@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm --version)",
+      "Bash(where node:*)",
+      "Bash(winget list:*)",
+      "Bash(winget install:*)",
+      "Bash(export PATH=\"$PATH:/c/Program Files/nodejs\")",
+      "Bash(npm create:*)",
+      "Bash(npm install:*)",
+      "Bash(npm run:*)",
+      "Bash(taskkill /F /IM node.exe)",
+      "Bash(taskkill //F //IM node.exe)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(npx tsc:*)",
+      "Bash(cmd //c \"npx tsc --noEmit 2>&1\")",
+      "Bash(cmd //c \"cd /d D:\\\\Data\\\\AI\\\\ClaudeCode\\\\ProjectVidBars\\\\vidbars && node_modules\\\\.bin\\\\tsc --noEmit 2>&1\")",
+      "Bash(Remove-Item -Recurse -Force \"D:\\\\Data\\\\AI\\\\ClaudeCode\\\\ProjectVidBars\\\\vidbars\\\\node_modules\\\\.vite\" -ErrorAction SilentlyContinue)",
+      "Bash(Write-Host \"cache cleared\")",
+      "Bash(curl -s \"http://localhost:5173/src/store/canvasStore.ts\")",
+      "Bash(find /d/Data/AI/ClaudeCode/ProjectVidBars/vidbars/src -name *.ts -o -name *.tsx)",
+      "Bash(del \"D:\\\\Data\\\\AI\\\\ClaudeCode\\\\ProjectVidBars\\\\vidbars\\\\src\\\\components\\\\NLE\\\\ProjectBoard.tsx\" \"D:\\\\Data\\\\AI\\\\ClaudeCode\\\\ProjectVidBars\\\\vidbars\\\\src\\\\components\\\\NLE\\\\ExtraBoard.tsx\" \"D:\\\\Data\\\\AI\\\\ClaudeCode\\\\ProjectVidBars\\\\vidbars\\\\src\\\\components\\\\NLE\\\\ExtraBoardsCanvas.tsx\")",
+      "Bash(grep -E \"\\\\.ts$|\\\\.tsx$\")",
+      "Bash(grep -r \"from.*Bar/Bar\\\\|import.*Bar/Bar\\\\|import Bar from\" /d/Data/AI/ClaudeCode/ProjectVidBars/vidbars/src --include=*.tsx --include=*.ts)",
+      "Bash(/tmp/analysis.txt:*)",
+      "Read(//tmp/**)",
+      "Bash(grep -r \"from.*Bar/Bar\\\\|import.*Bar/Bar\\\\|import.*Bar\\\\s*from.*Bar\\\\|<Bar\\\\s\" /d/Data/AI/ClaudeCode/ProjectVidBars/vidbars/src --include=*.tsx --include=*.ts)",
+      "Bash(npx vite:*)"
+    ]
+  }
+}
