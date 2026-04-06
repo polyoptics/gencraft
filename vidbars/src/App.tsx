@@ -1,9 +1,7 @@
 import { useEffect } from 'react'
 import { InfiniteCanvas } from './components/Canvas/InfiniteCanvas'
-import { BoardsCanvas } from './components/NLE/BoardsCanvas'
-import { NLETimelineHeader } from './components/NLE/NLETimelineHeader'
 import { NLETimelineViewer } from './components/NLE/NLETimelineViewer'
-import { FreeCanvas } from './components/Canvas/FreeCanvas'
+import { LayerContent, LayerOverlay } from './components/Layers/LayerRouter'
 import { Viewer } from './components/Viewer/Viewer'
 import { TemplateMenu } from './components/UI/TemplateMenu'
 import { useBoardsStore } from './store/boardsStore'
@@ -31,6 +29,7 @@ interface Clipboard {
   isWholeBoard: boolean  // true → paste creates new board; false → paste adds bars
 }
 let clipboard: Clipboard | null = null
+let clipboardGroupId: string | null = null
 
 function remapIds(bars: Record<string, Bar>, rootIds: string[]): { bars: Record<string, Bar>; rootIds: string[] } {
   const idMap = new Map<string, string>()
@@ -56,6 +55,17 @@ function useKeyboardCopyPaste() {
       if (tag === 'INPUT' || tag === 'TEXTAREA') return
 
       if (e.key === 'c' || e.key === 'C') {
+        const zoom = useCanvasStore.getState().zoom
+        // Card-level copy: copy selected group
+        if (zoom <= 0.15) {
+          const selectedGroupId = useBoardsStore.getState().selectedGroupId
+          if (selectedGroupId) {
+            clipboardGroupId = selectedGroupId
+            clipboard = null
+          }
+          return
+        }
+        clipboardGroupId = null
         const { boards } = useBoardsStore.getState()
         // Bar-level copy: any board has selected bars
         for (const board of Object.values(boards)) {
@@ -83,13 +93,16 @@ function useKeyboardCopyPaste() {
       }
 
       if (e.key === 'v' || e.key === 'V') {
-        if (!clipboard) return
         useUndoCoordinator.getState().checkpoint()
+        // Card-level paste: duplicate group
+        if (clipboardGroupId) {
+          useBoardsStore.getState().duplicateGroup(clipboardGroupId)
+          return
+        }
+        if (!clipboard) return
         if (clipboard.isWholeBoard) {
-          // Paste as new board
           useBoardsStore.getState().duplicateBoard(clipboard.boardId)
         } else {
-          // Paste bars into same board
           const { bars: remappedBars, rootIds: remappedRoots } = remapIds(clipboard.bars, clipboard.rootIds)
           useBoardsStore.getState().importBars(clipboard.boardId, remappedBars, remappedRoots, 40)
         }
@@ -178,6 +191,25 @@ function UndoRedoButtons() {
   )
 }
 
+function DynamicRowToggle() {
+  const active = useCanvasStore(s => s.dynamicRowHeights)
+  const toggle = useCanvasStore(s => s.toggleDynamicRowHeights)
+  return (
+    <button
+      onClick={toggle}
+      title={active ? 'Dynamic row heights (click for fixed)' : 'Fixed row heights (click for dynamic)'}
+      style={{
+        background: active ? 'rgba(37,99,235,0.22)' : 'rgba(255,255,255,0.06)',
+        border: active ? '1px solid rgba(37,99,235,0.45)' : '1px solid rgba(255,255,255,0.08)',
+        color: active ? 'rgba(130,180,255,0.9)' : 'rgba(255,255,255,0.35)',
+        fontSize: 11, fontWeight: 600, fontFamily: 'inherit',
+        padding: '3px 10px', borderRadius: 6, cursor: 'pointer',
+        whiteSpace: 'nowrap',
+      }}
+    >{active ? 'Rows: Dynamic' : 'Rows: Fixed'}</button>
+  )
+}
+
 export default function App() {
   useKeyboardDelete()
   useKeyboardCopyPaste()
@@ -202,17 +234,17 @@ export default function App() {
         <span style={{ color: 'rgba(255,255,255,0.15)', fontSize: 10 }}>
           drag header · resize edges · dbl-click empty space to collapse all · Del to delete selected
         </span>
+        <DynamicRowToggle />
         <TemplateMenu />
       </div>
 
       {/* ── Infinite Canvas ── */}
       <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
         <InfiniteCanvas initialCenterW={520} initialCenterH={310}>
-          <FreeCanvas />
-          <BoardsCanvas />
+          <LayerContent />
         </InfiniteCanvas>
-        {/* NLE header renders outside the canvas transform so it stays readable at any zoom */}
-        <NLETimelineHeader />
+        {/* Layer overlay renders outside the canvas transform (screen-space headers/cards) */}
+        <LayerOverlay />
       </div>
 
       {/* Viewers render outside the canvas so they are fixed to the viewport */}

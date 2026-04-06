@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { useBoardsStore } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
+import { computeRowLayout, getRowY, yToRow } from '../../utils/nleRows'
 
 interface Frame {
   id: string
@@ -36,7 +37,7 @@ export const Viewer: React.FC<Props> = ({ boardId }) => {
   const zoom          = useCanvasStore(s => s.zoom)
   const boardPos      = useCanvasStore(s => s.boardPos)
   const shiftBoardPos = useCanvasStore(s => s.shiftBoardPos)
-  const nleRowHeight  = useCanvasStore(s => s.nleRowHeight)
+
 
   const closeViewer = useCallback(() => useBoardsStore.getState().closeViewer(boardId), [boardId])
   const renameBar   = useCallback((id: string, name: string) => useBoardsStore.getState().renameBar(boardId, id, name), [boardId])
@@ -83,11 +84,16 @@ export const Viewer: React.FC<Props> = ({ boardId }) => {
       shiftBoardPos(dx, dy)
     } else {
       const b = useBoardsStore.getState().boards[boardId]
-      if (b) useBoardsStore.getState().setBoardNlePos(boardId, b.nleRow + dy / nleRowHeight, b.nleX + dx)
+      if (b) {
+        const bs = useBoardsStore.getState()
+        const layout = computeRowLayout(bs.boards, b.nleRow)
+        const rowH = layout.rowHeights[b.nleRow] ?? 160
+        useBoardsStore.getState().setBoardNlePos(boardId, b.nleRow + dy / rowH, b.nleX + dx)
+      }
     }
     titleLastX.current = e.clientX
     titleLastY.current = e.clientY
-  }, [isPrimary, boardId, shiftBoardPos, zoom, nleRowHeight])
+  }, [isPrimary, boardId, shiftBoardPos, zoom])
 
   const onTitleDragUp = useCallback(() => {}, [])
 
@@ -117,22 +123,26 @@ export const Viewer: React.FC<Props> = ({ boardId }) => {
   let headerScreenTop: number
   let naturalWidth: number
 
+  const bScale = board?.boardScale ?? 1
+
   if (isPrimary) {
     const topRow = Object.values(bars).filter(b => b.rowIndex === 0)
     const minX = topRow.length > 0 ? Math.min(...topRow.map(b => b.x)) : 0
     const maxX = topRow.length > 0 ? Math.max(...topRow.map(b => b.x + b.width)) : 200
-    naturalWidth = maxX - minX
-    headerScreenLeft = pan.x + (boardPos.x + BOARD_PADDING_X + minX) * zoom
+    naturalWidth = (maxX - minX) * bScale
+    headerScreenLeft = pan.x + (boardPos.x + BOARD_PADDING_X + minX * bScale) * zoom
     headerScreenTop  = APP_TOOLBAR_H + pan.y + boardPos.y * zoom
   } else {
     const topRow = Object.values(bars).filter(b => b.rowIndex === 0)
     const minX = topRow.length > 0 ? Math.min(...topRow.map(b => b.x)) : 0
     const maxX = topRow.length > 0 ? Math.max(...topRow.map(b => b.x + b.width)) : 480
-    naturalWidth = maxX - minX
+    naturalWidth = (maxX - minX) * bScale
     const nleRow = board?.nleRow ?? 0
     const nleX   = board?.nleX   ?? 0
-    headerScreenLeft = pan.x + (nleX + BOARD_PADDING_X + minX) * zoom
-    headerScreenTop  = APP_TOOLBAR_H + pan.y + (nleRow * nleRowHeight) * zoom
+    headerScreenLeft = pan.x + (nleX + BOARD_PADDING_X + minX * bScale) * zoom
+    const bs = useBoardsStore.getState()
+    const viewerLayout = computeRowLayout(bs.boards, nleRow)
+    headerScreenTop  = APP_TOOLBAR_H + pan.y + getRowY(nleRow, viewerLayout) * zoom
   }
 
   const canvasNaturalH = Math.round((naturalWidth - TOOLS_W) * 9 / 16)

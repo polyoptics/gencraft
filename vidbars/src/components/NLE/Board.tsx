@@ -8,14 +8,16 @@ import { ColorPickerPopup } from '../Bar/ColorPickerPopup'
 import { NLELayout } from './NLELayout'
 import { primarySlot, extraSlots, clampBoardX } from '../../utils/nlePush'
 import type { BoardSlot } from '../../utils/nlePush'
+import { computeRowLayout, getRowY, yToRow, dyToRowDelta } from '../../utils/nleRows'
+import type { RowLayout } from '../../utils/nleRows'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 
 interface Props { boardId: string }
 
 const BOARD_PADDING_X = 20
-const BOARD_PADDING_TOP = 36
-const BOARD_PADDING_BOT = 24
-const HEADER_H = 44
+const BOARD_PADDING_TOP = 28
+const BOARD_PADDING_BOT = 20
+const HEADER_H = 28
 
 export const Board: React.FC<Props> = ({ boardId }) => {
   const isPrimary = boardId === 'primary'
@@ -31,7 +33,7 @@ export const Board: React.FC<Props> = ({ boardId }) => {
   const setBoardPos     = useCanvasStore(s => s.setBoardPos)
   const setFocusedBoard = useCanvasStore(s => s.setFocusedBoard)
   const zoom            = Math.max(useCanvasStore(s => s.zoom) || 1, 0.01)
-  const nleRowHeight    = useCanvasStore(s => s.nleRowHeight)
+
 
   const clearFreeSelection = useFreeNodeStore(s => s.clearFreeSelection)
 
@@ -51,6 +53,8 @@ export const Board: React.FC<Props> = ({ boardId }) => {
   const dragStartRow  = useRef(0)
   const totalDY       = useRef(0)
   const dragSlots     = useRef<BoardSlot[]>([])
+  const dragLayout    = useRef<RowLayout>({ rowHeights: {}, rowTops: {}, totalHeight: 0 })
+  const gripLayout    = useRef<RowLayout>({ rowHeights: {}, rowTops: {}, totalHeight: 0 })
   const gripLastX     = useRef(0)
   const gripLastY     = useRef(0)
   const gripStartRow  = useRef(0)
@@ -63,10 +67,23 @@ export const Board: React.FC<Props> = ({ boardId }) => {
     if (renaming) nameInputRef.current?.select()
   }, [renaming])
 
+  /** Build a RowLayout snapshot from current state */
+  const getLayout = useCallback((): RowLayout => {
+    const cs = useCanvasStore.getState()
+    const bs = useBoardsStore.getState()
+    const pRow = isPrimary
+      ? Math.max(0, yToRow(cs.boardPos.y, computeRowLayout(bs.boards, 0)))
+      : (useBoardsStore.getState().boards[boardId]?.nleRow ?? 0)
+    return computeRowLayout(bs.boards, pRow)
+  }, [isPrimary, boardId])
+
   const getCurrentRow = useCallback(() => {
     if (isPrimary) {
+      const b = useBoardsStore.getState().boards['primary']
+      // Primary row is derived from boardPos.y
       const cs = useCanvasStore.getState()
-      return Math.max(0, Math.round(cs.boardPos.y / cs.nleRowHeight))
+      const layout = computeRowLayout(useBoardsStore.getState().boards, 0)
+      return Math.max(0, yToRow(cs.boardPos.y, layout))
     }
     const b = useBoardsStore.getState().boards[boardId]
     return Math.max(0, Math.round(b?.nleRow ?? 0))
@@ -74,8 +91,9 @@ export const Board: React.FC<Props> = ({ boardId }) => {
 
   const setPosition = useCallback((row: number, x: number) => {
     if (isPrimary) {
-      const rowH = useCanvasStore.getState().nleRowHeight
-      setBoardPos({ x, y: row * rowH })
+      const bs = useBoardsStore.getState()
+      const layout = computeRowLayout(bs.boards, row)
+      setBoardPos({ x, y: getRowY(row, layout) })
     } else {
       setBoardNlePos(boardId, row, x)
     }
@@ -97,10 +115,12 @@ export const Board: React.FC<Props> = ({ boardId }) => {
     lastY.current = e.clientY
     const csState = useCanvasStore.getState()
     const bsState = useBoardsStore.getState()
-    const pRow = Math.max(0, Math.round(csState.boardPos.y / csState.nleRowHeight))
+    const layout0 = computeRowLayout(bsState.boards, 0)
+    dragLayout.current = computeRowLayout(bsState.boards, dragStartRow.current)
+    const pRow = Math.max(0, yToRow(csState.boardPos.y, layout0))
     const primaryBars = bsState.boards['primary']?.bars ?? {}
     dragSlots.current = [
-      primarySlot(csState.boardPos.x, pRow, primaryBars),
+      primarySlot(csState.boardPos.x, pRow, primaryBars, bsState.boards['primary']?.boardScale ?? 1),
       ...extraSlots(bsState.boards),
     ]
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
@@ -114,12 +134,12 @@ export const Board: React.FC<Props> = ({ boardId }) => {
     lastX.current = e.clientX
     lastY.current = e.clientY
     totalDY.current += dy
-    const rowH = useCanvasStore.getState().nleRowHeight
-    const targetRow = Math.max(0, dragStartRow.current + Math.round(totalDY.current / rowH))
+    const lay = dragLayout.current
+    const targetRow = Math.max(0, dragStartRow.current + dyToRowDelta(totalDY.current, dragStartRow.current, lay))
     if (isPrimary) {
       const rawX = useCanvasStore.getState().boardPos.x + dx
       const clampedX = clampBoardX(dragSlots.current, 'primary', rawX, targetRow)
-      setBoardPos({ x: clampedX, y: targetRow * rowH })
+      setBoardPos({ x: clampedX, y: getRowY(targetRow, lay) })
     } else {
       const b = useBoardsStore.getState().boards[boardId]
       if (!b) return
@@ -156,6 +176,7 @@ export const Board: React.FC<Props> = ({ boardId }) => {
     useUndoCoordinator.getState().checkpoint()
     setFocusedBoard(boardId)
     gripStartRow.current = getCurrentRow()
+    gripLayout.current = getLayout()
     gripTotalDY.current = 0
     gripLastX.current = e.clientX
     gripLastY.current = e.clientY
@@ -169,11 +190,11 @@ export const Board: React.FC<Props> = ({ boardId }) => {
     gripLastX.current = e.clientX
     gripLastY.current = e.clientY
     gripTotalDY.current += dy
-    const rowH = useCanvasStore.getState().nleRowHeight
-    const targetRow = Math.max(0, gripStartRow.current + Math.round(gripTotalDY.current / rowH))
+    const lay = gripLayout.current
+    const targetRow = Math.max(0, gripStartRow.current + dyToRowDelta(gripTotalDY.current, gripStartRow.current, lay))
     if (isPrimary) {
       const cs = useCanvasStore.getState()
-      setBoardPos({ x: cs.boardPos.x + dx, y: targetRow * rowH })
+      setBoardPos({ x: cs.boardPos.x + dx, y: getRowY(targetRow, lay) })
     } else {
       const b = useBoardsStore.getState().boards[boardId]
       if (b) setBoardNlePos(boardId, targetRow, b.nleX + dx)
@@ -310,7 +331,13 @@ export const Board: React.FC<Props> = ({ boardId }) => {
   if (!board || !boardCtx) return null
 
   const canvasX = isPrimary ? boardPos.x : board.nleX
-  const canvasY = isPrimary ? boardPos.y : board.nleRow * nleRowHeight
+  const layout = useMemo(() => {
+    const bs = useBoardsStore.getState()
+    const pRow = Math.max(0, yToRow(boardPos.y, computeRowLayout(bs.boards, 0)))
+    return computeRowLayout(bs.boards, pRow)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [boardPos.y, board?.nleRow, board?.bars, board?.boardScale])
+  const canvasY = isPrimary ? boardPos.y : getRowY(board.nleRow, layout)
 
   const topRow = Object.values(board.bars).filter(b => b.rowIndex === 0)
   const minX = topRow.length > 0 ? Math.min(...topRow.map(b => b.x)) : 0
@@ -329,15 +356,15 @@ export const Board: React.FC<Props> = ({ boardId }) => {
         {/* ── Header ── */}
         <div
           style={{
-            position: 'absolute', top: 0,
-            left: BOARD_PADDING_X + minX,
-            width: maxX - minX,
+            position: 'absolute', top: 2,
+            left: BOARD_PADDING_X + minX * boardScale,
+            width: (maxX - minX) * boardScale,
             height: HEADER_H,
             boxSizing: 'border-box',
-            display: 'flex', alignItems: 'center', gap: 8, padding: `0 ${12 / zoom}px`,
+            display: 'flex', alignItems: 'center', gap: 5, padding: `0 ${8 / zoom}px`,
             background: 'rgba(255,255,255,0.05)',
             border: '1px solid rgba(255,255,255,0.08)',
-            borderRadius: 8, backdropFilter: 'blur(12px)',
+            borderRadius: 6, backdropFilter: 'blur(12px)',
             cursor: 'grab', zIndex: 30,
           }}
           onPointerDown={onHeaderDown}
@@ -369,20 +396,21 @@ export const Board: React.FC<Props> = ({ boardId }) => {
 
           <div style={{ flex: 1 }} />
 
-          {/* Viewer toggle */}
+          {/* Viewer toggle — icon only */}
           <div
             data-viewer-toggle="true"
             onPointerDown={toggleViewer}
             style={{
-              padding: `${2 / zoom}px ${9 / zoom}px`, borderRadius: 6,
+              padding: `${1 / zoom}px ${10 / zoom}px`, borderRadius: 4,
               background: viewerBarId ? 'rgba(37,99,235,0.22)' : 'rgba(255,255,255,0.06)',
               border: viewerBarId ? '1px solid rgba(37,99,235,0.45)' : '1px solid rgba(255,255,255,0.08)',
               color: viewerBarId ? 'rgba(130,180,255,0.9)' : 'rgba(255,255,255,0.35)',
-              fontSize: 10 / zoom, fontWeight: 700, letterSpacing: '0.3px',
+              fontSize: 9 / zoom, fontWeight: 700,
               cursor: 'pointer', userSelect: 'none', flexShrink: 0,
+              lineHeight: '12px',
             }}
           >
-            {viewerBarId ? '▼ viewer' : '▲ viewer'}
+            {viewerBarId ? '▼' : '▲'}
           </div>
 
           <BlockCount boardId={boardId} zoom={zoom} />
@@ -394,11 +422,11 @@ export const Board: React.FC<Props> = ({ boardId }) => {
             onPointerMove={onGripMove}
             onPointerUp={onGripUp}
             title="Free drag — pass through other boards"
-            style={{ cursor: 'grab', flexShrink: 0, padding: '4px 8px', marginRight: -4 }}
+            style={{ cursor: 'grab', flexShrink: 0, padding: '2px 8px', marginRight: -4 }}
           >
-            <svg width="14" height="16" viewBox="0 0 14 16" style={{ opacity: 0.35, display: 'block' }}>
-              {[0, 5, 10].map(cx => [0, 5, 10].map(cy => (
-                <circle key={`${cx}-${cy}`} cx={cx + 2} cy={cy + 2} r="1.4" fill="white" />
+            <svg width="10" height="10" viewBox="0 0 10 10" style={{ opacity: 0.35, display: 'block' }}>
+              {[1, 5, 9].flatMap(cx => [1, 5, 9].map(cy => (
+                <circle key={`${cx}-${cy}`} cx={cx} cy={cy} r={0.9} fill="white" />
               )))}
             </svg>
           </div>
@@ -508,12 +536,10 @@ const BlockCount: React.FC<{ boardId: string; zoom: number }> = ({ boardId, zoom
   const count = useBoardsStore(s => Object.keys(s.boards[boardId]?.bars ?? {}).length)
   return (
     <span style={{
-      fontSize: 10 / zoom, color: 'rgba(255,255,255,0.18)', fontWeight: 600,
-      background: 'rgba(255,255,255,0.04)',
-      border: '1px solid rgba(255,255,255,0.05)',
-      borderRadius: 10, padding: `${2 / zoom}px ${7 / zoom}px`,
+      fontSize: 9 / zoom, color: 'rgba(255,255,255,0.18)', fontWeight: 600,
+      borderRadius: 8, padding: `${1 / zoom}px ${5 / zoom}px`,
     }}>
-      {count} block{count !== 1 ? 's' : ''}
+      {count}
     </span>
   )
 }

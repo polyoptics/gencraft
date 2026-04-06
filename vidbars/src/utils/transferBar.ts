@@ -2,6 +2,7 @@ import type { Bar } from '../types/bar'
 import { useBoardsStore } from '../store/boardsStore'
 import { useCanvasStore } from '../store/canvasStore'
 import { collectSubtree } from './barOps'
+import { computeRowLayout, yToRow } from './nleRows'
 
 const BOARD_PADDING_X = 20
 
@@ -30,7 +31,8 @@ export function buildBoardRanges(): BoardRange[] {
     if (pTopRow.length > 0) {
       const minX = Math.min(...pTopRow.map(b => b.x))
       const maxX = Math.max(...pTopRow.map(b => b.x + b.width))
-      const pRow = Math.round(csState.boardPos.y / csState.nleRowHeight)
+      const layout0 = computeRowLayout(bsState.boards, 0)
+      const pRow = Math.max(0, yToRow(csState.boardPos.y, layout0))
       ranges.push({
         id: 'primary',
         anchorX: csState.boardPos.x,

@@ -9,6 +9,7 @@ interface CanvasStore {
   zoom: number
   boardPos: { x: number; y: number }
   nleRowHeight: number
+  dynamicRowHeights: boolean
   focusedBoardId: string | null
 
   setPan: (pan: { x: number; y: number }) => void
@@ -18,6 +19,7 @@ interface CanvasStore {
   setBoardPos: (pos: { x: number; y: number }) => void
   shiftBoardPos: (dx: number, dy: number) => void
   setNleRowHeight: (h: number) => void
+  toggleDynamicRowHeights: () => void
   setFocusedBoard: (id: string | null) => void
 }
 
@@ -26,6 +28,7 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
   zoom: 1,
   boardPos: { x: 0, y: 0 },
   nleRowHeight: 420,
+  dynamicRowHeights: false,
   focusedBoardId: null,
 
   setPan: (pan) => set({ pan }),
@@ -56,6 +59,8 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
 
   setNleRowHeight: (nleRowHeight) => set({ nleRowHeight }),
 
+  toggleDynamicRowHeights: () => set(s => ({ dynamicRowHeights: !s.dynamicRowHeights })),
+
   setFocusedBoard: (focusedBoardId) => set({ focusedBoardId }),
 }), {
   name: 'vidbars-canvas',
@@ -64,5 +69,6 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
     zoom: s.zoom,
     boardPos: s.boardPos,
     nleRowHeight: s.nleRowHeight,
+    dynamicRowHeights: s.dynamicRowHeights,
   }),
 }))

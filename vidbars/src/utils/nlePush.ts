@@ -1,4 +1,6 @@
 import type { Bar } from '../types/bar'
+import type { RowLayout } from './nleRows'
+import { getRowY, getRowHeight } from './nleRows'
 
 /** Slot describing a board's visual span on the NLE timeline */
 export interface BoardSlot {
@@ -17,23 +19,26 @@ export interface BoardSlot {
 const BOARD_PADDING_X = 20
 const DEFAULT_GAP = 12
 
-/** Compute a board's visual slot from its bars */
+/** Compute a board's visual slot from its bars, accounting for boardScale */
 function slotFromBars(
   id: string,
   nleRow: number,
   anchorX: number,
   bars: Record<string, Bar>,
+  boardScale = 1,
 ): BoardSlot {
   const topRowBars = Object.values(bars).filter(b => b.rowIndex === 0)
   const minBarX = topRowBars.length > 0 ? Math.min(...topRowBars.map(b => b.x)) : 0
   const maxBarX = topRowBars.length > 0 ? Math.max(...topRowBars.map(b => b.x + b.width)) : 200
+  // Store scaled values so all consumers work in visual canvas coords
+  const scaledMinBarX = minBarX * boardScale
   return {
     id,
     nleRow,
     anchorX,
-    minBarX,
-    nleX: anchorX + BOARD_PADDING_X + minBarX,
-    width: Math.max(maxBarX - minBarX, 4),
+    minBarX: scaledMinBarX,
+    nleX: anchorX + BOARD_PADDING_X + scaledMinBarX,
+    width: Math.max((maxBarX - minBarX) * boardScale, 4),
   }
 }
 
@@ -42,17 +47,18 @@ export function primarySlot(
   boardPosX: number,
   boardRow: number,
   bars: Record<string, Bar>,
+  boardScale = 1,
 ): BoardSlot {
-  return slotFromBars('primary', boardRow, boardPosX, bars)
+  return slotFromBars('primary', boardRow, boardPosX, bars, boardScale)
 }
 
 /** Build slots for all extra boards (excludes the primary board) */
 export function extraSlots(
-  boards: Record<string, { id: string; nleRow: number; nleX: number; bars: Record<string, Bar> }>,
+  boards: Record<string, { id: string; nleRow: number; nleX: number; boardScale?: number; bars: Record<string, Bar> }>,
 ): BoardSlot[] {
   return Object.values(boards)
     .filter(b => b.id !== 'primary')
-    .map(b => slotFromBars(b.id, b.nleRow, b.nleX, b.bars))
+    .map(b => slotFromBars(b.id, b.nleRow, b.nleX, b.bars, b.boardScale ?? 1))
 }
 
 /**
@@ -133,6 +139,97 @@ export function computeNLEPush(
   }
 
   return result
+}
+
+// ── Group-level collision (card layer) ──────────────────────────────
+
+/** 2D bounding box for a group of boards in canvas space */
+export interface GroupSlot {
+  id: string
+  left: number
+  right: number
+  top: number
+  bottom: number
+}
+
+/** Build a GroupSlot from a group's board IDs */
+export function groupSlot(
+  groupId: string,
+  boardIds: string[],
+  boards: Record<string, any>,
+  boardPos: { x: number; y: number },
+  layout: RowLayout,
+): GroupSlot | null {
+  let left = Infinity, right = -Infinity, top = Infinity, bottom = -Infinity
+  boardIds.forEach(bid => {
+    const board = boards[bid]
+    if (!board) return
+    const bScale = board.boardScale ?? 1
+    const rootBars = board.rootIds.map((rid: string) => board.bars[rid]).filter(Boolean)
+    if (rootBars.length === 0) return
+    const bx = bid === 'primary' ? boardPos.x : board.nleX
+    const row = bid === 'primary' ? 0 : board.nleRow
+    const by = bid === 'primary' ? boardPos.y : getRowY(row, layout)
+    const rowH = getRowHeight(row, layout)
+    const minX = Math.min(...rootBars.map((b: any) => b.x))
+    const maxX = Math.max(...rootBars.map((b: any) => b.x + b.width))
+    const l = bx + BOARD_PADDING_X + minX * bScale - 16
+    const r = bx + BOARD_PADDING_X + maxX * bScale + 16
+    if (l < left) left = l
+    if (r > right) right = r
+    if (by < top) top = by
+    if (by + rowH > bottom) bottom = by + rowH
+  })
+  if (left === Infinity) return null
+  return { id: groupId, left, right, top, bottom }
+}
+
+/**
+ * Clamp a proposed dx/dy so the moving GroupSlot doesn't overlap any obstacle.
+ * Same approach-direction logic as clampBoardX, extended to 2D.
+ */
+export function clampGroupMove(
+  moving: GroupSlot,
+  dx: number,
+  dy: number,
+  obstacles: GroupSlot[],
+  gap = DEFAULT_GAP,
+): { dx: number; dy: number } {
+  let clampedDx = dx
+  let clampedDy = dy
+
+  for (const obs of obstacles) {
+    const ml = moving.left   + clampedDx
+    const mr = moving.right  + clampedDx
+    const mt = moving.top    + clampedDy
+    const mb = moving.bottom + clampedDy
+
+    const ol = obs.left   - gap
+    const or_ = obs.right + gap
+    const ot = obs.top    - gap
+    const ob = obs.bottom + gap
+
+    // Check overlap
+    if (ml >= or_ || mr <= ol || mt >= ob || mb <= ot) continue
+
+    // Overlap exists — resolve on the axis with least penetration
+    const pushRight = or_ - ml   // push moving rightward
+    const pushLeft  = ol - mr    // push moving leftward (negative)
+    const pushDown  = ob - mt    // push moving downward
+    const pushUp    = ot - mb    // push moving upward (negative)
+
+    const minAbsX = Math.abs(pushRight) < Math.abs(pushLeft) ? pushRight : pushLeft
+    const minAbsY = Math.abs(pushDown)  < Math.abs(pushUp)   ? pushDown  : pushUp
+
+    // Resolve on whichever axis needs the smaller correction
+    if (Math.abs(minAbsX) < Math.abs(minAbsY)) {
+      clampedDx += minAbsX
+    } else {
+      clampedDy += minAbsY
+    }
+  }
+
+  return { dx: clampedDx, dy: clampedDy }
 }
 
 /**

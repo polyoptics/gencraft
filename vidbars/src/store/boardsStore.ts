@@ -24,6 +24,39 @@ const INIT_W = 480
 const INIT_H = 270
 const PRIMARY_INIT_ID = 'root-bar'
 
+/** A project group — boards that collapse into one card at card zoom level */
+export interface ProjectGroup {
+  id: string
+  name: string
+  color: string
+  boardIds: string[]   // ordered, can include 'primary'
+  cardHeroImage: string | null
+  cardSummary: string
+}
+
+/** Find which group a board belongs to */
+export function getGroupForBoard(groups: ProjectGroup[], boardId: string): ProjectGroup | undefined {
+  return groups.find(g => g.boardIds.includes(boardId))
+}
+
+/** Layer-specific metadata — each zoom level has its own data fields */
+export interface BoardLayerData {
+  card: {
+    heroImage: string | null   // card-level thumbnail (NOT bar.content.images[0])
+    summary: string            // short text visible on card
+  }
+  block: {
+    thumbnail: string | null   // block-level representative image
+    label: string              // display name override at block zoom
+  }
+  // Board layer uses bar tree directly — no extra fields needed
+}
+
+const DEFAULT_LAYERS: BoardLayerData = {
+  card: { heroImage: null, summary: '' },
+  block: { thumbnail: null, label: '' },
+}
+
 export interface BoardData {
   id: string
   projectName: string
@@ -37,11 +70,13 @@ export interface BoardData {
   savedCollapsedState: Record<string, boolean> | null
   pristine: boolean
   boardScale: number   // content zoom (primary only, but stored per-board for generality)
+  layers: BoardLayerData  // layer-specific metadata for card/block zoom levels
 }
 
 interface BoardsState {
   boards: Record<string, BoardData>
   boardOrder: string[]    // does NOT include 'primary'
+  groups: ProjectGroup[]  // project groups — each collapses to one card
 
   createBoard: (nleRow: number, nleX: number) => string
   duplicateBoard: (sourceBoardId: string) => string
@@ -79,6 +114,25 @@ interface BoardsState {
   changeBarRow: (boardId: string, barId: string, newRow: number, detach?: boolean) => void
   reparentBar: (boardId: string, barId: string, newParentId: string) => void
   crossBoardReparent: (sourceBoardId: string, barId: string, targetBoardId: string, newParentId: string) => void
+
+  // ── Layer-specific actions ──
+  setCardHeroImage: (boardId: string, url: string | null) => void
+  setCardSummary: (boardId: string, summary: string) => void
+  setBlockThumbnail: (boardId: string, url: string | null) => void
+  setBlockLabel: (boardId: string, label: string) => void
+
+  // ── Project group actions ──
+  createGroup: (name: string, boardIds: string[]) => string
+  deleteGroup: (groupId: string) => void
+  renameGroup: (groupId: string, name: string) => void
+  setGroupColor: (groupId: string, color: string) => void
+  setGroupCardHeroImage: (groupId: string, url: string | null) => void
+  setGroupCardSummary: (groupId: string, summary: string) => void
+  reassignBoard: (boardId: string, targetGroupId: string) => void
+  moveToNewGroup: (boardId: string) => void
+  duplicateGroup: (groupId: string) => string | null
+  selectedGroupId: string | null
+  setSelectedGroup: (groupId: string | null) => void
 }
 
 type SetFn = (fn: (s: BoardsState) => Partial<BoardsState>) => void
@@ -129,11 +183,23 @@ const PRIMARY_BOARD: BoardData = {
   savedCollapsedState: null,
   pristine: true,
   boardScale: 1,
+  layers: { ...DEFAULT_LAYERS },
+}
+
+const DEFAULT_GROUP: ProjectGroup = {
+  id: 'default-group',
+  name: 'NLE Timeline',
+  color: '#5b8dd9',
+  boardIds: ['primary'],
+  cardHeroImage: null,
+  cardSummary: '',
 }
 
 export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
   boards: { primary: PRIMARY_BOARD },
   boardOrder: [],
+  groups: [DEFAULT_GROUP],
+  selectedGroupId: null,
 
   createBoard(nleRow, nleX) {
     const id = crypto.randomUUID()
@@ -150,8 +216,13 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
       savedCollapsedState: null,
       pristine: true,
       boardScale: 1,
+      layers: { ...DEFAULT_LAYERS },
     }
-    set(s => ({ boards: { ...s.boards, [id]: board }, boardOrder: [...s.boardOrder, id] }))
+    set(s => {
+      // Add new board to the first group
+      const groups = s.groups.map((g, i) => i === 0 ? { ...g, boardIds: [...g.boardIds, id] } : g)
+      return { boards: { ...s.boards, [id]: board }, boardOrder: [...s.boardOrder, id], groups }
+    })
     return id
   },
 
@@ -176,15 +247,28 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
       bars, rootIds,
       viewerBarId: null, selectedIds: [], savedCollapsedState: null, pristine: false,
       boardScale: src.boardScale ?? 1,
+      layers: structuredClone(src.layers ?? DEFAULT_LAYERS),
     }
-    set(s => ({ boards: { ...s.boards, [id]: board }, boardOrder: [...s.boardOrder, id] }))
+    set(s => {
+      // Add duplicate to same group as source
+      const groups = s.groups.map(g =>
+        g.boardIds.includes(sourceBoardId) ? { ...g, boardIds: [...g.boardIds, id] } : g
+      )
+      return { boards: { ...s.boards, [id]: board }, boardOrder: [...s.boardOrder, id], groups }
+    })
     return id
   },
 
   deleteBoard(id) {
     set(s => {
       const { [id]: _, ...rest } = s.boards
-      return { boards: rest, boardOrder: s.boardOrder.filter(x => x !== id) }
+      // Remove from its group; auto-delete empty groups (keep at least one)
+      let groups = s.groups.map(g => ({
+        ...g,
+        boardIds: g.boardIds.filter(bid => bid !== id),
+      }))
+      if (groups.length > 1) groups = groups.filter(g => g.boardIds.length > 0)
+      return { boards: rest, boardOrder: s.boardOrder.filter(x => x !== id), groups }
     })
   },
 
@@ -387,10 +471,168 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
   setBoardScale(id, scale) {
     updateBoard(set, id, () => ({ boardScale: Math.max(0.25, Math.min(3.0, scale)) }))
   },
+
+  // ── Layer-specific actions ──
+
+  setCardHeroImage(boardId, url) {
+    updateBoard(set, boardId, b => ({
+      layers: { ...b.layers, card: { ...b.layers.card, heroImage: url } },
+    }))
+  },
+
+  setCardSummary(boardId, summary) {
+    updateBoard(set, boardId, b => ({
+      layers: { ...b.layers, card: { ...b.layers.card, summary } },
+    }))
+  },
+
+  setBlockThumbnail(boardId, url) {
+    updateBoard(set, boardId, b => ({
+      layers: { ...b.layers, block: { ...b.layers.block, thumbnail: url } },
+    }))
+  },
+
+  setBlockLabel(boardId, label) {
+    updateBoard(set, boardId, b => ({
+      layers: { ...b.layers, block: { ...b.layers.block, label } },
+    }))
+  },
+
+  // ── Project group actions ──
+
+  createGroup(name, boardIds) {
+    const id = crypto.randomUUID()
+    const group: ProjectGroup = {
+      id, name, color: '#5b8dd9', boardIds,
+      cardHeroImage: null, cardSummary: '',
+    }
+    set(s => {
+      // Remove these boardIds from any existing group to avoid duplicates
+      const cleaned = s.groups.map(g => ({
+        ...g, boardIds: g.boardIds.filter(bid => !boardIds.includes(bid)),
+      }))
+      // Remove empty groups (keep at least one via the new group)
+      const remaining = cleaned.filter(g => g.boardIds.length > 0)
+      return { groups: [...remaining, group] }
+    })
+    return id
+  },
+
+  deleteGroup(groupId) {
+    set(s => {
+      const target = s.groups.find(g => g.id === groupId)
+      if (!target || s.groups.length <= 1) return s
+      // Move orphaned boards to the first remaining group
+      const others = s.groups.filter(g => g.id !== groupId)
+      const first = { ...others[0], boardIds: [...others[0].boardIds, ...target.boardIds] }
+      return { groups: [first, ...others.slice(1)] }
+    })
+  },
+
+  renameGroup(groupId, name) {
+    set(s => ({ groups: s.groups.map(g => g.id === groupId ? { ...g, name } : g) }))
+  },
+
+  setGroupColor(groupId, color) {
+    set(s => ({ groups: s.groups.map(g => g.id === groupId ? { ...g, color } : g) }))
+  },
+
+  setGroupCardHeroImage(groupId, url) {
+    set(s => ({ groups: s.groups.map(g => g.id === groupId ? { ...g, cardHeroImage: url } : g) }))
+  },
+
+  setGroupCardSummary(groupId, summary) {
+    set(s => ({ groups: s.groups.map(g => g.id === groupId ? { ...g, cardSummary: summary } : g) }))
+  },
+
+  reassignBoard(boardId, targetGroupId) {
+    set(s => {
+      let groups = s.groups.map(g => {
+        if (g.id === targetGroupId) return { ...g, boardIds: g.boardIds.includes(boardId) ? g.boardIds : [...g.boardIds, boardId] }
+        return { ...g, boardIds: g.boardIds.filter(bid => bid !== boardId) }
+      })
+      // Auto-delete empty groups (keep at least one)
+      if (groups.length > 1) groups = groups.filter(g => g.boardIds.length > 0)
+      return { groups }
+    })
+  },
+
+  moveToNewGroup(boardId) {
+    const board = get().boards[boardId]
+    const name = board?.projectName ?? 'New Group'
+    const color = board?.color ?? '#5b8dd9'
+    const id = crypto.randomUUID()
+    set(s => {
+      let groups = s.groups.map(g => ({
+        ...g, boardIds: g.boardIds.filter(bid => bid !== boardId),
+      }))
+      if (groups.length > 1) groups = groups.filter(g => g.boardIds.length > 0)
+      const newGroup: ProjectGroup = { id, name, color, boardIds: [boardId], cardHeroImage: null, cardSummary: '' }
+      return { groups: [...groups, newGroup] }
+    })
+  },
+
+  duplicateGroup(groupId) {
+    const group = get().groups.find(g => g.id === groupId)
+    if (!group) return null
+    const newGroupId = crypto.randomUUID()
+    const newBoardIds: string[] = []
+    // Duplicate each board in the group
+    group.boardIds.forEach(bid => {
+      const newBid = get().duplicateBoard(bid)
+      newBoardIds.push(newBid)
+    })
+    // Remove the duplicated boards from whatever group they landed in, create new group
+    set(s => {
+      const cleaned = s.groups.map(g => ({
+        ...g, boardIds: g.boardIds.filter(bid => !newBoardIds.includes(bid)),
+      }))
+      const remaining = cleaned.filter(g => g.boardIds.length > 0)
+      const newGroup: ProjectGroup = {
+        id: newGroupId,
+        name: group.name + ' copy',
+        color: group.color,
+        boardIds: newBoardIds,
+        cardHeroImage: group.cardHeroImage,
+        cardSummary: group.cardSummary,
+      }
+      return { groups: [...remaining, newGroup] }
+    })
+    return newGroupId
+  },
+
+  setSelectedGroup(groupId) {
+    set({ selectedGroupId: groupId })
+  },
 }), {
   name: 'vidbars-boards',
-  version: 2,
-  migrate(persisted: any, _version: number) {
+  version: 4,
+  migrate(persisted: any, version: number) {
+    if (version < 3) {
+      // Add layers field to all boards that lack it
+      const boards = persisted.boards ?? {}
+      for (const key of Object.keys(boards)) {
+        if (!boards[key].layers) {
+          boards[key].layers = { card: { heroImage: null, summary: '' }, block: { thumbnail: null, label: '' } }
+        }
+      }
+    }
+    if (version < 4) {
+      // Create one default group containing all boards
+      const boardOrder: string[] = persisted.boardOrder ?? []
+      const primary = persisted.boards?.['primary']
+      const heroImage = primary?.layers?.card?.heroImage ?? null
+      const summary = primary?.layers?.card?.summary ?? ''
+      const color = primary?.color ?? '#5b8dd9'
+      persisted.groups = [{
+        id: 'default-group',
+        name: 'NLE Timeline',
+        color,
+        boardIds: ['primary', ...boardOrder],
+        cardHeroImage: heroImage,
+        cardSummary: summary,
+      }]
+    }
     return persisted as BoardsState
   },
   partialize: (s) => ({
@@ -402,5 +644,6 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
       }])
     ),
     boardOrder: s.boardOrder,
+    groups: s.groups,
   }),
 }))

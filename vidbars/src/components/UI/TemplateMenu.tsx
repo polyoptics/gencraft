@@ -5,6 +5,7 @@ import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useUserTemplateStore } from '../../store/userTemplateStore'
 import type { SavedTemplate } from '../../store/userTemplateStore'
 import { TEMPLATES } from '../../data/templates'
+import { computeRowLayout, yToRow } from '../../utils/nleRows'
 
 export const TemplateMenu: React.FC = () => {
   const [open, setOpen] = useState(false)
@@ -75,7 +76,8 @@ export const TemplateMenu: React.FC = () => {
   function nextFreeRow(): number {
     const bs = useBoardsStore.getState()
     const cs = useCanvasStore.getState()
-    const pRow = Math.max(0, Math.round(cs.boardPos.y / cs.nleRowHeight))
+    const layout = computeRowLayout(bs.boards, 0)
+    const pRow = Math.max(0, yToRow(cs.boardPos.y, layout))
     let maxRow = pRow
     for (const bid of bs.boardOrder) {
       const b = bs.boards[bid]

@@ -4,6 +4,7 @@ import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useBoardsStore } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
+import { clampToNoParkZone } from '../../utils/nleZone'
 
 interface Props { id: string }
 
@@ -97,6 +98,16 @@ export const FreeNode: React.FC<Props> = ({ id }) => {
         }
       }
     }
+    // No transfer happened — snap to row grid + clamp out of NLE no-park zone
+    if (dragHasMoved.current) {
+      const cur = useFreeNodeStore.getState().nodes[id]
+      if (cur) {
+        const clamped = clampToNoParkZone(cur.x, cur.y, cur.width, cur.height)
+        if (clamped.x !== cur.x || clamped.y !== cur.y) {
+          useFreeNodeStore.getState().updateFreeNode(id, { x: clamped.x, y: clamped.y })
+        }
+      }
+    }
   }, [id, setFreeSelection, toggleFreeSelection])
 
   // Resize handle
@@ -123,6 +134,16 @@ export const FreeNode: React.FC<Props> = ({ id }) => {
 
   if (!node) return null
 
+  // Inverse-zoom scaling: keep header text and controls readable at any canvas zoom.
+  // At zoom 0.12, a canvas-space value of X appears as X*0.12 on screen,
+  // so we scale up by 1/zoom to maintain roughly constant screen-pixel sizes.
+  const iz = 1 / zoom
+  const headerH = 20 * iz
+  const fontSize = 11 * iz               // ~11px on screen at any zoom
+  const dotSize  = 5 * iz
+  const pad      = 6 * iz
+  const borderW  = Math.max(1, 2 / zoom)
+
   return (
     <div
       ref={wrapperRef}
@@ -134,12 +155,12 @@ export const FreeNode: React.FC<Props> = ({ id }) => {
         top: node.y,
         width: node.width,
         height: node.height,
-        borderRadius: 10,
+        borderRadius: 10 / zoom,
         background: node.color,
-        border: `1px solid rgba(255,255,255,${isHovered ? 0.18 : 0.08})`,
+        border: `${borderW}px solid rgba(255,255,255,${isHovered ? 0.18 : 0.08})`,
         boxShadow: isSelected
-          ? '0 0 0 2.5px rgba(120,180,255,0.9), 0 8px 32px rgba(0,0,0,0.55)'
-          : isHovered ? '0 8px 32px rgba(0,0,0,0.55)' : '0 2px 12px rgba(0,0,0,0.4)',
+          ? `0 0 0 ${2.5 / zoom}px rgba(120,180,255,0.9), 0 ${8 / zoom}px ${32 / zoom}px rgba(0,0,0,0.55)`
+          : isHovered ? `0 ${8 / zoom}px ${32 / zoom}px rgba(0,0,0,0.55)` : `0 ${2 / zoom}px ${12 / zoom}px rgba(0,0,0,0.4)`,
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
@@ -159,13 +180,13 @@ export const FreeNode: React.FC<Props> = ({ id }) => {
     >
       {/* ── Header ── */}
       <div style={{
-        display: 'flex', alignItems: 'center', gap: 6,
-        padding: '6px 10px',
+        display: 'flex', alignItems: 'center', gap: 6 * iz,
+        padding: `${pad * 0.6}px ${pad}px`,
         background: 'rgba(0,0,0,0.3)',
-        borderBottom: '1px solid rgba(255,255,255,0.06)',
-        flexShrink: 0, height: 32,
+        borderBottom: `${borderW}px solid rgba(255,255,255,0.06)`,
+        flexShrink: 0, height: headerH,
       }}>
-        <div style={{ width: 7, height: 7, borderRadius: '50%', background: 'rgba(255,255,255,0.22)', flexShrink: 0 }} />
+        <div style={{ width: dotSize, height: dotSize, borderRadius: '50%', background: 'rgba(255,255,255,0.22)', flexShrink: 0 }} />
 
         {isRenaming ? (
           <input
@@ -176,15 +197,15 @@ export const FreeNode: React.FC<Props> = ({ id }) => {
             onKeyDown={e => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') setIsRenaming(false) }}
             onPointerDown={e => e.stopPropagation()}
             style={{
-              flex: 1, background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.2)',
-              borderRadius: 4, outline: 'none', color: '#fff',
-              fontSize: 11, fontWeight: 600, padding: '2px 6px', fontFamily: 'inherit',
+              flex: 1, background: 'rgba(255,255,255,0.08)', border: `${borderW}px solid rgba(255,255,255,0.2)`,
+              borderRadius: 4 / zoom, outline: 'none', color: '#fff',
+              fontSize, fontWeight: 600, padding: `${2 * iz}px ${6 * iz}px`, fontFamily: 'inherit',
             }}
           />
         ) : (
           <span
             style={{
-              flex: 1, color: 'rgba(255,255,255,0.65)', fontSize: 11, fontWeight: 600,
+              flex: 1, color: 'rgba(255,255,255,0.65)', fontSize, fontWeight: 600,
               userSelect: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
             }}
             onDoubleClick={e => { e.stopPropagation(); setRenameVal(node.label); setIsRenaming(true) }}
@@ -201,8 +222,10 @@ export const FreeNode: React.FC<Props> = ({ id }) => {
           placeholder="Type a note…"
           style={{
             flex: 1, background: 'none', border: 'none', outline: 'none',
-            color: 'rgba(255,255,255,0.8)', fontSize: 12, lineHeight: 1.55,
-            padding: '8px 10px 28px',   // bottom padding leaves space for resize handle
+            color: 'rgba(255,255,255,0.8)',
+            fontSize: 12 * iz,
+            lineHeight: 1.55,
+            padding: `${8 * iz}px ${pad}px ${28 * iz}px`,
             resize: 'none', fontFamily: 'inherit', cursor: 'text',
           }}
         />
@@ -215,11 +238,11 @@ export const FreeNode: React.FC<Props> = ({ id }) => {
           onPointerDown={e => e.stopPropagation()}
         >
           {node.imageUrl ? (
-            <img src={node.imageUrl} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+            <img src={node.imageUrl} draggable={false} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
           ) : (
             <div style={{ textAlign: 'center', color: 'rgba(255,255,255,0.18)', userSelect: 'none', pointerEvents: 'none' }}>
-              <div style={{ fontSize: 22, marginBottom: 5, opacity: 0.5 }}>⬛</div>
-              <div style={{ fontSize: 10 }}>drop image here</div>
+              <div style={{ fontSize: 22 * iz, marginBottom: 5 * iz, opacity: 0.5 }}>⬛</div>
+              <div style={{ fontSize: 10 * iz }}>drop image here</div>
             </div>
           )}
         </div>
@@ -230,11 +253,11 @@ export const FreeNode: React.FC<Props> = ({ id }) => {
         data-resize="true"
         style={{
           position: 'absolute', bottom: 0, right: 0,
-          width: 40, height: 40,
+          width: 40 * iz, height: 40 * iz,
           cursor: 'nwse-resize',
           zIndex: 20,
           display: 'flex', alignItems: 'flex-end', justifyContent: 'flex-end',
-          padding: '0 5px 5px 0',
+          padding: `0 ${5 * iz}px ${5 * iz}px 0`,
         }}
         onPointerDown={onResizeDown}
         onPointerMove={onResizeMove}
@@ -242,17 +265,17 @@ export const FreeNode: React.FC<Props> = ({ id }) => {
         {/* Visual grip dots */}
         <div style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(3, 3px)',
-          gridTemplateRows: 'repeat(3, 3px)',
-          gap: '2px',
+          gridTemplateColumns: `repeat(3, ${3 * iz}px)`,
+          gridTemplateRows: `repeat(3, ${3 * iz}px)`,
+          gap: `${2 * iz}px`,
           opacity: isHovered ? 0.5 : 0.15,
           transition: 'opacity 0.12s',
         }}>
           {[...Array(9)].map((_, i) => (
             <div key={i} style={{
-              width: 3, height: 3, borderRadius: '50%',
+              width: 3 * iz, height: 3 * iz, borderRadius: '50%',
               background: 'rgba(255,255,255,0.9)',
-              opacity: (i === 4 || i < 3) ? 0 : 1,  // hide top-left dots to hint direction
+              opacity: (i === 4 || i < 3) ? 0 : 1,
             }} />
           ))}
         </div>

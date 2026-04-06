@@ -504,7 +504,7 @@ export const NLEBlock: React.FC<Props> = ({ id, top, blockHeight, offsetX, rowTo
           style={{
             position: 'absolute', top: 0, left: 0,
             display: 'flex', alignItems: 'center',
-            background: 'rgba(255,255,255,0.18)',
+            background: 'rgba(0,0,0,0.35)',
             backdropFilter: 'blur(8px)',
             borderRadius: '12px 0 12px 0',
             padding: compact ? '3px 8px' : medium ? '3px 9px 3px 3px' : '3px 10px 3px 3px',
@@ -559,7 +559,7 @@ export const NLEBlock: React.FC<Props> = ({ id, top, blockHeight, offsetX, rowTo
             ) : (
               <span
                 style={{
-                  color: '#fff', fontSize: (compact ? 10 : 12) / zoom, fontWeight: 700,
+                  color: '#fff', fontSize: (compact ? 10 : 12) / Math.max(zoom, 0.5), fontWeight: 700,
                   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                   textShadow: '0 1px 3px rgba(0,0,0,0.5)', cursor: 'text',
                 }}

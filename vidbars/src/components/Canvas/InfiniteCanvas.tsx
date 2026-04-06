@@ -2,6 +2,8 @@ import React, { useRef, useCallback, useEffect, useState } from 'react'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useBoardsStore } from '../../store/boardsStore'
+import { clampToNoParkZone } from '../../utils/nleZone'
+import { computeRowLayout, getRowY, getRowHeight, yToRow } from '../../utils/nleRows'
 
 interface Props {
   children: React.ReactNode
@@ -16,7 +18,7 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
   const shiftPan = useCanvasStore(s => s.shiftPan)
   const zoomAtPoint = useCanvasStore(s => s.zoomAtPoint)
   const setPan = useCanvasStore(s => s.setPan)
-  const nleRowHeight = useCanvasStore(s => s.nleRowHeight)
+
 
   const addFreeNode = useFreeNodeStore(s => s.addFreeNode)
   const updateFreeNode = useFreeNodeStore(s => s.updateFreeNode)
@@ -136,16 +138,97 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
     }
   }, [])
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/'))
-    if (files.length === 0) return
-    e.preventDefault()
+  // ── Layer-aware drop handlers ──
 
-    // Check ALL elements at the drop point — use priority order:
-    // blocks/cards > boards > free nodes > bare canvas
+  /** Drop on bare canvas at any layer — create free image node(s) */
+  const dropOnBareCanvas = useCallback((e: React.DragEvent, files: File[]) => {
+    const rect = containerRef.current!.getBoundingClientRect()
+    const z = zoomRef.current
+    const p = panRef.current
+    files.forEach((file, i) => {
+      let cx = (e.clientX - rect.left - p.x) / z + i * 220
+      let cy = (e.clientY - rect.top - p.y) / z
+      const clamped = clampToNoParkZone(cx, cy, 200, 180)
+      cx = clamped.x; cy = clamped.y
+      const nodeId = addFreeNode(cx, cy, 'image')
+      const reader = new FileReader()
+      reader.onload = () => {
+        updateFreeNode(nodeId, { imageUrl: reader.result as string, label: file.name.replace(/\.[^.]+$/, '') })
+      }
+      reader.readAsDataURL(file)
+    })
+  }, [addFreeNode, updateFreeNode])
+
+  /** Drop on a free node at any layer — set its image */
+  const dropOnFreeNode = useCallback((allEls: Element[], files: File[]): boolean => {
+    for (const el of allEls) {
+      const freenode = el.closest('[data-freenode][data-id]') as HTMLElement | null
+      if (freenode) {
+        const nodeId = freenode.dataset.id!
+        const file = files[0]
+        const reader = new FileReader()
+        reader.onload = () => {
+          useFreeNodeStore.getState().updateFreeNode(nodeId, {
+            type: 'image',
+            imageUrl: reader.result as string,
+            label: file.name.replace(/\.[^.]+$/, ''),
+          })
+        }
+        reader.readAsDataURL(file)
+        return true
+      }
+    }
+    return false
+  }, [])
+
+  const handleCardDrop = useCallback((e: React.DragEvent, files: File[]) => {
+    const allEls = document.elementsFromPoint(e.clientX, e.clientY)
+    // 1. Card target — data-layer-card is now a group ID
+    for (const el of allEls) {
+      const card = el.closest('[data-layer-card]') as HTMLElement | null
+      if (card) {
+        const groupId = card.dataset.layerCard!
+        const file = files[0]
+        const reader = new FileReader()
+        reader.onload = () => {
+          useBoardsStore.getState().setGroupCardHeroImage(groupId, reader.result as string)
+        }
+        reader.readAsDataURL(file)
+        return
+      }
+    }
+    // 2. Free node
+    if (dropOnFreeNode(allEls, files)) return
+    // 3. Bare canvas
+    dropOnBareCanvas(e, files)
+  }, [dropOnFreeNode, dropOnBareCanvas])
+
+  const handleBlockDrop = useCallback((e: React.DragEvent, files: File[]) => {
+    const allEls = document.elementsFromPoint(e.clientX, e.clientY)
+    // 1. Block target
+    for (const el of allEls) {
+      const block = el.closest('[data-layer-block]') as HTMLElement | null
+      if (block) {
+        const boardId = block.dataset.layerBlock!
+        const file = files[0]
+        const reader = new FileReader()
+        reader.onload = () => {
+          useBoardsStore.getState().setBlockThumbnail(boardId, reader.result as string)
+        }
+        reader.readAsDataURL(file)
+        return
+      }
+    }
+    // 2. Free node
+    if (dropOnFreeNode(allEls, files)) return
+    // 3. Bare canvas
+    dropOnBareCanvas(e, files)
+  }, [dropOnFreeNode, dropOnBareCanvas])
+
+  const handleBoardDrop = useCallback((e: React.DragEvent, files: File[]) => {
     const allEls = document.elementsFromPoint(e.clientX, e.clientY)
 
-    // 1. NLE block bar (any zoom level that renders them)
+    // 1. NLE block bar
     for (const el of allEls) {
       const block = el.closest('[data-block][data-id]') as HTMLElement | null
       if (block) {
@@ -164,27 +247,7 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
       }
     }
 
-    // 2. Collapsed NLE card
-    for (const el of allEls) {
-      const card = el.closest('[data-nle-card]') as HTMLElement | null
-      if (card) {
-        const boardId = card.dataset.nleCard!
-        files.forEach(file => {
-          const reader = new FileReader()
-          reader.onload = () => {
-            const b = useBoardsStore.getState().boards[boardId]
-            const rid = b?.rootIds[0]
-            if (!rid) return
-            const cur = b.bars[rid]?.content.images ?? []
-            useBoardsStore.getState().setContent(boardId, rid, { images: [...cur, reader.result as string] })
-          }
-          reader.readAsDataURL(file)
-        })
-        return
-      }
-    }
-
-    // 3. Board area (drop on board padding, not a specific block)
+    // 2. Board area
     for (const el of allEls) {
       const board = el.closest('[data-board]') as HTMLElement | null
       if (board) {
@@ -208,46 +271,31 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
       }
     }
 
-    // 4. Free node (only if nothing above matched)
-    for (const el of allEls) {
-      const freenode = el.closest('[data-freenode][data-id]') as HTMLElement | null
-      if (freenode) {
-        const nodeId = freenode.dataset.id!
-        const file = files[0]
-        const reader = new FileReader()
-        reader.onload = () => {
-          useFreeNodeStore.getState().updateFreeNode(nodeId, {
-            type: 'image',
-            imageUrl: reader.result as string,
-            label: file.name.replace(/\.[^.]+$/, ''),
-          })
-        }
-        reader.readAsDataURL(file)
-        return
-      }
-    }
+    // 3. Free node
+    if (dropOnFreeNode(allEls, files)) return
+    // 4. Bare canvas
+    dropOnBareCanvas(e, files)
+  }, [dropOnFreeNode, dropOnBareCanvas])
 
-    // Dropped on bare canvas — create new image nodes
-    const rect = containerRef.current!.getBoundingClientRect()
-    const z = zoomRef.current
-    const p = panRef.current
-    files.forEach((file, i) => {
-      const cx = (e.clientX - rect.left - p.x) / z + i * 220
-      const cy = (e.clientY - rect.top - p.y) / z
-      const nodeId = addFreeNode(cx, cy, 'image')
-      const reader = new FileReader()
-      reader.onload = () => {
-        updateFreeNode(nodeId, { imageUrl: reader.result as string, label: file.name.replace(/\.[^.]+$/, '') })
-      }
-      reader.readAsDataURL(file)
-    })
-  }, [addFreeNode, updateFreeNode])
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/'))
+    if (files.length === 0) return
+    e.preventDefault()
+
+    // Dispatch to the active layer's drop handler
+    const zoom = useCanvasStore.getState().zoom
+    if (zoom <= 0.15)      return handleCardDrop(e, files)
+    if (zoom < 0.3)        return handleBlockDrop(e, files)
+    return handleBoardDrop(e, files)
+  }, [handleCardDrop, handleBlockDrop, handleBoardDrop])
 
   const handlePointerUp = useCallback((e: React.PointerEvent) => {
     if (isPanning.current) {
       isPanning.current = false
       return
     }
+    // Clear card-level selection when clicking empty canvas
+    useBoardsStore.getState().setSelectedGroup(null)
     if (rbStartCanvas.current) {
       const containerRect = containerRef.current!.getBoundingClientRect()
       const rb = rubberBandRef.current
@@ -315,36 +363,7 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
       <DotGrid panX={pan.x} panY={pan.y} />
 
       {/* ── NLE row lines (behind everything, in canvas space) ── */}
-      <div style={{
-        position: 'absolute', left: 0, top: 0,
-        transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-        transformOrigin: '0 0',
-        pointerEvents: 'none',
-        willChange: 'transform',
-      }}>
-        {Array.from({ length: 16 }, (_, i) => (
-          <React.Fragment key={i}>
-            {/* Row band fill (alternating) */}
-            {i % 2 === 0 && (
-              <div style={{
-                position: 'absolute',
-                left: -8000, width: 20000,
-                top: i * nleRowHeight,
-                height: nleRowHeight,
-                background: 'rgba(255,255,255,0.008)',
-              }} />
-            )}
-            {/* Row separator line */}
-            <div style={{
-              position: 'absolute',
-              left: -8000, width: 20000,
-              top: i * nleRowHeight,
-              height: 1,
-              background: i === 0 ? 'rgba(255,255,255,0.07)' : 'rgba(255,255,255,0.03)',
-            }} />
-          </React.Fragment>
-        ))}
-      </div>
+      <NLERowBands pan={pan} zoom={zoom} />
 
       <div
         style={{
@@ -369,7 +388,7 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
         userSelect: 'none',
         pointerEvents: 'none',
       }}>
-        {Math.round(zoom * 100)}% · scroll to zoom · middle-drag or space+drag to pan · left-drag to select · right-click to add
+        {Math.round(zoom * 100)}% · {zoom <= 0.15 ? 'Cards' : zoom < 0.3 ? 'Blocks' : 'Boards'} · scroll to zoom · middle-drag or space+drag to pan
       </div>
 
       {/* ── Rubber-band selection overlay ── */}
@@ -404,13 +423,16 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
             minWidth: 160,
           }}>
             {[
-              { label: '📝  Add note',    action: () => { addFreeNode(addMenu.cx, addMenu.cy, 'note');  setAddMenu(null) } },
-              { label: '🖼  Add image',   action: () => { addFreeNode(addMenu.cx, addMenu.cy, 'image'); setAddMenu(null) } },
+              { label: '📝  Add note',    action: () => { const c = clampToNoParkZone(addMenu.cx, addMenu.cy, 200, 160); addFreeNode(c.x, c.y, 'note');  setAddMenu(null) } },
+              { label: '🖼  Add image',   action: () => { const c = clampToNoParkZone(addMenu.cx, addMenu.cy, 200, 180); addFreeNode(c.x, c.y, 'image'); setAddMenu(null) } },
               { label: '─────────────', action: null },
-              { label: '🎬  New VidBar', action: () => {
-                const rowH = useCanvasStore.getState().nleRowHeight
-                const nleRow = Math.max(0, Math.round(addMenu.cy / rowH))
-                useBoardsStore.getState().createBoard(nleRow, addMenu.cx)
+              { label: zoom <= 0.15 ? '🎬  New Card' : '🎬  New VidBar', action: () => {
+                const bs = useBoardsStore.getState()
+                const addLayout = computeRowLayout(bs.boards, 0)
+                const nleRow = Math.max(0, yToRow(addMenu.cy, addLayout))
+                const boardId = useBoardsStore.getState().createBoard(nleRow, addMenu.cx)
+                // At card level, also split into its own group
+                if (zoom <= 0.15) useBoardsStore.getState().moveToNewGroup(boardId)
                 setAddMenu(null)
               }},
             ].map((item, idx) => (
@@ -429,6 +451,50 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
           </div>
         </>
       )}
+    </div>
+  )
+}
+
+/** Dynamic NLE row bands — renders alternating fills and separator lines based on actual row layout */
+const NLERowBands: React.FC<{ pan: { x: number; y: number }; zoom: number }> = ({ pan, zoom }) => {
+  const boards = useBoardsStore(s => s.boards)
+  const boardPos = useCanvasStore(s => s.boardPos)
+  const pRow = Math.max(0, yToRow(boardPos.y, computeRowLayout(boards, 0)))
+  const layout = computeRowLayout(boards, pRow)
+  // Render rows 0..15 (or as many as exist + a few extras)
+  const maxRow = Math.max(15, ...Object.keys(layout.rowHeights).map(Number))
+  return (
+    <div style={{
+      position: 'absolute', left: 0, top: 0,
+      transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+      transformOrigin: '0 0',
+      pointerEvents: 'none',
+      willChange: 'transform',
+    }}>
+      {Array.from({ length: maxRow + 1 }, (_, i) => {
+        const rowTop = getRowY(i, layout)
+        const rowH = getRowHeight(i, layout)
+        return (
+          <React.Fragment key={i}>
+            {i % 2 === 0 && (
+              <div style={{
+                position: 'absolute',
+                left: -8000, width: 20000,
+                top: rowTop,
+                height: rowH,
+                background: 'rgba(255,255,255,0.008)',
+              }} />
+            )}
+            <div style={{
+              position: 'absolute',
+              left: -8000, width: 20000,
+              top: rowTop,
+              height: 1,
+              background: i === 0 ? 'rgba(255,255,255,0.07)' : 'rgba(255,255,255,0.03)',
+            }} />
+          </React.Fragment>
+        )
+      })}
     </div>
   )
 }
