@@ -1,8 +1,7 @@
 import type { Bar } from '../types/bar'
-import { useBoardsStore } from '../store/boardsStore'
-import { useCanvasStore } from '../store/canvasStore'
+import { useBoardsStore, getGroupForBoard } from '../store/boardsStore'
 import { collectSubtree } from './barOps'
-import { computeRowLayout, yToRow } from './nleRows'
+import { computeGroupLayout, getRowY } from './nleRows'
 
 const BOARD_PADDING_X = 20
 
@@ -12,52 +11,38 @@ const BOARD_PADDING_X = 20
  */
 export interface BoardRange {
   id: string           // 'primary' for the primary board
-  anchorX: number      // board's nleX (boardPos.x for primary)
+  anchorX: number      // board's absolute X (group.originX + board.nleX)
   nleRow: number
   left: number         // canvas left edge of bar content
   right: number        // canvas right edge of bar content
 }
 
 export function buildBoardRanges(): BoardRange[] {
-  const csState = useCanvasStore.getState()
   const bsState = useBoardsStore.getState()
 
   const ranges: BoardRange[] = []
 
-  // Primary board — position from canvasStore, bars from boardsStore
-  const primaryBoard = bsState.boards['primary']
-  if (primaryBoard) {
-    const pTopRow = Object.values(primaryBoard.bars).filter(b => b.rowIndex === 0)
-    if (pTopRow.length > 0) {
-      const minX = Math.min(...pTopRow.map(b => b.x))
-      const maxX = Math.max(...pTopRow.map(b => b.x + b.width))
-      const layout0 = computeRowLayout(bsState.boards, 0)
-      const pRow = Math.max(0, yToRow(csState.boardPos.y, layout0))
-      ranges.push({
-        id: 'primary',
-        anchorX: csState.boardPos.x,
-        nleRow: pRow,
-        left: csState.boardPos.x + BOARD_PADDING_X + minX,
-        right: csState.boardPos.x + BOARD_PADDING_X + maxX,
-      })
-    }
-  }
+  bsState.groups.forEach(group => {
+    const groupLayout = computeGroupLayout(group.boardIds, bsState.boards)
 
-  // Extra boards
-  for (const board of Object.values(bsState.boards)) {
-    if (board.id === 'primary') continue
-    const topRow = Object.values(board.bars).filter(b => b.rowIndex === 0)
-    if (topRow.length === 0) continue
-    const minX = Math.min(...topRow.map(b => b.x))
-    const maxX = Math.max(...topRow.map(b => b.x + b.width))
-    ranges.push({
-      id: board.id,
-      anchorX: board.nleX,
-      nleRow: board.nleRow,
-      left: board.nleX + BOARD_PADDING_X + minX,
-      right: board.nleX + BOARD_PADDING_X + maxX,
+    group.boardIds.forEach(bid => {
+      const board = bsState.boards[bid]
+      if (!board) return
+      const bScale = board.boardScale ?? 1
+      const topRow = Object.values(board.bars).filter(b => b.rowIndex === 0)
+      if (topRow.length === 0) return
+      const minX = Math.min(...topRow.map(b => b.x))
+      const maxX = Math.max(...topRow.map(b => b.x + b.width))
+      const absX = group.originX + (board.nleX ?? 0)
+      ranges.push({
+        id: bid,
+        anchorX: absX,
+        nleRow: board.nleRow ?? 0,
+        left: absX + BOARD_PADDING_X + minX * bScale,
+        right: absX + BOARD_PADDING_X + maxX * bScale,
+      })
     })
-  }
+  })
 
   return ranges
 }

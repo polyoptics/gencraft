@@ -8,20 +8,18 @@ import ReactDOM from 'react-dom'
 import { useBoardsStore, getGroupForBoard } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
-import { primarySlot, extraSlots, clampBoardX } from '../../utils/nlePush'
-import type { BoardSlot } from '../../utils/nlePush'
-import { computeRowLayout, getRowY, yToRow, dyToRowDelta } from '../../utils/nleRows'
+import { computeGroupLayout, getRowY, dyToRowDelta, getBoardAbsolutePos } from '../../utils/nleRows'
+import type { RowLayout } from '../../utils/nleRows'
+import { groupBoardSlots, clampBoardX } from '../../utils/nlePush'
 import { DEFAULT_H } from '../../utils/barConstants'
 import { ColorPickerPopup } from '../Bar/ColorPickerPopup'
 import { FreeCanvas } from '../Canvas/FreeCanvas'
+import { NLETimelineHeader } from '../NLE/NLETimelineHeader'
 
 const BOARD_PADDING_X = 20
 
-// ── Per-board solid block (rendered in canvas space) ──
-
 const BLOCK_HEADER_H = 57
 
-// ── Grip SVG (3×3 dot grid) ──
 const GripDots: React.FC<{ size?: number; opacity?: number }> = ({ size = 10, opacity = 0.35 }) => (
   <svg width={size} height={size} viewBox="0 0 10 10" style={{ opacity, flexShrink: 0 }}>
     {[1, 5, 9].flatMap(cy => [1, 5, 9].map(cx => (
@@ -33,9 +31,9 @@ const GripDots: React.FC<{ size?: number; opacity?: number }> = ({ size = 10, op
 const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
   const board = useBoardsStore(s => s.boards[boardId])
   const zoom = useCanvasStore(s => s.zoom)
-  const boardPos = useCanvasStore(s => s.boardPos)
 
   const groups = useBoardsStore(s => s.groups)
+  const boards = useBoardsStore(s => s.boards)
   const [colorPicker, setColorPicker] = useState<{ x: number; y: number } | null>(null)
   const [blockMenu, setBlockMenu] = useState<{ x: number; y: number } | null>(null)
   const [renaming, setRenaming] = useState(false)
@@ -64,21 +62,21 @@ const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
   const height = Math.max(...rootBars.map(b => b.height), DEFAULT_H) * bScale
   const rootColor = rootBars[0]?.color ?? '#5b8dd9'
 
-  // Use layer-specific thumbnail, fall back to first bar image
   const thumbnail = board.layers?.block?.thumbnail
     ?? rootBars.find(b => b.content?.images?.length > 0)?.content.images[0]
     ?? null
 
   const displayLabel = board.layers?.block?.label || board.projectName
 
-  // Group color indicator
   const myGroup = getGroupForBoard(groups, boardId)
+  const isUngroupedBlock = !myGroup
   const groupColor = myGroup?.color ?? '#5b8dd9'
 
+  // ── Block drag: board moves within its group (local nleRow / nleX), or free drag if ungrouped ──
   const onSolidDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return
     if ((e.target as HTMLElement).tagName === 'INPUT') return
-    if ((e.target as Element).closest('[data-grip]')) return  // grip has its own handler
+    if ((e.target as Element).closest('[data-grip]')) return
     e.stopPropagation()
     e.preventDefault()
     useUndoCoordinator.getState().checkpoint()
@@ -88,25 +86,21 @@ const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
     let dyAccum = 0
     let xAccum = 0
 
-    const cs0 = useCanvasStore.getState()
     const bs0 = useBoardsStore.getState()
-    const layout0 = computeRowLayout(bs0.boards, 0)
-    const initialRow = boardId === 'primary'
-      ? Math.max(0, yToRow(cs0.boardPos.y, layout0))
-      : (bs0.boards[boardId]?.nleRow ?? 0)
-    const initialX = boardId === 'primary'
-      ? cs0.boardPos.x
-      : (bs0.boards[boardId]?.nleX ?? 0)
+    const b0 = bs0.boards[boardId]
+    if (!b0) return
+    const group = getGroupForBoard(bs0.groups, boardId)
+    const ungrouped = !group
 
-    // Snapshot all board slots for collision detection (same as board level)
-    const pRow = Math.max(0, yToRow(cs0.boardPos.y, layout0))
-    const pBars = bs0.boards['primary']?.bars ?? {}
-    const slots: BoardSlot[] = [
-      primarySlot(cs0.boardPos.x, pRow, pBars, bs0.boards['primary']?.boardScale ?? 1),
-      ...extraSlots(bs0.boards),
-    ]
-
-    const dragLay = computeRowLayout(bs0.boards, initialRow)
+    // Grouped: row/x clamped drag setup
+    const initialRow = b0.nleRow ?? 0
+    const initialX = b0.nleX ?? 0
+    const dragLay = ungrouped ? null : computeGroupLayout(group.boardIds, bs0.boards)
+    const gox = group?.originX ?? 0
+    const dragSlots = ungrouped ? [] : groupBoardSlots(gox, group.boardIds, bs0.boards)
+    // Ungrouped: free drag start
+    const startCX = b0.canvasX ?? 0
+    const startCY = b0.canvasY ?? 0
 
     const onMove = (ev: PointerEvent) => {
       const z = useCanvasStore.getState().zoom
@@ -116,18 +110,26 @@ const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
       lastY = ev.clientY
       dyAccum += dy
       xAccum += dx
-      const newRow = Math.max(0, initialRow + dyToRowDelta(dyAccum, initialRow, dragLay))
-      const rawX = initialX + xAccum
-      const clampedX = clampBoardX(slots, boardId, rawX, newRow)
-      if (boardId === 'primary') {
-        useCanvasStore.getState().setBoardPos({ x: clampedX, y: getRowY(newRow, dragLay) })
+      if (ungrouped) {
+        useBoardsStore.getState().setUngroupedBoardPos(boardId, startCX + xAccum, startCY + dyAccum)
       } else {
-        useBoardsStore.getState().setBoardNlePos(boardId, newRow, clampedX)
+        const newRow = Math.max(0, initialRow + dyToRowDelta(dyAccum, initialRow, dragLay!))
+        const rawAbsX = gox + initialX + xAccum
+        const clampedAbsX = clampBoardX(dragSlots, boardId, rawAbsX, newRow)
+        useBoardsStore.getState().setBoardNlePos(boardId, newRow, clampedAbsX - gox)
       }
     }
     const onUp = () => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
+      // Zone transition: ungrouped block dragged into timeline → create group
+      if (ungrouped) {
+        const b = useBoardsStore.getState().boards[boardId]
+        const zly = useCanvasStore.getState().zoneLineY
+        if (b && (b.canvasY ?? 0) >= zly) {
+          useBoardsStore.getState().groupBoardAsNew(boardId)
+        }
+      }
     }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
@@ -146,17 +148,14 @@ const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
     let dyAccum = 0
     let xAccum = 0
 
-    const cs0 = useCanvasStore.getState()
     const bs0 = useBoardsStore.getState()
-    const layout0 = computeRowLayout(bs0.boards, 0)
-    const initialRow = boardId === 'primary'
-      ? Math.max(0, yToRow(cs0.boardPos.y, layout0))
-      : (bs0.boards[boardId]?.nleRow ?? 0)
-    const initialX = boardId === 'primary'
-      ? cs0.boardPos.x
-      : (bs0.boards[boardId]?.nleX ?? 0)
-    const sourceGroupId = getGroupForBoard(useBoardsStore.getState().groups, boardId)?.id
-    const gripLay = computeRowLayout(bs0.boards, initialRow)
+    const b0 = bs0.boards[boardId]
+    if (!b0) return
+    const group = getGroupForBoard(bs0.groups, boardId)
+    const initialRow = b0.nleRow ?? 0
+    const initialX = b0.nleX ?? 0
+    const sourceGroupId = group?.id
+    const gripLay = computeGroupLayout(group?.boardIds ?? [boardId], bs0.boards)
 
     const onMove = (ev: PointerEvent) => {
       const z = useCanvasStore.getState().zoom
@@ -167,11 +166,7 @@ const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
       dyAccum += dy
       xAccum += dx
       const newRow = Math.max(0, initialRow + dyToRowDelta(dyAccum, initialRow, gripLay))
-      if (boardId === 'primary') {
-        useCanvasStore.getState().setBoardPos({ x: initialX + xAccum, y: getRowY(newRow, gripLay) })
-      } else {
-        useBoardsStore.getState().setBoardNlePos(boardId, newRow, initialX + xAccum)
-      }
+      useBoardsStore.getState().setBoardNlePos(boardId, newRow, initialX + xAccum)
     }
 
     const onUp = (ev: PointerEvent) => {
@@ -179,7 +174,6 @@ const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
       window.removeEventListener('pointerup', onUp)
       setGripDragging(false)
 
-      // Check what's under the drop point — look for another block's group
       const allEls = document.elementsFromPoint(ev.clientX, ev.clientY)
       for (const el of allEls) {
         const blockEl = el.closest('[data-layer-block]') as HTMLElement | null
@@ -192,10 +186,17 @@ const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
           }
         }
       }
-      // Dropped on empty canvas — move to new group (only if there's more than one board in source group)
       const currentGroup = getGroupForBoard(useBoardsStore.getState().groups, boardId)
       if (currentGroup && currentGroup.boardIds.length > 1 && (Math.abs(xAccum) > 50 || Math.abs(dyAccum) > 50)) {
-        useBoardsStore.getState().moveToNewGroup(boardId)
+        // Check if dragged into free zone → ungroup
+        const bs = useBoardsStore.getState()
+        const absPos = getBoardAbsolutePos(boardId, bs.groups, bs.boards)
+        const zly = useCanvasStore.getState().zoneLineY
+        if (absPos.y < zly) {
+          useBoardsStore.getState().ungroupBoard(boardId)
+        } else {
+          useBoardsStore.getState().moveToNewGroup(boardId)
+        }
       }
     }
 
@@ -203,24 +204,27 @@ const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
     window.addEventListener('pointerup', onUp)
   }
 
-  // Compute position in canvas coordinates
-  const boardX = boardId === 'primary' ? boardPos.x : board.nleX
-  const boards = useBoardsStore(s => s.boards)
-  const blockLayout = useMemo(() => {
-    const pRow = Math.max(0, yToRow(boardPos.y, computeRowLayout(boards, 0)))
-    return computeRowLayout(boards, pRow)
-  }, [boards, boardPos.y])
-  const boardY = boardId === 'primary' ? boardPos.y : getRowY(board.nleRow, blockLayout)
+  // ── Two-level positioning: group origin + local row ──
+  const siblingRowKey = useBoardsStore(s => {
+    const bids = myGroup?.boardIds ?? [boardId]
+    return bids.map(bid => s.boards[bid]?.nleRow ?? 0).join(',')
+  })
+  const groupLayout = useMemo(() => {
+    return computeGroupLayout(myGroup?.boardIds ?? [boardId], useBoardsStore.getState().boards)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [myGroup?.boardIds, siblingRowKey, board?.bars, board?.boardScale])
+
+  const boardX = isUngroupedBlock ? (board.canvasX ?? 0) : (myGroup!.originX + (board.nleX ?? 0))
+  const boardY = isUngroupedBlock ? (board.canvasY ?? 0) : (myGroup!.originY + getRowY(board.nleRow ?? 0, groupLayout))
 
   const left = BOARD_PADDING_X + minX * bScale
   const totalW = Math.max(maxX * bScale, 200)
 
-  // Other groups for the context menu
   const otherGroups = groups.filter(g => g.id !== myGroup?.id)
 
   return (
     <div style={{ position: 'absolute', left: boardX, top: boardY, width: totalW, height: height + BLOCK_HEADER_H }}>
-      {/* ── Header bar (matches Board-level style) ── */}
+      {/* ── Header bar ── */}
       <div
         style={{
           position: 'absolute', top: 0,
@@ -232,26 +236,26 @@ const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
           border: '1px solid rgba(255,255,255,0.08)',
           borderRadius: 8, backdropFilter: 'blur(12px)',
           cursor: 'grab', zIndex: 30,
-          // Group color indicator — thin left border stripe
           borderLeft: `3px solid ${groupColor}`,
         }}
         onPointerDown={onSolidDown}
       >
-        {/* Grip handle for group reassignment */}
-        <div
-          data-grip="true"
-          style={{
-            cursor: gripDragging ? 'grabbing' : 'grab',
-            padding: '4px 2px',
-            borderRadius: 3,
-            display: 'flex', alignItems: 'center',
-            flexShrink: 0,
-          }}
-          onPointerDown={onGripDown}
-          title="Drag to reassign to another group"
-        >
-          <GripDots size={12} opacity={gripDragging ? 0.7 : 0.35} />
-        </div>
+        {!isUngroupedBlock && (
+          <div
+            data-grip="true"
+            style={{
+              cursor: gripDragging ? 'grabbing' : 'grab',
+              padding: '4px 2px',
+              borderRadius: 3,
+              display: 'flex', alignItems: 'center',
+              flexShrink: 0,
+            }}
+            onPointerDown={onGripDown}
+            title="Drag to reassign to another group"
+          >
+            <GripDots size={12} opacity={gripDragging ? 0.7 : 0.35} />
+          </div>
+        )}
 
         {renaming ? (
           <input
@@ -308,7 +312,6 @@ const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
             opacity: 0.7, borderRadius: 12,
           }} />
         )}
-        {/* Block label overlay */}
         <div style={{
           position: 'absolute', bottom: 6, left: 8,
           color: 'rgba(255,255,255,0.7)', fontSize: 11, fontWeight: 600,
@@ -330,7 +333,6 @@ const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
         />
       )}
 
-      {/* Block-layer context menu */}
       {blockMenu && ReactDOM.createPortal(
         <>
           <div style={{ position: 'fixed', inset: 0, zIndex: 9998 }} onPointerDown={() => setBlockMenu(null)} />
@@ -366,7 +368,6 @@ const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
                 useBoardsStore.getState().duplicateBoard(boardId)
                 setBlockMenu(null)
               }}] : []),
-              // ── Group reassignment ──
               { label: 'Move to New Group', icon: '📦', action: () => {
                 useUndoCoordinator.getState().checkpoint()
                 useBoardsStore.getState().moveToNewGroup(boardId)
@@ -404,7 +405,7 @@ const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
   )
 }
 
-// ── Canvas content: solid block per board ──
+// ── Canvas content ──
 
 const Canvas: React.FC = () => {
   const boardOrder = useBoardsStore(s => s.boardOrder)
@@ -417,9 +418,7 @@ const Canvas: React.FC = () => {
   )
 }
 
-// ── Screen-space overlay: one NLE header per group ──
-
-import { NLETimelineHeader } from '../NLE/NLETimelineHeader'
+// ── Screen-space overlay ──
 
 const Overlay: React.FC = () => {
   const groups = useBoardsStore(s => s.groups)

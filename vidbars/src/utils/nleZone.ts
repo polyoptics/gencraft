@@ -1,9 +1,8 @@
 // nleZone.ts — computes the NLE timeline bounding box in canvas coordinates
 // and clamps free nodes so they can't rest inside it.
 
-import { useCanvasStore } from '../store/canvasStore'
 import { useBoardsStore } from '../store/boardsStore'
-import { computeRowLayout, getRowY, getRowHeight, yToRow } from './nleRows'
+import { computeGroupLayout, getRowY, getRowHeight } from './nleRows'
 
 const BOARD_PADDING_X = 20
 const NLE_HEADER_H = 36
@@ -11,49 +10,32 @@ const GAP = 8
 const ZONE_PADDING = 50 // breathing room around the NLE zone
 
 export function getNleZoneBounds(): { left: number; right: number; top: number; bottom: number } | null {
-  const { boardPos } = useCanvasStore.getState()
-  const { boards, boardOrder } = useBoardsStore.getState()
-
-  const layout0 = computeRowLayout(boards, 0)
-  const pRow = Math.max(0, yToRow(boardPos.y, layout0))
-  const layout = computeRowLayout(boards, pRow)
+  const { boards, groups } = useBoardsStore.getState()
 
   const extents: { left: number; right: number; y: number; rowH: number }[] = []
 
-  // Primary board
-  const primary = boards['primary']
-  if (primary) {
-    const pScale = primary.boardScale ?? 1
-    const rootBars = primary.rootIds.map(id => primary.bars[id]).filter(Boolean)
-    if (rootBars.length > 0) {
+  groups.forEach(group => {
+    const groupLayout = computeGroupLayout(group.boardIds, boards)
+
+    group.boardIds.forEach(bid => {
+      const board = boards[bid]
+      if (!board) return
+      const bScale = board.boardScale ?? 1
+      const rootBars = board.rootIds.map(id => board.bars[id]).filter(Boolean)
+      if (rootBars.length === 0) return
       const minX = Math.min(...rootBars.map(b => b.x))
       const maxX = Math.max(...rootBars.map(b => b.x + b.width))
+      const bx = group.originX + (board.nleX ?? 0)
+      const row = board.nleRow ?? 0
+      const by = group.originY + getRowY(row, groupLayout)
       extents.push({
-        left: boardPos.x + BOARD_PADDING_X + minX * pScale,
-        right: boardPos.x + BOARD_PADDING_X + maxX * pScale,
-        y: boardPos.y,
-        rowH: getRowHeight(pRow, layout),
+        left: bx + BOARD_PADDING_X + minX * bScale,
+        right: bx + BOARD_PADDING_X + maxX * bScale,
+        y: by,
+        rowH: getRowHeight(row, groupLayout),
       })
-    }
-  }
-
-  // Extra boards
-  for (const bid of boardOrder) {
-    const board = boards[bid]
-    if (!board) continue
-    const bScale = board.boardScale ?? 1
-    const rootBars = board.rootIds.map(id => board.bars[id]).filter(Boolean)
-    if (rootBars.length === 0) continue
-    const minX = Math.min(...rootBars.map(b => b.x))
-    const maxX = Math.max(...rootBars.map(b => b.x + b.width))
-    const y = getRowY(board.nleRow, layout)
-    extents.push({
-      left: board.nleX + BOARD_PADDING_X + minX * bScale,
-      right: board.nleX + BOARD_PADDING_X + maxX * bScale,
-      y,
-      rowH: getRowHeight(board.nleRow, layout),
     })
-  }
+  })
 
   if (extents.length === 0) return null
 

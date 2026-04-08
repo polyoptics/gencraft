@@ -1,14 +1,15 @@
 import React, { useRef, useState, useCallback, useMemo, useEffect } from 'react'
-import { useBoardsStore } from '../../store/boardsStore'
+import ReactDOM from 'react-dom'
+import { useBoardsStore, getGroupForBoard } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { BoardProvider } from '../../contexts/BoardContext'
 import type { BoardCtx } from '../../contexts/BoardContext'
 import { ColorPickerPopup } from '../Bar/ColorPickerPopup'
 import { NLELayout } from './NLELayout'
-import { primarySlot, extraSlots, clampBoardX } from '../../utils/nlePush'
+import { groupBoardSlots, clampBoardX } from '../../utils/nlePush'
 import type { BoardSlot } from '../../utils/nlePush'
-import { computeRowLayout, getRowY, yToRow, dyToRowDelta } from '../../utils/nleRows'
+import { computeGroupLayout, getRowY, dyToRowDelta, getBoardAbsolutePos } from '../../utils/nleRows'
 import type { RowLayout } from '../../utils/nleRows'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 
@@ -23,17 +24,15 @@ export const Board: React.FC<Props> = ({ boardId }) => {
   const isPrimary = boardId === 'primary'
 
   const board        = useBoardsStore(s => s.boards[boardId])
+  const groups       = useBoardsStore(s => s.groups)
   const setBoardNlePos    = useBoardsStore(s => s.setBoardNlePos)
   const setBoardColor     = useBoardsStore(s => s.setBoardColor)
   const setBoardProjectName = useBoardsStore(s => s.setBoardProjectName)
   const deleteBoard       = useBoardsStore(s => s.deleteBoard)
   const viewerBarId       = useBoardsStore(s => s.boards[boardId]?.viewerBarId ?? null)
 
-  const boardPos        = useCanvasStore(s => s.boardPos)   // primary position
-  const setBoardPos     = useCanvasStore(s => s.setBoardPos)
   const setFocusedBoard = useCanvasStore(s => s.setFocusedBoard)
   const zoom            = Math.max(useCanvasStore(s => s.zoom) || 1, 0.01)
-
 
   const clearFreeSelection = useFreeNodeStore(s => s.clearFreeSelection)
 
@@ -51,6 +50,8 @@ export const Board: React.FC<Props> = ({ boardId }) => {
   const lastX         = useRef(0)
   const lastY         = useRef(0)
   const dragStartRow  = useRef(0)
+  const dragStartNleX = useRef(0)
+  const totalDX       = useRef(0)
   const totalDY       = useRef(0)
   const dragSlots     = useRef<BoardSlot[]>([])
   const dragLayout    = useRef<RowLayout>({ rowHeights: {}, rowTops: {}, totalHeight: 0 })
@@ -67,41 +68,30 @@ export const Board: React.FC<Props> = ({ boardId }) => {
     if (renaming) nameInputRef.current?.select()
   }, [renaming])
 
-  /** Build a RowLayout snapshot from current state */
+  /** Build a RowLayout snapshot for the board's group */
   const getLayout = useCallback((): RowLayout => {
-    const cs = useCanvasStore.getState()
     const bs = useBoardsStore.getState()
-    const pRow = isPrimary
-      ? Math.max(0, yToRow(cs.boardPos.y, computeRowLayout(bs.boards, 0)))
-      : (useBoardsStore.getState().boards[boardId]?.nleRow ?? 0)
-    return computeRowLayout(bs.boards, pRow)
-  }, [isPrimary, boardId])
+    const group = getGroupForBoard(bs.groups, boardId)
+    return computeGroupLayout(group?.boardIds ?? [boardId], bs.boards)
+  }, [boardId])
 
   const getCurrentRow = useCallback(() => {
-    if (isPrimary) {
-      const b = useBoardsStore.getState().boards['primary']
-      // Primary row is derived from boardPos.y
-      const cs = useCanvasStore.getState()
-      const layout = computeRowLayout(useBoardsStore.getState().boards, 0)
-      return Math.max(0, yToRow(cs.boardPos.y, layout))
-    }
     const b = useBoardsStore.getState().boards[boardId]
     return Math.max(0, Math.round(b?.nleRow ?? 0))
-  }, [isPrimary, boardId])
+  }, [boardId])
 
   const setPosition = useCallback((row: number, x: number) => {
-    if (isPrimary) {
-      const bs = useBoardsStore.getState()
-      const layout = computeRowLayout(bs.boards, row)
-      setBoardPos({ x, y: getRowY(row, layout) })
-    } else {
-      setBoardNlePos(boardId, row, x)
-    }
-  }, [isPrimary, boardId, setBoardPos, setBoardNlePos])
+    setBoardNlePos(boardId, row, x)
+  }, [boardId, setBoardNlePos])
 
-  // ── Clamped header drag ──
+  // Track ungrouped drag start
+  const ungroupedStartX = useRef(0)
+  const ungroupedStartY = useRef(0)
+  const isUngroupedDrag = useRef(false)
+
+  // ── Clamped header drag (board moves within its group, or free drag if ungrouped) ──
   const onHeaderDown = useCallback((e: React.PointerEvent) => {
-    if (e.button !== 0) return  // let middle bubble for canvas pan
+    if (e.button !== 0) return
     if ((e.target as HTMLElement).tagName === 'INPUT') return
     if ((e.target as Element).closest('[data-viewer-toggle],[data-grip],[data-name]')) return
     e.stopPropagation()
@@ -109,22 +99,27 @@ export const Board: React.FC<Props> = ({ boardId }) => {
     setFocusedBoard(boardId)
     headerDragMoved.current = false
     headerShift.current = e.shiftKey
-    dragStartRow.current = getCurrentRow()
+    totalDX.current = 0
     totalDY.current = 0
     lastX.current = e.clientX
     lastY.current = e.clientY
-    const csState = useCanvasStore.getState()
     const bsState = useBoardsStore.getState()
-    const layout0 = computeRowLayout(bsState.boards, 0)
-    dragLayout.current = computeRowLayout(bsState.boards, dragStartRow.current)
-    const pRow = Math.max(0, yToRow(csState.boardPos.y, layout0))
-    const primaryBars = bsState.boards['primary']?.bars ?? {}
-    dragSlots.current = [
-      primarySlot(csState.boardPos.x, pRow, primaryBars, bsState.boards['primary']?.boardScale ?? 1),
-      ...extraSlots(bsState.boards),
-    ]
+    const group = getGroupForBoard(bsState.groups, boardId)
+    isUngroupedDrag.current = !group
+    if (!group) {
+      // Ungrouped: store starting canvas position
+      const b = bsState.boards[boardId]
+      ungroupedStartX.current = b?.canvasX ?? 0
+      ungroupedStartY.current = b?.canvasY ?? 0
+    } else {
+      // Grouped: existing clamped drag setup
+      dragStartRow.current = getCurrentRow()
+      dragStartNleX.current = bsState.boards[boardId]?.nleX ?? 0
+      dragLayout.current = computeGroupLayout(group.boardIds, bsState.boards)
+      dragSlots.current = groupBoardSlots(group.originX, group.boardIds, bsState.boards)
+    }
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
-  }, [getCurrentRow])
+  }, [getCurrentRow, boardId])
 
   const onHeaderMove = useCallback((e: React.PointerEvent) => {
     if (!(e.currentTarget as HTMLElement).hasPointerCapture(e.pointerId)) return
@@ -133,30 +128,42 @@ export const Board: React.FC<Props> = ({ boardId }) => {
     if (Math.abs(dx) > 2 || Math.abs(dy) > 2) headerDragMoved.current = true
     lastX.current = e.clientX
     lastY.current = e.clientY
+    totalDX.current += dx
     totalDY.current += dy
-    const lay = dragLayout.current
-    const targetRow = Math.max(0, dragStartRow.current + dyToRowDelta(totalDY.current, dragStartRow.current, lay))
-    if (isPrimary) {
-      const rawX = useCanvasStore.getState().boardPos.x + dx
-      const clampedX = clampBoardX(dragSlots.current, 'primary', rawX, targetRow)
-      setBoardPos({ x: clampedX, y: getRowY(targetRow, lay) })
+    if (isUngroupedDrag.current) {
+      // Ungrouped: free 2D drag, no clamping
+      useBoardsStore.getState().setUngroupedBoardPos(
+        boardId,
+        ungroupedStartX.current + totalDX.current,
+        ungroupedStartY.current + totalDY.current,
+      )
     } else {
-      const b = useBoardsStore.getState().boards[boardId]
-      if (!b) return
-      const rawX = b.nleX + dx
-      const clampedX = clampBoardX(dragSlots.current, boardId, rawX, targetRow)
-      setBoardNlePos(boardId, targetRow, clampedX)
+      // Grouped: row-snapped clamped drag
+      const lay = dragLayout.current
+      const targetRow = Math.max(0, dragStartRow.current + dyToRowDelta(totalDY.current, dragStartRow.current, lay))
+      const grp = getGroupForBoard(useBoardsStore.getState().groups, boardId)
+      const gox = grp?.originX ?? 0
+      const rawLocalX = dragStartNleX.current + totalDX.current
+      const rawAbsX = gox + rawLocalX
+      const clampedAbsX = clampBoardX(dragSlots.current, boardId, rawAbsX, targetRow)
+      setBoardNlePos(boardId, targetRow, clampedAbsX - gox)
     }
-  }, [boardId, zoom, isPrimary, setBoardPos, setBoardNlePos])
+  }, [boardId, zoom, setBoardNlePos])
 
   const onHeaderUp = useCallback(() => {
+    // Zone transition: ungrouped board dragged into timeline → create group
+    if (isUngroupedDrag.current && headerDragMoved.current) {
+      const b = useBoardsStore.getState().boards[boardId]
+      const zly = useCanvasStore.getState().zoneLineY
+      if (b && (b.canvasY ?? 0) >= zly) {
+        useBoardsStore.getState().groupBoardAsNew(boardId)
+      }
+    }
     if (!headerDragMoved.current) {
-      // Click without drag → select all bars in this board
       const b = useBoardsStore.getState().boards[boardId]
       if (b) {
         const allBarIds = Object.keys(b.bars)
         if (!headerShift.current) {
-          // Clear selections on all OTHER boards first
           const boards = useBoardsStore.getState().boards
           for (const bid of Object.keys(boards)) {
             if (bid !== boardId) useBoardsStore.getState().clearSelection(bid)
@@ -166,11 +173,12 @@ export const Board: React.FC<Props> = ({ boardId }) => {
         useBoardsStore.getState().setSelection(boardId, allBarIds)
       }
     }
+    totalDX.current = 0
     totalDY.current = 0
     dragSlots.current = []
   }, [boardId])
 
-  // ── Free grip drag (no clamp — passes through other boards) ──
+  // ── Free grip drag (no clamp) ──
   const onGripDown = useCallback((e: React.PointerEvent) => {
     e.stopPropagation()
     useUndoCoordinator.getState().checkpoint()
@@ -181,7 +189,7 @@ export const Board: React.FC<Props> = ({ boardId }) => {
     gripLastX.current = e.clientX
     gripLastY.current = e.clientY
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
-  }, [getCurrentRow])
+  }, [getCurrentRow, getLayout, boardId])
 
   const onGripMove = useCallback((e: React.PointerEvent) => {
     if (!(e.currentTarget as HTMLElement).hasPointerCapture(e.pointerId)) return
@@ -192,18 +200,13 @@ export const Board: React.FC<Props> = ({ boardId }) => {
     gripTotalDY.current += dy
     const lay = gripLayout.current
     const targetRow = Math.max(0, gripStartRow.current + dyToRowDelta(gripTotalDY.current, gripStartRow.current, lay))
-    if (isPrimary) {
-      const cs = useCanvasStore.getState()
-      setBoardPos({ x: cs.boardPos.x + dx, y: getRowY(targetRow, lay) })
-    } else {
-      const b = useBoardsStore.getState().boards[boardId]
-      if (b) setBoardNlePos(boardId, targetRow, b.nleX + dx)
-    }
-  }, [boardId, zoom, isPrimary, setBoardPos, setBoardNlePos])
+    const b = useBoardsStore.getState().boards[boardId]
+    if (b) setBoardNlePos(boardId, targetRow, b.nleX + dx)
+  }, [boardId, zoom, setBoardNlePos])
 
   const onGripUp = useCallback(() => { gripTotalDY.current = 0 }, [])
 
-  // ── Scale resize (primary only) ──
+  // ── Scale resize ──
   const onResizeDown = useCallback((e: React.PointerEvent) => {
     e.stopPropagation()
     useUndoCoordinator.getState().checkpoint()
@@ -240,7 +243,7 @@ export const Board: React.FC<Props> = ({ boardId }) => {
 
   // ── Board-level rubber-band selection ──
   const onBoardDown = useCallback((e: React.PointerEvent) => {
-    if (e.button !== 0) return  // let middle/right bubble up for canvas pan & context menu
+    if (e.button !== 0) return
     e.stopPropagation()
     setFocusedBoard(boardId)
     const target = e.target as Element
@@ -330,14 +333,22 @@ export const Board: React.FC<Props> = ({ boardId }) => {
 
   if (!board || !boardCtx) return null
 
-  const canvasX = isPrimary ? boardPos.x : board.nleX
-  const layout = useMemo(() => {
-    const bs = useBoardsStore.getState()
-    const pRow = Math.max(0, yToRow(boardPos.y, computeRowLayout(bs.boards, 0)))
-    return computeRowLayout(bs.boards, pRow)
+  // ── Two-level positioning: group origin + local row ──
+  const group = getGroupForBoard(groups, boardId)
+  const ungrouped = !group
+  // Subscribe to nleRow of ALL sibling boards so layout recomputes when any board moves rows
+  const siblingRowKey = useBoardsStore(s => {
+    const bids = group?.boardIds ?? [boardId]
+    return bids.map(bid => s.boards[bid]?.nleRow ?? 0).join(',')
+  })
+  const groupLayout = useMemo(() => {
+    return computeGroupLayout(group?.boardIds ?? [boardId], useBoardsStore.getState().boards)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [boardPos.y, board?.nleRow, board?.bars, board?.boardScale])
-  const canvasY = isPrimary ? boardPos.y : getRowY(board.nleRow, layout)
+  }, [group?.boardIds, siblingRowKey, board?.bars, board?.boardScale])
+
+  // Ungrouped boards use absolute canvasX/canvasY; grouped use group origin + local offset
+  const canvasX = ungrouped ? (board.canvasX ?? 0) : (group.originX + (board.nleX ?? 0))
+  const canvasY = ungrouped ? (board.canvasY ?? 0) : (group.originY + getRowY(board.nleRow ?? 0, groupLayout))
 
   const topRow = Object.values(board.bars).filter(b => b.rowIndex === 0)
   const minX = topRow.length > 0 ? Math.min(...topRow.map(b => b.x)) : 0
@@ -396,7 +407,6 @@ export const Board: React.FC<Props> = ({ boardId }) => {
 
           <div style={{ flex: 1 }} />
 
-          {/* Viewer toggle — icon only */}
           <div
             data-viewer-toggle="true"
             onPointerDown={toggleViewer}
@@ -415,7 +425,6 @@ export const Board: React.FC<Props> = ({ boardId }) => {
 
           <BlockCount boardId={boardId} zoom={zoom} />
 
-          {/* Grip — free drag, bypasses clamp */}
           <div
             data-grip="true"
             onPointerDown={onGripDown}
@@ -461,7 +470,6 @@ export const Board: React.FC<Props> = ({ boardId }) => {
           </div>
         </div>
 
-        {/* ── Rubber-band overlay (screen coords → CSS canvas coords via /zoom) ── */}
         {rubberBand && (
           <div style={{
             position: 'absolute',
@@ -476,8 +484,7 @@ export const Board: React.FC<Props> = ({ boardId }) => {
         )}
       </div>
 
-      {/* ── Extra board context menu ── */}
-      {contextMenu && (
+      {contextMenu && ReactDOM.createPortal(
         <>
           <div style={{ position: 'fixed', inset: 0, zIndex: 900 }} onPointerDown={() => setContextMenu(null)} />
           <div style={{
@@ -496,6 +503,9 @@ export const Board: React.FC<Props> = ({ boardId }) => {
                 setShowColorPicker(true); setContextMenu(null)
               }},
               { label: 'Duplicate board', action: () => { useUndoCoordinator.getState().checkpoint(); useBoardsStore.getState().duplicateBoard(boardId); setContextMenu(null) } },
+              ...(!isPrimary && group ? [
+                { label: 'Move to Free Canvas', action: () => { useUndoCoordinator.getState().checkpoint(); useBoardsStore.getState().ungroupBoard(boardId); setContextMenu(null) } },
+              ] : []),
               ...(!isPrimary ? [
                 null as null,
                 { label: 'Delete board', action: () => { useUndoCoordinator.getState().checkpoint(); deleteBoard(boardId); setContextMenu(null) }, danger: true },
@@ -516,17 +526,19 @@ export const Board: React.FC<Props> = ({ boardId }) => {
               >{(item as { label: string }).label}</div>
             ))}
           </div>
-        </>
+        </>,
+        document.body,
       )}
 
-      {showColorPicker && board && (
+      {showColorPicker && board && ReactDOM.createPortal(
         <ColorPickerPopup
           color={board.color}
           anchorX={colorPickerPos.x}
           anchorY={colorPickerPos.y}
           onChange={c => setBoardColor(boardId, c)}
           onClose={() => setShowColorPicker(false)}
-        />
+        />,
+        document.body,
       )}
     </>
   )

@@ -3,51 +3,42 @@ import { useBoardsStore, getGroupForBoard } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useNLEViewerStore } from '../../store/nleViewerStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
+import { computeGroupLayout, getRowY, snapToCardGrid, CARD_GRID_SPACING } from '../../utils/nleRows'
 import { groupSlot, clampGroupMove } from '../../utils/nlePush'
 import type { GroupSlot } from '../../utils/nlePush'
-import { computeRowLayout, getRowY, yToRow, getRowHeight, dyToRowDelta } from '../../utils/nleRows'
 
 const BOARD_PADDING_X = 20
-// Canvas-space height of the NLE header — scales with zoom so it stacks
-// neatly on top of the board headers at any zoom level.
 export const NLE_HEADER_CANVAS_H = 36
-const GAP = 2   // canvas units between NLE header bottom and board header top
+const GAP = 2
 
 interface Segment {
-  canvasLeft: number  // canvas units from header left edge
+  canvasLeft: number
   canvasWidth: number
   color: string
   boardId: string | null
 }
 
 interface Props {
-  /** When provided, header scopes to one group (card level).
-   *  Without it, spans all boards (block/board level). */
   groupId?: string
 }
 
 export const NLETimelineHeader: React.FC<Props> = ({ groupId }) => {
   const pan          = useCanvasStore(s => s.pan)
   const zoom         = useCanvasStore(s => s.zoom)
-  const boardPos     = useCanvasStore(s => s.boardPos)
 
-  const primaryBars  = useBoardsStore(s => s.boards['primary']?.bars ?? {})
-  const primaryRoots = useBoardsStore(s => s.boards['primary']?.rootIds ?? [])
-  const boardOrder   = useBoardsStore(s => s.boardOrder)
   const boards       = useBoardsStore(s => s.boards)
   const groups       = useBoardsStore(s => s.groups)
 
-  // Resolve which boards this header covers
-  const scopedBoardIds = useMemo(() => {
-    if (groupId) {
-      const group = groups.find(g => g.id === groupId)
-      return group?.boardIds ?? []
-    }
-    return ['primary', ...boardOrder]
-  }, [groupId, groups, boardOrder])
-
-  // Resolve the name for this header
+  // Resolve which group this header covers
   const group = groupId ? groups.find(g => g.id === groupId) : undefined
+  const scopedBoardIds = useMemo(() => {
+    if (group) return group.boardIds
+    // No groupId → span all boards (legacy block/board level)
+    const allBids: string[] = []
+    groups.forEach(g => g.boardIds.forEach(bid => allBids.push(bid)))
+    return allBids
+  }, [group, groups])
+
   const defaultName = group?.name ?? 'NLE Timeline'
 
   const [headerName, setHeaderName] = useState(defaultName)
@@ -59,13 +50,13 @@ export const NLETimelineHeader: React.FC<Props> = ({ groupId }) => {
   const viewerOpen = useNLEViewerStore(s => s.openGroupIds.has(effectiveGroupId))
   const toggleViewer = useCallback(() => useNLEViewerStore.getState().toggle(effectiveGroupId), [effectiveGroupId])
 
-  // Keep headerName in sync if the group name changes externally
   const prevGroupName = useRef(defaultName)
   if (defaultName !== prevGroupName.current) {
     prevGroupName.current = defaultName
     setHeaderName(defaultName)
   }
 
+  // ── Group drag: simply move group.originY / group.originX ──
   const onTimelineDown = useCallback((e: React.PointerEvent) => {
     if (e.button !== 0) return
     if ((e.target as HTMLElement).tagName === 'INPUT') return
@@ -75,46 +66,31 @@ export const NLETimelineHeader: React.FC<Props> = ({ groupId }) => {
     useUndoCoordinator.getState().checkpoint()
     let lastX = e.clientX
     let lastY = e.clientY
-    let dyAccum = 0
-    let xAccum = 0
     setIsDragging(true)
 
-    // Determine which boards to drag
-    const bIds = groupId
-      ? (useBoardsStore.getState().groups.find(g => g.id === groupId)?.boardIds ?? [])
-      : ['primary', ...useBoardsStore.getState().boardOrder]
-
-    const cs0 = useCanvasStore.getState()
+    // Snapshot initial group origin + obstacle slots
     const bs0 = useBoardsStore.getState()
-    const layout0 = computeRowLayout(bs0.boards, 0)
+    const g = groupId ? bs0.groups.find(g => g.id === groupId) : undefined
+    const initialOriginY = g?.originY ?? 0
+    const initialOriginX = g?.originX ?? 0
+    let dyAccum = 0
+    let dxAccum = 0
 
-    // Snapshot initial positions
-    const initialRows: Record<string, number> = {}
-    const initialXs: Record<string, number> = {}
-    const initialPrimaryY = cs0.boardPos.y
-    bIds.forEach(bid => {
-      if (bid === 'primary') {
-        initialRows[bid] = Math.max(0, yToRow(cs0.boardPos.y, layout0))
-        initialXs[bid] = cs0.boardPos.x
-      } else {
-        const b = bs0.boards[bid]
-        if (b) { initialRows[bid] = b.nleRow; initialXs[bid] = b.nleX }
-      }
-    })
-    // Pick a reference board for computing a single uniform row delta
-    const refBid = bIds.includes('primary') ? 'primary' : bIds[0]
-    const refInitialRow = initialRows[refBid] ?? 0
-
-    // Collision: snapshot group rects for clamping (only when scoped to a group)
-    let initialRect: GroupSlot | null = null
-    const obstacleRects: GroupSlot[] = []
-    if (groupId) {
-      initialRect = groupSlot(groupId, bIds, bs0.boards, cs0.boardPos, layout0)
-      bs0.groups.forEach(g => {
-        if (g.id === groupId) return
-        const slot = groupSlot(g.id, g.boardIds, bs0.boards, cs0.boardPos, layout0)
-        if (slot) obstacleRects.push(slot)
-      })
+    // Build collision slots for all other groups
+    let mySlot: GroupSlot | null = null
+    let obstacles: GroupSlot[] = []
+    if (groupId && g) {
+      const myLayout = computeGroupLayout(g.boardIds, bs0.boards)
+      mySlot = groupSlot(groupId, g.boardIds, bs0.boards, initialOriginX, initialOriginY, myLayout)
+      // Zone-aware collision: only collide with groups in the timeline zone
+      const zly = useCanvasStore.getState().zoneLineY
+      const inTimeline = initialOriginY >= zly
+      obstacles = inTimeline
+        ? bs0.groups
+            .filter(og => og.id !== groupId && og.originY >= zly)
+            .map(og => groupSlot(og.id, og.boardIds, bs0.boards, og.originX, og.originY, computeGroupLayout(og.boardIds, bs0.boards)))
+            .filter(Boolean) as GroupSlot[]
+        : []  // free zone: no collision
     }
 
     const onMove = (ev: PointerEvent) => {
@@ -124,45 +100,22 @@ export const NLETimelineHeader: React.FC<Props> = ({ groupId }) => {
       lastX = ev.clientX
       lastY = ev.clientY
       dyAccum += dy
-      xAccum += dx
+      dxAccum += dx
 
-      // Clamp against other groups when scoped
-      let clampedX = xAccum
-      let clampedY = dyAccum
-      if (initialRect) {
-        const clamped = clampGroupMove(initialRect, xAccum, dyAccum, obstacleRects)
-        clampedX = clamped.dx
-        clampedY = clamped.dy
-      }
-
-      // Soft-snap: find nearest row top and snap when within threshold
-      const SNAP_THRESHOLD = 80 // canvas units
-      const refInitialY = refBid === 'primary' ? initialPrimaryY : getRowY(refInitialRow, layout0)
-      const refRawY = refInitialY + clampedY
-      // Check current row and neighbor rows for closest row top
-      const candidateRow = Math.max(0, yToRow(refRawY, layout0))
-      let bestRow = candidateRow
-      let bestDist = Math.abs(refRawY - getRowY(candidateRow, layout0))
-      for (const r of [candidateRow - 1, candidateRow + 1]) {
-        if (r < 0) continue
-        const d = Math.abs(refRawY - getRowY(r, layout0))
-        if (d < bestDist) { bestDist = d; bestRow = r }
-      }
-      const snapped = bestDist < SNAP_THRESHOLD
-      const rowDelta = (snapped ? bestRow : candidateRow) - refInitialRow
-      const primaryOffset = initialPrimaryY - refInitialY
-
-      bIds.forEach(bid => {
-        const newX = (initialXs[bid] ?? 0) + clampedX
-        if (bid === 'primary') {
-          const rawY = Math.max(0, initialPrimaryY + clampedY)
-          const snapY = getRowY(bestRow, layout0) + primaryOffset
-          useCanvasStore.getState().setBoardPos({ x: newX, y: Math.max(0, snapped ? snapY : rawY) })
+      if (groupId) {
+        const rawY = initialOriginY + dyAccum
+        // Soft-snap to coarse grid
+        const { y: snapY, snapped } = snapToCardGrid(rawY, CARD_GRID_SPACING, 80)
+        const preClampY = snapped ? snapY : rawY
+        const preClampX = initialOriginX + dxAccum
+        // Clamp against other groups (only in timeline zone)
+        if (mySlot && obstacles.length > 0) {
+          const { dx: cdx, dy: cdy } = clampGroupMove(mySlot, preClampX - initialOriginX, preClampY - initialOriginY, obstacles)
+          useBoardsStore.getState().setGroupPos(groupId, initialOriginY + cdy, initialOriginX + cdx)
         } else {
-          const newRow = Math.max(0, (initialRows[bid] ?? 0) + rowDelta)
-          useBoardsStore.getState().setBoardNlePos(bid, newRow, newX)
+          useBoardsStore.getState().setGroupPos(groupId, preClampY, preClampX)
         }
-      })
+      }
     }
 
     const onUp = () => {
@@ -175,8 +128,14 @@ export const NLETimelineHeader: React.FC<Props> = ({ groupId }) => {
     window.addEventListener('pointerup', onUp)
   }, [groupId])
 
+  // ── Geometry: segments + header position ──
   const { segments, globalCanvasLeft, globalCanvasRight, headerCanvasY } = useMemo(() => {
     const segs: Segment[] = []
+    const groupOriginX = group?.originX ?? 0
+    const groupOriginY = group?.originY ?? 0
+    const groupLayout = group
+      ? computeGroupLayout(group.boardIds, boards)
+      : computeGroupLayout(scopedBoardIds, boards)
 
     scopedBoardIds.forEach(bid => {
       const board = boards[bid]
@@ -186,7 +145,8 @@ export const NLETimelineHeader: React.FC<Props> = ({ groupId }) => {
       const bScale = board.boardScale ?? 1
       const minX = Math.min(...rootBars.map(b => b.x))
       const maxX = Math.max(...rootBars.map(b => b.x + b.width))
-      const bx = bid === 'primary' ? boardPos.x : board.nleX
+      // Board absolute X = group origin + board local X
+      const bx = groupOriginX + (board.nleX ?? 0)
       segs.push({
         canvasLeft:  bx + BOARD_PADDING_X + minX * bScale,
         canvasWidth: (maxX - minX) * bScale,
@@ -200,23 +160,16 @@ export const NLETimelineHeader: React.FC<Props> = ({ groupId }) => {
     const globalCanvasLeft  = Math.min(...segs.map(s => s.canvasLeft)) - 16
     const globalCanvasRight = Math.max(...segs.map(s => s.canvasLeft + s.canvasWidth)) + 16
 
-    // Compute top of the group's boards using dynamic row layout
-    const pRow = Math.max(0, yToRow(boardPos.y, computeRowLayout(boards, 0)))
-    const layout = computeRowLayout(boards, pRow)
-    const boardYs = scopedBoardIds.map(bid => {
-      if (bid === 'primary') return boardPos.y
-      return getRowY(boards[bid]?.nleRow ?? 0, layout)
-    })
-    const topBoardY = Math.min(...boardYs)
+    // Header Y = top of the group - header height - gap
+    const topBoardY = groupOriginY  // group origin IS the top
     const headerCanvasY = topBoardY - NLE_HEADER_CANVAS_H - GAP
 
     const offsetSegs = segs.map(s => ({ ...s, canvasLeft: s.canvasLeft - globalCanvasLeft }))
     return { segments: offsetSegs, globalCanvasLeft, globalCanvasRight, headerCanvasY }
-  }, [scopedBoardIds, boardPos, boards])
+  }, [scopedBoardIds, boards, group])
 
   if (segments.length === 0) return null
 
-  // Screen-space geometry
   const screenLeft   = pan.x + globalCanvasLeft * zoom
   const screenWidth  = (globalCanvasRight - globalCanvasLeft) * zoom
 
@@ -224,13 +177,11 @@ export const NLETimelineHeader: React.FC<Props> = ({ groupId }) => {
     const trimmed = renameVal.trim()
     if (trimmed) {
       setHeaderName(trimmed)
-      // If scoped to a group, also update the group name in the store
       if (groupId) useBoardsStore.getState().renameGroup(groupId, trimmed)
     }
     setRenaming(false)
   }
 
-  // Forward wheel events to canvas zoom so scrolling over the header still zooms
   const onWheel = useCallback((e: React.WheelEvent) => {
     e.stopPropagation()
     const f = e.deltaY < 0 ? 1.12 : 1 / 1.12
@@ -242,16 +193,12 @@ export const NLETimelineHeader: React.FC<Props> = ({ groupId }) => {
     useCanvasStore.getState().zoomAtPoint(f, mx, my)
   }, [])
 
-  // ── Compact header bar ──
   const screenBottom = pan.y + (headerCanvasY + NLE_HEADER_CANVAS_H) * zoom
-  // Tight height: 20px min (hugs the 12px font), scales with zoom at larger sizes
   const screenHeight = Math.max(NLE_HEADER_CANVAS_H * zoom, 20)
   const screenTop    = screenBottom - screenHeight
   const effectiveWidth = Math.max(screenWidth, 40)
-  // When too narrow for name + viewer side by side, stack them
   const isNarrow = effectiveWidth < 90
 
-  // Only render when on screen
   if (screenLeft + screenWidth < 0 || screenTop + screenHeight < 0) return null
 
   const viewerToggle = (
@@ -333,7 +280,6 @@ export const NLETimelineHeader: React.FC<Props> = ({ groupId }) => {
       onPointerDown={onTimelineDown}
       onWheel={onWheel}
     >
-      {/* Background */}
       <div style={{
         position: 'absolute', inset: 0,
         background: 'rgba(255,255,255,0.05)',
@@ -343,7 +289,6 @@ export const NLETimelineHeader: React.FC<Props> = ({ groupId }) => {
         boxShadow: '0 2px 12px rgba(0,0,0,0.35)',
         overflow: 'hidden',
       }}>
-        {/* Segment dividers */}
         {segments.map((seg, i) => i > 0 && (
           <div
             key={seg.boardId ?? 'primary'}
@@ -358,7 +303,6 @@ export const NLETimelineHeader: React.FC<Props> = ({ groupId }) => {
         ))}
       </div>
 
-      {/* Content — stacked when narrow, row when wide */}
       <div style={{
         position: 'absolute', inset: 0,
         display: 'flex',

@@ -19,17 +19,18 @@ export interface BoardSlot {
 const BOARD_PADDING_X = 20
 const DEFAULT_GAP = 12
 
-/** Compute a board's visual slot from its bars, accounting for boardScale */
+/** Compute a board's visual slot from its root bars only, accounting for boardScale */
 function slotFromBars(
   id: string,
   nleRow: number,
   anchorX: number,
   bars: Record<string, Bar>,
+  rootIds: string[],
   boardScale = 1,
 ): BoardSlot {
-  const topRowBars = Object.values(bars).filter(b => b.rowIndex === 0)
-  const minBarX = topRowBars.length > 0 ? Math.min(...topRowBars.map(b => b.x)) : 0
-  const maxBarX = topRowBars.length > 0 ? Math.max(...topRowBars.map(b => b.x + b.width)) : 200
+  const rootBars = rootIds.map(rid => bars[rid]).filter(Boolean)
+  const minBarX = rootBars.length > 0 ? Math.min(...rootBars.map(b => b.x)) : 0
+  const maxBarX = rootBars.length > 0 ? Math.max(...rootBars.map(b => b.x + b.width)) : 200
   // Store scaled values so all consumers work in visual canvas coords
   const scaledMinBarX = minBarX * boardScale
   return {
@@ -47,18 +48,39 @@ export function primarySlot(
   boardPosX: number,
   boardRow: number,
   bars: Record<string, Bar>,
+  rootIds: string[],
   boardScale = 1,
 ): BoardSlot {
-  return slotFromBars('primary', boardRow, boardPosX, bars, boardScale)
+  return slotFromBars('primary', boardRow, boardPosX, bars, rootIds, boardScale)
 }
 
 /** Build slots for all extra boards (excludes the primary board) */
 export function extraSlots(
-  boards: Record<string, { id: string; nleRow: number; nleX: number; boardScale?: number; bars: Record<string, Bar> }>,
+  boards: Record<string, { id: string; nleRow: number; nleX: number; rootIds: string[]; boardScale?: number; bars: Record<string, Bar> }>,
 ): BoardSlot[] {
   return Object.values(boards)
     .filter(b => b.id !== 'primary')
-    .map(b => slotFromBars(b.id, b.nleRow, b.nleX, b.bars, b.boardScale ?? 1))
+    .map(b => slotFromBars(b.id, b.nleRow, b.nleX, b.bars, b.rootIds, b.boardScale ?? 1))
+}
+
+/**
+ * Build BoardSlots for all boards within one group, using the group's origin
+ * for absolute X but keeping local nleRow for same-row collision matching.
+ * Collision only makes sense within a group (shared row grid).
+ */
+export function groupBoardSlots(
+  groupOriginX: number,
+  boardIds: string[],
+  boards: Record<string, any>,
+): BoardSlot[] {
+  return boardIds
+    .map(bid => {
+      const b = boards[bid]
+      if (!b) return null
+      const absX = groupOriginX + (b.nleX ?? 0)
+      return slotFromBars(bid, b.nleRow ?? 0, absX, b.bars, b.rootIds ?? [], b.boardScale ?? 1)
+    })
+    .filter(Boolean) as BoardSlot[]
 }
 
 /**
@@ -152,12 +174,13 @@ export interface GroupSlot {
   bottom: number
 }
 
-/** Build a GroupSlot from a group's board IDs */
+/** Build a GroupSlot from a group's board IDs using two-level positioning */
 export function groupSlot(
   groupId: string,
   boardIds: string[],
   boards: Record<string, any>,
-  boardPos: { x: number; y: number },
+  groupOriginX: number,
+  groupOriginY: number,
   layout: RowLayout,
 ): GroupSlot | null {
   let left = Infinity, right = -Infinity, top = Infinity, bottom = -Infinity
@@ -167,9 +190,9 @@ export function groupSlot(
     const bScale = board.boardScale ?? 1
     const rootBars = board.rootIds.map((rid: string) => board.bars[rid]).filter(Boolean)
     if (rootBars.length === 0) return
-    const bx = bid === 'primary' ? boardPos.x : board.nleX
-    const row = bid === 'primary' ? 0 : board.nleRow
-    const by = bid === 'primary' ? boardPos.y : getRowY(row, layout)
+    const bx = groupOriginX + (board.nleX ?? 0)
+    const row = board.nleRow ?? 0
+    const by = groupOriginY + getRowY(row, layout)
     const rowH = getRowHeight(row, layout)
     const minX = Math.min(...rootBars.map((b: any) => b.x))
     const maxX = Math.max(...rootBars.map((b: any) => b.x + b.width))

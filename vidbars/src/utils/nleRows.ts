@@ -1,8 +1,12 @@
 /**
- * Dynamic per-row height computation for the NLE timeline.
+ * Two-level row layout for the NLE timeline.
  *
- * Each NLE row's height is determined by the tallest board on that row.
- * Board content height = tallest root-bar height × boardScale + header/padding overhead.
+ * Level 1 — Group (card) positioning: each ProjectGroup has an originY/originX
+ *           in canvas space.  Moving a group moves all its boards as a rigid unit.
+ *
+ * Level 2 — Board (local) rows within a group: each board has nleRow (0, 1, 2…)
+ *           relative to the group origin.  Row heights are either fixed (nleRowHeight)
+ *           or dynamic (tallest board on that row).
  */
 
 import type { Bar } from '../types/bar'
@@ -11,7 +15,7 @@ import { useCanvasStore } from '../store/canvasStore'
 
 /** Overhead added to bar content to get total board height in canvas units */
 const BOARD_OVERHEAD = 90   // header + top/bottom padding
-const ROW_GAP = 16          // canvas-unit gap between rows
+export const ROW_GAP = 16   // canvas-unit gap between rows
 const MIN_ROW_H = 160       // minimum row height even if content is smaller
 
 /** Compute the content height of a single board from its bars */
@@ -20,10 +24,7 @@ export function boardContentHeight(
   rootIds: string[],
   boardScale = 1,
 ): number {
-  // Walk visible bars to find per-row max heights (same logic as NLELayout)
   const rowH: Record<number, number> = {}
-  const allBars = Object.values(bars)
-  // Only count bars reachable from roots
   const reachable = new Set<string>()
   const collect = (id: string) => {
     if (reachable.has(id)) return
@@ -34,7 +35,7 @@ export function boardContentHeight(
   }
   rootIds.forEach(collect)
 
-  allBars.filter(b => reachable.has(b.id)).forEach(b => {
+  Object.values(bars).filter(b => reachable.has(b.id)).forEach(b => {
     rowH[b.rowIndex] = Math.max(rowH[b.rowIndex] ?? DEFAULT_H, b.height)
   })
 
@@ -52,38 +53,36 @@ export function boardContentHeight(
   return total * boardScale + BOARD_OVERHEAD
 }
 
-/** Result of computing NLE row layout */
+// ─── Row Layout (shared shape for both levels) ───
+
 export interface RowLayout {
-  /** Height of each row (indexed by row number) */
   rowHeights: Record<number, number>
-  /** Y position of each row top (indexed by row number) */
   rowTops: Record<number, number>
-  /** Total height of all rows */
   totalHeight: number
 }
 
+// ─── Level 2: Group-local board rows ───
+
 /**
- * Compute per-row heights and Y positions from all boards.
- * Call this whenever board content or positions change.
+ * Compute per-row heights and Y positions for boards within ONE group.
+ * Board `nleRow` values are group-local (0, 1, 2…).
  *
- * When `canvasStore.dynamicRowHeights` is false, all rows get a uniform
- * height (the fixed `nleRowHeight` value), preserving the original fixed-grid
- * behavior with zero changes to any consumer code.
+ * When `canvasStore.dynamicRowHeights` is false, all rows get fixed height.
  */
-export function computeRowLayout(
+export function computeGroupLayout(
+  groupBoardIds: string[],
   boards: Record<string, any>,
-  primaryBoardRow: number,
 ): RowLayout {
   const cs = useCanvasStore.getState()
   const dynamic = cs.dynamicRowHeights
-  const fixedH = cs.nleRowHeight   // fallback uniform height (420)
+  const fixedH = cs.nleRowHeight
 
-  // Collect all boards with their row assignments and content heights
   const rowContentHeights: Record<number, number> = {}
 
-  Object.values(boards).forEach(board => {
+  groupBoardIds.forEach(bid => {
+    const board = boards[bid]
     if (!board) return
-    const row = board.id === 'primary' ? primaryBoardRow : (board.nleRow ?? 0)
+    const row = board.nleRow ?? 0
     if (dynamic) {
       const h = boardContentHeight(board.bars, board.rootIds, board.boardScale ?? 1)
       rowContentHeights[row] = Math.max(rowContentHeights[row] ?? MIN_ROW_H, h)
@@ -92,7 +91,6 @@ export function computeRowLayout(
     }
   })
 
-  // Ensure at least row 0 exists
   if (Object.keys(rowContentHeights).length === 0) {
     rowContentHeights[0] = dynamic ? MIN_ROW_H : fixedH
   }
@@ -117,12 +115,22 @@ export function computeRowLayout(
   return { rowHeights, rowTops, totalHeight: Math.max(y - ROW_GAP, dynamic ? MIN_ROW_H : fixedH) }
 }
 
+/**
+ * Compute the total canvas-space height of a group (all its local rows + gaps).
+ */
+export function getGroupHeight(
+  groupBoardIds: string[],
+  boards: Record<string, any>,
+): number {
+  return computeGroupLayout(groupBoardIds, boards).totalHeight
+}
+
+// ─── Row helpers (work with any RowLayout — group-local or legacy) ───
+
 /** Get the Y position for a given row */
 export function getRowY(row: number, layout: RowLayout): number {
-  // If row is in the layout, use it directly
   if (row in layout.rowTops) return layout.rowTops[row]
 
-  // Row is beyond computed range — extrapolate
   const rows = Object.keys(layout.rowTops).map(Number).sort((a, b) => a - b)
   if (rows.length === 0) return row * MIN_ROW_H
 
@@ -130,20 +138,16 @@ export function getRowY(row: number, layout: RowLayout): number {
   const minRow = rows[0]
 
   if (row > maxRow) {
-    // Extrapolate below: last row top + last row height + gap per extra row
     const lastTop = layout.rowTops[maxRow]
     const lastH = layout.rowHeights[maxRow] ?? MIN_ROW_H
     return lastTop + lastH + ROW_GAP + (row - maxRow - 1) * (MIN_ROW_H + ROW_GAP)
   }
 
   if (row < minRow) {
-    // Extrapolate above
     const firstTop = layout.rowTops[minRow]
     return firstTop - (minRow - row) * (MIN_ROW_H + ROW_GAP)
   }
 
-  // Row is in range but not occupied — interpolate from neighbors
-  // Find nearest lower row that exists
   let prevRow = row - 1
   while (prevRow >= minRow && !(prevRow in layout.rowTops)) prevRow--
   if (prevRow >= minRow) {
@@ -160,12 +164,11 @@ export function getRowHeight(row: number, layout: RowLayout): number {
   return layout.rowHeights[row] ?? MIN_ROW_H
 }
 
-/** Convert a Y position to the nearest row index */
+/** Convert a Y position (relative to group origin) to the nearest row index */
 export function yToRow(y: number, layout: RowLayout): number {
   const rows = Object.keys(layout.rowTops).map(Number).sort((a, b) => a - b)
   if (rows.length === 0) return Math.max(0, Math.round(y / MIN_ROW_H))
 
-  // Find which row this Y falls in
   for (let i = rows.length - 1; i >= 0; i--) {
     const r = rows[i]
     const top = layout.rowTops[r]
@@ -174,7 +177,6 @@ export function yToRow(y: number, layout: RowLayout): number {
     if (y >= mid) return r + (i < rows.length - 1 ? 0 : Math.max(0, Math.round((y - top - h) / (MIN_ROW_H + ROW_GAP))))
   }
 
-  // Above all rows
   const firstRow = rows[0]
   const firstTop = layout.rowTops[firstRow]
   if (y < firstTop) {
@@ -185,9 +187,108 @@ export function yToRow(y: number, layout: RowLayout): number {
   return 0
 }
 
-/** Convert accumulated Y delta to a row delta, given the layout and starting row */
+/** Convert accumulated Y delta to a row delta */
 export function dyToRowDelta(dy: number, startRow: number, layout: RowLayout): number {
+  // Fixed mode: clean division by stride for stable row quantization
+  const cs = useCanvasStore.getState()
+  if (!cs.dynamicRowHeights) {
+    const stride = cs.nleRowHeight + ROW_GAP
+    return Math.round(dy / stride)
+  }
+  // Dynamic mode: position-based
   const startY = getRowY(startRow, layout)
   const targetY = startY + dy
   return yToRow(targetY, layout) - startRow
+}
+
+// ─── Level 1: Group absolute positioning ───
+
+/**
+ * Compute the absolute canvas-space position of a board.
+ * Returns { x, y } in canvas coordinates.
+ */
+export function getBoardAbsolutePos(
+  boardId: string,
+  groups: { originY: number; originX: number; boardIds: string[] }[],
+  boards: Record<string, any>,
+): { x: number; y: number } {
+  const board = boards[boardId]
+  if (!board) return { x: 0, y: 0 }
+
+  const group = groups.find(g => g.boardIds.includes(boardId))
+  if (!group) return { x: board.nleX ?? 0, y: 0 }
+
+  const groupLayout = computeGroupLayout(group.boardIds, boards)
+  return {
+    x: group.originX + (board.nleX ?? 0),
+    y: group.originY + getRowY(board.nleRow ?? 0, groupLayout),
+  }
+}
+
+/**
+ * Compute the absolute canvas-space X of a board.
+ */
+export function getBoardAbsoluteX(
+  boardId: string,
+  groups: { originX: number; boardIds: string[] }[],
+  boards: Record<string, any>,
+): number {
+  const board = boards[boardId]
+  if (!board) return 0
+  const group = groups.find(g => g.boardIds.includes(boardId))
+  return (group?.originX ?? 0) + (board.nleX ?? 0)
+}
+
+/**
+ * Compute the absolute canvas-space Y of a board.
+ */
+export function getBoardAbsoluteY(
+  boardId: string,
+  groups: { originY: number; boardIds: string[] }[],
+  boards: Record<string, any>,
+): number {
+  const board = boards[boardId]
+  if (!board) return 0
+  const group = groups.find(g => g.boardIds.includes(boardId))
+  if (!group) return 0
+  const groupLayout = computeGroupLayout(
+    (group as any).boardIds ?? [],
+    boards,
+  )
+  return (group.originY ?? 0) + getRowY(board.nleRow ?? 0, groupLayout)
+}
+
+// ─── Coarse grid helpers for group-level snap ───
+
+/** Default coarse grid spacing for group snap (canvas units) */
+export const CARD_GRID_SPACING = 500
+
+/**
+ * Snap a group originY to the nearest coarse grid line.
+ * Returns the snapped Y if within threshold, else the raw Y.
+ */
+export function snapToCardGrid(
+  rawY: number,
+  gridSpacing: number = CARD_GRID_SPACING,
+  threshold: number = 80,
+): { y: number; snapped: boolean } {
+  const nearest = Math.round(rawY / gridSpacing) * gridSpacing
+  const dist = Math.abs(rawY - nearest)
+  if (dist < threshold) return { y: nearest, snapped: true }
+  return { y: rawY, snapped: false }
+}
+
+// ─── Legacy compat: computeRowLayout → redirects to computeGroupLayout ───
+
+/**
+ * @deprecated Use computeGroupLayout instead.
+ * Kept for consumers not yet migrated. Computes layout for ALL boards
+ * (treats them as one flat group — same as old behavior).
+ */
+export function computeRowLayout(
+  boards: Record<string, any>,
+  _primaryBoardRow: number,
+): RowLayout {
+  const allIds = Object.keys(boards)
+  return computeGroupLayout(allIds, boards)
 }

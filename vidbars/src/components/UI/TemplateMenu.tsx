@@ -5,7 +5,7 @@ import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useUserTemplateStore } from '../../store/userTemplateStore'
 import type { SavedTemplate } from '../../store/userTemplateStore'
 import { TEMPLATES } from '../../data/templates'
-import { computeRowLayout, yToRow } from '../../utils/nleRows'
+import { computeGroupLayout, getGroupHeight } from '../../utils/nleRows'
 
 export const TemplateMenu: React.FC = () => {
   const [open, setOpen] = useState(false)
@@ -68,22 +68,21 @@ export const TemplateMenu: React.FC = () => {
       nleRowHeight: cs.nleRowHeight,
       extraBoards,
       boardOrder: bs.boardOrder,
+      groups: bs.groups,
       freeNodes: fn.nodes,
     }
   }
 
-  /** Find the next available NLE row (one below the last used row) */
-  function nextFreeRow(): number {
+  /** Find the next available Y position below all existing groups */
+  function nextFreeY(): number {
     const bs = useBoardsStore.getState()
-    const cs = useCanvasStore.getState()
-    const layout = computeRowLayout(bs.boards, 0)
-    const pRow = Math.max(0, yToRow(cs.boardPos.y, layout))
-    let maxRow = pRow
-    for (const bid of bs.boardOrder) {
-      const b = bs.boards[bid]
-      if (b) maxRow = Math.max(maxRow, Math.round(b.nleRow))
-    }
-    return maxRow + 1
+    let maxBottom = 0
+    bs.groups.forEach(g => {
+      const h = getGroupHeight(g.boardIds, bs.boards)
+      const bottom = g.originY + h
+      if (bottom > maxBottom) maxBottom = bottom
+    })
+    return maxBottom + 60
   }
 
   function applyBuiltIn(id: string) {
@@ -110,22 +109,30 @@ export const TemplateMenu: React.FC = () => {
   function addBuiltInAsBoard(id: string) {
     const t = TEMPLATES.find(t => t.id === id)
     if (!t) return
-    const row = nextFreeRow()
-    const newId = useBoardsStore.getState().createBoard(row, 0)
+    const freeY = nextFreeY()
+    const newId = useBoardsStore.getState().createBoard(0, 0)
     useBoardsStore.getState().loadTemplate(newId, id)
+    // Position the new board's group at the free Y
+    const bs = useBoardsStore.getState()
+    const group = bs.groups.find(g => g.boardIds.includes(newId))
+    if (group) useBoardsStore.getState().setGroupPos(group.id, freeY, 0)
     setOpen(false)
   }
 
   function addUserTemplateAsBoard(id: string) {
     const t = userTemplates.find(t => t.id === id)
     if (!t) return
-    const row = nextFreeRow()
-    const newId = useBoardsStore.getState().createBoard(row, 0)
+    const freeY = nextFreeY()
+    const newId = useBoardsStore.getState().createBoard(0, 0)
     useBoardsStore.getState().loadLayout(newId, {
       bars: t.bars,
       rootIds: t.rootIds,
       projectName: t.projectName,
     })
+    // Position the new board's group at the free Y
+    const bs = useBoardsStore.getState()
+    const group = bs.groups.find(g => g.boardIds.includes(newId))
+    if (group) useBoardsStore.getState().setGroupPos(group.id, freeY, 0)
     setOpen(false)
   }
 
@@ -150,6 +157,11 @@ export const TemplateMenu: React.FC = () => {
           boardOrder: [...s.boardOrder, board.id],
         }))
       })
+    }
+
+    // Restore groups
+    if (t.groups) {
+      useBoardsStore.setState({ groups: t.groups })
     }
 
     // Restore free nodes

@@ -4,13 +4,12 @@
 
 import React, { useMemo, useState, useCallback, Fragment } from 'react'
 import ReactDOM from 'react-dom'
-import { useBoardsStore } from '../../store/boardsStore'
-import type { ProjectGroup } from '../../store/boardsStore'
+import { useBoardsStore, getUngroupedBoardIds } from '../../store/boardsStore'
+import type { ProjectGroup, BoardData } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
+import { computeGroupLayout, getRowY, getRowHeight, boardContentHeight, snapToCardGrid, CARD_GRID_SPACING } from '../../utils/nleRows'
 import { groupSlot, clampGroupMove } from '../../utils/nlePush'
-import type { GroupSlot } from '../../utils/nlePush'
-import { computeRowLayout, getRowY, yToRow, getRowHeight, dyToRowDelta, boardContentHeight } from '../../utils/nleRows'
 import { FreeCanvas } from '../Canvas/FreeCanvas'
 import { NLETimelineHeader } from '../NLE/NLETimelineHeader'
 
@@ -24,7 +23,6 @@ const Canvas: React.FC = () => <FreeCanvas />
 const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
   const pan          = useCanvasStore(s => s.pan)
   const zoom         = useCanvasStore(s => s.zoom)
-  const boardPos     = useCanvasStore(s => s.boardPos)
 
   const boards       = useBoardsStore(s => s.boards)
   const groups       = useBoardsStore(s => s.groups)
@@ -33,50 +31,36 @@ const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
   const [isDragging, setIsDragging] = useState(false)
   const [cardMenu, setCardMenu] = useState<{ x: number; y: number } | null>(null)
 
-  // Drag logic — moves only this group's boards
+  // ── Group drag: move group.originY / group.originX ──
   const onCardDown = useCallback((e: React.PointerEvent) => {
     if (e.button !== 0) return
     if ((e.target as HTMLElement).tagName === 'INPUT') return
     e.stopPropagation()
     e.preventDefault()
-    // Select this card
     useBoardsStore.getState().setSelectedGroup(group.id)
     useUndoCoordinator.getState().checkpoint()
     let lastX = e.clientX
     let lastY = e.clientY
     let dyAccum = 0
-    let xAccum = 0
+    let dxAccum = 0
     setIsDragging(true)
 
-    const groupBoardIds = group.boardIds.slice()
-    const cs0 = useCanvasStore.getState()
+    // Snapshot initial group origin + obstacle slots
     const bs0 = useBoardsStore.getState()
-    const layout0 = computeRowLayout(bs0.boards, 0)
-
-    // Capture initial positions
-    const initialRows: Record<string, number> = {}
-    const initialXs: Record<string, number> = {}
-    const initialPrimaryY = cs0.boardPos.y
-    groupBoardIds.forEach(bid => {
-      if (bid === 'primary') {
-        initialRows[bid] = Math.max(0, yToRow(cs0.boardPos.y, layout0))
-        initialXs[bid] = cs0.boardPos.x
-      } else {
-        const b = bs0.boards[bid]
-        if (b) { initialRows[bid] = b.nleRow; initialXs[bid] = b.nleX }
-      }
-    })
-    const refBid = groupBoardIds.includes('primary') ? 'primary' : groupBoardIds[0]
-    const refInitialRow = initialRows[refBid] ?? 0
-
-    // Collision: snapshot initial rect of this group + obstacle rects of all other groups
-    const initialRect = groupSlot(group.id, groupBoardIds, bs0.boards, cs0.boardPos, layout0)
-    const obstacleRects: GroupSlot[] = []
-    bs0.groups.forEach(g => {
-      if (g.id === group.id) return
-      const slot = groupSlot(g.id, g.boardIds, bs0.boards, cs0.boardPos, layout0)
-      if (slot) obstacleRects.push(slot)
-    })
+    const g0 = bs0.groups.find(g => g.id === group.id)
+    const initialOriginY = g0?.originY ?? 0
+    const initialOriginX = g0?.originX ?? 0
+    const myLayout = computeGroupLayout(group.boardIds, bs0.boards)
+    const mySlot = groupSlot(group.id, group.boardIds, bs0.boards, initialOriginX, initialOriginY, myLayout)
+    // Zone-aware collision: only collide with groups in the timeline zone
+    const zly = useCanvasStore.getState().zoneLineY
+    const inTimeline = initialOriginY >= zly
+    const obstacles = inTimeline
+      ? bs0.groups
+          .filter(g => g.id !== group.id && g.originY >= zly)
+          .map(g => groupSlot(g.id, g.boardIds, bs0.boards, g.originX, g.originY, computeGroupLayout(g.boardIds, bs0.boards)))
+          .filter(Boolean) as import('../../utils/nlePush').GroupSlot[]
+      : []  // free zone: no collision
 
     const onMove = (ev: PointerEvent) => {
       const z = useCanvasStore.getState().zoom
@@ -85,45 +69,20 @@ const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
       lastX = ev.clientX
       lastY = ev.clientY
       dyAccum += dy
-      xAccum += dx
+      dxAccum += dx
 
-      // Clamp movement against other cards (same module as board-level collision)
-      let clampedX = xAccum
-      let clampedY = dyAccum
-      if (initialRect) {
-        const clamped = clampGroupMove(initialRect, xAccum, dyAccum, obstacleRects)
-        clampedX = clamped.dx
-        clampedY = clamped.dy
+      const rawY = initialOriginY + dyAccum
+      // Soft-snap to coarse grid
+      const { y: snapY, snapped } = snapToCardGrid(rawY, CARD_GRID_SPACING, 80)
+      const preClampY = snapped ? snapY : rawY
+      const preClampX = initialOriginX + dxAccum
+      // Clamp against other groups (only in timeline zone)
+      if (mySlot && obstacles.length > 0) {
+        const { dx: cdx, dy: cdy } = clampGroupMove(mySlot, preClampX - initialOriginX, preClampY - initialOriginY, obstacles)
+        useBoardsStore.getState().setGroupPos(group.id, initialOriginY + cdy, initialOriginX + cdx)
+      } else {
+        useBoardsStore.getState().setGroupPos(group.id, preClampY, preClampX)
       }
-
-      // Soft-snap: find nearest row top and snap when within threshold
-      const SNAP_THRESHOLD = 80
-      const refInitialY = refBid === 'primary' ? initialPrimaryY : getRowY(refInitialRow, layout0)
-      const refRawY = refInitialY + clampedY
-      // Check current row and neighbor rows for closest row top
-      const candidateRow = Math.max(0, yToRow(refRawY, layout0))
-      let bestRow = candidateRow
-      let bestDist = Math.abs(refRawY - getRowY(candidateRow, layout0))
-      for (const r of [candidateRow - 1, candidateRow + 1]) {
-        if (r < 0) continue
-        const d = Math.abs(refRawY - getRowY(r, layout0))
-        if (d < bestDist) { bestDist = d; bestRow = r }
-      }
-      const snapped = bestDist < SNAP_THRESHOLD
-      const rowDelta = (snapped ? bestRow : candidateRow) - refInitialRow
-      const primaryOffset = initialPrimaryY - refInitialY
-
-      groupBoardIds.forEach(bid => {
-        const newX = (initialXs[bid] ?? 0) + clampedX
-        if (bid === 'primary') {
-          const rawY = Math.max(0, initialPrimaryY + clampedY)
-          const snapY = getRowY(bestRow, layout0) + primaryOffset
-          useCanvasStore.getState().setBoardPos({ x: newX, y: Math.max(0, snapped ? snapY : rawY) })
-        } else {
-          const newRow = Math.max(0, (initialRows[bid] ?? 0) + rowDelta)
-          useBoardsStore.getState().setBoardNlePos(bid, newRow, newX)
-        }
-      })
     }
     const onUp = () => {
       window.removeEventListener('pointermove', onMove)
@@ -132,13 +91,11 @@ const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
     }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
-  }, [group.boardIds])
+  }, [group.id])
 
-  // Geometry: compute bounding box in canvas space, then multiply by zoom for screen.
-  // No fixed screen-pixel sizes — everything scales uniformly with zoom.
+  // ── Geometry: compute bounding box from group layout ──
   const { screenLeft, screenTop, screenWidth, cardHeight, color } = useMemo(() => {
-    const pRow = Math.max(0, yToRow(boardPos.y, computeRowLayout(boards, 0)))
-    const layout = computeRowLayout(boards, pRow)
+    const groupLayout = computeGroupLayout(group.boardIds, boards)
 
     let globalMinX = Infinity
     let globalMaxX = -Infinity
@@ -152,11 +109,10 @@ const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
       const rootBars = board.rootIds.map(rid => board.bars[rid]).filter(Boolean)
       if (rootBars.length === 0) return
 
-      const bx = bid === 'primary' ? boardPos.x : board.nleX
-      const row = bid === 'primary' ? pRow : board.nleRow
-      const by = bid === 'primary' ? boardPos.y : getRowY(row, layout)
-      const rowH = getRowHeight(row, layout)
-      // Card hangs below grid line when content is taller than the row
+      const bx = group.originX + (board.nleX ?? 0)
+      const localRow = board.nleRow ?? 0
+      const by = group.originY + getRowY(localRow, groupLayout)
+      const rowH = getRowHeight(localRow, groupLayout)
       const contentH = boardContentHeight(board.bars, board.rootIds, bScale)
       const visualH = Math.max(rowH, contentH)
       const minX = Math.min(...rootBars.map(b => b.x))
@@ -182,9 +138,9 @@ const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
       cardHeight: (bottomY - topY) * zoom,
       color: group.color,
     }
-  }, [group.boardIds, boards, boardPos, pan, zoom, group.color])
+  }, [group.boardIds, group.originX, group.originY, boards, pan, zoom, group.color])
 
-  // Hero image: group-level, then scan boards
+  // Hero image
   const heroImage = useMemo(() => {
     if (group.cardHeroImage) return group.cardHeroImage
     for (const bid of group.boardIds) {
@@ -198,7 +154,6 @@ const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
     return null
   }, [group.cardHeroImage, group.boardIds, boards])
 
-  // Forward wheel events to canvas zoom
   const onWheel = useCallback((e: React.WheelEvent) => {
     e.stopPropagation()
     const f = e.deltaY < 0 ? 1.12 : 1 / 1.12
@@ -240,7 +195,6 @@ const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
         onWheel={onWheel}
         onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setCardMenu({ x: e.clientX, y: e.clientY }) }}
       >
-        {/* Hero image background */}
         {heroImage && (
           <div style={{
             position: 'absolute', inset: 0,
@@ -249,7 +203,6 @@ const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
             opacity: 0.7, borderRadius: 12,
           }} />
         )}
-        {/* Label overlay */}
         <div style={{
           position: 'absolute', bottom: 6, left: 8,
           color: 'rgba(255,255,255,0.7)', fontSize: 11, fontWeight: 600,
@@ -260,7 +213,6 @@ const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
         </div>
       </div>
 
-      {/* Card-layer context menu */}
       {cardMenu && ReactDOM.createPortal(
         <>
           <div style={{ position: 'fixed', inset: 0, zIndex: 9998 }} onPointerDown={() => setCardMenu(null)} />
@@ -307,7 +259,6 @@ const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
               }}] : []),
               ...(groups.length > 1 ? [{ label: 'Delete Card', icon: '🗑', action: () => {
                 useUndoCoordinator.getState().checkpoint()
-                // Delete all non-primary boards, then delete the group
                 group.boardIds.forEach(bid => {
                   if (bid !== 'primary') useBoardsStore.getState().deleteBoard(bid)
                 })
@@ -339,9 +290,122 @@ const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
   )
 }
 
-/** Screen-space overlay — one card per group + per-group NLE headers */
+// ── Ungrouped board card (free canvas) ──
+
+const UngroupedBoardCard: React.FC<{ boardId: string }> = ({ boardId }) => {
+  const pan    = useCanvasStore(s => s.pan)
+  const zoom   = useCanvasStore(s => s.zoom)
+  const board  = useBoardsStore(s => s.boards[boardId])
+  const [isDragging, setIsDragging] = useState(false)
+
+  const onDown = useCallback((e: React.PointerEvent) => {
+    if (e.button !== 0) return
+    e.stopPropagation()
+    e.preventDefault()
+    useUndoCoordinator.getState().checkpoint()
+    setIsDragging(true)
+    let lastX = e.clientX, lastY = e.clientY
+    let dxAccum = 0, dyAccum = 0
+    const startCX = board?.canvasX ?? 0
+    const startCY = board?.canvasY ?? 0
+
+    const onMove = (ev: PointerEvent) => {
+      const z = useCanvasStore.getState().zoom
+      dxAccum += (ev.clientX - lastX) / z
+      dyAccum += (ev.clientY - lastY) / z
+      lastX = ev.clientX; lastY = ev.clientY
+      useBoardsStore.getState().setUngroupedBoardPos(boardId, startCX + dxAccum, startCY + dyAccum)
+    }
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      setIsDragging(false)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }, [boardId, board?.canvasX, board?.canvasY])
+
+  const onWheel = useCallback((e: React.WheelEvent) => {
+    e.stopPropagation()
+    const f = e.deltaY < 0 ? 1.12 : 1 / 1.12
+    let container = (e.currentTarget as HTMLElement).parentElement
+    while (container && container.style.overflow !== 'hidden') container = container.parentElement
+    const rect = container?.getBoundingClientRect()
+    const mx = rect ? e.clientX - rect.left : e.clientX
+    const my = rect ? e.clientY - rect.top : e.clientY
+    useCanvasStore.getState().zoomAtPoint(f, mx, my)
+  }, [])
+
+  if (!board) return null
+
+  const bScale = board.boardScale ?? 1
+  const rootBars = board.rootIds.map(rid => board.bars[rid]).filter(Boolean)
+  if (rootBars.length === 0) return null
+
+  const cx = board.canvasX ?? 0
+  const cy = board.canvasY ?? 0
+  const minBarX = Math.min(...rootBars.map(b => b.x))
+  const maxBarX = Math.max(...rootBars.map(b => b.x + b.width))
+  const contentW = (maxBarX - minBarX) * bScale + 32
+  const contentH = boardContentHeight(board.bars, board.rootIds, bScale)
+
+  const screenLeft = pan.x + (cx + BOARD_PADDING_X + minBarX * bScale - 16) * zoom
+  const screenTop = pan.y + cy * zoom
+  const screenWidth = contentW * zoom
+  const screenHeight = contentH * zoom
+  const color = board.color ?? '#5b8dd9'
+
+  const heroImage = rootBars.find(b => b.content?.images?.length > 0)?.content.images[0] ?? null
+
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        left: screenLeft, top: screenTop,
+        width: screenWidth, height: screenHeight,
+        zIndex: 40, userSelect: 'none', pointerEvents: 'all',
+        cursor: isDragging ? 'grabbing' : 'grab',
+        borderRadius: 12,
+        background: heroImage ? `linear-gradient(160deg, ${color}cc 0%, ${color}aa 100%)` : color,
+        touchAction: 'none',
+        border: '1.5px solid rgba(255,255,255,0.25)',
+        boxShadow: '0 4px 24px rgba(0,0,0,0.4)',
+        overflow: 'hidden',
+      }}
+      onPointerDown={onDown}
+      onWheel={onWheel}
+    >
+      {heroImage && (
+        <div style={{
+          position: 'absolute', inset: 0,
+          backgroundImage: `url(${heroImage})`,
+          backgroundSize: 'cover', backgroundPosition: 'center',
+          opacity: 0.7, borderRadius: 12,
+        }} />
+      )}
+      <div style={{
+        position: 'absolute', bottom: 6, left: 8,
+        color: 'rgba(255,255,255,0.7)', fontSize: 11, fontWeight: 600,
+        textShadow: '0 1px 4px rgba(0,0,0,0.8)',
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>
+        {board.projectName}
+      </div>
+      {/* Dashed border to distinguish ungrouped */}
+      <div style={{
+        position: 'absolute', inset: 0, borderRadius: 12,
+        border: '1.5px dashed rgba(255,255,255,0.3)',
+        pointerEvents: 'none',
+      }} />
+    </div>
+  )
+}
+
+/** Screen-space overlay — one card per group + per-group NLE headers + ungrouped board cards */
 const Overlay: React.FC = () => {
   const groups = useBoardsStore(s => s.groups)
+  const boards = useBoardsStore(s => s.boards)
+  const ungroupedIds = useMemo(() => getUngroupedBoardIds(groups, boards), [groups, boards])
   return (
     <>
       {groups.map(g => (
@@ -349,6 +413,9 @@ const Overlay: React.FC = () => {
           <NLETimelineHeader groupId={g.id} />
           <GroupCard group={g} />
         </Fragment>
+      ))}
+      {ungroupedIds.map(bid => (
+        <UngroupedBoardCard key={bid} boardId={bid} />
       ))}
     </>
   )

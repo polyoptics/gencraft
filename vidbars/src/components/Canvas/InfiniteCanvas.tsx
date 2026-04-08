@@ -3,7 +3,7 @@ import { useCanvasStore } from '../../store/canvasStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useBoardsStore } from '../../store/boardsStore'
 import { clampToNoParkZone } from '../../utils/nleZone'
-import { computeRowLayout, getRowY, getRowHeight, yToRow } from '../../utils/nleRows'
+import { computeGroupLayout, getRowY, getRowHeight, boardContentHeight, CARD_GRID_SPACING } from '../../utils/nleRows'
 
 interface Props {
   children: React.ReactNode
@@ -365,6 +365,9 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
       {/* ── NLE row lines (behind everything, in canvas space) ── */}
       <NLERowBands pan={pan} zoom={zoom} />
 
+      {/* ── Zone divider (screen space, behind content) ── */}
+      <ZoneDivider />
+
       <div
         style={{
           position: 'absolute',
@@ -426,13 +429,22 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
               { label: '📝  Add note',    action: () => { const c = clampToNoParkZone(addMenu.cx, addMenu.cy, 200, 160); addFreeNode(c.x, c.y, 'note');  setAddMenu(null) } },
               { label: '🖼  Add image',   action: () => { const c = clampToNoParkZone(addMenu.cx, addMenu.cy, 200, 180); addFreeNode(c.x, c.y, 'image'); setAddMenu(null) } },
               { label: '─────────────', action: null },
-              { label: zoom <= 0.15 ? '🎬  New Card' : '🎬  New VidBar', action: () => {
-                const bs = useBoardsStore.getState()
-                const addLayout = computeRowLayout(bs.boards, 0)
-                const nleRow = Math.max(0, yToRow(addMenu.cy, addLayout))
-                const boardId = useBoardsStore.getState().createBoard(nleRow, addMenu.cx)
-                // At card level, also split into its own group
-                if (zoom <= 0.15) useBoardsStore.getState().moveToNewGroup(boardId)
+              { label: addMenu.cy < useCanvasStore.getState().zoneLineY
+                  ? (zoom <= 0.15 ? '🎬  New Free Card' : '🎬  New Free Board')
+                  : (zoom <= 0.15 ? '🎬  New Card' : '🎬  New VidBar'),
+                action: () => {
+                const zly = useCanvasStore.getState().zoneLineY
+                if (addMenu.cy < zly) {
+                  // Free zone: create ungrouped board
+                  useBoardsStore.getState().createUngroupedBoard(addMenu.cx, addMenu.cy)
+                } else {
+                  // Timeline zone: create grouped board (existing behavior)
+                  const boardId = useBoardsStore.getState().createBoard(0, 0)
+                  useBoardsStore.getState().moveToNewGroup(boardId)
+                  const bs = useBoardsStore.getState()
+                  const group = bs.groups.find(g => g.boardIds.includes(boardId))
+                  if (group) useBoardsStore.getState().setGroupPos(group.id, addMenu.cy, addMenu.cx)
+                }
                 setAddMenu(null)
               }},
             ].map((item, idx) => (
@@ -455,14 +467,86 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
   )
 }
 
-/** Dynamic NLE row bands — renders alternating fills and separator lines based on actual row layout */
+/** Zone divider — subtle line separating free canvas (above) from timeline (below) */
+const ZoneDivider: React.FC = () => {
+  const zoneLineY = useCanvasStore(s => s.zoneLineY)
+  const zoom = useCanvasStore(s => s.zoom)
+  const pan = useCanvasStore(s => s.pan)
+  // Render in screen space so line weight and labels stay readable at any zoom
+  const screenY = pan.y + zoneLineY * zoom
+  const labelSize = 11
+  return (
+    <>
+      <div style={{
+        position: 'absolute',
+        left: 0,
+        top: screenY,
+        width: '100%',
+        height: 0,
+        borderTop: '1px dashed rgba(130,180,255,0.25)',
+        pointerEvents: 'none',
+        zIndex: 0,
+      }} />
+      <div style={{
+        position: 'absolute',
+        left: 12,
+        top: screenY - labelSize - 4,
+        color: 'rgba(130,180,255,0.22)',
+        fontSize: labelSize,
+        fontWeight: 600,
+        letterSpacing: '0.5px',
+        pointerEvents: 'none',
+        userSelect: 'none',
+      }}>FREE CANVAS</div>
+      <div style={{
+        position: 'absolute',
+        left: 12,
+        top: screenY + 4,
+        color: 'rgba(130,180,255,0.22)',
+        fontSize: labelSize,
+        fontWeight: 600,
+        letterSpacing: '0.5px',
+        pointerEvents: 'none',
+        userSelect: 'none',
+      }}>TIMELINE</div>
+    </>
+  )
+}
+
+/** NLE row bands scoped to group bounding boxes + card-level grid lines */
 const NLERowBands: React.FC<{ pan: { x: number; y: number }; zoom: number }> = ({ pan, zoom }) => {
   const boards = useBoardsStore(s => s.boards)
-  const boardPos = useCanvasStore(s => s.boardPos)
-  const pRow = Math.max(0, yToRow(boardPos.y, computeRowLayout(boards, 0)))
-  const layout = computeRowLayout(boards, pRow)
-  // Render rows 0..15 (or as many as exist + a few extras)
-  const maxRow = Math.max(15, ...Object.keys(layout.rowHeights).map(Number))
+  const groups = useBoardsStore(s => s.groups)
+  const BOARD_PADDING_X = 20
+  const BAND_PAD = 30 // breathing room around content edges
+
+  // Card-level grid: visible lines at CARD_GRID_SPACING intervals
+  const isCardLevel = zoom <= 0.15
+  const cardGridLines: React.ReactNode[] = []
+  if (isCardLevel) {
+    // Compute vertical range from all groups
+    let minY = Infinity, maxY = -Infinity
+    groups.forEach(g => {
+      const gl = computeGroupLayout(g.boardIds, boards)
+      if (g.originY < minY) minY = g.originY
+      const bottom = g.originY + gl.totalHeight
+      if (bottom > maxY) maxY = bottom
+    })
+    if (minY === Infinity) { minY = 0; maxY = 2000 }
+    const gridTop = Math.floor((minY - 500) / CARD_GRID_SPACING) * CARD_GRID_SPACING
+    const gridBottom = maxY + 1000
+    for (let y = gridTop; y <= gridBottom; y += CARD_GRID_SPACING) {
+      cardGridLines.push(
+        <div key={`cg-${y}`} style={{
+          position: 'absolute',
+          left: -8000, width: 20000,
+          top: y, height: 1,
+          background: 'rgba(130,180,255,0.06)',
+        }} />
+      )
+    }
+  }
+
   return (
     <div style={{
       position: 'absolute', left: 0, top: 0,
@@ -471,29 +555,68 @@ const NLERowBands: React.FC<{ pan: { x: number; y: number }; zoom: number }> = (
       pointerEvents: 'none',
       willChange: 'transform',
     }}>
-      {Array.from({ length: maxRow + 1 }, (_, i) => {
-        const rowTop = getRowY(i, layout)
-        const rowH = getRowHeight(i, layout)
-        return (
-          <React.Fragment key={i}>
-            {i % 2 === 0 && (
+      {cardGridLines}
+      {groups.map(group => {
+        const layout = computeGroupLayout(group.boardIds, boards)
+        const maxRow = Math.max(0, ...Object.keys(layout.rowHeights).map(Number))
+
+        // Compute group horizontal extent
+        let groupLeft = Infinity, groupRight = -Infinity
+        group.boardIds.forEach(bid => {
+          const board = boards[bid]
+          if (!board) return
+          const bScale = board.boardScale ?? 1
+          const rootBars = board.rootIds.map(rid => board.bars[rid]).filter(Boolean)
+          if (rootBars.length === 0) return
+          const bx = group.originX + (board.nleX ?? 0)
+          const minX = Math.min(...rootBars.map(b => b.x))
+          const maxX = Math.max(...rootBars.map(b => b.x + b.width))
+          const l = bx + BOARD_PADDING_X + minX * bScale
+          const r = bx + BOARD_PADDING_X + maxX * bScale
+          if (l < groupLeft) groupLeft = l
+          if (r > groupRight) groupRight = r
+        })
+        if (groupLeft === Infinity) return null
+
+        groupLeft -= BAND_PAD
+        groupRight += BAND_PAD
+        const bandWidth = groupRight - groupLeft
+
+        // Only show bands for rows that actually contain boards
+        const occupiedRows = new Set<number>()
+        group.boardIds.forEach(bid => {
+          const b = boards[bid]
+          if (b) occupiedRows.add(b.nleRow ?? 0)
+        })
+        const minOccupied = Math.min(...occupiedRows)
+        const maxOccupied = Math.max(...occupiedRows)
+
+        return Array.from({ length: maxOccupied - minOccupied + 1 }, (_, idx) => {
+          const i = minOccupied + idx
+          const rowTop = group.originY + getRowY(i, layout)
+          const rowH = getRowHeight(i, layout)
+          return (
+            <React.Fragment key={`${group.id}-${i}`}>
+              {i % 2 === 0 && (
+                <div style={{
+                  position: 'absolute',
+                  left: groupLeft, width: bandWidth,
+                  top: rowTop,
+                  height: rowH,
+                  background: 'rgba(255,255,255,0.008)',
+                  borderRadius: 6,
+                }} />
+              )}
               <div style={{
                 position: 'absolute',
-                left: -8000, width: 20000,
+                left: groupLeft, width: bandWidth,
                 top: rowTop,
-                height: rowH,
-                background: 'rgba(255,255,255,0.008)',
+                height: 1,
+                background: i === minOccupied ? 'rgba(255,255,255,0.07)' : 'rgba(255,255,255,0.03)',
               }} />
-            )}
-            <div style={{
-              position: 'absolute',
-              left: -8000, width: 20000,
-              top: rowTop,
-              height: 1,
-              background: i === 0 ? 'rgba(255,255,255,0.07)' : 'rgba(255,255,255,0.03)',
-            }} />
-          </React.Fragment>
-        )
+            </React.Fragment>
+          )
+        })
       })}
     </div>
   )

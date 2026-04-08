@@ -95,7 +95,7 @@ export const NLELayout: React.FC = () => {
       dragSnappedRow = gripDrag.snappedRow
     }
 
-    const result: { id: string; d: string }[] = []
+    const result: { id: string; d: string; color: string }[] = []
     allBars.forEach(bar => {
       if (!bar.parentId) return
       const parent = bars[bar.parentId]
@@ -117,6 +117,7 @@ export const NLELayout: React.FC = () => {
       result.push({
         id: `${parent.id}-${bar.id}`,
         d: `M ${px} ${py} C ${px} ${midY}, ${cx} ${midY}, ${cx} ${cy}`,
+        color: parent.color ?? '#5b8dd9',
       })
     })
     return result
@@ -154,8 +155,8 @@ export const NLELayout: React.FC = () => {
           </defs>
           {wires.map(w => (
             <g key={w.id}>
-              <path d={w.d} stroke="rgba(140,170,255,0.18)" strokeWidth="4" fill="none" filter="url(#wire-glow)" />
-              <path d={w.d} stroke="rgba(160,185,255,0.45)" strokeWidth="1.5" fill="none" strokeLinecap="round" />
+              <path d={w.d} stroke={w.color} strokeWidth="4" fill="none" filter="url(#wire-glow)" opacity={0.18} />
+              <path d={w.d} stroke={w.color} strokeWidth="1.5" fill="none" strokeLinecap="round" opacity={0.55} />
             </g>
           ))}
           {/* Temp wire while dragging from a port — only in the board that owns the block */}

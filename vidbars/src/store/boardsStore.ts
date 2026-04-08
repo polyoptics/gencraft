@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { Bar } from '../types/bar'
 import { TEMPLATES } from '../data/templates'
+import { getBoardAbsolutePos, computeGroupLayout, yToRow } from '../utils/nleRows'
 import {
   makeBar,
   collectSubtree,
@@ -32,6 +33,8 @@ export interface ProjectGroup {
   boardIds: string[]   // ordered, can include 'primary'
   cardHeroImage: string | null
   cardSummary: string
+  originY: number      // canvas-space Y position (group origin)
+  originX: number      // canvas-space X position (group origin)
 }
 
 /** Find which group a board belongs to */
@@ -63,6 +66,8 @@ export interface BoardData {
   color: string        // board-level color (NLE overview block)
   nleRow: number       // which NLE row (integer, snapped)
   nleX: number         // horizontal canvas position
+  canvasX?: number     // absolute canvas X (only when ungrouped / free canvas)
+  canvasY?: number     // absolute canvas Y (only when ungrouped / free canvas)
   bars: Record<string, Bar>
   rootIds: string[]
   viewerBarId: string | null
@@ -71,6 +76,17 @@ export interface BoardData {
   pristine: boolean
   boardScale: number   // content zoom (primary only, but stored per-board for generality)
   layers: BoardLayerData  // layer-specific metadata for card/block zoom levels
+}
+
+/** True if board is not in any group's boardIds */
+export function isUngrouped(groups: ProjectGroup[], boardId: string): boolean {
+  return !groups.some(g => g.boardIds.includes(boardId))
+}
+
+/** Get all board IDs that aren't in any group */
+export function getUngroupedBoardIds(groups: ProjectGroup[], boards: Record<string, BoardData>): string[] {
+  const grouped = new Set(groups.flatMap(g => g.boardIds))
+  return Object.keys(boards).filter(id => !grouped.has(id))
 }
 
 interface BoardsState {
@@ -128,11 +144,19 @@ interface BoardsState {
   setGroupColor: (groupId: string, color: string) => void
   setGroupCardHeroImage: (groupId: string, url: string | null) => void
   setGroupCardSummary: (groupId: string, summary: string) => void
+  setGroupPos: (groupId: string, originY: number, originX: number) => void
   reassignBoard: (boardId: string, targetGroupId: string) => void
   moveToNewGroup: (boardId: string) => void
   duplicateGroup: (groupId: string) => string | null
   selectedGroupId: string | null
   setSelectedGroup: (groupId: string | null) => void
+
+  // ── Ungrouped board actions (free canvas) ──
+  createUngroupedBoard: (canvasX: number, canvasY: number) => string
+  ungroupBoard: (boardId: string) => void
+  groupBoard: (boardId: string, targetGroupId: string) => void
+  groupBoardAsNew: (boardId: string) => void
+  setUngroupedBoardPos: (boardId: string, canvasX: number, canvasY: number) => void
 }
 
 type SetFn = (fn: (s: BoardsState) => Partial<BoardsState>) => void
@@ -193,6 +217,8 @@ const DEFAULT_GROUP: ProjectGroup = {
   boardIds: ['primary'],
   cardHeroImage: null,
   cardSummary: '',
+  originY: 0,
+  originX: 0,
 }
 
 export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
@@ -505,6 +531,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
     const group: ProjectGroup = {
       id, name, color: '#5b8dd9', boardIds,
       cardHeroImage: null, cardSummary: '',
+      originY: 0, originX: 0,
     }
     set(s => {
       // Remove these boardIds from any existing group to avoid duplicates
@@ -545,6 +572,10 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
     set(s => ({ groups: s.groups.map(g => g.id === groupId ? { ...g, cardSummary: summary } : g) }))
   },
 
+  setGroupPos(groupId, originY, originX) {
+    set(s => ({ groups: s.groups.map(g => g.id === groupId ? { ...g, originY, originX } : g) }))
+  },
+
   reassignBoard(boardId, targetGroupId) {
     set(s => {
       let groups = s.groups.map(g => {
@@ -567,7 +598,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
         ...g, boardIds: g.boardIds.filter(bid => bid !== boardId),
       }))
       if (groups.length > 1) groups = groups.filter(g => g.boardIds.length > 0)
-      const newGroup: ProjectGroup = { id, name, color, boardIds: [boardId], cardHeroImage: null, cardSummary: '' }
+      const newGroup: ProjectGroup = { id, name, color, boardIds: [boardId], cardHeroImage: null, cardSummary: '', originY: 0, originX: 0 }
       return { groups: [...groups, newGroup] }
     })
   },
@@ -595,10 +626,113 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
         boardIds: newBoardIds,
         cardHeroImage: group.cardHeroImage,
         cardSummary: group.cardSummary,
+        originY: group.originY + 100,
+        originX: group.originX + 100,
       }
       return { groups: [...remaining, newGroup] }
     })
     return newGroupId
+  },
+
+  // ── Ungrouped board actions (free canvas) ──
+
+  createUngroupedBoard(canvasX, canvasY) {
+    const id = crypto.randomUUID()
+    const rootId = crypto.randomUUID()
+    const board: BoardData = {
+      id, projectName: 'New VidBar', color: '#5b8dd9',
+      nleRow: 0, nleX: 0,
+      canvasX, canvasY,
+      bars: {
+        [rootId]: makeBar({ id: rootId, parentId: null, rowIndex: 0, x: 0, width: INIT_W, height: INIT_H }),
+      },
+      rootIds: [rootId],
+      viewerBarId: null,
+      selectedIds: [],
+      savedCollapsedState: null,
+      pristine: true,
+      boardScale: 1,
+      layers: { ...DEFAULT_LAYERS },
+    }
+    set(s => ({
+      boards: { ...s.boards, [id]: board },
+      boardOrder: [...s.boardOrder, id],
+      // NOT added to any group — this is the key difference
+    }))
+    return id
+  },
+
+  ungroupBoard(boardId) {
+    if (boardId === 'primary') return  // never ungroup primary
+    const s = get()
+    const group = s.groups.find(g => g.boardIds.includes(boardId))
+    if (!group) return  // already ungrouped
+    // Compute absolute canvas position before removing from group
+    const absPos = getBoardAbsolutePos(boardId, s.groups, s.boards)
+    set(s2 => {
+      // Update board with absolute position
+      const board = s2.boards[boardId]
+      if (!board) return s2
+      const updatedBoard = { ...board, canvasX: absPos.x, canvasY: absPos.y }
+      // Remove from group
+      let groups = s2.groups.map(g =>
+        g.id === group.id ? { ...g, boardIds: g.boardIds.filter(bid => bid !== boardId) } : g
+      )
+      // Clean up empty groups (keep at least one)
+      if (groups.length > 1) groups = groups.filter(g => g.boardIds.length > 0)
+      return { boards: { ...s2.boards, [boardId]: updatedBoard }, groups }
+    })
+  },
+
+  groupBoard(boardId, targetGroupId) {
+    const s = get()
+    const board = s.boards[boardId]
+    if (!board) return
+    const group = s.groups.find(g => g.id === targetGroupId)
+    if (!group) return
+    // Compute local position within the target group
+    const cx = board.canvasX ?? 0
+    const cy = board.canvasY ?? 0
+    const nleX = cx - group.originX
+    const groupLayout = computeGroupLayout(group.boardIds, s.boards)
+    const localY = cy - group.originY
+    const nleRow = yToRow(localY, groupLayout)
+    set(s2 => {
+      const updatedBoard = { ...s2.boards[boardId], nleRow, nleX, canvasX: undefined, canvasY: undefined }
+      const groups = s2.groups.map(g =>
+        g.id === targetGroupId ? { ...g, boardIds: [...g.boardIds, boardId] } : g
+      )
+      return { boards: { ...s2.boards, [boardId]: updatedBoard }, groups }
+    })
+  },
+
+  groupBoardAsNew(boardId) {
+    const board = get().boards[boardId]
+    if (!board) return
+    const cx = board.canvasX ?? 0
+    const cy = board.canvasY ?? 0
+    const id = crypto.randomUUID()
+    const newGroup: ProjectGroup = {
+      id,
+      name: board.projectName ?? 'New Group',
+      color: board.color ?? '#5b8dd9',
+      boardIds: [boardId],
+      cardHeroImage: null,
+      cardSummary: '',
+      originY: cy,
+      originX: cx,
+    }
+    set(s => {
+      const updatedBoard = { ...s.boards[boardId], nleRow: 0, nleX: 0, canvasX: undefined, canvasY: undefined }
+      return {
+        boards: { ...s.boards, [boardId]: updatedBoard },
+        groups: [...s.groups, newGroup],
+      }
+    })
+  },
+
+  setUngroupedBoardPos(boardId, canvasX, canvasY) {
+    updateBoard(set, boardId, () => ({ canvasX, canvasY }))
   },
 
   setSelectedGroup(groupId) {
@@ -606,10 +740,9 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
   },
 }), {
   name: 'vidbars-boards',
-  version: 4,
+  version: 8,
   migrate(persisted: any, version: number) {
     if (version < 3) {
-      // Add layers field to all boards that lack it
       const boards = persisted.boards ?? {}
       for (const key of Object.keys(boards)) {
         if (!boards[key].layers) {
@@ -618,7 +751,6 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
       }
     }
     if (version < 4) {
-      // Create one default group containing all boards
       const boardOrder: string[] = persisted.boardOrder ?? []
       const primary = persisted.boards?.['primary']
       const heroImage = primary?.layers?.card?.heroImage ?? null
@@ -631,7 +763,99 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
         boardIds: ['primary', ...boardOrder],
         cardHeroImage: heroImage,
         cardSummary: summary,
+        originY: 0, originX: 0,
       }]
+    }
+    if (version < 5) {
+      // v4→v5: Convert global nleRow/nleX to group-local + compute group origins.
+      // Each group's origin = the minimum absolute position of its boards.
+      // Each board's nleRow/nleX becomes relative to the group origin.
+      //
+      // For primary board: its global Y was stored in canvasStore.boardPos.y,
+      // and its nleRow was 0. We read canvasStore separately and set primary's
+      // nleRow/nleX in the group-local system.
+      const boards = persisted.boards ?? {}
+      const groups: any[] = persisted.groups ?? []
+      const ROW_GAP = 16
+      const FIXED_H = 300  // default nleRowHeight
+
+      // Read canvasStore from localStorage to get primary board's absolute position
+      let primaryAbsY = 0
+      let primaryAbsX = 0
+      try {
+        const canvasRaw = localStorage.getItem('vidbars-canvas')
+        if (canvasRaw) {
+          const cs = JSON.parse(canvasRaw)?.state
+          if (cs?.boardPos) {
+            primaryAbsY = cs.boardPos.y ?? 0
+            primaryAbsX = cs.boardPos.x ?? 0
+          }
+        }
+      } catch {}
+
+      // Helper: get a board's absolute Y from old global nleRow
+      function oldAbsY(bid: string): number {
+        if (bid === 'primary') return primaryAbsY
+        const b = boards[bid]
+        if (!b) return 0
+        return (b.nleRow ?? 0) * (FIXED_H + ROW_GAP)
+      }
+      function oldAbsX(bid: string): number {
+        if (bid === 'primary') return primaryAbsX
+        return boards[bid]?.nleX ?? 0
+      }
+
+      groups.forEach((g: any) => {
+        const bids: string[] = g.boardIds ?? []
+        if (bids.length === 0) {
+          g.originY = 0
+          g.originX = 0
+          return
+        }
+
+        // Group origin = min absolute position of its boards
+        const absYs = bids.map(oldAbsY)
+        const absXs = bids.map(oldAbsX)
+        const minY = Math.min(...absYs)
+        const minX = Math.min(...absXs)
+        g.originY = minY
+        g.originX = minX
+
+        // Convert each board to group-local coordinates
+        bids.forEach(bid => {
+          const b = boards[bid]
+          if (!b) return
+          const absY = oldAbsY(bid)
+          // Compute local row from Y offset within group
+          const localY = absY - minY
+          const localRow = Math.round(localY / (FIXED_H + ROW_GAP))
+          b.nleRow = localRow
+          b.nleX = oldAbsX(bid) - minX
+        })
+      })
+
+      persisted.groups = groups
+    }
+    if (version < 7) {
+      // v6→v7: Compact group-local nleRow values to sequential 0, 1, 2...
+      // Previous data may have gaps or non-zero-based row numbers.
+      const boards = persisted.boards ?? {}
+      const groups: any[] = persisted.groups ?? []
+      groups.forEach((g: any) => {
+        const bids: string[] = g.boardIds ?? []
+        if (bids.length === 0) return
+        // Collect unique row numbers, sort them, map to 0-based sequential
+        const rowSet = new Set<number>()
+        bids.forEach(bid => { if (boards[bid]) rowSet.add(boards[bid].nleRow ?? 0) })
+        const sorted = [...rowSet].sort((a, b) => a - b)
+        const rowMap = new Map<number, number>()
+        sorted.forEach((oldRow, idx) => rowMap.set(oldRow, idx))
+        bids.forEach(bid => {
+          const b = boards[bid]
+          if (b) b.nleRow = rowMap.get(b.nleRow ?? 0) ?? 0
+        })
+      })
+      persisted.groups = groups
     }
     return persisted as BoardsState
   },

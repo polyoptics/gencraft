@@ -11,6 +11,7 @@ interface CanvasStore {
   nleRowHeight: number
   dynamicRowHeights: boolean
   focusedBoardId: string | null
+  zoneLineY: number
 
   setPan: (pan: { x: number; y: number }) => void
   setZoom: (zoom: number) => void
@@ -21,15 +22,17 @@ interface CanvasStore {
   setNleRowHeight: (h: number) => void
   toggleDynamicRowHeights: () => void
   setFocusedBoard: (id: string | null) => void
+  setZoneLineY: (y: number) => void
 }
 
 export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
   pan: { x: 0, y: 0 },
   zoom: 1,
   boardPos: { x: 0, y: 0 },
-  nleRowHeight: 420,
+  nleRowHeight: 300,
   dynamicRowHeights: false,
   focusedBoardId: null,
+  zoneLineY: 0,
 
   setPan: (pan) => set({ pan }),
 
@@ -62,6 +65,8 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
   toggleDynamicRowHeights: () => set(s => ({ dynamicRowHeights: !s.dynamicRowHeights })),
 
   setFocusedBoard: (focusedBoardId) => set({ focusedBoardId }),
+
+  setZoneLineY: (zoneLineY) => set({ zoneLineY }),
 }), {
   name: 'vidbars-canvas',
   partialize: (s) => ({
@@ -70,5 +75,13 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
     boardPos: s.boardPos,
     nleRowHeight: s.nleRowHeight,
     dynamicRowHeights: s.dynamicRowHeights,
+    zoneLineY: s.zoneLineY,
   }),
+  version: 1,
+  migrate: (persisted: any, version: number) => {
+    if (version < 1) {
+      persisted.zoneLineY = 0
+    }
+    return persisted
+  },
 }))

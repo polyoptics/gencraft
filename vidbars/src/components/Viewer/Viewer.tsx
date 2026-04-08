@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { useBoardsStore } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
-import { computeRowLayout, getRowY, yToRow } from '../../utils/nleRows'
+import { computeGroupLayout, getRowY } from '../../utils/nleRows'
+import { getGroupForBoard } from '../../store/boardsStore'
 
 interface Frame {
   id: string
@@ -35,9 +36,31 @@ export const Viewer: React.FC<Props> = ({ boardId }) => {
 
   const pan           = useCanvasStore(s => s.pan)
   const zoom          = useCanvasStore(s => s.zoom)
-  const boardPos      = useCanvasStore(s => s.boardPos)
-  const shiftBoardPos = useCanvasStore(s => s.shiftBoardPos)
+  const zoomAtPoint   = useCanvasStore(s => s.zoomAtPoint)
+  const shiftPan      = useCanvasStore(s => s.shiftPan)
+  const groups        = useBoardsStore(s => s.groups)
 
+  // Forward wheel-zoom through the viewer to the canvas
+  const onWheel = useCallback((e: React.WheelEvent) => {
+    e.stopPropagation()
+    const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12
+    zoomAtPoint(factor, e.clientX, e.clientY - APP_TOOLBAR_H)
+  }, [zoomAtPoint])
+
+  // Forward middle-mouse pan through the viewer
+  const panLast = useRef({ x: 0, y: 0 })
+  const onPanDown = useCallback((e: React.PointerEvent) => {
+    if (e.button !== 1) return
+    e.preventDefault(); e.stopPropagation()
+    panLast.current = { x: e.clientX, y: e.clientY }
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+  }, [])
+  const onPanMove = useCallback((e: React.PointerEvent) => {
+    if (!(e.currentTarget as HTMLElement).hasPointerCapture(e.pointerId)) return
+    shiftPan(e.clientX - panLast.current.x, e.clientY - panLast.current.y)
+    panLast.current = { x: e.clientX, y: e.clientY }
+  }, [shiftPan])
+  const onPanUp = useCallback((_e: React.PointerEvent) => {}, [])
 
   const closeViewer = useCallback(() => useBoardsStore.getState().closeViewer(boardId), [boardId])
   const renameBar   = useCallback((id: string, name: string) => useBoardsStore.getState().renameBar(boardId, id, name), [boardId])
@@ -80,20 +103,15 @@ export const Viewer: React.FC<Props> = ({ boardId }) => {
     if (!(e.currentTarget as HTMLElement).hasPointerCapture(e.pointerId)) return
     const dx = (e.clientX - titleLastX.current) / zoom
     const dy = (e.clientY - titleLastY.current) / zoom
-    if (isPrimary) {
-      shiftBoardPos(dx, dy)
-    } else {
-      const b = useBoardsStore.getState().boards[boardId]
-      if (b) {
-        const bs = useBoardsStore.getState()
-        const layout = computeRowLayout(bs.boards, b.nleRow)
-        const rowH = layout.rowHeights[b.nleRow] ?? 160
-        useBoardsStore.getState().setBoardNlePos(boardId, b.nleRow + dy / rowH, b.nleX + dx)
-      }
+    // Move the board's group
+    const bs = useBoardsStore.getState()
+    const group = getGroupForBoard(bs.groups, boardId)
+    if (group) {
+      useBoardsStore.getState().setGroupPos(group.id, group.originY + dy, group.originX + dx)
     }
     titleLastX.current = e.clientX
     titleLastY.current = e.clientY
-  }, [isPrimary, boardId, shiftBoardPos, zoom])
+  }, [boardId, zoom])
 
   const onTitleDragUp = useCallback(() => {}, [])
 
@@ -125,27 +143,29 @@ export const Viewer: React.FC<Props> = ({ boardId }) => {
 
   const bScale = board?.boardScale ?? 1
 
-  if (isPrimary) {
-    const topRow = Object.values(bars).filter(b => b.rowIndex === 0)
-    const minX = topRow.length > 0 ? Math.min(...topRow.map(b => b.x)) : 0
-    const maxX = topRow.length > 0 ? Math.max(...topRow.map(b => b.x + b.width)) : 200
-    naturalWidth = (maxX - minX) * bScale
-    headerScreenLeft = pan.x + (boardPos.x + BOARD_PADDING_X + minX * bScale) * zoom
-    headerScreenTop  = APP_TOOLBAR_H + pan.y + boardPos.y * zoom
-  } else {
+  {
     const topRow = Object.values(bars).filter(b => b.rowIndex === 0)
     const minX = topRow.length > 0 ? Math.min(...topRow.map(b => b.x)) : 0
     const maxX = topRow.length > 0 ? Math.max(...topRow.map(b => b.x + b.width)) : 480
     naturalWidth = (maxX - minX) * bScale
+    const group = getGroupForBoard(groups, boardId)
+    const groupOriginX = group?.originX ?? 0
+    const groupOriginY = group?.originY ?? 0
     const nleRow = board?.nleRow ?? 0
     const nleX   = board?.nleX   ?? 0
-    headerScreenLeft = pan.x + (nleX + BOARD_PADDING_X + minX * bScale) * zoom
-    const bs = useBoardsStore.getState()
-    const viewerLayout = computeRowLayout(bs.boards, nleRow)
-    headerScreenTop  = APP_TOOLBAR_H + pan.y + getRowY(nleRow, viewerLayout) * zoom
+    const groupLayout = group ? computeGroupLayout(group.boardIds, useBoardsStore.getState().boards) : computeGroupLayout([boardId], useBoardsStore.getState().boards)
+    const absX = groupOriginX + nleX
+    const absY = groupOriginY + getRowY(nleRow, groupLayout)
+    headerScreenLeft = pan.x + (absX + BOARD_PADDING_X + minX * bScale) * zoom
+    headerScreenTop  = APP_TOOLBAR_H + pan.y + absY * zoom
   }
 
   const canvasNaturalH = Math.round((naturalWidth - TOOLS_W) * 9 / 16)
+  // Compute the viewer's natural (unscaled) height so we can position in screen pixels
+  const topBarH = 38
+  const frameStripHeaderH = 26
+  const frameStripContentH = framesOpen ? 110 : 0
+  const viewerNaturalH = topBarH + canvasNaturalH + 1 + frameStripHeaderH + frameStripContentH
   const barColor = bar.color
 
   const handleFrameUpload = (target: string) => {
@@ -200,15 +220,34 @@ export const Viewer: React.FC<Props> = ({ boardId }) => {
 
   return (
     <>
+      {/* Outer: screen-pixel positioning — no transform, no drift */}
       <div
+        onWheel={onWheel}
+        onPointerDown={onPanDown}
+        onPointerMove={onPanMove}
+        onPointerUp={onPanUp}
         style={{
           position: 'fixed',
           left: headerScreenLeft,
-          bottom: window.innerHeight - headerScreenTop,
+          top: headerScreenTop - viewerNaturalH * zoom,
+          width: naturalWidth * zoom,
+          height: viewerNaturalH * zoom,
+          zIndex: 500,
+          overflow: 'hidden',
+          pointerEvents: 'auto',
+          borderRadius: `${10 * zoom}px ${10 * zoom}px 0 0`,
+        }}
+      >
+      {/* Inner: natural size, scaled to fit the outer container */}
+      <div
+        style={{
           width: naturalWidth,
+          height: viewerNaturalH,
           transformOrigin: 'bottom left',
           transform: `scale(${zoom})`,
-          zIndex: 500,
+          position: 'absolute',
+          bottom: 0,
+          left: 0,
           background: '#0d0e1a',
           borderRadius: '10px 10px 0 0',
           border: '1px solid rgba(255,255,255,0.10)',
@@ -418,6 +457,7 @@ export const Viewer: React.FC<Props> = ({ boardId }) => {
             </div>
           )}
         </div>
+      </div>
       </div>
 
       <input ref={fileInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleFileChange} />

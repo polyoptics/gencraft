@@ -3,7 +3,7 @@ import { useBoardsStore } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useNLEViewerStore } from '../../store/nleViewerStore'
 import { NLE_HEADER_CANVAS_H } from './NLETimelineHeader'
-import { computeRowLayout, getRowY, yToRow } from '../../utils/nleRows'
+import { computeGroupLayout, getRowY } from '../../utils/nleRows'
 
 interface Frame {
   id: string
@@ -47,8 +47,28 @@ const NLEGroupViewer: React.FC<Props> = ({ groupId }) => {
   const boards       = useBoardsStore(s => s.boards)
   const pan          = useCanvasStore(s => s.pan)
   const zoom         = useCanvasStore(s => s.zoom)
-  const boardPos     = useCanvasStore(s => s.boardPos)
+  const zoomAtPoint  = useCanvasStore(s => s.zoomAtPoint)
+  const shiftPan     = useCanvasStore(s => s.shiftPan)
 
+  const onWheel = useCallback((e: React.WheelEvent) => {
+    e.stopPropagation()
+    const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12
+    zoomAtPoint(factor, e.clientX, e.clientY - APP_TOOLBAR_H)
+  }, [zoomAtPoint])
+
+  const panLast = useRef({ x: 0, y: 0 })
+  const onPanDown = useCallback((e: React.PointerEvent) => {
+    if (e.button !== 1) return
+    e.preventDefault(); e.stopPropagation()
+    panLast.current = { x: e.clientX, y: e.clientY }
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+  }, [])
+  const onPanMove = useCallback((e: React.PointerEvent) => {
+    if (!(e.currentTarget as HTMLElement).hasPointerCapture(e.pointerId)) return
+    shiftPan(e.clientX - panLast.current.x, e.clientY - panLast.current.y)
+    panLast.current = { x: e.clientX, y: e.clientY }
+  }, [shiftPan])
+  const onPanUp = useCallback((_e: React.PointerEvent) => {}, [])
 
   const [firstFrame, setFirstFrame]       = useState<string | null>(null)
   const [lastFrame, setLastFrame]         = useState<string | null>(null)
@@ -71,10 +91,13 @@ const NLEGroupViewer: React.FC<Props> = ({ groupId }) => {
   const groupColor = group?.color ?? '#5b8dd9'
   const groupName = group?.name ?? 'NLE Timeline'
 
-  // Canvas geometry — scoped to this group's boards
+  // Canvas geometry — scoped to this group's boards using two-level positioning
   const { globalLeft, globalRight, topBoardY } = useMemo(() => {
     const allEdges: number[] = []
     const boardYs: number[] = []
+    const groupOriginX = group?.originX ?? 0
+    const groupOriginY = group?.originY ?? 0
+    const groupLayout = computeGroupLayout(scopedBoardIds, boards)
 
     scopedBoardIds.forEach(bid => {
       const board = boards[bid]
@@ -82,10 +105,8 @@ const NLEGroupViewer: React.FC<Props> = ({ groupId }) => {
       const bScale = board.boardScale ?? 1
       const rb = board.rootIds.map(rid => board.bars[rid]).filter(Boolean)
       if (rb.length === 0) return
-      const bx = bid === 'primary' ? boardPos.x : board.nleX
-      const pRow = Math.max(0, yToRow(boardPos.y, computeRowLayout(boards, 0)))
-      const layout = computeRowLayout(boards, pRow)
-      const by = bid === 'primary' ? boardPos.y : getRowY(board.nleRow, layout)
+      const bx = groupOriginX + (board.nleX ?? 0)
+      const by = groupOriginY + getRowY(board.nleRow ?? 0, groupLayout)
       allEdges.push(bx + BOARD_PADDING_X + Math.min(...rb.map(b => b.x)) * bScale - 16)
       allEdges.push(bx + BOARD_PADDING_X + Math.max(...rb.map(b => b.x + b.width)) * bScale + 16)
       boardYs.push(by)
@@ -94,15 +115,22 @@ const NLEGroupViewer: React.FC<Props> = ({ groupId }) => {
     return {
       globalLeft: allEdges.length > 0 ? Math.min(...allEdges) : 0,
       globalRight: allEdges.length > 0 ? Math.max(...allEdges) : 200,
-      topBoardY: boardYs.length > 0 ? Math.min(...boardYs) : boardPos.y,
+      topBoardY: boardYs.length > 0 ? Math.min(...boardYs) : groupOriginY,
     }
-  }, [scopedBoardIds, boards, boardPos])
+  }, [scopedBoardIds, boards, group])
 
   // Anchor: viewer bottom edge sits at NLE header top
+  // Must match NLETimelineHeader's clamped screen height: Math.max(H * zoom, 20)
   const naturalWidth = globalRight - globalLeft
   const screenLeft = pan.x + globalLeft * zoom
-  const nleHeaderTopScreen = APP_TOOLBAR_H + pan.y + (topBoardY - NLE_HEADER_CANVAS_H - NLE_HEADER_GAP) * zoom
+  const headerScreenBottom = APP_TOOLBAR_H + pan.y + (topBoardY - NLE_HEADER_GAP) * zoom
+  const headerScreenHeight = Math.max(NLE_HEADER_CANVAS_H * zoom, 20)
+  const nleHeaderTopScreen = headerScreenBottom - headerScreenHeight
   const canvasNaturalH = Math.round((naturalWidth - TOOLS_W) * 9 / 16)
+  const topBarH = 38
+  const frameStripHeaderH = 26
+  const frameStripContentH = framesOpen ? 110 : 0
+  const viewerNaturalH = topBarH + canvasNaturalH + 1 + frameStripHeaderH + frameStripContentH
 
   if (!isOpen || scopedBoardIds.length === 0) return null
 
@@ -154,15 +182,34 @@ const NLEGroupViewer: React.FC<Props> = ({ groupId }) => {
 
   return (
     <>
+      {/* Outer: screen-pixel positioning — no drift */}
       <div
+        onWheel={onWheel}
+        onPointerDown={onPanDown}
+        onPointerMove={onPanMove}
+        onPointerUp={onPanUp}
         style={{
           position: 'fixed',
           left: screenLeft,
-          bottom: window.innerHeight - nleHeaderTopScreen,
+          top: nleHeaderTopScreen - viewerNaturalH * zoom,
+          width: naturalWidth * zoom,
+          height: viewerNaturalH * zoom,
+          zIndex: 500,
+          overflow: 'hidden',
+          pointerEvents: 'auto',
+          borderRadius: `${10 * zoom}px ${10 * zoom}px 0 0`,
+        }}
+      >
+      {/* Inner: natural size, scaled */}
+      <div
+        style={{
           width: naturalWidth,
+          height: viewerNaturalH,
           transformOrigin: 'bottom left',
           transform: `scale(${zoom})`,
-          zIndex: 500,
+          position: 'absolute',
+          bottom: 0,
+          left: 0,
           background: '#0d0e1a',
           borderRadius: '10px 10px 0 0',
           border: '1px solid rgba(255,255,255,0.10)',
@@ -371,6 +418,7 @@ const NLEGroupViewer: React.FC<Props> = ({ groupId }) => {
             </div>
           )}
         </div>
+      </div>
       </div>
 
       <input ref={fileInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleFileChange} />

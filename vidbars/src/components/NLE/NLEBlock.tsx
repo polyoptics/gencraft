@@ -681,7 +681,7 @@ export const NLEBlock: React.FC<Props> = ({ id, top, blockHeight, offsetX, rowTo
             style={{
               position: 'absolute', top: -10, left: '50%', transform: 'translateX(-50%)',
               width: 20, height: 20, borderRadius: '50%',
-              background: 'rgba(140,175,255,0.65)', border: '2px solid rgba(255,255,255,0.35)',
+              background: bar.color ?? 'rgba(140,175,255,0.65)', border: '2px solid rgba(255,255,255,0.35)',
               zIndex: 12, cursor: 'crosshair',
             }}
             onPointerDown={e => {
@@ -751,7 +751,7 @@ export const NLEBlock: React.FC<Props> = ({ id, top, blockHeight, offsetX, rowTo
           style={{
             position: 'absolute', bottom: -10, left: '50%', transform: 'translateX(-50%)',
             width: 20, height: 20, borderRadius: '50%',
-            background: bar.collapsed ? 'rgba(255,170,50,0.85)' : 'rgba(140,175,255,0.65)',
+            background: bar.collapsed ? 'rgba(255,170,50,0.85)' : (bar.color ?? 'rgba(140,175,255,0.65)'),
             border: '2px solid rgba(255,255,255,0.35)',
             cursor: 'crosshair',
             zIndex: 12, transition: 'background 0.15s',
