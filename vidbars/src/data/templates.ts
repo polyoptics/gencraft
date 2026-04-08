@@ -21,7 +21,7 @@ function b(
     icon: null,
     color: '#5b8dd9',
     children,
-    content: { text: '', images: [], mentions: [] },
+    content: { text: '', images: [], media: [], mentions: [] },
     ...overrides,
   }
 }

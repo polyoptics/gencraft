@@ -17,7 +17,7 @@ export function makeBar(
   return {
     name: 'Untitled', subtitle: '', icon: null, color: '#5b8dd9',
     children: [], height: 135,
-    content: { text: '', images: [], mentions: [] },
+    content: { text: '', images: [], media: [], mentions: [] },
     ...overrides,
   }
 }

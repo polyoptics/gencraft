@@ -3,6 +3,7 @@ import { useCanvasStore } from '../../store/canvasStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useBoardsStore } from '../../store/boardsStore'
 import { clampToNoParkZone } from '../../utils/nleZone'
+import { uploadFile } from '../../utils/uploadFile'
 import { computeGroupLayout, getRowY, getRowHeight, boardContentHeight, CARD_GRID_SPACING } from '../../utils/nleRows'
 
 interface Props {
@@ -140,7 +141,7 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
 
   // ── Layer-aware drop handlers ──
 
-  /** Drop on bare canvas at any layer — create free image node(s) */
+  /** Drop on bare canvas at any layer — create free node(s) */
   const dropOnBareCanvas = useCallback((e: React.DragEvent, files: File[]) => {
     const rect = containerRef.current!.getBoundingClientRect()
     const z = zoomRef.current
@@ -150,31 +151,34 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
       let cy = (e.clientY - rect.top - p.y) / z
       const clamped = clampToNoParkZone(cx, cy, 200, 180)
       cx = clamped.x; cy = clamped.y
-      const nodeId = addFreeNode(cx, cy, 'image')
-      const reader = new FileReader()
-      reader.onload = () => {
-        updateFreeNode(nodeId, { imageUrl: reader.result as string, label: file.name.replace(/\.[^.]+$/, '') })
-      }
-      reader.readAsDataURL(file)
+      // Determine node type from MIME
+      const mime = file.type
+      const nodeType = mime.startsWith('video/') ? 'video' as const : mime.startsWith('audio/') ? 'audio' as const : 'image' as const
+      const mediaType = nodeType
+      const nodeId = addFreeNode(cx, cy, nodeType)
+      uploadFile(file).then(({ url }) => {
+        updateFreeNode(nodeId, { imageUrl: url, mediaType, label: file.name.replace(/\.[^.]+$/, '') })
+      })
     })
   }, [addFreeNode, updateFreeNode])
 
-  /** Drop on a free node at any layer — set its image */
+  /** Drop on a free node at any layer — set its media */
   const dropOnFreeNode = useCallback((allEls: Element[], files: File[]): boolean => {
     for (const el of allEls) {
       const freenode = el.closest('[data-freenode][data-id]') as HTMLElement | null
       if (freenode) {
         const nodeId = freenode.dataset.id!
         const file = files[0]
-        const reader = new FileReader()
-        reader.onload = () => {
+        const mime = file.type
+        const nodeType = mime.startsWith('video/') ? 'video' as const : mime.startsWith('audio/') ? 'audio' as const : 'image' as const
+        uploadFile(file).then(({ url }) => {
           useFreeNodeStore.getState().updateFreeNode(nodeId, {
-            type: 'image',
-            imageUrl: reader.result as string,
+            type: nodeType,
+            mediaType: nodeType,
+            imageUrl: url,
             label: file.name.replace(/\.[^.]+$/, ''),
           })
-        }
-        reader.readAsDataURL(file)
+        })
         return true
       }
     }
@@ -189,11 +193,9 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
       if (card) {
         const groupId = card.dataset.layerCard!
         const file = files[0]
-        const reader = new FileReader()
-        reader.onload = () => {
-          useBoardsStore.getState().setGroupCardHeroImage(groupId, reader.result as string)
-        }
-        reader.readAsDataURL(file)
+        uploadFile(file).then(({ url }) => {
+          useBoardsStore.getState().setGroupCardHeroImage(groupId, url)
+        })
         return
       }
     }
@@ -211,11 +213,9 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
       if (block) {
         const boardId = block.dataset.layerBlock!
         const file = files[0]
-        const reader = new FileReader()
-        reader.onload = () => {
-          useBoardsStore.getState().setBlockThumbnail(boardId, reader.result as string)
-        }
-        reader.readAsDataURL(file)
+        uploadFile(file).then(({ url }) => {
+          useBoardsStore.getState().setBlockThumbnail(boardId, url)
+        })
         return
       }
     }
@@ -235,13 +235,11 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
         const barId = block.dataset.id!
         const boardId = block.dataset.boardId ?? 'primary'
         files.forEach(file => {
-          const reader = new FileReader()
-          reader.onload = () => {
+          uploadFile(file).then(({ url, type }) => {
             const b = useBoardsStore.getState().boards[boardId]
-            const cur = b?.bars[barId]?.content.images ?? []
-            useBoardsStore.getState().setContent(boardId, barId, { images: [...cur, reader.result as string] })
-          }
-          reader.readAsDataURL(file)
+            const curMedia = b?.bars[barId]?.content.media ?? []
+            useBoardsStore.getState().setContent(boardId, barId, { media: [...curMedia, { url, type: type as any }] })
+          })
         })
         return
       }
@@ -258,12 +256,10 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
           const rid = b?.rootIds[0]
           if (rid) {
             files.forEach(file => {
-              const reader = new FileReader()
-              reader.onload = () => {
-                const cur = useBoardsStore.getState().boards[boardId]?.bars[rid]?.content.images ?? []
-                useBoardsStore.getState().setContent(boardId, rid, { images: [...cur, reader.result as string] })
-              }
-              reader.readAsDataURL(file)
+              uploadFile(file).then(({ url, type }) => {
+                const curMedia = useBoardsStore.getState().boards[boardId]?.bars[rid]?.content.media ?? []
+                useBoardsStore.getState().setContent(boardId, rid, { media: [...curMedia, { url, type: type as any }] })
+              })
             })
             return
           }
@@ -278,7 +274,9 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
   }, [dropOnFreeNode, dropOnBareCanvas])
 
   const handleDrop = useCallback((e: React.DragEvent) => {
-    const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/'))
+    const files = Array.from(e.dataTransfer.files).filter(f =>
+      f.type.startsWith('image/') || f.type.startsWith('video/') || f.type.startsWith('audio/')
+    )
     if (files.length === 0) return
     e.preventDefault()
 
@@ -427,6 +425,7 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
           }}>
             {[
               { label: '📝  Add note',    action: () => { const c = clampToNoParkZone(addMenu.cx, addMenu.cy, 200, 160); addFreeNode(c.x, c.y, 'note');  setAddMenu(null) } },
+              { label: 'T   Add text',    action: () => { const c = clampToNoParkZone(addMenu.cx, addMenu.cy, 200, 180); addFreeNode(c.x, c.y, 'text');  setAddMenu(null) } },
               { label: '🖼  Add image',   action: () => { const c = clampToNoParkZone(addMenu.cx, addMenu.cy, 200, 180); addFreeNode(c.x, c.y, 'image'); setAddMenu(null) } },
               { label: '─────────────', action: null },
               { label: addMenu.cy < useCanvasStore.getState().zoneLineY

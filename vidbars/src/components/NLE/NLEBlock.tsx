@@ -11,6 +11,9 @@ import { ColorHoverWheel } from '../Bar/ColorHoverWheel'
 import { gripDragState } from '../../utils/gripDragState'
 import { wireDragState } from '../../utils/wireDragState'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
+import { uploadFile } from '../../utils/uploadFile'
+import { getFirstImageUrl, getMediaItems, DEFAULT_BAR_TEXT_STYLE } from '../../types/bar'
+import type { BarTextStyle } from '../../types/bar'
 
 const MIN_H = 90
 
@@ -61,6 +64,9 @@ export const NLEBlock: React.FC<Props> = ({ id, top, blockHeight, offsetX, rowTo
   const colorDragHasMoved = useRef(false)
   const colorDragStart = useRef({ x: 0, y: 0 })
   const [showHoverWheel, setShowHoverWheel] = useState(false)
+  const [showTextToolbar, setShowTextToolbar] = useState(false)
+  const [isEditingText, setIsEditingText] = useState(false)
+  const textEditRef = useRef<HTMLTextAreaElement>(null)
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const colorDotRef = useRef<HTMLDivElement>(null)
 
@@ -114,7 +120,7 @@ export const NLEBlock: React.FC<Props> = ({ id, top, blockHeight, offsetX, rowTo
   const onBodyDown = useCallback((e: React.PointerEvent) => {
     if (e.button !== 0) return  // let middle/right bubble for canvas pan & context menu
     const tag = (e.target as HTMLElement).tagName
-    if (tag === 'INPUT' || tag === 'BUTTON') return
+    if (tag === 'INPUT' || tag === 'BUTTON' || tag === 'TEXTAREA') return
     if ((e.target as Element).closest?.('[data-handle]')) return
     if (e.shiftKey) {
       toggleSelection(id)
@@ -309,21 +315,18 @@ export const NLEBlock: React.FC<Props> = ({ id, top, blockHeight, offsetX, rowTo
 
   const handleIconFile = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; if (!file) return
-    const reader = new FileReader()
-    reader.onload = ev => setIcon(id, ev.target?.result as string)
-    reader.readAsDataURL(file); e.target.value = ''
+    uploadFile(file).then(({ url }) => setIcon(id, url))
+    e.target.value = ''
   }, [id, setIcon])
 
   const handleMediaFile = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     Array.from(e.target.files ?? []).forEach(file => {
-      if (!file.type.startsWith('image/')) return
-      const reader = new FileReader()
-      reader.onload = ev => {
+      if (!file.type.startsWith('image/') && !file.type.startsWith('video/') && !file.type.startsWith('audio/')) return
+      uploadFile(file).then(({ url, type }) => {
         const currentBars = getBars()
-        const currentImages = currentBars[id]?.content.images ?? []
-        setContent(id, { images: [...currentImages, ev.target?.result as string] })
-      }
-      reader.readAsDataURL(file)
+        const curMedia = currentBars[id]?.content.media ?? []
+        setContent(id, { media: [...curMedia, { url, type: type as any, originalName: file.name }] })
+      })
     })
     e.target.value = ''
   }, [id, setContent, getBars])
@@ -470,9 +473,17 @@ export const NLEBlock: React.FC<Props> = ({ id, top, blockHeight, offsetX, rowTo
         onPointerMove={onBodyMove}
         onPointerUp={onBodyUp}
         onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setContextMenu({ x: e.clientX, y: e.clientY }) }}
-        onDoubleClick={() => {
+        onDoubleClick={(e) => {
           if (dragHasMoved.current) return
-          startRename()
+          // Double-click on name pill → rename; anywhere else in body → edit text
+          const onPill = (e.target as HTMLElement).closest('[data-name-pill]')
+          if (onPill) {
+            startRename()
+          } else {
+            e.stopPropagation()
+            setShowTextToolbar(true)
+            setIsEditingText(true)
+          }
         }}
         onDragOver={e => e.preventDefault()}
       >
@@ -489,18 +500,90 @@ export const NLEBlock: React.FC<Props> = ({ id, top, blockHeight, offsetX, rowTo
           transition: 'box-shadow 0.12s ease',
         }}>
           <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(160deg, rgba(255,255,255,0.10) 0%, rgba(0,0,0,0.10) 100%)' }} />
-          {bar.content.images.length > 0 && (
+          {getFirstImageUrl(bar.content) && (
             <div style={{
               position: 'absolute', inset: 0,
-              backgroundImage: `url(${bar.content.images[0]})`,
+              backgroundImage: `url(${getFirstImageUrl(bar.content)})`,
               backgroundSize: 'cover', backgroundPosition: 'center',
               opacity: 0.82,
             }} />
           )}
+          {(bar.content.text || isEditingText) && (() => {
+            const bts = { ...DEFAULT_BAR_TEXT_STYLE, ...bar.content.textStyle }
+            const bgRgba = `rgba(${parseInt(bts.bgColor.slice(1,3),16)},${parseInt(bts.bgColor.slice(3,5),16)},${parseInt(bts.bgColor.slice(5,7),16)},${bts.bgOpacity})`
+            const hasImage = !!getFirstImageUrl(bar.content)
+            const effectiveBg = bts.bgOpacity > 0 ? bgRgba : hasImage ? 'rgba(0,0,0,0.45)' : 'none'
+            const baseStyle: React.CSSProperties = {
+              position: 'absolute',
+              top: compact ? 20 : medium ? 28 : 34,
+              left: 0, right: 0, bottom: 0,
+              padding: compact ? '2px 6px' : '6px 10px',
+              background: effectiveBg,
+              color: bts.color,
+              fontSize: bts.fontSize,
+              lineHeight: 1.4,
+              fontWeight: bts.bold ? 700 : 400,
+              fontStyle: bts.italic ? 'italic' : 'normal',
+              textAlign: bts.align,
+              overflow: 'hidden',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              backdropFilter: hasImage && bts.bgOpacity === 0 ? 'blur(4px)' : 'none',
+            }
+            if (isEditingText) {
+              return (
+                <textarea
+                  ref={textEditRef}
+                  data-text-overlay
+                  autoFocus
+                  value={bar.content.text}
+                  onChange={e => setContent(id, { text: e.target.value })}
+                  onPointerDown={e => e.stopPropagation()}
+                  onBlur={(e) => {
+                    // Don't close if clicking the format toolbar
+                    const related = e.relatedTarget as HTMLElement | null
+                    if (related?.closest('[data-bar-text-toolbar]')) return
+                    setIsEditingText(false); setShowTextToolbar(false)
+                  }}
+                  onKeyDown={e => { if (e.key === 'Escape') { setIsEditingText(false); setShowTextToolbar(false) } }}
+                  placeholder="Type text…"
+                  style={{
+                    ...baseStyle,
+                    border: '1px solid rgba(120,180,255,0.4)',
+                    outline: 'none',
+                    resize: 'none',
+                    fontFamily: 'inherit',
+                    cursor: 'text',
+                    zIndex: 6,
+                  }}
+                />
+              )
+            }
+            return (
+              <div
+                data-text-overlay
+                style={{
+                  ...baseStyle,
+                  display: 'flex', flexDirection: 'column',
+                  justifyContent: bts.vAlign === 'middle' ? 'center' : bts.vAlign === 'bottom' ? 'flex-end' : 'flex-start',
+                  cursor: 'pointer',
+                  zIndex: 4,
+                }}
+                onDoubleClick={e => {
+                  e.stopPropagation()
+                  setShowTextToolbar(true)
+                  setIsEditingText(true)
+                }}
+              >
+                <div>{bar.content.text}</div>
+              </div>
+            )
+          })()}
         </div>
 
         {/* ── Icon + name pill ── */}
         <div
+          data-name-pill
           style={{
             position: 'absolute', top: 0, left: 0,
             display: 'flex', alignItems: 'center',
@@ -914,6 +997,16 @@ export const NLEBlock: React.FC<Props> = ({ id, top, blockHeight, offsetX, rowTo
           onClose={() => setShowColorPicker(false)}
         />
       )}
+      {showTextToolbar && bar.content.text && createPortal(
+        <BarTextFormatToolbar
+          barId={id}
+          boardId={ctx.boardId}
+          content={bar.content}
+          wrapperRef={wrapperRef}
+          onClose={() => setShowTextToolbar(false)}
+        />,
+        document.body
+      )}
       {colorDragging && createPortal(
         <div style={{ position: 'fixed', left: 0, top: 0, width: '100vw', height: '100vh', pointerEvents: 'none', zIndex: 99999 }}>
           {/* Floating color circle at cursor */}
@@ -939,6 +1032,229 @@ export const NLEBlock: React.FC<Props> = ({ id, top, blockHeight, offsetX, rowTo
         </div>,
         document.body
       )}
+    </>
+  )
+}
+
+// ── Bar Text Format Toolbar ──
+
+const FONT_SIZES = [8, 10, 12, 14, 18, 24, 32, 48, 64, 96]
+const PRESET_COLORS = ['#ffffff', '#e2e8f0', '#fbbf24', '#f87171', '#34d399', '#60a5fa', '#a78bfa', '#fb923c']
+
+function hexToRgba(hex: string, opacity: number): string {
+  const n = parseInt(hex.replace('#', ''), 16)
+  const r = (n >> 16) & 0xff, g = (n >> 8) & 0xff, b = n & 0xff
+  return `rgba(${r},${g},${b},${opacity})`
+}
+
+const hAlignIcons: Record<string, React.ReactNode> = {
+  left: <svg width="14" height="14" viewBox="0 0 14 14"><path d="M1 2h12M1 5h8M1 8h10M1 11h6" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round"/></svg>,
+  center: <svg width="14" height="14" viewBox="0 0 14 14"><path d="M1 2h12M3 5h8M2 8h10M4 11h6" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round"/></svg>,
+  right: <svg width="14" height="14" viewBox="0 0 14 14"><path d="M1 2h12M5 5h8M3 8h10M7 11h6" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round"/></svg>,
+}
+const vAlignIcons: Record<string, React.ReactNode> = {
+  top: <svg width="14" height="14" viewBox="0 0 14 14"><path d="M1 1h12M4 4h6M3 7h8" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round"/></svg>,
+  middle: <svg width="14" height="14" viewBox="0 0 14 14"><path d="M4 3h6M3 7h8M4 11h6" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round"/></svg>,
+  bottom: <svg width="14" height="14" viewBox="0 0 14 14"><path d="M3 7h8M4 10h6M1 13h12" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round"/></svg>,
+}
+
+const BarTextFormatToolbar: React.FC<{
+  barId: string
+  boardId: string
+  content: import('../../types/bar').BarContent
+  wrapperRef: React.RefObject<HTMLDivElement | null>
+  onClose: () => void
+}> = ({ barId, boardId, content, wrapperRef, onClose }) => {
+  const setContent = useBoardsStore(s => s.setContent)
+  const [showPopup, setShowPopup] = useState<'text' | 'bg' | 'hAlign' | 'vAlign' | null>(null)
+
+  const ts: BarTextStyle = { ...DEFAULT_BAR_TEXT_STYLE, ...content.textStyle }
+  const setStyle = (patch: Partial<BarTextStyle>) => {
+    setContent(boardId, barId, { textStyle: { ...ts, ...patch } })
+  }
+
+  const rect = wrapperRef.current?.getBoundingClientRect()
+  if (!rect) return null
+
+  const btnStyle = (active?: boolean): React.CSSProperties => ({
+    background: active ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.05)',
+    border: active ? '1px solid rgba(255,255,255,0.3)' : '1px solid rgba(255,255,255,0.08)',
+    borderRadius: 5,
+    color: active ? '#fff' : 'rgba(255,255,255,0.6)',
+    fontSize: 12, fontWeight: active ? 700 : 500,
+    padding: '2px 7px', cursor: 'pointer',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    minWidth: 24, height: 26,
+    transition: 'all 0.1s',
+  })
+
+  const sepStyle: React.CSSProperties = {
+    width: 1, height: 18, background: 'rgba(255,255,255,0.08)', margin: '0 3px', flexShrink: 0,
+  }
+
+  return (
+    <>
+      <div style={{ position: 'fixed', inset: 0, zIndex: 9998 }} onPointerDown={onClose} />
+      <div
+        data-bar-text-toolbar
+        tabIndex={-1}
+        onPointerDown={e => e.stopPropagation()}
+        style={{
+          position: 'fixed',
+          left: Math.max(4, Math.min(rect.left, window.innerWidth - 380)),
+          top: Math.max(4, rect.top - 40),
+          zIndex: 10000,
+          display: 'flex', alignItems: 'center', gap: 3,
+          background: '#1a1b2e',
+          border: '1px solid rgba(255,255,255,0.12)',
+          borderRadius: 8, padding: '4px 6px',
+          boxShadow: '0 8px 30px rgba(0,0,0,0.7)',
+          fontFamily: 'system-ui, sans-serif',
+        }}
+      >
+        {/* Font size */}
+        <button style={btnStyle()} onClick={() => {
+          const prev = FONT_SIZES.filter(s => s < ts.fontSize).pop() ?? FONT_SIZES[0]
+          setStyle({ fontSize: prev })
+        }}>−</button>
+        <span style={{ color: 'rgba(255,255,255,0.6)', fontSize: 11, minWidth: 22, textAlign: 'center', userSelect: 'none' }}>{ts.fontSize}</span>
+        <button style={btnStyle()} onClick={() => {
+          const next = FONT_SIZES.find(s => s > ts.fontSize) ?? FONT_SIZES[FONT_SIZES.length - 1]
+          setStyle({ fontSize: next })
+        }}>+</button>
+
+        <div style={sepStyle} />
+
+        {/* Bold / Italic */}
+        <button style={{ ...btnStyle(ts.bold), fontWeight: 800, fontSize: 13 }} onClick={() => setStyle({ bold: !ts.bold })}>B</button>
+        <button style={{ ...btnStyle(ts.italic), fontStyle: 'italic', fontSize: 13 }} onClick={() => setStyle({ italic: !ts.italic })}>I</button>
+
+        <div style={sepStyle} />
+
+        {/* Horizontal alignment */}
+        <div style={{ position: 'relative' }}>
+          <button style={btnStyle(showPopup === 'hAlign')} onClick={() => setShowPopup(showPopup === 'hAlign' ? null : 'hAlign')}>
+            {hAlignIcons[ts.align]}
+          </button>
+          {showPopup === 'hAlign' && (
+            <div onPointerDown={e => e.stopPropagation()} style={{
+              position: 'absolute', top: 32, left: -4, zIndex: 10001,
+              background: '#1a1b2e', border: '1px solid rgba(255,255,255,0.12)',
+              borderRadius: 8, padding: 4, boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
+              display: 'flex', gap: 2,
+            }}>
+              {(['left', 'center', 'right'] as const).map(v => (
+                <button key={v} title={v} onClick={() => { setStyle({ align: v }); setShowPopup(null) }} style={{
+                  background: v === ts.align ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.03)',
+                  border: v === ts.align ? '1px solid rgba(255,255,255,0.3)' : '1px solid rgba(255,255,255,0.06)',
+                  borderRadius: 5, color: v === ts.align ? '#fff' : 'rgba(255,255,255,0.5)',
+                  width: 28, height: 28, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
+                }}>{hAlignIcons[v]}</button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Vertical alignment */}
+        <div style={{ position: 'relative' }}>
+          <button style={btnStyle(showPopup === 'vAlign')} onClick={() => setShowPopup(showPopup === 'vAlign' ? null : 'vAlign')}>
+            {vAlignIcons[ts.vAlign]}
+          </button>
+          {showPopup === 'vAlign' && (
+            <div onPointerDown={e => e.stopPropagation()} style={{
+              position: 'absolute', top: 32, left: -4, zIndex: 10001,
+              background: '#1a1b2e', border: '1px solid rgba(255,255,255,0.12)',
+              borderRadius: 8, padding: 4, boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
+              display: 'flex', gap: 2,
+            }}>
+              {(['top', 'middle', 'bottom'] as const).map(v => (
+                <button key={v} title={v} onClick={() => { setStyle({ vAlign: v }); setShowPopup(null) }} style={{
+                  background: v === ts.vAlign ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.03)',
+                  border: v === ts.vAlign ? '1px solid rgba(255,255,255,0.3)' : '1px solid rgba(255,255,255,0.06)',
+                  borderRadius: 5, color: v === ts.vAlign ? '#fff' : 'rgba(255,255,255,0.5)',
+                  width: 28, height: 28, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
+                }}>{vAlignIcons[v]}</button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div style={sepStyle} />
+
+        {/* Text color */}
+        <div style={{ position: 'relative' }}>
+          <button style={{ ...btnStyle(showPopup === 'text'), gap: 4, padding: '2px 6px' }} onClick={() => setShowPopup(showPopup === 'text' ? null : 'text')}>
+            <span style={{ fontSize: 13, fontWeight: 700 }}>A</span>
+            <div style={{ width: 14, height: 4, borderRadius: 1, background: ts.color, border: '1px solid rgba(255,255,255,0.15)' }} />
+          </button>
+          {showPopup === 'text' && (
+            <div onPointerDown={e => e.stopPropagation()} style={{
+              position: 'absolute', top: 32, left: -4, zIndex: 10001,
+              background: '#1a1b2e', border: '1px solid rgba(255,255,255,0.12)',
+              borderRadius: 8, padding: 6, boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
+              display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4, width: 120,
+            }}>
+              {PRESET_COLORS.map(c => (
+                <button key={c} onClick={() => { setStyle({ color: c }); setShowPopup(null) }} style={{
+                  width: 24, height: 24, borderRadius: 5, background: c,
+                  border: c === ts.color ? '2px solid #fff' : '1px solid rgba(255,255,255,0.15)',
+                  cursor: 'pointer', padding: 0,
+                }} />
+              ))}
+              <label style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
+                <input type="color" value={ts.color} onChange={e => setStyle({ color: e.target.value })}
+                  style={{ width: 24, height: 24, border: 'none', background: 'none', cursor: 'pointer', padding: 0 }} />
+                <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)' }}>Custom</span>
+              </label>
+            </div>
+          )}
+        </div>
+
+        {/* Background color + opacity */}
+        <div style={{ position: 'relative' }}>
+          <button style={{ ...btnStyle(showPopup === 'bg'), gap: 4, padding: '2px 6px' }} onClick={() => setShowPopup(showPopup === 'bg' ? null : 'bg')}>
+            <div style={{
+              width: 16, height: 14, borderRadius: 3,
+              background: ts.bgOpacity > 0 ? hexToRgba(ts.bgColor, ts.bgOpacity) : 'linear-gradient(135deg, rgba(255,255,255,0.1) 45%, transparent 45%, transparent 55%, rgba(255,255,255,0.1) 55%)',
+              border: '1px solid rgba(255,255,255,0.15)',
+            }} />
+          </button>
+          {showPopup === 'bg' && (
+            <div onPointerDown={e => e.stopPropagation()} style={{
+              position: 'absolute', top: 32, right: -4, zIndex: 10001,
+              background: '#1a1b2e', border: '1px solid rgba(255,255,255,0.12)',
+              borderRadius: 8, padding: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.6)', width: 150,
+            }}>
+              <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', marginBottom: 4 }}>Background Color</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4, marginBottom: 8 }}>
+                {['#000000', '#1e1b4b', '#1e3a2f', '#3b1520', '#1e293b', '#2d1b0e', '#1a1a1a', '#0f172a'].map(c => (
+                  <button key={c} onClick={() => setStyle({ bgColor: c })} style={{
+                    width: 24, height: 24, borderRadius: 5, background: c,
+                    border: c === ts.bgColor ? '2px solid #fff' : '1px solid rgba(255,255,255,0.15)',
+                    cursor: 'pointer', padding: 0,
+                  }} />
+                ))}
+              </div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 2 }}>
+                <input type="color" value={ts.bgColor} onChange={e => setStyle({ bgColor: e.target.value })}
+                  style={{ width: 24, height: 24, border: 'none', background: 'none', cursor: 'pointer', padding: 0 }} />
+                <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)' }}>Custom</span>
+              </label>
+              <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', marginTop: 6, marginBottom: 4 }}>Opacity</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <input type="range" min={0} max={1} step={0.05} value={ts.bgOpacity}
+                  onChange={e => setStyle({ bgOpacity: parseFloat(e.target.value) })}
+                  onPointerDown={e => e.stopPropagation()}
+                  style={{ flex: 1, height: 4, accentColor: '#60a5fa', cursor: 'pointer' }} />
+                <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.5)', minWidth: 28, textAlign: 'right' }}>
+                  {Math.round(ts.bgOpacity * 100)}%
+                </span>
+              </div>
+              <div style={{ marginTop: 6, height: 20, borderRadius: 4, background: hexToRgba(ts.bgColor, ts.bgOpacity), border: '1px solid rgba(255,255,255,0.08)' }} />
+            </div>
+          )}
+        </div>
+      </div>
     </>
   )
 }

@@ -7,12 +7,19 @@ import type { SavedTemplate } from '../../store/userTemplateStore'
 import { TEMPLATES } from '../../data/templates'
 import { computeGroupLayout, getGroupHeight } from '../../utils/nleRows'
 
+interface SnapshotMeta { id: string; name: string; savedAt: number; file: string }
+
 export const TemplateMenu: React.FC = () => {
   const [open, setOpen] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [savingScene, setSavingScene] = useState(false)
   const [saveName, setSaveName] = useState('')
+  const [sceneName, setSceneName] = useState('')
   const saveInputRef = useRef<HTMLInputElement>(null)
+  const sceneInputRef = useRef<HTMLInputElement>(null)
   const ref = useRef<HTMLDivElement>(null)
+  const [snapshots, setSnapshots] = useState<SnapshotMeta[]>([])
+  const [loadingScene, setLoadingScene] = useState<string | null>(null)
 
   const setPan = useCanvasStore(s => s.setPan)
   const setZoom = useCanvasStore(s => s.setZoom)
@@ -24,12 +31,19 @@ export const TemplateMenu: React.FC = () => {
   const updateTemplate = useUserTemplateStore(s => s.updateTemplate)
 
   useEffect(() => {
-    if (!open) { setSaving(false); setSaveName('') }
+    if (!open) { setSaving(false); setSaveName(''); setSavingScene(false); setSceneName('') }
   }, [open])
 
   useEffect(() => {
     if (saving) saveInputRef.current?.focus()
-  }, [saving])
+    if (savingScene) sceneInputRef.current?.focus()
+  }, [saving, savingScene])
+
+  // Fetch snapshot list when menu opens
+  useEffect(() => {
+    if (!open) return
+    fetch('/api/snapshots/list').then(r => r.json()).then(setSnapshots).catch(() => {})
+  }, [open])
 
   useEffect(() => {
     if (!open) return
@@ -192,6 +206,58 @@ export const TemplateMenu: React.FC = () => {
     setOpen(false)
   }
 
+  async function saveSceneSnapshot() {
+    const name = sceneName.trim()
+    if (!name) return
+    const snapshot = { name, id: crypto.randomUUID(), savedAt: Date.now(), ...getCurrentSnapshot() }
+    await fetch('/api/snapshots/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(snapshot),
+    })
+    setSavingScene(false)
+    setSceneName('')
+    // Refresh list
+    fetch('/api/snapshots/list').then(r => r.json()).then(setSnapshots).catch(() => {})
+  }
+
+  async function loadSceneSnapshot(file: string) {
+    setLoadingScene(file)
+    try {
+      const res = await fetch(`/api/snapshots/load/${file}`)
+      const t = await res.json()
+      if (!t || !t.bars) return
+
+      // Same restore logic as applyUserTemplate
+      useBoardsStore.getState().loadLayout('primary', {
+        bars: t.bars, rootIds: t.rootIds, projectName: t.projectName,
+      })
+      const bs = useBoardsStore.getState()
+      bs.boardOrder.slice().forEach(id => useBoardsStore.getState().deleteBoard(id))
+      if (t.extraBoards && t.boardOrder) {
+        t.extraBoards.forEach((board: any) => {
+          useBoardsStore.setState(s => ({
+            boards: { ...s.boards, [board.id]: { ...board, selectedIds: [], viewerBarId: null } },
+            boardOrder: [...s.boardOrder, board.id],
+          }))
+        })
+      }
+      if (t.groups) useBoardsStore.setState({ groups: t.groups })
+      if (t.freeNodes) useFreeNodeStore.setState({ nodes: t.freeNodes, selectedIds: [] })
+      setZoom(t.zoom)
+      setPan(t.pan)
+      if (t.boardPos) setBoardPos(t.boardPos)
+      setOpen(false)
+    } finally {
+      setLoadingScene(null)
+    }
+  }
+
+  async function deleteSceneSnapshot(file: string) {
+    await fetch(`/api/snapshots/delete/${file}`, { method: 'DELETE' })
+    setSnapshots(s => s.filter(sn => sn.file !== file))
+  }
+
   const btnStyle: React.CSSProperties = {
     display: 'flex',
     alignItems: 'center',
@@ -308,6 +374,75 @@ export const TemplateMenu: React.FC = () => {
               <div style={{ margin: '4px 8px', borderTop: '1px solid rgba(255,255,255,0.07)' }} />
             </>
           )}
+
+          {/* ── Scene Snapshots ── */}
+          <div style={{ padding: '4px 10px 2px', fontSize: 9, color: 'rgba(255,255,255,0.28)', letterSpacing: '0.6px', textTransform: 'uppercase' }}>
+            Scenes
+          </div>
+          {snapshots.map(sn => (
+            <div key={sn.file} style={{ display: 'flex', alignItems: 'center' }}>
+              <button
+                style={{ ...btnStyle, flex: 1, color: loadingScene === sn.file ? 'rgba(120,170,255,0.9)' : 'rgba(255,255,255,0.70)' }}
+                onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.07)')}
+                onMouseLeave={e => (e.currentTarget.style.background = 'none')}
+                onClick={() => loadSceneSnapshot(sn.file)}
+              >
+                {loadingScene === sn.file ? 'Loading…' : sn.name}
+              </button>
+              <button
+                title="Delete scene"
+                style={{
+                  background: 'none', border: 'none',
+                  color: 'rgba(255,255,255,0.22)', fontSize: 13,
+                  cursor: 'pointer', padding: '4px 8px 4px 2px',
+                  lineHeight: 1, flexShrink: 0,
+                }}
+                onMouseEnter={e => (e.currentTarget.style.color = 'rgba(255,100,100,0.7)')}
+                onMouseLeave={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.22)')}
+                onClick={e => { e.stopPropagation(); deleteSceneSnapshot(sn.file) }}
+              >×</button>
+            </div>
+          ))}
+          {savingScene ? (
+            <div style={{ padding: '6px 8px', display: 'flex', gap: 6 }}>
+              <input
+                ref={sceneInputRef}
+                value={sceneName}
+                onChange={e => setSceneName(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') saveSceneSnapshot()
+                  if (e.key === 'Escape') { setSavingScene(false); setSceneName('') }
+                }}
+                placeholder="Scene name…"
+                style={{
+                  flex: 1, background: 'rgba(255,255,255,0.07)',
+                  border: '1px solid rgba(255,255,255,0.15)',
+                  borderRadius: 5, outline: 'none',
+                  color: '#fff', fontSize: 11, padding: '4px 8px',
+                  fontFamily: 'inherit',
+                }}
+              />
+              <button
+                onClick={saveSceneSnapshot}
+                style={{
+                  background: 'rgba(100,200,120,0.25)', border: '1px solid rgba(100,200,120,0.4)',
+                  borderRadius: 5, color: 'rgba(255,255,255,0.85)',
+                  fontSize: 11, fontWeight: 600, padding: '4px 10px',
+                  cursor: 'pointer', fontFamily: 'inherit',
+                }}
+              >Save</button>
+            </div>
+          ) : (
+            <button
+              style={{ ...btnStyle, color: 'rgba(100,200,120,0.75)' }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.07)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'none')}
+              onClick={() => setSavingScene(true)}
+            >
+              + Save scene snapshot
+            </button>
+          )}
+          <div style={{ margin: '4px 8px', borderTop: '1px solid rgba(255,255,255,0.07)' }} />
 
           {/* ── Built-in templates ── */}
           <div style={{ padding: '4px 10px 2px', fontSize: 9, color: 'rgba(255,255,255,0.28)', letterSpacing: '0.6px', textTransform: 'uppercase' }}>

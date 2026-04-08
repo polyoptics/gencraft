@@ -1,7 +1,29 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
-export type FreeNodeType = 'note' | 'image'
+export type FreeNodeType = 'note' | 'image' | 'text' | 'video' | 'audio'
+
+export interface TextStyle {
+  fontSize: number       // in px (base, before zoom scaling)
+  color: string          // text color
+  bgColor: string        // background color
+  bgOpacity: number      // 0–1
+  bold: boolean
+  italic: boolean
+  align: 'left' | 'center' | 'right'
+  vAlign: 'top' | 'middle' | 'bottom'
+}
+
+export const DEFAULT_TEXT_STYLE: TextStyle = {
+  fontSize: 18,
+  color: '#ffffff',
+  bgColor: '#000000',
+  bgOpacity: 0,
+  bold: false,
+  italic: false,
+  align: 'left',
+  vAlign: 'top',
+}
 
 export interface FreeNodeData {
   id: string
@@ -13,7 +35,9 @@ export interface FreeNodeData {
   label: string
   text: string
   imageUrl: string | null
+  mediaType?: 'image' | 'video' | 'audio' | null
   color: string
+  textStyle?: TextStyle
 }
 
 const COLORS = ['#1e2235', '#1e3028', '#2e1e35', '#35281e', '#1e2e35', '#2e351e']
@@ -39,14 +63,21 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
   addFreeNode: (x, y, type) => {
     const id = crypto.randomUUID()
     const color = COLORS[colorIdx++ % COLORS.length]
+    const labels: Record<FreeNodeType, string> = {
+      image: 'Image', note: 'Note', text: 'Text', video: 'Video', audio: 'Audio',
+    }
+    const heights: Record<FreeNodeType, number> = {
+      image: 180, note: 160, text: 180, video: 180, audio: 120,
+    }
     const node: FreeNodeData = {
       id, x, y,
-      width: 200,
-      height: type === 'image' ? 180 : 160,
+      width: type === 'audio' ? 260 : 200,
+      height: heights[type] ?? 160,
       type,
-      label: type === 'image' ? 'Image' : 'Note',
+      label: labels[type] ?? type,
       text: '',
       imageUrl: null,
+      mediaType: null,
       color,
     }
     set(s => ({ nodes: { ...s.nodes, [id]: node } }))

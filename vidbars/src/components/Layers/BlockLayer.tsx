@@ -12,6 +12,7 @@ import { computeGroupLayout, getRowY, dyToRowDelta, getBoardAbsolutePos } from '
 import type { RowLayout } from '../../utils/nleRows'
 import { groupBoardSlots, clampBoardX } from '../../utils/nlePush'
 import { DEFAULT_H } from '../../utils/barConstants'
+import { getFirstImageUrl } from '../../types/bar'
 import { ColorPickerPopup } from '../Bar/ColorPickerPopup'
 import { FreeCanvas } from '../Canvas/FreeCanvas'
 import { NLETimelineHeader } from '../NLE/NLETimelineHeader'
@@ -63,7 +64,7 @@ const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
   const rootColor = rootBars[0]?.color ?? '#5b8dd9'
 
   const thumbnail = board.layers?.block?.thumbnail
-    ?? rootBars.find(b => b.content?.images?.length > 0)?.content.images[0]
+    ?? rootBars.reduce<string | null>((found, b) => found || getFirstImageUrl(b.content), null)
     ?? null
 
   const displayLabel = board.layers?.block?.label || board.projectName

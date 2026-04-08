@@ -12,6 +12,7 @@ import { computeGroupLayout, getRowY, getRowHeight, boardContentHeight, snapToCa
 import { groupSlot, clampGroupMove } from '../../utils/nlePush'
 import { FreeCanvas } from '../Canvas/FreeCanvas'
 import { NLETimelineHeader } from '../NLE/NLETimelineHeader'
+import { getFirstImageUrl } from '../../types/bar'
 
 const BOARD_PADDING_X = 20
 
@@ -147,7 +148,7 @@ const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
       const board = boards[bid]
       if (!board) continue
       for (const rid of board.rootIds) {
-        const img = board.bars[rid]?.content?.images?.[0]
+        const img = getFirstImageUrl(board.bars[rid]?.content)
         if (img) return img
       }
     }
@@ -355,7 +356,7 @@ const UngroupedBoardCard: React.FC<{ boardId: string }> = ({ boardId }) => {
   const screenHeight = contentH * zoom
   const color = board.color ?? '#5b8dd9'
 
-  const heroImage = rootBars.find(b => b.content?.images?.length > 0)?.content.images[0] ?? null
+  const heroImage = rootBars.reduce<string | null>((found, b) => found || getFirstImageUrl(b.content), null)
 
   return (
     <div
