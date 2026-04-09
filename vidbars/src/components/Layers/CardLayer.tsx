@@ -98,8 +98,10 @@ const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
     window.addEventListener('pointerup', onUp)
   }, [group.id])
 
+  const [isHovered, setIsHovered] = useState(false)
+
   // ── Geometry: compute bounding box from group layout ──
-  const { screenLeft, screenTop, screenWidth, cardHeight, color } = useMemo(() => {
+  const { screenLeft, screenTop, screenWidth, cardHeight, contentCanvasW, contentCanvasH, color } = useMemo(() => {
     const groupLayout = computeGroupLayout(group.boardIds, boards)
 
     let globalMinX = Infinity
@@ -131,19 +133,26 @@ const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
       if (by + visualH > bottomY) bottomY = by + visualH
     })
 
-    if (globalMinX === Infinity) return { screenLeft: 0, screenTop: 0, screenWidth: 0, cardHeight: 0, color: group.color }
+    if (globalMinX === Infinity) return { screenLeft: 0, screenTop: 0, screenWidth: 0, cardHeight: 0, contentCanvasW: 0, contentCanvasH: 0, color: group.color }
 
     globalMinX -= 16
     globalMaxX += 16
 
+    const cW = globalMaxX - globalMinX
+    const cH = bottomY - topY
+    const finalW = Math.max(cW, group.cardWidthOverride ?? 0)
+    const finalH = Math.max(cH, group.cardHeightOverride ?? 0)
+
     return {
       screenLeft: pan.x + globalMinX * zoom,
       screenTop: pan.y + topY * zoom,
-      screenWidth: (globalMaxX - globalMinX) * zoom,
-      cardHeight: (bottomY - topY) * zoom,
+      screenWidth: finalW * zoom,
+      cardHeight: finalH * zoom,
+      contentCanvasW: cW,
+      contentCanvasH: cH,
       color: group.color,
     }
-  }, [group.boardIds, group.originX, group.originY, boards, pan, zoom, group.color])
+  }, [group.boardIds, group.originX, group.originY, group.cardWidthOverride, group.cardHeightOverride, boards, pan, zoom, group.color])
 
   // Hero image
   const heroImage = useMemo(() => {
@@ -169,6 +178,37 @@ const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
     const my = rect ? e.clientY - rect.top : e.clientY
     useCanvasStore.getState().zoomAtPoint(f, mx, my)
   }, [])
+
+  const onResizeDown = useCallback((e: React.PointerEvent, edge: 'right' | 'bottom' | 'corner') => {
+    if (e.button !== 0) return
+    e.stopPropagation()
+    e.preventDefault()
+    useUndoCoordinator.getState().checkpoint()
+
+    const startX = e.clientX
+    const startY = e.clientY
+    const startW = screenWidth / zoom
+    const startH = cardHeight / zoom
+
+    const onMove = (ev: PointerEvent) => {
+      const z = useCanvasStore.getState().zoom
+      const dx = (ev.clientX - startX) / z
+      const dy = (ev.clientY - startY) / z
+      const newW = edge === 'bottom' ? startW : Math.max(contentCanvasW, startW + dx)
+      const newH = edge === 'right' ? startH : Math.max(contentCanvasH, startH + dy)
+      useBoardsStore.getState().setGroupCardSize(
+        group.id,
+        newW > contentCanvasW ? newW : undefined,
+        newH > contentCanvasH ? newH : undefined,
+      )
+    }
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }, [group.id, screenWidth, cardHeight, contentCanvasW, contentCanvasH, zoom])
 
   if (screenWidth === 0) return null
   if (screenLeft + screenWidth < 0 || screenTop + cardHeight < 0) return null
@@ -202,6 +242,8 @@ const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
           useBoardsStore.getState().setSelectedGroup(group.id)
         }}
         onPointerDown={onCardDown}
+        onPointerEnter={() => setIsHovered(true)}
+        onPointerLeave={() => setIsHovered(false)}
         onWheel={onWheel}
         onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setCardMenu({ x: e.clientX, y: e.clientY }) }}
         onDoubleClick={e => {
@@ -228,6 +270,35 @@ const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
         }}>
           {group.cardSummary || `${group.boardIds.length} board${group.boardIds.length !== 1 ? 's' : ''}`}
         </div>
+        {/* ── Resize handles ── */}
+        {isHovered && (
+          <>
+            <div
+              style={{
+                position: 'absolute', top: 8, right: 0, width: 6,
+                height: cardHeight - 16, cursor: 'col-resize', zIndex: 50,
+                background: 'rgba(130,180,255,0.4)', borderRadius: 3, opacity: 0.7,
+              }}
+              onPointerDown={e => onResizeDown(e, 'right')}
+            />
+            <div
+              style={{
+                position: 'absolute', bottom: 0, left: 8, height: 6,
+                width: screenWidth - 16, cursor: 'row-resize', zIndex: 50,
+                background: 'rgba(130,180,255,0.4)', borderRadius: 3, opacity: 0.7,
+              }}
+              onPointerDown={e => onResizeDown(e, 'bottom')}
+            />
+            <div
+              style={{
+                position: 'absolute', bottom: 0, right: 0, width: 12, height: 12,
+                cursor: 'nwse-resize', zIndex: 51,
+                background: 'rgba(130,180,255,0.6)', borderRadius: '3px 0 3px 0',
+              }}
+              onPointerDown={e => onResizeDown(e, 'corner')}
+            />
+          </>
+        )}
       </div>
 
       {cardMenu && ReactDOM.createPortal(
@@ -314,6 +385,7 @@ const UngroupedBoardCard: React.FC<{ boardId: string }> = ({ boardId }) => {
   const zoom   = useCanvasStore(s => s.zoom)
   const board  = useBoardsStore(s => s.boards[boardId])
   const [isDragging, setIsDragging] = useState(false)
+  const [isHovered, setIsHovered] = useState(false)
 
   const onDown = useCallback((e: React.PointerEvent) => {
     if (e.button !== 0) return
@@ -363,8 +435,12 @@ const UngroupedBoardCard: React.FC<{ boardId: string }> = ({ boardId }) => {
   const cy = board.canvasY ?? 0
   const minBarX = Math.min(...rootBars.map(b => b.x))
   const maxBarX = Math.max(...rootBars.map(b => b.x + b.width))
-  const contentW = (maxBarX - minBarX) * bScale + 32
-  const contentH = boardContentHeight(board.bars, board.rootIds, bScale)
+  const rawContentW = (maxBarX - minBarX) * bScale + 32
+  const rawContentH = boardContentHeight(board.bars, board.rootIds, bScale)
+  const cardWOverride = board.layers?.card?.widthOverride
+  const cardHOverride = board.layers?.card?.heightOverride
+  const contentW = Math.max(rawContentW, cardWOverride ?? 0)
+  const contentH = Math.max(rawContentH, cardHOverride ?? 0)
 
   const screenLeft = pan.x + (cx + BOARD_PADDING_X + minBarX * bScale - 16) * zoom
   const screenTop = pan.y + cy * zoom
@@ -373,6 +449,37 @@ const UngroupedBoardCard: React.FC<{ boardId: string }> = ({ boardId }) => {
   const color = board.color ?? '#5b8dd9'
 
   const heroImage = rootBars.reduce<string | null>((found, b) => found || getFirstImageUrl(b.content), null)
+
+  const onResizeDown = useCallback((e: React.PointerEvent, edge: 'right' | 'bottom' | 'corner') => {
+    if (e.button !== 0) return
+    e.stopPropagation()
+    e.preventDefault()
+    useUndoCoordinator.getState().checkpoint()
+
+    const startX = e.clientX
+    const startY = e.clientY
+    const startW = contentW
+    const startH = contentH
+
+    const onMove = (ev: PointerEvent) => {
+      const z = useCanvasStore.getState().zoom
+      const dx = (ev.clientX - startX) / z
+      const dy = (ev.clientY - startY) / z
+      const newW = edge === 'bottom' ? startW : Math.max(rawContentW, startW + dx)
+      const newH = edge === 'right' ? startH : Math.max(rawContentH, startH + dy)
+      useBoardsStore.getState().setCardSize(
+        boardId,
+        newW > rawContentW ? newW : undefined,
+        newH > rawContentH ? newH : undefined,
+      )
+    }
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }, [boardId, contentW, contentH, rawContentW, rawContentH])
 
   return (
     <div
@@ -391,6 +498,8 @@ const UngroupedBoardCard: React.FC<{ boardId: string }> = ({ boardId }) => {
         overflow: 'hidden',
       }}
       onPointerDown={onDown}
+      onPointerEnter={() => setIsHovered(true)}
+      onPointerLeave={() => setIsHovered(false)}
       onWheel={onWheel}
       onDoubleClick={e => {
         e.stopPropagation()
@@ -422,6 +531,35 @@ const UngroupedBoardCard: React.FC<{ boardId: string }> = ({ boardId }) => {
         border: '1.5px dashed rgba(255,255,255,0.3)',
         pointerEvents: 'none',
       }} />
+      {/* ── Resize handles ── */}
+      {isHovered && (
+        <>
+          <div
+            style={{
+              position: 'absolute', top: 8, right: 0, width: 6,
+              height: screenHeight - 16, cursor: 'col-resize', zIndex: 50,
+              background: 'rgba(130,180,255,0.4)', borderRadius: 3, opacity: 0.7,
+            }}
+            onPointerDown={e => onResizeDown(e, 'right')}
+          />
+          <div
+            style={{
+              position: 'absolute', bottom: 0, left: 8, height: 6,
+              width: screenWidth - 16, cursor: 'row-resize', zIndex: 50,
+              background: 'rgba(130,180,255,0.4)', borderRadius: 3, opacity: 0.7,
+            }}
+            onPointerDown={e => onResizeDown(e, 'bottom')}
+          />
+          <div
+            style={{
+              position: 'absolute', bottom: 0, right: 0, width: 12, height: 12,
+              cursor: 'nwse-resize', zIndex: 51,
+              background: 'rgba(130,180,255,0.6)', borderRadius: '3px 0 3px 0',
+            }}
+            onPointerDown={e => onResizeDown(e, 'corner')}
+          />
+        </>
+      )}
     </div>
   )
 }

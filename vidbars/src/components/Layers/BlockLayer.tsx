@@ -45,6 +45,7 @@ const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
   const [renameVal, setRenameVal] = useState('')
   const nameInputRef = useRef<HTMLInputElement>(null)
   const [gripDragging, setGripDragging] = useState(false)
+  const [isHovered, setIsHovered] = useState(false)
 
   const commitRename = useCallback(() => {
     if (renameVal.trim()) {
@@ -63,8 +64,12 @@ const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
   const bScale = board.boardScale ?? 1
   const minX = Math.min(...rootBars.map(b => b.x))
   const maxX = Math.max(...rootBars.map(b => b.x + b.width))
-  const width = (maxX - minX) * bScale
-  const height = Math.max(...rootBars.map(b => b.height), DEFAULT_H) * bScale
+  const contentW = (maxX - minX) * bScale
+  const contentH = Math.max(...rootBars.map(b => b.height), DEFAULT_H) * bScale
+  const wOverride = board.layers?.block?.widthOverride
+  const hOverride = board.layers?.block?.heightOverride
+  const width = Math.max(contentW, wOverride ?? 0)
+  const height = Math.max(contentH, hOverride ?? 0)
   const rootColor = rootBars[0]?.color ?? '#5b8dd9'
 
   const thumbnail = board.layers?.block?.thumbnail
@@ -209,6 +214,38 @@ const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
     window.addEventListener('pointerup', onUp)
   }
 
+  // ── Resize: right / bottom / corner handles ──
+  const onResizeDown = useCallback((e: React.PointerEvent, edge: 'right' | 'bottom' | 'corner') => {
+    if (e.button !== 0) return
+    e.stopPropagation()
+    e.preventDefault()
+    useUndoCoordinator.getState().checkpoint()
+
+    const startX = e.clientX
+    const startY = e.clientY
+    const startW = width
+    const startH = height
+
+    const onMove = (ev: PointerEvent) => {
+      const z = useCanvasStore.getState().zoom
+      const dx = (ev.clientX - startX) / z
+      const dy = (ev.clientY - startY) / z
+      const newW = edge === 'bottom' ? startW : Math.max(contentW, startW + dx)
+      const newH = edge === 'right' ? startH : Math.max(contentH, startH + dy)
+      useBoardsStore.getState().setBlockSize(
+        boardId,
+        newW > contentW ? newW : undefined,
+        newH > contentH ? newH : undefined,
+      )
+    }
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }, [boardId, width, height, contentW, contentH])
+
   // ── Two-level positioning: group origin + local row ──
   const siblingRowKey = useBoardsStore(s => {
     const bids = myGroup?.boardIds ?? [boardId]
@@ -223,7 +260,7 @@ const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
   const boardY = isUngroupedBlock ? (board.canvasY ?? 0) : (myGroup!.originY + getRowY(board.nleRow ?? 0, groupLayout))
 
   const left = BOARD_PADDING_X + minX * bScale
-  const totalW = Math.max(maxX * bScale, 200)
+  const totalW = Math.max(maxX * bScale, 200, width + left)
 
   const otherGroups = groups.filter(g => g.id !== myGroup?.id)
 
@@ -234,6 +271,8 @@ const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
         if (e.button !== 0) return
         useBoardsStore.getState().setSelection(boardId, board.rootIds)
       }}
+      onPointerEnter={() => setIsHovered(true)}
+      onPointerLeave={() => setIsHovered(false)}
     >
       {/* ── Header bar ── */}
       <div
@@ -339,6 +378,39 @@ const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
           {displayLabel}
         </div>
       </div>
+
+      {/* ── Resize handles ── */}
+      {isHovered && (
+        <>
+          {/* Right edge */}
+          <div
+            style={{
+              position: 'absolute', top: BLOCK_HEADER_H + 8, right: 0, width: 6,
+              height: height - 16, cursor: 'col-resize', zIndex: 50,
+              background: 'rgba(130,180,255,0.4)', borderRadius: 3, opacity: 0.7,
+            }}
+            onPointerDown={e => onResizeDown(e, 'right')}
+          />
+          {/* Bottom edge */}
+          <div
+            style={{
+              position: 'absolute', bottom: 0, left: left + 8, height: 6,
+              width: width - 16, cursor: 'row-resize', zIndex: 50,
+              background: 'rgba(130,180,255,0.4)', borderRadius: 3, opacity: 0.7,
+            }}
+            onPointerDown={e => onResizeDown(e, 'bottom')}
+          />
+          {/* Corner */}
+          <div
+            style={{
+              position: 'absolute', bottom: 0, right: 0, width: 12, height: 12,
+              cursor: 'nwse-resize', zIndex: 51,
+              background: 'rgba(130,180,255,0.6)', borderRadius: '3px 0 3px 0',
+            }}
+            onPointerDown={e => onResizeDown(e, 'corner')}
+          />
+        </>
+      )}
 
       {colorPicker && (
         <ColorPickerPopup

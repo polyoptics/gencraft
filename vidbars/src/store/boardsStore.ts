@@ -40,6 +40,8 @@ export interface ProjectGroup {
   cardHeaderTextStyle?: import('../store/freeNodeStore').TextStyle
   originY: number      // canvas-space Y position (group origin)
   originX: number      // canvas-space X position (group origin)
+  cardWidthOverride?: number   // user-set card width (screen px)
+  cardHeightOverride?: number  // user-set card height (screen px)
 }
 
 /** Find which group a board belongs to */
@@ -56,6 +58,8 @@ export interface BoardLayerData {
     textStyle?: import('../store/freeNodeStore').TextStyle
     headerText?: string
     headerTextStyle?: import('../store/freeNodeStore').TextStyle
+    widthOverride?: number     // user-set width (canvas px, pre-zoom)
+    heightOverride?: number    // user-set height (canvas px, pre-zoom)
   }
   block: {
     thumbnail: string | null   // block-level representative image
@@ -64,6 +68,8 @@ export interface BoardLayerData {
     textStyle?: import('../store/freeNodeStore').TextStyle
     headerText?: string
     headerTextStyle?: import('../store/freeNodeStore').TextStyle
+    widthOverride?: number     // user-set width (canvas px, pre-zoom)
+    heightOverride?: number    // user-set height (canvas px, pre-zoom)
   }
   // Board layer uses bar tree directly — no extra fields needed
 }
@@ -157,6 +163,8 @@ interface BoardsState {
   setBlockHeaderTextStyle: (boardId: string, style: import('../store/freeNodeStore').TextStyle) => void
   setCardHeaderText: (boardId: string, text: string) => void
   setCardHeaderTextStyle: (boardId: string, style: import('../store/freeNodeStore').TextStyle) => void
+  setCardSize: (boardId: string, w: number | undefined, h: number | undefined) => void
+  setBlockSize: (boardId: string, w: number | undefined, h: number | undefined) => void
 
   // ── Project group actions ──
   createGroup: (name: string, boardIds: string[]) => string
@@ -169,6 +177,7 @@ interface BoardsState {
   setGroupCardTextStyle: (groupId: string, style: import('../store/freeNodeStore').TextStyle) => void
   setGroupCardHeaderText: (groupId: string, text: string) => void
   setGroupCardHeaderTextStyle: (groupId: string, style: import('../store/freeNodeStore').TextStyle) => void
+  setGroupCardSize: (groupId: string, w: number | undefined, h: number | undefined) => void
   setGroupPos: (groupId: string, originY: number, originX: number) => void
   reassignBoard: (boardId: string, targetGroupId: string) => void
   moveToNewGroup: (boardId: string) => void
@@ -599,6 +608,18 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
     }))
   },
 
+  setCardSize(boardId, w, h) {
+    updateBoard(set, boardId, b => ({
+      layers: { ...b.layers, card: { ...b.layers.card, widthOverride: w, heightOverride: h } },
+    }))
+  },
+
+  setBlockSize(boardId, w, h) {
+    updateBoard(set, boardId, b => ({
+      layers: { ...b.layers, block: { ...b.layers.block, widthOverride: w, heightOverride: h } },
+    }))
+  },
+
   // ── Project group actions ──
 
   createGroup(name, boardIds) {
@@ -661,6 +682,10 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
 
   setGroupCardHeaderTextStyle(groupId, style) {
     set(s => ({ groups: s.groups.map(g => g.id === groupId ? { ...g, cardHeaderTextStyle: style } : g) }))
+  },
+
+  setGroupCardSize(groupId, w, h) {
+    set(s => ({ groups: s.groups.map(g => g.id === groupId ? { ...g, cardWidthOverride: w, cardHeightOverride: h } : g) }))
   },
 
   setGroupPos(groupId, originY, originX) {
