@@ -1,5 +1,6 @@
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
+import { persist, createJSONStorage } from 'zustand/middleware'
+import { createDebouncedStorage } from '../utils/debouncedStorage'
 
 const MIN_ZOOM = 0.11
 const MAX_ZOOM = 4
@@ -69,6 +70,7 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
   setZoneLineY: (zoneLineY) => set({ zoneLineY }),
 }), {
   name: 'vidbars-canvas',
+  storage: createJSONStorage(() => createDebouncedStorage(500)),
   partialize: (s) => ({
     pan: s.pan,
     zoom: s.zoom,

@@ -12,6 +12,15 @@ import { collectSubtree } from '../../utils/barOps'
 
 const ROW_GAP = 40
 
+/** Lighten a hex color by blending with white — mimics the port border highlight */
+function lighten(hex: string, amount = 0.45): string {
+  const n = parseInt(hex.replace('#', ''), 16)
+  const r = Math.min(255, ((n >> 16) & 0xff) + Math.round((255 - ((n >> 16) & 0xff)) * amount))
+  const g = Math.min(255, (((n >> 8) & 0xff)) + Math.round((255 - ((n >> 8) & 0xff)) * amount))
+  const b = Math.min(255, ((n & 0xff)) + Math.round((255 - (n & 0xff)) * amount))
+  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`
+}
+
 export const NLELayout: React.FC = () => {
   const ctx = useBoardCtx()
   const { bars, rootIds, collapseAllToggle } = ctx
@@ -147,18 +156,13 @@ export const NLELayout: React.FC = () => {
       {/* ── Wire layer ── */}
       {(wires.length > 0 || wireDrag) && (
         <svg style={{ position: 'absolute', left: 0, top: 0, width: totalW, height: totalH, overflow: 'visible', pointerEvents: 'none', zIndex: 0 }}>
-          <defs>
-            <filter id="wire-glow">
-              <feGaussianBlur stdDeviation="1.5" result="blur" />
-              <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
-            </filter>
-          </defs>
-          {wires.map(w => (
-            <g key={w.id}>
-              <path d={w.d} stroke={w.color} strokeWidth="4" fill="none" filter="url(#wire-glow)" opacity={0.18} />
-              <path d={w.d} stroke={w.color} strokeWidth="1.5" fill="none" strokeLinecap="round" opacity={0.55} />
-            </g>
-          ))}
+          <defs />
+          {wires.map(w => {
+            const bright = lighten(w.color, 0.45)
+            return (
+              <path key={w.id} d={w.d} stroke={bright} strokeWidth="1.5" fill="none" strokeLinecap="round" />
+            )
+          })}
           {/* Temp wire while dragging from a port — only in the board that owns the block */}
           {wireDrag && bars[wireDrag.fromBlockId] && (() => {
             const sx = wireDrag.startX
@@ -168,10 +172,7 @@ export const NLELayout: React.FC = () => {
             const midY = (sy + ey) / 2
             const d = `M ${sx} ${sy} C ${sx} ${midY}, ${ex} ${midY}, ${ex} ${ey}`
             return (
-              <g key="temp-wire">
-                <path d={d} stroke="rgba(80,220,120,0.25)" strokeWidth="4" fill="none" filter="url(#wire-glow)" />
-                <path d={d} stroke="rgba(80,220,120,0.85)" strokeWidth="2" fill="none" strokeLinecap="round" strokeDasharray="6 4" />
-              </g>
+              <path key="temp-wire" d={d} stroke="rgba(80,220,120,0.85)" strokeWidth="2" fill="none" strokeLinecap="round" strokeDasharray="6 4" />
             )
           })()}
         </svg>

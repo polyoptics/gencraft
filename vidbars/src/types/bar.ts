@@ -33,6 +33,8 @@ export const DEFAULT_BAR_TEXT_STYLE: BarTextStyle = {
 export interface BarContent {
   text: string
   textStyle?: BarTextStyle
+  headerText?: string
+  headerTextStyle?: BarTextStyle
   images: string[]   // legacy — data URLs or file paths
   media: MediaItem[] // new — typed media items
   mentions: string[] // @mention strings e.g. "@A.Yuki"

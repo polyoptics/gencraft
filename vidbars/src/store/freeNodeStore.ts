@@ -1,5 +1,6 @@
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
+import { persist, createJSONStorage } from 'zustand/middleware'
+import { createDebouncedStorage } from '../utils/debouncedStorage'
 
 export type FreeNodeType = 'note' | 'image' | 'text' | 'video' | 'audio'
 
@@ -12,6 +13,7 @@ export interface TextStyle {
   italic: boolean
   align: 'left' | 'center' | 'right'
   vAlign: 'top' | 'middle' | 'bottom'
+  fontFamily?: string    // CSS font-family value
 }
 
 export const DEFAULT_TEXT_STYLE: TextStyle = {
@@ -23,6 +25,26 @@ export const DEFAULT_TEXT_STYLE: TextStyle = {
   italic: false,
   align: 'left',
   vAlign: 'top',
+}
+
+export const DEFAULT_HEADER_STYLE: TextStyle = {
+  fontSize: 28,
+  color: '#ffffff',
+  bgColor: '#000000',
+  bgOpacity: 0,
+  bold: true,
+  italic: false,
+  align: 'center',
+  vAlign: 'top',
+}
+
+export const DEFAULT_BLOCK_HEADER_STYLE: TextStyle = {
+  ...DEFAULT_HEADER_STYLE,
+  fontSize: 45,
+}
+
+export const DEFAULT_BODY_STYLE: TextStyle = {
+  ...DEFAULT_TEXT_STYLE,
 }
 
 export interface FreeNodeData {
@@ -48,6 +70,7 @@ interface FreeNodeStore {
   selectedIds: string[]
   addFreeNode: (x: number, y: number, type: FreeNodeType) => string
   moveFreeNode: (id: string, dx: number, dy: number) => void
+  moveManyFreeNodes: (ids: string[], dx: number, dy: number) => void
   resizeFreeNode: (id: string, dw: number, dh: number) => void
   updateFreeNode: (id: string, patch: Partial<FreeNodeData>) => void
   deleteFreeNode: (id: string) => void
@@ -91,6 +114,16 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
       return { nodes: { ...s.nodes, [id]: { ...n, x: n.x + dx, y: n.y + dy } } }
     }),
 
+  moveManyFreeNodes: (ids, dx, dy) =>
+    set(s => {
+      const updated = { ...s.nodes }
+      for (const id of ids) {
+        const n = updated[id]
+        if (n) updated[id] = { ...n, x: n.x + dx, y: n.y + dy }
+      }
+      return { nodes: updated }
+    }),
+
   resizeFreeNode: (id, dw, dh) =>
     set(s => {
       const n = s.nodes[id]
@@ -120,5 +153,6 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
   clearFreeSelection: () => set({ selectedIds: [] }),
 }), {
   name: 'vidbars-freenodes',
+  storage: createJSONStorage(() => createDebouncedStorage(500)),
   partialize: (s) => ({ nodes: s.nodes }),  // selectedIds is transient
 }))

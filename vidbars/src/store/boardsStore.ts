@@ -1,5 +1,6 @@
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
+import { persist, createJSONStorage } from 'zustand/middleware'
+import { createDebouncedStorage } from '../utils/debouncedStorage'
 import type { Bar } from '../types/bar'
 import { TEMPLATES } from '../data/templates'
 import { getBoardAbsolutePos, computeGroupLayout, yToRow } from '../utils/nleRows'
@@ -33,6 +34,10 @@ export interface ProjectGroup {
   boardIds: string[]   // ordered, can include 'primary'
   cardHeroImage: string | null
   cardSummary: string
+  cardText: string     // independent body text visible on the card
+  cardTextStyle?: import('../store/freeNodeStore').TextStyle
+  cardHeaderText?: string
+  cardHeaderTextStyle?: import('../store/freeNodeStore').TextStyle
   originY: number      // canvas-space Y position (group origin)
   originX: number      // canvas-space X position (group origin)
 }
@@ -47,17 +52,25 @@ export interface BoardLayerData {
   card: {
     heroImage: string | null   // card-level thumbnail (NOT bar.content.images[0])
     summary: string            // short text visible on card
+    text: string               // independent body text at card zoom
+    textStyle?: import('../store/freeNodeStore').TextStyle
+    headerText?: string
+    headerTextStyle?: import('../store/freeNodeStore').TextStyle
   }
   block: {
     thumbnail: string | null   // block-level representative image
     label: string              // display name override at block zoom
+    text: string               // independent body text at block zoom
+    textStyle?: import('../store/freeNodeStore').TextStyle
+    headerText?: string
+    headerTextStyle?: import('../store/freeNodeStore').TextStyle
   }
   // Board layer uses bar tree directly — no extra fields needed
 }
 
 const DEFAULT_LAYERS: BoardLayerData = {
-  card: { heroImage: null, summary: '' },
-  block: { thumbnail: null, label: '' },
+  card: { heroImage: null, summary: '', text: '' },
+  block: { thumbnail: null, label: '', text: '' },
 }
 
 export interface BoardData {
@@ -136,6 +149,14 @@ interface BoardsState {
   setCardSummary: (boardId: string, summary: string) => void
   setBlockThumbnail: (boardId: string, url: string | null) => void
   setBlockLabel: (boardId: string, label: string) => void
+  setBlockText: (boardId: string, text: string) => void
+  setCardText: (boardId: string, text: string) => void
+  setBlockTextStyle: (boardId: string, style: import('../store/freeNodeStore').TextStyle) => void
+  setCardTextStyle: (boardId: string, style: import('../store/freeNodeStore').TextStyle) => void
+  setBlockHeaderText: (boardId: string, text: string) => void
+  setBlockHeaderTextStyle: (boardId: string, style: import('../store/freeNodeStore').TextStyle) => void
+  setCardHeaderText: (boardId: string, text: string) => void
+  setCardHeaderTextStyle: (boardId: string, style: import('../store/freeNodeStore').TextStyle) => void
 
   // ── Project group actions ──
   createGroup: (name: string, boardIds: string[]) => string
@@ -144,6 +165,10 @@ interface BoardsState {
   setGroupColor: (groupId: string, color: string) => void
   setGroupCardHeroImage: (groupId: string, url: string | null) => void
   setGroupCardSummary: (groupId: string, summary: string) => void
+  setGroupCardText: (groupId: string, text: string) => void
+  setGroupCardTextStyle: (groupId: string, style: import('../store/freeNodeStore').TextStyle) => void
+  setGroupCardHeaderText: (groupId: string, text: string) => void
+  setGroupCardHeaderTextStyle: (groupId: string, style: import('../store/freeNodeStore').TextStyle) => void
   setGroupPos: (groupId: string, originY: number, originX: number) => void
   reassignBoard: (boardId: string, targetGroupId: string) => void
   moveToNewGroup: (boardId: string) => void
@@ -217,6 +242,8 @@ const DEFAULT_GROUP: ProjectGroup = {
   boardIds: ['primary'],
   cardHeroImage: null,
   cardSummary: '',
+  cardText: '',
+  cardHeaderText: '',
   originY: 0,
   originX: 0,
 }
@@ -524,13 +551,61 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
     }))
   },
 
+  setBlockText(boardId: string, text: string) {
+    updateBoard(set, boardId, b => ({
+      layers: { ...b.layers, block: { ...b.layers.block, text } },
+    }))
+  },
+
+  setCardText(boardId: string, text: string) {
+    updateBoard(set, boardId, b => ({
+      layers: { ...b.layers, card: { ...b.layers.card, text } },
+    }))
+  },
+
+  setBlockTextStyle(boardId, style) {
+    updateBoard(set, boardId, b => ({
+      layers: { ...b.layers, block: { ...b.layers.block, textStyle: style } },
+    }))
+  },
+
+  setCardTextStyle(boardId, style) {
+    updateBoard(set, boardId, b => ({
+      layers: { ...b.layers, card: { ...b.layers.card, textStyle: style } },
+    }))
+  },
+
+  setBlockHeaderText(boardId, text) {
+    updateBoard(set, boardId, b => ({
+      layers: { ...b.layers, block: { ...b.layers.block, headerText: text } },
+    }))
+  },
+
+  setBlockHeaderTextStyle(boardId, style) {
+    updateBoard(set, boardId, b => ({
+      layers: { ...b.layers, block: { ...b.layers.block, headerTextStyle: style } },
+    }))
+  },
+
+  setCardHeaderText(boardId, text) {
+    updateBoard(set, boardId, b => ({
+      layers: { ...b.layers, card: { ...b.layers.card, headerText: text } },
+    }))
+  },
+
+  setCardHeaderTextStyle(boardId, style) {
+    updateBoard(set, boardId, b => ({
+      layers: { ...b.layers, card: { ...b.layers.card, headerTextStyle: style } },
+    }))
+  },
+
   // ── Project group actions ──
 
   createGroup(name, boardIds) {
     const id = crypto.randomUUID()
     const group: ProjectGroup = {
       id, name, color: '#5b8dd9', boardIds,
-      cardHeroImage: null, cardSummary: '',
+      cardHeroImage: null, cardSummary: '', cardText: '', cardHeaderText: '',
       originY: 0, originX: 0,
     }
     set(s => {
@@ -572,6 +647,22 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
     set(s => ({ groups: s.groups.map(g => g.id === groupId ? { ...g, cardSummary: summary } : g) }))
   },
 
+  setGroupCardText(groupId: string, text: string) {
+    set(s => ({ groups: s.groups.map(g => g.id === groupId ? { ...g, cardText: text } : g) }))
+  },
+
+  setGroupCardTextStyle(groupId, style) {
+    set(s => ({ groups: s.groups.map(g => g.id === groupId ? { ...g, cardTextStyle: style } : g) }))
+  },
+
+  setGroupCardHeaderText(groupId, text) {
+    set(s => ({ groups: s.groups.map(g => g.id === groupId ? { ...g, cardHeaderText: text } : g) }))
+  },
+
+  setGroupCardHeaderTextStyle(groupId, style) {
+    set(s => ({ groups: s.groups.map(g => g.id === groupId ? { ...g, cardHeaderTextStyle: style } : g) }))
+  },
+
   setGroupPos(groupId, originY, originX) {
     set(s => ({ groups: s.groups.map(g => g.id === groupId ? { ...g, originY, originX } : g) }))
   },
@@ -598,7 +689,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
         ...g, boardIds: g.boardIds.filter(bid => bid !== boardId),
       }))
       if (groups.length > 1) groups = groups.filter(g => g.boardIds.length > 0)
-      const newGroup: ProjectGroup = { id, name, color, boardIds: [boardId], cardHeroImage: null, cardSummary: '', originY: 0, originX: 0 }
+      const newGroup: ProjectGroup = { id, name, color, boardIds: [boardId], cardHeroImage: null, cardSummary: '', cardText: '', cardHeaderText: '', originY: 0, originX: 0 }
       return { groups: [...groups, newGroup] }
     })
   },
@@ -626,6 +717,8 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
         boardIds: newBoardIds,
         cardHeroImage: group.cardHeroImage,
         cardSummary: group.cardSummary,
+        cardText: group.cardText ?? '',
+        cardHeaderText: group.cardHeaderText ?? '',
         originY: group.originY + 100,
         originX: group.originX + 100,
       }
@@ -719,6 +812,8 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
       boardIds: [boardId],
       cardHeroImage: null,
       cardSummary: '',
+      cardText: '',
+      cardHeaderText: '',
       originY: cy,
       originX: cx,
     }
@@ -740,7 +835,8 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
   },
 }), {
   name: 'vidbars-boards',
-  version: 8,
+  storage: createJSONStorage(() => createDebouncedStorage(500)),
+  version: 9,
   migrate(persisted: any, version: number) {
     if (version < 3) {
       const boards = persisted.boards ?? {}
@@ -856,6 +952,18 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
         })
       })
       persisted.groups = groups
+    }
+    if (version < 9) {
+      // v8→v9: Add independent text fields to layers and groups
+      const boards = persisted.boards ?? {}
+      for (const b of Object.values(boards) as any[]) {
+        if (b.layers?.card && !('text' in b.layers.card)) b.layers.card.text = ''
+        if (b.layers?.block && !('text' in b.layers.block)) b.layers.block.text = ''
+      }
+      const groups: any[] = persisted.groups ?? []
+      for (const g of groups) {
+        if (!('cardText' in g)) g.cardText = ''
+      }
     }
     return persisted as BoardsState
   },

@@ -392,9 +392,11 @@ export const Board: React.FC<Props> = ({ boardId }) => {
               onKeyDown={e => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') setRenaming(false) }}
               onPointerDown={e => e.stopPropagation()}
               style={{
-                background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.2)',
-                borderRadius: 4, color: '#fff', fontSize: 11, fontWeight: 700,
-                padding: '1px 6px', outline: 'none', fontFamily: 'inherit', width: 140,
+                background: 'rgba(255,255,255,0.08)', border: 'none',
+                borderBottom: `${Math.max(1, 1 / zoom)}px solid rgba(255,255,255,0.3)`,
+                borderRadius: 0, color: '#fff', fontSize: 11 / zoom, fontWeight: 700, lineHeight: 1.2,
+                padding: 0, outline: 'none', fontFamily: 'inherit', width: 140 / zoom,
+                boxSizing: 'border-box',
               }}
             />
           ) : (

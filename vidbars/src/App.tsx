@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { InfiniteCanvas } from './components/Canvas/InfiniteCanvas'
 import { NLETimelineViewer } from './components/NLE/NLETimelineViewer'
 import { LayerContent, LayerOverlay } from './components/Layers/LayerRouter'
@@ -9,6 +9,7 @@ import { useCanvasStore } from './store/canvasStore'
 import { useFreeNodeStore } from './store/freeNodeStore'
 import { useUndoCoordinator } from './store/undoCoordinator'
 import type { Bar } from './types/bar'
+import type { FreeNodeData } from './store/freeNodeStore'
 import { collectSubtree } from './utils/barOps'
 
 function AllViewers() {
@@ -30,6 +31,7 @@ interface Clipboard {
 }
 let clipboard: Clipboard | null = null
 let clipboardGroupId: string | null = null
+let freeNodeClipboard: FreeNodeData[] = []
 
 function remapIds(bars: Record<string, Bar>, rootIds: string[]): { bars: Record<string, Bar>; rootIds: string[] } {
   const idMap = new Map<string, string>()
@@ -55,9 +57,23 @@ function useKeyboardCopyPaste() {
       if (tag === 'INPUT' || tag === 'TEXTAREA') return
 
       if (e.key === 'c' || e.key === 'C') {
+        // Free node copy: if any free nodes are selected, copy them
+        const freeSelected = useFreeNodeStore.getState().selectedIds
+        const freeNodes = useFreeNodeStore.getState().nodes
+        if (freeSelected.length > 0) {
+          freeNodeClipboard = freeSelected
+            .map(id => freeNodes[id])
+            .filter(Boolean)
+            .map(n => structuredClone(n))
+          clipboard = null
+          clipboardGroupId = null
+          return
+        }
+
+        freeNodeClipboard = []
         const zoom = useCanvasStore.getState().zoom
         // Card-level copy: copy selected group
-        if (zoom <= 0.15) {
+        if (zoom <= 0.18) {
           const selectedGroupId = useBoardsStore.getState().selectedGroupId
           if (selectedGroupId) {
             clipboardGroupId = selectedGroupId
@@ -94,6 +110,26 @@ function useKeyboardCopyPaste() {
 
       if (e.key === 'v' || e.key === 'V') {
         useUndoCoordinator.getState().checkpoint()
+        // Free node paste
+        if (freeNodeClipboard.length > 0) {
+          const newIds: string[] = []
+          for (const src of freeNodeClipboard) {
+            const id = useFreeNodeStore.getState().addFreeNode(src.x + 40, src.y + 40, src.type)
+            useFreeNodeStore.getState().updateFreeNode(id, {
+              label: src.label,
+              text: src.text,
+              imageUrl: src.imageUrl,
+              mediaType: src.mediaType,
+              color: src.color,
+              width: src.width,
+              height: src.height,
+              textStyle: src.textStyle ? { ...src.textStyle } : undefined,
+            })
+            newIds.push(id)
+          }
+          useFreeNodeStore.getState().setFreeSelection(newIds)
+          return
+        }
         // Card-level paste: duplicate group
         if (clipboardGroupId) {
           useBoardsStore.getState().duplicateGroup(clipboardGroupId)
@@ -121,6 +157,15 @@ function useKeyboardDelete() {
       if (tag === 'INPUT' || tag === 'TEXTAREA') return
 
       useUndoCoordinator.getState().checkpoint()
+
+      // Free node delete
+      const freeSelected = useFreeNodeStore.getState().selectedIds
+      if (freeSelected.length > 0) {
+        ;[...freeSelected].forEach(id => useFreeNodeStore.getState().deleteFreeNode(id))
+        useFreeNodeStore.getState().clearFreeSelection()
+        return
+      }
+
       const { boards } = useBoardsStore.getState()
       let deletedBars = false
       Object.values(boards).forEach(board => {
@@ -210,10 +255,20 @@ function DynamicRowToggle() {
   )
 }
 
+function useBase64Migration() {
+  const ran = useRef(false)
+  useEffect(() => {
+    if (ran.current) return
+    ran.current = true
+    import('./utils/migrateBase64').then(m => m.migrateBase64ToServer())
+  }, [])
+}
+
 export default function App() {
   useKeyboardDelete()
   useKeyboardCopyPaste()
   useKeyboardUndo()
+  useBase64Migration()
 
   return (
     <div style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column', background: '#0d0e1a' }}>

@@ -8,7 +8,7 @@ import { CardLayer } from './CardLayer'
 import { BlockLayer } from './BlockLayer'
 import { BoardLayer } from './BoardLayer'
 
-const CARD_THRESHOLD = 0.15
+const CARD_THRESHOLD = 0.18
 const BLOCK_THRESHOLD = 0.3
 
 /** Canvas-space content: rendered inside the transform container */

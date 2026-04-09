@@ -282,7 +282,7 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
 
     // Dispatch to the active layer's drop handler
     const zoom = useCanvasStore.getState().zoom
-    if (zoom <= 0.15)      return handleCardDrop(e, files)
+    if (zoom <= 0.18)      return handleCardDrop(e, files)
     if (zoom < 0.3)        return handleBlockDrop(e, files)
     return handleBoardDrop(e, files)
   }, [handleCardDrop, handleBlockDrop, handleBoardDrop])
@@ -389,7 +389,7 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
         userSelect: 'none',
         pointerEvents: 'none',
       }}>
-        {Math.round(zoom * 100)}% · {zoom <= 0.15 ? 'Cards' : zoom < 0.3 ? 'Blocks' : 'Boards'} · scroll to zoom · middle-drag or space+drag to pan
+        {Math.round(zoom * 100)}% · {zoom <= 0.18 ? 'Cards' : zoom < 0.3 ? 'Blocks' : 'Boards'} · scroll to zoom · middle-drag or space+drag to pan
       </div>
 
       {/* ── Rubber-band selection overlay ── */}
@@ -429,8 +429,8 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
               { label: '🖼  Add image',   action: () => { const c = clampToNoParkZone(addMenu.cx, addMenu.cy, 200, 180); addFreeNode(c.x, c.y, 'image'); setAddMenu(null) } },
               { label: '─────────────', action: null },
               { label: addMenu.cy < useCanvasStore.getState().zoneLineY
-                  ? (zoom <= 0.15 ? '🎬  New Free Card' : '🎬  New Free Board')
-                  : (zoom <= 0.15 ? '🎬  New Card' : '🎬  New VidBar'),
+                  ? (zoom <= 0.18 ? '🎬  New Free Card' : '🎬  New Free Board')
+                  : (zoom <= 0.18 ? '🎬  New Card' : '🎬  New VidBar'),
                 action: () => {
                 const zly = useCanvasStore.getState().zoneLineY
                 if (addMenu.cy < zly) {
@@ -520,7 +520,7 @@ const NLERowBands: React.FC<{ pan: { x: number; y: number }; zoom: number }> = (
   const BAND_PAD = 30 // breathing room around content edges
 
   // Card-level grid: visible lines at CARD_GRID_SPACING intervals
-  const isCardLevel = zoom <= 0.15
+  const isCardLevel = zoom <= 0.18
   const cardGridLines: React.ReactNode[] = []
   if (isCardLevel) {
     // Compute vertical range from all groups

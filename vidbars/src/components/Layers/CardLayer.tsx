@@ -1,13 +1,17 @@
-// CardLayer — project/board-group overview (zoom ≤ 0.15)
+// CardLayer — project/board-group overview (zoom ≤ 0.17)
 // Renders one composite card per project group. Each group collapses its
 // boards into a single draggable card with a hero image and summary.
 
-import React, { useMemo, useState, useCallback, Fragment } from 'react'
+import React, { useMemo, useState, useCallback, useRef, Fragment } from 'react'
 import ReactDOM from 'react-dom'
 import { useBoardsStore, getUngroupedBoardIds } from '../../store/boardsStore'
 import type { ProjectGroup, BoardData } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
+import { DEFAULT_HEADER_STYLE, DEFAULT_BODY_STYLE } from '../../store/freeNodeStore'
+import type { TextStyle } from '../../store/freeNodeStore'
+import type { TextFieldMode } from '../UI/TextFormatToolbar'
+import { TextFormatToolbar, hexToRgba, ensureFontLoaded } from '../UI/TextFormatToolbar'
 import { computeGroupLayout, getRowY, getRowHeight, boardContentHeight, snapToCardGrid, CARD_GRID_SPACING } from '../../utils/nleRows'
 import { groupSlot, clampGroupMove } from '../../utils/nlePush'
 import { FreeCanvas } from '../Canvas/FreeCanvas'
@@ -173,6 +177,7 @@ const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
     <>
       <div
         data-layer-card={group.id}
+        data-nle-card={group.boardIds[0] ?? ''}
         style={{
           position: 'absolute',
           left: screenLeft,
@@ -192,9 +197,18 @@ const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
           boxShadow: isSelected ? '0 4px 24px rgba(37,99,235,0.4)' : '0 4px 24px rgba(0,0,0,0.4)',
           overflow: 'hidden',
         }}
+        onPointerDownCapture={e => {
+          if (e.button !== 0) return
+          useBoardsStore.getState().setSelectedGroup(group.id)
+        }}
         onPointerDown={onCardDown}
         onWheel={onWheel}
         onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setCardMenu({ x: e.clientX, y: e.clientY }) }}
+        onDoubleClick={e => {
+          e.stopPropagation()
+          const el = e.currentTarget.querySelector('[data-card-text]') as HTMLElement | null
+          el?.dispatchEvent(new CustomEvent('start-edit', { bubbles: false }))
+        }}
       >
         {heroImage && (
           <div style={{
@@ -204,8 +218,10 @@ const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
             opacity: 0.7, borderRadius: 12,
           }} />
         )}
+        {/* Independent card-level text */}
+        <GroupCardText groupId={group.id} />
         <div style={{
-          position: 'absolute', bottom: 6, left: 8,
+          position: 'absolute', bottom: 6, left: 8, zIndex: 2,
           color: 'rgba(255,255,255,0.7)', fontSize: 11, fontWeight: 600,
           textShadow: '0 1px 4px rgba(0,0,0,0.8)',
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
@@ -360,6 +376,7 @@ const UngroupedBoardCard: React.FC<{ boardId: string }> = ({ boardId }) => {
 
   return (
     <div
+      data-nle-card={boardId}
       style={{
         position: 'absolute',
         left: screenLeft, top: screenTop,
@@ -375,6 +392,11 @@ const UngroupedBoardCard: React.FC<{ boardId: string }> = ({ boardId }) => {
       }}
       onPointerDown={onDown}
       onWheel={onWheel}
+      onDoubleClick={e => {
+        e.stopPropagation()
+        const el = e.currentTarget.querySelector('[data-card-text]') as HTMLElement | null
+        el?.dispatchEvent(new CustomEvent('start-edit', { bubbles: false }))
+      }}
     >
       {heroImage && (
         <div style={{
@@ -384,8 +406,10 @@ const UngroupedBoardCard: React.FC<{ boardId: string }> = ({ boardId }) => {
           opacity: 0.7, borderRadius: 12,
         }} />
       )}
+      {/* Independent card-level text */}
+      <UngroupedCardText boardId={boardId} />
       <div style={{
-        position: 'absolute', bottom: 6, left: 8,
+        position: 'absolute', bottom: 6, left: 8, zIndex: 2,
         color: 'rgba(255,255,255,0.7)', fontSize: 11, fontWeight: 600,
         textShadow: '0 1px 4px rgba(0,0,0,0.8)',
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
@@ -419,6 +443,297 @@ const Overlay: React.FC = () => {
         <UngroupedBoardCard key={bid} boardId={bid} />
       ))}
     </>
+  )
+}
+
+// ── Card-level independent text with full formatting (header + body) ──
+
+// Shared helpers for card text styling
+const cardTextareaStyle = (ts: TextStyle, bg: string): React.CSSProperties => ({
+  width: '100%', padding: 6, boxSizing: 'border-box',
+  background: bg || 'transparent',
+  color: ts.color, fontSize: ts.fontSize, lineHeight: 1.4,
+  fontWeight: ts.bold ? 700 : 400, fontStyle: ts.italic ? 'italic' : 'normal',
+  textAlign: ts.align,
+  border: '1px solid rgba(100,160,255,0.5)', borderRadius: 8,
+  outline: 'none', resize: 'none', fontFamily: ts.fontFamily || 'inherit',
+  whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+  cursor: 'text',
+})
+
+const vAlignToJustify = (va: string) => va === 'middle' ? 'center' : va === 'bottom' ? 'flex-end' : 'flex-start'
+
+const cardDisplayStyle = (ts: TextStyle, bg: string, hasText: boolean): React.CSSProperties => ({
+  padding: hasText ? 6 : 0,
+  background: bg || 'transparent',
+  borderRadius: 6,
+  color: ts.color, fontSize: ts.fontSize, lineHeight: 1.4,
+  fontWeight: ts.bold ? 700 : 400, fontStyle: ts.italic ? 'italic' : 'normal',
+  textAlign: ts.align, fontFamily: ts.fontFamily || 'inherit',
+  overflow: 'hidden', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+  textShadow: hasText ? '0 1px 3px rgba(0,0,0,0.8)' : 'none',
+  cursor: 'text',
+})
+
+const GroupCardText: React.FC<{ groupId: string }> = ({ groupId }) => {
+  const bodyText = useBoardsStore(s => s.groups.find(g => g.id === groupId)?.cardText ?? '')
+  const rawBodyStyle = useBoardsStore(s => s.groups.find(g => g.id === groupId)?.cardTextStyle)
+  const bodyTs: TextStyle = useMemo(() => ({ ...DEFAULT_BODY_STYLE, ...rawBodyStyle }), [rawBodyStyle])
+
+  const headerText = useBoardsStore(s => s.groups.find(g => g.id === groupId)?.cardHeaderText ?? '')
+  const rawHeaderStyle = useBoardsStore(s => s.groups.find(g => g.id === groupId)?.cardHeaderTextStyle)
+  const headerTs: TextStyle = useMemo(() => ({ ...DEFAULT_HEADER_STYLE, ...rawHeaderStyle }), [rawHeaderStyle])
+  ensureFontLoaded(headerTs.fontFamily); ensureFontLoaded(bodyTs.fontFamily)
+
+  const [editingField, setEditingField] = useState<'header' | 'body' | null>(null)
+  const [activeField, setActiveField] = useState<TextFieldMode>('header')
+  const [selected, setSelected] = useState(false)
+  const [headerVal, setHeaderVal] = useState('')
+  const [bodyVal, setBodyVal] = useState('')
+  const wrapperRef = useRef<HTMLDivElement>(null)
+
+  const headerBg = hexToRgba(headerTs.bgColor, headerTs.bgOpacity)
+  const bodyBg = hexToRgba(bodyTs.bgColor, bodyTs.bgOpacity)
+  const rect = selected && wrapperRef.current ? wrapperRef.current.getBoundingClientRect() : null
+  const hasContent = !!(headerText || bodyText)
+
+  const commitHeader = useCallback(() => {
+    useBoardsStore.getState().setGroupCardHeaderText(groupId, headerVal)
+    setEditingField(null)
+  }, [groupId, headerVal])
+
+  const commitBody = useCallback(() => {
+    useBoardsStore.getState().setGroupCardText(groupId, bodyVal)
+    setEditingField(null)
+  }, [groupId, bodyVal])
+
+  const startEditHeader = useCallback(() => {
+    setHeaderVal(headerText); setEditingField('header'); setActiveField('header'); setSelected(true)
+  }, [headerText])
+
+  const startEditBody = useCallback(() => {
+    setBodyVal(bodyText); setEditingField('body'); setActiveField('body'); setSelected(true)
+  }, [bodyText])
+
+  React.useEffect(() => {
+    const el = wrapperRef.current
+    if (!el) return
+    const handler = () => startEditHeader()
+    el.addEventListener('start-edit', handler)
+    return () => el.removeEventListener('start-edit', handler)
+  }, [startEditHeader])
+
+  React.useEffect(() => {
+    if (!selected) return
+    if (activeField === 'header' && editingField !== 'header') startEditHeader()
+    else if (activeField === 'body' && editingField !== 'body') startEditBody()
+  }, [activeField]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <div ref={wrapperRef} data-card-text style={{ position: 'absolute', inset: 0, zIndex: 1 }}>
+      {selected && (
+        <TextFormatToolbar
+          headerStyle={headerTs}
+          bodyStyle={bodyTs}
+          onHeaderStyleChange={style => useBoardsStore.getState().setGroupCardHeaderTextStyle(groupId, style)}
+          onBodyStyleChange={style => useBoardsStore.getState().setGroupCardTextStyle(groupId, style)}
+          activeField={activeField}
+          onActiveFieldChange={setActiveField}
+          anchorRect={rect}
+          preferBelow
+        />
+      )}
+      <div
+        style={{
+          position: 'absolute', inset: 0, padding: '4px 4px 10px 4px',
+          display: 'flex', flexDirection: 'column',
+          overflow: 'hidden',
+          pointerEvents: editingField ? 'auto' : 'none',
+        }}
+        onPointerDown={e => { if (editingField) e.stopPropagation() }}
+        onBlur={e => {
+          const related = e.relatedTarget as HTMLElement | null
+          if (related?.closest('[data-text-format-toolbar]')) return
+          if (e.currentTarget.contains(e.relatedTarget as Node)) return
+          if (editingField === 'header') commitHeader()
+          if (editingField === 'body') commitBody()
+          setSelected(false); setEditingField(null)
+        }}
+        tabIndex={0}
+      >
+        {/* Header area — owns top half, positions content by its vAlign */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: vAlignToJustify(headerTs.vAlign), minHeight: 0 }}>
+          {editingField === 'header' ? (
+            <textarea autoFocus value={headerVal} onChange={e => setHeaderVal(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Escape') { commitHeader(); setSelected(false) }
+                if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); commitHeader(); startEditBody() }
+              }}
+              onPointerDown={e => e.stopPropagation()}
+              onClick={e => { e.stopPropagation(); setActiveField('header') }}
+              placeholder="Title…"
+              style={{ ...cardTextareaStyle(headerTs, headerBg || 'rgba(0,0,0,0.3)'), flex: 1 }}
+            />
+          ) : (
+            <div
+              onDoubleClick={e => { e.stopPropagation(); startEditHeader() }}
+              style={{ ...cardDisplayStyle(headerTs, headerBg, !!headerText), pointerEvents: 'auto' }}
+            >{headerText || null}</div>
+          )}
+        </div>
+        {/* Body area — owns bottom half, positions content by its vAlign */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: vAlignToJustify(bodyTs.vAlign), minHeight: 0 }}>
+          {editingField === 'body' ? (
+            <textarea autoFocus value={bodyVal} onChange={e => setBodyVal(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Escape') { commitBody(); setSelected(false) }
+                if (e.key === 'Tab' && e.shiftKey) { e.preventDefault(); commitBody(); startEditHeader() }
+              }}
+              onPointerDown={e => e.stopPropagation()}
+              onClick={e => { e.stopPropagation(); setActiveField('body') }}
+              placeholder="Body text…"
+              style={{ ...cardTextareaStyle(bodyTs, bodyBg || 'rgba(0,0,0,0.3)'), flex: 1 }}
+            />
+          ) : (
+            <div
+              onDoubleClick={e => { e.stopPropagation(); startEditBody() }}
+              style={{ ...cardDisplayStyle(bodyTs, bodyBg, !!bodyText), pointerEvents: 'auto' }}
+            >{bodyText || null}</div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const UngroupedCardText: React.FC<{ boardId: string }> = ({ boardId }) => {
+  const bodyText = useBoardsStore(s => s.boards[boardId]?.layers?.card?.text ?? '')
+  const rawBodyStyle = useBoardsStore(s => s.boards[boardId]?.layers?.card?.textStyle)
+  const bodyTs: TextStyle = useMemo(() => ({ ...DEFAULT_BODY_STYLE, ...rawBodyStyle }), [rawBodyStyle])
+
+  const headerText = useBoardsStore(s => s.boards[boardId]?.layers?.card?.headerText ?? '')
+  const rawHeaderStyle = useBoardsStore(s => s.boards[boardId]?.layers?.card?.headerTextStyle)
+  const headerTs: TextStyle = useMemo(() => ({ ...DEFAULT_HEADER_STYLE, ...rawHeaderStyle }), [rawHeaderStyle])
+  ensureFontLoaded(headerTs.fontFamily); ensureFontLoaded(bodyTs.fontFamily)
+
+  const [editingField, setEditingField] = useState<'header' | 'body' | null>(null)
+  const [activeField, setActiveField] = useState<TextFieldMode>('header')
+  const [selected, setSelected] = useState(false)
+  const [headerVal, setHeaderVal] = useState('')
+  const [bodyVal, setBodyVal] = useState('')
+  const wrapperRef = useRef<HTMLDivElement>(null)
+
+  const headerBg = hexToRgba(headerTs.bgColor, headerTs.bgOpacity)
+  const bodyBg = hexToRgba(bodyTs.bgColor, bodyTs.bgOpacity)
+  const rect = selected && wrapperRef.current ? wrapperRef.current.getBoundingClientRect() : null
+  const hasContent = !!(headerText || bodyText)
+
+  const commitHeader = useCallback(() => {
+    useBoardsStore.getState().setCardHeaderText(boardId, headerVal)
+    setEditingField(null)
+  }, [boardId, headerVal])
+
+  const commitBody = useCallback(() => {
+    useBoardsStore.getState().setCardText(boardId, bodyVal)
+    setEditingField(null)
+  }, [boardId, bodyVal])
+
+  const startEditHeader = useCallback(() => {
+    setHeaderVal(headerText); setEditingField('header'); setActiveField('header'); setSelected(true)
+  }, [headerText])
+
+  const startEditBody = useCallback(() => {
+    setBodyVal(bodyText); setEditingField('body'); setActiveField('body'); setSelected(true)
+  }, [bodyText])
+
+  React.useEffect(() => {
+    const el = wrapperRef.current
+    if (!el) return
+    const handler = () => startEditHeader()
+    el.addEventListener('start-edit', handler)
+    return () => el.removeEventListener('start-edit', handler)
+  }, [startEditHeader])
+
+  React.useEffect(() => {
+    if (!selected) return
+    if (activeField === 'header' && editingField !== 'header') startEditHeader()
+    else if (activeField === 'body' && editingField !== 'body') startEditBody()
+  }, [activeField]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <div ref={wrapperRef} data-card-text style={{ position: 'absolute', inset: 0, zIndex: 1 }}>
+      {selected && (
+        <TextFormatToolbar
+          headerStyle={headerTs}
+          bodyStyle={bodyTs}
+          onHeaderStyleChange={style => useBoardsStore.getState().setCardHeaderTextStyle(boardId, style)}
+          onBodyStyleChange={style => useBoardsStore.getState().setCardTextStyle(boardId, style)}
+          activeField={activeField}
+          onActiveFieldChange={setActiveField}
+          anchorRect={rect}
+          preferBelow
+        />
+      )}
+      <div
+        style={{
+          position: 'absolute', inset: 0, padding: '4px 4px 10px 4px',
+          display: 'flex', flexDirection: 'column',
+          overflow: 'hidden',
+          pointerEvents: editingField ? 'auto' : 'none',
+        }}
+        onPointerDown={e => { if (editingField) e.stopPropagation() }}
+        onBlur={e => {
+          const related = e.relatedTarget as HTMLElement | null
+          if (related?.closest('[data-text-format-toolbar]')) return
+          if (e.currentTarget.contains(e.relatedTarget as Node)) return
+          if (editingField === 'header') commitHeader()
+          if (editingField === 'body') commitBody()
+          setSelected(false); setEditingField(null)
+        }}
+        tabIndex={0}
+      >
+        {/* Header area — owns top half, positions content by its vAlign */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: vAlignToJustify(headerTs.vAlign), minHeight: 0 }}>
+          {editingField === 'header' ? (
+            <textarea autoFocus value={headerVal} onChange={e => setHeaderVal(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Escape') { commitHeader(); setSelected(false) }
+                if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); commitHeader(); startEditBody() }
+              }}
+              onPointerDown={e => e.stopPropagation()}
+              onClick={e => { e.stopPropagation(); setActiveField('header') }}
+              placeholder="Title…"
+              style={{ ...cardTextareaStyle(headerTs, headerBg || 'rgba(0,0,0,0.3)'), flex: 1 }}
+            />
+          ) : (
+            <div
+              onDoubleClick={e => { e.stopPropagation(); startEditHeader() }}
+              style={{ ...cardDisplayStyle(headerTs, headerBg, !!headerText), pointerEvents: 'auto' }}
+            >{headerText || null}</div>
+          )}
+        </div>
+        {/* Body area — owns bottom half, positions content by its vAlign */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: vAlignToJustify(bodyTs.vAlign), minHeight: 0 }}>
+          {editingField === 'body' ? (
+            <textarea autoFocus value={bodyVal} onChange={e => setBodyVal(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Escape') { commitBody(); setSelected(false) }
+                if (e.key === 'Tab' && e.shiftKey) { e.preventDefault(); commitBody(); startEditHeader() }
+              }}
+              onPointerDown={e => e.stopPropagation()}
+              onClick={e => { e.stopPropagation(); setActiveField('body') }}
+              placeholder="Body text…"
+              style={{ ...cardTextareaStyle(bodyTs, bodyBg || 'rgba(0,0,0,0.3)'), flex: 1 }}
+            />
+          ) : (
+            <div
+              onDoubleClick={e => { e.stopPropagation(); startEditBody() }}
+              style={{ ...cardDisplayStyle(bodyTs, bodyBg, !!bodyText), pointerEvents: 'auto' }}
+            >{bodyText || null}</div>
+          )}
+        </div>
+      </div>
+    </div>
   )
 }
 

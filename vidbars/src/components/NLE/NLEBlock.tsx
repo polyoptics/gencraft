@@ -12,8 +12,9 @@ import { gripDragState } from '../../utils/gripDragState'
 import { wireDragState } from '../../utils/wireDragState'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { uploadFile } from '../../utils/uploadFile'
-import { getFirstImageUrl, getMediaItems, DEFAULT_BAR_TEXT_STYLE } from '../../types/bar'
-import type { BarTextStyle } from '../../types/bar'
+import { getFirstImageUrl } from '../../types/bar'
+import { TextFormatToolbar, ensureFontLoaded, hexToRgba } from '../UI/TextFormatToolbar'
+import { DEFAULT_HEADER_STYLE, DEFAULT_BODY_STYLE } from '../../store/freeNodeStore'
 
 const MIN_H = 90
 
@@ -48,6 +49,11 @@ export const NLEBlock: React.FC<Props> = ({ id, top, blockHeight, offsetX, rowTo
   const bar = bars[id]
   const isSelected = selectedIds.includes(id)
   const zoom = useCanvasStore(s => s.zoom)
+  const boardScale = useBoardsStore(s => s.boards[ctx.boardId]?.boardScale ?? 1)
+  // Effective zoom = canvas zoom × boardScale — used for counter-scaling text to stay readable
+  // Sqrt-damped: pill grows as you zoom out, but not so aggressively that it dominates small bars
+  const effZoom = zoom * boardScale
+  const iz = 1 / Math.sqrt(Math.max(effZoom, 0.12))
 
   const [isHovered, setIsHovered] = useState(false)
   const [isRenaming, setIsRenaming] = useState(false)
@@ -66,6 +72,8 @@ export const NLEBlock: React.FC<Props> = ({ id, top, blockHeight, offsetX, rowTo
   const [showHoverWheel, setShowHoverWheel] = useState(false)
   const [showTextToolbar, setShowTextToolbar] = useState(false)
   const [isEditingText, setIsEditingText] = useState(false)
+  const [editingTextField, setEditingTextField] = useState<'header' | 'body' | null>(null)
+  const [activeTextField, setActiveTextField] = useState<'header' | 'body'>('header')
   const textEditRef = useRef<HTMLTextAreaElement>(null)
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const colorDotRef = useRef<HTMLDivElement>(null)
@@ -483,13 +491,15 @@ export const NLEBlock: React.FC<Props> = ({ id, top, blockHeight, offsetX, rowTo
             e.stopPropagation()
             setShowTextToolbar(true)
             setIsEditingText(true)
+            setEditingTextField('header')
+            setActiveTextField('header')
           }
         }}
         onDragOver={e => e.preventDefault()}
       >
         {/* ── Background layer ── */}
         <div style={{
-          position: 'absolute', inset: 0, borderRadius: 12, background: bg, overflow: 'hidden',
+          position: 'absolute', inset: 0, borderRadius: 12, background: bg, overflow: 'hidden', zIndex: 0,
           boxShadow: isDraggingReorder
             ? '0 0 0 2px rgba(255,210,80,0.9), 0 20px 50px rgba(0,0,0,0.7)'
             : isSelected
@@ -508,74 +518,130 @@ export const NLEBlock: React.FC<Props> = ({ id, top, blockHeight, offsetX, rowTo
               opacity: 0.82,
             }} />
           )}
-          {(bar.content.text || isEditingText) && (() => {
-            const bts = { ...DEFAULT_BAR_TEXT_STYLE, ...bar.content.textStyle }
-            const bgRgba = `rgba(${parseInt(bts.bgColor.slice(1,3),16)},${parseInt(bts.bgColor.slice(3,5),16)},${parseInt(bts.bgColor.slice(5,7),16)},${bts.bgOpacity})`
+          {(bar.content.text || bar.content.headerText || isEditingText) && (() => {
+            const hts = { ...DEFAULT_HEADER_STYLE, ...bar.content.headerTextStyle }
+            const bts = { ...DEFAULT_BODY_STYLE, ...bar.content.textStyle }
+            ensureFontLoaded(hts.fontFamily); ensureFontLoaded(bts.fontFamily)
             const hasImage = !!getFirstImageUrl(bar.content)
-            const effectiveBg = bts.bgOpacity > 0 ? bgRgba : hasImage ? 'rgba(0,0,0,0.45)' : 'none'
-            const baseStyle: React.CSSProperties = {
+            const containerStyle: React.CSSProperties = {
               position: 'absolute',
               top: compact ? 20 : medium ? 28 : 34,
               left: 0, right: 0, bottom: 0,
               padding: compact ? '2px 6px' : '6px 10px',
-              background: effectiveBg,
-              color: bts.color,
-              fontSize: bts.fontSize,
-              lineHeight: 1.4,
-              fontWeight: bts.bold ? 700 : 400,
-              fontStyle: bts.italic ? 'italic' : 'normal',
-              textAlign: bts.align,
+              background: 'none',
               overflow: 'hidden',
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-word',
-              backdropFilter: hasImage && bts.bgOpacity === 0 ? 'blur(4px)' : 'none',
+              display: 'flex', flexDirection: 'column',
+              zIndex: isEditingText ? 6 : 4,
             }
+            const mkTextStyle = (ts: typeof hts): React.CSSProperties => {
+              const bg = ts.bgOpacity > 0 ? hexToRgba(ts.bgColor, ts.bgOpacity) : null
+              return {
+                color: ts.color, fontSize: ts.fontSize, lineHeight: 1.4,
+                fontWeight: ts.bold ? 700 : 400, fontStyle: ts.italic ? 'italic' : 'normal',
+                textAlign: ts.align, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                fontFamily: ts.fontFamily || 'inherit',
+                background: bg || 'transparent',
+                borderRadius: bg ? 6 : 0,
+                padding: bg ? 4 : 0,
+                textShadow: hasImage && !bg ? '0 1px 6px rgba(0,0,0,0.9), 0 0 2px rgba(0,0,0,0.7)' : 'none',
+              }
+            }
+            const vAlignToJustify = (va?: string) => va === 'middle' ? 'center' : va === 'bottom' ? 'flex-end' : 'flex-start'
             if (isEditingText) {
               return (
-                <textarea
-                  ref={textEditRef}
-                  data-text-overlay
-                  autoFocus
-                  value={bar.content.text}
-                  onChange={e => setContent(id, { text: e.target.value })}
-                  onPointerDown={e => e.stopPropagation()}
+                <div data-text-overlay style={containerStyle} tabIndex={-1}
                   onBlur={(e) => {
-                    // Don't close if clicking the format toolbar
                     const related = e.relatedTarget as HTMLElement | null
-                    if (related?.closest('[data-bar-text-toolbar]')) return
-                    setIsEditingText(false); setShowTextToolbar(false)
+                    if (related?.closest('[data-text-format-toolbar]')) return
+                    if (related && e.currentTarget.contains(related)) return
+                    // relatedTarget can be null when clicking non-focusable children — defer check
+                    const container = e.currentTarget
+                    requestAnimationFrame(() => {
+                      if (container.contains(document.activeElement)) return
+                      if (document.activeElement?.closest('[data-text-format-toolbar]')) return
+                      setIsEditingText(false); setShowTextToolbar(false); setEditingTextField(null)
+                    })
                   }}
-                  onKeyDown={e => { if (e.key === 'Escape') { setIsEditingText(false); setShowTextToolbar(false) } }}
-                  placeholder="Type text…"
-                  style={{
-                    ...baseStyle,
-                    border: '1px solid rgba(120,180,255,0.4)',
-                    outline: 'none',
-                    resize: 'none',
-                    fontFamily: 'inherit',
-                    cursor: 'text',
-                    zIndex: 6,
-                  }}
-                />
+                  onPointerDown={e => { if (!(e.target as HTMLElement).closest('textarea')) e.preventDefault() }}
+                >
+                  {/* Header field wrapper — independent vAlign */}
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: vAlignToJustify(hts.vAlign), minHeight: 0 }}>
+                  {editingTextField === 'header' ? (
+                    <textarea
+                      ref={textEditRef}
+                      autoFocus
+                      value={bar.content.headerText ?? ''}
+                      onChange={e => setContent(id, { headerText: e.target.value })}
+                      onPointerDown={e => e.stopPropagation()}
+                      onClick={() => setActiveTextField('header')}
+                      onKeyDown={e => {
+                        if (e.key === 'Escape') { setIsEditingText(false); setShowTextToolbar(false); setEditingTextField(null) }
+                        if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); setEditingTextField('body'); setActiveTextField('body') }
+                      }}
+                      placeholder="Title…"
+                      style={{
+                        ...mkTextStyle(hts), width: '100%', boxSizing: 'border-box',
+                        padding: 4, background: hts.bgOpacity > 0 ? hexToRgba(hts.bgColor, hts.bgOpacity) : 'rgba(0,0,0,0.2)',
+                        border: '1px solid rgba(120,180,255,0.4)', borderRadius: 6,
+                        outline: 'none', resize: 'none', cursor: 'text',
+                      }}
+                    />
+                  ) : (
+                    <div
+                      style={{ ...mkTextStyle(hts), cursor: 'pointer', padding: bar.content.headerText ? 4 : 0 }}
+                      onClick={() => { setEditingTextField('header'); setActiveTextField('header') }}
+                    >{bar.content.headerText || null}</div>
+                  )}
+                  </div>
+                  {/* Body field wrapper — independent vAlign */}
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: vAlignToJustify(bts.vAlign), minHeight: 0 }}>
+                  {editingTextField === 'body' ? (
+                    <textarea
+                      autoFocus
+                      value={bar.content.text}
+                      onChange={e => setContent(id, { text: e.target.value })}
+                      onPointerDown={e => e.stopPropagation()}
+                      onClick={() => setActiveTextField('body')}
+                      onKeyDown={e => {
+                        if (e.key === 'Escape') { setIsEditingText(false); setShowTextToolbar(false); setEditingTextField(null) }
+                        if (e.key === 'Tab' && e.shiftKey) { e.preventDefault(); setEditingTextField('header'); setActiveTextField('header') }
+                      }}
+                      placeholder="Body text…"
+                      style={{
+                        ...mkTextStyle(bts), flex: 1, width: '100%', boxSizing: 'border-box',
+                        padding: 4, background: bts.bgOpacity > 0 ? hexToRgba(bts.bgColor, bts.bgOpacity) : 'rgba(0,0,0,0.2)',
+                        border: '1px solid rgba(120,180,255,0.4)', borderRadius: 6,
+                        outline: 'none', resize: 'none', cursor: 'text',
+                      }}
+                    />
+                  ) : (
+                    <div
+                      style={{ ...mkTextStyle(bts), cursor: 'pointer', padding: bar.content.text ? 4 : 0 }}
+                      onClick={() => { setEditingTextField('body'); setActiveTextField('body') }}
+                    >{bar.content.text || null}</div>
+                  )}
+                  </div>
+                </div>
               )
             }
             return (
               <div
                 data-text-overlay
-                style={{
-                  ...baseStyle,
-                  display: 'flex', flexDirection: 'column',
-                  justifyContent: bts.vAlign === 'middle' ? 'center' : bts.vAlign === 'bottom' ? 'flex-end' : 'flex-start',
-                  cursor: 'pointer',
-                  zIndex: 4,
-                }}
+                style={{ ...containerStyle, cursor: 'pointer' }}
                 onDoubleClick={e => {
                   e.stopPropagation()
                   setShowTextToolbar(true)
                   setIsEditingText(true)
+                  setEditingTextField('header')
+                  setActiveTextField('header')
                 }}
               >
-                <div>{bar.content.text}</div>
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: vAlignToJustify(hts.vAlign), minHeight: 0 }}>
+                  {bar.content.headerText && <div style={mkTextStyle(hts)}>{bar.content.headerText}</div>}
+                </div>
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: vAlignToJustify(bts.vAlign), minHeight: 0 }}>
+                  {bar.content.text && <div style={mkTextStyle(bts)}>{bar.content.text}</div>}
+                </div>
               </div>
             )
           })()}
@@ -589,29 +655,34 @@ export const NLEBlock: React.FC<Props> = ({ id, top, blockHeight, offsetX, rowTo
             display: 'flex', alignItems: 'center',
             background: 'rgba(0,0,0,0.35)',
             backdropFilter: 'blur(8px)',
-            borderRadius: '12px 0 12px 0',
-            padding: compact ? '3px 8px' : medium ? '3px 9px 3px 3px' : '3px 10px 3px 3px',
-            gap: compact ? 0 : 6,
-            maxWidth: 'calc(100% - 36px)',
-            zIndex: 5, cursor: 'default',
+            borderRadius: `${12 * iz}px 0 ${12 * iz}px 0`,
+            padding: compact
+              ? `${3 * iz}px ${8 * iz}px`
+              : medium
+                ? `${3 * iz}px ${9 * iz}px ${3 * iz}px ${3 * iz}px`
+                : `${3 * iz}px ${10 * iz}px ${3 * iz}px ${3 * iz}px`,
+            gap: compact ? 0 : 6 * iz,
+            maxWidth: `calc(100% - ${36 * iz}px)`,
+            zIndex: 10, cursor: 'text',
           }}
           onPointerDown={e => e.stopPropagation()}
+          onDoubleClick={e => { e.stopPropagation(); if (!isRenaming) startRename() }}
         >
           {iconSz > 0 && (
             <div
               ref={colorDotRef}
               style={{
                 position: 'relative',
-                width: iconSz + 4, height: iconSz + 4,
+                width: (iconSz + 4) * iz, height: (iconSz + 4) * iz,
                 flexShrink: 0,
               }}
             >
               <div style={{
-                position: 'absolute', left: 2, top: 2,
-                width: iconSz, height: iconSz, borderRadius: '50%',
+                position: 'absolute', left: 2 * iz, top: 2 * iz,
+                width: iconSz * iz, height: iconSz * iz, borderRadius: '50%',
                 background: bar.icon ? 'none' : bg,
-                border: `1.5px solid rgba(255,255,255,${colorDragging ? '0.6' : '0.25'})`,
-                boxShadow: colorDragging ? `0 0 8px ${bg}` : 'none',
+                border: `${1.5 * iz}px solid rgba(255,255,255,${colorDragging ? '0.6' : '0.25'})`,
+                boxShadow: colorDragging ? `0 0 ${8 * iz}px ${bg}` : 'none',
                 transition: 'border-color 0.1s, box-shadow 0.1s',
                 pointerEvents: 'none',
                 overflow: 'hidden',
@@ -625,7 +696,7 @@ export const NLEBlock: React.FC<Props> = ({ id, top, blockHeight, offsetX, rowTo
             </div>
           )}
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 1 * iz, minWidth: 0, flex: 1 }}>
             {isRenaming ? (
               <input ref={nameRef} value={renameVal}
                 onChange={e => setRenameVal(e.target.value)}
@@ -633,20 +704,21 @@ export const NLEBlock: React.FC<Props> = ({ id, top, blockHeight, offsetX, rowTo
                 onKeyDown={e => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') setIsRenaming(false) }}
                 onClick={e => e.stopPropagation()}
                 style={{
-                  background: 'rgba(0,0,0,0.35)', border: '1px solid rgba(255,255,255,0.3)',
-                  borderRadius: 4, outline: 'none', color: '#fff',
-                  fontSize: compact ? 10 : 12, fontWeight: 700, padding: '1px 5px',
-                  fontFamily: 'inherit', width: 80,
+                  background: 'rgba(0,0,0,0.25)', border: 'none', borderBottom: `${Math.max(1, iz)}px solid rgba(255,255,255,0.4)`,
+                  borderRadius: 0, outline: 'none', color: '#fff',
+                  fontSize: (compact ? 10 : 12) * iz, fontWeight: 700, lineHeight: 1.2,
+                  padding: 0,
+                  fontFamily: 'inherit', width: '100%', minWidth: 40 * iz,
+                  boxSizing: 'border-box',
                 }}
               />
             ) : (
               <span
                 style={{
-                  color: '#fff', fontSize: (compact ? 10 : 12) / Math.max(zoom, 0.5), fontWeight: 700,
+                  color: '#fff', fontSize: (compact ? 10 : 12) * iz, fontWeight: 700,
                   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                  textShadow: '0 1px 3px rgba(0,0,0,0.5)', cursor: 'text',
+                  textShadow: `0 ${iz}px ${3 * iz}px rgba(0,0,0,0.5)`, cursor: 'text',
                 }}
-                onDoubleClick={e => { e.stopPropagation(); startRename() }}
               >{bar.name}</span>
             )}
 
@@ -659,16 +731,17 @@ export const NLEBlock: React.FC<Props> = ({ id, top, blockHeight, offsetX, rowTo
                   onClick={e => e.stopPropagation()}
                   placeholder="subtitle…"
                   style={{
-                    background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.2)',
-                    borderRadius: 4, outline: 'none', color: 'rgba(255,255,255,0.75)',
-                    fontSize: 10, padding: '1px 5px',
-                    fontFamily: 'inherit', width: 90, fontStyle: 'italic',
+                    background: 'rgba(0,0,0,0.25)', border: 'none', borderBottom: `${Math.max(1, iz)}px solid rgba(255,255,255,0.25)`,
+                    borderRadius: 0, outline: 'none', color: 'rgba(255,255,255,0.75)',
+                    fontSize: 10 * iz, lineHeight: 1.2, padding: 0,
+                    fontFamily: 'inherit', width: '100%', minWidth: 40 * iz,
+                    fontStyle: 'italic', boxSizing: 'border-box',
                   }}
                 />
               ) : (
                 <span
                   style={{
-                    color: 'rgba(255,255,255,0.55)', fontSize: 10, fontStyle: 'italic',
+                    color: 'rgba(255,255,255,0.55)', fontSize: 10 * iz, fontStyle: 'italic',
                     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'text',
                   }}
                   onDoubleClick={e => { e.stopPropagation(); setSubtitleVal(bar.subtitle ?? ''); setIsRenamingSubtitle(true) }}
@@ -680,27 +753,29 @@ export const NLEBlock: React.FC<Props> = ({ id, top, blockHeight, offsetX, rowTo
 
         {/* ── Color dot hit zone (outside pill stacking context) ── */}
         {iconSz > 0 && (() => {
-          const dotR = iconSz / 2
-          const wheelGap = 4
-          const wheelVarSz = Math.max(8, iconSz * 0.45)
+          const szIz = iconSz * iz  // scaled icon size
+          const dotR = szIz / 2
+          const wheelGap = 4 * iz
+          const wheelVarSz = Math.max(8 * iz, szIz * 0.45)
           const wheelOffset = dotR + wheelGap + wheelVarSz / 2
-          const expandedSize = (wheelOffset + wheelVarSz / 2) * 2 + 4
-          const expandShift = (expandedSize - (iconSz + 4)) / 2
+          const expandedSize = (wheelOffset + wheelVarSz / 2) * 2 + 4 * iz
+          const expandShift = (expandedSize - (szIz + 4 * iz)) / 2
           const isExpanded = showHoverWheel && !colorDragging && !showColorPicker
           return (
             <div
               style={{
                 position: 'absolute',
-                left: isExpanded ? 3 - expandShift : 3,
-                top: isExpanded ? 3 - expandShift : 3,
-                width: isExpanded ? expandedSize : iconSz + 4,
-                height: isExpanded ? expandedSize : iconSz + 4,
+                left: isExpanded ? 3 * iz - expandShift : 3 * iz,
+                top: isExpanded ? 3 * iz - expandShift : 3 * iz,
+                width: isExpanded ? expandedSize : szIz + 4 * iz,
+                height: isExpanded ? expandedSize : szIz + 4 * iz,
                 zIndex: 25,
                 cursor: colorDragging ? 'grabbing' : 'grab',
                 borderRadius: isExpanded ? 0 : '50%',
               }}
               onPointerDown={onColorDotDown}
               onClick={onColorDotClick}
+              onDoubleClick={e => { e.stopPropagation(); if (!isRenaming) startRename() }}
               onMouseEnter={() => {
                 if (colorDragging) return
                 hoverTimer.current = setTimeout(() => setShowHoverWheel(true), 250)
@@ -712,10 +787,10 @@ export const NLEBlock: React.FC<Props> = ({ id, top, blockHeight, offsetX, rowTo
               title="Click to pick color · Drag to paint another bar"
             >
               {isExpanded && (
-                <div style={{ position: 'absolute', left: expandShift, top: expandShift, width: iconSz + 4, height: iconSz + 4 }}>
+                <div style={{ position: 'absolute', left: expandShift, top: expandShift, width: szIz + 4 * iz, height: szIz + 4 * iz }}>
                   <ColorHoverWheel
                     color={bar.color}
-                    size={iconSz}
+                    size={szIz}
                     onSelect={c => {
                       useUndoCoordinator.getState().checkpoint()
                       const targets = isSelected && selectedIds.length > 1 ? selectedIds : [id]
@@ -997,15 +1072,17 @@ export const NLEBlock: React.FC<Props> = ({ id, top, blockHeight, offsetX, rowTo
           onClose={() => setShowColorPicker(false)}
         />
       )}
-      {showTextToolbar && bar.content.text && createPortal(
-        <BarTextFormatToolbar
-          barId={id}
-          boardId={ctx.boardId}
-          content={bar.content}
-          wrapperRef={wrapperRef}
+      {showTextToolbar && (bar.content.text || bar.content.headerText || isEditingText) && (
+        <TextFormatToolbar
+          headerStyle={bar.content.headerTextStyle as any}
+          bodyStyle={bar.content.textStyle as any}
+          onHeaderStyleChange={style => useBoardsStore.getState().setContent(ctx.boardId, id, { headerTextStyle: style as any })}
+          onBodyStyleChange={style => useBoardsStore.getState().setContent(ctx.boardId, id, { textStyle: style as any })}
+          activeField={activeTextField}
+          onActiveFieldChange={f => { setActiveTextField(f); if (isEditingText) setEditingTextField(f) }}
+          anchorRect={wrapperRef.current?.getBoundingClientRect() ?? null}
           onClose={() => setShowTextToolbar(false)}
-        />,
-        document.body
+        />
       )}
       {colorDragging && createPortal(
         <div style={{ position: 'fixed', left: 0, top: 0, width: '100vw', height: '100vh', pointerEvents: 'none', zIndex: 99999 }}>
@@ -1036,225 +1113,3 @@ export const NLEBlock: React.FC<Props> = ({ id, top, blockHeight, offsetX, rowTo
   )
 }
 
-// ── Bar Text Format Toolbar ──
-
-const FONT_SIZES = [8, 10, 12, 14, 18, 24, 32, 48, 64, 96]
-const PRESET_COLORS = ['#ffffff', '#e2e8f0', '#fbbf24', '#f87171', '#34d399', '#60a5fa', '#a78bfa', '#fb923c']
-
-function hexToRgba(hex: string, opacity: number): string {
-  const n = parseInt(hex.replace('#', ''), 16)
-  const r = (n >> 16) & 0xff, g = (n >> 8) & 0xff, b = n & 0xff
-  return `rgba(${r},${g},${b},${opacity})`
-}
-
-const hAlignIcons: Record<string, React.ReactNode> = {
-  left: <svg width="14" height="14" viewBox="0 0 14 14"><path d="M1 2h12M1 5h8M1 8h10M1 11h6" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round"/></svg>,
-  center: <svg width="14" height="14" viewBox="0 0 14 14"><path d="M1 2h12M3 5h8M2 8h10M4 11h6" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round"/></svg>,
-  right: <svg width="14" height="14" viewBox="0 0 14 14"><path d="M1 2h12M5 5h8M3 8h10M7 11h6" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round"/></svg>,
-}
-const vAlignIcons: Record<string, React.ReactNode> = {
-  top: <svg width="14" height="14" viewBox="0 0 14 14"><path d="M1 1h12M4 4h6M3 7h8" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round"/></svg>,
-  middle: <svg width="14" height="14" viewBox="0 0 14 14"><path d="M4 3h6M3 7h8M4 11h6" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round"/></svg>,
-  bottom: <svg width="14" height="14" viewBox="0 0 14 14"><path d="M3 7h8M4 10h6M1 13h12" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round"/></svg>,
-}
-
-const BarTextFormatToolbar: React.FC<{
-  barId: string
-  boardId: string
-  content: import('../../types/bar').BarContent
-  wrapperRef: React.RefObject<HTMLDivElement | null>
-  onClose: () => void
-}> = ({ barId, boardId, content, wrapperRef, onClose }) => {
-  const setContent = useBoardsStore(s => s.setContent)
-  const [showPopup, setShowPopup] = useState<'text' | 'bg' | 'hAlign' | 'vAlign' | null>(null)
-
-  const ts: BarTextStyle = { ...DEFAULT_BAR_TEXT_STYLE, ...content.textStyle }
-  const setStyle = (patch: Partial<BarTextStyle>) => {
-    setContent(boardId, barId, { textStyle: { ...ts, ...patch } })
-  }
-
-  const rect = wrapperRef.current?.getBoundingClientRect()
-  if (!rect) return null
-
-  const btnStyle = (active?: boolean): React.CSSProperties => ({
-    background: active ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.05)',
-    border: active ? '1px solid rgba(255,255,255,0.3)' : '1px solid rgba(255,255,255,0.08)',
-    borderRadius: 5,
-    color: active ? '#fff' : 'rgba(255,255,255,0.6)',
-    fontSize: 12, fontWeight: active ? 700 : 500,
-    padding: '2px 7px', cursor: 'pointer',
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    minWidth: 24, height: 26,
-    transition: 'all 0.1s',
-  })
-
-  const sepStyle: React.CSSProperties = {
-    width: 1, height: 18, background: 'rgba(255,255,255,0.08)', margin: '0 3px', flexShrink: 0,
-  }
-
-  return (
-    <>
-      <div style={{ position: 'fixed', inset: 0, zIndex: 9998 }} onPointerDown={onClose} />
-      <div
-        data-bar-text-toolbar
-        tabIndex={-1}
-        onPointerDown={e => e.stopPropagation()}
-        style={{
-          position: 'fixed',
-          left: Math.max(4, Math.min(rect.left, window.innerWidth - 380)),
-          top: Math.max(4, rect.top - 40),
-          zIndex: 10000,
-          display: 'flex', alignItems: 'center', gap: 3,
-          background: '#1a1b2e',
-          border: '1px solid rgba(255,255,255,0.12)',
-          borderRadius: 8, padding: '4px 6px',
-          boxShadow: '0 8px 30px rgba(0,0,0,0.7)',
-          fontFamily: 'system-ui, sans-serif',
-        }}
-      >
-        {/* Font size */}
-        <button style={btnStyle()} onClick={() => {
-          const prev = FONT_SIZES.filter(s => s < ts.fontSize).pop() ?? FONT_SIZES[0]
-          setStyle({ fontSize: prev })
-        }}>−</button>
-        <span style={{ color: 'rgba(255,255,255,0.6)', fontSize: 11, minWidth: 22, textAlign: 'center', userSelect: 'none' }}>{ts.fontSize}</span>
-        <button style={btnStyle()} onClick={() => {
-          const next = FONT_SIZES.find(s => s > ts.fontSize) ?? FONT_SIZES[FONT_SIZES.length - 1]
-          setStyle({ fontSize: next })
-        }}>+</button>
-
-        <div style={sepStyle} />
-
-        {/* Bold / Italic */}
-        <button style={{ ...btnStyle(ts.bold), fontWeight: 800, fontSize: 13 }} onClick={() => setStyle({ bold: !ts.bold })}>B</button>
-        <button style={{ ...btnStyle(ts.italic), fontStyle: 'italic', fontSize: 13 }} onClick={() => setStyle({ italic: !ts.italic })}>I</button>
-
-        <div style={sepStyle} />
-
-        {/* Horizontal alignment */}
-        <div style={{ position: 'relative' }}>
-          <button style={btnStyle(showPopup === 'hAlign')} onClick={() => setShowPopup(showPopup === 'hAlign' ? null : 'hAlign')}>
-            {hAlignIcons[ts.align]}
-          </button>
-          {showPopup === 'hAlign' && (
-            <div onPointerDown={e => e.stopPropagation()} style={{
-              position: 'absolute', top: 32, left: -4, zIndex: 10001,
-              background: '#1a1b2e', border: '1px solid rgba(255,255,255,0.12)',
-              borderRadius: 8, padding: 4, boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
-              display: 'flex', gap: 2,
-            }}>
-              {(['left', 'center', 'right'] as const).map(v => (
-                <button key={v} title={v} onClick={() => { setStyle({ align: v }); setShowPopup(null) }} style={{
-                  background: v === ts.align ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.03)',
-                  border: v === ts.align ? '1px solid rgba(255,255,255,0.3)' : '1px solid rgba(255,255,255,0.06)',
-                  borderRadius: 5, color: v === ts.align ? '#fff' : 'rgba(255,255,255,0.5)',
-                  width: 28, height: 28, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
-                }}>{hAlignIcons[v]}</button>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Vertical alignment */}
-        <div style={{ position: 'relative' }}>
-          <button style={btnStyle(showPopup === 'vAlign')} onClick={() => setShowPopup(showPopup === 'vAlign' ? null : 'vAlign')}>
-            {vAlignIcons[ts.vAlign]}
-          </button>
-          {showPopup === 'vAlign' && (
-            <div onPointerDown={e => e.stopPropagation()} style={{
-              position: 'absolute', top: 32, left: -4, zIndex: 10001,
-              background: '#1a1b2e', border: '1px solid rgba(255,255,255,0.12)',
-              borderRadius: 8, padding: 4, boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
-              display: 'flex', gap: 2,
-            }}>
-              {(['top', 'middle', 'bottom'] as const).map(v => (
-                <button key={v} title={v} onClick={() => { setStyle({ vAlign: v }); setShowPopup(null) }} style={{
-                  background: v === ts.vAlign ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.03)',
-                  border: v === ts.vAlign ? '1px solid rgba(255,255,255,0.3)' : '1px solid rgba(255,255,255,0.06)',
-                  borderRadius: 5, color: v === ts.vAlign ? '#fff' : 'rgba(255,255,255,0.5)',
-                  width: 28, height: 28, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
-                }}>{vAlignIcons[v]}</button>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <div style={sepStyle} />
-
-        {/* Text color */}
-        <div style={{ position: 'relative' }}>
-          <button style={{ ...btnStyle(showPopup === 'text'), gap: 4, padding: '2px 6px' }} onClick={() => setShowPopup(showPopup === 'text' ? null : 'text')}>
-            <span style={{ fontSize: 13, fontWeight: 700 }}>A</span>
-            <div style={{ width: 14, height: 4, borderRadius: 1, background: ts.color, border: '1px solid rgba(255,255,255,0.15)' }} />
-          </button>
-          {showPopup === 'text' && (
-            <div onPointerDown={e => e.stopPropagation()} style={{
-              position: 'absolute', top: 32, left: -4, zIndex: 10001,
-              background: '#1a1b2e', border: '1px solid rgba(255,255,255,0.12)',
-              borderRadius: 8, padding: 6, boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
-              display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4, width: 120,
-            }}>
-              {PRESET_COLORS.map(c => (
-                <button key={c} onClick={() => { setStyle({ color: c }); setShowPopup(null) }} style={{
-                  width: 24, height: 24, borderRadius: 5, background: c,
-                  border: c === ts.color ? '2px solid #fff' : '1px solid rgba(255,255,255,0.15)',
-                  cursor: 'pointer', padding: 0,
-                }} />
-              ))}
-              <label style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
-                <input type="color" value={ts.color} onChange={e => setStyle({ color: e.target.value })}
-                  style={{ width: 24, height: 24, border: 'none', background: 'none', cursor: 'pointer', padding: 0 }} />
-                <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)' }}>Custom</span>
-              </label>
-            </div>
-          )}
-        </div>
-
-        {/* Background color + opacity */}
-        <div style={{ position: 'relative' }}>
-          <button style={{ ...btnStyle(showPopup === 'bg'), gap: 4, padding: '2px 6px' }} onClick={() => setShowPopup(showPopup === 'bg' ? null : 'bg')}>
-            <div style={{
-              width: 16, height: 14, borderRadius: 3,
-              background: ts.bgOpacity > 0 ? hexToRgba(ts.bgColor, ts.bgOpacity) : 'linear-gradient(135deg, rgba(255,255,255,0.1) 45%, transparent 45%, transparent 55%, rgba(255,255,255,0.1) 55%)',
-              border: '1px solid rgba(255,255,255,0.15)',
-            }} />
-          </button>
-          {showPopup === 'bg' && (
-            <div onPointerDown={e => e.stopPropagation()} style={{
-              position: 'absolute', top: 32, right: -4, zIndex: 10001,
-              background: '#1a1b2e', border: '1px solid rgba(255,255,255,0.12)',
-              borderRadius: 8, padding: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.6)', width: 150,
-            }}>
-              <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', marginBottom: 4 }}>Background Color</div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4, marginBottom: 8 }}>
-                {['#000000', '#1e1b4b', '#1e3a2f', '#3b1520', '#1e293b', '#2d1b0e', '#1a1a1a', '#0f172a'].map(c => (
-                  <button key={c} onClick={() => setStyle({ bgColor: c })} style={{
-                    width: 24, height: 24, borderRadius: 5, background: c,
-                    border: c === ts.bgColor ? '2px solid #fff' : '1px solid rgba(255,255,255,0.15)',
-                    cursor: 'pointer', padding: 0,
-                  }} />
-                ))}
-              </div>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 2 }}>
-                <input type="color" value={ts.bgColor} onChange={e => setStyle({ bgColor: e.target.value })}
-                  style={{ width: 24, height: 24, border: 'none', background: 'none', cursor: 'pointer', padding: 0 }} />
-                <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)' }}>Custom</span>
-              </label>
-              <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', marginTop: 6, marginBottom: 4 }}>Opacity</div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <input type="range" min={0} max={1} step={0.05} value={ts.bgOpacity}
-                  onChange={e => setStyle({ bgOpacity: parseFloat(e.target.value) })}
-                  onPointerDown={e => e.stopPropagation()}
-                  style={{ flex: 1, height: 4, accentColor: '#60a5fa', cursor: 'pointer' }} />
-                <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.5)', minWidth: 28, textAlign: 'right' }}>
-                  {Math.round(ts.bgOpacity * 100)}%
-                </span>
-              </div>
-              <div style={{ marginTop: 6, height: 20, borderRadius: 4, background: hexToRgba(ts.bgColor, ts.bgOpacity), border: '1px solid rgba(255,255,255,0.08)' }} />
-            </div>
-          )}
-        </div>
-      </div>
-    </>
-  )
-}

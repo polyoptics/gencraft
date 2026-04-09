@@ -17,7 +17,7 @@ import { useCanvasStore } from './canvasStore'
 import { useFreeNodeStore } from './freeNodeStore'
 import { create } from 'zustand'
 
-const LIMIT = 80
+const LIMIT = 30
 
 const CANVAS_EXCLUDE = new Set(['focusedBoardId', 'pan', 'zoom'])
 const FREE_EXCLUDE = new Set(['selectedIds'])

@@ -8,6 +8,10 @@ import ReactDOM from 'react-dom'
 import { useBoardsStore, getGroupForBoard } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
+import { DEFAULT_BLOCK_HEADER_STYLE, DEFAULT_BODY_STYLE } from '../../store/freeNodeStore'
+import type { TextStyle } from '../../store/freeNodeStore'
+import type { TextFieldMode } from '../UI/TextFormatToolbar'
+import { TextFormatToolbar, hexToRgba, ensureFontLoaded } from '../UI/TextFormatToolbar'
 import { computeGroupLayout, getRowY, dyToRowDelta, getBoardAbsolutePos } from '../../utils/nleRows'
 import type { RowLayout } from '../../utils/nleRows'
 import { groupBoardSlots, clampBoardX } from '../../utils/nlePush'
@@ -224,7 +228,13 @@ const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
   const otherGroups = groups.filter(g => g.id !== myGroup?.id)
 
   return (
-    <div style={{ position: 'absolute', left: boardX, top: boardY, width: totalW, height: height + BLOCK_HEADER_H }}>
+    <div
+      style={{ position: 'absolute', left: boardX, top: boardY, width: totalW, height: height + BLOCK_HEADER_H }}
+      onPointerDownCapture={e => {
+        if (e.button !== 0) return
+        useBoardsStore.getState().setSelection(boardId, board.rootIds)
+      }}
+    >
       {/* ── Header bar ── */}
       <div
         style={{
@@ -304,6 +314,11 @@ const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
         }}
         onPointerDown={onSolidDown}
         onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setBlockMenu({ x: e.clientX, y: e.clientY }) }}
+        onDoubleClick={e => {
+          e.stopPropagation()
+          const el = e.currentTarget.querySelector('[data-block-text]') as HTMLElement | null
+          el?.dispatchEvent(new CustomEvent('start-edit', { bubbles: false }))
+        }}
       >
         {thumbnail && (
           <div style={{
@@ -313,8 +328,9 @@ const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
             opacity: 0.7, borderRadius: 12,
           }} />
         )}
+        <BlockText boardId={boardId} width={width} />
         <div style={{
-          position: 'absolute', bottom: 6, left: 8,
+          position: 'absolute', bottom: 6, left: 8, zIndex: 2,
           color: 'rgba(255,255,255,0.7)', fontSize: 11, fontWeight: 600,
           textShadow: '0 1px 4px rgba(0,0,0,0.8)',
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
@@ -429,6 +445,185 @@ const Overlay: React.FC = () => {
         <NLETimelineHeader key={g.id} groupId={g.id} />
       ))}
     </>
+  )
+}
+
+// ── Block-level independent text (double-click to edit) ──
+const vAlignToJustify = (va: string) => va === 'middle' ? 'center' : va === 'bottom' ? 'flex-end' : 'flex-start'
+
+const BlockText: React.FC<{ boardId: string; width: number }> = ({ boardId }) => {
+  const bodyText = useBoardsStore(s => s.boards[boardId]?.layers?.block?.text ?? '')
+  const rawBodyStyle = useBoardsStore(s => s.boards[boardId]?.layers?.block?.textStyle)
+  const bodyTs: TextStyle = useMemo(() => ({ ...DEFAULT_BODY_STYLE, ...rawBodyStyle }), [rawBodyStyle])
+
+  const headerText = useBoardsStore(s => s.boards[boardId]?.layers?.block?.headerText ?? '')
+  const rawHeaderStyle = useBoardsStore(s => s.boards[boardId]?.layers?.block?.headerTextStyle)
+  const headerTs: TextStyle = useMemo(() => ({ ...DEFAULT_BLOCK_HEADER_STYLE, ...rawHeaderStyle }), [rawHeaderStyle])
+  ensureFontLoaded(headerTs.fontFamily); ensureFontLoaded(bodyTs.fontFamily)
+
+  const [editingField, setEditingField] = useState<'header' | 'body' | null>(null)
+  const [activeField, setActiveField] = useState<TextFieldMode>('header')
+  const [selected, setSelected] = useState(false)
+  const [headerVal, setHeaderVal] = useState('')
+  const [bodyVal, setBodyVal] = useState('')
+  const wrapperRef = useRef<HTMLDivElement>(null)
+  const headerRef = useRef<HTMLTextAreaElement>(null)
+  const bodyRef = useRef<HTMLTextAreaElement>(null)
+
+  const headerBg = hexToRgba(headerTs.bgColor, headerTs.bgOpacity)
+  const bodyBg = hexToRgba(bodyTs.bgColor, bodyTs.bgOpacity)
+  const rect = selected && wrapperRef.current ? wrapperRef.current.getBoundingClientRect() : null
+
+  const commitHeader = useCallback(() => {
+    useBoardsStore.getState().setBlockHeaderText(boardId, headerVal)
+    setEditingField(null)
+  }, [boardId, headerVal])
+
+  const commitBody = useCallback(() => {
+    useBoardsStore.getState().setBlockText(boardId, bodyVal)
+    setEditingField(null)
+  }, [boardId, bodyVal])
+
+  const startEditHeader = useCallback(() => {
+    setHeaderVal(headerText); setEditingField('header'); setActiveField('header'); setSelected(true)
+  }, [headerText])
+
+  const startEditBody = useCallback(() => {
+    setBodyVal(bodyText); setEditingField('body'); setActiveField('body'); setSelected(true)
+  }, [bodyText])
+
+  // Listen for parent's double-click to start editing even when empty
+  React.useEffect(() => {
+    const el = wrapperRef.current
+    if (!el) return
+    const handler = () => startEditHeader()
+    el.addEventListener('start-edit', handler)
+    return () => el.removeEventListener('start-edit', handler)
+  }, [startEditHeader])
+
+  // When H/P mode switches, focus the corresponding textarea
+  React.useEffect(() => {
+    if (!selected) return
+    if (activeField === 'header' && editingField !== 'header') {
+      startEditHeader()
+    } else if (activeField === 'body' && editingField !== 'body') {
+      startEditBody()
+    }
+  }, [activeField]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const textareaStyle = (ts: TextStyle, bg: string): React.CSSProperties => ({
+    width: '100%', padding: 8, boxSizing: 'border-box',
+    background: bg || 'transparent',
+    color: ts.color, fontSize: ts.fontSize, lineHeight: 1.4,
+    fontWeight: ts.bold ? 700 : 400, fontStyle: ts.italic ? 'italic' : 'normal',
+    textAlign: ts.align,
+    border: '1px solid rgba(100,160,255,0.5)', borderRadius: 8,
+    outline: 'none', resize: 'none', fontFamily: ts.fontFamily || 'inherit',
+    whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+    cursor: 'text',
+  })
+
+  const displayStyle = (ts: TextStyle, bg: string, hasText: boolean): React.CSSProperties => ({
+    padding: hasText ? 8 : 0,
+    background: hasText ? bg : 'transparent',
+    borderRadius: 6,
+    color: ts.color, fontSize: ts.fontSize, lineHeight: 1.4,
+    fontWeight: ts.bold ? 700 : 400, fontStyle: ts.italic ? 'italic' : 'normal',
+    textAlign: ts.align, fontFamily: ts.fontFamily || 'inherit',
+    overflow: 'hidden', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+    textShadow: hasText ? '0 1px 4px rgba(0,0,0,0.8)' : 'none',
+  })
+
+  return (
+    <div ref={wrapperRef} data-block-text style={{ position: 'absolute', inset: 0, zIndex: 1, pointerEvents: 'none' }}>
+      {selected && (
+        <TextFormatToolbar
+          headerStyle={headerTs}
+          bodyStyle={bodyTs}
+          onHeaderStyleChange={style => useBoardsStore.getState().setBlockHeaderTextStyle(boardId, style)}
+          onBodyStyleChange={style => useBoardsStore.getState().setBlockTextStyle(boardId, style)}
+          activeField={activeField}
+          onActiveFieldChange={setActiveField}
+          anchorRect={rect}
+          preferBelow
+        />
+      )}
+      <div
+        style={{
+          position: 'absolute', inset: 0, padding: 4,
+          display: 'flex', flexDirection: 'column',
+          overflow: 'hidden',
+          pointerEvents: editingField ? 'auto' : 'none',
+        }}
+        onPointerDown={e => { if (editingField) e.stopPropagation() }}
+        onBlur={e => {
+          const related = e.relatedTarget as HTMLElement | null
+          if (related?.closest('[data-text-format-toolbar]')) return
+          if (e.currentTarget.contains(e.relatedTarget as Node)) return
+          if (editingField === 'header') commitHeader()
+          if (editingField === 'body') commitBody()
+          setSelected(false); setEditingField(null)
+        }}
+        tabIndex={0}
+      >
+        {/* Header area */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: vAlignToJustify(headerTs.vAlign), minHeight: 0 }}>
+          {editingField === 'header' ? (
+            <textarea
+              ref={headerRef}
+              autoFocus
+              value={headerVal}
+              onChange={e => setHeaderVal(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Escape') { commitHeader(); setSelected(false) }
+                if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); commitHeader(); startEditBody() }
+              }}
+              onPointerDown={e => e.stopPropagation()}
+              onClick={e => { e.stopPropagation(); setActiveField('header') }}
+              placeholder="Title…"
+              style={{ ...textareaStyle(headerTs, headerBg || 'rgba(0,0,0,0.3)'), flex: 1 }}
+            />
+          ) : (
+            headerText ? (
+              <div
+                style={{ ...displayStyle(headerTs, headerBg, true), pointerEvents: 'auto', cursor: 'text' }}
+                onDoubleClick={e => { e.stopPropagation(); startEditHeader() }}
+              >
+                {headerText}
+              </div>
+            ) : null
+          )}
+        </div>
+        {/* Body area */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: vAlignToJustify(bodyTs.vAlign), minHeight: 0 }}>
+          {editingField === 'body' ? (
+            <textarea
+              ref={bodyRef}
+              autoFocus
+              value={bodyVal}
+              onChange={e => setBodyVal(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Escape') { commitBody(); setSelected(false) }
+                if (e.key === 'Tab' && e.shiftKey) { e.preventDefault(); commitBody(); startEditHeader() }
+              }}
+              onPointerDown={e => e.stopPropagation()}
+              onClick={e => { e.stopPropagation(); setActiveField('body') }}
+              placeholder="Body text…"
+              style={{ ...textareaStyle(bodyTs, bodyBg || 'rgba(0,0,0,0.3)'), flex: 1 }}
+            />
+          ) : (
+            bodyText ? (
+              <div
+                style={{ ...displayStyle(bodyTs, bodyBg, true), pointerEvents: 'auto', cursor: 'text' }}
+                onDoubleClick={e => { e.stopPropagation(); startEditBody() }}
+              >
+                {bodyText}
+              </div>
+            ) : null
+          )}
+        </div>
+      </div>
+    </div>
   )
 }
 

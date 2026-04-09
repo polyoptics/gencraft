@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import type { FreeNodeData, TextStyle } from '../../store/freeNodeStore'
 import { DEFAULT_TEXT_STYLE } from '../../store/freeNodeStore'
+import { ensureFontLoaded, FONT_LIST, loadGoogleFont } from '../UI/TextFormatToolbar'
 import { useBoardsStore } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
@@ -13,6 +14,7 @@ interface Props { id: string }
 export const FreeNode: React.FC<Props> = ({ id }) => {
   const node = useFreeNodeStore(s => s.nodes[id])
   const moveFreeNode = useFreeNodeStore(s => s.moveFreeNode)
+  const moveManyFreeNodes = useFreeNodeStore(s => s.moveManyFreeNodes)
   const resizeFreeNode = useFreeNodeStore(s => s.resizeFreeNode)
   const updateFreeNode = useFreeNodeStore(s => s.updateFreeNode)
   const deleteFreeNode = useFreeNodeStore(s => s.deleteFreeNode)
@@ -25,15 +27,16 @@ export const FreeNode: React.FC<Props> = ({ id }) => {
   const [isRenaming, setIsRenaming] = useState(false)
   const [renameVal, setRenameVal] = useState('')
   const [nodeMenu, setNodeMenu] = useState<{ x: number; y: number } | null>(null)
+  const [textEditing, setTextEditing] = useState(false)
 
   const renameRef = useRef<HTMLInputElement>(null)
   const wrapperRef = useRef<HTMLDivElement>(null)
   const dragLastX = useRef(0)
   const dragLastY = useRef(0)
   const dragHasMoved = useRef(false)
+  const wasSelectedOnDown = useRef(false)
   const resizeLastX = useRef(0)
   const resizeLastY = useRef(0)
-  const textEditTrigger = useRef(0)
 
   useEffect(() => { if (isRenaming) renameRef.current?.select() }, [isRenaming])
 
@@ -56,16 +59,29 @@ export const FreeNode: React.FC<Props> = ({ id }) => {
     const dx = (e.clientX - dragLastX.current) / zoom
     const dy = (e.clientY - dragLastY.current) / zoom
     if (Math.abs(dx) > 1 || Math.abs(dy) > 1) dragHasMoved.current = true
-    moveFreeNode(id, dx, dy)
+    // Move all selected nodes together if this node is part of the selection
+    const sel = useFreeNodeStore.getState().selectedIds
+    if (sel.length > 1 && sel.includes(id)) {
+      moveManyFreeNodes(sel, dx, dy)
+    } else {
+      moveFreeNode(id, dx, dy)
+    }
     dragLastX.current = e.clientX
     dragLastY.current = e.clientY
-  }, [id, moveFreeNode, zoom])
+  }, [id, moveFreeNode, moveManyFreeNodes, zoom])
 
   const onNodeUp = useCallback((e: React.PointerEvent) => {
     if (!wrapperRef.current?.hasPointerCapture(e.pointerId)) return
     if (!dragHasMoved.current) {
       if (e.shiftKey) toggleFreeSelection(id)
-      else setFreeSelection([id])
+      else {
+        // If text node was already selected before this click, single click on body → enter edit
+        // Header clicks never reach here (stopPropagation on header div prevents pointer capture)
+        if (node.type === 'text' && wasSelectedOnDown.current && !isRenaming) {
+          setTextEditing(true)
+        }
+        setFreeSelection([id])
+      }
     }
     // Transfer node content to a bar/card on drop
     const node = useFreeNodeStore.getState().nodes[id]
@@ -98,37 +114,94 @@ export const FreeNode: React.FC<Props> = ({ id }) => {
           useFreeNodeStore.getState().deleteFreeNode(id)
         }
 
-        // Priority: blocks > cards > boards
+        // Priority: board-level blocks > block-layer blocks > cards
+        let transferred = false
+        const curZoom = useCanvasStore.getState().zoom
+
+        // Board zoom (>= 0.3): transfer to specific bar
         for (const el of allEls) {
           const block = el.closest('[data-block][data-id]') as HTMLElement | null
-          if (block) {
+          if (block && !block.dataset.layerBlock) {
             transferToBar(block.dataset.boardId ?? 'primary', block.dataset.id!)
-            return
+            transferred = true
+            break
           }
         }
-        for (const el of allEls) {
-          const card = el.closest('[data-nle-card]') as HTMLElement | null
-          if (card) {
-            const boardId = card.dataset.nleCard!
-            const b = useBoardsStore.getState().boards[boardId]
-            const firstRoot = b?.rootIds[0]
-            if (firstRoot) transferToBar(boardId, firstRoot)
-            return
+
+        // Block zoom (0.17–0.3): transfer to block-level independent text
+        if (!transferred) {
+          for (const el of allEls) {
+            const block = el.closest('[data-layer-block]') as HTMLElement | null
+            if (block) {
+              const targetBoardId = block.getAttribute('data-layer-block')!
+              if (hasText) {
+                const curText = useBoardsStore.getState().boards[targetBoardId]?.layers?.block?.text ?? ''
+                const newText = curText ? curText + '\n' + node.text : node.text
+                useBoardsStore.getState().setBlockText(targetBoardId, newText)
+              }
+              if (hasMedia && node.imageUrl) {
+                useBoardsStore.getState().setBlockThumbnail(targetBoardId, node.imageUrl)
+              }
+              useFreeNodeStore.getState().deleteFreeNode(id)
+              transferred = true
+              break
+            }
           }
         }
+
+        // Card zoom (≤ 0.17): transfer to card-level independent text
+        if (!transferred) {
+          for (const el of allEls) {
+            const card = el.closest('[data-nle-card]') as HTMLElement | null
+            if (card) {
+              const targetBoardId = card.dataset.nleCard!
+              // Check if this is a group card or ungrouped
+              const layerCard = card.closest('[data-layer-card]') as HTMLElement | null
+              const groupId = layerCard?.getAttribute('data-layer-card')
+
+              if (hasText) {
+                if (groupId) {
+                  const curText = useBoardsStore.getState().groups.find(g => g.id === groupId)?.cardText ?? ''
+                  const newText = curText ? curText + '\n' + node.text : node.text
+                  useBoardsStore.getState().setGroupCardText(groupId, newText)
+                } else {
+                  const curText = useBoardsStore.getState().boards[targetBoardId]?.layers?.card?.text ?? ''
+                  const newText = curText ? curText + '\n' + node.text : node.text
+                  useBoardsStore.getState().setCardText(targetBoardId, newText)
+                }
+              }
+              if (hasMedia && node.imageUrl) {
+                if (groupId) {
+                  useBoardsStore.getState().setGroupCardHeroImage(groupId, node.imageUrl)
+                } else {
+                  useBoardsStore.getState().setCardHeroImage(targetBoardId, node.imageUrl)
+                }
+              }
+              useFreeNodeStore.getState().deleteFreeNode(id)
+              transferred = true
+              break
+            }
+          }
+        }
+
+        if (transferred) return
       }
     }
     // No transfer happened — snap to row grid + clamp out of NLE no-park zone
     if (dragHasMoved.current) {
-      const cur = useFreeNodeStore.getState().nodes[id]
-      if (cur) {
-        const clamped = clampToNoParkZone(cur.x, cur.y, cur.width, cur.height)
-        if (clamped.x !== cur.x || clamped.y !== cur.y) {
-          useFreeNodeStore.getState().updateFreeNode(id, { x: clamped.x, y: clamped.y })
+      const sel = useFreeNodeStore.getState().selectedIds
+      const idsToClamp = (sel.length > 1 && sel.includes(id)) ? sel : [id]
+      for (const nid of idsToClamp) {
+        const cur = useFreeNodeStore.getState().nodes[nid]
+        if (cur) {
+          const clamped = clampToNoParkZone(cur.x, cur.y, cur.width, cur.height)
+          if (clamped.x !== cur.x || clamped.y !== cur.y) {
+            useFreeNodeStore.getState().updateFreeNode(nid, { x: clamped.x, y: clamped.y })
+          }
         }
       }
     }
-  }, [id, setFreeSelection, toggleFreeSelection])
+  }, [id, node?.type, isSelected, isRenaming, setFreeSelection, toggleFreeSelection])
 
   // Resize handle
   const onResizeDown = useCallback((e: React.PointerEvent) => {
@@ -158,6 +231,9 @@ export const FreeNode: React.FC<Props> = ({ id }) => {
   // At zoom 0.12, a canvas-space value of X appears as X*0.12 on screen,
   // so we scale up by 1/zoom to maintain roughly constant screen-pixel sizes.
   const iz = 1 / zoom
+  // Damped inverse-zoom: sqrt(1/zoom). Shrinks more gently than linear zoom,
+  // grows more gently than full iz. Used for body content (text, icons, waveforms).
+  const dz = 1 / Math.sqrt(zoom)
   const headerH = 20 * iz
   const fontSize = 11 * iz               // ~11px on screen at any zoom
   const dotSize  = 5 * iz
@@ -190,20 +266,25 @@ export const FreeNode: React.FC<Props> = ({ id }) => {
       }}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
+      onPointerDownCapture={e => {
+        // Select node in capture phase so children with stopPropagation (note textarea) don't block selection
+        if (e.button !== 0) return
+        if ((e.target as Element).closest('[data-resize]')) return
+        wasSelectedOnDown.current = isSelected
+        if (e.shiftKey) { toggleFreeSelection(id) }
+        else if (!isSelected) { setFreeSelection([id]) }
+      }}
       onPointerDown={onNodeDown}
       onPointerMove={onNodeMove}
       onPointerUp={onNodeUp}
       onDoubleClick={e => {
         if (dragHasMoved.current) return
         // Header label has its own dblclick handler for rename.
-        // For text nodes, double-click on body → trigger text edit via ref.
+        // For text nodes, double-click on body → trigger text edit.
+        // Header clicks don't reach here (stopPropagation on header div).
         if (node.type === 'text' && !isRenaming) {
-          const onHeader = (e.target as HTMLElement).closest('[data-freenode-header]')
-          if (!onHeader) {
-            textEditTrigger.current++
-            // force re-render to pick up the new trigger value
-            setFreeSelection([id])
-          }
+          setTextEditing(true)
+          setFreeSelection([id])
         }
       }}
       onContextMenu={e => {
@@ -212,7 +293,7 @@ export const FreeNode: React.FC<Props> = ({ id }) => {
       }}
     >
       {/* ── Header ── */}
-      <div data-freenode-header style={{
+      <div data-freenode-header onPointerDown={e => e.stopPropagation()} style={{
         display: 'flex', alignItems: 'center', gap: 6 * iz,
         padding: `${pad * 0.6}px ${pad}px`,
         background: 'rgba(0,0,0,0.3)',
@@ -238,9 +319,11 @@ export const FreeNode: React.FC<Props> = ({ id }) => {
             onKeyDown={e => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') setIsRenaming(false) }}
             onPointerDown={e => e.stopPropagation()}
             style={{
-              flex: 1, background: 'rgba(255,255,255,0.08)', border: `${borderW}px solid rgba(255,255,255,0.2)`,
-              borderRadius: 4 / zoom, outline: 'none', color: '#fff',
-              fontSize, fontWeight: 600, padding: `${2 * iz}px ${6 * iz}px`, fontFamily: 'inherit',
+              flex: 1, background: 'rgba(255,255,255,0.06)', border: 'none',
+              borderBottom: `${Math.max(1, borderW)}px solid rgba(255,255,255,0.3)`,
+              borderRadius: 0, outline: 'none', color: '#fff',
+              fontSize, fontWeight: 600, lineHeight: 1.2, padding: 0, fontFamily: 'inherit',
+              boxSizing: 'border-box', minWidth: 0,
             }}
           />
         ) : (
@@ -255,7 +338,7 @@ export const FreeNode: React.FC<Props> = ({ id }) => {
       </div>
 
       {/* ── Body ── */}
-      <FreeNodeBody node={node} id={id} iz={iz} pad={pad} updateFreeNode={updateFreeNode} editTrigger={textEditTrigger.current} />
+      <FreeNodeBody node={node} id={id} iz={iz} dz={dz} pad={pad} updateFreeNode={updateFreeNode} isEditing={textEditing} setIsEditing={setTextEditing} />
 
       {/* ── Text format toolbar (shown when text node is selected) ── */}
       {node.type === 'text' && isSelected && (
@@ -350,23 +433,15 @@ const FreeNodeBody: React.FC<{
   node: FreeNodeData
   id: string
   iz: number
+  dz: number
   pad: number
   updateFreeNode: (id: string, patch: Partial<FreeNodeData>) => void
-  editTrigger: number
-}> = ({ node, id, iz, pad, updateFreeNode, editTrigger }) => {
-  const [isEditing, setIsEditing] = useState(false)
+  isEditing: boolean
+  setIsEditing: (v: boolean) => void
+}> = ({ node, id, iz, dz, pad, updateFreeNode, isEditing, setIsEditing }) => {
   const textRef = useRef<HTMLTextAreaElement>(null)
-  const lastTrigger = useRef(0)
 
   useEffect(() => { if (isEditing) textRef.current?.focus() }, [isEditing])
-
-  // Wrapper double-click triggers edit mode for text nodes
-  useEffect(() => {
-    if (editTrigger > lastTrigger.current && node.type === 'text') {
-      setIsEditing(true)
-    }
-    lastTrigger.current = editTrigger
-  }, [editTrigger, node.type])
 
   // ── Note type: always-editable textarea ──
   if (node.type === 'note') {
@@ -390,15 +465,19 @@ const FreeNodeBody: React.FC<{
   // ── Text type: view/edit toggle with formatting ──
   if (node.type === 'text') {
     const ts = { ...DEFAULT_TEXT_STYLE, ...node.textStyle }
+    ensureFontLoaded(ts.fontFamily)
     const bgRgba = hexToRgba(ts.bgColor, ts.bgOpacity)
 
-    // Damped zoom: text scales with node but clamped to stay readable.
-    // screenPx = fontSize * zoom  →  clamp to [8, 60] screen-px  →  convert back to canvas-space.
+    // Damped zoom: text scales with the node but uses sqrt(zoom) so it shrinks
+    // more gently than linearly. At zoom 1.0 → fontSize screen-px (natural).
+    // At zoom 0.11 → fontSize * sqrt(0.11)/0.11 ≈ fontSize * 3 canvas-px → ~fontSize * 0.33 screen-px
+    // which is much more readable than pure linear (fontSize * 0.11 screen-px).
+    // Floor at 10 screen-px so text is always legible.
     const curZoom = 1 / iz
-    const screenPx = ts.fontSize * curZoom
-    const clampedScreenPx = Math.max(8, Math.min(60, screenPx))
+    const dampedScreenPx = ts.fontSize * Math.sqrt(curZoom)
+    const clampedScreenPx = Math.max(10, Math.min(60, dampedScreenPx))
     const renderFontSize = clampedScreenPx / curZoom
-    const renderPad = Math.max(4, 6 * iz * Math.min(1, curZoom * 2))
+    const renderPad = Math.max(4, 6 * Math.sqrt(iz))
 
     if (isEditing) {
       return (
@@ -419,7 +498,7 @@ const FreeNodeBody: React.FC<{
               fontStyle: ts.italic ? 'italic' : 'normal',
               textAlign: ts.align,
               padding: renderPad,
-              resize: 'none', fontFamily: 'inherit', cursor: 'text',
+              resize: 'none', fontFamily: ts.fontFamily || 'inherit', cursor: 'text',
               wordBreak: 'break-word',
             }}
           />
@@ -435,7 +514,7 @@ const FreeNodeBody: React.FC<{
           fontSize: renderFontSize, lineHeight: 1.55,
           fontWeight: ts.bold ? 700 : 400,
           fontStyle: ts.italic ? 'italic' : 'normal',
-          textAlign: ts.align,
+          textAlign: ts.align, fontFamily: ts.fontFamily || 'inherit',
           whiteSpace: 'pre-wrap', overflow: 'hidden',
           wordBreak: 'break-word',
           cursor: 'pointer',
@@ -451,8 +530,7 @@ const FreeNodeBody: React.FC<{
   // ── Video type: image with play overlay ──
   if (node.type === 'video') {
     return (
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', overflow: 'hidden' }}
-           onPointerDown={e => e.stopPropagation()}>
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', overflow: 'hidden' }}>
         {node.imageUrl ? (
           <>
             <img src={node.imageUrl} draggable={false} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
@@ -462,24 +540,24 @@ const FreeNodeBody: React.FC<{
               background: 'rgba(0,0,0,0.25)',
             }}>
               <div style={{
-                width: 40 * iz, height: 40 * iz, borderRadius: '50%',
-                background: 'rgba(0,0,0,0.6)', border: `${2 * iz}px solid rgba(255,255,255,0.5)`,
+                width: 40 * dz, height: 40 * dz, borderRadius: '50%',
+                background: 'rgba(0,0,0,0.6)', border: `${2 * dz}px solid rgba(255,255,255,0.5)`,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
               }}>
                 <div style={{
                   width: 0, height: 0,
-                  borderTop: `${8 * iz}px solid transparent`,
-                  borderBottom: `${8 * iz}px solid transparent`,
-                  borderLeft: `${14 * iz}px solid rgba(255,255,255,0.9)`,
-                  marginLeft: 3 * iz,
+                  borderTop: `${8 * dz}px solid transparent`,
+                  borderBottom: `${8 * dz}px solid transparent`,
+                  borderLeft: `${14 * dz}px solid rgba(255,255,255,0.9)`,
+                  marginLeft: 3 * dz,
                 }} />
               </div>
             </div>
           </>
         ) : (
           <div style={{ textAlign: 'center', color: 'rgba(255,255,255,0.25)', pointerEvents: 'none' }}>
-            <div style={{ fontSize: 28 * iz, marginBottom: 4 * iz }}>▶</div>
-            <div style={{ fontSize: 10 * iz }}>drop video here</div>
+            <div style={{ fontSize: 28 * dz, marginBottom: 4 * dz }}>▶</div>
+            <div style={{ fontSize: 10 * dz }}>drop video here</div>
           </div>
         )}
       </div>
@@ -489,44 +567,43 @@ const FreeNodeBody: React.FC<{
   // ── Audio type: waveform skeleton + transport ──
   if (node.type === 'audio') {
     return (
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: `${6 * iz}px ${pad}px`, gap: 4 * iz }}
-           onPointerDown={e => e.stopPropagation()}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: `${6 * dz}px ${pad}px`, gap: 4 * dz }}>
         {/* Filename */}
-        <div style={{ fontSize: 10 * iz, color: 'rgba(255,255,255,0.5)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <div style={{ fontSize: 10 * dz, color: 'rgba(255,255,255,0.5)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {node.label || 'Audio'}
         </div>
         {/* Fake waveform */}
-        <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 1 * iz, minHeight: 24 * iz }}>
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 1 * dz, minHeight: 24 * dz }}>
           {Array.from({ length: 40 }, (_, i) => {
             const h = (Math.sin(i * 0.7) * 0.4 + 0.5 + Math.sin(i * 1.9) * 0.2) * 100
             return (
               <div key={i} style={{
                 flex: 1, height: `${Math.max(8, h)}%`,
                 background: node.imageUrl ? 'rgba(100,200,255,0.5)' : 'rgba(255,255,255,0.15)',
-                borderRadius: 1 * iz,
+                borderRadius: 1 * dz,
               }} />
             )
           })}
         </div>
         {/* Transport controls */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12 * iz, padding: `${2 * iz}px 0` }}>
-          <div style={{ fontSize: 10 * iz, color: 'rgba(255,255,255,0.35)', cursor: 'pointer' }}>⏮</div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12 * dz, padding: `${2 * dz}px 0` }}>
+          <div style={{ fontSize: 10 * dz, color: 'rgba(255,255,255,0.35)', cursor: 'pointer' }}>⏮</div>
           <div style={{
-            width: 22 * iz, height: 22 * iz, borderRadius: '50%',
-            background: 'rgba(255,255,255,0.1)', border: `${1.5 * iz}px solid rgba(255,255,255,0.25)`,
+            width: 22 * dz, height: 22 * dz, borderRadius: '50%',
+            background: 'rgba(255,255,255,0.1)', border: `${1.5 * dz}px solid rgba(255,255,255,0.25)`,
             display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
           }}>
             <div style={{
               width: 0, height: 0,
-              borderTop: `${4 * iz}px solid transparent`,
-              borderBottom: `${4 * iz}px solid transparent`,
-              borderLeft: `${7 * iz}px solid rgba(255,255,255,0.7)`,
-              marginLeft: 2 * iz,
+              borderTop: `${4 * dz}px solid transparent`,
+              borderBottom: `${4 * dz}px solid transparent`,
+              borderLeft: `${7 * dz}px solid rgba(255,255,255,0.7)`,
+              marginLeft: 2 * dz,
             }} />
           </div>
-          <div style={{ fontSize: 10 * iz, color: 'rgba(255,255,255,0.35)', cursor: 'pointer' }}>⏭</div>
+          <div style={{ fontSize: 10 * dz, color: 'rgba(255,255,255,0.35)', cursor: 'pointer' }}>⏭</div>
           <div style={{ flex: 1 }} />
-          <div style={{ fontSize: 9 * iz, color: 'rgba(255,255,255,0.3)' }}>0:00 / 0:00</div>
+          <div style={{ fontSize: 9 * dz, color: 'rgba(255,255,255,0.3)' }}>0:00 / 0:00</div>
         </div>
       </div>
     )
@@ -534,8 +611,7 @@ const FreeNodeBody: React.FC<{
 
   // ── Image type (default) ──
   return (
-    <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', overflow: 'hidden' }}
-         onPointerDown={e => e.stopPropagation()}>
+    <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', overflow: 'hidden' }}>
       {node.imageUrl ? (
         <img src={node.imageUrl} draggable={false} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
       ) : (
@@ -572,7 +648,7 @@ const TextFormatToolbar: React.FC<{
 }> = ({ node, id, updateFreeNode, wrapperRef }) => {
   const zoom = useCanvasStore(s => s.zoom)
   const pan = useCanvasStore(s => s.pan)
-  const [showPopup, setShowPopup] = useState<'text' | 'bg' | 'hAlign' | 'vAlign' | null>(null)
+  const [showPopup, setShowPopup] = useState<'text' | 'bg' | 'hAlign' | 'vAlign' | 'font' | null>(null)
 
   const ts = { ...DEFAULT_TEXT_STYLE, ...node.textStyle }
   const setStyle = (patch: Partial<TextStyle>) => {
@@ -630,6 +706,53 @@ const TextFormatToolbar: React.FC<{
         const next = FONT_SIZES.find(s => s > cur) ?? FONT_SIZES[FONT_SIZES.length - 1]
         setStyle({ fontSize: next })
       }}>+</button>
+
+      {/* Font family */}
+      <div style={{ position: 'relative' }}>
+        <button
+          style={{ ...btnStyle(showPopup === 'font'), fontSize: 10, padding: '2px 5px', maxWidth: 58, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+          onClick={() => setShowPopup(showPopup === 'font' ? null : 'font')}
+          title="Font family"
+        >{FONT_LIST.find(f => f.value === (ts.fontFamily ?? FONT_LIST[0].value))?.label ?? 'System'}</button>
+        {showPopup === 'font' && (
+          <div
+            onPointerDown={e => { e.preventDefault(); e.stopPropagation() }}
+            style={{
+              position: 'absolute', top: 32, left: -4, zIndex: 10001,
+              background: '#1a1b2e', border: '1px solid rgba(255,255,255,0.12)',
+              borderRadius: 8, padding: 4, boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
+              display: 'flex', flexDirection: 'column', gap: 1, width: 170, maxHeight: 320, overflowY: 'auto',
+            }}
+          >
+            <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)', padding: '4px 8px 2px', fontWeight: 600, letterSpacing: 1, textTransform: 'uppercase' }}>System</div>
+            {FONT_LIST.filter(f => !f.google).map(f => (
+              <button
+                key={f.value}
+                onClick={() => { setStyle({ fontFamily: f.value }); setShowPopup(null) }}
+                style={{
+                  ...btnStyle((ts.fontFamily ?? FONT_LIST[0].value) === f.value),
+                  fontFamily: f.value, fontSize: 12, padding: '4px 8px',
+                  textAlign: 'left', width: '100%', justifyContent: 'flex-start',
+                }}
+              >{f.label}</button>
+            ))}
+            <div style={{ height: 1, background: 'rgba(255,255,255,0.08)', margin: '4px 0' }} />
+            <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)', padding: '2px 8px 2px', fontWeight: 600, letterSpacing: 1, textTransform: 'uppercase' }}>Google Fonts</div>
+            {FONT_LIST.filter(f => f.google).map(f => (
+              <button
+                key={f.value}
+                onMouseEnter={() => loadGoogleFont(f.label)}
+                onClick={() => { loadGoogleFont(f.label); setStyle({ fontFamily: f.value }); setShowPopup(null) }}
+                style={{
+                  ...btnStyle((ts.fontFamily ?? FONT_LIST[0].value) === f.value),
+                  fontFamily: f.value, fontSize: 12, padding: '4px 8px',
+                  textAlign: 'left', width: '100%', justifyContent: 'flex-start',
+                }}
+              >{f.label}</button>
+            ))}
+          </div>
+        )}
+      </div>
 
       <div style={sepStyle} />
 
