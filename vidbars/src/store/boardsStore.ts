@@ -42,6 +42,8 @@ export interface ProjectGroup {
   originX: number      // canvas-space X position (group origin)
   cardWidthOverride?: number   // user-set card width (screen px)
   cardHeightOverride?: number  // user-set card height (screen px)
+  deckState?: 'open' | 'fanned' | 'stacked'  // deck visual state (default: 'open')
+  deckAnchorId?: string   // group ID of the deck anchor (leftmost card); set when deckState !== 'open'
 }
 
 /** Find which group a board belongs to */
@@ -178,6 +180,7 @@ interface BoardsState {
   setGroupCardHeaderText: (groupId: string, text: string) => void
   setGroupCardHeaderTextStyle: (groupId: string, style: import('../store/freeNodeStore').TextStyle) => void
   setGroupCardSize: (groupId: string, w: number | undefined, h: number | undefined) => void
+  setDeckState: (groupIds: string[], state: 'open' | 'fanned' | 'stacked') => void
   setGroupPos: (groupId: string, originY: number, originX: number) => void
   reassignBoard: (boardId: string, targetGroupId: string) => void
   moveToNewGroup: (boardId: string) => void
@@ -688,6 +691,13 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
     set(s => ({ groups: s.groups.map(g => g.id === groupId ? { ...g, cardWidthOverride: w, cardHeightOverride: h } : g) }))
   },
 
+  setDeckState(groupIds, state) {
+    const idSet = new Set(groupIds)
+    // The first ID in the array is the anchor (leftmost card in the cluster)
+    const anchorId = state === 'open' ? undefined : groupIds[0]
+    set(s => ({ groups: s.groups.map(g => idSet.has(g.id) ? { ...g, deckState: state, deckAnchorId: anchorId } : g) }))
+  },
+
   setGroupPos(groupId, originY, originX) {
     set(s => ({ groups: s.groups.map(g => g.id === groupId ? { ...g, originY, originX } : g) }))
   },
@@ -861,7 +871,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
 }), {
   name: 'vidbars-boards',
   storage: createJSONStorage(() => createDebouncedStorage(500)),
-  version: 9,
+  version: 10,
   migrate(persisted: any, version: number) {
     if (version < 3) {
       const boards = persisted.boards ?? {}
@@ -988,6 +998,17 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
       const groups: any[] = persisted.groups ?? []
       for (const g of groups) {
         if (!('cardText' in g)) g.cardText = ''
+      }
+    }
+    if (version < 10) {
+      // v9→v10: Backfill deckAnchorId for groups that have deckState set.
+      // Groups with deckState !== 'open' but no deckAnchorId need one.
+      // Reset them to 'open' so user can re-stack cleanly.
+      const groups: any[] = persisted.groups ?? []
+      for (const g of groups) {
+        if (g.deckState && g.deckState !== 'open' && !g.deckAnchorId) {
+          g.deckState = 'open'
+        }
       }
     }
     return persisted as BoardsState

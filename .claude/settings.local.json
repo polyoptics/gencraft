@@ -28,7 +28,10 @@
       "Bash(npx vite:*)",
       "Bash(python3 -c:*)",
       "Bash(node -e \"const fs=require\\(''fs''\\);const p=''C:/Users/User/.claude/plans/deep-napping-pixel-agent-a6583904bdf86f832.md'';fs.mkdirSync\\(require\\(''path''\\).dirname\\(p\\),{recursive:true}\\);fs.writeFileSync\\(p,''# Plan - see conversation''\\);console.log\\(''ok''\\)\")",
-      "Bash(npx rolldown:*)"
+      "Bash(npx rolldown:*)",
+      "Read(//mnt/**)",
+      "Read(//d//**)",
+      "Bash(git add:*)"
     ]
   }
 }

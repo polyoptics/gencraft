@@ -20,6 +20,7 @@ import { getFirstImageUrl } from '../../types/bar'
 import { ColorPickerPopup } from '../Bar/ColorPickerPopup'
 import { FreeCanvas } from '../Canvas/FreeCanvas'
 import { NLETimelineHeader } from '../NLE/NLETimelineHeader'
+import { getHiddenBoardIds, getHiddenGroupIds } from '../../hooks/useCardDecks'
 
 const BOARD_PADDING_X = 20
 
@@ -498,11 +499,18 @@ const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
 
 const Canvas: React.FC = () => {
   const boardOrder = useBoardsStore(s => s.boardOrder)
+  const groups = useBoardsStore(s => s.groups)
+  const boards = useBoardsStore(s => s.boards)
+  const zoneLineY = useCanvasStore(s => s.zoneLineY)
+  const hiddenBoards = useMemo(
+    () => getHiddenBoardIds(groups, boards, zoneLineY),
+    [groups, boards, zoneLineY],
+  )
   return (
     <>
       <FreeCanvas />
-      <BlockItem boardId="primary" />
-      {boardOrder.map(id => <BlockItem key={id} boardId={id} />)}
+      {!hiddenBoards.has('primary') && <BlockItem boardId="primary" />}
+      {boardOrder.filter(id => !hiddenBoards.has(id)).map(id => <BlockItem key={id} boardId={id} />)}
     </>
   )
 }
@@ -511,9 +519,15 @@ const Canvas: React.FC = () => {
 
 const Overlay: React.FC = () => {
   const groups = useBoardsStore(s => s.groups)
+  const boards = useBoardsStore(s => s.boards)
+  const zoneLineY = useCanvasStore(s => s.zoneLineY)
+  const hiddenGroups = useMemo(
+    () => getHiddenGroupIds(groups, boards, zoneLineY),
+    [groups, boards, zoneLineY],
+  )
   return (
     <>
-      {groups.map(g => (
+      {groups.filter(g => !hiddenGroups.has(g.id)).map(g => (
         <NLETimelineHeader key={g.id} groupId={g.id} />
       ))}
     </>

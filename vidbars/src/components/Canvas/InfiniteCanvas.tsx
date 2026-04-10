@@ -555,7 +555,7 @@ const NLERowBands: React.FC<{ pan: { x: number; y: number }; zoom: number }> = (
       willChange: 'transform',
     }}>
       {cardGridLines}
-      {groups.map(group => {
+      {groups.filter(g => !(g.deckState && g.deckState !== 'open' && g.deckAnchorId && g.deckAnchorId !== g.id)).map(group => {
         const layout = computeGroupLayout(group.boardIds, boards)
         const maxRow = Math.max(0, ...Object.keys(layout.rowHeights).map(Number))
 
