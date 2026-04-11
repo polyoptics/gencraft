@@ -110,7 +110,8 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
       setRubberBand(initial)
       ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
       clearFreeSelection()
-      // Clear selection on ALL boards
+      // Clear selection on ALL boards + card groups
+      useBoardsStore.getState().clearGroupSelection()
       const allBoards = useBoardsStore.getState().boards
       for (const bid of Object.keys(allBoards)) {
         useBoardsStore.getState().clearSelection(bid)
@@ -292,8 +293,11 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
       isPanning.current = false
       return
     }
-    // Clear card-level selection when clicking empty canvas
-    useBoardsStore.getState().setSelectedGroup(null)
+    // Clear card-level selection when clicking empty canvas (not on a card/node)
+    const upTarget = e.target as Element
+    if (!upTarget.closest('[data-group-card],[data-freenode]')) {
+      useBoardsStore.getState().clearGroupSelection()
+    }
     if (rbStartCanvas.current) {
       const containerRect = containerRef.current!.getBoundingClientRect()
       const rb = rubberBandRef.current
@@ -325,6 +329,10 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
           const nodeIds = Array.from(document.querySelectorAll('[data-freenode][data-id]'))
             .filter(hits).map(el => (el as HTMLElement).dataset.id!)
           if (nodeIds.length > 0) setFreeSelection(nodeIds)
+          // Card group hit-test
+          const hitGroups = Array.from(document.querySelectorAll('[data-group-card][data-id]'))
+            .filter(hits).map(el => (el as HTMLElement).dataset.id!)
+          if (hitGroups.length > 0) useBoardsStore.getState().setSelectedGroups(hitGroups)
         }
       }
       rbStartCanvas.current = null

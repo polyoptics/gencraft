@@ -6,6 +6,17 @@ import type { ProjectGroup, BoardData } from '../store/boardsStore'
 import { groupSlot, type GroupSlot } from '../utils/nlePush'
 import { computeGroupLayout } from '../utils/nleRows'
 
+/** Returns true if this group is a non-anchor member of a stacked/fanned deck (visually hidden). */
+export function isHiddenDeckMember(g: ProjectGroup): boolean {
+  return !!(g.deckState && g.deckState !== 'open' && g.deckAnchorId && g.deckAnchorId !== g.id)
+}
+
+/** Returns true if this group is an anchor of a sub-deck (other non-open groups point to it via deckAnchorId). */
+export function isSubDeckAnchor(groupId: string, allGroups: ProjectGroup[]): boolean {
+  return allGroups.some(g => g.id !== groupId && g.deckAnchorId === groupId
+    && g.deckState !== undefined && g.deckState !== 'open')
+}
+
 const TOUCH_TOLERANCE = 16 // canvas units — slightly > DEFAULT_GAP (12)
 
 export interface Deck {
@@ -67,12 +78,17 @@ export function useCardDecks(
       if (slot) rects.set(g.id, slot)
     }
 
-    // 2. Partition by zone
-    const timelineGroups = groups.filter(g => {
+    // 2. Filter out hidden deck members from clustering — they're invisible and
+    //    already tracked by the persisted-anchor fallback. Including them would
+    //    corrupt clusters (e.g. sub-deck members inflating a parent cluster).
+    const visibleGroups = groups.filter(g => !isHiddenDeckMember(g))
+
+    // Partition by zone (only visible groups participate in clustering)
+    const timelineGroups = visibleGroups.filter(g => {
       const r = rects.get(g.id)
       return r && r.top >= zoneLineY
     })
-    const freeGroups = groups.filter(g => {
+    const freeGroups = visibleGroups.filter(g => {
       const r = rects.get(g.id)
       return r && r.top < zoneLineY
     })
@@ -87,6 +103,12 @@ export function useCardDecks(
           const ri = rects.get(zoneGroups[i].id)
           const rj = rects.get(zoneGroups[j].id)
           if (ri && rj && rectsTouch(ri, rj, TOUCH_TOLERANCE)) {
+            // Don't merge two separate stacked/fanned deck anchors —
+            // they are independent decks that happen to be adjacent.
+            const gi = zoneGroups[i], gj = zoneGroups[j]
+            const iIsAnchor = gi.deckState && gi.deckState !== 'open' && gi.deckAnchorId === gi.id
+            const jIsAnchor = gj.deckState && gj.deckState !== 'open' && gj.deckAnchorId === gj.id
+            if (iIsAnchor && jIsAnchor) continue
             uf.union(i, j)
           }
         }
@@ -162,16 +184,25 @@ export function useCardDecks(
       // Need at least the anchor + 1 member (or at least 2 members)
       // Also include the anchor itself if it's non-open with matching deckAnchorId
       const fullMembers = memberIds.includes(anchorId) ? memberIds : [anchorId, ...memberIds]
-      // Only form a deck if the anchor group exists and is also non-open
+      // Only form a deck if the anchor group exists
+      // (anchor may be 'open' if it's a sub-deck anchor visible after parent opened)
       const anchorGroup = groupMap.get(anchorId)
-      if (!anchorGroup || (!anchorGroup.deckState || anchorGroup.deckState === 'open')) continue
+      if (!anchorGroup) continue
       if (fullMembers.length < 2) continue
 
       // Sort by left edge (anchor first by convention)
       const sorted = fullMembers.sort((a, b) => (rects.get(a)?.left ?? 0) - (rects.get(b)?.left ?? 0))
 
-      const hasStacked = sorted.some(gid => groupMap.get(gid)?.deckState === 'stacked')
-      const state: 'fanned' | 'stacked' = hasStacked ? 'stacked' : 'fanned'
+      // Derive deck state: anchor's deckState is authoritative when non-open.
+      // Fall back to member analysis only when anchor is 'open' (sub-deck anchor case,
+      // where the anchor's deckState doesn't represent this deck's state).
+      let state: 'fanned' | 'stacked'
+      if (anchorGroup.deckState === 'stacked' || anchorGroup.deckState === 'fanned') {
+        state = anchorGroup.deckState
+      } else {
+        const hasStacked = sorted.some(gid => groupMap.get(gid)?.deckState === 'stacked')
+        state = hasStacked ? 'stacked' : 'fanned'
+      }
 
       const memberRects = new Map<string, GroupSlot>()
       for (const gid of sorted) {

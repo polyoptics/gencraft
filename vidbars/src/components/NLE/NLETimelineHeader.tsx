@@ -6,6 +6,7 @@ import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { computeGroupLayout, getRowY, snapToCardGrid, CARD_GRID_SPACING } from '../../utils/nleRows'
 import { groupSlot, clampGroupMove } from '../../utils/nlePush'
 import type { GroupSlot } from '../../utils/nlePush'
+import { isHiddenDeckMember } from '../../hooks/useCardDecks'
 
 const BOARD_PADDING_X = 20
 export const NLE_HEADER_CANVAS_H = 36
@@ -87,7 +88,7 @@ export const NLETimelineHeader: React.FC<Props> = ({ groupId }) => {
       const inTimeline = initialOriginY >= zly
       obstacles = inTimeline
         ? bs0.groups
-            .filter(og => og.id !== groupId && og.originY >= zly)
+            .filter(og => og.id !== groupId && og.originY >= zly && !isHiddenDeckMember(og))
             .map(og => groupSlot(og.id, og.boardIds, bs0.boards, og.originX, og.originY, computeGroupLayout(og.boardIds, bs0.boards)))
             .filter(Boolean) as GroupSlot[]
         : []  // free zone: no collision

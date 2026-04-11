@@ -31,7 +31,7 @@ const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
 
   const boards       = useBoardsStore(s => s.boards)
   const groups       = useBoardsStore(s => s.groups)
-  const isSelected   = useBoardsStore(s => s.selectedGroupId === group.id)
+  const isSelected   = useBoardsStore(s => s.selectedGroupIds.includes(group.id))
 
   const [isDragging, setIsDragging] = useState(false)
   const [cardMenu, setCardMenu] = useState<{ x: number; y: number } | null>(null)
@@ -42,27 +42,51 @@ const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
     if ((e.target as HTMLElement).tagName === 'INPUT') return
     e.stopPropagation()
     e.preventDefault()
-    useBoardsStore.getState().setSelectedGroup(group.id)
+
+    // Shift+click: toggle multi-selection, no drag
+    if (e.shiftKey) {
+      useBoardsStore.getState().toggleGroupSelection(group.id)
+      return
+    }
+
+    // If this card is already in selection, drag all selected. Otherwise single-select + drag.
+    const bs0 = useBoardsStore.getState()
+    const alreadySelected = bs0.selectedGroupIds.includes(group.id)
+    if (!alreadySelected) {
+      bs0.setSelectedGroup(group.id)
+    }
     useUndoCoordinator.getState().checkpoint()
+
+    // Expand to include nested sub-deck members
+    const draggingIds = expandWithNestedMembers(
+      alreadySelected ? [...bs0.selectedGroupIds] : [group.id],
+      bs0.groups,
+    )
+
     let lastX = e.clientX
     let lastY = e.clientY
     let dyAccum = 0
     let dxAccum = 0
     setIsDragging(true)
 
-    // Snapshot initial group origin + obstacle slots
-    const bs0 = useBoardsStore.getState()
-    const g0 = bs0.groups.find(g => g.id === group.id)
-    const initialOriginY = g0?.originY ?? 0
-    const initialOriginX = g0?.originX ?? 0
+    // Snapshot initial origins for all dragging groups
+    const initialOrigins = new Map<string, { x: number; y: number }>()
+    for (const gid of draggingIds) {
+      const g = bs0.groups.find(gr => gr.id === gid)
+      if (g) initialOrigins.set(gid, { x: g.originX, y: g.originY })
+    }
+    const initialOriginY = initialOrigins.get(group.id)?.y ?? 0
+    const initialOriginX = initialOrigins.get(group.id)?.x ?? 0
+
     const myLayout = computeGroupLayout(group.boardIds, bs0.boards)
     const mySlot = groupSlot(group.id, group.boardIds, bs0.boards, initialOriginX, initialOriginY, myLayout)
     // Zone-aware collision: only collide with groups in the timeline zone
     const zly = useCanvasStore.getState().zoneLineY
     const inTimeline = initialOriginY >= zly
+    const draggingSet = new Set(draggingIds)
     const obstacles = inTimeline
       ? bs0.groups
-          .filter(g => g.id !== group.id && g.originY >= zly)
+          .filter(g => !draggingSet.has(g.id) && g.originY >= zly && !isHiddenDeckMember(g))
           .map(g => groupSlot(g.id, g.boardIds, bs0.boards, g.originX, g.originY, computeGroupLayout(g.boardIds, bs0.boards)))
           .filter(Boolean) as import('../../utils/nlePush').GroupSlot[]
       : []  // free zone: no collision
@@ -82,11 +106,18 @@ const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
       const preClampY = snapped ? snapY : rawY
       const preClampX = initialOriginX + dxAccum
       // Clamp against other groups (only in timeline zone)
+      let finalDx: number, finalDy: number
       if (mySlot && obstacles.length > 0) {
         const { dx: cdx, dy: cdy } = clampGroupMove(mySlot, preClampX - initialOriginX, preClampY - initialOriginY, obstacles)
-        useBoardsStore.getState().setGroupPos(group.id, initialOriginY + cdy, initialOriginX + cdx)
+        finalDx = cdx
+        finalDy = cdy
       } else {
-        useBoardsStore.getState().setGroupPos(group.id, preClampY, preClampX)
+        finalDx = preClampX - initialOriginX
+        finalDy = preClampY - initialOriginY
+      }
+      // Move all dragging groups by the same delta
+      for (const [gid, origin] of initialOrigins) {
+        useBoardsStore.getState().setGroupPos(gid, origin.y + finalDy, origin.x + finalDx)
       }
     }
     const onUp = () => {
@@ -218,6 +249,8 @@ const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
       <div
         data-layer-card={group.id}
         data-nle-card={group.boardIds[0] ?? ''}
+        data-group-card="true"
+        data-id={group.id}
         style={{
           position: 'absolute',
           left: screenLeft,
@@ -236,10 +269,6 @@ const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
           border: isSelected ? '2px solid rgba(130,180,255,0.8)' : '1.5px solid rgba(255,255,255,0.25)',
           boxShadow: isSelected ? '0 4px 24px rgba(37,99,235,0.4)' : '0 4px 24px rgba(0,0,0,0.4)',
           overflow: 'hidden',
-        }}
-        onPointerDownCapture={e => {
-          if (e.button !== 0) return
-          useBoardsStore.getState().setSelectedGroup(group.id)
         }}
         onPointerDown={onCardDown}
         onPointerEnter={() => setIsHovered(true)}
@@ -484,6 +513,8 @@ const UngroupedBoardCard: React.FC<{ boardId: string }> = ({ boardId }) => {
   return (
     <div
       data-nle-card={boardId}
+      data-group-card="true"
+      data-id={boardId}
       style={{
         position: 'absolute',
         left: screenLeft, top: screenTop,
@@ -566,14 +597,32 @@ const UngroupedBoardCard: React.FC<{ boardId: string }> = ({ boardId }) => {
 
 // ── Deck components ──
 
-import { useCardDecks, type Deck } from '../../hooks/useCardDecks'
+import { useCardDecks, isHiddenDeckMember, isSubDeckAnchor, type Deck } from '../../hooks/useCardDecks'
+
+/** Expand a set of group IDs to include nested sub-deck members.
+ *  Any group whose deckAnchorId points to a member of the set is added (recursively). */
+function expandWithNestedMembers(baseIds: string[], allGroups: ProjectGroup[]): string[] {
+  const result = new Set(baseIds)
+  let added = true
+  while (added) {
+    added = false
+    for (const g of allGroups) {
+      if (!result.has(g.id) && g.deckAnchorId && result.has(g.deckAnchorId)) {
+        result.add(g.id)
+        added = true
+      }
+    }
+  }
+  return Array.from(result)
+}
 
 /** Stacked deck — only anchor visible, peek tabs behind, badge + controls */
-const StackedDeckCard: React.FC<{ deck: Deck; anchorGroup: ProjectGroup }> = ({ deck, anchorGroup }) => {
+const StackedDeckCard: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; isNested?: boolean }> = ({ deck, anchorGroup, isNested }) => {
   const pan = useCanvasStore(s => s.pan)
   const zoom = useCanvasStore(s => s.zoom)
   const boards = useBoardsStore(s => s.boards)
   const groups = useBoardsStore(s => s.groups)
+  const isSelected = useBoardsStore(s => s.selectedGroupIds.includes(anchorGroup.id))
   const [isHovered, setIsHovered] = useState(false)
 
   // Compute anchor card geometry — identical to GroupCard so it looks exactly the same
@@ -638,16 +687,35 @@ const StackedDeckCard: React.FC<{ deck: Deck; anchorGroup: ProjectGroup }> = ({ 
     if (e.button !== 0) return
     e.stopPropagation()
     e.preventDefault()
+
+    // Shift+click: toggle multi-selection, no drag
+    if (e.shiftKey) {
+      useBoardsStore.getState().toggleGroupSelection(anchorGroup.id)
+      return
+    }
+
+    const bs0 = useBoardsStore.getState()
+    const alreadySelected = bs0.selectedGroupIds.includes(anchorGroup.id)
+    if (!alreadySelected) {
+      bs0.setSelectedGroup(anchorGroup.id)
+    }
     useUndoCoordinator.getState().checkpoint()
+
+    // Collect all groups to drag: deck members + other selected groups
+    const otherSelected = alreadySelected
+      ? bs0.selectedGroupIds.filter(id => !deck.memberIds.includes(id))
+      : []
 
     let lastX = e.clientX
     let lastY = e.clientY
     let dyAccum = 0
     let dxAccum = 0
 
-    const bs0 = useBoardsStore.getState()
+    // Expand to include nested sub-deck members (hidden groups anchored to any member)
+    const allDragIds = expandWithNestedMembers([...deck.memberIds, ...otherSelected], bs0.groups)
+
     const initialOrigins = new Map<string, { x: number; y: number }>()
-    for (const gid of deck.memberIds) {
+    for (const gid of allDragIds) {
       const g = bs0.groups.find(gr => gr.id === gid)
       if (g) initialOrigins.set(gid, { x: g.originX, y: g.originY })
     }
@@ -658,12 +726,12 @@ const StackedDeckCard: React.FC<{ deck: Deck; anchorGroup: ProjectGroup }> = ({ 
       ? groupSlot(deck.anchorGroupId, anchorGroup.boardIds, bs0.boards, anchorOrigin.x, anchorOrigin.y, anchorLayout)
       : null
 
-    const deckSet = new Set(deck.memberIds)
+    const draggingSet = new Set(allDragIds)
     const zly = useCanvasStore.getState().zoneLineY
     const inTimeline = (anchorOrigin?.y ?? 0) >= zly
     const obstacles = inTimeline
       ? bs0.groups
-          .filter(g => !deckSet.has(g.id) && g.originY >= zly)
+          .filter(g => !draggingSet.has(g.id) && g.originY >= zly && !isHiddenDeckMember(g))
           .map(g => groupSlot(g.id, g.boardIds, bs0.boards, g.originX, g.originY, computeGroupLayout(g.boardIds, bs0.boards)))
           .filter(Boolean) as import('../../utils/nlePush').GroupSlot[]
       : []
@@ -704,7 +772,7 @@ const StackedDeckCard: React.FC<{ deck: Deck; anchorGroup: ProjectGroup }> = ({ 
     }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
-  }, [deck.memberIds, deck.anchorGroupId, anchorGroup.boardIds])
+  }, [deck.memberIds, deck.anchorGroupId, anchorGroup.id, anchorGroup.boardIds])
 
   const heroImage = useMemo(() => {
     if (anchorGroup.cardHeroImage) return anchorGroup.cardHeroImage
@@ -719,67 +787,165 @@ const StackedDeckCard: React.FC<{ deck: Deck; anchorGroup: ProjectGroup }> = ({ 
     return null
   }, [anchorGroup, boards])
 
-  // Secondary cards: tucked behind primary, only a thin edge visible to the right
-  const EDGE_PEEK = 6 // px each secondary card edge peeks out to the right
+  // Stacked card outlines — right-side only, contained within the card's bounding box.
+  // The primary card is slightly narrower to make room for edge indicators.
+  const PEEK_RIGHT = 3  // px each edge step
+  const showCount  = Math.min(secondaryCards.length, 2)
+  const EDGE_RESERVE = showCount >= 1 ? PEEK_RIGHT * 4 + 6 : 0 // space reserved for edges on right
+  const cardWidth = screenWidth - EDGE_RESERVE // primary card is slimmer
+  const edgeBaseX = cardWidth - 1 // edges start at right edge of slimmed card
 
   return (
     <>
-      {/* Secondary card edges — thin slivers peeking right of primary to show it's a deck */}
-      {secondaryCards.map((sc, i) => {
-        const peekX = screenLeft + screenWidth + EDGE_PEEK * i
-        return (
-          <div
-            key={sc.group.id}
-            style={{
-              position: 'absolute',
-              left: peekX,
-              top: screenTop,
-              width: EDGE_PEEK,
-              height: screenHeight,
-              borderRadius: '0 4px 4px 0',
-              background: sc.group.color || '#5b8dd9',
-              borderRight: '1px solid rgba(255,255,255,0.15)',
-              borderTop: '1px solid rgba(255,255,255,0.10)',
-              borderBottom: '1px solid rgba(255,255,255,0.10)',
-              zIndex: 38 - i,
-              pointerEvents: 'none',
-            }}
-          />
-        )
-      })}
-      {/* Hover wrapper — covers card + controls area so hover persists while moving to buttons */}
+      {/* Hover wrapper — covers card + edges area (all within original bounding box) */}
       <div
+        data-group-card="true"
+        data-id={anchorGroup.id}
         style={{
           position: 'absolute',
           left: screenLeft,
           top: screenTop,
           width: screenWidth,
-          height: screenHeight + 30, // extra space for controls below
+          height: screenHeight,
           zIndex: 40,
           pointerEvents: 'all',
         }}
         onPointerEnter={() => setIsHovered(true)}
         onPointerLeave={() => setIsHovered(false)}
       >
-        {/* Primary card — front, identical to open state, defines deck shape */}
+        {/* Edge 1 — full-height right edge with top+bottom rounded corners */}
+        {showCount >= 1 && (
+          <div
+            key="stack-edge-0"
+            style={{
+              position: 'absolute',
+              left: edgeBaseX,
+              top: 0,
+              width: PEEK_RIGHT + 2,
+              height: screenHeight,
+              borderRadius: '0 8px 8px 0',
+              background: 'transparent',
+              borderTop: '2px solid rgba(120,170,255,0.6)',
+              borderRight: '2px solid rgba(120,170,255,0.6)',
+              borderBottom: '2px solid rgba(120,170,255,0.6)',
+              borderLeft: 'none',
+              zIndex: 37,
+              pointerEvents: 'none',
+            }}
+          />
+        )}
+        {/* Edge 2 — 94% height, centered */}
+        {showCount >= 2 && (
+          <div
+            key="stack-edge-1"
+            style={{
+              position: 'absolute',
+              left: edgeBaseX + PEEK_RIGHT + 1,
+              top: screenHeight * 0.03,
+              width: PEEK_RIGHT + 2,
+              height: screenHeight * 0.94,
+              borderRadius: '0 6px 6px 0',
+              background: 'transparent',
+              borderRight: '2px solid rgba(130,170,255,0.42)',
+              borderTop: 'none',
+              borderBottom: 'none',
+              borderLeft: 'none',
+              zIndex: 36,
+              pointerEvents: 'none',
+            }}
+          />
+        )}
+        {/* Edge 3 — 50% height, centered vertically */}
+        {showCount >= 2 && (
+          <div
+            key="stack-edge-2"
+            style={{
+              position: 'absolute',
+              left: edgeBaseX + PEEK_RIGHT * 2 + 2,
+              top: screenHeight * 0.25,
+              width: PEEK_RIGHT + 2,
+              height: screenHeight * 0.5,
+              borderRadius: 0,
+              background: 'transparent',
+              borderRight: '2px solid rgba(120,160,255,0.3)',
+              borderTop: 'none',
+              borderBottom: 'none',
+              borderLeft: 'none',
+              zIndex: 35,
+              pointerEvents: 'none',
+            }}
+          />
+        )}
+        {/* Edge 4 — 30% height, centered vertically */}
+        {showCount >= 2 && (
+          <div
+            key="stack-edge-3"
+            style={{
+              position: 'absolute',
+              left: edgeBaseX + PEEK_RIGHT * 3 + 3,
+              top: screenHeight * 0.35,
+              width: PEEK_RIGHT + 2,
+              height: screenHeight * 0.3,
+              borderRadius: 0,
+              background: 'transparent',
+              borderRight: '2px solid rgba(110,150,255,0.15)',
+              borderTop: 'none',
+              borderBottom: 'none',
+              borderLeft: 'none',
+              zIndex: 34,
+              pointerEvents: 'none',
+            }}
+          />
+        )}
+        {/* Invisible hit area covering edges — click to fan */}
+        {showCount >= 1 && (
+          <div
+            key="stack-hit-area"
+            style={{
+              position: 'absolute',
+              left: edgeBaseX,
+              top: 0,
+              width: EDGE_RESERVE + 4,
+              height: screenHeight,
+              zIndex: 45,
+              pointerEvents: 'all',
+              cursor: 'pointer',
+            }}
+            onClick={e => {
+              e.stopPropagation()
+              useUndoCoordinator.getState().checkpoint()
+              useBoardsStore.getState().setDeckState(deck.memberIds, 'fanned')
+            }}
+            onPointerDown={e => e.stopPropagation()}
+          />
+        )}
+        {/* Primary card — front, slightly narrower to fit edges within bounding box */}
         <div
           style={{
             position: 'absolute',
             left: 0,
             top: 0,
-            width: screenWidth,
+            width: cardWidth,
             height: screenHeight,
             borderRadius: 12,
             background: heroImage
               ? `linear-gradient(160deg, ${anchorGroup.color}cc 0%, ${anchorGroup.color}aa 100%)`
               : anchorGroup.color,
-            border: '2px solid rgba(180,210,255,0.5)',
-            boxShadow: '0 6px 32px rgba(0,0,0,0.5)',
+            border: isSelected ? '2px solid rgba(130,180,255,0.8)' : '1.5px solid rgba(255,255,255,0.25)',
+            boxShadow: isSelected ? '0 0 0 2px rgba(100,160,255,0.25), 0 6px 32px rgba(0,0,0,0.5)' : '0 6px 32px rgba(0,0,0,0.5)',
             overflow: 'hidden',
             cursor: 'grab',
             userSelect: 'none',
           }}
           onPointerDown={onDeckDown}
+          onDoubleClick={e => {
+            e.stopPropagation()
+            useUndoCoordinator.getState().checkpoint()
+            // Sub-decks that are currently nested inside a parent cluster → fan.
+            // Standalone decks (or sub-decks dragged out) → open.
+            const isSubDeck = !!anchorGroup.nestedDeck && !!isNested
+            useBoardsStore.getState().setDeckState(deck.memberIds, isSubDeck ? 'fanned' : 'open')
+          }}
         >
           {heroImage && (
             <div style={{
@@ -807,124 +973,154 @@ const StackedDeckCard: React.FC<{ deck: Deck; anchorGroup: ProjectGroup }> = ({ 
             </div>
           )}
         </div>
-        {/* Fan/Open controls — shown on hover, below primary */}
-        {isHovered && (
-          <div style={{
-            position: 'absolute',
-            left: '50%',
-            top: screenHeight + 4,
-            transform: 'translateX(-50%)',
-            display: 'flex', gap: 4,
-            zIndex: 60,
-          }}>
-            {(['Fan', 'Open'] as const).map(label => (
-              <button
-                key={label}
-                style={{
-                  background: 'rgba(30,31,48,0.95)', color: '#e2e8f0',
-                  border: '1px solid rgba(255,255,255,0.15)', borderRadius: 6,
-                  padding: '3px 8px', fontSize: 10, fontWeight: 600,
-                  cursor: 'pointer', boxShadow: '0 2px 8px rgba(0,0,0,0.5)',
-                }}
-                onClick={e => {
-                  e.stopPropagation()
-                  useUndoCoordinator.getState().checkpoint()
-                  if (label === 'Fan') useBoardsStore.getState().setDeckState(deck.memberIds, 'fanned')
-                  else useBoardsStore.getState().setDeckState(deck.memberIds, 'open')
-                }}
-                onPointerDown={e => e.stopPropagation()}
-              >{label}</button>
-            ))}
-          </div>
-        )}
       </div>
     </>
   )
 }
 
-/** Fanned deck — cards spread with overlap from anchor position */
+/** Fanned deck — primary card unchanged, secondary cards as ~40px strips peeking right.
+ *  Hover a strip to surface that card fully; mouse away to slide it back. */
 const FannedDeckOverlay: React.FC<{ deck: Deck; groups: ProjectGroup[] }> = ({ deck, groups }) => {
   const pan = useCanvasStore(s => s.pan)
   const zoom = useCanvasStore(s => s.zoom)
   const boards = useBoardsStore(s => s.boards)
-  const [frontId, setFrontId] = useState<string | null>(null)
+  const allGroups = useBoardsStore(s => s.groups)
+  const isSelected = useBoardsStore(s => s.selectedGroupIds.includes(deck.anchorGroupId))
+  const [isHovered, setIsHovered] = useState(false)
+  const [surfacedId, setSurfacedId] = useState<string | null>(null)
 
-  const anchorRect = deck.rects.get(deck.anchorGroupId)
-  if (!anchorRect) return null
+  const anchorGroup = groups.find(g => g.id === deck.anchorGroupId)
+  if (!anchorGroup) return null
 
-  const anchorScreenLeft = pan.x + anchorRect.left * zoom
-  const anchorScreenTop = pan.y + anchorRect.top * zoom
-  const cardW = (anchorRect.right - anchorRect.left) * zoom
-  const cardH = (anchorRect.bottom - anchorRect.top) * zoom
-  const fanOffset = cardW * 0.35 // 35% overlap
+  // Compute primary card geometry — identical to GroupCard / StackedDeckCard
+  const { screenLeft, screenTop, screenWidth, screenHeight } = useMemo(() => {
+    const groupLayout = computeGroupLayout(anchorGroup.boardIds, boards)
+    let globalMinX = Infinity, globalMaxX = -Infinity, topY = Infinity, bottomY = -Infinity
 
-  // Drag single card out of fan
-  const onFannedCardDown = useCallback((e: React.PointerEvent, groupId: string, index: number) => {
-    if (e.button !== 0) return
-    e.stopPropagation()
-    e.preventDefault()
+    anchorGroup.boardIds.forEach(bid => {
+      const board = boards[bid]
+      if (!board) return
+      const bScale = board.boardScale ?? 1
+      const rootBars = board.rootIds.map(rid => board.bars[rid]).filter(Boolean)
+      if (rootBars.length === 0) return
+      const bx = anchorGroup.originX + (board.nleX ?? 0)
+      const localRow = board.nleRow ?? 0
+      const by = anchorGroup.originY + getRowY(localRow, groupLayout)
+      const rowH = getRowHeight(localRow, groupLayout)
+      const contentH = boardContentHeight(board.bars, board.rootIds, bScale)
+      const visualH = Math.max(rowH, contentH)
+      const minX = Math.min(...rootBars.map(b => b.x))
+      const maxX = Math.max(...rootBars.map(b => b.x + b.width))
+      const left = bx + BOARD_PADDING_X + minX * bScale
+      const right = bx + BOARD_PADDING_X + maxX * bScale
+      if (left < globalMinX) globalMinX = left
+      if (right > globalMaxX) globalMaxX = right
+      if (by < topY) topY = by
+      if (by + visualH > bottomY) bottomY = by + visualH
+    })
 
-    const startX = e.clientX
-    const startY = e.clientY
-    let dragged = false
+    if (globalMinX === Infinity) return { screenLeft: 0, screenTop: 0, screenWidth: 0, screenHeight: 0 }
+    globalMinX -= 16; globalMaxX += 16
+    const cW = globalMaxX - globalMinX, cH = bottomY - topY
+    const finalW = Math.max(cW, anchorGroup.cardWidthOverride ?? 0)
+    const finalH = Math.max(cH, anchorGroup.cardHeightOverride ?? 0)
+    return {
+      screenLeft: pan.x + globalMinX * zoom,
+      screenTop: pan.y + topY * zoom,
+      screenWidth: finalW * zoom,
+      screenHeight: finalH * zoom,
+    }
+  }, [anchorGroup, boards, pan, zoom])
 
-    const onMove = (ev: PointerEvent) => {
-      const dist = Math.abs(ev.clientX - startX) + Math.abs(ev.clientY - startY)
-      if (dist > 30 && !dragged) {
-        dragged = true
-        // Pull card out — set it to 'open', rest stay fanned
-        useUndoCoordinator.getState().checkpoint()
-        useBoardsStore.getState().setDeckState([groupId], 'open')
-      }
-      if (dragged) {
-        // Move the now-open card
-        const z = useCanvasStore.getState().zoom
-        const g = useBoardsStore.getState().groups.find(gr => gr.id === groupId)
-        if (g) {
-          const dx = (ev.clientX - startX) / z
-          const dy = (ev.clientY - startY) / z
-          // Don't accumulate — use offset from start
-          const rect = deck.rects.get(groupId)
-          if (rect) {
-            useBoardsStore.getState().setGroupPos(groupId, g.originY + dy * 0.05, g.originX + dx * 0.05)
-          }
-        }
+  if (screenWidth === 0) return null
+
+  // Secondary groups (non-anchor members)
+  const secondaryCards = useMemo(() => {
+    return deck.memberIds
+      .filter(id => id !== anchorGroup.id)
+      .map(id => {
+        const g = groups.find(gr => gr.id === id)
+        if (!g) return null
+        return g
+      })
+      .filter(Boolean) as ProjectGroup[]
+  }, [deck.memberIds, anchorGroup.id, groups])
+
+  const FAN_STRIP_WIDTH = 40 // px visible per secondary card strip
+  const totalFanWidth = screenWidth + secondaryCards.length * FAN_STRIP_WIDTH
+
+  // Hero image for anchor
+  const heroImage = (() => {
+    if (anchorGroup.cardHeroImage) return anchorGroup.cardHeroImage
+    for (const bid of anchorGroup.boardIds) {
+      const board = boards[bid]
+      if (!board) continue
+      for (const rid of board.rootIds) {
+        const img = getFirstImageUrl(board.bars[rid]?.content)
+        if (img) return img
       }
     }
-    const onUp = () => {
-      window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup', onUp)
-      if (!dragged) {
-        // Just a click — bring to front
-        setFrontId(prev => prev === groupId ? null : groupId)
-      }
-    }
-    window.addEventListener('pointermove', onMove)
-    window.addEventListener('pointerup', onUp)
-  }, [deck])
+    return null
+  })()
 
-  // Drag entire fan
+  // Drag entire fan — move all members together. Click (no drag) → stack.
   const onFanDragDown = useCallback((e: React.PointerEvent) => {
     if (e.button !== 0) return
     e.stopPropagation()
     e.preventDefault()
+
+    // Shift+click: toggle multi-selection, no drag
+    if (e.shiftKey) {
+      useBoardsStore.getState().toggleGroupSelection(anchorGroup.id)
+      return
+    }
+
+    const bs0 = useBoardsStore.getState()
+    const alreadySelected = bs0.selectedGroupIds.includes(anchorGroup.id)
+    if (!alreadySelected) {
+      bs0.setSelectedGroup(anchorGroup.id)
+    }
     useUndoCoordinator.getState().checkpoint()
 
+    // Other selected groups not in this deck
+    const otherSelected = alreadySelected
+      ? bs0.selectedGroupIds.filter(id => !deck.memberIds.includes(id))
+      : []
+
+    const fanStartX = e.clientX
+    const fanStartY = e.clientY
     let lastX = e.clientX
     let lastY = e.clientY
     let dyAccum = 0
     let dxAccum = 0
+    let fanMoved = false
 
-    // Snapshot initial origins
-    const bs0 = useBoardsStore.getState()
+    // Expand to include nested sub-deck members
+    const allDragIds = expandWithNestedMembers([...deck.memberIds, ...otherSelected], bs0.groups)
+
     const initialOrigins = new Map<string, { x: number; y: number }>()
-    for (const gid of deck.memberIds) {
+    for (const gid of allDragIds) {
       const g = bs0.groups.find(gr => gr.id === gid)
       if (g) initialOrigins.set(gid, { x: g.originX, y: g.originY })
     }
     const anchorOrigin = initialOrigins.get(deck.anchorGroupId)
 
+    const zly = useCanvasStore.getState().zoneLineY
+    const inTimeline = (anchorOrigin?.y ?? 0) >= zly
+    const draggingSet = new Set(allDragIds)
+    const anchorLayout = computeGroupLayout(anchorGroup.boardIds, bs0.boards)
+    const mySlot = anchorOrigin
+      ? groupSlot(deck.anchorGroupId, anchorGroup.boardIds, bs0.boards, anchorOrigin.x, anchorOrigin.y, anchorLayout)
+      : null
+    const obstacles = inTimeline
+      ? bs0.groups
+          .filter(g => !draggingSet.has(g.id) && g.originY >= zly && !isHiddenDeckMember(g))
+          .map(g => groupSlot(g.id, g.boardIds, bs0.boards, g.originX, g.originY, computeGroupLayout(g.boardIds, bs0.boards)))
+          .filter(Boolean) as import('../../utils/nlePush').GroupSlot[]
+      : []
+
     const onMove = (ev: PointerEvent) => {
+      if (!fanMoved && Math.abs(ev.clientX - fanStartX) + Math.abs(ev.clientY - fanStartY) > 5) fanMoved = true
       const z = useCanvasStore.getState().zoom
       const dx = (ev.clientX - lastX) / z
       const dy = (ev.clientY - lastY) / z
@@ -934,10 +1130,21 @@ const FannedDeckOverlay: React.FC<{ deck: Deck; groups: ProjectGroup[] }> = ({ d
       dxAccum += dx
 
       const anchorInitY = anchorOrigin?.y ?? 0
+      const anchorInitX = anchorOrigin?.x ?? 0
       const rawY = anchorInitY + dyAccum
       const { y: snapY, snapped } = snapToCardGrid(rawY, CARD_GRID_SPACING, 80)
-      const finalDy = (snapped ? snapY : rawY) - anchorInitY
-      const finalDx = dxAccum
+      const preClampY = snapped ? snapY : rawY
+      const preClampX = anchorInitX + dxAccum
+
+      let finalDx: number, finalDy: number
+      if (mySlot && obstacles.length > 0) {
+        const { dx: cdx, dy: cdy } = clampGroupMove(mySlot, preClampX - anchorInitX, preClampY - anchorInitY, obstacles)
+        finalDx = cdx
+        finalDy = cdy
+      } else {
+        finalDx = preClampX - anchorInitX
+        finalDy = preClampY - anchorInitY
+      }
 
       for (const [gid, origin] of initialOrigins) {
         useBoardsStore.getState().setGroupPos(gid, origin.y + finalDy, origin.x + finalDx)
@@ -946,27 +1153,93 @@ const FannedDeckOverlay: React.FC<{ deck: Deck; groups: ProjectGroup[] }> = ({ d
     const onUp = () => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
+      if (!fanMoved) {
+        useBoardsStore.getState().setDeckState(deck.memberIds, 'stacked')
+      }
     }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
-  }, [deck.memberIds])
+  }, [deck.memberIds, deck.anchorGroupId, anchorGroup.id, anchorGroup.boardIds])
 
-  // Reorder: front card first
-  const orderedIds = useMemo(() => {
-    if (!frontId || !deck.memberIds.includes(frontId)) return deck.memberIds
-    return [...deck.memberIds.filter(id => id !== frontId), frontId]
-  }, [deck.memberIds, frontId])
+  // Drag a single card out of the fan (30px threshold to pull out)
+  const onStripDown = useCallback((e: React.PointerEvent, groupId: string) => {
+    if (e.button !== 0) return
+    e.stopPropagation()
+    e.preventDefault()
+
+    const startX = e.clientX
+    const startY = e.clientY
+    const bs0 = useBoardsStore.getState()
+    const g0 = bs0.groups.find(gr => gr.id === groupId)
+    const initX = g0?.originX ?? 0
+    const initY = g0?.originY ?? 0
+    let dragged = false
+
+    const onMove = (ev: PointerEvent) => {
+      const dist = Math.abs(ev.clientX - startX) + Math.abs(ev.clientY - startY)
+      if (dist > 30 && !dragged) {
+        dragged = true
+        useUndoCoordinator.getState().checkpoint()
+        useBoardsStore.getState().setDeckState([groupId], 'open')
+      }
+      if (dragged) {
+        const z = useCanvasStore.getState().zoom
+        const dx = (ev.clientX - startX) / z
+        const dy = (ev.clientY - startY) / z
+        useBoardsStore.getState().setGroupPos(groupId, initY + dy, initX + dx)
+      }
+    }
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }, [])
+
+  // When a secondary card is surfaced, render it full-size on top
+  const surfacedGroup = surfacedId ? groups.find(g => g.id === surfacedId) : null
+  const surfacedHero = useMemo(() => {
+    if (!surfacedGroup) return null
+    if (surfacedGroup.cardHeroImage) return surfacedGroup.cardHeroImage
+    for (const bid of surfacedGroup.boardIds) {
+      const board = boards[bid]
+      if (!board) continue
+      for (const rid of board.rootIds) {
+        const img = getFirstImageUrl(board.bars[rid]?.content)
+        if (img) return img
+      }
+    }
+    return null
+  }, [surfacedGroup, boards])
 
   return (
-    <>
-      {orderedIds.map((gid, renderIdx) => {
-        const memberIndex = deck.memberIds.indexOf(gid)
-        const g = groups.find(gr => gr.id === gid)
-        if (!g) return null
+    /* Single hover wrapper — covers primary card + strips + controls area.
+       Everything is inside so z-index stacking and pointer events work correctly.
+       Fanned decks render above other cards (z-index 50) so strips aren't blocked. */
+    <div
+      data-group-card="true"
+      data-id={anchorGroup.id}
+      style={{
+        position: 'absolute',
+        left: screenLeft,
+        top: screenTop,
+        width: totalFanWidth,
+        height: screenHeight,
+        zIndex: 50,
+        pointerEvents: 'all',
+      }}
+      onPointerEnter={() => setIsHovered(true)}
+      onPointerLeave={() => { setIsHovered(false); setSurfacedId(null) }}
+    >
+      {/* Secondary card strips — 40px each, peeking right of primary */}
+      {secondaryCards.map((sc, i) => {
+        const stripX = screenWidth + FAN_STRIP_WIDTH * i
+        const isSurfaced = sc.id === surfacedId
 
-        const heroImage = (() => {
-          if (g.cardHeroImage) return g.cardHeroImage
-          for (const bid of g.boardIds) {
+        const scHero = (() => {
+          if (sc.cardHeroImage) return sc.cardHeroImage
+          for (const bid of sc.boardIds) {
             const board = boards[bid]
             if (!board) continue
             for (const rid of board.rootIds) {
@@ -977,81 +1250,221 @@ const FannedDeckOverlay: React.FC<{ deck: Deck; groups: ProjectGroup[] }> = ({ d
           return null
         })()
 
-        const isFront = gid === frontId
-        const left = anchorScreenLeft + memberIndex * fanOffset
-        const top = anchorScreenTop
+        const isSubDeck = isSubDeckAnchor(sc.id, allGroups)
 
         return (
           <div
-            key={gid}
+            key={sc.id}
             style={{
               position: 'absolute',
-              left, top,
-              width: cardW, height: cardH,
-              borderRadius: 12,
-              background: heroImage
-                ? `linear-gradient(160deg, ${g.color}cc 0%, ${g.color}aa 100%)`
-                : g.color,
-              border: isFront ? '2px solid rgba(180,210,255,0.7)' : '1.5px solid rgba(255,255,255,0.2)',
-              boxShadow: isFront ? '0 8px 32px rgba(0,0,0,0.6)' : '0 4px 16px rgba(0,0,0,0.4)',
-              overflow: 'hidden',
-              zIndex: 38 + renderIdx,
+              left: stripX,
+              top: 0,
+              width: FAN_STRIP_WIDTH,
+              height: screenHeight,
+              borderRadius: '0 8px 8px 0',
+              background: scHero
+                ? `linear-gradient(160deg, ${sc.color}cc 0%, ${sc.color}aa 100%)`
+                : sc.color || '#5b8dd9',
+              borderRight: '1px solid rgba(255,255,255,0.2)',
+              borderTop: '1px solid rgba(255,255,255,0.12)',
+              borderBottom: '1px solid rgba(255,255,255,0.12)',
+              overflow: 'visible',
+              zIndex: 2 + secondaryCards.length - i, // behind primary but ordered among strips
               cursor: 'pointer',
               userSelect: 'none',
               pointerEvents: 'all',
-              transition: 'box-shadow 0.15s, border 0.15s',
+              transition: 'opacity 0.15s',
+              opacity: isSurfaced ? 0.4 : 1,
             }}
-            onPointerDown={e => onFannedCardDown(e, gid, memberIndex)}
+            onPointerEnter={() => setSurfacedId(sc.id)}
+            onPointerLeave={() => setSurfacedId(prev => prev === sc.id ? null : prev)}
+            onPointerDown={e => onStripDown(e, sc.id)}
           >
-            {heroImage && (
+            {scHero && (
               <div style={{
                 position: 'absolute', inset: 0,
-                backgroundImage: `url(${heroImage})`,
-                backgroundSize: 'cover', backgroundPosition: 'center',
-                opacity: 0.7, borderRadius: 12,
+                backgroundImage: `url(${scHero})`,
+                backgroundSize: 'cover',
+                backgroundPosition: 'center',
+                opacity: 0.7,
+                borderRadius: '0 8px 8px 0',
               }} />
             )}
+            {/* Vertical name label along the strip */}
             <div style={{
-              position: 'absolute', bottom: 6, left: 8, right: 8, zIndex: 2,
-              color: 'rgba(255,255,255,0.85)', fontSize: 11, fontWeight: 600,
-              textShadow: '0 1px 4px rgba(0,0,0,0.8)',
+              position: 'absolute', top: 8, left: 4, right: 4, bottom: 8,
+              writingMode: 'vertical-rl', textOrientation: 'mixed',
+              color: 'rgba(255,255,255,0.85)', fontSize: 10, fontWeight: 600,
+              textShadow: '0 1px 3px rgba(0,0,0,0.8)',
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              display: 'flex', alignItems: 'center', justifyContent: 'flex-start',
             }}>
-              {g.name}
+              {sc.name}
             </div>
+            {/* Sub-deck indicator — horizontal tab above the strip with tapering edges */}
+            {isSubDeck && (
+              <div style={{
+                position: 'absolute',
+                left: 0, bottom: '100%',
+                width: FAN_STRIP_WIDTH,
+                height: 18,
+                pointerEvents: 'none',
+              }}>
+                {/* Edge 1: full width, bright, rounded top */}
+                <div style={{
+                  position: 'absolute',
+                  left: 0, bottom: 0,
+                  width: '100%', height: 5,
+                  borderTop: '2px solid rgba(120,170,255,0.6)',
+                  borderLeft: '2px solid rgba(120,170,255,0.6)',
+                  borderRight: '2px solid rgba(120,170,255,0.6)',
+                  borderRadius: '6px 6px 0 0',
+                }} />
+                {/* Edge 2: 80% width centered, medium */}
+                <div style={{
+                  position: 'absolute',
+                  left: '10%', bottom: 5,
+                  width: '80%', height: 4,
+                  borderTop: '2px solid rgba(130,170,255,0.42)',
+                  borderRadius: '4px 4px 0 0',
+                }} />
+                {/* Edge 3: 50% width centered, faint */}
+                <div style={{
+                  position: 'absolute',
+                  left: '25%', bottom: 9,
+                  width: '50%', height: 4,
+                  borderTop: '1.5px solid rgba(120,160,255,0.25)',
+                  borderRadius: '3px 3px 0 0',
+                }} />
+                {/* Edge 4: 30% width centered, very faint */}
+                <div style={{
+                  position: 'absolute',
+                  left: '35%', bottom: 13,
+                  width: '30%', height: 4,
+                  borderTop: '1.5px solid rgba(110,150,255,0.15)',
+                  borderRadius: '2px 2px 0 0',
+                }} />
+              </div>
+            )}
           </div>
         )
       })}
-      {/* Fan drag handle — bottom bar */}
+
+      {/* Surfaced card — full-size overlay when hovering a strip.
+           Shows the card's own hero image + header/body text (GroupCardText),
+           plus the card title at the bottom — same as how primary card renders. */}
+      {surfacedGroup && (
+        <div
+          style={{
+            position: 'absolute',
+            left: 0,
+            top: 0,
+            width: screenWidth,
+            height: screenHeight,
+            borderRadius: 12,
+            background: surfacedHero
+              ? `linear-gradient(160deg, ${surfacedGroup.color}cc 0%, ${surfacedGroup.color}aa 100%)`
+              : surfacedGroup.color,
+            border: '2px solid rgba(180,210,255,0.7)',
+            boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
+            overflow: 'hidden',
+            zIndex: 20,
+            pointerEvents: 'none',
+            transition: 'opacity 0.12s ease-in',
+          }}
+        >
+          {surfacedHero && (
+            <div style={{
+              position: 'absolute', inset: 0,
+              backgroundImage: `url(${surfacedHero})`,
+              backgroundSize: 'cover', backgroundPosition: 'center',
+              opacity: 0.7, borderRadius: 12,
+            }} />
+          )}
+          {/* Card's own header/body text — same component as the normal card */}
+          <GroupCardText groupId={surfacedGroup.id} />
+          <div style={{
+            position: 'absolute', bottom: 6, left: 8, zIndex: 2,
+            color: 'rgba(255,255,255,0.7)', fontSize: 11, fontWeight: 600,
+            textShadow: '0 1px 4px rgba(0,0,0,0.8)',
+          }}>
+            {surfacedGroup.cardSummary || surfacedGroup.name}
+          </div>
+          {/* Sub-deck indicator — stacked edges on surfaced card */}
+          {isSubDeckAnchor(surfacedGroup.id, allGroups) && (
+            <>
+              <div style={{
+                position: 'absolute',
+                right: -5, top: 0, width: 5, height: '100%',
+                borderTop: '2px solid rgba(120,170,255,0.6)',
+                borderRight: '2px solid rgba(120,170,255,0.6)',
+                borderBottom: '2px solid rgba(120,170,255,0.6)',
+                borderRadius: '0 8px 8px 0',
+                pointerEvents: 'none',
+                zIndex: 21,
+              }} />
+              <div style={{
+                position: 'absolute',
+                right: -9, top: '3%', width: 4, height: '94%',
+                borderRight: '2px solid rgba(130,170,255,0.42)',
+                borderRadius: '0 6px 6px 0',
+                pointerEvents: 'none',
+                zIndex: 21,
+              }} />
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Primary card — front, identical to open state */}
       <div
         style={{
           position: 'absolute',
-          left: anchorScreenLeft,
-          top: anchorScreenTop + cardH + 2,
-          width: cardW + (deck.memberIds.length - 1) * fanOffset,
-          height: 4,
-          background: 'rgba(130,180,255,0.3)',
-          borderRadius: 2,
+          left: 0,
+          top: 0,
+          width: screenWidth,
+          height: screenHeight,
+          borderRadius: 12,
+          background: heroImage
+            ? `linear-gradient(160deg, ${anchorGroup.color}cc 0%, ${anchorGroup.color}aa 100%)`
+            : anchorGroup.color,
+          border: isSelected ? '2px solid rgba(130,180,255,0.8)' : '1.5px solid rgba(255,255,255,0.25)',
+          boxShadow: isSelected ? '0 0 0 2px rgba(100,160,255,0.25), 0 6px 32px rgba(0,0,0,0.5)' : '0 6px 32px rgba(0,0,0,0.5)',
+          overflow: 'hidden',
           cursor: 'grab',
-          zIndex: 50,
-          pointerEvents: 'all',
+          userSelect: 'none',
+          zIndex: surfacedId ? 5 : 10, // drop below surfaced card when one is active
         }}
         onPointerDown={onFanDragDown}
-      />
-      <DeckControls
-        left={anchorScreenLeft + (cardW + (deck.memberIds.length - 1) * fanOffset) / 2}
-        top={anchorScreenTop + cardH + 10}
-        onStack={() => {
-          useUndoCoordinator.getState().checkpoint()
-          useBoardsStore.getState().setDeckState(deck.memberIds, 'stacked')
-        }}
-        onOpen={() => {
-          useUndoCoordinator.getState().checkpoint()
-          useBoardsStore.getState().setDeckState(deck.memberIds, 'open')
-        }}
-        mode="fanned"
-      />
-    </>
+      >
+        {heroImage && (
+          <div style={{
+            position: 'absolute', inset: 0,
+            backgroundImage: `url(${heroImage})`,
+            backgroundSize: 'cover', backgroundPosition: 'center',
+            opacity: 0.7, borderRadius: 12,
+          }} />
+        )}
+        <GroupCardText groupId={anchorGroup.id} />
+        <div style={{
+          position: 'absolute', bottom: 6, left: 8, zIndex: 2,
+          color: 'rgba(255,255,255,0.7)', fontSize: 11, fontWeight: 600,
+          textShadow: '0 1px 4px rgba(0,0,0,0.8)',
+        }}>
+          {anchorGroup.cardSummary || anchorGroup.name}
+        </div>
+        {/* Badge */}
+        {isHovered && (
+          <div style={{
+            position: 'absolute', top: 6, right: 6, zIndex: 50,
+            display: 'flex', gap: 4,
+          }}>
+            <DeckBadge count={deck.memberIds.length} />
+          </div>
+        )}
+      </div>
+
+    </div>
   )
 }
 
@@ -1168,6 +1581,55 @@ const DeckAffordance: React.FC<{ cluster: string[] }> = ({ cluster }) => {
   const boards = useBoardsStore(s => s.boards)
   const [isHovered, setIsHovered] = useState(false)
 
+  // Drag all cluster members together
+  const onClusterDragDown = useCallback((e: React.PointerEvent) => {
+    if (e.button !== 0) return
+    e.stopPropagation()
+    e.preventDefault()
+    useUndoCoordinator.getState().checkpoint()
+
+    let lastX = e.clientX
+    let lastY = e.clientY
+    let dyAccum = 0
+    let dxAccum = 0
+
+    const bs0 = useBoardsStore.getState()
+    // Expand cluster to include hidden sub-deck members
+    const allDragIds = expandWithNestedMembers(cluster, bs0.groups)
+    const initialOrigins = new Map<string, { x: number; y: number }>()
+    for (const gid of allDragIds) {
+      const g = bs0.groups.find(gr => gr.id === gid)
+      if (g) initialOrigins.set(gid, { x: g.originX, y: g.originY })
+    }
+    const primaryOrigin = initialOrigins.get(cluster[0])
+
+    const onMove = (ev: PointerEvent) => {
+      const z = useCanvasStore.getState().zoom
+      const dx = (ev.clientX - lastX) / z
+      const dy = (ev.clientY - lastY) / z
+      lastX = ev.clientX
+      lastY = ev.clientY
+      dyAccum += dy
+      dxAccum += dx
+
+      const anchorInitY = primaryOrigin?.y ?? 0
+      const rawY = anchorInitY + dyAccum
+      const { y: snapY, snapped } = snapToCardGrid(rawY, CARD_GRID_SPACING, 80)
+      const finalDy = (snapped ? snapY : rawY) - anchorInitY
+      const finalDx = dxAccum
+
+      for (const [gid, origin] of initialOrigins) {
+        useBoardsStore.getState().setGroupPos(gid, origin.y + finalDy, origin.x + finalDx)
+      }
+    }
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }, [cluster])
+
   // Build screen rects using same geometry as GroupCard
   const memberRects = useMemo(() => {
     return cluster.map(gid => {
@@ -1191,44 +1653,20 @@ const DeckAffordance: React.FC<{ cluster: string[] }> = ({ cluster }) => {
           left: primary.screenLeft,
           top: primary.screenTop,
           width: primary.screenWidth,
-          height: primary.screenHeight + 34,
+          height: primary.screenHeight,
           zIndex: 41,
           pointerEvents: 'all',
-          cursor: 'default',
+          cursor: 'grab',
         }}
         onPointerEnter={() => setIsHovered(true)}
         onPointerLeave={() => setIsHovered(false)}
+        onPointerDown={onClusterDragDown}
+        onDoubleClick={e => {
+          e.stopPropagation()
+          useUndoCoordinator.getState().checkpoint()
+          useBoardsStore.getState().setDeckState(cluster, 'stacked')
+        }}
       >
-        {/* Stack/Fan buttons below the primary card — only on hover */}
-        {isHovered && (
-          <div style={{
-            position: 'absolute',
-            left: '50%',
-            top: primary.screenHeight + 4,
-            transform: 'translateX(-50%)',
-            display: 'flex', gap: 4,
-            zIndex: 60,
-          }}>
-            {(['Stack', 'Fan'] as const).map(label => (
-              <button
-                key={label}
-                style={{
-                  background: 'rgba(30,31,48,0.95)', color: '#e2e8f0',
-                  border: '1px solid rgba(255,255,255,0.15)', borderRadius: 6,
-                  padding: '3px 8px', fontSize: 10, fontWeight: 600,
-                  cursor: 'pointer', boxShadow: '0 2px 8px rgba(0,0,0,0.5)',
-                }}
-                onClick={e => {
-                  e.stopPropagation()
-                  useUndoCoordinator.getState().checkpoint()
-                  if (label === 'Stack') useBoardsStore.getState().setDeckState(cluster, 'stacked')
-                  else useBoardsStore.getState().setDeckState(cluster, 'fanned')
-                }}
-                onPointerDown={e => e.stopPropagation()}
-              >{label}</button>
-            ))}
-          </div>
-        )}
       </div>
       {/* Outline borders around all cluster members on hover — outside hover zone for correct positioning */}
       {isHovered && memberRects.map(r => (
@@ -1271,18 +1709,23 @@ const Overlay: React.FC = () => {
     return set
   }, [decks])
 
-  // Affordance clusters: touching clusters where at least one member is 'open'
+  // Affordance clusters: touching clusters where at least 2 eligible members exist
+  // (open cards or visible sub-deck anchors count as eligible)
   const affordanceClusters = useMemo(() => {
     return touchingClusters.filter(cluster => {
       // Skip if this cluster is fully handled by a deck
       const allInDeck = cluster.every(gid => renderedByDeck.has(gid))
       if (allInDeck) return false
-      // Show affordance if at least 2 open cards are touching
-      const openCount = cluster.filter(gid => {
+      // Show affordance if at least 2 eligible cards are touching
+      const eligibleCount = cluster.filter(gid => {
         const g = groups.find(gr => gr.id === gid)
-        return !g?.deckState || g.deckState === 'open'
+        if (!g) return false
+        const isOpen = !g.deckState || g.deckState === 'open'
+        // Visible sub-deck anchors are eligible for parent deck formation
+        const isVisibleSubAnchor = !isHiddenDeckMember(g) && isSubDeckAnchor(g.id, groups)
+        return isOpen || isVisibleSubAnchor
       }).length
-      return openCount >= 2
+      return eligibleCount >= 2
     })
   }, [touchingClusters, renderedByDeck, groups])
 
@@ -1299,10 +1742,14 @@ const Overlay: React.FC = () => {
 
         // If anchor of a stacked deck → render StackedDeckCard
         if (deck?.state === 'stacked' && deck.anchorGroupId === g.id) {
+          // isNested = this deck's anchor is in a touching cluster with cards outside the deck
+          const nested = touchingClusters.some(c =>
+            c.includes(g.id) && c.some(cid => !deck.memberIds.includes(cid))
+          )
           return (
             <Fragment key={g.id}>
               <NLETimelineHeader groupId={g.id} />
-              <StackedDeckCard deck={deck} anchorGroup={g} />
+              <StackedDeckCard deck={deck} anchorGroup={g} isNested={nested} />
             </Fragment>
           )
         }

@@ -44,6 +44,9 @@ export interface ProjectGroup {
   cardHeightOverride?: number  // user-set card height (screen px)
   deckState?: 'open' | 'fanned' | 'stacked'  // deck visual state (default: 'open')
   deckAnchorId?: string   // group ID of the deck anchor (leftmost card); set when deckState !== 'open'
+  nestedDeck?: boolean    // true if this group is a sub-deck anchor (persists through fan/stack cycles)
+  deckOffsetX?: number    // offset from OWN anchor at stacking time (for position restore on open)
+  deckOffsetY?: number
 }
 
 /** Find which group a board belongs to */
@@ -185,8 +188,11 @@ interface BoardsState {
   reassignBoard: (boardId: string, targetGroupId: string) => void
   moveToNewGroup: (boardId: string) => void
   duplicateGroup: (groupId: string) => string | null
-  selectedGroupId: string | null
+  selectedGroupIds: string[]
   setSelectedGroup: (groupId: string | null) => void
+  toggleGroupSelection: (groupId: string) => void
+  setSelectedGroups: (groupIds: string[]) => void
+  clearGroupSelection: () => void
 
   // ── Ungrouped board actions (free canvas) ──
   createUngroupedBoard: (canvasX: number, canvasY: number) => string
@@ -264,7 +270,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
   boards: { primary: PRIMARY_BOARD },
   boardOrder: [],
   groups: [DEFAULT_GROUP],
-  selectedGroupId: null,
+  selectedGroupIds: [],
 
   createBoard(nleRow, nleX) {
     const id = crypto.randomUUID()
@@ -695,7 +701,46 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
     const idSet = new Set(groupIds)
     // The first ID in the array is the anchor (leftmost card in the cluster)
     const anchorId = state === 'open' ? undefined : groupIds[0]
-    set(s => ({ groups: s.groups.map(g => idSet.has(g.id) ? { ...g, deckState: state, deckAnchorId: anchorId } : g) }))
+    set(s => {
+      // Detect sub-deck anchors: members whose ID is referenced by
+      // deckAnchorId of groups OUTSIDE this set (they anchor a nested sub-deck)
+      const subDeckAnchors = new Set<string>()
+      for (const g of s.groups) {
+        if (!idSet.has(g.id) && g.deckAnchorId && idSet.has(g.deckAnchorId)) {
+          subDeckAnchors.add(g.deckAnchorId)
+        }
+      }
+      // Find the anchor group for offset computation
+      const anchorGroup = anchorId ? s.groups.find(g => g.id === anchorId) : null
+      // For opening: the first ID is the anchor whose current position is the reference
+      const openAnchor = state === 'open' ? s.groups.find(g => g.id === groupIds[0]) : null
+
+      return {
+        groups: s.groups.map(g => {
+          if (!idSet.has(g.id)) return g
+          if (subDeckAnchors.has(g.id)) {
+            // Sub-deck anchor: only update parent membership, preserve sub-deck state
+            // Store offset from parent anchor for position restore
+            const offX = anchorGroup ? g.originX - anchorGroup.originX : g.deckOffsetX
+            const offY = anchorGroup ? g.originY - anchorGroup.originY : g.deckOffsetY
+            return { ...g, deckAnchorId: anchorId, nestedDeck: true, deckOffsetX: offX, deckOffsetY: offY }
+          }
+          if (state === 'open') {
+            // Restore position relative to anchor's current position
+            let ox = g.originX, oy = g.originY
+            if (openAnchor && g.deckOffsetX != null && g.deckOffsetY != null && g.id !== groupIds[0]) {
+              ox = openAnchor.originX + g.deckOffsetX
+              oy = openAnchor.originY + g.deckOffsetY
+            }
+            return { ...g, deckState: state, deckAnchorId: anchorId, nestedDeck: undefined, originX: ox, originY: oy, deckOffsetX: undefined, deckOffsetY: undefined }
+          }
+          // Stacking/fanning: store offset from anchor
+          const offX = anchorGroup ? g.originX - anchorGroup.originX : g.deckOffsetX
+          const offY = anchorGroup ? g.originY - anchorGroup.originY : g.deckOffsetY
+          return { ...g, deckState: state, deckAnchorId: anchorId, nestedDeck: g.nestedDeck, deckOffsetX: offX, deckOffsetY: offY }
+        })
+      }
+    })
   },
 
   setGroupPos(groupId, originY, originX) {
@@ -866,7 +911,19 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
   },
 
   setSelectedGroup(groupId) {
-    set({ selectedGroupId: groupId })
+    set({ selectedGroupIds: groupId ? [groupId] : [] })
+  },
+  toggleGroupSelection(groupId) {
+    set(s => {
+      const ids = s.selectedGroupIds
+      return { selectedGroupIds: ids.includes(groupId) ? ids.filter(id => id !== groupId) : [...ids, groupId] }
+    })
+  },
+  setSelectedGroups(groupIds) {
+    set({ selectedGroupIds: groupIds })
+  },
+  clearGroupSelection() {
+    set({ selectedGroupIds: [] })
   },
 }), {
   name: 'vidbars-boards',

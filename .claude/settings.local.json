@@ -31,7 +31,8 @@
       "Bash(npx rolldown:*)",
       "Read(//mnt/**)",
       "Read(//d//**)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ]
   }
 }

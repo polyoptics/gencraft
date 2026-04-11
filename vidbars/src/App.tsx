@@ -74,9 +74,9 @@ function useKeyboardCopyPaste() {
         const zoom = useCanvasStore.getState().zoom
         // Card-level copy: copy selected group
         if (zoom <= 0.18) {
-          const selectedGroupId = useBoardsStore.getState().selectedGroupId
-          if (selectedGroupId) {
-            clipboardGroupId = selectedGroupId
+          const selectedGroupIds = useBoardsStore.getState().selectedGroupIds
+          if (selectedGroupIds.length > 0) {
+            clipboardGroupId = selectedGroupIds[0]
             clipboard = null
           }
           return
