@@ -812,6 +812,16 @@ const StackedDeckCard: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; isNeste
         }}
         onPointerEnter={() => setIsHovered(true)}
         onPointerLeave={() => setIsHovered(false)}
+        onWheel={e => {
+          e.stopPropagation()
+          const f = e.deltaY < 0 ? 1.12 : 1 / 1.12
+          let container = (e.currentTarget as HTMLElement).parentElement
+          while (container && container.style.overflow !== 'hidden') container = container.parentElement
+          const rect = container?.getBoundingClientRect()
+          const mx = rect ? e.clientX - rect.left : e.clientX
+          const my = rect ? e.clientY - rect.top : e.clientY
+          useCanvasStore.getState().zoomAtPoint(f, mx, my)
+        }}
       >
         {/* Edge 1 — full-height right edge with top+bottom rounded corners */}
         {showCount >= 1 && (
@@ -1231,6 +1241,16 @@ const FannedDeckOverlay: React.FC<{ deck: Deck; groups: ProjectGroup[] }> = ({ d
       }}
       onPointerEnter={() => setIsHovered(true)}
       onPointerLeave={() => { setIsHovered(false); setSurfacedId(null) }}
+      onWheel={e => {
+        e.stopPropagation()
+        const f = e.deltaY < 0 ? 1.12 : 1 / 1.12
+        let container = (e.currentTarget as HTMLElement).parentElement
+        while (container && container.style.overflow !== 'hidden') container = container.parentElement
+        const rect = container?.getBoundingClientRect()
+        const mx = rect ? e.clientX - rect.left : e.clientX
+        const my = rect ? e.clientY - rect.top : e.clientY
+        useCanvasStore.getState().zoomAtPoint(f, mx, my)
+      }}
     >
       {/* Secondary card strips — 40px each, peeking right of primary */}
       {secondaryCards.map((sc, i) => {
@@ -1666,6 +1686,16 @@ const DeckAffordance: React.FC<{ cluster: string[] }> = ({ cluster }) => {
           useUndoCoordinator.getState().checkpoint()
           useBoardsStore.getState().setDeckState(cluster, 'stacked')
         }}
+        onWheel={e => {
+          e.stopPropagation()
+          const f = e.deltaY < 0 ? 1.12 : 1 / 1.12
+          let container = (e.currentTarget as HTMLElement).parentElement
+          while (container && container.style.overflow !== 'hidden') container = container.parentElement
+          const rect = container?.getBoundingClientRect()
+          const mx = rect ? e.clientX - rect.left : e.clientX
+          const my = rect ? e.clientY - rect.top : e.clientY
+          useCanvasStore.getState().zoomAtPoint(f, mx, my)
+        }}
       >
       </div>
       {/* Outline borders around all cluster members on hover — outside hover zone for correct positioning */}
@@ -1698,7 +1728,8 @@ const Overlay: React.FC = () => {
   const boards = useBoardsStore(s => s.boards)
   const zoneLineY = useCanvasStore(s => s.zoneLineY)
   const ungroupedIds = useMemo(() => getUngroupedBoardIds(groups, boards), [groups, boards])
-  const { decks, touchingClusters, getDeckForGroup } = useCardDecks(groups, boards, zoneLineY)
+  const zoom = useCanvasStore(s => s.zoom)
+  const { decks, touchingClusters, getDeckForGroup } = useCardDecks(groups, boards, zoneLineY, zoom)
 
   // Track which groups are rendered by decks so we skip them
   const renderedByDeck = useMemo(() => {

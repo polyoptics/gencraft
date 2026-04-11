@@ -3,8 +3,8 @@
 
 import { useMemo } from 'react'
 import type { ProjectGroup, BoardData } from '../store/boardsStore'
-import { groupSlot, type GroupSlot } from '../utils/nlePush'
-import { computeGroupLayout } from '../utils/nleRows'
+import { type GroupSlot } from '../utils/nlePush'
+import { computeGroupLayout, getRowY, getRowHeight, boardContentHeight } from '../utils/nleRows'
 
 /** Returns true if this group is a non-anchor member of a stacked/fanned deck (visually hidden). */
 export function isHiddenDeckMember(g: ProjectGroup): boolean {
@@ -64,18 +64,55 @@ export function useCardDecks(
   groups: ProjectGroup[],
   boards: Record<string, BoardData>,
   zoneLineY: number,
+  zoom: number,
 ): CardDeckInfo {
   return useMemo(() => {
     if (groups.length < 2) {
       return { decks: [], touchingClusters: [], getDeckForGroup: () => null }
     }
 
-    // 1. Build rects for all groups
+    // 1. Build rects for all groups — mirrors CardLayer's GroupCard geometry exactly.
+    // Uses boardContentHeight + Math.max(rowH, contentH) per board, matching the
+    // visual card size. Also accounts for cardWidthOverride/cardHeightOverride.
+    const BOARD_PADDING_X = 20
     const rects = new Map<string, GroupSlot>()
     for (const g of groups) {
       const layout = computeGroupLayout(g.boardIds, boards)
-      const slot = groupSlot(g.id, g.boardIds, boards, g.originX, g.originY, layout)
-      if (slot) rects.set(g.id, slot)
+      let left = Infinity, right = -Infinity, top = Infinity, bottom = -Infinity
+      g.boardIds.forEach(bid => {
+        const board = boards[bid]
+        if (!board) return
+        const bScale = board.boardScale ?? 1
+        const rootBars = board.rootIds.map((rid: string) => board.bars[rid]).filter(Boolean)
+        if (rootBars.length === 0) return
+        const bx = g.originX + (board.nleX ?? 0)
+        const localRow = board.nleRow ?? 0
+        const by = g.originY + getRowY(localRow, layout)
+        const rowH = getRowHeight(localRow, layout)
+        const contentH = boardContentHeight(board.bars, board.rootIds, bScale)
+        const visualH = Math.max(rowH, contentH)
+        const minX = Math.min(...rootBars.map((b: any) => b.x))
+        const maxX = Math.max(...rootBars.map((b: any) => b.x + b.width))
+        const l = bx + BOARD_PADDING_X + minX * bScale - 16
+        const r = bx + BOARD_PADDING_X + maxX * bScale + 16
+        if (l < left) left = l
+        if (r > right) right = r
+        if (by < top) top = by
+        if (by + visualH > bottom) bottom = by + visualH
+      })
+      if (left === Infinity) continue
+      const cW = right - left
+      const cH = bottom - top
+      // Apply manual card size overrides (canvas units)
+      const finalW = Math.max(cW, g.cardWidthOverride ?? 0)
+      const finalH = Math.max(cH, g.cardHeightOverride ?? 0)
+      rects.set(g.id, {
+        id: g.id,
+        left,
+        right: left + finalW,
+        top,
+        bottom: top + finalH,
+      })
     }
 
     // 2. Filter out hidden deck members from clustering — they're invisible and
@@ -232,7 +269,7 @@ export function useCardDecks(
       touchingClusters,
       getDeckForGroup: (gid: string) => groupToDeck.get(gid) ?? null,
     }
-  }, [groups, boards, zoneLineY])
+  }, [groups, boards, zoneLineY, zoom])
 }
 
 /**
