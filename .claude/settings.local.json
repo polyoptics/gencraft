@@ -32,7 +32,9 @@
       "Read(//mnt/**)",
       "Read(//d//**)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(git stash:*)",
+      "Bash(git checkout:*)"
     ]
   }
 }

@@ -6,13 +6,14 @@ import { useBoardsStore } from '../../store/boardsStore'
 import { useBoardCtx } from '../../contexts/BoardContext'
 import { ContextMenu } from '../Bar/ContextMenu'
 import { CircularColorPicker } from '../Bar/CircularColorPicker'
-import { ColorHoverWheel } from '../Bar/ColorHoverWheel'
+// ColorHoverWheel replaced by inline ear variants
 // transferBar removed — reparenting is done via port wires, not cross-board drag
 import { gripDragState } from '../../utils/gripDragState'
 import { wireDragState } from '../../utils/wireDragState'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { uploadFile } from '../../utils/uploadFile'
 import { getFirstImageUrl } from '../../types/bar'
+import { generateHoverVariants } from '../../utils/colorUtils'
 import { TextFormatToolbar, ensureFontLoaded, hexToRgba } from '../UI/TextFormatToolbar'
 import { DEFAULT_HEADER_STYLE, DEFAULT_BODY_STYLE } from '../../store/freeNodeStore'
 
@@ -532,17 +533,11 @@ export const NLEBlock: React.FC<Props> = ({ id, top, blockHeight, offsetX, rowTo
         onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setContextMenu({ x: e.clientX, y: e.clientY }) }}
         onDoubleClick={(e) => {
           if (dragHasMoved.current) return
-          // Double-click on name pill → rename; anywhere else in body → edit text
-          const onPill = (e.target as HTMLElement).closest('[data-name-pill]')
-          if (onPill) {
-            startRename()
-          } else {
-            e.stopPropagation()
-            setShowTextToolbar(true)
-            setIsEditingText(true)
-            setEditingTextField('header')
-            setActiveTextField('header')
-          }
+          e.stopPropagation()
+          setShowTextToolbar(true)
+          setIsEditingText(true)
+          setEditingTextField('header')
+          setActiveTextField('header')
         }}
         onDragOver={e => e.preventDefault()}
       >
@@ -702,131 +697,31 @@ export const NLEBlock: React.FC<Props> = ({ id, top, blockHeight, offsetX, rowTo
           })()}
         </div>
 
-        {/* ── Icon + name pill ── */}
-        <div
-          data-name-pill
-          style={{
-            position: 'absolute', top: 0, left: 0,
-            display: 'flex', alignItems: 'center',
-            background: 'rgba(0,0,0,0.35)',
-            backdropFilter: 'blur(8px)',
-            borderRadius: `${12 * iz}px 0 ${12 * iz}px 0`,
-            padding: compact
-              ? `${3 * iz}px ${8 * iz}px`
-              : medium
-                ? `${3 * iz}px ${9 * iz}px ${3 * iz}px ${3 * iz}px`
-                : `${3 * iz}px ${10 * iz}px ${3 * iz}px ${3 * iz}px`,
-            gap: compact ? 0 : 6 * iz,
-            maxWidth: `calc(100% - ${36 * iz}px)`,
-            zIndex: 10, cursor: 'text',
-          }}
-          onPointerDown={e => e.stopPropagation()}
-          onDoubleClick={e => { e.stopPropagation(); if (!isRenaming) startRename() }}
-        >
-          {iconSz > 0 && (
+        {/* ── Corner color ear (triangular, with color strip on card edges) ── */}
+        {(() => {
+          const earSz = 28
+          const stripW = 6   // width of the color strip border
+          const isEarActive = isHovered || showHoverWheel || showColorPicker || colorDragging
+          const isExpanded = showHoverWheel && !colorDragging && !showColorPicker
+          const { brighter1, brighter2, darker1, darker2 } = generateHoverVariants(bar.color)
+          // 4 colors along top edge + left edge (card border only, not hypotenuse)
+          // Top edge: right→left (brighter2, brighter1), Left edge: top→bottom (darker1, darker2)
+          const topLen = earSz
+          const leftLen = earSz
+          const totalLen = topLen + leftLen
+          const segLen = totalLen / 4
+          // L-shaped path: along top edge then down left edge
+          const sw2 = stripW / 2
+          const pathD = `M ${earSz},${-sw2} L ${-sw2},${-sw2} L ${-sw2},${earSz}`
+          const variants = [brighter2, brighter1, darker1, darker2]
+          return (
             <div
               ref={colorDotRef}
               style={{
-                position: 'relative',
-                width: (iconSz + 4) * iz, height: (iconSz + 4) * iz,
-                flexShrink: 0,
-              }}
-            >
-              <div style={{
-                position: 'absolute', left: 2 * iz, top: 2 * iz,
-                width: iconSz * iz, height: iconSz * iz, borderRadius: '50%',
-                background: bar.icon ? 'none' : bg,
-                border: `${1.5 * iz}px solid rgba(255,255,255,${colorDragging ? '0.6' : '0.25'})`,
-                boxShadow: colorDragging ? `0 0 ${8 * iz}px ${bg}` : 'none',
-                transition: 'border-color 0.1s, box-shadow 0.1s',
-                pointerEvents: 'none',
-                overflow: 'hidden',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-              }}>
-                {bar.icon
-                  ? <img src={bar.icon} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                  : null
-                }
-              </div>
-            </div>
-          )}
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 1 * iz, minWidth: 0, flex: 1 }}>
-            {isRenaming ? (
-              <input ref={nameRef} value={renameVal}
-                onChange={e => setRenameVal(e.target.value)}
-                onBlur={commitRename}
-                onKeyDown={e => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') setIsRenaming(false) }}
-                onClick={e => e.stopPropagation()}
-                style={{
-                  background: 'rgba(0,0,0,0.25)', border: 'none', borderBottom: `${Math.max(1, iz)}px solid rgba(255,255,255,0.4)`,
-                  borderRadius: 0, outline: 'none', color: '#fff',
-                  fontSize: (compact ? 10 : 12) * iz, fontWeight: 700, lineHeight: 1.2,
-                  padding: 0,
-                  fontFamily: 'inherit', width: '100%', minWidth: 40 * iz,
-                  boxSizing: 'border-box',
-                }}
-              />
-            ) : (
-              <span
-                style={{
-                  color: '#fff', fontSize: (compact ? 10 : 12) * iz, fontWeight: 700,
-                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                  textShadow: `0 ${iz}px ${3 * iz}px rgba(0,0,0,0.5)`, cursor: 'text',
-                }}
-              >{bar.name}</span>
-            )}
-
-            {!compact && !medium && (
-              isRenamingSubtitle ? (
-                <input ref={subtitleRef} value={subtitleVal}
-                  onChange={e => setSubtitleVal(e.target.value)}
-                  onBlur={commitSubtitle}
-                  onKeyDown={e => { if (e.key === 'Enter') commitSubtitle(); if (e.key === 'Escape') setIsRenamingSubtitle(false) }}
-                  onClick={e => e.stopPropagation()}
-                  placeholder="subtitle…"
-                  style={{
-                    background: 'rgba(0,0,0,0.25)', border: 'none', borderBottom: `${Math.max(1, iz)}px solid rgba(255,255,255,0.25)`,
-                    borderRadius: 0, outline: 'none', color: 'rgba(255,255,255,0.75)',
-                    fontSize: 10 * iz, lineHeight: 1.2, padding: 0,
-                    fontFamily: 'inherit', width: '100%', minWidth: 40 * iz,
-                    fontStyle: 'italic', boxSizing: 'border-box',
-                  }}
-                />
-              ) : (
-                <span
-                  style={{
-                    color: 'rgba(255,255,255,0.55)', fontSize: 10 * iz, fontStyle: 'italic',
-                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'text',
-                  }}
-                  onDoubleClick={e => { e.stopPropagation(); setSubtitleVal(bar.subtitle ?? ''); setIsRenamingSubtitle(true) }}
-                >{bar.subtitle || <span style={{ opacity: 0.4 }}>subtitle…</span>}</span>
-              )
-            )}
-          </div>
-        </div>
-
-        {/* ── Color dot hit zone (outside pill stacking context) ── */}
-        {iconSz > 0 && (() => {
-          const szIz = iconSz * iz  // scaled icon size
-          const dotR = szIz / 2
-          const wheelGap = 4 * iz
-          const wheelVarSz = Math.max(8 * iz, szIz * 0.45)
-          const wheelOffset = dotR + wheelGap + wheelVarSz / 2
-          const expandedSize = (wheelOffset + wheelVarSz / 2) * 2 + 4 * iz
-          const expandShift = (expandedSize - (szIz + 4 * iz)) / 2
-          const isExpanded = showHoverWheel && !colorDragging && !showColorPicker
-          return (
-            <div
-              style={{
-                position: 'absolute',
-                left: isExpanded ? 3 * iz - expandShift : 3 * iz,
-                top: isExpanded ? 3 * iz - expandShift : 3 * iz,
-                width: isExpanded ? expandedSize : szIz + 4 * iz,
-                height: isExpanded ? expandedSize : szIz + 4 * iz,
+                position: 'absolute', top: 0, left: 0,
+                width: earSz + stripW, height: earSz + stripW,
                 zIndex: 25,
-                cursor: colorDragging ? 'grabbing' : 'grab',
-                borderRadius: isExpanded ? 0 : '50%',
+                cursor: colorDragging ? 'grabbing' : 'pointer',
               }}
               onPointerDown={onColorDotDown}
               onClick={onColorDotClick}
@@ -841,23 +736,101 @@ export const NLEBlock: React.FC<Props> = ({ id, top, blockHeight, offsetX, rowTo
               }}
               title="Click to pick color · Drag to paint another bar"
             >
-              {isExpanded && (
-                <div style={{ position: 'absolute', left: expandShift, top: expandShift, width: szIz + 4 * iz, height: szIz + 4 * iz }}>
-                  <ColorHoverWheel
-                    color={bar.color}
-                    size={szIz}
-                    onSelect={c => {
-                      useUndoCoordinator.getState().checkpoint()
-                      const targets = isSelected && selectedIds.length > 1 ? selectedIds : [id]
-                      targets.forEach(tid => setColor(tid, c))
-                      setShowHoverWheel(false)
-                    }}
-                  />
-                </div>
-              )}
+              {/* Triangle ear fill — rounded top-left corner to match node */}
+              <div style={{
+                position: 'absolute', top: 0, left: 0,
+                width: earSz, height: earSz,
+                clipPath: 'polygon(12px 0, 100% 0, 0 100%, 0 12px)',
+                background: bg,
+                opacity: isEarActive ? 1 : 0.45,
+                transition: 'opacity 0.2s',
+                borderRadius: '12px 0 0 0',
+              }} />
+              {/* White edge highlight */}
+              <div style={{
+                position: 'absolute', top: 0, left: 0,
+                width: earSz, height: earSz,
+                clipPath: 'polygon(12px 0, 100% 0, 0 100%, 0 12px)',
+                background: 'linear-gradient(135deg, rgba(255,255,255,0.25) 0%, transparent 50%)',
+                opacity: isEarActive ? 1 : 0.5,
+                transition: 'opacity 0.2s',
+                pointerEvents: 'none',
+                borderRadius: '12px 0 0 0',
+              }} />
+              {/* Color strip — 4 equal-length segments along L-path (top edge → corner arc → left edge) */}
+              {isExpanded && (() => {
+                const r = 12 // corner radius matching node border-radius
+                const topStraight = earSz - r            // 16px
+                const arcLen = Math.PI / 2 * r            // ~18.85px
+                const leftStraight = earSz - r            // 16px
+                const totalLen = topStraight + arcLen + leftStraight // ~50.85px
+                const segLen = totalLen / 4
+                const colors = [brighter2, brighter1, darker1, darker2]
+                // SVG L-path: horizontal line right→left along top, arc at corner, vertical line down left edge
+                // Origin at (earSz, 0) in SVG coords, stroke centered on path
+                const svgW = earSz + stripW
+                const svgH = earSz + stripW
+                const pathD = `M ${earSz},${sw2} L ${r},${sw2} A ${r},${r} 0 0,0 ${sw2},${r} L ${sw2},${earSz}`
+                return (
+                  <svg
+                    style={{ position: 'absolute', top: -sw2, left: -sw2, overflow: 'visible', zIndex: 26 }}
+                    width={svgW} height={svgH}
+                  >
+                    {colors.map((c, i) => (
+                      <path
+                        key={i}
+                        d={pathD}
+                        fill="none"
+                        stroke={c}
+                        strokeWidth={stripW}
+                        strokeLinecap="butt"
+                        strokeDasharray={`${segLen} ${totalLen}`}
+                        strokeDashoffset={-i * segLen}
+                        style={{ cursor: 'pointer', filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.2))' }}
+                        onPointerDown={e => {
+                          e.stopPropagation(); e.preventDefault()
+                          useUndoCoordinator.getState().checkpoint()
+                          const targets = isSelected && selectedIds.length > 1 ? selectedIds : [id]
+                          targets.forEach(tid => setColor(tid, c))
+                          setShowHoverWheel(false)
+                        }}
+                        onMouseEnter={e => { e.currentTarget.style.filter = 'brightness(1.3) drop-shadow(0 1px 2px rgba(0,0,0,0.2))' }}
+                        onMouseLeave={e => { e.currentTarget.style.filter = 'drop-shadow(0 1px 2px rgba(0,0,0,0.2))' }}
+                      />
+                    ))}
+                  </svg>
+                )
+              })()}
             </div>
           )
         })()}
+
+        {/* ── Inline rename (shown on double-click or context menu) ── */}
+        {isRenaming && (
+          <div
+            style={{
+              position: 'absolute', top: 2, left: 32,
+              zIndex: 12, pointerEvents: 'auto',
+            }}
+            onPointerDown={e => e.stopPropagation()}
+          >
+            <input ref={nameRef} value={renameVal}
+              onChange={e => setRenameVal(e.target.value)}
+              onBlur={commitRename}
+              onKeyDown={e => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') setIsRenaming(false) }}
+              onClick={e => e.stopPropagation()}
+              style={{
+                background: 'rgba(0,0,0,0.6)', border: '1px solid rgba(100,160,255,0.5)',
+                borderRadius: 6, outline: 'none', color: '#fff',
+                fontSize: 12 * iz, fontWeight: 700, lineHeight: 1.2,
+                padding: `${2 * iz}px ${6 * iz}px`,
+                fontFamily: 'inherit', minWidth: 60 * iz,
+                boxSizing: 'border-box',
+                backdropFilter: 'blur(8px)',
+              }}
+            />
+          </div>
+        )}
 
         {/* ── Drag grip handle ── */}
         <div

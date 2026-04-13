@@ -82,9 +82,9 @@ const clamp = (v: number, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, v))
 export function generateHoverVariants(hex: string) {
   const { h, s, l } = hexToHsl(hex)
   return {
-    brighter1: hslToHex(h, clamp(s - 0.18), clamp(l + 0.14)),
-    brighter2: hslToHex(h, clamp(s - 0.32), clamp(l + 0.24)),
-    darker1:   hslToHex(h, clamp(s + 0.12), clamp(l - 0.14)),
-    darker2:   hslToHex(h, clamp(s + 0.22), clamp(l - 0.24)),
+    brighter1: hslToHex(h, clamp(s - 0.08), clamp(l + 0.08)),
+    brighter2: hslToHex(h, clamp(s - 0.14), clamp(l + 0.14)),
+    darker1:   hslToHex(h, clamp(s + 0.06), clamp(l - 0.08)),
+    darker2:   hslToHex(h, clamp(s + 0.10), clamp(l - 0.14)),
   }
 }

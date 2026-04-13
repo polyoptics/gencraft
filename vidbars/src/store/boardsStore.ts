@@ -47,6 +47,7 @@ export interface ProjectGroup {
   nestedDeck?: boolean    // true if this group is a sub-deck anchor (persists through fan/stack cycles)
   deckOffsetX?: number    // offset from OWN anchor at stacking time (for position restore on open)
   deckOffsetY?: number
+  textSplitRatio?: number // header/body vertical split (0-1, default 0.5)
 }
 
 /** Find which group a board belongs to */
@@ -65,6 +66,7 @@ export interface BoardLayerData {
     headerTextStyle?: import('../store/freeNodeStore').TextStyle
     widthOverride?: number     // user-set width (canvas px, pre-zoom)
     heightOverride?: number    // user-set height (canvas px, pre-zoom)
+    textSplitRatio?: number    // header/body vertical split (0-1, default 0.5)
   }
   block: {
     thumbnail: string | null   // block-level representative image
@@ -75,6 +77,7 @@ export interface BoardLayerData {
     headerTextStyle?: import('../store/freeNodeStore').TextStyle
     widthOverride?: number     // user-set width (canvas px, pre-zoom)
     heightOverride?: number    // user-set height (canvas px, pre-zoom)
+    textSplitRatio?: number    // header/body vertical split (0-1, default 0.5)
   }
   // Board layer uses bar tree directly — no extra fields needed
 }
@@ -183,6 +186,9 @@ interface BoardsState {
   setGroupCardHeaderText: (groupId: string, text: string) => void
   setGroupCardHeaderTextStyle: (groupId: string, style: import('../store/freeNodeStore').TextStyle) => void
   setGroupCardSize: (groupId: string, w: number | undefined, h: number | undefined) => void
+  setGroupTextSplitRatio: (groupId: string, ratio: number) => void
+  setBlockTextSplitRatio: (boardId: string, ratio: number) => void
+  setCardTextSplitRatio: (boardId: string, ratio: number) => void
   setDeckState: (groupIds: string[], state: 'open' | 'fanned' | 'stacked') => void
   setGroupPos: (groupId: string, originY: number, originX: number) => void
   reassignBoard: (boardId: string, targetGroupId: string, dropCanvasPos?: { x: number; y: number }) => void
@@ -695,6 +701,26 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
 
   setGroupCardSize(groupId, w, h) {
     set(s => ({ groups: s.groups.map(g => g.id === groupId ? { ...g, cardWidthOverride: w, cardHeightOverride: h } : g) }))
+  },
+
+  setGroupTextSplitRatio(groupId, ratio) {
+    set(s => ({ groups: s.groups.map(g => g.id === groupId ? { ...g, textSplitRatio: ratio } : g) }))
+  },
+
+  setBlockTextSplitRatio(boardId, ratio) {
+    set(s => {
+      const b = s.boards[boardId]
+      if (!b) return s
+      return { boards: { ...s.boards, [boardId]: { ...b, layers: { ...b.layers, block: { ...b.layers.block, textSplitRatio: ratio } } } } }
+    })
+  },
+
+  setCardTextSplitRatio(boardId, ratio) {
+    set(s => {
+      const b = s.boards[boardId]
+      if (!b) return s
+      return { boards: { ...s.boards, [boardId]: { ...b, layers: { ...b.layers, card: { ...b.layers.card, textSplitRatio: ratio } } } } }
+    })
   },
 
   setDeckState(groupIds, state) {
