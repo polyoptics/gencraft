@@ -55,16 +55,19 @@ export const CardOutline: React.FC<{ group: ProjectGroup }> = ({ group }) => {
   if (!rect || rect.screenWidth === 0) return null
 
   return (
-    <div style={{
-      position: 'absolute',
-      left: rect.screenLeft,
-      top: rect.screenTop,
-      width: rect.screenWidth,
-      height: rect.screenHeight,
-      border: '1px solid rgba(255,255,255,0.08)',
-      borderRadius: 12,
-      background: group.color + '0a',
-      pointerEvents: 'none',
-    }} />
+    <div
+      data-group-outline={group.id}
+      style={{
+        position: 'absolute',
+        left: rect.screenLeft,
+        top: rect.screenTop,
+        width: rect.screenWidth,
+        height: rect.screenHeight,
+        border: '1px solid rgba(255,255,255,0.08)',
+        borderRadius: 12,
+        background: group.color + '0a',
+        pointerEvents: 'none',
+      }}
+    />
   )
 }

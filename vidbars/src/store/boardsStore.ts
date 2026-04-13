@@ -185,7 +185,7 @@ interface BoardsState {
   setGroupCardSize: (groupId: string, w: number | undefined, h: number | undefined) => void
   setDeckState: (groupIds: string[], state: 'open' | 'fanned' | 'stacked') => void
   setGroupPos: (groupId: string, originY: number, originX: number) => void
-  reassignBoard: (boardId: string, targetGroupId: string) => void
+  reassignBoard: (boardId: string, targetGroupId: string, dropCanvasPos?: { x: number; y: number }) => void
   moveToNewGroup: (boardId: string) => void
   duplicateGroup: (groupId: string) => string | null
   selectedGroupIds: string[]
@@ -747,30 +747,46 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
     set(s => ({ groups: s.groups.map(g => g.id === groupId ? { ...g, originY, originX } : g) }))
   },
 
-  reassignBoard(boardId, targetGroupId) {
-    set(s => {
-      let groups = s.groups.map(g => {
+  reassignBoard(boardId, targetGroupId, dropCanvasPos) {
+    const s = get()
+    const targetGroup = s.groups.find(g => g.id === targetGroupId)
+    if (!targetGroup) return
+    // Use explicit drop position if provided, otherwise compute from current state
+    const absPos = dropCanvasPos ?? getBoardAbsolutePos(boardId, s.groups, s.boards)
+    // Compute local position within the target group
+    const nleX = absPos.x - targetGroup.originX
+    const targetLayout = computeGroupLayout(targetGroup.boardIds, s.boards)
+    const localY = absPos.y - targetGroup.originY
+    const nleRow = yToRow(localY, targetLayout)
+    set(s2 => {
+      const board = s2.boards[boardId]
+      if (!board) return s2
+      const updatedBoard = { ...board, nleRow, nleX }
+      let groups = s2.groups.map(g => {
         if (g.id === targetGroupId) return { ...g, boardIds: g.boardIds.includes(boardId) ? g.boardIds : [...g.boardIds, boardId] }
         return { ...g, boardIds: g.boardIds.filter(bid => bid !== boardId) }
       })
-      // Auto-delete empty groups (keep at least one)
-      if (groups.length > 1) groups = groups.filter(g => g.boardIds.length > 0)
-      return { groups }
+      return { boards: { ...s2.boards, [boardId]: updatedBoard }, groups }
     })
   },
 
   moveToNewGroup(boardId) {
-    const board = get().boards[boardId]
-    const name = board?.projectName ?? 'New Group'
-    const color = board?.color ?? '#5b8dd9'
+    const s = get()
+    const board = s.boards[boardId]
+    if (!board) return
+    const name = board.projectName ?? 'New Group'
+    const color = board.color ?? '#5b8dd9'
     const id = crypto.randomUUID()
-    set(s => {
-      let groups = s.groups.map(g => ({
+    // Use absolute position so the new group origin matches the board's current visual position
+    const absPos = getBoardAbsolutePos(boardId, s.groups, s.boards)
+    set(s2 => {
+      const groups = s2.groups.map(g => ({
         ...g, boardIds: g.boardIds.filter(bid => bid !== boardId),
       }))
-      if (groups.length > 1) groups = groups.filter(g => g.boardIds.length > 0)
-      const newGroup: ProjectGroup = { id, name, color, boardIds: [boardId], cardHeroImage: null, cardSummary: '', cardText: '', cardHeaderText: '', originY: 0, originX: 0 }
-      return { groups: [...groups, newGroup] }
+      // Reset board's local position to 0,0 within the new group
+      const updatedBoard = { ...s2.boards[boardId], nleRow: 0, nleX: 0 }
+      const newGroup: ProjectGroup = { id, name, color, boardIds: [boardId], cardHeroImage: null, cardSummary: '', cardText: '', cardHeaderText: '', originY: absPos.y, originX: absPos.x }
+      return { boards: { ...s2.boards, [boardId]: updatedBoard }, groups: [...groups, newGroup] }
     })
   },
 
@@ -848,11 +864,9 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
       if (!board) return s2
       const updatedBoard = { ...board, canvasX: absPos.x, canvasY: absPos.y }
       // Remove from group
-      let groups = s2.groups.map(g =>
+      const groups = s2.groups.map(g =>
         g.id === group.id ? { ...g, boardIds: g.boardIds.filter(bid => bid !== boardId) } : g
       )
-      // Clean up empty groups (keep at least one)
-      if (groups.length > 1) groups = groups.filter(g => g.boardIds.length > 0)
       return { boards: { ...s2.boards, [boardId]: updatedBoard }, groups }
     })
   },

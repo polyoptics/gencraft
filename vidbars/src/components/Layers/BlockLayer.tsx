@@ -84,11 +84,10 @@ const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
   const isUngroupedBlock = !myGroup
   const groupColor = myGroup?.color ?? '#5b8dd9'
 
-  // ── Block drag: board moves within its group (local nleRow / nleX), or free drag if ungrouped ──
-  const onSolidDown = (e: React.PointerEvent) => {
+  // ── Body drag: board moves within its group (local nleRow / nleX), or free drag if ungrouped ──
+  const onBodyDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return
     if ((e.target as HTMLElement).tagName === 'INPUT') return
-    if ((e.target as Element).closest('[data-grip]')) return
     e.stopPropagation()
     e.preventDefault()
     useUndoCoordinator.getState().checkpoint()
@@ -147,8 +146,8 @@ const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
     window.addEventListener('pointerup', onUp)
   }
 
-  // ── Grip drag: lift board to reassign to another group ──
-  const onGripDown = (e: React.PointerEvent) => {
+  // ── Header drag: within-group reorder + cross-group reassign ──
+  const onHeaderDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return
     e.stopPropagation()
     e.preventDefault()
@@ -169,6 +168,44 @@ const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
     const sourceGroupId = group?.id
     const gripLay = computeGroupLayout(group?.boardIds ?? [boardId], bs0.boards)
 
+    // Visual highlight for drop target group outline
+    let highlightedOutline: HTMLElement | null = null
+    const setHL = (el: HTMLElement | null) => {
+      if (highlightedOutline && highlightedOutline !== el) {
+        highlightedOutline.style.border = '1px solid rgba(255,255,255,0.08)'
+        highlightedOutline.style.background = highlightedOutline.dataset.origBg ?? ''
+      }
+      if (el && el !== highlightedOutline) {
+        el.dataset.origBg = el.style.background
+        el.style.border = '2px solid rgba(100,160,255,0.6)'
+        el.style.background = 'rgba(100,160,255,0.08)'
+      }
+      highlightedOutline = el
+    }
+
+    const findTarget = (ev: PointerEvent): string | null => {
+      // 1. Check blocks via elementsFromPoint
+      const allEls = document.elementsFromPoint(ev.clientX, ev.clientY)
+      for (const el of allEls) {
+        const blockEl = el.closest('[data-layer-block]') as HTMLElement | null
+        if (blockEl && blockEl.dataset.layerBlock !== boardId) {
+          const tid = blockEl.dataset.layerBlock!
+          const tg = getGroupForBoard(useBoardsStore.getState().groups, tid)
+          if (tg && tg.id !== sourceGroupId) return tg.id
+        }
+      }
+      // 2. Check group outlines via bounding rect (they have pointerEvents:none)
+      const outlines = document.querySelectorAll('[data-group-outline]')
+      for (const el of outlines) {
+        const r = el.getBoundingClientRect()
+        if (ev.clientX >= r.left && ev.clientX <= r.right && ev.clientY >= r.top && ev.clientY <= r.bottom) {
+          const gid = (el as HTMLElement).dataset.groupOutline!
+          if (gid !== sourceGroupId) return gid
+        }
+      }
+      return null
+    }
+
     const onMove = (ev: PointerEvent) => {
       const z = useCanvasStore.getState().zoom
       const dx = (ev.clientX - lastX) / z
@@ -179,32 +216,39 @@ const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
       xAccum += dx
       const newRow = Math.max(0, initialRow + dyToRowDelta(dyAccum, initialRow, gripLay))
       useBoardsStore.getState().setBoardNlePos(boardId, newRow, initialX + xAccum)
+      // Highlight target group
+      const targetId = findTarget(ev)
+      if (targetId) {
+        const outlineEl = document.querySelector(`[data-group-outline="${targetId}"]`) as HTMLElement | null
+        setHL(outlineEl)
+      } else {
+        setHL(null)
+      }
     }
 
     const onUp = (ev: PointerEvent) => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
       setGripDragging(false)
+      setHL(null)
 
-      const allEls = document.elementsFromPoint(ev.clientX, ev.clientY)
-      for (const el of allEls) {
-        const blockEl = el.closest('[data-layer-block]') as HTMLElement | null
-        if (blockEl && blockEl.dataset.layerBlock !== boardId) {
-          const targetBoardId = blockEl.dataset.layerBlock!
-          const targetGroup = getGroupForBoard(useBoardsStore.getState().groups, targetBoardId)
-          if (targetGroup && targetGroup.id !== sourceGroupId) {
-            useBoardsStore.getState().reassignBoard(boardId, targetGroup.id)
-            return
-          }
-        }
+      // Check for drop on another group
+      const targetGroupId = findTarget(ev)
+      if (targetGroupId) {
+        const z = useCanvasStore.getState().zoom
+        const pan = useCanvasStore.getState().pan
+        const dropPos = { x: (ev.clientX - pan.x) / z, y: (ev.clientY - pan.y) / z }
+        useBoardsStore.getState().reassignBoard(boardId, targetGroupId, dropPos)
+        return
       }
+
       const currentGroup = getGroupForBoard(useBoardsStore.getState().groups, boardId)
       if (currentGroup && currentGroup.boardIds.length > 1 && (Math.abs(xAccum) > 50 || Math.abs(dyAccum) > 50)) {
-        // Check if dragged into free zone → ungroup
-        const bs = useBoardsStore.getState()
-        const absPos = getBoardAbsolutePos(boardId, bs.groups, bs.boards)
         const zly = useCanvasStore.getState().zoneLineY
-        if (absPos.y < zly) {
+        const z = useCanvasStore.getState().zoom
+        const pan = useCanvasStore.getState().pan
+        const dropCanvasY = (ev.clientY - pan.y) / z
+        if (dropCanvasY < zly) {
           useBoardsStore.getState().ungroupBoard(boardId)
         } else {
           useBoardsStore.getState().moveToNewGroup(boardId)
@@ -290,11 +334,10 @@ const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
           cursor: 'grab', zIndex: 30,
           borderLeft: `3px solid ${groupColor}`,
         }}
-        onPointerDown={onSolidDown}
+        onPointerDown={onHeaderDown}
       >
         {!isUngroupedBlock && (
           <div
-            data-grip="true"
             style={{
               cursor: gripDragging ? 'grabbing' : 'grab',
               padding: '4px 2px',
@@ -302,8 +345,6 @@ const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
               display: 'flex', alignItems: 'center',
               flexShrink: 0,
             }}
-            onPointerDown={onGripDown}
-            title="Drag to reassign to another group"
           >
             <GripDots size={12} opacity={gripDragging ? 0.7 : 0.35} />
           </div>
@@ -353,7 +394,7 @@ const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
           zIndex: gripDragging ? 100 : undefined,
           transition: 'box-shadow 0.15s',
         }}
-        onPointerDown={onSolidDown}
+        onPointerDown={onBodyDown}
         onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setBlockMenu({ x: e.clientX, y: e.clientY }) }}
         onDoubleClick={e => {
           e.stopPropagation()
