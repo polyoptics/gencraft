@@ -39,6 +39,7 @@ export interface BarContent {
   media: MediaItem[] // new — typed media items
   mentions: string[] // @mention strings e.g. "@A.Yuki"
   textSplitRatio?: number // header/body vertical split (0-1, default 0.5)
+  imageTransform?: import('../store/boardsStore').HeroImageTransform
 }
 
 /** Helper: get all media items from a bar's content (bridges old images[] and new media[]) */

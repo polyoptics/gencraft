@@ -17,6 +17,8 @@ import type { RowLayout } from '../../utils/nleRows'
 import { groupBoardSlots, clampBoardX } from '../../utils/nlePush'
 import { DEFAULT_H } from '../../utils/barConstants'
 import { getFirstImageUrl } from '../../types/bar'
+import { HeroImageLayer } from './HeroImageLayer'
+import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
 import { ColorPickerPopup } from '../Bar/ColorPickerPopup'
 import { FreeCanvas } from '../Canvas/FreeCanvas'
 import { NLETimelineHeader } from '../NLE/NLETimelineHeader'
@@ -48,6 +50,7 @@ const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
   const nameInputRef = useRef<HTMLInputElement>(null)
   const [gripDragging, setGripDragging] = useState(false)
   const [isHovered, setIsHovered] = useState(false)
+  const [isEditingImage, setIsEditingImage] = useState(false)
 
   const commitRename = useCallback(() => {
     if (renameVal.trim()) {
@@ -77,6 +80,8 @@ const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
   const thumbnail = board.layers?.block?.thumbnail
     ?? rootBars.reduce<string | null>((found, b) => found || getFirstImageUrl(b.content), null)
     ?? null
+  const thumbnailTransform = board.layers?.block?.thumbnailTransform
+    ?? (board.layers?.block?.thumbnail ? undefined : rootBars.reduce<import('../../store/boardsStore').HeroImageTransform | undefined>((found, b) => found || (getFirstImageUrl(b.content) ? b.content.imageTransform : undefined), undefined))
 
   const displayLabel = board.layers?.block?.label || board.projectName
 
@@ -402,15 +407,8 @@ const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
           el?.dispatchEvent(new CustomEvent('start-edit', { bubbles: false }))
         }}
       >
-        {thumbnail && (
-          <div style={{
-            position: 'absolute', inset: 0,
-            backgroundImage: `url(${thumbnail})`,
-            backgroundSize: 'cover', backgroundPosition: 'center',
-            opacity: 0.7, borderRadius: 30,
-          }} />
-        )}
-        <BlockText boardId={boardId} width={width} />
+        {thumbnail && <HeroImageLayer heroImage={thumbnail} transform={thumbnailTransform} borderRadius={30} />}
+        <BlockText boardId={boardId} width={width} thumbnail={thumbnail} onCropImage={() => setIsEditingImage(true)} />
         <div style={{
           position: 'absolute', bottom: 6, left: 8, zIndex: 2,
           color: 'rgba(255,255,255,0.7)', fontSize: 11, fontWeight: 600,
@@ -465,6 +463,25 @@ const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
         />
       )}
 
+      {isEditingImage && thumbnail && (() => {
+        const blockEl = document.querySelector(`[data-layer-block="${boardId}"]`) as HTMLElement | null
+        const r = blockEl?.getBoundingClientRect()
+        if (!r) return null
+        return (
+          <HeroImageEditOverlay
+            cardRect={{ left: r.left, top: r.top, width: r.width, height: r.height }}
+            heroImage={thumbnail}
+            initialTransform={thumbnailTransform ?? { scale: 1, offsetX: 0, offsetY: 0, flipH: false, flipV: false }}
+            onDone={t => {
+              useUndoCoordinator.getState().checkpoint()
+              useBoardsStore.getState().setBlockThumbnailTransform(boardId, t)
+              setIsEditingImage(false)
+            }}
+            onCancel={() => setIsEditingImage(false)}
+          />
+        )
+      })()}
+
       {blockMenu && ReactDOM.createPortal(
         <>
           <div style={{ position: 'fixed', inset: 0, zIndex: 9998 }} onPointerDown={() => setBlockMenu(null)} />
@@ -490,11 +507,14 @@ const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
                 if (val !== null) useBoardsStore.getState().setBlockLabel(boardId, val)
                 setBlockMenu(null)
               }},
-              ...(thumbnail ? [{ label: 'Remove Thumbnail', icon: '🖼', action: () => {
-                useUndoCoordinator.getState().checkpoint()
-                useBoardsStore.getState().setBlockThumbnail(boardId, null)
-                setBlockMenu(null)
-              }}] : []),
+              ...(thumbnail ? [
+                { label: 'Edit Image', icon: '✂️', action: () => { setBlockMenu(null); setIsEditingImage(true) } },
+                { label: 'Remove Thumbnail', icon: '🖼', action: () => {
+                  useUndoCoordinator.getState().checkpoint()
+                  useBoardsStore.getState().setBlockThumbnail(boardId, null)
+                  setBlockMenu(null)
+                }},
+              ] : []),
               ...(boardId !== 'primary' ? [{ label: 'Duplicate Board', icon: '📋', action: () => {
                 useUndoCoordinator.getState().checkpoint()
                 useBoardsStore.getState().duplicateBoard(boardId)
@@ -636,7 +656,7 @@ const BlockTextSplitDivider: React.FC<{
 // ── Block-level independent text (double-click to edit) ──
 const vAlignToJustify = (va: string) => va === 'middle' ? 'center' : va === 'bottom' ? 'flex-end' : 'flex-start'
 
-const BlockText: React.FC<{ boardId: string; width: number }> = ({ boardId }) => {
+const BlockText: React.FC<{ boardId: string; width: number; thumbnail?: string | null; onCropImage?: () => void }> = ({ boardId, thumbnail, onCropImage }) => {
   const bodyText = useBoardsStore(s => s.boards[boardId]?.layers?.block?.text ?? '')
   const rawBodyStyle = useBoardsStore(s => s.boards[boardId]?.layers?.block?.textStyle)
   const bodyTs: TextStyle = useMemo(() => ({ ...DEFAULT_BODY_STYLE, ...rawBodyStyle }), [rawBodyStyle])
@@ -732,6 +752,20 @@ const BlockText: React.FC<{ boardId: string; width: number }> = ({ boardId }) =>
           onActiveFieldChange={setActiveField}
           anchorRect={rect}
           preferBelow
+          heroImage={thumbnail}
+          heroFlipH={useBoardsStore.getState().boards[boardId]?.layers?.block?.thumbnailTransform?.flipH}
+          heroFlipV={useBoardsStore.getState().boards[boardId]?.layers?.block?.thumbnailTransform?.flipV}
+          onFlipH={() => {
+            useUndoCoordinator.getState().checkpoint()
+            const cur = useBoardsStore.getState().boards[boardId]?.layers?.block?.thumbnailTransform ?? { scale: 1, offsetX: 0, offsetY: 0, flipH: false, flipV: false }
+            useBoardsStore.getState().setBlockThumbnailTransform(boardId, { ...cur, flipH: !cur.flipH })
+          }}
+          onFlipV={() => {
+            useUndoCoordinator.getState().checkpoint()
+            const cur = useBoardsStore.getState().boards[boardId]?.layers?.block?.thumbnailTransform ?? { scale: 1, offsetX: 0, offsetY: 0, flipH: false, flipV: false }
+            useBoardsStore.getState().setBlockThumbnailTransform(boardId, { ...cur, flipV: !cur.flipV })
+          }}
+          onCropImage={onCropImage}
         />
       )}
       <div

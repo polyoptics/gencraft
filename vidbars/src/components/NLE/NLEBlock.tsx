@@ -13,6 +13,8 @@ import { wireDragState } from '../../utils/wireDragState'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { uploadFile } from '../../utils/uploadFile'
 import { getFirstImageUrl } from '../../types/bar'
+import { HeroImageLayer } from '../Layers/HeroImageLayer'
+import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
 import { generateHoverVariants } from '../../utils/colorUtils'
 import { TextFormatToolbar, ensureFontLoaded, hexToRgba } from '../UI/TextFormatToolbar'
 import { DEFAULT_HEADER_STYLE, DEFAULT_BODY_STYLE } from '../../store/freeNodeStore'
@@ -122,6 +124,7 @@ export const NLEBlock: React.FC<Props> = ({ id, top, blockHeight, offsetX, rowTo
   const [showHoverWheel, setShowHoverWheel] = useState(false)
   const [showTextToolbar, setShowTextToolbar] = useState(false)
   const [isEditingText, setIsEditingText] = useState(false)
+  const [isEditingImage, setIsEditingImage] = useState(false)
   const [editingTextField, setEditingTextField] = useState<'header' | 'body' | null>(null)
   const [activeTextField, setActiveTextField] = useState<'header' | 'body'>('header')
   const textEditRef = useRef<HTMLTextAreaElement>(null)
@@ -555,12 +558,7 @@ export const NLEBlock: React.FC<Props> = ({ id, top, blockHeight, offsetX, rowTo
         }}>
           <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(160deg, rgba(255,255,255,0.10) 0%, rgba(0,0,0,0.10) 100%)' }} />
           {getFirstImageUrl(bar.content) && (
-            <div style={{
-              position: 'absolute', inset: 0,
-              backgroundImage: `url(${getFirstImageUrl(bar.content)})`,
-              backgroundSize: 'cover', backgroundPosition: 'center',
-              opacity: 0.82,
-            }} />
+            <HeroImageLayer heroImage={getFirstImageUrl(bar.content)!} transform={bar.content.imageTransform} borderRadius={0} opacity={0.82} />
           )}
           {(bar.content.text || bar.content.headerText || isEditingText) && (() => {
             const hts = { ...DEFAULT_HEADER_STYLE, ...bar.content.headerTextStyle }
@@ -1087,8 +1085,27 @@ export const NLEBlock: React.FC<Props> = ({ id, top, blockHeight, offsetX, rowTo
           onClose={() => setContextMenu(null)}
           onStartRename={startRename}
           onOpenColorPicker={handleColorPickerOpen}
+          onEditImage={getFirstImageUrl(bar.content) ? () => setIsEditingImage(true) : undefined}
         />
       )}
+      {isEditingImage && getFirstImageUrl(bar.content) && (() => {
+        const blockEl = wrapperRef.current
+        const r = blockEl?.getBoundingClientRect()
+        if (!r) return null
+        return (
+          <HeroImageEditOverlay
+            cardRect={{ left: r.left, top: r.top, width: r.width, height: r.height }}
+            heroImage={getFirstImageUrl(bar.content)!}
+            initialTransform={bar.content.imageTransform ?? { scale: 1, offsetX: 0, offsetY: 0, flipH: false, flipV: false }}
+            onDone={t => {
+              useUndoCoordinator.getState().checkpoint()
+              setContent(id, { imageTransform: t })
+              setIsEditingImage(false)
+            }}
+            onCancel={() => setIsEditingImage(false)}
+          />
+        )
+      })()}
       {showColorPicker && (
         <CircularColorPicker
           color={bar.color}
@@ -1110,6 +1127,20 @@ export const NLEBlock: React.FC<Props> = ({ id, top, blockHeight, offsetX, rowTo
           onActiveFieldChange={f => { setActiveTextField(f); if (isEditingText) setEditingTextField(f) }}
           anchorRect={wrapperRef.current?.getBoundingClientRect() ?? null}
           onClose={() => setShowTextToolbar(false)}
+          heroImage={getFirstImageUrl(bar.content)}
+          heroFlipH={bar.content.imageTransform?.flipH}
+          heroFlipV={bar.content.imageTransform?.flipV}
+          onFlipH={() => {
+            useUndoCoordinator.getState().checkpoint()
+            const cur = bar.content.imageTransform ?? { scale: 1, offsetX: 0, offsetY: 0, flipH: false, flipV: false }
+            setContent(id, { imageTransform: { ...cur, flipH: !cur.flipH } })
+          }}
+          onFlipV={() => {
+            useUndoCoordinator.getState().checkpoint()
+            const cur = bar.content.imageTransform ?? { scale: 1, offsetX: 0, offsetY: 0, flipH: false, flipV: false }
+            setContent(id, { imageTransform: { ...cur, flipV: !cur.flipV } })
+          }}
+          onCropImage={() => setIsEditingImage(true)}
         />
       )}
       {colorDragging && createPortal(

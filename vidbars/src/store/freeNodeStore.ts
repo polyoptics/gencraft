@@ -57,6 +57,7 @@ export interface FreeNodeData {
   label: string
   text: string
   imageUrl: string | null
+  imageTransform?: import('../store/boardsStore').HeroImageTransform
   mediaType?: 'image' | 'video' | 'audio' | null
   color: string
   textStyle?: TextStyle

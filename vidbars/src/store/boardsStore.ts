@@ -79,6 +79,7 @@ export interface BoardLayerData {
   }
   block: {
     thumbnail: string | null   // block-level representative image
+    thumbnailTransform?: HeroImageTransform
     label: string              // display name override at block zoom
     text: string               // independent body text at block zoom
     textStyle?: import('../store/freeNodeStore').TextStyle
@@ -171,6 +172,7 @@ interface BoardsState {
   setCardHeroImage: (boardId: string, url: string | null) => void
   setCardSummary: (boardId: string, summary: string) => void
   setBlockThumbnail: (boardId: string, url: string | null) => void
+  setBlockThumbnailTransform: (boardId: string, transform: HeroImageTransform | undefined) => void
   setBlockLabel: (boardId: string, label: string) => void
   setBlockText: (boardId: string, text: string) => void
   setCardText: (boardId: string, text: string) => void
@@ -575,7 +577,13 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
 
   setBlockThumbnail(boardId, url) {
     updateBoard(set, boardId, b => ({
-      layers: { ...b.layers, block: { ...b.layers.block, thumbnail: url } },
+      layers: { ...b.layers, block: { ...b.layers.block, thumbnail: url, ...(url === null ? { thumbnailTransform: undefined } : {}) } },
+    }))
+  },
+
+  setBlockThumbnailTransform(boardId, transform) {
+    updateBoard(set, boardId, b => ({
+      layers: { ...b.layers, block: { ...b.layers.block, thumbnailTransform: transform } },
     }))
   },
 

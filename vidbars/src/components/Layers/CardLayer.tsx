@@ -2026,16 +2026,17 @@ const TextSplitDivider: React.FC<{
 
 const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void; heroImage?: string | null }> = ({ groupId, onCropImage, heroImage: heroImageProp }) => {
   const zoom = useCanvasStore(s => s.zoom)
-  const heroImage = heroImageProp ?? useBoardsStore(s => s.groups.find(g => g.id === groupId)?.cardHeroImage ?? null)
-  const heroTransform = useBoardsStore(s => s.groups.find(g => g.id === groupId)?.cardHeroTransform)
-  const bodyText = useBoardsStore(s => s.groups.find(g => g.id === groupId)?.cardText ?? '')
-  const rawBodyStyle = useBoardsStore(s => s.groups.find(g => g.id === groupId)?.cardTextStyle)
+  const group = useBoardsStore(s => s.groups.find(g => g.id === groupId))
+  const heroImage = heroImageProp ?? group?.cardHeroImage ?? null
+  const heroTransform = group?.cardHeroTransform
+  const bodyText = group?.cardText ?? ''
+  const rawBodyStyle = group?.cardTextStyle
   const bodyTs: TextStyle = useMemo(() => ({ ...DEFAULT_BODY_STYLE, ...rawBodyStyle }), [rawBodyStyle])
 
-  const headerText = useBoardsStore(s => s.groups.find(g => g.id === groupId)?.cardHeaderText ?? '')
-  const rawHeaderStyle = useBoardsStore(s => s.groups.find(g => g.id === groupId)?.cardHeaderTextStyle)
+  const headerText = group?.cardHeaderText ?? ''
+  const rawHeaderStyle = group?.cardHeaderTextStyle
   const headerTs: TextStyle = useMemo(() => ({ ...DEFAULT_HEADER_STYLE, ...rawHeaderStyle }), [rawHeaderStyle])
-  const splitRatio = useBoardsStore(s => s.groups.find(g => g.id === groupId)?.textSplitRatio ?? 0.5)
+  const splitRatio = group?.textSplitRatio ?? 0.5
   ensureFontLoaded(headerTs.fontFamily); ensureFontLoaded(bodyTs.fontFamily)
   // Scale text down 10% at max zoom-out (zoom ~0.05) → 1.0 at 0.18, 0.9 at ≤0.05
   const textScale = Math.min(1, 0.7 + 0.3 * ((zoom - 0.05) / (0.18 - 0.05)))

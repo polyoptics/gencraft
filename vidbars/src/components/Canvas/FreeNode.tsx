@@ -5,8 +5,10 @@ import type { FreeNodeData, TextStyle } from '../../store/freeNodeStore'
 import { DEFAULT_TEXT_STYLE } from '../../store/freeNodeStore'
 import { ensureFontLoaded, FONT_LIST, loadGoogleFont } from '../UI/TextFormatToolbar'
 import { useBoardsStore } from '../../store/boardsStore'
+import type { HeroImageTransform } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
+import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
 import { clampToNoParkZone } from '../../utils/nleZone'
 
 interface Props { id: string }
@@ -28,6 +30,7 @@ export const FreeNode: React.FC<Props> = ({ id }) => {
   const [renameVal, setRenameVal] = useState('')
   const [nodeMenu, setNodeMenu] = useState<{ x: number; y: number } | null>(null)
   const [textEditing, setTextEditing] = useState(false)
+  const [isEditingImage, setIsEditingImage] = useState(false)
 
   const renameRef = useRef<HTMLInputElement>(null)
   const wrapperRef = useRef<HTMLDivElement>(null)
@@ -399,7 +402,10 @@ export const FreeNode: React.FC<Props> = ({ id }) => {
             </div>
             {[
               { label: 'Rename', icon: '✏️', action: () => { setRenameVal(node.label); setIsRenaming(true); setNodeMenu(null) } },
-              ...(node.imageUrl ? [{ label: 'Remove Image', icon: '🖼', action: () => { useUndoCoordinator.getState().checkpoint(); updateFreeNode(id, { imageUrl: null }); setNodeMenu(null) } }] : []),
+              ...(node.imageUrl ? [
+                { label: 'Edit Image', icon: '✂️', action: () => { setNodeMenu(null); setIsEditingImage(true) } },
+                { label: 'Remove Image', icon: '🖼', action: () => { useUndoCoordinator.getState().checkpoint(); updateFreeNode(id, { imageUrl: null, imageTransform: undefined }); setNodeMenu(null) } },
+              ] : []),
               { label: 'Delete', icon: '🗑️', danger: true, action: () => { useUndoCoordinator.getState().checkpoint(); deleteFreeNode(id); setNodeMenu(null) } },
             ].map(item => (
               <button
@@ -423,6 +429,23 @@ export const FreeNode: React.FC<Props> = ({ id }) => {
         </>,
         document.body
       )}
+      {isEditingImage && node.imageUrl && (() => {
+        const r = wrapperRef.current?.getBoundingClientRect()
+        if (!r) return null
+        return (
+          <HeroImageEditOverlay
+            cardRect={{ left: r.left, top: r.top, width: r.width, height: r.height }}
+            heroImage={node.imageUrl}
+            initialTransform={node.imageTransform ?? { scale: 1, offsetX: 0, offsetY: 0, flipH: false, flipV: false }}
+            onDone={t => {
+              useUndoCoordinator.getState().checkpoint()
+              updateFreeNode(id, { imageTransform: t })
+              setIsEditingImage(false)
+            }}
+            onCancel={() => setIsEditingImage(false)}
+          />
+        )
+      })()}
     </div>
   )
 }
@@ -610,10 +633,25 @@ const FreeNodeBody: React.FC<{
   }
 
   // ── Image type (default) ──
+  const imgT = node.imageTransform
+  const imgFlips: string[] = []
+  if (imgT?.flipH) imgFlips.push('scaleX(-1)')
+  if (imgT?.flipV) imgFlips.push('scaleY(-1)')
+  const hasImgTransform = imgT && (imgT.scale !== 1 || imgT.offsetX !== 0 || imgT.offsetY !== 0 || imgT.flipH || imgT.flipV)
+  const imgStyle: React.CSSProperties = hasImgTransform ? {
+    width: `${imgT.scale * 100}%`, height: `${imgT.scale * 100}%`,
+    objectFit: 'cover',
+    objectPosition: `${50 + imgT.offsetX}% ${50 + imgT.offsetY}%`,
+    transform: imgFlips.length > 0 ? imgFlips.join(' ') : undefined,
+    position: 'absolute',
+    left: `${50 - imgT.scale * 50}%`,
+    top: `${50 - imgT.scale * 50}%`,
+  } : { width: '100%', height: '100%', objectFit: 'cover' as const, transform: imgFlips.length > 0 ? imgFlips.join(' ') : undefined }
+
   return (
     <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', overflow: 'hidden' }}>
       {node.imageUrl ? (
-        <img src={node.imageUrl} draggable={false} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+        <img src={node.imageUrl} draggable={false} style={imgStyle} />
       ) : (
         <div style={{ textAlign: 'center', color: 'rgba(255,255,255,0.18)', pointerEvents: 'none' }}>
           <div style={{ fontSize: 22 * iz, marginBottom: 5 * iz, opacity: 0.5 }}>⬛</div>

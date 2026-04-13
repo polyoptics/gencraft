@@ -10,10 +10,11 @@ interface Props {
   onClose: () => void
   onStartRename: () => void
   onOpenColorPicker: () => void
+  onEditImage?: () => void
 }
 
 export const ContextMenu: React.FC<Props> = ({
-  x, y, barId, onClose, onStartRename, onOpenColorPicker,
+  x, y, barId, onClose, onStartRename, onOpenColorPicker, onEditImage,
 }) => {
   const ctx = useBoardCtx()
   const bar = ctx.bars[barId]
@@ -42,10 +43,10 @@ export const ContextMenu: React.FC<Props> = ({
       label: 'Add Parent Above', icon: '↑',
       action: () => { useUndoCoordinator.getState().checkpoint(); ctx.addParentAbove(barId); onClose() },
     },
-    ...(bar.content.images.length > 0 ? [{
-      label: 'Remove Image', icon: '🖼',
-      action: () => { useUndoCoordinator.getState().checkpoint(); ctx.setContent(barId, { images: [] }); onClose() },
-    }] : []),
+    ...(bar.content.images.length > 0 || (bar.content.media && bar.content.media.length > 0) ? [
+      ...(onEditImage ? [{ label: 'Edit Image', icon: '✂️', action: () => { onClose(); onEditImage() } }] : []),
+      { label: 'Remove Image', icon: '🖼', action: () => { useUndoCoordinator.getState().checkpoint(); ctx.setContent(barId, { images: [], media: [] }); onClose() } },
+    ] : []),
     { sep: true },
     {
       label: 'Open Viewer', icon: '▶️',
