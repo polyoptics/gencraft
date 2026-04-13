@@ -20,6 +20,7 @@ import { getFirstImageUrl } from '../../types/bar'
 import { ColorPickerPopup } from '../Bar/ColorPickerPopup'
 import { FreeCanvas } from '../Canvas/FreeCanvas'
 import { NLETimelineHeader } from '../NLE/NLETimelineHeader'
+import { CardOutline } from './CardOutline'
 import { getHiddenBoardIds, getHiddenGroupIds } from '../../hooks/useCardDecks'
 
 const BOARD_PADDING_X = 20
@@ -285,7 +286,7 @@ const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
           display: 'flex', alignItems: 'center', gap: 8, padding: `0 ${12 / zoom}px`,
           background: 'rgba(255,255,255,0.05)',
           border: '1px solid rgba(255,255,255,0.08)',
-          borderRadius: 8, backdropFilter: 'blur(12px)',
+          borderRadius: 14, backdropFilter: 'blur(12px)',
           cursor: 'grab', zIndex: 30,
           borderLeft: `3px solid ${groupColor}`,
         }}
@@ -339,7 +340,7 @@ const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
         data-board-id={boardId}
         style={{
           position: 'absolute', left, top: BLOCK_HEADER_H, width, height,
-          borderRadius: 12,
+          borderRadius: 30,
           background: thumbnail
             ? `linear-gradient(160deg, ${rootColor}cc 0%, ${rootColor}aa 100%)`
             : rootColor,
@@ -365,7 +366,7 @@ const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
             position: 'absolute', inset: 0,
             backgroundImage: `url(${thumbnail})`,
             backgroundSize: 'cover', backgroundPosition: 'center',
-            opacity: 0.7, borderRadius: 12,
+            opacity: 0.7, borderRadius: 30,
           }} />
         )}
         <BlockText boardId={boardId} width={width} />
@@ -525,10 +526,17 @@ const Overlay: React.FC = () => {
     () => getHiddenGroupIds(groups, boards, zoneLineY),
     [groups, boards, zoneLineY],
   )
+  const visibleGroups = useMemo(
+    () => groups.filter(g => !hiddenGroups.has(g.id)),
+    [groups, hiddenGroups],
+  )
   return (
     <>
-      {groups.filter(g => !hiddenGroups.has(g.id)).map(g => (
-        <NLETimelineHeader key={g.id} groupId={g.id} />
+      {visibleGroups.map(g => (
+        <React.Fragment key={g.id}>
+          <CardOutline group={g} />
+          <NLETimelineHeader groupId={g.id} />
+        </React.Fragment>
       ))}
     </>
   )

@@ -6,6 +6,7 @@ import React, { useMemo } from 'react'
 import { BoardsCanvas } from '../NLE/BoardsCanvas'
 import { FreeCanvas } from '../Canvas/FreeCanvas'
 import { NLETimelineHeader } from '../NLE/NLETimelineHeader'
+import { CardOutline } from './CardOutline'
 import { useBoardsStore } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { getHiddenGroupIds } from '../../hooks/useCardDecks'
@@ -27,10 +28,17 @@ const Overlay: React.FC = () => {
     () => getHiddenGroupIds(groups, boards, zoneLineY),
     [groups, boards, zoneLineY],
   )
+  const visibleGroups = useMemo(
+    () => groups.filter(g => !hiddenGroups.has(g.id)),
+    [groups, hiddenGroups],
+  )
   return (
     <>
-      {groups.filter(g => !hiddenGroups.has(g.id)).map(g => (
-        <NLETimelineHeader key={g.id} groupId={g.id} />
+      {visibleGroups.map(g => (
+        <React.Fragment key={g.id}>
+          <CardOutline group={g} />
+          <NLETimelineHeader groupId={g.id} />
+        </React.Fragment>
       ))}
     </>
   )

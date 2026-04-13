@@ -20,6 +20,152 @@ import { getFirstImageUrl } from '../../types/bar'
 
 const BOARD_PADDING_X = 20
 
+const CARD_COLORS = [
+  '#5b8dd9', '#3b82f6', '#0ea5e9', '#06b6d4',
+  '#14b8a6', '#22c55e', '#84cc16', '#f59e0b',
+  '#f97316', '#ef4444', '#ec4899', '#8b5cf6',
+  '#6366f1', '#64748b', '#475569', '#334155',
+]
+
+/** Shared context menu for all card types (GroupCard, StackedDeckCard, FannedDeckOverlay) */
+const CardContextMenu: React.FC<{
+  pos: { x: number; y: number }
+  group: ProjectGroup
+  heroImage: string | null
+  deckMemberIds?: string[]   // if this card is part of a deck
+  deckState?: 'open' | 'fanned' | 'stacked'
+  onClose: () => void
+}> = ({ pos, group, heroImage, deckMemberIds, deckState, onClose }) => {
+  const groups = useBoardsStore(s => s.groups)
+  const [showColors, setShowColors] = useState(false)
+
+  const menuItems: { label: string; icon: string; action: () => void; danger?: boolean; separator?: boolean }[] = []
+
+  // Rename
+  menuItems.push({ label: 'Rename', icon: '✏️', action: () => {
+    const val = prompt('Card name:', group.name)
+    if (val !== null) useBoardsStore.getState().renameGroup(group.id, val)
+    onClose()
+  }})
+
+  // Edit Summary
+  menuItems.push({ label: 'Edit Summary', icon: '📝', action: () => {
+    const val = prompt('Card summary:', group.cardSummary)
+    if (val !== null) useBoardsStore.getState().setGroupCardSummary(group.id, val)
+    onClose()
+  }})
+
+  // Color — toggles swatch row
+  menuItems.push({ label: 'Card Color', icon: '🎨', action: () => setShowColors(v => !v) })
+
+  // Separator before deck actions
+  if (deckMemberIds && deckMemberIds.length >= 2) {
+    if (deckState !== 'stacked') menuItems.push({ label: 'Stack', icon: '📚', separator: true, action: () => {
+      useUndoCoordinator.getState().checkpoint()
+      useBoardsStore.getState().setDeckState(deckMemberIds, 'stacked')
+      onClose()
+    }})
+    if (deckState !== 'fanned') menuItems.push({ label: 'Fan', icon: '🃏', separator: !deckState || deckState === 'stacked' ? false : true, action: () => {
+      useUndoCoordinator.getState().checkpoint()
+      useBoardsStore.getState().setDeckState(deckMemberIds, 'fanned')
+      onClose()
+    }})
+    if (deckState && deckState !== 'open') menuItems.push({ label: 'Open Deck', icon: '📂', action: () => {
+      useUndoCoordinator.getState().checkpoint()
+      useBoardsStore.getState().setDeckState(deckMemberIds, 'open')
+      onClose()
+    }})
+  }
+
+  // Duplicate
+  menuItems.push({ label: 'Duplicate', icon: '📋', separator: true, action: () => {
+    useUndoCoordinator.getState().checkpoint()
+    useBoardsStore.getState().duplicateGroup(group.id)
+    onClose()
+  }})
+
+  // Remove hero image
+  if (heroImage) menuItems.push({ label: 'Remove Hero Image', icon: '🖼', action: () => {
+    useUndoCoordinator.getState().checkpoint()
+    useBoardsStore.getState().setGroupCardHeroImage(group.id, null)
+    onClose()
+  }})
+
+  // Delete
+  if (groups.length > 1) menuItems.push({ label: 'Delete Card', icon: '🗑', danger: true, separator: true, action: () => {
+    useUndoCoordinator.getState().checkpoint()
+    group.boardIds.forEach(bid => {
+      if (bid !== 'primary') useBoardsStore.getState().deleteBoard(bid)
+    })
+    useBoardsStore.getState().deleteGroup(group.id)
+    onClose()
+  }})
+
+  return ReactDOM.createPortal(
+    <>
+      <div style={{ position: 'fixed', inset: 0, zIndex: 9998 }} onPointerDown={onClose} />
+      <div
+        onPointerDown={e => e.stopPropagation()}
+        style={{
+          position: 'fixed',
+          left: Math.min(pos.x, window.innerWidth - 200),
+          top: Math.min(pos.y, window.innerHeight - 300),
+          width: 200, zIndex: 9999,
+          background: '#1e1f30', border: '1px solid rgba(255,255,255,0.1)',
+          borderRadius: 10, boxShadow: '0 12px 40px rgba(0,0,0,0.6)',
+          padding: '5px 0', fontFamily: 'system-ui, sans-serif',
+        }}
+      >
+        <div style={{ padding: '4px 12px 6px', borderBottom: '1px solid rgba(255,255,255,0.07)', marginBottom: 4 }}>
+          <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: 11 }}>{group.name}</span>
+        </div>
+        {menuItems.map((item, i) => (
+          <React.Fragment key={item.label}>
+            {item.separator && i > 0 && (
+              <div style={{ height: 1, background: 'rgba(255,255,255,0.07)', margin: '4px 0' }} />
+            )}
+            <button
+              onClick={item.action}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 9,
+                width: '100%', padding: '7px 14px',
+                background: 'none', border: 'none', cursor: 'pointer',
+                color: item.danger ? '#f87171' : '#e2e8f0', fontSize: 13, textAlign: 'left', borderRadius: 4,
+              }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.07)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'none')}
+            >
+              <span style={{ fontSize: 14, width: 18, textAlign: 'center' }}>{item.icon}</span>
+              {item.label}
+            </button>
+            {/* Color swatches inline after "Card Color" item */}
+            {item.label === 'Card Color' && showColors && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, padding: '6px 14px 8px' }}>
+                {CARD_COLORS.map(c => (
+                  <button
+                    key={c}
+                    onClick={() => {
+                      useUndoCoordinator.getState().checkpoint()
+                      useBoardsStore.getState().setGroupColor(group.id, c)
+                      onClose()
+                    }}
+                    style={{
+                      width: 22, height: 22, background: c,
+                      border: c.toLowerCase() === group.color.toLowerCase() ? '2.5px solid #fff' : '2px solid rgba(255,255,255,0.15)',
+                      borderRadius: 5, cursor: 'pointer', flexShrink: 0, padding: 0,
+                    }}
+                  />
+                ))}
+              </div>
+            )}
+          </React.Fragment>
+        ))}
+      </div>
+    </>,
+    document.body
+  )
+}
+
 /** Canvas-space content — free nodes visible at all layers */
 const Canvas: React.FC = () => <FreeCanvas />
 
@@ -330,78 +476,8 @@ const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
         )}
       </div>
 
-      {cardMenu && ReactDOM.createPortal(
-        <>
-          <div style={{ position: 'fixed', inset: 0, zIndex: 9998 }} onPointerDown={() => setCardMenu(null)} />
-          <div
-            onPointerDown={e => e.stopPropagation()}
-            style={{
-              position: 'fixed',
-              left: Math.min(cardMenu.x, window.innerWidth - 180),
-              top: Math.min(cardMenu.y, window.innerHeight - 200),
-              width: 180, zIndex: 9999,
-              background: '#1e1f30', border: '1px solid rgba(255,255,255,0.1)',
-              borderRadius: 10, boxShadow: '0 12px 40px rgba(0,0,0,0.6)',
-              padding: '5px 0', fontFamily: 'system-ui, sans-serif',
-            }}
-          >
-            <div style={{ padding: '4px 12px 6px', borderBottom: '1px solid rgba(255,255,255,0.07)', marginBottom: 4 }}>
-              <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: 11 }}>{group.name}</span>
-            </div>
-            {[
-              { label: 'Rename', icon: '✏️', action: () => {
-                const val = prompt('Card name:', group.name)
-                if (val !== null) useBoardsStore.getState().renameGroup(group.id, val)
-                setCardMenu(null)
-              }},
-              { label: 'Set Color', icon: '🎨', action: () => {
-                const val = prompt('Color hex:', group.color)
-                if (val !== null) useBoardsStore.getState().setGroupColor(group.id, val)
-                setCardMenu(null)
-              }},
-              { label: 'Edit Summary', icon: '📝', action: () => {
-                const val = prompt('Card summary:', group.cardSummary)
-                if (val !== null) useBoardsStore.getState().setGroupCardSummary(group.id, val)
-                setCardMenu(null)
-              }},
-              { label: 'Duplicate', icon: '📋', action: () => {
-                useUndoCoordinator.getState().checkpoint()
-                useBoardsStore.getState().duplicateGroup(group.id)
-                setCardMenu(null)
-              }},
-              ...(heroImage ? [{ label: 'Remove Hero Image', icon: '🖼', action: () => {
-                useUndoCoordinator.getState().checkpoint()
-                useBoardsStore.getState().setGroupCardHeroImage(group.id, null)
-                setCardMenu(null)
-              }}] : []),
-              ...(groups.length > 1 ? [{ label: 'Delete Card', icon: '🗑', action: () => {
-                useUndoCoordinator.getState().checkpoint()
-                group.boardIds.forEach(bid => {
-                  if (bid !== 'primary') useBoardsStore.getState().deleteBoard(bid)
-                })
-                useBoardsStore.getState().deleteGroup(group.id)
-                setCardMenu(null)
-              }}] : []),
-            ].map(item => (
-              <button
-                key={item.label}
-                onClick={item.action}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 9,
-                  width: '100%', padding: '7px 14px',
-                  background: 'none', border: 'none', cursor: 'pointer',
-                  color: '#e2e8f0', fontSize: 13, textAlign: 'left', borderRadius: 4,
-                }}
-                onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.07)')}
-                onMouseLeave={e => (e.currentTarget.style.background = 'none')}
-              >
-                <span style={{ fontSize: 14, width: 18, textAlign: 'center' }}>{item.icon}</span>
-                {item.label}
-              </button>
-            ))}
-          </div>
-        </>,
-        document.body
+      {cardMenu && (
+        <CardContextMenu pos={cardMenu} group={group} heroImage={heroImage} onClose={() => setCardMenu(null)} />
       )}
     </>
   )
@@ -624,6 +700,7 @@ const StackedDeckCard: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; isNeste
   const groups = useBoardsStore(s => s.groups)
   const isSelected = useBoardsStore(s => s.selectedGroupIds.includes(anchorGroup.id))
   const [isHovered, setIsHovered] = useState(false)
+  const [cardMenu, setCardMenu] = useState<{ x: number; y: number } | null>(null)
 
   // Compute anchor card geometry — identical to GroupCard so it looks exactly the same
   const { screenLeft, screenTop, screenWidth, screenHeight } = useMemo(() => {
@@ -812,6 +889,7 @@ const StackedDeckCard: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; isNeste
         }}
         onPointerEnter={() => setIsHovered(true)}
         onPointerLeave={() => setIsHovered(false)}
+        onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setCardMenu({ x: e.clientX, y: e.clientY }) }}
         onWheel={e => {
           e.stopPropagation()
           const f = e.deltaY < 0 ? 1.12 : 1 / 1.12
@@ -984,6 +1062,16 @@ const StackedDeckCard: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; isNeste
           )}
         </div>
       </div>
+      {cardMenu && (
+        <CardContextMenu
+          pos={cardMenu}
+          group={anchorGroup}
+          heroImage={heroImage}
+          deckMemberIds={deck.memberIds}
+          deckState={deck.state}
+          onClose={() => setCardMenu(null)}
+        />
+      )}
     </>
   )
 }
@@ -997,6 +1085,7 @@ const FannedDeckOverlay: React.FC<{ deck: Deck; groups: ProjectGroup[] }> = ({ d
   const allGroups = useBoardsStore(s => s.groups)
   const isSelected = useBoardsStore(s => s.selectedGroupIds.includes(deck.anchorGroupId))
   const [isHovered, setIsHovered] = useState(false)
+  const [cardMenu, setCardMenu] = useState<{ x: number; y: number } | null>(null)
   const [surfacedId, setSurfacedId] = useState<string | null>(null)
 
   const anchorGroup = groups.find(g => g.id === deck.anchorGroupId)
@@ -1224,10 +1313,9 @@ const FannedDeckOverlay: React.FC<{ deck: Deck; groups: ProjectGroup[] }> = ({ d
   }, [surfacedGroup, boards])
 
   return (
-    /* Single hover wrapper — covers primary card + strips + controls area.
-       Everything is inside so z-index stacking and pointer events work correctly.
-       Fanned decks render above other cards (z-index 50) so strips aren't blocked. */
-    <div
+    <>
+      {/* Single hover wrapper — primary card + strips + controls */}
+      <div
       data-group-card="true"
       data-id={anchorGroup.id}
       style={{
@@ -1241,6 +1329,7 @@ const FannedDeckOverlay: React.FC<{ deck: Deck; groups: ProjectGroup[] }> = ({ d
       }}
       onPointerEnter={() => setIsHovered(true)}
       onPointerLeave={() => { setIsHovered(false); setSurfacedId(null) }}
+      onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setCardMenu({ x: e.clientX, y: e.clientY }) }}
       onWheel={e => {
         e.stopPropagation()
         const f = e.deltaY < 0 ? 1.12 : 1 / 1.12
@@ -1485,6 +1574,17 @@ const FannedDeckOverlay: React.FC<{ deck: Deck; groups: ProjectGroup[] }> = ({ d
       </div>
 
     </div>
+    {cardMenu && (
+      <CardContextMenu
+        pos={cardMenu}
+        group={anchorGroup}
+        heroImage={heroImage}
+        deckMemberIds={deck.memberIds}
+        deckState={deck.state}
+        onClose={() => setCardMenu(null)}
+      />
+    )}
+    </>
   )
 }
 
