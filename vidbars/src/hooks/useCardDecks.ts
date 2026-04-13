@@ -141,12 +141,6 @@ export function useCardDecks(
           const ri = rects.get(zoneGroups[i].id)
           const rj = rects.get(zoneGroups[j].id)
           if (ri && rj && rectsTouch(ri, rj, TOUCH_TOLERANCE)) {
-            // Don't merge two separate stacked/fanned deck anchors —
-            // they are independent decks that happen to be adjacent.
-            const gi = zoneGroups[i], gj = zoneGroups[j]
-            const iIsAnchor = gi.deckState && gi.deckState !== 'open' && gi.deckAnchorId === gi.id
-            const jIsAnchor = gj.deckState && gj.deckState !== 'open' && gj.deckAnchorId === gj.id
-            if (iIsAnchor && jIsAnchor) continue
             uf.union(i, j)
           }
         }
