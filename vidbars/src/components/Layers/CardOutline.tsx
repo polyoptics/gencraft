@@ -7,6 +7,7 @@ import type { ProjectGroup } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { computeGroupLayout, getRowY, getRowHeight } from '../../utils/nleRows'
 import { DEFAULT_H } from '../../utils/barConstants'
+import { NLE_HEADER_CANVAS_H } from '../NLE/NLETimelineHeader'
 
 const BOARD_PADDING_X = 20
 
@@ -44,11 +45,12 @@ export const CardOutline: React.FC<{ group: ProjectGroup }> = ({ group }) => {
     const cH = bottom - top
     const finalW = Math.max(cW, group.cardWidthOverride ?? 0)
     const finalH = Math.max(cH, group.cardHeightOverride ?? 0)
+    const headerExtend = Math.max(NLE_HEADER_CANVAS_H * zoom, 20) + 2 * zoom
     return {
       screenLeft: pan.x + left * zoom,
-      screenTop: pan.y + top * zoom,
+      screenTop: pan.y + top * zoom - headerExtend,
       screenWidth: finalW * zoom,
-      screenHeight: finalH * zoom,
+      screenHeight: finalH * zoom + headerExtend,
     }
   }, [group, boards, pan, zoom])
 

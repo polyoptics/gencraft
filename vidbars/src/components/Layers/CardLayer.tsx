@@ -1681,11 +1681,12 @@ function cardScreenRect(g: ProjectGroup, boards: Record<string, import('../../st
   const cW = gMaxX - gMinX, cH = bottomY - topY
   const finalW = Math.max(cW, g.cardWidthOverride ?? 0)
   const finalH = Math.max(cH, g.cardHeightOverride ?? 0)
+  const headerExtend = Math.max(NLE_HEADER_CANVAS_H * zoom, 20) + 2 * zoom
   return {
     screenLeft: pan.x + gMinX * zoom,
-    screenTop: pan.y + topY * zoom,
+    screenTop: pan.y + topY * zoom - headerExtend,
     screenWidth: finalW * zoom,
-    screenHeight: finalH * zoom,
+    screenHeight: finalH * zoom + headerExtend,
   }
 }
 
@@ -2007,6 +2008,7 @@ const TextSplitDivider: React.FC<{
 }
 
 const GroupCardText: React.FC<{ groupId: string }> = ({ groupId }) => {
+  const zoom = useCanvasStore(s => s.zoom)
   const bodyText = useBoardsStore(s => s.groups.find(g => g.id === groupId)?.cardText ?? '')
   const rawBodyStyle = useBoardsStore(s => s.groups.find(g => g.id === groupId)?.cardTextStyle)
   const bodyTs: TextStyle = useMemo(() => ({ ...DEFAULT_BODY_STYLE, ...rawBodyStyle }), [rawBodyStyle])
@@ -2016,6 +2018,8 @@ const GroupCardText: React.FC<{ groupId: string }> = ({ groupId }) => {
   const headerTs: TextStyle = useMemo(() => ({ ...DEFAULT_HEADER_STYLE, ...rawHeaderStyle }), [rawHeaderStyle])
   const splitRatio = useBoardsStore(s => s.groups.find(g => g.id === groupId)?.textSplitRatio ?? 0.5)
   ensureFontLoaded(headerTs.fontFamily); ensureFontLoaded(bodyTs.fontFamily)
+  // Scale text down 10% at max zoom-out (zoom ~0.05) → 1.0 at 0.18, 0.9 at ≤0.05
+  const textScale = Math.min(1, 0.7 + 0.3 * ((zoom - 0.05) / (0.18 - 0.05)))
 
   const [editingField, setEditingField] = useState<'header' | 'body' | null>(null)
   const [activeField, setActiveField] = useState<TextFieldMode>('header')
@@ -2062,7 +2066,7 @@ const GroupCardText: React.FC<{ groupId: string }> = ({ groupId }) => {
   }, [activeField]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <div ref={wrapperRef} data-card-text style={{ position: 'absolute', inset: 0, zIndex: 1 }}>
+    <div ref={wrapperRef} data-card-text style={{ position: 'absolute', inset: 0, zIndex: 1, transform: `scale(${textScale})`, transformOrigin: 'top left', width: `${100 / textScale}%`, height: `${100 / textScale}%` }}>
       {selected && (
         <TextFormatToolbar
           headerStyle={headerTs}
@@ -2141,6 +2145,7 @@ const GroupCardText: React.FC<{ groupId: string }> = ({ groupId }) => {
 }
 
 const UngroupedCardText: React.FC<{ boardId: string }> = ({ boardId }) => {
+  const zoom = useCanvasStore(s => s.zoom)
   const bodyText = useBoardsStore(s => s.boards[boardId]?.layers?.card?.text ?? '')
   const rawBodyStyle = useBoardsStore(s => s.boards[boardId]?.layers?.card?.textStyle)
   const bodyTs: TextStyle = useMemo(() => ({ ...DEFAULT_BODY_STYLE, ...rawBodyStyle }), [rawBodyStyle])
@@ -2150,6 +2155,7 @@ const UngroupedCardText: React.FC<{ boardId: string }> = ({ boardId }) => {
   const headerTs: TextStyle = useMemo(() => ({ ...DEFAULT_HEADER_STYLE, ...rawHeaderStyle }), [rawHeaderStyle])
   const splitRatio = useBoardsStore(s => s.boards[boardId]?.layers?.card?.textSplitRatio ?? 0.5)
   ensureFontLoaded(headerTs.fontFamily); ensureFontLoaded(bodyTs.fontFamily)
+  const textScale = Math.min(1, 0.7 + 0.3 * ((zoom - 0.05) / (0.18 - 0.05)))
 
   const [editingField, setEditingField] = useState<'header' | 'body' | null>(null)
   const [activeField, setActiveField] = useState<TextFieldMode>('header')
@@ -2196,7 +2202,7 @@ const UngroupedCardText: React.FC<{ boardId: string }> = ({ boardId }) => {
   }, [activeField]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <div ref={wrapperRef} data-card-text style={{ position: 'absolute', inset: 0, zIndex: 1 }}>
+    <div ref={wrapperRef} data-card-text style={{ position: 'absolute', inset: 0, zIndex: 1, transform: `scale(${textScale})`, transformOrigin: 'top left', width: `${100 / textScale}%`, height: `${100 / textScale}%` }}>
       {selected && (
         <TextFormatToolbar
           headerStyle={headerTs}
