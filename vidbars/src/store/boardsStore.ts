@@ -841,6 +841,11 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
         cardSummary: group.cardSummary,
         cardText: group.cardText ?? '',
         cardHeaderText: group.cardHeaderText ?? '',
+        cardTextStyle: group.cardTextStyle ? { ...group.cardTextStyle } : undefined,
+        cardHeaderTextStyle: group.cardHeaderTextStyle ? { ...group.cardHeaderTextStyle } : undefined,
+        cardWidthOverride: group.cardWidthOverride,
+        cardHeightOverride: group.cardHeightOverride,
+        textSplitRatio: group.textSplitRatio,
         originY: group.originY + 100,
         originX: group.originX + 100,
       }

@@ -7,6 +7,7 @@ import { computeGroupLayout, getRowY, snapToCardGrid, CARD_GRID_SPACING } from '
 import { groupSlot, clampGroupMove } from '../../utils/nlePush'
 import type { GroupSlot } from '../../utils/nlePush'
 import { isHiddenDeckMember } from '../../hooks/useCardDecks'
+import { hexToHsl, hslToHex } from '../../utils/colorUtils'
 
 const BOARD_PADDING_X = 20
 export const NLE_HEADER_CANVAS_H = 36
@@ -21,9 +22,10 @@ interface Segment {
 
 interface Props {
   groupId?: string
+  rightInset?: number  // screen px to trim from right edge (e.g. deck edge reserve)
 }
 
-export const NLETimelineHeader: React.FC<Props> = ({ groupId }) => {
+export const NLETimelineHeader: React.FC<Props> = ({ groupId, rightInset = 0 }) => {
   const pan          = useCanvasStore(s => s.pan)
   const zoom         = useCanvasStore(s => s.zoom)
 
@@ -32,13 +34,16 @@ export const NLETimelineHeader: React.FC<Props> = ({ groupId }) => {
 
   // Resolve which group this header covers
   const group = groupId ? groups.find(g => g.id === groupId) : undefined
+  const groupGone = !!groupId && !group // group was deleted (e.g. during grip-drag)
+
   const scopedBoardIds = useMemo(() => {
+    if (groupGone) return [] // group deleted — render nothing
     if (group) return group.boardIds
     // No groupId → span all boards (legacy block/board level)
     const allBids: string[] = []
     groups.forEach(g => g.boardIds.forEach(bid => allBids.push(bid)))
     return allBids
-  }, [group, groups])
+  }, [group, groups, groupGone])
 
   const defaultName = group?.name ?? 'NLE Timeline'
 
@@ -172,7 +177,7 @@ export const NLETimelineHeader: React.FC<Props> = ({ groupId }) => {
   if (segments.length === 0) return null
 
   const screenLeft   = pan.x + globalCanvasLeft * zoom
-  const screenWidth  = (globalCanvasRight - globalCanvasLeft) * zoom
+  const screenWidth  = (globalCanvasRight - globalCanvasLeft) * zoom - rightInset
 
   const commitRename = () => {
     const trimmed = renameVal.trim()
@@ -201,6 +206,13 @@ export const NLETimelineHeader: React.FC<Props> = ({ groupId }) => {
   const isNarrow = effectiveWidth < 90
 
   if (screenLeft + screenWidth < 0 || screenTop + screenHeight < 0) return null
+
+  // Compute header fill: group color brightened 15%, at 25% opacity
+  const groupColor = group?.color ?? '#5b8dd9'
+  const { h, s, l } = hexToHsl(groupColor)
+  const brighterHex = hslToHex(h, s, Math.min(1, l + 0.15))
+  const n = parseInt(brighterHex.replace('#', ''), 16)
+  const headerBg = `rgba(${(n >> 16) & 0xff},${(n >> 8) & 0xff},${n & 0xff},0.25)`
 
   const viewerToggle = (
     <div
@@ -273,7 +285,7 @@ export const NLETimelineHeader: React.FC<Props> = ({ groupId }) => {
         top: isNarrow ? screenTop - 14 : screenTop,
         width: effectiveWidth,
         height: isNarrow ? screenHeight + 14 : screenHeight,
-        zIndex: 40,
+        zIndex: 41,
         userSelect: 'none',
         pointerEvents: 'all',
         cursor: isDragging ? 'grabbing' : 'grab',
@@ -283,26 +295,10 @@ export const NLETimelineHeader: React.FC<Props> = ({ groupId }) => {
     >
       <div style={{
         position: 'absolute', inset: 0,
-        background: 'rgba(255,255,255,0.05)',
-        border: '1px solid rgba(255,255,255,0.08)',
-        borderRadius: 6,
-        backdropFilter: 'blur(12px)',
-        boxShadow: '0 2px 12px rgba(0,0,0,0.35)',
+        background: headerBg,
+        borderRadius: '12px 12px 0 0',
         overflow: 'hidden',
-      }}>
-        {segments.map((seg, i) => i > 0 && (
-          <div
-            key={seg.boardId ?? 'primary'}
-            style={{
-              position: 'absolute',
-              left: (seg.canvasLeft / (globalCanvasRight - globalCanvasLeft)) * 100 + '%',
-              top: '20%', bottom: '20%',
-              width: 1,
-              background: 'rgba(255,255,255,0.10)',
-            }}
-          />
-        ))}
-      </div>
+      }} />
 
       <div style={{
         position: 'absolute', inset: 0,

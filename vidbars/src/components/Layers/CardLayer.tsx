@@ -16,7 +16,7 @@ import { computeGroupLayout, getRowY, getRowHeight, snapToCardGrid, CARD_GRID_SP
 import { DEFAULT_H } from '../../utils/barConstants'
 import { groupSlot, clampGroupMove } from '../../utils/nlePush'
 import { FreeCanvas } from '../Canvas/FreeCanvas'
-import { NLETimelineHeader } from '../NLE/NLETimelineHeader'
+import { NLETimelineHeader, NLE_HEADER_CANVAS_H } from '../NLE/NLETimelineHeader'
 import { getFirstImageUrl } from '../../types/bar'
 
 const BOARD_PADDING_X = 20
@@ -299,7 +299,7 @@ const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
   const [isHovered, setIsHovered] = useState(false)
 
   // ── Geometry: compute bounding box from group layout ──
-  const { screenLeft, screenTop, screenWidth, cardHeight, contentCanvasW, contentCanvasH, color } = useMemo(() => {
+  const { screenLeft, screenTop, screenWidth, cardHeight, headerPad, contentCanvasW, contentCanvasH, color } = useMemo(() => {
     const groupLayout = computeGroupLayout(group.boardIds, boards)
 
     let globalMinX = Infinity
@@ -331,7 +331,7 @@ const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
       if (by + visualH > bottomY) bottomY = by + visualH
     })
 
-    if (globalMinX === Infinity) return { screenLeft: 0, screenTop: 0, screenWidth: 0, cardHeight: 0, contentCanvasW: 0, contentCanvasH: 0, color: group.color }
+    if (globalMinX === Infinity) return { screenLeft: 0, screenTop: 0, screenWidth: 0, cardHeight: 0, headerPad: 0, contentCanvasW: 0, contentCanvasH: 0, color: group.color }
 
     globalMinX -= 16
     globalMaxX += 16
@@ -341,11 +341,16 @@ const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
     const finalW = Math.max(cW, group.cardWidthOverride ?? 0)
     const finalH = Math.max(cH, group.cardHeightOverride ?? 0)
 
+    // Extend card top upward to fill behind the timeline header (visual only)
+    // Must match NLETimelineHeader's clamped screen height (Math.max(..., 20)) + gap
+    const headerExtend = Math.max(NLE_HEADER_CANVAS_H * zoom, 20) + 2 * zoom
+
     return {
       screenLeft: pan.x + globalMinX * zoom,
-      screenTop: pan.y + topY * zoom,
+      screenTop: pan.y + topY * zoom - headerExtend,
       screenWidth: finalW * zoom,
-      cardHeight: finalH * zoom,
+      cardHeight: finalH * zoom + headerExtend,
+      headerPad: headerExtend,
       contentCanvasW: cW,
       contentCanvasH: cH,
       color: group.color,
@@ -386,7 +391,7 @@ const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
     const startX = e.clientX
     const startY = e.clientY
     const startW = screenWidth / zoom
-    const startH = cardHeight / zoom
+    const startH = (cardHeight - headerPad) / zoom  // exclude header extension from canvas-space height
 
     const onMove = (ev: PointerEvent) => {
       const z = useCanvasStore.getState().zoom
@@ -406,7 +411,7 @@ const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
     }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
-  }, [group.id, screenWidth, cardHeight, contentCanvasW, contentCanvasH, zoom])
+  }, [group.id, screenWidth, cardHeight, headerPad, contentCanvasW, contentCanvasH, zoom])
 
   if (screenWidth === 0) return null
   if (screenLeft + screenWidth < 0 || screenTop + cardHeight < 0) return null
@@ -456,15 +461,17 @@ const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
             opacity: 0.7, borderRadius: 12,
           }} />
         )}
-        {/* Independent card-level text */}
-        <GroupCardText groupId={group.id} />
-        <div style={{
-          position: 'absolute', bottom: 6, left: 8, zIndex: 2,
-          color: 'rgba(255,255,255,0.7)', fontSize: 11, fontWeight: 600,
-          textShadow: '0 1px 4px rgba(0,0,0,0.8)',
-          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        }}>
-          {group.cardSummary || `${group.boardIds.length} board${group.boardIds.length !== 1 ? 's' : ''}`}
+        {/* Content area — offset below header extension */}
+        <div style={{ position: 'absolute', top: headerPad, left: 0, right: 0, bottom: 0, overflow: 'hidden', borderRadius: '0 0 12px 12px' }}>
+          <GroupCardText groupId={group.id} />
+          <div style={{
+            position: 'absolute', bottom: 6, left: 8, zIndex: 2,
+            color: 'rgba(255,255,255,0.7)', fontSize: 11, fontWeight: 600,
+            textShadow: '0 1px 4px rgba(0,0,0,0.8)',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>
+            {group.cardSummary || `${group.boardIds.length} board${group.boardIds.length !== 1 ? 's' : ''}`}
+          </div>
         </div>
         {/* ── Resize handles ── */}
         {isHovered && (
@@ -724,7 +731,7 @@ const StackedDeckCard: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; isNeste
   const [cardMenu, setCardMenu] = useState<{ x: number; y: number } | null>(null)
 
   // Compute anchor card geometry — identical to GroupCard so it looks exactly the same
-  const { screenLeft, screenTop, screenWidth, screenHeight } = useMemo(() => {
+  const { screenLeft, screenTop, screenWidth, screenHeight, headerPad } = useMemo(() => {
     const groupLayout = computeGroupLayout(anchorGroup.boardIds, boards)
     let globalMinX = Infinity, globalMaxX = -Infinity, topY = Infinity, bottomY = -Infinity
 
@@ -750,16 +757,18 @@ const StackedDeckCard: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; isNeste
       if (by + visualH > bottomY) bottomY = by + visualH
     })
 
-    if (globalMinX === Infinity) return { screenLeft: 0, screenTop: 0, screenWidth: 0, screenHeight: 0 }
+    if (globalMinX === Infinity) return { screenLeft: 0, screenTop: 0, screenWidth: 0, screenHeight: 0, headerPad: 0 }
     globalMinX -= 16; globalMaxX += 16
     const cW = globalMaxX - globalMinX, cH = bottomY - topY
     const finalW = Math.max(cW, anchorGroup.cardWidthOverride ?? 0)
     const finalH = Math.max(cH, anchorGroup.cardHeightOverride ?? 0)
+    const headerExtend = Math.max(NLE_HEADER_CANVAS_H * zoom, 20) + 2 * zoom
     return {
       screenLeft: pan.x + globalMinX * zoom,
-      screenTop: pan.y + topY * zoom,
+      screenTop: pan.y + topY * zoom - headerExtend,
       screenWidth: finalW * zoom,
-      screenHeight: finalH * zoom,
+      screenHeight: finalH * zoom + headerExtend,
+      headerPad: headerExtend,
     }
   }, [anchorGroup, boards, pan, zoom])
 
@@ -885,11 +894,10 @@ const StackedDeckCard: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; isNeste
     return null
   }, [anchorGroup, boards])
 
-  // Stacked card outlines — right-side only, contained within the card's bounding box.
-  // The primary card is slightly narrower to make room for edge indicators.
+  // Stacked card outlines — right-side only, max 2 edges to keep primary card wide.
   const PEEK_RIGHT = 3  // px each edge step
-  const showCount  = Math.min(secondaryCards.length, 2)
-  const EDGE_RESERVE = showCount >= 1 ? PEEK_RIGHT * 4 + 6 : 0 // space reserved for edges on right
+  const showCount  = Math.min(secondaryCards.length, 1) // always show max 2 edges (1 = has secondaries)
+  const EDGE_RESERVE = showCount >= 1 ? PEEK_RIGHT * 2 + 4 : 0 // space reserved for 2 edges on right
   const cardWidth = screenWidth - EDGE_RESERVE // primary card is slimmer
   const edgeBaseX = cardWidth - 1 // edges start at right edge of slimmed card
 
@@ -922,37 +930,36 @@ const StackedDeckCard: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; isNeste
           useCanvasStore.getState().zoomAtPoint(f, mx, my)
         }}
       >
-        {/* Edge 1 — full-height right edge with top+bottom rounded corners */}
+        {/* Edge 1 — content-height right edge, beyond card face */}
         {showCount >= 1 && (
           <div
             key="stack-edge-0"
             style={{
               position: 'absolute',
               left: edgeBaseX,
-              top: 0,
+              top: 5,
               width: PEEK_RIGHT + 2,
-              height: screenHeight,
-              borderRadius: '0 8px 8px 0',
+              height: screenHeight - 10,
+              borderRadius: '0 12px 12px 0',
               background: 'transparent',
               borderTop: '2px solid rgba(120,170,255,0.6)',
               borderRight: '2px solid rgba(120,170,255,0.6)',
               borderBottom: '2px solid rgba(120,170,255,0.6)',
-              borderLeft: 'none',
               zIndex: 37,
               pointerEvents: 'none',
             }}
           />
         )}
-        {/* Edge 2 — 94% height, centered */}
-        {showCount >= 2 && (
+        {/* Edge 2 — 90% of content height, centered */}
+        {showCount >= 1 && secondaryCards.length >= 2 && (
           <div
             key="stack-edge-1"
             style={{
               position: 'absolute',
               left: edgeBaseX + PEEK_RIGHT + 1,
-              top: screenHeight * 0.03,
+              top: screenHeight * 0.05,
               width: PEEK_RIGHT + 2,
-              height: screenHeight * 0.94,
+              height: screenHeight * 0.9,
               borderRadius: '0 6px 6px 0',
               background: 'transparent',
               borderRight: '2px solid rgba(130,170,255,0.42)',
@@ -960,48 +967,6 @@ const StackedDeckCard: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; isNeste
               borderBottom: 'none',
               borderLeft: 'none',
               zIndex: 36,
-              pointerEvents: 'none',
-            }}
-          />
-        )}
-        {/* Edge 3 — 50% height, centered vertically */}
-        {showCount >= 2 && (
-          <div
-            key="stack-edge-2"
-            style={{
-              position: 'absolute',
-              left: edgeBaseX + PEEK_RIGHT * 2 + 2,
-              top: screenHeight * 0.25,
-              width: PEEK_RIGHT + 2,
-              height: screenHeight * 0.5,
-              borderRadius: 0,
-              background: 'transparent',
-              borderRight: '2px solid rgba(120,160,255,0.3)',
-              borderTop: 'none',
-              borderBottom: 'none',
-              borderLeft: 'none',
-              zIndex: 35,
-              pointerEvents: 'none',
-            }}
-          />
-        )}
-        {/* Edge 4 — 30% height, centered vertically */}
-        {showCount >= 2 && (
-          <div
-            key="stack-edge-3"
-            style={{
-              position: 'absolute',
-              left: edgeBaseX + PEEK_RIGHT * 3 + 3,
-              top: screenHeight * 0.35,
-              width: PEEK_RIGHT + 2,
-              height: screenHeight * 0.3,
-              borderRadius: 0,
-              background: 'transparent',
-              borderRight: '2px solid rgba(110,150,255,0.15)',
-              borderTop: 'none',
-              borderBottom: 'none',
-              borderLeft: 'none',
-              zIndex: 34,
               pointerEvents: 'none',
             }}
           />
@@ -1064,13 +1029,16 @@ const StackedDeckCard: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; isNeste
               opacity: 0.7, borderRadius: 12,
             }} />
           )}
-          <GroupCardText groupId={anchorGroup.id} />
-          <div style={{
-            position: 'absolute', bottom: 6, left: 8, zIndex: 2,
-            color: 'rgba(255,255,255,0.7)', fontSize: 11, fontWeight: 600,
-            textShadow: '0 1px 4px rgba(0,0,0,0.8)',
-          }}>
-            {anchorGroup.cardSummary || anchorGroup.name}
+          {/* Content area — offset below header extension */}
+          <div style={{ position: 'absolute', top: headerPad, left: 0, right: 0, bottom: 0, overflow: 'hidden', borderRadius: '0 0 12px 12px' }}>
+            <GroupCardText groupId={anchorGroup.id} />
+            <div style={{
+              position: 'absolute', bottom: 6, left: 8, zIndex: 2,
+              color: 'rgba(255,255,255,0.7)', fontSize: 11, fontWeight: 600,
+              textShadow: '0 1px 4px rgba(0,0,0,0.8)',
+            }}>
+              {anchorGroup.cardSummary || anchorGroup.name}
+            </div>
           </div>
           {/* Badge on primary card */}
           {isHovered && (
@@ -1113,7 +1081,7 @@ const FannedDeckOverlay: React.FC<{ deck: Deck; groups: ProjectGroup[] }> = ({ d
   if (!anchorGroup) return null
 
   // Compute primary card geometry — identical to GroupCard / StackedDeckCard
-  const { screenLeft, screenTop, screenWidth, screenHeight } = useMemo(() => {
+  const { screenLeft, screenTop, screenWidth, screenHeight, headerPad } = useMemo(() => {
     const groupLayout = computeGroupLayout(anchorGroup.boardIds, boards)
     let globalMinX = Infinity, globalMaxX = -Infinity, topY = Infinity, bottomY = -Infinity
 
@@ -1139,16 +1107,18 @@ const FannedDeckOverlay: React.FC<{ deck: Deck; groups: ProjectGroup[] }> = ({ d
       if (by + visualH > bottomY) bottomY = by + visualH
     })
 
-    if (globalMinX === Infinity) return { screenLeft: 0, screenTop: 0, screenWidth: 0, screenHeight: 0 }
+    if (globalMinX === Infinity) return { screenLeft: 0, screenTop: 0, screenWidth: 0, screenHeight: 0, headerPad: 0 }
     globalMinX -= 16; globalMaxX += 16
     const cW = globalMaxX - globalMinX, cH = bottomY - topY
     const finalW = Math.max(cW, anchorGroup.cardWidthOverride ?? 0)
     const finalH = Math.max(cH, anchorGroup.cardHeightOverride ?? 0)
+    const headerExtend = Math.max(NLE_HEADER_CANVAS_H * zoom, 20) + 2 * zoom
     return {
       screenLeft: pan.x + globalMinX * zoom,
-      screenTop: pan.y + topY * zoom,
+      screenTop: pan.y + topY * zoom - headerExtend,
       screenWidth: finalW * zoom,
-      screenHeight: finalH * zoom,
+      screenHeight: finalH * zoom + headerExtend,
+      headerPad: headerExtend,
     }
   }, [anchorGroup, boards, pan, zoom])
 
@@ -1511,14 +1481,16 @@ const FannedDeckOverlay: React.FC<{ deck: Deck; groups: ProjectGroup[] }> = ({ d
               opacity: 0.7, borderRadius: 12,
             }} />
           )}
-          {/* Card's own header/body text — same component as the normal card */}
-          <GroupCardText groupId={surfacedGroup.id} />
-          <div style={{
-            position: 'absolute', bottom: 6, left: 8, zIndex: 2,
-            color: 'rgba(255,255,255,0.7)', fontSize: 11, fontWeight: 600,
-            textShadow: '0 1px 4px rgba(0,0,0,0.8)',
-          }}>
-            {surfacedGroup.cardSummary || surfacedGroup.name}
+          {/* Content area — offset below header extension */}
+          <div style={{ position: 'absolute', top: headerPad, left: 0, right: 0, bottom: 0, overflow: 'hidden', borderRadius: '0 0 12px 12px' }}>
+            <GroupCardText groupId={surfacedGroup.id} />
+            <div style={{
+              position: 'absolute', bottom: 6, left: 8, zIndex: 2,
+              color: 'rgba(255,255,255,0.7)', fontSize: 11, fontWeight: 600,
+              textShadow: '0 1px 4px rgba(0,0,0,0.8)',
+            }}>
+              {surfacedGroup.cardSummary || surfacedGroup.name}
+            </div>
           </div>
           {/* Sub-deck indicator — stacked edges on surfaced card */}
           {isSubDeckAnchor(surfacedGroup.id, allGroups) && (
@@ -1575,13 +1547,16 @@ const FannedDeckOverlay: React.FC<{ deck: Deck; groups: ProjectGroup[] }> = ({ d
             opacity: 0.7, borderRadius: 12,
           }} />
         )}
-        <GroupCardText groupId={anchorGroup.id} />
-        <div style={{
-          position: 'absolute', bottom: 6, left: 8, zIndex: 2,
-          color: 'rgba(255,255,255,0.7)', fontSize: 11, fontWeight: 600,
-          textShadow: '0 1px 4px rgba(0,0,0,0.8)',
-        }}>
-          {anchorGroup.cardSummary || anchorGroup.name}
+        {/* Content area — offset below header extension */}
+        <div style={{ position: 'absolute', top: headerPad, left: 0, right: 0, bottom: 0, overflow: 'hidden', borderRadius: '0 0 12px 12px' }}>
+          <GroupCardText groupId={anchorGroup.id} />
+          <div style={{
+            position: 'absolute', bottom: 6, left: 8, zIndex: 2,
+            color: 'rgba(255,255,255,0.7)', fontSize: 11, fontWeight: 600,
+            textShadow: '0 1px 4px rgba(0,0,0,0.8)',
+          }}>
+            {anchorGroup.cardSummary || anchorGroup.name}
+          </div>
         </div>
         {/* Badge */}
         {isHovered && (
@@ -1900,7 +1875,7 @@ const Overlay: React.FC = () => {
           )
           return (
             <Fragment key={g.id}>
-              <NLETimelineHeader groupId={g.id} />
+              <NLETimelineHeader groupId={g.id} rightInset={deck.memberIds.length > 1 ? 10 : 0} />
               <StackedDeckCard deck={deck} anchorGroup={g} isNested={nested} />
             </Fragment>
           )
