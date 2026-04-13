@@ -285,7 +285,7 @@ export const NLETimelineHeader: React.FC<Props> = ({ groupId, rightInset = 0 }) 
         top: isNarrow ? screenTop - 14 : screenTop,
         width: effectiveWidth,
         height: isNarrow ? screenHeight + 14 : screenHeight,
-        zIndex: 41,
+        zIndex: 51,
         userSelect: 'none',
         pointerEvents: 'all',
         cursor: isDragging ? 'grabbing' : 'grab',

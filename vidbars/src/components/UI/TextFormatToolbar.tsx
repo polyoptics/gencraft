@@ -258,11 +258,19 @@ interface TextFormatToolbarProps {
   anchorRect: { left: number; top: number; right: number; bottom: number } | null
   preferBelow?: boolean  // true for block/card layer text where headers sit above
   onClose?: () => void   // if provided, renders a backdrop that closes toolbar on outside click
+  // Hero image editing (optional — shown only when heroImage is set)
+  heroImage?: string | null
+  heroFlipH?: boolean
+  heroFlipV?: boolean
+  onFlipH?: () => void
+  onFlipV?: () => void
+  onCropImage?: () => void
 }
 
 export const TextFormatToolbar: React.FC<TextFormatToolbarProps> = ({
   headerStyle, bodyStyle, onHeaderStyleChange, onBodyStyleChange,
   activeField, onActiveFieldChange, anchorRect, preferBelow, onClose,
+  heroImage, heroFlipH, heroFlipV, onFlipH, onFlipV, onCropImage,
 }) => {
   const [showPopup, setShowPopup] = useState<'text' | 'bg' | 'hAlign' | 'vAlign' | 'font' | null>(null)
 
@@ -507,6 +515,33 @@ export const TextFormatToolbar: React.FC<TextFormatToolbarProps> = ({
           <BgPickerPopup bgColor={ts.bgColor} bgOpacity={ts.bgOpacity} onColorSelect={c => setStyle({ bgColor: c })} onOpacityChange={o => setStyle({ bgOpacity: o })} onClose={() => setShowPopup(null)} />
         )}
       </div>
+
+      {/* Hero image editing buttons — only shown when a hero image exists */}
+      {heroImage && (
+        <>
+          <div style={sepStyle} />
+          <button style={btnStyle(heroFlipH)} onClick={onFlipH} title="Flip horizontal">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M7 1v12" strokeDasharray="2 1.5"/>
+              <path d="M4.5 4L2 7l2.5 3"/>
+              <path d="M9.5 4L12 7l-2.5 3"/>
+            </svg>
+          </button>
+          <button style={btnStyle(heroFlipV)} onClick={onFlipV} title="Flip vertical">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M1 7h12" strokeDasharray="2 1.5"/>
+              <path d="M4 4.5L7 2l3 2.5"/>
+              <path d="M4 9.5L7 12l3-2.5"/>
+            </svg>
+          </button>
+          <button style={btnStyle()} onClick={onCropImage} title="Crop / reposition image">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3.5 0.5v10h10"/>
+              <path d="M0.5 3.5h10v10"/>
+            </svg>
+          </button>
+        </>
+      )}
     </div>
     </>,
     document.body

@@ -27,12 +27,21 @@ const INIT_H = 270
 const PRIMARY_INIT_ID = 'root-bar'
 
 /** A project group — boards that collapse into one card at card zoom level */
+export interface HeroImageTransform {
+  scale: number      // 1 = cover-fit, >1 = zoomed in
+  offsetX: number    // % shift from center (background-position)
+  offsetY: number    // % shift from center
+  flipH: boolean
+  flipV: boolean
+}
+
 export interface ProjectGroup {
   id: string
   name: string
   color: string
   boardIds: string[]   // ordered, can include 'primary'
   cardHeroImage: string | null
+  cardHeroTransform?: HeroImageTransform
   cardSummary: string
   cardText: string     // independent body text visible on the card
   cardTextStyle?: import('../store/freeNodeStore').TextStyle
@@ -180,6 +189,7 @@ interface BoardsState {
   renameGroup: (groupId: string, name: string) => void
   setGroupColor: (groupId: string, color: string) => void
   setGroupCardHeroImage: (groupId: string, url: string | null) => void
+  setGroupCardHeroTransform: (groupId: string, transform: HeroImageTransform | undefined) => void
   setGroupCardSummary: (groupId: string, summary: string) => void
   setGroupCardText: (groupId: string, text: string) => void
   setGroupCardTextStyle: (groupId: string, style: import('../store/freeNodeStore').TextStyle) => void
@@ -676,7 +686,11 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
   },
 
   setGroupCardHeroImage(groupId, url) {
-    set(s => ({ groups: s.groups.map(g => g.id === groupId ? { ...g, cardHeroImage: url } : g) }))
+    set(s => ({ groups: s.groups.map(g => g.id === groupId ? { ...g, cardHeroImage: url, ...(url === null ? { cardHeroTransform: undefined } : {}) } : g) }))
+  },
+
+  setGroupCardHeroTransform(groupId, transform) {
+    set(s => ({ groups: s.groups.map(g => g.id === groupId ? { ...g, cardHeroTransform: transform } : g) }))
   },
 
   setGroupCardSummary(groupId, summary) {
@@ -838,6 +852,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
         color: group.color,
         boardIds: newBoardIds,
         cardHeroImage: group.cardHeroImage,
+        cardHeroTransform: group.cardHeroTransform ? { ...group.cardHeroTransform } : undefined,
         cardSummary: group.cardSummary,
         cardText: group.cardText ?? '',
         cardHeaderText: group.cardHeaderText ?? '',

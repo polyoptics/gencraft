@@ -17,6 +17,8 @@ import { DEFAULT_H } from '../../utils/barConstants'
 import { groupSlot, clampGroupMove } from '../../utils/nlePush'
 import { FreeCanvas } from '../Canvas/FreeCanvas'
 import { NLETimelineHeader, NLE_HEADER_CANVAS_H } from '../NLE/NLETimelineHeader'
+import { HeroImageLayer } from './HeroImageLayer'
+import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
 import { getFirstImageUrl } from '../../types/bar'
 
 const BOARD_PADDING_X = 20
@@ -56,7 +58,8 @@ const CardContextMenu: React.FC<{
   deckMemberIds?: string[]   // if this card is part of a deck
   deckState?: 'open' | 'fanned' | 'stacked'
   onClose: () => void
-}> = ({ pos, group, heroImage, deckMemberIds, deckState, onClose }) => {
+  onEditHeroImage?: () => void
+}> = ({ pos, group, heroImage, deckMemberIds, deckState, onClose, onEditHeroImage }) => {
   const groups = useBoardsStore(s => s.groups)
   const [showColors, setShowColors] = useState(false)
 
@@ -105,7 +108,11 @@ const CardContextMenu: React.FC<{
     onClose()
   }})
 
-  // Remove hero image
+  // Hero image actions
+  if (heroImage && onEditHeroImage) menuItems.push({ label: 'Edit Hero Image', icon: '✂️', action: () => {
+    onClose()
+    onEditHeroImage()
+  }})
   if (heroImage) menuItems.push({ label: 'Remove Hero Image', icon: '🖼', action: () => {
     useUndoCoordinator.getState().checkpoint()
     useBoardsStore.getState().setGroupCardHeroImage(group.id, null)
@@ -202,6 +209,7 @@ const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
 
   const [isDragging, setIsDragging] = useState(false)
   const [cardMenu, setCardMenu] = useState<{ x: number; y: number } | null>(null)
+  const [isEditingHero, setIsEditingHero] = useState(false)
 
   // ── Group drag: move group.originY / group.originX ──
   const onCardDown = useCallback((e: React.PointerEvent) => {
@@ -453,17 +461,10 @@ const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
           el?.dispatchEvent(new CustomEvent('start-edit', { bubbles: false }))
         }}
       >
-        {heroImage && (
-          <div style={{
-            position: 'absolute', inset: 0,
-            backgroundImage: `url(${heroImage})`,
-            backgroundSize: 'cover', backgroundPosition: 'center',
-            opacity: 0.7, borderRadius: 12,
-          }} />
-        )}
+        {heroImage && <HeroImageLayer heroImage={heroImage} transform={group.cardHeroTransform} />}
         {/* Content area — offset below header extension */}
         <div style={{ position: 'absolute', top: headerPad, left: 0, right: 0, bottom: 0, overflow: 'hidden', borderRadius: '0 0 12px 12px' }}>
-          <GroupCardText groupId={group.id} />
+          <GroupCardText groupId={group.id} onCropImage={() => setIsEditingHero(true)} heroImage={heroImage} />
           <div style={{
             position: 'absolute', bottom: 6, left: 8, zIndex: 2,
             color: 'rgba(255,255,255,0.7)', fontSize: 11, fontWeight: 600,
@@ -505,7 +506,21 @@ const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
       </div>
 
       {cardMenu && (
-        <CardContextMenu pos={cardMenu} group={group} heroImage={heroImage} onClose={() => setCardMenu(null)} />
+        <CardContextMenu pos={cardMenu} group={group} heroImage={heroImage} onClose={() => setCardMenu(null)} onEditHeroImage={() => setIsEditingHero(true)} />
+      )}
+
+      {isEditingHero && heroImage && (
+        <HeroImageEditOverlay
+          cardRect={{ left: screenLeft, top: screenTop, width: screenWidth, height: cardHeight }}
+          heroImage={heroImage}
+          initialTransform={group.cardHeroTransform ?? { scale: 1, offsetX: 0, offsetY: 0, flipH: false, flipV: false }}
+          onDone={t => {
+            useUndoCoordinator.getState().checkpoint()
+            useBoardsStore.getState().setGroupCardHeroTransform(group.id, t)
+            setIsEditingHero(false)
+          }}
+          onCancel={() => setIsEditingHero(false)}
+        />
       )}
     </>
   )
@@ -642,14 +657,7 @@ const UngroupedBoardCard: React.FC<{ boardId: string }> = ({ boardId }) => {
         el?.dispatchEvent(new CustomEvent('start-edit', { bubbles: false }))
       }}
     >
-      {heroImage && (
-        <div style={{
-          position: 'absolute', inset: 0,
-          backgroundImage: `url(${heroImage})`,
-          backgroundSize: 'cover', backgroundPosition: 'center',
-          opacity: 0.7, borderRadius: 12,
-        }} />
-      )}
+      {heroImage && <HeroImageLayer heroImage={heroImage} />}
       {/* Independent card-level text */}
       <UngroupedCardText boardId={boardId} />
       <div style={{
@@ -729,6 +737,7 @@ const StackedDeckCard: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; isNeste
   const isSelected = useBoardsStore(s => s.selectedGroupIds.includes(anchorGroup.id))
   const [isHovered, setIsHovered] = useState(false)
   const [cardMenu, setCardMenu] = useState<{ x: number; y: number } | null>(null)
+  const [isEditingHero, setIsEditingHero] = useState(false)
 
   // Compute anchor card geometry — identical to GroupCard so it looks exactly the same
   const { screenLeft, screenTop, screenWidth, screenHeight, headerPad } = useMemo(() => {
@@ -1021,17 +1030,10 @@ const StackedDeckCard: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; isNeste
             useBoardsStore.getState().setDeckState(deck.memberIds, isSubDeck ? 'fanned' : 'open')
           }}
         >
-          {heroImage && (
-            <div style={{
-              position: 'absolute', inset: 0,
-              backgroundImage: `url(${heroImage})`,
-              backgroundSize: 'cover', backgroundPosition: 'center',
-              opacity: 0.7, borderRadius: 12,
-            }} />
-          )}
+          {heroImage && <HeroImageLayer heroImage={heroImage} transform={anchorGroup.cardHeroTransform} />}
           {/* Content area — offset below header extension */}
           <div style={{ position: 'absolute', top: headerPad, left: 0, right: 0, bottom: 0, overflow: 'hidden', borderRadius: '0 0 12px 12px' }}>
-            <GroupCardText groupId={anchorGroup.id} />
+            <GroupCardText groupId={anchorGroup.id} onCropImage={() => setIsEditingHero(true)} heroImage={heroImage} />
             <div style={{
               position: 'absolute', bottom: 6, left: 8, zIndex: 2,
               color: 'rgba(255,255,255,0.7)', fontSize: 11, fontWeight: 600,
@@ -1059,6 +1061,20 @@ const StackedDeckCard: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; isNeste
           deckMemberIds={deck.memberIds}
           deckState={deck.state}
           onClose={() => setCardMenu(null)}
+          onEditHeroImage={() => setIsEditingHero(true)}
+        />
+      )}
+      {isEditingHero && heroImage && (
+        <HeroImageEditOverlay
+          cardRect={{ left: screenLeft, top: screenTop, width: screenWidth, height: screenHeight }}
+          heroImage={heroImage}
+          initialTransform={anchorGroup.cardHeroTransform ?? { scale: 1, offsetX: 0, offsetY: 0, flipH: false, flipV: false }}
+          onDone={t => {
+            useUndoCoordinator.getState().checkpoint()
+            useBoardsStore.getState().setGroupCardHeroTransform(anchorGroup.id, t)
+            setIsEditingHero(false)
+          }}
+          onCancel={() => setIsEditingHero(false)}
         />
       )}
     </>
@@ -1076,6 +1092,7 @@ const FannedDeckOverlay: React.FC<{ deck: Deck; groups: ProjectGroup[] }> = ({ d
   const [isHovered, setIsHovered] = useState(false)
   const [cardMenu, setCardMenu] = useState<{ x: number; y: number } | null>(null)
   const [surfacedId, setSurfacedId] = useState<string | null>(null)
+  const [isEditingHero, setIsEditingHero] = useState(false)
 
   const anchorGroup = groups.find(g => g.id === deck.anchorGroupId)
   if (!anchorGroup) return null
@@ -1473,14 +1490,7 @@ const FannedDeckOverlay: React.FC<{ deck: Deck; groups: ProjectGroup[] }> = ({ d
             transition: 'opacity 0.12s ease-in',
           }}
         >
-          {surfacedHero && (
-            <div style={{
-              position: 'absolute', inset: 0,
-              backgroundImage: `url(${surfacedHero})`,
-              backgroundSize: 'cover', backgroundPosition: 'center',
-              opacity: 0.7, borderRadius: 12,
-            }} />
-          )}
+          {surfacedHero && <HeroImageLayer heroImage={surfacedHero} transform={surfacedGroup.cardHeroTransform} />}
           {/* Content area — offset below header extension */}
           <div style={{ position: 'absolute', top: headerPad, left: 0, right: 0, bottom: 0, overflow: 'hidden', borderRadius: '0 0 12px 12px' }}>
             <GroupCardText groupId={surfacedGroup.id} />
@@ -1539,17 +1549,10 @@ const FannedDeckOverlay: React.FC<{ deck: Deck; groups: ProjectGroup[] }> = ({ d
         }}
         onPointerDown={onFanDragDown}
       >
-        {heroImage && (
-          <div style={{
-            position: 'absolute', inset: 0,
-            backgroundImage: `url(${heroImage})`,
-            backgroundSize: 'cover', backgroundPosition: 'center',
-            opacity: 0.7, borderRadius: 12,
-          }} />
-        )}
+        {heroImage && <HeroImageLayer heroImage={heroImage} transform={anchorGroup.cardHeroTransform} />}
         {/* Content area — offset below header extension */}
         <div style={{ position: 'absolute', top: headerPad, left: 0, right: 0, bottom: 0, overflow: 'hidden', borderRadius: '0 0 12px 12px' }}>
-          <GroupCardText groupId={anchorGroup.id} />
+          <GroupCardText groupId={anchorGroup.id} onCropImage={() => setIsEditingHero(true)} />
           <div style={{
             position: 'absolute', bottom: 6, left: 8, zIndex: 2,
             color: 'rgba(255,255,255,0.7)', fontSize: 11, fontWeight: 600,
@@ -1578,6 +1581,20 @@ const FannedDeckOverlay: React.FC<{ deck: Deck; groups: ProjectGroup[] }> = ({ d
         deckMemberIds={deck.memberIds}
         deckState={deck.state}
         onClose={() => setCardMenu(null)}
+        onEditHeroImage={() => setIsEditingHero(true)}
+      />
+    )}
+    {isEditingHero && heroImage && (
+      <HeroImageEditOverlay
+        cardRect={{ left: screenLeft, top: screenTop, width: screenWidth, height: screenHeight }}
+        heroImage={heroImage}
+        initialTransform={anchorGroup.cardHeroTransform ?? { scale: 1, offsetX: 0, offsetY: 0, flipH: false, flipV: false }}
+        onDone={t => {
+          useUndoCoordinator.getState().checkpoint()
+          useBoardsStore.getState().setGroupCardHeroTransform(anchorGroup.id, t)
+          setIsEditingHero(false)
+        }}
+        onCancel={() => setIsEditingHero(false)}
       />
     )}
     </>
@@ -2007,8 +2024,10 @@ const TextSplitDivider: React.FC<{
   )
 }
 
-const GroupCardText: React.FC<{ groupId: string }> = ({ groupId }) => {
+const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void; heroImage?: string | null }> = ({ groupId, onCropImage, heroImage: heroImageProp }) => {
   const zoom = useCanvasStore(s => s.zoom)
+  const heroImage = heroImageProp ?? useBoardsStore(s => s.groups.find(g => g.id === groupId)?.cardHeroImage ?? null)
+  const heroTransform = useBoardsStore(s => s.groups.find(g => g.id === groupId)?.cardHeroTransform)
   const bodyText = useBoardsStore(s => s.groups.find(g => g.id === groupId)?.cardText ?? '')
   const rawBodyStyle = useBoardsStore(s => s.groups.find(g => g.id === groupId)?.cardTextStyle)
   const bodyTs: TextStyle = useMemo(() => ({ ...DEFAULT_BODY_STYLE, ...rawBodyStyle }), [rawBodyStyle])
@@ -2077,6 +2096,20 @@ const GroupCardText: React.FC<{ groupId: string }> = ({ groupId }) => {
           onActiveFieldChange={setActiveField}
           anchorRect={rect}
           preferBelow
+          heroImage={heroImage}
+          heroFlipH={heroTransform?.flipH}
+          heroFlipV={heroTransform?.flipV}
+          onFlipH={() => {
+            useUndoCoordinator.getState().checkpoint()
+            const cur = useBoardsStore.getState().groups.find(g => g.id === groupId)?.cardHeroTransform ?? { scale: 1, offsetX: 0, offsetY: 0, flipH: false, flipV: false }
+            useBoardsStore.getState().setGroupCardHeroTransform(groupId, { ...cur, flipH: !cur.flipH })
+          }}
+          onFlipV={() => {
+            useUndoCoordinator.getState().checkpoint()
+            const cur = useBoardsStore.getState().groups.find(g => g.id === groupId)?.cardHeroTransform ?? { scale: 1, offsetX: 0, offsetY: 0, flipH: false, flipV: false }
+            useBoardsStore.getState().setGroupCardHeroTransform(groupId, { ...cur, flipV: !cur.flipV })
+          }}
+          onCropImage={onCropImage}
         />
       )}
       <div
