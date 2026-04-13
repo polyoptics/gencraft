@@ -1968,6 +1968,69 @@ const cardDisplayStyle = (ts: TextStyle, bg: string, hasText: boolean): React.CS
   cursor: 'text',
 })
 
+/** Draggable divider between header and body text areas */
+const TextSplitDivider: React.FC<{
+  ratio: number
+  onRatioChange: (r: number) => void
+  visible: boolean
+}> = ({ ratio, onRatioChange, visible }) => {
+  const zoom = useCanvasStore(s => s.zoom)
+  const [dragging, setDragging] = useState(false)
+  const [hovered, setHovered] = useState(false)
+
+  const onDown = useCallback((e: React.PointerEvent) => {
+    if (e.button !== 0) return
+    e.stopPropagation()
+    e.preventDefault()
+    setDragging(true)
+    const parent = (e.currentTarget as HTMLElement).parentElement
+    if (!parent) return
+    const parentRect = parent.getBoundingClientRect()
+    const parentH = parentRect.height
+
+    const onMove = (ev: PointerEvent) => {
+      const localY = ev.clientY - parentRect.top
+      const newRatio = Math.max(0.1, Math.min(0.9, localY / parentH))
+      onRatioChange(newRatio)
+    }
+    const onUp = () => {
+      setDragging(false)
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }, [onRatioChange])
+
+  if (!visible && !dragging) return null
+
+  // CardLayer renders in screen space (overlay) — use fixed pixel sizes
+  const lineBg = dragging ? 'rgba(100,160,255,0.9)' : hovered ? 'rgba(100,160,255,0.7)' : 'rgba(130,180,255,0.4)'
+  const zoneBg = dragging ? 'rgba(100,160,255,0.15)' : hovered ? 'rgba(100,160,255,0.12)' : 'transparent'
+  return (
+    <div
+      style={{
+        padding: '4px 6px',
+        cursor: 'row-resize',
+        pointerEvents: 'auto',
+        backgroundColor: zoneBg,
+        borderRadius: 4,
+        transition: 'background-color 0.15s',
+      }}
+      onPointerDown={onDown}
+      onPointerEnter={() => setHovered(true)}
+      onPointerLeave={() => { if (!dragging) setHovered(false) }}
+    >
+      <div style={{
+        height: dragging ? 3 : 2,
+        borderRadius: 2,
+        backgroundColor: lineBg,
+        transition: 'background-color 0.15s',
+      }} />
+    </div>
+  )
+}
+
 const GroupCardText: React.FC<{ groupId: string }> = ({ groupId }) => {
   const bodyText = useBoardsStore(s => s.groups.find(g => g.id === groupId)?.cardText ?? '')
   const rawBodyStyle = useBoardsStore(s => s.groups.find(g => g.id === groupId)?.cardTextStyle)
@@ -1976,6 +2039,7 @@ const GroupCardText: React.FC<{ groupId: string }> = ({ groupId }) => {
   const headerText = useBoardsStore(s => s.groups.find(g => g.id === groupId)?.cardHeaderText ?? '')
   const rawHeaderStyle = useBoardsStore(s => s.groups.find(g => g.id === groupId)?.cardHeaderTextStyle)
   const headerTs: TextStyle = useMemo(() => ({ ...DEFAULT_HEADER_STYLE, ...rawHeaderStyle }), [rawHeaderStyle])
+  const splitRatio = useBoardsStore(s => s.groups.find(g => g.id === groupId)?.textSplitRatio ?? 0.5)
   ensureFontLoaded(headerTs.fontFamily); ensureFontLoaded(bodyTs.fontFamily)
 
   const [editingField, setEditingField] = useState<'header' | 'body' | null>(null)
@@ -2054,8 +2118,8 @@ const GroupCardText: React.FC<{ groupId: string }> = ({ groupId }) => {
         }}
         tabIndex={0}
       >
-        {/* Header area — owns top half, positions content by its vAlign */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: vAlignToJustify(headerTs.vAlign), minHeight: 0 }}>
+        {/* Header area */}
+        <div style={{ flex: splitRatio, display: 'flex', flexDirection: 'column', justifyContent: vAlignToJustify(headerTs.vAlign), minHeight: 0, overflow: 'hidden' }}>
           {editingField === 'header' ? (
             <textarea autoFocus value={headerVal} onChange={e => setHeaderVal(e.target.value)}
               onKeyDown={e => {
@@ -2074,8 +2138,10 @@ const GroupCardText: React.FC<{ groupId: string }> = ({ groupId }) => {
             >{headerText || null}</div>
           )}
         </div>
-        {/* Body area — owns bottom half, positions content by its vAlign */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: vAlignToJustify(bodyTs.vAlign), minHeight: 0 }}>
+        {/* Draggable divider */}
+        <TextSplitDivider ratio={splitRatio} onRatioChange={r => useBoardsStore.getState().setGroupTextSplitRatio(groupId, r)} visible={selected} />
+        {/* Body area */}
+        <div style={{ flex: 1 - splitRatio, display: 'flex', flexDirection: 'column', justifyContent: vAlignToJustify(bodyTs.vAlign), minHeight: 0, overflow: 'hidden' }}>
           {editingField === 'body' ? (
             <textarea autoFocus value={bodyVal} onChange={e => setBodyVal(e.target.value)}
               onKeyDown={e => {
@@ -2107,6 +2173,7 @@ const UngroupedCardText: React.FC<{ boardId: string }> = ({ boardId }) => {
   const headerText = useBoardsStore(s => s.boards[boardId]?.layers?.card?.headerText ?? '')
   const rawHeaderStyle = useBoardsStore(s => s.boards[boardId]?.layers?.card?.headerTextStyle)
   const headerTs: TextStyle = useMemo(() => ({ ...DEFAULT_HEADER_STYLE, ...rawHeaderStyle }), [rawHeaderStyle])
+  const splitRatio = useBoardsStore(s => s.boards[boardId]?.layers?.card?.textSplitRatio ?? 0.5)
   ensureFontLoaded(headerTs.fontFamily); ensureFontLoaded(bodyTs.fontFamily)
 
   const [editingField, setEditingField] = useState<'header' | 'body' | null>(null)
@@ -2185,8 +2252,8 @@ const UngroupedCardText: React.FC<{ boardId: string }> = ({ boardId }) => {
         }}
         tabIndex={0}
       >
-        {/* Header area — owns top half, positions content by its vAlign */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: vAlignToJustify(headerTs.vAlign), minHeight: 0 }}>
+        {/* Header area */}
+        <div style={{ flex: splitRatio, display: 'flex', flexDirection: 'column', justifyContent: vAlignToJustify(headerTs.vAlign), minHeight: 0, overflow: 'hidden' }}>
           {editingField === 'header' ? (
             <textarea autoFocus value={headerVal} onChange={e => setHeaderVal(e.target.value)}
               onKeyDown={e => {
@@ -2205,8 +2272,10 @@ const UngroupedCardText: React.FC<{ boardId: string }> = ({ boardId }) => {
             >{headerText || null}</div>
           )}
         </div>
-        {/* Body area — owns bottom half, positions content by its vAlign */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: vAlignToJustify(bodyTs.vAlign), minHeight: 0 }}>
+        {/* Draggable divider */}
+        <TextSplitDivider ratio={splitRatio} onRatioChange={r => useBoardsStore.getState().setCardTextSplitRatio(boardId, r)} visible={selected} />
+        {/* Body area */}
+        <div style={{ flex: 1 - splitRatio, display: 'flex', flexDirection: 'column', justifyContent: vAlignToJustify(bodyTs.vAlign), minHeight: 0, overflow: 'hidden' }}>
           {editingField === 'body' ? (
             <textarea autoFocus value={bodyVal} onChange={e => setBodyVal(e.target.value)}
               onKeyDown={e => {

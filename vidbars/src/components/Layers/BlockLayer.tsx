@@ -583,6 +583,56 @@ const Overlay: React.FC = () => {
   )
 }
 
+// ── Block-level text split divider ──
+const BlockTextSplitDivider: React.FC<{
+  ratio: number; onRatioChange: (r: number) => void; visible: boolean
+}> = ({ ratio, onRatioChange, visible }) => {
+  const zoom = useCanvasStore(s => s.zoom)
+  const [dragging, setDragging] = useState(false)
+  const [hovered, setHovered] = useState(false)
+  const onDown = useCallback((e: React.PointerEvent) => {
+    if (e.button !== 0) return
+    e.stopPropagation(); e.preventDefault()
+    setDragging(true)
+    const parent = (e.currentTarget as HTMLElement).parentElement
+    if (!parent) return
+    const parentRect = parent.getBoundingClientRect()
+    const onMove = (ev: PointerEvent) => {
+      const r = Math.max(0.1, Math.min(0.9, (ev.clientY - parentRect.top) / parentRect.height))
+      onRatioChange(r)
+    }
+    const onUp = () => { setDragging(false); window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp) }
+    window.addEventListener('pointermove', onMove); window.addEventListener('pointerup', onUp)
+  }, [onRatioChange])
+  if (!visible && !dragging) return null
+  // All sizes target screen-px: divide by zoom to get canvas units
+  const grabPad = Math.round(4 / zoom)
+  const lineH = Math.round(3 / zoom)   // 3 screen-px line — more visible
+  const lineBg = dragging ? 'rgba(100,160,255,0.9)' : hovered ? 'rgba(100,160,255,0.7)' : 'rgba(130,180,255,0.4)'
+  const zoneBg = dragging ? 'rgba(100,160,255,0.15)' : hovered ? 'rgba(100,160,255,0.12)' : 'transparent'
+  return (
+    <div
+      style={{
+        padding: `${grabPad}px ${Math.round(4 / zoom)}px`,
+        cursor: 'row-resize', pointerEvents: 'auto',
+        backgroundColor: zoneBg,
+        borderRadius: Math.round(4 / zoom),
+        transition: 'background-color 0.15s',
+      }}
+      onPointerDown={onDown}
+      onPointerEnter={() => setHovered(true)}
+      onPointerLeave={() => { if (!dragging) setHovered(false) }}
+    >
+      <div style={{
+        height: lineH,
+        borderRadius: Math.round(2 / zoom),
+        backgroundColor: lineBg,
+        transition: 'background-color 0.15s',
+      }} />
+    </div>
+  )
+}
+
 // ── Block-level independent text (double-click to edit) ──
 const vAlignToJustify = (va: string) => va === 'middle' ? 'center' : va === 'bottom' ? 'flex-end' : 'flex-start'
 
@@ -594,6 +644,7 @@ const BlockText: React.FC<{ boardId: string; width: number }> = ({ boardId }) =>
   const headerText = useBoardsStore(s => s.boards[boardId]?.layers?.block?.headerText ?? '')
   const rawHeaderStyle = useBoardsStore(s => s.boards[boardId]?.layers?.block?.headerTextStyle)
   const headerTs: TextStyle = useMemo(() => ({ ...DEFAULT_BLOCK_HEADER_STYLE, ...rawHeaderStyle }), [rawHeaderStyle])
+  const splitRatio = useBoardsStore(s => s.boards[boardId]?.layers?.block?.textSplitRatio ?? 0.5)
   ensureFontLoaded(headerTs.fontFamily); ensureFontLoaded(bodyTs.fontFamily)
 
   const [editingField, setEditingField] = useState<'header' | 'body' | null>(null)
@@ -702,7 +753,7 @@ const BlockText: React.FC<{ boardId: string; width: number }> = ({ boardId }) =>
         tabIndex={0}
       >
         {/* Header area */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: vAlignToJustify(headerTs.vAlign), minHeight: 0 }}>
+        <div style={{ flex: splitRatio, display: 'flex', flexDirection: 'column', justifyContent: vAlignToJustify(headerTs.vAlign), minHeight: 0, overflow: 'hidden' }}>
           {editingField === 'header' ? (
             <textarea
               ref={headerRef}
@@ -729,8 +780,10 @@ const BlockText: React.FC<{ boardId: string; width: number }> = ({ boardId }) =>
             ) : null
           )}
         </div>
+        {/* Draggable divider */}
+        <BlockTextSplitDivider ratio={splitRatio} onRatioChange={r => useBoardsStore.getState().setBlockTextSplitRatio(boardId, r)} visible={selected} />
         {/* Body area */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: vAlignToJustify(bodyTs.vAlign), minHeight: 0 }}>
+        <div style={{ flex: 1 - splitRatio, display: 'flex', flexDirection: 'column', justifyContent: vAlignToJustify(bodyTs.vAlign), minHeight: 0, overflow: 'hidden' }}>
           {editingField === 'body' ? (
             <textarea
               ref={bodyRef}

@@ -1,5 +1,5 @@
 // Shared text formatting toolbar — used by FreeNode, CardLayer, BlockLayer
-import React, { useState } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import ReactDOM from 'react-dom'
 import type { TextStyle } from '../../store/freeNodeStore'
 import { DEFAULT_HEADER_STYLE, DEFAULT_BODY_STYLE } from '../../store/freeNodeStore'
@@ -275,6 +275,19 @@ export const TextFormatToolbar: React.FC<TextFormatToolbarProps> = ({
     else onBodyStyleChange(merged)
   }
 
+  // Close toolbar on outside click — replaces the blocking backdrop div
+  const toolbarRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!onClose) return
+    const handler = (e: PointerEvent) => {
+      const target = e.target as HTMLElement
+      if (target.closest('[data-text-format-toolbar]')) return
+      onClose()
+    }
+    window.addEventListener('pointerdown', handler)
+    return () => window.removeEventListener('pointerdown', handler)
+  }, [onClose])
+
   if (!anchorRect) return null
 
   const TOOLBAR_H = 36
@@ -305,9 +318,7 @@ export const TextFormatToolbar: React.FC<TextFormatToolbarProps> = ({
 
   return ReactDOM.createPortal(
     <>
-    {onClose && (
-      <div style={{ position: 'fixed', inset: 0, zIndex: 9998 }} onClick={onClose} />
-    )}
+    {/* Close-on-outside-click handled by useEffect listener above */}
     <div
       data-text-format-toolbar
       onPointerDown={e => {

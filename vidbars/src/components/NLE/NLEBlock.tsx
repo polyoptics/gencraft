@@ -35,6 +35,55 @@ function darken(hex: string, amt = 0.35): string {
   return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`
 }
 
+/** Draggable divider between header and body text in NLEBlock (board-level zoom ≥ 0.3) */
+const NLETextSplitDivider: React.FC<{
+  ratio: number; onRatioChange: (r: number) => void
+}> = ({ ratio, onRatioChange }) => {
+  const zoom = useCanvasStore(s => s.zoom)
+  const [dragging, setDragging] = useState(false)
+  const [hovered, setHovered] = useState(false)
+  const onDown = useCallback((e: React.PointerEvent) => {
+    if (e.button !== 0) return
+    e.stopPropagation(); e.preventDefault()
+    setDragging(true)
+    const container = (e.currentTarget as HTMLElement).parentElement
+    if (!container) return
+    const rect = container.getBoundingClientRect()
+    const onMove = (ev: PointerEvent) => {
+      const r = Math.max(0.1, Math.min(0.9, (ev.clientY - rect.top) / rect.height))
+      onRatioChange(r)
+    }
+    const onUp = () => { setDragging(false); window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp) }
+    window.addEventListener('pointermove', onMove); window.addEventListener('pointerup', onUp)
+  }, [onRatioChange])
+  // Board zoom ≥0.3, so scaling less aggressive here
+  const grabPad = Math.round(4 / zoom)
+  const lineH = Math.round(3 / zoom)
+  const lineBg = dragging ? 'rgba(100,160,255,0.9)' : hovered ? 'rgba(100,160,255,0.7)' : 'rgba(130,180,255,0.4)'
+  const zoneBg = dragging ? 'rgba(100,160,255,0.15)' : hovered ? 'rgba(100,160,255,0.12)' : 'transparent'
+  return (
+    <div
+      style={{
+        padding: `${grabPad}px ${Math.round(3 / zoom)}px`,
+        cursor: 'row-resize', pointerEvents: 'auto',
+        backgroundColor: zoneBg,
+        borderRadius: Math.max(1, Math.round(1 / zoom)),
+        transition: 'background-color 0.15s',
+      }}
+      onPointerDown={onDown}
+      onPointerEnter={() => setHovered(true)}
+      onPointerLeave={() => { if (!dragging) setHovered(false) }}
+    >
+      <div style={{
+        height: lineH,
+        borderRadius: Math.max(1, Math.round(1 / zoom)),
+        backgroundColor: lineBg,
+        transition: 'background-color 0.15s',
+      }} />
+    </div>
+  )
+}
+
 export const NLEBlock: React.FC<Props> = ({ id, top, blockHeight, offsetX, rowTops, rowHeights }) => {
   const ctx = useBoardCtx()
   const {
@@ -565,7 +614,8 @@ export const NLEBlock: React.FC<Props> = ({ id, top, blockHeight, offsetX, rowTo
                   onPointerDown={e => { if (!(e.target as HTMLElement).closest('textarea')) e.preventDefault() }}
                 >
                   {/* Header field wrapper — independent vAlign */}
-                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: vAlignToJustify(hts.vAlign), minHeight: 0 }}>
+                  {(() => { const sr = bar.content.textSplitRatio ?? 0.5; return <>
+                  <div style={{ flex: sr, display: 'flex', flexDirection: 'column', justifyContent: vAlignToJustify(hts.vAlign), minHeight: 0 }}>
                   {editingTextField === 'header' ? (
                     <textarea
                       ref={textEditRef}
@@ -593,8 +643,10 @@ export const NLEBlock: React.FC<Props> = ({ id, top, blockHeight, offsetX, rowTo
                     >{bar.content.headerText || null}</div>
                   )}
                   </div>
+                  {/* Draggable divider between header and body */}
+                  <NLETextSplitDivider ratio={sr} onRatioChange={r => setContent(id, { textSplitRatio: r })} />
                   {/* Body field wrapper — independent vAlign */}
-                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: vAlignToJustify(bts.vAlign), minHeight: 0 }}>
+                  <div style={{ flex: 1 - sr, display: 'flex', flexDirection: 'column', justifyContent: vAlignToJustify(bts.vAlign), minHeight: 0 }}>
                   {editingTextField === 'body' ? (
                     <textarea
                       autoFocus
@@ -621,6 +673,7 @@ export const NLEBlock: React.FC<Props> = ({ id, top, blockHeight, offsetX, rowTo
                     >{bar.content.text || null}</div>
                   )}
                   </div>
+                  </> })()}
                 </div>
               )
             }
@@ -636,12 +689,14 @@ export const NLEBlock: React.FC<Props> = ({ id, top, blockHeight, offsetX, rowTo
                   setActiveTextField('header')
                 }}
               >
-                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: vAlignToJustify(hts.vAlign), minHeight: 0 }}>
+                {(() => { const sr = bar.content.textSplitRatio ?? 0.5; return <>
+                <div style={{ flex: sr, display: 'flex', flexDirection: 'column', justifyContent: vAlignToJustify(hts.vAlign), minHeight: 0 }}>
                   {bar.content.headerText && <div style={mkTextStyle(hts)}>{bar.content.headerText}</div>}
                 </div>
-                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: vAlignToJustify(bts.vAlign), minHeight: 0 }}>
+                <div style={{ flex: 1 - sr, display: 'flex', flexDirection: 'column', justifyContent: vAlignToJustify(bts.vAlign), minHeight: 0 }}>
                   {bar.content.text && <div style={mkTextStyle(bts)}>{bar.content.text}</div>}
                 </div>
+                </> })()}
               </div>
             )
           })()}
