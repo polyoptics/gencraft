@@ -5,7 +5,8 @@ import React, { useMemo } from 'react'
 import { useBoardsStore } from '../../store/boardsStore'
 import type { ProjectGroup } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
-import { computeGroupLayout, getRowY, getRowHeight, boardContentHeight } from '../../utils/nleRows'
+import { computeGroupLayout, getRowY, getRowHeight } from '../../utils/nleRows'
+import { DEFAULT_H } from '../../utils/barConstants'
 
 const BOARD_PADDING_X = 20
 
@@ -27,8 +28,8 @@ export const CardOutline: React.FC<{ group: ProjectGroup }> = ({ group }) => {
       const localRow = board.nleRow ?? 0
       const by = group.originY + getRowY(localRow, layout)
       const rowH = getRowHeight(localRow, layout)
-      const contentH = boardContentHeight(board.bars, board.rootIds, bScale)
-      const visualH = Math.max(rowH, contentH)
+      const rootH = Math.max(...rootBars.map(b => b.height), DEFAULT_H) * bScale
+      const visualH = Math.max(rowH, rootH)
       const minX = Math.min(...rootBars.map(b => b.x))
       const maxX = Math.max(...rootBars.map(b => b.x + b.width))
       const l = bx + BOARD_PADDING_X + minX * bScale - 16

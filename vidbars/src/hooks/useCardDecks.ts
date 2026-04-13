@@ -4,7 +4,8 @@
 import { useMemo } from 'react'
 import type { ProjectGroup, BoardData } from '../store/boardsStore'
 import { type GroupSlot } from '../utils/nlePush'
-import { computeGroupLayout, getRowY, getRowHeight, boardContentHeight } from '../utils/nleRows'
+import { computeGroupLayout, getRowY, getRowHeight } from '../utils/nleRows'
+import { DEFAULT_H } from '../utils/barConstants'
 
 /** Returns true if this group is a non-anchor member of a stacked/fanned deck (visually hidden). */
 export function isHiddenDeckMember(g: ProjectGroup): boolean {
@@ -89,8 +90,8 @@ export function useCardDecks(
         const localRow = board.nleRow ?? 0
         const by = g.originY + getRowY(localRow, layout)
         const rowH = getRowHeight(localRow, layout)
-        const contentH = boardContentHeight(board.bars, board.rootIds, bScale)
-        const visualH = Math.max(rowH, contentH)
+        const rootH = Math.max(...rootBars.map((b: any) => b.height), DEFAULT_H) * bScale
+        const visualH = Math.max(rowH, rootH)
         const minX = Math.min(...rootBars.map((b: any) => b.x))
         const maxX = Math.max(...rootBars.map((b: any) => b.x + b.width))
         const l = bx + BOARD_PADDING_X + minX * bScale - 16

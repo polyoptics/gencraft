@@ -12,7 +12,8 @@ import { DEFAULT_HEADER_STYLE, DEFAULT_BODY_STYLE } from '../../store/freeNodeSt
 import type { TextStyle } from '../../store/freeNodeStore'
 import type { TextFieldMode } from '../UI/TextFormatToolbar'
 import { TextFormatToolbar, hexToRgba, ensureFontLoaded } from '../UI/TextFormatToolbar'
-import { computeGroupLayout, getRowY, getRowHeight, boardContentHeight, snapToCardGrid, CARD_GRID_SPACING } from '../../utils/nleRows'
+import { computeGroupLayout, getRowY, getRowHeight, snapToCardGrid, CARD_GRID_SPACING } from '../../utils/nleRows'
+import { DEFAULT_H } from '../../utils/barConstants'
 import { groupSlot, clampGroupMove } from '../../utils/nlePush'
 import { FreeCanvas } from '../Canvas/FreeCanvas'
 import { NLETimelineHeader } from '../NLE/NLETimelineHeader'
@@ -297,8 +298,8 @@ const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
       const localRow = board.nleRow ?? 0
       const by = group.originY + getRowY(localRow, groupLayout)
       const rowH = getRowHeight(localRow, groupLayout)
-      const contentH = boardContentHeight(board.bars, board.rootIds, bScale)
-      const visualH = Math.max(rowH, contentH)
+      const rootH = Math.max(...rootBars.map(b => b.height), DEFAULT_H) * bScale
+      const visualH = Math.max(rowH, rootH)
       const minX = Math.min(...rootBars.map(b => b.x))
       const maxX = Math.max(...rootBars.map(b => b.x + b.width))
       const left = bx + BOARD_PADDING_X + minX * bScale
@@ -541,7 +542,7 @@ const UngroupedBoardCard: React.FC<{ boardId: string }> = ({ boardId }) => {
   const minBarX = Math.min(...rootBars.map(b => b.x))
   const maxBarX = Math.max(...rootBars.map(b => b.x + b.width))
   const rawContentW = (maxBarX - minBarX) * bScale + 32
-  const rawContentH = boardContentHeight(board.bars, board.rootIds, bScale)
+  const rawContentH = Math.max(...rootBars.map(b => b.height), DEFAULT_H) * bScale
   const cardWOverride = board.layers?.card?.widthOverride
   const cardHOverride = board.layers?.card?.heightOverride
   const contentW = Math.max(rawContentW, cardWOverride ?? 0)
@@ -717,8 +718,8 @@ const StackedDeckCard: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; isNeste
       const localRow = board.nleRow ?? 0
       const by = anchorGroup.originY + getRowY(localRow, groupLayout)
       const rowH = getRowHeight(localRow, groupLayout)
-      const contentH = boardContentHeight(board.bars, board.rootIds, bScale)
-      const visualH = Math.max(rowH, contentH)
+      const rootH = Math.max(...rootBars.map(b => b.height), DEFAULT_H) * bScale
+      const visualH = Math.max(rowH, rootH)
       const minX = Math.min(...rootBars.map(b => b.x))
       const maxX = Math.max(...rootBars.map(b => b.x + b.width))
       const left = bx + BOARD_PADDING_X + minX * bScale
@@ -1106,8 +1107,8 @@ const FannedDeckOverlay: React.FC<{ deck: Deck; groups: ProjectGroup[] }> = ({ d
       const localRow = board.nleRow ?? 0
       const by = anchorGroup.originY + getRowY(localRow, groupLayout)
       const rowH = getRowHeight(localRow, groupLayout)
-      const contentH = boardContentHeight(board.bars, board.rootIds, bScale)
-      const visualH = Math.max(rowH, contentH)
+      const rootH = Math.max(...rootBars.map(b => b.height), DEFAULT_H) * bScale
+      const visualH = Math.max(rowH, rootH)
       const minX = Math.min(...rootBars.map(b => b.x))
       const maxX = Math.max(...rootBars.map(b => b.x + b.width))
       const left = bx + BOARD_PADDING_X + minX * bScale
@@ -1669,8 +1670,8 @@ function cardScreenRect(g: ProjectGroup, boards: Record<string, import('../../st
     const localRow = board.nleRow ?? 0
     const by = g.originY + getRowY(localRow, groupLayout)
     const rowH = getRowHeight(localRow, groupLayout)
-    const contentH = boardContentHeight(board.bars, board.rootIds, bScale)
-    const visualH = Math.max(rowH, contentH)
+    const rootH = Math.max(...rootBars.map(b => b.height), DEFAULT_H) * bScale
+    const visualH = Math.max(rowH, rootH)
     const minX = Math.min(...rootBars.map(b => b.x))
     const maxX = Math.max(...rootBars.map(b => b.x + b.width))
     const left = bx + BOARD_PADDING_X + minX * bScale
