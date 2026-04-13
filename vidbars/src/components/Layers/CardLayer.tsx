@@ -21,6 +21,26 @@ import { getFirstImageUrl } from '../../types/bar'
 
 const BOARD_PADDING_X = 20
 
+/** Start a middle-mouse pan from overlay elements (which are siblings of InfiniteCanvas, not children) */
+function startOverlayPan(e: React.PointerEvent) {
+  if (e.button !== 1) return
+  e.preventDefault()
+  e.stopPropagation()
+  let lastX = e.clientX
+  let lastY = e.clientY
+  const onMove = (ev: PointerEvent) => {
+    useCanvasStore.getState().shiftPan(ev.clientX - lastX, ev.clientY - lastY)
+    lastX = ev.clientX
+    lastY = ev.clientY
+  }
+  const onUp = () => {
+    window.removeEventListener('pointermove', onMove)
+    window.removeEventListener('pointerup', onUp)
+  }
+  window.addEventListener('pointermove', onMove)
+  window.addEventListener('pointerup', onUp)
+}
+
 const CARD_COLORS = [
   '#5b8dd9', '#3b82f6', '#0ea5e9', '#06b6d4',
   '#14b8a6', '#22c55e', '#84cc16', '#f59e0b',
@@ -1005,7 +1025,7 @@ const StackedDeckCard: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; isNeste
               useUndoCoordinator.getState().checkpoint()
               useBoardsStore.getState().setDeckState(deck.memberIds, 'fanned')
             }}
-            onPointerDown={e => e.stopPropagation()}
+            onPointerDown={e => { if (e.button === 0) e.stopPropagation() }}
           />
         )}
         {/* Primary card — front, slightly narrower to fit edges within bounding box */}
@@ -1630,27 +1650,27 @@ const DeckControls: React.FC<{
     >
       {mode === 'stacked' && onFan && (
         <button style={btnStyle} onClick={e => { e.stopPropagation(); onFan() }}
-          onPointerDown={e => e.stopPropagation()}>Fan</button>
+          onPointerDown={e => { if (e.button === 0) e.stopPropagation() }}>Fan</button>
       )}
       {mode === 'stacked' && onOpen && (
         <button style={btnStyle} onClick={e => { e.stopPropagation(); onOpen() }}
-          onPointerDown={e => e.stopPropagation()}>Open</button>
+          onPointerDown={e => { if (e.button === 0) e.stopPropagation() }}>Open</button>
       )}
       {mode === 'fanned' && onStack && (
         <button style={btnStyle} onClick={e => { e.stopPropagation(); onStack() }}
-          onPointerDown={e => e.stopPropagation()}>Stack</button>
+          onPointerDown={e => { if (e.button === 0) e.stopPropagation() }}>Stack</button>
       )}
       {mode === 'fanned' && onOpen && (
         <button style={btnStyle} onClick={e => { e.stopPropagation(); onOpen() }}
-          onPointerDown={e => e.stopPropagation()}>Open</button>
+          onPointerDown={e => { if (e.button === 0) e.stopPropagation() }}>Open</button>
       )}
       {mode === 'affordance' && onStack && (
         <button style={btnStyle} onClick={e => { e.stopPropagation(); onStack() }}
-          onPointerDown={e => e.stopPropagation()}>Stack</button>
+          onPointerDown={e => { if (e.button === 0) e.stopPropagation() }}>Stack</button>
       )}
       {mode === 'affordance' && onFan && (
         <button style={btnStyle} onClick={e => { e.stopPropagation(); onFan() }}
-          onPointerDown={e => e.stopPropagation()}>Fan</button>
+          onPointerDown={e => { if (e.button === 0) e.stopPropagation() }}>Fan</button>
       )}
     </div>
   )
@@ -1862,7 +1882,7 @@ const Overlay: React.FC = () => {
   }, [touchingClusters, renderedByDeck, groups])
 
   return (
-    <>
+    <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }} onPointerDown={startOverlayPan}>
       {groups.map(g => {
         // Hard gate: if this group is a non-anchor member of any deck, hide it completely.
         // This uses the persisted deckAnchorId — no spatial clustering needed.
@@ -1915,7 +1935,7 @@ const Overlay: React.FC = () => {
       {ungroupedIds.map(bid => (
         <UngroupedBoardCard key={bid} boardId={bid} />
       ))}
-    </>
+    </div>
   )
 }
 
