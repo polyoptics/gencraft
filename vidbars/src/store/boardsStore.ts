@@ -158,6 +158,7 @@ interface BoardsState {
   closeViewer: (boardId: string) => void
   setSelection: (boardId: string, ids: string[]) => void
   clearSelection: (boardId: string) => void
+  clearAllSelections: () => void
   toggleSelection: (boardId: string, barId: string) => void
   toggleCollapsed: (boardId: string, barId: string) => void
   reorderSiblings: (boardId: string, barId: string) => void
@@ -448,6 +449,20 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
   },
   clearSelection(boardId) {
     updateBoard(set, boardId, () => ({ selectedIds: [] }))
+  },
+  clearAllSelections() {
+    const boards = get().boards
+    const updated: Record<string, any> = {}
+    let changed = false
+    for (const [id, board] of Object.entries(boards)) {
+      if (board.selectedIds.length > 0) {
+        updated[id] = { ...board, selectedIds: [] }
+        changed = true
+      } else {
+        updated[id] = board
+      }
+    }
+    if (changed) set({ boards: updated as any })
   },
   toggleSelection(boardId, barId) {
     updateBoard(set, boardId, b => ({

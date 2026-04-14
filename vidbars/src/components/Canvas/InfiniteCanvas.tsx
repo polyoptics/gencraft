@@ -110,12 +110,9 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
       setRubberBand(initial)
       ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
       clearFreeSelection()
-      // Clear selection on ALL boards + card groups
+      // Clear selection on ALL boards + card groups — single batched update
       useBoardsStore.getState().clearGroupSelection()
-      const allBoards = useBoardsStore.getState().boards
-      for (const bid of Object.keys(allBoards)) {
-        useBoardsStore.getState().clearSelection(bid)
-      }
+      useBoardsStore.getState().clearAllSelections()
     }
   }, [clearFreeSelection])
 
