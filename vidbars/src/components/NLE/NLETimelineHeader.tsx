@@ -163,17 +163,12 @@ export const NLETimelineHeader: React.FC<Props> = ({ groupId, rightInset = 0 }) 
 
     if (segs.length === 0) return { segments: [], globalCanvasLeft: 0, globalCanvasRight: 200, headerCanvasY: -NLE_HEADER_CANVAS_H }
 
-    let globalCanvasLeft  = Math.min(...segs.map(s => s.canvasLeft)) - 16
-    let globalCanvasRight = Math.max(...segs.map(s => s.canvasLeft + s.canvasWidth)) + 16
+    const globalCanvasLeft  = Math.min(...segs.map(s => s.canvasLeft)) - 16
+    const contentRight = Math.max(...segs.map(s => s.canvasLeft + s.canvasWidth)) + 16
 
-    // Match card width: apply cardWidthOverride if it makes the header wider
-    const contentW = globalCanvasRight - globalCanvasLeft
-    const cardW = Math.max(contentW, group?.cardWidthOverride ?? 0)
-    if (cardW > contentW) {
-      const center = (globalCanvasLeft + globalCanvasRight) / 2
-      globalCanvasLeft = center - cardW / 2
-      globalCanvasRight = center + cardW / 2
-    }
+    // Match card width: apply cardWidthOverride (card extends right from left edge)
+    const contentW = contentRight - globalCanvasLeft
+    const globalCanvasRight = globalCanvasLeft + Math.max(contentW, group?.cardWidthOverride ?? 0)
 
     // Header Y = top of the group - header height - gap
     const topBoardY = groupOriginY  // group origin IS the top
