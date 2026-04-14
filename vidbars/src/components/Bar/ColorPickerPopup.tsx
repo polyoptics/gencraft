@@ -1,6 +1,8 @@
-import React, { useEffect, useRef } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { HexColorPicker } from 'react-colorful'
+
+const hasEyeDropper = typeof window !== 'undefined' && 'EyeDropper' in window
 
 const PALETTE = [
   '#5b8dd9', '#3b82f6', '#0ea5e9', '#06b6d4',
@@ -19,6 +21,7 @@ interface Props {
 
 export const ColorPickerPopup: React.FC<Props> = ({ color, anchorX, anchorY, onChange, onClose }) => {
   const ref = useRef<HTMLDivElement>(null)
+  const [picking, setPicking] = useState(false)
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -27,6 +30,17 @@ export const ColorPickerPopup: React.FC<Props> = ({ color, anchorX, anchorY, onC
     const tid = setTimeout(() => document.addEventListener('mousedown', handler), 0)
     return () => { clearTimeout(tid); document.removeEventListener('mousedown', handler) }
   }, [onClose])
+
+  const openEyeDropper = async () => {
+    if (!hasEyeDropper) return
+    setPicking(true)
+    try {
+      const dropper = new (window as any).EyeDropper()
+      const result = await dropper.open()
+      if (result?.sRGBHex) onChange(result.sRGBHex)
+    } catch { /* user cancelled */ }
+    setPicking(false)
+  }
 
   const x = Math.min(anchorX, window.innerWidth - 225)
   const y = Math.min(anchorY, window.innerHeight - 360)
@@ -49,11 +63,32 @@ export const ColorPickerPopup: React.FC<Props> = ({ color, anchorX, anchorY, onC
       }}
     >
       <HexColorPicker color={color} onChange={onChange} style={{ width: '100%' }} />
+      {hasEyeDropper && (
+        <button
+          onClick={openEyeDropper}
+          style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+            width: '100%', marginTop: 10, padding: '6px 0',
+            background: picking ? 'rgba(59,130,246,0.25)' : 'rgba(255,255,255,0.06)',
+            border: picking ? '1px solid rgba(59,130,246,0.5)' : '1px solid rgba(255,255,255,0.1)',
+            borderRadius: 7, cursor: 'pointer',
+            color: picking ? '#93c5fd' : 'rgba(255,255,255,0.7)',
+            fontSize: 12, fontWeight: 600,
+          }}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M2 22l1-1h3l9-9" /><path d="M3 21v-3l9-9" />
+            <path d="m15 6 3.4-3.4a2.1 2.1 0 1 1 3 3L18 9" /><path d="m15 6 3 3" />
+            <path d="m9 12 3 3" />
+          </svg>
+          {picking ? 'Picking…' : 'Eyedropper'}
+        </button>
+      )}
       <div style={{
         display: 'flex',
         flexWrap: 'wrap',
         gap: 6,
-        marginTop: 12,
+        marginTop: 10,
       }}>
         {PALETTE.map(c => (
           <button
