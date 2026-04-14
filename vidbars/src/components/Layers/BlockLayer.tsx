@@ -757,6 +757,7 @@ const BlockText: React.FC<{ boardId: string; width: number; thumbnail?: string |
           heroImage={thumbnail}
           heroFlipH={useBoardsStore.getState().boards[boardId]?.layers?.block?.thumbnailTransform?.flipH}
           heroFlipV={useBoardsStore.getState().boards[boardId]?.layers?.block?.thumbnailTransform?.flipV}
+          heroOpacity={useBoardsStore.getState().boards[boardId]?.layers?.block?.thumbnailTransform?.opacity}
           onFlipH={() => {
             useUndoCoordinator.getState().checkpoint()
             const cur = useBoardsStore.getState().boards[boardId]?.layers?.block?.thumbnailTransform ?? { scale: 1, offsetX: 0, offsetY: 0, flipH: false, flipV: false }
@@ -766,6 +767,10 @@ const BlockText: React.FC<{ boardId: string; width: number; thumbnail?: string |
             useUndoCoordinator.getState().checkpoint()
             const cur = useBoardsStore.getState().boards[boardId]?.layers?.block?.thumbnailTransform ?? { scale: 1, offsetX: 0, offsetY: 0, flipH: false, flipV: false }
             useBoardsStore.getState().setBlockThumbnailTransform(boardId, { ...cur, flipV: !cur.flipV })
+          }}
+          onHeroOpacityChange={opacity => {
+            const cur = useBoardsStore.getState().boards[boardId]?.layers?.block?.thumbnailTransform ?? { scale: 1, offsetX: 0, offsetY: 0, flipH: false, flipV: false }
+            useBoardsStore.getState().setBlockThumbnailTransform(boardId, { ...cur, opacity })
           }}
           onCropImage={onCropImage}
         />

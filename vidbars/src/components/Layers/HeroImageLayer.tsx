@@ -9,7 +9,9 @@ interface Props {
   opacity?: number
 }
 
-export const HeroImageLayer: React.FC<Props> = ({ heroImage, transform, borderRadius = 12, opacity = 0.7 }) => {
+export const HeroImageLayer: React.FC<Props> = ({ heroImage, transform, borderRadius = 12, opacity }) => {
+  // Use transform.opacity if set, then prop, then default 0.7
+  const effectiveOpacity = opacity ?? transform?.opacity ?? 0.7
   const t = transform
   const hasTransform = t && (t.scale !== 1 || t.offsetX !== 0 || t.offsetY !== 0 || t.flipH || t.flipV)
 
@@ -28,7 +30,7 @@ export const HeroImageLayer: React.FC<Props> = ({ heroImage, transform, borderRa
       backgroundSize: bgSize,
       backgroundPosition: bgPos,
       backgroundRepeat: 'no-repeat',
-      opacity,
+      opacity: effectiveOpacity,
       borderRadius,
       transform: cssTransform,
     }} />

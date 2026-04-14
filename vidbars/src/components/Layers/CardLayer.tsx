@@ -21,8 +21,17 @@ import { NLETimelineHeader, NLE_HEADER_CANVAS_H } from '../NLE/NLETimelineHeader
 import { HeroImageLayer } from './HeroImageLayer'
 import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
 import { getFirstImageUrl } from '../../types/bar'
+import { hexToHsl, hslToHex } from '../../utils/colorUtils'
 
 const BOARD_PADDING_X = 20
+
+/** Derive a deck-edge border color from a card's base color at a given alpha */
+function edgeColor(baseHex: string, alpha: number): string {
+  const { h, s, l } = hexToHsl(baseHex)
+  const hex = hslToHex(h, Math.min(1, s + 0.1), Math.min(1, l + 0.25))
+  const n = parseInt(hex.replace('#', ''), 16)
+  return `rgba(${(n >> 16) & 0xff},${(n >> 8) & 0xff},${n & 0xff},${alpha})`
+}
 
 /** Start a middle-mouse pan from overlay elements (which are siblings of InfiniteCanvas, not children) */
 function startOverlayPan(e: React.PointerEvent) {
@@ -940,9 +949,9 @@ const StackedDeckCard: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; isNeste
               height: screenHeight - 10,
               borderRadius: '0 12px 12px 0',
               background: 'transparent',
-              borderTop: '2px solid rgba(120,170,255,0.6)',
-              borderRight: '2px solid rgba(120,170,255,0.6)',
-              borderBottom: '2px solid rgba(120,170,255,0.6)',
+              borderTop: `2px solid ${edgeColor(anchorGroup.color, 0.6)}`,
+              borderRight: `2px solid ${edgeColor(anchorGroup.color, 0.6)}`,
+              borderBottom: `2px solid ${edgeColor(anchorGroup.color, 0.6)}`,
               zIndex: 37,
               pointerEvents: 'none',
             }}
@@ -960,7 +969,7 @@ const StackedDeckCard: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; isNeste
               height: screenHeight * 0.9,
               borderRadius: '0 6px 6px 0',
               background: 'transparent',
-              borderRight: '2px solid rgba(130,170,255,0.42)',
+              borderRight: `2px solid ${edgeColor(anchorGroup.color, 0.42)}`,
               borderTop: 'none',
               borderBottom: 'none',
               borderLeft: 'none',
@@ -2035,8 +2044,9 @@ const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void; heroI
   const headerTs: TextStyle = useMemo(() => ({ ...DEFAULT_HEADER_STYLE, ...rawHeaderStyle }), [rawHeaderStyle])
   const splitRatio = group?.textSplitRatio ?? 0.5
   ensureFontLoaded(headerTs.fontFamily); ensureFontLoaded(bodyTs.fontFamily)
-  // Text locked to card — no zoom compensation
-  const textScale = 1
+  // Text locked to card — scales proportionally with the card (no screen-size compensation)
+  const CARD_MAX_ZOOM = 0.18
+  const textScale = zoom / CARD_MAX_ZOOM
 
   const [editingField, setEditingField] = useState<'header' | 'body' | null>(null)
   const [activeField, setActiveField] = useState<TextFieldMode>('header')
@@ -2097,6 +2107,7 @@ const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void; heroI
           heroImage={heroImage}
           heroFlipH={heroTransform?.flipH}
           heroFlipV={heroTransform?.flipV}
+          heroOpacity={heroTransform?.opacity}
           onFlipH={() => {
             useUndoCoordinator.getState().checkpoint()
             const cur = useBoardsStore.getState().groups.find(g => g.id === groupId)?.cardHeroTransform ?? { scale: 1, offsetX: 0, offsetY: 0, flipH: false, flipV: false }
@@ -2106,6 +2117,10 @@ const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void; heroI
             useUndoCoordinator.getState().checkpoint()
             const cur = useBoardsStore.getState().groups.find(g => g.id === groupId)?.cardHeroTransform ?? { scale: 1, offsetX: 0, offsetY: 0, flipH: false, flipV: false }
             useBoardsStore.getState().setGroupCardHeroTransform(groupId, { ...cur, flipV: !cur.flipV })
+          }}
+          onHeroOpacityChange={opacity => {
+            const cur = useBoardsStore.getState().groups.find(g => g.id === groupId)?.cardHeroTransform ?? { scale: 1, offsetX: 0, offsetY: 0, flipH: false, flipV: false }
+            useBoardsStore.getState().setGroupCardHeroTransform(groupId, { ...cur, opacity })
           }}
           onCropImage={onCropImage}
         />
@@ -2137,6 +2152,7 @@ const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void; heroI
                 if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); commitHeader(); startEditBody() }
               }}
               onPointerDown={e => e.stopPropagation()}
+              onDoubleClick={e => e.stopPropagation()}
               onClick={e => { e.stopPropagation(); setActiveField('header') }}
               placeholder="Title…"
               style={{ ...cardTextareaStyle(headerTs, headerBg || 'rgba(0,0,0,0.3)'), flex: 1 }}
@@ -2159,6 +2175,7 @@ const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void; heroI
                 if (e.key === 'Tab' && e.shiftKey) { e.preventDefault(); commitBody(); startEditHeader() }
               }}
               onPointerDown={e => e.stopPropagation()}
+              onDoubleClick={e => e.stopPropagation()}
               onClick={e => { e.stopPropagation(); setActiveField('body') }}
               placeholder="Body text…"
               style={{ ...cardTextareaStyle(bodyTs, bodyBg || 'rgba(0,0,0,0.3)'), flex: 1 }}
@@ -2186,7 +2203,9 @@ const UngroupedCardText: React.FC<{ boardId: string }> = ({ boardId }) => {
   const headerTs: TextStyle = useMemo(() => ({ ...DEFAULT_HEADER_STYLE, ...rawHeaderStyle }), [rawHeaderStyle])
   const splitRatio = useBoardsStore(s => s.boards[boardId]?.layers?.card?.textSplitRatio ?? 0.5)
   ensureFontLoaded(headerTs.fontFamily); ensureFontLoaded(bodyTs.fontFamily)
-  const textScale = 1
+  // Text locked to card — scales proportionally with the card
+  const CARD_MAX_ZOOM = 0.18
+  const textScale = zoom / CARD_MAX_ZOOM
 
   const [editingField, setEditingField] = useState<'header' | 'body' | null>(null)
   const [activeField, setActiveField] = useState<TextFieldMode>('header')
@@ -2273,6 +2292,7 @@ const UngroupedCardText: React.FC<{ boardId: string }> = ({ boardId }) => {
                 if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); commitHeader(); startEditBody() }
               }}
               onPointerDown={e => e.stopPropagation()}
+              onDoubleClick={e => e.stopPropagation()}
               onClick={e => { e.stopPropagation(); setActiveField('header') }}
               placeholder="Title…"
               style={{ ...cardTextareaStyle(headerTs, headerBg || 'rgba(0,0,0,0.3)'), flex: 1 }}
@@ -2295,6 +2315,7 @@ const UngroupedCardText: React.FC<{ boardId: string }> = ({ boardId }) => {
                 if (e.key === 'Tab' && e.shiftKey) { e.preventDefault(); commitBody(); startEditHeader() }
               }}
               onPointerDown={e => e.stopPropagation()}
+              onDoubleClick={e => e.stopPropagation()}
               onClick={e => { e.stopPropagation(); setActiveField('body') }}
               placeholder="Body text…"
               style={{ ...cardTextareaStyle(bodyTs, bodyBg || 'rgba(0,0,0,0.3)'), flex: 1 }}

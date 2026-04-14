@@ -281,15 +281,17 @@ interface TextFormatToolbarProps {
   heroImage?: string | null
   heroFlipH?: boolean
   heroFlipV?: boolean
+  heroOpacity?: number
   onFlipH?: () => void
   onFlipV?: () => void
   onCropImage?: () => void
+  onHeroOpacityChange?: (opacity: number) => void
 }
 
 export const TextFormatToolbar: React.FC<TextFormatToolbarProps> = ({
   headerStyle, bodyStyle, onHeaderStyleChange, onBodyStyleChange,
   activeField, onActiveFieldChange, anchorRect, preferBelow, onClose,
-  heroImage, heroFlipH, heroFlipV, onFlipH, onFlipV, onCropImage,
+  heroImage, heroFlipH, heroFlipV, heroOpacity, onFlipH, onFlipV, onCropImage, onHeroOpacityChange,
 }) => {
   const [showPopup, setShowPopup] = useState<'text' | 'bg' | 'hAlign' | 'vAlign' | 'font' | 'weight' | 'lineHeight' | 'spacing' | 'transform' | null>(null)
 
@@ -700,6 +702,27 @@ export const TextFormatToolbar: React.FC<TextFormatToolbarProps> = ({
               <path d="M0.5 3.5h10v10"/>
             </svg>
           </button>
+          {/* Hero image opacity slider */}
+          {onHeroOpacityChange && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 2 }} title="Image opacity">
+              <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round">
+                <circle cx="7" cy="7" r="5.5"/>
+                <path d="M7 1.5v11" strokeDasharray="1.5 1.5"/>
+              </svg>
+              <input
+                type="range"
+                min={0} max={1} step={0.05}
+                value={heroOpacity ?? 0.7}
+                onChange={e => onHeroOpacityChange(parseFloat(e.target.value))}
+                onPointerDown={e => e.stopPropagation()}
+                onMouseDown={e => e.stopPropagation()}
+                style={{ width: 50, height: 4, accentColor: '#60a5fa', cursor: 'pointer' }}
+              />
+              <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.45)', minWidth: 22 }}>
+                {Math.round((heroOpacity ?? 0.7) * 100)}%
+              </span>
+            </div>
+          )}
         </>
       )}
     </div>

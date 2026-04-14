@@ -166,6 +166,21 @@ function useKeyboardDelete() {
         return
       }
 
+      // Group/card delete
+      const selGroups = useBoardsStore.getState().selectedGroupIds
+      if (selGroups.length > 0) {
+        for (const gid of selGroups) {
+          const bs = useBoardsStore.getState()
+          if (bs.groups.length <= 1) break  // keep at least one group
+          const g = bs.groups.find(gr => gr.id === gid)
+          if (!g) continue
+          g.boardIds.forEach(bid => { if (bid !== 'primary') bs.deleteBoard(bid) })
+          bs.deleteGroup(gid)
+        }
+        useBoardsStore.getState().setSelectedGroup(null)
+        return
+      }
+
       const { boards } = useBoardsStore.getState()
       let deletedBars = false
       Object.values(boards).forEach(board => {

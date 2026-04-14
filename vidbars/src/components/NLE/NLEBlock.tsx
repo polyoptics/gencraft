@@ -1132,6 +1132,7 @@ export const NLEBlock: React.FC<Props> = React.memo(({ id, top, blockHeight, off
           heroImage={getFirstImageUrl(bar.content)}
           heroFlipH={bar.content.imageTransform?.flipH}
           heroFlipV={bar.content.imageTransform?.flipV}
+          heroOpacity={bar.content.imageTransform?.opacity}
           onFlipH={() => {
             useUndoCoordinator.getState().checkpoint()
             const cur = bar.content.imageTransform ?? { scale: 1, offsetX: 0, offsetY: 0, flipH: false, flipV: false }
@@ -1141,6 +1142,10 @@ export const NLEBlock: React.FC<Props> = React.memo(({ id, top, blockHeight, off
             useUndoCoordinator.getState().checkpoint()
             const cur = bar.content.imageTransform ?? { scale: 1, offsetX: 0, offsetY: 0, flipH: false, flipV: false }
             setContent(id, { imageTransform: { ...cur, flipV: !cur.flipV } })
+          }}
+          onHeroOpacityChange={opacity => {
+            const cur = bar.content.imageTransform ?? { scale: 1, offsetX: 0, offsetY: 0, flipH: false, flipV: false }
+            setContent(id, { imageTransform: { ...cur, opacity } })
           }}
           onCropImage={() => setIsEditingImage(true)}
         />

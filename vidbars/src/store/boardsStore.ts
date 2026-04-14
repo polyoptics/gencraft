@@ -33,6 +33,7 @@ export interface HeroImageTransform {
   offsetY: number    // % shift from center
   flipH: boolean
   flipV: boolean
+  opacity?: number   // hero image opacity (0–1, default 0.7)
 }
 
 export interface ProjectGroup {
