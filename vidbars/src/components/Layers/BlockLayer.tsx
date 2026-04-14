@@ -41,8 +41,8 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
   const board = useBoardsStore(s => s.boards[boardId])
   const zoom = useCanvasStore(s => s.zoom)
 
-  const groups = useBoardsStore(s => s.groups)
-  const boards = useBoardsStore(s => s.boards)
+  // Only subscribe to this board's group — not all groups
+  const myGroup = useBoardsStore(s => s.groups.find(g => g.boardIds.includes(boardId)))
   const [colorPicker, setColorPicker] = useState<{ x: number; y: number } | null>(null)
   const [blockMenu, setBlockMenu] = useState<{ x: number; y: number } | null>(null)
   const [renaming, setRenaming] = useState(false)
@@ -85,7 +85,6 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
 
   const displayLabel = board.layers?.block?.label || board.projectName
 
-  const myGroup = getGroupForBoard(groups, boardId)
   const isUngroupedBlock = !myGroup
   const groupColor = myGroup?.color ?? '#5b8dd9'
 
@@ -313,7 +312,8 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
   const left = BOARD_PADDING_X + minX * bScale
   const totalW = Math.max(maxX * bScale, 200, width + left)
 
-  const otherGroups = groups.filter(g => g.id !== myGroup?.id)
+  // Read lazily — only used in context menu rendering
+  const otherGroups = useBoardsStore.getState().groups.filter(g => g.id !== myGroup?.id)
 
   return (
     <div
@@ -562,11 +562,10 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
 const Canvas: React.FC = () => {
   const boardOrder = useBoardsStore(s => s.boardOrder)
   const groups = useBoardsStore(s => s.groups)
-  const boards = useBoardsStore(s => s.boards)
   const zoneLineY = useCanvasStore(s => s.zoneLineY)
   const hiddenBoards = useMemo(
-    () => getHiddenBoardIds(groups, boards, zoneLineY),
-    [groups, boards, zoneLineY],
+    () => getHiddenBoardIds(groups, {} as any, zoneLineY),
+    [groups, zoneLineY],
   )
   return (
     <>
@@ -581,11 +580,10 @@ const Canvas: React.FC = () => {
 
 const Overlay: React.FC = () => {
   const groups = useBoardsStore(s => s.groups)
-  const boards = useBoardsStore(s => s.boards)
   const zoneLineY = useCanvasStore(s => s.zoneLineY)
   const hiddenGroups = useMemo(
-    () => getHiddenGroupIds(groups, boards, zoneLineY),
-    [groups, boards, zoneLineY],
+    () => getHiddenGroupIds(groups, {} as any, zoneLineY),
+    [groups, zoneLineY],
   )
   const visibleGroups = useMemo(
     () => groups.filter(g => !hiddenGroups.has(g.id)),

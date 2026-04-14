@@ -1,12 +1,14 @@
 import React from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { FreeNode } from './FreeNode'
 
 export const FreeCanvas: React.FC = React.memo(() => {
-  const nodes = useFreeNodeStore(s => s.nodes)
+  // Only re-render when nodes are added/removed, not when node content changes
+  const nodeIds = useFreeNodeStore(useShallow(s => Object.keys(s.nodes)))
   return (
     <>
-      {Object.keys(nodes).map(id => <FreeNode key={id} id={id} />)}
+      {nodeIds.map(id => <FreeNode key={id} id={id} />)}
     </>
   )
 })

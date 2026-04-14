@@ -22,11 +22,10 @@ const Canvas: React.FC = () => (
 /** Screen-space overlay: one NLE timeline header per group */
 const Overlay: React.FC = () => {
   const groups = useBoardsStore(s => s.groups)
-  const boards = useBoardsStore(s => s.boards)
   const zoneLineY = useCanvasStore(s => s.zoneLineY)
   const hiddenGroups = useMemo(
-    () => getHiddenGroupIds(groups, boards, zoneLineY),
-    [groups, boards, zoneLineY],
+    () => getHiddenGroupIds(groups, {} as any, zoneLineY),
+    [groups, zoneLineY],
   )
   const visibleGroups = useMemo(
     () => groups.filter(g => !hiddenGroups.has(g.id)),

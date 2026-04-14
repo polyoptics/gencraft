@@ -9,11 +9,11 @@ import { getHiddenBoardIds } from '../../hooks/useCardDecks'
 export const BoardsCanvas: React.FC = () => {
   const boardOrder = useBoardsStore(s => s.boardOrder)
   const groups = useBoardsStore(s => s.groups)
-  const boards = useBoardsStore(s => s.boards)
   const zoneLineY = useCanvasStore(s => s.zoneLineY)
+  // getHiddenBoardIds only reads groups (boards/_zoneLineY params unused)
   const hiddenBoards = useMemo(
-    () => getHiddenBoardIds(groups, boards, zoneLineY),
-    [groups, boards, zoneLineY],
+    () => getHiddenBoardIds(groups, {} as any, zoneLineY),
+    [groups, zoneLineY],
   )
 
   return (

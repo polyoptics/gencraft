@@ -24,7 +24,8 @@ export const Board: React.FC<Props> = React.memo(({ boardId }) => {
   const isPrimary = boardId === 'primary'
 
   const board        = useBoardsStore(s => s.boards[boardId])
-  const groups       = useBoardsStore(s => s.groups)
+  // Only subscribe to this board's group — not all groups
+  const group        = useBoardsStore(s => s.groups.find(g => g.boardIds.includes(boardId)))
   const setBoardNlePos    = useBoardsStore(s => s.setBoardNlePos)
   const setBoardColor     = useBoardsStore(s => s.setBoardColor)
   const setBoardProjectName = useBoardsStore(s => s.setBoardProjectName)
@@ -334,7 +335,6 @@ export const Board: React.FC<Props> = React.memo(({ boardId }) => {
   if (!board || !boardCtx) return null
 
   // ── Two-level positioning: group origin + local row ──
-  const group = getGroupForBoard(groups, boardId)
   const ungrouped = !group
   // Subscribe to nleRow of ALL sibling boards so layout recomputes when any board moves rows
   const siblingRowKey = useBoardsStore(s => {
