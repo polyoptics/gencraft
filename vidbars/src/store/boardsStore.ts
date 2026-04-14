@@ -204,6 +204,7 @@ interface BoardsState {
   setCardTextSplitRatio: (boardId: string, ratio: number) => void
   setDeckState: (groupIds: string[], state: 'open' | 'fanned' | 'stacked') => void
   setGroupPos: (groupId: string, originY: number, originX: number) => void
+  setGroupPosBatch: (updates: { groupId: string; originY: number; originX: number }[]) => void
   reassignBoard: (boardId: string, targetGroupId: string, dropCanvasPos?: { x: number; y: number }) => void
   moveToNewGroup: (boardId: string) => void
   duplicateGroup: (groupId: string) => string | null
@@ -812,6 +813,33 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
     const g = get().groups.find(gr => gr.id === groupId)
     if (g && g.originY === originY && g.originX === originX) return
     set(s => ({ groups: s.groups.map(g => g.id === groupId ? { ...g, originY, originX } : g) }))
+  },
+
+  setGroupPosBatch(updates) {
+    if (updates.length === 0) return
+    // Single-group shortcut
+    if (updates.length === 1) {
+      const u = updates[0]
+      const g = get().groups.find(gr => gr.id === u.groupId)
+      if (g && g.originY === u.originY && g.originX === u.originX) return
+      set(s => ({ groups: s.groups.map(g => g.id === u.groupId ? { ...g, originY: u.originY, originX: u.originX } : g) }))
+      return
+    }
+    // Build lookup for O(1) per-group update
+    const lookup = new Map(updates.map(u => [u.groupId, u]))
+    // Check if anything actually changed
+    const groups = get().groups
+    const anyChanged = updates.some(u => {
+      const g = groups.find(gr => gr.id === u.groupId)
+      return !g || g.originY !== u.originY || g.originX !== u.originX
+    })
+    if (!anyChanged) return
+    set(s => ({
+      groups: s.groups.map(g => {
+        const u = lookup.get(g.id)
+        return u ? { ...g, originY: u.originY, originX: u.originX } : g
+      })
+    }))
   },
 
   reassignBoard(boardId, targetGroupId, dropCanvasPos) {

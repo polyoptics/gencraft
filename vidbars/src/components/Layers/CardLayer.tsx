@@ -290,10 +290,11 @@ const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
         finalDx = preClampX - initialOriginX
         finalDy = preClampY - initialOriginY
       }
-      // Move all dragging groups by the same delta
-      for (const [gid, origin] of initialOrigins) {
-        useBoardsStore.getState().setGroupPos(gid, origin.y + finalDy, origin.x + finalDx)
-      }
+      // Move all dragging groups by the same delta — single batched store update
+      const updates = Array.from(initialOrigins, ([gid, origin]) => ({
+        groupId: gid, originY: origin.y + finalDy, originX: origin.x + finalDx,
+      }))
+      useBoardsStore.getState().setGroupPosBatch(updates)
     }
     const onUp = () => {
       window.removeEventListener('pointermove', onMove)
@@ -878,9 +879,11 @@ const StackedDeckCard: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; isNeste
         finalDy = preClampY - anchorInitY
       }
 
-      for (const [gid, origin] of initialOrigins) {
-        useBoardsStore.getState().setGroupPos(gid, origin.y + finalDy, origin.x + finalDx)
-      }
+      useBoardsStore.getState().setGroupPosBatch(
+        Array.from(initialOrigins, ([gid, origin]) => ({
+          groupId: gid, originY: origin.y + finalDy, originX: origin.x + finalDx,
+        }))
+      )
     }
     const onUp = () => {
       window.removeEventListener('pointermove', onMove)
@@ -1253,9 +1256,11 @@ const FannedDeckOverlay: React.FC<{ deck: Deck; groups: ProjectGroup[] }> = ({ d
         finalDy = preClampY - anchorInitY
       }
 
-      for (const [gid, origin] of initialOrigins) {
-        useBoardsStore.getState().setGroupPos(gid, origin.y + finalDy, origin.x + finalDx)
-      }
+      useBoardsStore.getState().setGroupPosBatch(
+        Array.from(initialOrigins, ([gid, origin]) => ({
+          groupId: gid, originY: origin.y + finalDy, originX: origin.x + finalDx,
+        }))
+      )
     }
     const onUp = () => {
       window.removeEventListener('pointermove', onMove)
@@ -1752,9 +1757,11 @@ const DeckAffordance: React.FC<{ cluster: string[] }> = ({ cluster }) => {
       const finalDy = (snapped ? snapY : rawY) - anchorInitY
       const finalDx = dxAccum
 
-      for (const [gid, origin] of initialOrigins) {
-        useBoardsStore.getState().setGroupPos(gid, origin.y + finalDy, origin.x + finalDx)
-      }
+      useBoardsStore.getState().setGroupPosBatch(
+        Array.from(initialOrigins, ([gid, origin]) => ({
+          groupId: gid, originY: origin.y + finalDy, originX: origin.x + finalDx,
+        }))
+      )
     }
     const onUp = () => {
       window.removeEventListener('pointermove', onMove)
