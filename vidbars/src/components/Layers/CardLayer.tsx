@@ -2035,8 +2035,8 @@ const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void; heroI
   const headerTs: TextStyle = useMemo(() => ({ ...DEFAULT_HEADER_STYLE, ...rawHeaderStyle }), [rawHeaderStyle])
   const splitRatio = group?.textSplitRatio ?? 0.5
   ensureFontLoaded(headerTs.fontFamily); ensureFontLoaded(bodyTs.fontFamily)
-  // Scale text down 10% at max zoom-out (zoom ~0.05) → 1.0 at 0.18, 0.9 at ≤0.05
-  const textScale = Math.min(1, 0.7 + 0.3 * ((zoom - 0.05) / (0.18 - 0.05)))
+  // Text locked to card — no zoom compensation
+  const textScale = 1
 
   const [editingField, setEditingField] = useState<'header' | 'body' | null>(null)
   const [activeField, setActiveField] = useState<TextFieldMode>('header')
@@ -2186,7 +2186,7 @@ const UngroupedCardText: React.FC<{ boardId: string }> = ({ boardId }) => {
   const headerTs: TextStyle = useMemo(() => ({ ...DEFAULT_HEADER_STYLE, ...rawHeaderStyle }), [rawHeaderStyle])
   const splitRatio = useBoardsStore(s => s.boards[boardId]?.layers?.card?.textSplitRatio ?? 0.5)
   ensureFontLoaded(headerTs.fontFamily); ensureFontLoaded(bodyTs.fontFamily)
-  const textScale = Math.min(1, 0.7 + 0.3 * ((zoom - 0.05) / (0.18 - 0.05)))
+  const textScale = 1
 
   const [editingField, setEditingField] = useState<'header' | 'body' | null>(null)
   const [activeField, setActiveField] = useState<TextFieldMode>('header')
