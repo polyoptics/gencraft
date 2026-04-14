@@ -578,10 +578,12 @@ export const NLEBlock: React.FC<Props> = ({ id, top, blockHeight, offsetX, rowTo
             const mkTextStyle = (ts: typeof hts): React.CSSProperties => {
               const bg = ts.bgOpacity > 0 ? hexToRgba(ts.bgColor, ts.bgOpacity) : null
               return {
-                color: ts.color, fontSize: ts.fontSize, lineHeight: 1.4,
-                fontWeight: ts.bold ? 700 : 400, fontStyle: ts.italic ? 'italic' : 'normal',
+                color: ts.color, fontSize: ts.fontSize, lineHeight: ts.lineHeight ?? 1.4,
+                fontWeight: ts.fontWeight ?? (ts.bold ? 700 : 400), fontStyle: ts.italic ? 'italic' : 'normal',
                 textAlign: ts.align, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
                 fontFamily: ts.fontFamily || 'inherit',
+                letterSpacing: ts.letterSpacing ?? 0,
+                textTransform: ts.textTransform ?? 'none',
                 background: bg || 'transparent',
                 borderRadius: bg ? 6 : 0,
                 padding: bg ? 4 : 0,

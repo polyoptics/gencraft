@@ -14,6 +14,10 @@ export interface TextStyle {
   align: 'left' | 'center' | 'right'
   vAlign: 'top' | 'middle' | 'bottom'
   fontFamily?: string    // CSS font-family value
+  lineHeight?: number    // multiplier, e.g. 1.0, 1.2, 1.5 — default 1.55
+  letterSpacing?: number // px — default 0
+  fontWeight?: number    // 100–900 — overrides bold when set
+  textTransform?: 'none' | 'uppercase' | 'lowercase' | 'capitalize'
 }
 
 export const DEFAULT_TEXT_STYLE: TextStyle = {

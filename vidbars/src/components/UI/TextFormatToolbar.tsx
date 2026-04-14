@@ -7,6 +7,25 @@ import { DEFAULT_HEADER_STYLE, DEFAULT_BODY_STYLE } from '../../store/freeNodeSt
 export type TextFieldMode = 'header' | 'body'
 
 export const FONT_SIZES = [8, 10, 12, 14, 18, 24, 32, 48, 64, 96]
+export const FONT_WEIGHTS = [
+  { value: 100, label: '100 Thin' },
+  { value: 200, label: '200 Extra Light' },
+  { value: 300, label: '300 Light' },
+  { value: 400, label: '400 Regular' },
+  { value: 500, label: '500 Medium' },
+  { value: 600, label: '600 Semi Bold' },
+  { value: 700, label: '700 Bold' },
+  { value: 800, label: '800 Extra Bold' },
+  { value: 900, label: '900 Black' },
+]
+export const LINE_HEIGHTS = [0.8, 1.0, 1.15, 1.3, 1.55, 1.8, 2.0, 2.5]
+export const LETTER_SPACINGS = [-2, -1, -0.5, 0, 0.5, 1, 2, 4, 8]
+export const TEXT_TRANSFORMS = [
+  { value: 'none', label: 'None' },
+  { value: 'uppercase', label: 'UPPER' },
+  { value: 'lowercase', label: 'lower' },
+  { value: 'capitalize', label: 'Title' },
+]
 export const PRESET_COLORS = ['#ffffff', '#e2e8f0', '#fbbf24', '#f87171', '#34d399', '#60a5fa', '#a78bfa', '#fb923c']
 
 export const FONT_LIST: { label: string; value: string; google?: boolean }[] = [
@@ -272,7 +291,7 @@ export const TextFormatToolbar: React.FC<TextFormatToolbarProps> = ({
   activeField, onActiveFieldChange, anchorRect, preferBelow, onClose,
   heroImage, heroFlipH, heroFlipV, onFlipH, onFlipV, onCropImage,
 }) => {
-  const [showPopup, setShowPopup] = useState<'text' | 'bg' | 'hAlign' | 'vAlign' | 'font' | null>(null)
+  const [showPopup, setShowPopup] = useState<'text' | 'bg' | 'hAlign' | 'vAlign' | 'font' | 'weight' | 'lineHeight' | 'spacing' | 'transform' | null>(null)
 
   const defaultForField = activeField === 'header' ? DEFAULT_HEADER_STYLE : DEFAULT_BODY_STYLE
   const activeStyle = activeField === 'header' ? headerStyle : bodyStyle
@@ -445,9 +464,74 @@ export const TextFormatToolbar: React.FC<TextFormatToolbarProps> = ({
 
       <div style={sepStyle} />
 
-      {/* Bold / Italic */}
-      <button style={{ ...btnStyle(ts.bold), fontWeight: 800, fontSize: 13 }} onClick={() => setStyle({ bold: !ts.bold })}>B</button>
+      {/* Font weight */}
+      <div style={{ position: 'relative' }}>
+        <button
+          style={{ ...btnStyle(showPopup === 'weight'), fontSize: 10, padding: '2px 5px', minWidth: 28 }}
+          onClick={() => setShowPopup(showPopup === 'weight' ? null : 'weight')}
+          title="Font weight"
+        >
+          <span style={{ fontWeight: ts.fontWeight ?? (ts.bold ? 700 : 400) }}>W</span>
+        </button>
+        {showPopup === 'weight' && (
+          <div
+            onPointerDown={e => { e.preventDefault(); e.stopPropagation() }}
+            style={{
+              position: 'absolute', top: 32, left: -4, zIndex: 10001,
+              background: '#1a1b2e', border: '1px solid rgba(255,255,255,0.12)',
+              borderRadius: 8, padding: 4, boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
+              display: 'flex', flexDirection: 'column', gap: 1, width: 120,
+            }}
+          >
+            {FONT_WEIGHTS.map(w => (
+              <button
+                key={w.value}
+                onClick={() => { setStyle({ fontWeight: w.value, bold: w.value >= 600 }); setShowPopup(null) }}
+                style={{
+                  ...btnStyle((ts.fontWeight ?? (ts.bold ? 700 : 400)) === w.value),
+                  fontWeight: w.value, fontSize: 11, padding: '3px 8px',
+                  textAlign: 'left', width: '100%', justifyContent: 'flex-start',
+                }}
+              >{w.label}</button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Italic */}
       <button style={{ ...btnStyle(ts.italic), fontStyle: 'italic', fontSize: 13 }} onClick={() => setStyle({ italic: !ts.italic })}>I</button>
+
+      {/* Text transform */}
+      <div style={{ position: 'relative' }}>
+        <button
+          style={{ ...btnStyle(showPopup === 'transform'), fontSize: 10, padding: '2px 5px' }}
+          onClick={() => setShowPopup(showPopup === 'transform' ? null : 'transform')}
+          title="Text transform"
+        >Aa</button>
+        {showPopup === 'transform' && (
+          <div
+            onPointerDown={e => { e.preventDefault(); e.stopPropagation() }}
+            style={{
+              position: 'absolute', top: 32, left: -4, zIndex: 10001,
+              background: '#1a1b2e', border: '1px solid rgba(255,255,255,0.12)',
+              borderRadius: 8, padding: 4, boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
+              display: 'flex', flexDirection: 'column', gap: 1, width: 110,
+            }}
+          >
+            {TEXT_TRANSFORMS.map(t => (
+              <button
+                key={t.value}
+                onClick={() => { setStyle({ textTransform: t.value as any }); setShowPopup(null) }}
+                style={{
+                  ...btnStyle((ts.textTransform ?? 'none') === t.value),
+                  fontSize: 11, padding: '3px 8px',
+                  textAlign: 'left', width: '100%', justifyContent: 'flex-start',
+                }}
+              >{t.label}</button>
+            ))}
+          </div>
+        )}
+      </div>
 
       <div style={sepStyle} />
 
@@ -486,6 +570,82 @@ export const TextFormatToolbar: React.FC<TextFormatToolbarProps> = ({
             onSelect={v => { setStyle({ vAlign: v as any }); setShowPopup(null) }}
             onClose={() => setShowPopup(null)}
           />
+        )}
+      </div>
+
+      <div style={sepStyle} />
+
+      {/* Line height */}
+      <div style={{ position: 'relative' }}>
+        <button
+          style={{ ...btnStyle(showPopup === 'lineHeight'), fontSize: 10, padding: '2px 5px' }}
+          onClick={() => setShowPopup(showPopup === 'lineHeight' ? null : 'lineHeight')}
+          title="Line height"
+        >
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M1 2h12M1 7h12M1 12h12" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+            <path d="M13 4.5L13 9.5M13 4.5l-1.5 1.5M13 4.5l1.5 1.5M13 9.5l-1.5-1.5M13 9.5l1.5-1.5" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        </button>
+        {showPopup === 'lineHeight' && (
+          <div
+            onPointerDown={e => { e.preventDefault(); e.stopPropagation() }}
+            style={{
+              position: 'absolute', top: 32, left: -4, zIndex: 10001,
+              background: '#1a1b2e', border: '1px solid rgba(255,255,255,0.12)',
+              borderRadius: 8, padding: 4, boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
+              display: 'flex', flexDirection: 'column', gap: 1, width: 80,
+            }}
+          >
+            {LINE_HEIGHTS.map(lh => (
+              <button
+                key={lh}
+                onClick={() => { setStyle({ lineHeight: lh }); setShowPopup(null) }}
+                style={{
+                  ...btnStyle(Math.abs((ts.lineHeight ?? 1.55) - lh) < 0.01),
+                  fontSize: 11, padding: '3px 8px',
+                  textAlign: 'left', width: '100%', justifyContent: 'flex-start',
+                }}
+              >{lh.toFixed(1)}</button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Letter spacing */}
+      <div style={{ position: 'relative' }}>
+        <button
+          style={{ ...btnStyle(showPopup === 'spacing'), fontSize: 10, padding: '2px 5px' }}
+          onClick={() => setShowPopup(showPopup === 'spacing' ? null : 'spacing')}
+          title="Letter spacing"
+        >
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M3 3L7 11M11 3L7 11" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+            <path d="M1 13l2-2M1 13l2 2M13 13l-2-2M13 13l-2 2" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        </button>
+        {showPopup === 'spacing' && (
+          <div
+            onPointerDown={e => { e.preventDefault(); e.stopPropagation() }}
+            style={{
+              position: 'absolute', top: 32, left: -4, zIndex: 10001,
+              background: '#1a1b2e', border: '1px solid rgba(255,255,255,0.12)',
+              borderRadius: 8, padding: 4, boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
+              display: 'flex', flexDirection: 'column', gap: 1, width: 80,
+            }}
+          >
+            {LETTER_SPACINGS.map(ls => (
+              <button
+                key={ls}
+                onClick={() => { setStyle({ letterSpacing: ls }); setShowPopup(null) }}
+                style={{
+                  ...btnStyle((ts.letterSpacing ?? 0) === ls),
+                  fontSize: 11, padding: '3px 8px',
+                  textAlign: 'left', width: '100%', justifyContent: 'flex-start',
+                }}
+              >{ls === 0 ? '0' : ls > 0 ? `+${ls}` : `${ls}`}</button>
+            ))}
+          </div>
         )}
       </div>
 
