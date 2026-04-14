@@ -28,11 +28,11 @@ export function collectSubtree(bars: Record<string, Bar>, id: string): string[] 
   return [id, ...bar.children.flatMap(cid => collectSubtree(bars, cid))]
 }
 
-export function getBlocksAtRow(bars: Record<string, Bar>, rowIndex: number, excludeId?: string): Bar[] {
+function getBlocksAtRow(bars: Record<string, Bar>, rowIndex: number, excludeId?: string): Bar[] {
   return Object.values(bars).filter(b => b.rowIndex === rowIndex && b.id !== excludeId)
 }
 
-export function clampDxSiblings(bar: Bar, dx: number, rowBlocks: Bar[]): number {
+function clampDxSiblings(bar: Bar, dx: number, rowBlocks: Bar[]): number {
   if (dx === 0) return 0
   if (dx < 0) {
     const leftNeighbors = rowBlocks.filter(b => b.x + b.width <= bar.x)
@@ -45,14 +45,6 @@ export function clampDxSiblings(bar: Bar, dx: number, rowBlocks: Bar[]): number 
     const minRightEdge = Math.min(...rightNeighbors.map(b => b.x))
     return Math.min(dx, minRightEdge - (bar.x + bar.width))
   }
-}
-
-export function clampDxParent(bar: Bar, dx: number, bars: Record<string, Bar>): number {
-  if (!bar.parentId) return dx
-  const parent = bars[bar.parentId]
-  if (!parent) return dx
-  const newX = Math.max(parent.x, Math.min(parent.x + parent.width - bar.width, bar.x + dx))
-  return newX - bar.x
 }
 
 // ── Return type for mutations that change bars + optionally rootIds ──

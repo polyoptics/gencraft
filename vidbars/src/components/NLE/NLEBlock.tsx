@@ -87,7 +87,7 @@ const NLETextSplitDivider: React.FC<{
   )
 }
 
-export const NLEBlock: React.FC<Props> = ({ id, top, blockHeight, offsetX, rowTops, rowHeights }) => {
+export const NLEBlock: React.FC<Props> = React.memo(({ id, top, blockHeight, offsetX, rowTops, rowHeights }) => {
   const ctx = useBoardCtx()
   const {
     bars, selectedIds,
@@ -1172,5 +1172,5 @@ export const NLEBlock: React.FC<Props> = ({ id, top, blockHeight, offsetX, rowTo
       )}
     </>
   )
-}
+})
 

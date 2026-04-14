@@ -43,26 +43,6 @@ function slotFromBars(
   }
 }
 
-/** Build a slot for the primary board */
-export function primarySlot(
-  boardPosX: number,
-  boardRow: number,
-  bars: Record<string, Bar>,
-  rootIds: string[],
-  boardScale = 1,
-): BoardSlot {
-  return slotFromBars('primary', boardRow, boardPosX, bars, rootIds, boardScale)
-}
-
-/** Build slots for all extra boards (excludes the primary board) */
-export function extraSlots(
-  boards: Record<string, { id: string; nleRow: number; nleX: number; rootIds: string[]; boardScale?: number; bars: Record<string, Bar> }>,
-): BoardSlot[] {
-  return Object.values(boards)
-    .filter(b => b.id !== 'primary')
-    .map(b => slotFromBars(b.id, b.nleRow, b.nleX, b.bars, b.rootIds, b.boardScale ?? 1))
-}
-
 /**
  * Build BoardSlots for all boards within one group, using the group's origin
  * for absolute X but keeping local nleRow for same-row collision matching.

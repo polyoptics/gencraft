@@ -37,7 +37,7 @@ const GripDots: React.FC<{ size?: number; opacity?: number }> = ({ size = 10, op
   </svg>
 )
 
-const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
+const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
   const board = useBoardsStore(s => s.boards[boardId])
   const zoom = useCanvasStore(s => s.zoom)
 
@@ -555,7 +555,7 @@ const BlockItem: React.FC<{ boardId: string }> = ({ boardId }) => {
       )}
     </div>
   )
-}
+})
 
 // ── Canvas content ──
 

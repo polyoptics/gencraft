@@ -20,7 +20,7 @@ const BOARD_PADDING_TOP = 28
 const BOARD_PADDING_BOT = 20
 const HEADER_H = 28
 
-export const Board: React.FC<Props> = ({ boardId }) => {
+export const Board: React.FC<Props> = React.memo(({ boardId }) => {
   const isPrimary = boardId === 'primary'
 
   const board        = useBoardsStore(s => s.boards[boardId])
@@ -544,7 +544,7 @@ export const Board: React.FC<Props> = ({ boardId }) => {
       )}
     </>
   )
-}
+})
 
 const BlockCount: React.FC<{ boardId: string; zoom: number }> = ({ boardId, zoom }) => {
   const count = useBoardsStore(s => Object.keys(s.boards[boardId]?.bars ?? {}).length)

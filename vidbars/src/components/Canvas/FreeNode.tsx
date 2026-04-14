@@ -3,7 +3,11 @@ import ReactDOM from 'react-dom'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import type { FreeNodeData, TextStyle } from '../../store/freeNodeStore'
 import { DEFAULT_TEXT_STYLE } from '../../store/freeNodeStore'
-import { ensureFontLoaded, FONT_LIST, loadGoogleFont } from '../UI/TextFormatToolbar'
+import {
+  ensureFontLoaded, FONT_LIST, loadGoogleFont, hexToRgba,
+  FONT_SIZES, FONT_WEIGHTS, LINE_HEIGHTS, LETTER_SPACINGS, TEXT_TRANSFORMS, PRESET_COLORS,
+  hAlignIcons, vAlignIcons, AlignPopup, ColorSwatchPopup, BgPickerPopup,
+} from '../UI/TextFormatToolbar'
 import { useBoardsStore } from '../../store/boardsStore'
 import type { HeroImageTransform } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
@@ -13,7 +17,7 @@ import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
 
 interface Props { id: string }
 
-export const FreeNode: React.FC<Props> = ({ id }) => {
+export const FreeNode: React.FC<Props> = React.memo(({ id }) => {
   const node = useFreeNodeStore(s => s.nodes[id])
   const moveFreeNode = useFreeNodeStore(s => s.moveFreeNode)
   const moveManyFreeNodes = useFreeNodeStore(s => s.moveManyFreeNodes)
@@ -435,7 +439,7 @@ export const FreeNode: React.FC<Props> = ({ id }) => {
       })()}
     </div>
   )
-}
+})
 
 // ── Body renderer for each node type ──
 
@@ -652,39 +656,8 @@ const FreeNodeBody: React.FC<{
   )
 }
 
-// ── Helpers ──
-
-function hexToRgba(hex: string, opacity: number): string {
-  const n = parseInt(hex.replace('#', ''), 16)
-  const r = (n >> 16) & 0xff
-  const g = (n >> 8) & 0xff
-  const b = n & 0xff
-  return `rgba(${r},${g},${b},${opacity})`
-}
-
 // ── Text Format Toolbar (portalled above the node) ──
 
-const FONT_SIZES = [8, 10, 12, 14, 18, 24, 32, 48, 64, 96]
-const FONT_WEIGHTS = [
-  { value: 100, label: '100 Thin' },
-  { value: 200, label: '200 Extra Light' },
-  { value: 300, label: '300 Light' },
-  { value: 400, label: '400 Regular' },
-  { value: 500, label: '500 Medium' },
-  { value: 600, label: '600 Semi Bold' },
-  { value: 700, label: '700 Bold' },
-  { value: 800, label: '800 Extra Bold' },
-  { value: 900, label: '900 Black' },
-]
-const LINE_HEIGHTS = [0.8, 1.0, 1.15, 1.3, 1.55, 1.8, 2.0, 2.5]
-const LETTER_SPACINGS = [-2, -1, -0.5, 0, 0.5, 1, 2, 4, 8]
-const TEXT_TRANSFORMS = [
-  { value: 'none', label: 'None' },
-  { value: 'uppercase', label: 'UPPER' },
-  { value: 'lowercase', label: 'lower' },
-  { value: 'capitalize', label: 'Title' },
-]
-const PRESET_COLORS = ['#ffffff', '#e2e8f0', '#fbbf24', '#f87171', '#34d399', '#60a5fa', '#a78bfa', '#fb923c']
 const PRESET_BG_COLORS = ['#000000', '#1e1b4b', '#1e3a2f', '#3b1520', '#1e293b', '#transparent']
 
 const TextFormatToolbar: React.FC<{
@@ -1077,157 +1050,3 @@ const TextFormatToolbar: React.FC<{
   )
 }
 
-// ── Alignment icons ──
-
-const hAlignIcons: Record<string, React.ReactNode> = {
-  left: <svg width="14" height="14" viewBox="0 0 14 14"><path d="M1 2h12M1 5h8M1 8h10M1 11h6" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round"/></svg>,
-  center: <svg width="14" height="14" viewBox="0 0 14 14"><path d="M1 2h12M3 5h8M2 8h10M4 11h6" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round"/></svg>,
-  right: <svg width="14" height="14" viewBox="0 0 14 14"><path d="M1 2h12M5 5h8M3 8h10M7 11h6" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round"/></svg>,
-}
-
-const vAlignIcons: Record<string, React.ReactNode> = {
-  top: <svg width="14" height="14" viewBox="0 0 14 14"><path d="M1 1h12M4 4h6M3 7h8" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round"/></svg>,
-  middle: <svg width="14" height="14" viewBox="0 0 14 14"><path d="M4 3h6M3 7h8M4 11h6" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round"/></svg>,
-  bottom: <svg width="14" height="14" viewBox="0 0 14 14"><path d="M3 7h8M4 10h6M1 13h12" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round"/></svg>,
-}
-
-// ── Alignment popup (shared for both h and v) ──
-
-const AlignPopup: React.FC<{
-  options: { value: string; label: string; icon: React.ReactNode }[]
-  selected: string
-  onSelect: (v: string) => void
-  onClose: () => void
-}> = ({ options, selected, onSelect, onClose }) => (
-  <div
-    onPointerDown={e => e.stopPropagation()}
-    style={{
-      position: 'absolute', top: 32, left: -4, zIndex: 10001,
-      background: '#1a1b2e', border: '1px solid rgba(255,255,255,0.12)',
-      borderRadius: 8, padding: 4, boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
-      display: 'flex', gap: 2,
-    }}
-  >
-    {options.map(o => (
-      <button
-        key={o.value}
-        onClick={() => onSelect(o.value)}
-        title={o.label}
-        style={{
-          background: o.value === selected ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.03)',
-          border: o.value === selected ? '1px solid rgba(255,255,255,0.3)' : '1px solid rgba(255,255,255,0.06)',
-          borderRadius: 5, color: o.value === selected ? '#fff' : 'rgba(255,255,255,0.5)',
-          width: 28, height: 28, cursor: 'pointer',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          padding: 0,
-        }}
-      >
-        {o.icon}
-      </button>
-    ))}
-  </div>
-)
-
-// ── Color swatch popup ──
-const ColorSwatchPopup: React.FC<{
-  colors: string[]
-  selected: string
-  onSelect: (c: string) => void
-  onClose: () => void
-}> = ({ colors, selected, onSelect, onClose }) => (
-  <div
-    onPointerDown={e => e.stopPropagation()}
-    style={{
-      position: 'absolute', top: 32, left: -4, zIndex: 10001,
-      background: '#1a1b2e', border: '1px solid rgba(255,255,255,0.12)',
-      borderRadius: 8, padding: 6, boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
-      display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4,
-      width: 120,
-    }}
-  >
-    {colors.map(c => (
-      <button
-        key={c}
-        onClick={() => onSelect(c)}
-        style={{
-          width: 24, height: 24, borderRadius: 5,
-          background: c, border: c === selected ? '2px solid #fff' : '1px solid rgba(255,255,255,0.15)',
-          cursor: 'pointer', padding: 0,
-        }}
-      />
-    ))}
-    {/* Custom color input */}
-    <label style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
-      <input
-        type="color"
-        value={selected}
-        onChange={e => onSelect(e.target.value)}
-        style={{ width: 24, height: 24, border: 'none', background: 'none', cursor: 'pointer', padding: 0 }}
-      />
-      <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)' }}>Custom</span>
-    </label>
-  </div>
-)
-
-// ── Background color + opacity popup ──
-const BgPickerPopup: React.FC<{
-  bgColor: string
-  bgOpacity: number
-  onColorSelect: (c: string) => void
-  onOpacityChange: (o: number) => void
-  onClose: () => void
-}> = ({ bgColor, bgOpacity, onColorSelect, onOpacityChange, onClose }) => (
-  <div
-    onPointerDown={e => e.stopPropagation()}
-    style={{
-      position: 'absolute', top: 32, right: -4, zIndex: 10001,
-      background: '#1a1b2e', border: '1px solid rgba(255,255,255,0.12)',
-      borderRadius: 8, padding: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
-      width: 150,
-    }}
-  >
-    <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', marginBottom: 4 }}>Background Color</div>
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4, marginBottom: 8 }}>
-      {['#000000', '#1e1b4b', '#1e3a2f', '#3b1520', '#1e293b', '#2d1b0e', '#1a1a1a', '#0f172a'].map(c => (
-        <button
-          key={c}
-          onClick={() => onColorSelect(c)}
-          style={{
-            width: 24, height: 24, borderRadius: 5,
-            background: c, border: c === bgColor ? '2px solid #fff' : '1px solid rgba(255,255,255,0.15)',
-            cursor: 'pointer', padding: 0,
-          }}
-        />
-      ))}
-    </div>
-    <label style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 2 }}>
-      <input
-        type="color"
-        value={bgColor}
-        onChange={e => onColorSelect(e.target.value)}
-        style={{ width: 24, height: 24, border: 'none', background: 'none', cursor: 'pointer', padding: 0 }}
-      />
-      <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)' }}>Custom</span>
-    </label>
-    <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', marginTop: 6, marginBottom: 4 }}>Opacity</div>
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-      <input
-        type="range"
-        min={0} max={1} step={0.05}
-        value={bgOpacity}
-        onChange={e => onOpacityChange(parseFloat(e.target.value))}
-        onPointerDown={e => e.stopPropagation()}
-        style={{ flex: 1, height: 4, accentColor: '#60a5fa', cursor: 'pointer' }}
-      />
-      <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.5)', minWidth: 28, textAlign: 'right' }}>
-        {Math.round(bgOpacity * 100)}%
-      </span>
-    </div>
-    {/* Preview */}
-    <div style={{
-      marginTop: 6, height: 20, borderRadius: 4,
-      background: hexToRgba(bgColor, bgOpacity),
-      border: '1px solid rgba(255,255,255,0.08)',
-    }} />
-  </div>
-)
