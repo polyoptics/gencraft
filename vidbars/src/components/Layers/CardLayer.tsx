@@ -12,6 +12,7 @@ import { DEFAULT_HEADER_STYLE, DEFAULT_BODY_STYLE } from '../../store/freeNodeSt
 import type { TextStyle } from '../../store/freeNodeStore'
 import type { TextFieldMode } from '../UI/TextFormatToolbar'
 import { TextFormatToolbar, hexToRgba, ensureFontLoaded } from '../UI/TextFormatToolbar'
+import { ColorPickerPopup } from '../Bar/ColorPickerPopup'
 import { computeGroupLayout, getRowY, getRowHeight, snapToCardGrid, CARD_GRID_SPACING } from '../../utils/nleRows'
 import { DEFAULT_H } from '../../utils/barConstants'
 import { groupSlot, clampGroupMove } from '../../utils/nlePush'
@@ -43,13 +44,6 @@ function startOverlayPan(e: React.PointerEvent) {
   window.addEventListener('pointerup', onUp)
 }
 
-const CARD_COLORS = [
-  '#5b8dd9', '#3b82f6', '#0ea5e9', '#06b6d4',
-  '#14b8a6', '#22c55e', '#84cc16', '#f59e0b',
-  '#f97316', '#ef4444', '#ec4899', '#8b5cf6',
-  '#6366f1', '#64748b', '#475569', '#334155',
-]
-
 /** Shared context menu for all card types (GroupCard, StackedDeckCard, FannedDeckOverlay) */
 const CardContextMenu: React.FC<{
   pos: { x: number; y: number }
@@ -61,7 +55,7 @@ const CardContextMenu: React.FC<{
   onEditHeroImage?: () => void
 }> = ({ pos, group, heroImage, deckMemberIds, deckState, onClose, onEditHeroImage }) => {
   const groups = useBoardsStore(s => s.groups)
-  const [showColors, setShowColors] = useState(false)
+  const [colorPicker, setColorPicker] = useState<{ x: number; y: number } | null>(null)
 
   const menuItems: { label: string; icon: string; action: () => void; danger?: boolean; separator?: boolean }[] = []
 
@@ -79,8 +73,8 @@ const CardContextMenu: React.FC<{
     onClose()
   }})
 
-  // Color — toggles swatch row
-  menuItems.push({ label: 'Card Color', icon: '🎨', action: () => setShowColors(v => !v) })
+  // Color — opens full color picker
+  menuItems.push({ label: 'Card Color', icon: '🎨', action: () => setColorPicker(colorPicker ? null : { x: pos.x + 200, y: pos.y }) })
 
   // Separator before deck actions
   if (deckMemberIds && deckMemberIds.length >= 2) {
@@ -166,29 +160,21 @@ const CardContextMenu: React.FC<{
               <span style={{ fontSize: 14, width: 18, textAlign: 'center' }}>{item.icon}</span>
               {item.label}
             </button>
-            {/* Color swatches inline after "Card Color" item */}
-            {item.label === 'Card Color' && showColors && (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, padding: '6px 14px 8px' }}>
-                {CARD_COLORS.map(c => (
-                  <button
-                    key={c}
-                    onClick={() => {
-                      useUndoCoordinator.getState().checkpoint()
-                      useBoardsStore.getState().setGroupColor(group.id, c)
-                      onClose()
-                    }}
-                    style={{
-                      width: 22, height: 22, background: c,
-                      border: c.toLowerCase() === group.color.toLowerCase() ? '2.5px solid #fff' : '2px solid rgba(255,255,255,0.15)',
-                      borderRadius: 5, cursor: 'pointer', flexShrink: 0, padding: 0,
-                    }}
-                  />
-                ))}
-              </div>
-            )}
           </React.Fragment>
         ))}
       </div>
+      {colorPicker && (
+        <ColorPickerPopup
+          color={group.color}
+          anchorX={colorPicker.x}
+          anchorY={colorPicker.y}
+          onChange={c => {
+            useUndoCoordinator.getState().checkpoint()
+            useBoardsStore.getState().setGroupColor(group.id, c)
+          }}
+          onClose={() => { setColorPicker(null); onClose() }}
+        />
+      )}
     </>,
     document.body
   )
