@@ -112,14 +112,17 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
     return id
   },
 
-  moveFreeNode: (id, dx, dy) =>
+  moveFreeNode: (id, dx, dy) => {
+    if (dx === 0 && dy === 0) return
     set(s => {
       const n = s.nodes[id]
       if (!n) return s
       return { nodes: { ...s.nodes, [id]: { ...n, x: n.x + dx, y: n.y + dy } } }
-    }),
+    })
+  },
 
-  moveManyFreeNodes: (ids, dx, dy) =>
+  moveManyFreeNodes: (ids, dx, dy) => {
+    if (dx === 0 && dy === 0) return
     set(s => {
       const updated = { ...s.nodes }
       for (const id of ids) {
@@ -127,7 +130,8 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
         if (n) updated[id] = { ...n, x: n.x + dx, y: n.y + dy }
       }
       return { nodes: updated }
-    }),
+    })
+  },
 
   resizeFreeNode: (id, dw, dh) =>
     set(s => {

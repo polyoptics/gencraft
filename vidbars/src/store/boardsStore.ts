@@ -362,6 +362,8 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
   },
 
   setBoardNlePos(id, nleRow, nleX) {
+    const b = get().boards[id]
+    if (b && b.nleRow === nleRow && b.nleX === nleX) return
     updateBoard(set, id, () => ({ nleRow, nleX }))
   },
 
@@ -792,6 +794,8 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
   },
 
   setGroupPos(groupId, originY, originX) {
+    const g = get().groups.find(gr => gr.id === groupId)
+    if (g && g.originY === originY && g.originX === originX) return
     set(s => ({ groups: s.groups.map(g => g.id === groupId ? { ...g, originY, originX } : g) }))
   },
 
@@ -975,6 +979,8 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
   },
 
   setUngroupedBoardPos(boardId, canvasX, canvasY) {
+    const b = get().boards[boardId]
+    if (b && b.canvasX === canvasX && b.canvasY === canvasY) return
     updateBoard(set, boardId, () => ({ canvasX, canvasY }))
   },
 

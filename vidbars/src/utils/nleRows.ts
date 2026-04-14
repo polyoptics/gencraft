@@ -69,6 +69,9 @@ export interface RowLayout {
  *
  * When `canvasStore.dynamicRowHeights` is false, all rows get fixed height.
  */
+// ── Layout cache: avoids recomputation when inputs haven't changed ──
+const _layoutCache = new Map<string, RowLayout>()
+
 export function computeGroupLayout(
   groupBoardIds: string[],
   boards: Record<string, any>,
@@ -76,6 +79,16 @@ export function computeGroupLayout(
   const cs = useCanvasStore.getState()
   const dynamic = cs.dynamicRowHeights
   const fixedH = cs.nleRowHeight
+
+  // Build a cache key from board row/scale/bar-count to detect changes cheaply
+  const keyParts = groupBoardIds.map(bid => {
+    const b = boards[bid]
+    if (!b) return `${bid}:_`
+    return `${bid}:${b.nleRow ?? 0}:${b.boardScale ?? 1}:${Object.keys(b.bars ?? {}).length}`
+  })
+  const cacheKey = `${dynamic}:${fixedH}:${keyParts.join('|')}`
+  const cached = _layoutCache.get(cacheKey)
+  if (cached) return cached
 
   const rowContentHeights: Record<number, number> = {}
 
@@ -112,7 +125,11 @@ export function computeGroupLayout(
     y += h + ROW_GAP
   }
 
-  return { rowHeights, rowTops, totalHeight: Math.max(y - ROW_GAP, dynamic ? MIN_ROW_H : fixedH) }
+  const result: RowLayout = { rowHeights, rowTops, totalHeight: Math.max(y - ROW_GAP, dynamic ? MIN_ROW_H : fixedH) }
+  // Cap cache size to prevent unbounded growth
+  if (_layoutCache.size > 50) _layoutCache.clear()
+  _layoutCache.set(cacheKey, result)
+  return result
 }
 
 /**

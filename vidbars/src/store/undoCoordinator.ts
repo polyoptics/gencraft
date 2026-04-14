@@ -5,8 +5,9 @@
  * It captures the current state. On undo, that state is restored.
  * No debounce, no throttle — explicit checkpoints only.
  *
- * Snapshots are deep-cloned (structuredClone) so they are fully isolated
- * from the live Zustand state — no shared references.
+ * Snapshots use targeted cloning: only boards.bars (deeply nested bar trees)
+ * are structuredClone'd. Everything else is shallow-copied since Zustand's
+ * immutable updates already create new references on mutation.
  *
  * Transient per-board fields (selectedIds, viewerBarId, savedCollapsedState)
  * are stripped from snapshots so undo never disturbs selection / viewer state.
@@ -44,14 +45,15 @@ function snapStore(
   return snap
 }
 
-/** Deep-clone boards, stripping transient fields from each board entry */
+/** Clone boards with targeted deep-cloning: only bars (deeply nested trees) use structuredClone */
 function snapBoards(boards: Record<string, Record<string, unknown>>): Record<string, Record<string, unknown>> {
   const result: Record<string, Record<string, unknown>> = {}
   for (const [id, board] of Object.entries(boards)) {
     const clean: Record<string, unknown> = {}
     for (const key of Object.keys(board)) {
       if (!(BOARD_TRANSIENT as readonly string[]).includes(key)) {
-        clean[key] = board[key]
+        // Deep-clone only the bars tree (complex nested structure)
+        clean[key] = key === 'bars' ? structuredClone(board[key]) : board[key]
       }
     }
     result[id] = clean
@@ -63,11 +65,13 @@ function captureSnapshot(): Snapshot {
   const boardsState = useBoardsStore.getState() as unknown as Record<string, unknown>
   const boards = boardsState.boards as Record<string, Record<string, unknown>>
 
-  // Deep-clone the entire snapshot so it's fully isolated from live state
-  return structuredClone({
+  // Targeted cloning: deep-clone only bars (via snapBoards), shallow-copy everything else
+  return {
     boards: {
       boards: snapBoards(boards),
       boardOrder: boardsState.boardOrder,
+      // Include groups so undo restores group positions, colors, deck states
+      groups: boardsState.groups,
     },
     canvas: snapStore(
       useCanvasStore.getState() as unknown as Record<string, unknown>,
@@ -77,7 +81,7 @@ function captureSnapshot(): Snapshot {
       useFreeNodeStore.getState() as unknown as Record<string, unknown>,
       FREE_EXCLUDE,
     ),
-  })
+  }
 }
 
 function restoreSnapshot(snap: Snapshot) {
@@ -99,7 +103,9 @@ function restoreSnapshot(snap: Snapshot) {
     }
   }
 
-  useBoardsStore.setState({ boards: merged, boardOrder: snapBoardsData.boardOrder })
+  const restoreData: Record<string, unknown> = { boards: merged, boardOrder: snapBoardsData.boardOrder }
+  if (snapBoardsData.groups !== undefined) restoreData.groups = snapBoardsData.groups
+  useBoardsStore.setState(restoreData)
   useCanvasStore.setState(snap.canvas)
   useFreeNodeStore.setState(snap.freeNodes)
 }
