@@ -204,6 +204,7 @@ export const NLETimelineHeader: React.FC<Props> = ({ groupId, rightInset = 0 }) 
   const screenTop    = screenBottom - screenHeight
   const effectiveWidth = Math.max(screenWidth, 40)
   const isNarrow = effectiveWidth < 90
+  const isTiny = effectiveWidth < 50
 
   if (screenLeft + screenWidth < 0 || screenTop + screenHeight < 0) return null
 
@@ -282,9 +283,9 @@ export const NLETimelineHeader: React.FC<Props> = ({ groupId, rightInset = 0 }) 
       style={{
         position: 'absolute',
         left: screenLeft,
-        top: isNarrow ? screenTop - 14 : screenTop,
+        top: screenTop,
         width: effectiveWidth,
-        height: isNarrow ? screenHeight + 14 : screenHeight,
+        height: screenHeight,
         zIndex: 51,
         userSelect: 'none',
         pointerEvents: 'all',
@@ -303,24 +304,16 @@ export const NLETimelineHeader: React.FC<Props> = ({ groupId, rightInset = 0 }) 
       <div style={{
         position: 'absolute', inset: 0,
         display: 'flex',
-        flexDirection: isNarrow ? 'column' : 'row',
-        alignItems: isNarrow ? 'flex-start' : 'center',
-        justifyContent: isNarrow ? 'center' : 'flex-start',
-        padding: isNarrow ? '2px 6px' : '0 8px 0 8px',
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'flex-start',
+        padding: '0 6px',
         zIndex: 2,
-        gap: isNarrow ? 1 : 6,
+        gap: 4,
+        overflow: 'hidden',
       }}>
-        {isNarrow ? (
-          <>
-            <div style={{ flex: '0 0 auto' }}>{viewerToggle}</div>
-            {nameEl}
-          </>
-        ) : (
-          <>
-            {nameEl}
-            <div style={{ flex: '0 0 auto' }}>{viewerToggle}</div>
-          </>
-        )}
+        {!isTiny && nameEl}
+        <div style={{ flex: '0 0 auto', marginLeft: isTiny ? 0 : 'auto' }}>{viewerToggle}</div>
       </div>
     </div>
   )
