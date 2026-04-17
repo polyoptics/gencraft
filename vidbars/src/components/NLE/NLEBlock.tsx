@@ -558,7 +558,7 @@ export const NLEBlock: React.FC<Props> = React.memo(({ id, top, blockHeight, off
         }}>
           <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(160deg, rgba(255,255,255,0.10) 0%, rgba(0,0,0,0.10) 100%)' }} />
           {getFirstImageUrl(bar.content) && (
-            <HeroImageLayer heroImage={getFirstImageUrl(bar.content)!} transform={bar.content.imageTransform} borderRadius={0} opacity={0.82} />
+            <HeroImageLayer heroImage={getFirstImageUrl(bar.content)!} transform={bar.content.imageTransform} borderRadius={0} opacity={bar.content.imageTransform?.opacity ?? 0.82} />
           )}
           {(bar.content.text || bar.content.headerText || isEditingText) && (() => {
             const hts = { ...DEFAULT_HEADER_STYLE, ...bar.content.headerTextStyle }
@@ -1128,7 +1128,12 @@ export const NLEBlock: React.FC<Props> = React.memo(({ id, top, blockHeight, off
           activeField={activeTextField}
           onActiveFieldChange={f => { setActiveTextField(f); if (isEditingText) setEditingTextField(f) }}
           anchorRect={wrapperRef.current?.getBoundingClientRect() ?? null}
-          onClose={() => setShowTextToolbar(false)}
+          onClose={() => {
+            // Empty-canvas click = fully exit text editing, not just the toolbar
+            setShowTextToolbar(false)
+            setIsEditingText(false)
+            setEditingTextField(null)
+          }}
           heroImage={getFirstImageUrl(bar.content)}
           heroFlipH={bar.content.imageTransform?.flipH}
           heroFlipV={bar.content.imageTransform?.flipV}

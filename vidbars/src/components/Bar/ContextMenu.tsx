@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useBoardCtx } from '../../contexts/BoardContext'
+import { useBoardsStore } from '../../store/boardsStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 
 interface Props {
@@ -48,6 +49,10 @@ export const ContextMenu: React.FC<Props> = ({
       { label: 'Remove Image', icon: '🖼', action: () => { useUndoCoordinator.getState().checkpoint(); ctx.setContent(barId, { images: [], media: [] }); onClose() } },
     ] : []),
     { sep: true },
+    {
+      label: 'Extract to Board', icon: '📤',
+      action: () => { useUndoCoordinator.getState().checkpoint(); useBoardsStore.getState().extractBarToBoard(ctx.boardId, barId); onClose() },
+    },
     {
       label: 'Open Viewer', icon: '▶️',
       action: () => { ctx.openViewer(barId); onClose() },

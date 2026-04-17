@@ -536,6 +536,10 @@ const UngroupedBoardCard: React.FC<{ boardId: string }> = ({ boardId }) => {
     e.stopPropagation()
     e.preventDefault()
     useUndoCoordinator.getState().checkpoint()
+    // Focus this ungrouped board so Del/Backspace can target it
+    useCanvasStore.getState().setFocusedBoard(boardId)
+    useBoardsStore.getState().setSelectedGroup(null)
+    useBoardsStore.getState().clearAllSelections()
     setIsDragging(true)
     let lastX = e.clientX, lastY = e.clientY
     let dxAccum = 0, dyAccum = 0
@@ -2078,6 +2082,32 @@ const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void; heroI
     setBodyVal(bodyText); setEditingField('body'); setActiveField('body'); setSelected(true)
   }, [bodyText])
 
+  // Handler passed to the format toolbar when the user clicks H / P.
+  // Commits the current field's buffer immediately (without waiting for the
+  // activeField effect) so toolbar-driven switches never drop typed text.
+  const handleToolbarFieldChange = useCallback((newField: TextFieldMode) => {
+    if (newField === activeField) return
+    if (editingField === 'header' && newField !== 'header') {
+      useBoardsStore.getState().setGroupCardHeaderText(groupId, headerVal)
+    } else if (editingField === 'body' && newField !== 'body') {
+      useBoardsStore.getState().setGroupCardText(groupId, bodyVal)
+    }
+    setActiveField(newField)
+  }, [activeField, editingField, headerVal, bodyVal, groupId])
+
+  // Called when the toolbar's outside-click handler fires — a click on empty
+  // canvas should unwind all editing state in one shot: commit pending buffer,
+  // drop the toolbar, exit edit mode, deselect.
+  const exitEditing = useCallback(() => {
+    if (editingField === 'header') {
+      useBoardsStore.getState().setGroupCardHeaderText(groupId, headerVal)
+    } else if (editingField === 'body') {
+      useBoardsStore.getState().setGroupCardText(groupId, bodyVal)
+    }
+    setEditingField(null)
+    setSelected(false)
+  }, [editingField, headerVal, bodyVal, groupId])
+
   React.useEffect(() => {
     const el = wrapperRef.current
     if (!el) return
@@ -2088,9 +2118,35 @@ const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void; heroI
 
   React.useEffect(() => {
     if (!selected) return
-    if (activeField === 'header' && editingField !== 'header') startEditHeader()
-    else if (activeField === 'body' && editingField !== 'body') startEditBody()
+    if (activeField === 'header' && editingField !== 'header') {
+      // Commit the outgoing field before switching so typed text isn't lost
+      if (editingField === 'body') useBoardsStore.getState().setGroupCardText(groupId, bodyVal)
+      startEditHeader()
+    } else if (activeField === 'body' && editingField !== 'body') {
+      if (editingField === 'header') useBoardsStore.getState().setGroupCardHeaderText(groupId, headerVal)
+      startEditBody()
+    }
   }, [activeField]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // On unmount, flush any in-progress edit so leaving the card never loses text
+  React.useEffect(() => {
+    return () => {
+      if (editingFieldRef.current === 'header') {
+        useBoardsStore.getState().setGroupCardHeaderText(groupId, headerValRef.current)
+      } else if (editingFieldRef.current === 'body') {
+        useBoardsStore.getState().setGroupCardText(groupId, bodyValRef.current)
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Refs mirror the latest values so the unmount cleanup has them
+  const editingFieldRef = useRef(editingField)
+  const headerValRef = useRef(headerVal)
+  const bodyValRef = useRef(bodyVal)
+  React.useEffect(() => { editingFieldRef.current = editingField }, [editingField])
+  React.useEffect(() => { headerValRef.current = headerVal }, [headerVal])
+  React.useEffect(() => { bodyValRef.current = bodyVal }, [bodyVal])
 
   return (
     <div ref={wrapperRef} data-card-text style={{ position: 'absolute', inset: 0, zIndex: 1, transform: `scale(${textScale})`, transformOrigin: 'top left', width: `${100 / textScale}%`, height: `${100 / textScale}%` }}>
@@ -2101,7 +2157,8 @@ const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void; heroI
           onHeaderStyleChange={style => useBoardsStore.getState().setGroupCardHeaderTextStyle(groupId, style)}
           onBodyStyleChange={style => useBoardsStore.getState().setGroupCardTextStyle(groupId, style)}
           activeField={activeField}
-          onActiveFieldChange={setActiveField}
+          onActiveFieldChange={handleToolbarFieldChange}
+          onClose={exitEditing}
           anchorRect={rect}
           preferBelow
           heroImage={heroImage}
@@ -2237,6 +2294,28 @@ const UngroupedCardText: React.FC<{ boardId: string }> = ({ boardId }) => {
     setBodyVal(bodyText); setEditingField('body'); setActiveField('body'); setSelected(true)
   }, [bodyText])
 
+  // Commit on toolbar-driven field switch, synchronously
+  const handleToolbarFieldChange = useCallback((newField: TextFieldMode) => {
+    if (newField === activeField) return
+    if (editingField === 'header' && newField !== 'header') {
+      useBoardsStore.getState().setCardHeaderText(boardId, headerVal)
+    } else if (editingField === 'body' && newField !== 'body') {
+      useBoardsStore.getState().setCardText(boardId, bodyVal)
+    }
+    setActiveField(newField)
+  }, [activeField, editingField, headerVal, bodyVal, boardId])
+
+  // Empty-canvas click = full unwind: commit, drop toolbar, exit edit mode.
+  const exitEditing = useCallback(() => {
+    if (editingField === 'header') {
+      useBoardsStore.getState().setCardHeaderText(boardId, headerVal)
+    } else if (editingField === 'body') {
+      useBoardsStore.getState().setCardText(boardId, bodyVal)
+    }
+    setEditingField(null)
+    setSelected(false)
+  }, [editingField, headerVal, bodyVal, boardId])
+
   React.useEffect(() => {
     const el = wrapperRef.current
     if (!el) return
@@ -2247,9 +2326,32 @@ const UngroupedCardText: React.FC<{ boardId: string }> = ({ boardId }) => {
 
   React.useEffect(() => {
     if (!selected) return
-    if (activeField === 'header' && editingField !== 'header') startEditHeader()
-    else if (activeField === 'body' && editingField !== 'body') startEditBody()
+    if (activeField === 'header' && editingField !== 'header') {
+      if (editingField === 'body') useBoardsStore.getState().setCardText(boardId, bodyVal)
+      startEditHeader()
+    } else if (activeField === 'body' && editingField !== 'body') {
+      if (editingField === 'header') useBoardsStore.getState().setCardHeaderText(boardId, headerVal)
+      startEditBody()
+    }
   }, [activeField]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Flush pending edit on unmount so leaving the card never loses text
+  const editingFieldRef = useRef(editingField)
+  const headerValRef = useRef(headerVal)
+  const bodyValRef = useRef(bodyVal)
+  React.useEffect(() => { editingFieldRef.current = editingField }, [editingField])
+  React.useEffect(() => { headerValRef.current = headerVal }, [headerVal])
+  React.useEffect(() => { bodyValRef.current = bodyVal }, [bodyVal])
+  React.useEffect(() => {
+    return () => {
+      if (editingFieldRef.current === 'header') {
+        useBoardsStore.getState().setCardHeaderText(boardId, headerValRef.current)
+      } else if (editingFieldRef.current === 'body') {
+        useBoardsStore.getState().setCardText(boardId, bodyValRef.current)
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   return (
     <div ref={wrapperRef} data-card-text style={{ position: 'absolute', inset: 0, zIndex: 1, transform: `scale(${textScale})`, transformOrigin: 'top left', width: `${100 / textScale}%`, height: `${100 / textScale}%` }}>
@@ -2260,7 +2362,8 @@ const UngroupedCardText: React.FC<{ boardId: string }> = ({ boardId }) => {
           onHeaderStyleChange={style => useBoardsStore.getState().setCardHeaderTextStyle(boardId, style)}
           onBodyStyleChange={style => useBoardsStore.getState().setCardTextStyle(boardId, style)}
           activeField={activeField}
-          onActiveFieldChange={setActiveField}
+          onActiveFieldChange={handleToolbarFieldChange}
+          onClose={exitEditing}
           anchorRect={rect}
           preferBelow
         />

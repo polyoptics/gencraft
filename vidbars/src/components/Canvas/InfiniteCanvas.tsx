@@ -145,14 +145,20 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
     const z = zoomRef.current
     const p = panRef.current
     files.forEach((file, i) => {
-      let cx = (e.clientX - rect.left - p.x) / z + i * 220
-      let cy = (e.clientY - rect.top - p.y) / z
-      const clamped = clampToNoParkZone(cx, cy, 200, 180)
-      cx = clamped.x; cy = clamped.y
-      // Determine node type from MIME
+      // Cursor position in canvas coordinates
+      const cursorCX = (e.clientX - rect.left - p.x) / z + i * 220
+      const cursorCY = (e.clientY - rect.top - p.y) / z
+      // Determine node type from MIME (drives default size — must match freeNodeStore.addFreeNode)
       const mime = file.type
       const nodeType = mime.startsWith('video/') ? 'video' as const : mime.startsWith('audio/') ? 'audio' as const : 'image' as const
       const mediaType = nodeType
+      const nodeW = nodeType === 'audio' ? 260 : 200
+      const nodeH = nodeType === 'audio' ? 120 : 180
+      // Center the node on the cursor (store x/y = top-left)
+      let cx = cursorCX - nodeW / 2
+      let cy = cursorCY - nodeH / 2
+      const clamped = clampToNoParkZone(cx, cy, nodeW, nodeH)
+      cx = clamped.x; cy = clamped.y
       const nodeId = addFreeNode(cx, cy, nodeType)
       uploadFile(file).then(({ url }) => {
         updateFreeNode(nodeId, { imageUrl: url, mediaType, label: file.name.replace(/\.[^.]+$/, '') })
@@ -226,24 +232,48 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
   const handleBoardDrop = useCallback((e: React.DragEvent, files: File[]) => {
     const allEls = document.elementsFromPoint(e.clientX, e.clientY)
 
-    // 1. NLE block bar
+    // Replace a bar's media[] with the newly dropped files (one set call, not N appends).
+    const replaceBarMedia = (boardId: string, barId: string) => {
+      Promise.all(files.map(f => uploadFile(f))).then(results => {
+        const media = results.map(r => ({ url: r.url, type: r.type as any }))
+        useBoardsStore.getState().setContent(boardId, barId, { media })
+      })
+    }
+
+    // 1. NLE block bar — try elementsFromPoint first
     for (const el of allEls) {
       const block = el.closest('[data-block][data-id]') as HTMLElement | null
       if (block) {
         const barId = block.dataset.id!
         const boardId = block.dataset.boardId ?? 'primary'
-        files.forEach(file => {
-          uploadFile(file).then(({ url, type }) => {
-            const b = useBoardsStore.getState().boards[boardId]
-            const curMedia = b?.bars[barId]?.content.media ?? []
-            useBoardsStore.getState().setContent(boardId, barId, { media: [...curMedia, { url, type: type as any }] })
-          })
-        })
+        replaceBarMedia(boardId, barId)
         return
       }
     }
 
-    // 2. Board area
+    // 1b. Fallback: scan ALL bars by bounding rect. Handles the case where a
+    // transparent overlay (text layer, hero image with opacity, etc.) sits above
+    // the bar but elementsFromPoint walks past it. If the cursor is visually
+    // inside any bar, drop there — pick the smallest (innermost) match.
+    {
+      const bars = Array.from(document.querySelectorAll('[data-block][data-id]')) as HTMLElement[]
+      let best: { el: HTMLElement; area: number } | null = null
+      for (const bar of bars) {
+        const r = bar.getBoundingClientRect()
+        if (r.width <= 0 || r.height <= 0) continue
+        if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) continue
+        const area = r.width * r.height
+        if (!best || area < best.area) best = { el: bar, area }
+      }
+      if (best) {
+        const barId = best.el.dataset.id!
+        const boardId = best.el.dataset.boardId ?? 'primary'
+        replaceBarMedia(boardId, barId)
+        return
+      }
+    }
+
+    // 2. Board area (drop on board background → replace root bar media)
     for (const el of allEls) {
       const board = el.closest('[data-board]') as HTMLElement | null
       if (board) {
@@ -253,12 +283,7 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
           const b = useBoardsStore.getState().boards[boardId]
           const rid = b?.rootIds[0]
           if (rid) {
-            files.forEach(file => {
-              uploadFile(file).then(({ url, type }) => {
-                const curMedia = useBoardsStore.getState().boards[boardId]?.bars[rid]?.content.media ?? []
-                useBoardsStore.getState().setContent(boardId, rid, { media: [...curMedia, { url, type: type as any }] })
-              })
-            })
+            replaceBarMedia(boardId, rid)
             return
           }
         }
@@ -295,6 +320,10 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
     if (!upTarget.closest('[data-group-card],[data-freenode]')) {
       useBoardsStore.getState().clearGroupSelection()
     }
+    // Clear block-layer selection when clicking empty canvas (not on a block)
+    if (!upTarget.closest('[data-layer-block]')) {
+      useCanvasStore.getState().clearSelectedBlockBoardIds()
+    }
     if (rbStartCanvas.current) {
       const containerRect = containerRef.current!.getBoundingClientRect()
       const rb = rubberBandRef.current
@@ -310,19 +339,33 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
             const r = el.getBoundingClientRect()
             return r.left < selRight && r.right > selLeft && r.top < selBottom && r.bottom > selTop
           }
-          // Group selected bars by their board
-          const hitBlocks = Array.from(document.querySelectorAll('[data-block][data-id]'))
-            .filter(hits)
-          const perBoard = new Map<string, string[]>()
-          hitBlocks.forEach(el => {
-            const bid = (el as HTMLElement).dataset.boardId ?? 'primary'
-            const id = (el as HTMLElement).dataset.id!
-            if (!perBoard.has(bid)) perBoard.set(bid, [])
-            perBoard.get(bid)!.push(id)
-          })
-          perBoard.forEach((ids, bid) => {
-            useBoardsStore.getState().setSelection(bid, ids)
-          })
+          const currentZoom = useCanvasStore.getState().zoom
+          const isBlockZoom = currentZoom > 0.18 && currentZoom < 0.3
+          if (isBlockZoom) {
+            // Block zoom: select whole blocks (boards) instead of bars
+            const hitBlockBoardIds = Array.from(document.querySelectorAll('[data-layer-block]'))
+              .filter(hits)
+              .map(el => (el as HTMLElement).dataset.layerBlock!)
+              .filter(Boolean)
+            if (hitBlockBoardIds.length > 0) {
+              useCanvasStore.getState().setSelectedBlockBoardIds(hitBlockBoardIds)
+            }
+          } else {
+            // Board zoom: select individual bars, grouped by board
+            const hitBlocks = Array.from(document.querySelectorAll('[data-block][data-id]'))
+              .filter(el => !(el as HTMLElement).hasAttribute('data-layer-block'))
+              .filter(hits)
+            const perBoard = new Map<string, string[]>()
+            hitBlocks.forEach(el => {
+              const bid = (el as HTMLElement).dataset.boardId ?? 'primary'
+              const id = (el as HTMLElement).dataset.id!
+              if (!perBoard.has(bid)) perBoard.set(bid, [])
+              perBoard.get(bid)!.push(id)
+            })
+            perBoard.forEach((ids, bid) => {
+              useBoardsStore.getState().setSelection(bid, ids)
+            })
+          }
           const nodeIds = Array.from(document.querySelectorAll('[data-freenode][data-id]'))
             .filter(hits).map(el => (el as HTMLElement).dataset.id!)
           if (nodeIds.length > 0) setFreeSelection(nodeIds)
@@ -433,22 +476,14 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
               { label: 'T   Add text',    action: () => { const c = clampToNoParkZone(addMenu.cx, addMenu.cy, 200, 180); addFreeNode(c.x, c.y, 'text');  setAddMenu(null) } },
               { label: '🖼  Add image',   action: () => { const c = clampToNoParkZone(addMenu.cx, addMenu.cy, 200, 180); addFreeNode(c.x, c.y, 'image'); setAddMenu(null) } },
               { label: '─────────────', action: null },
-              { label: addMenu.cy < useCanvasStore.getState().zoneLineY
-                  ? (zoom <= 0.18 ? '🎬  New Free Card' : '🎬  New Free Board')
-                  : (zoom <= 0.18 ? '🎬  New Card' : '🎬  New VidBar'),
+              { label: zoom <= 0.18 ? '🎬  New Card' : '🎬  New VidBar',
                 action: () => {
-                const zly = useCanvasStore.getState().zoneLineY
-                if (addMenu.cy < zly) {
-                  // Free zone: create ungrouped board
-                  useBoardsStore.getState().createUngroupedBoard(addMenu.cx, addMenu.cy)
-                } else {
-                  // Timeline zone: create grouped board (existing behavior)
-                  const boardId = useBoardsStore.getState().createBoard(0, 0)
-                  useBoardsStore.getState().moveToNewGroup(boardId)
-                  const bs = useBoardsStore.getState()
-                  const group = bs.groups.find(g => g.boardIds.includes(boardId))
-                  if (group) useBoardsStore.getState().setGroupPos(group.id, addMenu.cy, addMenu.cx)
-                }
+                // Always create a grouped card — works in both free and timeline zones.
+                const boardId = useBoardsStore.getState().createBoard(0, 0)
+                useBoardsStore.getState().moveToNewGroup(boardId)
+                const bs = useBoardsStore.getState()
+                const group = bs.groups.find(g => g.boardIds.includes(boardId))
+                if (group) useBoardsStore.getState().setGroupPos(group.id, addMenu.cy, addMenu.cx)
                 setAddMenu(null)
               }},
             ].map((item, idx) => (

@@ -7,6 +7,7 @@ import React, { useMemo, useState, useRef, useCallback } from 'react'
 import ReactDOM from 'react-dom'
 import { useBoardsStore, getGroupForBoard } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
+import { useNLEViewerStore } from '../../store/nleViewerStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { DEFAULT_BLOCK_HEADER_STYLE, DEFAULT_BODY_STYLE } from '../../store/freeNodeStore'
 import type { TextStyle } from '../../store/freeNodeStore'
@@ -40,6 +41,9 @@ const GripDots: React.FC<{ size?: number; opacity?: number }> = ({ size = 10, op
 const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
   const board = useBoardsStore(s => s.boards[boardId])
   const zoom = useCanvasStore(s => s.zoom)
+  const blockScopeKey = 'board:' + boardId
+  const blockViewerOpen = useNLEViewerStore(s => s.openGroupIds.has(blockScopeKey))
+  const isBlockSelected = useCanvasStore(s => s.selectedBlockBoardIds.includes(boardId))
 
   // Only subscribe to this board's group — not all groups
   const myGroup = useBoardsStore(s => s.groups.find(g => g.boardIds.includes(boardId)))
@@ -106,8 +110,39 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
     if (!b0) return
     const group = getGroupForBoard(bs0.groups, boardId)
     const ungrouped = !group
+    // Focus this board so Del/Backspace can target it (esp. for ungrouped blocks)
+    if (ungrouped) {
+      useCanvasStore.getState().setFocusedBoard(boardId)
+      useBoardsStore.getState().setSelectedGroup(null)
+      useBoardsStore.getState().clearAllSelections()
+    }
 
-    // Grouped: row/x clamped drag setup
+    // ── Multi-drag: move all selected blocks together if this one is in the selection ──
+    const canvasSel = useCanvasStore.getState().selectedBlockBoardIds
+    const multiIds = canvasSel.includes(boardId) && canvasSel.length > 1 ? canvasSel : [boardId]
+    const isMulti = multiIds.length > 1
+    type MultiStart =
+      | { id: string; kind: 'ungrouped'; startCX: number; startCY: number }
+      | { id: string; kind: 'grouped'; groupId: string; initialRow: number; initialX: number }
+    const multiStarts: MultiStart[] = isMulti
+      ? multiIds.flatMap(bid => {
+          const b = bs0.boards[bid]
+          if (!b) return []
+          const g = getGroupForBoard(bs0.groups, bid)
+          if (g) {
+            return [{
+              id: bid, kind: 'grouped' as const, groupId: g.id,
+              initialRow: b.nleRow ?? 0, initialX: b.nleX ?? 0,
+            }]
+          }
+          return [{
+            id: bid, kind: 'ungrouped' as const,
+            startCX: b.canvasX ?? 0, startCY: b.canvasY ?? 0,
+          }]
+        })
+      : []
+
+    // Grouped: row/x clamped drag setup (single-drag path)
     const initialRow = b0.nleRow ?? 0
     const initialX = b0.nleX ?? 0
     const dragLay = ungrouped ? null : computeGroupLayout(group.boardIds, bs0.boards)
@@ -125,6 +160,21 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
       lastY = ev.clientY
       dyAccum += dy
       xAccum += dx
+
+      if (isMulti) {
+        // Translate every selected board by the same delta.
+        // Ungrouped: free 2D move. Grouped: horizontal-only (preserve row).
+        const store = useBoardsStore.getState()
+        for (const m of multiStarts) {
+          if (m.kind === 'ungrouped') {
+            store.setUngroupedBoardPos(m.id, m.startCX + xAccum, m.startCY + dyAccum)
+          } else {
+            store.setBoardNlePos(m.id, m.initialRow, m.initialX + xAccum)
+          }
+        }
+        return
+      }
+
       if (ungrouped) {
         useBoardsStore.getState().setUngroupedBoardPos(boardId, startCX + xAccum, startCY + dyAccum)
       } else {
@@ -137,8 +187,9 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
     const onUp = () => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
-      // Zone transition: ungrouped block dragged into timeline → create group
-      if (ungrouped) {
+      // Zone transition: ungrouped block dragged into timeline → create group.
+      // Skip in multi-drag to avoid mangling the selection mid-move.
+      if (ungrouped && !isMulti) {
         const b = useBoardsStore.getState().boards[boardId]
         const zly = useCanvasStore.getState().zoneLineY
         if (b && (b.canvasY ?? 0) >= zly) {
@@ -321,6 +372,22 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
       onPointerDownCapture={e => {
         if (e.button !== 0) return
         useBoardsStore.getState().setSelection(boardId, board.rootIds)
+        // Block-layer selection:
+        //   shift/ctrl/meta → toggle in/out of selection
+        //   plain click on a NON-selected block → replace with [boardId]
+        //   plain click on an already-selected block → leave selection alone
+        //       (so a subsequent drag moves the whole multi-selection)
+        const cs = useCanvasStore.getState()
+        if (e.shiftKey || e.metaKey || e.ctrlKey) {
+          const cur = cs.selectedBlockBoardIds
+          if (cur.includes(boardId)) {
+            cs.setSelectedBlockBoardIds(cur.filter(id => id !== boardId))
+          } else {
+            cs.setSelectedBlockBoardIds([...cur, boardId])
+          }
+        } else if (!cs.selectedBlockBoardIds.includes(boardId)) {
+          cs.setSelectedBlockBoardIds([boardId])
+        }
       }}
       onPointerEnter={() => setIsHovered(true)}
       onPointerLeave={() => setIsHovered(false)}
@@ -376,6 +443,27 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
             onDoubleClick={e => { e.stopPropagation(); setRenameVal(displayLabel); setRenaming(true) }}
           >{displayLabel}</span>
         )}
+
+        <div style={{ flex: 1 }} />
+
+        {/* Per-block viewer toggle (opens a single-board scoped NLE viewer) */}
+        <div
+          data-viewer-toggle
+          onPointerDown={e => { e.stopPropagation(); useNLEViewerStore.getState().toggle(blockScopeKey) }}
+          style={{
+            padding: `${1 / zoom}px ${5 / zoom}px`,
+            borderRadius: 4 / zoom,
+            background: blockViewerOpen ? 'rgba(37,99,235,0.32)' : 'rgba(0,0,0,0.30)',
+            border: blockViewerOpen ? `${1 / zoom}px solid rgba(37,99,235,0.55)` : `${1 / zoom}px solid rgba(255,255,255,0.14)`,
+            color: blockViewerOpen ? 'rgba(130,180,255,0.95)' : 'rgba(255,255,255,0.55)',
+            fontSize: 9 / zoom,
+            fontWeight: 700,
+            cursor: 'pointer',
+            whiteSpace: 'nowrap',
+            lineHeight: `${12 / zoom}px`,
+            flexShrink: 0,
+          }}
+        >{blockViewerOpen ? '▼' : '▲'}</div>
       </div>
 
       {/* ── Block rectangle ── */}
@@ -390,9 +478,11 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
           background: thumbnail
             ? `linear-gradient(160deg, ${rootColor}cc 0%, ${rootColor}aa 100%)`
             : rootColor,
-          border: '1.5px solid rgba(255,255,255,0.25)',
+          border: isBlockSelected ? '2.5px solid rgba(120,180,255,0.95)' : '1.5px solid rgba(255,255,255,0.25)',
           boxShadow: gripDragging
             ? '0 8px 40px rgba(0,0,0,0.7)'
+            : isBlockSelected
+            ? '0 0 0 2px rgba(120,180,255,0.4), 0 6px 28px rgba(0,0,0,0.5)'
             : '0 4px 24px rgba(0,0,0,0.4)',
           cursor: 'grab',
           overflow: 'hidden',
@@ -696,6 +786,29 @@ const BlockText: React.FC<{ boardId: string; width: number; thumbnail?: string |
     setBodyVal(bodyText); setEditingField('body'); setActiveField('body'); setSelected(true)
   }, [bodyText])
 
+  // Synchronous commit when the toolbar's H/P button is clicked — prevents
+  // any buffer loss from effect-timing edge cases.
+  const handleToolbarFieldChange = useCallback((newField: TextFieldMode) => {
+    if (newField === activeField) return
+    if (editingField === 'header' && newField !== 'header') {
+      useBoardsStore.getState().setBlockHeaderText(boardId, headerVal)
+    } else if (editingField === 'body' && newField !== 'body') {
+      useBoardsStore.getState().setBlockText(boardId, bodyVal)
+    }
+    setActiveField(newField)
+  }, [activeField, editingField, headerVal, bodyVal, boardId])
+
+  // Empty-canvas click = full unwind
+  const exitEditing = useCallback(() => {
+    if (editingField === 'header') {
+      useBoardsStore.getState().setBlockHeaderText(boardId, headerVal)
+    } else if (editingField === 'body') {
+      useBoardsStore.getState().setBlockText(boardId, bodyVal)
+    }
+    setEditingField(null)
+    setSelected(false)
+  }, [editingField, headerVal, bodyVal, boardId])
+
   // Listen for parent's double-click to start editing even when empty
   React.useEffect(() => {
     const el = wrapperRef.current
@@ -705,15 +818,36 @@ const BlockText: React.FC<{ boardId: string; width: number; thumbnail?: string |
     return () => el.removeEventListener('start-edit', handler)
   }, [startEditHeader])
 
-  // When H/P mode switches, focus the corresponding textarea
+  // When H/P mode switches, focus the corresponding textarea.
+  // Also commit the outgoing field before switching so typed text isn't lost.
   React.useEffect(() => {
     if (!selected) return
     if (activeField === 'header' && editingField !== 'header') {
+      if (editingField === 'body') useBoardsStore.getState().setBlockText(boardId, bodyVal)
       startEditHeader()
     } else if (activeField === 'body' && editingField !== 'body') {
+      if (editingField === 'header') useBoardsStore.getState().setBlockHeaderText(boardId, headerVal)
       startEditBody()
     }
   }, [activeField]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Flush pending edit on unmount so leaving the block never loses text
+  const editingFieldRef = useRef(editingField)
+  const headerValRef = useRef(headerVal)
+  const bodyValRef = useRef(bodyVal)
+  React.useEffect(() => { editingFieldRef.current = editingField }, [editingField])
+  React.useEffect(() => { headerValRef.current = headerVal }, [headerVal])
+  React.useEffect(() => { bodyValRef.current = bodyVal }, [bodyVal])
+  React.useEffect(() => {
+    return () => {
+      if (editingFieldRef.current === 'header') {
+        useBoardsStore.getState().setBlockHeaderText(boardId, headerValRef.current)
+      } else if (editingFieldRef.current === 'body') {
+        useBoardsStore.getState().setBlockText(boardId, bodyValRef.current)
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const textareaStyle = (ts: TextStyle, bg: string): React.CSSProperties => ({
     width: '100%', padding: 8, boxSizing: 'border-box',
@@ -751,7 +885,8 @@ const BlockText: React.FC<{ boardId: string; width: number; thumbnail?: string |
           onHeaderStyleChange={style => useBoardsStore.getState().setBlockHeaderTextStyle(boardId, style)}
           onBodyStyleChange={style => useBoardsStore.getState().setBlockTextStyle(boardId, style)}
           activeField={activeField}
-          onActiveFieldChange={setActiveField}
+          onActiveFieldChange={handleToolbarFieldChange}
+          onClose={exitEditing}
           anchorRect={rect}
           preferBelow
           heroImage={thumbnail}

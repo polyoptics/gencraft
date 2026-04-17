@@ -42,13 +42,25 @@ export const CircularColorPicker: React.FC<Props> = ({ color, anchorX, anchorY, 
   const currentHex = hsvToHex(hue, sat, val)
   useEffect(() => { setHexInput(currentHex) }, [currentHex])
 
-  // Close on outside click
+  // Close on outside click (pointerdown — robust to touch/pen) and on Escape.
+  // Capture phase ensures no descendant can stopPropagation before we see it.
   useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose()
+    const outside = (e: Event) => {
+      const t = e.target as Node | null
+      if (ref.current && t && !ref.current.contains(t)) onClose()
     }
-    const tid = setTimeout(() => document.addEventListener('mousedown', handler), 0)
-    return () => { clearTimeout(tid); document.removeEventListener('mousedown', handler) }
+    const esc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.stopPropagation(); onClose() }
+    }
+    const tid = setTimeout(() => {
+      document.addEventListener('pointerdown', outside, true)
+      document.addEventListener('keydown', esc, true)
+    }, 0)
+    return () => {
+      clearTimeout(tid)
+      document.removeEventListener('pointerdown', outside, true)
+      document.removeEventListener('keydown', esc, true)
+    }
   }, [onClose])
 
   // Draw hue ring

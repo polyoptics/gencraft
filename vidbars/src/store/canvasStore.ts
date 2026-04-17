@@ -12,6 +12,7 @@ interface CanvasStore {
   nleRowHeight: number
   dynamicRowHeights: boolean
   focusedBoardId: string | null
+  selectedBlockBoardIds: string[]
   zoneLineY: number
 
   setPan: (pan: { x: number; y: number }) => void
@@ -23,6 +24,8 @@ interface CanvasStore {
   setNleRowHeight: (h: number) => void
   toggleDynamicRowHeights: () => void
   setFocusedBoard: (id: string | null) => void
+  setSelectedBlockBoardIds: (ids: string[]) => void
+  clearSelectedBlockBoardIds: () => void
   setZoneLineY: (y: number) => void
 }
 
@@ -33,6 +36,7 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
   nleRowHeight: 300,
   dynamicRowHeights: false,
   focusedBoardId: null,
+  selectedBlockBoardIds: [],
   zoneLineY: 0,
 
   setPan: (pan) => set({ pan }),
@@ -66,6 +70,9 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
   toggleDynamicRowHeights: () => set(s => ({ dynamicRowHeights: !s.dynamicRowHeights })),
 
   setFocusedBoard: (focusedBoardId) => set({ focusedBoardId }),
+
+  setSelectedBlockBoardIds: (selectedBlockBoardIds) => set({ selectedBlockBoardIds }),
+  clearSelectedBlockBoardIds: () => set({ selectedBlockBoardIds: [] }),
 
   setZoneLineY: (zoneLineY) => set({ zoneLineY }),
 }), {

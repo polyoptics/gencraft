@@ -294,6 +294,9 @@ export const TextFormatToolbar: React.FC<TextFormatToolbarProps> = ({
   heroImage, heroFlipH, heroFlipV, heroOpacity, onFlipH, onFlipV, onCropImage, onHeroOpacityChange,
 }) => {
   const [showPopup, setShowPopup] = useState<'text' | 'bg' | 'hAlign' | 'vAlign' | 'font' | 'weight' | 'lineHeight' | 'spacing' | 'transform' | null>(null)
+  const [editingSize, setEditingSize] = useState(false)
+  const [sizeBuffer, setSizeBuffer] = useState('')
+  const sizeInputRef = useRef<HTMLInputElement>(null)
 
   const defaultForField = activeField === 'header' ? DEFAULT_HEADER_STYLE : DEFAULT_BODY_STYLE
   const activeStyle = activeField === 'header' ? headerStyle : bodyStyle
@@ -304,18 +307,54 @@ export const TextFormatToolbar: React.FC<TextFormatToolbarProps> = ({
     else onBodyStyleChange(merged)
   }
 
-  // Close toolbar on outside click — replaces the blocking backdrop div
+  // When font-size edit mode is entered, focus & select-all so typing overwrites
+  useEffect(() => {
+    if (!editingSize) return
+    const el = sizeInputRef.current
+    if (!el) return
+    el.focus()
+    el.select()
+  }, [editingSize])
+
+  // Close toolbar on outside click — replaces the blocking backdrop div.
+  // A single click on empty canvas should close every sub-UI the toolbar owns
+  // (any open popup, any in-progress size edit) AND tell the parent to exit.
   const toolbarRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!onClose) return
     const handler = (e: PointerEvent) => {
       const target = e.target as HTMLElement
       if (target.closest('[data-text-format-toolbar]')) return
+      // Anything else means "get me out" — close popup → size-edit → toolbar
+      setShowPopup(null)
+      setEditingSize(false)
       onClose()
     }
     window.addEventListener('pointerdown', handler)
     return () => window.removeEventListener('pointerdown', handler)
   }, [onClose])
+
+  // Escape closes: any open sub-popup first; if none are open, the whole toolbar
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      // Don't hijack ESC while the user is typing in a field
+      const tag = (e.target as HTMLElement | null)?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return
+      if (showPopup) {
+        e.stopPropagation()
+        setShowPopup(null)
+      } else if (editingSize) {
+        e.stopPropagation()
+        setEditingSize(false)
+      } else if (onClose) {
+        e.stopPropagation()
+        onClose()
+      }
+    }
+    document.addEventListener('keydown', onKey, true)
+    return () => document.removeEventListener('keydown', onKey, true)
+  }, [showPopup, editingSize, onClose])
 
   if (!anchorRect) return null
 
@@ -379,27 +418,62 @@ export const TextFormatToolbar: React.FC<TextFormatToolbarProps> = ({
         fontFamily: 'system-ui, sans-serif',
       }}
     >
-      {/* Font size — hold shift for ±5 */}
+      {/* Font size — hold shift for ±5. Double-click the field to edit; Enter confirms. */}
       <button style={btnStyle()} onClick={e => {
         const step = e.shiftKey ? 5 : 1
         setStyle({ fontSize: Math.max(4, ts.fontSize - step) })
       }}>−</button>
-      <input
-        type="number"
-        value={ts.fontSize}
-        onChange={e => {
-          const v = parseInt(e.target.value)
-          if (!isNaN(v) && v >= 4 && v <= 200) setStyle({ fontSize: v })
-        }}
-        onPointerDown={e => e.stopPropagation()}
-        style={{
-          width: 36, textAlign: 'center', background: 'rgba(255,255,255,0.06)',
-          border: '1px solid rgba(255,255,255,0.12)', borderRadius: 4,
-          color: 'rgba(255,255,255,0.7)', fontSize: 11, padding: '2px 2px',
-          fontFamily: 'inherit', outline: 'none',
-          MozAppearance: 'textfield', WebkitAppearance: 'none',
-        } as React.CSSProperties}
-      />
+      {editingSize ? (
+        <input
+          ref={sizeInputRef}
+          type="text"
+          inputMode="numeric"
+          autoFocus
+          value={sizeBuffer}
+          onChange={e => setSizeBuffer(e.target.value.replace(/[^0-9]/g, ''))}
+          onKeyDown={e => {
+            if (e.key === 'Enter') {
+              const v = parseInt(sizeBuffer, 10)
+              if (!isNaN(v) && v >= 4 && v <= 200) setStyle({ fontSize: v })
+              setEditingSize(false)
+            } else if (e.key === 'Escape') {
+              setEditingSize(false)
+            }
+          }}
+          onBlur={() => {
+            const v = parseInt(sizeBuffer, 10)
+            if (!isNaN(v) && v >= 4 && v <= 200) setStyle({ fontSize: v })
+            setEditingSize(false)
+          }}
+          onPointerDown={e => e.stopPropagation()}
+          onWheel={e => e.stopPropagation()}
+          style={{
+            width: 36, textAlign: 'center', background: 'rgba(255,255,255,0.12)',
+            border: '1px solid rgba(255,255,255,0.3)', borderRadius: 4,
+            color: '#fff', fontSize: 11, padding: '2px 2px',
+            fontFamily: 'inherit', outline: 'none',
+          }}
+        />
+      ) : (
+        <div
+          onDoubleClick={e => {
+            e.stopPropagation()
+            setSizeBuffer(String(ts.fontSize))
+            setEditingSize(true)
+            // Focus + select happens via autoFocus on the rendered input;
+            // select-all is handled in the effect below after mount.
+          }}
+          onPointerDown={e => e.stopPropagation()}
+          title="Double-click to edit · Enter to confirm"
+          style={{
+            width: 36, textAlign: 'center', background: 'rgba(255,255,255,0.06)',
+            border: '1px solid rgba(255,255,255,0.12)', borderRadius: 4,
+            color: 'rgba(255,255,255,0.7)', fontSize: 11, padding: '2px 2px',
+            fontFamily: 'inherit', cursor: 'text', userSelect: 'none',
+            lineHeight: '17px',
+          }}
+        >{ts.fontSize}</div>
+      )}
       <button style={btnStyle()} onClick={e => {
         const step = e.shiftKey ? 5 : 1
         setStyle({ fontSize: Math.min(200, ts.fontSize + step) })
@@ -415,6 +489,7 @@ export const TextFormatToolbar: React.FC<TextFormatToolbarProps> = ({
         {showPopup === 'font' && (
           <div
             onPointerDown={e => { e.preventDefault(); e.stopPropagation() }}
+            onWheel={e => e.stopPropagation()}
             style={{
               position: 'absolute', top: 32, left: -4, zIndex: 10001,
               background: '#1a1b2e', border: '1px solid rgba(255,255,255,0.12)',

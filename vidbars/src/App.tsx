@@ -166,6 +166,18 @@ function useKeyboardDelete() {
         return
       }
 
+      // Block-layer multi-select delete (whole boards)
+      const selBlocks = useCanvasStore.getState().selectedBlockBoardIds
+      if (selBlocks.length > 0) {
+        const bs = useBoardsStore.getState()
+        for (const bid of selBlocks) {
+          if (bid === 'primary') continue
+          if (bs.boards[bid]) bs.deleteBoard(bid)
+        }
+        useCanvasStore.getState().clearSelectedBlockBoardIds()
+        return
+      }
+
       // Group/card delete
       const selGroups = useBoardsStore.getState().selectedGroupIds
       if (selGroups.length > 0) {

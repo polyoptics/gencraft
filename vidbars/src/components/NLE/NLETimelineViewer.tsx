@@ -25,7 +25,8 @@ const BOARD_PADDING_X = 20
 const TOOLS_W         = 72
 
 interface Props {
-  groupId: string
+  /** Either a real group id OR a single-board scope via `board:<id>` */
+  scopeKey: string
 }
 
 const sel: React.CSSProperties = {
@@ -40,9 +41,12 @@ const sel: React.CSSProperties = {
   outline: 'none',
 }
 
-const NLEGroupViewer: React.FC<Props> = ({ groupId }) => {
-  const isOpen       = useNLEViewerStore(s => s.openGroupIds.has(groupId))
-  const onClose      = useCallback(() => useNLEViewerStore.getState().close(groupId), [groupId])
+const NLEGroupViewer: React.FC<Props> = ({ scopeKey }) => {
+  const isBoardScope = scopeKey.startsWith('board:')
+  const singleBoardId = isBoardScope ? scopeKey.slice('board:'.length) : null
+  const groupId = isBoardScope ? '' : scopeKey
+  const isOpen       = useNLEViewerStore(s => s.openGroupIds.has(scopeKey))
+  const onClose      = useCallback(() => useNLEViewerStore.getState().close(scopeKey), [scopeKey])
   const groups       = useBoardsStore(s => s.groups)
   const boards       = useBoardsStore(s => s.boards)
   const pan          = useCanvasStore(s => s.pan)
@@ -86,13 +90,54 @@ const NLEGroupViewer: React.FC<Props> = ({ groupId }) => {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const titleInputRef = useRef<HTMLInputElement>(null)
 
-  const group = groups.find(g => g.id === groupId)
-  const scopedBoardIds = group?.boardIds ?? []
-  const groupColor = group?.color ?? '#5b8dd9'
-  const groupName = group?.name ?? 'NLE Timeline'
+  // Resolve scope: either a group (scopedBoardIds = group.boardIds) or a single board
+  const group = isBoardScope
+    ? groups.find(g => g.boardIds.includes(singleBoardId!))
+    : groups.find(g => g.id === groupId)
+  const scopedBoard = isBoardScope ? boards[singleBoardId!] : null
+  const scopedBoardIds = isBoardScope
+    ? (scopedBoard ? [singleBoardId!] : [])
+    : (group?.boardIds ?? [])
+  const rootColorFromBoard = scopedBoard
+    ? (scopedBoard.rootIds.map(rid => scopedBoard.bars[rid]).filter(Boolean)[0]?.color ?? scopedBoard.color ?? '#5b8dd9')
+    : '#5b8dd9'
+  const groupColor = isBoardScope ? rootColorFromBoard : (group?.color ?? '#5b8dd9')
+  const groupName = isBoardScope
+    ? (scopedBoard?.layers?.block?.label || scopedBoard?.projectName || 'Board')
+    : (group?.name ?? 'NLE Timeline')
 
-  // Canvas geometry — scoped to this group's boards using two-level positioning
-  const { globalLeft, globalRight, topBoardY } = useMemo(() => {
+  // Canvas geometry — scoped to this group's boards (for group scope) OR
+  // locked to the single block's header bounds (for board scope).
+  const geom = useMemo(() => {
+    // ── BOARD SCOPE: match the block header exactly ─────────────────────
+    if (isBoardScope) {
+      const board = scopedBoard
+      if (!board) return { naturalWidth: 200, canvasLeft: 0, canvasBottom: 0 }
+      const rb = board.rootIds.map(rid => board.bars[rid]).filter(Boolean)
+      if (rb.length === 0) return { naturalWidth: 200, canvasLeft: 0, canvasBottom: 0 }
+      const bScale = board.boardScale ?? 1
+      const minX = Math.min(...rb.map(b => b.x))
+      const maxX = Math.max(...rb.map(b => b.x + b.width))
+      const contentW = (maxX - minX) * bScale
+      const wOverride = board.layers?.block?.widthOverride
+      const blockW = Math.max(contentW, wOverride ?? 0)
+
+      const groupLayout = group ? computeGroupLayout(group.boardIds, boards) : null
+      const bx = group
+        ? group.originX + (board.nleX ?? 0)
+        : (board.canvasX ?? 0)
+      const by = group && groupLayout
+        ? group.originY + getRowY(board.nleRow ?? 0, groupLayout)
+        : (board.canvasY ?? 0)
+
+      // Block header left edge in canvas (mirrors BlockItem's `left`)
+      const canvasLeft = bx + BOARD_PADDING_X + minX * bScale
+      // Block header top in canvas = boardY (header occupies top: 0 within the block item)
+      const canvasBottom = by
+      return { naturalWidth: blockW, canvasLeft, canvasBottom }
+    }
+
+    // ── GROUP SCOPE: span all boards in the group (legacy behavior) ─────
     const allEdges: number[] = []
     const boardYs: number[] = []
     const groupOriginX = group?.originX ?? 0
@@ -105,27 +150,42 @@ const NLEGroupViewer: React.FC<Props> = ({ groupId }) => {
       const bScale = board.boardScale ?? 1
       const rb = board.rootIds.map(rid => board.bars[rid]).filter(Boolean)
       if (rb.length === 0) return
-      const bx = groupOriginX + (board.nleX ?? 0)
-      const by = groupOriginY + getRowY(board.nleRow ?? 0, groupLayout)
+      const bx = group
+        ? groupOriginX + (board.nleX ?? 0)
+        : (board.canvasX ?? 0)
+      const by = group
+        ? groupOriginY + getRowY(board.nleRow ?? 0, groupLayout)
+        : (board.canvasY ?? 0)
       allEdges.push(bx + BOARD_PADDING_X + Math.min(...rb.map(b => b.x)) * bScale - 16)
       allEdges.push(bx + BOARD_PADDING_X + Math.max(...rb.map(b => b.x + b.width)) * bScale + 16)
       boardYs.push(by)
     })
 
+    const globalLeft = allEdges.length > 0 ? Math.min(...allEdges) : 0
+    const globalRight = allEdges.length > 0 ? Math.max(...allEdges) : 200
+    const topBoardY = boardYs.length > 0 ? Math.min(...boardYs) : (group?.originY ?? 0)
+    // For group scope, the viewer's bottom sits at the NLE header TOP, not the board top.
+    // Back that out so downstream math can treat it uniformly.
+    // canvasBottom here is a *canvas-space* y that, after pan/zoom, lands at the NLE header top.
+    const nleHeaderBottomCanvas = topBoardY - NLE_HEADER_GAP
+    // We'll handle the clamped-header subtraction in screen space below.
     return {
-      globalLeft: allEdges.length > 0 ? Math.min(...allEdges) : 0,
-      globalRight: allEdges.length > 0 ? Math.max(...allEdges) : 200,
-      topBoardY: boardYs.length > 0 ? Math.min(...boardYs) : groupOriginY,
+      naturalWidth: globalRight - globalLeft,
+      canvasLeft: globalLeft,
+      canvasBottom: nleHeaderBottomCanvas,
+      _groupHeaderAdjust: true as const,
     }
-  }, [scopedBoardIds, boards, group])
+  }, [isBoardScope, scopedBoard, scopedBoardIds, boards, group])
 
-  // Anchor: viewer bottom edge sits at NLE header top
-  // Must match NLETimelineHeader's clamped screen height: Math.max(H * zoom, 20)
-  const naturalWidth = globalRight - globalLeft
-  const screenLeft = pan.x + globalLeft * zoom
-  const headerScreenBottom = APP_TOOLBAR_H + pan.y + (topBoardY - NLE_HEADER_GAP) * zoom
-  const headerScreenHeight = Math.max(NLE_HEADER_CANVAS_H * zoom, 20)
-  const nleHeaderTopScreen = headerScreenBottom - headerScreenHeight
+  const naturalWidth = geom.naturalWidth
+  const screenLeft = pan.x + geom.canvasLeft * zoom
+  // Viewer bottom edge: for board scope sits at block-header top.
+  // For group scope sits at NLE-header top (with clamped min-height subtraction).
+  let anchorBottomScreen = APP_TOOLBAR_H + pan.y + geom.canvasBottom * zoom
+  if ('_groupHeaderAdjust' in geom && geom._groupHeaderAdjust) {
+    const headerScreenHeight = Math.max(NLE_HEADER_CANVAS_H * zoom, 20)
+    anchorBottomScreen = anchorBottomScreen - headerScreenHeight
+  }
   const canvasNaturalH = Math.round((naturalWidth - TOOLS_W) * 9 / 16)
   const topBarH = 38
   const frameStripHeaderH = 26
@@ -171,7 +231,13 @@ const NLEGroupViewer: React.FC<Props> = ({ groupId }) => {
 
   const commitRename = () => {
     const trimmed = renameVal.trim()
-    if (trimmed) useBoardsStore.getState().renameGroup(groupId, trimmed)
+    if (trimmed) {
+      if (isBoardScope && singleBoardId) {
+        useBoardsStore.getState().setBlockLabel(singleBoardId, trimmed)
+      } else if (groupId) {
+        useBoardsStore.getState().renameGroup(groupId, trimmed)
+      }
+    }
     setRenaming(false)
   }
 
@@ -191,7 +257,7 @@ const NLEGroupViewer: React.FC<Props> = ({ groupId }) => {
         style={{
           position: 'fixed',
           left: screenLeft,
-          top: nleHeaderTopScreen - viewerNaturalH * zoom,
+          top: anchorBottomScreen - viewerNaturalH * zoom,
           width: naturalWidth * zoom,
           height: viewerNaturalH * zoom,
           zIndex: 500,
@@ -317,6 +383,7 @@ const NLEGroupViewer: React.FC<Props> = ({ groupId }) => {
               const file = e.dataTransfer.files?.[0]
               if (!file) return
               e.preventDefault()
+              e.stopPropagation()
               loadImageFile(file, activeFrameId)
             }}
           >
@@ -433,7 +500,7 @@ export const NLETimelineViewer: React.FC = () => {
   return (
     <>
       {Array.from(openGroupIds).map(gid => (
-        <NLEGroupViewer key={gid} groupId={gid} />
+        <NLEGroupViewer key={gid} scopeKey={gid} />
       ))}
     </>
   )

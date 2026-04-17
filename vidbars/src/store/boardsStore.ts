@@ -134,6 +134,7 @@ interface BoardsState {
 
   createBoard: (nleRow: number, nleX: number) => string
   duplicateBoard: (sourceBoardId: string) => string
+  extractBarToBoard: (sourceBoardId: string, barId: string) => string | null
   deleteBoard: (id: string) => void
   setBoardNlePos: (id: string, nleRow: number, nleX: number) => void
   setBoardColor: (id: string, color: string) => void
@@ -349,6 +350,85 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
       return { boards: { ...s.boards, [id]: board }, boardOrder: [...s.boardOrder, id], groups }
     })
     return id
+  },
+
+  extractBarToBoard(sourceBoardId, barId) {
+    const src = get().boards[sourceBoardId]
+    if (!src) return null
+    const bar = src.bars[barId]
+    if (!bar) return null
+
+    // Collect the bar + its entire subtree
+    const subtreeIds = collectSubtree(src.bars, barId)
+    if (subtreeIds.length === 0) return null
+
+    // Don't extract if it would leave the source board empty
+    const remainingRoots = src.rootIds.filter(rid => !subtreeIds.includes(rid))
+    if (remainingRoots.length === 0 && src.rootIds.includes(barId)) return null
+
+    // Build bars for the new board (clone with same IDs — they're unique UUIDs)
+    const extractedBars: Record<string, Bar> = {}
+    const subtreeSet = new Set(subtreeIds)
+    for (const sid of subtreeIds) {
+      const b = src.bars[sid]
+      if (!b) continue
+      extractedBars[sid] = {
+        ...b,
+        // If this bar's parent is outside the subtree, make it a root
+        parentId: b.parentId && subtreeSet.has(b.parentId) ? b.parentId : null,
+        // Filter children to only those in the subtree
+        children: b.children.filter(cid => subtreeSet.has(cid)),
+      }
+    }
+
+    // Normalize x positions so the leftmost bar starts at 0
+    const minX = Math.min(...Object.values(extractedBars).map(b => b.x))
+    for (const b of Object.values(extractedBars)) b.x -= minX
+
+    // Root IDs for the new board: bars with no parent in the extracted set
+    const newRootIds = Object.values(extractedBars).filter(b => !b.parentId).map(b => b.id)
+
+    const newBoardId = crypto.randomUUID()
+    const newBoard: BoardData = {
+      id: newBoardId,
+      projectName: bar.name || src.projectName,
+      color: bar.color || src.color,
+      nleRow: src.nleRow ?? 0,
+      nleX: (src.nleX ?? 0) + 200,
+      bars: extractedBars,
+      rootIds: newRootIds,
+      viewerBarId: null,
+      selectedIds: [],
+      savedCollapsedState: null,
+      pristine: false,
+      boardScale: src.boardScale ?? 1,
+      layers: { ...DEFAULT_LAYERS },
+    }
+
+    // Remove extracted bars from source board
+    const srcBars = { ...src.bars }
+    for (const sid of subtreeIds) delete srcBars[sid]
+
+    // Detach from parent in source if this bar was a child
+    if (bar.parentId && srcBars[bar.parentId]) {
+      srcBars[bar.parentId] = {
+        ...srcBars[bar.parentId],
+        children: srcBars[bar.parentId].children.filter(cid => cid !== barId),
+      }
+    }
+
+    const srcRootIds = src.rootIds.filter(rid => !subtreeSet.has(rid))
+
+    set(s => {
+      const updatedSrc = { ...s.boards[sourceBoardId], bars: srcBars, rootIds: srcRootIds, selectedIds: [] }
+      const boards = { ...s.boards, [sourceBoardId]: updatedSrc, [newBoardId]: newBoard }
+      // Add new board to the same group as the source
+      const groups = s.groups.map(g =>
+        g.boardIds.includes(sourceBoardId) ? { ...g, boardIds: [...g.boardIds, newBoardId] } : g
+      )
+      return { boards, boardOrder: [...s.boardOrder, newBoardId], groups }
+    })
+    return newBoardId
   },
 
   deleteBoard(id) {
@@ -862,6 +942,8 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
         if (g.id === targetGroupId) return { ...g, boardIds: g.boardIds.includes(boardId) ? g.boardIds : [...g.boardIds, boardId] }
         return { ...g, boardIds: g.boardIds.filter(bid => bid !== boardId) }
       })
+      // Drop any source group that became empty (except default-group)
+      groups = groups.filter(g => g.id === 'default-group' || g.id === targetGroupId || g.boardIds.length > 0)
       return { boards: { ...s2.boards, [boardId]: updatedBoard }, groups }
     })
   },
@@ -876,9 +958,11 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
     // Use absolute position so the new group origin matches the board's current visual position
     const absPos = getBoardAbsolutePos(boardId, s.groups, s.boards)
     set(s2 => {
-      const groups = s2.groups.map(g => ({
+      let groups = s2.groups.map(g => ({
         ...g, boardIds: g.boardIds.filter(bid => bid !== boardId),
       }))
+      // Drop any source group that became empty (except default-group)
+      groups = groups.filter(g => g.id === 'default-group' || g.boardIds.length > 0)
       // Reset board's local position to 0,0 within the new group
       const updatedBoard = { ...s2.boards[boardId], nleRow: 0, nleX: 0 }
       const newGroup: ProjectGroup = { id, name, color, boardIds: [boardId], cardHeroImage: null, cardSummary: '', cardText: '', cardHeaderText: '', originY: absPos.y, originX: absPos.x }
@@ -966,9 +1050,11 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
       if (!board) return s2
       const updatedBoard = { ...board, canvasX: absPos.x, canvasY: absPos.y }
       // Remove from group
-      const groups = s2.groups.map(g =>
+      let groups = s2.groups.map(g =>
         g.id === group.id ? { ...g, boardIds: g.boardIds.filter(bid => bid !== boardId) } : g
       )
+      // Drop the source group if it became empty (except default-group)
+      groups = groups.filter(g => g.id === 'default-group' || g.boardIds.length > 0)
       return { boards: { ...s2.boards, [boardId]: updatedBoard }, groups }
     })
   },
