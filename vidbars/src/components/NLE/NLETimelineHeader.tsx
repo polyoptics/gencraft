@@ -25,15 +25,18 @@ interface Props {
   rightInset?: number  // screen px to trim from right edge (e.g. deck edge reserve)
 }
 
-export const NLETimelineHeader: React.FC<Props> = ({ groupId, rightInset = 0 }) => {
+const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0 }) => {
   const pan          = useCanvasStore(s => s.pan)
   const zoom         = useCanvasStore(s => s.zoom)
 
   const boards       = useBoardsStore(s => s.boards)
-  const groups       = useBoardsStore(s => s.groups)
-
-  // Resolve which group this header covers
-  const group = groupId ? groups.find(g => g.id === groupId) : undefined
+  // Subscribe only to THIS group — sibling groups changing during drags
+  // won't invalidate this subscription, so the header doesn't re-render
+  // for unrelated motion.
+  const group = useBoardsStore(s => groupId ? s.groups.find(g => g.id === groupId) : undefined)
+  // Legacy "no groupId" path (block/board level) needs all groups; subscribe
+  // to that only when we're actually in that mode.
+  const allGroupsFallback = useBoardsStore(s => groupId ? null : s.groups)
   const groupGone = !!groupId && !group // group was deleted (e.g. during grip-drag)
 
   const scopedBoardIds = useMemo(() => {
@@ -41,9 +44,9 @@ export const NLETimelineHeader: React.FC<Props> = ({ groupId, rightInset = 0 }) 
     if (group) return group.boardIds
     // No groupId → span all boards (legacy block/board level)
     const allBids: string[] = []
-    groups.forEach(g => g.boardIds.forEach(bid => allBids.push(bid)))
+    allGroupsFallback?.forEach(g => g.boardIds.forEach(bid => allBids.push(bid)))
     return allBids
-  }, [group, groups, groupGone])
+  }, [group, allGroupsFallback, groupGone])
 
   const defaultName = group?.name ?? 'NLE Timeline'
 
@@ -322,3 +325,9 @@ export const NLETimelineHeader: React.FC<Props> = ({ groupId, rightInset = 0 }) 
     </div>
   )
 }
+
+// Memoized — renders one per group. When Overlay re-renders due to unrelated
+// groups changing, headers with the same (groupId, rightInset) skip entirely.
+// Their own store subscriptions still drive re-renders when pan/zoom/their
+// group change.
+export const NLETimelineHeader = React.memo(NLETimelineHeaderInner)

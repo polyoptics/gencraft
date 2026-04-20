@@ -1,9 +1,11 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { InfiniteCanvas } from './components/Canvas/InfiniteCanvas'
 import { NLETimelineViewer } from './components/NLE/NLETimelineViewer'
 import { LayerContent, LayerOverlay } from './components/Layers/LayerRouter'
 import { Viewer } from './components/Viewer/Viewer'
 import { TemplateMenu } from './components/UI/TemplateMenu'
+import { DeckBrowserTray } from './components/DeckBrowser/DeckBrowserTray'
+import { LinkDragOverlay } from './components/Linking/LinkDragOverlay'
 import { useBoardsStore } from './store/boardsStore'
 import { useCanvasStore } from './store/canvasStore'
 import { useFreeNodeStore } from './store/freeNodeStore'
@@ -297,6 +299,8 @@ export default function App() {
   useKeyboardUndo()
   useBase64Migration()
 
+  const [deckBrowserOpen, setDeckBrowserOpen] = useState(false)
+
   return (
     <div style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column', background: '#0d0e1a' }}>
 
@@ -309,6 +313,27 @@ export default function App() {
         padding: '0 16px', gap: 10, zIndex: 600,
       }}>
         <span style={{ color: '#fff', fontSize: 14, fontWeight: 800, letterSpacing: '-0.5px' }}>VidBars</span>
+        <button
+          onClick={() => setDeckBrowserOpen(o => !o)}
+          title="Deck Browser — drag decks onto cards to link"
+          style={{
+            height: 24,
+            padding: '0 8px',
+            display: 'flex', alignItems: 'center', gap: 5,
+            background: deckBrowserOpen ? 'rgba(217,122,98,0.22)' : 'rgba(255,255,255,0.05)',
+            border: deckBrowserOpen
+              ? '1px solid rgba(217,122,98,0.5)'
+              : '1px solid rgba(255,255,255,0.1)',
+            borderRadius: 6,
+            color: deckBrowserOpen ? '#ffb19e' : 'rgba(255,255,255,0.6)',
+            fontSize: 11, fontWeight: 600,
+            cursor: 'pointer',
+            fontFamily: 'inherit',
+          }}
+        >
+          <span style={{ fontSize: 13 }}>📚</span>
+          Decks
+        </button>
         <div style={{ width: 1, height: 16, background: 'rgba(255,255,255,0.1)' }} />
         <span style={{ color: 'rgba(255,255,255,0.22)', fontSize: 11 }}>GenAI Video Composer</span>
         <div style={{ flex: 1 }} />
@@ -328,6 +353,10 @@ export default function App() {
         {/* Layer overlay renders outside the canvas transform (screen-space headers/cards) */}
         <LayerOverlay />
       </div>
+
+      {/* Deck browser tray + link-drag overlay */}
+      <DeckBrowserTray open={deckBrowserOpen} onClose={() => setDeckBrowserOpen(false)} />
+      <LinkDragOverlay />
 
       {/* Viewers render outside the canvas so they are fixed to the viewport */}
       <AllViewers />

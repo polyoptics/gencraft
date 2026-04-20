@@ -188,7 +188,9 @@ export const NLEBlock: React.FC<Props> = React.memo(({ id, top, blockHeight, off
       e.stopPropagation()
       return
     }
-    useUndoCoordinator.getState().checkpoint()
+    // Note: checkpoint is deferred to onBodyMove's first actual motion so a
+    // click / double-click (no drag) doesn't pay the ~20ms per-pointerdown
+    // structuredClone cost that was choking text-edit entry.
     isDragging.current = true
     dragHasMoved.current = false
     dragLastX.current = e.clientX
@@ -200,7 +202,13 @@ export const NLEBlock: React.FC<Props> = React.memo(({ id, top, blockHeight, off
     if (!isDragging.current) return
     const dx = (e.clientX - dragLastX.current) / zoom
     const dy = (e.clientY - dragLastY.current) / zoom
-    if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) dragHasMoved.current = true
+    const actuallyMoved = Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5
+    // Lazy checkpoint — only when an actual drag is detected, not on every
+    // pointerdown. This skips the clone cost for clicks and double-clicks.
+    if (actuallyMoved && !dragHasMoved.current) {
+      useUndoCoordinator.getState().checkpoint()
+    }
+    if (actuallyMoved) dragHasMoved.current = true
     dragLastX.current = e.clientX
     dragLastY.current = e.clientY
     const currentSelectedIds = getSelectedIds()

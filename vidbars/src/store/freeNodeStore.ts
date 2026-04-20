@@ -1,6 +1,6 @@
 import { create } from 'zustand'
-import { persist, createJSONStorage } from 'zustand/middleware'
-import { createDebouncedStorage } from '../utils/debouncedStorage'
+import { persist } from 'zustand/middleware'
+import { createDebouncedJSONStorage } from '../utils/debouncedJSONStorage'
 
 export type FreeNodeType = 'note' | 'image' | 'text' | 'video' | 'audio'
 
@@ -162,6 +162,6 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
   clearFreeSelection: () => set({ selectedIds: [] }),
 }), {
   name: 'vidbars-freenodes',
-  storage: createJSONStorage(() => createDebouncedStorage(500)),
+  storage: createDebouncedJSONStorage(400),
   partialize: (s) => ({ nodes: s.nodes }),  // selectedIds is transient
 }))

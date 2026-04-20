@@ -1,4 +1,4 @@
-import React, { useRef, useCallback, useEffect, useState } from 'react'
+import React, { useRef, useCallback, useEffect, useState, useDeferredValue, useMemo } from 'react'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useBoardsStore } from '../../store/boardsStore'
@@ -552,57 +552,57 @@ const ZoneDivider: React.FC = () => {
   )
 }
 
-/** NLE row bands scoped to group bounding boxes + card-level grid lines */
-const NLERowBands: React.FC<{ pan: { x: number; y: number }; zoom: number }> = ({ pan, zoom }) => {
+/** NLE row bands scoped to group bounding boxes + card-level grid lines.
+ *  Decorative background — can lag one frame behind a drag without the user
+ *  noticing. Uses useDeferredValue so the heavy JSX work happens on idle time
+ *  while the dragged card itself updates immediately. */
+const NLERowBands: React.FC<{ pan: { x: number; y: number }; zoom: number }> = React.memo(({ pan, zoom }) => {
   const boards = useBoardsStore(s => s.boards)
   const groups = useBoardsStore(s => s.groups)
+  // Defer the inputs so card drags don't block on rebuilding all band JSX.
+  const deferredGroups = useDeferredValue(groups)
+  const deferredBoards = useDeferredValue(boards)
   const BOARD_PADDING_X = 20
   const BAND_PAD = 30 // breathing room around content edges
-
-  // Card-level grid: visible lines at CARD_GRID_SPACING intervals
   const isCardLevel = zoom <= 0.18
-  const cardGridLines: React.ReactNode[] = []
-  if (isCardLevel) {
-    // Compute vertical range from all groups
-    let minY = Infinity, maxY = -Infinity
-    groups.forEach(g => {
-      const gl = computeGroupLayout(g.boardIds, boards)
-      if (g.originY < minY) minY = g.originY
-      const bottom = g.originY + gl.totalHeight
-      if (bottom > maxY) maxY = bottom
-    })
-    if (minY === Infinity) { minY = 0; maxY = 2000 }
-    const gridTop = Math.floor((minY - 500) / CARD_GRID_SPACING) * CARD_GRID_SPACING
-    const gridBottom = maxY + 1000
-    for (let y = gridTop; y <= gridBottom; y += CARD_GRID_SPACING) {
-      cardGridLines.push(
-        <div key={`cg-${y}`} style={{
-          position: 'absolute',
-          left: -8000, width: 20000,
-          top: y, height: 1,
-          background: 'rgba(130,180,255,0.06)',
-        }} />
-      )
+
+  // Memoize the expensive JSX build — it only needs to change when the
+  // deferred inputs (or the card-level flag) change. During a pointermove
+  // burst, deferredGroups holds its previous value, so this memo hits.
+  const { cardGridLines, rowBands } = useMemo(() => {
+    const cardGridLines: React.ReactNode[] = []
+    if (isCardLevel) {
+      let minY = Infinity, maxY = -Infinity
+      deferredGroups.forEach(g => {
+        const gl = computeGroupLayout(g.boardIds, deferredBoards)
+        if (g.originY < minY) minY = g.originY
+        const bottom = g.originY + gl.totalHeight
+        if (bottom > maxY) maxY = bottom
+      })
+      if (minY === Infinity) { minY = 0; maxY = 2000 }
+      const gridTop = Math.floor((minY - 500) / CARD_GRID_SPACING) * CARD_GRID_SPACING
+      const gridBottom = maxY + 1000
+      for (let y = gridTop; y <= gridBottom; y += CARD_GRID_SPACING) {
+        cardGridLines.push(
+          <div key={`cg-${y}`} style={{
+            position: 'absolute',
+            left: -8000, width: 20000,
+            top: y, height: 1,
+            background: 'rgba(130,180,255,0.06)',
+          }} />
+        )
+      }
     }
-  }
 
-  return (
-    <div style={{
-      position: 'absolute', left: 0, top: 0,
-      transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-      transformOrigin: '0 0',
-      pointerEvents: 'none',
-      willChange: 'transform',
-    }}>
-      {cardGridLines}
-      {groups.filter(g => !(g.deckState && g.deckState !== 'open' && g.deckAnchorId && g.deckAnchorId !== g.id)).map(group => {
-        const layout = computeGroupLayout(group.boardIds, boards)
-        const maxRow = Math.max(0, ...Object.keys(layout.rowHeights).map(Number))
+    const rowBands: React.ReactNode[] = []
+    deferredGroups
+      .filter(g => !(g.deckState && g.deckState !== 'open' && g.deckAnchorId && g.deckAnchorId !== g.id))
+      .forEach(group => {
+        const layout = computeGroupLayout(group.boardIds, deferredBoards)
 
-        // Compute group horizontal extent
         let groupLeft = Infinity, groupRight = -Infinity
         group.boardIds.forEach(bid => {
-          const board = boards[bid]
+          const board = deferredBoards[bid]
           if (!board) return
           const bScale = board.boardScale ?? 1
           const rootBars = board.rootIds.map(rid => board.bars[rid]).filter(Boolean)
@@ -615,26 +615,25 @@ const NLERowBands: React.FC<{ pan: { x: number; y: number }; zoom: number }> = (
           if (l < groupLeft) groupLeft = l
           if (r > groupRight) groupRight = r
         })
-        if (groupLeft === Infinity) return null
+        if (groupLeft === Infinity) return
 
         groupLeft -= BAND_PAD
         groupRight += BAND_PAD
         const bandWidth = groupRight - groupLeft
 
-        // Only show bands for rows that actually contain boards
         const occupiedRows = new Set<number>()
         group.boardIds.forEach(bid => {
-          const b = boards[bid]
+          const b = deferredBoards[bid]
           if (b) occupiedRows.add(b.nleRow ?? 0)
         })
         const minOccupied = Math.min(...occupiedRows)
         const maxOccupied = Math.max(...occupiedRows)
 
-        return Array.from({ length: maxOccupied - minOccupied + 1 }, (_, idx) => {
+        for (let idx = 0; idx < maxOccupied - minOccupied + 1; idx++) {
           const i = minOccupied + idx
           const rowTop = group.originY + getRowY(i, layout)
           const rowH = getRowHeight(i, layout)
-          return (
+          rowBands.push(
             <React.Fragment key={`${group.id}-${i}`}>
               {i % 2 === 0 && (
                 <div style={{
@@ -655,11 +654,24 @@ const NLERowBands: React.FC<{ pan: { x: number; y: number }; zoom: number }> = (
               }} />
             </React.Fragment>
           )
-        })
-      })}
+        }
+      })
+    return { cardGridLines, rowBands }
+  }, [deferredGroups, deferredBoards, isCardLevel])
+
+  return (
+    <div style={{
+      position: 'absolute', left: 0, top: 0,
+      transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+      transformOrigin: '0 0',
+      pointerEvents: 'none',
+      willChange: 'transform',
+    }}>
+      {cardGridLines}
+      {rowBands}
     </div>
   )
-}
+})
 
 const DotGrid: React.FC<{ panX: number; panY: number }> = ({ panX, panY }) => {
   const spacing = 40

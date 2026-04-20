@@ -165,10 +165,10 @@ export const Board: React.FC<Props> = React.memo(({ boardId }) => {
       if (b) {
         const allBarIds = Object.keys(b.bars)
         if (!headerShift.current) {
-          const boards = useBoardsStore.getState().boards
-          for (const bid of Object.keys(boards)) {
-            if (bid !== boardId) useBoardsStore.getState().clearSelection(bid)
-          }
+          // Use the bulk clear — ONE persist hit instead of one per board.
+          // The per-board loop was causing 40+ store sets × 83ms each of
+          // JSON.stringify on every header tap (a single double-click = ~6s).
+          useBoardsStore.getState().clearAllSelections()
           useFreeNodeStore.getState().clearFreeSelection()
         }
         useBoardsStore.getState().setSelection(boardId, allBarIds)

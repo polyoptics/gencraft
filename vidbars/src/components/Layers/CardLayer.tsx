@@ -2,7 +2,7 @@
 // Renders one composite card per project group. Each group collapses its
 // boards into a single draggable card with a hero image and summary.
 
-import React, { useMemo, useState, useCallback, useRef, Fragment } from 'react'
+import React, { useMemo, useState, useCallback, useRef, useDeferredValue, Fragment } from 'react'
 import ReactDOM from 'react-dom'
 import { useBoardsStore, getUngroupedBoardIds } from '../../store/boardsStore'
 import type { ProjectGroup, BoardData } from '../../store/boardsStore'
@@ -14,6 +14,10 @@ import type { TextFieldMode } from '../UI/TextFormatToolbar'
 import { TextFormatToolbar, hexToRgba, ensureFontLoaded } from '../UI/TextFormatToolbar'
 import { ColorPickerPopup } from '../Bar/ColorPickerPopup'
 import { computeGroupLayout, getRowY, getRowHeight, snapToCardGrid, CARD_GRID_SPACING } from '../../utils/nleRows'
+import { PrimaryChipRail } from '../Linking/PrimaryChipRail'
+import { BackRefChipRail } from '../Linking/BackRefChipRail'
+import { CloneDeck } from '../Linking/CloneDeck'
+import { useLinkingStore } from '../../store/linkingStore'
 import { DEFAULT_H } from '../../utils/barConstants'
 import { groupSlot, clampGroupMove } from '../../utils/nlePush'
 import { FreeCanvas } from '../Canvas/FreeCanvas'
@@ -105,7 +109,7 @@ const CardContextMenu: React.FC<{
   }
 
   // Duplicate
-  menuItems.push({ label: 'Duplicate', icon: '📋', separator: true, action: () => {
+  menuItems.push({ label: 'Duplicate', icon: '📋', action: () => {
     useUndoCoordinator.getState().checkpoint()
     useBoardsStore.getState().duplicateGroup(group.id)
     onClose()
@@ -194,12 +198,11 @@ const Canvas: React.FC = () => <FreeCanvas />
 
 // ── Per-group card (screen-space) ──
 
-const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
+const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
   const pan          = useCanvasStore(s => s.pan)
   const zoom         = useCanvasStore(s => s.zoom)
 
   const boards       = useBoardsStore(s => s.boards)
-  const groups       = useBoardsStore(s => s.groups)
   const isSelected   = useBoardsStore(s => s.selectedGroupIds.includes(group.id))
 
   const [isDragging, setIsDragging] = useState(false)
@@ -426,6 +429,7 @@ const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
         data-layer-card={group.id}
         data-nle-card={group.boardIds[0] ?? ''}
         data-group-card="true"
+        data-link-drop={`card:${group.id}`}
         data-id={group.id}
         style={{
           position: 'absolute',
@@ -522,9 +526,14 @@ const GroupCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
   )
 }
 
+// Wrap in memo so unmoved cards don't re-render every frame during sibling drags.
+// The `group` prop reference is preserved by setGroupPosBatch for untouched groups,
+// so a shallow prop compare correctly skips them.
+const GroupCard = React.memo(GroupCardInner)
+
 // ── Ungrouped board card (free canvas) ──
 
-const UngroupedBoardCard: React.FC<{ boardId: string }> = ({ boardId }) => {
+const UngroupedBoardCardInner: React.FC<{ boardId: string }> = ({ boardId }) => {
   const pan    = useCanvasStore(s => s.pan)
   const zoom   = useCanvasStore(s => s.zoom)
   const board  = useBoardsStore(s => s.boards[boardId])
@@ -707,6 +716,8 @@ const UngroupedBoardCard: React.FC<{ boardId: string }> = ({ boardId }) => {
   )
 }
 
+const UngroupedBoardCard = React.memo(UngroupedBoardCardInner)
+
 // ── Deck components ──
 
 import { useCardDecks, isHiddenDeckMember, isSubDeckAnchor, type Deck } from '../../hooks/useCardDecks'
@@ -729,7 +740,7 @@ function expandWithNestedMembers(baseIds: string[], allGroups: ProjectGroup[]): 
 }
 
 /** Stacked deck — only anchor visible, peek tabs behind, badge + controls */
-const StackedDeckCard: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; isNested?: boolean }> = ({ deck, anchorGroup, isNested }) => {
+const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; isNested?: boolean }> = ({ deck, anchorGroup, isNested }) => {
   const pan = useCanvasStore(s => s.pan)
   const zoom = useCanvasStore(s => s.zoom)
   const boards = useBoardsStore(s => s.boards)
@@ -917,6 +928,7 @@ const StackedDeckCard: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; isNeste
       {/* Hover wrapper — covers card + edges area (all within original bounding box) */}
       <div
         data-group-card="true"
+        data-link-drop={`card:${anchorGroup.id}`}
         data-id={anchorGroup.id}
         style={{
           position: 'absolute',
@@ -1083,9 +1095,11 @@ const StackedDeckCard: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; isNeste
   )
 }
 
+const StackedDeckCard = React.memo(StackedDeckCardInner)
+
 /** Fanned deck — primary card unchanged, secondary cards as ~40px strips peeking right.
  *  Hover a strip to surface that card fully; mouse away to slide it back. */
-const FannedDeckOverlay: React.FC<{ deck: Deck; groups: ProjectGroup[] }> = ({ deck, groups }) => {
+const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> = ({ deck, groups }) => {
   const pan = useCanvasStore(s => s.pan)
   const zoom = useCanvasStore(s => s.zoom)
   const boards = useBoardsStore(s => s.boards)
@@ -1329,6 +1343,7 @@ const FannedDeckOverlay: React.FC<{ deck: Deck; groups: ProjectGroup[] }> = ({ d
       {/* Single hover wrapper — primary card + strips + controls */}
       <div
       data-group-card="true"
+      data-link-drop={`card:${anchorGroup.id}`}
       data-id={anchorGroup.id}
       style={{
         position: 'absolute',
@@ -1605,6 +1620,8 @@ const FannedDeckOverlay: React.FC<{ deck: Deck; groups: ProjectGroup[] }> = ({ d
   )
 }
 
+const FannedDeckOverlay = React.memo(FannedDeckOverlayInner)
+
 /** Badge pill showing deck card count */
 const DeckBadge: React.FC<{ count: number }> = ({ count }) => (
   <div style={{
@@ -1673,7 +1690,7 @@ const DeckControls: React.FC<{
 }
 
 /** Compute card screen rect using the same geometry as GroupCard */
-function cardScreenRect(g: ProjectGroup, boards: Record<string, import('../../store/boardsStore').BoardData>, pan: { x: number; y: number }, zoom: number) {
+export function cardScreenRect(g: ProjectGroup, boards: Record<string, import('../../store/boardsStore').BoardData>, pan: { x: number; y: number }, zoom: number) {
   const groupLayout = computeGroupLayout(g.boardIds, boards)
   let gMinX = Infinity, gMaxX = -Infinity, topY = Infinity, bottomY = -Infinity
   g.boardIds.forEach(bid => {
@@ -1847,9 +1864,19 @@ const Overlay: React.FC = () => {
   const groups = useBoardsStore(s => s.groups)
   const boards = useBoardsStore(s => s.boards)
   const zoneLineY = useCanvasStore(s => s.zoneLineY)
-  const ungroupedIds = useMemo(() => getUngroupedBoardIds(groups, boards), [groups, boards])
   const zoom = useCanvasStore(s => s.zoom)
-  const { decks, touchingClusters, getDeckForGroup } = useCardDecks(groups, boards, zoneLineY, zoom)
+  const pan = useCanvasStore(s => s.pan)
+  // Defer groups/boards so the heavy derived work (deck clustering, ungrouped
+  // board-id computation, affordance filtering) runs on idle time during drags.
+  // The Overlay's child props (group refs) still come from the urgent `groups`,
+  // so the dragged card's position updates without delay.
+  const deferredGroups = useDeferredValue(groups)
+  const deferredBoards = useDeferredValue(boards)
+  const ungroupedIds = useMemo(
+    () => getUngroupedBoardIds(deferredGroups, deferredBoards),
+    [deferredGroups, deferredBoards]
+  )
+  const { decks, touchingClusters, getDeckForGroup } = useCardDecks(deferredGroups, deferredBoards, zoneLineY, zoom)
 
   // Track which groups are rendered by decks so we skip them
   const renderedByDeck = useMemo(() => {
@@ -1869,16 +1896,16 @@ const Overlay: React.FC = () => {
       if (allInDeck) return false
       // Show affordance if at least 2 eligible cards are touching
       const eligibleCount = cluster.filter(gid => {
-        const g = groups.find(gr => gr.id === gid)
+        const g = deferredGroups.find(gr => gr.id === gid)
         if (!g) return false
         const isOpen = !g.deckState || g.deckState === 'open'
         // Visible sub-deck anchors are eligible for parent deck formation
-        const isVisibleSubAnchor = !isHiddenDeckMember(g) && isSubDeckAnchor(g.id, groups)
+        const isVisibleSubAnchor = !isHiddenDeckMember(g) && isSubDeckAnchor(g.id, deferredGroups)
         return isOpen || isVisibleSubAnchor
       }).length
       return eligibleCount >= 2
     })
-  }, [touchingClusters, renderedByDeck, groups])
+  }, [touchingClusters, renderedByDeck, deferredGroups])
 
   return (
     <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }} onPointerDown={startOverlayPan}>
@@ -1934,7 +1961,74 @@ const Overlay: React.FC = () => {
       {ungroupedIds.map(bid => (
         <UngroupedBoardCard key={bid} boardId={bid} />
       ))}
+
+      {/* ── Deck-linking layer: chip rails + parented ghost tree ── */}
+      {groups.map(g => {
+        // Skip hidden deck members — they aren't visible so they shouldn't
+        // render chip rails either.
+        if (g.deckState && g.deckState !== 'open' && g.deckAnchorId && g.deckAnchorId !== g.id) {
+          return null
+        }
+        const rect = cardScreenRect(g, boards, pan, zoom)
+        if (!rect) return null
+        return <CardLinkingLayer key={g.id} group={g} rect={rect} />
+      })}
     </div>
+  )
+}
+
+// ── Per-card chip rails + clone expansion tree ─────────────────────────
+
+const CardLinkingLayer: React.FC<{
+  group: ProjectGroup
+  rect: { screenLeft: number; screenTop: number; screenWidth: number; screenHeight: number }
+}> = ({ group, rect }) => {
+  const expandedPaths = useLinkingStore(s => s.expandedPaths)
+  const zoom = useCanvasStore(s => s.zoom)
+
+  const hostRect = {
+    left: rect.screenLeft,
+    top: rect.screenTop,
+    width: rect.screenWidth,
+    height: rect.screenHeight,
+  }
+
+  // Same scale ratio the card text uses, so chips scale with the card.
+  // Min clamp prevents chips disappearing at very low zoom.
+  const textScale = Math.max(zoom / 0.18, 0.25)
+
+  // Find any chips of THIS card whose clone is currently expanded (paths of
+  // length 2 that start with this group id).
+  const expandedChildIds: string[] = []
+  const linkedIds = group.linkedGroupIds ?? []
+  for (const gid of linkedIds) {
+    if (expandedPaths.has([group.id, gid].join('>'))) expandedChildIds.push(gid)
+  }
+
+  return (
+    <>
+      <PrimaryChipRail
+        groupId={group.id}
+        hostRect={hostRect}
+        path={[group.id]}
+        scale={textScale}
+      />
+      <BackRefChipRail
+        groupId={group.id}
+        hostRect={hostRect}
+        scale={textScale}
+      />
+      {expandedChildIds.map((cid, i) => (
+        <CloneDeck
+          key={cid}
+          targetGroupId={cid}
+          hostRect={hostRect}
+          path={[group.id, cid]}
+          childIndex={i}
+          hostGroupId={group.id}
+        />
+      ))}
+    </>
   )
 }
 
@@ -2034,7 +2128,7 @@ const TextSplitDivider: React.FC<{
   )
 }
 
-const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void; heroImage?: string | null }> = ({ groupId, onCropImage, heroImage: heroImageProp }) => {
+export const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void; heroImage?: string | null }> = ({ groupId, onCropImage, heroImage: heroImageProp }) => {
   const zoom = useCanvasStore(s => s.zoom)
   const group = useBoardsStore(s => s.groups.find(g => g.id === groupId))
   const heroImage = heroImageProp ?? group?.cardHeroImage ?? null

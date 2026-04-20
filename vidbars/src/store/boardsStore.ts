@@ -1,6 +1,6 @@
 import { create } from 'zustand'
-import { persist, createJSONStorage } from 'zustand/middleware'
-import { createDebouncedStorage } from '../utils/debouncedStorage'
+import { persist } from 'zustand/middleware'
+import { createDebouncedJSONStorage } from '../utils/debouncedJSONStorage'
 import type { Bar } from '../types/bar'
 import { TEMPLATES } from '../data/templates'
 import { getBoardAbsolutePos, computeGroupLayout, yToRow } from '../utils/nleRows'
@@ -58,6 +58,7 @@ export interface ProjectGroup {
   deckOffsetX?: number    // offset from OWN anchor at stacking time (for position restore on open)
   deckOffsetY?: number
   textSplitRatio?: number // header/body vertical split (0-1, default 0.5)
+  linkedGroupIds?: string[]  // bi-directional references to other groups (optional for legacy; treat as [] when absent)
 }
 
 /** Find which group a board belongs to */
@@ -215,6 +216,10 @@ interface BoardsState {
   toggleGroupSelection: (groupId: string) => void
   setSelectedGroups: (groupIds: string[]) => void
   clearGroupSelection: () => void
+
+  // ── Bi-directional group linking ──
+  linkGroups: (a: string, b: string) => void
+  unlinkGroups: (a: string, b: string) => void
 
   // ── Ungrouped board actions (free canvas) ──
   createUngroupedBoard: (canvasX: number, canvasY: number) => string
@@ -1129,10 +1134,37 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
   clearGroupSelection() {
     set({ selectedGroupIds: [] })
   },
+
+  // ── One-way group linking ──
+  // Stores only the outbound direction: "a references b". The reverse
+  // (back-reference) is derived at render time via `getBackRefs`.
+  // This lets the UI present asymmetric weights: the link you *made* is
+  // prominent on your card; the back-reference on the referenced card
+  // is smaller/muted.
+  linkGroups(a, b) {
+    if (!a || !b || a === b) return
+    set(s => ({
+      groups: s.groups.map(g => {
+        if (g.id !== a) return g
+        const cur = g.linkedGroupIds ?? []
+        return cur.includes(b) ? g : { ...g, linkedGroupIds: [...cur, b] }
+      }),
+    }))
+  },
+  unlinkGroups(a, b) {
+    if (!a || !b) return
+    set(s => ({
+      groups: s.groups.map(g => {
+        if (g.id !== a) return g
+        const cur = g.linkedGroupIds ?? []
+        return cur.includes(b) ? { ...g, linkedGroupIds: cur.filter(id => id !== b) } : g
+      }),
+    }))
+  },
 }), {
   name: 'vidbars-boards',
-  storage: createJSONStorage(() => createDebouncedStorage(500)),
-  version: 10,
+  storage: createDebouncedJSONStorage(400),
+  version: 11,
   migrate(persisted: any, version: number) {
     if (version < 3) {
       const boards = persisted.boards ?? {}
@@ -1270,6 +1302,13 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
         if (g.deckState && g.deckState !== 'open' && !g.deckAnchorId) {
           g.deckState = 'open'
         }
+      }
+    }
+    if (version < 11) {
+      // v10→v11: Backfill linkedGroupIds for bi-directional deck linking.
+      const groups: any[] = persisted.groups ?? []
+      for (const g of groups) {
+        if (!Array.isArray(g.linkedGroupIds)) g.linkedGroupIds = []
       }
     }
     return persisted as BoardsState
