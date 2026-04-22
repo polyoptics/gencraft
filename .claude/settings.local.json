@@ -34,7 +34,26 @@
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "Bash(git stash:*)",
-      "Bash(git checkout:*)"
+      "Bash(git checkout:*)",
+      "Bash(find /d/Data/AI/ClaudeCode/ProjectVidBars/vidbars/src -name \"*.tsx\" -exec grep -l \"content.media\\\\|content.images\" {} \\\\;)",
+      "Bash(npm list *)",
+      "Bash(node build_deck.js)",
+      "Bash(npm root *)",
+      "Bash(NODE_PATH=\"C:/Users/User/AppData/Roaming/npm/node_modules\" node build_deck.js)",
+      "Bash(python \"C:/Users/User/AppData/Roaming/Claude/local-agent-mode-sessions/skills-plugin/f8c22eba-ae8c-425c-acdb-3d066ea8e90b/a1309606-05b5-40c4-95a9-27e18bcbc22a/skills/pptx/scripts/office/soffice.py\" --headless --convert-to pdf VidBars_Deck.pptx)",
+      "Bash(python -m markitdown VidBars_Deck.pptx)",
+      "Bash(where pdftoppm *)",
+      "Bash(where pdftoppm.exe)",
+      "Bash(NODE_PATH=\"C:/Users/User/AppData/Roaming/npm/node_modules\" node build_deck_google.js)",
+      "Bash(taskkill /F /IM soffice.exe /IM soffice.bin)",
+      "Bash(taskkill /F /IM quickstart.exe)",
+      "Bash(rm -f \"D:/Data/AI/ClaudeCode/ProjectVidBars/VidBars_Deck_Google.pdf\")",
+      "Bash(\"C:/Program Files/LibreOffice/program/soffice.exe\" --headless --convert-to pdf VidBars_Deck_Google.pptx)",
+      "Bash(python render_google.py)",
+      "Bash(grep -n \"[^\\\\\\\\.]groups[^a-zA-Z]\")",
+      "Bash(grep -n \"^const.*React.FC\\\\|^const.*memo\\\\|^}\\\\|^export const Card\\\\|^}$\" src/components/Layers/CardLayer.tsx)",
+      "Bash(curl -sS \"http://localhost:5173/src/components/Linking/LinkedGhostCard.tsx?t=$\\(date +%s\\)\")",
+      "Bash(curl -sS -o /dev/null -w \"%{http_code}\\\\n\" \"http://localhost:5173/src/components/Linking/LinkChipRail.tsx?t=$\\(date +%s\\)\")"
     ]
   }
 }

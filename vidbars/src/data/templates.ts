@@ -105,7 +105,7 @@ export const TEMPLATES: TemplateData[] = [
   // ── vidBarDemo1 ── generic branching tree ──────────────────────────────
   {
     id: 'vidBarDemo1',
-    label: 'vidBarDemo1',
+    label: 'Branching Tree',
     projectName: 'storyMap',
     bars: {
       r0a: b('r0a', null, 0, 0,    320, ['r1a'], { name: 'FIRST FRAME' }),

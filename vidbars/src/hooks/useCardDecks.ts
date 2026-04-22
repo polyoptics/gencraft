@@ -6,6 +6,7 @@ import type { ProjectGroup, BoardData } from '../store/boardsStore'
 import { type GroupSlot } from '../utils/nlePush'
 import { computeGroupLayout, getRowY, getRowHeight } from '../utils/nleRows'
 import { DEFAULT_H } from '../utils/barConstants'
+import { NLE_HEADER_CANVAS_H } from '../components/NLE/NLETimelineHeader'
 
 /** Returns true if this group is a non-anchor member of a stacked/fanned deck (visually hidden). */
 export function isHiddenDeckMember(g: ProjectGroup): boolean {
@@ -107,11 +108,18 @@ export function useCardDecks(
       // Apply manual card size overrides (canvas units)
       const finalW = Math.max(cW, g.cardWidthOverride ?? 0)
       const finalH = Math.max(cH, g.cardHeightOverride ?? 0)
+      // Visual cards extend UP above the content by `headerExtend` (the NLE
+      // timeline header surrogate). Include that in the rect so spatial
+      // clustering compares the visual bounds, not the content bounds —
+      // otherwise two cards that look flush on screen read as ~100 canvas
+      // units apart in the math, and the 16-unit touch tolerance can't catch
+      // them. Formula mirrors GroupCard's headerExtend (canvas units).
+      const headerExtendCanvas = (Math.max(NLE_HEADER_CANVAS_H * zoom, 20) + 2 * zoom) / zoom
       rects.set(g.id, {
         id: g.id,
         left,
         right: left + finalW,
-        top,
+        top: top - headerExtendCanvas,
         bottom: top + finalH,
       })
     }

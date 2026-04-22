@@ -88,3 +88,40 @@ export function generateHoverVariants(hex: string) {
     darker2:   hslToHex(h, clamp(s + 0.10), clamp(l - 0.14)),
   }
 }
+
+/**
+ * Selection highlight derived from an element's own color.
+ * Ring is a light, desaturated tint of the color (not pure white) so the
+ * element's identity comes through without a flashlight-y wash. Outer glow
+ * is the color itself, brightened for legibility on dark cards.
+ *
+ * Pass alpha variants if you want softer or stronger emphasis.
+ */
+export function selectionHighlight(hex: string, opts?: {
+  ringAlpha?: number        // inner ring opacity (default 0.85)
+  ringWidthPx?: number      // inner ring thickness (default 2)
+  glowAlpha?: number        // colored glow opacity (default 0.38)
+  glowBlurPx?: number       // colored glow spread (default 10)
+}): { border: string; boxShadow: string; outlineColor: string } {
+  const r = opts?.ringAlpha ?? 0.85
+  const w = opts?.ringWidthPx ?? 2
+  const g = opts?.glowAlpha ?? 0.38
+  const b = opts?.glowBlurPx ?? 10
+  const n = parseInt(hex.replace('#', ''), 16)
+  const R = (n >> 16) & 0xff, G = (n >> 8) & 0xff, B = n & 0xff
+  const { h, s, l } = hexToHsl(hex)
+  // Ring: light tint of the color — desaturated and lightened, not pure white.
+  // Keeps the selected element's identity; still readable on any base.
+  const ringHex = hslToHex(h, Math.max(0.08, s * 0.35), Math.min(0.88, l + 0.38))
+  const rn = parseInt(ringHex.replace('#', ''), 16)
+  const rR = (rn >> 16) & 0xff, rG = (rn >> 8) & 0xff, rB = rn & 0xff
+  // Glow: brightened color so dark cards (navy/black) still show a halo.
+  const glowHex = hslToHex(h, Math.min(1, s * 0.9 + 0.1), Math.min(0.7, l + 0.15))
+  const gn = parseInt(glowHex.replace('#', ''), 16)
+  const gR = (gn >> 16) & 0xff, gG = (gn >> 8) & 0xff, gB = gn & 0xff
+  return {
+    border: `${w}px solid rgba(${rR},${rG},${rB},${r})`,
+    boxShadow: `0 0 ${b}px rgba(${gR},${gG},${gB},${g}), 0 5px 16px rgba(${R},${G},${B},${g * 0.6})`,
+    outlineColor: glowHex,
+  }
+}

@@ -15,7 +15,7 @@ import { uploadFile } from '../../utils/uploadFile'
 import { getFirstImageUrl } from '../../types/bar'
 import { HeroImageLayer } from '../Layers/HeroImageLayer'
 import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
-import { generateHoverVariants } from '../../utils/colorUtils'
+import { generateHoverVariants, selectionHighlight } from '../../utils/colorUtils'
 import { TextFormatToolbar, ensureFontLoaded, hexToRgba } from '../UI/TextFormatToolbar'
 import { DEFAULT_HEADER_STYLE, DEFAULT_BODY_STYLE } from '../../store/freeNodeStore'
 
@@ -471,6 +471,7 @@ export const NLEBlock: React.FC<Props> = React.memo(({ id, top, blockHeight, off
   const iconSz  = compact ? 0 : medium ? 20 : 28
   const bg = bar.color
   const pillBg = darken(bg, 0.38)
+  const nodeSelFx = isSelected ? selectionHighlight(bar.color, { ringWidthPx: 2.5, glowBlurPx: 22 }) : null
 
   const overlayPill: React.CSSProperties = {
     background: 'rgba(0,0,0,0.22)',
@@ -557,8 +558,8 @@ export const NLEBlock: React.FC<Props> = React.memo(({ id, top, blockHeight, off
           position: 'absolute', inset: 0, borderRadius: 12, background: bg, overflow: 'hidden', zIndex: 0,
           boxShadow: isDraggingReorder
             ? '0 0 0 2px rgba(255,210,80,0.9), 0 20px 50px rgba(0,0,0,0.7)'
-            : isSelected
-            ? '0 0 0 2.5px rgba(120,180,255,0.9), 0 8px 32px rgba(0,0,0,0.5)'
+            : nodeSelFx
+            ? nodeSelFx.boxShadow
             : isHovered
             ? '0 8px 32px rgba(0,0,0,0.5), 0 0 0 2px rgba(255,255,255,0.25)'
             : '0 2px 10px rgba(0,0,0,0.4), 0 0 0 1px rgba(0,0,0,0.25)',
@@ -742,7 +743,7 @@ export const NLEBlock: React.FC<Props> = React.memo(({ id, top, blockHeight, off
                 if (hoverTimer.current) { clearTimeout(hoverTimer.current); hoverTimer.current = null }
                 setTimeout(() => setShowHoverWheel(false), 300)
               }}
-              title="Click to pick color · Drag to paint another bar"
+              title="Click to pick color · Drag to paint another node"
             >
               {/* Triangle ear fill — rounded top-left corner to match node */}
               <div style={{
@@ -1064,11 +1065,11 @@ export const NLEBlock: React.FC<Props> = React.memo(({ id, top, blockHeight, off
 
             <div style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 4, pointerEvents: 'all' }}>
               <div style={smallHandle} onPointerDown={onLeftDown} title="Drag to resize left">›</div>
-              <button style={smallPlus} onPointerDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); useUndoCoordinator.getState().checkpoint(); addSiblingBar(id, 'before') }} title="Add block to the left">+</button>
+              <button style={smallPlus} onPointerDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); useUndoCoordinator.getState().checkpoint(); addSiblingBar(id, 'before') }} title="Add node to the left">+</button>
             </div>
 
             <div style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 4, pointerEvents: 'all' }}>
-              <button style={smallPlus} onPointerDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); useUndoCoordinator.getState().checkpoint(); addSiblingBar(id, 'after') }} title="Add block to the right">+</button>
+              <button style={smallPlus} onPointerDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); useUndoCoordinator.getState().checkpoint(); addSiblingBar(id, 'after') }} title="Add node to the right">+</button>
               <div style={smallHandle} onPointerDown={onRightDown} title="Drag to resize right">‹</div>
             </div>
 

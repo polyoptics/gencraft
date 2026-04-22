@@ -25,6 +25,7 @@ import { FreeCanvas } from '../Canvas/FreeCanvas'
 import { NLETimelineHeader } from '../NLE/NLETimelineHeader'
 import { CardOutline } from './CardOutline'
 import { getHiddenBoardIds, getHiddenGroupIds } from '../../hooks/useCardDecks'
+import { selectionHighlight } from '../../utils/colorUtils'
 
 const BOARD_PADDING_X = 20
 
@@ -80,6 +81,7 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
   const width = Math.max(contentW, wOverride ?? 0)
   const height = Math.max(contentH, hOverride ?? 0)
   const rootColor = rootBars[0]?.color ?? '#5b8dd9'
+  const blockSelFx = isBlockSelected ? selectionHighlight(rootColor, { ringWidthPx: 2.5 }) : null
 
   const thumbnail = board.layers?.block?.thumbnail
     ?? rootBars.reduce<string | null>((found, b) => found || getFirstImageUrl(b.content), null)
@@ -431,10 +433,17 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
             onBlur={commitRename}
             onKeyDown={e => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') setRenaming(false) }}
             onPointerDown={e => e.stopPropagation()}
+            // Counter-scale with zoom so the input matches the display span's
+            // visible size (which uses `fontSize: 11 / zoom`). Without this,
+            // the input renders at fractional screen pixels at block zoom.
             style={{
-              background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.2)',
-              borderRadius: 4, color: '#fff', fontSize: 11, fontWeight: 700,
-              padding: '1px 6px', outline: 'none', fontFamily: 'inherit', width: 140,
+              background: 'rgba(255,255,255,0.08)', border: `${1 / zoom}px solid rgba(255,255,255,0.3)`,
+              borderRadius: 4 / zoom, color: '#fff',
+              fontSize: 11 / zoom, fontWeight: 700,
+              padding: `${1 / zoom}px ${6 / zoom}px`,
+              outline: 'none', fontFamily: 'inherit',
+              width: 140 / zoom,
+              letterSpacing: '0.3px',
             }}
           />
         ) : (
@@ -478,11 +487,11 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
           background: thumbnail
             ? `linear-gradient(160deg, ${rootColor}cc 0%, ${rootColor}aa 100%)`
             : rootColor,
-          border: isBlockSelected ? '2.5px solid rgba(120,180,255,0.95)' : '1.5px solid rgba(255,255,255,0.25)',
+          border: blockSelFx ? blockSelFx.border : '1.5px solid rgba(255,255,255,0.25)',
           boxShadow: gripDragging
             ? '0 8px 40px rgba(0,0,0,0.7)'
-            : isBlockSelected
-            ? '0 0 0 2px rgba(120,180,255,0.4), 0 6px 28px rgba(0,0,0,0.5)'
+            : blockSelFx
+            ? blockSelFx.boxShadow
             : '0 4px 24px rgba(0,0,0,0.4)',
           cursor: 'grab',
           overflow: 'hidden',

@@ -62,12 +62,11 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
         if (!spaceDown.current) { spaceDown.current = true; setSpaceActive(true) }
         e.preventDefault()
       }
-      // Home key: reset zoom and pan to default
-      if (e.code === 'Home' && e.target === document.body) {
-        e.preventDefault()
-        useCanvasStore.getState().setPan({ x: 200, y: 100 })
-        useCanvasStore.getState().setZoom(0.35)
-      }
+      // Home key intentionally unbound — the old "reset zoom/pan" behavior
+      // was a trap (easy to hit by accident, instantly snaps the viewport
+      // away from wherever you were working, and the sudden pan+zoom
+      // transition can temporarily unseat some memoized rects until things
+      // re-settle). Re-add only behind an explicit modifier or UI action.
     }
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.code === 'Space') { spaceDown.current = false; setSpaceActive(false) }
@@ -476,7 +475,7 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
               { label: 'T   Add text',    action: () => { const c = clampToNoParkZone(addMenu.cx, addMenu.cy, 200, 180); addFreeNode(c.x, c.y, 'text');  setAddMenu(null) } },
               { label: '🖼  Add image',   action: () => { const c = clampToNoParkZone(addMenu.cx, addMenu.cy, 200, 180); addFreeNode(c.x, c.y, 'image'); setAddMenu(null) } },
               { label: '─────────────', action: null },
-              { label: zoom <= 0.18 ? '🎬  New Card' : '🎬  New VidBar',
+              { label: zoom <= 0.18 ? '🎬  New Card' : '🎬  New Board',
                 action: () => {
                 // Always create a grouped card — works in both free and timeline zones.
                 const boardId = useBoardsStore.getState().createBoard(0, 0)

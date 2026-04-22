@@ -25,7 +25,7 @@ import { NLETimelineHeader, NLE_HEADER_CANVAS_H } from '../NLE/NLETimelineHeader
 import { HeroImageLayer } from './HeroImageLayer'
 import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
 import { getFirstImageUrl } from '../../types/bar'
-import { hexToHsl, hslToHex } from '../../utils/colorUtils'
+import { hexToHsl, hslToHex, selectionHighlight } from '../../utils/colorUtils'
 
 const BOARD_PADDING_X = 20
 
@@ -423,6 +423,8 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
   if (screenWidth === 0) return null
   if (screenLeft + screenWidth < 0 || screenTop + cardHeight < 0) return null
 
+  const selFx = isSelected ? selectionHighlight(color) : null
+
   return (
     <>
       <div
@@ -446,8 +448,8 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
             ? `linear-gradient(160deg, ${color}cc 0%, ${color}aa 100%)`
             : color,
           touchAction: 'none',
-          border: isSelected ? '2px solid rgba(130,180,255,0.8)' : '1.5px solid rgba(255,255,255,0.25)',
-          boxShadow: isSelected ? '0 4px 24px rgba(37,99,235,0.4)' : '0 4px 24px rgba(0,0,0,0.4)',
+          border: selFx ? selFx.border : '1.5px solid rgba(255,255,255,0.25)',
+          boxShadow: selFx ? selFx.boxShadow : '0 4px 24px rgba(0,0,0,0.4)',
           overflow: 'hidden',
         }}
         onPointerDown={onCardDown}
@@ -923,6 +925,8 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
   const cardWidth = screenWidth - EDGE_RESERVE // primary card is slimmer
   const edgeBaseX = cardWidth - 1 // edges start at right edge of slimmed card
 
+  const stackSelFx = isSelected ? selectionHighlight(anchorGroup.color) : null
+
   return (
     <>
       {/* Hover wrapper — covers card + edges area (all within original bounding box) */}
@@ -1028,8 +1032,8 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
             background: heroImage
               ? `linear-gradient(160deg, ${anchorGroup.color}cc 0%, ${anchorGroup.color}aa 100%)`
               : anchorGroup.color,
-            border: isSelected ? '2px solid rgba(130,180,255,0.8)' : '1.5px solid rgba(255,255,255,0.25)',
-            boxShadow: isSelected ? '0 0 0 2px rgba(100,160,255,0.25), 0 6px 32px rgba(0,0,0,0.5)' : '0 6px 32px rgba(0,0,0,0.5)',
+            border: stackSelFx ? stackSelFx.border : '1.5px solid rgba(255,255,255,0.25)',
+            boxShadow: stackSelFx ? stackSelFx.boxShadow : '0 6px 32px rgba(0,0,0,0.5)',
             overflow: 'hidden',
             cursor: 'grab',
             userSelect: 'none',
@@ -1171,6 +1175,8 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
 
   const FAN_STRIP_WIDTH = 40 // px visible per secondary card strip
   const totalFanWidth = screenWidth + secondaryCards.length * FAN_STRIP_WIDTH
+
+  const fanSelFx = isSelected ? selectionHighlight(anchorGroup.color) : null
 
   // Hero image for anchor
   const heroImage = (() => {
@@ -1559,8 +1565,8 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
           background: heroImage
             ? `linear-gradient(160deg, ${anchorGroup.color}cc 0%, ${anchorGroup.color}aa 100%)`
             : anchorGroup.color,
-          border: isSelected ? '2px solid rgba(130,180,255,0.8)' : '1.5px solid rgba(255,255,255,0.25)',
-          boxShadow: isSelected ? '0 0 0 2px rgba(100,160,255,0.25), 0 6px 32px rgba(0,0,0,0.5)' : '0 6px 32px rgba(0,0,0,0.5)',
+          border: fanSelFx ? fanSelFx.border : '1.5px solid rgba(255,255,255,0.25)',
+          boxShadow: fanSelFx ? fanSelFx.boxShadow : '0 6px 32px rgba(0,0,0,0.5)',
           overflow: 'hidden',
           cursor: 'grab',
           userSelect: 'none',
@@ -1901,7 +1907,14 @@ const Overlay: React.FC = () => {
         const isOpen = !g.deckState || g.deckState === 'open'
         // Visible sub-deck anchors are eligible for parent deck formation
         const isVisibleSubAnchor = !isHiddenDeckMember(g) && isSubDeckAnchor(g.id, deferredGroups)
-        return isOpen || isVisibleSubAnchor
+        // Orphan deck state: group has deckState set but no other groups
+        // actually reference it as their anchor — treat it as open so the
+        // affordance can re-form it into a real deck with a neighbor.
+        const hasRealMembers = deferredGroups.some(other =>
+          other.id !== g.id && other.deckAnchorId === g.id
+        )
+        const isOrphanDeck = !isOpen && !isVisibleSubAnchor && !hasRealMembers
+        return isOpen || isVisibleSubAnchor || isOrphanDeck
       }).length
       return eligibleCount >= 2
     })

@@ -312,7 +312,7 @@ export default function App() {
         display: 'flex', alignItems: 'center',
         padding: '0 16px', gap: 10, zIndex: 600,
       }}>
-        <span style={{ color: '#fff', fontSize: 14, fontWeight: 800, letterSpacing: '-0.5px' }}>VidBars</span>
+        <span style={{ color: '#fff', fontSize: 14, fontWeight: 800, letterSpacing: '-0.5px' }}>Armarium</span>
         <button
           onClick={() => setDeckBrowserOpen(o => !o)}
           title="Deck Browser — drag decks onto cards to link"
@@ -335,7 +335,7 @@ export default function App() {
           Decks
         </button>
         <div style={{ width: 1, height: 16, background: 'rgba(255,255,255,0.1)' }} />
-        <span style={{ color: 'rgba(255,255,255,0.22)', fontSize: 11 }}>GenAI Video Composer</span>
+        <span style={{ color: 'rgba(255,255,255,0.22)', fontSize: 11 }}>a canvas for creative work</span>
         <div style={{ flex: 1 }} />
         <UndoRedoButtons />
         <span style={{ color: 'rgba(255,255,255,0.15)', fontSize: 10 }}>

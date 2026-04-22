@@ -1,6 +1,7 @@
 // Shared text formatting toolbar — used by FreeNode, CardLayer, BlockLayer
 import React, { useState, useEffect, useRef } from 'react'
 import ReactDOM from 'react-dom'
+import { HexColorPicker } from 'react-colorful'
 import type { TextStyle } from '../../store/freeNodeStore'
 import { DEFAULT_HEADER_STYLE, DEFAULT_BODY_STYLE } from '../../store/freeNodeStore'
 
@@ -158,39 +159,76 @@ export const ColorSwatchPopup: React.FC<{
   selected: string
   onSelect: (c: string) => void
   onClose: () => void
-}> = ({ colors, selected, onSelect }) => (
-  <div
-    onPointerDown={e => { e.preventDefault(); e.stopPropagation() }}
-    style={{
-      position: 'absolute', top: 32, left: -4, zIndex: 10001,
-      background: '#1a1b2e', border: '1px solid rgba(255,255,255,0.12)',
-      borderRadius: 8, padding: 6, boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
-      display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4,
-      width: 120,
-    }}
-  >
-    {colors.map(c => (
+}> = ({ colors, selected, onSelect }) => {
+  const [customOpen, setCustomOpen] = useState(false)
+  return (
+    <div
+      onPointerDown={e => { e.preventDefault(); e.stopPropagation() }}
+      onPointerUp={e => e.stopPropagation()}
+      onClick={e => e.stopPropagation()}
+      style={{
+        position: 'absolute', top: 32, left: -4, zIndex: 10001,
+        background: '#1a1b2e', border: '1px solid rgba(255,255,255,0.12)',
+        borderRadius: 8, padding: 6, boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
+        width: customOpen ? 200 : 120,
+      }}
+    >
+      <div style={{
+        display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4,
+      }}>
+        {colors.map(c => (
+          <button
+            key={c}
+            onClick={() => onSelect(c)}
+            style={{
+              width: 24, height: 24, borderRadius: 5,
+              background: c, border: c === selected ? '2px solid #fff' : '1px solid rgba(255,255,255,0.15)',
+              cursor: 'pointer', padding: 0,
+            }}
+          />
+        ))}
+      </div>
       <button
-        key={c}
-        onClick={() => onSelect(c)}
+        onClick={() => setCustomOpen(o => !o)}
         style={{
-          width: 24, height: 24, borderRadius: 5,
-          background: c, border: c === selected ? '2px solid #fff' : '1px solid rgba(255,255,255,0.15)',
-          cursor: 'pointer', padding: 0,
+          width: '100%', marginTop: 6, padding: '4px 6px',
+          background: customOpen ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.04)',
+          border: '1px solid rgba(255,255,255,0.1)', borderRadius: 5,
+          color: 'rgba(255,255,255,0.7)', fontSize: 10,
+          cursor: 'pointer', fontFamily: 'inherit',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         }}
-      />
-    ))}
-    <label style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
-      <input
-        type="color"
-        value={selected}
-        onChange={e => onSelect(e.target.value)}
-        style={{ width: 24, height: 24, border: 'none', background: 'none', cursor: 'pointer', padding: 0 }}
-      />
-      <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)' }}>Custom</span>
-    </label>
-  </div>
-)
+      >
+        <span>Custom</span>
+        <span style={{
+          display: 'inline-block', width: 14, height: 14, borderRadius: 3,
+          background: selected, border: '1px solid rgba(255,255,255,0.25)',
+        }} />
+      </button>
+      {customOpen && (
+        <div
+          // Keep pointer events contained to the picker so the hue-drag works.
+          onPointerDown={e => e.stopPropagation()}
+          onPointerUp={e => e.stopPropagation()}
+          style={{ marginTop: 6 }}
+        >
+          <HexColorPicker color={selected} onChange={onSelect} style={{ width: '100%', height: 140 }} />
+          <input
+            value={selected}
+            onChange={e => onSelect(e.target.value)}
+            onPointerDown={e => e.stopPropagation()}
+            style={{
+              width: '100%', marginTop: 4, padding: '3px 6px', boxSizing: 'border-box',
+              background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)',
+              borderRadius: 4, color: '#fff', fontSize: 10, fontFamily: 'monospace',
+              outline: 'none',
+            }}
+          />
+        </div>
+      )}
+    </div>
+  )
+}
 
 export const BgPickerPopup: React.FC<{
   bgColor: string
@@ -198,50 +236,82 @@ export const BgPickerPopup: React.FC<{
   onColorSelect: (c: string) => void
   onOpacityChange: (o: number) => void
   onClose: () => void
-}> = ({ bgColor, bgOpacity, onColorSelect, onOpacityChange }) => (
-  <div
-    onPointerDown={e => {
-      const tag = (e.target as HTMLElement).tagName
-      const type = (e.target as HTMLInputElement).type
-      if (!(tag === 'INPUT' && (type === 'range' || type === 'color'))) e.preventDefault()
-      e.stopPropagation()
-    }}
-    onMouseDown={e => {
-      const tag = (e.target as HTMLElement).tagName
-      const type = (e.target as HTMLInputElement).type
-      if (!(tag === 'INPUT' && (type === 'range' || type === 'color'))) e.preventDefault()
-      e.stopPropagation()
-    }}
-    style={{
-      position: 'absolute', top: 32, right: -4, zIndex: 10001,
-      background: '#1a1b2e', border: '1px solid rgba(255,255,255,0.12)',
-      borderRadius: 8, padding: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
-      width: 150,
-    }}
-  >
-    <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', marginBottom: 4 }}>Background Color</div>
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4, marginBottom: 8 }}>
-      {['#000000', '#1e1b4b', '#1e3a2f', '#3b1520', '#1e293b', '#2d1b0e', '#1a1a1a', '#0f172a'].map(c => (
-        <button
-          key={c}
-          onClick={() => onColorSelect(c)}
-          style={{
-            width: 24, height: 24, borderRadius: 5,
-            background: c, border: c === bgColor ? '2px solid #fff' : '1px solid rgba(255,255,255,0.15)',
-            cursor: 'pointer', padding: 0,
-          }}
-        />
-      ))}
-    </div>
-    <label style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 2 }}>
-      <input
-        type="color"
-        value={bgColor}
-        onChange={e => onColorSelect(e.target.value)}
-        style={{ width: 24, height: 24, border: 'none', background: 'none', cursor: 'pointer', padding: 0 }}
-      />
-      <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)' }}>Custom</span>
-    </label>
+}> = ({ bgColor, bgOpacity, onColorSelect, onOpacityChange }) => {
+  const [customOpen, setCustomOpen] = useState(false)
+  return (
+    <div
+      onPointerDown={e => {
+        const tag = (e.target as HTMLElement).tagName
+        const type = (e.target as HTMLInputElement).type
+        if (!(tag === 'INPUT' && type === 'range')) e.preventDefault()
+        e.stopPropagation()
+      }}
+      onPointerUp={e => e.stopPropagation()}
+      onClick={e => e.stopPropagation()}
+      onMouseDown={e => {
+        const tag = (e.target as HTMLElement).tagName
+        const type = (e.target as HTMLInputElement).type
+        if (!(tag === 'INPUT' && type === 'range')) e.preventDefault()
+        e.stopPropagation()
+      }}
+      style={{
+        position: 'absolute', top: 32, right: -4, zIndex: 10001,
+        background: '#1a1b2e', border: '1px solid rgba(255,255,255,0.12)',
+        borderRadius: 8, padding: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
+        width: customOpen ? 210 : 150,
+      }}
+    >
+      <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', marginBottom: 4 }}>Background Color</div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4, marginBottom: 8 }}>
+        {['#000000', '#1e1b4b', '#1e3a2f', '#3b1520', '#1e293b', '#2d1b0e', '#1a1a1a', '#0f172a'].map(c => (
+          <button
+            key={c}
+            onClick={() => onColorSelect(c)}
+            style={{
+              width: 24, height: 24, borderRadius: 5,
+              background: c, border: c === bgColor ? '2px solid #fff' : '1px solid rgba(255,255,255,0.15)',
+              cursor: 'pointer', padding: 0,
+            }}
+          />
+        ))}
+      </div>
+      <button
+        onClick={() => setCustomOpen(o => !o)}
+        style={{
+          width: '100%', padding: '4px 6px',
+          background: customOpen ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.04)',
+          border: '1px solid rgba(255,255,255,0.1)', borderRadius: 5,
+          color: 'rgba(255,255,255,0.7)', fontSize: 10,
+          cursor: 'pointer', fontFamily: 'inherit',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        }}
+      >
+        <span>Custom</span>
+        <span style={{
+          display: 'inline-block', width: 14, height: 14, borderRadius: 3,
+          background: bgColor, border: '1px solid rgba(255,255,255,0.25)',
+        }} />
+      </button>
+      {customOpen && (
+        <div
+          onPointerDown={e => e.stopPropagation()}
+          onPointerUp={e => e.stopPropagation()}
+          style={{ marginTop: 6 }}
+        >
+          <HexColorPicker color={bgColor} onChange={onColorSelect} style={{ width: '100%', height: 130 }} />
+          <input
+            value={bgColor}
+            onChange={e => onColorSelect(e.target.value)}
+            onPointerDown={e => e.stopPropagation()}
+            style={{
+              width: '100%', marginTop: 4, padding: '3px 6px', boxSizing: 'border-box',
+              background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)',
+              borderRadius: 4, color: '#fff', fontSize: 10, fontFamily: 'monospace',
+              outline: 'none',
+            }}
+          />
+        </div>
+      )}
     <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', marginTop: 6, marginBottom: 4 }}>Opacity</div>
     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
       <input
@@ -257,13 +327,14 @@ export const BgPickerPopup: React.FC<{
         {Math.round(bgOpacity * 100)}%
       </span>
     </div>
-    <div style={{
-      marginTop: 6, height: 20, borderRadius: 4,
-      background: hexToRgba(bgColor, bgOpacity),
-      border: '1px solid rgba(255,255,255,0.08)',
-    }} />
-  </div>
-)
+      <div style={{
+        marginTop: 6, height: 20, borderRadius: 4,
+        background: hexToRgba(bgColor, bgOpacity),
+        border: '1px solid rgba(255,255,255,0.08)',
+      }} />
+    </div>
+  )
+}
 
 // ── Main toolbar component ──
 

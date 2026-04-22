@@ -303,7 +303,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
     const id = crypto.randomUUID()
     const rootId = crypto.randomUUID()
     const board: BoardData = {
-      id, projectName: 'New VidBar', color: '#5b8dd9',
+      id, projectName: 'New Board', color: '#5b8dd9',
       nleRow, nleX,
       bars: {
         [rootId]: makeBar({ id: rootId, parentId: null, rowIndex: 0, x: 0, width: INIT_W, height: INIT_H }),
@@ -1020,7 +1020,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
     const id = crypto.randomUUID()
     const rootId = crypto.randomUUID()
     const board: BoardData = {
-      id, projectName: 'New VidBar', color: '#5b8dd9',
+      id, projectName: 'New Board', color: '#5b8dd9',
       nleRow: 0, nleX: 0,
       canvasX, canvasY,
       bars: {
