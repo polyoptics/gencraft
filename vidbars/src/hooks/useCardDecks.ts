@@ -19,6 +19,24 @@ export function isSubDeckAnchor(groupId: string, allGroups: ProjectGroup[]): boo
     && g.deckState !== undefined && g.deckState !== 'open')
 }
 
+/** Expand a set of group IDs to include nested sub-deck members (transitively).
+ *  Any group whose deckAnchorId points to any member of the set is added.
+ *  Used by drag handlers so moving a deck anchor also moves its hidden members. */
+export function expandWithNestedMembers(baseIds: string[], allGroups: ProjectGroup[]): string[] {
+  const result = new Set(baseIds)
+  let added = true
+  while (added) {
+    added = false
+    for (const g of allGroups) {
+      if (!result.has(g.id) && g.deckAnchorId && result.has(g.deckAnchorId)) {
+        result.add(g.id)
+        added = true
+      }
+    }
+  }
+  return Array.from(result)
+}
+
 const TOUCH_TOLERANCE = 16 // canvas units — slightly > DEFAULT_GAP (12)
 
 export interface Deck {

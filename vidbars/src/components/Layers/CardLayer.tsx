@@ -722,24 +722,7 @@ const UngroupedBoardCard = React.memo(UngroupedBoardCardInner)
 
 // ── Deck components ──
 
-import { useCardDecks, isHiddenDeckMember, isSubDeckAnchor, type Deck } from '../../hooks/useCardDecks'
-
-/** Expand a set of group IDs to include nested sub-deck members.
- *  Any group whose deckAnchorId points to a member of the set is added (recursively). */
-function expandWithNestedMembers(baseIds: string[], allGroups: ProjectGroup[]): string[] {
-  const result = new Set(baseIds)
-  let added = true
-  while (added) {
-    added = false
-    for (const g of allGroups) {
-      if (!result.has(g.id) && g.deckAnchorId && result.has(g.deckAnchorId)) {
-        result.add(g.id)
-        added = true
-      }
-    }
-  }
-  return Array.from(result)
-}
+import { useCardDecks, isHiddenDeckMember, isSubDeckAnchor, expandWithNestedMembers, type Deck } from '../../hooks/useCardDecks'
 
 /** Stacked deck — only anchor visible, peek tabs behind, badge + controls */
 const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; isNested?: boolean }> = ({ deck, anchorGroup, isNested }) => {

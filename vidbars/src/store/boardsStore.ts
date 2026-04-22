@@ -871,8 +871,23 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
         groups: s.groups.map(g => {
           if (!idSet.has(g.id)) return g
           if (subDeckAnchors.has(g.id)) {
-            // Sub-deck anchor: only update parent membership, preserve sub-deck state
-            // Store offset from parent anchor for position restore
+            if (state === 'open') {
+              // Parent deck is opening: restore the sub-deck anchor's position
+              // relative to the parent anchor using the stored offset — same
+              // formula as regular members. Preserve the sub-deck's own state
+              // and the nestedDeck flag (the sub-deck is still a sub-deck).
+              // Clear the parent-relative offset since the parent is no longer
+              // a deck. If the drag path already moved this group together with
+              // its parent anchor, the restore is a no-op.
+              let ox = g.originX, oy = g.originY
+              if (openAnchor && g.deckOffsetX != null && g.deckOffsetY != null && g.id !== groupIds[0]) {
+                ox = openAnchor.originX + g.deckOffsetX
+                oy = openAnchor.originY + g.deckOffsetY
+              }
+              return { ...g, deckAnchorId: undefined, nestedDeck: true, originX: ox, originY: oy, deckOffsetX: undefined, deckOffsetY: undefined }
+            }
+            // Parent is stacking/fanning: store offset from parent anchor for
+            // later restore. Preserve the sub-deck's own deckState.
             const offX = anchorGroup ? g.originX - anchorGroup.originX : g.deckOffsetX
             const offY = anchorGroup ? g.originY - anchorGroup.originY : g.deckOffsetY
             return { ...g, deckAnchorId: anchorId, nestedDeck: true, deckOffsetX: offX, deckOffsetY: offY }

@@ -6,7 +6,7 @@ import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { computeGroupLayout, getRowY, snapToCardGrid, CARD_GRID_SPACING } from '../../utils/nleRows'
 import { groupSlot, clampGroupMove } from '../../utils/nlePush'
 import type { GroupSlot } from '../../utils/nlePush'
-import { isHiddenDeckMember } from '../../hooks/useCardDecks'
+import { isHiddenDeckMember, expandWithNestedMembers } from '../../hooks/useCardDecks'
 import { hexToHsl, hslToHex } from '../../utils/colorUtils'
 
 const BOARD_PADDING_X = 20
@@ -65,7 +65,8 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0 }) =>
     setHeaderName(defaultName)
   }
 
-  // ── Group drag: simply move group.originY / group.originX ──
+  // ── Group drag: move group.originY / group.originX, and carry any
+  // nested sub-deck members along so hidden members stay in sync ──
   const onTimelineDown = useCallback((e: React.PointerEvent) => {
     if (e.button !== 0) return
     if ((e.target as HTMLElement).tagName === 'INPUT') return
@@ -85,7 +86,18 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0 }) =>
     let dyAccum = 0
     let dxAccum = 0
 
-    // Build collision slots for all other groups
+    // Expand to include any nested sub-deck members so hidden cards
+    // stay locked to their anchor during a header drag.
+    const dragIds = groupId ? expandWithNestedMembers([groupId], bs0.groups) : []
+    const initialOrigins = new Map<string, { x: number; y: number }>()
+    for (const gid of dragIds) {
+      const gg = bs0.groups.find(gr => gr.id === gid)
+      if (gg) initialOrigins.set(gid, { x: gg.originX, y: gg.originY })
+    }
+    const draggingSet = new Set(dragIds)
+
+    // Build collision slots — clamp against everything that isn't part
+    // of the drag set (so nested members don't collide with themselves).
     let mySlot: GroupSlot | null = null
     let obstacles: GroupSlot[] = []
     if (groupId && g) {
@@ -96,7 +108,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0 }) =>
       const inTimeline = initialOriginY >= zly
       obstacles = inTimeline
         ? bs0.groups
-            .filter(og => og.id !== groupId && og.originY >= zly && !isHiddenDeckMember(og))
+            .filter(og => !draggingSet.has(og.id) && og.originY >= zly && !isHiddenDeckMember(og))
             .map(og => groupSlot(og.id, og.boardIds, bs0.boards, og.originX, og.originY, computeGroupLayout(og.boardIds, bs0.boards)))
             .filter(Boolean) as GroupSlot[]
         : []  // free zone: no collision
@@ -111,20 +123,29 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0 }) =>
       dyAccum += dy
       dxAccum += dx
 
-      if (groupId) {
-        const rawY = initialOriginY + dyAccum
-        // Soft-snap to coarse grid
-        const { y: snapY, snapped } = snapToCardGrid(rawY, CARD_GRID_SPACING, 80)
-        const preClampY = snapped ? snapY : rawY
-        const preClampX = initialOriginX + dxAccum
-        // Clamp against other groups (only in timeline zone)
-        if (mySlot && obstacles.length > 0) {
-          const { dx: cdx, dy: cdy } = clampGroupMove(mySlot, preClampX - initialOriginX, preClampY - initialOriginY, obstacles)
-          useBoardsStore.getState().setGroupPos(groupId, initialOriginY + cdy, initialOriginX + cdx)
-        } else {
-          useBoardsStore.getState().setGroupPos(groupId, preClampY, preClampX)
-        }
+      if (!groupId || initialOrigins.size === 0) return
+
+      const rawY = initialOriginY + dyAccum
+      // Soft-snap to coarse grid
+      const { y: snapY, snapped } = snapToCardGrid(rawY, CARD_GRID_SPACING, 80)
+      const preClampY = snapped ? snapY : rawY
+      const preClampX = initialOriginX + dxAccum
+      // Clamp against other groups (only in timeline zone)
+      let finalDx: number, finalDy: number
+      if (mySlot && obstacles.length > 0) {
+        const { dx: cdx, dy: cdy } = clampGroupMove(mySlot, preClampX - initialOriginX, preClampY - initialOriginY, obstacles)
+        finalDx = cdx
+        finalDy = cdy
+      } else {
+        finalDx = preClampX - initialOriginX
+        finalDy = preClampY - initialOriginY
       }
+      // Move all dragging groups by the same delta — single batched store update
+      useBoardsStore.getState().setGroupPosBatch(
+        Array.from(initialOrigins, ([gid, origin]) => ({
+          groupId: gid, originY: origin.y + finalDy, originX: origin.x + finalDx,
+        }))
+      )
     }
 
     const onUp = () => {
