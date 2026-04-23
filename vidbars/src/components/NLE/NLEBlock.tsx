@@ -147,8 +147,10 @@ export const NLEBlock: React.FC<Props> = React.memo(({ id, top, blockHeight, off
   const isReorderMode = useRef(false)
   const leftEdgeLastX = useRef(0)
   const rightEdgeLastX = useRef(0)
-  const cornerLastX = useRef(0)
+  const cornerLastX = useRef(0)    // bottom-right corner
   const cornerLastY = useRef(0)
+  const cornerBLLastX = useRef(0)  // bottom-left corner
+  const cornerBLLastY = useRef(0)
 
   useEffect(() => { if (isRenaming) { nameRef.current?.focus(); nameRef.current?.select() } }, [isRenaming])
   useEffect(() => { if (isRenamingSubtitle) { subtitleRef.current?.focus(); subtitleRef.current?.select() } }, [isRenamingSubtitle])
@@ -395,6 +397,46 @@ export const NLEBlock: React.FC<Props> = React.memo(({ id, top, blockHeight, off
           useBoardsStore.getState().setBarHeight(boardId, sid, newH)
         })
         cornerLastY.current = ev.clientY
+      }
+    }
+    const onUp = () => { window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp) }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }, [id, ctx.boardId])
+
+  // Bottom-left corner: mirror of onCornerDown — drags the LEFT edge (width+x
+  // via resizeBarEdge) and bottom edge (height) together. Shift snaps aspect.
+  const onCornerBLDown = useCallback((e: React.PointerEvent) => {
+    if (e.button !== 0) return
+    e.stopPropagation()
+    useUndoCoordinator.getState().checkpoint()
+    cornerBLLastX.current = e.clientX
+    cornerBLLastY.current = e.clientY
+    const boardId = ctx.boardId
+    const onMove = (ev: PointerEvent) => {
+      const z = useCanvasStore.getState().zoom || 1
+      const dx = (ev.clientX - cornerBLLastX.current) / z
+      const dy = (ev.clientY - cornerBLLastY.current) / z
+      const selIds = useBoardsStore.getState().boards[boardId]?.selectedIds ?? []
+      const curBars = useBoardsStore.getState().boards[boardId]?.bars ?? {}
+      const targets = selIds.includes(id) && selIds.length > 1 ? selIds : [id]
+      if (dx !== 0) {
+        targets.forEach(sid => useBoardsStore.getState().resizeBarEdge(boardId, sid, 'left', dx))
+        cornerBLLastX.current = ev.clientX
+      }
+      if (dy !== 0) {
+        targets.forEach(sid => {
+          const b = curBars[sid]
+          if (!b) return
+          let newH = b.height + dy
+          if (ev.shiftKey) {
+            const ratio = newH / b.width
+            const snapped = SNAP_RATIOS.find(r => Math.abs(ratio - r) / r < SNAP_THRESHOLD)
+            if (snapped) newH = b.width * snapped
+          }
+          useBoardsStore.getState().setBarHeight(boardId, sid, newH)
+        })
+        cornerBLLastY.current = ev.clientY
       }
     }
     const onUp = () => { window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp) }
@@ -1217,6 +1259,30 @@ export const NLEBlock: React.FC<Props> = React.memo(({ id, top, blockHeight, off
                   onClick={e => { e.stopPropagation(); mediaInputRef.current?.click() }}
                   title="Add media"
                 >+</button>
+              </div>
+
+              {/* ── CORNER grip (bottom-left) — resize width-from-left + height ── */}
+              <div
+                style={{
+                  position: 'absolute',
+                  bottom: 0, left: 0,
+                  width: cornerW, height: cornerW,
+                  background: cornerBg,
+                  cursor: 'nesw-resize',
+                  pointerEvents: 'all',
+                  display: 'flex',
+                  alignItems: 'flex-end',
+                  justifyContent: 'flex-start',
+                  padding: `0 0 ${cornerW * 0.18}px ${cornerW * 0.18}px`,
+                  zIndex: 5,
+                }}
+                onPointerDown={onCornerBLDown}
+                title="Drag to resize"
+              >
+                <svg width="60%" height="60%" viewBox="0 0 10 10" style={{ pointerEvents: 'none', display: 'block' }}>
+                  <line x1="0" y1="3" x2="7" y2="10" stroke="rgba(255,255,255,0.85)" strokeWidth="1.4" strokeLinecap="round" />
+                  <line x1="0" y1="6" x2="4" y2="10" stroke="rgba(255,255,255,0.85)" strokeWidth="1.4" strokeLinecap="round" />
+                </svg>
               </div>
 
               {/* ── CORNER grip (bottom-right) — resize both dimensions ── */}

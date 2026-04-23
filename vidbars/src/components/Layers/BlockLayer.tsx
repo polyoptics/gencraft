@@ -317,8 +317,11 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
     window.addEventListener('pointerup', onUp)
   }
 
-  // ── Resize: right / bottom / corner handles ──
-  const onResizeDown = useCallback((e: React.PointerEvent, edge: 'right' | 'bottom' | 'corner') => {
+  // ── Resize: edge-based, right/left/bottom + two bottom corners ──
+  // Left-edge drag pins the block's right edge in place: width grows/shrinks
+  // and the block's X (nleX if grouped, canvasX if ungrouped) shifts by the
+  // inverse delta. No top resize (we never grow blocks upward).
+  const onResizeDown = useCallback((e: React.PointerEvent, edge: 'right' | 'left' | 'bottom' | 'bottom-right' | 'bottom-left') => {
     if (e.button !== 0) return
     e.stopPropagation()
     e.preventDefault()
@@ -328,18 +331,46 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
     const startY = e.clientY
     const startW = width
     const startH = height
+    const bs0 = useBoardsStore.getState()
+    const startBoard = bs0.boards[boardId]
+    const startLeftX = isUngroupedBlock ? (startBoard?.canvasX ?? 0) : (startBoard?.nleX ?? 0)
+    const startRight = startLeftX + startW
+    const startCanvasY = startBoard?.canvasY ?? 0
+    const startNleRow = startBoard?.nleRow ?? 0
+    const isLeftEdge   = edge === 'left'   || edge === 'bottom-left'
+    const isRightEdge  = edge === 'right'  || edge === 'bottom-right'
+    const isBottomEdge = edge === 'bottom' || edge === 'bottom-left' || edge === 'bottom-right'
 
     const onMove = (ev: PointerEvent) => {
       const z = useCanvasStore.getState().zoom
       const dx = (ev.clientX - startX) / z
       const dy = (ev.clientY - startY) / z
-      const newW = edge === 'bottom' ? startW : Math.max(contentW, startW + dx)
-      const newH = edge === 'right' ? startH : Math.max(contentH, startH + dy)
+
+      let newW = startW
+      let newH = startH
+      let newX = startLeftX
+      if (isRightEdge) {
+        newW = Math.max(contentW, startW + dx)
+      } else if (isLeftEdge) {
+        newW = Math.max(contentW, startW - dx)
+        newX = startRight - newW
+      }
+      if (isBottomEdge) {
+        newH = Math.max(contentH, startH + dy)
+      }
+
       useBoardsStore.getState().setBlockSize(
         boardId,
         newW > contentW ? newW : undefined,
         newH > contentH ? newH : undefined,
       )
+      if (isLeftEdge && newX !== startLeftX) {
+        if (isUngroupedBlock) {
+          useBoardsStore.getState().setUngroupedBoardPos(boardId, newX, startCanvasY)
+        } else {
+          useBoardsStore.getState().setBoardNlePos(boardId, startNleRow, newX)
+        }
+      }
     }
     const onUp = () => {
       window.removeEventListener('pointermove', onMove)
@@ -347,7 +378,7 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
     }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
-  }, [boardId, width, height, contentW, contentH])
+  }, [boardId, width, height, contentW, contentH, isUngroupedBlock])
 
   // ── Two-level positioning: group origin + local row ──
   const siblingRowKey = useBoardsStore(s => {
@@ -517,40 +548,92 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
         }}>
           {displayLabel}
         </div>
-      </div>
 
-      {/* ── Resize handles ── */}
-      {isHovered && (
-        <>
-          {/* Right edge */}
-          <div
-            style={{
-              position: 'absolute', top: BLOCK_HEADER_H + 8, right: 0, width: 6,
-              height: height - 16, cursor: 'col-resize', zIndex: 50,
-              background: 'rgba(130,180,255,0.4)', borderRadius: 3, opacity: 0.7,
-            }}
-            onPointerDown={e => onResizeDown(e, 'right')}
-          />
-          {/* Bottom edge */}
-          <div
-            style={{
-              position: 'absolute', bottom: 0, left: left + 8, height: 6,
-              width: width - 16, cursor: 'row-resize', zIndex: 50,
-              background: 'rgba(130,180,255,0.4)', borderRadius: 3, opacity: 0.7,
-            }}
-            onPointerDown={e => onResizeDown(e, 'bottom')}
-          />
-          {/* Corner */}
-          <div
-            style={{
-              position: 'absolute', bottom: 0, right: 0, width: 12, height: 12,
-              cursor: 'nwse-resize', zIndex: 51,
-              background: 'rgba(130,180,255,0.6)', borderRadius: '3px 0 3px 0',
-            }}
-            onPointerDown={e => onResizeDown(e, 'corner')}
-          />
-        </>
-      )}
+        {/* ── Reactive resize border (hover) ──
+           Same pattern as the node overlay: thick semi-transparent strips on
+           left/right/bottom edges with chunkier corner grips at the two
+           bottom corners. No top edge (no upward resize). Sizes scale with
+           zoom so they stay clickable at any block-layer zoom. */}
+        {isHovered && (() => {
+          const edgeW   = Math.max(6 / zoom, 6)
+          const cornerW = Math.max(12 / zoom, 10)
+          const edgeBg   = 'rgba(255,255,255,0.16)'
+          const cornerBg = 'rgba(255,255,255,0.26)'
+          return (
+            <>
+              {/* Left edge */}
+              <div
+                style={{
+                  position: 'absolute', left: 0, top: 0, bottom: 0,
+                  width: edgeW, background: edgeBg, cursor: 'ew-resize', zIndex: 50,
+                }}
+                onPointerDown={e => onResizeDown(e, 'left')}
+                title="Drag to resize width"
+              />
+              {/* Right edge */}
+              <div
+                style={{
+                  position: 'absolute', right: 0, top: 0, bottom: 0,
+                  width: edgeW, background: edgeBg, cursor: 'ew-resize', zIndex: 50,
+                }}
+                onPointerDown={e => onResizeDown(e, 'right')}
+                title="Drag to resize width"
+              />
+              {/* Bottom edge */}
+              <div
+                style={{
+                  position: 'absolute', left: 0, right: 0, bottom: 0,
+                  height: edgeW, background: edgeBg, cursor: 'ns-resize', zIndex: 50,
+                }}
+                onPointerDown={e => onResizeDown(e, 'bottom')}
+                title="Drag to resize height"
+              />
+              {/* Bottom-left corner */}
+              <div
+                style={{
+                  position: 'absolute', bottom: 0, left: 0,
+                  width: cornerW, height: cornerW,
+                  background: cornerBg,
+                  cursor: 'nesw-resize',
+                  zIndex: 51,
+                  display: 'flex',
+                  alignItems: 'flex-end',
+                  justifyContent: 'flex-start',
+                  padding: `0 0 ${cornerW * 0.18}px ${cornerW * 0.18}px`,
+                }}
+                onPointerDown={e => onResizeDown(e, 'bottom-left')}
+                title="Drag to resize"
+              >
+                <svg width="60%" height="60%" viewBox="0 0 10 10" style={{ pointerEvents: 'none', display: 'block' }}>
+                  <line x1="0" y1="3" x2="7" y2="10" stroke="rgba(255,255,255,0.85)" strokeWidth="1.4" strokeLinecap="round" />
+                  <line x1="0" y1="6" x2="4" y2="10" stroke="rgba(255,255,255,0.85)" strokeWidth="1.4" strokeLinecap="round" />
+                </svg>
+              </div>
+              {/* Bottom-right corner */}
+              <div
+                style={{
+                  position: 'absolute', bottom: 0, right: 0,
+                  width: cornerW, height: cornerW,
+                  background: cornerBg,
+                  cursor: 'nwse-resize',
+                  zIndex: 51,
+                  display: 'flex',
+                  alignItems: 'flex-end',
+                  justifyContent: 'flex-end',
+                  padding: `0 ${cornerW * 0.18}px ${cornerW * 0.18}px 0`,
+                }}
+                onPointerDown={e => onResizeDown(e, 'bottom-right')}
+                title="Drag to resize"
+              >
+                <svg width="60%" height="60%" viewBox="0 0 10 10" style={{ pointerEvents: 'none', display: 'block' }}>
+                  <line x1="3" y1="10" x2="10" y2="3" stroke="rgba(255,255,255,0.85)" strokeWidth="1.4" strokeLinecap="round" />
+                  <line x1="6" y1="10" x2="10" y2="6" stroke="rgba(255,255,255,0.85)" strokeWidth="1.4" strokeLinecap="round" />
+                </svg>
+              </div>
+            </>
+          )
+        })()}
+      </div>
 
       {colorPicker && (
         <ColorPickerPopup
