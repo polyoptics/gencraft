@@ -341,6 +341,26 @@ export const NLEBlock: React.FC<Props> = React.memo(({ id, top, blockHeight, off
     window.addEventListener('pointerup', onUp)
   }, [id, resizeBarEdge])
 
+  const bottomEdgeLastY = useRef(0)
+  const onBottomDown = useCallback((e: React.PointerEvent) => {
+    if (e.button !== 0) return
+    e.stopPropagation()
+    useUndoCoordinator.getState().checkpoint()
+    bottomEdgeLastY.current = e.clientY
+    const boardId = ctx.boardId
+    const onMove = (ev: PointerEvent) => {
+      const z = useCanvasStore.getState().zoom || 1
+      const dy = (ev.clientY - bottomEdgeLastY.current) / z
+      const cur = useBoardsStore.getState().boards[boardId]?.bars[id]
+      if (!cur) return
+      useBoardsStore.getState().setBarHeight(boardId, id, cur.height + dy)
+      bottomEdgeLastY.current = ev.clientY
+    }
+    const onUp = () => { window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp) }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }, [id, ctx.boardId])
+
   const SNAP_RATIOS = [9 / 16, 1, 16 / 9]
   const SNAP_THRESHOLD = 0.07
 
@@ -472,49 +492,6 @@ export const NLEBlock: React.FC<Props> = React.memo(({ id, top, blockHeight, off
   const bg = bar.color
   const pillBg = darken(bg, 0.38)
   const nodeSelFx = isSelected ? selectionHighlight(bar.color, { ringWidthPx: 2.5, glowBlurPx: 22 }) : null
-
-  const overlayPill: React.CSSProperties = {
-    background: 'rgba(0,0,0,0.22)',
-    border: '1px solid rgba(255,255,255,0.09)',
-    borderRadius: 20,
-    color: 'rgba(255,255,255,0.65)',
-    fontSize: 10,
-    fontWeight: 600,
-    padding: '3px 11px',
-    cursor: 'pointer',
-    letterSpacing: '0.3px',
-    userSelect: 'none',
-    backdropFilter: 'blur(4px)',
-    lineHeight: 1.4,
-  }
-
-  const smallHandle: React.CSSProperties = {
-    background: 'rgba(0,0,0,0.20)',
-    border: '1px solid rgba(255,255,255,0.08)',
-    borderRadius: 5,
-    color: 'rgba(255,255,255,0.45)',
-    fontSize: 12,
-    fontWeight: 900,
-    width: 20, height: 20,
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    cursor: 'ew-resize',
-    userSelect: 'none',
-    flexShrink: 0,
-  }
-
-  const smallPlus: React.CSSProperties = {
-    background: 'rgba(0,0,0,0.20)',
-    border: '1px solid rgba(255,255,255,0.08)',
-    borderRadius: '50%',
-    color: 'rgba(255,255,255,0.5)',
-    fontSize: 14,
-    fontWeight: 700,
-    width: 20, height: 20,
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    cursor: 'pointer',
-    userSelect: 'none',
-    flexShrink: 0,
-  }
 
   return (
     <>
@@ -867,6 +844,32 @@ export const NLEBlock: React.FC<Props> = React.memo(({ id, top, blockHeight, off
           </div>
         </div>
 
+        {/* ── Delete button (always visible, paired with the drag grip) ── */}
+        <div
+          style={{
+            position: 'absolute', top: 3, right: 6,
+            width: 22, height: 28,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            cursor: 'pointer',
+            zIndex: 20,
+          }}
+          onPointerDown={e => e.stopPropagation()}
+          onClick={e => { e.stopPropagation(); useUndoCoordinator.getState().checkpoint(); ctx.deleteBar(id) }}
+          onMouseEnter={e => { (e.currentTarget.firstChild as HTMLElement).style.opacity = '1' }}
+          onMouseLeave={e => { (e.currentTarget.firstChild as HTMLElement).style.opacity = isHovered ? '0.7' : '0.25' }}
+          title="Delete"
+        >
+          <div style={{
+            color: 'rgba(255,255,255,0.95)',
+            fontSize: 15,
+            fontWeight: 600,
+            lineHeight: 1,
+            opacity: isHovered ? 0.7 : 0.25,
+            transition: 'opacity 0.12s',
+            userSelect: 'none',
+          }}>×</div>
+        </div>
+
         {/* ── Ports (draggable for rewiring) ── */}
         {bar.rowIndex > 0 && (
           <div
@@ -1017,77 +1020,232 @@ export const NLEBlock: React.FC<Props> = React.memo(({ id, top, blockHeight, off
           title={bar.children.length > 0 ? (bar.collapsed ? 'Expand children' : 'Collapse children') : undefined}
         />
 
-        {/* ── Corner resize ── */}
-        <div
-          data-handle="corner"
-          style={{
-            position: 'absolute', bottom: 0, right: 0,
-            width: 44, height: 44, cursor: 'nwse-resize', zIndex: 6,
-            display: 'flex', alignItems: 'flex-end', justifyContent: 'flex-end',
-            padding: '0 6px 6px 0',
-          }}
-          onPointerDown={onCornerDown}
-        >
-          <div style={{
-            display: 'grid', gridTemplateColumns: 'repeat(3, 3px)', gridTemplateRows: 'repeat(3, 3px)', gap: '2px',
-            opacity: isHovered ? 0.5 : 0.13, transition: 'opacity 0.12s',
-          }}>
-            {[...Array(9)].map((_, i) => (
-              <div key={i} style={{
-                width: 3, height: 3, borderRadius: '50%', background: 'rgba(255,255,255,0.95)',
-                opacity: (i === 0 || i === 1 || i === 3) ? 0 : 1,
-              }} />
-            ))}
-          </div>
-        </div>
+        {/* Corner resize grip has moved into the hover overlay — see below. */}
 
-        {/* ── Hover overlay ── */}
-        {isHovered && (
-          <div style={{ position: 'absolute', inset: 0, borderRadius: 12, zIndex: 15, pointerEvents: 'none' }}>
+        {/* ── Hover overlay ──
+           Edges are the primary affordance: drag the outer two-thirds of
+           left/right/bottom to resize; single-click the brighter middle
+           fourth of any edge to add a node in that direction (parent/
+           child/sibling). Top edge is add-parent-only (no resize upward). */}
+        {isHovered && (() => {
+          // Edge thickness in canvas px. At zoom < 1 we use 6/zoom so the edge
+          // stays ~6 screen px (clickable even zoomed out). At zoom >= 1 we
+          // clamp the canvas value at 6, so the on-screen thickness grows
+          // proportionally with zoom (18 screen px at 3x, etc.) — this is
+          // what "exaggerate" means here.
+          const edgeW   = Math.max(6 / zoom, 6)
+          // Corner grip: same idea, ~2x edge thickness so it reads as a corner.
+          const cornerW = Math.max(12 / zoom, 10)
+          // Middle-fourth zone size as a fraction of edge length
+          const midFrac = 0.25
+          const midStart = (1 - midFrac) / 2   // 0.375
+          // Common style helpers
+          const edgeBg    = 'rgba(255,255,255,0.16)'     // resize zones
+          const midBg     = 'rgba(255,255,255,0.34)'     // add-node zones (brighter)
+          const cornerBg  = 'rgba(255,255,255,0.26)'     // corner grip
+          // + icon inside the middle-fourth zones grows with the edge at high zoom
+          const plusFont  = Math.max(11 / zoom, 8)
+          const plusColor = 'rgba(255,255,255,0.9)'
+          const addPlus: React.CSSProperties = {
+            color: plusColor, fontSize: plusFont, fontWeight: 700, lineHeight: 1,
+            userSelect: 'none', pointerEvents: 'none',
+          }
+          // Media + button — now follows the same pattern as edges/corner so
+          // it tracks with the node at high zoom instead of staying oversized
+          // when zoomed out. ~18 screen px at low zoom, grows at zoom >= 1.5.
+          const mediaSz   = Math.max(18 / zoom, 12)
+          const mediaFont = Math.max(12 / zoom, 8)
+          return (
+            <div style={{ position: 'absolute', inset: 0, borderRadius: 12, zIndex: 15, pointerEvents: 'none', overflow: 'hidden' }}>
 
-            <button
-              style={{
-                position: 'absolute', top: 8, right: 8,
-                width: 22, height: 22, borderRadius: '50%',
-                background: 'rgba(0,0,0,0.35)', border: '1px solid rgba(255,255,255,0.12)',
-                color: 'rgba(255,255,255,0.75)', fontSize: 13, cursor: 'pointer',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                zIndex: 20, lineHeight: 1, pointerEvents: 'all',
-              }}
-              onPointerDown={e => e.stopPropagation()}
-              onClick={e => { e.stopPropagation(); useUndoCoordinator.getState().checkpoint(); ctx.deleteBar(id) }}
-              title="Delete"
-            >×</button>
-
-            <div style={{ position: 'absolute', top: 8, left: 0, right: 0, display: 'flex', justifyContent: 'center', pointerEvents: 'all' }}>
-              <button style={overlayPill} onPointerDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); useUndoCoordinator.getState().checkpoint(); addParentAbove(id) }}>Parent</button>
-            </div>
-
-            <div style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 4, pointerEvents: 'all' }}>
-              <div style={smallHandle} onPointerDown={onLeftDown} title="Drag to resize left">›</div>
-              <button style={smallPlus} onPointerDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); useUndoCoordinator.getState().checkpoint(); addSiblingBar(id, 'before') }} title="Add node to the left">+</button>
-            </div>
-
-            <div style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 4, pointerEvents: 'all' }}>
-              <button style={smallPlus} onPointerDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); useUndoCoordinator.getState().checkpoint(); addSiblingBar(id, 'after') }} title="Add node to the right">+</button>
-              <div style={smallHandle} onPointerDown={onRightDown} title="Drag to resize right">‹</div>
-            </div>
-
-            <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
-              <button
-                style={{ ...smallPlus, width: 28, height: 28, fontSize: 18, background: 'rgba(0,0,0,0.22)', pointerEvents: 'all' }}
+              {/* ── TOP edge: only the middle-fourth segment (no resize) ── */}
+              <div
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: `${midStart * 100}%`,
+                  width: `${midFrac * 100}%`,
+                  height: edgeW,
+                  background: midBg,
+                  borderRadius: `${edgeW / 2}px ${edgeW / 2}px 0 0`,
+                  cursor: 'pointer',
+                  pointerEvents: 'all',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}
                 onPointerDown={e => e.stopPropagation()}
-                onClick={e => { e.stopPropagation(); mediaInputRef.current?.click() }}
-                title="Add media"
-              >+</button>
-            </div>
+                onDoubleClick={e => e.stopPropagation()}
+                onClick={e => { e.stopPropagation(); useUndoCoordinator.getState().checkpoint(); addParentAbove(id) }}
+                title="Add parent above"
+              >
+                <div style={addPlus}>+</div>
+              </div>
 
-            <div style={{ position: 'absolute', bottom: 8, left: 0, right: 0, display: 'flex', justifyContent: 'center', pointerEvents: 'all' }}>
-              <button style={overlayPill} onPointerDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); useUndoCoordinator.getState().checkpoint(); addChildToBar(id) }}>Child</button>
-            </div>
+              {/* ── BOTTOM edge: outer thirds = resize height, middle-fourth = add child ── */}
+              <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: edgeW, pointerEvents: 'none' }}>
+                <div
+                  style={{
+                    position: 'absolute', left: 0, top: 0,
+                    width: `${midStart * 100}%`, height: '100%',
+                    background: edgeBg, cursor: 'ns-resize', pointerEvents: 'all',
+                  }}
+                  onPointerDown={onBottomDown}
+                  title="Drag to resize height"
+                />
+                <div
+                  style={{
+                    position: 'absolute', left: `${midStart * 100}%`, top: 0,
+                    width: `${midFrac * 100}%`, height: '100%',
+                    background: midBg, cursor: 'pointer', pointerEvents: 'all',
+                    borderRadius: `0 0 ${edgeW / 2}px ${edgeW / 2}px`,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}
+                  onPointerDown={e => e.stopPropagation()}
+                  onDoubleClick={e => e.stopPropagation()}
+                  onClick={e => { e.stopPropagation(); useUndoCoordinator.getState().checkpoint(); addChildToBar(id) }}
+                  title="Add child below"
+                >
+                  <div style={addPlus}>+</div>
+                </div>
+                <div
+                  style={{
+                    position: 'absolute', right: 0, top: 0,
+                    width: `${midStart * 100}%`, height: '100%',
+                    background: edgeBg, cursor: 'ns-resize', pointerEvents: 'all',
+                  }}
+                  onPointerDown={onBottomDown}
+                  title="Drag to resize height"
+                />
+              </div>
 
-          </div>
-        )}
+              {/* ── LEFT edge: outer thirds = resize width, middle-fourth = add sibling-left ── */}
+              <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: edgeW, pointerEvents: 'none' }}>
+                <div
+                  style={{
+                    position: 'absolute', top: 0, left: 0,
+                    height: `${midStart * 100}%`, width: '100%',
+                    background: edgeBg, cursor: 'ew-resize', pointerEvents: 'all',
+                    borderRadius: `${edgeW / 2}px 0 0 0`,
+                  }}
+                  onPointerDown={onLeftDown}
+                  title="Drag to resize width"
+                />
+                <div
+                  style={{
+                    position: 'absolute', top: `${midStart * 100}%`, left: 0,
+                    height: `${midFrac * 100}%`, width: '100%',
+                    background: midBg, cursor: 'pointer', pointerEvents: 'all',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}
+                  onPointerDown={e => e.stopPropagation()}
+                  onDoubleClick={e => e.stopPropagation()}
+                  onClick={e => { e.stopPropagation(); useUndoCoordinator.getState().checkpoint(); addSiblingBar(id, 'before') }}
+                  title="Add node to the left"
+                >
+                  <div style={addPlus}>+</div>
+                </div>
+                <div
+                  style={{
+                    position: 'absolute', bottom: 0, left: 0,
+                    height: `${midStart * 100}%`, width: '100%',
+                    background: edgeBg, cursor: 'ew-resize', pointerEvents: 'all',
+                    borderRadius: `0 0 0 ${edgeW / 2}px`,
+                  }}
+                  onPointerDown={onLeftDown}
+                  title="Drag to resize width"
+                />
+              </div>
+
+              {/* ── RIGHT edge: outer thirds = resize width, middle-fourth = add sibling-right ── */}
+              <div style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: edgeW, pointerEvents: 'none' }}>
+                <div
+                  style={{
+                    position: 'absolute', top: 0, right: 0,
+                    height: `${midStart * 100}%`, width: '100%',
+                    background: edgeBg, cursor: 'ew-resize', pointerEvents: 'all',
+                    borderRadius: `0 ${edgeW / 2}px 0 0`,
+                  }}
+                  onPointerDown={onRightDown}
+                  title="Drag to resize width"
+                />
+                <div
+                  style={{
+                    position: 'absolute', top: `${midStart * 100}%`, right: 0,
+                    height: `${midFrac * 100}%`, width: '100%',
+                    background: midBg, cursor: 'pointer', pointerEvents: 'all',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}
+                  onPointerDown={e => e.stopPropagation()}
+                  onDoubleClick={e => e.stopPropagation()}
+                  onClick={e => { e.stopPropagation(); useUndoCoordinator.getState().checkpoint(); addSiblingBar(id, 'after') }}
+                  title="Add node to the right"
+                >
+                  <div style={addPlus}>+</div>
+                </div>
+                <div
+                  style={{
+                    position: 'absolute', bottom: 0, right: 0,
+                    height: `${midStart * 100}%`, width: '100%',
+                    background: edgeBg, cursor: 'ew-resize', pointerEvents: 'all',
+                    borderRadius: `0 0 ${edgeW / 2}px 0`,
+                  }}
+                  onPointerDown={onRightDown}
+                  title="Drag to resize width"
+                />
+              </div>
+
+              {/* ── CENTER: add media ── */}
+              <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
+                <button
+                  style={{
+                    width: mediaSz, height: mediaSz,
+                    borderRadius: '50%',
+                    background: 'rgba(255,255,255,0.28)',
+                    border: `${Math.max(1 / zoom, 0.5)}px solid rgba(255,255,255,0.22)`,
+                    color: plusColor,
+                    fontSize: mediaFont,
+                    fontWeight: 700,
+                    lineHeight: 1,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    cursor: 'pointer',
+                    userSelect: 'none',
+                    pointerEvents: 'all',
+                    padding: 0,
+                    backdropFilter: 'blur(4px)',
+                  }}
+                  onPointerDown={e => e.stopPropagation()}
+                  onDoubleClick={e => e.stopPropagation()}
+                  onClick={e => { e.stopPropagation(); mediaInputRef.current?.click() }}
+                  title="Add media"
+                >+</button>
+              </div>
+
+              {/* ── CORNER grip (bottom-right) — resize both dimensions ── */}
+              <div
+                style={{
+                  position: 'absolute',
+                  bottom: 0, right: 0,
+                  width: cornerW, height: cornerW,
+                  background: cornerBg,
+                  cursor: 'nwse-resize',
+                  pointerEvents: 'all',
+                  display: 'flex',
+                  alignItems: 'flex-end',
+                  justifyContent: 'flex-end',
+                  padding: `0 ${cornerW * 0.18}px ${cornerW * 0.18}px 0`,
+                  zIndex: 5,
+                }}
+                onPointerDown={onCornerDown}
+                title="Drag to resize"
+              >
+                <svg width="60%" height="60%" viewBox="0 0 10 10" style={{ pointerEvents: 'none', display: 'block' }}>
+                  <line x1="3" y1="10" x2="10" y2="3" stroke="rgba(255,255,255,0.85)" strokeWidth="1.4" strokeLinecap="round" />
+                  <line x1="6" y1="10" x2="10" y2="6" stroke="rgba(255,255,255,0.85)" strokeWidth="1.4" strokeLinecap="round" />
+                </svg>
+              </div>
+
+            </div>
+          )
+        })()}
       </div>
 
       {contextMenu && (
