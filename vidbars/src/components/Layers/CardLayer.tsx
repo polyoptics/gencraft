@@ -1158,6 +1158,11 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
   }, [deck.memberIds, anchorGroup.id, groups])
 
   const FAN_STRIP_WIDTH = 40 // px visible per secondary card strip
+  // How far each strip extends LEFT under the piece in front of it, so the
+  // piece in front's rounded outer corner shows the next strip through the
+  // curve (and strip 0 merges under the primary card's 12px corner).
+  const STRIP_OVERLAP = 12
+  const STRIP_RADIUS = 8
   const totalFanWidth = screenWidth + secondaryCards.length * FAN_STRIP_WIDTH
 
   const fanSelFx = isSelected ? selectionHighlight(anchorGroup.color) : null
@@ -1360,7 +1365,16 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
     >
       {/* Secondary card strips — 40px each, peeking right of primary */}
       {secondaryCards.map((sc, i) => {
-        const stripX = screenWidth + FAN_STRIP_WIDTH * i
+        // Each strip extends STRIP_OVERLAP pixels LEFT behind the piece in
+        // front of it (primary for i=0, previous strip for i>0). The piece
+        // in front has a rounded outer corner (primary: 12, strips: 8), and
+        // this strip fills the little gap outside that corner so the fan
+        // reads as one continuous stack. Strip 0 tucks under primary's 12px
+        // corner; the flat left edge of the strip sits exactly at primary's
+        // top-right-curve start so the top/bottom edges stay continuous.
+        const stripX = screenWidth + FAN_STRIP_WIDTH * i - STRIP_OVERLAP
+        const stripW = FAN_STRIP_WIDTH + STRIP_OVERLAP
+        const stripRadius = `0 ${STRIP_RADIUS}px ${STRIP_RADIUS}px 0`
         const isSurfaced = sc.id === surfacedId
 
         const scHero = (() => {
@@ -1385,22 +1399,31 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
               position: 'absolute',
               left: stripX,
               top: 0,
-              width: FAN_STRIP_WIDTH,
+              width: stripW,
               height: screenHeight,
-              borderRadius: '0 8px 8px 0',
-              background: scHero
-                ? `linear-gradient(160deg, ${sc.color}cc 0%, ${sc.color}aa 100%)`
-                : sc.color || '#5b8dd9',
+              borderRadius: stripRadius,
+              // Fully opaque — strips overlap in the fan, so any alpha <1
+              // leaks the strip behind through this one's left edge.
+              background: sc.color || '#5b8dd9',
               borderRight: '1px solid rgba(255,255,255,0.2)',
               borderTop: '1px solid rgba(255,255,255,0.12)',
               borderBottom: '1px solid rgba(255,255,255,0.12)',
               overflow: 'visible',
-              zIndex: 2 + secondaryCards.length - i, // behind primary but ordered among strips
+              // Strip 0 is at N+1, one below primary's z=10 so primary always
+              // covers its left overlap. Each subsequent strip is one below
+              // the previous. Staying at natural z on hover — popping the
+              // strip above its neighbors fights the fan geometry.
+              zIndex: 1 + secondaryCards.length - i,
               cursor: 'pointer',
               userSelect: 'none',
               pointerEvents: 'all',
-              transition: 'opacity 0.15s',
-              opacity: isSurfaced ? 0.4 : 1,
+              transition: 'filter 0.15s ease',
+              // Hover: brighten the visible surface + a right/down drop
+              // shadow that falls onto the strips below-and-right in z-order.
+              // Conveys "lifted" without breaking the stacking geometry.
+              filter: isSurfaced
+                ? 'brightness(1.22) drop-shadow(4px 6px 10px rgba(0,0,0,0.55))'
+                : 'none',
             }}
             onPointerEnter={() => setSurfacedId(sc.id)}
             onPointerLeave={() => setSurfacedId(prev => prev === sc.id ? null : prev)}
@@ -1413,12 +1436,14 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
                 backgroundSize: 'cover',
                 backgroundPosition: 'center',
                 opacity: 0.7,
-                borderRadius: '0 8px 8px 0',
+                borderRadius: stripRadius,
               }} />
             )}
-            {/* Vertical name label along the strip */}
+            {/* Vertical name label along the strip — offset by STRIP_OVERLAP
+                so the label sits in the visible FAN_STRIP_WIDTH area, not
+                under the piece in front. */}
             <div style={{
-              position: 'absolute', top: 8, left: 4, right: 4, bottom: 8,
+              position: 'absolute', top: 8, left: STRIP_OVERLAP + 4, right: 4, bottom: 8,
               writingMode: 'vertical-rl', textOrientation: 'mixed',
               color: 'rgba(255,255,255,0.85)', fontSize: 10, fontWeight: 600,
               textShadow: '0 1px 3px rgba(0,0,0,0.8)',
@@ -1427,11 +1452,12 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
             }}>
               {sc.name}
             </div>
-            {/* Sub-deck indicator — horizontal tab above the strip with tapering edges */}
+            {/* Sub-deck indicator — horizontal tab above the strip with tapering edges.
+                Shifted by STRIP_OVERLAP so it sits above the visible slice only. */}
             {isSubDeck && (
               <div style={{
                 position: 'absolute',
-                left: 0, bottom: '100%',
+                left: STRIP_OVERLAP, bottom: '100%',
                 width: FAN_STRIP_WIDTH,
                 height: 18,
                 pointerEvents: 'none',
