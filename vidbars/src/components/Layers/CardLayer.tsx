@@ -340,8 +340,8 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
 
     if (globalMinX === Infinity) return { screenLeft: 0, screenTop: 0, screenWidth: 0, cardHeight: 0, headerPad: 0, contentCanvasW: 0, contentCanvasH: 0, color: group.color }
 
-    globalMinX -= 16
-    globalMaxX += 16
+    // Card visual bounds match the content exactly. Collision/push and deck
+    // clustering use separate padded bounds (useCardDecks / nlePush).
 
     const cW = globalMaxX - globalMinX
     const cH = bottomY - topY
@@ -601,7 +601,8 @@ const UngroupedBoardCardInner: React.FC<{ boardId: string }> = ({ boardId }) => 
   const contentW = Math.max(rawContentW, cardWOverride ?? 0)
   const contentH = Math.max(rawContentH, cardHOverride ?? 0)
 
-  const screenLeft = pan.x + (cx + BOARD_PADDING_X + minBarX * bScale - 16) * zoom
+  // Card visual bounds match content exactly (no outer padding).
+  const screenLeft = pan.x + (cx + BOARD_PADDING_X + minBarX * bScale) * zoom
   const screenTop = pan.y + cy * zoom
   const screenWidth = contentW * zoom
   const screenHeight = contentH * zoom
@@ -763,7 +764,7 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
     })
 
     if (globalMinX === Infinity) return { screenLeft: 0, screenTop: 0, screenWidth: 0, screenHeight: 0, headerPad: 0 }
-    globalMinX -= 16; globalMaxX += 16
+    // Card visual bounds match the content exactly (no outer padding).
     const cW = globalMaxX - globalMinX, cH = bottomY - topY
     const finalW = Math.max(cW, anchorGroup.cardWidthOverride ?? 0)
     const finalH = Math.max(cH, anchorGroup.cardHeightOverride ?? 0)
@@ -1128,7 +1129,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
     })
 
     if (globalMinX === Infinity) return { screenLeft: 0, screenTop: 0, screenWidth: 0, screenHeight: 0, headerPad: 0 }
-    globalMinX -= 16; globalMaxX += 16
+    // Card visual bounds match the content exactly (no outer padding).
     const cW = globalMaxX - globalMinX, cH = bottomY - topY
     const finalW = Math.max(cW, anchorGroup.cardWidthOverride ?? 0)
     const finalH = Math.max(cH, anchorGroup.cardHeightOverride ?? 0)
@@ -1704,7 +1705,7 @@ export function cardScreenRect(g: ProjectGroup, boards: Record<string, import('.
     if (by + visualH > bottomY) bottomY = by + visualH
   })
   if (gMinX === Infinity) return null
-  gMinX -= 16; gMaxX += 16
+  // Card visual bounds match content exactly.
   const cW = gMaxX - gMinX, cH = bottomY - topY
   const finalW = Math.max(cW, g.cardWidthOverride ?? 0)
   const finalH = Math.max(cH, g.cardHeightOverride ?? 0)

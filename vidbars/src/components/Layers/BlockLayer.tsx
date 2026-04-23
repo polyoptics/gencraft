@@ -89,7 +89,10 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
   const thumbnailTransform = board.layers?.block?.thumbnailTransform
     ?? (board.layers?.block?.thumbnail ? undefined : rootBars.reduce<import('../../store/boardsStore').HeroImageTransform | undefined>((found, b) => found || (getFirstImageUrl(b.content) ? b.content.imageTransform : undefined), undefined))
 
-  const displayLabel = board.layers?.block?.label || board.projectName
+  // Falls back through: block label → projectName → "New Block" placeholder
+  const labelText = board.layers?.block?.label || board.projectName || ''
+  const isLabelPlaceholder = !labelText
+  const displayLabel = labelText || 'New Block'
 
   const isUngroupedBlock = !myGroup
   const groupColor = myGroup?.color ?? '#5b8dd9'
@@ -460,6 +463,7 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
             ref={nameInputRef}
             autoFocus
             value={renameVal}
+            placeholder="New Block"
             onChange={e => setRenameVal(e.target.value)}
             onBlur={commitRename}
             onKeyDown={e => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') setRenaming(false) }}
@@ -479,8 +483,12 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
           />
         ) : (
           <span
-            style={{ color: 'rgba(255,255,255,0.75)', fontSize: 11 / zoom, fontWeight: 700, letterSpacing: '0.3px', cursor: 'text', whiteSpace: 'nowrap' }}
-            onDoubleClick={e => { e.stopPropagation(); setRenameVal(displayLabel); setRenaming(true) }}
+            style={{
+              color: isLabelPlaceholder ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.75)',
+              fontStyle: isLabelPlaceholder ? 'italic' : 'normal',
+              fontSize: 11 / zoom, fontWeight: 700, letterSpacing: '0.3px', cursor: 'text', whiteSpace: 'nowrap',
+            }}
+            onDoubleClick={e => { e.stopPropagation(); setRenameVal(labelText); setRenaming(true) }}
           >{displayLabel}</span>
         )}
 
@@ -541,7 +549,9 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
         <BlockText boardId={boardId} width={width} thumbnail={thumbnail} onCropImage={() => setIsEditingImage(true)} />
         <div style={{
           position: 'absolute', bottom: 6, left: 8, zIndex: 2,
-          color: 'rgba(255,255,255,0.7)', fontSize: 11, fontWeight: 600,
+          color: isLabelPlaceholder ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.7)',
+          fontStyle: isLabelPlaceholder ? 'italic' : 'normal',
+          fontSize: 11, fontWeight: 600,
           textShadow: '0 1px 4px rgba(0,0,0,0.8)',
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           maxWidth: width - 16,

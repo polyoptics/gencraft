@@ -387,6 +387,7 @@ export const Board: React.FC<Props> = React.memo(({ boardId }) => {
               ref={nameInputRef}
               autoFocus
               value={renameVal}
+              placeholder="New Board"
               onChange={e => setRenameVal(e.target.value)}
               onBlur={commitRename}
               onKeyDown={e => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') setRenaming(false) }}
@@ -402,9 +403,13 @@ export const Board: React.FC<Props> = React.memo(({ boardId }) => {
           ) : (
             <span
               data-name="true"
-              style={{ color: 'rgba(255,255,255,0.75)', fontSize: 11 / zoom, fontWeight: 700, letterSpacing: '0.3px', cursor: 'text', whiteSpace: 'nowrap' }}
+              style={{
+                color: projectName ? 'rgba(255,255,255,0.75)' : 'rgba(255,255,255,0.35)',
+                fontStyle: projectName ? 'normal' : 'italic',
+                fontSize: 11 / zoom, fontWeight: 700, letterSpacing: '0.3px', cursor: 'text', whiteSpace: 'nowrap',
+              }}
               onDoubleClick={e => { e.stopPropagation(); setRenameVal(projectName); setRenaming(true) }}
-            >{projectName}</span>
+            >{projectName || 'New Board'}</span>
           )}
 
           <div style={{ flex: 1 }} />

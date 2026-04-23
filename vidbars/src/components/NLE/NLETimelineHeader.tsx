@@ -267,6 +267,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0 }) =>
       ref={inputRef}
       autoFocus
       value={renameVal}
+      placeholder="New Card"
       onChange={e => setRenameVal(e.target.value)}
       onBlur={commitRename}
       onKeyDown={e => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') setRenaming(false) }}
@@ -290,7 +291,8 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0 }) =>
     <span
       onDoubleClick={e => { e.stopPropagation(); setRenameVal(headerName); setRenaming(true) }}
       style={{
-        color: 'rgba(255,255,255,0.92)',
+        color: headerName ? 'rgba(255,255,255,0.92)' : 'rgba(255,255,255,0.35)',
+        fontStyle: headerName ? 'normal' : 'italic',
         fontSize: 10,
         fontWeight: 700,
         letterSpacing: '0.2px',
@@ -303,7 +305,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0 }) =>
         minWidth: 0,
         lineHeight: '14px',
       }}
-    >{headerName}</span>
+    >{headerName || 'New Card'}</span>
   )
 
   return (

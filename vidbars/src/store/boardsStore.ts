@@ -303,7 +303,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
     const id = crypto.randomUUID()
     const rootId = crypto.randomUUID()
     const board: BoardData = {
-      id, projectName: 'New Board', color: '#5b8dd9',
+      id, projectName: '', color: '#5b8dd9',
       nleRow, nleX,
       bars: {
         [rootId]: makeBar({ id: rootId, parentId: null, rowIndex: 0, x: 0, width: INIT_W, height: INIT_H }),
@@ -340,7 +340,8 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
     })
     const rootIds = src.rootIds.map(rid => idMap.get(rid) ?? rid)
     const board: BoardData = {
-      id, projectName: src.projectName + ' copy', color: src.color,
+      // Empty source projectName stays empty in the copy (placeholder handles the display).
+      id, projectName: src.projectName ? src.projectName + ' copy' : '', color: src.color,
       nleRow: src.nleRow, nleX: src.nleX + 40,
       bars, rootIds,
       viewerBarId: null, selectedIds: [], savedCollapsedState: null, pristine: false,
@@ -972,7 +973,10 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
     const s = get()
     const board = s.boards[boardId]
     if (!board) return
-    const name = board.projectName ?? 'New Group'
+    // Keep group.name empty for brand-new groups — the UI renders "New Card"
+    // as a dimmed placeholder when the field is empty. If the board already
+    // has a user-entered name, carry it over.
+    const name = board.projectName && board.projectName.length > 0 ? board.projectName : ''
     const color = board.color ?? '#5b8dd9'
     const id = crypto.randomUUID()
     // Use absolute position so the new group origin matches the board's current visual position
@@ -1035,7 +1039,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
     const id = crypto.randomUUID()
     const rootId = crypto.randomUUID()
     const board: BoardData = {
-      id, projectName: 'New Board', color: '#5b8dd9',
+      id, projectName: '', color: '#5b8dd9',
       nleRow: 0, nleX: 0,
       canvasX, canvasY,
       bars: {
@@ -1109,7 +1113,8 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
     const id = crypto.randomUUID()
     const newGroup: ProjectGroup = {
       id,
-      name: board.projectName ?? 'New Group',
+      // Empty so the UI renders "New Card" as a dimmed placeholder.
+      name: board.projectName && board.projectName.length > 0 ? board.projectName : '',
       color: board.color ?? '#5b8dd9',
       boardIds: [boardId],
       cardHeroImage: null,

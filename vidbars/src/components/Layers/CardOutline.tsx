@@ -33,8 +33,11 @@ export const CardOutline: React.FC<{ group: ProjectGroup }> = ({ group }) => {
       const visualH = Math.max(rowH, rootH)
       const minX = Math.min(...rootBars.map(b => b.x))
       const maxX = Math.max(...rootBars.map(b => b.x + b.width))
-      const l = bx + BOARD_PADDING_X + minX * bScale - 16
-      const r = bx + BOARD_PADDING_X + maxX * bScale + 16
+      // Outline bounds match the content bounds exactly (no outer padding).
+      // Matches the card-visual computations in CardLayer so the outline
+      // aligns with the actual card.
+      const l = bx + BOARD_PADDING_X + minX * bScale
+      const r = bx + BOARD_PADDING_X + maxX * bScale
       if (l < left) left = l
       if (r > right) right = r
       if (by < top) top = by
