@@ -1959,11 +1959,16 @@ const Overlay: React.FC = () => {
         if (deck?.state === 'fanned') {
           if (deck.anchorGroupId === g.id) {
             const memberGroups = deck.memberIds.map(id => groups.find(gr => gr.id === id)).filter(Boolean) as ProjectGroup[]
+            // Wrap the anchor's header + fan overlay in a single stacking
+            // context above the normal NLETimelineHeader z-index (51). Adjacent
+            // cards' headers render underneath this bundle when the fan extends
+            // horizontally over them. Internal z-order (primary > strips) is
+            // preserved WITHIN this context, so the curve-merge effect stays.
             return (
-              <Fragment key={g.id}>
+              <div key={g.id} style={{ position: 'relative', zIndex: 55 }}>
                 <NLETimelineHeader groupId={g.id} />
                 <FannedDeckOverlay deck={deck} groups={memberGroups} />
-              </Fragment>
+              </div>
             )
           }
           return null // non-anchor fanned member — rendered by FannedDeckOverlay
