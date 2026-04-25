@@ -1193,52 +1193,62 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
   //
   // Order MUST match StackedDeckCard's secondaryCards (which uses
   // deck.memberIds — sorted by visual rect.left in useCardDecks). Re-sorting
-  // by deckOffsetX here would diverge from rect.left whenever cards have
-  // different board.nleX or differing leftmost-bar offsets, causing strips to
-  // appear in a different slot order than what the user sees in the stacked
-  // peek view.
+  // by deckOffsetX would diverge from rect.left whenever cards have
+  // different board.nleX or differing leftmost-bar offsets, so we sort by
+  // each item's effective rect.left instead.
   //
-  // So: real members preserve deck.memberIds order. Ghosts (which have no
-  // current rect — the card sits elsewhere on canvas) are inserted by
-  // comparing slot.deckOffsetX against neighboring real members' deckOffsetX.
+  // For real members we use deck.rects directly. For ghosts (the card is no
+  // longer in the deck), we compute the rect.left it WOULD have if it were
+  // still slotted, using the card's intact boards plus its snapshotted
+  // deckOffsetX. Same formula useCardDecks runs.
   type StripItem =
-    | { kind: 'real'; group: ProjectGroup; deckOffsetX: number }
-    | { kind: 'ghost'; cardId: string; card: ProjectGroup | null; deckOffsetX: number; deckOffsetY: number }
+    | { kind: 'real'; group: ProjectGroup; deckOffsetX: number; sortKey: number }
+    | { kind: 'ghost'; cardId: string; card: ProjectGroup | null; deckOffsetX: number; deckOffsetY: number; sortKey: number }
   // (allGroups already subscribed at the top of the component for sub-deck-anchor checks)
   const secondaryItems = useMemo<StripItem[]>(() => {
+    // Compute the per-card delta between rect.left and originX. Mirrors the
+    // useCardDecks rect formula: l = bx + BOARD_PADDING_X + minX*bScale - 16
+    // where bx = originX + (board.nleX ?? 0). Delta is everything except originX.
+    const contentLeftOffset = (g: ProjectGroup): number => {
+      let leftDelta = Infinity
+      for (const bid of g.boardIds) {
+        const board = boards[bid]
+        if (!board) continue
+        const bScale = board.boardScale ?? 1
+        const rootBars = board.rootIds.map(rid => board.bars[rid]).filter(Boolean)
+        if (rootBars.length === 0) continue
+        const minX = Math.min(...rootBars.map(b => b.x))
+        const delta = (board.nleX ?? 0) + BOARD_PADDING_X + minX * bScale - 16
+        if (delta < leftDelta) leftDelta = delta
+      }
+      return leftDelta === Infinity ? 0 : leftDelta
+    }
+
     const real: StripItem[] = deck.memberIds
       .filter(id => id !== anchorGroup.id)
       .map(id => {
         const g = groups.find(gr => gr.id === id)
         if (!g) return null
-        return { kind: 'real' as const, group: g, deckOffsetX: g.deckOffsetX ?? 0 }
+        const sortKey = deck.rects.get(id)?.left ?? (anchorGroup.originX + (g.deckOffsetX ?? 0) + contentLeftOffset(g))
+        return { kind: 'real' as const, group: g, deckOffsetX: g.deckOffsetX ?? 0, sortKey }
       })
       .filter(Boolean) as StripItem[]
-    const ghosts: StripItem[] = (anchorGroup.ghostSlots ?? []).map(s => ({
-      kind: 'ghost' as const,
-      cardId: s.cardId,
-      card: allGroups.find(g => g.id === s.cardId) ?? null,
-      deckOffsetX: s.deckOffsetX,
-      deckOffsetY: s.deckOffsetY,
-    }))
-    if (ghosts.length === 0) return real
-    // Insert each ghost into the real list at the position closest to its
-    // deckOffsetX. Walk left-to-right; the first real member with a strictly
-    // larger deckOffsetX is where the ghost slots in.
-    const merged: StripItem[] = [...real]
-    for (const ghost of ghosts) {
-      let insertAt = merged.length
-      for (let i = 0; i < merged.length; i++) {
-        if (merged[i].kind === 'ghost') continue // skip already-inserted ghosts
-        if (ghost.deckOffsetX < merged[i].deckOffsetX) {
-          insertAt = i
-          break
-        }
+    const ghosts: StripItem[] = (anchorGroup.ghostSlots ?? []).map(s => {
+      const card = allGroups.find(g => g.id === s.cardId) ?? null
+      // Reconstruct the ghost's would-be rect.left as if the card were still
+      // a deck member at slot.deckOffsetX from the anchor.
+      const sortKey = anchorGroup.originX + s.deckOffsetX + (card ? contentLeftOffset(card) : 0)
+      return {
+        kind: 'ghost' as const,
+        cardId: s.cardId,
+        card,
+        deckOffsetX: s.deckOffsetX,
+        deckOffsetY: s.deckOffsetY,
+        sortKey,
       }
-      merged.splice(insertAt, 0, ghost)
-    }
-    return merged
-  }, [deck.memberIds, anchorGroup.id, anchorGroup.ghostSlots, groups, allGroups])
+    })
+    return [...real, ...ghosts].sort((a, b) => a.sortKey - b.sortKey)
+  }, [deck.memberIds, deck.rects, anchorGroup.id, anchorGroup.originX, anchorGroup.ghostSlots, groups, allGroups, boards])
   // Backward-compat for any code still expecting just real members.
   const secondaryCards = secondaryItems.filter(it => it.kind === 'real').map(it => (it as any).group as ProjectGroup)
 
@@ -1488,7 +1498,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
         useCanvasStore.getState().zoomAtPoint(f, mx, my)
       }}
     >
-      {/* Secondary strips — real members and ghost slots, sorted by deckOffsetX */}
+      {/* Secondary strips — real members and ghost slots, sorted by visual rect.left */}
       {secondaryItems.map((item, i) => {
         const stripX = screenWidth + FAN_STRIP_WIDTH * i - STRIP_OVERLAP
         const stripW = FAN_STRIP_WIDTH + STRIP_OVERLAP
