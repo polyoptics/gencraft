@@ -72,8 +72,24 @@ const CardContextMenu: React.FC<{
 
   const menuItems: { label: string; icon: string; action: () => void; danger?: boolean; separator?: boolean }[] = []
 
+  // If this card is extracted (some other group holds a ghost slot for it),
+  // surface deck-tether actions at the top.
+  const extractionParent = groups.find(g => (g.ghostSlots ?? []).some(s => s.cardId === group.id))
+  if (extractionParent) {
+    const parentName = extractionParent.name || extractionParent.cardHeaderText || 'Untitled deck'
+    menuItems.push({ label: `Go to deck: ${parentName.substring(0, 24)}`, icon: '↗', action: () => {
+      useCanvasStore.getState().jumpToGroup(extractionParent.id)
+      onClose()
+    }})
+    menuItems.push({ label: 'Check back in', icon: '↩', separator: true, action: () => {
+      useUndoCoordinator.getState().checkpoint()
+      useBoardsStore.getState().returnToDeck(group.id)
+      onClose()
+    }})
+  }
+
   // Rename
-  menuItems.push({ label: 'Rename', icon: '✏️', action: () => {
+  menuItems.push({ label: 'Rename', icon: '✏️', separator: !!extractionParent, action: () => {
     const val = prompt('Card name:', group.name)
     if (val !== null) useBoardsStore.getState().renameGroup(group.id, val)
     onClose()
@@ -294,10 +310,23 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
       }))
       useBoardsStore.getState().setGroupPosBatch(updates)
     }
-    const onUp = () => {
+    const onUp = (ev: PointerEvent) => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
       setIsDragging(false)
+      // Drop-on-ghost-slot return: if the card was released over a
+      // [data-deck-slot-drop="<anchorId>:<cardId>"] element AND that cardId
+      // matches this card, snap it back into the deck.
+      const els = document.elementsFromPoint(ev.clientX, ev.clientY)
+      for (const el of els) {
+        const drop = (el as HTMLElement).dataset?.deckSlotDrop
+        if (!drop) continue
+        const [, memberId] = drop.split(':')
+        if (memberId === group.id) {
+          useBoardsStore.getState().returnToDeck(group.id)
+        }
+        break
+      }
     }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
@@ -881,9 +910,21 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
         }))
       )
     }
-    const onUp = () => {
+    const onUp = (ev: PointerEvent) => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
+      // Drop-on-ghost-slot return for extracted sub-decks rendered as
+      // StackedDeckCard: anchor might match a ghost slot on its former parent.
+      const els = document.elementsFromPoint(ev.clientX, ev.clientY)
+      for (const el of els) {
+        const drop = (el as HTMLElement).dataset?.deckSlotDrop
+        if (!drop) continue
+        const [, memberId] = drop.split(':')
+        if (memberId === anchorGroup.id) {
+          useBoardsStore.getState().returnToDeck(anchorGroup.id)
+        }
+        break
+      }
     }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
@@ -1093,6 +1134,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
   const boards = useBoardsStore(s => s.boards)
   const allGroups = useBoardsStore(s => s.groups)
   const isSelected = useBoardsStore(s => s.selectedGroupIds.includes(deck.anchorGroupId))
+  const selectedGhostIds = useCanvasStore(s => s.selectedGhostGroupIds)
   const [isHovered, setIsHovered] = useState(false)
   const [cardMenu, setCardMenu] = useState<{ x: number; y: number } | null>(null)
   const [surfacedId, setSurfacedId] = useState<string | null>(null)
@@ -1146,16 +1188,59 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
   if (screenWidth === 0) return null
 
   // Secondary groups (non-anchor members)
-  const secondaryCards = useMemo(() => {
-    return deck.memberIds
+  // Strip items combine real (non-anchor) deck members with the anchor's
+  // ghostSlots (extracted cards).
+  //
+  // Order MUST match StackedDeckCard's secondaryCards (which uses
+  // deck.memberIds — sorted by visual rect.left in useCardDecks). Re-sorting
+  // by deckOffsetX here would diverge from rect.left whenever cards have
+  // different board.nleX or differing leftmost-bar offsets, causing strips to
+  // appear in a different slot order than what the user sees in the stacked
+  // peek view.
+  //
+  // So: real members preserve deck.memberIds order. Ghosts (which have no
+  // current rect — the card sits elsewhere on canvas) are inserted by
+  // comparing slot.deckOffsetX against neighboring real members' deckOffsetX.
+  type StripItem =
+    | { kind: 'real'; group: ProjectGroup; deckOffsetX: number }
+    | { kind: 'ghost'; cardId: string; card: ProjectGroup | null; deckOffsetX: number; deckOffsetY: number }
+  // (allGroups already subscribed at the top of the component for sub-deck-anchor checks)
+  const secondaryItems = useMemo<StripItem[]>(() => {
+    const real: StripItem[] = deck.memberIds
       .filter(id => id !== anchorGroup.id)
       .map(id => {
         const g = groups.find(gr => gr.id === id)
         if (!g) return null
-        return g
+        return { kind: 'real' as const, group: g, deckOffsetX: g.deckOffsetX ?? 0 }
       })
-      .filter(Boolean) as ProjectGroup[]
-  }, [deck.memberIds, anchorGroup.id, groups])
+      .filter(Boolean) as StripItem[]
+    const ghosts: StripItem[] = (anchorGroup.ghostSlots ?? []).map(s => ({
+      kind: 'ghost' as const,
+      cardId: s.cardId,
+      card: allGroups.find(g => g.id === s.cardId) ?? null,
+      deckOffsetX: s.deckOffsetX,
+      deckOffsetY: s.deckOffsetY,
+    }))
+    if (ghosts.length === 0) return real
+    // Insert each ghost into the real list at the position closest to its
+    // deckOffsetX. Walk left-to-right; the first real member with a strictly
+    // larger deckOffsetX is where the ghost slots in.
+    const merged: StripItem[] = [...real]
+    for (const ghost of ghosts) {
+      let insertAt = merged.length
+      for (let i = 0; i < merged.length; i++) {
+        if (merged[i].kind === 'ghost') continue // skip already-inserted ghosts
+        if (ghost.deckOffsetX < merged[i].deckOffsetX) {
+          insertAt = i
+          break
+        }
+      }
+      merged.splice(insertAt, 0, ghost)
+    }
+    return merged
+  }, [deck.memberIds, anchorGroup.id, anchorGroup.ghostSlots, groups, allGroups])
+  // Backward-compat for any code still expecting just real members.
+  const secondaryCards = secondaryItems.filter(it => it.kind === 'real').map(it => (it as any).group as ProjectGroup)
 
   const FAN_STRIP_WIDTH = 40 // px visible per secondary card strip
   // How far each strip extends LEFT under the piece in front of it, so the
@@ -1163,7 +1248,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
   // curve (and strip 0 merges under the primary card's 12px corner).
   const STRIP_OVERLAP = 12
   const STRIP_RADIUS = 8
-  const totalFanWidth = screenWidth + secondaryCards.length * FAN_STRIP_WIDTH
+  const totalFanWidth = screenWidth + secondaryItems.length * FAN_STRIP_WIDTH
 
   const fanSelFx = isSelected ? selectionHighlight(anchorGroup.color) : null
 
@@ -1270,18 +1355,34 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
         }))
       )
     }
-    const onUp = () => {
+    const onUp = (ev: PointerEvent) => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
       if (!fanMoved) {
         useBoardsStore.getState().setDeckState(deck.memberIds, 'stacked')
+        return
+      }
+      // Drop-on-ghost-slot return for extracted fanned sub-decks.
+      const els = document.elementsFromPoint(ev.clientX, ev.clientY)
+      for (const el of els) {
+        const drop = (el as HTMLElement).dataset?.deckSlotDrop
+        if (!drop) continue
+        const [, memberId] = drop.split(':')
+        if (memberId === anchorGroup.id) {
+          useBoardsStore.getState().returnToDeck(anchorGroup.id)
+        }
+        break
       }
     }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
   }, [deck.memberIds, deck.anchorGroupId, anchorGroup.id, anchorGroup.boardIds])
 
-  // Drag a single card out of the fan (30px threshold to pull out)
+  // Drag a single card out of the fan (30px threshold to pull out).
+  // On threshold cross, calls extractFromDeck — the card becomes free on
+  // canvas and the parent gets a ghostSlots entry remembering the slot.
+  // The card is positioned so the cursor lands ~10px inside its top-right
+  // corner (we're "pulling it out" by the right edge of the strip).
   const onStripDown = useCallback((e: React.PointerEvent, groupId: string) => {
     if (e.button !== 0) return
     e.stopPropagation()
@@ -1289,24 +1390,48 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
 
     const startX = e.clientX
     const startY = e.clientY
+    // Snapshot at pointer-down so cursor offset is stable through zoom.
     const bs0 = useBoardsStore.getState()
+    const cs0 = useCanvasStore.getState()
+    const z0 = cs0.zoom || 1
     const g0 = bs0.groups.find(gr => gr.id === groupId)
-    const initX = g0?.originX ?? 0
-    const initY = g0?.originY ?? 0
+    if (!g0) return
+    const rect = cardScreenRect(g0, bs0.boards, cs0.pan, z0)
+    if (!rect) return
+    // Visual edges relative to origin (varies per card due to bar layout).
+    const visualLeftCanvas = (rect.screenLeft - cs0.pan.x) / z0
+    const visualTopCanvas  = (rect.screenTop  - cs0.pan.y) / z0
+    const widthCanvas      = rect.screenWidth / z0
+    const deltaX = visualLeftCanvas - g0.originX
+    const deltaY = visualTopCanvas  - g0.originY
+    // Cursor's Y offset from the strip's visual top at pointer-down.
+    const stripEl = e.currentTarget as HTMLElement
+    const stripRect = stripEl.getBoundingClientRect()
+    const vOffsetCanvas = (startY - stripRect.top) / z0
+    const rightInsetCanvas = 10
     let dragged = false
+
+    const computeOrigin = (clientX: number, clientY: number) => {
+      const cs = useCanvasStore.getState()
+      const cursorCanvasX = (clientX - cs.pan.x) / cs.zoom
+      const cursorCanvasY = (clientY - cs.pan.y) / cs.zoom
+      return {
+        originX: cursorCanvasX - deltaX - widthCanvas + rightInsetCanvas,
+        originY: cursorCanvasY - deltaY - vOffsetCanvas,
+      }
+    }
 
     const onMove = (ev: PointerEvent) => {
       const dist = Math.abs(ev.clientX - startX) + Math.abs(ev.clientY - startY)
       if (dist > 30 && !dragged) {
         dragged = true
         useUndoCoordinator.getState().checkpoint()
-        useBoardsStore.getState().setDeckState([groupId], 'open')
+        const { originX, originY } = computeOrigin(ev.clientX, ev.clientY)
+        useBoardsStore.getState().extractFromDeck(groupId, originX, originY)
       }
       if (dragged) {
-        const z = useCanvasStore.getState().zoom
-        const dx = (ev.clientX - startX) / z
-        const dy = (ev.clientY - startY) / z
-        useBoardsStore.getState().setGroupPos(groupId, initY + dy, initX + dx)
+        const { originX, originY } = computeOrigin(ev.clientX, ev.clientY)
+        useBoardsStore.getState().setGroupPos(groupId, originY, originX)
       }
     }
     const onUp = () => {
@@ -1363,18 +1488,53 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
         useCanvasStore.getState().zoomAtPoint(f, mx, my)
       }}
     >
-      {/* Secondary card strips — 40px each, peeking right of primary */}
-      {secondaryCards.map((sc, i) => {
-        // Each strip extends STRIP_OVERLAP pixels LEFT behind the piece in
-        // front of it (primary for i=0, previous strip for i>0). The piece
-        // in front has a rounded outer corner (primary: 12, strips: 8), and
-        // this strip fills the little gap outside that corner so the fan
-        // reads as one continuous stack. Strip 0 tucks under primary's 12px
-        // corner; the flat left edge of the strip sits exactly at primary's
-        // top-right-curve start so the top/bottom edges stay continuous.
+      {/* Secondary strips — real members and ghost slots, sorted by deckOffsetX */}
+      {secondaryItems.map((item, i) => {
         const stripX = screenWidth + FAN_STRIP_WIDTH * i - STRIP_OVERLAP
         const stripW = FAN_STRIP_WIDTH + STRIP_OVERLAP
         const stripRadius = `0 ${STRIP_RADIUS}px ${STRIP_RADIUS}px 0`
+        const stripZ = 1 + secondaryItems.length - i
+
+        // ── Ghost slot (extracted card placeholder) ──
+        if (item.kind === 'ghost') {
+          const ghostColor = item.card?.color ?? '#5b8dd9'
+          const hsl = hexToHsl(ghostColor)
+          const darkFill = hslToHex(hsl.h, Math.max(0.15, hsl.s * 0.5), Math.max(0.08, hsl.l * 0.22))
+          const isGhostSelected = selectedGhostIds.includes(item.cardId)
+          return (
+            <div
+              key={`ghost-${item.cardId}`}
+              data-deck-slot-drop={`${anchorGroup.id}:${item.cardId}`}
+              onPointerDown={e => {
+                if (e.button !== 0) return
+                e.stopPropagation()
+                useCanvasStore.getState().setSelectedGhostGroupIds([item.cardId])
+                useCanvasStore.getState().clearSelectedBlockBoardIds()
+                useBoardsStore.getState().clearGroupSelection()
+              }}
+              style={{
+                position: 'absolute',
+                left: stripX,
+                top: 0,
+                width: stripW,
+                height: screenHeight,
+                borderRadius: stripRadius,
+                background: darkFill,
+                border: isGhostSelected
+                  ? '2px solid rgba(255,255,255,0.85)'
+                  : '1.5px dashed rgba(255,255,255,0.28)',
+                overflow: 'visible',
+                zIndex: stripZ,
+                cursor: 'pointer',
+                userSelect: 'none',
+                pointerEvents: 'all',
+              }}
+            />
+          )
+        }
+
+        // ── Real member strip ──
+        const sc = item.group
         const isSurfaced = sc.id === surfacedId
 
         const scHero = (() => {
@@ -1402,25 +1562,16 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
               width: stripW,
               height: screenHeight,
               borderRadius: stripRadius,
-              // Fully opaque — strips overlap in the fan, so any alpha <1
-              // leaks the strip behind through this one's left edge.
               background: sc.color || '#5b8dd9',
               borderRight: '1px solid rgba(255,255,255,0.2)',
               borderTop: '1px solid rgba(255,255,255,0.12)',
               borderBottom: '1px solid rgba(255,255,255,0.12)',
               overflow: 'visible',
-              // Strip 0 is at N+1, one below primary's z=10 so primary always
-              // covers its left overlap. Each subsequent strip is one below
-              // the previous. Staying at natural z on hover — popping the
-              // strip above its neighbors fights the fan geometry.
-              zIndex: 1 + secondaryCards.length - i,
+              zIndex: stripZ,
               cursor: 'pointer',
               userSelect: 'none',
               pointerEvents: 'all',
               transition: 'filter 0.15s ease',
-              // Hover: brighten the visible surface + a right/down drop
-              // shadow that falls onto the strips below-and-right in z-order.
-              // Conveys "lifted" without breaking the stacking geometry.
               filter: isSurfaced
                 ? 'brightness(1.22) drop-shadow(4px 6px 10px rgba(0,0,0,0.55))'
                 : 'none',
@@ -1439,9 +1590,6 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
                 borderRadius: stripRadius,
               }} />
             )}
-            {/* Vertical name label along the strip — offset by STRIP_OVERLAP
-                so the label sits in the visible FAN_STRIP_WIDTH area, not
-                under the piece in front. */}
             <div style={{
               position: 'absolute', top: 8, left: STRIP_OVERLAP + 4, right: 4, bottom: 8,
               writingMode: 'vertical-rl', textOrientation: 'mixed',
@@ -1452,8 +1600,6 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
             }}>
               {sc.name}
             </div>
-            {/* Sub-deck indicator — horizontal tab above the strip with tapering edges.
-                Shifted by STRIP_OVERLAP so it sits above the visible slice only. */}
             {isSubDeck && (
               <div style={{
                 position: 'absolute',
@@ -1462,7 +1608,6 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
                 height: 18,
                 pointerEvents: 'none',
               }}>
-                {/* Edge 1: full width, bright, rounded top */}
                 <div style={{
                   position: 'absolute',
                   left: 0, bottom: 0,
@@ -1472,7 +1617,6 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
                   borderRight: '2px solid rgba(120,170,255,0.6)',
                   borderRadius: '6px 6px 0 0',
                 }} />
-                {/* Edge 2: 80% width centered, medium */}
                 <div style={{
                   position: 'absolute',
                   left: '10%', bottom: 5,
@@ -1480,7 +1624,6 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
                   borderTop: '2px solid rgba(130,170,255,0.42)',
                   borderRadius: '4px 4px 0 0',
                 }} />
-                {/* Edge 3: 50% width centered, faint */}
                 <div style={{
                   position: 'absolute',
                   left: '25%', bottom: 9,
@@ -1488,7 +1631,6 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
                   borderTop: '1.5px solid rgba(120,160,255,0.25)',
                   borderRadius: '3px 3px 0 0',
                 }} />
-                {/* Edge 4: 30% width centered, very faint */}
                 <div style={{
                   position: 'absolute',
                   left: '35%', bottom: 13,
@@ -1875,6 +2017,116 @@ const DeckAffordance: React.FC<{ cluster: string[] }> = ({ cluster }) => {
 // Alias to avoid name conflict with component-level import
 import { groupSlot as __groupSlot } from '../../utils/nlePush'
 
+/** True if some other group is holding a ghostSlot for this card — i.e., the
+ *  card is "extracted" out of that other group's deck. */
+function findExtractionParent(cardId: string, allGroups: ProjectGroup[]): ProjectGroup | null {
+  return allGroups.find(g => (g.ghostSlots ?? []).some(s => s.cardId === cardId)) ?? null
+}
+
+/** Card-shaped dotted-outline placeholder at a ghost slot's would-be position
+ *  on canvas. Rendered when the parent is OPEN — so the extracted card can
+ *  be dropped here to return. (When the parent is fanned/stacked the ghost
+ *  appears as a strip inside the fan instead.) */
+const GhostCardSlot: React.FC<{ anchor: ProjectGroup; slot: { cardId: string; deckOffsetX: number; deckOffsetY: number } }> = ({ anchor, slot }) => {
+  const boards = useBoardsStore(s => s.boards)
+  const pan = useCanvasStore(s => s.pan)
+  const zoom = useCanvasStore(s => s.zoom)
+  const isSelected = useCanvasStore(s => s.selectedGhostGroupIds.includes(slot.cardId))
+  const allGroups = useBoardsStore(s => s.groups)
+  const card = allGroups.find(g => g.id === slot.cardId)
+  // Compute the slot's canvas-space rect using the card's geometry projected
+  // at the slot position (anchor.origin + offsets). If the card was deleted,
+  // fall back to a generic small placeholder.
+  const slotGroup: ProjectGroup | null = card ? {
+    ...card,
+    originX: anchor.originX + slot.deckOffsetX,
+    originY: anchor.originY + slot.deckOffsetY,
+  } : null
+  const rect = slotGroup ? cardScreenRect(slotGroup, boards, pan, zoom) : null
+  if (!rect) return null
+  const ghostColor = card?.color ?? '#5b8dd9'
+  const hsl = hexToHsl(ghostColor)
+  const darkFill = hslToHex(hsl.h, Math.max(0.15, hsl.s * 0.5), Math.max(0.08, hsl.l * 0.22))
+  return (
+    <div
+      data-deck-slot-drop={`${anchor.id}:${slot.cardId}`}
+      onPointerDown={e => {
+        if (e.button !== 0) return
+        e.stopPropagation()
+        useCanvasStore.getState().setSelectedGhostGroupIds([slot.cardId])
+        useCanvasStore.getState().clearSelectedBlockBoardIds()
+        useBoardsStore.getState().clearGroupSelection()
+      }}
+      style={{
+        position: 'absolute',
+        left: rect.screenLeft,
+        top: rect.screenTop,
+        width: rect.screenWidth,
+        height: rect.screenHeight,
+        border: isSelected
+          ? '2px solid rgba(255,255,255,0.85)'
+          : '1.5px dashed rgba(255,255,255,0.28)',
+        borderRadius: 12,
+        background: darkFill,
+        pointerEvents: 'all',
+        cursor: 'pointer',
+        zIndex: 30,
+      }}
+    />
+  )
+}
+
+/** Tiny colored tab anchored to an extracted card's top-left edge. Color
+ *  mirrors the source deck. Hover → tooltip with deck name; double-click →
+ *  pan to that deck. */
+const TetherTab: React.FC<{ cardId: string }> = ({ cardId }) => {
+  const boards = useBoardsStore(s => s.boards)
+  const pan = useCanvasStore(s => s.pan)
+  const zoom = useCanvasStore(s => s.zoom)
+  const allGroups = useBoardsStore(s => s.groups)
+  const card = allGroups.find(g => g.id === cardId)
+  const parent = card ? findExtractionParent(card.id, allGroups) : null
+  if (!card || !parent) return null
+  const rect = cardScreenRect(card, boards, pan, zoom)
+  if (!rect) return null
+  const parentName = parent.name || parent.cardHeaderText || 'Untitled deck'
+  // Tab scales with card's zoom but with screen-px floor for visibility.
+  const BASE_W = 30
+  const BASE_H = 18
+  const BASE_OFFSET_X = 12
+  const MIN_W = 20
+  const MIN_H = 13
+  const MIN_OFFSET_X = 5
+  const tabW    = Math.max(MIN_W, BASE_W * zoom)
+  const tabH    = Math.max(MIN_H, BASE_H * zoom)
+  const tuck    = tabH / 3
+  const offsetX = Math.max(MIN_OFFSET_X, BASE_OFFSET_X * zoom)
+  const borderW = Math.max(1, zoom)
+  return (
+    <div
+      onPointerDown={e => e.stopPropagation()}
+      onDoubleClick={e => {
+        e.stopPropagation()
+        useCanvasStore.getState().jumpToGroup(parent.id)
+      }}
+      title={`From deck: ${parentName} · double-click to jump`}
+      style={{
+        position: 'absolute',
+        left: rect.screenLeft + offsetX,
+        top: rect.screenTop - tabH + tuck,
+        width: tabW,
+        height: tabH,
+        background: parent.color || '#5b8dd9',
+        border: `${borderW}px solid rgba(255,255,255,0.3)`,
+        borderRadius: `${tabH / 3}px ${tabH / 3}px 0 0`,
+        zIndex: 35, // below card primary (40) so the bottom third tucks behind
+        pointerEvents: 'all',
+        cursor: 'pointer',
+      }}
+    />
+  )
+}
+
 /** Screen-space overlay — one card per group + per-group NLE headers + ungrouped board cards */
 const Overlay: React.FC = () => {
   const groups = useBoardsStore(s => s.groups)
@@ -1989,6 +2241,31 @@ const Overlay: React.FC = () => {
       {ungroupedIds.map(bid => (
         <UngroupedBoardCard key={bid} boardId={bid} />
       ))}
+
+      {/* Tether tabs — one per extracted card (any group whose id appears in
+          some other group's ghostSlots). Anchored to the card's top-left in
+          the source deck's color. */}
+      {groups.map(g => {
+        const parent = findExtractionParent(g.id, groups)
+        if (!parent) return null
+        return <TetherTab key={`tether-${g.id}`} cardId={g.id} />
+      })}
+
+      {/* Ghost-slot placeholders for OPEN parent decks. When the parent is
+          stacked or fanned, the ghost appears as a strip in the fan render
+          instead. */}
+      {groups.flatMap(parent => {
+        const isOpen = !parent.deckState || parent.deckState === 'open'
+        if (!isOpen) return []
+        const slots = parent.ghostSlots ?? []
+        return slots.map(slot => (
+          <GhostCardSlot
+            key={`ghost-${parent.id}-${slot.cardId}`}
+            anchor={parent}
+            slot={slot}
+          />
+        ))
+      })}
 
       {/* ── Deck-linking layer: chip rails + parented ghost tree ── */}
       {groups.map(g => {

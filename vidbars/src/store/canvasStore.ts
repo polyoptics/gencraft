@@ -18,6 +18,9 @@ interface CanvasStore {
   dynamicRowHeights: boolean
   focusedBoardId: string | null
   selectedBlockBoardIds: string[]
+  /** IDs of extracted cards whose ghost slot is currently selected. Pressing
+   *  Delete/Backspace severs each one (parent's ghostSlots entry removed). */
+  selectedGhostGroupIds: string[]
   zoneLineY: number
 
   setPan: (pan: { x: number; y: number }) => void
@@ -31,6 +34,8 @@ interface CanvasStore {
   setFocusedBoard: (id: string | null) => void
   setSelectedBlockBoardIds: (ids: string[]) => void
   clearSelectedBlockBoardIds: () => void
+  setSelectedGhostGroupIds: (ids: string[]) => void
+  clearSelectedGhostGroupIds: () => void
   setZoneLineY: (y: number) => void
   /** Pan (keeping current zoom) so the given group is centered in the viewport. */
   jumpToGroup: (groupId: string) => void
@@ -44,6 +49,7 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
   dynamicRowHeights: false,
   focusedBoardId: null,
   selectedBlockBoardIds: [],
+  selectedGhostGroupIds: [],
   zoneLineY: 0,
 
   setPan: (pan) => set({ pan }),
@@ -80,6 +86,9 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
 
   setSelectedBlockBoardIds: (selectedBlockBoardIds) => set({ selectedBlockBoardIds }),
   clearSelectedBlockBoardIds: () => set({ selectedBlockBoardIds: [] }),
+
+  setSelectedGhostGroupIds: (selectedGhostGroupIds) => set({ selectedGhostGroupIds }),
+  clearSelectedGhostGroupIds: () => set({ selectedGhostGroupIds: [] }),
 
   setZoneLineY: (zoneLineY) => set({ zoneLineY }),
 

@@ -57,6 +57,18 @@ export interface ProjectGroup {
   nestedDeck?: boolean    // true if this group is a sub-deck anchor (persists through fan/stack cycles)
   deckOffsetX?: number    // offset from OWN anchor at stacking time (for position restore on open)
   deckOffsetY?: number
+  /**
+   * When THIS group is a deck anchor, ghostSlots holds "checked-out" entries
+   * for cards that were extracted from this deck. Each entry remembers where
+   * the card's slot was so the dotted-outline strip can render in the fan
+   * AND so the card can return to its slot when dropped on the ghost.
+   * Extracted cards have NO deckAnchorId — they are independent on canvas.
+   */
+  ghostSlots?: Array<{
+    cardId: string
+    deckOffsetX: number
+    deckOffsetY: number
+  }>
   textSplitRatio?: number // header/body vertical split (0-1, default 0.5)
   linkedGroupIds?: string[]  // bi-directional references to other groups (optional for legacy; treat as [] when absent)
 }
@@ -206,6 +218,19 @@ interface BoardsState {
   setBlockTextSplitRatio: (boardId: string, ratio: number) => void
   setCardTextSplitRatio: (boardId: string, ratio: number) => void
   setDeckState: (groupIds: string[], state: 'open' | 'fanned' | 'stacked') => void
+  /** Pull a card out of its deck onto the canvas. The parent gets a ghostSlots
+   *  entry remembering the slot's offset so the card can return. The card
+   *  itself becomes independent (deckAnchorId/deckOffset cleared). If the
+   *  card has tethered sub-members, it self-anchors and renders as a free-
+   *  floating sub-deck on canvas. */
+  extractFromDeck: (cardId: string, newOriginX: number, newOriginY: number) => void
+  /** Return an extracted card to its parent deck's ghost slot. Re-tethers
+   *  the card to the parent at the slot's saved offset, removes the slot
+   *  entry, and snaps the card's origin to the slot position. */
+  returnToDeck: (cardId: string) => void
+  /** Permanently sever the tether: remove the card's ghost slot from its
+   *  former parent. Card stays where it is on canvas, fully independent. */
+  severDeckTether: (cardId: string) => void
   setGroupPos: (groupId: string, originY: number, originX: number) => void
   setGroupPosBatch: (updates: { groupId: string; originY: number; originX: number }[]) => void
   reassignBoard: (boardId: string, targetGroupId: string, dropCanvasPos?: { x: number; y: number }) => void
@@ -909,6 +934,125 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
         })
       }
     })
+  },
+
+  extractFromDeck(cardId, newOriginX, newOriginY) {
+    set(s => {
+      const card = s.groups.find(g => g.id === cardId)
+      if (!card || !card.deckAnchorId) return {}
+      const parentId = card.deckAnchorId
+      const parent = s.groups.find(g => g.id === parentId)
+      if (!parent) return {}
+      // Snapshot the card's slot offsets before clearing.
+      const slotOffsetX = card.deckOffsetX ?? 0
+      const slotOffsetY = card.deckOffsetY ?? 0
+      // Does the card have tethered sub-members? Then it stays as a deck
+      // anchor (self-anchored) so its sub-deck renders as a stacked/fanned
+      // card on canvas. Otherwise it becomes a plain open card.
+      const hasSubMembers = s.groups.some(g => g.id !== cardId && g.deckAnchorId === cardId)
+      return {
+        groups: s.groups.map(g => {
+          if (g.id === parentId) {
+            const slots = g.ghostSlots ?? []
+            // De-dupe by cardId in case the card was somehow already extracted.
+            const filtered = slots.filter(sl => sl.cardId !== cardId)
+            return { ...g, ghostSlots: [...filtered, { cardId, deckOffsetX: slotOffsetX, deckOffsetY: slotOffsetY }] }
+          }
+          if (g.id === cardId) {
+            if (hasSubMembers) {
+              // Self-anchored sub-deck on canvas; preserve its own deckState.
+              const own: 'stacked' | 'fanned' =
+                (g.deckState === 'stacked' || g.deckState === 'fanned') ? g.deckState : 'stacked'
+              return {
+                ...g,
+                originX: newOriginX,
+                originY: newOriginY,
+                deckAnchorId: g.id,
+                deckOffsetX: 0,
+                deckOffsetY: 0,
+                deckState: own,
+                nestedDeck: undefined,
+              }
+            }
+            // Plain open card.
+            return {
+              ...g,
+              originX: newOriginX,
+              originY: newOriginY,
+              deckAnchorId: undefined,
+              deckOffsetX: undefined,
+              deckOffsetY: undefined,
+              deckState: 'open',
+              nestedDeck: undefined,
+            }
+          }
+          return g
+        }),
+      }
+    })
+  },
+
+  returnToDeck(cardId) {
+    set(s => {
+      // Find the parent that holds this card's ghost slot.
+      const parent = s.groups.find(p => (p.ghostSlots ?? []).some(sl => sl.cardId === cardId))
+      if (!parent) return {}
+      const slot = (parent.ghostSlots ?? []).find(sl => sl.cardId === cardId)!
+      const newOriginX = parent.originX + slot.deckOffsetX
+      const newOriginY = parent.originY + slot.deckOffsetY
+      return {
+        groups: s.groups.map(g => {
+          if (g.id === parent.id) {
+            const slots = (g.ghostSlots ?? []).filter(sl => sl.cardId !== cardId)
+            return { ...g, ghostSlots: slots.length > 0 ? slots : undefined }
+          }
+          if (g.id === cardId) {
+            // Re-tether to the parent at the slot offsets.
+            // If this card has its own sub-members, it's a sub-deck anchor —
+            // keep its current deckState (its sub-deck's mode) and mark
+            // nestedDeck=true. Otherwise, match the parent's deckState as a
+            // regular hidden member.
+            const hasSubMembers = s.groups.some(o => o.id !== cardId && o.deckAnchorId === cardId)
+            if (hasSubMembers) {
+              const own: 'stacked' | 'fanned' =
+                (g.deckState === 'stacked' || g.deckState === 'fanned') ? g.deckState : 'stacked'
+              return {
+                ...g,
+                originX: newOriginX,
+                originY: newOriginY,
+                deckAnchorId: parent.id,
+                deckOffsetX: slot.deckOffsetX,
+                deckOffsetY: slot.deckOffsetY,
+                deckState: own,
+                nestedDeck: true,
+              }
+            }
+            return {
+              ...g,
+              originX: newOriginX,
+              originY: newOriginY,
+              deckAnchorId: parent.id,
+              deckOffsetX: slot.deckOffsetX,
+              deckOffsetY: slot.deckOffsetY,
+              deckState: parent.deckState ?? 'open',
+              nestedDeck: undefined,
+            }
+          }
+          return g
+        }),
+      }
+    })
+  },
+
+  severDeckTether(cardId) {
+    set(s => ({
+      groups: s.groups.map(g => {
+        const slots = g.ghostSlots
+        if (!slots || !slots.some(sl => sl.cardId === cardId)) return g
+        const filtered = slots.filter(sl => sl.cardId !== cardId)
+        return { ...g, ghostSlots: filtered.length > 0 ? filtered : undefined }
+      }),
+    }))
   },
 
   setGroupPos(groupId, originY, originX) {

@@ -53,7 +53,8 @@
       "Bash(grep -n \"[^\\\\\\\\.]groups[^a-zA-Z]\")",
       "Bash(grep -n \"^const.*React.FC\\\\|^const.*memo\\\\|^}\\\\|^export const Card\\\\|^}$\" src/components/Layers/CardLayer.tsx)",
       "Bash(curl -sS \"http://localhost:5173/src/components/Linking/LinkedGhostCard.tsx?t=$\\(date +%s\\)\")",
-      "Bash(curl -sS -o /dev/null -w \"%{http_code}\\\\n\" \"http://localhost:5173/src/components/Linking/LinkChipRail.tsx?t=$\\(date +%s\\)\")"
+      "Bash(curl -sS -o /dev/null -w \"%{http_code}\\\\n\" \"http://localhost:5173/src/components/Linking/LinkChipRail.tsx?t=$\\(date +%s\\)\")",
+      "Bash(./node_modules/.bin/tsc --noEmit)"
     ]
   }
 }

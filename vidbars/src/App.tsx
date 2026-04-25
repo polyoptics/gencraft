@@ -160,6 +160,19 @@ function useKeyboardDelete() {
 
       useUndoCoordinator.getState().checkpoint()
 
+      // Ghost-slot sever delete: if a ghost slot is selected (extracted card's
+      // slot in its former parent's fan), severing removes the parent's
+      // ghostSlots entry — the card stays where it is on canvas, fully
+      // independent. Higher priority than other deletes so the user's intent
+      // is unambiguous when a ghost is selected.
+      const selGhosts = useCanvasStore.getState().selectedGhostGroupIds
+      if (selGhosts.length > 0) {
+        const bs = useBoardsStore.getState()
+        for (const cardId of selGhosts) bs.severDeckTether(cardId)
+        useCanvasStore.getState().clearSelectedGhostGroupIds()
+        return
+      }
+
       // Free node delete
       const freeSelected = useFreeNodeStore.getState().selectedIds
       if (freeSelected.length > 0) {
