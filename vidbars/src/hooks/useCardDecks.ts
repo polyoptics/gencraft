@@ -96,6 +96,9 @@ export function useCardDecks(
     // visual card size. Also accounts for cardWidthOverride/cardHeightOverride.
     const BOARD_PADDING_X = 20
     const rects = new Map<string, GroupSlot>()
+    // Logical (zoom-independent) content top per group. Used for zone partitioning
+    // — see step 2 below for why this MUST stay separate from rect.top.
+    const logicalTops = new Map<string, number>()
     for (const g of groups) {
       const layout = computeGroupLayout(g.boardIds, boards)
       let left = Infinity, right = -Infinity, top = Infinity, bottom = -Infinity
@@ -140,6 +143,9 @@ export function useCardDecks(
         top: top - headerExtendCanvas,
         bottom: top + finalH,
       })
+      // Stash the pre-inflated content top — zone classification uses this so
+      // it stays zoom-invariant.
+      logicalTops.set(g.id, top)
     }
 
     // 2. Filter out hidden deck members from clustering — they're invisible and
@@ -147,14 +153,21 @@ export function useCardDecks(
     //    corrupt clusters (e.g. sub-deck members inflating a parent cluster).
     const visibleGroups = groups.filter(g => !isHiddenDeckMember(g))
 
-    // Partition by zone (only visible groups participate in clustering)
+    // Partition by zone (only visible groups participate in clustering).
+    // Use the LOGICAL content top, not rect.top: rect.top is inflated by
+    // `headerExtendCanvas`, which has a 20-screen-pixel minimum that grows
+    // unboundedly in canvas units as zoom decreases (~32 at zoom 1, ~135 at
+    // zoom 0.15). If we used rect.top here, a card's zone would flip purely
+    // from zooming — the affordance would suddenly catch a card that was
+    // previously excluded, with no spatial change. Logical top depends only on
+    // the card's own originY + row layout, so zone classification is stable.
     const timelineGroups = visibleGroups.filter(g => {
-      const r = rects.get(g.id)
-      return r && r.top >= zoneLineY
+      const lt = logicalTops.get(g.id)
+      return lt !== undefined && lt >= zoneLineY
     })
     const freeGroups = visibleGroups.filter(g => {
-      const r = rects.get(g.id)
-      return r && r.top < zoneLineY
+      const lt = logicalTops.get(g.id)
+      return lt !== undefined && lt < zoneLineY
     })
 
     // 3. Find touching clusters via union-find, per zone
