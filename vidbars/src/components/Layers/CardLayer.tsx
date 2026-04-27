@@ -968,8 +968,15 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
           zIndex: 40,
           pointerEvents: 'all',
         }}
-        onPointerEnter={() => setIsHovered(true)}
-        onPointerLeave={() => setIsHovered(false)}
+        onPointerEnter={() => { setIsHovered(true); useCanvasStore.getState().setPreviewHoveredDeckId(deck.id) }}
+        onPointerLeave={() => {
+          setIsHovered(false)
+          // Only clear if this deck still owns the hover slot — guards against
+          // fast cross-deck transitions where another deck's enter fires first.
+          if (useCanvasStore.getState().previewHoveredDeckId === deck.id) {
+            useCanvasStore.getState().setPreviewHoveredDeckId(null)
+          }
+        }}
         onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setCardMenu({ x: e.clientX, y: e.clientY }) }}
         onWheel={e => {
           e.stopPropagation()
@@ -1484,8 +1491,14 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
         zIndex: 50,
         pointerEvents: 'all',
       }}
-      onPointerEnter={() => setIsHovered(true)}
-      onPointerLeave={() => { setIsHovered(false); setSurfacedId(null) }}
+      onPointerEnter={() => { setIsHovered(true); useCanvasStore.getState().setPreviewHoveredDeckId(deck.id) }}
+      onPointerLeave={() => {
+        setIsHovered(false)
+        setSurfacedId(null)
+        if (useCanvasStore.getState().previewHoveredDeckId === deck.id) {
+          useCanvasStore.getState().setPreviewHoveredDeckId(null)
+        }
+      }}
       onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setCardMenu({ x: e.clientX, y: e.clientY }) }}
       onWheel={e => {
         e.stopPropagation()
@@ -2086,6 +2099,91 @@ const GhostCardSlot: React.FC<{ anchor: ProjectGroup; slot: { cardId: string; de
   )
 }
 
+/** Open-footprint preview — when a stacked or fanned deck is hovered or
+ *  selected, render a faint dashed outline at each non-anchor member's
+ *  would-be open position. Lets the user see where members will land BEFORE
+ *  committing to setDeckState('open'), avoiding surprise overlaps in the
+ *  free-form layout zone.
+ *
+ *  Geometry uses the same virtual-group projection trick as GhostCardSlot:
+ *  build {...member, originX/Y: anchor.origin + member.deckOffset} and feed
+ *  it to cardScreenRect so the preview math is the SAME source of truth as
+ *  the actual post-open render — no drift possible.
+ *
+ *  Sub-deck members preview as ONE card outline (the sub-deck anchor's own
+ *  bounds at its spread position). That matches setDeckState('open'): only
+ *  one nesting level opens, so a sub-deck stays closed inside its parent
+ *  after the open. We do not recurse into nested members.
+ *
+ *  pointer-events: none, zIndex 25 — purely visual, sits above the canvas
+ *  backdrop but below ghost slots (30) and far below all card surfaces (40+),
+ *  so the deck always draws on top of any overlapping preview rect. */
+const DeckOpenPreview: React.FC<{ deck: Deck }> = ({ deck }) => {
+  const boards = useBoardsStore(s => s.boards)
+  const allGroups = useBoardsStore(s => s.groups)
+  const pan = useCanvasStore(s => s.pan)
+  const zoom = useCanvasStore(s => s.zoom)
+  const isHovered = useCanvasStore(s => s.previewHoveredDeckId === deck.id)
+  const isSelected = useBoardsStore(s => deck.memberIds.some(id => s.selectedGroupIds.includes(id)))
+  const active = isHovered || isSelected
+
+  // Project each non-anchor member at its would-be open position. Memoize so
+  // we don't re-walk on every pan/zoom render that doesn't change membership.
+  // The gate is *inside* the memo (rather than an early return) so all hooks
+  // run unconditionally — keeps React's rules-of-hooks happy.
+  const previews = useMemo(() => {
+    if (!active) return []
+    const anchor = allGroups.find(g => g.id === deck.anchorGroupId)
+    if (!anchor) return []
+    const out: { id: string; color: string; rect: NonNullable<ReturnType<typeof cardScreenRect>> }[] = []
+    for (const memberId of deck.memberIds) {
+      if (memberId === deck.anchorGroupId) continue // anchor doesn't move on open
+      const member = allGroups.find(g => g.id === memberId)
+      if (!member) continue
+      // Build a virtual member at its post-open canvas position. Same trick
+      // GhostCardSlot uses (lines ~2050-2054). cardScreenRect bakes in
+      // BOARD_PADDING_X, minX*bScale, getRowY, cardWidthOverride, and the
+      // headerExtend, so this matches the actual card render exactly.
+      const virtualMember: ProjectGroup = {
+        ...member,
+        originX: anchor.originX + (member.deckOffsetX ?? 0),
+        originY: anchor.originY + (member.deckOffsetY ?? 0),
+      }
+      const rect = cardScreenRect(virtualMember, boards, pan, zoom)
+      if (!rect) continue
+      out.push({ id: member.id, color: member.color, rect })
+    }
+    return out
+  }, [active, deck.memberIds, deck.anchorGroupId, allGroups, boards, pan, zoom])
+
+  if (previews.length === 0) return null
+
+  return (
+    <>
+      {previews.map(p => (
+        <div
+          key={`preview-${deck.id}-${p.id}`}
+          data-deck-preview={p.id}
+          style={{
+            position: 'absolute',
+            left: p.rect.screenLeft,
+            top: p.rect.screenTop,
+            width: p.rect.screenWidth,
+            height: p.rect.screenHeight,
+            border: '1.5px dashed rgba(255,255,255,0.35)',
+            borderRadius: 12,
+            // Very faint color tint (~8% alpha) so the user can tell which
+            // member each outline corresponds to without it dominating visuals.
+            background: `${p.color}14`,
+            pointerEvents: 'none',
+            zIndex: 25,
+          }}
+        />
+      ))}
+    </>
+  )
+}
+
 /** Tiny colored tab anchored to an extracted card's top-left edge. Color
  *  mirrors the source deck. Hover → tooltip with deck name; double-click →
  *  pan to that deck. */
@@ -2246,6 +2344,13 @@ const Overlay: React.FC = () => {
           </Fragment>
         )
       })}
+      {/* Open-footprint previews — hover or select a stacked/fanned deck and
+          a faint dashed outline appears at each non-anchor member's would-be
+          open position. Self-gates on hover/selection state, so unconditional
+          mapping is fine. */}
+      {decks.map(d => (
+        <DeckOpenPreview key={`preview-${d.id}`} deck={d} />
+      ))}
       {/* Affordance buttons for open touching clusters */}
       {affordanceClusters.map(cluster => (
         <DeckAffordance key={cluster.join('|')} cluster={cluster} />

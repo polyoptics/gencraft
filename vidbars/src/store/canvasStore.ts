@@ -21,6 +21,11 @@ interface CanvasStore {
   /** IDs of extracted cards whose ghost slot is currently selected. Pressing
    *  Delete/Backspace severs each one (parent's ghostSlots entry removed). */
   selectedGhostGroupIds: string[]
+  /** Deck.id (joined member-IDs from useCardDecks) currently hovered by the
+   *  pointer. Drives the open-footprint preview outlines so the user can see
+   *  where members will land before committing to setDeckState('open'). Null
+   *  when no deck is hovered. */
+  previewHoveredDeckId: string | null
   zoneLineY: number
 
   setPan: (pan: { x: number; y: number }) => void
@@ -36,6 +41,7 @@ interface CanvasStore {
   clearSelectedBlockBoardIds: () => void
   setSelectedGhostGroupIds: (ids: string[]) => void
   clearSelectedGhostGroupIds: () => void
+  setPreviewHoveredDeckId: (id: string | null) => void
   setZoneLineY: (y: number) => void
   /** Pan (keeping current zoom) so the given group is centered in the viewport. */
   jumpToGroup: (groupId: string) => void
@@ -50,6 +56,7 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
   focusedBoardId: null,
   selectedBlockBoardIds: [],
   selectedGhostGroupIds: [],
+  previewHoveredDeckId: null,
   zoneLineY: 0,
 
   setPan: (pan) => set({ pan }),
@@ -89,6 +96,8 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
 
   setSelectedGhostGroupIds: (selectedGhostGroupIds) => set({ selectedGhostGroupIds }),
   clearSelectedGhostGroupIds: () => set({ selectedGhostGroupIds: [] }),
+
+  setPreviewHoveredDeckId: (previewHoveredDeckId) => set({ previewHoveredDeckId }),
 
   setZoneLineY: (zoneLineY) => set({ zoneLineY }),
 
