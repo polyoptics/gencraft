@@ -968,8 +968,18 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
           zIndex: 40,
           pointerEvents: 'all',
         }}
-        onPointerEnter={() => setIsHovered(true)}
-        onPointerLeave={() => setIsHovered(false)}
+        onPointerEnter={() => {
+          setIsHovered(true)
+          // Soft "deck has an affordance" hint — drives a faint glow on the
+          // dashed-rect icon in the header. NOT the full open-preview.
+          useCanvasStore.getState().setCardHoveredDeckId(deck.id)
+        }}
+        onPointerLeave={() => {
+          setIsHovered(false)
+          if (useCanvasStore.getState().cardHoveredDeckId === deck.id) {
+            useCanvasStore.getState().setCardHoveredDeckId(null)
+          }
+        }}
         onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setCardMenu({ x: e.clientX, y: e.clientY }) }}
         onWheel={e => {
           e.stopPropagation()
@@ -1085,16 +1095,8 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
               {anchorGroup.cardSummary || anchorGroup.name}
             </div>
           </div>
-          {/* Badge on primary card. headerPad offset places it below the
-              NLE header surrogate so it doesn't overlap the title row. */}
-          {isHovered && (
-            <div style={{
-              position: 'absolute', top: headerPad + 4, right: 6, zIndex: 50,
-              display: 'flex', gap: 4,
-            }}>
-              <DeckBadge count={deck.memberIds.length} />
-            </div>
-          )}
+          {/* The deck-member count now lives inside the dashed-rect
+              affordance in the header (one element, two jobs). */}
         </div>
       </div>
       {cardMenu && (
@@ -1485,8 +1487,19 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
         zIndex: 50,
         pointerEvents: 'all',
       }}
-      onPointerEnter={() => setIsHovered(true)}
-      onPointerLeave={() => { setIsHovered(false); setSurfacedId(null) }}
+      onPointerEnter={() => {
+        setIsHovered(true)
+        // Soft "deck has an affordance" hint — drives a faint glow on the
+        // dashed-rect icon in the header. NOT the full open-preview.
+        useCanvasStore.getState().setCardHoveredDeckId(deck.id)
+      }}
+      onPointerLeave={() => {
+        setIsHovered(false)
+        setSurfacedId(null)
+        if (useCanvasStore.getState().cardHoveredDeckId === deck.id) {
+          useCanvasStore.getState().setCardHoveredDeckId(null)
+        }
+      }}
       onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setCardMenu({ x: e.clientX, y: e.clientY }) }}
       onWheel={e => {
         e.stopPropagation()
@@ -1749,16 +1762,8 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
             {anchorGroup.cardSummary || anchorGroup.name}
           </div>
         </div>
-        {/* Badge — offset by headerPad so it sits below the NLE header
-            surrogate rather than overlapping the title row. */}
-        {isHovered && (
-          <div style={{
-            position: 'absolute', top: headerPad + 4, right: 6, zIndex: 50,
-            display: 'flex', gap: 4,
-          }}>
-            <DeckBadge count={deck.memberIds.length} />
-          </div>
-        )}
+        {/* The deck-member count now lives inside the dashed-rect
+            affordance in the header (one element, two jobs). */}
       </div>
 
     </div>
@@ -1791,19 +1796,6 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
 }
 
 const FannedDeckOverlay = React.memo(FannedDeckOverlayInner)
-
-/** Badge pill showing deck card count */
-const DeckBadge: React.FC<{ count: number }> = ({ count }) => (
-  <div style={{
-    background: 'rgba(60,100,200,0.9)', color: '#fff',
-    fontSize: 10, fontWeight: 700, padding: '2px 6px',
-    borderRadius: 10, minWidth: 16, textAlign: 'center',
-    boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
-    pointerEvents: 'none',
-  }}>
-    {count}
-  </div>
-)
 
 /** Deck state transition buttons */
 const DeckControls: React.FC<{
@@ -2112,9 +2104,12 @@ const DeckOpenPreview: React.FC<{ deck: Deck }> = ({ deck }) => {
   const allGroups = useBoardsStore(s => s.groups)
   const pan = useCanvasStore(s => s.pan)
   const zoom = useCanvasStore(s => s.zoom)
-  const isHovered = useCanvasStore(s => s.previewHoveredDeckId === deck.id)
-  const isSelected = useBoardsStore(s => deck.memberIds.some(id => s.selectedGroupIds.includes(id)))
-  const active = isHovered || isSelected
+  // Preview only fires when the dashed-rect affordance icon in the header is
+  // hovered. Selection used to also trigger this, but selection is too sticky
+  // for that to feel right — too many other interactions require selecting a
+  // card, so the preview was constantly on. Hover-the-icon is the single
+  // explicit gesture for the preview now.
+  const active = useCanvasStore(s => s.previewHoveredDeckId === deck.id)
 
   // Project each non-anchor member at its would-be open position. Memoize so
   // we don't re-walk on every pan/zoom render that doesn't change membership.
@@ -2298,9 +2293,20 @@ const Overlay: React.FC = () => {
           const nested = touchingClusters.some(c =>
             c.includes(g.id) && c.some(cid => !deck.memberIds.includes(cid))
           )
+          // Stacked deck → double-click icon fully opens the deck. The icon
+          // disappears in the open state, so there's no "close from icon" —
+          // the body's existing UI handles re-stacking.
+          const stackedDoubleClick = () => {
+            useUndoCoordinator.getState().checkpoint()
+            useBoardsStore.getState().setDeckState(deck.memberIds, 'open')
+          }
           return (
             <Fragment key={g.id}>
-              <NLETimelineHeader groupId={g.id} rightInset={deck.memberIds.length > 1 ? 10 : 0} iconMode={{ kind: 'deckPreview', deckId: deck.id }} />
+              <NLETimelineHeader
+                groupId={g.id}
+                rightInset={deck.memberIds.length > 1 ? 10 : 0}
+                iconMode={{ kind: 'deckPreview', deckId: deck.id, count: deck.memberIds.length, onDoubleClick: stackedDoubleClick }}
+              />
               <StackedDeckCard deck={deck} anchorGroup={g} isNested={nested} />
             </Fragment>
           )
@@ -2315,9 +2321,20 @@ const Overlay: React.FC = () => {
             // cards' headers render underneath this bundle when the fan extends
             // horizontally over them. Internal z-order (primary > strips) is
             // preserved WITHIN this context, so the curve-merge effect stays.
+            // Fanned deck → double-click icon fully opens the deck (same
+            // semantic as the stacked-deck icon double-click: "open the
+            // whole deck"). Body double-click on the fan still collapses to
+            // stacked.
+            const fannedDoubleClick = () => {
+              useUndoCoordinator.getState().checkpoint()
+              useBoardsStore.getState().setDeckState(deck.memberIds, 'open')
+            }
             return (
               <div key={g.id} style={{ position: 'relative', zIndex: 55 }}>
-                <NLETimelineHeader groupId={g.id} iconMode={{ kind: 'deckPreview', deckId: deck.id }} />
+                <NLETimelineHeader
+                  groupId={g.id}
+                  iconMode={{ kind: 'deckPreview', deckId: deck.id, count: deck.memberIds.length, onDoubleClick: fannedDoubleClick }}
+                />
                 <FannedDeckOverlay deck={deck} groups={memberGroups} />
               </div>
             )

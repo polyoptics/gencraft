@@ -30,7 +30,7 @@ interface Segment {
  *    standalone cards (no viewer at this zoom, no deck to preview). */
 type IconMode =
   | { kind: 'viewer' }
-  | { kind: 'deckPreview'; deckId: string }
+  | { kind: 'deckPreview'; deckId: string; count: number; onDoubleClick?: () => void }
   | { kind: 'hidden' }
 
 interface Props {
@@ -43,6 +43,13 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, icon
   const mode: IconMode = iconMode ?? { kind: 'viewer' }
   const previewHovered = useCanvasStore(s =>
     mode.kind === 'deckPreview' ? s.previewHoveredDeckId === mode.deckId : false
+  )
+  // Soft hint: deck card body is hovered but the icon itself isn't. Subtle
+  // glow draws the eye to the affordance without committing to the full
+  // open-preview. Suppressed when previewHovered is true so the active state
+  // takes over cleanly.
+  const cardHinted = useCanvasStore(s =>
+    mode.kind === 'deckPreview' ? s.cardHoveredDeckId === mode.deckId : false
   )
   const pan          = useCanvasStore(s => s.pan)
   const zoom         = useCanvasStore(s => s.zoom)
@@ -289,6 +296,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, icon
   } else if (mode.kind === 'deckPreview') {
     const deckId = mode.deckId
     const active = previewHovered
+    const hint = cardHinted && !active
     // Size everything proportional to the header's rendered screenHeight, so
     // the icon scales with the card at all zooms above the header's 20px
     // clamp (i.e. the icon tracks zoom linearly while it visibly matters)
@@ -304,7 +312,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, icon
     headerIcon = (
       <div
         data-deck-preview-affordance
-        title="Open layout preview"
+        title="Hover: preview open layout · Double-click: toggle deck"
         // Hover writes/clears previewHoveredDeckId. Leave-clear is guarded by
         // an id check so a fast cross-deck hover doesn't clobber the new
         // deck's hover state with a stale clear from the previous one.
@@ -314,32 +322,69 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, icon
             useCanvasStore.getState().setPreviewHoveredDeckId(null)
           }
         }}
-        // Don't trigger header drag on click. No other action — the affordance
-        // is purely for the hover preview; opening the deck still happens via
-        // double-click on the card body.
+        // Don't trigger header drag on click.
         onPointerDown={e => e.stopPropagation()}
+        // Double-click triggers the call-site-supplied transition (typically
+        // "open the deck"). Clear both hover signals first — they're keyed
+        // by deck.id (joined member ids), and re-stacking later produces the
+        // same id, which would resurrect the preview outlines from a stale
+        // hover state if we didn't reset.
+        onDoubleClick={e => {
+          e.stopPropagation()
+          if (mode.kind === 'deckPreview' && mode.onDoubleClick) {
+            useCanvasStore.getState().setPreviewHoveredDeckId(null)
+            useCanvasStore.getState().setCardHoveredDeckId(null)
+            mode.onDoubleClick()
+          }
+        }}
         style={{
           // No chrome on the wrapper — the dashed-rect glyph stands free in
           // the header. Padding is hit-zone only, invisible.
           padding: `${hitPadY}px ${hitPadX}px`,
-          cursor: 'default',
+          cursor: mode.kind === 'deckPreview' && mode.onDoubleClick ? 'pointer' : 'default',
           display: 'flex',
           alignItems: 'center',
         }}
       >
-        {/* Dashed-rectangle glyph — a tiny card silhouette. Visually echoes
-            the DeckOpenPreview outlines that appear when hovered, so the
-            affordance and the result share a vocabulary. */}
+        {/* Dashed-rectangle glyph — a tiny card silhouette displaying the
+            deck's member count. Visually echoes the DeckOpenPreview outlines
+            it summons, AND replaces the floating blue badge that used to sit
+            on the card body. One element does both jobs. */}
         <div style={{
           width: iconW,
           height: iconH,
-          border: `${borderW}px dashed ${active ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.7)'}`,
-          background: active ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.04)',
+          border: `${borderW}px dashed ${
+            active ? 'rgba(255,255,255,0.95)' :
+            hint   ? 'rgba(255,255,255,0.85)' :
+                     'rgba(255,255,255,0.7)'
+          }`,
+          background: active ? 'rgba(255,255,255,0.26)' :
+                      hint   ? 'rgba(255,255,255,0.20)' :
+                               'rgba(255,255,255,0.14)',
           borderRadius: radius,
           boxSizing: 'border-box',
-          transition: 'border-color 0.12s, background 0.12s, filter 0.12s',
-          filter: active ? `drop-shadow(0 0 ${Math.max(2, borderW * 2)}px rgba(255,255,255,0.4))` : 'none',
-        }} />
+          transition: 'border-color 0.12s, background 0.12s, filter 0.12s, color 0.12s',
+          filter:
+            active ? `drop-shadow(0 0 ${Math.max(2, borderW * 2)}px rgba(255,255,255,0.4))` :
+            hint   ? `drop-shadow(0 0 ${Math.max(1.5, borderW * 1.4)}px rgba(255,255,255,0.22))` :
+                     'none',
+          // Count display
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          // Font size tracks the icon height so the digit always fits cleanly,
+          // with a tiny floor so it stays legible at the lowest card zooms.
+          fontSize: Math.max(8, iconH * 0.62),
+          fontWeight: 700,
+          color: active ? 'rgba(255,255,255,0.98)' :
+                 hint   ? 'rgba(255,255,255,0.88)' :
+                          'rgba(255,255,255,0.78)',
+          lineHeight: 1,
+          fontFamily: 'system-ui, -apple-system, sans-serif',
+          fontVariantNumeric: 'tabular-nums',
+          textShadow: '0 1px 2px rgba(0,0,0,0.4)',
+          userSelect: 'none',
+        }}>{mode.count}</div>
       </div>
     )
   }

@@ -21,11 +21,16 @@ interface CanvasStore {
   /** IDs of extracted cards whose ghost slot is currently selected. Pressing
    *  Delete/Backspace severs each one (parent's ghostSlots entry removed). */
   selectedGhostGroupIds: string[]
-  /** Deck.id (joined member-IDs from useCardDecks) currently hovered by the
-   *  pointer. Drives the open-footprint preview outlines so the user can see
-   *  where members will land before committing to setDeckState('open'). Null
-   *  when no deck is hovered. */
+  /** Deck.id whose preview affordance icon is currently hovered. Drives the
+   *  open-footprint preview outlines AND the icon's full "active" highlight.
+   *  Set/cleared by the dashed-rect icon's own enter/leave handlers. */
   previewHoveredDeckId: string | null
+  /** Deck.id whose card body is currently hovered (any surface other than
+   *  the affordance icon). Drives a SOFT hint glow on the affordance icon —
+   *  a subtle nudge that the affordance is there. Distinct from
+   *  previewHoveredDeckId so the soft hint and the full open-preview never
+   *  fire from the same hover. */
+  cardHoveredDeckId: string | null
   zoneLineY: number
 
   setPan: (pan: { x: number; y: number }) => void
@@ -42,6 +47,7 @@ interface CanvasStore {
   setSelectedGhostGroupIds: (ids: string[]) => void
   clearSelectedGhostGroupIds: () => void
   setPreviewHoveredDeckId: (id: string | null) => void
+  setCardHoveredDeckId: (id: string | null) => void
   setZoneLineY: (y: number) => void
   /** Pan (keeping current zoom) so the given group is centered in the viewport. */
   jumpToGroup: (groupId: string) => void
@@ -57,6 +63,7 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
   selectedBlockBoardIds: [],
   selectedGhostGroupIds: [],
   previewHoveredDeckId: null,
+  cardHoveredDeckId: null,
   zoneLineY: 0,
 
   setPan: (pan) => set({ pan }),
@@ -98,6 +105,8 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
   clearSelectedGhostGroupIds: () => set({ selectedGhostGroupIds: [] }),
 
   setPreviewHoveredDeckId: (previewHoveredDeckId) => set({ previewHoveredDeckId }),
+
+  setCardHoveredDeckId: (cardHoveredDeckId) => set({ cardHoveredDeckId }),
 
   setZoneLineY: (zoneLineY) => set({ zoneLineY }),
 
