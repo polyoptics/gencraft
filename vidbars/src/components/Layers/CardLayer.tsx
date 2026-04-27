@@ -968,15 +968,8 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
           zIndex: 40,
           pointerEvents: 'all',
         }}
-        onPointerEnter={() => { setIsHovered(true); useCanvasStore.getState().setPreviewHoveredDeckId(deck.id) }}
-        onPointerLeave={() => {
-          setIsHovered(false)
-          // Only clear if this deck still owns the hover slot — guards against
-          // fast cross-deck transitions where another deck's enter fires first.
-          if (useCanvasStore.getState().previewHoveredDeckId === deck.id) {
-            useCanvasStore.getState().setPreviewHoveredDeckId(null)
-          }
-        }}
+        onPointerEnter={() => setIsHovered(true)}
+        onPointerLeave={() => setIsHovered(false)}
         onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setCardMenu({ x: e.clientX, y: e.clientY }) }}
         onWheel={e => {
           e.stopPropagation()
@@ -1092,10 +1085,11 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
               {anchorGroup.cardSummary || anchorGroup.name}
             </div>
           </div>
-          {/* Badge on primary card */}
+          {/* Badge on primary card. headerPad offset places it below the
+              NLE header surrogate so it doesn't overlap the title row. */}
           {isHovered && (
             <div style={{
-              position: 'absolute', top: 6, right: 6, zIndex: 50,
+              position: 'absolute', top: headerPad + 4, right: 6, zIndex: 50,
               display: 'flex', gap: 4,
             }}>
               <DeckBadge count={deck.memberIds.length} />
@@ -1491,14 +1485,8 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
         zIndex: 50,
         pointerEvents: 'all',
       }}
-      onPointerEnter={() => { setIsHovered(true); useCanvasStore.getState().setPreviewHoveredDeckId(deck.id) }}
-      onPointerLeave={() => {
-        setIsHovered(false)
-        setSurfacedId(null)
-        if (useCanvasStore.getState().previewHoveredDeckId === deck.id) {
-          useCanvasStore.getState().setPreviewHoveredDeckId(null)
-        }
-      }}
+      onPointerEnter={() => setIsHovered(true)}
+      onPointerLeave={() => { setIsHovered(false); setSurfacedId(null) }}
       onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setCardMenu({ x: e.clientX, y: e.clientY }) }}
       onWheel={e => {
         e.stopPropagation()
@@ -1761,10 +1749,11 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
             {anchorGroup.cardSummary || anchorGroup.name}
           </div>
         </div>
-        {/* Badge */}
+        {/* Badge — offset by headerPad so it sits below the NLE header
+            surrogate rather than overlapping the title row. */}
         {isHovered && (
           <div style={{
-            position: 'absolute', top: 6, right: 6, zIndex: 50,
+            position: 'absolute', top: headerPad + 4, right: 6, zIndex: 50,
             display: 'flex', gap: 4,
           }}>
             <DeckBadge count={deck.memberIds.length} />
@@ -2311,7 +2300,7 @@ const Overlay: React.FC = () => {
           )
           return (
             <Fragment key={g.id}>
-              <NLETimelineHeader groupId={g.id} rightInset={deck.memberIds.length > 1 ? 10 : 0} />
+              <NLETimelineHeader groupId={g.id} rightInset={deck.memberIds.length > 1 ? 10 : 0} iconMode={{ kind: 'deckPreview', deckId: deck.id }} />
               <StackedDeckCard deck={deck} anchorGroup={g} isNested={nested} />
             </Fragment>
           )
@@ -2328,7 +2317,7 @@ const Overlay: React.FC = () => {
             // preserved WITHIN this context, so the curve-merge effect stays.
             return (
               <div key={g.id} style={{ position: 'relative', zIndex: 55 }}>
-                <NLETimelineHeader groupId={g.id} />
+                <NLETimelineHeader groupId={g.id} iconMode={{ kind: 'deckPreview', deckId: deck.id }} />
                 <FannedDeckOverlay deck={deck} groups={memberGroups} />
               </div>
             )
@@ -2339,7 +2328,7 @@ const Overlay: React.FC = () => {
         // Normal open card
         return (
           <Fragment key={g.id}>
-            <NLETimelineHeader groupId={g.id} />
+            <NLETimelineHeader groupId={g.id} iconMode={{ kind: 'hidden' }} />
             <GroupCard group={g} />
           </Fragment>
         )

@@ -20,12 +20,30 @@ interface Segment {
   boardId: string | null
 }
 
+/** Right-side header icon behavior:
+ *  - 'viewer' (default): the up/down chevron toggle that opens the NLE timeline
+ *    viewer for this group. Used at block & board zoom where viewing makes sense.
+ *  - 'deckPreview': a small dashed-rectangle affordance. Hovering it sets
+ *    `previewHoveredDeckId` in canvasStore so DeckOpenPreview renders the
+ *    open-footprint outlines. Used at card zoom for stacked/fanned decks.
+ *  - 'hidden': don't render the icon at all. Used at card zoom for open
+ *    standalone cards (no viewer at this zoom, no deck to preview). */
+type IconMode =
+  | { kind: 'viewer' }
+  | { kind: 'deckPreview'; deckId: string }
+  | { kind: 'hidden' }
+
 interface Props {
   groupId?: string
   rightInset?: number  // screen px to trim from right edge (e.g. deck edge reserve)
+  iconMode?: IconMode
 }
 
-const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0 }) => {
+const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, iconMode }) => {
+  const mode: IconMode = iconMode ?? { kind: 'viewer' }
+  const previewHovered = useCanvasStore(s =>
+    mode.kind === 'deckPreview' ? s.previewHoveredDeckId === mode.deckId : false
+  )
   const pan          = useCanvasStore(s => s.pan)
   const zoom         = useCanvasStore(s => s.zoom)
 
@@ -70,7 +88,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0 }) =>
   const onTimelineDown = useCallback((e: React.PointerEvent) => {
     if (e.button !== 0) return
     if ((e.target as HTMLElement).tagName === 'INPUT') return
-    if ((e.target as Element).closest('[data-viewer-toggle]')) return
+    if ((e.target as Element).closest('[data-viewer-toggle], [data-deck-preview-affordance]')) return
     e.stopPropagation()
     e.preventDefault()
     useUndoCoordinator.getState().checkpoint()
@@ -243,24 +261,89 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0 }) =>
   const n = parseInt(brighterHex.replace('#', ''), 16)
   const headerBg = `rgba(${(n >> 16) & 0xff},${(n >> 8) & 0xff},${n & 0xff},0.25)`
 
-  const viewerToggle = (
-    <div
-      data-viewer-toggle
-      onPointerDown={e => { e.stopPropagation(); toggleViewer() }}
-      style={{
-        padding: '1px 5px',
-        borderRadius: 4,
-        background: viewerOpen ? 'rgba(37,99,235,0.32)' : 'rgba(0,0,0,0.30)',
-        border: viewerOpen ? '1px solid rgba(37,99,235,0.55)' : '1px solid rgba(255,255,255,0.14)',
-        color: viewerOpen ? 'rgba(130,180,255,0.95)' : 'rgba(255,255,255,0.55)',
-        fontSize: 9,
-        fontWeight: 700,
-        cursor: 'pointer',
-        whiteSpace: 'nowrap',
-        lineHeight: '12px',
-      }}
-    >{viewerOpen ? '▼' : '▲'}</div>
-  )
+  // Right-side icon. Three flavors based on iconMode:
+  // - 'viewer'  → chevron toggle for NLE viewer (block/board zoom).
+  // - 'deckPreview' → dashed-rectangle affordance; hover triggers
+  //                   DeckOpenPreview outlines (card zoom for decks).
+  // - 'hidden'  → no icon (card zoom for open standalone cards).
+  let headerIcon: React.ReactNode = null
+  if (mode.kind === 'viewer') {
+    headerIcon = (
+      <div
+        data-viewer-toggle
+        onPointerDown={e => { e.stopPropagation(); toggleViewer() }}
+        style={{
+          padding: '1px 5px',
+          borderRadius: 4,
+          background: viewerOpen ? 'rgba(37,99,235,0.32)' : 'rgba(0,0,0,0.30)',
+          border: viewerOpen ? '1px solid rgba(37,99,235,0.55)' : '1px solid rgba(255,255,255,0.14)',
+          color: viewerOpen ? 'rgba(130,180,255,0.95)' : 'rgba(255,255,255,0.55)',
+          fontSize: 9,
+          fontWeight: 700,
+          cursor: 'pointer',
+          whiteSpace: 'nowrap',
+          lineHeight: '12px',
+        }}
+      >{viewerOpen ? '▼' : '▲'}</div>
+    )
+  } else if (mode.kind === 'deckPreview') {
+    const deckId = mode.deckId
+    const active = previewHovered
+    // Size everything proportional to the header's rendered screenHeight, so
+    // the icon scales with the card at all zooms above the header's 20px
+    // clamp (i.e. the icon tracks zoom linearly while it visibly matters)
+    // and freezes alongside the header at the lowest card zooms (so it
+    // stays visible/clickable when the card is at its smallest). All
+    // chrome lives in these few computed values — no fixed pixel sizes.
+    const iconH    = screenHeight * 0.7              // tall enough to nearly fill header
+    const iconW    = iconH * 1.45                    // 3:2-ish aspect — reads as a card
+    const borderW  = Math.max(0.75, screenHeight * 0.055)
+    const radius   = Math.max(1, screenHeight * 0.12)
+    const hitPadX  = Math.max(2, screenHeight * 0.1)
+    const hitPadY  = Math.max(1, screenHeight * 0.04)
+    headerIcon = (
+      <div
+        data-deck-preview-affordance
+        title="Open layout preview"
+        // Hover writes/clears previewHoveredDeckId. Leave-clear is guarded by
+        // an id check so a fast cross-deck hover doesn't clobber the new
+        // deck's hover state with a stale clear from the previous one.
+        onPointerEnter={() => useCanvasStore.getState().setPreviewHoveredDeckId(deckId)}
+        onPointerLeave={() => {
+          if (useCanvasStore.getState().previewHoveredDeckId === deckId) {
+            useCanvasStore.getState().setPreviewHoveredDeckId(null)
+          }
+        }}
+        // Don't trigger header drag on click. No other action — the affordance
+        // is purely for the hover preview; opening the deck still happens via
+        // double-click on the card body.
+        onPointerDown={e => e.stopPropagation()}
+        style={{
+          // No chrome on the wrapper — the dashed-rect glyph stands free in
+          // the header. Padding is hit-zone only, invisible.
+          padding: `${hitPadY}px ${hitPadX}px`,
+          cursor: 'default',
+          display: 'flex',
+          alignItems: 'center',
+        }}
+      >
+        {/* Dashed-rectangle glyph — a tiny card silhouette. Visually echoes
+            the DeckOpenPreview outlines that appear when hovered, so the
+            affordance and the result share a vocabulary. */}
+        <div style={{
+          width: iconW,
+          height: iconH,
+          border: `${borderW}px dashed ${active ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.7)'}`,
+          background: active ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.04)',
+          borderRadius: radius,
+          boxSizing: 'border-box',
+          transition: 'border-color 0.12s, background 0.12s, filter 0.12s',
+          filter: active ? `drop-shadow(0 0 ${Math.max(2, borderW * 2)}px rgba(255,255,255,0.4))` : 'none',
+        }} />
+      </div>
+    )
+  }
+  // mode.kind === 'hidden' → headerIcon stays null; the trailing flex slot is omitted.
 
   const nameEl = renaming ? (
     <input
@@ -343,7 +426,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0 }) =>
         overflow: 'hidden',
       }}>
         {!isTiny && nameEl}
-        <div style={{ flex: '0 0 auto', marginLeft: isTiny ? 0 : 'auto' }}>{viewerToggle}</div>
+        {headerIcon && <div style={{ flex: '0 0 auto', marginLeft: isTiny ? 0 : 'auto' }}>{headerIcon}</div>}
       </div>
     </div>
   )
