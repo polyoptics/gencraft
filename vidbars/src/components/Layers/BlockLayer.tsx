@@ -399,9 +399,6 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
   const left = BOARD_PADDING_X + minX * bScale
   const totalW = Math.max(maxX * bScale, 200, width + left)
 
-  // Read lazily — only used in context menu rendering
-  const otherGroups = useBoardsStore.getState().groups.filter(g => g.id !== myGroup?.id)
-
   return (
     <div
       style={{ position: 'absolute', left: boardX, top: boardY, width: totalW, height: height + BLOCK_HEADER_H }}
@@ -717,13 +714,10 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
                 useBoardsStore.getState().moveToNewGroup(boardId)
                 setBlockMenu(null)
               }},
-              ...otherGroups.map(g => ({
-                label: `→ ${g.name}`, icon: '↗️', action: () => {
-                  useUndoCoordinator.getState().checkpoint()
-                  useBoardsStore.getState().reassignBoard(boardId, g.id)
-                  setBlockMenu(null)
-                }
-              })),
+              // Per-group destination entries removed — drag-and-drop is the
+              // single way to move a block into an EXISTING group. Keeping
+              // "Move to New Group" because there's no equivalent drag target
+              // (it spins up a brand-new group).
             ].map(item => (
               <button
                 key={item.label}

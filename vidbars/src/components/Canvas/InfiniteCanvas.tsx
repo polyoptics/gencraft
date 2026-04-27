@@ -62,11 +62,16 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
         if (!spaceDown.current) { spaceDown.current = true; setSpaceActive(true) }
         e.preventDefault()
       }
-      // Home key intentionally unbound — the old "reset zoom/pan" behavior
-      // was a trap (easy to hit by accident, instantly snaps the viewport
-      // away from wherever you were working, and the sudden pan+zoom
-      // transition can temporarily unseat some memoized rects until things
-      // re-settle). Re-add only behind an explicit modifier or UI action.
+      // Home/End: nothing in our code reads them, but the browser default
+      // (scroll to top/bottom of document) is a trap on a canvas app —
+      // hitting Home by accident snaps the page scroll and the visual
+      // result reads as "everything went crazy" even though no app state
+      // moved. Swallow the keys when focus is on the document body so
+      // text-editing contexts (inputs, textareas, contenteditable) keep
+      // their native Home/End behavior untouched.
+      if ((e.key === 'Home' || e.key === 'End') && e.target === document.body) {
+        e.preventDefault()
+      }
     }
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.code === 'Space') { spaceDown.current = false; setSpaceActive(false) }
