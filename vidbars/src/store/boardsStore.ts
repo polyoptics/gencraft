@@ -78,6 +78,31 @@ export function getGroupForBoard(groups: ProjectGroup[], boardId: string): Proje
   return groups.find(g => g.boardIds.includes(boardId))
 }
 
+/**
+ * IDs of every group reachable from rootId via deckAnchorId chains, EXCLUDING
+ * rootId itself. Used by extract/return to keep a sub-deck's members spatially
+ * coherent with their anchor when the anchor moves: shift every descendant by
+ * the same delta so deckOffsetX/Y stays consistent with originX/Y.
+ *
+ * Mirrors `expandWithNestedMembers` in useCardDecks.ts but inlined here to
+ * avoid a circular import between the store and the hook.
+ */
+function getTransitiveDescendantIds(rootId: string, groups: ProjectGroup[]): string[] {
+  const result = new Set<string>([rootId])
+  let added = true
+  while (added) {
+    added = false
+    for (const g of groups) {
+      if (!result.has(g.id) && g.deckAnchorId && result.has(g.deckAnchorId)) {
+        result.add(g.id)
+        added = true
+      }
+    }
+  }
+  result.delete(rootId)
+  return Array.from(result)
+}
+
 /** Layer-specific metadata — each zoom level has its own data fields */
 export interface BoardLayerData {
   card: {
@@ -877,7 +902,8 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
 
   setDeckState(groupIds, state) {
     const idSet = new Set(groupIds)
-    // The first ID in the array is the anchor (leftmost card in the cluster)
+    // For stacking/fanning: the new deck anchor is groupIds[0] (leftmost in
+    // the cluster). For opening: anchorId is undefined (no deck after open).
     const anchorId = state === 'open' ? undefined : groupIds[0]
     set(s => {
       // Detect sub-deck anchors: members whose ID is referenced by
@@ -888,42 +914,93 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
           subDeckAnchors.add(g.deckAnchorId)
         }
       }
-      // Find the anchor group for offset computation
+      // For stacking/fanning, the new anchor is groupIds[0].
       const anchorGroup = anchorId ? s.groups.find(g => g.id === anchorId) : null
-      // For opening: the first ID is the anchor whose current position is the reference
-      const openAnchor = state === 'open' ? s.groups.find(g => g.id === groupIds[0]) : null
+      const groupById = new Map(s.groups.map(g => [g.id, g]))
+
+      // For opening: each member is repositioned relative to its OWN
+      // deckAnchorId (which is the deck's actual anchor — the group with
+      // self-anchored deckAnchorId === id). Using groupIds[0] would be wrong
+      // when groupIds[0] !== actual anchor, e.g. when a sub-member's content
+      // extends further leftward than the anchor's so that the sub-member
+      // lands as memberIds[0] in deck.memberIds (sorted by rect.left).
+      const refAnchor = (g: ProjectGroup) =>
+        g.deckAnchorId && g.id !== g.deckAnchorId ? groupById.get(g.deckAnchorId) ?? null : null
+
+      // When opening, propagate each in-idSet member's repositioning delta
+      // down to its transitive descendants OUTSIDE idSet (deeper nested
+      // sub-deck members). Without this, those nested members keep stale
+      // absolute positions and their sub-deck's layout scrambles. Each
+      // outside group adopts the delta of its NEAREST in-idSet ancestor.
+      const positionShifts = new Map<string, { dx: number; dy: number }>()
+      if (state === 'open') {
+        const idSetDeltas = new Map<string, { dx: number; dy: number }>()
+        for (const g of s.groups) {
+          if (!idSet.has(g.id)) continue
+          if (g.deckOffsetX == null || g.deckOffsetY == null) continue
+          const anchor = refAnchor(g)
+          if (!anchor) continue // self-anchored or no anchor — doesn't move
+          const newOx = anchor.originX + g.deckOffsetX
+          const newOy = anchor.originY + g.deckOffsetY
+          const dx = newOx - g.originX
+          const dy = newOy - g.originY
+          if (dx !== 0 || dy !== 0) idSetDeltas.set(g.id, { dx, dy })
+        }
+        if (idSetDeltas.size > 0) {
+          // Walk each outside group's deckAnchorId chain to its nearest
+          // in-idSet ancestor. Visited-set guards against any cycle in the
+          // anchor graph (e.g. a self-anchored card outside idSet).
+          for (const g of s.groups) {
+            if (idSet.has(g.id)) continue
+            let cur = g.deckAnchorId
+            const visited = new Set<string>()
+            while (cur && !visited.has(cur)) {
+              if (idSet.has(cur)) {
+                const delta = idSetDeltas.get(cur)
+                if (delta) positionShifts.set(g.id, delta)
+                break
+              }
+              visited.add(cur)
+              const parent = groupById.get(cur)
+              if (!parent) break
+              cur = parent.deckAnchorId
+            }
+          }
+        }
+      }
 
       return {
         groups: s.groups.map(g => {
-          if (!idSet.has(g.id)) return g
+          if (!idSet.has(g.id)) {
+            const shift = positionShifts.get(g.id)
+            if (shift) return { ...g, originX: g.originX + shift.dx, originY: g.originY + shift.dy }
+            return g
+          }
           if (subDeckAnchors.has(g.id)) {
             if (state === 'open') {
-              // Parent deck is opening: restore the sub-deck anchor's position
-              // relative to the parent anchor using the stored offset — same
-              // formula as regular members. Preserve the sub-deck's own state
-              // and the nestedDeck flag (the sub-deck is still a sub-deck).
-              // Clear the parent-relative offset since the parent is no longer
-              // a deck. If the drag path already moved this group together with
-              // its parent anchor, the restore is a no-op.
+              // Sub-deck anchor opening: restore position relative to its own
+              // deckAnchorId, preserving the sub-deck's own state and the
+              // nestedDeck flag (it's still a sub-deck on canvas).
               let ox = g.originX, oy = g.originY
-              if (openAnchor && g.deckOffsetX != null && g.deckOffsetY != null && g.id !== groupIds[0]) {
-                ox = openAnchor.originX + g.deckOffsetX
-                oy = openAnchor.originY + g.deckOffsetY
+              const anchor = refAnchor(g)
+              if (anchor && g.deckOffsetX != null && g.deckOffsetY != null) {
+                ox = anchor.originX + g.deckOffsetX
+                oy = anchor.originY + g.deckOffsetY
               }
               return { ...g, deckAnchorId: undefined, nestedDeck: true, originX: ox, originY: oy, deckOffsetX: undefined, deckOffsetY: undefined }
             }
-            // Parent is stacking/fanning: store offset from parent anchor for
-            // later restore. Preserve the sub-deck's own deckState.
+            // Stacking/fanning: store offset from new parent anchor for later restore.
             const offX = anchorGroup ? g.originX - anchorGroup.originX : g.deckOffsetX
             const offY = anchorGroup ? g.originY - anchorGroup.originY : g.deckOffsetY
             return { ...g, deckAnchorId: anchorId, nestedDeck: true, deckOffsetX: offX, deckOffsetY: offY }
           }
           if (state === 'open') {
-            // Restore position relative to anchor's current position
+            // Regular member opening: restore position relative to its own anchor.
             let ox = g.originX, oy = g.originY
-            if (openAnchor && g.deckOffsetX != null && g.deckOffsetY != null && g.id !== groupIds[0]) {
-              ox = openAnchor.originX + g.deckOffsetX
-              oy = openAnchor.originY + g.deckOffsetY
+            const anchor = refAnchor(g)
+            if (anchor && g.deckOffsetX != null && g.deckOffsetY != null) {
+              ox = anchor.originX + g.deckOffsetX
+              oy = anchor.originY + g.deckOffsetY
             }
             return { ...g, deckState: state, deckAnchorId: anchorId, nestedDeck: undefined, originX: ox, originY: oy, deckOffsetX: undefined, deckOffsetY: undefined }
           }
@@ -950,6 +1027,13 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
       // anchor (self-anchored) so its sub-deck renders as a stacked/fanned
       // card on canvas. Otherwise it becomes a plain open card.
       const hasSubMembers = s.groups.some(g => g.id !== cardId && g.deckAnchorId === cardId)
+      // Shift any transitive sub-members by the same delta as the anchor so
+      // their absolute originX/Y stays consistent with their preserved
+      // deckOffsetX/Y. Without this, sub-members render at the anchor's
+      // pre-extract location until something forces a deckState='open' pass.
+      const dx = newOriginX - card.originX
+      const dy = newOriginY - card.originY
+      const subTreeIds = hasSubMembers ? new Set(getTransitiveDescendantIds(cardId, s.groups)) : new Set<string>()
       return {
         groups: s.groups.map(g => {
           if (g.id === parentId) {
@@ -986,6 +1070,9 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
               nestedDeck: undefined,
             }
           }
+          if (subTreeIds.has(g.id)) {
+            return { ...g, originX: g.originX + dx, originY: g.originY + dy }
+          }
           return g
         }),
       }
@@ -998,12 +1085,27 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
       const parent = s.groups.find(p => (p.ghostSlots ?? []).some(sl => sl.cardId === cardId))
       if (!parent) return {}
       const slot = (parent.ghostSlots ?? []).find(sl => sl.cardId === cardId)!
+      const card = s.groups.find(g => g.id === cardId)
+      if (!card) return {}
       const newOriginX = parent.originX + slot.deckOffsetX
       const newOriginY = parent.originY + slot.deckOffsetY
+      // Shift any transitive sub-members by the anchor's delta so the whole
+      // sub-tree lands intact at the slot position. Without this, returning a
+      // sub-deck snaps the anchor home but leaves its members at the drag-drop
+      // location, breaking the visual layout until the sub-deck is re-opened.
+      const dx = newOriginX - card.originX
+      const dy = newOriginY - card.originY
+      const subTreeIds = getTransitiveDescendantIds(cardId, s.groups)
+      const subTreeIdSet = new Set(subTreeIds)
+      // Cards reachable inside the returning anchor (anchor + descendants) are
+      // no longer "extracted" from the parent — they live inside parent again
+      // via the nested-deck chain. Drop any of their lingering ghostSlots from
+      // the parent so we don't render orphan slots in the fan.
+      const reachable = new Set<string>([cardId, ...subTreeIds])
       return {
         groups: s.groups.map(g => {
           if (g.id === parent.id) {
-            const slots = (g.ghostSlots ?? []).filter(sl => sl.cardId !== cardId)
+            const slots = (g.ghostSlots ?? []).filter(sl => !reachable.has(sl.cardId))
             return { ...g, ghostSlots: slots.length > 0 ? slots : undefined }
           }
           if (g.id === cardId) {
@@ -1012,7 +1114,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
             // keep its current deckState (its sub-deck's mode) and mark
             // nestedDeck=true. Otherwise, match the parent's deckState as a
             // regular hidden member.
-            const hasSubMembers = s.groups.some(o => o.id !== cardId && o.deckAnchorId === cardId)
+            const hasSubMembers = subTreeIds.length > 0
             if (hasSubMembers) {
               const own: 'stacked' | 'fanned' =
                 (g.deckState === 'stacked' || g.deckState === 'fanned') ? g.deckState : 'stacked'
@@ -1037,6 +1139,9 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
               deckState: parent.deckState ?? 'open',
               nestedDeck: undefined,
             }
+          }
+          if (subTreeIdSet.has(g.id)) {
+            return { ...g, originX: g.originX + dx, originY: g.originY + dy }
           }
           return g
         }),

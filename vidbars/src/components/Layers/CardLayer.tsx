@@ -2144,17 +2144,19 @@ const Overlay: React.FC = () => {
   const zoneLineY = useCanvasStore(s => s.zoneLineY)
   const zoom = useCanvasStore(s => s.zoom)
   const pan = useCanvasStore(s => s.pan)
-  // Defer groups/boards so the heavy derived work (deck clustering, ungrouped
-  // board-id computation, affordance filtering) runs on idle time during drags.
-  // The Overlay's child props (group refs) still come from the urgent `groups`,
-  // so the dragged card's position updates without delay.
-  const deferredGroups = useDeferredValue(groups)
+  // Defer boards (only) so the heavy derived work runs on idle time during
+  // drags. We can't defer `groups` here: the render gate below uses live
+  // `groups` to hide non-anchor deck members (via deckAnchorId), and useCardDecks
+  // must agree on visibility — otherwise after returnToDeck, the gate hides A
+  // (live) while useCardDecks's deferred data still lists A as a self-anchored
+  // standalone deck and never adds A to its parent's memberIds. The strip never
+  // renders until something else (like close+reopen) bumps deferredGroups.
   const deferredBoards = useDeferredValue(boards)
   const ungroupedIds = useMemo(
-    () => getUngroupedBoardIds(deferredGroups, deferredBoards),
-    [deferredGroups, deferredBoards]
+    () => getUngroupedBoardIds(groups, deferredBoards),
+    [groups, deferredBoards]
   )
-  const { decks, touchingClusters, getDeckForGroup } = useCardDecks(deferredGroups, deferredBoards, zoneLineY, zoom)
+  const { decks, touchingClusters, getDeckForGroup } = useCardDecks(groups, deferredBoards, zoneLineY, zoom)
 
   // Track which groups are rendered by decks so we skip them
   const renderedByDeck = useMemo(() => {
@@ -2174,15 +2176,15 @@ const Overlay: React.FC = () => {
       if (allInDeck) return false
       // Show affordance if at least 2 eligible cards are touching
       const eligibleCount = cluster.filter(gid => {
-        const g = deferredGroups.find(gr => gr.id === gid)
+        const g = groups.find(gr => gr.id === gid)
         if (!g) return false
         const isOpen = !g.deckState || g.deckState === 'open'
         // Visible sub-deck anchors are eligible for parent deck formation
-        const isVisibleSubAnchor = !isHiddenDeckMember(g) && isSubDeckAnchor(g.id, deferredGroups)
+        const isVisibleSubAnchor = !isHiddenDeckMember(g) && isSubDeckAnchor(g.id, groups)
         // Orphan deck state: group has deckState set but no other groups
         // actually reference it as their anchor — treat it as open so the
         // affordance can re-form it into a real deck with a neighbor.
-        const hasRealMembers = deferredGroups.some(other =>
+        const hasRealMembers = groups.some(other =>
           other.id !== g.id && other.deckAnchorId === g.id
         )
         const isOrphanDeck = !isOpen && !isVisibleSubAnchor && !hasRealMembers
@@ -2190,7 +2192,7 @@ const Overlay: React.FC = () => {
       }).length
       return eligibleCount >= 2
     })
-  }, [touchingClusters, renderedByDeck, deferredGroups])
+  }, [touchingClusters, renderedByDeck, groups])
 
   return (
     <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }} onPointerDown={startOverlayPan}>
