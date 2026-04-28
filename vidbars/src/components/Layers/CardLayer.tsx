@@ -72,24 +72,12 @@ const CardContextMenu: React.FC<{
 
   const menuItems: { label: string; icon: string; action: () => void; danger?: boolean; separator?: boolean }[] = []
 
-  // If this card is extracted (some other group holds a ghost slot for it),
-  // surface deck-tether actions at the top.
-  const extractionParent = groups.find(g => (g.ghostSlots ?? []).some(s => s.cardId === group.id))
-  if (extractionParent) {
-    const parentName = extractionParent.name || extractionParent.cardHeaderText || 'Untitled deck'
-    menuItems.push({ label: `Go to deck: ${parentName.substring(0, 24)}`, icon: '↗', action: () => {
-      useCanvasStore.getState().jumpToGroup(extractionParent.id)
-      onClose()
-    }})
-    menuItems.push({ label: 'Check back in', icon: '↩', separator: true, action: () => {
-      useUndoCoordinator.getState().checkpoint()
-      useBoardsStore.getState().returnToDeck(group.id)
-      onClose()
-    }})
-  }
+  // (Deck-tether actions — "Go to deck" and "Check back in" — live on the
+  // tether tint stripe in the header, not on the card-body context menu.
+  // Right-click that stripe to access them.)
 
   // Rename
-  menuItems.push({ label: 'Rename', icon: '✏️', separator: !!extractionParent, action: () => {
+  menuItems.push({ label: 'Rename', icon: '✏️', action: () => {
     const val = prompt('Card name:', group.name)
     if (val !== null) useBoardsStore.getState().renameGroup(group.id, val)
     onClose()
@@ -1582,16 +1570,39 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
           const hsl = hexToHsl(ghostColor)
           const darkFill = hslToHex(hsl.h, Math.max(0.15, hsl.s * 0.5), Math.max(0.08, hsl.l * 0.22))
           const isGhostSelected = selectedGhostIds.includes(item.cardId)
+          // Resolve a hero image for the ghost: prefer the extracted card's
+          // own cardHeroImage, fall back to the first image in any of its
+          // boards. Same lookup as the regular strip render — just rendered
+          // at lower opacity below so the slot reads as a placeholder.
+          const ghostHero = (() => {
+            if (!item.card) return null
+            if (item.card.cardHeroImage) return item.card.cardHeroImage
+            for (const bid of item.card.boardIds) {
+              const board = boards[bid]
+              if (!board) continue
+              for (const rid of board.rootIds) {
+                const img = getFirstImageUrl(board.bars[rid]?.content)
+                if (img) return img
+              }
+            }
+            return null
+          })()
+          const ghostName = item.card?.name || ''
           return (
             <div
               key={`ghost-${item.cardId}`}
               data-deck-slot-drop={`${anchorGroup.id}:${item.cardId}`}
+              title={item.card ? `Extracted: ${ghostName} · double-click to jump` : 'Extracted card (deleted)'}
               onPointerDown={e => {
                 if (e.button !== 0) return
                 e.stopPropagation()
                 useCanvasStore.getState().setSelectedGhostGroupIds([item.cardId])
                 useCanvasStore.getState().clearSelectedBlockBoardIds()
                 useBoardsStore.getState().clearGroupSelection()
+              }}
+              onDoubleClick={e => {
+                e.stopPropagation()
+                if (item.card) useCanvasStore.getState().jumpToGroup(item.cardId)
               }}
               style={{
                 position: 'absolute',
@@ -1604,13 +1615,60 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
                 border: isGhostSelected
                   ? '2px solid rgba(255,255,255,0.85)'
                   : '1.5px dashed rgba(255,255,255,0.28)',
-                overflow: 'visible',
+                overflow: 'hidden',
                 zIndex: stripZ,
                 cursor: 'pointer',
                 userSelect: 'none',
                 pointerEvents: 'all',
               }}
-            />
+            >
+              {/* Hero thumbnail at low opacity — barely visible but enough
+                  to recognize the missing card. Mirrors the regular strip's
+                  hero block, just at ~0.18 alpha vs 0.7 for live cards. */}
+              {ghostHero && (
+                <div style={{
+                  position: 'absolute', inset: 0,
+                  backgroundImage: `url(${ghostHero})`,
+                  backgroundSize: 'cover',
+                  backgroundPosition: 'center',
+                  opacity: 0.18,
+                  borderRadius: stripRadius,
+                  pointerEvents: 'none',
+                }} />
+              )}
+              {/* Vertical card name + "CHECKED OUT" indicator. The state
+                  label is the headline at full opacity; the name is dim,
+                  acting as supporting info. Mirrors the canvas ghost slot's
+                  flipped hierarchy. */}
+              {ghostName && (
+                <div style={{
+                  position: 'absolute', top: 8, left: STRIP_OVERLAP + 4, right: 4, bottom: 8,
+                  writingMode: 'vertical-rl', textOrientation: 'mixed',
+                  textShadow: '0 1px 3px rgba(0,0,0,0.7)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'flex-start',
+                  gap: 8,
+                  pointerEvents: 'none',
+                }}>
+                  <div style={{
+                    color: 'rgba(255,255,255,0.42)',
+                    fontSize: 10, fontWeight: 500,
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  }}>
+                    {ghostName}
+                  </div>
+                  <div style={{
+                    color: 'rgba(255,255,255,1)',
+                    fontSize: 9, fontWeight: 700,
+                    fontStyle: 'italic',
+                    letterSpacing: '0.12em',
+                    textTransform: 'uppercase',
+                    whiteSpace: 'nowrap',
+                  }}>
+                    Checked Out
+                  </div>
+                </div>
+              )}
+            </div>
           )
         }
 
@@ -2138,7 +2196,12 @@ function findExtractionParent(cardId: string, allGroups: ProjectGroup[]): Projec
 /** Card-shaped dotted-outline placeholder at a ghost slot's would-be position
  *  on canvas. Rendered when the parent is OPEN — so the extracted card can
  *  be dropped here to return. (When the parent is fanned/stacked the ghost
- *  appears as a strip inside the fan instead.) */
+ *  appears as a strip inside the fan instead.)
+ *
+ *  Now shows muted card-identity (hero image at low opacity, card name) so
+ *  collaborators opening the file can see WHICH card was checked out, not
+ *  just that something was. Double-click pans the canvas to wherever the
+ *  extracted card actually lives. */
 const GhostCardSlot: React.FC<{ anchor: ProjectGroup; slot: { cardId: string; deckOffsetX: number; deckOffsetY: number } }> = ({ anchor, slot }) => {
   const boards = useBoardsStore(s => s.boards)
   const pan = useCanvasStore(s => s.pan)
@@ -2159,15 +2222,36 @@ const GhostCardSlot: React.FC<{ anchor: ProjectGroup; slot: { cardId: string; de
   const ghostColor = card?.color ?? '#5b8dd9'
   const hsl = hexToHsl(ghostColor)
   const darkFill = hslToHex(hsl.h, Math.max(0.15, hsl.s * 0.5), Math.max(0.08, hsl.l * 0.22))
+  // Hero image lookup — same fallback chain as live cards, just rendered
+  // muted below so the slot still reads as a placeholder.
+  const ghostHero = (() => {
+    if (!card) return null
+    if (card.cardHeroImage) return card.cardHeroImage
+    for (const bid of card.boardIds) {
+      const board = boards[bid]
+      if (!board) continue
+      for (const rid of board.rootIds) {
+        const img = getFirstImageUrl(board.bars[rid]?.content)
+        if (img) return img
+      }
+    }
+    return null
+  })()
+  const ghostName = card?.name || ''
   return (
     <div
       data-deck-slot-drop={`${anchor.id}:${slot.cardId}`}
+      title={card ? `Checked out: ${ghostName} · double-click to jump` : 'Extracted card (deleted)'}
       onPointerDown={e => {
         if (e.button !== 0) return
         e.stopPropagation()
         useCanvasStore.getState().setSelectedGhostGroupIds([slot.cardId])
         useCanvasStore.getState().clearSelectedBlockBoardIds()
         useBoardsStore.getState().clearGroupSelection()
+      }}
+      onDoubleClick={e => {
+        e.stopPropagation()
+        if (card) useCanvasStore.getState().jumpToGroup(slot.cardId)
       }}
       style={{
         position: 'absolute',
@@ -2180,11 +2264,76 @@ const GhostCardSlot: React.FC<{ anchor: ProjectGroup; slot: { cardId: string; de
           : '1.5px dashed rgba(255,255,255,0.28)',
         borderRadius: 12,
         background: darkFill,
+        overflow: 'hidden',
         pointerEvents: 'all',
         cursor: 'pointer',
         zIndex: 30,
       }}
-    />
+    >
+      {/* Hero image at low opacity — recognizable but clearly muted. */}
+      {ghostHero && (
+        <div style={{
+          position: 'absolute', inset: 0,
+          backgroundImage: `url(${ghostHero})`,
+          backgroundSize: 'cover',
+          backgroundPosition: 'center',
+          opacity: 0.22,
+          pointerEvents: 'none',
+        }} />
+      )}
+      {/* "CHECKED OUT" is the headline; the card name is secondary. The
+          state matters more than the identity here — third parties opening
+          the file should immediately register "this slot is checked out"
+          and find the card name as supporting info. */}
+      {ghostName && (() => {
+        const nameSize = Math.max(13, Math.min(24, rect.screenHeight * 0.11))
+        const subtitleSize = Math.max(9, nameSize * 0.55)
+        return (
+          <div style={{
+            position: 'absolute', inset: 0,
+            display: 'flex', flexDirection: 'column',
+            alignItems: 'center', justifyContent: 'center',
+            padding: '0 12px',
+            textAlign: 'center',
+            pointerEvents: 'none',
+          }}>
+            <div style={{
+              color: 'rgba(255,255,255,0.5)',
+              fontSize: nameSize,
+              fontWeight: 600,
+              textShadow: '0 1px 4px rgba(0,0,0,0.6)',
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              maxWidth: '100%',
+            }}>
+              {ghostName}
+            </div>
+            <div style={{
+              color: 'rgba(255,255,255,0.95)',
+              fontSize: subtitleSize,
+              fontWeight: 700,
+              letterSpacing: '0.08em',
+              textTransform: 'uppercase',
+              fontStyle: 'italic',
+              marginTop: Math.max(2, subtitleSize * 0.25),
+              textShadow: '0 1px 4px rgba(0,0,0,0.75)',
+            }}>
+              Checked Out
+            </div>
+          </div>
+        )
+      })()}
+      {/* "Checked out" indicator in the top-right corner — visual cue that
+          this isn't an empty slot, the card is somewhere on the canvas. */}
+      {card && (
+        <div style={{
+          position: 'absolute', top: 6, right: 6,
+          color: 'rgba(255,255,255,0.45)',
+          fontSize: 13, lineHeight: 1, fontWeight: 700,
+          pointerEvents: 'none',
+          textShadow: '0 1px 4px rgba(0,0,0,0.7)',
+        }}>↗</div>
+      )}
+    </div>
   )
 }
 
@@ -2276,9 +2425,12 @@ const DeckOpenPreview: React.FC<{ deck: Deck }> = ({ deck }) => {
   )
 }
 
-/** Tiny colored tab anchored to an extracted card's top-left edge. Color
- *  mirrors the source deck. Hover → tooltip with deck name; double-click →
- *  pan to that deck. */
+/** Tint stripe across the middle third of an extracted card's NLE header,
+ *  colored with the parent deck's color. Replaces the older floating chip
+ *  approach — by integrating into the header bar itself, the indicator
+ *  reads as part of the card's own UI rather than something tacked on.
+ *
+ *  Hover → tooltip with deck name; double-click → pan to that deck. */
 const TetherTab: React.FC<{ cardId: string }> = ({ cardId }) => {
   const boards = useBoardsStore(s => s.boards)
   const pan = useCanvasStore(s => s.pan)
@@ -2286,44 +2438,152 @@ const TetherTab: React.FC<{ cardId: string }> = ({ cardId }) => {
   const allGroups = useBoardsStore(s => s.groups)
   const card = allGroups.find(g => g.id === cardId)
   const parent = card ? findExtractionParent(card.id, allGroups) : null
+  // Context menu state. Stored as cursor position (or null for closed) so we
+  // can render the menu via portal without blocking the early-return below.
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
+  // Hover state — surfaces a small ↗ arrow indicating the stripe is
+  // interactive (jump-to-deck via double-click, menu via right-click).
+  const [isHovered, setIsHovered] = useState(false)
   if (!card || !parent) return null
   const rect = cardScreenRect(card, boards, pan, zoom)
   if (!rect) return null
   const parentName = parent.name || parent.cardHeaderText || 'Untitled deck'
-  // Tab scales with card's zoom but with screen-px floor for visibility.
-  const BASE_W = 30
-  const BASE_H = 18
-  const BASE_OFFSET_X = 12
-  const MIN_W = 20
-  const MIN_H = 13
-  const MIN_OFFSET_X = 5
-  const tabW    = Math.max(MIN_W, BASE_W * zoom)
-  const tabH    = Math.max(MIN_H, BASE_H * zoom)
-  const tuck    = tabH / 3
-  const offsetX = Math.max(MIN_OFFSET_X, BASE_OFFSET_X * zoom)
-  const borderW = Math.max(1, zoom)
+  // Header geometry — same formula NLETimelineHeader uses, mirrored here so
+  // the tint stripe lines up exactly with the visible header bar.
+  const headerExtend = Math.max(NLE_HEADER_CANVAS_H * zoom, 20) + 2 * zoom
+  // Use the CARD's own color (not the parent deck's). Dimmed via lower
+  // saturation + lightness so the band reads as a darker variant of the
+  // card's color rather than a separate identity.
+  const cardHsl = hexToHsl(card.color)
+  const dimmedColor = hslToHex(
+    cardHsl.h,
+    Math.max(0.15, cardHsl.s * 0.5),
+    Math.max(0.15, cardHsl.l * 0.55),
+  )
+  // Middle-third stripe: leaves the card's title (left side) and the
+  // affordance icon (right side) visually unobstructed, while still being
+  // wide enough to register as a deliberate tint rather than a thin band.
+  const stripeLeft = rect.screenLeft + rect.screenWidth / 3
+  const stripeWidth = rect.screenWidth / 3
+  // Arrow size scales with the header — same proportion as the affordance
+  // icon's font size so the visual weight matches.
+  const arrowSize = Math.max(11, headerExtend * 0.55)
   return (
-    <div
-      onPointerDown={e => e.stopPropagation()}
-      onDoubleClick={e => {
-        e.stopPropagation()
-        useCanvasStore.getState().jumpToGroup(parent.id)
-      }}
-      title={`From deck: ${parentName} · double-click to jump`}
-      style={{
-        position: 'absolute',
-        left: rect.screenLeft + offsetX,
-        top: rect.screenTop - tabH + tuck,
-        width: tabW,
-        height: tabH,
-        background: parent.color || '#5b8dd9',
-        border: `${borderW}px solid rgba(255,255,255,0.3)`,
-        borderRadius: `${tabH / 3}px ${tabH / 3}px 0 0`,
-        zIndex: 35, // below card primary (40) so the bottom third tucks behind
-        pointerEvents: 'all',
-        cursor: 'pointer',
-      }}
-    />
+    <>
+      <div
+        onPointerEnter={() => setIsHovered(true)}
+        onPointerLeave={() => setIsHovered(false)}
+        onPointerDown={e => e.stopPropagation()}
+        // Double-click → check the card back in. The "Go to deck" action
+        // is still reachable via right-click for users who want to jump to
+        // the source rather than commit to a return.
+        onDoubleClick={e => {
+          e.stopPropagation()
+          useUndoCoordinator.getState().checkpoint()
+          useBoardsStore.getState().returnToDeck(card.id)
+        }}
+        // Right-click on the tether stripe → tether-specific menu
+        // ("Go to deck" / "Check back in"). The card-body context menu no
+        // longer carries these — they live here, where the visual cue
+        // (dimmed band on the header) is.
+        onContextMenu={e => {
+          e.preventDefault()
+          e.stopPropagation()
+          setMenu({ x: e.clientX, y: e.clientY })
+        }}
+        title={`From deck: ${parentName} · double-click to check back in · right-click for actions`}
+        style={{
+          position: 'absolute',
+          left: stripeLeft,
+          top: rect.screenTop,
+          width: stripeWidth,
+          height: headerExtend,
+          // Dimmed card color: visibly darker than the rest of the header
+          // (which is already a card-color tint) but still in the same
+          // family. Hover bumps alpha slightly for an interaction signal
+          // alongside the arrow appearing.
+          background: isHovered ? `${dimmedColor}b3` : `${dimmedColor}80`,
+          // Dotted outline gives the stripe enough definition to be
+          // unmissable against the header's own card-color tint, without
+          // committing to the dashed treatment used by the affordance icon.
+          border: `1px dotted rgba(255,255,255,${isHovered ? 0.65 : 0.45})`,
+          boxSizing: 'border-box',
+          transition: 'background 0.12s, border-color 0.12s',
+          zIndex: 52, // above the header (z=51) so the tint lands on top
+          pointerEvents: 'all',
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        {/* Hover arrow — same ↗ glyph as the corner indicator on the
+            canvas ghost slot, so the "this is a checked-out tether" visual
+            language is consistent across the two surfaces. */}
+        {isHovered && (
+          <span style={{
+            color: 'rgba(255,255,255,0.85)',
+            fontSize: arrowSize,
+            fontWeight: 700,
+            lineHeight: 1,
+            textShadow: '0 1px 3px rgba(0,0,0,0.6)',
+            pointerEvents: 'none',
+          }}>↗</span>
+        )}
+      </div>
+      {menu && ReactDOM.createPortal(
+        <>
+          <div
+            style={{ position: 'fixed', inset: 0, zIndex: 9998 }}
+            onPointerDown={() => setMenu(null)}
+          />
+          <div
+            onPointerDown={e => e.stopPropagation()}
+            style={{
+              position: 'fixed',
+              left: Math.min(menu.x, window.innerWidth - 220),
+              top: Math.min(menu.y, window.innerHeight - 100),
+              minWidth: 200, zIndex: 9999,
+              background: '#1e1f30', border: '1px solid rgba(255,255,255,0.1)',
+              borderRadius: 10, boxShadow: '0 12px 40px rgba(0,0,0,0.6)',
+              padding: '5px 0', fontFamily: 'system-ui, sans-serif',
+            }}
+          >
+            <div style={{ padding: '4px 12px 6px', borderBottom: '1px solid rgba(255,255,255,0.07)', marginBottom: 4 }}>
+              <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: 11 }}>Tether</span>
+            </div>
+            {[
+              { label: `Go to deck: ${parentName.substring(0, 24)}`, icon: '↗', action: () => {
+                useCanvasStore.getState().jumpToGroup(parent.id)
+                setMenu(null)
+              }},
+              { label: 'Check back in', icon: '↩', action: () => {
+                useUndoCoordinator.getState().checkpoint()
+                useBoardsStore.getState().returnToDeck(card.id)
+                setMenu(null)
+              }},
+            ].map(item => (
+              <button
+                key={item.label}
+                onClick={item.action}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 9,
+                  width: '100%', padding: '7px 14px',
+                  background: 'none', border: 'none', cursor: 'pointer',
+                  color: '#e2e8f0', fontSize: 13, textAlign: 'left', borderRadius: 4,
+                }}
+                onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.07)')}
+                onMouseLeave={e => (e.currentTarget.style.background = 'none')}
+              >
+                <span style={{ fontSize: 14, width: 18, textAlign: 'center' }}>{item.icon}</span>
+                {item.label}
+              </button>
+            ))}
+          </div>
+        </>,
+        document.body
+      )}
+    </>
   )
 }
 
