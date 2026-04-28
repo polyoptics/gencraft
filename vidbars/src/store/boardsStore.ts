@@ -1109,15 +1109,33 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
             return { ...g, ghostSlots: slots.length > 0 ? slots : undefined }
           }
           if (g.id === cardId) {
-            // Re-tether to the parent at the slot offsets.
-            // If this card has its own sub-members, it's a sub-deck anchor —
-            // keep its current deckState (its sub-deck's mode) and mark
-            // nestedDeck=true. Otherwise, match the parent's deckState as a
-            // regular hidden member.
+            // Land at the slot position; the exact tether depends on whether
+            // the parent is currently a deck (fanned/stacked) or open.
             const hasSubMembers = subTreeIds.length > 0
+            const parentIsOpen = !parent.deckState || parent.deckState === 'open'
             if (hasSubMembers) {
               const own: 'stacked' | 'fanned' =
                 (g.deckState === 'stacked' || g.deckState === 'fanned') ? g.deckState : 'stacked'
+              if (parentIsOpen) {
+                // Parent is currently NOT a deck. Re-tethering to it would
+                // mark this card as a hidden deck member of a non-existent
+                // fan — it'd vanish from view until the parent re-closes.
+                // Instead, return as a self-anchored sub-deck on canvas at
+                // the slot position. Sub-tree members travel along via the
+                // delta shift below.
+                return {
+                  ...g,
+                  originX: newOriginX,
+                  originY: newOriginY,
+                  deckAnchorId: g.id,
+                  deckOffsetX: 0,
+                  deckOffsetY: 0,
+                  deckState: own,
+                  nestedDeck: undefined,
+                }
+              }
+              // Parent is fanned/stacked → A becomes a nested sub-deck
+              // member, rendering as a strip in the parent's fan/stack.
               return {
                 ...g,
                 originX: newOriginX,
@@ -1129,6 +1147,9 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
                 nestedDeck: true,
               }
             }
+            // No sub-members. parent.deckState='open' here gives the card
+            // 'open' deckState — a standalone open card at the slot
+            // position, matching the other now-open siblings.
             return {
               ...g,
               originX: newOriginX,

@@ -1138,6 +1138,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
   const allGroups = useBoardsStore(s => s.groups)
   const isSelected = useBoardsStore(s => s.selectedGroupIds.includes(deck.anchorGroupId))
   const selectedGhostIds = useCanvasStore(s => s.selectedGhostGroupIds)
+  const extractingCardId = useCanvasStore(s => s.extractingCardId)
   const [isHovered, setIsHovered] = useState(false)
   const [cardMenu, setCardMenu] = useState<{ x: number; y: number } | null>(null)
   const [surfacedId, setSurfacedId] = useState<string | null>(null)
@@ -1400,6 +1401,11 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
     if (e.button !== 0) return
     e.stopPropagation()
     e.preventDefault()
+    // Clear any stale surfaced-strip state from the hover that immediately
+    // preceded this click. Otherwise the primary card drops to z=5 during
+    // the pre-threshold window and strip 0 (at z=N+1) sits in front of it
+    // for the few frames before extraction kicks in.
+    setSurfacedId(null)
 
     const startX = e.clientX
     const startY = e.clientY
@@ -1421,7 +1427,11 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
     const stripEl = e.currentTarget as HTMLElement
     const stripRect = stripEl.getBoundingClientRect()
     const vOffsetCanvas = (startY - stripRect.top) / z0
-    const rightInsetCanvas = 10
+    // Grab-point: cursor lands ~1/3 of the way in from the card's left
+    // edge. Pulling-from-the-strip-edge feels unnatural — the user expects
+    // to be holding the card by its body, not pinching its corner.
+    // 2/3 from the right == 1/3 from the left.
+    const rightInsetCanvas = widthCanvas * (2 / 3)
     let dragged = false
 
     const computeOrigin = (clientX: number, clientY: number) => {
@@ -1436,20 +1446,67 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
 
     const onMove = (ev: PointerEvent) => {
       const dist = Math.abs(ev.clientX - startX) + Math.abs(ev.clientY - startY)
-      if (dist > 30 && !dragged) {
+      if (dist > 8 && !dragged) {
         dragged = true
         useUndoCoordinator.getState().checkpoint()
         const { originX, originY } = computeOrigin(ev.clientX, ev.clientY)
         useBoardsStore.getState().extractFromDeck(groupId, originX, originY)
+        // Hand off rendering of this card to the fan wrapper at strip
+        // z-index, so it slides out from between the layers rather than
+        // disappearing behind the entire fan stacking context.
+        useCanvasStore.getState().setExtractingCardId(groupId)
+        // Clear any surfaced strip state so the primary card's zIndex
+        // doesn't drop to 5 during extraction — see the primary card's
+        // zIndex below.
+        setSurfacedId(null)
       }
       if (dragged) {
         const { originX, originY } = computeOrigin(ev.clientX, ev.clientY)
-        useBoardsStore.getState().setGroupPos(groupId, originY, originX)
+        // Move the anchor AND any tethered sub-members together. Without
+        // this, only the anchor follows the cursor while sub-members stay
+        // frozen at the threshold-cross position — leaving them stranded
+        // far from the anchor when the user drops it elsewhere on the
+        // canvas. Apply the same delta to each sub-tree member so the
+        // whole sub-deck travels intact.
+        const bs = useBoardsStore.getState()
+        const currentAnchor = bs.groups.find(g => g.id === groupId)
+        if (!currentAnchor) return
+        const dxMove = originX - currentAnchor.originX
+        const dyMove = originY - currentAnchor.originY
+        const allDragIds = expandWithNestedMembers([groupId], bs.groups)
+        const updates = allDragIds.map(id => {
+          if (id === groupId) return { groupId: id, originX, originY }
+          const sub = bs.groups.find(g => g.id === id)
+          return sub
+            ? { groupId: id, originX: sub.originX + dxMove, originY: sub.originY + dyMove }
+            : null
+        }).filter(Boolean) as { groupId: string; originX: number; originY: number }[]
+        bs.setGroupPosBatch(updates)
       }
     }
-    const onUp = () => {
+    const onUp = (ev: PointerEvent) => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
+      // Drop-on-original-slot returns the card to the fan — equivalent to
+      // an "undo" of the extraction. Lets the user pull a card partway out
+      // and put it back without the full extract→drag-back sequence.
+      if (dragged) {
+        const els = document.elementsFromPoint(ev.clientX, ev.clientY)
+        for (const el of els) {
+          const drop = (el as HTMLElement).dataset?.deckSlotDrop
+          if (!drop) continue
+          const [, memberId] = drop.split(':')
+          if (memberId === groupId) {
+            useBoardsStore.getState().returnToDeck(groupId)
+          }
+          break
+        }
+      }
+      // Always release the fan-render handoff. After this clear, the card
+      // either stays where dropped (rendered by CardLayer's main loop at
+      // z-index 40) or has been returned to the fan (no longer rendered as
+      // a standalone at all).
+      useCanvasStore.getState().setExtractingCardId(null)
     }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
@@ -1746,7 +1803,17 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
           overflow: 'hidden',
           cursor: 'grab',
           userSelect: 'none',
-          zIndex: surfacedId ? 5 : 10, // drop below surfaced card when one is active
+          // Drop to z=5 only when a strip is being surface-hovered (so the
+          // surfaced-card overlay at z=20 can render above), AND we're not
+          // in the middle of an extraction. Otherwise the primary's z scales
+          // with the fan size: stays above any possible strip-equivalent z
+          // (max strip z is N+1). Without this scaling, fans with 9+
+          // secondaries push slot 0's z to 10+, which ties or beats a
+          // fixed primary at 10 — and the dragged card (sharing that z)
+          // pops in front of primary instead of sliding under it.
+          zIndex: (surfacedId && !extractingCardId)
+            ? 5
+            : Math.max(10, secondaryItems.length + 2),
         }}
         onPointerDown={onFanDragDown}
       >
@@ -1765,6 +1832,47 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
         {/* The deck-member count now lives inside the dashed-rect
             affordance in the header (one element, two jobs). */}
       </div>
+
+      {/* Extracting card — while a fan strip is being dragged out, render the
+          card here (inside the fan wrapper) at the same z-index its strip
+          held. This puts the card "between layers" in the fan stacking
+          context: cards to its LEFT in fan order cover it, cards to its
+          RIGHT are behind. The visual is "sliding out from between layers"
+          rather than the previous "popping out behind the entire fan".
+          On pointerup, extractingCardId clears and the card transitions to
+          CardLayer's normal main-loop render at zIndex 40 — at which point
+          it's at cursor position (rest of the fan is to the left), so the
+          stacking-context handoff is invisible in practice. */}
+      {extractingCardId && (() => {
+        const slotIdx = secondaryItems.findIndex(it => it.kind === 'ghost' && it.cardId === extractingCardId)
+        if (slotIdx === -1) return null
+        // Use the strip's natural z so the dragged card matches the ghost
+        // slot (which sits beneath it in DOM order — dragged ends up on top
+        // of its own ghost). Primary card's z scales above this — see the
+        // primary's zIndex below.
+        const slotZ = 1 + secondaryItems.length - slotIdx
+        const card = allGroups.find(g => g.id === extractingCardId)
+        if (!card) return null
+        // The wrapper is at (screenLeft, screenTop). Negative offsets cancel
+        // that out so children's absolute positions read as screen-absolute,
+        // letting GroupCard render where its own cardScreenRect math says.
+        return (
+          <div
+            key={`extracting-${card.id}`}
+            style={{
+              position: 'absolute',
+              left: -screenLeft,
+              top: -screenTop,
+              zIndex: slotZ,
+              // Suppress GroupCard's interactions during the drag — pointer
+              // events are owned by the window-level handlers in onStripDown.
+              pointerEvents: 'none',
+            }}
+          >
+            <GroupCard group={card} />
+          </div>
+        )
+      })()}
 
     </div>
     {cardMenu && (
@@ -2276,6 +2384,7 @@ const Overlay: React.FC = () => {
     })
   }, [touchingClusters, renderedByDeck, groups])
 
+  const extractingCardId = useCanvasStore(s => s.extractingCardId)
   return (
     <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }} onPointerDown={startOverlayPan}>
       {groups.map(g => {
@@ -2284,6 +2393,10 @@ const Overlay: React.FC = () => {
         if (g.deckState && g.deckState !== 'open' && g.deckAnchorId && g.deckAnchorId !== g.id) {
           return null
         }
+        // While a fan strip is being dragged out, the FannedDeckOverlay owns
+        // that card's render (at strip-equivalent z-index). Skip here so we
+        // don't render it twice.
+        if (g.id === extractingCardId) return null
 
         const deck = getDeckForGroup(g.id)
 

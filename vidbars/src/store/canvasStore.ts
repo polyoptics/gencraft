@@ -31,6 +31,16 @@ interface CanvasStore {
    *  previewHoveredDeckId so the soft hint and the full open-preview never
    *  fire from the same hover. */
   cardHoveredDeckId: string | null
+  /** Group.id of a card that's currently being dragged out of a fanned deck
+   *  (between the 30px threshold and pointerup). While set:
+   *   - The fan wrapper renders the card itself at strip-equivalent z-index
+   *     so it slides out from between the layers instead of disappearing
+   *     behind the entire fan.
+   *   - CardLayer's main loop skips rendering this card, since the fan
+   *     owns it during the drag.
+   *  Cleared on pointerup, after which the card transitions to its normal
+   *  z-index 40 standalone render. */
+  extractingCardId: string | null
   zoneLineY: number
 
   setPan: (pan: { x: number; y: number }) => void
@@ -48,6 +58,7 @@ interface CanvasStore {
   clearSelectedGhostGroupIds: () => void
   setPreviewHoveredDeckId: (id: string | null) => void
   setCardHoveredDeckId: (id: string | null) => void
+  setExtractingCardId: (id: string | null) => void
   setZoneLineY: (y: number) => void
   /** Pan (keeping current zoom) so the given group is centered in the viewport. */
   jumpToGroup: (groupId: string) => void
@@ -64,6 +75,7 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
   selectedGhostGroupIds: [],
   previewHoveredDeckId: null,
   cardHoveredDeckId: null,
+  extractingCardId: null,
   zoneLineY: 0,
 
   setPan: (pan) => set({ pan }),
@@ -107,6 +119,8 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
   setPreviewHoveredDeckId: (previewHoveredDeckId) => set({ previewHoveredDeckId }),
 
   setCardHoveredDeckId: (cardHoveredDeckId) => set({ cardHoveredDeckId }),
+
+  setExtractingCardId: (extractingCardId) => set({ extractingCardId }),
 
   setZoneLineY: (zoneLineY) => set({ zoneLineY }),
 

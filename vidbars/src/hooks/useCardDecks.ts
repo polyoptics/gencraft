@@ -170,23 +170,82 @@ export function useCardDecks(
       return lt !== undefined && lt < zoneLineY
     })
 
-    // 3. Find touching clusters via union-find, per zone
-    function findClusters(zoneGroups: ProjectGroup[]): string[][] {
-      const n = zoneGroups.length
-      if (n < 2) return []
-      const uf = new UnionFind(n)
-      for (let i = 0; i < n; i++) {
-        for (let j = i + 1; j < n; j++) {
-          const ri = rects.get(zoneGroups[i].id)
-          const rj = rects.get(zoneGroups[j].id)
+    // 2b. Ghost-slot BRIDGE rects. When a parent deck is open and one or more
+    // of its members have been extracted, the parent renders a placeholder at
+    // each empty slot (`GhostCardSlot`). Without anything more, those
+    // placeholders are spatially invisible to the union-find — so cards on
+    // either side of an empty slot can read as separate clusters and the
+    // re-close affordance only catches part of the original deck. Project
+    // each ghost slot's rect (using the extracted card's geometry shifted to
+    // the slot's canvas position) and use them as VIRTUAL bridge nodes in
+    // clustering. They union groups they connect, but never become deck
+    // members themselves. Same treatment for sub-deck extractions: the
+    // parent's ghost slot bridges identically regardless of whether the
+    // extracted thing was a single card or a sub-deck anchor with members.
+    const groupMap = new Map(groups.map(g => [g.id, g]))
+    type GhostBridge = { rect: GroupSlot; logicalTop: number }
+    const ghostBridges: GhostBridge[] = []
+    for (const g of groups) {
+      // Only OPEN parents have visible ghost-slot placeholders on canvas.
+      // For fanned/stacked parents, the ghost slot is part of the fan render
+      // and the parent itself is the cluster — no bridging needed.
+      if (g.deckState && g.deckState !== 'open') continue
+      const slots = g.ghostSlots ?? []
+      if (slots.length === 0) continue
+      for (const slot of slots) {
+        const card = groupMap.get(slot.cardId)
+        if (!card) continue
+        const cardRect = rects.get(slot.cardId)
+        const cardLogicalTop = logicalTops.get(slot.cardId)
+        if (!cardRect || cardLogicalTop === undefined) continue
+        // Translate the extracted card's rect by the offset between its
+        // current origin and where the slot sits in the parent.
+        const dx = (g.originX + slot.deckOffsetX) - card.originX
+        const dy = (g.originY + slot.deckOffsetY) - card.originY
+        ghostBridges.push({
+          rect: {
+            id: `ghost:${g.id}:${slot.cardId}`,
+            left: cardRect.left + dx,
+            right: cardRect.right + dx,
+            top: cardRect.top + dy,
+            bottom: cardRect.bottom + dy,
+          },
+          logicalTop: cardLogicalTop + dy,
+        })
+      }
+    }
+    // Partition ghost bridges by zone using their projected logical top.
+    const timelineGhosts = ghostBridges.filter(b => b.logicalTop >= zoneLineY).map(b => b.rect)
+    const freeGhosts     = ghostBridges.filter(b => b.logicalTop <  zoneLineY).map(b => b.rect)
+
+    // 3. Find touching clusters via union-find, per zone. Ghost bridges
+    // participate as virtual nodes — they help union groups across an
+    // extracted-card gap, but are filtered out before cluster IDs are
+    // returned (only real groups become deck members).
+    function findClusters(zoneGroups: ProjectGroup[], zoneGhosts: GroupSlot[]): string[][] {
+      const groupCount = zoneGroups.length
+      const totalNodes = groupCount + zoneGhosts.length
+      if (groupCount < 2) return [] // need at least 2 real groups to form a cluster
+      if (totalNodes < 2) return []
+      const uf = new UnionFind(totalNodes)
+      // Helper: rect for node i, where 0..groupCount-1 are groups and
+      // groupCount..totalNodes-1 are ghost bridges.
+      const nodeRect = (i: number): GroupSlot | undefined =>
+        i < groupCount ? rects.get(zoneGroups[i].id) : zoneGhosts[i - groupCount]
+      for (let i = 0; i < totalNodes; i++) {
+        for (let j = i + 1; j < totalNodes; j++) {
+          const ri = nodeRect(i)
+          const rj = nodeRect(j)
           if (ri && rj && rectsTouch(ri, rj, TOUCH_TOLERANCE)) {
             uf.union(i, j)
           }
         }
       }
-      // Extract clusters
+      // Extract clusters — only real groups, not ghost bridges. Multi-ghost
+      // chains transit cleanly: ghosts in the same union root just don't
+      // contribute to the result.
       const clusterMap = new Map<number, number[]>()
-      for (let i = 0; i < n; i++) {
+      for (let i = 0; i < groupCount; i++) {
         const root = uf.find(i)
         if (!clusterMap.has(root)) clusterMap.set(root, [])
         clusterMap.get(root)!.push(i)
@@ -202,15 +261,15 @@ export function useCardDecks(
     }
 
     const allClusters = [
-      ...findClusters(timelineGroups),
-      ...findClusters(freeGroups),
+      ...findClusters(timelineGroups, timelineGhosts),
+      ...findClusters(freeGroups, freeGhosts),
     ]
 
     // 4. Build touching clusters (all, regardless of state)
     const touchingClusters = allClusters
 
     // 5. Filter to decks: clusters where ALL members have deckState !== 'open'
-    const groupMap = new Map(groups.map(g => [g.id, g]))
+    // (groupMap declared above for ghost-bridge construction).
     const decks: Deck[] = []
     const inSpatialDeck = new Set<string>()  // track groups handled by spatial clusters
 
