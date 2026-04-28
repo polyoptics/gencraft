@@ -2431,7 +2431,7 @@ const DeckOpenPreview: React.FC<{ deck: Deck }> = ({ deck }) => {
  *  reads as part of the card's own UI rather than something tacked on.
  *
  *  Hover → tooltip with deck name; double-click → pan to that deck. */
-const TetherTab: React.FC<{ cardId: string }> = ({ cardId }) => {
+const TetherTab: React.FC<{ cardId: string; touchingClusters: string[][] }> = ({ cardId, touchingClusters }) => {
   const boards = useBoardsStore(s => s.boards)
   const pan = useCanvasStore(s => s.pan)
   const zoom = useCanvasStore(s => s.zoom)
@@ -2451,14 +2451,15 @@ const TetherTab: React.FC<{ cardId: string }> = ({ cardId }) => {
   // Header geometry — same formula NLETimelineHeader uses, mirrored here so
   // the tint stripe lines up exactly with the visible header bar.
   const headerExtend = Math.max(NLE_HEADER_CANVAS_H * zoom, 20) + 2 * zoom
-  // Use the CARD's own color (not the parent deck's). Dimmed via lower
-  // saturation + lightness so the band reads as a darker variant of the
-  // card's color rather than a separate identity.
+  // Use the CARD's own color (not the parent deck's), but brightened —
+  // higher lightness and slightly higher saturation than the rest of the
+  // header tint. Stays in the same color family while standing out as a
+  // distinct band.
   const cardHsl = hexToHsl(card.color)
-  const dimmedColor = hslToHex(
+  const brightColor = hslToHex(
     cardHsl.h,
-    Math.max(0.15, cardHsl.s * 0.5),
-    Math.max(0.15, cardHsl.l * 0.55),
+    Math.min(1, cardHsl.s + 0.1),
+    Math.min(0.9, cardHsl.l + 0.25),
   )
   // Middle-third stripe: leaves the card's title (left side) and the
   // affordance icon (right side) visually unobstructed, while still being
@@ -2474,12 +2475,23 @@ const TetherTab: React.FC<{ cardId: string }> = ({ cardId }) => {
         onPointerEnter={() => setIsHovered(true)}
         onPointerLeave={() => setIsHovered(false)}
         onPointerDown={e => e.stopPropagation()}
-        // Double-click → check the card back in. The "Go to deck" action
-        // is still reachable via right-click for users who want to jump to
-        // the source rather than commit to a return.
+        // Double-click → check the card back in. If the card is currently
+        // in a touching cluster with other cards on canvas (i.e., a deck
+        // affordance is showing around them), re-form the cluster as
+        // THIS card's sub-deck first — so the whole group goes back into
+        // the parent's slot together rather than leaving the cluster
+        // stranded. The "Go to deck" action is still reachable via
+        // right-click for users who want to jump to the source instead.
         onDoubleClick={e => {
           e.stopPropagation()
           useUndoCoordinator.getState().checkpoint()
+          const cluster = touchingClusters.find(c => c.includes(card.id))
+          if (cluster && cluster.length >= 2) {
+            // Reorder so this card is first → it becomes the sub-deck
+            // anchor. Other cluster members get tethered to it.
+            const ordered = [card.id, ...cluster.filter(id => id !== card.id)]
+            useBoardsStore.getState().setDeckState(ordered, 'stacked')
+          }
           useBoardsStore.getState().returnToDeck(card.id)
         }}
         // Right-click on the tether stripe → tether-specific menu
@@ -2498,15 +2510,14 @@ const TetherTab: React.FC<{ cardId: string }> = ({ cardId }) => {
           top: rect.screenTop,
           width: stripeWidth,
           height: headerExtend,
-          // Dimmed card color: visibly darker than the rest of the header
-          // (which is already a card-color tint) but still in the same
-          // family. Hover bumps alpha slightly for an interaction signal
+          // Brightened card color: visibly lighter than the rest of the
+          // header (which is already a card-color tint) but still in the
+          // same family. Hover bumps alpha for an interaction signal
           // alongside the arrow appearing.
-          background: isHovered ? `${dimmedColor}b3` : `${dimmedColor}80`,
+          background: isHovered ? `${brightColor}66` : `${brightColor}40`,
           // Dotted outline gives the stripe enough definition to be
-          // unmissable against the header's own card-color tint, without
-          // committing to the dashed treatment used by the affordance icon.
-          border: `1px dotted rgba(255,255,255,${isHovered ? 0.65 : 0.45})`,
+          // recognizable without competing with the header content.
+          border: `1px dotted rgba(255,255,255,${isHovered ? 0.35 : 0.22})`,
           boxSizing: 'border-box',
           transition: 'background 0.12s, border-color 0.12s',
           zIndex: 52, // above the header (z=51) so the tint lands on top
@@ -2531,6 +2542,37 @@ const TetherTab: React.FC<{ cardId: string }> = ({ cardId }) => {
           }}>↗</span>
         )}
       </div>
+      {/* Hover preview: outline every card in the touching cluster around
+          this tether's card. Tells the user, before they double-click,
+          which cards will be folded into the sub-deck and returned along
+          with the anchor. Uses the same blue-dashed treatment as
+          DeckAffordance's hover so it reads as "deck-ish." */}
+      {isHovered && (() => {
+        const cluster = touchingClusters.find(c => c.includes(card.id))
+        if (!cluster || cluster.length < 2) return null
+        return cluster.map(memberId => {
+          const member = allGroups.find(g => g.id === memberId)
+          if (!member) return null
+          const r = cardScreenRect(member, boards, pan, zoom)
+          if (!r) return null
+          return (
+            <div
+              key={`tether-preview-${memberId}`}
+              style={{
+                position: 'absolute',
+                left: r.screenLeft - 3,
+                top: r.screenTop - 3,
+                width: r.screenWidth + 6,
+                height: r.screenHeight + 6,
+                border: '2px dashed rgba(130,180,255,0.6)',
+                borderRadius: 14,
+                zIndex: 39,
+                pointerEvents: 'none',
+              }}
+            />
+          )
+        })
+      })()}
       {menu && ReactDOM.createPortal(
         <>
           <div
@@ -2559,6 +2601,13 @@ const TetherTab: React.FC<{ cardId: string }> = ({ cardId }) => {
               }},
               { label: 'Check back in', icon: '↩', action: () => {
                 useUndoCoordinator.getState().checkpoint()
+                // Same cluster-fold behavior as double-click: bring touching
+                // cards along as a sub-deck so the whole group returns home.
+                const cluster = touchingClusters.find(c => c.includes(card.id))
+                if (cluster && cluster.length >= 2) {
+                  const ordered = [card.id, ...cluster.filter(id => id !== card.id)]
+                  useBoardsStore.getState().setDeckState(ordered, 'stacked')
+                }
                 useBoardsStore.getState().returnToDeck(card.id)
                 setMenu(null)
               }},
@@ -2744,7 +2793,7 @@ const Overlay: React.FC = () => {
       {groups.map(g => {
         const parent = findExtractionParent(g.id, groups)
         if (!parent) return null
-        return <TetherTab key={`tether-${g.id}`} cardId={g.id} />
+        return <TetherTab key={`tether-${g.id}`} cardId={g.id} touchingClusters={touchingClusters} />
       })}
 
       {/* Ghost-slot placeholders for OPEN parent decks. When the parent is
