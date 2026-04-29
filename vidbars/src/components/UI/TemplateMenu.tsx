@@ -1,43 +1,50 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { useBoardsStore } from '../../store/boardsStore'
+import type { BoardData, ProjectGroup } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
-import { useUserTemplateStore } from '../../store/userTemplateStore'
-import type { SavedTemplate } from '../../store/userTemplateStore'
 import { TEMPLATES } from '../../data/templates'
-import { computeGroupLayout, getGroupHeight } from '../../utils/nleRows'
+import type { TemplateData } from '../../data/templates'
+import { SCAFFOLDS, instantiateScaffold } from '../../data/scaffolds'
+import type { ScaffoldData } from '../../data/scaffolds'
+import { insertProjectSnapshot } from '../../utils/projectInsert'
+import { getGroupHeight } from '../../utils/nleRows'
 
 interface SnapshotMeta { id: string; name: string; savedAt: number; file: string }
 
+// Unified shape that lets the menu render scaffolds + presets the same way
+type TemplateEntry =
+  | { kind: 'scaffold'; data: ScaffoldData }
+  | { kind: 'preset';   data: TemplateData }
+
 export const TemplateMenu: React.FC = () => {
   const [open, setOpen] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [savingScene, setSavingScene] = useState(false)
-  const [saveName, setSaveName] = useState('')
-  const [sceneName, setSceneName] = useState('')
-  const saveInputRef = useRef<HTMLInputElement>(null)
-  const sceneInputRef = useRef<HTMLInputElement>(null)
+  const [savingProject, setSavingProject] = useState(false)
+  const [projectName, setProjectName] = useState('')
+  const projectInputRef = useRef<HTMLInputElement>(null)
   const ref = useRef<HTMLDivElement>(null)
   const [snapshots, setSnapshots] = useState<SnapshotMeta[]>([])
-  const [loadingScene, setLoadingScene] = useState<string | null>(null)
+  const [busyFile, setBusyFile] = useState<string | null>(null)
+
+  // ── Confirmation dialog state ──
+  // When set, a modal yes/no overlay renders. Yes calls onYes; No clears.
+  const [confirm, setConfirm] = useState<{
+    message: string
+    onYes: () => void
+  } | null>(null)
+  const yesBtnRef = useRef<HTMLButtonElement>(null)
 
   const setPan = useCanvasStore(s => s.setPan)
   const setZoom = useCanvasStore(s => s.setZoom)
   const setBoardPos = useCanvasStore(s => s.setBoardPos)
 
-  const userTemplates = useUserTemplateStore(s => s.templates)
-  const saveTemplate = useUserTemplateStore(s => s.saveTemplate)
-  const removeTemplate = useUserTemplateStore(s => s.removeTemplate)
-  const updateTemplate = useUserTemplateStore(s => s.updateTemplate)
-
   useEffect(() => {
-    if (!open) { setSaving(false); setSaveName(''); setSavingScene(false); setSceneName('') }
+    if (!open) { setSavingProject(false); setProjectName('') }
   }, [open])
 
   useEffect(() => {
-    if (saving) saveInputRef.current?.focus()
-    if (savingScene) sceneInputRef.current?.focus()
-  }, [saving, savingScene])
+    if (savingProject) projectInputRef.current?.focus()
+  }, [savingProject])
 
   // Fetch snapshot list when menu opens
   useEffect(() => {
@@ -54,25 +61,45 @@ export const TemplateMenu: React.FC = () => {
     return () => document.removeEventListener('mousedown', handler)
   }, [open])
 
-  function getCurrentSnapshot(): Omit<SavedTemplate, 'id' | 'savedAt' | 'name'> {
+  // Focus the Yes button when the confirm dialog opens, and wire Esc to cancel.
+  useEffect(() => {
+    if (!confirm) return
+    yesBtnRef.current?.focus()
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setConfirm(null)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [confirm])
+
+  /** Wraps an action in the yes/no confirmation dialog. */
+  function ask(message: string, action: () => void) {
+    setConfirm({ message, onYes: action })
+  }
+
+  // ── Snapshot helpers ─────────────────────────────────────────
+
+  function getCurrentSnapshot() {
     const bs = useBoardsStore.getState()
     const cs = useCanvasStore.getState()
     const fn = useFreeNodeStore.getState()
 
     const primary = bs.boards['primary']
-    const { bars, rootIds, projectName } = primary ?? { bars: {}, rootIds: [], projectName: 'storyMap' }
+    const { bars, rootIds, projectName: pName } = primary ?? { bars: {}, rootIds: [], projectName: 'storyMap' }
 
     const allBars = Object.values(bars)
     const canvasWidth = allBars.length > 0 ? Math.max(...allBars.map(b => b.x + b.width)) : 800
 
-    // Extra boards — strip transient state (selection, open viewer)
     const extraBoards = bs.boardOrder
       .map(id => bs.boards[id])
       .filter(Boolean)
       .map(b => ({ ...b, selectedIds: [], viewerBarId: null }))
 
     return {
-      projectName,
+      projectName: pName,
       bars,
       rootIds,
       pan: cs.pan,
@@ -99,143 +126,23 @@ export const TemplateMenu: React.FC = () => {
     return maxBottom + 60
   }
 
-  function applyBuiltIn(id: string) {
-    const t = TEMPLATES.find(t => t.id === id)
-    if (!t) return
-    // Clear extra boards
-    const bs = useBoardsStore.getState()
-    bs.boardOrder.slice().forEach(bid => useBoardsStore.getState().deleteBoard(bid))
-    // Clear free nodes
-    useFreeNodeStore.setState({ nodes: {}, selectedIds: [] })
-    // Reset boardPos
-    setBoardPos({ x: 0, y: 0 })
-    useBoardsStore.getState().loadTemplate('primary', id)
-    setZoom(t.zoom)
-    const toolbarH = 40
-    const canvasH = window.innerHeight - toolbarH
-    setPan({
-      x: Math.max(20, (window.innerWidth - t.canvasWidth * t.zoom) / 2),
-      y: Math.round(canvasH * 0.18),
-    })
-    setOpen(false)
-  }
+  // ── Project actions (load / insert / overwrite / delete / save) ──
 
-  function addBuiltInAsBoard(id: string) {
-    const t = TEMPLATES.find(t => t.id === id)
-    if (!t) return
-    const freeY = nextFreeY()
-    const newId = useBoardsStore.getState().createBoard(0, 0)
-    useBoardsStore.getState().loadTemplate(newId, id)
-    // Position the new board's group at the free Y
-    const bs = useBoardsStore.getState()
-    const group = bs.groups.find(g => g.boardIds.includes(newId))
-    if (group) useBoardsStore.getState().setGroupPos(group.id, freeY, 0)
-    setOpen(false)
-  }
-
-  function addUserTemplateAsBoard(id: string) {
-    const t = userTemplates.find(t => t.id === id)
-    if (!t) return
-    const freeY = nextFreeY()
-    const newId = useBoardsStore.getState().createBoard(0, 0)
-    useBoardsStore.getState().loadLayout(newId, {
-      bars: t.bars,
-      rootIds: t.rootIds,
-      projectName: t.projectName,
-    })
-    // Position the new board's group at the free Y
-    const bs = useBoardsStore.getState()
-    const group = bs.groups.find(g => g.boardIds.includes(newId))
-    if (group) useBoardsStore.getState().setGroupPos(group.id, freeY, 0)
-    setOpen(false)
-  }
-
-  function applyUserTemplate(id: string) {
-    const t = userTemplates.find(t => t.id === id)
-    if (!t) return
-
-    // Restore primary board
-    useBoardsStore.getState().loadLayout('primary', {
-      bars: t.bars,
-      rootIds: t.rootIds,
-      projectName: t.projectName,
-    })
-
-    // Restore extra boards — clear existing extras first, then add saved ones
-    const bs = useBoardsStore.getState()
-    bs.boardOrder.slice().forEach(id => useBoardsStore.getState().deleteBoard(id))
-    if (t.extraBoards && t.boardOrder) {
-      t.extraBoards.forEach(board => {
-        useBoardsStore.setState(s => ({
-          boards: { ...s.boards, [board.id]: { ...board, selectedIds: [], viewerBarId: null } },
-          boardOrder: [...s.boardOrder, board.id],
-        }))
-      })
-    }
-
-    // Restore groups
-    if (t.groups) {
-      useBoardsStore.setState({ groups: t.groups })
-    }
-
-    // Restore free nodes
-    if (t.freeNodes) {
-      useFreeNodeStore.setState({ nodes: t.freeNodes, selectedIds: [] })
-    }
-
-    // Restore canvas
-    setZoom(t.zoom)
-    setPan(t.pan)
-    if (t.boardPos) setBoardPos(t.boardPos)
-
-    setOpen(false)
-  }
-
-  function overwriteTemplate(id: string) {
-    const existing = userTemplates.find(t => t.id === id)
-    if (!existing) return
-    updateTemplate(id, { name: existing.name, ...getCurrentSnapshot() })
-  }
-
-  function commitSave() {
-    const name = saveName.trim()
-    if (!name) return
-    saveTemplate({ name, ...getCurrentSnapshot() })
-    setSaving(false)
-    setSaveName('')
-    setOpen(false)
-  }
-
-  async function saveSceneSnapshot() {
-    const name = sceneName.trim()
-    if (!name) return
-    const snapshot = { name, id: crypto.randomUUID(), savedAt: Date.now(), ...getCurrentSnapshot() }
-    await fetch('/api/snapshots/save', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(snapshot),
-    })
-    setSavingScene(false)
-    setSceneName('')
-    // Refresh list
-    fetch('/api/snapshots/list').then(r => r.json()).then(setSnapshots).catch(() => {})
-  }
-
-  async function loadSceneSnapshot(file: string) {
-    setLoadingScene(file)
+  async function loadProject(file: string) {
+    setBusyFile(file)
     try {
       const res = await fetch(`/api/snapshots/load/${file}`)
       const t = await res.json()
       if (!t || !t.bars) return
 
-      // Same restore logic as applyUserTemplate
+      // Replace canvas: primary content + extras + groups + free nodes
       useBoardsStore.getState().loadLayout('primary', {
         bars: t.bars, rootIds: t.rootIds, projectName: t.projectName,
       })
       const bs = useBoardsStore.getState()
       bs.boardOrder.slice().forEach(id => useBoardsStore.getState().deleteBoard(id))
       if (t.extraBoards && t.boardOrder) {
-        t.extraBoards.forEach((board: any) => {
+        t.extraBoards.forEach((board: BoardData) => {
           useBoardsStore.setState(s => ({
             boards: { ...s.boards, [board.id]: { ...board, selectedIds: [], viewerBarId: null } },
             boardOrder: [...s.boardOrder, board.id],
@@ -249,14 +156,144 @@ export const TemplateMenu: React.FC = () => {
       if (t.boardPos) setBoardPos(t.boardPos)
       setOpen(false)
     } finally {
-      setLoadingScene(null)
+      setBusyFile(null)
     }
   }
 
-  async function deleteSceneSnapshot(file: string) {
+  async function insertProject(file: string) {
+    setBusyFile(file)
+    try {
+      const res = await fetch(`/api/snapshots/load/${file}`)
+      const t = await res.json()
+      if (!t) return
+      insertProjectSnapshot(t, nextFreeY())
+      setOpen(false)
+    } finally {
+      setBusyFile(null)
+    }
+  }
+
+  async function overwriteProject(meta: SnapshotMeta) {
+    // Save endpoint writes to `<safeName>.json`, so reusing the same name
+    // overwrites the same file on disk.
+    const snapshot = { name: meta.name, id: meta.id, savedAt: Date.now(), ...getCurrentSnapshot() }
+    await fetch('/api/snapshots/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(snapshot),
+    })
+    fetch('/api/snapshots/list').then(r => r.json()).then(setSnapshots).catch(() => {})
+  }
+
+  async function deleteProject(file: string) {
     await fetch(`/api/snapshots/delete/${file}`, { method: 'DELETE' })
     setSnapshots(s => s.filter(sn => sn.file !== file))
   }
+
+  async function saveCurrentAsProject() {
+    const name = projectName.trim()
+    if (!name) return
+    const snapshot = { name, id: crypto.randomUUID(), savedAt: Date.now(), ...getCurrentSnapshot() }
+    await fetch('/api/snapshots/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(snapshot),
+    })
+    setSavingProject(false)
+    setProjectName('')
+    fetch('/api/snapshots/list').then(r => r.json()).then(setSnapshots).catch(() => {})
+  }
+
+  // ── Template actions (load / insert) ───────────────────────────
+
+  function loadTemplate(entry: TemplateEntry) {
+    if (entry.kind === 'preset') {
+      const t = entry.data
+      const bs = useBoardsStore.getState()
+      bs.boardOrder.slice().forEach(bid => useBoardsStore.getState().deleteBoard(bid))
+      useFreeNodeStore.setState({ nodes: {}, selectedIds: [] })
+      setBoardPos({ x: 0, y: 0 })
+      useBoardsStore.getState().loadTemplate('primary', t.id)
+      setZoom(t.zoom)
+      const toolbarH = 40
+      const canvasH = window.innerHeight - toolbarH
+      setPan({
+        x: Math.max(20, (window.innerWidth - t.canvasWidth * t.zoom) / 2),
+        y: Math.round(canvasH * 0.18),
+      })
+    } else {
+      // Scaffold: generate a fresh instance, fold the first block into primary,
+      // remaining blocks become extras inside the same group.
+      const inst = instantiateScaffold(entry.data.id, 0, 0)
+      if (!inst || inst.boards.length === 0) return
+      const bs = useBoardsStore.getState()
+      bs.boardOrder.slice().forEach(bid => useBoardsStore.getState().deleteBoard(bid))
+      useFreeNodeStore.setState({ nodes: {}, selectedIds: [] })
+
+      const [first, ...rest] = inst.boards
+      useBoardsStore.setState(s => {
+        const newPrimary: BoardData = {
+          ...s.boards.primary,
+          bars: first.bars,
+          rootIds: first.rootIds,
+          projectName: first.projectName,
+          color: first.color,
+          nleRow: 0,
+          nleX: 0,
+          layers: first.layers,
+          pristine: true,
+          selectedIds: [],
+          viewerBarId: null,
+          savedCollapsedState: null,
+        }
+        const newBoards: Record<string, BoardData> = { primary: newPrimary }
+        rest.forEach(b => { newBoards[b.id] = b })
+        const newGroup: ProjectGroup = {
+          ...inst.group,
+          boardIds: ['primary', ...rest.map(b => b.id)],
+          originX: 0,
+          originY: 0,
+        }
+        return {
+          boards: newBoards,
+          boardOrder: rest.map(b => b.id),
+          groups: [newGroup],
+        }
+      })
+
+      setBoardPos({ x: 0, y: 0 })
+      setZoom(0.85)
+      setPan({ x: 100, y: 100 })
+    }
+    setOpen(false)
+  }
+
+  function insertTemplate(entry: TemplateEntry) {
+    if (entry.kind === 'preset') {
+      const t = entry.data
+      const freeY = nextFreeY()
+      const newId = useBoardsStore.getState().createBoard(0, 0)
+      useBoardsStore.getState().loadTemplate(newId, t.id)
+      const bs = useBoardsStore.getState()
+      const group = bs.groups.find(g => g.boardIds.includes(newId))
+      if (group) useBoardsStore.getState().setGroupPos(group.id, freeY, 0)
+    } else {
+      const inst = instantiateScaffold(entry.data.id, nextFreeY(), 0)
+      if (!inst) return
+      useBoardsStore.setState(s => {
+        const newBoards = { ...s.boards }
+        inst.boards.forEach(b => { newBoards[b.id] = b })
+        return {
+          boards: newBoards,
+          boardOrder: [...s.boardOrder, ...inst.boards.map(b => b.id)],
+          groups: [...s.groups, inst.group],
+        }
+      })
+    }
+    setOpen(false)
+  }
+
+  // ── Styles ─────────────────────────────────────────────────────
 
   const btnStyle: React.CSSProperties = {
     display: 'flex',
@@ -276,6 +313,25 @@ export const TemplateMenu: React.FC = () => {
     letterSpacing: '0.2px',
     gap: 6,
   }
+
+  // Hover colors are applied imperatively via mouseEnter/Leave below, since
+  // React has no inline :hover. This base style is shared by every icon button.
+  const iconBtn: React.CSSProperties = {
+    background: 'none',
+    border: 'none',
+    color: 'rgba(255,255,255,0.22)',
+    fontSize: 13,
+    cursor: 'pointer',
+    padding: '4px 4px 4px 2px',
+    lineHeight: 1,
+    flexShrink: 0,
+  }
+
+  // Build the unified template list (scaffolds first, then presets)
+  const templateEntries: TemplateEntry[] = [
+    ...SCAFFOLDS.map<TemplateEntry>(s => ({ kind: 'scaffold', data: s })),
+    ...TEMPLATES.map<TemplateEntry>(t => ({ kind: 'preset', data: t })),
+  ]
 
   return (
     <div ref={ref} style={{ position: 'relative' }}>
@@ -312,108 +368,72 @@ export const TemplateMenu: React.FC = () => {
           border: '1px solid rgba(255,255,255,0.10)',
           borderRadius: 8,
           padding: '4px',
-          minWidth: 180,
+          minWidth: 220,
           zIndex: 1000,
           boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
         }}>
 
-          {/* ── User-saved templates ── */}
-          {userTemplates.length > 0 && (
-            <>
-              <div style={{ padding: '4px 10px 2px', fontSize: 9, color: 'rgba(255,255,255,0.28)', letterSpacing: '0.6px', textTransform: 'uppercase' }}>
-                Saved
-              </div>
-              {userTemplates.map(t => (
-                <div key={t.id} style={{ display: 'flex', alignItems: 'center' }}>
-                  <button
-                    style={{ ...btnStyle, flex: 1 }}
-                    onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.07)')}
-                    onMouseLeave={e => (e.currentTarget.style.background = 'none')}
-                    onClick={() => applyUserTemplate(t.id)}
-                  >
-                    {t.name}
-                  </button>
-                  <button
-                    title="Add as new board"
-                    style={{
-                      background: 'none', border: 'none',
-                      color: 'rgba(255,255,255,0.22)', fontSize: 13,
-                      cursor: 'pointer', padding: '4px 4px 4px 2px',
-                      lineHeight: 1, flexShrink: 0,
-                    }}
-                    onMouseEnter={e => (e.currentTarget.style.color = 'rgba(120,170,255,0.8)')}
-                    onMouseLeave={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.22)')}
-                    onClick={e => { e.stopPropagation(); addUserTemplateAsBoard(t.id) }}
-                  >+</button>
-                  <button
-                    title="Overwrite with current layout"
-                    style={{
-                      background: 'none', border: 'none',
-                      color: 'rgba(255,255,255,0.22)', fontSize: 12,
-                      cursor: 'pointer', padding: '4px 4px 4px 2px',
-                      lineHeight: 1, flexShrink: 0,
-                    }}
-                    onMouseEnter={e => (e.currentTarget.style.color = 'rgba(120,200,120,0.8)')}
-                    onMouseLeave={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.22)')}
-                    onClick={e => { e.stopPropagation(); overwriteTemplate(t.id) }}
-                  >↺</button>
-                  <button
-                    title="Delete saved layout"
-                    style={{
-                      background: 'none', border: 'none',
-                      color: 'rgba(255,255,255,0.22)', fontSize: 13,
-                      cursor: 'pointer', padding: '4px 8px 4px 2px',
-                      lineHeight: 1, flexShrink: 0,
-                    }}
-                    onMouseEnter={e => (e.currentTarget.style.color = 'rgba(255,100,100,0.7)')}
-                    onMouseLeave={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.22)')}
-                    onClick={e => { e.stopPropagation(); removeTemplate(t.id) }}
-                  >×</button>
-                </div>
-              ))}
-              <div style={{ margin: '4px 8px', borderTop: '1px solid rgba(255,255,255,0.07)' }} />
-            </>
-          )}
-
-          {/* ── Scene Snapshots ── */}
+          {/* ── Projects (your saved canvases) ── */}
           <div style={{ padding: '4px 10px 2px', fontSize: 9, color: 'rgba(255,255,255,0.28)', letterSpacing: '0.6px', textTransform: 'uppercase' }}>
-            Scenes
+            Projects
           </div>
           {snapshots.map(sn => (
             <div key={sn.file} style={{ display: 'flex', alignItems: 'center' }}>
               <button
-                style={{ ...btnStyle, flex: 1, color: loadingScene === sn.file ? 'rgba(120,170,255,0.9)' : 'rgba(255,255,255,0.70)' }}
+                style={{ ...btnStyle, flex: 1, color: busyFile === sn.file ? 'rgba(120,170,255,0.9)' : 'rgba(255,255,255,0.70)' }}
                 onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.07)')}
                 onMouseLeave={e => (e.currentTarget.style.background = 'none')}
-                onClick={() => loadSceneSnapshot(sn.file)}
+                onClick={() => ask(`Load project "${sn.name}"? This replaces your current canvas.`, () => loadProject(sn.file))}
               >
-                {loadingScene === sn.file ? 'Loading…' : sn.name}
+                {busyFile === sn.file ? 'Loading…' : sn.name}
               </button>
               <button
-                title="Delete scene"
-                style={{
-                  background: 'none', border: 'none',
-                  color: 'rgba(255,255,255,0.22)', fontSize: 13,
-                  cursor: 'pointer', padding: '4px 8px 4px 2px',
-                  lineHeight: 1, flexShrink: 0,
+                title="Insert as new group on canvas"
+                style={iconBtn}
+                onMouseEnter={e => (e.currentTarget.style.color = 'rgba(120,170,255,0.8)')}
+                onMouseLeave={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.22)')}
+                onClick={e => {
+                  e.stopPropagation()
+                  ask(`Insert "${sn.name}" into current canvas?`, () => insertProject(sn.file))
                 }}
+              >+</button>
+              <button
+                title="Overwrite this project with current canvas"
+                style={iconBtn}
+                onMouseEnter={e => (e.currentTarget.style.color = 'rgba(120,200,120,0.8)')}
+                onMouseLeave={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.22)')}
+                onClick={e => {
+                  e.stopPropagation()
+                  ask(`Overwrite "${sn.name}" with current canvas?`, () => overwriteProject(sn))
+                }}
+              >↺</button>
+              <button
+                title="Delete project file"
+                style={{ ...iconBtn, padding: '4px 8px 4px 2px' }}
                 onMouseEnter={e => (e.currentTarget.style.color = 'rgba(255,100,100,0.7)')}
                 onMouseLeave={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.22)')}
-                onClick={e => { e.stopPropagation(); deleteSceneSnapshot(sn.file) }}
+                onClick={e => {
+                  e.stopPropagation()
+                  ask(`Delete project "${sn.name}"? This cannot be undone.`, () => deleteProject(sn.file))
+                }}
               >×</button>
             </div>
           ))}
-          {savingScene ? (
+          {savingProject ? (
             <div style={{ padding: '6px 8px', display: 'flex', gap: 6 }}>
               <input
-                ref={sceneInputRef}
-                value={sceneName}
-                onChange={e => setSceneName(e.target.value)}
+                ref={projectInputRef}
+                value={projectName}
+                onChange={e => setProjectName(e.target.value)}
                 onKeyDown={e => {
-                  if (e.key === 'Enter') saveSceneSnapshot()
-                  if (e.key === 'Escape') { setSavingScene(false); setSceneName('') }
+                  if (e.key === 'Enter') {
+                    const name = projectName.trim()
+                    if (!name) return
+                    ask(`Save current canvas as new project "${name}"?`, saveCurrentAsProject)
+                  }
+                  if (e.key === 'Escape') { setSavingProject(false); setProjectName('') }
                 }}
-                placeholder="Scene name…"
+                placeholder="Project name…"
                 style={{
                   flex: 1, background: 'rgba(255,255,255,0.07)',
                   border: '1px solid rgba(255,255,255,0.15)',
@@ -423,7 +443,11 @@ export const TemplateMenu: React.FC = () => {
                 }}
               />
               <button
-                onClick={saveSceneSnapshot}
+                onClick={() => {
+                  const name = projectName.trim()
+                  if (!name) return
+                  ask(`Save current canvas as new project "${name}"?`, saveCurrentAsProject)
+                }}
                 style={{
                   background: 'rgba(100,200,120,0.25)', border: '1px solid rgba(100,200,120,0.4)',
                   borderRadius: 5, color: 'rgba(255,255,255,0.85)',
@@ -437,84 +461,132 @@ export const TemplateMenu: React.FC = () => {
               style={{ ...btnStyle, color: 'rgba(100,200,120,0.75)' }}
               onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.07)')}
               onMouseLeave={e => (e.currentTarget.style.background = 'none')}
-              onClick={() => setSavingScene(true)}
+              onClick={() => setSavingProject(true)}
             >
-              + Save scene snapshot
+              + Save current canvas as project
             </button>
           )}
+
           <div style={{ margin: '4px 8px', borderTop: '1px solid rgba(255,255,255,0.07)' }} />
 
-          {/* ── Built-in templates ── */}
+          {/* ── Templates (scaffolds + presets unified) ── */}
           <div style={{ padding: '4px 10px 2px', fontSize: 9, color: 'rgba(255,255,255,0.28)', letterSpacing: '0.6px', textTransform: 'uppercase' }}>
-            Presets
+            Templates
           </div>
-          {TEMPLATES.map(t => (
-            <div key={t.id} style={{ display: 'flex', alignItems: 'center' }}>
-              <button
-                style={{ ...btnStyle, flex: 1 }}
-                onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.07)')}
-                onMouseLeave={e => (e.currentTarget.style.background = 'none')}
-                onClick={() => applyBuiltIn(t.id)}
-              >
-                {t.label}
-              </button>
-              <button
-                title="Add as new board"
-                style={{
-                  background: 'none', border: 'none',
-                  color: 'rgba(255,255,255,0.22)', fontSize: 13,
-                  cursor: 'pointer', padding: '4px 8px 4px 2px',
-                  lineHeight: 1, flexShrink: 0,
-                }}
-                onMouseEnter={e => (e.currentTarget.style.color = 'rgba(120,170,255,0.8)')}
-                onMouseLeave={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.22)')}
-                onClick={e => { e.stopPropagation(); addBuiltInAsBoard(t.id) }}
-              >+</button>
+          {templateEntries.map(entry => {
+            const id = entry.kind === 'scaffold' ? entry.data.id : entry.data.id
+            const name = entry.kind === 'scaffold' ? entry.data.name : entry.data.label
+            const subtitle = entry.kind === 'scaffold' ? entry.data.description : null
+            const color = entry.kind === 'scaffold' ? entry.data.color : '#5b8dd9'
+            const blockCount = entry.kind === 'scaffold' ? entry.data.blocks.length : 1
+            return (
+              <div key={`${entry.kind}-${id}`} style={{ display: 'flex', alignItems: 'center' }}>
+                <button
+                  style={{ ...btnStyle, flex: 1 }}
+                  title={subtitle ?? undefined}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.07)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'none')}
+                  onClick={() => ask(
+                    `Load template "${name}"? This replaces your current canvas.`,
+                    () => loadTemplate(entry),
+                  )}
+                >
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                    <span style={{
+                      width: 8, height: 8, borderRadius: 2,
+                      background: color, flexShrink: 0,
+                    }} />
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {name}
+                    </span>
+                  </span>
+                  <span style={{ color: 'rgba(255,255,255,0.25)', fontSize: 10, flexShrink: 0 }}>
+                    {blockCount}
+                  </span>
+                </button>
+                <button
+                  title="Insert as new group on canvas"
+                  style={{ ...iconBtn, padding: '4px 8px 4px 2px' }}
+                  onMouseEnter={e => (e.currentTarget.style.color = 'rgba(120,170,255,0.8)')}
+                  onMouseLeave={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.22)')}
+                  onClick={e => {
+                    e.stopPropagation()
+                    ask(`Insert "${name}" into current canvas?`, () => insertTemplate(entry))
+                  }}
+                >+</button>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {/* ── Confirmation dialog ── */}
+      {confirm && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, zIndex: 2000,
+            background: 'rgba(0,0,0,0.55)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}
+          onClick={() => setConfirm(null)}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              background: '#1f2138',
+              border: '1px solid rgba(255,255,255,0.12)',
+              borderRadius: 10,
+              padding: '18px 20px 14px',
+              minWidth: 280,
+              maxWidth: 420,
+              boxShadow: '0 16px 48px rgba(0,0,0,0.6)',
+              fontFamily: 'inherit',
+            }}
+          >
+            <div style={{
+              color: 'rgba(255,255,255,0.92)',
+              fontSize: 13,
+              lineHeight: 1.45,
+              marginBottom: 14,
+            }}>
+              {confirm.message}
             </div>
-          ))}
-
-          <div style={{ margin: '4px 8px', borderTop: '1px solid rgba(255,255,255,0.07)' }} />
-
-          {/* ── Save current ── */}
-          {saving ? (
-            <div style={{ padding: '6px 8px', display: 'flex', gap: 6 }}>
-              <input
-                ref={saveInputRef}
-                value={saveName}
-                onChange={e => setSaveName(e.target.value)}
-                onKeyDown={e => {
-                  if (e.key === 'Enter') commitSave()
-                  if (e.key === 'Escape') { setSaving(false); setSaveName('') }
-                }}
-                placeholder="Layout name…"
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button
+                onClick={() => setConfirm(null)}
                 style={{
-                  flex: 1, background: 'rgba(255,255,255,0.07)',
-                  border: '1px solid rgba(255,255,255,0.15)',
-                  borderRadius: 5, outline: 'none',
-                  color: '#fff', fontSize: 11, padding: '4px 8px',
+                  background: 'rgba(255,255,255,0.05)',
+                  border: '1px solid rgba(255,255,255,0.12)',
+                  borderRadius: 5,
+                  color: 'rgba(255,255,255,0.7)',
+                  fontSize: 11, fontWeight: 500,
+                  padding: '6px 14px',
+                  cursor: 'pointer',
                   fontFamily: 'inherit',
                 }}
-              />
+              >No</button>
               <button
-                onClick={commitSave}
-                style={{
-                  background: 'rgba(100,150,255,0.25)', border: '1px solid rgba(100,150,255,0.4)',
-                  borderRadius: 5, color: 'rgba(255,255,255,0.85)',
-                  fontSize: 11, fontWeight: 600, padding: '4px 10px',
-                  cursor: 'pointer', fontFamily: 'inherit',
+                ref={yesBtnRef}
+                onClick={() => {
+                  const action = confirm.onYes
+                  setConfirm(null)
+                  action()
                 }}
-              >Save</button>
+                style={{
+                  background: 'rgba(100,150,255,0.35)',
+                  border: '1px solid rgba(100,150,255,0.55)',
+                  borderRadius: 5,
+                  color: 'rgba(255,255,255,0.95)',
+                  fontSize: 11, fontWeight: 600,
+                  padding: '6px 16px',
+                  cursor: 'pointer',
+                  fontFamily: 'inherit',
+                  outline: 'none',
+                  boxShadow: '0 0 0 2px rgba(100,150,255,0.35)',
+                }}
+              >Yes</button>
             </div>
-          ) : (
-            <button
-              style={{ ...btnStyle, color: 'rgba(120,170,255,0.75)' }}
-              onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.07)')}
-              onMouseLeave={e => (e.currentTarget.style.background = 'none')}
-              onClick={() => setSaving(true)}
-            >
-              + Save current layout
-            </button>
-          )}
+          </div>
         </div>
       )}
     </div>

@@ -1806,34 +1806,37 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
                 height: 18,
                 pointerEvents: 'none',
               }}>
+                {/* Cascading fan-edge cues derived from the sub-deck anchor's
+                    own color (sc is the sub-deck primary), matching the
+                    edgeColor pattern used for stacked-deck right edges. */}
                 <div style={{
                   position: 'absolute',
                   left: 0, bottom: 0,
                   width: '100%', height: 5,
-                  borderTop: '2px solid rgba(120,170,255,0.6)',
-                  borderLeft: '2px solid rgba(120,170,255,0.6)',
-                  borderRight: '2px solid rgba(120,170,255,0.6)',
+                  borderTop: `2px solid ${edgeColor(sc.color, 0.6)}`,
+                  borderLeft: `2px solid ${edgeColor(sc.color, 0.6)}`,
+                  borderRight: `2px solid ${edgeColor(sc.color, 0.6)}`,
                   borderRadius: '6px 6px 0 0',
                 }} />
                 <div style={{
                   position: 'absolute',
                   left: '10%', bottom: 5,
                   width: '80%', height: 4,
-                  borderTop: '2px solid rgba(130,170,255,0.42)',
+                  borderTop: `2px solid ${edgeColor(sc.color, 0.42)}`,
                   borderRadius: '4px 4px 0 0',
                 }} />
                 <div style={{
                   position: 'absolute',
                   left: '25%', bottom: 9,
                   width: '50%', height: 4,
-                  borderTop: '1.5px solid rgba(120,160,255,0.25)',
+                  borderTop: `1.5px solid ${edgeColor(sc.color, 0.25)}`,
                   borderRadius: '3px 3px 0 0',
                 }} />
                 <div style={{
                   position: 'absolute',
                   left: '35%', bottom: 13,
                   width: '30%', height: 4,
-                  borderTop: '1.5px solid rgba(110,150,255,0.15)',
+                  borderTop: `1.5px solid ${edgeColor(sc.color, 0.15)}`,
                   borderRadius: '2px 2px 0 0',
                 }} />
               </div>
@@ -1875,15 +1878,18 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
               {surfacedGroup.cardSummary || surfacedGroup.name}
             </div>
           </div>
-          {/* Sub-deck indicator — stacked edges on surfaced card */}
+          {/* Sub-deck indicator — stacked edges on surfaced card. Derived from
+              the surfaced group's own color so a non-blue sub-deck stays in
+              its own color family (matches the fan-strip top-edge cue and the
+              stacked-deck right-edge cue). */}
           {isSubDeckAnchor(surfacedGroup.id, allGroups) && (
             <>
               <div style={{
                 position: 'absolute',
                 right: -5, top: 0, width: 5, height: '100%',
-                borderTop: '2px solid rgba(120,170,255,0.6)',
-                borderRight: '2px solid rgba(120,170,255,0.6)',
-                borderBottom: '2px solid rgba(120,170,255,0.6)',
+                borderTop: `2px solid ${edgeColor(surfacedGroup.color, 0.6)}`,
+                borderRight: `2px solid ${edgeColor(surfacedGroup.color, 0.6)}`,
+                borderBottom: `2px solid ${edgeColor(surfacedGroup.color, 0.6)}`,
                 borderRadius: '0 8px 8px 0',
                 pointerEvents: 'none',
                 zIndex: 21,
@@ -1891,7 +1897,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
               <div style={{
                 position: 'absolute',
                 right: -9, top: '3%', width: 4, height: '94%',
-                borderRight: '2px solid rgba(130,170,255,0.42)',
+                borderRight: `2px solid ${edgeColor(surfacedGroup.color, 0.42)}`,
                 borderRadius: '0 6px 6px 0',
                 pointerEvents: 'none',
                 zIndex: 21,
