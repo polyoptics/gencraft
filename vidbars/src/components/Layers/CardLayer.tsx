@@ -461,9 +461,10 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
           pointerEvents: 'all',
           cursor: isDragging ? 'grabbing' : 'grab',
           borderRadius: 12,
-          background: heroImage
-            ? `linear-gradient(160deg, ${color}cc 0%, ${color}aa 100%)`
-            : color,
+          // Solid card color regardless of hero presence. Hero renders ON
+          // TOP at its own opacity — fading the hero reveals the card
+          // color underneath rather than the canvas behind.
+          background: color,
           touchAction: 'none',
           border: selFx ? selFx.border : '1.5px solid rgba(255,255,255,0.25)',
           boxShadow: selFx ? selFx.boxShadow : '0 4px 24px rgba(0,0,0,0.4)',
@@ -670,7 +671,9 @@ const UngroupedBoardCardInner: React.FC<{ boardId: string }> = ({ boardId }) => 
         zIndex: 40, userSelect: 'none', pointerEvents: 'all',
         cursor: isDragging ? 'grabbing' : 'grab',
         borderRadius: 12,
-        background: heroImage ? `linear-gradient(160deg, ${color}cc 0%, ${color}aa 100%)` : color,
+        // Solid card color regardless of hero — hero opacity fades reveal
+        // the color underneath, not the canvas.
+        background: color,
         touchAction: 'none',
         border: '1.5px solid rgba(255,255,255,0.25)',
         boxShadow: '0 4px 24px rgba(0,0,0,0.4)',
@@ -1052,9 +1055,7 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
             width: cardWidth,
             height: screenHeight,
             borderRadius: 12,
-            background: heroImage
-              ? `linear-gradient(160deg, ${anchorGroup.color}cc 0%, ${anchorGroup.color}aa 100%)`
-              : anchorGroup.color,
+            background: anchorGroup.color,
             border: stackSelFx ? stackSelFx.border : '1.5px solid rgba(255,255,255,0.25)',
             boxShadow: stackSelFx ? stackSelFx.boxShadow : '0 6px 32px rgba(0,0,0,0.5)',
             overflow: 'hidden',
@@ -1853,9 +1854,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
             width: screenWidth,
             height: screenHeight,
             borderRadius: 12,
-            background: surfacedHero
-              ? `linear-gradient(160deg, ${surfacedGroup.color}cc 0%, ${surfacedGroup.color}aa 100%)`
-              : surfacedGroup.color,
+            background: surfacedGroup.color,
             border: '2px solid rgba(180,210,255,0.7)',
             boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
             overflow: 'hidden',
@@ -1911,9 +1910,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
           width: screenWidth,
           height: screenHeight,
           borderRadius: 12,
-          background: heroImage
-            ? `linear-gradient(160deg, ${anchorGroup.color}cc 0%, ${anchorGroup.color}aa 100%)`
-            : anchorGroup.color,
+          background: anchorGroup.color,
           border: fanSelFx ? fanSelFx.border : '1.5px solid rgba(255,255,255,0.25)',
           boxShadow: fanSelFx ? fanSelFx.boxShadow : '0 6px 32px rgba(0,0,0,0.5)',
           overflow: 'hidden',
