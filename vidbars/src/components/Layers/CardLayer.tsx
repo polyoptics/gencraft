@@ -2,7 +2,7 @@
 // Renders one composite card per project group. Each group collapses its
 // boards into a single draggable card with a hero image and summary.
 
-import React, { useMemo, useState, useCallback, useRef, useDeferredValue, Fragment } from 'react'
+import React, { useMemo, useState, useCallback, useRef, useLayoutEffect, useDeferredValue, Fragment } from 'react'
 import ReactDOM from 'react-dom'
 import { useBoardsStore, getUngroupedBoardIds } from '../../store/boardsStore'
 import type { ProjectGroup, BoardData } from '../../store/boardsStore'
@@ -1127,10 +1127,16 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
   const isSelected = useBoardsStore(s => s.selectedGroupIds.includes(deck.anchorGroupId))
   const selectedGhostIds = useCanvasStore(s => s.selectedGhostGroupIds)
   const extractingCardId = useCanvasStore(s => s.extractingCardId)
+  const fanTransition = useCanvasStore(s => s.fanTransition)
   const [isHovered, setIsHovered] = useState(false)
   const [cardMenu, setCardMenu] = useState<{ x: number; y: number } | null>(null)
   const [surfacedId, setSurfacedId] = useState<string | null>(null)
   const [isEditingHero, setIsEditingHero] = useState(false)
+
+  // Refs to each strip — used for imperative animation when this deck is in
+  // an active fan ↔ stack transition. Keyed by strip id (member group id or
+  // ghost cardId) so we can map secondaryItems → DOM nodes consistently.
+  const stripRefs = useRef(new Map<string, HTMLDivElement>())
 
   const anchorGroup = groups.find(g => g.id === deck.anchorGroupId)
   if (!anchorGroup) return null
@@ -1253,6 +1259,49 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
   const totalFanWidth = screenWidth + secondaryItems.length * FAN_STRIP_WIDTH
 
   const fanSelFx = isSelected ? selectionHighlight(anchorGroup.color) : null
+
+  // Strip animation hook: when a fan ↔ stack transition is active for THIS
+  // deck, slide each strip out from under the primary card (fanning) or
+  // back into it (stacking). useLayoutEffect runs synchronously after DOM
+  // mutations and before paint, so the "snap to tucked, then animate to
+  // 0" pattern works without a visible flash.
+  //
+  // Tucked offset is -(i + 1) * FAN_STRIP_WIDTH so EVERY strip — including
+  // strip 0 — starts fully behind the primary card and has to slide out
+  // by at least one FAN_STRIP_WIDTH to reach its resting position. Each
+  // strip lags the previous one by a small stagger for a cascade feel.
+  useLayoutEffect(() => {
+    const isThisDeck = fanTransition && fanTransition.deckId === anchorGroup.id
+    secondaryItems.forEach((item, i) => {
+      const key = item.kind === 'real' ? item.group.id : `ghost-${item.cardId}`
+      const el = stripRefs.current.get(key)
+      if (!el) return
+      if (!isThisDeck) {
+        el.style.transition = ''
+        el.style.transform = ''
+        return
+      }
+      const tuckOffset = -(i + 1) * FAN_STRIP_WIDTH
+      // Stagger scales with deck size — small decks (≤5 strips) keep the
+      // tight 8ms cascade, larger decks spread out so each strip is
+      // individually readable. Capped at 20ms so the longest deck doesn't
+      // feel sluggish. Mirrored in boardsStore.setDeckState's clearAfter
+      // computation — keep both in sync.
+      const N = secondaryItems.length
+      const stripStagger = Math.max(8, Math.min(20, Math.floor(N * 1.5)))
+      const stagger = i * stripStagger
+      if (fanTransition!.phase === 'fanning') {
+        el.style.transition = 'none'
+        el.style.transform = `translateX(${tuckOffset}px)`
+        void el.offsetWidth
+        el.style.transition = `transform 0.1s cubic-bezier(0.16, 1, 0.3, 1) ${stagger}ms`
+        el.style.transform = 'translateX(0)'
+      } else {
+        el.style.transition = `transform 0.09s cubic-bezier(0.4, 0, 0.6, 1) ${stagger}ms`
+        el.style.transform = `translateX(${tuckOffset}px)`
+      }
+    })
+  }, [fanTransition, anchorGroup.id, secondaryItems])
 
   // Hero image for anchor
   const heroImage = (() => {
@@ -1591,6 +1640,11 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
           return (
             <div
               key={`ghost-${item.cardId}`}
+              ref={el => {
+                const k = `ghost-${item.cardId}`
+                if (el) stripRefs.current.set(k, el)
+                else stripRefs.current.delete(k)
+              }}
               data-deck-slot-drop={`${anchorGroup.id}:${item.cardId}`}
               title={item.card ? `Extracted: ${ghostName} · double-click to jump` : 'Extracted card (deleted)'}
               onPointerDown={e => {
@@ -1694,6 +1748,10 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
         return (
           <div
             key={sc.id}
+            ref={el => {
+              if (el) stripRefs.current.set(sc.id, el)
+              else stripRefs.current.delete(sc.id)
+            }}
             style={{
               position: 'absolute',
               left: stripX,
@@ -2694,6 +2752,7 @@ const Overlay: React.FC = () => {
   }, [touchingClusters, renderedByDeck, groups])
 
   const extractingCardId = useCanvasStore(s => s.extractingCardId)
+  const fanTransition = useCanvasStore(s => s.fanTransition)
   return (
     <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }} onPointerDown={startOverlayPan}>
       {groups.map(g => {
@@ -2709,8 +2768,18 @@ const Overlay: React.FC = () => {
 
         const deck = getDeckForGroup(g.id)
 
-        // If anchor of a stacked deck → render StackedDeckCard
-        if (deck?.state === 'stacked' && deck.anchorGroupId === g.id) {
+        // Treat the deck as "fanned for rendering purposes" when there's an
+        // active stack-direction fan transition for it — keeps the
+        // FannedDeckOverlay alive during the closing animation so its strips
+        // can slide back into the primary card before the StackedDeckCard
+        // takes over.
+        const isStackingTransition =
+          fanTransition?.deckId === g.id && fanTransition.phase === 'stacking'
+        const treatAsFanned = deck?.state === 'fanned' || (deck && isStackingTransition)
+
+        // If anchor of a stacked deck → render StackedDeckCard (unless mid-
+        // stacking-transition, where we keep FannedDeckOverlay active).
+        if (deck?.state === 'stacked' && deck.anchorGroupId === g.id && !isStackingTransition) {
           // isNested = this deck's anchor is in a touching cluster with cards outside the deck
           const nested = touchingClusters.some(c =>
             c.includes(g.id) && c.some(cid => !deck.memberIds.includes(cid))
@@ -2735,7 +2804,7 @@ const Overlay: React.FC = () => {
         }
 
         // If in a fanned deck → rendered by FannedDeckOverlay (only once for anchor)
-        if (deck?.state === 'fanned') {
+        if (deck && treatAsFanned) {
           if (deck.anchorGroupId === g.id) {
             const memberGroups = deck.memberIds.map(id => groups.find(gr => gr.id === id)).filter(Boolean) as ProjectGroup[]
             // Wrap the anchor's header + fan overlay in a single stacking

@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { createDebouncedJSONStorage } from '../utils/debouncedJSONStorage'
+import { useCanvasStore } from './canvasStore'
 import type { Bar } from '../types/bar'
 import { TEMPLATES } from '../data/templates'
 import { getBoardAbsolutePos, computeGroupLayout, yToRow } from '../utils/nleRows'
@@ -905,6 +906,39 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
     // For stacking/fanning: the new deck anchor is groupIds[0] (leftmost in
     // the cluster). For opening: anchorId is undefined (no deck after open).
     const anchorId = state === 'open' ? undefined : groupIds[0]
+    // Detect a stack ↔ fan crossing. When firing, mark the deck for
+    // animation in canvasStore — FannedDeckOverlay's strips imperatively
+    // slide out (fanning) or back in (stacking). For 'stacking', CardLayer
+    // keeps the fan rendered during the animation window; once it clears,
+    // the StackedDeckCard takes over.
+    {
+      const groups = get().groups
+      const firstAnchor = groupIds[0] // canvasStore's deckId is just the anchor's id; matches what CardLayer compares against
+      const wasFanned = groupIds.some(id => groups.find(g => g.id === id)?.deckState === 'fanned')
+      const wasStacked = groupIds.some(id => groups.find(g => g.id === id)?.deckState === 'stacked')
+      let phase: 'fanning' | 'stacking' | null = null
+      if (state === 'fanned' && wasStacked) phase = 'fanning'
+      else if (state === 'stacked' && wasFanned) phase = 'stacking'
+      if (phase) {
+        useCanvasStore.getState().setFanTransition({ deckId: firstAnchor, phase })
+        // Adaptive cleanup: match the actual animation end so the
+        // FannedDeckOverlay → StackedDeckCard handoff doesn't sit on a
+        // pause. Per-strip duration + (N-1)*stagger + tiny buffer.
+        // Stagger scales with deck size for readability — mirrors the
+        // formula in FannedDeckOverlay's useLayoutEffect.
+        const stripCount = Math.max(1, groupIds.length - 1)
+        const STRIP_DURATION_MS = phase === 'fanning' ? 100 : 90
+        const STAGGER_MS = Math.max(8, Math.min(20, Math.floor(stripCount * 1.5)))
+        const CLEAR_BUFFER_MS = 20
+        const clearAfter = STRIP_DURATION_MS + (stripCount - 1) * STAGGER_MS + CLEAR_BUFFER_MS
+        setTimeout(() => {
+          const cur = useCanvasStore.getState().fanTransition
+          if (cur && cur.deckId === firstAnchor && cur.phase === phase) {
+            useCanvasStore.getState().setFanTransition(null)
+          }
+        }, clearAfter)
+      }
+    }
     set(s => {
       // Detect sub-deck anchors: members whose ID is referenced by
       // deckAnchorId of groups OUTSIDE this set (they anchor a nested sub-deck)

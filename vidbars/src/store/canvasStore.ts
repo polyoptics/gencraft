@@ -41,6 +41,16 @@ interface CanvasStore {
    *  Cleared on pointerup, after which the card transitions to its normal
    *  z-index 40 standalone render. */
   extractingCardId: string | null
+  /** Active stack ↔ fan transition. While set, FannedDeckOverlay's strips
+   *  imperatively animate (sliding out from the primary card on 'fanning',
+   *  collapsing back into it on 'stacking'). For 'stacking', CardLayer
+   *  keeps rendering the FannedDeckOverlay even though deck.state has
+   *  already flipped to 'stacked' — the overlay needs to stay alive for
+   *  the closing animation duration. */
+  fanTransition: {
+    deckId: string                   // id of the transitioning deck
+    phase: 'fanning' | 'stacking'    // direction
+  } | null
   zoneLineY: number
 
   setPan: (pan: { x: number; y: number }) => void
@@ -59,6 +69,7 @@ interface CanvasStore {
   setPreviewHoveredDeckId: (id: string | null) => void
   setCardHoveredDeckId: (id: string | null) => void
   setExtractingCardId: (id: string | null) => void
+  setFanTransition: (t: CanvasStore['fanTransition']) => void
   setZoneLineY: (y: number) => void
   /** Pan (keeping current zoom) so the given group is centered in the viewport. */
   jumpToGroup: (groupId: string) => void
@@ -76,6 +87,7 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
   previewHoveredDeckId: null,
   cardHoveredDeckId: null,
   extractingCardId: null,
+  fanTransition: null,
   zoneLineY: 0,
 
   setPan: (pan) => set({ pan }),
@@ -121,6 +133,8 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
   setCardHoveredDeckId: (cardHoveredDeckId) => set({ cardHoveredDeckId }),
 
   setExtractingCardId: (extractingCardId) => set({ extractingCardId }),
+
+  setFanTransition: (fanTransition) => set({ fanTransition }),
 
   setZoneLineY: (zoneLineY) => set({ zoneLineY }),
 
