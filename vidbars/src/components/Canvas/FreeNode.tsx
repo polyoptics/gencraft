@@ -13,6 +13,8 @@ import type { HeroImageTransform } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
+import { DrawableSurface } from '../Annotation/DrawableSurface'
+import { PenButton } from '../Annotation/PenButton'
 
 
 interface Props { id: string }
@@ -53,6 +55,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id }) => {
     const tag = (e.target as HTMLElement).tagName
     if (tag === 'TEXTAREA' || tag === 'INPUT' || tag === 'BUTTON') return
     if ((e.target as Element).closest('[data-resize]')) return
+    if ((e.target as Element).closest('[data-pen-button]')) return
     e.stopPropagation()
     useUndoCoordinator.getState().checkpoint()
     dragLastX.current = e.clientX
@@ -304,6 +307,20 @@ export const FreeNode: React.FC<Props> = React.memo(({ id }) => {
           <div style={{ width: dotSize, height: dotSize, borderRadius: '50%', background: 'rgba(255,255,255,0.22)', flexShrink: 0 }} />
         )}
 
+        {/* Annotation toggle — placed LEFT of the label so it doesn't crowd
+                the right-edge resize-corner zone or any future trailing
+                affordances on the header. Hover-only reveal keeps the header
+                clean by default; the button fades in once the node is
+                pointer-engaged (matches X / grip patterns elsewhere). */}
+        <span data-pen-button="true" style={{ display: 'inline-flex', flexShrink: 0 }}>
+          <PenButton
+            surface={{ kind: 'freeNode', nodeId: id }}
+            baseColor={node.color}
+            size={Math.max(14, 14 * iz)}
+            visible={isHovered}
+          />
+        </span>
+
         {isRenaming ? (
           <input
             ref={renameRef}
@@ -333,6 +350,25 @@ export const FreeNode: React.FC<Props> = React.memo(({ id }) => {
 
       {/* ── Body ── */}
       <FreeNodeBody node={node} id={id} iz={iz} dz={dz} pad={pad} updateFreeNode={updateFreeNode} isEditing={textEditing} setIsEditing={setTextEditing} />
+
+      {/* ── Annotation layer — overlays the body region only (header excluded).
+              Always renders saved strokes; captures pointer events only while
+              draw mode targets THIS node. */}
+      <div style={{
+        position: 'absolute',
+        top: headerH,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        pointerEvents: 'none',  // children opt-in via DrawableSurface's own gate
+      }}>
+        <DrawableSurface
+          surface={{ kind: 'freeNode', nodeId: id }}
+          width={node.width}
+          height={Math.max(0, node.height - headerH)}
+          strokes={node.strokes ?? []}
+        />
+      </div>
 
       {/* ── Text format toolbar (shown when text node is selected) ── */}
       {node.type === 'text' && isSelected && (

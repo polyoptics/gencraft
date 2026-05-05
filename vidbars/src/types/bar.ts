@@ -76,4 +76,7 @@ export interface Bar {
   height: number          // individual block height
   content: BarContent
   collapsed?: boolean   // true = children are hidden
+  /** Annotation layer — vector strokes drawn on this bar at board zoom.
+   *  Same shape across every drawable surface; see types/stroke.ts. */
+  strokes?: import('./stroke').Stroke[]
 }

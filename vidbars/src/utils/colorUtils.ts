@@ -3,6 +3,21 @@
 export interface HSL { h: number; s: number; l: number }
 export interface HSV { h: number; s: number; v: number }
 
+/**
+ * Brighten a base hex color (more saturated, lighter) and emit it as `rgba()`
+ * at the given alpha. Used for deck-edge cues, pen-button tints, and similar
+ * "in the visual family of the host" affordances.
+ *
+ * Mirrors the local edgeColor() helper that's been duplicated in CardLayer;
+ * lifted here so the annotation system can reuse it.
+ */
+export function edgeColorFromHex(baseHex: string, alpha: number): string {
+  const { h, s, l } = hexToHsl(baseHex)
+  const hex = hslToHex(h, Math.min(1, s + 0.1), Math.min(1, l + 0.25))
+  const n = parseInt(hex.replace('#', ''), 16)
+  return `rgba(${(n >> 16) & 0xff},${(n >> 8) & 0xff},${n & 0xff},${alpha})`
+}
+
 export function hexToHsl(hex: string): HSL {
   const n = parseInt(hex.replace('#', ''), 16)
   const r = (n >> 16) / 255, g = ((n >> 8) & 0xff) / 255, b = (n & 0xff) / 255

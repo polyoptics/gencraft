@@ -72,6 +72,8 @@ export interface ProjectGroup {
   }>
   textSplitRatio?: number // header/body vertical split (0-1, default 0.5)
   linkedGroupIds?: string[]  // bi-directional references to other groups (optional for legacy; treat as [] when absent)
+  /** Annotation layer drawn on this card at card zoom. */
+  cardStrokes?: import('../types/stroke').Stroke[]
 }
 
 /** Find which group a board belongs to */
@@ -128,8 +130,10 @@ export interface BoardLayerData {
     widthOverride?: number     // user-set width (canvas px, pre-zoom)
     heightOverride?: number    // user-set height (canvas px, pre-zoom)
     textSplitRatio?: number    // header/body vertical split (0-1, default 0.5)
+    /** Annotation layer drawn on this block at block zoom. */
+    strokes?: import('../types/stroke').Stroke[]
   }
-  // Board layer uses bar tree directly — no extra fields needed
+  // Board layer uses bar tree directly — strokes per bar live on Bar.strokes
 }
 
 const DEFAULT_LAYERS: BoardLayerData = {
@@ -243,6 +247,10 @@ interface BoardsState {
   setGroupTextSplitRatio: (groupId: string, ratio: number) => void
   setBlockTextSplitRatio: (boardId: string, ratio: number) => void
   setCardTextSplitRatio: (boardId: string, ratio: number) => void
+  // ── Annotation / stroke actions ──
+  setBarStrokes: (boardId: string, barId: string, strokes: import('../types/stroke').Stroke[]) => void
+  setBlockStrokes: (boardId: string, strokes: import('../types/stroke').Stroke[]) => void
+  setCardStrokes: (groupId: string, strokes: import('../types/stroke').Stroke[]) => void
   setDeckState: (groupIds: string[], state: 'open' | 'fanned' | 'stacked') => void
   /** Pull a card out of its deck onto the canvas. The parent gets a ghostSlots
    *  entry remembering the slot's offset so the card can return. The card
@@ -899,6 +907,44 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
       if (!b) return s
       return { boards: { ...s.boards, [boardId]: { ...b, layers: { ...b.layers, card: { ...b.layers.card, textSplitRatio: ratio } } } } }
     })
+  },
+
+  // ── Annotation strokes ─────────────────────────────────────
+  // Each surface (bar / block / card) has its own per-zoom stroke layer.
+  // `strokes` arrays use normalized 0–1 coords so strokes scale with their
+  // host. Setters do a full replace; add/delete/clear are composed in
+  // utils/strokeActions.ts so undo + history get a single mutation per change.
+
+  setBarStrokes(boardId, barId, strokes) {
+    set(s => {
+      const b = s.boards[boardId]
+      if (!b) return s
+      const bar = b.bars[barId]
+      if (!bar) return s
+      return {
+        boards: {
+          ...s.boards,
+          [boardId]: { ...b, bars: { ...b.bars, [barId]: { ...bar, strokes } } },
+        },
+      }
+    })
+  },
+
+  setBlockStrokes(boardId, strokes) {
+    set(s => {
+      const b = s.boards[boardId]
+      if (!b) return s
+      return {
+        boards: {
+          ...s.boards,
+          [boardId]: { ...b, layers: { ...b.layers, block: { ...b.layers.block, strokes } } },
+        },
+      }
+    })
+  },
+
+  setCardStrokes(groupId, strokes) {
+    set(s => ({ groups: s.groups.map(g => g.id === groupId ? { ...g, cardStrokes: strokes } : g) }))
   },
 
   setDeckState(groupIds, state) {

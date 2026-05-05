@@ -26,6 +26,8 @@ import { HeroImageLayer } from './HeroImageLayer'
 import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
 import { getFirstImageUrl } from '../../types/bar'
 import { hexToHsl, hslToHex, selectionHighlight } from '../../utils/colorUtils'
+import { DrawableSurface } from '../Annotation/DrawableSurface'
+import { PenButton } from '../Annotation/PenButton'
 
 const BOARD_PADDING_X = 20
 
@@ -217,6 +219,11 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
   const onCardDown = useCallback((e: React.PointerEvent) => {
     if (e.button !== 0) return
     if ((e.target as HTMLElement).tagName === 'INPUT') return
+    // Belt-and-braces: skip drag init if the pointerdown originated on the
+    // pen-button affordance (or any descendant of it). The button itself
+    // already calls stopPropagation, but this guard catches any event-flow
+    // edge case (capture phase, native bubbling, etc).
+    if ((e.target as Element).closest('[data-pen-button]')) return
     e.stopPropagation()
     e.preventDefault()
 
@@ -523,6 +530,57 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
             />
           </>
         )}
+
+        {/* ── Annotation layer — body region only (excludes header extension).
+                Renders saved cardStrokes always; pointer-event-active only when
+                draw mode targets THIS card. */}
+        <div style={{
+          position: 'absolute',
+          top: headerPad, left: 0, right: 0, bottom: 0,
+          pointerEvents: 'none',
+          borderRadius: '0 0 12px 12px',
+          overflow: 'hidden',
+        }}>
+          <DrawableSurface
+            surface={{ kind: 'card', groupId: group.id }}
+            width={screenWidth}
+            height={Math.max(0, cardHeight - headerPad)}
+            strokes={group.cardStrokes ?? []}
+          />
+        </div>
+
+        {/* Pen toggle — top-right corner of the card BODY (not the header).
+                Sits just below the header band; size scales with the timeline
+                header's screenHeight so it tracks zoom, slightly LARGER than
+                the affordance icon (multiplier 0.85 vs. 0.7) per spec.
+                zIndex 60 keeps it above the DrawableSurface that covers the
+                same body region, so it remains clickable in or out of draw
+                mode. Visible on card hover only (lit-up affordance) — active
+                draw mode overrides for the exit-toggle case. */}
+        {(() => {
+          const screenHeight = Math.max(NLE_HEADER_CANVAS_H * zoom, 20)
+          const penSize = Math.min(32, Math.max(16, screenHeight * 0.85))
+          const PEN_INSET = 6   // distance from right edge and from header band
+          return (
+            <div
+              data-pen-button="true"
+              style={{
+                position: 'absolute',
+                top: headerPad + PEN_INSET,
+                right: PEN_INSET,
+                zIndex: 60,
+                lineHeight: 0,
+              }}
+            >
+              <PenButton
+                surface={{ kind: 'card', groupId: group.id }}
+                baseColor={color}
+                size={penSize}
+                visible={isHovered}
+              />
+            </div>
+          )
+        })()}
       </div>
 
       {cardMenu && (
@@ -818,6 +876,8 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
   // Drag handler: move all members together with grid snap + collision
   const onDeckDown = useCallback((e: React.PointerEvent) => {
     if (e.button !== 0) return
+    // Don't initiate drag on the pen-button affordance.
+    if ((e.target as Element).closest('[data-pen-button]')) return
     e.stopPropagation()
     e.preventDefault()
 
@@ -1084,6 +1144,53 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
               {anchorGroup.cardSummary || anchorGroup.name}
             </div>
           </div>
+
+          {/* ── Card-zoom annotation layer for the deck's primary card.
+                  Draws on the anchor group's cardStrokes — same surface as
+                  the open card uses, so leaving stack/fan state preserves
+                  whatever was drawn. */}
+          <div style={{
+            position: 'absolute',
+            top: headerPad, left: 0, right: 0, bottom: 0,
+            pointerEvents: 'none',
+            borderRadius: '0 0 12px 12px',
+            overflow: 'hidden',
+          }}>
+            <DrawableSurface
+              surface={{ kind: 'card', groupId: anchorGroup.id }}
+              width={cardWidth}
+              height={Math.max(0, screenHeight - headerPad)}
+              strokes={anchorGroup.cardStrokes ?? []}
+            />
+          </div>
+
+          {/* Pen toggle — top-right corner of body (matches GroupCard).
+                See GroupCardInner for sizing/positioning notes. Hover-only. */}
+          {(() => {
+            const screenHeight = Math.max(NLE_HEADER_CANVAS_H * zoom, 20)
+            const penSize = Math.min(32, Math.max(16, screenHeight * 0.85))
+            const PEN_INSET = 6
+            return (
+              <div
+                data-pen-button="true"
+                style={{
+                  position: 'absolute',
+                  top: headerPad + PEN_INSET,
+                  right: PEN_INSET,
+                  zIndex: 60,
+                  lineHeight: 0,
+                }}
+              >
+                <PenButton
+                  surface={{ kind: 'card', groupId: anchorGroup.id }}
+                  baseColor={anchorGroup.color}
+                  size={penSize}
+                  visible={isHovered}
+                />
+              </div>
+            )
+          })()}
+
           {/* The deck-member count now lives inside the dashed-rect
               affordance in the header (one element, two jobs). */}
         </div>

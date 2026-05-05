@@ -26,6 +26,8 @@ import { NLETimelineHeader } from '../NLE/NLETimelineHeader'
 import { CardOutline } from './CardOutline'
 import { getHiddenBoardIds, getHiddenGroupIds } from '../../hooks/useCardDecks'
 import { selectionHighlight } from '../../utils/colorUtils'
+import { DrawableSurface } from '../Annotation/DrawableSurface'
+import { PenButton } from '../Annotation/PenButton'
 
 const BOARD_PADDING_X = 20
 
@@ -101,6 +103,7 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
   const onBodyDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return
     if ((e.target as HTMLElement).tagName === 'INPUT') return
+    if ((e.target as Element).closest?.('[data-pen-button]')) return
     e.stopPropagation()
     e.preventDefault()
     useUndoCoordinator.getState().checkpoint()
@@ -640,6 +643,48 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
             </>
           )
         })()}
+
+        {/* ── Block-zoom annotation layer.
+                Strokes live on board.layers.block.strokes — shared across all
+                blocks rendering this board (matches existing layers.block
+                pattern for label/thumbnail). */}
+        <div style={{
+          position: 'absolute', inset: 0,
+          pointerEvents: 'none',
+          borderRadius: 30,
+          overflow: 'hidden',
+          zIndex: 4,
+        }}>
+          <DrawableSurface
+            surface={{ kind: 'block', boardId }}
+            width={width}
+            height={height}
+            strokes={board.layers?.block?.strokes ?? []}
+            borderRadius={30}
+          />
+        </div>
+
+        {/* Pen toggle — top-right of block face. BlockLayer also lives inside
+                the canvas transform, so size + offset are scaled by 1/zoom
+                to render at a constant visual size at any zoom. Hover-only
+                reveal — fades in on block hover, lit up like the resize
+                handles already are. */}
+        <div
+          data-pen-button="true"
+          style={{
+            position: 'absolute',
+            top: 8 / Math.max(zoom, 0.1),
+            right: 12 / Math.max(zoom, 0.1),
+            zIndex: 6,
+          }}
+        >
+          <PenButton
+            surface={{ kind: 'block', boardId }}
+            baseColor={rootColor}
+            size={22 / Math.max(zoom, 0.1)}
+            visible={isHovered}
+          />
+        </div>
       </div>
 
       {colorPicker && (

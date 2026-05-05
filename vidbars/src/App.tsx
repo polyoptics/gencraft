@@ -6,6 +6,7 @@ import { Viewer } from './components/Viewer/Viewer'
 import { TemplateMenu } from './components/UI/TemplateMenu'
 import { DeckBrowserTray } from './components/DeckBrowser/DeckBrowserTray'
 import { LinkDragOverlay } from './components/Linking/LinkDragOverlay'
+import { DrawToolbar } from './components/Annotation/DrawToolbar'
 import { useBoardsStore } from './store/boardsStore'
 import { useCanvasStore } from './store/canvasStore'
 import { useFreeNodeStore } from './store/freeNodeStore'
@@ -253,6 +254,20 @@ function useKeyboardUndo() {
   }, [])
 }
 
+/** Esc exits annotation / draw mode (whatever surface is active). */
+function useEscapeDrawMode() {
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      if (!useCanvasStore.getState().drawSurface) return
+      e.preventDefault()
+      useCanvasStore.getState().setDrawSurface(null)
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [])
+}
+
 function UndoRedoButtons() {
   const canUndo = useUndoCoordinator(s => s.canUndo)
   const canRedo = useUndoCoordinator(s => s.canRedo)
@@ -310,6 +325,7 @@ export default function App() {
   useKeyboardDelete()
   useKeyboardCopyPaste()
   useKeyboardUndo()
+  useEscapeDrawMode()
   useBase64Migration()
 
   const [deckBrowserOpen, setDeckBrowserOpen] = useState(false)
@@ -370,6 +386,9 @@ export default function App() {
       {/* Deck browser tray + link-drag overlay */}
       <DeckBrowserTray open={deckBrowserOpen} onClose={() => setDeckBrowserOpen(false)} />
       <LinkDragOverlay />
+
+      {/* Annotation / draw-mode floating toolbar (only visible while in draw mode) */}
+      <DrawToolbar />
 
       {/* Viewers render outside the canvas so they are fixed to the viewport */}
       <AllViewers />

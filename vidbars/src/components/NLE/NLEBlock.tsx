@@ -18,6 +18,8 @@ import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
 import { generateHoverVariants, selectionHighlight } from '../../utils/colorUtils'
 import { TextFormatToolbar, ensureFontLoaded, hexToRgba } from '../UI/TextFormatToolbar'
 import { DEFAULT_HEADER_STYLE, DEFAULT_BODY_STYLE } from '../../store/freeNodeStore'
+import { DrawableSurface } from '../Annotation/DrawableSurface'
+import { PenButton } from '../Annotation/PenButton'
 
 const MIN_H = 90
 
@@ -102,10 +104,21 @@ export const NLEBlock: React.FC<Props> = React.memo(({ id, top, blockHeight, off
   const isSelected = selectedIds.includes(id)
   const zoom = useCanvasStore(s => s.zoom)
   const boardScale = useBoardsStore(s => s.boards[ctx.boardId]?.boardScale ?? 1)
+  // Per-bar strokes at board zoom — every bar in the tree is its own annotatable
+  // node ("on the board, it's just nodes"). Subscribe via the store so the
+  // canvas re-renders when strokes change.
+  const barStrokes = useBoardsStore(s => s.boards[ctx.boardId]?.bars[id]?.strokes)
   // Effective zoom = canvas zoom × boardScale — used for counter-scaling text to stay readable
   // Sqrt-damped: pill grows as you zoom out, but not so aggressively that it dominates small bars
   const effZoom = zoom * boardScale
   const iz = 1 / Math.sqrt(Math.max(effZoom, 0.12))
+  // Corner-icon boost: keeps the grip / delete-X / pen at their canvas-unit
+  // size at zoom 1 (where they look right) but inflates them gently as zoom
+  // drops, so they stay legible at low zoom without dominating bars at high
+  // zoom. Sqrt-damped — same curve `iz` uses for text. All three corner
+  // icons multiply BOTH their position offsets (top/right) AND their sizes by
+  // this so the cluster scales as a unit, preserving inter-icon spacing. */
+  const cornerBoost = 1 / Math.sqrt(Math.max(zoom, 0.12))
 
   const [isHovered, setIsHovered] = useState(false)
   const [isRenaming, setIsRenaming] = useState(false)
@@ -185,6 +198,7 @@ export const NLEBlock: React.FC<Props> = React.memo(({ id, top, blockHeight, off
     const tag = (e.target as HTMLElement).tagName
     if (tag === 'INPUT' || tag === 'BUTTON' || tag === 'TEXTAREA') return
     if ((e.target as Element).closest?.('[data-handle]')) return
+    if ((e.target as Element).closest?.('[data-pen-button]')) return
     if (e.shiftKey) {
       toggleSelection(id)
       e.stopPropagation()
@@ -864,8 +878,11 @@ export const NLEBlock: React.FC<Props> = React.memo(({ id, top, blockHeight, off
         <div
           data-handle="grip"
           style={{
-            position: 'absolute', top: 3, right: 34,
-            width: 40, height: 28,
+            position: 'absolute',
+            top: 3 * cornerBoost,
+            right: 34 * cornerBoost,
+            width: 40 * cornerBoost,
+            height: 28 * cornerBoost,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             cursor: isDraggingReorder ? 'grabbing' : 'grab',
             zIndex: 20,
@@ -874,14 +891,19 @@ export const NLEBlock: React.FC<Props> = React.memo(({ id, top, blockHeight, off
         >
           <div style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(3, 4px)',
-            gridTemplateRows: 'repeat(2, 4px)',
-            gap: 2,
+            gridTemplateColumns: `repeat(3, ${4 * cornerBoost}px)`,
+            gridTemplateRows: `repeat(2, ${4 * cornerBoost}px)`,
+            gap: 2 * cornerBoost,
             opacity: isDraggingReorder ? 1 : isHovered ? 0.7 : 0.25,
             transition: 'opacity 0.12s',
           }}>
             {[0,1,2,3,4,5].map(i => (
-              <div key={i} style={{ width: 3, height: 3, borderRadius: '50%', background: 'rgba(255,255,255,0.95)' }} />
+              <div key={i} style={{
+                width: 3 * cornerBoost,
+                height: 3 * cornerBoost,
+                borderRadius: '50%',
+                background: 'rgba(255,255,255,0.95)',
+              }} />
             ))}
           </div>
         </div>
@@ -889,8 +911,11 @@ export const NLEBlock: React.FC<Props> = React.memo(({ id, top, blockHeight, off
         {/* ── Delete button (always visible, paired with the drag grip) ── */}
         <div
           style={{
-            position: 'absolute', top: 3, right: 6,
-            width: 22, height: 28,
+            position: 'absolute',
+            top: 3 * cornerBoost,
+            right: 6 * cornerBoost,
+            width: 22 * cornerBoost,
+            height: 28 * cornerBoost,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             cursor: 'pointer',
             zIndex: 20,
@@ -903,7 +928,7 @@ export const NLEBlock: React.FC<Props> = React.memo(({ id, top, blockHeight, off
         >
           <div style={{
             color: 'rgba(255,255,255,0.95)',
-            fontSize: 15,
+            fontSize: 15 * cornerBoost,
             fontWeight: 600,
             lineHeight: 1,
             opacity: isHovered ? 0.7 : 0.25,
@@ -1312,6 +1337,52 @@ export const NLEBlock: React.FC<Props> = React.memo(({ id, top, blockHeight, off
             </div>
           )
         })()}
+
+        {/* ── Per-bar annotation layer (board zoom).
+                Every bar in the tree gets its own strokes layer; renders saved
+                strokes always; captures pointer events only while draw mode
+                targets THIS bar. */}
+        <div style={{
+          position: 'absolute', inset: 0,
+          pointerEvents: 'none',
+          borderRadius: 12,
+          overflow: 'hidden',
+          zIndex: 4,
+        }}>
+          <DrawableSurface
+            surface={{ kind: 'bar', boardId: ctx.boardId, barId: id }}
+            width={bar.width}
+            height={blockHeight}
+            strokes={barStrokes ?? []}
+            borderRadius={12}
+          />
+        </div>
+
+        {/* Pen toggle — joins the X and drag grip in a single corner row.
+                Layout (right-edge offsets, all post-cornerBoost):
+                    X     at right: 6,   width 22  → covers [6, 28]
+                    grip  at right: 34,  width 40  → covers [34, 74]
+                    pen   at right: 80,  width 22  → covers [80, 102]
+                Each gap is 6 canvas-units, scaled with the rest. zIndex stays
+                at 6 so the X / grip (zIndex 20) win any overlap, but they no
+                longer overlap spatially anyway. Hover-revealed — matches the
+                X / grip's existing dim-by-default → bright-on-hover pattern. */}
+        <div
+          data-pen-button="true"
+          style={{
+            position: 'absolute',
+            top: 3 * cornerBoost,
+            right: 80 * cornerBoost,
+            zIndex: 6,
+          }}
+        >
+          <PenButton
+            surface={{ kind: 'bar', boardId: ctx.boardId, barId: id }}
+            baseColor={bar.color}
+            size={22 * cornerBoost}
+            visible={isHovered}
+          />
+        </div>
       </div>
 
       {contextMenu && (

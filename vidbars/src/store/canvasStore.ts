@@ -4,6 +4,11 @@ import { createDebouncedJSONStorage } from '../utils/debouncedJSONStorage'
 import { useBoardsStore } from './boardsStore'
 import { computeGroupLayout, getRowY, getRowHeight } from '../utils/nleRows'
 import { DEFAULT_H } from '../utils/barConstants'
+import {
+  type DrawSurface,
+  DEFAULT_PEN_COLOR,
+  DEFAULT_PEN_SIZE,
+} from '../types/stroke'
 
 const MIN_ZOOM = 0.11
 const MAX_ZOOM = 4
@@ -52,6 +57,13 @@ interface CanvasStore {
     phase: 'fanning' | 'stacking'    // direction
   } | null
   zoneLineY: number
+  /** When non-null, the user is in draw / annotation mode on this surface.
+   *  Pointer events on the surface paint strokes; the floating DrawToolbar
+   *  is visible. Click-outside / Esc / Done button clears it. */
+  drawSurface: DrawSurface | null
+  drawTool: 'pen' | 'eraser'
+  drawColor: string
+  drawSize: number
 
   setPan: (pan: { x: number; y: number }) => void
   setZoom: (zoom: number) => void
@@ -73,6 +85,11 @@ interface CanvasStore {
   setZoneLineY: (y: number) => void
   /** Pan (keeping current zoom) so the given group is centered in the viewport. */
   jumpToGroup: (groupId: string) => void
+  // ── Annotation / draw mode ──
+  setDrawSurface: (s: DrawSurface | null) => void
+  setDrawTool: (t: 'pen' | 'eraser') => void
+  setDrawColor: (c: string) => void
+  setDrawSize: (n: number) => void
 }
 
 export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
@@ -89,6 +106,10 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
   extractingCardId: null,
   fanTransition: null,
   zoneLineY: 0,
+  drawSurface: null,
+  drawTool: 'pen',
+  drawColor: DEFAULT_PEN_COLOR,
+  drawSize: DEFAULT_PEN_SIZE,
 
   setPan: (pan) => set({ pan }),
 
@@ -137,6 +158,11 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
   setFanTransition: (fanTransition) => set({ fanTransition }),
 
   setZoneLineY: (zoneLineY) => set({ zoneLineY }),
+
+  setDrawSurface: (drawSurface) => set({ drawSurface }),
+  setDrawTool: (drawTool) => set({ drawTool }),
+  setDrawColor: (drawColor) => set({ drawColor }),
+  setDrawSize: (drawSize) => set({ drawSize }),
 
   jumpToGroup: (groupId) => {
     const bs = useBoardsStore.getState()
@@ -193,6 +219,9 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
     nleRowHeight: s.nleRowHeight,
     dynamicRowHeights: s.dynamicRowHeights,
     zoneLineY: s.zoneLineY,
+    // Tool preferences persist across reloads; the active drawSurface does not.
+    drawColor: s.drawColor,
+    drawSize: s.drawSize,
   }),
   version: 1,
   migrate: (persisted: any, version: number) => {

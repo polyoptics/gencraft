@@ -65,6 +65,8 @@ export interface FreeNodeData {
   mediaType?: 'image' | 'video' | 'audio' | null
   color: string
   textStyle?: TextStyle
+  /** Annotation layer — vector strokes drawn on this node. */
+  strokes?: import('../types/stroke').Stroke[]
 }
 
 const COLORS = ['#1e2235', '#1e3028', '#2e1e35', '#35281e', '#1e2e35', '#2e351e']
