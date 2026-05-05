@@ -28,6 +28,7 @@ import { getFirstImageUrl } from '../../types/bar'
 import { hexToHsl, hslToHex, selectionHighlight } from '../../utils/colorUtils'
 import { DrawableSurface } from '../Annotation/DrawableSurface'
 import { PenButton } from '../Annotation/PenButton'
+import { useSeedHoverFromCursor } from '../../utils/pointerTracker'
 
 const BOARD_PADDING_X = 20
 
@@ -328,6 +329,11 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
   }, [group.id])
 
   const [isHovered, setIsHovered] = useState(false)
+  const cardRef = useRef<HTMLDivElement>(null)
+  // Seed hover state if the cursor is already over this card when it mounts
+  // (covers zoom-layer transitions where the card swaps in under a static
+  // cursor — pointerenter wouldn't fire otherwise).
+  useSeedHoverFromCursor(cardRef, setIsHovered)
 
   // ── Geometry: compute bounding box from group layout ──
   const { screenLeft, screenTop, screenWidth, cardHeight, headerPad, contentCanvasW, contentCanvasH, color } = useMemo(() => {
@@ -452,6 +458,7 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
   return (
     <>
       <div
+        ref={cardRef}
         data-layer-card={group.id}
         data-nle-card={group.boardIds[0] ?? ''}
         data-group-card="true"
@@ -811,6 +818,10 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
   const groups = useBoardsStore(s => s.groups)
   const isSelected = useBoardsStore(s => s.selectedGroupIds.includes(anchorGroup.id))
   const [isHovered, setIsHovered] = useState(false)
+  const stackedDeckHoverRef = useRef<HTMLDivElement>(null)
+  // Seed hover from current cursor position so the pen icon appears
+  // immediately when this deck card swaps in across a zoom-layer threshold.
+  useSeedHoverFromCursor(stackedDeckHoverRef, setIsHovered)
   const [cardMenu, setCardMenu] = useState<{ x: number; y: number } | null>(null)
   const [isEditingHero, setIsEditingHero] = useState(false)
 
@@ -1007,6 +1018,7 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
     <>
       {/* Hover wrapper — covers card + edges area (all within original bounding box) */}
       <div
+        ref={stackedDeckHoverRef}
         data-group-card="true"
         data-link-drop={`card:${anchorGroup.id}`}
         data-id={anchorGroup.id}

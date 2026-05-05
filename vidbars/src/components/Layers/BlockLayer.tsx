@@ -28,6 +28,7 @@ import { getHiddenBoardIds, getHiddenGroupIds } from '../../hooks/useCardDecks'
 import { selectionHighlight } from '../../utils/colorUtils'
 import { DrawableSurface } from '../Annotation/DrawableSurface'
 import { PenButton } from '../Annotation/PenButton'
+import { useSeedHoverFromCursor } from '../../utils/pointerTracker'
 
 const BOARD_PADDING_X = 20
 
@@ -57,6 +58,10 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
   const nameInputRef = useRef<HTMLInputElement>(null)
   const [gripDragging, setGripDragging] = useState(false)
   const [isHovered, setIsHovered] = useState(false)
+  const blockHoverRef = useRef<HTMLDivElement>(null)
+  // Seed hover from current cursor — covers zoom-layer transitions where
+  // this block swaps in under a stationary cursor and pointerenter wouldn't fire.
+  useSeedHoverFromCursor(blockHoverRef, setIsHovered)
   const [isEditingImage, setIsEditingImage] = useState(false)
 
   const commitRename = useCallback(() => {
@@ -404,6 +409,7 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
 
   return (
     <div
+      ref={blockHoverRef}
       style={{ position: 'absolute', left: boardX, top: boardY, width: totalW, height: height + BLOCK_HEADER_H }}
       onPointerDownCapture={e => {
         if (e.button !== 0) return

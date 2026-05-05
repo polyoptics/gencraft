@@ -49,3 +49,15 @@ export function sameSurface(a: DrawSurface | null, b: DrawSurface | null): boole
   if (a.kind === 'bar'      && b.kind === 'bar')      return a.boardId === b.boardId && a.barId === b.barId
   return false
 }
+
+/** Stable string id for a DrawSurface — used as a `data-draw-surface`
+ *  attribute so the toolbar / click-outside detection can find the surface's
+ *  drawable region in the DOM regardless of which zoom layer is active. */
+export function surfaceId(surface: DrawSurface): string {
+  switch (surface.kind) {
+    case 'freeNode': return `freeNode:${surface.nodeId}`
+    case 'card':     return `card:${surface.groupId}`
+    case 'block':    return `block:${surface.boardId}`
+    case 'bar':      return `bar:${surface.boardId}:${surface.barId}`
+  }
+}

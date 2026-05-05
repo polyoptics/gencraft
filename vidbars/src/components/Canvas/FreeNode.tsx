@@ -15,6 +15,7 @@ import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
 import { DrawableSurface } from '../Annotation/DrawableSurface'
 import { PenButton } from '../Annotation/PenButton'
+import { useSeedHoverFromCursor } from '../../utils/pointerTracker'
 
 
 interface Props { id: string }
@@ -48,6 +49,12 @@ export const FreeNode: React.FC<Props> = React.memo(({ id }) => {
   const resizeLastY = useRef(0)
 
   useEffect(() => { if (isRenaming) renameRef.current?.select() }, [isRenaming])
+
+  // Seed isHovered if the cursor is already over this node when it mounts —
+  // covers the "swapped in under stationary cursor" case at zoom-layer
+  // transitions (browsers don't fire mouseenter for elements that appear
+  // under a cursor that hasn't moved).
+  useSeedHoverFromCursor(wrapperRef, setIsHovered)
 
   // Drag the whole card — anything except textarea/input/button/[data-resize]
   const onNodeDown = useCallback((e: React.PointerEvent) => {

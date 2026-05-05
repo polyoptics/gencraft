@@ -20,6 +20,7 @@ import { TextFormatToolbar, ensureFontLoaded, hexToRgba } from '../UI/TextFormat
 import { DEFAULT_HEADER_STYLE, DEFAULT_BODY_STYLE } from '../../store/freeNodeStore'
 import { DrawableSurface } from '../Annotation/DrawableSurface'
 import { PenButton } from '../Annotation/PenButton'
+import { useSeedHoverFromCursor } from '../../utils/pointerTracker'
 
 const MIN_H = 90
 
@@ -147,6 +148,10 @@ export const NLEBlock: React.FC<Props> = React.memo(({ id, top, blockHeight, off
   const nameRef = useRef<HTMLInputElement>(null)
   const subtitleRef = useRef<HTMLInputElement>(null)
   const wrapperRef = useRef<HTMLDivElement>(null)
+  // Seed hover state if the cursor is already over this bar at mount time —
+  // matters at zoom-layer transitions where pointerenter doesn't fire under
+  // a stationary cursor.
+  useSeedHoverFromCursor(wrapperRef, setIsHovered)
   const iconInputRef = useRef<HTMLInputElement>(null)
   const mediaInputRef = useRef<HTMLInputElement>(null)
 
