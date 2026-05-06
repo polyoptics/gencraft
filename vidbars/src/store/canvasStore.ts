@@ -64,6 +64,10 @@ interface CanvasStore {
   drawTool: 'pen' | 'eraser'
   drawColor: string
   drawSize: number
+  /** Card Rolodex panel visibility — toggleable, persisted. */
+  rolodexOpen: boolean
+  /** Sort mode for the rolodex list. Persisted across sessions. */
+  rolodexSortMode: 'creation' | 'alphabetical'
 
   setPan: (pan: { x: number; y: number }) => void
   setZoom: (zoom: number) => void
@@ -90,6 +94,10 @@ interface CanvasStore {
   setDrawTool: (t: 'pen' | 'eraser') => void
   setDrawColor: (c: string) => void
   setDrawSize: (n: number) => void
+  // ── Card Rolodex ──
+  toggleRolodex: () => void
+  setRolodexOpen: (open: boolean) => void
+  setRolodexSortMode: (mode: 'creation' | 'alphabetical') => void
 }
 
 export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
@@ -110,6 +118,8 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
   drawTool: 'pen',
   drawColor: DEFAULT_PEN_COLOR,
   drawSize: DEFAULT_PEN_SIZE,
+  rolodexOpen: false,
+  rolodexSortMode: 'creation',
 
   setPan: (pan) => set({ pan }),
 
@@ -163,6 +173,10 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
   setDrawTool: (drawTool) => set({ drawTool }),
   setDrawColor: (drawColor) => set({ drawColor }),
   setDrawSize: (drawSize) => set({ drawSize }),
+
+  toggleRolodex: () => set(s => ({ rolodexOpen: !s.rolodexOpen })),
+  setRolodexOpen: (rolodexOpen) => set({ rolodexOpen }),
+  setRolodexSortMode: (rolodexSortMode) => set({ rolodexSortMode }),
 
   jumpToGroup: (groupId) => {
     const bs = useBoardsStore.getState()
@@ -222,6 +236,8 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
     // Tool preferences persist across reloads; the active drawSurface does not.
     drawColor: s.drawColor,
     drawSize: s.drawSize,
+    rolodexOpen: s.rolodexOpen,
+    rolodexSortMode: s.rolodexSortMode,
   }),
   version: 1,
   migrate: (persisted: any, version: number) => {

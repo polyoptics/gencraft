@@ -7,6 +7,7 @@ import { TemplateMenu } from './components/UI/TemplateMenu'
 import { DeckBrowserTray } from './components/DeckBrowser/DeckBrowserTray'
 import { LinkDragOverlay } from './components/Linking/LinkDragOverlay'
 import { DrawToolbar } from './components/Annotation/DrawToolbar'
+import { CardRolodex } from './components/Rolodex/CardRolodex'
 import { useBoardsStore } from './store/boardsStore'
 import { useCanvasStore } from './store/canvasStore'
 import { useFreeNodeStore } from './store/freeNodeStore'
@@ -312,6 +313,34 @@ function DynamicRowToggle() {
   )
 }
 
+function RolodexToggleButton() {
+  const open = useCanvasStore(s => s.rolodexOpen)
+  const toggle = useCanvasStore(s => s.toggleRolodex)
+  return (
+    <button
+      onClick={toggle}
+      title="Cards — browse all cards in your project"
+      style={{
+        height: 24,
+        padding: '0 8px',
+        display: 'flex', alignItems: 'center', gap: 5,
+        background: open ? 'rgba(120,170,255,0.22)' : 'rgba(255,255,255,0.05)',
+        border: open
+          ? '1px solid rgba(120,170,255,0.5)'
+          : '1px solid rgba(255,255,255,0.1)',
+        borderRadius: 6,
+        color: open ? '#a8c8ff' : 'rgba(255,255,255,0.6)',
+        fontSize: 11, fontWeight: 600,
+        cursor: 'pointer',
+        fontFamily: 'inherit',
+      }}
+    >
+      <span style={{ fontSize: 13 }}>🗂</span>
+      Cards
+    </button>
+  )
+}
+
 function useBase64Migration() {
   const ran = useRef(false)
   useEffect(() => {
@@ -363,6 +392,7 @@ export default function App() {
           <span style={{ fontSize: 13 }}>📚</span>
           Decks
         </button>
+        <RolodexToggleButton />
         <div style={{ width: 1, height: 16, background: 'rgba(255,255,255,0.1)' }} />
         <span style={{ color: 'rgba(255,255,255,0.22)', fontSize: 11 }}>a canvas for creative work</span>
         <div style={{ flex: 1 }} />
@@ -389,6 +419,9 @@ export default function App() {
 
       {/* Annotation / draw-mode floating toolbar (only visible while in draw mode) */}
       <DrawToolbar />
+
+      {/* Card Rolodex — vertical card index with hover-scrollable preview */}
+      <CardRolodex />
 
       {/* Viewers render outside the canvas so they are fixed to the viewport */}
       <AllViewers />
