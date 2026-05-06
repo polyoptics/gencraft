@@ -25,13 +25,31 @@ import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { HeroImageLayer } from '../Layers/HeroImageLayer'
 import { edgeColorFromHex } from '../../utils/colorUtils'
 
+// Card width — uniform across active and tucked cards. The active card
+// "rises" only via screen-Y lift (CENTER_BONUS); it's never wider than
+// the others. Visual connection to the preview pane is purely via color
+// (preview frame matches the active card's hue).
 const SLOT_W = 180
+// Width of the "wings" — vertical floor strips on the left and right of
+// the card column. They form the sides of the cabinet's cutout where
+// the active card's body pokes through.
+const WING_W = 8
+// Total left-column width: card column + wings on each side.
+const LEFTCOL_W = SLOT_W + 2 * WING_W
 // Each card is a TALL rectangle with a rounded top; only its top ~SLOT_PEEK_H
 // shows when tucked under the next card down (the visible "tab"). The full
 // CARD_H extends below into the territory the next card covers.
 const CARD_H = 90
 const SLOT_PEEK_H = 30
 const VISIBLE_RADIUS = 5         // slots above/below center → 11 total visible
+// Cabinet floor's bottom-bar height — a solid panel-floor strip that
+// always sits at the very bottom of the panel. The bar's rounded top
+// corners form the rounded INNER corners of the cabinet's cutout (the
+// "slot" the card pokes through).
+const CABINET_BAR_H = 32
+// Inner radius of the cabinet's cutout — applied to the bottom bar's
+// top-left + top-right corners.
+const CABINET_NOTCH_RADIUS = 14
 // At its peak (the float center), each card gets this much extra height
 // added to its tucked SLOT_PEEK_H. So the centered card's visible height
 // reads as SLOT_PEEK_H + CENTER_BONUS, and the cards a couple of slots
@@ -242,6 +260,45 @@ export const CardRolodex: React.FC = () => {
   const anchorY = LIST_AREA_H / 2 - SLOT_PEEK_H / 2
   const yShift = anchorY - PfracRawY
 
+  // ── Cabinet "floor" geometry ─────────────────────────────────
+  // The cabinet is rendered as wings (left, right) + a bottom bar with
+  // rounded top corners. Together they form a cutout in the middle where
+  // the active card's body shows through. When cards run out below the
+  // active, the cabinet rises into the listArea so the wings + cutout
+  // become visible above the bar.
+  //
+  // Geometry:
+  //   - Notch height (the empty wing-only band above the bar) is small —
+  //     just CABINET_NOTCH_RADIUS. That puts the bar's top INTO the
+  //     active card's body region so its rounded corners visually "carve"
+  //     rounded bottoms into the card. The card peeks up through the
+  //     curve, sells the illusion that the slot has a rounded inside
+  //     edge that the card protrudes through.
+  //   - Bar height = whatever remains of the cabinet's total height after
+  //     the notch — grows tall when the cabinet is tall (end of list),
+  //     shrinks to 0 when there's no cabinet rise (mid-list).
+  //
+  // The floor's TOP smoothly tracks the bottom-most visible card. At the
+  // end of the list, that bottom is the active's lifted-tab bottom, so
+  // the floor rises high. When many cards are below the active, the
+  // bottom-most card's bottom is near LIST_AREA_H, so the floor stays
+  // near the bottom.
+  let bottomMostCardBottom = 0
+  for (let i = 0; i < visibleIndices.length; i++) {
+    const cardBottom = (rawTops[i] + yShift) + sizes[i]
+    if (cardBottom > bottomMostCardBottom) bottomMostCardBottom = cardBottom
+  }
+  const floorTopMin = anchorY + SLOT_PEEK_H + CENTER_BONUS
+  const cabinetFloorTop = Math.max(floorTopMin, Math.min(LIST_AREA_H, bottomMostCardBottom))
+  const cabinetH = LIST_AREA_H - cabinetFloorTop
+  // Notch height = just enough wing-only band that the bar's rounded
+  // corners (radius CABINET_NOTCH_RADIUS) are exposed; the bar then sits
+  // ~CABINET_NOTCH_RADIUS pixels INSIDE the card's body so its rounded
+  // top corners overlap and "round off" the card's bottom.
+  const notchH = Math.min(CABINET_NOTCH_RADIUS, cabinetH)
+  const barH = cabinetH - notchH
+  const isAtEndOfList = sortedGroups.length > 0 && previewIndex === sortedGroups.length - 1
+
   return (
     <>
       <div
@@ -261,18 +318,23 @@ export const CardRolodex: React.FC = () => {
           display: 'flex',
           flexDirection: 'row',
           alignItems: 'flex-start',
-          gap: 10,
+          gap: 4,
           fontFamily: 'inherit',
           zIndex: 900,
           userSelect: 'none',
         }}
       >
-        {/* ── Left column: header + slot list + footer ── */}
+        {/* ── Left column: header + slot list + cabinet floor ──
+              Width is LEFTCOL_W (SLOT_W + 2*WING_W) so cards can sit
+              centered with the cabinet's side wings (WING_W each side)
+              flanking them. The visual link to the preview pane comes
+              from matching colors (preview frame uses the active card's
+              color). */}
         <div style={{
-          width: SLOT_W,
+          width: LEFTCOL_W,
           display: 'flex',
           flexDirection: 'column',
-          gap: 6,
+          gap: 0,
         }}>
           {/* Header */}
           <div style={{
@@ -294,59 +356,116 @@ export const CardRolodex: React.FC = () => {
             </div>
           </div>
 
-          {/* Slot list — fixed height, slots positioned absolutely so they
-              animate via translateY when centerIndex changes */}
+          {/* Slot list. Cards live inside; cabinet-floor wings + bar are
+              also positioned absolute on top, forming the cutout the
+              active card pokes through. */}
           <div style={{
             position: 'relative',
-            width: '100%',
+            width: LEFTCOL_W,
             height: LIST_AREA_H,
             overflow: 'hidden',
           }}>
             {sortedGroups.length === 0 ? (
               <EmptyState onAdd={startPlacement} />
             ) : (
-              visibleIndices.map((idx, i) => {
-                const g = sortedGroups[idx]
-                const offset = idx - centerPosition
-                return (
-                  <RolodexSlot
-                    key={g.id}
-                    group={g}
-                    offset={offset}
-                    top={rawTops[i] + yShift}
-                    zIndex={idx + 1}
-                    onClick={() => onSlotClick(idx)}
-                    onDoubleClick={() => onSlotDoubleClick(g)}
-                  />
-                )
-              })
+              <>
+                {visibleIndices.map((idx, i) => {
+                  const g = sortedGroups[idx]
+                  const offset = idx - centerPosition
+                  return (
+                    <RolodexSlot
+                      key={g.id}
+                      group={g}
+                      offset={offset}
+                      top={rawTops[i] + yShift}
+                      zIndex={idx + 1}
+                      onClick={() => onSlotClick(idx)}
+                      onDoubleClick={() => onSlotDoubleClick(g)}
+                    />
+                  )
+                })}
+
+                {/* ── Cabinet floor ──────────────────────────────────
+                      Wings on each side (full cabinet height) + a bottom
+                      bar with rounded top corners that forms the rounded
+                      INNER edge of the cutout. The active card's body
+                      shows through the empty notch between the wings,
+                      above the bar.
+                      cabinetFloorTop is computed from the bottom-most
+                      visible card, so this whole block smoothly rises
+                      as cards run out below the active. */}
+                {cabinetH > 0 && (
+                  <>
+                    {/* Left wing */}
+                    <div style={{
+                      position: 'absolute',
+                      left: 0,
+                      top: cabinetFloorTop,
+                      width: WING_W,
+                      height: cabinetH,
+                      background: 'rgba(8,9,16,1)',
+                      zIndex: 200,
+                      pointerEvents: 'none',
+                    }} />
+                    {/* Right wing */}
+                    <div style={{
+                      position: 'absolute',
+                      right: 0,
+                      top: cabinetFloorTop,
+                      width: WING_W,
+                      height: cabinetH,
+                      background: 'rgba(8,9,16,1)',
+                      zIndex: 200,
+                      pointerEvents: 'none',
+                    }} />
+                    {/* Bottom bar — its top sits ~CABINET_NOTCH_RADIUS px
+                          ABOVE where the card's body ends, so the rounded
+                          top corners overlap into the card. The card's
+                          flat bottom is hidden behind the bar; the curves
+                          that bite out of the bar's top corners read as
+                          the card's OWN rounded bottom corners poking up
+                          through the cabinet slot. Bar height grows with
+                          the cabinet to fill all the way to the listArea
+                          bottom with no gap. */}
+                    {barH > 0 && (
+                      <div style={{
+                        position: 'absolute',
+                        left: WING_W,
+                        top: cabinetFloorTop + notchH,
+                        width: SLOT_W,
+                        height: barH,
+                        background: 'rgba(8,9,16,1)',
+                        borderTopLeftRadius: notchH > 0 ? CABINET_NOTCH_RADIUS : 0,
+                        borderTopRightRadius: notchH > 0 ? CABINET_NOTCH_RADIUS : 0,
+                        boxShadow: 'inset 0 6px 10px -6px rgba(0,0,0,0.7)',
+                        zIndex: 200,
+                        pointerEvents: 'none',
+                      }} />
+                    )}
+                  </>
+                )}
+              </>
             )}
           </div>
 
-          {/* Footer: + new card button */}
+          {/* Cabinet base — the floor element CONTINUES below the list
+              area, anchoring the rolodex with a flat, rounded-corner
+              bottom. Same color as the wings/bar, so when the floor is
+              high (end-of-list) it reads as one continuous cabinet from
+              the cutout all the way down. */}
           <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            paddingTop: 6,
-            borderTop: '1px solid rgba(255,255,255,0.1)',
-          }}>
-            <button
-              onClick={startPlacement}
-              title="Place a new card on the canvas"
-              style={{
-                background: 'rgba(120,170,255,0.18)',
-                border: '1px solid rgba(120,170,255,0.4)',
-                color: 'rgba(255,255,255,0.85)',
-                borderRadius: 6,
-                padding: '4px 14px',
-                fontSize: 14,
-                fontWeight: 700,
-                cursor: 'pointer',
-                fontFamily: 'inherit',
-              }}
-            >+</button>
-          </div>
+            height: CABINET_BAR_H,
+            background: 'rgba(8,9,16,1)',
+            borderBottomLeftRadius: 6,
+            borderBottomRightRadius: 6,
+          }} />
+
+          {/* + Place new card — temporarily hidden per spec; placement
+              mode wiring (PlacementGhost, isPlacing, etc.) is left in
+              place and can be re-enabled by restoring this footer
+              with the original button.
+              <div style={{ ... }}><button onClick={startPlacement}>+</button></div>
+          */}
         </div>
 
         {/* ── Right column: preview pane (only when there's a center card) ── */}
@@ -436,15 +555,17 @@ const RolodexSlot: React.FC<{
         : `${group.name || 'Untitled'} — click to view`}
       style={{
         position: 'absolute',
-        left: '50%',
+        // Cards sit centered inside the leftColumn — offset by WING_W so
+        // the cabinet wings flank them on both sides.
+        left: WING_W,
         top,
-        transform: 'translateX(-50%)',
         width: SLOT_W,
         height: CARD_H,
         background: group.color,
-        // Rounded TOP only — bottom is tucked under the next card and never
-        // visible (except for the bottommost card, which gets clipped by
-        // the LIST_AREA_H overflow).
+        // Rounded TOP only — bottom is tucked under the next card down.
+        // The rounded top corners + cabinet's rounded inner bottom corners
+        // (from the bottom-bar's border-radius) frame the card poking
+        // through the cabinet cutout.
         borderRadius: '7px 7px 0 0',
         border: borderStyle,
         boxShadow: shadows.join(', '),
@@ -470,11 +591,12 @@ const RolodexSlot: React.FC<{
           rgba(0,0,0,${0.04 + 0.02 * lit}) 100%)`,
         pointerEvents: 'none',
       }} />
-      {/* Content lives in the top SLOT_PEEK_H "tab" region — that's the
-            part visible when this card is tucked. */}
+      {/* Content lives in the top SLOT_PEEK_H "tab" region. */}
       <div style={{
         position: 'absolute',
-        top: 0, left: 0, right: 0,
+        top: 0,
+        left: 0,
+        right: 0,
         height: SLOT_PEEK_H,
         display: 'flex',
         alignItems: 'center',
@@ -499,6 +621,11 @@ const RolodexSlot: React.FC<{
 // ─── Preview pane ──────────────────────────────────────────────
 
 const CardPreview: React.FC<{ group: ProjectGroup }> = ({ group }) => {
+  // Frame color: a brightened version of the card color, visually
+  // continuing the tongue protruding from the cabinet wall. Same color
+  // family as the card so the eye reads "this preview belongs to the
+  // active card."
+  const frameColor = edgeColorFromHex(group.color, 0.85)
   return (
     <div
       key={group.id}                                          // key swap → fade-in on change
@@ -506,8 +633,8 @@ const CardPreview: React.FC<{ group: ProjectGroup }> = ({ group }) => {
         width: PREVIEW_W,
         height: PREVIEW_H,
         background: group.color,
-        borderRadius: 12,
-        border: '1.5px solid rgba(255,255,255,0.25)',
+        borderRadius: 10,
+        border: `4px solid ${frameColor}`,
         boxShadow: '0 8px 32px rgba(0,0,0,0.55)',
         position: 'relative',
         overflow: 'hidden',
