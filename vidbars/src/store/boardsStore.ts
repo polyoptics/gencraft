@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { createDebouncedJSONStorage } from '../utils/debouncedJSONStorage'
+import { createDebouncedIDBStorage } from '../utils/debouncedIDBStorage'
 import { useCanvasStore } from './canvasStore'
 import type { Bar } from '../types/bar'
 import { TEMPLATES } from '../data/templates'
@@ -1533,7 +1533,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
   },
 }), {
   name: 'vidbars-boards',
-  storage: createDebouncedJSONStorage(400),
+  storage: createDebouncedIDBStorage(400),
   version: 12,
   migrate(persisted: any, version: number) {
     if (version < 3) {

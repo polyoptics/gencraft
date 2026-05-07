@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { createDebouncedJSONStorage } from '../utils/debouncedJSONStorage'
+import { createDebouncedIDBStorage } from '../utils/debouncedIDBStorage'
 import { useBoardsStore } from './boardsStore'
 import { computeGroupLayout, getRowY, getRowHeight } from '../utils/nleRows'
 import { DEFAULT_H } from '../utils/barConstants'
@@ -241,7 +241,7 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
   },
 }), {
   name: 'vidbars-canvas',
-  storage: createDebouncedJSONStorage(400),
+  storage: createDebouncedIDBStorage(400),
   partialize: (s) => ({
     pan: s.pan,
     zoom: s.zoom,
