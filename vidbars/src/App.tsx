@@ -8,6 +8,7 @@ import { DeckBrowserTray } from './components/DeckBrowser/DeckBrowserTray'
 import { LinkDragOverlay } from './components/Linking/LinkDragOverlay'
 import { DrawToolbar } from './components/Annotation/DrawToolbar'
 import { CardRolodex } from './components/Rolodex/CardRolodex'
+import { StoragePersistenceBanner } from './components/UI/StoragePersistenceBanner'
 import { useBoardsStore } from './store/boardsStore'
 import { useCanvasStore } from './store/canvasStore'
 import { useFreeNodeStore } from './store/freeNodeStore'
@@ -361,6 +362,11 @@ export default function App() {
 
   return (
     <div style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column', background: '#0d0e1a' }}>
+
+      {/* Sticky banner — only visible when localStorage persistence is
+            failing (or about to fail). Diagnoses the "my recent edits
+            disappear after a reload" class of bug. */}
+      <StoragePersistenceBanner />
 
       {/* ── Toolbar ── */}
       <div style={{
