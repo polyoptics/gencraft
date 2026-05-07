@@ -1723,3 +1723,13 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
     groups: s.groups,
   }),
 }))
+
+// Dev-only: expose the running store on `window` so debugging tooling
+// (preview_eval, devtools console) can reach the SAME instance the app
+// uses. Without this, dynamic `import()` from outside the bundle graph
+// gives a separate hot-loaded copy, and any setState calls on it have
+// no effect on the live UI. Tied to import.meta.env.DEV so production
+// builds drop it.
+if (typeof window !== 'undefined' && import.meta.env.DEV) {
+  ;(window as unknown as { useBoardsStore: typeof useBoardsStore }).useBoardsStore = useBoardsStore
+}
