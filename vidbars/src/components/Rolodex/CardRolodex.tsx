@@ -19,11 +19,12 @@
 import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react'
 import ReactDOM from 'react-dom'
 import { useBoardsStore } from '../../store/boardsStore'
-import type { ProjectGroup } from '../../store/boardsStore'
+import type { ProjectGroup, BoardData } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { HeroImageLayer } from '../Layers/HeroImageLayer'
 import { edgeColorFromHex } from '../../utils/colorUtils'
+import { getFirstImageUrl } from '../../types/bar'
 
 // Card width — uniform across active and tucked cards. The active card
 // "rises" only via screen-Y lift (CENTER_BONUS); it's never wider than
@@ -39,9 +40,31 @@ const LEFTCOL_W = SLOT_W + 2 * WING_W
 // Each card is a TALL rectangle with a rounded top; only its top ~SLOT_PEEK_H
 // shows when tucked under the next card down (the visible "tab"). The full
 // CARD_H extends below into the territory the next card covers.
-const CARD_H = 90
+//
+// CARD_H matches the preview pane's aspect ratio (PREVIEW_W:PREVIEW_H ≈
+// 1:1.417): 180 × 1.417 ≈ 255. This makes each row feel like a real
+// card-shaped object instead of a flat tab. In TREE mode the practical
+// effect is dramatic — when a child indents, the parent's left strip
+// (= CARD_H - sizes[i] tall) is now ~225 px instead of ~60 px, so the
+// parent reads as a card sitting BEHIND the child rather than as a
+// sliver of color.
+const CARD_H = 255
 const SLOT_PEEK_H = 30
 const VISIBLE_RADIUS = 5         // slots above/below center → 11 total visible
+// How far the active card's tab sits ABOVE the list area's vertical
+// center, measured in SLOT_PEEK_H units. 0 = exact center, 1 = one
+// tab-height above center, 2 = two. The list still scrolls smoothly
+// around the float center; only the resting Y of "selected" shifts.
+const ACTIVE_LIFT_SLOTS = 3.5
+// Extra buffer cards rendered ABOVE visibleStart so their full body
+// (CARD_H tall, but tucked tabs are only SLOT_PEEK_H) sits entirely
+// above the viewport. Without this, a parent card entering the
+// rendered set in tree mode would suddenly drop ~225 px of body color
+// into the visible area — visible as a left-strip "pop" behind any
+// indented child. With ceil(CARD_H/SLOT_PEEK_H)+1 buffer cards, the
+// new card always enters above y=0 and scrolls in continuously.
+// Re-derived from CARD_H so this stays correct if heights change.
+const TOP_BUFFER = Math.ceil(CARD_H / SLOT_PEEK_H) + 1
 // Cabinet floor's bottom-bar height — a solid panel-floor strip that
 // always sits at the very bottom of the panel. The bar's rounded top
 // corners form the rounded INNER corners of the cabinet's cutout (the
@@ -79,6 +102,11 @@ const PANEL_PAD = 4
 // than the panel's top. Derived: 2px padding-top + 18px (close button is
 // the tallest child) + 4px padding-bottom + 1px borderBottom = 25.
 const HEADER_H = 25
+// Tree-mode indent per level. Each step pushes the card's LEFT edge
+// inward by this many pixels, leaving the right edge fixed — so cards
+// appear to tuck under their parent as depth increases. The leftColumn
+// width itself never changes; only the card narrows.
+const INDENT_STEP = 12
 // LIST area is the visible viewport over the stack. Cards extend below it
 // (clipped by overflow) so the bottom of the stack reads as "more cards
 // continuing down" rather than ending abruptly.
@@ -108,17 +136,169 @@ function cardSize(offsetFromCenter: number): number {
   return SLOT_PEEK_H + CENTER_BONUS * bellFraction(offsetFromCenter)
 }
 
+// ─── Tree / flat list builders ─────────────────────────────────
+
+/** A row in the rolodex list. `level` is the indent depth (0 in flat
+ *  mode for everything; in tree mode 0 for root decks/standalones, 1
+ *  for direct deck members or sub-deck anchors, 2+ for deeper nesting).
+ *  `isDeck` flags rows that anchor at least one other group, so the
+ *  renderer can paint deck-stripe indicators on the slot edge. */
+type RolodexRow = { group: ProjectGroup; level: number; isDeck: boolean }
+
+/** Defensive filter — true iff the group has at least one board with at
+ *  least one valid root bar. Mirrors the canvas's validity check in
+ *  CardLayer's GroupCard bounds calc; phantom groups (boardIds all
+ *  resolve to missing/empty boards) are invisible on canvas, so we
+ *  shouldn't list them in the Rolodex either. The boardsStore migration
+ *  prunes these on load, but this check stays in place so a phantom
+ *  produced at runtime — or by a future code path we haven't audited —
+ *  doesn't desync the two views. */
+function hasRenderableContent(g: ProjectGroup, boards: Record<string, BoardData>): boolean {
+  for (const bid of g.boardIds) {
+    const board = boards[bid]
+    if (!board) continue
+    for (const rid of board.rootIds) {
+      if (board.bars[rid]) return true
+    }
+  }
+  return false
+}
+
+/** Sort an array of groups by the active sort mode. Mutates a copy. */
+function sortGroups(arr: ProjectGroup[], sortMode: 'creation' | 'alphabetical'): ProjectGroup[] {
+  if (sortMode === 'alphabetical') {
+    return [...arr].sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+  }
+  // 'creation' — preserve existing array order (boardsStore appends new
+  // groups at the end, so this is creation order by construction).
+  return [...arr]
+}
+
+/** Sort by deck-fan order: deckOffsetX ascending. The canvas's
+ *  useCardDecks hook orders members by their visual rect.left, which —
+ *  since every member of a deck shares the same anchor's originX —
+ *  comes out the same as ordering by each member's deckOffsetX. So
+ *  this matches what you see when the deck is fanned on canvas, and
+ *  it stays stable regardless of the user's flat-mode sort choice. */
+function sortByFanOrder(arr: ProjectGroup[]): ProjectGroup[] {
+  return [...arr].sort((a, b) => (a.deckOffsetX ?? 0) - (b.deckOffsetX ?? 0))
+}
+
+/** Flat list — every group as a level-0 row, sorted by sortMode. The
+ *  `isDeck` flag still tracks whether a group anchors others (so flat
+ *  mode can also show deck indicators on those rows if we want). */
+function buildFlatList(groups: ProjectGroup[], sortMode: 'creation' | 'alphabetical'): RolodexRow[] {
+  // Build "is anchor for at least one other group" set in a single pass.
+  const hasMembers = new Set<string>()
+  for (const g of groups) {
+    if (g.deckAnchorId && g.deckAnchorId !== g.id) hasMembers.add(g.deckAnchorId)
+  }
+  return sortGroups(groups, sortMode).map(g => ({
+    group: g,
+    level: 0,
+    isDeck: hasMembers.has(g.id),
+  }))
+}
+
+/** Tree list — decks (and their nested members) emitted first in DFS
+ *  order, standalones at the end.
+ *
+ *  Sort axes (independent):
+ *   - ROOTS (top-level decks + standalones) sort by `sortMode`
+ *     (creation or alphabetical). This is what the user toggles via
+ *     SortToggle in the header.
+ *   - CHILDREN inside a deck always sort by deck-fan order
+ *     (deckOffsetX ascending) regardless of sortMode, so the list
+ *     matches what the user sees when fanning the deck on canvas.
+ *     Sub-decks recurse with the same rule.
+ *
+ *  Membership model (per data-model research): each group stores a
+ *  `deckAnchorId` pointing at its parent deck's anchor (or undefined /
+ *  self for standalone). Sub-decks are just members that themselves
+ *  anchor further members. Recursion is unbounded.
+ *
+ *  Edge cases handled:
+ *   - Self-anchored groups (`deckAnchorId === g.id`) — treated as roots.
+ *   - Cycles — `visited` guards against pathological data.
+ *   - Extracted cards — keep `deckAnchorId`, so they still appear under
+ *     their tethered deck in the tree. (An extracted sub-deck whose
+ *     anchor was rewired to itself shows up as a fresh root deck —
+ *     correct behavior, since the canvas treats it as standalone.)
+ */
+function buildTreeList(groups: ProjectGroup[], sortMode: 'creation' | 'alphabetical'): RolodexRow[] {
+  const childMap = new Map<string, ProjectGroup[]>()
+  for (const g of groups) {
+    if (!g.deckAnchorId || g.deckAnchorId === g.id) continue
+    const arr = childMap.get(g.deckAnchorId) ?? []
+    arr.push(g)
+    childMap.set(g.deckAnchorId, arr)
+  }
+
+  const visited = new Set<string>()
+  const out: RolodexRow[] = []
+
+  const emit = (g: ProjectGroup, level: number) => {
+    if (visited.has(g.id)) return
+    visited.add(g.id)
+    const children = childMap.get(g.id) ?? []
+    out.push({ group: g, level, isDeck: children.length > 0 })
+    if (children.length === 0) return
+    // Children inside a deck always render in deck-fan order
+    // (deckOffsetX ascending), so the Rolodex slot list mirrors what
+    // the user sees when they fan the deck on canvas. The user's
+    // flat-mode sort mode (creation / alphabetical) only affects the
+    // order of ROOTS — primary decks and standalones — never the
+    // ordering of members within a deck or sub-deck.
+    for (const c of sortByFanOrder(children)) emit(c, level + 1)
+  }
+
+  // Roots = groups with no parent (or self-anchored). Partition into
+  // root decks (have members) vs standalones, decks first.
+  const roots = groups.filter(g => !g.deckAnchorId || g.deckAnchorId === g.id)
+  const rootDecks: ProjectGroup[] = []
+  const standalones: ProjectGroup[] = []
+  for (const g of roots) {
+    if ((childMap.get(g.id) ?? []).length > 0) rootDecks.push(g)
+    else standalones.push(g)
+  }
+
+  for (const d of sortGroups(rootDecks, sortMode)) emit(d, 0)
+  for (const s of sortGroups(standalones, sortMode)) emit(s, 0)
+
+  // Safety net — anything visited.has missed (e.g. orphaned member
+  // whose anchor doesn't exist in `groups`). Append at level 0.
+  for (const g of groups) {
+    if (!visited.has(g.id)) emit(g, 0)
+  }
+
+  return out
+}
+
 // ─── Main panel ────────────────────────────────────────────────
 
 export const CardRolodex: React.FC = () => {
   const isOpen = useCanvasStore(s => s.rolodexOpen)
   const sortMode = useCanvasStore(s => s.rolodexSortMode)
   const setSortMode = useCanvasStore(s => s.setRolodexSortMode)
+  const view = useCanvasStore(s => s.rolodexView)
+  const setView = useCanvasStore(s => s.setRolodexView)
   const setRolodexOpen = useCanvasStore(s => s.setRolodexOpen)
   const rolodexPos = useCanvasStore(s => s.rolodexPos)
   const setRolodexPos = useCanvasStore(s => s.setRolodexPos)
   const groups = useBoardsStore(s => s.groups)
+  const boards = useBoardsStore(s => s.boards)
   const jumpToGroup = useCanvasStore(s => s.jumpToGroup)
+
+  // Skip phantom groups whose boardIds all resolve to missing/empty
+  // boards — the canvas already hides them (rendered as 0×0), so the
+  // Rolodex would otherwise show entries that don't pan when
+  // double-clicked. The boardsStore v12 migration prunes these on
+  // load, but this filter stays as a runtime safety net for any
+  // phantom produced after load.
+  const visibleGroups = useMemo(
+    () => groups.filter(g => hasRenderableContent(g, boards)),
+    [groups, boards],
+  )
 
   // ── Header drag — moves the panel by setting rolodexPos ───────
   // dragOffsetRef captures the cursor's offset from the panel's top-left
@@ -153,15 +333,16 @@ export const CardRolodex: React.FC = () => {
     dragOffsetRef.current = null
   }, [])
 
-  // Sort the groups based on mode. Creation order is the natural order of the
-  // groups array (newest at the end); alphabetical is by name.
-  const sortedGroups = useMemo(() => {
-    const list = [...groups]
-    if (sortMode === 'alphabetical') {
-      list.sort((a, b) => (a.name || '').localeCompare(b.name || ''))
-    }
-    return list
-  }, [groups, sortMode])
+  // Build the visible row list. In 'flat' mode every group is a level-0
+  // row sorted by sortMode. In 'tree' mode decks come first with their
+  // members nested by indent level, then standalones at the end. The
+  // sortMode is applied to siblings within each branch. Operates on
+  // visibleGroups so phantom groups never reach the builders.
+  const rows = useMemo(() => (
+    view === 'tree'
+      ? buildTreeList(visibleGroups, sortMode)
+      : buildFlatList(visibleGroups, sortMode)
+  ), [visibleGroups, sortMode, view])
 
   // ── Smooth-scroll center model ─────────────────────────────────
   //
@@ -219,18 +400,18 @@ export const CardRolodex: React.FC = () => {
 
   // Clamp target if the list shrinks beneath us.
   useEffect(() => {
-    if (sortedGroups.length === 0) {
+    if (rows.length === 0) {
       targetRef.current = 0
       positionRef.current = 0
       bumpRender()
       return
     }
-    const max = sortedGroups.length - 1
+    const max = rows.length - 1
     if (targetRef.current > max) {
       targetRef.current = max
       startTween()
     }
-  }, [sortedGroups.length, bumpRender, startTween])
+  }, [rows.length, bumpRender, startTween])
 
   // ── Wheel scroll ──
   // One wheel tick = one row of TARGET advance. The eased rAF loop handles
@@ -240,12 +421,12 @@ export const CardRolodex: React.FC = () => {
   const onWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault()
     e.stopPropagation()
-    if (sortedGroups.length === 0) return
+    if (rows.length === 0) return
     const dir = e.deltaY > 0 ? 1 : -1
-    const max = sortedGroups.length - 1
+    const max = rows.length - 1
     targetRef.current = Math.max(0, Math.min(max, targetRef.current + dir))
     startTween()
-  }, [sortedGroups.length, startTween])
+  }, [rows.length, startTween])
 
   const onSlotClick = useCallback((idx: number) => {
     targetRef.current = idx
@@ -266,7 +447,7 @@ export const CardRolodex: React.FC = () => {
   // adjacent indices, which is the natural moment for the preview to swap.
   const centerPosition = positionRef.current
   const previewIndex = Math.round(centerPosition)
-  const centerGroup = sortedGroups[previewIndex] ?? null
+  const centerGroup = rows[previewIndex]?.group ?? null
 
   // ── Lay out the visible stack via prefix-sums ─────────────
   // Each card's "size" (visible height of its top tab) is a bell-bonus around
@@ -275,8 +456,13 @@ export const CardRolodex: React.FC = () => {
   // a fixed Y in the list area — this is what gives "during a tween, the
   // active card grows toward center" since multiple cards' sizes are in
   // partial bonus simultaneously.
-  const visibleStart = Math.max(0, Math.floor(centerPosition - VISIBLE_RADIUS - 1))
-  const visibleEnd   = Math.min(sortedGroups.length - 1, Math.ceil(centerPosition + VISIBLE_RADIUS + 1))
+  // Top side renders TOP_BUFFER extra cards above the visible window so
+  // their bodies sit above the viewport (see TOP_BUFFER comment). The
+  // bottom side keeps a 1-card buffer — bottom-side bodies extend BELOW
+  // their tabs (further into the clipped region) so a small buffer is
+  // already enough to mask any pop on that edge.
+  const visibleStart = Math.max(0, Math.floor(centerPosition - VISIBLE_RADIUS - TOP_BUFFER))
+  const visibleEnd   = Math.min(rows.length - 1, Math.ceil(centerPosition + VISIBLE_RADIUS + 1))
   const visibleIndices: number[] = []
   for (let k = visibleStart; k <= visibleEnd; k++) visibleIndices.push(k)
 
@@ -301,8 +487,10 @@ export const CardRolodex: React.FC = () => {
   }
 
   // Anchor: put P's center-of-tab at LIST_AREA_H / 2 - SLOT_PEEK_H / 2 so
-  // the tab itself is centered in the visible viewport.
-  const anchorY = LIST_AREA_H / 2 - SLOT_PEEK_H / 2
+  // the tab itself is centered in the visible viewport — then shift the
+  // active card UP by ACTIVE_LIFT_SLOTS * SLOT_PEEK_H so it sits a bit
+  // above center, leaving more of the upcoming stack visible below.
+  const anchorY = LIST_AREA_H / 2 - SLOT_PEEK_H / 2 - ACTIVE_LIFT_SLOTS * SLOT_PEEK_H
   const yShift = anchorY - PfracRawY
 
   // ── Cabinet "floor" geometry ─────────────────────────────────
@@ -342,7 +530,7 @@ export const CardRolodex: React.FC = () => {
   // top corners overlap and "round off" the card's bottom.
   const notchH = Math.min(CABINET_NOTCH_RADIUS, cabinetH)
   const barH = cabinetH - notchH
-  const isAtEndOfList = sortedGroups.length > 0 && previewIndex === sortedGroups.length - 1
+  const isAtEndOfList = rows.length > 0 && previewIndex === rows.length - 1
 
   return (
     <>
@@ -410,6 +598,7 @@ export const CardRolodex: React.FC = () => {
               letterSpacing: '0.5px',
             }}>CARDS</span>
             <div style={{ display: 'flex', gap: 3 }}>
+              <ViewToggle mode={view} setMode={setView} />
               <SortToggle mode={sortMode} setMode={setSortMode} />
               <CloseButton onClick={() => setRolodexOpen(false)} />
             </div>
@@ -424,22 +613,24 @@ export const CardRolodex: React.FC = () => {
             height: LIST_AREA_H,
             overflow: 'hidden',
           }}>
-            {sortedGroups.length === 0 ? (
+            {rows.length === 0 ? (
               <EmptyState onAdd={startPlacement} />
             ) : (
               <>
                 {visibleIndices.map((idx, i) => {
-                  const g = sortedGroups[idx]
+                  const row = rows[idx]
                   const offset = idx - centerPosition
                   return (
                     <RolodexSlot
-                      key={g.id}
-                      group={g}
+                      key={row.group.id}
+                      group={row.group}
+                      level={row.level}
+                      isDeck={row.isDeck}
                       offset={offset}
                       top={rawTops[i] + yShift}
                       zIndex={idx + 1}
                       onClick={() => onSlotClick(idx)}
-                      onDoubleClick={() => onSlotDoubleClick(g)}
+                      onDoubleClick={() => onSlotDoubleClick(row.group)}
                     />
                   )
                 })}
@@ -557,6 +748,15 @@ export const CardRolodex: React.FC = () => {
 
 const RolodexSlot: React.FC<{
   group: ProjectGroup
+  /** Tree depth — 0 in flat mode for everything, and in tree mode 0 for
+   *  root decks/standalones, 1 for direct deck members or sub-deck
+   *  anchors, 2+ for cards inside sub-decks. Each step pushes the card's
+   *  LEFT edge inward by INDENT_STEP and narrows the card by the same
+   *  amount; the right edge stays put. */
+  level: number
+  /** True if this row anchors at least one other group (deck or sub-deck).
+   *  Drives the "deck-stripe" indicators on the right edge of the tab. */
+  isDeck: boolean
   /** Fractional offset against the live float center, used only for
    *  visual-emphasis math (rim brightness, shadow strength, glow). The
    *  actual TOP position is computed by the parent via prefix-sum so the
@@ -569,7 +769,7 @@ const RolodexSlot: React.FC<{
   zIndex: number
   onClick: () => void
   onDoubleClick: () => void
-}> = ({ group, offset, top, zIndex, onClick, onDoubleClick }) => {
+}> = ({ group, level, isDeck, offset, top, zIndex, onClick, onDoubleClick }) => {
   const [isHovered, setIsHovered] = useState(false)
 
   // Continuous "centerness" used to tween visual emphasis (rim, shadow,
@@ -627,17 +827,22 @@ const RolodexSlot: React.FC<{
       style={{
         position: 'absolute',
         // Cards sit centered inside the leftColumn — offset by WING_W so
-        // the cabinet wings flank them on both sides.
-        left: WING_W,
+        // the cabinet wings flank them on both sides. In tree mode each
+        // indent level pushes the LEFT edge inward by INDENT_STEP and
+        // narrows the card by the same amount (right edge stays fixed),
+        // so deeper-nested cards visually tuck under their parents.
+        left: WING_W + level * INDENT_STEP,
         top,
-        width: SLOT_W,
+        width: SLOT_W - level * INDENT_STEP,
         height: CARD_H,
         background: group.color,
-        // Rounded TOP only — bottom is tucked under the next card down.
-        // The rounded top corners + cabinet's rounded inner bottom corners
-        // (from the bottom-bar's border-radius) frame the card poking
-        // through the cabinet cutout.
-        borderRadius: '7px 7px 0 0',
+        // Rounded on all four corners — now that CARD_H is tall enough
+        // for the bottom to read as a real card edge in tree mode (the
+        // indented child reveals it), matching the rounded TOP keeps the
+        // card-shaped silhouette consistent. The cabinet still hides
+        // bottoms at end-of-list and the next card hides them mid-list,
+        // so rounding the bottom is purely a tree-mode visual win.
+        borderRadius: 7,
         border: borderStyle,
         boxShadow: shadows.join(', '),
         cursor: 'pointer',
@@ -662,7 +867,27 @@ const RolodexSlot: React.FC<{
           rgba(0,0,0,${0.04 + 0.02 * lit}) 100%)`,
         pointerEvents: 'none',
       }} />
-      {/* Content lives in the top SLOT_PEEK_H "tab" region. */}
+      {/* Deck-stripe indicators — two thin vertical bars on the inner
+            right edge of the tab, mimicking the layered "cards behind"
+            look on canvas decks. Only rendered when this row anchors at
+            least one other group. */}
+      {isDeck && (
+        <div style={{
+          position: 'absolute',
+          top: 5,
+          right: 5,
+          height: SLOT_PEEK_H - 10,
+          display: 'flex',
+          gap: 1.5,
+          pointerEvents: 'none',
+        }}>
+          <div style={{ width: 2.5, height: '100%', background: 'rgba(0,0,0,0.42)', borderRadius: '1.5px 1.5px 0 0' }} />
+          <div style={{ width: 2.5, height: '100%', background: 'rgba(0,0,0,0.26)', borderRadius: '1.5px 1.5px 0 0' }} />
+        </div>
+      )}
+      {/* Content lives in the top SLOT_PEEK_H "tab" region. Right-pad
+            extra when deck-stripes are showing so the title's ellipsis
+            doesn't run under them. */}
       <div style={{
         position: 'absolute',
         top: 0,
@@ -671,7 +896,7 @@ const RolodexSlot: React.FC<{
         height: SLOT_PEEK_H,
         display: 'flex',
         alignItems: 'center',
-        padding: '0 10px',
+        padding: isDeck ? '0 18px 0 10px' : '0 10px',
         boxSizing: 'border-box',
       }}>
         <span style={{
@@ -692,6 +917,26 @@ const RolodexSlot: React.FC<{
 // ─── Preview pane ──────────────────────────────────────────────
 
 const CardPreview: React.FC<{ group: ProjectGroup }> = ({ group }) => {
+  // Resolve the hero image with the same fallback chain CardLayer uses on
+  // canvas: prefer group.cardHeroImage, otherwise scan the group's boards
+  // and their root bars for the first image embedded in bar content. Many
+  // cards (e.g. deck anchors like "Location" inside Pelagia IX) keep their
+  // image at the bar level rather than as an explicit group.cardHeroImage,
+  // and without this fallback the preview pane would render empty.
+  const boards = useBoardsStore(s => s.boards)
+  const heroImage = useMemo(() => {
+    if (group.cardHeroImage) return group.cardHeroImage
+    for (const bid of group.boardIds) {
+      const board = boards[bid]
+      if (!board) continue
+      for (const rid of board.rootIds) {
+        const img = getFirstImageUrl(board.bars[rid]?.content)
+        if (img) return img
+      }
+    }
+    return null
+  }, [group.cardHeroImage, group.boardIds, boards])
+
   return (
     <div
       key={group.id}                                          // key swap → fade-in on change
@@ -712,11 +957,14 @@ const CardPreview: React.FC<{ group: ProjectGroup }> = ({ group }) => {
           to { opacity: 1; transform: translateY(0); }
         }
       `}</style>
-      {/* Hero image at low-ish opacity so the color tint shows */}
-      {group.cardHeroImage && (
+      {/* Hero image at low-ish opacity so the color tint shows. Uses the
+            resolved heroImage (group OR bar-content fallback), matching
+            how the canvas card resolves its hero in CardLayer.tsx. */}
+      {heroImage && (
         <HeroImageLayer
-          heroImage={group.cardHeroImage}
+          heroImage={heroImage}
           transform={group.cardHeroTransform}
+          borderRadius={10}
         />
       )}
       {/* Header band — group name */}
@@ -872,6 +1120,31 @@ const PlacementGhost: React.FC<{ onDone: () => void }> = ({ onDone }) => {
 }
 
 // ─── Misc subcomponents ────────────────────────────────────────
+
+/** Tiny toggle that flips the rolodex between flat list and tree view.
+ *  Sits to the LEFT of SortToggle in the header. Same shape/sizing as
+ *  the sort + close buttons so the three icons read as a row. */
+const ViewToggle: React.FC<{
+  mode: 'flat' | 'tree'
+  setMode: (m: 'flat' | 'tree') => void
+}> = ({ mode, setMode }) => (
+  <button
+    onClick={() => setMode(mode === 'flat' ? 'tree' : 'flat')}
+    title={mode === 'flat' ? 'View: flat list — click to switch to tree' : 'View: deck tree — click to switch to flat'}
+    style={{
+      background: 'transparent',
+      border: '1px solid rgba(255,255,255,0.16)',
+      color: 'rgba(255,255,255,0.7)',
+      borderRadius: 3,
+      padding: '1px 5px',
+      fontSize: 10,
+      fontWeight: 700,
+      cursor: 'pointer',
+      fontFamily: 'inherit',
+      lineHeight: 1,
+    }}
+  >{mode === 'flat' ? '≡' : '⊽'}</button>
+)
 
 const SortToggle: React.FC<{
   mode: 'creation' | 'alphabetical'

@@ -1534,7 +1534,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
 }), {
   name: 'vidbars-boards',
   storage: createDebouncedJSONStorage(400),
-  version: 11,
+  version: 12,
   migrate(persisted: any, version: number) {
     if (version < 3) {
       const boards = persisted.boards ?? {}
@@ -1680,6 +1680,34 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
       for (const g of groups) {
         if (!Array.isArray(g.linkedGroupIds)) g.linkedGroupIds = []
       }
+    }
+    if (version < 12) {
+      // v11→v12: Sweep "phantom" groups whose boardIds all resolve to
+      // missing or empty boards (no valid root bars). Such groups
+      // accumulated from interrupted localStorage writes, abandoned
+      // create flows, and old migrations; the canvas renders them as
+      // 0×0 (invisible) but the Rolodex would still list them. This
+      // mirrors the validity check the canvas already applies in
+      // CardLayer.tsx (see the GroupCard bounds calc).
+      const boards = persisted.boards ?? {}
+      const groups: any[] = persisted.groups ?? []
+      const isRenderable = (g: any): boolean => {
+        for (const bid of (g.boardIds ?? [])) {
+          const board = boards[bid]
+          if (!board) continue
+          for (const rid of (board.rootIds ?? [])) {
+            if (board.bars && board.bars[rid]) return true
+          }
+        }
+        return false
+      }
+      const cleaned = groups.filter(isRenderable)
+      // Invariant: keep at least one group so the canvas always has a
+      // destination for new boards. If every group was phantom, fall
+      // back to the original first group (almost always default-group).
+      persisted.groups = cleaned.length > 0
+        ? cleaned
+        : (groups.length > 0 ? [groups[0]] : [])
     }
     return persisted as BoardsState
   },

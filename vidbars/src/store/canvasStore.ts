@@ -68,6 +68,12 @@ interface CanvasStore {
   rolodexOpen: boolean
   /** Sort mode for the rolodex list. Persisted across sessions. */
   rolodexSortMode: 'creation' | 'alphabetical'
+  /** View mode for the rolodex list — 'flat' shows every group as a row,
+   *  'tree' nests decks → sub-decks → cards with indentation. Each deck
+   *  level adds an indent step. Independent from rolodexSortMode (sort
+   *  applies to roots in 'flat', and to siblings within each tree branch
+   *  in 'tree'). Persisted. */
+  rolodexView: 'flat' | 'tree'
   /** Top-left position of the floating rolodex panel (screen px), persisted
    *  so it stays where the user dragged it across reloads. Header acts as
    *  the drag handle. */
@@ -102,6 +108,7 @@ interface CanvasStore {
   toggleRolodex: () => void
   setRolodexOpen: (open: boolean) => void
   setRolodexSortMode: (mode: 'creation' | 'alphabetical') => void
+  setRolodexView: (mode: 'flat' | 'tree') => void
   setRolodexPos: (pos: { x: number; y: number }) => void
 }
 
@@ -125,6 +132,7 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
   drawSize: DEFAULT_PEN_SIZE,
   rolodexOpen: false,
   rolodexSortMode: 'creation',
+  rolodexView: 'flat',
   rolodexPos: { x: 12, y: 60 },
 
   setPan: (pan) => set({ pan }),
@@ -183,6 +191,7 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
   toggleRolodex: () => set(s => ({ rolodexOpen: !s.rolodexOpen })),
   setRolodexOpen: (rolodexOpen) => set({ rolodexOpen }),
   setRolodexSortMode: (rolodexSortMode) => set({ rolodexSortMode }),
+  setRolodexView: (rolodexView) => set({ rolodexView }),
   setRolodexPos: (rolodexPos) => set({ rolodexPos }),
 
   jumpToGroup: (groupId) => {
@@ -245,6 +254,7 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
     drawSize: s.drawSize,
     rolodexOpen: s.rolodexOpen,
     rolodexSortMode: s.rolodexSortMode,
+    rolodexView: s.rolodexView,
     rolodexPos: s.rolodexPos,
   }),
   version: 1,
