@@ -50,6 +50,10 @@ const CABINET_BAR_H = 32
 // Inner radius of the cabinet's cutout — applied to the bottom bar's
 // top-left + top-right corners.
 const CABINET_NOTCH_RADIUS = 14
+// Outer radius for the cabinet's top corners — mirror of the
+// always-visible base footer's bottom-corner radius so the rising
+// cabinet reads as a smaller mirrored version of that same shape.
+const CABINET_OUTER_RADIUS = 6
 // At its peak (the float center), each card gets this much extra height
 // added to its tucked SLOT_PEEK_H. So the centered card's visible height
 // reads as SLOT_PEEK_H + CENTER_BONUS, and the cards a couple of slots
@@ -68,7 +72,13 @@ const FALLOFF_RADIUS_BELOW = 1.0
 const TWEEN_EASE = 0.065
 const PREVIEW_W = 240
 const PREVIEW_H = 340
-const PANEL_PAD = 12
+const PANEL_PAD = 4
+// Header strip height (CARDS title + sort/close icons + borderBottom).
+// Used as a marginTop on the preview pane so its TOP aligns with the
+// slot list's top (i.e., where the FIRST card's top edge sits) rather
+// than the panel's top. Derived: 2px padding-top + 18px (close button is
+// the tallest child) + 4px padding-bottom + 1px borderBottom = 25.
+const HEADER_H = 25
 // LIST area is the visible viewport over the stack. Cards extend below it
 // (clipped by overflow) so the bottom of the stack reads as "more cards
 // continuing down" rather than ending abruptly.
@@ -105,8 +115,43 @@ export const CardRolodex: React.FC = () => {
   const sortMode = useCanvasStore(s => s.rolodexSortMode)
   const setSortMode = useCanvasStore(s => s.setRolodexSortMode)
   const setRolodexOpen = useCanvasStore(s => s.setRolodexOpen)
+  const rolodexPos = useCanvasStore(s => s.rolodexPos)
+  const setRolodexPos = useCanvasStore(s => s.setRolodexPos)
   const groups = useBoardsStore(s => s.groups)
   const jumpToGroup = useCanvasStore(s => s.jumpToGroup)
+
+  // ── Header drag — moves the panel by setting rolodexPos ───────
+  // dragOffsetRef captures the cursor's offset from the panel's top-left
+  // at pointerdown, then on pointermove we set the panel's left/top so
+  // that offset is preserved (cursor stays anchored to the same spot in
+  // the header). Persists via canvasStore so position survives reloads.
+  const dragOffsetRef = useRef<{ dx: number; dy: number } | null>(null)
+  const onHeaderPointerDown = useCallback((e: React.PointerEvent) => {
+    // Buttons (sort, close) own their own clicks — don't treat
+    // pointerdown on them as the start of a drag.
+    if ((e.target as HTMLElement).closest('button')) return
+    if (e.button !== 0) return
+    e.preventDefault()
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+    dragOffsetRef.current = {
+      dx: e.clientX - rolodexPos.x,
+      dy: e.clientY - rolodexPos.y,
+    }
+  }, [rolodexPos])
+  const onHeaderPointerMove = useCallback((e: React.PointerEvent) => {
+    if (!dragOffsetRef.current) return
+    e.preventDefault()
+    // Clamp loosely to viewport so the user can't drag the panel fully
+    // offscreen and lose access to it.
+    const x = Math.max(0, Math.min(window.innerWidth - 40, e.clientX - dragOffsetRef.current.dx))
+    const y = Math.max(0, Math.min(window.innerHeight - 40, e.clientY - dragOffsetRef.current.dy))
+    setRolodexPos({ x, y })
+  }, [setRolodexPos])
+  const onHeaderPointerUp = useCallback((e: React.PointerEvent) => {
+    if (!dragOffsetRef.current) return
+    try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId) } catch { /* ignore */ }
+    dragOffsetRef.current = null
+  }, [])
 
   // Sort the groups based on mode. Creation order is the natural order of the
   // groups array (newest at the end); alphabetical is by name.
@@ -308,13 +353,13 @@ export const CardRolodex: React.FC = () => {
         onPointerDown={e => e.stopPropagation()}
         style={{
           position: 'fixed',
-          left: 12,
-          top: 60,
+          left: rolodexPos.x,
+          top: rolodexPos.y,
           background: 'rgba(20,22,38,0.96)',
-          border: '1px solid rgba(255,255,255,0.12)',
-          borderRadius: 12,
+          border: '1px solid rgba(255,255,255,0.06)',
+          borderRadius: 8,
           padding: PANEL_PAD,
-          boxShadow: '0 12px 40px rgba(0,0,0,0.55)',
+          boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
           display: 'flex',
           flexDirection: 'row',
           alignItems: 'flex-start',
@@ -336,21 +381,35 @@ export const CardRolodex: React.FC = () => {
           flexDirection: 'column',
           gap: 0,
         }}>
-          {/* Header */}
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '4px 4px 6px',
-            borderBottom: '1px solid rgba(255,255,255,0.1)',
-          }}>
+          {/* Header — also acts as the drag handle for the whole panel.
+              Pointer events on buttons short-circuit the drag (see
+              onHeaderPointerDown), so the close + sort icons still click
+              normally. */}
+          <div
+            onPointerDown={onHeaderPointerDown}
+            onPointerMove={onHeaderPointerMove}
+            onPointerUp={onHeaderPointerUp}
+            onPointerCancel={onHeaderPointerUp}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              // Horizontal padding = WING_W so the title's left edge and the
+              // icons' right edge line up with the cards' left/right edges
+              // below (cards are inset by WING_W inside the leftColumn).
+              padding: `2px ${WING_W}px 4px`,
+              borderBottom: '1px solid rgba(255,255,255,0.05)',
+              cursor: 'move',
+              touchAction: 'none',
+            }}
+          >
             <span style={{
               color: 'rgba(255,255,255,0.85)',
-              fontSize: 13,
+              fontSize: 11,
               fontWeight: 700,
-              letterSpacing: '0.6px',
+              letterSpacing: '0.5px',
             }}>CARDS</span>
-            <div style={{ display: 'flex', gap: 4 }}>
+            <div style={{ display: 'flex', gap: 3 }}>
               <SortToggle mode={sortMode} setMode={setSortMode} />
               <CloseButton onClick={() => setRolodexOpen(false)} />
             </div>
@@ -396,7 +455,10 @@ export const CardRolodex: React.FC = () => {
                       as cards run out below the active. */}
                 {cabinetH > 0 && (
                   <>
-                    {/* Left wing */}
+                    {/* Left wing — rounded TOP-OUTER corner mirrors the
+                          panel-base footer's rounded BOTTOM-LEFT corner so
+                          the rising cabinet reads as a smaller version of
+                          the same shape, peeking up from below. */}
                     <div style={{
                       position: 'absolute',
                       left: 0,
@@ -404,10 +466,11 @@ export const CardRolodex: React.FC = () => {
                       width: WING_W,
                       height: cabinetH,
                       background: 'rgba(8,9,16,1)',
+                      borderTopLeftRadius: CABINET_OUTER_RADIUS,
                       zIndex: 200,
                       pointerEvents: 'none',
                     }} />
-                    {/* Right wing */}
+                    {/* Right wing — mirrors the footer's bottom-right. */}
                     <div style={{
                       position: 'absolute',
                       right: 0,
@@ -415,6 +478,7 @@ export const CardRolodex: React.FC = () => {
                       width: WING_W,
                       height: cabinetH,
                       background: 'rgba(8,9,16,1)',
+                      borderTopRightRadius: CABINET_OUTER_RADIUS,
                       zIndex: 200,
                       pointerEvents: 'none',
                     }} />
@@ -456,8 +520,8 @@ export const CardRolodex: React.FC = () => {
           <div style={{
             height: CABINET_BAR_H,
             background: 'rgba(8,9,16,1)',
-            borderBottomLeftRadius: 6,
-            borderBottomRightRadius: 6,
+            borderBottomLeftRadius: CABINET_OUTER_RADIUS,
+            borderBottomRightRadius: CABINET_OUTER_RADIUS,
           }} />
 
           {/* + Place new card — temporarily hidden per spec; placement
@@ -468,9 +532,16 @@ export const CardRolodex: React.FC = () => {
           */}
         </div>
 
-        {/* ── Right column: preview pane (only when there's a center card) ── */}
+        {/* ── Right column: preview pane (only when there's a center card) ──
+              Wrapped so we can push the preview's TOP down by HEADER_H,
+              keeping it aligned with the slot list (which sits beneath
+              the leftColumn's header). Without this margin, the preview
+              would sit flush with the panel top and look "ahead" of the
+              first card. */}
         {centerGroup && (
-          <CardPreview group={centerGroup} />
+          <div style={{ marginTop: HEADER_H }}>
+            <CardPreview group={centerGroup} />
+          </div>
         )}
       </div>
 
@@ -621,11 +692,6 @@ const RolodexSlot: React.FC<{
 // ─── Preview pane ──────────────────────────────────────────────
 
 const CardPreview: React.FC<{ group: ProjectGroup }> = ({ group }) => {
-  // Frame color: a brightened version of the card color, visually
-  // continuing the tongue protruding from the cabinet wall. Same color
-  // family as the card so the eye reads "this preview belongs to the
-  // active card."
-  const frameColor = edgeColorFromHex(group.color, 0.85)
   return (
     <div
       key={group.id}                                          // key swap → fade-in on change
@@ -634,7 +700,6 @@ const CardPreview: React.FC<{ group: ProjectGroup }> = ({ group }) => {
         height: PREVIEW_H,
         background: group.color,
         borderRadius: 10,
-        border: `4px solid ${frameColor}`,
         boxShadow: '0 8px 32px rgba(0,0,0,0.55)',
         position: 'relative',
         overflow: 'hidden',
@@ -817,15 +882,16 @@ const SortToggle: React.FC<{
     title={mode === 'creation' ? 'Sort: creation order — click to switch' : 'Sort: alphabetical — click to switch'}
     style={{
       background: 'transparent',
-      border: '1px solid rgba(255,255,255,0.18)',
+      border: '1px solid rgba(255,255,255,0.16)',
       color: 'rgba(255,255,255,0.7)',
-      borderRadius: 4,
-      padding: '2px 6px',
-      fontSize: 9,
+      borderRadius: 3,
+      padding: '1px 5px',
+      fontSize: 8,
       fontWeight: 700,
-      letterSpacing: '0.5px',
+      letterSpacing: '0.4px',
       cursor: 'pointer',
       fontFamily: 'inherit',
+      lineHeight: 1.4,
     }}
   >{mode === 'creation' ? '#' : 'A→Z'}</button>
 )
@@ -836,15 +902,15 @@ const CloseButton: React.FC<{ onClick: () => void }> = ({ onClick }) => (
     title="Hide Cards panel"
     style={{
       background: 'transparent',
-      border: '1px solid rgba(255,255,255,0.18)',
+      border: '1px solid rgba(255,255,255,0.16)',
       color: 'rgba(255,255,255,0.7)',
-      borderRadius: 4,
-      width: 22,
-      height: 22,
+      borderRadius: 3,
+      width: 18,
+      height: 18,
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      fontSize: 13,
+      fontSize: 11,
       lineHeight: 1,
       cursor: 'pointer',
       fontFamily: 'inherit',

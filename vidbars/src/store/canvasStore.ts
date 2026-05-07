@@ -68,6 +68,10 @@ interface CanvasStore {
   rolodexOpen: boolean
   /** Sort mode for the rolodex list. Persisted across sessions. */
   rolodexSortMode: 'creation' | 'alphabetical'
+  /** Top-left position of the floating rolodex panel (screen px), persisted
+   *  so it stays where the user dragged it across reloads. Header acts as
+   *  the drag handle. */
+  rolodexPos: { x: number; y: number }
 
   setPan: (pan: { x: number; y: number }) => void
   setZoom: (zoom: number) => void
@@ -98,6 +102,7 @@ interface CanvasStore {
   toggleRolodex: () => void
   setRolodexOpen: (open: boolean) => void
   setRolodexSortMode: (mode: 'creation' | 'alphabetical') => void
+  setRolodexPos: (pos: { x: number; y: number }) => void
 }
 
 export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
@@ -120,6 +125,7 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
   drawSize: DEFAULT_PEN_SIZE,
   rolodexOpen: false,
   rolodexSortMode: 'creation',
+  rolodexPos: { x: 12, y: 60 },
 
   setPan: (pan) => set({ pan }),
 
@@ -177,6 +183,7 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
   toggleRolodex: () => set(s => ({ rolodexOpen: !s.rolodexOpen })),
   setRolodexOpen: (rolodexOpen) => set({ rolodexOpen }),
   setRolodexSortMode: (rolodexSortMode) => set({ rolodexSortMode }),
+  setRolodexPos: (rolodexPos) => set({ rolodexPos }),
 
   jumpToGroup: (groupId) => {
     const bs = useBoardsStore.getState()
@@ -238,6 +245,7 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
     drawSize: s.drawSize,
     rolodexOpen: s.rolodexOpen,
     rolodexSortMode: s.rolodexSortMode,
+    rolodexPos: s.rolodexPos,
   }),
   version: 1,
   migrate: (persisted: any, version: number) => {
