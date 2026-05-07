@@ -376,7 +376,7 @@ export default function App() {
         display: 'flex', alignItems: 'center',
         padding: '0 16px', gap: 10, zIndex: 600,
       }}>
-        <span style={{ color: '#fff', fontSize: 14, fontWeight: 800, letterSpacing: '-0.5px' }}>Armarium</span>
+        <span style={{ color: '#fff', fontSize: 14, fontWeight: 800, letterSpacing: '-0.5px' }}>genCraft</span>
         <button
           onClick={() => setDeckBrowserOpen(o => !o)}
           title="Deck Browser — drag decks onto cards to link"
