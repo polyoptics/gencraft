@@ -65,6 +65,12 @@ const ACTIVE_LIFT_SLOTS = 3.5
 // new card always enters above y=0 and scrolls in continuously.
 // Re-derived from CARD_H so this stays correct if heights change.
 const TOP_BUFFER = Math.ceil(CARD_H / SLOT_PEEK_H) + 1
+// Extra buffer cards rendered BELOW visibleEnd so the slide-under
+// region (where cards travel behind the cabinet base) is always
+// filled. Without enough cards rendered down here, you'd see cards
+// "pop in" at the bottom edge of the visible card area instead of
+// sliding up smoothly from beneath the cabinet base.
+const BOTTOM_BUFFER = 6
 // Cabinet floor's bottom-bar height — a solid panel-floor strip that
 // always sits at the very bottom of the panel. The bar's rounded top
 // corners form the rounded INNER corners of the cabinet's cutout (the
@@ -456,13 +462,12 @@ export const CardRolodex: React.FC = () => {
   // a fixed Y in the list area — this is what gives "during a tween, the
   // active card grows toward center" since multiple cards' sizes are in
   // partial bonus simultaneously.
-  // Top side renders TOP_BUFFER extra cards above the visible window so
-  // their bodies sit above the viewport (see TOP_BUFFER comment). The
-  // bottom side keeps a 1-card buffer — bottom-side bodies extend BELOW
-  // their tabs (further into the clipped region) so a small buffer is
-  // already enough to mask any pop on that edge.
+  // TOP_BUFFER extra cards above so their bodies sit above the viewport;
+  // BOTTOM_BUFFER extra cards below so the slide-under-cabinet region
+  // is populated and cards smoothly emerge from / disappear behind the
+  // cabinet base instead of popping at the visible edge.
   const visibleStart = Math.max(0, Math.floor(centerPosition - VISIBLE_RADIUS - TOP_BUFFER))
-  const visibleEnd   = Math.min(rows.length - 1, Math.ceil(centerPosition + VISIBLE_RADIUS + 1))
+  const visibleEnd   = Math.min(rows.length - 1, Math.ceil(centerPosition + VISIBLE_RADIUS + BOTTOM_BUFFER))
   const visibleIndices: number[] = []
   for (let k = visibleStart; k <= visibleEnd; k++) visibleIndices.push(k)
 
@@ -617,12 +622,21 @@ export const CardRolodex: React.FC = () => {
 
           {/* Slot list. Cards live inside; cabinet-floor wings + bar are
               also positioned absolute on top, forming the cutout the
-              active card pokes through. */}
+              active card pokes through. The wrapper height is extended
+              by CABINET_BAR_H to include the always-visible base — that
+              way cards rendered past LIST_AREA_H are clipped at the
+              panel's actual bottom (LIST_AREA_H + CABINET_BAR_H),
+              giving us the slide-under-cabinet effect when cards
+              travel through the bottom edge. The base itself sits
+              absolute inside, with a high z-index so it visually
+              hides any cards passing behind. */}
           <div style={{
             position: 'relative',
             width: LEFTCOL_W,
-            height: LIST_AREA_H,
+            height: LIST_AREA_H + CABINET_BAR_H,
             overflow: 'hidden',
+            borderBottomLeftRadius: CABINET_OUTER_RADIUS,
+            borderBottomRightRadius: CABINET_OUTER_RADIUS,
           }}>
             {rows.length === 0 ? (
               <EmptyState onAdd={startPlacement} />
@@ -712,19 +726,24 @@ export const CardRolodex: React.FC = () => {
                 )}
               </>
             )}
+            {/* Cabinet base — sits at the bottom of the slot-list
+                wrapper, full LEFTCOL_W width. Higher z-index than any
+                card (cards top out around 60) but compatible with the
+                cabinet wings/bar at z=200. Cards traveling past
+                LIST_AREA_H are still rendered (until they're clipped
+                at LIST_AREA_H + CABINET_BAR_H) but visually hidden
+                behind this strip — that's the slide-under effect. */}
+            <div style={{
+              position: 'absolute',
+              left: 0,
+              top: LIST_AREA_H,
+              width: LEFTCOL_W,
+              height: CABINET_BAR_H,
+              background: 'rgba(8,9,16,1)',
+              zIndex: 200,
+              pointerEvents: 'none',
+            }} />
           </div>
-
-          {/* Cabinet base — the floor element CONTINUES below the list
-              area, anchoring the rolodex with a flat, rounded-corner
-              bottom. Same color as the wings/bar, so when the floor is
-              high (end-of-list) it reads as one continuous cabinet from
-              the cutout all the way down. */}
-          <div style={{
-            height: CABINET_BAR_H,
-            background: 'rgba(8,9,16,1)',
-            borderBottomLeftRadius: CABINET_OUTER_RADIUS,
-            borderBottomRightRadius: CABINET_OUTER_RADIUS,
-          }} />
 
           {/* + Place new card — temporarily hidden per spec; placement
               mode wiring (PlacementGhost, isPlacing, etc.) is left in
