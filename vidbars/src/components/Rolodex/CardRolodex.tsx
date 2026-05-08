@@ -99,13 +99,21 @@ const FALLOFF_RADIUS_BELOW = 1.0
 // 0.065 settles in ~550–650ms — between snappy and drawn-out.
 // Lower = more languorous; higher = snappier.
 const TWEEN_EASE = 0.065
-// Cap on per-frame motion (in slot units). Easing alone produces big
-// per-frame jumps when the diff is large (rapid wheel input puts target
-// many slots ahead of position) — the catch-up reads as choppy because
-// each frame visibly snaps ~15+ pixels. Capping the step keeps active
-// scroll smooth without affecting the settle phase, where diff is small
-// enough that easing*diff is well below the cap.
+// Cap on per-frame motion (in slot units). Caps both kinetic and easing
+// motion so the visible delta per frame stays smooth even when the diff
+// is large (rapid wheel input).
 const MAX_STEP_PER_FRAME = 0.35
+// Wheel impulse — slots of velocity added per discrete wheel tick.
+// Tuned with SCROLL_FRICTION so a single tick + decay travels ~1 slot.
+const WHEEL_IMPULSE = 0.2
+// Per-frame velocity multiplier. 0.85 → velocity halves in ~4 frames,
+// drops to MIN_VELOCITY around ~12 frames after wheel stops. That's the
+// "coast" tail you feel after a spin.
+const SCROLL_FRICTION = 0.85
+// Below this velocity the rolodex switches from kinetic-mode to settle-
+// mode (snap to nearest integer + ease in). Picked low enough that the
+// kinetic decay completes before snapping, so motion feels continuous.
+const MIN_VELOCITY = 0.04
 const PREVIEW_W = 240
 const PREVIEW_H = 340
 const PANEL_PAD = 4
@@ -365,6 +373,10 @@ export const CardRolodex: React.FC = () => {
   //                  (snapped) so the preview pane has a definite target.
   //   positionRef  — the FLOAT center position currently rendered. An rAF
   //                  loop eases it toward targetRef each frame.
+  //   velocityRef — current scroll velocity in slots/frame from wheel
+  //                  input. While non-zero, drives kinetic motion;
+  //                  drops via friction each frame; below MIN_VELOCITY
+  //                  the loop falls back to easing-toward-target.
   //
   // Float offset (per card) = idx - positionRef.current. Lift bell-curves
   // off that float, so cards near the moving center are at partial lift
@@ -374,32 +386,57 @@ export const CardRolodex: React.FC = () => {
   // changes without copying the float into reactive state on every frame.
   const targetRef = useRef(0)
   const positionRef = useRef(0)
+  const velocityRef = useRef(0)
   const rafRef = useRef<number | null>(null)
   const [, forceRender] = useState(0)
   const bumpRender = useCallback(() => forceRender(n => (n + 1) & 0xffff), [])
 
   const tick = useCallback(() => {
     rafRef.current = null
+    const max = Math.max(0, rows.length - 1)
+
+    // ── Kinetic phase ────────────────────────────────────────────
+    // While there's wheel velocity, advance position by velocity (capped
+    // by MAX_STEP_PER_FRAME so a fast spin still reads as smooth motion
+    // rather than giant per-frame jumps). Each frame, friction drains a
+    // bit of velocity; once it dips below MIN_VELOCITY we hand off to
+    // the settle phase below.
+    if (Math.abs(velocityRef.current) > MIN_VELOCITY) {
+      const v = velocityRef.current
+      const step = Math.sign(v) * Math.min(Math.abs(v), MAX_STEP_PER_FRAME)
+      positionRef.current += step
+      velocityRef.current = v * SCROLL_FRICTION
+      // Clamp position to bounds; kill velocity if we hit an edge so
+      // we don't fight the bound with leftover momentum.
+      if (positionRef.current < 0) { positionRef.current = 0; velocityRef.current = 0 }
+      else if (positionRef.current > max) { positionRef.current = max; velocityRef.current = 0 }
+      bumpRender()
+      rafRef.current = requestAnimationFrame(tick)
+      return
+    }
+
+    // Velocity drained. Snap to nearest valid integer as the new
+    // settling target, then fall through to ease-in.
+    if (velocityRef.current !== 0) {
+      velocityRef.current = 0
+      targetRef.current = Math.max(0, Math.min(max, Math.round(positionRef.current)))
+    }
+
+    // ── Settle phase ─────────────────────────────────────────────
     const diff = targetRef.current - positionRef.current
     if (Math.abs(diff) < 0.005) {
-      // Snap to target — rounding error pile-up makes the float never
-      // exactly equal the target without this nudge.
       if (positionRef.current !== targetRef.current) {
         positionRef.current = targetRef.current
         bumpRender()
       }
       return
     }
-    // Easing — dominates the settle phase (small diff → tiny step).
-    // For rapid wheel input the diff can be many slots, which would
-    // produce big per-frame jumps without the cap. MAX_STEP_PER_FRAME
-    // limits the motion to a smooth visible delta.
     const easedStep = diff * TWEEN_EASE
     const step = Math.sign(easedStep) * Math.min(Math.abs(easedStep), MAX_STEP_PER_FRAME)
     positionRef.current += step
     bumpRender()
     rafRef.current = requestAnimationFrame(tick)
-  }, [bumpRender])
+  }, [bumpRender, rows.length])
 
   const startTween = useCallback(() => {
     if (rafRef.current === null) {
@@ -433,21 +470,25 @@ export const CardRolodex: React.FC = () => {
   }, [rows.length, bumpRender, startTween])
 
   // ── Wheel scroll ──
-  // One wheel tick = one row of TARGET advance. The eased rAF loop handles
-  // the visual smoothness, so no throttle needed: even rapid spins read as
-  // a fluid roll because the position keeps chasing whatever target the
-  // wheel last landed on.
+  // Each wheel tick adds an impulse to scroll velocity (kinetic model).
+  // Rapid spins accumulate velocity → motion keeps rolling past
+  // multiple cards before friction takes over. A gentle single tick
+  // adds just enough velocity to coast ~one card before the rolodex
+  // snaps to that card and eases the last bit. Position never has to
+  // stop on each card during active scrolling.
   const onWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault()
     e.stopPropagation()
     if (rows.length === 0) return
     const dir = e.deltaY > 0 ? 1 : -1
-    const max = rows.length - 1
-    targetRef.current = Math.max(0, Math.min(max, targetRef.current + dir))
+    velocityRef.current += dir * WHEEL_IMPULSE
     startTween()
   }, [rows.length, startTween])
 
   const onSlotClick = useCallback((idx: number) => {
+    // Cancel any in-flight kinetic motion — click means "go here, no
+    // momentum carry-over" — then let the settle-phase ease handle it.
+    velocityRef.current = 0
     targetRef.current = idx
     startTween()
   }, [startTween])
