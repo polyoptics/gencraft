@@ -516,13 +516,24 @@ export const CardRolodex: React.FC = () => {
   // the floor rises high. When many cards are below the active, the
   // bottom-most card's bottom is near LIST_AREA_H, so the floor stays
   // near the bottom.
+  //
+  // Important: ACTIVE_LIFT_SLOTS pulls the active card up, which means
+  // mid-list the bottom-most VISIBLE card's tab bottom can fall ABOVE
+  // LIST_AREA_H (there are unrendered cards continuing below the visible
+  // window — they just live past the buffer). Without correction, the
+  // cabinet would render mid-list and bob with each scroll tick as the
+  // bell-curve tween shifts the visible rows. We virtually extend the
+  // bottom by `cardsBelow * SLOT_PEEK_H` so the cabinet only triggers
+  // when there's nothing left to scroll into view from below.
   let bottomMostCardBottom = 0
   for (let i = 0; i < visibleIndices.length; i++) {
     const cardBottom = (rawTops[i] + yShift) + sizes[i]
     if (cardBottom > bottomMostCardBottom) bottomMostCardBottom = cardBottom
   }
+  const cardsBelowVisible = Math.max(0, (rows.length - 1) - visibleEnd)
+  const effectiveBottom = bottomMostCardBottom + cardsBelowVisible * SLOT_PEEK_H
   const floorTopMin = anchorY + SLOT_PEEK_H + CENTER_BONUS
-  const cabinetFloorTop = Math.max(floorTopMin, Math.min(LIST_AREA_H, bottomMostCardBottom))
+  const cabinetFloorTop = Math.max(floorTopMin, Math.min(LIST_AREA_H, effectiveBottom))
   const cabinetH = LIST_AREA_H - cabinetFloorTop
   // Notch height = just enough wing-only band that the bar's rounded
   // corners (radius CABINET_NOTCH_RADIUS) are exposed; the bar then sits
