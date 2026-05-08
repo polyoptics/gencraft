@@ -55,7 +55,7 @@ const VISIBLE_RADIUS = 5         // slots above/below center → 11 total visibl
 // center, measured in SLOT_PEEK_H units. 0 = exact center, 1 = one
 // tab-height above center, 2 = two. The list still scrolls smoothly
 // around the float center; only the resting Y of "selected" shifts.
-const ACTIVE_LIFT_SLOTS = 3.5
+const ACTIVE_LIFT_SLOTS = 2.5
 // Extra buffer cards rendered ABOVE visibleStart so their full body
 // (CARD_H tall, but tucked tabs are only SLOT_PEEK_H) sits entirely
 // above the viewport. Without this, a parent card entering the
@@ -99,6 +99,13 @@ const FALLOFF_RADIUS_BELOW = 1.0
 // 0.065 settles in ~550–650ms — between snappy and drawn-out.
 // Lower = more languorous; higher = snappier.
 const TWEEN_EASE = 0.065
+// Cap on per-frame motion (in slot units). Easing alone produces big
+// per-frame jumps when the diff is large (rapid wheel input puts target
+// many slots ahead of position) — the catch-up reads as choppy because
+// each frame visibly snaps ~15+ pixels. Capping the step keeps active
+// scroll smooth without affecting the settle phase, where diff is small
+// enough that easing*diff is well below the cap.
+const MAX_STEP_PER_FRAME = 0.35
 const PREVIEW_W = 240
 const PREVIEW_H = 340
 const PANEL_PAD = 4
@@ -383,7 +390,13 @@ export const CardRolodex: React.FC = () => {
       }
       return
     }
-    positionRef.current += diff * TWEEN_EASE
+    // Easing — dominates the settle phase (small diff → tiny step).
+    // For rapid wheel input the diff can be many slots, which would
+    // produce big per-frame jumps without the cap. MAX_STEP_PER_FRAME
+    // limits the motion to a smooth visible delta.
+    const easedStep = diff * TWEEN_EASE
+    const step = Math.sign(easedStep) * Math.min(Math.abs(easedStep), MAX_STEP_PER_FRAME)
+    positionRef.current += step
     bumpRender()
     rafRef.current = requestAnimationFrame(tick)
   }, [bumpRender])
