@@ -106,15 +106,17 @@ const TWEEN_EASE = 0.065
 // scroll smooth without affecting the settle phase, where diff is small
 // enough that easing*diff is well below the cap.
 const MAX_STEP_PER_FRAME = 0.35
-const PREVIEW_W = 240
-const PREVIEW_H = 340
+// Preview-pane dimensions previously here (240 × 340 ≈ 1:1.42). The
+// pane is gone; the in-row expansion via the bottom drag handle plays
+// that role now. Active slot tops out at SLOT_W × CARD_H (180 × 255 ≈
+// the same aspect ratio).
 const PANEL_PAD = 4
-// Header strip height (CARDS title + sort/close icons + borderBottom).
-// Used as a marginTop on the preview pane so its TOP aligns with the
-// slot list's top (i.e., where the FIRST card's top edge sits) rather
-// than the panel's top. Derived: 2px padding-top + 18px (close button is
-// the tallest child) + 4px padding-bottom + 1px borderBottom = 25.
-const HEADER_H = 25
+// Header strip height was previously used as a marginTop on a separate
+// preview pane. The pane has been folded into the in-row expansion
+// (cards grow via the drag handle), so that constant is no longer
+// needed. If the preview pane ever returns, the derivation was:
+// 2px padding-top + 18px (close button tallest child) + 4px
+// padding-bottom + 1px borderBottom = 25.
 // Tree-mode indent per level. Each step pushes the card's LEFT edge
 // inward by this many pixels, leaving the right edge fixed — so cards
 // appear to tuck under their parent as depth increases. The leftColumn
@@ -122,8 +124,15 @@ const HEADER_H = 25
 const INDENT_STEP = 12
 // LIST area is the visible viewport over the stack. Cards extend below it
 // (clipped by overflow) so the bottom of the stack reads as "more cards
-// continuing down" rather than ending abruptly.
-const LIST_AREA_H = SLOT_PEEK_H * (VISIBLE_RADIUS * 2 + 1)
+// continuing down" rather than ending abruptly. The compact value is the
+// list area when rolodexExpansion = 0. The actual height in the component
+// = LIST_AREA_H_COMPACT + rolodexExpansion (panel grows downward when the
+// user drags the bottom).
+const LIST_AREA_H_COMPACT = SLOT_PEEK_H * (VISIBLE_RADIUS * 2 + 1)
+// Maximum expansion in pixels — when reached, the active slot's visible
+// size equals CARD_H (the full card height), so the user sees the entire
+// card. Beyond that the slot can't reveal more content.
+const MAX_EXPANSION = CARD_H - SLOT_PEEK_H - CENTER_BONUS
 
 /** Half-cosine bell, asymmetric: the radius below center is wider than the
  *  one above so the lift effect "trails down" the stack — cards a few slots
@@ -141,12 +150,17 @@ function bellFraction(offset: number): number {
 /** Each card K, given the float center P, has a "size" — the vertical
  *  span between this card's top and the next card's top (= visible height
  *  of this card's tab when tucked). At the exact center, size peaks at
- *  SLOT_PEEK_H + CENTER_BONUS; symmetrically falls back to SLOT_PEEK_H
- *  beyond the falloff radius. The card's TOP position is the prefix-sum of
- *  sizes from card 0 up to itself, anchored so position(P) lands at the
- *  list area's center. */
-function cardSize(offsetFromCenter: number): number {
-  return SLOT_PEEK_H + CENTER_BONUS * bellFraction(offsetFromCenter)
+ *  SLOT_PEEK_H + bellPeak; symmetrically falls back to SLOT_PEEK_H beyond
+ *  the falloff radius. The card's TOP position is the prefix-sum of sizes
+ *  from card 0 up to itself, anchored so position(P) lands at the list
+ *  area's center.
+ *
+ *  bellPeak defaults to CENTER_BONUS for the base "selected card grows a
+ *  bit" effect. When rolodexExpansion > 0, the parent passes
+ *  CENTER_BONUS + expansion so the active slot grows that much MORE —
+ *  giving the drag-to-expand behaviour. */
+function cardSize(offsetFromCenter: number, bellPeak: number = CENTER_BONUS): number {
+  return SLOT_PEEK_H + bellPeak * bellFraction(offsetFromCenter)
 }
 
 // ─── Tree / flat list builders ─────────────────────────────────
@@ -298,6 +312,16 @@ export const CardRolodex: React.FC = () => {
   const setRolodexOpen = useCanvasStore(s => s.setRolodexOpen)
   const rolodexPos = useCanvasStore(s => s.rolodexPos)
   const setRolodexPos = useCanvasStore(s => s.setRolodexPos)
+  const rolodexExpansion = useCanvasStore(s => s.rolodexExpansion)
+  const setRolodexExpansion = useCanvasStore(s => s.setRolodexExpansion)
+
+  // Dynamic list-area height and bell-peak — these grow with the user's
+  // current expansion (drag-handle pulls the panel taller). bellPeak is
+  // passed into cardSize so the active card's "size" gets a bigger
+  // CENTER_BONUS — that's all the geometry needs to scale up; the
+  // existing prefix-sum + yShift math handles the rest.
+  const LIST_AREA_H = LIST_AREA_H_COMPACT + rolodexExpansion
+  const bellPeak = CENTER_BONUS + rolodexExpansion
   const groups = useBoardsStore(s => s.groups)
   const boards = useBoardsStore(s => s.boards)
   const jumpToGroup = useCanvasStore(s => s.jumpToGroup)
@@ -370,6 +394,32 @@ export const CardRolodex: React.FC = () => {
     if (!dragOffsetRef.current) return
     try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId) } catch { /* ignore */ }
     dragOffsetRef.current = null
+  }, [])
+
+  // ── Bottom-edge expansion drag ─────────────────────────────────
+  // The cabinet base doubles as a vertical-resize handle. Pointer-down
+  // captures the start Y + start expansion value; pointer-move computes
+  // delta and updates rolodexExpansion (clamped to [0, MAX_EXPANSION]).
+  // The panel grows DOWNWARD with the user's pointer — the cabinet base
+  // visually tracks the cursor, like grabbing a drawer pull.
+  const expandDragRef = useRef<{ startY: number; startExpansion: number } | null>(null)
+  const onExpandPointerDown = useCallback((e: React.PointerEvent) => {
+    if (e.button !== 0) return
+    e.preventDefault()
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+    expandDragRef.current = { startY: e.clientY, startExpansion: rolodexExpansion }
+  }, [rolodexExpansion])
+  const onExpandPointerMove = useCallback((e: React.PointerEvent) => {
+    if (!expandDragRef.current) return
+    e.preventDefault()
+    const dy = e.clientY - expandDragRef.current.startY
+    const next = Math.max(0, Math.min(MAX_EXPANSION, expandDragRef.current.startExpansion + dy))
+    setRolodexExpansion(next)
+  }, [setRolodexExpansion])
+  const onExpandPointerUp = useCallback((e: React.PointerEvent) => {
+    if (!expandDragRef.current) return
+    try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId) } catch { /* ignore */ }
+    expandDragRef.current = null
   }, [])
 
   // Build the visible row list. In 'flat' mode every group is a level-0
@@ -491,8 +541,10 @@ export const CardRolodex: React.FC = () => {
   // Round the float position to pick the preview card. Snaps at 0.5 between
   // adjacent indices, which is the natural moment for the preview to swap.
   const centerPosition = positionRef.current
+  // previewIndex retained for end-of-list cabinet logic / future preview
+  // re-introduction; previously also fed CardPreview but that component
+  // is no longer mounted here.
   const previewIndex = Math.round(centerPosition)
-  const centerGroup = rows[previewIndex]?.group ?? null
 
   // ── Lay out the visible stack via prefix-sums ─────────────
   // Each card's "size" (visible height of its top tab) is a bell-bonus around
@@ -510,7 +562,7 @@ export const CardRolodex: React.FC = () => {
   const visibleIndices: number[] = []
   for (let k = visibleStart; k <= visibleEnd; k++) visibleIndices.push(k)
 
-  const sizes = visibleIndices.map(k => cardSize(k - centerPosition))
+  const sizes = visibleIndices.map(k => cardSize(k - centerPosition, bellPeak))
 
   // Cumulative card-top positions, anchor-pending.
   const rawTops: number[] = []
@@ -530,11 +582,13 @@ export const CardRolodex: React.FC = () => {
     PfracRawY = rawTops[PfloorIdxInVisible] + Pfrac * sizes[PfloorIdxInVisible]
   }
 
-  // Anchor: put P's center-of-tab at LIST_AREA_H / 2 - SLOT_PEEK_H / 2 so
-  // the tab itself is centered in the visible viewport — then shift the
-  // active card UP by ACTIVE_LIFT_SLOTS * SLOT_PEEK_H so it sits a bit
-  // above center, leaving more of the upcoming stack visible below.
-  const anchorY = LIST_AREA_H / 2 - SLOT_PEEK_H / 2 - ACTIVE_LIFT_SLOTS * SLOT_PEEK_H
+  // Anchor: put P's center-of-tab at LIST_AREA_H_COMPACT / 2 - SLOT_PEEK_H / 2
+  // (compact-value, NOT the dynamic LIST_AREA_H) so the active card stays
+  // VERTICALLY PINNED at the same screen-Y when the user expands the
+  // panel via drag — the expansion goes entirely to growing the active
+  // card downward, not to shifting it around. Then shift the active up
+  // by ACTIVE_LIFT_SLOTS * SLOT_PEEK_H to sit a bit above center.
+  const anchorY = LIST_AREA_H_COMPACT / 2 - SLOT_PEEK_H / 2 - ACTIVE_LIFT_SLOTS * SLOT_PEEK_H
   const yShift = anchorY - PfracRawY
 
   // ── Cabinet "floor" geometry ─────────────────────────────────
@@ -576,7 +630,11 @@ export const CardRolodex: React.FC = () => {
   }
   const cardsBelowVisible = Math.max(0, (rows.length - 1) - visibleEnd)
   const effectiveBottom = bottomMostCardBottom + cardsBelowVisible * SLOT_PEEK_H
-  const floorTopMin = anchorY + SLOT_PEEK_H + CENTER_BONUS
+  // Floor minimum sits at the active card's full visible bottom edge —
+  // that's SLOT_PEEK_H + bellPeak (= CENTER_BONUS + expansion). When the
+  // user expands the rolodex, the active card grows downward, so the
+  // cabinet's allowable rise-point grows too.
+  const floorTopMin = anchorY + SLOT_PEEK_H + bellPeak
   const cabinetFloorTop = Math.max(floorTopMin, Math.min(LIST_AREA_H, effectiveBottom))
   const cabinetH = LIST_AREA_H - cabinetFloorTop
   // Notch height = just enough wing-only band that the bar's rounded
@@ -694,6 +752,7 @@ export const CardRolodex: React.FC = () => {
                       top={rawTops[i] + yShift}
                       zIndex={idx + 1}
                       heroImage={heroImageMap.get(row.group.id) ?? null}
+                      expansionFraction={rolodexExpansion / MAX_EXPANSION}
                       onClick={() => onSlotClick(idx)}
                       onDoubleClick={() => onSlotDoubleClick(row.group)}
                     />
@@ -772,17 +831,43 @@ export const CardRolodex: React.FC = () => {
                 cabinet wings/bar at z=200. Cards traveling past
                 LIST_AREA_H are still rendered (until they're clipped
                 at LIST_AREA_H + CABINET_BAR_H) but visually hidden
-                behind this strip — that's the slide-under effect. */}
-            <div style={{
-              position: 'absolute',
-              left: 0,
-              top: LIST_AREA_H,
-              width: LEFTCOL_W,
-              height: CABINET_BAR_H,
-              background: 'rgba(8,9,16,1)',
-              zIndex: 200,
-              pointerEvents: 'none',
-            }} />
+                behind this strip — that's the slide-under effect.
+                ALSO doubles as the drag handle that controls
+                rolodexExpansion — grab it and drag DOWN to grow the
+                active card slot (and the panel) so the card's hero
+                image / content reveals; drag UP to collapse back to
+                the compact tab-list view. */}
+            <div
+              onPointerDown={onExpandPointerDown}
+              onPointerMove={onExpandPointerMove}
+              onPointerUp={onExpandPointerUp}
+              onPointerCancel={onExpandPointerUp}
+              title="Drag down to expand the selected card · drag up to collapse"
+              style={{
+                position: 'absolute',
+                left: 0,
+                top: LIST_AREA_H,
+                width: LEFTCOL_W,
+                height: CABINET_BAR_H,
+                background: 'rgba(8,9,16,1)',
+                zIndex: 200,
+                cursor: 'ns-resize',
+                touchAction: 'none',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              {/* Visible grip — a small horizontal pill so the user
+                  knows the cabinet base is grabbable. */}
+              <div style={{
+                width: 28,
+                height: 3,
+                borderRadius: 2,
+                background: 'rgba(255,255,255,0.22)',
+                pointerEvents: 'none',
+              }} />
+            </div>
           </div>
 
           {/* + Place new card — temporarily hidden per spec; placement
@@ -793,17 +878,11 @@ export const CardRolodex: React.FC = () => {
           */}
         </div>
 
-        {/* ── Right column: preview pane (only when there's a center card) ──
-              Wrapped so we can push the preview's TOP down by HEADER_H,
-              keeping it aligned with the slot list (which sits beneath
-              the leftColumn's header). Without this margin, the preview
-              would sit flush with the panel top and look "ahead" of the
-              first card. */}
-        {centerGroup && (
-          <div style={{ marginTop: HEADER_H }}>
-            <CardPreview group={centerGroup} />
-          </div>
-        )}
+        {/* Preview pane removed — its role is now served by expanding
+            the active row card via the drag handle at the bottom of
+            the panel. CardPreview component is kept around in the
+            file (below) in case we want to reintroduce it as an
+            optional mode. */}
       </div>
 
       {/* Cursor-follow ghost card during placement mode (rendered globally) */}
@@ -843,9 +922,14 @@ const RolodexSlot: React.FC<{
    *  by the parent so each slot doesn't need its own boards
    *  subscription. */
   heroImage: string | null
+  /** 0 (compact, peek-tab list) → 1 (fully expanded, active slot reveals
+   *  the whole card). Used to scale up the hero image's opacity so the
+   *  image is more visible at higher expansion, and to fade in the
+   *  preview-style header text + summary overlays. */
+  expansionFraction: number
   onClick: () => void
   onDoubleClick: () => void
-}> = ({ group, level, isDeck, offset, top, zIndex, heroImage, onClick, onDoubleClick }) => {
+}> = ({ group, level, isDeck, offset, top, zIndex, heroImage, expansionFraction, onClick, onDoubleClick }) => {
   const [isHovered, setIsHovered] = useState(false)
 
   // Continuous "centerness" used to tween visual emphasis (rim, shadow,
@@ -932,17 +1016,16 @@ const RolodexSlot: React.FC<{
       }}
     >
       {/* Hero image — rendered BEFORE the gradient + content so it
-            sits at the back. Opacity scales with lit so only the
-            centered card shows a clear thumbnail; tucked cards stay
-            color-only. Uses the same transform as the canvas/preview
-            card so framing matches. Rendered only when an image is
-            actually available and the card is at least faintly lit
-            (skips render cost for far-tucked slots). */}
+            sits at the back. Opacity scales with lit (centerness) AND
+            with expansionFraction: compact rolodex shows a faint
+            thumbnail on the active card; fully-expanded rolodex
+            shows the image at full strength so the active slot reads
+            as the actual card. Tucked cards stay color-only. */}
       {heroImage && lit > 0.05 && (
         <HeroImageLayer
           heroImage={heroImage}
           transform={group.cardHeroTransform}
-          opacity={0.7 * lit}
+          opacity={(0.55 + 0.4 * expansionFraction) * lit}
           borderRadius={6}
         />
       )}
@@ -1001,111 +1084,6 @@ const RolodexSlot: React.FC<{
           flex: 1,
         }}>{group.name || 'Untitled'}</span>
       </div>
-    </div>
-  )
-}
-
-// ─── Preview pane ──────────────────────────────────────────────
-
-const CardPreview: React.FC<{ group: ProjectGroup }> = ({ group }) => {
-  // Resolve the hero image with the same fallback chain CardLayer uses on
-  // canvas: prefer group.cardHeroImage, otherwise scan the group's boards
-  // and their root bars for the first image embedded in bar content. Many
-  // cards (e.g. deck anchors like "Location" inside Pelagia IX) keep their
-  // image at the bar level rather than as an explicit group.cardHeroImage,
-  // and without this fallback the preview pane would render empty.
-  const boards = useBoardsStore(s => s.boards)
-  const heroImage = useMemo(() => {
-    if (group.cardHeroImage) return group.cardHeroImage
-    for (const bid of group.boardIds) {
-      const board = boards[bid]
-      if (!board) continue
-      for (const rid of board.rootIds) {
-        const img = getFirstImageUrl(board.bars[rid]?.content)
-        if (img) return img
-      }
-    }
-    return null
-  }, [group.cardHeroImage, group.boardIds, boards])
-
-  return (
-    <div
-      key={group.id}                                          // key swap → fade-in on change
-      style={{
-        width: PREVIEW_W,
-        height: PREVIEW_H,
-        background: group.color,
-        borderRadius: 10,
-        boxShadow: '0 8px 32px rgba(0,0,0,0.55)',
-        position: 'relative',
-        overflow: 'hidden',
-        animation: 'rolodex-fade-in 0.18s ease-out',
-      }}
-    >
-      <style>{`
-        @keyframes rolodex-fade-in {
-          from { opacity: 0; transform: translateY(4px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-      `}</style>
-      {/* Hero image at low-ish opacity so the color tint shows. Uses the
-            resolved heroImage (group OR bar-content fallback), matching
-            how the canvas card resolves its hero in CardLayer.tsx. */}
-      {heroImage && (
-        <HeroImageLayer
-          heroImage={heroImage}
-          transform={group.cardHeroTransform}
-          borderRadius={10}
-        />
-      )}
-      {/* Header band — group name */}
-      <div style={{
-        position: 'absolute',
-        top: 0, left: 0, right: 0,
-        padding: '14px 14px 10px',
-        background: `linear-gradient(180deg, rgba(0,0,0,0.35), transparent)`,
-        zIndex: 2,
-      }}>
-        {group.cardHeaderText && (
-          <div style={{
-            color: 'rgba(255,255,255,0.6)',
-            fontSize: 9,
-            fontWeight: 600,
-            letterSpacing: '0.6px',
-            textTransform: 'uppercase',
-            marginBottom: 4,
-          }}>{group.cardHeaderText}</div>
-        )}
-        <div style={{
-          color: 'rgba(255,255,255,0.97)',
-          fontSize: 22,
-          fontWeight: 800,
-          textShadow: '0 2px 6px rgba(0,0,0,0.6)',
-          lineHeight: 1.05,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-        }}>{group.name || 'Untitled'}</div>
-      </div>
-      {/* Bottom band — summary */}
-      {group.cardSummary && (
-        <div style={{
-          position: 'absolute',
-          bottom: 0, left: 0, right: 0,
-          padding: '10px 14px 12px',
-          background: `linear-gradient(0deg, rgba(0,0,0,0.55), transparent)`,
-          color: 'rgba(255,255,255,0.92)',
-          fontSize: 11,
-          fontWeight: 600,
-          textShadow: '0 1px 4px rgba(0,0,0,0.7)',
-          zIndex: 2,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-        }}>
-          {group.cardSummary}
-        </div>
-      )}
     </div>
   )
 }

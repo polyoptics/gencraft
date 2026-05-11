@@ -74,6 +74,13 @@ interface CanvasStore {
    *  applies to roots in 'flat', and to siblings within each tree branch
    *  in 'tree'). Persisted. */
   rolodexView: 'flat' | 'tree'
+  /** Extra pixels added to the active card's visible tab in the Rolodex.
+   *  0 = compact (just-the-name, peek-tab view); when larger, the active
+   *  slot grows downward to reveal more of the card content (hero image,
+   *  header text, summary). The bottom of the panel becomes a drag
+   *  handle that adjusts this value. Capped at CARD_H - SLOT_PEEK_H -
+   *  CENTER_BONUS so the active slot tops out at the full card size. */
+  rolodexExpansion: number
   /** Top-left position of the floating rolodex panel (screen px), persisted
    *  so it stays where the user dragged it across reloads. Header acts as
    *  the drag handle. */
@@ -110,6 +117,7 @@ interface CanvasStore {
   setRolodexSortMode: (mode: 'creation' | 'alphabetical') => void
   setRolodexView: (mode: 'flat' | 'tree') => void
   setRolodexPos: (pos: { x: number; y: number }) => void
+  setRolodexExpansion: (px: number) => void
 }
 
 export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
@@ -134,6 +142,7 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
   rolodexSortMode: 'creation',
   rolodexView: 'flat',
   rolodexPos: { x: 12, y: 60 },
+  rolodexExpansion: 0,
 
   setPan: (pan) => set({ pan }),
 
@@ -193,6 +202,7 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
   setRolodexSortMode: (rolodexSortMode) => set({ rolodexSortMode }),
   setRolodexView: (rolodexView) => set({ rolodexView }),
   setRolodexPos: (rolodexPos) => set({ rolodexPos }),
+  setRolodexExpansion: (rolodexExpansion) => set({ rolodexExpansion }),
 
   jumpToGroup: (groupId) => {
     const bs = useBoardsStore.getState()
@@ -256,6 +266,7 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
     rolodexSortMode: s.rolodexSortMode,
     rolodexView: s.rolodexView,
     rolodexPos: s.rolodexPos,
+    rolodexExpansion: s.rolodexExpansion,
   }),
   version: 1,
   migrate: (persisted: any, version: number) => {
@@ -265,3 +276,10 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
     return persisted
   },
 }))
+
+// Dev-only: expose the running store on `window` so debugging tooling
+// (preview_eval, devtools console) can reach the SAME instance the app
+// uses. Same reasoning + production-guard as window.useBoardsStore.
+if (typeof window !== 'undefined' && import.meta.env.DEV) {
+  ;(window as unknown as { useCanvasStore: typeof useCanvasStore }).useCanvasStore = useCanvasStore
+}
