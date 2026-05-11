@@ -88,17 +88,44 @@ const CABINET_OUTER_RADIUS = 6
 // reads as SLOT_PEEK_H + CENTER_BONUS, and the cards a couple of slots
 // either side smoothly trail off back to plain SLOT_PEEK_H.
 const CENTER_BONUS = 34
+// "Anticipation" bonus on the FIRST card below the active slot. Its tab
+// grows by up to PEEK_BONUS px when the card sits exactly at offset=1
+// (just below active), then fades back to plain SLOT_PEEK_H by offset=2.
+// Cards further down the below-stack are uniformly shifted by half the
+// bonus (the bell's full integral), so they keep their uniform SLOT_PEEK_H
+// spacing — only the first-below card itself grows. Small enough that the
+// "secondary transit" stutter it introduces is dwarfed by the main active
+// transit and reads as a gentle anticipation of the next card stepping up.
+const PEEK_BONUS = 15
 // Per-frame easing factor for the rAF tween toward target center.
 // 0.065 settles in ~550–650ms — between snappy and drawn-out.
-// Lower = more languorous; higher = snappier.
+// Lower = more languorous; higher = snappier. This is the COMPACT-mode
+// baseline; the actual easing used per-frame divides this by an
+// expansion-dependent slowdown (see EXPANSION_SLOWDOWN_FACTOR) so the
+// tween takes longer when the active card is large — the transit card
+// has to cover activeSize px per integer step (up to 255 at full
+// expansion vs 64 compact), and slowing the tween proportionally keeps
+// its visible pixel velocity in a comfortable range.
 const TWEEN_EASE = 0.065
 // Cap on per-frame motion (in slot units). Easing alone produces big
 // per-frame jumps when the diff is large (rapid wheel input puts target
 // many slots ahead of position) — the catch-up reads as choppy because
 // each frame visibly snaps ~15+ pixels. Capping the step keeps active
 // scroll smooth without affecting the settle phase, where diff is small
-// enough that easing*diff is well below the cap.
+// enough that easing*diff is well below the cap. Like TWEEN_EASE this
+// is the compact baseline; the actual per-frame cap shrinks
+// proportionally with expansion.
 const MAX_STEP_PER_FRAME = 0.35
+// How much to slow the tween at MAX_EXPANSION, relative to compact.
+// At expansion = 0 the slowdown is 1 (no change). At MAX_EXPANSION the
+// effective easing is TWEEN_EASE / EXPANSION_SLOWDOWN_FACTOR and the
+// step cap is MAX_STEP_PER_FRAME / EXPANSION_SLOWDOWN_FACTOR, so the
+// integer-to-integer tween takes EXPANSION_SLOWDOWN_FACTOR× longer.
+// 1.6 is "a little bit longer" — at full expansion the integer-step
+// tween settles in ~1.15 s vs ~720 ms compact. Bigger values feel
+// sluggish; activeSize quadruples from compact (64) to full (255) so a
+// full proportional slowdown would be 4× and read as molasses.
+const EXPANSION_SLOWDOWN_FACTOR = 1.6
 // Preview-pane dimensions previously here (240 × 340 ≈ 1:1.42). The
 // pane is gone; the in-row expansion via the bottom drag handle plays
 // that role now. Active slot tops out at SLOT_W × CARD_H (180 × 255 ≈
@@ -440,12 +467,24 @@ export const CardRolodex: React.FC = () => {
       }
       return
     }
+    // Expansion-aware slowdown — at full expansion the transit card has
+    // to cover activeSize ≈ 255 px per integer step (vs 64 in compact),
+    // so we slow the tween proportionally to keep its visible pixel
+    // velocity comfortable. Read live from the store inside tick so the
+    // slowdown reacts immediately when the user drags the cabinet
+    // handle to resize. expansionFraction = 0 (compact) → slowdown = 1
+    // (unchanged); = 1 (full) → slowdown = EXPANSION_SLOWDOWN_FACTOR.
+    const expansion = useCanvasStore.getState().rolodexExpansion
+    const expansionFraction = MAX_EXPANSION > 0 ? expansion / MAX_EXPANSION : 0
+    const slowdown = 1 + (EXPANSION_SLOWDOWN_FACTOR - 1) * expansionFraction
+    const easing = TWEEN_EASE / slowdown
+    const cap = MAX_STEP_PER_FRAME / slowdown
     // Easing — dominates the settle phase (small diff → tiny step).
     // For rapid wheel input the diff can be many slots, which would
-    // produce big per-frame jumps without the cap. MAX_STEP_PER_FRAME
-    // limits the motion to a smooth visible delta.
-    const easedStep = diff * TWEEN_EASE
-    const step = Math.sign(easedStep) * Math.min(Math.abs(easedStep), MAX_STEP_PER_FRAME)
+    // produce big per-frame jumps without the cap. The cap limits the
+    // motion to a smooth visible delta.
+    const easedStep = diff * easing
+    const step = Math.sign(easedStep) * Math.min(Math.abs(easedStep), cap)
     positionRef.current += step
     bumpRender()
     rafRef.current = requestAnimationFrame(tick)
@@ -563,19 +602,43 @@ export const CardRolodex: React.FC = () => {
   // uniformly upward by SLOT_PEEK_H per unit of centerPosition advance,
   // so neighbours of the transit card never bob or stutter — only the
   // transit card itself crosses the active gap.
+  //
+  // ANTICIPATION (offset 1 → 2): a small half-cosine bell shift adds
+  // up to PEEK_BONUS px to the first below-card's tab, fading to 0 by
+  // offset = 2. Cards deeper in the below stack stay uniformly spaced
+  // because the bell has fully integrated by offset = 2. The shift is
+  // small relative to activeSize, so the secondary stutter it
+  // introduces is dwarfed by the main active transit.
   const activeSize = SLOT_PEEK_H + CENTER_BONUS + rolodexExpansion
 
+  // Half-cosine bell's CUMULATIVE INTEGRAL from offset 1 outward — a
+  // smooth ramp from 0 at offset=1 to PEEK_BONUS * 0.5 at offset=2,
+  // staying at PEEK_BONUS * 0.5 for any deeper offset. Used to add a
+  // small "anticipation" bump to the first below-card's tab while
+  // keeping the rest of the below stack uniformly spaced (since
+  // beyond offset=2 the bell has integrated to its full constant
+  // value, all deeper cards inherit the same shift). The bell shape
+  // is (cos(π·t) + 1) / 2 with t = o − 1 over [0, 1]; its integral is
+  // sin(π·t) / (2π) + t / 2.
+  const belowBellShift = (o: number): number => {
+    if (o <= 1) return 0
+    if (o >= 2) return PEEK_BONUS * 0.5
+    const t = o - 1
+    return PEEK_BONUS * (Math.sin(Math.PI * t) / (2 * Math.PI) + t / 2)
+  }
+
   // Position of a card with offset (= idx - centerPosition), measured
-  // from the active card's anchor TOP. Piecewise linear:
-  //   o ≤ 0:  o * SLOT_PEEK_H                   (above stack)
-  //   0 < o < 1:  o * activeSize                (transit through slot)
-  //   o ≥ 1:  activeSize + (o - 1) * SLOT_PEEK_H (below stack)
-  // Continuous at o = 0 (both branches yield 0) and at o = 1 (both
-  // yield activeSize).
+  // from the active card's anchor TOP. Piecewise linear with a small
+  // bell-curve anticipation bump on the first below-card:
+  //   o ≤ 0:  o * SLOT_PEEK_H                                      (above stack)
+  //   0 < o < 1:  o * activeSize                                   (transit through slot)
+  //   o ≥ 1:  activeSize + (o − 1) * SLOT_PEEK_H + belowBellShift(o) (below stack)
+  // Continuous at o = 0 (both branches yield 0) and at o = 1 (transit
+  // yields activeSize; below-stack adds 0 from belowBellShift).
   const positionForOffset = (o: number): number => {
     if (o <= 0) return o * SLOT_PEEK_H
     if (o < 1) return o * activeSize
-    return activeSize + (o - 1) * SLOT_PEEK_H
+    return activeSize + (o - 1) * SLOT_PEEK_H + belowBellShift(o)
   }
 
   // Anchor: the active card's TOP sits at this Y. Uses LIST_AREA_H_COMPACT
