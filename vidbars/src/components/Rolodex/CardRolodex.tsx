@@ -633,22 +633,26 @@ export const CardRolodex: React.FC = () => {
   const anchorY = LIST_AREA_H_COMPACT / 2 - SLOT_PEEK_H / 2 - ACTIVE_LIFT_SLOTS * SLOT_PEEK_H
   const yShift = anchorY - PfracRawY
 
-  // Indent level of the BOTTOM-MOST card whose tab is still visible
-  // (tab top ≤ LIST_AREA_H — i.e. it hasn't slid under the cabinet
-  // yet). That's the card the cabinet's right edge should hug; as
-  // cards scroll, this changes from row to row, and the cabinet's
-  // right edge tracks it. Avoids the previous behaviour where the
-  // edge bumped out for any deeply-indented card anywhere in the
-  // rendered buffer — even ones scrolled off-screen above.
+  // Cabinet right-edge extension: cover the rightmost overhang of any
+  // card whose render-box intersects the cabinet's y-range. That
+  // includes the bottom-most visible card AND cards sliding under
+  // the cabinet (whose tabs are between LIST_AREA_H and
+  // LIST_AREA_H + CABINET_BAR_H), but EXCLUDES off-screen buffer
+  // cards above (their bodies are too high to reach the cabinet)
+  // and far-below buffer cards (already past it). Take the max
+  // indent level among those — the cabinet rectangle needs to be
+  // wide enough to cover whichever card's right edge sits highest
+  // within the cabinet zone.
   let cabinetEdgeLevel = 0
-  let bottomMostVisibleTabTop = -Infinity
   for (let i = 0; i < visibleIndices.length; i++) {
     const idx = visibleIndices[i]
     const row = rows[idx]
     if (!row) continue
     const tabTop = rawTops[i] + yShift
-    if (tabTop <= LIST_AREA_H && tabTop > bottomMostVisibleTabTop) {
-      bottomMostVisibleTabTop = tabTop
+    // Card render box [tabTop, tabTop + CARD_H] intersects cabinet
+    // y-range [LIST_AREA_H, LIST_AREA_H + CABINET_BAR_H] when:
+    const intersects = tabTop <= LIST_AREA_H + CABINET_BAR_H && tabTop + CARD_H >= LIST_AREA_H
+    if (intersects && row.level > cabinetEdgeLevel) {
       cabinetEdgeLevel = row.level
     }
   }
