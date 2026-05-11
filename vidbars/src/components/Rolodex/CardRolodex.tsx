@@ -601,19 +601,8 @@ export const CardRolodex: React.FC = () => {
   const visibleIndices: number[] = []
   for (let k = visibleStart; k <= visibleEnd; k++) visibleIndices.push(k)
 
-  // Deepest indent level among currently-rendered rows. Drives how far
-  // the cabinet base extends rightward — just enough to hug the right
-  // edge of the rightmost overhanging card with a tiny 1 px overlap
-  // (so there's no hairline gap between card and cabinet). 0 when
-  // flat-mode / no indented cards extend past the panel.
-  let maxLevelInView = 0
-  for (const idx of visibleIndices) {
-    const r = rows[idx]
-    if (r && r.level > maxLevelInView) maxLevelInView = r.level
-  }
-  const rightmostCardRight = WING_W + maxLevelInView * INDENT_STEP + SLOT_W
-  const CABINET_CARD_OVERLAP = 1
-  const cabinetRightExtension = Math.max(0, rightmostCardRight + CABINET_CARD_OVERLAP - LEFTCOL_W)
+  // (cabinet right-edge tracking is computed below, after rawTops /
+  // yShift are known — see "cabinetEdgeLevel" further down.)
 
   const sizes = visibleIndices.map(k => cardSize(k - centerPosition, rolodexExpansion))
 
@@ -643,6 +632,29 @@ export const CardRolodex: React.FC = () => {
   // by ACTIVE_LIFT_SLOTS * SLOT_PEEK_H to sit a bit above center.
   const anchorY = LIST_AREA_H_COMPACT / 2 - SLOT_PEEK_H / 2 - ACTIVE_LIFT_SLOTS * SLOT_PEEK_H
   const yShift = anchorY - PfracRawY
+
+  // Indent level of the BOTTOM-MOST card whose tab is still visible
+  // (tab top ≤ LIST_AREA_H — i.e. it hasn't slid under the cabinet
+  // yet). That's the card the cabinet's right edge should hug; as
+  // cards scroll, this changes from row to row, and the cabinet's
+  // right edge tracks it. Avoids the previous behaviour where the
+  // edge bumped out for any deeply-indented card anywhere in the
+  // rendered buffer — even ones scrolled off-screen above.
+  let cabinetEdgeLevel = 0
+  let bottomMostVisibleTabTop = -Infinity
+  for (let i = 0; i < visibleIndices.length; i++) {
+    const idx = visibleIndices[i]
+    const row = rows[idx]
+    if (!row) continue
+    const tabTop = rawTops[i] + yShift
+    if (tabTop <= LIST_AREA_H && tabTop > bottomMostVisibleTabTop) {
+      bottomMostVisibleTabTop = tabTop
+      cabinetEdgeLevel = row.level
+    }
+  }
+  const rightmostCardRight = WING_W + cabinetEdgeLevel * INDENT_STEP + SLOT_W
+  const CABINET_CARD_OVERLAP = 1
+  const cabinetRightExtension = Math.max(0, rightmostCardRight + CABINET_CARD_OVERLAP - LEFTCOL_W)
 
   // ── Cabinet "floor" geometry ─────────────────────────────────
   // The cabinet is rendered as wings (left, right) + a bottom bar with
