@@ -896,17 +896,11 @@ export const CardRolodex: React.FC = () => {
                 active card slot (and the panel) so the card's hero
                 image / content reveals; drag UP to collapse back to
                 the compact tab-list view.
-                3D-BEVEL SHAPING: when indented cards overhang past
-                the panel's right edge (tree mode), the base extends
-                rightward at the TOP to meet the rightmost overhang,
-                then tapers back to the panel's original right edge
-                at the BOTTOM. Reads as a faux-3D shelf with the
-                front edge receding into the panel — visually closes
-                the gap that would otherwise show between the
-                rightmost overhanging card and the cabinet's right
-                edge. When there are no indented cards in view
-                (cabinetRightExtension = 0) the base is a clean
-                rectangle at its original width. */}
+                Width extends rightward by cabinetRightExtension so
+                the base covers tree-mode overhanging cards — no gap
+                between the rightmost overhanging card and the
+                cabinet's right edge. Plain rectangle (no bevel),
+                always flat. */}
             <div
               onPointerDown={onExpandPointerDown}
               onPointerMove={onExpandPointerMove}
@@ -920,9 +914,6 @@ export const CardRolodex: React.FC = () => {
                 width: LEFTCOL_W + cabinetRightExtension,
                 height: CABINET_BAR_H,
                 background: 'rgba(8,9,16,1)',
-                clipPath: cabinetRightExtension > 0
-                  ? `polygon(0 0, ${LEFTCOL_W + cabinetRightExtension}px 0, ${LEFTCOL_W}px ${CABINET_BAR_H}px, 0 ${CABINET_BAR_H}px)`
-                  : 'none',
                 zIndex: 200,
                 cursor: 'ns-resize',
                 touchAction: 'none',
