@@ -27,7 +27,7 @@ import { edgeColorFromHex } from '../../utils/colorUtils'
 import { getFirstImageUrl } from '../../types/bar'
 
 // Card width — uniform across active and tucked cards. The active card
-// "rises" only via screen-Y lift (CENTER_BONUS); it's never wider than
+// "rises" only via vertical growth (expansion); it's never wider than
 // the others. Visual connection to the preview pane is purely via color
 // (preview frame matches the active card's hue).
 const SLOT_W = 180
@@ -83,22 +83,16 @@ const CABINET_NOTCH_RADIUS = 14
 // always-visible base footer's bottom-corner radius so the rising
 // cabinet reads as a smaller mirrored version of that same shape.
 const CABINET_OUTER_RADIUS = 6
-// At its peak (the float center), each card gets this much extra height
-// added to its tucked SLOT_PEEK_H. So the centered card's visible height
-// reads as SLOT_PEEK_H + CENTER_BONUS, and the cards a couple of slots
-// either side smoothly trail off back to plain SLOT_PEEK_H.
-const CENTER_BONUS = 34
-// "Anticipation" bonus amplitude on cards just below the active slot.
-// PEEK_BONUS is the compact-mode baseline (15 px peak amplitude). At
-// full expansion the effective amplitude grows by PEEK_BONUS_GROWTH
-// so each of the cards in the bell zone gets a more pronounced
-// swell — useful because the bell's radius also widens with expansion,
-// spreading the effect across more cards. With BASE = 15 and GROWTH
-// = 30, the effective amplitude triples from compact (15) to full
-// (45), so the three cards in the bell zone at full expansion grow
-// noticeably.
-const PEEK_BONUS = 15
-const PEEK_BONUS_GROWTH = 30
+// Anticipation bell peak amplitude on cards just below the active slot.
+// Both BASE and GROWTH are scaled by expansionFraction in the slot
+// formula, so the bell fully VANISHES at super-collapsed (expansion = 0).
+// That keeps the super-collapsed look strictly uniform — all tabs at
+// SLOT_PEEK_H, no growth anywhere — while still letting the bell reach
+// a substantial PEEK_BONUS + PEEK_BONUS_GROWTH = 45 px amplitude at
+// full expansion. BASE is 0 so super-collapsed is clean; GROWTH = 45
+// is the full-expansion target.
+const PEEK_BONUS = 0
+const PEEK_BONUS_GROWTH = 45
 // Bell radius for the anticipation effect, in slot units. Radius 1 =
 // the bell fades to 0 by offset 2 (only the first below-card affected).
 // At full expansion the radius grows to BELOW_BELL_RADIUS_BASE +
@@ -174,8 +168,9 @@ const OVERHANG_ALLOWANCE = 500
 const LIST_AREA_H_COMPACT = SLOT_PEEK_H * (VISIBLE_RADIUS * 2 + 1)
 // Maximum expansion in pixels — when reached, the active slot's visible
 // size equals CARD_H (the full card height), so the user sees the entire
-// card. Beyond that the slot can't reveal more content.
-const MAX_EXPANSION = CARD_H - SLOT_PEEK_H - CENTER_BONUS
+// card. Beyond that the slot can't reveal more content. Expansion of 0
+// is "super-collapsed": active card flat with the peeks, no images.
+const MAX_EXPANSION = CARD_H - SLOT_PEEK_H
 
 // ─── Tree / flat list builders ─────────────────────────────────
 
@@ -331,13 +326,13 @@ export const CardRolodex: React.FC = () => {
 
   // Dynamic list-area height — grows with rolodexExpansion (drag-handle
   // pulls the panel taller). The expansion enlarges the active card's
-  // "slot" (the gap between the above and below stacks): resting active
-  // size is SLOT_PEEK_H + CENTER_BONUS; at full expansion it becomes
-  // SLOT_PEEK_H + CENTER_BONUS + expansion = CARD_H.
+  // "slot" (the gap between the above and below stacks): at
+  // super-collapsed (expansion=0) the active is just SLOT_PEEK_H tall;
+  // at full expansion it equals CARD_H.
   const LIST_AREA_H = LIST_AREA_H_COMPACT + rolodexExpansion
-  // 0 (compact) → 1 (fully expanded). Drives hero-image opacity in
-  // RolodexSlot so the active card reveals its image more strongly as
-  // the user expands the panel.
+  // 0 (super-collapsed) → 1 (fully expanded). Drives hero-image opacity
+  // (staggered fade by offset), the bell anticipation amplitude and
+  // radius, and the below-stack overlap.
   const expansionFraction = MAX_EXPANSION > 0 ? rolodexExpansion / MAX_EXPANSION : 0
   const groups = useBoardsStore(s => s.groups)
   const boards = useBoardsStore(s => s.boards)
@@ -606,10 +601,12 @@ export const CardRolodex: React.FC = () => {
   //   BELOW STACK (offset ≥ 1): cards uniformly spaced SLOT_PEEK_H apart,
   //                              starting at activeSize below the active.
   //
-  // activeSize = SLOT_PEEK_H + CENTER_BONUS + rolodexExpansion. At full
-  // expansion the active card occupies the entire CARD_H, so the lower
-  // list sits VISIBLY BELOW it (not hidden behind it) — the gap between
-  // the two stacks always equals the visible height of the active card.
+  // activeSize = SLOT_PEEK_H + rolodexExpansion. At super-collapsed
+  // (expansion = 0) the active card is the same SLOT_PEEK_H tab as the
+  // others — all uniform. At full expansion the active occupies the
+  // entire CARD_H, so the lower list sits VISIBLY BELOW it (not hidden
+  // behind it) — the gap between the two stacks always equals the
+  // visible height of the active card.
   //
   // TRANSIT (0 < offset < 1): the position function is piecewise linear
   // and continuous at offset = 0 and offset = 1. As the user scrolls
@@ -627,14 +624,13 @@ export const CardRolodex: React.FC = () => {
   // the below stack reads as a longer, gentler ramp. Cards beyond the
   // bell zone stay uniformly spaced because the bell has fully
   // integrated by then.
-  const activeSize = SLOT_PEEK_H + CENTER_BONUS + rolodexExpansion
+  const activeSize = SLOT_PEEK_H + rolodexExpansion
 
   // Anticipation bell parameters — both the RADIUS and the AMPLITUDE
   // widen linearly with expansion so the swell at full expansion is
-  // both broader (covers more cards) and taller (each card grows more).
-  // Compact: radius=1, amplitude=PEEK_BONUS (only first below-card,
-  // small bump). Full: radius=3, amplitude=2·PEEK_BONUS (three cards,
-  // double the bump per card).
+  // both broader and taller. Super-collapsed: radius=1, amplitude=0
+  // (bell vanishes — all tabs uniform). Full expansion: radius=3,
+  // amplitude=PEEK_BONUS_GROWTH (three cards, full bell per card).
   const belowBellRadius = BELOW_BELL_RADIUS_BASE + BELOW_BELL_RADIUS_GROWTH * expansionFraction
   const belowBellAmplitude = PEEK_BONUS + PEEK_BONUS_GROWTH * expansionFraction
 
@@ -660,10 +656,14 @@ export const CardRolodex: React.FC = () => {
 
   // Effective visible size of the active slot — the active card body
   // itself is still rendered CARD_H tall, but the lower stack steps up
-  // BELOW_OVERLAP px so it visually overlaps the active card's bottom
-  // edge. Used as the transit-zone length and the below-stack starting
-  // offset so the position function stays continuous at o = 1.
-  const visibleActiveSize = activeSize - BELOW_OVERLAP
+  // by up to BELOW_OVERLAP px so it visually overlaps the active card's
+  // bottom edge. Scaled by expansionFraction so super-collapsed has no
+  // overlap (clean uniform tabs) and full expansion gets the full
+  // BELOW_OVERLAP step. Used as the transit-zone length and the
+  // below-stack starting offset so the position function stays
+  // continuous at o = 1.
+  const effectiveBelowOverlap = BELOW_OVERLAP * expansionFraction
+  const visibleActiveSize = activeSize - effectiveBelowOverlap
 
   // Position of a card with offset (= idx - centerPosition), measured
   // from the active card's anchor TOP. Piecewise linear with a small
@@ -766,11 +766,12 @@ export const CardRolodex: React.FC = () => {
   const cardsBelowVisible = Math.max(0, (rows.length - 1) - visibleEnd)
   const effectiveBottom = bottomMostCardBottom + cardsBelowVisible * SLOT_PEEK_H
   // Floor minimum sits at the active card's full visible bottom edge —
-  // SLOT_PEEK_H + (both bells at offset 0, where both peak at 1.0)
-  // = SLOT_PEEK_H + CENTER_BONUS + rolodexExpansion. When the user
-  // expands the rolodex, the active card grows downward, so the
-  // cabinet's allowable rise-point grows with it.
-  const floorTopMin = anchorY + SLOT_PEEK_H + CENTER_BONUS + rolodexExpansion
+  // anchorY + activeSize. When the user expands the rolodex, the
+  // active card grows downward, so the cabinet's allowable rise-point
+  // grows with it. (Uses activeSize directly rather than
+  // visibleActiveSize so the cabinet doesn't intrude into the
+  // overlap zone at end-of-list.)
+  const floorTopMin = anchorY + activeSize
   const cabinetFloorTop = Math.max(floorTopMin, Math.min(LIST_AREA_H, effectiveBottom))
   const cabinetH = LIST_AREA_H - cabinetFloorTop
   // Notch height = just enough wing-only band that the bar's rounded
@@ -1089,30 +1090,55 @@ const RolodexSlot: React.FC<{
   // has a tighter peak than the geometric growth.
   const centerness = Math.max(0, 1 - Math.abs(offset))
 
-  // Asymmetric centerness for the HERO IMAGE opacity. The image fades
-  // IN quickly as a card transits up into the active slot (so the
-  // user sees the image almost immediately when their target is
-  // approaching the center) and LINGERS as the card moves out past
-  // active into the above-stack (so the previously-active card's
-  // image stays visible while a new card slides in below it, giving
-  // a "trailing" feel rather than an abrupt cut).
-  //   offset ≥ 0.6:                  opacity 0 (card too far below)
-  //   0.2 ≤ offset < 0.6:            ramping up (linear, 0 → 1)
-  //   -0.7 < offset < 0.2:           opacity 1 (full)
-  //   -1.6 < offset ≤ -0.7:          ramping down (linear, 1 → 0)
-  //   offset ≤ -1.6:                 opacity 0 (card too far above)
-  const IMAGE_FADE_IN_START  =  0.6
-  const IMAGE_FADE_IN_END    =  0.2
-  const IMAGE_FADE_OUT_START = -0.7
-  const IMAGE_FADE_OUT_END   = -1.6
-  let imageCenterness: number
-  if (offset >= IMAGE_FADE_IN_START) imageCenterness = 0
-  else if (offset >= IMAGE_FADE_IN_END) {
-    imageCenterness = 1 - (offset - IMAGE_FADE_IN_END) / (IMAGE_FADE_IN_START - IMAGE_FADE_IN_END)
-  } else if (offset >= IMAGE_FADE_OUT_START) imageCenterness = 1
-  else if (offset >= IMAGE_FADE_OUT_END) {
-    imageCenterness = 1 - (IMAGE_FADE_OUT_START - offset) / (IMAGE_FADE_OUT_START - IMAGE_FADE_OUT_END)
-  } else imageCenterness = 0
+  // Hero image opacity — single-card asymmetric scroll fade, gated by
+  // expansion. EXPERIMENT: only the ACTIVE card shows its image, with
+  // a "fade up fast, stay long, fade out fast" curve during scroll
+  // transit. Below stack and far above stack stay color-only.
+  //
+  //    offset ≥ 1.0:        opacity 0 (card too far below, hasn't started
+  //                          its transit toward active)
+  //    0.0 ≤ offset < 1.0:  fade IN  (linear, 0 → 1) — begins as the
+  //                          card starts moving from first-below toward
+  //                          active, full by the time it lands.
+  //   −1.0 ≤ offset < 0.0:  fade OUT (linear, 1 → 0) — begins as the
+  //                          card starts leaving active, fully gone by
+  //                          the time it lands at first-above.
+  //    offset < −1.0:       opacity 0 (gone)
+  //
+  // No plateau — the image peaks at exactly offset 0 (active) then
+  // immediately starts fading out. The longer fade windows (full 1.0
+  // wide each side) make the entire scroll transit feel like one
+  // continuous "image swap" rather than a snap.
+  //
+  // Then multiplied by an expansion factor so super-collapsed shows no
+  // image and the active image fades in over expansionFraction 0.15 → 0.35.
+  const SCROLL_FADE_IN_START  =  1.0
+  const SCROLL_FADE_IN_END    =  0.0
+  const SCROLL_PLATEAU_END    =  0.0
+  const SCROLL_FADE_OUT_END   = -1.0
+  const IMAGE_FADE_WINDOW     =  0.2
+  const IMAGE_FADE_START_BASE =  0.15
+
+  let scrollFactor: number
+  if (offset >= SCROLL_FADE_IN_START) scrollFactor = 0
+  else if (offset >= SCROLL_FADE_IN_END) {
+    scrollFactor = 1 - (offset - SCROLL_FADE_IN_END) / (SCROLL_FADE_IN_START - SCROLL_FADE_IN_END)
+  } else if (offset >= SCROLL_PLATEAU_END) {
+    scrollFactor = 1
+  } else if (offset >= SCROLL_FADE_OUT_END) {
+    scrollFactor = (offset - SCROLL_FADE_OUT_END) / (SCROLL_PLATEAU_END - SCROLL_FADE_OUT_END)
+  } else {
+    scrollFactor = 0
+  }
+
+  const fadeStart = IMAGE_FADE_START_BASE
+  const fadeEnd = fadeStart + IMAGE_FADE_WINDOW
+  let expansionFactor: number
+  if (expansionFraction <= fadeStart) expansionFactor = 0
+  else if (expansionFraction >= fadeEnd) expansionFactor = 1
+  else expansionFactor = (expansionFraction - fadeStart) / IMAGE_FADE_WINDOW
+
+  const imageCenterness = scrollFactor * expansionFactor
 
 
   // ── Visual emphasis (scales with centerness) ─────────────────
@@ -1193,17 +1219,15 @@ const RolodexSlot: React.FC<{
       }}
     >
       {/* Hero image — rendered BEFORE the gradient + content so it
-            sits at the back. Opacity scales with imageCenterness
-            (asymmetric: snaps in fast as the card transits up into
-            active, lingers as it moves up past active) AND with
-            expansionFraction (compact = faint thumbnail; expanded =
-            full strength). Tucked cards beyond the fade-out zone
-            stay color-only. */}
-      {heroImage && imageCenterness > 0.05 && (
+            sits at the back. Opacity is driven by imageCenterness
+            (staggered fade by offset + expansion; see comment above).
+            Super-collapsed = no images; full expansion = images on
+            active + below cards. Above-stack stays color-only at rest. */}
+      {heroImage && imageCenterness > 0.01 && (
         <HeroImageLayer
           heroImage={heroImage}
           transform={group.cardHeroTransform}
-          opacity={(0.55 + 0.4 * expansionFraction) * imageCenterness}
+          opacity={imageCenterness}
           borderRadius={6}
         />
       )}

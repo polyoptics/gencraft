@@ -142,7 +142,10 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
   rolodexSortMode: 'creation',
   rolodexView: 'flat',
   rolodexPos: { x: 12, y: 60 },
-  rolodexExpansion: 0,
+  // Default to 34 — the historical "compact, popped active, no images" look.
+  // Drag up to reach super-collapsed (expansion = 0, all tabs uniform); drag
+  // down to see the active card grow and below-stack images fade in.
+  rolodexExpansion: 34,
 
   setPan: (pan) => set({ pan }),
 
@@ -268,10 +271,19 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
     rolodexPos: s.rolodexPos,
     rolodexExpansion: s.rolodexExpansion,
   }),
-  version: 1,
+  version: 2,
   migrate: (persisted: any, version: number) => {
     if (version < 1) {
       persisted.zoneLineY = 0
+    }
+    if (version < 2) {
+      // Rolodex CENTER_BONUS folded into the expansion range. Old
+      // rolodexExpansion = 0 meant "active popped up by 34 px (compact)";
+      // new rolodexExpansion = 0 means "super-collapsed, active flat with
+      // peeks". Shift persisted values up by 34 to preserve appearance.
+      if (typeof persisted.rolodexExpansion === 'number') {
+        persisted.rolodexExpansion += 34
+      }
     }
     return persisted
   },
