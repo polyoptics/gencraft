@@ -95,6 +95,16 @@ const CENTER_BONUS = 34
 // settle back into tucked size quickly.
 const FALLOFF_RADIUS_ABOVE = 2.0
 const FALLOFF_RADIUS_BELOW = 1.0
+// SEPARATE falloff radii for the rolodex-expansion contribution to size.
+// Narrow on the above side so cards above the active barely grow as the
+// user expands the panel — upper card tabs stay tucked together so their
+// headers remain visible. Normal radius below center keeps the
+// expansion's interaction with cards below smooth (the active's growth
+// pushes them down, but they also gain a temporary bell contribution
+// during cross-center tweens). Just enough above-radius to avoid a
+// discontinuity in size when the active card crosses center.
+const EXPANSION_RADIUS_ABOVE = 0.5
+const EXPANSION_RADIUS_BELOW = 1.0
 // Per-frame easing factor for the rAF tween toward target center.
 // 0.065 settles in ~550–650ms — between snappy and drawn-out.
 // Lower = more languorous; higher = snappier.
@@ -147,20 +157,41 @@ function bellFraction(offset: number): number {
   return (Math.cos(x * Math.PI / radius) + 1) / 2
 }
 
+/** Bell used specifically for the user-controlled rolodex expansion. Same
+ *  shape as bellFraction but with a narrower above-radius — so when the
+ *  user drags the bottom to expand the active card, the cards above
+ *  center barely receive any of that expansion bonus. The upper card
+ *  tabs stay tucked together at their normal size, letting their headers
+ *  remain visible even at full expansion. Below center stays normal so
+ *  the active card's expansion smoothly hands off to the next card
+ *  during a scroll-induced tween. */
+function bellFractionExpansion(offset: number): number {
+  const radius = offset >= 0 ? EXPANSION_RADIUS_BELOW : EXPANSION_RADIUS_ABOVE
+  const x = Math.abs(offset)
+  if (x >= radius) return 0
+  return (Math.cos(x * Math.PI / radius) + 1) / 2
+}
+
 /** Each card K, given the float center P, has a "size" — the vertical
  *  span between this card's top and the next card's top (= visible height
- *  of this card's tab when tucked). At the exact center, size peaks at
- *  SLOT_PEEK_H + bellPeak; symmetrically falls back to SLOT_PEEK_H beyond
- *  the falloff radius. The card's TOP position is the prefix-sum of sizes
- *  from card 0 up to itself, anchored so position(P) lands at the list
- *  area's center.
+ *  of this card's tab when tucked). Two bell contributions are summed:
  *
- *  bellPeak defaults to CENTER_BONUS for the base "selected card grows a
- *  bit" effect. When rolodexExpansion > 0, the parent passes
- *  CENTER_BONUS + expansion so the active slot grows that much MORE —
- *  giving the drag-to-expand behaviour. */
-function cardSize(offsetFromCenter: number, bellPeak: number = CENTER_BONUS): number {
-  return SLOT_PEEK_H + bellPeak * bellFraction(offsetFromCenter)
+ *   1. CENTER_BONUS * bellFraction(offset) — the always-on "active card
+ *      grows a bit" effect. Applied symmetrically around center (with the
+ *      existing asymmetric radii) so both upper and lower cards get the
+ *      gentle near-center growth.
+ *
+ *   2. expansion * bellFractionExpansion(offset) — the user-controlled
+ *      drag-to-expand bonus. Applied with a NARROW above-radius so cards
+ *      above the active are essentially unaffected as the user expands,
+ *      while cards at/below the active get the bonus smoothly.
+ *
+ *  The card's TOP position is the prefix-sum of sizes from card 0 up to
+ *  itself, anchored so position(P) lands at the list area's center. */
+function cardSize(offsetFromCenter: number, expansion: number = 0): number {
+  return SLOT_PEEK_H
+    + CENTER_BONUS * bellFraction(offsetFromCenter)
+    + expansion * bellFractionExpansion(offsetFromCenter)
 }
 
 // ─── Tree / flat list builders ─────────────────────────────────
@@ -315,13 +346,14 @@ export const CardRolodex: React.FC = () => {
   const rolodexExpansion = useCanvasStore(s => s.rolodexExpansion)
   const setRolodexExpansion = useCanvasStore(s => s.setRolodexExpansion)
 
-  // Dynamic list-area height and bell-peak — these grow with the user's
-  // current expansion (drag-handle pulls the panel taller). bellPeak is
-  // passed into cardSize so the active card's "size" gets a bigger
-  // CENTER_BONUS — that's all the geometry needs to scale up; the
-  // existing prefix-sum + yShift math handles the rest.
+  // Dynamic list-area height — grows with rolodexExpansion (drag-handle
+  // pulls the panel taller). The expansion itself is passed straight
+  // into cardSize as a separate bell contribution (see cardSize doc),
+  // so cards above the active are barely affected while cards at/below
+  // get the smooth handoff during scroll. Resting active size is still
+  // SLOT_PEEK_H + CENTER_BONUS; at full expansion it becomes
+  // SLOT_PEEK_H + CENTER_BONUS + expansion = CARD_H.
   const LIST_AREA_H = LIST_AREA_H_COMPACT + rolodexExpansion
-  const bellPeak = CENTER_BONUS + rolodexExpansion
   const groups = useBoardsStore(s => s.groups)
   const boards = useBoardsStore(s => s.boards)
   const jumpToGroup = useCanvasStore(s => s.jumpToGroup)
@@ -562,7 +594,7 @@ export const CardRolodex: React.FC = () => {
   const visibleIndices: number[] = []
   for (let k = visibleStart; k <= visibleEnd; k++) visibleIndices.push(k)
 
-  const sizes = visibleIndices.map(k => cardSize(k - centerPosition, bellPeak))
+  const sizes = visibleIndices.map(k => cardSize(k - centerPosition, rolodexExpansion))
 
   // Cumulative card-top positions, anchor-pending.
   const rawTops: number[] = []
@@ -631,10 +663,11 @@ export const CardRolodex: React.FC = () => {
   const cardsBelowVisible = Math.max(0, (rows.length - 1) - visibleEnd)
   const effectiveBottom = bottomMostCardBottom + cardsBelowVisible * SLOT_PEEK_H
   // Floor minimum sits at the active card's full visible bottom edge —
-  // that's SLOT_PEEK_H + bellPeak (= CENTER_BONUS + expansion). When the
-  // user expands the rolodex, the active card grows downward, so the
-  // cabinet's allowable rise-point grows too.
-  const floorTopMin = anchorY + SLOT_PEEK_H + bellPeak
+  // SLOT_PEEK_H + (both bells at offset 0, where both peak at 1.0)
+  // = SLOT_PEEK_H + CENTER_BONUS + rolodexExpansion. When the user
+  // expands the rolodex, the active card grows downward, so the
+  // cabinet's allowable rise-point grows with it.
+  const floorTopMin = anchorY + SLOT_PEEK_H + CENTER_BONUS + rolodexExpansion
   const cabinetFloorTop = Math.max(floorTopMin, Math.min(LIST_AREA_H, effectiveBottom))
   const cabinetH = LIST_AREA_H - cabinetFloorTop
   // Notch height = just enough wing-only band that the bar's rounded
