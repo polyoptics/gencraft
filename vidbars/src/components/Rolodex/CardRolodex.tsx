@@ -313,6 +313,32 @@ export const CardRolodex: React.FC = () => {
     [groups, boards],
   )
 
+  // Pre-resolve hero images for every renderable group so slots can
+  // show a thumbnail-sized version of the actual card image in the
+  // tab area (fades in with `lit`/centerness). Same fallback chain
+  // the canvas + preview use: explicit `group.cardHeroImage` first,
+  // then the first image found in any of the group's boards' root
+  // bars. One pass over the (small) groups list per groups/boards
+  // change keeps this cheap.
+  const heroImageMap = useMemo(() => {
+    const map = new Map<string, string | null>()
+    for (const g of visibleGroups) {
+      if (g.cardHeroImage) { map.set(g.id, g.cardHeroImage); continue }
+      let img: string | null = null
+      for (const bid of g.boardIds) {
+        const board = boards[bid]
+        if (!board) continue
+        for (const rid of board.rootIds) {
+          const found = getFirstImageUrl(board.bars[rid]?.content)
+          if (found) { img = found; break }
+        }
+        if (img) break
+      }
+      map.set(g.id, img)
+    }
+    return map
+  }, [visibleGroups, boards])
+
   // ── Header drag — moves the panel by setting rolodexPos ───────
   // dragOffsetRef captures the cursor's offset from the panel's top-left
   // at pointerdown, then on pointermove we set the panel's left/top so
@@ -667,6 +693,7 @@ export const CardRolodex: React.FC = () => {
                       offset={offset}
                       top={rawTops[i] + yShift}
                       zIndex={idx + 1}
+                      heroImage={heroImageMap.get(row.group.id) ?? null}
                       onClick={() => onSlotClick(idx)}
                       onDoubleClick={() => onSlotDoubleClick(row.group)}
                     />
@@ -810,9 +837,15 @@ const RolodexSlot: React.FC<{
   /** Stacking order — higher index = higher z so each card down covers
    *  the previous card's bottom (the "tucked under" look). */
   zIndex: number
+  /** Resolved hero image URL for this group (or null if none). Faded in
+   *  by lit/centerness so the active card shows a clear thumbnail of
+   *  its actual image and tucked cards stay color-only. Pre-resolved
+   *  by the parent so each slot doesn't need its own boards
+   *  subscription. */
+  heroImage: string | null
   onClick: () => void
   onDoubleClick: () => void
-}> = ({ group, level, isDeck, offset, top, zIndex, onClick, onDoubleClick }) => {
+}> = ({ group, level, isDeck, offset, top, zIndex, heroImage, onClick, onDoubleClick }) => {
   const [isHovered, setIsHovered] = useState(false)
 
   // Continuous "centerness" used to tween visual emphasis (rim, shadow,
@@ -898,6 +931,21 @@ const RolodexSlot: React.FC<{
         overflow: 'hidden',
       }}
     >
+      {/* Hero image — rendered BEFORE the gradient + content so it
+            sits at the back. Opacity scales with lit so only the
+            centered card shows a clear thumbnail; tucked cards stay
+            color-only. Uses the same transform as the canvas/preview
+            card so framing matches. Rendered only when an image is
+            actually available and the card is at least faintly lit
+            (skips render cost for far-tucked slots). */}
+      {heroImage && lit > 0.05 && (
+        <HeroImageLayer
+          heroImage={heroImage}
+          transform={group.cardHeroTransform}
+          opacity={0.7 * lit}
+          borderRadius={6}
+        />
+      )}
       {/* Subtle top→bottom highlight gradient. The center version (lit=1)
             shows a slightly stronger top sheen + faint bottom darkening so
             the exposed body looks 3D; tucked cards get a fainter version. */}
