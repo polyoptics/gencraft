@@ -25,6 +25,12 @@ import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { HeroImageLayer } from '../Layers/HeroImageLayer'
 import { edgeColorFromHex } from '../../utils/colorUtils'
 import { getFirstImageUrl } from '../../types/bar'
+import {
+  DEFAULT_HEADER_STYLE,
+  DEFAULT_BODY_STYLE,
+  type TextStyle,
+} from '../../store/freeNodeStore'
+import { ensureFontLoaded, hexToRgba } from '../UI/TextFormatToolbar'
 
 // Card width — uniform across active and tucked cards. The active card
 // "rises" only via vertical growth (expansion); it's never wider than
@@ -136,11 +142,12 @@ const MAX_STEP_PER_FRAME = 0.35
 // sluggish; activeSize quadruples from compact (64) to full (255) so a
 // full proportional slowdown would be 4× and read as molasses.
 const EXPANSION_SLOWDOWN_FACTOR = 1.6
-// Preview-pane dimensions previously here (240 × 340 ≈ 1:1.42). The
-// pane is gone; the in-row expansion via the bottom drag handle plays
-// that role now. Active slot tops out at SLOT_W × CARD_H (180 × 255 ≈
-// the same aspect ratio).
-const PANEL_PAD = 4
+// Padding between the outer panel border and the leftColumn content
+// (header / slot list / cabinet base). 1 px leaves just a hairline of
+// the panel's dark background visible against the border, so the
+// border reads as a tight "highlight" hugging the cabinet rather than
+// a chunky frame.
+const PANEL_PAD = 1
 // Header strip height was previously used as a marginTop on a separate
 // preview pane. The pane has been folded into the in-row expansion
 // (cards grow via the drag handle), so that constant is no longer
@@ -445,6 +452,17 @@ export const CardRolodex: React.FC = () => {
       : buildFlatList(visibleGroups, sortMode)
   ), [visibleGroups, sortMode, view])
 
+  // Max indent depth across the ENTIRE list (not just visible rows).
+  // Drives the panel's right-edge extension so the header / outer
+  // border / cabinet base all share one stable width that never
+  // shifts during scroll — even if the currently visible window
+  // contains only shallow cards, the panel still reserves room for
+  // the deepest card in the list.
+  const maxListLevel = useMemo(
+    () => rows.reduce((m, r) => (r.level > m ? r.level : m), 0),
+    [rows],
+  )
+
   // ── Smooth-scroll center model ─────────────────────────────────
   //
   // Two pieces of state, neither in React proper:
@@ -709,22 +727,16 @@ export const CardRolodex: React.FC = () => {
   // indent level among those — the cabinet rectangle needs to be
   // wide enough to cover whichever card's right edge sits highest
   // within the cabinet zone.
-  let cabinetEdgeLevel = 0
-  for (let i = 0; i < visibleIndices.length; i++) {
-    const idx = visibleIndices[i]
-    const row = rows[idx]
-    if (!row) continue
-    const tabTop = tops[i]
-    // Card render box [tabTop, tabTop + CARD_H] intersects cabinet
-    // y-range [LIST_AREA_H, LIST_AREA_H + CABINET_BAR_H] when:
-    const intersects = tabTop <= LIST_AREA_H + CABINET_BAR_H && tabTop + CARD_H >= LIST_AREA_H
-    if (intersects && row.level > cabinetEdgeLevel) {
-      cabinetEdgeLevel = row.level
-    }
-  }
-  const rightmostCardRight = WING_W + cabinetEdgeLevel * INDENT_STEP + SLOT_W
+  // Panel right-edge extension — derived from the LIST-WIDE max indent
+  // (maxListLevel, memoized over rows). Stable through scroll: header
+  // and cabinet stay one consistent width regardless of which cards
+  // happen to be in the visible window. Reserves room for the deepest
+  // card in the list even if the currently-visible window contains
+  // only shallow ones, so the panel silhouette doesn't "breathe" as
+  // the wheel scrolls.
   const CABINET_CARD_OVERLAP = 1
-  const cabinetRightExtension = Math.max(0, rightmostCardRight + CABINET_CARD_OVERLAP - LEFTCOL_W)
+  const panelRightmostCardRight = WING_W + maxListLevel * INDENT_STEP + SLOT_W
+  const panelRightExtension = Math.max(0, panelRightmostCardRight + CABINET_CARD_OVERLAP - LEFTCOL_W)
 
   // ── Cabinet "floor" geometry ─────────────────────────────────
   // The cabinet is rendered as wings (left, right) + a bottom bar with
@@ -765,13 +777,16 @@ export const CardRolodex: React.FC = () => {
   }
   const cardsBelowVisible = Math.max(0, (rows.length - 1) - visibleEnd)
   const effectiveBottom = bottomMostCardBottom + cardsBelowVisible * SLOT_PEEK_H
-  // Floor minimum sits at the active card's full visible bottom edge —
-  // anchorY + activeSize. When the user expands the rolodex, the
-  // active card grows downward, so the cabinet's allowable rise-point
-  // grows with it. (Uses activeSize directly rather than
-  // visibleActiveSize so the cabinet doesn't intrude into the
-  // overlap zone at end-of-list.)
-  const floorTopMin = anchorY + activeSize
+  // Floor minimum sits at the active card's visible bottom MINUS the
+  // notch radius, so when the cabinet rises (end-of-list), its rounded
+  // bar top OVERLAPS the active card by exactly CABINET_NOTCH_RADIUS
+  // px. The bar's rounded top corners (same radius) then read as
+  // curves carved into the card's bottom — the card appears to have
+  // matching rounded bottom corners poking through the cabinet's slot.
+  // Clamped so the overlap never exceeds half of activeSize (avoids
+  // hiding most of a tiny super-collapsed tab).
+  const cabinetOverlap = Math.min(CABINET_NOTCH_RADIUS, activeSize / 2)
+  const floorTopMin = anchorY + activeSize - cabinetOverlap
   const cabinetFloorTop = Math.max(floorTopMin, Math.min(LIST_AREA_H, effectiveBottom))
   const cabinetH = LIST_AREA_H - cabinetFloorTop
   // Notch height = just enough wing-only band that the bar's rounded
@@ -808,13 +823,14 @@ export const CardRolodex: React.FC = () => {
         }}
       >
         {/* ── Left column: header + slot list + cabinet floor ──
-              Width is LEFTCOL_W (SLOT_W + 2*WING_W) so cards can sit
-              centered with the cabinet's side wings (WING_W each side)
-              flanking them. The visual link to the preview pane comes
-              from matching colors (preview frame uses the active card's
-              color). */}
+              Base width is LEFTCOL_W (SLOT_W + 2*WING_W) so cards can
+              sit centered with the cabinet's side wings (WING_W each
+              side) flanking them. Extended by panelRightExtension so
+              the header (and outer panel border) stretches to cover
+              every overhanging card in the visible window — otherwise
+              indented cards poke past the header on the top right. */}
         <div style={{
-          width: LEFTCOL_W,
+          width: LEFTCOL_W + panelRightExtension,
           display: 'flex',
           flexDirection: 'column',
           gap: 0,
@@ -928,10 +944,15 @@ export const CardRolodex: React.FC = () => {
                       zIndex: 200,
                       pointerEvents: 'none',
                     }} />
-                    {/* Right wing — mirrors the footer's bottom-right. */}
+                    {/* Right wing — mirrors the footer's bottom-right.
+                          Stays WING_W wide and sits at the FAR right of
+                          the extended panel (right: -panelRightExtension
+                          places it past the slot list wrapper's right
+                          edge by panelRightExtension px). The bar below
+                          fills the space between the two wings. */}
                     <div style={{
                       position: 'absolute',
-                      right: 0,
+                      right: -panelRightExtension,
                       top: cabinetFloorTop,
                       width: WING_W,
                       height: cabinetH,
@@ -940,21 +961,25 @@ export const CardRolodex: React.FC = () => {
                       zIndex: 200,
                       pointerEvents: 'none',
                     }} />
-                    {/* Bottom bar — its top sits ~CABINET_NOTCH_RADIUS px
-                          ABOVE where the card's body ends, so the rounded
-                          top corners overlap into the card. The card's
-                          flat bottom is hidden behind the bar; the curves
-                          that bite out of the bar's top corners read as
-                          the card's OWN rounded bottom corners poking up
-                          through the cabinet slot. Bar height grows with
-                          the cabinet to fill all the way to the listArea
-                          bottom with no gap. */}
+                    {/* Bottom bar — fills the space between the two
+                          wings, extending right by panelRightExtension
+                          so the rising cabinet reads as one continuous
+                          shape spanning the full panel width. Its top
+                          sits ~CABINET_NOTCH_RADIUS px ABOVE where the
+                          card's body ends, so the rounded top corners
+                          overlap into the card. The card's flat bottom
+                          is hidden behind the bar; the curves that bite
+                          out of the bar's top corners read as the
+                          card's OWN rounded bottom corners poking up
+                          through the cabinet slot. Bar height grows
+                          with the cabinet to fill all the way to the
+                          listArea bottom with no gap. */}
                     {barH > 0 && (
                       <div style={{
                         position: 'absolute',
                         left: WING_W,
                         top: cabinetFloorTop + notchH,
-                        width: SLOT_W,
+                        width: SLOT_W + panelRightExtension,
                         height: barH,
                         background: 'rgba(8,9,16,1)',
                         borderTopLeftRadius: notchH > 0 ? CABINET_NOTCH_RADIUS : 0,
@@ -980,11 +1005,11 @@ export const CardRolodex: React.FC = () => {
                 active card slot (and the panel) so the card's hero
                 image / content reveals; drag UP to collapse back to
                 the compact tab-list view.
-                Width extends rightward by cabinetRightExtension so
-                the base covers tree-mode overhanging cards — no gap
-                between the rightmost overhanging card and the
-                cabinet's right edge. Plain rectangle (no bevel),
-                always flat. */}
+                Width extends rightward by panelRightExtension so the
+                base fills the full panel width (matching the header /
+                outer border), with no gap on the right between the
+                cabinet and the panel border. Plain rectangle (no
+                bevel), always flat. */}
             <div
               onPointerDown={onExpandPointerDown}
               onPointerMove={onExpandPointerMove}
@@ -995,7 +1020,7 @@ export const CardRolodex: React.FC = () => {
                 position: 'absolute',
                 left: 0,
                 top: LIST_AREA_H,
-                width: LEFTCOL_W + cabinetRightExtension,
+                width: LEFTCOL_W + panelRightExtension,
                 height: CABINET_BAR_H,
                 background: 'rgba(8,9,16,1)',
                 zIndex: 200,
@@ -1007,7 +1032,7 @@ export const CardRolodex: React.FC = () => {
                 // Keep the grip pill centered on the ORIGINAL panel
                 // width (not the extended width) so it stays where
                 // it always sits regardless of indent depth.
-                paddingRight: cabinetRightExtension,
+                paddingRight: panelRightExtension,
               }}
             >
               {/* Visible grip — a small horizontal pill so the user
@@ -1042,6 +1067,123 @@ export const CardRolodex: React.FC = () => {
         <PlacementGhost onDone={() => setIsPlacing(false)} />
       )}
     </>
+  )
+}
+
+// ─── Active card preview overlay ─────────────────────────────
+// Read-only render of the group's saved cardHeaderText + cardText with
+// their respective text styles, laid out the same way a canvas card
+// shows them at card-zoom: header on top, body below, split by the
+// group's textSplitRatio. Used inside RolodexSlot to give the active
+// card a full preview of the canvas card's content — not just the
+// hero image. Opacity is driven by the parent (same imageCenterness
+// that fades the hero image), so the overlay only materialises on the
+// active card at sufficient expansion. Pointer-events disabled so the
+// overlay doesn't intercept slot clicks.
+const RolodexCardPreview: React.FC<{
+  group: ProjectGroup
+  opacity: number
+}> = ({ group, opacity }) => {
+  const headerText = group.cardHeaderText ?? ''
+  const bodyText   = group.cardText ?? ''
+  const headerStyle: TextStyle = useMemo(
+    () => ({ ...DEFAULT_HEADER_STYLE, ...(group.cardHeaderTextStyle ?? {}) }),
+    [group.cardHeaderTextStyle],
+  )
+  const bodyStyle: TextStyle = useMemo(
+    () => ({ ...DEFAULT_BODY_STYLE, ...(group.cardTextStyle ?? {}) }),
+    [group.cardTextStyle],
+  )
+  const splitRatio = group.textSplitRatio ?? 0.5
+
+  // Load any Google fonts referenced by the saved styles so the overlay
+  // renders with the correct typography rather than falling back to
+  // inherit. No-op for system fonts.
+  ensureFontLoaded(headerStyle.fontFamily)
+  ensureFontLoaded(bodyStyle.fontFamily)
+
+  if (opacity < 0.01) return null
+
+  const headerBg = hexToRgba(headerStyle.bgColor, headerStyle.bgOpacity)
+  const bodyBg   = hexToRgba(bodyStyle.bgColor,   bodyStyle.bgOpacity)
+
+  // Text-area display style — mirrors cardDisplayStyle in CardLayer.tsx.
+  const textBlockStyle = (ts: TextStyle, bg: string, hasText: boolean): React.CSSProperties => ({
+    padding: hasText ? 6 : 0,
+    background: bg || 'transparent',
+    borderRadius: 6,
+    color: ts.color,
+    fontSize: ts.fontSize,
+    lineHeight: ts.lineHeight ?? 1.4,
+    fontWeight: ts.fontWeight ?? (ts.bold ? 700 : 400),
+    fontStyle: ts.italic ? 'italic' : 'normal',
+    textAlign: ts.align,
+    fontFamily: ts.fontFamily || 'inherit',
+    letterSpacing: ts.letterSpacing ?? 0,
+    textTransform: ts.textTransform ?? 'none',
+    overflow: 'hidden',
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+    textShadow: hasText ? '0 1px 3px rgba(0,0,0,0.8)' : 'none',
+  })
+
+  const vAlignToJustify = (va: string) =>
+    va === 'middle' ? 'center' : va === 'bottom' ? 'flex-end' : 'flex-start'
+
+  // The rolodex slot is SLOT_W × CARD_H = 180 × 255. A canvas card at
+  // its base card-zoom rendering is roughly ~280 px wide, so scale the
+  // text down to ~64% to keep proportions consistent with what the
+  // canvas shows. transformOrigin top-left + inflated child dimensions
+  // preserve correct layout under the scale.
+  const TEXT_SCALE = 0.64
+
+  return (
+    <div style={{
+      position: 'absolute',
+      inset: 0,
+      pointerEvents: 'none',
+      opacity,
+      overflow: 'hidden',
+      zIndex: 2,
+    }}>
+      <div style={{
+        position: 'absolute',
+        inset: 0,
+        padding: '4px 4px 10px 4px',
+        display: 'flex',
+        flexDirection: 'column',
+        boxSizing: 'border-box',
+        transform: `scale(${TEXT_SCALE})`,
+        transformOrigin: 'top left',
+        width:  `${100 / TEXT_SCALE}%`,
+        height: `${100 / TEXT_SCALE}%`,
+      }}>
+        <div style={{
+          flex: splitRatio,
+          display: 'flex',
+          flexDirection: 'column',
+          justifyContent: vAlignToJustify(headerStyle.vAlign),
+          minHeight: 0,
+          overflow: 'hidden',
+        }}>
+          <div style={textBlockStyle(headerStyle, headerBg, !!headerText)}>
+            {headerText || null}
+          </div>
+        </div>
+        <div style={{
+          flex: 1 - splitRatio,
+          display: 'flex',
+          flexDirection: 'column',
+          justifyContent: vAlignToJustify(bodyStyle.vAlign),
+          minHeight: 0,
+          overflow: 'hidden',
+        }}>
+          <div style={textBlockStyle(bodyStyle, bodyBg, !!bodyText)}>
+            {bodyText || null}
+          </div>
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -1097,23 +1239,23 @@ const RolodexSlot: React.FC<{
   //
   //    offset ≥ 1.0:        opacity 0 (card too far below, hasn't started
   //                          its transit toward active)
-  //    0.0 ≤ offset < 1.0:  fade IN  (linear, 0 → 1) — begins as the
-  //                          card starts moving from first-below toward
-  //                          active, full by the time it lands.
+  //    0.5 ≤ offset < 1.0:  fade IN  (linear, 0 → 1) — begins when the
+  //                          card starts moving toward active, reaches
+  //                          full opacity at the halfway point of the
+  //                          transit (twice as fast as a full-transit
+  //                          fade so the image lands quickly without
+  //                          feeling lazy).
+  //    0.0 ≤ offset < 0.5:  plateau (full opacity through second half
+  //                          of the inbound transit + landing).
   //   −1.0 ≤ offset < 0.0:  fade OUT (linear, 1 → 0) — begins as the
   //                          card starts leaving active, fully gone by
   //                          the time it lands at first-above.
   //    offset < −1.0:       opacity 0 (gone)
   //
-  // No plateau — the image peaks at exactly offset 0 (active) then
-  // immediately starts fading out. The longer fade windows (full 1.0
-  // wide each side) make the entire scroll transit feel like one
-  // continuous "image swap" rather than a snap.
-  //
   // Then multiplied by an expansion factor so super-collapsed shows no
   // image and the active image fades in over expansionFraction 0.15 → 0.35.
   const SCROLL_FADE_IN_START  =  1.0
-  const SCROLL_FADE_IN_END    =  0.0
+  const SCROLL_FADE_IN_END    =  0.5
   const SCROLL_PLATEAU_END    =  0.0
   const SCROLL_FADE_OUT_END   = -1.0
   const IMAGE_FADE_WINDOW     =  0.2
@@ -1219,18 +1361,23 @@ const RolodexSlot: React.FC<{
       }}
     >
       {/* Hero image — rendered BEFORE the gradient + content so it
-            sits at the back. Opacity is driven by imageCenterness
-            (staggered fade by offset + expansion; see comment above).
-            Super-collapsed = no images; full expansion = images on
-            active + below cards. Above-stack stays color-only at rest. */}
-      {heroImage && imageCenterness > 0.01 && (
-        <HeroImageLayer
-          heroImage={heroImage}
-          transform={group.cardHeroTransform}
-          opacity={imageCenterness}
-          borderRadius={6}
-        />
-      )}
+            sits at the back. Opacity = imageCenterness multiplied by
+            the user's saved cardHeroTransform.opacity (or HeroImageLayer's
+            default 0.7) so a card whose canvas representation blends
+            the image with its color at, say, 20 % renders the same
+            blend in the rolodex. Otherwise we'd whitewash the card
+            color with a full-opacity image. */}
+      {heroImage && imageCenterness > 0.01 && (() => {
+        const userOpacity = group.cardHeroTransform?.opacity ?? 0.7
+        return (
+          <HeroImageLayer
+            heroImage={heroImage}
+            transform={group.cardHeroTransform}
+            opacity={imageCenterness * userOpacity}
+            borderRadius={6}
+          />
+        )
+      })()}
       {/* Subtle top→bottom highlight gradient. The center version (lit=1)
             shows a slightly stronger top sheen + faint bottom darkening so
             the exposed body looks 3D; tucked cards get a fainter version. */}
@@ -1263,7 +1410,10 @@ const RolodexSlot: React.FC<{
       )}
       {/* Content lives in the top SLOT_PEEK_H "tab" region. Right-pad
             extra when deck-stripes are showing so the title's ellipsis
-            doesn't run under them. */}
+            doesn't run under them. The tab fades OUT as the full
+            preview (RolodexCardPreview) fades IN, so on the active
+            card at full expansion the canvas-style header replaces
+            this tab title rather than stacking with it. */}
       <div style={{
         position: 'absolute',
         top: 0,
@@ -1274,6 +1424,7 @@ const RolodexSlot: React.FC<{
         alignItems: 'center',
         padding: isDeck ? '0 18px 0 10px' : '0 10px',
         boxSizing: 'border-box',
+        opacity: 1 - imageCenterness,
       }}>
         <span style={{
           color: 'rgba(255,255,255,0.97)',
@@ -1286,6 +1437,11 @@ const RolodexSlot: React.FC<{
           flex: 1,
         }}>{group.name || 'Untitled'}</span>
       </div>
+      {/* Full canvas-style card preview — renders the group's saved
+            cardHeaderText + cardText with their styles, only on the
+            active card at sufficient expansion. Crossfades with the
+            tab title via opacity=imageCenterness. */}
+      <RolodexCardPreview group={group} opacity={imageCenterness} />
     </div>
   )
 }
