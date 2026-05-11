@@ -128,10 +128,17 @@ const PANEL_PAD = 4
 // 2px padding-top + 18px (close button tallest child) + 4px
 // padding-bottom + 1px borderBottom = 25.
 // Tree-mode indent per level. Each step pushes the card's LEFT edge
-// inward by this many pixels, leaving the right edge fixed — so cards
-// appear to tuck under their parent as depth increases. The leftColumn
-// width itself never changes; only the card narrows.
+// inward by this many pixels. The card keeps its full SLOT_W width —
+// so its RIGHT edge overhangs past the panel into the canvas area for
+// any non-zero indent. The slot-list wrapper uses clip-path to allow
+// horizontal overflow specifically for this overhang.
 const INDENT_STEP = 12
+// How far cards can overhang past the slot-list wrapper's right edge,
+// in pixels. Sets the clip-path's right inset (negative value =
+// extends the visible region rightward). 500 covers anything reasonable
+// — even at 40 indent levels (way more than ever happens) cards stay
+// within this allowance.
+const OVERHANG_ALLOWANCE = 500
 // LIST area is the visible viewport over the stack. Cards extend below it
 // (clipped by overflow) so the bottom of the stack reads as "more cards
 // continuing down" rather than ending abruptly. The compact value is the
@@ -759,14 +766,20 @@ export const CardRolodex: React.FC = () => {
               giving us the slide-under-cabinet effect when cards
               travel through the bottom edge. The base itself sits
               absolute inside, with a high z-index so it visually
-              hides any cards passing behind. */}
+              hides any cards passing behind.
+              clip-path replaces overflow:hidden + borderRadius:
+                - clips top/bottom at the wrapper edges (rounded BL/BR
+                  corners give the panel its rounded bottom)
+                - clips left at the wrapper's left edge
+                - EXTENDS the right edge by OVERHANG_ALLOWANCE so
+                  tree-mode indented cards can overhang past the panel
+                  width without being clipped at the right side. */}
           <div style={{
             position: 'relative',
             width: LEFTCOL_W,
             height: LIST_AREA_H + CABINET_BAR_H,
-            overflow: 'hidden',
-            borderBottomLeftRadius: CABINET_OUTER_RADIUS,
-            borderBottomRightRadius: CABINET_OUTER_RADIUS,
+            overflow: 'visible',
+            clipPath: `inset(0px -${OVERHANG_ALLOWANCE}px 0px 0px round 0px 0px ${CABINET_OUTER_RADIUS}px ${CABINET_OUTER_RADIUS}px)`,
           }}>
             {rows.length === 0 ? (
               <EmptyState onAdd={startPlacement} />
@@ -1021,12 +1034,13 @@ const RolodexSlot: React.FC<{
         position: 'absolute',
         // Cards sit centered inside the leftColumn — offset by WING_W so
         // the cabinet wings flank them on both sides. In tree mode each
-        // indent level pushes the LEFT edge inward by INDENT_STEP and
-        // narrows the card by the same amount (right edge stays fixed),
-        // so deeper-nested cards visually tuck under their parents.
+        // indent level pushes the LEFT edge inward by INDENT_STEP while
+        // keeping full SLOT_W width — so the card's RIGHT edge overhangs
+        // past the panel into the canvas area. The slot-list wrapper's
+        // clip-path allows that overhang (see OVERHANG_ALLOWANCE).
         left: WING_W + level * INDENT_STEP,
         top,
-        width: SLOT_W - level * INDENT_STEP,
+        width: SLOT_W,
         height: CARD_H,
         background: group.color,
         // Rounded on all four corners — now that CARD_H is tall enough
