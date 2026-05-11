@@ -601,6 +601,19 @@ export const CardRolodex: React.FC = () => {
   const visibleIndices: number[] = []
   for (let k = visibleStart; k <= visibleEnd; k++) visibleIndices.push(k)
 
+  // Deepest indent level among currently-rendered rows. Drives how far
+  // the cabinet base extends rightward so it meets the rightmost
+  // overhanging card (closing the gap that would otherwise sit between
+  // the cabinet's original right edge and the indented card's right
+  // edge). 0 when flat-mode / no indented cards → cabinet stays at
+  // its compact width.
+  let maxLevelInView = 0
+  for (const idx of visibleIndices) {
+    const r = rows[idx]
+    if (r && r.level > maxLevelInView) maxLevelInView = r.level
+  }
+  const cabinetRightExtension = maxLevelInView * INDENT_STEP
+
   const sizes = visibleIndices.map(k => cardSize(k - centerPosition, rolodexExpansion))
 
   // Cumulative card-top positions, anchor-pending.
@@ -872,17 +885,28 @@ export const CardRolodex: React.FC = () => {
               </>
             )}
             {/* Cabinet base — sits at the bottom of the slot-list
-                wrapper, full LEFTCOL_W width. Higher z-index than any
-                card (cards top out around 60) but compatible with the
-                cabinet wings/bar at z=200. Cards traveling past
-                LIST_AREA_H are still rendered (until they're clipped
-                at LIST_AREA_H + CABINET_BAR_H) but visually hidden
-                behind this strip — that's the slide-under effect.
+                wrapper. Higher z-index than any card (cards top out
+                around 60) but compatible with the cabinet wings/bar
+                at z=200. Cards traveling past LIST_AREA_H are still
+                rendered (until they're clipped at LIST_AREA_H +
+                CABINET_BAR_H) but visually hidden behind this strip
+                — that's the slide-under effect.
                 ALSO doubles as the drag handle that controls
                 rolodexExpansion — grab it and drag DOWN to grow the
                 active card slot (and the panel) so the card's hero
                 image / content reveals; drag UP to collapse back to
-                the compact tab-list view. */}
+                the compact tab-list view.
+                3D-BEVEL SHAPING: when indented cards overhang past
+                the panel's right edge (tree mode), the base extends
+                rightward at the TOP to meet the rightmost overhang,
+                then tapers back to the panel's original right edge
+                at the BOTTOM. Reads as a faux-3D shelf with the
+                front edge receding into the panel — visually closes
+                the gap that would otherwise show between the
+                rightmost overhanging card and the cabinet's right
+                edge. When there are no indented cards in view
+                (cabinetRightExtension = 0) the base is a clean
+                rectangle at its original width. */}
             <div
               onPointerDown={onExpandPointerDown}
               onPointerMove={onExpandPointerMove}
@@ -893,15 +917,22 @@ export const CardRolodex: React.FC = () => {
                 position: 'absolute',
                 left: 0,
                 top: LIST_AREA_H,
-                width: LEFTCOL_W,
+                width: LEFTCOL_W + cabinetRightExtension,
                 height: CABINET_BAR_H,
                 background: 'rgba(8,9,16,1)',
+                clipPath: cabinetRightExtension > 0
+                  ? `polygon(0 0, ${LEFTCOL_W + cabinetRightExtension}px 0, ${LEFTCOL_W}px ${CABINET_BAR_H}px, 0 ${CABINET_BAR_H}px)`
+                  : 'none',
                 zIndex: 200,
                 cursor: 'ns-resize',
                 touchAction: 'none',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
+                // Keep the grip pill centered on the ORIGINAL panel
+                // width (not the extended width) so it stays where
+                // it always sits regardless of indent depth.
+                paddingRight: cabinetRightExtension,
               }}
             >
               {/* Visible grip — a small horizontal pill so the user
