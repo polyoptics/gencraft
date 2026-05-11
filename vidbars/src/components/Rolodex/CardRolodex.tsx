@@ -602,17 +602,18 @@ export const CardRolodex: React.FC = () => {
   for (let k = visibleStart; k <= visibleEnd; k++) visibleIndices.push(k)
 
   // Deepest indent level among currently-rendered rows. Drives how far
-  // the cabinet base extends rightward so it meets the rightmost
-  // overhanging card (closing the gap that would otherwise sit between
-  // the cabinet's original right edge and the indented card's right
-  // edge). 0 when flat-mode / no indented cards → cabinet stays at
-  // its compact width.
+  // the cabinet base extends rightward — just enough to hug the right
+  // edge of the rightmost overhanging card with a tiny 1 px overlap
+  // (so there's no hairline gap between card and cabinet). 0 when
+  // flat-mode / no indented cards extend past the panel.
   let maxLevelInView = 0
   for (const idx of visibleIndices) {
     const r = rows[idx]
     if (r && r.level > maxLevelInView) maxLevelInView = r.level
   }
-  const cabinetRightExtension = maxLevelInView * INDENT_STEP
+  const rightmostCardRight = WING_W + maxLevelInView * INDENT_STEP + SLOT_W
+  const CABINET_CARD_OVERLAP = 1
+  const cabinetRightExtension = Math.max(0, rightmostCardRight + CABINET_CARD_OVERLAP - LEFTCOL_W)
 
   const sizes = visibleIndices.map(k => cardSize(k - centerPosition, rolodexExpansion))
 
