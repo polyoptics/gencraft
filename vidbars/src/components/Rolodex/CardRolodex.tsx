@@ -102,9 +102,18 @@ const FALLOFF_RADIUS_BELOW = 1.0
 // expansion's interaction with cards below smooth (the active's growth
 // pushes them down, but they also gain a temporary bell contribution
 // during cross-center tweens). Just enough above-radius to avoid a
-// discontinuity in size when the active card crosses center.
+// discontinuity in size when the active card crosses center. These are
+// the BASE radii used at expansion = 0; they widen as expansion grows
+// to dampen the cross-center "bump" (see EXPANSION_RADIUS_GROWTH).
 const EXPANSION_RADIUS_ABOVE = 0.5
 const EXPANSION_RADIUS_BELOW = 1.0
+// How much the expansion bell radii widen at MAX_EXPANSION. At
+// expansion = 0 the radii stay at their tight base values (upper cards
+// stay tucked). At full expansion they grow by this amount, spreading
+// the active card's growth across more neighboring slots — each card's
+// per-slot size change shrinks, so the cross-center motion feels less
+// jerky. Effectively a "smoothness fades in with expansion" knob.
+const EXPANSION_RADIUS_GROWTH = 1.0
 // Per-frame easing factor for the rAF tween toward target center.
 // 0.065 settles in ~550–650ms — between snappy and drawn-out.
 // Lower = more languorous; higher = snappier.
@@ -165,15 +174,16 @@ function bellFraction(offset: number): number {
 }
 
 /** Bell used specifically for the user-controlled rolodex expansion. Same
- *  shape as bellFraction but with a narrower above-radius — so when the
- *  user drags the bottom to expand the active card, the cards above
- *  center barely receive any of that expansion bonus. The upper card
- *  tabs stay tucked together at their normal size, letting their headers
- *  remain visible even at full expansion. Below center stays normal so
- *  the active card's expansion smoothly hands off to the next card
- *  during a scroll-induced tween. */
-function bellFractionExpansion(offset: number): number {
-  const radius = offset >= 0 ? EXPANSION_RADIUS_BELOW : EXPANSION_RADIUS_ABOVE
+ *  shape as bellFraction but the falloff radii are passed in so the
+ *  parent can widen them as expansion grows — at low expansion the
+ *  bell is tight (upper cards stay tucked); at high expansion the bell
+ *  is wide (smooth cross-center motion). */
+function bellFractionExpansion(
+  offset: number,
+  radiusAbove: number,
+  radiusBelow: number,
+): number {
+  const radius = offset >= 0 ? radiusBelow : radiusAbove
   const x = Math.abs(offset)
   if (x >= radius) return 0
   return (Math.cos(x * Math.PI / radius) + 1) / 2
@@ -188,17 +198,23 @@ function bellFractionExpansion(offset: number): number {
  *      existing asymmetric radii) so both upper and lower cards get the
  *      gentle near-center growth.
  *
- *   2. expansion * bellFractionExpansion(offset) — the user-controlled
- *      drag-to-expand bonus. Applied with a NARROW above-radius so cards
- *      above the active are essentially unaffected as the user expands,
- *      while cards at/below the active get the bonus smoothly.
+ *   2. expansion * bellFractionExpansion(offset, radii...) — the user-
+ *      controlled drag-to-expand bonus. Applied with dynamic radii
+ *      passed in by the caller — these widen as expansion grows so the
+ *      cross-center motion stays smooth even when the active card is
+ *      at full card-height.
  *
  *  The card's TOP position is the prefix-sum of sizes from card 0 up to
  *  itself, anchored so position(P) lands at the list area's center. */
-function cardSize(offsetFromCenter: number, expansion: number = 0): number {
+function cardSize(
+  offsetFromCenter: number,
+  expansion: number = 0,
+  expansionRadiusAbove: number = EXPANSION_RADIUS_ABOVE,
+  expansionRadiusBelow: number = EXPANSION_RADIUS_BELOW,
+): number {
   return SLOT_PEEK_H
     + CENTER_BONUS * bellFraction(offsetFromCenter)
-    + expansion * bellFractionExpansion(offsetFromCenter)
+    + expansion * bellFractionExpansion(offsetFromCenter, expansionRadiusAbove, expansionRadiusBelow)
 }
 
 // ─── Tree / flat list builders ─────────────────────────────────
@@ -361,6 +377,16 @@ export const CardRolodex: React.FC = () => {
   // SLOT_PEEK_H + CENTER_BONUS; at full expansion it becomes
   // SLOT_PEEK_H + CENTER_BONUS + expansion = CARD_H.
   const LIST_AREA_H = LIST_AREA_H_COMPACT + rolodexExpansion
+  // Stutter dampening — as expansion grows, widen the expansion bell's
+  // radii so the active card's growth is spread across more
+  // neighboring slots. Each card crosses fewer pixels of size delta per
+  // slot of scroll, so the visual "bump" as a card transits center
+  // gets smoother the bigger the panel gets. At expansion=0 these
+  // collapse back to the base radii (so the upper-cards-stay-tucked
+  // behaviour at compact mode is unchanged).
+  const expansionFraction = MAX_EXPANSION > 0 ? rolodexExpansion / MAX_EXPANSION : 0
+  const expansionRadiusAbove = EXPANSION_RADIUS_ABOVE + EXPANSION_RADIUS_GROWTH * expansionFraction
+  const expansionRadiusBelow = EXPANSION_RADIUS_BELOW + EXPANSION_RADIUS_GROWTH * expansionFraction
   const groups = useBoardsStore(s => s.groups)
   const boards = useBoardsStore(s => s.boards)
   const jumpToGroup = useCanvasStore(s => s.jumpToGroup)
@@ -604,7 +630,9 @@ export const CardRolodex: React.FC = () => {
   // (cabinet right-edge tracking is computed below, after rawTops /
   // yShift are known — see "cabinetEdgeLevel" further down.)
 
-  const sizes = visibleIndices.map(k => cardSize(k - centerPosition, rolodexExpansion))
+  const sizes = visibleIndices.map(k =>
+    cardSize(k - centerPosition, rolodexExpansion, expansionRadiusAbove, expansionRadiusBelow),
+  )
 
   // Cumulative card-top positions, anchor-pending.
   const rawTops: number[] = []
