@@ -22,6 +22,7 @@ import { useBoardsStore } from '../../store/boardsStore'
 import type { ProjectGroup, BoardData } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
+import { useLinkDragStore } from '../../store/linkDragStore'
 import { HeroImageLayer } from '../Layers/HeroImageLayer'
 import { edgeColorFromHex } from '../../utils/colorUtils'
 import { getFirstImageUrl } from '../../types/bar'
@@ -142,12 +143,29 @@ const MAX_STEP_PER_FRAME = 0.35
 // sluggish; activeSize quadruples from compact (64) to full (255) so a
 // full proportional slowdown would be 4× and read as molasses.
 const EXPANSION_SLOWDOWN_FACTOR = 1.6
-// Padding between the outer panel border and the leftColumn content
-// (header / slot list / cabinet base). 1 px leaves just a hairline of
-// the panel's dark background visible against the border, so the
-// border reads as a tight "highlight" hugging the cabinet rather than
-// a chunky frame.
-const PANEL_PAD = 1
+// Padding between the outer panel border and the leftColumn content.
+// 0 lets the FRAME (header + side rails + cabinet base) touch the
+// panel's rounded outer edges directly — they ARE the panel's visible
+// silhouette, no separate border line needed.
+const PANEL_PAD = 0
+// Colors for the rolodex "frame" — the dark casing that wraps the
+// cards on all four sides (header at top, side rails on the left/
+// right, cabinet at bottom). Slightly lighter than pure black so it
+// reads as a warm dark rather than a stark hole, and harmonises with
+// the panel-bg dark blue. PANEL_BG fills the card area itself
+// (visible in the gaps between cards).
+const FRAME_COLOR  = 'rgba(13,15,25,1)'
+const PANEL_BG     = 'rgba(20,22,38,0.97)'
+const PANEL_RADIUS = 8
+// Shared frame-edge shadows. The inset highlight is a 1-px warm-light
+// line that picks up the inside edge of each frame piece — reads as a
+// gentle bevel rather than a hard transition. The outer shadow lets
+// the frame cast a subtle drop onto the cards behind, so cards sit a
+// bit "sunken" into the casing instead of floating against it. Each
+// piece composes its own multi-shadow value pointing in the right
+// direction (header → down, rails → inward, cabinet → up).
+const FRAME_HIGHLIGHT = 'rgba(255,255,255,0.05)'
+const FRAME_SHADOW    = 'rgba(0,0,0,0.45)'
 // Header strip height was previously used as a marginTop on a separate
 // preview pane. The pane has been folded into the in-row expansion
 // (cards grow via the drag handle), so that constant is no longer
@@ -173,11 +191,29 @@ const OVERHANG_ALLOWANCE = 500
 // = LIST_AREA_H_COMPACT + rolodexExpansion (panel grows downward when the
 // user drags the bottom).
 const LIST_AREA_H_COMPACT = SLOT_PEEK_H * (VISIBLE_RADIUS * 2 + 1)
-// Maximum expansion in pixels — when reached, the active slot's visible
-// size equals CARD_H (the full card height), so the user sees the entire
-// card. Beyond that the slot can't reveal more content. Expansion of 0
-// is "super-collapsed": active card flat with the peeks, no images.
-const MAX_EXPANSION = CARD_H - SLOT_PEEK_H
+// Small permanent height bonus on the active card even at the
+// "super-collapsed" end of the expansion range, so the user can
+// always tell which row is selected without an image / size jump.
+// 4 px gives a clear "lift" while keeping the list reading as
+// uniform tabs.
+const COLLAPSED_BONUS = 4
+// Maximum expansion in pixels that affects the ACTIVE CARD's height.
+// At rolodexExpansion = MAX_EXPANSION, activeSize equals CARD_H — the
+// active fills its full height and can't reveal more content.
+// activeSize = SLOT_PEEK_H + COLLAPSED_BONUS + clamp(0, MAX_EXPANSION,
+// rolodexExpansion).
+const MAX_EXPANSION = CARD_H - SLOT_PEEK_H - COLLAPSED_BONUS
+// Past MAX_EXPANSION the cabinet keeps moving down (LIST_AREA_H keeps
+// growing), but only to REVEAL MORE BELOW-STACK CARDS — bell amplitude,
+// image fade, and active size all stay at their MAX_EXPANSION values.
+// This caps how far the user can drag past full so the panel never
+// gets absurdly tall.
+const PANEL_GROWTH_MAX = LIST_AREA_H_COMPACT
+const MAX_EXPANSION_TOTAL = MAX_EXPANSION + PANEL_GROWTH_MAX
+// Negative expansion = drag-to-CLOSE: the panel shrinks toward zero
+// height, eventually leaving just the header above the cabinet base.
+// LIST_AREA_H clamps at 0 when rolodexExpansion reaches MIN_EXPANSION.
+const MIN_EXPANSION = -LIST_AREA_H_COMPACT
 
 // ─── Tree / flat list builders ─────────────────────────────────
 
@@ -268,7 +304,11 @@ function buildFlatList(groups: ProjectGroup[], sortMode: 'creation' | 'alphabeti
  *     anchor was rewired to itself shows up as a fresh root deck —
  *     correct behavior, since the canvas treats it as standalone.)
  */
-function buildTreeList(groups: ProjectGroup[], sortMode: 'creation' | 'alphabetical'): RolodexRow[] {
+function buildTreeList(
+  groups: ProjectGroup[],
+  sortMode: 'creation' | 'alphabetical',
+  collapsedDeckIds: Set<string>,
+): RolodexRow[] {
   const childMap = new Map<string, ProjectGroup[]>()
   for (const g of groups) {
     if (!g.deckAnchorId || g.deckAnchorId === g.id) continue
@@ -286,6 +326,10 @@ function buildTreeList(groups: ProjectGroup[], sortMode: 'creation' | 'alphabeti
     const children = childMap.get(g.id) ?? []
     out.push({ group: g, level, isDeck: children.length > 0 })
     if (children.length === 0) return
+    // Collapsed deck — emit the deck row itself but skip its children.
+    // Sub-decks deeper inside a collapsed deck are also skipped via
+    // this short-circuit (no recursion).
+    if (collapsedDeckIds.has(g.id)) return
     // Children inside a deck always render in deck-fan order
     // (deckOffsetX ascending), so the Rolodex slot list mirrors what
     // the user sees when they fan the deck on canvas. The user's
@@ -331,16 +375,24 @@ export const CardRolodex: React.FC = () => {
   const rolodexExpansion = useCanvasStore(s => s.rolodexExpansion)
   const setRolodexExpansion = useCanvasStore(s => s.setRolodexExpansion)
 
-  // Dynamic list-area height — grows with rolodexExpansion (drag-handle
-  // pulls the panel taller). The expansion enlarges the active card's
-  // "slot" (the gap between the above and below stacks): at
-  // super-collapsed (expansion=0) the active is just SLOT_PEEK_H tall;
-  // at full expansion it equals CARD_H.
-  const LIST_AREA_H = LIST_AREA_H_COMPACT + rolodexExpansion
-  // 0 (super-collapsed) → 1 (fully expanded). Drives hero-image opacity
-  // (staggered fade by offset), the bell anticipation amplitude and
-  // radius, and the below-stack overlap.
-  const expansionFraction = MAX_EXPANSION > 0 ? rolodexExpansion / MAX_EXPANSION : 0
+  // List-area height grows / shrinks linearly with rolodexExpansion,
+  // clamped to 0 at the closed extreme. The drag handle moves the
+  // bottom of the panel by exactly the drag delta — drag UP past
+  // super-collapsed and the panel shrinks toward closed; drag DOWN
+  // past MAX_EXPANSION and the panel keeps growing to reveal more
+  // below-stack cards.
+  const LIST_AREA_H = Math.max(0, LIST_AREA_H_COMPACT + rolodexExpansion)
+  // activeGrowth = the portion of rolodexExpansion that contributes
+  // to the active card's height (capped at MAX_EXPANSION). Past that
+  // the user is in "panel growth" territory — only the panel gets
+  // taller, the active card stays at CARD_H.
+  const activeGrowth = Math.max(0, Math.min(MAX_EXPANSION, rolodexExpansion))
+  // 0 (super-collapsed or closed) → 1 (active fully grown). Drives
+  // hero-image opacity (staggered fade by offset), the bell
+  // anticipation amplitude / radius, the below-stack overlap, and
+  // the tween-rate slowdown. Past MAX_EXPANSION this stays at 1 so
+  // all the visual effects freeze while the panel keeps growing.
+  const expansionFraction = MAX_EXPANSION > 0 ? activeGrowth / MAX_EXPANSION : 0
   const groups = useBoardsStore(s => s.groups)
   const boards = useBoardsStore(s => s.boards)
   const jumpToGroup = useCanvasStore(s => s.jumpToGroup)
@@ -415,6 +467,27 @@ export const CardRolodex: React.FC = () => {
     dragOffsetRef.current = null
   }, [])
 
+  // Double-click the header to toggle the panel between CLOSED
+  // (rolodexExpansion = MIN_EXPANSION; only header + cabinet visible)
+  // and a previous open state. If there's no previous state stored,
+  // restore to the default "compact" expansion (= 34, the historical
+  // popped-active no-images point).
+  const previousExpansionRef = useRef<number | null>(null)
+  const DEFAULT_OPEN_EXPANSION = 34
+  const onHeaderDoubleClick = useCallback((e: React.MouseEvent) => {
+    // Buttons own their own clicks (toggle view / sort / close).
+    if ((e.target as HTMLElement).closest('button')) return
+    const current = useCanvasStore.getState().rolodexExpansion
+    if (current <= MIN_EXPANSION) {
+      // Re-open: restore last open state, or fall back to compact.
+      setRolodexExpansion(previousExpansionRef.current ?? DEFAULT_OPEN_EXPANSION)
+    } else {
+      // Close: remember current, then collapse to MIN.
+      previousExpansionRef.current = current
+      setRolodexExpansion(MIN_EXPANSION)
+    }
+  }, [setRolodexExpansion])
+
   // ── Bottom-edge expansion drag ─────────────────────────────────
   // The cabinet base doubles as a vertical-resize handle. Pointer-down
   // captures the start Y + start expansion value; pointer-move computes
@@ -432,7 +505,11 @@ export const CardRolodex: React.FC = () => {
     if (!expandDragRef.current) return
     e.preventDefault()
     const dy = e.clientY - expandDragRef.current.startY
-    const next = Math.max(0, Math.min(MAX_EXPANSION, expandDragRef.current.startExpansion + dy))
+    // Allow the full range: MIN_EXPANSION (drag UP to close the panel)
+    // through MAX_EXPANSION (active reaches CARD_H) and beyond up to
+    // MAX_EXPANSION_TOTAL (drag DOWN further to reveal more below
+    // cards — active stays at CARD_H, panel just grows).
+    const next = Math.max(MIN_EXPANSION, Math.min(MAX_EXPANSION_TOTAL, expandDragRef.current.startExpansion + dy))
     setRolodexExpansion(next)
   }, [setRolodexExpansion])
   const onExpandPointerUp = useCallback((e: React.PointerEvent) => {
@@ -446,11 +523,14 @@ export const CardRolodex: React.FC = () => {
   // members nested by indent level, then standalones at the end. The
   // sortMode is applied to siblings within each branch. Operates on
   // visibleGroups so phantom groups never reach the builders.
+  const collapsedDeckIds = useCanvasStore(s => s.rolodexCollapsedDeckIds)
+  const toggleDeckCollapsed = useCanvasStore(s => s.toggleRolodexDeckCollapsed)
+  const collapsedDeckIdSet = useMemo(() => new Set(collapsedDeckIds), [collapsedDeckIds])
   const rows = useMemo(() => (
     view === 'tree'
-      ? buildTreeList(visibleGroups, sortMode)
+      ? buildTreeList(visibleGroups, sortMode, collapsedDeckIdSet)
       : buildFlatList(visibleGroups, sortMode)
-  ), [visibleGroups, sortMode, view])
+  ), [visibleGroups, sortMode, view, collapsedDeckIdSet])
 
   // Max indent depth across the ENTIRE list (not just visible rows).
   // Drives the panel's right-edge extension so the header / outer
@@ -462,6 +542,24 @@ export const CardRolodex: React.FC = () => {
     () => rows.reduce((m, r) => (r.level > m ? r.level : m), 0),
     [rows],
   )
+
+  // Deck-boundary spacing — in TREE view, add a small extra gap each
+  // time the list crosses from one top-level deck/standalone into
+  // the next. boundaryShifts[i] is the cumulative extra Y added by
+  // all boundaries between row 0 and row i, used as a per-row offset
+  // on top of the two-stack positionForOffset value.
+  const DECK_BOUNDARY_GAP = 8
+  const boundaryShifts = useMemo(() => {
+    const shifts: number[] = []
+    let cum = 0
+    for (let i = 0; i < rows.length; i++) {
+      if (i > 0 && view === 'tree' && rows[i].level === 0) {
+        cum += DECK_BOUNDARY_GAP
+      }
+      shifts.push(cum)
+    }
+    return shifts
+  }, [rows, view])
 
   // ── Smooth-scroll center model ─────────────────────────────────
   //
@@ -504,7 +602,12 @@ export const CardRolodex: React.FC = () => {
     // handle to resize. expansionFraction = 0 (compact) → slowdown = 1
     // (unchanged); = 1 (full) → slowdown = EXPANSION_SLOWDOWN_FACTOR.
     const expansion = useCanvasStore.getState().rolodexExpansion
-    const expansionFraction = MAX_EXPANSION > 0 ? expansion / MAX_EXPANSION : 0
+    // Use the ACTIVE-GROWTH fraction (clamped 0..1) so negative
+    // expansion (panel closing) and post-MAX_EXPANSION (panel growth
+    // past full) both freeze the slowdown at the same value rather
+    // than feeding the formula a value outside [0, 1].
+    const activeGrowth = Math.max(0, Math.min(MAX_EXPANSION, expansion))
+    const expansionFraction = MAX_EXPANSION > 0 ? activeGrowth / MAX_EXPANSION : 0
     const slowdown = 1 + (EXPANSION_SLOWDOWN_FACTOR - 1) * expansionFraction
     const easing = TWEEN_EASE / slowdown
     const cap = MAX_STEP_PER_FRAME / slowdown
@@ -642,7 +745,10 @@ export const CardRolodex: React.FC = () => {
   // the below stack reads as a longer, gentler ramp. Cards beyond the
   // bell zone stay uniformly spaced because the bell has fully
   // integrated by then.
-  const activeSize = SLOT_PEEK_H + rolodexExpansion
+  // SLOT_PEEK_H baseline + permanent COLLAPSED_BONUS (so the active
+  // is always at least 2 px taller than peeks even at super-collapsed)
+  // + activeGrowth (capped at MAX_EXPANSION). Total maxes at CARD_H.
+  const activeSize = SLOT_PEEK_H + COLLAPSED_BONUS + activeGrowth
 
   // Anticipation bell parameters — both the RADIUS and the AMPLITUDE
   // widen linearly with expansion so the swell at full expansion is
@@ -703,10 +809,66 @@ export const CardRolodex: React.FC = () => {
   // entirely to growing the active card downward, not to shifting it.
   // ACTIVE_LIFT_SLOTS lifts the active above mid-panel so there's room
   // to see context above without burying the cards below.
-  const anchorY = LIST_AREA_H_COMPACT / 2 - SLOT_PEEK_H / 2 - ACTIVE_LIFT_SLOTS * SLOT_PEEK_H
+  //
+  // Two CLAMPS pull the anchor away from anchorYBase at the list's
+  // extremes:
+  //
+  //   TOP CLAMP (engaged when topTarget < anchorYBase, i.e. fewer than
+  //   ~ACTIVE_LIFT_SLOTS cards exist above): pulls anchorY UP so the
+  //   above-stack cards stack tightly between the header and the
+  //   active, with no empty region. anchorY = numCardsAbove × peek.
+  //
+  //   BOTTOM CLAMP (engaged when bottomTarget > anchorYBase, i.e.
+  //   fewer than ~(LIST_AREA_H − anchorYBase − activeSize)/peek cards
+  //   exist below): pushes anchorY DOWN so the below-stack and active
+  //   sit tightly above the cabinet, no empty region below.
+  //
+  // For long lists the two clamps are mutually exclusive — only the
+  // relevant one engages near each end, and the middle just uses
+  // anchorYBase. For VERY short lists where both can engage at once,
+  // we lerp between top and bottom targets by scroll fraction so the
+  // active glides smoothly from top → bottom as the user scrolls.
+  const anchorYBase = LIST_AREA_H_COMPACT / 2 - SLOT_PEEK_H / 2 - ACTIVE_LIFT_SLOTS * SLOT_PEEK_H
+  const numCardsAbove = Math.max(0, centerPosition)
+  const numCardsBelow = Math.max(0, (rows.length - 1) - centerPosition)
+  const topTarget    = numCardsAbove * SLOT_PEEK_H
+  const bottomTarget = LIST_AREA_H - activeSize - numCardsBelow * SLOT_PEEK_H
+  const topClampEngaged    = topTarget < anchorYBase
+  const bottomClampEngaged = bottomTarget > anchorYBase
+  let anchorY: number
+  if (topClampEngaged && bottomClampEngaged) {
+    // Short list — interpolate between targets so the transition
+    // through the list stays continuous, no jumps.
+    const fraction = rows.length > 1 ? centerPosition / (rows.length - 1) : 0
+    anchorY = topTarget + fraction * (bottomTarget - topTarget)
+  } else if (topClampEngaged) {
+    anchorY = topTarget
+  } else if (bottomClampEngaged) {
+    anchorY = bottomTarget
+  } else {
+    anchorY = anchorYBase
+  }
 
-  // Final top position for each visible card.
-  const tops = visibleIndices.map(k => anchorY + positionForOffset(k - centerPosition))
+  // Interpolated deck-boundary shift at the fractional centerPosition,
+  // used as the reference point so the ACTIVE card's effective shift
+  // is 0 (stays at anchorY) while other cards get +/− adjusted by the
+  // number of deck boundaries that lie between them and the active.
+  // Linear interpolation keeps the shift continuous through scroll
+  // transits across boundaries (no jumps).
+  const Pfloor_for_shift = Math.max(0, Math.min(rows.length - 1, Math.floor(centerPosition)))
+  const Pfrac_for_shift = Math.max(0, Math.min(1, centerPosition - Pfloor_for_shift))
+  const centerBoundaryShift = (() => {
+    const lo = boundaryShifts[Pfloor_for_shift] ?? 0
+    const hi = boundaryShifts[Pfloor_for_shift + 1] ?? lo
+    return lo + Pfrac_for_shift * (hi - lo)
+  })()
+
+  // Final top position for each visible card — base two-stack position
+  // plus this card's deck-boundary delta relative to the active.
+  const tops = visibleIndices.map(k => {
+    const cardShift = boundaryShifts[k] ?? 0
+    return anchorY + positionForOffset(k - centerPosition) + (cardShift - centerBoundaryShift)
+  })
 
   // "Sizes" array — the visible tab height of each card (= gap to the
   // next card's top, since cards stack tucked-under each other). Kept
@@ -808,11 +970,19 @@ export const CardRolodex: React.FC = () => {
           position: 'fixed',
           left: rolodexPos.x,
           top: rolodexPos.y,
-          background: 'rgba(20,22,38,0.96)',
-          border: '1px solid rgba(255,255,255,0.06)',
-          borderRadius: 8,
+          // Panel-bg fills the card area (visible between cards). The
+          // FRAME (header + side rails + cabinet) sits in front of this
+          // and forms the panel's visible silhouette.
+          background: PANEL_BG,
+          borderRadius: PANEL_RADIUS,
           padding: PANEL_PAD,
-          boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
+          // overflow:hidden lets the FRAME's square corners be clipped
+          // by the panel's rounded outer corners. Removes the need for
+          // a separate outer border line.
+          overflow: 'hidden',
+          // Drop shadow replaces the role the old hairline border was
+          // playing — separates the panel from the canvas behind it.
+          boxShadow: '0 10px 28px rgba(0,0,0,0.6), 0 2px 6px rgba(0,0,0,0.5)',
           display: 'flex',
           flexDirection: 'row',
           alignItems: 'flex-start',
@@ -835,15 +1005,18 @@ export const CardRolodex: React.FC = () => {
           flexDirection: 'column',
           gap: 0,
         }}>
-          {/* Header — also acts as the drag handle for the whole panel.
-              Pointer events on buttons short-circuit the drag (see
-              onHeaderPointerDown), so the close + sort icons still click
-              normally. */}
+          {/* Header — top of the FRAME. Solid frame color, drag handle
+              for the whole panel. Pointer events on buttons short-
+              circuit the drag (see onHeaderPointerDown), so the close
+              and sort icons still click normally. Double-click toggles
+              the panel between closed (MIN_EXPANSION) and a previous
+              open state. */}
           <div
             onPointerDown={onHeaderPointerDown}
             onPointerMove={onHeaderPointerMove}
             onPointerUp={onHeaderPointerUp}
             onPointerCancel={onHeaderPointerUp}
+            onDoubleClick={onHeaderDoubleClick}
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -851,10 +1024,16 @@ export const CardRolodex: React.FC = () => {
               // Horizontal padding = WING_W so the title's left edge and the
               // icons' right edge line up with the cards' left/right edges
               // below (cards are inset by WING_W inside the leftColumn).
-              padding: `2px ${WING_W}px 4px`,
-              borderBottom: '1px solid rgba(255,255,255,0.05)',
+              padding: `4px ${WING_W}px 5px`,
+              background: FRAME_COLOR,
+              // Inset highlight on the bottom inside edge (warm hairline
+              // separating header from cards) + outer drop shadow
+              // pointing down so the header casts onto the cards below.
+              boxShadow: `inset 0 -1px 0 ${FRAME_HIGHLIGHT}, 0 3px 6px -1px ${FRAME_SHADOW}`,
               cursor: 'move',
               touchAction: 'none',
+              position: 'relative',
+              zIndex: 1,
             }}
           >
             <span style={{
@@ -894,6 +1073,37 @@ export const CardRolodex: React.FC = () => {
             overflow: 'visible',
             clipPath: `inset(0px -${OVERHANG_ALLOWANCE}px 0px 0px round 0px 0px ${CABINET_OUTER_RADIUS}px ${CABINET_OUTER_RADIUS}px)`,
           }}>
+            {/* Side rails — vertical FRAME strips on the left and right
+                  of the card column, running the full panel height (under
+                  the header, down to the cabinet base). Same color as the
+                  header and cabinet so the four pieces read as one frame
+                  wrapping the cards. Each rail has an inset highlight on
+                  its INNER edge (the side facing the cards) plus a
+                  subtle outward shadow so the rail casts a drop onto
+                  the card area. The right rail sits at the FAR right of
+                  the extended panel via right:-panelRightExtension. */}
+            <div style={{
+              position: 'absolute',
+              left: 0,
+              top: 0,
+              width: WING_W,
+              height: LIST_AREA_H + CABINET_BAR_H,
+              background: FRAME_COLOR,
+              boxShadow: `inset -1px 0 0 ${FRAME_HIGHLIGHT}, 3px 0 6px -1px ${FRAME_SHADOW}`,
+              zIndex: 150,
+              pointerEvents: 'none',
+            }} />
+            <div style={{
+              position: 'absolute',
+              right: -panelRightExtension,
+              top: 0,
+              width: WING_W,
+              height: LIST_AREA_H + CABINET_BAR_H,
+              background: FRAME_COLOR,
+              boxShadow: `inset 1px 0 0 ${FRAME_HIGHLIGHT}, -3px 0 6px -1px ${FRAME_SHADOW}`,
+              zIndex: 150,
+              pointerEvents: 'none',
+            }} />
             {rows.length === 0 ? (
               <EmptyState onAdd={startPlacement} />
             ) : (
@@ -911,9 +1121,12 @@ export const CardRolodex: React.FC = () => {
                       top={tops[i]}
                       zIndex={idx + 1}
                       heroImage={heroImageMap.get(row.group.id) ?? null}
-                      expansionFraction={rolodexExpansion / MAX_EXPANSION}
+                      expansionFraction={expansionFraction}
+                      isCollapsed={collapsedDeckIdSet.has(row.group.id)}
+                      showCaret={view === 'tree' && row.isDeck}
                       onClick={() => onSlotClick(idx)}
                       onDoubleClick={() => onSlotDoubleClick(row.group)}
+                      onToggleCollapsed={() => toggleDeckCollapsed(row.group.id)}
                     />
                   )
                 })}
@@ -939,7 +1152,7 @@ export const CardRolodex: React.FC = () => {
                       top: cabinetFloorTop,
                       width: WING_W,
                       height: cabinetH,
-                      background: 'rgba(8,9,16,1)',
+                      background: FRAME_COLOR,
                       borderTopLeftRadius: CABINET_OUTER_RADIUS,
                       zIndex: 200,
                       pointerEvents: 'none',
@@ -956,7 +1169,7 @@ export const CardRolodex: React.FC = () => {
                       top: cabinetFloorTop,
                       width: WING_W,
                       height: cabinetH,
-                      background: 'rgba(8,9,16,1)',
+                      background: FRAME_COLOR,
                       borderTopRightRadius: CABINET_OUTER_RADIUS,
                       zIndex: 200,
                       pointerEvents: 'none',
@@ -981,7 +1194,7 @@ export const CardRolodex: React.FC = () => {
                         top: cabinetFloorTop + notchH,
                         width: SLOT_W + panelRightExtension,
                         height: barH,
-                        background: 'rgba(8,9,16,1)',
+                        background: FRAME_COLOR,
                         borderTopLeftRadius: notchH > 0 ? CABINET_NOTCH_RADIUS : 0,
                         borderTopRightRadius: notchH > 0 ? CABINET_NOTCH_RADIUS : 0,
                         boxShadow: 'inset 0 6px 10px -6px rgba(0,0,0,0.7)',
@@ -1022,7 +1235,12 @@ export const CardRolodex: React.FC = () => {
                 top: LIST_AREA_H,
                 width: LEFTCOL_W + panelRightExtension,
                 height: CABINET_BAR_H,
-                background: 'rgba(8,9,16,1)',
+                background: FRAME_COLOR,
+                // Inset highlight on the TOP inside edge of the base
+                // (a warm hairline picking up the bar's top edge) +
+                // outer shadow pointing UP so the base casts onto the
+                // cards above it.
+                boxShadow: `inset 0 1px 0 ${FRAME_HIGHLIGHT}, 0 -3px 6px -1px ${FRAME_SHADOW}`,
                 zIndex: 200,
                 cursor: 'ns-resize',
                 touchAction: 'none',
@@ -1221,9 +1439,16 @@ const RolodexSlot: React.FC<{
    *  image is more visible at higher expansion, and to fade in the
    *  preview-style header text + summary overlays. */
   expansionFraction: number
+  /** True if this deck-row's children are currently hidden (caret-collapsed
+   *  in the tree view). Only meaningful when isDeck && in tree view. */
+  isCollapsed: boolean
+  /** True if a caret toggle should be rendered (only for deck rows in tree
+   *  view). Click toggles isCollapsed for this deck. */
+  showCaret: boolean
   onClick: () => void
   onDoubleClick: () => void
-}> = ({ group, level, isDeck, offset, top, zIndex, heroImage, expansionFraction, onClick, onDoubleClick }) => {
+  onToggleCollapsed: () => void
+}> = ({ group, level, isDeck, offset, top, zIndex, heroImage, expansionFraction, isCollapsed, showCaret, onClick, onDoubleClick, onToggleCollapsed }) => {
   const [isHovered, setIsHovered] = useState(false)
 
   // Continuous "centerness" used to tween visual emphasis (rim, shadow,
@@ -1319,15 +1544,57 @@ const RolodexSlot: React.FC<{
   shadows.push(`0 ${downShadowOffset}px ${downShadowBlur}px -1px rgba(0,0,0,${downShadowAlpha})`)
   shadows.push(`0 2px 4px rgba(0,0,0,${contactAlpha})`)
 
+  // Drag-to-link: pointerdown + small move starts a link-drag operation
+  // (mirroring the canvas chip / plus-affordance behaviour). If the
+  // pointer is released without moving past the threshold, the normal
+  // onClick fires; if a drag started, draggedRef suppresses the click
+  // that the browser may still synthesize.
+  const draggedRef = useRef(false)
+  const onSlotPointerDown = useCallback((e: React.PointerEvent) => {
+    if (e.button !== 0) return
+    const startX = e.clientX
+    const startY = e.clientY
+    const DRAG_THRESHOLD_PX = 5
+    let dragStarted = false
+    const onMove = (ev: PointerEvent) => {
+      if (dragStarted) return
+      const dx = ev.clientX - startX
+      const dy = ev.clientY - startY
+      if (Math.hypot(dx, dy) > DRAG_THRESHOLD_PX) {
+        dragStarted = true
+        draggedRef.current = true
+        useLinkDragStore.getState().begin(group.id, group.color, ev.clientX, ev.clientY)
+        // Cleanup our temporary listeners — LinkDragOverlay's window
+        // listeners take over from here.
+        window.removeEventListener('pointermove', onMove)
+        window.removeEventListener('pointerup', onUp)
+      }
+    }
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }, [group.id, group.color])
+  const handleSlotClick = useCallback(() => {
+    if (draggedRef.current) {
+      draggedRef.current = false
+      return
+    }
+    onClick()
+  }, [onClick])
+
   return (
     <div
-      onClick={onClick}
+      onPointerDown={onSlotPointerDown}
+      onClick={handleSlotClick}
       onDoubleClick={onDoubleClick}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
       title={lit > 0.5
-        ? `${group.name || 'Untitled'} — double-click to pan canvas`
-        : `${group.name || 'Untitled'} — click to view`}
+        ? `${group.name || 'Untitled'} — double-click to pan canvas · drag to link to another card`
+        : `${group.name || 'Untitled'} — click to view · drag to link to another card`}
       style={{
         position: 'absolute',
         // Cards sit centered inside the leftColumn — offset by WING_W so
@@ -1413,7 +1680,9 @@ const RolodexSlot: React.FC<{
             doesn't run under them. The tab fades OUT as the full
             preview (RolodexCardPreview) fades IN, so on the active
             card at full expansion the canvas-style header replaces
-            this tab title rather than stacking with it. */}
+            this tab title rather than stacking with it.
+            Deck rows in tree view get a caret on the LEFT that
+            toggles their children's visibility. */}
       <div style={{
         position: 'absolute',
         top: 0,
@@ -1422,10 +1691,52 @@ const RolodexSlot: React.FC<{
         height: SLOT_PEEK_H,
         display: 'flex',
         alignItems: 'center',
-        padding: isDeck ? '0 18px 0 10px' : '0 10px',
+        padding: isDeck
+          ? `0 18px 0 ${showCaret ? 4 : 10}px`
+          : '0 10px',
         boxSizing: 'border-box',
         opacity: 1 - imageCenterness,
       }}>
+        {showCaret && (
+          <div
+            onClick={e => {
+              e.stopPropagation()
+              onToggleCollapsed()
+            }}
+            onPointerDown={e => e.stopPropagation()}
+            onDoubleClick={e => e.stopPropagation()}
+            title={isCollapsed ? 'Expand deck' : 'Collapse deck'}
+            style={{
+              width: 14,
+              height: 14,
+              marginRight: 4,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              flexShrink: 0,
+              borderRadius: 2,
+              transition: 'background 0.1s',
+              pointerEvents: 'auto',
+            }}
+            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.18)' }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
+          >
+            {/* Caret SVG — points right when collapsed, down when expanded. */}
+            <svg
+              width="8" height="8" viewBox="0 0 8 8"
+              style={{
+                transform: isCollapsed ? 'rotate(0deg)' : 'rotate(90deg)',
+                transition: 'transform 0.12s ease',
+              }}
+            >
+              <path
+                d="M2 1 L6 4 L2 7 Z"
+                fill="rgba(255,255,255,0.85)"
+              />
+            </svg>
+          </div>
+        )}
         <span style={{
           color: 'rgba(255,255,255,0.97)',
           fontSize: 11,

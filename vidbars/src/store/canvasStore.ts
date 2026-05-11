@@ -85,6 +85,9 @@ interface CanvasStore {
    *  so it stays where the user dragged it across reloads. Header acts as
    *  the drag handle. */
   rolodexPos: { x: number; y: number }
+  /** Set of group IDs whose children are hidden in the Rolodex tree view.
+   *  Toggled by the caret on deck rows. Only meaningful in 'tree' view. */
+  rolodexCollapsedDeckIds: string[]
 
   setPan: (pan: { x: number; y: number }) => void
   setZoom: (zoom: number) => void
@@ -118,6 +121,7 @@ interface CanvasStore {
   setRolodexView: (mode: 'flat' | 'tree') => void
   setRolodexPos: (pos: { x: number; y: number }) => void
   setRolodexExpansion: (px: number) => void
+  toggleRolodexDeckCollapsed: (groupId: string) => void
 }
 
 export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
@@ -146,6 +150,7 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
   // Drag up to reach super-collapsed (expansion = 0, all tabs uniform); drag
   // down to see the active card grow and below-stack images fade in.
   rolodexExpansion: 34,
+  rolodexCollapsedDeckIds: [],
 
   setPan: (pan) => set({ pan }),
 
@@ -206,6 +211,12 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
   setRolodexView: (rolodexView) => set({ rolodexView }),
   setRolodexPos: (rolodexPos) => set({ rolodexPos }),
   setRolodexExpansion: (rolodexExpansion) => set({ rolodexExpansion }),
+  toggleRolodexDeckCollapsed: (groupId) => set(s => {
+    const set_ = new Set(s.rolodexCollapsedDeckIds)
+    if (set_.has(groupId)) set_.delete(groupId)
+    else set_.add(groupId)
+    return { rolodexCollapsedDeckIds: [...set_] }
+  }),
 
   jumpToGroup: (groupId) => {
     const bs = useBoardsStore.getState()
@@ -270,6 +281,7 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
     rolodexView: s.rolodexView,
     rolodexPos: s.rolodexPos,
     rolodexExpansion: s.rolodexExpansion,
+    rolodexCollapsedDeckIds: s.rolodexCollapsedDeckIds,
   }),
   version: 2,
   migrate: (persisted: any, version: number) => {
