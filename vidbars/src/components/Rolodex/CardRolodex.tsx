@@ -88,32 +88,6 @@ const CABINET_OUTER_RADIUS = 6
 // reads as SLOT_PEEK_H + CENTER_BONUS, and the cards a couple of slots
 // either side smoothly trail off back to plain SLOT_PEEK_H.
 const CENTER_BONUS = 34
-// Bell-curve falloff radius (in slot units). Asymmetric on purpose: the
-// effect lasts LONGER on the below-center side so the third, fourth cards
-// down are already growing toward the middle as the wheel approaches them.
-// Above center the effect stays tight — cards leaving the active zone
-// settle back into tucked size quickly.
-const FALLOFF_RADIUS_ABOVE = 2.0
-const FALLOFF_RADIUS_BELOW = 1.0
-// SEPARATE falloff radii for the rolodex-expansion contribution to size.
-// Narrow on the above side so cards above the active barely grow as the
-// user expands the panel — upper card tabs stay tucked together so their
-// headers remain visible. Normal radius below center keeps the
-// expansion's interaction with cards below smooth (the active's growth
-// pushes them down, but they also gain a temporary bell contribution
-// during cross-center tweens). Just enough above-radius to avoid a
-// discontinuity in size when the active card crosses center. These are
-// the BASE radii used at expansion = 0; they widen as expansion grows
-// to dampen the cross-center "bump" (see EXPANSION_RADIUS_GROWTH).
-const EXPANSION_RADIUS_ABOVE = 0.5
-const EXPANSION_RADIUS_BELOW = 1.0
-// How much the expansion bell radii widen at MAX_EXPANSION. At
-// expansion = 0 the radii stay at their tight base values (upper cards
-// stay tucked). At full expansion they grow by this amount, spreading
-// the active card's growth across more neighboring slots — each card's
-// per-slot size change shrinks, so the cross-center motion feels less
-// jerky. Effectively a "smoothness fades in with expansion" knob.
-const EXPANSION_RADIUS_GROWTH = 1.0
 // Per-frame easing factor for the rAF tween toward target center.
 // 0.065 settles in ~550–650ms — between snappy and drawn-out.
 // Lower = more languorous; higher = snappier.
@@ -159,63 +133,6 @@ const LIST_AREA_H_COMPACT = SLOT_PEEK_H * (VISIBLE_RADIUS * 2 + 1)
 // size equals CARD_H (the full card height), so the user sees the entire
 // card. Beyond that the slot can't reveal more content.
 const MAX_EXPANSION = CARD_H - SLOT_PEEK_H - CENTER_BONUS
-
-/** Half-cosine bell, asymmetric: the radius below center is wider than the
- *  one above so the lift effect "trails down" the stack — cards a few slots
- *  below the active one already have a small bonus, so when the user
- *  scrolls down they appear to be growing toward the middle from earlier
- *  rather than waiting until they hit the center. 1.0 at offset 0, 0.0 at
- *  the radius edge, smooth at both endpoints. */
-function bellFraction(offset: number): number {
-  const radius = offset >= 0 ? FALLOFF_RADIUS_BELOW : FALLOFF_RADIUS_ABOVE
-  const x = Math.abs(offset)
-  if (x >= radius) return 0
-  return (Math.cos(x * Math.PI / radius) + 1) / 2
-}
-
-/** Bell used specifically for the user-controlled rolodex expansion. Same
- *  shape as bellFraction but the falloff radii are passed in so the
- *  parent can widen them as expansion grows — at low expansion the
- *  bell is tight (upper cards stay tucked); at high expansion the bell
- *  is wide (smooth cross-center motion). */
-function bellFractionExpansion(
-  offset: number,
-  radiusAbove: number,
-  radiusBelow: number,
-): number {
-  const radius = offset >= 0 ? radiusBelow : radiusAbove
-  const x = Math.abs(offset)
-  if (x >= radius) return 0
-  return (Math.cos(x * Math.PI / radius) + 1) / 2
-}
-
-/** Each card K, given the float center P, has a "size" — the vertical
- *  span between this card's top and the next card's top (= visible height
- *  of this card's tab when tucked). Two bell contributions are summed:
- *
- *   1. CENTER_BONUS * bellFraction(offset) — the always-on "active card
- *      grows a bit" effect. Applied symmetrically around center (with the
- *      existing asymmetric radii) so both upper and lower cards get the
- *      gentle near-center growth.
- *
- *   2. expansion * bellFractionExpansion(offset, radii...) — the user-
- *      controlled drag-to-expand bonus. Applied with dynamic radii
- *      passed in by the caller — these widen as expansion grows so the
- *      cross-center motion stays smooth even when the active card is
- *      at full card-height.
- *
- *  The card's TOP position is the prefix-sum of sizes from card 0 up to
- *  itself, anchored so position(P) lands at the list area's center. */
-function cardSize(
-  offsetFromCenter: number,
-  expansion: number = 0,
-  expansionRadiusAbove: number = EXPANSION_RADIUS_ABOVE,
-  expansionRadiusBelow: number = EXPANSION_RADIUS_BELOW,
-): number {
-  return SLOT_PEEK_H
-    + CENTER_BONUS * bellFraction(offsetFromCenter)
-    + expansion * bellFractionExpansion(offsetFromCenter, expansionRadiusAbove, expansionRadiusBelow)
-}
 
 // ─── Tree / flat list builders ─────────────────────────────────
 
@@ -370,23 +287,15 @@ export const CardRolodex: React.FC = () => {
   const setRolodexExpansion = useCanvasStore(s => s.setRolodexExpansion)
 
   // Dynamic list-area height — grows with rolodexExpansion (drag-handle
-  // pulls the panel taller). The expansion itself is passed straight
-  // into cardSize as a separate bell contribution (see cardSize doc),
-  // so cards above the active are barely affected while cards at/below
-  // get the smooth handoff during scroll. Resting active size is still
-  // SLOT_PEEK_H + CENTER_BONUS; at full expansion it becomes
+  // pulls the panel taller). The expansion enlarges the active card's
+  // "slot" (the gap between the above and below stacks): resting active
+  // size is SLOT_PEEK_H + CENTER_BONUS; at full expansion it becomes
   // SLOT_PEEK_H + CENTER_BONUS + expansion = CARD_H.
   const LIST_AREA_H = LIST_AREA_H_COMPACT + rolodexExpansion
-  // Stutter dampening — as expansion grows, widen the expansion bell's
-  // radii so the active card's growth is spread across more
-  // neighboring slots. Each card crosses fewer pixels of size delta per
-  // slot of scroll, so the visual "bump" as a card transits center
-  // gets smoother the bigger the panel gets. At expansion=0 these
-  // collapse back to the base radii (so the upper-cards-stay-tucked
-  // behaviour at compact mode is unchanged).
+  // 0 (compact) → 1 (fully expanded). Drives hero-image opacity in
+  // RolodexSlot so the active card reveals its image more strongly as
+  // the user expands the panel.
   const expansionFraction = MAX_EXPANSION > 0 ? rolodexExpansion / MAX_EXPANSION : 0
-  const expansionRadiusAbove = EXPANSION_RADIUS_ABOVE + EXPANSION_RADIUS_GROWTH * expansionFraction
-  const expansionRadiusBelow = EXPANSION_RADIUS_BELOW + EXPANSION_RADIUS_GROWTH * expansionFraction
   const groups = useBoardsStore(s => s.groups)
   const boards = useBoardsStore(s => s.boards)
   const jumpToGroup = useCanvasStore(s => s.jumpToGroup)
@@ -627,39 +536,67 @@ export const CardRolodex: React.FC = () => {
   const visibleIndices: number[] = []
   for (let k = visibleStart; k <= visibleEnd; k++) visibleIndices.push(k)
 
-  // (cabinet right-edge tracking is computed below, after rawTops /
-  // yShift are known — see "cabinetEdgeLevel" further down.)
+  // (cabinet right-edge tracking is computed below, after the per-card
+  // tops are known — see "cabinetEdgeLevel" further down.)
 
-  const sizes = visibleIndices.map(k =>
-    cardSize(k - centerPosition, rolodexExpansion, expansionRadiusAbove, expansionRadiusBelow),
-  )
+  // ── Two-stack positioning ──────────────────────────────────────
+  // Cards before and after the active card are treated as TWO separate
+  // uniform stacks, with a fixed "active slot" gap between them:
+  //
+  //   ABOVE STACK (offset ≤ 0): cards uniformly spaced SLOT_PEEK_H apart,
+  //                              extending upward from the active card.
+  //   ACTIVE SLOT (gap of activeSize): occupied by the card at offset 0.
+  //                                     During a fractional tween the
+  //                                     slot is "shared" — see below.
+  //   BELOW STACK (offset ≥ 1): cards uniformly spaced SLOT_PEEK_H apart,
+  //                              starting at activeSize below the active.
+  //
+  // activeSize = SLOT_PEEK_H + CENTER_BONUS + rolodexExpansion. At full
+  // expansion the active card occupies the entire CARD_H, so the lower
+  // list sits VISIBLY BELOW it (not hidden behind it) — the gap between
+  // the two stacks always equals the visible height of the active card.
+  //
+  // TRANSIT (0 < offset < 1): the position function is piecewise linear
+  // and continuous at offset = 0 and offset = 1. As the user scrolls
+  // through an integer, the card transiting through the slot grows
+  // smoothly from peek-height to full active-height. Both stacks slide
+  // uniformly upward by SLOT_PEEK_H per unit of centerPosition advance,
+  // so neighbours of the transit card never bob or stutter — only the
+  // transit card itself crosses the active gap.
+  const activeSize = SLOT_PEEK_H + CENTER_BONUS + rolodexExpansion
 
-  // Cumulative card-top positions, anchor-pending.
-  const rawTops: number[] = []
-  let acc = 0
-  for (const s of sizes) {
-    rawTops.push(acc)
-    acc += s
+  // Position of a card with offset (= idx - centerPosition), measured
+  // from the active card's anchor TOP. Piecewise linear:
+  //   o ≤ 0:  o * SLOT_PEEK_H                   (above stack)
+  //   0 < o < 1:  o * activeSize                (transit through slot)
+  //   o ≥ 1:  activeSize + (o - 1) * SLOT_PEEK_H (below stack)
+  // Continuous at o = 0 (both branches yield 0) and at o = 1 (both
+  // yield activeSize).
+  const positionForOffset = (o: number): number => {
+    if (o <= 0) return o * SLOT_PEEK_H
+    if (o < 1) return o * activeSize
+    return activeSize + (o - 1) * SLOT_PEEK_H
   }
 
-  // Where the FRACTIONAL center P sits in raw coordinates: between two
-  // integer indices, interpolated by frac.
-  const Pfloor = Math.floor(centerPosition)
-  const Pfrac = centerPosition - Pfloor
-  const PfloorIdxInVisible = Pfloor - visibleStart
-  let PfracRawY = 0
-  if (PfloorIdxInVisible >= 0 && PfloorIdxInVisible < rawTops.length) {
-    PfracRawY = rawTops[PfloorIdxInVisible] + Pfrac * sizes[PfloorIdxInVisible]
-  }
-
-  // Anchor: put P's center-of-tab at LIST_AREA_H_COMPACT / 2 - SLOT_PEEK_H / 2
-  // (compact-value, NOT the dynamic LIST_AREA_H) so the active card stays
-  // VERTICALLY PINNED at the same screen-Y when the user expands the
-  // panel via drag — the expansion goes entirely to growing the active
-  // card downward, not to shifting it around. Then shift the active up
-  // by ACTIVE_LIFT_SLOTS * SLOT_PEEK_H to sit a bit above center.
+  // Anchor: the active card's TOP sits at this Y. Uses LIST_AREA_H_COMPACT
+  // (not the dynamic LIST_AREA_H) so the active card stays vertically
+  // pinned when the user drags to expand the panel — expansion goes
+  // entirely to growing the active card downward, not to shifting it.
+  // ACTIVE_LIFT_SLOTS lifts the active above mid-panel so there's room
+  // to see context above without burying the cards below.
   const anchorY = LIST_AREA_H_COMPACT / 2 - SLOT_PEEK_H / 2 - ACTIVE_LIFT_SLOTS * SLOT_PEEK_H
-  const yShift = anchorY - PfracRawY
+
+  // Final top position for each visible card.
+  const tops = visibleIndices.map(k => anchorY + positionForOffset(k - centerPosition))
+
+  // "Sizes" array — the visible tab height of each card (= gap to the
+  // next card's top, since cards stack tucked-under each other). Kept
+  // in this shape so the cabinet floor logic below can use sizes[i] to
+  // get each card's effective bottom edge without recomputing the
+  // piecewise function. The last visible card has no successor
+  // rendered; default it to SLOT_PEEK_H (matches the below-stack
+  // uniform spacing).
+  const sizes = tops.map((t, i) => (i + 1 < tops.length ? tops[i + 1] - t : SLOT_PEEK_H))
 
   // Cabinet right-edge extension: cover the rightmost overhang of any
   // card whose render-box intersects the cabinet's y-range. That
@@ -676,7 +613,7 @@ export const CardRolodex: React.FC = () => {
     const idx = visibleIndices[i]
     const row = rows[idx]
     if (!row) continue
-    const tabTop = rawTops[i] + yShift
+    const tabTop = tops[i]
     // Card render box [tabTop, tabTop + CARD_H] intersects cabinet
     // y-range [LIST_AREA_H, LIST_AREA_H + CABINET_BAR_H] when:
     const intersects = tabTop <= LIST_AREA_H + CABINET_BAR_H && tabTop + CARD_H >= LIST_AREA_H
@@ -722,7 +659,7 @@ export const CardRolodex: React.FC = () => {
   // when there's nothing left to scroll into view from below.
   let bottomMostCardBottom = 0
   for (let i = 0; i < visibleIndices.length; i++) {
-    const cardBottom = (rawTops[i] + yShift) + sizes[i]
+    const cardBottom = tops[i] + sizes[i]
     if (cardBottom > bottomMostCardBottom) bottomMostCardBottom = cardBottom
   }
   const cardsBelowVisible = Math.max(0, (rows.length - 1) - visibleEnd)
@@ -853,7 +790,7 @@ export const CardRolodex: React.FC = () => {
                       level={row.level}
                       isDeck={row.isDeck}
                       offset={offset}
-                      top={rawTops[i] + yShift}
+                      top={tops[i]}
                       zIndex={idx + 1}
                       heroImage={heroImageMap.get(row.group.id) ?? null}
                       expansionFraction={rolodexExpansion / MAX_EXPANSION}
