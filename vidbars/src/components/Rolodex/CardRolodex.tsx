@@ -150,22 +150,20 @@ const EXPANSION_SLOWDOWN_FACTOR = 1.6
 const PANEL_PAD = 0
 // Colors for the rolodex "frame" — the dark casing that wraps the
 // cards on all four sides (header at top, side rails on the left/
-// right, cabinet at bottom). Slightly lighter than pure black so it
-// reads as a warm dark rather than a stark hole, and harmonises with
-// the panel-bg dark blue. PANEL_BG fills the card area itself
-// (visible in the gaps between cards).
-const FRAME_COLOR  = 'rgba(13,15,25,1)'
+// right, cabinet at bottom). Lifted a few notches from pure dark so
+// the frame reads as a real surface rather than a hole, and the
+// inset highlights become genuinely visible against it.
+const FRAME_COLOR  = 'rgba(28,33,52,1)'
 const PANEL_BG     = 'rgba(20,22,38,0.97)'
 const PANEL_RADIUS = 8
-// Shared frame-edge shadows. The inset highlight is a 1-px warm-light
-// line that picks up the inside edge of each frame piece — reads as a
-// gentle bevel rather than a hard transition. The outer shadow lets
-// the frame cast a subtle drop onto the cards behind, so cards sit a
-// bit "sunken" into the casing instead of floating against it. Each
-// piece composes its own multi-shadow value pointing in the right
-// direction (header → down, rails → inward, cabinet → up).
-const FRAME_HIGHLIGHT = 'rgba(255,255,255,0.05)'
-const FRAME_SHADOW    = 'rgba(0,0,0,0.45)'
+// Frame-edge accents. The inset HIGHLIGHT is a 1-px warm-light line
+// on each frame piece's inner edge — a small bevel that makes the
+// cabinet read as a constructed surface, not a flat fill. The outer
+// SHADOW lets the frame drop softly onto the cards behind it so
+// they sit "sunken" into the casing. Each piece composes its own
+// shadow direction (header → down, rails → inward, cabinet → up).
+const FRAME_HIGHLIGHT = 'rgba(255,255,255,0.12)'
+const FRAME_SHADOW    = 'rgba(0,0,0,0.50)'
 // Header strip height was previously used as a marginTop on a separate
 // preview pane. The pane has been folded into the in-row expansion
 // (cards grow via the drag handle), so that constant is no longer
@@ -681,6 +679,19 @@ export const CardRolodex: React.FC = () => {
   const [isPlacing, setIsPlacing] = useState(false)
   const startPlacement = useCallback(() => setIsPlacing(true), [])
 
+  // ── Hover-to-preview ─────────────────────────────────────────
+  // Which row in the list the user is currently hovering. When non-null,
+  // that row pops up below-stack cards push down to make room, and the
+  // hovered card's preview overlay appears at hoverPreviewOpacity. The
+  // hover effect strength scales with expansion: full at compact (so
+  // tucked cards burst into full previews on hover), half at full
+  // expansion (the active card already shows everything, so hover is
+  // a subtler peek).
+  const [hoveredRowIdx, setHoveredRowIdx] = useState<number | null>(null)
+  const setHoveredRowIdxStable = useCallback((idx: number | null) => {
+    setHoveredRowIdx(prev => (prev === idx ? prev : idx))
+  }, [])
+
   if (!isOpen) return null
 
   // Round the float position to pick the preview card. Snaps at 0.5 between
@@ -698,12 +709,23 @@ export const CardRolodex: React.FC = () => {
   // a fixed Y in the list area — this is what gives "during a tween, the
   // active card grows toward center" since multiple cards' sizes are in
   // partial bonus simultaneously.
-  // TOP_BUFFER extra cards above so their bodies sit above the viewport;
-  // BOTTOM_BUFFER extra cards below so the slide-under-cabinet region
-  // is populated and cards smoothly emerge from / disappear behind the
-  // cabinet base instead of popping at the visible edge.
-  const visibleStart = Math.max(0, Math.floor(centerPosition - VISIBLE_RADIUS - TOP_BUFFER))
-  const visibleEnd   = Math.min(rows.length - 1, Math.ceil(centerPosition + VISIBLE_RADIUS + BOTTOM_BUFFER))
+  // TOP_BUFFER + BOTTOM_BUFFER both expand DYNAMICALLY with LIST_AREA_H —
+  // when the user drags the panel taller (into the "panel growth"
+  // range past MAX_EXPANSION), more cards become visible above AND
+  // below the active, so the compact-mode static buffers can't cover
+  // them. Symptom without this: the last-rendered card has nothing
+  // covering its body and pops out as a fully-expanded card at the
+  // panel edge; as the user scrolls, the cutoff shifts and cards
+  // flicker in/out at that edge. We compute how many SLOT_PEEK_H-tall
+  // tabs fit in the panel area and use that as a floor for each
+  // buffer.
+  const cardsThatFitInPanel = SLOT_PEEK_H > 0
+    ? Math.ceil(Math.max(0, LIST_AREA_H + CABINET_BAR_H) / SLOT_PEEK_H)
+    : 0
+  const effectiveTopBuffer    = Math.max(TOP_BUFFER,    cardsThatFitInPanel + 2)
+  const effectiveBottomBuffer = Math.max(BOTTOM_BUFFER, cardsThatFitInPanel + 2)
+  const visibleStart = Math.max(0, Math.floor(centerPosition - VISIBLE_RADIUS - effectiveTopBuffer))
+  const visibleEnd   = Math.min(rows.length - 1, Math.ceil(centerPosition + VISIBLE_RADIUS + effectiveBottomBuffer))
   const visibleIndices: number[] = []
   for (let k = visibleStart; k <= visibleEnd; k++) visibleIndices.push(k)
 
@@ -863,11 +885,26 @@ export const CardRolodex: React.FC = () => {
     return lo + Pfrac_for_shift * (hi - lo)
   })()
 
+  // Hover pop — always the compact-mode "tiny peek" effect regardless
+  // of expansion. The hovered card raises by exactly COLLAPSED_BONUS
+  // (4 px) above peek (matching the active card's lift at compact)
+  // and swaps its tab title for the preview header text. No hero
+  // image fade, no scaled pop. Hover stays a small, predictable
+  // affordance even when the panel is fully expanded.
+  const hoverPopBonus = COLLAPSED_BONUS
+  const activeRowIdx = Math.round(centerPosition)
+  const isHoverActive = hoveredRowIdx != null && hoveredRowIdx !== activeRowIdx
+
   // Final top position for each visible card — base two-stack position
-  // plus this card's deck-boundary delta relative to the active.
+  // plus this card's deck-boundary delta relative to the active, plus
+  // hover-pop bonus for cards below the hovered row.
   const tops = visibleIndices.map(k => {
     const cardShift = boundaryShifts[k] ?? 0
-    return anchorY + positionForOffset(k - centerPosition) + (cardShift - centerBoundaryShift)
+    let pos = anchorY + positionForOffset(k - centerPosition) + (cardShift - centerBoundaryShift)
+    if (isHoverActive && hoveredRowIdx != null && k > hoveredRowIdx) {
+      pos += hoverPopBonus
+    }
+    return pos
   })
 
   // "Sizes" array — the visible tab height of each card (= gap to the
@@ -1124,6 +1161,14 @@ export const CardRolodex: React.FC = () => {
                       expansionFraction={expansionFraction}
                       isCollapsed={collapsedDeckIdSet.has(row.group.id)}
                       showCaret={view === 'tree' && row.isDeck}
+                      isHovered={isHoverActive && hoveredRowIdx === idx}
+                      onHoverEnter={() => setHoveredRowIdxStable(idx)}
+                      onHoverLeave={() => {
+                        // Only clear if this slot is still the hovered one;
+                        // avoids races when the pointer crosses rapidly to
+                        // the next card (its enter fires before this leave).
+                        setHoveredRowIdx(prev => prev === idx ? null : prev)
+                      }}
                       onClick={() => onSlotClick(idx)}
                       onDoubleClick={() => onSlotDoubleClick(row.group)}
                       onToggleCollapsed={() => toggleDeckCollapsed(row.group.id)}
@@ -1445,10 +1490,19 @@ const RolodexSlot: React.FC<{
   /** True if a caret toggle should be rendered (only for deck rows in tree
    *  view). Click toggles isCollapsed for this deck. */
   showCaret: boolean
+  /** True when the user is hovering this row (and it isn't the active
+   *  card). Drives a SOLID hover state: preview text and hero image
+   *  snap to full opacity, tab title hides. Pop-up height (handled by
+   *  parent positioning) scales smaller at higher expansions, but the
+   *  content shown inside the popped area stays at full opacity — no
+   *  half-fade intermediate states. */
+  isHovered: boolean
   onClick: () => void
   onDoubleClick: () => void
   onToggleCollapsed: () => void
-}> = ({ group, level, isDeck, offset, top, zIndex, heroImage, expansionFraction, isCollapsed, showCaret, onClick, onDoubleClick, onToggleCollapsed }) => {
+  onHoverEnter: () => void
+  onHoverLeave: () => void
+}> = ({ group, level, isDeck, offset, top, zIndex, heroImage, expansionFraction, isCollapsed, showCaret, isHovered: isHoverActive, onClick, onDoubleClick, onToggleCollapsed, onHoverEnter, onHoverLeave }) => {
   const [isHovered, setIsHovered] = useState(false)
 
   // Continuous "centerness" used to tween visual emphasis (rim, shadow,
@@ -1515,11 +1569,37 @@ const RolodexSlot: React.FC<{
   // all "grow into" the center together.
   const lit = centerness
 
-  // Border lerps from dark hairline (tucked) to bright white rim (centered).
-  // Both the color and the width grow with lit.
-  const borderRGB = Math.round(255 * lit)
-  const borderAlpha = 0.28 + (0.92 - 0.28) * lit
-  const borderWidth = 1 + 0.5 * lit
+  // Border highlight — uses an ASYMMETRIC centerness with a quick
+  // fade-in, a long plateau, and a quick fade-out. Reads as "the rim
+  // flips on early when scrolling toward a card, stays lit through
+  // active and a bit past, then snaps over to the next card." During
+  // a rapid scroll two adjacent cards briefly have their rims partly
+  // lit (one coming in, one going out) so the eye gets continuous
+  // feedback rather than a single fade.
+  //   offset ≥ 0.50:  borderLit = 0
+  //   0.20 ≤ off < 0.50: linear 0 → 1 (quick fade-in)
+  //   −0.50 ≤ off < 0.20: borderLit = 1 (full)
+  //   −0.80 ≤ off < −0.50: linear 1 → 0 (quick fade-out)
+  //   offset < −0.80: borderLit = 0
+  const BORDER_IN_START  =  0.5
+  const BORDER_IN_END    =  0.2
+  const BORDER_OUT_START = -0.5
+  const BORDER_OUT_END   = -0.8
+  let borderLit: number
+  if (offset >= BORDER_IN_START) borderLit = 0
+  else if (offset >= BORDER_IN_END) {
+    borderLit = 1 - (offset - BORDER_IN_END) / (BORDER_IN_START - BORDER_IN_END)
+  } else if (offset >= BORDER_OUT_START) borderLit = 1
+  else if (offset >= BORDER_OUT_END) {
+    borderLit = (offset - BORDER_OUT_END) / (BORDER_OUT_START - BORDER_OUT_END)
+  } else borderLit = 0
+
+  // Border lerps from dark hairline (tucked) to bright white rim
+  // (centered). Color, alpha, and width all grow with borderLit so the
+  // rim asymmetry above applies uniformly to the whole rim treatment.
+  const borderRGB = Math.round(255 * borderLit)
+  const borderAlpha = 0.28 + (0.92 - 0.28) * borderLit
+  const borderWidth = 1 + 0.5 * borderLit
   const borderStyle = isHovered
     ? '1.5px solid rgba(255,255,255,0.85)'
     : `${borderWidth}px solid rgba(${borderRGB},${borderRGB},${borderRGB},${borderAlpha})`
@@ -1590,8 +1670,8 @@ const RolodexSlot: React.FC<{
       onPointerDown={onSlotPointerDown}
       onClick={handleSlotClick}
       onDoubleClick={onDoubleClick}
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
+      onMouseEnter={() => { setIsHovered(true); onHoverEnter() }}
+      onMouseLeave={() => { setIsHovered(false); onHoverLeave() }}
       title={lit > 0.5
         ? `${group.name || 'Untitled'} — double-click to pan canvas · drag to link to another card`
         : `${group.name || 'Untitled'} — click to view · drag to link to another card`}
@@ -1635,6 +1715,10 @@ const RolodexSlot: React.FC<{
             blend in the rolodex. Otherwise we'd whitewash the card
             color with a full-opacity image. */}
       {heroImage && imageCenterness > 0.01 && (() => {
+        // Hover NEVER touches the hero image — the hover effect is
+        // always the compact "tiny peek" (4 px pop + text swap),
+        // never revealing the card image. Image is driven solely by
+        // imageCenterness (scroll + expansion) for the active card.
         const userOpacity = group.cardHeroTransform?.opacity ?? 0.7
         return (
           <HeroImageLayer
@@ -1675,84 +1759,118 @@ const RolodexSlot: React.FC<{
           <div style={{ width: 2.5, height: '100%', background: 'rgba(0,0,0,0.26)', borderRadius: '1.5px 1.5px 0 0' }} />
         </div>
       )}
-      {/* Content lives in the top SLOT_PEEK_H "tab" region. Right-pad
-            extra when deck-stripes are showing so the title's ellipsis
-            doesn't run under them. The tab fades OUT as the full
-            preview (RolodexCardPreview) fades IN, so on the active
-            card at full expansion the canvas-style header replaces
-            this tab title rather than stacking with it.
-            Deck rows in tree view get a caret on the LEFT that
-            toggles their children's visibility. */}
-      <div style={{
-        position: 'absolute',
-        top: 0,
-        left: 0,
-        right: 0,
-        height: SLOT_PEEK_H,
-        display: 'flex',
-        alignItems: 'center',
-        padding: isDeck
-          ? `0 18px 0 ${showCaret ? 4 : 10}px`
-          : '0 10px',
-        boxSizing: 'border-box',
-        opacity: 1 - imageCenterness,
-      }}>
-        {showCaret && (
-          <div
-            onClick={e => {
-              e.stopPropagation()
-              onToggleCollapsed()
-            }}
-            onPointerDown={e => e.stopPropagation()}
-            onDoubleClick={e => e.stopPropagation()}
-            title={isCollapsed ? 'Expand deck' : 'Collapse deck'}
-            style={{
-              width: 14,
-              height: 14,
-              marginRight: 4,
+      {/* Quick CROSSFADE between the small tab title and the full
+            preview. Both texts have NARROW fade windows (0.15 of
+            imageCenterness each) with only a small overlap in the
+            middle (~10 % of the range) so during scroll there's no
+            long "both at 50%" moment where the two headers double up
+            and neither reads. The tab fades 1 → 0 over
+            imageCenterness 0.40 → 0.55; the preview fades 0 → 1 over
+            0.45 → 0.60. */}
+      {(() => {
+        const TAB_FADE_START   = 0.40
+        const TAB_FADE_END     = 0.55
+        const PREV_FADE_START  = 0.45
+        const PREV_FADE_END    = 0.60
+        const ic = imageCenterness
+        const scrollTabOpacity     = ic <= TAB_FADE_START ? 1
+                                   : ic >= TAB_FADE_END ? 0
+                                   : 1 - (ic - TAB_FADE_START) / (TAB_FADE_END - TAB_FADE_START)
+        const scrollPreviewOpacity = ic <= PREV_FADE_START ? 0
+                                   : ic >= PREV_FADE_END ? 1
+                                   : (ic - PREV_FADE_START) / (PREV_FADE_END - PREV_FADE_START)
+        // Hover OVERRIDES the scroll crossfade with a SOLID swap —
+        // preview snaps to full opacity, tab title snaps to 0. No
+        // half-fade intermediate state. The card pops up by less
+        // than the active at high expansions (parent positioning),
+        // but whatever IS revealed reads at full strength.
+        const previewOpacity = isHoverActive ? 1 : scrollPreviewOpacity
+        const tabOpacity     = isHoverActive ? 0 : scrollTabOpacity
+        return (
+          <>
+            {/* Tab title — text only. Fades on its own opacity so the
+                  CARET (rendered separately below) stays visible even
+                  when the active card's preview takes over. */}
+            <div style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              height: SLOT_PEEK_H,
               display: 'flex',
               alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              flexShrink: 0,
-              borderRadius: 2,
-              transition: 'background 0.1s',
-              pointerEvents: 'auto',
+              padding: isDeck
+                ? `0 18px 0 ${showCaret ? 24 : 10}px`
+                : '0 10px',
+              boxSizing: 'border-box',
+              opacity: tabOpacity,
+              pointerEvents: 'none',
+            }}>
+              <span style={{
+                color: 'rgba(255,255,255,0.97)',
+                fontSize: 11,
+                fontWeight: 600,
+                textShadow: '0 1px 2px rgba(0,0,0,0.55)',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                flex: 1,
+              }}>{group.name || 'Untitled'}</span>
+            </div>
+            {/* Full canvas-style card preview — renders the group's saved
+                  cardHeaderText + cardText with their styles. Quick
+                  fade so it doesn't double up with the tab title. */}
+            <RolodexCardPreview group={group} opacity={previewOpacity} />
+          </>
+        )
+      })()}
+      {/* Caret toggle — rendered LAST so it stays on top of the tab
+            text AND the preview overlay. Stays at full opacity at all
+            scroll positions: even when this card is the active one and
+            the preview takes over the tab area, the deck's
+            collapse/expand control remains operable. */}
+      {showCaret && (
+        <div
+          onClick={e => {
+            e.stopPropagation()
+            onToggleCollapsed()
+          }}
+          onPointerDown={e => e.stopPropagation()}
+          onDoubleClick={e => e.stopPropagation()}
+          title={isCollapsed ? 'Expand deck' : 'Collapse deck'}
+          style={{
+            position: 'absolute',
+            top: (SLOT_PEEK_H - 14) / 2,
+            left: 4,
+            width: 14,
+            height: 14,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            borderRadius: 2,
+            transition: 'background 0.1s',
+            pointerEvents: 'auto',
+            zIndex: 3,
+          }}
+          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.18)' }}
+          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
+        >
+          {/* Caret SVG — points right when collapsed, down when expanded. */}
+          <svg
+            width="8" height="8" viewBox="0 0 8 8"
+            style={{
+              transform: isCollapsed ? 'rotate(0deg)' : 'rotate(90deg)',
+              transition: 'transform 0.12s ease',
             }}
-            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.18)' }}
-            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
           >
-            {/* Caret SVG — points right when collapsed, down when expanded. */}
-            <svg
-              width="8" height="8" viewBox="0 0 8 8"
-              style={{
-                transform: isCollapsed ? 'rotate(0deg)' : 'rotate(90deg)',
-                transition: 'transform 0.12s ease',
-              }}
-            >
-              <path
-                d="M2 1 L6 4 L2 7 Z"
-                fill="rgba(255,255,255,0.85)"
-              />
-            </svg>
-          </div>
-        )}
-        <span style={{
-          color: 'rgba(255,255,255,0.97)',
-          fontSize: 11,
-          fontWeight: 600,
-          textShadow: '0 1px 2px rgba(0,0,0,0.55)',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-          flex: 1,
-        }}>{group.name || 'Untitled'}</span>
-      </div>
-      {/* Full canvas-style card preview — renders the group's saved
-            cardHeaderText + cardText with their styles, only on the
-            active card at sufficient expansion. Crossfades with the
-            tab title via opacity=imageCenterness. */}
-      <RolodexCardPreview group={group} opacity={imageCenterness} />
+            <path
+              d="M2 1 L6 4 L2 7 Z"
+              fill="rgba(255,255,255,0.85)"
+            />
+          </svg>
+        </div>
+      )}
     </div>
   )
 }
