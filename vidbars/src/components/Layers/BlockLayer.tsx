@@ -13,7 +13,9 @@ import { DEFAULT_BLOCK_HEADER_STYLE, DEFAULT_BODY_STYLE } from '../../store/free
 import type { TextStyle } from '../../store/freeNodeStore'
 import type { TextFieldMode } from '../UI/TextFormatToolbar'
 import { TextFormatToolbar, hexToRgba, ensureFontLoaded } from '../UI/TextFormatToolbar'
-import { computeGroupLayout, getRowY, dyToRowDelta, getBoardAbsolutePos } from '../../utils/nleRows'
+import { computeGroupLayout, getRowY, getRowHeight, dyToRowDelta, getBoardAbsolutePos } from '../../utils/nleRows'
+import { NLE_HEADER_CANVAS_H } from '../NLE/NLETimelineHeader'
+import { hexToHsl, hslToHex } from '../../utils/colorUtils'
 import type { RowLayout } from '../../utils/nleRows'
 import { groupBoardSlots, clampBoardX } from '../../utils/nlePush'
 import { DEFAULT_H } from '../../utils/barConstants'
@@ -796,19 +798,115 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
 
 // ── Canvas content ──
 
+// Compute the visual block-level footprint of a group: the bounding box
+// (in canvas coords) of all its boards' rendered rects. Returns null
+// if the group has no renderable content. Same formula used by
+// CardOutline and PortalAnchorGlow — extracted so the portal-translate
+// math in Canvas can align member content to the anchor's actual left/
+// top edges rather than just the group's origin point.
+function computeGroupBlockFootprint(
+  group: import('../../store/boardsStore').ProjectGroup,
+  boards: Record<string, import('../../store/boardsStore').BoardData>,
+): { left: number; top: number; width: number; height: number } | null {
+  const layout = computeGroupLayout(group.boardIds, boards)
+  let left = Infinity, right = -Infinity, top = Infinity, bottom = -Infinity
+  for (const bid of group.boardIds) {
+    const board = boards[bid]
+    if (!board) continue
+    const bScale = board.boardScale ?? 1
+    const rootBars = board.rootIds.map(rid => board.bars[rid]).filter(Boolean)
+    if (rootBars.length === 0) continue
+    const bx = group.originX + (board.nleX ?? 0)
+    const localRow = board.nleRow ?? 0
+    const by = group.originY + getRowY(localRow, layout)
+    const rowH = getRowHeight(localRow, layout)
+    const rootH = Math.max(...rootBars.map(b => b.height), DEFAULT_H) * bScale
+    const visualH = Math.max(rowH, rootH)
+    const minX = Math.min(...rootBars.map(b => b.x))
+    const maxX = Math.max(...rootBars.map(b => b.x + b.width))
+    const l = bx + BOARD_PADDING_X + minX * bScale
+    const r = bx + BOARD_PADDING_X + maxX * bScale
+    if (l < left) left = l
+    if (r > right) right = r
+    if (by < top) top = by
+    if (by + visualH > bottom) bottom = by + visualH
+  }
+  if (left === Infinity) return null
+  const w = right - left
+  const h = bottom - top
+  const finalW = Math.max(w, group.cardWidthOverride ?? 0)
+  const finalH = Math.max(h, group.cardHeightOverride ?? 0)
+  return { left, top, width: finalW, height: finalH }
+}
+
 const Canvas: React.FC = () => {
   const boardOrder = useBoardsStore(s => s.boardOrder)
   const groups = useBoardsStore(s => s.groups)
+  const boards = useBoardsStore(s => s.boards)
   const zoneLineY = useCanvasStore(s => s.zoneLineY)
+  const portalSelections = useCanvasStore(s => s.deckPortalSelections)
+
   const hiddenBoards = useMemo(
     () => getHiddenBoardIds(groups, {} as any, zoneLineY),
     [groups, zoneLineY],
   )
+
+  // Deck portals at block zoom: replace the anchor's blocks with the
+  // locked member's blocks, rendered at the anchor's canvas position.
+  // We align the LEFT/TOP EDGES of the member's footprint to the
+  // anchor's footprint (not origin to origin) so the content tucks
+  // visually into the anchor's slot regardless of either group's
+  // internal nleX/nleY offsets. The member group itself is already
+  // hidden by getHiddenBoardIds (non-anchor deck member), so no
+  // duplicate render at the member's natural location.
+  const { effectiveHiddenBoards, portalRenderings } = useMemo(() => {
+    const eff = new Set(hiddenBoards)
+    const portals: Array<{ key: string; anchorId: string; memberId: string; dx: number; dy: number; boardIds: string[] }> = []
+    for (const [anchorId, memberId] of Object.entries(portalSelections)) {
+      const anchor = groups.find(g => g.id === anchorId)
+      const member = groups.find(g => g.id === memberId)
+      if (!anchor || !member) continue
+      const anchorFp = computeGroupBlockFootprint(anchor, boards)
+      const memberFp = computeGroupBlockFootprint(member, boards)
+      if (!anchorFp || !memberFp) continue
+      // Anchor's own boards: hidden while portal is active.
+      for (const bid of anchor.boardIds) eff.add(bid)
+      portals.push({
+        key: `portal-${anchorId}-${memberId}`,
+        anchorId, memberId,
+        dx: anchorFp.left - memberFp.left,
+        dy: anchorFp.top - memberFp.top,
+        boardIds: [...member.boardIds],
+      })
+    }
+    return { effectiveHiddenBoards: eff, portalRenderings: portals }
+  }, [hiddenBoards, portalSelections, groups, boards])
+
   return (
     <>
       <FreeCanvas />
-      {!hiddenBoards.has('primary') && <BlockItem boardId="primary" />}
-      {boardOrder.filter(id => !hiddenBoards.has(id)).map(id => <BlockItem key={id} boardId={id} />)}
+      {!effectiveHiddenBoards.has('primary') && <BlockItem boardId="primary" />}
+      {boardOrder.filter(id => !effectiveHiddenBoards.has(id)).map(id => <BlockItem key={id} boardId={id} />)}
+      {/* Portal renderings: each one wraps the locked member's blocks in
+          a translate so they land at the anchor's canvas position.
+          pointerEvents:'none' on the wrapper enforces view-only; clicks
+          fall through to the canvas instead of selecting/dragging the
+          portal-displayed blocks. */}
+      {portalRenderings.map(p => (
+        <div
+          key={p.key}
+          data-portal-render={`${p.anchorId}:${p.memberId}`}
+          style={{
+            position: 'absolute',
+            left: 0,
+            top: 0,
+            transform: `translate(${p.dx}px, ${p.dy}px)`,
+            pointerEvents: 'none',
+          }}
+        >
+          {p.boardIds.map(bid => <BlockItem key={bid} boardId={bid} />)}
+        </div>
+      ))}
     </>
   )
 }
@@ -818,6 +916,7 @@ const Canvas: React.FC = () => {
 const Overlay: React.FC = () => {
   const groups = useBoardsStore(s => s.groups)
   const zoneLineY = useCanvasStore(s => s.zoneLineY)
+  const portalSelections = useCanvasStore(s => s.deckPortalSelections)
   const hiddenGroups = useMemo(
     () => getHiddenGroupIds(groups, {} as any, zoneLineY),
     [groups, zoneLineY],
@@ -826,14 +925,150 @@ const Overlay: React.FC = () => {
     () => groups.filter(g => !hiddenGroups.has(g.id)),
     [groups, hiddenGroups],
   )
+  // For each active portal: a glow ring positioned at the anchor's
+  // top-left edge but sized to hug the locked member's content. As the
+  // user swaps which strip is locked, the frame grows or shrinks to
+  // fit — the anchor's "slot" extends to contain whatever block is
+  // displayed inside it.
+  const portalGlows = useMemo(() => {
+    const out: Array<{ key: string; anchor: typeof groups[0]; member: typeof groups[0]; memberColor: string }> = []
+    for (const [anchorId, memberId] of Object.entries(portalSelections)) {
+      const anchor = groups.find(g => g.id === anchorId)
+      const member = groups.find(g => g.id === memberId)
+      if (!anchor || !member) continue
+      out.push({ key: `portal-glow-${anchorId}`, anchor, member, memberColor: member.color })
+    }
+    return out
+  }, [portalSelections, groups])
+  // Anchors with active portals: hide their normal CardOutline +
+  // NLETimelineHeader, since the PortalFrame below provides a unified
+  // header + body sized to the portal's actual content.
+  const portalAnchorIds = useMemo(
+    () => new Set(Object.keys(portalSelections)),
+    [portalSelections],
+  )
+  const visibleNonPortalGroups = useMemo(
+    () => visibleGroups.filter(g => !portalAnchorIds.has(g.id)),
+    [visibleGroups, portalAnchorIds],
+  )
   return (
     <>
-      {visibleGroups.map(g => (
+      {visibleNonPortalGroups.map(g => (
         <React.Fragment key={g.id}>
           <CardOutline group={g} />
           <NLETimelineHeader groupId={g.id} />
         </React.Fragment>
       ))}
+      {portalGlows.map(p => (
+        <PortalFrame key={p.key} anchor={p.anchor} member={p.member} memberColor={p.memberColor} />
+      ))}
+    </>
+  )
+}
+
+// Unified portal frame at block zoom: an anchor-colored timeline header
+// matching the standard NLETimelineHeader style, plus a member-colored
+// glow outline below. Both sized to fit the locked member's content
+// (positioned at the anchor's top-left). Replaces the anchor's normal
+// CardOutline + NLETimelineHeader when a portal is active, so the
+// portal reads as a single cohesive element: "this is X's slot,
+// displaying Y's content."
+const PortalFrame: React.FC<{
+  anchor: import('../../store/boardsStore').ProjectGroup
+  member: import('../../store/boardsStore').ProjectGroup
+  memberColor: string
+}> = ({ anchor, member, memberColor }) => {
+  const pan = useCanvasStore(s => s.pan)
+  const zoom = useCanvasStore(s => s.zoom)
+  const boards = useBoardsStore(s => s.boards)
+  const rect = useMemo(() => {
+    const anchorFp = computeGroupBlockFootprint(anchor, boards)
+    const memberFp = computeGroupBlockFootprint(member, boards)
+    if (!anchorFp || !memberFp) return null
+    return {
+      screenLeft: pan.x + anchorFp.left * zoom,
+      screenTop: pan.y + anchorFp.top * zoom,
+      screenWidth: memberFp.width * zoom,
+      screenHeight: memberFp.height * zoom,
+    }
+  }, [anchor, member, boards, pan, zoom])
+  if (!rect || rect.screenWidth === 0) return null
+
+  // Header: matches the standard NLETimelineHeader visual — anchor's
+  // color brightened 15% at 25% opacity, top corners rounded — but
+  // sized to the portal frame's width, not the anchor's own footprint.
+  const headerHeight = Math.max(NLE_HEADER_CANVAS_H * zoom, 20)
+  const headerTop = rect.screenTop - headerHeight
+  const { h, s, l } = hexToHsl(anchor.color)
+  const brighterHex = hslToHex(h, s, Math.min(1, l + 0.15))
+  const n = parseInt(brighterHex.replace('#', ''), 16)
+  const headerBg = `rgba(${(n >> 16) & 0xff},${(n >> 8) & 0xff},${n & 0xff},0.25)`
+
+  const FRAME_PAD = 4 // matches glow outset on each side
+  const frameLeft = rect.screenLeft - FRAME_PAD
+  const frameWidth = rect.screenWidth + FRAME_PAD * 2
+
+  return (
+    <>
+      {/* Stretched anchor header — same style as NLETimelineHeader,
+          sized to the portal frame's width. Pointer-events:none keeps
+          it view-only (no rename, no drag) while the portal is active. */}
+      <div
+        data-portal-header={anchor.id}
+        style={{
+          position: 'absolute',
+          left: frameLeft,
+          top: headerTop,
+          width: frameWidth,
+          height: headerHeight,
+          background: headerBg,
+          borderRadius: '12px 12px 0 0',
+          borderTop: `2px solid ${memberColor}`,
+          borderLeft: `2px solid ${memberColor}`,
+          borderRight: `2px solid ${memberColor}`,
+          boxSizing: 'border-box',
+          display: 'flex',
+          alignItems: 'center',
+          padding: '0 8px',
+          pointerEvents: 'none',
+          zIndex: 11,
+          boxShadow: `0 0 12px 1px ${memberColor}66`,
+        }}
+      >
+        <span style={{
+          color: anchor.name ? 'rgba(255,255,255,0.92)' : 'rgba(255,255,255,0.35)',
+          fontStyle: anchor.name ? 'normal' : 'italic',
+          fontSize: 10,
+          fontWeight: 700,
+          letterSpacing: '0.2px',
+          textShadow: '0 1px 4px rgba(0,0,0,0.6)',
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          flex: 1,
+          minWidth: 0,
+          lineHeight: '14px',
+        }}>{anchor.name || 'Card'}</span>
+      </div>
+      {/* Body glow — frame around the displayed member content. Shares
+          top edge with the header (no double-border at the seam: the
+          header's bottom is open and the body's top continues the
+          member-color line). */}
+      <div
+        data-portal-glow={anchor.id}
+        style={{
+          position: 'absolute',
+          left: frameLeft,
+          top: rect.screenTop - FRAME_PAD,
+          width: frameWidth,
+          height: rect.screenHeight + FRAME_PAD * 2,
+          border: `2px solid ${memberColor}`,
+          borderRadius: '0 0 14px 14px',
+          boxShadow: `0 0 18px 4px ${memberColor}80, inset 0 0 12px ${memberColor}40`,
+          pointerEvents: 'none',
+          zIndex: 10,
+        }}
+      />
     </>
   )
 }
