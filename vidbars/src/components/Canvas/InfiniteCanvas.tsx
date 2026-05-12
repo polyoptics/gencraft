@@ -117,6 +117,9 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
       // Clear selection on ALL boards + card groups — single batched update
       useBoardsStore.getState().clearGroupSelection()
       useBoardsStore.getState().clearAllSelections()
+      // Click on empty canvas also releases any deck-portal previews —
+      // bare-canvas-click is the universal "deselect everything" gesture.
+      useCanvasStore.getState().clearAllDeckPortals()
     }
   }, [clearFreeSelection])
 

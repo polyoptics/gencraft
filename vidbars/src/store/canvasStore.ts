@@ -88,6 +88,13 @@ interface CanvasStore {
   /** Set of group IDs whose children are hidden in the Rolodex tree view.
    *  Toggled by the caret on deck rows. Only meaningful in 'tree' view. */
   rolodexCollapsedDeckIds: string[]
+  /** Deck-portal selections: anchorId → memberId. When set, a click on a
+   *  fanned member "locks" that member's content onto the anchor's face,
+   *  so the primary card acts as a view-only portal for the member. The
+   *  selection is session-only (not persisted) — it's an editor view
+   *  state, not data. Cleared on Esc, click-empty-canvas, or selecting
+   *  the same member again (toggle off). */
+  deckPortalSelections: Record<string, string>
 
   setPan: (pan: { x: number; y: number }) => void
   setZoom: (zoom: number) => void
@@ -122,6 +129,10 @@ interface CanvasStore {
   setRolodexPos: (pos: { x: number; y: number }) => void
   setRolodexExpansion: (px: number) => void
   toggleRolodexDeckCollapsed: (groupId: string) => void
+  setDeckPortal: (anchorId: string, memberId: string) => void
+  clearDeckPortal: (anchorId: string) => void
+  clearAllDeckPortals: () => void
+  toggleDeckPortal: (anchorId: string, memberId: string) => void
 }
 
 export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
@@ -151,6 +162,7 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
   // down to see the active card grow and below-stack images fade in.
   rolodexExpansion: 34,
   rolodexCollapsedDeckIds: [],
+  deckPortalSelections: {},
 
   setPan: (pan) => set({ pan }),
 
@@ -216,6 +228,30 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
     if (set_.has(groupId)) set_.delete(groupId)
     else set_.add(groupId)
     return { rolodexCollapsedDeckIds: [...set_] }
+  }),
+  setDeckPortal: (anchorId, memberId) => set(s => ({
+    deckPortalSelections: { ...s.deckPortalSelections, [anchorId]: memberId },
+  })),
+  clearDeckPortal: (anchorId) => set(s => {
+    if (!(anchorId in s.deckPortalSelections)) return s
+    const next = { ...s.deckPortalSelections }
+    delete next[anchorId]
+    return { deckPortalSelections: next }
+  }),
+  clearAllDeckPortals: () => set(s => (
+    Object.keys(s.deckPortalSelections).length === 0
+      ? s
+      : { deckPortalSelections: {} }
+  )),
+  toggleDeckPortal: (anchorId, memberId) => set(s => {
+    const current = s.deckPortalSelections[anchorId]
+    const next = { ...s.deckPortalSelections }
+    if (current === memberId) {
+      delete next[anchorId]
+    } else {
+      next[anchorId] = memberId
+    }
+    return { deckPortalSelections: next }
   }),
 
   jumpToGroup: (groupId) => {

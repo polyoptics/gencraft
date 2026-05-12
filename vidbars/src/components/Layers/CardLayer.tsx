@@ -1423,6 +1423,11 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
     })
   }, [fanTransition, anchorGroup.id, secondaryItems])
 
+  // Refs to the two portal-connector bars so the transition effect can
+  // animate their width in lockstep with the locked strip's slide.
+  // lockedStripIdx is computed below, after portalMemberId is read.
+  const connectorRefs = useRef<{ top: HTMLDivElement | null; bottom: HTMLDivElement | null }>({ top: null, bottom: null })
+
   // Hero image for anchor
   const heroImage = (() => {
     if (anchorGroup.cardHeroImage) return anchorGroup.cardHeroImage
@@ -1658,6 +1663,11 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
           }
           break
         }
+      } else {
+        // No drag = click. Toggle the deck-portal for this anchor →
+        // member. Clicking the same member again clears the portal;
+        // clicking a different member swaps it.
+        useCanvasStore.getState().toggleDeckPortal(deck.anchorGroupId, groupId)
       }
       // Always release the fan-render handoff. After this clear, the card
       // either stays where dropped (rendered by CardLayer's main loop at
@@ -1669,8 +1679,72 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
     window.addEventListener('pointerup', onUp)
   }, [])
 
-  // When a secondary card is surfaced, render it full-size on top
-  const surfacedGroup = surfacedId ? groups.find(g => g.id === surfacedId) : null
+  // Portal selection from the global store — a click on a fan member
+  // sets this to the member's ID for THIS deck's anchor, locking the
+  // member's content on the anchor's face even when the cursor moves
+  // off. Hover (surfacedId, local) takes priority for responsiveness,
+  // so the user can hover-preview different members while the portal
+  // is locked — release the hover and the locked portal takes over.
+  const portalMemberId = useCanvasStore(s => s.deckPortalSelections[deck.anchorGroupId])
+  const effectiveSurfacedId = surfacedId ?? portalMemberId ?? null
+
+  // Locked-strip index for portal connectors — used both in render and
+  // in the connector-animation effect below so the bar tracks the same
+  // strip during fan ↔ stack transitions.
+  const lockedStripIdx = useMemo(() => {
+    if (!portalMemberId) return -1
+    return secondaryItems.findIndex(
+      item => item.kind === 'real' && item.group.id === portalMemberId,
+    )
+  }, [portalMemberId, secondaryItems])
+
+  // Animate the portal connectors in lockstep with the locked strip
+  // during a fan ↔ stack transition. Without this they stay at full
+  // width and only snap on transition end, looking "left behind" while
+  // the strips slide. We animate transform:scaleX (not width) so React's
+  // rendered width remains authoritative when no transition is active —
+  // clearing an inline width would override the React style and not
+  // get restored unless the width prop changed.
+  // Tucked ratio = TUCK_W/FULL_W shrinks the bar to just the primary-
+  // card wrap stub (locked strip fully tucked behind). Resting ratio is
+  // 1 (full width). Same easing + the locked strip's own stagger so
+  // bar and strip arrive together.
+  useLayoutEffect(() => {
+    const isThisDeck = fanTransition && fanTransition.deckId === anchorGroup.id
+    const connectorEls = [connectorRefs.current.top, connectorRefs.current.bottom].filter(Boolean) as HTMLDivElement[]
+    if (lockedStripIdx < 0 || !isThisDeck) {
+      for (const el of connectorEls) {
+        el.style.transition = ''
+        el.style.transform = ''
+        el.style.transformOrigin = ''
+      }
+      return
+    }
+    const FAN_PRIMARY_RADIUS = 12
+    const FULL_W = FAN_PRIMARY_RADIUS + (lockedStripIdx + 1) * FAN_STRIP_WIDTH - STRIP_RADIUS
+    const TUCK_W = FAN_PRIMARY_RADIUS - STRIP_RADIUS
+    const tuckRatio = TUCK_W / FULL_W
+    const N = secondaryItems.length
+    const stripStagger = Math.max(8, Math.min(20, Math.floor(N * 1.5)))
+    const stagger = lockedStripIdx * stripStagger
+    for (const el of connectorEls) {
+      el.style.transformOrigin = 'left center'
+      if (fanTransition!.phase === 'fanning') {
+        el.style.transition = 'none'
+        el.style.transform = `scaleX(${tuckRatio})`
+        void el.offsetWidth
+        el.style.transition = `transform 0.1s cubic-bezier(0.16, 1, 0.3, 1) ${stagger}ms`
+        el.style.transform = 'scaleX(1)'
+      } else {
+        el.style.transition = `transform 0.09s cubic-bezier(0.4, 0, 0.6, 1) ${stagger}ms`
+        el.style.transform = `scaleX(${tuckRatio})`
+      }
+    }
+  }, [fanTransition, anchorGroup.id, secondaryItems, lockedStripIdx])
+
+  // When a secondary card is surfaced (hovered or portal-locked),
+  // render it full-size on top of the primary card.
+  const surfacedGroup = effectiveSurfacedId ? groups.find(g => g.id === effectiveSurfacedId) : null
   const surfacedHero = useMemo(() => {
     if (!surfacedGroup) return null
     if (surfacedGroup.cardHeroImage) return surfacedGroup.cardHeroImage
@@ -1848,7 +1922,19 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
 
         // ── Real member strip ──
         const sc = item.group
-        const isSurfaced = sc.id === surfacedId
+        // Strip is "surfaced" if hovered OR if it's the portal-selected
+        // member — same brightness/drop-shadow base treatment.
+        const isSurfaced = sc.id === effectiveSurfacedId
+        // Additionally, "portal-locked" means the click-toggled lock is
+        // on THIS strip. Gets a bright outline + a small pin dot to
+        // tell it apart from a transient hover.
+        const isPortalLocked = sc.id === portalMemberId
+        // When a portal is locked on SOME strip but not this one, this
+        // strip is "dimmed" — visually muted and unresponsive to hover.
+        // The locked strip stays full-brightness; the user can still
+        // click a dimmed strip to swap the selection (pointerDown stays
+        // active), but hovering won't change the surfaced preview.
+        const isPortalDimmed = portalMemberId != null && !isPortalLocked
 
         const scHero = (() => {
           if (sc.cardHeroImage) return sc.cardHeroImage
@@ -1880,21 +1966,58 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
               height: screenHeight,
               borderRadius: stripRadius,
               background: sc.color || '#5b8dd9',
-              borderRight: '1px solid rgba(255,255,255,0.2)',
-              borderTop: '1px solid rgba(255,255,255,0.12)',
-              borderBottom: '1px solid rgba(255,255,255,0.12)',
+              boxSizing: 'border-box',
+              // The strip's OWN border properties carry the indicator.
+              // When portal-locked, top/right/bottom upgrade from the
+              // faint 1-px lines to 2-px bright lines that sit at the
+              // strip's actual outer edges — co-linear with the primary
+              // card's top/bottom edges, so they read as connected.
+              // borderLeft stays absent so the strip's left side is
+              // open onto the primary, no vertical wall.
+              borderRight: isPortalLocked
+                ? '2px solid rgba(255,255,255,0.92)'
+                : '1px solid rgba(255,255,255,0.2)',
+              borderTop: isPortalLocked
+                ? '2px solid rgba(255,255,255,0.92)'
+                : '1px solid rgba(255,255,255,0.12)',
+              borderBottom: isPortalLocked
+                ? '2px solid rgba(255,255,255,0.92)'
+                : '1px solid rgba(255,255,255,0.12)',
               overflow: 'visible',
               zIndex: stripZ,
               cursor: 'pointer',
               userSelect: 'none',
               pointerEvents: 'all',
-              transition: 'filter 0.15s ease',
+              transition: 'filter 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease',
+              // Dimmed strips fade to near-black via brightness/saturate
+              // rather than translucency. The hero image stays in place
+              // (rendered below) so it adds a faint texture once crushed
+              // by the filter — keeps the strips from reading as flat
+              // dead rectangles. A touch of contrast deepens the shadows
+              // so the inset vignette has something to bite into.
               filter: isSurfaced
                 ? 'brightness(1.22) drop-shadow(4px 6px 10px rgba(0,0,0,0.55))'
-                : 'none',
+                : isPortalDimmed
+                  ? 'brightness(0.28) saturate(0.35) contrast(1.15)'
+                  : 'none',
+              // Locked: soft blue glow.
+              // Dimmed: layered inset shadow — a tight inner ring darkens
+              // the strip's edges (vignette), and a top-biased shadow
+              // adds a subtle "in shadow from above" depth cue so each
+              // strip reads as recessed rather than printed flat.
+              boxShadow: isPortalLocked
+                ? '0 0 12px 2px rgba(120,180,255,0.5)'
+                : isPortalDimmed
+                  ? 'inset 0 0 14px rgba(0,0,0,0.55), inset 0 14px 22px -10px rgba(0,0,0,0.7)'
+                  : 'none',
             }}
-            onPointerEnter={() => setSurfacedId(sc.id)}
-            onPointerLeave={() => setSurfacedId(prev => prev === sc.id ? null : prev)}
+            // Hover handlers gated by isPortalDimmed: a dimmed strip
+            // doesn't respond to mouseover, so the locked-strip preview
+            // stays put while the cursor passes over its siblings. Click
+            // (onPointerDown) still works — that's how the user swaps the
+            // portal selection to a different strip.
+            onPointerEnter={() => { if (!isPortalDimmed) setSurfacedId(sc.id) }}
+            onPointerLeave={() => { if (!isPortalDimmed) setSurfacedId(prev => prev === sc.id ? null : prev) }}
             onPointerDown={e => onStripDown(e, sc.id)}
           >
             {scHero && (
@@ -1964,10 +2087,67 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
         )
       })}
 
+      {/* Portal-lock CONNECTORS — two bright bars at the top and bottom
+            of the strips area, spanning from INSIDE the primary card's
+            rounded right corner (extended PRIMARY_RADIUS px leftward
+            so the bar visibly tucks into the card's top-right / bottom-
+            right corner) across the in-between strips and ending where
+            the locked strip's straight top/bottom border ends (i.e.
+            STRIP_RADIUS before the strip's rounded right corner). The
+            strip's own rounded corner closes the bracket on the right,
+            so the connectors don't poke out as little dots past the
+            curve. z=30 keeps the bars above all strips AND above the
+            surfaced overlay's bright border, so the leftward extension
+            is actually visible against the primary card's corner zone. */}
+      {(() => {
+        if (lockedStripIdx < 0) return null
+        const PRIMARY_RADIUS = 12 // matches the primary card's borderRadius
+        // Width = wrap-in distance on the left + strips spanned − strip
+        // radius on the right. The bar starts at (screenWidth - PRIMARY_RADIUS)
+        // so its left end visually enters the primary card's rounded corner.
+        // During a fan transition, the useLayoutEffect above overrides this
+        // width imperatively so the bars track the locked strip's slide.
+        const connectorWidth =
+          PRIMARY_RADIUS + (lockedStripIdx + 1) * FAN_STRIP_WIDTH - STRIP_RADIUS
+        const barStyle: React.CSSProperties = {
+          position: 'absolute',
+          left: screenWidth - PRIMARY_RADIUS,
+          width: connectorWidth,
+          height: 2,
+          background: 'rgba(255,255,255,0.92)',
+          zIndex: 30,
+          pointerEvents: 'none',
+        }
+        return (
+          <>
+            <div
+              ref={el => { connectorRefs.current.top = el }}
+              style={{ ...barStyle, top: 0 }}
+            />
+            <div
+              ref={el => { connectorRefs.current.bottom = el }}
+              style={{ ...barStyle, top: screenHeight - 2 }}
+            />
+          </>
+        )
+      })()}
+
       {/* Surfaced card — full-size overlay when hovering a strip.
            Shows the card's own hero image + header/body text (GroupCardText),
            plus the card title at the bottom — same as how primary card renders. */}
-      {surfacedGroup && (
+      {surfacedGroup && (() => {
+        // Distinguish PORTAL-LOCKED state from transient hover: when the
+        // surfaced group matches the click-locked portal member, give
+        // the overlay a brighter accent ring + outer glow. Hover-only
+        // gets the subtler blue-tinted border.
+        const isPortalRender = surfacedGroup.id === portalMemberId
+        const overlayBorder = isPortalRender
+          ? '2px solid rgba(255,255,255,0.92)'
+          : '2px solid rgba(180,210,255,0.7)'
+        const overlayShadow = isPortalRender
+          ? '0 8px 32px rgba(0,0,0,0.6), 0 0 14px 2px rgba(120,180,255,0.45)'
+          : '0 8px 32px rgba(0,0,0,0.6)'
+        return (
         <div
           style={{
             position: 'absolute',
@@ -1977,8 +2157,8 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
             height: screenHeight,
             borderRadius: 12,
             background: surfacedGroup.color,
-            border: '2px solid rgba(180,210,255,0.7)',
-            boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
+            border: overlayBorder,
+            boxShadow: overlayShadow,
             overflow: 'hidden',
             zIndex: 20,
             pointerEvents: 'none',
@@ -2024,7 +2204,8 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
             </>
           )}
         </div>
-      )}
+        )
+      })()}
 
       {/* Primary card — front, identical to open state */}
       <div
@@ -2049,7 +2230,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
           // secondaries push slot 0's z to 10+, which ties or beats a
           // fixed primary at 10 — and the dragged card (sharing that z)
           // pops in front of primary instead of sliding under it.
-          zIndex: (surfacedId && !extractingCardId)
+          zIndex: (effectiveSurfacedId && !extractingCardId)
             ? 5
             : Math.max(10, secondaryItems.length + 2),
         }}

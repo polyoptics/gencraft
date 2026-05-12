@@ -270,6 +270,23 @@ function useEscapeDrawMode() {
   }, [])
 }
 
+/** Esc clears any deck-portal preview (click on a fanned member locks
+ *  that member's content onto the anchor's face; this hook releases
+ *  the lock so the anchor goes back to showing its own content). */
+function useEscapeDeckPortals() {
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      const cs = useCanvasStore.getState()
+      if (Object.keys(cs.deckPortalSelections).length === 0) return
+      e.preventDefault()
+      cs.clearAllDeckPortals()
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [])
+}
+
 function UndoRedoButtons() {
   const canUndo = useUndoCoordinator(s => s.canUndo)
   const canRedo = useUndoCoordinator(s => s.canRedo)
@@ -356,6 +373,7 @@ export default function App() {
   useKeyboardCopyPaste()
   useKeyboardUndo()
   useEscapeDrawMode()
+  useEscapeDeckPortals()
   useBase64Migration()
 
   const [deckBrowserOpen, setDeckBrowserOpen] = useState(false)
