@@ -8,6 +8,7 @@ import { FreeCanvas } from '../Canvas/FreeCanvas'
 import { NLETimelineHeader } from '../NLE/NLETimelineHeader'
 import { CardOutline } from './CardOutline'
 import { BlockOutline } from './BlockOutline'
+import { PortalFrame } from './PortalFrame'
 import { useBoardsStore } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { getHiddenGroupIds } from '../../hooks/useCardDecks'
@@ -24,6 +25,7 @@ const Canvas: React.FC = () => (
 const Overlay: React.FC = () => {
   const groups = useBoardsStore(s => s.groups)
   const zoneLineY = useCanvasStore(s => s.zoneLineY)
+  const portalSelections = useCanvasStore(s => s.deckPortalSelections)
   const hiddenGroups = useMemo(
     () => getHiddenGroupIds(groups, {} as any, zoneLineY),
     [groups, zoneLineY],
@@ -32,9 +34,33 @@ const Overlay: React.FC = () => {
     () => groups.filter(g => !hiddenGroups.has(g.id)),
     [groups, hiddenGroups],
   )
+  // Anchors with active portals: suppress their normal CardOutline,
+  // BlockOutlines, and NLETimelineHeader — PortalFrame provides the
+  // unified header + body for portal anchors instead. The displayed
+  // member's own boards still render their natural block-level
+  // headers (that's the proper board-level chrome for the bars
+  // shown inside the portal slot).
+  const portalAnchorIds = useMemo(
+    () => new Set(Object.keys(portalSelections)),
+    [portalSelections],
+  )
+  const visibleNonPortalGroups = useMemo(
+    () => visibleGroups.filter(g => !portalAnchorIds.has(g.id)),
+    [visibleGroups, portalAnchorIds],
+  )
+  const portalGlows = useMemo(() => {
+    const out: Array<{ key: string; anchor: typeof groups[0]; member: typeof groups[0]; memberColor: string }> = []
+    for (const [anchorId, memberId] of Object.entries(portalSelections)) {
+      const anchor = groups.find(g => g.id === anchorId)
+      const member = groups.find(g => g.id === memberId)
+      if (!anchor || !member) continue
+      out.push({ key: `portal-glow-${anchorId}`, anchor, member, memberColor: member.color })
+    }
+    return out
+  }, [portalSelections, groups])
   return (
     <>
-      {visibleGroups.map(g => (
+      {visibleNonPortalGroups.map(g => (
         <React.Fragment key={g.id}>
           <CardOutline group={g} />
           {/* BlockOutlines: inner-partition outlines per board. CardOutline
@@ -47,6 +73,9 @@ const Overlay: React.FC = () => {
           ))}
           <NLETimelineHeader groupId={g.id} />
         </React.Fragment>
+      ))}
+      {portalGlows.map(p => (
+        <PortalFrame key={p.key} anchor={p.anchor} member={p.member} memberColor={p.memberColor} />
       ))}
     </>
   )
