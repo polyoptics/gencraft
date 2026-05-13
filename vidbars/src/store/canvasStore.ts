@@ -74,6 +74,15 @@ interface CanvasStore {
    *  applies to roots in 'flat', and to siblings within each tree branch
    *  in 'tree'). Persisted. */
   rolodexView: 'flat' | 'tree'
+  /** Display mode for the active card in the Rolodex.
+   *  - 'auto':    today's behavior — active stays compact until the
+   *    panel passes the "all tabs fit" threshold, then it grows.
+   *  - 'compact': active never grows past its peek tab; dragging the
+   *    panel just reveals more rows as tabs.
+   *  - 'full':    active grows immediately as the panel opens and
+   *    locks at full hero size once there's room for it. Further
+   *    panel growth past that reveals additional peek tabs. */
+  rolodexDisplayMode: 'auto' | 'compact' | 'full'
   /** Extra pixels added to the active card's visible tab in the Rolodex.
    *  0 = compact (just-the-name, peek-tab view); when larger, the active
    *  slot grows downward to reveal more of the card content (hero image,
@@ -126,6 +135,7 @@ interface CanvasStore {
   setRolodexOpen: (open: boolean) => void
   setRolodexSortMode: (mode: 'creation' | 'alphabetical') => void
   setRolodexView: (mode: 'flat' | 'tree') => void
+  setRolodexDisplayMode: (mode: 'auto' | 'compact' | 'full') => void
   setRolodexPos: (pos: { x: number; y: number }) => void
   setRolodexExpansion: (px: number) => void
   toggleRolodexDeckCollapsed: (groupId: string) => void
@@ -156,6 +166,7 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
   rolodexOpen: false,
   rolodexSortMode: 'creation',
   rolodexView: 'flat',
+  rolodexDisplayMode: 'auto',
   rolodexPos: { x: 12, y: 60 },
   // Default to 34 — the historical "compact, popped active, no images" look.
   // Drag up to reach super-collapsed (expansion = 0, all tabs uniform); drag
@@ -221,6 +232,7 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
   setRolodexOpen: (rolodexOpen) => set({ rolodexOpen }),
   setRolodexSortMode: (rolodexSortMode) => set({ rolodexSortMode }),
   setRolodexView: (rolodexView) => set({ rolodexView }),
+  setRolodexDisplayMode: (rolodexDisplayMode) => set({ rolodexDisplayMode }),
   setRolodexPos: (rolodexPos) => set({ rolodexPos }),
   setRolodexExpansion: (rolodexExpansion) => set({ rolodexExpansion }),
   toggleRolodexDeckCollapsed: (groupId) => set(s => {
@@ -315,6 +327,7 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
     rolodexOpen: s.rolodexOpen,
     rolodexSortMode: s.rolodexSortMode,
     rolodexView: s.rolodexView,
+    rolodexDisplayMode: s.rolodexDisplayMode,
     rolodexPos: s.rolodexPos,
     rolodexExpansion: s.rolodexExpansion,
     rolodexCollapsedDeckIds: s.rolodexCollapsedDeckIds,

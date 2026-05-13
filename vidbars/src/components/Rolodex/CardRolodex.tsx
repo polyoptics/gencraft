@@ -350,10 +350,19 @@ function buildTreeList(
   for (const d of sortGroups(rootDecks, sortMode)) emit(d, 0)
   for (const s of sortGroups(standalones, sortMode)) emit(s, 0)
 
-  // Safety net — anything visited.has missed (e.g. orphaned member
-  // whose anchor doesn't exist in `groups`). Append at level 0.
+  // Safety net — emit any truly orphaned member (its anchor is NOT
+  // present in `groups`, so the main pass had no way to reach it).
+  // Crucially, we do NOT emit children of decks that ARE present
+  // but happen to be collapsed — the main pass deliberately skipped
+  // them, and re-emitting at level 0 would flatten the hierarchy
+  // every time the user collapsed a deck.
+  const groupIdSet = new Set(groups.map(g => g.id))
   for (const g of groups) {
-    if (!visited.has(g.id)) emit(g, 0)
+    if (visited.has(g.id)) continue
+    const hasPresentAnchor =
+      g.deckAnchorId && g.deckAnchorId !== g.id && groupIdSet.has(g.deckAnchorId)
+    if (hasPresentAnchor) continue
+    emit(g, 0)
   }
 
   return out
@@ -367,6 +376,8 @@ export const CardRolodex: React.FC = () => {
   const setSortMode = useCanvasStore(s => s.setRolodexSortMode)
   const view = useCanvasStore(s => s.rolodexView)
   const setView = useCanvasStore(s => s.setRolodexView)
+  const displayMode = useCanvasStore(s => s.rolodexDisplayMode)
+  const setDisplayMode = useCanvasStore(s => s.setRolodexDisplayMode)
   const setRolodexOpen = useCanvasStore(s => s.setRolodexOpen)
   const rolodexPos = useCanvasStore(s => s.rolodexPos)
   const setRolodexPos = useCanvasStore(s => s.setRolodexPos)
@@ -380,20 +391,21 @@ export const CardRolodex: React.FC = () => {
   // past MAX_EXPANSION and the panel keeps growing to reveal more
   // below-stack cards.
   const LIST_AREA_H = Math.max(0, LIST_AREA_H_COMPACT + rolodexExpansion)
-  // activeGrowth = the portion of rolodexExpansion that contributes
-  // to the active card's height (capped at MAX_EXPANSION). Past that
-  // the user is in "panel growth" territory — only the panel gets
-  // taller, the active card stays at CARD_H.
-  const activeGrowth = Math.max(0, Math.min(MAX_EXPANSION, rolodexExpansion))
-  // 0 (super-collapsed or closed) → 1 (active fully grown). Drives
-  // hero-image opacity (staggered fade by offset), the bell
-  // anticipation amplitude / radius, the below-stack overlap, and
-  // the tween-rate slowdown. Past MAX_EXPANSION this stays at 1 so
-  // all the visual effects freeze while the panel keeps growing.
-  const expansionFraction = MAX_EXPANSION > 0 ? activeGrowth / MAX_EXPANSION : 0
+  // activeGrowth + expansionFraction are computed AFTER rows is built
+  // so we can scale the phase-2 threshold to the list's actual row
+  // count (see compactThreshold below). For long lists that fully
+  // fill the compact view, the threshold is 0 — same as before. For
+  // short lists, the threshold is negative so the active card starts
+  // growing earlier (the moment the panel is tall enough to show all
+  // tabs at peek height).
   const groups = useBoardsStore(s => s.groups)
   const boards = useBoardsStore(s => s.boards)
   const jumpToGroup = useCanvasStore(s => s.jumpToGroup)
+
+  // Search filter — controls the header input. Filters the list by
+  // group name. Tree-mode preserves ancestry: if any descendant matches,
+  // its anchor chain is kept too so the user sees the full deck context.
+  const [searchQuery, setSearchQuery] = useState('')
 
   // Skip phantom groups whose boardIds all resolve to missing/empty
   // boards — the canvas already hides them (rendered as 0×0), so the
@@ -401,10 +413,39 @@ export const CardRolodex: React.FC = () => {
   // double-clicked. The boardsStore v12 migration prunes these on
   // load, but this filter stays as a runtime safety net for any
   // phantom produced after load.
-  const visibleGroups = useMemo(
+  const renderableGroups = useMemo(
     () => groups.filter(g => hasRenderableContent(g, boards)),
     [groups, boards],
   )
+
+  // Apply the search filter on top of renderableGroups. A group is
+  // kept if (a) its own name matches, or (b) any of its descendants
+  // match — so a search for a child still surfaces the parent deck.
+  const visibleGroups = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase()
+    if (!q) return renderableGroups
+    const nameMatch = (g: ProjectGroup) => (g.name || '').toLowerCase().includes(q)
+    // Set of group ids whose own name matches the query.
+    const matched = new Set<string>()
+    for (const g of renderableGroups) {
+      if (nameMatch(g)) matched.add(g.id)
+    }
+    if (matched.size === 0) return [] as ProjectGroup[]
+    // For each match, walk up its anchor chain and include each
+    // ancestor so the deck/sub-deck hierarchy survives the filter.
+    const byId = new Map(renderableGroups.map(g => [g.id, g] as const))
+    const keep = new Set<string>(matched)
+    for (const id of matched) {
+      let cur = byId.get(id)
+      while (cur && cur.deckAnchorId && cur.deckAnchorId !== cur.id) {
+        const parent = byId.get(cur.deckAnchorId)
+        if (!parent || keep.has(parent.id)) break
+        keep.add(parent.id)
+        cur = parent
+      }
+    }
+    return renderableGroups.filter(g => keep.has(g.id))
+  }, [renderableGroups, searchQuery])
 
   // Pre-resolve hero images for every renderable group so slots can
   // show a thumbnail-sized version of the actual card image in the
@@ -433,37 +474,56 @@ export const CardRolodex: React.FC = () => {
   }, [visibleGroups, boards])
 
   // ── Header drag — moves the panel by setting rolodexPos ───────
-  // dragOffsetRef captures the cursor's offset from the panel's top-left
-  // at pointerdown, then on pointermove we set the panel's left/top so
-  // that offset is preserved (cursor stays anchored to the same spot in
-  // the header). Persists via canvasStore so position survives reloads.
-  const dragOffsetRef = useRef<{ dx: number; dy: number } | null>(null)
-  const onHeaderPointerDown = useCallback((e: React.PointerEvent) => {
-    // Buttons (sort, close) own their own clicks — don't treat
-    // pointerdown on them as the start of a drag.
-    if ((e.target as HTMLElement).closest('button')) return
+  // Panel-wide drag. Pointerdown anywhere on the panel — header empty
+  // space, side rails, panel background between/below cards — moves the
+  // window. Skipped targets: buttons (own clicks), cards (their handlers
+  // stopPropagation), cabinet handle (stopPropagation), the search
+  // input (special-cased so click-to-focus still works and click-and-
+  // drag still moves the panel). Persists position via canvasStore so
+  // it survives reloads.
+  const onPanelPointerDown = useCallback((e: React.PointerEvent) => {
+    // Don't leak to the canvas behind the panel.
+    e.stopPropagation()
     if (e.button !== 0) return
-    e.preventDefault()
-    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
-    dragOffsetRef.current = {
-      dx: e.clientX - rolodexPos.x,
-      dy: e.clientY - rolodexPos.y,
+    const target = e.target as HTMLElement
+    if (target.closest('button')) return
+
+    const startX = e.clientX
+    const startY = e.clientY
+    const startPanelX = rolodexPos.x
+    const startPanelY = rolodexPos.y
+    const isInput = target.tagName === 'INPUT'
+    let dragging = false
+
+    if (!isInput) {
+      // Non-input target: start drag immediately. preventDefault keeps
+      // the cursor from selecting text on side rails or panel bg.
+      e.preventDefault()
+      dragging = true
     }
-  }, [rolodexPos])
-  const onHeaderPointerMove = useCallback((e: React.PointerEvent) => {
-    if (!dragOffsetRef.current) return
-    e.preventDefault()
-    // Clamp loosely to viewport so the user can't drag the panel fully
-    // offscreen and lose access to it.
-    const x = Math.max(0, Math.min(window.innerWidth - 40, e.clientX - dragOffsetRef.current.dx))
-    const y = Math.max(0, Math.min(window.innerHeight - 40, e.clientY - dragOffsetRef.current.dy))
-    setRolodexPos({ x, y })
-  }, [setRolodexPos])
-  const onHeaderPointerUp = useCallback((e: React.PointerEvent) => {
-    if (!dragOffsetRef.current) return
-    try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId) } catch { /* ignore */ }
-    dragOffsetRef.current = null
-  }, [])
+    // For input: don't preventDefault — let focus and text-selection
+    // work normally. We escalate to drag only after the cursor moves
+    // past a 4-px threshold, at which point we blur the input.
+
+    const onMove = (ev: PointerEvent) => {
+      if (!dragging) {
+        const dxAbs = Math.abs(ev.clientX - startX)
+        const dyAbs = Math.abs(ev.clientY - startY)
+        if (dxAbs * dxAbs + dyAbs * dyAbs <= 16) return
+        if (isInput) target.blur()
+        dragging = true
+      }
+      const x = Math.max(0, Math.min(window.innerWidth - 40, startPanelX + ev.clientX - startX))
+      const y = Math.max(0, Math.min(window.innerHeight - 40, startPanelY + ev.clientY - startY))
+      setRolodexPos({ x, y })
+    }
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }, [rolodexPos, setRolodexPos])
 
   // Double-click the header to toggle the panel between CLOSED
   // (rolodexExpansion = MIN_EXPANSION; only header + cabinet visible)
@@ -473,8 +533,11 @@ export const CardRolodex: React.FC = () => {
   const previousExpansionRef = useRef<number | null>(null)
   const DEFAULT_OPEN_EXPANSION = 34
   const onHeaderDoubleClick = useCallback((e: React.MouseEvent) => {
-    // Buttons own their own clicks (toggle view / sort / close).
-    if ((e.target as HTMLElement).closest('button')) return
+    // Buttons + the search input own their own clicks (toggle view /
+    // sort / close, text-select inside the search field).
+    const target = e.target as HTMLElement
+    if (target.closest('button')) return
+    if (target.tagName === 'INPUT') return
     const current = useCanvasStore.getState().rolodexExpansion
     if (current <= MIN_EXPANSION) {
       // Re-open: restore last open state, or fall back to compact.
@@ -492,9 +555,12 @@ export const CardRolodex: React.FC = () => {
   // delta and updates rolodexExpansion (clamped to [0, MAX_EXPANSION]).
   // The panel grows DOWNWARD with the user's pointer — the cabinet base
   // visually tracks the cursor, like grabbing a drawer pull.
+  //
   const expandDragRef = useRef<{ startY: number; startExpansion: number } | null>(null)
   const onExpandPointerDown = useCallback((e: React.PointerEvent) => {
     if (e.button !== 0) return
+    // Block bubble so the panel-level pan drag doesn't also engage.
+    e.stopPropagation()
     e.preventDefault()
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
     expandDragRef.current = { startY: e.clientY, startExpansion: rolodexExpansion }
@@ -503,11 +569,14 @@ export const CardRolodex: React.FC = () => {
     if (!expandDragRef.current) return
     e.preventDefault()
     const dy = e.clientY - expandDragRef.current.startY
-    // Allow the full range: MIN_EXPANSION (drag UP to close the panel)
-    // through MAX_EXPANSION (active reaches CARD_H) and beyond up to
-    // MAX_EXPANSION_TOTAL (drag DOWN further to reveal more below
-    // cards — active stays at CARD_H, panel just grows).
-    const next = Math.max(MIN_EXPANSION, Math.min(MAX_EXPANSION_TOTAL, expandDragRef.current.startExpansion + dy))
+    // Clamp range:
+    //   MIN_EXPANSION (drag UP to close the panel) →
+    //   contentMaxExpansionRef.current (drag DOWN limit).
+    // The DOWN limit is dynamic — for short lists it locks at "all
+    // cards visible + active fully grown" so the cabinet doesn't keep
+    // pulling into empty space. For long lists it falls back to the
+    // original MAX_EXPANSION_TOTAL ceiling.
+    const next = Math.max(MIN_EXPANSION, Math.min(contentMaxExpansionRef.current, expandDragRef.current.startExpansion + dy))
     setRolodexExpansion(next)
   }, [setRolodexExpansion])
   const onExpandPointerUp = useCallback((e: React.PointerEvent) => {
@@ -529,6 +598,65 @@ export const CardRolodex: React.FC = () => {
       ? buildTreeList(visibleGroups, sortMode, collapsedDeckIdSet)
       : buildFlatList(visibleGroups, sortMode)
   ), [visibleGroups, sortMode, view, collapsedDeckIdSet])
+
+  // ── Phase-scaling + display mode ──────────────────────────────
+  // compactThreshold = the expansion value at which Phase 2 (active
+  // grows) begins. Per-mode:
+  //   auto    → keep today's rule: 0 for long lists, negative for
+  //             short ones (so all tabs fit before active grows).
+  //   compact → +Infinity (never enter Phase 2 — active stays at peek
+  //             no matter how far the panel is dragged).
+  //   full    → as low as MIN_EXPANSION territory so active starts
+  //             growing immediately as the panel opens from closed.
+  //             The clamp into [0, MAX_EXPANSION] still caps active
+  //             at full once there's enough room.
+  const autoCompactThreshold = Math.min(0, rows.length * SLOT_PEEK_H - LIST_AREA_H_COMPACT)
+  const compactThreshold =
+    displayMode === 'compact' ? Number.POSITIVE_INFINITY
+    : displayMode === 'full'  ? SLOT_PEEK_H + COLLAPSED_BONUS - LIST_AREA_H_COMPACT
+    : autoCompactThreshold
+  // activeGrowth = how much of rolodexExpansion contributes to the
+  // active card's height. Clamped to [0, MAX_EXPANSION]. The
+  // compactThreshold offset is what defines each mode's "when does
+  // the active start growing?" rule.
+  const activeGrowth = displayMode === 'compact'
+    ? 0
+    : Math.max(0, Math.min(MAX_EXPANSION, rolodexExpansion - compactThreshold))
+  // 0 (compact) → 1 (active fully grown). Drives image opacity,
+  // bell amplitude/radius, below-stack overlap, tween slowdown.
+  const expansionFraction = MAX_EXPANSION > 0 ? activeGrowth / MAX_EXPANSION : 0
+
+  // Max expansion the user can drag to. Mode-aware:
+  //   compact → all rows visible as peek tabs, no Phase 2.
+  //             cap = rows*peek + COLLAPSED_BONUS - LIST_AREA_H_COMPACT.
+  //   full / auto → all rows + active at full hero size, same as the
+  //             previous content cap. Falls back to MAX_EXPANSION_TOTAL
+  //             for very long lists where Phase 3 (extra below-cards
+  //             reveal) is the real ceiling.
+  const naturalContentMaxExpansion = displayMode === 'compact'
+    ? rows.length * SLOT_PEEK_H + COLLAPSED_BONUS - LIST_AREA_H_COMPACT
+    : rows.length * SLOT_PEEK_H + COLLAPSED_BONUS + MAX_EXPANSION - LIST_AREA_H_COMPACT
+  const contentMaxExpansion = Math.min(naturalContentMaxExpansion, MAX_EXPANSION_TOTAL)
+  // Refs let the imperative drag/tween paths read the current values
+  // without needing to be inside the render function.
+  const compactThresholdRef = useRef(0)
+  const contentMaxExpansionRef = useRef(MAX_EXPANSION_TOTAL)
+  compactThresholdRef.current = compactThreshold
+  contentMaxExpansionRef.current = contentMaxExpansion
+
+  // Auto-clamp rolodexExpansion when row count or display mode
+  // changes so the panel never persists a size larger than the
+  // current mode's content cap. The drag handler also clamps to
+  // contentMaxExpansion live, so the store stays consistent.
+  useEffect(() => {
+    if (rows.length === 0) return
+    if (rolodexExpansion > contentMaxExpansion) {
+      setRolodexExpansion(contentMaxExpansion)
+    }
+    // Intentionally not depending on rolodexExpansion: we only shrink
+    // when the row count or display mode changes, not on every drag.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows.length, displayMode])
 
   // Max indent depth across the ENTIRE list (not just visible rows).
   // Drives the panel's right-edge extension so the header / outer
@@ -603,8 +731,11 @@ export const CardRolodex: React.FC = () => {
     // Use the ACTIVE-GROWTH fraction (clamped 0..1) so negative
     // expansion (panel closing) and post-MAX_EXPANSION (panel growth
     // past full) both freeze the slowdown at the same value rather
-    // than feeding the formula a value outside [0, 1].
-    const activeGrowth = Math.max(0, Math.min(MAX_EXPANSION, expansion))
+    // than feeding the formula a value outside [0, 1]. The
+    // compactThresholdRef shift matches the render-side activeGrowth
+    // so the slowdown engages from Phase 2 start regardless of list
+    // length.
+    const activeGrowth = Math.max(0, Math.min(MAX_EXPANSION, expansion - compactThresholdRef.current))
     const expansionFraction = MAX_EXPANSION > 0 ? activeGrowth / MAX_EXPANSION : 0
     const slowdown = 1 + (EXPANSION_SLOWDOWN_FACTOR - 1) * expansionFraction
     const easing = TWEEN_EASE / slowdown
@@ -998,11 +1129,46 @@ export const CardRolodex: React.FC = () => {
 
   return (
     <>
+      {/* Dock anchors to the panel like an attached piece of the frame:
+          - Fully closed: dock fades out (opacity 0) — invisible.
+          - As the panel opens: dock pops in (opacity 1), top edge
+            flush with the header top.
+          - As the panel grows past the dock height: the dock slides
+            down with the panel bottom (kept flush) until it reaches
+            its final position (≈ 116 px below the top, beside the
+            active card row), then locks there.
+          The 'pseudo-cabinet' colors in the dock's styles make it read
+          as a small detachable piece of the same frame. */}
+      {(() => {
+        const APPROX_HEADER_H = 26
+        const DOCK_H = 82
+        const FINAL_OFFSET = 26 + 3 * SLOT_PEEK_H // 116 — beside active row
+        // panel_height = header + list area + cabinet bar.
+        const approxPanelH = APPROX_HEADER_H + LIST_AREA_H + CABINET_BAR_H
+        const dockOffset = Math.max(0, Math.min(FINAL_OFFSET, approxPanelH - DOCK_H))
+        // Fade out when fully collapsed; pop in as soon as any list
+        // area appears.
+        const fade = LIST_AREA_H > 0 ? 1 : 0
+        return (
+          <DisplayModeDock
+            mode={displayMode}
+            setMode={setDisplayMode}
+            left={rolodexPos.x - 30}
+            top={rolodexPos.y}
+            slideOffset={dockOffset}
+            fade={fade}
+            onPointerDownBg={onPanelPointerDown}
+            onWheel={onWheel}
+          />
+        )
+      })()}
       <div
         data-rolodex
         onWheel={onWheel}
-        // Stop pan/clicks from leaking to the canvas behind the panel.
-        onPointerDown={e => e.stopPropagation()}
+        // Whole-panel drag — pointerdown anywhere except buttons/cards/
+        // cabinet/input(click) moves the window. See onPanelPointerDown
+        // for the per-target rules.
+        onPointerDown={onPanelPointerDown}
         style={{
           position: 'fixed',
           left: rolodexPos.x,
@@ -1042,17 +1208,11 @@ export const CardRolodex: React.FC = () => {
           flexDirection: 'column',
           gap: 0,
         }}>
-          {/* Header — top of the FRAME. Solid frame color, drag handle
-              for the whole panel. Pointer events on buttons short-
-              circuit the drag (see onHeaderPointerDown), so the close
-              and sort icons still click normally. Double-click toggles
-              the panel between closed (MIN_EXPANSION) and a previous
-              open state. */}
+          {/* Header — top of the FRAME. Solid frame color. The panel-
+              wide drag handler on the outer container handles dragging
+              (see onPanelPointerDown). Double-click toggles between
+              closed (MIN_EXPANSION) and a previous open state. */}
           <div
-            onPointerDown={onHeaderPointerDown}
-            onPointerMove={onHeaderPointerMove}
-            onPointerUp={onHeaderPointerUp}
-            onPointerCancel={onHeaderPointerUp}
             onDoubleClick={onHeaderDoubleClick}
             style={{
               display: 'flex',
@@ -1073,12 +1233,42 @@ export const CardRolodex: React.FC = () => {
               zIndex: 1,
             }}
           >
-            <span style={{
-              color: 'rgba(255,255,255,0.85)',
-              fontSize: 11,
-              fontWeight: 700,
-              letterSpacing: '0.5px',
-            }}>CARDS</span>
+            {/* Search input — replaces the static "CARDS" label so the
+                header doubles as a filter field. Placeholder ALL-CAPS
+                "CARDS" preserves the original label vibe when empty.
+                Pointer-events override the parent's drag/double-click
+                via the tag check in onHeaderPointerDown above. */}
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Escape') {
+                  setSearchQuery('')
+                  ;(e.target as HTMLInputElement).blur()
+                }
+                // Stop arrow keys from triggering canvas pan / nav.
+                e.stopPropagation()
+              }}
+              placeholder="SEARCH"
+              spellCheck={false}
+              autoComplete="off"
+              style={{
+                flex: 1,
+                minWidth: 0,
+                marginRight: 6,
+                background: 'transparent',
+                border: 'none',
+                outline: 'none',
+                color: 'rgba(255,255,255,0.92)',
+                fontSize: 11,
+                fontWeight: 700,
+                letterSpacing: searchQuery ? '0.2px' : '0.5px',
+                fontFamily: 'inherit',
+                padding: 0,
+                cursor: 'text',
+              }}
+            />
             <div style={{ display: 'flex', gap: 3 }}>
               <ViewToggle mode={view} setMode={setView} />
               <SortToggle mode={sortMode} setMode={setSortMode} />
@@ -1632,6 +1822,11 @@ const RolodexSlot: React.FC<{
   const draggedRef = useRef(false)
   const onSlotPointerDown = useCallback((e: React.PointerEvent) => {
     if (e.button !== 0) return
+    // The card owns its pointer-down: short clicks are slot selection,
+    // drags spawn a link-drag to the canvas. Stop the bubble so the
+    // panel-wide drag handler doesn't steal the gesture (its 4-px
+    // threshold beats the card's 5-px otherwise).
+    e.stopPropagation()
     const startX = e.clientX
     const startY = e.clientY
     const DRAG_THRESHOLD_PX = 5
@@ -2024,6 +2219,110 @@ const SortToggle: React.FC<{
     }}
   >{mode === 'creation' ? '#' : 'A→Z'}</button>
 )
+
+// Side dock attached to the LEFT edge of the Rolodex panel. Three
+// buttons toggle the active-card display mode (see canvasStore's
+// rolodexDisplayMode). The dock's background reuses the panel's own
+// drag handler so clicking the empty area still moves the window —
+// buttons stop propagation in their onPointerDown to suppress that.
+// Wheel events forward to the panel's onWheel so scrolling over the
+// dock advances the list, like a side control box.
+const DisplayModeDock: React.FC<{
+  mode: 'auto' | 'compact' | 'full'
+  setMode: (m: 'auto' | 'compact' | 'full') => void
+  left: number
+  /** Absolute screen Y of the panel's top — this is the un-transitioned
+   *  anchor, so dragging the whole window keeps the dock locked 1:1
+   *  with the panel. */
+  top: number
+  /** Vertical offset (in px) of the dock relative to `top`. Animated
+   *  via transform so the open/close slide is smooth without lagging
+   *  the panel-drag motion. */
+  slideOffset: number
+  /** 0 = invisible, 1 = visible. Fades the dock out when the panel
+   *  is fully collapsed and back in as soon as it starts opening. */
+  fade: number
+  onPointerDownBg: (e: React.PointerEvent) => void
+  onWheel: (e: React.WheelEvent) => void
+}> = ({ mode, setMode, left, top, slideOffset, fade, onPointerDownBg, onWheel }) => {
+  const Btn: React.FC<{ value: 'auto' | 'compact' | 'full'; label: string; title: string }> = ({ value, label, title }) => {
+    const isActive = mode === value
+    return (
+      <button
+        title={title}
+        // Stop propagation on pointerdown too — the dock background
+        // is draggable, and we don't want a click on the button to
+        // also initiate a panel drag.
+        onPointerDown={e => e.stopPropagation()}
+        onClick={() => setMode(value)}
+        style={{
+          width: 22, height: 22,
+          background: isActive ? 'rgba(255,255,255,0.18)' : 'transparent',
+          border: `1px solid rgba(255,255,255,${isActive ? 0.45 : 0.14})`,
+          color: `rgba(255,255,255,${isActive ? 0.95 : 0.55})`,
+          borderRadius: 3,
+          cursor: 'pointer',
+          fontFamily: 'inherit',
+          fontSize: 11,
+          fontWeight: 700,
+          lineHeight: 1,
+          padding: 0,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >{label}</button>
+    )
+  }
+  return (
+    <div
+      data-rolodex-dock
+      onPointerDown={onPointerDownBg}
+      onWheel={onWheel}
+      style={{
+        position: 'fixed',
+        left,
+        // top tracks the panel anchor 1:1 — NO transition here, so
+        // when the user drags the whole window the dock stays glued
+        // to the panel without any lag.
+        top,
+        // The slide between "beside header" (closed) and "beside
+        // active row" (open) rides on transform, not top, so it
+        // animates independently of panel-drag. Pointer-events stay
+        // inside the dock since the transform doesn't shift the
+        // hit-test bounds anywhere weird.
+        transform: `translateY(${slideOffset}px)`,
+        opacity: fade,
+        width: 30,
+        // Frame color matches the panel's header / side rails / cabinet
+        // so the dock reads as a detachable extension of the same
+        // chassis. Inset highlight on the right side echoes the side-
+        // rail trim; drop shadow biases left so the dock looks lifted
+        // off the canvas like the panel itself.
+        background: FRAME_COLOR,
+        borderRadius: '6px 0 0 6px',
+        padding: 4,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 4,
+        zIndex: 900,
+        boxShadow: `inset -1px 0 0 ${FRAME_HIGHLIGHT}, -3px 0 6px -1px ${FRAME_SHADOW}, 0 4px 10px rgba(0,0,0,0.4)`,
+        userSelect: 'none',
+        // transform → slide animation. opacity → fade when fully
+        // collapsed. Neither affects `top`, so the panel-drag stays
+        // synchronous and 1:1.
+        transition: 'transform 0.18s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.2s ease',
+        // Don't capture pointer events while invisible — otherwise
+        // the user could still click an invisible dock by accident.
+        pointerEvents: fade < 0.05 ? 'none' : 'auto',
+      }}
+    >
+      <Btn value="compact" label="≡" title="Compact — all rows as peek tabs, active never grows" />
+      <Btn value="full" label="▣" title="Full — active card always at hero size when possible" />
+      <Btn value="auto" label="A" title="Auto — drag the cabinet to control active growth" />
+    </div>
+  )
+}
 
 const CloseButton: React.FC<{ onClick: () => void }> = ({ onClick }) => (
   <button
