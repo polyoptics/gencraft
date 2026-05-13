@@ -287,6 +287,31 @@ function useEscapeDeckPortals() {
   }, [])
 }
 
+// Garbage-collect dead deck portals: if a portal's anchor or member is
+// deleted, drop the entry so we don't silently render against a stale
+// id. Runs on every groups change — cheap because the inner loop only
+// fires when there's at least one active portal.
+function useDeadDeckPortalCleanup() {
+  const groups = useBoardsStore(s => s.groups)
+  useEffect(() => {
+    const cs = useCanvasStore.getState()
+    const portals = cs.deckPortalSelections
+    const entries = Object.entries(portals)
+    if (entries.length === 0) return
+    const aliveIds = new Set(groups.map(g => g.id))
+    const next: Record<string, string> = {}
+    let changed = false
+    for (const [anchorId, memberId] of entries) {
+      if (aliveIds.has(anchorId) && aliveIds.has(memberId)) {
+        next[anchorId] = memberId
+      } else {
+        changed = true
+      }
+    }
+    if (changed) useCanvasStore.setState({ deckPortalSelections: next })
+  }, [groups])
+}
+
 function UndoRedoButtons() {
   const canUndo = useUndoCoordinator(s => s.canUndo)
   const canRedo = useUndoCoordinator(s => s.canRedo)
@@ -374,6 +399,7 @@ export default function App() {
   useKeyboardUndo()
   useEscapeDrawMode()
   useEscapeDeckPortals()
+  useDeadDeckPortalCleanup()
   useBase64Migration()
 
   const [deckBrowserOpen, setDeckBrowserOpen] = useState(false)

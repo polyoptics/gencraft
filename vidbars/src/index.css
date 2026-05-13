@@ -34,3 +34,15 @@ body {
   box-shadow: 0 0 12px rgba(80,220,120,0.6);
   transform: translateX(-50%) scale(1.4) !important;
 }
+
+/* Deck-portal preview: view-only at block/board zoom. pointer-events
+   is NOT inherited in CSS, so a wrapper with `pointer-events: none`
+   wouldn't actually block events from reaching the child Boards/
+   BlockItems — descendants would keep their default `auto` and still
+   receive hover, drag, click, edit. Force the cascade with `!important`
+   on the wrapper and all its descendants. The portal chrome (header
+   and glow) lives in BoardLayer.Overlay / BlockLayer.Overlay, not
+   inside this wrapper, so it's unaffected. */
+[data-portal-render], [data-portal-render] * {
+  pointer-events: none !important;
+}

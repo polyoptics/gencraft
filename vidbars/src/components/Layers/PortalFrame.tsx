@@ -128,10 +128,34 @@ export const PortalFrame: React.FC<{
           whiteSpace: 'nowrap',
           overflow: 'hidden',
           textOverflow: 'ellipsis',
-          flex: 1,
-          minWidth: 0,
+          flexShrink: 0,
+          maxWidth: '50%',
           lineHeight: '14px',
         }}>{anchor.name || 'Card'}</span>
+        {/* "Viewing X" hint — a subtle suffix in the locked member's
+            color identifying which card is being previewed in this
+            anchor's slot. Muted so it reads as supplementary, not
+            competing with the anchor's title. */}
+        {member.name && (
+          <span style={{
+            color: memberColor,
+            opacity: 0.75,
+            fontSize: 9,
+            fontWeight: 600,
+            fontStyle: 'italic',
+            letterSpacing: '0.15px',
+            textShadow: '0 1px 3px rgba(0,0,0,0.6)',
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            flex: 1,
+            minWidth: 0,
+            lineHeight: '14px',
+          }}>
+            <span style={{ opacity: 0.5, margin: '0 6px' }}>·</span>
+            viewing {member.name}
+          </span>
+        )}
       </div>
       <div
         data-portal-glow={anchor.id}
