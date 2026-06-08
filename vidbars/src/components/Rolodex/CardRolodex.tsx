@@ -378,6 +378,28 @@ export const CardRolodex: React.FC = () => {
   const setView = useCanvasStore(s => s.setRolodexView)
   const displayMode = useCanvasStore(s => s.rolodexDisplayMode)
   const setDisplayMode = useCanvasStore(s => s.setRolodexDisplayMode)
+
+  // Hovered-zone state shared between the panel and the side dock.
+  // The dock only appears while the cursor is inside the panel OR
+  // the dock itself; leaving fires after a small grace period so
+  // moving the cursor from panel→dock (or back) doesn't flash the
+  // dock off and back on between the two pointerleave/enter events.
+  const [rolodexHovered, setRolodexHovered] = useState(false)
+  const hoverLeaveTimerRef = useRef<number | null>(null)
+  const onHoverEnter = useCallback(() => {
+    if (hoverLeaveTimerRef.current) {
+      clearTimeout(hoverLeaveTimerRef.current)
+      hoverLeaveTimerRef.current = null
+    }
+    setRolodexHovered(true)
+  }, [])
+  const onHoverLeave = useCallback(() => {
+    if (hoverLeaveTimerRef.current) clearTimeout(hoverLeaveTimerRef.current)
+    hoverLeaveTimerRef.current = window.setTimeout(() => {
+      setRolodexHovered(false)
+      hoverLeaveTimerRef.current = null
+    }, 80)
+  }, [])
   const setRolodexOpen = useCanvasStore(s => s.setRolodexOpen)
   const rolodexPos = useCanvasStore(s => s.rolodexPos)
   const setRolodexPos = useCanvasStore(s => s.setRolodexPos)
@@ -804,6 +826,10 @@ export const CardRolodex: React.FC = () => {
 
   const onSlotDoubleClick = useCallback((g: ProjectGroup) => {
     jumpToGroup(g.id)
+    // Highlight the group on the canvas too — same selection
+    // state the canvas's own click would set, so the user sees
+    // where the jumped-to card is.
+    useBoardsStore.getState().setSelectedGroup(g.id)
   }, [jumpToGroup])
 
   // ── Placement mode ──
@@ -1142,29 +1168,46 @@ export const CardRolodex: React.FC = () => {
       {(() => {
         const APPROX_HEADER_H = 26
         const DOCK_H = 82
+        const DOCK_W = 30
         const FINAL_OFFSET = 26 + 3 * SLOT_PEEK_H // 116 — beside active row
-        // panel_height = header + list area + cabinet bar.
         const approxPanelH = APPROX_HEADER_H + LIST_AREA_H + CABINET_BAR_H
         const dockOffset = Math.max(0, Math.min(FINAL_OFFSET, approxPanelH - DOCK_H))
-        // Fade out when fully collapsed; pop in as soon as any list
-        // area appears.
-        const fade = LIST_AREA_H > 0 ? 1 : 0
+        // Dock only shows while the rolodex (or the dock itself) is
+        // hovered. Still gated on LIST_AREA_H > 0 so a fully-collapsed
+        // panel doesn't flash the dock when the cursor passes over.
+        const fade = (LIST_AREA_H > 0 && rolodexHovered) ? 1 : 0
+        // If the panel is dragged so close to the left edge that the
+        // left-side dock would clip offscreen, flip to the right side
+        // of the panel. Threshold = dock width so the dock is always
+        // fully visible. Right-edge position uses the panel's actual
+        // total width (LEFTCOL_W + the dynamic right-side overhang
+        // for tree-mode indented cards).
+        const flipRight = rolodexPos.x < DOCK_W
+        const panelWidth = LEFTCOL_W + panelRightExtension
+        const dockLeft = flipRight
+          ? rolodexPos.x + panelWidth
+          : rolodexPos.x - DOCK_W
         return (
           <DisplayModeDock
             mode={displayMode}
             setMode={setDisplayMode}
-            left={rolodexPos.x - 30}
+            left={dockLeft}
             top={rolodexPos.y}
             slideOffset={dockOffset}
             fade={fade}
+            flipRight={flipRight}
             onPointerDownBg={onPanelPointerDown}
             onWheel={onWheel}
+            onHoverEnter={onHoverEnter}
+            onHoverLeave={onHoverLeave}
           />
         )
       })()}
       <div
         data-rolodex
         onWheel={onWheel}
+        onPointerEnter={onHoverEnter}
+        onPointerLeave={onHoverLeave}
         // Whole-panel drag — pointerdown anywhere except buttons/cards/
         // cabinet/input(click) moves the window. See onPanelPointerDown
         // for the per-target rules.
@@ -1309,13 +1352,32 @@ export const CardRolodex: React.FC = () => {
                   subtle outward shadow so the rail casts a drop onto
                   the card area. The right rail sits at the FAR right of
                   the extended panel via right:-panelRightExtension. */}
+            {/* Rails read as gently-curved cylindrical bars over their
+                  bottom 60 px: a narrow vertical highlight stripe runs
+                  down the middle of the rail face, brightest right at
+                  the bottom and fading up over 60 px. Same effect on
+                  both rails (the gradient is symmetric across the
+                  rail's width, so no need to mirror per side). */}
             <div style={{
               position: 'absolute',
               left: 0,
               top: 0,
               width: WING_W,
               height: LIST_AREA_H + CABINET_BAR_H,
-              background: FRAME_COLOR,
+              background:
+                // Horizontal radius = full rail width so the highlight
+                // covers the whole rail face (brightest at center,
+                // softly tapering at the edges so the curve still
+                // reads). Vertical radius 60 px → the sheen fades up
+                // over the bottom 60 px of the rail.
+                // Anchored at the visible bottom of the rail (cabinet seam =
+// CABINET_BAR_H above the rail-div bottom). Smooth fade only —
+// no bottom spike. Peak at the seam, gentle decay through 60 px
+// to transparent. Tint is a cool off-white pulled toward the
+// FRAME_COLOR's blue-purple hue (rgb(28,33,52)) so the highlight
+// feels integrated with the cabinet rather than a pure-white wash.
+`linear-gradient(to top, rgba(210,220,250,0.35) ${CABINET_BAR_H}px, rgba(210,220,250,0.20) ${CABINET_BAR_H + 8}px, rgba(210,220,250,0.10) ${CABINET_BAR_H + 20}px, rgba(210,220,250,0.03) ${CABINET_BAR_H + 40}px, transparent ${CABINET_BAR_H + 60}px),`
+                + ` ${FRAME_COLOR}`,
               boxShadow: `inset -1px 0 0 ${FRAME_HIGHLIGHT}, 3px 0 6px -1px ${FRAME_SHADOW}`,
               zIndex: 150,
               pointerEvents: 'none',
@@ -1326,7 +1388,15 @@ export const CardRolodex: React.FC = () => {
               top: 0,
               width: WING_W,
               height: LIST_AREA_H + CABINET_BAR_H,
-              background: FRAME_COLOR,
+              background:
+                // Anchored at the visible bottom of the rail (cabinet seam =
+// CABINET_BAR_H above the rail-div bottom). Smooth fade only —
+// no bottom spike. Peak at the seam, gentle decay through 60 px
+// to transparent. Tint is a cool off-white pulled toward the
+// FRAME_COLOR's blue-purple hue (rgb(28,33,52)) so the highlight
+// feels integrated with the cabinet rather than a pure-white wash.
+`linear-gradient(to top, rgba(210,220,250,0.35) ${CABINET_BAR_H}px, rgba(210,220,250,0.20) ${CABINET_BAR_H + 8}px, rgba(210,220,250,0.10) ${CABINET_BAR_H + 20}px, rgba(210,220,250,0.03) ${CABINET_BAR_H + 40}px, transparent ${CABINET_BAR_H + 60}px),`
+                + ` ${FRAME_COLOR}`,
               boxShadow: `inset 1px 0 0 ${FRAME_HIGHLIGHT}, -3px 0 6px -1px ${FRAME_SHADOW}`,
               zIndex: 150,
               pointerEvents: 'none',
@@ -2242,9 +2312,16 @@ const DisplayModeDock: React.FC<{
   /** 0 = invisible, 1 = visible. Fades the dock out when the panel
    *  is fully collapsed and back in as soon as it starts opening. */
   fade: number
+  /** When true, the dock sits on the RIGHT side of the panel and
+   *  flips its rounded corners + shadow direction to match. Used
+   *  when the panel is dragged to the very left of the screen, where
+   *  a left-side dock would be cut off. */
+  flipRight: boolean
   onPointerDownBg: (e: React.PointerEvent) => void
   onWheel: (e: React.WheelEvent) => void
-}> = ({ mode, setMode, left, top, slideOffset, fade, onPointerDownBg, onWheel }) => {
+  onHoverEnter: () => void
+  onHoverLeave: () => void
+}> = ({ mode, setMode, left, top, slideOffset, fade, flipRight, onPointerDownBg, onWheel, onHoverEnter, onHoverLeave }) => {
   const Btn: React.FC<{ value: 'auto' | 'compact' | 'full'; label: string; title: string }> = ({ value, label, title }) => {
     const isActive = mode === value
     return (
@@ -2279,6 +2356,11 @@ const DisplayModeDock: React.FC<{
       data-rolodex-dock
       onPointerDown={onPointerDownBg}
       onWheel={onWheel}
+      onPointerEnter={onHoverEnter}
+      onPointerLeave={onHoverLeave}
+      // (handlers passed through from the parent so the panel and
+      // dock share a single hover-zone state — moving the cursor
+      // between them doesn't flash the dock off.)
       style={{
         position: 'fixed',
         left,
@@ -2300,13 +2382,19 @@ const DisplayModeDock: React.FC<{
         // rail trim; drop shadow biases left so the dock looks lifted
         // off the canvas like the panel itself.
         background: FRAME_COLOR,
-        borderRadius: '6px 0 0 6px',
+        // Round the OUTSIDE edge (away from the panel), keep the
+        // panel-side edge square so the dock tucks into the panel.
+        borderRadius: flipRight ? '0 6px 6px 0' : '6px 0 0 6px',
         padding: 4,
         display: 'flex',
         flexDirection: 'column',
         gap: 4,
         zIndex: 900,
-        boxShadow: `inset -1px 0 0 ${FRAME_HIGHLIGHT}, -3px 0 6px -1px ${FRAME_SHADOW}, 0 4px 10px rgba(0,0,0,0.4)`,
+        // Inset highlight on the panel-facing side, drop shadow on the
+        // outside — mirror across the flip.
+        boxShadow: flipRight
+          ? `inset 1px 0 0 ${FRAME_HIGHLIGHT}, 3px 0 6px -1px ${FRAME_SHADOW}, 0 4px 10px rgba(0,0,0,0.4)`
+          : `inset -1px 0 0 ${FRAME_HIGHLIGHT}, -3px 0 6px -1px ${FRAME_SHADOW}, 0 4px 10px rgba(0,0,0,0.4)`,
         userSelect: 'none',
         // transform → slide animation. opacity → fade when fully
         // collapsed. Neither affects `top`, so the panel-drag stays
