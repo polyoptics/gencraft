@@ -21,7 +21,7 @@ import { useLinkingStore } from '../../store/linkingStore'
 import { DEFAULT_H } from '../../utils/barConstants'
 import { groupSlot, clampGroupMove } from '../../utils/nlePush'
 import { FreeCanvas } from '../Canvas/FreeCanvas'
-import { NLETimelineHeader, NLE_HEADER_CANVAS_H } from '../NLE/NLETimelineHeader'
+import { NLETimelineHeader, NLE_HEADER_CANVAS_H, headerExtend as computeHeaderExtend, headerScreenH, overviewScale } from '../NLE/NLETimelineHeader'
 import { HeroImageLayer } from './HeroImageLayer'
 import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
 import { getFirstImageUrl } from '../../types/bar'
@@ -380,7 +380,7 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
 
     // Extend card top upward to fill behind the timeline header (visual only)
     // Must match NLETimelineHeader's clamped screen height (Math.max(..., 20)) + gap
-    const headerExtend = Math.max(NLE_HEADER_CANVAS_H * zoom, 20) + 2 * zoom
+    const headerExtend = computeHeaderExtend(zoom)
 
     return {
       screenLeft: pan.x + globalMinX * zoom,
@@ -501,7 +501,7 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
           <GroupCardText groupId={group.id} onCropImage={() => setIsEditingHero(true)} heroImage={heroImage} />
           <div style={{
             position: 'absolute', bottom: 6, left: 8, zIndex: 2,
-            color: 'rgba(255,255,255,0.7)', fontSize: 11, fontWeight: 600,
+            color: 'rgba(255,255,255,0.7)', fontSize: 11 * overviewScale(zoom), fontWeight: 600,
             textShadow: '0 1px 4px rgba(0,0,0,0.8)',
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}>
@@ -565,8 +565,8 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
                 mode. Visible on card hover only (lit-up affordance) — active
                 draw mode overrides for the exit-toggle case. */}
         {(() => {
-          const screenHeight = Math.max(NLE_HEADER_CANVAS_H * zoom, 20)
-          const penSize = Math.min(32, Math.max(16, screenHeight * 0.85))
+          const screenHeight = headerScreenH(zoom)
+          const penSize = Math.min(32, Math.max(8, 16 * overviewScale(zoom), screenHeight * 0.85))
           const PEN_INSET = 6   // distance from right edge and from header band
           return (
             <div
@@ -759,7 +759,7 @@ const UngroupedBoardCardInner: React.FC<{ boardId: string }> = ({ boardId }) => 
       <UngroupedCardText boardId={boardId} />
       <div style={{
         position: 'absolute', bottom: 6, left: 8, zIndex: 2,
-        color: 'rgba(255,255,255,0.7)', fontSize: 11, fontWeight: 600,
+        color: 'rgba(255,255,255,0.7)', fontSize: 11 * overviewScale(zoom), fontWeight: 600,
         textShadow: '0 1px 4px rgba(0,0,0,0.8)',
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
       }}>
@@ -810,6 +810,78 @@ const UngroupedBoardCard = React.memo(UngroupedBoardCardInner)
 
 import { useCardDecks, isHiddenDeckMember, isSubDeckAnchor, expandWithNestedMembers, type Deck } from '../../hooks/useCardDecks'
 
+// Placeholder names that carry no authored intention — a card/bar with
+// only one of these (and no other content) is NOT counted as meaningful.
+const PLACEHOLDER_NAMES = new Set(['', 'untitled', 'new card', 'new block', 'new vidbar'])
+const isAuthoredName = (name?: string) =>
+  !!name && !PLACEHOLDER_NAMES.has(name.trim().toLowerCase())
+const hasText = (s?: string) => !!s && s.trim().length > 0
+const barHasImage = (bar: { content?: unknown }) => {
+  const c = bar?.content as Record<string, unknown> | undefined
+  return !!c && (!!c.imageUrl || !!c.image || !!c.imageTransform)
+}
+
+/** Count "meaningful content" across a deck: every authored unit (a
+ *  card with text/header/summary/hero/name, a block with a label or
+ *  text, a bar with content/image/name) contributes 1 to a single
+ *  overall total. An image or even a single word counts — anything
+ *  that reflects user intention. Empty placeholders don't.
+ *
+ *  Recurses through nested sub-decks: a deck's `memberIds` lists only
+ *  its TOP-LEVEL members, but a member can itself be a sub-deck anchor
+ *  with its own members (and those can nest further). We expand the
+ *  id set across the full deckAnchorId tree first, so the total covers
+ *  every card/block/bar anywhere inside the deck — not just the front
+ *  layer. */
+function countMeaningfulContent(
+  memberIds: string[],
+  groups: ProjectGroup[],
+  boards: Record<string, import('../../store/boardsStore').BoardData>,
+): number {
+  // Expand to all transitive descendants via deckAnchorId.
+  const ids = new Set(memberIds)
+  let added = true
+  while (added) {
+    added = false
+    for (const g of groups) {
+      if (g.deckAnchorId && g.deckAnchorId !== g.id && ids.has(g.deckAnchorId) && !ids.has(g.id)) {
+        ids.add(g.id)
+        added = true
+      }
+    }
+  }
+  let total = 0
+  for (const gid of ids) {
+    const g = groups.find(gr => gr.id === gid)
+    if (!g) continue
+    // Card-level intention — counted once per card (matches the
+    // "this card means something" read, regardless of how many of
+    // its fields are filled).
+    const cardMeaningful =
+      hasText(g.cardText) || hasText(g.cardHeaderText) || hasText(g.cardSummary) ||
+      !!g.cardHeroImage || isAuthoredName(g.name)
+    if (cardMeaningful) total += 1
+    // Block-level + bar-level intention — counted per board / per bar
+    // so a richly developed card scores higher than a one-liner.
+    for (const bid of g.boardIds) {
+      const board = boards[bid]
+      if (!board) continue
+      const blk = board.layers?.block
+      if (blk && (hasText(blk.text) || hasText(blk.label) || hasText(blk.headerText) || !!blk.thumbnail)) {
+        total += 1
+      }
+      for (const barId of Object.keys(board.bars || {})) {
+        const bar = board.bars[barId]
+        if (!bar) continue
+        if (hasText(bar.content?.text) || barHasImage(bar) || isAuthoredName(bar.name)) {
+          total += 1
+        }
+      }
+    }
+  }
+  return total
+}
+
 /** Stacked deck — only anchor visible, peek tabs behind, badge + controls */
 const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; isNested?: boolean }> = ({ deck, anchorGroup, isNested }) => {
   const pan = useCanvasStore(s => s.pan)
@@ -857,7 +929,7 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
     const cW = globalMaxX - globalMinX, cH = bottomY - topY
     const finalW = Math.max(cW, anchorGroup.cardWidthOverride ?? 0)
     const finalH = Math.max(cH, anchorGroup.cardHeightOverride ?? 0)
-    const headerExtend = Math.max(NLE_HEADER_CANVAS_H * zoom, 20) + 2 * zoom
+    const headerExtend = computeHeaderExtend(zoom)
     return {
       screenLeft: pan.x + globalMinX * zoom,
       screenTop: pan.y + topY * zoom - headerExtend,
@@ -1150,7 +1222,7 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
             <GroupCardText groupId={anchorGroup.id} onCropImage={() => setIsEditingHero(true)} heroImage={heroImage} />
             <div style={{
               position: 'absolute', bottom: 6, left: 8, zIndex: 2,
-              color: 'rgba(255,255,255,0.7)', fontSize: 11, fontWeight: 600,
+              color: 'rgba(255,255,255,0.7)', fontSize: 11 * overviewScale(zoom), fontWeight: 600,
               textShadow: '0 1px 4px rgba(0,0,0,0.8)',
             }}>
               {anchorGroup.cardSummary || anchorGroup.name}
@@ -1293,7 +1365,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
     const cW = globalMaxX - globalMinX, cH = bottomY - topY
     const finalW = Math.max(cW, anchorGroup.cardWidthOverride ?? 0)
     const finalH = Math.max(cH, anchorGroup.cardHeightOverride ?? 0)
-    const headerExtend = Math.max(NLE_HEADER_CANVAS_H * zoom, 20) + 2 * zoom
+    const headerExtend = computeHeaderExtend(zoom)
     return {
       screenLeft: pan.x + globalMinX * zoom,
       screenTop: pan.y + topY * zoom - headerExtend,
@@ -1899,14 +1971,14 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
                 }}>
                   <div style={{
                     color: 'rgba(255,255,255,0.42)',
-                    fontSize: 10, fontWeight: 500,
+                    fontSize: 10 * overviewScale(zoom), fontWeight: 500,
                     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                   }}>
                     {ghostName}
                   </div>
                   <div style={{
                     color: 'rgba(255,255,255,1)',
-                    fontSize: 9, fontWeight: 700,
+                    fontSize: 9 * overviewScale(zoom), fontWeight: 700,
                     fontStyle: 'italic',
                     letterSpacing: '0.12em',
                     textTransform: 'uppercase',
@@ -2033,7 +2105,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
             <div style={{
               position: 'absolute', top: 8, left: STRIP_OVERLAP + 4, right: 4, bottom: 8,
               writingMode: 'vertical-rl', textOrientation: 'mixed',
-              color: 'rgba(255,255,255,0.85)', fontSize: 10, fontWeight: 600,
+              color: 'rgba(255,255,255,0.85)', fontSize: 10 * overviewScale(zoom), fontWeight: 600,
               textShadow: '0 1px 3px rgba(0,0,0,0.8)',
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
               display: 'flex', alignItems: 'center', justifyContent: 'flex-start',
@@ -2171,7 +2243,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
             <GroupCardText groupId={surfacedGroup.id} />
             <div style={{
               position: 'absolute', bottom: 6, left: 8, zIndex: 2,
-              color: 'rgba(255,255,255,0.7)', fontSize: 11, fontWeight: 600,
+              color: 'rgba(255,255,255,0.7)', fontSize: 11 * overviewScale(zoom), fontWeight: 600,
               textShadow: '0 1px 4px rgba(0,0,0,0.8)',
             }}>
               {surfacedGroup.cardSummary || surfacedGroup.name}
@@ -2242,7 +2314,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
           <GroupCardText groupId={anchorGroup.id} onCropImage={() => setIsEditingHero(true)} />
           <div style={{
             position: 'absolute', bottom: 6, left: 8, zIndex: 2,
-            color: 'rgba(255,255,255,0.7)', fontSize: 11, fontWeight: 600,
+            color: 'rgba(255,255,255,0.7)', fontSize: 11 * overviewScale(zoom), fontWeight: 600,
             textShadow: '0 1px 4px rgba(0,0,0,0.8)',
           }}>
             {anchorGroup.cardSummary || anchorGroup.name}
@@ -2408,7 +2480,7 @@ export function cardScreenRect(g: ProjectGroup, boards: Record<string, import('.
   const cW = gMaxX - gMinX, cH = bottomY - topY
   const finalW = Math.max(cW, g.cardWidthOverride ?? 0)
   const finalH = Math.max(cH, g.cardHeightOverride ?? 0)
-  const headerExtend = Math.max(NLE_HEADER_CANVAS_H * zoom, 20) + 2 * zoom
+  const headerExtend = computeHeaderExtend(zoom)
   return {
     screenLeft: pan.x + gMinX * zoom,
     screenTop: pan.y + topY * zoom - headerExtend,
@@ -2647,8 +2719,8 @@ const GhostCardSlot: React.FC<{ anchor: ProjectGroup; slot: { cardId: string; de
           the file should immediately register "this slot is checked out"
           and find the card name as supporting info. */}
       {ghostName && (() => {
-        const nameSize = Math.max(13, Math.min(24, rect.screenHeight * 0.11))
-        const subtitleSize = Math.max(9, nameSize * 0.55)
+        const nameSize = Math.max(13 * overviewScale(zoom), Math.min(24, rect.screenHeight * 0.11))
+        const subtitleSize = Math.max(9 * overviewScale(zoom), nameSize * 0.55)
         return (
           <div style={{
             position: 'absolute', inset: 0,
@@ -2689,7 +2761,7 @@ const GhostCardSlot: React.FC<{ anchor: ProjectGroup; slot: { cardId: string; de
         <div style={{
           position: 'absolute', top: 6, right: 6,
           color: 'rgba(255,255,255,0.45)',
-          fontSize: 13, lineHeight: 1, fontWeight: 700,
+          fontSize: 13 * overviewScale(zoom), lineHeight: 1, fontWeight: 700,
           pointerEvents: 'none',
           textShadow: '0 1px 4px rgba(0,0,0,0.7)',
         }}>↗</div>
@@ -2811,7 +2883,7 @@ const TetherTab: React.FC<{ cardId: string; touchingClusters: string[][] }> = ({
   const parentName = parent.name || parent.cardHeaderText || 'Untitled deck'
   // Header geometry — same formula NLETimelineHeader uses, mirrored here so
   // the tint stripe lines up exactly with the visible header bar.
-  const headerExtend = Math.max(NLE_HEADER_CANVAS_H * zoom, 20) + 2 * zoom
+  const headerExtend = computeHeaderExtend(zoom)
   // Use the CARD's own color (not the parent deck's), but brightened —
   // higher lightness and slightly higher saturation than the rest of the
   // header tint. Stays in the same color family while standing out as a
@@ -2829,7 +2901,7 @@ const TetherTab: React.FC<{ cardId: string; touchingClusters: string[][] }> = ({
   const stripeWidth = rect.screenWidth / 3
   // Arrow size scales with the header — same proportion as the affordance
   // icon's font size so the visual weight matches.
-  const arrowSize = Math.max(11, headerExtend * 0.55)
+  const arrowSize = Math.max(11 * overviewScale(zoom), headerExtend * 0.55)
   return (
     <>
       <div
@@ -3099,7 +3171,7 @@ const Overlay: React.FC = () => {
               <NLETimelineHeader
                 groupId={g.id}
                 rightInset={deck.memberIds.length > 1 ? 10 : 0}
-                iconMode={{ kind: 'deckPreview', deckId: deck.id, count: deck.memberIds.length, onDoubleClick: stackedDoubleClick }}
+                iconMode={{ kind: 'deckPreview', deckId: deck.id, count: countMeaningfulContent(deck.memberIds, groups, boards), onDoubleClick: stackedDoubleClick }}
               />
               <StackedDeckCard deck={deck} anchorGroup={g} isNested={nested} />
             </Fragment>
@@ -3127,7 +3199,7 @@ const Overlay: React.FC = () => {
               <div key={g.id} style={{ position: 'relative', zIndex: 55 }}>
                 <NLETimelineHeader
                   groupId={g.id}
-                  iconMode={{ kind: 'deckPreview', deckId: deck.id, count: deck.memberIds.length, onDoubleClick: fannedDoubleClick }}
+                  iconMode={{ kind: 'deckPreview', deckId: deck.id, count: countMeaningfulContent(deck.memberIds, groups, boards), onDoubleClick: fannedDoubleClick }}
                 />
                 <FannedDeckOverlay deck={deck} groups={memberGroups} />
               </div>

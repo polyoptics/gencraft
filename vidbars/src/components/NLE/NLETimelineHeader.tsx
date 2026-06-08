@@ -13,6 +13,28 @@ const BOARD_PADDING_X = 20
 export const NLE_HEADER_CANVAS_H = 36
 const GAP = 2
 
+// ── Card-zoom "overview" scaling ──────────────────────────────────
+// The card body + card text scale cleanly with zoom (zoom / 0.18, no
+// clamp). The card CHROME (header band, badges, fonts, icons) uses
+// fixed-pixel floors so it stops shrinking below ~0.18 and balloons
+// relative to the cards when you zoom out far. To allow zooming out
+// further while keeping the look coherent, we scale every chrome floor
+// by `overviewScale`: it's 1 at/above CARD_FLOOR_ZOOM (today's look
+// unchanged) and shrinks linearly below it, so the whole card — body
+// and chrome — shrinks as one uniform unit. CARD_FLOOR_ZOOM is the
+// "comfortable widest" reference (the historical MIN_ZOOM); MIN_ZOOM in
+// canvasStore is the hard stop below it.
+export const CARD_FLOOR_ZOOM = 0.11
+export const overviewScale = (zoom: number) => Math.min(1, zoom / CARD_FLOOR_ZOOM)
+// Card-top extension that fills behind the header: floored, overview-
+// scaled header screen-height + a 2px gap. MUST be identical wherever a
+// card top / outline / affordance is positioned (see CLAUDE.md).
+export const headerExtend = (zoom: number) =>
+  Math.max(NLE_HEADER_CANVAS_H * zoom, 20 * overviewScale(zoom)) + 2 * zoom
+// The header bar's own rendered screen height (no +gap term).
+export const headerScreenH = (zoom: number) =>
+  Math.max(NLE_HEADER_CANVAS_H * zoom, 20 * overviewScale(zoom))
+
 interface Segment {
   canvasLeft: number
   canvasWidth: number
@@ -253,7 +275,10 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, icon
   }, [])
 
   const screenBottom = pan.y + (headerCanvasY + NLE_HEADER_CANVAS_H) * zoom
-  const screenHeight = Math.max(NLE_HEADER_CANVAS_H * zoom, 20)
+  // overview scale factor — 1 at/above the comfortable floor, shrinks
+  // below it so the header chrome scales uniformly with the cards.
+  const ov = overviewScale(zoom)
+  const screenHeight = headerScreenH(zoom)
   const screenTop    = screenBottom - screenHeight
   const effectiveWidth = Math.max(screenWidth, 40)
   const isNarrow = effectiveWidth < 90
@@ -285,11 +310,11 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, icon
           background: viewerOpen ? 'rgba(37,99,235,0.32)' : 'rgba(0,0,0,0.30)',
           border: viewerOpen ? '1px solid rgba(37,99,235,0.55)' : '1px solid rgba(255,255,255,0.14)',
           color: viewerOpen ? 'rgba(130,180,255,0.95)' : 'rgba(255,255,255,0.55)',
-          fontSize: 9,
+          fontSize: 9 * ov,
           fontWeight: 700,
           cursor: 'pointer',
           whiteSpace: 'nowrap',
-          lineHeight: '12px',
+          lineHeight: `${12 * ov}px`,
         }}
       >{viewerOpen ? '▼' : '▲'}</div>
     )
@@ -305,10 +330,13 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, icon
     // chrome lives in these few computed values — no fixed pixel sizes.
     const iconH    = screenHeight * 0.7              // tall enough to nearly fill header
     const iconW    = iconH * 1.45                    // 3:2-ish aspect — reads as a card
-    const borderW  = Math.max(0.75, screenHeight * 0.055)
-    const radius   = Math.max(1, screenHeight * 0.12)
-    const hitPadX  = Math.max(2, screenHeight * 0.1)
-    const hitPadY  = Math.max(1, screenHeight * 0.04)
+    // Floors scaled by ov so the icon chrome keeps shrinking below the
+    // comfortable floor. Hit-zone pads keep a tiny absolute floor so the
+    // affordance stays clickable even at the minimum zoom.
+    const borderW  = Math.max(0.75 * ov, screenHeight * 0.055)
+    const radius   = Math.max(1 * ov, screenHeight * 0.12)
+    const hitPadX  = Math.max(0.5, Math.max(2 * ov, screenHeight * 0.1))
+    const hitPadY  = Math.max(0.5, Math.max(1 * ov, screenHeight * 0.04))
     headerIcon = (
       <div
         data-deck-preview-affordance
@@ -347,9 +375,10 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, icon
         }}
       >
         {/* Dashed-rectangle glyph — a tiny card silhouette displaying the
-            deck's member count. Visually echoes the DeckOpenPreview outlines
-            it summons, AND replaces the floating blue badge that used to sit
-            on the card body. One element does both jobs. */}
+            deck's MEANINGFUL-CONTENT count (authored pieces across all
+            members: cards, blocks, bars — text, images, titles). The
+            caller passes this via mode.count. Visually echoes the
+            DeckOpenPreview outlines it summons. */}
         <div style={{
           width: iconW,
           height: iconH,
@@ -365,16 +394,16 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, icon
           boxSizing: 'border-box',
           transition: 'border-color 0.12s, background 0.12s, filter 0.12s, color 0.12s',
           filter:
-            active ? `drop-shadow(0 0 ${Math.max(2, borderW * 2)}px rgba(255,255,255,0.4))` :
-            hint   ? `drop-shadow(0 0 ${Math.max(1.5, borderW * 1.4)}px rgba(255,255,255,0.22))` :
+            active ? `drop-shadow(0 0 ${Math.max(2 * ov, borderW * 2)}px rgba(255,255,255,0.4))` :
+            hint   ? `drop-shadow(0 0 ${Math.max(1.5 * ov, borderW * 1.4)}px rgba(255,255,255,0.22))` :
                      'none',
           // Count display
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
           // Font size tracks the icon height so the digit always fits cleanly,
-          // with a tiny floor so it stays legible at the lowest card zooms.
-          fontSize: Math.max(8, iconH * 0.62),
+          // with an ov-scaled floor so it shrinks past the comfortable zoom.
+          fontSize: Math.max(8 * ov, iconH * 0.62),
           fontWeight: 700,
           color: active ? 'rgba(255,255,255,0.98)' :
                  hint   ? 'rgba(255,255,255,0.88)' :
@@ -405,7 +434,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, icon
         border: '1px solid rgba(255,255,255,0.35)',
         borderRadius: 3,
         color: '#fff',
-        fontSize: 10,
+        fontSize: 10 * ov,
         fontWeight: 700,
         padding: '1px 6px',
         outline: 'none',
@@ -421,7 +450,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, icon
       style={{
         color: headerName ? 'rgba(255,255,255,0.92)' : 'rgba(255,255,255,0.35)',
         fontStyle: headerName ? 'normal' : 'italic',
-        fontSize: 10,
+        fontSize: 10 * ov,
         fontWeight: 700,
         letterSpacing: '0.2px',
         textShadow: '0 1px 4px rgba(0,0,0,0.6)',
@@ -431,7 +460,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, icon
         textOverflow: 'ellipsis',
         flex: '1 1 0',
         minWidth: 0,
-        lineHeight: '14px',
+        lineHeight: `${14 * ov}px`,
       }}
     >{headerName || 'New Card'}</span>
   )

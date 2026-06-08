@@ -10,10 +10,68 @@ import {
   DEFAULT_PEN_SIZE,
 } from '../types/stroke'
 
-const MIN_ZOOM = 0.11
+// Hard zoom-out stop. Note this is BELOW CARD_FLOOR_ZOOM (0.11, in
+// NLETimelineHeader) — that's the "comfortable widest" reference where
+// the card chrome looks today; between MIN_ZOOM and CARD_FLOOR_ZOOM the
+// chrome scales down uniformly (via overviewScale) so the whole card
+// shrinks coherently instead of the headers/badges ballooning.
+const MIN_ZOOM = 0.045
 const MAX_ZOOM = 4
 const APP_TOOLBAR_H = 38
 const BOARD_PADDING_X = 20
+
+// ── Animated camera jumps ────────────────────────────────────────
+// Module-level rAF handle for the in-flight jump animation. Pan-
+// affecting setters (setPan, shiftPan, setZoom, zoomAtPoint) call
+// cancelJumpAnim() before applying their change so a user gesture
+// always interrupts an animation cleanly. The animation itself
+// writes pan via `set` directly (NOT via setPan) to avoid cancelling
+// itself.
+let jumpAnimRaf: number | null = null
+function cancelJumpAnim() {
+  if (jumpAnimRaf !== null) {
+    cancelAnimationFrame(jumpAnimRaf)
+    jumpAnimRaf = null
+  }
+}
+// Standard cubic ease-in-out — smoothstep curve. Slow start, faster
+// middle, slow end. 0 at t=0, 1 at t=1.
+function easeInOutCubic(t: number): number {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
+}
+const JUMP_ANIM_MS = 420
+
+type CanvasSetFn = {
+  (partial: object): void
+}
+
+function animatePanTo(
+  target: { x: number; y: number },
+  set: CanvasSetFn,
+  get: () => { pan: { x: number; y: number } },
+) {
+  cancelJumpAnim()
+  const start = get().pan
+  const dx = target.x - start.x
+  const dy = target.y - start.y
+  // Already there (or close enough) — snap and skip the animation.
+  if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) {
+    set({ pan: target })
+    return
+  }
+  const startedAt = performance.now()
+  const tick = () => {
+    const t = Math.min(1, (performance.now() - startedAt) / JUMP_ANIM_MS)
+    const k = easeInOutCubic(t)
+    set({ pan: { x: start.x + dx * k, y: start.y + dy * k } })
+    if (t < 1) {
+      jumpAnimRaf = requestAnimationFrame(tick)
+    } else {
+      jumpAnimRaf = null
+    }
+  }
+  jumpAnimRaf = requestAnimationFrame(tick)
+}
 
 interface CanvasStore {
   pan: { x: number; y: number }
@@ -175,14 +233,17 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
   rolodexCollapsedDeckIds: [],
   deckPortalSelections: {},
 
-  setPan: (pan) => set({ pan }),
+  setPan: (pan) => { cancelJumpAnim(); set({ pan }) },
 
-  setZoom: (zoom) => set({ zoom: Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom)) }),
+  setZoom: (zoom) => { cancelJumpAnim(); set({ zoom: Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom)) }) },
 
-  shiftPan: (dx, dy) =>
-    set(s => ({ pan: { x: s.pan.x + dx, y: s.pan.y + dy } })),
+  shiftPan: (dx, dy) => {
+    cancelJumpAnim()
+    set(s => ({ pan: { x: s.pan.x + dx, y: s.pan.y + dy } }))
+  },
 
   zoomAtPoint: (factor, mx, my) => {
+    cancelJumpAnim()
     const { zoom, pan } = get()
     let newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom * factor))
     if (Math.abs(newZoom - zoom) < 1e-8) return
@@ -304,12 +365,11 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
     const z = get().zoom
     const vpW = window.innerWidth
     const vpH = window.innerHeight - APP_TOOLBAR_H
-    set({
-      pan: {
-        x: vpW / 2 - centerCX * z,
-        y: vpH / 2 - centerCY * z,
-      },
-    })
+    const targetPan = {
+      x: vpW / 2 - centerCX * z,
+      y: vpH / 2 - centerCY * z,
+    }
+    animatePanTo(targetPan, set, get)
   },
 }), {
   name: 'vidbars-canvas',
