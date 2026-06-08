@@ -1442,12 +1442,19 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
   // Backward-compat for any code still expecting just real members.
   const secondaryCards = secondaryItems.filter(it => it.kind === 'real').map(it => (it as any).group as ProjectGroup)
 
-  const FAN_STRIP_WIDTH = 40 // px visible per secondary card strip
+  // Fan-strip geometry is in SCREEN px (this overlay is screen-space), so
+  // it normally stays a fixed size while the primary card scales by zoom.
+  // Below the comfortable floor that makes the strips balloon relative to
+  // the shrunken card. Scale them by overviewScale — identical at/above
+  // CARD_FLOOR_ZOOM (0.11), shrinking in lockstep with the card below it —
+  // so the whole fan stays proportional when zoomed way out.
+  const fanOv = overviewScale(zoom)
+  const FAN_STRIP_WIDTH = 40 * fanOv // px visible per secondary card strip
   // How far each strip extends LEFT under the piece in front of it, so the
   // piece in front's rounded outer corner shows the next strip through the
-  // curve (and strip 0 merges under the primary card's 12px corner).
-  const STRIP_OVERLAP = 12
-  const STRIP_RADIUS = 8
+  // curve (and strip 0 merges under the primary card's corner).
+  const STRIP_OVERLAP = 12 * fanOv
+  const STRIP_RADIUS = 8 * fanOv
   const totalFanWidth = screenWidth + secondaryItems.length * FAN_STRIP_WIDTH
 
   const fanSelFx = isSelected ? selectionHighlight(anchorGroup.color) : null
