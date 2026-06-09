@@ -152,13 +152,10 @@ export const Board: React.FC<Props> = React.memo(({ boardId }) => {
   }, [boardId, zoom, setBoardNlePos])
 
   const onHeaderUp = useCallback(() => {
-    // Zone transition: ungrouped board dragged into timeline → create group
+    // Dragging an ungrouped board anywhere on the unified work area
+    // spins it into its own card/group.
     if (isUngroupedDrag.current && headerDragMoved.current) {
-      const b = useBoardsStore.getState().boards[boardId]
-      const zly = useCanvasStore.getState().zoneLineY
-      if (b && (b.canvasY ?? 0) >= zly) {
-        useBoardsStore.getState().groupBoardAsNew(boardId)
-      }
+      useBoardsStore.getState().groupBoardAsNew(boardId)
     }
     if (!headerDragMoved.current) {
       const b = useBoardsStore.getState().boards[boardId]
@@ -510,9 +507,6 @@ export const Board: React.FC<Props> = React.memo(({ boardId }) => {
                 setShowColorPicker(true); setContextMenu(null)
               }},
               { label: 'Duplicate board', action: () => { useUndoCoordinator.getState().checkpoint(); useBoardsStore.getState().duplicateBoard(boardId); setContextMenu(null) } },
-              ...(!isPrimary && group ? [
-                { label: 'Move to Free Canvas', action: () => { useUndoCoordinator.getState().checkpoint(); useBoardsStore.getState().ungroupBoard(boardId); setContextMenu(null) } },
-              ] : []),
               ...(!isPrimary ? [
                 null as null,
                 { label: 'Delete board', action: () => { useUndoCoordinator.getState().checkpoint(); deleteBoard(boardId); setContextMenu(null) }, danger: true },

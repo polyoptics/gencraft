@@ -202,14 +202,11 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
     const onUp = () => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
-      // Zone transition: ungrouped block dragged into timeline → create group.
-      // Skip in multi-drag to avoid mangling the selection mid-move.
+      // Dropping an ungrouped block anywhere on the (single) work area
+      // turns it into its own card/group. Skip in multi-drag to avoid
+      // mangling the selection mid-move.
       if (ungrouped && !isMulti) {
-        const b = useBoardsStore.getState().boards[boardId]
-        const zly = useCanvasStore.getState().zoneLineY
-        if (b && (b.canvasY ?? 0) >= zly) {
-          useBoardsStore.getState().groupBoardAsNew(boardId)
-        }
+        useBoardsStore.getState().groupBoardAsNew(boardId)
       }
     }
     window.addEventListener('pointermove', onMove)
@@ -314,15 +311,9 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
 
       const currentGroup = getGroupForBoard(useBoardsStore.getState().groups, boardId)
       if (currentGroup && currentGroup.boardIds.length > 1 && (Math.abs(xAccum) > 50 || Math.abs(dyAccum) > 50)) {
-        const zly = useCanvasStore.getState().zoneLineY
-        const z = useCanvasStore.getState().zoom
-        const pan = useCanvasStore.getState().pan
-        const dropCanvasY = (ev.clientY - pan.y) / z
-        if (dropCanvasY < zly) {
-          useBoardsStore.getState().ungroupBoard(boardId)
-        } else {
-          useBoardsStore.getState().moveToNewGroup(boardId)
-        }
+        // Dragging a board out of its group spins it into its own new
+        // card/group anywhere on the unified work area.
+        useBoardsStore.getState().moveToNewGroup(boardId)
       }
     }
 
@@ -802,12 +793,11 @@ const Canvas: React.FC = () => {
   const boardOrder = useBoardsStore(s => s.boardOrder)
   const groups = useBoardsStore(s => s.groups)
   const boards = useBoardsStore(s => s.boards)
-  const zoneLineY = useCanvasStore(s => s.zoneLineY)
   const portalSelections = useCanvasStore(s => s.deckPortalSelections)
 
   const hiddenBoards = useMemo(
-    () => getHiddenBoardIds(groups, {} as any, zoneLineY),
-    [groups, zoneLineY],
+    () => getHiddenBoardIds(groups),
+    [groups],
   )
 
   // Deck portals at block zoom: replace the anchor's blocks with the
@@ -874,11 +864,10 @@ const Canvas: React.FC = () => {
 
 const Overlay: React.FC = () => {
   const groups = useBoardsStore(s => s.groups)
-  const zoneLineY = useCanvasStore(s => s.zoneLineY)
   const portalSelections = useCanvasStore(s => s.deckPortalSelections)
   const hiddenGroups = useMemo(
-    () => getHiddenGroupIds(groups, {} as any, zoneLineY),
-    [groups, zoneLineY],
+    () => getHiddenGroupIds(groups),
+    [groups],
   )
   const visibleGroups = useMemo(
     () => groups.filter(g => !hiddenGroups.has(g.id)),

@@ -11,12 +11,10 @@ export const BoardsCanvas: React.FC = () => {
   const boardOrder = useBoardsStore(s => s.boardOrder)
   const groups = useBoardsStore(s => s.groups)
   const boards = useBoardsStore(s => s.boards)
-  const zoneLineY = useCanvasStore(s => s.zoneLineY)
   const portalSelections = useCanvasStore(s => s.deckPortalSelections)
-  // getHiddenBoardIds only reads groups (boards/_zoneLineY params unused)
   const hiddenBoards = useMemo(
-    () => getHiddenBoardIds(groups, {} as any, zoneLineY),
-    [groups, zoneLineY],
+    () => getHiddenBoardIds(groups),
+    [groups],
   )
 
   // Deck portals at board zoom: replace the anchor's boards with the

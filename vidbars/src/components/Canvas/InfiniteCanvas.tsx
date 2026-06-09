@@ -418,9 +418,6 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
       {/* ── NLE row lines (behind everything, in canvas space) ── */}
       <NLERowBands pan={pan} zoom={zoom} />
 
-      {/* ── Zone divider (screen space, behind content) ── */}
-      <ZoneDivider />
-
       <div
         style={{
           position: 'absolute',
@@ -510,52 +507,6 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
         </>
       )}
     </div>
-  )
-}
-
-/** Zone divider — subtle line separating free canvas (above) from timeline (below) */
-const ZoneDivider: React.FC = () => {
-  const zoneLineY = useCanvasStore(s => s.zoneLineY)
-  const zoom = useCanvasStore(s => s.zoom)
-  const pan = useCanvasStore(s => s.pan)
-  // Render in screen space so line weight and labels stay readable at any zoom
-  const screenY = pan.y + zoneLineY * zoom
-  const labelSize = 11
-  return (
-    <>
-      <div style={{
-        position: 'absolute',
-        left: 0,
-        top: screenY,
-        width: '100%',
-        height: 0,
-        borderTop: '1px dashed rgba(130,180,255,0.25)',
-        pointerEvents: 'none',
-        zIndex: 0,
-      }} />
-      <div style={{
-        position: 'absolute',
-        left: 12,
-        top: screenY - labelSize - 4,
-        color: 'rgba(130,180,255,0.22)',
-        fontSize: labelSize,
-        fontWeight: 600,
-        letterSpacing: '0.5px',
-        pointerEvents: 'none',
-        userSelect: 'none',
-      }}>FREE CANVAS</div>
-      <div style={{
-        position: 'absolute',
-        left: 12,
-        top: screenY + 4,
-        color: 'rgba(130,180,255,0.22)',
-        fontSize: labelSize,
-        fontWeight: 600,
-        letterSpacing: '0.5px',
-        pointerEvents: 'none',
-        userSelect: 'none',
-      }}>TIMELINE</div>
-    </>
   )
 }
 

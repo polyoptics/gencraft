@@ -265,16 +265,13 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
 
     const myLayout = computeGroupLayout(group.boardIds, bs0.boards)
     const mySlot = groupSlot(group.id, group.boardIds, bs0.boards, initialOriginX, initialOriginY, myLayout)
-    // Zone-aware collision: only collide with groups in the timeline zone
-    const zly = useCanvasStore.getState().zoneLineY
-    const inTimeline = initialOriginY >= zly
+    // One unified work area — collide with every other visible (non-dragging)
+    // group, wherever it sits on the canvas.
     const draggingSet = new Set(draggingIds)
-    const obstacles = inTimeline
-      ? bs0.groups
-          .filter(g => !draggingSet.has(g.id) && g.originY >= zly && !isHiddenDeckMember(g))
-          .map(g => groupSlot(g.id, g.boardIds, bs0.boards, g.originX, g.originY, computeGroupLayout(g.boardIds, bs0.boards)))
-          .filter(Boolean) as import('../../utils/nlePush').GroupSlot[]
-      : []  // free zone: no collision
+    const obstacles = bs0.groups
+      .filter(g => !draggingSet.has(g.id) && !isHiddenDeckMember(g))
+      .map(g => groupSlot(g.id, g.boardIds, bs0.boards, g.originX, g.originY, computeGroupLayout(g.boardIds, bs0.boards)))
+      .filter(Boolean) as import('../../utils/nlePush').GroupSlot[]
 
     const onMove = (ev: PointerEvent) => {
       const z = useCanvasStore.getState().zoom
@@ -1003,14 +1000,11 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
       : null
 
     const draggingSet = new Set(allDragIds)
-    const zly = useCanvasStore.getState().zoneLineY
-    const inTimeline = (anchorOrigin?.y ?? 0) >= zly
-    const obstacles = inTimeline
-      ? bs0.groups
-          .filter(g => !draggingSet.has(g.id) && g.originY >= zly && !isHiddenDeckMember(g))
-          .map(g => groupSlot(g.id, g.boardIds, bs0.boards, g.originX, g.originY, computeGroupLayout(g.boardIds, bs0.boards)))
-          .filter(Boolean) as import('../../utils/nlePush').GroupSlot[]
-      : []
+    // One unified work area — collide with every other visible group.
+    const obstacles = bs0.groups
+      .filter(g => !draggingSet.has(g.id) && !isHiddenDeckMember(g))
+      .map(g => groupSlot(g.id, g.boardIds, bs0.boards, g.originX, g.originY, computeGroupLayout(g.boardIds, bs0.boards)))
+      .filter(Boolean) as import('../../utils/nlePush').GroupSlot[]
 
     const onMove = (ev: PointerEvent) => {
       const z = useCanvasStore.getState().zoom
@@ -1563,19 +1557,16 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
     }
     const anchorOrigin = initialOrigins.get(deck.anchorGroupId)
 
-    const zly = useCanvasStore.getState().zoneLineY
-    const inTimeline = (anchorOrigin?.y ?? 0) >= zly
     const draggingSet = new Set(allDragIds)
     const anchorLayout = computeGroupLayout(anchorGroup.boardIds, bs0.boards)
     const mySlot = anchorOrigin
       ? groupSlot(deck.anchorGroupId, anchorGroup.boardIds, bs0.boards, anchorOrigin.x, anchorOrigin.y, anchorLayout)
       : null
-    const obstacles = inTimeline
-      ? bs0.groups
-          .filter(g => !draggingSet.has(g.id) && g.originY >= zly && !isHiddenDeckMember(g))
-          .map(g => groupSlot(g.id, g.boardIds, bs0.boards, g.originX, g.originY, computeGroupLayout(g.boardIds, bs0.boards)))
-          .filter(Boolean) as import('../../utils/nlePush').GroupSlot[]
-      : []
+    // One unified work area — collide with every other visible group.
+    const obstacles = bs0.groups
+      .filter(g => !draggingSet.has(g.id) && !isHiddenDeckMember(g))
+      .map(g => groupSlot(g.id, g.boardIds, bs0.boards, g.originX, g.originY, computeGroupLayout(g.boardIds, bs0.boards)))
+      .filter(Boolean) as import('../../utils/nlePush').GroupSlot[]
 
     const onMove = (ev: PointerEvent) => {
       if (!fanMoved && Math.abs(ev.clientX - fanStartX) + Math.abs(ev.clientY - fanStartY) > 5) fanMoved = true
@@ -3080,7 +3071,6 @@ const TetherTab: React.FC<{ cardId: string; touchingClusters: string[][] }> = ({
 const Overlay: React.FC = () => {
   const groups = useBoardsStore(s => s.groups)
   const boards = useBoardsStore(s => s.boards)
-  const zoneLineY = useCanvasStore(s => s.zoneLineY)
   const zoom = useCanvasStore(s => s.zoom)
   const pan = useCanvasStore(s => s.pan)
   // Defer boards (only) so the heavy derived work runs on idle time during
@@ -3095,7 +3085,7 @@ const Overlay: React.FC = () => {
     () => getUngroupedBoardIds(groups, deferredBoards),
     [groups, deferredBoards]
   )
-  const { decks, touchingClusters, getDeckForGroup } = useCardDecks(groups, deferredBoards, zoneLineY, zoom)
+  const { decks, touchingClusters, getDeckForGroup } = useCardDecks(groups, deferredBoards, zoom)
 
   // Track which groups are rendered by decks so we skip them
   const renderedByDeck = useMemo(() => {

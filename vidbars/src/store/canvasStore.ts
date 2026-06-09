@@ -114,7 +114,6 @@ interface CanvasStore {
     deckId: string                   // id of the transitioning deck
     phase: 'fanning' | 'stacking'    // direction
   } | null
-  zoneLineY: number
   /** When non-null, the user is in draw / annotation mode on this surface.
    *  Pointer events on the surface paint strokes; the floating DrawToolbar
    *  is visible. Click-outside / Esc / Done button clears it. */
@@ -180,7 +179,6 @@ interface CanvasStore {
   setCardHoveredDeckId: (id: string | null) => void
   setExtractingCardId: (id: string | null) => void
   setFanTransition: (t: CanvasStore['fanTransition']) => void
-  setZoneLineY: (y: number) => void
   /** Pan (keeping current zoom) so the given group is centered in the viewport. */
   jumpToGroup: (groupId: string) => void
   // ── Annotation / draw mode ──
@@ -216,7 +214,6 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
   cardHoveredDeckId: null,
   extractingCardId: null,
   fanTransition: null,
-  zoneLineY: 0,
   drawSurface: null,
   drawTool: 'pen',
   drawColor: DEFAULT_PEN_COLOR,
@@ -281,8 +278,6 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
   setExtractingCardId: (extractingCardId) => set({ extractingCardId }),
 
   setFanTransition: (fanTransition) => set({ fanTransition }),
-
-  setZoneLineY: (zoneLineY) => set({ zoneLineY }),
 
   setDrawSurface: (drawSurface) => set({ drawSurface }),
   setDrawTool: (drawTool) => set({ drawTool }),
@@ -380,7 +375,6 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
     boardPos: s.boardPos,
     nleRowHeight: s.nleRowHeight,
     dynamicRowHeights: s.dynamicRowHeights,
-    zoneLineY: s.zoneLineY,
     // Tool preferences persist across reloads; the active drawSurface does not.
     drawColor: s.drawColor,
     drawSize: s.drawSize,
@@ -394,9 +388,6 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
   }),
   version: 2,
   migrate: (persisted: any, version: number) => {
-    if (version < 1) {
-      persisted.zoneLineY = 0
-    }
     if (version < 2) {
       // Rolodex CENTER_BONUS folded into the expansion range. Old
       // rolodexExpansion = 0 meant "active popped up by 34 px (compact)";

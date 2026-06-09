@@ -83,7 +83,6 @@ function rectsTouch(a: GroupSlot, b: GroupSlot, tol: number): boolean {
 export function useCardDecks(
   groups: ProjectGroup[],
   boards: Record<string, BoardData>,
-  zoneLineY: number,
   zoom: number,
 ): CardDeckInfo {
   return useMemo(() => {
@@ -152,23 +151,11 @@ export function useCardDecks(
     //    already tracked by the persisted-anchor fallback. Including them would
     //    corrupt clusters (e.g. sub-deck members inflating a parent cluster).
     const visibleGroups = groups.filter(g => !isHiddenDeckMember(g))
-
-    // Partition by zone (only visible groups participate in clustering).
-    // Use the LOGICAL content top, not rect.top: rect.top is inflated by
-    // `headerExtendCanvas`, which has a 20-screen-pixel minimum that grows
-    // unboundedly in canvas units as zoom decreases (~32 at zoom 1, ~135 at
-    // zoom 0.15). If we used rect.top here, a card's zone would flip purely
-    // from zooming — the affordance would suddenly catch a card that was
-    // previously excluded, with no spatial change. Logical top depends only on
-    // the card's own originY + row layout, so zone classification is stable.
-    const timelineGroups = visibleGroups.filter(g => {
-      const lt = logicalTops.get(g.id)
-      return lt !== undefined && lt >= zoneLineY
-    })
-    const freeGroups = visibleGroups.filter(g => {
-      const lt = logicalTops.get(g.id)
-      return lt !== undefined && lt < zoneLineY
-    })
+    // The whole canvas is one work area — clustering runs over a single
+    // pool of all visible groups, so decks form among any touching cards
+    // regardless of vertical position. (The old free/timeline zone split
+    // was retired; logicalTops is still computed above for the rect/ghost
+    // geometry but no longer partitions clustering.)
 
     // 2b. Ghost-slot BRIDGE rects. When a parent deck is open and one or more
     // of its members have been extracted, the parent renders a placeholder at
@@ -214,11 +201,10 @@ export function useCardDecks(
         })
       }
     }
-    // Partition ghost bridges by zone using their projected logical top.
-    const timelineGhosts = ghostBridges.filter(b => b.logicalTop >= zoneLineY).map(b => b.rect)
-    const freeGhosts     = ghostBridges.filter(b => b.logicalTop <  zoneLineY).map(b => b.rect)
+    // All ghost bridges participate in the single clustering pool.
+    const allGhosts = ghostBridges.map(b => b.rect)
 
-    // 3. Find touching clusters via union-find, per zone. Ghost bridges
+    // 3. Find touching clusters via union-find. Ghost bridges
     // participate as virtual nodes — they help union groups across an
     // extracted-card gap, but are filtered out before cluster IDs are
     // returned (only real groups become deck members).
@@ -260,10 +246,7 @@ export function useCardDecks(
         })
     }
 
-    const allClusters = [
-      ...findClusters(timelineGroups, timelineGhosts),
-      ...findClusters(freeGroups, freeGhosts),
-    ]
+    const allClusters = findClusters(visibleGroups, allGhosts)
 
     // 4. Build touching clusters (all, regardless of state)
     const touchingClusters = allClusters
@@ -362,7 +345,7 @@ export function useCardDecks(
       touchingClusters,
       getDeckForGroup: (gid: string) => groupToDeck.get(gid) ?? null,
     }
-  }, [groups, boards, zoneLineY, zoom])
+  }, [groups, boards, zoom])
 }
 
 /**
@@ -374,8 +357,6 @@ export function useCardDecks(
  */
 export function getHiddenBoardIds(
   groups: ProjectGroup[],
-  _boards: Record<string, BoardData>,
-  _zoneLineY: number,
 ): Set<string> {
   const hidden = new Set<string>()
   for (const g of groups) {
@@ -395,8 +376,6 @@ export function getHiddenBoardIds(
  */
 export function getHiddenGroupIds(
   groups: ProjectGroup[],
-  _boards: Record<string, BoardData>,
-  _zoneLineY: number,
 ): Set<string> {
   const hidden = new Set<string>()
   for (const g of groups) {

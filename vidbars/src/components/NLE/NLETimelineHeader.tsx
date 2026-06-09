@@ -150,15 +150,11 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, icon
     if (groupId && g) {
       const myLayout = computeGroupLayout(g.boardIds, bs0.boards)
       mySlot = groupSlot(groupId, g.boardIds, bs0.boards, initialOriginX, initialOriginY, myLayout)
-      // Zone-aware collision: only collide with groups in the timeline zone
-      const zly = useCanvasStore.getState().zoneLineY
-      const inTimeline = initialOriginY >= zly
-      obstacles = inTimeline
-        ? bs0.groups
-            .filter(og => !draggingSet.has(og.id) && og.originY >= zly && !isHiddenDeckMember(og))
-            .map(og => groupSlot(og.id, og.boardIds, bs0.boards, og.originX, og.originY, computeGroupLayout(og.boardIds, bs0.boards)))
-            .filter(Boolean) as GroupSlot[]
-        : []  // free zone: no collision
+      // One unified work area — collide with every other visible group.
+      obstacles = bs0.groups
+        .filter(og => !draggingSet.has(og.id) && !isHiddenDeckMember(og))
+        .map(og => groupSlot(og.id, og.boardIds, bs0.boards, og.originX, og.originY, computeGroupLayout(og.boardIds, bs0.boards)))
+        .filter(Boolean) as GroupSlot[]
     }
 
     const onMove = (ev: PointerEvent) => {
