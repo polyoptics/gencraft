@@ -1,14 +1,21 @@
-// migrateInlineMedia.ts — move base64 data-URL images OUT of the
-// persisted Zustand state and INTO the IndexedDB blob store (mediaStore),
-// replacing each inline value with a small `mediaref:<id>` pointer.
+// migrateInlineMedia.ts — move images OUT of state (and off the server)
+// INTO the local IndexedDB blob store (mediaStore), replacing each value
+// with a small `mediaref:<id>` pointer so the whole project is local +
+// self-contained (portable in the backup file).
+//
+// Converts two kinds of value:
+//   - `data:` base64 URLs (decoded locally), and
+//   - `/uploads/…` server paths (fetched from the dev server) — so the
+//     project no longer depends on a server to show its images.
+// Anything else (mediaref, external http(s), blob:) passes through.
 //
 // Two entry points:
-//  - runInlineMediaMigration(): the guard-free core. Idempotent (only
-//    touches `data:` values; existing refs / urls are skipped). Used by
+//  - runInlineMediaMigration(): the guard-free core. Idempotent. Used by
 //    the project import path, which always needs a fresh sweep.
 //  - useInlineMediaMigration(): a load-time React hook that runs the
-//    core once per app version (localStorage guard), mirroring the old
-//    useBase64Migration pattern.
+//    core once per app version (localStorage guard). Advances the guard
+//    ONLY on a fully clean pass, so a server hiccup mid-sweep retries
+//    next load rather than permanently skipping unfetched images.
 
 import { useEffect, useRef } from 'react'
 import { useBoardsStore } from '../store/boardsStore'
@@ -19,35 +26,63 @@ import { putMedia } from './mediaStore'
 import { isDataUrl, dataUrlToBlob, makeMediaRef } from './mediaRef'
 
 const MIGRATION_KEY = 'vidbars-inline-media-migrated'
-const MIGRATION_VERSION = 1
+// v1: base64 data URLs → blobs. v2: also pull /uploads server paths local.
+const MIGRATION_VERSION = 2
 
-/** Convert one value: a `data:` URL → stored blob + `mediaref:`; anything
- *  else passes through unchanged. Counts conversions via the counter. */
-async function migrateValue(v: string | null | undefined, counter: { n: number }): Promise<string | null> {
-  if (!isDataUrl(v)) return v ?? null
-  const blob = dataUrlToBlob(v)
-  if (!blob) return v // undecodable — leave as-is (resolver passthrough still renders it)
-  try {
-    const id = await putMedia(blob)
-    counter.n++
-    return makeMediaRef(id)
-  } catch {
-    return v // put failed (e.g. quota) — keep the data URL; next sweep retries
+interface Counter { n: number; failed: number }
+
+/** True for a same-origin server media path we should localize. */
+function isUploadPath(v: string | null | undefined): v is string {
+  return typeof v === 'string' && v.startsWith('/uploads/')
+}
+
+/** Convert one value to a local blob ref:
+ *   - `data:` URL → decode → store.
+ *   - `/uploads/…` path → fetch → store.
+ *   - anything else → unchanged.
+ *  On any failure the original value is kept and counter.failed bumped
+ *  (so the load guard retries next time). */
+async function migrateValue(v: string | null | undefined, counter: Counter): Promise<string | null> {
+  if (isDataUrl(v)) {
+    const blob = dataUrlToBlob(v)
+    if (!blob) return v // undecodable — passthrough still renders it
+    try {
+      const id = await putMedia(blob)
+      counter.n++
+      return makeMediaRef(id)
+    } catch {
+      counter.failed++
+      return v
+    }
   }
+  if (isUploadPath(v)) {
+    try {
+      const res = await fetch(v)
+      if (!res.ok) { counter.failed++; return v }
+      const blob = await res.blob()
+      const id = await putMedia(blob)
+      counter.n++
+      return makeMediaRef(id)
+    } catch {
+      counter.failed++
+      return v
+    }
+  }
+  return v ?? null
 }
 
 /** Walk every image-bearing field in both stores, convert inline data
  *  URLs to blob refs, and commit one setState per store. Safe to run
  *  repeatedly. */
-export async function runInlineMediaMigration(): Promise<number> {
-  const counter = { n: 0 }
+export async function runInlineMediaMigration(): Promise<Counter> {
+  const counter: Counter = { n: 0, failed: 0 }
 
   // ── freeNodeStore: nodes[].imageUrl ──
   const fnState = useFreeNodeStore.getState()
   const newNodes: Record<string, FreeNodeData> = {}
   let nodesChanged = false
   for (const [id, node] of Object.entries(fnState.nodes)) {
-    if (isDataUrl(node.imageUrl)) {
+    if (isDataUrl(node.imageUrl) || isUploadPath(node.imageUrl)) {
       newNodes[id] = { ...node, imageUrl: await migrateValue(node.imageUrl, counter) }
       nodesChanged = true
     } else {
@@ -95,11 +130,27 @@ export async function runInlineMediaMigration(): Promise<number> {
   )
   useBoardsStore.setState({ boards: newBoards, groups: newGroups })
 
-  if (counter.n > 0) console.log(`[media-migrate] moved ${counter.n} inline images into the blob store`)
-  return counter.n
+  if (counter.n > 0 || counter.failed > 0) {
+    console.log(`[media-migrate] localized ${counter.n} images into the blob store` +
+      (counter.failed > 0 ? ` (${counter.failed} failed — will retry next load)` : ''))
+  }
+  return counter
 }
 
-/** Load-time hook: run the sweep once per app version. */
+/** Resolve once a persisted store has finished its (async IndexedDB)
+ *  rehydration — otherwise the migration would scan empty initial state. */
+function whenHydrated(store: {
+  persist?: { hasHydrated: () => boolean; onFinishHydration: (cb: () => void) => () => void }
+}): Promise<void> {
+  const p = store.persist
+  if (!p || p.hasHydrated()) return Promise.resolve()
+  return new Promise(resolve => {
+    const unsub = p.onFinishHydration(() => { unsub(); resolve() })
+  })
+}
+
+/** Load-time hook: run the sweep once per app version, AFTER both stores
+ *  have rehydrated from IndexedDB. */
 export function useInlineMediaMigration(): void {
   const ran = useRef(false)
   useEffect(() => {
@@ -107,8 +158,16 @@ export function useInlineMediaMigration(): void {
     ran.current = true
     const stored = Number(localStorage.getItem(MIGRATION_KEY) ?? '0')
     if (stored >= MIGRATION_VERSION) return
-    runInlineMediaMigration()
-      .then(() => { localStorage.setItem(MIGRATION_KEY, String(MIGRATION_VERSION)) })
+    Promise.all([
+      whenHydrated(useBoardsStore as never),
+      whenHydrated(useFreeNodeStore as never),
+    ])
+      .then(() => runInlineMediaMigration())
+      .then(({ failed }) => {
+        // Only advance the guard on a fully clean pass; otherwise retry
+        // next load (e.g. server was briefly unreachable mid-sweep).
+        if (failed === 0) localStorage.setItem(MIGRATION_KEY, String(MIGRATION_VERSION))
+      })
       .catch(err => console.warn('[media-migrate] failed; will retry next load', err))
   }, [])
 }
