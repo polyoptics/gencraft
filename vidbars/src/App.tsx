@@ -4,6 +4,7 @@ import { NLETimelineViewer } from './components/NLE/NLETimelineViewer'
 import { LayerContent, LayerOverlay } from './components/Layers/LayerRouter'
 import { Viewer } from './components/Viewer/Viewer'
 import { TemplateMenu } from './components/UI/TemplateMenu'
+import { ProjectBackupMenu } from './components/UI/ProjectBackupMenu'
 import { DeckBrowserTray } from './components/DeckBrowser/DeckBrowserTray'
 import { LinkDragOverlay } from './components/Linking/LinkDragOverlay'
 import { DrawToolbar } from './components/Annotation/DrawToolbar'
@@ -451,6 +452,7 @@ export default function App() {
           drag header · resize edges · dbl-click empty space to collapse all · Del to delete selected
         </span>
         <DynamicRowToggle />
+        <ProjectBackupMenu />
         <TemplateMenu />
       </div>
 
