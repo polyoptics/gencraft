@@ -73,6 +73,26 @@ export async function putMedia(blob: Blob): Promise<string> {
   }
 }
 
+/** Store a Blob under a SPECIFIC id (used by import so the manifest's
+ *  `mediaref:<id>` pointers keep matching their bytes). Overwrites any
+ *  existing record at that id. */
+export async function putMediaWithId(id: string, blob: Blob): Promise<void> {
+  const rec: MediaRecord = { blob, type: blob.type, size: blob.size, createdAt: Date.now() }
+  try {
+    const db = await getDB()
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE_NAME, 'readwrite')
+      tx.objectStore(STORE_NAME).put(rec, id)
+      tx.oncomplete = () => resolve()
+      tx.onerror = () => reject(tx.error)
+      tx.onabort = () => reject(tx.error ?? new Error('media tx aborted'))
+    })
+  } catch (err) {
+    surfaceFailure(err)
+    throw err
+  }
+}
+
 /** Load a Blob by id, or null if absent / on error. */
 export async function getMedia(id: string): Promise<Blob | null> {
   try {

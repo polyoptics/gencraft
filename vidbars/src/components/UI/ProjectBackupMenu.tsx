@@ -1,16 +1,19 @@
 import React, { useState, useRef, useEffect } from 'react'
-import { exportProject, readBackupFile, applyBackup, type ProjectBackup } from '../../utils/projectBackup'
+import { exportProject, importProjectFile } from '../../utils/projectBackup'
 
 /** Top-bar menu for portable project backup: export the whole project
- *  to a single JSON file, or import one (replacing the current project).
- *  Mirrors TemplateMenu's dropdown + confirm-dialog styling. */
+ *  to a single .zip file (manifest + images), or import one (replacing
+ *  the current project). Mirrors TemplateMenu's dropdown + confirm-dialog
+ *  styling. */
 export const ProjectBackupMenu: React.FC = () => {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  // Pending import awaiting confirmation: holds the parsed backup + a label.
-  const [pending, setPending] = useState<{ backup: ProjectBackup; name: string } | null>(null)
+  // Pending import awaiting confirmation: holds the picked file + a label.
+  const [pending, setPending] = useState<{ file: File; name: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // Export/import can move hundreds of MB and take a few seconds — surface it.
+  const [busy, setBusy] = useState<null | 'export' | 'import'>(null)
   const yesBtnRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
@@ -32,17 +35,41 @@ export const ProjectBackupMenu: React.FC = () => {
     return () => window.removeEventListener('keydown', onKey)
   }, [pending])
 
-  const onPickFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const onPickFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     // Reset the input so picking the same file again still fires onChange.
     e.target.value = ''
     if (!file) return
     setError(null)
+    setPending({ file, name: file.name })
+  }
+
+  const onExport = async () => {
+    setError(null)
+    setOpen(false)
+    setBusy('export')
     try {
-      const backup = await readBackupFile(file)
-      setPending({ backup, name: file.name })
+      await exportProject()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not read that file.')
+      setError(err instanceof Error ? err.message : 'Export failed.')
+      setOpen(true)
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const doImport = async (file: File) => {
+    setPending(null)
+    setError(null)
+    setBusy('import')
+    try {
+      await importProjectFile(file)
+      setOpen(false)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not import that file.')
+      setOpen(true)
+    } finally {
+      setBusy(null)
     }
   }
 
@@ -87,25 +114,27 @@ export const ProjectBackupMenu: React.FC = () => {
             Project file
           </div>
           <button
-            style={btnStyle}
-            onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.07)')}
+            style={{ ...btnStyle, opacity: busy ? 0.5 : 1, cursor: busy ? 'default' : 'pointer' }}
+            disabled={!!busy}
+            onMouseEnter={e => (e.currentTarget.style.background = busy ? 'none' : 'rgba(255,255,255,0.07)')}
             onMouseLeave={e => (e.currentTarget.style.background = 'none')}
-            onClick={() => { void exportProject(); setOpen(false) }}
+            onClick={() => { void onExport() }}
           >
             <span style={{ width: 14, textAlign: 'center', opacity: 0.7 }}>⤓</span>
-            Export project to file
+            {busy === 'export' ? 'Exporting…' : 'Export project to file'}
           </button>
           <button
-            style={btnStyle}
-            onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.07)')}
+            style={{ ...btnStyle, opacity: busy ? 0.5 : 1, cursor: busy ? 'default' : 'pointer' }}
+            disabled={!!busy}
+            onMouseEnter={e => (e.currentTarget.style.background = busy ? 'none' : 'rgba(255,255,255,0.07)')}
             onMouseLeave={e => (e.currentTarget.style.background = 'none')}
             onClick={() => fileInputRef.current?.click()}
           >
             <span style={{ width: 14, textAlign: 'center', opacity: 0.7 }}>⤒</span>
-            Import project from file…
+            {busy === 'import' ? 'Importing…' : 'Import project from file…'}
           </button>
           <div style={{ padding: '4px 10px 6px', fontSize: 9, color: 'rgba(255,255,255,0.28)', lineHeight: 1.4 }}>
-            One self-contained file (includes images). Carry it to another device.
+            One portable .zip (manifest + all your images). Carry it to another device.
           </div>
           {error && (
             <div style={{ padding: '4px 10px 8px', fontSize: 10, color: 'rgba(255,140,140,0.9)', lineHeight: 1.4 }}>
@@ -119,7 +148,7 @@ export const ProjectBackupMenu: React.FC = () => {
       <input
         ref={fileInputRef}
         type="file"
-        accept="application/json,.json"
+        accept=".zip,.json,application/zip,application/json"
         style={{ display: 'none' }}
         onChange={onPickFile}
       />
@@ -160,12 +189,7 @@ export const ProjectBackupMenu: React.FC = () => {
               >Cancel</button>
               <button
                 ref={yesBtnRef}
-                onClick={() => {
-                  const b = pending.backup
-                  setPending(null)
-                  setOpen(false)
-                  void applyBackup(b)
-                }}
+                onClick={() => { const f = pending.file; void doImport(f) }}
                 style={{
                   background: 'rgba(217,122,98,0.35)', border: '1px solid rgba(217,122,98,0.6)',
                   borderRadius: 5, color: 'rgba(255,255,255,0.95)', fontSize: 11, fontWeight: 600,

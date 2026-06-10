@@ -1,20 +1,27 @@
-// projectBackup.ts — export/import the whole project to/from a single
-// self-contained JSON file. This is the user's portable backup AND the
-// manual cross-device transfer: export on one machine, import on another.
+// projectBackup.ts — export/import the whole project as a portable .zip.
 //
-// The file captures exactly what the three Zustand stores persist (the
-// same slices as their `partialize`), so an import is a faithful, full
-// restore. Images are still base64-inline in the state today, so the
-// file is fully self-contained (no separate asset bundle needed). When
-// media later moves to a blob store, exportProject() will re-inline it
-// so this file format stays stable.
+// This is the user's backup AND manual cross-device transfer: export on
+// one machine, import on another.
+//
+// Why a zip (not one JSON file): images live in the local blob store and
+// total hundreds of MB. Re-inlining them all to base64 into a single JSON
+// string overflows V8's max string length (~512 MB) → "Invalid string
+// length". A zip sidesteps that entirely: a small `project.json` manifest
+// (state with `mediaref:<id>` pointers kept as-is) plus each image as its
+// own binary `media/<id>.<ext>` entry. Nothing ever becomes one giant
+// string, so it scales to any project size — and the archive is a plain
+// zip the user can open by hand to recover individual images.
+//
+// Backward compatible on import: legacy Phase-1 `.json` backups (base64
+// inline) are detected and swept into the blob store on the way in.
 
+import { zip, unzip, type AsyncZippable, type Unzipped } from 'fflate'
 import { useBoardsStore } from '../store/boardsStore'
 import type { BoardData, ProjectGroup } from '../store/boardsStore'
 import { useCanvasStore } from '../store/canvasStore'
 import { useFreeNodeStore } from '../store/freeNodeStore'
-import { isMediaRef, mediaRefId, blobToDataUrl } from './mediaRef'
-import { getMedia } from './mediaStore'
+import { isMediaRef, mediaRefId } from './mediaRef'
+import { getMedia, putMediaWithId } from './mediaStore'
 import { runInlineMediaMigration } from './migrateInlineMedia'
 
 const FORMAT = 'vidbars-project'
@@ -23,6 +30,9 @@ const FORMAT = 'vidbars-project'
 const BOARDS_VERSION = 12
 const CANVAS_VERSION = 2
 const FREENODES_VERSION = 0
+
+const MANIFEST_NAME = 'project.json'
+const MEDIA_DIR = 'media/'
 
 export interface ProjectBackup {
   format: typeof FORMAT
@@ -36,7 +46,8 @@ export interface ProjectBackup {
 }
 
 /** Snapshot the persisted slices of all three stores. Mirrors each
- *  store's partialize so the round-trip is exact. */
+ *  store's partialize so the round-trip is exact. Media values stay as
+ *  `mediaref:<id>` pointers — their bytes ship as separate zip entries. */
 function buildBackup(): ProjectBackup {
   const bs = useBoardsStore.getState()
   const cs = useCanvasStore.getState()
@@ -77,129 +88,148 @@ function buildBackup(): ProjectBackup {
   }
 }
 
-/** Resolve a `mediaref:` value back to its base64 data URL (via the blob
- *  store) so the exported file stays self-contained and portable. Plain
- *  values pass through; an orphaned ref becomes null. */
-async function reinlineValue(v: string | null | undefined): Promise<string | null> {
-  if (!isMediaRef(v)) return v ?? null
-  const id = mediaRefId(v)!
-  const blob = await getMedia(id)
-  if (!blob) { console.warn(`[backup] export: no blob for ${id}, dropping`); return null }
-  return blobToDataUrl(blob)
-}
-
-/** Walk the backup's media-bearing fields, re-inlining any `mediaref:`
- *  values to base64 so the file imports onto a machine with no blob store. */
-async function reinlineBackup(backup: ProjectBackup): Promise<ProjectBackup> {
-  const b = backup.stores
-  // free nodes
-  const nodes: Record<string, unknown> = {}
-  for (const [id, node] of Object.entries(b.freenodes.nodes as Record<string, { imageUrl?: string | null }>)) {
-    nodes[id] = { ...node, imageUrl: await reinlineValue(node.imageUrl) }
+/** Gather every `mediaref:` id referenced anywhere in the manifest, so we
+ *  know which blobs to bundle. */
+function collectRefIds(backup: ProjectBackup): Set<string> {
+  const ids = new Set<string>()
+  const add = (v: unknown) => {
+    if (isMediaRef(v)) { const id = mediaRefId(v as string); if (id) ids.add(id) }
   }
-  // boards
-  const boards: Record<string, unknown> = {}
-  for (const [boardId, board] of Object.entries(b.boards.boards as Record<string, BoardData>)) {
-    const newBars: Record<string, unknown> = {}
-    for (const [barId, bar] of Object.entries(board.bars)) {
+  const s = backup.stores
+  for (const node of Object.values(s.freenodes?.nodes ?? {})) add((node as { imageUrl?: unknown }).imageUrl)
+  for (const board of Object.values(s.boards.boards as Record<string, BoardData>)) {
+    add(board.layers?.card?.heroImage)
+    add(board.layers?.block?.thumbnail)
+    for (const bar of Object.values(board.bars)) {
+      add(bar.icon)
       const c = bar.content
-      newBars[barId] = {
-        ...bar,
-        icon: await reinlineValue(bar.icon),
-        content: c ? {
-          ...c,
-          images: c.images ? await Promise.all(c.images.map(s => reinlineValue(s) as Promise<string>)) : c.images,
-          media: c.media ? await Promise.all(c.media.map(async m => ({
-            ...m,
-            url: (await reinlineValue(m.url)) ?? m.url,
-            ...(m.posterUrl !== undefined ? { posterUrl: (await reinlineValue(m.posterUrl)) ?? undefined } : {}),
-          }))) : c.media,
-        } : c,
-      }
+      if (c?.images) for (const im of c.images) add(im)
+      if (c?.media) for (const m of c.media) { add(m.url); add(m.posterUrl) }
     }
-    const layers = board.layers
-    const newLayers = layers ? {
-      ...layers,
-      card: layers.card ? { ...layers.card, heroImage: await reinlineValue(layers.card.heroImage) } : layers.card,
-      block: layers.block ? { ...layers.block, thumbnail: await reinlineValue(layers.block.thumbnail) } : layers.block,
-    } : layers
-    boards[boardId] = { ...board, bars: newBars, layers: newLayers }
   }
-  const groups = await Promise.all(
-    (b.boards.groups as ProjectGroup[]).map(async g => ({ ...g, cardHeroImage: await reinlineValue(g.cardHeroImage) })),
-  )
-  return {
-    ...backup,
-    stores: {
-      ...b,
-      boards: { ...b.boards, boards: boards as Record<string, unknown>, groups: groups as unknown[] },
-      freenodes: { ...b.freenodes, nodes: nodes as Record<string, unknown> },
-    },
-  }
+  for (const g of s.boards.groups as ProjectGroup[]) add(g.cardHeroImage)
+  return ids
 }
 
-/** Serialize the whole project and trigger a file download. Re-inlines
- *  blob-store media so the file is fully self-contained. */
+const MIME_EXT: Record<string, string> = {
+  'image/png': 'png', 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/webp': 'webp',
+  'image/gif': 'gif', 'image/svg+xml': 'svg', 'image/avif': 'avif', 'image/bmp': 'bmp',
+  'video/mp4': 'mp4', 'video/webm': 'webm', 'video/quicktime': 'mov',
+  'audio/mpeg': 'mp3', 'audio/wav': 'wav', 'audio/ogg': 'ogg',
+}
+function extFor(type: string): string { return MIME_EXT[type] || 'bin' }
+
+/** Recover the blob id from a `media/<id>.<ext>` entry name. Ids are
+ *  UUIDs (no dots), so trimming the final extension is safe. */
+function idFromMediaName(name: string): string {
+  return name.slice(MEDIA_DIR.length).replace(/\.[^/.]+$/, '')
+}
+
+/** Serialize the whole project to a portable .zip and trigger download.
+ *  Manifest holds `mediaref:` pointers; each referenced blob is bundled
+ *  as its own (uncompressed — images are already compressed) entry. */
 export async function exportProject(): Promise<void> {
-  const backup = await reinlineBackup(buildBackup())
-  const json = JSON.stringify(backup)
-  const blob = new Blob([json], { type: 'application/json' })
+  const manifest = buildBackup()
+  const ids = collectRefIds(manifest)
+
+  const files: AsyncZippable = {
+    [MANIFEST_NAME]: new TextEncoder().encode(JSON.stringify(manifest)),
+  }
+  let missing = 0
+  for (const id of ids) {
+    const blob = await getMedia(id)
+    if (!blob) { missing++; console.warn(`[backup] export: no blob for ${id}, skipping`); continue }
+    const bytes = new Uint8Array(await blob.arrayBuffer())
+    files[`${MEDIA_DIR}${id}.${extFor(blob.type)}`] = [bytes, { level: 0 }]
+  }
+  if (missing) console.warn(`[backup] export: ${missing} referenced blob(s) were missing and skipped`)
+
+  const zipped = await new Promise<Uint8Array>((resolve, reject) =>
+    zip(files, (err, data) => (err ? reject(err) : resolve(data))),
+  )
+
+  const blob = new Blob([zipped], { type: 'application/zip' })
   const url = URL.createObjectURL(blob)
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
   const a = document.createElement('a')
   a.href = url
-  a.download = `vidbars-project-${stamp}.json`
+  a.download = `gencraft-project-${stamp}.zip`
   document.body.appendChild(a)
   a.click()
   a.remove()
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
-/** Parse + validate a backup file. Rejects with a human-readable message. */
-export function readBackupFile(file: File): Promise<ProjectBackup> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      try {
-        const data = JSON.parse(String(reader.result))
-        if (!data || data.format !== FORMAT || !data.stores?.boards || !data.stores?.canvas) {
-          reject(new Error('That doesn’t look like a genCraft project file.'))
-          return
-        }
-        resolve(data as ProjectBackup)
-      } catch {
-        reject(new Error('Could not read the file (invalid JSON).'))
-      }
-    }
-    reader.onerror = () => reject(reader.error ?? new Error('File read failed.'))
-    reader.readAsText(file)
-  })
+/** ZIP local-file-header / empty-archive / spanned signatures: 'PK' + … */
+function looksLikeZip(bytes: Uint8Array): boolean {
+  return bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b &&
+    (bytes[2] === 0x03 || bytes[2] === 0x05 || bytes[2] === 0x07)
 }
 
-/** Replace the current project with a parsed backup. Writes the slices
- *  into the live stores (persistence saves them on its normal debounce)
- *  and clears transient selection state so nothing dangles against the
- *  freshly-loaded ids. The UI updates live — no reload needed. */
-export async function applyBackup(backup: ProjectBackup): Promise<void> {
-  const { boards, freenodes, canvas } = backup.stores
+function validateBackup(data: unknown): asserts data is ProjectBackup {
+  const d = data as Partial<ProjectBackup> | null
+  if (!d || d.format !== FORMAT || !d.stores?.boards || !d.stores?.canvas) {
+    throw new Error('That doesn’t look like a genCraft project file.')
+  }
+}
 
+/** Write a parsed manifest into the live stores (persistence saves on its
+ *  normal debounce) and clear transient selection/view state so nothing
+ *  dangles against the freshly-loaded ids. UI updates live — no reload. */
+function setBackupState(backup: ProjectBackup): void {
+  const { boards, freenodes, canvas } = backup.stores
   useBoardsStore.setState({
     boards: boards.boards as never,
     boardOrder: boards.boardOrder,
     groups: boards.groups as never,
     selectedGroupIds: [],
   })
-  useFreeNodeStore.setState({ nodes: freenodes.nodes as never, selectedIds: [] })
+  useFreeNodeStore.setState({ nodes: (freenodes?.nodes ?? {}) as never, selectedIds: [] })
   useCanvasStore.setState({
     ...(canvas.prefs as object),
-    // Clear transient selection / view state that may reference old ids.
     selectedBlockBoardIds: [],
     selectedGhostGroupIds: [],
     focusedBoardId: null,
     deckPortalSelections: {},
   } as never)
+}
 
-  // The file is self-contained (base64-inline). Sweep it into the blob
-  // store so imported images live as refs like the rest of the app.
+/** Import a project file, replacing the current project. Accepts both the
+ *  current .zip bundle and legacy Phase-1 self-contained .json backups;
+ *  rejects with a human-readable message on a bad file. */
+export async function importProjectFile(file: File): Promise<void> {
+  const buf = new Uint8Array(await file.arrayBuffer())
+
+  if (looksLikeZip(buf)) {
+    const entries = await new Promise<Unzipped>((resolve, reject) =>
+      unzip(buf, (err, data) => (err ? reject(err) : resolve(data))),
+    )
+    const manifestBytes = entries[MANIFEST_NAME]
+    if (!manifestBytes) throw new Error('That zip isn’t a genCraft project (no project.json inside).')
+    let manifest: unknown
+    try { manifest = JSON.parse(new TextDecoder().decode(manifestBytes)) }
+    catch { throw new Error('The project.json inside the zip is corrupt.') }
+    validateBackup(manifest)
+
+    // Restore each media blob under its ORIGINAL id so the manifest's
+    // `mediaref:<id>` pointers resolve. Do this BEFORE setState so the
+    // first render after import can already fetch the bytes.
+    for (const [name, bytes] of Object.entries(entries)) {
+      if (!name.startsWith(MEDIA_DIR)) continue
+      const id = idFromMediaName(name)
+      if (id) await putMediaWithId(id, new Blob([bytes]))
+    }
+    setBackupState(manifest)
+    // No re-sweep: the manifest already references blobs we just stored.
+    return
+  }
+
+  // Legacy self-contained JSON (Phase-1 backups: base64 inline / upload paths).
+  let manifest: unknown
+  try { manifest = JSON.parse(new TextDecoder().decode(buf)) }
+  catch { throw new Error('Could not read the file (not a genCraft project .zip or .json).') }
+  validateBackup(manifest)
+  setBackupState(manifest)
+  // Sweep the inlined base64 / server paths into the blob store as refs.
   await runInlineMediaMigration()
 }
