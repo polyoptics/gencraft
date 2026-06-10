@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { InfiniteCanvas } from './components/Canvas/InfiniteCanvas'
 import { NLETimelineViewer } from './components/NLE/NLETimelineViewer'
 import { LayerContent, LayerOverlay } from './components/Layers/LayerRouter'
 import { Viewer } from './components/Viewer/Viewer'
 import { TemplateMenu } from './components/UI/TemplateMenu'
 import { ProjectBackupMenu } from './components/UI/ProjectBackupMenu'
+import { useInlineMediaMigration } from './utils/migrateInlineMedia'
 import { DeckBrowserTray } from './components/DeckBrowser/DeckBrowserTray'
 import { LinkDragOverlay } from './components/Linking/LinkDragOverlay'
 import { DrawToolbar } from './components/Annotation/DrawToolbar'
@@ -385,15 +386,6 @@ function RolodexToggleButton() {
   )
 }
 
-function useBase64Migration() {
-  const ran = useRef(false)
-  useEffect(() => {
-    if (ran.current) return
-    ran.current = true
-    import('./utils/migrateBase64').then(m => m.migrateBase64ToServer())
-  }, [])
-}
-
 export default function App() {
   useKeyboardDelete()
   useKeyboardCopyPaste()
@@ -401,7 +393,9 @@ export default function App() {
   useEscapeDrawMode()
   useEscapeDeckPortals()
   useDeadDeckPortalCleanup()
-  useBase64Migration()
+  // Move base64-inline images out of state into the local blob store
+  // (one-time, versioned). Replaces the old server-based base64 migration.
+  useInlineMediaMigration()
 
   const [deckBrowserOpen, setDeckBrowserOpen] = useState(false)
 

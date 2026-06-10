@@ -90,7 +90,7 @@ export const ProjectBackupMenu: React.FC = () => {
             style={btnStyle}
             onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.07)')}
             onMouseLeave={e => (e.currentTarget.style.background = 'none')}
-            onClick={() => { exportProject(); setOpen(false) }}
+            onClick={() => { void exportProject(); setOpen(false) }}
           >
             <span style={{ width: 14, textAlign: 'center', opacity: 0.7 }}>⤓</span>
             Export project to file
@@ -164,7 +164,7 @@ export const ProjectBackupMenu: React.FC = () => {
                   const b = pending.backup
                   setPending(null)
                   setOpen(false)
-                  applyBackup(b)
+                  void applyBackup(b)
                 }}
                 style={{
                   background: 'rgba(217,122,98,0.35)', border: '1px solid rgba(217,122,98,0.6)',

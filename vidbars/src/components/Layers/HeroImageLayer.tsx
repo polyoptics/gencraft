@@ -1,6 +1,7 @@
 // HeroImageLayer — shared hero image renderer with transform support
 import React from 'react'
 import type { HeroImageTransform } from '../../store/boardsStore'
+import { useResolvedMedia } from '../../utils/useResolvedMedia'
 
 interface Props {
   heroImage: string
@@ -10,6 +11,9 @@ interface Props {
 }
 
 export const HeroImageLayer: React.FC<Props> = ({ heroImage, transform, borderRadius = 12, opacity }) => {
+  // heroImage may be a plain URL or a `mediaref:` pointer into the blob
+  // store — resolve it to a usable URL (null while loading / if missing).
+  const resolved = useResolvedMedia(heroImage)
   // Use transform.opacity if set, then prop, then default 0.7
   const effectiveOpacity = opacity ?? transform?.opacity ?? 0.7
   const t = transform
@@ -23,10 +27,12 @@ export const HeroImageLayer: React.FC<Props> = ({ heroImage, transform, borderRa
   if (t?.flipV) flipParts.push('scaleY(-1)')
   const cssTransform = flipParts.length > 0 ? flipParts.join(' ') : undefined
 
+  if (!resolved) return null
+
   return (
     <div style={{
       position: 'absolute', inset: 0,
-      backgroundImage: `url(${heroImage})`,
+      backgroundImage: `url(${resolved})`,
       backgroundSize: bgSize,
       backgroundPosition: bgPos,
       backgroundRepeat: 'no-repeat',

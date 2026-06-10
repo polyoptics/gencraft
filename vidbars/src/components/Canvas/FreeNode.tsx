@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import type { FreeNodeData, TextStyle } from '../../store/freeNodeStore'
 import { DEFAULT_TEXT_STYLE } from '../../store/freeNodeStore'
+import { useResolvedMedia } from '../../utils/useResolvedMedia'
 import {
   ensureFontLoaded, FONT_LIST, loadGoogleFont, hexToRgba,
   FONT_SIZES, FONT_WEIGHTS, LINE_HEIGHTS, LETTER_SPACINGS, TEXT_TRANSFORMS, PRESET_COLORS,
@@ -497,6 +498,10 @@ const FreeNodeBody: React.FC<{
   setIsEditing: (v: boolean) => void
 }> = ({ node, id, iz, dz, pad, updateFreeNode, isEditing, setIsEditing }) => {
   const textRef = useRef<HTMLTextAreaElement>(null)
+  // node.imageUrl may be a `mediaref:` pointer — resolve to a usable URL
+  // (null while loading / if missing). Called unconditionally before any
+  // early return to keep hook order stable.
+  const resolvedUrl = useResolvedMedia(node.imageUrl)
 
   useEffect(() => { if (isEditing) textRef.current?.focus() }, [isEditing])
 
@@ -591,9 +596,9 @@ const FreeNodeBody: React.FC<{
   if (node.type === 'video') {
     return (
       <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', overflow: 'hidden' }}>
-        {node.imageUrl ? (
+        {resolvedUrl ? (
           <>
-            <img src={node.imageUrl} draggable={false} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+            <img src={resolvedUrl} draggable={false} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
             {/* Play button overlay */}
             <div style={{
               position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -687,8 +692,8 @@ const FreeNodeBody: React.FC<{
 
   return (
     <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', overflow: 'hidden' }}>
-      {node.imageUrl ? (
-        <img src={node.imageUrl} draggable={false} style={imgStyle} />
+      {resolvedUrl ? (
+        <img src={resolvedUrl} draggable={false} style={imgStyle} />
       ) : (
         <div style={{ textAlign: 'center', color: 'rgba(255,255,255,0.18)', pointerEvents: 'none' }}>
           <div style={{ fontSize: 22 * iz, marginBottom: 5 * iz, opacity: 0.5 }}>⬛</div>

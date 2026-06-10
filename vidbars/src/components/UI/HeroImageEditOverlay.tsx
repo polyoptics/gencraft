@@ -2,6 +2,7 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react'
 import ReactDOM from 'react-dom'
 import type { HeroImageTransform } from '../../store/boardsStore'
+import { useResolvedMedia } from '../../utils/useResolvedMedia'
 
 interface Props {
   cardRect: { left: number; top: number; width: number; height: number }
@@ -14,6 +15,8 @@ interface Props {
 const DEFAULT_TRANSFORM: HeroImageTransform = { scale: 1, offsetX: 0, offsetY: 0, flipH: false, flipV: false }
 
 export const HeroImageEditOverlay: React.FC<Props> = ({ cardRect, heroImage, initialTransform, onDone, onCancel }) => {
+  // heroImage may be a `mediaref:` pointer — resolve to a usable URL.
+  const resolvedHero = useResolvedMedia(heroImage) ?? heroImage
   const [t, setT] = useState<HeroImageTransform>({ ...initialTransform })
   const dragging = useRef(false)
   const lastPos = useRef({ x: 0, y: 0 })
@@ -109,7 +112,7 @@ export const HeroImageEditOverlay: React.FC<Props> = ({ cardRect, heroImage, ini
         top: cardRect.top - cardRect.height * 0.25,
         width: cardRect.width * 1.5,
         height: cardRect.height * 1.5,
-        backgroundImage: `url(${heroImage})`,
+        backgroundImage: `url(${resolvedHero})`,
         backgroundSize: bgSize,
         backgroundPosition: bgPos,
         backgroundRepeat: 'no-repeat',
@@ -142,7 +145,7 @@ export const HeroImageEditOverlay: React.FC<Props> = ({ cardRect, heroImage, ini
       >
         <div style={{
           position: 'absolute', inset: 0,
-          backgroundImage: `url(${heroImage})`,
+          backgroundImage: `url(${resolvedHero})`,
           backgroundSize: bgSize,
           backgroundPosition: bgPos,
           backgroundRepeat: 'no-repeat',
