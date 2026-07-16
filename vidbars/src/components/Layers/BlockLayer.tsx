@@ -18,6 +18,7 @@ import { computeGroupLayout, getRowY, getRowHeight, dyToRowDelta, getBoardAbsolu
 import { PortalFrame, computeGroupBlockFootprint } from './PortalFrame'
 import type { RowLayout } from '../../utils/nleRows'
 import { groupBoardSlots, clampBoardX } from '../../utils/nlePush'
+import { tryDockGroupAtRest } from '../../utils/deckDockDrag'
 import { DEFAULT_H } from '../../utils/barConstants'
 import { getFirstImageUrl } from '../../types/bar'
 import { HeroImageLayer } from './HeroImageLayer'
@@ -208,6 +209,10 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
       // mangling the selection mid-move.
       if (ungrouped && !isMulti) {
         useBoardsStore.getState().groupBoardAsNew(boardId)
+        // If the fresh group came to rest near a 3D viewport window edge
+        // and holds a model, snap it flush + load (block-zoom docking).
+        const newGroup = getGroupForBoard(useBoardsStore.getState().groups, boardId)
+        if (newGroup) tryDockGroupAtRest(newGroup.id)
       }
     }
     window.addEventListener('pointermove', onMove)

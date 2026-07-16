@@ -20,11 +20,9 @@ import { CloneDeck } from '../Linking/CloneDeck'
 import { useLinkingStore } from '../../store/linkingStore'
 import { DEFAULT_H } from '../../utils/barConstants'
 import { groupSlot, clampGroupMove } from '../../utils/nlePush'
-import type { GroupSlot } from '../../utils/nlePush'
-import { useViewport3DStore } from '../../store/viewport3dStore'
 import { useMagnetPreviewStore } from '../../store/magnetPreviewStore'
-import { findMagnetCandidate, type WindowRect } from '../../utils/viewportDocking'
-import { groupHasModels, collectDeckModels } from '../../utils/modelTraversal'
+import { updateDeckMagnetPreview, finishDeckMagnetDock } from '../../utils/deckDockDrag'
+import { groupHasModels } from '../../utils/modelTraversal'
 import { FreeCanvas } from '../Canvas/FreeCanvas'
 import { Viewport3DLayer } from '../Viewport3D/Viewport3DLayer'
 import { NLETimelineHeader, NLE_HEADER_CANVAS_H, headerExtend as computeHeaderExtend, headerScreenH, overviewScale } from '../NLE/NLETimelineHeader'
@@ -37,64 +35,6 @@ import { PenButton } from '../Annotation/PenButton'
 import { useSeedHoverFromCursor } from '../../utils/pointerTracker'
 
 const BOARD_PADDING_X = 20
-
-// ── Deck/card magnet-docking to 3D viewport windows ──
-// Shared by the open-card and stacked-deck drag handlers. Dock membership
-// stays derived from geometry; these helpers only provide the drag-time
-// affordance and the flush snap + load on release.
-
-function viewportWindowRects(): WindowRect[] {
-  return Object.values(useViewport3DStore.getState().windows)
-    .map(w => ({ id: w.id, x: w.x, y: w.y, width: w.width, height: w.height }))
-}
-
-/** During a drag: show/clear the "will snap here" ghost for the dragged
- *  slot (initial slot + current clamped delta). */
-function updateDeckMagnetPreview(canDock: boolean, slot: GroupSlot | null, dx: number, dy: number): void {
-  if (!canDock || !slot) return
-  const rect = { x: slot.left + dx, y: slot.top + dy, width: slot.right - slot.left, height: slot.bottom - slot.top }
-  const wins = viewportWindowRects()
-  const cand = wins.length > 0 ? findMagnetCandidate(rect, wins) : null
-  const mp = useMagnetPreviewStore.getState()
-  if (cand) {
-    mp.setPreview({ windowId: cand.windowId, edge: cand.edge, x: cand.snapped.x, y: cand.snapped.y, width: rect.width, height: rect.height })
-  } else if (mp.preview) {
-    mp.setPreview(null)
-  }
-}
-
-/** On release: snap the whole drag set flush to the previewed edge (same
- *  batched id set as the drag, so decks arrive intact) and load the deck's
- *  first model. Returns true when a dock happened. */
-function finishDeckMagnetDock(
-  canDock: boolean,
-  rootGroupId: string,
-  slotGroupId: string,
-  slotBoardIds: string[],
-  dragIds: string[],
-): boolean {
-  const mp = useMagnetPreviewStore.getState()
-  const preview = mp.preview
-  if (preview) mp.setPreview(null)
-  if (!canDock || !preview) return false
-  const bs = useBoardsStore.getState()
-  const g = bs.groups.find(x => x.id === slotGroupId)
-  if (!g) return false
-  const slot = groupSlot(slotGroupId, slotBoardIds, bs.boards, g.originX, g.originY, computeGroupLayout(slotBoardIds, bs.boards))
-  if (!slot) return false
-  const ddx = preview.x - slot.left
-  const ddy = preview.y - slot.top
-  if (ddx !== 0 || ddy !== 0) {
-    const updates = dragIds.flatMap(gid => {
-      const gg = bs.groups.find(x => x.id === gid)
-      return gg ? [{ groupId: gid, originX: gg.originX + ddx, originY: gg.originY + ddy }] : []
-    })
-    bs.setGroupPosBatch(updates)
-  }
-  const models = collectDeckModels(rootGroupId, bs.groups, bs.boards)
-  if (models[0]) useViewport3DStore.getState().setActiveModel(preview.windowId, models[0].url)
-  return true
-}
 
 /** Derive a deck-edge border color from a card's base color at a given alpha */
 function edgeColor(baseHex: string, alpha: number): string {

@@ -8,6 +8,8 @@ import { groupSlot, clampGroupMove } from '../../utils/nlePush'
 import type { GroupSlot } from '../../utils/nlePush'
 import { isHiddenDeckMember, expandWithNestedMembers } from '../../hooks/useCardDecks'
 import { hexToHsl, hslToHex } from '../../utils/colorUtils'
+import { updateDeckMagnetPreview, finishDeckMagnetDock } from '../../utils/deckDockDrag'
+import { groupHasModels } from '../../utils/modelTraversal'
 
 const BOARD_PADDING_X = 20
 export const NLE_HEADER_CANVAS_H = 36
@@ -156,6 +158,9 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, icon
         .map(og => groupSlot(og.id, og.boardIds, bs0.boards, og.originX, og.originY, computeGroupLayout(og.boardIds, bs0.boards)))
         .filter(Boolean) as GroupSlot[]
     }
+    // Magnet gate: groups with ≥1 model in their recursive content can
+    // dock to a 3D viewport window from the board-zoom header drag too.
+    const canDock = groupId ? groupHasModels(groupId, bs0.groups, bs0.boards) : false
 
     const onMove = (ev: PointerEvent) => {
       const z = useCanvasStore.getState().zoom
@@ -189,12 +194,16 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, icon
           groupId: gid, originY: origin.y + finalDy, originX: origin.x + finalDx,
         }))
       )
+      updateDeckMagnetPreview(canDock, mySlot, finalDx, finalDy)
     }
 
     const onUp = () => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
       setIsDragging(false)
+      if (groupId && g) {
+        finishDeckMagnetDock(canDock, groupId, groupId, g.boardIds, dragIds)
+      }
     }
 
     window.addEventListener('pointermove', onMove)
