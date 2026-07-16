@@ -21,6 +21,8 @@ import {
   type DockableItem, type WindowRect,
 } from '../utils/viewportDocking'
 import { collectDeckModels, groupHasModels } from '../utils/modelTraversal'
+import { groupVisualRect } from '../utils/deckDockDrag'
+import { useCanvasStore } from '../store/canvasStore'
 import { groupSlot } from '../utils/nlePush'
 import { computeGroupLayout } from '../utils/nleRows'
 import { isHiddenDeckMember, expandWithNestedMembers } from './useCardDecks'
@@ -68,10 +70,13 @@ function cardFace(g: ProjectGroup, boards: Record<string, BoardData>): string | 
   return null
 }
 
-/** Model-bearing visible groups as dockable items (slot rects). */
+/** Model-bearing visible groups as dockable items — VISUAL card rects
+ *  (slot + header extension), matching the snap geometry so a card that
+ *  looks flush IS docked. Zoom-aware like deck clustering. */
 function modelGroupItems(
   groups: ProjectGroup[],
   boards: Record<string, BoardData>,
+  zoom: number,
 ): DockableItem[] {
   const items: DockableItem[] = []
   for (const g of groups) {
@@ -79,7 +84,8 @@ function modelGroupItems(
     if (!groupHasModels(g.id, groups, boards)) continue
     const slot = groupSlot(g.id, g.boardIds, boards, g.originX, g.originY, computeGroupLayout(g.boardIds, boards))
     if (!slot) continue
-    items.push({ id: GROUP_PREFIX + g.id, x: slot.left, y: slot.top, width: slot.right - slot.left, height: slot.bottom - slot.top })
+    const vis = groupVisualRect(slot, zoom)
+    items.push({ id: GROUP_PREFIX + g.id, ...vis })
   }
   return items
 }
@@ -90,6 +96,9 @@ export function useDockedSources(windowId: string): DockedSource[] {
   const nodes = useFreeNodeStore(s => s.nodes)
   const groups = useBoardsStore(s => s.groups)
   const boards = useBoardsStore(s => s.boards)
+  // Zoom-reactive like useCardDecks: card dock geometry follows the
+  // visual card bounds, which include the zoom-dependent header extend.
+  const zoom = useCanvasStore(s => s.zoom)
 
   return useMemo(() => {
     const winRects = windowRects(windows)
@@ -110,7 +119,7 @@ export function useDockedSources(windowId: string): DockedSource[] {
     }
 
     // Cards/decks: direct slot touch, single-assignment partition
-    const groupDocks = computeAllDocks(winRects, modelGroupItems(groups, boards)).get(windowId) ?? []
+    const groupDocks = computeAllDocks(winRects, modelGroupItems(groups, boards, zoom)).get(windowId) ?? []
     for (const d of groupDocks) {
       const gid = d.id.slice(GROUP_PREFIX.length)
       const g = groups.find(x => x.id === gid)
@@ -123,7 +132,7 @@ export function useDockedSources(windowId: string): DockedSource[] {
     }
 
     return out
-  }, [windowId, windows, nodes, groups, boards])
+  }, [windowId, windows, nodes, groups, boards, zoom])
 }
 
 /** Flattened, url-deduped model list (first source wins) — what the window
@@ -155,13 +164,14 @@ export function computeCarriedEntities(windowId: string): { tileIds: string[]; g
   const clusters = computeTileClusters(modelTileItems(nodes), winRects)
   const tileIds = clusters.byWindow.get(windowId) ?? []
 
+  const zoom = useCanvasStore.getState().zoom
   const direct: string[] = []
   for (const g of bs.groups) {
     if (isHiddenDeckMember(g)) continue
     if (!groupHasModels(g.id, bs.groups, bs.boards)) continue
     const slot = groupSlot(g.id, g.boardIds, bs.boards, g.originX, g.originY, computeGroupLayout(g.boardIds, bs.boards))
     if (!slot) continue
-    const rect = { x: slot.left, y: slot.top, width: slot.right - slot.left, height: slot.bottom - slot.top }
+    const rect = groupVisualRect(slot, zoom)
     if (rectsTouch(rect, win, DOCK_TOLERANCE)) direct.push(g.id)
   }
   const groupIds = expandWithNestedMembers(direct, bs.groups)
