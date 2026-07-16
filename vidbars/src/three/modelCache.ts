@@ -1,0 +1,112 @@
+// modelCache.ts — GLTF/GLB loading, caching, and disposal.
+//
+// Cache is keyed by the RAW ref string ('mediaref:<id>' | '/uploads/…' |
+// 'http…') — never a session object URL, so the same model docked in two
+// windows loads once. `mediaref:` bytes come straight from the blob store
+// (loader.parse from an ArrayBuffer — self-contained GLB only; a multi-file
+// .gltf needs an http/path URL for its external resources). Each consumer
+// gets its own instance via SkeletonUtils.clone (plain .clone() shares
+// skinned-mesh skeletons incorrectly; SkeletonUtils handles both skinned
+// and static safely).
+//
+// Refcounted: release() moves a zero-ref entry into a small LRU; eviction
+// fully disposes geometry/materials/textures. DRACO-compressed GLBs are
+// not supported yet — the loader error surfaces as the window's error
+// state ("compressed GLB not supported").
+
+import * as THREE from 'three'
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
+import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js'
+import { isMediaRef, mediaRefId } from '../utils/mediaRef'
+import { getMedia } from '../utils/mediaStore'
+
+interface CacheEntry {
+  source: THREE.Group      // pristine parsed scene — never rendered directly
+  refCount: number
+}
+
+const cache = new Map<string, CacheEntry>()
+const pending = new Map<string, Promise<CacheEntry>>()
+// Zero-ref entries kept warm, oldest-first. Small: models are heavy.
+const lru: string[] = []
+const LRU_MAX = 6
+
+const loader = new GLTFLoader()
+
+async function loadEntry(url: string): Promise<CacheEntry> {
+  if (isMediaRef(url)) {
+    const id = mediaRefId(url)!
+    const blob = await getMedia(id)
+    if (!blob) throw new Error('Model bytes not found in local media store')
+    const buf = await blob.arrayBuffer()
+    const gltf = await loader.parseAsync(buf, '')
+    return { source: gltf.scene, refCount: 0 }
+  }
+  const gltf = await loader.loadAsync(url)
+  return { source: gltf.scene, refCount: 0 }
+}
+
+/** Load (or reuse) the model at `url` and return a fresh instance the
+ *  caller owns. Call releaseModel(url) when done with it. */
+export async function acquireModel(url: string): Promise<THREE.Object3D> {
+  let entry = cache.get(url)
+  if (!entry) {
+    let p = pending.get(url)
+    if (!p) {
+      p = loadEntry(url).finally(() => pending.delete(url))
+      pending.set(url, p)
+    }
+    entry = await p
+    // Another awaiter may have populated the cache first — reuse theirs.
+    const existing = cache.get(url)
+    if (existing) entry = existing
+    else cache.set(url, entry)
+  }
+  // Resurrect from LRU if it was parked there.
+  const li = lru.indexOf(url)
+  if (li >= 0) lru.splice(li, 1)
+  entry.refCount++
+  return SkeletonUtils.clone(entry.source)
+}
+
+/** Drop one reference. Zero-ref entries park in the LRU; overflow disposes. */
+export function releaseModel(url: string): void {
+  const entry = cache.get(url)
+  if (!entry) return
+  entry.refCount = Math.max(0, entry.refCount - 1)
+  if (entry.refCount === 0) {
+    lru.push(url)
+    while (lru.length > LRU_MAX) {
+      const evict = lru.shift()!
+      const e = cache.get(evict)
+      if (e && e.refCount === 0) {
+        disposeObject(e.source)
+        cache.delete(evict)
+      }
+    }
+  }
+}
+
+/** Fully dispose a cloned instance returned by acquireModel. Clones share
+ *  geometry/materials with the cached source, so instance disposal only
+ *  detaches — real GPU disposal happens at LRU eviction. */
+export function disposeInstance(root: THREE.Object3D): void {
+  root.removeFromParent()
+}
+
+function disposeObject(root: THREE.Object3D): void {
+  root.traverse(obj => {
+    const mesh = obj as THREE.Mesh
+    if (mesh.geometry) mesh.geometry.dispose()
+    const mat = mesh.material as THREE.Material | THREE.Material[] | undefined
+    if (Array.isArray(mat)) mat.forEach(disposeMaterial)
+    else if (mat) disposeMaterial(mat)
+  })
+}
+
+function disposeMaterial(mat: THREE.Material): void {
+  for (const value of Object.values(mat)) {
+    if (value instanceof THREE.Texture) value.dispose()
+  }
+  mat.dispose()
+}

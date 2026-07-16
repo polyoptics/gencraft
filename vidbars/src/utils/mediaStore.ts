@@ -9,7 +9,6 @@ import type { StorageWriteFailedDetail } from './debouncedJSONStorage'
 
 const DB_NAME = 'vidbars-media'
 const STORE_NAME = 'blobs'
-const DB_VERSION = 1
 
 interface MediaRecord {
   blob: Blob
@@ -20,10 +19,9 @@ interface MediaRecord {
 
 // Lazy singleton connection, mirroring debouncedIDBStorage's pattern.
 let dbPromise: Promise<IDBDatabase> | null = null
-function getDB(): Promise<IDBDatabase> {
-  if (dbPromise) return dbPromise
-  dbPromise = new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION)
+function openAt(version?: number): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const req = version === undefined ? indexedDB.open(DB_NAME) : indexedDB.open(DB_NAME, version)
     req.onupgradeneeded = () => {
       const db = req.result
       if (!db.objectStoreNames.contains(STORE_NAME)) db.createObjectStore(STORE_NAME)
@@ -32,6 +30,23 @@ function getDB(): Promise<IDBDatabase> {
     req.onerror = () => reject(req.error)
     req.onblocked = () => reject(new Error('media IDB open blocked — another tab is upgrading'))
   })
+}
+function getDB(): Promise<IDBDatabase> {
+  if (dbPromise) return dbPromise
+  dbPromise = (async () => {
+    // Versionless open: creates at v1 (firing onupgradeneeded) if absent,
+    // otherwise opens at whatever version exists — never VersionErrors.
+    let db = await openAt()
+    // Self-heal: a DB can exist WITHOUT the object store (crashed or
+    // interrupted first open). Existing-DB opens skip onupgradeneeded,
+    // so force an upgrade to create it.
+    if (!db.objectStoreNames.contains(STORE_NAME)) {
+      const bumped = db.version + 1
+      db.close()
+      db = await openAt(bumped)
+    }
+    return db
+  })()
   dbPromise.catch(() => { dbPromise = null })
   return dbPromise
 }

@@ -21,6 +21,7 @@ import { useLinkingStore } from '../../store/linkingStore'
 import { DEFAULT_H } from '../../utils/barConstants'
 import { groupSlot, clampGroupMove } from '../../utils/nlePush'
 import { FreeCanvas } from '../Canvas/FreeCanvas'
+import { Viewport3DLayer } from '../Viewport3D/Viewport3DLayer'
 import { NLETimelineHeader, NLE_HEADER_CANVAS_H, headerExtend as computeHeaderExtend, headerScreenH, overviewScale } from '../NLE/NLETimelineHeader'
 import { HeroImageLayer } from './HeroImageLayer'
 import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
@@ -200,8 +201,8 @@ const CardContextMenu: React.FC<{
   )
 }
 
-/** Canvas-space content — free nodes visible at all layers */
-const Canvas: React.FC = () => <FreeCanvas />
+/** Canvas-space content — free nodes + 3D viewports visible at all layers */
+const Canvas: React.FC = () => <><Viewport3DLayer /><FreeCanvas /></>
 
 // ── Per-group card (screen-space) ──
 

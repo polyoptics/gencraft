@@ -5,6 +5,9 @@ import { useBoardsStore } from '../../store/boardsStore'
 import { clampToNoParkZone } from '../../utils/nleZone'
 import { uploadFile, classifyFile, isAcceptedMediaFile } from '../../utils/uploadFile'
 import { computeGroupLayout, getRowY, getRowHeight, boardContentHeight, CARD_GRID_SPACING } from '../../utils/nleRows'
+import { useViewport3DStore, VIEWPORT3D_DEFAULT_W, VIEWPORT3D_DEFAULT_H } from '../../store/viewport3dStore'
+import { useUndoCoordinator } from '../../store/undoCoordinator'
+import { GLCanvasHost } from '../Viewport3D/GLCanvasHost'
 
 interface Props {
   children: React.ReactNode
@@ -100,7 +103,7 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
     // Left-click on bare canvas = rubber-band select
     if (e.button === 0) {
       const target = e.target as Element
-      if (target.closest('[data-block],[data-board],[data-freenode]')) return
+      if (target.closest('[data-block],[data-board],[data-freenode],[data-viewport3d]')) return
       setFocusedBoard(null)
       const rect = containerRef.current!.getBoundingClientRect()
       const relX = e.clientX - rect.left
@@ -309,19 +312,49 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
     dropOnBareCanvas(e, files)
   }, [dropOnFreeNode, dropOnBareCanvas])
 
+  /** Model files dropped ONTO a 3D viewport window: create model tiles
+   *  docked flush at the window's right edge (stacking downward) and load
+   *  the first one. Returns the files it did NOT consume. */
+  const dropOnViewportWindow = useCallback((e: React.DragEvent, files: File[]): File[] => {
+    const modelFiles = files.filter(f => classifyFile(f) === 'model')
+    if (modelFiles.length === 0) return files
+    const winEl = document.elementsFromPoint(e.clientX, e.clientY)
+      .map(el => el.closest('[data-viewport3d]'))
+      .find(Boolean) as HTMLElement | null
+    const windowId = winEl?.dataset.viewport3d
+    const win = windowId ? useViewport3DStore.getState().windows[windowId] : undefined
+    if (!win || !windowId) return files
+    useUndoCoordinator.getState().checkpoint()
+    const tileH = 180, gap = 12
+    modelFiles.forEach((file, i) => {
+      const nodeId = addFreeNode(win.x + win.width, win.y + i * (tileH + gap), 'model')
+      uploadFile(file).then(({ url }) => {
+        useFreeNodeStore.getState().updateFreeNode(nodeId, {
+          imageUrl: url, mediaType: 'model', label: file.name.replace(/\.[^.]+$/, ''),
+        })
+        if (i === 0) useViewport3DStore.getState().setActiveModel(windowId, url)
+      })
+    })
+    return files.filter(f => classifyFile(f) !== 'model')
+  }, [addFreeNode])
+
   const handleDrop = useCallback((e: React.DragEvent) => {
     // Accepts image/video/audio AND 3D models (.glb/.gltf — MIME is often
     // empty on Windows, so filtering lives in isAcceptedMediaFile).
-    const files = Array.from(e.dataTransfer.files).filter(isAcceptedMediaFile)
+    let files = Array.from(e.dataTransfer.files).filter(isAcceptedMediaFile)
     if (files.length === 0) return
     e.preventDefault()
+
+    // Pre-step: model files aimed at a 3D viewport window dock + load there.
+    files = dropOnViewportWindow(e, files)
+    if (files.length === 0) return
 
     // Dispatch to the active layer's drop handler
     const zoom = useCanvasStore.getState().zoom
     if (zoom <= 0.18)      return handleCardDrop(e, files)
     if (zoom < 0.3)        return handleBlockDrop(e, files)
     return handleBoardDrop(e, files)
-  }, [handleCardDrop, handleBlockDrop, handleBoardDrop])
+  }, [dropOnViewportWindow, handleCardDrop, handleBlockDrop, handleBoardDrop])
 
   const handlePointerUp = useCallback((e: React.PointerEvent) => {
     if (isPanning.current) {
@@ -411,7 +444,7 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
       onDragOver={handleDragOver}
       onDrop={handleDrop}
       onContextMenu={e => {
-        if ((e.target as Element).closest('[data-block],[data-board],[data-freenode]')) return
+        if ((e.target as Element).closest('[data-block],[data-board],[data-freenode],[data-viewport3d]')) return
         e.preventDefault()
         const rect = containerRef.current!.getBoundingClientRect()
         const cx = (e.clientX - rect.left - pan.x) / zoom
@@ -423,6 +456,11 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
 
       {/* ── NLE row lines (behind everything, in canvas space) ── */}
       <NLERowBands pan={pan} zoom={zoom} />
+
+      {/* ── Shared WebGL canvas for 3D viewport windows — painted BEFORE the
+             world transform container so GL pixels sit under all canvas
+             content (windows live "under" nodes/bars). ── */}
+      <GLCanvasHost containerRef={containerRef} />
 
       <div
         style={{
@@ -485,6 +523,12 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
               { label: '📝  Add note',    action: () => { const c = clampToNoParkZone(addMenu.cx, addMenu.cy, 200, 160); addFreeNode(c.x, c.y, 'note');  setAddMenu(null) } },
               { label: 'T   Add text',    action: () => { const c = clampToNoParkZone(addMenu.cx, addMenu.cy, 200, 180); addFreeNode(c.x, c.y, 'text');  setAddMenu(null) } },
               { label: '🖼  Add image',   action: () => { const c = clampToNoParkZone(addMenu.cx, addMenu.cy, 200, 180); addFreeNode(c.x, c.y, 'image'); setAddMenu(null) } },
+              { label: '◆  Add 3D viewport', action: () => {
+                useUndoCoordinator.getState().checkpoint()
+                const c = clampToNoParkZone(addMenu.cx, addMenu.cy, VIEWPORT3D_DEFAULT_W, VIEWPORT3D_DEFAULT_H)
+                useViewport3DStore.getState().addWindow(c.x, c.y)
+                setAddMenu(null)
+              } },
               { label: '─────────────', action: null },
               { label: zoom <= 0.18 ? '🎬  New Card' : '🎬  New Board',
                 action: () => {

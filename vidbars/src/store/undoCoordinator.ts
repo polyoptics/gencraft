@@ -16,6 +16,8 @@
 import { useBoardsStore } from './boardsStore'
 import { useCanvasStore } from './canvasStore'
 import { useFreeNodeStore } from './freeNodeStore'
+import { useViewport3DStore } from './viewport3dStore'
+import type { ViewportWindow3D } from './viewport3dStore'
 import { create } from 'zustand'
 
 const LIMIT = 30
@@ -30,6 +32,19 @@ interface Snapshot {
   boards: Record<string, unknown>
   canvas: Record<string, unknown>
   freeNodes: Record<string, unknown>
+  viewports3d: Record<string, ViewportWindow3D>
+}
+
+/** Snapshot the 3D viewport windows WITHOUT their cameras — an orbit is a
+ *  "look", not an edit (we never checkpoint orbit gestures), so restoring
+ *  a camera here would make unrelated undos yank the 3D view. */
+function snapViewports(windows: Record<string, ViewportWindow3D>): Record<string, ViewportWindow3D> {
+  const out: Record<string, ViewportWindow3D> = {}
+  for (const [id, w] of Object.entries(windows)) {
+    const { camera: _camera, ...rest } = w
+    out[id] = rest
+  }
+  return out
 }
 
 function snapStore(
@@ -81,6 +96,7 @@ function captureSnapshot(): Snapshot {
       useFreeNodeStore.getState() as unknown as Record<string, unknown>,
       FREE_EXCLUDE,
     ),
+    viewports3d: snapViewports(useViewport3DStore.getState().windows),
   }
 }
 
@@ -108,6 +124,14 @@ function restoreSnapshot(snap: Snapshot) {
   useBoardsStore.setState(restoreData)
   useCanvasStore.setState(snap.canvas)
   useFreeNodeStore.setState(snap.freeNodes)
+  // Viewports: restore records but keep each window's CURRENT camera
+  // (cameras are excluded from undo — see snapViewports).
+  const currentWins = useViewport3DStore.getState().windows
+  const mergedWins: Record<string, ViewportWindow3D> = {}
+  for (const [id, snapWin] of Object.entries(snap.viewports3d)) {
+    mergedWins[id] = { ...snapWin, camera: currentWins[id]?.camera }
+  }
+  useViewport3DStore.setState({ windows: mergedWins })
 }
 
 interface UndoCoordinatorState {

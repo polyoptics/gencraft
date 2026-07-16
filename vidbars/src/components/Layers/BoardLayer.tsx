@@ -5,6 +5,7 @@
 import React, { useMemo } from 'react'
 import { BoardsCanvas } from '../NLE/BoardsCanvas'
 import { FreeCanvas } from '../Canvas/FreeCanvas'
+import { Viewport3DLayer } from '../Viewport3D/Viewport3DLayer'
 import { NLETimelineHeader } from '../NLE/NLETimelineHeader'
 import { CardOutline } from './CardOutline'
 import { BlockOutline } from './BlockOutline'
@@ -16,6 +17,7 @@ import { getHiddenGroupIds } from '../../hooks/useCardDecks'
 /** Canvas-space: boards + free nodes (inside transform container) */
 const Canvas: React.FC = () => (
   <>
+    <Viewport3DLayer />
     <FreeCanvas />
     <BoardsCanvas />
   </>

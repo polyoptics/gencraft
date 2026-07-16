@@ -24,6 +24,7 @@ import { HeroImageLayer } from './HeroImageLayer'
 import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
 import { ColorPickerPopup } from '../Bar/ColorPickerPopup'
 import { FreeCanvas } from '../Canvas/FreeCanvas'
+import { Viewport3DLayer } from '../Viewport3D/Viewport3DLayer'
 import { NLETimelineHeader } from '../NLE/NLETimelineHeader'
 import { CardOutline } from './CardOutline'
 import { getHiddenBoardIds, getHiddenGroupIds } from '../../hooks/useCardDecks'
@@ -833,6 +834,7 @@ const Canvas: React.FC = () => {
 
   return (
     <>
+      <Viewport3DLayer />
       <FreeCanvas />
       {!effectiveHiddenBoards.has('primary') && <BlockItem boardId="primary" />}
       {boardOrder.filter(id => !effectiveHiddenBoards.has(id)).map(id => <BlockItem key={id} boardId={id} />)}
