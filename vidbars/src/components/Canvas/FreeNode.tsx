@@ -188,6 +188,33 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
           useFreeNodeStore.getState().deleteFreeNode(id)
         }
 
+        // Helper: a model dropped on a CARD/BLOCK becomes its OWN node — a
+        // new child bar under the board's root, named after the model and
+        // holding it as media. Repeated drops stack up as sibling nodes at
+        // that level instead of piling into one bar's media list.
+        const addModelChildBar = (boardId: string): boolean => {
+          if (!node.imageUrl) return false
+          const bs0 = useBoardsStore.getState()
+          const rootBar = bs0.boards[boardId]?.rootIds[0]
+          if (!rootBar) return false
+          bs0.addChildToBar(boardId, rootBar)
+          const children = useBoardsStore.getState().boards[boardId]?.bars[rootBar]?.children ?? []
+          const newBarId = children[children.length - 1]
+          if (!newBarId) return false
+          const store = useBoardsStore.getState()
+          if (node.label) store.renameBar(boardId, newBarId, node.label)
+          const modelPoster = node.posterUrl ?? getModelPoster(node.imageUrl)
+          store.setContent(boardId, newBarId, {
+            media: [{
+              url: node.imageUrl, type: 'model' as const,
+              ...(modelPoster ? { posterUrl: modelPoster } : {}),
+              ...(node.label ? { originalName: node.label } : {}),
+            }],
+          })
+          useFreeNodeStore.getState().deleteFreeNode(id)
+          return true
+        }
+
         // Priority: board-level blocks > block-layer blocks > cards
         let transferred = false
         const curZoom = useCanvasStore.getState().zoom
@@ -214,13 +241,11 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
               const targetBoardId = block.getAttribute('data-layer-block')!
               if (mediaType === 'model') {
                 const b = useBoardsStore.getState().boards[targetBoardId]
-                const rootBar = b?.rootIds[0]
-                if (!rootBar) break   // no bar to hold the model — leave the tile
                 const poster = node.posterUrl ?? (node.imageUrl ? getModelPoster(node.imageUrl) : null)
-                if (poster && !b.layers?.block?.thumbnail) {
+                if (poster && b && !b.layers?.block?.thumbnail) {
                   useBoardsStore.getState().setBlockThumbnail(targetBoardId, poster)
                 }
-                transferToBar(targetBoardId, rootBar)   // appends media + deletes node
+                if (!addModelChildBar(targetBoardId)) break   // nowhere to hold it — leave the tile
                 transferred = true
                 break
               }
@@ -256,8 +281,6 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
                 const bs = useBoardsStore.getState()
                 const group = groupId ? bs.groups.find(g => g.id === groupId) : undefined
                 const modelBoardId = group ? group.boardIds[0] : targetBoardId
-                const rootBar = bs.boards[modelBoardId]?.rootIds[0]
-                if (!rootBar) break   // nowhere to hold the model — leave the tile
                 const poster = node.posterUrl ?? (node.imageUrl ? getModelPoster(node.imageUrl) : null)
                 if (poster) {
                   if (group && !group.cardHeroImage) {
@@ -266,7 +289,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
                     bs.setCardHeroImage(targetBoardId, poster)
                   }
                 }
-                transferToBar(modelBoardId, rootBar)   // appends media + deletes node
+                if (!addModelChildBar(modelBoardId)) break   // nowhere to hold it — leave the tile
                 transferred = true
                 break
               }
