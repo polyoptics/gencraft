@@ -39,6 +39,52 @@ export function expandWithNestedMembers(baseIds: string[], allGroups: ProjectGro
 
 const TOUCH_TOLERANCE = 16 // canvas units — slightly > DEFAULT_GAP (12)
 
+/** THE card-geometry authority: a group's VISUAL card rect in canvas
+ *  units — mirrors CardLayer's GroupCard exactly (per-board visual
+ *  heights, card size overrides, and the zoom-dependent header extend
+ *  above the content). Deck clustering, 3D-viewport magnet/snap, and
+ *  derived docking all share this so "card level" geometry is one
+ *  definition. Also returns the pre-inflated content top (zone logic
+ *  needs it zoom-invariant). */
+export function cardVisualRect(
+  g: ProjectGroup,
+  boards: Record<string, BoardData>,
+  zoom: number,
+): { rect: GroupSlot; contentTop: number } | null {
+  const BOARD_PADDING_X = 20
+  const layout = computeGroupLayout(g.boardIds, boards)
+  let left = Infinity, right = -Infinity, top = Infinity, bottom = -Infinity
+  g.boardIds.forEach(bid => {
+    const board = boards[bid]
+    if (!board) return
+    const bScale = board.boardScale ?? 1
+    const rootBars = board.rootIds.map((rid: string) => board.bars[rid]).filter(Boolean)
+    if (rootBars.length === 0) return
+    const bx = g.originX + (board.nleX ?? 0)
+    const localRow = board.nleRow ?? 0
+    const by = g.originY + getRowY(localRow, layout)
+    const rowH = getRowHeight(localRow, layout)
+    const rootH = Math.max(...rootBars.map(b => b.height), DEFAULT_H) * bScale
+    const visualH = Math.max(rowH, rootH)
+    const minX = Math.min(...rootBars.map(b => b.x))
+    const maxX = Math.max(...rootBars.map(b => b.x + b.width))
+    const l = bx + BOARD_PADDING_X + minX * bScale - 16
+    const r = bx + BOARD_PADDING_X + maxX * bScale + 16
+    if (l < left) left = l
+    if (r > right) right = r
+    if (by < top) top = by
+    if (by + visualH > bottom) bottom = by + visualH
+  })
+  if (left === Infinity) return null
+  const finalW = Math.max(right - left, g.cardWidthOverride ?? 0)
+  const finalH = Math.max(bottom - top, g.cardHeightOverride ?? 0)
+  const headerExtendCanvas = (Math.max(NLE_HEADER_CANVAS_H * zoom, 20) + 2 * zoom) / zoom
+  return {
+    rect: { id: g.id, left, right: left + finalW, top: top - headerExtendCanvas, bottom: top + finalH },
+    contentTop: top,
+  }
+}
+
 export interface Deck {
   id: string              // sorted member group IDs joined with "|"
   memberIds: string[]     // group IDs sorted left-to-right by card rect
@@ -90,61 +136,20 @@ export function useCardDecks(
       return { decks: [], touchingClusters: [], getDeckForGroup: () => null }
     }
 
-    // 1. Build rects for all groups — mirrors CardLayer's GroupCard geometry exactly.
-    // Uses boardContentHeight + Math.max(rowH, contentH) per board, matching the
-    // visual card size. Also accounts for cardWidthOverride/cardHeightOverride.
-    const BOARD_PADDING_X = 20
+    // 1. Build rects for all groups via the shared card-geometry authority
+    // (cardVisualRect — visual bounds incl. header extend, so clustering
+    // compares what's on screen, not content bounds).
     const rects = new Map<string, GroupSlot>()
     // Logical (zoom-independent) content top per group. Used for zone partitioning
     // — see step 2 below for why this MUST stay separate from rect.top.
     const logicalTops = new Map<string, number>()
     for (const g of groups) {
-      const layout = computeGroupLayout(g.boardIds, boards)
-      let left = Infinity, right = -Infinity, top = Infinity, bottom = -Infinity
-      g.boardIds.forEach(bid => {
-        const board = boards[bid]
-        if (!board) return
-        const bScale = board.boardScale ?? 1
-        const rootBars = board.rootIds.map((rid: string) => board.bars[rid]).filter(Boolean)
-        if (rootBars.length === 0) return
-        const bx = g.originX + (board.nleX ?? 0)
-        const localRow = board.nleRow ?? 0
-        const by = g.originY + getRowY(localRow, layout)
-        const rowH = getRowHeight(localRow, layout)
-        const rootH = Math.max(...rootBars.map((b: any) => b.height), DEFAULT_H) * bScale
-        const visualH = Math.max(rowH, rootH)
-        const minX = Math.min(...rootBars.map((b: any) => b.x))
-        const maxX = Math.max(...rootBars.map((b: any) => b.x + b.width))
-        const l = bx + BOARD_PADDING_X + minX * bScale - 16
-        const r = bx + BOARD_PADDING_X + maxX * bScale + 16
-        if (l < left) left = l
-        if (r > right) right = r
-        if (by < top) top = by
-        if (by + visualH > bottom) bottom = by + visualH
-      })
-      if (left === Infinity) continue
-      const cW = right - left
-      const cH = bottom - top
-      // Apply manual card size overrides (canvas units)
-      const finalW = Math.max(cW, g.cardWidthOverride ?? 0)
-      const finalH = Math.max(cH, g.cardHeightOverride ?? 0)
-      // Visual cards extend UP above the content by `headerExtend` (the NLE
-      // timeline header surrogate). Include that in the rect so spatial
-      // clustering compares the visual bounds, not the content bounds —
-      // otherwise two cards that look flush on screen read as ~100 canvas
-      // units apart in the math, and the 16-unit touch tolerance can't catch
-      // them. Formula mirrors GroupCard's headerExtend (canvas units).
-      const headerExtendCanvas = (Math.max(NLE_HEADER_CANVAS_H * zoom, 20) + 2 * zoom) / zoom
-      rects.set(g.id, {
-        id: g.id,
-        left,
-        right: left + finalW,
-        top: top - headerExtendCanvas,
-        bottom: top + finalH,
-      })
+      const v = cardVisualRect(g, boards, zoom)
+      if (!v) continue
+      rects.set(g.id, v.rect)
       // Stash the pre-inflated content top — zone classification uses this so
       // it stays zoom-invariant.
-      logicalTops.set(g.id, top)
+      logicalTops.set(g.id, v.contentTop)
     }
 
     // 2. Filter out hidden deck members from clustering — they're invisible and

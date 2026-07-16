@@ -194,7 +194,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, icon
           groupId: gid, originY: origin.y + finalDy, originX: origin.x + finalDx,
         }))
       )
-      updateDeckMagnetPreview(canDock, mySlot, finalDx, finalDy)
+      updateDeckMagnetPreview(canDock, groupId!)
     }
 
     const onUp = () => {
@@ -202,7 +202,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, icon
       window.removeEventListener('pointerup', onUp)
       setIsDragging(false)
       if (groupId && g) {
-        finishDeckMagnetDock(canDock, groupId, groupId, g.boardIds, dragIds)
+        finishDeckMagnetDock(canDock, groupId, groupId, dragIds)
       }
     }
 

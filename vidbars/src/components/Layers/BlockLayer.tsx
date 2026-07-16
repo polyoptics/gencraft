@@ -21,7 +21,6 @@ import { groupBoardSlots, clampBoardX } from '../../utils/nlePush'
 import { tryDockGroupAtRest, updateDeckMagnetPreview } from '../../utils/deckDockDrag'
 import { useMagnetPreviewStore } from '../../store/magnetPreviewStore'
 import { groupHasModels } from '../../utils/modelTraversal'
-import { groupSlot } from '../../utils/nlePush'
 import { DEFAULT_H } from '../../utils/barConstants'
 import { getFirstImageUrl } from '../../types/bar'
 import { HeroImageLayer } from './HeroImageLayer'
@@ -209,11 +208,7 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
         const clampedAbsX = clampBoardX(dragSlots, boardId, rawAbsX, newRow)
         useBoardsStore.getState().setBoardNlePos(boardId, newRow, clampedAbsX - gox)
         if (canDockBlock) {
-          // Slot recomputed from LIVE state (nleX just changed) → dx/dy 0.
-          const bs = useBoardsStore.getState()
-          const g = bs.groups.find(x => x.id === group.id)
-          const liveSlot = g ? groupSlot(g.id, g.boardIds, bs.boards, g.originX, g.originY, computeGroupLayout(g.boardIds, bs.boards)) : null
-          updateDeckMagnetPreview(true, liveSlot, 0, 0)
+          updateDeckMagnetPreview(true, group.id)   // live card rect
         }
       }
     }

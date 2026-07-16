@@ -21,11 +21,8 @@ import {
   type DockableItem, type WindowRect,
 } from '../utils/viewportDocking'
 import { collectDeckModels, groupHasModels } from '../utils/modelTraversal'
-import { groupVisualRect } from '../utils/deckDockDrag'
 import { useCanvasStore } from '../store/canvasStore'
-import { groupSlot } from '../utils/nlePush'
-import { computeGroupLayout } from '../utils/nleRows'
-import { isHiddenDeckMember, expandWithNestedMembers } from './useCardDecks'
+import { isHiddenDeckMember, expandWithNestedMembers, cardVisualRect } from './useCardDecks'
 import { getModelPoster } from '../three/posterService'
 import { getFirstImageUrl } from '../types/bar'
 
@@ -70,9 +67,9 @@ function cardFace(g: ProjectGroup, boards: Record<string, BoardData>): string | 
   return null
 }
 
-/** Model-bearing visible groups as dockable items — VISUAL card rects
- *  (slot + header extension), matching the snap geometry so a card that
- *  looks flush IS docked. Zoom-aware like deck clustering. */
+/** Model-bearing visible groups as dockable items — the shared CARD-level
+ *  visual rect (cardVisualRect), matching the snap geometry exactly so a
+ *  card that looks flush IS docked. Zoom-aware like deck clustering. */
 function modelGroupItems(
   groups: ProjectGroup[],
   boards: Record<string, BoardData>,
@@ -82,10 +79,13 @@ function modelGroupItems(
   for (const g of groups) {
     if (isHiddenDeckMember(g)) continue
     if (!groupHasModels(g.id, groups, boards)) continue
-    const slot = groupSlot(g.id, g.boardIds, boards, g.originX, g.originY, computeGroupLayout(g.boardIds, boards))
-    if (!slot) continue
-    const vis = groupVisualRect(slot, zoom)
-    items.push({ id: GROUP_PREFIX + g.id, ...vis })
+    const v = cardVisualRect(g, boards, zoom)
+    if (!v) continue
+    items.push({
+      id: GROUP_PREFIX + g.id,
+      x: v.rect.left, y: v.rect.top,
+      width: v.rect.right - v.rect.left, height: v.rect.bottom - v.rect.top,
+    })
   }
   return items
 }
@@ -169,9 +169,9 @@ export function computeCarriedEntities(windowId: string): { tileIds: string[]; g
   for (const g of bs.groups) {
     if (isHiddenDeckMember(g)) continue
     if (!groupHasModels(g.id, bs.groups, bs.boards)) continue
-    const slot = groupSlot(g.id, g.boardIds, bs.boards, g.originX, g.originY, computeGroupLayout(g.boardIds, bs.boards))
-    if (!slot) continue
-    const rect = groupVisualRect(slot, zoom)
+    const v = cardVisualRect(g, bs.boards, zoom)
+    if (!v) continue
+    const rect = { x: v.rect.left, y: v.rect.top, width: v.rect.right - v.rect.left, height: v.rect.bottom - v.rect.top }
     if (rectsTouch(rect, win, DOCK_TOLERANCE)) direct.push(g.id)
   }
   const groupIds = expandWithNestedMembers(direct, bs.groups)

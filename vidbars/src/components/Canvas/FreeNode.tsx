@@ -10,11 +10,11 @@ import {
   hAlignIcons, vAlignIcons, AlignPopup, ColorSwatchPopup, BgPickerPopup,
 } from '../UI/TextFormatToolbar'
 import { useBoardsStore } from '../../store/boardsStore'
-import type { HeroImageTransform } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { useViewport3DStore } from '../../store/viewport3dStore'
 import { useMagnetPreviewStore } from '../../store/magnetPreviewStore'
+import { cardVisualRect } from '../../hooks/useCardDecks'
 import { findMagnetCandidate, magnetRadiusForZoom, type WindowRect } from '../../utils/viewportDocking'
 import { ensureModelPoster, getModelPoster, useModelPoster } from '../../three/posterService'
 import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
@@ -188,23 +188,28 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
           useFreeNodeStore.getState().deleteFreeNode(id)
         }
 
-        // Helper: a model dropped on a CARD/BLOCK becomes its OWN node — a
-        // new child bar under the board's root, named after the model and
-        // holding it as media. Repeated drops stack up as sibling nodes at
-        // that level instead of piling into one bar's media list.
-        const addModelChildBar = (boardId: string): boolean => {
+        // Helper: a model dropped on a CARD becomes its OWN BLOCK — a new
+        // board added to the card's group, with the model as the media of
+        // that board's TOP-LEVEL node (root bar). Repeated drops stack up
+        // as sibling blocks, so a "deck of models" card shows one block
+        // per model at block zoom.
+        const addModelBlockToCard = (groupId: string): boolean => {
           if (!node.imageUrl) return false
           const bs0 = useBoardsStore.getState()
-          const rootBar = bs0.boards[boardId]?.rootIds[0]
+          const group = bs0.groups.find(g => g.id === groupId)
+          if (!group) return false
+          // Land the new block after the card's existing content: top row,
+          // just right of the visual card edge.
+          const v = cardVisualRect(group, bs0.boards, useCanvasStore.getState().zoom)
+          const dropX = (v ? v.rect.right : group.originX) + 40
+          const newBoardId = bs0.createBoard(0, 0)
+          useBoardsStore.getState().reassignBoard(newBoardId, groupId, { x: dropX, y: group.originY })
+          const rootBar = useBoardsStore.getState().boards[newBoardId]?.rootIds[0]
           if (!rootBar) return false
-          bs0.addChildToBar(boardId, rootBar)
-          const children = useBoardsStore.getState().boards[boardId]?.bars[rootBar]?.children ?? []
-          const newBarId = children[children.length - 1]
-          if (!newBarId) return false
           const store = useBoardsStore.getState()
-          if (node.label) store.renameBar(boardId, newBarId, node.label)
+          if (node.label) store.renameBar(newBoardId, rootBar, node.label)
           const modelPoster = node.posterUrl ?? getModelPoster(node.imageUrl)
-          store.setContent(boardId, newBarId, {
+          store.setContent(newBoardId, rootBar, {
             media: [{
               url: node.imageUrl, type: 'model' as const,
               ...(modelPoster ? { posterUrl: modelPoster } : {}),
@@ -217,7 +222,6 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
 
         // Priority: board-level blocks > block-layer blocks > cards
         let transferred = false
-        const curZoom = useCanvasStore.getState().zoom
 
         // Board zoom (>= 0.3): transfer to specific bar
         for (const el of allEls) {
@@ -240,12 +244,16 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
             if (block) {
               const targetBoardId = block.getAttribute('data-layer-block')!
               if (mediaType === 'model') {
-                const b = useBoardsStore.getState().boards[targetBoardId]
-                const poster = node.posterUrl ?? (node.imageUrl ? getModelPoster(node.imageUrl) : null)
-                if (poster && b && !b.layers?.block?.thumbnail) {
-                  useBoardsStore.getState().setBlockThumbnail(targetBoardId, poster)
+                // Resolve the target board's group (auto-grouping ungrouped
+                // boards, matching drag-release behavior) → own block there.
+                const bs0 = useBoardsStore.getState()
+                let targetGroup = bs0.groups.find(gr => gr.boardIds.includes(targetBoardId))
+                if (!targetGroup || targetGroup.id === 'default-group') {
+                  bs0.groupBoardAsNew(targetBoardId)
+                  targetGroup = useBoardsStore.getState().groups.find(gr => gr.boardIds.includes(targetBoardId))
                 }
-                if (!addModelChildBar(targetBoardId)) break   // nowhere to hold it — leave the tile
+                if (!targetGroup) break   // nowhere to hold it — leave the tile
+                if (!addModelBlockToCard(targetGroup.id)) break
                 transferred = true
                 break
               }
@@ -278,18 +286,20 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
               const groupId = layerCard?.getAttribute('data-layer-card')
 
               if (mediaType === 'model') {
+                // Resolve the card's group (auto-grouping ungrouped cards),
+                // fill an empty hero from the poster, then own block.
                 const bs = useBoardsStore.getState()
-                const group = groupId ? bs.groups.find(g => g.id === groupId) : undefined
-                const modelBoardId = group ? group.boardIds[0] : targetBoardId
-                const poster = node.posterUrl ?? (node.imageUrl ? getModelPoster(node.imageUrl) : null)
-                if (poster) {
-                  if (group && !group.cardHeroImage) {
-                    bs.setGroupCardHeroImage(group.id, poster)
-                  } else if (!group && !bs.boards[targetBoardId]?.layers?.card?.heroImage) {
-                    bs.setCardHeroImage(targetBoardId, poster)
-                  }
+                let targetGroup = groupId ? bs.groups.find(g => g.id === groupId) : undefined
+                if (!targetGroup) {
+                  bs.groupBoardAsNew(targetBoardId)
+                  targetGroup = useBoardsStore.getState().groups.find(gr => gr.boardIds.includes(targetBoardId))
                 }
-                if (!addModelChildBar(modelBoardId)) break   // nowhere to hold it — leave the tile
+                if (!targetGroup) break   // nowhere to hold it — leave the tile
+                const poster = node.posterUrl ?? (node.imageUrl ? getModelPoster(node.imageUrl) : null)
+                if (poster && !targetGroup.cardHeroImage) {
+                  useBoardsStore.getState().setGroupCardHeroImage(targetGroup.id, poster)
+                }
+                if (!addModelBlockToCard(targetGroup.id)) break
                 transferred = true
                 break
               }

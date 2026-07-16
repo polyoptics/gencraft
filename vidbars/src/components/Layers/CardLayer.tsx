@@ -309,7 +309,7 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
         groupId: gid, originY: origin.y + finalDy, originX: origin.x + finalDx,
       }))
       useBoardsStore.getState().setGroupPosBatch(updates)
-      updateDeckMagnetPreview(canDock, mySlot, finalDx, finalDy)
+      updateDeckMagnetPreview(canDock, group.id)
     }
     const onUp = (ev: PointerEvent) => {
       window.removeEventListener('pointermove', onMove)
@@ -332,7 +332,7 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
       }
       // Magnet dock to a 3D viewport window (deck return outranks docking)
       if (!returnedToDeck) {
-        finishDeckMagnetDock(canDock, group.id, group.id, group.boardIds, draggingIds)
+        finishDeckMagnetDock(canDock, group.id, group.id, draggingIds)
       } else {
         useMagnetPreviewStore.getState().setPreview(null)
       }
@@ -1056,7 +1056,7 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
           groupId: gid, originY: origin.y + finalDy, originX: origin.x + finalDx,
         }))
       )
-      updateDeckMagnetPreview(canDock, mySlot, finalDx, finalDy)
+      updateDeckMagnetPreview(canDock, deck.anchorGroupId)
     }
     const onUp = (ev: PointerEvent) => {
       window.removeEventListener('pointermove', onMove)
@@ -1077,7 +1077,7 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
       }
       // Magnet dock to a 3D viewport window (deck return outranks docking)
       if (!returnedToDeck) {
-        finishDeckMagnetDock(canDock, deck.anchorGroupId, deck.anchorGroupId, anchorGroup.boardIds, allDragIds)
+        finishDeckMagnetDock(canDock, deck.anchorGroupId, deck.anchorGroupId, allDragIds)
       } else {
         useMagnetPreviewStore.getState().setPreview(null)
       }
