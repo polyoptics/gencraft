@@ -13,6 +13,10 @@ import { useBoardsStore } from '../../store/boardsStore'
 import type { HeroImageTransform } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
+import { useViewport3DStore } from '../../store/viewport3dStore'
+import { useMagnetPreviewStore } from '../../store/magnetPreviewStore'
+import { findMagnetCandidate, type WindowRect } from '../../utils/viewportDocking'
+import { ensureModelPoster } from '../../three/posterService'
 import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
 import { DrawableSurface } from '../Annotation/DrawableSurface'
 import { PenButton } from '../Annotation/PenButton'
@@ -86,6 +90,20 @@ export const FreeNode: React.FC<Props> = React.memo(({ id }) => {
     }
     dragLastX.current = e.clientX
     dragLastY.current = e.clientY
+    // Magnet affordance: model tiles near a viewport window edge show a
+    // "will snap here" ghost (dock itself is resolved on release).
+    const n = useFreeNodeStore.getState().nodes[id]
+    if (n?.mediaType === 'model' && n.imageUrl) {
+      const winRects: WindowRect[] = Object.values(useViewport3DStore.getState().windows)
+        .map(w => ({ id: w.id, x: w.x, y: w.y, width: w.width, height: w.height }))
+      const cand = winRects.length > 0 ? findMagnetCandidate(n, winRects) : null
+      const mp = useMagnetPreviewStore.getState()
+      if (cand) {
+        mp.setPreview({ windowId: cand.windowId, edge: cand.edge, x: cand.snapped.x, y: cand.snapped.y, width: n.width, height: n.height })
+      } else if (mp.preview) {
+        mp.setPreview(null)
+      }
+    }
   }, [id, moveFreeNode, moveManyFreeNodes, zoom])
 
   const onNodeUp = useCallback((e: React.PointerEvent) => {
@@ -103,6 +121,19 @@ export const FreeNode: React.FC<Props> = React.memo(({ id }) => {
     }
     // Transfer node content to a bar/card on drop
     const node = useFreeNodeStore.getState().nodes[id]
+    // Magnet dock: a model tile released near a viewport window edge snaps
+    // flush and loads its model. The tile is KEPT (dock membership stays
+    // derived from its position) — this outranks the transfer scan below.
+    {
+      const preview = useMagnetPreviewStore.getState().preview
+      if (preview) useMagnetPreviewStore.getState().setPreview(null)
+      if (dragHasMoved.current && node?.mediaType === 'model' && preview) {
+        const cur = useFreeNodeStore.getState().nodes[id]
+        if (cur) updateFreeNode(id, { x: preview.x, y: preview.y })
+        if (node.imageUrl) useViewport3DStore.getState().setActiveModel(preview.windowId, node.imageUrl)
+        return
+      }
+    }
     if (dragHasMoved.current && node) {
       const hasMedia = !!node.imageUrl
       const hasText = !!(node.text && (node.type === 'text' || node.type === 'note'))
@@ -522,7 +553,7 @@ const FreeNodeBody: React.FC<{
 
   // ── Model type: poster thumbnail + 3D badge (never renders the .glb) ──
   if (node.type === 'model') {
-    return <ModelTileBody node={node} dz={dz} />
+    return <ModelTileBody node={node} id={id} dz={dz} updateFreeNode={updateFreeNode} />
   }
 
   // ── Note type: always-editable textarea ──
@@ -728,8 +759,24 @@ const FreeNodeBody: React.FC<{
 //    poster service once a renderer exists) + "3D" corner badge; wireframe
 //    cube + filename until a poster is available. The raw model URL is
 //    NEVER fed to an <img>. ──
-const ModelTileBody: React.FC<{ node: FreeNodeData; dz: number }> = ({ node, dz }) => {
+const ModelTileBody: React.FC<{
+  node: FreeNodeData
+  id: string
+  dz: number
+  updateFreeNode: (id: string, patch: Partial<FreeNodeData>) => void
+}> = ({ node, id, dz, updateFreeNode }) => {
   const resolvedPoster = useResolvedMedia(node.posterUrl ?? null)
+  // Lazy poster: generate once via the shared renderer and persist the ref
+  // on the node (so transfers/exports carry it). Null result (renderer not
+  // ready / load failure) just retries on a later mount.
+  useEffect(() => {
+    if (node.posterUrl || !node.imageUrl) return
+    let live = true
+    ensureModelPoster(node.imageUrl)
+      .then(ref => { if (live && ref) updateFreeNode(id, { posterUrl: ref }) })
+      .catch(() => {})
+    return () => { live = false }
+  }, [node.imageUrl, node.posterUrl, id, updateFreeNode])
   return (
     <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', overflow: 'hidden' }}>
       {resolvedPoster ? (

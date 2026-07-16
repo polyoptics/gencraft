@@ -20,6 +20,11 @@ import { CloneDeck } from '../Linking/CloneDeck'
 import { useLinkingStore } from '../../store/linkingStore'
 import { DEFAULT_H } from '../../utils/barConstants'
 import { groupSlot, clampGroupMove } from '../../utils/nlePush'
+import type { GroupSlot } from '../../utils/nlePush'
+import { useViewport3DStore } from '../../store/viewport3dStore'
+import { useMagnetPreviewStore } from '../../store/magnetPreviewStore'
+import { findMagnetCandidate, type WindowRect } from '../../utils/viewportDocking'
+import { groupHasModels, collectDeckModels } from '../../utils/modelTraversal'
 import { FreeCanvas } from '../Canvas/FreeCanvas'
 import { Viewport3DLayer } from '../Viewport3D/Viewport3DLayer'
 import { NLETimelineHeader, NLE_HEADER_CANVAS_H, headerExtend as computeHeaderExtend, headerScreenH, overviewScale } from '../NLE/NLETimelineHeader'
@@ -32,6 +37,64 @@ import { PenButton } from '../Annotation/PenButton'
 import { useSeedHoverFromCursor } from '../../utils/pointerTracker'
 
 const BOARD_PADDING_X = 20
+
+// ── Deck/card magnet-docking to 3D viewport windows ──
+// Shared by the open-card and stacked-deck drag handlers. Dock membership
+// stays derived from geometry; these helpers only provide the drag-time
+// affordance and the flush snap + load on release.
+
+function viewportWindowRects(): WindowRect[] {
+  return Object.values(useViewport3DStore.getState().windows)
+    .map(w => ({ id: w.id, x: w.x, y: w.y, width: w.width, height: w.height }))
+}
+
+/** During a drag: show/clear the "will snap here" ghost for the dragged
+ *  slot (initial slot + current clamped delta). */
+function updateDeckMagnetPreview(canDock: boolean, slot: GroupSlot | null, dx: number, dy: number): void {
+  if (!canDock || !slot) return
+  const rect = { x: slot.left + dx, y: slot.top + dy, width: slot.right - slot.left, height: slot.bottom - slot.top }
+  const wins = viewportWindowRects()
+  const cand = wins.length > 0 ? findMagnetCandidate(rect, wins) : null
+  const mp = useMagnetPreviewStore.getState()
+  if (cand) {
+    mp.setPreview({ windowId: cand.windowId, edge: cand.edge, x: cand.snapped.x, y: cand.snapped.y, width: rect.width, height: rect.height })
+  } else if (mp.preview) {
+    mp.setPreview(null)
+  }
+}
+
+/** On release: snap the whole drag set flush to the previewed edge (same
+ *  batched id set as the drag, so decks arrive intact) and load the deck's
+ *  first model. Returns true when a dock happened. */
+function finishDeckMagnetDock(
+  canDock: boolean,
+  rootGroupId: string,
+  slotGroupId: string,
+  slotBoardIds: string[],
+  dragIds: string[],
+): boolean {
+  const mp = useMagnetPreviewStore.getState()
+  const preview = mp.preview
+  if (preview) mp.setPreview(null)
+  if (!canDock || !preview) return false
+  const bs = useBoardsStore.getState()
+  const g = bs.groups.find(x => x.id === slotGroupId)
+  if (!g) return false
+  const slot = groupSlot(slotGroupId, slotBoardIds, bs.boards, g.originX, g.originY, computeGroupLayout(slotBoardIds, bs.boards))
+  if (!slot) return false
+  const ddx = preview.x - slot.left
+  const ddy = preview.y - slot.top
+  if (ddx !== 0 || ddy !== 0) {
+    const updates = dragIds.flatMap(gid => {
+      const gg = bs.groups.find(x => x.id === gid)
+      return gg ? [{ groupId: gid, originX: gg.originX + ddx, originY: gg.originY + ddy }] : []
+    })
+    bs.setGroupPosBatch(updates)
+  }
+  const models = collectDeckModels(rootGroupId, bs.groups, bs.boards)
+  if (models[0]) useViewport3DStore.getState().setActiveModel(preview.windowId, models[0].url)
+  return true
+}
 
 /** Derive a deck-edge border color from a card's base color at a given alpha */
 function edgeColor(baseHex: string, alpha: number): string {
@@ -266,6 +329,9 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
 
     const myLayout = computeGroupLayout(group.boardIds, bs0.boards)
     const mySlot = groupSlot(group.id, group.boardIds, bs0.boards, initialOriginX, initialOriginY, myLayout)
+    // Magnet gate: only cards whose recursive content holds ≥1 model can
+    // dock to a 3D viewport window (a card is a deck of one).
+    const canDock = groupHasModels(group.id, bs0.groups, bs0.boards)
     // One unified work area — collide with every other visible (non-dragging)
     // group, wherever it sits on the canvas.
     const draggingSet = new Set(draggingIds)
@@ -303,6 +369,7 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
         groupId: gid, originY: origin.y + finalDy, originX: origin.x + finalDx,
       }))
       useBoardsStore.getState().setGroupPosBatch(updates)
+      updateDeckMagnetPreview(canDock, mySlot, finalDx, finalDy)
     }
     const onUp = (ev: PointerEvent) => {
       window.removeEventListener('pointermove', onMove)
@@ -311,6 +378,7 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
       // Drop-on-ghost-slot return: if the card was released over a
       // [data-deck-slot-drop="<anchorId>:<cardId>"] element AND that cardId
       // matches this card, snap it back into the deck.
+      let returnedToDeck = false
       const els = document.elementsFromPoint(ev.clientX, ev.clientY)
       for (const el of els) {
         const drop = (el as HTMLElement).dataset?.deckSlotDrop
@@ -318,8 +386,15 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
         const [, memberId] = drop.split(':')
         if (memberId === group.id) {
           useBoardsStore.getState().returnToDeck(group.id)
+          returnedToDeck = true
         }
         break
+      }
+      // Magnet dock to a 3D viewport window (deck return outranks docking)
+      if (!returnedToDeck) {
+        finishDeckMagnetDock(canDock, group.id, group.id, group.boardIds, draggingIds)
+      } else {
+        useMagnetPreviewStore.getState().setPreview(null)
       }
     }
     window.addEventListener('pointermove', onMove)
@@ -999,6 +1074,9 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
     const mySlot = anchorOrigin
       ? groupSlot(deck.anchorGroupId, anchorGroup.boardIds, bs0.boards, anchorOrigin.x, anchorOrigin.y, anchorLayout)
       : null
+    // Magnet gate: decks with ≥1 model anywhere in their recursive content
+    // can dock to a 3D viewport window.
+    const canDock = groupHasModels(deck.anchorGroupId, bs0.groups, bs0.boards)
 
     const draggingSet = new Set(allDragIds)
     // One unified work area — collide with every other visible group.
@@ -1038,12 +1116,14 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
           groupId: gid, originY: origin.y + finalDy, originX: origin.x + finalDx,
         }))
       )
+      updateDeckMagnetPreview(canDock, mySlot, finalDx, finalDy)
     }
     const onUp = (ev: PointerEvent) => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
       // Drop-on-ghost-slot return for extracted sub-decks rendered as
       // StackedDeckCard: anchor might match a ghost slot on its former parent.
+      let returnedToDeck = false
       const els = document.elementsFromPoint(ev.clientX, ev.clientY)
       for (const el of els) {
         const drop = (el as HTMLElement).dataset?.deckSlotDrop
@@ -1051,8 +1131,15 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
         const [, memberId] = drop.split(':')
         if (memberId === anchorGroup.id) {
           useBoardsStore.getState().returnToDeck(anchorGroup.id)
+          returnedToDeck = true
         }
         break
+      }
+      // Magnet dock to a 3D viewport window (deck return outranks docking)
+      if (!returnedToDeck) {
+        finishDeckMagnetDock(canDock, deck.anchorGroupId, deck.anchorGroupId, anchorGroup.boardIds, allDragIds)
+      } else {
+        useMagnetPreviewStore.getState().setPreview(null)
       }
     }
     window.addEventListener('pointermove', onMove)

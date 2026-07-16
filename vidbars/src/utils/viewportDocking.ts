@@ -1,0 +1,159 @@
+// viewportDocking.ts — pure geometry for magnet-docking tiles/decks to 3D
+// viewport windows.
+//
+// Dock membership is DERIVED, never stored: a model tile (or deck) is
+// "docked" to a window iff its rect touches the window's rect within
+// DOCK_TOLERANCE — the same philosophy (and tolerance) as deck clustering
+// in useCardDecks. Snapping places rects flush (gap 0), so a snapped rect
+// always passes the dock test afterwards. All coordinates are canvas units.
+
+export type DockEdge = 'top' | 'right' | 'bottom' | 'left'
+
+/** Attraction radius while dragging (canvas units). */
+export const MAGNET_RADIUS = 48
+/** Derived-dock test tolerance — MUST equal useCardDecks' TOUCH_TOLERANCE
+ *  so the two spatial systems agree about "touching". */
+export const DOCK_TOLERANCE = 16
+
+export interface Rect { x: number; y: number; width: number; height: number }
+export interface WindowRect extends Rect { id: string }
+
+export interface MagnetCandidate {
+  windowId: string
+  edge: DockEdge
+  distance: number
+  snapped: { x: number; y: number }
+}
+
+/** Inflated-AABB touch test — same semantics as useCardDecks.rectsTouch
+ *  (private to that hook): true when the rects overlap or are within
+ *  `tol` on every axis. */
+export function rectsTouch(a: Rect, b: Rect, tol: number): boolean {
+  return !(
+    a.x + a.width + tol < b.x || b.x + b.width + tol < a.x ||
+    a.y + a.height + tol < b.y || b.y + b.height + tol < a.y
+  )
+}
+
+/** Flush-snap `rect` onto `edge` of `win`. The along-edge coordinate is
+ *  PRESERVED (clamped into the window's span) — users order docked tiles
+ *  by physically sliding them along an edge. */
+export function snapToEdge(rect: Rect, win: Rect, edge: DockEdge): { x: number; y: number } {
+  const clampAlongY = Math.max(win.y, Math.min(rect.y, win.y + win.height - rect.height))
+  const clampAlongX = Math.max(win.x, Math.min(rect.x, win.x + win.width - rect.width))
+  switch (edge) {
+    case 'left':   return { x: win.x - rect.width, y: clampAlongY }
+    case 'right':  return { x: win.x + win.width, y: clampAlongY }
+    case 'top':    return { x: clampAlongX, y: win.y - rect.height }
+    case 'bottom': return { x: clampAlongX, y: win.y + win.height }
+  }
+}
+
+/** Distance from `rect` to each edge of `win`, measured edge-to-edge and
+ *  meaningful even when the rect is INSIDE the window (so a tile dropped
+ *  onto a window snaps OUT to its nearest edge). Returns the best edge. */
+function nearestEdge(rect: Rect, win: Rect): { edge: DockEdge; distance: number } {
+  // Signed gaps: positive when outside beyond that edge, negative inside.
+  const gapLeft = win.x - (rect.x + rect.width)         // rect fully left of win
+  const gapRight = rect.x - (win.x + win.width)          // rect fully right
+  const gapTop = win.y - (rect.y + rect.height)          // rect above
+  const gapBottom = rect.y - (win.y + win.height)        // rect below
+  // Off-axis overlap requirement: to magnet to the left/right edge the rect
+  // must overlap the window's Y-span (within tolerance), and vice versa.
+  const overlapsY = rect.y < win.y + win.height + DOCK_TOLERANCE && rect.y + rect.height > win.y - DOCK_TOLERANCE
+  const overlapsX = rect.x < win.x + win.width + DOCK_TOLERANCE && rect.x + rect.width > win.x - DOCK_TOLERANCE
+
+  const cands: Array<{ edge: DockEdge; distance: number }> = []
+  if (overlapsY) {
+    cands.push({ edge: 'left', distance: Math.abs(gapLeft) })
+    cands.push({ edge: 'right', distance: Math.abs(gapRight) })
+  }
+  if (overlapsX) {
+    cands.push({ edge: 'top', distance: Math.abs(gapTop) })
+    cands.push({ edge: 'bottom', distance: Math.abs(gapBottom) })
+  }
+  if (cands.length === 0) return { edge: 'left', distance: Infinity }
+  return cands.reduce((best, c) => (c.distance < best.distance ? c : best))
+}
+
+/** Best (window, edge) for a dragged rect, or null when nothing within
+ *  `radius`. Nearest window wins; ties break to the smaller window id so
+ *  a tile between two windows resolves deterministically. */
+export function findMagnetCandidate(
+  rect: Rect,
+  windows: WindowRect[],
+  radius: number = MAGNET_RADIUS,
+): MagnetCandidate | null {
+  let best: MagnetCandidate | null = null
+  for (const win of windows) {
+    const { edge, distance } = nearestEdge(rect, win)
+    if (distance > radius) continue
+    if (!best || distance < best.distance ||
+        (distance === best.distance && win.id < best.windowId)) {
+      best = { windowId: win.id, edge, distance, snapped: snapToEdge(rect, win, edge) }
+    }
+  }
+  return best
+}
+
+export interface DockableItem extends Rect { id: string }
+export interface DockedItem { id: string; edge: DockEdge; along: number }
+
+const EDGE_RANK: Record<DockEdge, number> = { top: 0, right: 1, bottom: 2, left: 3 }
+
+/** Partition dockable items among windows — each item docks to at most ONE
+ *  window (min edge distance, tie → smaller window id), ordered per window
+ *  by edge rank (top→right→bottom→left) then position along the edge. */
+export function computeAllDocks(
+  windows: WindowRect[],
+  items: DockableItem[],
+  tol: number = DOCK_TOLERANCE,
+): Map<string, DockedItem[]> {
+  const result = new Map<string, DockedItem[]>()
+  for (const win of windows) result.set(win.id, [])
+  for (const item of items) {
+    let best: { winId: string; edge: DockEdge; distance: number } | null = null
+    for (const win of windows) {
+      if (!rectsTouch(item, win, tol)) continue
+      const { edge, distance } = nearestEdge(item, win)
+      if (!best || distance < best.distance ||
+          (distance === best.distance && win.id < best.winId)) {
+        best = { winId: win.id, edge, distance }
+      }
+    }
+    if (best) {
+      const along = best.edge === 'left' || best.edge === 'right' ? item.y : item.x
+      result.get(best.winId)!.push({ id: item.id, edge: best.edge, along })
+    }
+  }
+  for (const list of result.values()) {
+    list.sort((a, b) => (EDGE_RANK[a.edge] - EDGE_RANK[b.edge]) || (a.along - b.along))
+  }
+  return result
+}
+
+/** Next free slot flush against `edge` of `win` for an item of tileW×tileH,
+ *  stacking along the edge past `occupied` rects (used by direct file drops
+ *  onto a window). */
+export function nextFreeEdgeSlot(
+  win: Rect,
+  edge: DockEdge,
+  tileW: number,
+  tileH: number,
+  occupied: Rect[],
+  gap = 12,
+): { x: number; y: number } {
+  const isVertical = edge === 'left' || edge === 'right'
+  const base = snapToEdge(
+    { x: win.x, y: win.y, width: tileW, height: tileH },
+    win, edge,
+  )
+  const slot = { x: base.x, y: base.y, width: tileW, height: tileH }
+  for (let i = 0; i < 100; i++) {
+    const overlaps = occupied.some(o => rectsTouch(slot, o, -1))  // strict overlap
+    if (!overlaps) return { x: slot.x, y: slot.y }
+    if (isVertical) slot.y += tileH + gap
+    else slot.x += tileW + gap
+  }
+  return { x: slot.x, y: slot.y }
+}

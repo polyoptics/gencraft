@@ -20,6 +20,7 @@ import { useViewStatus } from '../../hooks/useViewStatus'
 import { getViewRuntime, requestRender, MIN_GL_PX } from '../../three/viewportRenderer'
 import { clampPhi } from '../../three/orbitState'
 import { useSeedHoverFromCursor } from '../../utils/pointerTracker'
+import { ViewportSwitcherStrip } from './ViewportSwitcherStrip'
 
 export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => {
   const win = useViewport3DStore(s => s.windows[id])
@@ -149,8 +150,9 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
           height: headerH, flexShrink: 0,
           padding: `0 ${8 * iz}px`,
           background: isHovered ? 'rgba(30,34,58,0.95)' : 'rgba(24,27,46,0.9)',
-          border: `${borderW}px solid rgba(140,170,255,${isHovered ? 0.35 : 0.18})`,
-          borderBottom: 'none',
+          borderTop: `${borderW}px solid rgba(140,170,255,${isHovered ? 0.35 : 0.18})`,
+          borderLeft: `${borderW}px solid rgba(140,170,255,${isHovered ? 0.35 : 0.18})`,
+          borderRight: `${borderW}px solid rgba(140,170,255,${isHovered ? 0.35 : 0.18})`,
           borderRadius: `${8 * iz}px ${8 * iz}px 0 0`,
           cursor: 'grab',
           transition: 'background 0.12s, border-color 0.12s',
@@ -183,8 +185,9 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
         style={{
           flex: 1, position: 'relative',
           background: 'transparent',
-          border: `${borderW}px solid rgba(140,170,255,${isHovered ? 0.35 : 0.18})`,
-          borderTop: 'none',
+          borderBottom: `${borderW}px solid rgba(140,170,255,${isHovered ? 0.35 : 0.18})`,
+          borderLeft: `${borderW}px solid rgba(140,170,255,${isHovered ? 0.35 : 0.18})`,
+          borderRight: `${borderW}px solid rgba(140,170,255,${isHovered ? 0.35 : 0.18})`,
           cursor: status.status === 'ready' ? 'grab' : 'default',
           overflow: 'hidden',
         }}
@@ -209,6 +212,10 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
             </div>
           </div>
         )}
+
+        {/* Model playlist — appears when ≥2 models are docked; also owns
+            active-model reconciliation, so it mounts unconditionally. */}
+        <ViewportSwitcherStrip windowId={id} />
       </div>
 
       {/* ── Resize corner ── */}

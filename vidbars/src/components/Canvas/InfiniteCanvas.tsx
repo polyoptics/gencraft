@@ -7,6 +7,7 @@ import { uploadFile, classifyFile, isAcceptedMediaFile } from '../../utils/uploa
 import { computeGroupLayout, getRowY, getRowHeight, boardContentHeight, CARD_GRID_SPACING } from '../../utils/nleRows'
 import { useViewport3DStore, VIEWPORT3D_DEFAULT_W, VIEWPORT3D_DEFAULT_H } from '../../store/viewport3dStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
+import { nextFreeEdgeSlot } from '../../utils/viewportDocking'
 import { GLCanvasHost } from '../Viewport3D/GLCanvasHost'
 
 interface Props {
@@ -325,9 +326,14 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
     const win = windowId ? useViewport3DStore.getState().windows[windowId] : undefined
     if (!win || !windowId) return files
     useUndoCoordinator.getState().checkpoint()
-    const tileH = 180, gap = 12
+    const tileW = 200, tileH = 180
+    // Stack down the right edge past anything already parked there.
+    const occupied = Object.values(useFreeNodeStore.getState().nodes)
+      .map(n => ({ x: n.x, y: n.y, width: n.width, height: n.height }))
     modelFiles.forEach((file, i) => {
-      const nodeId = addFreeNode(win.x + win.width, win.y + i * (tileH + gap), 'model')
+      const slot = nextFreeEdgeSlot(win, 'right', tileW, tileH, occupied)
+      occupied.push({ x: slot.x, y: slot.y, width: tileW, height: tileH })
+      const nodeId = addFreeNode(slot.x, slot.y, 'model')
       uploadFile(file).then(({ url }) => {
         useFreeNodeStore.getState().updateFreeNode(nodeId, {
           imageUrl: url, mediaType: 'model', label: file.name.replace(/\.[^.]+$/, ''),
