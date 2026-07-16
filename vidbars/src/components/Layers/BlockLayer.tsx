@@ -18,7 +18,10 @@ import { computeGroupLayout, getRowY, getRowHeight, dyToRowDelta, getBoardAbsolu
 import { PortalFrame, computeGroupBlockFootprint } from './PortalFrame'
 import type { RowLayout } from '../../utils/nleRows'
 import { groupBoardSlots, clampBoardX } from '../../utils/nlePush'
-import { tryDockGroupAtRest } from '../../utils/deckDockDrag'
+import { tryDockGroupAtRest, updateDeckMagnetPreview } from '../../utils/deckDockDrag'
+import { useMagnetPreviewStore } from '../../store/magnetPreviewStore'
+import { groupHasModels } from '../../utils/modelTraversal'
+import { groupSlot } from '../../utils/nlePush'
 import { DEFAULT_H } from '../../utils/barConstants'
 import { getFirstImageUrl } from '../../types/bar'
 import { HeroImageLayer } from './HeroImageLayer'
@@ -165,6 +168,12 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
     const dragLay = ungrouped ? null : computeGroupLayout(group.boardIds, bs0.boards)
     const gox = group?.originX ?? 0
     const dragSlots = ungrouped ? [] : groupBoardSlots(gox, group.boardIds, bs0.boards)
+    // Magnet gate for block-zoom "cards": a single-board group holding a
+    // model can dock to a 3D viewport window from this drag too (the board
+    // moves within its group, but for a one-board group the slot IS the
+    // card). Ungrouped blocks dock on release via groupBoardAsNew below.
+    const canDockBlock = !ungrouped && !isMulti && group.boardIds.length === 1
+      && groupHasModels(group.id, bs0.groups, bs0.boards)
     // Ungrouped: free drag start
     const startCX = b0.canvasX ?? 0
     const startCY = b0.canvasY ?? 0
@@ -199,6 +208,13 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
         const rawAbsX = gox + initialX + xAccum
         const clampedAbsX = clampBoardX(dragSlots, boardId, rawAbsX, newRow)
         useBoardsStore.getState().setBoardNlePos(boardId, newRow, clampedAbsX - gox)
+        if (canDockBlock) {
+          // Slot recomputed from LIVE state (nleX just changed) → dx/dy 0.
+          const bs = useBoardsStore.getState()
+          const g = bs.groups.find(x => x.id === group.id)
+          const liveSlot = g ? groupSlot(g.id, g.boardIds, bs.boards, g.originX, g.originY, computeGroupLayout(g.boardIds, bs.boards)) : null
+          updateDeckMagnetPreview(true, liveSlot, 0, 0)
+        }
       }
     }
     const onUp = () => {
@@ -213,6 +229,10 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
         // and holds a model, snap it flush + load (block-zoom docking).
         const newGroup = getGroupForBoard(useBoardsStore.getState().groups, boardId)
         if (newGroup) tryDockGroupAtRest(newGroup.id)
+      }
+      if (canDockBlock) {
+        useMagnetPreviewStore.getState().setPreview(null)
+        tryDockGroupAtRest(group.id)
       }
     }
     window.addEventListener('pointermove', onMove)

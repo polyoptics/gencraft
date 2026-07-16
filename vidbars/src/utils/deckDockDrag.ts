@@ -6,9 +6,10 @@
 // affordance and the flush snap + load on release.
 
 import { useBoardsStore } from '../store/boardsStore'
+import { useCanvasStore } from '../store/canvasStore'
 import { useViewport3DStore } from '../store/viewport3dStore'
 import { useMagnetPreviewStore } from '../store/magnetPreviewStore'
-import { findMagnetCandidate, type WindowRect } from './viewportDocking'
+import { findMagnetCandidate, magnetRadiusForZoom, type WindowRect } from './viewportDocking'
 import { collectDeckModels } from './modelTraversal'
 import { groupSlot, type GroupSlot } from './nlePush'
 import { computeGroupLayout } from './nleRows'
@@ -24,7 +25,8 @@ export function updateDeckMagnetPreview(canDock: boolean, slot: GroupSlot | null
   if (!canDock || !slot) return
   const rect = { x: slot.left + dx, y: slot.top + dy, width: slot.right - slot.left, height: slot.bottom - slot.top }
   const wins = viewportWindowRects()
-  const cand = wins.length > 0 ? findMagnetCandidate(rect, wins) : null
+  const radius = magnetRadiusForZoom(useCanvasStore.getState().zoom)
+  const cand = wins.length > 0 ? findMagnetCandidate(rect, wins, radius) : null
   const mp = useMagnetPreviewStore.getState()
   if (cand) {
     mp.setPreview({ windowId: cand.windowId, edge: cand.edge, x: cand.snapped.x, y: cand.snapped.y, width: rect.width, height: rect.height })
@@ -78,7 +80,8 @@ export function tryDockGroupAtRest(groupId: string): boolean {
   if (!slot) return false
   const rect = { x: slot.left, y: slot.top, width: slot.right - slot.left, height: slot.bottom - slot.top }
   const wins = viewportWindowRects()
-  const cand = wins.length > 0 ? findMagnetCandidate(rect, wins) : null
+  const radius = magnetRadiusForZoom(useCanvasStore.getState().zoom)
+  const cand = wins.length > 0 ? findMagnetCandidate(rect, wins, radius) : null
   if (!cand) return false
   const models = collectDeckModels(groupId, bs.groups, bs.boards)
   if (models.length === 0) return false

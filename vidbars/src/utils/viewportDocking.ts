@@ -9,10 +9,19 @@
 
 export type DockEdge = 'top' | 'right' | 'bottom' | 'left'
 
-/** Attraction radius while dragging (canvas units). */
+/** Attraction radius while dragging (canvas units) — the zoomed-in floor. */
 export const MAGNET_RADIUS = 48
+/** Screen-space attraction radius: the magnet should FEEL the same at any
+ *  zoom. In pure canvas units it shrinks to a few pixels when zoomed out
+ *  (48 units at zoom 0.15 ≈ 7px — undiscoverable). */
+export const MAGNET_RADIUS_PX = 64
+export function magnetRadiusForZoom(zoom: number): number {
+  return Math.max(MAGNET_RADIUS, MAGNET_RADIUS_PX / Math.max(0.01, zoom))
+}
 /** Derived-dock test tolerance — MUST equal useCardDecks' TOUCH_TOLERANCE
- *  so the two spatial systems agree about "touching". */
+ *  so the two spatial systems agree about "touching". Zoom-independent by
+ *  design (persistent state can't depend on the camera); the magnet SNAP
+ *  closes placements to flush so dragged docks always pass this. */
 export const DOCK_TOLERANCE = 16
 
 export interface Rect { x: number; y: number; width: number; height: number }

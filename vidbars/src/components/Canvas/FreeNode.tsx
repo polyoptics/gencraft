@@ -15,7 +15,7 @@ import { useCanvasStore } from '../../store/canvasStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { useViewport3DStore } from '../../store/viewport3dStore'
 import { useMagnetPreviewStore } from '../../store/magnetPreviewStore'
-import { findMagnetCandidate, type WindowRect } from '../../utils/viewportDocking'
+import { findMagnetCandidate, magnetRadiusForZoom, type WindowRect } from '../../utils/viewportDocking'
 import { ensureModelPoster, getModelPoster, useModelPoster } from '../../three/posterService'
 import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
 import { DrawableSurface } from '../Annotation/DrawableSurface'
@@ -101,7 +101,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
     if (n?.mediaType === 'model' && n.imageUrl) {
       const winRects: WindowRect[] = Object.values(useViewport3DStore.getState().windows)
         .map(w => ({ id: w.id, x: w.x, y: w.y, width: w.width, height: w.height }))
-      const cand = winRects.length > 0 ? findMagnetCandidate(n, winRects) : null
+      const cand = winRects.length > 0 ? findMagnetCandidate(n, winRects, magnetRadiusForZoom(zoom)) : null
       const mp = useMagnetPreviewStore.getState()
       if (cand) {
         mp.setPreview({ windowId: cand.windowId, edge: cand.edge, x: cand.snapped.x, y: cand.snapped.y, width: n.width, height: n.height })
