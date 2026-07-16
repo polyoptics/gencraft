@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { createDebouncedIDBStorage } from '../utils/debouncedIDBStorage'
 
-export type FreeNodeType = 'note' | 'image' | 'text' | 'video' | 'audio'
+export type FreeNodeType = 'note' | 'image' | 'text' | 'video' | 'audio' | 'model'
 
 export interface TextStyle {
   fontSize: number       // in px (base, before zoom scaling)
@@ -62,7 +62,9 @@ export interface FreeNodeData {
   text: string
   imageUrl: string | null
   imageTransform?: import('../store/boardsStore').HeroImageTransform
-  mediaType?: 'image' | 'video' | 'audio' | null
+  mediaType?: import('../types/bar').MediaType | null
+  /** Model tiles: rendered poster thumbnail (`mediaref:`), lazily generated. */
+  posterUrl?: string | null
   color: string
   textStyle?: TextStyle
   /** Annotation layer — vector strokes drawn on this node. */
@@ -94,10 +96,10 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
     const id = crypto.randomUUID()
     const color = COLORS[colorIdx++ % COLORS.length]
     const labels: Record<FreeNodeType, string> = {
-      image: 'Image', note: 'Note', text: 'Text', video: 'Video', audio: 'Audio',
+      image: 'Image', note: 'Note', text: 'Text', video: 'Video', audio: 'Audio', model: 'Model',
     }
     const heights: Record<FreeNodeType, number> = {
-      image: 180, note: 160, text: 180, video: 180, audio: 120,
+      image: 180, note: 160, text: 180, video: 180, audio: 120, model: 180,
     }
     const node: FreeNodeData = {
       id, x, y,

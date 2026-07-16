@@ -11,7 +11,7 @@ import { CircularColorPicker } from '../Bar/CircularColorPicker'
 import { gripDragState } from '../../utils/gripDragState'
 import { wireDragState } from '../../utils/wireDragState'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
-import { uploadFile } from '../../utils/uploadFile'
+import { uploadFile, isAcceptedMediaFile } from '../../utils/uploadFile'
 import { getFirstImageUrl } from '../../types/bar'
 import { HeroImageLayer } from '../Layers/HeroImageLayer'
 import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
@@ -471,11 +471,11 @@ export const NLEBlock: React.FC<Props> = React.memo(({ id, top, blockHeight, off
 
   const handleMediaFile = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     Array.from(e.target.files ?? []).forEach(file => {
-      if (!file.type.startsWith('image/') && !file.type.startsWith('video/') && !file.type.startsWith('audio/')) return
+      if (!isAcceptedMediaFile(file)) return
       uploadFile(file).then(({ url, type }) => {
         const currentBars = getBars()
         const curMedia = currentBars[id]?.content.media ?? []
-        setContent(id, { media: [...curMedia, { url, type: type as any, originalName: file.name }] })
+        setContent(id, { media: [...curMedia, { url, type, originalName: file.name }] })
       })
     })
     e.target.value = ''
@@ -557,7 +557,7 @@ export const NLEBlock: React.FC<Props> = React.memo(({ id, top, blockHeight, off
   return (
     <>
       <input ref={iconInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleIconFile} />
-      <input ref={mediaInputRef} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={handleMediaFile} />
+      <input ref={mediaInputRef} type="file" accept="image/*,video/*,audio/*,.glb,.gltf,model/gltf-binary,model/gltf+json" multiple style={{ display: 'none' }} onChange={handleMediaFile} />
 
       <div
         ref={wrapperRef}

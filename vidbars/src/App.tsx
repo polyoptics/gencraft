@@ -127,6 +127,7 @@ function useKeyboardCopyPaste() {
               text: src.text,
               imageUrl: src.imageUrl,
               mediaType: src.mediaType,
+              posterUrl: src.posterUrl,
               color: src.color,
               width: src.width,
               height: src.height,

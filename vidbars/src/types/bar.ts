@@ -1,10 +1,10 @@
-export type MediaType = 'image' | 'video' | 'audio'
+export type MediaType = 'image' | 'video' | 'audio' | 'model'
 
 export interface MediaItem {
   url: string
   type: MediaType
   originalName?: string
-  /** Static poster frame URL for videos (used at block/card zoom) */
+  /** Static poster frame URL for videos and 3D models (used at block/card zoom) */
   posterUrl?: string
 }
 
@@ -50,16 +50,20 @@ export function getMediaItems(content: BarContent | undefined): MediaItem[] {
   return (content.images ?? []).map(url => ({ url, type: 'image' as MediaType }))
 }
 
-/** Helper: get the first image URL (for thumbnails) */
+/** Helper: get the first image URL (for thumbnails).
+ *  NEVER returns a raw 3D-model URL — every consumer feeds this into an
+ *  <img>/background-image, and a .glb there renders broken. Models only
+ *  contribute via their posterUrl. */
 export function getFirstImageUrl(content: BarContent | undefined): string | null {
   const items = getMediaItems(content)
-  // Prefer images, then video posters
+  // Prefer images, then video/model posters
   const img = items.find(m => m.type === 'image')
   if (img) return img.url
-  const vid = items.find(m => m.type === 'video' && m.posterUrl)
-  if (vid) return vid.posterUrl!
-  // Last resort: any URL (video without poster shows as thumbnail)
-  return items[0]?.url ?? null
+  const posterable = items.find(m => (m.type === 'video' || m.type === 'model') && m.posterUrl)
+  if (posterable) return posterable.posterUrl!
+  // Last resort: any non-model URL (video without poster shows as thumbnail)
+  const nonModel = items.find(m => m.type !== 'model')
+  return nonModel?.url ?? null
 }
 
 export interface Bar {

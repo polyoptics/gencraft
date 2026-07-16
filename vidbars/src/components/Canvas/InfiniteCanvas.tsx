@@ -3,7 +3,7 @@ import { useCanvasStore } from '../../store/canvasStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useBoardsStore } from '../../store/boardsStore'
 import { clampToNoParkZone } from '../../utils/nleZone'
-import { uploadFile } from '../../utils/uploadFile'
+import { uploadFile, classifyFile, isAcceptedMediaFile } from '../../utils/uploadFile'
 import { computeGroupLayout, getRowY, getRowHeight, boardContentHeight, CARD_GRID_SPACING } from '../../utils/nleRows'
 
 interface Props {
@@ -155,9 +155,8 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
       // Cursor position in canvas coordinates
       const cursorCX = (e.clientX - rect.left - p.x) / z + i * 220
       const cursorCY = (e.clientY - rect.top - p.y) / z
-      // Determine node type from MIME (drives default size — must match freeNodeStore.addFreeNode)
-      const mime = file.type
-      const nodeType = mime.startsWith('video/') ? 'video' as const : mime.startsWith('audio/') ? 'audio' as const : 'image' as const
+      // Determine node type from the file (drives default size — must match freeNodeStore.addFreeNode)
+      const nodeType = classifyFile(file)
       const mediaType = nodeType
       const nodeW = nodeType === 'audio' ? 260 : 200
       const nodeH = nodeType === 'audio' ? 120 : 180
@@ -180,13 +179,13 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
       if (freenode) {
         const nodeId = freenode.dataset.id!
         const file = files[0]
-        const mime = file.type
-        const nodeType = mime.startsWith('video/') ? 'video' as const : mime.startsWith('audio/') ? 'audio' as const : 'image' as const
+        const nodeType = classifyFile(file)
         uploadFile(file).then(({ url }) => {
           useFreeNodeStore.getState().updateFreeNode(nodeId, {
             type: nodeType,
             mediaType: nodeType,
             imageUrl: url,
+            posterUrl: undefined,   // stale poster from any previous model
             label: file.name.replace(/\.[^.]+$/, ''),
           })
         })
@@ -198,16 +197,20 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
 
   const handleCardDrop = useCallback((e: React.DragEvent, files: File[]) => {
     const allEls = document.elementsFromPoint(e.clientX, e.clientY)
-    // 1. Card target — data-layer-card is now a group ID
-    for (const el of allEls) {
-      const card = el.closest('[data-layer-card]') as HTMLElement | null
-      if (card) {
-        const groupId = card.dataset.layerCard!
-        const file = files[0]
-        uploadFile(file).then(({ url }) => {
-          useBoardsStore.getState().setGroupCardHeroImage(groupId, url)
-        })
-        return
+    // 1. Card target — data-layer-card is now a group ID.
+    // Card heroes are images by construction: model files skip this branch
+    // (fall through to free-node/tile creation) so a .glb never lands in an <img>.
+    const cardHeroFile = files.find(f => classifyFile(f) !== 'model')
+    if (cardHeroFile) {
+      for (const el of allEls) {
+        const card = el.closest('[data-layer-card]') as HTMLElement | null
+        if (card) {
+          const groupId = card.dataset.layerCard!
+          uploadFile(cardHeroFile).then(({ url }) => {
+            useBoardsStore.getState().setGroupCardHeroImage(groupId, url)
+          })
+          return
+        }
       }
     }
     // 2. Free node
@@ -218,16 +221,19 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
 
   const handleBlockDrop = useCallback((e: React.DragEvent, files: File[]) => {
     const allEls = document.elementsFromPoint(e.clientX, e.clientY)
-    // 1. Block target
-    for (const el of allEls) {
-      const block = el.closest('[data-layer-block]') as HTMLElement | null
-      if (block) {
-        const boardId = block.dataset.layerBlock!
-        const file = files[0]
-        uploadFile(file).then(({ url }) => {
-          useBoardsStore.getState().setBlockThumbnail(boardId, url)
-        })
-        return
+    // 1. Block target — thumbnails are images by construction: model files
+    // skip this branch (fall through to tile creation).
+    const blockThumbFile = files.find(f => classifyFile(f) !== 'model')
+    if (blockThumbFile) {
+      for (const el of allEls) {
+        const block = el.closest('[data-layer-block]') as HTMLElement | null
+        if (block) {
+          const boardId = block.dataset.layerBlock!
+          uploadFile(blockThumbFile).then(({ url }) => {
+            useBoardsStore.getState().setBlockThumbnail(boardId, url)
+          })
+          return
+        }
       }
     }
     // 2. Free node
@@ -242,7 +248,7 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
     // Replace a bar's media[] with the newly dropped files (one set call, not N appends).
     const replaceBarMedia = (boardId: string, barId: string) => {
       Promise.all(files.map(f => uploadFile(f))).then(results => {
-        const media = results.map(r => ({ url: r.url, type: r.type as any }))
+        const media = results.map(r => ({ url: r.url, type: r.type, originalName: r.originalName }))
         useBoardsStore.getState().setContent(boardId, barId, { media })
       })
     }
@@ -304,9 +310,9 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
   }, [dropOnFreeNode, dropOnBareCanvas])
 
   const handleDrop = useCallback((e: React.DragEvent) => {
-    const files = Array.from(e.dataTransfer.files).filter(f =>
-      f.type.startsWith('image/') || f.type.startsWith('video/') || f.type.startsWith('audio/')
-    )
+    // Accepts image/video/audio AND 3D models (.glb/.gltf — MIME is often
+    // empty on Windows, so filtering lives in isAcceptedMediaFile).
+    const files = Array.from(e.dataTransfer.files).filter(isAcceptedMediaFile)
     if (files.length === 0) return
     e.preventDefault()
 

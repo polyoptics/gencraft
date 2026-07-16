@@ -1,10 +1,32 @@
 import { putMedia } from './mediaStore'
 import { makeMediaRef } from './mediaRef'
+import type { MediaType } from '../types/bar'
 
 export interface UploadResult {
   url: string
-  type: 'image' | 'video' | 'audio'
+  type: MediaType
   originalName: string
+}
+
+const MODEL_EXT = /\.(glb|gltf)$/i
+
+/** Classify a file into a MediaType. MIME-first with an extension fallback:
+ *  Windows commonly reports an EMPTY file.type for .glb/.gltf drags, so the
+ *  extension sniff is mandatory, not defensive. Single source of truth —
+ *  every drop filter and node-type derivation calls this. */
+export function classifyFile(file: File): MediaType {
+  const mime = file.type
+  if (mime.startsWith('video/')) return 'video'
+  if (mime.startsWith('audio/')) return 'audio'
+  if (mime.startsWith('model/') || MODEL_EXT.test(file.name)) return 'model'
+  return 'image'
+}
+
+/** True for any file kind the canvas accepts (image/video/audio/3D model). */
+export function isAcceptedMediaFile(f: File): boolean {
+  return f.type.startsWith('image/') || f.type.startsWith('video/')
+    || f.type.startsWith('audio/') || f.type.startsWith('model/')
+    || MODEL_EXT.test(f.name)
 }
 
 /**
@@ -15,15 +37,16 @@ export interface UploadResult {
  * so a drop is never lost.
  */
 export async function uploadFile(file: File): Promise<UploadResult> {
-  const mime = file.type
-  const type: UploadResult['type'] =
-    mime.startsWith('video/') ? 'video' : mime.startsWith('audio/') ? 'audio' : 'image'
+  const type = classifyFile(file)
   try {
     const form = new FormData()
     form.append('file', file)
     const res = await fetch('/api/upload', { method: 'POST', body: form })
     if (!res.ok) throw new Error(`Upload failed: ${res.status}`)
-    return await res.json()
+    // Keep the CLIENT classification — the upload server predates 'model'
+    // and would mislabel .glb as 'image'.
+    const json = await res.json()
+    return { ...json, type }
   } catch {
     // Server unavailable → keep it local: store the File (a Blob) in the
     // media blob store and reference it.
