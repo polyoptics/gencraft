@@ -154,7 +154,7 @@ function snapshotsApi(): Plugin {
     name: 'snapshots-api',
     configureServer(server) {
       // List all snapshots (metadata only)
-      server.middlewares.use('/api/snapshots/list', (req, res) => {
+      server.middlewares.use('/api/snapshots/list', (_req, res) => {
         res.setHeader('Content-Type', 'application/json')
         res.end(JSON.stringify(listSnapshots()))
       })

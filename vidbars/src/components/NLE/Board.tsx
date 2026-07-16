@@ -9,7 +9,7 @@ import { ColorPickerPopup } from '../Bar/ColorPickerPopup'
 import { NLELayout } from './NLELayout'
 import { groupBoardSlots, clampBoardX } from '../../utils/nlePush'
 import type { BoardSlot } from '../../utils/nlePush'
-import { computeGroupLayout, getRowY, dyToRowDelta, getBoardAbsolutePos } from '../../utils/nleRows'
+import { computeGroupLayout, getRowY, dyToRowDelta } from '../../utils/nleRows'
 import type { RowLayout } from '../../utils/nleRows'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 
@@ -80,10 +80,6 @@ export const Board: React.FC<Props> = React.memo(({ boardId }) => {
     const b = useBoardsStore.getState().boards[boardId]
     return Math.max(0, Math.round(b?.nleRow ?? 0))
   }, [boardId])
-
-  const setPosition = useCallback((row: number, x: number) => {
-    setBoardNlePos(boardId, row, x)
-  }, [boardId, setBoardNlePos])
 
   // Track ungrouped drag start
   const ungroupedStartX = useRef(0)

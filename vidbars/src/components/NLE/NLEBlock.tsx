@@ -22,8 +22,6 @@ import { DrawableSurface } from '../Annotation/DrawableSurface'
 import { PenButton } from '../Annotation/PenButton'
 import { useSeedHoverFromCursor } from '../../utils/pointerTracker'
 
-const MIN_H = 90
-
 interface Props {
   id: string
   top: number
@@ -33,18 +31,10 @@ interface Props {
   rowHeights: Record<number, number>
 }
 
-function darken(hex: string, amt = 0.35): string {
-  const n = parseInt(hex.replace('#', ''), 16)
-  const r = Math.max(0, (n >> 16) - Math.round(255 * amt))
-  const g = Math.max(0, ((n >> 8) & 0xff) - Math.round(255 * amt))
-  const b = Math.max(0, (n & 0xff) - Math.round(255 * amt))
-  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`
-}
-
 /** Draggable divider between header and body text in NLEBlock (board-level zoom ≥ 0.3) */
 const NLETextSplitDivider: React.FC<{
   ratio: number; onRatioChange: (r: number) => void
-}> = ({ ratio, onRatioChange }) => {
+}> = ({ onRatioChange }) => {
   const zoom = useCanvasStore(s => s.zoom)
   const [dragging, setDragging] = useState(false)
   const [hovered, setHovered] = useState(false)
@@ -94,8 +84,8 @@ export const NLEBlock: React.FC<Props> = React.memo(({ id, top, blockHeight, off
   const ctx = useBoardCtx()
   const {
     bars, selectedIds,
-    moveBar, moveMultiple, resizeBarEdge, setBarHeight, renameBar,
-    setSubtitle, setIcon, setColor, addChildToBar, addSiblingBar, addParentAbove,
+    moveBar, moveMultiple, resizeBarEdge, renameBar,
+    setIcon, setColor, addChildToBar, addSiblingBar, addParentAbove,
     setContent, toggleCollapsed, toggleSelection, setSelection, reorderSiblings,
     changeBarRow, reparentBar,
     getSelectedIds, getBars,
@@ -124,13 +114,12 @@ export const NLEBlock: React.FC<Props> = React.memo(({ id, top, blockHeight, off
   const [isHovered, setIsHovered] = useState(false)
   const [isRenaming, setIsRenaming] = useState(false)
   const [renameVal, setRenameVal] = useState('')
-  const [isRenamingSubtitle, setIsRenamingSubtitle] = useState(false)
-  const [subtitleVal, setSubtitleVal] = useState('')
+  const [isRenamingSubtitle] = useState(false)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
   const [showColorPicker, setShowColorPicker] = useState(false)
   const [colorPickerPos, setColorPickerPos] = useState({ x: 0, y: 0 })
   const [isDraggingReorder, setIsDraggingReorder] = useState(false)
-  const [gripOffsetY, setGripOffsetY] = useState(0)
+  const [, setGripOffsetY] = useState(0)
   const [colorDragging, setColorDragging] = useState(false)
   const [colorDragPos, setColorDragPos] = useState({ x: 0, y: 0 })
   const colorDragHasMoved = useRef(false)
@@ -181,7 +170,6 @@ export const NLEBlock: React.FC<Props> = React.memo(({ id, top, blockHeight, off
     targets.forEach(tid => renameBar(tid, name))
     setIsRenaming(false)
   }, [id, renameVal, renameBar, isSelected, selectedIds])
-  const commitSubtitle = useCallback(() => { setSubtitle(id, subtitleVal); setIsRenamingSubtitle(false) }, [id, subtitleVal, setSubtitle])
 
   const onGripDown = useCallback((e: React.PointerEvent) => {
     if (e.button !== 0) return
@@ -549,9 +537,7 @@ export const NLEBlock: React.FC<Props> = React.memo(({ id, top, blockHeight, off
 
   const compact = blockHeight < 72
   const medium  = blockHeight >= 72 && blockHeight < 105
-  const iconSz  = compact ? 0 : medium ? 20 : 28
   const bg = bar.color
-  const pillBg = darken(bg, 0.38)
   const nodeSelFx = isSelected ? selectionHighlight(bar.color, { ringWidthPx: 2.5, glowBlurPx: 22 }) : null
 
   return (
@@ -753,14 +739,7 @@ export const NLEBlock: React.FC<Props> = React.memo(({ id, top, blockHeight, off
           const { brighter1, brighter2, darker1, darker2 } = generateHoverVariants(bar.color)
           // 4 colors along top edge + left edge (card border only, not hypotenuse)
           // Top edge: right→left (brighter2, brighter1), Left edge: top→bottom (darker1, darker2)
-          const topLen = earSz
-          const leftLen = earSz
-          const totalLen = topLen + leftLen
-          const segLen = totalLen / 4
-          // L-shaped path: along top edge then down left edge
           const sw2 = stripW / 2
-          const pathD = `M ${earSz},${-sw2} L ${-sw2},${-sw2} L ${-sw2},${earSz}`
-          const variants = [brighter2, brighter1, darker1, darker2]
           return (
             <div
               ref={colorDotRef}

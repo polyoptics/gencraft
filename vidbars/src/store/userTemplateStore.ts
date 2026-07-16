@@ -43,7 +43,7 @@ function syncToFile(templates: SavedTemplate[]) {
   }).catch(() => { /* dev server might not be running */ })
 }
 
-export const useUserTemplateStore = create<UserTemplateStore>()((set, get) => ({
+export const useUserTemplateStore = create<UserTemplateStore>()((set, _get) => ({
   templates: [],
   _loaded: false,
 

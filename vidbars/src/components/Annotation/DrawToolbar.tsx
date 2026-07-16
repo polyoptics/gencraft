@@ -292,9 +292,8 @@ export const DrawToolbar: React.FC = () => {
           style={{
             writingMode: 'vertical-lr' as React.CSSProperties['writingMode'],
             direction: 'rtl',
-            // @ts-expect-error — vendor prefix not in TS lib
             WebkitAppearance: 'slider-vertical',
-            appearance: 'slider-vertical',
+            appearance: 'slider-vertical' as unknown as React.CSSProperties['appearance'],
             width: 8,
             height: 80,
             accentColor: '#7baed4',

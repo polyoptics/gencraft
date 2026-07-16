@@ -1,9 +1,9 @@
 import React, { useMemo, useState, useRef, useCallback } from 'react'
-import { useBoardsStore, getGroupForBoard } from '../../store/boardsStore'
+import { useBoardsStore } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useNLEViewerStore } from '../../store/nleViewerStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
-import { computeGroupLayout, getRowY, snapToCardGrid, CARD_GRID_SPACING } from '../../utils/nleRows'
+import { computeGroupLayout, snapToCardGrid, CARD_GRID_SPACING } from '../../utils/nleRows'
 import { groupSlot, clampGroupMove } from '../../utils/nlePush'
 import type { GroupSlot } from '../../utils/nlePush'
 import { isHiddenDeckMember, expandWithNestedMembers } from '../../hooks/useCardDecks'
@@ -215,9 +215,6 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, icon
     const segs: Segment[] = []
     const groupOriginX = group?.originX ?? 0
     const groupOriginY = group?.originY ?? 0
-    const groupLayout = group
-      ? computeGroupLayout(group.boardIds, boards)
-      : computeGroupLayout(scopedBoardIds, boards)
 
     scopedBoardIds.forEach(bid => {
       const board = boards[bid]
@@ -286,7 +283,6 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, icon
   const screenHeight = headerScreenH(zoom)
   const screenTop    = screenBottom - screenHeight
   const effectiveWidth = Math.max(screenWidth, 40)
-  const isNarrow = effectiveWidth < 90
   const isTiny = effectiveWidth < 50
 
   if (screenLeft + screenWidth < 0 || screenTop + screenHeight < 0) return null

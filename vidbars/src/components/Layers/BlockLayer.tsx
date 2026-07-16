@@ -14,9 +14,8 @@ import { DEFAULT_BLOCK_HEADER_STYLE, DEFAULT_BODY_STYLE } from '../../store/free
 import type { TextStyle } from '../../store/freeNodeStore'
 import type { TextFieldMode } from '../UI/TextFormatToolbar'
 import { TextFormatToolbar, hexToRgba, ensureFontLoaded } from '../UI/TextFormatToolbar'
-import { computeGroupLayout, getRowY, getRowHeight, dyToRowDelta, getBoardAbsolutePos } from '../../utils/nleRows'
+import { computeGroupLayout, getRowY, dyToRowDelta } from '../../utils/nleRows'
 import { PortalFrame, computeGroupBlockFootprint } from './PortalFrame'
-import type { RowLayout } from '../../utils/nleRows'
 import { groupBoardSlots, clampBoardX } from '../../utils/nlePush'
 import { tryDockGroupAtRest, updateDeckMagnetPreview } from '../../utils/deckDockDrag'
 import { useMagnetPreviewStore } from '../../store/magnetPreviewStore'
@@ -144,7 +143,7 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
       | { id: string; kind: 'ungrouped'; startCX: number; startCY: number }
       | { id: string; kind: 'grouped'; groupId: string; initialRow: number; initialX: number }
     const multiStarts: MultiStart[] = isMulti
-      ? multiIds.flatMap(bid => {
+      ? multiIds.flatMap((bid): MultiStart[] => {
           const b = bs0.boards[bid]
           if (!b) return []
           const g = getGroupForBoard(bs0.groups, bid)
@@ -940,7 +939,7 @@ const Overlay: React.FC = () => {
 // ── Block-level text split divider ──
 const BlockTextSplitDivider: React.FC<{
   ratio: number; onRatioChange: (r: number) => void; visible: boolean
-}> = ({ ratio, onRatioChange, visible }) => {
+}> = ({ onRatioChange, visible }) => {
   const zoom = useCanvasStore(s => s.zoom)
   const [dragging, setDragging] = useState(false)
   const [hovered, setHovered] = useState(false)

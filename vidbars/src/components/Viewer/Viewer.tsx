@@ -28,8 +28,6 @@ interface Props {
 }
 
 export const Viewer: React.FC<Props> = ({ boardId }) => {
-  const isPrimary = boardId === 'primary'
-
   const board        = useBoardsStore(s => s.boards[boardId])
   const viewerBarId  = useBoardsStore(s => s.boards[boardId]?.viewerBarId ?? null)
   const bars         = useBoardsStore(s => s.boards[boardId]?.bars ?? {})

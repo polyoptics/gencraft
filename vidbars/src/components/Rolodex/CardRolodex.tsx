@@ -854,10 +854,6 @@ export const CardRolodex: React.FC = () => {
   // Round the float position to pick the preview card. Snaps at 0.5 between
   // adjacent indices, which is the natural moment for the preview to swap.
   const centerPosition = positionRef.current
-  // previewIndex retained for end-of-list cabinet logic / future preview
-  // re-introduction; previously also fed CardPreview but that component
-  // is no longer mounted here.
-  const previewIndex = Math.round(centerPosition)
 
   // ── Lay out the visible stack via prefix-sums ─────────────
   // Each card's "size" (visible height of its top tab) is a bell-bonus around
@@ -1151,7 +1147,6 @@ export const CardRolodex: React.FC = () => {
   // top corners overlap and "round off" the card's bottom.
   const notchH = Math.min(CABINET_NOTCH_RADIUS, cabinetH)
   const barH = cabinetH - notchH
-  const isAtEndOfList = rows.length > 0 && previewIndex === rows.length - 1
 
   return (
     <>

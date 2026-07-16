@@ -4,7 +4,7 @@ import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useBoardsStore } from '../../store/boardsStore'
 import { clampToNoParkZone } from '../../utils/nleZone'
 import { uploadFile, classifyFile, isAcceptedMediaFile } from '../../utils/uploadFile'
-import { computeGroupLayout, getRowY, getRowHeight, boardContentHeight, CARD_GRID_SPACING } from '../../utils/nleRows'
+import { computeGroupLayout, getRowY, getRowHeight, CARD_GRID_SPACING } from '../../utils/nleRows'
 import { useViewport3DStore, VIEWPORT3D_DEFAULT_W, VIEWPORT3D_DEFAULT_H } from '../../store/viewport3dStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { nextFreeEdgeSlot } from '../../utils/viewportDocking'
@@ -16,7 +16,7 @@ interface Props {
   initialCenterH?: number
 }
 
-export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 1000, initialCenterH = 300 }) => {
+export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 1000 }) => {
   const containerRef = useRef<HTMLDivElement>(null)
   const pan = useCanvasStore(s => s.pan)
   const zoom = useCanvasStore(s => s.zoom)

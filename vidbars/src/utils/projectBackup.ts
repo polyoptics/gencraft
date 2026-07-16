@@ -93,7 +93,7 @@ function buildBackup(): ProjectBackup {
 function collectRefIds(backup: ProjectBackup): Set<string> {
   const ids = new Set<string>()
   const add = (v: unknown) => {
-    if (isMediaRef(v)) { const id = mediaRefId(v as string); if (id) ids.add(id) }
+    if (isMediaRef(v as string | null | undefined)) { const id = mediaRefId(v as string); if (id) ids.add(id) }
   }
   const s = backup.stores
   for (const node of Object.values(s.freenodes?.nodes ?? {})) add((node as { imageUrl?: unknown }).imageUrl)
@@ -148,7 +148,7 @@ export async function exportProject(): Promise<void> {
     zip(files, (err, data) => (err ? reject(err) : resolve(data))),
   )
 
-  const blob = new Blob([zipped], { type: 'application/zip' })
+  const blob = new Blob([zipped as unknown as BlobPart], { type: 'application/zip' })
   const url = URL.createObjectURL(blob)
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
   const a = document.createElement('a')

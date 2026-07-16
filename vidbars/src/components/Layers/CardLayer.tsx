@@ -5,7 +5,7 @@
 import React, { useMemo, useState, useCallback, useRef, useLayoutEffect, useDeferredValue, Fragment } from 'react'
 import ReactDOM from 'react-dom'
 import { useBoardsStore, getUngroupedBoardIds } from '../../store/boardsStore'
-import type { ProjectGroup, BoardData } from '../../store/boardsStore'
+import type { ProjectGroup } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { DEFAULT_HEADER_STYLE, DEFAULT_BODY_STYLE } from '../../store/freeNodeStore'
@@ -1342,7 +1342,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
   const selectedGhostIds = useCanvasStore(s => s.selectedGhostGroupIds)
   const extractingCardId = useCanvasStore(s => s.extractingCardId)
   const fanTransition = useCanvasStore(s => s.fanTransition)
-  const [isHovered, setIsHovered] = useState(false)
+  const [, setIsHovered] = useState(false)
   const [cardMenu, setCardMenu] = useState<{ x: number; y: number } | null>(null)
   const [surfacedId, setSurfacedId] = useState<string | null>(null)
   const [isEditingHero, setIsEditingHero] = useState(false)
@@ -1461,8 +1461,6 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
     })
     return [...real, ...ghosts].sort((a, b) => a.sortKey - b.sortKey)
   }, [deck.memberIds, deck.rects, anchorGroup.id, anchorGroup.originX, anchorGroup.ghostSlots, groups, allGroups, boards])
-  // Backward-compat for any code still expecting just real members.
-  const secondaryCards = secondaryItems.filter(it => it.kind === 'real').map(it => (it as any).group as ProjectGroup)
 
   // Fan-strip geometry is in SCREEN px (this overlay is screen-space), so
   // it normally stays a fixed size while the primary card scales by zoom.
@@ -2422,60 +2420,6 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
 
 const FannedDeckOverlay = React.memo(FannedDeckOverlayInner)
 
-/** Deck state transition buttons */
-const DeckControls: React.FC<{
-  left: number; top: number
-  onFan?: () => void
-  onStack?: () => void
-  onOpen?: () => void
-  mode: 'stacked' | 'fanned' | 'affordance'
-}> = ({ left, top, onFan, onStack, onOpen, mode }) => {
-  const btnStyle: React.CSSProperties = {
-    background: 'rgba(30,31,48,0.95)', color: '#e2e8f0',
-    border: '1px solid rgba(255,255,255,0.15)', borderRadius: 6,
-    padding: '3px 8px', fontSize: 10, fontWeight: 600,
-    cursor: 'pointer', pointerEvents: 'all',
-    boxShadow: '0 2px 8px rgba(0,0,0,0.5)',
-  }
-  return (
-    <div
-      style={{
-        position: 'absolute',
-        left, top,
-        transform: 'translateX(-50%)',
-        display: 'flex', gap: 4,
-        zIndex: 60,
-        pointerEvents: 'all',
-      }}
-    >
-      {mode === 'stacked' && onFan && (
-        <button style={btnStyle} onClick={e => { e.stopPropagation(); onFan() }}
-          onPointerDown={e => { if (e.button === 0) e.stopPropagation() }}>Fan</button>
-      )}
-      {mode === 'stacked' && onOpen && (
-        <button style={btnStyle} onClick={e => { e.stopPropagation(); onOpen() }}
-          onPointerDown={e => { if (e.button === 0) e.stopPropagation() }}>Open</button>
-      )}
-      {mode === 'fanned' && onStack && (
-        <button style={btnStyle} onClick={e => { e.stopPropagation(); onStack() }}
-          onPointerDown={e => { if (e.button === 0) e.stopPropagation() }}>Stack</button>
-      )}
-      {mode === 'fanned' && onOpen && (
-        <button style={btnStyle} onClick={e => { e.stopPropagation(); onOpen() }}
-          onPointerDown={e => { if (e.button === 0) e.stopPropagation() }}>Open</button>
-      )}
-      {mode === 'affordance' && onStack && (
-        <button style={btnStyle} onClick={e => { e.stopPropagation(); onStack() }}
-          onPointerDown={e => { if (e.button === 0) e.stopPropagation() }}>Stack</button>
-      )}
-      {mode === 'affordance' && onFan && (
-        <button style={btnStyle} onClick={e => { e.stopPropagation(); onFan() }}
-          onPointerDown={e => { if (e.button === 0) e.stopPropagation() }}>Fan</button>
-      )}
-    </div>
-  )
-}
-
 /** Compute card screen rect using the same geometry as GroupCard */
 export function cardScreenRect(g: ProjectGroup, boards: Record<string, import('../../store/boardsStore').BoardData>, pan: { x: number; y: number }, zoom: number) {
   const groupLayout = computeGroupLayout(g.boardIds, boards)
@@ -3389,8 +3333,7 @@ const TextSplitDivider: React.FC<{
   ratio: number
   onRatioChange: (r: number) => void
   visible: boolean
-}> = ({ ratio, onRatioChange, visible }) => {
-  const zoom = useCanvasStore(s => s.zoom)
+}> = ({ onRatioChange, visible }) => {
   const [dragging, setDragging] = useState(false)
   const [hovered, setHovered] = useState(false)
 
@@ -3475,7 +3418,6 @@ export const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void
   const headerBg = hexToRgba(headerTs.bgColor, headerTs.bgOpacity)
   const bodyBg = hexToRgba(bodyTs.bgColor, bodyTs.bgOpacity)
   const rect = selected && wrapperRef.current ? wrapperRef.current.getBoundingClientRect() : null
-  const hasContent = !!(headerText || bodyText)
 
   const commitHeader = useCallback(() => {
     useBoardsStore.getState().setGroupCardHeaderText(groupId, headerVal)
@@ -3687,7 +3629,6 @@ const UngroupedCardText: React.FC<{ boardId: string }> = ({ boardId }) => {
   const headerBg = hexToRgba(headerTs.bgColor, headerTs.bgOpacity)
   const bodyBg = hexToRgba(bodyTs.bgColor, bodyTs.bgOpacity)
   const rect = selected && wrapperRef.current ? wrapperRef.current.getBoundingClientRect() : null
-  const hasContent = !!(headerText || bodyText)
 
   const commitHeader = useCallback(() => {
     useBoardsStore.getState().setCardHeaderText(boardId, headerVal)

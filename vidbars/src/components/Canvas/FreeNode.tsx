@@ -413,7 +413,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
       onPointerDown={onNodeDown}
       onPointerMove={onNodeMove}
       onPointerUp={onNodeUp}
-      onDoubleClick={e => {
+      onDoubleClick={() => {
         if (dragHasMoved.current) return
         // Header label has its own dblclick handler for rename.
         // For text nodes, double-click on body → trigger text edit.
@@ -904,16 +904,12 @@ const ModelTileBody: React.FC<{
 
 // ── Text Format Toolbar (portalled above the node) ──
 
-const PRESET_BG_COLORS = ['#000000', '#1e1b4b', '#1e3a2f', '#3b1520', '#1e293b', '#transparent']
-
 const TextFormatToolbar: React.FC<{
   node: FreeNodeData
   id: string
   updateFreeNode: (id: string, patch: Partial<FreeNodeData>) => void
   wrapperRef: React.RefObject<HTMLDivElement | null>
 }> = ({ node, id, updateFreeNode, wrapperRef }) => {
-  const zoom = useCanvasStore(s => s.zoom)
-  const pan = useCanvasStore(s => s.pan)
   const selectedIds = useFreeNodeStore(s => s.selectedIds)
   const allNodes = useFreeNodeStore(s => s.nodes)
   const [showPopup, setShowPopup] = useState<'text' | 'bg' | 'hAlign' | 'vAlign' | 'font' | 'weight' | 'lineHeight' | 'spacing' | 'transform' | null>(null)

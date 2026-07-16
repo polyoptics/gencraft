@@ -2,7 +2,7 @@
  * Pure bar-mutation functions.
  * All operate on (bars, rootIds) and return new state — no store dependency.
  */
-import type { Bar, BarContent } from '../types/bar'
+import type { Bar } from '../types/bar'
 
 // ── Constants ──────────────────────────────────────────────
 export const DEFAULT_CHILD_W = 240

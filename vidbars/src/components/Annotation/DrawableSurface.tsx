@@ -21,7 +21,7 @@
 import React, { useRef, useState, useCallback, useEffect } from 'react'
 import { useCanvasStore } from '../../store/canvasStore'
 import { sameSurface, surfaceId, type Stroke, type StrokePoint, type DrawSurface } from '../../types/stroke'
-import { addStroke, deleteStroke, readStrokes } from '../../utils/strokeActions'
+import { addStroke, deleteStroke } from '../../utils/strokeActions'
 import { StrokeLayer } from './StrokeLayer'
 
 interface Props {

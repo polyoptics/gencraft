@@ -74,7 +74,6 @@ export const FONT_LIST: { label: string; value: string; google?: boolean }[] = [
 
 // ── Google Font loader ──
 const loadedGoogleFonts = new Set<string>()
-const googleFontLabels = new Set(FONT_LIST.filter(f => f.google).map(f => f.label))
 const fontValueToLabel = new Map(FONT_LIST.filter(f => f.google).map(f => [f.value, f.label]))
 
 export function loadGoogleFont(label: string) {
@@ -390,7 +389,6 @@ export const TextFormatToolbar: React.FC<TextFormatToolbarProps> = ({
   // Close toolbar on outside click — replaces the blocking backdrop div.
   // A single click on empty canvas should close every sub-UI the toolbar owns
   // (any open popup, any in-progress size edit) AND tell the parent to exit.
-  const toolbarRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!onClose) return
     const handler = (e: PointerEvent) => {
