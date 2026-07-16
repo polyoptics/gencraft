@@ -57,3 +57,27 @@ export function frameModel(root: THREE.Object3D, fovDeg = 50): { orbit: OrbitSta
 export function dollyBounds(o: OrbitState): { min: number; max: number } {
   return { min: o.radius * 0.05, max: o.radius * 10 }
 }
+
+const _right = new THREE.Vector3()
+const _up = new THREE.Vector3()
+
+/** Truck/pedestal pan: shift the orbit TARGET along the camera's right/up
+ *  basis so the view slides without rotating. Screen deltas are converted
+ *  at the target's distance (world-per-pixel from the vertical fov), using
+ *  the window's VISUAL height — zoom-invariant like the orbit rotation. */
+export function panOrbit(
+  o: OrbitState,
+  cam: THREE.PerspectiveCamera,
+  dxPx: number,
+  dyPx: number,
+  screenHpx: number,
+): void {
+  const wpp = (2 * o.radius * Math.tan((cam.fov * Math.PI / 180) / 2)) / Math.max(1, screenHpx)
+  // Camera basis from its world matrix (applyOrbit ran last frame; position
+  // + lookAt keep it current). Columns: 0 = right, 1 = up.
+  _right.setFromMatrixColumn(cam.matrixWorld, 0)
+  _up.setFromMatrixColumn(cam.matrixWorld, 1)
+  o.tx += -dxPx * wpp * _right.x + dyPx * wpp * _up.x
+  o.ty += -dxPx * wpp * _right.y + dyPx * wpp * _up.y
+  o.tz += -dxPx * wpp * _right.z + dyPx * wpp * _up.z
+}

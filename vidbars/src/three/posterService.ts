@@ -34,7 +34,13 @@ export const usePosterMapStore = create<PosterMapStore>()(persist((set) => ({
   name: 'vidbars-model-posters',
   storage: createDebouncedIDBStorage(400),
   partialize: (s) => ({ map: s.map }),
-  version: 0,
+  // v3: readRenderTargetPixels returns LINEAR values (three's sRGB output
+  // encoding only applies to the canvas framebuffer), so earlier posters
+  // were written linear → displayed dark. Drop them all; regeneration now
+  // sRGB-encodes the readback (+ brighter rig). (v3 not v2: an HMR race
+  // during development persisted stale entries under version 2.)
+  version: 3,
+  migrate: () => ({ map: {} }),
 }))
 
 /** Sync lookup — a `mediaref:` (resolvable via useResolvedMedia) or null. */
@@ -72,12 +78,17 @@ async function generatePoster(modelUrl: string): Promise<string | null> {
   try {
     root = await acquireModel(modelUrl)
 
+    // Poster rig is deliberately BRIGHTER than the live viewport — at tile
+    // size a dim render reads as murky.
     const scene = new THREE.Scene()
-    scene.background = new THREE.Color(0x0d0e1a)
-    scene.add(new THREE.HemisphereLight(0xffffff, 0x444466, 1.2))
-    const dir = new THREE.DirectionalLight(0xffffff, 1.5)
+    scene.background = new THREE.Color(0x232738)
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x555577, 2.0))
+    const dir = new THREE.DirectionalLight(0xffffff, 2.2)
     dir.position.set(3, 5, 4)
     scene.add(dir)
+    const fill = new THREE.DirectionalLight(0xaaccff, 0.8)
+    fill.position.set(-4, 2, -3)
+    scene.add(fill)
     scene.add(root)
 
     const camera = new THREE.PerspectiveCamera(50, POSTER_W / POSTER_H, 0.1, 100)
@@ -99,7 +110,15 @@ async function generatePoster(modelUrl: string): Promise<string | null> {
     renderer.setRenderTarget(prevTarget)
     renderer.setScissorTest(prevScissor)
 
-    // GL rows are bottom-up — flip into a 2D canvas.
+    // Render-target readback is LINEAR (three applies sRGB output encoding
+    // only to the canvas framebuffer) — encode to sRGB or the PNG displays
+    // dark. 256-entry LUT, then flip rows (GL is bottom-up) into a canvas.
+    const toSRGB = new Uint8Array(256)
+    for (let i = 0; i < 256; i++) {
+      const l = i / 255
+      const s = l <= 0.0031308 ? 12.92 * l : 1.055 * Math.pow(l, 1 / 2.4) - 0.055
+      toSRGB[i] = Math.round(Math.min(1, Math.max(0, s)) * 255)
+    }
     const cnv = document.createElement('canvas')
     cnv.width = POSTER_W; cnv.height = POSTER_H
     const ctx = cnv.getContext('2d')!
@@ -107,7 +126,13 @@ async function generatePoster(modelUrl: string): Promise<string | null> {
     const rowBytes = POSTER_W * 4
     for (let y = 0; y < POSTER_H; y++) {
       const src = (POSTER_H - 1 - y) * rowBytes
-      img.data.set(pixels.subarray(src, src + rowBytes), y * rowBytes)
+      const dst = y * rowBytes
+      for (let x = 0; x < rowBytes; x += 4) {
+        img.data[dst + x] = toSRGB[pixels[src + x]]
+        img.data[dst + x + 1] = toSRGB[pixels[src + x + 1]]
+        img.data[dst + x + 2] = toSRGB[pixels[src + x + 2]]
+        img.data[dst + x + 3] = pixels[src + x + 3]
+      }
     }
     ctx.putImageData(img, 0, 0)
     const blob = await new Promise<Blob | null>(res => cnv.toBlob(res, 'image/png'))

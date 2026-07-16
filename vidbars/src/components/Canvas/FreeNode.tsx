@@ -16,16 +16,21 @@ import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { useViewport3DStore } from '../../store/viewport3dStore'
 import { useMagnetPreviewStore } from '../../store/magnetPreviewStore'
 import { findMagnetCandidate, type WindowRect } from '../../utils/viewportDocking'
-import { ensureModelPoster } from '../../three/posterService'
+import { ensureModelPoster, getModelPoster, useModelPoster } from '../../three/posterService'
 import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
 import { DrawableSurface } from '../Annotation/DrawableSurface'
 import { PenButton } from '../Annotation/PenButton'
 import { useSeedHoverFromCursor } from '../../utils/pointerTracker'
 
 
-interface Props { id: string }
+interface Props {
+  id: string
+  /** When this model tile's cluster touches a 3D viewport window, the
+   *  window's id — enables the connected affordance + click-to-load. */
+  connectedWindowId?: string | null
+}
 
-export const FreeNode: React.FC<Props> = React.memo(({ id }) => {
+export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = null }) => {
   const node = useFreeNodeStore(s => s.nodes[id])
   const moveFreeNode = useFreeNodeStore(s => s.moveFreeNode)
   const moveManyFreeNodes = useFreeNodeStore(s => s.moveManyFreeNodes)
@@ -108,6 +113,11 @@ export const FreeNode: React.FC<Props> = React.memo(({ id }) => {
 
   const onNodeUp = useCallback((e: React.PointerEvent) => {
     if (!wrapperRef.current?.hasPointerCapture(e.pointerId)) return
+    // Fresh read up front — NOTE: this intentionally shadows the component-
+    // scope `node`; declaring it lower created a temporal-dead-zone throw
+    // for any reference above the declaration (broke no-drag clicks).
+    const node = useFreeNodeStore.getState().nodes[id]
+    if (!node) return
     if (!dragHasMoved.current) {
       if (e.shiftKey) toggleFreeSelection(id)
       else {
@@ -117,10 +127,14 @@ export const FreeNode: React.FC<Props> = React.memo(({ id }) => {
           setTextEditing(true)
         }
         setFreeSelection([id])
+        // Connected model tile: a plain click also shows its model in the
+        // viewport window its cluster touches (in addition to the strip).
+        if (node.type === 'model' && connectedWindowId && node.imageUrl) {
+          useViewport3DStore.getState().setActiveModel(connectedWindowId, node.imageUrl)
+        }
       }
     }
     // Transfer node content to a bar/card on drop
-    const node = useFreeNodeStore.getState().nodes[id]
     // Magnet dock: a model tile released near a viewport window edge snaps
     // flush and loads its model. The tile is KEPT (dock membership stays
     // derived from its position) — this outranks the transfer scan below.
@@ -148,10 +162,15 @@ export const FreeNode: React.FC<Props> = React.memo(({ id }) => {
         const transferToBar = (boardId: string, barId: string) => {
           if (hasMedia && node.imageUrl) {
             const curMedia = useBoardsStore.getState().boards[boardId]?.bars[barId]?.content.media ?? []
+            // Models: the poster may live only in the shared map (map-first
+            // rendering skips writing node.posterUrl) — carry it either way
+            // so bar heroes can show it.
+            const posterUrl = node.posterUrl
+              ?? (mediaType === 'model' ? getModelPoster(node.imageUrl) : null)
             useBoardsStore.getState().setContent(boardId, barId, {
               media: [...curMedia, {
                 url: node.imageUrl, type: mediaType,
-                ...(node.posterUrl ? { posterUrl: node.posterUrl } : {}),
+                ...(posterUrl ? { posterUrl } : {}),
                 ...(node.label ? { originalName: node.label } : {}),
               }],
             })
@@ -184,14 +203,27 @@ export const FreeNode: React.FC<Props> = React.memo(({ id }) => {
         }
 
         // Block zoom (0.17–0.3): transfer to block-level independent text.
-        // Model tiles never transfer here — block thumbnails are images by
-        // construction (a .glb URL in an <img> renders broken), and consuming
-        // the tile would destroy the model reference. The tile just stays.
-        if (!transferred && mediaType !== 'model') {
+        // Model tiles transfer INTO the board's content (root bar media —
+        // so the block "has" the model); the thumbnail only ever receives
+        // the model's POSTER (a .glb URL in an <img> renders broken), and
+        // only when the block has none yet.
+        if (!transferred) {
           for (const el of allEls) {
             const block = el.closest('[data-layer-block]') as HTMLElement | null
             if (block) {
               const targetBoardId = block.getAttribute('data-layer-block')!
+              if (mediaType === 'model') {
+                const b = useBoardsStore.getState().boards[targetBoardId]
+                const rootBar = b?.rootIds[0]
+                if (!rootBar) break   // no bar to hold the model — leave the tile
+                const poster = node.posterUrl ?? (node.imageUrl ? getModelPoster(node.imageUrl) : null)
+                if (poster && !b.layers?.block?.thumbnail) {
+                  useBoardsStore.getState().setBlockThumbnail(targetBoardId, poster)
+                }
+                transferToBar(targetBoardId, rootBar)   // appends media + deletes node
+                transferred = true
+                break
+              }
               if (hasText) {
                 const curText = useBoardsStore.getState().boards[targetBoardId]?.layers?.block?.text ?? ''
                 const newText = curText ? curText + '\n' + node.text : node.text
@@ -208,8 +240,10 @@ export const FreeNode: React.FC<Props> = React.memo(({ id }) => {
         }
 
         // Card zoom (≤ 0.17): transfer to card-level independent text.
-        // Model tiles skip this too — card heroes are images by construction.
-        if (!transferred && mediaType !== 'model') {
+        // Model tiles transfer INTO the card's content (first board's root
+        // bar media — enabling decks of models); the hero only ever gets
+        // the model's POSTER, and only when the card has none yet.
+        if (!transferred) {
           for (const el of allEls) {
             const card = el.closest('[data-nle-card]') as HTMLElement | null
             if (card) {
@@ -217,6 +251,25 @@ export const FreeNode: React.FC<Props> = React.memo(({ id }) => {
               // Check if this is a group card or ungrouped
               const layerCard = card.closest('[data-layer-card]') as HTMLElement | null
               const groupId = layerCard?.getAttribute('data-layer-card')
+
+              if (mediaType === 'model') {
+                const bs = useBoardsStore.getState()
+                const group = groupId ? bs.groups.find(g => g.id === groupId) : undefined
+                const modelBoardId = group ? group.boardIds[0] : targetBoardId
+                const rootBar = bs.boards[modelBoardId]?.rootIds[0]
+                if (!rootBar) break   // nowhere to hold the model — leave the tile
+                const poster = node.posterUrl ?? (node.imageUrl ? getModelPoster(node.imageUrl) : null)
+                if (poster) {
+                  if (group && !group.cardHeroImage) {
+                    bs.setGroupCardHeroImage(group.id, poster)
+                  } else if (!group && !bs.boards[targetBoardId]?.layers?.card?.heroImage) {
+                    bs.setCardHeroImage(targetBoardId, poster)
+                  }
+                }
+                transferToBar(modelBoardId, rootBar)   // appends media + deletes node
+                transferred = true
+                break
+              }
 
               if (hasText) {
                 if (groupId) {
@@ -247,7 +300,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id }) => {
       }
     }
     // No transfer happened — user placed the node here intentionally, leave it.
-  }, [id, node?.type, isSelected, isRenaming, setFreeSelection, toggleFreeSelection])
+  }, [id, node?.type, node?.imageUrl, connectedWindowId, isSelected, isRenaming, setFreeSelection, toggleFreeSelection])
 
   // Resize handle
   const onResizeDown = useCallback((e: React.PointerEvent) => {
@@ -299,7 +352,11 @@ export const FreeNode: React.FC<Props> = React.memo(({ id }) => {
         height: node.height,
         borderRadius: 10 / zoom,
         background: node.color,
-        border: `${borderW}px solid rgba(255,255,255,${isHovered ? 0.18 : 0.08})`,
+        // Connected-to-viewport model tiles carry the accent tint — the
+        // same "these things are linked" language as touching deck cards.
+        border: `${borderW}px solid ${connectedWindowId
+          ? `rgba(120,170,255,${isHovered ? 0.65 : 0.45})`
+          : `rgba(255,255,255,${isHovered ? 0.18 : 0.08})`}`,
         boxShadow: isSelected
           ? `0 0 0 ${2.5 / zoom}px rgba(120,180,255,0.9), 0 ${8 / zoom}px ${32 / zoom}px rgba(0,0,0,0.55)`
           : isHovered ? `0 ${8 / zoom}px ${32 / zoom}px rgba(0,0,0,0.55)` : `0 ${2 / zoom}px ${12 / zoom}px rgba(0,0,0,0.4)`,
@@ -353,7 +410,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id }) => {
         ) : node.type === 'audio' ? (
           <span style={{ fontSize: fontSize * 0.75, color: 'rgba(255,255,255,0.35)', lineHeight: 1, flexShrink: 0 }}>♪</span>
         ) : node.type === 'model' ? (
-          <span style={{ fontSize: fontSize * 0.75, color: 'rgba(255,255,255,0.35)', lineHeight: 1, flexShrink: 0 }}>◆</span>
+          <span style={{ fontSize: fontSize * 0.75, color: connectedWindowId ? 'rgba(140,190,255,0.9)' : 'rgba(255,255,255,0.35)', lineHeight: 1, flexShrink: 0 }}>◆</span>
         ) : (
           <div style={{ width: dotSize, height: dotSize, borderRadius: '50%', background: 'rgba(255,255,255,0.22)', flexShrink: 0 }} />
         )}
@@ -765,18 +822,23 @@ const ModelTileBody: React.FC<{
   dz: number
   updateFreeNode: (id: string, patch: Partial<FreeNodeData>) => void
 }> = ({ node, id, dz, updateFreeNode }) => {
-  const resolvedPoster = useResolvedMedia(node.posterUrl ?? null)
-  // Lazy poster: generate once via the shared renderer and persist the ref
-  // on the node (so transfers/exports carry it). Null result (renderer not
-  // ready / load failure) just retries on a later mount.
+  // MAP-first poster: the persisted url→poster map is the source of truth
+  // (its version bump invalidates stale renders); node.posterUrl is the
+  // durable/transfer copy and the fallback while the map refills.
+  const mapPoster = useModelPoster(node.imageUrl ?? null)
+  const resolvedPoster = useResolvedMedia(mapPoster ?? node.posterUrl ?? null)
+  // Lazy generation whenever the MAP lacks this model (first ever render,
+  // or after a poster-version migration cleared it); syncs the fresh ref
+  // onto the node. Null result (renderer not ready / load failure) just
+  // retries on a later mount.
   useEffect(() => {
-    if (node.posterUrl || !node.imageUrl) return
+    if (!node.imageUrl || mapPoster) return
     let live = true
     ensureModelPoster(node.imageUrl)
-      .then(ref => { if (live && ref) updateFreeNode(id, { posterUrl: ref }) })
+      .then(ref => { if (live && ref && ref !== node.posterUrl) updateFreeNode(id, { posterUrl: ref }) })
       .catch(() => {})
     return () => { live = false }
-  }, [node.imageUrl, node.posterUrl, id, updateFreeNode])
+  }, [node.imageUrl, mapPoster, node.posterUrl, id, updateFreeNode])
   return (
     <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', overflow: 'hidden' }}>
       {resolvedPoster ? (

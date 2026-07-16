@@ -1,32 +1,34 @@
-// ViewportSwitcherStrip.tsx — the model "playlist" chips at the bottom of
-// a viewport window, listing every model docked to it (derived — see
-// useDockedModels). Click a chip → that model loads. Also owns the
-// active-model RECONCILIATION: default to the first docked model, fall
-// back when the active one undocks, clear when nothing is docked.
-// Reconciliation is debounced (300ms) so a tile mid-drag crossing the
-// dock boundary doesn't thrash model loads.
+// ViewportSwitcherStrip.tsx — the source "playlist" at the bottom of a
+// viewport window. One chip per connected SOURCE: tiles show their model
+// poster; cards/decks show the card's FACE (hero) with a ×N badge when
+// they hold several models — clicking a card chip shows its first model,
+// clicking again cycles through them. Also owns the active-model
+// RECONCILIATION: default to the first available model, fall back when
+// the active one disconnects, clear when nothing is connected — debounced
+// (300ms) so a tile mid-drag crossing the boundary doesn't thrash loads.
 
 import React, { useEffect, useRef } from 'react'
 import { useViewport3DStore } from '../../store/viewport3dStore'
 import { useCanvasStore } from '../../store/canvasStore'
-import { useDockedModels } from '../../hooks/useDockedModels'
+import { useDockedSources, flattenSourceModels, type DockedSource } from '../../hooks/useDockedModels'
 import { useResolvedMedia } from '../../utils/useResolvedMedia'
 
 export const ViewportSwitcherStrip: React.FC<{ windowId: string }> = ({ windowId }) => {
   const win = useViewport3DStore(s => s.windows[windowId])
   const setActiveModel = useViewport3DStore(s => s.setActiveModel)
   const zoom = useCanvasStore(s => s.zoom)
-  const docked = useDockedModels(windowId)
+  const sources = useDockedSources(windowId)
   const reconcileTimer = useRef<number | null>(null)
 
   const active = win?.activeModelUrl ?? null
+  const flat = flattenSourceModels(sources)
 
   // ── Reconciliation (debounced for drag-transition stability) ──
   useEffect(() => {
     if (!win) return
-    const desired = docked.length === 0
+    const desired = flat.length === 0
       ? null
-      : (active && docked.some(m => m.url === active)) ? active : docked[0].url
+      : (active && flat.some(m => m.url === active)) ? active : flat[0].url
     if (desired === active) {
       if (reconcileTimer.current !== null) { window.clearTimeout(reconcileTimer.current); reconcileTimer.current = null }
       return
@@ -34,7 +36,6 @@ export const ViewportSwitcherStrip: React.FC<{ windowId: string }> = ({ windowId
     if (reconcileTimer.current !== null) window.clearTimeout(reconcileTimer.current)
     reconcileTimer.current = window.setTimeout(() => {
       reconcileTimer.current = null
-      // Re-check against live state — things move fast during drags.
       const liveWin = useViewport3DStore.getState().windows[windowId]
       if (liveWin && liveWin.activeModelUrl === active) {
         setActiveModel(windowId, desired)
@@ -43,11 +44,21 @@ export const ViewportSwitcherStrip: React.FC<{ windowId: string }> = ({ windowId
     return () => {
       if (reconcileTimer.current !== null) { window.clearTimeout(reconcileTimer.current); reconcileTimer.current = null }
     }
-  }, [win, docked, active, windowId, setActiveModel])
+  }, [win, flat, active, windowId, setActiveModel])
 
-  if (!win || docked.length < 2) return null   // a single model needs no picker
+  // Show when there's a real choice, or any card is connected (a single
+  // docked card should still show its face for provenance).
+  if (!win || (flat.length < 2 && !sources.some(s => s.kind === 'card'))) return null
 
   const iz = 1 / zoom
+  const onChipClick = (s: DockedSource) => {
+    if (s.models.length === 0) return
+    const idx = active ? s.models.findIndex(m => m.url === active) : -1
+    // Not this source's model yet → its first; else cycle within it.
+    const next = idx < 0 ? s.models[0] : s.models[(idx + 1) % s.models.length]
+    setActiveModel(windowId, next.url)
+  }
+
   return (
     <div
       onPointerDown={e => { if (e.button === 0) e.stopPropagation() }}
@@ -61,33 +72,34 @@ export const ViewportSwitcherStrip: React.FC<{ windowId: string }> = ({ windowId
         overflowX: 'hidden',
       }}
     >
-      {docked.map(m => (
-        <ModelChip
-          key={m.url}
-          name={m.name}
-          posterUrl={m.posterUrl ?? null}
-          isActive={m.url === active}
+      {sources.map(s => (
+        <SourceChip
+          key={`${s.kind}:${s.id}`}
+          source={s}
+          isActive={!!active && s.models.some(m => m.url === active)}
           iz={iz}
-          onClick={() => setActiveModel(windowId, m.url)}
+          onClick={() => onChipClick(s)}
         />
       ))}
     </div>
   )
 }
 
-const ModelChip: React.FC<{
-  name: string
-  posterUrl: string | null
+const SourceChip: React.FC<{
+  source: DockedSource
   isActive: boolean
   iz: number
   onClick: () => void
-}> = ({ name, posterUrl, isActive, iz, onClick }) => {
-  const resolvedPoster = useResolvedMedia(posterUrl)
+}> = ({ source, isActive, iz, onClick }) => {
+  const resolvedFace = useResolvedMedia(source.face)
+  const isCard = source.kind === 'card'
+  const count = source.models.length
   return (
     <div
       onClick={onClick}
-      title={name}
+      title={isCard && count > 1 ? `${source.name} — ${count} models (click to cycle)` : source.name}
       style={{
+        position: 'relative',
         display: 'flex', alignItems: 'center', gap: 4 * iz,
         padding: `${2 * iz}px ${6 * iz}px`,
         borderRadius: 5 * iz,
@@ -95,20 +107,37 @@ const ModelChip: React.FC<{
         border: `${Math.max(1, iz)}px solid ${isActive ? 'rgba(140,190,255,0.55)' : 'rgba(255,255,255,0.1)'}`,
         cursor: 'pointer',
         flexShrink: 0,
-        maxWidth: 110 * iz,
+        maxWidth: 120 * iz,
       }}
     >
-      {resolvedPoster ? (
-        <img src={resolvedPoster} draggable={false} style={{ width: 16 * iz, height: 12 * iz, objectFit: 'cover', borderRadius: 2 * iz, flexShrink: 0 }} />
+      {resolvedFace ? (
+        <img
+          src={resolvedFace}
+          draggable={false}
+          style={{
+            width: (isCard ? 18 : 16) * iz,
+            height: (isCard ? 22 : 12) * iz,   // cards read as portrait faces
+            objectFit: 'cover',
+            borderRadius: 2 * iz,
+            flexShrink: 0,
+          }}
+        />
       ) : (
-        <span style={{ fontSize: 8 * iz, color: 'rgba(160,200,255,0.7)', flexShrink: 0 }}>◆</span>
+        <span style={{ fontSize: 8 * iz, color: 'rgba(160,200,255,0.7)', flexShrink: 0 }}>{isCard ? '▮' : '◆'}</span>
       )}
       <span style={{
         fontSize: 9 * iz, color: isActive ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.55)',
         fontWeight: isActive ? 700 : 500,
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         userSelect: 'none',
-      }}>{name}</span>
+      }}>{source.name}</span>
+      {isCard && count > 1 && (
+        <span style={{
+          fontSize: 8 * iz, fontWeight: 700, flexShrink: 0,
+          padding: `0 ${3 * iz}px`, borderRadius: 3 * iz,
+          background: 'rgba(140,190,255,0.25)', color: 'rgba(200,225,255,0.95)',
+        }}>×{count}</span>
+      )}
     </div>
   )
 }

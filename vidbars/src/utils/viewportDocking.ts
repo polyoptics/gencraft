@@ -132,6 +132,102 @@ export function computeAllDocks(
   return result
 }
 
+export interface TileClusterResult {
+  /** windowId → cluster tile ids, BFS-ordered from the window outward. */
+  byWindow: Map<string, string[]>
+  /** tileId → the window its cluster is connected to. */
+  tileToWindow: Map<string, string>
+}
+
+/** Deck-style tile clustering: union-find over tiles touching each other
+ *  (within tol), where a whole cluster is CONNECTED to a window when any
+ *  member touches it. A cluster binds to exactly one window (min edge
+ *  distance among touching members; tie → smaller window id).
+ *
+ *  Ordering (per window): BFS from the window — tiles touching the window
+ *  directly come first (edge rank top→right→bottom→left, then position
+ *  along the edge, same as computeAllDocks), then their neighbors layer by
+ *  layer (within a layer: y, then x). Sliding tiles reorders naturally. */
+export function computeTileClusters(
+  tiles: DockableItem[],
+  windows: WindowRect[],
+  tol: number = DOCK_TOLERANCE,
+): TileClusterResult {
+  const byWindow = new Map<string, string[]>()
+  const tileToWindow = new Map<string, string>()
+  for (const w of windows) byWindow.set(w.id, [])
+  if (tiles.length === 0 || windows.length === 0) return { byWindow, tileToWindow }
+
+  // Union-find over touching tiles
+  const parent = tiles.map((_, i) => i)
+  const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])))
+  const union = (a: number, b: number) => { const ra = find(a), rb = find(b); if (ra !== rb) parent[rb] = ra }
+  for (let i = 0; i < tiles.length; i++) {
+    for (let j = i + 1; j < tiles.length; j++) {
+      if (rectsTouch(tiles[i], tiles[j], tol)) union(i, j)
+    }
+  }
+  const clusters = new Map<number, number[]>()
+  for (let i = 0; i < tiles.length; i++) {
+    const r = find(i)
+    if (!clusters.has(r)) clusters.set(r, [])
+    clusters.get(r)!.push(i)
+  }
+
+  for (const members of clusters.values()) {
+    // Which window is this cluster connected to? Judge only by members that
+    // actually TOUCH a window; nearest edge distance wins.
+    let best: { winId: string; distance: number } | null = null
+    for (const mi of members) {
+      for (const win of windows) {
+        if (!rectsTouch(tiles[mi], win, tol)) continue
+        const d = edgeDistance(tiles[mi], win)
+        if (!best || d < best.distance || (d === best.distance && win.id < best.winId)) {
+          best = { winId: win.id, distance: d }
+        }
+      }
+    }
+    if (!best) continue
+    const win = windows.find(w => w.id === best!.winId)!
+
+    // BFS from the window: layer 0 = members touching the window (sorted by
+    // edge rank + along), then touch-neighbors layer by layer (y, then x).
+    const memberSet = new Set(members)
+    const layer0 = members.filter(mi => rectsTouch(tiles[mi], win, tol))
+    layer0.sort((a, b) => {
+      const ea = nearestEdge(tiles[a], win), eb = nearestEdge(tiles[b], win)
+      const ra = EDGE_RANK[ea.edge], rb = EDGE_RANK[eb.edge]
+      if (ra !== rb) return ra - rb
+      const alongA = ea.edge === 'left' || ea.edge === 'right' ? tiles[a].y : tiles[a].x
+      const alongB = eb.edge === 'left' || eb.edge === 'right' ? tiles[b].y : tiles[b].x
+      return alongA - alongB
+    })
+    const ordered: number[] = []
+    const seen = new Set<number>()
+    let frontier = layer0
+    while (frontier.length > 0) {
+      for (const mi of frontier) { if (!seen.has(mi)) { seen.add(mi); ordered.push(mi) } }
+      const next = members.filter(mi => !seen.has(mi) &&
+        frontier.some(fi => rectsTouch(tiles[mi], tiles[fi], tol)))
+      next.sort((a, b) => (tiles[a].y - tiles[b].y) || (tiles[a].x - tiles[b].x))
+      frontier = next
+    }
+    // Disconnected-from-layer0 members can't happen (same union-find set ⇒
+    // touch-path exists), but keep the guard cheap: append any stragglers.
+    for (const mi of members) if (!seen.has(mi) && memberSet.has(mi)) ordered.push(mi)
+
+    const ids = ordered.map(mi => tiles[mi].id)
+    byWindow.get(best.winId)!.push(...ids)
+    for (const tid of ids) tileToWindow.set(tid, best.winId)
+  }
+  return { byWindow, tileToWindow }
+}
+
+/** Min edge distance from rect to window (finite only when axis-overlapping). */
+function edgeDistance(rect: Rect, win: Rect): number {
+  return nearestEdge(rect, win).distance
+}
+
 /** Next free slot flush against `edge` of `win` for an item of tileW×tileH,
  *  stacking along the edge past `occupied` rects (used by direct file drops
  *  onto a window). */

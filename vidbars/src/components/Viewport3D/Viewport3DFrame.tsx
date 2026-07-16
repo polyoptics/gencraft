@@ -16,9 +16,12 @@ import React, { useRef, useState, useCallback } from 'react'
 import { useViewport3DStore } from '../../store/viewport3dStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
+import { useFreeNodeStore } from '../../store/freeNodeStore'
+import { useBoardsStore } from '../../store/boardsStore'
+import { computeCarriedEntities } from '../../hooks/useDockedModels'
 import { useViewStatus } from '../../hooks/useViewStatus'
 import { getViewRuntime, requestRender, MIN_GL_PX } from '../../three/viewportRenderer'
-import { clampPhi } from '../../three/orbitState'
+import { clampPhi, panOrbit } from '../../three/orbitState'
 import { useSeedHoverFromCursor } from '../../utils/pointerTracker'
 import { ViewportSwitcherStrip } from './ViewportSwitcherStrip'
 
@@ -41,18 +44,34 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
 
   useSeedHoverFromCursor(wrapperRef, setIsHovered)
 
-  // ── Header drag-move ──
+  // ── Header drag-move — carries everything connected to the window
+  //    (tile clusters + docked cards/decks), snapshotted at drag start so
+  //    the whole assembly moves as one. ──
+  const carried = useRef<{ tileIds: string[]; groupIds: string[] }>({ tileIds: [], groupIds: [] })
   const onHeaderDown = useCallback((e: React.PointerEvent) => {
     if (e.button !== 0) return
     if ((e.target as Element).closest('button')) return
     e.stopPropagation()
     useUndoCoordinator.getState().checkpoint()
+    carried.current = computeCarriedEntities(id)
     dragLast.current = { x: e.clientX, y: e.clientY }
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
-  }, [])
+  }, [id])
   const onHeaderMove = useCallback((e: React.PointerEvent) => {
     if (!(e.currentTarget as HTMLElement).hasPointerCapture(e.pointerId)) return
-    moveWindow(id, (e.clientX - dragLast.current.x) / zoom, (e.clientY - dragLast.current.y) / zoom)
+    const dx = (e.clientX - dragLast.current.x) / zoom
+    const dy = (e.clientY - dragLast.current.y) / zoom
+    moveWindow(id, dx, dy)
+    if (carried.current.tileIds.length > 0) {
+      useFreeNodeStore.getState().moveManyFreeNodes(carried.current.tileIds, dx, dy)
+    }
+    if (carried.current.groupIds.length > 0) {
+      const bs = useBoardsStore.getState()
+      bs.setGroupPosBatch(carried.current.groupIds.flatMap(gid => {
+        const g = bs.groups.find(x => x.id === gid)
+        return g ? [{ groupId: gid, originX: g.originX + dx, originY: g.originY + dy }] : []
+      }))
+    }
     dragLast.current = { x: e.clientX, y: e.clientY }
   }, [id, moveWindow, zoom])
 
@@ -69,11 +88,16 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
     resizeLast.current = { x: e.clientX, y: e.clientY }
   }, [id, resizeWindow, zoom])
 
-  // ── Orbit (body) — normalize by VISUAL height so feel is zoom-invariant ──
+  // ── Orbit / pan (body) — normalize by VISUAL height so feel is
+  //    zoom-invariant. Left-drag orbits; Shift+left-drag or right-drag
+  //    pans (trucks the orbit target). Middle-mouse falls through →
+  //    canvas pan. ──
+  const gestureMode = useRef<'orbit' | 'pan'>('orbit')
   const onBodyDown = useCallback((e: React.PointerEvent) => {
-    if (e.button !== 0) return          // middle-mouse falls through → canvas pan
+    if (e.button !== 0 && e.button !== 2) return
     e.stopPropagation()
     if (status.status !== 'ready') return
+    gestureMode.current = (e.button === 2 || e.shiftKey) ? 'pan' : 'orbit'
     orbitActive.current = true
     orbitLast.current = { x: e.clientX, y: e.clientY }
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
@@ -86,8 +110,14 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
     if (!w) return
     const screenH = Math.max(40, w.height * zoom)
     const o = view.orbit
-    o.theta -= (e.clientX - orbitLast.current.x) * (Math.PI / screenH)
-    o.phi = clampPhi(o.phi - (e.clientY - orbitLast.current.y) * (Math.PI / screenH))
+    const dx = e.clientX - orbitLast.current.x
+    const dy = e.clientY - orbitLast.current.y
+    if (gestureMode.current === 'pan') {
+      panOrbit(o, view.camera, dx, dy, screenH)
+    } else {
+      o.theta -= dx * (Math.PI / screenH)
+      o.phi = clampPhi(o.phi - dy * (Math.PI / screenH))
+    }
     orbitLast.current = { x: e.clientX, y: e.clientY }
     requestRender()
   }, [id, zoom])
@@ -182,6 +212,7 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
         onPointerMove={onBodyMove}
         onPointerUp={onBodyUp}
         onWheel={onBodyWheel}
+        onContextMenu={e => { e.preventDefault(); e.stopPropagation() }}
         style={{
           flex: 1, position: 'relative',
           background: 'transparent',
@@ -207,7 +238,7 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
             <div style={{ fontSize: 10 * iz, color: showError ? 'rgba(255,150,150,0.8)' : 'rgba(255,255,255,0.35)', textAlign: 'center', maxWidth: '85%' }}>
               {showError ? (status.errorMsg ?? 'Failed to load model')
                 : showLoading ? 'Loading model…'
-                : showEmpty ? 'Drop a 3D model here, or magnet a model tile to an edge'
+                : showEmpty ? 'Drop a 3D model here, or magnet a model tile to an edge · drag orbit · shift-drag pan · scroll zoom'
                 : null}
             </div>
           </div>
