@@ -48,6 +48,31 @@ export function getModelPoster(modelUrl: string): string | null {
   return usePosterMapStore.getState().map[modelUrl] ?? null
 }
 
+/** Follow model-url renames (old url → new url) so existing posters
+ *  survive instead of regenerating. Used by the media localization sweep,
+ *  which rewrites '/uploads/x.glb' style urls to 'mediaref:' pointers. */
+export async function rekeyModelPosters(renames: Map<string, string>): Promise<void> {
+  // The sweep can finish before this store's async rehydration lands —
+  // wait for it, or the re-key would see an empty map and orphan entries.
+  const p = usePosterMapStore.persist
+  if (p && !p.hasHydrated()) {
+    await new Promise<void>(resolve => {
+      const unsub = p.onFinishHydration(() => { unsub(); resolve() })
+    })
+  }
+  const { map } = usePosterMapStore.getState()
+  let changed = false
+  const next: Record<string, string> = { ...map }
+  for (const [oldUrl, newUrl] of renames) {
+    const poster = next[oldUrl]
+    if (poster === undefined) continue
+    delete next[oldUrl]
+    if (next[newUrl] === undefined) next[newUrl] = poster
+    changed = true
+  }
+  if (changed) usePosterMapStore.setState({ map: next })
+}
+
 /** React hook: the poster ref for a model url (reactive to generation). */
 export function useModelPoster(modelUrl: string | null): string | null {
   return usePosterMapStore(s => (modelUrl ? s.map[modelUrl] ?? null : null))

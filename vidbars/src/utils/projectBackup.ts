@@ -116,8 +116,19 @@ const MIME_EXT: Record<string, string> = {
   'image/gif': 'gif', 'image/svg+xml': 'svg', 'image/avif': 'avif', 'image/bmp': 'bmp',
   'video/mp4': 'mp4', 'video/webm': 'webm', 'video/quicktime': 'mov',
   'audio/mpeg': 'mp3', 'audio/wav': 'wav', 'audio/ogg': 'ogg',
+  'model/gltf-binary': 'glb', 'model/gltf+json': 'gltf',
 }
 function extFor(type: string): string { return MIME_EXT[type] || 'bin' }
+
+// Reverse lookup so import can restore each blob's MIME type from its zip
+// entry name ('jpg' folds into 'image/jpeg'; unknown 'bin' stays '').
+const EXT_MIME: Record<string, string> = Object.fromEntries(
+  Object.entries(MIME_EXT).map(([mime, ext]) => [ext, mime]),
+)
+function mimeFor(name: string): string {
+  const ext = name.match(/\.([^/.]+)$/)?.[1]?.toLowerCase()
+  return (ext && EXT_MIME[ext]) || ''
+}
 
 /** Recover the blob id from a `media/<id>.<ext>` entry name. Ids are
  *  UUIDs (no dots), so trimming the final extension is safe. */
@@ -217,7 +228,7 @@ export async function importProjectFile(file: File): Promise<void> {
     for (const [name, bytes] of Object.entries(entries)) {
       if (!name.startsWith(MEDIA_DIR)) continue
       const id = idFromMediaName(name)
-      if (id) await putMediaWithId(id, new Blob([bytes]))
+      if (id) await putMediaWithId(id, new Blob([bytes as BlobPart], { type: mimeFor(name) }))
     }
     setBackupState(manifest)
     // No re-sweep: the manifest already references blobs we just stored.
