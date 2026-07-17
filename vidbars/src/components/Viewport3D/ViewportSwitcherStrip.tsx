@@ -19,6 +19,7 @@ import { useResolvedMedia } from '../../utils/useResolvedMedia'
 
 /** Glyph per item kind for chips without a face image. */
 function chipGlyph(source: DockedSource): string {
+  if (source.kind === 'list') return '≔'
   if (source.kind === 'card') return '▮'
   const it = source.items[0]
   if (!it) return '◆'
@@ -65,9 +66,9 @@ export const ViewportSwitcherStrip: React.FC<{ windowId: string }> = ({ windowId
     }
   }, [win, flat, active, activeKey, windowId, setActiveItem])
 
-  // Show when there's a real choice, or any card is connected (a single
-  // docked card should still show its face for provenance).
-  if (!win || (flat.length < 2 && !sources.some(s => s.kind === 'card'))) return null
+  // Show when there's a real choice, or any card/list is connected (a
+  // single docked card/list should still show provenance).
+  if (!win || (flat.length < 2 && !sources.some(s => s.kind === 'card' || s.kind === 'list'))) return null
 
   const iz = 1 / zoom
   const onChipClick = (s: DockedSource) => {
@@ -113,11 +114,12 @@ const SourceChip: React.FC<{
 }> = ({ source, isActive, iz, onClick }) => {
   const resolvedFace = useResolvedMedia(source.face)
   const isCard = source.kind === 'card'
+  const showCount = source.kind !== 'tile'
   const count = source.items.length
   return (
     <div
       onClick={onClick}
-      title={isCard && count > 1 ? `${source.name} — ${count} items (click to cycle)` : source.name}
+      title={showCount && count > 1 ? `${source.name} — ${count} items (click to cycle)` : source.name}
       style={{
         position: 'relative',
         display: 'flex', alignItems: 'center', gap: 4 * iz,
@@ -151,7 +153,7 @@ const SourceChip: React.FC<{
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         userSelect: 'none',
       }}>{source.name}</span>
-      {isCard && count > 1 && (
+      {showCount && count > 1 && (
         <span style={{
           fontSize: 8 * iz, fontWeight: 700, flexShrink: 0,
           padding: `0 ${3 * iz}px`, borderRadius: 3 * iz,

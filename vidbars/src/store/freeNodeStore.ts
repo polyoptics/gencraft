@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { createDebouncedIDBStorage } from '../utils/debouncedIDBStorage'
 
-export type FreeNodeType = 'note' | 'image' | 'text' | 'video' | 'audio' | 'model'
+export type FreeNodeType = 'note' | 'image' | 'text' | 'video' | 'audio' | 'model' | 'list'
 
 export interface TextStyle {
   fontSize: number       // in px (base, before zoom scaling)
@@ -65,6 +65,8 @@ export interface FreeNodeData {
   mediaType?: import('../types/bar').MediaType | null
   /** Model tiles: rendered poster thumbnail (`mediaref:`), lazily generated. */
   posterUrl?: string | null
+  /** List tiles: the pinned LIVE query (results derive from the stores). */
+  listQuery?: import('../utils/contentKinds').ListQuery
   color: string
   textStyle?: TextStyle
   /** Annotation layer — vector strokes drawn on this node. */
@@ -96,14 +98,14 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
     const id = crypto.randomUUID()
     const color = COLORS[colorIdx++ % COLORS.length]
     const labels: Record<FreeNodeType, string> = {
-      image: 'Image', note: 'Note', text: 'Text', video: 'Video', audio: 'Audio', model: 'Model',
+      image: 'Image', note: 'Note', text: 'Text', video: 'Video', audio: 'Audio', model: 'Model', list: 'List',
     }
     const heights: Record<FreeNodeType, number> = {
-      image: 180, note: 160, text: 180, video: 180, audio: 120, model: 180,
+      image: 180, note: 160, text: 180, video: 180, audio: 120, model: 180, list: 280,
     }
     const node: FreeNodeData = {
       id, x, y,
-      width: type === 'audio' ? 260 : 200,
+      width: type === 'audio' ? 260 : type === 'list' ? 220 : 200,
       height: heights[type] ?? 160,
       type,
       label: labels[type] ?? type,

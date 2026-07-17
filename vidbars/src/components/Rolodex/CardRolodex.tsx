@@ -30,7 +30,7 @@ import { useFreeNodeStore } from '../../store/freeNodeStore'
 import type { FreeNodeData } from '../../store/freeNodeStore'
 import {
   type ContentKind, KIND_LABELS, groupHasContentOfKind, freeNodeMatchesKind,
-  hasRenderableContent, sortGroups, sortFreeNodes,
+  hasRenderableContent, sortGroups, sortFreeNodes, formatListQuerySummary,
 } from '../../utils/contentKinds'
 import { getModelPoster } from '../../three/posterService'
 import {
@@ -1343,6 +1343,27 @@ export const CardRolodex: React.FC = () => {
             <div style={{ display: 'flex', gap: 3 }}>
               <ViewToggle mode={view} setMode={setView} />
               <SortToggle mode={sortMode} setMode={setSortMode} />
+              <button
+                onClick={() => {
+                  // Pin the current filtered list to the canvas as a LIVE
+                  // query object, placed just right of the panel.
+                  const cs = useCanvasStore.getState()
+                  const cx = (rolodexPos.x + LEFTCOL_W + 60 - cs.pan.x) / cs.zoom
+                  const cy = (rolodexPos.y + 60 - cs.pan.y) / cs.zoom
+                  useUndoCoordinator.getState().checkpoint()
+                  const fns = useFreeNodeStore.getState()
+                  const nid = fns.addFreeNode(cx, cy, 'list')
+                  const listQuery = { query: searchQuery.trim(), kind: kindFilter, includeCanvasItems, sortMode }
+                  fns.updateFreeNode(nid, { listQuery, label: formatListQuerySummary(listQuery) })
+                  fns.setFreeSelection([nid])
+                }}
+                title="Pin this filtered list to the canvas as a live list object"
+                style={{
+                  background: 'rgba(120,170,255,0.12)', border: '1px solid rgba(140,190,255,0.3)',
+                  borderRadius: 4, color: 'rgba(180,210,255,0.9)', fontSize: 10, fontWeight: 700,
+                  padding: '1px 6px', cursor: 'pointer', fontFamily: 'inherit', lineHeight: 1.4,
+                }}
+              >📌</button>
               <CloseButton onClick={() => setRolodexOpen(false)} />
             </div>
           </div>
@@ -1801,7 +1822,7 @@ const RolodexCardPreview: React.FC<{
 
 /** Glyph per free-node type — matches the tile headers on canvas. */
 const FREENODE_GLYPHS: Record<FreeNodeData['type'], string> = {
-  model: '◆', image: '🖼', video: '▶', audio: '♪', text: 'T', note: '📝',
+  model: '◆', image: '🖼', video: '▶', audio: '♪', text: 'T', note: '📝', list: '≔',
 }
 
 /** Lightweight slot for a free-floating canvas tile row. Mirrors

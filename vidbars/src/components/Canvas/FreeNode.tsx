@@ -16,7 +16,8 @@ import { useViewport3DStore } from '../../store/viewport3dStore'
 import { useMagnetPreviewStore } from '../../store/magnetPreviewStore'
 import { cardVisualRect } from '../../hooks/useCardDecks'
 import { findMagnetCandidate, magnetRadiusForZoom, type WindowRect } from '../../utils/viewportDocking'
-import { tileBrowseItem } from '../../utils/contentTraversal'
+import { tileBrowseItem, isDockableTile } from '../../utils/contentTraversal'
+import { ListTileBody } from './ListTileBody'
 import { ensureModelPoster, getModelPoster, useModelPoster } from '../../three/posterService'
 import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
 import { DrawableSurface } from '../Annotation/DrawableSurface'
@@ -96,10 +97,10 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
     }
     dragLastX.current = e.clientX
     dragLastY.current = e.clientY
-    // Magnet affordance: content-bearing tiles near a browser window edge
-    // show a "will snap here" ghost (dock itself resolves on release).
+    // Magnet affordance: dockable tiles (content-bearing + lists) near a
+    // browser window edge show a "will snap here" ghost.
     const n = useFreeNodeStore.getState().nodes[id]
-    if (n && tileBrowseItem(n) !== null) {
+    if (n && isDockableTile(n)) {
       const winRects: WindowRect[] = Object.values(useViewport3DStore.getState().windows)
         .map(w => ({ id: w.id, x: w.x, y: w.y, width: w.width, height: w.height }))
       const cand = winRects.length > 0 ? findMagnetCandidate(n, winRects, magnetRadiusForZoom(zoom)) : null
@@ -143,11 +144,13 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
     {
       const preview = useMagnetPreviewStore.getState().preview
       if (preview) useMagnetPreviewStore.getState().setPreview(null)
-      const dockItem = tileBrowseItem(node)
-      if (dragHasMoved.current && dockItem && preview) {
+      if (dragHasMoved.current && isDockableTile(node) && preview) {
         const cur = useFreeNodeStore.getState().nodes[id]
         if (cur) updateFreeNode(id, { x: preview.x, y: preview.y })
-        useViewport3DStore.getState().setActiveItem(preview.windowId, dockItem)
+        // Content tiles load their item; LIST tiles just snap — the
+        // strip's reconciliation picks the default from their results.
+        const dockItem = tileBrowseItem(node)
+        if (dockItem) useViewport3DStore.getState().setActiveItem(preview.windowId, dockItem)
         return
       }
     }
@@ -470,6 +473,8 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
           <span style={{ fontSize: fontSize * 0.75, color: 'rgba(255,255,255,0.35)', lineHeight: 1, flexShrink: 0 }}>♪</span>
         ) : node.type === 'model' ? (
           <span style={{ fontSize: fontSize * 0.75, color: connectedWindowId ? 'rgba(140,190,255,0.9)' : 'rgba(255,255,255,0.35)', lineHeight: 1, flexShrink: 0 }}>◆</span>
+        ) : node.type === 'list' ? (
+          <span style={{ fontSize: fontSize * 0.75, color: connectedWindowId ? 'rgba(140,190,255,0.9)' : 'rgba(255,255,255,0.35)', lineHeight: 1, flexShrink: 0 }}>≔</span>
         ) : (
           <div style={{ width: dotSize, height: dotSize, borderRadius: '50%', background: 'rgba(255,255,255,0.22)', flexShrink: 0 }} />
         )}
@@ -670,6 +675,11 @@ const FreeNodeBody: React.FC<{
   // ── Model type: poster thumbnail + 3D badge (never renders the .glb) ──
   if (node.type === 'model') {
     return <ModelTileBody node={node} id={id} dz={dz} updateFreeNode={updateFreeNode} />
+  }
+
+  // ── List type: live query results (pinned from the Rolodex) ──
+  if (node.type === 'list') {
+    return <ListTileBody node={node} dz={dz} />
   }
 
   // ── Note type: always-editable textarea ──

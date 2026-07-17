@@ -24,19 +24,22 @@ import {
   type DockableItem, type WindowRect,
 } from '../utils/viewportDocking'
 import {
-  collectDeckContent, groupHasBrowsableContent, tileBrowseItem, type BrowseItem,
+  collectDeckContent, collectGroupOwnContent, groupHasBrowsableContent,
+  tileBrowseItem, isDockableTile, type BrowseItem,
 } from '../utils/contentTraversal'
+import { evaluateListQuery } from '../utils/listQueryEval'
+import { formatListQuerySummary } from '../utils/contentKinds'
 import { useCanvasStore } from '../store/canvasStore'
 import { isHiddenDeckMember, expandWithNestedMembers, cardVisualRect } from './useCardDecks'
 import { getFirstImageUrl } from '../types/bar'
 
 export interface DockedSource {
-  kind: 'tile' | 'card'
+  kind: 'tile' | 'card' | 'list'
   id: string                    // nodeId | groupId
   name: string
   /** Chip visual: tile → poster/image ref; card → hero image; null → glyph. */
   face: string | null
-  items: BrowseItem[]           // tiles: exactly one
+  items: BrowseItem[]           // tiles: exactly one; lists: query results
 }
 
 const GROUP_PREFIX = 'group:'
@@ -45,12 +48,44 @@ function windowRects(windows: Record<string, ViewportWindow3D>): WindowRect[] {
   return Object.values(windows).map(w => ({ id: w.id, x: w.x, y: w.y, width: w.width, height: w.height }))
 }
 
-/** Content-bearing tiles as cluster items — THE tile predicate is
- *  tileBrowseItem (media tiles with bytes + text/note tiles with text). */
+/** Dockable tiles as cluster items — content-bearing tiles + list tiles
+ *  (isDockableTile is THE shared predicate). */
 function contentTileItems(nodes: Record<string, FreeNodeData>): DockableItem[] {
   return Object.values(nodes)
-    .filter(n => tileBrowseItem(n) !== null)
+    .filter(isDockableTile)
     .map(n => ({ id: n.id, x: n.x, y: n.y, width: n.width, height: n.height }))
+}
+
+/** A list tile's contribution: matched groups' OWN content (no deck
+ *  expansion — the list enumerates every matched group individually, so
+ *  recursive collection would double-count matched members) + matched
+ *  tiles' items; the list's kind filter applies to the contributed items
+ *  (a "3D objects" list contributes only models). */
+function listSourceItems(
+  n: FreeNodeData,
+  groups: ProjectGroup[],
+  boards: Record<string, BoardData>,
+  nodes: Record<string, FreeNodeData>,
+): BrowseItem[] {
+  const q = n.listQuery
+  if (!q) return []
+  const res = evaluateListQuery(q, groups, boards, nodes)
+  const kindAccepts = (it: BrowseItem): boolean => {
+    if (q.kind === 'all') return true
+    if (q.kind === 'text') return it.kind === 'text'
+    return it.kind === 'media' && it.mediaType === q.kind
+  }
+  const out: BrowseItem[] = []
+  for (const g of res.groups) {
+    for (const it of collectGroupOwnContent(g, boards)) {
+      if (kindAccepts(it)) out.push(it)
+    }
+  }
+  for (const t of res.freeNodes) {
+    const it = tileBrowseItem(t)
+    if (it && kindAccepts(it)) out.push(it)
+  }
+  return out
 }
 
 /** Chip face for a tile: model poster / image url / video-audio poster;
@@ -120,6 +155,16 @@ export function useDockedSources(windowId: string): DockedSource[] {
     for (const tid of clusters.byWindow.get(windowId) ?? []) {
       const n = nodes[tid]
       if (!n) continue
+      if (n.type === 'list' && n.listQuery) {
+        const items = flattenDedupe(listSourceItems(n, groups, boards, nodes))
+        out.push({
+          kind: 'list', id: n.id,
+          name: n.label || formatListQuerySummary(n.listQuery),
+          face: null,
+          items,
+        })
+        continue
+      }
       const item = tileBrowseItem(n)
       if (!item) continue
       out.push({
@@ -145,20 +190,24 @@ export function useDockedSources(windowId: string): DockedSource[] {
   }, [windowId, windows, nodes, groups, boards, zoom])
 }
 
+/** Key-dedupe within one item list (a list source can match a card that
+ *  contributes the same media twice via legacy fields, etc.). */
+function flattenDedupe(items: BrowseItem[]): BrowseItem[] {
+  const seen = new Set<string>()
+  const out: BrowseItem[] = []
+  for (const it of items) {
+    const key = activeItemKey(it)!
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(it)
+  }
+  return out
+}
+
 /** Flattened, key-deduped item list (first source wins) — what the window
  *  can show; drives active-item reconciliation. */
 export function flattenSourceItems(sources: DockedSource[]): BrowseItem[] {
-  const seen = new Set<string>()
-  const out: BrowseItem[] = []
-  for (const s of sources) {
-    for (const it of s.items) {
-      const key = activeItemKey(it)!
-      if (seen.has(key)) continue
-      seen.add(key)
-      out.push(it)
-    }
-  }
-  return out
+  return flattenDedupe(sources.flatMap(s => s.items))
 }
 
 /** Non-hook: everything a moving window must CARRY — its connected tile

@@ -6,7 +6,7 @@ import { FreeNode } from './FreeNode'
 import { MagnetDockPreview } from './MagnetDockPreview'
 import { useViewportBounds, intersectsViewport } from '../../hooks/useViewportBounds'
 import { computeTileClusters, type DockableItem, type WindowRect } from '../../utils/viewportDocking'
-import { tileBrowseItem } from '../../utils/contentTraversal'
+import { isDockableTile } from '../../utils/contentTraversal'
 
 export const FreeCanvas: React.FC = React.memo(() => {
   // Only re-render when nodes are added/removed, not when node content changes
@@ -31,7 +31,7 @@ export const FreeCanvas: React.FC = React.memo(() => {
   // click-to-load (FreeNode).
   const tileConnections = useMemo(() => {
     const tiles: DockableItem[] = Object.values(nodes)
-      .filter(n => tileBrowseItem(n) !== null)
+      .filter(isDockableTile)
       .map(n => ({ id: n.id, x: n.x, y: n.y, width: n.width, height: n.height }))
     const winRects: WindowRect[] = Object.values(windows)
       .map(w => ({ id: w.id, x: w.x, y: w.y, width: w.width, height: w.height }))

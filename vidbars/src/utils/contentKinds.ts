@@ -63,9 +63,7 @@ export function groupHasContentOfKind(
  *  not content themselves, so they only appear under 'all'. Media tiles
  *  need real content (imageUrl); empty drop targets only show under 'all'. */
 export function freeNodeMatchesKind(n: FreeNodeData, kind: ContentKind | 'all'): boolean {
-  // 'list' joins FreeNodeType in the pinned-list stage; the cast keeps
-  // this predicate correct from day one without a forward type dep.
-  if ((n.type as string) === 'list') return kind === 'all'
+  if (n.type === 'list') return kind === 'all'
   if (kind === 'all') return true
   if (kind === 'text') return (n.type === 'text' || n.type === 'note') && n.text.trim() !== ''
   return n.type === kind && !!n.imageUrl

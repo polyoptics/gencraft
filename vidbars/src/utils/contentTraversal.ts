@@ -141,3 +141,10 @@ export function tileBrowseItem(n: FreeNodeData): BrowseItem | null {
 export function defaultBrowseItem(items: BrowseItem[]): BrowseItem | null {
   return items.find(i => i.kind === 'media') ?? items[0] ?? null
 }
+
+/** Cluster/magnet membership for tiles: content-bearing tiles PLUS list
+ *  tiles (whose "content" is their query results). */
+export function isDockableTile(n: FreeNodeData): boolean {
+  if (n.type === 'list') return !!n.listQuery
+  return tileBrowseItem(n) !== null
+}
