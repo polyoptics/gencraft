@@ -19,13 +19,20 @@
 import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react'
 import ReactDOM from 'react-dom'
 import { useBoardsStore } from '../../store/boardsStore'
-import type { ProjectGroup, BoardData } from '../../store/boardsStore'
+import type { ProjectGroup } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { useLinkDragStore } from '../../store/linkDragStore'
 import { HeroImageLayer } from '../Layers/HeroImageLayer'
 import { edgeColorFromHex } from '../../utils/colorUtils'
 import { getFirstImageUrl } from '../../types/bar'
+import { useFreeNodeStore } from '../../store/freeNodeStore'
+import type { FreeNodeData } from '../../store/freeNodeStore'
+import {
+  type ContentKind, KIND_LABELS, groupHasContentOfKind, freeNodeMatchesKind,
+  hasRenderableContent, sortGroups, sortFreeNodes,
+} from '../../utils/contentKinds'
+import { getModelPoster } from '../../three/posterService'
 import {
   DEFAULT_HEADER_STYLE,
   DEFAULT_BODY_STYLE,
@@ -220,36 +227,13 @@ const MIN_EXPANSION = -LIST_AREA_H_COMPACT
  *  for direct deck members or sub-deck anchors, 2+ for deeper nesting).
  *  `isDeck` flags rows that anchor at least one other group, so the
  *  renderer can paint deck-stripe indicators on the slot edge. */
-type RolodexRow = { group: ProjectGroup; level: number; isDeck: boolean }
+type RolodexRow =
+  | { kind: 'group'; group: ProjectGroup; level: number; isDeck: boolean }
+  | { kind: 'freenode'; node: FreeNodeData; level: 0; isDeck: false }
 
-/** Defensive filter — true iff the group has at least one board with at
- *  least one valid root bar. Mirrors the canvas's validity check in
- *  CardLayer's GroupCard bounds calc; phantom groups (boardIds all
- *  resolve to missing/empty boards) are invisible on canvas, so we
- *  shouldn't list them in the Rolodex either. The boardsStore migration
- *  prunes these on load, but this check stays in place so a phantom
- *  produced at runtime — or by a future code path we haven't audited —
- *  doesn't desync the two views. */
-function hasRenderableContent(g: ProjectGroup, boards: Record<string, BoardData>): boolean {
-  for (const bid of g.boardIds) {
-    const board = boards[bid]
-    if (!board) continue
-    for (const rid of board.rootIds) {
-      if (board.bars[rid]) return true
-    }
-  }
-  return false
-}
-
-/** Sort an array of groups by the active sort mode. Mutates a copy. */
-function sortGroups(arr: ProjectGroup[], sortMode: 'creation' | 'alphabetical'): ProjectGroup[] {
-  if (sortMode === 'alphabetical') {
-    return [...arr].sort((a, b) => (a.name || '').localeCompare(b.name || ''))
-  }
-  // 'creation' — preserve existing array order (boardsStore appends new
-  // groups at the end, so this is creation order by construction).
-  return [...arr]
-}
+// hasRenderableContent + sortGroups moved to utils/contentKinds.ts so the
+// pinned-list evaluator shares them (tile results must equal rolodex
+// results by construction).
 
 /** Sort by deck-fan order: deckOffsetX ascending. The canvas's
  *  useCardDecks hook orders members by their visual rect.left, which —
@@ -271,9 +255,28 @@ function buildFlatList(groups: ProjectGroup[], sortMode: 'creation' | 'alphabeti
     if (g.deckAnchorId && g.deckAnchorId !== g.id) hasMembers.add(g.deckAnchorId)
   }
   return sortGroups(groups, sortMode).map(g => ({
+    kind: 'group' as const,
     group: g,
     level: 0,
     isDeck: hasMembers.has(g.id),
+  }))
+}
+
+/** Free-node rows — a flat tail section after all group rows (free nodes
+ *  have no hierarchy; a predictable tail is the coherent v1), filtered by
+ *  kind + name query, sorted by the same sortMode. */
+function buildFreeNodeRows(
+  nodes: Record<string, FreeNodeData>,
+  sortMode: 'creation' | 'alphabetical',
+  kind: ContentKind | 'all',
+  query: string,
+): RolodexRow[] {
+  const q = query.trim().toLowerCase()
+  const matched = Object.values(nodes).filter(n =>
+    freeNodeMatchesKind(n, kind) &&
+    (!q || (n.label || '').toLowerCase().includes(q)))
+  return sortFreeNodes(matched, sortMode).map(n => ({
+    kind: 'freenode' as const, node: n, level: 0 as const, isDeck: false as const,
   }))
 }
 
@@ -322,7 +325,7 @@ function buildTreeList(
     if (visited.has(g.id)) return
     visited.add(g.id)
     const children = childMap.get(g.id) ?? []
-    out.push({ group: g, level, isDeck: children.length > 0 })
+    out.push({ kind: 'group', group: g, level, isDeck: children.length > 0 })
     if (children.length === 0) return
     // Collapsed deck — emit the deck row itself but skip its children.
     // Sub-decks deeper inside a collapsed deck are also skipped via
@@ -428,6 +431,13 @@ export const CardRolodex: React.FC = () => {
   // group name. Tree-mode preserves ancestry: if any descendant matches,
   // its anchor chain is kept too so the user sees the full deck context.
   const [searchQuery, setSearchQuery] = useState('')
+  // Content-kind filter + canvas-items toggle — session state like the
+  // search query (queries aren't persisted; the pin button snapshots
+  // them into the spawned list object instead).
+  const [kindFilter, setKindFilter] = useState<ContentKind | 'all'>('all')
+  const [includeCanvasItems, setIncludeCanvasItems] = useState(false)
+  const freeNodes = useFreeNodeStore(s => s.nodes)
+  const jumpToFreeNode = useCanvasStore(s => s.jumpToFreeNode)
 
   // Skip phantom groups whose boardIds all resolve to missing/empty
   // boards — the canvas already hides them (rendered as 0×0), so the
@@ -440,17 +450,21 @@ export const CardRolodex: React.FC = () => {
     [groups, boards],
   )
 
-  // Apply the search filter on top of renderableGroups. A group is
-  // kept if (a) its own name matches, or (b) any of its descendants
-  // match — so a search for a child still surfaces the parent deck.
+  // Apply the search + kind filters on top of renderableGroups. A group
+  // is kept if (a) its own name matches AND it holds content of the
+  // active kind (own boards only — not the deck tree, else one member's
+  // model lights the whole deck), or (b) any of its descendants match —
+  // so a filtered child still surfaces its parent deck as context.
   const visibleGroups = useMemo(() => {
     const q = searchQuery.trim().toLowerCase()
-    if (!q) return renderableGroups
-    const nameMatch = (g: ProjectGroup) => (g.name || '').toLowerCase().includes(q)
-    // Set of group ids whose own name matches the query.
+    if (!q && kindFilter === 'all') return renderableGroups
+    const nameMatch = (g: ProjectGroup) => !q || (g.name || '').toLowerCase().includes(q)
+    const kindMatch = (g: ProjectGroup) =>
+      kindFilter === 'all' || groupHasContentOfKind(g, boards, kindFilter)
+    // Set of group ids that match BOTH predicates on their own.
     const matched = new Set<string>()
     for (const g of renderableGroups) {
-      if (nameMatch(g)) matched.add(g.id)
+      if (nameMatch(g) && kindMatch(g)) matched.add(g.id)
     }
     if (matched.size === 0) return [] as ProjectGroup[]
     // For each match, walk up its anchor chain and include each
@@ -467,7 +481,7 @@ export const CardRolodex: React.FC = () => {
       }
     }
     return renderableGroups.filter(g => keep.has(g.id))
-  }, [renderableGroups, searchQuery])
+  }, [renderableGroups, searchQuery, kindFilter, boards])
 
   // Pre-resolve hero images for every renderable group so slots can
   // show a thumbnail-sized version of the actual card image in the
@@ -615,11 +629,30 @@ export const CardRolodex: React.FC = () => {
   const collapsedDeckIds = useCanvasStore(s => s.rolodexCollapsedDeckIds)
   const toggleDeckCollapsed = useCanvasStore(s => s.toggleRolodexDeckCollapsed)
   const collapsedDeckIdSet = useMemo(() => new Set(collapsedDeckIds), [collapsedDeckIds])
-  const rows = useMemo(() => (
-    view === 'tree'
+  const rows = useMemo(() => {
+    const groupRows = view === 'tree'
       ? buildTreeList(visibleGroups, sortMode, collapsedDeckIdSet)
       : buildFlatList(visibleGroups, sortMode)
-  ), [visibleGroups, sortMode, view, collapsedDeckIdSet])
+    if (!includeCanvasItems) return groupRows
+    return [...groupRows, ...buildFreeNodeRows(freeNodes, sortMode, kindFilter, searchQuery)]
+  }, [visibleGroups, sortMode, view, collapsedDeckIdSet, includeCanvasItems, freeNodes, kindFilter, searchQuery])
+
+  // Thumbnails for free-node rows: model tiles use their poster (never
+  // the raw model url); image/video tiles use imageUrl (already <img>-
+  // safe); audio/text/note have none.
+  const freeNodeHeroMap = useMemo(() => {
+    const map = new Map<string, string | null>()
+    if (!includeCanvasItems) return map
+    for (const row of rows) {
+      if (row.kind !== 'freenode') continue
+      const n = row.node
+      map.set(n.id,
+        n.type === 'model' ? (n.posterUrl ?? (n.imageUrl ? getModelPoster(n.imageUrl) : null))
+        : (n.type === 'image' || n.type === 'video') ? n.imageUrl
+        : null)
+    }
+    return map
+  }, [rows, includeCanvasItems])
 
   // ── Phase-scaling + display mode ──────────────────────────────
   // compactThreshold = the expansion value at which Phase 2 (active
@@ -1161,7 +1194,7 @@ export const CardRolodex: React.FC = () => {
           The 'pseudo-cabinet' colors in the dock's styles make it read
           as a small detachable piece of the same frame. */}
       {(() => {
-        const APPROX_HEADER_H = 26
+        const APPROX_HEADER_H = 46   // header (26) + filter strip (~20)
         const DOCK_H = 82
         const DOCK_W = 30
         const FINAL_OFFSET = 26 + 3 * SLOT_PEEK_H // 116 — beside active row
@@ -1314,6 +1347,48 @@ export const CardRolodex: React.FC = () => {
             </div>
           </div>
 
+          {/* ── Filter strip: content-kind chips + canvas-items toggle ──
+                Session state like the search query. Single-select kind;
+                the Tiles chip appends free-floating canvas items as a
+                tail section of rows. */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 2,
+            padding: '3px 6px 4px',
+            background: FRAME_COLOR,
+            borderBottom: '1px solid rgba(0,0,0,0.35)',
+          }}>
+            {(['all', 'model', 'image', 'video', 'audio', 'text'] as const).map(k => (
+              <button
+                key={k}
+                onClick={() => setKindFilter(k)}
+                title={k === 'all' ? 'Show all content kinds' : `Only cards/tiles with ${k} content`}
+                style={{
+                  flex: 1, minWidth: 0,
+                  background: kindFilter === k ? 'rgba(120,170,255,0.28)' : 'rgba(255,255,255,0.05)',
+                  border: `1px solid ${kindFilter === k ? 'rgba(140,190,255,0.55)' : 'rgba(255,255,255,0.08)'}`,
+                  borderRadius: 4, padding: '2px 0',
+                  color: kindFilter === k ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.5)',
+                  fontSize: 8.5, fontWeight: 700, letterSpacing: '0.3px',
+                  cursor: 'pointer', fontFamily: 'inherit',
+                }}
+              >{KIND_LABELS[k]}</button>
+            ))}
+            <div style={{ width: 1, alignSelf: 'stretch', margin: '2px 2px', background: 'rgba(255,255,255,0.12)' }} />
+            <button
+              onClick={() => setIncludeCanvasItems(v => !v)}
+              title="Include free-floating canvas tiles in the list"
+              style={{
+                flex: 1.2, minWidth: 0,
+                background: includeCanvasItems ? 'rgba(120,170,255,0.28)' : 'rgba(255,255,255,0.05)',
+                border: `1px solid ${includeCanvasItems ? 'rgba(140,190,255,0.55)' : 'rgba(255,255,255,0.08)'}`,
+                borderRadius: 4, padding: '2px 0',
+                color: includeCanvasItems ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.5)',
+                fontSize: 8.5, fontWeight: 700, letterSpacing: '0.3px',
+                cursor: 'pointer', fontFamily: 'inherit',
+              }}
+            >Tiles</button>
+          </div>
+
           {/* Slot list. Cards live inside; cabinet-floor wings + bar are
               also positioned absolute on top, forming the cutout the
               active card pokes through. The wrapper height is extended
@@ -1403,30 +1478,47 @@ export const CardRolodex: React.FC = () => {
                 {visibleIndices.map((idx, i) => {
                   const row = rows[idx]
                   const offset = idx - centerPosition
+                  const shared = {
+                    offset,
+                    top: tops[i],
+                    zIndex: idx + 1,
+                    expansionFraction,
+                    isHovered: isHoverActive && hoveredRowIdx === idx,
+                    onHoverEnter: () => setHoveredRowIdxStable(idx),
+                    onHoverLeave: () => {
+                      // Only clear if this slot is still the hovered one;
+                      // avoids races when the pointer crosses rapidly to
+                      // the next card (its enter fires before this leave).
+                      setHoveredRowIdx(prev => prev === idx ? null : prev)
+                    },
+                    onClick: () => onSlotClick(idx),
+                  }
+                  if (row.kind === 'freenode') {
+                    return (
+                      <RolodexFreeNodeSlot
+                        key={'fn:' + row.node.id}
+                        node={row.node}
+                        heroImage={freeNodeHeroMap.get(row.node.id) ?? null}
+                        onDoubleClick={() => {
+                          jumpToFreeNode(row.node.id)
+                          useFreeNodeStore.getState().setFreeSelection([row.node.id])
+                        }}
+                        {...shared}
+                      />
+                    )
+                  }
                   return (
                     <RolodexSlot
                       key={row.group.id}
                       group={row.group}
                       level={row.level}
                       isDeck={row.isDeck}
-                      offset={offset}
-                      top={tops[i]}
-                      zIndex={idx + 1}
                       heroImage={heroImageMap.get(row.group.id) ?? null}
-                      expansionFraction={expansionFraction}
                       isCollapsed={collapsedDeckIdSet.has(row.group.id)}
                       showCaret={view === 'tree' && row.isDeck}
-                      isHovered={isHoverActive && hoveredRowIdx === idx}
-                      onHoverEnter={() => setHoveredRowIdxStable(idx)}
-                      onHoverLeave={() => {
-                        // Only clear if this slot is still the hovered one;
-                        // avoids races when the pointer crosses rapidly to
-                        // the next card (its enter fires before this leave).
-                        setHoveredRowIdx(prev => prev === idx ? null : prev)
-                      }}
-                      onClick={() => onSlotClick(idx)}
                       onDoubleClick={() => onSlotDoubleClick(row.group)}
                       onToggleCollapsed={() => toggleDeckCollapsed(row.group.id)}
+                      {...shared}
                     />
                   )
                 })}
@@ -1706,6 +1798,99 @@ const RolodexCardPreview: React.FC<{
 }
 
 // ─── Slot ─────────────────────────────────────────────────────
+
+/** Glyph per free-node type — matches the tile headers on canvas. */
+const FREENODE_GLYPHS: Record<FreeNodeData['type'], string> = {
+  model: '◆', image: '🖼', video: '▶', audio: '♪', text: 'T', note: '📝',
+}
+
+/** Lightweight slot for a free-floating canvas tile row. Mirrors
+ *  RolodexSlot's geometry (WING_W inset, SLOT_W×CARD_H, top/zIndex from
+ *  the shared layout) with a simplified centerness-driven treatment —
+ *  tiles skip deck stripes, carets, link-drag, and the full preview
+ *  overlay. Double-click pans the canvas to the tile. */
+const RolodexFreeNodeSlot: React.FC<{
+  node: FreeNodeData
+  offset: number
+  top: number
+  zIndex: number
+  heroImage: string | null
+  expansionFraction: number
+  isHovered: boolean
+  onClick: () => void
+  onDoubleClick: () => void
+  onHoverEnter: () => void
+  onHoverLeave: () => void
+}> = ({ node, offset, top, zIndex, heroImage, expansionFraction, isHovered, onClick, onDoubleClick, onHoverEnter, onHoverLeave }) => {
+  const centerness = Math.max(0, 1 - Math.abs(offset))
+  const lit = centerness
+  const imageCenterness = centerness * Math.min(1, Math.max(0, (expansionFraction - 0.15) / 0.2))
+  const borderRGB = Math.round(255 * lit)
+  const borderAlpha = 0.28 + (0.92 - 0.28) * lit
+  const name = node.label || 'Untitled'
+  const excerpt = (node.type === 'text' || node.type === 'note') ? node.text.slice(0, 180) : ''
+  return (
+    <div
+      onClick={onClick}
+      onDoubleClick={onDoubleClick}
+      onPointerDown={e => { if (e.button === 0) e.stopPropagation() }}
+      onMouseEnter={onHoverEnter}
+      onMouseLeave={onHoverLeave}
+      title={`${name} — canvas item · double-click to pan canvas`}
+      style={{
+        position: 'absolute',
+        left: WING_W,
+        top,
+        width: SLOT_W,
+        height: CARD_H,
+        background: node.color,
+        borderRadius: 7,
+        border: isHovered
+          ? '1.5px solid rgba(255,255,255,0.85)'
+          : `${1 + 0.5 * lit}px solid rgba(${borderRGB},${borderRGB},${borderRGB},${borderAlpha})`,
+        boxShadow: `0 -2px ${6 + 8 * lit}px -2px rgba(0,0,0,${0.45 + 0.1 * lit}), 0 ${1 + 5 * lit}px ${2 + 16 * lit}px -1px rgba(0,0,0,${0.3 + 0.2 * lit})`,
+        cursor: 'pointer',
+        transition: 'border-color 0.10s linear',
+        zIndex,
+        overflow: 'hidden',
+      }}
+    >
+      {heroImage && imageCenterness > 0.01 && (
+        <HeroImageLayer
+          heroImage={heroImage}
+          transform={node.imageTransform}
+          opacity={imageCenterness * 0.7}
+          borderRadius={6}
+        />
+      )}
+      {/* Tab row: type glyph + label. Dashed underline marks it as a
+          canvas item rather than a card. */}
+      <div style={{
+        position: 'absolute', top: 0, left: 0, right: 0, height: SLOT_PEEK_H,
+        display: 'flex', alignItems: 'center', gap: 6, padding: '0 10px',
+        boxSizing: 'border-box', pointerEvents: 'none',
+      }}>
+        <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.6)', flexShrink: 0 }}>
+          {FREENODE_GLYPHS[node.type]}
+        </span>
+        <span style={{
+          color: 'rgba(255,255,255,0.97)', fontSize: 11, fontWeight: 600,
+          textShadow: '0 1px 2px rgba(0,0,0,0.55)',
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1,
+          borderBottom: '1px dashed rgba(255,255,255,0.25)',
+        }}>{name}</span>
+      </div>
+      {/* Text/note excerpt when centered or hovered */}
+      {excerpt && (imageCenterness > 0.5 || isHovered) && (
+        <div style={{
+          position: 'absolute', top: SLOT_PEEK_H + 4, left: 10, right: 10,
+          color: 'rgba(255,255,255,0.75)', fontSize: 9.5, lineHeight: 1.45,
+          overflow: 'hidden', pointerEvents: 'none', maxHeight: CARD_H - SLOT_PEEK_H - 14,
+        }}>{excerpt}</div>
+      )}
+    </div>
+  )
+}
 
 const RolodexSlot: React.FC<{
   group: ProjectGroup

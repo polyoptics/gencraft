@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { createDebouncedIDBStorage } from '../utils/debouncedIDBStorage'
 import { useBoardsStore } from './boardsStore'
+import { useFreeNodeStore } from './freeNodeStore'
 import { computeGroupLayout, getRowY, getRowHeight } from '../utils/nleRows'
 import { DEFAULT_H } from '../utils/barConstants'
 import {
@@ -181,6 +182,7 @@ interface CanvasStore {
   setFanTransition: (t: CanvasStore['fanTransition']) => void
   /** Pan (keeping current zoom) so the given group is centered in the viewport. */
   jumpToGroup: (groupId: string) => void
+  jumpToFreeNode: (nodeId: string) => void
   // ── Annotation / draw mode ──
   setDrawSurface: (s: DrawSurface | null) => void
   setDrawTool: (t: 'pen' | 'eraser') => void
@@ -365,6 +367,21 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
       y: vpH / 2 - centerCY * z,
     }
     animatePanTo(targetPan, set, get)
+  },
+
+  jumpToFreeNode: (nodeId) => {
+    // Lazy import avoids a module cycle at load (freeNodeStore has no
+    // canvasStore import, but keep the dependency one-directional at
+    // module-eval time anyway).
+    const n = useFreeNodeStore.getState().nodes[nodeId]
+    if (!n) return
+    const z = get().zoom
+    const vpW = window.innerWidth
+    const vpH = window.innerHeight - APP_TOOLBAR_H
+    animatePanTo({
+      x: vpW / 2 - (n.x + n.width / 2) * z,
+      y: vpH / 2 - (n.y + n.height / 2) * z,
+    }, set, get)
   },
 }), {
   name: 'vidbars-canvas',
