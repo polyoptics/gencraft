@@ -1,14 +1,17 @@
-// Viewport3DFrame.tsx — the canvas-space chrome for one 3D viewport
-// window. The GL pixels paint on the shared screen-space canvas BELOW the
-// world transform (see GLCanvasHost); this frame is a transparent-bodied
+// Viewport3DFrame.tsx — the canvas-space chrome for one content-browser
+// window ("Viewer"). For MODEL items the GL pixels paint on the shared
+// screen-space canvas BELOW the world transform (see GLCanvasHost) and
+// the body stays transparent with orbit input; for image/video/audio/
+// text items a DOM ContentView fills the body (opaque). This frame is a
 // div at z=1 (under free nodes z=5 and bars z≥2) providing: header
-// (drag-move / rename-lite title / close), resize corner, orbit input on
-// the body, and the loading/error/poster states.
+// (drag-move + carry / title / close), resize corner, type-gated body
+// input, and the loading/error/poster states.
 //
 // Interaction rules (FreeNode parity):
 //  - header/body pointerdown button-0 stopPropagation (canvas never pans
 //    from a window gesture); middle-mouse falls through → canvas pan.
-//  - body onWheel MUST stopPropagation — dolly, not canvas zoom.
+//  - body onWheel MUST stopPropagation in every mode — dolly for models,
+//    no-op/scroll for DOM views; the canvas never zooms from the body.
 //  - orbit mutates the module OrbitState per move + requestRender();
 //    flushed to the store once per gesture end (no store churn at 120 Hz).
 
@@ -18,12 +21,13 @@ import { useCanvasStore } from '../../store/canvasStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useBoardsStore } from '../../store/boardsStore'
-import { computeCarriedEntities } from '../../hooks/useDockedModels'
+import { computeCarriedEntities } from '../../hooks/useDockedContent'
 import { useViewStatus } from '../../hooks/useViewStatus'
 import { getViewRuntime, requestRender, MIN_GL_PX } from '../../three/viewportRenderer'
 import { clampPhi, panOrbit } from '../../three/orbitState'
 import { useSeedHoverFromCursor } from '../../utils/pointerTracker'
 import { ViewportSwitcherStrip } from './ViewportSwitcherStrip'
+import { ContentView } from './ContentViews'
 
 export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => {
   const win = useViewport3DStore(s => s.windows[id])
@@ -93,10 +97,11 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
   //    pans (trucks the orbit target). Middle-mouse falls through →
   //    canvas pan. ──
   const gestureMode = useRef<'orbit' | 'pan'>('orbit')
+  const modelActiveRef = useRef(false)
   const onBodyDown = useCallback((e: React.PointerEvent) => {
     if (e.button !== 0 && e.button !== 2) return
-    e.stopPropagation()
-    if (status.status !== 'ready') return
+    e.stopPropagation()   // canvas never pans from a body gesture, any mode
+    if (!modelActiveRef.current || status.status !== 'ready') return
     gestureMode.current = (e.button === 2 || e.shiftKey) ? 'pan' : 'orbit'
     orbitActive.current = true
     orbitLast.current = { x: e.clientX, y: e.clientY }
@@ -129,6 +134,7 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
   }, [id, saveCamera])
   const onBodyWheel = useCallback((e: React.WheelEvent) => {
     e.stopPropagation()   // MANDATORY — else the canvas zooms mid-dolly
+    if (!modelActiveRef.current) return   // DOM views own their wheel
     const view = getViewRuntime(id)
     if (!view || view.status !== 'ready') return
     const o = view.orbit
@@ -143,16 +149,23 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
 
   if (!win) return null
 
+  const active = win.activeItem
+  const modelActive = active?.kind === 'media' && active.mediaType === 'model'
+  modelActiveRef.current = modelActive
+
   const iz = 1 / zoom
   const headerH = 22 * iz
   const fontSize = 11 * iz
   const borderW = Math.max(1, 2 / zoom)
   const glTooSmall = win.width * zoom < MIN_GL_PX
-  // Body message states — GL paints beneath; these overlay when GL isn't showing.
-  const showEmpty = status.status === 'empty'
-  const showLoading = status.status === 'loading'
-  const showError = status.status === 'error'
-  const showBodyOverlay = showEmpty || showLoading || showError || (glTooSmall && !showEmpty)
+  // Body states — GL statuses only mean anything while a MODEL is active;
+  // DOM content views own the body otherwise (no MIN_GL fallback needed —
+  // DOM scales down natively).
+  const showEmpty = !active
+  const showLoading = modelActive && status.status === 'loading'
+  const showError = modelActive && status.status === 'error'
+  const glPoster = modelActive && status.status === 'ready' && glTooSmall
+  const showBodyOverlay = showEmpty || showLoading || showError || glPoster
 
   return (
     <div
@@ -215,14 +228,20 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
         onContextMenu={e => { e.preventDefault(); e.stopPropagation() }}
         style={{
           flex: 1, position: 'relative',
-          background: 'transparent',
+          // Transparent for GL/empty (grid shows around, GL beneath);
+          // opaque for DOM content views.
+          background: modelActive || !active ? 'transparent' : '#0d0e1a',
           borderBottom: `${borderW}px solid rgba(140,170,255,${isHovered ? 0.35 : 0.18})`,
           borderLeft: `${borderW}px solid rgba(140,170,255,${isHovered ? 0.35 : 0.18})`,
           borderRight: `${borderW}px solid rgba(140,170,255,${isHovered ? 0.35 : 0.18})`,
-          cursor: status.status === 'ready' ? 'grab' : 'default',
+          cursor: modelActive && status.status === 'ready' ? 'grab' : 'default',
           overflow: 'hidden',
         }}
       >
+        {/* DOM content views (image/video/audio/text) — models paint via GL */}
+        {active && !modelActive && (
+          <ContentView windowId={id} item={active} zoom={zoom} />
+        )}
         {showBodyOverlay && (
           <div style={{
             position: 'absolute', inset: 0,
@@ -238,14 +257,14 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
             <div style={{ fontSize: 10 * iz, color: showError ? 'rgba(255,150,150,0.8)' : 'rgba(255,255,255,0.35)', textAlign: 'center', maxWidth: '85%' }}>
               {showError ? (status.errorMsg ?? 'Failed to load model')
                 : showLoading ? 'Loading model…'
-                : showEmpty ? 'Drop a 3D model here, or magnet a model tile to an edge · drag orbit · shift-drag pan · scroll zoom'
+                : showEmpty ? 'Drop content here, or magnet cards and tiles to an edge'
                 : null}
             </div>
           </div>
         )}
 
-        {/* Model playlist — appears when ≥2 models are docked; also owns
-            active-model reconciliation, so it mounts unconditionally. */}
+        {/* Content playlist — appears when ≥2 items are docked; also owns
+            active-item reconciliation, so it mounts unconditionally. */}
         <ViewportSwitcherStrip windowId={id} />
       </div>
 

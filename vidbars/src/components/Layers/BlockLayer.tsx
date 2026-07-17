@@ -19,7 +19,7 @@ import { PortalFrame, computeGroupBlockFootprint } from './PortalFrame'
 import { groupBoardSlots, clampBoardX } from '../../utils/nlePush'
 import { tryDockGroupAtRest, updateDeckMagnetPreview } from '../../utils/deckDockDrag'
 import { useMagnetPreviewStore } from '../../store/magnetPreviewStore'
-import { groupHasModels } from '../../utils/modelTraversal'
+import { groupHasBrowsableContent } from '../../utils/contentTraversal'
 import { DEFAULT_H } from '../../utils/barConstants'
 import { getFirstImageUrl } from '../../types/bar'
 import { HeroImageLayer } from './HeroImageLayer'
@@ -171,7 +171,7 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
     // moves within its group, but for a one-board group the slot IS the
     // card). Ungrouped blocks dock on release via groupBoardAsNew below.
     const canDockBlock = !ungrouped && !isMulti && group.boardIds.length === 1
-      && groupHasModels(group.id, bs0.groups, bs0.boards)
+      && groupHasBrowsableContent(group.id, bs0.groups, bs0.boards)
     // Ungrouped: free drag start
     const startCX = b0.canvasX ?? 0
     const startCY = b0.canvasY ?? 0

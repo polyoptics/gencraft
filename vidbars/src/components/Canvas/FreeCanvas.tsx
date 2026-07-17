@@ -6,6 +6,7 @@ import { FreeNode } from './FreeNode'
 import { MagnetDockPreview } from './MagnetDockPreview'
 import { useViewportBounds, intersectsViewport } from '../../hooks/useViewportBounds'
 import { computeTileClusters, type DockableItem, type WindowRect } from '../../utils/viewportDocking'
+import { tileBrowseItem } from '../../utils/contentTraversal'
 
 export const FreeCanvas: React.FC = React.memo(() => {
   // Only re-render when nodes are added/removed, not when node content changes
@@ -24,12 +25,13 @@ export const FreeCanvas: React.FC = React.memo(() => {
     })
   }, [nodeIds, vp])
 
-  // Deck-style tile connections: model tiles touching each other join a
-  // cluster; a cluster touching a viewport window is CONNECTED to it —
-  // those tiles get the accent affordance and click-to-load (FreeNode).
+  // Deck-style tile connections: CONTENT-bearing tiles touching each
+  // other join a cluster; a cluster touching a browser window is
+  // CONNECTED to it — those tiles get the accent affordance and
+  // click-to-load (FreeNode).
   const tileConnections = useMemo(() => {
     const tiles: DockableItem[] = Object.values(nodes)
-      .filter(n => n.type === 'model' && n.imageUrl)
+      .filter(n => tileBrowseItem(n) !== null)
       .map(n => ({ id: n.id, x: n.x, y: n.y, width: n.width, height: n.height }))
     const winRects: WindowRect[] = Object.values(windows)
       .map(w => ({ id: w.id, x: w.x, y: w.y, width: w.width, height: w.height }))

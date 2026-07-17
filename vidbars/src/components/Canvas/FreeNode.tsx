@@ -16,6 +16,7 @@ import { useViewport3DStore } from '../../store/viewport3dStore'
 import { useMagnetPreviewStore } from '../../store/magnetPreviewStore'
 import { cardVisualRect } from '../../hooks/useCardDecks'
 import { findMagnetCandidate, magnetRadiusForZoom, type WindowRect } from '../../utils/viewportDocking'
+import { tileBrowseItem } from '../../utils/contentTraversal'
 import { ensureModelPoster, getModelPoster, useModelPoster } from '../../three/posterService'
 import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
 import { DrawableSurface } from '../Annotation/DrawableSurface'
@@ -95,10 +96,10 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
     }
     dragLastX.current = e.clientX
     dragLastY.current = e.clientY
-    // Magnet affordance: model tiles near a viewport window edge show a
-    // "will snap here" ghost (dock itself is resolved on release).
+    // Magnet affordance: content-bearing tiles near a browser window edge
+    // show a "will snap here" ghost (dock itself resolves on release).
     const n = useFreeNodeStore.getState().nodes[id]
-    if (n?.mediaType === 'model' && n.imageUrl) {
+    if (n && tileBrowseItem(n) !== null) {
       const winRects: WindowRect[] = Object.values(useViewport3DStore.getState().windows)
         .map(w => ({ id: w.id, x: w.x, y: w.y, width: w.width, height: w.height }))
       const cand = winRects.length > 0 ? findMagnetCandidate(n, winRects, magnetRadiusForZoom(zoom)) : null
@@ -127,24 +128,26 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
           setTextEditing(true)
         }
         setFreeSelection([id])
-        // Connected model tile: a plain click also shows its model in the
-        // viewport window its cluster touches (in addition to the strip).
-        if (node.type === 'model' && connectedWindowId && node.imageUrl) {
-          useViewport3DStore.getState().setActiveModel(connectedWindowId, node.imageUrl)
+        // Connected content tile: a plain click also shows its item in
+        // the browser window its cluster touches (alongside the strip).
+        if (connectedWindowId) {
+          const item = tileBrowseItem(node)
+          if (item) useViewport3DStore.getState().setActiveItem(connectedWindowId, item)
         }
       }
     }
     // Transfer node content to a bar/card on drop
-    // Magnet dock: a model tile released near a viewport window edge snaps
-    // flush and loads its model. The tile is KEPT (dock membership stays
-    // derived from its position) — this outranks the transfer scan below.
+    // Magnet dock: a content tile released near a browser window edge
+    // snaps flush and loads its item. The tile is KEPT (dock membership
+    // stays derived from its position) — outranks the transfer scan below.
     {
       const preview = useMagnetPreviewStore.getState().preview
       if (preview) useMagnetPreviewStore.getState().setPreview(null)
-      if (dragHasMoved.current && node?.mediaType === 'model' && preview) {
+      const dockItem = tileBrowseItem(node)
+      if (dragHasMoved.current && dockItem && preview) {
         const cur = useFreeNodeStore.getState().nodes[id]
         if (cur) updateFreeNode(id, { x: preview.x, y: preview.y })
-        if (node.imageUrl) useViewport3DStore.getState().setActiveModel(preview.windowId, node.imageUrl)
+        useViewport3DStore.getState().setActiveItem(preview.windowId, dockItem)
         return
       }
     }

@@ -1,35 +1,54 @@
 // ViewportSwitcherStrip.tsx — the source "playlist" at the bottom of a
-// viewport window. One chip per connected SOURCE: tiles show their model
-// poster; cards/decks show the card's FACE (hero) with a ×N badge when
-// they hold several models — clicking a card chip shows its first model,
-// clicking again cycles through them. Also owns the active-model
-// RECONCILIATION: default to the first available model, fall back when
-// the active one disconnects, clear when nothing is connected — debounced
-// (300ms) so a tile mid-drag crossing the boundary doesn't thrash loads.
+// browser window. One chip per connected SOURCE: tiles show their poster/
+// image (or a kind glyph); cards/decks show the card's FACE (hero) with a
+// ×N badge when they hold several items — clicking a card chip shows its
+// first item, clicking again cycles through them. Also owns the
+// active-item RECONCILIATION: default to the first available media item
+// (defaultBrowseItem — text pages don't hijack fresh docks), fall back
+// when the active one disconnects, clear when nothing is connected —
+// debounced (300ms) so a tile mid-drag crossing the boundary doesn't
+// thrash loads.
 
 import React, { useEffect, useRef } from 'react'
-import { useViewport3DStore } from '../../store/viewport3dStore'
+import { useViewport3DStore, activeItemKey } from '../../store/viewport3dStore'
+import type { ActiveItem } from '../../store/viewport3dStore'
 import { useCanvasStore } from '../../store/canvasStore'
-import { useDockedSources, flattenSourceModels, type DockedSource } from '../../hooks/useDockedModels'
+import { useDockedSources, flattenSourceItems, type DockedSource } from '../../hooks/useDockedContent'
+import { defaultBrowseItem } from '../../utils/contentTraversal'
 import { useResolvedMedia } from '../../utils/useResolvedMedia'
+
+/** Glyph per item kind for chips without a face image. */
+function chipGlyph(source: DockedSource): string {
+  if (source.kind === 'card') return '▮'
+  const it = source.items[0]
+  if (!it) return '◆'
+  if (it.kind === 'text') return 'T'
+  switch (it.mediaType) {
+    case 'video': return '▶'
+    case 'audio': return '♪'
+    case 'image': return '🖼'
+    default: return '◆'
+  }
+}
 
 export const ViewportSwitcherStrip: React.FC<{ windowId: string }> = ({ windowId }) => {
   const win = useViewport3DStore(s => s.windows[windowId])
-  const setActiveModel = useViewport3DStore(s => s.setActiveModel)
+  const setActiveItem = useViewport3DStore(s => s.setActiveItem)
   const zoom = useCanvasStore(s => s.zoom)
   const sources = useDockedSources(windowId)
   const reconcileTimer = useRef<number | null>(null)
 
-  const active = win?.activeModelUrl ?? null
-  const flat = flattenSourceModels(sources)
+  const active = win?.activeItem ?? null
+  const activeKey = activeItemKey(active)
+  const flat = flattenSourceItems(sources)
 
   // ── Reconciliation (debounced for drag-transition stability) ──
   useEffect(() => {
     if (!win) return
-    const desired = flat.length === 0
+    const desired: ActiveItem | null = flat.length === 0
       ? null
-      : (active && flat.some(m => m.url === active)) ? active : flat[0].url
-    if (desired === active) {
+      : (active && flat.some(i => activeItemKey(i) === activeKey)) ? active : defaultBrowseItem(flat)
+    if (activeItemKey(desired) === activeKey) {
       if (reconcileTimer.current !== null) { window.clearTimeout(reconcileTimer.current); reconcileTimer.current = null }
       return
     }
@@ -37,14 +56,14 @@ export const ViewportSwitcherStrip: React.FC<{ windowId: string }> = ({ windowId
     reconcileTimer.current = window.setTimeout(() => {
       reconcileTimer.current = null
       const liveWin = useViewport3DStore.getState().windows[windowId]
-      if (liveWin && liveWin.activeModelUrl === active) {
-        setActiveModel(windowId, desired)
+      if (liveWin && activeItemKey(liveWin.activeItem) === activeKey) {
+        setActiveItem(windowId, desired)
       }
     }, 300)
     return () => {
       if (reconcileTimer.current !== null) { window.clearTimeout(reconcileTimer.current); reconcileTimer.current = null }
     }
-  }, [win, flat, active, windowId, setActiveModel])
+  }, [win, flat, active, activeKey, windowId, setActiveItem])
 
   // Show when there's a real choice, or any card is connected (a single
   // docked card should still show its face for provenance).
@@ -52,11 +71,11 @@ export const ViewportSwitcherStrip: React.FC<{ windowId: string }> = ({ windowId
 
   const iz = 1 / zoom
   const onChipClick = (s: DockedSource) => {
-    if (s.models.length === 0) return
-    const idx = active ? s.models.findIndex(m => m.url === active) : -1
-    // Not this source's model yet → its first; else cycle within it.
-    const next = idx < 0 ? s.models[0] : s.models[(idx + 1) % s.models.length]
-    setActiveModel(windowId, next.url)
+    if (s.items.length === 0) return
+    const idx = activeKey ? s.items.findIndex(i => activeItemKey(i) === activeKey) : -1
+    // Not this source's item yet → its first; else cycle within it.
+    const next = idx < 0 ? s.items[0] : s.items[(idx + 1) % s.items.length]
+    setActiveItem(windowId, next)
   }
 
   return (
@@ -70,13 +89,14 @@ export const ViewportSwitcherStrip: React.FC<{ windowId: string }> = ({ windowId
         background: 'rgba(13,14,26,0.85)',
         borderTop: `${Math.max(1, 1 / zoom)}px solid rgba(140,170,255,0.15)`,
         overflowX: 'hidden',
+        zIndex: 2,   // above DOM content views in the body
       }}
     >
       {sources.map(s => (
         <SourceChip
           key={`${s.kind}:${s.id}`}
           source={s}
-          isActive={!!active && s.models.some(m => m.url === active)}
+          isActive={!!activeKey && s.items.some(i => activeItemKey(i) === activeKey)}
           iz={iz}
           onClick={() => onChipClick(s)}
         />
@@ -93,11 +113,11 @@ const SourceChip: React.FC<{
 }> = ({ source, isActive, iz, onClick }) => {
   const resolvedFace = useResolvedMedia(source.face)
   const isCard = source.kind === 'card'
-  const count = source.models.length
+  const count = source.items.length
   return (
     <div
       onClick={onClick}
-      title={isCard && count > 1 ? `${source.name} — ${count} models (click to cycle)` : source.name}
+      title={isCard && count > 1 ? `${source.name} — ${count} items (click to cycle)` : source.name}
       style={{
         position: 'relative',
         display: 'flex', alignItems: 'center', gap: 4 * iz,
@@ -123,7 +143,7 @@ const SourceChip: React.FC<{
           }}
         />
       ) : (
-        <span style={{ fontSize: 8 * iz, color: 'rgba(160,200,255,0.7)', flexShrink: 0 }}>{isCard ? '▮' : '◆'}</span>
+        <span style={{ fontSize: 8 * iz, color: 'rgba(160,200,255,0.7)', flexShrink: 0 }}>{chipGlyph(source)}</span>
       )}
       <span style={{
         fontSize: 9 * iz, color: isActive ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.55)',

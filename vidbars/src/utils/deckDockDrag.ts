@@ -15,7 +15,7 @@ import { useCanvasStore } from '../store/canvasStore'
 import { useViewport3DStore } from '../store/viewport3dStore'
 import { useMagnetPreviewStore } from '../store/magnetPreviewStore'
 import { findMagnetCandidate, magnetRadiusForZoom, type WindowRect } from './viewportDocking'
-import { collectDeckModels } from './modelTraversal'
+import { collectDeckContent, defaultBrowseItem } from './contentTraversal'
 import { cardVisualRect } from '../hooks/useCardDecks'
 
 export function viewportWindowRects(): WindowRect[] {
@@ -75,8 +75,8 @@ export function finishDeckMagnetDock(
     })
     bs.setGroupPosBatch(updates)
   }
-  const models = collectDeckModels(rootGroupId, bs.groups, bs.boards)
-  if (models[0]) useViewport3DStore.getState().setActiveModel(preview.windowId, models[0].url)
+  const first = defaultBrowseItem(collectDeckContent(rootGroupId, bs.groups, bs.boards))
+  if (first) useViewport3DStore.getState().setActiveItem(preview.windowId, first)
   return true
 }
 
@@ -92,8 +92,8 @@ export function tryDockGroupAtRest(groupId: string): boolean {
   const cand = wins.length > 0 ? findMagnetCandidate(rect, wins, radius) : null
   if (!cand) return false
   const bs = useBoardsStore.getState()
-  const models = collectDeckModels(groupId, bs.groups, bs.boards)
-  if (models.length === 0) return false
+  const first = defaultBrowseItem(collectDeckContent(groupId, bs.groups, bs.boards))
+  if (!first) return false
   const g = bs.groups.find(x => x.id === groupId)
   if (!g) return false
   const ddx = cand.snapped.x - rect.x
@@ -101,6 +101,6 @@ export function tryDockGroupAtRest(groupId: string): boolean {
   if (ddx !== 0 || ddy !== 0) {
     bs.setGroupPosBatch([{ groupId, originX: g.originX + ddx, originY: g.originY + ddy }])
   }
-  useViewport3DStore.getState().setActiveModel(cand.windowId, models[0].url)
+  useViewport3DStore.getState().setActiveItem(cand.windowId, first)
   return true
 }

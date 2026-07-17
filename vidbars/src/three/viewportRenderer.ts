@@ -210,11 +210,14 @@ function syncViews(): void {
   for (const id of Array.from(views.keys())) {
     if (!wins[id]) destroyView(id)
   }
-  // Create/refresh views
+  // Create/refresh views. Only MODEL actives engage GL; any other item
+  // kind reads as "no model" here — the view drops to 'empty' and the
+  // scissor loop skips the window (DOM content views own the body).
   for (const win of Object.values(wins)) {
     let view = views.get(win.id)
     if (!view) view = createView(win.id)
-    const targetUrl = win.activeModelUrl
+    const it = win.activeItem
+    const targetUrl = it?.kind === 'media' && it.mediaType === 'model' ? it.url : null
     if (targetUrl !== view.modelUrl) {
       if (targetUrl) {
         void loadModelIntoView(view, targetUrl, win.camera)

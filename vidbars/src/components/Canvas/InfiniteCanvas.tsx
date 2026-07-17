@@ -313,12 +313,11 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
     dropOnBareCanvas(e, files)
   }, [dropOnFreeNode, dropOnBareCanvas])
 
-  /** Model files dropped ONTO a 3D viewport window: create model tiles
+  /** ANY media files dropped ONTO a browser window: create content tiles
    *  docked flush at the window's right edge (stacking downward) and load
-   *  the first one. Returns the files it did NOT consume. */
+   *  the first one. Returns the files it did NOT consume (none when a
+   *  window was hit). */
   const dropOnViewportWindow = useCallback((e: React.DragEvent, files: File[]): File[] => {
-    const modelFiles = files.filter(f => classifyFile(f) === 'model')
-    if (modelFiles.length === 0) return files
     const winEl = document.elementsFromPoint(e.clientX, e.clientY)
       .map(el => el.closest('[data-viewport3d]'))
       .find(Boolean) as HTMLElement | null
@@ -326,22 +325,29 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
     const win = windowId ? useViewport3DStore.getState().windows[windowId] : undefined
     if (!win || !windowId) return files
     useUndoCoordinator.getState().checkpoint()
-    const tileW = 200, tileH = 180
     // Stack down the right edge past anything already parked there.
     const occupied = Object.values(useFreeNodeStore.getState().nodes)
       .map(n => ({ x: n.x, y: n.y, width: n.width, height: n.height }))
-    modelFiles.forEach((file, i) => {
+    files.forEach((file, i) => {
+      const type = classifyFile(file)
+      const tileW = type === 'audio' ? 260 : 200
+      const tileH = type === 'audio' ? 120 : 180
       const slot = nextFreeEdgeSlot(win, 'right', tileW, tileH, occupied)
       occupied.push({ x: slot.x, y: slot.y, width: tileW, height: tileH })
-      const nodeId = addFreeNode(slot.x, slot.y, 'model')
+      const nodeId = addFreeNode(slot.x, slot.y, type)
       uploadFile(file).then(({ url }) => {
+        const label = file.name.replace(/\.[^.]+$/, '')
         useFreeNodeStore.getState().updateFreeNode(nodeId, {
-          imageUrl: url, mediaType: 'model', label: file.name.replace(/\.[^.]+$/, ''),
+          imageUrl: url, mediaType: type, label,
         })
-        if (i === 0) useViewport3DStore.getState().setActiveModel(windowId, url)
+        if (i === 0) {
+          useViewport3DStore.getState().setActiveItem(windowId, {
+            kind: 'media', mediaType: type, url, name: label,
+          })
+        }
       })
     })
-    return files.filter(f => classifyFile(f) !== 'model')
+    return []
   }, [addFreeNode])
 
   const handleDrop = useCallback((e: React.DragEvent) => {
@@ -351,7 +357,7 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
     if (files.length === 0) return
     e.preventDefault()
 
-    // Pre-step: model files aimed at a 3D viewport window dock + load there.
+    // Pre-step: files aimed at a browser window dock + load there.
     files = dropOnViewportWindow(e, files)
     if (files.length === 0) return
 
@@ -529,7 +535,7 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
               { label: '📝  Add note',    action: () => { const c = clampToNoParkZone(addMenu.cx, addMenu.cy, 200, 160); addFreeNode(c.x, c.y, 'note');  setAddMenu(null) } },
               { label: 'T   Add text',    action: () => { const c = clampToNoParkZone(addMenu.cx, addMenu.cy, 200, 180); addFreeNode(c.x, c.y, 'text');  setAddMenu(null) } },
               { label: '🖼  Add image',   action: () => { const c = clampToNoParkZone(addMenu.cx, addMenu.cy, 200, 180); addFreeNode(c.x, c.y, 'image'); setAddMenu(null) } },
-              { label: '◆  Add 3D viewport', action: () => {
+              { label: '◆  Add Viewer', action: () => {
                 useUndoCoordinator.getState().checkpoint()
                 const c = clampToNoParkZone(addMenu.cx, addMenu.cy, VIEWPORT3D_DEFAULT_W, VIEWPORT3D_DEFAULT_H)
                 useViewport3DStore.getState().addWindow(c.x, c.y)

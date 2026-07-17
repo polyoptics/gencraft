@@ -22,7 +22,7 @@ import { DEFAULT_H } from '../../utils/barConstants'
 import { groupSlot, clampGroupMove } from '../../utils/nlePush'
 import { useMagnetPreviewStore } from '../../store/magnetPreviewStore'
 import { updateDeckMagnetPreview, finishDeckMagnetDock } from '../../utils/deckDockDrag'
-import { groupHasModels } from '../../utils/modelTraversal'
+import { groupHasBrowsableContent } from '../../utils/contentTraversal'
 import { FreeCanvas } from '../Canvas/FreeCanvas'
 import { Viewport3DLayer } from '../Viewport3D/Viewport3DLayer'
 import { NLETimelineHeader, NLE_HEADER_CANVAS_H, headerExtend as computeHeaderExtend, headerScreenH, overviewScale } from '../NLE/NLETimelineHeader'
@@ -271,7 +271,7 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
     const mySlot = groupSlot(group.id, group.boardIds, bs0.boards, initialOriginX, initialOriginY, myLayout)
     // Magnet gate: only cards whose recursive content holds ≥1 model can
     // dock to a 3D viewport window (a card is a deck of one).
-    const canDock = groupHasModels(group.id, bs0.groups, bs0.boards)
+    const canDock = groupHasBrowsableContent(group.id, bs0.groups, bs0.boards)
     // One unified work area — collide with every other visible (non-dragging)
     // group, wherever it sits on the canvas.
     const draggingSet = new Set(draggingIds)
@@ -1016,7 +1016,7 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
       : null
     // Magnet gate: decks with ≥1 model anywhere in their recursive content
     // can dock to a 3D viewport window.
-    const canDock = groupHasModels(deck.anchorGroupId, bs0.groups, bs0.boards)
+    const canDock = groupHasBrowsableContent(deck.anchorGroupId, bs0.groups, bs0.boards)
 
     const draggingSet = new Set(allDragIds)
     // One unified work area — collide with every other visible group.
