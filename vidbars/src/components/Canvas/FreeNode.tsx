@@ -188,36 +188,59 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
           useFreeNodeStore.getState().deleteFreeNode(id)
         }
 
-        // Helper: a model dropped on a CARD becomes its OWN BLOCK — a new
-        // board added to the card's group, with the model as the media of
-        // that board's TOP-LEVEL node (root bar). Repeated drops stack up
-        // as sibling blocks, so a "deck of models" card shows one block
-        // per model at block zoom.
+        // A board is "unused" when nothing has touched it: the single
+        // default root bar with no children, name, media, text, icon, or
+        // strokes, and no block/card layer content. A fresh card's default
+        // board qualifies — models FILL it before new blocks are created.
+        const isBoardUnused = (b: import('../../store/boardsStore').BoardData | undefined): boolean => {
+          if (!b || b.rootIds.length !== 1) return false
+          const root = b.bars[b.rootIds[0]]
+          if (!root || root.children.length > 0) return false
+          const c = root.content
+          const barUntouched = (root.name === 'Untitled' || root.name === '')
+            && !root.icon && !(root.strokes && root.strokes.length > 0)
+            && (!c || (!c.text && !c.headerText && (c.images?.length ?? 0) === 0 && (c.media?.length ?? 0) === 0))
+          const layersUntouched = !b.layers?.block?.label && !b.layers?.block?.thumbnail
+            && !b.layers?.card?.text && !b.layers?.card?.heroImage && !b.projectName
+          return barUntouched && layersUntouched
+        }
+
+        // Helper: a model dropped on a CARD gets its OWN BLOCK, with the
+        // model as the media of that block's TOP-LEVEL node (root bar).
+        // An existing UNUSED board (e.g. a fresh card's default one) is
+        // filled first; a new board is only created once every board has
+        // been used in some way.
         const addModelBlockToCard = (groupId: string): boolean => {
           if (!node.imageUrl) return false
           const bs0 = useBoardsStore.getState()
           const group = bs0.groups.find(g => g.id === groupId)
           if (!group) return false
+          const modelPoster = node.posterUrl ?? getModelPoster(node.imageUrl)
+          const fillModel = (boardId: string): boolean => {
+            const rootBar = useBoardsStore.getState().boards[boardId]?.rootIds[0]
+            if (!rootBar) return false
+            const store = useBoardsStore.getState()
+            if (node.label) store.renameBar(boardId, rootBar, node.label)
+            store.setContent(boardId, rootBar, {
+              media: [{
+                url: node.imageUrl!, type: 'model' as const,
+                ...(modelPoster ? { posterUrl: modelPoster } : {}),
+                ...(node.label ? { originalName: node.label } : {}),
+              }],
+            })
+            useFreeNodeStore.getState().deleteFreeNode(id)
+            return true
+          }
+          // Fill-first: reuse an untouched board before adding a block.
+          const emptyBoardId = group.boardIds.find(bid => isBoardUnused(bs0.boards[bid]))
+          if (emptyBoardId) return fillModel(emptyBoardId)
           // Land the new block after the card's existing content: top row,
           // just right of the visual card edge.
           const v = cardVisualRect(group, bs0.boards, useCanvasStore.getState().zoom)
           const dropX = (v ? v.rect.right : group.originX) + 40
           const newBoardId = bs0.createBoard(0, 0)
           useBoardsStore.getState().reassignBoard(newBoardId, groupId, { x: dropX, y: group.originY })
-          const rootBar = useBoardsStore.getState().boards[newBoardId]?.rootIds[0]
-          if (!rootBar) return false
-          const store = useBoardsStore.getState()
-          if (node.label) store.renameBar(newBoardId, rootBar, node.label)
-          const modelPoster = node.posterUrl ?? getModelPoster(node.imageUrl)
-          store.setContent(newBoardId, rootBar, {
-            media: [{
-              url: node.imageUrl, type: 'model' as const,
-              ...(modelPoster ? { posterUrl: modelPoster } : {}),
-              ...(node.label ? { originalName: node.label } : {}),
-            }],
-          })
-          useFreeNodeStore.getState().deleteFreeNode(id)
-          return true
+          return fillModel(newBoardId)
         }
 
         // Priority: board-level blocks > block-layer blocks > cards
