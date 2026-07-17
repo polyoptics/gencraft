@@ -29,32 +29,55 @@ export function isAcceptedMediaFile(f: File): boolean {
     || MODEL_EXT.test(f.name)
 }
 
+/** Fill in the MIME type Windows drops for .glb/.gltf drags so the stored
+ *  blob (and its backup zip entry name) knows what it is. Non-copying:
+ *  slice() re-types the same backing bytes. */
+function withKnownMime(file: File): Blob {
+  if (file.type) return file
+  if (/\.glb$/i.test(file.name)) return file.slice(0, file.size, 'model/gltf-binary')
+  if (/\.gltf$/i.test(file.name)) return file.slice(0, file.size, 'model/gltf+json')
+  return file
+}
+
+/** Best-effort raw-file archive: also POST the file to the dev server so a
+ *  plain copy lands in public/uploads/ on disk. The returned path is never
+ *  referenced — the blob store is the source of truth — so failures (no dev
+ *  server, prod build) are silently ignored. */
+function mirrorToServer(file: File): void {
+  const form = new FormData()
+  form.append('file', file)
+  fetch('/api/upload', { method: 'POST', body: form }).catch(() => {})
+}
+
 /**
- * Ingest a dropped/picked file. Tries the server upload first; if that's
- * unavailable, stores the file in the LOCAL blob store and returns a
- * `mediaref:` (so new media never bloats the persisted state as base64).
- * Only if the blob store also fails do we fall back to a base64 data URL
- * so a drop is never lost.
+ * Ingest a dropped/picked file. Stores the bytes in the LOCAL IndexedDB
+ * blob store FIRST and returns a `mediaref:` — local-first because the
+ * project backup only bundles blob-store media: a server `/uploads/` path
+ * is invisible to the exporter and dead without the dev server. A raw copy
+ * is still mirrored to the server's uploads folder as an on-disk archive.
+ *
+ * Fallbacks if the blob store fails (e.g. quota): server upload (the
+ * load-time localization sweep pulls it local later), then an inline
+ * base64 data URL — a drop is never lost.
  */
 export async function uploadFile(file: File): Promise<UploadResult> {
   const type = classifyFile(file)
   try {
-    const form = new FormData()
-    form.append('file', file)
-    const res = await fetch('/api/upload', { method: 'POST', body: form })
-    if (!res.ok) throw new Error(`Upload failed: ${res.status}`)
-    // Keep the CLIENT classification — the upload server predates 'model'
-    // and would mislabel .glb as 'image'.
-    const json = await res.json()
-    return { ...json, type }
+    const id = await putMedia(withKnownMime(file))
+    mirrorToServer(file)
+    return { url: makeMediaRef(id), type, originalName: file.name }
   } catch {
-    // Server unavailable → keep it local: store the File (a Blob) in the
-    // media blob store and reference it.
     try {
-      const id = await putMedia(file)
-      return { url: makeMediaRef(id), type, originalName: file.name }
+      const form = new FormData()
+      form.append('file', file)
+      const res = await fetch('/api/upload', { method: 'POST', body: form })
+      if (!res.ok) throw new Error(`Upload failed: ${res.status}`)
+      // Keep the CLIENT classification — the upload server predates 'model'
+      // and would mislabel .glb as 'image'.
+      const json = await res.json()
+      return { ...json, type }
     } catch {
-      // Last resort (e.g. quota): inline as a data URL so the drop survives.
+      // Last resort: inline as a data URL so the drop survives.
       return new Promise((resolve, reject) => {
         const reader = new FileReader()
         reader.onload = () => resolve({ url: reader.result as string, type, originalName: file.name })
