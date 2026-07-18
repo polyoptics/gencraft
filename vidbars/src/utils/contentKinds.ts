@@ -26,9 +26,12 @@ export interface ListQuery {
   query: string
   kind: ContentKind | 'all'
   includeCanvasItems: boolean
-  /** Snapshot of the Rolodex sort at pin time — pinned lists must not
-   *  reshuffle when the Rolodex sort toggle changes later. */
+  /** Snapshot of the Rolodex sort at pin time; the EMBEDDED rolodex on a
+   *  pinned tile edits this in place (its own sort toggle). */
   sortMode: 'creation' | 'alphabetical'
+  /** Embedded-rolodex view state, persisted per pinned tile. */
+  view?: 'flat' | 'tree'
+  collapsedDeckIds?: string[]
 }
 
 /** Human summary for list-tile headers, e.g. `3D · “mech”` or `All`. */

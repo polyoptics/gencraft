@@ -17,7 +17,7 @@ import { useMagnetPreviewStore } from '../../store/magnetPreviewStore'
 import { cardVisualRect } from '../../hooks/useCardDecks'
 import { findMagnetCandidate, magnetRadiusForZoom, type WindowRect } from '../../utils/viewportDocking'
 import { tileBrowseItem, isDockableTile } from '../../utils/contentTraversal'
-import { ListTileBody } from './ListTileBody'
+import { CardRolodex } from '../Rolodex/CardRolodex'
 import { ensureModelPoster, getModelPoster, useModelPoster } from '../../three/posterService'
 import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
 import { DrawableSurface } from '../Annotation/DrawableSurface'
@@ -677,9 +677,14 @@ const FreeNodeBody: React.FC<{
     return <ModelTileBody node={node} id={id} dz={dz} updateFreeNode={updateFreeNode} />
   }
 
-  // ── List type: live query results (pinned from the Rolodex) ──
+  // ── List type: a FULL embedded Rolodex — 100% the floating panel's
+  //    functionality, state persisted on this node's listQuery. ──
   if (node.type === 'list') {
-    return <ListTileBody node={node} dz={dz} />
+    return (
+      <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
+        <CardRolodex embedded={{ nodeId: id }} />
+      </div>
+    )
   }
 
   // ── Note type: always-editable textarea ──

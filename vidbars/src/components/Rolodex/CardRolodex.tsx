@@ -29,7 +29,7 @@ import { getFirstImageUrl } from '../../types/bar'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import type { FreeNodeData } from '../../store/freeNodeStore'
 import {
-  type ContentKind, KIND_LABELS, groupHasContentOfKind, freeNodeMatchesKind,
+  type ContentKind, type ListQuery, KIND_LABELS, groupHasContentOfKind, freeNodeMatchesKind,
   hasRenderableContent, sortGroups, sortFreeNodes, formatListQuerySummary,
 } from '../../utils/contentKinds'
 import { getModelPoster } from '../../three/posterService'
@@ -196,6 +196,9 @@ const OVERHANG_ALLOWANCE = 500
 // = LIST_AREA_H_COMPACT + rolodexExpansion (panel grows downward when the
 // user drags the bottom).
 const LIST_AREA_H_COMPACT = SLOT_PEEK_H * (VISIBLE_RADIUS * 2 + 1)
+// Stable empty array for embedded-mode collapsed ids (referential
+// stability keeps the collapsedDeckIdSet memo quiet).
+const EMPTY_IDS: string[] = []
 // Small permanent height bonus on the active card even at the
 // "super-collapsed" end of the expansion range, so the user can
 // always tell which row is selected without an image / size jump.
@@ -372,15 +375,24 @@ function buildTreeList(
 }
 
 // ─── Main panel ────────────────────────────────────────────────
+//
+// Renders in TWO modes sharing 100% of the list machinery:
+//  - FLOATING (no props): the classic fixed panel, state in canvasStore +
+//    component-local session state.
+//  - EMBEDDED ({ embedded: { nodeId } }): mounted inside a pinned LIST
+//    tile's body on the canvas. All query/view state lives in the node's
+//    persisted listQuery (edits write back live), the panel fills the
+//    tile, the tile's resize handle replaces the expansion drag, and the
+//    tile header replaces panel drag/close.
 
-export const CardRolodex: React.FC = () => {
-  const isOpen = useCanvasStore(s => s.rolodexOpen)
-  const sortMode = useCanvasStore(s => s.rolodexSortMode)
-  const setSortMode = useCanvasStore(s => s.setRolodexSortMode)
-  const view = useCanvasStore(s => s.rolodexView)
-  const setView = useCanvasStore(s => s.setRolodexView)
-  const displayMode = useCanvasStore(s => s.rolodexDisplayMode)
-  const setDisplayMode = useCanvasStore(s => s.setRolodexDisplayMode)
+export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embedded }) => {
+  const flIsOpen = useCanvasStore(s => s.rolodexOpen)
+  const flSortMode = useCanvasStore(s => s.rolodexSortMode)
+  const setFlSortMode = useCanvasStore(s => s.setRolodexSortMode)
+  const flView = useCanvasStore(s => s.rolodexView)
+  const setFlView = useCanvasStore(s => s.setRolodexView)
+  const flDisplayMode = useCanvasStore(s => s.rolodexDisplayMode)
+  const setFlDisplayMode = useCanvasStore(s => s.setRolodexDisplayMode)
 
   // Hovered-zone state shared between the panel and the side dock.
   // The dock only appears while the cursor is inside the panel OR
@@ -406,23 +418,9 @@ export const CardRolodex: React.FC = () => {
   const setRolodexOpen = useCanvasStore(s => s.setRolodexOpen)
   const rolodexPos = useCanvasStore(s => s.rolodexPos)
   const setRolodexPos = useCanvasStore(s => s.setRolodexPos)
-  const rolodexExpansion = useCanvasStore(s => s.rolodexExpansion)
-  const setRolodexExpansion = useCanvasStore(s => s.setRolodexExpansion)
+  const flExpansion = useCanvasStore(s => s.rolodexExpansion)
+  const setFlExpansion = useCanvasStore(s => s.setRolodexExpansion)
 
-  // List-area height grows / shrinks linearly with rolodexExpansion,
-  // clamped to 0 at the closed extreme. The drag handle moves the
-  // bottom of the panel by exactly the drag delta — drag UP past
-  // super-collapsed and the panel shrinks toward closed; drag DOWN
-  // past MAX_EXPANSION and the panel keeps growing to reveal more
-  // below-stack cards.
-  const LIST_AREA_H = Math.max(0, LIST_AREA_H_COMPACT + rolodexExpansion)
-  // activeGrowth + expansionFraction are computed AFTER rows is built
-  // so we can scale the phase-2 threshold to the list's actual row
-  // count (see compactThreshold below). For long lists that fully
-  // fill the compact view, the threshold is 0 — same as before. For
-  // short lists, the threshold is negative so the active card starts
-  // growing earlier (the moment the panel is tall enough to show all
-  // tabs at peek height).
   const groups = useBoardsStore(s => s.groups)
   const boards = useBoardsStore(s => s.boards)
   const jumpToGroup = useCanvasStore(s => s.jumpToGroup)
@@ -430,14 +428,74 @@ export const CardRolodex: React.FC = () => {
   // Search filter — controls the header input. Filters the list by
   // group name. Tree-mode preserves ancestry: if any descendant matches,
   // its anchor chain is kept too so the user sees the full deck context.
-  const [searchQuery, setSearchQuery] = useState('')
+  const [flSearchQuery, setFlSearchQuery] = useState('')
   // Content-kind filter + canvas-items toggle — session state like the
   // search query (queries aren't persisted; the pin button snapshots
   // them into the spawned list object instead).
-  const [kindFilter, setKindFilter] = useState<ContentKind | 'all'>('all')
-  const [includeCanvasItems, setIncludeCanvasItems] = useState(false)
+  const [flKindFilter, setFlKindFilter] = useState<ContentKind | 'all'>('all')
+  const [flIncludeCanvasItems, setFlIncludeCanvasItems] = useState(false)
   const freeNodes = useFreeNodeStore(s => s.nodes)
   const jumpToFreeNode = useCanvasStore(s => s.jumpToFreeNode)
+
+  // ── Embedded-mode state adapter ─────────────────────────────────
+  // All query/view state reads/writes go to the node's persisted
+  // listQuery; panel height derives from the tile's measured body.
+  const embeddedNode = useFreeNodeStore(s => (embedded ? s.nodes[embedded.nodeId] : undefined))
+  const eq = embeddedNode?.listQuery
+  const patchQuery = useCallback((patch: Partial<ListQuery>) => {
+    if (!embedded) return
+    const fns = useFreeNodeStore.getState()
+    const n = fns.nodes[embedded.nodeId]
+    if (!n?.listQuery) return
+    const q = { ...n.listQuery, ...patch }
+    fns.updateFreeNode(embedded.nodeId, { listQuery: q, label: formatListQuerySummary(q) })
+  }, [embedded])
+  const [embedH, setEmbedH] = useState(340)
+  const embedRootRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!embedded || !embedRootRef.current) return
+    const el = embedRootRef.current
+    const ro = new ResizeObserver(() => setEmbedH(el.offsetHeight))
+    ro.observe(el)
+    setEmbedH(el.offsetHeight)
+    return () => ro.disconnect()
+  }, [embedded])
+
+  const isOpen = embedded ? true : flIsOpen
+  const searchQuery = embedded ? (eq?.query ?? '') : flSearchQuery
+  const setSearchQuery = embedded ? (v: string) => patchQuery({ query: v }) : setFlSearchQuery
+  const kindFilter = embedded ? (eq?.kind ?? 'all') : flKindFilter
+  const setKindFilter = embedded ? (v: ContentKind | 'all') => patchQuery({ kind: v }) : setFlKindFilter
+  const includeCanvasItems = embedded ? (eq?.includeCanvasItems ?? false) : flIncludeCanvasItems
+  const setIncludeCanvasItems: React.Dispatch<React.SetStateAction<boolean>> = embedded
+    ? (v => patchQuery({ includeCanvasItems: typeof v === 'function' ? v(includeCanvasItems) : v }))
+    : setFlIncludeCanvasItems
+  const sortMode = embedded ? (eq?.sortMode ?? 'creation') : flSortMode
+  const setSortMode = embedded ? (v: 'creation' | 'alphabetical') => patchQuery({ sortMode: v }) : setFlSortMode
+  const view = embedded ? (eq?.view ?? 'flat') : flView
+  const setView = embedded ? (v: 'flat' | 'tree') => patchQuery({ view: v }) : setFlView
+  const displayMode = embedded ? ('auto' as const) : flDisplayMode
+  const setDisplayMode = embedded ? (() => {}) : setFlDisplayMode
+  // Chrome above/below the list area inside the embedded panel: header
+  // (~26) + filter strip (~21) + cabinet base.
+  const EMBED_CHROME = 26 + 21 + CABINET_BAR_H
+  const rolodexExpansion = embedded
+    ? Math.max(MIN_EXPANSION, embedH - EMBED_CHROME - LIST_AREA_H_COMPACT)
+    : flExpansion
+  const setRolodexExpansion = embedded
+    ? (v: number) => {
+        const fns = useFreeNodeStore.getState()
+        const n = fns.nodes[embedded.nodeId]
+        if (!n) return
+        fns.updateFreeNode(embedded.nodeId, { height: Math.max(160, n.height + (v - rolodexExpansion)) })
+      }
+    : setFlExpansion
+
+  // List-area height grows / shrinks linearly with rolodexExpansion,
+  // clamped to 0 at the closed extreme. The drag handle moves the
+  // bottom of the panel by exactly the drag delta (embedded: resizes
+  // the tile instead).
+  const LIST_AREA_H = Math.max(0, LIST_AREA_H_COMPACT + rolodexExpansion)
 
   // Skip phantom groups whose boardIds all resolve to missing/empty
   // boards — the canvas already hides them (rendered as 0×0), so the
@@ -626,8 +684,15 @@ export const CardRolodex: React.FC = () => {
   // members nested by indent level, then standalones at the end. The
   // sortMode is applied to siblings within each branch. Operates on
   // visibleGroups so phantom groups never reach the builders.
-  const collapsedDeckIds = useCanvasStore(s => s.rolodexCollapsedDeckIds)
-  const toggleDeckCollapsed = useCanvasStore(s => s.toggleRolodexDeckCollapsed)
+  const flCollapsedDeckIds = useCanvasStore(s => s.rolodexCollapsedDeckIds)
+  const flToggleDeckCollapsed = useCanvasStore(s => s.toggleRolodexDeckCollapsed)
+  const collapsedDeckIds = embedded ? (eq?.collapsedDeckIds ?? EMPTY_IDS) : flCollapsedDeckIds
+  const toggleDeckCollapsed = embedded
+    ? (gid: string) => {
+        const cur = eq?.collapsedDeckIds ?? []
+        patchQuery({ collapsedDeckIds: cur.includes(gid) ? cur.filter(x => x !== gid) : [...cur, gid] })
+      }
+    : flToggleDeckCollapsed
   const collapsedDeckIdSet = useMemo(() => new Set(collapsedDeckIds), [collapsedDeckIds])
   const rows = useMemo(() => {
     const groupRows = view === 'tree'
@@ -1193,7 +1258,7 @@ export const CardRolodex: React.FC = () => {
             active card row), then locks there.
           The 'pseudo-cabinet' colors in the dock's styles make it read
           as a small detachable piece of the same frame. */}
-      {(() => {
+      {!embedded && (() => {
         const APPROX_HEADER_H = 46   // header (26) + filter strip (~20)
         const DOCK_H = 82
         const DOCK_W = 30
@@ -1233,14 +1298,28 @@ export const CardRolodex: React.FC = () => {
       })()}
       <div
         data-rolodex
+        ref={embedded ? embedRootRef : undefined}
         onWheel={onWheel}
         onPointerEnter={onHoverEnter}
         onPointerLeave={onHoverLeave}
-        // Whole-panel drag — pointerdown anywhere except buttons/cards/
-        // cabinet/input(click) moves the window. See onPanelPointerDown
-        // for the per-target rules.
-        onPointerDown={onPanelPointerDown}
-        style={{
+        // FLOATING: whole-panel drag (see onPanelPointerDown). EMBEDDED:
+        // let background pointerdowns bubble to the FreeNode wrapper so
+        // the TILE drags instead; inner controls stopPropagation on their
+        // own already.
+        onPointerDown={embedded ? undefined : onPanelPointerDown}
+        style={embedded ? {
+          position: 'relative',
+          width: '100%',
+          height: '100%',
+          background: PANEL_BG,
+          overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'row',
+          alignItems: 'flex-start',
+          gap: 4,
+          fontFamily: 'inherit',
+          userSelect: 'none',
+        } : {
           position: 'fixed',
           left: rolodexPos.x,
           top: rolodexPos.y,
@@ -1346,14 +1425,19 @@ export const CardRolodex: React.FC = () => {
               <button
                 onClick={() => {
                   // Pin the current filtered list to the canvas as a LIVE
-                  // query object, placed just right of the panel.
+                  // query object — beside the panel (floating) or beside
+                  // this tile (embedded → clones the list).
                   const cs = useCanvasStore.getState()
-                  const cx = (rolodexPos.x + LEFTCOL_W + 60 - cs.pan.x) / cs.zoom
-                  const cy = (rolodexPos.y + 60 - cs.pan.y) / cs.zoom
+                  const cx = embedded && embeddedNode
+                    ? embeddedNode.x + embeddedNode.width + 40
+                    : (rolodexPos.x + LEFTCOL_W + 60 - cs.pan.x) / cs.zoom
+                  const cy = embedded && embeddedNode
+                    ? embeddedNode.y
+                    : (rolodexPos.y + 60 - cs.pan.y) / cs.zoom
                   useUndoCoordinator.getState().checkpoint()
                   const fns = useFreeNodeStore.getState()
                   const nid = fns.addFreeNode(cx, cy, 'list')
-                  const listQuery = { query: searchQuery.trim(), kind: kindFilter, includeCanvasItems, sortMode }
+                  const listQuery = { query: searchQuery.trim(), kind: kindFilter, includeCanvasItems, sortMode, view, collapsedDeckIds: [...collapsedDeckIds] }
                   fns.updateFreeNode(nid, { listQuery, label: formatListQuerySummary(listQuery) })
                   fns.setFreeSelection([nid])
                 }}
@@ -1364,7 +1448,7 @@ export const CardRolodex: React.FC = () => {
                   padding: '1px 6px', cursor: 'pointer', fontFamily: 'inherit', lineHeight: 1.4,
                 }}
               >📌</button>
-              <CloseButton onClick={() => setRolodexOpen(false)} />
+              {!embedded && <CloseButton onClick={() => setRolodexOpen(false)} />}
             </div>
           </div>
 

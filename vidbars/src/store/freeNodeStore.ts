@@ -101,11 +101,13 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
       image: 'Image', note: 'Note', text: 'Text', video: 'Video', audio: 'Audio', model: 'Model', list: 'List',
     }
     const heights: Record<FreeNodeType, number> = {
-      image: 180, note: 160, text: 180, video: 180, audio: 120, model: 180, list: 280,
+      image: 180, note: 160, text: 180, video: 180, audio: 120, model: 180, list: 440,
     }
     const node: FreeNodeData = {
       id, x, y,
-      width: type === 'audio' ? 260 : type === 'list' ? 220 : 200,
+      // Lists host a full embedded Rolodex — size for its natural panel
+      // width (LEFTCOL_W 196 + margins).
+      width: type === 'audio' ? 260 : type === 'list' ? 240 : 200,
       height: heights[type] ?? 160,
       type,
       label: labels[type] ?? type,
