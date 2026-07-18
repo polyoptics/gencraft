@@ -235,6 +235,10 @@ const ImageEditor: React.FC<{ windowId: string; url: string }> = ({ windowId, ur
         name: prev?.kind === 'media' ? prev.name : undefined,
       })
       enterMode('view')
+    } catch (err) {
+      // e.g. a cross-origin image tainting the canvas — keep the edit
+      // state so the user can Cancel; nothing was written.
+      console.warn('[image-editor] apply failed', err)
     } finally {
       setBusy(false)
     }
@@ -574,8 +578,8 @@ const TextToolbar: React.FC<{
     >
       {target !== null && (
         <div style={{ display: 'flex', gap: 2, marginRight: 3 }}>
-          <button style={tbBtn(target === 'header')} onClick={() => setTarget('header')} title="Style the header block">H</button>
-          <button style={tbBtn(target === 'body')} onClick={() => setTarget('body')} title="Style the body block">B̲</button>
+          <button style={{ ...tbBtn(target === 'header'), fontSize: 9.5 }} onClick={() => setTarget('header')} title="Style the header block">Hdr</button>
+          <button style={{ ...tbBtn(target === 'body'), fontSize: 9.5 }} onClick={() => setTarget('body')} title="Style the body block">Body</button>
         </div>
       )}
       <select
