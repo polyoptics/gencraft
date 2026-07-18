@@ -66,17 +66,26 @@ export const ViewportSwitcherStrip: React.FC<{ windowId: string }> = ({ windowId
     }
   }, [win, flat, active, activeKey, windowId, setActiveItem])
 
-  // Show when there's a real choice, or any card/list is connected (a
-  // single docked card/list should still show provenance).
-  if (!win || (flat.length < 2 && !sources.some(s => s.kind === 'card' || s.kind === 'list'))) return null
+  // Show whenever something is connected and showing — this is the
+  // "now viewing" provenance card, not a picker.
+  if (!win || !active || flat.length === 0) return null
 
   const iz = 1 / zoom
-  const onChipClick = (s: DockedSource) => {
-    if (s.items.length === 0) return
-    const idx = activeKey ? s.items.findIndex(i => activeItemKey(i) === activeKey) : -1
-    // Not this source's item yet → its first; else cycle within it.
-    const next = idx < 0 ? s.items[0] : s.items[(idx + 1) % s.items.length]
-    setActiveItem(windowId, next)
+  // The SOURCE the active item belongs to (first source containing it).
+  const activeSource = sources.find(s => s.items.some(i => activeItemKey(i) === activeKey)) ?? null
+  const flatIdx = flat.findIndex(i => activeItemKey(i) === activeKey)
+  const step = (dir: 1 | -1) => {
+    if (flat.length === 0) return
+    const cur = flatIdx < 0 ? 0 : flatIdx
+    setActiveItem(windowId, flat[(cur + dir + flat.length) % flat.length])
+  }
+
+  const navBtn: React.CSSProperties = {
+    background: 'rgba(255,255,255,0.06)', border: `${Math.max(1, iz)}px solid rgba(255,255,255,0.12)`,
+    borderRadius: 4 * iz, color: 'rgba(255,255,255,0.7)',
+    fontSize: 11 * iz, fontWeight: 700, lineHeight: 1,
+    padding: `${3 * iz}px ${7 * iz}px`, cursor: 'pointer', fontFamily: 'inherit',
+    flexShrink: 0, userSelect: 'none' as const,
   }
 
   return (
@@ -85,51 +94,47 @@ export const ViewportSwitcherStrip: React.FC<{ windowId: string }> = ({ windowId
       onWheel={e => e.stopPropagation()}
       style={{
         position: 'absolute', left: 0, right: 0, bottom: 0,
-        display: 'flex', alignItems: 'center', gap: 4 * iz,
-        padding: `${4 * iz}px ${6 * iz}px`,
-        background: 'rgba(13,14,26,0.85)',
+        display: 'flex', alignItems: 'center', gap: 6 * iz,
+        padding: `${4 * iz}px ${8 * iz}px`,
+        background: 'rgba(13,14,26,0.88)',
         borderTop: `${Math.max(1, 1 / zoom)}px solid rgba(140,170,255,0.15)`,
-        overflowX: 'hidden',
         zIndex: 2,   // above DOM content views in the body
       }}
     >
-      {sources.map(s => (
-        <SourceChip
-          key={`${s.kind}:${s.id}`}
-          source={s}
-          isActive={!!activeKey && s.items.some(i => activeItemKey(i) === activeKey)}
-          iz={iz}
-          onClick={() => onChipClick(s)}
-        />
-      ))}
+      <button style={navBtn} onClick={() => step(-1)} title="Previous item">‹</button>
+      {activeSource && <NowViewingCard windowId={windowId} source={activeSource} activeKey={activeKey} iz={iz} />}
+      <div style={{ flex: 1 }} />
+      <span style={{ fontSize: 9 * iz, color: 'rgba(255,255,255,0.4)', flexShrink: 0, userSelect: 'none' }}>
+        {flatIdx >= 0 ? flatIdx + 1 : '–'} / {flat.length}
+      </span>
+      <button style={navBtn} onClick={() => step(1)} title="Next item">›</button>
     </div>
   )
 }
 
-const SourceChip: React.FC<{
+/** The card face + name of the source being viewed right now. Clicking it
+ *  cycles within THAT source's items. */
+const NowViewingCard: React.FC<{
+  windowId: string
   source: DockedSource
-  isActive: boolean
+  activeKey: string | null
   iz: number
-  onClick: () => void
-}> = ({ source, isActive, iz, onClick }) => {
+}> = ({ windowId, source, activeKey, iz }) => {
   const resolvedFace = useResolvedMedia(source.face)
-  const isCard = source.kind === 'card'
-  const showCount = source.kind !== 'tile'
-  const count = source.items.length
+  const idxInSource = activeKey ? source.items.findIndex(i => activeItemKey(i) === activeKey) : -1
+  const activeItem = idxInSource >= 0 ? source.items[idxInSource] : null
+  const cycle = () => {
+    if (source.items.length < 2 || idxInSource < 0) return
+    const next = source.items[(idxInSource + 1) % source.items.length]
+    useViewport3DStore.getState().setActiveItem(windowId, next)
+  }
   return (
     <div
-      onClick={onClick}
-      title={showCount && count > 1 ? `${source.name} — ${count} items (click to cycle)` : source.name}
+      onClick={cycle}
+      title={source.items.length > 1 ? `${source.name} — item ${idxInSource + 1} of ${source.items.length} (click to cycle within)` : source.name}
       style={{
-        position: 'relative',
-        display: 'flex', alignItems: 'center', gap: 4 * iz,
-        padding: `${2 * iz}px ${6 * iz}px`,
-        borderRadius: 5 * iz,
-        background: isActive ? 'rgba(120,170,255,0.22)' : 'rgba(255,255,255,0.06)',
-        border: `${Math.max(1, iz)}px solid ${isActive ? 'rgba(140,190,255,0.55)' : 'rgba(255,255,255,0.1)'}`,
-        cursor: 'pointer',
-        flexShrink: 0,
-        maxWidth: 120 * iz,
+        display: 'flex', alignItems: 'center', gap: 6 * iz,
+        minWidth: 0, cursor: source.items.length > 1 ? 'pointer' : 'default',
       }}
     >
       {resolvedFace ? (
@@ -137,29 +142,31 @@ const SourceChip: React.FC<{
           src={resolvedFace}
           draggable={false}
           style={{
-            width: (isCard ? 18 : 16) * iz,
-            height: (isCard ? 22 : 12) * iz,   // cards read as portrait faces
-            objectFit: 'cover',
-            borderRadius: 2 * iz,
-            flexShrink: 0,
+            width: 26 * iz, height: 32 * iz,   // portrait card face
+            objectFit: 'cover', borderRadius: 3 * iz, flexShrink: 0,
+            border: `${Math.max(1, iz)}px solid rgba(140,190,255,0.4)`,
           }}
         />
       ) : (
-        <span style={{ fontSize: 8 * iz, color: 'rgba(160,200,255,0.7)', flexShrink: 0 }}>{chipGlyph(source)}</span>
-      )}
-      <span style={{
-        fontSize: 9 * iz, color: isActive ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.55)',
-        fontWeight: isActive ? 700 : 500,
-        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        userSelect: 'none',
-      }}>{source.name}</span>
-      {showCount && count > 1 && (
         <span style={{
-          fontSize: 8 * iz, fontWeight: 700, flexShrink: 0,
-          padding: `0 ${3 * iz}px`, borderRadius: 3 * iz,
-          background: 'rgba(140,190,255,0.25)', color: 'rgba(200,225,255,0.95)',
-        }}>×{count}</span>
+          width: 26 * iz, height: 32 * iz, borderRadius: 3 * iz, flexShrink: 0,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: 'rgba(255,255,255,0.06)', border: `${Math.max(1, iz)}px solid rgba(255,255,255,0.15)`,
+          fontSize: 12 * iz, color: 'rgba(160,200,255,0.7)',
+        }}>{chipGlyph(source)}</span>
       )}
+      <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 * iz }}>
+        <span style={{
+          fontSize: 10 * iz, fontWeight: 700, color: 'rgba(255,255,255,0.9)',
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', userSelect: 'none',
+        }}>{source.name}</span>
+        <span style={{
+          fontSize: 8.5 * iz, color: 'rgba(255,255,255,0.45)',
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', userSelect: 'none',
+        }}>
+          {activeItem?.name ?? ''}{source.items.length > 1 ? `  ·  ${idxInSource + 1}/${source.items.length}` : ''}
+        </span>
+      </div>
     </div>
   )
 }
