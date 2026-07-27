@@ -10,11 +10,13 @@
 export type DockEdge = 'top' | 'right' | 'bottom' | 'left'
 
 /** Attraction radius while dragging (canvas units) — the zoomed-in floor. */
-export const MAGNET_RADIUS = 48
+export const MAGNET_RADIUS = 20
 /** Screen-space attraction radius: the magnet should FEEL the same at any
  *  zoom. In pure canvas units it shrinks to a few pixels when zoomed out
- *  (48 units at zoom 0.15 ≈ 7px — undiscoverable). */
-export const MAGNET_RADIUS_PX = 64
+ *  (undiscoverable), so the effective radius is the larger of the two.
+ *  Kept deliberately TIGHT — a generous reach made windows grab every
+ *  nearby card/tile while being repositioned. */
+export const MAGNET_RADIUS_PX = 26
 export function magnetRadiusForZoom(zoom: number): number {
   return Math.max(MAGNET_RADIUS, MAGNET_RADIUS_PX / Math.max(0.01, zoom))
 }

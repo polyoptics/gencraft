@@ -26,7 +26,7 @@ import { useUndoCoordinator } from '../../store/undoCoordinator'
 
 export const ContentView: React.FC<{ windowId: string; item: ActiveItem; zoom: number }> = ({ windowId, item, zoom }) => {
   if (item.kind === 'text') {
-    return <CounterScaled zoom={zoom}><TextView sourceId={item.sourceId} name={item.name} /></CounterScaled>
+    return <CounterScaled zoom={zoom}><TextView windowId={windowId} sourceId={item.sourceId} name={item.name} /></CounterScaled>
   }
   switch (item.mediaType) {
     case 'image':
@@ -407,9 +407,9 @@ const AudioView: React.FC<{ url: string; name?: string }> = ({ url, name }) => {
 
 // ── Text ── readable page, content resolved LIVE from the stores. Style
 // merge mirrors RolodexCardPreview (defaults + saved styles + fonts).
-function textBlockCss(ts: TextStyle): React.CSSProperties {
+function textBlockCss(ts: TextStyle, scale = 1): React.CSSProperties {
   return {
-    fontSize: ts.fontSize,
+    fontSize: ts.fontSize * scale,
     lineHeight: ts.lineHeight ?? 1.55,
     fontWeight: ts.fontWeight ?? (ts.bold ? 700 : 400),
     fontStyle: ts.italic ? 'italic' : 'normal',
@@ -428,12 +428,16 @@ function textBlockCss(ts: TextStyle): React.CSSProperties {
  *  source has one, body) are directly editable, writing back LIVE to the
  *  source bar/card/tile; the toolbar styles whichever block was last
  *  focused. checkpoint() on focus = one undo step per editing session. */
-const TextView: React.FC<{ sourceId: string; name?: string }> = ({ sourceId, name }) => {
+const TextView: React.FC<{ windowId: string; sourceId: string; name?: string }> = ({ windowId, sourceId, name }) => {
   const [kind, a, b] = sourceId.split(':')
   const group = useBoardsStore(s => (kind === 'group' ? s.groups.find(g => g.id === a) : undefined))
   const bar = useBoardsStore(s => (kind === 'bar' ? s.boards[a]?.bars[b] : undefined))
   const tile = useFreeNodeStore(s => (kind === 'tile' ? s.nodes[a] : undefined))
   const [target, setTarget] = useState<'header' | 'body'>('body')
+  // VIEW-only zoom: how big text renders in THIS window. Never written
+  // back to the card.
+  const textScale = useViewport3DStore(s => s.windows[windowId]?.textScale ?? 1)
+  const setTextScale = useViewport3DStore(s => s.setTextScale)
 
   if (!group && !bar && !tile) return <Centered>(content removed)</Centered>
 
@@ -478,7 +482,7 @@ const TextView: React.FC<{ sourceId: string; name?: string }> = ({ sourceId, nam
   const activeStyle = (hasHeader && target === 'header') ? headerStyle : bodyStyle
 
   const areaCss = (ts: TextStyle, minH: number): React.CSSProperties => ({
-    ...textBlockCss(ts),
+    ...textBlockCss(ts, textScale),
     width: '100%', minHeight: minH,
     border: 'none', outline: 'none', resize: 'vertical',
     padding: '8px 10px', borderRadius: 6,
@@ -496,6 +500,8 @@ const TextView: React.FC<{ sourceId: string; name?: string }> = ({ sourceId, nam
         target={hasHeader ? target : null}
         setTarget={setTarget}
         onStyle={writeStyle}
+        textScale={textScale}
+        setTextScale={s => setTextScale(windowId, s)}
       />
       <div style={{ flex: 1, overflowY: 'auto' }}>
         <div style={{ maxWidth: 760, margin: '0 auto', padding: '14px 22px 60px' }}>
@@ -546,7 +552,10 @@ const TextToolbar: React.FC<{
   target: 'header' | 'body' | null   // null → single-block source
   setTarget: (t: 'header' | 'body') => void
   onStyle: (patch: Partial<TextStyle>) => void
-}> = ({ style, target, setTarget, onStyle }) => {
+  textScale: number
+  setTextScale: (s: number) => void
+}> = ({ style, target, setTarget, onStyle, textScale, setTextScale }) => {
+  const [showCardStyles, setShowCardStyles] = useState(false)
   const checkpointOnce = () => useUndoCoordinator.getState().checkpoint()
   const stepSize = (dir: 1 | -1) => {
     const cur = style.fontSize
@@ -576,6 +585,31 @@ const TextToolbar: React.FC<{
         borderBottom: '1px solid rgba(255,255,255,0.08)', flexShrink: 0,
       }}
     >
+      {/* ── VIEW ZOOM — how big text renders HERE. Never edits the card. ── */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 3,
+        padding: '2px 6px 2px 4px', borderRadius: 5,
+        background: 'rgba(120,170,255,0.10)', border: '1px solid rgba(140,190,255,0.25)',
+      }}>
+        <span style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: '0.4px', color: 'rgba(170,205,255,0.85)' }}>VIEW</span>
+        <button style={tbBtn(false)} onClick={() => setTextScale(textScale / 1.15)} title="Show more text (view only)">A−</button>
+        <span
+          onClick={() => setTextScale(1)}
+          title="Reset view zoom to 100%"
+          style={{ fontSize: 10, color: 'rgba(255,255,255,0.8)', minWidth: 30, textAlign: 'center', cursor: 'pointer', userSelect: 'none' }}
+        >{Math.round(textScale * 100)}%</span>
+        <button style={tbBtn(false)} onClick={() => setTextScale(textScale * 1.15)} title="Bigger text (view only)">A+</button>
+      </div>
+
+      {/* ── Card-style editing — collapsed by default so the view zoom
+             above is the easy reach and card fonts aren't changed by
+             accident. ── */}
+      <button
+        style={tbBtn(showCardStyles)}
+        onClick={() => setShowCardStyles(v => !v)}
+        title="Edit the CARD's own fonts and styling (changes the card everywhere)"
+      >✎ Card style</button>
+      {!showCardStyles ? null : <>
       {target !== null && (
         <div style={{ display: 'flex', gap: 2, marginRight: 3 }}>
           <button style={{ ...tbBtn(target === 'header'), fontSize: 9.5 }} onClick={() => setTarget('header')} title="Style the header block">Hdr</button>
@@ -621,6 +655,7 @@ const TextToolbar: React.FC<{
           />
         ))}
       </div>
+      </>}
     </div>
   )
 }

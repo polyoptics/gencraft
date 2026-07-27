@@ -55,6 +55,9 @@ export interface ViewportWindow3D {
   camera?: Viewport3DCamera
   /** The model url `camera` was saved for — see header comment. */
   cameraUrl?: string
+  /** VIEW-ONLY text zoom for this window (1 = the source's own sizes).
+   *  Purely how big text renders HERE — never touches the card. */
+  textScale?: number
   createdAt: number
 }
 
@@ -73,6 +76,8 @@ interface Viewport3DStore {
   /** Clears the camera ONLY when a DIFFERENT model takes over. */
   setActiveItem: (id: string, item: ActiveItem | null) => void
   saveCamera: (id: string, cam: Viewport3DCamera) => void
+  /** View-only text zoom (does NOT edit any card). */
+  setTextScale: (id: string, scale: number) => void
 }
 
 export const useViewport3DStore = create<Viewport3DStore>()(persist((set) => ({
@@ -158,6 +163,15 @@ export const useViewport3DStore = create<Viewport3DStore>()(persist((set) => ({
         ? w.activeItem.url
         : w.cameraUrl
       return { windows: { ...s.windows, [id]: { ...w, camera: cam, cameraUrl: url } } }
+    }),
+
+  setTextScale: (id, scale) =>
+    set(s => {
+      const w = s.windows[id]
+      if (!w) return s
+      const clamped = Math.max(0.3, Math.min(3, scale))
+      if (w.textScale === clamped) return s
+      return { windows: { ...s.windows, [id]: { ...w, textScale: clamped } } }
     }),
 }), {
   name: 'vidbars-viewports3d',

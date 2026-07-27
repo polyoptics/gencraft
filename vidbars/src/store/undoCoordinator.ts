@@ -41,7 +41,8 @@ interface Snapshot {
 function snapViewports(windows: Record<string, ViewportWindow3D>): Record<string, ViewportWindow3D> {
   const out: Record<string, ViewportWindow3D> = {}
   for (const [id, w] of Object.entries(windows)) {
-    const { camera: _camera, cameraUrl: _cameraUrl, ...rest } = w
+    // camera/cameraUrl/textScale are VIEW prefs, not edits — see below.
+    const { camera: _camera, cameraUrl: _cameraUrl, textScale: _textScale, ...rest } = w
     out[id] = rest
   }
   return out
@@ -129,7 +130,12 @@ function restoreSnapshot(snap: Snapshot) {
   const currentWins = useViewport3DStore.getState().windows
   const mergedWins: Record<string, ViewportWindow3D> = {}
   for (const [id, snapWin] of Object.entries(snap.viewports3d)) {
-    mergedWins[id] = { ...snapWin, camera: currentWins[id]?.camera, cameraUrl: currentWins[id]?.cameraUrl }
+    mergedWins[id] = {
+      ...snapWin,
+      camera: currentWins[id]?.camera,
+      cameraUrl: currentWins[id]?.cameraUrl,
+      textScale: currentWins[id]?.textScale,
+    }
   }
   useViewport3DStore.setState({ windows: mergedWins })
 }
