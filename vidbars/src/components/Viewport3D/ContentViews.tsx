@@ -9,7 +9,7 @@
 // stays plain canvas-space (browsers rescale <img> crisply under the
 // transform; pan/zoom is manual anyway).
 
-import React, { useRef, useState, useEffect, useCallback } from 'react'
+import React, { useRef, useState, useEffect } from 'react'
 import type { ActiveItem } from '../../store/viewport3dStore'
 import { useViewport3DStore } from '../../store/viewport3dStore'
 import { useResolvedMedia } from '../../utils/useResolvedMedia'
@@ -23,6 +23,7 @@ import {
   FONT_LIST, FONT_SIZES, LINE_HEIGHTS, PRESET_COLORS,
 } from '../UI/TextFormatToolbar'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
+import { ImageStudio } from './ImageStudio'
 
 export const ContentView: React.FC<{ windowId: string; item: ActiveItem; zoom: number }> = ({ windowId, item, zoom }) => {
   if (item.kind === 'text') {
@@ -30,7 +31,11 @@ export const ContentView: React.FC<{ windowId: string; item: ActiveItem; zoom: n
   }
   switch (item.mediaType) {
     case 'image':
-      return <ImageView windowId={windowId} url={item.url} zoom={zoom} />
+      return (
+        <CounterScaled zoom={zoom}>
+          <ImageStudio windowId={windowId} url={item.url} name={item.name} />
+        </CounterScaled>
+      )
     case 'video':
       return <CounterScaled zoom={zoom}><VideoView url={item.url} posterUrl={item.posterUrl ?? null} /></CounterScaled>
     case 'audio':
@@ -60,299 +65,6 @@ const Centered: React.FC<{ children: React.ReactNode }> = ({ children }) => (
     justifyContent: 'center', color: 'rgba(255,255,255,0.35)', fontSize: 13,
   }}>{children}</div>
 )
-
-// ── Image ── the Viewer's mini IMAGE EDITOR. Three modes:
-//   view  — pan/zoom (wheel 1–8×, drag when zoomed, dblclick reset)
-//   crop  — drag a marquee, Apply bakes the region to a new blob
-//   paint — freehand brush (color + size), Apply bakes strokes in
-// Bakes write a NEW blob to the media store and rewrite the old url at
-// every source (replaceMediaUrl) after a checkpoint — undo restores the
-// original everywhere. Crop/paint work in the CounterScaled plane so all
-// coordinates are screen-true.
-interface ImgViewState { scale: number; tx: number; ty: number }
-const imgViews = new Map<string, ImgViewState>()
-
-type ImgMode = 'view' | 'crop' | 'paint'
-interface PaintStroke { color: string; size: number; pts: { x: number; y: number }[] }
-
-const PAINT_COLORS = ['#ffffff', '#f87171', '#fbbf24', '#34d399', '#60a5fa', '#a78bfa', '#111318']
-
-/** Contain-fit box of a natural iw×ih image inside a w×h container. */
-function fitBox(w: number, h: number, iw: number, ih: number) {
-  const s = Math.min(w / iw, h / ih)
-  const dw = iw * s, dh = ih * s
-  return { s, dw, dh, ox: (w - dw) / 2, oy: (h - dh) / 2 }
-}
-
-const ImageView: React.FC<{ windowId: string; url: string; zoom: number }> = ({ windowId, url, zoom }) => {
-  // The editor lives in a CounterScaled plane so pointer math is 1:1
-  // screen pixels regardless of canvas zoom.
-  return (
-    <CounterScaled zoom={zoom}>
-      <ImageEditor windowId={windowId} url={url} />
-    </CounterScaled>
-  )
-}
-
-const ImageEditor: React.FC<{ windowId: string; url: string }> = ({ windowId, url }) => {
-  const resolved = useResolvedMedia(url)
-  const key = `${windowId}|${url}`
-  const [, bump] = useState(0)
-  const [mode, setMode] = useState<ImgMode>('view')
-  const [natural, setNatural] = useState<{ w: number; h: number } | null>(null)
-  const [cropRect, setCropRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
-  const [strokes, setStrokes] = useState<PaintStroke[]>([])
-  const [brushColor, setBrushColor] = useState(PAINT_COLORS[1])
-  const [brushSize, setBrushSize] = useState(6)
-  const [busy, setBusy] = useState(false)
-  const areaRef = useRef<HTMLDivElement>(null)
-  const imgRef = useRef<HTMLImageElement>(null)
-  const dragLast = useRef<{ x: number; y: number } | null>(null)
-  const cropStart = useRef<{ x: number; y: number } | null>(null)
-  const painting = useRef(false)
-
-  const view = imgViews.get(key) ?? { scale: 1, tx: 0, ty: 0 }
-  const setView = (v: ImgViewState) => { imgViews.set(key, v); bump(n => n + 1) }
-
-  const enterMode = (m: ImgMode) => {
-    setView({ scale: 1, tx: 0, ty: 0 })   // crop/paint operate on the fitted image
-    setCropRect(null)
-    setStrokes([])
-    setMode(m)
-  }
-
-  // Local coords relative to the image AREA (below the toolbar).
-  const localPoint = (e: React.PointerEvent) => {
-    const r = areaRef.current!.getBoundingClientRect()
-    // getBoundingClientRect is in SCREEN px; the CounterScaled plane is
-    // also screen-true, so divide by the on-screen scale of this plane:
-    const sx = r.width / areaRef.current!.offsetWidth
-    return { x: (e.clientX - r.left) / sx, y: (e.clientY - r.top) / sx }
-  }
-
-  const onDown = useCallback((e: React.PointerEvent) => {
-    if (e.button !== 0) return
-    e.stopPropagation()
-    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
-    const p = localPoint(e)
-    if (mode === 'crop') {
-      cropStart.current = p
-      setCropRect({ x: p.x, y: p.y, w: 0, h: 0 })
-    } else if (mode === 'paint') {
-      painting.current = true
-      setStrokes(s => [...s, { color: brushColor, size: brushSize, pts: [p] }])
-    } else {
-      dragLast.current = { x: e.clientX, y: e.clientY }
-    }
-  }, [mode, brushColor, brushSize])
-
-  const onMove = useCallback((e: React.PointerEvent) => {
-    if (!(e.currentTarget as HTMLElement).hasPointerCapture(e.pointerId)) return
-    const p = localPoint(e)
-    if (mode === 'crop' && cropStart.current) {
-      const s = cropStart.current
-      setCropRect({
-        x: Math.min(s.x, p.x), y: Math.min(s.y, p.y),
-        w: Math.abs(p.x - s.x), h: Math.abs(p.y - s.y),
-      })
-    } else if (mode === 'paint' && painting.current) {
-      setStrokes(prev => {
-        const next = [...prev]
-        const last = next[next.length - 1]
-        next[next.length - 1] = { ...last, pts: [...last.pts, p] }
-        return next
-      })
-    } else if (mode === 'view' && dragLast.current) {
-      setView({ ...view, tx: view.tx + (e.clientX - dragLast.current.x), ty: view.ty + (e.clientY - dragLast.current.y) })
-      dragLast.current = { x: e.clientX, y: e.clientY }
-    }
-  }, [mode, view])
-
-  const onUp = useCallback(() => {
-    dragLast.current = null
-    cropStart.current = null
-    painting.current = false
-  }, [])
-
-  const onWheel = useCallback((e: React.WheelEvent) => {
-    e.stopPropagation()
-    if (mode !== 'view') return
-    const next = Math.min(8, Math.max(1, view.scale * (e.deltaY > 0 ? 1 / 1.1 : 1.1)))
-    setView(next === 1 ? { scale: 1, tx: 0, ty: 0 } : { ...view, scale: next })
-  }, [mode, view])
-
-  /** Bake crop and/or strokes into a new blob and rewrite the url at
-   *  every source. */
-  const applyEdit = useCallback(async () => {
-    const img = imgRef.current
-    const area = areaRef.current
-    if (!img || !area || !natural || busy) return
-    const fit = fitBox(area.offsetWidth, area.offsetHeight, natural.w, natural.h)
-    // Region in NATURAL pixels
-    let sx = 0, sy = 0, sw = natural.w, sh = natural.h
-    if (mode === 'crop') {
-      if (!cropRect || cropRect.w < 4 || cropRect.h < 4) return
-      sx = Math.max(0, Math.round((cropRect.x - fit.ox) / fit.s))
-      sy = Math.max(0, Math.round((cropRect.y - fit.oy) / fit.s))
-      sw = Math.min(natural.w - sx, Math.round(cropRect.w / fit.s))
-      sh = Math.min(natural.h - sy, Math.round(cropRect.h / fit.s))
-      if (sw < 2 || sh < 2) return
-    }
-    setBusy(true)
-    try {
-      const cnv = document.createElement('canvas')
-      cnv.width = sw; cnv.height = sh
-      const ctx = cnv.getContext('2d')!
-      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh)
-      if (mode === 'paint' && strokes.length > 0) {
-        ctx.lineCap = 'round'
-        ctx.lineJoin = 'round'
-        for (const st of strokes) {
-          ctx.strokeStyle = st.color
-          ctx.lineWidth = st.size / fit.s
-          ctx.beginPath()
-          st.pts.forEach((p, i) => {
-            const nx = (p.x - fit.ox) / fit.s - sx
-            const ny = (p.y - fit.oy) / fit.s - sy
-            if (i === 0) ctx.moveTo(nx, ny); else ctx.lineTo(nx, ny)
-          })
-          ctx.stroke()
-        }
-      }
-      const blob = await new Promise<Blob | null>(res => cnv.toBlob(res, 'image/png'))
-      if (!blob) return
-      const { putMedia } = await import('../../utils/mediaStore')
-      const { makeMediaRef } = await import('../../utils/mediaRef')
-      const { replaceMediaUrl } = await import('../../utils/mediaReplace')
-      const newRef = makeMediaRef(await putMedia(blob))
-      useUndoCoordinator.getState().checkpoint()
-      replaceMediaUrl(url, newRef)
-      // Point this window at the new item (same identity, new bytes)
-      const win = useViewport3DStore.getState().windows[windowId]
-      const prev = win?.activeItem
-      useViewport3DStore.getState().setActiveItem(windowId, {
-        kind: 'media', mediaType: 'image', url: newRef,
-        name: prev?.kind === 'media' ? prev.name : undefined,
-      })
-      enterMode('view')
-    } catch (err) {
-      // e.g. a cross-origin image tainting the canvas — keep the edit
-      // state so the user can Cancel; nothing was written.
-      console.warn('[image-editor] apply failed', err)
-    } finally {
-      setBusy(false)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, cropRect, strokes, natural, url, windowId, busy])
-
-  if (!resolved) return <Centered>Loading…</Centered>
-
-  const modeBtn = (m: ImgMode, label: string, title: string) => (
-    <button key={m} style={tbBtn(mode === m)} title={title} onClick={() => enterMode(m)}>{label}</button>
-  )
-
-  return (
-    <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column' }}>
-      {/* Toolbar */}
-      <div
-        onPointerDown={e => e.stopPropagation()}
-        style={{
-          display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap',
-          padding: '6px 10px', background: 'rgba(20,22,38,0.95)',
-          borderBottom: '1px solid rgba(255,255,255,0.08)', flexShrink: 0,
-        }}
-      >
-        {modeBtn('view', '⤢', 'View: wheel zoom · drag pan · dblclick reset')}
-        {modeBtn('crop', '⿻', 'Crop: drag a region, then Apply')}
-        {modeBtn('paint', '✎', 'Paint: brush over the image, then Apply')}
-        {mode === 'paint' && (
-          <>
-            <div style={{ display: 'flex', gap: 3, alignItems: 'center', marginLeft: 4 }}>
-              {PAINT_COLORS.map(c => (
-                <div key={c} onClick={() => setBrushColor(c)} title={c} style={{
-                  width: 13, height: 13, borderRadius: '50%', background: c, cursor: 'pointer',
-                  border: brushColor === c ? '2px solid rgba(140,190,255,0.9)' : '1px solid rgba(0,0,0,0.4)',
-                }} />
-              ))}
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-              <button style={tbBtn(false)} onClick={() => setBrushSize(s => Math.max(2, s - 2))}>−</button>
-              <span style={{ fontSize: 10.5, color: 'rgba(255,255,255,0.75)', minWidth: 16, textAlign: 'center' }}>{brushSize}</span>
-              <button style={tbBtn(false)} onClick={() => setBrushSize(s => Math.min(40, s + 2))}>+</button>
-            </div>
-          </>
-        )}
-        {(mode === 'crop' || mode === 'paint') && (
-          <div style={{ display: 'flex', gap: 4, marginLeft: 'auto' }}>
-            <button
-              style={{ ...tbBtn(true), opacity: busy ? 0.5 : 1 }}
-              disabled={busy}
-              onClick={() => void applyEdit()}
-              title={mode === 'crop' ? 'Bake the cropped region' : 'Bake the paint into the image'}
-            >{busy ? '…' : 'Apply'}</button>
-            <button style={tbBtn(false)} onClick={() => enterMode('view')} title="Discard">Cancel</button>
-          </div>
-        )}
-      </div>
-      {/* Image area */}
-      <div
-        ref={areaRef}
-        onPointerDown={onDown}
-        onPointerMove={onMove}
-        onPointerUp={onUp}
-        onWheel={onWheel}
-        onDoubleClick={() => { if (mode === 'view') setView({ scale: 1, tx: 0, ty: 0 }) }}
-        style={{
-          flex: 1, position: 'relative', overflow: 'hidden',
-          cursor: mode === 'crop' ? 'crosshair' : mode === 'paint' ? 'crosshair' : view.scale > 1 ? 'grab' : 'default',
-          touchAction: 'none',
-        }}
-      >
-        <img
-          ref={imgRef}
-          src={resolved}
-          draggable={false}
-          onLoad={e => {
-            const el = e.currentTarget
-            setNatural({ w: el.naturalWidth, h: el.naturalHeight })
-          }}
-          style={{
-            position: 'absolute', inset: 0, width: '100%', height: '100%',
-            objectFit: 'contain',
-            transform: `translate(${view.tx}px, ${view.ty}px) scale(${view.scale})`,
-          }}
-        />
-        {/* Paint overlay (SVG — crisp, cheap, screen-space coords) */}
-        {mode === 'paint' && strokes.length > 0 && (
-          <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
-            {strokes.map((st, i) => (
-              <polyline
-                key={i}
-                points={st.pts.map(p => `${p.x},${p.y}`).join(' ')}
-                fill="none"
-                stroke={st.color}
-                strokeWidth={st.size}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            ))}
-          </svg>
-        )}
-        {/* Crop marquee */}
-        {mode === 'crop' && cropRect && (
-          <div style={{
-            position: 'absolute',
-            left: cropRect.x, top: cropRect.y, width: cropRect.w, height: cropRect.h,
-            border: '1.5px dashed rgba(140,190,255,0.9)',
-            background: 'rgba(120,170,255,0.12)',
-            boxShadow: '0 0 0 9999px rgba(0,0,0,0.45)',
-            pointerEvents: 'none',
-          }} />
-        )}
-      </div>
-    </div>
-  )
-}
 
 // ── Video ── native controls; key-forced teardown per item; explicit
 // decode-pipeline release on unmount. No autoplay.

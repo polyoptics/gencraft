@@ -169,7 +169,9 @@ export const useViewport3DStore = create<Viewport3DStore>()(persist((set) => ({
     set(s => {
       const w = s.windows[id]
       if (!w) return s
-      const clamped = Math.max(0.3, Math.min(3, scale))
+      // Wide range on purpose: the whole point is fitting a long page
+      // into a small window, so allow going properly small.
+      const clamped = Math.max(0.08, Math.min(5, scale))
       if (w.textScale === clamped) return s
       return { windows: { ...s.windows, [id]: { ...w, textScale: clamped } } }
     }),
