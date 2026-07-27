@@ -23,6 +23,7 @@ import {
   FONT_LIST, FONT_SIZES, LINE_HEIGHTS, PRESET_COLORS,
 } from '../UI/TextFormatToolbar'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
+import { useTextVersionStore, type TextVersion } from '../../store/textVersionStore'
 import { ImageStudio } from './ImageStudio'
 
 export const ContentView: React.FC<{ windowId: string; item: ActiveItem; zoom: number }> = ({ windowId, item, zoom }) => {
@@ -146,6 +147,7 @@ const TextView: React.FC<{ windowId: string; sourceId: string; name?: string }> 
   const bar = useBoardsStore(s => (kind === 'bar' ? s.boards[a]?.bars[b] : undefined))
   const tile = useFreeNodeStore(s => (kind === 'tile' ? s.nodes[a] : undefined))
   const [target, setTarget] = useState<'header' | 'body'>('body')
+  const [showVersions, setShowVersions] = useState(false)
   // VIEW-only zoom: how big text renders in THIS window. Never written
   // back to the card.
   const textScale = useViewport3DStore(s => s.windows[windowId]?.textScale ?? 1)
@@ -193,12 +195,15 @@ const TextView: React.FC<{ windowId: string; sourceId: string; name?: string }> 
   }
   const activeStyle = (hasHeader && target === 'header') ? headerStyle : bodyStyle
 
-  const areaCss = (ts: TextStyle, minH: number): React.CSSProperties => ({
+  // The page IS the window: blocks are edge-to-edge and transparent, and
+  // they auto-grow so the WINDOW is the only scroller — scrolling the
+  // viewer scrolls the document, with no inner text box.
+  const blockCss = (ts: TextStyle): React.CSSProperties => ({
     ...textBlockCss(ts, textScale),
-    width: '100%', minHeight: minH,
-    border: 'none', outline: 'none', resize: 'vertical',
-    padding: '8px 10px', borderRadius: 6,
-    background: hexToRgba(ts.bgColor, Math.max(ts.bgOpacity, 0.06)),
+    display: 'block', width: '100%',
+    border: 'none', outline: 'none', resize: 'none', overflow: 'hidden',
+    padding: 0, margin: 0,
+    background: ts.bgOpacity > 0 ? hexToRgba(ts.bgColor, ts.bgOpacity) : 'transparent',
     cursor: 'text',
   })
 
@@ -214,40 +219,181 @@ const TextView: React.FC<{ windowId: string; sourceId: string; name?: string }> 
         onStyle={writeStyle}
         textScale={textScale}
         setTextScale={s => setTextScale(windowId, s)}
+        showVersions={showVersions}
+        toggleVersions={() => setShowVersions(v => !v)}
       />
-      <div style={{ flex: 1, overflowY: 'auto' }}>
-        <div style={{ maxWidth: 760, margin: '0 auto', padding: '14px 22px 60px' }}>
-          <div style={{
-            fontSize: 10, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase',
-            color: 'rgba(255,255,255,0.32)', margin: '4px 0 10px',
-          }}>{name ?? 'Text'}</div>
-          {hasHeader && (
-            <textarea
-              value={headerText}
-              placeholder="Header…"
-              spellCheck={false}
-              onFocus={() => { setTarget('header'); useUndoCoordinator.getState().checkpoint() }}
-              onChange={e => writeText('header', e.target.value)}
-              onPointerDown={e => e.stopPropagation()}
-              onKeyDown={e => e.stopPropagation()}
-              style={{ ...areaCss(headerStyle, 54), marginBottom: 12 }}
+      <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
+        {/* The page — one scroll surface, full width of the window */}
+        <div style={{ flex: 1, overflowY: 'auto', minWidth: 0 }}>
+          <div style={{ padding: '16px 26px 64px' }}>
+            <div style={{
+              fontSize: 10, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase',
+              color: 'rgba(255,255,255,0.28)', marginBottom: 12,
+            }}>{name ?? 'Text'}</div>
+            {hasHeader && (
+              <AutoTextarea
+                value={headerText}
+                placeholder="Header…"
+                grow={[textScale, headerStyle.fontSize, showVersions]}
+                onFocus={() => { setTarget('header'); useUndoCoordinator.getState().checkpoint() }}
+                onChange={v => writeText('header', v)}
+                style={{ ...blockCss(headerStyle), marginBottom: 14 }}
+              />
+            )}
+            <AutoTextarea
+              value={bodyText}
+              placeholder="Write…"
+              grow={[textScale, bodyStyle.fontSize, showVersions]}
+              onFocus={() => { setTarget('body'); useUndoCoordinator.getState().checkpoint() }}
+              onChange={v => writeText('body', v)}
+              style={blockCss(bodyStyle)}
             />
-          )}
-          <textarea
-            value={bodyText}
-            placeholder="Write…"
-            spellCheck={false}
-            onFocus={() => { setTarget('body'); useUndoCoordinator.getState().checkpoint() }}
-            onChange={e => writeText('body', e.target.value)}
-            onPointerDown={e => e.stopPropagation()}
-            onKeyDown={e => e.stopPropagation()}
-            style={areaCss(bodyStyle, 220)}
-          />
+          </div>
         </div>
+        {showVersions && (
+          <VersionsRail
+            sourceId={sourceId}
+            headerText={headerText}
+            bodyText={bodyText}
+            hasHeader={hasHeader}
+            onRestore={(v) => {
+              useUndoCoordinator.getState().checkpoint()
+              if (hasHeader) writeText('header', v.headerText)
+              writeText('body', v.text)
+            }}
+          />
+        )}
       </div>
     </div>
   )
 }
+
+/** A textarea that grows to fit its content, so the page scrolls as ONE
+ *  document instead of nesting a scrollbar inside the window. */
+const AutoTextarea: React.FC<{
+  value: string
+  placeholder: string
+  style: React.CSSProperties
+  grow: unknown[]           // extra deps that change the rendered height
+  onFocus: () => void
+  onChange: (v: string) => void
+}> = ({ value, placeholder, style, grow, onFocus, onChange }) => {
+  const ref = useRef<HTMLTextAreaElement>(null)
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value, ...grow])
+  return (
+    <textarea
+      ref={ref}
+      value={value}
+      placeholder={placeholder}
+      spellCheck={false}
+      onFocus={onFocus}
+      onChange={e => onChange(e.target.value)}
+      onPointerDown={e => e.stopPropagation()}
+      onKeyDown={e => e.stopPropagation()}
+      style={style}
+    />
+  )
+}
+
+/** Right-hand pop-out: saved drafts of this text source. Save snapshots
+ *  as you go; click one to restore it into the card (undoable). */
+const VersionsRail: React.FC<{
+  sourceId: string
+  headerText: string
+  bodyText: string
+  hasHeader: boolean
+  onRestore: (v: TextVersion) => void
+}> = ({ sourceId, headerText, bodyText, hasHeader, onRestore }) => {
+  const versions = useTextVersionStore(s => s.versions[sourceId] ?? EMPTY_VERSIONS)
+  const saveVersion = useTextVersionStore(s => s.saveVersion)
+  const deleteVersion = useTextVersionStore(s => s.deleteVersion)
+  const current = (hasHeader ? headerText + '\n' : '') + bodyText
+  const isSaved = versions.some(v => (hasHeader ? v.headerText + '\n' : '') + v.text === current)
+
+  return (
+    <div
+      onPointerDown={e => e.stopPropagation()}
+      onWheel={e => e.stopPropagation()}
+      style={{
+        width: 210, flexShrink: 0, display: 'flex', flexDirection: 'column',
+        background: 'rgba(16,18,32,0.96)', borderLeft: '1px solid rgba(255,255,255,0.10)',
+      }}
+    >
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 6, padding: '7px 9px',
+        borderBottom: '1px solid rgba(255,255,255,0.08)',
+      }}>
+        <span style={{ flex: 1, fontSize: 9.5, fontWeight: 700, letterSpacing: '0.6px', color: 'rgba(255,255,255,0.4)' }}>
+          DOCUMENTS
+        </span>
+        <button
+          onClick={() => saveVersion(sourceId, { headerText, text: bodyText })}
+          disabled={isSaved}
+          title={isSaved ? 'This exact text is already saved' : 'Save the current text as a new document'}
+          style={{
+            background: isSaved ? 'rgba(255,255,255,0.05)' : 'rgba(120,170,255,0.28)',
+            border: `1px solid ${isSaved ? 'rgba(255,255,255,0.1)' : 'rgba(140,190,255,0.55)'}`,
+            borderRadius: 4, color: isSaved ? 'rgba(255,255,255,0.35)' : '#fff',
+            fontSize: 10, fontWeight: 700, padding: '3px 8px',
+            cursor: isSaved ? 'default' : 'pointer', fontFamily: 'inherit',
+          }}
+        >＋ Save</button>
+      </div>
+      <div style={{ flex: 1, overflowY: 'auto', padding: '5px 0' }}>
+        {versions.length === 0 && (
+          <div style={{ padding: '10px 10px', fontSize: 9.5, color: 'rgba(255,255,255,0.3)', lineHeight: 1.5 }}>
+            No saved documents yet. Hit <strong>＋ Save</strong> to keep this draft, then keep editing — the card always shows the latest.
+          </div>
+        )}
+        {versions.map(v => {
+          const active = (hasHeader ? v.headerText + '\n' : '') + v.text === current
+          return (
+            <div
+              key={v.id}
+              onClick={() => onRestore(v)}
+              title="Restore this document into the card (undoable)"
+              style={{
+                display: 'flex', alignItems: 'flex-start', gap: 6,
+                padding: '6px 9px', cursor: 'pointer',
+                background: active ? 'rgba(120,170,255,0.14)' : 'transparent',
+                borderLeft: `2px solid ${active ? 'rgba(140,190,255,0.8)' : 'transparent'}`,
+              }}
+              onMouseEnter={e => { if (!active) e.currentTarget.style.background = 'rgba(255,255,255,0.05)' }}
+              onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent' }}
+            >
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{
+                  fontSize: 10.5, color: 'rgba(255,255,255,0.85)', fontWeight: 600,
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                }}>{v.label}</div>
+                <div style={{ fontSize: 8.5, color: 'rgba(255,255,255,0.35)', marginTop: 1 }}>
+                  {new Date(v.savedAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                  {active ? ' · current' : ''}
+                </div>
+              </div>
+              <button
+                onClick={e => { e.stopPropagation(); deleteVersion(sourceId, v.id) }}
+                title="Delete this document"
+                style={{
+                  background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px',
+                  color: 'rgba(255,255,255,0.3)', fontSize: 12, lineHeight: 1, flexShrink: 0,
+                }}
+              >×</button>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+const EMPTY_VERSIONS: TextVersion[] = []
 
 // ── Text toolbar — compact single row: block toggle, font, size, bold/
 //    italic, align, color, line-height. Styles the focused block. ──
@@ -266,7 +412,9 @@ const TextToolbar: React.FC<{
   onStyle: (patch: Partial<TextStyle>) => void
   textScale: number
   setTextScale: (s: number) => void
-}> = ({ style, target, setTarget, onStyle, textScale, setTextScale }) => {
+  showVersions: boolean
+  toggleVersions: () => void
+}> = ({ style, target, setTarget, onStyle, textScale, setTextScale, showVersions, toggleVersions }) => {
   const [showCardStyles, setShowCardStyles] = useState(false)
   const checkpointOnce = () => useUndoCoordinator.getState().checkpoint()
   const stepSize = (dir: 1 | -1) => {
@@ -321,6 +469,11 @@ const TextToolbar: React.FC<{
         onClick={() => setShowCardStyles(v => !v)}
         title="Edit the CARD's own fonts and styling (changes the card everywhere)"
       >✎ Card style</button>
+      <button
+        style={{ ...tbBtn(showVersions), marginLeft: 'auto' }}
+        onClick={toggleVersions}
+        title="Documents — save and restore drafts of this text"
+      >▤ Docs</button>
       {!showCardStyles ? null : <>
       {target !== null && (
         <div style={{ display: 'flex', gap: 2, marginRight: 3 }}>
