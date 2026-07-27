@@ -49,6 +49,28 @@ function fitBox(w: number, h: number, iw: number, ih: number) {
   return { s, dw, dh, ox: (w - dw) / 2, oy: (h - dh) / 2 }
 }
 
+/** AREA point → NATURAL image pixel, undoing the view transform (the img
+ *  is scaled about the area's CENTER, then translated) and then the
+ *  contain-fit. This is what lets snip/crop honour the current zoom+pan
+ *  instead of assuming an untransformed image. */
+function areaToNatural(
+  p: { x: number; y: number },
+  aw: number, ah: number,
+  view: ImgViewState,
+  nat: { w: number; h: number },
+): { x: number; y: number } {
+  const cx = aw / 2, cy = ah / 2
+  const ux = cx + (p.x - cx - view.tx) / view.scale
+  const uy = cy + (p.y - cy - view.ty) / view.scale
+  const fit = fitBox(aw, ah, nat.w, nat.h)
+  return { x: (ux - fit.ox) / fit.s, y: (uy - fit.oy) / fit.s }
+}
+
+/** Area px → natural px scale factor under the current view. */
+function areaToNaturalScale(aw: number, ah: number, view: ImgViewState, nat: { w: number; h: number }): number {
+  return 1 / (fitBox(aw, ah, nat.w, nat.h).s * view.scale)
+}
+
 /** First free spot to the RIGHT of the window that fits w×h, scanning
  *  down then wrapping to the next column. Avoids existing tiles AND
  *  windows so stamps never land on top of anything. */
@@ -97,6 +119,7 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
   const dragLast = useRef<{ x: number; y: number } | null>(null)
   const boxStart = useRef<{ x: number; y: number } | null>(null)
   const painting = useRef(false)
+  const panning = useRef(false)
   // Mirror of the in-progress snip box. pointerup must read the LIVE box,
   // not a possibly-stale render closure (fast drags can deliver move+up
   // inside one React batch).
@@ -107,14 +130,15 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
   const view = imgViews.get(key) ?? { scale: 1, tx: 0, ty: 0 }
   const setView = (v: ImgViewState) => { imgViews.set(key, v); bump(n => n + 1) }
 
+  // Switching tools KEEPS the current zoom/pan — you frame the shot by
+  // zooming in, then snip/crop exactly what you see.
   const enterMode = useCallback((m: ImgMode) => {
-    setView({ scale: 1, tx: 0, ty: 0 })   // tools operate on the fitted image
     setSnipBox(null)
+    snipBoxRef.current = null
     if (m !== 'crop') setCropBox(null)
     if (m !== 'paint') setStrokes([])
     setMode(m)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key])
+  }, [])
 
   // Escape leaves any tool.
   useEffect(() => {
@@ -143,14 +167,21 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
   const stamp = useCallback(async (region: Box | null, withStrokes: boolean) => {
     const img = imgRef.current, area = areaRef.current
     if (!img || !area || !natural || busy) return
-    const fit = fitBox(area.offsetWidth, area.offsetHeight, natural.w, natural.h)
+    const aw = area.offsetWidth, ah = area.offsetHeight
+    const v = imgViews.get(key) ?? { scale: 1, tx: 0, ty: 0 }
     let sx = 0, sy = 0, sw = natural.w, sh = natural.h
     if (region) {
       if (region.w < MIN_BOX || region.h < MIN_BOX) return
-      sx = Math.max(0, Math.round((region.x - fit.ox) / fit.s))
-      sy = Math.max(0, Math.round((region.y - fit.oy) / fit.s))
-      sw = Math.min(natural.w - sx, Math.round(region.w / fit.s))
-      sh = Math.min(natural.h - sy, Math.round(region.h / fit.s))
+      // Region is in AREA coords — map through the live zoom/pan, then
+      // clamp to the image so a box hanging off the edge still works.
+      const tl = areaToNatural({ x: region.x, y: region.y }, aw, ah, v, natural)
+      const br = areaToNatural({ x: region.x + region.w, y: region.y + region.h }, aw, ah, v, natural)
+      const x0 = Math.max(0, Math.min(natural.w, Math.round(tl.x)))
+      const y0 = Math.max(0, Math.min(natural.h, Math.round(tl.y)))
+      const x1 = Math.max(0, Math.min(natural.w, Math.round(br.x)))
+      const y1 = Math.max(0, Math.min(natural.h, Math.round(br.y)))
+      sx = Math.min(x0, x1); sy = Math.min(y0, y1)
+      sw = Math.abs(x1 - x0); sh = Math.abs(y1 - y0)
       if (sw < 2 || sh < 2) return
     }
     setBusy(true)
@@ -160,14 +191,15 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
       const ctx = cnv.getContext('2d')!
       ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh)
       if (withStrokes && strokes.length > 0) {
+        const k = areaToNaturalScale(aw, ah, v, natural)
         ctx.lineCap = 'round'; ctx.lineJoin = 'round'
         for (const st of strokes) {
           ctx.strokeStyle = st.color
-          ctx.lineWidth = st.size / fit.s
+          ctx.lineWidth = st.size * k
           ctx.beginPath()
           st.pts.forEach((p, i) => {
-            const nx = (p.x - fit.ox) / fit.s - sx
-            const ny = (p.y - fit.oy) / fit.s - sy
+            const n = areaToNatural(p, aw, ah, v, natural)
+            const nx = n.x - sx, ny = n.y - sy
             if (i === 0) ctx.moveTo(nx, ny); else ctx.lineTo(nx, ny)
           })
           ctx.stroke()
@@ -202,7 +234,7 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
     } finally {
       setBusy(false)
     }
-  }, [natural, busy, strokes, windowId, name])
+  }, [natural, busy, strokes, windowId, name, key])
 
   // Toast fades on its own.
   useEffect(() => {
@@ -213,6 +245,16 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
 
   // ── Area pointer handling ──
   const onDown = useCallback((e: React.PointerEvent) => {
+    // PAN in any mode: middle-drag or Alt+drag. Keeps the tool armed
+    // while you move around a zoomed-in image.
+    if (e.button === 1 || (e.button === 0 && e.altKey)) {
+      e.stopPropagation()
+      e.preventDefault()
+      ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+      panning.current = true
+      dragLast.current = { x: e.clientX, y: e.clientY }
+      return
+    }
     if (e.button !== 0) return
     e.stopPropagation()
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
@@ -235,6 +277,11 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
 
   const onMove = useCallback((e: React.PointerEvent) => {
     if (!(e.currentTarget as HTMLElement).hasPointerCapture(e.pointerId)) return
+    if (panning.current && dragLast.current) {
+      setView({ ...view, tx: view.tx + (e.clientX - dragLast.current.x), ty: view.ty + (e.clientY - dragLast.current.y) })
+      dragLast.current = { x: e.clientX, y: e.clientY }
+      return
+    }
     const p = localPoint(e)
     const marquee = (s: { x: number; y: number }): Box => ({
       x: Math.min(s.x, p.x), y: Math.min(s.y, p.y),
@@ -260,6 +307,7 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
   }, [mode, view])
 
   const onUp = useCallback(() => {
+    if (panning.current) { panning.current = false; dragLast.current = null; return }
     // SNIP: releasing IS the save. Box clears; mode stays for the next one.
     if (mode === 'snip' && snipBoxRef.current) {
       const b = snipBoxRef.current
@@ -274,13 +322,27 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
     painting.current = false
   }, [mode, stamp])
 
+  // Wheel zooms in EVERY mode, anchored on the cursor so the pixel under
+  // the pointer stays put — you zoom to what you're about to snip.
   const onWheel = useCallback((e: React.WheelEvent) => {
     e.stopPropagation()
-    if (mode !== 'view') return
-    const next = Math.min(8, Math.max(1, view.scale * (e.deltaY > 0 ? 1 / 1.1 : 1.1)))
-    setView(next === 1 ? { scale: 1, tx: 0, ty: 0 } : { ...view, scale: next })
+    const area = areaRef.current
+    if (!area) return
+    const next = Math.min(12, Math.max(1, view.scale * (e.deltaY > 0 ? 1 / 1.1 : 1.1)))
+    if (next === view.scale) return
+    if (next === 1) { setView({ scale: 1, tx: 0, ty: 0 }); return }
+    const p = localPoint(e as unknown as React.PointerEvent)
+    const cx = area.offsetWidth / 2, cy = area.offsetHeight / 2
+    // Image-space point under the cursor, held invariant across the zoom.
+    const ux = cx + (p.x - cx - view.tx) / view.scale
+    const uy = cy + (p.y - cy - view.ty) / view.scale
+    setView({
+      scale: next,
+      tx: p.x - cx - (ux - cx) * next,
+      ty: p.y - cy - (uy - cy) * next,
+    })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, view])
+  }, [view])
 
   // ── Crop-widget handles ──
   const onHandleDown = (handle: Handle) => (e: React.PointerEvent) => {
@@ -329,6 +391,10 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
   )
   const activeBox = mode === 'snip' ? snipBox : mode === 'crop' ? cropBox : null
   const hasCropFrame = mode === 'crop' && cropBox && cropBox.w >= MIN_BOX && cropBox.h >= MIN_BOX
+  // Live px readout for the frame badge (area px → source px).
+  const naturalPerArea = natural && areaRef.current
+    ? areaToNaturalScale(areaRef.current.offsetWidth, areaRef.current.offsetHeight, view, natural)
+    : 1
 
   return (
     <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column' }}>
@@ -462,6 +528,37 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
                   <div key={`h${i}`} style={{ position: 'absolute', top: `${(i * 100) / 3}%`, left: 0, right: 0, height: 1, background: 'rgba(255,255,255,0.18)', pointerEvents: 'none' }} />
                 ))}
               </>
+            )}
+            {/* Floating stamp — rides with the frame so you can move,
+                resize and fire off copies without going back to the
+                toolbar. Sits below the frame, flipping above when the
+                frame is near the bottom edge. */}
+            {mode === 'crop' && cropBox && cropBox.w >= MIN_BOX && cropBox.h >= MIN_BOX && (
+              <div
+                onPointerDown={e => { e.stopPropagation(); e.preventDefault() }}
+                onClick={e => { e.stopPropagation(); void stamp(cropBox, false) }}
+                title="Save this frame as a new image (frame stays — move it and stamp again)"
+                style={{
+                  position: 'absolute',
+                  left: '50%', transform: 'translateX(-50%)',
+                  ...(cropBox.y + cropBox.h + 42 < (areaRef.current?.offsetHeight ?? 0)
+                    ? { top: 'calc(100% + 8px)' }
+                    : { bottom: 'calc(100% + 8px)' }),
+                  display: 'flex', alignItems: 'center', gap: 5,
+                  padding: '5px 11px', borderRadius: 6, whiteSpace: 'nowrap',
+                  background: busy ? 'rgba(90,110,160,0.9)' : 'rgba(120,170,255,0.92)',
+                  border: '1px solid rgba(190,220,255,0.9)',
+                  color: '#0b1020', fontSize: 11, fontWeight: 800,
+                  cursor: busy ? 'default' : 'pointer',
+                  boxShadow: '0 4px 14px rgba(0,0,0,0.55)',
+                  userSelect: 'none',
+                }}
+              >
+                {busy ? '…' : '⎘ Stamp'}
+                <span style={{ fontSize: 9, fontWeight: 600, opacity: 0.65 }}>
+                  {Math.max(1, Math.round(cropBox.w * naturalPerArea))}×{Math.max(1, Math.round(cropBox.h * naturalPerArea))}
+                </span>
+              </div>
             )}
             {/* 8 resize handles */}
             {mode === 'crop' && (['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'] as const).map(h => {
