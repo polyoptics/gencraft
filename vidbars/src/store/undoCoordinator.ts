@@ -35,19 +35,6 @@ interface Snapshot {
   viewports3d: Record<string, ViewportWindow3D>
 }
 
-/** Snapshot the 3D viewport windows WITHOUT their cameras — an orbit is a
- *  "look", not an edit (we never checkpoint orbit gestures), so restoring
- *  a camera here would make unrelated undos yank the 3D view. */
-function snapViewports(windows: Record<string, ViewportWindow3D>): Record<string, ViewportWindow3D> {
-  const out: Record<string, ViewportWindow3D> = {}
-  for (const [id, w] of Object.entries(windows)) {
-    // camera/cameraUrl/textScale are VIEW prefs, not edits — see below.
-    const { camera: _camera, cameraUrl: _cameraUrl, textScale: _textScale, ...rest } = w
-    out[id] = rest
-  }
-  return out
-}
-
 function snapStore(
   state: Record<string, unknown>,
   exclude: Set<string>,
@@ -97,7 +84,9 @@ function captureSnapshot(): Snapshot {
       useFreeNodeStore.getState() as unknown as Record<string, unknown>,
       FREE_EXCLUDE,
     ),
-    viewports3d: snapViewports(useViewport3DStore.getState().windows),
+    // View prefs (camera, text zoom) ride IN the snapshot; restoreSnapshot
+    // is what keeps them out of history — see the liveness test there.
+    viewports3d: useViewport3DStore.getState().windows,
   }
 }
 
@@ -125,17 +114,25 @@ function restoreSnapshot(snap: Snapshot) {
   useBoardsStore.setState(restoreData)
   useCanvasStore.setState(snap.canvas)
   useFreeNodeStore.setState(snap.freeNodes)
-  // Viewports: restore records but keep each window's CURRENT camera
-  // (cameras are excluded from undo — see snapViewports).
+  // Viewports: restore the records, but VIEW PREFS always come from the
+  // LIVE window while it still exists — an orbit or a reading size is a
+  // "look", not an edit, so an unrelated undo must never yank either. A
+  // window present ONLY in the snapshot (undo of its close, redo past its
+  // creation) is restored whole, so its looks come back WITH it instead
+  // of being silently dropped.
   const currentWins = useViewport3DStore.getState().windows
   const mergedWins: Record<string, ViewportWindow3D> = {}
   for (const [id, snapWin] of Object.entries(snap.viewports3d)) {
-    mergedWins[id] = {
-      ...snapWin,
-      camera: currentWins[id]?.camera,
-      cameraUrl: currentWins[id]?.cameraUrl,
-      textScale: currentWins[id]?.textScale,
-    }
+    const live = currentWins[id]
+    mergedWins[id] = live
+      ? {
+          ...snapWin,
+          camera: live.camera,
+          cameraUrl: live.cameraUrl,
+          textScales: live.textScales,
+          defaultTextScale: live.defaultTextScale,
+        }
+      : snapWin
   }
   useViewport3DStore.setState({ windows: mergedWins })
 }

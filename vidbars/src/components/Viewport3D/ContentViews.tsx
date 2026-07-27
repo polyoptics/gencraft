@@ -11,7 +11,7 @@
 
 import React, { useRef, useState, useEffect } from 'react'
 import type { ActiveItem } from '../../store/viewport3dStore'
-import { useViewport3DStore } from '../../store/viewport3dStore'
+import { useViewport3DStore, textItemKey } from '../../store/viewport3dStore'
 import { useResolvedMedia } from '../../utils/useResolvedMedia'
 import { useBoardsStore } from '../../store/boardsStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
@@ -148,10 +148,19 @@ const TextView: React.FC<{ windowId: string; sourceId: string; name?: string }> 
   const tile = useFreeNodeStore(s => (kind === 'tile' ? s.nodes[a] : undefined))
   const [target, setTarget] = useState<'header' | 'body'>('body')
   const [showVersions, setShowVersions] = useState(false)
-  // VIEW-only zoom: how big text renders in THIS window. Never written
-  // back to the card.
-  const textScale = useViewport3DStore(s => s.windows[windowId]?.textScale ?? 1)
+  // VIEW-only zoom, remembered PER PAGE: a page you have adjusted keeps
+  // its own size, the rest follow this window's reading size. Never
+  // written back to the card. Keyed off the RENDERED sourceId rather than
+  // the store's live activeItem — strip reconciliation can swap that
+  // under us, and this is the page actually on screen.
+  const itemKey = textItemKey(sourceId)
+  const textScale = useViewport3DStore(s => {
+    const w = s.windows[windowId]
+    return w?.textScales?.[itemKey] ?? w?.defaultTextScale ?? 1
+  })
+  const pinned = useViewport3DStore(s => s.windows[windowId]?.textScales?.[itemKey] !== undefined)
   const setTextScale = useViewport3DStore(s => s.setTextScale)
+  const clearTextScale = useViewport3DStore(s => s.clearTextScale)
 
   if (!group && !bar && !tile) return <Centered>(content removed)</Centered>
 
@@ -218,7 +227,9 @@ const TextView: React.FC<{ windowId: string; sourceId: string; name?: string }> 
         setTarget={setTarget}
         onStyle={writeStyle}
         textScale={textScale}
-        setTextScale={s => setTextScale(windowId, s)}
+        pinned={pinned}
+        setTextScale={s => setTextScale(windowId, itemKey, s)}
+        unpin={() => clearTextScale(windowId, itemKey)}
         showVersions={showVersions}
         toggleVersions={() => setShowVersions(v => !v)}
       />
@@ -411,10 +422,12 @@ const TextToolbar: React.FC<{
   setTarget: (t: 'header' | 'body') => void
   onStyle: (patch: Partial<TextStyle>) => void
   textScale: number
+  pinned: boolean
   setTextScale: (s: number) => void
+  unpin: () => void
   showVersions: boolean
   toggleVersions: () => void
-}> = ({ style, target, setTarget, onStyle, textScale, setTextScale, showVersions, toggleVersions }) => {
+}> = ({ style, target, setTarget, onStyle, textScale, pinned, setTextScale, unpin, showVersions, toggleVersions }) => {
   const [showCardStyles, setShowCardStyles] = useState(false)
   const checkpointOnce = () => useUndoCoordinator.getState().checkpoint()
   const stepSize = (dir: 1 | -1) => {
@@ -453,10 +466,21 @@ const TextToolbar: React.FC<{
       }}>
         <span style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: '0.4px', color: 'rgba(170,205,255,0.85)' }}>VIEW</span>
         <button style={tbBtn(false)} onClick={() => setTextScale(textScale / 1.15)} title="Show more text (view only)">A−</button>
+        {/* Not a reset — the way OUT of a pin. A page you have adjusted
+            keeps its size forever; clicking here hands it back to the
+            window's reading size, which is the only route back. */}
         <span
-          onClick={() => setTextScale(1)}
-          title="Reset view zoom to 100%"
-          style={{ fontSize: 10, color: 'rgba(255,255,255,0.8)', minWidth: 30, textAlign: 'center', cursor: 'pointer', userSelect: 'none' }}
+          onClick={unpin}
+          title={pinned
+            ? `This page is pinned at ${Math.round(textScale * 100)}% — click to follow the window's reading size`
+            : "Following the window's reading size — A− / A+ pins this page"}
+          style={{
+            fontSize: 10, minWidth: 30, textAlign: 'center', userSelect: 'none',
+            color: pinned ? 'rgba(180,212,255,0.95)' : 'rgba(255,255,255,0.55)',
+            fontWeight: pinned ? 700 : 400,
+            textDecoration: pinned ? 'underline dotted' : 'none',
+            cursor: pinned ? 'pointer' : 'default',
+          }}
         >{Math.round(textScale * 100)}%</span>
         <button style={tbBtn(false)} onClick={() => setTextScale(textScale * 1.15)} title="Bigger text (view only)">A+</button>
       </div>

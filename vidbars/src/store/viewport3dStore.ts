@@ -10,11 +10,17 @@
 // matching how deck membership is derived in useCardDecks. `activeItem`
 // is the one piece of content state.
 //
-// Camera persists per window (so a reload restores the view) but is
-// STRIPPED from undo snapshots (an orbit is a "look", not an edit) —
-// see undoCoordinator.ts. `cameraUrl` records which MODEL owns the saved
+// Camera persists per window (so a reload restores the view) but never
+// moves under an undo (an orbit is a "look", not an edit) — see
+// undoCoordinator.ts. `cameraUrl` records which MODEL owns the saved
 // camera, so browsing away to an image/text page and back to the same
 // model restores the orbit; only a different model resets it.
+//
+// Text zoom is the same tier one level finer: `textScales` remembers a
+// size PER PAGE (browse back to a page and it is the size you left it)
+// and `defaultTextScale` is this window's reading size — the opening size
+// for a page you have never adjusted. Both persist, both are held out of
+// undo the same way the camera is.
 
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
@@ -36,10 +42,32 @@ export type ActiveItem =
   | { kind: 'text'; sourceId: string; name?: string }
   // text sourceId forms: 'bar:<boardId>:<barId>' | 'group:<groupId>' | 'tile:<nodeId>'
 
+/** Map key for a TEXT item from its sourceId alone — the same string
+ *  activeItemKey yields for that item, so the 'text:' prefix is owned
+ *  here and never spelled out at a call site. */
+export const textItemKey = (sourceId: string): string => `text:${sourceId}`
+
 /** Stable identity for equality, dedupe, and strip-active matching. */
 export function activeItemKey(i: ActiveItem | null | undefined): string | null {
   if (!i) return null
-  return i.kind === 'media' ? `media:${i.url}` : `text:${i.sourceId}`
+  return i.kind === 'media' ? `media:${i.url}` : textItemKey(i.sourceId)
+}
+
+// Text zoom moves in ×1.15 steps (the A−/A+ buttons), so scales are
+// snapped to that geometric ladder. That makes A− then A+ land on
+// EXACTLY the size you started from and keeps the % readout on stable
+// rungs (100 / 87 / 76 / 66 / 57 …); rounding the raw float instead
+// leaves 13% of values a step off after a round trip (0.5 → 0.43 → 0.49).
+const TEXT_STEP = 1.15
+const TEXT_RUNG_MIN = Math.ceil(Math.log(0.08) / Math.log(TEXT_STEP))  // −18 ⇒ ~8%
+const TEXT_RUNG_MAX = Math.floor(Math.log(5) / Math.log(TEXT_STEP))    // +11 ⇒ ~465%
+
+/** Nearest rung of the ×1.15 ladder, clamped. Wide range on purpose: the
+ *  whole point is fitting a long page into a small window. */
+export function snapTextScale(scale: number): number {
+  if (!Number.isFinite(scale) || scale <= 0) return 1
+  const rung = Math.round(Math.log(scale) / Math.log(TEXT_STEP))
+  return Math.pow(TEXT_STEP, Math.max(TEXT_RUNG_MIN, Math.min(TEXT_RUNG_MAX, rung)))
 }
 
 export interface ViewportWindow3D {
@@ -55,9 +83,18 @@ export interface ViewportWindow3D {
   camera?: Viewport3DCamera
   /** The model url `camera` was saved for — see header comment. */
   cameraUrl?: string
-  /** VIEW-ONLY text zoom for this window (1 = the source's own sizes).
-   *  Purely how big text renders HERE — never touches the card. */
-  textScale?: number
+  /** VIEW-ONLY text zoom PER PAGE (activeItemKey's `text:<sourceId>` form
+   *  → scale; 1 = the source's own sizes). A page you have adjusted keeps
+   *  its own size; no entry ⇒ it follows `defaultTextScale`. Purely how
+   *  big text renders HERE — never touches the card. A Record rather than
+   *  camera's single slot + owner tag, because a text page's neighbours
+   *  on the browse list are usually OTHER text pages: one slot would be
+   *  evicted by the very browsing this exists to remember. */
+  textScales?: Record<string, number>
+  /** This window's reading size: the last zoom set anywhere in it, and
+   *  the opening size for a page with no entry above. A window you have
+   *  made small is small for EVERY page it shows. */
+  defaultTextScale?: number
   createdAt: number
 }
 
@@ -76,8 +113,13 @@ interface Viewport3DStore {
   /** Clears the camera ONLY when a DIFFERENT model takes over. */
   setActiveItem: (id: string, item: ActiveItem | null) => void
   saveCamera: (id: string, cam: Viewport3DCamera) => void
-  /** View-only text zoom (does NOT edit any card). */
-  setTextScale: (id: string, scale: number) => void
+  /** View-only text zoom for ONE page (itemKey = activeItemKey's
+   *  `text:<sourceId>` form). Also becomes this window's reading size.
+   *  Does NOT edit any card. */
+  setTextScale: (id: string, itemKey: string, scale: number) => void
+  /** Hand ONE page back to this window's reading size, leaving that
+   *  reading size alone — see the % readout in ContentViews. */
+  clearTextScale: (id: string, itemKey: string) => void
 }
 
 export const useViewport3DStore = create<Viewport3DStore>()(persist((set) => ({
@@ -165,15 +207,33 @@ export const useViewport3DStore = create<Viewport3DStore>()(persist((set) => ({
       return { windows: { ...s.windows, [id]: { ...w, camera: cam, cameraUrl: url } } }
     }),
 
-  setTextScale: (id, scale) =>
+  setTextScale: (id, itemKey, scale) =>
     set(s => {
       const w = s.windows[id]
       if (!w) return s
-      // Wide range on purpose: the whole point is fitting a long page
-      // into a small window, so allow going properly small.
-      const clamped = Math.max(0.08, Math.min(5, scale))
-      if (w.textScale === clamped) return s
-      return { windows: { ...s.windows, [id]: { ...w, textScale: clamped } } }
+      const snapped = snapTextScale(scale)
+      if (w.textScales?.[itemKey] === snapped && w.defaultTextScale === snapped) return s
+      // Sizing a page pins it AND becomes this window's reading size, so
+      // the next unseen page opens where you left off. Deliberately NO
+      // "landing back on the reading size un-pins it" shortcut: the
+      // reading size moves with every step, so by the time an A− / A+
+      // round trip returns, the value it would have to match has already
+      // followed it down. The % readout is the honest way back.
+      const textScales = { ...w.textScales, [itemKey]: snapped }
+      return {
+        windows: { ...s.windows, [id]: { ...w, textScales, defaultTextScale: snapped } },
+      }
+    }),
+
+  clearTextScale: (id, itemKey) =>
+    set(s => {
+      const w = s.windows[id]
+      if (!w || w.textScales?.[itemKey] === undefined) return s
+      const textScales = { ...w.textScales }
+      delete textScales[itemKey]
+      // defaultTextScale is deliberately UNTOUCHED: handing one page back
+      // must not resize every page you have not set.
+      return { windows: { ...s.windows, [id]: { ...w, textScales } } }
     }),
 }), {
   name: 'vidbars-viewports3d',
@@ -181,9 +241,11 @@ export const useViewport3DStore = create<Viewport3DStore>()(persist((set) => ({
   partialize: (s) => ({ windows: s.windows }),
   // v2: activeModelUrl → discriminated activeItem; '3D View' → 'Viewer';
   // camera ownership recorded in cameraUrl.
-  version: 2,
+  // v3: window-wide textScale → per-page textScales + defaultTextScale.
+  version: 3,
   migrate: (persisted, version) => {
-    const p = persisted as { windows?: Record<string, ViewportWindow3D & { activeModelUrl?: string | null }> }
+    type LegacyWin = ViewportWindow3D & { activeModelUrl?: string | null; textScale?: number }
+    const p = persisted as { windows?: Record<string, LegacyWin> }
     if (version < 2 && p?.windows) {
       for (const w of Object.values(p.windows)) {
         w.activeItem = w.activeModelUrl
@@ -192,6 +254,20 @@ export const useViewport3DStore = create<Viewport3DStore>()(persist((set) => ({
         if (w.camera && w.activeModelUrl) w.cameraUrl = w.activeModelUrl
         delete w.activeModelUrl
         if (w.title === '3D View') w.title = 'Viewer'
+      }
+    }
+    if (version < 3 && p?.windows) {
+      for (const w of Object.values(p.windows)) {
+        if (typeof w.textScale !== 'number') continue
+        // The old window-wide zoom IS a reading size — seed it
+        // UNCONDITIONALLY so nothing snaps back to 100% on upgrade, even
+        // for a window parked on a media item (the common case, since
+        // defaultBrowseItem prefers media)…
+        w.defaultTextScale = snapTextScale(w.textScale)
+        // …and pin it on the text page it was set from, if there is one.
+        const k = activeItemKey(w.activeItem)
+        if (k && k.startsWith('text:')) w.textScales = { [k]: w.defaultTextScale }
+        delete w.textScale
       }
     }
     return p as never
