@@ -15,6 +15,7 @@ import { useBoardsStore } from './store/boardsStore'
 import { useCanvasStore } from './store/canvasStore'
 import { useFreeNodeStore } from './store/freeNodeStore'
 import { useUndoCoordinator } from './store/undoCoordinator'
+import { useViewport3DStore } from './store/viewport3dStore'
 import type { Bar } from './types/bar'
 import type { FreeNodeData } from './store/freeNodeStore'
 import { collectSubtree } from './utils/barOps'
@@ -187,6 +188,32 @@ function useKeyboardDelete() {
         return
       }
 
+      // Viewer (content-browser window) delete — the same call the frame's
+      // × already makes, minus the checkpoint (line above fired one). No
+      // teardown here: the renderer's store subscription destroys the GL
+      // view, docked content is DERIVED geometry and deliberately stays on
+      // canvas, and undo restores the window whole with its camera and
+      // text scales.
+      //
+      // AFTER free nodes: Ctrl+V sets a tile selection with no pointer
+      // event at all, which is the one way both sets can be lit — and the
+      // paste is the more recent intent. BEFORE blocks/groups/bars: those
+      // are only ever selected by a pointer gesture, and every such
+      // gesture clears this selection, so they cannot be lit while this
+      // is. Going first among them means that if a clear is ever missed,
+      // what dies is a WINDOW — undoable, destroying no content.
+      const v3 = useViewport3DStore.getState()
+      const liveViewers = v3.selectedIds.filter(wid => v3.windows[wid])
+      if (liveViewers.length > 0) {
+        for (const wid of liveViewers) v3.removeWindow(wid)
+        v3.clearViewerSelection()
+        return
+      }
+      // An id left dangling by undo (restoreSnapshot rewrites `windows`
+      // but never `selectedIds`) renders nothing, so it must not silently
+      // swallow the keypress for every kind below.
+      if (v3.selectedIds.length > 0) v3.clearViewerSelection()
+
       // Block-layer multi-select delete (whole boards)
       const selBlocks = useCanvasStore.getState().selectedBlockBoardIds
       if (selBlocks.length > 0) {
@@ -237,6 +264,35 @@ function useKeyboardDelete() {
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
+  }, [])
+}
+
+/** A Viewer stays selected only until the next press lands somewhere else.
+ *
+ *  A document-level CAPTURE listener rather than a handler on a container,
+ *  because the surfaces that set a COMPETING selection live in sibling
+ *  subtrees: cards, decks and ghost slots render in the overlay layer, a
+ *  sibling of the canvas, and the Rolodex, deck tray, NLE viewer and
+ *  toolbar are siblings again. One listener covers all of them plus every
+ *  portaled menu, with no ancestry assumptions — and it matches the
+ *  document-listener idiom of the hooks above.
+ *
+ *  Capture phase so no child's stopPropagation can swallow it, and it runs
+ *  before React's dispatch, so a press INSIDE a Viewer early-returns and
+ *  the frame's own capture handler then selects.
+ *
+ *  Deliberately NOT gated on e.button: a middle-drag pan or a right-click
+ *  elsewhere should drop the selection too, so the ring never survives a
+ *  gesture that moved attention off the window. */
+function useDeselectViewerOnOutsidePress() {
+  useEffect(() => {
+    const onDown = (e: PointerEvent) => {
+      const t = e.target
+      if (t instanceof Element && t.closest('[data-viewport3d]')) return
+      useViewport3DStore.getState().clearViewerSelection()
+    }
+    document.addEventListener('pointerdown', onDown, true)
+    return () => document.removeEventListener('pointerdown', onDown, true)
   }, [])
 }
 
@@ -389,6 +445,7 @@ function RolodexToggleButton() {
 
 export default function App() {
   useKeyboardDelete()
+  useDeselectViewerOnOutsidePress()
   useKeyboardCopyPaste()
   useKeyboardUndo()
   useEscapeDrawMode()

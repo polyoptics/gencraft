@@ -105,11 +105,21 @@ export const VIEWPORT3D_DEFAULT_H = 360
 
 interface Viewport3DStore {
   windows: Record<string, ViewportWindow3D>
+  /** Transient click-selection of Viewer ids — the Viewer's seat in the
+   *  canvas selection model, shaped after freeNodeStore.selectedIds.
+   *  Dropped by `partialize`, and invisible to undo because
+   *  restoreSnapshot writes ONLY `{ windows }`. That cuts both ways: an
+   *  undo can remove a window without pruning this list, so every reader
+   *  must test liveness against `windows` (see useKeyboardDelete). */
+  selectedIds: string[]
   addWindow: (x: number, y: number) => string
   moveWindow: (id: string, dx: number, dy: number) => void
   resizeWindow: (id: string, dw: number, dh: number) => void
   updateWindow: (id: string, patch: Partial<ViewportWindow3D>) => void
   removeWindow: (id: string) => void
+  setViewerSelection: (ids: string[]) => void
+  toggleViewerSelection: (id: string) => void
+  clearViewerSelection: () => void
   /** Clears the camera ONLY when a DIFFERENT model takes over. */
   setActiveItem: (id: string, item: ActiveItem | null) => void
   saveCamera: (id: string, cam: Viewport3DCamera) => void
@@ -122,8 +132,9 @@ interface Viewport3DStore {
   clearTextScale: (id: string, itemKey: string) => void
 }
 
-export const useViewport3DStore = create<Viewport3DStore>()(persist((set) => ({
+export const useViewport3DStore = create<Viewport3DStore>()(persist((set, get) => ({
   windows: {},
+  selectedIds: [],
 
   addWindow: (x, y) => {
     const id = crypto.randomUUID()
@@ -174,8 +185,35 @@ export const useViewport3DStore = create<Viewport3DStore>()(persist((set) => ({
   removeWindow: (id) =>
     set(s => {
       const { [id]: _, ...rest } = s.windows
-      return { windows: rest }
+      // Self-pruning, like deleteFreeNode — so closing via × can never
+      // leave the id behind in the selection.
+      return s.selectedIds.includes(id)
+        ? { windows: rest, selectedIds: s.selectedIds.filter(x => x !== id) }
+        : { windows: rest }
     }),
+
+  // The no-op guards here are load-bearing, not micro-optimisation:
+  // zustand's persist wrapper calls storage.setItem() after EVERY
+  // setState whether or not anything changed, and the debounced IDB
+  // storage RESETS its timer on each call. clearViewerSelection fires on
+  // every press anywhere in the app, so an unguarded set() would let a
+  // burst of clicks starve a pending write of a real edit.
+  setViewerSelection: (ids) => {
+    const cur = get().selectedIds
+    if (cur.length === ids.length && cur.every((x, i) => x === ids[i])) return
+    set({ selectedIds: ids })
+  },
+
+  toggleViewerSelection: (id) => set(s => ({
+    selectedIds: s.selectedIds.includes(id)
+      ? s.selectedIds.filter(x => x !== id)
+      : [...s.selectedIds, id],
+  })),
+
+  clearViewerSelection: () => {
+    if (get().selectedIds.length === 0) return
+    set({ selectedIds: [] })
+  },
 
   setActiveItem: (id, item) =>
     set(s => {
@@ -238,7 +276,7 @@ export const useViewport3DStore = create<Viewport3DStore>()(persist((set) => ({
 }), {
   name: 'vidbars-viewports3d',
   storage: createDebouncedIDBStorage(400),
-  partialize: (s) => ({ windows: s.windows }),
+  partialize: (s) => ({ windows: s.windows }),   // selectedIds is transient
   // v2: activeModelUrl → discriminated activeItem; '3D View' → 'Viewer';
   // camera ownership recorded in cameraUrl.
   // v3: window-wide textScale → per-page textScales + defaultTextScale.

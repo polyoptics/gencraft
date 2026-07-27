@@ -29,6 +29,24 @@ import { useSeedHoverFromCursor } from '../../utils/pointerTracker'
 import { ViewportSwitcherStrip } from './ViewportSwitcherStrip'
 import { ContentView } from './ContentViews'
 
+/** Selecting a Viewer takes over the canvas selection outright, so the
+ *  Delete key's priority chain is never asked to arbitrate between two lit
+ *  selections. focusedBoardId is included because it is that chain's
+ *  last-resort target — without clearing it, Delete-then-Delete would
+ *  remove the window and then silently remove a whole board. Bare-canvas
+ *  pointerdown already nulls it for exactly that reason. */
+function claimCanvasSelection(): void {
+  const fs = useFreeNodeStore.getState()
+  if (fs.selectedIds.length > 0) fs.clearFreeSelection()
+  const bs = useBoardsStore.getState()
+  if (bs.selectedGroupIds.length > 0) bs.clearGroupSelection()
+  bs.clearAllSelections()
+  const cs = useCanvasStore.getState()
+  if (cs.selectedBlockBoardIds.length > 0) cs.clearSelectedBlockBoardIds()
+  if (cs.selectedGhostGroupIds.length > 0) cs.clearSelectedGhostGroupIds()
+  if (cs.focusedBoardId !== null) cs.setFocusedBoard(null)
+}
+
 export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => {
   const win = useViewport3DStore(s => s.windows[id])
   const moveWindow = useViewport3DStore(s => s.moveWindow)
@@ -37,6 +55,7 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
   const saveCamera = useViewport3DStore(s => s.saveCamera)
   const zoom = useCanvasStore(s => s.zoom)
   const status = useViewStatus(id)
+  const isSelected = useViewport3DStore(s => s.selectedIds.includes(id))
 
   const [isHovered, setIsHovered] = useState(false)
   const wrapperRef = useRef<HTMLDivElement>(null)
@@ -47,6 +66,32 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
   const wheelSaveTimer = useRef<number | null>(null)
 
   useSeedHoverFromCursor(wrapperRef, setIsHovered)
+
+  // ── Click-to-select ────────────────────────────────────────────────
+  // CAPTURE phase is mandatory: the header, the body, the switcher strip
+  // and every editor toolbar stopPropagation on pointerdown, so a
+  // bubble-phase handler on this wrapper would never fire.
+  //
+  // Calls NEITHER preventDefault NOR stopPropagation — it is a pure store
+  // write, so onHeaderDown / onBodyDown / onResizeDown all still run and
+  // still setPointerCapture. No `closest('button')` exemption on purpose:
+  // a press on the ×, the strip's ‹ ›, or a toolbar selects THIS window,
+  // which is what makes it impossible to leave a DIFFERENT window
+  // selected while poking at this one.
+  const onSelectDownCapture = useCallback((e: React.PointerEvent) => {
+    if (e.button !== 0) return   // 1 → canvas pan, 2 → body orbit-pan
+    // Shift toggles only on the window's own CHROME. In the body that
+    // modifier is already taken twice: Shift+left-drag pans the model,
+    // and Shift+click extends a text selection.
+    const onChrome = !!(e.target as Element).closest('[data-viewer-chrome],[data-resize]')
+    const st = useViewport3DStore.getState()
+    if (e.shiftKey && onChrome) st.toggleViewerSelection(id)
+    else if (!st.selectedIds.includes(id)) st.setViewerSelection([id])
+    // else: a plain press on an ALREADY-selected window leaves the
+    // selection alone, so a multi-select survives the press that starts
+    // a drag — same rule as tiles, blocks and cards.
+    claimCanvasSelection()
+  }, [id])
 
   // ── Header drag-move — carries everything connected to the window
   //    (tile clusters + docked cards/decks), snapshotted at drag start so
@@ -157,6 +202,12 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
   const headerH = 22 * iz
   const fontSize = 11 * iz
   const borderW = Math.max(1, 2 / zoom)
+  // One alpha for all six chrome borders. Brightening them on selection is
+  // a SECOND signal, and the one that survives occlusion: the outer ring
+  // is a box-shadow on a zIndex:1 wrapper, so a flush-docked tile (docking
+  // snaps to gap 0) or an overlapping card paints over it. These borders
+  // are inside the frame's own box.
+  const edge = isSelected ? 0.7 : isHovered ? 0.35 : 0.18
   const glTooSmall = win.width * zoom < MIN_GL_PX
   // Body states — GL statuses only mean anything while a MODEL is active;
   // DOM content views own the body otherwise (no MIN_GL fallback needed —
@@ -180,12 +231,23 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
         zIndex: 1,                    // under free nodes (5) and bars (≥2)
         display: 'flex',
         flexDirection: 'column',
+        // Cosmetic only — this wrapper has no background and no overflow,
+        // so the radius clips nothing; it just shapes the ring to the
+        // header's rounded top and the body's square bottom.
+        borderRadius: `${8 * iz}px ${8 * iz}px 0 0`,
+        // The project's selection ring, counter-scaled to a constant 2.5
+        // SCREEN px. box-shadow paints outside the border box, so it can
+        // neither cover a GL pixel nor take a pointer event.
+        boxShadow: isSelected ? `0 0 0 ${2.5 * iz}px rgba(120,180,255,0.9)` : undefined,
+        transition: 'box-shadow 0.12s',
       }}
+      onPointerDownCapture={onSelectDownCapture}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
     >
       {/* ── Header (rounded top; body corners stay square — CSS radius can't clip GL) ── */}
       <div
+        data-viewer-chrome=""
         onPointerDown={onHeaderDown}
         onPointerMove={onHeaderMove}
         style={{
@@ -193,9 +255,9 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
           height: headerH, flexShrink: 0,
           padding: `0 ${8 * iz}px`,
           background: isHovered ? 'rgba(30,34,58,0.95)' : 'rgba(24,27,46,0.9)',
-          borderTop: `${borderW}px solid rgba(140,170,255,${isHovered ? 0.35 : 0.18})`,
-          borderLeft: `${borderW}px solid rgba(140,170,255,${isHovered ? 0.35 : 0.18})`,
-          borderRight: `${borderW}px solid rgba(140,170,255,${isHovered ? 0.35 : 0.18})`,
+          borderTop: `${borderW}px solid rgba(140,170,255,${edge})`,
+          borderLeft: `${borderW}px solid rgba(140,170,255,${edge})`,
+          borderRight: `${borderW}px solid rgba(140,170,255,${edge})`,
           borderRadius: `${8 * iz}px ${8 * iz}px 0 0`,
           cursor: 'grab',
           transition: 'background 0.12s, border-color 0.12s',
@@ -231,9 +293,9 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
           // Transparent for GL/empty (grid shows around, GL beneath);
           // opaque for DOM content views.
           background: modelActive || !active ? 'transparent' : '#0d0e1a',
-          borderBottom: `${borderW}px solid rgba(140,170,255,${isHovered ? 0.35 : 0.18})`,
-          borderLeft: `${borderW}px solid rgba(140,170,255,${isHovered ? 0.35 : 0.18})`,
-          borderRight: `${borderW}px solid rgba(140,170,255,${isHovered ? 0.35 : 0.18})`,
+          borderBottom: `${borderW}px solid rgba(140,170,255,${edge})`,
+          borderLeft: `${borderW}px solid rgba(140,170,255,${edge})`,
+          borderRight: `${borderW}px solid rgba(140,170,255,${edge})`,
           cursor: modelActive && status.status === 'ready' ? 'grab' : 'default',
           overflow: 'hidden',
         }}
