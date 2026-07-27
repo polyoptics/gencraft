@@ -2,13 +2,18 @@ import React, { useRef, useCallback, useEffect, useState, useDeferredValue, useM
 import { useCanvasStore } from '../../store/canvasStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useBoardsStore } from '../../store/boardsStore'
-import { clampToNoParkZone } from '../../utils/nleZone'
 import { uploadFile, classifyFile, isAcceptedMediaFile } from '../../utils/uploadFile'
+import type { FreeNodeType } from '../../store/freeNodeStore'
 import { computeGroupLayout, getRowY, getRowHeight, CARD_GRID_SPACING } from '../../utils/nleRows'
 import { useViewport3DStore, VIEWPORT3D_DEFAULT_W, VIEWPORT3D_DEFAULT_H } from '../../store/viewport3dStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { nextFreeEdgeSlot } from '../../utils/viewportDocking'
 import { GLCanvasHost } from '../Viewport3D/GLCanvasHost'
+
+// A card's visual left edge sits this far right of its group origin
+// (BOARD_PADDING_X in the shared card geometry) — used to center a
+// newly created card on the cursor.
+const CARD_CONTENT_INSET = 20
 
 interface Props {
   children: React.ReactNode
@@ -148,6 +153,28 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
     }
   }, [])
 
+  // ── Creation sizing ──────────────────────────────────────────────
+  // New things are sized in CANVAS units, but the user judges them on
+  // SCREEN. At card zoom a 200-unit tile is a 30-px speck. Scale the
+  // creation size by 1/zoom so anything created lands at a comfortable
+  // on-screen size whatever the zoom, clamped so the extremes stay sane.
+  const createScale = useCallback(() => {
+    const z = zoomRef.current
+    return Math.max(0.6, Math.min(10, 1 / z))
+  }, [])
+
+  /** Create a free node CENTERED on the add-menu's canvas point, sized
+   *  for the current zoom. */
+  const addNodeAtCursor = useCallback((type: FreeNodeType, baseW: number, baseH: number) => {
+    if (!addMenu) return
+    useUndoCoordinator.getState().checkpoint()
+    const k = createScale()
+    const w = baseW * k, h = baseH * k
+    const id = addFreeNode(addMenu.cx - w / 2, addMenu.cy - h / 2, type)
+    if (k !== 1) useFreeNodeStore.getState().updateFreeNode(id, { width: w, height: h })
+    useFreeNodeStore.getState().setFreeSelection([id])
+  }, [addMenu, addFreeNode, createScale])
+
   // ── Layer-aware drop handlers ──
 
   /** Drop on bare canvas at any layer — create free node(s) */
@@ -155,21 +182,21 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
     const rect = containerRef.current!.getBoundingClientRect()
     const z = zoomRef.current
     const p = panRef.current
+    // Zoom-aware size so a drop at card zoom isn't a speck (see createScale).
+    const k = Math.max(0.6, Math.min(10, 1 / z))
     files.forEach((file, i) => {
-      // Cursor position in canvas coordinates
-      const cursorCX = (e.clientX - rect.left - p.x) / z + i * 220
-      const cursorCY = (e.clientY - rect.top - p.y) / z
       // Determine node type from the file (drives default size — must match freeNodeStore.addFreeNode)
       const nodeType = classifyFile(file)
       const mediaType = nodeType
-      const nodeW = nodeType === 'audio' ? 260 : 200
-      const nodeH = nodeType === 'audio' ? 120 : 180
+      const nodeW = (nodeType === 'audio' ? 260 : 200) * k
+      const nodeH = (nodeType === 'audio' ? 120 : 180) * k
+      // Cursor position in canvas coordinates; multi-drops fan out by
+      // one node-width so they never land on top of each other.
+      const cursorCX = (e.clientX - rect.left - p.x) / z + i * (nodeW + 20 * k)
+      const cursorCY = (e.clientY - rect.top - p.y) / z
       // Center the node on the cursor (store x/y = top-left)
-      let cx = cursorCX - nodeW / 2
-      let cy = cursorCY - nodeH / 2
-      const clamped = clampToNoParkZone(cx, cy, nodeW, nodeH)
-      cx = clamped.x; cy = clamped.y
-      const nodeId = addFreeNode(cx, cy, nodeType)
+      const nodeId = addFreeNode(cursorCX - nodeW / 2, cursorCY - nodeH / 2, nodeType)
+      if (k !== 1) updateFreeNode(nodeId, { width: nodeW, height: nodeH })
       uploadFile(file).then(({ url }) => {
         updateFreeNode(nodeId, { imageUrl: url, mediaType, label: file.name.replace(/\.[^.]+$/, '') })
       })
@@ -532,24 +559,48 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
             minWidth: 160,
           }}>
             {[
-              { label: '📝  Add note',    action: () => { const c = clampToNoParkZone(addMenu.cx, addMenu.cy, 200, 160); addFreeNode(c.x, c.y, 'note');  setAddMenu(null) } },
-              { label: 'T   Add text',    action: () => { const c = clampToNoParkZone(addMenu.cx, addMenu.cy, 200, 180); addFreeNode(c.x, c.y, 'text');  setAddMenu(null) } },
-              { label: '🖼  Add image',   action: () => { const c = clampToNoParkZone(addMenu.cx, addMenu.cy, 200, 180); addFreeNode(c.x, c.y, 'image'); setAddMenu(null) } },
+              { label: '📝  Add note',  action: () => { addNodeAtCursor('note',  200, 160); setAddMenu(null) } },
+              { label: 'T   Add text',  action: () => { addNodeAtCursor('text',  200, 180); setAddMenu(null) } },
+              { label: '🖼  Add image', action: () => { addNodeAtCursor('image', 200, 180); setAddMenu(null) } },
               { label: '◆  Add Viewer', action: () => {
                 useUndoCoordinator.getState().checkpoint()
-                const c = clampToNoParkZone(addMenu.cx, addMenu.cy, VIEWPORT3D_DEFAULT_W, VIEWPORT3D_DEFAULT_H)
-                useViewport3DStore.getState().addWindow(c.x, c.y)
+                const k = createScale()
+                const w = VIEWPORT3D_DEFAULT_W * k, h = VIEWPORT3D_DEFAULT_H * k
+                useViewport3DStore.getState().addWindow(addMenu.cx - w / 2, addMenu.cy - h / 2)
+                const wins = useViewport3DStore.getState().windows
+                const newest = Object.values(wins).reduce((a, b) => (a && a.createdAt >= b.createdAt ? a : b))
+                if (newest) useViewport3DStore.getState().updateWindow(newest.id, { width: w, height: h })
                 setAddMenu(null)
               } },
               { label: '─────────────', action: null },
               { label: zoom <= 0.18 ? '🎬  New Card' : '🎬  New Board',
                 action: () => {
-                // Always create a grouped card — works in both free and timeline zones.
+                useUndoCoordinator.getState().checkpoint()
+                const k = createScale()
                 const boardId = useBoardsStore.getState().createBoard(0, 0)
                 useBoardsStore.getState().moveToNewGroup(boardId)
                 const bs = useBoardsStore.getState()
                 const group = bs.groups.find(g => g.boardIds.includes(boardId))
-                if (group) useBoardsStore.getState().setGroupPos(group.id, addMenu.cy, addMenu.cx)
+                const board = bs.boards[boardId]
+                const rootId = board?.rootIds[0]
+                // Scale the root bar so the card reads at a comfortable
+                // SCREEN size at the zoom it was created from.
+                if (rootId && k !== 1) {
+                  const bar = board.bars[rootId]
+                  bs.resizeBarEdge(boardId, rootId, 'right', bar.width * (k - 1))
+                  bs.setBarHeight(boardId, rootId, bar.height * k)
+                }
+                // Center the card's footprint on the cursor (setGroupPos
+                // takes y, x — origin is the card's top-left content corner).
+                const cardW = (board?.bars[rootId ?? '']?.width ?? 480) * k
+                const cardH = (board?.bars[rootId ?? '']?.height ?? 270) * k
+                if (group) {
+                  useBoardsStore.getState().setGroupPos(
+                    group.id,
+                    addMenu.cy - cardH / 2,
+                    addMenu.cx - cardW / 2 - CARD_CONTENT_INSET,
+                  )
+                }
                 setAddMenu(null)
               }},
             ].map((item, idx) => (
