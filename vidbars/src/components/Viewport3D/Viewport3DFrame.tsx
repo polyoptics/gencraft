@@ -201,7 +201,8 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
   const iz = 1 / zoom
   const headerH = 22 * iz
   const fontSize = 11 * iz
-  const borderW = Math.max(1, 2 / zoom)
+  const borderW = Math.min(Math.max(1, 2 / zoom), win.width * 0.04, win.height * 0.04)
+  const grabZone = Math.min(36 * iz, win.width * 0.3, win.height * 0.3)
   // One alpha for all six chrome borders. Brightening them on selection is
   // a SECOND signal, and the one that survives occlusion: the outer ring
   // is a box-shadow on a zIndex:1 wrapper, so a flush-docked tile (docking
@@ -337,23 +338,26 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
         onPointerMove={onResizeMove}
         style={{
           position: 'absolute', bottom: 0, right: 0,
-          width: 36 * iz, height: 36 * iz,
+          // Capped against the window's own box — see FreeNode: a constant
+          // screen-pixel corner outgrows the window when zoomed out and
+          // swallows the body.
+          width: grabZone, height: grabZone,
           cursor: 'nwse-resize',
           display: 'flex', alignItems: 'flex-end', justifyContent: 'flex-end',
-          padding: `0 ${5 * iz}px ${5 * iz}px 0`,
+          padding: `0 ${grabZone * 0.14}px ${grabZone * 0.14}px 0`,
         }}
       >
         <div style={{
           display: 'grid',
-          gridTemplateColumns: `repeat(3, ${3 * iz}px)`,
-          gridTemplateRows: `repeat(3, ${3 * iz}px)`,
-          gap: `${2 * iz}px`,
+          gridTemplateColumns: `repeat(3, ${grabZone * 0.083}px)`,
+          gridTemplateRows: `repeat(3, ${grabZone * 0.083}px)`,
+          gap: `${grabZone * 0.055}px`,
           opacity: isHovered ? 0.5 : 0.12,
           transition: 'opacity 0.12s',
         }}>
           {[...Array(9)].map((_, i) => (
             <div key={i} style={{
-              width: 3 * iz, height: 3 * iz, borderRadius: '50%',
+              width: grabZone * 0.083, height: grabZone * 0.083, borderRadius: '50%',
               background: 'rgba(255,255,255,0.9)',
               opacity: (i === 4 || i < 3) ? 0 : 1,
             }} />

@@ -395,11 +395,26 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
   // Damped inverse-zoom: sqrt(1/zoom). Shrinks more gently than linear zoom,
   // grows more gently than full iz. Used for body content (text, icons, waveforms).
   const dz = 1 / Math.sqrt(zoom)
-  const headerH = 20 * iz
-  const fontSize = 11 * iz               // ~11px on screen at any zoom
-  const dotSize  = 5 * iz
-  const pad      = 6 * iz
-  const borderW  = Math.max(1, 2 / zoom)
+  // Counter-scaled chrome has to be capped against the NODE'S OWN box, not
+  // just against the screen. 20*iz and 40*iz are "constant screen pixels",
+  // which is right while the tile is big — but zoomed out they grow past
+  // the tile itself (at zoom 0.1 the 40*iz corner is 400 canvas units over
+  // a ~220-unit tile), so the whole node becomes header + resize corner
+  // with no body left to grab. Every interactive zone below therefore
+  // takes a fraction of the node as a ceiling, which leaves ~70% of each
+  // axis — ~91% of the area — as drag surface at ANY zoom.
+  const headerH = Math.min(20 * iz, node.height * 0.28)
+  const grabZone = Math.min(40 * iz, node.width * 0.3, node.height * 0.3)
+  // Padding is counter-scaled too, so it needs the same ceiling — an
+  // unclamped 6*iz is 100 canvas units at zoom 0.06 and, under content-box
+  // sizing, lands OUTSIDE the capped header height and re-inflates it.
+  const pad      = Math.min(6 * iz, node.width * 0.05, node.height * 0.05)
+  const fontSize = Math.min(11 * iz, headerH * 0.55)
+  const dotSize  = Math.min(5 * iz, headerH * 0.35)
+  // Same disease as the zones above: an unclamped 2/zoom border is 33
+  // canvas units at zoom 0.06, which is 4 of a 12-pixel tile — it shrinks
+  // the content box until the corner zone starts a hair from the centre.
+  const borderW  = Math.min(Math.max(1, 2 / zoom), node.width * 0.04, node.height * 0.04)
 
   return (
     <div
@@ -459,11 +474,14 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
     >
       {/* ── Header ── */}
       <div data-freenode-header onPointerDown={e => e.stopPropagation()} style={{
-        display: 'flex', alignItems: 'center', gap: 6 * iz,
+        display: 'flex', alignItems: 'center', gap: pad,
         padding: `${pad * 0.6}px ${pad}px`,
         background: 'rgba(0,0,0,0.3)',
         borderBottom: `${borderW}px solid rgba(255,255,255,0.06)`,
-        flexShrink: 0, height: headerH,
+        // border-box so `height` is the whole story: with content-box the
+        // padding above stacks on top of it and the cap stops holding.
+        boxSizing: 'border-box',
+        flexShrink: 0, height: headerH, overflow: 'hidden',
       }}>
         {node.type === 'text' ? (
           <span style={{ fontSize: fontSize * 0.9, fontWeight: 800, color: 'rgba(255,255,255,0.4)', lineHeight: 1, flexShrink: 0 }}>T</span>
@@ -488,7 +506,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
           <PenButton
             surface={{ kind: 'freeNode', nodeId: id }}
             baseColor={node.color}
-            size={Math.max(14, 14 * iz)}
+            size={Math.min(Math.max(14, 14 * iz), node.width * 0.16, headerH * 0.9)}
             visible={isHovered}
           />
         </span>
@@ -552,11 +570,11 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
         data-resize="true"
         style={{
           position: 'absolute', bottom: 0, right: 0,
-          width: 40 * iz, height: 40 * iz,
+          width: grabZone, height: grabZone,
           cursor: 'nwse-resize',
           zIndex: 20,
           display: 'flex', alignItems: 'flex-end', justifyContent: 'flex-end',
-          padding: `0 ${5 * iz}px ${5 * iz}px 0`,
+          padding: `0 ${grabZone * 0.125}px ${grabZone * 0.125}px 0`,
         }}
         onPointerDown={onResizeDown}
         onPointerMove={onResizeMove}
@@ -564,15 +582,15 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
         {/* Visual grip dots */}
         <div style={{
           display: 'grid',
-          gridTemplateColumns: `repeat(3, ${3 * iz}px)`,
-          gridTemplateRows: `repeat(3, ${3 * iz}px)`,
-          gap: `${2 * iz}px`,
+          gridTemplateColumns: `repeat(3, ${grabZone * 0.075}px)`,
+          gridTemplateRows: `repeat(3, ${grabZone * 0.075}px)`,
+          gap: `${grabZone * 0.05}px`,
           opacity: isHovered ? 0.5 : 0.15,
           transition: 'opacity 0.12s',
         }}>
           {[...Array(9)].map((_, i) => (
             <div key={i} style={{
-              width: 3 * iz, height: 3 * iz, borderRadius: '50%',
+              width: grabZone * 0.075, height: grabZone * 0.075, borderRadius: '50%',
               background: 'rgba(255,255,255,0.9)',
               opacity: (i === 4 || i < 3) ? 0 : 1,
             }} />
