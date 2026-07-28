@@ -67,6 +67,27 @@ export interface FreeNodeData {
   posterUrl?: string | null
   /** List tiles: the pinned LIVE query (results derive from the stores). */
   listQuery?: import('../utils/contentKinds').ListQuery
+  /** SCREEN-PINNED instances. Present ⇒ this node is rendered by
+   *  <PinLayer/> OUTSIDE the world transform and is SKIPPED by
+   *  FreeCanvas. Absent ⇒ canvas-placed. That is the whole model.
+   *
+   *  x/y are CANVAS-CONTAINER pixels — origin = top-left of the
+   *  InfiniteCanvas container, the SAME basis `pan` is measured in. NOT
+   *  document space: that differs by the toolbar height and shifts again
+   *  when the storage banner mounts.
+   *
+   *  `scale` is the world zoom FROZEN at pin time. width/height stay
+   *  CANVAS units and stay LIVE — the pinned box is
+   *  layout(width × height) × scale(pin.scale). That is what keeps every
+   *  existing size writer working unchanged (the Rolodex expansion
+   *  drawer, the aspect-locked corner, resizeFreeNode's canvas-unit
+   *  floors) and what makes offsetWidth — and so the panel's own
+   *  embedScale — identical across the flip.
+   *
+   *  While pinned, x/y hold the pre-pin canvas position: stale, but still
+   *  a VALID canvas quantity, so a missed guard is cosmetic rather than
+   *  corrupting. Unpin recomputes them. */
+  pin?: { x: number; y: number; scale: number }
   color: string
   textStyle?: TextStyle
   /** Annotation layer — vector strokes drawn on this node. */
@@ -83,6 +104,18 @@ interface FreeNodeStore {
   moveFreeNode: (id: string, dx: number, dy: number) => void
   moveManyFreeNodes: (ids: string[], dx: number, dy: number) => void
   resizeFreeNode: (id: string, dw: number, dh: number) => void
+  /** Flip nodes between screen-pinned and canvas-placed. Takes an ARRAY
+   *  so a host and everything docked to it later convert in ONE set —
+   *  a half-converted assembly can then never exist, not even across the
+   *  400ms debounced IDB write. pan/zoom are PASSED IN so this store
+   *  keeps zero imports of canvasStore. */
+  setNodePlacement: (ids: string[], to: 'screen' | 'canvas',
+                     view: { pan: { x: number; y: number }; zoom: number }) => void
+  /** SCREEN-px delta for pinned nodes. moveManyFreeNodes stays
+   *  canvas-delta-only; keeping the two separate is what lets a pinned
+   *  host carry pinned children later without reopening this store. */
+  movePinnedNodes: (ids: string[], dx: number, dy: number) => void
+  clampPinnedIntoView: (hostW: number, hostH: number) => void
   updateFreeNode: (id: string, patch: Partial<FreeNodeData>) => void
   deleteFreeNode: (id: string) => void
   setFreeSelection: (ids: string[]) => void
@@ -135,7 +168,10 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
       const updated = { ...s.nodes }
       for (const id of ids) {
         const n = updated[id]
-        if (n) updated[id] = { ...n, x: n.x + dx, y: n.y + dy }
+        // Canvas deltas only — pinned nodes take SCREEN deltas via
+        // movePinnedNodes. Unguarded, dragging a Viewer header at zoom
+        // 0.1 would walk a pinned panel 100px per 10px of drag.
+        if (n && !n.pin) updated[id] = { ...n, x: n.x + dx, y: n.y + dy }
       }
       return { nodes: updated }
     })
@@ -146,6 +182,76 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
       const n = s.nodes[id]
       if (!n) return s
       return { nodes: { ...s.nodes, [id]: { ...n, width: Math.max(120, n.width + dw), height: Math.max(80, n.height + dh) } } }
+    }),
+
+  setNodePlacement: (ids, to, view) =>
+    set(s => {
+      const nodes = { ...s.nodes }
+      let changed = false
+      for (const id of ids) {
+        const n = nodes[id]
+        if (!n) continue
+        if (to === 'screen') {
+          if (n.pin) continue
+          // The rect the browser is painting RIGHT NOW: the world div is
+          // translate(pan) scale(zoom) and the node is left:x top:y.
+          nodes[id] = { ...n, pin: {
+            x: view.pan.x + n.x * view.zoom,
+            y: view.pan.y + n.y * view.zoom,
+            scale: view.zoom,
+          } }
+        } else {
+          if (!n.pin) continue
+          const k = n.pin.scale / view.zoom
+          const { pin: _drop, ...rest } = n
+          // Deliberately NOT routed through resizeFreeNode: its 120/80
+          // floors would silently resize a small tile mid-flip and break
+          // the seam.
+          nodes[id] = {
+            ...rest,
+            x: (n.pin.x - view.pan.x) / view.zoom,
+            y: (n.pin.y - view.pan.y) / view.zoom,
+            width: n.width * k,
+            height: n.height * k,
+          }
+        }
+        changed = true
+      }
+      return changed ? { nodes } : s
+    }),
+
+  movePinnedNodes: (ids, dx, dy) => {
+    if (dx === 0 && dy === 0) return
+    set(s => {
+      const nodes = { ...s.nodes }
+      for (const id of ids) {
+        const n = nodes[id]
+        if (n?.pin) nodes[id] = { ...n, pin: { ...n.pin, x: n.pin.x + dx, y: n.pin.y + dy } }
+      }
+      return { nodes }
+    })
+  },
+
+  clampPinnedIntoView: (hostW, hostH) =>
+    set(s => {
+      if (hostW <= 0 || hostH <= 0) return s
+      const KEEP = 48
+      const nodes = { ...s.nodes }
+      let changed = false
+      for (const n of Object.values(s.nodes)) {
+        if (!n.pin) continue
+        const w = n.width * n.pin.scale
+        // x may go negative (a panel can hang off the left edge); y floors
+        // at 0 because the header is the drag handle and a header above
+        // the top edge is unrecoverable.
+        const x = Math.max(KEEP - w, Math.min(hostW - KEEP, n.pin.x))
+        const y = Math.max(0, Math.min(hostH - KEEP, n.pin.y))
+        if (x !== n.pin.x || y !== n.pin.y) {
+          nodes[n.id] = { ...n, pin: { ...n.pin, x, y } }
+          changed = true
+        }
+      }
+      return changed ? { nodes } : s
     }),
 
   updateFreeNode: (id, patch) =>

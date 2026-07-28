@@ -16,14 +16,18 @@ export const FreeCanvas: React.FC = React.memo(() => {
   const vp = useViewportBounds()
 
   // Cull nodes outside viewport + margin buffer
+  // This is a PARTITION, not just a cull: without the `n.pin` test a
+  // pinned node would render in BOTH hosts, and the world copy would
+  // scale with zoom. `nodes` must be a dep — a placement flip changes
+  // neither nodeIds nor vp, so on unpin the node would otherwise not
+  // reappear here until the next pan.
   const visibleIds = useMemo(() => {
-    const all = useFreeNodeStore.getState().nodes
     return nodeIds.filter(id => {
-      const n = all[id]
-      if (!n) return false
+      const n = nodes[id]
+      if (!n || n.pin) return false     // pinned ⇒ PinLayer renders it
       return intersectsViewport(vp, n.x, n.y, n.width, n.height)
     })
-  }, [nodeIds, vp])
+  }, [nodeIds, nodes, vp])
 
   // Deck-style tile connections: CONTENT-bearing tiles touching each
   // other join a cluster; a cluster touching a browser window is
@@ -31,7 +35,9 @@ export const FreeCanvas: React.FC = React.memo(() => {
   // click-to-load (FreeNode).
   const tileConnections = useMemo(() => {
     const tiles: DockableItem[] = Object.values(nodes)
-      .filter(isDockableTile)
+      // A pinned tile is not canvas geometry — its x/y are stale, so it
+      // would join clusters at wherever it used to be.
+      .filter(n => !n.pin && isDockableTile(n))
       .map(n => ({ id: n.id, x: n.x, y: n.y, width: n.width, height: n.height }))
     const winRects: WindowRect[] = Object.values(windows)
       .map(w => ({ id: w.id, x: w.x, y: w.y, width: w.width, height: w.height }))

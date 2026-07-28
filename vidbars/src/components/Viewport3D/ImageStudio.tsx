@@ -81,6 +81,9 @@ function findFreeSlotRightOf(
   type R = { x: number; y: number; width: number; height: number }
   const occupied: R[] = [
     ...Object.values(useFreeNodeStore.getState().nodes)
+      // A pinned node reserves no world space — counting it would
+      // displace stamped tiles around wherever it used to sit.
+      .filter(n => !n.pin)
       .map(n => ({ x: n.x, y: n.y, width: n.width, height: n.height })),
     ...Object.values(useViewport3DStore.getState().windows)
       .map(v => ({ x: v.x, y: v.y, width: v.width, height: v.height })),

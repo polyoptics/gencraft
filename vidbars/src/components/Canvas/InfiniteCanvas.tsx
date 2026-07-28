@@ -1,6 +1,7 @@
 import React, { useRef, useCallback, useEffect, useState, useDeferredValue, useMemo } from 'react'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
+import { PinLayer } from './PinLayer'
 import { useBoardsStore } from '../../store/boardsStore'
 import { uploadFile, classifyFile, isAcceptedMediaFile } from '../../utils/uploadFile'
 import type { FreeNodeType } from '../../store/freeNodeStore'
@@ -209,6 +210,11 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
       const freenode = el.closest('[data-freenode][data-id]') as HTMLElement | null
       if (freenode) {
         const nodeId = freenode.dataset.id!
+        const target = useFreeNodeStore.getState().nodes[nodeId]
+        // A pinned panel floats over the canvas, so a file dropped
+        // anywhere near it would land ON it and overwrite its type. A
+        // list tile isn't a media target in either placement.
+        if (!target || target.pin || target.type === 'list') continue
         const file = files[0]
         const nodeType = classifyFile(file)
         uploadFile(file).then(({ url }) => {
@@ -354,6 +360,7 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
     useUndoCoordinator.getState().checkpoint()
     // Stack down the right edge past anything already parked there.
     const occupied = Object.values(useFreeNodeStore.getState().nodes)
+      .filter(n => !n.pin)      // pinned nodes occupy no world space
       .map(n => ({ x: n.x, y: n.y, width: n.width, height: n.height }))
     files.forEach((file, i) => {
       const type = classifyFile(file)
@@ -451,7 +458,10 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
               useBoardsStore.getState().setSelection(bid, ids)
             })
           }
-          const nodeIds = Array.from(document.querySelectorAll('[data-freenode][data-id]'))
+          // Pinned nodes are excluded: the band is a canvas-space gesture,
+          // and a screen-fixed panel it merely happens to sweep across is
+          // not something the user was selecting.
+          const nodeIds = Array.from(document.querySelectorAll('[data-freenode][data-id]:not([data-pinned])'))
             .filter(hits).map(el => (el as HTMLElement).dataset.id!)
           if (nodeIds.length > 0) setFreeSelection(nodeIds)
           // Card group hit-test
@@ -513,6 +523,12 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
       >
         {children}
       </div>
+
+      {/* ── Screen-pinned nodes — OUTSIDE the world transform, but the
+             SAME origin `pan` is measured in, so the pin math needs no
+             offset term. Not part of `children`, so LayerRouter never
+             remounts them at a zoom threshold. ── */}
+      <PinLayer />
 
       <div style={{
         position: 'absolute',

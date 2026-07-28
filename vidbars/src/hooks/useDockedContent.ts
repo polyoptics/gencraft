@@ -52,7 +52,11 @@ function windowRects(windows: Record<string, ViewportWindow3D>): WindowRect[] {
  *  (isDockableTile is THE shared predicate). */
 function contentTileItems(nodes: Record<string, FreeNodeData>): DockableItem[] {
   return Object.values(nodes)
-    .filter(isDockableTile)
+    // Screen-pinned tiles are not canvas geometry. Guarding at this one
+    // site keeps a pinned panel's stale rect out of the ENTIRE docking
+    // graph — dock strips, cluster affordances, and computeCarriedEntities,
+    // which decides what a dragging Viewer takes with it.
+    .filter(n => !n.pin && isDockableTile(n))
     .map(n => ({ id: n.id, x: n.x, y: n.y, width: n.width, height: n.height }))
 }
 

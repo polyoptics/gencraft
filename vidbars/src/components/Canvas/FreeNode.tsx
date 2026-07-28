@@ -49,6 +49,14 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
   const setFreeSelection = useFreeNodeStore(s => s.setFreeSelection)
   const toggleFreeSelection = useFreeNodeStore(s => s.toggleFreeSelection)
   const zoom = useCanvasStore(s => s.zoom)
+  const movePinnedNodes = useFreeNodeStore(s => s.movePinnedNodes)
+  // gz — the multiplier from this node's LAYOUT units to screen pixels.
+  // Canvas-placed that is the world zoom; pinned it is the zoom FROZEN at
+  // pin time, which is also the wrapper's own transform. Every `/ zoom`
+  // in this component means "counter-scale so this stays a constant
+  // screen size", and gz is that same quantity for either placement — so
+  // the pinned subtree renders byte-identically to the canvas one.
+  const gz = node?.pin ? node.pin.scale : zoom
 
   const [isHovered, setIsHovered] = useState(false)
   const [isRenaming, setIsRenaming] = useState(false)
@@ -92,13 +100,20 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
 
   const onNodeMove = useCallback((e: React.PointerEvent) => {
     if (!wrapperRef.current?.hasPointerCapture(e.pointerId)) return
-    const dx = (e.clientX - dragLastX.current) / zoom
-    const dy = (e.clientY - dragLastY.current) / zoom
+    const dx = (e.clientX - dragLastX.current) / gz
+    const dy = (e.clientY - dragLastY.current) / gz
     if (Math.abs(dx) > 1 || Math.abs(dy) > 1) dragHasMoved.current = true
-    // Move all selected nodes together if this node is part of the selection
+    // Move all selected nodes together if this node is part of the
+    // selection — but only same-placement siblings, since a canvas delta
+    // and a screen delta are different quantities.
     const sel = useFreeNodeStore.getState().selectedIds
+    const all = useFreeNodeStore.getState().nodes
     if (sel.length > 1 && sel.includes(id)) {
-      moveManyFreeNodes(sel, dx, dy)
+      const same = sel.filter(sid => !!all[sid]?.pin === !!node?.pin)
+      if (node?.pin) movePinnedNodes(same, e.clientX - dragLastX.current, e.clientY - dragLastY.current)
+      else moveManyFreeNodes(same, dx, dy)
+    } else if (node?.pin) {
+      movePinnedNodes([id], e.clientX - dragLastX.current, e.clientY - dragLastY.current)
     } else {
       moveFreeNode(id, dx, dy)
     }
@@ -107,7 +122,10 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
     // Magnet affordance: dockable tiles (content-bearing + lists) near a
     // browser window edge show a "will snap here" ghost.
     const n = useFreeNodeStore.getState().nodes[id]
-    if (n && isDockableTile(n)) {
+    // Magnet is canvas-only: cross-placement docking does not exist, and
+    // snapping would write canvas coords into a node whose position is
+    // screen-space.
+    if (n && !n.pin && isDockableTile(n)) {
       const winRects: WindowRect[] = Object.values(useViewport3DStore.getState().windows)
         .map(w => ({ id: w.id, x: w.x, y: w.y, width: w.width, height: w.height }))
       const cand = winRects.length > 0 ? findMagnetCandidate(n, winRects, magnetRadiusForZoom(zoom)) : null
@@ -118,7 +136,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
         mp.setPreview(null)
       }
     }
-  }, [id, moveFreeNode, moveManyFreeNodes, zoom])
+  }, [id, moveFreeNode, moveManyFreeNodes, movePinnedNodes, node?.pin, gz, zoom])
 
   const onNodeUp = useCallback((e: React.PointerEvent) => {
     if (!wrapperRef.current?.hasPointerCapture(e.pointerId)) return
@@ -127,6 +145,15 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
     // for any reference above the declaration (broke no-drag clicks).
     const node = useFreeNodeStore.getState().nodes[id]
     if (!node) return
+    // Screen-placed nodes never take part in the canvas drop-transfer
+    // scan below: it hit-tests with elementsFromPoint (screen space) and
+    // ends by deleting the source, so a pinned tile nudged over a card
+    // would hand over its media and destroy itself.
+    if (node.pin && dragHasMoved.current) {
+      try { wrapperRef.current?.releasePointerCapture(e.pointerId) } catch { /* ignore */ }
+      dragHasMoved.current = false
+      return
+    }
     if (!dragHasMoved.current) {
       if (e.shiftKey) toggleFreeSelection(id)
       else {
@@ -393,8 +420,8 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
     if (LOCKS_ASPECT.has(node.type)) {
       const s = resizeStart.current
       const ratio = s.h / s.w
-      const dx = (e.clientX - s.x) / zoom
-      const dy = (e.clientY - s.y) / zoom
+      const dx = (e.clientX - s.x) / gz
+      const dy = (e.clientY - s.y) / gz
       // Project the drag onto the diagonal (1, ratio) so both directions
       // of pointer travel contribute and the corner tracks the cursor.
       const t = (dx + dy * ratio) / (1 + ratio * ratio)
@@ -402,10 +429,10 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
       updateFreeNode(id, { width: w, height: w * ratio })
       return
     }
-    resizeFreeNode(id, (e.clientX - resizeLastX.current) / zoom, (e.clientY - resizeLastY.current) / zoom)
+    resizeFreeNode(id, (e.clientX - resizeLastX.current) / gz, (e.clientY - resizeLastY.current) / gz)
     resizeLastX.current = e.clientX
     resizeLastY.current = e.clientY
-  }, [id, node.type, resizeFreeNode, updateFreeNode, zoom])
+  }, [id, node?.type, resizeFreeNode, updateFreeNode, gz])
 
   const commitRename = useCallback(() => {
     if (renameVal.trim()) updateFreeNode(id, { label: renameVal.trim() })
@@ -418,10 +445,10 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
   // Inverse-zoom scaling: keep header text and controls readable at any canvas zoom.
   // At zoom 0.12, a canvas-space value of X appears as X*0.12 on screen,
   // so we scale up by 1/zoom to maintain roughly constant screen-pixel sizes.
-  const iz = 1 / zoom
+  const iz = 1 / gz
   // Damped inverse-zoom: sqrt(1/zoom). Shrinks more gently than linear zoom,
   // grows more gently than full iz. Used for body content (text, icons, waveforms).
-  const dz = 1 / Math.sqrt(zoom)
+  const dz = 1 / Math.sqrt(gz)
   // Counter-scaled chrome has to be capped against the NODE'S OWN box, not
   // just against the screen. 20*iz and 40*iz are "constant screen pixels",
   // which is right while the tile is big — but zoomed out they grow past
@@ -441,20 +468,35 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
   // Same disease as the zones above: an unclamped 2/zoom border is 33
   // canvas units at zoom 0.06, which is 4 of a 12-pixel tile — it shrinks
   // the content box until the corner zone starts a hair from the centre.
-  const borderW  = Math.min(Math.max(1, 2 / zoom), node.width * 0.04, node.height * 0.04)
+  const borderW  = Math.min(Math.max(1, 2 / gz), node.width * 0.04, node.height * 0.04)
 
   return (
     <div
       ref={wrapperRef}
       data-freenode="true"
       data-id={id}
+      data-pinned={node.pin ? 'true' : undefined}
       style={{
         position: 'absolute',
-        left: node.x,
-        top: node.y,
+        // left/top come from whichever space this node lives in; width and
+        // height ALWAYS come from node.width/height, which never change
+        // basis. The pin's scale is applied as this wrapper's own
+        // transform, so the entire subtree below is identical either way.
+        ...(node.pin ? {
+          left: node.pin.x,
+          top: node.pin.y,
+          transform: `scale(${node.pin.scale})`,
+          transformOrigin: '0 0',
+          pointerEvents: 'auto' as const,   // the PinLayer host is 'none'
+          zIndex: isHovered ? 902 : isSelected ? 901 : 900,
+        } : {
+          left: node.x,
+          top: node.y,
+          zIndex: isHovered ? 50 : 5,
+        }),
         width: node.width,
         height: node.height,
-        borderRadius: 10 / zoom,
+        borderRadius: 10 / gz,
         background: node.color,
         // Connected-to-viewport model tiles carry the accent tint — the
         // same "these things are linked" language as touching deck cards.
@@ -462,13 +504,12 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
           ? `rgba(120,170,255,${isHovered ? 0.65 : 0.45})`
           : `rgba(255,255,255,${isHovered ? 0.18 : 0.08})`}`,
         boxShadow: isSelected
-          ? `0 0 0 ${2.5 / zoom}px rgba(120,180,255,0.9), 0 ${8 / zoom}px ${32 / zoom}px rgba(0,0,0,0.55)`
-          : isHovered ? `0 ${8 / zoom}px ${32 / zoom}px rgba(0,0,0,0.55)` : `0 ${2 / zoom}px ${12 / zoom}px rgba(0,0,0,0.4)`,
+          ? `0 0 0 ${2.5 / gz}px rgba(120,180,255,0.9), 0 ${8 / gz}px ${32 / gz}px rgba(0,0,0,0.55)`
+          : isHovered ? `0 ${8 / gz}px ${32 / gz}px rgba(0,0,0,0.55)` : `0 ${2 / gz}px ${12 / gz}px rgba(0,0,0,0.4)`,
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
         transition: 'border-color 0.12s, box-shadow 0.12s',
-        zIndex: isHovered ? 50 : 5,
         cursor: 'grab',
       }}
       onMouseEnter={() => setIsHovered(true)}
@@ -477,6 +518,11 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
         // Select node in capture phase so children with stopPropagation (note textarea) don't block selection
         if (e.button !== 0) return
         if ((e.target as Element).closest('[data-resize]')) return
+        // A list tile's body is a full Rolodex that owns its own clicks:
+        // selecting the tile on every card row flashed the ring and armed
+        // Delete on the whole panel. Only its header and corner select it.
+        if (node.type === 'list' &&
+            !(e.target as Element).closest('[data-freenode-header],[data-resize]')) return
         wasSelectedOnDown.current = isSelected
         if (e.shiftKey) { toggleFreeSelection(id) }
         else if (!isSelected) { setFreeSelection([id]) }
@@ -664,6 +710,18 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
               ...(node.imageUrl && node.mediaType === 'model' ? [
                 { label: 'Remove Model', icon: '◆', action: () => { useUndoCoordinator.getState().checkpoint(); updateFreeNode(id, { imageUrl: null, posterUrl: undefined }); setNodeMenu(null) } },
               ] : []),
+              // The ONLY placement gesture. Dragging a pinned panel "off
+              // the canvas" deliberately does NOT unpin — a mode should
+              // never change by accident during a move.
+              { label: node.pin ? 'Drop on canvas' : 'Pin to screen',
+                icon: node.pin ? '📤' : '📌',
+                action: () => {
+                  const cs = useCanvasStore.getState()
+                  useUndoCoordinator.getState().checkpoint()
+                  useFreeNodeStore.getState().setNodePlacement(
+                    [id], node.pin ? 'canvas' : 'screen', { pan: cs.pan, zoom: cs.zoom })
+                  setNodeMenu(null)
+                } },
               { label: 'Delete', icon: '🗑️', danger: true, action: () => { useUndoCoordinator.getState().checkpoint(); deleteFreeNode(id); setNodeMenu(null) } },
             ].map(item => (
               <button
