@@ -474,10 +474,27 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
     measure()
     return () => ro.disconnect()
   }, [embedded])
+  // The panel's own NATIVE width, measured rather than assumed: in tree
+  // mode the left column grows past LEFTCOL_W by panelRightExtension to
+  // make room for indented cards, and scaling by the bare LEFTCOL_W then
+  // pushed that overhang outside the tile, where it was clipped. This is
+  // safe to measure because offsetWidth is a LAYOUT metric — the ancestor
+  // scale transform below does not affect it, so there is no feedback loop.
+  const [nativeW, setNativeW] = useState(LEFTCOL_W)
+  const colRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!embedded || !colRef.current) return
+    const el = colRef.current
+    const measure = () => setNativeW(Math.max(1, el.offsetWidth))
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    measure()
+    return () => ro.disconnect()
+  }, [embedded])
   // Scale so the card column exactly spans the tile. Clamped: below ~0.4
   // the labels are unreadable anyway, and above 4 a huge tile would blow
   // the cards up past any useful size.
-  const embedScale = Math.max(0.4, Math.min(4, embedPx.w / LEFTCOL_W))
+  const embedScale = Math.max(0.4, Math.min(4, embedPx.w / nativeW))
   // The row/expansion math below all works in the panel's NATIVE pixel
   // space, so feed it the tile's height converted into that space —
   // otherwise a scaled-up panel would think it has room for far more
@@ -1350,7 +1367,7 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
           position: 'absolute',
           left: 0,
           top: 0,
-          width: LEFTCOL_W,
+          width: nativeW,
           height: embedH,
           transform: `scale(${embedScale})`,
           transformOrigin: 'top left',
@@ -1395,7 +1412,7 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
               the header (and outer panel border) stretches to cover
               every overhanging card in the visible window — otherwise
               indented cards poke past the header on the top right. */}
-        <div style={{
+        <div ref={colRef} style={{
           width: LEFTCOL_W + panelRightExtension,
           display: 'flex',
           flexDirection: 'column',
@@ -1500,6 +1517,30 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
                   padding: '1px 6px', cursor: 'pointer', fontFamily: 'inherit', lineHeight: 1.4,
                 }}
               >＋</button>
+              {/* Placement toggle — the pin. Lives here rather than only
+                  in the right-click menu, because a mode you can't see is
+                  a mode you don't know you have. */}
+              {embedded && embeddedNode && (
+                <button
+                  onClick={() => {
+                    const cs = useCanvasStore.getState()
+                    useUndoCoordinator.getState().checkpoint()
+                    useFreeNodeStore.getState().setNodePlacement(
+                      [embeddedNode.id], embeddedNode.pin ? 'canvas' : 'screen',
+                      { pan: cs.pan, zoom: cs.zoom })
+                  }}
+                  title={embeddedNode.pin
+                    ? 'Pinned to the screen — click to set it down on the canvas'
+                    : 'On the canvas — click to pin it to the screen'}
+                  style={{
+                    background: embeddedNode.pin ? 'rgba(120,170,255,0.28)' : 'rgba(255,255,255,0.05)',
+                    border: `1px solid ${embeddedNode.pin ? 'rgba(140,190,255,0.6)' : 'rgba(255,255,255,0.12)'}`,
+                    borderRadius: 4, color: embeddedNode.pin ? '#cfe2ff' : 'rgba(255,255,255,0.5)',
+                    fontSize: 10, fontWeight: 700,
+                    padding: '1px 6px', cursor: 'pointer', fontFamily: 'inherit', lineHeight: 1.4,
+                  }}
+                >📌</button>
+              )}
               {!embedded && <CloseButton onClick={() => setRolodexOpen(false)} />}
             </div>
           </div>
@@ -1529,6 +1570,30 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
                   cursor: 'pointer', fontFamily: 'inherit',
                 }}
               >{KIND_LABELS[k]}</button>
+            ))}
+            {/* Display mode — how tall the cards sit. This used to be a
+                hover-revealed dock floating beside the panel, which only
+                worked for a screen-fixed panel at a known document
+                position; as chips it works in both placements, is visible
+                without hunting for it, and can't be clipped by the tile. */}
+            <div style={{ width: 1, alignSelf: 'stretch', margin: '2px 2px', background: 'rgba(255,255,255,0.12)' }} />
+            {(['auto', 'compact', 'full'] as const).map(m => (
+              <button
+                key={m}
+                onClick={() => setDisplayMode(m)}
+                title={m === 'auto' ? 'Auto — the active card grows, the rest stay tabs'
+                     : m === 'compact' ? 'Compact — every card stays a tab'
+                     : 'Expanded — every card at full height'}
+                style={{
+                  flex: 1, minWidth: 0,
+                  background: displayMode === m ? 'rgba(120,170,255,0.28)' : 'rgba(255,255,255,0.05)',
+                  border: `1px solid ${displayMode === m ? 'rgba(140,190,255,0.55)' : 'rgba(255,255,255,0.08)'}`,
+                  borderRadius: 4, padding: '2px 0',
+                  color: displayMode === m ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.5)',
+                  fontSize: 8.5, fontWeight: 700, letterSpacing: '0.3px',
+                  cursor: 'pointer', fontFamily: 'inherit',
+                }}
+              >{m === 'auto' ? 'Auto' : m === 'compact' ? 'Tabs' : 'Full'}</button>
             ))}
             <div style={{ width: 1, alignSelf: 'stretch', margin: '2px 2px', background: 'rgba(255,255,255,0.12)' }} />
             <button
