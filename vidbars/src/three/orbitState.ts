@@ -35,8 +35,61 @@ export function applyOrbit(cam: THREE.PerspectiveCamera, o: OrbitState): void {
  *  center, radius derived from its size + camera fov. Returns the orbit
  *  plus near/far planes derived from the model scale (a fixed near clips
  *  huge models and z-fights tiny ones). */
+/** Bounds of what is actually ON SCREEN.
+ *
+ *  Box3.setFromObject uses a SkinnedMesh's geometry bounds transformed by
+ *  its world matrix — i.e. the BIND POSE, which for a rigged character is
+ *  routinely far larger than the posed mesh and offset from it (T-pose
+ *  arms, a root bone at the origin). Framing off that puts the model in a
+ *  corner of the frame, tiny. So for skinned meshes we walk the vertices
+ *  through applyBoneTransform and measure where they really are.
+ *
+ *  Sampled for large meshes: a bounding box only needs the extremes, and
+ *  every 12th vertex finds them to well inside a pixel at poster size. */
+export function computePosedBounds(root: THREE.Object3D): THREE.Box3 {
+  root.updateMatrixWorld(true)
+  const box = new THREE.Box3()
+  const v = new THREE.Vector3()
+  let sawSkinned = false
+
+  root.traverse(obj => {
+    const sk = obj as THREE.SkinnedMesh
+    if (!sk.isSkinnedMesh || !sk.geometry?.attributes?.position) return
+    sawSkinned = true
+    const pos = sk.geometry.attributes.position
+    const step = pos.count > 6000 ? 12 : 1
+    for (let i = 0; i < pos.count; i += step) {
+      v.fromBufferAttribute(pos, i)
+      sk.applyBoneTransform(i, v)
+      box.expandByPoint(sk.localToWorld(v))
+    }
+    // Always include the last vertex — sampling can miss a lone extreme.
+    if (step > 1 && pos.count > 0) {
+      v.fromBufferAttribute(pos, pos.count - 1)
+      sk.applyBoneTransform(pos.count - 1, v)
+      box.expandByPoint(sk.localToWorld(v))
+    }
+  })
+
+  // Non-skinned geometry (props, static parts) measured the normal way.
+  root.traverse(obj => {
+    const m = obj as THREE.Mesh
+    if (!m.isMesh || (m as THREE.SkinnedMesh).isSkinnedMesh || !m.geometry) return
+    m.geometry.computeBoundingBox()
+    if (m.geometry.boundingBox) {
+      box.union(m.geometry.boundingBox.clone().applyMatrix4(m.matrixWorld))
+    }
+  })
+
+  if (box.isEmpty()) return new THREE.Box3().setFromObject(root)
+  // A rig with no skinned mesh gains nothing from the walk above; the
+  // plain box is equivalent and cheaper to trust.
+  if (!sawSkinned) return new THREE.Box3().setFromObject(root)
+  return box
+}
+
 export function frameModel(root: THREE.Object3D, fovDeg = 50): { orbit: OrbitState; near: number; far: number } {
-  const box = new THREE.Box3().setFromObject(root)
+  const box = computePosedBounds(root)
   const sphere = new THREE.Sphere()
   box.getBoundingSphere(sphere)
   const r = Math.max(sphere.radius, 1e-4)
@@ -53,9 +106,11 @@ export function frameModel(root: THREE.Object3D, fovDeg = 50): { orbit: OrbitSta
   }
 }
 
-/** Dolly bounds for a framed model — keeps wheel-zoom sane. */
+/** Dolly bounds for a framed model. Deliberately loose: when the automatic
+ *  framing gets a model wrong you need to be able to pull right back, see
+ *  it, and re-frame by hand — a tight ceiling made that impossible. */
 export function dollyBounds(o: OrbitState): { min: number; max: number } {
-  return { min: o.radius * 0.05, max: o.radius * 10 }
+  return { min: o.radius * 0.002, max: o.radius * 200 }
 }
 
 const _right = new THREE.Vector3()

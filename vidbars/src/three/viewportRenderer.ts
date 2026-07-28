@@ -18,7 +18,7 @@
 
 import * as THREE from 'three'
 import { useCanvasStore } from '../store/canvasStore'
-import { useViewport3DStore } from '../store/viewport3dStore'
+import { useViewport3DStore, type ViewportWindow3D } from '../store/viewport3dStore'
 import { acquireModel, releaseModel, disposeInstance } from './modelCache'
 import { applyOrbit, frameModel, dollyBounds, type OrbitState } from './orbitState'
 
@@ -54,6 +54,90 @@ let rafHandle: number | null = null
 let resizeObserver: ResizeObserver | null = null
 const unsubscribers: Array<() => void> = []
 const views = new Map<string, ViewRuntime>()
+
+// ── Display modes ──
+// Applied as scene.overrideMaterial rather than by touching the model's
+// own materials: instances made by SkeletonUtils.clone SHARE materials, so
+// mutating one would change every window showing that model.
+const WIREFRAME_MAT = new THREE.MeshBasicMaterial({
+  color: 0x9fd0ff, wireframe: true, transparent: true, opacity: 0.85,
+})
+const SHADED_MAT = new THREE.MeshStandardMaterial({
+  color: 0xc8ccd8, roughness: 0.75, metalness: 0.0,
+})
+
+export interface ModelStats {
+  vertices: number
+  triangles: number
+  meshes: number
+  materials: number
+  textures: number
+  bones: number
+  animations: number
+}
+const statsByView = new Map<string, ModelStats>()
+
+export function getModelStats(id: string): ModelStats | undefined {
+  return statsByView.get(id)
+}
+
+function computeStats(root: THREE.Object3D, animations: number): ModelStats {
+  let vertices = 0, triangles = 0, meshes = 0, bones = 0
+  const mats = new Set<unknown>()
+  const texes = new Set<unknown>()
+  root.traverse(o => {
+    const b = o as THREE.Bone
+    if (b.isBone) bones++
+    const m = o as THREE.Mesh
+    if (!m.isMesh || !m.geometry) return
+    meshes++
+    const pos = m.geometry.attributes?.position
+    if (pos) vertices += pos.count
+    triangles += m.geometry.index ? m.geometry.index.count / 3 : (pos ? pos.count / 3 : 0)
+    for (const mat of (Array.isArray(m.material) ? m.material : [m.material])) {
+      if (!mat) continue
+      mats.add(mat)
+      for (const k of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'aoMap'] as const) {
+        const t = (mat as unknown as Record<string, unknown>)[k]
+        if (t) texes.add(t)
+      }
+    }
+  })
+  return {
+    vertices, triangles: Math.round(triangles), meshes,
+    materials: mats.size, textures: texes.size, bones, animations,
+  }
+}
+
+/** Skeleton helpers are created lazily, one per view, and only while the
+ *  skin is hidden — there is nothing to look at otherwise. */
+const skeletons = new Map<string, THREE.SkeletonHelper>()
+
+function applyDisplayMode(id: string, view: ViewRuntime, win: ViewportWindow3D): void {
+  view.scene.overrideMaterial =
+    win.viewMode === 'wireframe' ? WIREFRAME_MAT
+    : win.viewMode === 'shaded' ? SHADED_MAT
+    : null
+
+  const skinVisible = win.showSkin !== false
+  let hasSkinned = false
+  view.modelRoot?.traverse(o => {
+    if ((o as THREE.SkinnedMesh).isSkinnedMesh) { hasSkinned = true; o.visible = skinVisible }
+  })
+
+  let helper = skeletons.get(id)
+  if (!skinVisible && hasSkinned && view.modelRoot && !helper) {
+    helper = new THREE.SkeletonHelper(view.modelRoot)
+    // Drawn on top of everything so bones inside a body are still readable.
+    // (In wireframe/shaded mode the scene override also applies to these
+    // lines; they stay legible, just in the override's colour.)
+    ;(helper.material as THREE.LineBasicMaterial).depthTest = false
+    helper.renderOrder = 999
+    skeletons.set(id, helper)
+    view.scene.add(helper)
+  }
+  if (helper) helper.visible = !skinVisible
+}
 
 // ── Status pub/sub (for useViewStatus — mirrors useResolvedMedia's pattern) ──
 type StatusSnapshot = { status: ViewStatus; hasRenderedOnce: boolean; errorMsg?: string }
@@ -140,6 +224,7 @@ function renderFrame(): void {
     target.setClearColor(VIEWPORT_BG, 1)
     target.clear()
 
+    applyDisplayMode(win.id, view, win)
     view.camera.aspect = sw / sh
     applyOrbit(view.camera, view.orbit)
     view.camera.updateProjectionMatrix()
@@ -172,6 +257,68 @@ function createView(id: string): ViewRuntime {
   return view
 }
 
+/** Render a window's CURRENT view — its camera, its display mode — to a
+ *  poster-sized data URL. This is what makes a bad auto-frame recoverable:
+ *  pull back, orbit to something that reads well, and make that the
+ *  thumbnail. Returns null if the view has no model ready. */
+export function captureViewPoster(id: string, w = 512, h = 384): string | null {
+  const view = views.get(id)
+  const r = renderer ?? pinRenderer
+  if (!view || !r || view.status !== 'ready') return null
+  const win = useViewport3DStore.getState().windows[id]
+  if (win) applyDisplayMode(id, view, win)
+
+  const target = new THREE.WebGLRenderTarget(w, h)
+  try {
+    const prevTarget = r.getRenderTarget()
+    const prevScissor = r.getScissorTest()
+    r.setScissorTest(false)
+    r.setRenderTarget(target)
+    r.setClearColor(VIEWPORT_BG, 1)
+    r.clear()
+    const prevAspect = view.camera.aspect
+    view.camera.aspect = w / h
+    applyOrbit(view.camera, view.orbit)
+    view.camera.updateProjectionMatrix()
+    r.render(view.scene, view.camera)
+    const pixels = new Uint8Array(w * h * 4)
+    r.readRenderTargetPixels(target, 0, 0, w, h, pixels)
+    r.setRenderTarget(prevTarget)
+    r.setScissorTest(prevScissor)
+    view.camera.aspect = prevAspect
+    view.camera.updateProjectionMatrix()
+
+    // Same linear→sRGB + row flip as the poster service, and a data URL
+    // for the same reason: blob bytes do not survive in this runtime.
+    const toSRGB = new Uint8Array(256)
+    for (let i = 0; i < 256; i++) {
+      const l = i / 255
+      const s = l <= 0.0031308 ? 12.92 * l : 1.055 * Math.pow(l, 1 / 2.4) - 0.055
+      toSRGB[i] = Math.round(Math.min(1, Math.max(0, s)) * 255)
+    }
+    const cnv = document.createElement('canvas')
+    cnv.width = w; cnv.height = h
+    const ctx = cnv.getContext('2d')!
+    const img = ctx.createImageData(w, h)
+    const rowBytes = w * 4
+    for (let y = 0; y < h; y++) {
+      const src = (h - 1 - y) * rowBytes
+      const dst = y * rowBytes
+      for (let x = 0; x < rowBytes; x += 4) {
+        img.data[dst + x] = toSRGB[pixels[src + x]]
+        img.data[dst + x + 1] = toSRGB[pixels[src + x + 1]]
+        img.data[dst + x + 2] = toSRGB[pixels[src + x + 2]]
+        img.data[dst + x + 3] = pixels[src + x + 3]
+      }
+    }
+    ctx.putImageData(img, 0, 0)
+    return cnv.toDataURL('image/png')
+  } finally {
+    target.dispose()
+    requestRender()
+  }
+}
+
 function destroyView(id: string): void {
   const view = views.get(id)
   if (!view) return
@@ -186,6 +333,9 @@ async function loadModelIntoView(view: ViewRuntime, url: string, savedCamera: Or
   // Drop the previous model
   if (view.modelRoot) { disposeInstance(view.modelRoot); view.modelRoot = null }
   if (view.modelUrl) { releaseModel(view.modelUrl); view.modelUrl = null }
+  const oldHelper = skeletons.get(view.id)
+  if (oldHelper) { view.scene.remove(oldHelper); oldHelper.dispose?.(); skeletons.delete(view.id) }
+  statsByView.delete(view.id)
   view.modelUrl = url
   view.status = 'loading'
   view.hasRenderedOnce = false
@@ -199,6 +349,7 @@ async function loadModelIntoView(view: ViewRuntime, url: string, savedCamera: Or
     }
     view.modelRoot = root
     view.scene.add(root)
+    statsByView.set(view.id, computeStats(root, (root.animations?.length ?? 0)))
     const framed = frameModel(root, view.camera.fov)
     view.camera.near = framed.near
     view.camera.far = framed.far

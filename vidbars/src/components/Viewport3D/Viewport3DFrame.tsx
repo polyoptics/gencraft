@@ -23,7 +23,8 @@ import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useBoardsStore } from '../../store/boardsStore'
 import { computeCarriedEntities } from '../../hooks/useDockedContent'
 import { useViewStatus } from '../../hooks/useViewStatus'
-import { getViewRuntime, requestRender, MIN_GL_PX } from '../../three/viewportRenderer'
+import { getViewRuntime, requestRender, MIN_GL_PX, captureViewPoster, getModelStats } from '../../three/viewportRenderer'
+import { usePosterMapStore } from '../../three/posterService'
 import { clampPhi, panOrbit } from '../../three/orbitState'
 import { useSeedHoverFromCursor } from '../../utils/pointerTracker'
 import { ViewportSwitcherStrip } from './ViewportSwitcherStrip'
@@ -62,6 +63,7 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
   // the world zoom otherwise. Every `/ zoom` below means "counter-scale to
   // a constant screen size", so all of them become `/ gz`.
   const gz = win?.pin ? win.pin.scale : zoom
+  const setPoster = usePosterMapStore(s => s.setPoster)
 
   const [isHovered, setIsHovered] = useState(false)
   const wrapperRef = useRef<HTMLDivElement>(null)
@@ -297,6 +299,49 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
           flex: 1, color: 'rgba(255,255,255,0.7)', fontSize, fontWeight: 600,
           userSelect: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>{win.title}</span>
+
+        {/* ── Model controls — only meaningful while a model is loaded ── */}
+        {modelActive && (() => {
+          const btn = (active: boolean): React.CSSProperties => ({
+            background: active ? 'rgba(120,170,255,0.28)' : 'rgba(255,255,255,0.06)',
+            border: `1px solid ${active ? 'rgba(140,190,255,0.6)' : 'rgba(255,255,255,0.12)'}`,
+            borderRadius: 3 * iz,
+            color: active ? '#cfe2ff' : 'rgba(255,255,255,0.55)',
+            fontSize: fontSize * 0.72, fontWeight: 700, letterSpacing: '0.3px',
+            padding: `${1 * iz}px ${4 * iz}px`, cursor: 'pointer',
+            fontFamily: 'inherit', lineHeight: 1.5, flexShrink: 0,
+          })
+          const mode = win.viewMode ?? 'textured'
+          const v3 = useViewport3DStore.getState()
+          return (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 2 * iz, flexShrink: 0 }}
+                 onPointerDown={e => e.stopPropagation()}>
+              {(['textured', 'shaded', 'wireframe'] as const).map(m => (
+                <button key={m} style={btn(mode === m)} onClick={() => v3.setViewMode(id, m)}
+                  title={m === 'textured' ? 'Textured — the model as authored'
+                       : m === 'shaded' ? 'Shaded — flat material, no maps'
+                       : 'Wireframe'}>
+                  {m === 'textured' ? 'TEX' : m === 'shaded' ? 'SHD' : 'WIRE'}
+                </button>
+              ))}
+              <button style={btn(win.showSkin === false)} onClick={() => v3.toggleShowSkin(id)}
+                title="Hide the skinned mesh and show the skeleton">SKEL</button>
+              <button style={btn(!!win.showStats)} onClick={() => v3.toggleShowStats(id)}
+                title="Vertex / triangle counts">#</button>
+              <button
+                style={btn(false)}
+                title="Use this view as the model's thumbnail"
+                onClick={() => {
+                  const active = win.activeItem
+                  if (active?.kind !== 'media' || active.mediaType !== 'model') return
+                  const shot = captureViewPoster(id)
+                  if (shot) setPoster(active.url, shot)
+                }}
+              >SNAP</button>
+            </div>
+          )
+        })()}
+
         <button
           onClick={() => {
             const cs = useCanvasStore.getState()
@@ -372,6 +417,40 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
             </div>
           </div>
         )}
+
+        {/* ── Stats HUD ── read from the view registry, which is where the
+               loaded instance actually lives. Keyed on status so it fills
+               in the moment the model becomes ready. */}
+        {win.showStats && modelActive && status.status === 'ready' && (() => {
+          const st = getModelStats(id)
+          if (!st) return null
+          const n = (x: number) => x >= 1e6 ? `${(x / 1e6).toFixed(2)}M`
+            : x >= 1e3 ? `${(x / 1e3).toFixed(1)}k` : String(x)
+          const rows: Array<[string, string]> = [
+            ['verts', n(st.vertices)],
+            ['tris', n(st.triangles)],
+            ['meshes', String(st.meshes)],
+            ['mats', String(st.materials)],
+            ['tex', String(st.textures)],
+          ]
+          if (st.bones) rows.push(['bones', String(st.bones)])
+          if (st.animations) rows.push(['clips', String(st.animations)])
+          return (
+            <div style={{
+              position: 'absolute', top: 6 * iz, left: 6 * iz,
+              padding: `${4 * iz}px ${6 * iz}px`, borderRadius: 4 * iz,
+              background: 'rgba(8,10,20,0.72)', border: `${1 * iz}px solid rgba(140,190,255,0.22)`,
+              pointerEvents: 'none', fontFamily: 'ui-monospace, monospace',
+              fontSize: 9 * iz, lineHeight: 1.5, color: 'rgba(200,225,255,0.9)',
+            }}>
+              {rows.map(([k, v]) => (
+                <div key={k} style={{ display: 'flex', gap: 6 * iz, justifyContent: 'space-between' }}>
+                  <span style={{ opacity: 0.6 }}>{k}</span><span>{v}</span>
+                </div>
+              ))}
+            </div>
+          )
+        })()}
 
         {/* Content playlist — appears when ≥2 items are docked; also owns
             active-item reconciliation, so it mounts unconditionally. */}

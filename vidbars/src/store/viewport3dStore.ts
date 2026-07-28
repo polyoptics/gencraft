@@ -101,6 +101,13 @@ export interface ViewportWindow3D {
    *  is skipped by the canvas-space layer. width/height stay canvas units
    *  and stay live, so resize and the docking geometry keep working. */
   pin?: { x: number; y: number; scale: number }
+  /** How the model is drawn. Applied as a scene-wide override, so the
+   *  model's own materials are never mutated (instances share them). */
+  viewMode?: 'textured' | 'shaded' | 'wireframe'
+  /** false ⇒ hide the skinned meshes and show the skeleton instead. */
+  showSkin?: boolean
+  /** Vertex/triangle readout over the model. */
+  showStats?: boolean
   createdAt: number
 }
 
@@ -137,6 +144,9 @@ interface Viewport3DStore {
                        view: { pan: { x: number; y: number }; zoom: number }) => void
   /** SCREEN-px delta for a pinned window. */
   movePinnedWindow: (id: string, dx: number, dy: number) => void
+  setViewMode: (id: string, mode: 'textured' | 'shaded' | 'wireframe') => void
+  toggleShowSkin: (id: string) => void
+  toggleShowStats: (id: string) => void
   /** View-only text zoom for ONE page (itemKey = activeItemKey's
    *  `text:<sourceId>` form). Also becomes this window's reading size.
    *  Does NOT edit any card. */
@@ -281,6 +291,27 @@ export const useViewport3DStore = create<Viewport3DStore>()(persist((set, get) =
         width: w.width * k,
         height: w.height * k,
       } } }
+    }),
+
+  setViewMode: (id, viewMode) =>
+    set(s => {
+      const w = s.windows[id]
+      if (!w || w.viewMode === viewMode) return s
+      return { windows: { ...s.windows, [id]: { ...w, viewMode } } }
+    }),
+
+  toggleShowSkin: (id) =>
+    set(s => {
+      const w = s.windows[id]
+      if (!w) return s
+      return { windows: { ...s.windows, [id]: { ...w, showSkin: w.showSkin === false } } }
+    }),
+
+  toggleShowStats: (id) =>
+    set(s => {
+      const w = s.windows[id]
+      if (!w) return s
+      return { windows: { ...s.windows, [id]: { ...w, showStats: !w.showStats } } }
     }),
 
   movePinnedWindow: (id, dx, dy) => {
