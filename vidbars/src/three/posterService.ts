@@ -107,9 +107,41 @@ export function ensureModelPoster(modelUrl: string): Promise<string | null> {
   return p
 }
 
+/** Generation needs the shared renderer, which is attached by the GL host
+ *  on mount. A tile can easily ask BEFORE that lands — on a fresh load, or
+ *  right after a batch import — and the old code just returned null with
+ *  no log. Nothing retried, because the only caller is an effect whose
+ *  deps have not changed, so that model had no poster for the rest of the
+ *  session. That is exactly "some of them came in with thumbnails and the
+ *  rest never did". Wait for the renderer instead of giving up. */
+async function waitForRenderer(timeoutMs = 20000): Promise<THREE.WebGLRenderer | null> {
+  const t0 = performance.now()
+  let r = getSharedRenderer()
+  while (!r && performance.now() - t0 < timeoutMs) {
+    await new Promise(res => setTimeout(res, 200))
+    r = getSharedRenderer()
+  }
+  return r
+}
+
+/** One poster at a time. These are 10-20MB GLBs: eight parsed and
+ *  uploaded to the GPU at once is a lot of transient memory for something
+ *  with no deadline, and the model cache only keeps 6 entries warm, so a
+ *  concurrent burst evicts the very entries it is loading. */
+let queue: Promise<unknown> = Promise.resolve()
+
 async function generatePoster(modelUrl: string): Promise<string | null> {
-  const renderer = getSharedRenderer()
-  if (!renderer) return null
+  const run = queue.then(() => generatePosterNow(modelUrl), () => generatePosterNow(modelUrl))
+  queue = run.catch(() => {})
+  return run
+}
+
+async function generatePosterNow(modelUrl: string): Promise<string | null> {
+  const renderer = await waitForRenderer()
+  if (!renderer) {
+    console.warn('[posterService] no renderer available for', modelUrl)
+    return null
+  }
   let root: THREE.Object3D | null = null
   let target: THREE.WebGLRenderTarget | null = null
   try {
