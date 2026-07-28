@@ -31,6 +31,21 @@ import { useSeedHoverFromCursor } from '../../utils/pointerTracker'
  *  set, not to fight it. */
 const LOCKS_ASPECT = new Set<FreeNodeData['type']>(['list'])
 
+/** The poster to hand on when a model tile transfers its content.
+ *
+ *  LIVE map first, the node's stored copy only as a fallback. The stored
+ *  `posterUrl` can point at a blob that no longer exists — a template or
+ *  project load restores node records without the poster images — and the
+ *  tile itself never reveals that, because it renders from the live map.
+ *  Preferring the stored copy therefore wrote a DEAD reference into the
+ *  card, and the model then rendered as nothing at every zoom level: no
+ *  bar hero, no block thumbnail, no card hero. Which is exactly what
+ *  "I dropped it in and it disappeared" looks like. */
+function transferablePoster(node: FreeNodeData): string | null {
+  if (!node.imageUrl) return node.posterUrl ?? null
+  return getModelPoster(node.imageUrl) ?? node.posterUrl ?? null
+}
+
 interface Props {
   id: string
   /** When this model tile's cluster touches a 3D viewport window, the
@@ -202,11 +217,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
         const transferToBar = (boardId: string, barId: string) => {
           if (hasMedia && node.imageUrl) {
             const curMedia = useBoardsStore.getState().boards[boardId]?.bars[barId]?.content.media ?? []
-            // Models: the poster may live only in the shared map (map-first
-            // rendering skips writing node.posterUrl) — carry it either way
-            // so bar heroes can show it.
-            const posterUrl = node.posterUrl
-              ?? (mediaType === 'model' ? getModelPoster(node.imageUrl) : null)
+            const posterUrl = mediaType === 'model' ? transferablePoster(node) : node.posterUrl ?? null
             useBoardsStore.getState().setContent(boardId, barId, {
               media: [...curMedia, {
                 url: node.imageUrl, type: mediaType,
@@ -255,7 +266,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
           const bs0 = useBoardsStore.getState()
           const group = bs0.groups.find(g => g.id === groupId)
           if (!group) return false
-          const modelPoster = node.posterUrl ?? getModelPoster(node.imageUrl)
+          const modelPoster = transferablePoster(node)
           const fillModel = (boardId: string): boolean => {
             const rootBar = useBoardsStore.getState().boards[boardId]?.rootIds[0]
             if (!rootBar) return false
@@ -358,7 +369,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
                   targetGroup = useBoardsStore.getState().groups.find(gr => gr.boardIds.includes(targetBoardId))
                 }
                 if (!targetGroup) break   // nowhere to hold it — leave the tile
-                const poster = node.posterUrl ?? (node.imageUrl ? getModelPoster(node.imageUrl) : null)
+                const poster = transferablePoster(node)
                 if (poster && !targetGroup.cardHeroImage) {
                   useBoardsStore.getState().setGroupCardHeroImage(targetGroup.id, poster)
                 }
