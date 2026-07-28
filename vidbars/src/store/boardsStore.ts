@@ -24,11 +24,11 @@ import {
 } from '../utils/barOps'
 
 // Starting footprint of a new board's root bar — i.e. how big a brand-new
-// card is at board zoom. Half the old 480x270, same 16:9, so a new card
-// arrives at a workable size instead of filling the view. Only NEW boards
-// are affected; existing ones keep whatever size they were given.
-const INIT_W = 240
-const INIT_H = 135
+// card is at board zoom. A quarter of the original 480x270, same 16:9, so
+// a new card arrives at a workable size instead of filling the view. Only
+// NEW boards are affected; existing ones keep the size they were given.
+const INIT_W = 120
+const INIT_H = 67.5
 const PRIMARY_INIT_ID = 'root-bar'
 
 /** A project group — boards that collapse into one card at card zoom level */
