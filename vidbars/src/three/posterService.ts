@@ -12,8 +12,6 @@ import * as THREE from 'three'
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { createDebouncedIDBStorage } from '../utils/debouncedIDBStorage'
-import { putMedia } from '../utils/mediaStore'
-import { makeMediaRef } from '../utils/mediaRef'
 import { acquireModel, releaseModel, disposeInstance } from './modelCache'
 import { applyOrbit, frameModel } from './orbitState'
 import { getSharedRenderer } from './viewportRenderer'
@@ -39,7 +37,11 @@ export const usePosterMapStore = create<PosterMapStore>()(persist((set) => ({
   // were written linear → displayed dark. Drop them all; regeneration now
   // sRGB-encodes the readback (+ brighter rig). (v3 not v2: an HMR race
   // during development persisted stale entries under version 2.)
-  version: 3,
+  // v4: posters are now self-contained `data:` URLs rather than
+  // `mediaref:` pointers into the blob store — see generatePosterNow.
+  // Every v3 entry points at blob bytes that this runtime cannot read
+  // back, so they render as nothing; drop them and regenerate.
+  version: 4,
   migrate: () => ({ map: {} }),
 }))
 
@@ -204,13 +206,27 @@ async function generatePosterNow(modelUrl: string): Promise<string | null> {
       }
     }
     ctx.putImageData(img, 0, 0)
-    const blob = await new Promise<Blob | null>(res => cnv.toBlob(res, 'image/png'))
-    if (!blob) return null
 
-    const id = await putMedia(blob)
-    const ref = makeMediaRef(id)
-    usePosterMapStore.getState().setPoster(modelUrl, ref)
-    return ref
+    // A DATA URL, not a Blob in the media store.
+    //
+    // The poster is small (tens of KB) and it is the ONE piece of media
+    // this app manufactures rather than receives, so it can be kept as a
+    // self-contained string. That matters because a `blob:` URL is a
+    // pointer to bytes the browser stores separately, and in this runtime
+    // those bytes come back unreadable once they are more than a few
+    // hundred bytes: FileReader throws, arrayBuffer() throws
+    // NotReadableError, and an <img> pointed at the object URL decodes to
+    // 0x0. The poster was being generated and stored perfectly and then
+    // rendering as nothing.
+    //
+    // A data: URL carries the bytes inline, so there is nothing to fetch
+    // and nothing to lose. useResolvedMedia passes non-mediaref strings
+    // through untouched, so every existing consumer works unchanged.
+    const dataUrl = cnv.toDataURL('image/png')
+    if (!dataUrl || dataUrl.length < 32) return null
+
+    usePosterMapStore.getState().setPoster(modelUrl, dataUrl)
+    return dataUrl
   } catch (err) {
     console.warn('[posterService] generation failed for', modelUrl, err)
     return null
