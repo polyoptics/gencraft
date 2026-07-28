@@ -781,7 +781,12 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
       if (row.kind !== 'freenode') continue
       const n = row.node
       map.set(n.id,
-        n.type === 'model' ? (n.posterUrl ?? (n.imageUrl ? getModelPoster(n.imageUrl) : null))
+        // LIVE map first, the node's stored copy only as a fallback: after
+        // a template load the stored posterUrl points at a blob that is
+        // gone, and preferring it meant the regenerated poster was never
+        // used — the face image stayed blank while the chip worked.
+        n.type === 'model'
+          ? ((n.imageUrl ? getModelPoster(n.imageUrl) : null) ?? n.posterUrl ?? null)
         : (n.type === 'image' || n.type === 'video') ? n.imageUrl
         : null)
     }
@@ -2103,7 +2108,15 @@ const RolodexFreeNodeSlot: React.FC<{
 }> = ({ node, offset, top, zIndex, heroImage, expansionFraction, isHovered, onClick, onDoubleClick, onHoverEnter, onHoverLeave }) => {
   const centerness = Math.max(0, 1 - Math.abs(offset))
   const lit = centerness
-  const imageCenterness = centerness * Math.min(1, Math.max(0, (expansionFraction - 0.15) / 0.2))
+  const exposure = Math.min(1, Math.max(0, (expansionFraction - 0.15) / 0.2))
+  const imageCenterness = centerness * exposure
+  // A MODEL's poster belongs on the FACE of the card once the card is
+  // exposed enough to have a face — the same way the tile shows it out on
+  // the canvas. Deliberately NOT multiplied by centerness like the others:
+  // in a list of tiles the "active" row is rarely one of them, so keying
+  // on centerness meant the poster essentially never appeared. Exposure
+  // alone means every card that is actually open shows what it is.
+  const faceOpacity = node.type === 'model' ? exposure * 0.85 : imageCenterness * 0.7
   const borderRGB = Math.round(255 * lit)
   const borderAlpha = 0.28 + (0.92 - 0.28) * lit
   const name = node.label || 'Untitled'
@@ -2134,11 +2147,11 @@ const RolodexFreeNodeSlot: React.FC<{
         overflow: 'hidden',
       }}
     >
-      {heroImage && imageCenterness > 0.01 && (
+      {heroImage && faceOpacity > 0.01 && (
         <HeroImageLayer
           heroImage={heroImage}
           transform={node.imageTransform}
-          opacity={imageCenterness * 0.7}
+          opacity={faceOpacity}
           borderRadius={6}
         />
       )}
@@ -2149,11 +2162,11 @@ const RolodexFreeNodeSlot: React.FC<{
         display: 'flex', alignItems: 'center', gap: 6, padding: '0 10px',
         boxSizing: 'border-box', pointerEvents: 'none',
       }}>
-        {/* A 3D model's snapshot rides ON the row, always — the big hero
-            behind the card only appears once the card is the grown one,
-            which for a long list of tiles is almost never. The thumb is
-            what makes a list of models readable at a glance. */}
-        {heroImage && node.type === 'model'
+        {/* While the card is a tab there is no face to put the poster on,
+            so it rides in the tab row as a chip. Once the card opens, the
+            face image above takes over and the chip stands down rather
+            than showing the same picture twice. */}
+        {heroImage && node.type === 'model' && faceOpacity < 0.25
           ? <ModelRowThumb src={heroImage} modelUrl={node.imageUrl} size={SLOT_PEEK_H - 12} />
           : (
             <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.6)', flexShrink: 0 }}>
