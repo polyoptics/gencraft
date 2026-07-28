@@ -155,6 +155,13 @@ interface CanvasStore {
   /** Set of group IDs whose children are hidden in the Rolodex tree view.
    *  Toggled by the caret on deck rows. Only meaningful in 'tree' view. */
   rolodexCollapsedDeckIds: string[]
+  /** The one `list` free node the toolbar's Cards button drives. A
+   *  POINTER, not a flag on the node: a flag gets DUPLICATED by paste and
+   *  by project insert, and two homes is unrecoverable. A DANGLING
+   *  pointer self-heals via ensureRolodexHome(), which is why the
+   *  wholesale node-map replacements need no knowledge of it. */
+  homeRolodexId: string | null
+  setHomeRolodexId: (id: string | null) => void
   /** Deck-portal selections: anchorId → memberId. When set, a click on a
    *  fanned member "locks" that member's content onto the anchor's face,
    *  so the primary card acts as a view-only portal for the member. The
@@ -230,6 +237,7 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
   // down to see the active card grow and below-stack images fade in.
   rolodexExpansion: 34,
   rolodexCollapsedDeckIds: [],
+  homeRolodexId: null,
   deckPortalSelections: {},
 
   setPan: (pan) => { cancelJumpAnim(); set({ pan }) },
@@ -292,6 +300,7 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
   setRolodexView: (rolodexView) => set({ rolodexView }),
   setRolodexDisplayMode: (rolodexDisplayMode) => set({ rolodexDisplayMode }),
   setRolodexPos: (rolodexPos) => set({ rolodexPos }),
+  setHomeRolodexId: (homeRolodexId) => set({ homeRolodexId }),
   setRolodexExpansion: (rolodexExpansion) => set({ rolodexExpansion }),
   toggleRolodexDeckCollapsed: (groupId) => set(s => {
     const set_ = new Set(s.rolodexCollapsedDeckIds)
@@ -374,7 +383,9 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
     // canvasStore import, but keep the dependency one-directional at
     // module-eval time anyway).
     const n = useFreeNodeStore.getState().nodes[nodeId]
-    if (!n) return
+    // Panning the world so a SCREEN coordinate lands centred is a jump to
+    // nowhere — and this is reachable straight from a Rolodex row click.
+    if (!n || n.pin) return
     const z = get().zoom
     const vpW = window.innerWidth
     const vpH = window.innerHeight - APP_TOOLBAR_H
@@ -402,6 +413,7 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
     rolodexPos: s.rolodexPos,
     rolodexExpansion: s.rolodexExpansion,
     rolodexCollapsedDeckIds: s.rolodexCollapsedDeckIds,
+    homeRolodexId: s.homeRolodexId,
   }),
   version: 2,
   migrate: (persisted: any, version: number) => {

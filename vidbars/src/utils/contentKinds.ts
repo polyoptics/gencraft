@@ -32,6 +32,9 @@ export interface ListQuery {
   /** Embedded-rolodex view state, persisted per pinned tile. */
   view?: 'flat' | 'tree'
   collapsedDeckIds?: string[]
+  /** Per-instance display mode. Optional, so every list tile that exists
+   *  today keeps working on the 'auto' default with no migration. */
+  displayMode?: 'auto' | 'compact' | 'full'
 }
 
 /** Human summary for list-tile headers, e.g. `3D · “mech”` or `All`. */

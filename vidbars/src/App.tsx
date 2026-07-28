@@ -9,7 +9,7 @@ import { useInlineMediaMigration } from './utils/migrateInlineMedia'
 import { DeckBrowserTray } from './components/DeckBrowser/DeckBrowserTray'
 import { LinkDragOverlay } from './components/Linking/LinkDragOverlay'
 import { DrawToolbar } from './components/Annotation/DrawToolbar'
-import { CardRolodex } from './components/Rolodex/CardRolodex'
+import { ensureRolodexHome, useRolodexHomeBootstrap } from './utils/rolodexHome'
 import { StoragePersistenceBanner } from './components/UI/StoragePersistenceBanner'
 import { useBoardsStore } from './store/boardsStore'
 import { useCanvasStore } from './store/canvasStore'
@@ -121,8 +121,18 @@ function useKeyboardCopyPaste() {
         // Free node paste
         if (freeNodeClipboard.length > 0) {
           const newIds: string[] = []
+          const cs = useCanvasStore.getState()
           for (const src of freeNodeClipboard) {
-            const id = useFreeNodeStore.getState().addFreeNode(src.x + 40, src.y + 40, src.type)
+            // Unproject the source's ON-SCREEN top-left, so a paste always
+            // lands 40 screen px from what the user is looking at whatever
+            // the source's placement — src.x/y are stale while pinned.
+            const sx = src.pin ? src.pin.x : cs.pan.x + src.x * cs.zoom
+            const sy = src.pin ? src.pin.y : cs.pan.y + src.y * cs.zoom
+            const k = src.pin ? src.pin.scale / cs.zoom : 1
+            const id = useFreeNodeStore.getState().addFreeNode(
+              (sx + 40 - cs.pan.x) / cs.zoom, (sy + 40 - cs.pan.y) / cs.zoom, src.type)
+            // The copy is always canvas-placed: `pin` is deliberately never
+            // carried, or two pinned panels would stack on the same pixels.
             useFreeNodeStore.getState().updateFreeNode(id, {
               label: src.label,
               text: src.text,
@@ -130,9 +140,15 @@ function useKeyboardCopyPaste() {
               mediaType: src.mediaType,
               posterUrl: src.posterUrl,
               color: src.color,
-              width: src.width,
-              height: src.height,
+              width: src.width * k,
+              height: src.height * k,
               textStyle: src.textStyle ? { ...src.textStyle } : undefined,
+              // These three were omitted, which is why a pasted list tile
+              // was permanently dead (its editors bail with no listQuery)
+              // and pasted annotations/crops were silently lost.
+              listQuery: src.listQuery ? structuredClone(src.listQuery) : undefined,
+              strokes: src.strokes ? structuredClone(src.strokes) : undefined,
+              imageTransform: src.imageTransform ? { ...src.imageTransform } : undefined,
             })
             newIds.push(id)
           }
@@ -183,8 +199,17 @@ function useKeyboardDelete() {
       // Free node delete
       const freeSelected = useFreeNodeStore.getState().selectedIds
       if (freeSelected.length > 0) {
+        const homeId = useCanvasStore.getState().homeRolodexId
         ;[...freeSelected].forEach(id => useFreeNodeStore.getState().deleteFreeNode(id))
         useFreeNodeStore.getState().clearFreeSelection()
+        if (homeId && freeSelected.includes(homeId)) {
+          // The home Rolodex really deletes. The pointer goes null and the
+          // next Cards press re-mints it from the seed prefs, which are
+          // still persisted — so there is never an orphaned button. Undo
+          // restores node and pointer together.
+          useCanvasStore.getState().setHomeRolodexId(null)
+          useCanvasStore.getState().setRolodexOpen(false)
+        }
         return
       }
 
@@ -415,29 +440,63 @@ function DynamicRowToggle() {
   )
 }
 
+/** Three states, so the button is never dead and never lies:
+ *   pinned + visible  → lit; click hides it
+ *   pinned + hidden   → dim; click shows it
+ *   on the canvas     → dashed + 📍; click pins it back
+ *  It never moves the camera — the button's promise is "the card index,
+ *  here, now". Re-pinning a panel that is still on screen is seamless
+ *  (nothing moves, only the lighting changes); re-pinning one that has
+ *  been panned away is an explicit recall to the default anchor at
+ *  scale 1, because pinning it at card zoom would produce a sliver. */
 function RolodexToggleButton() {
   const open = useCanvasStore(s => s.rolodexOpen)
-  const toggle = useCanvasStore(s => s.toggleRolodex)
+  const homeId = useCanvasStore(s => s.homeRolodexId)
+  const home = useFreeNodeStore(s => (homeId ? s.nodes[homeId] : undefined))
+  const onCanvas = !!home && !home.pin
+  const lit = open && !!home?.pin
+
+  const onClick = () => {
+    const cs = useCanvasStore.getState()
+    const id = ensureRolodexHome()
+    if (!id) return                     // pre-hydration; the bootstrap will run
+    const n = useFreeNodeStore.getState().nodes[id]!
+    if (n.pin) { cs.setRolodexOpen(!open); return }
+    useUndoCoordinator.getState().checkpoint()
+    const sx = cs.pan.x + n.x * cs.zoom, sy = cs.pan.y + n.y * cs.zoom
+    const onScreen = sx < window.innerWidth && sy < window.innerHeight
+                  && sx + n.width * cs.zoom > 0 && sy + n.height * cs.zoom > 0
+    if (onScreen) {
+      useFreeNodeStore.getState().setNodePlacement([id], 'screen', { pan: cs.pan, zoom: cs.zoom })
+    } else {
+      useFreeNodeStore.getState().updateFreeNode(id, { pin: { x: 12, y: 22, scale: 1 } })
+    }
+    cs.setRolodexOpen(true)
+  }
+
   return (
     <button
-      onClick={toggle}
-      title="Cards — browse all cards in your project"
+      onClick={onClick}
+      title={onCanvas
+        ? 'Cards is on the canvas — click to pin it back to the screen'
+        : lit ? 'Hide the Cards panel'
+        : 'Cards — browse all cards in your project'}
       style={{
         height: 24,
         padding: '0 8px',
         display: 'flex', alignItems: 'center', gap: 5,
-        background: open ? 'rgba(120,170,255,0.22)' : 'rgba(255,255,255,0.05)',
-        border: open
-          ? '1px solid rgba(120,170,255,0.5)'
-          : '1px solid rgba(255,255,255,0.1)',
+        background: lit ? 'rgba(120,170,255,0.22)' : 'rgba(255,255,255,0.05)',
+        border: onCanvas
+          ? '1px dashed rgba(120,170,255,0.7)'
+          : lit ? '1px solid rgba(120,170,255,0.5)' : '1px solid rgba(255,255,255,0.1)',
         borderRadius: 6,
-        color: open ? '#a8c8ff' : 'rgba(255,255,255,0.6)',
+        color: lit || onCanvas ? '#a8c8ff' : 'rgba(255,255,255,0.6)',
         fontSize: 11, fontWeight: 600,
         cursor: 'pointer',
         fontFamily: 'inherit',
       }}
     >
-      <span style={{ fontSize: 13 }}>🗂</span>
+      <span style={{ fontSize: 13 }}>{onCanvas ? '📍' : '🗂'}</span>
       Cards
     </button>
   )
@@ -445,6 +504,7 @@ function RolodexToggleButton() {
 
 export default function App() {
   useKeyboardDelete()
+  useRolodexHomeBootstrap()
   useDeselectViewerOnOutsidePress()
   useKeyboardCopyPaste()
   useKeyboardUndo()
@@ -524,8 +584,9 @@ export default function App() {
       {/* Annotation / draw-mode floating toolbar (only visible while in draw mode) */}
       <DrawToolbar />
 
-      {/* Card Rolodex — vertical card index with hover-scrollable preview */}
-      <CardRolodex />
+      {/* The Rolodex is no longer mounted here: the home instance is an
+          ordinary pinned `list` node, rendered by PinLayer → FreeNode →
+          <CardRolodex embedded>. See utils/rolodexHome.ts. */}
 
       {/* Viewers render outside the canvas so they are fixed to the viewport */}
       <AllViewers />

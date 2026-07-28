@@ -188,7 +188,11 @@ export function insertProjectSnapshot(
       const updated = { ...s.nodes }
       for (const node of Object.values(snapshot.freeNodes!)) {
         const newId = crypto.randomUUID()
-        updated[newId] = { ...node, id: newId, y: (node.y ?? 0) + dy }
+        // Strip `pin`: an inserted project must never silently pin objects
+        // over the user's own UI, and shifting a SCREEN anchor by a canvas
+        // delta is meaningless anyway.
+        const { pin: _drop, ...rest } = node as typeof node & { pin?: unknown }
+        updated[newId] = { ...rest, id: newId, y: (rest.y ?? 0) + dy }
       }
       return { nodes: updated }
     })

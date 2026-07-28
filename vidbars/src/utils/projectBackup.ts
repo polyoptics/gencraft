@@ -23,6 +23,7 @@ import { useFreeNodeStore } from '../store/freeNodeStore'
 import { isMediaRef, mediaRefId } from './mediaRef'
 import { getMedia, putMediaWithId } from './mediaStore'
 import { runInlineMediaMigration } from './migrateInlineMedia'
+import { ensureRolodexHome } from './rolodexHome'
 
 const FORMAT = 'vidbars-project'
 // Persist versions, mirrored from each store's `persist({ version })`.
@@ -74,6 +75,9 @@ function buildBackup(): ProjectBackup {
     rolodexPos: cs.rolodexPos,
     rolodexExpansion: cs.rolodexExpansion,
     rolodexCollapsedDeckIds: cs.rolodexCollapsedDeckIds,
+    // Hand-written mirror — without this line the home Rolodex's identity
+    // is silently dropped from every export.
+    homeRolodexId: cs.homeRolodexId,
   }
 
   return {
@@ -203,6 +207,13 @@ function setBackupState(backup: ProjectBackup): void {
     focusedBoardId: null,
     deckPortalSelections: {},
   } as never)
+  // The imported home pointer may be absent or dangling; re-mint if so.
+  ensureRolodexHome()
+  // Pinned anchors are viewport-size dependent AND persisted, so a project
+  // exported from a wide monitor otherwise lands off-screen and
+  // unreachable on a laptop.
+  const host = document.querySelector('[data-pin-host]') as HTMLElement | null
+  if (host) useFreeNodeStore.getState().clampPinnedIntoView(host.clientWidth, host.clientHeight)
 }
 
 /** Import a project file, replacing the current project. Accepts both the

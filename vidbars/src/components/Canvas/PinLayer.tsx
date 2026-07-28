@@ -21,11 +21,17 @@
 
 import React, { useEffect, useMemo, useRef } from 'react'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
+import { useCanvasStore } from '../../store/canvasStore'
 import { FreeNode } from './FreeNode'
 
 export const PinLayer: React.FC = () => {
   const nodes = useFreeNodeStore(s => s.nodes)
   const clamp = useFreeNodeStore(s => s.clampPinnedIntoView)
+  // The home instance is the only pinned node with a hide toggle — that
+  // is what the Cards button means. Every other pinned node is visible
+  // because it is pinned.
+  const homeId = useCanvasStore(s => s.homeRolodexId)
+  const homeVisible = useCanvasStore(s => s.rolodexOpen)
   const ref = useRef<HTMLDivElement>(null)
 
   const ids = useMemo(() => Object.keys(nodes).filter(id => !!nodes[id].pin), [nodes])
@@ -48,8 +54,10 @@ export const PinLayer: React.FC = () => {
   // pointer events would kill canvas panning everywhere it covers. Each
   // pinned FreeNode wrapper re-enables it on itself.
   return (
-    <div ref={ref} style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 900 }}>
-      {ids.map(id => <FreeNode key={id} id={id} />)}
+    <div ref={ref} data-pin-host style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 900 }}>
+      {ids.map(id => (
+        (id === homeId && !homeVisible) ? null : <FreeNode key={id} id={id} />
+      ))}
     </div>
   )
 }

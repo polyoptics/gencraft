@@ -3,6 +3,7 @@ import { useBoardsStore } from '../../store/boardsStore'
 import type { BoardData, ProjectGroup } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
+import { ensureRolodexHome } from '../../utils/rolodexHome'
 import { TEMPLATES } from '../../data/templates'
 import type { TemplateData } from '../../data/templates'
 import { SCAFFOLDS, instantiateScaffold } from '../../data/scaffolds'
@@ -212,6 +213,7 @@ export const TemplateMenu: React.FC = () => {
       const bs = useBoardsStore.getState()
       bs.boardOrder.slice().forEach(bid => useBoardsStore.getState().deleteBoard(bid))
       useFreeNodeStore.setState({ nodes: {}, selectedIds: [] })
+      ensureRolodexHome()   // pointer now dangles — re-mint at the seed position
       setBoardPos({ x: 0, y: 0 })
       useBoardsStore.getState().loadTemplate('primary', t.id)
       setZoom(t.zoom)
@@ -229,6 +231,7 @@ export const TemplateMenu: React.FC = () => {
       const bs = useBoardsStore.getState()
       bs.boardOrder.slice().forEach(bid => useBoardsStore.getState().deleteBoard(bid))
       useFreeNodeStore.setState({ nodes: {}, selectedIds: [] })
+      ensureRolodexHome()   // pointer now dangles — re-mint at the seed position
 
       const [first, ...rest] = inst.boards
       useBoardsStore.setState(s => {

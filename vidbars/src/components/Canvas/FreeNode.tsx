@@ -469,6 +469,9 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
   // canvas units at zoom 0.06, which is 4 of a 12-pixel tile — it shrinks
   // the content box until the corner zone starts a hair from the centre.
   const borderW  = Math.min(Math.max(1, 2 / gz), node.width * 0.04, node.height * 0.04)
+  /** A list tile IS the Rolodex panel, so it wears the panel's chrome
+   *  rather than the generic tile's — identically in both placements. */
+  const isPanel = node.type === 'list'
 
   return (
     <div
@@ -496,14 +499,21 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
         }),
         width: node.width,
         height: node.height,
-        borderRadius: 10 / gz,
+        // A Rolodex keeps the panel's own silhouette — rounded corners, a
+        // soft drop shadow, no tile border — and keeps it in BOTH
+        // placements, so pinning it to the screen or setting it down on
+        // the canvas never changes how it looks.
+        borderRadius: (isPanel ? 12 : 10) / gz,
         background: node.color,
         // Connected-to-viewport model tiles carry the accent tint — the
         // same "these things are linked" language as touching deck cards.
-        border: `${borderW}px solid ${connectedWindowId
+        border: isPanel ? 'none' : `${borderW}px solid ${connectedWindowId
           ? `rgba(120,170,255,${isHovered ? 0.65 : 0.45})`
           : `rgba(255,255,255,${isHovered ? 0.18 : 0.08})`}`,
-        boxShadow: isSelected
+        boxShadow: isPanel
+          ? `${isSelected ? `0 0 0 ${2.5 / gz}px rgba(120,180,255,0.9), ` : ''}` +
+            `0 ${10 / gz}px ${28 / gz}px rgba(0,0,0,0.6), 0 ${2 / gz}px ${6 / gz}px rgba(0,0,0,0.5)`
+          : isSelected
           ? `0 0 0 ${2.5 / gz}px rgba(120,180,255,0.9), 0 ${8 / gz}px ${32 / gz}px rgba(0,0,0,0.55)`
           : isHovered ? `0 ${8 / gz}px ${32 / gz}px rgba(0,0,0,0.55)` : `0 ${2 / gz}px ${12 / gz}px rgba(0,0,0,0.4)`,
         display: 'flex',

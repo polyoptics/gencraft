@@ -50,7 +50,7 @@ const SLOT_W = 180
 // the active card's body pokes through.
 const WING_W = 8
 // Total left-column width: card column + wings on each side.
-const LEFTCOL_W = SLOT_W + 2 * WING_W
+export const LEFTCOL_W = SLOT_W + 2 * WING_W
 // Each card is a TALL rectangle with a rounded top; only its top ~SLOT_PEEK_H
 // shows when tucked under the next card down (the visible "tab"). The full
 // CARD_H extends below into the territory the next card covers.
@@ -195,7 +195,11 @@ const OVERHANG_ALLOWANCE = 500
 // list area when rolodexExpansion = 0. The actual height in the component
 // = LIST_AREA_H_COMPACT + rolodexExpansion (panel grows downward when the
 // user drags the bottom).
-const LIST_AREA_H_COMPACT = SLOT_PEEK_H * (VISIBLE_RADIUS * 2 + 1)
+export const LIST_AREA_H_COMPACT = SLOT_PEEK_H * (VISIBLE_RADIUS * 2 + 1)
+/** Chrome above/below the list area inside an embedded panel: header
+ *  (~26) + filter strip (~21) + cabinet base. Hoisted and exported so
+ *  rolodexHome seeds the home panel's height from ONE definition. */
+export const EMBED_CHROME = 26 + 21 + CABINET_BAR_H
 // Stable empty array for embedded-mode collapsed ids (referential
 // stability keeps the collapsedDeckIdSet memo quiet).
 const EMPTY_IDS: string[] = []
@@ -493,11 +497,10 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
   const setSortMode = embedded ? (v: 'creation' | 'alphabetical') => patchQuery({ sortMode: v }) : setFlSortMode
   const view = embedded ? (eq?.view ?? 'flat') : flView
   const setView = embedded ? (v: 'flat' | 'tree') => patchQuery({ view: v }) : setFlView
-  const displayMode = embedded ? ('auto' as const) : flDisplayMode
-  const setDisplayMode = embedded ? (() => {}) : setFlDisplayMode
-  // Chrome above/below the list area inside the embedded panel: header
-  // (~26) + filter strip (~21) + cabinet base.
-  const EMBED_CHROME = 26 + 21 + CABINET_BAR_H
+  const displayMode = embedded ? (eq?.displayMode ?? 'auto') : flDisplayMode
+  const setDisplayMode = embedded
+    ? (v: 'auto' | 'compact' | 'full') => patchQuery({ displayMode: v })
+    : setFlDisplayMode
   const rolodexExpansion = embedded
     ? Math.max(MIN_EXPANSION, embedH - EMBED_CHROME - LIST_AREA_H_COMPACT)
     : flExpansion
@@ -512,6 +515,11 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
         })
       }
     : setFlExpansion
+
+  // Live mirror for the two imperative readers below (a pointer handler
+  // and an rAF tick) that must not close over a stale render value.
+  const expansionRef = useRef(rolodexExpansion)
+  expansionRef.current = rolodexExpansion
 
   // List-area height grows / shrinks linearly with rolodexExpansion,
   // clamped to 0 at the closed extreme. The drag handle moves the
@@ -654,7 +662,10 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
     const target = e.target as HTMLElement
     if (target.closest('button')) return
     if (target.tagName === 'INPUT') return
-    const current = useCanvasStore.getState().rolodexExpansion
+    // Via the ref, not canvasStore: every instance is a node now, so an
+    // imperative store read would give EVERY panel the old floating
+    // panel's expansion.
+    const current = expansionRef.current
     if (current <= MIN_EXPANSION) {
       // Re-open: restore last open state, or fall back to compact.
       setRolodexExpansion(previousExpansionRef.current ?? DEFAULT_OPEN_EXPANSION)
@@ -869,7 +880,7 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
     // slowdown reacts immediately when the user drags the cabinet
     // handle to resize. expansionFraction = 0 (compact) → slowdown = 1
     // (unchanged); = 1 (full) → slowdown = EXPANSION_SLOWDOWN_FACTOR.
-    const expansion = useCanvasStore.getState().rolodexExpansion
+    const expansion = expansionRef.current   // rAF tick — must be a ref
     // Use the ACTIVE-GROWTH fraction (clamped 0..1) so negative
     // expansion (panel closing) and post-MAX_EXPANSION (panel growth
     // past full) both freeze the slowdown at the same value rather
@@ -1456,30 +1467,39 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
               <SortToggle mode={sortMode} setMode={setSortMode} />
               <button
                 onClick={() => {
-                  // Pin the current filtered list to the canvas as a LIVE
-                  // query object — beside the panel (floating) or beside
-                  // this tile (embedded → clones the list).
+                  // Spawn the current filtered list as a NEW live list
+                  // object beside this one. Computed from the spawner's
+                  // ON-SCREEN rect: its x/y are stale while pinned, so the
+                  // old canvas-space branch spawned at the world origin.
                   const cs = useCanvasStore.getState()
-                  const cx = embedded && embeddedNode
-                    ? embeddedNode.x + embeddedNode.width + 40
-                    : (rolodexPos.x + LEFTCOL_W + 60 - cs.pan.x) / cs.zoom
-                  const cy = embedded && embeddedNode
-                    ? embeddedNode.y
-                    : (rolodexPos.y + 60 - cs.pan.y) / cs.zoom
+                  const n = embeddedNode
+                  const sx = n ? (n.pin ? n.pin.x : cs.pan.x + n.x * cs.zoom) : rolodexPos.x
+                  const sy = n ? (n.pin ? n.pin.y : cs.pan.y + n.y * cs.zoom) : rolodexPos.y
+                  const scale = n ? (n.pin ? n.pin.scale : cs.zoom) : 1
+                  const sw = n ? n.width * scale : LEFTCOL_W
+                  const cx = (sx + sw + 40 - cs.pan.x) / cs.zoom
+                  const cy = (sy - cs.pan.y) / cs.zoom
                   useUndoCoordinator.getState().checkpoint()
                   const fns = useFreeNodeStore.getState()
                   const nid = fns.addFreeNode(cx, cy, 'list')
-                  const listQuery = { query: searchQuery.trim(), kind: kindFilter, includeCanvasItems, sortMode, view, collapsedDeckIds: [...collapsedDeckIds] }
-                  fns.updateFreeNode(nid, { listQuery, label: formatListQuerySummary(listQuery) })
+                  const listQuery = { query: searchQuery.trim(), kind: kindFilter, includeCanvasItems, sortMode, view, displayMode, collapsedDeckIds: [...collapsedDeckIds] }
+                  fns.updateFreeNode(nid, {
+                    listQuery,
+                    label: formatListQuerySummary(listQuery),
+                    // Inherit the spawner's on-screen size so the copy does
+                    // not arrive as a speck at low zoom.
+                    width: sw / cs.zoom,
+                    height: n ? (n.height * scale) / cs.zoom : 420,
+                  })
                   fns.setFreeSelection([nid])
                 }}
-                title="Pin this filtered list to the canvas as a live list object"
+                title="New list from this filter"
                 style={{
                   background: 'rgba(120,170,255,0.12)', border: '1px solid rgba(140,190,255,0.3)',
                   borderRadius: 4, color: 'rgba(180,210,255,0.9)', fontSize: 10, fontWeight: 700,
                   padding: '1px 6px', cursor: 'pointer', fontFamily: 'inherit', lineHeight: 1.4,
                 }}
-              >📌</button>
+              >＋</button>
               {!embedded && <CloseButton onClick={() => setRolodexOpen(false)} />}
             </div>
           </div>

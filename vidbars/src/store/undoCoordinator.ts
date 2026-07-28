@@ -22,7 +22,15 @@ import { create } from 'zustand'
 
 const LIMIT = 30
 
-const CANVAS_EXCLUDE = new Set(['focusedBoardId', 'pan', 'zoom'])
+// Panel visibility / position / size are a "look", not an edit, and are
+// written without checkpoints — leaving them in meant "edit, move the
+// panel, Ctrl+Z" teleported the panel back. Same reasoning as the
+// viewport camera/text-zoom merge below. homeRolodexId is deliberately
+// NOT excluded: identity must be undone with the node it names.
+const CANVAS_EXCLUDE = new Set([
+  'focusedBoardId', 'pan', 'zoom',
+  'rolodexOpen', 'rolodexPos', 'rolodexExpansion',
+])
 const FREE_EXCLUDE = new Set(['selectedIds'])
 
 // Per-board keys that are transient and should NOT participate in undo
