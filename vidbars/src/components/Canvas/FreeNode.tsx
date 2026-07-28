@@ -25,6 +25,12 @@ import { PenButton } from '../Annotation/PenButton'
 import { useSeedHoverFromCursor } from '../../utils/pointerTracker'
 
 
+/** Node types whose corner resize keeps the current proportions. A
+ *  Rolodex tile already has a length control — the drawer at the base of
+ *  the cabinet — so the corner's job is only to grow the shape the drawer
+ *  set, not to fight it. */
+const LOCKS_ASPECT = new Set<FreeNodeData['type']>(['list'])
+
 interface Props {
   id: string
   /** When this model tile's cluster touches a 3D viewport window, the
@@ -59,6 +65,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
   const wasSelectedOnDown = useRef(false)
   const resizeLastX = useRef(0)
   const resizeLastY = useRef(0)
+  const resizeStart = useRef({ x: 0, y: 0, w: 0, h: 0 })
 
   useEffect(() => { if (isRenaming) renameRef.current?.select() }, [isRenaming])
 
@@ -370,15 +377,35 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
     useUndoCoordinator.getState().checkpoint()
     resizeLastX.current = e.clientX
     resizeLastY.current = e.clientY
+    // Aspect-locked resize works from the drag START, not incrementally:
+    // resizeFreeNode clamps width and height independently, so an
+    // incremental path would let one axis hit its floor while the other
+    // kept going and the ratio would drift away mid-drag.
+    resizeStart.current = { x: e.clientX, y: e.clientY, w: node.width, h: node.height }
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
-  }, [])
+  }, [node.width, node.height])
 
   const onResizeMove = useCallback((e: React.PointerEvent) => {
     if (!(e.currentTarget as HTMLElement).hasPointerCapture(e.pointerId)) return
+    // A Rolodex tile keeps its proportions on the corner — the drawer at
+    // its base is what sets how long the cabinet is, and the corner just
+    // grows that shape. Dragging the corner freely would fight the drawer.
+    if (LOCKS_ASPECT.has(node.type)) {
+      const s = resizeStart.current
+      const ratio = s.h / s.w
+      const dx = (e.clientX - s.x) / zoom
+      const dy = (e.clientY - s.y) / zoom
+      // Project the drag onto the diagonal (1, ratio) so both directions
+      // of pointer travel contribute and the corner tracks the cursor.
+      const t = (dx + dy * ratio) / (1 + ratio * ratio)
+      const w = Math.max(120, 80 / ratio, s.w + t)
+      updateFreeNode(id, { width: w, height: w * ratio })
+      return
+    }
     resizeFreeNode(id, (e.clientX - resizeLastX.current) / zoom, (e.clientY - resizeLastY.current) / zoom)
     resizeLastX.current = e.clientX
     resizeLastY.current = e.clientY
-  }, [id, resizeFreeNode, zoom])
+  }, [id, node.type, resizeFreeNode, updateFreeNode, zoom])
 
   const commitRename = useCallback(() => {
     if (renameVal.trim()) updateFreeNode(id, { label: renameVal.trim() })
@@ -473,7 +500,18 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
       }}
     >
       {/* ── Header ── */}
-      <div data-freenode-header onPointerDown={e => e.stopPropagation()} style={{
+      {/* The header is the node's title bar, so it DRAGS the node. It used
+          to only stopPropagation, which made it a dead zone: it neither
+          moved the node nor panned the canvas, and on a Rolodex tile —
+          where the body is a full panel that handles its own clicks —
+          that left almost nowhere to grab. onNodeDown stops propagation
+          itself and skips inputs/buttons, so rename and the header
+          controls still work; dblclick stays isolated for rename. */}
+      <div
+        data-freenode-header
+        onPointerDown={onNodeDown}
+        onDoubleClick={e => e.stopPropagation()}
+        style={{
         display: 'flex', alignItems: 'center', gap: pad,
         padding: `${pad * 0.6}px ${pad}px`,
         background: 'rgba(0,0,0,0.3)',
