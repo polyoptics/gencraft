@@ -45,7 +45,12 @@ export interface DockedSource {
 const GROUP_PREFIX = 'group:'
 
 function windowRects(windows: Record<string, ViewportWindow3D>): WindowRect[] {
-  return Object.values(windows).map(w => ({ id: w.id, x: w.x, y: w.y, width: w.width, height: w.height }))
+  return Object.values(windows)
+    // A screen-pinned window is not canvas geometry: its x/y are the stale
+    // pre-pin position, so leaving it in would dock tiles to where it used
+    // to be. Cross-placement docking does not exist.
+    .filter(w => !w.pin)
+    .map(w => ({ id: w.id, x: w.x, y: w.y, width: w.width, height: w.height }))
 }
 
 /** Dockable tiles as cluster items — content-bearing tiles + list tiles

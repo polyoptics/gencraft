@@ -56,6 +56,12 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
   const zoom = useCanvasStore(s => s.zoom)
   const status = useViewStatus(id)
   const isSelected = useViewport3DStore(s => s.selectedIds.includes(id))
+  const movePinnedWindow = useViewport3DStore(s => s.movePinnedWindow)
+  // Same one-symbol substitution as a free node: the multiplier from this
+  // window's LAYOUT units to screen pixels — the frozen scale when pinned,
+  // the world zoom otherwise. Every `/ zoom` below means "counter-scale to
+  // a constant screen size", so all of them become `/ gz`.
+  const gz = win?.pin ? win.pin.scale : zoom
 
   const [isHovered, setIsHovered] = useState(false)
   const wrapperRef = useRef<HTMLDivElement>(null)
@@ -108,8 +114,16 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
   }, [id])
   const onHeaderMove = useCallback((e: React.PointerEvent) => {
     if (!(e.currentTarget as HTMLElement).hasPointerCapture(e.pointerId)) return
-    const dx = (e.clientX - dragLast.current.x) / zoom
-    const dy = (e.clientY - dragLast.current.y) / zoom
+    const dx = (e.clientX - dragLast.current.x) / gz
+    const dy = (e.clientY - dragLast.current.y) / gz
+    if (win?.pin) {
+      // Screen-space move; a pinned window carries nothing, because what
+      // it was docked to is canvas geometry it no longer shares a space
+      // with.
+      movePinnedWindow(id, e.clientX - dragLast.current.x, e.clientY - dragLast.current.y)
+      dragLast.current = { x: e.clientX, y: e.clientY }
+      return
+    }
     moveWindow(id, dx, dy)
     if (carried.current.tileIds.length > 0) {
       useFreeNodeStore.getState().moveManyFreeNodes(carried.current.tileIds, dx, dy)
@@ -122,7 +136,7 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
       }))
     }
     dragLast.current = { x: e.clientX, y: e.clientY }
-  }, [id, moveWindow, zoom])
+  }, [id, moveWindow, movePinnedWindow, win?.pin, gz])
 
   // ── Resize corner ──
   const onResizeDown = useCallback((e: React.PointerEvent) => {
@@ -133,9 +147,9 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
   }, [])
   const onResizeMove = useCallback((e: React.PointerEvent) => {
     if (!(e.currentTarget as HTMLElement).hasPointerCapture(e.pointerId)) return
-    resizeWindow(id, (e.clientX - resizeLast.current.x) / zoom, (e.clientY - resizeLast.current.y) / zoom)
+    resizeWindow(id, (e.clientX - resizeLast.current.x) / gz, (e.clientY - resizeLast.current.y) / gz)
     resizeLast.current = { x: e.clientX, y: e.clientY }
-  }, [id, resizeWindow, zoom])
+  }, [id, resizeWindow, gz])
 
   // ── Orbit / pan (body) — normalize by VISUAL height so feel is
   //    zoom-invariant. Left-drag orbits; Shift+left-drag or right-drag
@@ -158,7 +172,7 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
     if (!view) return
     const w = useViewport3DStore.getState().windows[id]
     if (!w) return
-    const screenH = Math.max(40, w.height * zoom)
+    const screenH = Math.max(40, w.height * (w.pin ? w.pin.scale : zoom))
     const o = view.orbit
     const dx = e.clientX - orbitLast.current.x
     const dy = e.clientY - orbitLast.current.y
@@ -198,10 +212,10 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
   const modelActive = active?.kind === 'media' && active.mediaType === 'model'
   modelActiveRef.current = modelActive
 
-  const iz = 1 / zoom
+  const iz = 1 / gz
   const headerH = 22 * iz
   const fontSize = 11 * iz
-  const borderW = Math.min(Math.max(1, 2 / zoom), win.width * 0.04, win.height * 0.04)
+  const borderW = Math.min(Math.max(1, 2 / gz), win.width * 0.04, win.height * 0.04)
   const grabZone = Math.min(36 * iz, win.width * 0.3, win.height * 0.3)
   // One alpha for all six chrome borders. Brightening them on selection is
   // a SECOND signal, and the one that survives occlusion: the outer ring
@@ -209,7 +223,9 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
   // snaps to gap 0) or an overlapping card paints over it. These borders
   // are inside the frame's own box.
   const edge = isSelected ? 0.7 : isHovered ? 0.35 : 0.18
-  const glTooSmall = win.width * zoom < MIN_GL_PX
+  // Uses gz, so a PINNED window does not drop to poster mode just because
+  // the world zoomed out underneath it — its own size never changed.
+  const glTooSmall = win.width * gz < MIN_GL_PX
   // Body states — GL statuses only mean anything while a MODEL is active;
   // DOM content views own the body otherwise (no MIN_GL fallback needed —
   // DOM scales down natively).
@@ -223,13 +239,25 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
     <div
       ref={wrapperRef}
       data-viewport3d={id}
+      data-pinned={win.pin ? 'true' : undefined}
       style={{
         position: 'absolute',
-        left: win.x,
-        top: win.y - headerH,        // header sits ABOVE the GL body rect
+        // Pinned: anchor + frozen scale as the wrapper's own transform, so
+        // the whole subtree renders identically to the canvas-placed case.
+        ...(win.pin ? {
+          left: win.pin.x,
+          top: win.pin.y - headerH * win.pin.scale,
+          transform: `scale(${win.pin.scale})`,
+          transformOrigin: '0 0',
+          pointerEvents: 'auto' as const,
+          zIndex: 880,               // under the Rolodex (900), over the canvas
+        } : {
+          left: win.x,
+          top: win.y - headerH,      // header sits ABOVE the GL body rect
+          zIndex: 1,                 // under free nodes (5) and bars (≥2)
+        }),
         width: win.width,
         height: win.height + headerH,
-        zIndex: 1,                    // under free nodes (5) and bars (≥2)
         display: 'flex',
         flexDirection: 'column',
         // Cosmetic only — this wrapper has no background and no overflow,
@@ -269,6 +297,25 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
           flex: 1, color: 'rgba(255,255,255,0.7)', fontSize, fontWeight: 600,
           userSelect: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>{win.title}</span>
+        <button
+          onClick={() => {
+            const cs = useCanvasStore.getState()
+            useUndoCoordinator.getState().checkpoint()
+            useViewport3DStore.getState().setWindowPlacement(
+              id, win.pin ? 'canvas' : 'screen', { pan: cs.pan, zoom: cs.zoom })
+          }}
+          onPointerDown={e => e.stopPropagation()}
+          title={win.pin
+            ? 'Pinned to the screen — click to set it down on the canvas'
+            : 'On the canvas — click to pin it to the screen'}
+          style={{
+            background: 'none', border: 'none', cursor: 'pointer',
+            color: win.pin ? 'rgba(150,200,255,0.95)' : 'rgba(255,255,255,0.4)',
+            fontSize: fontSize * 0.95,
+            padding: 0, lineHeight: 1, flexShrink: 0,
+            opacity: win.pin ? 1 : (isHovered ? 1 : 0.3), transition: 'opacity 0.12s',
+          }}
+        >📌</button>
         <button
           onClick={() => { useUndoCoordinator.getState().checkpoint(); removeWindow(id) }}
           onPointerDown={e => e.stopPropagation()}

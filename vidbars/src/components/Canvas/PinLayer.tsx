@@ -22,7 +22,10 @@
 import React, { useEffect, useMemo, useRef } from 'react'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useCanvasStore } from '../../store/canvasStore'
+import { useViewport3DStore } from '../../store/viewport3dStore'
 import { FreeNode } from './FreeNode'
+import { Viewport3DFrame } from '../Viewport3D/Viewport3DFrame'
+import { GLPinnedCanvasHost } from '../Viewport3D/GLPinnedCanvasHost'
 
 export const PinLayer: React.FC = () => {
   const nodes = useFreeNodeStore(s => s.nodes)
@@ -32,7 +35,13 @@ export const PinLayer: React.FC = () => {
   // because it is pinned.
   const homeId = useCanvasStore(s => s.homeRolodexId)
   const homeVisible = useCanvasStore(s => s.rolodexOpen)
+  const viewerWindows = useViewport3DStore(s => s.windows)
   const ref = useRef<HTMLDivElement>(null)
+
+  const pinnedViewerIds = useMemo(
+    () => Object.keys(viewerWindows).filter(wid => !!viewerWindows[wid].pin),
+    [viewerWindows],
+  )
 
   const ids = useMemo(() => Object.keys(nodes).filter(id => !!nodes[id].pin), [nodes])
   // Key on the id LIST, not its length: an import that replaces the map
@@ -55,6 +64,11 @@ export const PinLayer: React.FC = () => {
   // pinned FreeNode wrapper re-enables it on itself.
   return (
     <div ref={ref} data-pin-host style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 900 }}>
+      {/* GL for pinned Viewers, mounted here so their models paint ABOVE
+          canvas content. Only mounted while something is pinned — no
+          second WebGL context is created otherwise. */}
+      {pinnedViewerIds.length > 0 && <GLPinnedCanvasHost />}
+      {pinnedViewerIds.map(wid => <Viewport3DFrame key={wid} id={wid} />)}
       {ids.map(id => (
         (id === homeId && !homeVisible) ? null : <FreeNode key={id} id={id} />
       ))}

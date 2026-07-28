@@ -11,17 +11,21 @@ import { useViewportBounds, intersectsViewport } from '../../hooks/useViewportBo
 
 export const Viewport3DLayer: React.FC = React.memo(() => {
   const windowIds = useViewport3DStore(useShallow(s => Object.keys(s.windows)))
+  const windows = useViewport3DStore(s => s.windows)
   const vp = useViewportBounds()
 
+  // PARTITION, not just a cull: a pinned window is rendered by PinLayer,
+  // and drawing it here too would double it — with the world copy sliding
+  // around under the pinned one. `windows` must be a dep so a placement
+  // flip re-runs this; nothing else here changes when only `pin` does.
   const visibleIds = useMemo(() => {
-    const windows = useViewport3DStore.getState().windows
     return windowIds.filter(id => {
       const w = windows[id]
-      if (!w) return false
+      if (!w || w.pin) return false
       // Small top margin so the floating header doesn't pop at the edge.
       return intersectsViewport(vp, w.x, w.y - 40, w.width, w.height + 40)
     })
-  }, [windowIds, vp])
+  }, [windowIds, windows, vp])
 
   return (
     <>

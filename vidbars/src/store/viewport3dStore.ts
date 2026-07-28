@@ -95,6 +95,12 @@ export interface ViewportWindow3D {
    *  the opening size for a page with no entry above. A window you have
    *  made small is small for EVERY page it shows. */
   defaultTextScale?: number
+  /** SCREEN-PINNED windows — identical shape and meaning to a free node's
+   *  `pin`: a container-space anchor plus the world zoom frozen at pin
+   *  time. Present ⇒ the window renders OUTSIDE the world transform and
+   *  is skipped by the canvas-space layer. width/height stay canvas units
+   *  and stay live, so resize and the docking geometry keep working. */
+  pin?: { x: number; y: number; scale: number }
   createdAt: number
 }
 
@@ -123,6 +129,14 @@ interface Viewport3DStore {
   /** Clears the camera ONLY when a DIFFERENT model takes over. */
   setActiveItem: (id: string, item: ActiveItem | null) => void
   saveCamera: (id: string, cam: Viewport3DCamera) => void
+  /** Flip a window between screen-pinned and canvas-placed. Same maths as
+   *  the free-node version: pin freezes the rect the browser is painting
+   *  now; unpin unprojects it and rescales by pin.scale / zoom, so the
+   *  toggle is invisible. */
+  setWindowPlacement: (id: string, to: 'screen' | 'canvas',
+                       view: { pan: { x: number; y: number }; zoom: number }) => void
+  /** SCREEN-px delta for a pinned window. */
+  movePinnedWindow: (id: string, dx: number, dy: number) => void
   /** View-only text zoom for ONE page (itemKey = activeItemKey's
    *  `text:<sourceId>` form). Also becomes this window's reading size.
    *  Does NOT edit any card. */
@@ -244,6 +258,39 @@ export const useViewport3DStore = create<Viewport3DStore>()(persist((set, get) =
         : w.cameraUrl
       return { windows: { ...s.windows, [id]: { ...w, camera: cam, cameraUrl: url } } }
     }),
+
+  setWindowPlacement: (id, to, view) =>
+    set(s => {
+      const w = s.windows[id]
+      if (!w) return s
+      if (to === 'screen') {
+        if (w.pin) return s
+        return { windows: { ...s.windows, [id]: { ...w, pin: {
+          x: view.pan.x + w.x * view.zoom,
+          y: view.pan.y + w.y * view.zoom,
+          scale: view.zoom,
+        } } } }
+      }
+      if (!w.pin) return s
+      const k = w.pin.scale / view.zoom
+      const { pin: _drop, ...rest } = w
+      return { windows: { ...s.windows, [id]: {
+        ...rest,
+        x: (w.pin.x - view.pan.x) / view.zoom,
+        y: (w.pin.y - view.pan.y) / view.zoom,
+        width: w.width * k,
+        height: w.height * k,
+      } } }
+    }),
+
+  movePinnedWindow: (id, dx, dy) => {
+    if (dx === 0 && dy === 0) return
+    set(s => {
+      const w = s.windows[id]
+      if (!w?.pin) return s
+      return { windows: { ...s.windows, [id]: { ...w, pin: { ...w.pin, x: w.pin.x + dx, y: w.pin.y + dy } } } }
+    })
+  },
 
   setTextScale: (id, itemKey, scale) =>
     set(s => {
