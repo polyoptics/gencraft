@@ -18,7 +18,7 @@ import { cardVisualRect } from '../../hooks/useCardDecks'
 import { findMagnetCandidate, magnetRadiusForZoom, type WindowRect } from '../../utils/viewportDocking'
 import { tileBrowseItem, isDockableTile } from '../../utils/contentTraversal'
 import { CardRolodex } from '../Rolodex/CardRolodex'
-import { ensureModelPoster, getModelPoster, useModelPoster } from '../../three/posterService'
+import { ensureModelPoster, getModelPoster, invalidateModelPoster, useModelPoster } from '../../three/posterService'
 import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
 import { DrawableSurface } from '../Annotation/DrawableSurface'
 import { PenButton } from '../Annotation/PenButton'
@@ -1036,6 +1036,8 @@ const ModelTileBody: React.FC<{
   // durable/transfer copy and the fallback while the map refills.
   const mapPoster = useModelPoster(node.imageUrl ?? null)
   const resolvedPoster = useResolvedMedia(mapPoster ?? node.posterUrl ?? null)
+  /** One self-heal attempt per mount — see the <img> onError below. */
+  const posterHealed = useRef(false)
   // Lazy generation whenever the MAP lacks this model (first ever render,
   // or after a poster-version migration cleared it); syncs the fresh ref
   // onto the node. Null result (renderer not ready / load failure) just
@@ -1051,7 +1053,26 @@ const ModelTileBody: React.FC<{
   return (
     <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', overflow: 'hidden' }}>
       {resolvedPoster ? (
-        <img src={resolvedPoster} draggable={false} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+        <img
+          src={resolvedPoster}
+          draggable={false}
+          // A poster whose blob no longer reads back (the browser can lose
+          // the file behind an IndexedDB blob — the record survives with
+          // the right size and type, but reading it throws
+          // NotReadableError) decodes to nothing and the tile shows an
+          // empty box forever. Regenerating writes a fresh blob, which
+          // works, so heal instead of sitting there broken. Once per
+          // mount, so a genuinely undecodable poster can't loop.
+          onError={() => {
+            if (!node.imageUrl || posterHealed.current) return
+            posterHealed.current = true
+            invalidateModelPoster(node.imageUrl)
+            void ensureModelPoster(node.imageUrl)
+              .then(ref => { if (ref) updateFreeNode(id, { posterUrl: ref }) })
+              .catch(() => {})
+          }}
+          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+        />
       ) : (
         <div style={{ textAlign: 'center', color: 'rgba(255,255,255,0.25)', pointerEvents: 'none', maxWidth: '90%' }}>
           {/* Wireframe cube */}
