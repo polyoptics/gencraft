@@ -18,6 +18,7 @@ import * as THREE from 'three'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js'
 import { isMediaRef, mediaRefId } from '../utils/mediaRef'
+import { inlineGlbTextures } from './glbInlineTextures'
 import { getMedia } from '../utils/mediaStore'
 
 interface CacheEntry {
@@ -31,18 +32,34 @@ const pending = new Map<string, Promise<CacheEntry>>()
 const lru: string[] = []
 const LRU_MAX = 6
 
-const loader = new GLTFLoader()
+// Textures arrive as `data:` URIs (see inlineGlbTextures) and must be
+// decoded by the plain TextureLoader, NOT three's default ImageBitmapLoader.
+// ImageBitmapLoader does fetch(url) -> .blob() -> createImageBitmap, and the
+// blob step throws in this runtime — which is why every model rendered in
+// flat grey while its geometry loaded fine. Registering a handler for
+// data: URIs routes them through an <img>, which works.
+const manager = new THREE.LoadingManager()
+manager.addHandler(/^data:/, new THREE.TextureLoader(manager))
+
+const loader = new GLTFLoader(manager)
 
 async function loadEntry(url: string): Promise<CacheEntry> {
-  if (isMediaRef(url)) {
-    const id = mediaRefId(url)!
-    const blob = await getMedia(id)
-    if (!blob) throw new Error('Model bytes not found in local media store')
-    const buf = await blob.arrayBuffer()
-    const gltf = await loader.parseAsync(buf, '')
-    return { source: gltf.scene, refCount: 0 }
-  }
-  const gltf = await loader.loadAsync(url)
+  // Both paths go through parseAsync on bytes we hold, so the texture
+  // inlining below applies either way. (The url path used to call
+  // loadAsync, which fetches and parses internally and gave us no chance
+  // to touch the buffer.)
+  const buf = isMediaRef(url)
+    ? await (async () => {
+        const blob = await getMedia(mediaRefId(url)!)
+        if (!blob) throw new Error('Model bytes not found in local media store')
+        return blob.arrayBuffer()
+      })()
+    : await (await fetch(url)).arrayBuffer()
+
+  // Embedded textures become data URIs before the parser sees them — it
+  // would otherwise turn each into a blob: URL, and those do not survive
+  // in this runtime, leaving the model flat grey. See glbInlineTextures.
+  const gltf = await loader.parseAsync(inlineGlbTextures(buf), '')
   return { source: gltf.scene, refCount: 0 }
 }
 
