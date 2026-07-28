@@ -450,16 +450,35 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
     const q = { ...n.listQuery, ...patch }
     fns.updateFreeNode(embedded.nodeId, { listQuery: q, label: formatListQuerySummary(q) })
   }, [embedded])
-  const [embedH, setEmbedH] = useState(340)
+  // Measure BOTH axes. Height alone was measured before, which is why
+  // dragging a pinned list wider only grew an empty box: the card slots
+  // are a fixed SLOT_W × CARD_H, so extra width had nothing to spend
+  // itself on. Width now sets a SCALE for the panel's native geometry
+  // (wider ⇒ physically bigger cards) and height still buys rows.
+  const [embedPx, setEmbedPx] = useState({ w: 220, h: 340 })
   const embedRootRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!embedded || !embedRootRef.current) return
-    const el = embedRootRef.current
-    const ro = new ResizeObserver(() => setEmbedH(el.offsetHeight))
+    // Measure the TILE BODY (our parent), not the panel: the panel is
+    // about to be transform-scaled to fit, so measuring it would feed its
+    // own output back in.
+    const el = embedRootRef.current.parentElement
+    if (!el) return
+    const measure = () => setEmbedPx({ w: el.offsetWidth, h: el.offsetHeight })
+    const ro = new ResizeObserver(measure)
     ro.observe(el)
-    setEmbedH(el.offsetHeight)
+    measure()
     return () => ro.disconnect()
   }, [embedded])
+  // Scale so the card column exactly spans the tile. Clamped: below ~0.4
+  // the labels are unreadable anyway, and above 4 a huge tile would blow
+  // the cards up past any useful size.
+  const embedScale = Math.max(0.4, Math.min(4, embedPx.w / LEFTCOL_W))
+  // The row/expansion math below all works in the panel's NATIVE pixel
+  // space, so feed it the tile's height converted into that space —
+  // otherwise a scaled-up panel would think it has room for far more
+  // rows than it can actually show.
+  const embedH = embedPx.h / embedScale
 
   const isOpen = embedded ? true : flIsOpen
   const searchQuery = embedded ? (eq?.query ?? '') : flSearchQuery
@@ -487,7 +506,10 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
         const fns = useFreeNodeStore.getState()
         const n = fns.nodes[embedded.nodeId]
         if (!n) return
-        fns.updateFreeNode(embedded.nodeId, { height: Math.max(160, n.height + (v - rolodexExpansion)) })
+        // v is in native panel units; the tile's height is in scaled ones.
+        fns.updateFreeNode(embedded.nodeId, {
+          height: Math.max(160, n.height + (v - rolodexExpansion) * embedScale),
+        })
       }
     : setFlExpansion
 
@@ -1308,9 +1330,19 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
         // own already.
         onPointerDown={embedded ? undefined : onPanelPointerDown}
         style={embedded ? {
-          position: 'relative',
-          width: '100%',
-          height: '100%',
+          // Laid out at the panel's NATIVE size, then scaled to the tile.
+          // scale(w/LEFTCOL_W) with height = h/scale means the scaled box
+          // lands exactly on the tile's box, so the card column spans the
+          // full width at any tile size and the whole intricate slot/tween
+          // geometry below keeps working in the pixel space it was written
+          // for.
+          position: 'absolute',
+          left: 0,
+          top: 0,
+          width: LEFTCOL_W,
+          height: embedH,
+          transform: `scale(${embedScale})`,
+          transformOrigin: 'top left',
           background: PANEL_BG,
           overflow: 'hidden',
           display: 'flex',
