@@ -48,6 +48,18 @@ export function getModelPoster(modelUrl: string): string | null {
   return usePosterMapStore.getState().map[modelUrl] ?? null
 }
 
+/** Forget a poster so the next ensureModelPoster REGENERATES it. Needed
+ *  when a stored `mediaref:` no longer resolves — e.g. a template or
+ *  project load restores node records (which carry posterUrl) without the
+ *  poster blobs, leaving every model pointing at an image that is gone. */
+export function invalidateModelPoster(modelUrl: string): void {
+  const map = usePosterMapStore.getState().map
+  if (!(modelUrl in map)) return
+  const next = { ...map }
+  delete next[modelUrl]
+  usePosterMapStore.setState({ map: next })
+}
+
 /** Follow model-url renames (old url → new url) so existing posters
  *  survive instead of regenerating. Used by the media localization sweep,
  *  which rewrites '/uploads/x.glb' style urls to 'mediaref:' pointers. */

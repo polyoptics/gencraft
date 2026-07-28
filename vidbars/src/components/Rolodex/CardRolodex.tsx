@@ -32,7 +32,8 @@ import {
   type ContentKind, type ListQuery, KIND_LABELS, groupHasContentOfKind, freeNodeMatchesKind,
   hasRenderableContent, sortGroups, sortFreeNodes, formatListQuerySummary,
 } from '../../utils/contentKinds'
-import { getModelPoster } from '../../three/posterService'
+import { getModelPoster, ensureModelPoster, invalidateModelPoster, useModelPoster, usePosterMapStore } from '../../three/posterService'
+import { useResolvedMedia } from '../../utils/useResolvedMedia'
 import {
   DEFAULT_HEADER_STYLE,
   DEFAULT_BODY_STYLE,
@@ -51,6 +52,9 @@ const SLOT_W = 180
 const WING_W = 8
 // Total left-column width: card column + wings on each side.
 export const LEFTCOL_W = SLOT_W + 2 * WING_W
+/** Toolbar height — pin coordinates are container-relative, the dock is
+ *  position:fixed (document-relative). */
+const APP_TOOLBAR_H = 38
 // Each card is a TALL rectangle with a rounded top; only its top ~SLOT_PEEK_H
 // shows when tucked under the next card down (the visible "tab"). The full
 // CARD_H extends below into the territory the next card covers.
@@ -419,6 +423,9 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
       hoverLeaveTimerRef.current = null
     }, 80)
   }, [])
+  // Live view transform — the dock's anchor is derived from these.
+  const cvPan = useCanvasStore(s => s.pan)
+  const cvZoom = useCanvasStore(s => s.zoom)
   const setRolodexOpen = useCanvasStore(s => s.setRolodexOpen)
   const rolodexPos = useCanvasStore(s => s.rolodexPos)
   const setRolodexPos = useCanvasStore(s => s.setRolodexPos)
@@ -491,10 +498,17 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
     measure()
     return () => ro.disconnect()
   }, [embedded])
-  // Scale so the card column exactly spans the tile. Clamped: below ~0.4
-  // the labels are unreadable anyway, and above 4 a huge tile would blow
-  // the cards up past any useful size.
-  const embedScale = Math.max(0.4, Math.min(4, embedPx.w / nativeW))
+  // Scale so the card column exactly spans the tile.
+  //
+  // NO upper clamp, deliberately. What the eye sees is embedScale × the
+  // node's own scale, and unpinning multiplies node.width by k while
+  // dividing that outer scale by k — so the product is preserved and the
+  // flip is invisible. A ceiling here breaks exactly that: it pins
+  // embedScale while the outer scale still changes, which is why
+  // unpinning at a low zoom used to visibly re-scale the panel. The floor
+  // is only a divide-by-zero guard for the frame before the first
+  // measurement.
+  const embedScale = Math.max(0.01, embedPx.w / nativeW)
   // The row/expansion math below all works in the panel's NATIVE pixel
   // space, so feed it the tile's height converted into that space —
   // otherwise a scaled-up panel would think it has room for far more
@@ -752,10 +766,15 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
     return [...groupRows, ...buildFreeNodeRows(freeNodes, sortMode, kindFilter, searchQuery)]
   }, [visibleGroups, sortMode, view, collapsedDeckIdSet, includeCanvasItems, freeNodes, kindFilter, searchQuery])
 
+  // Bumps whenever a poster finishes generating, so the thumbnail map
+  // below re-derives and the row swaps its glyph for the snapshot.
+  const posterMapVersion = usePosterMapStore(s => s.map)
+
   // Thumbnails for free-node rows: model tiles use their poster (never
   // the raw model url); image/video tiles use imageUrl (already <img>-
   // safe); audio/text/note have none.
   const freeNodeHeroMap = useMemo(() => {
+    void posterMapVersion   // re-derive when a poster finishes generating
     const map = new Map<string, string | null>()
     if (!includeCanvasItems) return map
     for (const row of rows) {
@@ -767,6 +786,20 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
         : null)
     }
     return map
+  }, [rows, includeCanvasItems, posterMapVersion])
+
+  // getModelPoster above is a CACHE READ, so a model that has never been
+  // rendered on canvas had no snapshot and the row fell back to a glyph.
+  // Ask for one here too; posterMapVersion re-runs the map when it lands.
+  useEffect(() => {
+    if (!includeCanvasItems) return
+    for (const row of rows) {
+      if (row.kind !== 'freenode') continue
+      const n = row.node
+      if (n.type === 'model' && !n.posterUrl && n.imageUrl && !getModelPoster(n.imageUrl)) {
+        void ensureModelPoster(n.imageUrl)
+      }
+    }
   }, [rows, includeCanvasItems])
 
   // ── Phase-scaling + display mode ──────────────────────────────
@@ -1308,7 +1341,7 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
             active card row), then locks there.
           The 'pseudo-cabinet' colors in the dock's styles make it read
           as a small detachable piece of the same frame. */}
-      {!embedded && (() => {
+      {(() => {
         const APPROX_HEADER_H = 46   // header (26) + filter strip (~20)
         const DOCK_H = 82
         const DOCK_W = 30
@@ -1325,17 +1358,33 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
         // fully visible. Right-edge position uses the panel's actual
         // total width (LEFTCOL_W + the dynamic right-side overhang
         // for tree-mode indented cards).
-        const flipRight = rolodexPos.x < DOCK_W
-        const panelWidth = LEFTCOL_W + panelRightExtension
-        const dockLeft = flipRight
-          ? rolodexPos.x + panelWidth
-          : rolodexPos.x - DOCK_W
-        return (
+        // The dock is position:fixed and an embedded panel has no fixed
+        // document coordinate, so DERIVE its on-screen box from live state
+        // every render. (Measuring it into state instead goes stale the
+        // moment the panel moves — a pan, a drag, a resize — and strands
+        // the dock away from its panel.) It cannot live inside the panel:
+        // it would either cover cards or be clipped by the tile.
+        if (embedded && !embeddedNode) return null
+        const en = embeddedNode
+        const anchorX = !embedded ? rolodexPos.x
+          : en!.pin ? en!.pin.x : cvPan.x + en!.x * cvZoom
+        const anchorY = !embedded ? rolodexPos.y
+          : APP_TOOLBAR_H + (en!.pin ? en!.pin.y : cvPan.y + en!.y * cvZoom)
+        const panelWidth = !embedded ? LEFTCOL_W + panelRightExtension
+          : en!.width * (en!.pin ? en!.pin.scale : cvZoom)
+        const flipRight = anchorX < DOCK_W
+        const dockLeft = flipRight ? anchorX + panelWidth : anchorX - DOCK_W
+        // PORTAL to <body>, not just position:fixed. An embedded panel
+        // carries a scale() transform, and a transformed ancestor becomes
+        // the containing block for fixed descendants — so a correct
+        // viewport coordinate would be re-resolved against the panel (and
+        // scaled with it), landing the dock a panel-width away.
+        return ReactDOM.createPortal(
           <DisplayModeDock
             mode={displayMode}
             setMode={setDisplayMode}
             left={dockLeft}
-            top={rolodexPos.y}
+            top={anchorY}
             slideOffset={dockOffset}
             fade={fade}
             flipRight={flipRight}
@@ -1343,7 +1392,8 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
             onWheel={onWheel}
             onHoverEnter={onHoverEnter}
             onHoverLeave={onHoverLeave}
-          />
+          />,
+          document.body,
         )
       })()}
       <div
@@ -1570,30 +1620,6 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
                   cursor: 'pointer', fontFamily: 'inherit',
                 }}
               >{KIND_LABELS[k]}</button>
-            ))}
-            {/* Display mode — how tall the cards sit. This used to be a
-                hover-revealed dock floating beside the panel, which only
-                worked for a screen-fixed panel at a known document
-                position; as chips it works in both placements, is visible
-                without hunting for it, and can't be clipped by the tile. */}
-            <div style={{ width: 1, alignSelf: 'stretch', margin: '2px 2px', background: 'rgba(255,255,255,0.12)' }} />
-            {(['auto', 'compact', 'full'] as const).map(m => (
-              <button
-                key={m}
-                onClick={() => setDisplayMode(m)}
-                title={m === 'auto' ? 'Auto — the active card grows, the rest stay tabs'
-                     : m === 'compact' ? 'Compact — every card stays a tab'
-                     : 'Expanded — every card at full height'}
-                style={{
-                  flex: 1, minWidth: 0,
-                  background: displayMode === m ? 'rgba(120,170,255,0.28)' : 'rgba(255,255,255,0.05)',
-                  border: `1px solid ${displayMode === m ? 'rgba(140,190,255,0.55)' : 'rgba(255,255,255,0.08)'}`,
-                  borderRadius: 4, padding: '2px 0',
-                  color: displayMode === m ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.5)',
-                  fontSize: 8.5, fontWeight: 700, letterSpacing: '0.3px',
-                  cursor: 'pointer', fontFamily: 'inherit',
-                }}
-              >{m === 'auto' ? 'Auto' : m === 'compact' ? 'Tabs' : 'Full'}</button>
             ))}
             <div style={{ width: 1, alignSelf: 'stretch', margin: '2px 2px', background: 'rgba(255,255,255,0.12)' }} />
             <button
@@ -2026,6 +2052,37 @@ const FREENODE_GLYPHS: Record<FreeNodeData['type'], string> = {
   model: '◆', image: '🖼', video: '▶', audio: '♪', text: 'T', note: '📝', list: '≔',
 }
 
+/** The model poster as a small chip in a tile row's tab. Posters are
+ *  `mediaref:` pointers, so they need resolving before they can be used
+ *  as an image source. */
+const ModelRowThumb: React.FC<{ src: string; modelUrl: string | null; size: number }> = ({ src, modelUrl, size }) => {
+  // Prefer the LIVE map entry over the node's stored copy, so a
+  // regenerated poster is picked up without touching the node.
+  const live = useModelPoster(modelUrl)
+  const resolved = useResolvedMedia(live ?? src)
+  // A stored ref whose blob is gone (template / project load restores
+  // records but not poster images) resolves to null forever. Drop the
+  // dead entry once and ask for a fresh render.
+  const retried = useRef(false)
+  useEffect(() => {
+    if (resolved || !modelUrl || retried.current) return
+    const t = window.setTimeout(() => {
+      if (retried.current) return
+      retried.current = true
+      invalidateModelPoster(modelUrl)
+      void ensureModelPoster(modelUrl)
+    }, 400)   // give the blob lookup a chance before declaring it dead
+    return () => clearTimeout(t)
+  }, [resolved, modelUrl])
+  return (
+    <div style={{
+      width: size, height: size, flexShrink: 0, borderRadius: 3,
+      background: resolved ? `#0c0e18 center/cover no-repeat url("${resolved}")` : 'rgba(255,255,255,0.10)',
+      border: '1px solid rgba(255,255,255,0.18)',
+    }} />
+  )
+}
+
 /** Lightweight slot for a free-floating canvas tile row. Mirrors
  *  RolodexSlot's geometry (WING_W inset, SLOT_W×CARD_H, top/zIndex from
  *  the shared layout) with a simplified centerness-driven treatment —
@@ -2092,9 +2149,17 @@ const RolodexFreeNodeSlot: React.FC<{
         display: 'flex', alignItems: 'center', gap: 6, padding: '0 10px',
         boxSizing: 'border-box', pointerEvents: 'none',
       }}>
-        <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.6)', flexShrink: 0 }}>
-          {FREENODE_GLYPHS[node.type]}
-        </span>
+        {/* A 3D model's snapshot rides ON the row, always — the big hero
+            behind the card only appears once the card is the grown one,
+            which for a long list of tiles is almost never. The thumb is
+            what makes a list of models readable at a glance. */}
+        {heroImage && node.type === 'model'
+          ? <ModelRowThumb src={heroImage} modelUrl={node.imageUrl} size={SLOT_PEEK_H - 12} />
+          : (
+            <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.6)', flexShrink: 0 }}>
+              {FREENODE_GLYPHS[node.type]}
+            </span>
+          )}
         <span style={{
           color: 'rgba(255,255,255,0.97)', fontSize: 11, fontWeight: 600,
           textShadow: '0 1px 2px rgba(0,0,0,0.55)',
