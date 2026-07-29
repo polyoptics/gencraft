@@ -28,6 +28,8 @@ import {
   tileBrowseItem, isDockableTile, type BrowseItem,
 } from '../utils/contentTraversal'
 import { evaluateListQuery } from '../utils/listQueryEval'
+import { poolFeedingList } from '../utils/componentLinks'
+import { getPoolContents } from '../store/poolStore'
 import { formatListQuerySummary } from '../utils/contentKinds'
 import { useCanvasStore } from '../store/canvasStore'
 import { isHiddenDeckMember, expandWithNestedMembers, cardVisualRect } from './useCardDecks'
@@ -78,6 +80,26 @@ function listSourceItems(
 ): BrowseItem[] {
   const q = n.listQuery
   if (!q) return []
+
+  // A Rolodex magneted to a Media Pool browses THAT POOL, so what it
+  // contributes to a Viewer docked on its other side is the pool's files.
+  // This is the middle link of the Pool | Rolodex | Viewer chain: none of
+  // the three knows about the others, they are just adjacent.
+  const pool = poolFeedingList(n, nodes)
+  if (pool) {
+    const files = getPoolContents(pool.id).files
+    const search = q.query.trim().toLowerCase()
+    return files
+      .filter(f => q.kind === 'all' || f.kind === q.kind)
+      .filter(f => !search || f.name.toLowerCase().includes(search))
+      .map(f => ({
+        kind: 'media' as const,
+        mediaType: f.kind,
+        url: f.url,
+        name: f.name,
+      }))
+  }
+
   const res = evaluateListQuery(q, groups, boards, nodes)
   const kindAccepts = (it: BrowseItem): boolean => {
     if (q.kind === 'all') return true

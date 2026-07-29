@@ -75,6 +75,12 @@ export interface FreeNodeData {
   posterUrl?: string | null
   /** List tiles: the pinned LIVE query (results derive from the stores). */
   listQuery?: import('../utils/contentKinds').ListQuery
+  /** Media Pool: the directory it points at. Only the PATH persists — the
+   *  listing is re-read on mount, since a folder changes under you. */
+  poolDir?: string
+  /** Prompt Pad: the tag workshop and saved prompts. Persisted per pad, so
+   *  two pads can carry different vocabularies. */
+  promptKit?: import('../utils/promptKit').PromptKit
   /** SCREEN-PINNED instances. Present ⇒ this node is rendered by
    *  <PinLayer/> OUTSIDE the world transform and is SKIPPED by
    *  FreeCanvas. Absent ⇒ canvas-placed. That is the whole model.

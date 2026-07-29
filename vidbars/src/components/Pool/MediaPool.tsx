@@ -1,142 +1,125 @@
-// MediaPool.tsx — the media pool / generation history component.
+// MediaPool.tsx — a real media pool: point it at a folder, get its files.
 //
-// One component, two GROUPINGS, because they are the same thing seen from
-// two angles: a set of images with metadata and a big preview.
+// No preview pane, deliberately. Previewing is what a Viewer does, and a
+// Viewer magneted to a Rolodex magneted to this pool already gives you
+// that — building it in here would be the same job done twice, and would
+// argue against the modular idea rather than for it.
 //
-//   POOL     — flat, newest first. Everything generated, plus anything
-//              loaded from a folder on disk.
-//   HISTORY  — the same items grouped by generation session, each row
-//              carrying the prompt that produced it, recallable.
-//
-// It reads the shared generation store rather than talking to any other
-// component, which is what lets a Prompt Pad magneted alongside feed it
-// with no wiring between the two.
-//
-// Local folders come in through the File System Access API. The handle is
-// held for the session only; re-picking is one click and avoids asking for
-// persistent permission the user did not ask to give.
+// Contents go into poolStore rather than component state, which is what
+// lets a magneted Rolodex browse this pool without either component
+// knowing the other exists.
 
-import React, { useMemo, useRef, useState } from 'react'
-import { useGenerationStore } from '../../store/generationStore'
+import React, { useEffect, useState } from 'react'
+import { usePoolStore, loadPoolDir, type PoolFile } from '../../store/poolStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
-import { useResolvedMedia } from '../../utils/useResolvedMedia'
-import { putMedia } from '../../utils/mediaStore'
-import { makeMediaRef } from '../../utils/mediaRef'
+import { getModelPoster, ensureModelPoster, useModelPoster } from '../../three/posterService'
 
-/** Icon-size ladder — the sml/mid/lrg control in the design. */
-const SIZES = [56, 84, 124, 180] as const
-type SizeIdx = 0 | 1 | 2 | 3
+const SIZES = [48, 72, 108, 156] as const
+const SIZE_LABELS = ['sml', 'mid', 'lrg', 'xl'] as const
 
-interface PoolEntry {
-  id: string
-  url: string
-  label: string
-  prompt?: string
-  sessionId?: string
+const KIND_GLYPH: Record<PoolFile['kind'], string> = {
+  image: '🖼', video: '▶', audio: '♪', model: '◆',
 }
 
-const Thumb: React.FC<{
-  entry: PoolEntry
+/** One file. Models show their generated poster; everything else shows
+ *  itself. A model url is never fed to an <img> — it is not an image. */
+const FileTile: React.FC<{
+  file: PoolFile
   px: number
   selected: boolean
   onClick: () => void
-  onDragOut: (e: React.DragEvent) => void
-}> = ({ entry, px, selected, onClick, onDragOut }) => {
-  const src = useResolvedMedia(entry.url)
+  onDoubleClick: () => void
+}> = ({ file, px, selected, onClick, onDoubleClick }) => {
+  const poster = useModelPoster(file.kind === 'model' ? file.url : null)
+  useEffect(() => {
+    if (file.kind === 'model' && !getModelPoster(file.url)) void ensureModelPoster(file.url)
+  }, [file.kind, file.url])
+
+  const src = file.kind === 'model' ? poster : file.kind === 'image' ? file.url : null
+
   return (
     <div
       draggable
-      onDragStart={onDragOut}
-      onClick={onClick}
-      title={entry.prompt || entry.label}
-      style={{
-        width: px, height: px, flexShrink: 0,
-        borderRadius: 4,
-        background: src ? `#0c0e18 center/cover no-repeat url("${src}")` : 'rgba(255,255,255,0.06)',
-        border: selected ? '2px solid rgba(140,190,255,0.95)' : '1px solid rgba(255,255,255,0.12)',
-        cursor: 'grab',
-        boxShadow: selected ? '0 0 0 1px rgba(140,190,255,0.4)' : undefined,
+      onDragStart={e => {
+        e.dataTransfer.setData('application/x-vidbars-pool',
+          JSON.stringify({ url: file.url, label: file.name, kind: file.kind }))
+        e.dataTransfer.effectAllowed = 'copy'
       }}
-    />
+      onClick={onClick}
+      onDoubleClick={onDoubleClick}
+      title={`${file.name}${file.size ? ` · ${Math.round(file.size / 1024)}KB` : ''}`}
+      style={{
+        width: px, height: px, flexShrink: 0, position: 'relative',
+        borderRadius: 4,
+        background: src
+          ? `#0c0e18 center/cover no-repeat url("${src}")`
+          : 'rgba(255,255,255,0.05)',
+        border: selected ? '2px solid rgba(140,190,255,0.95)' : '1px solid rgba(255,255,255,0.1)',
+        cursor: 'grab',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}
+    >
+      {!src && (
+        <span style={{ fontSize: Math.max(11, px * 0.26), opacity: 0.5 }}>{KIND_GLYPH[file.kind]}</span>
+      )}
+      {file.kind !== 'image' && (
+        <span style={{
+          position: 'absolute', top: 2, right: 3, fontSize: 8,
+          padding: '0 3px', borderRadius: 2, background: 'rgba(0,0,0,0.6)',
+          color: 'rgba(180,215,255,0.9)', pointerEvents: 'none',
+        }}>{file.kind === 'model' ? '3D' : KIND_GLYPH[file.kind]}</span>
+      )}
+    </div>
   )
 }
 
-export const MediaPool: React.FC<{ nodeId: string }> = () => {
-  const items = useGenerationStore(s => s.items)
-  const sessions = useGenerationStore(s => s.sessions)
-  const pending = useGenerationStore(s => s.pending)
-  const [mode, setMode] = useState<'pool' | 'history'>('pool')
-  const [sizeIdx, setSizeIdx] = useState<SizeIdx>(1)
-  const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [folder, setFolder] = useState<{ name: string; entries: PoolEntry[] } | null>(null)
-  const [loading, setLoading] = useState(false)
-  const scrollRef = useRef<HTMLDivElement>(null)
+export const MediaPool: React.FC<{ nodeId: string }> = ({ nodeId }) => {
+  const node = useFreeNodeStore(s => s.nodes[nodeId])
+  const updateFreeNode = useFreeNodeStore(s => s.updateFreeNode)
+  const contents = usePoolStore(s => s.pools[nodeId])
+  const [sizeIdx, setSizeIdx] = useState(1)
+  const [selected, setSelected] = useState<string | null>(null)
+  const [filter, setFilter] = useState('')
+  const [pathDraft, setPathDraft] = useState('')
+  const [editingPath, setEditingPath] = useState(false)
 
-  const genEntries: PoolEntry[] = useMemo(
-    () => items.map(i => ({
-      id: i.id, url: i.url, label: i.prompt.slice(0, 40) || 'generated',
-      prompt: i.prompt, sessionId: i.sessionId,
-    })),
-    [items],
-  )
-  const entries = folder ? [...folder.entries, ...genEntries] : genEntries
-  const selected = entries.find(e => e.id === selectedId) ?? entries[0] ?? null
-  const previewSrc = useResolvedMedia(selected?.url ?? null)
+  const dir = node?.poolDir ?? 'public/uploads'
 
-  /** Read a folder of images into the pool. Bytes go into the blob store so
-   *  a dragged-out tile keeps working after the handle is gone. */
-  const pickFolder = async () => {
-    const picker = (window as unknown as {
-      showDirectoryPicker?: () => Promise<FileSystemDirectoryHandle>
-    }).showDirectoryPicker
-    if (!picker) { alert('This browser has no folder picker (File System Access API).'); return }
-    setLoading(true)
-    try {
-      const dir = await picker()
-      const found: PoolEntry[] = []
-      // @ts-expect-error — values() is present on the handle at runtime
-      for await (const handle of dir.values()) {
-        if (handle.kind !== 'file') continue
-        if (!/\.(png|jpe?g|webp|gif|avif)$/i.test(handle.name)) continue
-        const file = await handle.getFile()
-        const id = await putMedia(file)
-        found.push({ id: `f:${handle.name}`, url: makeMediaRef(id), label: handle.name })
-        if (found.length >= 400) break     // a folder is not a database
-      }
-      setFolder({ name: dir.name, entries: found })
-    } catch { /* user cancelled */ }
-    finally { setLoading(false) }
-  }
+  // Re-read on mount and whenever the folder changes: a listing is a
+  // snapshot of something that moves.
+  useEffect(() => { void loadPoolDir(nodeId, dir) }, [nodeId, dir])
 
-  /** Drag a pool item out onto the canvas as an image tile. */
-  const onDragOut = (entry: PoolEntry) => (e: React.DragEvent) => {
-    e.dataTransfer.setData('application/x-vidbars-pool', JSON.stringify({ url: entry.url, label: entry.label }))
-    e.dataTransfer.effectAllowed = 'copy'
-  }
+  const files = contents?.files ?? []
+  const dirs = contents?.dirs ?? []
+  const shown = filter.trim()
+    ? files.filter(f => f.name.toLowerCase().includes(filter.trim().toLowerCase()))
+    : files
 
-  /** Same thing without the drag, for when the pool is pinned and the
-   *  canvas is somewhere else entirely. */
-  const dropToCanvas = (entry: PoolEntry) => {
+  const goTo = (d: string) => { updateFreeNode(nodeId, { poolDir: d }); setSelected(null) }
+
+  /** Double-click drops a file on the canvas as a tile of its own kind. */
+  const placeOnCanvas = (f: PoolFile) => {
     const cs = useCanvasStore.getState()
     const fns = useFreeNodeStore.getState()
     useUndoCoordinator.getState().checkpoint()
     const cx = (window.innerWidth / 2 - cs.pan.x) / cs.zoom
     const cy = (window.innerHeight / 2 - cs.pan.y) / cs.zoom
-    const id = fns.addFreeNode(cx, cy, 'image')
-    fns.updateFreeNode(id, { imageUrl: entry.url, mediaType: 'image', label: entry.label })
+    const id = fns.addFreeNode(cx, cy, f.kind)
+    fns.updateFreeNode(id, { imageUrl: f.url, mediaType: f.kind, label: f.name })
     fns.setFreeSelection([id])
   }
 
-  const px = SIZES[sizeIdx]
   const chip = (on: boolean): React.CSSProperties => ({
     background: on ? 'rgba(120,170,255,0.28)' : 'rgba(255,255,255,0.05)',
     border: `1px solid ${on ? 'rgba(140,190,255,0.55)' : 'rgba(255,255,255,0.1)'}`,
     borderRadius: 4, color: on ? '#dce9ff' : 'rgba(255,255,255,0.55)',
     fontSize: 9, fontWeight: 700, letterSpacing: '0.3px',
-    padding: '2px 7px', cursor: 'pointer', fontFamily: 'inherit',
+    padding: '2px 7px', cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0,
   })
+
+  const px = SIZES[sizeIdx]
 
   return (
     <div
@@ -147,100 +130,111 @@ export const MediaPool: React.FC<{ nodeId: string }> = () => {
         background: '#12131f', overflow: 'hidden', fontFamily: 'system-ui, sans-serif',
       }}
     >
-      {/* ── Toolbar ── */}
+      {/* ── Path bar ── */}
       <div style={{
-        display: 'flex', alignItems: 'center', gap: 4, padding: '5px 7px',
-        borderBottom: '1px solid rgba(255,255,255,0.08)', flexShrink: 0, flexWrap: 'wrap',
+        display: 'flex', alignItems: 'center', gap: 4, padding: '4px 6px',
+        borderBottom: '1px solid rgba(255,255,255,0.08)', flexShrink: 0,
       }}>
-        <button style={chip(mode === 'pool')} onClick={() => setMode('pool')}>POOL</button>
-        <button style={chip(mode === 'history')} onClick={() => setMode('history')}>HISTORY</button>
-        <div style={{ width: 1, alignSelf: 'stretch', background: 'rgba(255,255,255,0.12)', margin: '0 3px' }} />
-        {(['sml', 'mid', 'lrg', 'xl'] as const).map((lbl, i) => (
-          <button key={lbl} style={chip(sizeIdx === i)} onClick={() => setSizeIdx(i as SizeIdx)}>{lbl}</button>
-        ))}
-        <div style={{ flex: 1 }} />
-        <button style={chip(false)} onClick={pickFolder} title="Load images from a folder on disk">
-          {loading ? '…' : folder ? `📁 ${folder.name}` : '📁 FOLDER'}
-        </button>
+        <button style={chip(false)} title="Up one folder"
+          onClick={() => contents?.parent && goTo(contents.parent)}>↑</button>
+        {editingPath ? (
+          <input
+            autoFocus
+            value={pathDraft}
+            onChange={e => setPathDraft(e.target.value)}
+            onKeyDown={e => {
+              e.stopPropagation()
+              if (e.key === 'Enter') { goTo(pathDraft.trim()); setEditingPath(false) }
+              if (e.key === 'Escape') setEditingPath(false)
+            }}
+            onBlur={() => setEditingPath(false)}
+            style={{
+              flex: 1, minWidth: 0, background: 'rgba(255,255,255,0.06)',
+              border: '1px solid rgba(140,190,255,0.4)', borderRadius: 3,
+              color: 'rgba(255,255,255,0.9)', fontSize: 9.5, padding: '2px 5px',
+              fontFamily: 'ui-monospace, monospace', outline: 'none',
+            }}
+          />
+        ) : (
+          <div
+            onClick={() => { setPathDraft(contents?.dir ?? dir); setEditingPath(true) }}
+            title="Click to type a folder path"
+            style={{
+              flex: 1, minWidth: 0, fontSize: 9.5, color: 'rgba(255,255,255,0.55)',
+              fontFamily: 'ui-monospace, monospace', cursor: 'text',
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', direction: 'rtl',
+            }}
+          >{contents?.dir ?? dir}</div>
+        )}
+        <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.3)', flexShrink: 0 }}>
+          {contents?.loading ? '…' : `${files.length}`}
+        </span>
       </div>
 
-      <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
-        {/* ── Grid ── */}
-        <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', padding: 7, minWidth: 0 }}>
-          {pending > 0 && (
-            <div style={{
-              fontSize: 10, color: 'rgba(160,200,255,0.8)', marginBottom: 6,
-              fontFamily: 'ui-monospace, monospace',
-            }}>generating {pending}…</div>
-          )}
+      {/* ── Controls ── */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 3, padding: '4px 6px',
+        borderBottom: '1px solid rgba(255,255,255,0.08)', flexShrink: 0,
+      }}>
+        {SIZE_LABELS.map((lbl, i) => (
+          <button key={lbl} style={chip(sizeIdx === i)} onClick={() => setSizeIdx(i)}>{lbl}</button>
+        ))}
+        <input
+          value={filter}
+          onChange={e => setFilter(e.target.value)}
+          onKeyDown={e => e.stopPropagation()}
+          placeholder="filter…"
+          style={{
+            flex: 1, minWidth: 40, marginLeft: 4,
+            background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
+            borderRadius: 3, color: 'rgba(255,255,255,0.85)', fontSize: 9.5,
+            padding: '2px 6px', fontFamily: 'inherit', outline: 'none',
+          }}
+        />
+        <button style={chip(false)} title="Re-read this folder"
+          onClick={() => void loadPoolDir(nodeId, dir)}>⟳</button>
+      </div>
 
-          {mode === 'pool' ? (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-              {entries.map(e => (
-                <Thumb key={e.id} entry={e} px={px} selected={selected?.id === e.id}
-                  onClick={() => setSelectedId(e.id)} onDragOut={onDragOut(e)} />
-              ))}
-              {entries.length === 0 && (
-                <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: 11, padding: 12 }}>
-                  Empty. Load a folder, or magnet a Prompt Pad to this pool and generate.
-                </div>
-              )}
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {sessions.map(sess => {
-                const rows = genEntries.filter(e => e.sessionId === sess.id)
-                if (rows.length === 0) return null
-                return (
-                  <div key={sess.id}>
-                    <div style={{
-                      display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 4,
-                      color: 'rgba(180,210,255,0.85)', fontSize: 10, fontWeight: 700,
-                    }}>
-                      <span>{sess.label}</span>
-                      <span style={{ color: 'rgba(255,255,255,0.3)', fontWeight: 400, fontSize: 9 }}>
-                        {new Date(sess.startedAt).toLocaleString()} · {rows.length}
-                      </span>
-                    </div>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-                      {rows.map(e => (
-                        <Thumb key={e.id} entry={e} px={Math.max(48, px * 0.75)} selected={selected?.id === e.id}
-                          onClick={() => setSelectedId(e.id)} onDragOut={onDragOut(e)} />
-                      ))}
-                    </div>
-                  </div>
-                )
-              })}
-              {sessions.length === 0 && (
-                <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: 11, padding: 12 }}>
-                  No generation sessions yet.
-                </div>
-              )}
-            </div>
-          )}
+      {/* ── Grid ── */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: 6, minHeight: 0 }}>
+        {contents?.error && (
+          <div style={{ color: 'rgba(255,150,150,0.8)', fontSize: 10, padding: 6 }}>{contents.error}</div>
+        )}
+
+        {dirs.length > 0 && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 8 }}>
+            {dirs.map(d => (
+              <button key={d.path} onClick={() => goTo(d.path)} style={{
+                ...chip(false), fontWeight: 500, fontSize: 9.5, letterSpacing: 0,
+              }}>📁 {d.name}</button>
+            ))}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+          {shown.map(f => (
+            <FileTile
+              key={f.id} file={f} px={px}
+              selected={selected === f.id}
+              onClick={() => setSelected(f.id)}
+              onDoubleClick={() => placeOnCanvas(f)}
+            />
+          ))}
         </div>
 
-        {/* ── Big preview ── */}
-        <div style={{
-          width: '38%', minWidth: 120, borderLeft: '1px solid rgba(255,255,255,0.08)',
-          display: 'flex', flexDirection: 'column', flexShrink: 0,
-        }}>
-          <div style={{
-            flex: 1, minHeight: 0,
-            background: previewSrc ? `#0a0c14 center/contain no-repeat url("${previewSrc}")` : '#0a0c14',
-          }} />
-          {selected && (
-            <div style={{ padding: 6, borderTop: '1px solid rgba(255,255,255,0.08)' }}>
-              <div style={{
-                fontSize: 9.5, color: 'rgba(255,255,255,0.62)', lineHeight: 1.45,
-                maxHeight: 54, overflow: 'auto', marginBottom: 5,
-              }}>{selected.prompt || selected.label}</div>
-              <button style={{ ...chip(false), width: '100%' }} onClick={() => dropToCanvas(selected)}>
-                ↧ PLACE ON CANVAS
-              </button>
-            </div>
-          )}
-        </div>
+        {!contents?.loading && shown.length === 0 && dirs.length === 0 && (
+          <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: 10.5, padding: 10, lineHeight: 1.6 }}>
+            Nothing here. Click the path above to point at a folder —
+            an absolute path works, or one relative to the project.
+          </div>
+        )}
+      </div>
+
+      <div style={{
+        padding: '3px 6px', borderTop: '1px solid rgba(255,255,255,0.08)',
+        fontSize: 8.5, color: 'rgba(255,255,255,0.3)', flexShrink: 0,
+      }}>
+        drag a file to the canvas · double-click to place it · magnet a Rolodex to browse this pool
       </div>
     </div>
   )

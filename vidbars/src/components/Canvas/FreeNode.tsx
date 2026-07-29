@@ -17,6 +17,7 @@ import { useMagnetPreviewStore } from '../../store/magnetPreviewStore'
 import { cardVisualRect } from '../../hooks/useCardDecks'
 import { findMagnetCandidate, magnetRadiusForZoom, type WindowRect } from '../../utils/viewportDocking'
 import { tileBrowseItem, isDockableTile } from '../../utils/contentTraversal'
+import { snapPanelToPanel, isPanelType } from '../../utils/componentLinks'
 import { CardRolodex } from '../Rolodex/CardRolodex'
 import { MediaPool } from '../Pool/MediaPool'
 import { PromptPad } from '../Prompt/PromptPad'
@@ -167,6 +168,10 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
     // ends by deleting the source, so a pinned tile nudged over a card
     // would hand over its media and destroy itself.
     if (node.pin && dragHasMoved.current) {
+      // …but a pinned PANEL still magnets to its pinned neighbours, which
+      // is how a pinned pool/rolodex/viewer row gets built on screen.
+      const snap = snapPanelToPanel(node, useFreeNodeStore.getState().nodes, zoom)
+      if (snap && node.pin) updateFreeNode(id, { pin: { ...node.pin, x: snap.x, y: snap.y } })
       try { wrapperRef.current?.releasePointerCapture(e.pointerId) } catch { /* ignore */ }
       dragHasMoved.current = false
       return
@@ -204,6 +209,15 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
         if (dockItem) useViewport3DStore.getState().setActiveItem(preview.windowId, dockItem)
         return
       }
+    }
+    // Panel magnet: the modular apps snap flush to each other. This is what
+    // actually forms the derived links (pool → rolodex → viewer) — the link
+    // test is tight on purpose, so landing inside it is the magnet's job.
+    // Runs AFTER the window magnet, so docking to a Viewer still wins.
+    if (dragHasMoved.current && isPanelType(node.type)) {
+      const cur = useFreeNodeStore.getState().nodes[id]
+      const snap = cur ? snapPanelToPanel(cur, useFreeNodeStore.getState().nodes, zoom) : null
+      if (snap) updateFreeNode(id, snap)
     }
     if (dragHasMoved.current && node) {
       const hasMedia = !!node.imageUrl
@@ -409,7 +423,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
       }
     }
     // No transfer happened — user placed the node here intentionally, leave it.
-  }, [id, node?.type, node?.imageUrl, connectedWindowId, isSelected, isRenaming, setFreeSelection, toggleFreeSelection])
+  }, [id, node?.type, node?.imageUrl, connectedWindowId, isSelected, isRenaming, setFreeSelection, toggleFreeSelection, updateFreeNode, zoom])
 
   // Resize handle
   const onResizeDown = useCallback((e: React.PointerEvent) => {

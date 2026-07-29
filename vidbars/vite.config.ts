@@ -206,6 +206,94 @@ function snapshotsApi(): Plugin {
   }
 }
 
+/** Vite plugin: GET /api/browse?dir=<abs-or-relative path>
+ *
+ *  Lists the media files in a directory on disk so the Media Pool can point
+ *  at a real folder. Files are returned as URLs the browser can load:
+ *  anything under public/ is already served, and anything OUTSIDE it is
+ *  streamed back through /api/file so the pool is not limited to the
+ *  project. Dev-server only, which is the trust boundary here — this is a
+ *  local-first tool, not a hosted service. */
+function browseApi(): Plugin {
+  const publicDir = path.resolve(__dirname, 'public')
+  const MEDIA = /\.(png|jpe?g|webp|gif|avif|bmp|svg|mp4|webm|mov|mp3|wav|ogg|glb|gltf|fbx)$/i
+
+  function kindOf(name: string): string {
+    if (/\.(mp4|webm|mov)$/i.test(name)) return 'video'
+    if (/\.(mp3|wav|ogg)$/i.test(name)) return 'audio'
+    if (/\.(glb|gltf|fbx)$/i.test(name)) return 'model'
+    return 'image'
+  }
+
+  return {
+    name: 'browse-api',
+    configureServer(server) {
+      server.middlewares.use('/api/browse', (req, res) => {
+        res.setHeader('Content-Type', 'application/json')
+        const url = new URL(req.url ?? '', 'http://x')
+        const raw = url.searchParams.get('dir') || 'public/uploads'
+        const dir = path.isAbsolute(raw) ? raw : path.resolve(__dirname, raw)
+        try {
+          if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
+            res.statusCode = 404
+            res.end(JSON.stringify({ error: 'Not a directory', dir }))
+            return
+          }
+          const entries = fs.readdirSync(dir, { withFileTypes: true })
+          const files = entries
+            .filter(e => e.isFile() && MEDIA.test(e.name))
+            .slice(0, 2000)
+            .map(e => {
+              const full = path.join(dir, e.name)
+              const rel = path.relative(publicDir, full)
+              // Inside public/ → the dev server already serves it directly.
+              const servable = !rel.startsWith('..') && !path.isAbsolute(rel)
+              let size = 0
+              try { size = fs.statSync(full).size } catch { /* ignore */ }
+              return {
+                name: e.name,
+                kind: kindOf(e.name),
+                size,
+                url: servable
+                  ? '/' + rel.split(path.sep).join('/')
+                  : `/api/file?path=${encodeURIComponent(full)}`,
+              }
+            })
+          const dirs = entries.filter(e => e.isDirectory() && !e.name.startsWith('.'))
+            .map(e => ({ name: e.name, path: path.join(dir, e.name) }))
+          res.end(JSON.stringify({ dir, parent: path.dirname(dir), dirs, files }))
+        } catch (err) {
+          res.statusCode = 500
+          res.end(JSON.stringify({ error: String(err) }))
+        }
+      })
+
+      // Stream a single file from anywhere on disk (see above).
+      server.middlewares.use('/api/file', (req, res) => {
+        const url = new URL(req.url ?? '', 'http://x')
+        const p = url.searchParams.get('path')
+        if (!p || !fs.existsSync(p) || !fs.statSync(p).isFile()) {
+          res.statusCode = 404
+          res.end('not found')
+          return
+        }
+        const ext = path.extname(p).toLowerCase()
+        const types: Record<string, string> = {
+          '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+          '.webp': 'image/webp', '.gif': 'image/gif', '.avif': 'image/avif',
+          '.bmp': 'image/bmp', '.svg': 'image/svg+xml',
+          '.mp4': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime',
+          '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg',
+          '.glb': 'model/gltf-binary', '.gltf': 'model/gltf+json',
+        }
+        res.setHeader('Content-Type', types[ext] ?? 'application/octet-stream')
+        res.setHeader('Cache-Control', 'public, max-age=3600')
+        fs.createReadStream(p).pipe(res)
+      })
+    },
+  }
+}
+
 export default defineConfig({
-  plugins: [react(), tailwindcss(), fileUploadApi(), userTemplatesApi(), snapshotsApi()],
+  plugins: [react(), tailwindcss(), fileUploadApi(), userTemplatesApi(), snapshotsApi(), browseApi()],
 })

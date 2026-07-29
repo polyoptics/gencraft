@@ -34,6 +34,8 @@ import {
 } from '../../utils/contentKinds'
 import { getModelPoster, ensureModelPoster, invalidateModelPoster, useModelPoster, usePosterMapStore } from '../../three/posterService'
 import { useResolvedMedia } from '../../utils/useResolvedMedia'
+import { usePoolStore, loadPoolDir, type PoolFile } from '../../store/poolStore'
+import { poolFeedingList } from '../../utils/componentLinks'
 import {
   DEFAULT_HEADER_STYLE,
   DEFAULT_BODY_STYLE,
@@ -207,6 +209,7 @@ export const EMBED_CHROME = 26 + 21 + CABINET_BAR_H
 // Stable empty array for embedded-mode collapsed ids (referential
 // stability keeps the collapsedDeckIdSet memo quiet).
 const EMPTY_IDS: string[] = []
+const EMPTY_FILES: PoolFile[] = []
 // Small permanent height bonus on the active card even at the
 // "super-collapsed" end of the expansion range, so the user can
 // always tell which row is selected without an image / size jump.
@@ -241,6 +244,8 @@ const MIN_EXPANSION = -LIST_AREA_H_COMPACT
 type RolodexRow =
   | { kind: 'group'; group: ProjectGroup; level: number; isDeck: boolean }
   | { kind: 'freenode'; node: FreeNodeData; level: 0; isDeck: false }
+  // A file in a magneted Media Pool — see the pool branch in `rows`.
+  | { kind: 'poolfile'; file: PoolFile; level: 0; isDeck: false }
 
 // hasRenderableContent + sortGroups moved to utils/contentKinds.ts so the
 // pinned-list evaluator shares them (tile results must equal rolodex
@@ -758,13 +763,43 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
       }
     : flToggleDeckCollapsed
   const collapsedDeckIdSet = useMemo(() => new Set(collapsedDeckIds), [collapsedDeckIds])
+
+  // ── Magnet link: a pool touching this Rolodex feeds it ──
+  const allNodes = useFreeNodeStore(s => s.nodes)
+  // Zoom is a dependency because the link's slack is screen-relative:
+  // the same two panels can be linked at one zoom and not at another.
+  const linkZoom = useCanvasStore(s => s.zoom)
+  const feedingPool = useMemo(
+    () => (embedded && embeddedNode ? poolFeedingList(embeddedNode, allNodes) : null),
+    [embedded, embeddedNode, allNodes, linkZoom],
+  )
+  const poolFiles = usePoolStore(s => (feedingPool ? s.pools[feedingPool.id]?.files : undefined)) ?? EMPTY_FILES
+  // The pool's own component re-reads on mount, but a Rolodex can be
+  // magneted to a pool that is off screen and therefore unmounted.
+  useEffect(() => {
+    if (feedingPool && !usePoolStore.getState().pools[feedingPool.id]) {
+      void loadPoolDir(feedingPool.id, feedingPool.poolDir ?? 'public/uploads')
+    }
+  }, [feedingPool])
   const rows = useMemo(() => {
+    // MAGNETED TO A POOL: this Rolodex stops being a browser for the canvas
+    // and becomes a browser for that pool. Nothing was wired to make this
+    // happen — the link is derived from the two panels touching, so pulling
+    // them apart restores the canvas view with no state to undo.
+    if (feedingPool) {
+      const q = searchQuery.trim().toLowerCase()
+      return poolFiles
+        .filter(f => (kindFilter === 'all' || f.kind === kindFilter))
+        .filter(f => !q || f.name.toLowerCase().includes(q))
+        .map(f => ({ kind: 'poolfile' as const, file: f, level: 0 as const, isDeck: false as const }))
+    }
     const groupRows = view === 'tree'
       ? buildTreeList(visibleGroups, sortMode, collapsedDeckIdSet)
       : buildFlatList(visibleGroups, sortMode)
     if (!includeCanvasItems) return groupRows
     return [...groupRows, ...buildFreeNodeRows(freeNodes, sortMode, kindFilter, searchQuery)]
-  }, [visibleGroups, sortMode, view, collapsedDeckIdSet, includeCanvasItems, freeNodes, kindFilter, searchQuery])
+  }, [visibleGroups, sortMode, view, collapsedDeckIdSet, includeCanvasItems, freeNodes,
+      kindFilter, searchQuery, feedingPool, poolFiles])
 
   // Bumps whenever a poster finishes generating, so the thumbnail map
   // below re-derives and the row swaps its glyph for the snapshot.
@@ -1725,7 +1760,9 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
               pointerEvents: 'none',
             }} />
             {rows.length === 0 ? (
-              <EmptyState onAdd={startPlacement} />
+              feedingPool
+                ? <PoolEmptyState dir={feedingPool.poolDir ?? 'public/uploads'} />
+                : <EmptyState onAdd={startPlacement} />
             ) : (
               <>
                 {visibleIndices.map((idx, i) => {
@@ -1745,6 +1782,15 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
                       setHoveredRowIdx(prev => prev === idx ? null : prev)
                     },
                     onClick: () => onSlotClick(idx),
+                  }
+                  if (row.kind === 'poolfile') {
+                    return (
+                      <RolodexPoolSlot
+                        key={'pf:' + row.file.id}
+                        file={row.file}
+                        {...shared}
+                      />
+                    )
                   }
                   if (row.kind === 'freenode') {
                     return (
@@ -2056,6 +2102,70 @@ const RolodexCardPreview: React.FC<{
 const FREENODE_GLYPHS: Record<FreeNodeData['type'], string> = {
   model: '◆', image: '🖼', video: '▶', audio: '♪', text: 'T', note: '📝', list: '≔',
   pool: '▦', prompt: '✎',
+}
+
+/** A file from a magneted Media Pool. Same geometry as the other slots so
+ *  the list reads as one thing regardless of what is feeding it. */
+const RolodexPoolSlot: React.FC<{
+  file: PoolFile
+  offset: number
+  top: number
+  zIndex: number
+  expansionFraction: number
+  isHovered: boolean
+  onClick: () => void
+  onHoverEnter: () => void
+  onHoverLeave: () => void
+}> = ({ file, offset, top, zIndex, expansionFraction, isHovered, onClick, onHoverEnter, onHoverLeave }) => {
+  const poster = useModelPoster(file.kind === 'model' ? file.url : null)
+  useEffect(() => {
+    if (file.kind === 'model' && !getModelPoster(file.url)) void ensureModelPoster(file.url)
+  }, [file.kind, file.url])
+  const hero = file.kind === 'model' ? poster : file.kind === 'image' ? file.url : null
+  const centerness = Math.max(0, 1 - Math.abs(offset))
+  const exposure = Math.min(1, Math.max(0, (expansionFraction - 0.15) / 0.2))
+  const borderRGB = Math.round(255 * centerness)
+  return (
+    <div
+      onClick={onClick}
+      onPointerDown={e => { if (e.button === 0) e.stopPropagation() }}
+      onMouseEnter={onHoverEnter}
+      onMouseLeave={onHoverLeave}
+      draggable
+      onDragStart={e => {
+        e.dataTransfer.setData('application/x-vidbars-pool',
+          JSON.stringify({ url: file.url, label: file.name, kind: file.kind }))
+        e.dataTransfer.effectAllowed = 'copy'
+      }}
+      title={`${file.name} — from the magneted Media Pool`}
+      style={{
+        position: 'absolute', left: WING_W, top, width: SLOT_W, height: CARD_H,
+        background: '#1b2030', borderRadius: 7,
+        border: isHovered
+          ? '1.5px solid rgba(255,255,255,0.85)'
+          : `${1 + 0.5 * centerness}px solid rgba(${borderRGB},${borderRGB},${borderRGB},${0.28 + 0.64 * centerness})`,
+        cursor: 'pointer', zIndex, overflow: 'hidden',
+      }}
+    >
+      {hero && (
+        <HeroImageLayer heroImage={hero} opacity={file.kind === 'model' ? exposure * 0.9 : Math.max(0.35, exposure)} borderRadius={6} />
+      )}
+      <div style={{
+        position: 'absolute', top: 0, left: 0, right: 0, height: SLOT_PEEK_H,
+        display: 'flex', alignItems: 'center', gap: 6, padding: '0 10px',
+        boxSizing: 'border-box', pointerEvents: 'none',
+      }}>
+        <span style={{ fontSize: 9, color: 'rgba(160,205,255,0.8)', flexShrink: 0 }}>
+          {file.kind === 'model' ? '◆' : file.kind === 'video' ? '▶' : file.kind === 'audio' ? '♪' : '🖼'}
+        </span>
+        <span style={{
+          color: 'rgba(255,255,255,0.95)', fontSize: 11, fontWeight: 600,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          textShadow: '0 1px 3px rgba(0,0,0,0.8)',
+        }}>{file.name}</span>
+      </div>
+    </div>
+  )
 }
 
 /** The model poster as a small chip in a tile row's tab. Posters are
@@ -2913,6 +3023,23 @@ const CloseButton: React.FC<{ onClick: () => void }> = ({ onClick }) => (
       fontFamily: 'inherit',
     }}
   >×</button>
+)
+
+/** Pool-fed and empty is a different kind of nothing: there is no card to
+ *  place, the folder just has no matches. */
+const PoolEmptyState: React.FC<{ dir: string }> = ({ dir }) => (
+  <div style={{
+    position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
+    alignItems: 'center', justifyContent: 'center', gap: 5,
+    color: 'rgba(255,255,255,0.4)', fontSize: 10.5, textAlign: 'center', padding: 14,
+  }}>
+    <div style={{ fontSize: 15, opacity: 0.5 }}>📁</div>
+    <div>Nothing matches in the pool</div>
+    <div style={{
+      fontSize: 8.5, opacity: 0.6, fontFamily: 'ui-monospace, monospace',
+      wordBreak: 'break-all', lineHeight: 1.35,
+    }}>{dir}</div>
+  </div>
 )
 
 const EmptyState: React.FC<{ onAdd: () => void }> = ({ onAdd }) => (
