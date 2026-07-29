@@ -29,6 +29,47 @@ export const DOCK_TOLERANCE = 16
 export interface Rect { x: number; y: number; width: number; height: number }
 export interface WindowRect extends Rect { id: string }
 
+/** A Viewer's header is 22 SCREEN px and is drawn ABOVE win.y — the frame
+ *  mounts at `top: win.y - headerH`, so win.y is the top of the GL body,
+ *  not the top of the window you can see. */
+export const VIEWPORT_HEADER_SCREEN_H = 22
+
+/** The rect a Viewer actually OCCUPIES, header included.
+ *
+ *  Every docking and magnet test has to use this. Using the bare win.y made
+ *  a top-docked tile land with its bottom at the header's BOTTOM — i.e.
+ *  covering the whole header — and made side-docked tiles start below the
+ *  header instead of level with it. Both were visible on screen.
+ *
+ *  Zoom-aware because the header is counter-scaled to stay 22 screen px, so
+ *  its height in CANVAS units grows as you zoom out. Same reasoning as
+ *  cardVisualRect, and the same requirement from CLAUDE.md: screen-space
+ *  geometry helpers must include the header extension. */
+export function viewportVisualRect(
+  w: { id: string; x: number; y: number; width: number; height: number;
+       pin?: { x: number; y: number; scale: number } },
+  zoom: number,
+): WindowRect {
+  if (w.pin) {
+    // Pinned: already screen pixels, so the header is a flat 22.
+    return {
+      id: w.id,
+      x: w.pin.x,
+      y: w.pin.y - VIEWPORT_HEADER_SCREEN_H,
+      width: w.width * w.pin.scale,
+      height: w.height * w.pin.scale + VIEWPORT_HEADER_SCREEN_H,
+    }
+  }
+  const headerCanvas = VIEWPORT_HEADER_SCREEN_H / Math.max(0.01, zoom)
+  return {
+    id: w.id,
+    x: w.x,
+    y: w.y - headerCanvas,
+    width: w.width,
+    height: w.height + headerCanvas,
+  }
+}
+
 export interface MagnetCandidate {
   windowId: string
   edge: DockEdge

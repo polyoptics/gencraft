@@ -15,7 +15,7 @@ import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { useViewport3DStore } from '../../store/viewport3dStore'
 import { useMagnetPreviewStore } from '../../store/magnetPreviewStore'
 import { cardVisualRect } from '../../hooks/useCardDecks'
-import { findMagnetCandidate, magnetRadiusForZoom, type WindowRect } from '../../utils/viewportDocking'
+import { findMagnetCandidate, magnetRadiusForZoom, viewportVisualRect, type WindowRect } from '../../utils/viewportDocking'
 import { tileBrowseItem, isDockableTile } from '../../utils/contentTraversal'
 import { snapPanelToPanel, isPanelType } from '../../utils/componentLinks'
 import { CardRolodex } from '../Rolodex/CardRolodex'
@@ -153,9 +153,11 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
       // home; while it is pinned it lives on the screen, so letting a
       // canvas tile magnet to that ghost attaches two things that are
       // nowhere near each other. Same rule the docking reader uses.
+      // Header-inclusive rects: docking against the bare win.y snapped
+      // top-docked tiles UNDER the header instead of onto its top edge.
       const winRects: WindowRect[] = Object.values(useViewport3DStore.getState().windows)
         .filter(w => !w.pin)
-        .map(w => ({ id: w.id, x: w.x, y: w.y, width: w.width, height: w.height }))
+        .map(w => viewportVisualRect(w, zoom))
       const cand = winRects.length > 0 ? findMagnetCandidate(n, winRects, magnetRadiusForZoom(zoom)) : null
       const mp = useMagnetPreviewStore.getState()
       if (cand) {

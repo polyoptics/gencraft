@@ -14,13 +14,17 @@ import { useBoardsStore } from '../store/boardsStore'
 import { useCanvasStore } from '../store/canvasStore'
 import { useViewport3DStore } from '../store/viewport3dStore'
 import { useMagnetPreviewStore } from '../store/magnetPreviewStore'
-import { findMagnetCandidate, magnetRadiusForZoom, type WindowRect } from './viewportDocking'
+import { findMagnetCandidate, magnetRadiusForZoom, viewportVisualRect, type WindowRect } from './viewportDocking'
 import { collectDeckContent, defaultBrowseItem } from './contentTraversal'
 import { cardVisualRect } from '../hooks/useCardDecks'
 
 export function viewportWindowRects(): WindowRect[] {
+  const zoom = useCanvasStore.getState().zoom
+  // Header-inclusive, and canvas-placed only: a pinned Viewer's x/y are its
+  // stale pre-pin home, and a card cannot dock to a screen-pinned window.
   return Object.values(useViewport3DStore.getState().windows)
-    .map(w => ({ id: w.id, x: w.x, y: w.y, width: w.width, height: w.height }))
+    .filter(w => !w.pin)
+    .map(w => viewportVisualRect(w, zoom))
 }
 
 /** The group's live visual card rect as an x/y/w/h rect, or null. */

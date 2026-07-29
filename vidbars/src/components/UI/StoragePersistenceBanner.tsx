@@ -71,8 +71,19 @@ function probeQuotaCeiling(): { used: number; ceiling: number } {
 
 const fmtMB = (bytes: number) => (bytes / 1024 / 1024).toFixed(1) + ' MB'
 
+/** Identity of a report, so dismissing one failure does not hide the NEXT,
+ *  different one. Keyed by kind + which store + the error, deliberately not
+ *  by timestamp: the same store failing the same way every 600 ms is one
+ *  problem being retried, not a thousand problems. */
+function dismissKey(s: Status): string {
+  if (s.kind === 'write-failed') return `w:${s.detail.key}:${s.detail.errorName}`
+  if (s.kind === 'quota-warning') return 'quota'
+  return 'ok'
+}
+
 export const StoragePersistenceBanner: React.FC = () => {
   const [status, setStatus] = useState<Status>({ kind: 'ok' })
+  const [dismissed, setDismissed] = useState<string | null>(null)
 
   // Initial probe — runs once on mount.
   useEffect(() => {
@@ -104,6 +115,7 @@ export const StoragePersistenceBanner: React.FC = () => {
   }, [])
 
   if (status.kind === 'ok') return null
+  if (dismissed === dismissKey(status)) return null
 
   const isFailure = status.kind === 'write-failed'
   const bg = isFailure ? 'rgba(180, 30, 35, 0.96)' : 'rgba(170, 110, 30, 0.96)'
@@ -165,10 +177,27 @@ export const StoragePersistenceBanner: React.FC = () => {
         flexShrink: 0,
       }}
     >
-      <div style={{ fontWeight: 700, fontSize: 13, letterSpacing: '0.4px' }}>
-        ⚠ {headline}
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 700, fontSize: 13, letterSpacing: '0.4px' }}>
+            ⚠ {headline}
+          </div>
+          {body}
+        </div>
+        {/* An alarm you cannot silence stops being an alarm. Dismissing it
+            hides THIS report; a genuinely new failure raises a new one, so
+            nothing real gets suppressed. */}
+        <button
+          onClick={() => setDismissed(dismissKey(status))}
+          title="Dismiss — a new failure will raise this again"
+          style={{
+            flexShrink: 0, background: 'rgba(0,0,0,0.22)',
+            border: '1px solid rgba(255,255,255,0.35)', borderRadius: 4,
+            color: '#fff', fontSize: 14, lineHeight: 1,
+            padding: '3px 8px', cursor: 'pointer', fontFamily: 'inherit',
+          }}
+        >×</button>
       </div>
-      {body}
     </div>
   )
 }

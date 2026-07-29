@@ -81,6 +81,13 @@ export const useHistoryStore = create<HistoryStore>()(persist((set) => ({
   name: 'vidbars-history',
   version: 1,
   storage: createDebouncedIDBStorage(600),
+  // WITHOUT THIS, NOTHING SAVES. Omitting partialize persists the whole
+  // store — including `record`, `remove` and `clear`, which are functions.
+  // IndexedDB structured-clones its values and throws DataCloneError on a
+  // function, so every single write failed, and the storage banner sat on
+  // screen shouting about it. Every other store here partialises; this one
+  // did not, and that was the entire bug.
+  partialize: (s) => ({ entries: s.entries }),
 }))
 
 /** Non-hook recorder — call sites are mostly outside React. */

@@ -21,6 +21,7 @@ import { useViewport3DStore, activeItemKey } from '../store/viewport3dStore'
 import type { ViewportWindow3D } from '../store/viewport3dStore'
 import {
   computeAllDocks, computeTileClusters, rectsTouch, DOCK_TOLERANCE,
+  viewportVisualRect,
   type DockableItem, type WindowRect,
 } from '../utils/viewportDocking'
 import {
@@ -58,12 +59,14 @@ const GROUP_PREFIX = 'group:'
  *  the same number reads as 16 screen pixels there. Both are right for
  *  their own space, which is why callers leave the default alone —
  *  placementCarry relies on that agreement too. */
-function windowRects(windows: Record<string, ViewportWindow3D>, pinned: boolean): WindowRect[] {
+function windowRects(
+  windows: Record<string, ViewportWindow3D>, pinned: boolean, zoom: number,
+): WindowRect[] {
   return Object.values(windows)
     .filter(w => !!w.pin === pinned)
-    .map(w => (w.pin
-      ? { id: w.id, x: w.pin.x, y: w.pin.y, width: w.width * w.pin.scale, height: w.height * w.pin.scale }
-      : { id: w.id, x: w.x, y: w.y, width: w.width, height: w.height }))
+    // Header included — see viewportVisualRect. Docking against the bare
+    // win.y put tiles under the header rather than level with its top.
+    .map(w => viewportVisualRect(w, zoom))
 }
 
 /** Dockable tiles as cluster items — content-bearing tiles + list tiles
@@ -192,7 +195,7 @@ export function useDockedSources(windowId: string): DockedSource[] {
   return useMemo(() => {
     // This window's own placement picks the stratum everything is read in.
     const pinned = !!windows[windowId]?.pin
-    const winRects = windowRects(windows, pinned)
+    const winRects = windowRects(windows, pinned, zoom)
     if (!winRects.some(w => w.id === windowId)) return []
 
     const out: DockedSource[] = []
@@ -269,7 +272,8 @@ export function computeCarriedEntities(windowId: string): { tileIds: string[]; g
   const nodes = useFreeNodeStore.getState().nodes
   const bs = useBoardsStore.getState()
   const pinned = !!windows[windowId]?.pin
-  const winRects = windowRects(windows, pinned)
+  const carryZoom = useCanvasStore.getState().zoom
+  const winRects = windowRects(windows, pinned, carryZoom)
   const win = winRects.find(w => w.id === windowId)
   if (!win) return { tileIds: [], groupIds: [] }
 
