@@ -42,6 +42,48 @@ export const CounterScaled: React.FC<{ gz: number; children: React.ReactNode }> 
   )
 }
 
+/** A panel whose CONTENT must not reflow when the camera moves.
+ *
+ *  Counter-scaling keeps chrome a constant screen size, which is right for
+ *  a toolbar and wrong for a browser: as you zoom, the tile size and column
+ *  count change, the grid re-wraps, and you lose your place. A pool is FOR
+ *  keeping your place. So its layout is computed in the panel's own units
+ *  and the whole thing scales uniformly with the canvas, like a photograph
+ *  — nothing moves relative to anything else.
+ *
+ *  Legibility then belongs to the user, not the camera: `uiScale` on the
+ *  node multiplies the panel's internal sizes, so you make it bigger once
+ *  and it stays that way at every zoom.
+ */
+export function panelContentScale(node: FreeNodeData | undefined): number {
+  return clampUiScale(node?.uiScale ?? 1)
+}
+
+export const UI_SCALE_MIN = 0.6
+export const UI_SCALE_MAX = 3
+export function clampUiScale(v: number): number {
+  return Math.max(UI_SCALE_MIN, Math.min(UI_SCALE_MAX, v))
+}
+
+/** Scale the contents by a factor the USER chose. The surface is laid out
+ *  at (100/factor)% and scaled up by `factor`, so it still covers the node
+ *  exactly while everything inside is drawn `factor` times larger — which
+ *  also means proportionally fewer columns fit, exactly as it should.
+ *
+ *  Nothing here reads the camera, and that is the point: the layout is
+ *  identical at every zoom, so zooming moves you closer to the panel
+ *  instead of rearranging it under you. */
+export const ContentScaled: React.FC<{ factor: number; children: React.ReactNode }> = ({ factor, children }) => {
+  const f = clampUiScale(factor)
+  return (
+    <div style={{
+      position: 'absolute', left: 0, top: 0,
+      width: `${100 / f}%`, height: `${100 / f}%`,
+      transform: `scale(${f})`, transformOrigin: 'top left',
+    }}>{children}</div>
+  )
+}
+
 export interface PanelChrome {
   /** Counter-scale factor for CounterScaled. */
   gz: number

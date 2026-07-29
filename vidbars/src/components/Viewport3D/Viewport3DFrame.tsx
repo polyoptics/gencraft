@@ -19,7 +19,7 @@ import React, { useRef, useState, useCallback } from 'react'
 import { useViewport3DStore } from '../../store/viewport3dStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
-import { setPlacementWithCarry } from '../../utils/placementCarry'
+import { PinControl } from '../UI/PinControl'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useBoardsStore } from '../../store/boardsStore'
 import { computeCarriedEntities } from '../../hooks/useDockedContent'
@@ -349,44 +349,23 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
           )
         })()}
 
-        {win.pin && (
-          <button
-            onClick={() => {
-              const cs = useCanvasStore.getState()
-              useUndoCoordinator.getState().checkpoint()
-              useViewport3DStore.getState().rehomePinnedWindow(id, { pan: cs.pan, zoom: cs.zoom })
-            }}
-            onPointerDown={e => e.stopPropagation()}
-            title="Make this the spot it returns to when unpinned"
-            style={{
-              background: 'none', border: 'none', cursor: 'pointer',
-              color: 'rgba(255,255,255,0.4)', fontSize: fontSize * 0.95,
-              padding: 0, lineHeight: 1, flexShrink: 0,
-              opacity: isHovered ? 1 : 0.35, transition: 'opacity 0.12s',
-            }}
-          >⌖</button>
-        )}
-        <button
-          onClick={() => {
+        <PinControl
+          pinned={!!win.pin}
+          size={Math.max(11, fontSize * 1.15)}
+          onToggle={() => {
             const cs = useCanvasStore.getState()
             useUndoCoordinator.getState().checkpoint()
-            // Carries whatever is magneted to it, so a composed row does
-            // not get torn in half by a pin.
-            setPlacementWithCarry(
-              id, win.pin ? 'canvas' : 'screen', { pan: cs.pan, zoom: cs.zoom }, 'window')
+            // Per component: pinning a Viewer does not drag its neighbours
+            // off the canvas with it.
+            useViewport3DStore.getState().setWindowPlacement(
+              id, win.pin ? 'canvas' : 'screen', { pan: cs.pan, zoom: cs.zoom })
           }}
-          onPointerDown={e => e.stopPropagation()}
-          title={win.pin
-            ? 'Pinned to the screen — click to set it down on the canvas'
-            : 'On the canvas — click to pin it to the screen'}
-          style={{
-            background: 'none', border: 'none', cursor: 'pointer',
-            color: win.pin ? 'rgba(150,200,255,0.95)' : 'rgba(255,255,255,0.4)',
-            fontSize: fontSize * 0.95,
-            padding: 0, lineHeight: 1, flexShrink: 0,
-            opacity: win.pin ? 1 : (isHovered ? 1 : 0.3), transition: 'opacity 0.12s',
-          }}
-        >📌</button>
+          onResetHome={win.pin ? () => {
+            const cs = useCanvasStore.getState()
+            useUndoCoordinator.getState().checkpoint()
+            useViewport3DStore.getState().rehomePinnedWindow(id, { pan: cs.pan, zoom: cs.zoom })
+          } : undefined}
+        />
         <button
           onClick={() => { useUndoCoordinator.getState().checkpoint(); removeWindow(id) }}
           onPointerDown={e => e.stopPropagation()}

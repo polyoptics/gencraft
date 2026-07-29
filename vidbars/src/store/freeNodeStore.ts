@@ -112,6 +112,12 @@ export interface FreeNodeData {
    *  position, which is the old behaviour. The re-home control overwrites
    *  it with the current spot when the visit turns out to be permanent. */
   home?: { x: number; y: number; width: number; height: number }
+  /** Panel content scale, chosen by the user. Reshaping a panel changes its
+   *  SHAPE; this changes how big everything inside it is drawn. Two
+   *  independent gestures, the way the Rolodex already separates its drawer
+   *  from its frame. Deliberately not derived from zoom: a browser whose
+   *  contents re-flow as you zoom loses your place. */
+  uiScale?: number
   color: string
   textStyle?: TextStyle
   /** Annotation layer — vector strokes drawn on this node. */

@@ -37,7 +37,6 @@ import { useThumb } from '../../utils/thumbService'
 import { useResolvedMedia } from '../../utils/useResolvedMedia'
 import { usePoolStore, loadPoolDir, type PoolFile } from '../../store/poolStore'
 import { poolFeedingList } from '../../utils/componentLinks'
-import { setPlacementWithCarry } from '../../utils/placementCarry'
 import {
   DEFAULT_HEADER_STYLE,
   DEFAULT_BODY_STYLE,
@@ -1609,48 +1608,10 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
                   padding: '1px 6px', cursor: 'pointer', fontFamily: 'inherit', lineHeight: 1.4,
                 }}
               >＋</button>
-              {/* Placement toggle — the pin. Lives here rather than only
-                  in the right-click menu, because a mode you can't see is
-                  a mode you don't know you have. */}
-              {embedded && embeddedNode?.pin && (
-                <button
-                  onClick={() => {
-                    const cs = useCanvasStore.getState()
-                    useUndoCoordinator.getState().checkpoint()
-                    useFreeNodeStore.getState().rehomePinnedNode(
-                      embeddedNode.id, { pan: cs.pan, zoom: cs.zoom })
-                  }}
-                  title="Make this the spot it returns to when unpinned"
-                  style={{
-                    background: 'rgba(255,255,255,0.05)',
-                    border: '1px solid rgba(255,255,255,0.12)',
-                    borderRadius: 4, color: 'rgba(255,255,255,0.5)',
-                    fontSize: 10, fontWeight: 700,
-                    padding: '1px 6px', cursor: 'pointer', fontFamily: 'inherit', lineHeight: 1.4,
-                  }}
-                >⌖</button>
-              )}
-              {embedded && embeddedNode && (
-                <button
-                  onClick={() => {
-                    const cs = useCanvasStore.getState()
-                    useUndoCoordinator.getState().checkpoint()
-                    setPlacementWithCarry(
-                      embeddedNode.id, embeddedNode.pin ? 'canvas' : 'screen',
-                      { pan: cs.pan, zoom: cs.zoom })
-                  }}
-                  title={embeddedNode.pin
-                    ? 'Pinned to the screen — click to set it down on the canvas'
-                    : 'On the canvas — click to pin it to the screen'}
-                  style={{
-                    background: embeddedNode.pin ? 'rgba(120,170,255,0.28)' : 'rgba(255,255,255,0.05)',
-                    border: `1px solid ${embeddedNode.pin ? 'rgba(140,190,255,0.6)' : 'rgba(255,255,255,0.12)'}`,
-                    borderRadius: 4, color: embeddedNode.pin ? '#cfe2ff' : 'rgba(255,255,255,0.5)',
-                    fontSize: 10, fontWeight: 700,
-                    padding: '1px 6px', cursor: 'pointer', fontFamily: 'inherit', lineHeight: 1.4,
-                  }}
-                >📌</button>
-              )}
+              {/* No pin here any more. An embedded Rolodex is a panel like
+                  the others and wears the shared pin in its NODE header —
+                  two pins for one thing, in two different places, was just
+                  a second way to be unsure which one you pressed. */}
               {!embedded && <CloseButton onClick={() => setRolodexOpen(false)} />}
             </div>
           </div>

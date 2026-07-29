@@ -39,7 +39,7 @@ import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { useThumb, requestThumb, getThumb } from '../../utils/thumbService'
-import { CounterScaled, usePanelChrome } from '../UI/PanelSurface'
+import { ContentScaled, panelContentScale, clampUiScale, UI_SCALE_MIN, UI_SCALE_MAX } from '../UI/PanelSurface'
 
 /** Target tile size in SCREEN pixels. These used to be canvas pixels,
  *  which made "mid" 14 real pixels wide at block zoom. The grid fills the
@@ -249,11 +249,12 @@ export const MediaPool: React.FC<{ nodeId: string }> = ({ nodeId }) => {
   // The multiplier the canvas applies to this node: the live zoom, or the
   // zoom FROZEN at pin time. Identical to FreeNode and Viewport3DFrame —
   // a pinned pool and a canvas pool must render the same.
-  // Counter-scaled chrome is a constant ~90 screen px, so on a panel shorter
-  // than that the chrome eats everything and the grid collapses — measured
-  // at zoom 0.3, a 380-unit pool left a 16 px grid against 125 px tiles.
-  // usePanelChrome is the shared answer: rows drop out as room runs out.
-  const { gz, showFooter, showControls, showHeader: showPath } = usePanelChrome(node)
+  // NOTHING here reads the canvas zoom, deliberately. Counter-scaling made
+  // the tile size and column count change as you zoomed, so the grid
+  // re-wrapped under you and you lost your place — the one thing a pool
+  // exists to keep. The panel now scales uniformly with the canvas like any
+  // other object, and how big its contents are drawn is the USER's setting.
+  const uiScale = panelContentScale(node)
 
   const dir = node?.poolDir ?? 'public/uploads'
 
@@ -304,7 +305,11 @@ export const MediaPool: React.FC<{ nodeId: string }> = ({ nodeId }) => {
     const ro = new ResizeObserver(measure)
     ro.observe(el)
     return () => ro.disconnect()
-  }, [])
+    // uiScale is a dependency because changing it resizes this element
+    // through an ANCESTOR's width, which the observer did not report:
+    // measured on a live panel, the column count stayed at its pre-scale
+    // value and the grid laid 5 columns into a 2-column space.
+  }, [uiScale])
 
   // A new listing or a new filter is a new list: scrolled-into-nowhere is
   // indistinguishable from an empty folder.
@@ -355,13 +360,13 @@ export const MediaPool: React.FC<{ nodeId: string }> = ({ nodeId }) => {
       onWheel={e => e.stopPropagation()}
       style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: '#12131f' }}
     >
-      <CounterScaled gz={gz}>
+      <ContentScaled factor={uiScale}>
         <div style={{
           width: '100%', height: '100%', display: 'flex', flexDirection: 'column',
           overflow: 'hidden', fontFamily: 'system-ui, sans-serif',
         }}>
           {/* ── Path bar ── */}
-          {showPath && <div style={{
+          <div style={{
             display: 'flex', alignItems: 'center', gap: 5, padding: '5px 7px',
             borderBottom: '1px solid rgba(255,255,255,0.08)', flexShrink: 0,
           }}>
@@ -399,10 +404,10 @@ export const MediaPool: React.FC<{ nodeId: string }> = ({ nodeId }) => {
             <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', flexShrink: 0 }}>
               {contents?.loading ? '…' : `${files.length}`}
             </span>
-          </div>}
+          </div>
 
           {/* ── Controls ── */}
-          {showControls && <div style={{
+          <div style={{
             display: 'flex', alignItems: 'center', gap: 4, padding: '5px 7px',
             borderBottom: '1px solid rgba(255,255,255,0.08)', flexShrink: 0, overflow: 'hidden',
           }}>
@@ -425,9 +430,23 @@ export const MediaPool: React.FC<{ nodeId: string }> = ({ nodeId }) => {
               <button style={chip(false)} title="Render 3D thumbnails for the models on this page"
                 onClick={buildVisiblePosters}>3D</button>
             )}
+            {/* Panel scale. This is the ONLY thing that changes how big the
+                contents are drawn — the camera does not get a vote, which
+                is what keeps your place while you zoom. */}
+            <button
+              style={{ ...chip(false), opacity: uiScale <= UI_SCALE_MIN ? 0.35 : 1 }}
+              title="Smaller contents"
+              onClick={() => updateFreeNode(nodeId, { uiScale: clampUiScale(uiScale / 1.15) })}
+            >−</button>
+            <button
+              style={{ ...chip(false), opacity: uiScale >= UI_SCALE_MAX ? 0.35 : 1 }}
+              title={`Larger contents (${Math.round(uiScale * 100)}%) — double-click to reset`}
+              onClick={() => updateFreeNode(nodeId, { uiScale: clampUiScale(uiScale * 1.15) })}
+              onDoubleClick={() => updateFreeNode(nodeId, { uiScale: 1 })}
+            >+</button>
             <button style={chip(false)} title="Re-read this folder"
               onClick={() => void loadPoolDir(nodeId, dir)}>⟳</button>
-          </div>}
+          </div>
 
           {/* ── Subfolders ── one line that scrolls sideways, so a folder
               with fifty children cannot eat the file grid. */}
@@ -490,7 +509,7 @@ export const MediaPool: React.FC<{ nodeId: string }> = ({ nodeId }) => {
             )}
           </div>
 
-          {showFooter && <div style={{
+          <div style={{
             padding: '4px 7px', borderTop: '1px solid rgba(255,255,255,0.08)',
             fontSize: 11, color: 'rgba(255,255,255,0.38)', flexShrink: 0,
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
@@ -498,9 +517,9 @@ export const MediaPool: React.FC<{ nodeId: string }> = ({ nodeId }) => {
             {thumbsPossible
               ? 'drag a file to the canvas · double-click to place · magnet a Rolodex to browse this pool'
               : 'showing originals — install sharp for fast thumbnails · drag a file to the canvas'}
-          </div>}
+          </div>
         </div>
-      </CounterScaled>
+      </ContentScaled>
     </div>
   )
 }
