@@ -8,6 +8,7 @@
 // browse a pool without the two components knowing about each other.
 
 import { create } from 'zustand'
+import { recordHistory } from './historyStore'
 
 export interface PoolFile {
   /** Stable within a listing: the url doubles as the identity. */
@@ -76,6 +77,13 @@ export async function loadPoolDir(nodeId: string, dir: string): Promise<void> {
       parent: json.parent,
       dirs: json.dirs ?? [],
       files: (json.files ?? []).map((f: Omit<PoolFile, 'id'>) => ({ ...f, id: f.url })),
+    })
+    // Where you have BEEN is history, so a History window docked to a pool
+    // can walk you back. Recorded after success only: a folder that failed
+    // to read is not somewhere you went.
+    recordHistory({
+      kind: 'folder', sourceId: nodeId, dir: json.dir,
+      label: json.dir,
     })
   } catch (err) {
     st.setError(nodeId, String(err))

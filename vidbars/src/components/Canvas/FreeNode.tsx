@@ -21,6 +21,7 @@ import { snapPanelToPanel, isPanelType } from '../../utils/componentLinks'
 import { CardRolodex } from '../Rolodex/CardRolodex'
 import { MediaPool } from '../Pool/MediaPool'
 import { PromptPad } from '../Prompt/PromptPad'
+import { HistoryPanel } from '../History/HistoryPanel'
 import { ensureModelPoster, getModelPoster, invalidateModelPoster, useModelPoster } from '../../three/posterService'
 import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
 import { DrawableSurface } from '../Annotation/DrawableSurface'
@@ -498,7 +499,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
   const borderW  = Math.min(Math.max(1, 2 / gz), node.width * 0.04, node.height * 0.04)
   /** COMPONENT nodes are panels, not media tiles, so they wear the panel's
    *  chrome — identically in both placements. */
-  const isPanel = node.type === 'list' || node.type === 'pool' || node.type === 'prompt'
+  const isPanel = isPanelType(node.type)
 
   return (
     <div
@@ -558,7 +559,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
         // A component's body is a full panel that owns its own clicks:
         // selecting the node on every control would flash the ring and arm
         // Delete on the whole thing. Only its header and corner select it.
-        if ((node.type === 'list' || node.type === 'pool' || node.type === 'prompt') &&
+        if (isPanelType(node.type) &&
             !(e.target as Element).closest('[data-freenode-header],[data-resize]')) return
         wasSelectedOnDown.current = isSelected
         if (e.shiftKey) { toggleFreeSelection(id) }
@@ -844,6 +845,13 @@ const FreeNodeBody: React.FC<{
     return (
       <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
         <PromptPad nodeId={id} />
+      </div>
+    )
+  }
+  if (node.type === 'history') {
+    return (
+      <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
+        <HistoryPanel nodeId={id} />
       </div>
     )
   }

@@ -1,41 +1,78 @@
-// PromptPad.tsx — the prompt editor and its tag palette.
+// PromptPad.tsx — a workshop for BUILDING prompts, not a fixed menu.
 //
-// Deliberately ONE component rather than two. The tags are only useful
-// next to the text they are building; splitting them would mean magneting
-// two things together every time just to get back to a usable baseline.
-// What IS separable — the saved-prompt list — is a rail on the side, the
-// same shape as the Documents rail in the text viewer.
+// The vocabulary belongs to whoever is using it: sections and tags are all
+// editable, addable and deletable, and the whole kit lives on the node, so
+// two pads can carry different vocabularies (one for characters, one for
+// environments) and each rides export and undo with its node.
 //
-// Submitting writes to the shared generation store, which is what a Media
-// Pool reads. Neither component knows the other exists; magneting them
-// together is a spatial statement, not a wiring one.
+// Deliberately ONE component rather than two. The tags are only useful next
+// to the text they are building; splitting them would mean magneting two
+// things together every time just to get back to a usable baseline. What IS
+// separable — the history of what you sent — is its own app, because you
+// might want that history docked somewhere else entirely.
+//
+// Sending records a prompt entry in the shared history and stops there.
+// There is no generator behind it and nothing pretends otherwise.
 
-import React, { useState } from 'react'
-import { useGenerationStore, isUsingStubAdapter } from '../../store/generationStore'
+import React, { useMemo, useState } from 'react'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
+import { recordHistory } from '../../store/historyStore'
+import {
+  defaultPromptKit, newSection, newTag, newSaved,
+  type PromptKit, type PromptSection,
+} from '../../utils/promptKit'
 
-/** The Mad-Libs palette from the design: click to append, grouped by the
- *  kind of thing it says. Editable per node later; these are the defaults
- *  that make the idea legible. */
-const TAG_GROUPS: Array<{ label: string; tags: string[] }> = [
-  { label: 'framing', tags: ['isometric view', 'orthographic view', 'front, back, left, right', 'arms out to the side', '3/4 view'] },
-  { label: 'grid', tags: ['2x2 grid', '3x3 grid', 'where each cell contains', 'sprite sheet'] },
-  { label: 'background', tags: ['clean black background', 'clean white background', 'transparent background', 'no shadow'] },
-  { label: 'style', tags: ['in the same style as the reference images', 'flat vector', 'painterly', 'photoreal', 'blueprint'] },
-  { label: 'for 3d', tags: ['T-pose', 'neutral pose', 'even lighting', 'texture atlas', 'seamless'] },
-]
+/** Small inline editor used for every renameable label in the pad. */
+const InlineEdit: React.FC<{
+  value: string
+  onCommit: (v: string) => void
+  onCancel?: () => void
+  style?: React.CSSProperties
+  placeholder?: string
+}> = ({ value, onCommit, onCancel, style, placeholder }) => {
+  const [draft, setDraft] = useState(value)
+  return (
+    <input
+      autoFocus
+      value={draft}
+      placeholder={placeholder}
+      onChange={e => setDraft(e.target.value)}
+      onClick={e => e.stopPropagation()}
+      onPointerDown={e => e.stopPropagation()}
+      onKeyDown={e => {
+        e.stopPropagation()
+        if (e.key === 'Enter') onCommit(draft.trim())
+        if (e.key === 'Escape') (onCancel ?? (() => onCommit(value)))()
+      }}
+      onBlur={() => onCommit(draft.trim())}
+      style={{
+        background: 'rgba(255,255,255,0.08)',
+        border: '1px solid rgba(140,190,255,0.5)', borderRadius: 3,
+        color: 'rgba(255,255,255,0.92)', fontSize: 9.5, padding: '1px 5px',
+        fontFamily: 'inherit', outline: 'none', minWidth: 0, ...style,
+      }}
+    />
+  )
+}
 
 export const PromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
   const node = useFreeNodeStore(s => s.nodes[nodeId])
   const updateFreeNode = useFreeNodeStore(s => s.updateFreeNode)
-  const submit = useGenerationStore(s => s.submit)
-  const pending = useGenerationStore(s => s.pending)
-  const startSession = useGenerationStore(s => s.startSession)
-  const [count, setCount] = useState(4)
-  const [showSaved, setShowSaved] = useState(false)
-  const [saved, setSaved] = useState<string[]>([])
+  const [showSaved, setShowSaved] = useState(true)
+  const [editing, setEditing] = useState<string | null>(null)   // 'sec:<id>' | 'tag:<id>' | 'saved:<id>'
+  const [addingTagTo, setAddingTagTo] = useState<string | null>(null)
+  const [sent, setSent] = useState(0)
 
-  // The prompt text lives on the node, so it persists and rides export.
+  // The kit lives on the node. Defaulting here rather than at creation means
+  // pads made before this existed still open with a full palette.
+  const kit: PromptKit = useMemo(
+    () => node?.promptKit ?? defaultPromptKit(),
+    [node?.promptKit],
+  )
+  const setKit = (k: PromptKit) => updateFreeNode(nodeId, { promptKit: k })
+  const patchSections = (fn: (s: PromptSection[]) => PromptSection[]) =>
+    setKit({ ...kit, sections: fn(kit.sections) })
+
   const text = node?.text ?? ''
   const setText = (v: string) => updateFreeNode(nodeId, { text: v })
 
@@ -44,9 +81,11 @@ export const PromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
     setText(t ? `${t}, ${tag}` : tag)
   }
 
-  const run = async () => {
-    if (!text.trim()) return
-    await submit({ prompt: text.trim(), refs: [], count })
+  const send = () => {
+    const t = text.trim()
+    if (!t) return
+    recordHistory({ kind: 'prompt', sourceId: nodeId, label: t, prompt: t })
+    setSent(n => n + 1)
   }
 
   const chip = (on = false): React.CSSProperties => ({
@@ -54,8 +93,13 @@ export const PromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
     border: `1px solid ${on ? 'rgba(140,190,255,0.55)' : 'rgba(255,255,255,0.1)'}`,
     borderRadius: 4, color: on ? '#dce9ff' : 'rgba(255,255,255,0.6)',
     fontSize: 9, fontWeight: 600, padding: '2px 6px', cursor: 'pointer',
-    fontFamily: 'inherit', textAlign: 'left', lineHeight: 1.4,
+    fontFamily: 'inherit', textAlign: 'left', lineHeight: 1.4, flexShrink: 0,
   })
+
+  const ghostBtn: React.CSSProperties = {
+    background: 'none', border: 'none', color: 'rgba(255,255,255,0.25)',
+    fontSize: 10, cursor: 'pointer', padding: '0 3px', fontFamily: 'inherit', flexShrink: 0,
+  }
 
   return (
     <div
@@ -66,15 +110,15 @@ export const PromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
         background: '#12131f', overflow: 'hidden', fontFamily: 'system-ui, sans-serif',
       }}
     >
-      {/* ── Prompt text + run ── */}
+      {/* ── Prompt text + send ── */}
       <div style={{ display: 'flex', gap: 5, padding: 6, flexShrink: 0 }}>
         <textarea
           value={text}
           onChange={e => setText(e.target.value)}
           onKeyDown={e => {
-            // Ctrl/Cmd+Enter submits; plain Enter stays a newline, because
+            // Ctrl/Cmd+Enter sends; plain Enter stays a newline, because
             // this is a writing surface first.
-            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void run() }
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send() }
             e.stopPropagation()
           }}
           placeholder="inspirational jumpsuit, clean black background, arms out to the side"
@@ -85,84 +129,219 @@ export const PromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
             padding: 7, fontSize: 11, lineHeight: 1.5, fontFamily: 'inherit', outline: 'none',
           }}
         />
-        <button
-          onClick={() => void run()}
-          disabled={!text.trim() || pending > 0}
-          title="Generate (Ctrl+Enter)"
-          style={{
-            width: 52, flexShrink: 0,
-            background: text.trim() ? 'rgba(120,170,255,0.3)' : 'rgba(255,255,255,0.05)',
-            border: '1px solid rgba(140,190,255,0.45)', borderRadius: 5,
-            color: '#dce9ff', fontSize: 10, fontWeight: 700, cursor: text.trim() ? 'pointer' : 'default',
-            fontFamily: 'inherit',
-          }}
-        >{pending > 0 ? '…' : '⏎'}</button>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, width: 52, flexShrink: 0 }}>
+          <button
+            onClick={send}
+            disabled={!text.trim()}
+            title="Send (Ctrl+Enter) — recorded in history"
+            style={{
+              flex: 1,
+              background: text.trim() ? 'rgba(120,170,255,0.3)' : 'rgba(255,255,255,0.05)',
+              border: '1px solid rgba(140,190,255,0.45)', borderRadius: 5,
+              color: '#dce9ff', fontSize: 10, fontWeight: 700,
+              cursor: text.trim() ? 'pointer' : 'default', fontFamily: 'inherit',
+            }}
+          >⏎</button>
+          <button
+            onClick={() => setText('')}
+            title="Clear the prompt"
+            style={{ ...chip(false), textAlign: 'center', padding: '3px 0' }}
+          >CLR</button>
+        </div>
       </div>
 
-      {/* ── Count + saved ── */}
+      {/* ── Save / show rail ── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '0 6px 5px', flexShrink: 0 }}>
-        <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)' }}>count</span>
-        {[1, 2, 4, 8].map(n => (
-          <button key={n} style={chip(count === n)} onClick={() => setCount(n)}>{n}</button>
-        ))}
+        <button
+          style={chip(false)}
+          title="Save this prompt"
+          onClick={() => {
+            if (!text.trim()) return
+            setKit({ ...kit, saved: [newSaved(text.trim()), ...kit.saved] })
+            setShowSaved(true)
+          }}
+        >＋ SAVE</button>
+        <button style={chip(showSaved)} onClick={() => setShowSaved(v => !v)}
+          title="Show saved prompts">▤ {kit.saved.length}</button>
         <div style={{ flex: 1 }} />
-        <button style={chip(false)} onClick={() => { if (text.trim()) setSaved(s => [text.trim(), ...s]) }}>SAVE</button>
-        <button style={chip(showSaved)} onClick={() => setShowSaved(v => !v)}>▤</button>
-        <button style={chip(false)} onClick={() => startSession()} title="Start a new generation session">NEW SESSION</button>
+        {sent > 0 && (
+          <span style={{ fontSize: 8.5, color: 'rgba(150,200,255,0.65)' }}>
+            sent {sent}× · see History
+          </span>
+        )}
       </div>
 
       <div style={{ flex: 1, display: 'flex', minHeight: 0, borderTop: '1px solid rgba(255,255,255,0.08)' }}>
-        {/* ── Tag palette ── */}
+        {/* ── Tag workshop ── */}
         <div style={{ flex: 1, overflowY: 'auto', padding: 6, minWidth: 0 }}>
-          {TAG_GROUPS.map(g => (
-            <div key={g.label} style={{ marginBottom: 7 }}>
-              <div style={{
-                fontSize: 8.5, fontWeight: 700, letterSpacing: '0.6px', textTransform: 'uppercase',
-                color: 'rgba(255,255,255,0.3)', marginBottom: 3,
-              }}>{g.label}</div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
-                {g.tags.map(t => (
-                  <button key={t} style={chip(false)} onClick={() => append(t)}>+ {t}</button>
-                ))}
+          {kit.sections.map(sec => {
+            const collapsed = !!sec.collapsed
+            return (
+              <div key={sec.id} style={{ marginBottom: 7 }}>
+                {/* section header */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 3, marginBottom: 3 }}>
+                  <button
+                    onClick={() => patchSections(ss => ss.map(s =>
+                      s.id === sec.id ? { ...s, collapsed: !collapsed } : s))}
+                    title={collapsed ? 'Expand' : 'Collapse'}
+                    style={{ ...ghostBtn, color: 'rgba(255,255,255,0.45)', fontSize: 9 }}
+                  >{collapsed ? '▸' : '▾'}</button>
+                  {editing === `sec:${sec.id}` ? (
+                    <InlineEdit
+                      value={sec.label}
+                      onCommit={v => {
+                        if (v) patchSections(ss => ss.map(s => s.id === sec.id ? { ...s, label: v } : s))
+                        setEditing(null)
+                      }}
+                      onCancel={() => setEditing(null)}
+                      style={{ flex: 1 }}
+                    />
+                  ) : (
+                    <div
+                      onClick={() => setEditing(`sec:${sec.id}`)}
+                      title="Click to rename"
+                      style={{
+                        flex: 1, fontSize: 8.5, fontWeight: 700, letterSpacing: '0.6px',
+                        textTransform: 'uppercase', color: 'rgba(255,255,255,0.32)',
+                        cursor: 'text', userSelect: 'none',
+                      }}
+                    >{sec.label}{collapsed ? ` · ${sec.tags.length}` : ''}</div>
+                  )}
+                  <button style={ghostBtn} title="Add a tag here"
+                    onClick={() => { setAddingTagTo(sec.id); if (collapsed) patchSections(ss => ss.map(s => s.id === sec.id ? { ...s, collapsed: false } : s)) }}>＋</button>
+                  <button style={ghostBtn} title="Delete this section"
+                    onClick={() => patchSections(ss => ss.filter(s => s.id !== sec.id))}>×</button>
+                </div>
+
+                {/* tags */}
+                {!collapsed && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+                    {sec.tags.map(tag => (
+                      editing === `tag:${tag.id}` ? (
+                        <InlineEdit
+                          key={tag.id}
+                          value={tag.text}
+                          onCommit={v => {
+                            patchSections(ss => ss.map(s => s.id !== sec.id ? s : {
+                              ...s,
+                              tags: v
+                                ? s.tags.map(t => t.id === tag.id ? { ...t, text: v } : t)
+                                : s.tags.filter(t => t.id !== tag.id),   // emptied = deleted
+                            }))
+                            setEditing(null)
+                          }}
+                          onCancel={() => setEditing(null)}
+                          style={{ width: 130 }}
+                        />
+                      ) : (
+                        <div key={tag.id} style={{ ...chip(false), display: 'flex', alignItems: 'center', gap: 2, padding: '2px 3px 2px 6px' }}>
+                          <span onClick={() => append(tag.text)} title="Add to the prompt"
+                            style={{ cursor: 'pointer' }}>+ {tag.text}</span>
+                          <span onClick={() => setEditing(`tag:${tag.id}`)} title="Rename"
+                            style={{ ...ghostBtn, fontSize: 8, opacity: 0.55, cursor: 'pointer' }}>✎</span>
+                          <span
+                            onClick={() => patchSections(ss => ss.map(s => s.id !== sec.id ? s
+                              : { ...s, tags: s.tags.filter(t => t.id !== tag.id) }))}
+                            title="Delete this tag"
+                            style={{ ...ghostBtn, fontSize: 9, cursor: 'pointer' }}
+                          >×</span>
+                        </div>
+                      )
+                    ))}
+                    {addingTagTo === sec.id && (
+                      <InlineEdit
+                        value=""
+                        placeholder="new tag…"
+                        onCommit={v => {
+                          if (v) patchSections(ss => ss.map(s => s.id === sec.id
+                            ? { ...s, tags: [...s.tags, newTag(v)] } : s))
+                          setAddingTagTo(null)
+                        }}
+                        onCancel={() => setAddingTagTo(null)}
+                        style={{ width: 130 }}
+                      />
+                    )}
+                  </div>
+                )}
               </div>
-            </div>
-          ))}
-          {isUsingStubAdapter() && (
-            <div style={{
-              marginTop: 4, fontSize: 8.5, lineHeight: 1.5, color: 'rgba(255,200,140,0.65)',
-              borderTop: '1px solid rgba(255,255,255,0.07)', paddingTop: 5,
-            }}>
-              No image provider configured — generating placeholder tiles so the
-              flow is demonstrable. Wiring a real one is a single adapter function.
-            </div>
-          )}
+            )
+          })}
+
+          <button
+            style={{ ...chip(false), width: '100%', textAlign: 'center', marginTop: 2 }}
+            onClick={() => {
+              const s = newSection()
+              setKit({ ...kit, sections: [...kit.sections, s] })
+              setEditing(`sec:${s.id}`)
+            }}
+          >＋ new section</button>
+
+          <div style={{
+            marginTop: 8, fontSize: 8, lineHeight: 1.6, color: 'rgba(255,255,255,0.22)',
+            borderTop: '1px solid rgba(255,255,255,0.07)', paddingTop: 5,
+          }}>
+            click a tag to append it · ✎ rename · × delete · this vocabulary
+            belongs to this pad
+          </div>
         </div>
 
         {/* ── Saved prompts rail ── */}
         {showSaved && (
           <div style={{
-            width: 150, flexShrink: 0, borderLeft: '1px solid rgba(255,255,255,0.08)',
+            width: 158, flexShrink: 0, borderLeft: '1px solid rgba(255,255,255,0.08)',
             overflowY: 'auto', padding: 6,
           }}>
             <div style={{
               fontSize: 8.5, fontWeight: 700, letterSpacing: '0.6px', textTransform: 'uppercase',
               color: 'rgba(255,255,255,0.3)', marginBottom: 4,
             }}>Saved</div>
-            {saved.length === 0 && (
-              <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.25)' }}>Nothing saved yet.</div>
+            {kit.saved.length === 0 && (
+              <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.25)', lineHeight: 1.5 }}>
+                Nothing saved yet. Write a prompt and hit SAVE.
+              </div>
             )}
-            {saved.map((s, i) => (
+            {kit.saved.map(sp => (
               <div
-                key={i}
-                onClick={() => setText(s)}
-                title="Click to load this prompt"
+                key={sp.id}
                 style={{
-                  fontSize: 9, color: 'rgba(255,255,255,0.7)', lineHeight: 1.4,
-                  padding: '4px 5px', marginBottom: 3, cursor: 'pointer',
+                  padding: '4px 5px', marginBottom: 3, borderRadius: 3,
                   borderLeft: '2px solid rgba(140,190,255,0.5)',
-                  background: 'rgba(255,255,255,0.03)', borderRadius: 3,
+                  background: 'rgba(255,255,255,0.03)',
                 }}
-              >{s.length > 90 ? `${s.slice(0, 90)}…` : s}</div>
+              >
+                {editing === `saved:${sp.id}` ? (
+                  <InlineEdit
+                    value={sp.label}
+                    onCommit={v => {
+                      setKit({
+                        ...kit,
+                        saved: kit.saved.map(x => x.id === sp.id ? { ...x, label: v || x.label } : x),
+                      })
+                      setEditing(null)
+                    }}
+                    onCancel={() => setEditing(null)}
+                    style={{ width: '100%' }}
+                  />
+                ) : (
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 2 }}>
+                    <div
+                      onClick={() => setText(sp.text)}
+                      title="Click to load this prompt"
+                      style={{
+                        flex: 1, minWidth: 0, fontSize: 9, lineHeight: 1.4,
+                        color: 'rgba(255,255,255,0.72)', cursor: 'pointer',
+                      }}
+                    >{sp.label}</div>
+                    <span onClick={() => setEditing(`saved:${sp.id}`)} title="Rename"
+                      style={{ ...ghostBtn, fontSize: 8, cursor: 'pointer' }}>✎</span>
+                    <span
+                      onClick={() => setKit({ ...kit, saved: kit.saved.filter(x => x.id !== sp.id) })}
+                      title="Delete this saved prompt"
+                      style={{ ...ghostBtn, fontSize: 10, cursor: 'pointer' }}
+                    >×</span>
+                  </div>
+                )}
+              </div>
             ))}
           </div>
         )}

@@ -26,6 +26,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { createDebouncedIDBStorage } from '../utils/debouncedIDBStorage'
 import type { MediaType } from '../types/bar'
+import { recordHistory } from './historyStore'
 
 export interface Viewport3DCamera {
   theta: number   // azimuth (rad)
@@ -239,7 +240,22 @@ export const useViewport3DStore = create<Viewport3DStore>()(persist((set, get) =
     set({ selectedIds: [] })
   },
 
-  setActiveItem: (id, item) =>
+  setActiveItem: (id, item) => {
+    // Opening something IS the history event — recorded here rather than at
+    // each call site so every route into a Viewer (chip, click, dock,
+    // reconciliation) lands in the record exactly once.
+    if (item && activeItemKey(useViewport3DStore.getState().windows[id]?.activeItem) !== activeItemKey(item)) {
+      if (item.kind === 'media') {
+        recordHistory({
+          kind: 'view', sourceId: id,
+          label: item.name || item.url.split('/').pop() || item.mediaType,
+          face: item.mediaType === 'image' ? item.url : item.posterUrl ?? null,
+          url: item.url, mediaType: item.mediaType,
+        })
+      } else {
+        recordHistory({ kind: 'view', sourceId: id, label: item.name || 'Text page' })
+      }
+    }
     set(s => {
       const w = s.windows[id]
       if (!w || activeItemKey(w.activeItem) === activeItemKey(item)) return s
@@ -257,7 +273,8 @@ export const useViewport3DStore = create<Viewport3DStore>()(persist((set, get) =
           },
         },
       }
-    }),
+    })
+  },
 
   saveCamera: (id, cam) =>
     set(s => {

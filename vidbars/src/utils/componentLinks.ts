@@ -149,6 +149,26 @@ export function snapPanelToPanel(
   return { x: best.x, y: best.y }
 }
 
+/** Every panel touching this one, nearest first. A History window uses this
+ *  to decide WHICH history it is: docked to a Prompt Pad it shows prompts,
+ *  to a Media Pool it shows folders, to a Viewer's Rolodex it shows what was
+ *  opened. Free-standing, it shows everything. */
+export function adjacentPanels(
+  node: FreeNodeData,
+  nodes: Record<string, FreeNodeData>,
+): FreeNodeData[] {
+  const a = comparableRect(node)
+  if (!a) return []
+  const out: Array<{ n: FreeNodeData; d: number }> = []
+  for (const n of Object.values(nodes)) {
+    if (n.id === node.id || !isPanelType(n.type) || !sameSpace(node, n)) continue
+    const b = comparableRect(n)
+    if (!b || !rectsAdjacent(a, b, TOUCH_SLACK)) continue
+    out.push({ n, d: Math.abs(b.x - a.x) + Math.abs(b.y - a.y) })
+  }
+  return out.sort((x, y) => x.d - y.d).map(x => x.n)
+}
+
 /** Every list node touching this rect — used by a Viewer to find the
  *  Rolodex feeding it. */
 export function listsAdjacentTo(

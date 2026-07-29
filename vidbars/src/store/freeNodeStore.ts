@@ -2,15 +2,17 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { createDebouncedIDBStorage } from '../utils/debouncedIDBStorage'
 
-// 'list' | 'pool' | 'prompt' are COMPONENTS rather than media: a node whose
-// body is a whole panel. They ride the same substrate as everything else —
-// drag, resize, pin, dock, select, undo, export — which is the point of the
-// modular design: a component is just a node that happens to be a tool.
+// 'list' | 'pool' | 'prompt' | 'history' are COMPONENTS rather than media: a
+// node whose body is a whole panel. They ride the same substrate as
+// everything else — drag, resize, pin, dock, select, undo, export — which is
+// the point of the modular design: a component is just a node that happens
+// to be a tool.
 export type FreeNodeType =
   | 'note' | 'image' | 'text' | 'video' | 'audio' | 'model'
   | 'list'     // the Rolodex / image scroller
-  | 'pool'     // media pool + generation history
+  | 'pool'     // media pool — a folder on disk
   | 'prompt'   // prompt pad + tag palette
+  | 'history'  // history lens — shows the kind of history it is docked to
 
 export interface TextStyle {
   fontSize: number       // in px (base, before zoom scaling)
@@ -146,11 +148,11 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
     const color = COLORS[colorIdx++ % COLORS.length]
     const labels: Record<FreeNodeType, string> = {
       image: 'Image', note: 'Note', text: 'Text', video: 'Video', audio: 'Audio', model: 'Model',
-      list: 'List', pool: 'Media Pool', prompt: 'Prompt Pad',
+      list: 'List', pool: 'Media Pool', prompt: 'Prompt Pad', history: 'History',
     }
     const heights: Record<FreeNodeType, number> = {
       image: 180, note: 160, text: 180, video: 180, audio: 120, model: 180,
-      list: 440, pool: 420, prompt: 360,
+      list: 440, pool: 420, prompt: 360, history: 400,
     }
     const widths: Partial<Record<FreeNodeType, number>> = {
       audio: 260,

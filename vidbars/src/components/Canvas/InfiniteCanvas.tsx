@@ -591,6 +591,7 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
               } },
               { label: '▦  Add Media Pool', action: () => { addNodeAtCursor('pool', 520, 420); setAddMenu(null) } },
               { label: '✎  Add Prompt Pad', action: () => { addNodeAtCursor('prompt', 460, 360); setAddMenu(null) } },
+              { label: '⟲  Add History', action: () => { addNodeAtCursor('history', 260, 400); setAddMenu(null) } },
               { label: '≔  Add List', action: () => {
                 const nid = addNodeAtCursor('list', 240, 440)
                 if (nid) useFreeNodeStore.getState().updateFreeNode(nid, {
