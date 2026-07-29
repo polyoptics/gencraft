@@ -17,6 +17,7 @@ import { useFreeNodeStore } from '../store/freeNodeStore'
 import type { FreeNodeData } from '../store/freeNodeStore'
 import { useViewport3DStore } from '../store/viewport3dStore'
 import type { ViewportWindow3D } from '../store/viewport3dStore'
+import { useCanvasStore } from '../store/canvasStore'
 import { rectsTouch, DOCK_TOLERANCE } from './viewportDocking'
 import { isDockableTile } from './contentTraversal'
 import { isPanelType } from './componentLinks'
@@ -56,9 +57,16 @@ export function computeCarrySet(seed: { nodeId?: string; windowId?: string }): C
   // would differ from the set that is docked.
   const tol = DOCK_TOLERANCE
 
+  // The home Rolodex is app furniture, not a composable instance: it lives
+  // pinned at the screen origin and is toggled by the Cards button. Anything
+  // pinned near the top-left overlaps it, so without this it gets swept onto
+  // the canvas by an unrelated unpin — which is exactly what happened the
+  // first time this ran.
+  const homeId = useCanvasStore.getState().homeRolodexId
+
   // Only same-placement things can be in reach of each other.
   const candNodes = Object.values(nodes).filter(
-    n => !!n.pin === pinned && (isPanelType(n.type) || isDockableTile(n)),
+    n => n.id !== homeId && !!n.pin === pinned && (isPanelType(n.type) || isDockableTile(n)),
   )
   const candWins = Object.values(windows).filter(w => !!w.pin === pinned)
 
