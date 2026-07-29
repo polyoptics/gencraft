@@ -44,7 +44,12 @@ export function updateDeckMagnetPreview(canDock: boolean, groupId: string): void
   const cand = wins.length > 0 ? findMagnetCandidate(rect, wins, radius) : null
   const mp = useMagnetPreviewStore.getState()
   if (cand) {
-    mp.setPreview({ windowId: cand.windowId, edge: cand.edge, x: cand.snapped.x, y: cand.snapped.y, width: rect.width, height: rect.height })
+    const t = wins.find(w => w.id === cand.windowId)!
+    mp.setPreview({
+      edge: cand.edge, space: 'canvas', windowId: cand.windowId,
+      x: cand.snapped.x, y: cand.snapped.y, width: rect.width, height: rect.height,
+      target: { x: t.x, y: t.y, width: t.width, height: t.height },
+    })
   } else if (mp.preview) {
     mp.setPreview(null)
   }
@@ -76,7 +81,10 @@ export function finishDeckMagnetDock(
     bs.setGroupPosBatch(updates)
   }
   const first = defaultBrowseItem(collectDeckContent(rootGroupId, bs.groups, bs.boards))
-  if (first) useViewport3DStore.getState().setActiveItem(preview.windowId, first)
+  // A deck only ever previews against a Viewer, but the field is optional
+  // now that panels share the affordance, so the guard is real rather than
+  // ceremonial.
+  if (first && preview.windowId) useViewport3DStore.getState().setActiveItem(preview.windowId, first)
   return true
 }
 

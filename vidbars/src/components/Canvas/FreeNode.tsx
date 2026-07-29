@@ -156,7 +156,31 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
       const cand = winRects.length > 0 ? findMagnetCandidate(n, winRects, magnetRadiusForZoom(zoom)) : null
       const mp = useMagnetPreviewStore.getState()
       if (cand) {
-        mp.setPreview({ windowId: cand.windowId, edge: cand.edge, x: cand.snapped.x, y: cand.snapped.y, width: n.width, height: n.height })
+        const t = winRects.find(w => w.id === cand.windowId)!
+        mp.setPreview({
+          edge: cand.edge, space: 'canvas', windowId: cand.windowId,
+          x: cand.snapped.x, y: cand.snapped.y, width: n.width, height: n.height,
+          target: { x: t.x, y: t.y, width: t.width, height: t.height },
+        })
+      } else if (mp.preview) {
+        mp.setPreview(null)
+      }
+    }
+    // PANEL → PANEL, in either placement. This is the same gesture, so it
+    // gets the same affordance: without it, panel snaps were the one magnet
+    // where you only found out where it landed after letting go.
+    if (n && isPanelType(n.type)) {
+      const snap = snapPanelToPanel(n, useFreeNodeStore.getState().nodes, zoom)
+      const mp = useMagnetPreviewStore.getState()
+      if (snap) {
+        const scale = n.pin ? n.pin.scale : 1
+        mp.setPreview({
+          edge: snap.edge,
+          space: n.pin ? 'screen' : 'canvas',
+          x: snap.x, y: snap.y,
+          width: n.width * scale, height: n.height * scale,
+          target: snap.target,
+        })
       } else if (mp.preview) {
         mp.setPreview(null)
       }
@@ -177,6 +201,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
     if (node.pin && dragHasMoved.current) {
       // …but a pinned PANEL still magnets to its pinned neighbours, which
       // is how a pinned pool/rolodex/viewer row gets built on screen.
+      useMagnetPreviewStore.getState().setPreview(null)
       const snap = snapPanelToPanel(node, useFreeNodeStore.getState().nodes, zoom)
       if (snap && node.pin) updateFreeNode(id, { pin: { ...node.pin, x: snap.x, y: snap.y } })
       try { wrapperRef.current?.releasePointerCapture(e.pointerId) } catch { /* ignore */ }
@@ -207,7 +232,9 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
     {
       const preview = useMagnetPreviewStore.getState().preview
       if (preview) useMagnetPreviewStore.getState().setPreview(null)
-      if (dragHasMoved.current && isDockableTile(node) && preview) {
+      // Only a VIEWER preview docks — a panel-to-panel ghost has no window
+      // and is handled by the panel magnet below.
+      if (dragHasMoved.current && isDockableTile(node) && preview?.windowId) {
         const cur = useFreeNodeStore.getState().nodes[id]
         if (cur) updateFreeNode(id, { x: preview.x, y: preview.y })
         // Content tiles load their item; LIST tiles just snap — the
@@ -224,7 +251,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
     if (dragHasMoved.current && isPanelType(node.type)) {
       const cur = useFreeNodeStore.getState().nodes[id]
       const snap = cur ? snapPanelToPanel(cur, useFreeNodeStore.getState().nodes, zoom) : null
-      if (snap) updateFreeNode(id, snap)
+      if (snap) updateFreeNode(id, { x: snap.x, y: snap.y })
     }
     if (dragHasMoved.current && node) {
       const hasMedia = !!node.imageUrl

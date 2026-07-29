@@ -15,7 +15,7 @@
 // which composes into the chain from the design: Pool | Rolodex | Viewer.
 
 import type { FreeNodeData } from '../store/freeNodeStore'
-import { DOCK_TOLERANCE, MAGNET_RADIUS_PX, magnetRadiusForZoom } from './viewportDocking'
+import { DOCK_TOLERANCE, MAGNET_RADIUS_PX, magnetRadiusForZoom, type DockEdge } from './viewportDocking'
 
 /** Touching, with a little slack so a hand-dragged panel that lands a
  *  pixel short still counts. Deliberately the SAME constant as docking and
@@ -99,18 +99,29 @@ export function isPanelType(t: string): boolean {
  *  canvas panel, pin x/y for a pinned one — so the caller writes the result
  *  straight back to whichever it owns. Returns null when nothing is in
  *  reach; the caller then keeps the raw drop. */
+export interface PanelSnap {
+  /** Where the dragged panel lands. */
+  x: number
+  y: number
+  /** The neighbour it meets, and which of ITS edges — everything the
+   *  "will snap here" affordance needs, so the drag can show the landing
+   *  before you commit to it. */
+  target: Rect
+  edge: DockEdge
+}
+
 export function snapPanelToPanel(
   dragged: FreeNodeData,
   nodes: Record<string, FreeNodeData>,
   zoom: number,
-): { x: number; y: number } | null {
+): PanelSnap | null {
   if (!isPanelType(dragged.type)) return null
   const a = comparableRect(dragged)
   if (!a) return null
   // A pinned panel is already screen-space, so its reach is raw pixels.
   const reach = dragged.pin ? MAGNET_RADIUS_PX : magnetRadiusForZoom(zoom)
 
-  interface Landing { x: number; y: number; d: number }
+  interface Landing { x: number; y: number; d: number; target: Rect; edge: DockEdge }
   const cands: Landing[] = []
   for (const n of Object.values(nodes)) {
     if (n.id === dragged.id || !isPanelType(n.type)) continue
@@ -125,28 +136,28 @@ export function snapPanelToPanel(
     const overlapY = Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y)
     const overlapX = Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x)
 
-    const consider = (nx: number, ny: number, d: number): void => {
-      if (d <= reach) cands.push({ x: nx, y: ny, d })
+    const consider = (nx: number, ny: number, d: number, edge: DockEdge): void => {
+      if (d <= reach) cands.push({ x: nx, y: ny, d, target: b, edge })
     }
 
     if (overlapY > -reach) {
       // Left/right of b, keeping the vertical offset the user dragged to
       // unless it is close to flush-top, which is the common intent.
       const ny = Math.abs(a.y - b.y) <= reach ? b.y : a.y
-      consider(b.x - a.width, ny, Math.abs(a.x + a.width - b.x))
-      consider(b.x + b.width, ny, Math.abs(a.x - (b.x + b.width)))
+      consider(b.x - a.width, ny, Math.abs(a.x + a.width - b.x), 'left')
+      consider(b.x + b.width, ny, Math.abs(a.x - (b.x + b.width)), 'right')
     }
     if (overlapX > -reach) {
       const nx = Math.abs(a.x - b.x) <= reach ? b.x : a.x
-      consider(nx, b.y - a.height, Math.abs(a.y + a.height - b.y))
-      consider(nx, b.y + b.height, Math.abs(a.y - (b.y + b.height)))
+      consider(nx, b.y - a.height, Math.abs(a.y + a.height - b.y), 'top')
+      consider(nx, b.y + b.height, Math.abs(a.y - (b.y + b.height)), 'bottom')
     }
   }
   if (cands.length === 0) return null
   // Nearest edge wins, so a panel dropped in a corner picks one side
   // instead of splitting the difference between two.
   const best = cands.reduce((m, c) => (c.d < m.d ? c : m))
-  return { x: best.x, y: best.y }
+  return { x: best.x, y: best.y, target: best.target, edge: best.edge }
 }
 
 /** Every panel touching this one, nearest first. A History window uses this

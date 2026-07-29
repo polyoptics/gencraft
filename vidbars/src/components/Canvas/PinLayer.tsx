@@ -26,6 +26,7 @@ import { useViewport3DStore } from '../../store/viewport3dStore'
 import { FreeNode } from './FreeNode'
 import { Viewport3DFrame } from '../Viewport3D/Viewport3DFrame'
 import { GLPinnedCanvasHost } from '../Viewport3D/GLPinnedCanvasHost'
+import { MagnetDockPreview } from './MagnetDockPreview'
 
 export const PinLayer: React.FC = () => {
   const nodes = useFreeNodeStore(s => s.nodes)
@@ -69,6 +70,10 @@ export const PinLayer: React.FC = () => {
           second WebGL context is created otherwise. */}
       {pinnedViewerIds.length > 0 && <GLPinnedCanvasHost />}
       {pinnedViewerIds.map(wid => <Viewport3DFrame key={wid} id={wid} />)}
+      {/* The screen-space half of the magnet affordance. Pinned rects are
+          pixels, so drawing them in the canvas layer would put the ghost
+          somewhere else entirely. */}
+      <MagnetDockPreview space="screen" />
       {ids.map(id => (
         (id === homeId && !homeVisible) ? null : <FreeNode key={id} id={id} />
       ))}
