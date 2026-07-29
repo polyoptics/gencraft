@@ -34,6 +34,9 @@ import { clampPhi, panOrbit } from '../../three/orbitState'
 import { useSeedHoverFromCursor } from '../../utils/pointerTracker'
 import { ViewportSwitcherStrip } from './ViewportSwitcherStrip'
 import { ContentView } from './ContentViews'
+import { snapWindowToComponents } from '../../utils/componentLinks'
+import { useMagnetPreviewStore } from '../../store/magnetPreviewStore'
+import { viewportVisualRect, VIEWPORT_HEADER_SCREEN_H } from '../../utils/viewportDocking'
 
 /** Selecting a Viewer takes over the canvas selection outright, so the
  *  Delete key's priority chain is never asked to arbitrate between two lit
@@ -124,6 +127,57 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
     dragLast.current = { x: e.clientX, y: e.clientY }
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
   }, [id])
+  // ── Magnet ghost while dragging the Viewer ───────────────────────────
+  // A Viewer used to be the only component you could drag with NO warning
+  // of where it would land: it was always the magnet's TARGET, never the
+  // thing being magneted. Same gesture, same affordance.
+  const showMagnetGhost = useCallback(() => {
+    const st = useViewport3DStore.getState()
+    const w = st.windows[id]
+    if (!w) return
+    const z = useCanvasStore.getState().zoom
+    const snap = snapWindowToComponents(
+      w, useFreeNodeStore.getState().nodes, st.windows, z)
+    const mp = useMagnetPreviewStore.getState()
+    if (!snap) { if (mp.preview) mp.setPreview(null); return }
+    // The snap is for the VISUAL rect, so the ghost is drawn on that too —
+    // it is the shape the user will actually see land.
+    const v = viewportVisualRect(w, z)
+    mp.setPreview({
+      edge: snap.edge,
+      space: w.pin ? 'screen' : 'canvas',
+      x: snap.x, y: snap.y, width: v.width, height: v.height,
+      target: snap.target,
+    })
+  }, [id])
+
+  /** Land the Viewer on its ghost. The snap is in VISUAL-rect coordinates,
+   *  so the header height comes back off to get the stored y. */
+  const applyMagnetSnap = useCallback(() => {
+    const st = useViewport3DStore.getState()
+    const w = st.windows[id]
+    useMagnetPreviewStore.getState().setPreview(null)
+    if (!w) return
+    const z = useCanvasStore.getState().zoom
+    const snap = snapWindowToComponents(
+      w, useFreeNodeStore.getState().nodes, st.windows, z)
+    if (!snap) return
+    const headerOffset = w.pin
+      ? VIEWPORT_HEADER_SCREEN_H
+      : VIEWPORT_HEADER_SCREEN_H / Math.max(0.01, z)
+    if (w.pin) {
+      st.updateWindow(id, { pin: { ...w.pin, x: snap.x, y: snap.y + headerOffset } })
+    } else {
+      st.updateWindow(id, { x: snap.x, y: snap.y + headerOffset })
+    }
+  }, [id])
+
+  const onHeaderUp = useCallback((e: React.PointerEvent) => {
+    if (!(e.currentTarget as HTMLElement).hasPointerCapture(e.pointerId)) return
+    try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId) } catch { /* ignore */ }
+    applyMagnetSnap()
+  }, [applyMagnetSnap])
+
   const onHeaderMove = useCallback((e: React.PointerEvent) => {
     if (!(e.currentTarget as HTMLElement).hasPointerCapture(e.pointerId)) return
     const dx = (e.clientX - dragLast.current.x) / gz
@@ -134,6 +188,7 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
       // with.
       movePinnedWindow(id, e.clientX - dragLast.current.x, e.clientY - dragLast.current.y)
       dragLast.current = { x: e.clientX, y: e.clientY }
+      showMagnetGhost()
       return
     }
     moveWindow(id, dx, dy)
@@ -148,7 +203,8 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
       }))
     }
     dragLast.current = { x: e.clientX, y: e.clientY }
-  }, [id, moveWindow, movePinnedWindow, win?.pin, gz])
+    showMagnetGhost()
+  }, [id, moveWindow, movePinnedWindow, win?.pin, gz, showMagnetGhost])
 
   // ── Reshape handles ── eight, matching FreeNode. Growing only from the
   //    SE corner meant a Viewer could never be pulled back from the left or
@@ -348,6 +404,7 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
         data-viewer-chrome=""
         onPointerDown={onHeaderDown}
         onPointerMove={onHeaderMove}
+        onPointerUp={onHeaderUp}
         style={{
           display: 'flex', alignItems: 'center', gap: 6 * iz,
           height: headerH, flexShrink: 0,

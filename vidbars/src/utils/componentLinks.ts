@@ -111,27 +111,50 @@ export interface PanelSnap {
   edge: DockEdge
 }
 
-export function snapPanelToPanel(
-  dragged: FreeNodeData,
+/** Everything a dragged component can snap to, in ONE space.
+ *
+ *  Panels AND Viewers, deliberately together. Treating them as different
+ *  kinds is what made the affordance feel broken: a Rolodex approaching a
+ *  Media Pool got a ghost, the same Rolodex approaching a Viewer got one
+ *  only because a list happens to be a "dockable tile", and a Media Pool
+ *  approaching a Viewer got nothing at all. They are all components; from
+ *  the magnet's point of view they are all just rectangles. */
+export function magnetTargets(
+  pinned: boolean,
+  exclude: { nodeId?: string; windowId?: string },
   nodes: Record<string, FreeNodeData>,
+  windows: Record<string, ViewportWindow3D>,
   zoom: number,
-): PanelSnap | null {
-  if (!isPanelType(dragged.type)) return null
-  const a = comparableRect(dragged)
-  if (!a) return null
-  // A pinned panel is already screen-space, so its reach is raw pixels.
-  const reach = dragged.pin ? MAGNET_RADIUS_PX : magnetRadiusForZoom(zoom)
+): Rect[] {
+  const out: Rect[] = []
+  for (const n of Object.values(nodes)) {
+    if (n.id === exclude.nodeId || !isPanelType(n.type)) continue
+    if (!!n.pin !== pinned) continue
+    const r = comparableRect(n)
+    if (r) out.push(r)
+  }
+  for (const w of Object.values(windows)) {
+    if (w.id === exclude.windowId) continue
+    if (!!w.pin !== pinned) continue
+    // Header-INCLUSIVE, so a panel lands level with the Viewer's title bar
+    // rather than level with its content pane.
+    const v = viewportVisualRect(w, zoom)
+    out.push({ x: v.x, y: v.y, width: v.width, height: v.height })
+  }
+  return out
+}
 
+/** The core snap: a rect against a set of rects, in one space. Both the
+ *  panel and the Viewer paths go through here, so "what does snapping feel
+ *  like" is answered in exactly one place. */
+export function snapRectToTargets(
+  a: Rect,
+  targets: Rect[],
+  reach: number,
+): PanelSnap | null {
   interface Landing { x: number; y: number; d: number; target: Rect; edge: DockEdge }
   const cands: Landing[] = []
-  for (const n of Object.values(nodes)) {
-    if (n.id === dragged.id || !isPanelType(n.type)) continue
-    // Only panels in the same space are candidates — a canvas panel and a
-    // pinned one are never near each other in any meaningful sense.
-    if (!sameSpace(dragged, n)) continue
-    const b = comparableRect(n)
-    if (!b) continue
-
+  for (const b of targets) {
     // Overlap on each axis decides which edges are even candidates: you can
     // only sit on someone's left if you also share some vertical extent.
     const overlapY = Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y)
@@ -155,10 +178,52 @@ export function snapPanelToPanel(
     }
   }
   if (cands.length === 0) return null
-  // Nearest edge wins, so a panel dropped in a corner picks one side
+  // Nearest edge wins, so a component dropped in a corner picks one side
   // instead of splitting the difference between two.
   const best = cands.reduce((m, c) => (c.d < m.d ? c : m))
   return { x: best.x, y: best.y, target: best.target, edge: best.edge }
+}
+
+/** Reach in the dragged thing's own space: pinned rects are already screen
+ *  pixels, canvas ones have to grow as the world shrinks. */
+export function magnetReach(pinned: boolean, zoom: number): number {
+  return pinned ? MAGNET_RADIUS_PX : magnetRadiusForZoom(zoom)
+}
+
+/** Where a dragged PANEL should land. */
+export function snapPanelToPanel(
+  dragged: FreeNodeData,
+  nodes: Record<string, FreeNodeData>,
+  zoom: number,
+  windows: Record<string, ViewportWindow3D> = {},
+): PanelSnap | null {
+  if (!isPanelType(dragged.type)) return null
+  const a = comparableRect(dragged)
+  if (!a) return null
+  const pinned = !!dragged.pin
+  return snapRectToTargets(
+    a,
+    magnetTargets(pinned, { nodeId: dragged.id }, nodes, windows, zoom),
+    magnetReach(pinned, zoom),
+  )
+}
+
+/** Where a dragged VIEWER should land. Returns the landing for its VISUAL
+ *  rect (header included) — callers add the header back to get win.y, the
+ *  same asymmetry viewportVisualRect already documents. */
+export function snapWindowToComponents(
+  win: ViewportWindow3D,
+  nodes: Record<string, FreeNodeData>,
+  windows: Record<string, ViewportWindow3D>,
+  zoom: number,
+): PanelSnap | null {
+  const pinned = !!win.pin
+  const v = viewportVisualRect(win, zoom)
+  return snapRectToTargets(
+    { x: v.x, y: v.y, width: v.width, height: v.height },
+    magnetTargets(pinned, { windowId: win.id }, nodes, windows, zoom),
+    magnetReach(pinned, zoom),
+  )
 }
 
 /** The Viewer a panel is magneted to, if any — the other half of the

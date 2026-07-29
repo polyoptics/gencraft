@@ -18,6 +18,7 @@ import { cardVisualRect } from '../../hooks/useCardDecks'
 import { findMagnetCandidate, magnetRadiusForZoom, viewportVisualRect, type WindowRect } from '../../utils/viewportDocking'
 import { tileBrowseItem, isDockableTile } from '../../utils/contentTraversal'
 import { snapPanelToPanel, isPanelType } from '../../utils/componentLinks'
+import { panelContentScale, clampUiScale } from '../UI/PanelSurface'
 import { CardRolodex } from '../Rolodex/CardRolodex'
 import { MediaPool } from '../Pool/MediaPool'
 import { PromptPad } from '../Prompt/PromptPad'
@@ -94,7 +95,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
   const wasSelectedOnDown = useRef(false)
   const resizeLastX = useRef(0)
   const resizeLastY = useRef(0)
-  const resizeStart = useRef({ x: 0, y: 0, w: 0, h: 0, nx: 0, ny: 0 })
+  const resizeStart = useRef({ x: 0, y: 0, w: 0, h: 0, nx: 0, ny: 0, u: 1 })
   /** Which handle is being dragged: any of n/s/e/w combined. */
   const resizeDir = useRef('se')
 
@@ -175,7 +176,9 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
     // gets the same affordance: without it, panel snaps were the one magnet
     // where you only found out where it landed after letting go.
     if (n && isPanelType(n.type)) {
-      const snap = snapPanelToPanel(n, useFreeNodeStore.getState().nodes, zoom)
+      const snap = snapPanelToPanel(
+        n, useFreeNodeStore.getState().nodes, zoom,
+        useViewport3DStore.getState().windows)
       const mp = useMagnetPreviewStore.getState()
       if (snap) {
         const scale = n.pin ? n.pin.scale : 1
@@ -207,7 +210,9 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
       // …but a pinned PANEL still magnets to its pinned neighbours, which
       // is how a pinned pool/rolodex/viewer row gets built on screen.
       useMagnetPreviewStore.getState().setPreview(null)
-      const snap = snapPanelToPanel(node, useFreeNodeStore.getState().nodes, zoom)
+      const snap = snapPanelToPanel(
+        node, useFreeNodeStore.getState().nodes, zoom,
+        useViewport3DStore.getState().windows)
       if (snap && node.pin) updateFreeNode(id, { pin: { ...node.pin, x: snap.x, y: snap.y } })
       try { wrapperRef.current?.releasePointerCapture(e.pointerId) } catch { /* ignore */ }
       dragHasMoved.current = false
@@ -255,7 +260,10 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
     // Runs AFTER the window magnet, so docking to a Viewer still wins.
     if (dragHasMoved.current && isPanelType(node.type)) {
       const cur = useFreeNodeStore.getState().nodes[id]
-      const snap = cur ? snapPanelToPanel(cur, useFreeNodeStore.getState().nodes, zoom) : null
+      const snap = cur
+        ? snapPanelToPanel(cur, useFreeNodeStore.getState().nodes, zoom,
+                           useViewport3DStore.getState().windows)
+        : null
       if (snap) updateFreeNode(id, { x: snap.x, y: snap.y })
     }
     if (dragHasMoved.current && node) {
@@ -481,6 +489,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
       w: node.width, h: node.height,
       nx: node.pin ? node.pin.x : node.x,
       ny: node.pin ? node.pin.y : node.y,
+      u: panelContentScale(node),
     }
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
   }, [node.width, node.height, node.x, node.y, node.pin])
@@ -512,6 +521,14 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
       const w = Math.max(120, 80 / ratio, s.w + t)
       const h = w * ratio
       const patch: Partial<FreeNodeData> = { width: w, height: h }
+      // …and the CONTENTS scale with the box. Without this, a counter-scaled
+      // panel just gained room at the same text size, which is "bigger
+      // window, same squint" rather than "bigger panel". Growing uiScale by
+      // the same factor is what makes the gesture feel like zooming the whole
+      // component. Tiles have no uiScale and are unaffected.
+      if (isPanelType(node.type) && s.w > 0) {
+        patch.uiScale = clampUiScale(s.u * (w / s.w))
+      }
       // Growing from a west/north handle has to move the opposite corner's
       // anchor, or the node grows away from the hand holding it.
       const k = node.pin ? node.pin.scale : 1
