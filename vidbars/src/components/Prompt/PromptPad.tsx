@@ -59,7 +59,13 @@ const InlineEdit: React.FC<{
 export const PromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
   const node = useFreeNodeStore(s => s.nodes[nodeId])
   const updateFreeNode = useFreeNodeStore(s => s.updateFreeNode)
-  const { gz, showFooter, narrow } = usePanelChrome(node)
+  const { gz, showFooter, screenW } = usePanelChrome(node)
+  // The saved rail is a fixed 158px. On a narrow pad that is half the
+  // width, and the workshop — the thing you are actually using — gets
+  // squeezed to one thin column. Measured at 300px wide the section cards
+  // came out 113px. Below this the rail folds away and the SAVE/▤ buttons
+  // are how you get it back.
+  const railFits = screenW >= 430
   const [showSaved, setShowSaved] = useState(true)
   const [editing, setEditing] = useState<string | null>(null)   // 'sec:<id>' | 'tag:<id>' | 'saved:<id>'
   const [addingTagTo, setAddingTagTo] = useState<string | null>(null)
@@ -181,99 +187,167 @@ export const PromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
 
       <div style={{ flex: 1, display: 'flex', minHeight: 0, borderTop: '1px solid rgba(255,255,255,0.08)' }}>
         {/* ── Tag workshop ── */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: 6, minWidth: 0 }}>
-          {kit.sections.map(sec => {
-            const collapsed = !!sec.collapsed
-            return (
-              <div key={sec.id} style={{ marginBottom: 7 }}>
-                {/* section header */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 3, marginBottom: 3 }}>
-                  <button
-                    onClick={() => patchSections(ss => ss.map(s =>
-                      s.id === sec.id ? { ...s, collapsed: !collapsed } : s))}
-                    title={collapsed ? 'Expand' : 'Collapse'}
-                    style={{ ...ghostBtn, color: 'rgba(255,255,255,0.55)', fontSize: 13, padding: '0 4px' }}
-                  >{collapsed ? '▸' : '▾'}</button>
-                  {editing === `sec:${sec.id}` ? (
-                    <InlineEdit
-                      value={sec.label}
-                      onCommit={v => {
-                        if (v) patchSections(ss => ss.map(s => s.id === sec.id ? { ...s, label: v } : s))
-                        setEditing(null)
-                      }}
-                      onCancel={() => setEditing(null)}
-                      style={{ flex: 1 }}
-                    />
-                  ) : (
-                    <div
-                      onClick={() => setEditing(`sec:${sec.id}`)}
-                      title="Click to rename"
-                      style={{
-                        flex: 1, fontSize: 10.5, fontWeight: 700, letterSpacing: '0.6px',
-                        textTransform: 'uppercase', color: 'rgba(255,255,255,0.32)',
-                        cursor: 'text', userSelect: 'none',
-                      }}
-                    >{sec.label}{collapsed ? ` · ${sec.tags.length}` : ''}</div>
-                  )}
-                  <button style={ghostBtn} title="Add a tag here"
-                    onClick={() => { setAddingTagTo(sec.id); if (collapsed) patchSections(ss => ss.map(s => s.id === sec.id ? { ...s, collapsed: false } : s)) }}>＋</button>
-                  <button style={ghostBtn} title="Delete this section"
-                    onClick={() => patchSections(ss => ss.filter(s => s.id !== sec.id))}>×</button>
-                </div>
+        <div style={{ flex: 1, overflowY: 'auto', padding: 7, minWidth: 0 }}>
+          {/* Sections flow into COLUMNS as the pad gets wider. A single
+              wrapping row of loose tags sprawled when the pad was stretched
+              horizontally — lots of motion, little order. CSS multi-column
+              does the responsive part with no measuring: narrow pads get one
+              column of stacked cards, wide pads get two or three side by
+              side, and a card is never split down the middle. */}
+          <div style={{ columnWidth: 190, columnGap: 8 }}>
+            {kit.sections.map(sec => {
+              const collapsed = !!sec.collapsed
+              const isRenaming = editing === `sec:${sec.id}`
+              return (
+                <div
+                  key={sec.id}
+                  style={{
+                    breakInside: 'avoid',
+                    marginBottom: 8,
+                    border: '1px solid rgba(255,255,255,0.11)',
+                    borderRadius: 6,
+                    background: 'rgba(255,255,255,0.025)',
+                    overflow: 'hidden',
+                  }}
+                >
+                  {/* ── Section header ── the WHOLE bar toggles. A 9px caret
+                      was both invisible and ambiguous: nothing said what it
+                      would fold. A bounded card with a tinted title bar says
+                      "this lid belongs to this box". */}
+                  <div
+                    onClick={() => { if (!isRenaming) patchSections(ss => ss.map(s =>
+                      s.id === sec.id ? { ...s, collapsed: !collapsed } : s)) }}
+                    title={collapsed ? 'Expand this section' : 'Collapse this section'}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 5,
+                      padding: '5px 6px',
+                      background: 'rgba(255,255,255,0.055)',
+                      borderBottom: collapsed ? 'none' : '1px solid rgba(255,255,255,0.09)',
+                      cursor: isRenaming ? 'default' : 'pointer',
+                      userSelect: 'none',
+                    }}
+                  >
+                    <span style={{
+                      fontSize: 11, color: 'rgba(255,255,255,0.5)', width: 10,
+                      display: 'inline-block', flexShrink: 0,
+                      transform: collapsed ? 'rotate(-90deg)' : 'none',
+                      transition: 'transform 160ms ease-out',
+                    }}>▾</span>
 
-                {/* tags */}
-                {!collapsed && (
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
-                    {sec.tags.map(tag => (
-                      editing === `tag:${tag.id}` ? (
-                        <InlineEdit
-                          key={tag.id}
-                          value={tag.text}
-                          onCommit={v => {
-                            patchSections(ss => ss.map(s => s.id !== sec.id ? s : {
-                              ...s,
-                              tags: v
-                                ? s.tags.map(t => t.id === tag.id ? { ...t, text: v } : t)
-                                : s.tags.filter(t => t.id !== tag.id),   // emptied = deleted
-                            }))
-                            setEditing(null)
-                          }}
-                          onCancel={() => setEditing(null)}
-                          style={{ width: 130 }}
-                        />
-                      ) : (
-                        <div key={tag.id} style={{ ...chip(false), display: 'flex', alignItems: 'center', gap: 2, padding: '2px 3px 2px 6px' }}>
-                          <span onClick={() => append(tag.text)} title="Add to the prompt"
-                            style={{ cursor: 'pointer' }}>+ {tag.text}</span>
-                          <span onClick={() => setEditing(`tag:${tag.id}`)} title="Rename"
-                            style={{ ...ghostBtn, fontSize: 10, opacity: 0.55, cursor: 'pointer' }}>✎</span>
-                          <span
-                            onClick={() => patchSections(ss => ss.map(s => s.id !== sec.id ? s
-                              : { ...s, tags: s.tags.filter(t => t.id !== tag.id) }))}
-                            title="Delete this tag"
-                            style={{ ...ghostBtn, fontSize: 11, cursor: 'pointer' }}
-                          >×</span>
-                        </div>
-                      )
-                    ))}
-                    {addingTagTo === sec.id && (
+                    {isRenaming ? (
                       <InlineEdit
-                        value=""
-                        placeholder="new tag…"
+                        value={sec.label}
                         onCommit={v => {
-                          if (v) patchSections(ss => ss.map(s => s.id === sec.id
-                            ? { ...s, tags: [...s.tags, newTag(v)] } : s))
-                          setAddingTagTo(null)
+                          if (v) patchSections(ss => ss.map(s => s.id === sec.id ? { ...s, label: v } : s))
+                          setEditing(null)
                         }}
-                        onCancel={() => setAddingTagTo(null)}
-                        style={{ width: 130 }}
+                        onCancel={() => setEditing(null)}
+                        style={{ flex: 1 }}
                       />
+                    ) : (
+                      <span
+                        onDoubleClick={e => { e.stopPropagation(); setEditing(`sec:${sec.id}`) }}
+                        title="Double-click to rename"
+                        style={{
+                          flex: 1, minWidth: 0, fontSize: 11, fontWeight: 700,
+                          letterSpacing: '0.5px', textTransform: 'uppercase',
+                          color: 'rgba(255,255,255,0.62)',
+                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        }}
+                      >{sec.label}</span>
                     )}
+
+                    <span style={{
+                      fontSize: 10, color: 'rgba(255,255,255,0.32)', flexShrink: 0,
+                      background: 'rgba(255,255,255,0.06)', borderRadius: 8, padding: '0 5px',
+                    }}>{sec.tags.length}</span>
+                    <span
+                      onClick={e => {
+                        e.stopPropagation()
+                        setAddingTagTo(sec.id)
+                        if (collapsed) patchSections(ss => ss.map(s => s.id === sec.id ? { ...s, collapsed: false } : s))
+                      }}
+                      title="Add a tag here"
+                      style={{ ...ghostBtn, fontSize: 12, cursor: 'pointer' }}
+                    >＋</span>
+                    <span
+                      onClick={e => { e.stopPropagation(); patchSections(ss => ss.filter(s => s.id !== sec.id)) }}
+                      title="Delete this section"
+                      style={{ ...ghostBtn, fontSize: 12, cursor: 'pointer' }}
+                    >×</span>
                   </div>
-                )}
-              </div>
-            )
-          })}
+
+                  {/* ── Tags ── one per line. Stacked reads as a list you can
+                      scan; the wrapping row read as a paragraph of buttons. */}
+                  {!collapsed && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: '5px 5px 6px' }}>
+                      {sec.tags.map(tag => (
+                        editing === `tag:${tag.id}` ? (
+                          <InlineEdit
+                            key={tag.id}
+                            value={tag.text}
+                            onCommit={v => {
+                              patchSections(ss => ss.map(s => s.id !== sec.id ? s : {
+                                ...s,
+                                tags: v
+                                  ? s.tags.map(t => t.id === tag.id ? { ...t, text: v } : t)
+                                  : s.tags.filter(t => t.id !== tag.id),   // emptied = deleted
+                              }))
+                              setEditing(null)
+                            }}
+                            onCancel={() => setEditing(null)}
+                            style={{ width: '100%' }}
+                          />
+                        ) : (
+                          <div key={tag.id} style={{
+                            display: 'flex', alignItems: 'center', gap: 3,
+                            borderRadius: 4, background: 'rgba(255,255,255,0.04)',
+                            border: '1px solid rgba(255,255,255,0.07)',
+                          }}>
+                            <span
+                              onClick={() => append(tag.text)}
+                              title="Add to the prompt"
+                              style={{
+                                flex: 1, minWidth: 0, cursor: 'pointer',
+                                fontSize: 11, color: 'rgba(255,255,255,0.78)',
+                                padding: '3px 5px', lineHeight: 1.35,
+                              }}
+                            >{tag.text}</span>
+                            <span onClick={() => setEditing(`tag:${tag.id}`)} title="Rename"
+                              style={{ ...ghostBtn, fontSize: 10, cursor: 'pointer' }}>✎</span>
+                            <span
+                              onClick={() => patchSections(ss => ss.map(s => s.id !== sec.id ? s
+                                : { ...s, tags: s.tags.filter(t => t.id !== tag.id) }))}
+                              title="Delete this tag"
+                              style={{ ...ghostBtn, fontSize: 11, cursor: 'pointer', paddingRight: 5 }}
+                            >×</span>
+                          </div>
+                        )
+                      ))}
+                      {addingTagTo === sec.id && (
+                        <InlineEdit
+                          value=""
+                          placeholder="new tag…"
+                          onCommit={v => {
+                            if (v) patchSections(ss => ss.map(s => s.id === sec.id
+                              ? { ...s, tags: [...s.tags, newTag(v)] } : s))
+                            setAddingTagTo(null)
+                          }}
+                          onCancel={() => setAddingTagTo(null)}
+                          style={{ width: '100%' }}
+                        />
+                      )}
+                      {sec.tags.length === 0 && addingTagTo !== sec.id && (
+                        <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.25)', padding: '2px 4px' }}>
+                          Empty — ＋ adds a tag.
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
 
           <button
             style={{ ...chip(false), width: '100%', textAlign: 'center', marginTop: 2 }}
@@ -294,7 +368,7 @@ export const PromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
         </div>
 
         {/* ── Saved prompts rail ── */}
-        {showSaved && !narrow && (
+        {showSaved && railFits && (
           <div style={{
             width: 158, flexShrink: 0, borderLeft: '1px solid rgba(255,255,255,0.08)',
             overflowY: 'auto', padding: 6,
