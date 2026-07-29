@@ -49,9 +49,21 @@ export function rectsTouch(a: Rect, b: Rect, tol: number): boolean {
 /** Flush-snap `rect` onto `edge` of `win`. The along-edge coordinate is
  *  PRESERVED (clamped into the window's span) — users order docked tiles
  *  by physically sliding them along an edge. */
-export function snapToEdge(rect: Rect, win: Rect, edge: DockEdge): { x: number; y: number } {
-  const clampAlongY = Math.max(win.y, Math.min(rect.y, win.y + win.height - rect.height))
-  const clampAlongX = Math.max(win.x, Math.min(rect.x, win.x + win.width - rect.width))
+export function snapToEdge(
+  rect: Rect, win: Rect, edge: DockEdge,
+  /** Within this, the along-edge coordinate snaps FLUSH to the window's
+   *  leading edge instead of being preserved. Docked things carry headers
+   *  of their own, and a tile dropped a few pixels low left the two header
+   *  bands ragged; landing near the top now means landing ON it, so the
+   *  strip reads as one line. Sliding further along still orders freely. */
+  alignTol = 0,
+): { x: number; y: number } {
+  const clampAlongY = Math.abs(rect.y - win.y) <= alignTol
+    ? win.y
+    : Math.max(win.y, Math.min(rect.y, win.y + win.height - rect.height))
+  const clampAlongX = Math.abs(rect.x - win.x) <= alignTol
+    ? win.x
+    : Math.max(win.x, Math.min(rect.x, win.x + win.width - rect.width))
   switch (edge) {
     case 'left':   return { x: win.x - rect.width, y: clampAlongY }
     case 'right':  return { x: win.x + win.width, y: clampAlongY }
@@ -101,7 +113,9 @@ export function findMagnetCandidate(
     if (distance > radius) continue
     if (!best || distance < best.distance ||
         (distance === best.distance && win.id < best.windowId)) {
-      best = { windowId: win.id, edge, distance, snapped: snapToEdge(rect, win, edge) }
+      // Same reach for the flush-align as for the magnet itself: if you got
+      // close enough to dock, you got close enough to line up.
+      best = { windowId: win.id, edge, distance, snapped: snapToEdge(rect, win, edge, radius) }
     }
   }
   return best
