@@ -16,6 +16,7 @@ import { useCanvasStore } from '../../store/canvasStore'
 import { useDockedSources, flattenSourceItems, type DockedSource } from '../../hooks/useDockedContent'
 import { defaultBrowseItem } from '../../utils/contentTraversal'
 import { useResolvedMedia } from '../../utils/useResolvedMedia'
+import { applyAnimationFromUrl } from '../../three/viewportRenderer'
 
 /** Glyph per item kind for chips without a face image. */
 function chipGlyph(source: DockedSource): string {
@@ -128,10 +129,28 @@ const NowViewingCard: React.FC<{
     const next = source.items[(idxInSource + 1) % source.items.length]
     useViewport3DStore.getState().setActiveItem(windowId, next)
   }
+  /** Shift-click DONATES this source's animation to whatever rig the
+   *  window is already showing, instead of replacing it. That is the
+   *  "magnet an animation onto a character" move: the clip file rides in
+   *  as an ordinary docked tile, and shift says use it, don't open it. */
+  const donateAnimation = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    const item = source.items.find(i => i.kind === 'media' && i.mediaType === 'model')
+    if (item?.kind !== 'media') return
+    const matched = await applyAnimationFromUrl(windowId, item.url)
+    if (matched === 0) {
+      // Silence here would read as "the app is broken"; skeletons that
+      // don't share bone names genuinely can't drive each other.
+      console.warn('[anim] no bone names matched — these rigs are not compatible')
+    }
+  }
+
   return (
     <div
-      onClick={cycle}
-      title={source.items.length > 1 ? `${source.name} — item ${idxInSource + 1} of ${source.items.length} (click to cycle within)` : source.name}
+      onClick={e => { if (e.shiftKey) void donateAnimation(e); else cycle() }}
+      title={source.items.length > 1
+        ? `${source.name} — item ${idxInSource + 1} of ${source.items.length} (click to cycle · shift-click to drive the current rig with its animation)`
+        : `${source.name} (shift-click to drive the current rig with its animation)`}
       style={{
         display: 'flex', alignItems: 'center', gap: 6 * iz,
         minWidth: 0, cursor: source.items.length > 1 ? 'pointer' : 'default',

@@ -377,6 +377,29 @@ export function applyExternalClips(id: string, clips: THREE.AnimationClip[]): nu
   return matched
 }
 
+/** Take the clips out of ANOTHER model file and drive this window's rig
+ *  with them — the "magnet an animation onto a character" gesture.
+ *
+ *  The donor is loaded through the normal cache (so a tile already on
+ *  canvas costs nothing) purely to read its clips; its instance is
+ *  released immediately, because clips are standalone data that address
+ *  bones by name. Returns the number of tracks that found a bone: 0 means
+ *  the two skeletons do not share a naming convention and the caller
+ *  should say so rather than leave a motionless model unexplained. */
+export async function applyAnimationFromUrl(id: string, donorUrl: string): Promise<number> {
+  const view = views.get(id)
+  if (!view?.modelRoot) return 0
+  const donor = await acquireModel(donorUrl)
+  try {
+    const clips = donor.animations ?? []
+    if (clips.length === 0) return 0
+    return applyExternalClips(id, clips)
+  } finally {
+    disposeInstance(donor)
+    releaseModel(donorUrl)
+  }
+}
+
 /** Render a window's CURRENT view — its camera, its display mode — to a
  *  poster-sized data URL. This is what makes a bad auto-frame recoverable:
  *  pull back, orbit to something that reads well, and make that the
