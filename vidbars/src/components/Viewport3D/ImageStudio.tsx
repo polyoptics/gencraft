@@ -20,8 +20,6 @@ import { useViewport3DStore } from '../../store/viewport3dStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { useResolvedMedia } from '../../utils/useResolvedMedia'
-import { putMedia } from '../../utils/mediaStore'
-import { makeMediaRef } from '../../utils/mediaRef'
 
 interface ImgViewState { scale: number; tx: number; ty: number }
 const imgViews = new Map<string, ImgViewState>()
@@ -208,9 +206,22 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
           ctx.stroke()
         }
       }
-      const blob = await new Promise<Blob | null>(res => cnv.toBlob(res, 'image/png'))
-      if (!blob) return
-      const ref = makeMediaRef(await putMedia(blob))
+      // A DATA URL, not a blob. Measured in this runtime: canvas.toBlob
+      // produces a blob whose arrayBuffer() throws NotReadableError and
+      // whose object URL will not decode in an <img> at all — so every
+      // snip and stamp landed on the canvas as an empty tile. Files picked
+      // from disk are fine (they are disk-backed); anything MANUFACTURED in
+      // the browser has to be a data URL. Do not "optimise" this back.
+      //
+      // PNG while the region is modest, JPEG above that: a 4K snip as PNG
+      // is a multi-megabyte string that then rides every persist of this
+      // node. The source pixels are already composited onto an opaque
+      // canvas by the drawImage above, so dropping alpha costs nothing.
+      const px = sw * sh
+      const ref = px <= 1_200_000
+        ? cnv.toDataURL('image/png')
+        : cnv.toDataURL('image/jpeg', 0.92)
+      if (!ref || ref.length < 32) return
 
       const win = useViewport3DStore.getState().windows[windowId]
       if (!win) return

@@ -492,10 +492,16 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
     const dx = (e.clientX - s.x) / gz
     const dy = (e.clientY - s.y) / gz
 
-    // A Rolodex tile keeps its proportions — the drawer at its base is what
-    // sets how long the cabinet is, so the handles only grow the shape the
-    // drawer set rather than fighting it.
-    if (LOCKS_ASPECT.has(node.type)) {
+    // SCALE, as opposed to reshape. Two different intentions: the plain
+    // handles change the panel's SHAPE, and Shift on a corner scales the
+    // whole thing keeping the shape you already settled on — the thing that
+    // was missing once you had the aspect right and just wanted it bigger.
+    //
+    // A Rolodex tile is always in this mode: the drawer at its base sets how
+    // long the cabinet is, so its handles only grow the shape the drawer
+    // chose rather than fighting it.
+    const proportional = LOCKS_ASPECT.has(node.type) || (e.shiftKey && dir.length === 2)
+    if (proportional) {
       const ratio = s.h / s.w
       // Project the drag onto the diagonal (1, ratio) so both directions of
       // pointer travel contribute and the corner tracks the cursor. West and
@@ -572,6 +578,9 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
   const edgeZone   = Math.min(9 * iz, node.width * 0.12, node.height * 0.12)
   // Sides stop short of the corners so the corner always wins its own patch.
   const sideInset  = cornerZone
+  /** This node's bottom edge is a drawer pull, so the resize zones there
+   *  have to stay out of its way. */
+  const drawerSafe = LOCKS_ASPECT.has(node.type)
   // Padding is counter-scaled too, so it needs the same ceiling — an
   // unclamped 6*iz is 100 canvas units at zoom 0.06 and, under content-box
   // sizing, lands OUTSIDE the capped header height and re-inflates it.
@@ -807,12 +816,18 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
               these only grow it. */}
       {([
         ['n',  { top: 0, left: sideInset, right: sideInset, height: edgeZone }, 'ns-resize'],
-        ['s',  { bottom: 0, left: sideInset, right: sideInset, height: edgeZone }, 'ns-resize'],
+        // The Rolodex's cabinet base IS its drawer pull, and it runs the full
+        // width. A resize strip lying on top of it made the drawer a
+        // coin-toss to grab, so on those the bottom handles keep to the right
+        // third and the drawer owns the rest.
+        ['s',  { bottom: 0, left: drawerSafe ? node.width * 0.667 : sideInset, right: sideInset, height: edgeZone }, 'ns-resize'],
         ['w',  { left: 0, top: sideInset, bottom: sideInset, width: edgeZone }, 'ew-resize'],
         ['e',  { right: 0, top: sideInset, bottom: sideInset, width: edgeZone }, 'ew-resize'],
         ['nw', { top: 0, left: 0, width: cornerZone, height: cornerZone }, 'nwse-resize'],
         ['ne', { top: 0, right: 0, width: cornerZone, height: cornerZone }, 'nesw-resize'],
-        ['sw', { bottom: 0, left: 0, width: cornerZone, height: cornerZone }, 'nesw-resize'],
+        // sw sits at the far LEFT of the drawer — the worst possible place
+        // for it — so it is simply absent when a drawer is present.
+        ...(drawerSafe ? [] : [['sw', { bottom: 0, left: 0, width: cornerZone, height: cornerZone }, 'nesw-resize'] as const]),
       ] as const).map(([dir, pos, cursor]) => (
         <div
           key={dir}

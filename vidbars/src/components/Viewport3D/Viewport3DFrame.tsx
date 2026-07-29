@@ -181,6 +181,28 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
     const MIN_W = 160, MIN_H = 120
 
     let width = s.w, height = s.h, nx = s.nx, ny = s.ny
+
+    // Shift on a corner SCALES instead of reshaping — same gesture as the
+    // panels, for when the aspect is already right and you only want it
+    // bigger.
+    if (e.shiftKey && dir.length === 2) {
+      const ratio = s.h / s.w
+      const sx = dir.includes('w') ? -1 : 1
+      const sy = dir.includes('n') ? -1 : 1
+      const t = (dx * sx + dy * sy * ratio) / (1 + ratio * ratio)
+      width = Math.max(MIN_W, MIN_H / ratio, s.w + t)
+      height = width * ratio
+      if (dir.includes('w')) nx = s.nx - (width - s.w) * k
+      if (dir.includes('n')) ny = s.ny - (height - s.h) * k
+      const scaled: Partial<ViewportWindow3D> = { width, height }
+      if (nx !== s.nx || ny !== s.ny) {
+        if (w.pin) scaled.pin = { ...w.pin, x: nx, y: ny }
+        else { scaled.x = nx; scaled.y = ny }
+      }
+      useViewport3DStore.getState().updateWindow(id, scaled)
+      return
+    }
+
     if (dir.includes('e')) width = Math.max(MIN_W, s.w + dx)
     if (dir.includes('s')) height = Math.max(MIN_H, s.h + dy)
     if (dir.includes('w')) { width = Math.max(MIN_W, s.w - dx); nx = s.nx + (s.w - width) * k }
@@ -436,9 +458,15 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
           overflow: 'hidden',
         }}
       >
-        {/* DOM content views (image/video/audio/text) — models paint via GL */}
+        {/* DOM content views (image/video/audio/text) — models paint via GL.
+            zoom={gz}, NOT the live canvas zoom: ContentView counter-scales
+            its controls and text against its ANCESTOR's scale, and for a
+            pinned window that ancestor is frozen at pin time. The live zoom
+            made a pinned Viewer's video controls and text resize as the
+            canvas zoomed underneath it, while the window itself stood
+            perfectly still. */}
         {active && !modelActive && (
-          <ContentView windowId={id} item={active} zoom={zoom} />
+          <ContentView windowId={id} item={active} zoom={gz} />
         )}
         {showBodyOverlay && (
           <div style={{

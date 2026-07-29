@@ -169,17 +169,23 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
       image: 'Image', note: 'Note', text: 'Text', video: 'Video', audio: 'Audio', model: 'Model',
       list: 'List', pool: 'Media Pool', prompt: 'Prompt Pad', history: 'History',
     }
+    // COMPONENTS start twice as big per side — four times the area. They are
+    // tools, not tiles: a Media Pool wants a readable grid, a Prompt Pad
+    // wants its sections side by side, and at the old sizes every one of
+    // them had to be resized before it was usable. Media tiles keep their
+    // modest defaults; a dropped image is content, not an instrument.
     const heights: Record<FreeNodeType, number> = {
       image: 180, note: 160, text: 180, video: 180, audio: 120, model: 180,
-      list: 440, pool: 420, prompt: 360, history: 400,
+      list: 880, pool: 840, prompt: 720, history: 800,
     }
     const widths: Partial<Record<FreeNodeType, number>> = {
       audio: 260,
       // Lists host a full embedded Rolodex — size for its natural panel
-      // width (LEFTCOL_W 196 + margins).
-      list: 240,
-      pool: 520,     // a grid plus a preview needs room to read as one
-      prompt: 460,
+      // width (LEFTCOL_W 196 + margins), doubled.
+      list: 480,
+      pool: 1040,    // a grid needs room before it reads as a grid
+      prompt: 920,
+      history: 520,
     }
     const node: FreeNodeData = {
       id, x, y,
