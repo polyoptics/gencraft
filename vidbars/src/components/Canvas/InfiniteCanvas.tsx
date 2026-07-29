@@ -5,6 +5,7 @@ import { PinLayer } from './PinLayer'
 import { useBoardsStore } from '../../store/boardsStore'
 import { uploadFile, classifyFile, isAcceptedMediaFile } from '../../utils/uploadFile'
 import type { FreeNodeType } from '../../store/freeNodeStore'
+import type { MediaType } from '../../types/bar'
 import { computeGroupLayout, getRowY, getRowHeight, CARD_GRID_SPACING } from '../../utils/nleRows'
 import { useViewport3DStore, VIEWPORT3D_DEFAULT_W, VIEWPORT3D_DEFAULT_H } from '../../store/viewport3dStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
@@ -15,6 +16,39 @@ import { GLCanvasHost } from '../Viewport3D/GLCanvasHost'
 // (BOARD_PADDING_X in the shared card geometry) — used to center a
 // newly created card on the cursor.
 const CARD_CONTENT_INSET = 20
+
+// ── Media Pool drag-out ──────────────────────────────────────────────
+// A pool tile and a pool-fed Rolodex slot put this exact payload on the
+// wire at dragstart, so ONE reader here serves both producers. The file
+// already lives on the server, which is why nothing on this path uploads:
+// the url is the whole transfer.
+const POOL_DRAG_MIME = 'application/x-vidbars-pool'
+
+interface PoolDragPayload {
+  url: string
+  label: string
+  kind: MediaType
+}
+
+const POOL_KINDS: readonly MediaType[] = ['image', 'video', 'audio', 'model']
+
+/** Parse a pool payload defensively — a drag can carry text from anywhere,
+ *  and a malformed one must fall through to the file path rather than
+ *  create a node pointing at nothing. */
+function parsePoolDrag(raw: string): PoolDragPayload | null {
+  try {
+    const p = JSON.parse(raw) as Partial<PoolDragPayload>
+    if (typeof p?.url !== 'string' || !p.url) return null
+    if (!POOL_KINDS.includes(p.kind as MediaType)) return null
+    return {
+      url: p.url,
+      label: typeof p.label === 'string' ? p.label : '',
+      kind: p.kind as MediaType,
+    }
+  } catch {
+    return null
+  }
+}
 
 interface Props {
   children: React.ReactNode
@@ -148,7 +182,12 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
   }, [shiftPan])
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
-    if (e.dataTransfer.types.includes('Files')) {
+    // preventDefault here is what tells the browser the canvas ACCEPTS the
+    // drag — without it no drop event is ever dispatched. The pool payload
+    // has to be admitted alongside 'Files' or dragging a tile out of a
+    // Media Pool is silently dead. getData is blacked out during dragover
+    // for security, but `types` is not, which is all this test needs.
+    if (e.dataTransfer.types.includes('Files') || e.dataTransfer.types.includes(POOL_DRAG_MIME)) {
       e.preventDefault()
       e.dataTransfer.dropEffect = 'copy'
     }
@@ -204,6 +243,34 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
       })
     })
   }, [addFreeNode, updateFreeNode])
+
+  /** Drop of a Media Pool tile. The file is already server-served, so this
+   *  never uploads — it is purely "make a node that points at that url".
+   *  Produces the SAME node the pool's own double-click place produces
+   *  (checkpoint → node → media → select), but lands at the cursor with
+   *  the zoom-aware sizing an OS file drop gets, so a drop at card zoom
+   *  isn't a speck. */
+  const dropPoolItem = useCallback((e: React.DragEvent, p: PoolDragPayload) => {
+    const rect = containerRef.current!.getBoundingClientRect()
+    const z = zoomRef.current
+    const pn = panRef.current
+    const k = Math.max(0.6, Math.min(10, 1 / z))
+    const nodeW = (p.kind === 'audio' ? 260 : 200) * k
+    const nodeH = (p.kind === 'audio' ? 120 : 180) * k
+    // Cursor position in canvas coordinates; store x/y is top-left, so
+    // offset by half the node to center it under the pointer.
+    const cursorCX = (e.clientX - rect.left - pn.x) / z
+    const cursorCY = (e.clientY - rect.top - pn.y) / z
+    useUndoCoordinator.getState().checkpoint()
+    const nodeId = addFreeNode(cursorCX - nodeW / 2, cursorCY - nodeH / 2, p.kind)
+    updateFreeNode(nodeId, {
+      imageUrl: p.url,
+      mediaType: p.kind,
+      ...(p.label ? { label: p.label } : {}),
+      ...(k !== 1 ? { width: nodeW, height: nodeH } : {}),
+    })
+    setFreeSelection([nodeId])
+  }, [addFreeNode, updateFreeNode, setFreeSelection])
 
   /** Drop on a free node at any layer — set its media */
   const dropOnFreeNode = useCallback((allEls: Element[], files: File[]): boolean => {
@@ -386,6 +453,19 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
   }, [addFreeNode])
 
   const handleDrop = useCallback((e: React.DragEvent) => {
+    // A pool drag carries ZERO .files, so it has to be answered before the
+    // empty-files bail below — and it has to call preventDefault itself,
+    // since that bail returns ahead of the one on the file path.
+    const poolRaw = e.dataTransfer.getData(POOL_DRAG_MIME)
+    if (poolRaw) {
+      const payload = parsePoolDrag(poolRaw)
+      if (payload) {
+        e.preventDefault()
+        dropPoolItem(e, payload)
+        return
+      }
+    }
+
     // Accepts image/video/audio AND 3D models (.glb/.gltf — MIME is often
     // empty on Windows, so filtering lives in isAcceptedMediaFile).
     let files = Array.from(e.dataTransfer.files).filter(isAcceptedMediaFile)
@@ -401,7 +481,7 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
     if (zoom <= 0.18)      return handleCardDrop(e, files)
     if (zoom < 0.3)        return handleBlockDrop(e, files)
     return handleBoardDrop(e, files)
-  }, [dropOnViewportWindow, handleCardDrop, handleBlockDrop, handleBoardDrop])
+  }, [dropPoolItem, dropOnViewportWindow, handleCardDrop, handleBlockDrop, handleBoardDrop])
 
   const handlePointerUp = useCallback((e: React.PointerEvent) => {
     if (isPanning.current) {

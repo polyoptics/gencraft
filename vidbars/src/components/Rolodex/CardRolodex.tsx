@@ -33,6 +33,7 @@ import {
   hasRenderableContent, sortGroups, sortFreeNodes, formatListQuerySummary,
 } from '../../utils/contentKinds'
 import { getModelPoster, ensureModelPoster, invalidateModelPoster, useModelPoster, usePosterMapStore } from '../../three/posterService'
+import { useThumb } from '../../utils/thumbService'
 import { useResolvedMedia } from '../../utils/useResolvedMedia'
 import { usePoolStore, loadPoolDir, type PoolFile } from '../../store/poolStore'
 import { poolFeedingList } from '../../utils/componentLinks'
@@ -2136,11 +2137,17 @@ const RolodexPoolSlot: React.FC<{
   onHoverEnter: () => void
   onHoverLeave: () => void
 }> = ({ file, offset, top, zIndex, expansionFraction, isHovered, onClick, onHoverEnter, onHoverLeave }) => {
-  const poster = useModelPoster(file.kind === 'model' ? file.url : null)
-  useEffect(() => {
-    if (file.kind === 'model' && !getModelPoster(file.url)) void ensureModelPoster(file.url)
-  }, [file.kind, file.url])
-  const hero = file.kind === 'model' ? poster : file.kind === 'image' ? file.url : null
+  // THE SAME RULE AS THE POOL, and it has to be the same rule: this slot
+  // renders the identical listing, so an eager per-tile poster call here
+  // re-creates the exact failure the pool was fixed for — magnet a Rolodex
+  // to a pool and 85 models download to draw thumbnails. useThumb only
+  // READS; it never generates a model poster implicitly.
+  const poster = useThumb(file.kind === 'model' ? file.url : null, 'model')
+  // Images take the server's downscaled copy. Handing HeroImageLayer the
+  // original meant decoding multi-megabyte PNGs into a ~200px card.
+  const hero = file.kind === 'model'
+    ? poster
+    : file.kind === 'image' ? (file.thumb ?? file.url) : null
   const centerness = Math.max(0, 1 - Math.abs(offset))
   const exposure = Math.min(1, Math.max(0, (expansionFraction - 0.15) / 0.2))
   const borderRGB = Math.round(255 * centerness)
@@ -2152,8 +2159,12 @@ const RolodexPoolSlot: React.FC<{
       onMouseLeave={onHoverLeave}
       draggable
       onDragStart={e => {
-        e.dataTransfer.setData('application/x-vidbars-pool',
-          JSON.stringify({ url: file.url, label: file.name, kind: file.kind }))
+        // Byte-identical to the pool's own dragstart, including the
+        // text/plain fallback — one reader on the canvas serves both, so
+        // the two producers must not drift.
+        const payload = JSON.stringify({ url: file.url, label: file.name, kind: file.kind })
+        e.dataTransfer.setData('application/x-vidbars-pool', payload)
+        e.dataTransfer.setData('text/plain', file.url)
         e.dataTransfer.effectAllowed = 'copy'
       }}
       title={`${file.name} — from the magneted Media Pool`}

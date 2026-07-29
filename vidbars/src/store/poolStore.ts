@@ -17,6 +17,10 @@ export interface PoolFile {
   url: string
   kind: 'image' | 'video' | 'audio' | 'model'
   size: number
+  /** The dev server's downscaled copy, when it can make one. Null when the
+   *  server has no encoder — the pool then falls back to the original, which
+   *  is why this is optional rather than assumed. */
+  thumb?: string | null
 }
 
 export interface PoolDir {
@@ -31,6 +35,9 @@ export interface PoolContents {
   files: PoolFile[]
   loading: boolean
   error?: string
+  /** What this server can do. Surfaced so the panel can SAY why pictures
+   *  are missing instead of silently showing glyphs. */
+  caps?: { thumbs: boolean }
 }
 
 const EMPTY: PoolContents = { dir: '', parent: '', dirs: [], files: [], loading: false }
@@ -77,6 +84,7 @@ export async function loadPoolDir(nodeId: string, dir: string): Promise<void> {
       parent: json.parent,
       dirs: json.dirs ?? [],
       files: (json.files ?? []).map((f: Omit<PoolFile, 'id'>) => ({ ...f, id: f.url })),
+      caps: json.caps,
     })
     // Where you have BEEN is history, so a History window docked to a pool
     // can walk you back. Recorded after success only: a folder that failed
