@@ -18,6 +18,8 @@ import { cardVisualRect } from '../../hooks/useCardDecks'
 import { findMagnetCandidate, magnetRadiusForZoom, type WindowRect } from '../../utils/viewportDocking'
 import { tileBrowseItem, isDockableTile } from '../../utils/contentTraversal'
 import { CardRolodex } from '../Rolodex/CardRolodex'
+import { MediaPool } from '../Pool/MediaPool'
+import { PromptPad } from '../Prompt/PromptPad'
 import { ensureModelPoster, getModelPoster, invalidateModelPoster, useModelPoster } from '../../three/posterService'
 import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
 import { DrawableSurface } from '../Annotation/DrawableSurface'
@@ -480,9 +482,9 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
   // canvas units at zoom 0.06, which is 4 of a 12-pixel tile — it shrinks
   // the content box until the corner zone starts a hair from the centre.
   const borderW  = Math.min(Math.max(1, 2 / gz), node.width * 0.04, node.height * 0.04)
-  /** A list tile IS the Rolodex panel, so it wears the panel's chrome
-   *  rather than the generic tile's — identically in both placements. */
-  const isPanel = node.type === 'list'
+  /** COMPONENT nodes are panels, not media tiles, so they wear the panel's
+   *  chrome — identically in both placements. */
+  const isPanel = node.type === 'list' || node.type === 'pool' || node.type === 'prompt'
 
   return (
     <div
@@ -539,10 +541,10 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
         // Select node in capture phase so children with stopPropagation (note textarea) don't block selection
         if (e.button !== 0) return
         if ((e.target as Element).closest('[data-resize]')) return
-        // A list tile's body is a full Rolodex that owns its own clicks:
-        // selecting the tile on every card row flashed the ring and armed
-        // Delete on the whole panel. Only its header and corner select it.
-        if (node.type === 'list' &&
+        // A component's body is a full panel that owns its own clicks:
+        // selecting the node on every control would flash the ring and arm
+        // Delete on the whole thing. Only its header and corner select it.
+        if ((node.type === 'list' || node.type === 'pool' || node.type === 'prompt') &&
             !(e.target as Element).closest('[data-freenode-header],[data-resize]')) return
         wasSelectedOnDown.current = isSelected
         if (e.shiftKey) { toggleFreeSelection(id) }
@@ -814,6 +816,23 @@ const FreeNodeBody: React.FC<{
 
   // ── List type: a FULL embedded Rolodex — 100% the floating panel's
   //    functionality, state persisted on this node's listQuery. ──
+  // ── Component bodies: a whole panel inside a node. Each is a plain
+  //    component reading a shared store, so magneting two of them together
+  //    is the only "wiring" the composition needs. ──
+  if (node.type === 'pool') {
+    return (
+      <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
+        <MediaPool nodeId={id} />
+      </div>
+    )
+  }
+  if (node.type === 'prompt') {
+    return (
+      <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
+        <PromptPad nodeId={id} />
+      </div>
+    )
+  }
   if (node.type === 'list') {
     return (
       <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>

@@ -2,7 +2,15 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { createDebouncedIDBStorage } from '../utils/debouncedIDBStorage'
 
-export type FreeNodeType = 'note' | 'image' | 'text' | 'video' | 'audio' | 'model' | 'list'
+// 'list' | 'pool' | 'prompt' are COMPONENTS rather than media: a node whose
+// body is a whole panel. They ride the same substrate as everything else —
+// drag, resize, pin, dock, select, undo, export — which is the point of the
+// modular design: a component is just a node that happens to be a tool.
+export type FreeNodeType =
+  | 'note' | 'image' | 'text' | 'video' | 'audio' | 'model'
+  | 'list'     // the Rolodex / image scroller
+  | 'pool'     // media pool + generation history
+  | 'prompt'   // prompt pad + tag palette
 
 export interface TextStyle {
   fontSize: number       // in px (base, before zoom scaling)
@@ -131,16 +139,24 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
     const id = crypto.randomUUID()
     const color = COLORS[colorIdx++ % COLORS.length]
     const labels: Record<FreeNodeType, string> = {
-      image: 'Image', note: 'Note', text: 'Text', video: 'Video', audio: 'Audio', model: 'Model', list: 'List',
+      image: 'Image', note: 'Note', text: 'Text', video: 'Video', audio: 'Audio', model: 'Model',
+      list: 'List', pool: 'Media Pool', prompt: 'Prompt Pad',
     }
     const heights: Record<FreeNodeType, number> = {
-      image: 180, note: 160, text: 180, video: 180, audio: 120, model: 180, list: 440,
+      image: 180, note: 160, text: 180, video: 180, audio: 120, model: 180,
+      list: 440, pool: 420, prompt: 360,
+    }
+    const widths: Partial<Record<FreeNodeType, number>> = {
+      audio: 260,
+      // Lists host a full embedded Rolodex — size for its natural panel
+      // width (LEFTCOL_W 196 + margins).
+      list: 240,
+      pool: 520,     // a grid plus a preview needs room to read as one
+      prompt: 460,
     }
     const node: FreeNodeData = {
       id, x, y,
-      // Lists host a full embedded Rolodex — size for its natural panel
-      // width (LEFTCOL_W 196 + margins).
-      width: type === 'audio' ? 260 : type === 'list' ? 240 : 200,
+      width: widths[type] ?? 200,
       height: heights[type] ?? 160,
       type,
       label: labels[type] ?? type,

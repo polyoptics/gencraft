@@ -2055,6 +2055,7 @@ const RolodexCardPreview: React.FC<{
 /** Glyph per free-node type — matches the tile headers on canvas. */
 const FREENODE_GLYPHS: Record<FreeNodeData['type'], string> = {
   model: '◆', image: '🖼', video: '▶', audio: '♪', text: 'T', note: '📝', list: '≔',
+  pool: '▦', prompt: '✎',
 }
 
 /** The model poster as a small chip in a tile row's tab. Posters are

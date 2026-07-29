@@ -174,6 +174,7 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
     const id = addFreeNode(addMenu.cx - w / 2, addMenu.cy - h / 2, type)
     if (k !== 1) useFreeNodeStore.getState().updateFreeNode(id, { width: w, height: h })
     useFreeNodeStore.getState().setFreeSelection([id])
+    return id
   }, [addMenu, addFreeNode, createScale])
 
   // ── Layer-aware drop handlers ──
@@ -586,6 +587,15 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
                 const wins = useViewport3DStore.getState().windows
                 const newest = Object.values(wins).reduce((a, b) => (a && a.createdAt >= b.createdAt ? a : b))
                 if (newest) useViewport3DStore.getState().updateWindow(newest.id, { width: w, height: h })
+                setAddMenu(null)
+              } },
+              { label: '▦  Add Media Pool', action: () => { addNodeAtCursor('pool', 520, 420); setAddMenu(null) } },
+              { label: '✎  Add Prompt Pad', action: () => { addNodeAtCursor('prompt', 460, 360); setAddMenu(null) } },
+              { label: '≔  Add List', action: () => {
+                const nid = addNodeAtCursor('list', 240, 440)
+                if (nid) useFreeNodeStore.getState().updateFreeNode(nid, {
+                  listQuery: { query: '', kind: 'all', includeCanvasItems: false, sortMode: 'creation', view: 'flat' },
+                })
                 setAddMenu(null)
               } },
               { label: '─────────────', action: null },
