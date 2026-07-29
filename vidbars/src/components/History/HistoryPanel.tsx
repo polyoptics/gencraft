@@ -18,7 +18,7 @@ import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { adjacentPanels } from '../../utils/componentLinks'
-import { CounterScaled, usePanelChrome } from '../UI/PanelSurface'
+import { CounterScaled, usePanelChrome, PanelScaleButtons } from '../UI/PanelSurface'
 
 const KIND_GLYPH: Record<HistoryKind, string> = {
   prompt: '✎', view: '◉', folder: '📁', place: '＋',
@@ -49,7 +49,7 @@ function ago(ms: number): string {
 export const HistoryPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
   const node = useFreeNodeStore(s => s.nodes[nodeId])
   const nodes = useFreeNodeStore(s => s.nodes)
-  const { gz, showControls } = usePanelChrome(node)
+  const { surface, uiScale, showControls } = usePanelChrome(node)
   const updateFreeNode = useFreeNodeStore(s => s.updateFreeNode)
   const entries = useHistoryStore(s => s.entries)
   const remove = useHistoryStore(s => s.remove)
@@ -124,7 +124,7 @@ export const HistoryPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
       {/* Screen-pixel chrome at any zoom — see PanelSurface. The kind chips
           and the search row are the first things to go when the window is
           too short on screen to afford them; the entries keep the space. */}
-      <CounterScaled gz={gz}>
+      <CounterScaled gz={surface}>
       <div style={{
         width: '100%', height: '100%', display: 'flex', flexDirection: 'column',
         overflow: 'hidden', fontFamily: 'system-ui, sans-serif',
@@ -146,6 +146,7 @@ export const HistoryPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
           }}>▸ {hostType === 'prompt' ? 'prompt pad' : hostType === 'pool' ? 'media pool' : 'rolodex'}</span>
         )}
         <div style={{ flex: 1 }} />
+        <PanelScaleButtons nodeId={nodeId} uiScale={uiScale} />
         <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.3)' }}>{shown.length}</span>
       </div>
 

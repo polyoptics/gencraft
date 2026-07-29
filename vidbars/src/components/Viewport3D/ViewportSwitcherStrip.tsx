@@ -36,7 +36,13 @@ function chipGlyph(source: DockedSource): string {
 export const ViewportSwitcherStrip: React.FC<{ windowId: string }> = ({ windowId }) => {
   const win = useViewport3DStore(s => s.windows[windowId])
   const setActiveItem = useViewport3DStore(s => s.setActiveItem)
-  const zoom = useCanvasStore(s => s.zoom)
+  const canvasZoom = useCanvasStore(s => s.zoom)
+  // gz, not the live canvas zoom — the same rule as Viewport3DFrame. This
+  // strip counter-scales its chips against the scale of its ANCESTOR, and a
+  // pinned window's ancestor transform is frozen at pin time. Reading the
+  // live zoom made the chips grow and shrink under the mouse wheel on a
+  // window that was standing perfectly still.
+  const zoom = win?.pin ? win.pin.scale : canvasZoom
   const sources = useDockedSources(windowId)
   const reconcileTimer = useRef<number | null>(null)
 

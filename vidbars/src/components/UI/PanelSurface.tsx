@@ -20,6 +20,7 @@
 
 import React from 'react'
 import { useCanvasStore } from '../../store/canvasStore'
+import { useFreeNodeStore } from '../../store/freeNodeStore'
 import type { FreeNodeData } from '../../store/freeNodeStore'
 
 /** The multiplier the canvas applies to a node: the live zoom, or the zoom
@@ -84,9 +85,52 @@ export const ContentScaled: React.FC<{ factor: number; children: React.ReactNode
   )
 }
 
+/** The −/+ pair. Every panel that can be scaled wears the same one, so
+ *  "make this bigger" is one gesture with one appearance everywhere. */
+export const PanelScaleButtons: React.FC<{
+  nodeId: string
+  uiScale: number
+  style?: React.CSSProperties
+}> = ({ nodeId, uiScale, style }) => {
+  const update = useFreeNodeStore(s => s.updateFreeNode)
+  const btn = (dim: boolean): React.CSSProperties => ({
+    background: 'rgba(255,255,255,0.05)',
+    border: '1px solid rgba(255,255,255,0.1)',
+    borderRadius: 4, color: 'rgba(255,255,255,0.6)',
+    fontSize: 11, fontWeight: 700, lineHeight: 1,
+    padding: '2px 6px', cursor: 'pointer', fontFamily: 'inherit',
+    flexShrink: 0, opacity: dim ? 0.35 : 1, ...style,
+  })
+  return (
+    <>
+      <button
+        style={btn(uiScale <= UI_SCALE_MIN)}
+        title="Smaller — scales everything in this panel"
+        onClick={() => update(nodeId, { uiScale: clampUiScale(uiScale / 1.15) })}
+      >−</button>
+      <button
+        style={btn(uiScale >= UI_SCALE_MAX)}
+        title={`Larger — ${Math.round(uiScale * 100)}% · double-click to reset`}
+        onClick={() => update(nodeId, { uiScale: clampUiScale(uiScale * 1.15) })}
+        onDoubleClick={() => update(nodeId, { uiScale: 1 })}
+      >+</button>
+    </>
+  )
+}
+
 export interface PanelChrome {
   /** Counter-scale factor for CounterScaled. */
   gz: number
+  /** The user's content scale for this panel. */
+  uiScale: number
+  /** What to hand CounterScaled so contents render at `uiScale` × screen px.
+   *
+   *  Resizing a counter-scaled panel gives you MORE ROOM at the same text
+   *  size, which is not the same as making the panel bigger — that was the
+   *  gap: you could get the shape right and still be squinting. Feeding
+   *  gz / uiScale multiplies every CSS pixel inside by uiScale, so one
+   *  control grows the whole interior together. */
+  surface: number
   /** The panel's height in SCREEN pixels — what decides how much fits. */
   screenH: number
   /** Same, across. */
@@ -104,10 +148,11 @@ export interface PanelChrome {
 export function usePanelChrome(node: FreeNodeData | undefined): PanelChrome {
   const zoom = useCanvasStore(s => s.zoom)
   const gz = panelScale(node, zoom)
+  const uiScale = panelContentScale(node)
   const screenH = (node?.height ?? 0) * gz
   const screenW = (node?.width ?? 0) * gz
   return {
-    gz, screenH, screenW,
+    gz, uiScale, surface: gz / uiScale, screenH, screenW,
     showFooter: screenH >= 240,
     showControls: screenH >= 150,
     showHeader: screenH >= 100,

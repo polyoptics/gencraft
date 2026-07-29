@@ -16,7 +16,7 @@
 
 import React, { useMemo, useState } from 'react'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
-import { CounterScaled, usePanelChrome } from '../UI/PanelSurface'
+import { CounterScaled, usePanelChrome, PanelScaleButtons } from '../UI/PanelSurface'
 import { recordHistory } from '../../store/historyStore'
 import {
   defaultPromptKit, newSection, newTag, newSaved,
@@ -59,7 +59,7 @@ const InlineEdit: React.FC<{
 export const PromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
   const node = useFreeNodeStore(s => s.nodes[nodeId])
   const updateFreeNode = useFreeNodeStore(s => s.updateFreeNode)
-  const { gz, showFooter, screenW } = usePanelChrome(node)
+  const { surface, uiScale, showFooter, screenW } = usePanelChrome(node)
   // The saved rail is a fixed 158px. On a narrow pad that is half the
   // width, and the workshop — the thing you are actually using — gets
   // squeezed to one thin column. Measured at 300px wide the section cards
@@ -118,7 +118,7 @@ export const PromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
       {/* Every CSS px below is a SCREEN px, so the pad reads the same at
           any zoom — see PanelSurface. The saved rail and the footer hint
           drop out when the pad is too small on screen to afford them. */}
-      <CounterScaled gz={gz}>
+      <CounterScaled gz={surface}>
       <div style={{
         width: '100%', height: '100%', display: 'flex', flexDirection: 'column',
         overflow: 'hidden', fontFamily: 'system-ui, sans-serif',
@@ -177,6 +177,7 @@ export const PromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
         >＋ SAVE</button>
         <button style={chip(showSaved)} onClick={() => setShowSaved(v => !v)}
           title="Show saved prompts">▤ {kit.saved.length}</button>
+        <PanelScaleButtons nodeId={nodeId} uiScale={uiScale} />
         <div style={{ flex: 1 }} />
         {sent > 0 && (
           <span style={{ fontSize: 10.5, color: 'rgba(150,200,255,0.65)' }}>
