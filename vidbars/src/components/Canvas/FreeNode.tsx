@@ -62,7 +62,8 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
   const node = useFreeNodeStore(s => s.nodes[id])
   const moveFreeNode = useFreeNodeStore(s => s.moveFreeNode)
   const moveManyFreeNodes = useFreeNodeStore(s => s.moveManyFreeNodes)
-  const resizeFreeNode = useFreeNodeStore(s => s.resizeFreeNode)
+  // resizeFreeNode is no longer used here: it only ever grew from the SE
+  // corner, and the eight-way handles need to move the anchor as well.
   const updateFreeNode = useFreeNodeStore(s => s.updateFreeNode)
   const deleteFreeNode = useFreeNodeStore(s => s.deleteFreeNode)
   const isSelected = useFreeNodeStore(s => s.selectedIds.includes(id))
@@ -93,7 +94,9 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
   const wasSelectedOnDown = useRef(false)
   const resizeLastX = useRef(0)
   const resizeLastY = useRef(0)
-  const resizeStart = useRef({ x: 0, y: 0, w: 0, h: 0 })
+  const resizeStart = useRef({ x: 0, y: 0, w: 0, h: 0, nx: 0, ny: 0 })
+  /** Which handle is being dragged: any of n/s/e/w combined. */
+  const resizeDir = useRef('se')
 
   useEffect(() => { if (isRenaming) renameRef.current?.select() }, [isRenaming])
 
@@ -459,41 +462,76 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
     // No transfer happened — user placed the node here intentionally, leave it.
   }, [id, node?.type, node?.imageUrl, connectedWindowId, isSelected, isRenaming, setFreeSelection, toggleFreeSelection, updateFreeNode, zoom])
 
-  // Resize handle
+  // Resize handles — eight of them, so a panel can be reshaped from any
+  // edge or corner instead of only being dragged bigger from one corner.
   const onResizeDown = useCallback((e: React.PointerEvent) => {
     e.stopPropagation()
     useUndoCoordinator.getState().checkpoint()
+    resizeDir.current = (e.currentTarget as HTMLElement).dataset.resize || 'se'
     resizeLastX.current = e.clientX
     resizeLastY.current = e.clientY
-    // Aspect-locked resize works from the drag START, not incrementally:
-    // resizeFreeNode clamps width and height independently, so an
-    // incremental path would let one axis hit its floor while the other
-    // kept going and the ratio would drift away mid-drag.
-    resizeStart.current = { x: e.clientX, y: e.clientY, w: node.width, h: node.height }
+    // Resizing works from the drag START, not incrementally: the width and
+    // height floors clamp independently, so an incremental path lets one
+    // axis stick at its floor while the other keeps going — the aspect
+    // drifts, and a west/north drag walks the node sideways.
+    resizeStart.current = {
+      x: e.clientX, y: e.clientY,
+      w: node.width, h: node.height,
+      nx: node.pin ? node.pin.x : node.x,
+      ny: node.pin ? node.pin.y : node.y,
+    }
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
-  }, [node.width, node.height])
+  }, [node.width, node.height, node.x, node.y, node.pin])
 
   const onResizeMove = useCallback((e: React.PointerEvent) => {
     if (!(e.currentTarget as HTMLElement).hasPointerCapture(e.pointerId)) return
-    // A Rolodex tile keeps its proportions on the corner — the drawer at
-    // its base is what sets how long the cabinet is, and the corner just
-    // grows that shape. Dragging the corner freely would fight the drawer.
+    const s = resizeStart.current
+    const dir = resizeDir.current
+    const dx = (e.clientX - s.x) / gz
+    const dy = (e.clientY - s.y) / gz
+
+    // A Rolodex tile keeps its proportions — the drawer at its base is what
+    // sets how long the cabinet is, so the handles only grow the shape the
+    // drawer set rather than fighting it.
     if (LOCKS_ASPECT.has(node.type)) {
-      const s = resizeStart.current
       const ratio = s.h / s.w
-      const dx = (e.clientX - s.x) / gz
-      const dy = (e.clientY - s.y) / gz
-      // Project the drag onto the diagonal (1, ratio) so both directions
-      // of pointer travel contribute and the corner tracks the cursor.
-      const t = (dx + dy * ratio) / (1 + ratio * ratio)
+      // Project the drag onto the diagonal (1, ratio) so both directions of
+      // pointer travel contribute and the corner tracks the cursor. West and
+      // north handles pull the other way, hence the sign.
+      const sx = dir.includes('w') ? -1 : 1
+      const sy = dir.includes('n') ? -1 : 1
+      const t = (dx * sx + dy * sy * ratio) / (1 + ratio * ratio)
       const w = Math.max(120, 80 / ratio, s.w + t)
-      updateFreeNode(id, { width: w, height: w * ratio })
+      const h = w * ratio
+      const patch: Partial<FreeNodeData> = { width: w, height: h }
+      // Growing from a west/north handle has to move the opposite corner's
+      // anchor, or the node grows away from the hand holding it.
+      const k = node.pin ? node.pin.scale : 1
+      if (dir.includes('w') || dir.includes('n')) {
+        const nx = dir.includes('w') ? s.nx - (w - s.w) * k : s.nx
+        const ny = dir.includes('n') ? s.ny - (h - s.h) * k : s.ny
+        if (node.pin) patch.pin = { ...node.pin, x: nx, y: ny }
+        else { patch.x = nx; patch.y = ny }
+      }
+      updateFreeNode(id, patch)
       return
     }
-    resizeFreeNode(id, (e.clientX - resizeLastX.current) / gz, (e.clientY - resizeLastY.current) / gz)
-    resizeLastX.current = e.clientX
-    resizeLastY.current = e.clientY
-  }, [id, node?.type, resizeFreeNode, updateFreeNode, gz])
+
+    const MIN_W = 120, MIN_H = 80
+    let w = s.w, h = s.h, nx = s.nx, ny = s.ny
+    const k = node.pin ? node.pin.scale : 1
+    if (dir.includes('e')) w = Math.max(MIN_W, s.w + dx)
+    if (dir.includes('s')) h = Math.max(MIN_H, s.h + dy)
+    if (dir.includes('w')) { w = Math.max(MIN_W, s.w - dx); nx = s.nx + (s.w - w) * k }
+    if (dir.includes('n')) { h = Math.max(MIN_H, s.h - dy); ny = s.ny + (s.h - h) * k }
+
+    const patch: Partial<FreeNodeData> = { width: w, height: h }
+    if (nx !== s.nx || ny !== s.ny) {
+      if (node.pin) patch.pin = { ...node.pin, x: nx, y: ny }
+      else { patch.x = nx; patch.y = ny }
+    }
+    updateFreeNode(id, patch)
+  }, [id, node?.type, node.pin, updateFreeNode, gz])
 
   const commitRename = useCallback(() => {
     if (renameVal.trim()) updateFreeNode(id, { label: renameVal.trim() })
@@ -518,8 +556,20 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
   // with no body left to grab. Every interactive zone below therefore
   // takes a fraction of the node as a ceiling, which leaves ~70% of each
   // axis — ~91% of the area — as drag surface at ANY zoom.
-  const headerH = Math.min(20 * iz, node.height * 0.28)
+  // 22, matching Viewport3DFrame's header exactly. A docked tile's top
+  // already lined up with the Viewer's, but at 20 against 22 the two header
+  // BOTTOMS were two pixels apart, so a row of docked things read as a
+  // ragged band instead of one strip. The node cap still wins on small
+  // tiles — a 40px tile has no business carrying a 22px header.
+  const headerH = Math.min(22 * iz, node.height * 0.28)
   const grabZone = Math.min(40 * iz, node.width * 0.3, node.height * 0.3)
+  // Edge and corner zones follow the same rule as every other counter-scaled
+  // hit target here: a constant screen size, capped against the node's own
+  // box so that zooming out cannot turn the whole tile into handles.
+  const cornerZone = Math.min(18 * iz, node.width * 0.22, node.height * 0.22)
+  const edgeZone   = Math.min(9 * iz, node.width * 0.12, node.height * 0.12)
+  // Sides stop short of the corners so the corner always wins its own patch.
+  const sideInset  = cornerZone
   // Padding is counter-scaled too, so it needs the same ceiling — an
   // unclamped 6*iz is 100 canvas units at zoom 0.06 and, under content-box
   // sizing, lands OUTSIDE the capped header height and re-inflates it.
@@ -745,9 +795,35 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
         <TextFormatToolbar node={node} id={id} updateFreeNode={updateFreeNode} wrapperRef={wrapperRef} />
       )}
 
+      {/* ── Reshape handles ── the other seven. A single grow-only corner
+              made panels awkward to lay out next to each other: you could
+              never pull an edge back, so every adjustment meant moving the
+              node as well. Sides are thin strips, corners are squares, and
+              they sit UNDER the visible SE grip in z-order so the familiar
+              one still wins where they overlap. Rolodex tiles keep their
+              locked aspect on all of them — the drawer still sets the shape,
+              these only grow it. */}
+      {([
+        ['n',  { top: 0, left: sideInset, right: sideInset, height: edgeZone }, 'ns-resize'],
+        ['s',  { bottom: 0, left: sideInset, right: sideInset, height: edgeZone }, 'ns-resize'],
+        ['w',  { left: 0, top: sideInset, bottom: sideInset, width: edgeZone }, 'ew-resize'],
+        ['e',  { right: 0, top: sideInset, bottom: sideInset, width: edgeZone }, 'ew-resize'],
+        ['nw', { top: 0, left: 0, width: cornerZone, height: cornerZone }, 'nwse-resize'],
+        ['ne', { top: 0, right: 0, width: cornerZone, height: cornerZone }, 'nesw-resize'],
+        ['sw', { bottom: 0, left: 0, width: cornerZone, height: cornerZone }, 'nesw-resize'],
+      ] as const).map(([dir, pos, cursor]) => (
+        <div
+          key={dir}
+          data-resize={dir}
+          onPointerDown={onResizeDown}
+          onPointerMove={onResizeMove}
+          style={{ position: 'absolute', ...pos, cursor, zIndex: 19 }}
+        />
+      ))}
+
       {/* ── Resize handle — large corner zone, always present ── */}
       <div
-        data-resize="true"
+        data-resize="se"
         style={{
           position: 'absolute', bottom: 0, right: 0,
           width: grabZone, height: grabZone,

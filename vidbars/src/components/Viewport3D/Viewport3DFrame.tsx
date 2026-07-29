@@ -17,6 +17,7 @@
 
 import React, { useRef, useState, useCallback } from 'react'
 import { useViewport3DStore } from '../../store/viewport3dStore'
+import type { ViewportWindow3D } from '../../store/viewport3dStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { PinControl } from '../UI/PinControl'
@@ -55,7 +56,8 @@ function claimCanvasSelection(): void {
 export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => {
   const win = useViewport3DStore(s => s.windows[id])
   const moveWindow = useViewport3DStore(s => s.moveWindow)
-  const resizeWindow = useViewport3DStore(s => s.resizeWindow)
+  // resizeWindow only ever grew from the SE corner; the eight-way handles
+  // move the anchor too, so they patch the window directly.
   const removeWindow = useViewport3DStore(s => s.removeWindow)
   const saveCamera = useViewport3DStore(s => s.saveCamera)
   const zoom = useCanvasStore(s => s.zoom)
@@ -75,7 +77,8 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
   const [, setAnimTick] = useState(0)
   const wrapperRef = useRef<HTMLDivElement>(null)
   const dragLast = useRef({ x: 0, y: 0 })
-  const resizeLast = useRef({ x: 0, y: 0 })
+  const resizeStart = useRef({ x: 0, y: 0, w: 0, h: 0, nx: 0, ny: 0 })
+  const resizeDir = useRef('se')
   const orbitLast = useRef({ x: 0, y: 0 })
   const orbitActive = useRef(false)
   const wheelSaveTimer = useRef<number | null>(null)
@@ -147,18 +150,49 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
     dragLast.current = { x: e.clientX, y: e.clientY }
   }, [id, moveWindow, movePinnedWindow, win?.pin, gz])
 
-  // ── Resize corner ──
+  // ── Reshape handles ── eight, matching FreeNode. Growing only from the
+  //    SE corner meant a Viewer could never be pulled back from the left or
+  //    top without also moving it, which makes laying one out beside a row
+  //    of panels needlessly fiddly.
   const onResizeDown = useCallback((e: React.PointerEvent) => {
     e.stopPropagation()
     useUndoCoordinator.getState().checkpoint()
-    resizeLast.current = { x: e.clientX, y: e.clientY }
+    const w = useViewport3DStore.getState().windows[id]
+    if (!w) return
+    resizeDir.current = (e.currentTarget as HTMLElement).dataset.resize || 'se'
+    // From the drag START, so an axis parked at its floor cannot let the
+    // opposite edge creep — see FreeNode for the same reasoning.
+    resizeStart.current = {
+      x: e.clientX, y: e.clientY, w: w.width, h: w.height,
+      nx: w.pin ? w.pin.x : w.x, ny: w.pin ? w.pin.y : w.y,
+    }
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
-  }, [])
+  }, [id])
+
   const onResizeMove = useCallback((e: React.PointerEvent) => {
     if (!(e.currentTarget as HTMLElement).hasPointerCapture(e.pointerId)) return
-    resizeWindow(id, (e.clientX - resizeLast.current.x) / gz, (e.clientY - resizeLast.current.y) / gz)
-    resizeLast.current = { x: e.clientX, y: e.clientY }
-  }, [id, resizeWindow, gz])
+    const w = useViewport3DStore.getState().windows[id]
+    if (!w) return
+    const s = resizeStart.current
+    const dir = resizeDir.current
+    const dx = (e.clientX - s.x) / gz
+    const dy = (e.clientY - s.y) / gz
+    const k = w.pin ? w.pin.scale : 1
+    const MIN_W = 160, MIN_H = 120
+
+    let width = s.w, height = s.h, nx = s.nx, ny = s.ny
+    if (dir.includes('e')) width = Math.max(MIN_W, s.w + dx)
+    if (dir.includes('s')) height = Math.max(MIN_H, s.h + dy)
+    if (dir.includes('w')) { width = Math.max(MIN_W, s.w - dx); nx = s.nx + (s.w - width) * k }
+    if (dir.includes('n')) { height = Math.max(MIN_H, s.h - dy); ny = s.ny + (s.h - height) * k }
+
+    const patch: Partial<ViewportWindow3D> = { width, height }
+    if (nx !== s.nx || ny !== s.ny) {
+      if (w.pin) patch.pin = { ...w.pin, x: nx, y: ny }
+      else { patch.x = nx; patch.y = ny }
+    }
+    useViewport3DStore.getState().updateWindow(id, patch)
+  }, [id, gz])
 
   // ── Orbit / pan (body) — normalize by VISUAL height so feel is
   //    zoom-invariant. Left-drag orbits; Shift+left-drag or right-drag
@@ -226,6 +260,10 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
   const fontSize = 11 * iz
   const borderW = Math.min(Math.max(1, 2 / gz), win.width * 0.04, win.height * 0.04)
   const grabZone = Math.min(36 * iz, win.width * 0.3, win.height * 0.3)
+  // Same rule as FreeNode's: constant screen size, capped against the
+  // window's own box so zooming out cannot make it all handles.
+  const cornerZone = Math.min(18 * iz, win.width * 0.22, win.height * 0.22)
+  const edgeZone   = Math.min(9 * iz, win.width * 0.12, win.height * 0.12)
   // One alpha for all six chrome borders. Brightening them on selection is
   // a SECOND signal, and the one that survives occlusion: the outer ring
   // is a box-shadow on a zIndex:1 wrapper, so a flush-docked tile (docking
@@ -509,13 +547,32 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
         <ViewportSwitcherStrip windowId={id} />
       </div>
 
+      {/* ── Reshape handles ── the other seven, under the visible SE grip. */}
+      {([
+        ['n',  { top: 0, left: cornerZone, right: cornerZone, height: edgeZone }, 'ns-resize'],
+        ['s',  { bottom: 0, left: cornerZone, right: cornerZone, height: edgeZone }, 'ns-resize'],
+        ['w',  { left: 0, top: cornerZone, bottom: cornerZone, width: edgeZone }, 'ew-resize'],
+        ['e',  { right: 0, top: cornerZone, bottom: cornerZone, width: edgeZone }, 'ew-resize'],
+        ['nw', { top: 0, left: 0, width: cornerZone, height: cornerZone }, 'nwse-resize'],
+        ['ne', { top: 0, right: 0, width: cornerZone, height: cornerZone }, 'nesw-resize'],
+        ['sw', { bottom: 0, left: 0, width: cornerZone, height: cornerZone }, 'nesw-resize'],
+      ] as const).map(([dir, pos, cursor]) => (
+        <div
+          key={dir}
+          data-resize={dir}
+          onPointerDown={onResizeDown}
+          onPointerMove={onResizeMove}
+          style={{ position: 'absolute', ...pos, cursor, zIndex: 19 }}
+        />
+      ))}
+
       {/* ── Resize corner ── */}
       <div
-        data-resize="true"
+        data-resize="se"
         onPointerDown={onResizeDown}
         onPointerMove={onResizeMove}
         style={{
-          position: 'absolute', bottom: 0, right: 0,
+          position: 'absolute', bottom: 0, right: 0, zIndex: 20,
           // Capped against the window's own box — see FreeNode: a constant
           // screen-pixel corner outgrows the window when zoomed out and
           // swallows the body.
