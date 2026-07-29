@@ -102,6 +102,9 @@ export interface ViewportWindow3D {
    *  is skipped by the canvas-space layer. width/height stay canvas units
    *  and stay live, so resize and the docking geometry keep working. */
   pin?: { x: number; y: number; scale: number }
+  /** Canvas spot to return to on unpin — same meaning as a free node's
+   *  `home`. See freeNodeStore for why a pin does not move a thing. */
+  home?: { x: number; y: number; width: number; height: number }
   /** How the model is drawn. Applied as a scene-wide override, so the
    *  model's own materials are never mutated (instances share them). */
   viewMode?: 'textured' | 'shaded' | 'wireframe'
@@ -142,6 +145,9 @@ interface Viewport3DStore {
    *  now; unpin unprojects it and rescales by pin.scale / zoom, so the
    *  toggle is invisible. */
   setWindowPlacement: (id: string, to: 'screen' | 'canvas',
+                       view: { pan: { x: number; y: number }; zoom: number }) => void
+  /** Make where a pinned window sits now the spot it returns to. */
+  rehomePinnedWindow: (id: string,
                        view: { pan: { x: number; y: number }; zoom: number }) => void
   /** SCREEN-px delta for a pinned window. */
   movePinnedWindow: (id: string, dx: number, dy: number) => void
@@ -292,21 +298,44 @@ export const useViewport3DStore = create<Viewport3DStore>()(persist((set, get) =
       if (!w) return s
       if (to === 'screen') {
         if (w.pin) return s
-        return { windows: { ...s.windows, [id]: { ...w, pin: {
-          x: view.pan.x + w.x * view.zoom,
-          y: view.pan.y + w.y * view.zoom,
-          scale: view.zoom,
-        } } } }
+        return { windows: { ...s.windows, [id]: {
+          ...w,
+          pin: {
+            x: view.pan.x + w.x * view.zoom,
+            y: view.pan.y + w.y * view.zoom,
+            scale: view.zoom,
+          },
+          // Remember where it stood — unpinning is a return trip.
+          home: { x: w.x, y: w.y, width: w.width, height: w.height },
+        } } }
       }
       if (!w.pin) return s
+      const { pin: _drop, home: _dropHome, ...rest } = w
+      if (w.home) return { windows: { ...s.windows, [id]: { ...rest, ...w.home } } }
+      // No recorded home: unproject where it is now, as unpin always did.
       const k = w.pin.scale / view.zoom
-      const { pin: _drop, ...rest } = w
       return { windows: { ...s.windows, [id]: {
         ...rest,
         x: (w.pin.x - view.pan.x) / view.zoom,
         y: (w.pin.y - view.pan.y) / view.zoom,
         width: w.width * k,
         height: w.height * k,
+      } } }
+    }),
+
+  rehomePinnedWindow: (id, view) =>
+    set(s => {
+      const w = s.windows[id]
+      if (!w?.pin) return s
+      const k = w.pin.scale / view.zoom
+      return { windows: { ...s.windows, [id]: {
+        ...w,
+        home: {
+          x: (w.pin.x - view.pan.x) / view.zoom,
+          y: (w.pin.y - view.pan.y) / view.zoom,
+          width: w.width * k,
+          height: w.height * k,
+        },
       } } }
     }),
 

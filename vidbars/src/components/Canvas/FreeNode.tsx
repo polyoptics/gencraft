@@ -18,6 +18,7 @@ import { cardVisualRect } from '../../hooks/useCardDecks'
 import { findMagnetCandidate, magnetRadiusForZoom, type WindowRect } from '../../utils/viewportDocking'
 import { tileBrowseItem, isDockableTile } from '../../utils/contentTraversal'
 import { snapPanelToPanel, isPanelType } from '../../utils/componentLinks'
+import { setPlacementWithCarry } from '../../utils/placementCarry'
 import { CardRolodex } from '../Rolodex/CardRolodex'
 import { MediaPool } from '../Pool/MediaPool'
 import { PromptPad } from '../Prompt/PromptPad'
@@ -658,6 +659,51 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
             onDoubleClick={e => { e.stopPropagation(); setRenameVal(node.label); setIsRenaming(true) }}
           >{node.label}</span>
         )}
+
+        {/* ── Placement controls ── the apps all wear the same pair, so
+                pinning a Media Pool is the same gesture as pinning the
+                Rolodex or the Viewer. Media tiles keep using the context
+                menu: a 20px tile has no room for header buttons. */}
+        {isPanel && (
+          <>
+            {node.pin && (
+              <button
+                onPointerDown={e => e.stopPropagation()}
+                onClick={e => {
+                  e.stopPropagation()
+                  const cs = useCanvasStore.getState()
+                  useUndoCoordinator.getState().checkpoint()
+                  useFreeNodeStore.getState().rehomePinnedNode(id, { pan: cs.pan, zoom: cs.zoom })
+                }}
+                title="Make this the spot it returns to when unpinned"
+                style={{
+                  background: 'none', border: 'none', cursor: 'pointer', flexShrink: 0,
+                  color: 'rgba(255,255,255,0.4)', fontSize: fontSize * 0.95,
+                  padding: 0, lineHeight: 1, fontFamily: 'inherit',
+                  opacity: isHovered ? 1 : 0.35, transition: 'opacity 0.12s',
+                }}
+              >⌖</button>
+            )}
+            <button
+              onPointerDown={e => e.stopPropagation()}
+              onClick={e => {
+                e.stopPropagation()
+                const cs = useCanvasStore.getState()
+                useUndoCoordinator.getState().checkpoint()
+                setPlacementWithCarry(id, node.pin ? 'canvas' : 'screen', { pan: cs.pan, zoom: cs.zoom })
+              }}
+              title={node.pin
+                ? 'Pinned to the screen — click to set it back down on the canvas'
+                : 'On the canvas — click to pin it to the screen'}
+              style={{
+                background: 'none', border: 'none', cursor: 'pointer', flexShrink: 0,
+                color: node.pin ? 'rgba(150,200,255,0.95)' : 'rgba(255,255,255,0.4)',
+                fontSize: fontSize * 0.95, padding: 0, lineHeight: 1, fontFamily: 'inherit',
+                opacity: node.pin ? 1 : (isHovered ? 1 : 0.3), transition: 'opacity 0.12s',
+              }}
+            >📌</button>
+          </>
+        )}
       </div>
 
       {/* ── Body ── */}
@@ -756,10 +802,19 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
                 action: () => {
                   const cs = useCanvasStore.getState()
                   useUndoCoordinator.getState().checkpoint()
-                  useFreeNodeStore.getState().setNodePlacement(
-                    [id], node.pin ? 'canvas' : 'screen', { pan: cs.pan, zoom: cs.zoom })
+                  setPlacementWithCarry(
+                    id, node.pin ? 'canvas' : 'screen', { pan: cs.pan, zoom: cs.zoom })
                   setNodeMenu(null)
                 } },
+              ...(node.pin ? [
+                { label: 'Set return spot here', icon: '⌖',
+                  action: () => {
+                    const cs = useCanvasStore.getState()
+                    useUndoCoordinator.getState().checkpoint()
+                    useFreeNodeStore.getState().rehomePinnedNode(id, { pan: cs.pan, zoom: cs.zoom })
+                    setNodeMenu(null)
+                  } },
+              ] : []),
               { label: 'Delete', icon: '🗑️', danger: true, action: () => { useUndoCoordinator.getState().checkpoint(); deleteFreeNode(id); setNodeMenu(null) } },
             ].map(item => (
               <button

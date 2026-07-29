@@ -104,6 +104,14 @@ export interface FreeNodeData {
    *  a VALID canvas quantity, so a missed guard is cosmetic rather than
    *  corrupting. Unpin recomputes them. */
   pin?: { x: number; y: number; scale: number }
+  /** Where this node came FROM, captured when it was pinned. Unpinning
+   *  puts it back here rather than dropping it wherever it happened to be
+   *  sitting on screen — a pin is a temporary visit to the screen, not a
+   *  move. Absent on nodes pinned before this existed, and on nodes that
+   *  have never been pinned; both fall back to unprojecting the current
+   *  position, which is the old behaviour. The re-home control overwrites
+   *  it with the current spot when the visit turns out to be permanent. */
+  home?: { x: number; y: number; width: number; height: number }
   color: string
   textStyle?: TextStyle
   /** Annotation layer — vector strokes drawn on this node. */
@@ -126,6 +134,11 @@ interface FreeNodeStore {
    *  400ms debounced IDB write. pan/zoom are PASSED IN so this store
    *  keeps zero imports of canvasStore. */
   setNodePlacement: (ids: string[], to: 'screen' | 'canvas',
+                     view: { pan: { x: number; y: number }; zoom: number }) => void
+  /** Re-home a PINNED node: make where it sits now the spot it returns to.
+   *  Without this a pin could never be made permanent — you would always
+   *  snap back to wherever you first pinned from. */
+  rehomePinnedNode: (id: string,
                      view: { pan: { x: number; y: number }; zoom: number }) => void
   /** SCREEN-px delta for pinned nodes. moveManyFreeNodes stays
    *  canvas-delta-only; keeping the two separate is what lets a pinned
@@ -219,29 +232,64 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
           if (n.pin) continue
           // The rect the browser is painting RIGHT NOW: the world div is
           // translate(pan) scale(zoom) and the node is left:x top:y.
-          nodes[id] = { ...n, pin: {
-            x: view.pan.x + n.x * view.zoom,
-            y: view.pan.y + n.y * view.zoom,
-            scale: view.zoom,
-          } }
+          nodes[id] = {
+            ...n,
+            pin: {
+              x: view.pan.x + n.x * view.zoom,
+              y: view.pan.y + n.y * view.zoom,
+              scale: view.zoom,
+            },
+            // Remember where it stood, so unpinning is a return trip.
+            home: { x: n.x, y: n.y, width: n.width, height: n.height },
+          }
         } else {
           if (!n.pin) continue
-          const k = n.pin.scale / view.zoom
-          const { pin: _drop, ...rest } = n
+          const { pin: _drop, home: _dropHome, ...rest } = n
           // Deliberately NOT routed through resizeFreeNode: its 120/80
           // floors would silently resize a small tile mid-flip and break
           // the seam.
-          nodes[id] = {
-            ...rest,
-            x: (n.pin.x - view.pan.x) / view.zoom,
-            y: (n.pin.y - view.pan.y) / view.zoom,
-            width: n.width * k,
-            height: n.height * k,
+          if (n.home) {
+            nodes[id] = { ...rest, ...n.home }
+          } else {
+            // No recorded home — either pinned before homes existed, or
+            // re-homing was never used. Unproject where it is now, which
+            // is what unpin always did.
+            const k = n.pin.scale / view.zoom
+            nodes[id] = {
+              ...rest,
+              x: (n.pin.x - view.pan.x) / view.zoom,
+              y: (n.pin.y - view.pan.y) / view.zoom,
+              width: n.width * k,
+              height: n.height * k,
+            }
           }
         }
         changed = true
       }
       return changed ? { nodes } : s
+    }),
+
+  rehomePinnedNode: (id, view) =>
+    set(s => {
+      const n = s.nodes[id]
+      if (!n?.pin) return s
+      // Exactly the rect a no-home unpin would produce — so pressing this
+      // and then unpinning leaves the panel visually where it is.
+      const k = n.pin.scale / view.zoom
+      return {
+        nodes: {
+          ...s.nodes,
+          [id]: {
+            ...n,
+            home: {
+              x: (n.pin.x - view.pan.x) / view.zoom,
+              y: (n.pin.y - view.pan.y) / view.zoom,
+              width: n.width * k,
+              height: n.height * k,
+            },
+          },
+        },
+      }
     }),
 
   movePinnedNodes: (ids, dx, dy) => {

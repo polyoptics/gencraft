@@ -46,25 +46,39 @@ export interface DockedSource {
 
 const GROUP_PREFIX = 'group:'
 
-function windowRects(windows: Record<string, ViewportWindow3D>): WindowRect[] {
+/** Window rects within ONE placement. Cross-placement docking still does
+ *  not exist — a canvas window and a pinned one are nowhere near each other
+ *  in any sense the user can see — but WITHIN the pinned stratum things
+ *  dock exactly as they do on the canvas, so a row composed on screen keeps
+ *  working. A pinned window's x/y are the stale pre-pin position, so its
+ *  live rect comes from `pin` instead.
+ *
+ *  Tolerance needs no adjustment between the two: DOCK_TOLERANCE is 16
+ *  canvas units on the canvas, and the pinned stratum IS screen space, so
+ *  the same number reads as 16 screen pixels there. Both are right for
+ *  their own space, which is why callers leave the default alone —
+ *  placementCarry relies on that agreement too. */
+function windowRects(windows: Record<string, ViewportWindow3D>, pinned: boolean): WindowRect[] {
   return Object.values(windows)
-    // A screen-pinned window is not canvas geometry: its x/y are the stale
-    // pre-pin position, so leaving it in would dock tiles to where it used
-    // to be. Cross-placement docking does not exist.
-    .filter(w => !w.pin)
-    .map(w => ({ id: w.id, x: w.x, y: w.y, width: w.width, height: w.height }))
+    .filter(w => !!w.pin === pinned)
+    .map(w => (w.pin
+      ? { id: w.id, x: w.pin.x, y: w.pin.y, width: w.width * w.pin.scale, height: w.height * w.pin.scale }
+      : { id: w.id, x: w.x, y: w.y, width: w.width, height: w.height }))
 }
 
 /** Dockable tiles as cluster items — content-bearing tiles + list tiles
  *  (isDockableTile is THE shared predicate). */
-function contentTileItems(nodes: Record<string, FreeNodeData>): DockableItem[] {
+function contentTileItems(nodes: Record<string, FreeNodeData>, pinned: boolean): DockableItem[] {
   return Object.values(nodes)
-    // Screen-pinned tiles are not canvas geometry. Guarding at this one
-    // site keeps a pinned panel's stale rect out of the ENTIRE docking
-    // graph — dock strips, cluster affordances, and computeCarriedEntities,
-    // which decides what a dragging Viewer takes with it.
-    .filter(n => !n.pin && isDockableTile(n))
-    .map(n => ({ id: n.id, x: n.x, y: n.y, width: n.width, height: n.height }))
+    // One placement at a time — a pinned tile's x/y are its stale pre-pin
+    // position, so it contributes its screen rect instead. Guarding at this
+    // one site keeps the two strata from ever seeing each other across the
+    // ENTIRE docking graph: dock strips, cluster affordances, and
+    // computeCarriedEntities, which decides what a dragging Viewer takes.
+    .filter(n => !!n.pin === pinned && isDockableTile(n))
+    .map(n => (n.pin
+      ? { id: n.id, x: n.pin.x, y: n.pin.y, width: n.width * n.pin.scale, height: n.height * n.pin.scale }
+      : { id: n.id, x: n.x, y: n.y, width: n.width, height: n.height }))
 }
 
 /** A list tile's contribution: matched groups' OWN content (no deck
@@ -176,13 +190,15 @@ export function useDockedSources(windowId: string): DockedSource[] {
   const zoom = useCanvasStore(s => s.zoom)
 
   return useMemo(() => {
-    const winRects = windowRects(windows)
+    // This window's own placement picks the stratum everything is read in.
+    const pinned = !!windows[windowId]?.pin
+    const winRects = windowRects(windows, pinned)
     if (!winRects.some(w => w.id === windowId)) return []
 
     const out: DockedSource[] = []
 
     // Tiles: cluster-connected, BFS order from the window
-    const clusters = computeTileClusters(contentTileItems(nodes), winRects)
+    const clusters = computeTileClusters(contentTileItems(nodes, pinned), winRects)
     for (const tid of clusters.byWindow.get(windowId) ?? []) {
       const n = nodes[tid]
       if (!n) continue
@@ -206,8 +222,12 @@ export function useDockedSources(windowId: string): DockedSource[] {
       })
     }
 
-    // Cards/decks: direct slot touch, single-assignment partition
-    const groupDocks = computeAllDocks(winRects, contentGroupItems(groups, boards, zoom)).get(windowId) ?? []
+    // Cards/decks: direct slot touch, single-assignment partition. Cards
+    // are canvas content with world coordinates and have no screen
+    // placement, so a PINNED window never has cards docked to it.
+    const groupDocks = pinned
+      ? []
+      : computeAllDocks(winRects, contentGroupItems(groups, boards, zoom)).get(windowId) ?? []
     for (const d of groupDocks) {
       const gid = d.id.slice(GROUP_PREFIX.length)
       const g = groups.find(x => x.id === gid)
@@ -248,12 +268,16 @@ export function computeCarriedEntities(windowId: string): { tileIds: string[]; g
   const windows = useViewport3DStore.getState().windows
   const nodes = useFreeNodeStore.getState().nodes
   const bs = useBoardsStore.getState()
-  const winRects = windowRects(windows)
+  const pinned = !!windows[windowId]?.pin
+  const winRects = windowRects(windows, pinned)
   const win = winRects.find(w => w.id === windowId)
   if (!win) return { tileIds: [], groupIds: [] }
 
-  const clusters = computeTileClusters(contentTileItems(nodes), winRects)
+  const clusters = computeTileClusters(contentTileItems(nodes, pinned), winRects)
   const tileIds = clusters.byWindow.get(windowId) ?? []
+
+  // A pinned window drags across the screen and cannot take cards with it.
+  if (pinned) return { tileIds, groupIds: [] }
 
   const zoom = useCanvasStore.getState().zoom
   const direct: string[] = []

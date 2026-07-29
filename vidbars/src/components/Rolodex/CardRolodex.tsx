@@ -36,6 +36,7 @@ import { getModelPoster, ensureModelPoster, invalidateModelPoster, useModelPoste
 import { useResolvedMedia } from '../../utils/useResolvedMedia'
 import { usePoolStore, loadPoolDir, type PoolFile } from '../../store/poolStore'
 import { poolFeedingList } from '../../utils/componentLinks'
+import { setPlacementWithCarry } from '../../utils/placementCarry'
 import {
   DEFAULT_HEADER_STYLE,
   DEFAULT_BODY_STYLE,
@@ -1610,13 +1611,31 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
               {/* Placement toggle — the pin. Lives here rather than only
                   in the right-click menu, because a mode you can't see is
                   a mode you don't know you have. */}
+              {embedded && embeddedNode?.pin && (
+                <button
+                  onClick={() => {
+                    const cs = useCanvasStore.getState()
+                    useUndoCoordinator.getState().checkpoint()
+                    useFreeNodeStore.getState().rehomePinnedNode(
+                      embeddedNode.id, { pan: cs.pan, zoom: cs.zoom })
+                  }}
+                  title="Make this the spot it returns to when unpinned"
+                  style={{
+                    background: 'rgba(255,255,255,0.05)',
+                    border: '1px solid rgba(255,255,255,0.12)',
+                    borderRadius: 4, color: 'rgba(255,255,255,0.5)',
+                    fontSize: 10, fontWeight: 700,
+                    padding: '1px 6px', cursor: 'pointer', fontFamily: 'inherit', lineHeight: 1.4,
+                  }}
+                >⌖</button>
+              )}
               {embedded && embeddedNode && (
                 <button
                   onClick={() => {
                     const cs = useCanvasStore.getState()
                     useUndoCoordinator.getState().checkpoint()
-                    useFreeNodeStore.getState().setNodePlacement(
-                      [embeddedNode.id], embeddedNode.pin ? 'canvas' : 'screen',
+                    setPlacementWithCarry(
+                      embeddedNode.id, embeddedNode.pin ? 'canvas' : 'screen',
                       { pan: cs.pan, zoom: cs.zoom })
                   }}
                   title={embeddedNode.pin
