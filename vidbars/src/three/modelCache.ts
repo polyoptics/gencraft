@@ -1,4 +1,4 @@
-// modelCache.ts — GLTF/GLB loading, caching, and disposal.
+// modelCache.ts — GLTF/GLB + FBX loading, caching, and disposal.
 //
 // Cache is keyed by the RAW ref string ('mediaref:<id>' | '/uploads/…' |
 // 'http…') — never a session object URL, so the same model docked in two
@@ -13,9 +13,21 @@
 // fully disposes geometry/materials/textures. DRACO-compressed GLBs are
 // not supported yet — the loader error surfaces as the window's error
 // state ("compressed GLB not supported").
+//
+// Animation clips are normalised onto `source.animations` for BOTH formats
+// (glTF hangs them off the parse result rather than the scene) and copied
+// onto each instance, since SkeletonUtils.clone does not carry them.
+//
+// FBX caveat: a binary FBX with EMBEDDED textures has them unpacked into
+// blob: URLs by FBXLoader, and blob bytes are unreadable in this runtime —
+// the same failure that made GLB textures grey. GLB is pre-processed to
+// dodge that (see glbInlineTextures); the FBX container is not, so an
+// embedded-texture FBX will load geometry, rig and animation correctly but
+// render untextured.
 
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js'
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js'
 import { isMediaRef, mediaRefId } from '../utils/mediaRef'
 import { inlineGlbTextures } from './glbInlineTextures'
@@ -42,6 +54,18 @@ const manager = new THREE.LoadingManager()
 manager.addHandler(/^data:/, new THREE.TextureLoader(manager))
 
 const loader = new GLTFLoader(manager)
+const fbxLoader = new FBXLoader(manager)
+
+/** FBX detection. Binary FBX starts with "Kaydara FBX Binary"; the ASCII
+ *  variant is a text file whose header mentions FBX. Extension first
+ *  because it is cheap and right almost always, magic bytes as the
+ *  fallback for `mediaref:` urls that carry no filename. */
+function isFbx(url: string, buf: ArrayBuffer): boolean {
+  if (/\.fbx(\?|$)/i.test(url)) return true
+  if (buf.byteLength < 24) return false
+  const head = new TextDecoder('latin1').decode(new Uint8Array(buf, 0, 24))
+  return head.startsWith('Kaydara FBX Binary') || /^;\s*FBX|FBXHeaderExtension/.test(head)
+}
 
 async function loadEntry(url: string): Promise<CacheEntry> {
   // Both paths go through parseAsync on bytes we hold, so the texture
@@ -56,10 +80,23 @@ async function loadEntry(url: string): Promise<CacheEntry> {
       })()
     : await (await fetch(url)).arrayBuffer()
 
+  if (isFbx(url, buf)) {
+    // FBXLoader.parse is synchronous and takes the raw buffer. Its second
+    // argument is the resource path for EXTERNAL textures; '' because we
+    // only have the file itself.
+    const group = fbxLoader.parse(buf, '')
+    // Animation clips live on the group for FBX. Keep them on `source` so
+    // clones can carry them (SkeletonUtils.clone does not copy them).
+    return { source: group as unknown as THREE.Group, refCount: 0 }
+  }
+
   // Embedded textures become data URIs before the parser sees them — it
   // would otherwise turn each into a blob: URL, and those do not survive
   // in this runtime, leaving the model flat grey. See glbInlineTextures.
   const gltf = await loader.parseAsync(inlineGlbTextures(buf), '')
+  // glTF hangs clips off the RESULT, not the scene; move them onto the
+  // scene so every format exposes animations the same way.
+  ;(gltf.scene as THREE.Object3D).animations = gltf.animations ?? []
   return { source: gltf.scene, refCount: 0 }
 }
 
@@ -83,7 +120,12 @@ export async function acquireModel(url: string): Promise<THREE.Object3D> {
   const li = lru.indexOf(url)
   if (li >= 0) lru.splice(li, 1)
   entry.refCount++
-  return SkeletonUtils.clone(entry.source)
+  const inst = SkeletonUtils.clone(entry.source)
+  // Clips are shared, read-only data — an AnimationMixer binds them to
+  // whatever root it is given, so instances can safely reference the same
+  // array. SkeletonUtils.clone does not carry them across.
+  inst.animations = entry.source.animations ?? []
+  return inst
 }
 
 /** Drop one reference. Zero-ref entries park in the LRU; overflow disposes. */

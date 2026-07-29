@@ -23,7 +23,10 @@ import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useBoardsStore } from '../../store/boardsStore'
 import { computeCarriedEntities } from '../../hooks/useDockedContent'
 import { useViewStatus } from '../../hooks/useViewStatus'
-import { getViewRuntime, requestRender, MIN_GL_PX, captureViewPoster, getModelStats } from '../../three/viewportRenderer'
+import {
+  getViewRuntime, requestRender, MIN_GL_PX, captureViewPoster, getModelStats,
+  getAnimInfo, playClip, pauseClip, stopClip,
+} from '../../three/viewportRenderer'
 import { usePosterMapStore } from '../../three/posterService'
 import { clampPhi, panOrbit } from '../../three/orbitState'
 import { useSeedHoverFromCursor } from '../../utils/pointerTracker'
@@ -66,6 +69,9 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
   const setPoster = usePosterMapStore(s => s.setPoster)
 
   const [isHovered, setIsHovered] = useState(false)
+  /** Transport state lives in the view registry (it changes at frame rate,
+   *  not React rate); this just forces a re-read after a button press. */
+  const [, setAnimTick] = useState(0)
   const wrapperRef = useRef<HTMLDivElement>(null)
   const dragLast = useRef({ x: 0, y: 0 })
   const resizeLast = useRef({ x: 0, y: 0 })
@@ -448,6 +454,53 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
                   <span style={{ opacity: 0.6 }}>{k}</span><span>{v}</span>
                 </div>
               ))}
+            </div>
+          )
+        })()}
+
+        {/* ── Animation transport — only when the model brought clips ── */}
+        {modelActive && status.status === 'ready' && (() => {
+          const anim = getAnimInfo(id)
+          if (!anim) return null
+          const btn: React.CSSProperties = {
+            background: 'rgba(10,14,26,0.8)', border: `${1 * iz}px solid rgba(140,190,255,0.3)`,
+            borderRadius: 3 * iz, color: 'rgba(200,225,255,0.92)',
+            fontSize: 10 * iz, padding: `${2 * iz}px ${7 * iz}px`,
+            cursor: 'pointer', fontFamily: 'inherit', lineHeight: 1.3,
+          }
+          return (
+            <div
+              onPointerDown={e => e.stopPropagation()}
+              style={{
+                position: 'absolute', left: 6 * iz, bottom: 34 * iz,
+                display: 'flex', alignItems: 'center', gap: 4 * iz,
+                padding: `${3 * iz}px ${4 * iz}px`, borderRadius: 4 * iz,
+                background: 'rgba(8,10,20,0.72)', border: `${1 * iz}px solid rgba(140,190,255,0.22)`,
+              }}
+            >
+              <button style={btn} title={anim.playing ? 'Pause' : 'Play'}
+                onClick={() => { anim.playing ? pauseClip(id) : playClip(id); setAnimTick(t => t + 1) }}
+              >{anim.playing ? '❚❚' : '▶'}</button>
+              <button style={btn} title="Stop and return to the rest pose"
+                onClick={() => { stopClip(id); setAnimTick(t => t + 1) }}
+              >■</button>
+              {anim.clipNames.length > 1 ? (
+                <select
+                  value={anim.clipIndex}
+                  onChange={e => { playClip(id, Number(e.target.value)); setAnimTick(t => t + 1) }}
+                  style={{ ...btn, maxWidth: 120 * iz }}
+                >
+                  {anim.clipNames.map((n, i) => <option key={i} value={i}>{n}</option>)}
+                </select>
+              ) : (
+                <span style={{ fontSize: 9 * iz, color: 'rgba(200,225,255,0.7)', maxWidth: 120 * iz,
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {anim.clipNames[0]}
+                </span>
+              )}
+              <span style={{ fontSize: 8.5 * iz, color: 'rgba(200,225,255,0.45)', fontFamily: 'ui-monospace, monospace' }}>
+                {anim.duration.toFixed(1)}s
+              </span>
             </div>
           )
         })()}

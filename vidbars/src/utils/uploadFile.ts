@@ -8,7 +8,7 @@ export interface UploadResult {
   originalName: string
 }
 
-const MODEL_EXT = /\.(glb|gltf)$/i
+const MODEL_EXT = /\.(glb|gltf|fbx)$/i
 
 /** Classify a file into a MediaType. MIME-first with an extension fallback:
  *  Windows commonly reports an EMPTY file.type for .glb/.gltf drags, so the
@@ -36,6 +36,9 @@ function withKnownMime(file: File): Blob {
   if (file.type) return file
   if (/\.glb$/i.test(file.name)) return file.slice(0, file.size, 'model/gltf-binary')
   if (/\.gltf$/i.test(file.name)) return file.slice(0, file.size, 'model/gltf+json')
+  // No registered MIME for FBX; this is the de-facto one and it only has to
+  // round-trip through our own blob store and backup zip.
+  if (/\.fbx$/i.test(file.name)) return file.slice(0, file.size, 'application/octet-stream')
   return file
 }
 

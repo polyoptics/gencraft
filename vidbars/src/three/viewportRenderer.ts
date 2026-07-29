@@ -32,6 +32,15 @@ export interface ViewRuntime {
   id: string
   scene: THREE.Scene
   camera: THREE.PerspectiveCamera
+  /** Animation, when the loaded model brought clips with it. The mixer is
+   *  created on load and ticked by the render loop while playing — which
+   *  is also what switches the loop from render-on-demand to continuous
+   *  (see renderFrame). */
+  mixer?: THREE.AnimationMixer
+  clips?: THREE.AnimationClip[]
+  action?: THREE.AnimationAction
+  clipIndex?: number
+  playing?: boolean
   orbit: OrbitState
   dollyMin: number
   dollyMax: number
@@ -51,6 +60,8 @@ let container: HTMLElement | null = null
 let containerW = 0
 let containerH = 0
 let rafHandle: number | null = null
+/** Timestamp of the last animated frame; 0 when nothing is playing. */
+let lastFrameMs = 0
 let resizeObserver: ResizeObserver | null = null
 const unsubscribers: Array<() => void> = []
 const views = new Map<string, ViewRuntime>()
@@ -183,6 +194,20 @@ function renderFrame(): void {
   const W = containerW, H = containerH
   if (W === 0 || H === 0) return
 
+  // Advance any playing animation. This is the ONE thing that makes the
+  // loop continuous instead of render-on-demand: while a clip is playing
+  // we re-arm every frame, and stop the moment nothing is playing so idle
+  // still costs zero GPU.
+  const now = performance.now()
+  const dt = lastFrameMs === 0 ? 0 : Math.min(0.1, (now - lastFrameMs) / 1000)
+  lastFrameMs = now
+  let anyPlaying = false
+  for (const view of views.values()) {
+    if (view.mixer && view.playing) { view.mixer.update(dt); anyPlaying = true }
+  }
+  if (!anyPlaying) lastFrameMs = 0
+  let keepAnimating = false
+
   // Full transparent clear each frame — windows move with pan; skipping
   // this leaves ghost trails. The dot grid shows through around windows.
   renderer.setScissorTest(false)
@@ -234,7 +259,12 @@ function renderFrame(): void {
       view.hasRenderedOnce = true
       notifyStatus(win.id)
     }
+    if (view.playing) keepAnimating = true
   }
+
+  // Re-arm only while something is actually animating ON SCREEN — a
+  // playing clip in a window scrolled out of view should not pin the loop.
+  if (keepAnimating) requestRender()
 }
 
 // ── View registry sync (store-driven, not mount-driven) ──
@@ -255,6 +285,96 @@ function createView(id: string): ViewRuntime {
   views.set(id, view)
   notifyStatus(id)
   return view
+}
+
+// ── Animation transport ──
+
+export interface AnimInfo {
+  clipNames: string[]
+  clipIndex: number
+  playing: boolean
+  duration: number
+}
+
+export function getAnimInfo(id: string): AnimInfo | null {
+  const view = views.get(id)
+  if (!view?.clips?.length) return null
+  const i = view.clipIndex ?? 0
+  return {
+    clipNames: view.clips.map((c, n) => c.name || `clip ${n + 1}`),
+    clipIndex: i,
+    playing: !!view.playing,
+    duration: view.clips[i]?.duration ?? 0,
+  }
+}
+
+/** Play a clip by index (or resume the current one). */
+export function playClip(id: string, index?: number): void {
+  const view = views.get(id)
+  if (!view?.mixer || !view.clips?.length) return
+  const i = Math.max(0, Math.min(view.clips.length - 1, index ?? view.clipIndex ?? 0))
+  if (view.action && i !== view.clipIndex) { view.action.stop(); view.action = undefined }
+  view.clipIndex = i
+  if (!view.action) {
+    view.action = view.mixer.clipAction(view.clips[i])
+    view.action.reset()
+  }
+  view.action.paused = false
+  view.action.play()
+  view.playing = true
+  lastFrameMs = 0        // don't charge the first frame for the idle gap
+  requestRender()
+}
+
+export function pauseClip(id: string): void {
+  const view = views.get(id)
+  if (!view?.action) return
+  view.action.paused = true
+  view.playing = false
+  requestRender()
+}
+
+export function stopClip(id: string): void {
+  const view = views.get(id)
+  if (!view?.mixer) return
+  view.action?.stop()
+  view.action = undefined
+  view.playing = false
+  // Return the rig to its rest pose rather than freezing mid-stride.
+  view.mixer.setTime(0)
+  requestRender()
+}
+
+/** Drive a rig from ANOTHER file's clips — the "drag an animation onto a
+ *  model" gesture. Clips address bones by NAME, so this works whenever the
+ *  two skeletons share a naming convention (Mixamo rigs generally do) and
+ *  silently animates nothing when they do not. Returns how many of the
+ *  clip's tracks actually found a target, so the caller can tell the user
+ *  it did not take rather than leaving them staring at a still model. */
+export function applyExternalClips(id: string, clips: THREE.AnimationClip[]): number {
+  const view = views.get(id)
+  if (!view?.modelRoot || clips.length === 0) return 0
+
+  const names = new Set<string>()
+  view.modelRoot.traverse(o => { if (o.name) names.add(o.name) })
+  let matched = 0
+  for (const clip of clips) {
+    for (const track of clip.tracks) {
+      // Track names look like "mixamorig:Hips.quaternion".
+      const bone = track.name.split('.')[0]
+      if (names.has(bone)) matched++
+    }
+  }
+  if (matched === 0) return 0
+
+  view.action?.stop()
+  view.mixer?.stopAllAction()
+  view.mixer = new THREE.AnimationMixer(view.modelRoot)
+  view.clips = clips
+  view.clipIndex = 0
+  view.action = undefined
+  playClip(id, 0)
+  return matched
 }
 
 /** Render a window's CURRENT view — its camera, its display mode — to a
@@ -336,6 +456,11 @@ async function loadModelIntoView(view: ViewRuntime, url: string, savedCamera: Or
   const oldHelper = skeletons.get(view.id)
   if (oldHelper) { view.scene.remove(oldHelper); oldHelper.dispose?.(); skeletons.delete(view.id) }
   statsByView.delete(view.id)
+  view.mixer?.stopAllAction()
+  view.mixer = undefined
+  view.clips = undefined
+  view.action = undefined
+  view.playing = false
   view.modelUrl = url
   view.status = 'loading'
   view.hasRenderedOnce = false
@@ -349,7 +474,13 @@ async function loadModelIntoView(view: ViewRuntime, url: string, savedCamera: Or
     }
     view.modelRoot = root
     view.scene.add(root)
-    statsByView.set(view.id, computeStats(root, (root.animations?.length ?? 0)))
+    const clips = root.animations ?? []
+    view.clips = clips
+    view.mixer = clips.length > 0 ? new THREE.AnimationMixer(root) : undefined
+    view.action = undefined
+    view.clipIndex = clips.length > 0 ? 0 : undefined
+    view.playing = false
+    statsByView.set(view.id, computeStats(root, clips.length))
     const framed = frameModel(root, view.camera.fov)
     view.camera.near = framed.near
     view.camera.far = framed.far
