@@ -39,6 +39,7 @@ import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { useThumb, requestThumb, getThumb } from '../../utils/thumbService'
+import { CounterScaled, usePanelChrome } from '../UI/PanelSurface'
 
 /** Target tile size in SCREEN pixels. These used to be canvas pixels,
  *  which made "mid" 14 real pixels wide at block zoom. The grid fills the
@@ -60,27 +61,6 @@ const OVERSCAN = 2
  *  real thumbnail or shows its glyph — a full-res 8.5 MB PNG decoded into
  *  a 120px box is the other half of what made this panel stutter. */
 const RAW_FALLBACK_MAX = 300 * 1024
-
-// ── Counter-scale ──────────────────────────────────────────────────
-// Same shape as ContentViews' CounterScaled. Replicated rather than
-// imported: this panel has no other reason to depend on the Viewport3D
-// module, and ten lines of transform is a cheaper coupling than a shared
-// import across two feature folders.
-//
-// The layout box is gz% of the node and is then scaled by 1/gz, so it
-// still covers the node exactly while every CSS pixel inside equals one
-// screen pixel. Clamped at 0.1 so extreme zoom-out cannot ask the browser
-// to lay out an absurd surface.
-const CounterScaled: React.FC<{ gz: number; children: React.ReactNode }> = ({ gz, children }) => {
-  const z = Math.max(gz, 0.1)
-  return (
-    <div style={{
-      position: 'absolute', left: 0, top: 0,
-      width: `${z * 100}%`, height: `${z * 100}%`,
-      transform: `scale(${1 / z})`, transformOrigin: 'top left',
-    }}>{children}</div>
-  )
-}
 
 // ── One tile ───────────────────────────────────────────────────────
 
@@ -260,7 +240,6 @@ export const MediaPool: React.FC<{ nodeId: string }> = ({ nodeId }) => {
   const node = useFreeNodeStore(s => s.nodes[nodeId])
   const updateFreeNode = useFreeNodeStore(s => s.updateFreeNode)
   const contents = usePoolStore(s => s.pools[nodeId])
-  const zoom = useCanvasStore(s => s.zoom)
   const [sizeIdx, setSizeIdx] = useState(1)
   const [selected, setSelected] = useState<string | null>(null)
   const [filter, setFilter] = useState('')
@@ -270,22 +249,11 @@ export const MediaPool: React.FC<{ nodeId: string }> = ({ nodeId }) => {
   // The multiplier the canvas applies to this node: the live zoom, or the
   // zoom FROZEN at pin time. Identical to FreeNode and Viewport3DFrame —
   // a pinned pool and a canvas pool must render the same.
-  const gz = node?.pin ? node.pin.scale : zoom
-
-  // How tall this panel actually is ON SCREEN. Counter-scaled chrome is a
-  // constant ~90 screen px, so on a panel shorter than that the chrome eats
-  // everything and the grid collapses — measured at zoom 0.3, a 380-unit
-  // pool left a 16 px grid against 125 px tiles. Making the chrome shrink
-  // instead is not an option: it is counter-scaled precisely so it stays
-  // readable, which was the complaint. So the chrome gives up ROWS as room
-  // runs out, poorest-value first, and the files keep the space. Zooming in
-  // brings each row back.
-  const screenH = (node?.height ?? 0) * gz
-  // Thresholds picked by measuring the resulting grid share, not by feel:
-  // they keep the file area above roughly half the panel at every zoom.
-  const showFooter = screenH >= 240
-  const showControls = screenH >= 150
-  const showPath = screenH >= 100
+  // Counter-scaled chrome is a constant ~90 screen px, so on a panel shorter
+  // than that the chrome eats everything and the grid collapses — measured
+  // at zoom 0.3, a 380-unit pool left a 16 px grid against 125 px tiles.
+  // usePanelChrome is the shared answer: rows drop out as room runs out.
+  const { gz, showFooter, showControls, showHeader: showPath } = usePanelChrome(node)
 
   const dir = node?.poolDir ?? 'public/uploads'
 

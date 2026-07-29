@@ -18,6 +18,7 @@ import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { adjacentPanels } from '../../utils/componentLinks'
+import { CounterScaled, usePanelChrome } from '../UI/PanelSurface'
 
 const KIND_GLYPH: Record<HistoryKind, string> = {
   prompt: '✎', view: '◉', folder: '📁', place: '＋',
@@ -48,6 +49,7 @@ function ago(ms: number): string {
 export const HistoryPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
   const node = useFreeNodeStore(s => s.nodes[nodeId])
   const nodes = useFreeNodeStore(s => s.nodes)
+  const { gz, showControls } = usePanelChrome(node)
   const updateFreeNode = useFreeNodeStore(s => s.updateFreeNode)
   const entries = useHistoryStore(s => s.entries)
   const remove = useHistoryStore(s => s.remove)
@@ -107,7 +109,7 @@ export const HistoryPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
     background: on ? 'rgba(120,170,255,0.28)' : 'rgba(255,255,255,0.05)',
     border: `1px solid ${on ? 'rgba(140,190,255,0.55)' : 'rgba(255,255,255,0.1)'}`,
     borderRadius: 4, color: on ? '#dce9ff' : 'rgba(255,255,255,0.55)',
-    fontSize: 9, fontWeight: 700, letterSpacing: '0.3px',
+    fontSize: 11, fontWeight: 700, letterSpacing: '0.3px',
     padding: '2px 7px', cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0,
   })
 
@@ -117,9 +119,15 @@ export const HistoryPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
     <div
       onPointerDown={e => e.stopPropagation()}
       onWheel={e => e.stopPropagation()}
-      style={{
-        position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
-        background: '#12131f', overflow: 'hidden', fontFamily: 'system-ui, sans-serif',
+      style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: '#12131f' }}
+    >
+      {/* Screen-pixel chrome at any zoom — see PanelSurface. The kind chips
+          and the search row are the first things to go when the window is
+          too short on screen to afford them; the entries keep the space. */}
+      <CounterScaled gz={gz}>
+      <div style={{
+        width: '100%', height: '100%', display: 'flex', flexDirection: 'column',
+        overflow: 'hidden', fontFamily: 'system-ui, sans-serif',
       }}
     >
       {/* ── What this history currently IS ── */}
@@ -128,21 +136,21 @@ export const HistoryPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
         borderBottom: '1px solid rgba(255,255,255,0.08)', flexShrink: 0,
       }}>
         <span style={{
-          fontSize: 9, fontWeight: 700, letterSpacing: '0.6px',
+          fontSize: 11, fontWeight: 700, letterSpacing: '0.6px',
           textTransform: 'uppercase', color: 'rgba(255,255,255,0.4)',
         }}>History</span>
         {hostType && !pinnedKind && (
           <span style={{
-            fontSize: 8.5, color: 'rgba(150,200,255,0.75)',
+            fontSize: 10.5, color: 'rgba(150,200,255,0.75)',
             background: 'rgba(120,170,255,0.14)', borderRadius: 3, padding: '1px 5px',
           }}>▸ {hostType === 'prompt' ? 'prompt pad' : hostType === 'pool' ? 'media pool' : 'rolodex'}</span>
         )}
         <div style={{ flex: 1 }} />
-        <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.3)' }}>{shown.length}</span>
+        <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.3)' }}>{shown.length}</span>
       </div>
 
       {/* ── Kind chips: derived by default, overridable ── */}
-      <div style={{
+      {showControls && <div style={{
         display: 'flex', alignItems: 'center', gap: 3, padding: '4px 6px',
         borderBottom: '1px solid rgba(255,255,255,0.08)', flexShrink: 0, flexWrap: 'wrap',
       }}>
@@ -154,9 +162,9 @@ export const HistoryPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
             {KIND_GLYPH[k]} {KIND_LABEL[k]}
           </button>
         ))}
-      </div>
+      </div>}
 
-      <div style={{
+      {showControls && <div style={{
         display: 'flex', alignItems: 'center', gap: 3, padding: '4px 6px',
         borderBottom: '1px solid rgba(255,255,255,0.08)', flexShrink: 0,
       }}>
@@ -168,13 +176,13 @@ export const HistoryPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
           style={{
             flex: 1, minWidth: 40, background: 'rgba(255,255,255,0.05)',
             border: '1px solid rgba(255,255,255,0.1)', borderRadius: 3,
-            color: 'rgba(255,255,255,0.85)', fontSize: 9.5, padding: '2px 6px',
+            color: 'rgba(255,255,255,0.85)', fontSize: 11.5, padding: '2px 6px',
             fontFamily: 'inherit', outline: 'none',
           }}
         />
         <button style={chip(false)} title="Clear what is shown"
           onClick={() => { for (const k of activeKinds) clear(k) }}>CLEAR</button>
-      </div>
+      </div>}
 
       {/* ── Entries ── */}
       <div style={{ flex: 1, overflowY: 'auto', minHeight: 0, padding: '3px 0' }}>
@@ -209,10 +217,10 @@ export const HistoryPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
                 </span>}
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{
-                fontSize: 9.5, color: 'rgba(255,255,255,0.78)', lineHeight: 1.35,
+                fontSize: 11.5, color: 'rgba(255,255,255,0.78)', lineHeight: 1.35,
                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
               }}>{e.label}</div>
-              <div style={{ fontSize: 8, color: 'rgba(255,255,255,0.28)' }}>
+              <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.28)' }}>
                 {KIND_LABEL[e.kind].toLowerCase()} · {ago(e.at)} ago
               </div>
             </div>
@@ -228,6 +236,8 @@ export const HistoryPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
           </div>
         ))}
       </div>
+      </div>
+      </CounterScaled>
     </div>
   )
 }

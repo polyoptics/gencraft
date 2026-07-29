@@ -16,6 +16,7 @@
 
 import React, { useMemo, useState } from 'react'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
+import { CounterScaled, usePanelChrome } from '../UI/PanelSurface'
 import { recordHistory } from '../../store/historyStore'
 import {
   defaultPromptKit, newSection, newTag, newSaved,
@@ -48,7 +49,7 @@ const InlineEdit: React.FC<{
       style={{
         background: 'rgba(255,255,255,0.08)',
         border: '1px solid rgba(140,190,255,0.5)', borderRadius: 3,
-        color: 'rgba(255,255,255,0.92)', fontSize: 9.5, padding: '1px 5px',
+        color: 'rgba(255,255,255,0.92)', fontSize: 11.5, padding: '1px 5px',
         fontFamily: 'inherit', outline: 'none', minWidth: 0, ...style,
       }}
     />
@@ -58,6 +59,7 @@ const InlineEdit: React.FC<{
 export const PromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
   const node = useFreeNodeStore(s => s.nodes[nodeId])
   const updateFreeNode = useFreeNodeStore(s => s.updateFreeNode)
+  const { gz, showFooter, narrow } = usePanelChrome(node)
   const [showSaved, setShowSaved] = useState(true)
   const [editing, setEditing] = useState<string | null>(null)   // 'sec:<id>' | 'tag:<id>' | 'saved:<id>'
   const [addingTagTo, setAddingTagTo] = useState<string | null>(null)
@@ -92,7 +94,7 @@ export const PromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
     background: on ? 'rgba(120,170,255,0.28)' : 'rgba(255,255,255,0.05)',
     border: `1px solid ${on ? 'rgba(140,190,255,0.55)' : 'rgba(255,255,255,0.1)'}`,
     borderRadius: 4, color: on ? '#dce9ff' : 'rgba(255,255,255,0.6)',
-    fontSize: 9, fontWeight: 600, padding: '2px 6px', cursor: 'pointer',
+    fontSize: 11, fontWeight: 600, padding: '2px 6px', cursor: 'pointer',
     fontFamily: 'inherit', textAlign: 'left', lineHeight: 1.4, flexShrink: 0,
   })
 
@@ -105,9 +107,15 @@ export const PromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
     <div
       onPointerDown={e => e.stopPropagation()}
       onWheel={e => e.stopPropagation()}
-      style={{
-        position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
-        background: '#12131f', overflow: 'hidden', fontFamily: 'system-ui, sans-serif',
+      style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: '#12131f' }}
+    >
+      {/* Every CSS px below is a SCREEN px, so the pad reads the same at
+          any zoom — see PanelSurface. The saved rail and the footer hint
+          drop out when the pad is too small on screen to afford them. */}
+      <CounterScaled gz={gz}>
+      <div style={{
+        width: '100%', height: '100%', display: 'flex', flexDirection: 'column',
+        overflow: 'hidden', fontFamily: 'system-ui, sans-serif',
       }}
     >
       {/* ── Prompt text + send ── */}
@@ -165,7 +173,7 @@ export const PromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
           title="Show saved prompts">▤ {kit.saved.length}</button>
         <div style={{ flex: 1 }} />
         {sent > 0 && (
-          <span style={{ fontSize: 8.5, color: 'rgba(150,200,255,0.65)' }}>
+          <span style={{ fontSize: 10.5, color: 'rgba(150,200,255,0.65)' }}>
             sent {sent}× · see History
           </span>
         )}
@@ -184,7 +192,7 @@ export const PromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
                     onClick={() => patchSections(ss => ss.map(s =>
                       s.id === sec.id ? { ...s, collapsed: !collapsed } : s))}
                     title={collapsed ? 'Expand' : 'Collapse'}
-                    style={{ ...ghostBtn, color: 'rgba(255,255,255,0.45)', fontSize: 9 }}
+                    style={{ ...ghostBtn, color: 'rgba(255,255,255,0.55)', fontSize: 13, padding: '0 4px' }}
                   >{collapsed ? '▸' : '▾'}</button>
                   {editing === `sec:${sec.id}` ? (
                     <InlineEdit
@@ -201,7 +209,7 @@ export const PromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
                       onClick={() => setEditing(`sec:${sec.id}`)}
                       title="Click to rename"
                       style={{
-                        flex: 1, fontSize: 8.5, fontWeight: 700, letterSpacing: '0.6px',
+                        flex: 1, fontSize: 10.5, fontWeight: 700, letterSpacing: '0.6px',
                         textTransform: 'uppercase', color: 'rgba(255,255,255,0.32)',
                         cursor: 'text', userSelect: 'none',
                       }}
@@ -238,12 +246,12 @@ export const PromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
                           <span onClick={() => append(tag.text)} title="Add to the prompt"
                             style={{ cursor: 'pointer' }}>+ {tag.text}</span>
                           <span onClick={() => setEditing(`tag:${tag.id}`)} title="Rename"
-                            style={{ ...ghostBtn, fontSize: 8, opacity: 0.55, cursor: 'pointer' }}>✎</span>
+                            style={{ ...ghostBtn, fontSize: 10, opacity: 0.55, cursor: 'pointer' }}>✎</span>
                           <span
                             onClick={() => patchSections(ss => ss.map(s => s.id !== sec.id ? s
                               : { ...s, tags: s.tags.filter(t => t.id !== tag.id) }))}
                             title="Delete this tag"
-                            style={{ ...ghostBtn, fontSize: 9, cursor: 'pointer' }}
+                            style={{ ...ghostBtn, fontSize: 11, cursor: 'pointer' }}
                           >×</span>
                         </div>
                       )
@@ -276,27 +284,27 @@ export const PromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
             }}
           >＋ new section</button>
 
-          <div style={{
-            marginTop: 8, fontSize: 8, lineHeight: 1.6, color: 'rgba(255,255,255,0.22)',
+          {showFooter && <div style={{
+            marginTop: 8, fontSize: 10, lineHeight: 1.6, color: 'rgba(255,255,255,0.28)',
             borderTop: '1px solid rgba(255,255,255,0.07)', paddingTop: 5,
           }}>
             click a tag to append it · ✎ rename · × delete · this vocabulary
             belongs to this pad
-          </div>
+          </div>}
         </div>
 
         {/* ── Saved prompts rail ── */}
-        {showSaved && (
+        {showSaved && !narrow && (
           <div style={{
             width: 158, flexShrink: 0, borderLeft: '1px solid rgba(255,255,255,0.08)',
             overflowY: 'auto', padding: 6,
           }}>
             <div style={{
-              fontSize: 8.5, fontWeight: 700, letterSpacing: '0.6px', textTransform: 'uppercase',
+              fontSize: 10.5, fontWeight: 700, letterSpacing: '0.6px', textTransform: 'uppercase',
               color: 'rgba(255,255,255,0.3)', marginBottom: 4,
             }}>Saved</div>
             {kit.saved.length === 0 && (
-              <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.25)', lineHeight: 1.5 }}>
+              <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.25)', lineHeight: 1.5 }}>
                 Nothing saved yet. Write a prompt and hit SAVE.
               </div>
             )}
@@ -328,12 +336,12 @@ export const PromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
                       onClick={() => setText(sp.text)}
                       title="Click to load this prompt"
                       style={{
-                        flex: 1, minWidth: 0, fontSize: 9, lineHeight: 1.4,
+                        flex: 1, minWidth: 0, fontSize: 11, lineHeight: 1.4,
                         color: 'rgba(255,255,255,0.72)', cursor: 'pointer',
                       }}
                     >{sp.label}</div>
                     <span onClick={() => setEditing(`saved:${sp.id}`)} title="Rename"
-                      style={{ ...ghostBtn, fontSize: 8, cursor: 'pointer' }}>✎</span>
+                      style={{ ...ghostBtn, fontSize: 10, cursor: 'pointer' }}>✎</span>
                     <span
                       onClick={() => setKit({ ...kit, saved: kit.saved.filter(x => x.id !== sp.id) })}
                       title="Delete this saved prompt"
@@ -346,6 +354,8 @@ export const PromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
           </div>
         )}
       </div>
+      </div>
+      </CounterScaled>
     </div>
   )
 }
