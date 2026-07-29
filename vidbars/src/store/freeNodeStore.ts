@@ -118,6 +118,12 @@ export interface FreeNodeData {
    *  from its frame. Deliberately not derived from zoom: a browser whose
    *  contents re-flow as you zoom loses your place. */
   uiScale?: number
+  /** For a Rolodex with a Viewer magneted to it: how a row reaches that
+   *  Viewer. 'click' — only an explicit click sends. 'follow' — whatever the
+   *  list settles on is shown, so flipping through browses live. Meaningless
+   *  without an adjacent Viewer, which is why it lives here rather than in a
+   *  stored link: the link itself is still pure geometry. */
+  linkMode?: 'click' | 'follow'
   color: string
   textStyle?: TextStyle
   /** Annotation layer — vector strokes drawn on this node. */

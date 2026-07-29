@@ -36,7 +36,9 @@ import { getModelPoster, ensureModelPoster, invalidateModelPoster, useModelPoste
 import { useThumb } from '../../utils/thumbService'
 import { useResolvedMedia } from '../../utils/useResolvedMedia'
 import { usePoolStore, loadPoolDir, type PoolFile } from '../../store/poolStore'
-import { poolFeedingList } from '../../utils/componentLinks'
+import { poolFeedingList, viewerAdjacentTo } from '../../utils/componentLinks'
+import { useViewport3DStore } from '../../store/viewport3dStore'
+import { collectDeckContent, defaultBrowseItem, tileBrowseItem, type BrowseItem } from '../../utils/contentTraversal'
 import {
   DEFAULT_HEADER_STYLE,
   DEFAULT_BODY_STYLE,
@@ -775,6 +777,16 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
     [embedded, embeddedNode, allNodes, linkZoom],
   )
   const poolFiles = usePoolStore(s => (feedingPool ? s.pools[feedingPool.id]?.files : undefined)) ?? EMPTY_FILES
+  // How a row reaches a magneted Viewer. Default 'click': nothing moves in
+  // the Viewer until you ask it to, which is the less startling of the two.
+  const linkMode = embeddedNode?.linkMode ?? 'click'
+  const lastSentRef = useRef(-1)
+  // Which Viewer, if any — drives whether the mode toggle is even shown.
+  const allWindows = useViewport3DStore(s => s.windows)
+  const linkedViewer = useMemo(
+    () => (embedded && embeddedNode ? viewerAdjacentTo(embeddedNode, allWindows, linkZoom) : null),
+    [embedded, embeddedNode, allWindows, linkZoom],
+  )
   // The pool's own component re-reads on mount, but a Rolodex can be
   // magneted to a pool that is off screen and therefore unmounted.
   useEffect(() => {
@@ -801,6 +813,11 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
     return [...groupRows, ...buildFreeNodeRows(freeNodes, sortMode, kindFilter, searchQuery)]
   }, [visibleGroups, sortMode, view, collapsedDeckIdSet, includeCanvasItems, freeNodes,
       kindFilter, searchQuery, feedingPool, poolFiles])
+
+  // Rows, in a ref, so the send-to-Viewer callbacks can read the current
+  // list without being rebuilt every time it changes.
+  const rowsRef = useRef<RolodexRow[]>(rows)
+  rowsRef.current = rows
 
   // Bumps whenever a poster finishes generating, so the thumbnail map
   // below re-derives and the row swaps its glyph for the snapshot.
@@ -1041,10 +1058,39 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
     startTween()
   }, [rows.length, startTween])
 
+  // ── Rolodex → Viewer ──────────────────────────────────────────────
+  // The link is geometry (a Viewer magneted to this panel); the MODE is
+  // intent, and lives on the node. Turning a row into something the Viewer
+  // can show is the same job contentTraversal already does for docking, so
+  // rows reuse it rather than inventing a second notion of "the content of
+  // this row".
+  const sendRowToViewer = useCallback((idx: number) => {
+    if (!embedded || !embeddedNode) return
+    const win = viewerAdjacentTo(
+      embeddedNode, useViewport3DStore.getState().windows, useCanvasStore.getState().zoom)
+    if (!win) return
+    const row = rowsRef.current[idx]
+    if (!row) return
+
+    let item: BrowseItem | null = null
+    if (row.kind === 'poolfile') {
+      item = { kind: 'media', mediaType: row.file.kind, url: row.file.url, name: row.file.name }
+    } else if (row.kind === 'freenode') {
+      item = tileBrowseItem(row.node)
+    } else {
+      const bs = useBoardsStore.getState()
+      item = defaultBrowseItem(collectDeckContent(row.group.id, bs.groups, bs.boards))
+    }
+    if (item) useViewport3DStore.getState().setActiveItem(win.id, item)
+  }, [embedded, embeddedNode])
+
   const onSlotClick = useCallback((idx: number) => {
     targetRef.current = idx
     startTween()
-  }, [startTween])
+    // A click is explicit intent, so it sends in BOTH modes. What the mode
+    // decides is whether merely FLIPPING past something also sends it.
+    sendRowToViewer(idx)
+  }, [startTween, sendRowToViewer])
 
   const onSlotDoubleClick = useCallback((g: ProjectGroup) => {
     jumpToGroup(g.id)
@@ -1103,6 +1149,18 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
   const visibleEnd   = Math.min(rows.length - 1, Math.ceil(centerPosition + VISIBLE_RADIUS + effectiveBottomBuffer))
   const visibleIndices: number[] = []
   for (let k = visibleStart; k <= visibleEnd; k++) visibleIndices.push(k)
+
+  // FOLLOW mode: whatever the rail settles on is what the Viewer shows, so
+  // flipping through browses live. Keyed on the SETTLED index rather than
+  // the tween position — pushing every intermediate frame would load
+  // everything you flew past, which for models means a GLB apiece.
+  const settledIdx = Math.round(centerPosition)
+  useEffect(() => {
+    if (linkMode !== 'follow') return
+    if (settledIdx === lastSentRef.current) return
+    lastSentRef.current = settledIdx
+    sendRowToViewer(settledIdx)
+  }, [linkMode, settledIdx, sendRowToViewer])
 
   // (cabinet right-edge tracking is computed below, after the per-card
   // tops are known — see "cabinetEdgeLevel" further down.)
@@ -1608,6 +1666,27 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
                   padding: '1px 6px', cursor: 'pointer', fontFamily: 'inherit', lineHeight: 1.4,
                 }}
               >＋</button>
+              {/* ── Viewer link mode ── only when a Viewer is actually
+                  magneted to this panel: an option for a connection that
+                  does not exist is just a puzzle. Sits at the end of the
+                  header, on the side the Viewer is on. */}
+              {linkedViewer && embeddedNode && (
+                <button
+                  onClick={() => useFreeNodeStore.getState().updateFreeNode(
+                    embeddedNode.id, { linkMode: linkMode === 'follow' ? 'click' : 'follow' })}
+                  title={linkMode === 'follow'
+                    ? 'Live: the Viewer follows this list as you flip — click to require a click instead'
+                    : 'Click-to-send: click a card to show it in the Viewer — click to make it live'}
+                  style={{
+                    background: linkMode === 'follow' ? 'rgba(120,200,150,0.28)' : 'rgba(255,255,255,0.05)',
+                    border: `1px solid ${linkMode === 'follow' ? 'rgba(140,220,170,0.6)' : 'rgba(255,255,255,0.12)'}`,
+                    borderRadius: 4,
+                    color: linkMode === 'follow' ? '#cfeedd' : 'rgba(255,255,255,0.5)',
+                    fontSize: 10, fontWeight: 700, padding: '1px 6px',
+                    cursor: 'pointer', fontFamily: 'inherit', lineHeight: 1.4,
+                  }}
+                >{linkMode === 'follow' ? '⇄ LIVE' : '⇢ CLICK'}</button>
+              )}
               {/* No pin here any more. An embedded Rolodex is a panel like
                   the others and wears the shared pin in its NODE header —
                   two pins for one thing, in two different places, was just

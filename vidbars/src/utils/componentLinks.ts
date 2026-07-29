@@ -15,7 +15,8 @@
 // which composes into the chain from the design: Pool | Rolodex | Viewer.
 
 import type { FreeNodeData } from '../store/freeNodeStore'
-import { DOCK_TOLERANCE, MAGNET_RADIUS_PX, magnetRadiusForZoom, type DockEdge } from './viewportDocking'
+import { DOCK_TOLERANCE, MAGNET_RADIUS_PX, magnetRadiusForZoom, viewportVisualRect, type DockEdge } from './viewportDocking'
+import type { ViewportWindow3D } from '../store/viewport3dStore'
 
 /** Touching, with a little slack so a hand-dragged panel that lands a
  *  pixel short still counts. Deliberately the SAME constant as docking and
@@ -158,6 +159,30 @@ export function snapPanelToPanel(
   // instead of splitting the difference between two.
   const best = cands.reduce((m, c) => (c.d < m.d ? c : m))
   return { x: best.x, y: best.y, target: best.target, edge: best.edge }
+}
+
+/** The Viewer a panel is magneted to, if any — the other half of the
+ *  Pool | Rolodex | Viewer chain, and what lets a Rolodex send a row
+ *  somewhere without either component storing a reference to the other. */
+export function viewerAdjacentTo(
+  node: FreeNodeData,
+  windows: Record<string, ViewportWindow3D>,
+  zoom: number,
+): ViewportWindow3D | null {
+  const a = comparableRect(node)
+  if (!a) return null
+  let best: ViewportWindow3D | null = null
+  let bestD = Infinity
+  for (const w of Object.values(windows)) {
+    // Same space only: a canvas Viewer and a pinned panel are nowhere near
+    // each other, whatever their stored coordinates say.
+    if (!!w.pin !== !!node.pin) continue
+    const r = viewportVisualRect(w, zoom)
+    if (!rectsAdjacent(a, r, TOUCH_SLACK)) continue
+    const d = Math.abs(r.x - a.x) + Math.abs(r.y - a.y)
+    if (d < bestD) { best = w; bestD = d }
+  }
+  return best
 }
 
 /** Every panel touching this one, nearest first. A History window uses this
