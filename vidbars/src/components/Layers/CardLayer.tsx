@@ -1085,6 +1085,20 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
       .filter(Boolean) as import('../../utils/nlePush').GroupSlot[]
 
     const onMove = (ev: PointerEvent) => {
+      // Pinned deck: screen delta to the pin, exactly as a pinned single card
+      // does. Moving the ORIGIN instead is invisible — the frozen camera is
+      // solved FROM the origin, so it compensates and the deck appears stuck
+      // — while every canvas thing keyed off that origin (ghost slots,
+      // affordances, push/collision) shuffles about behind it. That is both
+      // "I can't move a pinned deck" and "ghost bits move on the canvas".
+      if (anchorGroup.pin) {
+        const pdx = ev.clientX - lastX
+        const pdy = ev.clientY - lastY
+        lastX = ev.clientX
+        lastY = ev.clientY
+        useBoardsStore.getState().movePinnedGroups(deck.memberIds, pdx, pdy)
+        return
+      }
       const z = useCanvasStore.getState().zoom
       const dx = (ev.clientX - lastX) / z
       const dy = (ev.clientY - lastY) / z
@@ -1655,6 +1669,15 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
 
     const onMove = (ev: PointerEvent) => {
       if (!fanMoved && Math.abs(ev.clientX - fanStartX) + Math.abs(ev.clientY - fanStartY) > 5) fanMoved = true
+      // Pinned fan: screen delta to the pin — see the stacked-deck handler.
+      if (anchorGroup.pin) {
+        const pdx = ev.clientX - lastX
+        const pdy = ev.clientY - lastY
+        lastX = ev.clientX
+        lastY = ev.clientY
+        useBoardsStore.getState().movePinnedGroups(deck.memberIds, pdx, pdy)
+        return
+      }
       const z = useCanvasStore.getState().zoom
       const dx = (ev.clientX - lastX) / z
       const dy = (ev.clientY - lastY) / z
