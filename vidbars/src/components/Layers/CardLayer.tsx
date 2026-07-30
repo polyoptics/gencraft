@@ -3365,6 +3365,10 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
       {!scoped && groups.map(g => {
         const parent = findExtractionParent(g.id, groups)
         if (!parent) return null
+        // A pinned card left the canvas, so its check-in tab goes with it —
+        // otherwise the tab sits out here pointing at a card that is not
+        // there, offering to return something you cannot see.
+        if (g.pin) return null
         return <TetherTab key={`tether-${g.id}`} cardId={g.id} touchingClusters={touchingClusters} />
       })}
 
