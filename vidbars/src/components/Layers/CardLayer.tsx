@@ -2543,8 +2543,9 @@ export function cardScreenRect(g: ProjectGroup, boards: Record<string, import('.
 
 /** Affordance shown when open cards are touching — hover on primary shows outline + stack/fan */
 const DeckAffordance: React.FC<{ cluster: string[] }> = ({ cluster }) => {
-  const pan = useCanvasStore(s => s.pan)
-  const zoom = useCanvasStore(s => s.zoom)
+  // Frozen inside a pinned deck — this control travels WITH the deck, so it
+  // has to be measured by the deck's own camera or it lands elsewhere.
+  const { pan, zoom } = useCardView()
   const groups = useBoardsStore(s => s.groups)
   const boards = useBoardsStore(s => s.boards)
   const [isHovered, setIsHovered] = useState(false)
@@ -2689,8 +2690,8 @@ function findExtractionParent(cardId: string, allGroups: ProjectGroup[]): Projec
  *  extracted card actually lives. */
 const GhostCardSlot: React.FC<{ anchor: ProjectGroup; slot: { cardId: string; deckOffsetX: number; deckOffsetY: number } }> = ({ anchor, slot }) => {
   const boards = useBoardsStore(s => s.boards)
-  const pan = useCanvasStore(s => s.pan)
-  const zoom = useCanvasStore(s => s.zoom)
+  // Frozen inside a pinned deck — the empty slot sits in that deck's layout.
+  const { pan, zoom } = useCardView()
   const isSelected = useCanvasStore(s => s.selectedGhostGroupIds.includes(slot.cardId))
   const allGroups = useBoardsStore(s => s.groups)
   const card = allGroups.find(g => g.id === slot.cardId)
@@ -2844,8 +2845,8 @@ const GhostCardSlot: React.FC<{ anchor: ProjectGroup; slot: { cardId: string; de
 const DeckOpenPreview: React.FC<{ deck: Deck }> = ({ deck }) => {
   const boards = useBoardsStore(s => s.boards)
   const allGroups = useBoardsStore(s => s.groups)
-  const pan = useCanvasStore(s => s.pan)
-  const zoom = useCanvasStore(s => s.zoom)
+  // Frozen inside a pinned deck — the footprint belongs to that deck.
+  const { pan, zoom } = useCardView()
   // Preview only fires when the dashed-rect affordance icon in the header is
   // hovered. Selection used to also trigger this, but selection is too sticky
   // for that to feel right — too many other interactions require selecting a
@@ -3287,13 +3288,17 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
           a faint dashed outline appears at each non-anchor member's would-be
           open position. Self-gates on hover/selection state, so unconditional
           mapping is fine. */}
-      {/* Canvas-only furniture. A scoped render is ONE pinned deck floating
-          over the screen; footprint previews, cluster affordances and
-          ungrouped boards all describe the canvas it is no longer part of. */}
-      {!scoped && decks.map(d => (
+      {/* A pinned deck is still a deck: the controls that act ON it have to
+          come with it, or you can open one and then have no way to close it.
+          So these are filtered to the scoped set rather than suppressed —
+          only the things describing the WIDER canvas (ungrouped boards, and
+          the tether tabs below, which point at cards elsewhere) are dropped.
+          Same rule stated once: does this belong to this deck, or to the
+          canvas it is floating above? */}
+      {decks.filter(d => !onlySet || d.memberIds.some(id => onlySet.has(id))).map(d => (
         <DeckOpenPreview key={`preview-${d.id}`} deck={d} />
       ))}
-      {!scoped && affordanceClusters.map(cluster => (
+      {affordanceClusters.filter(c => !onlySet || c.some(id => onlySet.has(id))).map(cluster => (
         <DeckAffordance key={cluster.join('|')} cluster={cluster} />
       ))}
       {!scoped && ungroupedIds.map(bid => (
