@@ -115,7 +115,14 @@ export const PinnedCardBar: React.FC<{ group: ProjectGroup }> = ({ group }) => {
         left: box.x,
         top: box.y - 24,
         display: 'flex', alignItems: 'center', gap: 3,
-        pointerEvents: 'auto', zIndex: 5,
+        pointerEvents: 'auto',
+        // Above the card's own chrome, not just above the wrapper. The
+        // pinned card is rendered in a wrapper with z-index:auto, which does
+        // NOT create a stacking context — so the card body (40), its header
+        // (51) and the fan wrapper (55) all compete in the SAME context as
+        // this bar. At z-index 5 it was present, correctly positioned, and
+        // painted over by the card it belongs to.
+        zIndex: 200,
         fontFamily: 'system-ui, sans-serif',
       }}
     >
