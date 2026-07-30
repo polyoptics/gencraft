@@ -9,6 +9,9 @@ import { useUserTemplateStore } from './store/userTemplateStore'
 import { useViewport3DStore } from './store/viewport3dStore'
 import { useMagnetPreviewStore } from './store/magnetPreviewStore'
 import { usePosterMapStore } from './three/posterService'
+import { useLinkDragStore } from './store/linkDragStore'
+import { useLinkingStore } from './store/linkingStore'
+import { usePinTravelStore } from './store/pinTravelStore'
 
 // Expose stores for debugging. Anything you want to OBSERVE has to be here:
 // reaching a store through a dynamic import gets a second copy of the module
@@ -17,6 +20,7 @@ import { usePosterMapStore } from './three/posterService'
 ;(window as any).__stores = {
   useBoardsStore, useCanvasStore, useFreeNodeStore, useUserTemplateStore,
   useViewport3DStore, useMagnetPreviewStore, usePosterMapStore,
+  useLinkDragStore, useLinkingStore, usePinTravelStore,
 }
 
 createRoot(document.getElementById('root')!).render(
