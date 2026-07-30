@@ -22,6 +22,13 @@ export const BoardsCanvas: React.FC<{ only?: string[] }> = ({ only }) => {
     () => (only ? new Set(groups.flatMap(g => g.boardIds)) : null),
     [only, groups],
   )
+  /** Boards that have left the canvas for a pin — see BlockLayer. Boards
+   *  render per board id, so dropping pinned GROUPS from the list never
+   *  stopped their bars showing through underneath the pinned card. */
+  const pinnedAwayBoards = useMemo(
+    () => (only ? null : new Set(allGroups.filter(g => g.pin).flatMap(g => g.boardIds))),
+    [only, allGroups],
+  )
   const portalSelections = useCanvasStore(s => s.deckPortalSelections)
   const hiddenBoards = useMemo(
     () => getHiddenBoardIds(groups, !!only),
@@ -60,7 +67,8 @@ export const BoardsCanvas: React.FC<{ only?: string[] }> = ({ only }) => {
   return (
     <>
       {/* 'primary' is a real board and usually the one a card owns. */}
-      {(!scopedBoards || scopedBoards.has('primary')) && !effectiveHiddenBoards.has('primary') && (
+      {(!scopedBoards || scopedBoards.has('primary')) && !effectiveHiddenBoards.has('primary')
+        && !pinnedAwayBoards?.has('primary') && (
         <Board boardId="primary" />
       )}
       {/* Same trap as the block layer: boards render from boardOrder, which
@@ -69,6 +77,7 @@ export const BoardsCanvas: React.FC<{ only?: string[] }> = ({ only }) => {
       {boardOrder
         .filter(id => !effectiveHiddenBoards.has(id))
         .filter(id => !scopedBoards || scopedBoards.has(id))
+        .filter(id => !pinnedAwayBoards?.has(id))
         .map(id => <Board key={id} boardId={id} />)}
       {/* Portal renderings: each wraps the locked member's boards in
           a translate so they land at the anchor's canvas position.

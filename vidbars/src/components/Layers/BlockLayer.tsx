@@ -832,6 +832,15 @@ const Canvas: React.FC<{ only?: string[] }> = ({ only }) => {
     [only, groups],
   )
 
+  /** Boards that have LEFT the canvas: a pinned card's boards are drawn by
+   *  PinLayer under a frozen camera. Filtering the group list does not stop
+   *  them, because blocks render per BOARD id — which is why a pinned card's
+   *  blocks still appeared underneath it as you zoomed the canvas in. */
+  const pinnedAwayBoards = useMemo(
+    () => (only ? null : new Set(allGroups.filter(g => g.pin).flatMap(g => g.boardIds))),
+    [only, allGroups],
+  )
+
   const hiddenBoards = useMemo(
     () => getHiddenBoardIds(groups, !!only),
     [groups, only],
@@ -878,7 +887,8 @@ const Canvas: React.FC<{ only?: string[] }> = ({ only }) => {
       {/* 'primary' is a real board like any other and is very often the one
           a card owns — excluding it wholesale when scoped left pinned cards
           rendering nothing at all. */}
-      {(!scopedBoards || scopedBoards.has('primary')) && !effectiveHiddenBoards.has('primary') && (
+      {(!scopedBoards || scopedBoards.has('primary')) && !effectiveHiddenBoards.has('primary')
+        && !pinnedAwayBoards?.has('primary') && (
         <BlockItem boardId="primary" />
       )}
       {/* Boards belonging to the scoped groups only. Filtering `groups` was
@@ -887,6 +897,7 @@ const Canvas: React.FC<{ only?: string[] }> = ({ only }) => {
       {boardOrder
         .filter(id => !effectiveHiddenBoards.has(id))
         .filter(id => !scopedBoards || scopedBoards.has(id))
+        .filter(id => !pinnedAwayBoards?.has(id))
         .map(id => <BlockItem key={id} boardId={id} />)}
       {/* Portal renderings: each one wraps the locked member's blocks in
           a translate so they land at the anchor's canvas position.
