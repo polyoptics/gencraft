@@ -20,7 +20,9 @@ import type { FreeNodeData } from '../store/freeNodeStore'
 import { useViewport3DStore, activeItemKey } from '../store/viewport3dStore'
 import type { ViewportWindow3D } from '../store/viewport3dStore'
 import {
-  computeAllDocks, computeTileClusters, rectsTouch, DOCK_TOLERANCE,
+  // computeAllDocks is gone from here on purpose: cards used to get their
+  // own single-assignment pass, which is exactly why they did not cluster.
+  computeTileClusters,
   viewportVisualRect,
   type DockableItem, type WindowRect,
 } from '../utils/viewportDocking'
@@ -200,9 +202,26 @@ export function useDockedSources(windowId: string): DockedSource[] {
 
     const out: DockedSource[] = []
 
-    // Tiles: cluster-connected, BFS order from the window
-    const clusters = computeTileClusters(contentTileItems(nodes, pinned), winRects)
-    for (const tid of clusters.byWindow.get(windowId) ?? []) {
+    // ONE cluster graph over tiles AND cards.
+    //
+    // Tiles already clustered deck-style — touch one and the whole chain
+    // connects — but cards were a separate pass that only saw DIRECT contact
+    // with the window. So a card touching a docked tile was ignored, and a
+    // card touching a docked card was ignored, which made the rule feel
+    // arbitrary: the same gesture worked or didn't depending on what you had
+    // bundled. Cards are in the same graph now, so a bundle of touching
+    // things is browsable through whichever member the Viewer reaches.
+    //
+    // Cards are canvas content with world coordinates, so they can only
+    // participate in the CANVAS stratum; a pinned Viewer sees tiles only.
+    const clusterItems = pinned
+      ? contentTileItems(nodes, pinned)
+      : [...contentTileItems(nodes, pinned), ...contentGroupItems(groups, boards, zoom)]
+    const clusters = computeTileClusters(clusterItems, winRects)
+    const connected = clusters.byWindow.get(windowId) ?? []
+
+    for (const tid of connected) {
+      if (tid.startsWith(GROUP_PREFIX)) continue     // handled below
       const n = nodes[tid]
       if (!n) continue
       if (n.type === 'list' && n.listQuery) {
@@ -225,14 +244,11 @@ export function useDockedSources(windowId: string): DockedSource[] {
       })
     }
 
-    // Cards/decks: direct slot touch, single-assignment partition. Cards
-    // are canvas content with world coordinates and have no screen
-    // placement, so a PINNED window never has cards docked to it.
-    const groupDocks = pinned
-      ? []
-      : computeAllDocks(winRects, contentGroupItems(groups, boards, zoom)).get(windowId) ?? []
-    for (const d of groupDocks) {
-      const gid = d.id.slice(GROUP_PREFIX.length)
+    // Cards/decks, from the SAME cluster walk — BFS order, so the things
+    // nearest the window come first regardless of kind.
+    for (const cid of connected) {
+      if (!cid.startsWith(GROUP_PREFIX)) continue
+      const gid = cid.slice(GROUP_PREFIX.length)
       const g = groups.find(x => x.id === gid)
       if (!g) continue
       const items = collectDeckContent(gid, groups, boards)
@@ -277,22 +293,25 @@ export function computeCarriedEntities(windowId: string): { tileIds: string[]; g
   const win = winRects.find(w => w.id === windowId)
   if (!win) return { tileIds: [], groupIds: [] }
 
-  const clusters = computeTileClusters(contentTileItems(nodes, pinned), winRects)
-  const tileIds = clusters.byWindow.get(windowId) ?? []
+  // The SAME combined walk the browser uses. What a Viewer carries and what
+  // it can show have to be the same set, or dragging one leaves behind
+  // something it was displaying a moment ago.
+  const zoom = useCanvasStore.getState().zoom
+  const clusterItems = pinned
+    ? contentTileItems(nodes, pinned)
+    : [...contentTileItems(nodes, pinned), ...contentGroupItems(bs.groups, bs.boards, zoom)]
+  const clusters = computeTileClusters(clusterItems, winRects)
+  const connected = clusters.byWindow.get(windowId) ?? []
+  const tileIds = connected.filter(id => !id.startsWith(GROUP_PREFIX))
 
   // A pinned window drags across the screen and cannot take cards with it.
   if (pinned) return { tileIds, groupIds: [] }
 
-  const zoom = useCanvasStore.getState().zoom
-  const direct: string[] = []
-  for (const g of bs.groups) {
-    if (isHiddenDeckMember(g)) continue
-    if (!groupHasBrowsableContent(g.id, bs.groups, bs.boards)) continue
-    const v = cardVisualRect(g, bs.boards, zoom)
-    if (!v) continue
-    const rect = { x: v.rect.left, y: v.rect.top, width: v.rect.right - v.rect.left, height: v.rect.bottom - v.rect.top }
-    if (rectsTouch(rect, win, DOCK_TOLERANCE)) direct.push(g.id)
-  }
+  // Cards reached through the cluster — no separate direct-touch pass, which
+  // is what used to make carrying and browsing disagree.
+  const direct: string[] = connected
+    .filter(id => id.startsWith(GROUP_PREFIX))
+    .map(id => id.slice(GROUP_PREFIX.length))
   const groupIds = expandWithNestedMembers(direct, bs.groups)
   return { tileIds, groupIds }
 }

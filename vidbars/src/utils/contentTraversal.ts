@@ -121,6 +121,12 @@ export function groupHasBrowsableContent(
   boards: Record<string, BoardData>,
 ): boolean {
   for (const g of expandDeckTree(rootGroupId, groups)) {
+    // The face counts, same as in collectGroupOwnContent and contentKinds.
+    // Missing it here was worse than missing it there: this decides whether
+    // a card is a dock TARGET at all, so a card whose only content is the
+    // picture on its front could not be docked to a Viewer in the first
+    // place. Three functions describe "what is in a card"; they agree now.
+    if (g.cardHeroImage) return true
     if (g.cardText || g.cardHeaderText) return true
     for (const boardId of g.boardIds) {
       const board = boards[boardId]
