@@ -9,8 +9,9 @@
 //  - Group matching inspects the group's OWN boards only (not its deck
 //    tree) — the Rolodex lists every group individually, so recursive
 //    matching would light up a whole deck for one member's model.
-//  - Card hero images do NOT count as 'image' content (decoration; the
-//    browser enumeration doesn't browse them either).
+//  - A card's hero DOES count as 'image' content: it is the card's face,
+//    and the browser enumerates it too (see contentTraversal). Block
+//    thumbnails remain decoration.
 
 import type { ProjectGroup, BoardData } from '../store/boardsStore'
 import type { FreeNodeData } from '../store/freeNodeStore'
@@ -51,6 +52,10 @@ export function groupHasContentOfKind(
   kind: ContentKind,
 ): boolean {
   if (kind === 'text' && (g.cardText || g.cardHeaderText)) return true
+  // The card's face counts as an image, matching collectGroupOwnContent.
+  // If it did not, a list filtered to images would refuse to match a card
+  // whose only image is the one you are looking at.
+  if (kind === 'image' && g.cardHeroImage) return true
   for (const bid of g.boardIds) {
     const board = boards[bid]
     if (!board) continue

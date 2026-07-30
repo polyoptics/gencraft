@@ -10,9 +10,14 @@
 // AUTHORED order); within a bar: media[] items in order, then ONE text
 // item if the bar has text/headerText.
 //
-// Card heroes and block thumbnails are decoration (images by
-// construction) and are NOT browsable content — matching the Rolodex's
-// kind-filter semantics in utils/contentKinds.ts.
+// A card's HERO is browsable content — it is the face of the card, and
+// docking a card to a Viewer that showed everything except its face read as
+// a bug. contentKinds.ts counts it as image content for the same reason;
+// the two must agree or a list filtered to images will refuse to match a
+// card whose only image is the one you can see.
+//
+// Block thumbnails remain decoration: a block is a layout element, not
+// something you browse.
 
 import type { ProjectGroup, BoardData } from '../store/boardsStore'
 import type { FreeNodeData } from '../store/freeNodeStore'
@@ -53,6 +58,17 @@ export function collectGroupOwnContent(
   boards: Record<string, BoardData>,
 ): BrowseItem[] {
   const out: BrowseItem[] = []
+  // The card's FACE, first. It used to be treated as decoration and skipped,
+  // so docking a card to a Viewer showed everything inside the card except
+  // the picture the card actually looks like — which is the one image you
+  // point at when you say "that card". It leads because it is the card's
+  // identity, and defaultBrowseItem opens on the first MEDIA item.
+  if (g.cardHeroImage) {
+    out.push({
+      kind: 'media', mediaType: 'image', url: g.cardHeroImage,
+      name: g.name ? `${g.name} — face` : 'Card face',
+    })
+  }
   if (g.cardText || g.cardHeaderText) {
     out.push({ kind: 'text', sourceId: `group:${g.id}`, name: g.name || 'Card' })
   }

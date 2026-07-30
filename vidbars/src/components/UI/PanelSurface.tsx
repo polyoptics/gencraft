@@ -61,7 +61,12 @@ export function panelContentScale(node: FreeNodeData | undefined): number {
 }
 
 export const UI_SCALE_MIN = 0.6
-export const UI_SCALE_MAX = 3
+/** 6, not 3. A Media Pool used as the main browsing surface wants tiles you
+ *  can actually read across the room, and 3x turned out to be the ceiling
+ *  you hit rather than one you never reach. Nothing here is resolution-
+ *  bound — thumbnails are 384px and the chrome is vector — so the only cost
+ *  of a higher cap is the room it takes. */
+export const UI_SCALE_MAX = 6
 export function clampUiScale(v: number): number {
   return Math.max(UI_SCALE_MIN, Math.min(UI_SCALE_MAX, v))
 }
