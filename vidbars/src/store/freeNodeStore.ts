@@ -124,6 +124,11 @@ export interface FreeNodeData {
    *  without an adjacent Viewer, which is why it lives here rather than in a
    *  stored link: the link itself is still pure geometry. */
   linkMode?: 'click' | 'follow'
+  /** Media Pool view settings. On the node because they were component
+   *  state, and every remount — zoom-layer switch, pin, cull — put the pool
+   *  back to defaults mid-task. */
+  poolSizeIdx?: number
+  poolFilter?: string
   color: string
   textStyle?: TextStyle
   /** Annotation layer — vector strokes drawn on this node. */

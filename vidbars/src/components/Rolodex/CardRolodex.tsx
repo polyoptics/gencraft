@@ -33,7 +33,7 @@ import {
   hasRenderableContent, sortGroups, sortFreeNodes, formatListQuerySummary,
 } from '../../utils/contentKinds'
 import { getModelPoster, ensureModelPoster, invalidateModelPoster, useModelPoster, usePosterMapStore } from '../../three/posterService'
-import { useThumb } from '../../utils/thumbService'
+import { useThumb, requestThumb } from '../../utils/thumbService'
 import { useResolvedMedia } from '../../utils/useResolvedMedia'
 import { usePoolStore, loadPoolDir, type PoolFile } from '../../store/poolStore'
 import { poolFeedingList, viewerAdjacentTo } from '../../utils/componentLinks'
@@ -2182,10 +2182,16 @@ const RolodexPoolSlot: React.FC<{
   // re-creates the exact failure the pool was fixed for — magnet a Rolodex
   // to a pool and 85 models download to draw thumbnails. useThumb only
   // READS; it never generates a model poster implicitly.
-  const poster = useThumb(file.kind === 'model' ? file.url : null, 'model')
+  const framed = file.kind === 'model' || file.kind === 'video'
+  const poster = useThumb(framed ? file.url : null, file.kind)
+  // Videos ask for a frame the same way the pool does; models still never
+  // generate implicitly.
+  useEffect(() => {
+    if (file.kind === 'video') requestThumb(file.url, 'video')
+  }, [file.kind, file.url])
   // Images take the server's downscaled copy. Handing HeroImageLayer the
   // original meant decoding multi-megabyte PNGs into a ~200px card.
-  const hero = file.kind === 'model'
+  const hero = framed
     ? poster
     : file.kind === 'image' ? (file.thumb ?? file.url) : null
   const centerness = Math.max(0, 1 - Math.abs(offset))

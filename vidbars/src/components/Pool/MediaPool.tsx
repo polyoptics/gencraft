@@ -38,7 +38,7 @@ import { usePoolStore, loadPoolDir, type PoolFile } from '../../store/poolStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
-import { useThumb, requestThumb, getThumb } from '../../utils/thumbService'
+import { useThumb, requestThumb, getThumb, isThumbPending, hasThumbFailed } from '../../utils/thumbService'
 import { ContentScaled, panelContentScale, clampUiScale, UI_SCALE_MIN, UI_SCALE_MAX } from '../UI/PanelSurface'
 
 /** Target tile size in SCREEN pixels. These used to be canvas pixels,
@@ -84,6 +84,20 @@ const FileTile = React.memo<TileProps>(({ file, side, selected, thumbsPossible, 
   const imgRef = useRef<HTMLImageElement | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const [onScreen, setOnScreen] = useState(false)
+  // Bumped on click so the button can re-read the (non-reactive) queue.
+  const [renderTick, setRenderTick] = useState(0)
+  const renderState: 'idle' | 'working' | 'failed' = (() => {
+    void renderTick
+    if (isThumbPending(file.url)) return 'working'
+    return hasThumbFailed(file.url) ? 'failed' : 'idle'
+  })()
+  // While a job is in flight the queue never notifies, so poll gently just
+  // for the label — stops when the tile leaves the screen with the effect.
+  useEffect(() => {
+    if (renderState !== 'working') return
+    const t = setInterval(() => setRenderTick(v => v + 1), 900)
+    return () => clearInterval(t)
+  }, [renderState])
   const [thumbBroken, setThumbBroken] = useState(false)
   const [rawBroken, setRawBroken] = useState(false)
 
@@ -202,22 +216,36 @@ const FileTile = React.memo<TileProps>(({ file, side, selected, thumbsPossible, 
         }}>{file.kind === 'model' ? '3D' : KIND_GLYPH[file.kind]}</span>
       )}
 
+
       {/* Explicit, per-tile poster generation. This is the ONLY way a
           model gets rendered for a thumbnail — one file, because someone
           asked for that file. */}
       {file.kind === 'model' && !src && (
         <button
-          title="Render a 3D thumbnail for this model"
-          onClick={e => { e.stopPropagation(); requestThumb(file.url, 'model', true) }}
+          title={renderState === 'working'
+            ? 'Rendering — a large model can take a few seconds'
+            : renderState === 'failed'
+              ? 'That model could not be rendered. Click to try again.'
+              : 'Render a 3D thumbnail for this model'}
+          onClick={e => {
+            e.stopPropagation()
+            requestThumb(file.url, 'model', true)
+            // Local, because the queue is not reactive. A click that starts
+            // a multi-second GLB download used to look exactly like a click
+            // that was thrown away.
+            setRenderTick(t => t + 1)
+          }}
           onDoubleClick={e => e.stopPropagation()}
           onDragStart={e => e.preventDefault()}
           style={{
             position: 'absolute', bottom: captioned ? 22 : 3, left: 3,
             fontSize: 10, lineHeight: '15px', padding: '0 6px', borderRadius: 3,
-            background: 'rgba(0,0,0,0.62)', border: '1px solid rgba(140,190,255,0.4)',
-            color: 'rgba(200,225,255,0.95)', cursor: 'pointer', fontFamily: 'inherit',
+            background: 'rgba(0,0,0,0.62)',
+            border: `1px solid ${renderState === 'failed' ? 'rgba(255,150,150,0.55)' : 'rgba(140,190,255,0.4)'}`,
+            color: renderState === 'failed' ? 'rgba(255,190,190,0.95)' : 'rgba(200,225,255,0.95)',
+            cursor: 'pointer', fontFamily: 'inherit',
           }}
-        >render</button>
+        >{renderState === 'working' ? '…' : renderState === 'failed' ? 'retry' : 'render'}</button>
       )}
 
       {captioned && (
@@ -240,9 +268,15 @@ export const MediaPool: React.FC<{ nodeId: string }> = ({ nodeId }) => {
   const node = useFreeNodeStore(s => s.nodes[nodeId])
   const updateFreeNode = useFreeNodeStore(s => s.updateFreeNode)
   const contents = usePoolStore(s => s.pools[nodeId])
-  const [sizeIdx, setSizeIdx] = useState(1)
+  // Tile size and filter live on the NODE, not in component state. They were
+  // useState, so every remount — a zoom-layer switch, a pin, a scroll that
+  // culled the node — silently put the pool back to defaults while you were
+  // working in it.
+  const sizeIdx = node?.poolSizeIdx ?? 1
+  const setSizeIdx = (i: number) => updateFreeNode(nodeId, { poolSizeIdx: i })
   const [selected, setSelected] = useState<string | null>(null)
-  const [filter, setFilter] = useState('')
+  const filter = node?.poolFilter ?? ''
+  const setFilter = (v: string) => updateFreeNode(nodeId, { poolFilter: v })
   const [pathDraft, setPathDraft] = useState('')
   const [editingPath, setEditingPath] = useState(false)
 
@@ -358,6 +392,12 @@ export const MediaPool: React.FC<{ nodeId: string }> = ({ nodeId }) => {
     <div
       onPointerDown={e => e.stopPropagation()}
       onWheel={e => e.stopPropagation()}
+      // A pool drag released back over the pool used to bubble to the canvas,
+      // which happily made a node UNDER the opaque panel — invisible, plus an
+      // undo step and a selection change for something you never saw. Letting
+      // go over the panel you dragged from should simply do nothing.
+      onDragOver={e => { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = 'none' }}
+      onDrop={e => { e.preventDefault(); e.stopPropagation() }}
       style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: '#12131f' }}
     >
       <ContentScaled factor={uiScale}>
