@@ -34,6 +34,7 @@ import { BlockLayer } from '../Layers/BlockLayer'
 import { BoardLayer } from '../Layers/BoardLayer'
 import { expandWithNestedMembers } from '../../hooks/useCardDecks'
 import { PinnedCardBar } from './PinnedCardBar'
+import { PinTravelLines } from './PinTravelLines'
 
 export const PinLayer: React.FC = () => {
   const nodes = useFreeNodeStore(s => s.nodes)
@@ -91,6 +92,11 @@ export const PinLayer: React.FC = () => {
           pixels, so drawing them in the canvas layer would put the ghost
           somewhere else entirely. */}
       <MagnetDockPreview space="screen" />
+      {/* Where cards go when they unpin. Mounted in the pin host because
+          that is the surface a card departs FROM; the line has to outlive
+          the pinned render it came from, which it does — the store owns it,
+          not the card. */}
+      <PinTravelLines />
       {ids.map(id => (
         (id === homeId && !homeVisible) ? null : <FreeNode key={id} id={id} />
       ))}

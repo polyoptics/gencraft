@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { createDebouncedIDBStorage } from '../utils/debouncedIDBStorage'
 import { useCanvasStore } from './canvasStore'
+import { usePinTravelStore } from './pinTravelStore'
 import type { Bar } from '../types/bar'
 import { TEMPLATES } from '../data/templates'
 import { getBoardAbsolutePos, computeGroupLayout, yToRow } from '../utils/nleRows'
@@ -897,6 +898,14 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
   },
 
   setGroupPlacement(groupIds, to, view) {
+    // Where each card is leaving from, captured BEFORE the move — after it,
+    // the pin is gone and there is nothing left to draw a line from.
+    const departures = to === 'canvas'
+      ? get().groups
+          .filter(g => groupIds.includes(g.id) && g.pin)
+          .map(g => ({ from: { x: g.pin!.x, y: g.pin!.y }, color: g.color,
+                       home: g.home ?? { x: g.originX, y: g.originY } }))
+      : []
     set(s => ({
       groups: s.groups.map(g => {
         if (!groupIds.includes(g.id)) return g
@@ -928,6 +937,15 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
         }
       }),
     }))
+    // A card that unpins jumps from the screen to somewhere in the world,
+    // often off-screen. The streak is what tells you where it went.
+    for (const d of departures) {
+      usePinTravelStore.getState().emitTravel(
+        d.from,
+        { x: view.pan.x + d.home.x * view.zoom, y: view.pan.y + d.home.y * view.zoom },
+        d.color,
+      )
+    }
   },
 
   rescalePinnedGroup(groupId, scale) {
