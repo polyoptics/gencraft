@@ -29,8 +29,8 @@ import { GLPinnedCanvasHost } from '../Viewport3D/GLPinnedCanvasHost'
 import { MagnetDockPreview } from './MagnetDockPreview'
 import { useBoardsStore } from '../../store/boardsStore'
 import { PinnedCardView } from '../Layers/cardView'
-import { GroupCard } from '../Layers/CardLayer'
-import { NLETimelineHeader } from '../NLE/NLETimelineHeader'
+import { CardLayer } from '../Layers/CardLayer'
+import { expandWithNestedMembers } from '../../hooks/useCardDecks'
 
 export const PinLayer: React.FC = () => {
   const nodes = useFreeNodeStore(s => s.nodes)
@@ -98,17 +98,15 @@ export const PinLayer: React.FC = () => {
           (see cardView.tsx). pointerEvents is re-enabled per card because
           this host is pass-through. */}
       {pinnedGroups.map(g => (
-        <div key={g.id} style={{ position: 'absolute', inset: 0, pointerEvents: 'auto' }}>
-          <PinnedCardView
-            originX={g.originX}
-            originY={g.originY}
-            anchor={{ x: g.pin!.x, y: g.pin!.y }}
-            scale={g.pin!.scale}
-          >
-            <NLETimelineHeader groupId={g.id} iconMode={{ kind: 'hidden' }} />
-            <GroupCard group={g} />
-          </PinnedCardView>
-        </div>
+        <PinnedCardView
+          key={g.id}
+          originX={g.originX}
+          originY={g.originY}
+          anchor={{ x: g.pin!.x, y: g.pin!.y }}
+          scale={g.pin!.scale}
+        >
+          <CardLayer.Overlay only={expandWithNestedMembers([g.id], groups)} />
+        </PinnedCardView>
       ))}
     </div>
   )

@@ -3099,11 +3099,22 @@ const TetherTab: React.FC<{ cardId: string; touchingClusters: string[][] }> = ({
 }
 
 /** Screen-space overlay — one card per group + per-group NLE headers + ungrouped board cards */
-const Overlay: React.FC = () => {
+/** `only` renders JUST those groups, with everything else (previews,
+ *  affordances, ungrouped boards) suppressed.
+ *
+ *  This is what lets PinLayer show a pinned card WITHOUT a second copy of
+ *  this file's render branch: it mounts this same Overlay inside a frozen
+ *  camera, scoped to one deck. Decks, stacks, fans and open/close therefore
+ *  work while pinned because it is literally the same code — the alternative
+ *  was duplicating the branch, which is the drift that has already produced
+ *  three bugs in this project. */
+const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
   const groups = useBoardsStore(s => s.groups)
   const boards = useBoardsStore(s => s.boards)
-  const zoom = useCanvasStore(s => s.zoom)
-  const pan = useCanvasStore(s => s.pan)
+  // Frozen when pinned, live otherwise — the same swap every card piece makes.
+  const { pan, zoom } = useCardView()
+  const scoped = !!only
+  const onlySet = useMemo(() => (only ? new Set(only) : null), [only])
   // Defer boards (only) so the heavy derived work runs on idle time during
   // drags. We can't defer `groups` here: the render gate below uses live
   // `groups` to hide non-anchor deck members (via deckAnchorId), and useCardDecks
@@ -3168,9 +3179,11 @@ const Overlay: React.FC = () => {
         // that card's render (at strip-equivalent z-index). Skip here so we
         // don't render it twice.
         if (g.id === extractingCardId) return null
-        // Pinned to the screen: PinLayer renders it with a frozen camera, so
-        // it must not also render here inside the world transform.
-        if (g.pin) return null
+        // Scoped render (a pinned deck): draw only its own groups.
+        // Unscoped (the canvas): skip pinned ones, because PinLayer draws
+        // them with a frozen camera and they must not appear twice.
+        if (onlySet) { if (!onlySet.has(g.id)) return null }
+        else if (g.pin) return null
 
         const deck = getDeckForGroup(g.id)
 
@@ -3251,21 +3264,23 @@ const Overlay: React.FC = () => {
           a faint dashed outline appears at each non-anchor member's would-be
           open position. Self-gates on hover/selection state, so unconditional
           mapping is fine. */}
-      {decks.map(d => (
+      {/* Canvas-only furniture. A scoped render is ONE pinned deck floating
+          over the screen; footprint previews, cluster affordances and
+          ungrouped boards all describe the canvas it is no longer part of. */}
+      {!scoped && decks.map(d => (
         <DeckOpenPreview key={`preview-${d.id}`} deck={d} />
       ))}
-      {/* Affordance buttons for open touching clusters */}
-      {affordanceClusters.map(cluster => (
+      {!scoped && affordanceClusters.map(cluster => (
         <DeckAffordance key={cluster.join('|')} cluster={cluster} />
       ))}
-      {ungroupedIds.map(bid => (
+      {!scoped && ungroupedIds.map(bid => (
         <UngroupedBoardCard key={bid} boardId={bid} />
       ))}
 
       {/* Tether tabs — one per extracted card (any group whose id appears in
           some other group's ghostSlots). Anchored to the card's top-left in
           the source deck's color. */}
-      {groups.map(g => {
+      {!scoped && groups.map(g => {
         const parent = findExtractionParent(g.id, groups)
         if (!parent) return null
         return <TetherTab key={`tether-${g.id}`} cardId={g.id} touchingClusters={touchingClusters} />
