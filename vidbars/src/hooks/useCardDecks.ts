@@ -155,7 +155,15 @@ export function useCardDecks(
     // 2. Filter out hidden deck members from clustering — they're invisible and
     //    already tracked by the persisted-anchor fallback. Including them would
     //    corrupt clusters (e.g. sub-deck members inflating a parent cluster).
-    const visibleGroups = groups.filter(g => !isHiddenDeckMember(g))
+    // A PINNED card has left the canvas. It is not near anything out there
+    // any more, so it must not cluster with canvas cards, form decks with
+    // them, or raise affordances joining the two — and dragging it must not
+    // push canvas cards around. Excluding it HERE, at the one place
+    // clustering is derived, removes it from every consumer at once:
+    // decks, touching clusters, affordances and the push/collision
+    // obstacle lists that read from them. Patching those one at a time is
+    // what produced a pinned card that still tugged at its old neighbours.
+    const visibleGroups = groups.filter(g => !isHiddenDeckMember(g) && !g.pin)
     // The whole canvas is one work area — clustering runs over a single
     // pool of all visible groups, so decks form among any touching cards
     // regardless of vertical position. (The old free/timeline zone split

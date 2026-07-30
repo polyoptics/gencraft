@@ -880,7 +880,7 @@ const UngroupedBoardCard = React.memo(UngroupedBoardCardInner)
 
 // ── Deck components ──
 
-import { useCardDecks, isHiddenDeckMember, isSubDeckAnchor, expandWithNestedMembers, type Deck } from '../../hooks/useCardDecks'
+import { useCardDecks, isHiddenDeckMember, isSubDeckAnchor, expandWithNestedMembers, cardVisualRect, type Deck } from '../../hooks/useCardDecks'
 
 // Placeholder names that carry no authored intention — a card/bar with
 // only one of these (and no other content) is NOT counted as meaningful.
@@ -3304,6 +3304,38 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
       {!scoped && ungroupedIds.map(bid => (
         <UngroupedBoardCard key={bid} boardId={bid} />
       ))}
+
+      {/* Where a pinned card USED to be. A pin means the card left the
+          canvas — it does not cluster, push, or raise affordances out here
+          any more — so all that should remain is the hole it left, enough to
+          find your way back to it. */}
+      {!scoped && groups.filter(g => g.pin).map(g => {
+        const v = cardVisualRect(g, boards, zoom)
+        if (!v) return null
+        const home = g.home ?? { x: g.originX, y: g.originY }
+        // The rect is measured at the card's CURRENT origin; the outline
+        // belongs at its home, so shift by the difference.
+        const dx = (home.x - g.originX) * zoom
+        const dy = (home.y - g.originY) * zoom
+        return (
+          <div
+            key={`pinned-ghost-${g.id}`}
+            title={`${g.name || 'Card'} — pinned to the screen`}
+            style={{
+              position: 'absolute',
+              left: v.rect.left + dx,
+              top: v.rect.top + dy,
+              width: v.rect.right - v.rect.left,
+              height: v.rect.bottom - v.rect.top,
+              border: `${Math.max(1, 1.5)}px dashed ${edgeColor(g.color, 0.5)}`,
+              borderRadius: 12,
+              background: 'rgba(255,255,255,0.015)',
+              pointerEvents: 'none',
+              zIndex: 1,
+            }}
+          />
+        )
+      })}
 
       {/* Tether tabs — one per extracted card (any group whose id appears in
           some other group's ghostSlots). Anchored to the card's top-left in
