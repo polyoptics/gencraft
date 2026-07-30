@@ -2941,8 +2941,9 @@ const DeckOpenPreview: React.FC<{ deck: Deck }> = ({ deck }) => {
  *  Hover → tooltip with deck name; double-click → pan to that deck. */
 const TetherTab: React.FC<{ cardId: string; touchingClusters: string[][] }> = ({ cardId, touchingClusters }) => {
   const boards = useBoardsStore(s => s.boards)
-  const pan = useCanvasStore(s => s.pan)
-  const zoom = useCanvasStore(s => s.zoom)
+  // Frozen when pinned, live otherwise — the same swap every card piece
+  // makes, and the reason the tab lands on the card rather than beside it.
+  const { pan, zoom } = useCardView()
   const allGroups = useBoardsStore(s => s.groups)
   const card = allGroups.find(g => g.id === cardId)
   const parent = card ? findExtractionParent(card.id, allGroups) : null
@@ -2980,6 +2981,7 @@ const TetherTab: React.FC<{ cardId: string; touchingClusters: string[][] }> = ({
   return (
     <>
       <div
+        data-tether-tab={card.id}
         onPointerEnter={() => setIsHovered(true)}
         onPointerLeave={() => setIsHovered(false)}
         onPointerDown={e => e.stopPropagation()}
@@ -3372,13 +3374,16 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
       {/* Tether tabs — one per extracted card (any group whose id appears in
           some other group's ghostSlots). Anchored to the card's top-left in
           the source deck's color. */}
-      {!scoped && groups.map(g => {
+      {groups.filter(g => !onlySet || onlySet.has(g.id)).map(g => {
         const parent = findExtractionParent(g.id, groups)
         if (!parent) return null
-        // A pinned card left the canvas, so its check-in tab goes with it —
-        // otherwise the tab sits out here pointing at a card that is not
-        // there, offering to return something you cannot see.
-        if (g.pin) return null
+        // The tab belongs to the card, so it renders wherever the card is:
+        // out here while the card is on the canvas, inside the pinned render
+        // once it is pinned. Getting this wrong either strands the tab on the
+        // canvas pointing at a card that is no longer there, or — as it did —
+        // drops it entirely, leaving a checked-out card with no way back into
+        // its deck for as long as it stays pinned.
+        if (!!g.pin !== scoped) return null
         return <TetherTab key={`tether-${g.id}`} cardId={g.id} touchingClusters={touchingClusters} />
       })}
 
