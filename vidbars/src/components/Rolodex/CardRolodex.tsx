@@ -2189,11 +2189,18 @@ const RolodexPoolSlot: React.FC<{
   useEffect(() => {
     if (file.kind === 'video') requestThumb(file.url, 'video')
   }, [file.kind, file.url])
-  // Images take the server's downscaled copy. Handing HeroImageLayer the
-  // original meant decoding multi-megabyte PNGs into a ~200px card.
-  const hero = framed
-    ? poster
-    : file.kind === 'image' ? (file.thumb ?? file.url) : null
+  // THE SAME LADDER THE POOL USES, and it has to be: this slot renders the
+  // identical listing, so any difference shows up as "the pool has a picture
+  // and the Rolodex beside it does not". That was the bug — a model poster
+  // generated in an earlier session lives on the SERVER (87 of 94 models in
+  // the test folder had one), and this only ever consulted the in-memory
+  // map, so docking a Rolodex to a pool showed blank faces for models the
+  // pool was drawing perfectly.
+  //
+  // Server copy first, then the live map, then the original for images.
+  // Models never fall through to the original: a .glb is not an <img>.
+  const hero = file.thumb
+    ?? (framed ? poster : file.kind === 'image' ? file.url : null)
   const centerness = Math.max(0, 1 - Math.abs(offset))
   const exposure = Math.min(1, Math.max(0, (expansionFraction - 0.15) / 0.2))
   const borderRGB = Math.round(255 * centerness)
