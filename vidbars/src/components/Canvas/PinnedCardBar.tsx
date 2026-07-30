@@ -16,6 +16,12 @@ import type { ProjectGroup } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { PinControl } from '../UI/PinControl'
+import { headerExtend } from '../NLE/NLETimelineHeader'
+
+/** Control height — the buttons and the grip are all this tall. */
+const BAR_H = 18
+/** Inset from the card's left edge, matching the header's own text inset. */
+const RAIL_INSET_X = 4
 
 const LEVELS = [
   { key: 'card',  label: '1', title: 'Card — the whole thing as one face' },
@@ -53,7 +59,13 @@ export const PinnedCardBar: React.FC<{ group: ProjectGroup }> = ({ group }) => {
           r2 = Math.max(r2, r.right); b2 = Math.max(b2, r.bottom)
         }
         if (Number.isFinite(l)) {
-          setBox({ x: Math.round(l), y: Math.round(t) })
+          // getBoundingClientRect is VIEWPORT space; this bar is positioned
+          // absolutely inside the pin host, whose own origin sits below the
+          // app's top chrome. Using the viewport number directly offset the
+          // bar by exactly the height of that chrome — which is why it kept
+          // landing near the card instead of on it.
+          const hostBox = (host as HTMLElement).getBoundingClientRect()
+          setBox({ x: Math.round(l - hostBox.left), y: Math.round(t - hostBox.top) })
 
           // FIT TO SCREEN, once per level change. A level's default scale is
           // what that view is normally READ at, which is the right starting
@@ -92,6 +104,15 @@ export const PinnedCardBar: React.FC<{ group: ProjectGroup }> = ({ group }) => {
   // than appearing somewhere that is not the card.
   if (!group.pin || !box) return null
 
+  // The band the controls sit in. At card level a card's rect INCLUDES the
+  // header extension above its body, and that band is the card's own chrome
+  // strip — the right home for controls that belong to the card. Block and
+  // board levels have no such band, so the controls sit against the top edge
+  // of what they drew. The pin's scale is the card's camera, so the band is
+  // measured with that rather than the canvas zoom, which is unrelated to
+  // how big the pinned card is on screen.
+  const bandH = current === 'card' ? headerExtend(group.pin.scale) : BAR_H
+
   const btn = (on: boolean): React.CSSProperties => ({
     width: 20, height: 18, lineHeight: '18px', textAlign: 'center',
     background: on ? 'rgba(120,170,255,0.32)' : 'rgba(255,255,255,0.06)',
@@ -106,14 +127,17 @@ export const PinnedCardBar: React.FC<{ group: ProjectGroup }> = ({ group }) => {
       onPointerDown={e => e.stopPropagation()}
       style={{
         position: 'absolute',
-        // Just above whatever this level actually drew. No fallback to the
-        // pin anchor: the anchor is the group's ORIGIN, which is not where
-        // the content starts, and guessing with it is what put this bar in a
-        // different wrong place for every level. If the content cannot be
-        // measured the bar waits (see the null return above) rather than
-        // appearing somewhere misleading.
-        left: box.x,
-        top: box.y - 24,
+        // IN the card's header band, at its left edge — the same place the
+        // card's own chrome lives, so the controls read as part of the card
+        // rather than as something floating near it. Floating above the
+        // content is what put the bar in a different apparent position at
+        // every level, since each level's content starts at a different
+        // offset from the card. No fallback to the pin anchor: the anchor is
+        // the group's ORIGIN, which is not where the content starts. If the
+        // content cannot be measured the bar waits (see the null return
+        // above) rather than appearing somewhere misleading.
+        left: box.x + RAIL_INSET_X,
+        top: box.y + Math.max(0, (bandH - BAR_H) / 2),
         display: 'flex', alignItems: 'center', gap: 3,
         pointerEvents: 'auto',
         // Above the card's own chrome, not just above the wrapper. The
