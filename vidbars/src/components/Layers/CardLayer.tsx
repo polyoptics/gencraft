@@ -7,6 +7,7 @@ import ReactDOM from 'react-dom'
 import { useBoardsStore, getUngroupedBoardIds } from '../../store/boardsStore'
 import type { ProjectGroup } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
+import { useCardView } from './cardView'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { DEFAULT_HEADER_STYLE, DEFAULT_BODY_STYLE } from '../../store/freeNodeStore'
 import type { TextStyle } from '../../store/freeNodeStore'
@@ -137,6 +138,37 @@ const CardContextMenu: React.FC<{
     onClose()
   }})
 
+  // Placement — the same gesture tiles and panels have. A multi-selection
+  // converts together, so "select a few cards and pin them" is one action.
+  {
+    const sel = useBoardsStore.getState().selectedGroupIds
+    const targets = sel.includes(group.id) && sel.length > 1 ? sel : [group.id]
+    const many = targets.length > 1 ? ` (${targets.length})` : ''
+    menuItems.push({
+      label: group.pin ? `Drop on canvas${many}` : `Pin to screen${many}`,
+      icon: group.pin ? '📤' : '📌',
+      separator: true,
+      action: () => {
+        const cs = useCanvasStore.getState()
+        useUndoCoordinator.getState().checkpoint()
+        useBoardsStore.getState().setGroupPlacement(
+          targets, group.pin ? 'canvas' : 'screen', { pan: cs.pan, zoom: cs.zoom })
+        onClose()
+      },
+    })
+    if (group.pin) {
+      menuItems.push({
+        label: 'Set return spot here', icon: '⌖',
+        action: () => {
+          const cs = useCanvasStore.getState()
+          useUndoCoordinator.getState().checkpoint()
+          useBoardsStore.getState().rehomePinnedGroup(group.id, { pan: cs.pan, zoom: cs.zoom })
+          onClose()
+        },
+      })
+    }
+  }
+
   // Delete
   if (groups.length > 1) menuItems.push({ label: 'Delete Card', icon: '🗑', danger: true, separator: true, action: () => {
     useUndoCoordinator.getState().checkpoint()
@@ -210,8 +242,10 @@ const Canvas: React.FC = () => <><Viewport3DLayer /><FreeCanvas /></>
 // ── Per-group card (screen-space) ──
 
 const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
-  const pan          = useCanvasStore(s => s.pan)
-  const zoom         = useCanvasStore(s => s.zoom)
+  // The live canvas camera, or a frozen one when this card is pinned. All
+  // the geometry below is `pan + world * zoom`, so swapping the camera is
+  // the whole of what pinning does — see cardView.tsx.
+  const { pan, zoom } = useCardView()
 
   const boards       = useBoardsStore(s => s.boards)
   const isSelected   = useBoardsStore(s => s.selectedGroupIds.includes(group.id))
@@ -627,7 +661,10 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
 // Wrap in memo so unmoved cards don't re-render every frame during sibling drags.
 // The `group` prop reference is preserved by setGroupPosBatch for untouched groups,
 // so a shallow prop compare correctly skips them.
-const GroupCard = React.memo(GroupCardInner)
+/** Exported so PinLayer can render the SAME card with a frozen camera — one
+ *  card component, two placements, which is what keeps a pinned card from
+ *  drifting into a second implementation. */
+export const GroupCard = React.memo(GroupCardInner)
 
 // ── Ungrouped board card (free canvas) ──
 
@@ -3109,6 +3146,9 @@ const Overlay: React.FC = () => {
         // that card's render (at strip-equivalent z-index). Skip here so we
         // don't render it twice.
         if (g.id === extractingCardId) return null
+        // Pinned to the screen: PinLayer renders it with a frozen camera, so
+        // it must not also render here inside the world transform.
+        if (g.pin) return null
 
         const deck = getDeckForGroup(g.id)
 
@@ -3391,7 +3431,9 @@ const TextSplitDivider: React.FC<{
 }
 
 export const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void; heroImage?: string | null }> = ({ groupId, onCropImage, heroImage: heroImageProp }) => {
-  const zoom = useCanvasStore(s => s.zoom)
+  // Frozen camera inside a pinned card, so its text scales with the CARD
+  // rather than with a canvas it is no longer attached to.
+  const { zoom } = useCardView()
   const group = useBoardsStore(s => s.groups.find(g => g.id === groupId))
   const heroImage = heroImageProp ?? group?.cardHeroImage ?? null
   const heroTransform = group?.cardHeroTransform

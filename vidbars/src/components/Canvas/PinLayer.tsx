@@ -27,6 +27,10 @@ import { FreeNode } from './FreeNode'
 import { Viewport3DFrame } from '../Viewport3D/Viewport3DFrame'
 import { GLPinnedCanvasHost } from '../Viewport3D/GLPinnedCanvasHost'
 import { MagnetDockPreview } from './MagnetDockPreview'
+import { useBoardsStore } from '../../store/boardsStore'
+import { PinnedCardView } from '../Layers/cardView'
+import { GroupCard } from '../Layers/CardLayer'
+import { NLETimelineHeader } from '../NLE/NLETimelineHeader'
 
 export const PinLayer: React.FC = () => {
   const nodes = useFreeNodeStore(s => s.nodes)
@@ -43,6 +47,9 @@ export const PinLayer: React.FC = () => {
     () => Object.keys(viewerWindows).filter(wid => !!viewerWindows[wid].pin),
     [viewerWindows],
   )
+
+  const groups = useBoardsStore(s => s.groups)
+  const pinnedGroups = useMemo(() => groups.filter(g => g.pin), [groups])
 
   const ids = useMemo(() => Object.keys(nodes).filter(id => !!nodes[id].pin), [nodes])
   // Key on the id LIST, not its length: an import that replaces the map
@@ -76,6 +83,23 @@ export const PinLayer: React.FC = () => {
       <MagnetDockPreview space="screen" />
       {ids.map(id => (
         (id === homeId && !homeVisible) ? null : <FreeNode key={id} id={id} />
+      ))}
+      {/* Pinned CARDS. Same GroupCard the canvas layer renders — only the
+          camera differs, which is the whole of what pinning a card means
+          (see cardView.tsx). pointerEvents is re-enabled per card because
+          this host is pass-through. */}
+      {pinnedGroups.map(g => (
+        <div key={g.id} style={{ position: 'absolute', inset: 0, pointerEvents: 'auto' }}>
+          <PinnedCardView
+            originX={g.originX}
+            originY={g.originY}
+            anchor={{ x: g.pin!.x, y: g.pin!.y }}
+            scale={g.pin!.scale}
+          >
+            <NLETimelineHeader groupId={g.id} iconMode={{ kind: 'hidden' }} />
+            <GroupCard group={g} />
+          </PinnedCardView>
+        </div>
       ))}
     </div>
   )

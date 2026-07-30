@@ -48,6 +48,17 @@ export interface ProjectGroup {
   boardIds: string[]   // ordered, can include 'primary'
   cardHeroImage: string | null
   cardHeroTransform?: HeroImageTransform
+  /** SCREEN-PINNED cards — same shape and meaning as a free node's `pin`: a
+   *  container-space anchor for the card's ORIGIN, plus the zoom frozen at
+   *  pin time. Present ⇒ the card renders in PinLayer with a frozen camera
+   *  instead of inside the canvas layers, so it holds still while the world
+   *  moves under it. originX/originY stay world coordinates and stay live,
+   *  which is what makes pin/unpin seamless. */
+  pin?: { x: number; y: number; scale: number }
+  /** Where it came FROM, captured at pin time. Unpinning puts it back here
+   *  rather than dropping it wherever the camera happens to be pointing —
+   *  a pin is a visit to the screen, not a move. */
+  home?: { x: number; y: number }
   cardSummary: string
   cardText: string     // independent body text visible on the card
   cardTextStyle?: import('../store/freeNodeStore').TextStyle
@@ -241,6 +252,15 @@ interface BoardsState {
   renameGroup: (groupId: string, name: string) => void
   setGroupColor: (groupId: string, color: string) => void
   setGroupCardHeroImage: (groupId: string, url: string | null) => void
+  /** Flip cards between screen-pinned and canvas-placed. Takes an ARRAY so a
+   *  multi-selection converts in one set — same shape as setNodePlacement. */
+  setGroupPlacement: (groupIds: string[], to: 'screen' | 'canvas',
+                      view: { pan: { x: number; y: number }; zoom: number }) => void
+  /** Make where a pinned card sits now the spot it returns to. */
+  rehomePinnedGroup: (groupId: string,
+                      view: { pan: { x: number; y: number }; zoom: number }) => void
+  /** SCREEN-px delta for pinned cards. */
+  movePinnedGroups: (groupIds: string[], dx: number, dy: number) => void
   setGroupCardHeroTransform: (groupId: string, transform: HeroImageTransform | undefined) => void
   setGroupCardSummary: (groupId: string, summary: string) => void
   setGroupCardText: (groupId: string, text: string) => void
@@ -863,6 +883,60 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
 
   setGroupCardHeroImage(groupId, url) {
     set(s => ({ groups: s.groups.map(g => g.id === groupId ? { ...g, cardHeroImage: url, ...(url === null ? { cardHeroTransform: undefined } : {}) } : g) }))
+  },
+
+  setGroupPlacement(groupIds, to, view) {
+    set(s => ({
+      groups: s.groups.map(g => {
+        if (!groupIds.includes(g.id)) return g
+        if (to === 'screen') {
+          if (g.pin) return g
+          // The screen rect the browser is painting right now: the world
+          // layer is translate(pan) scale(zoom) and the card's origin is
+          // originX/originY.
+          return {
+            ...g,
+            pin: {
+              x: view.pan.x + g.originX * view.zoom,
+              y: view.pan.y + g.originY * view.zoom,
+              scale: view.zoom,
+            },
+            home: { x: g.originX, y: g.originY },
+          }
+        }
+        if (!g.pin) return g
+        const { pin: _drop, home, ...rest } = g
+        // Back where it came from. No recorded home means it was pinned
+        // before homes existed, so unproject where it sits — the old
+        // behaviour, rather than a jump to somewhere arbitrary.
+        if (home) return { ...rest, originX: home.x, originY: home.y }
+        return {
+          ...rest,
+          originX: (g.pin.x - view.pan.x) / view.zoom,
+          originY: (g.pin.y - view.pan.y) / view.zoom,
+        }
+      }),
+    }))
+  },
+
+  rehomePinnedGroup(groupId, view) {
+    set(s => ({
+      groups: s.groups.map(g => (g.id === groupId && g.pin)
+        ? { ...g, home: {
+            x: (g.pin.x - view.pan.x) / view.zoom,
+            y: (g.pin.y - view.pan.y) / view.zoom,
+          } }
+        : g),
+    }))
+  },
+
+  movePinnedGroups(groupIds, dx, dy) {
+    if (dx === 0 && dy === 0) return
+    set(s => ({
+      groups: s.groups.map(g => (groupIds.includes(g.id) && g.pin)
+        ? { ...g, pin: { ...g.pin, x: g.pin.x + dx, y: g.pin.y + dy } }
+        : g),
+    }))
   },
 
   setGroupCardHeroTransform(groupId, transform) {
