@@ -270,6 +270,8 @@ interface BoardsState {
   /** Choose which representation a pinned card shows, and the scale that
    *  representation is normally seen at. */
   setPinnedLayer: (groupId: string, layer: 'card' | 'block' | 'board') => void
+  /** Set a pinned card's scale directly — used by the fit-to-screen pass. */
+  rescalePinnedGroup: (groupId: string, scale: number) => void
   setGroupCardHeroTransform: (groupId: string, transform: HeroImageTransform | undefined) => void
   setGroupCardSummary: (groupId: string, summary: string) => void
   setGroupCardText: (groupId: string, text: string) => void
@@ -925,6 +927,17 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
           originY: (g.pin.y - view.pan.y) / view.zoom,
         }
       }),
+    }))
+  },
+
+  rescalePinnedGroup(groupId, scale) {
+    // Anchor-preserving: the top-left the user is looking at stays put and
+    // the content shrinks toward it. Scaling about some other point would
+    // make a fit feel like the card jumped somewhere else.
+    set(s => ({
+      groups: s.groups.map(g => (g.id === groupId && g.pin)
+        ? { ...g, pin: { ...g.pin, scale: Math.max(0.02, Math.min(4, scale)) } }
+        : g),
     }))
   },
 

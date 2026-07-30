@@ -116,8 +116,8 @@ export const PinLayer: React.FC = () => {
           zoom: g.pin!.scale,
         }
         return (
+          <div key={g.id} data-pinned-group={g.id} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
           <PinnedCardView
-            key={g.id}
             originX={g.originX}
             originY={g.originY}
             anchor={{ x: g.pin!.x, y: g.pin!.y }}
@@ -146,6 +146,7 @@ export const PinLayer: React.FC = () => {
               </>
             )}
           </PinnedCardView>
+          </div>
         )
       })}
     </div>
