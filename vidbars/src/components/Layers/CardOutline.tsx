@@ -4,7 +4,7 @@
 import React, { useMemo } from 'react'
 import { useBoardsStore } from '../../store/boardsStore'
 import type { ProjectGroup } from '../../store/boardsStore'
-import { useCanvasStore } from '../../store/canvasStore'
+import { useCardView } from './cardView'
 import { computeGroupLayout, getRowY, getRowHeight } from '../../utils/nleRows'
 import { DEFAULT_H } from '../../utils/barConstants'
 import { headerExtend as computeHeaderExtend } from '../NLE/NLETimelineHeader'
@@ -12,8 +12,12 @@ import { headerExtend as computeHeaderExtend } from '../NLE/NLETimelineHeader'
 const BOARD_PADDING_X = 20
 
 export const CardOutline: React.FC<{ group: ProjectGroup }> = ({ group }) => {
-  const pan = useCanvasStore(s => s.pan)
-  const zoom = useCanvasStore(s => s.zoom)
+  // Frozen inside a pinned card, live on the canvas. This outline shows where
+  // a card's face sits while you are at block or board level — and a pinned
+  // card is exactly the case where the canvas camera is the wrong answer, so
+  // the outline drew out on the canvas while the card it outlines was on
+  // screen somewhere else.
+  const { pan, zoom } = useCardView()
   const boards = useBoardsStore(s => s.boards)
 
   const rect = useMemo(() => {

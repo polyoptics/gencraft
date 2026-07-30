@@ -337,8 +337,7 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
     // One unified work area — collide with every other visible (non-dragging)
     // group, wherever it sits on the canvas.
     const draggingSet = new Set(draggingIds)
-    const obstacles = bs0.groups
-      .filter(g => !draggingSet.has(g.id) && !isHiddenDeckMember(g))
+    const obstacles = canvasObstacleGroups(bs0.groups, draggingSet)
       .map(g => groupSlot(g.id, g.boardIds, bs0.boards, g.originX, g.originY, computeGroupLayout(g.boardIds, bs0.boards)))
       .filter(Boolean) as import('../../utils/nlePush').GroupSlot[]
 
@@ -902,7 +901,7 @@ const UngroupedBoardCard = React.memo(UngroupedBoardCardInner)
 
 // ── Deck components ──
 
-import { useCardDecks, isHiddenDeckMember, isSubDeckAnchor, expandWithNestedMembers, cardVisualRect, type Deck } from '../../hooks/useCardDecks'
+import { useCardDecks, isHiddenDeckMember, isSubDeckAnchor, expandWithNestedMembers, cardVisualRect, canvasObstacleGroups, type Deck } from '../../hooks/useCardDecks'
 
 // Placeholder names that carry no authored intention — a card/bar with
 // only one of these (and no other content) is NOT counted as meaningful.
@@ -1101,8 +1100,7 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
 
     const draggingSet = new Set(allDragIds)
     // One unified work area — collide with every other visible group.
-    const obstacles = bs0.groups
-      .filter(g => !draggingSet.has(g.id) && !isHiddenDeckMember(g))
+    const obstacles = canvasObstacleGroups(bs0.groups, draggingSet)
       .map(g => groupSlot(g.id, g.boardIds, bs0.boards, g.originX, g.originY, computeGroupLayout(g.boardIds, bs0.boards)))
       .filter(Boolean) as import('../../utils/nlePush').GroupSlot[]
 
@@ -1684,8 +1682,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
       ? groupSlot(deck.anchorGroupId, anchorGroup.boardIds, bs0.boards, anchorOrigin.x, anchorOrigin.y, anchorLayout)
       : null
     // One unified work area — collide with every other visible group.
-    const obstacles = bs0.groups
-      .filter(g => !draggingSet.has(g.id) && !isHiddenDeckMember(g))
+    const obstacles = canvasObstacleGroups(bs0.groups, draggingSet)
       .map(g => groupSlot(g.id, g.boardIds, bs0.boards, g.originX, g.originY, computeGroupLayout(g.boardIds, bs0.boards)))
       .filter(Boolean) as import('../../utils/nlePush').GroupSlot[]
 

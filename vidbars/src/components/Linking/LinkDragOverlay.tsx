@@ -33,10 +33,17 @@ export const LinkDragOverlay: React.FC = () => {
         if (!attr) continue
         // Format: "chip:<groupId>" or "card:<groupId>"
         const [, gid] = attr.split(':')
-        if (gid && gid !== source) {
-          targetGroupId = gid
-          break
-        }
+        if (!gid) continue
+        // THE TOPMOST CARD WINS, whatever it is. elementsFromPoint returns the
+        // whole stack, not just the top hit, so skipping the source card and
+        // continuing meant the search fell THROUGH the card you released on
+        // and linked whatever happened to lie behind it. Harmless while cards
+        // never overlapped; with a pinned card floating over the canvas it
+        // fired on every plain click of that card's own "+" chip. Releasing
+        // over the source now cancels, which is what releasing where you
+        // started should do anyway.
+        if (gid !== source) targetGroupId = gid
+        break
       }
       if (targetGroupId) {
         // Direction convention: the DROP TARGET owns the reference. Dragging

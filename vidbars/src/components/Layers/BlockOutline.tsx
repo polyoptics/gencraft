@@ -12,7 +12,7 @@
 import React, { useMemo } from 'react'
 import { useBoardsStore } from '../../store/boardsStore'
 import type { ProjectGroup } from '../../store/boardsStore'
-import { useCanvasStore } from '../../store/canvasStore'
+import { useCardView } from './cardView'
 import { computeGroupLayout, getRowY } from '../../utils/nleRows'
 import { DEFAULT_H } from '../../utils/barConstants'
 
@@ -26,8 +26,10 @@ const BOARD_HEADER_H = 28
 const BOARD_PADDING_TOP = 28
 
 export const BlockOutline: React.FC<{ group: ProjectGroup; boardId: string }> = ({ group, boardId }) => {
-  const pan = useCanvasStore(s => s.pan)
-  const zoom = useCanvasStore(s => s.zoom)
+  // Frozen inside a pinned card — same reason as CardOutline: at board level
+  // this outline belongs to a block that may be rendering under a pin's
+  // camera, and the canvas camera would put it somewhere else entirely.
+  const { pan, zoom } = useCardView()
   const boards = useBoardsStore(s => s.boards)
   const board = boards[boardId]
 

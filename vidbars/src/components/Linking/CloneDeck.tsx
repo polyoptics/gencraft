@@ -14,6 +14,7 @@ import { useLinkingStore } from '../../store/linkingStore'
 import { HeroImageLayer } from '../Layers/HeroImageLayer'
 import { PrimaryChipRail } from './PrimaryChipRail'
 import { cardScreenRect, GroupCardText } from '../Layers/CardLayer'
+import { useCardView } from '../Layers/cardView'
 import { NLE_HEADER_CANVAS_H } from '../NLE/NLETimelineHeader'
 import { getFirstImageUrl } from '../../types/bar'
 
@@ -61,8 +62,14 @@ export const CloneDeck: React.FC<Props> = ({
   const deckSnapshots = useLinkingStore(s => s.deckSnapshots)
   const openDeck = useLinkingStore(s => s.openDeck)
   const closeDeck = useLinkingStore(s => s.closeDeck)
-  const pan = useCanvasStore(s => s.pan)
-  const zoom = useCanvasStore(s => s.zoom)
+  // The HOST card's camera, not the canvas's. A clone hangs off its host and
+  // is positioned from `hostRect`, which the linking layer already computed
+  // with the host's camera — so sizing it from the live canvas meant the box
+  // and its position were drawn by two different cameras. On a pinned host
+  // that is visible immediately: the position stays put while the box grows
+  // and shrinks with every canvas zoom, and the text inside it (which reads
+  // this same context) disagrees with the box it sits in.
+  const { pan, zoom } = useCardView()
 
   if (!target) return null
 

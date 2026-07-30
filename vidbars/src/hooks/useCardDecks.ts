@@ -361,6 +361,20 @@ export function useCardDecks(
   }, [groups, boards, zoom])
 }
 
+/** The groups a canvas drag has to steer around.
+ *
+ *  Excludes what is being dragged, what a collapsed deck is already hiding,
+ *  and — the part that is easy to forget — anything PINNED. A pinned card has
+ *  left the canvas, but its originX/originY still point at the space it used
+ *  to occupy, so without this a canvas card refuses to cross an empty patch
+ *  where nothing is drawn. Four drag handlers built this same list by hand
+ *  and all four had to agree; now they cannot disagree. */
+export function canvasObstacleGroups(
+  groups: ProjectGroup[], draggingSet: Set<string>,
+): ProjectGroup[] {
+  return groups.filter(g => !draggingSet.has(g.id) && !isHiddenDeckMember(g) && !g.pin)
+}
+
 /** A group is hidden because its deck is collapsed onto an anchor that ISN'T
  *  it. `selfContained` is for renders that draw one chosen group in its own
  *  frame — a pinned card. There, the deck it belongs to is not on screen, so

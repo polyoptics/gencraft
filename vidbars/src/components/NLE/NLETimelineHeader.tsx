@@ -7,7 +7,7 @@ import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { computeGroupLayout, snapToCardGrid, CARD_GRID_SPACING } from '../../utils/nleRows'
 import { groupSlot, clampGroupMove } from '../../utils/nlePush'
 import type { GroupSlot } from '../../utils/nlePush'
-import { isHiddenDeckMember, expandWithNestedMembers } from '../../hooks/useCardDecks'
+import { expandWithNestedMembers, canvasObstacleGroups } from '../../hooks/useCardDecks'
 import { hexToHsl, hslToHex } from '../../utils/colorUtils'
 import { updateDeckMagnetPreview, finishDeckMagnetDock } from '../../utils/deckDockDrag'
 import { groupHasBrowsableContent } from '../../utils/contentTraversal'
@@ -158,8 +158,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, icon
       const myLayout = computeGroupLayout(g.boardIds, bs0.boards)
       mySlot = groupSlot(groupId, g.boardIds, bs0.boards, initialOriginX, initialOriginY, myLayout)
       // One unified work area — collide with every other visible group.
-      obstacles = bs0.groups
-        .filter(og => !draggingSet.has(og.id) && !isHiddenDeckMember(og))
+      obstacles = canvasObstacleGroups(bs0.groups, draggingSet)
         .map(og => groupSlot(og.id, og.boardIds, bs0.boards, og.originX, og.originY, computeGroupLayout(og.boardIds, bs0.boards)))
         .filter(Boolean) as GroupSlot[]
     }

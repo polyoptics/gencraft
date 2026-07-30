@@ -337,6 +337,14 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
     const bs = useBoardsStore.getState()
     const group = bs.groups.find(g => g.id === groupId)
     if (!group) return
+    // A pinned card is already on screen and its originX/originY still point
+    // at the empty spot it left behind, so panning there would fly the canvas
+    // to nothing while the card the user asked to see sat where it always
+    // was. Select it instead — "go to it" is already satisfied.
+    if (group.pin) {
+      bs.setSelectedGroup(groupId)
+      return
+    }
 
     // Compute the group's canvas bounds — mirrors GroupCard's geometry math.
     const layout = computeGroupLayout(group.boardIds, bs.boards)
