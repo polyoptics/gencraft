@@ -361,6 +361,19 @@ export function useCardDecks(
   }, [groups, boards, zoom])
 }
 
+/** A group is hidden because its deck is collapsed onto an anchor that ISN'T
+ *  it. `selfContained` is for renders that draw one chosen group in its own
+ *  frame — a pinned card. There, the deck it belongs to is not on screen, so
+ *  "the anchor is showing this for you" is false and hiding it would erase
+ *  the only thing the render exists to draw. A pinned deck ANCHOR still hides
+ *  its members, because those ARE in the frame with it. */
+function hiddenMember(
+  g: ProjectGroup, groups: ProjectGroup[], selfContained: boolean,
+): boolean {
+  if (!(g.deckState && g.deckState !== 'open' && g.deckAnchorId && g.deckAnchorId !== g.id)) return false
+  return selfContained ? groups.some(x => x.id === g.deckAnchorId) : true
+}
+
 /**
  * Returns board IDs that should be hidden at block/board levels because they
  * belong to non-anchor groups in a stacked or fanned deck.
@@ -370,11 +383,12 @@ export function useCardDecks(
  */
 export function getHiddenBoardIds(
   groups: ProjectGroup[],
+  selfContained = false,
 ): Set<string> {
   const hidden = new Set<string>()
   for (const g of groups) {
     // Hide boards of any non-anchor group that's in a stacked or fanned deck
-    if (g.deckState && g.deckState !== 'open' && g.deckAnchorId && g.deckAnchorId !== g.id) {
+    if (hiddenMember(g, groups, selfContained)) {
       for (const bid of g.boardIds) hidden.add(bid)
     }
   }
@@ -389,12 +403,11 @@ export function getHiddenBoardIds(
  */
 export function getHiddenGroupIds(
   groups: ProjectGroup[],
+  selfContained = false,
 ): Set<string> {
   const hidden = new Set<string>()
   for (const g of groups) {
-    if (g.deckState && g.deckState !== 'open' && g.deckAnchorId && g.deckAnchorId !== g.id) {
-      hidden.add(g.id)
-    }
+    if (hiddenMember(g, groups, selfContained)) hidden.add(g.id)
   }
   return hidden
 }

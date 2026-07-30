@@ -826,9 +826,15 @@ const Canvas: React.FC<{ only?: string[] }> = ({ only }) => {
     [allGroups, only],
   )
 
+  /** Boards this render is allowed to draw, or null for the whole canvas. */
+  const scopedBoards = useMemo(
+    () => (only ? new Set(groups.flatMap(g => g.boardIds)) : null),
+    [only, groups],
+  )
+
   const hiddenBoards = useMemo(
-    () => getHiddenBoardIds(groups),
-    [groups],
+    () => getHiddenBoardIds(groups, !!only),
+    [groups, only],
   )
 
   // Deck portals at block zoom: replace the anchor's blocks with the
@@ -864,10 +870,24 @@ const Canvas: React.FC<{ only?: string[] }> = ({ only }) => {
 
   return (
     <>
-      <Viewport3DLayer />
-      <FreeCanvas />
-      {!effectiveHiddenBoards.has('primary') && <BlockItem boardId="primary" />}
-      {boardOrder.filter(id => !effectiveHiddenBoards.has(id)).map(id => <BlockItem key={id} boardId={id} />)}
+      {/* Global furniture — every Viewer and every loose tile on the canvas.
+          A scoped render is ONE pinned card, so mounting these would put a
+          second copy of the entire canvas inside it. */}
+      {!only && <Viewport3DLayer />}
+      {!only && <FreeCanvas />}
+      {/* 'primary' is a real board like any other and is very often the one
+          a card owns — excluding it wholesale when scoped left pinned cards
+          rendering nothing at all. */}
+      {(!scopedBoards || scopedBoards.has('primary')) && !effectiveHiddenBoards.has('primary') && (
+        <BlockItem boardId="primary" />
+      )}
+      {/* Boards belonging to the scoped groups only. Filtering `groups` was
+          not enough: the boards render from boardOrder, which is every board
+          in the project — so a pinned card at block level drew the lot. */}
+      {boardOrder
+        .filter(id => !effectiveHiddenBoards.has(id))
+        .filter(id => !scopedBoards || scopedBoards.has(id))
+        .map(id => <BlockItem key={id} boardId={id} />)}
       {/* Portal renderings: each one wraps the locked member's blocks in
           a translate so they land at the anchor's canvas position.
           pointerEvents:'none' on the wrapper enforces view-only; clicks
@@ -902,8 +922,8 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
   )
   const portalSelections = useCanvasStore(s => s.deckPortalSelections)
   const hiddenGroups = useMemo(
-    () => getHiddenGroupIds(groups),
-    [groups],
+    () => getHiddenGroupIds(groups, !!only),
+    [groups, only],
   )
   const visibleGroups = useMemo(
     () => groups.filter(g => !hiddenGroups.has(g.id)),

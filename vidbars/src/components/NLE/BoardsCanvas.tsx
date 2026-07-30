@@ -17,10 +17,15 @@ export const BoardsCanvas: React.FC<{ only?: string[] }> = ({ only }) => {
     [allGroups, only],
   )
   const boards = useBoardsStore(s => s.boards)
+  /** Boards this render may draw, or null for the whole canvas. */
+  const scopedBoards = useMemo(
+    () => (only ? new Set(groups.flatMap(g => g.boardIds)) : null),
+    [only, groups],
+  )
   const portalSelections = useCanvasStore(s => s.deckPortalSelections)
   const hiddenBoards = useMemo(
-    () => getHiddenBoardIds(groups),
-    [groups],
+    () => getHiddenBoardIds(groups, !!only),
+    [groups, only],
   )
 
   // Deck portals at board zoom: replace the anchor's boards with the
@@ -54,8 +59,17 @@ export const BoardsCanvas: React.FC<{ only?: string[] }> = ({ only }) => {
 
   return (
     <>
-      {!effectiveHiddenBoards.has('primary') && <Board boardId="primary" />}
-      {boardOrder.filter(id => !effectiveHiddenBoards.has(id)).map(id => <Board key={id} boardId={id} />)}
+      {/* 'primary' is a real board and usually the one a card owns. */}
+      {(!scopedBoards || scopedBoards.has('primary')) && !effectiveHiddenBoards.has('primary') && (
+        <Board boardId="primary" />
+      )}
+      {/* Same trap as the block layer: boards render from boardOrder, which
+          is every board in the project, so filtering `groups` alone left a
+          pinned card at board level drawing the whole canvas inside itself. */}
+      {boardOrder
+        .filter(id => !effectiveHiddenBoards.has(id))
+        .filter(id => !scopedBoards || scopedBoards.has(id))
+        .map(id => <Board key={id} boardId={id} />)}
       {/* Portal renderings: each wraps the locked member's boards in
           a translate so they land at the anchor's canvas position.
           pointerEvents:'none' enforces view-only (no bar editing, no

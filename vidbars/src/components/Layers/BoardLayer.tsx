@@ -39,8 +39,8 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
   )
   const portalSelections = useCanvasStore(s => s.deckPortalSelections)
   const hiddenGroups = useMemo(
-    () => getHiddenGroupIds(groups),
-    [groups],
+    () => getHiddenGroupIds(groups, !!only),
+    [groups, only],
   )
   const visibleGroups = useMemo(
     () => groups.filter(g => !hiddenGroups.has(g.id)),
