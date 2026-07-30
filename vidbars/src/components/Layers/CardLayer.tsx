@@ -956,8 +956,8 @@ function countMeaningfulContent(
 
 /** Stacked deck — only anchor visible, peek tabs behind, badge + controls */
 const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; isNested?: boolean }> = ({ deck, anchorGroup, isNested }) => {
-  const pan = useCanvasStore(s => s.pan)
-  const zoom = useCanvasStore(s => s.zoom)
+  // Frozen inside a pinned deck — same camera as every other card piece.
+  const { pan, zoom } = useCardView()
   const boards = useBoardsStore(s => s.boards)
   const groups = useBoardsStore(s => s.groups)
   const isSelected = useBoardsStore(s => s.selectedGroupIds.includes(anchorGroup.id))
@@ -1393,8 +1393,8 @@ const StackedDeckCard = React.memo(StackedDeckCardInner)
 /** Fanned deck — primary card unchanged, secondary cards as ~40px strips peeking right.
  *  Hover a strip to surface that card fully; mouse away to slide it back. */
 const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> = ({ deck, groups }) => {
-  const pan = useCanvasStore(s => s.pan)
-  const zoom = useCanvasStore(s => s.zoom)
+  // Frozen inside a pinned deck — same camera as every other card piece.
+  const { pan, zoom } = useCardView()
   const boards = useBoardsStore(s => s.boards)
   const allGroups = useBoardsStore(s => s.groups)
   const isSelected = useBoardsStore(s => s.selectedGroupIds.includes(deck.anchorGroupId))
@@ -3292,6 +3292,9 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
       {groups.flatMap(parent => {
         const isOpen = !parent.deckState || parent.deckState === 'open'
         if (!isOpen) return []
+        // Same gate as everything else that draws per-group.
+        if (onlySet) { if (!onlySet.has(parent.id)) return [] }
+        else if (parent.pin) return []
         const slots = parent.ghostSlots ?? []
         return slots.map(slot => (
           <GhostCardSlot
@@ -3309,6 +3312,14 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
         if (g.deckState && g.deckState !== 'open' && g.deckAnchorId && g.deckAnchorId !== g.id) {
           return null
         }
+        // The SAME gate the card loop uses. Without it this map drew a rail
+        // for every group in every Overlay instance: each pinned deck redrew
+        // the whole canvas's chips through its own frozen camera, and the
+        // canvas redrew the pinned card's. That is the scatter of stray "+"
+        // circles — one rail per group per camera, all landing in the wrong
+        // places because the camera did not match the card.
+        if (onlySet) { if (!onlySet.has(g.id)) return null }
+        else if (g.pin) return null
         const rect = cardScreenRect(g, boards, pan, zoom)
         if (!rect) return null
         return <CardLinkingLayer key={g.id} group={g} rect={rect} />
@@ -3324,7 +3335,10 @@ const CardLinkingLayer: React.FC<{
   rect: { screenLeft: number; screenTop: number; screenWidth: number; screenHeight: number }
 }> = ({ group, rect }) => {
   const expandedPaths = useLinkingStore(s => s.expandedPaths)
-  const zoom = useCanvasStore(s => s.zoom)
+  // Renders INSIDE the card's rect, so it must size against the card's own
+  // camera. Reading the live canvas zoom here is what made a pinned card's
+  // chips and text balloon past the card while the card itself stayed small.
+  const { zoom } = useCardView()
 
   const hostRect = {
     left: rect.screenLeft,
