@@ -144,24 +144,46 @@ const CardContextMenu: React.FC<{
     const bsNow = useBoardsStore.getState()
     const sel = bsNow.selectedGroupIds
     const base = sel.includes(group.id) && sel.length > 1 ? sel : [group.id]
-    // A deck pins as ONE object: pinning the anchor takes every member with
-    // it, recursively through sub-decks. Leaving members behind would strand
-    // them on the canvas as an invisible pile — they are hidden precisely
-    // because the anchor represents them.
-    const targets = expandWithNestedMembers(base, bsNow.groups)
-    const many = targets.length > 1 ? ` (${targets.length})` : ''
-    menuItems.push({
-      label: group.pin ? `Drop on canvas${many}` : `Pin to screen${many}`,
-      icon: group.pin ? '📤' : '📌',
-      separator: true,
-      action: () => {
-        const cs = useCanvasStore.getState()
-        useUndoCoordinator.getState().checkpoint()
-        useBoardsStore.getState().setGroupPlacement(
-          targets, group.pin ? 'canvas' : 'screen', { pan: cs.pan, zoom: cs.zoom })
-        onClose()
-      },
+    // SINGLE CARDS ONLY. A deck is not just several cards: stacking, fanning,
+    // extraction, ghost slots and per-member layout all assume the canvas
+    // they sit on. Pinning one produced a deck that could be opened and not
+    // closed, buttons that vanished when the deck state changed underneath
+    // them, and a level switch that scattered the members. Rather than teach
+    // every one of those about a second placement, a deck simply does not
+    // pin — pin its cards.
+    const isDeck = (g: ProjectGroup) => expandWithNestedMembers([g.id], bsNow.groups).length > 1
+    const targets = base.filter(id => {
+      const g = bsNow.groups.find(x => x.id === id)
+      return g && !isDeck(g)
     })
+    const blockedByDeck = isDeck(group)
+    const many = targets.length > 1 ? ` (${targets.length})` : ''
+    // Unpinning is always allowed — a pinned card must never be strandable,
+    // whatever it has since joined on the canvas.
+    if (group.pin || !blockedByDeck) {
+      menuItems.push({
+        label: group.pin ? `Drop on canvas${many}` : `Pin to screen${many}`,
+        icon: group.pin ? '📤' : '📌',
+        separator: true,
+        action: () => {
+          const cs = useCanvasStore.getState()
+          useUndoCoordinator.getState().checkpoint()
+          useBoardsStore.getState().setGroupPlacement(
+            group.pin ? base : targets,
+            group.pin ? 'canvas' : 'screen',
+            { pan: cs.pan, zoom: cs.zoom })
+          onClose()
+        },
+      })
+    } else {
+      // Say why, rather than leaving a missing item to be puzzled over.
+      menuItems.push({
+        label: 'Pin to screen — not for decks',
+        icon: '📌',
+        separator: true,
+        action: () => onClose(),
+      })
+    }
     if (group.pin) {
       menuItems.push({
         label: 'Set return spot here', icon: '⌖',
