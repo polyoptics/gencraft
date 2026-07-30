@@ -141,8 +141,14 @@ const CardContextMenu: React.FC<{
   // Placement — the same gesture tiles and panels have. A multi-selection
   // converts together, so "select a few cards and pin them" is one action.
   {
-    const sel = useBoardsStore.getState().selectedGroupIds
-    const targets = sel.includes(group.id) && sel.length > 1 ? sel : [group.id]
+    const bsNow = useBoardsStore.getState()
+    const sel = bsNow.selectedGroupIds
+    const base = sel.includes(group.id) && sel.length > 1 ? sel : [group.id]
+    // A deck pins as ONE object: pinning the anchor takes every member with
+    // it, recursively through sub-decks. Leaving members behind would strand
+    // them on the canvas as an invisible pile — they are hidden precisely
+    // because the anchor represents them.
+    const targets = expandWithNestedMembers(base, bsNow.groups)
     const many = targets.length > 1 ? ` (${targets.length})` : ''
     menuItems.push({
       label: group.pin ? `Drop on canvas${many}` : `Pin to screen${many}`,
@@ -315,6 +321,22 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
       .filter(Boolean) as import('../../utils/nlePush').GroupSlot[]
 
     const onMove = (ev: PointerEvent) => {
+      // A PINNED card lives in screen space: its position IS the pin anchor,
+      // while originX/originY are the home it returns to. Moving the origin
+      // would slide it away from its own anchor — and since the frozen camera
+      // is solved FROM the origin, the body would drift while the header held
+      // station. That is the "header separates from the body" report.
+      if (group.pin) {
+        const pdx = ev.clientX - lastX
+        const pdy = ev.clientY - lastY
+        lastX = ev.clientX
+        lastY = ev.clientY
+        const bs = useBoardsStore.getState()
+        const pinnedDragging = Array.from(initialOrigins.keys())
+          .filter(gid => bs.groups.find(g => g.id === gid)?.pin)
+        bs.movePinnedGroups(pinnedDragging, pdx, pdy)
+        return
+      }
       const z = useCanvasStore.getState().zoom
       const dx = (ev.clientX - lastX) / z
       const dy = (ev.clientY - lastY) / z

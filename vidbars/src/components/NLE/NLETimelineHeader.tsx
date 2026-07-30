@@ -1,6 +1,7 @@
 import React, { useMemo, useState, useRef, useCallback } from 'react'
 import { useBoardsStore } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
+import { useCardView } from '../Layers/cardView'
 import { useNLEViewerStore } from '../../store/nleViewerStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { computeGroupLayout, snapToCardGrid, CARD_GRID_SPACING } from '../../utils/nleRows'
@@ -75,8 +76,12 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, icon
   const cardHinted = useCanvasStore(s =>
     mode.kind === 'deckPreview' ? s.cardHoveredDeckId === mode.deckId : false
   )
-  const pan          = useCanvasStore(s => s.pan)
-  const zoom         = useCanvasStore(s => s.zoom)
+  // The card's camera, not the canvas's. A pinned card's body draws with a
+  // frozen view; reading the live one here made the header keep tracking the
+  // canvas while the body stayed put, so the two visibly came apart the
+  // moment anything moved. Header and body are one object and must share
+  // one camera — see cardView.tsx.
+  const { pan, zoom } = useCardView()
 
   const boards       = useBoardsStore(s => s.boards)
   // Subscribe only to THIS group — sibling groups changing during drags
