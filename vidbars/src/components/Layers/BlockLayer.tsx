@@ -809,11 +809,22 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
 
 // ── Canvas content ──
 
-const Canvas: React.FC = () => {
+/** `only` scopes this layer to one pinned card's groups — see CardLayer's
+ *  Overlay for the same idea. A pinned card at block level renders through
+ *  this exact component rather than a copy of it. */
+const Canvas: React.FC<{ only?: string[] }> = ({ only }) => {
   const boardOrder = useBoardsStore(s => s.boardOrder)
-  const groups = useBoardsStore(s => s.groups)
+  const allGroups = useBoardsStore(s => s.groups)
   const boards = useBoardsStore(s => s.boards)
   const portalSelections = useCanvasStore(s => s.deckPortalSelections)
+
+  // Scoped: just this card's groups. Unscoped: every group EXCEPT pinned
+  // ones, which PinLayer is drawing with a frozen camera and which must not
+  // appear twice.
+  const groups = useMemo(
+    () => (only ? allGroups.filter(g => only.includes(g.id)) : allGroups.filter(g => !g.pin)),
+    [allGroups, only],
+  )
 
   const hiddenBoards = useMemo(
     () => getHiddenBoardIds(groups),
@@ -883,8 +894,12 @@ const Canvas: React.FC = () => {
 
 // ── Screen-space overlay ──
 
-const Overlay: React.FC = () => {
-  const groups = useBoardsStore(s => s.groups)
+const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
+  const allGroups = useBoardsStore(s => s.groups)
+  const groups = useMemo(
+    () => (only ? allGroups.filter(g => only.includes(g.id)) : allGroups.filter(g => !g.pin)),
+    [allGroups, only],
+  )
   const portalSelections = useCanvasStore(s => s.deckPortalSelections)
   const hiddenGroups = useMemo(
     () => getHiddenGroupIds(groups),

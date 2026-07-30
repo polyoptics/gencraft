@@ -30,7 +30,10 @@ import { MagnetDockPreview } from './MagnetDockPreview'
 import { useBoardsStore } from '../../store/boardsStore'
 import { PinnedCardView } from '../Layers/cardView'
 import { CardLayer } from '../Layers/CardLayer'
+import { BlockLayer } from '../Layers/BlockLayer'
+import { BoardLayer } from '../Layers/BoardLayer'
 import { expandWithNestedMembers } from '../../hooks/useCardDecks'
+import { PinnedCardBar } from './PinnedCardBar'
 
 export const PinLayer: React.FC = () => {
   const nodes = useFreeNodeStore(s => s.nodes)
@@ -98,16 +101,53 @@ export const PinLayer: React.FC = () => {
           (see cardView.tsx). pointerEvents is re-enabled per card because
           this host is pass-through. */}
       {pinnedGroups.map(g => (
-        <PinnedCardView
-          key={g.id}
-          originX={g.originX}
-          originY={g.originY}
-          anchor={{ x: g.pin!.x, y: g.pin!.y }}
-          scale={g.pin!.scale}
-        >
-          <CardLayer.Overlay only={expandWithNestedMembers([g.id], groups)} />
-        </PinnedCardView>
+        <PinnedCardBar key={`bar-${g.id}`} group={g} />
       ))}
+      {pinnedGroups.map(g => {
+        const members = expandWithNestedMembers([g.id], groups)
+        const level = g.pinnedLayer ?? 'card'
+        // Card level is screen-space already, so a frozen camera is the whole
+        // story. Block and board draw in WORLD space inside the canvas's
+        // transform, so a pinned one needs that transform reproduced with the
+        // frozen values — same maths the canvas container applies, just held
+        // still.
+        const view = {
+          pan: { x: g.pin!.x - g.originX * g.pin!.scale, y: g.pin!.y - g.originY * g.pin!.scale },
+          zoom: g.pin!.scale,
+        }
+        return (
+          <PinnedCardView
+            key={g.id}
+            originX={g.originX}
+            originY={g.originY}
+            anchor={{ x: g.pin!.x, y: g.pin!.y }}
+            scale={g.pin!.scale}
+          >
+            {level === 'card' && <CardLayer.Overlay only={members} />}
+            {level !== 'card' && (
+              <>
+                <div style={{
+                  position: 'absolute', inset: 0, overflow: 'hidden', pointerEvents: 'none',
+                }}>
+                  <div style={{
+                    position: 'absolute', left: 0, top: 0,
+                    transform: `translate(${view.pan.x}px, ${view.pan.y}px) scale(${view.zoom})`,
+                    transformOrigin: '0 0',
+                    pointerEvents: 'auto',
+                  }}>
+                    {level === 'block'
+                      ? <BlockLayer.Canvas only={members} />
+                      : <BoardLayer.Canvas only={members} />}
+                  </div>
+                </div>
+                {level === 'block'
+                  ? <BlockLayer.Overlay only={members} />
+                  : <BoardLayer.Overlay only={members} />}
+              </>
+            )}
+          </PinnedCardView>
+        )
+      })}
     </div>
   )
 }

@@ -7,9 +7,15 @@ import { Board } from './Board'
 import { getHiddenBoardIds } from '../../hooks/useCardDecks'
 import { computeGroupBlockFootprint } from '../Layers/PortalFrame'
 
-export const BoardsCanvas: React.FC = () => {
+export const BoardsCanvas: React.FC<{ only?: string[] }> = ({ only }) => {
   const boardOrder = useBoardsStore(s => s.boardOrder)
-  const groups = useBoardsStore(s => s.groups)
+  const allGroups = useBoardsStore(s => s.groups)
+  // Scoped to one pinned card's groups, or the canvas minus pinned ones —
+  // PinLayer draws those with a frozen camera and they must not appear twice.
+  const groups = useMemo(
+    () => (only ? allGroups.filter(g => only.includes(g.id)) : allGroups.filter(g => !g.pin)),
+    [allGroups, only],
+  )
   const boards = useBoardsStore(s => s.boards)
   const portalSelections = useCanvasStore(s => s.deckPortalSelections)
   const hiddenBoards = useMemo(

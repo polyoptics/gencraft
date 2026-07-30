@@ -15,17 +15,28 @@ import { useCanvasStore } from '../../store/canvasStore'
 import { getHiddenGroupIds } from '../../hooks/useCardDecks'
 
 /** Canvas-space: boards + free nodes (inside transform container) */
-const Canvas: React.FC = () => (
-  <>
-    <Viewport3DLayer />
-    <FreeCanvas />
-    <BoardsCanvas />
-  </>
+/** Scoped (`only`) renders JUST the boards of one pinned card. The Viewer
+ *  windows and free nodes are global furniture — mounting a second copy of
+ *  them inside a pinned card would duplicate every viewer on the canvas. */
+const Canvas: React.FC<{ only?: string[] }> = ({ only }) => (
+  only
+    ? <BoardsCanvas only={only} />
+    : (
+      <>
+        <Viewport3DLayer />
+        <FreeCanvas />
+        <BoardsCanvas />
+      </>
+    )
 )
 
 /** Screen-space overlay: one NLE timeline header per group */
-const Overlay: React.FC = () => {
-  const groups = useBoardsStore(s => s.groups)
+const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
+  const allGroups = useBoardsStore(s => s.groups)
+  const groups = useMemo(
+    () => (only ? allGroups.filter(g => only.includes(g.id)) : allGroups.filter(g => !g.pin)),
+    [allGroups, only],
+  )
   const portalSelections = useCanvasStore(s => s.deckPortalSelections)
   const hiddenGroups = useMemo(
     () => getHiddenGroupIds(groups),

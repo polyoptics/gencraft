@@ -59,6 +59,12 @@ export interface ProjectGroup {
    *  rather than dropping it wherever the camera happens to be pointing —
    *  a pin is a visit to the screen, not a move. */
   home?: { x: number; y: number }
+  /** Which representation a PINNED card shows. On the canvas this is decided
+   *  by the camera (LayerRouter's thresholds); a pinned card has detached
+   *  from that camera, so the choice becomes explicit and lives here. This
+   *  is the whole reason pinning a card is well-defined: it freezes WHICH
+   *  view you are looking at, not just where it sits. */
+  pinnedLayer?: 'card' | 'block' | 'board'
   cardSummary: string
   cardText: string     // independent body text visible on the card
   cardTextStyle?: import('../store/freeNodeStore').TextStyle
@@ -261,6 +267,9 @@ interface BoardsState {
                       view: { pan: { x: number; y: number }; zoom: number }) => void
   /** SCREEN-px delta for pinned cards. */
   movePinnedGroups: (groupIds: string[], dx: number, dy: number) => void
+  /** Choose which representation a pinned card shows, and the scale that
+   *  representation is normally seen at. */
+  setPinnedLayer: (groupId: string, layer: 'card' | 'block' | 'board') => void
   setGroupCardHeroTransform: (groupId: string, transform: HeroImageTransform | undefined) => void
   setGroupCardSummary: (groupId: string, summary: string) => void
   setGroupCardText: (groupId: string, text: string) => void
@@ -916,6 +925,19 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
           originY: (g.pin.y - view.pan.y) / view.zoom,
         }
       }),
+    }))
+  },
+
+  setPinnedLayer(groupId, layer) {
+    // Each level carries the scale it is normally read at, so switching view
+    // also right-sizes the card. Without that, picking "board" on a card
+    // pinned at 0.15 would show board content at card scale — technically
+    // correct and completely unreadable.
+    const scaleFor = { card: 0.15, block: 0.25, board: 0.6 } as const
+    set(s => ({
+      groups: s.groups.map(g => (g.id === groupId && g.pin)
+        ? { ...g, pinnedLayer: layer, pin: { ...g.pin, scale: scaleFor[layer] } }
+        : g),
     }))
   },
 
