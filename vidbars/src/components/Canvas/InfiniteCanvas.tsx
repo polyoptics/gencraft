@@ -10,6 +10,7 @@ import { computeGroupLayout, getRowY, getRowHeight, CARD_GRID_SPACING } from '..
 import { useViewport3DStore, VIEWPORT3D_DEFAULT_W, VIEWPORT3D_DEFAULT_H } from '../../store/viewport3dStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { nextFreeEdgeSlot } from '../../utils/viewportDocking'
+import { isPanelType } from '../../utils/componentLinks'
 import { GLCanvasHost } from '../Viewport3D/GLCanvasHost'
 
 // A card's visual left edge sits this far right of its group origin
@@ -272,6 +273,100 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
     setFreeSelection([nodeId])
   }, [addFreeNode, updateFreeNode, setFreeSelection])
 
+  /** A pool item dropped ON something, rather than on bare canvas.
+   *
+   *  The file path already fills cards, blocks, bars, tiles and Viewers; the
+   *  pool path used to answer first and return, so the pool was the only
+   *  media source in the app that could not fill anything — drag an image
+   *  from the pool onto a card and you got a floating node lying on top of
+   *  it. Same targets, same priority, same zoom dispatch as the file path.
+   *  The only difference is that there is nothing to upload: the url already
+   *  points at something the server is serving.
+   *
+   *  Returns true when it consumed the drop. */
+  const dropPoolOnTarget = useCallback((e: React.DragEvent, p: PoolDragPayload): boolean => {
+    const allEls = document.elementsFromPoint(e.clientX, e.clientY)
+    const isImage = p.kind === 'image'
+    const label = p.label.replace(/\.[^.]+$/, '')
+
+    // 1. A Viewer — show it, and park a tile on the window's edge so the
+    //    thing you dropped still exists as an object you can move.
+    for (const el of allEls) {
+      const winEl = el.closest('[data-viewport3d]') as HTMLElement | null
+      if (!winEl) continue
+      const windowId = winEl.dataset.viewport3d
+      const win = windowId ? useViewport3DStore.getState().windows[windowId] : undefined
+      if (!win || !windowId) continue
+      useUndoCoordinator.getState().checkpoint()
+      const tileW = p.kind === 'audio' ? 260 : 200
+      const tileH = p.kind === 'audio' ? 120 : 180
+      const occupied = Object.values(useFreeNodeStore.getState().nodes)
+        .filter(n => !n.pin)
+        .map(n => ({ x: n.x, y: n.y, width: n.width, height: n.height }))
+      const slot = nextFreeEdgeSlot(win, 'right', tileW, tileH, occupied)
+      const nodeId = addFreeNode(slot.x, slot.y, p.kind)
+      updateFreeNode(nodeId, { imageUrl: p.url, mediaType: p.kind, label })
+      useViewport3DStore.getState().setActiveItem(windowId, {
+        kind: 'media', mediaType: p.kind, url: p.url, name: label,
+      })
+      return true
+    }
+
+    // 2. A media tile — replace what it holds. Same exclusions as the file
+    //    path: a pinned panel floats over everything, and a list is not a
+    //    media target.
+    for (const el of allEls) {
+      const nodeEl = el.closest('[data-freenode][data-id]') as HTMLElement | null
+      if (!nodeEl) continue
+      const nodeId = nodeEl.dataset.id!
+      const target = useFreeNodeStore.getState().nodes[nodeId]
+      if (!target || target.pin || isPanelType(target.type)) continue
+      useUndoCoordinator.getState().checkpoint()
+      updateFreeNode(nodeId, {
+        type: p.kind, mediaType: p.kind, imageUrl: p.url,
+        posterUrl: undefined,       // stale poster from whatever was here before
+        label,
+      })
+      return true
+    }
+
+    // 3/4/5. Card hero, block thumbnail, bar media — by zoom, exactly as the
+    //    file path dispatches. Heroes and thumbnails are images by
+    //    construction, so a model falls through to become a tile instead of
+    //    landing in an <img>.
+    const zoom = useCanvasStore.getState().zoom
+    if (zoom <= 0.18 && isImage) {
+      for (const el of allEls) {
+        const card = el.closest('[data-layer-card]') as HTMLElement | null
+        if (!card) continue
+        useUndoCoordinator.getState().checkpoint()
+        useBoardsStore.getState().setGroupCardHeroImage(card.dataset.layerCard!, p.url)
+        return true
+      }
+    }
+    if (zoom > 0.18 && zoom < 0.3 && isImage) {
+      for (const el of allEls) {
+        const block = el.closest('[data-layer-block]') as HTMLElement | null
+        if (!block) continue
+        useUndoCoordinator.getState().checkpoint()
+        useBoardsStore.getState().setBlockThumbnail(block.dataset.layerBlock!, p.url)
+        return true
+      }
+    }
+    if (zoom >= 0.3) {
+      for (const el of allEls) {
+        const bar = el.closest('[data-block][data-id]') as HTMLElement | null
+        if (!bar) continue
+        useUndoCoordinator.getState().checkpoint()
+        useBoardsStore.getState().setContent(bar.dataset.boardId ?? 'primary', bar.dataset.id!, {
+          media: [{ url: p.url, type: p.kind, originalName: p.label }],
+        })
+        return true
+      }
+    }
+    return false
+  }, [addFreeNode, updateFreeNode])
+
   /** Drop on a free node at any layer — set its media */
   const dropOnFreeNode = useCallback((allEls: Element[], files: File[]): boolean => {
     for (const el of allEls) {
@@ -461,7 +556,9 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
       const payload = parsePoolDrag(poolRaw)
       if (payload) {
         e.preventDefault()
-        dropPoolItem(e, payload)
+        // Fill whatever it landed on; only make a new node if it landed on
+        // nothing. Bare canvas is the fallback, not the only outcome.
+        if (!dropPoolOnTarget(e, payload)) dropPoolItem(e, payload)
         return
       }
     }
@@ -481,7 +578,7 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
     if (zoom <= 0.18)      return handleCardDrop(e, files)
     if (zoom < 0.3)        return handleBlockDrop(e, files)
     return handleBoardDrop(e, files)
-  }, [dropPoolItem, dropOnViewportWindow, handleCardDrop, handleBlockDrop, handleBoardDrop])
+  }, [dropPoolItem, dropPoolOnTarget, dropOnViewportWindow, handleCardDrop, handleBlockDrop, handleBoardDrop])
 
   const handlePointerUp = useCallback((e: React.PointerEvent) => {
     if (isPanning.current) {

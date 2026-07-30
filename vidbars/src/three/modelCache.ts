@@ -53,6 +53,8 @@ const LRU_MAX = 6
 const manager = new THREE.LoadingManager()
 manager.addHandler(/^data:/, new THREE.TextureLoader(manager))
 
+import { withDataUrlTextures } from './fbxDataTextures'
+
 const loader = new GLTFLoader(manager)
 const fbxLoader = new FBXLoader(manager)
 
@@ -84,7 +86,11 @@ async function loadEntry(url: string): Promise<CacheEntry> {
     // FBXLoader.parse is synchronous and takes the raw buffer. Its second
     // argument is the resource path for EXTERNAL textures; '' because we
     // only have the file itself.
-    const group = fbxLoader.parse(buf, '')
+    // Embedded FBX textures would become blob: urls, which do not survive
+    // here — the texture ends up with no image and the model renders
+    // untextured. withDataUrlTextures redirects them to data: urls for the
+    // duration of the (synchronous) parse. See fbxDataTextures.
+    const group = withDataUrlTextures(() => fbxLoader.parse(buf, ''))
     // Animation clips live on the group for FBX. Keep them on `source` so
     // clones can carry them (SkeletonUtils.clone does not copy them).
     return { source: group as unknown as THREE.Group, refCount: 0 }
