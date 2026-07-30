@@ -3218,7 +3218,10 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
       {groups.map(g => {
         // Hard gate: if this group is a non-anchor member of any deck, hide it completely.
         // This uses the persisted deckAnchorId — no spatial clustering needed.
-        if (g.deckState && g.deckState !== 'open' && g.deckAnchorId && g.deckAnchorId !== g.id) {
+        // …unless it is PINNED. Deck state persists from before the pin, and
+        // no anchor on the canvas represents a card that has left it, so a
+        // pinned card must never be hidden as "someone else's member".
+        if (!g.pin && g.deckState && g.deckState !== 'open' && g.deckAnchorId && g.deckAnchorId !== g.id) {
           return null
         }
         // While a fan strip is being dragged out, the FannedDeckOverlay owns
@@ -3231,7 +3234,14 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
         if (onlySet) { if (!onlySet.has(g.id)) return null }
         else if (g.pin) return null
 
-        const deck = getDeckForGroup(g.id)
+        // A PINNED card renders as a plain card, whatever its stored deck
+        // state says. Decks no longer pin, but `deckState` persists from
+        // before it was pinned — and clustering now excludes pinned groups,
+        // so the card would take the stacked/fanned branch while
+        // getDeckForGroup returns nothing for it. That mismatch is what put
+        // the level bar in the wrong place: it measured whatever that branch
+        // painted.
+        const deck = g.pin ? null : getDeckForGroup(g.id)
 
         // Treat the deck as "fanned for rendering purposes" when there's an
         // active stack-direction fan transition for it — keeps the
@@ -3395,7 +3405,10 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
       {groups.map(g => {
         // Skip hidden deck members — they aren't visible so they shouldn't
         // render chip rails either.
-        if (g.deckState && g.deckState !== 'open' && g.deckAnchorId && g.deckAnchorId !== g.id) {
+        // …unless it is PINNED. Deck state persists from before the pin, and
+        // no anchor on the canvas represents a card that has left it, so a
+        // pinned card must never be hidden as "someone else's member".
+        if (!g.pin && g.deckState && g.deckState !== 'open' && g.deckAnchorId && g.deckAnchorId !== g.id) {
           return null
         }
         // The SAME gate the card loop uses. Without it this map drew a rail

@@ -88,7 +88,9 @@ export const PinnedCardBar: React.FC<{ group: ProjectGroup }> = ({ group }) => {
     return () => cancelAnimationFrame(raf)
   }, [group.id, current])
 
-  if (!group.pin) return null
+  // Nothing measured yet ⇒ nothing to attach to. Waiting a frame is better
+  // than appearing somewhere that is not the card.
+  if (!group.pin || !box) return null
 
   const btn = (on: boolean): React.CSSProperties => ({
     width: 20, height: 18, lineHeight: '18px', textAlign: 'center',
@@ -104,9 +106,14 @@ export const PinnedCardBar: React.FC<{ group: ProjectGroup }> = ({ group }) => {
       onPointerDown={e => e.stopPropagation()}
       style={{
         position: 'absolute',
-        // Just above whatever this level actually drew.
-        left: box?.x ?? group.pin.x,
-        top: (box?.y ?? group.pin.y) - 24,
+        // Just above whatever this level actually drew. No fallback to the
+        // pin anchor: the anchor is the group's ORIGIN, which is not where
+        // the content starts, and guessing with it is what put this bar in a
+        // different wrong place for every level. If the content cannot be
+        // measured the bar waits (see the null return above) rather than
+        // appearing somewhere misleading.
+        left: box.x,
+        top: box.y - 24,
         display: 'flex', alignItems: 'center', gap: 3,
         pointerEvents: 'auto', zIndex: 5,
         fontFamily: 'system-ui, sans-serif',
@@ -123,6 +130,45 @@ export const PinnedCardBar: React.FC<{ group: ProjectGroup }> = ({ group }) => {
           }}
         >{l.label}</button>
       ))}
+      {/* Uniform scale. A pinned card has no resize corners of its own — its
+          size IS the frozen zoom — so scaling is a drag on this grip rather
+          than on a corner. Multiplicative, so the same drag distance feels
+          the same whether the card is tiny or huge, and aspect is preserved
+          by construction because one number drives both axes. */}
+      <div
+        title="Drag to scale this card · double-click to fit"
+        onPointerDown={e => {
+          e.stopPropagation()
+          const el = e.currentTarget
+          el.setPointerCapture(e.pointerId)
+          const startX = e.clientX, startY = e.clientY
+          const startScale = useBoardsStore.getState().groups
+            .find(g => g.id === group.id)?.pin?.scale ?? 1
+          useUndoCoordinator.getState().checkpoint()
+          const move = (ev: PointerEvent) => {
+            // Right/down grows. 260px of travel doubles it.
+            const t = ((ev.clientX - startX) + (ev.clientY - startY)) / 260
+            useBoardsStore.getState().rescalePinnedGroup(group.id, startScale * Math.pow(2, t))
+          }
+          const up = () => {
+            window.removeEventListener('pointermove', move)
+            window.removeEventListener('pointerup', up)
+          }
+          window.addEventListener('pointermove', move)
+          window.addEventListener('pointerup', up)
+        }}
+        onDoubleClick={() => {
+          // Re-run the fit for the current level.
+          fittedRef.current = null
+        }}
+        style={{
+          width: 18, height: 18, borderRadius: 4, flexShrink: 0,
+          background: 'rgba(255,255,255,0.06)',
+          border: '1px solid rgba(255,255,255,0.12)',
+          color: 'rgba(255,255,255,0.5)', fontSize: 11, lineHeight: '17px',
+          textAlign: 'center', cursor: 'nwse-resize', userSelect: 'none',
+        }}
+      >⤢</div>
       <PinControl
         pinned
         size={14}

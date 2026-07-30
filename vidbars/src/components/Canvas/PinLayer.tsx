@@ -52,16 +52,14 @@ export const PinLayer: React.FC = () => {
   )
 
   const groups = useBoardsStore(s => s.groups)
-  // Pinned cards, minus the ones a deck is currently representing. The same
-  // hard gate CardLayer applies: a non-anchor member of a closed deck is not
-  // drawn, because the anchor stands for it. Without this a pinned deck came
-  // out as every member stacked on the same spot.
-  const pinnedGroups = useMemo(
-    () => groups.filter(g =>
-      g.pin &&
-      !(g.deckState && g.deckState !== 'open' && g.deckAnchorId && g.deckAnchorId !== g.id)),
-    [groups],
-  )
+  // EVERY pinned card renders here. The deck-member gate that used to be on
+  // this filter is wrong now that decks cannot be pinned: `deckState` and
+  // `deckAnchorId` persist from before the card was pinned, so a card that
+  // had been tucked into a deck was judged "represented by its anchor",
+  // filtered out, and rendered NOWHERE — pinned, and invisible. Its level
+  // bar then had nothing to attach to, which is the bar that would not show
+  // up. A pinned card left the canvas; no anchor out there stands for it.
+  const pinnedGroups = useMemo(() => groups.filter(g => g.pin), [groups])
 
   const ids = useMemo(() => Object.keys(nodes).filter(id => !!nodes[id].pin), [nodes])
   // Key on the id LIST, not its length: an import that replaces the map
