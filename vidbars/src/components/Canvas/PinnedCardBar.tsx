@@ -112,6 +112,11 @@ export const PinnedCardBar: React.FC<{ group: ProjectGroup }> = ({ group }) => {
 
   return (
     <div
+      // Ties this bar to the card it controls. There was no link between the
+      // two in the DOM, so checking placement meant pairing bars to cards by
+      // array index — which is not a link at all, and gave contradictory
+      // readings that hid a real bug for a whole round.
+      data-pin-bar={group.id}
       onPointerDown={e => e.stopPropagation()}
       style={{
         position: 'absolute',

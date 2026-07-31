@@ -191,11 +191,21 @@ const PinnedLevel: React.FC<{
   // anchor that yields the pan computed above.
   const anchor = { x: pan.x + group.originX * zoom, y: pan.y + group.originY * zoom }
 
+  // The camera actually applied this render, in a ref. The measurement below
+  // needs it to convert screen px back to canvas units, but it must NOT be an
+  // effect dependency: pan and zoom are DERIVED from the measurement, so
+  // depending on them tore down and restarted the loop on every frame it
+  // produced a new value. That is what made pinned cards drift around instead
+  // of settling — the fit never got to converge before being restarted.
+  const camRef = useRef({ pan, zoom })
+  camRef.current = { pan, zoom }
+
   useLayoutEffect(() => {
     if (level === 'card') { setContent(null); return }
     let raf = 0
     const tick = () => {
       const el = contentRef.current
+      const { pan, zoom } = camRef.current
       if (el) {
         let l = Infinity, t = Infinity, r2 = -Infinity, b2 = -Infinity
         for (const c of el.querySelectorAll<HTMLElement>('[data-layer-block],[data-block][data-id]')) {
@@ -227,7 +237,7 @@ const PinnedLevel: React.FC<{
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
-  }, [level, pan.x, pan.y, zoom])
+  }, [level])
 
   return (
     <PinnedCardView
