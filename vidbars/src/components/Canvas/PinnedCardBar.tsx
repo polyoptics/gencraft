@@ -124,7 +124,11 @@ export const PinnedCardBar: React.FC<{ group: ProjectGroup }> = ({ group }) => {
         // the group's ORIGIN, which is not where the content starts. If the
         // content cannot be measured the bar waits (see the null return
         // above) rather than appearing somewhere misleading.
-        left: box.x + RAIL_INSET_X * s,
+        // TOP RIGHT of the header band. The left is where the card writes its
+        // own title, so controls put there collide with it — which is what
+        // made them look shoved out of place. Window controls sit on the
+        // right for the same reason.
+        left: box.x + box.w - (NATURAL_W + RAIL_INSET_X) * s,
         top: box.y + Math.max(0, (bandH - BAR_H) / 2) * s,
         // One scale drives the whole bar, so the controls keep their
         // proportions to each other and to the card at any size.
