@@ -33,8 +33,6 @@ export const PinnedCardBar: React.FC<{ group: ProjectGroup }> = ({ group }) => {
   const setPinnedLayer = useBoardsStore(s => s.setPinnedLayer)
   const current = group.pinnedLayer ?? 'card'
   const [box, setBox] = React.useState<{ x: number; y: number } | null>(null)
-  /** Which `${group}:${level}` has already been fitted — see the fit below. */
-  const fittedRef = React.useRef<string | null>(null)
 
   // MEASURED, not derived. The pin anchor is where the group's ORIGIN lands,
   // and the visible content does not start there: a card is inset from its
@@ -66,32 +64,6 @@ export const PinnedCardBar: React.FC<{ group: ProjectGroup }> = ({ group }) => {
           // landing near the card instead of on it.
           const hostBox = (host as HTMLElement).getBoundingClientRect()
           setBox({ x: Math.round(l - hostBox.left), y: Math.round(t - hostBox.top) })
-
-          // FIT TO SCREEN, once per level change. A level's default scale is
-          // what that view is normally READ at, which is the right starting
-          // point for one card and hopeless for a deck of them — the Palesia
-          // deck at board level is many screens wide. Rather than guess a
-          // scale per deck, measure what it actually painted and shrink until
-          // it fits. Once per level, guarded, so this cannot oscillate: the
-          // measurement feeds a scale that changes the measurement.
-          const key = `${group.id}:${current}`
-          if (fittedRef.current !== key) {
-            const w = r2 - l, h = b2 - t
-            const availW = window.innerWidth * 0.86
-            const availH = window.innerHeight * 0.86
-            if (w > 4 && h > 4) {
-              fittedRef.current = key
-              const f = Math.min(availW / w, availH / h, 1)
-              // Only shrink, and only when it is worth doing — a 2% trim is
-              // not worth moving the user's card for.
-              if (f < 0.97) {
-                const g = useBoardsStore.getState().groups.find(x => x.id === group.id)
-                if (g?.pin) {
-                  useBoardsStore.getState().rescalePinnedGroup(group.id, g.pin.scale * f)
-                }
-              }
-            }
-          }
         }
       }
       raf = requestAnimationFrame(tick)
@@ -104,14 +76,21 @@ export const PinnedCardBar: React.FC<{ group: ProjectGroup }> = ({ group }) => {
   // than appearing somewhere that is not the card.
   if (!group.pin || !box) return null
 
-  // The band the controls sit in. At card level a card's rect INCLUDES the
-  // header extension above its body, and that band is the card's own chrome
-  // strip — the right home for controls that belong to the card. Block and
-  // board levels have no such band, so the controls sit against the top edge
-  // of what they drew. The pin's scale is the card's camera, so the band is
-  // measured with that rather than the canvas zoom, which is unrelated to
-  // how big the pinned card is on screen.
-  const bandH = current === 'card' ? headerExtend(group.pin.scale) : BAR_H
+  // SCALES WITH THE CARD, like a window's title bar belongs to its window.
+  // Held at a fixed pixel size it broke at both ends: on a small card the
+  // 100px-wide bar hung off the side, and on a card scaled up to fill the
+  // screen it shrank into an unreadable speck in the corner. The ratio is
+  // the card's own chrome scale — the same `scale / 0.18` its header text
+  // uses (CardLayer's textScale) — so the bar grows and shrinks in step with
+  // everything else drawn on the card. Floored so it stays clickable on a
+  // tiny card, capped so it does not become the loudest thing on a huge one.
+  const s = Math.min(Math.max(group.pin.scale / 0.18, 0.55), 4)
+  // The band the controls sit in, in the bar's own (pre-scale) units. At card
+  // level a card's rect INCLUDES the header extension above its body, and
+  // that band is the card's chrome strip — the right home for controls that
+  // belong to the card. Block and board levels have no such band, so the
+  // controls sit against the top edge of what they drew.
+  const bandH = current === 'card' ? headerExtend(group.pin.scale) / s : BAR_H
 
   const btn = (on: boolean): React.CSSProperties => ({
     width: 20, height: 18, lineHeight: '18px', textAlign: 'center',
@@ -136,8 +115,12 @@ export const PinnedCardBar: React.FC<{ group: ProjectGroup }> = ({ group }) => {
         // the group's ORIGIN, which is not where the content starts. If the
         // content cannot be measured the bar waits (see the null return
         // above) rather than appearing somewhere misleading.
-        left: box.x + RAIL_INSET_X,
-        top: box.y + Math.max(0, (bandH - BAR_H) / 2),
+        left: box.x + RAIL_INSET_X * s,
+        top: box.y + Math.max(0, (bandH - BAR_H) / 2) * s,
+        // One scale drives the whole bar, so the controls keep their
+        // proportions to each other and to the card at any size.
+        transform: `scale(${s})`,
+        transformOrigin: 'top left',
         display: 'flex', alignItems: 'center', gap: 3,
         pointerEvents: 'auto',
         // Above the card's own chrome, not just above the wrapper. The
@@ -167,7 +150,7 @@ export const PinnedCardBar: React.FC<{ group: ProjectGroup }> = ({ group }) => {
           the same whether the card is tiny or huge, and aspect is preserved
           by construction because one number drives both axes. */}
       <div
-        title="Drag to scale this card · double-click to fit"
+        title="Drag to resize this card"
         onPointerDown={e => {
           e.stopPropagation()
           const el = e.currentTarget
@@ -187,10 +170,6 @@ export const PinnedCardBar: React.FC<{ group: ProjectGroup }> = ({ group }) => {
           }
           window.addEventListener('pointermove', move)
           window.addEventListener('pointerup', up)
-        }}
-        onDoubleClick={() => {
-          // Re-run the fit for the current level.
-          fittedRef.current = null
         }}
         style={{
           width: 18, height: 18, borderRadius: 4, flexShrink: 0,

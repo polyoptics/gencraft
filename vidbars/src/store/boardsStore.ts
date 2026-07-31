@@ -974,14 +974,16 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
   },
 
   setPinnedLayer(groupId, layer) {
-    // Each level carries the scale it is normally read at, so switching view
-    // also right-sizes the card. Without that, picking "board" on a card
-    // pinned at 0.15 would show board content at card scale — technically
-    // correct and completely unreadable.
-    const scaleFor = { card: 0.15, block: 0.25, board: 0.6 } as const
+    // ONLY the layer. The pin is a FRAME — a fixed box at a fixed spot on
+    // screen — and 1/2/3 choose what is drawn inside it. Rewriting pin.scale
+    // here (it used to snap to 0.15/0.25/0.6 per level) resized and moved the
+    // card on every switch, so picking a level felt like spawning a new
+    // window somewhere else instead of looking further into the card you
+    // already had. Content that does not fit the frame is scaled down into
+    // it at render time; making the frame bigger is the scale grip's job.
     set(s => ({
       groups: s.groups.map(g => (g.id === groupId && g.pin)
-        ? { ...g, pinnedLayer: layer, pin: { ...g.pin, scale: scaleFor[layer] } }
+        ? { ...g, pinnedLayer: layer }
         : g),
     }))
   },
