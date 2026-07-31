@@ -13,6 +13,7 @@ import type { BoardData, ProjectGroup } from '../store/boardsStore'
 import type { FreeNodeData } from '../store/freeNodeStore'
 import { useBoardsStore } from '../store/boardsStore'
 import { useFreeNodeStore } from '../store/freeNodeStore'
+import { remapRefs } from './linkTargets'
 
 /**
  * Snapshot shape — matches what `getCurrentSnapshot` produces in TemplateMenu.
@@ -37,6 +38,7 @@ export interface ProjectSnapshot {
 function remapBars(
   bars: Record<string, Bar>,
   barIdMap: Map<string, string>,
+  refMaps?: RefMaps,
 ): Record<string, Bar> {
   const out: Record<string, Bar> = {}
   for (const [oldId, bar] of Object.entries(bars)) {
@@ -46,9 +48,20 @@ function remapBars(
       id: newId,
       parentId: bar.parentId ? (barIdMap.get(bar.parentId) ?? null) : null,
       children: bar.children.map(cid => barIdMap.get(cid) ?? cid),
+      // Link references have to be remapped like every other id in here. A
+      // spread carries them through pointing at the ORIGINAL document, and
+      // because ids like 'primary' and 'root-bar' are reused, that is not a
+      // dead link — it silently attaches to whatever already owns that name.
+      ...(refMaps ? { linkedRefs: remapRefs(bar.linkedRefs, refMaps) } : {}),
     }
   }
   return out
+}
+
+type RefMaps = {
+  groupIdMap: Map<string, string>
+  boardIdMap: Map<string, string>
+  barIdMap: Map<string, string>
 }
 
 /**
@@ -85,6 +98,9 @@ export function insertProjectSnapshot(
   for (const g of snapshot.groups ?? []) {
     groupIdMap.set(g.id, crypto.randomUUID())
   }
+
+  /** Every id map in one bag, for rewriting link references below. */
+  const refMaps: RefMaps = { groupIdMap, boardIdMap, barIdMap }
 
   // ── 2. Compute Y offset ─────────────────────────────────────
   // Find the topmost source group; everything shifts down by (targetY - that).
@@ -128,7 +144,8 @@ export function insertProjectSnapshot(
     newBoards.push({
       ...board,
       id: newId,
-      bars: remapBars(board.bars ?? {}, barIdMap),
+      linkedRefs: remapRefs(board.linkedRefs, refMaps),
+      bars: remapBars(board.bars ?? {}, barIdMap, refMaps),
       rootIds: (board.rootIds ?? []).map(rid => barIdMap.get(rid) ?? rid),
       viewerBarId: null,
       selectedIds: [],
@@ -152,6 +169,12 @@ export function insertProjectSnapshot(
     nestedDeck: undefined,
     ghostSlots: undefined,
     linkedGroupIds: [],
+    // Card-to-card links are dropped above by policy (this comment block's
+    // "user can re-link manually"). Block and element references are kept
+    // where BOTH ends came along in the snapshot, since those are internal to
+    // the copy and survive remap exactly; anything pointing outside is
+    // dropped rather than left aimed at the original document.
+    linkedRefs: remapRefs(g.linkedRefs, refMaps),
   }))
 
   // If the snapshot had no groups but did have boards, wrap them in a default

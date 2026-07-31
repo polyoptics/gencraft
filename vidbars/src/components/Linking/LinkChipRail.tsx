@@ -50,9 +50,11 @@ export const LinkChipRail: React.FC<Props> = ({ owner, color, zoom, offsetY = 0 
 
   const refs = ownerRefs(entity)
 
-  // Counter-scaled: every number below is screen pixels at any zoom.
-  const px = (n: number) => n / zoom
-  const H = px(18)
+  // Counter-scaled: every number below is screen pixels at any zoom. The
+  // divisor is floored because the board layer has no zoom ceiling — past
+  // 1.5 the chip would keep shrinking in world units until its borders fell
+  // below a pixel.
+  const px = (n: number) => n / Math.min(zoom, 1.5)
 
   return (
     <div
@@ -62,15 +64,31 @@ export const LinkChipRail: React.FC<Props> = ({ owner, color, zoom, offsetY = 0 
       // chrome pass-through.
       style={{
         position: 'absolute',
-        left: px(6),
-        top: `calc(100% - ${H / 2}px + ${px(offsetY)}px)`,
+        // FULLY below the owner, not straddling it like the card rail does.
+        // A card's bottom edge is empty; a block's and a bar's are not — the
+        // bottom resize strip, the corner grips and the bar's output port all
+        // live in exactly the band a straddling rail would occupy, and the
+        // rail would both cover them and lose the z-fight to them.
+        left: px(14),
+        top: `calc(100% + ${px(3) + px(offsetY)}px)`,
         display: 'flex',
         alignItems: 'center',
         gap: px(4),
+        // Bounded to the owner's width. Unbounded, a rail on a narrow block
+        // runs out over its neighbours — and since chips are drop targets,
+        // that is not just untidy, it steals drops aimed at the block next
+        // door.
+        maxWidth: '100%',
+        overflow: 'hidden',
         pointerEvents: 'auto',
-        zIndex: 6,
+        zIndex: 12,
       }}
+      // pointerdown alone is not enough: dblclick and contextmenu are
+      // separate events that would otherwise reach the bar underneath and
+      // open its text editor or its menu.
       onPointerDown={e => e.stopPropagation()}
+      onDoubleClick={e => e.stopPropagation()}
+      onContextMenu={e => e.stopPropagation()}
     >
       {refs.map(r => (
         <RefChip key={refKey(r)} owner={owner} target={r} zoom={zoom} />
@@ -99,7 +117,13 @@ export const RefChip: React.FC<{ owner: LinkRef; target: LinkRef; zoom: number }
 
   return (
     <div
-      data-link-drop={refAttr(target)}
+      // The OWNER, not the target. A chip is part of its host's furniture, so
+      // dropping on it means "link this to the host" — the same thing the
+      // card rail's chips have always meant. Stamping the target here made
+      // two chips sitting side by side in one row mean opposite things, and
+      // made releasing on your own rail link you to your own referent instead
+      // of cancelling.
+      data-link-drop={refAttr(owner)}
       title={`${resolved.label} — double-click to go there`}
       onPointerEnter={() => setHovered(true)}
       onPointerLeave={() => setHovered(false)}
@@ -154,10 +178,16 @@ const AddChip: React.FC<{
       onPointerDown={e => {
         if (e.button !== 0) return
         e.stopPropagation()
-        useUndoCoordinator.getState().checkpoint()
+        // No checkpoint here — most drags are abandoned, and one undo entry
+        // per abandoned gesture buries the edit you actually want back. The
+        // checkpoint fires in LinkDragOverlay, once, only when a link is
+        // really made.
         onBegin(e.clientX, e.clientY)
       }}
       style={{
+        // Without this the browser claims the gesture for panning on touch
+        // and pen, no pointerup ever arrives, and the drag overlay hangs.
+        touchAction: 'none',
         width: px(18), height: px(18), borderRadius: '50%',
         background: `${color}66`,
         border: `${px(1.5)}px dashed rgba(255,255,255,0.5)`,

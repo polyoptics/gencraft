@@ -113,6 +113,39 @@ export function ownerRefs(owner: ProjectGroup | BoardData | Bar): LinkRef[] {
   })
 }
 
+/** Rewrite a reference onto freshly-minted ids when a project is inserted.
+ *
+ *  Returns null for anything pointing OUTSIDE the snapshot. That is the whole
+ *  point: an inserted copy carries ids that mean nothing in this document, and
+ *  a stale id is not merely dead — ids like 'primary' and 'root-bar' are
+ *  reused, so an unremapped reference silently re-attaches to unrelated
+ *  content that happens to share the name. Dropping is the only safe answer
+ *  for a referent that did not come along. */
+export function remapRef(
+  r: LinkRef,
+  maps: { groupIdMap: Map<string, string>; boardIdMap: Map<string, string>; barIdMap: Map<string, string> },
+): LinkRef | null {
+  if (r.kind === 'group') {
+    const id = maps.groupIdMap.get(r.id)
+    return id ? { kind: 'group', id } : null
+  }
+  if (r.kind === 'board') {
+    const id = maps.boardIdMap.get(r.id)
+    return id ? { kind: 'board', id } : null
+  }
+  const boardId = maps.boardIdMap.get(r.boardId)
+  const id = maps.barIdMap.get(r.id)
+  return boardId && id ? { kind: 'bar', id, boardId } : null
+}
+
+/** remapRef over a list, dropping what did not survive. */
+export function remapRefs(
+  list: LinkRef[] | undefined,
+  maps: { groupIdMap: Map<string, string>; boardIdMap: Map<string, string>; barIdMap: Map<string, string> },
+): LinkRef[] {
+  return (list ?? []).map(r => remapRef(r, maps)).filter((r): r is LinkRef => !!r)
+}
+
 /** Icon shown on a chip so the three kinds are tellable apart at a glance
  *  without reading the label. */
 export const REF_GLYPH: Record<LinkRef['kind'], string> = {

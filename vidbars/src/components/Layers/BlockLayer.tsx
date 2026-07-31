@@ -432,6 +432,12 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
       style={{ position: 'absolute', left: boardX, top: boardY, width: totalW, height: height + BLOCK_HEADER_H }}
       onPointerDownCapture={e => {
         if (e.button !== 0) return
+        // The link rail is chrome ON the block, not the block. This runs in
+        // the CAPTURE phase, so it fires before the rail's own handler by
+        // definition and stopPropagation down there cannot prevent it —
+        // without this bail, every chip click and every drag off the "+"
+        // also rewrote the block selection.
+        if ((e.target as Element).closest?.('[data-link-rail]')) return
         useBoardsStore.getState().setSelection(boardId, board.rootIds)
         // Block-layer selection:
         //   shift/ctrl/meta → toggle in/out of selection

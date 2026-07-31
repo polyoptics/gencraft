@@ -8,6 +8,7 @@ import { createPortal } from 'react-dom'
 import { useLinkDragStore } from '../../store/linkDragStore'
 import { useBoardsStore } from '../../store/boardsStore'
 import { parseRef, sameRef, type LinkRef } from '../../utils/linkTargets'
+import { useUndoCoordinator } from '../../store/undoCoordinator'
 
 export const LinkDragOverlay: React.FC = () => {
   const active = useLinkDragStore(s => s.active)
@@ -48,6 +49,11 @@ export const LinkDragOverlay: React.FC = () => {
         break
       }
       if (target) {
+        // Checkpoint HERE, not when the drag began: a checkpoint per
+        // abandoned gesture buries the edit the user actually wants back,
+        // and this is the one place that knows a link was really made — for
+        // all three source kinds at once.
+        useUndoCoordinator.getState().checkpoint()
         // Direction convention: the DROP TARGET owns the reference. Dropping
         // A onto B means "B references A" — B gets a prominent primary chip
         // pointing at A, A gets a small back-ref chip pointing at B.
@@ -59,12 +65,19 @@ export const LinkDragOverlay: React.FC = () => {
       if (e.key === 'Escape') end()
     }
 
+    // pointercancel matters as much as pointerup: the browser can take the
+    // gesture away (touch scroll, pen leaving range) and without this the
+    // dashed line hangs on screen with no way to dismiss it.
+    const onCancel = () => end()
+
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onCancel)
     window.addEventListener('keydown', onKey)
     return () => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onCancel)
       window.removeEventListener('keydown', onKey)
     }
   }, [active, move, end])
