@@ -19,7 +19,7 @@
 // running FreeCanvas's canvas-space test against its stale x/y would
 // make it disappear on the first pan.
 
-import React, { useEffect, useMemo, useRef } from 'react'
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useViewport3DStore } from '../../store/viewport3dStore'
@@ -28,8 +28,10 @@ import { Viewport3DFrame } from '../Viewport3D/Viewport3DFrame'
 import { GLPinnedCanvasHost } from '../Viewport3D/GLPinnedCanvasHost'
 import { MagnetDockPreview } from './MagnetDockPreview'
 import { useBoardsStore } from '../../store/boardsStore'
+import type { ProjectGroup } from '../../store/boardsStore'
 import { PinnedCardView } from '../Layers/cardView'
-import { CardLayer } from '../Layers/CardLayer'
+import { CardLayer, cardScreenRect } from '../Layers/CardLayer'
+import { headerExtend } from '../NLE/NLETimelineHeader'
 import { BlockLayer } from '../Layers/BlockLayer'
 import { BoardLayer } from '../Layers/BoardLayer'
 import { expandWithNestedMembers } from '../../hooks/useCardDecks'
@@ -110,49 +112,155 @@ export const PinLayer: React.FC = () => {
       {pinnedGroups.map(g => {
         const members = expandWithNestedMembers([g.id], groups)
         const level = g.pinnedLayer ?? 'card'
-        // Card level is screen-space already, so a frozen camera is the whole
-        // story. Block and board draw in WORLD space inside the canvas's
-        // transform, so a pinned one needs that transform reproduced with the
-        // frozen values — same maths the canvas container applies, just held
-        // still.
-        const view = {
-          pan: { x: g.pin!.x - g.originX * g.pin!.scale, y: g.pin!.y - g.originY * g.pin!.scale },
-          zoom: g.pin!.scale,
-        }
         return (
           <div key={g.id} data-pinned-group={g.id} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
-          <PinnedCardView
-            originX={g.originX}
-            originY={g.originY}
-            anchor={{ x: g.pin!.x, y: g.pin!.y }}
-            scale={g.pin!.scale}
-          >
-            {level === 'card' && <CardLayer.Overlay only={members} />}
-            {level !== 'card' && (
-              <>
-                <div style={{
-                  position: 'absolute', inset: 0, overflow: 'hidden', pointerEvents: 'none',
-                }}>
-                  <div style={{
-                    position: 'absolute', left: 0, top: 0,
-                    transform: `translate(${view.pan.x}px, ${view.pan.y}px) scale(${view.zoom})`,
-                    transformOrigin: '0 0',
-                    pointerEvents: 'auto',
-                  }}>
-                    {level === 'block'
-                      ? <BlockLayer.Canvas only={members} />
-                      : <BoardLayer.Canvas only={members} />}
-                  </div>
-                </div>
-                {level === 'block'
-                  ? <BlockLayer.Overlay only={members} />
-                  : <BoardLayer.Overlay only={members} />}
-              </>
-            )}
-          </PinnedCardView>
+            <PinnedLevel group={g} members={members} level={level} />
           </div>
         )
       })}
     </div>
+  )
+}
+
+type PinLevel = 'card' | 'block' | 'board'
+
+/** One pinned card's contents, at the level it is currently showing.
+ *
+ *  A pin is a FRAME — a fixed box at a fixed spot on screen. The 1/2/3 buttons
+ *  choose what is drawn inside it and must never move or resize it, so content
+ *  larger than the frame is scaled DOWN into it. That is what makes a pinned
+ *  card at board level read as looking further into the card you already had,
+ *  rather than as a new window opening somewhere else.
+ *
+ *  The content's size is MEASURED, not derived. This codebase has three
+ *  extent helpers and all three disagree with what actually gets drawn — the
+ *  block footprint omits the 57-unit header band and the size overrides, and
+ *  jumpToGroup never walks child bars — so a fourth one written from the same
+ *  assumptions would just be wrong in a fourth way. Measuring the rendered
+ *  content and dividing out the camera it was drawn with gives canvas units
+ *  that cannot disagree with the render, because they ARE the render.
+ *  Dividing out the camera is also what keeps this from oscillating: the
+ *  measurement is scale-invariant, so changing the fit does not change it. */
+const PinnedLevel: React.FC<{
+  group: ProjectGroup; members: string[]; level: PinLevel
+}> = ({ group, members, level }) => {
+  const boards = useBoardsStore(s => s.boards)
+  const pin = group.pin!
+  const contentRef = useRef<HTMLDivElement>(null)
+  /** Content bounds in CANVAS units — null until first measured. */
+  const [content, setContent] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
+
+  // The frame in canvas units: the card's own face, plus the header band it
+  // extends up into. cardScreenRect with an identity camera IS the canvas-unit
+  // answer, and it is the same function GroupCard sizes itself with, so the
+  // frame cannot drift from the card. The band is a screen-px quantity, so in
+  // canvas units it depends on the scale it is drawn at — freeze it at the
+  // pin's scale.
+  const frame = useMemo(() => {
+    const r = cardScreenRect(group, boards, { x: 0, y: 0 }, 1)
+    if (!r) return null
+    const bandAtOne = headerExtend(1)
+    const band = headerExtend(pin.scale) / pin.scale
+    return {
+      x: r.screenLeft,
+      y: r.screenTop + bandAtOne - band,
+      w: r.screenWidth,
+      h: r.screenHeight - bandAtOne + band,
+    }
+  }, [group, boards, pin.scale])
+
+  const fitted = level !== 'card' && !!frame && !!content && content.w > 0 && content.h > 0
+  // Shrink only. Content smaller than the frame is left alone rather than
+  // blown up to fill it — a two-bar board should not become huge just because
+  // its card is.
+  const fit = fitted ? Math.min(1, frame!.w / content!.w, frame!.h / content!.h) : 1
+  const zoom = pin.scale * fit
+
+  const pan = fitted
+    ? (() => {
+        const fx = pin.x + (frame!.x - group.originX) * pin.scale
+        const fy = pin.y + (frame!.y - group.originY) * pin.scale
+        return {
+          x: fx + (frame!.w * pin.scale - content!.w * zoom) / 2 - content!.x * zoom,
+          y: fy + (frame!.h * pin.scale - content!.h * zoom) / 2 - content!.y * zoom,
+        }
+      })()
+    : { x: pin.x - group.originX * zoom, y: pin.y - group.originY * zoom }
+
+  // PinnedCardView solves pan from (anchor, origin, scale), so hand it the
+  // anchor that yields the pan computed above.
+  const anchor = { x: pan.x + group.originX * zoom, y: pan.y + group.originY * zoom }
+
+  useLayoutEffect(() => {
+    if (level === 'card') { setContent(null); return }
+    let raf = 0
+    const tick = () => {
+      const el = contentRef.current
+      if (el) {
+        let l = Infinity, t = Infinity, r2 = -Infinity, b2 = -Infinity
+        for (const c of el.querySelectorAll<HTMLElement>('[data-layer-block],[data-block][data-id]')) {
+          const r = c.getBoundingClientRect()
+          if (r.width <= 0 || r.height <= 0) continue
+          l = Math.min(l, r.left); t = Math.min(t, r.top)
+          r2 = Math.max(r2, r.right); b2 = Math.max(b2, r.bottom)
+        }
+        if (Number.isFinite(l)) {
+          // Viewport px → canvas units: undo the host offset, then the camera
+          // these were actually drawn with.
+          const host = document.querySelector('[data-pin-host]') as HTMLElement | null
+          const off = host?.getBoundingClientRect()
+          const ox = off?.left ?? 0, oy = off?.top ?? 0
+          const next = {
+            x: ((l - ox) - pan.x) / zoom,
+            y: ((t - oy) - pan.y) / zoom,
+            w: (r2 - l) / zoom,
+            h: (b2 - t) / zoom,
+          }
+          // Epsilon guard: sub-pixel jitter must not feed a re-render loop.
+          setContent(prev => (prev
+            && Math.abs(prev.x - next.x) < 0.5 && Math.abs(prev.y - next.y) < 0.5
+            && Math.abs(prev.w - next.w) < 0.5 && Math.abs(prev.h - next.h) < 0.5)
+            ? prev : next)
+        }
+      }
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [level, pan.x, pan.y, zoom])
+
+  return (
+    <PinnedCardView
+      originX={group.originX}
+      originY={group.originY}
+      anchor={anchor}
+      scale={zoom}
+    >
+      {level === 'card' && <CardLayer.Overlay only={members} />}
+      {level !== 'card' && (
+        <>
+          <div style={{
+            position: 'absolute', inset: 0, overflow: 'hidden', pointerEvents: 'none',
+          }}>
+            <div
+              ref={contentRef}
+              style={{
+                position: 'absolute', left: 0, top: 0,
+                transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+                transformOrigin: '0 0',
+                pointerEvents: 'auto',
+              }}
+            >
+              {level === 'block'
+                ? <BlockLayer.Canvas only={members} />
+                : <BoardLayer.Canvas only={members} />}
+            </div>
+          </div>
+          {level === 'block'
+            ? <BlockLayer.Overlay only={members} />
+            : <BoardLayer.Overlay only={members} />}
+        </>
+      )}
+    </PinnedCardView>
   )
 }
