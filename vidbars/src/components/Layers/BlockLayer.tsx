@@ -51,7 +51,13 @@ const GripDots: React.FC<{ size?: number; opacity?: number }> = ({ size = 10, op
 
 const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
   const board = useBoardsStore(s => s.boards[boardId])
-  const zoom = useCanvasStore(s => s.zoom)
+  // THE CAMERA THIS BLOCK IS DRAWN WITH — the canvas's out on the canvas, the
+  // pin's when this block is inside a pinned card. Every `/zoom` below is a
+  // counter-scale meant to hold some piece of chrome at a constant SCREEN
+  // size; dividing by the canvas zoom while the block is actually drawn at
+  // the pin's scale is what made the labels, fonts and buttons come out at
+  // the wrong size inside a pinned card at level 2.
+  const zoom = useCardView().zoom
   const blockScopeKey = 'board:' + boardId
   const blockViewerOpen = useNLEViewerStore(s => s.openGroupIds.has(blockScopeKey))
   const isBlockSelected = useCanvasStore(s => s.selectedBlockBoardIds.includes(boardId))
@@ -110,10 +116,8 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
 
   const isUngroupedBlock = !myGroup
   const groupColor = myGroup?.color ?? '#5b8dd9'
-  // The camera this block is drawn with — the pin's when it sits inside a
-  // pinned card, the canvas's otherwise. The rail divides by it to hold a
-  // constant screen size.
-  const railZoom = useCardView().zoom
+  // Same camera as everything else on the block now.
+  const railZoom = zoom
 
   // ── Body drag: board moves within its group (local nleRow / nleX), or free drag if ungrouped ──
   const onBodyDown = (e: React.PointerEvent) => {

@@ -95,15 +95,16 @@ export const NLEBlock: React.FC<Props> = React.memo(({ id, top, blockHeight, off
 
   const bar = bars[id]
   const isSelected = selectedIds.includes(id)
-  const zoom = useCanvasStore(s => s.zoom)
+  // THE CAMERA THIS BAR IS DRAWN WITH — the canvas's normally, the pinned
+  // card's when this board sits inside one. Every `/zoom` in this file is a
+  // counter-scale holding some chrome at a constant SCREEN size, so reading
+  // the canvas zoom while the bar is drawn at the pin's scale sized all of it
+  // wrong inside a pinned card at level 3.
+  const zoom = useCardView().zoom
   const boardScale = useBoardsStore(s => s.boards[ctx.boardId]?.boardScale ?? 1)
-  // The camera this bar is actually drawn with — the canvas's normally, the
-  // pin's when this board sits inside a pinned card — times the board's own
-  // content scale, since bar coordinates are in board units. Only the link
-  // rail uses this so far; the rest of the bar chrome still counter-scales by
-  // the raw canvas zoom, which is separately wrong on the pinned path.
-  const cardViewZoom = useCardView().zoom
-  const railZoom = cardViewZoom * boardScale
+  // Bar coordinates are in BOARD units, so the rail's counter-scale carries
+  // the board's own content scale as well.
+  const railZoom = zoom * boardScale
   // Per-bar strokes at board zoom — every bar in the tree is its own annotatable
   // node ("on the board, it's just nodes"). Subscribe via the store so the
   // canvas re-renders when strokes change.

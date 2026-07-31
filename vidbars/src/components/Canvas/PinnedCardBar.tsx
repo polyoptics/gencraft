@@ -20,8 +20,10 @@ import { headerExtend } from '../NLE/NLETimelineHeader'
 
 /** Control height — the buttons and the grip are all this tall. */
 const BAR_H = 18
-/** Inset from the card's left edge, matching the header's own text inset. */
+/** Inset from the card's edge, matching the header's own text inset. */
 const RAIL_INSET_X = 4
+/** Corner resize grip — natural size, scaled with the card like the bar. */
+const GRIP = 20
 
 const LEVELS = [
   { key: 'card',  label: '1', title: 'Card — the whole thing as one face' },
@@ -32,7 +34,7 @@ const LEVELS = [
 export const PinnedCardBar: React.FC<{ group: ProjectGroup }> = ({ group }) => {
   const setPinnedLayer = useBoardsStore(s => s.setPinnedLayer)
   const current = group.pinnedLayer ?? 'card'
-  const [box, setBox] = React.useState<{ x: number; y: number; w: number } | null>(null)
+  const [box, setBox] = React.useState<{ x: number; y: number; w: number; h: number } | null>(null)
 
   // MEASURED, not derived. The pin anchor is where the group's ORIGIN lands,
   // and the visible content does not start there: a card is inset from its
@@ -67,6 +69,7 @@ export const PinnedCardBar: React.FC<{ group: ProjectGroup }> = ({ group }) => {
             x: Math.round(l - hostBox.left),
             y: Math.round(t - hostBox.top),
             w: Math.round(r2 - l),
+            h: Math.round(b2 - t),
           })
         }
       }
@@ -111,6 +114,81 @@ export const PinnedCardBar: React.FC<{ group: ProjectGroup }> = ({ group }) => {
   })
 
   return (
+    <>
+    {/* RESIZE GRIP at the card's bottom-right corner, hanging half on and
+        half off, the way the reference "+" hangs off a card. In the top bar
+        it gave no clue what it was scaling ABOUT, which is what made the
+        gesture feel unmoored: the scale is anchored at the top-left, so
+        pulling from the bottom-right is the drag that matches it — the far
+        corner follows your cursor and the near one stays put. */}
+    <div
+      data-pin-grip={group.id}
+      title="Drag to resize this card"
+      onPointerDown={e => {
+        e.stopPropagation()
+        e.currentTarget.setPointerCapture(e.pointerId)
+        const startX = e.clientX, startY = e.clientY
+        const g0 = useBoardsStore.getState().groups.find(g => g.id === group.id)
+        const startScale = g0?.pin?.scale ?? 1
+        const startPin = { x: g0?.pin?.x ?? 0, y: g0?.pin?.y ?? 0 }
+        // WHERE THE SCALE IS ANCHORED. rescalePinnedGroup holds the group's
+        // ORIGIN still, but the card's visible corner is not its origin — it
+        // sits at some offset that scales with it — so the card slid sideways
+        // as it grew and the gesture felt unmoored. Capture that offset once,
+        // in canvas units, and pull the pin back by it each step so the
+        // TOP-LEFT corner is what stays put. Dragging the bottom-right grip
+        // then does exactly what it looks like: the far corner follows the
+        // cursor, the near one does not move.
+        const host = document.querySelector('[data-pin-host]')?.getBoundingClientRect()
+        const cardEl = document.querySelector(`[data-pinned-group="${group.id}"] [data-layer-card]`)
+        const cr = cardEl?.getBoundingClientRect()
+        const anchor = (cr && host)
+          ? { x: cr.left - host.left, y: cr.top - host.top }
+          : null
+        const off = anchor
+          ? { x: (anchor.x - startPin.x) / startScale, y: (anchor.y - startPin.y) / startScale }
+          : null
+        useUndoCoordinator.getState().checkpoint()
+        const move = (ev: PointerEvent) => {
+          // Out from the corner grows. 260px of travel doubles it.
+          // Multiplicative, so the same drag distance feels the same whether
+          // the card is tiny or huge, and one number driving both axes keeps
+          // the aspect ratio by construction.
+          const t = ((ev.clientX - startX) + (ev.clientY - startY)) / 260
+          const next = startScale * Math.pow(2, t)
+          const bs = useBoardsStore.getState()
+          bs.rescalePinnedGroup(group.id, next)
+          if (anchor && off) {
+            // rescalePinnedGroup clamps, so read back what it actually set
+            // rather than assuming `next` took effect.
+            const applied = bs.groups.find(g => g.id === group.id)?.pin?.scale ?? next
+            const want = { x: anchor.x - off.x * applied, y: anchor.y - off.y * applied }
+            const now = useBoardsStore.getState().groups.find(g => g.id === group.id)?.pin
+            if (now) useBoardsStore.getState().movePinnedGroups(
+              [group.id], want.x - now.x, want.y - now.y)
+          }
+        }
+        const up = () => {
+          window.removeEventListener('pointermove', move)
+          window.removeEventListener('pointerup', up)
+        }
+        window.addEventListener('pointermove', move)
+        window.addEventListener('pointerup', up)
+      }}
+      style={{
+        position: 'absolute',
+        left: box.x + box.w - (GRIP / 2) * s,
+        top: box.y + box.h - (GRIP / 2) * s,
+        width: GRIP * s, height: GRIP * s,
+        borderRadius: '50%',
+        background: 'rgba(30,32,48,0.92)',
+        border: `${Math.max(1, s)}px solid rgba(255,255,255,0.35)`,
+        color: 'rgba(255,255,255,0.8)',
+        fontSize: 11 * s, lineHeight: `${GRIP * s - 2}px`,
+        textAlign: 'center', cursor: 'nwse-resize', userSelect: 'none',
+        pointerEvents: 'auto', zIndex: 200,
+      }}
+    >⤢</div>
     <div
       // Ties this bar to the card it controls. There was no link between the
       // two in the DOM, so checking placement meant pairing bars to cards by
@@ -162,41 +240,6 @@ export const PinnedCardBar: React.FC<{ group: ProjectGroup }> = ({ group }) => {
           }}
         >{l.label}</button>
       ))}
-      {/* Uniform scale. A pinned card has no resize corners of its own — its
-          size IS the frozen zoom — so scaling is a drag on this grip rather
-          than on a corner. Multiplicative, so the same drag distance feels
-          the same whether the card is tiny or huge, and aspect is preserved
-          by construction because one number drives both axes. */}
-      <div
-        title="Drag to resize this card"
-        onPointerDown={e => {
-          e.stopPropagation()
-          const el = e.currentTarget
-          el.setPointerCapture(e.pointerId)
-          const startX = e.clientX, startY = e.clientY
-          const startScale = useBoardsStore.getState().groups
-            .find(g => g.id === group.id)?.pin?.scale ?? 1
-          useUndoCoordinator.getState().checkpoint()
-          const move = (ev: PointerEvent) => {
-            // Right/down grows. 260px of travel doubles it.
-            const t = ((ev.clientX - startX) + (ev.clientY - startY)) / 260
-            useBoardsStore.getState().rescalePinnedGroup(group.id, startScale * Math.pow(2, t))
-          }
-          const up = () => {
-            window.removeEventListener('pointermove', move)
-            window.removeEventListener('pointerup', up)
-          }
-          window.addEventListener('pointermove', move)
-          window.addEventListener('pointerup', up)
-        }}
-        style={{
-          width: 18, height: 18, borderRadius: 4, flexShrink: 0,
-          background: 'rgba(255,255,255,0.06)',
-          border: '1px solid rgba(255,255,255,0.12)',
-          color: 'rgba(255,255,255,0.5)', fontSize: 11, lineHeight: '17px',
-          textAlign: 'center', cursor: 'nwse-resize', userSelect: 'none',
-        }}
-      >⤢</div>
       <PinControl
         pinned
         size={14}
@@ -213,5 +256,6 @@ export const PinnedCardBar: React.FC<{ group: ProjectGroup }> = ({ group }) => {
         }}
       />
     </div>
+    </>
   )
 }
