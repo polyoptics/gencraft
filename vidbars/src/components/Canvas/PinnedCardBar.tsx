@@ -32,7 +32,7 @@ const LEVELS = [
 export const PinnedCardBar: React.FC<{ group: ProjectGroup }> = ({ group }) => {
   const setPinnedLayer = useBoardsStore(s => s.setPinnedLayer)
   const current = group.pinnedLayer ?? 'card'
-  const [box, setBox] = React.useState<{ x: number; y: number } | null>(null)
+  const [box, setBox] = React.useState<{ x: number; y: number; w: number } | null>(null)
 
   // MEASURED, not derived. The pin anchor is where the group's ORIGIN lands,
   // and the visible content does not start there: a card is inset from its
@@ -63,7 +63,11 @@ export const PinnedCardBar: React.FC<{ group: ProjectGroup }> = ({ group }) => {
           // bar by exactly the height of that chrome — which is why it kept
           // landing near the card instead of on it.
           const hostBox = (host as HTMLElement).getBoundingClientRect()
-          setBox({ x: Math.round(l - hostBox.left), y: Math.round(t - hostBox.top) })
+          setBox({
+            x: Math.round(l - hostBox.left),
+            y: Math.round(t - hostBox.top),
+            w: Math.round(r2 - l),
+          })
         }
       }
       raf = requestAnimationFrame(tick)
@@ -76,15 +80,20 @@ export const PinnedCardBar: React.FC<{ group: ProjectGroup }> = ({ group }) => {
   // than appearing somewhere that is not the card.
   if (!group.pin || !box) return null
 
-  // SCALES WITH THE CARD, like a window's title bar belongs to its window.
-  // Held at a fixed pixel size it broke at both ends: on a small card the
-  // 100px-wide bar hung off the side, and on a card scaled up to fill the
-  // screen it shrank into an unreadable speck in the corner. The ratio is
-  // the card's own chrome scale — the same `scale / 0.18` its header text
-  // uses (CardLayer's textScale) — so the bar grows and shrinks in step with
-  // everything else drawn on the card. Floored so it stays clickable on a
-  // tiny card, capped so it does not become the loudest thing on a huge one.
-  const s = Math.min(Math.max(group.pin.scale / 0.18, 0.55), 4)
+  // READABLE FIRST, proportional second.
+  //
+  // Purely fixed broke on a big card (a speck lost in the corner) and purely
+  // proportional broke on a small one: two cards pinned at different scales
+  // grew visibly different chrome — 10px buttons on one, 18px on the other,
+  // side by side. Neither is what a window's title bar does.
+  //
+  // So: never below natural size, because a control you cannot read is not a
+  // control. Grow with the card past that, capped, so it does not get lost on
+  // something huge. The ONE case that may shrink it is a card too narrow to
+  // hold the bar at all — there, sized to the card beats hanging off its side.
+  const NATURAL_W = 104
+  const roomy = box.w > 0 ? box.w / NATURAL_W : 1
+  const s = Math.min(Math.max(group.pin.scale / 0.18, 1), 3, Math.max(roomy, 0.5))
   // The band the controls sit in, in the bar's own (pre-scale) units. At card
   // level a card's rect INCLUDES the header extension above its body, and
   // that band is the card's chrome strip — the right home for controls that
