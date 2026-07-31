@@ -121,7 +121,7 @@ const DeckTile: React.FC<{
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return
     e.stopPropagation()
-    beginDrag(group.id, color, e.clientX, e.clientY)
+    beginDrag({ kind: 'group', id: group.id }, color, e.clientX, e.clientY)
     moveDrag(e.clientX, e.clientY)
   }
 

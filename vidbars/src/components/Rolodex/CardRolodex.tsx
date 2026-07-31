@@ -2582,7 +2582,8 @@ const RolodexSlot: React.FC<{
       if (Math.hypot(dx, dy) > DRAG_THRESHOLD_PX) {
         dragStarted = true
         draggedRef.current = true
-        useLinkDragStore.getState().begin(group.id, group.color, ev.clientX, ev.clientY)
+        useLinkDragStore.getState().begin(
+          { kind: 'group', id: group.id }, group.color, ev.clientX, ev.clientY)
         // Cleanup our temporary listeners — LinkDragOverlay's window
         // listeners take over from here.
         window.removeEventListener('pointermove', onMove)

@@ -4,6 +4,8 @@ import { createPortal } from 'react-dom'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useBoardsStore } from '../../store/boardsStore'
 import { useBoardCtx } from '../../contexts/BoardContext'
+import { useCardView } from '../Layers/cardView'
+import { LinkChipRail } from '../Linking/LinkChipRail'
 import { ContextMenu } from '../Bar/ContextMenu'
 import { CircularColorPicker } from '../Bar/CircularColorPicker'
 // ColorHoverWheel replaced by inline ear variants
@@ -95,6 +97,13 @@ export const NLEBlock: React.FC<Props> = React.memo(({ id, top, blockHeight, off
   const isSelected = selectedIds.includes(id)
   const zoom = useCanvasStore(s => s.zoom)
   const boardScale = useBoardsStore(s => s.boards[ctx.boardId]?.boardScale ?? 1)
+  // The camera this bar is actually drawn with — the canvas's normally, the
+  // pin's when this board sits inside a pinned card — times the board's own
+  // content scale, since bar coordinates are in board units. Only the link
+  // rail uses this so far; the rest of the bar chrome still counter-scales by
+  // the raw canvas zoom, which is separately wrong on the pinned path.
+  const cardViewZoom = useCardView().zoom
+  const railZoom = cardViewZoom * boardScale
   // Per-bar strokes at board zoom — every bar in the tree is its own annotatable
   // node ("on the board, it's just nodes"). Subscribe via the store so the
   // canvas re-renders when strokes change.
@@ -550,6 +559,9 @@ export const NLEBlock: React.FC<Props> = React.memo(({ id, top, blockHeight, off
         data-block="true"
         data-id={id}
         data-board-id={ctx.boardId}
+        // An element is a link target like anything else: drop a card, a
+        // block or another element on it and it keeps the reference.
+        data-link-drop={`bar:${ctx.boardId}:${id}`}
         style={{
           position: 'absolute',
           left: bar.x + offsetX,
@@ -577,6 +589,17 @@ export const NLEBlock: React.FC<Props> = React.memo(({ id, top, blockHeight, off
         }}
         onDragOver={e => e.preventDefault()}
       >
+        {/* Reference chips along this element's bottom edge — the same rail
+            a card carries, so a reference reads the same wherever it hangs.
+            Only on hover or when it already holds references: an always-on
+            rail on every bar would bury the board in chrome. */}
+        {(isHovered || (bar.linkedRefs?.length ?? 0) > 0) && (
+          <LinkChipRail
+            owner={{ kind: 'bar', id, boardId: ctx.boardId }}
+            color={bar.color}
+            zoom={railZoom}
+          />
+        )}
         {/* ── Background layer ── */}
         <div style={{
           position: 'absolute', inset: 0, borderRadius: 12, background: bg, overflow: 'hidden', zIndex: 0,

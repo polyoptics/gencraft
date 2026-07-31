@@ -80,6 +80,8 @@ export interface Bar {
   height: number          // individual block height
   content: BarContent
   collapsed?: boolean   // true = children are hidden
+  /** References this ELEMENT owns — see utils/linkTargets. */
+  linkedRefs?: import('../utils/linkTargets').LinkRef[]
   /** Annotation layer — vector strokes drawn on this bar at board zoom.
    *  Same shape across every drawable surface; see types/stroke.ts. */
   strokes?: import('./stroke').Stroke[]

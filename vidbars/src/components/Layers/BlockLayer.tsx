@@ -29,6 +29,8 @@ import { FreeCanvas } from '../Canvas/FreeCanvas'
 import { Viewport3DLayer } from '../Viewport3D/Viewport3DLayer'
 import { NLETimelineHeader } from '../NLE/NLETimelineHeader'
 import { CardOutline } from './CardOutline'
+import { useCardView } from './cardView'
+import { LinkChipRail } from '../Linking/LinkChipRail'
 import { getHiddenBoardIds, getHiddenGroupIds } from '../../hooks/useCardDecks'
 import { selectionHighlight } from '../../utils/colorUtils'
 import { DrawableSurface } from '../Annotation/DrawableSurface'
@@ -108,6 +110,10 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
 
   const isUngroupedBlock = !myGroup
   const groupColor = myGroup?.color ?? '#5b8dd9'
+  // The camera this block is drawn with — the pin's when it sits inside a
+  // pinned card, the canvas's otherwise. The rail divides by it to hold a
+  // constant screen size.
+  const railZoom = useCardView().zoom
 
   // ── Body drag: board moves within its group (local nleRow / nleX), or free drag if ungrouped ──
   const onBodyDown = (e: React.PointerEvent) => {
@@ -539,6 +545,9 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
         data-block="true"
         data-id={board.rootIds[0]}
         data-board-id={boardId}
+        // A block is a link target: drop a card, another block or an element
+        // on it and it keeps the reference.
+        data-link-drop={`board:${boardId}`}
         style={{
           position: 'absolute', left, top: BLOCK_HEADER_H, width, height,
           borderRadius: 30,
@@ -705,6 +714,21 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
           />
         </div>
       </div>
+
+      {/* Reference chips straddling the block's bottom edge. A SIBLING of the
+          block rather than a child, because the block clips its overflow and
+          a rail that hangs half outside would be cut in half. Shown on hover
+          or when the block already holds references — an always-on rail under
+          every block would bury the layer in chrome. */}
+      {(isHovered || (board.linkedRefs?.length ?? 0) > 0) && (
+        <div style={{ position: 'absolute', left, top: BLOCK_HEADER_H + height, width, height: 0 }}>
+          <LinkChipRail
+            owner={{ kind: 'board', id: boardId }}
+            color={rootColor}
+            zoom={railZoom}
+          />
+        </div>
+      )}
 
       {colorPicker && (
         <ColorPickerPopup

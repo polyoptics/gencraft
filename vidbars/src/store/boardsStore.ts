@@ -3,6 +3,7 @@ import { persist } from 'zustand/middleware'
 import { createDebouncedIDBStorage } from '../utils/debouncedIDBStorage'
 import { useCanvasStore } from './canvasStore'
 import { usePinTravelStore } from './pinTravelStore'
+import { sameRef, type LinkRef } from '../utils/linkTargets'
 import type { Bar } from '../types/bar'
 import { TEMPLATES } from '../data/templates'
 import { getBoardAbsolutePos, computeGroupLayout, yToRow } from '../utils/nleRows'
@@ -94,6 +95,10 @@ export interface ProjectGroup {
   }>
   textSplitRatio?: number // header/body vertical split (0-1, default 0.5)
   linkedGroupIds?: string[]  // bi-directional references to other groups (optional for legacy; treat as [] when absent)
+  /** References to BLOCKS and ELEMENTS this card owns. Card-to-card links
+   *  stay in linkedGroupIds above — see utils/linkTargets for why the two
+   *  fields coexist rather than one replacing the other. */
+  linkedRefs?: import('../utils/linkTargets').LinkRef[]
   /** Annotation layer drawn on this card at card zoom. */
   cardStrokes?: import('../types/stroke').Stroke[]
 }
@@ -172,6 +177,9 @@ export interface BoardData {
   canvasX?: number     // absolute canvas X (only when ungrouped / free canvas)
   canvasY?: number     // absolute canvas Y (only when ungrouped / free canvas)
   bars: Record<string, Bar>
+  /** References this BLOCK owns — see utils/linkTargets. A block can be
+   *  linked to anything, same mechanic as a card. */
+  linkedRefs?: import('../utils/linkTargets').LinkRef[]
   rootIds: string[]
   viewerBarId: string | null
   selectedIds: string[]
@@ -315,6 +323,12 @@ interface BoardsState {
   // ── Bi-directional group linking ──
   linkGroups: (a: string, b: string) => void
   unlinkGroups: (a: string, b: string) => void
+  /** Link anything to anything: card, block or element, in any combination.
+   *  `owner` is the drop target and holds the reference; `ref` is what it
+   *  points at. Card-to-card is delegated to linkGroups so the original
+   *  storage — which many consumers read directly — stays authoritative. */
+  linkRefs: (owner: LinkRef, ref: LinkRef) => void
+  unlinkRefs: (owner: LinkRef, ref: LinkRef) => void
 
   // ── Ungrouped board actions (free canvas) ──
   createUngroupedBoard: (canvasX: number, canvasY: number) => string
@@ -1661,6 +1675,89 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
         return cur.includes(b) ? { ...g, linkedGroupIds: cur.filter(id => id !== b) } : g
       }),
     }))
+  },
+
+  // ── Links between any two things ──────────────────────────────────────
+  // linkGroups above is the card-to-card special case, kept because a dozen
+  // consumers read linkedGroupIds directly. These two handle every pair.
+
+  linkRefs(owner, ref) {
+    if (sameRef(owner, ref)) return
+    // Card-to-card keeps flowing into linkedGroupIds so that everything
+    // already reading that field — the Rolodex, project insert, clone
+    // expansion — keeps seeing links it would otherwise miss.
+    if (owner.kind === 'group' && ref.kind === 'group') {
+      get().linkGroups(owner.id, ref.id)
+      return
+    }
+    const add = (list: LinkRef[] | undefined) =>
+      (list ?? []).some(r => sameRef(r, ref)) ? list ?? [] : [...(list ?? []), ref]
+
+    if (owner.kind === 'group') {
+      set(s => ({ groups: s.groups.map(g =>
+        g.id === owner.id ? { ...g, linkedRefs: add(g.linkedRefs) } : g) }))
+      return
+    }
+    if (owner.kind === 'board') {
+      set(s => {
+        const b = s.boards[owner.id]
+        if (!b) return {}
+        return { boards: { ...s.boards, [owner.id]: { ...b, linkedRefs: add(b.linkedRefs) } } }
+      })
+      return
+    }
+    set(s => {
+      const b = s.boards[owner.boardId]
+      const bar = b?.bars[owner.id]
+      if (!b || !bar) return {}
+      return {
+        boards: {
+          ...s.boards,
+          [owner.boardId]: {
+            ...b,
+            bars: { ...b.bars, [owner.id]: { ...bar, linkedRefs: add(bar.linkedRefs) } },
+          },
+        },
+      }
+    })
+  },
+
+  unlinkRefs(owner, ref) {
+    if (owner.kind === 'group' && ref.kind === 'group') {
+      get().unlinkGroups(owner.id, ref.id)
+      // Fall through as well: an imported project could have put a group
+      // referent in linkedRefs, and half-removing a link leaves a chip that
+      // cannot be dismissed.
+    }
+    const drop = (list: LinkRef[] | undefined) => (list ?? []).filter(r => !sameRef(r, ref))
+
+    if (owner.kind === 'group') {
+      set(s => ({ groups: s.groups.map(g =>
+        g.id === owner.id ? { ...g, linkedRefs: drop(g.linkedRefs) } : g) }))
+      return
+    }
+    if (owner.kind === 'board') {
+      set(s => {
+        const b = s.boards[owner.id]
+        if (!b) return {}
+        return { boards: { ...s.boards, [owner.id]: { ...b, linkedRefs: drop(b.linkedRefs) } } }
+      })
+      return
+    }
+    set(s => {
+      const b = s.boards[owner.boardId]
+      const bar = b?.bars[owner.id]
+      if (!b || !bar) return {}
+      return {
+        boards: {
+          ...s.boards,
+          [owner.boardId]: {
+            ...b,
+            bars: { ...b.bars, [owner.id]: { ...bar, linkedRefs: drop(bar.linkedRefs) } },
+          },
+        },
+      }
+    })
   },
 }), {
   name: 'vidbars-boards',

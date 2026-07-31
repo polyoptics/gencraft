@@ -7,31 +7,34 @@
 // Not persisted.
 
 import { create } from 'zustand'
+import type { LinkRef } from '../utils/linkTargets'
 
 interface Point { x: number; y: number }
 
 interface LinkDragStore {
   active: boolean
-  sourceGroupId: string | null
+  /** What is being dragged — a card, a block or an element. Was a bare group
+   *  id back when cards were the only thing that could be linked. */
+  source: LinkRef | null
   sourceColor: string
   startScreenPos: Point | null
   currentPos: Point | null
 
-  begin: (sourceGroupId: string, color: string, x: number, y: number) => void
+  begin: (source: LinkRef, color: string, x: number, y: number) => void
   move: (x: number, y: number) => void
   end: () => void
 }
 
 export const useLinkDragStore = create<LinkDragStore>((set) => ({
   active: false,
-  sourceGroupId: null,
+  source: null,
   sourceColor: '#5b8dd9',
   startScreenPos: null,
   currentPos: null,
 
-  begin: (sourceGroupId, color, x, y) => set({
+  begin: (source, color, x, y) => set({
     active: true,
-    sourceGroupId,
+    source,
     sourceColor: color,
     startScreenPos: { x, y },
     currentPos: { x, y },
@@ -41,7 +44,7 @@ export const useLinkDragStore = create<LinkDragStore>((set) => ({
 
   end: () => set({
     active: false,
-    sourceGroupId: null,
+    source: null,
     sourceColor: '#5b8dd9',
     startScreenPos: null,
     currentPos: null,

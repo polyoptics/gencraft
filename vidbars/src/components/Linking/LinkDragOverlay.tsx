@@ -7,13 +7,13 @@ import React, { useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { useLinkDragStore } from '../../store/linkDragStore'
 import { useBoardsStore } from '../../store/boardsStore'
+import { parseRef, sameRef, type LinkRef } from '../../utils/linkTargets'
 
 export const LinkDragOverlay: React.FC = () => {
   const active = useLinkDragStore(s => s.active)
   const start = useLinkDragStore(s => s.startScreenPos)
   const pos = useLinkDragStore(s => s.currentPos)
   const color = useLinkDragStore(s => s.sourceColor)
-  const sourceGroupId = useLinkDragStore(s => s.sourceGroupId)
   const move = useLinkDragStore(s => s.move)
   const end = useLinkDragStore(s => s.end)
 
@@ -23,34 +23,35 @@ export const LinkDragOverlay: React.FC = () => {
 
     const onMove = (e: PointerEvent) => move(e.clientX, e.clientY)
     const onUp = (e: PointerEvent) => {
-      const source = useLinkDragStore.getState().sourceGroupId
+      const source = useLinkDragStore.getState().source
       if (!source) { end(); return }
       // Find drop target: look for [data-link-drop] ancestor at release point
       const els = document.elementsFromPoint(e.clientX, e.clientY)
-      let targetGroupId: string | null = null
+      let target: LinkRef | null = null
       for (const el of els) {
         const attr = (el as HTMLElement).closest?.('[data-link-drop]')?.getAttribute('data-link-drop')
         if (!attr) continue
-        // Format: "chip:<groupId>" or "card:<groupId>"
-        const [, gid] = attr.split(':')
-        if (!gid) continue
-        // THE TOPMOST CARD WINS, whatever it is. elementsFromPoint returns the
-        // whole stack, not just the top hit, so skipping the source card and
-        // continuing meant the search fell THROUGH the card you released on
+        // "group:<id>" / "board:<id>" / "bar:<boardId>:<barId>", plus the
+        // legacy "card:"/"chip:" spellings the card layer still emits.
+        const hit = parseRef(attr)
+        if (!hit) continue
+        // THE TOPMOST TARGET WINS, whatever it is. elementsFromPoint returns
+        // the whole stack, not just the top hit, so skipping the source and
+        // continuing meant the search fell THROUGH the thing you released on
         // and linked whatever happened to lie behind it. Harmless while cards
         // never overlapped; with a pinned card floating over the canvas it
-        // fired on every plain click of that card's own "+" chip. Releasing
-        // over the source now cancels, which is what releasing where you
-        // started should do anyway.
-        if (gid !== source) targetGroupId = gid
+        // fired on every plain click of that card's own "+" chip, and with
+        // nested bars almost every release is over a stack. Releasing over
+        // the source now cancels, which is what releasing where you started
+        // should do anyway.
+        if (!sameRef(hit, source)) target = hit
         break
       }
-      if (targetGroupId) {
-        // Direction convention: the DROP TARGET owns the reference. Dragging
-        // card A onto card B means "B references A" — so B gets a prominent
-        // primary chip pointing at A, while A gets a small back-ref chip
-        // pointing at B. Link record: target.linkedGroupIds ⊇ {source}.
-        useBoardsStore.getState().linkGroups(targetGroupId, source)
+      if (target) {
+        // Direction convention: the DROP TARGET owns the reference. Dropping
+        // A onto B means "B references A" — B gets a prominent primary chip
+        // pointing at A, A gets a small back-ref chip pointing at B.
+        useBoardsStore.getState().linkRefs(target, source)
       }
       end()
     }
@@ -69,10 +70,6 @@ export const LinkDragOverlay: React.FC = () => {
   }, [active, move, end])
 
   if (!active || !start || !pos) return null
-
-  // Suppress unused-variable complaint — sourceGroupId is read for the drop
-  // logic above via getState(); we don't need it in JSX directly.
-  void sourceGroupId
 
   return createPortal(
     <div

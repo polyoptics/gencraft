@@ -14,6 +14,8 @@ import { useCanvasStore } from '../../store/canvasStore'
 import { useLinkingStore } from '../../store/linkingStore'
 import { useLinkDragStore } from '../../store/linkDragStore'
 import type { ProjectGroup } from '../../store/boardsStore'
+import { RefChip } from './LinkChipRail'
+import { refKey } from '../../utils/linkTargets'
 
 interface Props {
   /** Group whose outbound link chips we're rendering. */
@@ -76,6 +78,14 @@ export const PrimaryChipRail: React.FC<Props> = ({ groupId, hostRect, path, scal
             linked={g}
             path={[...path, g.id]}
           />
+        ))}
+        {/* References to BLOCKS and ELEMENTS. Card-to-card chips above are
+            expandable into clones and so have their own component; these
+            share the chip the block and element rails use, so a reference
+            looks the same wherever you meet it. zoom=1 because this rail is
+            already inside a scale() wrapper. */}
+        {(host.linkedRefs ?? []).map(r => (
+          <RefChip key={refKey(r)} owner={{ kind: 'group', id: host.id }} target={r} zoom={1} />
         ))}
         <AddChip hostGroup={host} />
       </div>
@@ -175,7 +185,7 @@ const AddChip: React.FC<{ hostGroup: ProjectGroup }> = ({ hostGroup }) => {
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return
     e.stopPropagation()
-    beginDrag(hostGroup.id, hostGroup.color || '#5b8dd9', e.clientX, e.clientY)
+    beginDrag({ kind: 'group', id: hostGroup.id }, hostGroup.color || '#5b8dd9', e.clientX, e.clientY)
     // Global pointermove/up listeners are installed by the LinkDragTracker
     // hook mounted at the app root. This chip only begins the drag.
     // But to make sure the first move already registers, seed the position.
