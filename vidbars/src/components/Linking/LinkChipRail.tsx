@@ -59,29 +59,33 @@ export const LinkChipRail: React.FC<Props> = ({ owner, color, zoom, offsetY = 0 
   return (
     <div
       data-link-rail={refKey(owner)}
-      // Half-in, half-out of the owner's bottom edge, matching the card rail's
-      // look. pointerEvents re-enabled here because some owners render their
-      // chrome pass-through.
       style={{
         position: 'absolute',
-        // FULLY below the owner, not straddling it like the card rail does.
-        // A card's bottom edge is empty; a block's and a bar's are not — the
-        // bottom resize strip, the corner grips and the bar's output port all
-        // live in exactly the band a straddling rail would occupy, and the
-        // rail would both cover them and lose the z-fight to them.
+        // THE CARD'S PLACEMENT, exactly: bottom-left, hanging half on and
+        // half off the owner's edge. PrimaryChipRail's RAIL_INSET_X = 14 and
+        // RAIL_Y_OFFSET = -CHIP_H/2 are the numbers being copied, in screen
+        // px, so a block and a node read the same as a card.
+        //
+        // The bottom edge already has chrome — resize strips, corner grips, a
+        // bar's output port — and the rail must win it rather than move out
+        // of the way: sitting below the owner detaches the chips from the
+        // thing they belong to, and a "+" you have to hunt for below the box
+        // is not the same affordance. Hence the z-index rather than an
+        // offset; it clears the bar's hover overlay (15) and the block's edge
+        // handles (50).
         left: px(14),
-        top: `calc(100% + ${px(3) + px(offsetY)}px)`,
+        top: `calc(100% - ${px(9)}px + ${px(offsetY)}px)`,
         display: 'flex',
         alignItems: 'center',
         gap: px(4),
-        // Bounded to the owner's width. Unbounded, a rail on a narrow block
-        // runs out over its neighbours — and since chips are drop targets,
-        // that is not just untidy, it steals drops aimed at the block next
-        // door.
+        // Bounded to the owner's width so a rail on a narrow block cannot run
+        // out over its neighbours — the chips are drop targets, so overflow
+        // would steal drops aimed at the block next door. Horizontal only;
+        // it does not affect the vertical straddle above.
         maxWidth: '100%',
         overflow: 'hidden',
         pointerEvents: 'auto',
-        zIndex: 12,
+        zIndex: 60,
       }}
       // pointerdown alone is not enough: dblclick and contextmenu are
       // separate events that would otherwise reach the bar underneath and
