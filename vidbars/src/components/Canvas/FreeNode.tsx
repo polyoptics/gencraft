@@ -4,6 +4,7 @@ import { useFreeNodeStore } from '../../store/freeNodeStore'
 import type { FreeNodeData, TextStyle } from '../../store/freeNodeStore'
 import { DEFAULT_TEXT_STYLE } from '../../store/freeNodeStore'
 import { useResolvedMedia } from '../../utils/useResolvedMedia'
+import { useThumb, requestThumb, hasThumbFailed } from '../../utils/thumbService'
 import {
   ensureFontLoaded, FONT_LIST, loadGoogleFont, hexToRgba,
   FONT_SIZES, FONT_WEIGHTS, LINE_HEIGHTS, LETTER_SPACINGS, TEXT_TRANSFORMS, PRESET_COLORS,
@@ -44,7 +45,7 @@ const LOCKS_ASPECT = new Set<FreeNodeData['type']>(['list'])
  *  the file on disk behind it. Panels and text tiles never hold one. */
 const MEDIA_TILES = new Set<FreeNodeData['type']>(['image', 'video', 'audio', 'model'])
 
-/** The poster to hand on when a model tile transfers its content.
+/** The poster to hand on when a model or video tile transfers its content.
  *
  *  LIVE map first, the node's stored copy only as a fallback. The stored
  *  `posterUrl` can point at a blob that no longer exists — a template or
@@ -294,7 +295,8 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
         const transferToBar = (boardId: string, barId: string) => {
           if (hasMedia && node.imageUrl) {
             const curMedia = useBoardsStore.getState().boards[boardId]?.bars[barId]?.content.media ?? []
-            const posterUrl = mediaType === 'model' ? transferablePoster(node) : node.posterUrl ?? null
+            const posterUrl = mediaType === 'model' || mediaType === 'video'
+              ? transferablePoster(node) : node.posterUrl ?? null
             useBoardsStore.getState().setContent(boardId, barId, {
               media: [...curMedia, {
                 url: node.imageUrl, type: mediaType,
@@ -1148,41 +1150,9 @@ const FreeNodeBody: React.FC<{
     )
   }
 
-  // ── Video type: image with play overlay ──
+  // ── Video type: poster frame with play overlay ──
   if (node.type === 'video') {
-    return (
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', overflow: 'hidden' }}>
-        {resolvedUrl ? (
-          <>
-            <img src={resolvedUrl} draggable={false} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-            {/* Play button overlay */}
-            <div style={{
-              position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-              background: 'rgba(0,0,0,0.25)',
-            }}>
-              <div style={{
-                width: 40 * dz, height: 40 * dz, borderRadius: '50%',
-                background: 'rgba(0,0,0,0.6)', border: `${2 * dz}px solid rgba(255,255,255,0.5)`,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-              }}>
-                <div style={{
-                  width: 0, height: 0,
-                  borderTop: `${8 * dz}px solid transparent`,
-                  borderBottom: `${8 * dz}px solid transparent`,
-                  borderLeft: `${14 * dz}px solid rgba(255,255,255,0.9)`,
-                  marginLeft: 3 * dz,
-                }} />
-              </div>
-            </div>
-          </>
-        ) : (
-          <div style={{ textAlign: 'center', color: 'rgba(255,255,255,0.25)', pointerEvents: 'none' }}>
-            <div style={{ fontSize: 28 * dz, marginBottom: 4 * dz }}>▶</div>
-            <div style={{ fontSize: 10 * dz }}>drop video here</div>
-          </div>
-        )}
-      </div>
-    )
+    return <VideoTileBody node={node} id={id} dz={dz} resolvedUrl={resolvedUrl} updateFreeNode={updateFreeNode} />
   }
 
   // ── Audio type: waveform skeleton + transport ──
@@ -1254,6 +1224,97 @@ const FreeNodeBody: React.FC<{
         <div style={{ textAlign: 'center', color: 'rgba(255,255,255,0.18)', pointerEvents: 'none' }}>
           <div style={{ fontSize: 22 * iz, marginBottom: 5 * iz, opacity: 0.5 }}>⬛</div>
           <div style={{ fontSize: 10 * iz }}>drop image here</div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Video tile body: a real frame from the video under a play overlay.
+//    thumbService grabs it (a seek and one drawImage, no full download)
+//    and files it in the shared poster map, keyed by the STORED url so
+//    every surface showing this video finds it. The video itself is NEVER
+//    fed to an <img> — that rendered as a broken-image icon. ──
+const VideoTileBody: React.FC<{
+  node: FreeNodeData
+  id: string
+  dz: number
+  resolvedUrl: string | null
+  updateFreeNode: (id: string, patch: Partial<FreeNodeData>) => void
+}> = ({ node, id, dz, resolvedUrl, updateFreeNode }) => {
+  // Mounting useThumb is also what keeps the request alive (see thumbService).
+  const mapPoster = useThumb(node.imageUrl ?? null, 'video')
+  const shownPoster = mapPoster ?? node.posterUrl ?? null
+  const resolvedPoster = useResolvedMedia(shownPoster)
+  /** The poster that failed to decode, if any — hidden, and re-grabbed. */
+  const [brokenPoster, setBrokenPoster] = useState<string | null>(null)
+  // Read from the RESOLVED url — a `mediaref:` is not streamable, its object
+  // url is — but file the frame under the stored one. A failed grab is
+  // retried while the tile is up (the service spaces attempts a minute
+  // apart and gives up after its cap), so one slow disk read does not leave
+  // a play glyph for the rest of the session.
+  useEffect(() => {
+    if (!node.imageUrl || mapPoster || !resolvedUrl) return
+    const url = node.imageUrl
+    requestThumb(url, 'video', false, resolvedUrl)
+    const t = setInterval(() => {
+      if (hasThumbFailed(url)) clearInterval(t)
+      else requestThumb(url, 'video', false, resolvedUrl)
+    }, 61_000)
+    return () => clearInterval(t)
+  }, [node.imageUrl, mapPoster, resolvedUrl])
+  // The node keeps its own copy, as a model tile does: it is what travels
+  // when the tile is dropped onto a card or bar, and what the Card Browser
+  // shows for a tile that is off screen. Only when it has NONE: the load-time
+  // media sweep rewrites a data: copy to an /uploads/ file, and writing the
+  // map's data: url back over that would re-upload it on every launch.
+  useEffect(() => {
+    if (mapPoster && !node.posterUrl) updateFreeNode(id, { posterUrl: mapPoster })
+  }, [mapPoster, node.posterUrl, id, updateFreeNode])
+  return (
+    <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', overflow: 'hidden' }}>
+      {node.imageUrl ? (
+        <>
+          {resolvedPoster && shownPoster !== brokenPoster && (
+            <img
+              src={resolvedPoster}
+              draggable={false}
+              // A stored copy can outlive its bytes (an /uploads/ file that is
+              // gone, a project imported elsewhere). Hide it — the play glyph
+              // stands alone — and grab a fresh frame.
+              onError={() => {
+                setBrokenPoster(shownPoster)
+                // A dead node copy is dropped so the fresh frame can replace it.
+                if (shownPoster === node.posterUrl) updateFreeNode(id, { posterUrl: undefined })
+                if (node.imageUrl && resolvedUrl) requestThumb(node.imageUrl, 'video', true, resolvedUrl)
+              }}
+              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+            />
+          )}
+          {/* Play button overlay — also the whole picture until a frame lands */}
+          <div style={{
+            position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: 'rgba(0,0,0,0.25)',
+          }}>
+            <div style={{
+              width: 40 * dz, height: 40 * dz, borderRadius: '50%',
+              background: 'rgba(0,0,0,0.6)', border: `${2 * dz}px solid rgba(255,255,255,0.5)`,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <div style={{
+                width: 0, height: 0,
+                borderTop: `${8 * dz}px solid transparent`,
+                borderBottom: `${8 * dz}px solid transparent`,
+                borderLeft: `${14 * dz}px solid rgba(255,255,255,0.9)`,
+                marginLeft: 3 * dz,
+              }} />
+            </div>
+          </div>
+        </>
+      ) : (
+        <div style={{ textAlign: 'center', color: 'rgba(255,255,255,0.25)', pointerEvents: 'none' }}>
+          <div style={{ fontSize: 28 * dz, marginBottom: 4 * dz }}>▶</div>
+          <div style={{ fontSize: 10 * dz }}>drop video here</div>
         </div>
       )}
     </div>

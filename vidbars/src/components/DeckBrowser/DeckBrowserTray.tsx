@@ -11,6 +11,7 @@ import { useBoardsStore } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useLinkDragStore } from '../../store/linkDragStore'
 import { cssUrl } from '../../utils/diskUrl'
+import { useResolvedMedia } from '../../utils/useResolvedMedia'
 
 const APP_TOOLBAR_H = 38
 const TRAY_HEIGHT = 150
@@ -115,7 +116,9 @@ const DeckTile: React.FC<{
   const moveDrag = useLinkDragStore(s => s.move)
 
   const color = group.color || '#5b8dd9'
-  const hero = group.cardHeroImage
+  // Resolved: a `mediaref:` hero (every browser drop) is not a loadable
+  // CSS url, so the tile showed nothing.
+  const hero = useResolvedMedia(group.cardHeroImage ?? null)
   const name = group.cardHeaderText || group.name || 'Untitled'
   const board1 = group.boardIds.length
 

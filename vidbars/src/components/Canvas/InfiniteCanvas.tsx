@@ -398,9 +398,10 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
   const handleCardDrop = useCallback((e: React.DragEvent, files: File[]) => {
     const allEls = document.elementsFromPoint(e.clientX, e.clientY)
     // 1. Card target — data-layer-card is now a group ID.
-    // Card heroes are images by construction: model files skip this branch
-    // (fall through to free-node/tile creation) so a .glb never lands in an <img>.
-    const cardHeroFile = files.find(f => classifyFile(f) !== 'model')
+    // Card heroes are images by construction: model, video and audio files
+    // skip this branch (fall through to free-node/tile creation) so a .glb
+    // or an .mp4 never lands in an <img>.
+    const cardHeroFile = files.find(f => classifyFile(f) === 'image')
     if (cardHeroFile) {
       for (const el of allEls) {
         const card = el.closest('[data-layer-card]') as HTMLElement | null
@@ -421,9 +422,9 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
 
   const handleBlockDrop = useCallback((e: React.DragEvent, files: File[]) => {
     const allEls = document.elementsFromPoint(e.clientX, e.clientY)
-    // 1. Block target — thumbnails are images by construction: model files
-    // skip this branch (fall through to tile creation).
-    const blockThumbFile = files.find(f => classifyFile(f) !== 'model')
+    // 1. Block target — thumbnails are images by construction: model, video
+    // and audio files skip this branch (fall through to tile creation).
+    const blockThumbFile = files.find(f => classifyFile(f) === 'image')
     if (blockThumbFile) {
       for (const el of allEls) {
         const block = el.closest('[data-layer-block]') as HTMLElement | null

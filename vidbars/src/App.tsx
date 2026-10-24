@@ -6,6 +6,7 @@ import { Viewer } from './components/Viewer/Viewer'
 import { TemplateMenu } from './components/UI/TemplateMenu'
 import { ProjectBackupMenu } from './components/UI/ProjectBackupMenu'
 import { useInlineMediaMigration } from './utils/migrateInlineMedia'
+import { useVideoPosterBackfill } from './hooks/useVideoPosterBackfill'
 import { DeckBrowserTray } from './components/DeckBrowser/DeckBrowserTray'
 import { LinkDragOverlay } from './components/Linking/LinkDragOverlay'
 import { DrawToolbar } from './components/Annotation/DrawToolbar'
@@ -514,6 +515,8 @@ export default function App() {
   // Move base64-inline images out of state into the local blob store
   // (one-time, versioned). Replaces the old server-based base64 migration.
   useInlineMediaMigration()
+  // Poster frames for videos on bars — the only way a bar's video is seen.
+  useVideoPosterBackfill()
 
   const [deckBrowserOpen, setDeckBrowserOpen] = useState(false)
 

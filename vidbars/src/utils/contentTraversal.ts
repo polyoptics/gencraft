@@ -148,7 +148,7 @@ export function tileBrowseItem(n: FreeNodeData): BrowseItem | null {
       ?? (n.type === 'video' || n.type === 'audio' || n.type === 'model' ? n.type : 'image')
     return {
       kind: 'media', mediaType: mt, url: n.imageUrl,
-      posterUrl: n.posterUrl ?? (mt === 'model' ? getModelPoster(n.imageUrl) : null),
+      posterUrl: n.posterUrl ?? (mt === 'model' || mt === 'video' ? getModelPoster(n.imageUrl) : null),
       name: n.label || mt,
     }
   }

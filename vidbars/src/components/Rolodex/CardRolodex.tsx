@@ -826,9 +826,9 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
   // below re-derives and the row swaps its glyph for the snapshot.
   const posterMapVersion = usePosterMapStore(s => s.map)
 
-  // Thumbnails for free-node rows: model tiles use their poster (never
-  // the raw model url); image/video tiles use imageUrl (already <img>-
-  // safe); audio/text/note have none.
+  // Thumbnails for free-node rows: model and video tiles use their poster
+  // (never the raw file — an <img> cannot draw a .glb or an .mp4); image
+  // tiles use imageUrl; audio/text/note have none.
   const freeNodeHeroMap = useMemo(() => {
     void posterMapVersion   // re-derive when a poster finishes generating
     const map = new Map<string, string | null>()
@@ -841,9 +841,9 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
         // a template load the stored posterUrl points at a blob that is
         // gone, and preferring it meant the regenerated poster was never
         // used — the face image stayed blank while the chip worked.
-        n.type === 'model'
+        n.type === 'model' || n.type === 'video'
           ? ((n.imageUrl ? getModelPoster(n.imageUrl) : null) ?? n.posterUrl ?? null)
-        : (n.type === 'image' || n.type === 'video') ? n.imageUrl
+        : n.type === 'image' ? n.imageUrl
         : null)
     }
     return map
@@ -852,6 +852,7 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
   // getModelPoster above is a CACHE READ, so a model that has never been
   // rendered on canvas had no snapshot and the row fell back to a glyph.
   // Ask for one here too; posterMapVersion re-runs the map when it lands.
+  const videoPostersAsked = useRef(new Set<string>())
   useEffect(() => {
     if (!includeCanvasItems) return
     for (const row of rows) {
@@ -859,6 +860,16 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
       const n = row.node
       if (n.type === 'model' && !n.posterUrl && n.imageUrl && !getModelPoster(n.imageUrl)) {
         void ensureModelPoster(n.imageUrl)
+      }
+      // A video frame is a cheap seek — but only a server url streams as-is;
+      // a `mediaref:` one gets its frame when its tile is drawn on canvas.
+      // Forced, so it survives the service's off-screen drop (these rows are
+      // exactly the tiles culled off the canvas), and asked once per url:
+      // `rows` changes on every drag frame.
+      if (n.type === 'video' && !n.posterUrl && n.imageUrl?.startsWith('/') && !getModelPoster(n.imageUrl)
+          && !videoPostersAsked.current.has(n.imageUrl)) {
+        videoPostersAsked.current.add(n.imageUrl)
+        requestThumb(n.imageUrl, 'video', true)
       }
     }
   }, [rows, includeCanvasItems])

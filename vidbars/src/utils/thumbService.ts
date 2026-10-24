@@ -55,6 +55,15 @@ const waitingSet = new Set<string>()
 const running = new Set<string>()
 /** What each queued url IS, so pump can pick the right generator. */
 const kindOf = new Map<string, ThumbKind>()
+/** Where to READ a video from, when that is not the url it is filed under:
+ *  a `mediaref:` video is keyed by its stored ref (stable, persisted) but
+ *  can only be streamed through the object url it resolves to. */
+const sourceOf = new Map<string, string>()
+/** Explicit asks (`force`) from callers that cannot mount useThumb — the
+ *  Card Browser listing an off-screen tile, the bar poster back-fill. They
+ *  are exempt from the off-screen drop in pump(), which would otherwise
+ *  discard them for a tile that was once on canvas and is now culled. */
+const keep = new Set<string>()
 
 /** Live `useThumb` subscribers per url — see pump(). */
 const retained = new Map<string, number>()
@@ -91,8 +100,11 @@ export function useThumb(url: string | null, kind: ThumbKind): string | null {
 /** Ask for a thumbnail. Cheap to call repeatedly; queued, deduped, capped
  *  concurrency. Models are NEVER generated implicitly — requestThumb on a
  *  model is a no-op unless `force` is true, because rendering a 44 MB GLB
- *  to draw a 72 px tile is what made the pool unusable. */
-export function requestThumb(url: string, kind: ThumbKind, force?: boolean): void {
+ *  to draw a 72 px tile is what made the pool unusable.
+ *
+ *  `source` (videos only): stream from here instead of `url`, filing the
+ *  poster under `url` — see sourceOf. */
+export function requestThumb(url: string, kind: ThumbKind, force?: boolean, source?: string): void {
   if (!url) return
   // Images belong to the dev server (see the header). Audio has no frame to
   // grab — a waveform would be a different feature, and a glyph is honest.
@@ -105,6 +117,9 @@ export function requestThumb(url: string, kind: ThumbKind, force?: boolean): voi
   const have = getModelPoster(url)
   if (have) { warmServerCache(url, have); return }
 
+  // Before the dedupe, so a job already waiting picks up a fresher source.
+  if (kind === 'video' && source && source !== url) sourceOf.set(url, source)
+  if (force) keep.add(url)
   if (waitingSet.has(url) || running.has(url)) return
   // An explicit ask always retries. The attempt cap exists to stop AUTOMATIC
   // retries looping on a file that cannot be read; applying it to a button
@@ -112,7 +127,11 @@ export function requestThumb(url: string, kind: ThumbKind, force?: boolean): voi
   // session, with no way to tell it apart from a slow load.
   if (force) failures.delete(url)
   const f = failures.get(url)
-  if (f && (f.count >= MAX_ATTEMPTS || Date.now() < f.retryAt)) return
+  if (f && (f.count >= MAX_ATTEMPTS || Date.now() < f.retryAt)) {
+    sourceOf.delete(url)
+    keep.delete(url)
+    return
+  }
 
   waiting.push(url)
   waitingSet.add(url)
@@ -220,16 +239,16 @@ function pump(): void {
     waitingSet.delete(url)
 
     // Dropped, not deferred: this tile has left the screen since it asked.
-    if (seenOnScreen.has(url) && !retained.has(url)) continue
+    if (seenOnScreen.has(url) && !retained.has(url) && !keep.has(url)) { forget(url); continue }
 
     // It may have arrived while this job sat in the queue.
     const have = getModelPoster(url)
-    if (have) { warmServerCache(url, have); continue }
+    if (have) { forget(url); warmServerCache(url, have); continue }
 
     running.add(url)
     // Videos grab a frame; everything else in this queue is a model.
     const job = kindOf.get(url) === 'video'
-      ? captureVideoPoster(url).then(data => {
+      ? captureVideoPoster(sourceOf.get(url) ?? url).then(data => {
           if (data) usePosterMapStore.getState().setPoster(url, data)
           return data
         })
@@ -240,8 +259,15 @@ function pump(): void {
         else noteFailure(url)
       })
       .catch(() => noteFailure(url))
-      .finally(() => { running.delete(url); pump() })
+      .finally(() => { running.delete(url); forget(url); pump() })
   }
+}
+
+/** A job is over (done, dropped, or answered from the map): its per-job
+ *  bookkeeping goes with it. */
+function forget(url: string): void {
+  sourceOf.delete(url)
+  keep.delete(url)
 }
 
 function noteFailure(url: string): void {

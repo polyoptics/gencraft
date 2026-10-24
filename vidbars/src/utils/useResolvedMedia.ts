@@ -74,3 +74,16 @@ export function useResolvedMedia(ref: string | null | undefined): string | null 
   }
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 }
+
+/** The same resolution outside React (shares the session cache): the
+ *  usable URL, or null if the ref is missing or unreadable. */
+export function resolveMediaUrl(ref: string): Promise<string | null> {
+  const id = isMediaRef(ref) ? mediaRefId(ref) : null
+  if (!id) return Promise.resolve(ref)
+  const entry = ensure(id)
+  if (entry.status !== 'loading') return Promise.resolve(entry.url)
+  return new Promise(resolve => {
+    const done = () => { entry.listeners.delete(done); resolve(entry.url) }
+    entry.listeners.add(done)
+  })
+}

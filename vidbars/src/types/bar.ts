@@ -51,19 +51,17 @@ export function getMediaItems(content: BarContent | undefined): MediaItem[] {
 }
 
 /** Helper: get the first image URL (for thumbnails).
- *  NEVER returns a raw 3D-model URL — every consumer feeds this into an
- *  <img>/background-image, and a .glb there renders broken. Models only
- *  contribute via their posterUrl. */
+ *  NEVER returns a raw video, audio or 3D-model URL — every consumer feeds
+ *  this into an <img>/background-image, where those render blank or as a
+ *  broken-image icon. Video and models contribute only via their posterUrl
+ *  (useVideoPosterBackfill fills it for videos). */
 export function getFirstImageUrl(content: BarContent | undefined): string | null {
   const items = getMediaItems(content)
   // Prefer images, then video/model posters
   const img = items.find(m => m.type === 'image')
   if (img) return img.url
   const posterable = items.find(m => (m.type === 'video' || m.type === 'model') && m.posterUrl)
-  if (posterable) return posterable.posterUrl!
-  // Last resort: any non-model URL (video without poster shows as thumbnail)
-  const nonModel = items.find(m => m.type !== 'model')
-  return nonModel?.url ?? null
+  return posterable?.posterUrl ?? null
 }
 
 /** The stored url of the media item getFirstImageUrl() is SHOWING — the
@@ -74,9 +72,7 @@ export function getFirstMediaSource(content: BarContent | undefined): string | n
   const img = items.find(m => m.type === 'image')
   if (img) return img.url
   const posterable = items.find(m => (m.type === 'video' || m.type === 'model') && m.posterUrl)
-  if (posterable) return posterable.url
-  const nonModel = items.find(m => m.type !== 'model')
-  return nonModel?.url ?? null
+  return posterable?.url ?? null
 }
 
 export interface Bar {
