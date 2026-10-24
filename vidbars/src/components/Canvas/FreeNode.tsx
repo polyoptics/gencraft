@@ -25,6 +25,7 @@ import { MediaPool } from '../Pool/MediaPool'
 import { PromptPad } from '../Prompt/PromptPad'
 import { HistoryPanel } from '../History/HistoryPanel'
 import { PinControl } from '../UI/PinControl'
+import { DragOutGrip } from '../UI/DragOutGrip'
 import { ensureModelPoster, getModelPoster, invalidateModelPoster, useModelPoster } from '../../three/posterService'
 import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
 import { DrawableSurface } from '../Annotation/DrawableSurface'
@@ -620,6 +621,8 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
   const pad      = Math.min(6 * iz, node.width * 0.05, node.height * 0.05)
   const fontSize = Math.min(11 * iz, headerH * 0.55)
   const dotSize  = Math.min(5 * iz, headerH * 0.35)
+  // Header buttons — the pen and the drag-out grip share one size.
+  const headerBtn = Math.min(Math.max(14, 14 * iz), node.width * 0.16, headerH * 0.9)
   // Same disease as the zones above: an unclamped 2/zoom border is 33
   // canvas units at zoom 0.06, which is 4 of a 12-pixel tile — it shrinks
   // the content box until the corner zone starts a hair from the centre.
@@ -627,6 +630,20 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
   /** COMPONENT nodes are panels, not media tiles, so they wear the panel's
    *  chrome — identically in both placements. */
   const isPanel = isPanelType(node.type)
+  /** Drag-out carries the whole selection when this tile is part of it,
+   *  this tile first. Read at dragstart rather than subscribed, so the grip
+   *  does not re-render on every selection change. */
+  const dragOutUrls = (): string[] => {
+    const own = node.imageUrl
+    if (!own) return []
+    const { selectedIds, nodes } = useFreeNodeStore.getState()
+    if (!selectedIds.includes(id)) return [own]
+    const rest = selectedIds.flatMap(sid => {
+      const n = sid === id ? null : nodes[sid]
+      return n && MEDIA_TILES.has(n.type) && n.imageUrl ? [n.imageUrl] : []
+    })
+    return [own, ...rest]
+  }
 
   return (
     <div
@@ -683,6 +700,9 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
         // Select node in capture phase so children with stopPropagation (note textarea) don't block selection
         if (e.button !== 0) return
         if ((e.target as Element).closest('[data-resize]')) return
+        // The drag-out grip must not select or deselect: the selection is
+        // what the drag it starts carries.
+        if ((e.target as Element).closest('[data-drag-out]')) return
         // A component's body is a full panel that owns its own clicks:
         // selecting the node on every control would flash the ring and arm
         // Delete on the whole thing. Only its header and corner select it.
@@ -755,10 +775,26 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
           <PenButton
             surface={{ kind: 'freeNode', nodeId: id }}
             baseColor={node.color}
-            size={Math.min(Math.max(14, 14 * iz), node.width * 0.16, headerH * 0.9)}
+            size={headerBtn}
             visible={isHovered}
           />
         </span>
+
+        {/* Drag-out — hands the file behind this tile to another app or a
+                website's upload box. The header is the move handle, so leaving
+                the app needs its own grip; media tiles only, panels hold no
+                file. Lifted over the n-resize strip, which otherwise covers
+                its top few pixels. Not wrapped: it renders nothing in a plain
+                browser, and an empty wrapper would still take a flex gap. */}
+        {MEDIA_TILES.has(node.type) && (
+          <DragOutGrip
+            url={node.imageUrl}
+            getUrls={dragOutUrls}
+            size={headerBtn}
+            visible={isHovered}
+            style={{ position: 'relative', zIndex: 20 }}
+          />
+        )}
 
         {isRenaming ? (
           <input

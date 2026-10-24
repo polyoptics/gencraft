@@ -14,8 +14,6 @@ export interface VidbarsDesktop {
   /** Copy the path to the clipboard. */
   copyPath(path: string): Promise<boolean>
   exists(path: string): Promise<boolean>
-  /** Start a native OS file drag. Call inside dragstart after preventDefault(). */
-  startFileDrag(paths: string | string[]): void
 
   // Added after the first five. OPTIONAL in the type because a hot reload
   // swaps the app's code while an older preload keeps running until the
@@ -26,6 +24,15 @@ export interface VidbarsDesktop {
   resolveMedia?(url: string): Promise<{ path: string; exists: boolean } | null>
   /** A dropped file that can be referenced in place (not a temp copy). */
   isStablePath?(path: string): Promise<boolean>
+  /** Drag the files behind STORED media values out of the app. Call inside
+   *  a real dragstart after preventDefault() — anything else is ignored;
+   *  main resolves the urls itself. */
+  startMediaDrag?(urls: string[]): void
+  /** True while this window's own drag is out: a drop then is that file
+   *  coming back, not a new one. */
+  isDraggingOut?(): boolean
+  /** Warm the drag image for a stored url (on hover). */
+  prepareDragIcon?(url: string): Promise<boolean>
 }
 
 declare global {

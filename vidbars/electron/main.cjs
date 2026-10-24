@@ -173,8 +173,45 @@ function fromApp(event) {
   } catch { return false }
 }
 
-// startDrag needs an icon synchronously, during the dragstart, so there is
-// no time to fetch the file's own. A small neutral tile, built once.
+/** Stored media values → the files an OS drag may carry: media files that
+ *  exist, by their real names, de-duplicated, at most 64. Shared by the
+ *  drag handler and the self-test. */
+function dragFilesFor(urls) {
+  const out = []
+  // Bounded twice: the work (stored values that resolve to nothing still
+  // cost a lookup) and the result (what the OS is handed).
+  for (const u of (Array.isArray(urls) ? urls : [urls]).slice(0, 256)) {
+    if (out.length >= 64) break
+    const p = realPath(mediaPath(u))
+    if (p && MEDIA_FILE.test(p) && isFile(p) && !out.includes(p)) out.push(p)
+  }
+  return out
+}
+
+// The drag image. startDrag needs it synchronously, during the dragstart,
+// so the file's own thumbnail is prepared ahead — on hover — and kept here;
+// a drag that beats it gets the neutral tile below.
+//
+// createThumbnailFromPath runs the shell's extractor INLINE on this thread
+// (the await does not move it), so: only kinds Windows has a thumbnailer
+// for, and a failure is remembered (null) rather than retried every hover.
+const THUMBABLE = /\.(png|jpe?g|jfif|webp|gif|bmp|tiff?|heic|avif|mp4|m4v|mov|mkv|webm)$/i
+const dragIcons = new Map()   // path → NativeImage, or null when it has none
+async function prepareDragIcon(p) {
+  if (dragIcons.has(p)) return !!dragIcons.get(p)
+  let img = null
+  if (THUMBABLE.test(p)) {
+    try {
+      const t = await nativeImage.createThumbnailFromPath(p, { width: 96, height: 96 })
+      if (!t.isEmpty()) img = t
+    } catch { /* no thumbnail for this file */ }
+  }
+  dragIcons.set(p, img)
+  if (dragIcons.size > 64) dragIcons.delete(dragIcons.keys().next().value)
+  return !!img
+}
+
+// The fallback drag image: a small neutral tile, built once.
 let dragIcon = null
 function getDragIcon() {
   if (dragIcon) return dragIcon
@@ -226,17 +263,37 @@ function registerBridge() {
 
   ipcMain.handle('vb:stable-path', (e, p) => fromApp(e) && isStableMediaFile(p))
 
-  // `send`, not `handle`: the renderer's dragstart cannot await a reply,
-  // and the OS drag has to begin while that event is still being handled.
-  ipcMain.on('vb:start-drag', (e, paths) => {
+  ipcMain.handle('vb:prepare-drag', (e, u) => {
+    if (!fromApp(e)) return false
+    const [p] = dragFilesFor([u])
+    return p ? prepareDragIcon(p) : false
+  })
+
+  // Drag OUT by stored url: main resolves the files itself, so the
+  // renderer's dragstart has nothing to await. The preload only sends this
+  // right after a trusted dragstart, while the button is still down — an
+  // OS drag begun with the button up drops at once, wherever the cursor is.
+  ipcMain.on('vb:start-drag-media', (e, urls) => {
     if (!fromApp(e)) return
-    // Held to the same media-only line as Open and /api/file.
-    const list = (Array.isArray(paths) ? paths : [paths]).slice(0, 64).map(realPath)
-      .filter(p => p && MEDIA_FILE.test(p) && isFile(p))
-    if (list.length === 0) return
-    e.sender.startDrag(list.length === 1
-      ? { file: list[0], icon: getDragIcon() }
-      : { file: list[0], files: list, icon: getDragIcon() })
+    const files = dragFilesFor(urls)
+    if (files.length === 0) { e.sender.send('vb:drag-out-done'); return }
+    console.log(`[vidbars] drag out: ${files.length} file(s)`)
+    // Automated tests: report the files, never hand them to the OS. A real
+    // drag with no button held drops at once wherever the user's own mouse
+    // happens to be — into their Explorer, or their real canvas.
+    if (process.env.VIDBARS_DRAG_DRYRUN === '1') {
+      console.log('[vidbars] drag out (dry run): ' + files.map(f => path.basename(f)).join(' | '))
+      setTimeout(() => e.sender.send('vb:drag-out-done'), 1000)
+      return
+    }
+    const icon = dragIcons.get(files[0]) ?? getDragIcon()
+    try {
+      e.sender.startDrag(files.length === 1 ? { file: files[0], icon } : { file: files[0], files, icon })
+    } finally {
+      // The OS drag has ended (startDrag returns when it does). The page
+      // ignores drops while its own drag is out — see isDraggingOut.
+      e.sender.send('vb:drag-out-done')
+    }
   })
 }
 
@@ -307,6 +364,9 @@ async function selfTest(win) {
   let result
   // The test copies a path; put the user's clipboard back afterwards.
   const prevClip = clipboard.readText()
+  // A raster file for the drag-image check (no SVG thumbnailer is promised).
+  const testPng = path.join(app.getPath('temp'), 'vb-selftest.png')
+  try { fs.writeFileSync(testPng, getDragIcon().toPNG()) } catch { /* reported as false */ }
   try {
     const self = __filename
     const icon = path.join(PUBLIC_DIR, 'favicon.svg')
@@ -333,6 +393,9 @@ async function selfTest(win) {
         resolveMediaref: await d.resolveMedia('mediaref:abc'),
         resolveData: await d.resolveMedia('data:image/png;base64,AAAA'),
         stableIcon: await d.isStablePath(icon),
+        prepareDrag: await d.prepareDragIcon('/api/file?path=' + enc(${JSON.stringify(path.join(app.getPath('temp'), 'vb-selftest.png'))})),
+        prepareDragSvg: await d.prepareDragIcon('/favicon.svg'),
+        untrustedDragIgnored: (() => { d.startMediaDrag([${JSON.stringify('/favicon.svg')}]); return d.isDraggingOut() === false })(),
         stableScript: await d.isStablePath(self),
         openScript: await d.openPath(self),
         nodeLeaked: typeof require !== 'undefined' || typeof process !== 'undefined',
@@ -340,10 +403,18 @@ async function selfTest(win) {
       }
     })()`)
     result.clipboard = clipboard.readText()
+    // Drag-out resolution, without starting a real OS drag.
+    result.dragFiles = dragFilesFor([
+      '/api/file?path=' + encodeURIComponent(icon),   // a media file
+      '/favicon.svg',                                 // the same file again: de-duplicated
+      '/api/file?path=' + encodeURIComponent(self),   // not media: refused
+      'mediaref:abc',                                 // no file on disk
+    ]).map(p => path.basename(p))
   } catch (err) {
     result = { error: String(err) }
   }
   clipboard.writeText(prevClip)
+  try { fs.unlinkSync(testPng) } catch { /* already gone */ }
   console.log('[vidbars] SELFTEST ' + JSON.stringify(result))
   app.quit()
 }

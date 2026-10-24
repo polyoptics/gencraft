@@ -188,6 +188,9 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
     // has to be admitted alongside 'Files' or dragging a tile out of a
     // Media Pool is silently dead. getData is blacked out during dragover
     // for security, but `types` is not, which is all this test needs.
+    // Our own drag-out passing back over the canvas is NOT accepted: let go
+    // here and nothing happens, rather than importing the file again.
+    if (window.vidbarsDesktop?.isDraggingOut?.()) return
     if (e.dataTransfer.types.includes('Files') || e.dataTransfer.types.includes(POOL_DRAG_MIME)) {
       e.preventDefault()
       e.dataTransfer.dropEffect = 'copy'
@@ -549,6 +552,8 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
   }, [addFreeNode])
 
   const handleDrop = useCallback((e: React.DragEvent) => {
+    // Our own drag-out, released back over the canvas (see handleDragOver).
+    if (window.vidbarsDesktop?.isDraggingOut?.()) { e.preventDefault(); return }
     // A pool drag carries ZERO .files, so it has to be answered before the
     // empty-files bail below — and it has to call preventDefault itself,
     // since that bail returns ahead of the one on the file path.

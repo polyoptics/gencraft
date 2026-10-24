@@ -42,6 +42,7 @@ import { useThumb, requestThumb, getThumb, isThumbPending, hasThumbFailed } from
 import { ContentScaled, panelContentScale, clampUiScale, UI_SCALE_MIN, UI_SCALE_MAX } from '../UI/PanelSurface'
 import { FileContextMenu } from '../UI/FileMenu'
 import { mayHaveDiskFile } from '../../hooks/useFileMenu'
+import { DragOutGrip } from '../UI/DragOutGrip'
 
 /** Target tile size in SCREEN pixels. These used to be canvas pixels,
  *  which made "mid" 14 real pixels wide at block zoom. The grid fills the
@@ -153,6 +154,8 @@ const FileTile = React.memo<TileProps>(({ file, side, selected, thumbsPossible, 
   const src = usingThumb ? best : (raw && !rawBroken ? file.url : null)
 
   const captioned = side >= 78
+  // Only the drag-out grip reads this; the tile itself has no hover look.
+  const [hovered, setHovered] = useState(false)
 
   // Desktop only: right-click offers the file on disk behind this tile —
   // file.url, the listing's own, never the thumbnail standing in for it.
@@ -188,6 +191,8 @@ const FileTile = React.memo<TileProps>(({ file, side, selected, thumbsPossible, 
       onClick={() => onSelect(file.id)}
       onDoubleClick={() => onPlace(file)}
       onContextMenu={contextMenu}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       title={`${file.name}${file.size ? ` · ${Math.round(file.size / 1024)}KB` : ''}\ndrag onto the canvas, or double-click to place`}
       style={{
         position: 'relative', height: side, minWidth: 0,
@@ -232,6 +237,21 @@ const FileTile = React.memo<TileProps>(({ file, side, selected, thumbsPossible, 
         }}>{file.kind === 'model' ? '3D' : KIND_GLYPH[file.kind]}</span>
       )}
 
+      {/* Drag the file itself out of the app (desktop only — renders
+          nothing otherwise). Top-left, the one corner no other chrome
+          uses: the kind badge is top-right, the render button bottom-left
+          and the caption spans the bottom. The tile's own drag is the
+          INTERNAL one to the canvas; the grip's dragstart runs first and
+          stops propagation, so a press here never sets the pool payload. */}
+      <DragOutGrip
+        url={file.url}
+        size={Math.round(Math.min(22, Math.max(14, side * 0.16)))}
+        visible={hovered}
+        style={{
+          position: 'absolute', top: 3, left: 4,
+          background: 'rgba(0,0,0,0.62)', borderRadius: 3,
+        }}
+      />
 
       {/* Explicit, per-tile poster generation. This is the ONLY way a
           model gets rendered for a thumbnail — one file, because someone

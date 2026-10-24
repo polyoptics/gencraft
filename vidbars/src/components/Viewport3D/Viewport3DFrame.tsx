@@ -4,7 +4,7 @@
 // the body stays transparent with orbit input; for image/video/audio/
 // text items a DOM ContentView fills the body (opaque). This frame is a
 // div at z=1 (under free nodes z=5 and bars z≥2) providing: header
-// (drag-move + carry / title / close), resize corner, type-gated body
+// (drag-move + carry / title / drag-out / close), resize corner, type-gated body
 // input, and the loading/error/poster states.
 //
 // Interaction rules (FreeNode parity):
@@ -39,6 +39,7 @@ import { useMagnetPreviewStore } from '../../store/magnetPreviewStore'
 import { viewportVisualRect, VIEWPORT_HEADER_SCREEN_H } from '../../utils/viewportDocking'
 import { FileContextMenu } from '../UI/FileMenu'
 import { mayHaveDiskFile } from '../../hooks/useFileMenu'
+import { DragOutGrip } from '../UI/DragOutGrip'
 
 /** Selecting a Viewer takes over the canvas selection outright, so the
  *  Delete key's priority chain is never asked to arbitrate between two lit
@@ -103,6 +104,10 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
   // selected while poking at this one.
   const onSelectDownCapture = useCallback((e: React.PointerEvent) => {
     if (e.button !== 0) return   // 1 → canvas pan, 2 → body orbit-pan
+    // The one exemption: a press on the drag-out grip is the file leaving
+    // the app, not a gesture on this window — it must not select it (or
+    // clear the canvas selection) any more than it may start a move.
+    if ((e.target as Element).closest('[data-drag-out]')) return
     // Shift toggles only on the window's own CHROME. In the body that
     // modifier is already taken twice: Shift+left-drag pans the model,
     // and Shift+click extends a text selection.
@@ -503,6 +508,19 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
           )
         })()}
 
+        {/* ── Drag-out — the ACTIVE item's file, the same url the right-click
+               file menu offers (a model's file, never its poster). The grip
+               stops its own pointerdown, so onHeaderDown never sees the
+               press and no window move starts. Lifted over the reshape
+               handles (19/20): the unpositioned header is painted under the
+               north strip, which would otherwise take the grip's top edge
+               as a resize. Hidden, it takes no pointer, so the strip does. ── */}
+        <DragOutGrip
+          url={active?.kind === 'media' ? active.url : null}
+          size={Math.max(11, fontSize * 1.15)}
+          visible={isHovered}
+          style={{ position: 'relative', zIndex: 21 }}
+        />
         <PinControl
           pinned={!!win.pin}
           size={Math.max(11, fontSize * 1.15)}
