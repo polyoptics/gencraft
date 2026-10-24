@@ -19,6 +19,7 @@ import { useCanvasStore } from '../../store/canvasStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { adjacentPanels } from '../../utils/componentLinks'
 import { CounterScaled, usePanelChrome } from '../UI/PanelSurface'
+import { cssUrl } from '../../utils/diskUrl'
 
 const KIND_GLYPH: Record<HistoryKind, string> = {
   prompt: '✎', view: '◉', folder: '📁', place: '＋',
@@ -210,7 +211,7 @@ export const HistoryPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
             {e.face
               ? <div style={{
                   width: 22, height: 22, flexShrink: 0, borderRadius: 3,
-                  background: `#0c0e18 center/cover no-repeat url("${e.face}")`,
+                  background: `#0c0e18 center/cover no-repeat ${cssUrl(e.face)}`,
                 }} />
               : <span style={{ fontSize: 11, opacity: 0.5, width: 14, textAlign: 'center', flexShrink: 0 }}>
                   {KIND_GLYPH[e.kind]}

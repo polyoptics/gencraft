@@ -66,6 +66,19 @@ export function getFirstImageUrl(content: BarContent | undefined): string | null
   return nonModel?.url ?? null
 }
 
+/** The stored url of the media item getFirstImageUrl() is SHOWING — the
+ *  video or model itself, never its poster. This is the file behind the
+ *  picture, for "Show in Explorer" and friends; do not render it. */
+export function getFirstMediaSource(content: BarContent | undefined): string | null {
+  const items = getMediaItems(content)
+  const img = items.find(m => m.type === 'image')
+  if (img) return img.url
+  const posterable = items.find(m => (m.type === 'video' || m.type === 'model') && m.posterUrl)
+  if (posterable) return posterable.url
+  const nonModel = items.find(m => m.type !== 'model')
+  return nonModel?.url ?? null
+}
+
 export interface Bar {
   id: string
   name: string

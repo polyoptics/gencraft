@@ -6,6 +6,8 @@ import path from 'path'
 import type { Plugin } from 'vite'
 import Busboy from 'busboy'
 import crypto from 'crypto'
+import { pipeline } from 'stream'
+import { encodeUrlParam, isServableDiskPath, isUncPath } from './src/utils/diskUrl'
 
 /** Vite plugin: POST /api/upload — saves files to public/uploads/, returns URL */
 function fileUploadApi(): Plugin {
@@ -385,6 +387,11 @@ function browseApi(): Plugin {
         const url = new URL(req.url ?? '', 'http://x')
         const raw = url.searchParams.get('dir') || 'public/uploads'
         const dir = path.isAbsolute(raw) ? raw : path.resolve(__dirname, raw)
+        if (isUncPath(raw) || isUncPath(dir)) {
+          res.statusCode = 404
+          res.end(JSON.stringify({ error: 'Not a directory', dir }))
+          return
+        }
         try {
           if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
             res.statusCode = 404
@@ -419,10 +426,10 @@ function browseApi(): Plugin {
               // falls through to index.html — measured, not assumed. Those
               // names go through /api/file instead, where the name is a
               // query parameter and comes back exactly as it went in.
-              const encodable = !/[;/?:@&=+$,#]/.test(rel)
+              const encodable = !rel.split(path.sep).some(seg => /[;/?:@&=+$,#]/.test(seg))
               const url = servable && encodable
-                ? '/' + rel.split(path.sep).map(encodeURIComponent).join('/')
-                : `/api/file?path=${encodeURIComponent(full)}`
+                ? '/' + rel.split(path.sep).map(encodeUrlParam).join('/')
+                : `/api/file?path=${encodeUrlParam(full)}`
 
               // The client is told a thumbnail URL, never how one is keyed:
               // `v` is only there so the browser cache turns over when the
@@ -432,7 +439,7 @@ function browseApi(): Plugin {
               const key = thumbKey(full, mtimeMs, size, THUMB_W)
               const canMake = !!sharpMod && kind === 'image'
               const thumb = (canMake || cachedThumb(key))
-                ? `/api/thumb?path=${encodeURIComponent(full)}&v=${Math.round(mtimeMs)}-${size}&w=${THUMB_W}`
+                ? `/api/thumb?path=${encodeUrlParam(full)}&v=${Math.round(mtimeMs)}-${size}&w=${THUMB_W}`
                 : null
 
               return { name: e.name, kind, size, mtimeMs, url, thumb }
@@ -450,26 +457,127 @@ function browseApi(): Plugin {
       })
 
       // Stream a single file from anywhere on disk (see above).
+      //
+      // This is also what the desktop app STORES for a file dropped from
+      // Explorer — referenced in place, not copied — so it has to behave
+      // like a real static server: ranges (a <video> cannot seek without
+      // 206), Content-Length, revalidation, and never taking the dev server
+      // down because a file is locked.
       server.middlewares.use('/api/file', (req, res) => {
-        const url = new URL(req.url ?? '', 'http://x')
-        const p = url.searchParams.get('path')
-        if (!p || !fs.existsSync(p) || !fs.statSync(p).isFile()) {
+        if (req.method !== 'GET' && req.method !== 'HEAD') {
+          res.statusCode = 405
+          res.setHeader('Allow', 'GET, HEAD')
+          res.end()
+          return
+        }
+        const p = new URL(req.url ?? '', 'http://x').searchParams.get('path')
+        // Absolute only: a relative path would resolve against the server's
+        // cwd. No UNC (see isUncPath). Media kinds only (see diskUrl.ts).
+        if (!p || !path.isAbsolute(p) || isUncPath(p) || !isServableDiskPath(p)) {
           res.statusCode = 404
           res.end('not found')
           return
         }
+
+        // Open BEFORE any header is written, so a locked or vanished file
+        // is a clean status code rather than an unhandled stream 'error'
+        // (which kills the Vite process, and the desktop session with it).
+        let fd = -1
+        let st: fs.Stats
+        let real: string
+        try {
+          fd = fs.openSync(p, 'r')
+          st = fs.fstatSync(fd)
+          // The allowlist is re-checked against the file actually opened: an
+          // 8.3 short name (NOTES~1.PNG for notes.pngx) or a symlink can make
+          // the requested string look like media when the file is not.
+          real = fs.realpathSync.native(p)
+        } catch (err) {
+          if (fd !== -1) try { fs.closeSync(fd) } catch { /* ignore */ }
+          const code = (err as { code?: string } | null)?.code
+          res.statusCode = code === 'EBUSY' || code === 'EPERM' || code === 'EACCES' ? 503 : 404
+          res.end()
+          return
+        }
+        if (!st.isFile() || !isServableDiskPath(real)) {
+          fs.closeSync(fd)
+          res.statusCode = 404
+          res.end('not found')
+          return
+        }
+
         const ext = path.extname(p).toLowerCase()
         const types: Record<string, string> = {
-          '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+          '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.jfif': 'image/jpeg',
           '.webp': 'image/webp', '.gif': 'image/gif', '.avif': 'image/avif',
-          '.bmp': 'image/bmp', '.svg': 'image/svg+xml',
-          '.mp4': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime',
-          '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg',
+          '.bmp': 'image/bmp', '.svg': 'image/svg+xml', '.ico': 'image/x-icon',
+          '.tif': 'image/tiff', '.tiff': 'image/tiff', '.heic': 'image/heic', '.jxl': 'image/jxl',
+          '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime',
+          '.mkv': 'video/x-matroska', '.ogv': 'video/ogg',
+          '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.oga': 'audio/ogg',
+          '.opus': 'audio/ogg', '.m4a': 'audio/mp4', '.aac': 'audio/aac', '.flac': 'audio/flac',
           '.glb': 'model/gltf-binary', '.gltf': 'model/gltf+json',
         }
+        const etag = `W/"${st.size.toString(16)}-${Math.round(st.mtimeMs).toString(16)}"`
         res.setHeader('Content-Type', types[ext] ?? 'application/octet-stream')
-        res.setHeader('Cache-Control', 'public, max-age=3600')
-        fs.createReadStream(p).pipe(res)
+        res.setHeader('Accept-Ranges', 'bytes')
+        res.setHeader('ETag', etag)
+        res.setHeader('Last-Modified', st.mtime.toUTCString())
+        // Revalidate every time: the url IS the path, so a file re-exported
+        // in place must not show stale bytes. The ETag keeps that cheap.
+        res.setHeader('Cache-Control', 'no-cache')
+        res.setHeader('X-Content-Type-Options', 'nosniff')
+        // An SVG opened as a document must not run script on this origin.
+        res.setHeader('Content-Security-Policy', 'sandbox')
+        if (req.headers['if-none-match'] === etag) {
+          fs.closeSync(fd)
+          res.statusCode = 304
+          res.end()
+          return
+        }
+
+        // One range, `bytes=a-b`, `bytes=a-` or suffix `bytes=-n` — what a
+        // <video> sends. Anything else (multi-range) gets the whole file.
+        // GET only: a Range on HEAD must be ignored (RFC 9110 §14.2).
+        let start = 0
+        let end = st.size - 1
+        const range = req.headers.range
+        const m = typeof range === 'string' ? /^bytes=(\d*)-(\d*)$/.exec(range.trim()) : null
+        if (req.method === 'GET' && m && (m[1] || m[2])) {
+          if (m[1]) {
+            start = Number(m[1])
+            if (m[2]) end = Math.min(Number(m[2]), st.size - 1)
+          } else {
+            start = Math.max(0, st.size - Number(m[2]))
+          }
+          if (start > end || start >= st.size) {
+            fs.closeSync(fd)
+            res.statusCode = 416
+            res.setHeader('Content-Range', `bytes */${st.size}`)
+            res.end()
+            return
+          }
+          res.statusCode = 206
+          res.setHeader('Content-Range', `bytes ${start}-${end}/${st.size}`)
+        }
+        res.setHeader('Content-Length', String(st.size === 0 ? 0 : end - start + 1))
+        if (req.method === 'HEAD' || st.size === 0) {
+          fs.closeSync(fd)
+          res.end()
+          return
+        }
+        // pipeline() closes the fd when the client aborts (routine while
+        // scrubbing) or the read fails, instead of leaking it or throwing.
+        //
+        // A file that SHRANK after the fstat (re-exported in place mid-play)
+        // ends the stream early, but Node still counts the response as
+        // complete and keeps the socket alive: the <video> would wait ~5 s
+        // for bytes that never come. Kill the socket so it re-requests now.
+        // (res.destroy() is a no-op once the response has finished.)
+        const rs = fs.createReadStream('', { fd, start, end })
+        pipeline(rs, res, () => {
+          if (rs.bytesRead !== end - start + 1) req.socket.destroy()
+        })
       })
 
       // GET  /api/thumb?path=…&v=…&w=384 — a small copy of one file.
@@ -508,7 +616,7 @@ function browseApi(): Plugin {
                   ? data.path
                   : absFromUrl(data.url ?? '')
                 const dataUrl = data.dataUrl ?? ''
-                if (!abs || !fs.existsSync(abs) || !fs.statSync(abs).isFile() ||
+                if (!abs || isUncPath(abs) || !fs.existsSync(abs) || !fs.statSync(abs).isFile() ||
                     !dataUrl.startsWith('data:image/')) {
                   res.statusCode = 400
                   res.end(JSON.stringify({ error: 'bad request' }))
@@ -555,7 +663,7 @@ function browseApi(): Plugin {
         }
 
         const p = new URL(req.url ?? '', 'http://x').searchParams.get('path')
-        if (!p || !path.isAbsolute(p) || !fs.existsSync(p) || !fs.statSync(p).isFile()) {
+        if (!p || !path.isAbsolute(p) || isUncPath(p) || !fs.existsSync(p) || !fs.statSync(p).isFile()) {
           res.statusCode = 404
           res.end('not found')
           return
@@ -572,7 +680,9 @@ function browseApi(): Plugin {
           // a changed file is a different url.
           res.setHeader('Content-Type', hit.endsWith('.png') ? 'image/png' : 'image/jpeg')
           res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
-          fs.createReadStream(hit).pipe(res)
+          // pipeline, not .pipe(): a cache file deleted or locked after the
+          // lookup must fail this response, not crash the dev server.
+          pipeline(fs.createReadStream(hit), res, () => {})
           return
         }
 
@@ -603,6 +713,21 @@ function browseApi(): Plugin {
   }
 }
 
+/** Vite plugin: GET /api/ping — "this is VidBars", for the desktop shell's
+ *  readiness check. Deliberately trivial: the obvious alternatives
+ *  (snapshot listing) read gigabytes and time the probe out. */
+function pingApi(): Plugin {
+  return {
+    name: 'ping-api',
+    configureServer(server) {
+      server.middlewares.use('/api/ping', (_req, res) => {
+        res.setHeader('Content-Type', 'application/json')
+        res.end(JSON.stringify({ app: 'vidbars' }))
+      })
+    },
+  }
+}
+
 export default defineConfig({
-  plugins: [react(), tailwindcss(), fileUploadApi(), userTemplatesApi(), snapshotsApi(), browseApi()],
+  plugins: [react(), tailwindcss(), pingApi(), fileUploadApi(), userTemplatesApi(), snapshotsApi(), browseApi()],
 })

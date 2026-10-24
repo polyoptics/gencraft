@@ -35,6 +35,7 @@ import {
 import { getModelPoster, ensureModelPoster, invalidateModelPoster, useModelPoster, usePosterMapStore } from '../../three/posterService'
 import { useThumb, requestThumb } from '../../utils/thumbService'
 import { useResolvedMedia } from '../../utils/useResolvedMedia'
+import { cssUrl } from '../../utils/diskUrl'
 import { usePoolStore, loadPoolDir, type PoolFile } from '../../store/poolStore'
 import { poolFeedingList, viewerAdjacentTo } from '../../utils/componentLinks'
 import { useViewport3DStore } from '../../store/viewport3dStore'
@@ -45,6 +46,8 @@ import {
   type TextStyle,
 } from '../../store/freeNodeStore'
 import { ensureFontLoaded, hexToRgba } from '../UI/TextFormatToolbar'
+import { FileContextMenu } from '../UI/FileMenu'
+import { mayHaveDiskFile } from '../../hooks/useFileMenu'
 
 // Card width — uniform across active and tucked cards. The active card
 // "rises" only via vertical growth (expansion); it's never wider than
@@ -2204,12 +2207,23 @@ const RolodexPoolSlot: React.FC<{
   const centerness = Math.max(0, 1 - Math.abs(offset))
   const exposure = Math.min(1, Math.max(0, (expansionFraction - 0.15) / 0.2))
   const borderRGB = Math.round(255 * centerness)
+  // Desktop only, and the same menu the pool tile gives: the file on disk
+  // behind this slot. Anywhere else the right-click is left alone, so the
+  // host's menu is exactly what it was.
+  const [fileMenu, setFileMenu] = useState<{ x: number; y: number } | null>(null)
+  const closeFileMenu = useCallback(() => setFileMenu(null), [])
   return (
     <div
       onClick={onClick}
       onPointerDown={e => { if (e.button === 0) e.stopPropagation() }}
       onMouseEnter={onHoverEnter}
       onMouseLeave={onHoverLeave}
+      onContextMenu={e => {
+        if (!mayHaveDiskFile(file.url)) return
+        e.preventDefault()
+        e.stopPropagation()
+        setFileMenu({ x: e.clientX, y: e.clientY })
+      }}
       draggable
       onDragStart={e => {
         // Byte-identical to the pool's own dragstart, including the
@@ -2247,6 +2261,9 @@ const RolodexPoolSlot: React.FC<{
           textShadow: '0 1px 3px rgba(0,0,0,0.8)',
         }}>{file.name}</span>
       </div>
+      {fileMenu && (
+        <FileContextMenu x={fileMenu.x} y={fileMenu.y} url={file.url} onClose={closeFileMenu} />
+      )}
     </div>
   )
 }
@@ -2276,7 +2293,7 @@ const ModelRowThumb: React.FC<{ src: string; modelUrl: string | null; size: numb
   return (
     <div style={{
       width: size, height: size, flexShrink: 0, borderRadius: 3,
-      background: resolved ? `#0c0e18 center/cover no-repeat url("${resolved}")` : 'rgba(255,255,255,0.10)',
+      background: resolved ? `#0c0e18 center/cover no-repeat ${cssUrl(resolved)}` : 'rgba(255,255,255,0.10)',
       border: '1px solid rgba(255,255,255,0.18)',
     }} />
   )

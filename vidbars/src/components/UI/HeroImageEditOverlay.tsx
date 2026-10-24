@@ -3,6 +3,7 @@ import React, { useState, useCallback, useEffect, useRef } from 'react'
 import ReactDOM from 'react-dom'
 import type { HeroImageTransform } from '../../store/boardsStore'
 import { useResolvedMedia } from '../../utils/useResolvedMedia'
+import { cssUrl } from '../../utils/diskUrl'
 
 interface Props {
   cardRect: { left: number; top: number; width: number; height: number }
@@ -112,7 +113,7 @@ export const HeroImageEditOverlay: React.FC<Props> = ({ cardRect, heroImage, ini
         top: cardRect.top - cardRect.height * 0.25,
         width: cardRect.width * 1.5,
         height: cardRect.height * 1.5,
-        backgroundImage: `url(${resolvedHero})`,
+        backgroundImage: cssUrl(resolvedHero),
         backgroundSize: bgSize,
         backgroundPosition: bgPos,
         backgroundRepeat: 'no-repeat',
@@ -145,7 +146,7 @@ export const HeroImageEditOverlay: React.FC<Props> = ({ cardRect, heroImage, ini
       >
         <div style={{
           position: 'absolute', inset: 0,
-          backgroundImage: `url(${resolvedHero})`,
+          backgroundImage: cssUrl(resolvedHero),
           backgroundSize: bgSize,
           backgroundPosition: bgPos,
           backgroundRepeat: 'no-repeat',

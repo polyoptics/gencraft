@@ -29,6 +29,8 @@ import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
 import { DrawableSurface } from '../Annotation/DrawableSurface'
 import { PenButton } from '../Annotation/PenButton'
 import { useSeedHoverFromCursor } from '../../utils/pointerTracker'
+import { useFileMenuItems } from '../../hooks/useFileMenu'
+import { useMenuClamp } from '../../hooks/useMenuClamp'
 
 
 /** Node types whose corner resize keeps the current proportions. A
@@ -36,6 +38,11 @@ import { useSeedHoverFromCursor } from '../../utils/pointerTracker'
  *  the cabinet — so the corner's job is only to grow the shape the drawer
  *  set, not to fight it. */
 const LOCKS_ASPECT = new Set<FreeNodeData['type']>(['list'])
+
+/** Node types whose `imageUrl` IS the media — the stored file itself, a
+ *  model's .glb rather than its poster — so the context menu can offer
+ *  the file on disk behind it. Panels and text tiles never hold one. */
+const MEDIA_TILES = new Set<FreeNodeData['type']>(['image', 'video', 'audio', 'model'])
 
 /** The poster to hand on when a model tile transfers its content.
  *
@@ -86,6 +93,13 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
   const [nodeMenu, setNodeMenu] = useState<{ x: number; y: number } | null>(null)
   const [textEditing, setTextEditing] = useState(false)
   const [isEditingImage, setIsEditingImage] = useState(false)
+  const closeMenu = useCallback(() => setNodeMenu(null), [])
+  // Desktop "Show in Explorer / Copy path / Open" for the context menu.
+  // The url goes in only while the menu is open, so a closed menu resolves
+  // nothing; in a plain browser this is always [].
+  const fileMenuUrl = nodeMenu && node && MEDIA_TILES.has(node.type) ? node.imageUrl : null
+  const fileItems = useFileMenuItems(fileMenuUrl, closeMenu)
+  const { ref: nodeMenuRef, top: nodeMenuTop } = useMenuClamp(nodeMenu?.y ?? 0, nodeMenu ? fileItems.length : -1)
 
   const renameRef = useRef<HTMLInputElement>(null)
   const wrapperRef = useRef<HTMLDivElement>(null)
@@ -893,11 +907,12 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
         <>
           <div style={{ position: 'fixed', inset: 0, zIndex: 9998 }} onPointerDown={() => setNodeMenu(null)} />
           <div
+            ref={nodeMenuRef}
             onPointerDown={e => e.stopPropagation()}
             style={{
               position: 'fixed',
               left: Math.min(nodeMenu.x, window.innerWidth - 180),
-              top: Math.min(nodeMenu.y, window.innerHeight - 200),
+              top: nodeMenuTop,
               width: 170, zIndex: 9999,
               background: '#1e1f30', border: '1px solid rgba(255,255,255,0.1)',
               borderRadius: 10, boxShadow: '0 12px 40px rgba(0,0,0,0.6)',
@@ -938,23 +953,29 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
                   } },
               ] : []),
               { label: 'Delete', icon: '🗑️', danger: true, action: () => { useUndoCoordinator.getState().checkpoint(); deleteFreeNode(id); setNodeMenu(null) } },
+              ...fileItems,
             ].map(item => (
-              <button
-                key={item.label}
-                onClick={item.action}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 9,
-                  width: '100%', padding: '7px 14px',
-                  background: 'none', border: 'none', cursor: 'pointer',
-                  color: ('danger' in item && item.danger) ? '#f87171' : '#e2e8f0',
-                  fontSize: 13, textAlign: 'left', borderRadius: 4,
-                }}
-                onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.07)')}
-                onMouseLeave={e => (e.currentTarget.style.background = 'none')}
-              >
-                <span style={{ fontSize: 14, width: 18, textAlign: 'center' }}>{item.icon}</span>
-                {item.label}
-              </button>
+              <React.Fragment key={item.label}>
+                {/* Same rule as the header's: a divider above the file group. */}
+                {('separator' in item && item.separator) && (
+                  <div style={{ borderTop: '1px solid rgba(255,255,255,0.07)', margin: '4px 0' }} />
+                )}
+                <button
+                  onClick={item.action}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 9,
+                    width: '100%', padding: '7px 14px',
+                    background: 'none', border: 'none', cursor: 'pointer',
+                    color: ('danger' in item && item.danger) ? '#f87171' : '#e2e8f0',
+                    fontSize: 13, textAlign: 'left', borderRadius: 4,
+                  }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.07)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'none')}
+                >
+                  <span style={{ fontSize: 14, width: 18, textAlign: 'center' }}>{item.icon}</span>
+                  {item.label}
+                </button>
+              </React.Fragment>
             ))}
           </div>
         </>,

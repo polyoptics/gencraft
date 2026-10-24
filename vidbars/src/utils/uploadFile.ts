@@ -1,5 +1,6 @@
 import { putMedia } from './mediaStore'
 import { makeMediaRef } from './mediaRef'
+import { diskFileUrl, isServableDiskPath } from './diskUrl'
 import type { MediaType } from '../types/bar'
 
 export interface UploadResult {
@@ -52,19 +53,50 @@ function mirrorToServer(file: File): void {
   fetch('/api/upload', { method: 'POST', body: form }).catch(() => {})
 }
 
-/**
- * Ingest a dropped/picked file. Stores the bytes in the LOCAL IndexedDB
- * blob store FIRST and returns a `mediaref:` — local-first because the
- * project backup only bundles blob-store media: a server `/uploads/` path
- * is invisible to the exporter and dead without the dev server. A raw copy
- * is still mirrored to the server's uploads folder as an on-disk archive.
+/** Desktop only: the stored url for a file REFERENCED IN PLACE, or null
+ *  when it must be copied instead — a plain browser, a file with no path
+ *  (pasted, generated), a temp copy (dragged out of a zip or an email,
+ *  deleted afterwards), or a kind /api/file will not serve.
  *
- * Fallbacks if the blob store fails (e.g. quota): server upload (the
- * load-time localization sweep pulls it local later), then an inline
- * base64 data URL — a drop is never lost.
+ *  Takes the ORIGINAL File: withKnownMime's slice() is a path-less Blob.
+ *  Each bridge method is feature-detected because a hot reload can pair
+ *  this code with an older preload that predates it. */
+async function diskReference(file: File): Promise<string | null> {
+  const d = window.vidbarsDesktop
+  if (!d || typeof d.pathForFile !== 'function' || typeof d.isStablePath !== 'function') return null
+  const p = d.pathForFile(file)
+  if (!p || !isServableDiskPath(p)) return null
+  try {
+    if (!(await d.isStablePath(p))) return null
+    // Size + mtime as dropped: a re-export to the same path is a new url,
+    // so posters and parsed models cached by url do not stick to the old one.
+    return diskFileUrl(p, `${file.size.toString(36)}-${file.lastModified.toString(36)}`)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Ingest a dropped/picked file.
+ *
+ * In the DESKTOP app a file from disk is referenced where it sits
+ * (`/api/file?path=…`) and nothing is copied: the canvas is a map of the
+ * user's drive, not a second copy of it. The trade-off is deliberate — a
+ * project backup carries the reference, not the bytes, and moving or
+ * deleting the file in Explorer breaks the tile.
+ *
+ * Otherwise the bytes go into the LOCAL IndexedDB blob store and a
+ * `mediaref:` comes back — local-first because the project backup only
+ * bundles blob-store media. A raw copy is still mirrored to the server's
+ * uploads folder as an on-disk archive.
+ *
+ * Fallbacks if the blob store fails (e.g. quota): server upload, then an
+ * inline base64 data URL — a drop is never lost.
  */
 export async function uploadFile(file: File): Promise<UploadResult> {
   const type = classifyFile(file)
+  const ref = await diskReference(file)
+  if (ref) return { url: ref, type, originalName: file.name }
   try {
     const id = await putMedia(withKnownMime(file))
     mirrorToServer(file)

@@ -2,6 +2,7 @@
 import React from 'react'
 import type { HeroImageTransform } from '../../store/boardsStore'
 import { useResolvedMedia } from '../../utils/useResolvedMedia'
+import { cssUrl } from '../../utils/diskUrl'
 
 interface Props {
   heroImage: string
@@ -32,7 +33,7 @@ export const HeroImageLayer: React.FC<Props> = ({ heroImage, transform, borderRa
   return (
     <div style={{
       position: 'absolute', inset: 0,
-      backgroundImage: `url(${resolved})`,
+      backgroundImage: cssUrl(resolved),
       backgroundSize: bgSize,
       backgroundPosition: bgPos,
       backgroundRepeat: 'no-repeat',

@@ -37,6 +37,8 @@ import { ContentView } from './ContentViews'
 import { snapWindowToComponents } from '../../utils/componentLinks'
 import { useMagnetPreviewStore } from '../../store/magnetPreviewStore'
 import { viewportVisualRect, VIEWPORT_HEADER_SCREEN_H } from '../../utils/viewportDocking'
+import { FileContextMenu } from '../UI/FileMenu'
+import { mayHaveDiskFile } from '../../hooks/useFileMenu'
 
 /** Selecting a Viewer takes over the canvas selection outright, so the
  *  Delete key's priority chain is never asked to arbitrate between two lit
@@ -278,9 +280,37 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
   //    canvas pan. ──
   const gestureMode = useRef<'orbit' | 'pan'>('orbit')
   const modelActiveRef = useRef(false)
+
+  // ── Right-click → file menu (desktop app) ── right-DRAG pans the model,
+  //    so a right press only counts as a click if it never strays past
+  //    4px. Windows fires contextmenu on RELEASE and decides on the spot;
+  //    macOS/Linux fire it on PRESS, so there it waits for the pointerup.
+  const rightPress = useRef<{
+    x: number; y: number; dragged: boolean; released: boolean; pending: boolean
+  } | null>(null)
+  const [fileMenu, setFileMenu] = useState<{ x: number; y: number; url: string } | null>(null)
+  const closeFileMenu = useCallback(() => setFileMenu(null), [])
+  const openFileMenuIfClick = useCallback((x: number, y: number) => {
+    const p = rightPress.current
+    rightPress.current = null
+    if (!p || p.dragged || Math.hypot(x - p.x, y - p.y) > 4) return
+    // The item's SOURCE url — for a model that is the file, not its poster.
+    const a = useViewport3DStore.getState().windows[id]?.activeItem
+    if (a?.kind === 'media' && mayHaveDiskFile(a.url)) setFileMenu({ x, y, url: a.url })
+  }, [id])
+  const onBodyContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()    // never the browser's menu — right-drag is a gesture here
+    e.stopPropagation()
+    const p = rightPress.current
+    if (p && !p.released && (e.buttons & 2)) { p.pending = true; return }   // fired at press
+    openFileMenuIfClick(e.clientX, e.clientY)
+  }, [openFileMenuIfClick])
+
   const onBodyDown = useCallback((e: React.PointerEvent) => {
     if (e.button !== 0 && e.button !== 2) return
     e.stopPropagation()   // canvas never pans from a body gesture, any mode
+    rightPress.current = e.button === 2
+      ? { x: e.clientX, y: e.clientY, dragged: false, released: false, pending: false } : null
     if (!modelActiveRef.current || status.status !== 'ready') return
     gestureMode.current = (e.button === 2 || e.shiftKey) ? 'pan' : 'orbit'
     orbitActive.current = true
@@ -288,6 +318,8 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
   }, [status.status])
   const onBodyMove = useCallback((e: React.PointerEvent) => {
+    const p = rightPress.current
+    if (p && !p.dragged && Math.hypot(e.clientX - p.x, e.clientY - p.y) > 4) p.dragged = true
     if (!orbitActive.current || !(e.currentTarget as HTMLElement).hasPointerCapture(e.pointerId)) return
     const view = getViewRuntime(id)
     if (!view) return
@@ -306,12 +338,17 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
     orbitLast.current = { x: e.clientX, y: e.clientY }
     requestRender()
   }, [id, zoom])
-  const onBodyUp = useCallback(() => {
+  const onBodyUp = useCallback((e: React.PointerEvent) => {
+    const p = rightPress.current
+    if (e.button === 2 && p) {
+      if (p.pending) openFileMenuIfClick(e.clientX, e.clientY)
+      else p.released = true
+    }
     if (!orbitActive.current) return
     orbitActive.current = false
     const view = getViewRuntime(id)
     if (view && view.status === 'ready') saveCamera(id, { ...view.orbit })
-  }, [id, saveCamera])
+  }, [id, saveCamera, openFileMenuIfClick])
   const onBodyWheel = useCallback((e: React.WheelEvent) => {
     e.stopPropagation()   // MANDATORY — else the canvas zooms mid-dolly
     if (!modelActiveRef.current) return   // DOM views own their wheel
@@ -360,7 +397,7 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
   const glPoster = modelActive && status.status === 'ready' && glTooSmall
   const showBodyOverlay = showEmpty || showLoading || showError || glPoster
 
-  return (
+  const frame = (
     <div
       ref={wrapperRef}
       data-viewport3d={id}
@@ -502,7 +539,7 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
         onPointerMove={onBodyMove}
         onPointerUp={onBodyUp}
         onWheel={onBodyWheel}
-        onContextMenu={e => { e.preventDefault(); e.stopPropagation() }}
+        onContextMenu={onBodyContextMenu}
         style={{
           flex: 1, position: 'relative',
           // Transparent for GL/empty (grid shows around, GL beneath);
@@ -685,5 +722,18 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
         </div>
       </div>
     </div>
+  )
+
+  // The menu is a SIBLING of the frame, not a child: portal events bubble
+  // through the React tree, and inside the wrapper a press on its backdrop
+  // would hit onSelectDownCapture and select this window. Always the same
+  // fragment shape, so opening it never remounts the frame (or its video).
+  return (
+    <>
+      {frame}
+      {fileMenu && (
+        <FileContextMenu x={fileMenu.x} y={fileMenu.y} url={fileMenu.url} onClose={closeFileMenu} />
+      )}
+    </>
   )
 })

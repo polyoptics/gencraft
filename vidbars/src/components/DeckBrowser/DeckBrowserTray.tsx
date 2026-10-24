@@ -10,6 +10,7 @@ import React, { useState } from 'react'
 import { useBoardsStore } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useLinkDragStore } from '../../store/linkDragStore'
+import { cssUrl } from '../../utils/diskUrl'
 
 const APP_TOOLBAR_H = 38
 const TRAY_HEIGHT = 150
@@ -158,7 +159,7 @@ const DeckTile: React.FC<{
       {hero && (
         <div style={{
           position: 'absolute', inset: 0,
-          backgroundImage: `url(${hero})`,
+          backgroundImage: cssUrl(hero),
           backgroundSize: 'cover',
           // show the top slice of the hero since a canonical card shows hero
           // starting from its top

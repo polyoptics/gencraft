@@ -40,6 +40,8 @@ import { useCanvasStore } from '../../store/canvasStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { useThumb, requestThumb, getThumb, isThumbPending, hasThumbFailed } from '../../utils/thumbService'
 import { ContentScaled, panelContentScale, clampUiScale, UI_SCALE_MIN, UI_SCALE_MAX } from '../UI/PanelSurface'
+import { FileContextMenu } from '../UI/FileMenu'
+import { mayHaveDiskFile } from '../../hooks/useFileMenu'
 
 /** Target tile size in SCREEN pixels. These used to be canvas pixels,
  *  which made "mid" 14 real pixels wide at block zoom. The grid fills the
@@ -152,6 +154,19 @@ const FileTile = React.memo<TileProps>(({ file, side, selected, thumbsPossible, 
 
   const captioned = side >= 78
 
+  // Desktop only: right-click offers the file on disk behind this tile —
+  // file.url, the listing's own, never the thumbnail standing in for it.
+  // Anywhere else the event is left alone, so the panel's menu is exactly
+  // what it was.
+  const [fileMenu, setFileMenu] = useState<{ x: number; y: number } | null>(null)
+  const closeFileMenu = useCallback(() => setFileMenu(null), [])
+  const contextMenu = (e: React.MouseEvent) => {
+    if (!mayHaveDiskFile(file.url)) return
+    e.preventDefault()
+    e.stopPropagation()
+    setFileMenu({ x: e.clientX, y: e.clientY })
+  }
+
   const dragStart = (e: React.DragEvent) => {
     const payload = JSON.stringify({ url: file.url, label: file.name, kind: file.kind })
     e.dataTransfer.setData('application/x-vidbars-pool', payload)
@@ -172,6 +187,7 @@ const FileTile = React.memo<TileProps>(({ file, side, selected, thumbsPossible, 
       onDragStart={dragStart}
       onClick={() => onSelect(file.id)}
       onDoubleClick={() => onPlace(file)}
+      onContextMenu={contextMenu}
       title={`${file.name}${file.size ? ` · ${Math.round(file.size / 1024)}KB` : ''}\ndrag onto the canvas, or double-click to place`}
       style={{
         position: 'relative', height: side, minWidth: 0,
@@ -256,6 +272,10 @@ const FileTile = React.memo<TileProps>(({ file, side, selected, thumbsPossible, 
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           pointerEvents: 'none',
         }}>{file.name}</div>
+      )}
+
+      {fileMenu && (
+        <FileContextMenu x={fileMenu.x} y={fileMenu.y} url={file.url} onClose={closeFileMenu} />
       )}
     </div>
   )

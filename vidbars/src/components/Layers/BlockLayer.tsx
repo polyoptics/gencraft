@@ -21,7 +21,9 @@ import { tryDockGroupAtRest, updateDeckMagnetPreview } from '../../utils/deckDoc
 import { useMagnetPreviewStore } from '../../store/magnetPreviewStore'
 import { groupHasBrowsableContent } from '../../utils/contentTraversal'
 import { DEFAULT_H } from '../../utils/barConstants'
-import { getFirstImageUrl } from '../../types/bar'
+import { getFirstImageUrl, getFirstMediaSource } from '../../types/bar'
+import { useFileMenuItems } from '../../hooks/useFileMenu'
+import { useMenuClamp } from '../../hooks/useMenuClamp'
 import { HeroImageLayer } from './HeroImageLayer'
 import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
 import { ColorPickerPopup } from '../Bar/ColorPickerPopup'
@@ -48,6 +50,18 @@ const GripDots: React.FC<{ size?: number; opacity?: number }> = ({ size = 10, op
     )))}
   </svg>
 )
+
+/** The file behind a block's thumbnail, for the desktop file items on its
+ *  menu. Mirrors BlockItem's `thumbnail`: the override if set, else the first
+ *  root bar with a picture — read for its SOURCE, so a video or model block
+ *  names the clip or model, not its poster. Keep the two in step. */
+function blockThumbnailSource(board: import('../../store/boardsStore').BoardData | undefined): string | null {
+  if (!board) return null
+  const override = board.layers?.block?.thumbnail
+  if (override != null) return override
+  const bar = board.rootIds.map(id => board.bars[id]).find(b => b && getFirstImageUrl(b.content))
+  return bar ? getFirstMediaSource(bar.content) : null
+}
 
 const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
   const board = useBoardsStore(s => s.boards[boardId])
@@ -76,6 +90,12 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
   // this block swaps in under a stationary cursor and pointerenter wouldn't fire.
   useSeedHoverFromCursor(blockHoverRef, setIsHovered)
   const [isEditingImage, setIsEditingImage] = useState(false)
+  // Desktop file items for the block menu. Resolved only while the menu is
+  // open, so a canvas full of blocks does not ask the bridge about every
+  // file up front. Always empty in a plain browser.
+  const blockMenuFile = blockMenu ? blockThumbnailSource(board) : null
+  const fileItems = useFileMenuItems(blockMenuFile, () => setBlockMenu(null))
+  const { ref: blockMenuRef, top: blockMenuTop } = useMenuClamp(blockMenu?.y ?? 0, blockMenu ? fileItems.length : -1)
 
   const commitRename = useCallback(() => {
     if (renameVal.trim()) {
@@ -773,11 +793,12 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
         <>
           <div style={{ position: 'fixed', inset: 0, zIndex: 9998 }} onPointerDown={() => setBlockMenu(null)} />
           <div
+            ref={blockMenuRef}
             onPointerDown={e => e.stopPropagation()}
             style={{
               position: 'fixed',
               left: Math.min(blockMenu.x, window.innerWidth - 180),
-              top: Math.min(blockMenu.y, window.innerHeight - 220),
+              top: blockMenuTop,
               width: 180, zIndex: 9999,
               background: '#1e1f30', border: '1px solid rgba(255,255,255,0.1)',
               borderRadius: 10, boxShadow: '0 12px 40px rgba(0,0,0,0.6)',
@@ -816,22 +837,27 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
               // single way to move a block into an EXISTING group. Keeping
               // "Move to New Group" because there's no equivalent drag target
               // (it spins up a brand-new group).
+              ...fileItems,
             ].map(item => (
-              <button
-                key={item.label}
-                onClick={item.action}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 9,
-                  width: '100%', padding: '7px 14px',
-                  background: 'none', border: 'none', cursor: 'pointer',
-                  color: '#e2e8f0', fontSize: 13, textAlign: 'left', borderRadius: 4,
-                }}
-                onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.07)')}
-                onMouseLeave={e => (e.currentTarget.style.background = 'none')}
-              >
-                <span style={{ fontSize: 14, width: 18, textAlign: 'center' }}>{item.icon}</span>
-                {item.label}
-              </button>
+              <React.Fragment key={item.label}>
+                {item.separator && (
+                  <div style={{ height: 1, background: 'rgba(255,255,255,0.07)', margin: '4px 0' }} />
+                )}
+                <button
+                  onClick={item.action}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 9,
+                    width: '100%', padding: '7px 14px',
+                    background: 'none', border: 'none', cursor: 'pointer',
+                    color: '#e2e8f0', fontSize: 13, textAlign: 'left', borderRadius: 4,
+                  }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.07)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'none')}
+                >
+                  <span style={{ fontSize: 14, width: 18, textAlign: 'center' }}>{item.icon}</span>
+                  {item.label}
+                </button>
+              </React.Fragment>
             ))}
           </div>
         </>,

@@ -1,8 +1,11 @@
-import React, { useEffect, useRef } from 'react'
+import React, { useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { useBoardCtx } from '../../contexts/BoardContext'
 import { useBoardsStore } from '../../store/boardsStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
+import { getFirstMediaSource } from '../../types/bar'
+import { useFileMenuItems } from '../../hooks/useFileMenu'
+import { useMenuClamp } from '../../hooks/useMenuClamp'
 
 interface Props {
   x: number
@@ -19,7 +22,9 @@ export const ContextMenu: React.FC<Props> = ({
 }) => {
   const ctx = useBoardCtx()
   const bar = ctx.bars[barId]
-  const menuRef = useRef<HTMLDivElement>(null)
+  // The file behind the bar's picture (desktop only; [] in a browser).
+  const fileItems = useFileMenuItems(getFirstMediaSource(bar?.content), onClose)
+  const { ref: menuRef, top: ay } = useMenuClamp(y, `${barId}:${fileItems.length}`)
 
   useEffect(() => {
     const close = (e: MouseEvent) => {
@@ -27,7 +32,7 @@ export const ContextMenu: React.FC<Props> = ({
     }
     const tid = setTimeout(() => document.addEventListener('mousedown', close), 0)
     return () => { clearTimeout(tid); document.removeEventListener('mousedown', close) }
-  }, [onClose])
+  }, [onClose, menuRef])
 
   if (!bar) return null
 
@@ -68,12 +73,12 @@ export const ContextMenu: React.FC<Props> = ({
       action: () => { useUndoCoordinator.getState().checkpoint(); ctx.deleteSubtree(barId); onClose() },
       danger: true,
     },
+    ...fileItems.flatMap(({ separator, label, icon, action }) =>
+      separator ? [{ sep: true }, { label, icon, action }] : [{ label, icon, action }]),
   ]
 
   const menuW = 200
-  const menuH = 260
   const ax = Math.min(x, window.innerWidth - menuW - 8)
-  const ay = Math.min(y, window.innerHeight - menuH - 8)
 
   return createPortal(
     <div

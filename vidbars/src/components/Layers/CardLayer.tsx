@@ -5,7 +5,7 @@
 import React, { useMemo, useState, useCallback, useRef, useLayoutEffect, useDeferredValue, Fragment } from 'react'
 import ReactDOM from 'react-dom'
 import { useBoardsStore, getUngroupedBoardIds } from '../../store/boardsStore'
-import type { ProjectGroup } from '../../store/boardsStore'
+import type { ProjectGroup, BoardData } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useCardView } from './cardView'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
@@ -29,8 +29,11 @@ import { Viewport3DLayer } from '../Viewport3D/Viewport3DLayer'
 import { NLETimelineHeader, NLE_HEADER_CANVAS_H, headerExtend as computeHeaderExtend, headerScreenH, overviewScale } from '../NLE/NLETimelineHeader'
 import { HeroImageLayer } from './HeroImageLayer'
 import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
-import { getFirstImageUrl } from '../../types/bar'
+import { getFirstImageUrl, getFirstMediaSource } from '../../types/bar'
 import { hexToHsl, hslToHex, selectionHighlight } from '../../utils/colorUtils'
+import { cssUrl } from '../../utils/diskUrl'
+import { useFileMenuItems } from '../../hooks/useFileMenu'
+import { useMenuClamp } from '../../hooks/useMenuClamp'
 import { DrawableSurface } from '../Annotation/DrawableSurface'
 import { PenButton } from '../Annotation/PenButton'
 import { useSeedHoverFromCursor } from '../../utils/pointerTracker'
@@ -65,18 +68,37 @@ function startOverlayPan(e: React.PointerEvent) {
   window.addEventListener('pointerup', onUp)
 }
 
+/** The stored url of the file behind a card's hero, for the file menu.
+ *  Walks the same order as every hero loop in this file (override, then
+ *  boardIds → rootIds, first bar with a picture wins) so it names the bar
+ *  the card is SHOWING — but returns that bar's source, not its poster. */
+function groupHeroSource(g: ProjectGroup, boards: Record<string, BoardData>): string | null {
+  if (g.cardHeroImage) return g.cardHeroImage
+  for (const bid of g.boardIds) {
+    const board = boards[bid]
+    if (!board) continue
+    for (const rid of board.rootIds) {
+      const content = board.bars[rid]?.content
+      if (getFirstImageUrl(content)) return getFirstMediaSource(content)
+    }
+  }
+  return null
+}
+
 /** Shared context menu for all card types (GroupCard, StackedDeckCard, FannedDeckOverlay) */
 const CardContextMenu: React.FC<{
   pos: { x: number; y: number }
   group: ProjectGroup
   heroImage: string | null
+  mediaSource: string | null // file behind the picture shown — see groupHeroSource
   deckMemberIds?: string[]   // if this card is part of a deck
   deckState?: 'open' | 'fanned' | 'stacked'
   onClose: () => void
   onEditHeroImage?: () => void
-}> = ({ pos, group, heroImage, deckMemberIds, deckState, onClose, onEditHeroImage }) => {
+}> = ({ pos, group, heroImage, mediaSource, deckMemberIds, deckState, onClose, onEditHeroImage }) => {
   const groups = useBoardsStore(s => s.groups)
   const [colorPicker, setColorPicker] = useState<{ x: number; y: number } | null>(null)
+  const fileItems = useFileMenuItems(mediaSource, onClose)
 
   const menuItems: { label: string; icon: string; action: () => void; danger?: boolean; separator?: boolean }[] = []
 
@@ -207,15 +229,20 @@ const CardContextMenu: React.FC<{
     onClose()
   }})
 
+  // File on disk behind the hero — desktop app only, empty in a browser
+  menuItems.push(...fileItems)
+  const { ref: menuRef, top: menuTop } = useMenuClamp(pos.y, menuItems.length)
+
   return ReactDOM.createPortal(
     <>
       <div style={{ position: 'fixed', inset: 0, zIndex: 9998 }} onPointerDown={onClose} />
       <div
+        ref={menuRef}
         onPointerDown={e => e.stopPropagation()}
         style={{
           position: 'fixed',
           left: Math.min(pos.x, window.innerWidth - 200),
-          top: Math.min(pos.y, window.innerHeight - 300),
+          top: menuTop,
           width: 200, zIndex: 9999,
           background: '#1e1f30', border: '1px solid rgba(255,255,255,0.1)',
           borderRadius: 10, boxShadow: '0 12px 40px rgba(0,0,0,0.6)',
@@ -681,7 +708,7 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
       </div>
 
       {cardMenu && (
-        <CardContextMenu pos={cardMenu} group={group} heroImage={heroImage} onClose={() => setCardMenu(null)} onEditHeroImage={() => setIsEditingHero(true)} />
+        <CardContextMenu pos={cardMenu} group={group} heroImage={heroImage} mediaSource={groupHeroSource(group, boards)} onClose={() => setCardMenu(null)} onEditHeroImage={() => setIsEditingHero(true)} />
       )}
 
       {isEditingHero && heroImage && (
@@ -1399,6 +1426,7 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
           pos={cardMenu}
           group={anchorGroup}
           heroImage={heroImage}
+          mediaSource={groupHeroSource(anchorGroup, boards)}
           deckMemberIds={deck.memberIds}
           deckState={deck.state}
           onClose={() => setCardMenu(null)}
@@ -1436,7 +1464,8 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
   const extractingCardId = useCanvasStore(s => s.extractingCardId)
   const fanTransition = useCanvasStore(s => s.fanTransition)
   const [, setIsHovered] = useState(false)
-  const [cardMenu, setCardMenu] = useState<{ x: number; y: number } | null>(null)
+  // faceId: whose picture was under the cursor — see faceUnderCursor
+  const [cardMenu, setCardMenu] = useState<{ x: number; y: number; faceId: string } | null>(null)
   const [surfacedId, setSurfacedId] = useState<string | null>(null)
   const [isEditingHero, setIsEditingHero] = useState(false)
 
@@ -1956,6 +1985,22 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
     return null
   }, [surfacedGroup, boards])
 
+  // Whose picture a right-click landed on. The card menu's own actions all
+  // act on the anchor, but its file items should name the picture under
+  // the cursor: a strip shows its own card (ghosts included); anywhere else
+  // is the face, which is the surfaced member while one is up. Use
+  // surfacedGroup, not effectiveSurfacedId: a portal lock can outlive its
+  // member leaving the deck, and the face then falls back to the anchor.
+  const faceUnderCursor = (target: EventTarget): string => {
+    for (const item of secondaryItems) {
+      const el = stripRefs.current.get(item.kind === 'ghost' ? `ghost-${item.cardId}` : item.group.id)
+      if (el?.contains(target as Node)) return item.kind === 'ghost' ? item.cardId : item.group.id
+    }
+    return surfacedGroup?.id ?? anchorGroup.id
+  }
+  // A deleted ghost's card resolves to nothing — no file items, not the anchor's.
+  const menuFace = cardMenu ? allGroups.find(g => g.id === cardMenu.faceId) ?? null : null
+
   return (
     <>
       {/* Single hover wrapper — primary card + strips + controls */}
@@ -1985,7 +2030,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
           useCanvasStore.getState().setCardHoveredDeckId(null)
         }
       }}
-      onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setCardMenu({ x: e.clientX, y: e.clientY }) }}
+      onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setCardMenu({ x: e.clientX, y: e.clientY, faceId: faceUnderCursor(e.target) }) }}
       onWheel={e => {
         e.stopPropagation()
         const f = e.deltaY < 0 ? 1.12 : 1 / 1.12
@@ -2073,7 +2118,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
               {ghostHero && (
                 <div style={{
                   position: 'absolute', inset: 0,
-                  backgroundImage: `url(${ghostHero})`,
+                  backgroundImage: cssUrl(ghostHero),
                   backgroundSize: 'cover',
                   backgroundPosition: 'center',
                   opacity: 0.18,
@@ -2220,7 +2265,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
             {scHero && (
               <div style={{
                 position: 'absolute', inset: 0,
-                backgroundImage: `url(${scHero})`,
+                backgroundImage: cssUrl(scHero),
                 backgroundSize: 'cover',
                 backgroundPosition: 'center',
                 opacity: 0.7,
@@ -2496,6 +2541,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
         pos={cardMenu}
         group={anchorGroup}
         heroImage={heroImage}
+        mediaSource={menuFace ? groupHeroSource(menuFace, boards) : null}
         deckMemberIds={deck.memberIds}
         deckState={deck.state}
         onClose={() => setCardMenu(null)}
@@ -2779,7 +2825,7 @@ const GhostCardSlot: React.FC<{ anchor: ProjectGroup; slot: { cardId: string; de
       {ghostHero && (
         <div style={{
           position: 'absolute', inset: 0,
-          backgroundImage: `url(${ghostHero})`,
+          backgroundImage: cssUrl(ghostHero),
           backgroundSize: 'cover',
           backgroundPosition: 'center',
           opacity: 0.22,
