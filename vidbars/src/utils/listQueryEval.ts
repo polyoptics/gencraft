@@ -11,7 +11,7 @@
 import type { ProjectGroup, BoardData } from '../store/boardsStore'
 import type { FreeNodeData } from '../store/freeNodeStore'
 import {
-  type ListQuery, groupHasContentOfKind, freeNodeMatchesKind,
+  type ListQuery, groupHasContentOfKind, freeNodeInResults,
   hasRenderableContent, sortGroups, sortFreeNodes,
 } from './contentKinds'
 
@@ -33,11 +33,14 @@ export function evaluateListQuery(
     (!query || (g.name || '').toLowerCase().includes(query)) &&
     (q.kind === 'all' || groupHasContentOfKind(g, boards, q.kind)))
 
-  const matchedNodes = q.includeCanvasItems
+  // freeNodeInResults is the Rolodex's own tile rule (Tiles on: any match;
+  // Tiles off: only effect cards a search names). Effect cards carry no
+  // browsable content, so for a docked Viewer they add nothing — they are
+  // here so the two lists stay one rule, not two that happen to agree.
+  const matchedNodes = q.includeCanvasItems || query
     ? Object.values(nodes).filter(n =>
         n.type !== 'list' &&   // lists never match lists
-        freeNodeMatchesKind(n, q.kind) &&
-        (!query || (n.label || '').toLowerCase().includes(query)))
+        freeNodeInResults(n, q))
     : []
 
   return {

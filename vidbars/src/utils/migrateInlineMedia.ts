@@ -24,8 +24,7 @@ import { useBoardsStore } from '../store/boardsStore'
 import type { BoardData, ProjectGroup } from '../store/boardsStore'
 import { useFreeNodeStore } from '../store/freeNodeStore'
 import type { FreeNodeData } from '../store/freeNodeStore'
-import { putMedia } from './mediaStore'
-import { isDataUrl, dataUrlToBlob, makeMediaRef } from './mediaRef'
+import { isDataUrl, dataUrlToBlob } from './mediaRef'
 import { rekeyModelPosters } from '../three/posterService'
 
 // Pre-continuous-sweep guard key ('vidbars-inline-media-migrated') — the
@@ -34,14 +33,23 @@ const LEGACY_MIGRATION_KEY = 'vidbars-inline-media-migrated'
 
 interface Counter { n: number; failed: number }
 
-/** True for a same-origin server media path we should localize. */
+/** True for a same-origin server media path. These are the DURABLE form — a
+ *  real file under public/uploads — and the sweep now leaves them alone. */
 function isUploadPath(v: string | null | undefined): v is string {
   return typeof v === 'string' && v.startsWith('/uploads/')
 }
 
-/** True for any value the sweep would convert. */
+/** True for any value the sweep would convert.
+ *
+ *  `/uploads/` paths used to be in here. They are not any more: converting a
+ *  file on disk into a browser-storage pointer traded the durable copy for
+ *  the fragile one. The preview this app runs in does not keep IndexedDB
+ *  between runs, so every converted path became a dead `mediaref:` and the
+ *  tile went blank — while the file itself sat untouched in public/uploads
+ *  the whole time, unreachable because nothing recorded where the ref came
+ *  from. Server paths stay server paths. */
 function needsLocalizing(v: string | null | undefined): boolean {
-  return isDataUrl(v) || isUploadPath(v)
+  return isDataUrl(v)
 }
 
 /** Cheap synchronous scan: does any image-bearing field in either store
@@ -79,36 +87,47 @@ async function migrateValue(
   counter: Counter,
   rewrites: Map<string, string>,
 ): Promise<string | null> {
+  // Explicit, not incidental: a server path is already the durable form and
+  // must be returned untouched. Stated as its own branch so a future sweep
+  // cannot quietly start converting these again.
+  if (isUploadPath(v)) return v
   if (isDataUrl(v)) {
     const blob = dataUrlToBlob(v)
     if (!blob) return v // undecodable — passthrough still renders it
     try {
-      const id = await putMedia(blob)
+      // TO DISK, not to browser storage. Getting the base64 out of state is
+      // worth doing — it is what kept snapshots at 179 MB and pushed the
+      // persisted stores past what IndexedDB would read back. But the
+      // destination has to be the durable one. The upload endpoint writes a
+      // real file and hands back a /uploads/ path, which survives everything
+      // browser storage does not.
+      const url = await uploadBlobToServer(blob)
       counter.n++
-      const ref = makeMediaRef(id)
-      rewrites.set(v, ref)
-      return ref
+      rewrites.set(v, url)
+      return url
     } catch {
+      // Never drop the only copy. Leaving the data: URL in place keeps the
+      // image rendering and the sweep retries on the next load.
       counter.failed++
       return v
     }
   }
-  if (isUploadPath(v)) {
-    try {
-      const res = await fetch(v)
-      if (!res.ok) { counter.failed++; return v }
-      const blob = await res.blob()
-      const id = await putMedia(blob)
-      counter.n++
-      const ref = makeMediaRef(id)
-      rewrites.set(v, ref)
-      return ref
-    } catch {
-      counter.failed++
-      return v
-    }
-  }
+  // `/uploads/` paths and existing refs pass through untouched.
   return v ?? null
+}
+
+/** POST a blob to the dev server's upload endpoint; resolves to the
+ *  `/uploads/<name>` path it was written to. Throws if the write did not
+ *  happen, so the caller can keep the original value. */
+async function uploadBlobToServer(blob: Blob): Promise<string> {
+  const ext = (blob.type.split('/')[1] || 'bin').replace(/[^a-zA-Z0-9]/g, '') || 'bin'
+  const form = new FormData()
+  form.append('file', blob, `inline-${Date.now()}.${ext}`)
+  const res = await fetch('/api/upload', { method: 'POST', body: form })
+  if (!res.ok) throw new Error(`upload failed: ${res.status}`)
+  const data = (await res.json()) as { url?: string }
+  if (!data?.url) throw new Error('upload returned no url')
+  return data.url
 }
 
 /** Walk every image-bearing field in both stores, convert inline data

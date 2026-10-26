@@ -70,4 +70,10 @@ contextBridge.exposeInMainWorld('vidbarsDesktop', {
   /** Warm the drag image (the file's own thumbnail). Call on hover: the
    *  drag itself cannot wait for it. */
   prepareDragIcon: (url) => ipcRenderer.invoke('vb:prepare-drag', url),
+
+  /** Save an image the app made (a PNG/JPEG data url) as a real file in
+   *  Pictures — kind 'context-sheet' or 'effect' picks the folder; 'drag'
+   *  is a drag-out copy in the app's own Drag Cache, pruned to a budget.
+   *  Never overwrites. Resolves { path } of the file written, or { error }. */
+  saveImage: (kind, name, dataUrl) => ipcRenderer.invoke('vb:save-image', kind, name, dataUrl),
 })

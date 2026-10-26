@@ -40,6 +40,7 @@ import { viewportVisualRect, VIEWPORT_HEADER_SCREEN_H } from '../../utils/viewpo
 import { FileContextMenu } from '../UI/FileMenu'
 import { mayHaveDiskFile } from '../../hooks/useFileMenu'
 import { DragOutGrip } from '../UI/DragOutGrip'
+import { FxViewerOverlay } from './FxViewerOverlay'
 
 /** Selecting a Viewer takes over the canvas selection outright, so the
  *  Delete key's priority chain is never asked to arbitrate between two lit
@@ -580,6 +581,9 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
         {active && !modelActive && (
           <ContentView windowId={id} item={active} zoom={gz} />
         )}
+        {/* An effect strip touching this window shows its output here,
+            over whatever the window holds (utils/fx, useFxStrips). */}
+        <FxViewerOverlay windowId={id} fontSize={fontSize} />
         {showBodyOverlay && (
           <div style={{
             position: 'absolute', inset: 0,
@@ -684,7 +688,7 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
 
         {/* Content playlist — appears when ≥2 items are docked; also owns
             active-item reconciliation, so it mounts unconditionally. */}
-        <ViewportSwitcherStrip windowId={id} />
+        <ViewportSwitcherStrip windowId={id} reserveRight={grabZone} />
       </div>
 
       {/* ── Reshape handles ── the other seven, under the visible SE grip. */}

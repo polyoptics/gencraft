@@ -21,8 +21,10 @@ import { tryDockGroupAtRest, updateDeckMagnetPreview } from '../../utils/deckDoc
 import { useMagnetPreviewStore } from '../../store/magnetPreviewStore'
 import { groupHasBrowsableContent } from '../../utils/contentTraversal'
 import { DEFAULT_H } from '../../utils/barConstants'
-import { getFirstImageUrl, getFirstMediaSource } from '../../types/bar'
-import { useFileMenuItems } from '../../hooks/useFileMenu'
+import { getFirstImageUrl } from '../../types/bar'
+import { boardFaceSource, boardImageSources, gripSource } from '../../utils/mediaSources'
+import { useFileMenuItems, mayHaveDiskFile } from '../../hooks/useFileMenu'
+import { DragOutGrip } from '../UI/DragOutGrip'
 import { useMenuClamp } from '../../hooks/useMenuClamp'
 import { HeroImageLayer } from './HeroImageLayer'
 import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
@@ -50,18 +52,6 @@ const GripDots: React.FC<{ size?: number; opacity?: number }> = ({ size = 10, op
     )))}
   </svg>
 )
-
-/** The file behind a block's thumbnail, for the desktop file items on its
- *  menu. Mirrors BlockItem's `thumbnail`: the override if set, else the first
- *  root bar with a picture — read for its SOURCE, so a video or model block
- *  names the clip or model, not its poster. Keep the two in step. */
-function blockThumbnailSource(board: import('../../store/boardsStore').BoardData | undefined): string | null {
-  if (!board) return null
-  const override = board.layers?.block?.thumbnail
-  if (override != null) return override
-  const bar = board.rootIds.map(id => board.bars[id]).find(b => b && getFirstImageUrl(b.content))
-  return bar ? getFirstMediaSource(bar.content) : null
-}
 
 const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
   const board = useBoardsStore(s => s.boards[boardId])
@@ -93,9 +83,14 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
   // Desktop file items for the block menu. Resolved only while the menu is
   // open, so a canvas full of blocks does not ask the bridge about every
   // file up front. Always empty in a plain browser.
-  const blockMenuFile = blockMenu ? blockThumbnailSource(board) : null
+  const blockMenuFile = blockMenu ? boardFaceSource(board) : null
   const fileItems = useFileMenuItems(blockMenuFile, () => setBlockMenu(null))
   const { ref: blockMenuRef, top: blockMenuTop } = useMenuClamp(blockMenu?.y ?? 0, blockMenu ? fileItems.length : -1)
+  // The drag-out grip's file: the face, or the first picture inside that
+  // is on disk (see gripSource). Memoised — it can walk every bar.
+  const gripUrl = useMemo(() => mayHaveDiskFile('/')
+    ? gripSource(boardFaceSource(board), () => boardImageSources(board), mayHaveDiskFile)
+    : null, [board])
 
   const commitRename = useCallback(() => {
     if (renameVal.trim()) {
@@ -460,8 +455,9 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
         // the CAPTURE phase, so it fires before the rail's own handler by
         // definition and stopPropagation down there cannot prevent it —
         // without this bail, every chip click and every drag off the "+"
-        // also rewrote the block selection.
-        if ((e.target as Element).closest?.('[data-link-rail]')) return
+        // also rewrote the block selection. The drag-out grip likewise: a
+        // press there hands the file to another app, not a selection.
+        if ((e.target as Element).closest?.('[data-link-rail], [data-drag-out]')) return
         useBoardsStore.getState().setSelection(boardId, board.rootIds)
         // Block-layer selection:
         //   shift/ctrl/meta → toggle in/out of selection
@@ -743,6 +739,40 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
             visible={isHovered}
           />
         </div>
+
+        {/* Drag-out — hands the file behind this block's face to another app
+                or a website's upload box; Shift hands every image in the block.
+                The face is the move handle, so leaving the app needs its own
+                grip. Just left of the pen, centred on it: clear of the resize
+                strips, the bottom label and the chip rail. World space, so
+                size and offsets divide by the block's camera like the pen's.
+                Not by the pen's 0.1 floor, though: inside a pinned card the
+                camera is pin.scale × fit, routinely below 0.1, and the floor
+                would shrink the grip to a few px. So it divides by the real
+                zoom like the header text, and places itself from the pen's
+                actual (floored) extent: 6 px left of it, centred on it, never
+                above the face's top. Dark-backed because it sits on the
+                thumbnail. Renders nothing in a plain browser. */}
+        {(() => {
+          const pz = Math.max(zoom, 0.1)
+          const gz = Math.max(zoom, 0.01)
+          return (
+            <DragOutGrip
+              url={gripUrl}
+              getUrls={({ all }) => all ? boardImageSources(useBoardsStore.getState().boards[boardId]) : []}
+              allLabel="every image in this block"
+              size={16 / gz}
+              visible={isHovered}
+              style={{
+                position: 'absolute',
+                top: Math.max((8 + 11) / pz - 8 / gz, 2 / gz),
+                right: (12 + 22) / pz + 6 / gz,
+                zIndex: 6,
+                background: 'rgba(0,0,0,0.45)',
+              }}
+            />
+          )
+        })()}
       </div>
 
       {/* Reference chips straddling the block's bottom edge. A SIBLING of the

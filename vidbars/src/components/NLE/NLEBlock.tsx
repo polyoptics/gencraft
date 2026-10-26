@@ -14,9 +14,11 @@ import { gripDragState } from '../../utils/gripDragState'
 import { wireDragState } from '../../utils/wireDragState'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { uploadFile, isAcceptedMediaFile } from '../../utils/uploadFile'
-import { getFirstImageUrl } from '../../types/bar'
+import { getFirstImageUrl, getFirstMediaSource } from '../../types/bar'
+import { barImageSources } from '../../utils/mediaSources'
 import { HeroImageLayer } from '../Layers/HeroImageLayer'
 import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
+import { DragOutGrip } from '../UI/DragOutGrip'
 import { generateHoverVariants, selectionHighlight } from '../../utils/colorUtils'
 import { TextFormatToolbar, ensureFontLoaded, hexToRgba } from '../UI/TextFormatToolbar'
 import { DEFAULT_HEADER_STYLE, DEFAULT_BODY_STYLE } from '../../store/freeNodeStore'
@@ -549,6 +551,16 @@ export const NLEBlock: React.FC<Props> = React.memo(({ id, top, blockHeight, off
   const medium  = blockHeight >= 72 && blockHeight < 105
   const bg = bar.color
   const nodeSelFx = isSelected ? selectionHighlight(bar.color, { ringWidthPx: 2.5, glowBlurPx: 22 }) : null
+  // Drag-out hands over the file behind the picture this bar SHOWS — the
+  // video or model itself, never its poster. No media, no grip.
+  const mediaSource = getFirstMediaSource(bar.content)
+  /** Shift: every image in this bar and the bars under it. Read from the store
+   *  at dragstart, not from this render's `bars`. */
+  const dragOutUrls = ({ all }: { all: boolean }): string[] => {
+    if (!all) return []
+    const board = useBoardsStore.getState().boards[ctx.boardId]
+    return board ? barImageSources(board, id) : []
+  }
 
   return (
     <>
@@ -1391,6 +1403,42 @@ export const NLEBlock: React.FC<Props> = React.memo(({ id, top, blockHeight, off
             visible={isHovered}
           />
         </div>
+
+        {/* Drag-out — hands the file behind this bar's picture to another
+                app or a website's upload box. A body press moves the bar, so
+                leaving the app needs its own grip. It sits in the free stretch
+                of the top edge just right of the colour ear (or of the left
+                resize edge, which outgrows the ear at low zoom), 6 units clear
+                of it — NOT in the right corner row, whose next slot lands on
+                the top-centre add-parent '+' and the top port on common widths.
+                zIndex 20 like the X / grip. Only when that stretch is wide
+                enough to keep it 6 units clear of the add-parent zone (middle
+                fourth, which also covers the port) and of the pen — on a narrow
+                bar it would take their presses — and hidden while renaming or
+                editing text, which it would otherwise sit on. Not wrapped: it
+                renders nothing in a plain browser. */}
+        {(() => {
+          const left = Math.max(34, 6 / zoom) + 6 * cornerBoost   // ear | hover overlay's edgeW
+          const end = left + 28 * cornerBoost   // its right edge + the 6 gap
+          if (!mediaSource || end > 0.375 * bar.width || end > bar.width - 102 * cornerBoost) return null
+          return (
+            <DragOutGrip
+              url={mediaSource}
+              getUrls={dragOutUrls}
+              allLabel="every image in this bar and the bars under it"
+              size={22 * cornerBoost}
+              visible={isHovered && !isRenaming && !isEditingText}
+              style={{
+                position: 'absolute',
+                top: 3 * cornerBoost,
+                left,
+                zIndex: 20,
+                // It sits on the bar's picture, which can be as bright as the glyph.
+                filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.6))',
+              }}
+            />
+          )
+        })()}
       </div>
 
       {contextMenu && (

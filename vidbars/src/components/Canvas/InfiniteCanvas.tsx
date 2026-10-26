@@ -4,19 +4,18 @@ import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { PinLayer } from './PinLayer'
 import { useBoardsStore } from '../../store/boardsStore'
 import { uploadFile, classifyFile, isAcceptedMediaFile } from '../../utils/uploadFile'
-import type { FreeNodeType } from '../../store/freeNodeStore'
+import type { FreeNodeType, FreeNodeData } from '../../store/freeNodeStore'
 import type { MediaType } from '../../types/bar'
 import { computeGroupLayout, getRowY, getRowHeight, CARD_GRID_SPACING } from '../../utils/nleRows'
 import { useViewport3DStore, VIEWPORT3D_DEFAULT_W, VIEWPORT3D_DEFAULT_H } from '../../store/viewport3dStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { nextFreeEdgeSlot } from '../../utils/viewportDocking'
 import { isPanelType } from '../../utils/componentLinks'
+import { createCardOrBoardAt } from '../../utils/canvasCreate'
 import { GLCanvasHost } from '../Viewport3D/GLCanvasHost'
-
-// A card's visual left edge sits this far right of its group origin
-// (BOARD_PADDING_X in the shared card geometry) — used to center a
-// newly created card on the cursor.
-const CARD_CONTENT_INSET = 20
+import { addMediaBlockToCard, cardHitOf, groupForCardHit, type CardHit } from '../../utils/cardContent'
+import { EFFECT_DRAG_MIME, clientToCanvas, createEffectCard, effectKindFromDrag } from '../../utils/fx/createEffect'
+import { tileDeckIndex } from '../../utils/tileDecks'
 
 // ── Media Pool drag-out ──────────────────────────────────────────────
 // A pool tile and a pool-fed Rolodex slot put this exact payload on the
@@ -49,6 +48,154 @@ function parsePoolDrag(raw: string): PoolDragPayload | null {
   } catch {
     return null
   }
+}
+
+// ── Where a drop lands ───────────────────────────────────────────────
+// ONE target per drop: the topmost thing under the cursor that takes it,
+// the rule the link drag follows too. Fixed-priority passes that each
+// scanned the whole stack let a drop fall through onto whatever lay behind
+// — a Viewer or a tile hidden under a card at card zoom, a canvas block
+// hidden under a pinned card.
+
+type DropLevel = 'card' | 'block' | 'board'
+
+type DropTarget =
+  | { kind: 'viewer'; windowId: string }
+  | { kind: 'tile'; nodeId: string }
+  | { kind: 'card'; hit: CardHit }
+  | { kind: 'block'; boardId: string }
+  | { kind: 'bar'; boardId: string; barId: string }
+
+interface DropAim {
+  /** The topmost target under the cursor, or null. */
+  target: DropTarget | null
+  /** What lies under the cursor is the canvas itself, so a drop that finds
+   *  no target (or one that cannot take it) may make a tile there. False
+   *  over anything floating above the canvas — a pinned card's frame, a
+   *  pinned panel, the level bar: a tile made there would be hidden. */
+  onCanvas: boolean
+}
+
+/** A tile whose media a dropped file or pool item replaces. Not a pinned
+ *  node — it floats over everything, so a drop near it would land ON it —
+ *  and not a panel or an effect card: those are tools, not media, and a
+ *  drop would overwrite one into an image tile. */
+function takesMedia(n: FreeNodeData): boolean {
+  return !n.pin && !isPanelType(n.type) && n.type !== 'effect'
+}
+
+/** A board background's target: its root bar. */
+function boardRootTarget(board: HTMLElement): DropTarget | null {
+  const boardBlock = board.querySelector('[data-block][data-board-id]') as HTMLElement | null
+  if (!boardBlock) return null
+  const boardId = boardBlock.dataset.boardId ?? 'primary'
+  const rid = useBoardsStore.getState().boards[boardId]?.rootIds[0]
+  return rid ? { kind: 'bar', boardId, barId: rid } : null
+}
+
+/** The smallest bar in `scope` whose rect holds the point. Catches a bar
+ *  under a transparent overlay (text layer, hero image with opacity…) that
+ *  the element walk passed by. */
+function barByRect(scope: ParentNode, x: number, y: number, skipPinned: boolean): DropTarget | null {
+  let best: { el: HTMLElement; area: number } | null = null
+  for (const bar of Array.from(scope.querySelectorAll<HTMLElement>('[data-block][data-id]'))) {
+    if (bar.dataset.layerBlock || (skipPinned && bar.closest('[data-pin-host]'))) continue
+    const r = bar.getBoundingClientRect()
+    if (r.width <= 0 || r.height <= 0) continue
+    if (x < r.left || x > r.right || y < r.top || y > r.bottom) continue
+    const area = r.width * r.height
+    if (!best || area < best.area) best = { el: bar, area }
+  }
+  return best ? { kind: 'bar', boardId: best.el.dataset.boardId ?? 'primary', barId: best.el.dataset.id! } : null
+}
+
+/** Aim a drop at (x, y). Walks the stack topmost first, past chrome that
+ *  carries no identity (headers, a deck's hover zone, chips), and stops at
+ *  the first real surface — taking it if it is a target, refusing to look
+ *  behind it if not. Pure: reads the DOM and the stores, changes nothing,
+ *  so dragover can ask it too. */
+function aimDrop(x: number, y: number): DropAim {
+  let els = document.elementsFromPoint(x, y)
+  const z = useCanvasStore.getState().zoom
+  let level: DropLevel = z <= 0.18 ? 'card' : z < 0.3 ? 'block' : 'board'
+  // A pinned card is a frame of its own. A drop in it goes by the level the
+  // frame shows, not the canvas zoom, and reaches only what is drawn in it
+  // — never the canvas hidden behind the frame.
+  const frame = els[0]?.closest('[data-pinned-group]') as HTMLElement | null
+  if (frame) {
+    const g = useBoardsStore.getState().groups.find(gr => gr.id === frame.dataset.pinnedGroup)
+    level = g?.pinnedLayer ?? 'card'
+    els = els.filter(el => frame.contains(el))
+  }
+  const hit = (target: DropTarget): DropAim => ({ target, onCanvas: !frame })
+  const miss = (floating: boolean): DropAim => ({ target: null, onCanvas: !frame && !floating })
+
+  for (const el of els) {
+    // Viewers and tiles, at every level.
+    const winEl = el.closest('[data-viewport3d]') as HTMLElement | null
+    if (winEl) {
+      const windowId = winEl.dataset.viewport3d
+      return windowId && useViewport3DStore.getState().windows[windowId]
+        ? hit({ kind: 'viewer', windowId })
+        : miss(!!winEl.closest('[data-pin-host]'))
+    }
+    const nodeEl = el.closest('[data-freenode][data-id]') as HTMLElement | null
+    if (nodeEl) {
+      const nodeId = nodeEl.dataset.id!
+      const node = useFreeNodeStore.getState().nodes[nodeId]
+      return node && takesMedia(node) ? hit({ kind: 'tile', nodeId }) : miss(!!node?.pin)
+    }
+    if (level === 'card') {
+      const card = cardHitOf(el)
+      if (card) return hit({ kind: 'card', hit: card })
+    } else if (level === 'block') {
+      const block = el.closest('[data-layer-block]') as HTMLElement | null
+      if (block) return hit({ kind: 'block', boardId: block.dataset.layerBlock! })
+    } else {
+      const bar = el.closest('[data-block][data-id]') as HTMLElement | null
+      if (bar && !bar.dataset.layerBlock) {
+        return hit({ kind: 'bar', boardId: bar.dataset.boardId ?? 'primary', barId: bar.dataset.id! })
+      }
+      // A board's background: a bar it passed over, else the root bar.
+      const board = el.closest('[data-board]') as HTMLElement | null
+      const t = board && (barByRect(board, x, y, false) ?? boardRootTarget(board))
+      if (t) return hit(t)
+    }
+    // Anything else pinned floats over the canvas: the level bar, a pinned
+    // panel's chrome. (Inside a frame, everything is pinned — skip that.)
+    if (!frame && el.closest('[data-pin-host]')) return miss(true)
+  }
+  if (level === 'board') {
+    const t = barByRect(frame ?? document, x, y, !frame)
+    if (t) return hit(t)
+  }
+  return miss(false)
+}
+
+// ── Effect drags ─────────────────────────────────────────────────────
+// An effect from the Effects palette or the card browser (payload:
+// utils/fx/createEffect) MAKES a card where it is let go — it fills
+// nothing — so it only needs somewhere on the canvas to put one.
+
+/** May an effect drag be let go at (x, y)? Wherever aimDrop finds the
+ *  canvas itself, except on a Viewer, where the card would land on the
+ *  window. */
+function effectDropAllowed(x: number, y: number): boolean {
+  const aim = aimDrop(x, y)
+  return aim.onCanvas && aim.target?.kind !== 'viewer'
+}
+
+/** The tile an effect was let go on, if any — dropped on a picture, the
+ *  card joins that picture's strip rather than landing on top of it
+ *  (createEffectCard ignores a tile that cannot be on a strip). Topmost
+ *  first; a bar or board drawn over the point hides what lies behind. */
+function effectDropTile(x: number, y: number): string | undefined {
+  for (const el of document.elementsFromPoint(x, y)) {
+    const nodeEl = el.closest('[data-freenode][data-id]') as HTMLElement | null
+    if (nodeEl) return nodeEl.dataset.id
+    if (el.closest('[data-block],[data-board]')) return undefined
+  }
+  return undefined
 }
 
 interface Props {
@@ -182,7 +329,9 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
     }
   }, [shiftPan])
 
-  const handleDragOver = useCallback((e: React.DragEvent) => {
+  /** `floating`: the drag is over LayerOverlay chrome (see the host
+   *  listener below) — there is no bare canvas under it to make a tile on. */
+  const handleDragOver = useCallback((e: React.DragEvent, floating = false) => {
     // preventDefault here is what tells the browser the canvas ACCEPTS the
     // drag — without it no drop event is ever dispatched. The pool payload
     // has to be admitted alongside 'Files' or dragging a tile out of a
@@ -191,10 +340,29 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
     // Our own drag-out passing back over the canvas is NOT accepted: let go
     // here and nothing happens, rather than importing the file again.
     if (window.vidbarsDesktop?.isDraggingOut?.()) return
-    if (e.dataTransfer.types.includes('Files') || e.dataTransfer.types.includes(POOL_DRAG_MIME)) {
+    // An effect drag makes a card where it lands, so it is taken over the
+    // canvas only — never through the overlay listener (`floating`: card
+    // faces and headers, no canvas under them to put a card on).
+    // Decided here EITHER way, the refusal included: NLEBlock and the
+    // Viewers preventDefault every drag, so a bare return left a refused
+    // effect drop looking accepted — the drop fired, made nothing, and the
+    // palette (which closes on a dragend reporting 'copy') shut anyway.
+    // preventDefault + 'none' is a refusal their bare preventDefault cannot
+    // undo: it never resets dropEffect, whichever of us runs first.
+    if (e.dataTransfer.types.includes(EFFECT_DRAG_MIME)) {
       e.preventDefault()
-      e.dataTransfer.dropEffect = 'copy'
+      e.dataTransfer.dropEffect =
+        floating || !effectDropAllowed(e.clientX, e.clientY) ? 'none' : 'copy'
+      return
     }
+    if (!e.dataTransfer.types.includes('Files') && !e.dataTransfer.types.includes(POOL_DRAG_MIME)) return
+    // Accepted only where letting go would do something: over a target, or
+    // over bare canvas to make a tile on. Over a pinned panel, or over a
+    // header with nothing that takes it beneath, the drag is refused.
+    const aim = aimDrop(e.clientX, e.clientY)
+    if (!aim.target && !(aim.onCanvas && !floating)) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
   }, [])
 
   // ── Creation sizing ──────────────────────────────────────────────
@@ -220,7 +388,7 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
     return id
   }, [addMenu, addFreeNode, createScale])
 
-  // ── Layer-aware drop handlers ──
+  // ── Drop handlers — one per kind of target (see aimDrop) ──
 
   /** Drop on bare canvas at any layer — create free node(s) */
   const dropOnBareCanvas = useCallback((e: React.DragEvent, files: File[]) => {
@@ -229,6 +397,7 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
     const p = panRef.current
     // Zoom-aware size so a drop at card zoom isn't a speck (see createScale).
     const k = Math.max(0.6, Math.min(10, 1 / z))
+    useUndoCoordinator.getState().checkpoint()
     files.forEach((file, i) => {
       // Determine node type from the file (drives default size — must match freeNodeStore.addFreeNode)
       const nodeType = classifyFile(file)
@@ -282,252 +451,82 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
    *  pool path used to answer first and return, so the pool was the only
    *  media source in the app that could not fill anything — drag an image
    *  from the pool onto a card and you got a floating node lying on top of
-   *  it. Same targets, same priority, same zoom dispatch as the file path.
-   *  The only difference is that there is nothing to upload: the url already
+   *  it. Same targets, aimed the same way (aimDrop), as the file path. The
+   *  only difference is that there is nothing to upload: the url already
    *  points at something the server is serving.
    *
    *  Returns true when it consumed the drop. */
-  const dropPoolOnTarget = useCallback((e: React.DragEvent, p: PoolDragPayload): boolean => {
-    const allEls = document.elementsFromPoint(e.clientX, e.clientY)
-    const isImage = p.kind === 'image'
+  const dropPoolOnTarget = useCallback((p: PoolDragPayload, t: DropTarget): boolean => {
     const label = p.label.replace(/\.[^.]+$/, '')
-
-    // 1. A Viewer — show it, and park a tile on the window's edge so the
-    //    thing you dropped still exists as an object you can move.
-    for (const el of allEls) {
-      const winEl = el.closest('[data-viewport3d]') as HTMLElement | null
-      if (!winEl) continue
-      const windowId = winEl.dataset.viewport3d
-      const win = windowId ? useViewport3DStore.getState().windows[windowId] : undefined
-      if (!win || !windowId) continue
-      useUndoCoordinator.getState().checkpoint()
-      const tileW = p.kind === 'audio' ? 260 : 200
-      const tileH = p.kind === 'audio' ? 120 : 180
-      const occupied = Object.values(useFreeNodeStore.getState().nodes)
-        .filter(n => !n.pin)
-        .map(n => ({ x: n.x, y: n.y, width: n.width, height: n.height }))
-      const slot = nextFreeEdgeSlot(win, 'right', tileW, tileH, occupied)
-      const nodeId = addFreeNode(slot.x, slot.y, p.kind)
-      updateFreeNode(nodeId, { imageUrl: p.url, mediaType: p.kind, label })
-      useViewport3DStore.getState().setActiveItem(windowId, {
-        kind: 'media', mediaType: p.kind, url: p.url, name: label,
-      })
-      return true
-    }
-
-    // 2. A media tile — replace what it holds. Same exclusions as the file
-    //    path: a pinned panel floats over everything, and a list is not a
-    //    media target.
-    for (const el of allEls) {
-      const nodeEl = el.closest('[data-freenode][data-id]') as HTMLElement | null
-      if (!nodeEl) continue
-      const nodeId = nodeEl.dataset.id!
-      const target = useFreeNodeStore.getState().nodes[nodeId]
-      if (!target || target.pin || isPanelType(target.type)) continue
-      useUndoCoordinator.getState().checkpoint()
-      updateFreeNode(nodeId, {
-        type: p.kind, mediaType: p.kind, imageUrl: p.url,
-        posterUrl: undefined,       // stale poster from whatever was here before
-        label,
-      })
-      return true
-    }
-
-    // 3/4/5. Card hero, block thumbnail, bar media — by zoom, exactly as the
-    //    file path dispatches. Heroes and thumbnails are images by
-    //    construction, so a model falls through to become a tile instead of
-    //    landing in an <img>.
-    const zoom = useCanvasStore.getState().zoom
-    if (zoom <= 0.18 && isImage) {
-      for (const el of allEls) {
-        const card = el.closest('[data-layer-card]') as HTMLElement | null
-        if (!card) continue
+    switch (t.kind) {
+      // A Viewer — show it, and park a tile on the window's edge so the
+      // thing you dropped still exists as an object you can move.
+      case 'viewer': {
+        const win = useViewport3DStore.getState().windows[t.windowId]
+        if (!win) return false
         useUndoCoordinator.getState().checkpoint()
-        useBoardsStore.getState().setGroupCardHeroImage(card.dataset.layerCard!, p.url)
+        const tileW = p.kind === 'audio' ? 260 : 200
+        const tileH = p.kind === 'audio' ? 120 : 180
+        const fnNodes = useFreeNodeStore.getState().nodes
+        const { hidden } = tileDeckIndex(fnNodes)   // a collapsed deck occupies its face only
+        const occupied = Object.values(fnNodes)
+          .filter(n => !n.pin && !hidden.has(n.id))
+          .map(n => ({ x: n.x, y: n.y, width: n.width, height: n.height }))
+        const slot = nextFreeEdgeSlot(win, 'right', tileW, tileH, occupied)
+        const nodeId = addFreeNode(slot.x, slot.y, p.kind)
+        updateFreeNode(nodeId, { imageUrl: p.url, mediaType: p.kind, label })
+        useViewport3DStore.getState().setActiveItem(t.windowId, {
+          kind: 'media', mediaType: p.kind, url: p.url, name: label,
+        })
         return true
       }
-    }
-    if (zoom > 0.18 && zoom < 0.3 && isImage) {
-      for (const el of allEls) {
-        const block = el.closest('[data-layer-block]') as HTMLElement | null
-        if (!block) continue
+      // A media tile — replace what it holds.
+      case 'tile':
         useUndoCoordinator.getState().checkpoint()
-        useBoardsStore.getState().setBlockThumbnail(block.dataset.layerBlock!, p.url)
+        updateFreeNode(t.nodeId, {
+          type: p.kind, mediaType: p.kind, imageUrl: p.url,
+          posterUrl: undefined,       // stale poster from whatever was here before
+          label,
+        })
+        return true
+      // A card takes ANY kind, as a block of its own (utils/cardContent).
+      // Grouping an ungrouped board's card is part of the edit, so it comes
+      // after the checkpoint.
+      case 'card': {
+        useUndoCoordinator.getState().checkpoint()
+        const groupId = groupForCardHit(t.hit)
+        if (!groupId) return false
+        addMediaBlockToCard(groupId, { url: p.url, type: p.kind, originalName: p.label }, label)
         return true
       }
-    }
-    if (zoom >= 0.3) {
-      for (const el of allEls) {
-        const bar = el.closest('[data-block][data-id]') as HTMLElement | null
-        if (!bar) continue
+      // Thumbnails are images by construction, so a model falls through to
+      // become a tile instead of landing in an <img>.
+      case 'block':
+        if (p.kind !== 'image') return false
         useUndoCoordinator.getState().checkpoint()
-        useBoardsStore.getState().setContent(bar.dataset.boardId ?? 'primary', bar.dataset.id!, {
+        useBoardsStore.getState().setBlockThumbnail(t.boardId, p.url)
+        return true
+      case 'bar':
+        useUndoCoordinator.getState().checkpoint()
+        useBoardsStore.getState().setContent(t.boardId, t.barId, {
           media: [{ url: p.url, type: p.kind, originalName: p.label }],
         })
         return true
-      }
     }
-    return false
   }, [addFreeNode, updateFreeNode])
-
-  /** Drop on a free node at any layer — set its media */
-  const dropOnFreeNode = useCallback((allEls: Element[], files: File[]): boolean => {
-    for (const el of allEls) {
-      const freenode = el.closest('[data-freenode][data-id]') as HTMLElement | null
-      if (freenode) {
-        const nodeId = freenode.dataset.id!
-        const target = useFreeNodeStore.getState().nodes[nodeId]
-        // A pinned panel floats over the canvas, so a file dropped
-        // anywhere near it would land ON it and overwrite its type. A
-        // list tile isn't a media target in either placement.
-        if (!target || target.pin || target.type === 'list') continue
-        const file = files[0]
-        const nodeType = classifyFile(file)
-        uploadFile(file).then(({ url }) => {
-          useFreeNodeStore.getState().updateFreeNode(nodeId, {
-            type: nodeType,
-            mediaType: nodeType,
-            imageUrl: url,
-            posterUrl: undefined,   // stale poster from any previous model
-            label: file.name.replace(/\.[^.]+$/, ''),
-          })
-        })
-        return true
-      }
-    }
-    return false
-  }, [])
-
-  const handleCardDrop = useCallback((e: React.DragEvent, files: File[]) => {
-    const allEls = document.elementsFromPoint(e.clientX, e.clientY)
-    // 1. Card target — data-layer-card is now a group ID.
-    // Card heroes are images by construction: model, video and audio files
-    // skip this branch (fall through to free-node/tile creation) so a .glb
-    // or an .mp4 never lands in an <img>.
-    const cardHeroFile = files.find(f => classifyFile(f) === 'image')
-    if (cardHeroFile) {
-      for (const el of allEls) {
-        const card = el.closest('[data-layer-card]') as HTMLElement | null
-        if (card) {
-          const groupId = card.dataset.layerCard!
-          uploadFile(cardHeroFile).then(({ url }) => {
-            useBoardsStore.getState().setGroupCardHeroImage(groupId, url)
-          })
-          return
-        }
-      }
-    }
-    // 2. Free node
-    if (dropOnFreeNode(allEls, files)) return
-    // 3. Bare canvas
-    dropOnBareCanvas(e, files)
-  }, [dropOnFreeNode, dropOnBareCanvas])
-
-  const handleBlockDrop = useCallback((e: React.DragEvent, files: File[]) => {
-    const allEls = document.elementsFromPoint(e.clientX, e.clientY)
-    // 1. Block target — thumbnails are images by construction: model, video
-    // and audio files skip this branch (fall through to tile creation).
-    const blockThumbFile = files.find(f => classifyFile(f) === 'image')
-    if (blockThumbFile) {
-      for (const el of allEls) {
-        const block = el.closest('[data-layer-block]') as HTMLElement | null
-        if (block) {
-          const boardId = block.dataset.layerBlock!
-          uploadFile(blockThumbFile).then(({ url }) => {
-            useBoardsStore.getState().setBlockThumbnail(boardId, url)
-          })
-          return
-        }
-      }
-    }
-    // 2. Free node
-    if (dropOnFreeNode(allEls, files)) return
-    // 3. Bare canvas
-    dropOnBareCanvas(e, files)
-  }, [dropOnFreeNode, dropOnBareCanvas])
-
-  const handleBoardDrop = useCallback((e: React.DragEvent, files: File[]) => {
-    const allEls = document.elementsFromPoint(e.clientX, e.clientY)
-
-    // Replace a bar's media[] with the newly dropped files (one set call, not N appends).
-    const replaceBarMedia = (boardId: string, barId: string) => {
-      Promise.all(files.map(f => uploadFile(f))).then(results => {
-        const media = results.map(r => ({ url: r.url, type: r.type, originalName: r.originalName }))
-        useBoardsStore.getState().setContent(boardId, barId, { media })
-      })
-    }
-
-    // 1. NLE block bar — try elementsFromPoint first
-    for (const el of allEls) {
-      const block = el.closest('[data-block][data-id]') as HTMLElement | null
-      if (block) {
-        const barId = block.dataset.id!
-        const boardId = block.dataset.boardId ?? 'primary'
-        replaceBarMedia(boardId, barId)
-        return
-      }
-    }
-
-    // 1b. Fallback: scan ALL bars by bounding rect. Handles the case where a
-    // transparent overlay (text layer, hero image with opacity, etc.) sits above
-    // the bar but elementsFromPoint walks past it. If the cursor is visually
-    // inside any bar, drop there — pick the smallest (innermost) match.
-    {
-      const bars = Array.from(document.querySelectorAll('[data-block][data-id]')) as HTMLElement[]
-      let best: { el: HTMLElement; area: number } | null = null
-      for (const bar of bars) {
-        const r = bar.getBoundingClientRect()
-        if (r.width <= 0 || r.height <= 0) continue
-        if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) continue
-        const area = r.width * r.height
-        if (!best || area < best.area) best = { el: bar, area }
-      }
-      if (best) {
-        const barId = best.el.dataset.id!
-        const boardId = best.el.dataset.boardId ?? 'primary'
-        replaceBarMedia(boardId, barId)
-        return
-      }
-    }
-
-    // 2. Board area (drop on board background → replace root bar media)
-    for (const el of allEls) {
-      const board = el.closest('[data-board]') as HTMLElement | null
-      if (board) {
-        const boardBlock = board.querySelector('[data-block][data-board-id]') as HTMLElement | null
-        if (boardBlock) {
-          const boardId = boardBlock.dataset.boardId ?? 'primary'
-          const b = useBoardsStore.getState().boards[boardId]
-          const rid = b?.rootIds[0]
-          if (rid) {
-            replaceBarMedia(boardId, rid)
-            return
-          }
-        }
-      }
-    }
-
-    // 3. Free node
-    if (dropOnFreeNode(allEls, files)) return
-    // 4. Bare canvas
-    dropOnBareCanvas(e, files)
-  }, [dropOnFreeNode, dropOnBareCanvas])
 
   /** ANY media files dropped ONTO a browser window: create content tiles
    *  docked flush at the window's right edge (stacking downward) and load
-   *  the first one. Returns the files it did NOT consume (none when a
-   *  window was hit). */
-  const dropOnViewportWindow = useCallback((e: React.DragEvent, files: File[]): File[] => {
-    const winEl = document.elementsFromPoint(e.clientX, e.clientY)
-      .map(el => el.closest('[data-viewport3d]'))
-      .find(Boolean) as HTMLElement | null
-    const windowId = winEl?.dataset.viewport3d
-    const win = windowId ? useViewport3DStore.getState().windows[windowId] : undefined
-    if (!win || !windowId) return files
+   *  the first one. */
+  const dropOnViewportWindow = useCallback((windowId: string, files: File[]): boolean => {
+    const win = useViewport3DStore.getState().windows[windowId]
+    if (!win) return false
     useUndoCoordinator.getState().checkpoint()
     // Stack down the right edge past anything already parked there.
-    const occupied = Object.values(useFreeNodeStore.getState().nodes)
-      .filter(n => !n.pin)      // pinned nodes occupy no world space
+    const fnNodes = useFreeNodeStore.getState().nodes
+    const { hidden } = tileDeckIndex(fnNodes)
+    const occupied = Object.values(fnNodes)
+      .filter(n => !n.pin && !hidden.has(n.id))   // pinned nodes occupy no world space; nor do hidden deck members
       .map(n => ({ x: n.x, y: n.y, width: n.width, height: n.height }))
     files.forEach((file, i) => {
       const type = classifyFile(file)
@@ -548,43 +547,140 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
         }
       })
     })
-    return []
+    return true
   }, [addFreeNode])
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
+  /** Files dropped ON something. Returns true when it consumed the drop. */
+  const dropFilesOnTarget = useCallback((t: DropTarget, files: File[]): boolean => {
+    switch (t.kind) {
+      case 'viewer':
+        return dropOnViewportWindow(t.windowId, files)
+      // A media tile — the first file replaces what it holds.
+      case 'tile': {
+        const file = files[0]
+        const nodeType = classifyFile(file)
+        useUndoCoordinator.getState().checkpoint()
+        uploadFile(file).then(({ url }) => {
+          useFreeNodeStore.getState().updateFreeNode(t.nodeId, {
+            type: nodeType,
+            mediaType: nodeType,
+            imageUrl: url,
+            posterUrl: undefined,   // stale poster from any previous model
+            label: file.name.replace(/\.[^.]+$/, ''),
+          })
+        })
+        return true
+      }
+      // A card — every file goes INTO it, a block of its own, in drop order
+      // (utils/cardContent). Nothing on the card is replaced: its face keeps
+      // showing the first picture it holds, so dropping ten references on a
+      // character card collects ten references. Grouping an ungrouped
+      // board's card is part of the edit, so it comes after the checkpoint.
+      case 'card': {
+        useUndoCoordinator.getState().checkpoint()
+        const groupId = groupForCardHit(t.hit)
+        if (!groupId) return false
+        void (async () => {
+          // In order, awaited: each block is placed after the one before.
+          for (const file of files) {
+            const { url, type, originalName } = await uploadFile(file)
+            addMediaBlockToCard(groupId, { url, type, originalName }, file.name.replace(/\.[^.]+$/, ''))
+          }
+        })()
+        return true
+      }
+      // A block — thumbnails are images by construction: model, video and
+      // audio files skip this (fall through to tile creation).
+      case 'block': {
+        const thumbFile = files.find(f => classifyFile(f) === 'image')
+        if (!thumbFile) return false
+        useUndoCoordinator.getState().checkpoint()
+        uploadFile(thumbFile).then(({ url }) => {
+          useBoardsStore.getState().setBlockThumbnail(t.boardId, url)
+        })
+        return true
+      }
+      // A bar — its media[] becomes the dropped files (one set call, not N appends).
+      case 'bar':
+        useUndoCoordinator.getState().checkpoint()
+        Promise.all(files.map(f => uploadFile(f))).then(results => {
+          const media = results.map(r => ({ url: r.url, type: r.type, originalName: r.originalName }))
+          useBoardsStore.getState().setContent(t.boardId, t.barId, { media })
+        })
+        return true
+    }
+  }, [dropOnViewportWindow])
+
+  /** `floating`: dropped on LayerOverlay chrome (see the host listener
+   *  below) — no bare canvas under it, so a drop that takes nothing does
+   *  nothing rather than leave a stray tile under a header. */
+  const handleDrop = useCallback((e: React.DragEvent, floating = false) => {
     // Our own drag-out, released back over the canvas (see handleDragOver).
     if (window.vidbarsDesktop?.isDraggingOut?.()) { e.preventDefault(); return }
-    // A pool drag carries ZERO .files, so it has to be answered before the
-    // empty-files bail below — and it has to call preventDefault itself,
-    // since that bail returns ahead of the one on the file path.
-    const poolRaw = e.dataTransfer.getData(POOL_DRAG_MIME)
-    if (poolRaw) {
-      const payload = parsePoolDrag(poolRaw)
-      if (payload) {
-        e.preventDefault()
-        // Fill whatever it landed on; only make a new node if it landed on
-        // nothing. Bare canvas is the fallback, not the only outcome.
-        if (!dropPoolOnTarget(e, payload)) dropPoolItem(e, payload)
-        return
-      }
+    // An effect drag (see handleDragOver). Like a pool drag it carries no
+    // files, so it has to be read before the empty-files bail below.
+    const fxRaw = e.dataTransfer.getData(EFFECT_DRAG_MIME)
+    if (fxRaw) {
+      // A refusal is left UNcancelled: that resets the drag operation to
+      // 'none', so dragend reports nothing dropped and the palette stays
+      // open. (handleDragOver refuses these already; this covers a release
+      // the last dragover judged differently.)
+      if (floating || !effectDropAllowed(e.clientX, e.clientY)) return
+      e.preventDefault()
+      createEffectCard(effectKindFromDrag(fxRaw), {
+        at: clientToCanvas(e.clientX, e.clientY),
+        onto: effectDropTile(e.clientX, e.clientY),
+      })
+      return
     }
-
+    // A pool drag carries ZERO .files, so it has to be read before the
+    // empty-files bail below. A malformed payload falls through to the file
+    // path rather than create a node pointing at nothing.
+    const poolRaw = e.dataTransfer.getData(POOL_DRAG_MIME)
+    const payload = poolRaw ? parsePoolDrag(poolRaw) : null
     // Accepts image/video/audio AND 3D models (.glb/.gltf — MIME is often
     // empty on Windows, so filtering lives in isAcceptedMediaFile).
-    let files = Array.from(e.dataTransfer.files).filter(isAcceptedMediaFile)
-    if (files.length === 0) return
+    const files = payload ? [] : Array.from(e.dataTransfer.files).filter(isAcceptedMediaFile)
+    if (!payload && files.length === 0) return
     e.preventDefault()
 
-    // Pre-step: files aimed at a browser window dock + load there.
-    files = dropOnViewportWindow(e, files)
-    if (files.length === 0) return
+    // Fill whatever it landed on; only make a new node if it landed on
+    // bare canvas. Bare canvas is the fallback, not the only outcome.
+    const aim = aimDrop(e.clientX, e.clientY)
+    const bare = aim.onCanvas && !floating
+    if (payload) {
+      if (!(aim.target && dropPoolOnTarget(payload, aim.target)) && bare) dropPoolItem(e, payload)
+      return
+    }
+    if (!(aim.target && dropFilesOnTarget(aim.target, files)) && bare) dropOnBareCanvas(e, files)
+  }, [dropPoolItem, dropPoolOnTarget, dropFilesOnTarget, dropOnBareCanvas])
 
-    // Dispatch to the active layer's drop handler
-    const zoom = useCanvasStore.getState().zoom
-    if (zoom <= 0.18)      return handleCardDrop(e, files)
-    if (zoom < 0.3)        return handleBlockDrop(e, files)
-    return handleBoardDrop(e, files)
-  }, [dropPoolItem, dropPoolOnTarget, dropOnViewportWindow, handleCardDrop, handleBlockDrop, handleBoardDrop])
+  // Card faces, block and bar headers render in App's LayerOverlay, NEXT TO
+  // this container rather than inside it — so a file dropped on a card at
+  // card zoom never reached the handlers above, and did nothing at all.
+  // Catch drag-over/drop on the shared parent for targets OUTSIDE the
+  // container and route them through the same handlers; everything inside
+  // the container is React's (onDragOver/onDrop below), so it is skipped
+  // here and nothing is handled twice. The native events carry the same
+  // dataTransfer / clientX / preventDefault the handlers use. They come in
+  // `floating`: only a real target under the overlay takes the drop.
+  const dragOverRef = useRef(handleDragOver)
+  dragOverRef.current = handleDragOver
+  const dropRef = useRef(handleDrop)
+  dropRef.current = handleDrop
+  useEffect(() => {
+    const host = containerRef.current?.parentElement
+    if (!host) return
+    const outside = (e: Event) => !containerRef.current?.contains(e.target as Node)
+    const over = (e: DragEvent) => { if (outside(e)) dragOverRef.current(e as unknown as React.DragEvent, true) }
+    const drop = (e: DragEvent) => { if (outside(e)) dropRef.current(e as unknown as React.DragEvent, true) }
+    host.addEventListener('dragover', over)
+    host.addEventListener('drop', drop)
+    return () => {
+      host.removeEventListener('dragover', over)
+      host.removeEventListener('drop', drop)
+    }
+  }, [])
 
   const handlePointerUp = useCallback((e: React.PointerEvent) => {
     if (isPanning.current) {
@@ -762,6 +858,14 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
               { label: '📝  Add note',  action: () => { addNodeAtCursor('note',  200, 160); setAddMenu(null) } },
               { label: 'T   Add text',  action: () => { addNodeAtCursor('text',  200, 180); setAddMenu(null) } },
               { label: '🖼  Add image', action: () => { addNodeAtCursor('image', 200, 180); setAddMenu(null) } },
+              // An effect card starts as Bloom; its face switches the kind.
+              // Line it up right of an image card to start a strip. Made
+              // by utils/fx/createEffect, like the Effects palette's, so the
+              // size lives in one table (freeNodeStore), not a copy here.
+              { label: '✦  Add effect card', action: () => {
+                createEffectCard('bloom', { at: { cx: addMenu.cx, cy: addMenu.cy } })
+                setAddMenu(null)
+              } },
               { label: '◆  Add Viewer', action: () => {
                 useUndoCoordinator.getState().checkpoint()
                 const k = createScale()
@@ -785,32 +889,9 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
               { label: '─────────────', action: null },
               { label: zoom <= 0.18 ? '🎬  New Card' : '🎬  New Board',
                 action: () => {
-                useUndoCoordinator.getState().checkpoint()
-                const k = createScale()
-                const boardId = useBoardsStore.getState().createBoard(0, 0)
-                useBoardsStore.getState().moveToNewGroup(boardId)
-                const bs = useBoardsStore.getState()
-                const group = bs.groups.find(g => g.boardIds.includes(boardId))
-                const board = bs.boards[boardId]
-                const rootId = board?.rootIds[0]
-                // Scale the root bar so the card reads at a comfortable
-                // SCREEN size at the zoom it was created from.
-                if (rootId && k !== 1) {
-                  const bar = board.bars[rootId]
-                  bs.resizeBarEdge(boardId, rootId, 'right', bar.width * (k - 1))
-                  bs.setBarHeight(boardId, rootId, bar.height * k)
-                }
-                // Center the card's footprint on the cursor (setGroupPos
-                // takes y, x — origin is the card's top-left content corner).
-                const cardW = (board?.bars[rootId ?? '']?.width ?? 480) * k
-                const cardH = (board?.bars[rootId ?? '']?.height ?? 270) * k
-                if (group) {
-                  useBoardsStore.getState().setGroupPos(
-                    group.id,
-                    addMenu.cy - cardH / 2,
-                    addMenu.cx - cardW / 2 - CARD_CONTENT_INSET,
-                  )
-                }
+                // Shared with the top icon bar's + button — see
+                // utils/canvasCreate. Two copies of this sequence would drift.
+                createCardOrBoardAt({ cx: addMenu.cx, cy: addMenu.cy })
                 setAddMenu(null)
               }},
             ].map((item, idx) => (

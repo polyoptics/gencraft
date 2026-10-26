@@ -3,7 +3,9 @@
 // Used by the Rolodex's kind-filter chips, the pinned list objects'
 // query evaluation, and (indirectly) the content browser: one definition
 // of "does this group/tile hold content of kind K" so a filtered Rolodex,
-// a pinned list, and a browser playlist always agree.
+// a pinned list, and a browser playlist always agree. The same goes for
+// what a SEARCH matches on a free tile (freeNodeInResults), and which
+// effects a search offers to add.
 //
 // Semantics notes:
 //  - Group matching inspects the group's OWN boards only (not its deck
@@ -16,6 +18,7 @@
 import type { ProjectGroup, BoardData } from '../store/boardsStore'
 import type { FreeNodeData } from '../store/freeNodeStore'
 import { getMediaItems } from '../types/bar'
+import { EFFECTS, EFFECT_ORDER, effectKindOf, type EffectKind } from './fx/effects'
 
 export type ContentKind = 'model' | 'image' | 'video' | 'audio' | 'text'
 
@@ -78,6 +81,67 @@ export function freeNodeMatchesKind(n: FreeNodeData, kind: ContentKind | 'all'):
   if (kind === 'all') return true
   if (kind === 'text') return (n.type === 'text' || n.type === 'note') && n.text.trim() !== ''
   return n.type === kind && !!n.imageUrl
+}
+
+/** What a search reads on a free node, lower-cased. The label — plus, on
+ *  an effect card, what it IS: its effect's name and kind and the generic
+ *  words for effects, so "bloom", "glare" or "fx" find a card someone
+ *  renamed "hero shot". */
+export function freeNodeSearchText(n: FreeNodeData): string {
+  const base = n.label || ''
+  if (n.type !== 'effect') return base.toLowerCase()
+  const k = effectKindOf(n)
+  return `${base} ${EFFECTS[k].label} ${k} effect effects fx`.toLowerCase()
+}
+
+/** True iff the free node matches a search `query` (an empty one matches
+ *  everything). A LIST never matches a non-empty query: its label is its
+ *  own query summary (`All · “bloom”`), so an embedded Rolodex searching
+ *  for "bloom" always listed itself. */
+export function freeNodeMatchesQuery(n: FreeNodeData, query: string): boolean {
+  const q = query.trim().toLowerCase()
+  if (!q) return true
+  if (n.type === 'list') return false
+  return freeNodeSearchText(n).includes(q)
+}
+
+/** Is the free node one of a list's tile results? The ONE rule for the
+ *  Rolodex's tile rows and a pinned list's evaluator, so the two agree by
+ *  construction. With Tiles on: every tile matching the kind and the
+ *  search. With Tiles off: effect cards still answer a search that names
+ *  them — an effect card is a tool you go looking for by name, and hiding
+ *  it behind a toggle about "canvas items" made "where is my Bloom?"
+ *  unanswerable. Pinned ones stay out: they are on the screen, not lost. */
+export function freeNodeInResults(
+  n: FreeNodeData,
+  q: Pick<ListQuery, 'query' | 'kind' | 'includeCanvasItems'>,
+): boolean {
+  if (!q.includeCanvasItems && (n.type !== 'effect' || n.pin || !q.query.trim())) return false
+  return freeNodeMatchesKind(n, q.kind) && freeNodeMatchesQuery(n, q.query)
+}
+
+/** The effects a search offers to ADD ("Add new <effect>" rows): those
+ *  whose name or kind contains the query, or all of them for a query that
+ *  asks for effects in general — "fx", or a start of "effects" of two
+ *  letters or more. Nothing for a one-letter query: "e" alone would put
+ *  eight add rows in front of the cards you were starting to type the
+ *  name of. Exact name matches first, then names that start with the
+ *  query, then the rest, each in EFFECT_ORDER (the add menu's order). */
+export function effectKindsForQuery(query: string): EffectKind[] {
+  const q = query.trim().toLowerCase()
+  if (q.length < 2) return []
+  if (q === 'fx' || 'effects'.startsWith(q)) return [...EFFECT_ORDER]
+  // Ranked, because Enter and the top row create rows[0]: in plain
+  // EFFECT_ORDER, typing the whole name "screen" led with Screentone
+  // ("screentone" contains "screen" and comes first), so the user got a
+  // different effect from the one they named.
+  const rank = (k: EffectKind) => {
+    const l = EFFECTS[k].label.toLowerCase()
+    return k === q || l === q ? 0 : k.startsWith(q) || l.startsWith(q) ? 1 : 2
+  }
+  return EFFECT_ORDER
+    .filter(k => k.includes(q) || EFFECTS[k].label.toLowerCase().includes(q))
+    .sort((a, b) => rank(a) - rank(b))   // stable: EFFECT_ORDER within a tier
 }
 
 /** Defensive filter — true iff the group has at least one board with at

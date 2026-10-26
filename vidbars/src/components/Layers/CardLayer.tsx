@@ -29,14 +29,17 @@ import { Viewport3DLayer } from '../Viewport3D/Viewport3DLayer'
 import { NLETimelineHeader, NLE_HEADER_CANVAS_H, headerExtend as computeHeaderExtend, headerScreenH, overviewScale } from '../NLE/NLETimelineHeader'
 import { HeroImageLayer } from './HeroImageLayer'
 import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
-import { getFirstImageUrl, getFirstMediaSource } from '../../types/bar'
+import { getFirstImageUrl } from '../../types/bar'
+import { groupFaceSource, groupImageSources, deckFaceSources, deckImageSources, gripSource } from '../../utils/mediaSources'
+import { DragOutGrip } from '../UI/DragOutGrip'
 import { hexToHsl, hslToHex, selectionHighlight } from '../../utils/colorUtils'
 import { cssUrl } from '../../utils/diskUrl'
-import { useFileMenuItems } from '../../hooks/useFileMenu'
+import { useFileMenuItems, mayHaveDiskFile } from '../../hooks/useFileMenu'
 import { useMenuClamp } from '../../hooks/useMenuClamp'
 import { DrawableSurface } from '../Annotation/DrawableSurface'
 import { PenButton } from '../Annotation/PenButton'
 import { useSeedHoverFromCursor } from '../../utils/pointerTracker'
+import { useContextSheetStore } from '../../store/contextSheetStore'
 
 const BOARD_PADDING_X = 20
 
@@ -68,29 +71,12 @@ function startOverlayPan(e: React.PointerEvent) {
   window.addEventListener('pointerup', onUp)
 }
 
-/** The stored url of the file behind a card's hero, for the file menu.
- *  Walks the same order as every hero loop in this file (override, then
- *  boardIds → rootIds, first bar with a picture wins) so it names the bar
- *  the card is SHOWING — but returns that bar's source, not its poster. */
-function groupHeroSource(g: ProjectGroup, boards: Record<string, BoardData>): string | null {
-  if (g.cardHeroImage) return g.cardHeroImage
-  for (const bid of g.boardIds) {
-    const board = boards[bid]
-    if (!board) continue
-    for (const rid of board.rootIds) {
-      const content = board.bars[rid]?.content
-      if (getFirstImageUrl(content)) return getFirstMediaSource(content)
-    }
-  }
-  return null
-}
-
 /** Shared context menu for all card types (GroupCard, StackedDeckCard, FannedDeckOverlay) */
 const CardContextMenu: React.FC<{
   pos: { x: number; y: number }
   group: ProjectGroup
   heroImage: string | null
-  mediaSource: string | null // file behind the picture shown — see groupHeroSource
+  mediaSource: string | null // file behind the picture shown — see groupFaceSource
   deckMemberIds?: string[]   // if this card is part of a deck
   deckState?: 'open' | 'fanned' | 'stacked'
   onClose: () => void
@@ -147,6 +133,22 @@ const CardContextMenu: React.FC<{
     useUndoCoordinator.getState().checkpoint()
     useBoardsStore.getState().duplicateGroup(group.id)
     onClose()
+  }})
+
+  // Context sheet — one image of the card (or the whole deck) for an AI:
+  // pictures, name, summary and notes, sized in the dialog before it is made.
+  menuItems.push({ label: 'Context sheet…', icon: '🗂', action: () => {
+    onClose()
+    useContextSheetStore.getState().openSheet([group.id])
+  }})
+  if (deckMemberIds && deckMemberIds.length >= 2) menuItems.push({ label: 'Context sheet: whole deck…', icon: '🗂', action: () => {
+    onClose()
+    // This card first, then the rest in deck order, then the cards of any
+    // sub-deck nested in it — they are inside it, and travel with it (the
+    // deck's drag-out takes them too). Set order keeps the cards you can
+    // see leading.
+    const ids = [group.id, ...deckMemberIds.filter(id => id !== group.id)]
+    useContextSheetStore.getState().openSheet(expandWithNestedMembers(ids, useBoardsStore.getState().groups))
   }})
 
   // Hero image actions
@@ -293,6 +295,92 @@ const CardContextMenu: React.FC<{
 
 /** Canvas-space content — free nodes + 3D viewports visible at all layers */
 const Canvas: React.FC = () => <><Viewport3DLayer /><FreeCanvas /></>
+
+// ── Drag-out grip on a card face ──
+//
+// Hands the file(s) behind a card to another app or a website's upload box.
+// The face is the card's move handle, so leaving the app needs its own grip.
+// You hold what you see — the face's file, then a deck's other faces; Shift
+// hands every image inside instead. Desktop only: DragOutGrip renders
+// nothing in a plain browser, so hosts mount this unconditionally.
+//
+// Top-right of the BODY, just left of the pen and at its size, so the two
+// read as one pair of hover tools: below the header band, clear of the
+// resize strips and the stacked deck's fan edge on the right, and of the
+// summary label and chip rail along the bottom. The same spot on an open
+// card, a stacked deck and a fan (which has no pen), so it does not jump
+// when a deck changes state.
+
+const CARD_TOOL_INSET = 6   // the pen's inset from the face's right edge and the header band
+const CARD_TOOL_GAP = 4
+
+const CardFaceDragOut: React.FC<{
+  url: string | null
+  getUrls: (o: { all: boolean }) => string[]
+  allLabel: string
+  visible: boolean
+  /** The pen's size where it is not GroupCard's (the stacked deck's). */
+  size?: number
+  /** Container's right edge to the face's — non-zero only where the face
+   *  does not end its container (a fan, whose strips run on past it). */
+  faceRightOffset?: number
+  zIndex?: number
+}> = ({ url, getUrls, allLabel, visible, size: sizeProp, faceRightOffset = 0, zIndex = 60 }) => {
+  // The card's camera — frozen inside a pinned card — so the grip sizes
+  // with the card it is on, not with the canvas it left.
+  const { zoom } = useCardView()
+  // GroupCard's pen size: ~17px across card zoom, shrinking with the rest
+  // of the card's chrome below CARD_FLOOR_ZOOM.
+  const size = sizeProp ?? Math.min(32, Math.max(8, 16 * overviewScale(zoom), headerScreenH(zoom) * 0.85))
+  return (
+    <DragOutGrip
+      url={url}
+      getUrls={getUrls}
+      allLabel={allLabel}
+      size={size}
+      visible={visible}
+      style={{
+        position: 'absolute',
+        top: computeHeaderExtend(zoom) + CARD_TOOL_INSET,
+        right: faceRightOffset + CARD_TOOL_INSET + size + CARD_TOOL_GAP,
+        zIndex,
+        // Dark-backed: it sits on the hero image.
+        background: 'rgba(0,0,0,0.45)',
+      }}
+    />
+  )
+}
+
+/** A deck's drag-out urls, read from the live store at dragstart. `ids` in
+ *  hand-over order, front card first. Shift reaches into nested sub-decks
+ *  too (after the cards you can see) — they are inside it, and travel
+ *  with it; the faces are only the cards the deck shows. */
+function deckDragOutUrls(ids: string[], all: boolean): string[] {
+  const { groups, boards } = useBoardsStore.getState()
+  const members = (all ? expandWithNestedMembers(ids, groups) : ids)
+    .map(id => groups.find(g => g.id === id)).filter(Boolean) as ProjectGroup[]
+  return all ? deckImageSources(members, boards) : deckFaceSources(members, boards)
+}
+
+/** The url a deck's grip leads with: the first face that can be a file on
+ *  disk, else the first such image inside any of its cards. So the grip is
+ *  there whenever the deck has anything to give — not only when its front
+ *  card shows a picture of its own (a text card, or a poster hero, shows
+ *  none) — and the front face still leads when it has one. */
+function deckGripUrl(ids: string[]): string | null {
+  // No desktop bridge, no grip — and no reason to walk every member's bars
+  // on each pan/zoom render to find out.
+  if (!mayHaveDiskFile('/')) return null
+  return deckDragOutUrls(ids, false).find(mayHaveDiskFile)
+    ?? deckDragOutUrls(ids, true).find(mayHaveDiskFile)
+    ?? null
+}
+
+/** The url a card's grip leads with — deckGripUrl's rule for one card. */
+function cardGripUrl(g: ProjectGroup, boards: Record<string, BoardData>): string | null {
+  if (!mayHaveDiskFile('/')) return null
+  return gripSource(groupFaceSource(g, boards), () => groupImageSources(g, boards), mayHaveDiskFile)
+}
 
 // ── Per-group card (screen-space) ──
 
@@ -524,6 +612,9 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
     }
     return null
   }, [group.cardHeroImage, group.boardIds, boards])
+  // Memoised: when the face is not a file this walks every bar, and the
+  // card re-renders on every pan and zoom frame.
+  const gripUrl = useMemo(() => cardGripUrl(group, boards), [group, boards])
 
   const onWheel = useCallback((e: React.WheelEvent) => {
     e.stopPropagation()
@@ -705,10 +796,23 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
             </div>
           )
         })()}
+
+        {/* Drag-out — this card's face; Shift, every image in it. */}
+        <CardFaceDragOut
+          url={gripUrl}
+          getUrls={({ all }) => {
+            if (!all) return []
+            const bs = useBoardsStore.getState()
+            const g = bs.groups.find(gr => gr.id === group.id)
+            return g ? groupImageSources(g, bs.boards) : []
+          }}
+          allLabel="every image in this card"
+          visible={isHovered}
+        />
       </div>
 
       {cardMenu && (
-        <CardContextMenu pos={cardMenu} group={group} heroImage={heroImage} mediaSource={groupHeroSource(group, boards)} onClose={() => setCardMenu(null)} onEditHeroImage={() => setIsEditingHero(true)} />
+        <CardContextMenu pos={cardMenu} group={group} heroImage={heroImage} mediaSource={groupFaceSource(group, boards)} onClose={() => setCardMenu(null)} onEditHeroImage={() => setIsEditingHero(true)} />
       )}
 
       {isEditingHero && heroImage && (
@@ -1417,6 +1521,23 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
             )
           })()}
 
+          {/* Drag-out — ONE grip for the whole deck: the front face, then
+              the faces behind it; Shift, every image in every card. Sized to
+              this pen, which keeps its own (unscaled) formula above. Inside
+              the face, so its stopped press never reaches onDeckDown. */}
+          {(() => {
+            const ids = [anchorGroup.id, ...deck.memberIds.filter(id => id !== anchorGroup.id)]
+            return (
+              <CardFaceDragOut
+                url={deckGripUrl(ids)}
+                getUrls={({ all }) => deckDragOutUrls(ids, all)}
+                allLabel="every image in every card of this deck"
+                visible={isHovered}
+                size={Math.min(32, Math.max(16, Math.max(NLE_HEADER_CANVAS_H * zoom, 20) * 0.85))}
+              />
+            )
+          })()}
+
           {/* The deck-member count now lives inside the dashed-rect
               affordance in the header (one element, two jobs). */}
         </div>
@@ -1426,7 +1547,7 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
           pos={cardMenu}
           group={anchorGroup}
           heroImage={heroImage}
-          mediaSource={groupHeroSource(anchorGroup, boards)}
+          mediaSource={groupFaceSource(anchorGroup, boards)}
           deckMemberIds={deck.memberIds}
           deckState={deck.state}
           onClose={() => setCardMenu(null)}
@@ -1463,7 +1584,11 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
   const selectedGhostIds = useCanvasStore(s => s.selectedGhostGroupIds)
   const extractingCardId = useCanvasStore(s => s.extractingCardId)
   const fanTransition = useCanvasStore(s => s.fanTransition)
-  const [, setIsHovered] = useState(false)
+  const [isHovered, setIsHovered] = useState(false)
+  const fanHoverRef = useRef<HTMLDivElement>(null)
+  // Seed hover as the stacked card does, so the drag-out grip is there when
+  // the fan swaps in under a still cursor (a click on the stack's edge).
+  useSeedHoverFromCursor(fanHoverRef, setIsHovered)
   // faceId: whose picture was under the cursor — see faceUnderCursor
   const [cardMenu, setCardMenu] = useState<{ x: number; y: number; faceId: string } | null>(null)
   const [surfacedId, setSurfacedId] = useState<string | null>(null)
@@ -2005,6 +2130,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
     <>
       {/* Single hover wrapper — primary card + strips + controls */}
       <div
+      ref={fanHoverRef}
       data-group-card="true"
       data-link-drop={`card:${anchorGroup.id}`}
       data-id={anchorGroup.id}
@@ -2200,6 +2326,10 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
               if (el) stripRefs.current.set(sc.id, el)
               else stripRefs.current.delete(sc.id)
             }}
+            // Media dropped here goes into the card this strip SHOWS, not
+            // the deck's anchor (utils/cardContent). Not data-link-drop:
+            // linking onto a fan still means the deck.
+            data-card-drop={sc.id}
             style={{
               position: 'absolute',
               left: stripX,
@@ -2451,6 +2581,10 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
 
       {/* Primary card — front, identical to open state */}
       <div
+        // The surfaced overlay above takes no pointer, so a drop on the
+        // face lands HERE — and goes into the card the face is showing:
+        // the surfaced (portal-locked) member while one is up.
+        data-card-drop={(surfacedGroup ?? anchorGroup).id}
         style={{
           position: 'absolute',
           left: 0,
@@ -2493,6 +2627,30 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
         {/* The deck-member count now lives inside the dashed-rect
             affordance in the header (one element, two jobs). */}
       </div>
+
+      {/* Drag-out — the same deck grip as the stacked card, on the face as
+          it rests: the portal-locked member while one is locked (the face
+          shows it), else the anchor; then the rest in fan order. Not the
+          hovered strip's — the cursor has left the strip to reach the grip.
+          A SIBLING of the primary, not a child: the primary drops beneath
+          the surfaced overlay (20) while a portal is locked, and would take
+          the grip under with it. So it sits above both, and is offset past
+          the strips that run on to the wrapper's right edge. */}
+      {(() => {
+        const fanIds = [anchorGroup.id, ...secondaryItems.flatMap(it => it.kind === 'real' ? [it.group.id] : [])]
+        const frontId = portalMemberId && fanIds.includes(portalMemberId) ? portalMemberId : anchorGroup.id
+        const ids = [frontId, ...fanIds.filter(id => id !== frontId)]
+        return (
+          <CardFaceDragOut
+            url={deckGripUrl(ids)}
+            getUrls={({ all }) => deckDragOutUrls(ids, all)}
+            allLabel="every image in every card of this deck"
+            visible={isHovered}
+            faceRightOffset={totalFanWidth - screenWidth}
+            zIndex={Math.max(21, secondaryItems.length + 3)}
+          />
+        )
+      })()}
 
       {/* Extracting card — while a fan strip is being dragged out, render the
           card here (inside the fan wrapper) at the same z-index its strip
@@ -2541,7 +2699,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
         pos={cardMenu}
         group={anchorGroup}
         heroImage={heroImage}
-        mediaSource={menuFace ? groupHeroSource(menuFace, boards) : null}
+        mediaSource={menuFace ? groupFaceSource(menuFace, boards) : null}
         deckMemberIds={deck.memberIds}
         deckState={deck.state}
         onClose={() => setCardMenu(null)}
@@ -2606,8 +2764,11 @@ export function cardScreenRect(g: ProjectGroup, boards: Record<string, import('.
   }
 }
 
-/** Affordance shown when open cards are touching — hover on primary shows outline + stack/fan */
-const DeckAffordance: React.FC<{ cluster: string[] }> = ({ cluster }) => {
+/** Affordance shown when open cards are touching — hover on primary shows outline + stack/fan.
+ *  `front` is what the primary is drawn as (see Overlay's affordanceFront):
+ *  a plain card, a stacked deck it anchors, or null for anything drawn
+ *  above this zone. */
+const DeckAffordance: React.FC<{ cluster: string[]; front: Deck | 'card' | null }> = ({ cluster, front }) => {
   // Frozen inside a pinned deck — this control travels WITH the deck, so it
   // has to be measured by the deck's own camera or it lands elsewhere.
   const { pan, zoom } = useCardView()
@@ -2679,6 +2840,7 @@ const DeckAffordance: React.FC<{ cluster: string[] }> = ({ cluster }) => {
 
   const primary = memberRects[0]
   if (!primary) return null
+  const primaryGroup = groups.find(gr => gr.id === primary.gid)
 
   return (
     <>
@@ -2713,6 +2875,39 @@ const DeckAffordance: React.FC<{ cluster: string[] }> = ({ cluster }) => {
           useCanvasStore.getState().zoomAtPoint(f, mx, my)
         }}
       >
+        {/* Drag-out for the face under this zone. The zone covers it (41
+            over the card's 40), so that face's own grip never gets the
+            hover, and a press on it lands here as a cluster move — so the
+            grip lives here, where the hover is. The zone's rect is the
+            card's, header band included, so it lands in the same spot. It
+            stops its own press, click and double-click: neither the
+            cluster drag nor stack-on-double-click fires from it. */}
+        {primaryGroup && front === 'card' && (
+          <CardFaceDragOut
+            url={isHovered ? cardGripUrl(primaryGroup, boards) : null}
+            getUrls={({ all }) => {
+              if (!all) return []
+              const bs = useBoardsStore.getState()
+              const g = bs.groups.find(gr => gr.id === primaryGroup.id)
+              return g ? groupImageSources(g, bs.boards) : []
+            }}
+            allLabel="every image in this card"
+            visible={isHovered}
+          />
+        )}
+        {primaryGroup && front && front !== 'card' && (
+          <CardFaceDragOut
+            url={deckGripUrl([front.anchorGroupId, ...front.memberIds.filter(id => id !== front.anchorGroupId)])}
+            getUrls={({ all }) => deckDragOutUrls(
+              [front.anchorGroupId, ...front.memberIds.filter(id => id !== front.anchorGroupId)], all)}
+            allLabel="every image in every card of this deck"
+            visible={isHovered}
+            // StackedDeckCard's pen size, and its EDGE_RESERVE: the face
+            // stops short of the zone's right edge by the peek edges.
+            size={Math.min(32, Math.max(16, Math.max(NLE_HEADER_CANVAS_H * zoom, 20) * 0.85))}
+            faceRightOffset={front.memberIds.length > 1 ? 3 * 2 + 4 : 0}
+          />
+        )}
       </div>
       {/* Outline borders around all cluster members on hover — outside hover zone for correct positioning */}
       {isHovered && memberRects.map(r => (
@@ -3258,6 +3453,18 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
 
   const extractingCardId = useCanvasStore(s => s.extractingCardId)
   const fanTransition = useCanvasStore(s => s.fanTransition)
+  // What a cluster's primary is drawn as below — DeckAffordance's hover
+  // zone covers it and hosts its drag-out grip. Mirrors the render branch:
+  // a plain card, or a stacked deck it anchors. A fan (or a stack still
+  // closing) renders above the zone and keeps its own; a hidden member or
+  // a card mid-extraction shows no face here.
+  const affordanceFront = (gid: string): Deck | 'card' | null => {
+    if (gid === extractingCardId) return null
+    const deck = getDeckForGroup(gid)
+    if (!deck) return 'card'
+    const stacking = fanTransition?.deckId === gid && fanTransition.phase === 'stacking'
+    return deck.state === 'stacked' && deck.anchorGroupId === gid && !stacking ? deck : null
+  }
   return (
     <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }} onPointerDown={startOverlayPan}>
       {groups.map(g => {
@@ -3376,7 +3583,7 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
         <DeckOpenPreview key={`preview-${d.id}`} deck={d} />
       ))}
       {affordanceClusters.filter(c => !onlySet || c.some(id => onlySet.has(id))).map(cluster => (
-        <DeckAffordance key={cluster.join('|')} cluster={cluster} />
+        <DeckAffordance key={cluster.join('|')} cluster={cluster} front={affordanceFront(cluster[0])} />
       ))}
       {!scoped && ungroupedIds.map(bid => (
         <UngroupedBoardCard key={bid} boardId={bid} />

@@ -1,6 +1,8 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { createDebouncedIDBStorage } from '../utils/debouncedIDBStorage'
+import { canJoinTileDeck, collapsePatches, expandPositions, expandTileIds, tileDeckIndex } from '../utils/tileDecks'
+import { DOCK_TOLERANCE, rectsTouch } from '../utils/viewportDocking'
 
 // 'list' | 'pool' | 'prompt' | 'history' are COMPONENTS rather than media: a
 // node whose body is a whole panel. They ride the same substrate as
@@ -13,6 +15,7 @@ export type FreeNodeType =
   | 'pool'     // media pool — a folder on disk
   | 'prompt'   // prompt pad + tag palette
   | 'history'  // history lens — shows the kind of history it is docked to
+  | 'effect'   // an effect card — one image operator on an effect strip (utils/fx)
 
 export interface TextStyle {
   fontSize: number       // in px (base, before zoom scaling)
@@ -83,6 +86,17 @@ export interface FreeNodeData {
   /** Prompt Pad: the tag workshop and saved prompts. Persisted per pad, so
    *  two pads can carry different vocabularies. */
   promptKit?: import('../utils/promptKit').PromptKit
+  /** Effect cards: which operator, and its slider values (missing keys
+   *  take their defaults — utils/fx/effects). */
+  effect?: { kind: import('../utils/fx/effects').EffectKind; params?: Record<string, number> }
+  /** COLLAPSED TILE DECK membership — present on EVERY member, the face
+   *  included (face: anchor === own id, dx = dy = 0). Absent ⇒ open.
+   *  Which tiles touch is derived; only "collapsed, and where each member
+   *  goes back to" is stored, because a hidden member is no longer
+   *  geometry and its place cannot be re-derived. Positions are NOT moved
+   *  on collapse; expanding puts each member at face + (dx, dy). Helpers:
+   *  utils/tileDecks. */
+  tileDeck?: { anchor: string; dx: number; dy: number }
   /** SCREEN-PINNED instances. Present ⇒ this node is rendered by
    *  <PinLayer/> OUTSIDE the world transform and is SKIPPED by
    *  FreeCanvas. Absent ⇒ canvas-placed. That is the whole model.
@@ -163,6 +177,16 @@ interface FreeNodeStore {
   movePinnedNodes: (ids: string[], dx: number, dy: number) => void
   clampPinnedIntoView: (hostW: number, hostH: number) => void
   updateFreeNode: (id: string, patch: Partial<FreeNodeData>) => void
+  /** Collapse touching tiles into a TILE DECK (utils/tileDecks). `clusterIds`
+   *  in reading order — the first becomes the face. Selects only the face
+   *  and returns its id, or null when there was nothing to collapse. The
+   *  CALLER takes the undo checkpoint. */
+  collapseTiles: (clusterIds: string[]) => string | null
+  /** Open a tile deck: every member back at face + its offset, the deck
+   *  fields cleared on all of them (face included), all of them selected. */
+  expandTileDeck: (faceId: string) => void
+  /** Deletes a deck FACE together with everything hidden behind it — what
+   *  you see is what you delete; undo brings the whole deck back. */
   deleteFreeNode: (id: string) => void
   setFreeSelection: (ids: string[]) => void
   toggleFreeSelection: (id: string) => void
@@ -179,6 +203,7 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
     const labels: Record<FreeNodeType, string> = {
       image: 'Image', note: 'Note', text: 'Text', video: 'Video', audio: 'Audio', model: 'Model',
       list: 'List', pool: 'Media Pool', prompt: 'Prompt Pad', history: 'History',
+      effect: 'Effect',
     }
     // COMPONENTS start twice as big per side — four times the area. They are
     // tools, not tiles: a Media Pool wants a readable grid, a Prompt Pad
@@ -187,7 +212,7 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
     // modest defaults; a dropped image is content, not an instrument.
     const heights: Record<FreeNodeType, number> = {
       image: 180, note: 160, text: 180, video: 180, audio: 120, model: 180,
-      list: 880, pool: 840, prompt: 720, history: 800,
+      list: 880, pool: 840, prompt: 720, history: 800, effect: 252,
     }
     const widths: Partial<Record<FreeNodeType, number>> = {
       audio: 260,
@@ -197,6 +222,9 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
       pool: 1040,    // a grid needs room before it reads as a grid
       prompt: 920,
       history: 520,
+      // A playing card, 5:7 (FreeNode holds that ratio on resize). The
+      // whole tile is the card's face: name, then a slider per value.
+      effect: 180,
     }
     const node: FreeNodeData = {
       id, x, y,
@@ -216,9 +244,17 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
   moveFreeNode: (id, dx, dy) => {
     if (dx === 0 && dy === 0) return
     set(s => {
-      const n = s.nodes[id]
-      if (!n) return s
-      return { nodes: { ...s.nodes, [id]: { ...n, x: n.x + dx, y: n.y + dy } } }
+      if (!s.nodes[id]) return s
+      // A deck FACE carries what is hidden behind it, so the members' x/y
+      // stay face + offset and opening the deck lands them beside it, not
+      // back where the deck was first collapsed. Moves only — resizes write
+      // x/y through updateFreeNode and must not drag the deck along.
+      const nodes = { ...s.nodes }
+      for (const mid of expandTileIds([id], s.nodes)) {
+        const n = nodes[mid]
+        if (n) nodes[mid] = { ...n, x: n.x + dx, y: n.y + dy }
+      }
+      return { nodes }
     })
   },
 
@@ -226,7 +262,10 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
     if (dx === 0 && dy === 0) return
     set(s => {
       const updated = { ...s.nodes }
-      for (const id of ids) {
+      // Faces bring their hidden members (see moveFreeNode). De-duplicated,
+      // so a selection holding both a face and one of its members — or a
+      // Viewer carrying a face — still moves each tile exactly once.
+      for (const id of expandTileIds(ids, s.nodes)) {
         const n = updated[id]
         // Canvas deltas only — pinned nodes take SCREEN deltas via
         // movePinnedNodes. Unguarded, dragging a Viewer header at zoom
@@ -356,10 +395,105 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
       return { nodes: { ...s.nodes, [id]: { ...n, ...patch } } }
     }),
 
+  collapseTiles: (clusterIds) => {
+    let faceId: string | null = null
+    set(s => {
+      const patches = collapsePatches(clusterIds, s.nodes)
+      if (!patches) return s
+      const nodes = { ...s.nodes }
+      for (const [id, tileDeck] of Object.entries(patches)) {
+        const n = nodes[id]
+        if (n) nodes[id] = { ...n, tileDeck }
+        faceId = tileDeck.anchor
+      }
+      // Only the face: everything else just left the canvas, and a
+      // selection holding hidden tiles would carry them into Delete.
+      return { nodes, selectedIds: faceId ? [faceId] : [] }
+    })
+    return faceId
+  },
+
+  expandTileDeck: (faceId) =>
+    set(s => {
+      const face = s.nodes[faceId]
+      if (!face?.tileDeck) return s
+      const pos = expandPositions(faceId, s.nodes)
+      const nodes = { ...s.nodes }
+      // MAKE ROOM first. While collapsed, the space right of the face is
+      // free as far as everything else knows — hidden members are not
+      // geometry — so tiles land there: the Effects palette puts a new card
+      // flush right of a selected face, a dragged card snaps to the face's
+      // edge. Reopening on top of them would stack two tiles on one spot,
+      // and an effect strip (read left to right, ties by insertion order)
+      // would read the newcomer in the MIDDLE of the deck's cards: the
+      // processed picture would change just from opening the deck. So the
+      // tiles lined up after the face move right by the deck's hidden
+      // extent, and the open strip reads exactly as the collapsed one did.
+      // Same set, so it is one undo step with the expand.
+      const faceRight = face.x + face.width
+      const shift = Math.max(...Object.entries(pos).map(([mid, p]) => p.x + (s.nodes[mid]?.width ?? 0))) - faceRight
+      if (shift > 0) {
+        const { hidden } = tileDeckIndex(s.nodes)
+        const restored = Object.entries(pos).flatMap(([mid, p]) => {
+          const m = s.nodes[mid]
+          return m && mid !== faceId ? [{ ...p, width: m.width, height: m.height }] : []
+        })
+        // Visible canvas tiles after the face, other than the deck's own.
+        const after = Object.values(s.nodes).filter(o =>
+          !pos[o.id] && !o.pin && !hidden.has(o.id) && o.x >= faceRight - DOCK_TOLERANCE)
+        // In the way: overlapping where a member reopens, or a deck-able
+        // tile touching the face — it would read amid the reopened members,
+        // and it cannot have been there at collapse time, or it would be in
+        // the deck. (A panel touching the face may have been; it only moves
+        // if it is actually in the way.)…
+        const push = new Set(after.filter(o =>
+          (canJoinTileDeck(o) && rectsTouch(face, o, DOCK_TOLERANCE)) ||
+          restored.some(r => rectsTouch(r, o, -1))).map(o => o.id))
+        // …and whatever is lined up after those, so the rest of a strip
+        // keeps its place in the line instead of being run over.
+        const queue = [...push]
+        while (queue.length) {
+          const cur = s.nodes[queue.pop()!]
+          for (const o of after) {
+            if (push.has(o.id) || !rectsTouch(cur, o, DOCK_TOLERANCE)) continue
+            push.add(o.id)
+            queue.push(o.id)
+          }
+        }
+        // A pushed face takes the tiles hidden behind it along.
+        for (const pid of expandTileIds([...push], s.nodes)) {
+          const n = nodes[pid]
+          if (n && !n.pin && !pos[pid]) nodes[pid] = { ...n, x: n.x + shift }
+        }
+      }
+      const ids: string[] = []
+      for (const [id, p] of Object.entries(pos)) {
+        const n = nodes[id]
+        if (!n) continue
+        nodes[id] = { ...n, x: p.x, y: p.y, tileDeck: undefined }
+        ids.push(id)
+      }
+      // All of them, so the deck that was just opened can be moved — or
+      // collapsed again from the menu — as the one thing it was.
+      return { nodes, selectedIds: ids }
+    }),
+
   deleteFreeNode: (id) =>
     set(s => {
-      const { [id]: _, ...rest } = s.nodes
-      return { nodes: rest, selectedIds: s.selectedIds.filter(x => x !== id) }
+      // A face takes its hidden members with it: deleting only the face
+      // would orphan them, and orphans SHOW again (isHiddenTile) — a delete
+      // that made tiles appear.
+      const gone = new Set(expandTileIds([id], s.nodes))
+      const nodes = { ...s.nodes }
+      for (const d of gone) delete nodes[d]
+      // A hidden member deleted on its own (from the Card Browser) can
+      // leave its face alone in its deck; a deck of one is just a tile.
+      const anchor = s.nodes[id]?.tileDeck?.anchor
+      if (anchor && anchor !== id && nodes[anchor]?.tileDeck &&
+          !Object.values(nodes).some(m => m.id !== anchor && m.tileDeck?.anchor === anchor)) {
+        nodes[anchor] = { ...nodes[anchor], tileDeck: undefined }
+      }
+      return { nodes, selectedIds: s.selectedIds.filter(x => !gone.has(x)) }
     }),
 
   setFreeSelection: (ids) => set({ selectedIds: ids }),

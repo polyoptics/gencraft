@@ -18,6 +18,7 @@ import { useCanvasStore } from './canvasStore'
 import { useFreeNodeStore } from './freeNodeStore'
 import { useViewport3DStore } from './viewport3dStore'
 import type { ViewportWindow3D } from './viewport3dStore'
+import { tileDeckIndex } from '../utils/tileDecks'
 import { create } from 'zustand'
 
 const LIMIT = 30
@@ -122,6 +123,15 @@ function restoreSnapshot(snap: Snapshot) {
   useBoardsStore.setState(restoreData)
   useCanvasStore.setState(snap.canvas)
   useFreeNodeStore.setState(snap.freeNodes)
+  // Selection is transient and survives undo (FREE_EXCLUDE), but a tile the
+  // restored state hides behind a deck face must not stay selected: undoing
+  // an expand would leave the whole deck selected behind one ringed face,
+  // and Copy or Delete would then act on tiles the user cannot see.
+  const fs = useFreeNodeStore.getState()
+  const { hidden } = tileDeckIndex(fs.nodes)
+  if (fs.selectedIds.some(id => hidden.has(id))) {
+    useFreeNodeStore.setState({ selectedIds: fs.selectedIds.filter(id => !hidden.has(id)) })
+  }
   // Viewports: restore the records, but VIEW PREFS always come from the
   // LIVE window while it still exists — an orbit or a reading size is a
   // "look", not an edit, so an unrelated undo must never yank either. A

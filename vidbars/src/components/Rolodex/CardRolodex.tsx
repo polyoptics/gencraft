@@ -13,6 +13,10 @@
  *   - Double-click on a slot pans the canvas to the underlying card.
  *   - A `+` button enters placement mode: a mini ghost card follows the
  *     cursor; click on the canvas places it; Esc cancels.
+ *   - A search that names an effect ("bloom", or "fx" / "effects" for all
+ *     of them) leads the list with "Add new <effect>" rows: click or Enter
+ *     makes the card, dragging one drops it on the canvas. Effect cards in
+ *     use answer a search even with the Tiles toggle off.
  *
  * Toggle visibility via canvasStore.rolodexOpen. Sort mode persists.
  */
@@ -29,9 +33,12 @@ import { getFirstImageUrl } from '../../types/bar'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import type { FreeNodeData } from '../../store/freeNodeStore'
 import {
-  type ContentKind, type ListQuery, KIND_LABELS, groupHasContentOfKind, freeNodeMatchesKind,
-  hasRenderableContent, sortGroups, sortFreeNodes, formatListQuerySummary,
+  type ContentKind, type ListQuery, KIND_LABELS, groupHasContentOfKind, freeNodeInResults,
+  hasRenderableContent, sortGroups, sortFreeNodes, formatListQuerySummary, effectKindsForQuery,
 } from '../../utils/contentKinds'
+import { EFFECTS, effectKindOf, type EffectKind } from '../../utils/fx/effects'
+import { createEffectCard, EFFECT_DRAG_MIME } from '../../utils/fx/createEffect'
+import { tileDeckFaceOf } from '../../utils/tileDecks'
 import { getModelPoster, ensureModelPoster, invalidateModelPoster, useModelPoster, usePosterMapStore } from '../../three/posterService'
 import { useThumb, requestThumb } from '../../utils/thumbService'
 import { useResolvedMedia } from '../../utils/useResolvedMedia'
@@ -252,6 +259,10 @@ type RolodexRow =
   | { kind: 'freenode'; node: FreeNodeData; level: 0; isDeck: false }
   // A file in a magneted Media Pool — see the pool branch in `rows`.
   | { kind: 'poolfile'; file: PoolFile; level: 0; isDeck: false }
+  // "Add new <effect>" — an ACTION row a search offers, not a thing that
+  // exists yet. Every switch on `kind` must handle it: the group fallback
+  // at the end of those switches would read `row.group` off it.
+  | { kind: 'addfx'; effect: EffectKind; level: 0; isDeck: false }
 
 // hasRenderableContent + sortGroups moved to utils/contentKinds.ts so the
 // pinned-list evaluator shares them (tile results must equal rolodex
@@ -286,17 +297,21 @@ function buildFlatList(groups: ProjectGroup[], sortMode: 'creation' | 'alphabeti
 
 /** Free-node rows — a flat tail section after all group rows (free nodes
  *  have no hierarchy; a predictable tail is the coherent v1), filtered by
- *  kind + name query, sorted by the same sortMode. */
+ *  kind + name query, sorted by the same sortMode. Which tiles qualify is
+ *  freeNodeInResults — the pinned-list evaluator's rule too — so with
+ *  Tiles off this is just the effect cards a search names (often none). */
 function buildFreeNodeRows(
   nodes: Record<string, FreeNodeData>,
   sortMode: 'creation' | 'alphabetical',
   kind: ContentKind | 'all',
   query: string,
+  includeCanvasItems: boolean,
 ): RolodexRow[] {
-  const q = query.trim().toLowerCase()
-  const matched = Object.values(nodes).filter(n =>
-    freeNodeMatchesKind(n, kind) &&
-    (!q || (n.label || '').toLowerCase().includes(q)))
+  // Tiles off and no search: nothing can qualify — skip the walk (this
+  // runs on every drag frame, since `nodes` changes on each).
+  if (!includeCanvasItems && !query.trim()) return []
+  const q = { query, kind, includeCanvasItems }
+  const matched = Object.values(nodes).filter(n => freeNodeInResults(n, q))
   return sortFreeNodes(matched, sortMode).map(n => ({
     kind: 'freenode' as const, node: n, level: 0 as const, isDeck: false as const,
   }))
@@ -812,8 +827,16 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
     const groupRows = view === 'tree'
       ? buildTreeList(visibleGroups, sortMode, collapsedDeckIdSet)
       : buildFlatList(visibleGroups, sortMode)
-    if (!includeCanvasItems) return groupRows
-    return [...groupRows, ...buildFreeNodeRows(freeNodes, sortMode, kindFilter, searchQuery)]
+    // A search that names an effect (or effects in general: "fx",
+    // "effects") LEADS with rows that make one — the search is the
+    // shortest way to an effect you know the name of. Whatever kind chip
+    // is lit: these are actions, not content the chip could filter.
+    const addRows: RolodexRow[] = effectKindsForQuery(searchQuery).map(k => ({
+      kind: 'addfx' as const, effect: k, level: 0 as const, isDeck: false as const,
+    }))
+    const tileRows = buildFreeNodeRows(freeNodes, sortMode, kindFilter, searchQuery, includeCanvasItems)
+    if (addRows.length === 0 && tileRows.length === 0) return groupRows
+    return [...addRows, ...groupRows, ...tileRows]
   }, [visibleGroups, sortMode, view, collapsedDeckIdSet, includeCanvasItems, freeNodes,
       kindFilter, searchQuery, feedingPool, poolFiles])
 
@@ -925,6 +948,14 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
   // contentMaxExpansion live, so the store stays consistent.
   useEffect(() => {
     if (rows.length === 0) return
+    // An embedded panel's expansion IS its node's persisted height (no
+    // undo checkpoint), so a search or kind chip narrowing the rows must
+    // not shrink the tile for good — clearing the search never grew it
+    // back. The "Add new" effect rows made this bite on every effect-name
+    // search, which used to be a harmless zero-row no-match. Clearing the
+    // filter re-runs this with the full list; the drag handle still
+    // clamps live via contentMaxExpansionRef.
+    if (embedded && (searchQuery.trim() || kindFilter !== 'all')) return
     if (rolodexExpansion > contentMaxExpansion) {
       setRolodexExpansion(contentMaxExpansion)
     }
@@ -1085,6 +1116,9 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
     if (!win) return
     const row = rowsRef.current[idx]
     if (!row) return
+    // An "Add new" row has nothing to show yet — and FOLLOW mode lands on
+    // it whenever a search puts it first.
+    if (row.kind === 'addfx') return
 
     let item: BrowseItem | null = null
     if (row.kind === 'poolfile') {
@@ -1620,6 +1654,13 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
                   setSearchQuery('')
                   ;(e.target as HTMLInputElement).blur()
                 }
+                // Enter takes the leading "Add new" row: type "bloom",
+                // press Enter, and the card is there. The query stays, so
+                // pressing it again adds another.
+                if (e.key === 'Enter' && !e.repeat) {
+                  const first = rowsRef.current[0]
+                  if (first?.kind === 'addfx') createEffectCard(first.effect)
+                }
                 // Stop arrow keys from triggering canvas pan / nav.
                 e.stopPropagation()
               }}
@@ -1836,7 +1877,11 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
             {rows.length === 0 ? (
               feedingPool
                 ? <PoolEmptyState dir={feedingPool.poolDir ?? 'public/uploads'} />
-                : <EmptyState onAdd={startPlacement} />
+                // A filter that matched nothing is not an empty project —
+                // "No cards yet / Place your first card" said it was.
+                : (searchQuery.trim() || kindFilter !== 'all')
+                  ? <NoMatchState />
+                  : <EmptyState onAdd={startPlacement} />
             ) : (
               <>
                 {visibleIndices.map((idx, i) => {
@@ -1866,6 +1911,19 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
                       />
                     )
                   }
+                  if (row.kind === 'addfx') {
+                    return (
+                      <RolodexAddEffectSlot
+                        key={'ax:' + row.effect}
+                        effect={row.effect}
+                        {...shared}
+                        // Overrides shared.onClick: the click MAKES the card
+                        // rather than centring the row (and there is nothing
+                        // to send to a Viewer yet).
+                        onClick={() => createEffectCard(row.effect)}
+                      />
+                    )
+                  }
                   if (row.kind === 'freenode') {
                     return (
                       <RolodexFreeNodeSlot
@@ -1873,8 +1931,12 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
                         node={row.node}
                         heroImage={freeNodeHeroMap.get(row.node.id) ?? null}
                         onDoubleClick={() => {
-                          jumpToFreeNode(row.node.id)
-                          useFreeNodeStore.getState().setFreeSelection([row.node.id])
+                          // A tile collapsed into a deck is not on the
+                          // canvas to go to — its deck's face is. Selecting
+                          // the hidden tile would select nothing you can see.
+                          const target = tileDeckFaceOf(row.node.id, useFreeNodeStore.getState().nodes) ?? row.node.id
+                          jumpToFreeNode(target)
+                          useFreeNodeStore.getState().setFreeSelection([target])
                         }}
                         {...shared}
                       />
@@ -2175,7 +2237,7 @@ const RolodexCardPreview: React.FC<{
 /** Glyph per free-node type — matches the tile headers on canvas. */
 const FREENODE_GLYPHS: Record<FreeNodeData['type'], string> = {
   model: '◆', image: '🖼', video: '▶', audio: '♪', text: 'T', note: '📝', list: '≔',
-  pool: '▦', prompt: '✎', history: '⟲',
+  pool: '▦', prompt: '✎', history: '⟲', effect: '✦',
 }
 
 /** A file from a magneted Media Pool. Same geometry as the other slots so
@@ -2343,6 +2405,10 @@ const RolodexFreeNodeSlot: React.FC<{
   const borderAlpha = 0.28 + (0.92 - 0.28) * lit
   const name = node.label || 'Untitled'
   const excerpt = (node.type === 'text' || node.type === 'note') ? node.text.slice(0, 180) : ''
+  // An effect card wears its EFFECT's colour and glyph, as on the canvas —
+  // its node colour is an arbitrary palette pick nobody ever sees, and next
+  // to the "Add new" rows it must read as the same kind of thing.
+  const fx = node.type === 'effect' ? EFFECTS[effectKindOf(node)] : null
   return (
     <div
       onClick={onClick}
@@ -2350,14 +2416,16 @@ const RolodexFreeNodeSlot: React.FC<{
       onPointerDown={e => { if (e.button === 0) e.stopPropagation() }}
       onMouseEnter={onHoverEnter}
       onMouseLeave={onHoverLeave}
-      title={`${name} — canvas item · double-click to pan canvas`}
+      title={fx
+        ? `${name} — ${fx.label} effect card · double-click to pan canvas`
+        : `${name} — canvas item · double-click to pan canvas`}
       style={{
         position: 'absolute',
         left: WING_W,
         top,
         width: SLOT_W,
         height: CARD_H,
-        background: node.color,
+        background: fx ? effectFaceColor(fx.color) : node.color,
         borderRadius: 7,
         border: isHovered
           ? '1.5px solid rgba(255,255,255,0.85)'
@@ -2391,8 +2459,8 @@ const RolodexFreeNodeSlot: React.FC<{
         {heroImage && node.type === 'model' && faceOpacity < 0.25
           ? <ModelRowThumb src={heroImage} modelUrl={node.imageUrl} size={SLOT_PEEK_H - 12} />
           : (
-            <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.6)', flexShrink: 0 }}>
-              {FREENODE_GLYPHS[node.type]}
+            <span style={{ fontSize: fx ? 11 : 9, color: fx ? fx.color : 'rgba(255,255,255,0.6)', flexShrink: 0 }}>
+              {fx ? fx.glyph : FREENODE_GLYPHS[node.type]}
             </span>
           )}
         <span style={{
@@ -2409,6 +2477,124 @@ const RolodexFreeNodeSlot: React.FC<{
           color: 'rgba(255,255,255,0.75)', fontSize: 9.5, lineHeight: 1.45,
           overflow: 'hidden', pointerEvents: 'none', maxHeight: CARD_H - SLOT_PEEK_H - 14,
         }}>{excerpt}</div>
+      )}
+    </div>
+  )
+}
+
+/** An effect card's face colour: its effect colour mixed into the dark
+ *  canvas ink, flat — the card face's own recipe, so a row and the card
+ *  it stands for are recognisably the same thing. */
+function effectFaceColor(hex: string): string {
+  const a = parseInt(hex.slice(1), 16), b = 0x15161f, t = 0.3
+  const ch = (s: number) => Math.round(((a >> s) & 255) * t + ((b >> s) & 255) * (1 - t))
+  return `rgb(${ch(16)}, ${ch(8)}, ${ch(0)})`
+}
+
+/** "Add new <effect>" — what a search that names an effect offers. Same
+ *  geometry as the other slots, so the list still reads as one thing; the
+ *  DASHED border and the "+" say the card does not exist yet. A click
+ *  makes it (createEffectCard decides where: the end of the selected
+ *  picture's strip, else mid-view); a drag drops it where you let go,
+ *  with the Effects palette's own payload, so one reader on the canvas
+ *  serves both producers. */
+const RolodexAddEffectSlot: React.FC<{
+  effect: EffectKind
+  offset: number
+  top: number
+  zIndex: number
+  expansionFraction: number
+  isHovered: boolean
+  onClick: () => void
+  onHoverEnter: () => void
+  onHoverLeave: () => void
+}> = ({ effect, offset, top, zIndex, expansionFraction, isHovered, onClick, onHoverEnter, onHoverLeave }) => {
+  const def = EFFECTS[effect]
+  const centerness = Math.max(0, 1 - Math.abs(offset))
+  // The face fades in with the panel's expansion, like the other slots'
+  // hero images — a tucked tab has no face to show.
+  const exposure = Math.min(1, Math.max(0, (expansionFraction - 0.15) / 0.2))
+  const borderAlpha = 0.3 + 0.5 * centerness
+  return (
+    <div
+      data-rolodex-addfx={effect}
+      onClick={e => {
+        // A double-click delivers two clicks first. Rows elsewhere in the
+        // list double-click to go to things, so habit would make TWO cards
+        // here — only the first click of a run counts.
+        if (e.detail > 1) return
+        onClick()
+      }}
+      // Same as the other slots: keeps the press from dragging the panel
+      // (floating) or the list tile (embedded) — and so from cancelling
+      // the HTML5 drag below.
+      onPointerDown={e => { if (e.button === 0) e.stopPropagation() }}
+      // Nor may its double-click reach an embedded list's tile, which
+      // would read it as "stack touching tiles".
+      onDoubleClick={e => e.stopPropagation()}
+      onMouseEnter={onHoverEnter}
+      onMouseLeave={onHoverLeave}
+      draggable
+      onDragStart={e => {
+        // No text/plain fallback: let go over a text field and it would
+        // type the JSON in.
+        e.dataTransfer.setData(EFFECT_DRAG_MIME, JSON.stringify({ kind: effect }))
+        e.dataTransfer.effectAllowed = 'copy'
+      }}
+      title={`Add a ${def.label} card — ${def.blurb}\nClick to add · drag onto the canvas`}
+      style={{
+        position: 'absolute', left: WING_W, top, width: SLOT_W, height: CARD_H,
+        background: effectFaceColor(def.color),
+        borderRadius: 7,
+        border: isHovered
+          ? `1.5px dashed ${def.color}`
+          : `${1 + 0.5 * centerness}px dashed rgba(255,255,255,${borderAlpha})`,
+        cursor: 'copy', zIndex, overflow: 'hidden',
+      }}
+    >
+      {/* Tab row: TWO lines, so even a tucked tab says what the effect
+          does — "effects" lists all twelve, and a list of bare names is a
+          list of guesses. */}
+      <div style={{
+        position: 'absolute', top: 0, left: 0, right: 0, height: SLOT_PEEK_H,
+        display: 'flex', alignItems: 'center', gap: 7, padding: '0 10px',
+        boxSizing: 'border-box', pointerEvents: 'none',
+      }}>
+        <span style={{ fontSize: 14, lineHeight: 1, color: def.color, flexShrink: 0, width: 14, textAlign: 'center' }}>
+          {def.glyph}
+        </span>
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
+          <span style={{
+            color: 'rgba(255,255,255,0.97)', fontSize: 11, fontWeight: 600, lineHeight: 1.15,
+            textShadow: '0 1px 2px rgba(0,0,0,0.6)',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>+ Add {def.label}</span>
+          <span style={{
+            color: 'rgba(255,255,255,0.6)', fontSize: 8.5, lineHeight: 1.15,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>{def.blurb}</span>
+        </div>
+      </div>
+      {/* The face, once the card is open enough to have one: the glyph
+          large, as on the card it makes, and the blurb in full. */}
+      {exposure > 0.01 && (
+        <div style={{
+          position: 'absolute', top: SLOT_PEEK_H, left: 0, right: 0, bottom: 0,
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+          gap: 8, padding: '0 16px 18px', boxSizing: 'border-box',
+          opacity: exposure, pointerEvents: 'none', textAlign: 'center',
+        }}>
+          <span style={{ fontSize: 54, lineHeight: 1, color: def.color, textShadow: '0 2px 8px rgba(0,0,0,0.5)' }}>
+            {def.glyph}
+          </span>
+          <span style={{ color: 'rgba(255,255,255,0.82)', fontSize: 10.5, lineHeight: 1.4 }}>{def.blurb}</span>
+          {def.blend && (
+            <span style={{ color: 'rgba(255,255,255,0.55)', fontSize: 9, lineHeight: 1.3 }}>Mixes in the next picture</span>
+          )}
+          <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: 8.5, marginTop: 4 }}>
+            Click to add · drag onto the canvas
+          </span>
+        </div>
       )}
     </div>
   )
@@ -3152,6 +3338,16 @@ const PoolEmptyState: React.FC<{ dir: string }> = ({ dir }) => (
       wordBreak: 'break-all', lineHeight: 1.35,
     }}>{dir}</div>
   </div>
+)
+
+/** A search or kind filter that matched nothing. Not an empty project, so
+ *  no "place your first card" — the cards are there, just not these. */
+const NoMatchState: React.FC = () => (
+  <div style={{
+    position: 'absolute', inset: 0, display: 'flex',
+    alignItems: 'center', justifyContent: 'center',
+    color: 'rgba(255,255,255,0.4)', fontSize: 11, textAlign: 'center', padding: 16,
+  }}>No matches</div>
 )
 
 const EmptyState: React.FC<{ onAdd: () => void }> = ({ onAdd }) => (

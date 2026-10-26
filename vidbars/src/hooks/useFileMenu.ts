@@ -52,21 +52,54 @@ export function mayHaveDiskFile(url: string | null | undefined): boolean {
   return true
 }
 
-/** The file behind `url`, looked up once per url. `done` is false while the
- *  lookup is in flight, so a host can tell "no file" from "not known yet". */
+// Lookups are shared, and kept for a short while. Every one is an IPC that
+// main answers with a synchronous realpath, and many hosts can ask about
+// the same url in one burst (a layer remounting at a zoom threshold, the
+// same picture on a card, its block and its bar). Short-lived, because
+// files get moved and deleted while the app runs.
+const RESOLVE_TTL_MS = 10_000
+const RESOLVE_CACHE_MAX = 500
+interface Lookup { at: number; settled: boolean; value: ResolvedFile; promise: Promise<ResolvedFile> }
+const lookups = new Map<string, Lookup>()
+
+function freshLookup(url: string): Lookup | undefined {
+  const l = lookups.get(url)
+  return l && Date.now() - l.at < RESOLVE_TTL_MS ? l : undefined
+}
+
+function lookUp(url: string): Lookup {
+  const cached = freshLookup(url)
+  if (cached) return cached
+  const now = Date.now()
+  if (lookups.size >= RESOLVE_CACHE_MAX) {
+    for (const [k, l] of lookups) if (now - l.at >= RESOLVE_TTL_MS) lookups.delete(k)
+    if (lookups.size >= RESOLVE_CACHE_MAX) lookups.clear()
+  }
+  const l: Lookup = { at: now, settled: false, value: null, promise: Promise.resolve(null) }
+  l.promise = resolver()!.resolveMedia!(url)
+    .catch(() => null)
+    .then(r => { l.settled = true; l.value = r; return r })
+  lookups.set(url, l)
+  return l
+}
+
+/** The file behind `url`, looked up once per url (and shared — see
+ *  lookUp). `done` is false while the lookup is in flight, so a host can
+ *  tell "no file" from "not known yet". */
 export function useResolvedFile(url: string | null | undefined): { resolved: ResolvedFile; done: boolean } {
   const [state, setState] = useState<{ url: string | null; resolved: ResolvedFile }>({ url: null, resolved: null })
   const want = typeof url === 'string' && mayHaveDiskFile(url) ? url : null
   useEffect(() => {
     if (!want) return
     let live = true
-    resolver()!.resolveMedia!(want)
-      .then(r => { if (live) setState({ url: want, resolved: r }) })
-      .catch(() => { if (live) setState({ url: want, resolved: null }) })
+    void lookUp(want).promise.then(r => { if (live) setState({ url: want, resolved: r }) })
     return () => { live = false }
   }, [want])
   if (!want) return { resolved: null, done: true }
-  return state.url === want ? { resolved: state.resolved, done: true } : { resolved: null, done: false }
+  if (state.url === want) return { resolved: state.resolved, done: true }
+  // Someone asked moments ago: answer on this render, not one later.
+  const known = freshLookup(want)
+  return known?.settled ? { resolved: known.value, done: true } : { resolved: null, done: false }
 }
 
 export function fileMenuItemsFor(resolved: ResolvedFile, close: () => void): FileMenuItem[] {

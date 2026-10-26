@@ -33,7 +33,16 @@ function chipGlyph(source: DockedSource): string {
   }
 }
 
-export const ViewportSwitcherStrip: React.FC<{ windowId: string }> = ({ windowId }) => {
+export const ViewportSwitcherStrip: React.FC<{
+  windowId: string
+  /** Width of the resize grip's hit zone in the bottom-right corner, in screen
+   *  px. The strip spans the full width at the bottom of the window, so its
+   *  last control — the next-item arrow — sat directly under that grip, which
+   *  is a 36px square at zIndex 20 against the strip's 2. The grip took every
+   *  hover and click, making the arrow unusable exactly when you are cycling
+   *  through models. Reserve the corner instead of fighting over it. */
+  reserveRight?: number
+}> = ({ windowId, reserveRight = 0 }) => {
   const win = useViewport3DStore(s => s.windows[windowId])
   const setActiveItem = useViewport3DStore(s => s.setActiveItem)
   const canvasZoom = useCanvasStore(s => s.zoom)
@@ -102,7 +111,7 @@ export const ViewportSwitcherStrip: React.FC<{ windowId: string }> = ({ windowId
       style={{
         position: 'absolute', left: 0, right: 0, bottom: 0,
         display: 'flex', alignItems: 'center', gap: 6 * iz,
-        padding: `${4 * iz}px ${8 * iz}px`,
+        padding: `${4 * iz}px ${8 * iz + reserveRight}px ${4 * iz}px ${8 * iz}px`,
         background: 'rgba(13,14,26,0.88)',
         borderTop: `${Math.max(1, 1 / zoom)}px solid rgba(140,170,255,0.15)`,
         zIndex: 2,   // above DOM content views in the body

@@ -4,9 +4,12 @@ import { NLETimelineViewer } from './components/NLE/NLETimelineViewer'
 import { LayerContent, LayerOverlay } from './components/Layers/LayerRouter'
 import { Viewer } from './components/Viewer/Viewer'
 import { TemplateMenu } from './components/UI/TemplateMenu'
+import { TopIconBar } from './components/UI/TopIconBar'
 import { ProjectBackupMenu } from './components/UI/ProjectBackupMenu'
 import { useInlineMediaMigration } from './utils/migrateInlineMedia'
 import { useVideoPosterBackfill } from './hooks/useVideoPosterBackfill'
+import { ContextSheetHost } from './components/UI/ContextSheetDialog'
+import { useFxStrips } from './hooks/useFxStrips'
 import { DeckBrowserTray } from './components/DeckBrowser/DeckBrowserTray'
 import { LinkDragOverlay } from './components/Linking/LinkDragOverlay'
 import { DrawToolbar } from './components/Annotation/DrawToolbar'
@@ -20,6 +23,15 @@ import { useViewport3DStore } from './store/viewport3dStore'
 import type { Bar } from './types/bar'
 import type { FreeNodeData } from './store/freeNodeStore'
 import { collectSubtree } from './utils/barOps'
+import { expandTileIds } from './utils/tileDecks'
+
+/** Hosts useFxStrips, which subscribes to every tile, Viewer and zoom
+ *  change. Called in App's body, each drag frame and wheel tick would
+ *  re-render the whole tree; here it re-renders nothing. */
+function FxStripsHost() {
+  useFxStrips()
+  return null
+}
 
 function AllViewers() {
   const boardOrder = useBoardsStore(s => s.boardOrder)
@@ -70,7 +82,9 @@ function useKeyboardCopyPaste() {
         const freeSelected = useFreeNodeStore.getState().selectedIds
         const freeNodes = useFreeNodeStore.getState().nodes
         if (freeSelected.length > 0) {
-          freeNodeClipboard = freeSelected
+          // A deck face shows as one tile but IS the deck: the tiles hidden
+          // behind it come along, and paste rebuilds the deck from them.
+          freeNodeClipboard = expandTileIds(freeSelected, freeNodes)
             .map(id => freeNodes[id])
             .filter(Boolean)
             .map(n => structuredClone(n))
@@ -122,6 +136,7 @@ function useKeyboardCopyPaste() {
         // Free node paste
         if (freeNodeClipboard.length > 0) {
           const newIds: string[] = []
+          const idMap = new Map<string, string>()   // source id → pasted id
           const cs = useCanvasStore.getState()
           for (const src of freeNodeClipboard) {
             // Unproject the source's ON-SCREEN top-left, so a paste always
@@ -150,10 +165,32 @@ function useKeyboardCopyPaste() {
               listQuery: src.listQuery ? structuredClone(src.listQuery) : undefined,
               strokes: src.strokes ? structuredClone(src.strokes) : undefined,
               imageTransform: src.imageTransform ? { ...src.imageTransform } : undefined,
+              // An effect card IS its kind and sliders: without them a
+              // pasted Glare came back as a default Bloom.
+              effect: src.effect ? structuredClone(src.effect) : undefined,
             })
+            idMap.set(src.id, id)
             newIds.push(id)
           }
-          useFreeNodeStore.getState().setFreeSelection(newIds)
+          // A deck copied whole pastes as a deck: its members re-anchored to
+          // the new face, offsets unchanged — every tile moved by the same
+          // +40 screen px, and deck members are never pinned, so the hidden
+          // ones still sit at face + offset. A member whose face was not
+          // copied, or a face copied without members, pastes as a plain tile.
+          const faces = new Set(freeNodeClipboard.filter(c => c.tileDeck?.anchor === c.id &&
+            freeNodeClipboard.some(m => m.id !== c.id && m.tileDeck?.anchor === c.id)).map(c => c.id))
+          const pastedDeck = (src: FreeNodeData) => !!src.tileDeck && faces.has(src.tileDeck.anchor)
+          freeNodeClipboard.forEach((src, i) => {
+            if (!pastedDeck(src)) return
+            useFreeNodeStore.getState().updateFreeNode(newIds[i], {
+              tileDeck: { ...src.tileDeck!, anchor: idMap.get(src.tileDeck!.anchor)! },
+            })
+          })
+          // Select what shows: the faces, not the tiles hidden behind them.
+          useFreeNodeStore.getState().setFreeSelection(newIds.filter((_, i) => {
+            const src = freeNodeClipboard[i]
+            return !pastedDeck(src) || src.tileDeck!.anchor === src.id
+          }))
           return
         }
         // Card-level paste: duplicate group
@@ -571,6 +608,9 @@ export default function App() {
         <TemplateMenu />
       </div>
 
+      {/* ── Icon bar ── the things you reach for while building */}
+      <TopIconBar />
+
       {/* ── Infinite Canvas ── */}
       <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
         <InfiniteCanvas initialCenterW={520} initialCenterH={310}>
@@ -590,6 +630,12 @@ export default function App() {
       {/* The Rolodex is no longer mounted here: the home instance is an
           ordinary pinned `list` node, rendered by PinLayer → FreeNode →
           <CardRolodex embedded>. See utils/rolodexHome.ts. */}
+
+      {/* Context sheet dialog — opened from a card's or deck's menu */}
+      <ContextSheetHost />
+
+      {/* Effect strips: cards lined up with effect cards, kept running live */}
+      <FxStripsHost />
 
       {/* Viewers render outside the canvas so they are fixed to the viewport */}
       <AllViewers />

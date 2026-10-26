@@ -201,7 +201,10 @@ export function yToRow(y: number, layout: RowLayout): number {
     return Math.max(0, firstRow - rowsAbove)
   }
 
-  return 0
+  // The upper half of the first row. Rows need not start at 0 (a group's
+  // blocks can all sit on row 35), so this is that row, not row 0 — which
+  // would open every empty row in between.
+  return firstRow
 }
 
 /** Convert accumulated Y delta to a row delta */

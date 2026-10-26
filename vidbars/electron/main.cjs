@@ -150,14 +150,68 @@ function canonical(p) {
   try { return fs.realpathSync.native(p) } catch { return path.resolve(p) }
 }
 
+/** Where a drag-out copy of something the app rendered is written — an
+ *  effect result, prepared on hover so the drag itself has nothing to wait
+ *  for. The app's own folder, not Pictures: these are not the user's
+ *  saves. Held to a budget, not emptied (pruneDragCache). */
+function dragCacheDir() {
+  return path.join(app.getPath('userData'), 'Drag Cache')
+}
+
+// The Drag Cache's budget. A dropped copy can stay in use long after the
+// drop — an editor (Resolve, Premiere, After Effects) links media IN PLACE,
+// and an Alt-drop makes a shortcut to it — so a copy is never deleted the
+// moment it is made, nor all at once at startup. Instead: at startup, the
+// ones older than MAX_AGE; after each new one, the oldest past MAX_FILES or
+// MAX_BYTES. A long tweak-and-hover session writes a 4096-px JPEG per
+// setting, so without a running cap the folder grows by GBs.
+const DRAG_CACHE_MAX_AGE_MS = 2 * 24 * 60 * 60 * 1000
+const DRAG_CACHE_MAX_FILES = 100
+const DRAG_CACHE_MAX_BYTES = 400 * 1024 * 1024
+/** Never pruned, whatever their size: the newest files, which the page may
+ *  still hand to a drag. At least FxResultLayer's in-memory cap (32) —
+ *  it forgets the oldest first, in the order these were written. */
+const DRAG_CACHE_KEEP_NEWEST = 48
+
+/** Prune the Drag Cache to its budget, oldest first; with `maxAgeMs`, also
+ *  everything older than that. Best effort and never throws: a file another
+ *  program holds open just stays until next time. */
+async function pruneDragCache(maxAgeMs = Infinity) {
+  try {
+    const dir = dragCacheDir()
+    let names
+    try { names = await fs.promises.readdir(dir) } catch { return }   // none made yet
+    const files = (await Promise.all(names.map(async n => {
+      const p = path.join(dir, n)
+      try {
+        const s = await fs.promises.stat(p)
+        return s.isFile() ? { p, t: s.mtimeMs, size: s.size } : null
+      } catch { return null }
+    }))).filter(Boolean).sort((a, b) => b.t - a.t)   // newest first
+    const now = Date.now()
+    let bytes = 0
+    for (let i = 0; i < files.length; i++) {
+      bytes += files[i].size
+      const overBudget = i >= DRAG_CACHE_KEEP_NEWEST && (i >= DRAG_CACHE_MAX_FILES || bytes > DRAG_CACHE_MAX_BYTES)
+      if (overBudget || now - files[i].t > maxAgeMs) await fs.promises.unlink(files[i].p).catch(() => {})
+    }
+  } catch (err) {
+    console.warn('[vidbars] drag cache not pruned:', err.message)
+  }
+}
+
 /** Safe to reference IN PLACE rather than copy: a media file that exists
  *  and is not under the temp folder. A drag out of a zip or an email lands
- *  in %TEMP% and is deleted afterwards, so those must still be copied. */
+ *  in %TEMP% and is deleted afterwards, so those must still be copied —
+ *  and so must the Drag Cache: dragged back in (from Explorer, or after
+ *  the page's own-drag guard has lapsed), a reference would break when
+ *  the cache is pruned (pruneDragCache). */
 function isStableMediaFile(p) {
   const abs = realPath(p)
   if (!abs || !MEDIA_FILE.test(abs) || !isFile(abs)) return false
-  const tmp = canonical(app.getPath('temp')).toLowerCase() + path.sep
-  return !canonical(abs).toLowerCase().startsWith(tmp)
+  const at = canonical(abs).toLowerCase()
+  return ![app.getPath('temp'), dragCacheDir()]
+    .some(dir => at.startsWith(canonical(dir).toLowerCase() + path.sep))
 }
 
 // ── Bridge ──────────────────────────────────────────────────────────────
@@ -262,6 +316,74 @@ function registerBridge() {
   })
 
   ipcMain.handle('vb:stable-path', (e, p) => fromApp(e) && isStableMediaFile(p))
+
+  // An image the app MADE (a context sheet, an effect result), written as a
+  // real file so it can be dragged out like any other:
+  // Pictures\<folder for its kind>\<name> <stamp>.jpg. Never a path the page
+  // chose — the kind picks from a fixed list, the name is sanitised to one
+  // segment, and only a PNG/JPEG data url is accepted. Resolves { path } of
+  // the file actually written, or { error }.
+  // Kind 'drag' is the exception to Pictures: a drag-out copy, written to
+  // the app's own Drag Cache (dragCacheDir), held to a budget (pruneDragCache).
+  const SAVE_FOLDERS = { 'context-sheet': 'VidBars Context Sheets', 'effect': 'VidBars Effects' }
+  // Win32 treats these stems as DEVICES — the part before the first dot,
+  // trailing spaces ignored — so 'Con.Air poster <stamp>.jpg' would go to
+  // the console and report success for a file that does not exist.
+  const RESERVED_STEM = /^(con|prn|aux|nul|conin\$|conout\$|com[0-9¹²³]|lpt[0-9¹²³])$/i
+  /** Pictures — unless it is redirected to a network share, where every
+   *  reader (/api/file, Reveal, drag-out) refuses the file. Then a local
+   *  folder under the app's own data. */
+  function saveDir(kind) {
+    if (kind === 'drag') {
+      const dir = dragCacheDir()
+      return isUnc(dir) ? null : dir
+    }
+    for (const base of [app.getPath('pictures'), path.join(app.getPath('userData'), 'Saved Images')]) {
+      if (!isUnc(base)) return path.join(base, SAVE_FOLDERS[kind])
+    }
+    return null
+  }
+  ipcMain.handle('vb:save-image', async (e, kind, name, dataUrl) => {
+    if (!fromApp(e) || typeof dataUrl !== 'string' || !(Object.hasOwn(SAVE_FOLDERS, kind) || kind === 'drag')) return { error: 'Not allowed' }
+    const m = /^data:image\/(png|jpeg);base64,/.exec(dataUrl)
+    if (!m) return { error: 'Not a PNG or JPEG image' }
+    const dir = saveDir(kind)
+    if (!dir) return { error: `${kind === 'drag' ? 'The app data folder' : 'Pictures'} is on a network share, which VidBars cannot read files back from` }
+    // Cut by CODE POINTS, on a well-formed string: half an emoji is written
+    // to disk as U+FFFD while the path handed back keeps the half — a name
+    // that matches no file, and that encodeURIComponent throws on.
+    let safe = Array.from(String(name || '').toWellFormed().replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_'))
+      .slice(0, 80).join('').replace(/^[.\s]+|[.\s]+$/g, '') || (kind === 'context-sheet' ? 'context sheet' : 'image')
+    // (Without a dot the stem is '<safe> <stamp>', which is never reserved.)
+    if (safe.includes('.') && RESERVED_STEM.test(safe.split('.')[0].trimEnd())) safe = '_' + safe
+    const d = new Date()
+    const pad = n => String(n).padStart(2, '0')
+    const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
+    const ext = m[1] === 'png' ? 'png' : 'jpg'
+    const buf = Buffer.from(dataUrl.slice(m[0].length), 'base64')
+    try {
+      await fs.promises.mkdir(dir, { recursive: true })
+      // Never over an earlier file: a strip saves one per source within the
+      // same second, and their labels repeat ('Image'). 'wx' fails rather
+      // than replace, so two saves racing for a name cannot both get it.
+      for (let n = 1; n <= 99; n++) {
+        const file = path.join(dir, `${safe} ${stamp}${n > 1 ? ` (${n})` : ''}.${ext}`)
+        try {
+          await fs.promises.writeFile(file, buf, { flag: 'wx' })
+          // Not awaited: the page is waiting on this path, and the file
+          // just written is the newest, which a prune never takes.
+          if (kind === 'drag') void pruneDragCache()
+          return { path: file }
+        } catch (err) {
+          if (err.code !== 'EEXIST') throw err
+        }
+      }
+      return { error: 'Too many files of this name saved this second' }
+    } catch (err) {
+      console.error('[vidbars] image not saved:', err.message)
+      return { error: err.message }
+    }
+  })
 
   ipcMain.handle('vb:prepare-drag', (e, u) => {
     if (!fromApp(e)) return false
@@ -422,6 +544,12 @@ async function selfTest(win) {
 app.whenReady().then(async () => {
   lockPermissions()
   registerBridge()
+  // Old drag-out copies. Not the whole folder: a program that keeps
+  // dropped files BY REFERENCE (an editor's media bin) still needs
+  // yesterday's — two days is the grace; Save is what makes a lasting
+  // file. (The budget applies too.) Not awaited: it never takes the newest
+  // files, so nothing this session writes can race it.
+  void pruneDragCache(DRAG_CACHE_MAX_AGE_MS)
   try {
     await ensureDevServer()
   } catch (err) {

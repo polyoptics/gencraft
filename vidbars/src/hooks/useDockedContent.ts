@@ -37,6 +37,7 @@ import { formatListQuerySummary } from '../utils/contentKinds'
 import { useCanvasStore } from '../store/canvasStore'
 import { isHiddenDeckMember, expandWithNestedMembers, cardVisualRect } from './useCardDecks'
 import { getFirstImageUrl } from '../types/bar'
+import { tileDeckIndex, tileDeckMembers } from '../utils/tileDecks'
 
 export interface DockedSource {
   kind: 'tile' | 'card' | 'list'
@@ -72,15 +73,19 @@ function windowRects(
 }
 
 /** Dockable tiles as cluster items — content-bearing tiles + list tiles
- *  (isDockableTile is THE shared predicate). */
-function contentTileItems(nodes: Record<string, FreeNodeData>, pinned: boolean): DockableItem[] {
+ *  (isDockableTile is THE shared predicate). `hidden`: tiles collapsed
+ *  behind a deck face (tileDeckIndex) — not geometry, so they take no part;
+ *  the face's rect stands for its deck, as a stacked card deck's does. */
+function contentTileItems(
+  nodes: Record<string, FreeNodeData>, pinned: boolean, hidden: Set<string>,
+): DockableItem[] {
   return Object.values(nodes)
     // One placement at a time — a pinned tile's x/y are its stale pre-pin
     // position, so it contributes its screen rect instead. Guarding at this
     // one site keeps the two strata from ever seeing each other across the
     // ENTIRE docking graph: dock strips, cluster affordances, and
     // computeCarriedEntities, which decides what a dragging Viewer takes.
-    .filter(n => !!n.pin === pinned && isDockableTile(n))
+    .filter(n => !!n.pin === pinned && !hidden.has(n.id) && isDockableTile(n))
     .map(n => (n.pin
       ? { id: n.id, x: n.pin.x, y: n.pin.y, width: n.width * n.pin.scale, height: n.height * n.pin.scale }
       : { id: n.id, x: n.x, y: n.y, width: n.width, height: n.height }))
@@ -214,9 +219,10 @@ export function useDockedSources(windowId: string): DockedSource[] {
     //
     // Cards are canvas content with world coordinates, so they can only
     // participate in the CANVAS stratum; a pinned Viewer sees tiles only.
+    const deckIdx = tileDeckIndex(nodes)
     const clusterItems = pinned
-      ? contentTileItems(nodes, pinned)
-      : [...contentTileItems(nodes, pinned), ...contentGroupItems(groups, boards, zoom)]
+      ? contentTileItems(nodes, pinned, deckIdx.hidden)
+      : [...contentTileItems(nodes, pinned, deckIdx.hidden), ...contentGroupItems(groups, boards, zoom)]
     const clusters = computeTileClusters(clusterItems, winRects)
     const connected = clusters.byWindow.get(windowId) ?? []
 
@@ -234,14 +240,21 @@ export function useDockedSources(windowId: string): DockedSource[] {
         })
         continue
       }
-      const item = tileBrowseItem(n)
-      if (!item) continue
-      out.push({
-        kind: 'tile', id: n.id,
-        name: n.label || (item.kind === 'media' ? item.mediaType : 'Text'),
-        face: tileFace(n),
-        items: [item],
-      })
+      // A collapsed tile deck docks by its face but offers EVERYTHING in
+      // it, face first — the way a stacked card deck docked to a Viewer
+      // browses every card, not just the one on top. Collapsing a row of
+      // pictures beside a Viewer therefore changes nothing it can show.
+      const tiles = deckIdx.faces.has(n.id) ? tileDeckMembers(n.id, nodes) : [n]
+      for (const t of tiles) {
+        const item = tileBrowseItem(t)
+        if (!item) continue
+        out.push({
+          kind: 'tile', id: t.id,
+          name: t.label || (item.kind === 'media' ? item.mediaType : 'Text'),
+          face: tileFace(t),
+          items: [item],
+        })
+      }
     }
 
     // Cards/decks, from the SAME cluster walk — BFS order, so the things
@@ -297,9 +310,12 @@ export function computeCarriedEntities(windowId: string): { tileIds: string[]; g
   // it can show have to be the same set, or dragging one leaves behind
   // something it was displaying a moment ago.
   const zoom = useCanvasStore.getState().zoom
+  // Visible tiles only. A carried FACE needs no expanding here: the move
+  // itself (moveManyFreeNodes) brings the tiles hidden behind it.
+  const { hidden } = tileDeckIndex(nodes)
   const clusterItems = pinned
-    ? contentTileItems(nodes, pinned)
-    : [...contentTileItems(nodes, pinned), ...contentGroupItems(bs.groups, bs.boards, zoom)]
+    ? contentTileItems(nodes, pinned, hidden)
+    : [...contentTileItems(nodes, pinned, hidden), ...contentGroupItems(bs.groups, bs.boards, zoom)]
   const clusters = computeTileClusters(clusterItems, winRects)
   const connected = clusters.byWindow.get(windowId) ?? []
   const tileIds = connected.filter(id => !id.startsWith(GROUP_PREFIX))

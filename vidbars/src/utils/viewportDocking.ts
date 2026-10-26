@@ -213,7 +213,12 @@ export interface TileClusterResult {
  *  Ordering (per window): BFS from the window — tiles touching the window
  *  directly come first (edge rank top→right→bottom→left, then position
  *  along the edge, same as computeAllDocks), then their neighbors layer by
- *  layer (within a layer: y, then x). Sliding tiles reorders naturally. */
+ *  layer (within a layer: y, then x). Sliding tiles reorders naturally.
+ *
+ *  Callers pass VISIBLE tiles only: a tile collapsed behind a deck face is
+ *  not geometry (utils/tileDecks) — where it would sit if opened is empty
+ *  canvas now, and counting it there would connect the deck to whatever
+ *  lies beside that empty spot. The face's own rect stands for its deck. */
 export function computeTileClusters(
   tiles: DockableItem[],
   windows: WindowRect[],

@@ -1,0 +1,174 @@
+// chain.ts — how an effect strip reads, and running it.
+//
+// A strip is cards lined up touching, read left to right:
+//
+//   [A] [B] [Bloom] [Ink] [Multiply] [Paper] [Glare]
+//
+// Image cards BEFORE the first effect are the batch: each of them goes
+// through every effect in order. A blend effect (multiply, screen,
+// overlay) takes the image card right AFTER it as its second input — so
+// above, A and B each come out as glare(multiply(ink(bloom(X)), Paper)).
+// Any other image card after the first effect is ignored (and reported).
+
+import { fx, fitSource, type FxSource, type Tex } from './fxEngine'
+import { EFFECTS, FX_REF_SIDE, effectParams, knownKind, type EffectKind } from './effects'
+import { resolveMediaUrl } from '../useResolvedMedia'
+
+export type ChainItem =
+  | { id: string; kind: 'source'; url: string; label: string }
+  | { id: string; kind: 'effect'; effect: EffectKind; params?: Record<string, number> }
+
+export interface ChainPlan {
+  sources: Extract<ChainItem, { kind: 'source' }>[]
+  steps: { item: Extract<ChainItem, { kind: 'effect' }>; other: Extract<ChainItem, { kind: 'source' }> | null }[]
+  ignored: string[]
+}
+
+/** Read a left-to-right strip into sources and steps (no pixels yet). */
+export function planChain(items: ChainItem[]): ChainPlan {
+  const plan: ChainPlan = { sources: [], steps: [], ignored: [] }
+  let i = 0
+  while (i < items.length && items[i].kind === 'source') plan.sources.push(items[i++] as never)
+  for (; i < items.length; i++) {
+    const it = items[i]
+    if (it.kind === 'source') { plan.ignored.push(it.id); continue }
+    // A kind this build does not know (a snapshot from another build) runs
+    // as Bloom — what its card shows — rather than throwing.
+    const item = { ...it, effect: knownKind(it.effect) }
+    let other: ChainPlan['steps'][number]['other'] = null
+    if (EFFECTS[item.effect].blend && items[i + 1]?.kind === 'source') other = items[++i] as never
+    plan.steps.push({ item, other })
+  }
+  return plan
+}
+
+/** The strip as ONE of its batch pictures sees it: every other leading
+ *  source dropped, everything after the first effect (blend partners
+ *  included) kept. What saving or dragging out that picture's own result
+ *  renders — and, stringified, the signature of that result. */
+export function itemsForSource(items: ChainItem[], sourceId: string): ChainItem[] {
+  const lead = new Set(planChain(items).sources.map(s => s.id))
+  return items.filter(i => i.id === sourceId || !lead.has(i.id))
+}
+
+// Decoded images, by stored url. Small and session-long: a strip re-runs
+// on every slider move and must not re-decode its sources each time.
+// Least-recently-used goes first; a failure is not kept, so a file that is
+// back (unlocked, remounted) reads on the next run.
+const imageCache = new Map<string, Promise<HTMLImageElement | null>>()
+export function loadImage(url: string): Promise<HTMLImageElement | null> {
+  const hit = imageCache.get(url)
+  if (hit) {
+    imageCache.delete(url)
+    imageCache.set(url, hit)
+    return hit
+  }
+  const p = (async () => {
+    try {
+      const src = await resolveMediaUrl(url)
+      if (!src) return null
+      const img = new Image()
+      img.decoding = 'async'
+      img.src = src
+      await img.decode()
+      return img.naturalWidth > 0 ? img : null
+    } catch { return null }
+  })()
+  imageCache.set(url, p)
+  void p.then(img => { if (!img && imageCache.get(url) === p) imageCache.delete(url) })
+  if (imageCache.size > 64) imageCache.delete(imageCache.keys().next().value!)
+  return p
+}
+
+// Sources already fitted to a live working size, by size and url: a 24 MP
+// photo is resampled once rather than uploaded whole on every slider tick.
+// A save's one-off size is fitted but not kept.
+const fitCache = new Map<string, { img: HTMLImageElement; fit: FxSource }>()
+function fitted(img: HTMLImageElement, url: string, side: number): FxSource {
+  if (side > FX_REF_SIDE) return fitSource(img, side)
+  const key = `${side} ${url}`
+  const hit = fitCache.get(key)
+  fitCache.delete(key)
+  // Checked against the decode it came from: a re-decoded url refits.
+  const fit = hit?.img === img ? hit.fit : fitSource(img, side)
+  fitCache.set(key, { img, fit })
+  if (fitCache.size > 12) fitCache.delete(fitCache.keys().next().value!)
+  return fit
+}
+
+export interface ChainResult {
+  /** One output per source, in order. */
+  outputs: { sourceId: string; label: string; canvas: HTMLCanvasElement }[]
+  /** After each effect step, for the first source that could be read.
+   *  Only made when asked for (`previewSide`); nothing shows them now —
+   *  the result is shown on the picture itself. */
+  stepPreviews: Map<string, HTMLCanvasElement>
+  ignored: string[]
+  /** Batch sources whose picture could not be read, so they have no
+   *  output — lets that one picture say why, while the others still show
+   *  theirs. (Optional: a result made elsewhere may not carry it.) */
+  unreadable?: string[]
+  error?: string
+}
+
+/** Run a strip. `maxSide` caps the working resolution (a live preview
+ *  wants ~1400; a saved result the source's full size). `previewSide` is
+ *  the step previews' long edge; 0 or false makes none (a save never shows
+ *  them). */
+export async function runChain(items: ChainItem[], maxSide: number, previewSide: number | false = 220): Promise<ChainResult> {
+  const plan = planChain(items)
+  const unreadable: string[] = []
+  const result: ChainResult = { outputs: [], stepPreviews: new Map(), ignored: plan.ignored, unreadable }
+  if (plan.sources.length === 0) return { ...result, error: 'Put an image card at the start of the strip.' }
+
+  const urls = [...plan.sources.map(s => s.url), ...plan.steps.flatMap(s => s.other ? [s.other.url] : [])]
+  const images = new Map(await Promise.all(urls.map(async u => [u, await loadImage(u)] as const)))
+
+  // Taken after the wait: a context lost meanwhile is rebuilt here.
+  const e = fx()
+  if (!e) return { ...result, error: 'This display has no WebGL2.' }
+  const side = Math.min(maxSide, e.maxTexSide)
+  const others = new Map<string, Tex>()
+  try {
+    for (const s of plan.steps) {
+      if (!s.other) continue
+      const img = images.get(s.other.url)
+      if (img) others.set(s.other.id, e.upload(fitted(img, s.other.url, side), side, EFFECTS[s.item.effect].matte ?? 0))
+    }
+    for (const source of plan.sources) {
+      const img = images.get(source.url)
+      if (!img) { unreadable.push(source.id); continue }
+      const first = result.outputs.length === 0
+      let cur = e.upload(fitted(img, source.url, side), side)
+      for (const s of plan.steps) {
+        const next = EFFECTS[s.item.effect].run(e, cur, effectParams(s.item.effect, s.item.params), s.other ? others.get(s.other.id) : null)
+        e.release(cur)
+        cur = next
+        if (first && previewSide) {
+          // Shrunk on the GPU, so only the small preview is read back.
+          const k = previewSide / Math.max(cur.w, cur.h)
+          const small = k < 1 ? e.scaled(cur, cur.w * k, cur.h * k) : null
+          result.stepPreviews.set(s.item.id, e.toCanvas(small ?? cur))
+          e.release(small)
+        }
+      }
+      result.outputs.push({ sourceId: source.id, label: source.label, canvas: e.toCanvas(cur) })
+      e.release(cur)
+    }
+  } catch (err) {
+    result.error = String((err as Error)?.message ?? err)
+  } finally {
+    for (const t of others.values()) e.release(t)
+    // Reclaims whatever a throw left out, and a save's full-size targets.
+    e.endRun(FX_REF_SIDE)
+  }
+  if (e.gl.isContextLost()) {
+    // Everything drawn after the loss is blank; the next run gets a fresh
+    // engine. Say so rather than hand back (or save) empty pictures.
+    result.outputs = []
+    result.stepPreviews.clear()
+    result.error = 'The GPU was reset during this run; try again.'
+  }
+  if (!result.error && result.outputs.length === 0) result.error = 'The image cards on this strip could not be read.'
+  return result
+}

@@ -15,7 +15,12 @@ import { useCanvasStore } from '../../store/canvasStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { useViewport3DStore } from '../../store/viewport3dStore'
 import { useMagnetPreviewStore } from '../../store/magnetPreviewStore'
-import { cardVisualRect } from '../../hooks/useCardDecks'
+import { addMediaBlockToCard, cardHitAt, groupForCardHit } from '../../utils/cardContent'
+import { EffectTileBody } from './EffectTileBody'
+import { FxResultLayer, useFxDragUrl } from './FxResultLayer'
+import { snapToStrip } from '../../utils/fx/stripSnap'
+import { isTileDeckFace, tileDeckMembers, touchingTileCluster } from '../../utils/tileDecks'
+import { edgeColorFromHex } from '../../utils/colorUtils'
 import { findMagnetCandidate, magnetRadiusForZoom, viewportVisualRect, type WindowRect } from '../../utils/viewportDocking'
 import { tileBrowseItem, isDockableTile } from '../../utils/contentTraversal'
 import { snapPanelToPanel, isPanelType } from '../../utils/componentLinks'
@@ -40,6 +45,18 @@ import { useMenuClamp } from '../../hooks/useMenuClamp'
  *  the cabinet — so the corner's job is only to grow the shape the drawer
  *  set, not to fight it. */
 const LOCKS_ASPECT = new Set<FreeNodeData['type']>(['list'])
+
+/** Node types held at a FIXED shape on resize: height ÷ width of the whole
+ *  tile. Not LOCKS_ASPECT — that set keeps whatever shape the tile already
+ *  has, and also gives it the Rolodex's drawer-safe handles. An effect card
+ *  is a playing card (5:7) whatever it was before, so a card made at the
+ *  old size takes the right shape on its first resize. */
+const FIXED_ASPECT: Partial<Record<FreeNodeData['type'], number>> = { effect: 7 / 5 }
+
+/** EffectTileBody's FACE_HEIGHT_U — the tallest face in its unit u, which
+ *  it takes as min(width / 100, height / this). The resize grip has to
+ *  keep to the face's margin in the SAME unit. Keep the two in step. */
+const EFFECT_FACE_HEIGHT_U = 128
 
 /** Node types whose `imageUrl` IS the media — the stored file itself, a
  *  model's .glb rather than its poster — so the context menu can offer
@@ -77,6 +94,16 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
   const updateFreeNode = useFreeNodeStore(s => s.updateFreeNode)
   const deleteFreeNode = useFreeNodeStore(s => s.deleteFreeNode)
   const isSelected = useFreeNodeStore(s => s.selectedIds.includes(id))
+  // How many tiles the collapsed deck this node is the FACE of holds, the
+  // face included — 0 when it is not a face. A number, so this tile only
+  // re-renders when its own deck changes size; and O(1) for every tile
+  // that is not a face, which is nearly all of them.
+  const deckCount = useFreeNodeStore(s => {
+    if (s.nodes[id]?.tileDeck?.anchor !== id) return 0
+    let c = 0
+    for (const m of Object.values(s.nodes)) if (m.tileDeck?.anchor === id) c++
+    return c
+  })
   const setFreeSelection = useFreeNodeStore(s => s.setFreeSelection)
   const toggleFreeSelection = useFreeNodeStore(s => s.toggleFreeSelection)
   const zoom = useCanvasStore(s => s.zoom)
@@ -123,11 +150,19 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
   // under a cursor that hasn't moved).
   useSeedHoverFromCursor(wrapperRef, setIsHovered)
 
-  // Drag the whole card — anything except textarea/input/button/[data-resize]
+  // A picture at the head of an effect strip SHOWS the processed result
+  // (FxResultLayer), so its drag-out grip hands out that result: `active`
+  // while it is showing one, `url` once the file has been written ahead
+  // (on hover). Above the early return — it is a hook.
+  const fxDrag = useFxDragUrl(id, isHovered)
+
+  // Drag the whole card — anything except textarea/input/select/button/[data-resize]
   const onNodeDown = useCallback((e: React.PointerEvent) => {
     if (e.button !== 0) return
     const tag = (e.target as HTMLElement).tagName
-    if (tag === 'TEXTAREA' || tag === 'INPUT' || tag === 'BUTTON') return
+    // SELECT too: capturing the pointer on the wrapper would take the press
+    // away from a native dropdown (an effect card's name is one).
+    if (tag === 'TEXTAREA' || tag === 'INPUT' || tag === 'BUTTON' || tag === 'SELECT') return
     if ((e.target as Element).closest('[data-resize]')) return
     if ((e.target as Element).closest('[data-pen-button]')) return
     e.stopPropagation()
@@ -262,7 +297,10 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
       // and is handled by the panel magnet below.
       if (dragHasMoved.current && isDockableTile(node) && preview?.windowId) {
         const cur = useFreeNodeStore.getState().nodes[id]
-        if (cur) updateFreeNode(id, { x: preview.x, y: preview.y })
+        // As a DELTA through the move action, not an x/y write: a deck face
+        // takes the tiles hidden behind it along, and a write would leave
+        // them where the face was let go.
+        if (cur) moveFreeNode(id, preview.x - cur.x, preview.y - cur.y)
         // Content tiles load their item; LIST tiles just snap — the
         // strip's reconciliation picks the default from their results.
         const dockItem = tileBrowseItem(node)
@@ -282,12 +320,28 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
         : null
       if (snap) updateFreeNode(id, { x: snap.x, y: snap.y })
     }
-    if (dragHasMoved.current && node) {
+    // Effect strip: an effect card let go near a card's or a Viewer's left
+    // or right edge lines up flush with it — how a strip gets built.
+    if (dragHasMoved.current && node.type === 'effect' && !node.pin) {
+      const cur = useFreeNodeStore.getState().nodes[id]
+      const snap = cur
+        ? snapToStrip(cur, useFreeNodeStore.getState().nodes, useViewport3DStore.getState().windows, zoom)
+        : null
+      // A delta, for the same reason as the Viewer dock above.
+      if (snap && cur) moveFreeNode(id, snap.x - cur.x, snap.y - cur.y)
+    }
+    // A deck FACE never transfers. The scan below hands over the face's own
+    // media and then deletes the tile — which, for a face, is the deck.
+    if (dragHasMoved.current && node && !isTileDeckFace(node, useFreeNodeStore.getState().nodes)) {
       const hasMedia = !!node.imageUrl
       const hasText = !!(node.text && (node.type === 'text' || node.type === 'note'))
       if (hasMedia || hasText) {
         wrapperRef.current!.style.pointerEvents = 'none'
-        const allEls = document.elementsFromPoint(e.clientX, e.clientY)
+        // …minus this tile's own children that re-enable pointer events
+        // (its header buttons, the drag-out grip): the walks below stop at
+        // the first tile they meet, and that must never be this one.
+        const self = wrapperRef.current!
+        const allEls = document.elementsFromPoint(e.clientX, e.clientY).filter(el => !self.contains(el))
         wrapperRef.current!.style.pointerEvents = ''
 
         const mediaType = node.mediaType ?? 'image'
@@ -319,59 +373,21 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
           useFreeNodeStore.getState().deleteFreeNode(id)
         }
 
-        // A board is "unused" when nothing has touched it: the single
-        // default root bar with no children, name, media, text, icon, or
-        // strokes, and no block/card layer content. A fresh card's default
-        // board qualifies — models FILL it before new blocks are created.
-        const isBoardUnused = (b: import('../../store/boardsStore').BoardData | undefined): boolean => {
-          if (!b || b.rootIds.length !== 1) return false
-          const root = b.bars[b.rootIds[0]]
-          if (!root || root.children.length > 0) return false
-          const c = root.content
-          const barUntouched = (root.name === 'Untitled' || root.name === '')
-            && !root.icon && !(root.strokes && root.strokes.length > 0)
-            && (!c || (!c.text && !c.headerText && (c.images?.length ?? 0) === 0 && (c.media?.length ?? 0) === 0))
-          const layersUntouched = !b.layers?.block?.label && !b.layers?.block?.thumbnail
-            && !b.layers?.card?.text && !b.layers?.card?.heroImage && !b.projectName
-          return barUntouched && layersUntouched
-        }
-
-        // Helper: a model dropped on a CARD gets its OWN BLOCK, with the
-        // model as the media of that block's TOP-LEVEL node (root bar).
-        // An existing UNUSED board (e.g. a fresh card's default one) is
-        // filled first; a new board is only created once every board has
-        // been used in some way.
-        const addModelBlockToCard = (groupId: string): boolean => {
+        // Helper: media dropped on a CARD goes INTO it as a block of its
+        // own, the media on that block's top bar (utils/cardContent) — the
+        // same rule a file or Media Pool drop follows. Nothing on the card
+        // is replaced; its face keeps showing the first picture it holds.
+        const addMediaBlock = (groupId: string): boolean => {
           if (!node.imageUrl) return false
-          const bs0 = useBoardsStore.getState()
-          const group = bs0.groups.find(g => g.id === groupId)
-          if (!group) return false
-          const modelPoster = transferablePoster(node)
-          const fillModel = (boardId: string): boolean => {
-            const rootBar = useBoardsStore.getState().boards[boardId]?.rootIds[0]
-            if (!rootBar) return false
-            const store = useBoardsStore.getState()
-            if (node.label) store.renameBar(boardId, rootBar, node.label)
-            store.setContent(boardId, rootBar, {
-              media: [{
-                url: node.imageUrl!, type: 'model' as const,
-                ...(modelPoster ? { posterUrl: modelPoster } : {}),
-                ...(node.label ? { originalName: node.label } : {}),
-              }],
-            })
-            useFreeNodeStore.getState().deleteFreeNode(id)
-            return true
-          }
-          // Fill-first: reuse an untouched board before adding a block.
-          const emptyBoardId = group.boardIds.find(bid => isBoardUnused(bs0.boards[bid]))
-          if (emptyBoardId) return fillModel(emptyBoardId)
-          // Land the new block after the card's existing content: top row,
-          // just right of the visual card edge.
-          const v = cardVisualRect(group, bs0.boards, useCanvasStore.getState().zoom)
-          const dropX = (v ? v.rect.right : group.originX) + 40
-          const newBoardId = bs0.createBoard(0, 0)
-          useBoardsStore.getState().reassignBoard(newBoardId, groupId, { x: dropX, y: group.originY })
-          return fillModel(newBoardId)
+          const poster = mediaType === 'model' || mediaType === 'video' ? transferablePoster(node) : null
+          const landed = addMediaBlockToCard(groupId, {
+            url: node.imageUrl, type: mediaType,
+            ...(poster ? { posterUrl: poster } : {}),
+            ...(node.label ? { originalName: node.label } : {}),
+          }, node.label || undefined)
+          if (!landed) return false
+          useFreeNodeStore.getState().deleteFreeNode(id)
+          return true
         }
 
         // Priority: board-level blocks > block-layer blocks > cards
@@ -388,26 +404,22 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
         }
 
         // Block zoom (0.17–0.3): transfer to block-level independent text.
-        // Model tiles transfer INTO the board's content (root bar media —
-        // so the block "has" the model); the thumbnail only ever receives
-        // the model's POSTER (a .glb URL in an <img> renders broken), and
-        // only when the block has none yet.
+        // An image becomes the block's thumbnail. Anything a thumbnail
+        // cannot show — a model, a video, audio — transfers INTO the card's
+        // content as a block of its own instead (an .mp4 or a .glb in an
+        // <img> renders blank or broken).
         if (!transferred) {
           for (const el of allEls) {
             const block = el.closest('[data-layer-block]') as HTMLElement | null
             if (block) {
               const targetBoardId = block.getAttribute('data-layer-block')!
-              if (mediaType === 'model') {
-                // Resolve the target board's group (auto-grouping ungrouped
-                // boards, matching drag-release behavior) → own block there.
-                const bs0 = useBoardsStore.getState()
-                let targetGroup = bs0.groups.find(gr => gr.boardIds.includes(targetBoardId))
-                if (!targetGroup || targetGroup.id === 'default-group') {
-                  bs0.groupBoardAsNew(targetBoardId)
-                  targetGroup = useBoardsStore.getState().groups.find(gr => gr.boardIds.includes(targetBoardId))
-                }
-                if (!targetGroup) break   // nowhere to hold it — leave the tile
-                if (!addModelBlockToCard(targetGroup.id)) break
+              if (hasMedia && mediaType !== 'image') {
+                // The target board's group → own block there. The group
+                // that holds the board wins — default-group too, it is a
+                // real card; only a board no group holds is grouped.
+                const targetGroupId = groupForCardHit({ boardId: targetBoardId })
+                if (!targetGroupId) break   // nowhere to hold it — leave the tile
+                if (!addMediaBlock(targetGroupId)) break
                 transferred = true
                 break
               }
@@ -426,11 +438,32 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
           }
         }
 
-        // Card zoom (≤ 0.17): transfer to card-level independent text.
-        // Model tiles transfer INTO the card's content (first board's root
-        // bar media — enabling decks of models); the hero only ever gets
-        // the model's POSTER, and only when the card has none yet.
-        if (!transferred) {
+        // Card zoom (≤ 0.17): media of every kind transfers INTO the card's
+        // content as a block of its own (enabling cards dense with
+        // references, and decks of models). The card is found by cardHitAt,
+        // the rule a file or Media Pool drop follows, so a stacked deck, a
+        // fan strip or a clone takes it just as a plain card does. The hero
+        // is never overwritten — a model only fills an empty one from its
+        // POSTER.
+        if (!transferred && hasMedia && node.imageUrl) {
+          const hit = cardHitAt(allEls)
+          const targetGroupId = hit ? groupForCardHit(hit) : null
+          const targetGroup = targetGroupId
+            ? useBoardsStore.getState().groups.find(g => g.id === targetGroupId)
+            : undefined
+          if (targetGroup) {
+            if (mediaType === 'model') {
+              const poster = transferablePoster(node)
+              if (poster && !targetGroup.cardHeroImage) {
+                useBoardsStore.getState().setGroupCardHeroImage(targetGroup.id, poster)
+              }
+            }
+            if (addMediaBlock(targetGroup.id)) transferred = true
+          }
+        }
+
+        // Card zoom, text: transfers to card-level independent text.
+        if (!transferred && !hasMedia && hasText) {
           for (const el of allEls) {
             const card = el.closest('[data-nle-card]') as HTMLElement | null
             if (card) {
@@ -438,43 +471,14 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
               // Check if this is a group card or ungrouped
               const layerCard = card.closest('[data-layer-card]') as HTMLElement | null
               const groupId = layerCard?.getAttribute('data-layer-card')
-
-              if (mediaType === 'model') {
-                // Resolve the card's group (auto-grouping ungrouped cards),
-                // fill an empty hero from the poster, then own block.
-                const bs = useBoardsStore.getState()
-                let targetGroup = groupId ? bs.groups.find(g => g.id === groupId) : undefined
-                if (!targetGroup) {
-                  bs.groupBoardAsNew(targetBoardId)
-                  targetGroup = useBoardsStore.getState().groups.find(gr => gr.boardIds.includes(targetBoardId))
-                }
-                if (!targetGroup) break   // nowhere to hold it — leave the tile
-                const poster = transferablePoster(node)
-                if (poster && !targetGroup.cardHeroImage) {
-                  useBoardsStore.getState().setGroupCardHeroImage(targetGroup.id, poster)
-                }
-                if (!addModelBlockToCard(targetGroup.id)) break
-                transferred = true
-                break
-              }
-
-              if (hasText) {
-                if (groupId) {
-                  const curText = useBoardsStore.getState().groups.find(g => g.id === groupId)?.cardText ?? ''
-                  const newText = curText ? curText + '\n' + node.text : node.text
-                  useBoardsStore.getState().setGroupCardText(groupId, newText)
-                } else {
-                  const curText = useBoardsStore.getState().boards[targetBoardId]?.layers?.card?.text ?? ''
-                  const newText = curText ? curText + '\n' + node.text : node.text
-                  useBoardsStore.getState().setCardText(targetBoardId, newText)
-                }
-              }
-              if (hasMedia && node.imageUrl) {
-                if (groupId) {
-                  useBoardsStore.getState().setGroupCardHeroImage(groupId, node.imageUrl)
-                } else {
-                  useBoardsStore.getState().setCardHeroImage(targetBoardId, node.imageUrl)
-                }
+              if (groupId) {
+                const curText = useBoardsStore.getState().groups.find(g => g.id === groupId)?.cardText ?? ''
+                const newText = curText ? curText + '\n' + node.text : node.text
+                useBoardsStore.getState().setGroupCardText(groupId, newText)
+              } else {
+                const curText = useBoardsStore.getState().boards[targetBoardId]?.layers?.card?.text ?? ''
+                const newText = curText ? curText + '\n' + node.text : node.text
+                useBoardsStore.getState().setCardText(targetBoardId, newText)
               }
               useFreeNodeStore.getState().deleteFreeNode(id)
               transferred = true
@@ -487,7 +491,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
       }
     }
     // No transfer happened — user placed the node here intentionally, leave it.
-  }, [id, node?.type, node?.imageUrl, connectedWindowId, isSelected, isRenaming, setFreeSelection, toggleFreeSelection, updateFreeNode, zoom])
+  }, [id, node?.type, node?.imageUrl, connectedWindowId, isSelected, isRenaming, setFreeSelection, toggleFreeSelection, updateFreeNode, moveFreeNode, zoom])
 
   // Resize handles — eight of them, so a panel can be reshaped from any
   // edge or corner instead of only being dragged bigger from one corner.
@@ -526,15 +530,24 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
     // A Rolodex tile is always in this mode: the drawer at its base sets how
     // long the cabinet is, so its handles only grow the shape the drawer
     // chose rather than fighting it.
-    const proportional = LOCKS_ASPECT.has(node.type) || (e.shiftKey && dir.length === 2)
+    //
+    // An effect card is always in this mode too, at its FIXED playing-card
+    // shape rather than whatever shape it starts the drag with.
+    const fixedRatio = FIXED_ASPECT[node.type]
+    const proportional = fixedRatio !== undefined || LOCKS_ASPECT.has(node.type) || (e.shiftKey && dir.length === 2)
     if (proportional) {
-      const ratio = s.h / s.w
+      const ratio = fixedRatio ?? s.h / s.w
       // Project the drag onto the diagonal (1, ratio) so both directions of
       // pointer travel contribute and the corner tracks the cursor. West and
       // north handles pull the other way, hence the sign.
       const sx = dir.includes('w') ? -1 : 1
       const sy = dir.includes('n') ? -1 : 1
-      const t = (dx * sx + dy * sy * ratio) / (1 + ratio * ratio)
+      // A fixed-shape card's SIDE handles follow their own axis instead: on
+      // the diagonal, a sideways pull moved the edge a third as far as the
+      // hand and a vertical one two thirds, so the edge slid off the cursor.
+      const t = fixedRatio !== undefined && dir.length === 1
+        ? (dir === 'e' || dir === 'w' ? dx * sx : (dy * sy) / ratio)
+        : (dx * sx + dy * sy * ratio) / (1 + ratio * ratio)
       const w = Math.max(120, 80 / ratio, s.w + t)
       const h = w * ratio
       const patch: Partial<FreeNodeData> = { width: w, height: h }
@@ -580,6 +593,25 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
     setIsRenaming(false)
   }, [id, renameVal, updateFreeNode])
 
+  /** The tile-deck gesture (utils/tileDecks): opens the deck this tile is
+   *  the face of, or collapses the tiles touching it into one. One undo
+   *  step either way. Returns whether anything happened, so a double-click
+   *  that did nothing is left to whatever else wants it. */
+  const toggleTileDeck = useCallback((): boolean => {
+    const fns = useFreeNodeStore.getState()
+    const cur = fns.nodes[id]
+    if (!cur) return false
+    if (isTileDeckFace(cur, fns.nodes)) {
+      useUndoCoordinator.getState().checkpoint()
+      fns.expandTileDeck(id)
+      return true
+    }
+    const cluster = touchingTileCluster(id, fns.nodes)
+    if (cluster.length < 2) return false
+    useUndoCoordinator.getState().checkpoint()
+    return fns.collapseTiles(cluster) !== null
+  }, [id])
+
 
   if (!node) return null
 
@@ -604,12 +636,35 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
   // ragged band instead of one strip. The node cap still wins on small
   // tiles — a 40px tile has no business carrying a 22px header.
   const headerH = Math.min(22 * iz, node.height * 0.28)
-  const grabZone = Math.min(40 * iz, node.width * 0.3, node.height * 0.3)
+  /** Effect cards wear no title bar: the whole tile is the card's face
+   *  (EffectTileBody), its name banner included. */
+  const showHeader = node.type !== 'effect'
+  /** Where the body starts — the header's height, or 0 without one. */
+  const bodyTop = showHeader ? headerH : 0
+  // An effect card's sliders run nearly edge to edge, and a resize zone
+  // lying over one takes its presses — the value would not move. Only the
+  // SE grip can: it sits at z 20 AFTER the body, so it beats the face's
+  // controls, which EffectTileBody lifts (CONTROL_Z 20) over the z-19
+  // strips and corners. So only the grip keeps to the face's margin (the
+  // rows sit 4u in, corner overlap 2u), in the face's OWN unit — u is
+  // min(width/100, height/128) there, so a card squashed by an old free
+  // resize has rows nearer its edge than width/100 alone would say.
+  // Infinity elsewhere, i.e. no extra cap.
+  const faceU = node.type === 'effect'
+    ? Math.min(node.width / 100, node.height / EFFECT_FACE_HEIGHT_U) : Infinity
+  const grabZone = Math.min(40 * iz, node.width * 0.3, node.height * 0.3, 6 * faceU)
   // Edge and corner zones follow the same rule as every other counter-scaled
   // hit target here: a constant screen size, capped against the node's own
   // box so that zooming out cannot turn the whole tile into handles.
   const cornerZone = Math.min(18 * iz, node.width * 0.22, node.height * 0.22)
   const edgeZone   = Math.min(9 * iz, node.width * 0.12, node.height * 0.12)
+  // The grip's dots: a fixed minimum screen size on an effect card, not a
+  // fraction of its capped square — 0.075 of 6u is under a pixel at any
+  // normal zoom, which read as "this card cannot be resized".
+  const gripDot = node.type === 'effect'
+    ? Math.min(Math.max(1.5 * iz, grabZone * 0.075), grabZone * 0.22)
+    : grabZone * 0.075
+  const gripGap = node.type === 'effect' ? gripDot * 0.5 : grabZone * 0.05
   // Sides stop short of the corners so the corner always wins its own patch.
   const sideInset  = cornerZone
   /** This node's bottom edge is a drawer pull, so the resize zones there
@@ -630,13 +685,30 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
   /** COMPONENT nodes are panels, not media tiles, so they wear the panel's
    *  chrome — identically in both placements. */
   const isPanel = isPanelType(node.type)
+
+  // ── Collapsed tile deck ── a FACE draws the way a stacked card deck does
+  // (CardLayer's StackedDeckCard): its own content, narrowed by an edge
+  // reserve, with up to two edges peeking out on the right, so the deck
+  // keeps exactly the face's footprint. World space, so every size is
+  // counter-scaled by iz and capped against the tile, like the zones above.
+  // Canvas only: a face cannot be pinned.
+  const isDeckFace = deckCount >= 2 && !node.pin
+  const peek = Math.min(3 * iz, node.width * 0.02)
+  const deckReserve = isDeckFace ? peek * 2 + Math.min(4 * iz, node.width * 0.025) : 0
+  /** The width the tile's own box is drawn at — narrower on a deck face. */
+  const faceW = node.width - deckReserve
+
   /** Drag-out carries the whole selection when this tile is part of it,
    *  this tile first. Read at dragstart rather than subscribed, so the grip
-   *  does not re-render on every selection change. */
-  const dragOutUrls = (): string[] => {
+   *  does not re-render on every selection change. Shift on a deck face:
+   *  every file in the deck, the face's first. */
+  const dragOutUrls = ({ all }: { all: boolean }): string[] => {
     const own = node.imageUrl
     if (!own) return []
     const { selectedIds, nodes } = useFreeNodeStore.getState()
+    if (all && isDeckFace) {
+      return tileDeckMembers(id, nodes).flatMap(m => MEDIA_TILES.has(m.type) && m.imageUrl ? [m.imageUrl] : [])
+    }
     if (!selectedIds.includes(id)) return [own]
     const rest = selectedIds.flatMap(sid => {
       const n = sid === id ? null : nodes[sid]
@@ -645,7 +717,85 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
     return [own, ...rest]
   }
 
-  return (
+  // The peeking edges — StackedDeckCard's recipe in tile units. Siblings of
+  // the tile, not children: its box clips (overflow hidden). Drawn first at
+  // the tile's own zIndex, so the face paints over the hairline they share.
+  // Edge 1 always; edge 2 only for three tiles or more, as with cards.
+  const deckEdges = isDeckFace ? (() => {
+    const vIn = Math.min(5 * iz, node.height * 0.04)
+    const sw = Math.min(2 * iz, node.width * 0.012)
+    const r = 10 / gz
+    const edge: React.CSSProperties = {
+      position: 'absolute', boxSizing: 'border-box', width: peek + sw * 2,
+      background: 'transparent', pointerEvents: 'none', zIndex: isHovered ? 50 : 5,
+    }
+    return (
+      <>
+        <div data-tile-deck-edge style={{
+          ...edge, left: node.x + faceW - sw / 2, top: node.y + vIn, height: node.height - vIn * 2,
+          borderRadius: `0 ${r}px ${r}px 0`, borderLeft: 'none',
+          borderTop: `${sw}px solid ${edgeColorFromHex(node.color, 0.6)}`,
+          borderRight: `${sw}px solid ${edgeColorFromHex(node.color, 0.6)}`,
+          borderBottom: `${sw}px solid ${edgeColorFromHex(node.color, 0.6)}`,
+        }} />
+        {deckCount >= 3 && (
+          <div data-tile-deck-edge style={{
+            ...edge, left: node.x + faceW + peek, top: node.y + node.height * 0.05, height: node.height * 0.9,
+            borderRadius: `0 ${r / 2}px ${r / 2}px 0`,
+            borderRight: `${sw}px solid ${edgeColorFromHex(node.color, 0.42)}`,
+          }} />
+        )}
+      </>
+    )
+  })() : null
+
+  // The count — the card-deck header's dashed card glyph, holding how many
+  // tiles the deck has. In the title bar where there is one, else in the
+  // face's top-right corner. Double-clicking it opens the deck, like any
+  // double-click on the face.
+  const badgeW = Math.min(12 * iz, node.width * 0.1, headerH * 0.62)
+  const deckBadge = isDeckFace ? (
+    <div
+      data-tile-deck-count={deckCount}
+      title={`A deck of ${deckCount} tiles — double-click to open it`}
+      style={{
+        minWidth: badgeW, height: badgeW * 1.3, padding: `0 ${badgeW * 0.15}px`,
+        boxSizing: 'border-box', flexShrink: 0,
+        border: `${Math.min(1.2 * iz, badgeW * 0.12)}px dashed rgba(255,255,255,0.7)`,
+        background: 'rgba(255,255,255,0.14)', borderRadius: badgeW * 0.2,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontSize: badgeW * 1.3 * 0.62, fontWeight: 700, color: 'rgba(255,255,255,0.78)',
+        lineHeight: 1, fontFamily: 'system-ui, -apple-system, sans-serif',
+        fontVariantNumeric: 'tabular-nums', textShadow: '0 1px 2px rgba(0,0,0,0.4)',
+        userSelect: 'none',
+        ...(showHeader ? {} : { position: 'absolute' as const, top: pad, right: pad, zIndex: 21 }),
+      }}
+    >{deckCount}</div>
+  ) : null
+
+  const renameInput = (
+    <input
+      ref={renameRef}
+      value={renameVal}
+      onChange={e => setRenameVal(e.target.value)}
+      onBlur={commitRename}
+      onKeyDown={e => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') setIsRenaming(false) }}
+      onPointerDown={e => e.stopPropagation()}
+      style={{
+        flex: 1, background: 'rgba(255,255,255,0.06)', border: 'none',
+        borderBottom: `${Math.max(1, borderW)}px solid rgba(255,255,255,0.3)`,
+        borderRadius: 0, outline: 'none', color: '#fff',
+        fontSize, fontWeight: 600, lineHeight: 1.2, padding: 0, fontFamily: 'inherit',
+        boxSizing: 'border-box', minWidth: 0,
+      }}
+    />
+  )
+
+  // Deck gestures for the menu. The cluster walk reads every tile, so it
+  // only runs while the menu is open.
+  const menuCluster = nodeMenu && !isDeckFace ? touchingTileCluster(id, useFreeNodeStore.getState().nodes) : []
+
+  const tile = (
     <div
       ref={wrapperRef}
       data-freenode="true"
@@ -669,14 +819,16 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
           top: node.y,
           zIndex: isHovered ? 50 : 5,
         }),
-        width: node.width,
+        width: faceW,   // node.width, less the edge reserve on a deck face
         height: node.height,
         // A Rolodex keeps the panel's own silhouette — rounded corners, a
         // soft drop shadow, no tile border — and keeps it in BOTH
         // placements, so pinning it to the screen or setting it down on
         // the canvas never changes how it looks.
         borderRadius: (isPanel ? 12 : 10) / gz,
-        background: node.color,
+        // An effect card paints its own face edge to edge; the tile's random
+        // colour would only show through the translucent border as a ring.
+        background: node.type === 'effect' ? '#15161f' : node.color,
         // Connected-to-viewport model tiles carry the accent tint — the
         // same "these things are linked" language as touching deck cards.
         border: isPanel ? 'none' : `${borderW}px solid ${connectedWindowId
@@ -715,15 +867,51 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
       onPointerDown={onNodeDown}
       onPointerMove={onNodeMove}
       onPointerUp={onNodeUp}
-      onDoubleClick={() => {
+      onDoubleClick={e => {
+        // Portalled children — the context menu, the Edit Image overlay —
+        // still bubble here through the React tree, but they are not the
+        // tile. Their presses never reach onNodeDown either, so the guard
+        // below would hold whatever the last drag left in it.
+        if (!wrapperRef.current?.contains(e.target as Node)) return
         if (dragHasMoved.current) return
-        // Header label has its own dblclick handler for rename.
-        // For text nodes, double-click on body → trigger text edit.
-        // Header clicks don't reach here (stopPropagation on header div).
-        if (node.type === 'text' && !isRenaming) {
-          setTextEditing(true)
-          setFreeSelection([id])
+        // While the crop editor is open the tile is its canvas: stacking or
+        // opening the deck under it would unmount or remount the editor and
+        // lose the crop in progress.
+        if (isEditingImage) return
+        // What was ACTUALLY double-clicked. A press anywhere but a control
+        // captures the pointer on this wrapper (onNodeDown), and a click
+        // after a capture is dispatched to the capturing element — so
+        // e.target can be the wrapper itself whatever lies under the
+        // pointer. The document still knows.
+        const under = document.elementFromPoint(e.clientX, e.clientY)
+        const t = (under && wrapperRef.current?.contains(under) ? under : e.target) as Element
+        // The header label renames (it also has its own handler, for when
+        // the event does reach it).
+        if (t.closest('[data-freenode-label]')) {
+          if (!isRenaming) { setRenameVal(node.label); setIsRenaming(true) }
+          return
         }
+        // Controls keep their own double-click: word selection in a note,
+        // a slider row's reset, the drag-out grip, the resize handles. So
+        // does an ARMED draw surface — two quick pen dots or eraser taps
+        // are not a double-click on the tile. (Unarmed it is
+        // pointer-events: none, so it is never what lies under the pointer.)
+        if (t.closest('textarea, input, select, button, [contenteditable], [data-drag-out], [data-resize], [data-pen-button], [data-draw-surface]')) return
+        const inHeader = !!t.closest('[data-freenode-header]')
+        // A text tile's body keeps double-click-to-edit; it stacks from its
+        // title bar or the context menu instead.
+        if (node.type === 'text' && !inHeader) {
+          if (!isRenaming) {
+            setTextEditing(true)
+            setFreeSelection([id])
+          }
+          return
+        }
+        // Panels are apps, not things you stack (canJoinTileDeck).
+        if (isPanel) return
+        // Everything else: open this deck, or stack the tiles touching
+        // this one into a deck.
+        if (toggleTileDeck()) e.stopPropagation()
       }}
       onContextMenu={e => {
         e.preventDefault(); e.stopPropagation()
@@ -737,11 +925,12 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
           where the body is a full panel that handles its own clicks —
           that left almost nowhere to grab. onNodeDown stops propagation
           itself and skips inputs/buttons, so rename and the header
-          controls still work; dblclick stays isolated for rename. */}
-      <div
+          controls still work. A double-click on the LABEL renames; anywhere
+          else on the bar it reaches the tile and opens or stacks its deck.
+          Effect cards have none — the whole tile is the card's face. */}
+      {showHeader && <div
         data-freenode-header
         onPointerDown={onNodeDown}
-        onDoubleClick={e => e.stopPropagation()}
         style={{
         display: 'flex', alignItems: 'center', gap: pad,
         padding: `${pad * 0.6}px ${pad}px`,
@@ -785,35 +974,24 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
                 the app needs its own grip; media tiles only, panels hold no
                 file. Lifted over the n-resize strip, which otherwise covers
                 its top few pixels. Not wrapped: it renders nothing in a plain
-                browser, and an empty wrapper would still take a flex gap. */}
+                browser, and an empty wrapper would still take a flex gap.
+                A picture showing an effect result hands out THAT, alone —
+                the processed file, written ahead on hover; until it exists
+                there is no grip, rather than one that drags the original. */}
         {MEDIA_TILES.has(node.type) && (
           <DragOutGrip
-            url={node.imageUrl}
-            getUrls={dragOutUrls}
+            url={fxDrag.active ? fxDrag.url : node.imageUrl}
+            getUrls={fxDrag.active ? () => [] : dragOutUrls}
+            allLabel={!fxDrag.active && isDeckFace ? 'every file in this deck' : undefined}
             size={headerBtn}
             visible={isHovered}
             style={{ position: 'relative', zIndex: 20 }}
           />
         )}
 
-        {isRenaming ? (
-          <input
-            ref={renameRef}
-            value={renameVal}
-            onChange={e => setRenameVal(e.target.value)}
-            onBlur={commitRename}
-            onKeyDown={e => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') setIsRenaming(false) }}
-            onPointerDown={e => e.stopPropagation()}
-            style={{
-              flex: 1, background: 'rgba(255,255,255,0.06)', border: 'none',
-              borderBottom: `${Math.max(1, borderW)}px solid rgba(255,255,255,0.3)`,
-              borderRadius: 0, outline: 'none', color: '#fff',
-              fontSize, fontWeight: 600, lineHeight: 1.2, padding: 0, fontFamily: 'inherit',
-              boxSizing: 'border-box', minWidth: 0,
-            }}
-          />
-        ) : (
+        {isRenaming ? renameInput : (
           <span
+            data-freenode-label
             style={{
               flex: 1, color: 'rgba(255,255,255,0.65)', fontSize, fontWeight: 600,
               userSelect: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
@@ -821,6 +999,8 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
             onDoubleClick={e => { e.stopPropagation(); setRenameVal(node.label); setIsRenaming(true) }}
           >{node.label}</span>
         )}
+
+        {deckBadge}
 
         {/* ── Placement controls ── the apps all wear the same pair, so
                 pinning a Media Pool is the same gesture as pinning the
@@ -846,26 +1026,34 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
             } : undefined}
           />
         )}
-      </div>
+      </div>}
 
       {/* ── Body ── */}
-      <FreeNodeBody node={node} id={id} iz={iz} dz={dz} pad={pad} updateFreeNode={updateFreeNode} isEditing={textEditing} setIsEditing={setTextEditing} />
+      <FreeNodeBody node={node} id={id} iz={iz} dz={dz} pad={pad} faceW={faceW} hovered={isHovered} updateFreeNode={updateFreeNode} isEditing={textEditing} setIsEditing={setTextEditing} />
+
+      {!showHeader && deckBadge}
 
       {/* ── Annotation layer — overlays the body region only (header excluded).
               Always renders saved strokes; captures pointer events only while
               draw mode targets THIS node. */}
       <div style={{
         position: 'absolute',
-        top: headerH,
-        left: 0,
-        right: 0,
+        top: bodyTop,
+        // On a deck face the picture under this is centre-CROPPED (cover)
+        // to the narrowed face, not squashed. Strokes are stored as
+        // fractions of the surface's width, so they keep the full tile
+        // width and overhang the edge reserve equally on both sides — the
+        // wrapper's overflow clips the overhang — and stay on what they
+        // marked. 0 on any other tile.
+        left: -deckReserve / 2,
+        right: -deckReserve / 2,
         bottom: 0,
         pointerEvents: 'none',  // children opt-in via DrawableSurface's own gate
       }}>
         <DrawableSurface
           surface={{ kind: 'freeNode', nodeId: id }}
           width={node.width}
-          height={Math.max(0, node.height - headerH)}
+          height={Math.max(0, node.height - bodyTop)}
           strokes={node.strokes ?? []}
         />
       </div>
@@ -882,8 +1070,9 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
               they sit UNDER the visible SE grip in z-order so the familiar
               one still wins where they overlap. Rolodex tiles keep their
               locked aspect on all of them — the drawer still sets the shape,
-              these only grow it. */}
-      {([
+              these only grow it. A deck face has none, like a stacked card
+              deck: resizing the face would leave its hidden tiles behind. */}
+      {!isDeckFace && ([
         ['n',  { top: 0, left: sideInset, right: sideInset, height: edgeZone }, 'ns-resize'],
         // The Rolodex's cabinet base IS its drawer pull, and it runs the full
         // width. A resize strip lying on top of it made the drawer a
@@ -907,8 +1096,8 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
         />
       ))}
 
-      {/* ── Resize handle — large corner zone, always present ── */}
-      <div
+      {/* ── Resize handle — large corner zone, present on all but a deck face ── */}
+      {!isDeckFace && <div
         data-resize="se"
         style={{
           position: 'absolute', bottom: 0, right: 0,
@@ -924,21 +1113,21 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
         {/* Visual grip dots */}
         <div style={{
           display: 'grid',
-          gridTemplateColumns: `repeat(3, ${grabZone * 0.075}px)`,
-          gridTemplateRows: `repeat(3, ${grabZone * 0.075}px)`,
-          gap: `${grabZone * 0.05}px`,
+          gridTemplateColumns: `repeat(3, ${gripDot}px)`,
+          gridTemplateRows: `repeat(3, ${gripDot}px)`,
+          gap: `${gripGap}px`,
           opacity: isHovered ? 0.5 : 0.15,
           transition: 'opacity 0.12s',
         }}>
           {[...Array(9)].map((_, i) => (
             <div key={i} style={{
-              width: grabZone * 0.075, height: grabZone * 0.075, borderRadius: '50%',
+              width: gripDot, height: gripDot, borderRadius: '50%',
               background: 'rgba(255,255,255,0.9)',
               opacity: (i === 4 || i < 3) ? 0 : 1,
             }} />
           ))}
         </div>
-      </div>
+      </div>}
 
       {/* ── Context menu ── */}
       {nodeMenu && ReactDOM.createPortal(
@@ -961,7 +1150,12 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
               <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: 11 }}>{node.label}</span>
             </div>
             {[
-              { label: 'Rename', icon: '✏️', action: () => { setRenameVal(node.label); setIsRenaming(true); setNodeMenu(null) } },
+              // Not for an effect card: its face shows the EFFECT's name, so a
+              // rename would never be seen (and choosing an effect resets it).
+              // Nor does it have a title bar to type one into.
+              ...(node.type !== 'effect' ? [
+                { label: 'Rename', icon: '✏️', action: () => { setRenameVal(node.label); setIsRenaming(true); setNodeMenu(null) } },
+              ] : []),
               ...(node.imageUrl && node.mediaType !== 'model' ? [
                 { label: 'Edit Image', icon: '✂️', action: () => { setNodeMenu(null); setIsEditingImage(true) } },
                 { label: 'Remove Image', icon: '🖼', action: () => { useUndoCoordinator.getState().checkpoint(); updateFreeNode(id, { imageUrl: null, imageTransform: undefined }); setNodeMenu(null) } },
@@ -969,10 +1163,20 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
               ...(node.imageUrl && node.mediaType === 'model' ? [
                 { label: 'Remove Model', icon: '◆', action: () => { useUndoCoordinator.getState().checkpoint(); updateFreeNode(id, { imageUrl: null, posterUrl: undefined }); setNodeMenu(null) } },
               ] : []),
+              // Tile decks — the menu twin of double-click, and the only
+              // way for a text tile, whose body double-click edits. Icons
+              // as on the card menu's Stack / Open Deck.
+              ...(isDeckFace ? [
+                { label: 'Open deck', icon: '📂', action: () => { toggleTileDeck(); setNodeMenu(null) } },
+              ] : menuCluster.length >= 2 ? [
+                { label: 'Stack touching tiles', icon: '📚', action: () => { toggleTileDeck(); setNodeMenu(null) } },
+              ] : []),
               // The ONLY placement gesture. Dragging a pinned panel "off
               // the canvas" deliberately does NOT unpin — a mode should
-              // never change by accident during a move.
-              { label: node.pin ? 'Drop on canvas' : 'Pin to screen',
+              // never change by accident during a move. Not for a deck
+              // face, as card decks do not pin: the tiles hidden behind
+              // it would stay on the canvas.
+              ...(isDeckFace ? [] : [{ label: node.pin ? 'Drop on canvas' : 'Pin to screen',
                 icon: node.pin ? '📤' : '📌',
                 action: () => {
                   const cs = useCanvasStore.getState()
@@ -980,7 +1184,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
                   useFreeNodeStore.getState().setNodePlacement(
                     [id], node.pin ? 'canvas' : 'screen', { pan: cs.pan, zoom: cs.zoom })
                   setNodeMenu(null)
-                } },
+                } }]),
               ...(node.pin ? [
                 { label: 'Set return spot here', icon: '⌖',
                   action: () => {
@@ -990,7 +1194,8 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
                     setNodeMenu(null)
                   } },
               ] : []),
-              { label: 'Delete', icon: '🗑️', danger: true, action: () => { useUndoCoordinator.getState().checkpoint(); deleteFreeNode(id); setNodeMenu(null) } },
+              // On a face this deletes the whole deck (deleteFreeNode), so it says so.
+              { label: isDeckFace ? 'Delete deck' : 'Delete', icon: '🗑️', danger: true, action: () => { useUndoCoordinator.getState().checkpoint(); deleteFreeNode(id); setNodeMenu(null) } },
               ...fileItems,
             ].map(item => (
               <React.Fragment key={item.label}>
@@ -1038,6 +1243,15 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
       })()}
     </div>
   )
+
+  // A deck face is the tile plus its edges, which sit beside it in the
+  // world rather than inside its clipped box. ONE shape whether or not
+  // this is a face — [edges | null, tile] — so the tile stays the second
+  // child and React updates it in place on collapse and expand. Returning
+  // the bare tile otherwise switched the root between a <div> and a
+  // fragment, which remounted the whole subtree: the crop editor, the fx
+  // result, a focused control and every <img>/<canvas> started over.
+  return <>{deckEdges}{tile}</>
 })
 
 // ── Body renderer for each node type ──
@@ -1048,10 +1262,14 @@ const FreeNodeBody: React.FC<{
   iz: number
   dz: number
   pad: number
+  /** The width the tile is drawn at (narrower on a deck face). */
+  faceW: number
+  /** The tile is hovered — reveals the fx result's chrome on a picture. */
+  hovered: boolean
   updateFreeNode: (id: string, patch: Partial<FreeNodeData>) => void
   isEditing: boolean
   setIsEditing: (v: boolean) => void
-}> = ({ node, id, iz, dz, pad, updateFreeNode, isEditing, setIsEditing }) => {
+}> = ({ node, id, iz, dz, pad, faceW, hovered, updateFreeNode, isEditing, setIsEditing }) => {
   const textRef = useRef<HTMLTextAreaElement>(null)
   // node.imageUrl may be a `mediaref:` pointer — resolve to a usable URL
   // (null while loading / if missing). Called unconditionally before any
@@ -1059,6 +1277,11 @@ const FreeNodeBody: React.FC<{
   const resolvedUrl = useResolvedMedia(node.imageUrl)
 
   useEffect(() => { if (isEditing) textRef.current?.focus() }, [isEditing])
+
+  // ── Effect card: one operator on an effect strip ──
+  if (node.type === 'effect') {
+    return <EffectTileBody node={node} id={id} dz={dz} updateFreeNode={updateFreeNode} />
+  }
 
   // ── Model type: poster thumbnail + 3D badge (never renders the .glb) ──
   if (node.type === 'model') {
@@ -1188,7 +1411,7 @@ const FreeNodeBody: React.FC<{
 
   // ── Video type: poster frame with play overlay ──
   if (node.type === 'video') {
-    return <VideoTileBody node={node} id={id} dz={dz} resolvedUrl={resolvedUrl} updateFreeNode={updateFreeNode} />
+    return <VideoTileBody node={node} id={id} iz={iz} dz={dz} faceW={faceW} hovered={hovered} resolvedUrl={resolvedUrl} updateFreeNode={updateFreeNode} />
   }
 
   // ── Audio type: waveform skeleton + transport ──
@@ -1262,6 +1485,10 @@ const FreeNodeBody: React.FC<{
           <div style={{ fontSize: 10 * iz }}>drop image here</div>
         </div>
       )}
+      {/* The effect strip's RESULT, laid over the picture with the same
+          geometry — the effect cards beside it show only their settings.
+          Nothing unless this tile leads a strip with an output. */}
+      <FxResultLayer nodeId={id} imgStyle={imgStyle} iz={iz} nodeW={faceW} nodeH={node.height} hovered={hovered} />
     </div>
   )
 }
@@ -1271,13 +1498,18 @@ const FreeNodeBody: React.FC<{
 //    and files it in the shared poster map, keyed by the STORED url so
 //    every surface showing this video finds it. The video itself is NEVER
 //    fed to an <img> — that rendered as a broken-image icon. ──
+/** The poster's geometry — shared with the fx result laid over it. */
+const VIDEO_POSTER_STYLE: React.CSSProperties = { width: '100%', height: '100%', objectFit: 'cover' }
 const VideoTileBody: React.FC<{
   node: FreeNodeData
   id: string
+  iz: number
   dz: number
+  faceW: number
+  hovered: boolean
   resolvedUrl: string | null
   updateFreeNode: (id: string, patch: Partial<FreeNodeData>) => void
-}> = ({ node, id, dz, resolvedUrl, updateFreeNode }) => {
+}> = ({ node, id, iz, dz, faceW, hovered, resolvedUrl, updateFreeNode }) => {
   // Mounting useThumb is also what keeps the request alive (see thumbService).
   const mapPoster = useThumb(node.imageUrl ?? null, 'video')
   const shownPoster = mapPoster ?? node.posterUrl ?? null
@@ -1324,7 +1556,7 @@ const VideoTileBody: React.FC<{
                 if (shownPoster === node.posterUrl) updateFreeNode(id, { posterUrl: undefined })
                 if (node.imageUrl && resolvedUrl) requestThumb(node.imageUrl, 'video', true, resolvedUrl)
               }}
-              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+              style={VIDEO_POSTER_STYLE}
             />
           )}
           {/* Play button overlay — also the whole picture until a frame lands */}
@@ -1346,6 +1578,10 @@ const VideoTileBody: React.FC<{
               }} />
             </div>
           </div>
+          {/* A video leads an effect strip through its poster frame, so
+              the processed frame shows here exactly as on a picture — over
+              the play glyph, which comes back with "original". */}
+          <FxResultLayer nodeId={id} imgStyle={VIDEO_POSTER_STYLE} iz={iz} nodeW={faceW} nodeH={node.height} hovered={hovered} />
         </>
       ) : (
         <div style={{ textAlign: 'center', color: 'rgba(255,255,255,0.25)', pointerEvents: 'none' }}>

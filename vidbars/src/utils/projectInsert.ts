@@ -213,9 +213,12 @@ export function insertProjectSnapshot(
         const newId = crypto.randomUUID()
         // Strip `pin`: an inserted project must never silently pin objects
         // over the user's own UI, and shifting a SCREEN anchor by a canvas
-        // delta is meaningless anyway.
+        // delta is meaningless anyway. Strip `tileDeck` too, as groups clear
+        // their deck fields above: ids are re-minted WITHOUT remapping, so
+        // its anchor would name a node that is not in this document — the
+        // inserted tiles simply arrive open.
         const { pin: _drop, ...rest } = node as typeof node & { pin?: unknown }
-        updated[newId] = { ...rest, id: newId, y: (rest.y ?? 0) + dy }
+        updated[newId] = { ...rest, id: newId, y: (rest.y ?? 0) + dy, tileDeck: undefined }
       }
       return { nodes: updated }
     })

@@ -33,7 +33,24 @@ export interface VidbarsDesktop {
   isDraggingOut?(): boolean
   /** Warm the drag image for a stored url (on hover). */
   prepareDragIcon?(url: string): Promise<boolean>
+  /** Save an image the app made (PNG/JPEG data url) as a real file in
+   *  Pictures\VidBars Context Sheets or \VidBars Effects (a local folder
+   *  instead when Pictures is on a network share), or for kind 'drag' in
+   *  the Drag Cache (see SaveImageKind). Never overwrites: a taken
+   *  name gets " (2)", " (3)"… Resolves the path written, or why not.
+   *  A bare string | null comes from a main older than this page — it only
+   *  restarts with the window. Go through utils/saveImage.ts. */
+  saveImage?(kind: SaveImageKind, name: string, dataUrl: string): Promise<{ path: string } | { error: string } | string | null>
 }
+
+/** Where a save lands: 'context-sheet' and 'effect' are the user's files
+ *  (Pictures\VidBars Context Sheets, \VidBars Effects); 'drag' is a
+ *  drag-out copy prepared ahead of a drag (an effect result on its
+ *  picture), in the app's own Drag Cache, held to a budget (files older
+ *  than 2 days go at startup; past 100 files or 400 MB the oldest go) —
+ *  never a place to keep anything. A main older than 'drag' answers
+ *  { error: 'Not allowed' } until the window restarts. */
+export type SaveImageKind = 'context-sheet' | 'effect' | 'drag'
 
 declare global {
   interface Window {
