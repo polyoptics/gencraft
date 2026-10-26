@@ -688,7 +688,8 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
 
         {/* Content playlist — appears when ≥2 items are docked; also owns
             active-item reconciliation, so it mounts unconditionally. */}
-        <ViewportSwitcherStrip windowId={id} reserveRight={grabZone} />
+        <ViewportSwitcherStrip windowId={id}
+          reserveRight={grabZone} reserveLeft={cornerZone} reserveBottom={edgeZone} />
       </div>
 
       {/* ── Reshape handles ── the other seven, under the visible SE grip. */}

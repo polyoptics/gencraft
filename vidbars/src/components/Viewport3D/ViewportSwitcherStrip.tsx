@@ -42,7 +42,14 @@ export const ViewportSwitcherStrip: React.FC<{
    *  hover and click, making the arrow unusable exactly when you are cycling
    *  through models. Reserve the corner instead of fighting over it. */
   reserveRight?: number
-}> = ({ windowId, reserveRight = 0 }) => {
+  /** Same problem at the other end: the SW reshape corner (zIndex 19) sat
+   *  over the previous-item arrow. Width of that corner's hit zone. */
+  reserveLeft?: number
+  /** Height of the S reshape edge, which runs along the strip's bottom
+   *  between the two corners. Without a card face the strip is short enough
+   *  for that edge to clip the arrows' lower half. */
+  reserveBottom?: number
+}> = ({ windowId, reserveRight = 0, reserveLeft = 0, reserveBottom = 0 }) => {
   const win = useViewport3DStore(s => s.windows[windowId])
   const setActiveItem = useViewport3DStore(s => s.setActiveItem)
   const canvasZoom = useCanvasStore(s => s.zoom)
@@ -111,7 +118,7 @@ export const ViewportSwitcherStrip: React.FC<{
       style={{
         position: 'absolute', left: 0, right: 0, bottom: 0,
         display: 'flex', alignItems: 'center', gap: 6 * iz,
-        padding: `${4 * iz}px ${8 * iz + reserveRight}px ${4 * iz}px ${8 * iz}px`,
+        padding: `${4 * iz}px ${8 * iz + reserveRight}px ${Math.max(4 * iz, reserveBottom + 2 * iz)}px ${8 * iz + reserveLeft}px`,
         background: 'rgba(13,14,26,0.88)',
         borderTop: `${Math.max(1, 1 / zoom)}px solid rgba(140,170,255,0.15)`,
         zIndex: 2,   // above DOM content views in the body
