@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react'
-import { useBoardsStore } from '../../store/boardsStore'
+import { useBoardsStore, freshCanvasBoards } from '../../store/boardsStore'
 import type { BoardData, ProjectGroup } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
@@ -210,8 +210,11 @@ export const TemplateMenu: React.FC = () => {
   function loadTemplate(entry: TemplateEntry) {
     if (entry.kind === 'preset') {
       const t = entry.data
-      const bs = useBoardsStore.getState()
-      bs.boardOrder.slice().forEach(bid => useBoardsStore.getState().deleteBoard(bid))
+      // A fresh canvas, not the old one emptied: deleting the extra boards
+      // left the previous project's default card behind — its name, hero,
+      // position and deck membership — so a card hidden on the canvas
+      // still showed in the Card Browser.
+      useBoardsStore.setState(freshCanvasBoards())
       useFreeNodeStore.setState({ nodes: {}, selectedIds: [] })
       ensureRolodexHome()   // pointer now dangles — re-mint at the seed position
       setBoardPos({ x: 0, y: 0 })

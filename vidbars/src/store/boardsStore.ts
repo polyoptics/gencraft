@@ -402,6 +402,22 @@ const DEFAULT_GROUP: ProjectGroup = {
   originX: 0,
 }
 
+/** The boards of a brand-new canvas — the primary board and its default
+ *  card, exactly as first launch makes them. "Start fresh" (loading a
+ *  one-board template) resets to this rather than keeping the previous
+ *  project's default card: that card kept its name, hero, text, position
+ *  and deck membership, and as a stacked member of a deck that no longer
+ *  existed it was hidden on the canvas yet still listed in the Card
+ *  Browser — a card you could see in the list and never find. */
+export function freshCanvasBoards(): Pick<BoardsState, 'boards' | 'boardOrder' | 'groups' | 'selectedGroupIds'> {
+  return {
+    boards: { primary: { ...PRIMARY_BOARD, layers: { ...DEFAULT_LAYERS } } },
+    boardOrder: [],
+    groups: [{ ...DEFAULT_GROUP, boardIds: ['primary'] }],
+    selectedGroupIds: [],
+  }
+}
+
 export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
   boards: { primary: PRIMARY_BOARD },
   boardOrder: [],
@@ -1134,10 +1150,15 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
     }
     set(s => {
       // Detect sub-deck anchors: members whose ID is referenced by
-      // deckAnchorId of groups OUTSIDE this set (they anchor a nested sub-deck)
+      // deckAnchorId of COLLAPSED groups OUTSIDE this set (they anchor a
+      // nested sub-deck). An open card's leftover pointer is not a sub-deck
+      // — counting it took the sub-deck branch for a plain anchor, which
+      // never sets its deckState: Open Deck left it stuck 'stacked', and
+      // Stack left it 'open'. Same rule as useCardDecks' isSubDeckAnchor.
       const subDeckAnchors = new Set<string>()
       for (const g of s.groups) {
-        if (!idSet.has(g.id) && g.deckAnchorId && idSet.has(g.deckAnchorId)) {
+        if (!idSet.has(g.id) && g.deckAnchorId && idSet.has(g.deckAnchorId)
+            && g.deckState && g.deckState !== 'open') {
           subDeckAnchors.add(g.deckAnchorId)
         }
       }
@@ -1324,6 +1345,20 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
       const dy = newOriginY - card.originY
       const subTreeIds = getTransitiveDescendantIds(cardId, s.groups)
       const subTreeIdSet = new Set(subTreeIds)
+      // The card's own deck now CONTAINS the deck it was taken from (the
+      // parent was stacked under it). Returning it there would put each deck
+      // inside the other — a cycle in which every card is a hidden member
+      // and nothing is ever drawn again. The tether has nothing left to
+      // return to, so drop the ghost slot and leave the cards as they are.
+      if (subTreeIdSet.has(parent.id)) {
+        return {
+          groups: s.groups.map(g => {
+            if (g.id !== parent.id) return g
+            const slots = (g.ghostSlots ?? []).filter(sl => sl.cardId !== cardId)
+            return { ...g, ghostSlots: slots.length > 0 ? slots : undefined }
+          }),
+        }
+      }
       // Cards reachable inside the returning anchor (anchor + descendants) are
       // no longer "extracted" from the parent — they live inside parent again
       // via the nested-deck chain. Drop any of their lingering ghostSlots from
@@ -1374,9 +1409,23 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
                 nestedDeck: true,
               }
             }
-            // No sub-members. parent.deckState='open' here gives the card
-            // 'open' deckState — a standalone open card at the slot
-            // position, matching the other now-open siblings.
+            // No sub-members. An open parent gives a standalone open card at
+            // the slot position, matching the other now-open siblings — and
+            // like them it keeps NO deckAnchorId (Open Deck clears theirs).
+            // A leftover pointer to the parent was read as a sub-deck by the
+            // next Stack or Open Deck, which left the anchor half-updated.
+            if (parentIsOpen) {
+              return {
+                ...g,
+                originX: newOriginX,
+                originY: newOriginY,
+                deckAnchorId: undefined,
+                deckOffsetX: undefined,
+                deckOffsetY: undefined,
+                deckState: 'open',
+                nestedDeck: undefined,
+              }
+            }
             return {
               ...g,
               originX: newOriginX,
@@ -1384,7 +1433,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
               deckAnchorId: parent.id,
               deckOffsetX: slot.deckOffsetX,
               deckOffsetY: slot.deckOffsetY,
-              deckState: parent.deckState ?? 'open',
+              deckState: parent.deckState,
               nestedDeck: undefined,
             }
           }
@@ -1953,6 +2002,83 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
     groups: s.groups,
   }),
 }))
+
+/** Deck members whose anchor is GONE go back on the canvas. A member is
+ *  hidden (CardLayer's render gate, isHiddenDeckMember) and is drawn only
+ *  through its anchor's deck; when the anchor is deleted — or its group
+ *  dropped because its last board moved away — nothing draws or opens the
+ *  member again, so it stayed hidden on the canvas while the Card Browser
+ *  still listed it.
+ *
+ *  Members on an anchor LOOP (A in B's deck, B in A's) are healed the same
+ *  way: every anchor exists, yet each is a hidden member, so no deck in the
+ *  loop is ever drawn. Checking a card back in through its tether used to
+ *  build such loops; canvases saved with one get their cards back.
+ *
+ *  An anchor that exists outside any loop but is itself 'open' is NOT an
+ *  orphaning: useCardDecks' stored-anchor fallback draws that deck from its
+ *  members' state (older stacks built after a card was pulled out of a fan
+ *  and put back have that shape). Healing it undid the stack.
+ *
+ *  A regular member opens where it is: a collapsed deck's members move
+ *  with it, so their origins are already right. A member that is itself a
+ *  SUB-DECK anchor (cards outside the loop point at it) keeps its own deck
+ *  and becomes a top-level one — the same shape setDeckState gives a
+ *  sub-deck whose parent opens — rather than spilling its cards out.
+ *
+ *  Also clears the leftover pointer an OPEN card could keep to its old deck
+ *  (returnToDeck used to leave one). It means nothing — an opened deck's
+ *  cards keep none — but several readers count any pointer: the card was
+ *  dragged along with that deck, listed under it in the Card Browser, and
+ *  taken for a sub-deck.
+ *
+ *  Returns the same array when nothing needs healing. */
+export function healOrphanDeckMembers(groups: ProjectGroup[]): ProjectGroup[] {
+  const byId = new Map(groups.map(g => [g.id, g]))
+  const collapsed = (g: ProjectGroup | undefined) => !!g && !!g.deckState && g.deckState !== 'open'
+  const isMember = (g: ProjectGroup) => collapsed(g) && !!g.deckAnchorId && g.deckAnchorId !== g.id
+  // Hidden members whose anchor chain comes back round to itself.
+  const inLoop = new Set<string>()
+  for (const g of groups) {
+    if (!isMember(g) || inLoop.has(g.id)) continue
+    const path: string[] = []
+    const at = new Map<string, number>()
+    let cur: ProjectGroup | undefined = g
+    while (cur && isMember(cur) && !inLoop.has(cur.id)) {
+      const seen = at.get(cur.id)
+      if (seen !== undefined) { for (const id of path.slice(seen)) inLoop.add(id); break }
+      at.set(cur.id, path.length)
+      path.push(cur.id)
+      cur = byId.get(cur.deckAnchorId!)
+    }
+  }
+  const pointedAt = new Set(groups.filter(m => isMember(m) && !inLoop.has(m.id)).map(m => m.deckAnchorId!))
+  let changed = false
+  const out = groups.map(g => {
+    if (!isMember(g)) {
+      if (collapsed(g) || !g.deckAnchorId || g.deckAnchorId === g.id) return g
+      changed = true
+      return { ...g, deckAnchorId: undefined, nestedDeck: undefined, deckOffsetX: undefined, deckOffsetY: undefined }
+    }
+    if (byId.has(g.deckAnchorId!) && !inLoop.has(g.id)) return g
+    changed = true
+    if (pointedAt.has(g.id)) {
+      return { ...g, deckAnchorId: undefined, nestedDeck: true, deckOffsetX: undefined, deckOffsetY: undefined }
+    }
+    return { ...g, deckState: 'open' as const, deckAnchorId: undefined, nestedDeck: undefined, deckOffsetX: undefined, deckOffsetY: undefined }
+  })
+  return changed ? out : groups
+}
+
+// Heal on EVERY change to the card list rather than in each action that
+// can remove an anchor (delete, the last board leaving a group, a template
+// load, undo…) — and on load from storage, which repairs canvases saved
+// while the bug was live.
+useBoardsStore.subscribe((s, prev) => {
+  if (s.groups === prev.groups) return
+  const healed = healOrphanDeckMembers(s.groups)
+  if (healed !== s.groups) useBoardsStore.setState({ groups: healed })
+})
 
 // Dev-only: expose the running store on `window` so debugging tooling
 // (preview_eval, devtools console) can reach the SAME instance the app

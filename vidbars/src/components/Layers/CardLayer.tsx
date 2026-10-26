@@ -3195,6 +3195,16 @@ const TetherTab: React.FC<{ cardId: string; touchingClusters: string[][] }> = ({
   const rect = cardScreenRect(card, boards, pan, zoom)
   if (!rect) return null
   const parentName = parent.name || parent.cardHeaderText || 'Untitled deck'
+  // The touching cluster a check-in folds in with this card — none when it
+  // holds the deck the card came FROM, even tucked inside another deck in
+  // the cluster: folding that under the card and then returning the card
+  // into it put each deck inside the other, and every card in the loop was
+  // hidden for good. A card touching its own deck just goes back to its
+  // slot. The hover preview, double-click and "Check back in" all use this,
+  // so what is outlined is what folds.
+  const touching = touchingClusters.find(c => c.includes(card.id))
+  const foldCluster = touching && touching.length >= 2
+    && !expandWithNestedMembers(touching, allGroups).includes(parent.id) ? touching : null
   // Header geometry — same formula NLETimelineHeader uses, mirrored here so
   // the tint stripe lines up exactly with the visible header bar.
   const headerExtend = computeHeaderExtend(zoom)
@@ -3233,11 +3243,10 @@ const TetherTab: React.FC<{ cardId: string; touchingClusters: string[][] }> = ({
         onDoubleClick={e => {
           e.stopPropagation()
           useUndoCoordinator.getState().checkpoint()
-          const cluster = touchingClusters.find(c => c.includes(card.id))
-          if (cluster && cluster.length >= 2) {
+          if (foldCluster) {
             // Reorder so this card is first → it becomes the sub-deck
             // anchor. Other cluster members get tethered to it.
-            const ordered = [card.id, ...cluster.filter(id => id !== card.id)]
+            const ordered = [card.id, ...foldCluster.filter(id => id !== card.id)]
             useBoardsStore.getState().setDeckState(ordered, 'stacked')
           }
           useBoardsStore.getState().returnToDeck(card.id)
@@ -3295,10 +3304,8 @@ const TetherTab: React.FC<{ cardId: string; touchingClusters: string[][] }> = ({
           which cards will be folded into the sub-deck and returned along
           with the anchor. Uses the same blue-dashed treatment as
           DeckAffordance's hover so it reads as "deck-ish." */}
-      {isHovered && (() => {
-        const cluster = touchingClusters.find(c => c.includes(card.id))
-        if (!cluster || cluster.length < 2) return null
-        return cluster.map(memberId => {
+      {isHovered && foldCluster && (() => {
+        return foldCluster.map(memberId => {
           const member = allGroups.find(g => g.id === memberId)
           if (!member) return null
           const r = cardScreenRect(member, boards, pan, zoom)
@@ -3351,9 +3358,8 @@ const TetherTab: React.FC<{ cardId: string; touchingClusters: string[][] }> = ({
                 useUndoCoordinator.getState().checkpoint()
                 // Same cluster-fold behavior as double-click: bring touching
                 // cards along as a sub-deck so the whole group returns home.
-                const cluster = touchingClusters.find(c => c.includes(card.id))
-                if (cluster && cluster.length >= 2) {
-                  const ordered = [card.id, ...cluster.filter(id => id !== card.id)]
+                if (foldCluster) {
+                  const ordered = [card.id, ...foldCluster.filter(id => id !== card.id)]
                   useBoardsStore.getState().setDeckState(ordered, 'stacked')
                 }
                 useBoardsStore.getState().returnToDeck(card.id)
