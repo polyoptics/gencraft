@@ -32,6 +32,10 @@ import { useFxStore } from '../../store/fxStore'
 import { cardStripId } from '../../utils/fx/cardStrips'
 import { cardHitAt } from '../../utils/cardContent'
 import { cardFaceMedia, faceSteps, mergeCardsInto, stepFace } from '../../utils/cardGrid'
+import { drawnRect, effectChain, snapEffectCard } from '../../utils/effectCards'
+import { EffectTileBody } from '../Canvas/EffectTileBody'
+import { knownKind } from '../../utils/fx/effects'
+import type { FreeNodeData } from '../../store/freeNodeStore'
 import { useResolvedMedia } from '../../utils/useResolvedMedia'
 import type { MediaItem } from '../../types/bar'
 import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
@@ -432,11 +436,16 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
     }
     useUndoCoordinator.getState().checkpoint()
 
-    // Expand to include nested sub-deck members
-    const draggingIds = expandWithNestedMembers(
-      alreadySelected ? [...bs0.selectedGroupIds] : [group.id],
-      bs0.groups,
-    )
+    // Expand to include nested sub-deck members — and the effect cards lined
+    // up to the right of each card dragged (utils/effectCards): they travel
+    // with the card they process, and those after a dragged effect card
+    // travel with it.
+    const picked = alreadySelected ? [...bs0.selectedGroupIds] : [group.id]
+    const chains = picked.flatMap(id => effectChain(id, bs0.groups, bs0.boards))
+    const draggingIds = expandWithNestedMembers([...new Set([...picked, ...chains])], bs0.groups)
+    // An effect card's own box at the press: let go, it slides along the
+    // edge it was already on rather than jumping back to the top.
+    const startRect = group.effect ? drawnRect(group, bs0.boards, useCanvasStore.getState().zoom) : null
 
     let lastX = e.clientX
     let lastY = e.clientY
@@ -537,6 +546,16 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
       // pointer reaching into a card is the gesture. One undo step: the
       // press took the checkpoint. A click, or a release over the dragged
       // card itself, is just a move.
+      // An effect card let go by a card's right edge snaps flush there and
+      // rides the edge (utils/effectCards) — and is never merged as a block.
+      if (!returnedToDeck && !group.pin && group.effect) {
+        if (dxAccum !== 0 || dyAccum !== 0) {
+          const after = effectChain(group.id).filter(id => draggingIds.includes(id))
+          snapEffectCard(group.id, startRect, after, new Set(draggingIds))
+        }
+        useMagnetPreviewStore.getState().setPreview(null)
+        return
+      }
       if (!returnedToDeck && !group.pin && (dxAccum !== 0 || dyAccum !== 0)) {
         const own = new Set(draggingIds)
         const under = els.filter(el => {
@@ -738,6 +757,11 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
           el?.dispatchEvent(new CustomEvent('start-edit', { bubbles: false }))
         }}
       >
+        {group.effect ? (
+          <div style={{ position: 'absolute', top: headerPad, left: 0, right: 0, bottom: 0, overflow: 'hidden', borderRadius: '0 0 12px 12px', display: 'flex', flexDirection: 'column' }}>
+            <EffectCardFace group={group} width={screenWidth} height={Math.max(1, cardHeight - headerPad)} />
+          </div>
+        ) : (<>
         {faceVideo && !(fxFace && !fxOff)
           ? <FaceVideo media={faceVideo} />
           : shownHero && <HeroImageLayer heroImage={shownHero} transform={group.cardHeroTransform} />}
@@ -785,6 +809,7 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
             {group.cardSummary || `${group.boardIds.length} block${group.boardIds.length !== 1 ? 's' : ''}`}
           </div>
         </div>
+        </>)}
         {/* ── Resize handles ── */}
         {isHovered && (
           <>
@@ -2793,6 +2818,33 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
 }
 
 const FannedDeckOverlay = React.memo(FannedDeckOverlayInner)
+
+/** An effect card's face (utils/effectCards): the effect's sliders, the
+ *  same face an effect tile has. Its values live on the card. */
+const EffectCardFace: React.FC<{ group: ProjectGroup; width: number; height: number }> = ({ group, width, height }) => {
+  const id = cardStripId(group.id)
+  const kind = knownKind(group.effect?.kind)
+  // The face reads a tile; an effect card hands it one made of the card.
+  const node = useMemo(() => ({
+    id, type: 'effect', x: 0, y: 0, width, height, label: group.name,
+    effect: { kind, params: group.effect?.params ?? {} },
+  }) as unknown as FreeNodeData, [id, width, height, group.name, kind, group.effect?.params])
+  const read = useCallback(() => {
+    const g = useBoardsStore.getState().groups.find(x => x.id === group.id)
+    return g?.effect ? { kind: knownKind(g.effect.kind), stored: g.effect.params } : null
+  }, [group.id])
+  const update = useCallback((_: string, patch: Partial<FreeNodeData>) => {
+    if (!patch.effect && patch.label === undefined) return
+    useBoardsStore.setState(st => ({
+      groups: st.groups.map(g => g.id !== group.id ? g : {
+        ...g,
+        ...(patch.effect ? { effect: { kind: knownKind(patch.effect.kind), params: patch.effect.params ?? {} } } : {}),
+        ...(patch.label !== undefined ? { name: patch.label } : {}),
+      }),
+    }))
+  }, [group.id])
+  return <EffectTileBody node={node} id={id} updateFreeNode={update} read={read} />
+}
 
 /** A video on a card's face: still until the pointer moves across it,
  *  then the frame under the pointer — left edge the start, right edge the

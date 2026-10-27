@@ -109,7 +109,9 @@ export function computeStrips(
   // No effect card, no strip: skip the pairwise touch test entirely. This
   // runs on every tile drag frame and zoom tick. (A card docked on a loop
   // strip belongs to its rail, so it does not count.)
-  if (!Object.values(nodes).some(n => n.type === 'effect' && !n.pin && !isDocked(n, nodes))) return {}
+  if (!Object.values(nodes).some(n => n.type === 'effect' && !n.pin && !isDocked(n, nodes))
+    // Effect CARDS (utils/effectCards) make strips too.
+    && !useBoardsStore.getState().groups.some(g => g.effect && !g.pin)) return {}
   // Each VISIBLE tile with what it brings to a strip: its own item, or —
   // for a deck's face — those of the members on its open strip, in deck
   // order (faceItems).
@@ -183,7 +185,7 @@ export function useFxStrips(): void {
   const tokens = useRef(new Map<string, number>())
 
   useEffect(() => {
-    const next = computeStrips(nodes, windows, zoom, posters, () => stripCards(groups, boards, zoom))
+    const next = computeStrips(nodes, windows, zoom, posters, () => stripCards(groups, boards, zoom, true))
     // Tiles move on every drag frame; only publish when a strip's makeup
     // or its Viewer actually changed, so cards do not re-render per frame.
     // memberIds too: collapsing a deck behind a face that brings no item

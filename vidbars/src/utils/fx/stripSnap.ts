@@ -84,15 +84,7 @@ export function snapToStrip(
   const railY = (c: Rect): number => {
     const onEdge = !!from && Math.abs(from.x - (c.x + c.width)) < 0.5
       && from.y < c.y + c.height && from.y + n.height > c.y
-    if (!onEdge) return c.y
-    const lo = c.y + Math.min(0, c.height - n.height)
-    const hi = c.y + Math.max(0, c.height - n.height)
-    const y = Math.max(lo, Math.min(hi, n.y))
-    const detents = [c.y, c.y + (c.height - n.height) / 2, c.y + c.height - n.height]
-    const near = detents.reduce((a, b) => (Math.abs(b - y) < Math.abs(a - y) ? b : a))
-    // A click, not a grab: a third of the snap's reach, so the effect can
-    // still rest anywhere along the edge between the three.
-    return Math.abs(near - y) <= r / 3 ? near : y
+    return edgeRailY(c, n.y, n.height, onEdge, r)
   }
 
   let best: { x: number; y: number; d: number } | null = null
@@ -113,4 +105,20 @@ export function snapToStrip(
     }
   }
   return best ? { x: best.x, y: best.y } : null
+}
+
+/** Where something `h` tall lands on card `c`'s right edge, let go at `y`.
+ *  A first snap (`onEdge` false) goes to the top. One that was already on
+ *  that edge slides: it keeps the height it is let go at, held on the edge,
+ *  and clicks to the card's top, centre or bottom near one — within a third
+ *  of the snap's reach `r`, a click rather than a grab. Shared by effect
+ *  tiles (snapToStrip) and effect cards (utils/effectCards). */
+export function edgeRailY(c: Rect, y: number, h: number, onEdge: boolean, r: number): number {
+  if (!onEdge) return c.y
+  const lo = c.y + Math.min(0, c.height - h)
+  const hi = c.y + Math.max(0, c.height - h)
+  const at = Math.max(lo, Math.min(hi, y))
+  const detents = [c.y, c.y + (c.height - h) / 2, c.y + c.height - h]
+  const near = detents.reduce((a, b) => (Math.abs(b - at) < Math.abs(a - at) ? b : a))
+  return Math.abs(near - at) <= r / 3 ? near : at
 }

@@ -49,7 +49,8 @@ export function isBoardUnused(b: BoardData | undefined): boolean {
 export function addMediaBlockToCard(groupId: string, media: MediaItem, label?: string): string | null {
   const bs0 = useBoardsStore.getState()
   const group = bs0.groups.find(g => g.id === groupId)
-  if (!group) return null
+  // An effect card (utils/effectCards) holds an effect, not media.
+  if (!group || group.effect) return null
 
   const fill = (boardId: string): string | null => {
     const rootBar = useBoardsStore.getState().boards[boardId]?.rootIds[0]

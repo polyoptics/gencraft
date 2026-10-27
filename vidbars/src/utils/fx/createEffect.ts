@@ -38,6 +38,8 @@ import { isTileDeckFace, tileDeckFaceOf, tileDeckIndex } from '../tileDecks'
 import { isRail, railLayout, type RailData, type RailDropTarget } from '../rail'
 import { EFFECTS, knownKind, type EffectKind } from './effects'
 import { snapToStrip } from './stripSnap'
+import { useBoardsStore } from '../../store/boardsStore'
+import { createEffectCardGroup } from '../effectCards'
 
 type Nodes = Record<string, FreeNodeData>
 
@@ -264,6 +266,20 @@ export function createEffectCard(
   const target = railTarget ? null : opts.onto
     ? stripTileFor(opts.onto, before.nodes)
     : opts.at ? null : effectAttachTarget(before.nodes, before.selectedIds)
+
+  // Cards-first: going onto no loop strip and no picture tile's strip, an
+  // effect is a CARD (utils/effectCards) — after the selected card when
+  // exactly one is selected, else where it was let go (snapping onto a
+  // card's edge), else in view. Effect tiles stay for loop strips and for
+  // strips of picture tiles.
+  if (!railTarget && !target) {
+    useUndoCoordinator.getState().checkpoint()
+    const selCards = useBoardsStore.getState().selectedGroupIds
+    return createEffectCardGroup(k, {
+      at: opts.at,
+      after: !opts.at && selCards.length === 1 ? selCards[0] : null,
+    })
+  }
 
   // Checkpoint + the store's default size × the zoom compensation, all in
   // canvasCreate — the size table lives in freeNodeStore and nowhere else.

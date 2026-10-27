@@ -91,7 +91,10 @@ export const EffectTileBody: React.FC<{
    *  FreeNodeBody may keep passing it or stop. */
   dz?: number
   updateFreeNode: (id: string, patch: Partial<FreeNodeData>) => void
-}> = ({ node, id, updateFreeNode }) => {
+  /** Where the live values are read from, when the face is not a tile's —
+   *  an effect CARD (utils/effectCards) keeps them on its card. */
+  read?: () => { kind: EffectKind; stored: Record<string, number> | undefined } | null
+}> = ({ node, id, updateFreeNode, read }) => {
   const kind = effectKindOf(node)
   const def = EFFECTS[kind]
   const params = effectParams(kind, node.effect?.params)
@@ -107,6 +110,7 @@ export const EffectTileBody: React.FC<{
   // Edits read the node fresh: a slider drag writes many times between two
   // renders, and a stale closure would drop whatever landed in between.
   const paramsNow = () => {
+    if (read) return read()
     const n = useFreeNodeStore.getState().nodes[id]
     return n ? { kind: effectKindOf(n), stored: n.effect?.params } : null
   }

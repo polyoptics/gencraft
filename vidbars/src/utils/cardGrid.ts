@@ -247,8 +247,10 @@ export function createMediaCard(at: { cx: number; cy: number }, items: { media: 
 export function mergeCardsInto(targetId: string, sourceIds: string[]): boolean {
   const s = useBoardsStore.getState()
   const target = s.groups.find(g => g.id === targetId)
-  const sources = sourceIds.map(id => s.groups.find(g => g.id === id)).filter((g): g is ProjectGroup => !!g && g.id !== targetId && !g.pin)
-  if (!target || target.pin || sources.length === 0) return false
+  // Effect cards (utils/effectCards) are never blocks: they neither take
+  // a merge nor go into one — dragged along with a card, they stay cards.
+  const sources = sourceIds.map(id => s.groups.find(g => g.id === id)).filter((g): g is ProjectGroup => !!g && g.id !== targetId && !g.pin && !g.effect)
+  if (!target || target.pin || target.effect || sources.length === 0) return false
   const moving = sources.flatMap(src => gridOrder(src, s.boards))
   const nextRow = Math.max(-1, ...target.boardIds.map(b => s.boards[b]?.nleRow ?? 0)) + 1
   useBoardsStore.setState(st => {

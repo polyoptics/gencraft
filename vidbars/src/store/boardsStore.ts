@@ -109,6 +109,10 @@ export interface ProjectGroup {
   /** The block the face shows (stepped with the arrows), when not the
    *  first. A block that has left the card falls back to the first. */
   faceBoardId?: string
+  /** An EFFECT card (utils/effectCards): its face is the effect's sliders,
+   *  and lined up to the right of a picture card it processes that card's
+   *  face. A real card otherwise — it moves, stacks and fans with a deck. */
+  effect?: { kind: import('../utils/fx/effects').EffectKind; params?: Record<string, number> }
 }
 
 /** Find which group a board belongs to */

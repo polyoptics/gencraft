@@ -19,6 +19,7 @@ import { getHiddenGroupIds } from '../../hooks/useCardDecks'
 import { cardScreenRect } from '../../components/Layers/CardLayer'
 import type { WindowRect } from '../viewportDocking'
 import type { ChainItem } from './chain'
+import { knownKind } from './effects'
 
 const PREFIX = 'card:'
 
@@ -37,22 +38,28 @@ export interface StripCard {
   id: string
   /** The card's footprint, canvas units. */
   rect: WindowRect
-  item: Extract<ChainItem, { kind: 'source' }>
+  /** A picture card's face as a source; an effect card (utils/effectCards)
+   *  as its effect. */
+  item: ChainItem
 }
 
-/** Every card that can head a strip: on the canvas (not pinned, not tucked
- *  inside a stacked deck) and showing a picture. */
+/** Every card on a strip: a picture card (its face picture as the source)
+ *  or an effect card (its effect), on the canvas and not pinned. A card
+ *  tucked inside a collapsed deck counts only with `tucked`: still read in
+ *  place — a deck's members keep their open layout as it moves — so a
+ *  collapsed row keeps processing, but never a target to snap onto. */
 export function stripCards(
   groups: ProjectGroup[] = useBoardsStore.getState().groups,
   boards: Record<string, BoardData> = useBoardsStore.getState().boards,
   zoom: number = useCanvasStore.getState().zoom,
+  tucked = false,
 ): StripCard[] {
-  const hidden = getHiddenGroupIds(groups)
+  const hidden = tucked ? new Set<string>() : getHiddenGroupIds(groups)
   const out: StripCard[] = []
   for (const g of groups) {
     if (g.pin || hidden.has(g.id)) continue
-    const url = cardFacePicture(g, boards)
-    if (!url) continue
+    const url = g.effect ? null : cardFacePicture(g, boards)
+    if (!url && !g.effect) continue
     // The card as it is DRAWN at this zoom, in canvas units: its title band
     // is a screen-px band (headerExtend), so it is taller in canvas units
     // the further out the camera is. Measured at zoom 1 instead, an effect
@@ -63,7 +70,9 @@ export function stripCards(
     out.push({
       id,
       rect: { id, x: r.screenLeft / zoom, y: r.screenTop / zoom, width: r.screenWidth / zoom, height: r.screenHeight / zoom },
-      item: { id, kind: 'source', url, label: g.name || 'Card' },
+      item: g.effect
+        ? { id, kind: 'effect', effect: knownKind(g.effect.kind), params: g.effect.params }
+        : { id, kind: 'source', url: url!, label: g.name || 'Card' },
     })
   }
   return out
