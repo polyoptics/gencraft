@@ -45,9 +45,12 @@ function RailSyncHost() {
 
 function AllViewers() {
   const boardOrder = useBoardsStore(s => s.boardOrder)
+  // 'primary' goes when its card is deleted; mounting a board's view only
+  // while the board exists keeps it from returning early mid-hooks.
+  const hasPrimary = useBoardsStore(s => !!s.boards.primary)
   return (
     <>
-      <Viewer boardId="primary" />
+      {hasPrimary && <Viewer boardId="primary" />}
       {boardOrder.map(id => <Viewer key={id} boardId={id} />)}
     </>
   )
@@ -357,8 +360,9 @@ function useKeyboardDelete() {
       const selBlocks = useCanvasStore.getState().selectedBlockBoardIds
       if (selBlocks.length > 0) {
         const bs = useBoardsStore.getState()
+        // Any block goes, 'primary' too: nothing needs it to exist (see
+        // CardLayer's Delete Card). The checkpoint above brings them back.
         for (const bid of selBlocks) {
-          if (bid === 'primary') continue
           if (bs.boards[bid]) bs.deleteBoard(bid)
         }
         useCanvasStore.getState().clearSelectedBlockBoardIds()
@@ -373,7 +377,9 @@ function useKeyboardDelete() {
           if (bs.groups.length <= 1) break  // keep at least one group
           const g = bs.groups.find(gr => gr.id === gid)
           if (!g) continue
-          g.boardIds.forEach(bid => { if (bid !== 'primary') bs.deleteBoard(bid) })
+          // 'primary' too, as the card menu's Delete Card does (CardLayer):
+          // spared, deleteGroup would re-home it into the first card.
+          g.boardIds.forEach(bid => bs.deleteBoard(bid))
           bs.deleteGroup(gid)
         }
         useBoardsStore.getState().setSelectedGroup(null)

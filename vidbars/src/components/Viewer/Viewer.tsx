@@ -22,6 +22,10 @@ interface GenerationResult {
 const TOOLS_W = 72
 const APP_TOOLBAR_H = 38
 const BOARD_PADDING_X = 20
+/** One shared empty map: a selector must return the SAME object for a board
+ *  that is gone ('primary' is deleted with its card), or every store read
+ *  sees a change and React re-renders forever. */
+const NO_BARS: Record<string, never> = {}
 
 interface Props {
   boardId: string   // 'primary' for the primary board
@@ -30,7 +34,7 @@ interface Props {
 export const Viewer: React.FC<Props> = ({ boardId }) => {
   const board        = useBoardsStore(s => s.boards[boardId])
   const viewerBarId  = useBoardsStore(s => s.boards[boardId]?.viewerBarId ?? null)
-  const bars         = useBoardsStore(s => s.boards[boardId]?.bars ?? {})
+  const bars         = useBoardsStore(s => s.boards[boardId]?.bars ?? NO_BARS)
 
   const pan           = useCanvasStore(s => s.pan)
   const zoom          = useCanvasStore(s => s.zoom)

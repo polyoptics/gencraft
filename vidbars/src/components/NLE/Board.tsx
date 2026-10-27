@@ -21,7 +21,6 @@ const BOARD_PADDING_BOT = 20
 const HEADER_H = 28
 
 export const Board: React.FC<Props> = React.memo(({ boardId }) => {
-  const isPrimary = boardId === 'primary'
 
   const board        = useBoardsStore(s => s.boards[boardId])
   // Only subscribe to this board's group — not all groups
@@ -502,11 +501,10 @@ export const Board: React.FC<Props> = React.memo(({ boardId }) => {
                 setColorPickerPos({ x: r?.left ?? 0, y: (r?.top ?? 0) + 40 })
                 setShowColorPicker(true); setContextMenu(null)
               }},
-              { label: 'Duplicate board', action: () => { useUndoCoordinator.getState().checkpoint(); useBoardsStore.getState().duplicateBoard(boardId); setContextMenu(null) } },
-              ...(!isPrimary ? [
-                null as null,
-                { label: 'Delete board', action: () => { useUndoCoordinator.getState().checkpoint(); deleteBoard(boardId); setContextMenu(null) }, danger: true },
-              ] : []),
+              { label: 'Duplicate block', action: () => { useUndoCoordinator.getState().checkpoint(); useBoardsStore.getState().duplicateBoard(boardId); setContextMenu(null) } },
+              // Every block can go, the first one too (nothing needs 'primary').
+              null as null,
+              { label: 'Delete block', action: () => { useUndoCoordinator.getState().checkpoint(); deleteBoard(boardId); setContextMenu(null) }, danger: true },
             ] as const).map((item, idx) => item === null ? (
               <div key={idx} style={{ height: 1, background: 'rgba(255,255,255,0.07)', margin: '3px 10px' }} />
             ) : (

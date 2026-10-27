@@ -224,9 +224,12 @@ const CardContextMenu: React.FC<{
   // Delete
   if (groups.length > 1) menuItems.push({ label: 'Delete Card', icon: '🗑', danger: true, separator: true, action: () => {
     useUndoCoordinator.getState().checkpoint()
-    group.boardIds.forEach(bid => {
-      if (bid !== 'primary') useBoardsStore.getState().deleteBoard(bid)
-    })
+    // Every board on the card goes with it — 'primary' too. Sparing it left
+    // it behind for deleteGroup to re-home into the FIRST card, so a deleted
+    // card's block reappeared inside another card. Nothing needs 'primary'
+    // to exist: the canvases skip a missing board, and loading a project or
+    // a template makes a fresh one.
+    group.boardIds.forEach(bid => useBoardsStore.getState().deleteBoard(bid))
     useBoardsStore.getState().deleteGroup(group.id)
     onClose()
   }})

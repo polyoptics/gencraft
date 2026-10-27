@@ -868,6 +868,14 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
               // "Move to New Group" because there's no equivalent drag target
               // (it spins up a brand-new group).
               ...fileItems,
+              // Straight off its card — no pulling it out into a card of its
+              // own first. One undo step brings it back where it was.
+              { label: 'Delete block', icon: '🗑', separator: true, action: () => {
+                useUndoCoordinator.getState().checkpoint()
+                useBoardsStore.getState().deleteBoard(boardId)
+                useCanvasStore.getState().clearSelectedBlockBoardIds()
+                setBlockMenu(null)
+              }},
             ].map(item => (
               <React.Fragment key={item.label}>
                 {item.separator && (
@@ -935,6 +943,8 @@ const Canvas: React.FC<{ only?: string[] }> = ({ only }) => {
     () => getHiddenBoardIds(groups, !!only),
     [groups, only],
   )
+  // 'primary' is deleted with its card; see BoardsCanvas.
+  const hasPrimary = useBoardsStore(s => !!s.boards.primary)
 
   // Deck portals at block zoom: replace the anchor's blocks with the
   // locked member's blocks, rendered at the anchor's canvas position.
@@ -977,7 +987,7 @@ const Canvas: React.FC<{ only?: string[] }> = ({ only }) => {
       {/* 'primary' is a real board like any other and is very often the one
           a card owns — excluding it wholesale when scoped left pinned cards
           rendering nothing at all. */}
-      {(!scopedBoards || scopedBoards.has('primary')) && !effectiveHiddenBoards.has('primary')
+      {hasPrimary && (!scopedBoards || scopedBoards.has('primary')) && !effectiveHiddenBoards.has('primary')
         && !pinnedAwayBoards?.has('primary') && (
         <BlockItem boardId="primary" />
       )}

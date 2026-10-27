@@ -136,7 +136,13 @@ export const TemplateMenu: React.FC = () => {
       const t = await res.json()
       if (!t || !t.bars) return
 
-      // Replace canvas: primary content + extras + groups + free nodes
+      // Replace canvas: primary content + extras + groups + free nodes.
+      // 'primary' may be gone (deleting its card deletes it); loadLayout only
+      // fills a board that exists, so give it a fresh one first.
+      if (!useBoardsStore.getState().boards.primary) {
+        const { primary } = freshCanvasBoards().boards
+        useBoardsStore.setState(s => ({ boards: { ...s.boards, primary } }))
+      }
       useBoardsStore.getState().loadLayout('primary', {
         bars: t.bars, rootIds: t.rootIds, projectName: t.projectName,
       })
@@ -151,6 +157,11 @@ export const TemplateMenu: React.FC = () => {
         })
       }
       if (t.groups) useBoardsStore.setState({ groups: t.groups })
+      // A project saved after its 'primary' card was deleted has no card for
+      // it: the fresh board above would otherwise sit loose on the canvas.
+      if (!useBoardsStore.getState().groups.some(g => g.boardIds.includes('primary'))) {
+        useBoardsStore.getState().deleteBoard('primary')
+      }
       if (t.freeNodes) useFreeNodeStore.setState({ nodes: t.freeNodes, selectedIds: [] })
       setZoom(t.zoom)
       setPan(t.pan)
@@ -239,7 +250,8 @@ export const TemplateMenu: React.FC = () => {
       const [first, ...rest] = inst.boards
       useBoardsStore.setState(s => {
         const newPrimary: BoardData = {
-          ...s.boards.primary,
+          // 'primary' may have been deleted along with its card.
+          ...(s.boards.primary ?? freshCanvasBoards().boards.primary),
           bars: first.bars,
           rootIds: first.rootIds,
           projectName: first.projectName,

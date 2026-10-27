@@ -34,6 +34,9 @@ export const BoardsCanvas: React.FC<{ only?: string[] }> = ({ only }) => {
     () => getHiddenBoardIds(groups, !!only),
     [groups, only],
   )
+  // 'primary' is deleted with its card. Board returns early when its board
+  // is missing, which a mounted Board must never start doing mid-life.
+  const hasPrimary = useBoardsStore(s => !!s.boards.primary)
 
   // Deck portals at board zoom: replace the anchor's boards with the
   // locked member's boards, rendered at the anchor's canvas position.
@@ -67,7 +70,7 @@ export const BoardsCanvas: React.FC<{ only?: string[] }> = ({ only }) => {
   return (
     <>
       {/* 'primary' is a real board and usually the one a card owns. */}
-      {(!scopedBoards || scopedBoards.has('primary')) && !effectiveHiddenBoards.has('primary')
+      {hasPrimary && (!scopedBoards || scopedBoards.has('primary')) && !effectiveHiddenBoards.has('primary')
         && !pinnedAwayBoards?.has('primary') && (
         <Board boardId="primary" />
       )}
