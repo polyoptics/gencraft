@@ -13,6 +13,7 @@
 // like the rest of the strip it is derived on every change.
 
 import { useBoardsStore, type BoardData, type ProjectGroup } from '../../store/boardsStore'
+import { useCanvasStore } from '../../store/canvasStore'
 import { getFirstImageUrl } from '../../types/bar'
 import { getHiddenGroupIds } from '../../hooks/useCardDecks'
 import { cardScreenRect } from '../../components/Layers/CardLayer'
@@ -52,6 +53,7 @@ export interface StripCard {
 export function stripCards(
   groups: ProjectGroup[] = useBoardsStore.getState().groups,
   boards: Record<string, BoardData> = useBoardsStore.getState().boards,
+  zoom: number = useCanvasStore.getState().zoom,
 ): StripCard[] {
   const hidden = getHiddenGroupIds(groups)
   const out: StripCard[] = []
@@ -59,14 +61,16 @@ export function stripCards(
     if (g.pin || hidden.has(g.id)) continue
     const url = cardFacePicture(g, boards)
     if (!url) continue
-    // The camera that draws canvas units 1:1 — what cardScreenRect gives
-    // in canvas units (CLAUDE.md, invariant 3).
-    const r = cardScreenRect(g, boards, { x: 0, y: 0 }, 1)
-    if (!r || r.screenWidth <= 0) continue
+    // The card as it is DRAWN at this zoom, in canvas units: its title band
+    // is a screen-px band (headerExtend), so it is taller in canvas units
+    // the further out the camera is. Measured at zoom 1 instead, an effect
+    // snapped to the card's top sat below the top that shows.
+    const r = cardScreenRect(g, boards, { x: 0, y: 0 }, zoom)
+    if (!r || r.screenWidth <= 0 || zoom <= 0) continue
     const id = cardStripId(g.id)
     out.push({
       id,
-      rect: { id, x: r.screenLeft, y: r.screenTop, width: r.screenWidth, height: r.screenHeight },
+      rect: { id, x: r.screenLeft / zoom, y: r.screenTop / zoom, width: r.screenWidth / zoom, height: r.screenHeight / zoom },
       item: { id, kind: 'source', url, label: g.name || 'Card' },
     })
   }

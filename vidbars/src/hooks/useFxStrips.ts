@@ -183,7 +183,7 @@ export function useFxStrips(): void {
   const tokens = useRef(new Map<string, number>())
 
   useEffect(() => {
-    const next = computeStrips(nodes, windows, zoom, posters, () => stripCards(groups, boards))
+    const next = computeStrips(nodes, windows, zoom, posters, () => stripCards(groups, boards, zoom))
     // Tiles move on every drag frame; only publish when a strip's makeup
     // or its Viewer actually changed, so cards do not re-render per frame.
     // memberIds too: collapsing a deck behind a face that brings no item

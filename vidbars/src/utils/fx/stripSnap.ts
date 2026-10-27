@@ -21,6 +21,12 @@
 // lines up flush and the card reads as the strip's picture. Only an
 // EFFECT card snaps to a card: a picture tile or a video beside a card is
 // just lying there.
+//
+// Along a card's right edge an effect slides like a bead on a rail: the
+// first snap puts it at the card's top; one already on that edge when the
+// drag began keeps the height it is let go at (staying on the edge), and
+// clicks to the card's top, centre or bottom when let go near one. The
+// effects chained after it line up to it, as they snap to its own top.
 
 import type { FreeNodeData } from '../../store/freeNodeStore'
 import type { ViewportWindow3D } from '../../store/viewport3dStore'
@@ -36,6 +42,9 @@ export function snapToStrip(
   nodes: Record<string, FreeNodeData>,
   windows: Record<string, ViewportWindow3D>,
   zoom: number,
+  /** Where the dragged card stood when the drag began, to tell a slide
+   *  along a card's edge from a first snap onto it. */
+  from?: { x: number; y: number },
 ): { x: number; y: number } | null {
   // A little more generous than the Viewer magnet: lining cards up in a
   // row is the whole gesture here.
@@ -46,7 +55,7 @@ export function snapToStrip(
   const others = Object.values(nodes).filter(o =>
     o.id !== n.id && !o.pin && !hidden.has(o.id) && !isDocked(o, nodes))
   const wins = Object.values(windows).filter(w => !w.pin).map(w => viewportVisualRect(w, zoom))
-  const cards: Rect[] = n.type === 'effect' ? stripCards().map(c => c.rect) : []
+  const cards: Rect[] = n.type === 'effect' ? stripCards(undefined, undefined, zoom).map(c => c.rect) : []
   const targets: Rect[] = [...others.filter(isStripTile), ...wins, ...cards]
 
   // Where n can go at (x, y), or null when that slot is taken. Landing ON
@@ -71,14 +80,30 @@ export function snapToStrip(
     return null
   }
 
+  /** The height n lands at on a card's right edge (see the header). */
+  const railY = (c: Rect): number => {
+    const onEdge = !!from && Math.abs(from.x - (c.x + c.width)) < 0.5
+      && from.y < c.y + c.height && from.y + n.height > c.y
+    if (!onEdge) return c.y
+    const lo = c.y + Math.min(0, c.height - n.height)
+    const hi = c.y + Math.max(0, c.height - n.height)
+    const y = Math.max(lo, Math.min(hi, n.y))
+    const detents = [c.y, c.y + (c.height - n.height) / 2, c.y + c.height - n.height]
+    const near = detents.reduce((a, b) => (Math.abs(b - y) < Math.abs(a - y) ? b : a))
+    // A click, not a grab: a third of the snap's reach, so the effect can
+    // still rest anywhere along the edge between the three.
+    return Math.abs(near - y) <= r / 3 ? near : y
+  }
+
   let best: { x: number; y: number; d: number } | null = null
   for (const c of targets) {
     const overlapsY = n.y < c.y + c.height && n.y + n.height > c.y
     if (!overlapsY) continue
     const dRight = Math.abs(n.x - (c.x + c.width))       // n sits right of c
     if (dRight <= r && (!best || dRight < best.d)) {
-      const x = slotX(c.x + c.width, c.y, true, c)
-      if (x !== null) best = { x, y: c.y, d: dRight }
+      const y = cards.includes(c) ? railY(c) : c.y
+      const x = slotX(c.x + c.width, y, true, { ...c, y })
+      if (x !== null) best = { x, y, d: dRight }
     }
     const dLeft = Math.abs(n.x + n.width - c.x)          // n sits left of c
     // Never left of a card: an effect ahead of the picture reads as none.

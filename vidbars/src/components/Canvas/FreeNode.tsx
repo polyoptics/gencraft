@@ -593,7 +593,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
     if (dragHasMoved.current && node.type === 'effect' && !node.pin && !node.railDock) {
       const cur = useFreeNodeStore.getState().nodes[id]
       const snap = cur
-        ? snapToStrip(cur, useFreeNodeStore.getState().nodes, useViewport3DStore.getState().windows, zoom)
+        ? snapToStrip(cur, useFreeNodeStore.getState().nodes, useViewport3DStore.getState().windows, zoom, dragStart.current)
         : null
       // A delta, for the same reason as the Viewer dock above.
       if (snap && cur) moveFreeNode(id, snap.x - cur.x, snap.y - cur.y)
