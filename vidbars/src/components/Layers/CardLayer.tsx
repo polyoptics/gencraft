@@ -2943,6 +2943,9 @@ const EffectCardFace: React.FC<{ group: ProjectGroup; width: number; height: num
  *  decode at once. Keyed by its url where it is used: stepping to another
  *  block mounts a fresh, paused one. */
 const FACE_VIDEO_MIN_PX = 48
+/** Screen px the progress bar starts in from the face's left edge: past
+ *  the reference chips there. */
+const FACE_BAR_INSET = 40
 /** The video on each card's face, by the card whose face it is, and the
  *  frame it showed when the card was last right-clicked — for the card
  *  menu's "Set as thumbnail" (by the time the menu is used, the pointer
@@ -3133,11 +3136,13 @@ const FaceVideo: React.FC<{ media: MediaItem; cardId: string; faceOf?: string; s
         onPointerMove={e => { if (e.currentTarget.hasPointerCapture(e.pointerId)) seekTo(e.clientX, e.currentTarget) }}
         onDoubleClick={stop}
         style={{
-          position: 'absolute', zIndex: 3, left: 0, right: 0, bottom: 0, height: barH + 6 * k,
+          // Starts clear of the reference chips hanging off the card's
+          // bottom-left edge (PrimaryChipRail), so 0% can be clicked.
+          position: 'absolute', zIndex: 3, left: FACE_BAR_INSET * k, right: 0, bottom: 0, height: barH + 6 * k,
           display: 'flex', alignItems: 'flex-end', cursor: 'pointer',
         }}
       >
-        <div style={{ width: '100%', height: barH, background: 'rgba(255,255,255,0.18)', borderRadius: '0 0 12px 12px', overflow: 'hidden' }}>
+        <div style={{ width: '100%', height: barH, background: 'rgba(255,255,255,0.18)', borderRadius: '0 0 12px 0', overflow: 'hidden' }}>
           <div style={{ width: `${progress * 100}%`, height: '100%', background: 'rgba(255,255,255,0.85)' }} />
         </div>
       </div>
