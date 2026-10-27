@@ -9,7 +9,9 @@
 //
 // Also releases tiles whose rail is gone (deleted outside deleteFreeNode,
 // e.g. an undo that predates the rail): their railDock is cleared and the
-// size they had before docking comes back.
+// size they had before docking comes back. A tile holding a CARD
+// (utils/railCards) off any strip becomes that card again — deleting a strip
+// sets its cards down this way.
 //
 // Mounted once, in App (RailSyncHost) — like FxStripsHost, so the per-change
 // work re-renders nothing.
@@ -18,6 +20,8 @@ import { useEffect } from 'react'
 import { useFreeNodeStore, type FreeNodeData } from '../store/freeNodeStore'
 import { onUndoRestore } from '../store/undoCoordinator'
 import { isRail, railPlacements } from '../utils/rail'
+import { releaseStashedCard } from '../utils/railCards'
+import { useBoardsStore } from '../store/boardsStore'
 
 const EPS = 0.25   // canvas units: below this a box counts as unchanged
 
@@ -38,7 +42,7 @@ function landStrayLifts(): void {
   })
 }
 
-function syncRails(): void {
+function syncRails(prev?: Record<string, FreeNodeData>): void {
   const { nodes } = useFreeNodeStore.getState()
   let patch: Record<string, FreeNodeData> | null = null
   const put = (n: FreeNodeData, p: Partial<FreeNodeData>) => {
@@ -64,21 +68,29 @@ function syncRails(): void {
     }
   }
   if (patch) useFreeNodeStore.setState(s => ({ nodes: { ...s.nodes, ...patch } }))
+  // Held cards that just came off their strip (it was deleted): cards
+  // again, where the tile lies. Only those that WERE docked — a tile being
+  // made for a card is not docked yet. Not before the cards' own store is
+  // loaded, which would then overwrite them.
+  if (!prev || useBoardsStore.persist?.hasHydrated?.() === false) return
+  for (const n of Object.values(useFreeNodeStore.getState().nodes)) {
+    if (n.stashedCard && !n.railDock && prev[n.id]?.railDock) releaseStashedCard(n.id)
+  }
 }
 
 export function useRailSync(): void {
   useEffect(() => {
     let busy = false
-    const run = () => {
+    const run = (prev?: Record<string, FreeNodeData>) => {
       if (busy) return            // our own write re-enters; it settles in one pass
       busy = true
-      try { syncRails() } finally { busy = false }
+      try { syncRails(prev) } finally { busy = false }
     }
     // Persisted nodes may still be hydrating; land stray lifts once they are in.
     const land = () => { landStrayLifts(); run() }
     if (useFreeNodeStore.persist?.hasHydrated?.()) land()
     const offHydrate = useFreeNodeStore.persist?.onFinishHydration?.(land)
-    const off = useFreeNodeStore.subscribe((s, prev) => { if (s.nodes !== prev.nodes) run() })
+    const off = useFreeNodeStore.subscribe((s, prev) => { if (s.nodes !== prev.nodes) run(prev.nodes) })
     const offUndo = onUndoRestore(land)
     return () => { off(); offHydrate?.(); offUndo() }
   }, [])

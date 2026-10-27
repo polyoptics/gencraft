@@ -3,7 +3,7 @@ import { persist } from 'zustand/middleware'
 import { createDebouncedIDBStorage } from '../utils/debouncedIDBStorage'
 import { canJoinTileDeck, collapsePatches, expandPositions, expandTileIds, tileDeckIndex } from '../utils/tileDecks'
 import { DOCK_TOLERANCE, rectsTouch } from '../utils/viewportDocking'
-import { RAIL_TRAY } from '../utils/rail'
+import { RAIL_GEOM, RAIL_TRAY } from '../utils/rail'
 
 // 'list' | 'pool' | 'prompt' | 'history' are COMPONENTS rather than media: a
 // node whose body is a whole panel. They ride the same substrate as
@@ -634,14 +634,31 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
     set(s => {
       // A face takes its hidden members with it: deleting only the face
       // would orphan them, and orphans SHOW again (isHiddenTile) — a delete
-      // that made tiles appear. A loop strip likewise takes everything docked
-      // on it: what you see is what you delete (undo brings it all back).
+      // that made tiles appear.
       const gone = new Set(expandTileIds([id], s.nodes))
-      if (s.nodes[id]?.type === 'rail') {
-        for (const n of Object.values(s.nodes)) if (n.railDock?.railId === id) gone.add(n.id)
-      }
       const nodes = { ...s.nodes }
       for (const d of gone) delete nodes[d]
+      // A loop strip deletes only itself: what was docked on it — cards that
+      // hold pictures, results — is set down in a row just below where it
+      // was, at its own size, columns left to right, then the tray. A held
+      // card becomes a card again (useRailSync). Undo brings it all back.
+      const rail = s.nodes[id]
+      if (rail?.type === 'rail') {
+        const slots = [...(rail.rail?.slots.map(sl => sl.id) ?? []), RAIL_TRAY]
+        const u = rail.rail?.unit ?? 1
+        const gap = RAIL_GEOM.gap * u
+        let x = rail.x
+        const y = rail.y + rail.height + gap * 2
+        Object.values(s.nodes)
+          .filter(n => n.railDock?.railId === id)
+          .sort((a, b) => (slots.indexOf(a.railDock!.slotId) - slots.indexOf(b.railDock!.slotId)) || (a.railDock!.order - b.railDock!.order))
+          .forEach(n => {
+            const d = n.railDock!
+            const w = d.prevW ?? n.width, h = d.prevH ?? n.height
+            nodes[n.id] = { ...n, railDock: undefined, x, y, width: w, height: h }
+            x += w + gap
+          })
+      }
       // A hidden member deleted on its own (from the Card Browser) can
       // leave its face alone in its deck; a deck of one is just a tile.
       const anchor = s.nodes[id]?.tileDeck?.anchor

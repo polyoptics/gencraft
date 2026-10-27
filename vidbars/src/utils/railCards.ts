@@ -25,7 +25,7 @@ import { cardFaceSize, createMediaCard, gridOrder, layoutCardGrid } from './card
 import { drawnRect } from './effectCards'
 import { clientToCanvas } from './fx/createEffect'
 import { knownKind } from './fx/effects'
-import { RAIL_GEOM, RAIL_TRAY, isRail, railDropTarget, railLayout, railMembers, type RailDropTarget } from './rail'
+import { RAIL_TRAY, isRail, railDropTarget, railLayout, railMembers, type RailDropTarget } from './rail'
 
 /** A card off the canvas, held by the tile that stands for it on a strip. */
 export interface StashedCard {
@@ -281,10 +281,6 @@ export function landResultCard(railId: string, name: string, results: { url: str
   useBoardsStore.getState().setSelectedGroup(null)
   const [tile] = stashCards([gid])
   if (!tile) return false
-  const u = rail.rail.unit > 0 ? rail.rail.unit : 1
-  const face = cardFaceSize(1)
-  // Its size off the strip: the column's width at a card's shape.
-  useFreeNodeStore.getState().updateFreeNode(tile, { width: RAIL_GEOM.picW * u, height: RAIL_GEOM.picW * u * (face.h / face.w) })
   useFreeNodeStore.getState().dockToRail([tile], { railId, kind: 'column', slotId: RAIL_TRAY, index: Infinity })
   return true
 }
