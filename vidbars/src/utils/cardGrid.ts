@@ -225,6 +225,39 @@ export function stackedDeckMembers(anchorId: string, groups: ProjectGroup[]): st
   return [anchorId, ...rest.map(g => g.id)]
 }
 
+/** Set (or, null, reset) the thumbnail of the video on card `groupId`'s
+ *  face: the frame at `time`, as a small image (`url`, a data: url). It
+ *  becomes the video's poster — what every face, deck, browser and loop
+ *  strip shows of it while it is not playing. The caller takes the undo
+ *  checkpoint. False when the face is not a video. */
+export function setFaceThumbnail(groupId: string, thumb: { time: number; url: string } | null): boolean {
+  const s = useBoardsStore.getState()
+  const g = s.groups.find(gr => gr.id === groupId)
+  const face = g ? faceMedia(g, s.boards) : null
+  if (!face || face.media.type !== 'video') return false
+  const b = s.boards[face.boardId]
+  for (const rid of b.rootIds) {
+    const items = getMediaItems(b.bars[rid]?.content)
+    const i = items.findIndex(m => m.url === face.media.url)
+    if (i < 0) continue
+    const m = items[i]
+    const next: MediaItem = { ...m }
+    if (thumb) {
+      if (m.posterTime === undefined) next.posterOriginal = m.posterUrl
+      next.posterUrl = thumb.url
+      next.posterTime = thumb.time
+    } else {
+      next.posterUrl = m.posterTime === undefined ? m.posterUrl : m.posterOriginal
+      delete next.posterTime
+      delete next.posterOriginal
+      if (!next.posterUrl) delete next.posterUrl
+    }
+    s.setContent(face.boardId, rid, { media: items.map((x, j) => j === i ? next : x) })
+    return true
+  }
+  return false
+}
+
 /** A picture's height/width once it has loaded, or null (videos, failures). */
 async function measure(media: MediaItem): Promise<number | null> {
   if (media.type !== 'image') return null

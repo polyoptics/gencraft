@@ -2,14 +2,14 @@
 // Renders one composite card per project group. Each group collapses its
 // boards into a single draggable card with a hero image and summary.
 
-import React, { useMemo, useState, useCallback, useRef, useLayoutEffect, useDeferredValue, Fragment } from 'react'
+import React, { useMemo, useState, useCallback, useRef, useLayoutEffect, useEffect, useDeferredValue, Fragment } from 'react'
 import ReactDOM from 'react-dom'
 import { useBoardsStore, getUngroupedBoardIds } from '../../store/boardsStore'
 import type { ProjectGroup, BoardData } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useCardView } from './cardView'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
-import { DEFAULT_HEADER_STYLE, DEFAULT_BODY_STYLE } from '../../store/freeNodeStore'
+import { DEFAULT_HEADER_STYLE, DEFAULT_BODY_STYLE, useFreeNodeStore } from '../../store/freeNodeStore'
 import type { TextStyle } from '../../store/freeNodeStore'
 import type { TextFieldMode } from '../UI/TextFormatToolbar'
 import { TextFormatToolbar, hexToRgba, ensureFontLoaded } from '../UI/TextFormatToolbar'
@@ -31,7 +31,7 @@ import { HeroImageLayer } from './HeroImageLayer'
 import { useFxStore } from '../../store/fxStore'
 import { cardStripId } from '../../utils/fx/cardStrips'
 import { cardHitAt } from '../../utils/cardContent'
-import { cardFaceMedia, deckFaceSteps, faceSteps, mergeCardsInto, stepDeckFace, stepFace } from '../../utils/cardGrid'
+import { cardFaceMedia, deckFaceSteps, faceSteps, mergeCardsInto, setFaceThumbnail, stepDeckFace, stepFace } from '../../utils/cardGrid'
 import { drawnRect, effectChain, snapEffectCard } from '../../utils/effectCards'
 import { cardRailTarget, dockCardsOnRail, endDockedDrag, liftDockedCards, previewCardRail } from '../../utils/railCards'
 import { EffectTileBody } from '../Canvas/EffectTileBody'
@@ -102,6 +102,28 @@ const CardContextMenu: React.FC<{
   // (Deck-tether actions — "Go to deck" and "Check back in" — live on the
   // tether tint stripe in the header, not on the card-body context menu.
   // Right-click that stripe to access them.)
+
+  // A video face: the frame it shows now becomes its thumbnail (FaceVideo).
+  {
+    const faceOf = group.deckState === 'stacked' && group.deckFaceCard && faceVideoEls.has(group.deckFaceCard) ? group.deckFaceCard : group.id
+    const v = faceVideoEls.get(faceOf)
+    const snap = faceVideoSnap.get(faceOf)
+    const st = useBoardsStore.getState()
+    const fg = st.groups.find(g => g.id === faceOf)
+    const fm = fg ? cardFaceMedia(fg, st.boards) : null
+    if (v && fm?.type === 'video') {
+      if (snap) menuItems.push({ label: 'Set as thumbnail', icon: '🖼', action: () => {
+        useUndoCoordinator.getState().checkpoint()
+        setFaceThumbnail(faceOf, snap)
+        onClose()
+      }})
+      if (fm.posterTime !== undefined) menuItems.push({ label: 'Reset thumbnail', icon: '↺', action: () => {
+        useUndoCoordinator.getState().checkpoint()
+        setFaceThumbnail(faceOf, null)
+        onClose()
+      }})
+    }
+  }
 
   // Rename
   menuItems.push({ label: 'Rename', icon: '✏️', action: () => {
@@ -781,7 +803,7 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
           </div>
         ) : (<>
         {faceVideo && !(fxFace && !fxOff)
-          ? <FaceVideo media={faceVideo} />
+          ? <FaceVideo key={faceVideo.url} media={faceVideo} cardId={group.id} scale={overviewScale(zoom)} />
           : shownHero && <HeroImageLayer heroImage={shownHero} transform={group.cardHeroTransform} />}
         {/* Step the face through the card's blocks, in reading order. */}
         {isHovered && steps.count > 1 && (
@@ -1450,10 +1472,10 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
   // was stepped to, else its hero, else its first picture (a video by its
   // poster). Effects on it draw over this (deckFx).
   const faceCard = deckFace.card
-  const heroImage = useMemo(() => {
-    const m = cardFaceMedia(faceCard, boards)
-    return m ? (m.type === 'image' ? m.url : m.posterUrl ?? null) : null
-  }, [faceCard, boards])
+  const faceItem = useMemo(() => cardFaceMedia(faceCard, boards), [faceCard, boards])
+  const heroImage = faceItem ? (faceItem.type === 'image' ? faceItem.url : faceItem.posterUrl ?? null) : null
+  // A video face plays here as on the card itself (FaceVideo).
+  const faceVideo = faceItem?.type === 'video' && !deckFx.shown ? faceItem : null
 
   // Stacked card outlines — right-side only, max 2 edges to keep primary card wide.
   const PEEK_RIGHT = 3  // px each edge step
@@ -1594,7 +1616,9 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
             useBoardsStore.getState().setDeckState(deck.memberIds, isSubDeck ? 'fanned' : 'open')
           }}
         >
-          {(deckFx.shown ?? heroImage) && <HeroImageLayer heroImage={(deckFx.shown ?? heroImage)!} transform={faceCard.cardHeroTransform} />}
+          {faceVideo
+            ? <FaceVideo key={faceVideo.url} media={faceVideo} cardId={anchorGroup.id} faceOf={faceCard.id} scale={overviewScale(zoom)} />
+            : (deckFx.shown ?? heroImage) && <HeroImageLayer heroImage={(deckFx.shown ?? heroImage)!} transform={faceCard.cardHeroTransform} />}
           {/* Step the face through every card's pictures, in deck order. */}
           {isHovered && deckFace.entries.length > 1 && (
             <>
@@ -2909,28 +2933,215 @@ const EffectCardFace: React.FC<{ group: ProjectGroup; width: number; height: num
   return <EffectTileBody node={node} id={id} updateFreeNode={update} read={read} />
 }
 
-/** A video on a card's face: still until the pointer moves across it,
- *  then the frame under the pointer — left edge the start, right edge the
- *  end. Muted; it never plays on its own. */
-const FaceVideo: React.FC<{ media: MediaItem }> = ({ media }) => {
+/** A video on a card's face — an open card, a closed deck's front, a card
+ *  on a loop strip: the same player everywhere. It shows its first frame
+ *  with ▶ (no autoplay), loops, starts muted (🔇 toggles), and has a thin
+ *  bar along the bottom to click or drag through it. Paused, the pointer
+ *  scrubs it as it moves; playing, it does not. Space plays and pauses it
+ *  while its card (`cardId`) is the one selected. It pauses itself when it
+ *  goes off-screen or the zoom makes it tiny, so many faces never all
+ *  decode at once. Keyed by its url where it is used: stepping to another
+ *  block mounts a fresh, paused one. */
+const FACE_VIDEO_MIN_PX = 48
+/** The video on each card's face, by the card whose face it is, and the
+ *  frame it showed when the card was last right-clicked — for the card
+ *  menu's "Set as thumbnail" (by the time the menu is used, the pointer
+ *  has left the face and it is back at rest). */
+const faceVideoEls = new Map<string, HTMLVideoElement>()
+const faceVideoSnap = new Map<string, { time: number; url: string }>()
+
+/** The frame a video shows now, as a small JPEG data: url (CLAUDE.md §6). */
+function videoFrameUrl(v: HTMLVideoElement): string | null {
+  const w = v.videoWidth, h = v.videoHeight
+  if (!(w > 0 && h > 0)) return null
+  const k = Math.min(1, 1024 / Math.max(w, h))
+  const c = document.createElement('canvas')
+  c.width = Math.round(w * k)
+  c.height = Math.round(h * k)
+  const g = c.getContext('2d')
+  if (!g) return null
+  g.drawImage(v, 0, 0, c.width, c.height)
+  try {
+    const url = c.toDataURL('image/jpeg', 0.9)
+    return url.length > 64 ? url : null
+  } catch { return null }
+}
+
+const FaceVideo: React.FC<{ media: MediaItem; cardId: string; faceOf?: string; scale: number }> = ({ media, cardId, faceOf, scale }) => {
   const src = useResolvedMedia(media.url)
   const ref = useRef<HTMLVideoElement>(null)
+  const owner = faceOf ?? cardId
+  const [playing, setPlaying] = useState(false)
+  const [muted, setMuted] = useState(true)
+  const [progress, setProgress] = useState(0)
+  useEffect(() => {
+    const v = ref.current
+    if (!v) return
+    faceVideoEls.set(owner, v)
+    return () => { if (faceVideoEls.get(owner) === v) faceVideoEls.delete(owner) }
+  }, [owner])
+  // At rest it shows its thumbnail's frame (or the first).
+  const rest = media.posterTime ?? 0
+  const toRest = () => {
+    const v = ref.current
+    if (v && v.paused && v.duration > 0 && Math.abs(v.currentTime - rest) > 0.01) {
+      v.currentTime = Math.min(rest, v.duration)
+      setProgress(v.currentTime / v.duration)
+    }
+  }
+  const toRestRef = useRef(toRest)
+  const ownerRef = useRef(owner)
+  useLayoutEffect(() => { toRestRef.current = toRest; ownerRef.current = owner })
+  // A new thumbnail chosen: show it now.
+  useEffect(() => { toRestRef.current() }, [rest])
+  const k = Math.max(0.7, scale)
+
+  const play = useCallback((on: boolean) => {
+    const v = ref.current
+    if (!v) return
+    if (on) {
+      const r = v.getBoundingClientRect()
+      if (r.width < FACE_VIDEO_MIN_PX) return
+      void v.play().catch(() => setPlaying(false))
+    } else v.pause()
+  }, [])
+
+  // Space, while this card is the one selected — on release, and only if
+  // the space was not held to pan the canvas (InfiniteCanvas: space+drag).
+  useEffect(() => {
+    let down = false, dragged = false
+    const typing = () => {
+      const t = document.activeElement as HTMLElement | null
+      return !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)
+    }
+    const mine = () => {
+      const sel = useBoardsStore.getState().selectedGroupIds
+      return sel.length === 1 && sel[0] === cardId && useFreeNodeStore.getState().selectedIds.length === 0
+    }
+    const onDown = (e: KeyboardEvent) => { if (e.code === 'Space' && !e.repeat && !typing() && mine()) { down = true; dragged = false } }
+    const onPtr = () => { if (down) dragged = true }
+    const onUp = (e: KeyboardEvent) => {
+      if (e.code !== 'Space' || !down) return
+      down = false
+      if (dragged || !mine()) return
+      const v = ref.current
+      if (v) play(v.paused)
+    }
+    window.addEventListener('keydown', onDown)
+    window.addEventListener('keyup', onUp)
+    window.addEventListener('pointerdown', onPtr, true)
+    return () => {
+      window.removeEventListener('keydown', onDown)
+      window.removeEventListener('keyup', onUp)
+      window.removeEventListener('pointerdown', onPtr, true)
+    }
+  }, [cardId, play])
+
+  // Hover-scrub while not playing: left edge the start, right edge the end.
+  // Listened for on the face, not the video — the card's text layer lies
+  // over the video and takes the pointer. Leaving goes back to the rest.
+  useEffect(() => {
+    const v = ref.current
+    const face = v?.parentElement
+    if (!v || !face) return
+    const move = (e: PointerEvent) => {
+      if (!v.paused || !(v.duration > 0) || e.buttons) return
+      if ((e.target as Element).closest('[data-face-video-bar],[data-face-video-play],[data-face-video-sound],[data-card-face-arrow]')) return
+      const r = v.getBoundingClientRect()
+      v.currentTime = Math.max(0, Math.min(1, (e.clientX - r.left) / Math.max(1, r.width))) * v.duration
+      setProgress(v.currentTime / v.duration)
+    }
+    const leave = () => toRestRef.current()
+    const snap = () => {
+      const url = videoFrameUrl(v)
+      if (url) faceVideoSnap.set(ownerRef.current, { time: v.currentTime, url })
+    }
+    face.addEventListener('pointermove', move)
+    face.addEventListener('pointerleave', leave)
+    face.addEventListener('contextmenu', snap, true)
+    return () => {
+      face.removeEventListener('pointermove', move)
+      face.removeEventListener('pointerleave', leave)
+      face.removeEventListener('contextmenu', snap, true)
+    }
+  }, [])
+
+  // Off-screen, or too small to see: paused.
+  useEffect(() => {
+    const v = ref.current
+    if (!v) return
+    const io = new IntersectionObserver(([en]) => { if (!en.isIntersecting && !v.paused) v.pause() })
+    io.observe(v)
+    const ro = new ResizeObserver(() => { if (v.getBoundingClientRect().width < FACE_VIDEO_MIN_PX && !v.paused) v.pause() })
+    ro.observe(v)
+    return () => { io.disconnect(); ro.disconnect() }
+  }, [])
+
+  const seekTo = (clientX: number, bar: HTMLElement) => {
+    const v = ref.current
+    if (!v || !(v.duration > 0)) return
+    const r = bar.getBoundingClientRect()
+    v.currentTime = Math.max(0, Math.min(1, (clientX - r.left) / Math.max(1, r.width))) * v.duration
+    setProgress(v.currentTime / v.duration)
+  }
+  const stop = (e: React.SyntheticEvent) => e.stopPropagation()
+  const btn = (s: number): React.CSSProperties => ({
+    width: s, height: s, padding: 0, borderRadius: '50%', border: '1px solid rgba(255,255,255,0.35)',
+    background: 'rgba(12,13,20,0.6)', color: 'rgba(255,255,255,0.92)', fontSize: s * 0.5, lineHeight: 1,
+    cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'inherit',
+  })
+  const barH = 4 * k
   return (
-    <video
-      ref={ref}
-      data-card-face-video
-      src={src ?? undefined}
-      muted
-      playsInline
-      preload="metadata"
-      onPointerMove={e => {
-        const v = ref.current
-        if (!v || !(v.duration > 0)) return
-        const r = e.currentTarget.getBoundingClientRect()
-        v.currentTime = Math.max(0, Math.min(1, (e.clientX - r.left) / Math.max(1, r.width))) * v.duration
-      }}
-      style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', borderRadius: 12, opacity: 0.85 }}
-    />
+    <>
+      <video
+        ref={ref}
+        data-card-face-video
+        src={src ?? undefined}
+        muted={muted}
+        loop
+        playsInline
+        preload="metadata"
+        poster={media.posterUrl}
+        onLoadedMetadata={toRest}
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onTimeUpdate={e => { const v = e.currentTarget; if (v.duration > 0) setProgress(v.currentTime / v.duration) }}
+        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', borderRadius: 12, opacity: 0.85 }}
+      />
+      <div style={{ position: 'absolute', zIndex: 3, right: 6 * k, bottom: barH + 6 * k, display: 'flex', gap: 4 * k }}>
+        <button
+          type="button" data-face-video-play title={playing ? 'Pause (Space)' : 'Play (Space)'}
+          onPointerDown={stop} onDoubleClick={stop}
+          onClick={e => { e.stopPropagation(); play(!playing) }}
+          style={btn(22 * k)}
+        >{playing ? '❚❚' : '▶'}</button>
+        <button
+          type="button" data-face-video-sound title={muted ? 'Sound on' : 'Mute'}
+          onPointerDown={stop} onDoubleClick={stop}
+          onClick={e => { e.stopPropagation(); setMuted(m => !m) }}
+          style={btn(18 * k)}
+        >{muted ? '🔇' : '🔊'}</button>
+      </div>
+      <div
+        data-face-video-bar
+        onPointerDown={e => {
+          if (e.button !== 0) return
+          e.stopPropagation()
+          e.currentTarget.setPointerCapture(e.pointerId)
+          seekTo(e.clientX, e.currentTarget)
+        }}
+        onPointerMove={e => { if (e.currentTarget.hasPointerCapture(e.pointerId)) seekTo(e.clientX, e.currentTarget) }}
+        onDoubleClick={stop}
+        style={{
+          position: 'absolute', zIndex: 3, left: 0, right: 0, bottom: 0, height: barH + 6 * k,
+          display: 'flex', alignItems: 'flex-end', cursor: 'pointer',
+        }}
+      >
+        <div style={{ width: '100%', height: barH, background: 'rgba(255,255,255,0.18)', borderRadius: '0 0 12px 12px', overflow: 'hidden' }}>
+          <div style={{ width: `${progress * 100}%`, height: '100%', background: 'rgba(255,255,255,0.85)' }} />
+        </div>
+      </div>
+    </>
   )
 }
 

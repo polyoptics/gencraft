@@ -6,6 +6,11 @@ export interface MediaItem {
   originalName?: string
   /** Static poster frame URL for videos and 3D models (used at block/card zoom) */
   posterUrl?: string
+  /** A video's chosen thumbnail: the time (seconds) of the frame its
+   *  posterUrl was taken from ("Set as thumbnail"). Absent: the first frame. */
+  posterTime?: number
+  /** The poster it had before a thumbnail was chosen, for "Reset thumbnail". */
+  posterOriginal?: string
 }
 
 export interface BarTextStyle {

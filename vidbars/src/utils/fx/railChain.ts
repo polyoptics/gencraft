@@ -103,8 +103,10 @@ function usedCards(step: Extract<Step, { kind: 'role' }>): FreeNodeData[] {
  *  template or project load). A video with no poster yet gets an empty url,
  *  which the run reports as unreadable rather than skipping silently. */
 function sourceItem(n: FreeNodeData, posters: Record<string, string>): SourceItem {
+  // A chosen thumbnail (a data: url, "Set as thumbnail") first: it is the
+  // frame the user picked. Else the live poster map, then the node's copy.
   const url = n.type === 'video'
-    ? (n.imageUrl ? posters[n.imageUrl] : undefined) ?? n.posterUrl ?? ''
+    ? (n.posterUrl?.startsWith('data:') ? n.posterUrl : undefined) ?? (n.imageUrl ? posters[n.imageUrl] : undefined) ?? n.posterUrl ?? ''
     : n.imageUrl ?? ''
   return { id: n.id, kind: 'source', url, label: n.label }
 }
