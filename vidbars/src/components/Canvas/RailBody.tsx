@@ -32,6 +32,8 @@ import { RailOverlay } from './rail/RailOverlay'
 import { RailRunArrow } from './rail/RailRunArrow'
 import { RailResizeGrip } from './rail/RailResizeGrip'
 import { buildRailView, railNodesOf } from './rail/railView'
+import { railOnViewer, touchRail } from '../../utils/railViewer'
+import { useViewport3DStore } from '../../store/viewport3dStore'
 import { RAIL_COLORS as C, checkpoint, mixHex, pressButton, railShadow, stop, stopPrimary } from './rail/railStyle'
 
 /** VS15 keeps the warning sign a text glyph, not an emoji. */
@@ -57,6 +59,16 @@ export const RailBody: React.FC<{
 }> = ({ id, hovered, zoom }) => {
   const list = useFreeNodeStore(useShallow(s => railNodesOf(s.nodes, id)))
   const run = useRailRunStore(s => s.run[id])
+  // Docked to a Viewer and the strip it shows? Read live: the Viewer and
+  // the other strips move independently of this one.
+  const onViewer = useFreeNodeStore(s => {
+    const r = s.nodes[id]
+    if (!r) return false
+    const vw = useViewport3DStore.getState().windows
+    return Object.keys(vw).length > 0 && railOnViewer(r, s.nodes, vw, zoom, useRailUiStore.getState().active)
+  })
+  useRailUiStore(s => s.active[0])
+  useViewport3DStore(s => s.windows)
   const preview = useRailRunStore(s => s.preview[id])
   // An empty results tray takes the preview's shape (utils/rail
   // setTrayAspect): a new shape lays the rail out again.
@@ -149,17 +161,24 @@ export const RailBody: React.FC<{
     : null
   const rowTop = L.tray.head.y - rail.y
   const pad = RAIL_GEOM.pad * u
+  // Shown on a Viewer (utils/railViewer): a quiet accent round the strip.
+  const shown = onViewer
 
   return (
     <div
       ref={attach}
       data-rail-body={id}
+      data-rail-on-viewer={shown ? 'true' : undefined}
+      // Any press inside makes this the active strip a Viewer shows.
+      onPointerDownCapture={() => touchRail(id)}
       style={{
         // left/top: set by the layout effect above (the tile's border).
         position: 'absolute', width: L.box.width, height: L.box.height,
         background: C.ground, borderRadius: 14 * u,
         // Inset, not a border: a border would move every child by its width.
-        boxShadow: `inset 0 0 0 ${1.5 * u}px ${C.edge}`,
+        boxShadow: shown
+          ? `inset 0 0 0 ${1.5 * u}px rgba(143,211,255,0.55), 0 0 ${10 * u}px rgba(143,211,255,0.18)`
+          : `inset 0 0 0 ${1.5 * u}px ${C.edge}`,
         color: '#fff', userSelect: 'none', lineHeight: 1.2,
         fontFamily: 'system-ui, -apple-system, sans-serif',
       }}

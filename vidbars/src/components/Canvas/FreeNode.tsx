@@ -46,6 +46,7 @@ import {
 } from '../../utils/rail'
 import { clientToCanvas } from '../../utils/fx/createEffect'
 import { railAtPoint } from './rail/railHit'
+import { snapRailToViewer } from '../../utils/railViewer'
 
 
 /** Node types whose corner resize keeps the current proportions. A
@@ -540,6 +541,9 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
         return
       }
     }
+    // A loop strip let go by a Viewer's left edge docks to it, its right end
+    // flush (utils/railViewer): the Viewer then shows its live result.
+    if (dragHasMoved.current && node.type === 'rail' && !node.pin) snapRailToViewer(id, zoom)
     // A free tile let go on a rail where it does not dock (a note, a picture
     // on the tray): set down just under the rail, as 'Take off the strip'
     // does. Left there, it would lie beneath the rail's cascades.

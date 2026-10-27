@@ -41,6 +41,7 @@ import { FileContextMenu } from '../UI/FileMenu'
 import { mayHaveDiskFile } from '../../hooks/useFileMenu'
 import { DragOutGrip } from '../UI/DragOutGrip'
 import { FxViewerOverlay } from './FxViewerOverlay'
+import { RailViewerOverlay } from './RailViewerOverlay'
 
 /** Selecting a Viewer takes over the canvas selection outright, so the
  *  Delete key's priority chain is never asked to arbitrate between two lit
@@ -584,6 +585,9 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
         {/* An effect strip touching this window shows its output here,
             over whatever the window holds (utils/fx, useFxStrips). */}
         <FxViewerOverlay windowId={id} fontSize={fontSize} />
+        {/* Loop strips docked to its left edge: the active one's live
+            result (utils/railViewer). */}
+        <RailViewerOverlay windowId={id} fontSize={fontSize} />
         {showBodyOverlay && (
           <div style={{
             position: 'absolute', inset: 0,

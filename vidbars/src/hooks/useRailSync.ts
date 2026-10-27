@@ -27,6 +27,8 @@ import { useFreeNodeStore, type FreeNodeData } from '../store/freeNodeStore'
 import { onUndoRestore } from '../store/undoCoordinator'
 import { RAIL_TRAY, isRail, railPlacements, setTrayAspect } from '../utils/rail'
 import { useRailRunStore } from '../store/railRunStore'
+import { railViewerDocks, touchRail } from '../utils/railViewer'
+import { useViewport3DStore } from '../store/viewport3dStore'
 import { layoutCardGrid } from '../utils/cardGrid'
 import { followFaces, placeCard } from '../utils/railCards'
 import { useBoardsStore } from '../store/boardsStore'
@@ -66,6 +68,10 @@ function syncRails(prev?: Record<string, FreeNodeData>): boolean {
       put(n, { railDock: undefined, width: d.prevW ?? n.width, height: d.prevH ?? n.height })
     }
   }
+  // Strips docked to a Viewer's left edge (utils/railViewer) grow and
+  // shrink LEFTWARDS, so their right end stays on the Viewer.
+  const onViewer = new Set([...railViewerDocks(nodes, useViewport3DStore.getState().windows, useCanvasStore.getState().zoom).values()].flat())
+  let shifted = false
   for (const [id, r] of railPlacements(nodes)) {
     const n = nodes[id]
     if (!n) continue
@@ -74,11 +80,16 @@ function syncRails(prev?: Record<string, FreeNodeData>): boolean {
     const dw = Math.abs(n.width - r.width), dh = Math.abs(n.height - r.height)
     // The rail's own x/y is where the user put it — only its size follows.
     if (isRailTile ? (dw > EPS || dh > EPS) : (dx > EPS || dy > EPS || dw > EPS || dh > EPS)) {
-      put(n, isRailTile ? { width: r.width, height: r.height } : { x: r.x, y: r.y, width: r.width, height: r.height })
+      if (isRailTile && dw > EPS && onViewer.has(id)) {
+        put(n, { x: n.x + n.width - r.width, width: r.width, height: r.height })
+        shifted = true   // its cards are placed from the new x next pass
+      } else {
+        put(n, isRailTile ? { width: r.width, height: r.height } : { x: r.x, y: r.y, width: r.width, height: r.height })
+      }
     }
   }
   if (patch) useFreeNodeStore.setState(s => ({ nodes: { ...s.nodes, ...patch } }))
-  return syncCards(prev)
+  return syncCards(prev) || shifted
 }
 
 /** Cards on a results tray at their tray's scale; any other card that was
@@ -165,12 +176,36 @@ export function useRailSync(): void {
     const land = () => { landStrayLifts(); run() }
     if (useFreeNodeStore.persist?.hasHydrated?.()) land()
     const offHydrate = useFreeNodeStore.persist?.onFinishHydration?.(land)
-    const off = useFreeNodeStore.subscribe((s, prev) => { if (s.nodes !== prev.nodes) run(prev.nodes) })
+    const off = useFreeNodeStore.subscribe((s, prev) => {
+      if (s.nodes === prev.nodes) return
+      // An effect on a strip tweaked: that strip is the active one
+      // (utils/railViewer — a Viewer shows it).
+      for (const n of Object.values(s.nodes)) {
+        const was = prev.nodes[n.id]
+        if (n.railDock && n.effect && was && was.effect !== n.effect) touchRail(n.railDock.railId)
+      }
+      run(prev.nodes)
+    })
     // A docked card moved or resized by anything else goes back to its
     // place; result cards step with their inputs.
     const offCards = useBoardsStore.subscribe((s, prev) => {
       if (s.groups === prev.groups && s.boards === prev.boards) return
-      if (s.groups !== prev.groups) followFaces(prev.groups, s.groups, s.boards)
+      if (s.groups !== prev.groups) {
+        followFaces(prev.groups, s.groups, s.boards)
+        // A card on a strip stepped or selected: that strip is the active
+        // one (utils/railViewer).
+        const before = new Map(prev.groups.map(g => [g.id, g]))
+        const hit = new Set(s.groups.filter(g => {
+          const b = before.get(g.id)
+          return b && (b.faceBoardId !== g.faceBoardId || b.deckFaceCard !== g.deckFaceCard)
+        }).map(g => g.id))
+        if (s.selectedGroupIds !== prev.selectedGroupIds) s.selectedGroupIds.forEach(id => hit.add(id))
+        if (hit.size) {
+          for (const n of Object.values(useFreeNodeStore.getState().nodes)) {
+            if (n.cardRef && n.railDock && hit.has(n.cardRef)) touchRail(n.railDock.railId)
+          }
+        }
+      }
       run()
     })
     const offZoom = useCanvasStore.subscribe((s, prev) => { if (s.zoom !== prev.zoom) run() })
