@@ -46,7 +46,7 @@ import {
 } from '../../utils/rail'
 import { clientToCanvas } from '../../utils/fx/createEffect'
 import { railAtPoint } from './rail/railHit'
-import { releaseStashedCard, stashSteps, stepStashFace } from '../../utils/railCards'
+import { heldCards, heldSteps, releaseStashedCard, setStashFanned, showHeldCard, shownCard, stashSteps, stepHeldCard, stepStashFace } from '../../utils/railCards'
 
 
 /** Node types whose corner resize keeps the current proportions. A
@@ -1123,6 +1123,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
   // always under the pointer, so beneath the card it would never show.
   const canvasZ: number = isRailTile ? (isHovered ? 4 : 3)
     : lifted || aimingAtRail ? 65
+    : docked && node.stashedCard?.fanned ? 64
     : docked ? (peeking ? 60 : 10 + Math.min(dockOrder, 39))
     : isHovered ? 50 : 5
 
@@ -1565,10 +1566,10 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
               ] : menuCluster.length >= 2 ? [
                 { label: 'Stack touching tiles', icon: '📚', action: () => { toggleTileDeck(); setNodeMenu(null) } },
               ] : []),
-              // Loop strip: empty its results tray. The files stay on disk;
-              // only the tiles go (clearRailTray), in one undo step.
+              // Loop strip: empty its results tray onto the canvas, below the
+              // strip (clearRailTray), in one undo step.
               ...(isRailTile ? [
-                { label: trayCount > 0 ? `Clear results (${trayCount})` : 'Clear results', icon: '×',
+                { label: trayCount > 0 ? `Results to canvas (${trayCount})` : 'Results to canvas', icon: '↓',
                   action: () => {
                     if (trayCount > 0) {
                       useUndoCoordinator.getState().checkpoint()
@@ -2490,36 +2491,106 @@ const TextFormatToolbar: React.FC<{
 
 
 /** A card held on a loop strip (utils/railCards): ‹ › to step its face
- *  through its pictures, and "2 / 5", on hover — as on the card itself. */
+ *  through its pictures, and "2 / 5", on hover — as on the card itself. A
+ *  held DECK steps through every card's pictures, and fans out in place
+ *  (Fan) to look at its cards: each spread card steps through its own
+ *  pictures, and a click puts it on the deck's face. */
 const StashFace: React.FC<{ id: string; hovered: boolean; zoom: number }> = ({ id, hovered, zoom }) => {
   const st = useFreeNodeStore(s => s.nodes[id]?.stashedCard)
+  const w = useFreeNodeStore(s => s.nodes[id]?.width ?? 0)
+  const h = useFreeNodeStore(s => s.nodes[id]?.height ?? 0)
+  const x = useFreeNodeStore(s => s.nodes[id]?.x ?? 0)
+  const y = useFreeNodeStore(s => s.nodes[id]?.y ?? 0)
+  // The world layer the tile lives in: the fan is drawn there, as the rail's
+  // own overlay is (rail/RailOverlay) — the tile clips what spills out.
+  const [world, setWorld] = useState<HTMLElement | null>(null)
+  const attach = useCallback((el: HTMLDivElement | null) => setWorld(el?.parentElement?.parentElement ?? null), [])
   if (!st) return null
   const { entries, index } = stashSteps(st)
-  if (entries.length < 2) return null
+  const deck = (st.members?.length ?? 0) > 0
   const k = 1 / zoom
-  const arrow = (dir: 1 | -1): React.ReactNode => (
+  const press = (e: React.SyntheticEvent) => { e.stopPropagation(); e.preventDefault() }
+  const arrow = (dir: 1 | -1, onStep: () => void, key?: string): React.ReactNode => (
     <div
+      key={key}
       data-stash-step={dir}
-      onPointerDown={e => { e.stopPropagation(); e.preventDefault() }}
-      onClick={e => { e.stopPropagation(); stepStashFace(id, dir) }}
+      onPointerDown={press}
+      onDoubleClick={press}
+      onClick={e => { e.stopPropagation(); onStep() }}
       style={{
         position: 'absolute', top: '50%', [dir < 0 ? 'left' : 'right']: 4 * k,
         transform: 'translateY(-50%)', width: 22 * k, height: 34 * k, borderRadius: 6 * k,
         background: 'rgba(0,0,0,0.45)', color: '#fff', fontSize: 18 * k, lineHeight: `${34 * k}px`,
         textAlign: 'center', cursor: 'pointer', pointerEvents: 'auto', userSelect: 'none',
       }}
-    >{dir < 0 ? '\u2039' : '\u203a'}</div>
+    >{dir < 0 ? '‹' : '›'}</div>
   )
+  const badge = (text: string, pos: React.CSSProperties): React.ReactNode => (
+    <div style={{
+      position: 'absolute', ...pos, padding: `${1 * k}px ${6 * k}px`,
+      borderRadius: 8 * k, background: 'rgba(0,0,0,0.55)', color: '#fff',
+      fontSize: 11 * k, fontWeight: 600, pointerEvents: 'none', whiteSpace: 'nowrap',
+    }}>{text}</div>
+  )
+  const shown = shownCard(st).group.id
   return (
-    <div data-stash-face style={{ position: 'absolute', inset: 0, zIndex: 19, pointerEvents: 'none' }}>
-      {/* A card, not a picture: a count of what it holds, always there. */}
-      <div style={{
-        position: 'absolute', right: 6 * k, bottom: 6 * k, padding: `${1 * k}px ${6 * k}px`,
-        borderRadius: 8 * k, background: 'rgba(0,0,0,0.55)', color: '#fff',
-        fontSize: 11 * k, fontWeight: 600, pointerEvents: 'none',
-      }}>{hovered ? `${index + 1} / ${entries.length}` : `\u25a4 ${entries.length}`}</div>
-      {hovered && arrow(-1)}
-      {hovered && arrow(1)}
+    <div ref={attach} data-stash-face style={{ position: 'absolute', inset: 0, zIndex: 19, pointerEvents: 'none' }}>
+      {/* A deck shows its edges, like a closed deck on the canvas. */}
+      {deck && [2, 1].map(i => (
+        <div key={i} style={{
+          position: 'absolute', top: 5 * k * i, bottom: 5 * k * i, right: -4 * k * i, width: 8 * k,
+          borderRadius: `0 ${10 * k}px ${10 * k}px 0`, background: 'rgba(160,170,200,0.35)', zIndex: -1,
+        }} />
+      ))}
+      {/* A card, not a picture: what it holds, always there. */}
+      {badge(hovered && entries.length > 1 ? `${index + 1} / ${entries.length}`
+        : deck ? `${heldCards(st).length} cards · ${entries.length}` : `▤ ${entries.length}`,
+      { right: 6 * k, bottom: 6 * k })}
+      {hovered && entries.length > 1 && arrow(-1, () => stepStashFace(id, -1))}
+      {hovered && entries.length > 1 && arrow(1, () => stepStashFace(id, 1))}
+      {deck && (hovered || st.fanned) && (
+        <div
+          data-stash-fan-toggle
+          onPointerDown={press}
+          onDoubleClick={press}
+          onClick={e => { e.stopPropagation(); setStashFanned(id, !st.fanned) }}
+          style={{
+            position: 'absolute', left: 6 * k, bottom: 6 * k, padding: `${2 * k}px ${8 * k}px`,
+            borderRadius: 8 * k, background: st.fanned ? 'rgba(120,170,255,0.85)' : 'rgba(0,0,0,0.6)',
+            color: '#fff', fontSize: 11 * k, fontWeight: 700, cursor: 'pointer', pointerEvents: 'auto',
+          }}
+        >{st.fanned ? 'Close' : 'Fan'}</div>
+      )}
+      {/* The fan: every card side by side, to the right of the deck, over
+          the strip — a look, not a move. */}
+      {deck && st.fanned && world && ReactDOM.createPortal(<div data-stash-fan={id} style={{ position: 'absolute', left: 0, top: 0, width: 0, height: 0, zIndex: 66 }}>{heldCards(st).map((c, i) => {
+        const own = heldSteps(c)
+        const m = own.entries[own.index]?.media
+        const url = m ? (m.type === 'video' ? m.posterUrl ?? null : m.url) : null
+        const isShown = c.group.id === shown
+        return (
+          <div
+            key={c.group.id}
+            data-stash-fan-card={c.group.id}
+            onPointerDown={press}
+            onDoubleClick={press}
+            onClick={e => { e.stopPropagation(); showHeldCard(id, c.group.id) }}
+            style={{
+              position: 'absolute', top: y, left: x + (i + 1) * w * 1.04, width: w, height: h,
+              borderRadius: 10 * k, overflow: 'hidden', pointerEvents: 'auto', cursor: 'pointer',
+              background: c.group.color || '#334', boxShadow: `0 ${4 * k}px ${18 * k}px rgba(0,0,0,0.6)`,
+              outline: isShown ? `${2 * k}px solid rgba(120,170,255,0.9)` : undefined,
+            }}
+          >
+            {url && <img src={url} draggable={false} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />}
+            {c.group.effect && badge(c.group.name || 'Effect', { left: 6 * k, top: '45%' })}
+            {badge(c.group.name || 'Card', { left: 6 * k, top: 6 * k })}
+            {own.entries.length > 1 && badge(`${own.index + 1} / ${own.entries.length}`, { right: 6 * k, bottom: 6 * k })}
+            {own.entries.length > 1 && arrow(-1, () => stepHeldCard(id, c.group.id, -1), 'l')}
+            {own.entries.length > 1 && arrow(1, () => stepHeldCard(id, c.group.id, 1), 'r')}
+          </div>
+        )
+      })}</div>, world)}
     </div>
   )
 }

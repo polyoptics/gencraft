@@ -223,6 +223,29 @@ interface FreeNodeStore {
   clearFreeSelection: () => void
 }
 
+/** Undock what is docked on rail `railId` and passes `which`, into `out`:
+ *  set down in a row just below the rail, at its own size — columns left to
+ *  right, then the tray. Held cards become cards again (useRailSync).
+ *  Returns whether anything moved. */
+function setDownBelow(nodes: Record<string, FreeNodeData>, railId: string, which: (n: FreeNodeData) => boolean, out: Record<string, FreeNodeData>): boolean {
+  const rail = nodes[railId]
+  if (rail?.type !== 'rail') return false
+  const slots = [...(rail.rail?.slots.map(sl => sl.id) ?? []), RAIL_TRAY]
+  const gap = RAIL_GEOM.gap * (rail.rail?.unit ?? 1)
+  let x = rail.x
+  const y = rail.y + rail.height + gap * 2
+  const docked = Object.values(nodes)
+    .filter(n => n.railDock?.railId === railId && which(n))
+    .sort((a, b) => (slots.indexOf(a.railDock!.slotId) - slots.indexOf(b.railDock!.slotId)) || (a.railDock!.order - b.railDock!.order))
+  for (const n of docked) {
+    const d = n.railDock!
+    const w = d.prevW ?? n.width, h = d.prevH ?? n.height
+    out[n.id] = { ...n, railDock: undefined, x, y, width: w, height: h }
+    x += w + gap
+  }
+  return docked.length > 0
+}
+
 export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
   nodes: {},
   selectedIds: [],
@@ -620,14 +643,11 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
       return { nodes: { ...s.nodes, [railId]: { ...rail, rail: { ...rail.rail, slots } } } }
     }),
 
+  // Results are kept, as a deleted strip's are: set down below the strip.
   clearRailTray: (railId) =>
     set(s => {
       const nodes = { ...s.nodes }
-      let changed = false
-      for (const n of Object.values(s.nodes)) {
-        if (n.railDock?.railId === railId && n.railDock.slotId === RAIL_TRAY) { delete nodes[n.id]; changed = true }
-      }
-      return changed ? { nodes, selectedIds: s.selectedIds.filter(x => !!nodes[x]) } : s
+      return setDownBelow(s.nodes, railId, n => n.railDock?.slotId === RAIL_TRAY, nodes) ? { nodes } : s
     }),
 
   deleteFreeNode: (id) =>
@@ -642,23 +662,7 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
       // hold pictures, results — is set down in a row just below where it
       // was, at its own size, columns left to right, then the tray. A held
       // card becomes a card again (useRailSync). Undo brings it all back.
-      const rail = s.nodes[id]
-      if (rail?.type === 'rail') {
-        const slots = [...(rail.rail?.slots.map(sl => sl.id) ?? []), RAIL_TRAY]
-        const u = rail.rail?.unit ?? 1
-        const gap = RAIL_GEOM.gap * u
-        let x = rail.x
-        const y = rail.y + rail.height + gap * 2
-        Object.values(s.nodes)
-          .filter(n => n.railDock?.railId === id)
-          .sort((a, b) => (slots.indexOf(a.railDock!.slotId) - slots.indexOf(b.railDock!.slotId)) || (a.railDock!.order - b.railDock!.order))
-          .forEach(n => {
-            const d = n.railDock!
-            const w = d.prevW ?? n.width, h = d.prevH ?? n.height
-            nodes[n.id] = { ...n, railDock: undefined, x, y, width: w, height: h }
-            x += w + gap
-          })
-      }
+      if (s.nodes[id]?.type === 'rail') setDownBelow(s.nodes, id, () => true, nodes)
       // A hidden member deleted on its own (from the Card Browser) can
       // leave its face alone in its deck; a deck of one is just a tile.
       const anchor = s.nodes[id]?.tileDeck?.anchor

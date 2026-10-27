@@ -27,7 +27,7 @@ import { useRailRunStore } from '../../store/railRunStore'
 import { onUndoRestore, useUndoCoordinator } from '../../store/undoCoordinator'
 import { usePosterMapStore } from '../../three/posterService'
 import { RAIL_GEOM, RAIL_TRAY, isRail, railMembers } from '../rail'
-import { landResultCard } from '../railCards'
+import { landResultCard, unitCardName } from '../railCards'
 import { diskFileUrl } from '../diskUrl'
 import { saveCanvasImage } from '../saveImage'
 import { loadImage, runChain, type ChainItem } from './chain'
@@ -205,8 +205,7 @@ export async function runRail(railId: string): Promise<void> {
         if (combo.subjectCard) {
           if (pending && pending.card !== combo.subjectCard && !flush()) { gone = true; break }
           if (!pending) {
-            const card = members ? [...members.values()].flat().find(n => n.id === combo.subjectCard) : undefined
-            pending = { card: combo.subjectCard, name: `${card?.label || 'Card'} — ${railLabel}`, results: [] }
+            pending = { card: combo.subjectCard, name: `${unitCardName(nodes, combo.subjectCard)} — ${railLabel}`, results: [] }
           }
           pending.results.push({ ...out, label: name })
           made++

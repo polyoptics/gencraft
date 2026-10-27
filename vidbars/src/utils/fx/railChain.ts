@@ -28,7 +28,7 @@
 import type { FreeNodeData } from '../../store/freeNodeStore'
 import { usePosterMapStore } from '../../three/posterService'
 import { isRail, isRailPicture, type RailSlot } from '../rail'
-import { railUnits, unitOwner } from '../railCards'
+import { railUnits, unitCard, unitOwner } from '../railCards'
 import type { ChainItem } from './chain'
 import { EFFECTS, effectKindOf } from './effects'
 
@@ -144,7 +144,8 @@ export function railComboCount(rail: FreeNodeData, members: Members): number {
  *  subject, the way the tray then reads. `sourceIds` is the pictures used,
  *  SUBJECT FIRST, then partners in slot order — the docked tiles, so a
  *  card's picture names its card. `subjectCard` is the subject's docked
- *  card tile when the subject is a card's picture. Null when out of range. */
+ *  card (unitCard's key) when the subject is a held card's picture. Null
+ *  when out of range. */
 export function railComboAt(
   rail: FreeNodeData,
   members: Members,
@@ -185,7 +186,7 @@ export function railComboAt(
       label += ` ${EFFECTS[effectKindOf(card)].glyph} ${partner.label || 'picture'}`
     }
   }
-  return { items, label, sourceIds, subjectCard: subject.stashedCard ? unitOwner(subject.id) : null }
+  return { items, label, sourceIds, subjectCard: unitCard(subject.id) }
 }
 
 /** Why part of the recipe does nothing, by slot id: role columns the run

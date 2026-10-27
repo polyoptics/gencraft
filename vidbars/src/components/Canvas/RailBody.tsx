@@ -504,7 +504,7 @@ const TrayHead: React.FC<{
       <button
         type="button"
         data-rail-clear
-        title="Take the results off the tray (their files stay on disk)"
+        title="Set the results down on the canvas, below the strip"
         onPointerDown={stopPrimary}
         onMouseDown={pressButton}
         onDoubleClick={stop}
@@ -519,7 +519,7 @@ const TrayHead: React.FC<{
           color: 'rgba(255,255,255,0.78)', fontFamily: 'inherit', fontSize: 10 * u, fontWeight: 600, lineHeight: 1,
           cursor: 'pointer',
         }}
-      >Clear</button>
+      >Take off</button>
     )}
   </div>
 )

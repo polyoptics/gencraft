@@ -1399,14 +1399,14 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
     const onUp = (ev: PointerEvent) => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
-      // A deck let go over a loop strip goes into the column card by
-      // card, in deck order (see GroupCard's drag). One undo puts it back.
+      // A deck let go over a loop strip goes into the column as ONE deck
+      // (utils/railCards), front card first. One undo puts it back.
       {
         const railT = (dxAccum !== 0 || dyAccum !== 0) ? cardRailTarget(allDragIds, ev.clientX, ev.clientY) : null
         previewCardRail(null, deck.anchorGroupId)
         if (railT) {
           useBoardsStore.getState().setGroupPosBatch(Array.from(initialOrigins, ([gid, o]) => ({ groupId: gid, originY: o.y, originX: o.x })))
-          dockCardsOnRail(allDragIds, railT)
+          dockCardsOnRail(allDragIds, railT, true)
           useMagnetPreviewStore.getState().setPreview(null)
           return
         }
