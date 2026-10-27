@@ -1322,6 +1322,12 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
             url={fxDrag.active ? fxDrag.url : node.imageUrl}
             getUrls={fxDrag.active ? () => [] : dragOutUrls}
             allLabel={!fxDrag.active && isDeckFace ? 'every file in this deck' : undefined}
+            // Let go back on the canvas, the copy keeps this tile's size and
+            // crop. Read fresh: a docked tile's size is the rail's to change.
+            shape={() => {
+              const n = useFreeNodeStore.getState().nodes[id]
+              return n ? { width: n.width, height: n.height, imageTransform: n.imageTransform } : null
+            }}
             size={headerBtn}
             visible={isHovered}
             style={{ position: 'relative', zIndex: 20 }}

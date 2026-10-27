@@ -15,6 +15,7 @@ import { createCardOrBoardAt } from '../../utils/canvasCreate'
 import { GLCanvasHost } from '../Viewport3D/GLCanvasHost'
 import { addMediaBlockToCard, cardHitOf, groupForCardHit, type CardHit } from '../../utils/cardContent'
 import { EFFECT_DRAG_MIME, clientToCanvas, createEffectCard, createLoopStrip, effectKindFromDrag } from '../../utils/fx/createEffect'
+import { takeDragOutShape } from '../../utils/dragOutSource'
 import { tileDeckIndex } from '../../utils/tileDecks'
 import { RAIL_GEOM, isRail, railDropTarget, railLayout, railMembers, type RailDropTarget } from '../../utils/rail'
 import { railAtPoint } from './rail/railHit'
@@ -398,9 +399,18 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
     // has to be admitted alongside 'Files' or dragging a tile out of a
     // Media Pool is silently dead. getData is blacked out during dragover
     // for security, but `types` is not, which is all this test needs.
-    // Our own drag-out passing back over the canvas is NOT accepted: let go
-    // here and nothing happens, rather than importing the file again.
-    if (window.vidbarsDesktop?.isDraggingOut?.()) return
+    // Our own drag-out passing back over the canvas: taken over BARE canvas
+    // only (a loop strip counts — its column takes it), where letting go
+    // makes a duplicate of what was dragged, as it looks now. Over its own
+    // tile, or any other target, it is refused: a slip back onto the source
+    // must not replace or append anything.
+    if (window.vidbarsDesktop?.isDraggingOut?.()) {
+      const aim = aimDrop(e.clientX, e.clientY)
+      if (floating || aim.target || !aim.onCanvas) return
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'copy'
+      return
+    }
     // An effect drag makes a card where it lands, so it is taken over the
     // canvas only — never through the overlay listener (`floating`: card
     // faces and headers, no canvas under them to put a card on).
@@ -684,8 +694,32 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
    *  below) — no bare canvas under it, so a drop that takes nothing does
    *  nothing rather than leave a stray tile under a header. */
   const handleDrop = useCallback((e: React.DragEvent, floating = false) => {
-    // Our own drag-out, released back over the canvas (see handleDragOver).
-    if (window.vidbarsDesktop?.isDraggingOut?.()) { e.preventDefault(); return }
+    // Our own drag-out, released back over the canvas (see handleDragOver):
+    // on bare canvas, a duplicate of the file it carried — the picture as
+    // it showed, effects and all, since the grip hands out that render. A
+    // card, block or bar dragged out the same way gets out without first
+    // duplicating it in place. Anywhere else, nothing.
+    if (window.vidbarsDesktop?.isDraggingOut?.()) {
+      e.preventDefault()
+      const aim = aimDrop(e.clientX, e.clientY)
+      const own = Array.from(e.dataTransfer.files).filter(isAcceptedMediaFile)
+      if (floating || aim.target || !aim.onCanvas || own.length === 0) return
+      // Taken even when unused, so a later drag can never inherit it.
+      const shape = takeDragOutShape()
+      const made = dropOnBareCanvas(e, own)
+      // One file back from a tile: the copy looks like the tile did — its
+      // size and crop, centred where it was let go — not a default import.
+      if (shape && made.length === 1) {
+        const at = clientToCanvas(e.clientX, e.clientY)
+        useFreeNodeStore.getState().updateFreeNode(made[0], {
+          width: shape.width, height: shape.height,
+          x: at.cx - shape.width / 2, y: at.cy - shape.height / 2,
+          ...(shape.imageTransform ? { imageTransform: { ...shape.imageTransform } } : {}),
+        })
+      }
+      dealOntoRail(made, e.clientX, e.clientY)
+      return
+    }
     // An effect drag (see handleDragOver). Like a pool drag it carries no
     // files, so it has to be read before the empty-files bail below.
     const fxRaw = e.dataTransfer.getData(EFFECT_DRAG_MIME)

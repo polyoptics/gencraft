@@ -14,6 +14,7 @@
 
 import React, { useState } from 'react'
 import { mayHaveDiskFile, useResolvedFile } from '../../hooks/useFileMenu'
+import { noteDragOutShape, type DragOutShape } from '../../utils/dragOutSource'
 
 const stop = (e: React.SyntheticEvent) => { e.stopPropagation() }
 /** Only the primary button belongs to the grip: a middle-drag over it must
@@ -38,8 +39,12 @@ export const DragOutGrip: React.FC<{
   size: number
   /** Hover reveal. Hidden, it also stops taking the pointer. */
   visible?: boolean
+  /** The tile's size and crop, read at dragstart: dropped back on the
+   *  canvas, the duplicate takes it (utils/dragOutSource). Omit to have
+   *  it land like an imported file. */
+  shape?: () => DragOutShape | null
   style?: React.CSSProperties
-}> = ({ url, getUrls, allLabel, size, visible = true, style }) => {
+}> = ({ url, getUrls, allLabel, size, visible = true, shape, style }) => {
   const d = window.vidbarsDesktop
   const canDrag = !!d && typeof d.startMediaDrag === 'function'
   // Ask main about the file only once the grip is wanted. Hosts mount one
@@ -101,6 +106,9 @@ export const DragOutGrip: React.FC<{
         // by the cap.
         const all = e.shiftKey && !!getUrls
         const inside = all ? getUrls!({ all: true }) : []
+        // One file of this tile: its shape goes with it. Several (Shift)
+        // land as plain imports — whose shape would they take?
+        noteDragOutShape(inside.length ? null : shape?.() ?? null)
         d.startMediaDrag!(inside.length
           ? inside
           : [url, ...(getUrls?.({ all: false }) ?? []).filter(u => u !== url)])
