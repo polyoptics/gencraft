@@ -119,7 +119,7 @@ const DeckTile: React.FC<{
   // Resolved: a `mediaref:` hero (every browser drop) is not a loadable
   // CSS url, so the tile showed nothing.
   const hero = useResolvedMedia(group.cardHeroImage ?? null)
-  const name = group.cardHeaderText || group.name || 'Untitled'
+  const name = group.cardHeaderText || group.name || 'Card'
   const board1 = group.boardIds.length
 
   const onPointerDown = (e: React.PointerEvent) => {
@@ -135,7 +135,7 @@ const DeckTile: React.FC<{
       onPointerLeave={onLeave}
       onPointerDown={onPointerDown}
       onDoubleClick={onDoubleClick}
-      title={`${group.name} · ${board1} board${board1 !== 1 ? 's' : ''} · drag to link, double-click to jump`}
+      title={`${group.name} · ${board1} block${board1 !== 1 ? 's' : ''} · drag to link, double-click to jump`}
       style={{
         flexShrink: 0,
         width: TILE_W,
@@ -223,7 +223,7 @@ const DeckTile: React.FC<{
         color: 'rgba(255,255,255,0.65)',
         textShadow: '0 1px 2px rgba(0,0,0,0.6)',
       }}>
-        {board1} board{board1 !== 1 ? 's' : ''}
+        {board1} block{board1 !== 1 ? 's' : ''}
       </div>
     </div>
   )

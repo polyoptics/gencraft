@@ -89,7 +89,7 @@ export const TemplateMenu: React.FC = () => {
     const fn = useFreeNodeStore.getState()
 
     const primary = bs.boards['primary']
-    const { bars, rootIds, projectName: pName } = primary ?? { bars: {}, rootIds: [], projectName: 'storyMap' }
+    const { bars, rootIds, projectName: pName } = primary ?? { bars: {}, rootIds: [], projectName: 'Block' }
 
     const allBars = Object.values(bars)
     const canvasWidth = allBars.length > 0 ? Math.max(...allBars.map(b => b.x + b.width)) : 800
@@ -230,6 +230,11 @@ export const TemplateMenu: React.FC = () => {
       ensureRolodexHome()   // pointer now dangles — re-mint at the seed position
       setBoardPos({ x: 0, y: 0 })
       useBoardsStore.getState().loadTemplate('primary', t.id)
+      if (t.card) {
+        const bs = useBoardsStore.getState()
+        const g = bs.groups.find(gr => gr.boardIds.includes('primary'))
+        if (g) bs.setGroupCardSize(g.id, t.card.width, t.card.height)
+      }
       setZoom(t.zoom)
       const toolbarH = 40
       const canvasH = window.innerHeight - toolbarH
@@ -295,6 +300,7 @@ export const TemplateMenu: React.FC = () => {
       const bs = useBoardsStore.getState()
       const group = bs.groups.find(g => g.boardIds.includes(newId))
       if (group) useBoardsStore.getState().setGroupPos(group.id, freeY, 0)
+      if (group && t.card) useBoardsStore.getState().setGroupCardSize(group.id, t.card.width, t.card.height)
     } else {
       const inst = instantiateScaffold(entry.data.id, nextFreeY(), 0)
       if (!inst) return

@@ -236,7 +236,7 @@ export const CloneDeck: React.FC<Props> = ({
             textShadow: '0 1px 4px rgba(0,0,0,0.8)',
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}>
-            {target.cardSummary || `${target.boardIds.length} board${target.boardIds.length !== 1 ? 's' : ''}`}
+            {target.cardSummary || `${target.boardIds.length} block${target.boardIds.length !== 1 ? 's' : ''}`}
           </div>
         </div>
 

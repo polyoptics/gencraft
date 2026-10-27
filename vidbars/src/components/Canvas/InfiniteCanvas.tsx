@@ -973,7 +973,7 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
                 setAddMenu(null)
               } },
               { label: '─────────────', action: null },
-              { label: zoom <= 0.18 ? '🎬  New Card' : '🎬  New Board',
+              { label: zoom <= 0.18 ? '🎬  New Card' : '🎬  New Block',
                 action: () => {
                 // Shared with the top icon bar's + button — see
                 // utils/canvasCreate. Two copies of this sequence would drift.

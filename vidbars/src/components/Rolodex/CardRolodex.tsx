@@ -2827,8 +2827,8 @@ const RolodexSlot: React.FC<{
       onMouseEnter={() => { setIsHovered(true); onHoverEnter() }}
       onMouseLeave={() => { setIsHovered(false); onHoverLeave() }}
       title={lit > 0.5
-        ? `${group.name || 'Untitled'} — double-click to pan canvas · drag to link to another card`
-        : `${group.name || 'Untitled'} — click to view · drag to link to another card`}
+        ? `${group.name || 'Card'} — double-click to pan canvas · drag to link to another card`
+        : `${group.name || 'Card'} — click to view · drag to link to another card`}
       style={{
         position: 'absolute',
         // Cards sit centered inside the leftColumn — offset by WING_W so
@@ -2969,7 +2969,7 @@ const RolodexSlot: React.FC<{
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
                 flex: 1,
-              }}>{group.name || 'Untitled'}</span>
+              }}>{group.name || 'Card'}</span>
             </div>
             {/* Full canvas-style card preview — renders the group's saved
                   cardHeaderText + cardText with their styles. Quick
@@ -3046,7 +3046,7 @@ const PlacementGhost: React.FC<{ onDone: () => void }> = ({ onDone }) => {
     const bs = useBoardsStore.getState()
     useUndoCoordinator.getState().checkpoint()
     const newBoardId = bs.createBoard(0, 0)
-    const newGroupId = bs.createGroup('New Card', [newBoardId])
+    const newGroupId = bs.createGroup('Card', [newBoardId])
     bs.setGroupPos(newGroupId, canvasY, canvasX)
   }, [])
 

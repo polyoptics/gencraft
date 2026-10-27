@@ -853,7 +853,7 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
                   setBlockMenu(null)
                 }},
               ] : []),
-              ...(boardId !== 'primary' ? [{ label: 'Duplicate Board', icon: '📋', action: () => {
+              ...(boardId !== 'primary' ? [{ label: 'Duplicate Block', icon: '📋', action: () => {
                 useUndoCoordinator.getState().checkpoint()
                 useBoardsStore.getState().duplicateBoard(boardId)
                 setBlockMenu(null)

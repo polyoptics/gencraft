@@ -369,7 +369,7 @@ function applyBarMut(
 
 const PRIMARY_BOARD: BoardData = {
   id: 'primary',
-  projectName: 'storyMap',
+  projectName: 'Block',
   color: '#5b8dd9',
   nleRow: 0,
   nleX: 0,
@@ -391,7 +391,7 @@ const PRIMARY_BOARD: BoardData = {
 
 const DEFAULT_GROUP: ProjectGroup = {
   id: 'default-group',
-  name: 'NLE Timeline',
+  name: 'Card',
   color: '#5b8dd9',
   boardIds: ['primary'],
   cardHeroImage: null,

@@ -55,7 +55,7 @@ export const ContextMenu: React.FC<Props> = ({
     ] : []),
     { sep: true },
     {
-      label: 'Extract to Board', icon: '📤',
+      label: 'Extract to Block', icon: '📤',
       action: () => { useUndoCoordinator.getState().checkpoint(); useBoardsStore.getState().extractBarToBoard(ctx.boardId, barId); onClose() },
     },
     {

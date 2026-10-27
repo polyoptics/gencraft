@@ -103,8 +103,8 @@ const NLEGroupViewer: React.FC<Props> = ({ scopeKey }) => {
     : '#5b8dd9'
   const groupColor = isBoardScope ? rootColorFromBoard : (group?.color ?? '#5b8dd9')
   const groupName = isBoardScope
-    ? (scopedBoard?.layers?.block?.label || scopedBoard?.projectName || 'Board')
-    : (group?.name ?? 'NLE Timeline')
+    ? (scopedBoard?.layers?.block?.label || scopedBoard?.projectName || 'Block')
+    : (group?.name ?? 'Card')
 
   // Canvas geometry — scoped to this group's boards (for group scope) OR
   // locked to the single block's header bounds (for board scope).

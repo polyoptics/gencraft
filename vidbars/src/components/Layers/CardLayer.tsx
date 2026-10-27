@@ -716,7 +716,7 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
             textShadow: '0 1px 4px rgba(0,0,0,0.8)',
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}>
-            {group.cardSummary || `${group.boardIds.length} board${group.boardIds.length !== 1 ? 's' : ''}`}
+            {group.cardSummary || `${group.boardIds.length} block${group.boardIds.length !== 1 ? 's' : ''}`}
           </div>
         </div>
         {/* ── Resize handles ── */}

@@ -27,7 +27,7 @@ const GRIP = 20
 
 const LEVELS = [
   { key: 'card',  label: '1', title: 'Card — the whole thing as one face' },
-  { key: 'block',  label: '2', title: 'Blocks — the boards inside it' },
+  { key: 'block',  label: '2', title: 'Blocks — the blocks inside it' },
   { key: 'board', label: '3', title: 'Board — the bars in full detail' },
 ] as const
 

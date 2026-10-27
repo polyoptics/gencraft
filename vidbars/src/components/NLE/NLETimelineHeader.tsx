@@ -102,7 +102,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, icon
     return allBids
   }, [group, allGroupsFallback, groupGone])
 
-  const defaultName = group?.name ?? 'NLE Timeline'
+  const defaultName = group?.name ?? 'Card'
 
   const [headerName, setHeaderName] = useState(defaultName)
   const [renaming, setRenaming] = useState(false)
@@ -429,7 +429,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, icon
       ref={inputRef}
       autoFocus
       value={renameVal}
-      placeholder="New Card"
+      placeholder="Card"
       onChange={e => setRenameVal(e.target.value)}
       onBlur={commitRename}
       onKeyDown={e => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') setRenaming(false) }}
@@ -467,7 +467,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, icon
         minWidth: 0,
         lineHeight: `${14 * ov}px`,
       }}
-    >{headerName || 'New Card'}</span>
+    >{headerName || 'Card'}</span>
   )
 
   return (

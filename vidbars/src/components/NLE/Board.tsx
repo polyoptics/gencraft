@@ -379,7 +379,7 @@ export const Board: React.FC<Props> = React.memo(({ boardId }) => {
               ref={nameInputRef}
               autoFocus
               value={renameVal}
-              placeholder="New Board"
+              placeholder="Block"
               onChange={e => setRenameVal(e.target.value)}
               onBlur={commitRename}
               onKeyDown={e => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') setRenaming(false) }}
@@ -401,7 +401,7 @@ export const Board: React.FC<Props> = React.memo(({ boardId }) => {
                 fontSize: 11 / zoom, fontWeight: 700, letterSpacing: '0.3px', cursor: 'text', whiteSpace: 'nowrap',
               }}
               onDoubleClick={e => { e.stopPropagation(); setRenameVal(projectName); setRenaming(true) }}
-            >{projectName || 'New Board'}</span>
+            >{projectName || 'Block'}</span>
           )}
 
           <div style={{ flex: 1 }} />
@@ -429,7 +429,7 @@ export const Board: React.FC<Props> = React.memo(({ boardId }) => {
             onPointerDown={onGripDown}
             onPointerMove={onGripMove}
             onPointerUp={onGripUp}
-            title="Free drag — pass through other boards"
+            title="Free drag — pass through other blocks"
             style={{ cursor: 'grab', flexShrink: 0, padding: '2px 8px', marginRight: -4 }}
           >
             <svg width="10" height="10" viewBox="0 0 10 10" style={{ opacity: 0.35, display: 'block' }}>

@@ -34,6 +34,9 @@ export interface TemplateData {
   rootIds: string[]
   canvasWidth: number
   zoom: number
+  /** The card's own size (its frame, canvas units), when it should be
+   *  bigger than the blocks inside it — as a hand-resized card is. */
+  card?: { width: number; height: number }
 }
 
 // ── Color palette from the reference images ──
@@ -47,11 +50,17 @@ export const TEMPLATES: TemplateData[] = [
   {
     id: 'blank',
     label: 'Blank',
-    projectName: 'storyMap',
-    bars: { root: b('root', null, 0, 0, 480, []) },
+    projectName: 'Block',
+    // The size and shape of an effect card dropped at the template's zoom
+    // (180×252, 5:7 portrait): a fresh card reads as a card, the same as
+    // the cards and pictures laid beside it.
+    bars: { root: b('root', null, 0, 0, 180, [], { height: 252 }) },
     rootIds: ['root'],
-    canvasWidth: 520,
-    zoom: 1,
+    // The card itself: the size Brian set by hand (963 × 1419), opened at
+    // the card zoom he set it at, where it reads as a playing card.
+    card: { width: 963, height: 1419 },
+    canvasWidth: 963,
+    zoom: 0.13,
   },
 
   // ── storyMap ── hierarchy: one board, layers computed from bar tree depth
