@@ -43,6 +43,9 @@ export interface RailData {
   /** What the run produces. 'process' = effect pictures; 'write' and
    *  'generate' are later output cards on the same rail. */
   output: 'process'
+  /** How much bigger the results tray shows what is in it — its result
+   *  cards and the "next" preview — than the rest of the strip. Absent: 1. */
+  trayScale?: number
 }
 
 export interface RailDock {
@@ -164,6 +167,27 @@ function dockedHeight(n: FreeNodeData, w: number): number {
   return w * Math.min(1.8, Math.max(0.35, aspect))
 }
 
+/** The shape (height / width) of each rail's live "next" preview, so an
+ *  empty results tray is exactly as tall as the picture it shows. Set from
+ *  the preview as it lands (useRailSync); absent until one has. */
+const trayAspects = new Map<string, number>()
+
+/** A preview's shape as the tray draws it: within 0.35 – 1.8, as a docked
+ *  picture's is (dockedHeight). */
+export function clampAspect(aspect: number): number {
+  return Math.min(1.8, Math.max(0.35, aspect))
+}
+
+/** Record a rail's preview shape (null: none). True when it changed. */
+export function setTrayAspect(railId: string, aspect: number | null): boolean {
+  const was = trayAspects.get(railId)
+  if (aspect === null || !(aspect > 0)) { trayAspects.delete(railId); return was !== undefined }
+  const a = clampAspect(aspect)
+  if (was !== undefined && Math.abs(was - a) < 1e-3) return false
+  trayAspects.set(railId, a)
+  return true
+}
+
 /** A column's width: its widest card when it holds cards (stand-ins,
  *  utils/railCards — a card keeps its own size, and the column fits it),
  *  else the picture width. */
@@ -247,13 +271,17 @@ export function railLayout(rail: FreeNodeData, members: Map<string, FreeNodeData
   const plusEnd: Rect = { x, y: bodyTop, width: g.plusW * u, height: g.emptyH * u }
   x += (g.plusW + g.trayGap) * u
 
-  const trayW = columnWidth(members?.get(RAIL_TRAY) ?? [], picW)
+  // The tray at its own scale: an empty one, or one of loose pictures, is
+  // that much wider; result cards are scaled themselves (useRailSync).
+  const trayW = columnWidth(members?.get(RAIL_TRAY) ?? [], picW * (rail.rail.trayScale ?? 1))
   const trayCards = cascade(members?.get(RAIL_TRAY) ?? [], x, bodyTop, trayW, u)
   const trayLast = trayCards[trayCards.length - 1]
   const tray: RailColumn = {
     slot: null, slotId: RAIL_TRAY, kind: 'tray', x, width: trayW,
     head: { x, y: rowTop, width: trayW, height: g.headH * u },
-    bodyTop, bodyBottom: trayLast ? trayLast.y + trayLast.height : bodyTop + g.emptyH * u,
+    // Empty, it is as tall as the preview it shows, at the preview's shape.
+    bodyTop, bodyBottom: trayLast ? trayLast.y + trayLast.height
+      : bodyTop + (trayAspects.has(rail.id) ? trayW * trayAspects.get(rail.id)! : g.emptyH * u * (rail.rail.trayScale ?? 1)),
     cards: trayCards, empty: trayCards.length === 0,
   }
 

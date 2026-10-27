@@ -116,6 +116,9 @@ export interface ProjectGroup {
   /** A loop strip's result card: the card it was made from. They step
    *  through their pictures together (utils/railCards followFaces). */
   railSource?: string
+  /** A result card shown bigger on a strip's tray (RailData.trayScale): its
+   *  own frame size, which it goes back to when it leaves the tray. */
+  railBase?: { w?: number; h?: number }
   /** An EFFECT card (utils/effectCards): its face is the effect's sliders,
    *  and lined up to the right of a picture card it processes that card's
    *  face. A real card otherwise — it moves, stacks and fans with a deck. */

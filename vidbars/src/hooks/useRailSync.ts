@@ -16,7 +16,8 @@
 // and its own drawn size is what the column lays out. A stand-in set down
 // off its strip (the strip deleted, the tray taken off) puts its card there
 // and goes; one whose card is gone goes too. Result cards step with their
-// inputs (followFaces).
+// inputs (followFaces), and on a tray scaled up (RailData.trayScale) are
+// shown that much bigger, back to their own size once they leave it.
 //
 // Mounted once, in App (RailSyncHost) — like FxStripsHost, so the per-change
 // work re-renders nothing.
@@ -24,7 +25,9 @@
 import { useEffect } from 'react'
 import { useFreeNodeStore, type FreeNodeData } from '../store/freeNodeStore'
 import { onUndoRestore } from '../store/undoCoordinator'
-import { isRail, railPlacements } from '../utils/rail'
+import { RAIL_TRAY, isRail, railPlacements, setTrayAspect } from '../utils/rail'
+import { useRailRunStore } from '../store/railRunStore'
+import { layoutCardGrid } from '../utils/cardGrid'
 import { followFaces, placeCard } from '../utils/railCards'
 import { useBoardsStore } from '../store/boardsStore'
 import { useCanvasStore } from '../store/canvasStore'
@@ -78,13 +81,47 @@ function syncRails(prev?: Record<string, FreeNodeData>): boolean {
   return syncCards(prev)
 }
 
+/** Cards on a results tray at their tray's scale; any other card that was
+ *  scaled there back to its own frame size (ProjectGroup.railBase). True
+ *  when any card changed size. */
+function scaleTrayCards(): boolean {
+  const nodes = useFreeNodeStore.getState().nodes
+  const want = new Map<string, number>()
+  for (const n of Object.values(nodes)) {
+    const d = n.railDock
+    if (!n.cardRef || !d || d.lifted || d.slotId !== RAIL_TRAY) continue
+    const rail = nodes[d.railId]
+    if (isRail(rail)) want.set(n.cardRef, rail.rail.trayScale ?? 1)
+  }
+  const changed: string[] = []
+  const groups = useBoardsStore.getState().groups.map(g => {
+    const k = want.get(g.id) ?? 1
+    if (k === 1 && !g.railBase) return g
+    const base = g.railBase ?? { w: g.cardWidthOverride, h: g.cardHeightOverride }
+    if (base.w === undefined || base.h === undefined) return g
+    if (k === 1) {
+      changed.push(g.id)
+      return { ...g, cardWidthOverride: base.w, cardHeightOverride: base.h, railBase: undefined }
+    }
+    const w = base.w * k, h = base.h * k
+    if (g.railBase && Math.abs((g.cardWidthOverride ?? 0) - w) < 0.5 && Math.abs((g.cardHeightOverride ?? 0) - h) < 0.5) return g
+    changed.push(g.id)
+    return { ...g, cardWidthOverride: w, cardHeightOverride: h, railBase: base }
+  })
+  if (changed.length === 0) return false
+  useBoardsStore.setState({ groups })
+  // Its blocks laid out again in the frame it now has.
+  for (const id of changed) layoutCardGrid(id)
+  return true
+}
+
 /** Cards follow their stand-ins (see the top of the file). `prev` is the
  *  tiles before the change, when a tile change set this off. True when a
  *  card's size changed its column's layout: the caller lays out again. */
 function syncCards(prev?: Record<string, FreeNodeData>): boolean {
   // Not before the cards' own store is loaded: there is nothing to follow.
   if (useBoardsStore.persist?.hasHydrated?.() === false) return false
-  let resized = false
+  let resized = scaleTrayCards()
   const fs = useFreeNodeStore.getState()
   const zoom = useCanvasStore.getState().zoom
   for (const n of Object.values(fs.nodes)) {
@@ -137,7 +174,18 @@ export function useRailSync(): void {
       run()
     })
     const offZoom = useCanvasStore.subscribe((s, prev) => { if (s.zoom !== prev.zoom) run() })
+    // A results tray is as tall as its preview's picture: a new preview
+    // with a new shape lays its rail out again.
+    const offPreview = useRailRunStore.subscribe((s, prev) => {
+      if (s.preview === prev.preview) return
+      let changed = false
+      for (const [railId, p] of Object.entries(s.preview)) {
+        const c = p.canvas
+        if (c && c.width > 0) changed = setTrayAspect(railId, c.height / c.width) || changed
+      }
+      if (changed) run()
+    })
     const offUndo = onUndoRestore(land)
-    return () => { off(); offCards(); offZoom(); offHydrate?.(); offUndo() }
+    return () => { off(); offCards(); offZoom(); offPreview(); offHydrate?.(); offUndo() }
   }, [])
 }

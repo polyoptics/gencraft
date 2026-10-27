@@ -20,7 +20,7 @@
 
 import React from 'react'
 import { createPortal } from 'react-dom'
-import { RAIL_GEOM, type RailDropTarget, type RailLayout, type RailSlot } from '../../../utils/rail'
+import { RAIL_GEOM, clampAspect, type RailDropTarget, type RailLayout, type RailSlot } from '../../../utils/rail'
 import { CanvasMirror } from '../../UI/CanvasMirror'
 import { RAIL_COLORS as C } from './railStyle'
 import { nextCascadeY } from './railView'
@@ -112,7 +112,7 @@ export const RailOverlay: React.FC<{
     // Tucked, as wide as the card it tucks under (a card keeps its own size).
     const w = tucked ? Math.min(tray.width, tray.cards[tray.cards.length - 1].width) : tray.width
     // dockedHeight's clamp: the result tile will be laid out the same way.
-    const aspect = Math.min(1.8, Math.max(0.35, ghost.canvas.height / ghost.canvas.width))
+    const aspect = clampAspect(ghost.canvas.height / ghost.canvas.width)
     ghostCard = (
       <div data-rail-ghost={tucked ? 'tucked' : 'top'} style={{
         position: 'absolute', zIndex: tucked ? 9 : 10,

@@ -56,9 +56,13 @@ export const RailBody: React.FC<{
   zoom: number
 }> = ({ id, hovered, zoom }) => {
   const list = useFreeNodeStore(useShallow(s => railNodesOf(s.nodes, id)))
-  const view = useMemo(() => buildRailView(id, list), [id, list])
   const run = useRailRunStore(s => s.run[id])
   const preview = useRailRunStore(s => s.preview[id])
+  // An empty results tray takes the preview's shape (utils/rail
+  // setTrayAspect): a new shape lays the rail out again.
+  const previewShape = preview?.canvas && preview.canvas.width > 0 ? preview.canvas.height / preview.canvas.width : 0
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const view = useMemo(() => buildRailView(id, list), [id, list, previewShape])
   // Only drags aimed at THIS rail re-render it.
   const drop = useRailUiStore(s => (s.drop && s.drop.target.railId === id ? s.drop : null))
 
@@ -191,10 +195,6 @@ export const RailBody: React.FC<{
           }} />
         )
       })}
-      <div data-rail-tray style={{
-        position: 'absolute', ...loc(grow(bodyOf(L.tray), 4 * u)), borderRadius: 12 * u,
-        background: 'rgba(216,90,48,0.06)', border: `${u}px solid rgba(216,90,48,0.28)`,
-      }} />
 
       {/* ── Empty columns: a card-shaped outline to drop onto. ── */}
       {L.columns.map(col => col.kind === 'role' && col.empty && (
@@ -281,6 +281,13 @@ export const RailBody: React.FC<{
       />
 
       <RailResizeGrip railId={id} width={L.box.width} height={L.box.height} u={u} hovered={hovered} />
+      {/* The results tray scales on its own: judge the results big while
+          the inputs stay as they are. */}
+      <RailResizeGrip
+        railId={id} scales="tray" u={u} hovered={hovered}
+        width={L.tray.width} height={L.tray.bodyBottom - L.tray.bodyTop}
+        at={{ left: L.tray.x + L.tray.width - rail.x + 4 * u, top: L.tray.bodyBottom - rail.y + 4 * u }}
+      />
 
       {world && (
         <RailOverlay
