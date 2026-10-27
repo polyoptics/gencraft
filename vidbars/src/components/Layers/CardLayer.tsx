@@ -659,12 +659,7 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
   // as the hero's own image, so the face's crop, zoom and flips apply to
   // it unchanged. Re-encoded only when the strip's result changes — small,
   // for a face — never per pan or zoom frame.
-  const fxId = cardStripId(group.id)
-  const fxKey = useFxStore(s => s.sources[fxId])
-  const fxStrip = useFxStore(s => (fxKey ? s.strips[fxKey] : undefined))
-  const fxOff = useFxStore(s => !!s.bypass[fxId])
-  const fxCanvas = fxStrip?.result?.outputs.find(o => o.sourceId === fxId)?.canvas ?? null
-  const fxFace = useMemo(() => (fxCanvas ? faceDataUrl(fxCanvas) : null), [fxCanvas])
+  const { fxId, fxStrip, fxOff, fxFace } = useCardFxFace(group.id)
   const shownHero = fxFace && !fxOff ? fxFace : heroImage
   // Memoised: when the face is not a file this walks every bar, and the
   // card re-renders on every pan and zoom frame.
@@ -1256,6 +1251,9 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
       headerPad: headerExtend,
     }
   }, [anchorGroup, boards, pan, zoom])
+  // Effects on the front card show on the deck's face too — hooked here,
+  // above the early return, so the hook order never changes.
+  const deckFx = useCardFxFace(anchorGroup.id)
 
   if (screenWidth === 0) return null
 
@@ -1404,17 +1402,12 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
     window.addEventListener('pointerup', onUp)
   }, [deck.memberIds, deck.anchorGroupId, anchorGroup.id, anchorGroup.boardIds])
 
+  // The front card's face, by the face rule (utils/cardGrid): the block it
+  // was stepped to, else its hero, else its first picture (a video by its
+  // poster). Effects on it draw over this (deckFx).
   const heroImage = useMemo(() => {
-    if (anchorGroup.cardHeroImage) return anchorGroup.cardHeroImage
-    for (const bid of anchorGroup.boardIds) {
-      const board = boards[bid]
-      if (!board) continue
-      for (const rid of board.rootIds) {
-        const img = getFirstImageUrl(board.bars[rid]?.content)
-        if (img) return img
-      }
-    }
-    return null
+    const m = cardFaceMedia(anchorGroup, boards)
+    return m ? (m.type === 'image' ? m.url : m.posterUrl ?? null) : null
   }, [anchorGroup, boards])
 
   // Stacked card outlines — right-side only, max 2 edges to keep primary card wide.
@@ -1556,7 +1549,7 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
             useBoardsStore.getState().setDeckState(deck.memberIds, isSubDeck ? 'fanned' : 'open')
           }}
         >
-          {heroImage && <HeroImageLayer heroImage={heroImage} transform={anchorGroup.cardHeroTransform} />}
+          {(deckFx.shown ?? heroImage) && <HeroImageLayer heroImage={(deckFx.shown ?? heroImage)!} transform={anchorGroup.cardHeroTransform} />}
           {/* Content area — offset below header extension */}
           <div style={{ position: 'absolute', top: headerPad, left: 0, right: 0, bottom: 0, overflow: 'hidden', borderRadius: '0 0 12px 12px' }}>
             <GroupCardText groupId={anchorGroup.id} onCropImage={() => setIsEditingHero(true)} heroImage={heroImage} />
@@ -1694,6 +1687,9 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
   const stripRefs = useRef(new Map<string, HTMLDivElement>())
 
   const anchorGroup = groups.find(g => g.id === deck.anchorGroupId)
+  // Effects on the front card show on the fan's face too — hooked here,
+  // above every early return, so the hook order never changes.
+  const deckFx = useCardFxFace(anchorGroup?.id ?? '')
   if (!anchorGroup) return null
 
   // Compute primary card geometry — identical to GroupCard / StackedDeckCard
@@ -1869,17 +1865,10 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
   const connectorRefs = useRef<{ top: HTMLDivElement | null; bottom: HTMLDivElement | null }>({ top: null, bottom: null })
 
   // Hero image for anchor
+  // The front card's face, by the face rule (see StackedDeckCard).
   const heroImage = (() => {
-    if (anchorGroup.cardHeroImage) return anchorGroup.cardHeroImage
-    for (const bid of anchorGroup.boardIds) {
-      const board = boards[bid]
-      if (!board) continue
-      for (const rid of board.rootIds) {
-        const img = getFirstImageUrl(board.bars[rid]?.content)
-        if (img) return img
-      }
-    }
-    return null
+    const m = cardFaceMedia(anchorGroup, boards)
+    return m ? (m.type === 'image' ? m.url : m.posterUrl ?? null) : null
   })()
 
   // Drag entire fan — move all members together. Click (no drag) → stack.
@@ -2706,7 +2695,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
         }}
         onPointerDown={onFanDragDown}
       >
-        {heroImage && <HeroImageLayer heroImage={heroImage} transform={anchorGroup.cardHeroTransform} />}
+        {(deckFx.shown ?? heroImage) && <HeroImageLayer heroImage={(deckFx.shown ?? heroImage)!} transform={anchorGroup.cardHeroTransform} />}
         {/* Content area — offset below header extension */}
         <div style={{ position: 'absolute', top: headerPad, left: 0, right: 0, bottom: 0, overflow: 'hidden', borderRadius: '0 0 12px 12px' }}>
           <GroupCardText groupId={anchorGroup.id} onCropImage={() => setIsEditingHero(true)} />
@@ -2891,6 +2880,21 @@ const FaceArrow: React.FC<{ side: 'left' | 'right'; scale: number; onStep: () =>
       }}
     >{side === 'left' ? '‹' : '›'}</button>
   )
+}
+
+/** Effects on a card (utils/fx/cardStrips): its face picture as processed,
+ *  as a small data url, and whether its fx toggle shows the original.
+ *  `shown` is what a face should draw instead of its picture, or null.
+ *  Every face of the card — open, at the front of a stacked deck, at the
+ *  front of a fan — draws the same. */
+function useCardFxFace(groupId: string) {
+  const fxId = cardStripId(groupId)
+  const fxKey = useFxStore(s => s.sources[fxId])
+  const fxStrip = useFxStore(s => (fxKey ? s.strips[fxKey] : undefined))
+  const fxOff = useFxStore(s => !!s.bypass[fxId])
+  const fxCanvas = fxStrip?.result?.outputs.find(o => o.sourceId === fxId)?.canvas ?? null
+  const fxFace = useMemo(() => (fxCanvas ? faceDataUrl(fxCanvas) : null), [fxCanvas])
+  return { fxId, fxStrip, fxOff, fxFace, shown: fxFace && !fxOff ? fxFace : null }
 }
 
 /** A card face's copy of its effect result: a JPEG no larger than a face

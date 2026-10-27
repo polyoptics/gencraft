@@ -1,11 +1,13 @@
 // EffectPalette — every effect, as a hand of little playing cards, under
 // the top bar's Effects button.
 //
-// Click a card to add that effect — utils/fx/createEffect decides where:
-// onto the end of the selected picture's strip, else mid-canvas. Drag one
-// to put it where you let go (on a picture: onto that picture's strip).
-// The palette STAYS OPEN while you click: each new card is selected, so the
-// next click lines up after it and a strip takes a few clicks to build.
+// Click a card to add that effect — utils/fx/createEffect decides where.
+// Effects are cards (utils/effectCards): with a card selected, the new
+// effect card goes after it (after the effect cards already lined up
+// there), else mid-canvas. A picture TILE selected still takes an effect
+// tile after it. Drag one to put it where you let go. The palette STAYS
+// OPEN while you click: each new card is selected, so the next click lines
+// up after it and a row of effects takes a few clicks to build.
 //
 // Screen space and a fixed size: this is a menu, not a thing on the
 // canvas, so it does not follow the zoom.
@@ -25,6 +27,7 @@
 import React from 'react'
 import ReactDOM from 'react-dom'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
+import { useBoardsStore } from '../../store/boardsStore'
 import { EFFECTS, EFFECT_ORDER, type EffectKind } from '../../utils/fx/effects'
 import {
   EFFECT_DRAG_MIME, createEffectCard, createLoopStrip, effectAttachTarget, effectRailFor,
@@ -63,7 +66,7 @@ const PaletteCard: React.FC<{ kind: EffectKind; onDropped: () => void }> = ({ ki
     <div
       role="button"
       tabIndex={0}
-      title={`${d.label} — ${d.blurb}${d.blend ? '\nMixes in the next picture on its strip — on a loop strip, the column after it' : ''}\nClick to add · drag onto the canvas`}
+      title={`${d.label} — ${d.blurb}${d.blend ? '\nMixes in the next picture card after it — on a loop strip, the column after it' : ''}\nClick to add · drag onto the canvas`}
       draggable
       onClick={add}
       onKeyDown={e => {
@@ -251,6 +254,13 @@ export const EffectPalette = React.memo(function EffectPalette({ open, anchorRef
     return t ? (t.label || 'the selected tile') : null
   })
 
+  // A card selected: the new effect card goes after it (utils/effectCards).
+  const afterCard = useBoardsStore(s => {
+    if (!open || s.selectedGroupIds.length !== 1) return null
+    const g = s.groups.find(gr => gr.id === s.selectedGroupIds[0])
+    return g ? (g.name || 'the selected card') : null
+  })
+
   if (!open || !pos) return null
   return ReactDOM.createPortal(
     <div
@@ -278,8 +288,10 @@ export const EffectPalette = React.memo(function EffectPalette({ open, anchorRef
           {railName
             ? <>Click to add to the end of <span style={{ color: 'rgba(255,255,255,0.8)' }}>{railName}</span> — or drag onto its row</>
             : attachTo
-            ? <>Click to add to the end of <span style={{ color: 'rgba(255,255,255,0.8)' }}>{attachTo}</span>’s strip — or drag onto the canvas</>
-            : 'Click to add — or drag onto the canvas'}
+            ? <>Click to add after <span style={{ color: 'rgba(255,255,255,0.8)' }}>{attachTo}</span> — or drag onto the canvas</>
+            : afterCard
+            ? <>Click to add an effect card after <span style={{ color: 'rgba(255,255,255,0.8)' }}>{afterCard}</span> — or drag onto the canvas</>
+            : 'Click to add an effect card — or drag onto the canvas'}
         </span>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: `repeat(${COLS + 1}, ${CARD_W}px)`, gap: GAP }}>
