@@ -207,10 +207,17 @@ export function insertProjectSnapshot(
 
   // ── 6. Free nodes (Y-shifted, fresh IDs) ────────────────────
   if (snapshot.freeNodes) {
+    const sourceNodes = Object.values(snapshot.freeNodes)
+    // Ids minted up front, so a card docked on a loop strip can follow its
+    // rail (railDock.railId) into the copy — the one cross-node reference
+    // remapped here. Only to a rail that came along AS a rail: anything
+    // else would leave the card docked on nothing.
+    const nodeIdMap = new Map(sourceNodes.map(n => [n.id, crypto.randomUUID()]))
+    const railIds = new Set(sourceNodes.filter(n => n.type === 'rail' && n.rail).map(n => n.id))
     useFreeNodeStore.setState(s => {
       const updated = { ...s.nodes }
-      for (const node of Object.values(snapshot.freeNodes!)) {
-        const newId = crypto.randomUUID()
+      for (const node of sourceNodes) {
+        const newId = nodeIdMap.get(node.id) ?? crypto.randomUUID()
         // Strip `pin`: an inserted project must never silently pin objects
         // over the user's own UI, and shifting a SCREEN anchor by a canvas
         // delta is meaningless anyway. Strip `tileDeck` too, as groups clear
@@ -218,7 +225,18 @@ export function insertProjectSnapshot(
         // its anchor would name a node that is not in this document — the
         // inserted tiles simply arrive open.
         const { pin: _drop, ...rest } = node as typeof node & { pin?: unknown }
-        updated[newId] = { ...rest, id: newId, y: (rest.y ?? 0) + dy, tileDeck: undefined }
+        // Loop strips: a docked card re-anchors to its rail's new id (same
+        // slot ids — they live in the rail's own `rail`, which came along),
+        // and the rail lays it out again. A card whose rail did not come is
+        // a plain tile, at its own size. Never still `lifted`: no drag is in
+        // flight in this document.
+        const d = rest.railDock
+        const docked = d && railIds.has(d.railId)
+          ? { railDock: { ...d, railId: nodeIdMap.get(d.railId)!, lifted: undefined } }
+          : d
+            ? { railDock: undefined, width: d.prevW ?? rest.width, height: d.prevH ?? rest.height }
+            : {}
+        updated[newId] = { ...rest, id: newId, y: (rest.y ?? 0) + dy, tileDeck: undefined, ...docked }
       }
       return { nodes: updated }
     })

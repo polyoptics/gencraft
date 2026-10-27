@@ -27,9 +27,15 @@ type Nodes = Record<string, FreeNodeData>
 
 /** Can this tile be part of a deck at all? Canvas tiles only: a pinned
  *  node lives on the screen, and panels (lists, pools, prompt pads,
- *  history) are apps, not things you stack. */
+ *  history) are apps, not things you stack. Nor a loop strip, or a card
+ *  docked on one (utils/rail): the rail already stacks its cards — as a
+ *  cascade, with an order the run reads — and its docked cards overlap and
+ *  touch each other by design, so to the touch test every column would
+ *  look like a cluster waiting to be collapsed. Read from the node alone
+ *  (no `nodes` here): a railDock whose rail is gone is cleared by the rail
+ *  sync host within the same change. */
 export function canJoinTileDeck(n: FreeNodeData | undefined): n is FreeNodeData {
-  return !!n && !n.pin && !isPanelType(n.type)
+  return !!n && !n.pin && !isPanelType(n.type) && n.type !== 'rail' && !n.railDock
 }
 
 /** The face of a collapsed deck: anchors itself, and at least one other
@@ -149,7 +155,9 @@ export function expandTileIds(ids: string[], nodes: Nodes): string[] {
  *  reading order — the cluster a double-click would collapse. Includes
  *  `id` itself; fewer than 2 means there is nothing to collapse. Hidden
  *  members are not geometry, so a collapsed deck takes part through its
- *  face's rect only. */
+ *  face's rect only. A loop strip and its docked cards are never pulled in
+ *  (canJoinTileDeck), so a free tile parked against a rail's edge does not
+ *  drag the rail's columns into its deck. */
 export function touchingTileCluster(id: string, nodes: Nodes): string[] {
   const start = nodes[id]
   if (!canJoinTileDeck(start) || isHiddenTile(start, nodes)) return []

@@ -20,6 +20,10 @@ export const FreeCanvas: React.FC = React.memo(() => {
   const deckIdx = useMemo(() => tileDeckIndex(nodes), [nodes])
 
   // Cull nodes outside viewport + margin buffer
+  // Loop strips need nothing special: a rail's box is its whole layout
+  // (the rail sync host sizes it), so a rail partly on screen intersects
+  // and stays; each docked card is culled by its own cascade box, and
+  // stacks by z (FreeNode), not by the order drawn here.
   // This is a PARTITION, not just a cull: without the `n.pin` test a
   // pinned node would render in BOTH hosts, and the world copy would
   // scale with zoom. `nodes` must be a dep — a placement flip changes
@@ -42,8 +46,10 @@ export const FreeCanvas: React.FC = React.memo(() => {
     const tiles: DockableItem[] = Object.values(nodes)
       // A pinned tile is not canvas geometry — its x/y are stale, so it
       // would join clusters at wherever it used to be. Nor is a tile hidden
-      // in a deck: the face's own rect stands for the whole deck.
-      .filter(n => !n.pin && !deckIdx.hidden.has(n.id) && isDockableTile(n))
+      // in a deck: the face's own rect stands for the whole deck. Nor is a
+      // card on a loop strip: the cards in a column overlap by design, and
+      // a Viewer set against the rail must not read its cast as a cluster.
+      .filter(n => !n.pin && !n.railDock && n.type !== 'rail' && !deckIdx.hidden.has(n.id) && isDockableTile(n))
       .map(n => ({ id: n.id, x: n.x, y: n.y, width: n.width, height: n.height }))
     const winRects: WindowRect[] = Object.values(windows)
       .map(w => ({ id: w.id, x: w.x, y: w.y, width: w.width, height: w.height }))

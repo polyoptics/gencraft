@@ -169,6 +169,15 @@ const undoStack: Snapshot[] = []
 const redoStack: Snapshot[] = []
 let restoring = false
 
+/** Called after every undo or redo has restored a snapshot — for work that
+ *  is still writing into the state the user just stepped back from (a loop
+ *  strip's run, utils/fx/railRun). */
+const restoreListeners = new Set<() => void>()
+export function onUndoRestore(fn: () => void): () => void {
+  restoreListeners.add(fn)
+  return () => { restoreListeners.delete(fn) }
+}
+
 export const useUndoCoordinator = create<UndoCoordinatorState>()((set) => ({
   canUndo: false,
   canRedo: false,
@@ -189,6 +198,7 @@ export const useUndoCoordinator = create<UndoCoordinatorState>()((set) => ({
     restoreSnapshot(prev)
     restoring = false
     set({ canUndo: undoStack.length > 0, canRedo: redoStack.length > 0 })
+    for (const fn of restoreListeners) fn()
   },
 
   redo() {
@@ -199,6 +209,7 @@ export const useUndoCoordinator = create<UndoCoordinatorState>()((set) => ({
     restoreSnapshot(next)
     restoring = false
     set({ canUndo: undoStack.length > 0, canRedo: redoStack.length > 0 })
+    for (const fn of restoreListeners) fn()
   },
 
   clearHistory() {

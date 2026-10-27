@@ -3,6 +3,7 @@ import { persist } from 'zustand/middleware'
 import { createDebouncedIDBStorage } from '../utils/debouncedIDBStorage'
 import { canJoinTileDeck, collapsePatches, expandPositions, expandTileIds, tileDeckIndex } from '../utils/tileDecks'
 import { DOCK_TOLERANCE, rectsTouch } from '../utils/viewportDocking'
+import { RAIL_TRAY } from '../utils/rail'
 
 // 'list' | 'pool' | 'prompt' | 'history' are COMPONENTS rather than media: a
 // node whose body is a whole panel. They ride the same substrate as
@@ -16,6 +17,7 @@ export type FreeNodeType =
   | 'prompt'   // prompt pad + tag palette
   | 'history'  // history lens — shows the kind of history it is docked to
   | 'effect'   // an effect card — one image operator on an effect strip (utils/fx)
+  | 'rail'     // a loop strip — a rail of slots that runs a workflow (utils/rail)
 
 export interface TextStyle {
   fontSize: number       // in px (base, before zoom scaling)
@@ -97,6 +99,12 @@ export interface FreeNodeData {
    *  on collapse; expanding puts each member at face + (dx, dy). Helpers:
    *  utils/tileDecks. */
   tileDeck?: { anchor: string; dx: number; dy: number }
+  /** Loop strips: the RECIPE — slots left to right (utils/rail). */
+  rail?: import('../utils/rail').RailData
+  /** Docked on a loop strip: which rail, which slot, where in its column.
+   *  The rail decides this tile's x/y/size while it is docked (the rail sync
+   *  host writes them); undocking restores the size it had. */
+  railDock?: import('../utils/rail').RailDock
   /** SCREEN-PINNED instances. Present ⇒ this node is rendered by
    *  <PinLayer/> OUTSIDE the world transform and is SKIPPED by
    *  FreeCanvas. Absent ⇒ canvas-placed. That is the whole model.
@@ -187,6 +195,25 @@ interface FreeNodeStore {
   expandTileDeck: (faceId: string) => void
   /** Deletes a deck FACE together with everything hidden behind it — what
    *  you see is what you delete; undo brings the whole deck back. */
+  // ── Loop strips (utils/rail) — callers take the undo checkpoint ──
+  /** A new rail at (x, y), sized by `unit`, holding one empty "Pictures"
+   *  role slot. Returns its id. */
+  addRail: (x: number, y: number, unit: number) => string
+  /** Dock tiles on a rail. A column target takes pictures (in the order
+   *  given, inserted at `index`); a row target takes ONE effect card as a new
+   *  card slot at `insertAt`. Tiles already docked elsewhere move. */
+  dockToRail: (nodeIds: string[], target: import('../utils/rail').RailDropTarget) => void
+  /** Take a tile off its rail: its own size comes back, and a card slot it
+   *  held is removed. x/y stay where the rail last put it. */
+  undockFromRail: (nodeId: string) => void
+  /** Change a slot's name or mode. */
+  setRailSlot: (railId: string, slotId: string, patch: { name?: string; mode?: 'each' | 'pick' }) => void
+  /** Add an empty role slot at the rail's start or end. Returns its id. */
+  addRailRole: (railId: string, at: 'start' | 'end', name?: string) => string | null
+  /** Remove an EMPTY role slot (a slot with cards stays). */
+  removeRailSlot: (railId: string, slotId: string) => void
+  /** Delete the result tiles in a rail's tray (the files stay on disk). */
+  clearRailTray: (railId: string) => void
   deleteFreeNode: (id: string) => void
   setFreeSelection: (ids: string[]) => void
   toggleFreeSelection: (id: string) => void
@@ -203,7 +230,7 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
     const labels: Record<FreeNodeType, string> = {
       image: 'Image', note: 'Note', text: 'Text', video: 'Video', audio: 'Audio', model: 'Model',
       list: 'List', pool: 'Media Pool', prompt: 'Prompt Pad', history: 'History',
-      effect: 'Effect',
+      effect: 'Effect', rail: 'Loop strip',
     }
     // COMPONENTS start twice as big per side — four times the area. They are
     // tools, not tiles: a Media Pool wants a readable grid, a Prompt Pad
@@ -213,6 +240,7 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
     const heights: Record<FreeNodeType, number> = {
       image: 180, note: 160, text: 180, video: 180, audio: 120, model: 180,
       list: 880, pool: 840, prompt: 720, history: 800, effect: 252,
+      rail: 360,   // a placeholder: the rail sizes itself to its layout
     }
     const widths: Partial<Record<FreeNodeType, number>> = {
       audio: 260,
@@ -478,12 +506,137 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
       return { nodes, selectedIds: ids }
     }),
 
+  addRail: (x, y, unit) => {
+    const id = crypto.randomUUID()
+    const slotId = crypto.randomUUID()
+    const node: FreeNodeData = {
+      id, x, y, width: 600 * unit, height: 360 * unit,
+      type: 'rail', label: 'Loop strip', text: '', imageUrl: null, mediaType: null,
+      color: '#2a2b3a',
+      rail: { unit, output: 'process', slots: [{ id: slotId, kind: 'role', name: 'Pictures', mode: 'each' }] },
+    }
+    set(s => ({ nodes: { ...s.nodes, [id]: node } }))
+    return id
+  },
+
+  dockToRail: (nodeIds, target) =>
+    set(s => {
+      const rail = s.nodes[target.railId]
+      if (!rail?.rail || rail.pin) return s
+      const nodes = { ...s.nodes }
+      let slots = rail.rail.slots
+      let insertAt = target.kind === 'row' ? target.insertAt : 0
+      // Off any rail first — a card slot it held goes with it.
+      const ids = nodeIds.filter(id => nodes[id] && !nodes[id].pin && id !== target.railId)
+      for (const id of ids) {
+        const d = nodes[id].railDock
+        if (!d) continue
+        if (d.railId === target.railId) {
+          // railDropTarget counted this card's own slot (still listed while
+          // the card is lifted): removing it from before the insert point
+          // moves that point one to the left.
+          const was = slots.findIndex(sl => sl.kind === 'card' && sl.id === d.slotId)
+          if (was >= 0 && was < insertAt) insertAt--
+          slots = slots.filter(sl => !(sl.kind === 'card' && sl.id === d.slotId))
+        } else if (nodes[d.railId]?.rail) {
+          const other = nodes[d.railId]
+          nodes[d.railId] = { ...other, rail: { ...other.rail!, slots: other.rail!.slots.filter(sl => !(sl.kind === 'card' && sl.id === d.slotId)) } }
+        }
+      }
+      const keepSize = (n: FreeNodeData) => ({ prevW: n.railDock?.prevW ?? n.width, prevH: n.railDock?.prevH ?? n.height })
+      if (target.kind === 'row') {
+        const id = ids.find(i => nodes[i].type === 'effect')
+        if (!id) return s
+        const slotId = crypto.randomUUID()
+        const at = Math.max(0, Math.min(insertAt, slots.length))
+        slots = [...slots.slice(0, at), { id: slotId, kind: 'card' as const }, ...slots.slice(at)]
+        nodes[id] = { ...nodes[id], tileDeck: undefined, railDock: { railId: target.railId, slotId, order: 0, ...keepSize(nodes[id]) } }
+      } else {
+        // The column's other cards, in order, with the new ones spliced in.
+        const moving = new Set(ids)
+        const column = Object.values(nodes)
+          .filter(n => !moving.has(n.id) && n.railDock?.railId === target.railId && n.railDock.slotId === target.slotId)
+          .sort((a, b) => a.railDock!.order - b.railDock!.order)
+          .map(n => n.id)
+        const at = Math.max(0, Math.min(target.index, column.length))
+        const ordered = [...column.slice(0, at), ...ids, ...column.slice(at)]
+        ordered.forEach((nid, order) => {
+          const n = nodes[nid]
+          // A card already in the column keeps `lifted`: it may be in the
+          // user's hand while a run lands a result in this column (the tray).
+          const lifted = moving.has(nid) ? undefined : n.railDock?.lifted
+          nodes[nid] = { ...n, tileDeck: undefined, railDock: { railId: target.railId, slotId: target.slotId, order, ...keepSize(n), lifted } }
+        })
+      }
+      nodes[target.railId] = { ...nodes[target.railId], rail: { ...rail.rail, slots } }
+      return { nodes }
+    }),
+
+  undockFromRail: (nodeId) =>
+    set(s => {
+      const n = s.nodes[nodeId]
+      const d = n?.railDock
+      if (!n || !d) return s
+      const nodes = { ...s.nodes }
+      nodes[nodeId] = { ...n, railDock: undefined, width: d.prevW ?? n.width, height: d.prevH ?? n.height }
+      const rail = nodes[d.railId]
+      if (rail?.rail) {
+        nodes[d.railId] = { ...rail, rail: { ...rail.rail, slots: rail.rail.slots.filter(sl => !(sl.kind === 'card' && sl.id === d.slotId)) } }
+        // Close the gap it left in its column.
+        Object.values(nodes)
+          .filter(m => m.railDock?.railId === d.railId && m.railDock.slotId === d.slotId)
+          .sort((a, b) => a.railDock!.order - b.railDock!.order)
+          .forEach((m, order) => { if (m.railDock!.order !== order) nodes[m.id] = { ...m, railDock: { ...m.railDock!, order } } })
+      }
+      return { nodes }
+    }),
+
+  setRailSlot: (railId, slotId, patch) =>
+    set(s => {
+      const rail = s.nodes[railId]
+      if (!rail?.rail) return s
+      const slots = rail.rail.slots.map(sl => sl.id === slotId && sl.kind === 'role' ? { ...sl, ...patch } : sl)
+      return { nodes: { ...s.nodes, [railId]: { ...rail, rail: { ...rail.rail, slots } } } }
+    }),
+
+  addRailRole: (railId, at, name) => {
+    const rail = useFreeNodeStore.getState().nodes[railId]
+    if (!rail?.rail) return null
+    const slot = { id: crypto.randomUUID(), kind: 'role' as const, name: name ?? 'Pictures', mode: 'each' as const }
+    const slots = at === 'start' ? [slot, ...rail.rail.slots] : [...rail.rail.slots, slot]
+    set(s => ({ nodes: { ...s.nodes, [railId]: { ...s.nodes[railId], rail: { ...rail.rail!, slots } } } }))
+    return slot.id
+  },
+
+  removeRailSlot: (railId, slotId) =>
+    set(s => {
+      const rail = s.nodes[railId]
+      if (!rail?.rail) return s
+      if (Object.values(s.nodes).some(n => n.railDock?.railId === railId && n.railDock.slotId === slotId)) return s
+      const slots = rail.rail.slots.filter(sl => sl.id !== slotId)
+      return { nodes: { ...s.nodes, [railId]: { ...rail, rail: { ...rail.rail, slots } } } }
+    }),
+
+  clearRailTray: (railId) =>
+    set(s => {
+      const nodes = { ...s.nodes }
+      let changed = false
+      for (const n of Object.values(s.nodes)) {
+        if (n.railDock?.railId === railId && n.railDock.slotId === RAIL_TRAY) { delete nodes[n.id]; changed = true }
+      }
+      return changed ? { nodes, selectedIds: s.selectedIds.filter(x => !!nodes[x]) } : s
+    }),
+
   deleteFreeNode: (id) =>
     set(s => {
       // A face takes its hidden members with it: deleting only the face
       // would orphan them, and orphans SHOW again (isHiddenTile) — a delete
-      // that made tiles appear.
+      // that made tiles appear. A loop strip likewise takes everything docked
+      // on it: what you see is what you delete (undo brings it all back).
       const gone = new Set(expandTileIds([id], s.nodes))
+      if (s.nodes[id]?.type === 'rail') {
+        for (const n of Object.values(s.nodes)) if (n.railDock?.railId === id) gone.add(n.id)
+      }
       const nodes = { ...s.nodes }
       for (const d of gone) delete nodes[d]
       // A hidden member deleted on its own (from the Card Browser) can

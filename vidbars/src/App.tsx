@@ -10,6 +10,8 @@ import { useInlineMediaMigration } from './utils/migrateInlineMedia'
 import { useVideoPosterBackfill } from './hooks/useVideoPosterBackfill'
 import { ContextSheetHost } from './components/UI/ContextSheetDialog'
 import { useFxStrips } from './hooks/useFxStrips'
+import { useRailSync } from './hooks/useRailSync'
+import { RailRunHost } from './components/Canvas/RailRunHost'
 import { DeckBrowserTray } from './components/DeckBrowser/DeckBrowserTray'
 import { LinkDragOverlay } from './components/Linking/LinkDragOverlay'
 import { DrawToolbar } from './components/Annotation/DrawToolbar'
@@ -24,12 +26,20 @@ import type { Bar } from './types/bar'
 import type { FreeNodeData } from './store/freeNodeStore'
 import { collectSubtree } from './utils/barOps'
 import { expandTileIds } from './utils/tileDecks'
+import { isRail } from './utils/rail'
 
 /** Hosts useFxStrips, which subscribes to every tile, Viewer and zoom
  *  change. Called in App's body, each drag frame and wheel tick would
  *  re-render the whole tree; here it re-renders nothing. */
 function FxStripsHost() {
   useFxStrips()
+  return null
+}
+
+/** Keeps loop strips laid out (hooks/useRailSync) — isolated for the same
+ *  reason as FxStripsHost: it runs on every tile change. */
+function RailSyncHost() {
+  useRailSync()
   return null
 }
 
@@ -70,6 +80,30 @@ function remapIds(bars: Record<string, Bar>, rootIds: string[]): { bars: Record<
   return { bars: remapped, rootIds: rootIds.map(id => idMap.get(id) ?? id) }
 }
 
+/** What copying these free nodes takes, with loop strips (utils/rail) read
+ *  as their RECIPE: a rail brings the effect cards in its card slots — the
+ *  workflow — and leaves its cast (the pictures docked in its columns) and
+ *  its tray (the results) behind, even when a rubber band swept them up
+ *  with it: those are one run's material, not the recipe. A docked card
+ *  copied WITHOUT its rail comes along as itself, and pastes as a plain
+ *  tile. */
+function recipeCopy(ids: string[], nodes: Record<string, FreeNodeData>): string[] {
+  const rails = new Set(ids.filter(id => isRail(nodes[id])))
+  if (rails.size === 0) return ids
+  const inCardSlot = (n: FreeNodeData) => {
+    const d = n.railDock
+    return !!d && !!nodes[d.railId]?.rail?.slots.some(sl => sl.kind === 'card' && sl.id === d.slotId)
+  }
+  const kept = ids.filter(id => {
+    const d = nodes[id]?.railDock
+    return !d || !rails.has(d.railId)
+  })
+  const recipe = Object.values(nodes)
+    .filter(n => !!n.railDock && rails.has(n.railDock.railId) && inCardSlot(n))
+    .map(n => n.id)
+  return [...kept, ...recipe]
+}
+
 function useKeyboardCopyPaste() {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -84,7 +118,7 @@ function useKeyboardCopyPaste() {
         if (freeSelected.length > 0) {
           // A deck face shows as one tile but IS the deck: the tiles hidden
           // behind it come along, and paste rebuilds the deck from them.
-          freeNodeClipboard = expandTileIds(freeSelected, freeNodes)
+          freeNodeClipboard = recipeCopy(expandTileIds(freeSelected, freeNodes), freeNodes)
             .map(id => freeNodes[id])
             .filter(Boolean)
             .map(n => structuredClone(n))
@@ -138,15 +172,41 @@ function useKeyboardCopyPaste() {
           const newIds: string[] = []
           const idMap = new Map<string, string>()   // source id → pasted id
           const cs = useCanvasStore.getState()
+          // Loop strips copied whole (recipeCopy): the cards in their card
+          // slots go back ON the pasted rail. Any other docked card in the
+          // clipboard was copied without its rail and pastes as a plain tile.
+          const railSrc = new Set(freeNodeClipboard.filter(c => isRail(c)).map(c => c.id))
+          const onPastedRail = (src: FreeNodeData) => !!src.railDock && railSrc.has(src.railDock.railId)
+          // 40 px off its source, a pasted strip lands ON it, and the two
+          // rails' cascades interleave. A paste that holds a strip goes just
+          // below it instead — everything in it by the same amount.
+          let dx = 40, dy = 40
+          if (railSrc.size > 0) {
+            const top = (c: FreeNodeData) => c.pin ? c.pin.y : cs.pan.y + c.y * cs.zoom
+            const bottom = (c: FreeNodeData) => top(c) + c.height * (c.pin ? c.pin.scale : cs.zoom)
+            dx = 0
+            dy = Math.max(...freeNodeClipboard.filter(c => railSrc.has(c.id)).map(bottom))
+              - Math.min(...freeNodeClipboard.map(top)) + 40
+          }
+          let offRail = 0   // docked cards pasted without their rail, so far
           for (const src of freeNodeClipboard) {
+            // Off its rail, a docked card is its own size again (undockFromRail's
+            // rule) — the size the rail gave it was the column's, not its own.
+            const dock = src.railDock && !onPastedRail(src) ? src.railDock : undefined
             // Unproject the source's ON-SCREEN top-left, so a paste always
             // lands 40 screen px from what the user is looking at whatever
             // the source's placement — src.x/y are stale while pinned.
             const sx = src.pin ? src.pin.x : cs.pan.x + src.x * cs.zoom
             const sy = src.pin ? src.pin.y : cs.pan.y + src.y * cs.zoom
             const k = src.pin ? src.pin.scale / cs.zoom : 1
-            const id = useFreeNodeStore.getState().addFreeNode(
-              (sx + 40 - cs.pan.x) / cs.zoom, (sy + 40 - cs.pan.y) / cs.zoom, src.type)
+            // …except a copy of a docked card: 40 px off it is inside its own
+            // column, under the cards below it. It goes just under the rail,
+            // at its column, fanned out when several came from the strip.
+            const srcRail = dock ? useFreeNodeStore.getState().nodes[dock.railId] : undefined
+            const at = srcRail && !srcRail.pin
+              ? { x: src.x + offRail * 20 / cs.zoom, y: srcRail.y + srcRail.height + (40 + offRail++ * 20) / cs.zoom }
+              : { x: (sx + dx - cs.pan.x) / cs.zoom, y: (sy + dy - cs.pan.y) / cs.zoom }
+            const id = useFreeNodeStore.getState().addFreeNode(at.x, at.y, src.type)
             // The copy is always canvas-placed: `pin` is deliberately never
             // carried, or two pinned panels would stack on the same pixels.
             useFreeNodeStore.getState().updateFreeNode(id, {
@@ -156,8 +216,8 @@ function useKeyboardCopyPaste() {
               mediaType: src.mediaType,
               posterUrl: src.posterUrl,
               color: src.color,
-              width: src.width * k,
-              height: src.height * k,
+              width: (dock?.prevW ?? src.width) * k,
+              height: (dock?.prevH ?? src.height) * k,
               textStyle: src.textStyle ? { ...src.textStyle } : undefined,
               // These three were omitted, which is why a pasted list tile
               // was permanently dead (its editors bail with no listQuery)
@@ -168,10 +228,24 @@ function useKeyboardCopyPaste() {
               // An effect card IS its kind and sliders: without them a
               // pasted Glare came back as a default Bloom.
               effect: src.effect ? structuredClone(src.effect) : undefined,
+              // A loop strip IS its recipe: its slots, their names and modes.
+              // Slot ids are kept — they are only unique within a rail, and
+              // the cards re-docked below name them.
+              rail: src.rail ? structuredClone(src.rail) : undefined,
             })
             idMap.set(src.id, id)
             newIds.push(id)
           }
+          // The recipe's cards back into their slots on the NEW rail. After
+          // every node exists, never in the loop above: a tile docked on a
+          // rail id the store does not hold (yet) is released on the spot by
+          // the rail sync host. The rail lays them out from here.
+          freeNodeClipboard.forEach((src, i) => {
+            if (!onPastedRail(src)) return
+            useFreeNodeStore.getState().updateFreeNode(newIds[i], {
+              railDock: { ...src.railDock!, railId: idMap.get(src.railDock!.railId)!, lifted: undefined },
+            })
+          })
           // A deck copied whole pastes as a deck: its members re-anchored to
           // the new face, offsets unchanged — every tile moved by the same
           // +40 screen px, and deck members are never pinned, so the hidden
@@ -186,9 +260,11 @@ function useKeyboardCopyPaste() {
               tileDeck: { ...src.tileDeck!, anchor: idMap.get(src.tileDeck!.anchor)! },
             })
           })
-          // Select what shows: the faces, not the tiles hidden behind them.
+          // Select what shows: the faces, not the tiles hidden behind them —
+          // and a pasted rail, not the cards it carries (it moves them).
           useFreeNodeStore.getState().setFreeSelection(newIds.filter((_, i) => {
             const src = freeNodeClipboard[i]
+            if (onPastedRail(src)) return false
             return !pastedDeck(src) || src.tileDeck!.anchor === src.id
           }))
           return
@@ -636,6 +712,11 @@ export default function App() {
 
       {/* Effect strips: cards lined up with effect cards, kept running live */}
       <FxStripsHost />
+
+      {/* Loop strips: docked cards placed in their cascades, and the live
+            preview of what each rail's run will make */}
+      <RailSyncHost />
+      <RailRunHost />
 
       {/* Viewers render outside the canvas so they are fixed to the viewport */}
       <AllViewers />

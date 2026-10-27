@@ -20,6 +20,13 @@
 // collapsed from tiles lined up in that same order, so collapsing or
 // opening a strip changes neither its items nor its key: nothing re-runs,
 // and the face (its source picture) keeps showing the result.
+//
+// Loop strips (utils/rail) are a different machine for the same job, and
+// stay out of this one entirely: a docked card is laid out by its rail — its
+// column's cards overlap, and the columns sit a gap apart — so to the touch
+// test a rail would read as one big ad-hoc strip, running every picture on
+// it through every effect card in rail-x order. The rail runs its own cards
+// (utils/fx/railRun). The rail tile itself carries no item.
 
 import { useEffect, useRef } from 'react'
 import { useFreeNodeStore, type FreeNodeData } from '../store/freeNodeStore'
@@ -31,6 +38,7 @@ import { rectsTouch, viewportVisualRect, DOCK_TOLERANCE } from '../utils/viewpor
 import { runChain, type ChainItem, type ChainResult } from '../utils/fx/chain'
 import { effectKindOf } from '../utils/fx/effects'
 import { tileDeckIndex, tileDeckMembers } from '../utils/tileDecks'
+import { isDocked } from '../utils/rail'
 
 /** Working resolution for the live result (a saved result renders full). */
 export const LIVE_SIDE = 1400
@@ -93,16 +101,19 @@ export function computeStrips(
   posters: Record<string, string> = usePosterMapStore.getState().map,
 ): Record<string, FxStrip> {
   // No effect card, no strip: skip the pairwise touch test entirely. This
-  // runs on every tile drag frame and zoom tick.
-  if (!Object.values(nodes).some(n => n.type === 'effect' && !n.pin)) return {}
+  // runs on every tile drag frame and zoom tick. (A card docked on a loop
+  // strip belongs to its rail, so it does not count.)
+  if (!Object.values(nodes).some(n => n.type === 'effect' && !n.pin && !isDocked(n, nodes))) return {}
   // Each VISIBLE tile with what it brings to a strip: its own item, or —
   // for a deck's face — those of the members on its open strip, in deck
   // order (faceItems).
   const { faces, hidden } = tileDeckIndex(nodes)
   const tiles: { n: FreeNodeData; items: ChainItem[] }[] = []
   for (const n of Object.values(nodes)) {
-    // A pinned face has taken its deck off the canvas with it.
-    if (hidden.has(n.id) || n.pin) continue
+    // A pinned face has taken its deck off the canvas with it. A card on a
+    // loop strip — lifted mid-drag included, until its release decides —
+    // is the rail's, not a strip's (see the header).
+    if (hidden.has(n.id) || n.pin || isDocked(n, nodes)) continue
     const items = faces.has(n.id)
       ? faceItems(n, nodes, posters)
       : [stripItem(n, posters)].filter((i): i is ChainItem => i !== null)

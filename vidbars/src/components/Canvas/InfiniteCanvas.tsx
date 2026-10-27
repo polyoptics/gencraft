@@ -14,8 +14,10 @@ import { isPanelType } from '../../utils/componentLinks'
 import { createCardOrBoardAt } from '../../utils/canvasCreate'
 import { GLCanvasHost } from '../Viewport3D/GLCanvasHost'
 import { addMediaBlockToCard, cardHitOf, groupForCardHit, type CardHit } from '../../utils/cardContent'
-import { EFFECT_DRAG_MIME, clientToCanvas, createEffectCard, effectKindFromDrag } from '../../utils/fx/createEffect'
+import { EFFECT_DRAG_MIME, clientToCanvas, createEffectCard, createLoopStrip, effectKindFromDrag } from '../../utils/fx/createEffect'
 import { tileDeckIndex } from '../../utils/tileDecks'
+import { RAIL_GEOM, isRail, railDropTarget, railLayout, railMembers, type RailDropTarget } from '../../utils/rail'
+import { railAtPoint } from './rail/railHit'
 
 // ── Media Pool drag-out ──────────────────────────────────────────────
 // A pool tile and a pool-fed Rolodex slot put this exact payload on the
@@ -79,9 +81,58 @@ interface DropAim {
 /** A tile whose media a dropped file or pool item replaces. Not a pinned
  *  node — it floats over everything, so a drop near it would land ON it —
  *  and not a panel or an effect card: those are tools, not media, and a
- *  drop would overwrite one into an image tile. */
+ *  drop would overwrite one into an image tile. Not a loop strip either
+ *  (the drop would turn the rail itself into an image tile), nor a card
+ *  docked on one: a picture let go on a column is dealt INTO it, at that
+ *  spot in the cascade (see railDropAt), the way a dragged tile is — not
+ *  swapped for the card it landed on. */
 function takesMedia(n: FreeNodeData): boolean {
-  return !n.pin && !isPanelType(n.type) && n.type !== 'effect'
+  return !n.pin && !isPanelType(n.type) && n.type !== 'effect' && n.type !== 'rail' && !n.railDock
+}
+
+/** A stand-in for something not made yet — railDropTarget judges a drop
+ *  by the dragged node's type (picture or effect card), nothing else. */
+function railProbe(type: FreeNodeType): FreeNodeData {
+  return { id: '', x: 0, y: 0, width: 0, height: 0, type, label: '', text: '', imageUrl: 'probe', color: '' }
+}
+
+/** Where something let go at client (x, y) would dock on a loop strip, or
+ *  null: a picture into the role column under the point (at its place in
+ *  the cascade), an effect card into the slot row. Only on the rail that is
+ *  topmost under the point (railAtPoint): one hidden under a panel or a
+ *  Viewer must not take a drop aimed at what covers it. Pinned rails dock
+ *  nothing. */
+function railDropAt(x: number, y: number, type: FreeNodeType): RailDropTarget | null {
+  const nodes = useFreeNodeStore.getState().nodes
+  const railId = railAtPoint(x, y, nodes)
+  const rail = railId ? nodes[railId] : undefined
+  if (!rail || !isRail(rail) || rail.pin) return null
+  const { cx, cy } = clientToCanvas(x, y)
+  const L = railLayout(rail, railMembers(nodes).get(rail.id))
+  return L ? railDropTarget(L, rail, { x: cx, y: cy }, railProbe(type)) : null
+}
+
+/** Tiles a drop just made on the canvas at client (x, y): the pictures
+ *  among them go INTO the loop-strip column under the point, in drop
+ *  order — a hand dealt into a column. Same undo step as the drop (it took
+ *  the checkpoint). A picture still uploading docks too; its face fills in
+ *  when the upload lands. Whatever does not dock, dropped on a rail (its
+ *  tray, an effect card, a note), is set down just under that rail: left
+ *  there it would lie beneath the rail's cascades. Anywhere else, tiles stay
+ *  where the drop made them. */
+function dealOntoRail(ids: string[], x: number, y: number): void {
+  const fns = useFreeNodeStore.getState()
+  const pics = ids.filter(id => fns.nodes[id]?.type === 'image' || fns.nodes[id]?.type === 'video')
+  const t = pics.length > 0 ? railDropAt(x, y, 'image') : null
+  if (t?.kind === 'column') fns.dockToRail(pics, t)
+  const railId = railAtPoint(x, y, useFreeNodeStore.getState().nodes)
+  const rail = railId ? useFreeNodeStore.getState().nodes[railId] : undefined
+  if (!rail || !isRail(rail) || rail.pin) return
+  ids.forEach((id, i) => {
+    const n = useFreeNodeStore.getState().nodes[id]
+    if (!n || n.railDock) return
+    fns.updateFreeNode(id, { y: rail.y + rail.height + RAIL_GEOM.gap * rail.rail.unit + i * 20 / Math.max(0.01, useCanvasStore.getState().zoom) })
+  })
 }
 
 /** A board background's target: its root bar. */
@@ -196,6 +247,16 @@ function effectDropTile(x: number, y: number): string | undefined {
     if (el.closest('[data-block],[data-board]')) return undefined
   }
   return undefined
+}
+
+/** The loop strip an effect let go at (x, y) docks onto, or null. Only
+ *  when nothing else is on top there: over a rail's own face, a card on
+ *  it, or the rail's margin of bare canvas — a free tile lying over the
+ *  rail takes the drop itself (its strip), as it would anywhere. */
+function effectDropRail(x: number, y: number, onto: string | undefined): RailDropTarget | null {
+  const top = onto ? useFreeNodeStore.getState().nodes[onto] : undefined
+  if (top && top.type !== 'rail' && !top.railDock) return null
+  return railDropAt(x, y, 'effect')
 }
 
 interface Props {
@@ -390,14 +451,16 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
 
   // ── Drop handlers — one per kind of target (see aimDrop) ──
 
-  /** Drop on bare canvas at any layer — create free node(s) */
-  const dropOnBareCanvas = useCallback((e: React.DragEvent, files: File[]) => {
+  /** Drop on bare canvas at any layer — create free node(s). Returns their
+   *  ids (a drop over a loop strip deals the pictures into it). */
+  const dropOnBareCanvas = useCallback((e: React.DragEvent, files: File[]): string[] => {
     const rect = containerRef.current!.getBoundingClientRect()
     const z = zoomRef.current
     const p = panRef.current
     // Zoom-aware size so a drop at card zoom isn't a speck (see createScale).
     const k = Math.max(0.6, Math.min(10, 1 / z))
     useUndoCoordinator.getState().checkpoint()
+    const made: string[] = []
     files.forEach((file, i) => {
       // Determine node type from the file (drives default size — must match freeNodeStore.addFreeNode)
       const nodeType = classifyFile(file)
@@ -414,7 +477,9 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
       uploadFile(file).then(({ url }) => {
         updateFreeNode(nodeId, { imageUrl: url, mediaType, label: file.name.replace(/\.[^.]+$/, '') })
       })
+      made.push(nodeId)
     })
+    return made
   }, [addFreeNode, updateFreeNode])
 
   /** Drop of a Media Pool tile. The file is already server-served, so this
@@ -423,7 +488,7 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
    *  (checkpoint → node → media → select), but lands at the cursor with
    *  the zoom-aware sizing an OS file drop gets, so a drop at card zoom
    *  isn't a speck. */
-  const dropPoolItem = useCallback((e: React.DragEvent, p: PoolDragPayload) => {
+  const dropPoolItem = useCallback((e: React.DragEvent, p: PoolDragPayload): string => {
     const rect = containerRef.current!.getBoundingClientRect()
     const z = zoomRef.current
     const pn = panRef.current
@@ -443,6 +508,7 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
       ...(k !== 1 ? { width: nodeW, height: nodeH } : {}),
     })
     setFreeSelection([nodeId])
+    return nodeId
   }, [addFreeNode, updateFreeNode, setFreeSelection])
 
   /** A pool item dropped ON something, rather than on bare canvas.
@@ -470,7 +536,8 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
         const fnNodes = useFreeNodeStore.getState().nodes
         const { hidden } = tileDeckIndex(fnNodes)   // a collapsed deck occupies its face only
         const occupied = Object.values(fnNodes)
-          .filter(n => !n.pin && !hidden.has(n.id))
+          // …and a loop strip its own box: what is docked on it lies inside.
+          .filter(n => !n.pin && !hidden.has(n.id) && !n.railDock)
           .map(n => ({ x: n.x, y: n.y, width: n.width, height: n.height }))
         const slot = nextFreeEdgeSlot(win, 'right', tileW, tileH, occupied)
         const nodeId = addFreeNode(slot.x, slot.y, p.kind)
@@ -526,7 +593,9 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
     const fnNodes = useFreeNodeStore.getState().nodes
     const { hidden } = tileDeckIndex(fnNodes)
     const occupied = Object.values(fnNodes)
-      .filter(n => !n.pin && !hidden.has(n.id))   // pinned nodes occupy no world space; nor do hidden deck members
+      // Pinned nodes occupy no world space; nor do hidden deck members. A
+      // loop strip occupies its own box — what is docked on it lies inside.
+      .filter(n => !n.pin && !hidden.has(n.id) && !n.railDock)
       .map(n => ({ x: n.x, y: n.y, width: n.width, height: n.height }))
     files.forEach((file, i) => {
       const type = classifyFile(file)
@@ -627,9 +696,13 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
       // the last dragover judged differently.)
       if (floating || !effectDropAllowed(e.clientX, e.clientY)) return
       e.preventDefault()
+      // Over a loop strip it goes INTO the slot row, between the slots
+      // either side of the drop — what dragging a card onto the rail does.
+      const onto = effectDropTile(e.clientX, e.clientY)
       createEffectCard(effectKindFromDrag(fxRaw), {
         at: clientToCanvas(e.clientX, e.clientY),
-        onto: effectDropTile(e.clientX, e.clientY),
+        onto,
+        rail: effectDropRail(e.clientX, e.clientY, onto) ?? undefined,
       })
       return
     }
@@ -648,11 +721,17 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
     // bare canvas. Bare canvas is the fallback, not the only outcome.
     const aim = aimDrop(e.clientX, e.clientY)
     const bare = aim.onCanvas && !floating
+    // Bare canvas includes a loop strip and its cards (takesMedia): the
+    // tiles are made there, then dealt into the column under the drop.
     if (payload) {
-      if (!(aim.target && dropPoolOnTarget(payload, aim.target)) && bare) dropPoolItem(e, payload)
+      if (!(aim.target && dropPoolOnTarget(payload, aim.target)) && bare) {
+        dealOntoRail([dropPoolItem(e, payload)], e.clientX, e.clientY)
+      }
       return
     }
-    if (!(aim.target && dropFilesOnTarget(aim.target, files)) && bare) dropOnBareCanvas(e, files)
+    if (!(aim.target && dropFilesOnTarget(aim.target, files)) && bare) {
+      dealOntoRail(dropOnBareCanvas(e, files), e.clientX, e.clientY)
+    }
   }, [dropPoolItem, dropPoolOnTarget, dropFilesOnTarget, dropOnBareCanvas])
 
   // Card faces, block and bar headers render in App's LayerOverlay, NEXT TO
@@ -864,6 +943,13 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
               // size lives in one table (freeNodeStore), not a copy here.
               { label: '✦  Add effect card', action: () => {
                 createEffectCard('bloom', { at: { cx: addMenu.cx, cy: addMenu.cy } })
+                setAddMenu(null)
+              } },
+              // A rail to run effect cards over docked pictures. Hung from
+              // the cursor by its top-left corner — it grows right and down
+              // as slots and cards go on, so that corner is the stable one.
+              { label: '⟳  Add loop strip', action: () => {
+                createLoopStrip({ x: addMenu.cx, y: addMenu.cy })
                 setAddMenu(null)
               } },
               { label: '◆  Add Viewer', action: () => {

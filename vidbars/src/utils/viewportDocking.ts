@@ -218,7 +218,12 @@ export interface TileClusterResult {
  *  Callers pass VISIBLE tiles only: a tile collapsed behind a deck face is
  *  not geometry (utils/tileDecks) — where it would sit if opened is empty
  *  canvas now, and counting it there would connect the deck to whatever
- *  lies beside that empty spot. The face's own rect stands for its deck. */
+ *  lies beside that empty spot. The face's own rect stands for its deck.
+ *  Nor loop strips or the cards docked on them (utils/rail — `isDocked`,
+ *  `n.type === 'rail'`): a rail's columns overlap and touch by design, so
+ *  passing them here would make the whole rail one cluster the moment a
+ *  Viewer touched any of it. This file stays import-free (the stores use
+ *  it), so the filtering is the callers' — useDockedContent, FreeCanvas. */
 export function computeTileClusters(
   tiles: DockableItem[],
   windows: WindowRect[],

@@ -15,12 +15,20 @@
 // z 700 a stacking context that would put the palette under pinned panels
 // (900). No backdrop either: one would sit under the cursor for the whole
 // of an HTML5 drag and swallow the canvas's dragover.
+//
+// The first item is not an effect: it makes a LOOP STRIP (utils/rail), the
+// rail a workflow is laid out on. The new rail is selected, and while a
+// rail is selected a click on an effect deals that card onto the end of
+// the rail's slot row (createEffectCard) — the header says so — so
+// "strip, then Ink, Cel, Glow" builds a recipe in four clicks.
 
 import React from 'react'
 import ReactDOM from 'react-dom'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { EFFECTS, EFFECT_ORDER, type EffectKind } from '../../utils/fx/effects'
-import { EFFECT_DRAG_MIME, createEffectCard, effectAttachTarget } from '../../utils/fx/createEffect'
+import {
+  EFFECT_DRAG_MIME, createEffectCard, createLoopStrip, effectAttachTarget, effectRailFor,
+} from '../../utils/fx/createEffect'
 
 /** A palette card: 5:7, like the card it makes. */
 const CARD_W = 84
@@ -28,7 +36,12 @@ const CARD_H = 118
 const GAP = 8
 const PAD = 10
 const COLS = 6
-const PANEL_W = COLS * CARD_W + (COLS - 1) * GAP + PAD * 2
+/** The loop-strip item: one column wide, both rows tall, left of the
+ *  effects — the thing they go on, not a thirteenth effect. */
+const PANEL_W = (COLS + 1) * CARD_W + COLS * GAP + PAD * 2
+
+/** The run arrow's orange (RailBody) — the loop strip's own colour. */
+const RAIL_COLOR = '#D85A30'
 
 /** The dark the effect colours are mixed into — near the canvas's own. */
 const BASE = '#15161f'
@@ -50,7 +63,7 @@ const PaletteCard: React.FC<{ kind: EffectKind; onDropped: () => void }> = ({ ki
     <div
       role="button"
       tabIndex={0}
-      title={`${d.label} — ${d.blurb}${d.blend ? '\nMixes in the next picture on its strip' : ''}\nClick to add · drag onto the canvas`}
+      title={`${d.label} — ${d.blurb}${d.blend ? '\nMixes in the next picture on its strip — on a loop strip, the column after it' : ''}\nClick to add · drag onto the canvas`}
       draggable
       onClick={add}
       onKeyDown={e => {
@@ -106,6 +119,79 @@ const PaletteCard: React.FC<{ kind: EffectKind; onDropped: () => void }> = ({ ki
   )
 }
 
+/** The loop-strip item: makes a rail in the middle of the canvas you can
+ *  see, selected (createLoopStrip). Click only — the rail is made where
+ *  you are looking, then moved by its own background like any tile. Its
+ *  art is what a rail IS: the run arrow over a column of cards dealt as a
+ *  cascade. */
+const LoopStripItem: React.FC = () => {
+  const [hover, setHover] = React.useState(false)
+  const add = () => { createLoopStrip() }
+  // The cascade in the art: each card shows its top band, the last one whole.
+  const cards = [0, 1, 2].map(i => ({ y: 40 + i * 17, t: 0.3 + i * 0.12 }))
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      title={'Loop strip — a rail of slots that runs its effect cards over every picture docked under it\nClick to add, then click effects to put them on it'}
+      onClick={add}
+      onKeyDown={e => {
+        if (e.key !== 'Enter' && e.key !== ' ') return
+        e.preventDefault()
+        add()
+      }}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        gridRow: 'span 2',
+        width: CARD_W, height: CARD_H * 2 + GAP, boxSizing: 'border-box',
+        display: 'flex', flexDirection: 'column',
+        background: mixHex(RAIL_COLOR, BASE, hover ? 0.2 : 0.13),
+        border: `1px solid ${mixHex(RAIL_COLOR, BASE, hover ? 0.85 : 0.4)}`,
+        borderRadius: 8,
+        overflow: 'hidden',
+        cursor: 'pointer',
+        userSelect: 'none',
+        transform: hover ? 'translateY(-2px)' : 'none',
+        transition: 'transform 0.1s, background 0.1s, border-color 0.1s',
+      }}
+    >
+      <div style={{
+        flex: '1 1 auto', minHeight: 0, margin: 4, borderRadius: 5,
+        background: mixHex(RAIL_COLOR, BASE, 0.2),
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        pointerEvents: 'none',
+      }}>
+        <svg viewBox="0 0 76 130" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" aria-hidden>
+          {/* The run arrow across the top. */}
+          <rect x={6} y={12} width={52} height={11} rx={2} fill={RAIL_COLOR} />
+          <polygon points="57,5 71,17.5 57,30" fill={RAIL_COLOR} />
+          {/* A column, dealt as a cascade. */}
+          {cards.map((c, i) => (
+            <g key={i}>
+              <rect x={16} y={c.y} width={44} height={56} rx={4}
+                fill={mixHex('#ffffff', BASE, c.t)} stroke={mixHex('#ffffff', BASE, 0.62)} strokeWidth={1} />
+              <rect x={16.5} y={c.y + 0.5} width={43} height={8} rx={3.5} fill="rgba(0,0,0,0.3)" />
+            </g>
+          ))}
+        </svg>
+      </div>
+      <div style={{
+        padding: '0 6px', fontSize: 11, fontWeight: 600, color: '#fff',
+        textShadow: '0 1px 2px rgba(0,0,0,0.6)',
+        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        pointerEvents: 'none',
+      }}>⟳ Loop strip</div>
+      <div style={{
+        margin: '2px 6px 6px', fontSize: 8.5, lineHeight: '11px', height: 33,
+        color: 'rgba(255,255,255,0.62)',
+        display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+        pointerEvents: 'none',
+      }}>Runs its cards over every picture you dock under it</div>
+    </div>
+  )
+}
+
 /** The palette. Rendered by TopIconBar; open state lives there because the
  *  button that toggles it does. */
 export const EffectPalette = React.memo(function EffectPalette({ open, anchorRef, onClose }: {
@@ -151,9 +237,14 @@ export const EffectPalette = React.memo(function EffectPalette({ open, anchorRef
     }
   }, [open, anchorRef, onClose])
 
-  // Where a click will put the card — the same test createEffectCard acts
-  // on. A string, so this re-renders when the answer changes, not on every
-  // tile drag frame.
+  // Where a click will put the card — the same tests createEffectCard acts
+  // on, a rail first. Strings, so this re-renders when the answer changes,
+  // not on every tile drag frame.
+  const railName = useFreeNodeStore(s => {
+    if (!open) return null
+    const r = effectRailFor(s.nodes, s.selectedIds)
+    return r ? (r.label || 'the loop strip') : null
+  })
   const attachTo = useFreeNodeStore(s => {
     if (!open) return null
     const t = effectAttachTarget(s.nodes, s.selectedIds)
@@ -184,12 +275,15 @@ export const EffectPalette = React.memo(function EffectPalette({ open, anchorRef
           flex: 1, minWidth: 0, fontSize: 10.5, color: 'rgba(255,255,255,0.5)',
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
         }}>
-          {attachTo
+          {railName
+            ? <>Click to add to the end of <span style={{ color: 'rgba(255,255,255,0.8)' }}>{railName}</span> — or drag onto its row</>
+            : attachTo
             ? <>Click to add to the end of <span style={{ color: 'rgba(255,255,255,0.8)' }}>{attachTo}</span>’s strip — or drag onto the canvas</>
             : 'Click to add — or drag onto the canvas'}
         </span>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${COLS}, ${CARD_W}px)`, gap: GAP }}>
+      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${COLS + 1}, ${CARD_W}px)`, gap: GAP }}>
+        <LoopStripItem />
         {EFFECT_ORDER.map(k => <PaletteCard key={k} kind={k} onDropped={onClose} />)}
       </div>
     </div>,

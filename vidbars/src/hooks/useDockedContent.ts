@@ -38,6 +38,7 @@ import { useCanvasStore } from '../store/canvasStore'
 import { isHiddenDeckMember, expandWithNestedMembers, cardVisualRect } from './useCardDecks'
 import { getFirstImageUrl } from '../types/bar'
 import { tileDeckIndex, tileDeckMembers } from '../utils/tileDecks'
+import { isDocked } from '../utils/rail'
 
 export interface DockedSource {
   kind: 'tile' | 'card' | 'list'
@@ -75,7 +76,12 @@ function windowRects(
 /** Dockable tiles as cluster items — content-bearing tiles + list tiles
  *  (isDockableTile is THE shared predicate). `hidden`: tiles collapsed
  *  behind a deck face (tileDeckIndex) — not geometry, so they take no part;
- *  the face's rect stands for its deck, as a stacked card deck's does. */
+ *  the face's rect stands for its deck, as a stacked card deck's does.
+ *  Loop strips take no part either (utils/rail): a rail carries no content
+ *  of its own, and its docked cards overlap and touch by design — one of
+ *  them near a Viewer would hand the Viewer the whole rail's cast and tray
+ *  as one cluster, and a dragging Viewer would carry cards the rail places
+ *  (and would put straight back). */
 function contentTileItems(
   nodes: Record<string, FreeNodeData>, pinned: boolean, hidden: Set<string>,
 ): DockableItem[] {
@@ -85,7 +91,8 @@ function contentTileItems(
     // one site keeps the two strata from ever seeing each other across the
     // ENTIRE docking graph: dock strips, cluster affordances, and
     // computeCarriedEntities, which decides what a dragging Viewer takes.
-    .filter(n => !!n.pin === pinned && !hidden.has(n.id) && isDockableTile(n))
+    .filter(n => !!n.pin === pinned && !hidden.has(n.id) && isDockableTile(n)
+      && n.type !== 'rail' && !isDocked(n, nodes))
     .map(n => (n.pin
       ? { id: n.id, x: n.pin.x, y: n.pin.y, width: n.width * n.pin.scale, height: n.height * n.pin.scale }
       : { id: n.id, x: n.x, y: n.y, width: n.width, height: n.height }))

@@ -17,13 +17,25 @@
 // you just clicked usually is. With nothing like that selected it lands in
 // the middle of the canvas you can see, and lines up with a strip if it
 // happens to be close to one.
+//
+// Loop strips (utils/rail) come first. With a rail selected — or a card
+// docked on one, which is a spot ON that rail — the new card goes into the
+// rail's slot row at its END, the last step the run applies: the rail's
+// version of "the end of the strip". It is docked, not placed, so the rail
+// lays it out. A palette drag let go over a rail docks into the row at the
+// drop (the caller passes that target). A card on a rail is never a strip
+// tile: nothing lines up against one, and it never counts as in the way —
+// its rail does. The rail itself is made here too (createLoopStrip), for
+// the palette and the canvas menu alike.
 
 import { useFreeNodeStore, type FreeNodeData } from '../../store/freeNodeStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useViewport3DStore, type ViewportWindow3D } from '../../store/viewport3dStore'
-import { addFreeNodeCentered, viewportCenterInCanvas } from '../canvasCreate'
+import { useUndoCoordinator } from '../../store/undoCoordinator'
+import { addFreeNodeCentered, createScaleFor, viewportCenterInCanvas } from '../canvasCreate'
 import { DOCK_TOLERANCE, rectsTouch, viewportVisualRect, type Rect } from '../viewportDocking'
 import { isTileDeckFace, tileDeckFaceOf, tileDeckIndex } from '../tileDecks'
+import { isRail, railLayout, type RailData, type RailDropTarget } from '../rail'
 import { EFFECTS, knownKind, type EffectKind } from './effects'
 import { snapToStrip } from './stripSnap'
 
@@ -78,9 +90,11 @@ const STRIP_TYPES = new Set<FreeNodeData['type']>(['image', 'video', 'effect'])
 
 /** A tile an effect card can line up with: an unpinned picture, video or
  *  effect card — or a collapsed deck's face, whatever its own type, since
- *  it stands for every member behind it. */
+ *  it stands for every member behind it. Not a card docked on a loop strip:
+ *  its rail places it (and runs it), so a card "after" it would land on the
+ *  rail. (Rails are not strip types, and are never deck faces.) */
 function isStripTile(n: FreeNodeData | undefined, nodes: Nodes): n is FreeNodeData {
-  return !!n && !n.pin && (STRIP_TYPES.has(n.type) || isTileDeckFace(n, nodes))
+  return !!n && !n.pin && !n.railDock && (STRIP_TYPES.has(n.type) || isTileDeckFace(n, nodes))
 }
 
 /** `id` as a strip tile, or null. A hidden deck member is not geometry
@@ -98,6 +112,31 @@ export function effectAttachTarget(nodes: Nodes, selectedIds: string[]): FreeNod
   return selectedIds.length === 1 ? stripTileFor(selectedIds[0], nodes) : null
 }
 
+/** The loop strip a new effect card would go onto: the rail the selection
+ *  is on, when ALL of it is on one rail — the rail itself, cards docked on
+ *  it, or both (a rubber band over a rail sweeps up its docked cards with
+ *  it). A card in a column stands for its rail: picking a card on the rail
+ *  is picking the rail. Null otherwise, or for a pinned rail (it docks
+ *  nothing). Exported so the palette can say where a click will put the
+ *  card — the same answer createEffectCard acts on. Checked BEFORE
+ *  effectAttachTarget. */
+export function effectRailFor(nodes: Nodes, selectedIds: string[]): (FreeNodeData & { rail: RailData }) | null {
+  let railId: string | null = null
+  for (const id of selectedIds) {
+    const n = nodes[id]
+    const rid = n?.type === 'rail' ? n.id : n?.railDock?.railId
+    if (!rid || (railId && rid !== railId)) return null
+    railId = rid
+  }
+  const rail = railId ? nodes[railId] : undefined
+  return isRail(rail) && !rail.pin ? rail : null
+}
+
+/** The END of a rail's slot row — after its last slot, before the tray. */
+function railRowEnd(rail: FreeNodeData & { rail: RailData }): RailDropTarget {
+  return { railId: rail.id, kind: 'row', insertAt: rail.rail.slots.length }
+}
+
 /** The visible strip tiles touching `start`, transitively — the strip it
  *  is on, read from where the tiles sit. Not from fxStore: a picture with
  *  no effect yet has no strip there, and a second card made in the same
@@ -110,7 +149,7 @@ function stripRun(
   skipId: string,
 ): FreeNodeData[] {
   const pool = Object.values(nodes).filter(n =>
-    n.id !== skipId && n.id !== start.id && !n.pin && !decks.hidden.has(n.id)
+    n.id !== skipId && n.id !== start.id && !n.pin && !n.railDock && !decks.hidden.has(n.id)
     && (STRIP_TYPES.has(n.type) || decks.faces.has(n.id)))
   const run = [start]
   for (let i = 0; i < run.length; i++) {
@@ -150,8 +189,9 @@ function stripEndSlot(
   const last = run.reduce((a, b) => ((b.x - a.x) || (b.y - a.y)) > 0 ? b : a)
   // Anything the card would land ON: visible tiles, Viewers (header
   // included). Touching is fine — that is the point — overlapping is not.
+  // A loop strip occupies its own box; what is docked on it lies inside.
   const occupied: Rect[] = [
-    ...Object.values(nodes).filter(n => n.id !== skipId && !n.pin && !hidden.has(n.id)),
+    ...Object.values(nodes).filter(n => n.id !== skipId && !n.pin && !n.railDock && !hidden.has(n.id)),
     ...Object.values(windows).filter(w => !w.pin).map(w => viewportVisualRect(w, zoom)),
   ]
   const free = (x: number, y: number) =>
@@ -201,16 +241,27 @@ function revealIfOffscreen(id: string): void {
  *  Takes an undo checkpoint, sizes by the store default × createScaleFor
  *  (zoom), sets effect {kind, params:{}} and label EFFECTS[kind].label,
  *  snaps to a strip when close (snapToStrip), selects it unless
- *  select === false. Returns the node id. */
+ *  select === false. Returns the node id.
+ *
+ *  Loop strips: `rail` (where a drag was let go over a rail — the caller's
+ *  railDropTarget) docks the card there instead. Without `at`/`onto`/`rail`
+ *  a selection on one rail (effectRailFor) docks it at the END of that
+ *  rail's slot row. Either way under the same checkpoint, and selected
+ *  like any new card — a card on the rail stands for its rail, so the next
+ *  palette click goes onto the same rail, after this one. */
 export function createEffectCard(
   kind: EffectKind,
-  opts: { at?: { cx: number; cy: number }; select?: boolean; onto?: string } = {},
+  opts: { at?: { cx: number; cy: number }; select?: boolean; onto?: string; rail?: RailDropTarget } = {},
 ): string {
   const k = knownKind(kind)
   const before = useFreeNodeStore.getState()
-  // Which strip to join, if any — read BEFORE the card exists: the tile it
-  // was dropped on, else (no point given) the selected one.
-  const target = opts.onto
+  // A loop strip first: where it was let go, else (no point given) the rail
+  // the selection is on. Read BEFORE the card exists, like the strip below.
+  const selRail = opts.rail || opts.at || opts.onto ? null : effectRailFor(before.nodes, before.selectedIds)
+  const railTarget = opts.rail ?? (selRail ? railRowEnd(selRail) : null)
+  // Which strip to join, if any: the tile it was dropped on, else (no point
+  // given) the selected one.
+  const target = railTarget ? null : opts.onto
     ? stripTileFor(opts.onto, before.nodes)
     : opts.at ? null : effectAttachTarget(before.nodes, before.selectedIds)
 
@@ -220,6 +271,19 @@ export function createEffectCard(
   // the whole card. Same payload as the face's kind switch.
   const id = addFreeNodeCentered('effect', opts.at ?? visibleCanvasCenter())
   useFreeNodeStore.getState().updateFreeNode(id, { effect: { kind: k, params: {} }, label: EFFECTS[k].label })
+
+  if (railTarget) {
+    useFreeNodeStore.getState().dockToRail([id], railTarget)
+    // Docked: the rail sync host has already laid it out (it runs on the
+    // store change, synchronously) — no strip slot, no snap. A rail that
+    // refused it (pinned, or gone since the drag began) leaves it free,
+    // and it is placed below like any card made without a target.
+    if (useFreeNodeStore.getState().nodes[id]?.railDock) {
+      if (opts.select !== false) useFreeNodeStore.getState().setFreeSelection([id])
+      revealIfOffscreen(id)
+      return id
+    }
+  }
 
   const fs = useFreeNodeStore.getState()
   const made = fs.nodes[id]
@@ -240,5 +304,27 @@ export function createEffectCard(
   }
   if (opts.select !== false) useFreeNodeStore.getState().setFreeSelection([id])
   revealIfOffscreen(id)
+  return id
+}
+
+/** Make a loop strip (utils/rail): one empty "Pictures" column, the run
+ *  arrow, the results tray. `at` is its TOP-LEFT corner in canvas units —
+ *  the canvas menu hangs it from the cursor, the way a menu hangs from its
+ *  click; without it the rail is centred on the visible canvas. Its unit is
+ *  createScaleFor(zoom), so a rail made zoomed out is a usable size there,
+ *  like any new card. Takes an undo checkpoint and selects the rail, so the
+ *  Effects palette's next clicks go straight onto it. Returns its id. */
+export function createLoopStrip(at?: { x: number; y: number }): string {
+  const zoom = useCanvasStore.getState().zoom
+  useUndoCoordinator.getState().checkpoint()
+  const c = at ? null : visibleCanvasCenter()
+  const id = useFreeNodeStore.getState().addRail(at?.x ?? c!.cx, at?.y ?? c!.cy, createScaleFor(zoom))
+  if (c) {
+    // Centred on its first layout: the box the rail sync host sizes it to
+    // (addRail's own size is a placeholder until then).
+    const L = railLayout(useFreeNodeStore.getState().nodes[id], undefined)
+    if (L) useFreeNodeStore.getState().updateFreeNode(id, { x: c.cx - L.box.width / 2, y: c.cy - L.box.height / 2 })
+  }
+  useFreeNodeStore.getState().setFreeSelection([id])
   return id
 }

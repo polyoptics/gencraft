@@ -35,9 +35,17 @@ import { ensureModelPoster, getModelPoster, invalidateModelPoster, useModelPoste
 import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
 import { DrawableSurface } from '../Annotation/DrawableSurface'
 import { PenButton } from '../Annotation/PenButton'
-import { useSeedHoverFromCursor } from '../../utils/pointerTracker'
+import { currentPointerPos, useSeedHoverFromCursor } from '../../utils/pointerTracker'
 import { useFileMenuItems } from '../../hooks/useFileMenu'
 import { useMenuClamp } from '../../hooks/useMenuClamp'
+import { RailBody } from './RailBody'
+import { useRailUiStore } from '../../store/railUiStore'
+import {
+  RAIL_GEOM, RAIL_TRAY, isDocked, isRail, isRailPicture, railDropTarget, railLayout, railMembers,
+  type RailDropTarget,
+} from '../../utils/rail'
+import { clientToCanvas } from '../../utils/fx/createEffect'
+import { railAtPoint } from './rail/railHit'
 
 
 /** Node types whose corner resize keeps the current proportions. A
@@ -78,6 +86,54 @@ function transferablePoster(node: FreeNodeData): string | null {
   return getModelPoster(node.imageUrl) ?? node.posterUrl ?? null
 }
 
+type Nodes = Record<string, FreeNodeData>
+
+/** Can a drag of this tile dock on a loop strip (utils/rail)? A picture —
+ *  or a collapsed deck whose face is one, which deals the deck's pictures
+ *  into the column — or a single effect card, which takes a slot in the
+ *  row. Not a deck of effect cards: a card slot holds ONE card, and the
+ *  rest of the deck would be left hidden behind a face that went away. */
+function railDockable(n: FreeNodeData, nodes: Nodes): boolean {
+  if (n.pin || n.type === 'rail') return false
+  if (n.type === 'effect') return !isTileDeckFace(n, nodes)
+  return isRailPicture(n)
+}
+
+/** Where `dragged` would dock if let go with the pointer at (clientX,
+ *  clientY): on the unpinned rail that is topmost under the pointer
+ *  (railAtPoint — not one hidden under a panel), or null. The POINTER, not
+ *  the tile's box — you aim a card into a column with your hand, and a big
+ *  tile held by its corner would otherwise land somewhere you are not
+ *  pointing. `skip` is the dragged tile's element, always under the hand. */
+function railTargetAt(clientX: number, clientY: number, dragged: FreeNodeData, nodes: Nodes, skip: Element | null): RailDropTarget | null {
+  const railId = railAtPoint(clientX, clientY, nodes, skip)
+  const rail = railId ? nodes[railId] : undefined
+  if (!rail || !isRail(rail) || rail.pin) return null
+  const { cx, cy } = clientToCanvas(clientX, clientY)
+  const L = railLayout(rail, railMembers(nodes).get(rail.id))
+  return L ? railDropTarget(L, rail, { x: cx, y: cy }, dragged) : null
+}
+
+/** Put a card that is still LIFTED back in its column, and drop the drop
+ *  preview it owns. For a drag that ended without a release this tile
+ *  heard: the browser cancelled it, or a zoom-layer switch unmounted the
+ *  tile mid-gesture. Without this the card would float off its column (and
+ *  the rail keep drawing its insertion marker) until the next launch. */
+function landLiftedCard(id: string): void {
+  const rs = useRailUiStore.getState()
+  if (rs.drop?.draggedId === id) rs.setDrop(null)
+  const fns = useFreeNodeStore.getState()
+  const d = fns.nodes[id]?.railDock
+  if (d?.lifted) fns.updateFreeNode(id, { railDock: { ...d, lifted: undefined } })
+}
+
+/** How long the pointer rests on a docked card before it lifts above its
+ *  column. Immediate, a lifted card covers the bands of the cards below it,
+ *  so running the pointer down a cascade would stick on the first card it
+ *  touched; with a short rest each band takes the hover in turn, and the
+ *  one you stop on comes up. */
+const PEEK_DWELL_MS = 250
+
 interface Props {
   id: string
   /** When this model tile's cluster touches a 3D viewport window, the
@@ -104,6 +160,29 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
     for (const m of Object.values(s.nodes)) if (m.tileDeck?.anchor === id) c++
     return c
   })
+  // ── Loop strips (utils/rail) ── docked on a rail that exists: the rail
+  // decides where this tile sits and how big it is (the sync host writes
+  // it), so it has no resize handles and stacks by its cascade order.
+  const docked = useFreeNodeStore(s => isDocked(s.nodes[id], s.nodes))
+  // In a 'pick' column only the FACE-UP card — the last one — is used; the
+  // ones above it are dimmed. A boolean, so only a change of that re-renders;
+  // the column walk only runs for a docked card in a pick column.
+  const pickDimmed = useFreeNodeStore(s => {
+    const d = s.nodes[id]?.railDock
+    if (!d || d.lifted) return false
+    const slot = s.nodes[d.railId]?.rail?.slots.find(sl => sl.id === d.slotId)
+    if (slot?.kind !== 'role' || slot.mode !== 'pick') return false
+    for (const m of Object.values(s.nodes)) {
+      const md = m.railDock
+      // A card further down the cascade still sits on this column (a lifted
+      // one has left it: the column closes up behind it).
+      if (m.id !== id && md && !md.lifted && md.railId === d.railId && md.slotId === d.slotId && md.order > d.order) return true
+    }
+    return false
+  })
+  /** This tile is being aimed at a rail right now — it floats over the
+   *  docked cards it is about to go between. */
+  const aimingAtRail = useRailUiStore(s => s.drop?.draggedId === id)
   const setFreeSelection = useFreeNodeStore(s => s.setFreeSelection)
   const toggleFreeSelection = useFreeNodeStore(s => s.toggleFreeSelection)
   const zoom = useCanvasStore(s => s.zoom)
@@ -117,6 +196,9 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
   const gz = node?.pin ? node.pin.scale : zoom
 
   const [isHovered, setIsHovered] = useState(false)
+  /** A docked card the pointer has rested on (PEEK_DWELL_MS) — lifted above
+   *  its column so all of it shows: the solitaire peek. */
+  const [rested, setRested] = useState(false)
   const [isRenaming, setIsRenaming] = useState(false)
   const [renameVal, setRenameVal] = useState('')
   const [nodeMenu, setNodeMenu] = useState<{ x: number; y: number } | null>(null)
@@ -135,6 +217,14 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
   const dragLastX = useRef(0)
   const dragLastY = useRef(0)
   const dragHasMoved = useRef(false)
+  /** A press on this tile's body is in progress (onNodeDown → release). */
+  const dragActive = useRef(false)
+  /** This drag can dock on a loop strip — decided once, when it starts. */
+  const railDragOk = useRef(false)
+  /** Where the tile stood when the press began, canvas units. */
+  const dragStart = useRef({ x: 0, y: 0 })
+  /** Where the pointer pressed, client px — a drag is measured from here. */
+  const dragPress = useRef({ x: 0, y: 0 })
   const wasSelectedOnDown = useRef(false)
   const resizeLastX = useRef(0)
   const resizeLastY = useRef(0)
@@ -148,7 +238,34 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
   // covers the "swapped in under stationary cursor" case at zoom-layer
   // transitions (browsers don't fire mouseenter for elements that appear
   // under a cursor that hasn't moved).
-  useSeedHoverFromCursor(wrapperRef, setIsHovered)
+  // Only when this tile is the one ON TOP under the cursor, as the browser
+  // itself decides hover: cards in a loop-strip column overlap, and every
+  // card whose box holds the cursor would otherwise seed as hovered — and,
+  // never having been entered, never get the mouseleave that lowers its peek.
+  const seedHover = useCallback((v: boolean) => {
+    const p = v ? currentPointerPos() : null
+    const under = p ? document.elementFromPoint(p.x, p.y) : null
+    if (!v || (under && wrapperRef.current?.contains(under))) setIsHovered(v)
+  }, [])
+  useSeedHoverFromCursor(wrapperRef, seedHover)
+
+  // The peek: a docked card lifts once the pointer has RESTED on it. It is
+  // lowered by onMouseLeave, and means nothing while not hovered (see
+  // `peeking`), so nothing needs resetting from inside this effect.
+  const liftedNow = !!node?.railDock?.lifted
+  useEffect(() => {
+    if (!docked || !isHovered || liftedNow) return
+    const t = setTimeout(() => setRested(true), PEEK_DWELL_MS)
+    return () => clearTimeout(t)
+  }, [docked, isHovered, liftedNow])
+
+  // Unmounted in the middle of a drag — every canvas tile remounts at the
+  // zoom-layer thresholds, and a wheel zoom can cross one mid-gesture — so
+  // the release will never reach this tile. Land what the drag left open.
+  useEffect(() => {
+    const active = dragActive
+    return () => { if (active.current) landLiftedCard(id) }
+  }, [id])
 
   // A picture at the head of an effect strip SHOWS the processed result
   // (FxResultLayer), so its drag-out grip hands out that result: `active`
@@ -169,22 +286,58 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
     useUndoCoordinator.getState().checkpoint()
     dragLastX.current = e.clientX
     dragLastY.current = e.clientY
+    dragPress.current = { x: e.clientX, y: e.clientY }
     dragHasMoved.current = false
+    dragActive.current = true
+    railDragOk.current = false
+    const at = useFreeNodeStore.getState().nodes[id]
+    dragStart.current = { x: at?.x ?? 0, y: at?.y ?? 0 }
     wrapperRef.current?.setPointerCapture(e.pointerId)
-  }, [])
+  }, [id])
 
   const onNodeMove = useCallback((e: React.PointerEvent) => {
     if (!wrapperRef.current?.hasPointerCapture(e.pointerId)) return
     const dx = (e.clientX - dragLastX.current) / gz
     const dy = (e.clientY - dragLastY.current) / gz
-    if (Math.abs(dx) > 1 || Math.abs(dy) > 1) dragHasMoved.current = true
+    // A drag, by one big step or by the distance from the press: zoomed in,
+    // a slow hand moves less than a canvas unit per event, and a docked card
+    // would never be picked up (it does not move until it is lifted).
+    const fromPress = Math.hypot(e.clientX - dragPress.current.x, e.clientY - dragPress.current.y)
+    if (Math.abs(dx) > 1 || Math.abs(dy) > 1 || fromPress > 3) {
+      if (!dragHasMoved.current) {
+        // The drag has really started. A card docked on a loop strip is
+        // picked UP: its column closes up behind it and the rail stops
+        // placing it, but it still belongs there until the release decides.
+        // No checkpoint — onNodeDown took the one for this gesture.
+        const fns = useFreeNodeStore.getState()
+        const cur = fns.nodes[id]
+        if (cur?.railDock && !cur.railDock.lifted && isRail(fns.nodes[cur.railDock.railId])) {
+          fns.updateFreeNode(id, { railDock: { ...cur.railDock, lifted: true } })
+          // It stood still until now: catch up with the hand, less this
+          // event's own step, which the move below makes.
+          moveFreeNode(id, (e.clientX - dragPress.current.x) / gz - dx, (e.clientY - dragPress.current.y) / gz - dy)
+        }
+        // Read after the lift, so a lifted card is judged as what it is.
+        const now = useFreeNodeStore.getState().nodes
+        railDragOk.current = !!now[id] && railDockable(now[id], now)
+      }
+      dragHasMoved.current = true
+    }
     // Move all selected nodes together if this node is part of the
     // selection — but only same-placement siblings, since a canvas delta
     // and a screen delta are different quantities.
     const sel = useFreeNodeStore.getState().selectedIds
     const all = useFreeNodeStore.getState().nodes
-    if (sel.length > 1 && sel.includes(id)) {
-      const same = sel.filter(sid => !!all[sid]?.pin === !!node?.pin)
+    const self = all[id]
+    if (self?.railDock) {
+      // A card off a strip travels ALONE, and only once it is lifted: until
+      // then the rail owns its box, and moving it would only fight the sync
+      // host that puts it back.
+      if (self.railDock.lifted) moveFreeNode(id, dx, dy)
+    } else if (sel.length > 1 && sel.includes(id)) {
+      // Docked tiles stay where their rails put them; a selected rail
+      // carries its own cards along through the sync host.
+      const same = sel.filter(sid => !!all[sid]?.pin === !!node?.pin && !all[sid]?.railDock)
       if (node?.pin) movePinnedNodes(same, e.clientX - dragLastX.current, e.clientY - dragLastY.current)
       else moveManyFreeNodes(same, dx, dy)
     } else if (node?.pin) {
@@ -197,10 +350,29 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
     // Magnet affordance: dockable tiles (content-bearing + lists) near a
     // browser window edge show a "will snap here" ghost.
     const n = useFreeNodeStore.getState().nodes[id]
+    // LOOP STRIP drop preview: where a release would dock, under the
+    // pointer. The tile writes it; the rail (RailBody) draws the marker.
+    // Outranks the Viewer magnet below, as the release does.
+    let railAim: RailDropTarget | null = null
+    if (n && dragHasMoved.current && railDragOk.current) {
+      railAim = railTargetAt(e.clientX, e.clientY, n, useFreeNodeStore.getState().nodes, wrapperRef.current)
+    }
+    {
+      const rs = useRailUiStore.getState()
+      if (railAim) rs.setDrop({ target: railAim, draggedId: id })
+      else if (rs.drop?.draggedId === id) rs.setDrop(null)
+    }
+    if (railAim) {
+      // A Viewer ghost from a moment ago would promise a landing that the
+      // rail is about to take instead.
+      const mp = useMagnetPreviewStore.getState()
+      if (mp.preview) mp.setPreview(null)
+    }
     // Magnet is canvas-only: cross-placement docking does not exist, and
     // snapping would write canvas coords into a node whose position is
-    // screen-space.
-    if (n && !n.pin && isDockableTile(n)) {
+    // screen-space. Never for a card that is (or was until this drag) on a
+    // loop strip: the rail is where it lives.
+    else if (n && !n.pin && !n.railDock && isDockableTile(n)) {
       // Canvas windows ONLY. A pinned window's x/y are its stale pre-pin
       // home; while it is pinned it lives on the screen, so letting a
       // canvas tile magnet to that ghost attaches two things that are
@@ -252,6 +424,12 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
     // scope `node`; declaring it lower created a temporal-dead-zone throw
     // for any reference above the declaration (broke no-drag clicks).
     const node = useFreeNodeStore.getState().nodes[id]
+    dragActive.current = false
+    // The drop preview belongs to the drag, which ends here whatever lands.
+    {
+      const rs = useRailUiStore.getState()
+      if (rs.drop?.draggedId === id) rs.setDrop(null)
+    }
     if (!node) return
     // Screen-placed nodes never take part in the canvas drop-transfer
     // scan below: it hit-tests with elementsFromPoint (screen space) and
@@ -286,6 +464,95 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
         }
       }
     }
+    // ── Loop strip ── FIRST, before the Viewer dock, the strip snap and the
+    // transfer scan: a card let go over a rail docks there, where the
+    // preview said. A deck of pictures is DEALT into the column, its
+    // pictures in deck order.
+    if (dragHasMoved.current && (railDragOk.current || node.railDock?.lifted)) {
+      const fns = useFreeNodeStore.getState()
+      const target = railDragOk.current ? railTargetAt(e.clientX, e.clientY, node, fns.nodes, wrapperRef.current) : null
+      if (target) {
+        if (useMagnetPreviewStore.getState().preview) useMagnetPreviewStore.getState().setPreview(null)
+        // What goes in: this tile — and when it was dragged as part of a
+        // selection, every selected picture that travelled with it, a hand
+        // dealt into the column in reading order (left behind, they would
+        // lie loose on top of the rail). A deck face goes in as its pictures.
+        const sel = fns.selectedIds
+        const movers = target.kind === 'column' && !node.railDock && sel.length > 1 && sel.includes(id)
+          ? sel.map(s => fns.nodes[s])
+              .filter((m): m is FreeNodeData => !!m && !m.pin && !m.railDock && m.type !== 'effect' && railDockable(m, fns.nodes))
+              .sort((a, b) => (a.y - b.y) || (a.x - b.x))
+          : [node]
+        const ids: string[] = []
+        const rest: FreeNodeData[] = []
+        for (const m of movers) {
+          if (!isTileDeckFace(m, fns.nodes)) { ids.push(m.id); continue }
+          for (const dm of tileDeckMembers(m.id, fns.nodes)) {
+            if (isRailPicture(dm)) ids.push(dm.id); else rest.push(dm)
+          }
+        }
+        // The raw target: dockToRail itself allows for a card moving along
+        // its own row (its old slot sat before the insert point).
+        fns.dockToRail(ids, target)
+        // A deck's other cards (its effect cards, a note) have no place in
+        // a column. They open where the deck was picked up, in its open
+        // layout — not left hidden behind a face that is no longer one.
+        if (rest.length > 0) {
+          const ddx = node.x - dragStart.current.x, ddy = node.y - dragStart.current.y
+          useFreeNodeStore.setState(s => {
+            const nodes = { ...s.nodes }
+            for (const m of rest) {
+              const cur = nodes[m.id]
+              if (cur) nodes[m.id] = { ...cur, tileDeck: undefined, x: cur.x - ddx, y: cur.y - ddy }
+            }
+            return { nodes }
+          })
+        }
+        return
+      }
+      if (node.railDock?.lifted) {
+        // Let go ON a rail where nothing docks (a tray, a card slot, the
+        // arrow): back to its column. Set down there as a free tile, it
+        // would lie under the rail's cascades, out of sight.
+        if (railAtPoint(e.clientX, e.clientY, fns.nodes, wrapperRef.current)) {
+          landLiftedCard(id)
+          if (useMagnetPreviewStore.getState().preview) useMagnetPreviewStore.getState().setPreview(null)
+          return
+        }
+        // Pulled off its strip and let go elsewhere: a free tile again, at
+        // its own size, still held at the same spot under the hand.
+        const held = clientToCanvas(e.clientX, e.clientY)
+        const fx = node.width > 0 ? Math.min(1, Math.max(0, (held.cx - node.x) / node.width)) : 0
+        const fy = node.height > 0 ? Math.min(1, Math.max(0, (held.cy - node.y) / node.height)) : 0
+        fns.undockFromRail(id)
+        const free = useFreeNodeStore.getState().nodes[id]
+        if (free) fns.updateFreeNode(id, { x: held.cx - fx * free.width, y: held.cy - fy * free.height })
+        // An effect card still lines up with a strip it lands beside — it is
+        // an ordinary card now. Nothing else applies: no Viewer dock (no
+        // ghost was offered while it was on the strip), and never the
+        // transfer scan, which ends by deleting the tile.
+        const cur = useFreeNodeStore.getState().nodes[id]
+        if (cur?.type === 'effect') {
+          const snap = snapToStrip(cur, useFreeNodeStore.getState().nodes, useViewport3DStore.getState().windows, zoom)
+          if (snap) moveFreeNode(id, snap.x - cur.x, snap.y - cur.y)
+        }
+        if (useMagnetPreviewStore.getState().preview) useMagnetPreviewStore.getState().setPreview(null)
+        return
+      }
+    }
+    // A free tile let go on a rail where it does not dock (a note, a picture
+    // on the tray): set down just under the rail, as 'Take off the strip'
+    // does. Left there, it would lie beneath the rail's cascades.
+    if (dragHasMoved.current && !node.pin && !node.railDock && node.type !== 'rail') {
+      const fns = useFreeNodeStore.getState()
+      const over = railAtPoint(e.clientX, e.clientY, fns.nodes, wrapperRef.current)
+      const rail = over ? fns.nodes[over] : undefined
+      if (rail) {
+        moveFreeNode(id, 0, rail.y + rail.height + RAIL_GEOM.gap * (rail.rail?.unit ?? 1) - node.y)
+        if (useMagnetPreviewStore.getState().preview) useMagnetPreviewStore.getState().setPreview(null)
+        return
+      }
+    }
     // Transfer node content to a bar/card on drop
     // Magnet dock: a content tile released near a browser window edge
     // snaps flush and loads its item. The tile is KEPT (dock membership
@@ -294,8 +561,8 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
       const preview = useMagnetPreviewStore.getState().preview
       if (preview) useMagnetPreviewStore.getState().setPreview(null)
       // Only a VIEWER preview docks — a panel-to-panel ghost has no window
-      // and is handled by the panel magnet below.
-      if (dragHasMoved.current && isDockableTile(node) && preview?.windowId) {
+      // and is handled by the panel magnet below. Never a docked card.
+      if (dragHasMoved.current && !node.railDock && isDockableTile(node) && preview?.windowId) {
         const cur = useFreeNodeStore.getState().nodes[id]
         // As a DELTA through the move action, not an x/y write: a deck face
         // takes the tiles hidden behind it along, and a write would leave
@@ -322,7 +589,8 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
     }
     // Effect strip: an effect card let go near a card's or a Viewer's left
     // or right edge lines up flush with it — how a strip gets built.
-    if (dragHasMoved.current && node.type === 'effect' && !node.pin) {
+    // Not a card on a loop strip: the rail is its line.
+    if (dragHasMoved.current && node.type === 'effect' && !node.pin && !node.railDock) {
       const cur = useFreeNodeStore.getState().nodes[id]
       const snap = cur
         ? snapToStrip(cur, useFreeNodeStore.getState().nodes, useViewport3DStore.getState().windows, zoom)
@@ -331,8 +599,11 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
       if (snap && cur) moveFreeNode(id, snap.x - cur.x, snap.y - cur.y)
     }
     // A deck FACE never transfers. The scan below hands over the face's own
-    // media and then deletes the tile — which, for a face, is the deck.
-    if (dragHasMoved.current && node && !isTileDeckFace(node, useFreeNodeStore.getState().nodes)) {
+    // media and then deletes the tile — which, for a face, is the deck. Nor
+    // does a loop strip, or a card docked on one: the rail is its home, and
+    // a slip over a bar behind the rail must not destroy it.
+    if (dragHasMoved.current && node && node.type !== 'rail' && !node.railDock &&
+        !isTileDeckFace(node, useFreeNodeStore.getState().nodes)) {
       const hasMedia = !!node.imageUrl
       const hasText = !!(node.text && (node.type === 'text' || node.type === 'note'))
       if (hasMedia || hasText) {
@@ -341,8 +612,14 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
         // (its header buttons, the drag-out grip): the walks below stop at
         // the first tile they meet, and that must never be this one.
         const self = wrapperRef.current!
-        const allEls = document.elementsFromPoint(e.clientX, e.clientY).filter(el => !self.contains(el))
+        const hits = document.elementsFromPoint(e.clientX, e.clientY).filter(el => !self.contains(el))
         wrapperRef.current!.style.pointerEvents = ''
+        // Nothing passes THROUGH a loop strip. A tile let go on a rail where
+        // it does not dock (its arrow band, its tray) stays where it was let
+        // go; what lies under the rail is covered by it, and a transfer into
+        // a bar hidden back there would delete the tile.
+        const railAt = hits.findIndex(el => !!el.closest('[data-rail]'))
+        const allEls = railAt >= 0 ? hits.slice(0, railAt) : hits
 
         const mediaType = node.mediaType ?? 'image'
 
@@ -493,6 +770,15 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
     // No transfer happened — user placed the node here intentionally, leave it.
   }, [id, node?.type, node?.imageUrl, connectedWindowId, isSelected, isRenaming, setFreeSelection, toggleFreeSelection, updateFreeNode, moveFreeNode, zoom])
 
+  // A drag the browser ended without a release here: a pointercancel, or
+  // the capture lost some other way. After a normal release onNodeUp has
+  // already settled everything (dragActive is down), so this does nothing.
+  const onNodeLostCapture = useCallback(() => {
+    if (!dragActive.current) return
+    dragActive.current = false
+    landLiftedCard(id)
+  }, [id])
+
   // Resize handles — eight of them, so a panel can be reshaped from any
   // edge or corner instead of only being dragged bigger from one corner.
   const onResizeDown = useCallback((e: React.PointerEvent) => {
@@ -636,9 +922,22 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
   // ragged band instead of one strip. The node cap still wins on small
   // tiles — a 40px tile has no business carrying a 22px header.
   const headerH = Math.min(22 * iz, node.height * 0.28)
+  /** A loop strip (utils/rail): the whole tile is the rail's face, which
+   *  RailBody paints — no title bar, no handles (it sizes itself to its
+   *  layout), no pen, no pin. */
+  const isRailTile = node.type === 'rail'
+  /** The rail's own unit — every rail size scales by it, like a card made
+   *  at that zoom. */
+  const railU = node.rail?.unit && node.rail.unit > 0 ? node.rail.unit : 1
+  /** Lifted off its column by a drag in flight. */
+  const lifted = !!node.railDock?.lifted
+  /** Resting under the pointer long enough to lift above its column. */
+  const peeking = docked && isHovered && rested
+  const dockOrder = node.railDock?.order ?? 0
   /** Effect cards wear no title bar: the whole tile is the card's face
-   *  (EffectTileBody), its name banner included. */
-  const showHeader = node.type !== 'effect'
+   *  (EffectTileBody), its name banner included. A docked card keeps its
+   *  bar: it is the band that shows in the cascade, like a card's rank. */
+  const showHeader = node.type !== 'effect' && !isRailTile
   /** Where the body starts — the header's height, or 0 without one. */
   const bodyTop = showHeader ? headerH : 0
   // An effect card's sliders run nearly edge to edge, and a resize zone
@@ -773,7 +1072,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
     >{deckCount}</div>
   ) : null
 
-  const renameInput = (
+  const renameInput = (size: number) => (
     <input
       ref={renameRef}
       value={renameVal}
@@ -785,15 +1084,40 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
         flex: 1, background: 'rgba(255,255,255,0.06)', border: 'none',
         borderBottom: `${Math.max(1, borderW)}px solid rgba(255,255,255,0.3)`,
         borderRadius: 0, outline: 'none', color: '#fff',
-        fontSize, fontWeight: 600, lineHeight: 1.2, padding: 0, fontFamily: 'inherit',
+        fontSize: size, fontWeight: 600, lineHeight: 1.2, padding: 0, fontFamily: 'inherit',
         boxSizing: 'border-box', minWidth: 0,
       }}
     />
   )
 
   // Deck gestures for the menu. The cluster walk reads every tile, so it
-  // only runs while the menu is open.
-  const menuCluster = nodeMenu && !isDeckFace ? touchingTileCluster(id, useFreeNodeStore.getState().nodes) : []
+  // only runs while the menu is open. Never on a rail or a docked card:
+  // neither stacks into a tile deck.
+  const menuCluster = nodeMenu && !isDeckFace && !isRailTile && !docked
+    ? touchingTileCluster(id, useFreeNodeStore.getState().nodes) : []
+  // How many results the rail's tray holds — for its menu's Clear item.
+  const trayCount = nodeMenu && isRailTile
+    ? Object.values(useFreeNodeStore.getState().nodes)
+        .filter(n => n.railDock?.railId === id && n.railDock.slotId === RAIL_TRAY).length
+    : 0
+
+  // Canvas stacking. A rail is the table the cards lie on: below them and
+  // below free tiles (5), but over resting bars (2) and Viewer windows (1),
+  // which would otherwise cover its controls while its cards float above.
+  // Its chrome that must show over the docked cards (the drop mark, the run
+  // highlight, the next-result ghost) is portalled out to the world layer by
+  // rail/RailOverlay, where it takes its own z among the tiles. Docked cards
+  // stack by cascade order, each over the one above it, in a band that
+  // stops at 49 however long the column or the tray grows — under hovered
+  // free tiles (50), the run highlight (59) and everything above it. The
+  // card the pointer rests on comes up over its column (the peek: 60). A
+  // card in flight — lifted off a column, or aimed at one — floats over the
+  // cards it passes but stays UNDER the rail's drop mark (z 70): the mark is
+  // always under the pointer, so beneath the card it would never show.
+  const canvasZ: number = isRailTile ? (isHovered ? 4 : 3)
+    : lifted || aimingAtRail ? 65
+    : docked ? (peeking ? 60 : 10 + Math.min(dockOrder, 39))
+    : isHovered ? 50 : 5
 
   const tile = (
     <div
@@ -801,6 +1125,9 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
       data-freenode="true"
       data-id={id}
       data-pinned={node.pin ? 'true' : undefined}
+      data-rail={isRailTile ? 'true' : undefined}
+      data-rail-docked={docked ? node.railDock!.slotId : undefined}
+      data-rail-lifted={lifted ? 'true' : undefined}
       style={{
         position: 'absolute',
         // left/top come from whichever space this node lives in; width and
@@ -817,24 +1144,29 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
         } : {
           left: node.x,
           top: node.y,
-          zIndex: isHovered ? 50 : 5,
+          zIndex: canvasZ,
         }),
         width: faceW,   // node.width, less the edge reserve on a deck face
         height: node.height,
         // A Rolodex keeps the panel's own silhouette — rounded corners, a
         // soft drop shadow, no tile border — and keeps it in BOTH
         // placements, so pinning it to the screen or setting it down on
-        // the canvas never changes how it looks.
-        borderRadius: (isPanel ? 12 : 10) / gz,
+        // the canvas never changes how it looks. A rail rounds like its
+        // own frame (RailBody), so the selection ring hugs it.
+        borderRadius: isRailTile ? 14 * railU : (isPanel ? 12 : 10) / gz,
         // An effect card paints its own face edge to edge; the tile's random
         // colour would only show through the translucent border as a ring.
-        background: node.type === 'effect' ? '#15161f' : node.color,
+        // A rail paints its own frame entirely.
+        background: isRailTile ? 'transparent' : node.type === 'effect' ? '#15161f' : node.color,
         // Connected-to-viewport model tiles carry the accent tint — the
         // same "these things are linked" language as touching deck cards.
-        border: isPanel ? 'none' : `${borderW}px solid ${connectedWindowId
+        border: isPanel || isRailTile ? 'none' : `${borderW}px solid ${connectedWindowId
           ? `rgba(120,170,255,${isHovered ? 0.65 : 0.45})`
           : `rgba(255,255,255,${isHovered ? 0.18 : 0.08})`}`,
-        boxShadow: isPanel
+        boxShadow: isRailTile
+          // Flat: the ring when selected, nothing else.
+          ? (isSelected ? `0 0 0 ${2.5 / gz}px rgba(120,180,255,0.9)` : 'none')
+          : isPanel
           ? `${isSelected ? `0 0 0 ${2.5 / gz}px rgba(120,180,255,0.9), ` : ''}` +
             `0 ${10 / gz}px ${28 / gz}px rgba(0,0,0,0.6), 0 ${2 / gz}px ${6 / gz}px rgba(0,0,0,0.5)`
           : isSelected
@@ -842,12 +1174,14 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
           : isHovered ? `0 ${8 / gz}px ${32 / gz}px rgba(0,0,0,0.55)` : `0 ${2 / gz}px ${12 / gz}px rgba(0,0,0,0.4)`,
         display: 'flex',
         flexDirection: 'column',
-        overflow: 'hidden',
+        // Not on a rail: its chrome may reach a hair past the box (a marker
+        // across a column edge), and there is no tile content to clip.
+        overflow: isRailTile ? 'visible' : 'hidden',
         transition: 'border-color 0.12s, box-shadow 0.12s',
         cursor: 'grab',
       }}
       onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
+      onMouseLeave={() => { setIsHovered(false); setRested(false) }}
       onPointerDownCapture={e => {
         // Select node in capture phase so children with stopPropagation (note textarea) don't block selection
         if (e.button !== 0) return
@@ -867,6 +1201,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
       onPointerDown={onNodeDown}
       onPointerMove={onNodeMove}
       onPointerUp={onNodeUp}
+      onLostPointerCapture={onNodeLostCapture}
       onDoubleClick={e => {
         // Portalled children — the context menu, the Edit Image overlay —
         // still bubble here through the React tree, but they are not the
@@ -874,6 +1209,9 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
         // below would hold whatever the last drag left in it.
         if (!wrapperRef.current?.contains(e.target as Node)) return
         if (dragHasMoved.current) return
+        // A rail's double-clicks belong to its own controls (RailBody stops
+        // them); on its bare frame there is nothing to do.
+        if (isRailTile) return
         // While the crop editor is open the tile is its canvas: stacking or
         // opening the deck under it would unmount or remount the editor and
         // lose the crop in progress.
@@ -907,8 +1245,9 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
           }
           return
         }
-        // Panels are apps, not things you stack (canJoinTileDeck).
-        if (isPanel) return
+        // Panels are apps, not things you stack (canJoinTileDeck). Nor is a
+        // card on a loop strip: its column is its stack.
+        if (isPanel || docked) return
         // Everything else: open this deck, or stack the tiles touching
         // this one into a deck.
         if (toggleTileDeck()) e.stopPropagation()
@@ -989,7 +1328,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
           />
         )}
 
-        {isRenaming ? renameInput : (
+        {isRenaming ? renameInput(fontSize) : (
           <span
             data-freenode-label
             style={{
@@ -1028,15 +1367,52 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
         )}
       </div>}
 
-      {/* ── Body ── */}
-      <FreeNodeBody node={node} id={id} iz={iz} dz={dz} pad={pad} faceW={faceW} hovered={isHovered} updateFreeNode={updateFreeNode} isEditing={textEditing} setIsEditing={setTextEditing} />
+      {/* ── Body ── a rail's is the rail itself: arrow, slots, tray (RailBody,
+              local coordinates, filling the tile — mounted directly in it, so
+              its parent is this tile and the tile's is the world layer). Its
+              controls stop their own presses; its bare frame passes them on,
+              so pressing it moves the rail like any tile. */}
+      {isRailTile ? (
+        <RailBody id={id} node={node} hovered={isHovered} zoom={gz} />
+      ) : (
+        <FreeNodeBody node={node} id={id} iz={iz} dz={dz} pad={pad} faceW={faceW} hovered={isHovered} updateFreeNode={updateFreeNode} isEditing={textEditing} setIsEditing={setTextEditing} />
+      )}
+
+      {/* A rail has no title bar to type a name into: the rename field sits
+          over the rail's label at the left of its arrow band. Sized in the
+          rail's unit like the rest of its chrome, with a floor so it can
+          still be read zoomed out, and a ceiling so it stays in the band. */}
+      {isRailTile && isRenaming && (
+        <div style={{
+          position: 'absolute', zIndex: 30,
+          left: RAIL_GEOM.pad * railU, top: RAIL_GEOM.pad * 0.6 * railU,
+          width: Math.min(240 * railU, node.width * 0.45), height: RAIL_GEOM.arrowH * railU,
+          padding: `0 ${8 * railU}px`, boxSizing: 'border-box',
+          display: 'flex', alignItems: 'center',
+          background: '#1b1c27', borderRadius: 8 * railU,
+        }}>
+          {renameInput(Math.min(Math.max(13 * railU, 10 * iz), RAIL_GEOM.arrowH * railU * 0.6))}
+        </div>
+      )}
+
+      {/* ── Pick one ── in a 'pick' column only the face-up card (the last)
+              is used; the cards above it are dimmed. Lighter under the
+              pointer, so a peek still shows the picture. Over the header
+              too — the whole card is out of play. */}
+      {pickDimmed && (
+        <div data-rail-dimmed style={{
+          position: 'absolute', inset: 0, zIndex: 18, pointerEvents: 'none',
+          background: `rgba(0,0,0,${isHovered ? 0.2 : 0.45})`,
+          transition: 'background 0.12s',
+        }} />
+      )}
 
       {!showHeader && deckBadge}
 
       {/* ── Annotation layer — overlays the body region only (header excluded).
               Always renders saved strokes; captures pointer events only while
-              draw mode targets THIS node. */}
-      <div style={{
+              draw mode targets THIS node. Not on a rail: it has no pen. */}
+      {!isRailTile && <div style={{
         position: 'absolute',
         top: bodyTop,
         // On a deck face the picture under this is centre-CROPPED (cover)
@@ -1056,7 +1432,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
           height={Math.max(0, node.height - bodyTop)}
           strokes={node.strokes ?? []}
         />
-      </div>
+      </div>}
 
       {/* ── Text format toolbar (shown when text node is selected) ── */}
       {node.type === 'text' && isSelected && (
@@ -1071,8 +1447,10 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
               one still wins where they overlap. Rolodex tiles keep their
               locked aspect on all of them — the drawer still sets the shape,
               these only grow it. A deck face has none, like a stacked card
-              deck: resizing the face would leave its hidden tiles behind. */}
-      {!isDeckFace && ([
+              deck: resizing the face would leave its hidden tiles behind.
+              Nor does a rail (it sizes itself to its slots) or a card docked
+              on one (the rail decides its size). */}
+      {!isDeckFace && !isRailTile && !docked && ([
         ['n',  { top: 0, left: sideInset, right: sideInset, height: edgeZone }, 'ns-resize'],
         // The Rolodex's cabinet base IS its drawer pull, and it runs the full
         // width. A resize strip lying on top of it made the drawer a
@@ -1096,8 +1474,9 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
         />
       ))}
 
-      {/* ── Resize handle — large corner zone, present on all but a deck face ── */}
-      {!isDeckFace && <div
+      {/* ── Resize handle — large corner zone, present on all but a deck
+              face, a rail and a docked card ── */}
+      {!isDeckFace && !isRailTile && !docked && <div
         data-resize="se"
         style={{
           position: 'absolute', bottom: 0, right: 0,
@@ -1171,12 +1550,43 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
               ] : menuCluster.length >= 2 ? [
                 { label: 'Stack touching tiles', icon: '📚', action: () => { toggleTileDeck(); setNodeMenu(null) } },
               ] : []),
+              // Loop strip: empty its results tray. The files stay on disk;
+              // only the tiles go (clearRailTray), in one undo step.
+              ...(isRailTile ? [
+                { label: trayCount > 0 ? `Clear results (${trayCount})` : 'Clear results', icon: '×',
+                  action: () => {
+                    if (trayCount > 0) {
+                      useUndoCoordinator.getState().checkpoint()
+                      useFreeNodeStore.getState().clearRailTray(id)
+                    }
+                    setNodeMenu(null)
+                  } },
+              ] : []),
+              // A docked card's twin of pulling it out of its column. It is
+              // set down just under the rail, at its column — left where the
+              // rail had it, it would look as if it were still docked.
+              ...(docked ? [
+                { label: 'Take off the strip', icon: '↑',
+                  action: () => {
+                    const fns = useFreeNodeStore.getState()
+                    const cur = fns.nodes[id]
+                    const rail = cur?.railDock ? fns.nodes[cur.railDock.railId] : undefined
+                    useUndoCoordinator.getState().checkpoint()
+                    fns.undockFromRail(id)
+                    if (cur && rail) {
+                      fns.updateFreeNode(id, { x: cur.x, y: rail.y + rail.height + RAIL_GEOM.gap * (rail.rail?.unit ?? 1) })
+                    }
+                    setNodeMenu(null)
+                  } },
+              ] : []),
               // The ONLY placement gesture. Dragging a pinned panel "off
               // the canvas" deliberately does NOT unpin — a mode should
               // never change by accident during a move. Not for a deck
               // face, as card decks do not pin: the tiles hidden behind
-              // it would stay on the canvas.
-              ...(isDeckFace ? [] : [{ label: node.pin ? 'Drop on canvas' : 'Pin to screen',
+              // it would stay on the canvas. Not for a loop strip or a card
+              // on one either (v1): a pinned rail would leave its cards on
+              // the canvas, and a pinned card would leave its column.
+              ...(isDeckFace || isRailTile || docked ? [] : [{ label: node.pin ? 'Drop on canvas' : 'Pin to screen',
                 icon: node.pin ? '📤' : '📌',
                 action: () => {
                   const cs = useCanvasStore.getState()
@@ -1194,8 +1604,9 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
                     setNodeMenu(null)
                   } },
               ] : []),
-              // On a face this deletes the whole deck (deleteFreeNode), so it says so.
-              { label: isDeckFace ? 'Delete deck' : 'Delete', icon: '🗑️', danger: true, action: () => { useUndoCoordinator.getState().checkpoint(); deleteFreeNode(id); setNodeMenu(null) } },
+              // On a face this deletes the whole deck (deleteFreeNode), so it
+              // says so; a rail likewise takes every card docked on it.
+              { label: isRailTile ? 'Delete strip' : isDeckFace ? 'Delete deck' : 'Delete', icon: '🗑️', danger: true, action: () => { useUndoCoordinator.getState().checkpoint(); deleteFreeNode(id); setNodeMenu(null) } },
               ...fileItems,
             ].map(item => (
               <React.Fragment key={item.label}>

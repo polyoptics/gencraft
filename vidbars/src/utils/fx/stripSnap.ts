@@ -6,11 +6,21 @@
 // Collapsed tile decks: a hidden member is not on the canvas, so it is
 // neither a target nor in the way. A face IS a strip tile whatever its own
 // type — it reads as its whole deck (a collapsed strip, say, behind a note).
+//
+// Loop strips (utils/rail): a card docked on a rail is not a strip tile —
+// lining up against one would put the new card ON the rail, where the rail
+// lays it out over whatever the snap chose — so docked cards are never
+// targets. Nor are they separately in the way: they lie inside their rail's
+// box, and the RAIL is in the way, like any tile that is not a strip tile
+// (a card never snaps into a slot that would land on a rail). A rail, or a
+// card on one, being let go never snaps here at all: docking is the rail's
+// gesture (FreeNode docks it before it would get this far).
 
 import type { FreeNodeData } from '../../store/freeNodeStore'
 import type { ViewportWindow3D } from '../../store/viewport3dStore'
 import { magnetRadiusForZoom, rectsTouch, viewportVisualRect, type Rect } from '../viewportDocking'
 import { tileDeckIndex } from '../tileDecks'
+import { isDocked } from '../rail'
 
 const STRIP_TYPES = new Set(['image', 'video', 'effect'])
 
@@ -23,9 +33,11 @@ export function snapToStrip(
   // A little more generous than the Viewer magnet: lining cards up in a
   // row is the whole gesture here.
   const r = magnetRadiusForZoom(zoom) * 1.5
+  if (n.type === 'rail' || isDocked(n, nodes)) return null
   const { faces, hidden } = tileDeckIndex(nodes)
   const isStripTile = (o: FreeNodeData) => STRIP_TYPES.has(o.type) || faces.has(o.id)
-  const others = Object.values(nodes).filter(o => o.id !== n.id && !o.pin && !hidden.has(o.id))
+  const others = Object.values(nodes).filter(o =>
+    o.id !== n.id && !o.pin && !hidden.has(o.id) && !isDocked(o, nodes))
   const wins = Object.values(windows).filter(w => !w.pin).map(w => viewportVisualRect(w, zoom))
   const targets: Rect[] = [...others.filter(isStripTile), ...wins]
 

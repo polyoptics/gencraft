@@ -14,6 +14,8 @@ import { useLinkingStore } from './store/linkingStore'
 import { usePinTravelStore } from './store/pinTravelStore'
 import { useContextSheetStore } from './store/contextSheetStore'
 import { useFxStore } from './store/fxStore'
+import { useRailRunStore } from './store/railRunStore'
+import { useRailUiStore } from './store/railUiStore'
 
 // Expose stores for debugging. Anything you want to OBSERVE has to be here:
 // reaching a store through a dynamic import gets a second copy of the module
@@ -23,6 +25,8 @@ import { useFxStore } from './store/fxStore'
   useBoardsStore, useCanvasStore, useFreeNodeStore, useUserTemplateStore,
   useViewport3DStore, useMagnetPreviewStore, usePosterMapStore,
   useLinkDragStore, useLinkingStore, usePinTravelStore, useContextSheetStore, useFxStore,
+  // Loop strips: run progress + live preview, and the drag's drop preview.
+  useRailRunStore, useRailUiStore,
 }
 
 createRoot(document.getElementById('root')!).render(
