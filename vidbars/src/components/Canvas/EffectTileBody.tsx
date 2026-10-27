@@ -17,7 +17,7 @@
 // each control that edits takes its own. Anywhere else on the face moves
 // the card.
 
-import React, { useRef, useState } from 'react'
+import React, { useState } from 'react'
 import type { FreeNodeData } from '../../store/freeNodeStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useFxStore } from '../../store/fxStore'
@@ -37,12 +37,8 @@ const FACE_GROUND = '#15161f'
  *  takes u from its height instead, so its rows still fit. */
 const FACE_HEIGHT_U = 128
 
-/** A second press on the same row within this long, and this close, is the
- *  second half of a double-click (Windows' defaults): it neither jumps the
- *  value nor takes a checkpoint, so the reset that follows undoes in ONE
- *  step, back to before the first press. */
-const DOUBLE_MS = 500
-const DOUBLE_PX = 4
+/** The name picker's extra entry: not an effect, an action. */
+const RESET_ALL = '__reset_all'
 
 /** Slider rows and the name sit above the tile's edge-resize strips (z 19
  *  in FreeNode) — on a 5:7 card those strips would otherwise eat the ends
@@ -105,7 +101,8 @@ export const EffectTileBody: React.FC<{
   const [dragKey, setDragKey] = useState<string | null>(null)
   /** Keyboard focus on the (invisible) effect picker — underlines the name. */
   const [kindFocus, setKindFocus] = useState(false)
-  const lastPress = useRef<{ key: string; t: number; x: number; y: number; count: number } | null>(null)
+  /** The row under the pointer — shows its ↺ when the value is off default. */
+  const [hoverKey, setHoverKey] = useState<string | null>(null)
 
   // Edits read the node fresh: a slider drag writes many times between two
   // renders, and a stale closure would drop whatever landed in between.
@@ -121,15 +118,27 @@ export const EffectTileBody: React.FC<{
     updateFreeNode(id, { effect: { kind: cur.kind, params: { ...cur.stored, [key]: v } } })
   }
   // Reset drops the override rather than writing the default, so the value
-  // follows the effect's default if that is ever retuned.
+  // follows the effect's default if that is ever retuned. One undo step,
+  // and none at all when there is nothing to reset.
   const resetParam = (key: string) => {
     const cur = paramsNow()
     if (!cur?.stored || !(key in cur.stored)) return
+    checkpoint()
     const rest = { ...cur.stored }
     delete rest[key]
     updateFreeNode(id, { effect: { kind: cur.kind, params: rest } })
   }
+  /** Every value back to the effect's default, as one undo step. */
+  const resetAll = () => {
+    const cur = paramsNow()
+    if (!cur?.stored || Object.keys(cur.stored).length === 0) return
+    checkpoint()
+    updateFreeNode(id, { effect: { kind: cur.kind, params: {} } })
+  }
+  /** Anything moved off its default — what Reset all would undo. */
+  const anyChanged = def.params.some(p => params[p.key] !== p.default)
   const setKind = (k: EffectKind) => {
+    if ((k as string) === RESET_ALL) { resetAll(); return }
     checkpoint()
     updateFreeNode(id, { effect: { kind: k, params: {} }, label: EFFECTS[k].label })
   }
@@ -140,9 +149,10 @@ export const EffectTileBody: React.FC<{
 
   // A strip with no picture processes nothing, which reads the same as no
   // strip at all — so it gets the same hint, and its "no picture" error
-  // would only repeat it.
+  // would only repeat it. Not on a loop strip (utils/rail): there the card
+  // takes its pictures from the strip's columns, and is never pushed.
   const hasPicture = !!strip?.items.some(it => it.kind === 'source')
-  const hint = hasPicture ? null : 'Push against a picture'
+  const hint = hasPicture || node.railDock ? null : 'Push against a picture'
   const error = hasPicture ? strip?.result?.error ?? null : null
 
   return (
@@ -220,6 +230,11 @@ export const EffectTileBody: React.FC<{
           }}
         >
           {EFFECT_ORDER.map(k => <option key={k} value={k}>{EFFECTS[k].glyph}  {EFFECTS[k].label}{EFFECTS[k].blend ? ' (mixes next picture)' : ''}</option>)}
+          {/* An action, not an effect: picking it resets every value and
+              leaves the effect as it was. Here rather than on the face, so
+              the face never grows or shrinks a row. */}
+          <option disabled value="">──────────</option>
+          <option value={RESET_ALL} disabled={!anyChanged}>↺  Reset all settings</option>
         </select>
       </div>
       {def.blend && (
@@ -248,24 +263,17 @@ export const EffectTileBody: React.FC<{
               aria-valuemax={p.max}
               aria-valuenow={v}
               aria-valuetext={formatValue(p, v)}
-              title={`${p.label}: drag to set, double-click for ${formatValue(p, p.default)}`}
+              title={`${p.label}: drag to set · Alt+click or ↺ to reset to ${formatValue(p, p.default)} (the tick)`}
+              onPointerEnter={() => setHoverKey(p.key)}
+              onPointerLeave={() => setHoverKey(k => (k === p.key ? null : k))}
               onPointerDown={e => {
                 // Other buttons fall through: a middle-drag over a row still
                 // pans the canvas, as it does anywhere else on the tile.
                 if (e.button !== 0) return
                 e.stopPropagation()
-                const now = performance.now()
-                const prev = lastPress.current
-                // Count presses the way the platform does: one close in time
-                // and place to the press before continues the run. Only the
-                // run's SECOND press belongs to the double-click — dblclick
-                // fires on that one alone — so a third press right after a
-                // reset starts a fresh drag instead of being swallowed too.
-                const count = prev?.key === p.key && now - prev.t < DOUBLE_MS &&
-                  Math.abs(e.clientX - prev.x) <= DOUBLE_PX && Math.abs(e.clientY - prev.y) <= DOUBLE_PX
-                  ? prev.count + 1 : 1
-                lastPress.current = { key: p.key, t: now, x: e.clientX, y: e.clientY, count }
-                if (count === 2) return
+                // Alt+click resets it, and only that: the press never moves
+                // the value first, so the reset is the one undo step.
+                if (e.altKey) { e.preventDefault(); resetParam(p.key); return }
                 // One checkpoint per press, not per tick.
                 checkpoint()
                 e.currentTarget.setPointerCapture(e.pointerId)
@@ -280,10 +288,9 @@ export const EffectTileBody: React.FC<{
                 if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId)
               }}
               onLostPointerCapture={() => setDragKey(null)}
-              // No checkpoint of its own: the double-click's first press took
-              // one before it jumped the value, so a single undo restores
-              // the value from before the whole gesture.
-              onDoubleClick={e => { e.stopPropagation(); resetParam(p.key) }}
+              // Not a reset: the first click of a double-click has already
+              // moved the value. Only kept from reaching the tile.
+              onDoubleClick={stop}
               onKeyDown={e => {
                 const cur = paramsNow()
                 if (!cur) return
@@ -314,9 +321,37 @@ export const EffectTileBody: React.FC<{
               }}
             >
               <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${frac * 100}%`, background: `${def.color}8c`, pointerEvents: 'none' }} />
-              <div style={{ position: 'absolute', top: '24%', bottom: '24%', left: `${defFrac * 100}%`, width: 0.5 * u, marginLeft: -0.25 * u, background: 'rgba(255,255,255,0.3)', pointerEvents: 'none' }} />
+              {/* The default: a faint tick, so where "reset" goes is always
+                  in sight. */}
+              <div style={{ position: 'absolute', top: '18%', bottom: '18%', left: `${defFrac * 100}%`, width: 0.6 * u, marginLeft: -0.3 * u, background: 'rgba(255,255,255,0.42)', borderRadius: 0.3 * u, pointerEvents: 'none' }} />
               <span style={{ position: 'relative', flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: 0.92 }}>{p.label}</span>
               <span style={{ position: 'relative', flex: '0 0 auto', marginLeft: 2 * u, fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{formatValue(p, v)}</span>
+              {/* ↺ in a slot that is always there, so showing it on hover
+                  moves nothing. Only when the value is off its default.
+                  Its own press: the slider underneath never sees it. */}
+              {(() => {
+                const show = hoverKey === p.key && v !== p.default
+                return (
+                  <span
+                    data-effect-reset={p.key}
+                    role="button"
+                    aria-label={`Reset ${p.label}`}
+                    title={`Reset to ${formatValue(p, p.default)}`}
+                    onPointerDown={e => {
+                      if (e.button !== 0) return
+                      e.stopPropagation(); e.preventDefault()
+                      if (show) resetParam(p.key)
+                    }}
+                    onDoubleClick={stop}
+                    style={{
+                      position: 'relative', flex: '0 0 auto', width: 7 * u, marginLeft: 1.5 * u, marginRight: -1.5 * u,
+                      textAlign: 'center', fontSize: 8 * u, lineHeight: 1, fontWeight: 700,
+                      opacity: show ? 0.9 : 0, cursor: show ? 'pointer' : 'ew-resize',
+                      pointerEvents: show ? 'auto' : 'none', transition: 'opacity 120ms',
+                    }}
+                  >↺</span>
+                )
+              })()}
             </div>
           )
         })}
