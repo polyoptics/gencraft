@@ -39,6 +39,8 @@ import { runChain, type ChainItem, type ChainResult } from '../utils/fx/chain'
 import { effectKindOf } from '../utils/fx/effects'
 import { tileDeckIndex, tileDeckMembers } from '../utils/tileDecks'
 import { isDocked } from '../utils/rail'
+import { stripCards, type StripCard } from '../utils/fx/cardStrips'
+import { useBoardsStore } from '../store/boardsStore'
 
 /** Working resolution for the live result (a saved result renders full). */
 export const LIVE_SIDE = 1400
@@ -99,6 +101,10 @@ export function computeStrips(
   windows: Record<string, import('../store/viewport3dStore').ViewportWindow3D>,
   zoom: number,
   posters: Record<string, string> = usePosterMapStore.getState().map,
+  /** Cards that can head a strip (utils/fx/cardStrips): each joins as a
+   *  stand-in tile with its face picture as the source. A function, so
+   *  it is only worked out once there is an effect card at all. */
+  cards: () => StripCard[] = () => stripCards(),
 ): Record<string, FxStrip> {
   // No effect card, no strip: skip the pairwise touch test entirely. This
   // runs on every tile drag frame and zoom tick. (A card docked on a loop
@@ -108,7 +114,7 @@ export function computeStrips(
   // for a deck's face — those of the members on its open strip, in deck
   // order (faceItems).
   const { faces, hidden } = tileDeckIndex(nodes)
-  const tiles: { n: FreeNodeData; items: ChainItem[] }[] = []
+  const tiles: { n: { id: string; x: number; y: number; width: number; height: number }; items: ChainItem[] }[] = []
   for (const n of Object.values(nodes)) {
     // A pinned face has taken its deck off the canvas with it. A card on a
     // loop strip — lifted mid-drag included, until its release decides —
@@ -119,6 +125,8 @@ export function computeStrips(
       : [stripItem(n, posters)].filter((i): i is ChainItem => i !== null)
     if (items.length) tiles.push({ n, items })
   }
+  // A card stands in as its footprint, reading as its face picture.
+  for (const c of cards()) tiles.push({ n: c.rect, items: [c.item] })
   const parent = tiles.map((_, i) => i)
   const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])))
   for (let i = 0; i < tiles.length; i++) {
@@ -165,13 +173,17 @@ export function useFxStrips(): void {
   const zoom = useCanvasStore(s => s.zoom)
   // A video's poster can land (or be regrown) after its tile is lined up.
   const posters = usePosterMapStore(s => s.map)
+  // Cards head strips too (utils/fx/cardStrips): moving one, or changing
+  // the picture its face shows, changes its strip.
+  const groups = useBoardsStore(s => s.groups)
+  const boards = useBoardsStore(s => s.boards)
   const lastShape = useRef('')
   const ranWith = useRef(new Map<string, string>())
   const timers = useRef(new Map<string, number>())
   const tokens = useRef(new Map<string, number>())
 
   useEffect(() => {
-    const next = computeStrips(nodes, windows, zoom, posters)
+    const next = computeStrips(nodes, windows, zoom, posters, () => stripCards(groups, boards))
     // Tiles move on every drag frame; only publish when a strip's makeup
     // or its Viewer actually changed, so cards do not re-render per frame.
     // memberIds too: collapsing a deck behind a face that brings no item
@@ -219,5 +231,5 @@ export function useFxStrips(): void {
       window.clearTimeout(timers.current.get(k))
       timers.current.delete(k)
     }
-  }, [nodes, windows, zoom, posters])
+  }, [nodes, windows, zoom, posters, groups, boards])
 }

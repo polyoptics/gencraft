@@ -28,6 +28,8 @@ import { FreeCanvas } from '../Canvas/FreeCanvas'
 import { Viewport3DLayer } from '../Viewport3D/Viewport3DLayer'
 import { NLETimelineHeader, NLE_HEADER_CANVAS_H, headerExtend as computeHeaderExtend, headerScreenH, overviewScale } from '../NLE/NLETimelineHeader'
 import { HeroImageLayer } from './HeroImageLayer'
+import { useFxStore } from '../../store/fxStore'
+import { cardStripId } from '../../utils/fx/cardStrips'
 import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
 import { getFirstImageUrl } from '../../types/bar'
 import { groupFaceSource, groupImageSources, deckFaceSources, deckImageSources, gripSource } from '../../utils/mediaSources'
@@ -615,6 +617,18 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
     }
     return null
   }, [group.cardHeroImage, group.boardIds, boards])
+  // Effects snapped to the card (utils/fx/cardStrips): the face shows its
+  // picture through them, the way a picture tile does. The result goes in
+  // as the hero's own image, so the face's crop, zoom and flips apply to
+  // it unchanged. Re-encoded only when the strip's result changes — small,
+  // for a face — never per pan or zoom frame.
+  const fxId = cardStripId(group.id)
+  const fxKey = useFxStore(s => s.sources[fxId])
+  const fxStrip = useFxStore(s => (fxKey ? s.strips[fxKey] : undefined))
+  const fxOff = useFxStore(s => !!s.bypass[fxId])
+  const fxCanvas = fxStrip?.result?.outputs.find(o => o.sourceId === fxId)?.canvas ?? null
+  const fxFace = useMemo(() => (fxCanvas ? faceDataUrl(fxCanvas) : null), [fxCanvas])
+  const shownHero = fxFace && !fxOff ? fxFace : heroImage
   // Memoised: when the face is not a file this walks every bar, and the
   // card re-renders on every pan and zoom frame.
   const gripUrl = useMemo(() => cardGripUrl(group, boards), [group, boards])
@@ -706,7 +720,27 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
           el?.dispatchEvent(new CustomEvent('start-edit', { bubbles: false }))
         }}
       >
-        {heroImage && <HeroImageLayer heroImage={heroImage} transform={group.cardHeroTransform} />}
+        {shownHero && <HeroImageLayer heroImage={shownHero} transform={group.cardHeroTransform} />}
+        {/* Effects on this card: flip to the original and back. */}
+        {fxStrip && fxFace && (
+          <button
+            type="button"
+            data-card-fx-toggle
+            title={fxOff ? 'Showing the original — click to show the effects' : 'Showing the effects — click for the original'}
+            onPointerDown={e => { if (e.button === 0) e.stopPropagation() }}
+            onDoubleClick={e => e.stopPropagation()}
+            onClick={e => { e.stopPropagation(); useFxStore.getState().setBypass(fxId, !fxOff) }}
+            style={{
+              position: 'absolute', zIndex: 3, right: 8, bottom: 6,
+              fontSize: 10 * overviewScale(zoom), lineHeight: 1.25, fontWeight: 700, fontFamily: 'inherit',
+              padding: '1px 7px', borderRadius: 10, cursor: 'pointer',
+              background: fxOff ? 'rgba(12,13,20,0.55)' : 'rgba(12,13,20,0.72)',
+              color: fxOff ? 'rgba(255,255,255,0.6)' : 'rgba(255,255,255,0.92)',
+              border: `1px solid rgba(255,255,255,${fxOff ? 0.22 : 0.38})`,
+              textShadow: '0 1px 2px rgba(0,0,0,0.6)', whiteSpace: 'nowrap',
+            }}
+          >{fxOff ? 'original' : 'fx'}</button>
+        )}
         {/* Content area — offset below header extension */}
         <div style={{ position: 'absolute', top: headerPad, left: 0, right: 0, bottom: 0, overflow: 'hidden', borderRadius: '0 0 12px 12px' }}>
           <GroupCardText groupId={group.id} onCropImage={() => setIsEditingHero(true)} heroImage={heroImage} />
@@ -2727,6 +2761,22 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
 }
 
 const FannedDeckOverlay = React.memo(FannedDeckOverlayInner)
+
+/** A card face's copy of its effect result: a JPEG no larger than a face
+ *  is ever drawn (a card face, not a full-size render). Generated media is
+ *  a data: url (CLAUDE.md, invariant 6). */
+function faceDataUrl(src: HTMLCanvasElement): string | null {
+  const MAX = 1024
+  const k = Math.min(1, MAX / Math.max(src.width, src.height, 1))
+  const c = document.createElement('canvas')
+  c.width = Math.max(1, Math.round(src.width * k))
+  c.height = Math.max(1, Math.round(src.height * k))
+  const g = c.getContext('2d')
+  if (!g) return null
+  g.drawImage(src, 0, 0, c.width, c.height)
+  const url = c.toDataURL('image/jpeg', 0.9)
+  return url.length > 64 ? url : null
+}
 
 /** Compute card screen rect using the same geometry as GroupCard */
 export function cardScreenRect(g: ProjectGroup, boards: Record<string, import('../../store/boardsStore').BoardData>, pan: { x: number; y: number }, zoom: number) {

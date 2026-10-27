@@ -15,12 +15,19 @@
 // (a card never snaps into a slot that would land on a rail). A rail, or a
 // card on one, being let go never snaps here at all: docking is the rail's
 // gesture (FreeNode docks it before it would get this far).
+//
+// Cards (utils/fx/cardStrips): a card with a picture on its face is a
+// target too, the way a picture tile is — an effect let go by its edge
+// lines up flush and the card reads as the strip's picture. Only an
+// EFFECT card snaps to a card: a picture tile or a video beside a card is
+// just lying there.
 
 import type { FreeNodeData } from '../../store/freeNodeStore'
 import type { ViewportWindow3D } from '../../store/viewport3dStore'
 import { magnetRadiusForZoom, rectsTouch, viewportVisualRect, type Rect } from '../viewportDocking'
 import { tileDeckIndex } from '../tileDecks'
 import { isDocked } from '../rail'
+import { stripCards } from './cardStrips'
 
 const STRIP_TYPES = new Set(['image', 'video', 'effect'])
 
@@ -39,7 +46,8 @@ export function snapToStrip(
   const others = Object.values(nodes).filter(o =>
     o.id !== n.id && !o.pin && !hidden.has(o.id) && !isDocked(o, nodes))
   const wins = Object.values(windows).filter(w => !w.pin).map(w => viewportVisualRect(w, zoom))
-  const targets: Rect[] = [...others.filter(isStripTile), ...wins]
+  const cards: Rect[] = n.type === 'effect' ? stripCards().map(c => c.rect) : []
+  const targets: Rect[] = [...others.filter(isStripTile), ...wins, ...cards]
 
   // Where n can go at (x, y), or null when that slot is taken. Landing ON
   // a card would tie the two in read order while only one shows. Going
@@ -73,7 +81,8 @@ export function snapToStrip(
       if (x !== null) best = { x, y: c.y, d: dRight }
     }
     const dLeft = Math.abs(n.x + n.width - c.x)          // n sits left of c
-    if (dLeft <= r && (!best || dLeft < best.d)) {
+    // Never left of a card: an effect ahead of the picture reads as none.
+    if (dLeft <= r && (!best || dLeft < best.d) && !cards.includes(c)) {
       const x = slotX(c.x - n.width, c.y, false, c)
       if (x !== null) best = { x, y: c.y, d: dLeft }
     }
