@@ -105,9 +105,10 @@ export interface FreeNodeData {
    *  The rail decides this tile's x/y/size while it is docked (the rail sync
    *  host writes them); undocking restores the size it had. */
   railDock?: import('../utils/rail').RailDock
-  /** A CARD held by this tile while it sits on a loop strip: its group and
-   *  every block, off the canvas. The tile wears its face (utils/railCards). */
-  stashedCard?: import('../utils/railCards').StashedCard
+  /** A STAND-IN for a canvas card (or the deck it fronts) on a loop strip:
+   *  never drawn, it holds the card's place in its column, and the card is
+   *  moved to it (utils/railCards, useRailSync). */
+  cardRef?: string
   /** SCREEN-PINNED instances. Present ⇒ this node is rendered by
    *  <PinLayer/> OUTSIDE the world transform and is SKIPPED by
    *  FreeCanvas. Absent ⇒ canvas-placed. That is the whole model.

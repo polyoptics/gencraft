@@ -34,6 +34,7 @@ export const FreeCanvas: React.FC = React.memo(() => {
       const n = nodes[id]
       if (!n || n.pin) return false     // pinned ⇒ PinLayer renders it
       if (deckIdx.hidden.has(id)) return false   // behind a deck face
+      if (n.cardRef) return false        // a card's stand-in: the card is drawn
       return intersectsViewport(vp, n.x, n.y, n.width, n.height)
     })
   }, [nodeIds, nodes, vp, deckIdx])

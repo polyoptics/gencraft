@@ -28,7 +28,6 @@ import { collectSubtree } from './utils/barOps'
 import { expandTileIds } from './utils/tileDecks'
 import { isRail } from './utils/rail'
 import { stackedDeckMembers, stepDeckFace, stepFace } from './utils/cardGrid'
-import { stepStashFace } from './utils/railCards'
 
 /** Hosts useFxStrips, which subscribes to every tile, Viewer and zoom
  *  change. Called in App's body, each drag frame and wheel tick would
@@ -307,12 +306,6 @@ function useKeyboardCardFace() {
       const bs = useBoardsStore.getState()
       const sel = bs.selectedGroupIds
       const tiles = useFreeNodeStore.getState().selectedIds
-      // A card held on a loop strip (utils/railCards) steps the same way.
-      if (sel.length === 0 && tiles.length === 1 && useFreeNodeStore.getState().nodes[tiles[0]]?.stashedCard) {
-        e.preventDefault()
-        stepStashFace(tiles[0], dir)
-        return
-      }
       if (sel.length !== 1 || tiles.length > 0) return
       e.preventDefault()
       // A closed deck steps through every card in it.

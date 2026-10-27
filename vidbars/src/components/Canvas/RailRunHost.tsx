@@ -21,7 +21,8 @@ import { usePosterMapStore } from '../../three/posterService'
 import { isRail, railMembers } from '../../utils/rail'
 import { runChain, type ChainResult } from '../../utils/fx/chain'
 import { FX_REF_SIDE } from '../../utils/fx/effects'
-import { railComboAt } from '../../utils/fx/railChain'
+import { railComboAt, railFaceCombo } from '../../utils/fx/railChain'
+import { useBoardsStore } from '../../store/boardsStore'
 import { isRailRunning, unreadable } from '../../utils/fx/railRun'
 
 /** Quiet time after the last change before the preview re-renders — a
@@ -52,7 +53,8 @@ export function RailRunHost(): null {
         if (!isRail(rail)) continue
         const railId = rail.id
         seen.add(railId)
-        const combo = railComboAt(rail, members.get(railId), 0, posters)
+        // What the face-up card shows: step it and the preview follows.
+        const combo = railComboAt(rail, members.get(railId), railFaceCombo(rail, members.get(railId)), posters)
         const sig = combo ? JSON.stringify(combo.items) : ''
         if (sigs.get(railId) === sig) continue
         sigs.set(railId, sig)
@@ -120,10 +122,13 @@ export function RailRunHost(): null {
     const offNodes = useFreeNodeStore.subscribe((s, prev) => { if (s.nodes !== prev.nodes) check() })
     // A video's poster can land after its tile was docked.
     const offPosters = usePosterMapStore.subscribe((s, prev) => { if (s.map !== prev.map) check() })
+    // A docked card's face is the card's: stepped, the preview follows.
+    const offCards = useBoardsStore.subscribe((s, prev) => { if (s.groups !== prev.groups) check() })
     return () => {
       dead = true
       offNodes()
       offPosters()
+      offCards()
       for (const t of timers.values()) window.clearTimeout(t)
     }
   }, [])

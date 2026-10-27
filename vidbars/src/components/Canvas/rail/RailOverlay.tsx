@@ -108,8 +108,9 @@ export const RailOverlay: React.FC<{
   let ghostCard: React.ReactNode = null
   if (ghost && ghost.canvas.width > 0 && ghost.canvas.height > 0) {
     const tray = L.tray
-    const w = tray.width
     const tucked = tray.cards.length > 0
+    // Tucked, as wide as the card it tucks under (a card keeps its own size).
+    const w = tucked ? Math.min(tray.width, tray.cards[tray.cards.length - 1].width) : tray.width
     // dockedHeight's clamp: the result tile will be laid out the same way.
     const aspect = Math.min(1.8, Math.max(0.35, ghost.canvas.height / ghost.canvas.width))
     ghostCard = (

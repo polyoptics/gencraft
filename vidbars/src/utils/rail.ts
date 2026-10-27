@@ -170,7 +170,10 @@ function dockedHeight(n: FreeNodeData, w: number): number {
  *  column. */
 function cascade(cards: FreeNodeData[], x: number, top: number, w: number, u: number): RailCardBox[] {
   const g = RAIL_GEOM
-  const hs = cards.map(c => dockedHeight(c, w))
+  // A card (a stand-in, utils/railCards) keeps its own size: it is the
+  // canvas card, drawn as it is anywhere.
+  const own = (c: FreeNodeData) => !!c.cardRef && (c.railDock?.prevW ?? 0) > 0
+  const hs = cards.map(c => own(c) ? c.railDock!.prevH ?? c.height : dockedHeight(c, w))
   const peeks = hs.map(h => h * g.peekFrac)
   if (cards.length > 1) {
     const natural = peeks.slice(0, -1).reduce((a, b) => a + b, 0) + hs[hs.length - 1]
@@ -185,7 +188,7 @@ function cascade(cards: FreeNodeData[], x: number, top: number, w: number, u: nu
   const out: RailCardBox[] = []
   let y = top
   cards.forEach((c, i) => {
-    out.push({ id: c.id, order: i, x, y, width: w, height: hs[i] })
+    out.push({ id: c.id, order: i, x, y, width: own(c) ? c.railDock!.prevW! : w, height: hs[i] })
     y += peeks[i]
   })
   return out

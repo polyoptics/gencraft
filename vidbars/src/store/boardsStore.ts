@@ -113,6 +113,9 @@ export interface ProjectGroup {
    *  (utils/cardGrid stepDeckFace). That card's own faceBoardId says which
    *  of its blocks. Absent, or no longer a member: the anchor itself. */
   deckFaceCard?: string
+  /** A loop strip's result card: the card it was made from. They step
+   *  through their pictures together (utils/railCards followFaces). */
+  railSource?: string
   /** An EFFECT card (utils/effectCards): its face is the effect's sliders,
    *  and lined up to the right of a picture card it processes that card's
    *  face. A real card otherwise — it moves, stacks and fans with a deck. */

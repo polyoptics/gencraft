@@ -33,7 +33,7 @@ import { cardStripId } from '../../utils/fx/cardStrips'
 import { cardHitAt } from '../../utils/cardContent'
 import { cardFaceMedia, deckFaceSteps, faceSteps, mergeCardsInto, stepDeckFace, stepFace } from '../../utils/cardGrid'
 import { drawnRect, effectChain, snapEffectCard } from '../../utils/effectCards'
-import { cardRailTarget, dockCardsOnRail, previewCardRail } from '../../utils/railCards'
+import { cardRailTarget, dockCardsOnRail, endDockedDrag, liftDockedCards, previewCardRail } from '../../utils/railCards'
 import { EffectTileBody } from '../Canvas/EffectTileBody'
 import { knownKind } from '../../utils/fx/effects'
 import type { FreeNodeData } from '../../store/freeNodeStore'
@@ -475,7 +475,11 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
       .map(g => groupSlot(g.id, g.boardIds, bs0.boards, g.originX, g.originY, computeGroupLayout(g.boardIds, bs0.boards)))
       .filter(Boolean) as import('../../utils/nlePush').GroupSlot[]
 
+    // A card on a loop strip is lifted off its column as the drag starts
+    // (utils/railCards), so the strip stops holding it in place.
+    let railLifted = false
     const onMove = (ev: PointerEvent) => {
+      if (!railLifted) { railLifted = true; liftDockedCards(draggingIds) }
       // A PINNED card lives in screen space: its position IS the pin anchor,
       // while originX/originY are the home it returns to. Moving the origin
       // would slide it away from its own anchor — and since the frozen camera
@@ -529,10 +533,10 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
       window.removeEventListener('pointerup', onUp)
       setIsDragging(false)
       // Let go over a loop strip (utils/railCards): picture cards go into
-      // the column as themselves, left to right as they lay; effect cards
-      // put a copy of their effect into the row and stay. Whatever does
-      // not go on goes back where it was. The press took the checkpoint:
-      // one undo puts it all back.
+      // the column as themselves, left to right as they lay — the strip
+      // places them; effect cards put a copy of their effect into the row
+      // and go back where they were. The press took the checkpoint: one
+      // undo puts it all back.
       const railT = !group.pin && (dxAccum !== 0 || dyAccum !== 0) ? cardRailTarget(draggingIds, ev.clientX, ev.clientY) : null
       previewCardRail(null, group.id)
       if (railT) {
@@ -542,6 +546,8 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
         useMagnetPreviewStore.getState().setPreview(null)
         return
       }
+      // Off a strip: a docked card stays where it was let go.
+      endDockedDrag(draggingIds, dxAccum !== 0 || dyAccum !== 0)
       // Drop-on-ghost-slot return: if the card was released over a
       // [data-deck-slot-drop="<anchorId>:<cardId>"] element AND that cardId
       // matches this card, snap it back into the deck.
@@ -1347,7 +1353,10 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
       .map(g => groupSlot(g.id, g.boardIds, bs0.boards, g.originX, g.originY, computeGroupLayout(g.boardIds, bs0.boards)))
       .filter(Boolean) as import('../../utils/nlePush').GroupSlot[]
 
+    // A deck on a loop strip is lifted off its column as the drag starts.
+    let railLifted = false
     const onMove = (ev: PointerEvent) => {
+      if (!railLifted) { railLifted = true; liftDockedCards([deck.anchorGroupId]) }
       // Pinned deck: screen delta to the pin, exactly as a pinned single card
       // does. Moving the ORIGIN instead is invisible — the frozen camera is
       // solved FROM the origin, so it compensates and the deck appears stuck
@@ -1399,17 +1408,18 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
     const onUp = (ev: PointerEvent) => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
-      // A deck let go over a loop strip goes into the column as ONE deck
-      // (utils/railCards), front card first. One undo puts it back.
+      // A deck let go over a loop strip goes into the column as ONE deck,
+      // by its front card (utils/railCards). One undo puts it back.
       {
         const railT = (dxAccum !== 0 || dyAccum !== 0) ? cardRailTarget(allDragIds, ev.clientX, ev.clientY) : null
         previewCardRail(null, deck.anchorGroupId)
         if (railT) {
           useBoardsStore.getState().setGroupPosBatch(Array.from(initialOrigins, ([gid, o]) => ({ groupId: gid, originY: o.y, originX: o.x })))
-          dockCardsOnRail(allDragIds, railT, true)
+          dockCardsOnRail([deck.anchorGroupId], railT)
           useMagnetPreviewStore.getState().setPreview(null)
           return
         }
+        endDockedDrag([deck.anchorGroupId], dxAccum !== 0 || dyAccum !== 0)
       }
       // Drop-on-ghost-slot return for extracted sub-decks rendered as
       // StackedDeckCard: anchor might match a ghost slot on its former parent.
@@ -1971,7 +1981,12 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
       .filter(Boolean) as import('../../utils/nlePush').GroupSlot[]
 
     const onMove = (ev: PointerEvent) => {
-      if (!fanMoved && Math.abs(ev.clientX - fanStartX) + Math.abs(ev.clientY - fanStartY) > 5) fanMoved = true
+      if (!fanMoved && Math.abs(ev.clientX - fanStartX) + Math.abs(ev.clientY - fanStartY) > 5) {
+        fanMoved = true
+        // A fan on a loop strip is lifted off its column (utils/railCards).
+        liftDockedCards([deck.anchorGroupId])
+      }
+      if (fanMoved) previewCardRail(cardRailTarget(allDragIds, ev.clientX, ev.clientY), deck.anchorGroupId)
       // Pinned fan: screen delta to the pin — see the stacked-deck handler.
       if (anchorGroup.pin) {
         const pdx = ev.clientX - lastX
@@ -2018,6 +2033,18 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
       if (!fanMoved) {
         useBoardsStore.getState().setDeckState(deck.memberIds, 'stacked')
         return
+      }
+      // Let go over a loop strip: the fan goes into the column as one deck,
+      // as a closed deck does; anywhere else it stays where it was let go.
+      {
+        const railT = cardRailTarget(allDragIds, ev.clientX, ev.clientY)
+        previewCardRail(null, deck.anchorGroupId)
+        if (railT) {
+          useBoardsStore.getState().setGroupPosBatch(Array.from(initialOrigins, ([gid, o]) => ({ groupId: gid, originY: o.y, originX: o.x })))
+          dockCardsOnRail([deck.anchorGroupId], railT)
+          return
+        }
+        endDockedDrag([deck.anchorGroupId], true)
       }
       // Drop-on-ghost-slot return for extracted fanned sub-decks.
       const els = document.elementsFromPoint(ev.clientX, ev.clientY)

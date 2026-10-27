@@ -27,7 +27,8 @@ import { useRailRunStore } from '../../store/railRunStore'
 import { onUndoRestore, useUndoCoordinator } from '../../store/undoCoordinator'
 import { usePosterMapStore } from '../../three/posterService'
 import { RAIL_GEOM, RAIL_TRAY, isRail, railMembers } from '../rail'
-import { landResultCard, unitCardName } from '../railCards'
+import { landResultCard, unitCardId } from '../railCards'
+import { useBoardsStore } from '../../store/boardsStore'
 import { diskFileUrl } from '../diskUrl'
 import { saveCanvasImage } from '../saveImage'
 import { loadImage, runChain, type ChainItem } from './chain'
@@ -179,7 +180,7 @@ export async function runRail(railId: string): Promise<void> {
   const flush = (): boolean => {
     const p = pending
     pending = null
-    return !p || landResultCard(railId, p.name, p.results)
+    return !p || landResultCard(railId, p.name, unitCardId(p.card), p.results)
   }
   const isGone = () => !isRail(useFreeNodeStore.getState().nodes[railId])
   const stopping = () => stopAsked.has(railId) || isGone()
@@ -205,7 +206,8 @@ export async function runRail(railId: string): Promise<void> {
         if (combo.subjectCard) {
           if (pending && pending.card !== combo.subjectCard && !flush()) { gone = true; break }
           if (!pending) {
-            pending = { card: combo.subjectCard, name: `${unitCardName(nodes, combo.subjectCard)} — ${railLabel}`, results: [] }
+            const input = useBoardsStore.getState().groups.find(g => g.id === unitCardId(combo.subjectCard!))
+            pending = { card: combo.subjectCard, name: `${input?.name || 'Card'} — ${railLabel}`, results: [] }
           }
           pending.results.push({ ...out, label: name })
           made++

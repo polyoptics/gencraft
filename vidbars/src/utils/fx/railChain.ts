@@ -128,6 +128,22 @@ function radixColumns(r: Reading): { step: Extract<Step, { kind: 'role' }>; used
   })
 }
 
+/** The combination the strip's live preview shows: the subject column's
+ *  face-up card as its face shows it — stepping a docked card to its third
+ *  picture previews the third result — with the first of each partner. */
+export function railFaceCombo(rail: FreeNodeData, members: Members): number {
+  const r = read(rail, members)
+  const cols = radixColumns(r)
+  if (cols.length === 0 || !r.subject) return 0
+  const docked = members?.get(r.subject.slot.id) ?? []
+  const face = docked[docked.length - 1]
+  if (!face) return 0
+  const unit = railUnits(face, 'pick')[0]
+  const at = unit ? cols[0].used.findIndex(u => u.id === unit.id) : -1
+  if (at < 0) return 0
+  return at * cols.slice(1).reduce((n, c) => n * c.radix, 1)
+}
+
 /** How many results a run makes: the product over the subject and partner
  *  columns ('each' → its card count, 'pick' → 1). 0 while the subject
  *  column is empty. */

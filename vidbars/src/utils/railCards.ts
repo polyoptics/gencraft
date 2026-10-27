@@ -1,21 +1,23 @@
 // railCards.ts — cards on a loop strip (utils/rail).
 //
-// A loop strip lays out and runs TILES. A card meets it as itself: a picture
-// card dragged onto a role column leaves the canvas and is held, whole —
-// its group and every block — by a docked tile that wears its face
-// (`stashedCard`). The strip cascades, reorders and picks it like any
-// picture. Its face still steps through its blocks (‹ ›, ←/→). Pulled off
-// the strip, it is the same card again, back on the canvas.
+// A card on a strip IS the canvas card: the same group, drawn by CardLayer
+// with its title band, frame, deck edges and < > stepping, behaving as it
+// does anywhere. The strip only decides where it sits. It does that through
+// a stand-in tile (`cardRef`): an invisible docked free node that the
+// strip lays out, cascades, reorders and picks like any picture, and that
+// useRailSync follows by moving the card — or a whole deck, by its front
+// card — to the stand-in's place.
 //
-// A closed deck docks as ONE item that stays a deck: its face steps through
-// every picture of every card, it fans out in place to look at its cards,
-// and pulled off it is the same deck.
+// Dragging a docked card lifts its stand-in (the column closes up); let go
+// on a column it docks there, anywhere else it stays where it was let go,
+// off the strip. A strip deleted, or its tray taken off, sets its cards
+// down on the canvas below it.
 //
 // For a run, a docked card counts as all of its pictures ('each': every
-// block, in its reading order) or as its face ('pick'): railUnits below is
-// what utils/fx/railChain reads. Results come back grouped by the card they
-// started from: one result card per input card, its pictures as blocks in
-// the same order (landResultCard).
+// block, in its reading order — a deck's, card by card) or as its face
+// ('pick'). Results come back grouped by the card they started from: one
+// result card per input card, its pictures as blocks in the same order
+// (landResultCard), stepped in step with it (followFaces).
 //
 // An effect card dragged onto the slot row puts a copy of its effect there,
 // settings and all, and stays where it was.
@@ -24,27 +26,13 @@ import { useBoardsStore, type BoardData, type ProjectGroup } from '../store/boar
 import { useCanvasStore } from '../store/canvasStore'
 import { useFreeNodeStore, type FreeNodeData, type FreeNodeType } from '../store/freeNodeStore'
 import { useRailUiStore } from '../store/railUiStore'
+import { expandWithNestedMembers } from '../hooks/useCardDecks'
 import { getMediaItems, type MediaItem } from '../types/bar'
-import { cardFaceSize, createMediaCard, gridOrder, layoutCardGrid } from './cardGrid'
+import { createMediaCard, deckFaceSteps, gridOrder, layoutCardGrid } from './cardGrid'
 import { drawnRect } from './effectCards'
 import { clientToCanvas } from './fx/createEffect'
 import { knownKind } from './fx/effects'
 import { RAIL_TRAY, isRail, railDropTarget, railLayout, railMembers, type RailDropTarget } from './rail'
-
-/** One card as it was on the canvas: its group and its blocks. */
-export interface HeldCard {
-  group: ProjectGroup
-  boards: BoardData[]
-}
-
-/** A card off the canvas, held by the tile that stands for it on a strip —
- *  or a closed DECK: `group` is its front card and `members` the rest, in
- *  deck order, every deck field kept, so it comes back the same deck. */
-export interface StashedCard extends HeldCard {
-  members?: HeldCard[]
-  /** A deck spread out in place to look at its cards — a view. */
-  fanned?: boolean
-}
 
 /** One picture: the card and block it is in, and what it shows. */
 export interface Entry { groupId: string; boardId: string; media: MediaItem; label: string }
@@ -75,110 +63,43 @@ export function cardEntries(g: ProjectGroup, boards: Record<string, BoardData>):
   return out
 }
 
-const boardsOf = (c: HeldCard) => Object.fromEntries(c.boards.map(b => [b.id, b]))
-
-/** The cards a tile holds, front first. */
-export const heldCards = (st: StashedCard): HeldCard[] => [st, ...(st.members ?? [])]
-
-/** One held card's pictures. */
-export const heldEntries = (c: HeldCard): Entry[] => cardEntries(c.group, boardsOf(c))
-
-/** The card a held deck's face shows (as on the canvas, utils/cardGrid
- *  deckFaceSteps): the one it was stepped to, else the front. */
-export function shownCard(st: StashedCard): HeldCard {
-  return st.members?.find(c => c.group.id === st.group.deckFaceCard) ?? st
+/** The cards of the deck `anchorId` fronts — closed or fanned — front first,
+ *  then as they lay before it closed. Just the card when it fronts none. */
+export function deckCards(anchorId: string, groups: ProjectGroup[]): string[] {
+  const anchor = groups.find(g => g.id === anchorId)
+  if (!anchor) return []
+  if (!anchor.deckState || anchor.deckState === 'open') return [anchorId]
+  const rest = groups.filter(g => g.id !== anchorId && g.deckAnchorId === anchorId && g.deckState && g.deckState !== 'open')
+    .sort((a, b) => ((a.deckOffsetX ?? 0) - (b.deckOffsetX ?? 0)) || ((a.deckOffsetY ?? 0) - (b.deckOffsetY ?? 0)))
+  return [anchorId, ...rest.map(g => g.id)]
 }
 
-/** Every picture a tile holds — a deck's, card by card in deck order — and
- *  which one its face is on. */
-export function stashSteps(st: StashedCard): { entries: Entry[]; index: number } {
-  const entries = heldCards(st).flatMap(heldEntries)
-  const card = shownCard(st)
-  const own = entries.filter(e => e.groupId === card.group.id)
-  const block = own.find(e => e.boardId === card.group.faceBoardId) ?? own[0]
-  return { entries, index: Math.max(0, block ? entries.indexOf(block) : 0) }
-}
-
-/** A held card's own pictures and which one it is on, for a fanned deck. */
-export function heldSteps(c: HeldCard): { entries: Entry[]; index: number } {
-  const entries = heldEntries(c)
-  return { entries, index: Math.max(0, entries.findIndex(e => e.boardId === c.group.faceBoardId)) }
-}
-
-/** What the tile shows: the face picture. */
-function faceFields(st: StashedCard): Partial<FreeNodeData> {
-  const { entries, index } = stashSteps(st)
-  const m = entries[index]?.media
-  return {
-    imageUrl: m?.url ?? null,
-    mediaType: m?.type ?? null,
-    posterUrl: m?.posterUrl ?? null,
-    label: st.group.name || 'Card',
+/** Every picture a docked card (or deck) holds, and which one its face is
+ *  on — read live from the card. */
+export function dockedSteps(cardId: string): { entries: Entry[]; index: number } {
+  const { groups, boards } = useBoardsStore.getState()
+  const ids = deckCards(cardId, groups)
+  const cards = ids.map(id => groups.find(g => g.id === id)).filter((g): g is ProjectGroup => !!g)
+  const entries = cards.flatMap(g => cardEntries(g, boards))
+  if (cards.length === 0) return { entries, index: 0 }
+  let groupId = cards[0].id, boardId = cards[0].faceBoardId
+  if (ids.length > 1) {
+    const f = deckFaceSteps(cards[0], ids, groups, boards)
+    const e = f.entries[f.index]
+    if (e) { groupId = e.groupId; boardId = e.boardId }
   }
+  const own = entries.filter(e => e.groupId === groupId)
+  const at = own.find(e => e.boardId === boardId) ?? own[0]
+  return { entries, index: Math.max(0, at ? entries.indexOf(at) : 0) }
 }
 
-/** Turn the held card `groupId` to block `boardId`; on a deck, show that
- *  card on its face too. A view, not an undo step. */
-function showEntry(nodeId: string, groupId: string, boardId: string, onFace = true): void {
-  const fs = useFreeNodeStore.getState()
-  const st = fs.nodes[nodeId]?.stashedCard
-  if (!st) return
-  const turn = (c: HeldCard): HeldCard => c.group.id === groupId ? { ...c, group: { ...c.group, faceBoardId: boardId } } : c
-  const front = turn(st)
-  const next: StashedCard = {
-    ...st, ...front,
-    group: st.members && onFace ? { ...front.group, deckFaceCard: groupId } : front.group,
-    members: st.members?.map(turn),
-  }
-  fs.updateFreeNode(nodeId, { stashedCard: next, ...faceFields(next) })
-}
-
-/** Step a tile's face to its next (+1) or previous (-1) picture — across
- *  every card of a held deck — wrapping. Like a card's own face. */
-export function stepStashFace(nodeId: string, dir: 1 | -1): void {
-  const st = useFreeNodeStore.getState().nodes[nodeId]?.stashedCard
-  if (!st) return
-  const { entries, index } = stashSteps(st)
-  if (entries.length < 2) return
-  const e = entries[(index + dir + entries.length) % entries.length]
-  showEntry(nodeId, e.groupId, e.boardId)
-}
-
-/** In a fanned deck: step one card through its own pictures. It does not
- *  become the face unless it already is. */
-export function stepHeldCard(nodeId: string, groupId: string, dir: 1 | -1): void {
-  const st = useFreeNodeStore.getState().nodes[nodeId]?.stashedCard
-  const c = st && heldCards(st).find(h => h.group.id === groupId)
-  if (!st || !c) return
-  const { entries, index } = heldSteps(c)
-  if (entries.length < 2) return
-  const e = entries[(index + dir + entries.length) % entries.length]
-  showEntry(nodeId, groupId, e.boardId, shownCard(st).group.id === groupId)
-}
-
-/** In a fanned deck: put card `groupId` on the deck's face. */
-export function showHeldCard(nodeId: string, groupId: string): void {
-  const st = useFreeNodeStore.getState().nodes[nodeId]?.stashedCard
-  const c = st && heldCards(st).find(h => h.group.id === groupId)
-  const e = c && heldEntries(c)[heldSteps(c).index]
-  if (e) showEntry(nodeId, groupId, e.boardId)
-}
-
-/** Spread a held deck out in place, or close it up. */
-export function setStashFanned(nodeId: string, fanned: boolean): void {
-  const fs = useFreeNodeStore.getState()
-  const st = fs.nodes[nodeId]?.stashedCard
-  if (st?.members?.length) fs.updateFreeNode(nodeId, { stashedCard: { ...st, fanned: fanned || undefined } })
-}
-
-/** What a run reads from a docked tile: a held card — or every card of a
- *  held deck — is each of its pictures ('each') or the face ('pick'), as
- *  picture tiles whose ids are `<tile>#<card>#<block>` (unitOwner reads the
- *  tile back, unitCard the card). Anything else is itself. */
+/** What a run reads from a docked tile: a card's stand-in is each of the
+ *  card's pictures ('each') or its face ('pick'), as picture tiles whose ids
+ *  are `<tile>#<card>#<block>` (unitOwner reads the tile back, unitCard the
+ *  card). Anything else is itself. */
 export function railUnits(n: FreeNodeData, mode: 'each' | 'pick'): FreeNodeData[] {
-  const st = n.stashedCard
-  if (!st) return [n]
-  const { entries, index } = stashSteps(st)
+  if (!n.cardRef) return [n]
+  const { entries, index } = dockedSteps(n.cardRef)
   const used = mode === 'pick' ? entries.slice(index, index + 1) : entries
   return used.map(e => ({
     ...n, id: `${n.id}#${e.groupId}#${e.boardId}`,
@@ -190,114 +111,88 @@ export function railUnits(n: FreeNodeData, mode: 'each' | 'pick'): FreeNodeData[
 
 /** The docked tile a run unit came from. */
 export const unitOwner = (id: string): string => id.split('#')[0]
-/** The held card a run unit came from (`<tile>#<card>`), or null for a
- *  loose picture. */
+/** The card a run unit came from (`<tile>#<card>`), or null for a loose
+ *  picture. */
 export const unitCard = (id: string): string | null => {
   const [tile, card] = id.split('#')
   return card ? `${tile}#${card}` : null
 }
-/** A held card's name, by its unitCard key. */
-export function unitCardName(nodes: Record<string, FreeNodeData>, key: string): string {
-  const [tile, card] = key.split('#')
-  const st = nodes[tile]?.stashedCard
-  return (st && heldCards(st).find(c => c.group.id === card)?.group.name) || 'Card'
+/** The card id in a unitCard key. */
+export const unitCardId = (key: string): string => key.split('#')[1] ?? ''
+
+/** The stand-ins of cards `ids`. */
+function standIns(ids: string[]): FreeNodeData[] {
+  const set = new Set(ids)
+  return Object.values(useFreeNodeStore.getState().nodes).filter(n => n.cardRef && set.has(n.cardRef))
 }
 
-/** Take cards off the canvas and out of the cards' store. */
-function takeOff(groups: ProjectGroup[]): void {
-  const gone = new Set(groups.map(g => g.id))
-  const goneBoards = new Set(groups.flatMap(g => g.boardIds))
-  useBoardsStore.setState(st => ({
-    groups: st.groups.filter(g => !gone.has(g.id)),
-    boards: Object.fromEntries(Object.entries(st.boards).filter(([b]) => !goneBoards.has(b))),
-    boardOrder: st.boardOrder.filter(b => !goneBoards.has(b)),
-    selectedGroupIds: st.selectedGroupIds.filter(g => !gone.has(g)),
-  }))
-}
-
-/** A new tile holding `st`, at its front card's drawn box. */
-function holdTile(st: StashedCard): string {
-  const bs = useBoardsStore.getState()
-  const zoom = useCanvasStore.getState().zoom
-  const face = cardFaceSize(zoom)
-  const r = drawnRect(st.group, bs.boards, zoom)
+/** A card drag has started: lift the stand-ins of those of `ids` that are
+ *  docked, so their columns close up and the strip stops placing them. */
+export function liftDockedCards(ids: string[]): void {
   const fs = useFreeNodeStore.getState()
-  const id = fs.addFreeNode(r?.x ?? st.group.originX, r?.y ?? st.group.originY, 'image')
-  fs.updateFreeNode(id, { stashedCard: st, ...faceFields(st), width: r?.width ?? face.w, height: r?.height ?? face.h })
-  return id
-}
-
-const held = (g: ProjectGroup, boards: Record<string, BoardData>): HeldCard =>
-  ({ group: g, boards: g.boardIds.map(b => boards[b]).filter(Boolean) })
-
-/** Take picture cards off the canvas into tiles that hold them, one each,
- *  in the order given. Returns the tile ids. The caller holds the undo
- *  checkpoint. */
-function stashCards(ids: string[]): string[] {
-  const bs = useBoardsStore.getState()
-  const cards = ids.map(id => bs.groups.find(g => g.id === id)).filter((g): g is ProjectGroup => !!g && !g.effect && !g.pin)
-  // Off the canvas a loose card is in no deck: it comes back on its own.
-  const made = cards.map(g => holdTile(held({ ...g, deckState: undefined, deckAnchorId: undefined, deckOffsetX: undefined, deckOffsetY: undefined }, bs.boards)))
-  takeOff(cards)
-  return made
-}
-
-/** Take a closed deck off the canvas into ONE tile: `ids[0]` is its front
- *  card, the rest in deck order — effect cards too, so the deck comes back
- *  whole. Returns the tile id, or null. The caller holds the checkpoint. */
-function stashDeck(ids: string[]): string | null {
-  const bs = useBoardsStore.getState()
-  const cards = ids.map(id => bs.groups.find(g => g.id === id)).filter((g): g is ProjectGroup => !!g && !g.pin)
-  if (cards.length === 0) return null
-  const [front, ...rest] = cards.map(g => held(g, bs.boards))
-  const id = holdTile({ ...front, members: rest.length ? rest : undefined })
-  takeOff(cards)
-  return id
-}
-
-/** Put what a tile holds back on the canvas — a card, or a deck as the
- *  same deck — its front card's face where the tile's top-left is, and
- *  remove the tile. Cards already on the canvas under the same ids (a
- *  pasted copy of the tile) come back under new ids. The caller holds the
- *  undo checkpoint. Returns the front card's id, or null for a plain tile. */
-export function releaseStashedCard(nodeId: string): string | null {
-  const fs = useFreeNodeStore.getState()
-  const n = fs.nodes[nodeId]
-  const st = n?.stashedCard
-  if (!n || !st) return null
-  const cards = heldCards(st)
-  const bs = useBoardsStore.getState()
-  const clash = cards.some(c => bs.groups.some(g => g.id === c.group.id) || c.boards.some(b => bs.boards[b.id]))
-  const ids = new Map<string, string>()
-  const fresh = (id: string) => clash ? (ids.get(id) ?? (ids.set(id, crypto.randomUUID()), ids.get(id)!)) : id
-  // Ids inside the deck map with it; ids outside it (none, normally) stay.
-  const inside = new Set(cards.flatMap(c => [c.group.id, ...c.boards.map(b => b.id)]))
-  const map = (id: string | undefined) => id && inside.has(id) ? fresh(id) : id
-  const boards = cards.flatMap(c => c.boards.map(b => ({ ...b, id: fresh(b.id) })))
-  const groups: ProjectGroup[] = cards.map(c => ({
-    ...c.group, id: fresh(c.group.id),
-    boardIds: c.group.boardIds.filter(b => c.boards.some(x => x.id === b)).map(fresh),
-    faceBoardId: map(c.group.faceBoardId),
-    deckAnchorId: map(c.group.deckAnchorId),
-    deckFaceCard: map(c.group.deckFaceCard),
-  }))
-  useBoardsStore.setState(s => ({
-    groups: [...s.groups, ...groups],
-    boards: { ...s.boards, ...Object.fromEntries(boards.map(b => [b.id, b])) },
-    boardOrder: [...s.boardOrder, ...boards.map(b => b.id).filter(b => b !== 'primary' && !s.boardOrder.includes(b))],
-  }))
-  // Line the front card's drawn face up with the tile (the origin is not
-  // the face's corner); the rest of a deck moves with it.
-  const r = drawnRect(groups[0], useBoardsStore.getState().boards, useCanvasStore.getState().zoom)
-  if (r) {
-    const dx = n.x - r.x, dy = n.y - r.y
-    const moved = new Set(groups.map(g => g.id))
-    useBoardsStore.setState(s => ({
-      groups: s.groups.map(g => moved.has(g.id) ? { ...g, originX: g.originX + dx, originY: g.originY + dy } : g),
-    }))
+  for (const n of standIns(ids)) {
+    if (n.railDock && !n.railDock.lifted) fs.updateFreeNode(n.id, { railDock: { ...n.railDock, lifted: true } })
   }
-  fs.deleteFreeNode(nodeId)
-  return groups[0].id
+}
+
+/** A card drag has ended, not on a strip: docked cards that were lifted
+ *  stay where they were let go, off their strip; a press that never moved
+ *  leaves them docked. */
+export function endDockedDrag(ids: string[], moved: boolean): void {
+  const fs = useFreeNodeStore.getState()
+  for (const n of standIns(ids)) {
+    if (!n.railDock?.lifted) continue
+    if (moved) fs.deleteFreeNode(n.id)
+    else fs.updateFreeNode(n.id, { railDock: { ...n.railDock, lifted: undefined } })
+  }
+}
+
+/** Cards `ids` with every card of the decks they front. */
+function deckCardsOf(ids: string[]): Set<string> {
+  const { groups } = useBoardsStore.getState()
+  return new Set(expandWithNestedMembers(ids.flatMap(id => deckCards(id, groups)), groups))
+}
+
+/** Dock cards `ids` (each the front of its deck, or a card of its own) in
+ *  the column at `t`, in that order. A card already on a strip moves. */
+function dockCards(ids: string[], t: Extract<RailDropTarget, { kind: 'column' }>): number {
+  const fs = useFreeNodeStore.getState()
+  const bs = useBoardsStore.getState()
+  for (const old of standIns(ids)) fs.deleteFreeNode(old.id)
+  const zoom = useCanvasStore.getState().zoom
+  const made: string[] = []
+  for (const gid of ids) {
+    const g = bs.groups.find(x => x.id === gid)
+    if (!g || g.pin) continue
+    const r = drawnRect(g, bs.boards, zoom)
+    if (!r) continue
+    const id = fs.addFreeNode(r.x, r.y, 'image')
+    fs.updateFreeNode(id, { cardRef: gid, label: g.name, width: r.width, height: r.height })
+    made.push(id)
+  }
+  if (made.length) {
+    fs.dockToRail(made, t)
+    // Drawn in cascade order, each over the one above it: last in the list.
+    const order = deckCardsOf(ids)
+    useBoardsStore.setState(s => ({ groups: [...s.groups.filter(g => !order.has(g.id)), ...s.groups.filter(g => order.has(g.id))] }))
+  }
+  return made.length
+}
+
+/** Move card `id` — with every card of the deck it fronts — so its drawn
+ *  face's top-left is at (x, y). Returns whether it moved. */
+export function placeCard(id: string, x: number, y: number): boolean {
+  const bs = useBoardsStore.getState()
+  const g = bs.groups.find(gr => gr.id === id)
+  const r = g ? drawnRect(g, bs.boards, useCanvasStore.getState().zoom) : null
+  if (!r) return false
+  const dx = x - r.x, dy = y - r.y
+  if (Math.abs(dx) < 0.25 && Math.abs(dy) < 0.25) return false
+  const moving = deckCardsOf([id])
+  useBoardsStore.setState(s => ({
+    groups: s.groups.map(gr => moving.has(gr.id) ? { ...gr, originX: gr.originX + dx, originY: gr.originY + dy } : gr),
+  }))
+  return true
 }
 
 /** A stand-in tile for railDropTarget, which only reads its type. */
@@ -306,13 +201,14 @@ function probe(type: FreeNodeType): FreeNodeData {
 }
 
 /** The loop strip under client (x, y), looking PAST cards — the card being
- *  dragged is drawn over the canvas, right under the pointer — but stopping
- *  at the first tile: a strip under a panel takes nothing aimed at the
- *  panel. Pinned strips take nothing. */
+ *  dragged is drawn over the canvas, right under the pointer, and docked
+ *  cards lie over their strip — but stopping at the first tile: a strip
+ *  under a panel takes nothing aimed at the panel. Pinned strips take
+ *  nothing. */
 function railUnder(x: number, y: number): FreeNodeData | null {
   const nodes = useFreeNodeStore.getState().nodes
   for (const el of document.elementsFromPoint(x, y)) {
-    if (el.closest('[data-layer-card],[data-link-drop^="card:"],[data-card-drop]')) continue
+    if (el.closest('[data-layer-card],[data-link-drop^="card:"],[data-card-drop],[data-group-card]')) continue
     const tile = el.closest<HTMLElement>('[data-freenode]')
     if (!tile) continue
     const n = tile.dataset.id ? nodes[tile.dataset.id] : undefined
@@ -349,11 +245,10 @@ export function previewCardRail(t: RailDropTarget | null, draggedId: string): vo
 
 /** Put the cards on the strip at `t`. A column takes the picture cards
  *  themselves, in the order given (loose cards left to right is the
- *  caller's) — or, `asDeck`, the closed deck they make as ONE item, front
- *  card first. The row takes a copy of each effect card's effect; the
- *  effect cards stay. The caller holds the undo checkpoint. Returns how
- *  many went on. */
-export function dockCardsOnRail(ids: string[], t: RailDropTarget, asDeck = false): number {
+ *  caller's; a deck is given by its front card and goes as one). The row
+ *  takes a copy of each effect card's effect; the effect cards stay. The
+ *  caller holds the undo checkpoint. Returns how many went on. */
+export function dockCardsOnRail(ids: string[], t: RailDropTarget): number {
   const { groups } = useBoardsStore.getState()
   const cards = ids.map(id => groups.find(g => g.id === id)).filter((g): g is ProjectGroup => !!g)
   const fs = () => useFreeNodeStore.getState()
@@ -366,30 +261,66 @@ export function dockCardsOnRail(ids: string[], t: RailDropTarget, asDeck = false
     })
     return fx.length
   }
-  const deck = asDeck && cards.length > 1 ? stashDeck(cards.map(g => g.id)) : null
-  const made = deck ? [deck] : stashCards(cards.filter(g => !g.effect).map(g => g.id))
-  if (made.length) fs().dockToRail(made, t)
-  return made.length
+  return dockCards(cards.filter(g => !g.effect).map(g => g.id), t)
 }
 
 /** Land a run's results for one input card on the rail's tray: a card of
- *  their own, one block per picture in the order given, held by a tray
- *  tile like any docked card. False when the rail is gone. */
-export function landResultCard(railId: string, name: string, results: { url: string; w: number; h: number; label: string }[]): boolean {
+ *  their own, one block per picture in the order given, docked like any
+ *  card, and stepped in step with its input (`source`). False when the
+ *  rail is gone. */
+export function landResultCard(railId: string, name: string, source: string, results: { url: string; w: number; h: number; label: string }[]): boolean {
   const rail = useFreeNodeStore.getState().nodes[railId]
   if (!isRail(rail) || results.length === 0) return false
   const gid = createMediaCard({ cx: rail.x, cy: rail.y }, results.map(r => ({ media: { url: r.url, type: 'image' as const }, label: r.label })))
   if (!gid) return false
-  useBoardsStore.getState().renameGroup(gid, name)
-  // Their shapes are known: lay the grid out now, before it leaves.
+  const bs = useBoardsStore.getState()
+  bs.renameGroup(gid, name)
+  // Their shapes are known: lay the grid out now.
   const g = useBoardsStore.getState().groups.find(x => x.id === gid)
   if (g) {
     const order = gridOrder(g, useBoardsStore.getState().boards)
     layoutCardGrid(gid, Object.fromEntries(order.map((b, i) => [b, results[i] && results[i].w > 0 ? results[i].h / results[i].w : 0.75])))
   }
-  useBoardsStore.getState().setSelectedGroup(null)
-  const [tile] = stashCards([gid])
-  if (!tile) return false
-  useFreeNodeStore.getState().dockToRail([tile], { railId, kind: 'column', slotId: RAIL_TRAY, index: Infinity })
-  return true
+  // On the same picture as its input, from the start.
+  const st = useBoardsStore.getState()
+  const input = st.groups.find(x => x.id === source)
+  const made = st.groups.find(x => x.id === gid)
+  const at = input ? Math.max(0, cardEntries(input, st.boards).findIndex(e => e.boardId === input.faceBoardId)) : 0
+  const face = made ? cardEntries(made, st.boards)[at]?.boardId : undefined
+  useBoardsStore.setState(s => ({ groups: s.groups.map(x => x.id === gid ? { ...x, railSource: source, faceBoardId: face } : x) }))
+  bs.setSelectedGroup(null)
+  return dockCards([gid], { railId, kind: 'column', slotId: RAIL_TRAY, index: Infinity }) > 0
+}
+
+/** Result cards step with the card they were made from (`railSource`):
+ *  stepping the input to picture 3 shows result 3, and stepping a result
+ *  steps its input — and the input's other results — to match. Only where
+ *  a result holds one picture per input picture. Given the cards before and
+ *  after a change; a view, so no undo step. */
+export function followFaces(prev: ProjectGroup[], next: ProjectGroup[], boards: Record<string, BoardData>): void {
+  const results = next.filter(g => g.railSource)
+  if (results.length === 0) return
+  const before = new Map(prev.map(g => [g.id, g.faceBoardId]))
+  const changed = next.filter(g => before.has(g.id) && before.get(g.id) !== g.faceBoardId)
+  if (changed.length === 0) return
+  const byId = new Map(next.map(g => [g.id, g]))
+  const want = new Map<string, string>()
+  const turn = (g: ProjectGroup, i: number) => {
+    const e = cardEntries(g, boards)[i]
+    if (e && e.boardId !== g.faceBoardId) want.set(g.id, e.boardId)
+  }
+  for (const c of changed) {
+    const input = c.railSource ? byId.get(c.railSource) : c
+    if (!input) continue
+    const entries = cardEntries(c, boards)
+    if (entries.length === 0) continue
+    const index = Math.max(0, entries.findIndex(e => e.boardId === c.faceBoardId))
+    const n = cardEntries(input, boards).length
+    const outs = results.filter(r => r.railSource === input.id && cardEntries(r, boards).length === n)
+    if (c.railSource && !outs.includes(c)) continue
+    for (const g of [input, ...outs]) if (g !== c) turn(g, index)
+  }
+  if (want.size) {
+    useBoardsStore.setState(s => ({ groups: s.groups.map(g => want.has(g.id) ? { ...g, faceBoardId: want.get(g.id) } : g) }))
+  }
 }
