@@ -27,7 +27,8 @@ import type { FreeNodeData } from './store/freeNodeStore'
 import { collectSubtree } from './utils/barOps'
 import { expandTileIds } from './utils/tileDecks'
 import { isRail } from './utils/rail'
-import { stepFace } from './utils/cardGrid'
+import { stackedDeckMembers, stepDeckFace, stepFace } from './utils/cardGrid'
+import { stepStashFace } from './utils/railCards'
 
 /** Hosts useFxStrips, which subscribes to every tile, Viewer and zoom
  *  change. Called in App's body, each drag frame and wheel tick would
@@ -302,10 +303,22 @@ function useKeyboardCardFace() {
       if (e.ctrlKey || e.metaKey || e.altKey) return
       const t = document.activeElement as HTMLElement | null
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable || t.getAttribute('role') === 'slider')) return
-      const sel = useBoardsStore.getState().selectedGroupIds
-      if (sel.length !== 1 || useFreeNodeStore.getState().selectedIds.length > 0) return
+      const dir = e.key === 'ArrowLeft' ? -1 : 1
+      const bs = useBoardsStore.getState()
+      const sel = bs.selectedGroupIds
+      const tiles = useFreeNodeStore.getState().selectedIds
+      // A card held on a loop strip (utils/railCards) steps the same way.
+      if (sel.length === 0 && tiles.length === 1 && useFreeNodeStore.getState().nodes[tiles[0]]?.stashedCard) {
+        e.preventDefault()
+        stepStashFace(tiles[0], dir)
+        return
+      }
+      if (sel.length !== 1 || tiles.length > 0) return
       e.preventDefault()
-      stepFace(sel[0], e.key === 'ArrowLeft' ? -1 : 1)
+      // A closed deck steps through every card in it.
+      const members = stackedDeckMembers(sel[0], bs.groups)
+      if (members.length > 1) stepDeckFace(sel[0], members, dir)
+      else stepFace(sel[0], dir)
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)

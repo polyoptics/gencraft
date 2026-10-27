@@ -150,13 +150,19 @@ export function cardFaceMedia(g: ProjectGroup, boards: Record<string, BoardData>
   return faceMedia(g, boards)?.media ?? null
 }
 
-/** How many of a card's blocks the face can show, and which one it is on
- *  (0-based), for the arrows and the "2 / 5" count. */
-export function faceSteps(g: ProjectGroup, boards: Record<string, BoardData>): { count: number; index: number } {
-  const order = gridOrder(g, boards).filter(bid => {
+/** A card's blocks the face can show — those with a picture or video — in
+ *  reading order. A note-only block would leave the face blank. */
+export function faceBlocks(g: ProjectGroup, boards: Record<string, BoardData>): string[] {
+  return gridOrder(g, boards).filter(bid => {
     const b = boards[bid]
     return b.rootIds.some(rid => getMediaItems(b.bars[rid]?.content).some(m => m.type === 'image' || m.type === 'video'))
   })
+}
+
+/** How many of a card's blocks the face can show, and which one it is on
+ *  (0-based), for the arrows and the "2 / 5" count. */
+export function faceSteps(g: ProjectGroup, boards: Record<string, BoardData>): { count: number; index: number } {
+  const order = faceBlocks(g, boards)
   const f = g.faceBoardId ? order.indexOf(g.faceBoardId) : -1
   return { count: order.length, index: Math.max(0, f) }
 }
@@ -167,16 +173,56 @@ export function stepFace(groupId: string, dir: 1 | -1): void {
   const s = useBoardsStore.getState()
   const g = s.groups.find(gr => gr.id === groupId)
   if (!g) return
-  // Only blocks with something to show: a note-only block would leave
-  // the face blank.
-  const order = gridOrder(g, s.boards).filter(bid => {
-    const b = s.boards[bid]
-    return b.rootIds.some(rid => getMediaItems(b.bars[rid]?.content).some(m => m.type === 'image' || m.type === 'video'))
-  })
+  const order = faceBlocks(g, s.boards)
   if (order.length < 2) return
   const cur = g.faceBoardId && order.includes(g.faceBoardId) ? order.indexOf(g.faceBoardId) : 0
   const next = order[(cur + dir + order.length) % order.length]
   useBoardsStore.setState(st => ({ groups: st.groups.map(gr => gr.id === groupId ? { ...gr, faceBoardId: next } : gr) }))
+}
+
+/** A closed deck's face: every picture block of every card in it, card by
+ *  card in deck order (`memberIds`, front card first), each card's in its
+ *  reading order — and which one the face is on. Effect cards hold none.
+ *  `card` is the member the face shows, whose own face block it is on. */
+export function deckFaceSteps(anchor: ProjectGroup, memberIds: string[], groups: ProjectGroup[], boards: Record<string, BoardData>):
+  { entries: { groupId: string; boardId: string }[]; index: number; card: ProjectGroup } {
+  const members = memberIds.map(id => groups.find(g => g.id === id)).filter((g): g is ProjectGroup => !!g && !g.effect)
+  const entries = members.flatMap(g => faceBlocks(g, boards).map(boardId => ({ groupId: g.id, boardId })))
+  const card = members.find(g => g.id === anchor.deckFaceCard) ?? anchor
+  const blocks = faceBlocks(card, boards)
+  const block = card.faceBoardId && blocks.includes(card.faceBoardId) ? card.faceBoardId : blocks[0]
+  const index = entries.findIndex(e => e.groupId === card.id && e.boardId === block)
+  return { entries, index: Math.max(0, index), card }
+}
+
+/** Step a closed deck's face to the next (+1) or previous (-1) picture
+ *  across all its cards, wrapping. Turns the member to that block too, so
+ *  effects on it process what the deck shows. A view, not an undo step. */
+export function stepDeckFace(anchorId: string, memberIds: string[], dir: 1 | -1): void {
+  const s = useBoardsStore.getState()
+  const anchor = s.groups.find(g => g.id === anchorId)
+  if (!anchor) return
+  const { entries, index } = deckFaceSteps(anchor, memberIds, s.groups, s.boards)
+  if (entries.length < 2) return
+  const next = entries[(index + dir + entries.length) % entries.length]
+  useBoardsStore.setState(st => ({
+    groups: st.groups.map(g => {
+      let out = g
+      if (g.id === anchorId) out = { ...out, deckFaceCard: next.groupId }
+      if (g.id === next.groupId) out = { ...out, faceBoardId: next.boardId }
+      return out
+    }),
+  }))
+}
+
+/** The cards of the closed deck `anchorId` anchors, front first then as they
+ *  lay before stacking. For a caller with no Deck at hand (the keyboard). */
+export function stackedDeckMembers(anchorId: string, groups: ProjectGroup[]): string[] {
+  const anchor = groups.find(g => g.id === anchorId)
+  if (anchor?.deckState !== 'stacked') return []
+  const rest = groups.filter(g => g.id !== anchorId && g.deckAnchorId === anchorId && g.deckState === 'stacked')
+    .sort((a, b) => ((a.deckOffsetX ?? 0) - (b.deckOffsetX ?? 0)) || ((a.deckOffsetY ?? 0) - (b.deckOffsetY ?? 0)))
+  return [anchorId, ...rest.map(g => g.id)]
 }
 
 /** A picture's height/width once it has loaded, or null (videos, failures). */

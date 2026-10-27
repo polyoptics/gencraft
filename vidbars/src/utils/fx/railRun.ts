@@ -1,6 +1,9 @@
 // railRun.ts — running a loop strip: every combination its columns make
 // (utils/fx/railChain), rendered at full size, kept as a file, and dealt
-// face-up onto the rail's results tray.
+// face-up onto the rail's results tray. Results made from a docked CARD's
+// pictures land together as one card (utils/railCards' landResultCard),
+// its pictures in the order they were made — one result card per input
+// card.
 //
 // One undo step for the whole run: Ctrl+Z afterwards takes every result
 // back off the tray (the files stay on disk, as a saved strip's do). The
@@ -24,6 +27,7 @@ import { useRailRunStore } from '../../store/railRunStore'
 import { onUndoRestore, useUndoCoordinator } from '../../store/undoCoordinator'
 import { usePosterMapStore } from '../../three/posterService'
 import { RAIL_GEOM, RAIL_TRAY, isRail, railMembers } from '../rail'
+import { landResultCard } from '../railCards'
 import { diskFileUrl } from '../diskUrl'
 import { saveCanvasImage } from '../saveImage'
 import { loadImage, runChain, type ChainItem } from './chain'
@@ -170,6 +174,13 @@ export async function runRail(railId: string): Promise<void> {
   let stopped = false
   let gone = false
   let checkpointed = false
+  // A card's results so far: they land together once its pictures are done.
+  let pending: { card: string; name: string; results: { url: string; w: number; h: number; label: string }[] } | null = null
+  const flush = (): boolean => {
+    const p = pending
+    pending = null
+    return !p || landResultCard(railId, p.name, p.results)
+  }
   const isGone = () => !isRail(useFreeNodeStore.getState().nodes[railId])
   const stopping = () => stopAsked.has(railId) || isGone()
   try {
@@ -190,11 +201,25 @@ export async function runRail(railId: string): Promise<void> {
       if ('error' in out) failures.push(`${combo.label}: ${out.error}`)
       else {
         if (!checkpointed) { useUndoCoordinator.getState().checkpoint(); checkpointed = true }
-        if (land(railId, out, resultName(combo.label, combo.items))) made++
-        else { gone = true; break }
+        const name = resultName(combo.label, combo.items)
+        if (combo.subjectCard) {
+          if (pending && pending.card !== combo.subjectCard && !flush()) { gone = true; break }
+          if (!pending) {
+            const card = members ? [...members.values()].flat().find(n => n.id === combo.subjectCard) : undefined
+            pending = { card: combo.subjectCard, name: `${card?.label || 'Card'} — ${railLabel}`, results: [] }
+          }
+          pending.results.push({ ...out, label: name })
+          made++
+        } else {
+          if (!flush()) { gone = true; break }
+          if (land(railId, out, name)) made++
+          else { gone = true; break }
+        }
       }
       useRailRunStore.getState().patchRun(railId, { done: i + 1, made })
     }
+    // The last card's results — also when stopped: what was made is kept.
+    if (!gone && !discarded.has(railId) && !flush()) gone = true
   } catch (err) {
     // Outside any one combination (landing a tile, the store): end the run
     // with the reason rather than leave the arrow spinning.

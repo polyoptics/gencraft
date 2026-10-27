@@ -46,6 +46,7 @@ import {
 } from '../../utils/rail'
 import { clientToCanvas } from '../../utils/fx/createEffect'
 import { railAtPoint } from './rail/railHit'
+import { releaseStashedCard, stashSteps, stepStashFace } from '../../utils/railCards'
 
 
 /** Node types whose corner resize keeps the current proportions. A
@@ -527,6 +528,12 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
         fns.undockFromRail(id)
         const free = useFreeNodeStore.getState().nodes[id]
         if (free) fns.updateFreeNode(id, { x: held.cx - fx * free.width, y: held.cy - fy * free.height })
+        // A card held by this tile (utils/railCards) is a card again.
+        if (free?.stashedCard) {
+          releaseStashedCard(id)
+          if (useMagnetPreviewStore.getState().preview) useMagnetPreviewStore.getState().setPreview(null)
+          return
+        }
         // An effect card still lines up with a strip it lands beside — it is
         // an ordinary card now. Nothing else applies: no Viewer dock (no
         // ghost was offered while it was on the strip), and never the
@@ -1413,6 +1420,8 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
         }} />
       )}
 
+      {node.stashedCard && <StashFace id={id} hovered={isHovered} zoom={gz} />}
+
       {!showHeader && deckBadge}
 
       {/* ── Annotation layer — overlays the body region only (header excluded).
@@ -1582,6 +1591,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
                     if (cur && rail) {
                       fns.updateFreeNode(id, { x: cur.x, y: rail.y + rail.height + RAIL_GEOM.gap * (rail.rail?.unit ?? 1) })
                     }
+                    releaseStashedCard(id)
                     setNodeMenu(null)
                   } },
               ] : []),
@@ -2478,3 +2488,38 @@ const TextFormatToolbar: React.FC<{
   )
 }
 
+
+/** A card held on a loop strip (utils/railCards): ‹ › to step its face
+ *  through its pictures, and "2 / 5", on hover — as on the card itself. */
+const StashFace: React.FC<{ id: string; hovered: boolean; zoom: number }> = ({ id, hovered, zoom }) => {
+  const st = useFreeNodeStore(s => s.nodes[id]?.stashedCard)
+  if (!st) return null
+  const { entries, index } = stashSteps(st)
+  if (entries.length < 2) return null
+  const k = 1 / zoom
+  const arrow = (dir: 1 | -1): React.ReactNode => (
+    <div
+      data-stash-step={dir}
+      onPointerDown={e => { e.stopPropagation(); e.preventDefault() }}
+      onClick={e => { e.stopPropagation(); stepStashFace(id, dir) }}
+      style={{
+        position: 'absolute', top: '50%', [dir < 0 ? 'left' : 'right']: 4 * k,
+        transform: 'translateY(-50%)', width: 22 * k, height: 34 * k, borderRadius: 6 * k,
+        background: 'rgba(0,0,0,0.45)', color: '#fff', fontSize: 18 * k, lineHeight: `${34 * k}px`,
+        textAlign: 'center', cursor: 'pointer', pointerEvents: 'auto', userSelect: 'none',
+      }}
+    >{dir < 0 ? '\u2039' : '\u203a'}</div>
+  )
+  return (
+    <div data-stash-face style={{ position: 'absolute', inset: 0, zIndex: 19, pointerEvents: 'none' }}>
+      {/* A card, not a picture: a count of what it holds, always there. */}
+      <div style={{
+        position: 'absolute', right: 6 * k, bottom: 6 * k, padding: `${1 * k}px ${6 * k}px`,
+        borderRadius: 8 * k, background: 'rgba(0,0,0,0.55)', color: '#fff',
+        fontSize: 11 * k, fontWeight: 600, pointerEvents: 'none',
+      }}>{hovered ? `${index + 1} / ${entries.length}` : `\u25a4 ${entries.length}`}</div>
+      {hovered && arrow(-1)}
+      {hovered && arrow(1)}
+    </div>
+  )
+}

@@ -31,8 +31,9 @@ import { HeroImageLayer } from './HeroImageLayer'
 import { useFxStore } from '../../store/fxStore'
 import { cardStripId } from '../../utils/fx/cardStrips'
 import { cardHitAt } from '../../utils/cardContent'
-import { cardFaceMedia, faceSteps, mergeCardsInto, stepFace } from '../../utils/cardGrid'
+import { cardFaceMedia, deckFaceSteps, faceSteps, mergeCardsInto, stepDeckFace, stepFace } from '../../utils/cardGrid'
 import { drawnRect, effectChain, snapEffectCard } from '../../utils/effectCards'
+import { cardRailTarget, dockCardsOnRail, previewCardRail } from '../../utils/railCards'
 import { EffectTileBody } from '../Canvas/EffectTileBody'
 import { knownKind } from '../../utils/fx/effects'
 import type { FreeNodeData } from '../../store/freeNodeStore'
@@ -520,11 +521,27 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
       }))
       useBoardsStore.getState().setGroupPosBatch(updates)
       updateDeckMagnetPreview(canDock, group.id)
+      // Over a loop strip: where it would go (utils/railCards).
+      previewCardRail(cardRailTarget(draggingIds, ev.clientX, ev.clientY), group.id)
     }
     const onUp = (ev: PointerEvent) => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
       setIsDragging(false)
+      // Let go over a loop strip (utils/railCards): picture cards go into
+      // the column as themselves, left to right as they lay; effect cards
+      // put a copy of their effect into the row and stay. Whatever does
+      // not go on goes back where it was. The press took the checkpoint:
+      // one undo puts it all back.
+      const railT = !group.pin && (dxAccum !== 0 || dyAccum !== 0) ? cardRailTarget(draggingIds, ev.clientX, ev.clientY) : null
+      previewCardRail(null, group.id)
+      if (railT) {
+        useBoardsStore.getState().setGroupPosBatch(Array.from(initialOrigins, ([gid, o]) => ({ groupId: gid, originY: o.y, originX: o.x })))
+        const at = (id: string) => initialOrigins.get(id) ?? { x: 0, y: 0 }
+        dockCardsOnRail([...draggingIds].sort((a, b) => (at(a).x - at(b).x) || (at(a).y - at(b).y)), railT)
+        useMagnetPreviewStore.getState().setPreview(null)
+        return
+      }
       // Drop-on-ghost-slot return: if the card was released over a
       // [data-deck-slot-drop="<anchorId>:<cardId>"] element AND that cardId
       // matches this card, snap it back into the deck.
@@ -1251,9 +1268,12 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
       headerPad: headerExtend,
     }
   }, [anchorGroup, boards, pan, zoom])
-  // Effects on the front card show on the deck's face too — hooked here,
-  // above the early return, so the hook order never changes.
-  const deckFx = useCardFxFace(anchorGroup.id)
+  // The deck's face steps through every picture of every card in it
+  // (utils/cardGrid deckFaceSteps); `deckFace.card` is the one it shows.
+  const deckFace = useMemo(() => deckFaceSteps(anchorGroup, deck.memberIds, groups, boards), [anchorGroup, deck.memberIds, groups, boards])
+  // Effects on that card show on the deck's face too — hooked here, above
+  // the early return, so the hook order never changes.
+  const deckFx = useCardFxFace(deckFace.card.id)
 
   if (screenWidth === 0) return null
 
@@ -1373,10 +1393,24 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
         }))
       )
       updateDeckMagnetPreview(canDock, deck.anchorGroupId)
+      // Over a loop strip: where the deck would go (utils/railCards).
+      previewCardRail(cardRailTarget(allDragIds, ev.clientX, ev.clientY), deck.anchorGroupId)
     }
     const onUp = (ev: PointerEvent) => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
+      // A deck let go over a loop strip goes into the column card by
+      // card, in deck order (see GroupCard's drag). One undo puts it back.
+      {
+        const railT = (dxAccum !== 0 || dyAccum !== 0) ? cardRailTarget(allDragIds, ev.clientX, ev.clientY) : null
+        previewCardRail(null, deck.anchorGroupId)
+        if (railT) {
+          useBoardsStore.getState().setGroupPosBatch(Array.from(initialOrigins, ([gid, o]) => ({ groupId: gid, originY: o.y, originX: o.x })))
+          dockCardsOnRail(allDragIds, railT)
+          useMagnetPreviewStore.getState().setPreview(null)
+          return
+        }
+      }
       // Drop-on-ghost-slot return for extracted sub-decks rendered as
       // StackedDeckCard: anchor might match a ghost slot on its former parent.
       let returnedToDeck = false
@@ -1402,13 +1436,14 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
     window.addEventListener('pointerup', onUp)
   }, [deck.memberIds, deck.anchorGroupId, anchorGroup.id, anchorGroup.boardIds])
 
-  // The front card's face, by the face rule (utils/cardGrid): the block it
+  // The shown card's face, by the face rule (utils/cardGrid): the block it
   // was stepped to, else its hero, else its first picture (a video by its
   // poster). Effects on it draw over this (deckFx).
+  const faceCard = deckFace.card
   const heroImage = useMemo(() => {
-    const m = cardFaceMedia(anchorGroup, boards)
+    const m = cardFaceMedia(faceCard, boards)
     return m ? (m.type === 'image' ? m.url : m.posterUrl ?? null) : null
-  }, [anchorGroup, boards])
+  }, [faceCard, boards])
 
   // Stacked card outlines — right-side only, max 2 edges to keep primary card wide.
   const PEEK_RIGHT = 3  // px each edge step
@@ -1549,7 +1584,19 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
             useBoardsStore.getState().setDeckState(deck.memberIds, isSubDeck ? 'fanned' : 'open')
           }}
         >
-          {(deckFx.shown ?? heroImage) && <HeroImageLayer heroImage={(deckFx.shown ?? heroImage)!} transform={anchorGroup.cardHeroTransform} />}
+          {(deckFx.shown ?? heroImage) && <HeroImageLayer heroImage={(deckFx.shown ?? heroImage)!} transform={faceCard.cardHeroTransform} />}
+          {/* Step the face through every card's pictures, in deck order. */}
+          {isHovered && deckFace.entries.length > 1 && (
+            <>
+              <FaceArrow side="left" scale={overviewScale(zoom)} onStep={() => stepDeckFace(anchorGroup.id, deck.memberIds, -1)} />
+              <FaceArrow side="right" scale={overviewScale(zoom)} onStep={() => stepDeckFace(anchorGroup.id, deck.memberIds, 1)} />
+              <div data-deck-face-count style={{
+                position: 'absolute', zIndex: 3, left: 0, right: 0, bottom: 22 * overviewScale(zoom), textAlign: 'center', pointerEvents: 'none',
+                fontSize: 10 * overviewScale(zoom), fontWeight: 700, color: 'rgba(255,255,255,0.85)',
+                textShadow: '0 1px 3px rgba(0,0,0,0.85)',
+              }}>{deckFace.index + 1} / {deckFace.entries.length}</div>
+            </>
+          )}
           {/* Content area — offset below header extension */}
           <div style={{ position: 'absolute', top: headerPad, left: 0, right: 0, bottom: 0, overflow: 'hidden', borderRadius: '0 0 12px 12px' }}>
             <GroupCardText groupId={anchorGroup.id} onCropImage={() => setIsEditingHero(true)} heroImage={heroImage} />

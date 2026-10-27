@@ -17,7 +17,8 @@
 // runChain the strips use — the rail adds no second pipeline.
 //
 // Each column contributes its cards ('each') or only its face-up card, the
-// last in the cascade ('pick'). The run makes one result per combination:
+// last in the cascade ('pick'). A docked CARD (utils/railCards) is all of
+// its pictures under 'each', its face under 'pick'. The run makes one result per combination:
 // the product over the subject and partner columns. An EMPTY partner column
 // counts once, with nothing to mix in (the blend then passes the picture
 // through), so a strip can be tried before its texture is docked.
@@ -27,6 +28,7 @@
 import type { FreeNodeData } from '../../store/freeNodeStore'
 import { usePosterMapStore } from '../../three/posterService'
 import { isRail, isRailPicture, type RailSlot } from '../rail'
+import { railUnits, unitOwner } from '../railCards'
 import type { ChainItem } from './chain'
 import { EFFECTS, effectKindOf } from './effects'
 
@@ -69,7 +71,9 @@ function read(rail: FreeNodeData, members: Members): Reading {
       // A 'pick' column is its face-up card or nothing — the card the user
       // sees on top, not the last PICTURE (one still uploading has no url).
       const face = docked[docked.length - 1]
-      const cards = slot.mode !== 'pick' ? docked.filter(isRailPicture) : face && isRailPicture(face) ? [face] : []
+      const mode = slot.mode === 'pick' ? 'pick' : 'each'
+      const cards = (mode === 'each' ? docked : face ? [face] : [])
+        .flatMap(n => railUnits(n, mode)).filter(isRailPicture)
       out.steps.push({ kind: 'role', slot, cards })
     }
   }
@@ -90,7 +94,7 @@ function read(rail: FreeNodeData, members: Members): Reading {
 /** The cards of a column the run takes: all of them ('each'), or only the
  *  face-up one — the last in the cascade ('pick'). */
 function usedCards(step: Extract<Step, { kind: 'role' }>): FreeNodeData[] {
-  return step.slot.mode === 'pick' ? step.cards.slice(-1) : step.cards
+  return step.cards
 }
 
 /** A picture as a chain source — as an effect strip reads it (useFxStrips'
@@ -138,13 +142,15 @@ export function railComboCount(rail: FreeNodeData, members: Members): number {
  *  followed by its partner's picture. Mixed radix over the columns in slot
  *  order with the LAST varying fastest — so results come subject by
  *  subject, the way the tray then reads. `sourceIds` is the pictures used,
- *  SUBJECT FIRST, then partners in slot order. Null when out of range. */
+ *  SUBJECT FIRST, then partners in slot order — the docked tiles, so a
+ *  card's picture names its card. `subjectCard` is the subject's docked
+ *  card tile when the subject is a card's picture. Null when out of range. */
 export function railComboAt(
   rail: FreeNodeData,
   members: Members,
   index: number,
   posters: Record<string, string> = usePosterMapStore.getState().map,
-): { items: ChainItem[]; label: string; sourceIds: string[] } | null {
+): { items: ChainItem[]; label: string; sourceIds: string[]; subjectCard: string | null } | null {
   const r = read(rail, members)
   const cols = radixColumns(r)
   if (cols.length === 0 || !Number.isInteger(index) || index < 0) return null
@@ -162,7 +168,7 @@ export function railComboAt(
   if (!subject) return null
 
   const items: ChainItem[] = [sourceItem(subject, posters)]
-  const sourceIds = [subject.id]
+  const sourceIds = [unitOwner(subject.id)]
   let label = subject.label || 'picture'
   for (const s of r.steps) {
     if (s.kind !== 'card') continue
@@ -173,13 +179,13 @@ export function railComboAt(
     if (partner) {
       // Right after its blend card: planChain hands it to that card.
       items.push(sourceItem(partner, posters))
-      sourceIds.push(partner.id)
+      sourceIds.push(unitOwner(partner.id))
       // The blend's own operator glyph, so the label reads like the
       // equation on the rail: 'Harbour × Paper + Stars'.
       label += ` ${EFFECTS[effectKindOf(card)].glyph} ${partner.label || 'picture'}`
     }
   }
-  return { items, label, sourceIds }
+  return { items, label, sourceIds, subjectCard: subject.stashedCard ? unitOwner(subject.id) : null }
 }
 
 /** Why part of the recipe does nothing, by slot id: role columns the run
