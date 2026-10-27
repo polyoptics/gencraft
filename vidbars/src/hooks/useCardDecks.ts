@@ -2,6 +2,7 @@
 // Detects touching card clusters and manages deck state (open/fanned/stacked)
 
 import { useMemo } from 'react'
+import { useFreeNodeStore } from '../store/freeNodeStore'
 import type { ProjectGroup, BoardData } from '../store/boardsStore'
 import { type GroupSlot } from '../utils/nlePush'
 import { computeGroupLayout, getRowY, getRowHeight } from '../utils/nleRows'
@@ -131,6 +132,11 @@ export function useCardDecks(
   boards: Record<string, BoardData>,
   zoom: number,
 ): CardDeckInfo {
+  // Cards docked on a loop strip (utils/railCards), as a stable key: the
+  // strip already says how they sit together, so they raise no touching
+  // hints with their column neighbours.
+  const dockedKey = useFreeNodeStore(s => Object.values(s.nodes)
+    .filter(n => n.cardRef && n.railDock && !n.railDock.lifted).map(n => n.cardRef).sort().join('|'))
   return useMemo(() => {
     if (groups.length < 2) {
       return { decks: [], touchingClusters: [], getDeckForGroup: () => null }
@@ -262,14 +268,19 @@ export function useCardDecks(
     const allClusters = findClusters(visibleGroups, allGhosts)
 
     // 4. Build touching clusters (all, regardless of state)
-    const touchingClusters = allClusters
+    // A docked card leaves its cluster; the rest stay together if they still
+    // make two or more.
+    const docked = new Set(dockedKey ? dockedKey.split('|') : [])
+    const clusters = docked.size === 0 ? allClusters
+      : allClusters.map(c => c.filter(id => !docked.has(id))).filter(c => c.length >= 2)
+    const touchingClusters = clusters
 
     // 5. Filter to decks: clusters where ALL members have deckState !== 'open'
     // (groupMap declared above for ghost-bridge construction).
     const decks: Deck[] = []
     const inSpatialDeck = new Set<string>()  // track groups handled by spatial clusters
 
-    for (const cluster of allClusters) {
+    for (const cluster of clusters) {
       const allNonOpen = cluster.every(gid => {
         const g = groupMap.get(gid)
         return g && g.deckState && g.deckState !== 'open'
@@ -358,7 +369,7 @@ export function useCardDecks(
       touchingClusters,
       getDeckForGroup: (gid: string) => groupToDeck.get(gid) ?? null,
     }
-  }, [groups, boards, zoom])
+  }, [groups, boards, zoom, dockedKey])
 }
 
 /** The groups a canvas drag has to steer around.

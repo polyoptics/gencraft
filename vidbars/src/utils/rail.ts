@@ -164,6 +164,14 @@ function dockedHeight(n: FreeNodeData, w: number): number {
   return w * Math.min(1.8, Math.max(0.35, aspect))
 }
 
+/** A column's width: its widest card when it holds cards (stand-ins,
+ *  utils/railCards — a card keeps its own size, and the column fits it),
+ *  else the picture width. */
+function columnWidth(cards: FreeNodeData[], picW: number): number {
+  const own = cards.filter(c => c.cardRef && (c.railDock?.prevW ?? 0) > 0).map(c => c.railDock!.prevW!)
+  return own.length ? Math.max(...own) : picW
+}
+
 /** Lay a column's cards out as a cascade starting at `top`. Each card shows
  *  `peekFrac` of itself above the next; a column taller than maxColH
  *  tightens every overlap evenly (down to minPeek) so a long column stays a
@@ -223,11 +231,12 @@ export function railLayout(rail: FreeNodeData, members: Map<string, FreeNodeData
         empty: false,
       })
     } else {
-      const boxes = cascade(cards, x, bodyTop, picW, u)
+      const w = columnWidth(cards, picW)
+      const boxes = cascade(cards, x, bodyTop, w, u)
       const last = boxes[boxes.length - 1]
       columns.push({
-        slot, slotId: slot.id, kind: 'role', x, width: picW,
-        head: { x, y: rowTop, width: picW, height: g.headH * u },
+        slot, slotId: slot.id, kind: 'role', x, width: w,
+        head: { x, y: rowTop, width: w, height: g.headH * u },
         bodyTop, bodyBottom: last ? last.y + last.height : bodyTop + g.emptyH * u,
         cards: boxes, empty: boxes.length === 0,
       })
@@ -238,16 +247,17 @@ export function railLayout(rail: FreeNodeData, members: Map<string, FreeNodeData
   const plusEnd: Rect = { x, y: bodyTop, width: g.plusW * u, height: g.emptyH * u }
   x += (g.plusW + g.trayGap) * u
 
-  const trayCards = cascade(members?.get(RAIL_TRAY) ?? [], x, bodyTop, picW, u)
+  const trayW = columnWidth(members?.get(RAIL_TRAY) ?? [], picW)
+  const trayCards = cascade(members?.get(RAIL_TRAY) ?? [], x, bodyTop, trayW, u)
   const trayLast = trayCards[trayCards.length - 1]
   const tray: RailColumn = {
-    slot: null, slotId: RAIL_TRAY, kind: 'tray', x, width: picW,
-    head: { x, y: rowTop, width: picW, height: g.headH * u },
+    slot: null, slotId: RAIL_TRAY, kind: 'tray', x, width: trayW,
+    head: { x, y: rowTop, width: trayW, height: g.headH * u },
     bodyTop, bodyBottom: trayLast ? trayLast.y + trayLast.height : bodyTop + g.emptyH * u,
     cards: trayCards, empty: trayCards.length === 0,
   }
 
-  const right = x + picW + g.pad * u
+  const right = x + trayW + g.pad * u
   const bottom = Math.max(tray.bodyBottom, plusEnd.y + plusEnd.height, ...columns.map(c => c.bodyBottom)) + g.pad * u
   return {
     railId: rail.id, unit: u,
