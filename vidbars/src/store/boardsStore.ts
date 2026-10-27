@@ -101,6 +101,14 @@ export interface ProjectGroup {
   linkedRefs?: import('../utils/linkTargets').LinkRef[]
   /** Annotation layer drawn on this card at card zoom. */
   cardStrokes?: import('../types/stroke').Stroke[]
+  /** Cards-first (utils/cardGrid): a card that keeps its face's shape and
+   *  lays its blocks out in rows of small cells inside it, in reading
+   *  order, rather than growing a block to the right each time. Imports
+   *  and Blank make these; older cards keep their own layout. */
+  layout?: 'grid'
+  /** The block the face shows (stepped with the arrows), when not the
+   *  first. A block that has left the card falls back to the first. */
+  faceBoardId?: string
 }
 
 /** Find which group a board belongs to */

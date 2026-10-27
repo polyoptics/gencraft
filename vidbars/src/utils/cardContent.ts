@@ -18,6 +18,7 @@ import { cardScreenRect } from '../components/Layers/CardLayer'
 import { createScaleFor } from './canvasCreate'
 import type { GroupSlot } from './nlePush'
 import type { MediaItem } from '../types/bar'
+import { addMediaToGridCard, isGridCard } from './cardGrid'
 
 const BOARD_PADDING_X = 20   // a block's content inset from its anchor
 const BLOCK_GAP = 40         // the card's face to the new block
@@ -62,6 +63,9 @@ export function addMediaBlockToCard(groupId: string, media: MediaItem, label?: s
 
   // Fill-first: reuse an untouched board before adding a block.
   const emptyBoardId = group.boardIds.find(bid => isBoardUnused(bs0.boards[bid]))
+  // A grid card keeps its shape: the block takes the next cell inside it
+  // (utils/cardGrid), and nothing grows sideways or pushes its neighbours.
+  if (isGridCard(group)) return addMediaToGridCard(groupId, media, label, emptyBoardId ?? null)
   if (emptyBoardId) return fill(emptyBoardId)
   // Land the new block after the card's existing content: top row, just
   // right of the card's face — cardScreenRect at an identity camera is that

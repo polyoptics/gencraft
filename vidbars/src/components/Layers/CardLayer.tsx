@@ -30,6 +30,10 @@ import { NLETimelineHeader, NLE_HEADER_CANVAS_H, headerExtend as computeHeaderEx
 import { HeroImageLayer } from './HeroImageLayer'
 import { useFxStore } from '../../store/fxStore'
 import { cardStripId } from '../../utils/fx/cardStrips'
+import { cardHitAt } from '../../utils/cardContent'
+import { cardFaceMedia, faceSteps, mergeCardsInto, stepFace } from '../../utils/cardGrid'
+import { useResolvedMedia } from '../../utils/useResolvedMedia'
+import type { MediaItem } from '../../types/bar'
 import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
 import { getFirstImageUrl } from '../../types/bar'
 import { groupFaceSource, groupImageSources, deckFaceSources, deckImageSources, gripSource } from '../../utils/mediaSources'
@@ -527,6 +531,25 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
         }
         break
       }
+      // Cards-first: let go with the pointer over ANOTHER card and what was
+      // dragged merges into it as blocks (utils/cardGrid). Cards never
+      // overlap while dragged — the drag is clamped against them — so the
+      // pointer reaching into a card is the gesture. One undo step: the
+      // press took the checkpoint. A click, or a release over the dragged
+      // card itself, is just a move.
+      if (!returnedToDeck && !group.pin && (dxAccum !== 0 || dyAccum !== 0)) {
+        const own = new Set(draggingIds)
+        const under = els.filter(el => {
+          const c = (el as HTMLElement).closest?.('[data-layer-card]') as HTMLElement | null
+          return !(c && own.has(c.dataset.layerCard ?? ''))
+        })
+        const hit = cardHitAt(under)
+        const into = hit && 'groupId' in hit ? hit.groupId : null
+        if (into && !own.has(into) && mergeCardsInto(into, draggingIds)) {
+          useMagnetPreviewStore.getState().setPreview(null)
+          return
+        }
+      }
       // Magnet dock to a 3D viewport window (deck return outranks docking)
       if (!returnedToDeck) {
         finishDeckMagnetDock(canDock, group.id, group.id, draggingIds)
@@ -604,19 +627,14 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
     }
   }, [group.boardIds, group.originX, group.originY, group.cardWidthOverride, group.cardHeightOverride, boards, pan, zoom, group.color])
 
-  // Hero image
-  const heroImage = useMemo(() => {
-    if (group.cardHeroImage) return group.cardHeroImage
-    for (const bid of group.boardIds) {
-      const board = boards[bid]
-      if (!board) continue
-      for (const rid of board.rootIds) {
-        const img = getFirstImageUrl(board.bars[rid]?.content)
-        if (img) return img
-      }
-    }
-    return null
-  }, [group.cardHeroImage, group.boardIds, boards])
+  // The face (utils/cardGrid): the block it has been stepped to, else the
+  // hero, else the first picture or video — the same choice effects on
+  // the card process. A video face scrubs under the pointer (FaceVideo);
+  // its poster stands in wherever a picture is needed.
+  const faceItem = useMemo(() => cardFaceMedia(group, boards), [group, boards])
+  const heroImage = faceItem?.type === 'image' ? faceItem.url : (faceItem?.posterUrl ?? null)
+  const faceVideo = faceItem?.type === 'video' ? faceItem : null
+  const steps = useMemo(() => faceSteps(group, boards), [group, boards])
   // Effects snapped to the card (utils/fx/cardStrips): the face shows its
   // picture through them, the way a picture tile does. The result goes in
   // as the hero's own image, so the face's crop, zoom and flips apply to
@@ -720,7 +738,21 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
           el?.dispatchEvent(new CustomEvent('start-edit', { bubbles: false }))
         }}
       >
-        {shownHero && <HeroImageLayer heroImage={shownHero} transform={group.cardHeroTransform} />}
+        {faceVideo && !(fxFace && !fxOff)
+          ? <FaceVideo media={faceVideo} />
+          : shownHero && <HeroImageLayer heroImage={shownHero} transform={group.cardHeroTransform} />}
+        {/* Step the face through the card's blocks, in reading order. */}
+        {isHovered && steps.count > 1 && (
+          <>
+            <FaceArrow side="left" scale={overviewScale(zoom)} onStep={() => stepFace(group.id, -1)} />
+            <FaceArrow side="right" scale={overviewScale(zoom)} onStep={() => stepFace(group.id, 1)} />
+            <div data-card-face-count style={{
+              position: 'absolute', zIndex: 3, left: 0, right: 0, bottom: 6, textAlign: 'center', pointerEvents: 'none',
+              fontSize: 10 * overviewScale(zoom), fontWeight: 700, color: 'rgba(255,255,255,0.85)',
+              textShadow: '0 1px 3px rgba(0,0,0,0.85)',
+            }}>{steps.index + 1} / {steps.count}</div>
+          </>
+        )}
         {/* Effects on this card: flip to the original and back. */}
         {fxStrip && fxFace && (
           <button
@@ -2761,6 +2793,53 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
 }
 
 const FannedDeckOverlay = React.memo(FannedDeckOverlayInner)
+
+/** A video on a card's face: still until the pointer moves across it,
+ *  then the frame under the pointer — left edge the start, right edge the
+ *  end. Muted; it never plays on its own. */
+const FaceVideo: React.FC<{ media: MediaItem }> = ({ media }) => {
+  const src = useResolvedMedia(media.url)
+  const ref = useRef<HTMLVideoElement>(null)
+  return (
+    <video
+      ref={ref}
+      data-card-face-video
+      src={src ?? undefined}
+      muted
+      playsInline
+      preload="metadata"
+      onPointerMove={e => {
+        const v = ref.current
+        if (!v || !(v.duration > 0)) return
+        const r = e.currentTarget.getBoundingClientRect()
+        v.currentTime = Math.max(0, Math.min(1, (e.clientX - r.left) / Math.max(1, r.width))) * v.duration
+      }}
+      style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', borderRadius: 12, opacity: 0.85 }}
+    />
+  )
+}
+
+/** ‹ / › on a card's face: the previous or next block. Its own press — it
+ *  neither drags nor selects the card. */
+const FaceArrow: React.FC<{ side: 'left' | 'right'; scale: number; onStep: () => void }> = ({ side, scale, onStep }) => {
+  const s = 22 * Math.max(0.7, scale)
+  return (
+    <button
+      type="button"
+      data-card-face-arrow={side}
+      title={side === 'left' ? 'Previous block (←)' : 'Next block (→)'}
+      onPointerDown={e => { if (e.button === 0) e.stopPropagation() }}
+      onDoubleClick={e => e.stopPropagation()}
+      onClick={e => { e.stopPropagation(); onStep() }}
+      style={{
+        position: 'absolute', zIndex: 3, top: '50%', [side]: 4, width: s, height: s, marginTop: -s / 2,
+        borderRadius: '50%', border: '1px solid rgba(255,255,255,0.35)', background: 'rgba(12,13,20,0.6)',
+        color: 'rgba(255,255,255,0.92)', fontSize: s * 0.7, lineHeight: 1, padding: 0, cursor: 'pointer',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'inherit',
+      }}
+    >{side === 'left' ? '‹' : '›'}</button>
+  )
+}
 
 /** A card face's copy of its effect result: a JPEG no larger than a face
  *  is ever drawn (a card face, not a full-size render). Generated media is

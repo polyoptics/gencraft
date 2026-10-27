@@ -27,6 +27,7 @@ import type { FreeNodeData } from './store/freeNodeStore'
 import { collectSubtree } from './utils/barOps'
 import { expandTileIds } from './utils/tileDecks'
 import { isRail } from './utils/rail'
+import { stepFace } from './utils/cardGrid'
 
 /** Hosts useFxStrips, which subscribes to every tile, Viewer and zoom
  *  change. Called in App's body, each drag frame and wheel tick would
@@ -288,6 +289,26 @@ function useKeyboardCopyPaste() {
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
+  }, [])
+}
+
+/** ← / → step the selected card's face through its blocks (utils/cardGrid),
+ *  in reading order. Only with exactly one card selected, nothing else, and
+ *  no field or slider taking the keys. */
+function useKeyboardCardFace() {
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+      if (e.ctrlKey || e.metaKey || e.altKey) return
+      const t = document.activeElement as HTMLElement | null
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable || t.getAttribute('role') === 'slider')) return
+      const sel = useBoardsStore.getState().selectedGroupIds
+      if (sel.length !== 1 || useFreeNodeStore.getState().selectedIds.length > 0) return
+      e.preventDefault()
+      stepFace(sel[0], e.key === 'ArrowLeft' ? -1 : 1)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
 }
 
@@ -624,6 +645,7 @@ function RolodexToggleButton() {
 
 export default function App() {
   useKeyboardDelete()
+  useKeyboardCardFace()
   useRolodexHomeBootstrap()
   useDeselectViewerOnOutsidePress()
   useKeyboardCopyPaste()

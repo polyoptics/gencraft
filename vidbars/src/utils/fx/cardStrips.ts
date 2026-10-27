@@ -14,7 +14,7 @@
 
 import { useBoardsStore, type BoardData, type ProjectGroup } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
-import { getFirstImageUrl } from '../../types/bar'
+import { cardFaceMedia } from '../cardGrid'
 import { getHiddenGroupIds } from '../../hooks/useCardDecks'
 import { cardScreenRect } from '../../components/Layers/CardLayer'
 import type { WindowRect } from '../viewportDocking'
@@ -25,20 +25,12 @@ const PREFIX = 'card:'
 /** The strip id a card goes by (its fx result and bypass are keyed by it). */
 export const cardStripId = (groupId: string): string => PREFIX + groupId
 
-/** The picture a card's face shows — what goes through its effects. The
- *  same choice as GroupCard's hero: the hero image, else the first picture
- *  in its blocks. */
+/** The picture a card's face shows — what goes through its effects: the
+ *  face GroupCard draws (utils/cardGrid's cardFaceMedia), a video face as
+ *  its poster frame. Step the face and the effects follow. */
 export function cardFacePicture(g: ProjectGroup, boards: Record<string, BoardData>): string | null {
-  if (g.cardHeroImage) return g.cardHeroImage
-  for (const bid of g.boardIds) {
-    const board = boards[bid]
-    if (!board) continue
-    for (const rid of board.rootIds) {
-      const img = getFirstImageUrl(board.bars[rid]?.content)
-      if (img) return img
-    }
-  }
-  return null
+  const m = cardFaceMedia(g, boards)
+  return m ? (m.type === 'image' ? m.url : m.posterUrl ?? null) : null
 }
 
 export interface StripCard {

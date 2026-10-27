@@ -16,6 +16,7 @@ import { GLCanvasHost } from '../Viewport3D/GLCanvasHost'
 import { addMediaBlockToCard, cardHitOf, groupForCardHit, type CardHit } from '../../utils/cardContent'
 import { EFFECT_DRAG_MIME, clientToCanvas, createEffectCard, createLoopStrip, effectKindFromDrag } from '../../utils/fx/createEffect'
 import { takeDragOutShape } from '../../utils/dragOutSource'
+import { cardFaceSize, createMediaCard } from '../../utils/cardGrid'
 import { tileDeckIndex } from '../../utils/tileDecks'
 import { RAIL_GEOM, isRail, railDropTarget, railLayout, railMembers, type RailDropTarget } from '../../utils/rail'
 import { railAtPoint } from './rail/railHit'
@@ -521,6 +522,41 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
     return nodeId
   }, [addFreeNode, updateFreeNode, setFreeSelection])
 
+  /** Cards-first: what comes in onto bare canvas becomes a CARD — a picture
+   *  or a video, one card each (utils/cardGrid), side by side from the drop
+   *  point, the first centred on it. Anything else (audio, 3D) is still a
+   *  tile. One undo step for the lot. Files upload first: a card is made
+   *  around the media it holds. Returns nothing to deal onto a rail — a drop
+   *  over a loop strip keeps making tiles (see handleDrop). */
+  const dropAsCards = useCallback((e: React.DragEvent, files: File[], pool?: PoolDragPayload) => {
+    const at = clientToCanvas(e.clientX, e.clientY)
+    const step = cardFaceSize().w * 1.08
+    if (pool) {
+      if (pool.kind !== 'image' && pool.kind !== 'video') { dropPoolItem(e, pool); return }
+      useUndoCoordinator.getState().checkpoint()
+      const label = pool.label.replace(/\.[^.]+$/, '')
+      const gid = createMediaCard(at, [{ media: { url: pool.url, type: pool.kind, originalName: pool.label }, label }])
+      if (gid) useBoardsStore.getState().setSelectedGroup(gid)
+      return
+    }
+    const media = files.filter(f => { const t = classifyFile(f); return t === 'image' || t === 'video' })
+    const rest = files.filter(f => !media.includes(f))
+    if (rest.length) dropOnBareCanvas(e, rest)
+    if (media.length === 0) return
+    useUndoCoordinator.getState().checkpoint()
+    void (async () => {
+      const made: string[] = []
+      // In order, each card right of the one before.
+      for (const [i, file] of media.entries()) {
+        const { url, type, originalName } = await uploadFile(file)
+        const gid = createMediaCard({ cx: at.cx + i * step, cy: at.cy },
+          [{ media: { url, type, originalName }, label: file.name.replace(/\.[^.]+$/, '') }])
+        if (gid) made.push(gid)
+      }
+      if (made.length === 1) useBoardsStore.getState().setSelectedGroup(made[0])
+    })()
+  }, [dropOnBareCanvas, dropPoolItem])
+
   /** A pool item dropped ON something, rather than on bare canvas.
    *
    *  The file path already fills cards, blocks, bars, tiles and Viewers; the
@@ -706,6 +742,12 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
       if (floating || aim.target || !aim.onCanvas || own.length === 0) return
       // Taken even when unused, so a later drag can never inherit it.
       const shape = takeDragOutShape()
+      // Out of a card, block or bar (no tile shape), and not over a loop
+      // strip: it lands the way an import does — a card of its own.
+      if (!shape && !railAtPoint(e.clientX, e.clientY, useFreeNodeStore.getState().nodes)) {
+        dropAsCards(e, own)
+        return
+      }
       const made = dropOnBareCanvas(e, own)
       // One file back from a tile: the copy looks like the tile did — its
       // size and crop, centred where it was let go — not a default import.
@@ -757,16 +799,21 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
     const bare = aim.onCanvas && !floating
     // Bare canvas includes a loop strip and its cards (takesMedia): the
     // tiles are made there, then dealt into the column under the drop.
+    // Over a loop strip a drop still makes tiles — its columns deal
+    // tiles. Anywhere else on bare canvas, a picture or video is a card.
+    const overRail = !!railAtPoint(e.clientX, e.clientY, useFreeNodeStore.getState().nodes)
     if (payload) {
       if (!(aim.target && dropPoolOnTarget(payload, aim.target)) && bare) {
-        dealOntoRail([dropPoolItem(e, payload)], e.clientX, e.clientY)
+        if (overRail) dealOntoRail([dropPoolItem(e, payload)], e.clientX, e.clientY)
+        else dropAsCards(e, [], payload)
       }
       return
     }
     if (!(aim.target && dropFilesOnTarget(aim.target, files)) && bare) {
-      dealOntoRail(dropOnBareCanvas(e, files), e.clientX, e.clientY)
+      if (overRail) dealOntoRail(dropOnBareCanvas(e, files), e.clientX, e.clientY)
+      else dropAsCards(e, files)
     }
-  }, [dropPoolItem, dropPoolOnTarget, dropFilesOnTarget, dropOnBareCanvas])
+  }, [dropPoolItem, dropPoolOnTarget, dropFilesOnTarget, dropOnBareCanvas, dropAsCards])
 
   // Card faces, block and bar headers render in App's LayerOverlay, NEXT TO
   // this container rather than inside it — so a file dropped on a card at

@@ -233,7 +233,12 @@ export const TemplateMenu: React.FC = () => {
       if (t.card) {
         const bs = useBoardsStore.getState()
         const g = bs.groups.find(gr => gr.boardIds.includes('primary'))
-        if (g) bs.setGroupCardSize(g.id, t.card.width, t.card.height)
+        if (g) {
+          bs.setGroupCardSize(g.id, t.card.width, t.card.height)
+          // A card-shaped template is a grid card (utils/cardGrid): what is
+          // dropped in fills cells inside it instead of growing it sideways.
+          useBoardsStore.setState(st => ({ groups: st.groups.map(gr => gr.id === g.id ? { ...gr, layout: 'grid' as const } : gr) }))
+        }
       }
       setZoom(t.zoom)
       const toolbarH = 40
@@ -300,7 +305,10 @@ export const TemplateMenu: React.FC = () => {
       const bs = useBoardsStore.getState()
       const group = bs.groups.find(g => g.boardIds.includes(newId))
       if (group) useBoardsStore.getState().setGroupPos(group.id, freeY, 0)
-      if (group && t.card) useBoardsStore.getState().setGroupCardSize(group.id, t.card.width, t.card.height)
+      if (group && t.card) {
+        useBoardsStore.getState().setGroupCardSize(group.id, t.card.width, t.card.height)
+        useBoardsStore.setState(st => ({ groups: st.groups.map(gr => gr.id === group.id ? { ...gr, layout: 'grid' as const } : gr) }))
+      }
     } else {
       const inst = instantiateScaffold(entry.data.id, nextFreeY(), 0)
       if (!inst) return
