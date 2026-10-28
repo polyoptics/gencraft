@@ -468,7 +468,9 @@ def op_bghatch(req):
 # figure and element mattes are needed ("need") or used when a Segment card names something ("optional": without,
 # the whole picture is background). fixed: string dials the card always sets (the red pencil's hue).
 LOOKS = {
-    "hatch": dict(script="look_hatch.py", out="hatch", layers=[("layer", "normal")], mask="need"),
+    # follow: a normal layer whose colour is the frame's own, deepened (look_hatch.py colour_op: frame * mul + add):
+    # VidBars re-colours it from whatever it is laid on
+    "hatch": dict(script="look_hatch.py", out="hatch", layers=[("layer", "follow")], mask="need"),
     "cel": dict(script="look_cel.py", out="cel", layers=[("layer/multiply", "multiply"), ("layer/screen", "screen")],
                 mask="need"),
     "boil": dict(script="look_boil.py", out="boil", layers=[("lines", "normal")], mask="need"),

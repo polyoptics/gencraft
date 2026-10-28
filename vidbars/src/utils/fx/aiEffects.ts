@@ -59,7 +59,9 @@ export const LOOK_OF: Partial<Record<EffectKind, { look: string; background?: bo
   bglayout: { look: 'bg_layout', background: true }, bgwash: { look: 'bg_tonewash', background: true },
 }
 const LIVE_ONLY = new Set(['show', 'strength'])
-const BLEND = { normal: 0, multiply: 1, screen: 2, add: 3, hardlight: 4 } as Record<string, number>
+// 'follow': a normal layer whose colour the look took from the picture (a
+// deepened local colour): laid on another picture, it takes that one's.
+const BLEND = { normal: 0, multiply: 1, screen: 2, add: 3, hardlight: 4, follow: 5 } as Record<string, number>
 /** A Shading mix card's values that change nothing (the look mixer's
  *  neutral: mixer_bake.py NEUTRAL, for the hatch layers). */
 export const SHADE_NEUTRAL: Record<string, number> = { hatch: 1, bg: 1, hatch_weight: 1, bg_weight: 1, hatch_dark: 0, bg_dark: 0, light: 1 }
@@ -295,7 +297,7 @@ const black = (e: FxEngine, like: Tex) =>
 /** What step i receives besides its picture, as textures the size of
  *  `cur` — or null while something is missing (the step then passes the
  *  picture through). Release with releaseAux. */
-export function auxFor(e: FxEngine, plan: AuxPlan, steps: AuxStep[], i: number, url: string, cur: Tex): Aux | null {
+export function auxFor(e: FxEngine, plan: AuxPlan, steps: AuxStep[], i: number, url: string, cur: Tex, picture?: Tex): Aux | null {
   const s = steps[i]
   const rs = plan.reqs.get(planKey(i, url))
   if (rs === undefined) return {}
@@ -316,7 +318,7 @@ export function auxFor(e: FxEngine, plan: AuxPlan, steps: AuxStep[], i: number, 
     }
     else if (r.job.op === 'look') {
       const modes = ((k.colors as unknown as { modes?: string[] } | undefined)?.modes ?? [])
-      aux.look = { layers: modes.map((m, n) => ({ c: tex(`c${n}`), a: tex(`a${n}`), mode: BLEND[m] ?? 0 })) }
+      aux.look = { layers: modes.map((m, n) => ({ c: tex(`c${n}`), a: tex(`a${n}`), mode: BLEND[m] ?? 0 })), picture: picture ?? cur }
     }
     else if (r.job.op === 'formhatch' || r.job.op === 'bghatch') {
       const { mix } = hatchSetup(steps, i)
@@ -354,7 +356,9 @@ export interface Aux {
    *  light strokes (b, h: screen), the far pencil (p: multiply by `pencil`). */
   hatch?: { a: Tex; k: Tex; b: Tex; h: Tex; p: Tex; pencil: string; background: boolean; mix: Record<string, number> }
   /** A drawing look's layers in its order: colour, alpha and blend mode
-   *  (0 normal, 1 multiply, 2 screen, 3 add, 4 hard light). */
-  look?: { layers: { c: Tex; a: Tex; mode: number }[] }
+   *  (0 normal, 1 multiply, 2 screen, 3 add, 4 hard light, 5 normal in
+   *  the colour of what it is laid on); `picture` is the strip's source
+   *  picture (not to be released: runChain owns it). */
+  look?: { layers: { c: Tex; a: Tex; mode: number }[]; picture: Tex }
 }
 export type { AuxKind }

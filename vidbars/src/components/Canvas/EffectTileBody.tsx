@@ -24,6 +24,7 @@ import { useFxStore } from '../../store/fxStore'
 import { useAuxStore } from '../../utils/fx/aiEffects'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { EFFECTS, EFFECT_ORDER, effectKindOf, effectParams, type EffectKind, type ParamDef } from '../../utils/fx/effects'
+import { soloedElsewhere, toggleEffectOff, toggleEffectSolo } from '../../utils/fx/effectToggles'
 
 const stop = (e: React.SyntheticEvent) => e.stopPropagation()
 const checkpoint = () => useUndoCoordinator.getState().checkpoint()
@@ -47,6 +48,13 @@ const RESET_ALL = '__reset_all'
  *  (z 20, later in the DOM) still wins its own square, so the card stays
  *  resizable. */
 const CONTROL_Z = 20
+
+/** The on/off and solo buttons: small round chips at the card's scale. */
+const toggleStyle = (u: number, bg: string, fg: string): React.CSSProperties => ({
+  width: 8 * u, height: 8 * u, padding: 0, borderRadius: '50%', border: `${0.4 * u}px solid rgba(255,255,255,0.3)`,
+  background: bg, color: fg, fontSize: 5 * u, fontWeight: 700, lineHeight: 1, cursor: 'pointer',
+  display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'inherit',
+})
 
 /** `hex` mixed into FACE_GROUND by `t` (0..1), as a flat rgb() colour. */
 function mixIntoGround(hex: string, t: number): string {
@@ -95,7 +103,7 @@ export const EffectTileBody: React.FC<{
   updateFreeNode: (id: string, patch: Partial<FreeNodeData>) => void
   /** Where the live values are read from, when the face is not a tile's —
    *  an effect CARD (utils/effectCards) keeps them on its card. */
-  read?: () => { kind: EffectKind; stored: Record<string, number> | undefined; text?: string } | null
+  read?: () => { kind: EffectKind; stored: Record<string, number> | undefined; text?: string; off?: boolean; solo?: boolean } | null
 }> = ({ node, id, updateFreeNode, read }) => {
   const kind = effectKindOf(node)
   const def = EFFECTS[kind]
@@ -116,14 +124,16 @@ export const EffectTileBody: React.FC<{
   const paramsNow = () => {
     if (read) return read()
     const n = useFreeNodeStore.getState().nodes[id]
-    return n ? { kind: effectKindOf(n), stored: n.effect?.params, text: n.effect?.text } : null
+    return n ? { kind: effectKindOf(n), stored: n.effect?.params, text: n.effect?.text, off: n.effect?.off, solo: n.effect?.solo } : null
   }
+  /** The switches ride along with every edit (effectToggles). */
+  const flags = (cur: { off?: boolean; solo?: boolean }) => ({ off: cur.off, solo: cur.solo })
   const setParam = (key: string, v: number) => {
     const cur = paramsNow()
     // Skip no-op writes: the pointer moving inside one step would otherwise
     // republish the strip (its items carry the params) on every frame.
     if (!cur || effectParams(cur.kind, cur.stored)[key] === v) return
-    updateFreeNode(id, { effect: { kind: cur.kind, params: { ...cur.stored, [key]: v }, text: cur.text } })
+    updateFreeNode(id, { effect: { kind: cur.kind, params: { ...cur.stored, [key]: v }, text: cur.text, ...flags(cur) } })
   }
   // Reset drops the override rather than writing the default, so the value
   // follows the effect's default if that is ever retuned. One undo step,
@@ -134,14 +144,14 @@ export const EffectTileBody: React.FC<{
     checkpoint()
     const rest = { ...cur.stored }
     delete rest[key]
-    updateFreeNode(id, { effect: { kind: cur.kind, params: rest, text: cur.text } })
+    updateFreeNode(id, { effect: { kind: cur.kind, params: rest, text: cur.text, ...flags(cur) } })
   }
   /** Every value back to the effect's default, as one undo step. */
   const resetAll = () => {
     const cur = paramsNow()
     if (!cur?.stored || Object.keys(cur.stored).length === 0) return
     checkpoint()
-    updateFreeNode(id, { effect: { kind: cur.kind, params: {}, text: cur.text } })
+    updateFreeNode(id, { effect: { kind: cur.kind, params: {}, text: cur.text, ...flags(cur) } })
   }
   /** Segment's phrases. Typed locally and written on leaving the box:
    *  every write re-runs the strip, and a model run per keystroke would
@@ -155,14 +165,15 @@ export const EffectTileBody: React.FC<{
     const cur = paramsNow()
     if (!cur || (cur.text ?? '') === phrases) return
     checkpoint()
-    updateFreeNode(id, { effect: { kind: cur.kind, params: cur.stored ?? {}, text: phrases } })
+    updateFreeNode(id, { effect: { kind: cur.kind, params: cur.stored ?? {}, text: phrases, ...flags(cur) } })
   }
   /** Anything moved off its default — what Reset all would undo. */
   const anyChanged = def.params.some(p => params[p.key] !== p.default)
   const setKind = (k: EffectKind) => {
     if ((k as string) === RESET_ALL) { resetAll(); return }
     checkpoint()
-    updateFreeNode(id, { effect: { kind: k, params: {} }, label: EFFECTS[k].label })
+    const cur = paramsNow()
+    updateFreeNode(id, { effect: { kind: k, params: {}, ...(cur ? flags(cur) : {}) }, label: EFFECTS[k].label })
   }
 
   // u = 1% of the card's width, in canvas units (= CSS px: world space).
@@ -181,6 +192,13 @@ export const EffectTileBody: React.FC<{
   // would only repeat it. Not on a loop strip (utils/rail): there the card
   // takes its pictures from the strip's columns, and is never pushed.
   const hasPicture = !!strip?.items.some(it => it.kind === 'source')
+  // Switched off, or muted by another effect's solo: the card dims.
+  const off = !!node.effect?.off
+  const solo = !!node.effect?.solo
+  // Read on every render the strip or the rail changes; cheap.
+  useFxStore(s => s.strips)
+  useFreeNodeStore(s => s.nodes)
+  const muted = !solo && soloedElsewhere(id)
   const hint = hasPicture || node.railDock ? null : 'Push against a picture'
   const error = hasPicture ? strip?.result?.error ?? null : null
 
@@ -189,7 +207,32 @@ export const EffectTileBody: React.FC<{
       flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column',
       padding: 4 * u, overflow: 'hidden', lineHeight: 1.2,
       background: mixIntoGround(def.color, 0.16), color: '#fff',
+      position: 'relative',
     }}>
+      {/* ── On/off and solo, top-right of the card. Off: skipped in its
+              chain; solo: the only effect its chain runs (one per chain).
+              The face dims when this effect is not running. ── */}
+      {(off || muted) && (
+        <div style={{ position: 'absolute', inset: 0, zIndex: CONTROL_Z - 1, background: 'rgba(10,11,18,0.55)', pointerEvents: 'none' }} />
+      )}
+      <div style={{ position: 'absolute', zIndex: CONTROL_Z + 1, top: 1.5 * u, right: 1.5 * u, display: 'flex', gap: 1.2 * u }}>
+        <button
+          type="button" data-fx-onoff={off ? 'off' : 'on'}
+          title={off ? 'Switched off — click to switch on' : 'Switch this effect off'}
+          onPointerDown={e => { if (e.button === 0) e.stopPropagation() }}
+          onDoubleClick={stop}
+          onClick={e => { e.stopPropagation(); toggleEffectOff(id) }}
+          style={toggleStyle(u, off ? 'rgba(255,255,255,0.12)' : 'rgba(120,220,140,0.85)', off ? 'rgba(255,255,255,0.55)' : '#0b1a10')}
+        >⏻</button>
+        <button
+          type="button" data-fx-solo={solo ? 'on' : 'off'}
+          title={solo ? 'Soloed — click to clear' : 'Solo: only this effect runs'}
+          onPointerDown={e => { if (e.button === 0) e.stopPropagation() }}
+          onDoubleClick={stop}
+          onClick={e => { e.stopPropagation(); toggleEffectSolo(id) }}
+          style={toggleStyle(u, solo ? 'rgba(255,205,80,0.95)' : 'rgba(255,255,255,0.12)', solo ? '#1a1404' : 'rgba(255,255,255,0.7)')}
+        >S</button>
+      </div>
       {/* ── Art: the glyph on a flat tint. Static on purpose — the result
               is on the picture. Takes whatever height the rows leave. ── */}
       <div style={{

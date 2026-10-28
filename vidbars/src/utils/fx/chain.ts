@@ -19,7 +19,9 @@ export type ChainItem =
   | { id: string; kind: 'source'; url: string; label: string }
   | { id: string; kind: 'effect'; effect: EffectKind; params?: Record<string, number>
       /** Segment's phrases ("name: phrase, phrase" per line). */
-      text?: string }
+      text?: string
+      /** Switched off, or soloed (the card's on/off and solo buttons). */
+      off?: boolean; solo?: boolean }
 
 export interface ChainPlan {
   sources: Extract<ChainItem, { kind: 'source' }>[]
@@ -27,9 +29,14 @@ export interface ChainPlan {
   ignored: string[]
 }
 
-/** Read a left-to-right strip into sources and steps (no pixels yet). */
+/** Read a left-to-right strip into sources and steps (no pixels yet).
+ *  An effect switched off is skipped; when one is soloed, it is the only
+ *  effect that runs. A blend skipped either way still takes the picture
+ *  after it — that picture is its partner, not a new batch picture — and
+ *  mixes nothing in. */
 export function planChain(items: ChainItem[]): ChainPlan {
   const plan: ChainPlan = { sources: [], steps: [], ignored: [] }
+  const soloed = items.some(it => it.kind === 'effect' && it.solo)
   let i = 0
   while (i < items.length && items[i].kind === 'source') plan.sources.push(items[i++] as never)
   for (; i < items.length; i++) {
@@ -40,6 +47,7 @@ export function planChain(items: ChainItem[]): ChainPlan {
     const item = { ...it, effect: knownKind(it.effect) }
     let other: ChainPlan['steps'][number]['other'] = null
     if (EFFECTS[item.effect].blend && items[i + 1]?.kind === 'source') other = items[++i] as never
+    if (soloed ? !it.solo : it.off) continue
     plan.steps.push({ item, other })
   }
   return plan

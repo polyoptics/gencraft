@@ -146,7 +146,7 @@ function lookComp(e: FxEngine, src: Tex, p: Record<string, number>, aux?: Aux): 
     ? e.pass('grade', e.target(src.w, src.h), { src, exposure: 24, contrast: 1, saturation: 0, tint: [1, 1, 1], tintAmt: 0 })
     : e.pass('copy', e.target(src.w, src.h), { src })
   for (const l of L.layers) {
-    const next = e.pass('layerOver', e.target(src.w, src.h), { src: cur, C: l.c, A: l.a, blendMode: l.mode, strength: p.strength })
+    const next = e.pass('layerOver', e.target(src.w, src.h), { src: cur, C: l.c, A: l.a, S: L.picture, blendMode: l.mode, strength: p.strength })
     e.release(cur)
     cur = next
   }

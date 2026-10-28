@@ -302,15 +302,19 @@ const FRAG: Record<string, string> = {
     }`,
 
   // One layer of a drawing look over the picture, as the look documents it:
-  // blendMode 0 normal (over), 1 multiply, 2 screen, 3 add, 4 hard light;
-  // its alpha (A.r) times `strength`.
+  // blendMode 0 normal (over), 1 multiply, 2 screen, 3 add, 4 hard light,
+  // 5 normal in the colour of what it is laid on: the look made its colour
+  // from the picture S (picture x a ratio, look_hatch.py colour_op), so the
+  // same ratio is applied to the plate. Its alpha (A.r) times `strength`.
   layerOver: `
-    uniform sampler2D src; uniform sampler2D C; uniform sampler2D A; uniform float blendMode; uniform float strength;
+    uniform sampler2D src; uniform sampler2D C; uniform sampler2D A; uniform sampler2D S;
+    uniform float blendMode; uniform float strength;
     void main() {
       vec3 f = texture(src, uv).rgb, c = texture(C, uv).rgb;
+      if (blendMode > 4.5) c = clamp(f * c / max(texture(S, uv).rgb, vec3(1.0 / 255.0)), 0.0, 1.0);
       float a = clamp(texture(A, uv).r * strength, 0.0, 1.0);
       vec3 r;
-      if (blendMode < 0.5) r = mix(f, c, a);
+      if (blendMode < 0.5 || blendMode > 4.5) r = mix(f, c, a);
       else if (blendMode < 1.5) r = f * (1.0 - a + a * c);
       else if (blendMode < 2.5) r = 1.0 - (1.0 - f) * (1.0 - a * c);
       else if (blendMode < 3.5) r = f + a * c;
