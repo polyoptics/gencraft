@@ -17,7 +17,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useCanvasStore } from '../../store/canvasStore'
 import {
-  useZoomZonesStore, zoomToBar, barToZoom, notchesBetween, currentZone,
+  useZoomZonesStore, useZoomZone, zoomToBar, barToZoom, notchesBetween, currentZone,
   DEFAULT_CARD_MAX, DEFAULT_BLOCK_MAX, type ZoomZone,
 } from '../../store/zoomZonesStore'
 import { MIN_ZOOM, MAX_ZOOM } from '../../store/canvasStore'
@@ -30,6 +30,9 @@ const ZONES: { key: ZoomZone; label: string; color: string }[] = [
 const TRACK_W = 14
 const GRIP_H = 10
 const PANEL_W = 210
+const BAR_W = 38
+/** Same as App's title bar, so the bar reads as hanging from it. */
+const HEADER_BG = '#080910'
 
 function fmtTime(sec: number): string {
   if (sec < 60) return `${Math.round(sec)}s`
@@ -79,26 +82,6 @@ export const ZoomZoneBar: React.FC = () => {
   const [hover, setHover] = useState(false)
   const [dragging, setDragging] = useState<null | 'card' | 'block' | 'zoom'>(null)
 
-  if (!open) {
-    return (
-      <button
-        title="Show the zoom zone bar"
-        onClick={() => useZoomZonesStore.getState().setBarOpen(true)}
-        style={{
-          position: 'absolute', right: 0, top: '50%', transform: 'translateY(-50%)',
-          width: 12, height: 64, zIndex: 900, padding: 0, cursor: 'pointer',
-          background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)',
-          borderRight: 'none', borderRadius: '6px 0 0 6px',
-          display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', gap: 2,
-        }}
-      >
-        {ZONES.slice().reverse().map(z => (
-          <span key={z.key} style={{ width: 4, height: 14, borderRadius: 2, background: z.color, opacity: 0.7 }} />
-        ))}
-      </button>
-    )
-  }
-
   const tFromEvent = (e: React.PointerEvent | PointerEvent) => {
     const r = trackRef.current!.getBoundingClientRect()
     return 1 - (e.clientY - r.top) / r.height
@@ -144,18 +127,27 @@ export const ZoomZoneBar: React.FC = () => {
       onContextMenu={e => e.stopPropagation()}
       onDoubleClick={e => e.stopPropagation()}
       style={{
-        position: 'absolute', right: 8, top: 56, bottom: 40, width: 40,
+        // Flush with the window's right frame, hanging from the title bar's
+        // corner button (ZoomZoneHeaderButton). Collapsing folds it up into
+        // that button rather than unmounting, so it reads as one object.
+        position: 'absolute', right: 0, top: 0, bottom: 36, width: BAR_W,
         zIndex: 900, userSelect: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center',
+        background: HEADER_BG, borderLeft: '1px solid rgba(255,255,255,0.06)',
+        borderBottom: '1px solid rgba(255,255,255,0.06)', borderRadius: '0 0 0 10px',
+        padding: '6px 0 8px', boxSizing: 'border-box',
+        transformOrigin: 'top', transform: open ? 'none' : 'scaleY(0)', opacity: open ? 1 : 0,
+        transition: 'transform 160ms ease, opacity 120ms ease',
+        pointerEvents: open ? 'auto' : 'none',
       }}
     >
       <button
-        title="Hide the zoom zone bar"
+        title="Fold the zoom bar up into the corner"
         onClick={() => useZoomZonesStore.getState().setBarOpen(false)}
         style={{
-          width: 18, height: 14, marginBottom: 6, padding: 0, cursor: 'pointer', lineHeight: '12px',
-          background: 'transparent', border: 'none', color: 'rgba(255,255,255,0.35)', fontSize: 11,
+          width: 22, height: 14, marginBottom: 4, padding: 0, cursor: 'pointer', lineHeight: '12px',
+          background: 'transparent', border: 'none', color: 'rgba(255,255,255,0.45)', fontSize: 11,
         }}
-      >⇥</button>
+      >▲</button>
       <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)', marginBottom: 4, fontFamily: 'monospace' }}>in</div>
 
       {/* The track */}
@@ -209,11 +201,11 @@ export const ZoomZoneBar: React.FC = () => {
         >↺ Reset</button>
       )}
 
-      {(hover || dragging) && (
+      {open && (hover || dragging) && (
         <div
           onPointerDown={e => e.stopPropagation()}
           style={{
-            position: 'absolute', right: 44, top: '50%', transform: 'translateY(-50%)', width: PANEL_W,
+            position: 'absolute', right: BAR_W + 6, top: '50%', transform: 'translateY(-50%)', width: PANEL_W,
             background: 'rgba(12,13,20,0.94)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8,
             padding: '10px 12px', color: 'rgba(255,255,255,0.8)', fontSize: 11, lineHeight: 1.5,
             boxShadow: '0 6px 24px rgba(0,0,0,0.5)', pointerEvents: dragging ? 'none' : 'auto',
@@ -326,3 +318,31 @@ const PanelButton: React.FC<{ onClick: () => void; children: React.ReactNode }> 
     color: 'rgba(255,255,255,0.7)',
   }}>{children}</button>
 )
+
+/** The zoom bar's home: the rightmost item of the title bar, in the window's
+ *  top-right corner. The bar hangs straight down from it and folds back up
+ *  into it. */
+export const ZoomZoneHeaderButton: React.FC = () => {
+  const open = useZoomZonesStore(s => s.barOpen)
+  const zone = useZoomZone()
+  return (
+    <button
+      title={open ? 'Fold the zoom bar up' : 'Show the zoom bar'}
+      onClick={() => useZoomZonesStore.getState().setBarOpen(!open)}
+      style={{
+        // Out to the frame: cancels the title bar's right padding.
+        alignSelf: 'stretch', width: BAR_W, marginRight: -16, padding: 0, cursor: 'pointer',
+        background: open ? HEADER_BG : 'transparent',
+        border: 'none', borderLeft: '1px solid rgba(255,255,255,0.06)',
+        display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', gap: 2,
+      }}
+    >
+      {ZONES.slice().reverse().map(z => (
+        <span key={z.key} style={{
+          width: zone === z.key ? 14 : 10, height: 4, borderRadius: 2, background: z.color,
+          opacity: zone === z.key ? 0.95 : 0.45, transition: 'width 120ms, opacity 120ms',
+        }} />
+      ))}
+    </button>
+  )
+}

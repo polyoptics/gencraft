@@ -30,7 +30,7 @@ import { isRail } from './utils/rail'
 import { stackedDeckMembers, stepDeckFace, stepFace } from './utils/cardGrid'
 import { copyEffect, pasteEffect, selectedEffect } from './utils/fx/effectClipboard'
 import { currentZone } from './store/zoomZonesStore'
-import { ZoomZoneBar } from './components/UI/ZoomZoneBar'
+import { ZoomZoneBar, ZoomZoneHeaderButton } from './components/UI/ZoomZoneBar'
 
 /** Hosts useFxStrips, which subscribes to every tile, Viewer and zoom
  *  change. Called in App's body, each drag frame and wheel tick would
@@ -728,6 +728,8 @@ export default function App() {
         <DynamicRowToggle />
         <ProjectBackupMenu />
         <TemplateMenu />
+        {/* Rightmost, in the corner: the zoom bar hangs down from here */}
+        <ZoomZoneHeaderButton />
       </div>
 
       {/* ── Icon bar ── the things you reach for while building */}
