@@ -10,6 +10,7 @@
  */
 import type { Bar } from '../types/bar'
 import type { BoardData, ProjectGroup, BoardLayerData } from '../store/boardsStore'
+import { NEW_CARD_FACE } from '../store/boardsStore'
 
 // Block layout — each block is INIT_W wide; we leave a small gap between them.
 const BLOCK_W = 480
@@ -188,6 +189,7 @@ export function instantiateScaffold(
     color: scaffold.color,
     boardIds,
     cardHeroImage: null,
+    cardHeroTransform: { ...NEW_CARD_FACE },
     cardSummary: scaffold.cardSummary ?? '',
     cardText: '',
     cardHeaderText: scaffold.name,

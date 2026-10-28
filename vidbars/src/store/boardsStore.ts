@@ -43,6 +43,12 @@ export interface HeroImageTransform {
   opacity?: number   // hero image opacity (0–1, default 0.7)
 }
 
+/** The face a NEW card starts with: its picture at full strength, not
+ *  blended into the card colour. A card made before this has no transform
+ *  and keeps the 0.7 blend it always had (HeroImageLayer's default); the
+ *  blend control dials either down. Every card-making path uses this. */
+export const NEW_CARD_FACE: HeroImageTransform = { scale: 1, offsetX: 0, offsetY: 0, flipH: false, flipV: false, opacity: 1 }
+
 export interface ProjectGroup {
   id: string
   name: string
@@ -420,6 +426,7 @@ const DEFAULT_GROUP: ProjectGroup = {
   cardSummary: '',
   cardText: '',
   cardHeaderText: '',
+  cardHeroTransform: { ...NEW_CARD_FACE },
   originY: 0,
   originX: 0,
 }
@@ -912,6 +919,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
     const group: ProjectGroup = {
       id, name, color: '#5b8dd9', boardIds,
       cardHeroImage: null, cardSummary: '', cardText: '', cardHeaderText: '',
+      cardHeroTransform: { ...NEW_CARD_FACE },
       originY: 0, originX: 0,
     }
     set(s => {
@@ -1557,7 +1565,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
       groups = groups.filter(g => g.id === 'default-group' || g.boardIds.length > 0)
       // Reset board's local position to 0,0 within the new group
       const updatedBoard = { ...s2.boards[boardId], nleRow: 0, nleX: 0 }
-      const newGroup: ProjectGroup = { id, name, color, boardIds: [boardId], cardHeroImage: null, cardSummary: '', cardText: '', cardHeaderText: '', originY: absPos.y, originX: absPos.x }
+      const newGroup: ProjectGroup = { id, name, color, boardIds: [boardId], cardHeroImage: null, cardSummary: '', cardText: '', cardHeaderText: '', cardHeroTransform: { ...NEW_CARD_FACE }, originY: absPos.y, originX: absPos.x }
       return { boards: { ...s2.boards, [boardId]: updatedBoard }, groups: [...groups, newGroup] }
     })
   },
@@ -1696,6 +1704,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
       cardSummary: '',
       cardText: '',
       cardHeaderText: '',
+      cardHeroTransform: { ...NEW_CARD_FACE },
       originY: cy,
       originX: cx,
     }
