@@ -562,9 +562,21 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
       let insertAt = target.kind === 'row' ? target.insertAt : 0
       // Off any rail first — a card slot it held goes with it.
       const ids = nodeIds.filter(id => nodes[id] && !nodes[id].pin && id !== target.railId)
+      // An effect card's inputs (tucked under it, order 1…) move with it to
+      // its new slot, and come off the rail when it leaves the slot row.
+      const followers = new Map<string, string[]>()
+      for (const id of ids) {
+        const d = nodes[id].railDock
+        if (!d || d.order !== 0 || nodes[id].type !== 'effect') continue
+        followers.set(id, Object.values(nodes)
+          .filter(m => !ids.includes(m.id) && m.railDock?.railId === d.railId && m.railDock.slotId === d.slotId && m.railDock.order > 0)
+          .sort((a, b) => a.railDock!.order - b.railDock!.order).map(m => m.id))
+      }
       for (const id of ids) {
         const d = nodes[id].railDock
         if (!d) continue
+        // An input leaving its card leaves the card's slot where it is.
+        if (d.order > 0 && rail.rail.slots.concat(nodes[d.railId]?.rail?.slots ?? []).some(sl => sl.kind === 'card' && sl.id === d.slotId)) continue
         if (d.railId === target.railId) {
           // railDropTarget counted this card's own slot (still listed while
           // the card is lifted): removing it from before the insert point
@@ -585,6 +597,9 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
         const at = Math.max(0, Math.min(insertAt, slots.length))
         slots = [...slots.slice(0, at), { id: slotId, kind: 'card' as const }, ...slots.slice(at)]
         nodes[id] = { ...nodes[id], tileDeck: undefined, railDock: { railId: target.railId, slotId, order: 0, ...keepSize(nodes[id]) } }
+        ;(followers.get(id) ?? []).forEach((fid, k) => {
+          nodes[fid] = { ...nodes[fid], railDock: { ...nodes[fid].railDock!, railId: target.railId, slotId, order: k + 1 } }
+        })
       } else {
         // The column's other cards, in order, with the new ones spliced in.
         const moving = new Set(ids)
@@ -592,8 +607,10 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
           .filter(n => !moving.has(n.id) && n.railDock?.railId === target.railId && n.railDock.slotId === target.slotId)
           .sort((a, b) => a.railDock!.order - b.railDock!.order)
           .map(n => n.id)
-        const at = Math.max(0, Math.min(target.index, column.length))
-        const ordered = [...column.slice(0, at), ...ids, ...column.slice(at)]
+        // Inputs go under the card's existing inputs; nothing else is an input.
+        const placed = target.kind === 'input' ? ids.filter(i => nodes[i].type === 'effect') : ids
+        const at = target.kind === 'input' ? column.length : Math.max(0, Math.min(target.index, column.length))
+        const ordered = [...column.slice(0, at), ...placed, ...column.slice(at)]
         ordered.forEach((nid, order) => {
           const n = nodes[nid]
           // A card already in the column keeps `lifted`: it may be in the
@@ -601,6 +618,11 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
           const lifted = moving.has(nid) ? undefined : n.railDock?.lifted
           nodes[nid] = { ...n, tileDeck: undefined, railDock: { railId: target.railId, slotId: target.slotId, order, ...keepSize(n), lifted } }
         })
+        // A card that left the slot row: its inputs come off with it.
+        for (const fids of followers.values()) for (const fid of fids) {
+          const m = nodes[fid]
+          nodes[fid] = { ...m, railDock: undefined, width: m.railDock?.prevW ?? m.width, height: m.railDock?.prevH ?? m.height }
+        }
       }
       nodes[target.railId] = { ...nodes[target.railId], rail: { ...rail.rail, slots } }
       return { nodes }
@@ -614,8 +636,17 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
       const nodes = { ...s.nodes }
       nodes[nodeId] = { ...n, railDock: undefined, width: d.prevW ?? n.width, height: d.prevH ?? n.height }
       const rail = nodes[d.railId]
-      if (rail?.rail) {
+      // An input tucked under an effect card (order 1…) leaves the card's slot.
+      const isInput = d.order > 0 && !!rail?.rail?.slots.some(sl => sl.kind === 'card' && sl.id === d.slotId)
+      if (rail?.rail && !isInput) {
         nodes[d.railId] = { ...rail, rail: { ...rail.rail, slots: rail.rail.slots.filter(sl => !(sl.kind === 'card' && sl.id === d.slotId)) } }
+        // An effect card leaving takes the inputs tucked under it off too.
+        if (n.type === 'effect' && rail.rail.slots.some(sl => sl.kind === 'card' && sl.id === d.slotId)) {
+          for (const m of Object.values(nodes)) {
+            if (m.id === nodeId || m.railDock?.railId !== d.railId || m.railDock.slotId !== d.slotId) continue
+            nodes[m.id] = { ...m, railDock: undefined, width: m.railDock.prevW ?? m.width, height: m.railDock.prevH ?? m.height }
+          }
+        }
         // Close the gap it left in its column.
         Object.values(nodes)
           .filter(m => m.railDock?.railId === d.railId && m.railDock.slotId === d.slotId)

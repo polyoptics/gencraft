@@ -20,6 +20,42 @@
 // is a usable size there.
 
 import type { FreeNodeData } from '../store/freeNodeStore'
+import { EFFECTS, effectKindOf, type EffectKind } from './fx/effects'
+
+// ── Side inputs ─────────────────────────────────────────────────────────
+//
+// An effect card's column holds the card itself (order 0) and, tucked under
+// it solitaire-style, its INPUTS (order 1…): a Depth card gives its depth
+// map, a Segment card its mask. What an input means depends on the card it
+// feeds (aiEffects): a drawing card draws on what the Segment card names; a
+// blend (Multiply, Screen, Overlay) takes the map as its second image; any
+// other effect is limited to the Segment card's mask. Inputs override what
+// the card would otherwise take from the strip (the Segment card before it).
+
+/** What an input card gives: a Depth card its depth, a Segment card a mask. */
+export type RailInput = 'depth' | 'mask'
+const GIVES: Partial<Record<EffectKind, RailInput>> = { depth: 'depth', segment: 'mask' }
+
+/** What this card gives as an input under another card, or null. */
+export function inputGiven(n: FreeNodeData | undefined): RailInput | null {
+  return n?.type === 'effect' ? GIVES[effectKindOf(n)] ?? null : null
+}
+
+/** What inputs an effect card takes from cards tucked under it: what its
+ *  look needs (EffectDef.needs) that a card can give, or, for a blend, a
+ *  second image (depth or mask), or, for any other effect, a mask to limit
+ *  it to. A Depth or Segment card itself takes none. */
+export function inputsTaken(card: FreeNodeData | undefined): RailInput[] {
+  if (!card || card.type !== 'effect' || inputGiven(card)) return []
+  const kind = effectKindOf(card)
+  if (kind === 'linemix' || kind === 'shademix') return []   // they mix the drawing before them
+  const def = EFFECTS[kind]
+  if (def.blend) return ['depth', 'mask']
+  const needs = def.needs ?? []
+  // A drawing card: what to draw on (a mask), and depth when its look uses it.
+  if (needs.some(x => x === 'lines' || x === 'hatch' || x === 'look')) return needs.includes('depth') ? ['depth', 'mask'] : ['mask']
+  return ['mask']
+}
 
 /** Slot id of the results column (the tray) at the rail's right end. */
 export const RAIL_TRAY = 'tray'
@@ -85,6 +121,7 @@ export const RAIL_GEOM = {
   // An empty column's drop placeholder: a whole card, 5:7 at the picture
   // width — the strip opens with room for a full card in every column.
   emptyH: 280,
+  needH: 40,        // an empty input spot under an effect card ("needs depth")
 } as const
 
 export interface Rect { x: number; y: number; width: number; height: number }
@@ -107,6 +144,10 @@ export interface RailColumn {
   bodyBottom: number
   cards: RailCardBox[]
   empty: boolean
+  /** Card columns: the inputs its card takes from cards under it, and a spot
+   *  under the card for each it has not been given (what to drop there). */
+  takes?: RailInput[]
+  needSpots?: { need: RailInput; box: Rect }[]
 }
 
 export interface RailLayout {
@@ -247,12 +288,25 @@ export function railLayout(rail: FreeNodeData, members: Map<string, FreeNodeData
     if (slot.kind === 'card') {
       const card = cards[0]
       if (!card) continue                    // its card left; the slot is moot
+      // Under the card: its inputs as a cascade, then a spot for each input
+      // it takes and has not been given.
+      const takes = inputsTaken(card)
+      const inputs = cards.slice(1)
+      const inTop = bodyTop + (g.cardH + g.gap * 0.5) * u
+      const inBoxes = cascade(inputs, x, inTop, cardW, u).map(b => ({ ...b, order: b.order + 1 }))
+      const given = new Set(inputs.map(inputGiven))
+      let y = inBoxes.length ? inBoxes[inBoxes.length - 1].y + inBoxes[inBoxes.length - 1].height + g.gap * 0.5 * u : inTop
+      const needSpots = takes.filter(n => !given.has(n)).map(need => {
+        const box = { x, y, width: cardW, height: g.needH * u }
+        y += (g.needH + g.gap * 0.4) * u
+        return { need, box }
+      })
       columns.push({
         slot, slotId: slot.id, kind: 'card', x, width: cardW,
         head: { x, y: rowTop, width: cardW, height: g.headH * u },
-        bodyTop, bodyBottom: bodyTop + g.cardH * u,
-        cards: [{ id: card.id, order: 0, x, y: bodyTop, width: cardW, height: g.cardH * u }],
-        empty: false,
+        bodyTop, bodyBottom: Math.max(bodyTop + g.cardH * u, y - g.gap * 0.4 * u),
+        cards: [{ id: card.id, order: 0, x, y: bodyTop, width: cardW, height: g.cardH * u }, ...inBoxes],
+        empty: false, takes, needSpots,
       })
     } else {
       const w = columnWidth(cards, picW)
@@ -313,6 +367,8 @@ export function railPlacements(nodes: Nodes): Map<string, Rect> {
 export type RailDropTarget =
   | { railId: string; kind: 'column'; slotId: string; index: number }
   | { railId: string; kind: 'row'; insertAt: number }
+  /** Tucked under the effect card in this card slot, as its input. */
+  | { railId: string; kind: 'input'; slotId: string }
 
 /** Where a tile released at `p` (canvas units) would dock on this rail, or
  *  null. Pictures go into a role column at the cascade position under the
@@ -324,6 +380,15 @@ export function railDropTarget(L: RailLayout, rail: FreeNodeData, p: { x: number
   const b = L.box
   if (p.x < b.x - m || p.x > b.x + b.width + m || p.y < b.y - m || p.y > b.y + b.height + m) return null
   if (dragged.type === 'effect') {
+    // A Depth or Segment card released over the lower part of an effect
+    // card that takes what it gives (or over the inputs under it) is tucked
+    // under it as its input.
+    const gives = inputGiven(dragged)
+    if (gives) {
+      const col = L.columns.find(c => c.kind === 'card' && c.cards[0]?.id !== dragged.id && c.takes?.includes(gives) &&
+        p.x >= c.x && p.x <= c.x + c.width && p.y >= c.bodyTop + RAIL_GEOM.cardH * u * 0.6 && p.y <= c.bodyBottom + m)
+      if (col) return { railId: rail.id, kind: 'input', slotId: col.slotId }
+    }
     // Between the slots: count the slots whose middle lies left of the point.
     const slots = rail.rail.slots
     const centre = new Map(L.columns.map(c => [c.slotId, c.x + c.width / 2]))

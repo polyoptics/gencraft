@@ -23,7 +23,11 @@ import type { FxEngine, Tex } from './fxEngine'
 import type { EffectKind, AuxKind } from './effects'
 
 /** The strip step, as aiEffects reads it (chain.ts's effect item). */
-export interface AuxStep { id: string; effect: EffectKind; params?: Record<string, number>; text?: string }
+export interface AuxStep {
+  id: string; effect: EffectKind; params?: Record<string, number>; text?: string
+  /** Cards tucked under it on a loop strip (utils/rail side inputs). */
+  inputs?: { id: string; effect: EffectKind; params?: Record<string, number>; text?: string }[]
+}
 
 /** A Segment card's text: one thing per line, "name: phrase, phrase".
  *  A line with no colon names itself ("dog" finds a dog). */
@@ -116,19 +120,27 @@ const isAuxKind = (k: EffectKind) => AUX_KINDS.has(k)
 const READS_PHRASES = new Set<EffectKind>(['filmline', 'formhatch', 'bghatch', ...(Object.keys(LOOK_OF) as EffectKind[])])
 /** Whether any step on the strip needs a model or tool (so its live result
  *  can change when one lands). */
-export const stripNeedsAux = (steps: { kind: string; effect?: EffectKind }[]) =>
-  steps.some(s => s.kind === 'effect' && !!s.effect && isAuxKind(s.effect))
+export const stripNeedsAux = (steps: { kind: string; effect?: EffectKind; inputs?: unknown[] }[]) =>
+  steps.some(s => s.kind === 'effect' && !!s.effect && (isAuxKind(s.effect) || !!s.inputs?.length))
+
+/** The Segment card a step reads: one tucked under it (a side input,
+ *  utils/rail) first, else the nearest Segment card at or before it. */
+function segmentFor(steps: AuxStep[], i: number): AuxStep | undefined {
+  const own = steps[i].inputs?.find(x => x.effect === 'segment')
+  if (own) return { ...own }
+  for (let j = i; j >= 0; j--) if (steps[j].effect === 'segment') return steps[j]
+  return undefined
+}
 
 function phrasesFor(steps: AuxStep[], i: number): Record<string, string[]> | null {
-  for (let j = i; j >= 0; j--) if (steps[j].effect === 'segment') return parsePhrases(steps[j].text)
-  return null
+  const s = segmentFor(steps, i)
+  return s ? parsePhrases(s.text) : null
 }
 
 /** The engine of the nearest Segment card at or before step i (SAM 3
  *  without one). */
 function engineFor(steps: AuxStep[], i: number): Engine {
-  for (let j = i; j >= 0; j--) if (steps[j].effect === 'segment') return engineOf(steps[j])
-  return 'sam3'
+  return engineOf(segmentFor(steps, i))
 }
 
 /** A hatch card at step i: its dials, and the Shading mix cards after it
@@ -170,6 +182,21 @@ function lineSetup(steps: AuxStep[], i: number) {
  *  it cannot run (its card says why). */
 function requests(steps: AuxStep[], i: number, url: string): Req[] | null {
   const s = steps[i], src = hash(url)
+  // A plain effect or a blend fed by side inputs: their maps (runChain uses
+  // them as the blend's second image, or the mask the effect is limited to).
+  if (!isAuxKind(s.effect)) {
+    const out: Req[] = []
+    for (const x of s.inputs ?? []) {
+      if (x.effect === 'depth' && !out.some(r => r.what === 'depth')) out.push({ key: `depth|${src}`, what: 'depth', job: { op: 'depth' } })
+      if (x.effect === 'segment' && !out.some(r => r.what === 'mask')) {
+        const objects = parsePhrases(x.text)
+        if (!Object.keys(objects).length) { say(s.id, 'Name something on the Segment card under it'); return null }
+        const engine = engineOf(x)
+        out.push({ key: `mask|${src}|${JSON.stringify(objects)}|${engine}`, what: 'mask', job: { op: 'segment', objects, engine } })
+      }
+    }
+    return out
+  }
   if (s.effect === 'depth') return [{ key: `depth|${src}`, what: 'depth', job: { op: 'depth' } }]
   if (s.effect === 'segment') {
     const objects = parsePhrases(s.text)
@@ -272,7 +299,7 @@ export async function prepareAux(steps: AuxStep[], sources: { url: string; img: 
   for (const { url, img } of sources) {
     if (!img) continue
     for (let i = 0; i < steps.length; i++) {
-      if (!isAuxKind(steps[i].effect)) continue
+      if (!isAuxKind(steps[i].effect) && !steps[i].inputs?.length) continue
       const rs = requests(steps, i, url)
       plan.reqs.set(planKey(i, url), rs)
       for (const r of rs ?? []) if (!kept.has(r.key)) plan.pending.push(ask(r, img))

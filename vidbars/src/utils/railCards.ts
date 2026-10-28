@@ -261,6 +261,7 @@ export function dockCardsOnRail(ids: string[], t: RailDropTarget): number {
     })
     return fx.length
   }
+  if (t.kind === 'input') return 0   // a card from the canvas is never a side input (utils/rail)
   return dockCards(cards.filter(g => !g.effect).map(g => g.id), t)
 }
 

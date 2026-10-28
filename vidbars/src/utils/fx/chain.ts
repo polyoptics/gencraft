@@ -21,7 +21,10 @@ export type ChainItem =
       /** Segment's phrases ("name: phrase, phrase" per line). */
       text?: string
       /** Switched off, or soloed (the card's on/off and solo buttons). */
-      off?: boolean; solo?: boolean }
+      off?: boolean; solo?: boolean
+      /** Cards tucked under it on a loop strip (utils/rail side inputs), in
+       *  order: a Depth card's depth, a Segment card's mask. */
+      inputs?: { id: string; effect: EffectKind; params?: Record<string, number>; text?: string }[] }
 
 export interface ChainPlan {
   sources: Extract<ChainItem, { kind: 'source' }>[]
@@ -163,10 +166,21 @@ export async function runChain(items: ChainItem[], maxSide: number, previewSide:
         const def = EFFECTS[s.item.effect]
         // What it needs from a model or tool; still missing, the picture
         // goes through unchanged (its card says why).
-        const got = def.needs ? auxFor(e, aux, steps, i, source.url, cur, picture) : {}
-        const next = got
-          ? def.run(e, cur, effectParams(s.item.effect, s.item.params), s.other ? others.get(s.other.id) : null, got)
+        const inputs = s.item.inputs ?? []
+        const got = def.needs || inputs.length ? auxFor(e, aux, steps, i, source.url, cur, picture) : {}
+        // Side inputs (utils/rail): under a blend, the first input's map is
+        // its second image when no picture partners it; under a plain
+        // effect, a Segment card's mask limits it to the mask.
+        const inputMap = got && inputs.length ? (inputs[0].effect === 'depth' ? got.depth : got.mask) ?? got.depth ?? got.mask : undefined
+        const other = s.other ? others.get(s.other.id) : def.blend ? inputMap : null
+        let next = got
+          ? def.run(e, cur, effectParams(s.item.effect, s.item.params), other ?? null, got)
           : e.pass('copy', e.target(cur.w, cur.h), { src: cur })
+        if (got?.mask && !def.blend && !def.needs) {
+          const limited = e.pass('layerOver', e.target(cur.w, cur.h), { src: cur, C: next, A: got.mask, S: cur, blendMode: 0, strength: 1 })
+          e.release(next)
+          next = limited
+        }
         releaseAux(e, got)
         e.release(cur)
         cur = next

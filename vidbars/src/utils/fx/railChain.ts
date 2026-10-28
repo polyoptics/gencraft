@@ -39,7 +39,7 @@ type SourceItem = Extract<ChainItem, { kind: 'source' }>
  *  as the layout skips them — so "directly after" means after on screen. */
 type Step =
   | { kind: 'role'; slot: RailSlot; cards: FreeNodeData[] }
-  | { kind: 'card'; slot: RailSlot; card: FreeNodeData }
+  | { kind: 'card'; slot: RailSlot; card: FreeNodeData; inputs: FreeNodeData[] }
 
 interface Reading {
   steps: Step[]
@@ -65,7 +65,8 @@ function read(rail: FreeNodeData, members: Members): Reading {
       // Only an effect card can stand in a card slot; anything else there
       // (a stale dock) is no operator.
       const card = docked[0]
-      if (card && card.type === 'effect') out.steps.push({ kind: 'card', slot, card })
+      // Cards tucked under it are its side inputs (utils/rail).
+      if (card && card.type === 'effect') out.steps.push({ kind: 'card', slot, card, inputs: docked.slice(1).filter(n => n.type === 'effect') })
     } else {
       // The run takes pictures only; anything else in a column is passed by.
       // A 'pick' column is its face-up card or nothing — the card the user
@@ -192,7 +193,9 @@ export function railComboAt(
   for (const s of r.steps) {
     if (s.kind !== 'card') continue
     const card = s.card
-    items.push({ id: card.id, kind: 'effect', effect: effectKindOf(card), params: card.effect?.params, text: card.effect?.text, off: card.effect?.off, solo: card.effect?.solo })
+    const inputs = s.inputs.map(c => ({ id: c.id, effect: effectKindOf(c), params: c.effect?.params, text: c.effect?.text }))
+    items.push({ id: card.id, kind: 'effect', effect: effectKindOf(card), params: card.effect?.params, text: card.effect?.text, off: card.effect?.off, solo: card.effect?.solo,
+      ...(inputs.length ? { inputs } : {}) })
     const partnerStep = r.partnerOf.get(s.slot.id)
     const partner = partnerStep ? chosen.get(partnerStep.slot.id) : null
     if (partner) {
