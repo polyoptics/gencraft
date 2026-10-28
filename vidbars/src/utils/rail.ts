@@ -48,7 +48,7 @@ export function inputGiven(n: FreeNodeData | undefined): RailInput | null {
 export function inputsTaken(card: FreeNodeData | undefined): RailInput[] {
   if (!card || card.type !== 'effect' || inputGiven(card)) return []
   const kind = effectKindOf(card)
-  if (kind === 'linemix' || kind === 'shademix') return []   // they mix the drawing before them
+  if (kind === 'linemix' || kind === 'shademix' || kind === 'combine') return []   // they mix what is before them
   const def = EFFECTS[kind]
   if (def.blend) return ['depth', 'mask']
   const needs = def.needs ?? []
@@ -82,6 +82,23 @@ export interface RailData {
   /** How much bigger the results tray shows what is in it — its result
    *  cards and the "next" preview — than the rest of the strip. Absent: 1. */
   trayScale?: number
+  /** LOOK ROWS under the strip: each another look on the same picture, a row
+   *  of effect card slots (no picture columns: it takes the subject's
+   *  picture). A Combine card in the first row lays them over its picture,
+   *  each limited to its Segment mask (railChain, utils/fx/chain). Absent or
+   *  empty: a one-row strip, exactly as before. */
+  rows?: RailSlot[][]
+}
+
+/** Every row of slots: the strip's own (`slots`) first, then its look rows. */
+export function railRows(r: RailData): RailSlot[][] {
+  return [r.slots, ...(r.rows ?? [])]
+}
+
+/** The rail without a card slot, wherever it is (its own row or a look row). */
+export function withoutCardSlot(r: RailData, slotId: string): RailData {
+  const keep = (sl: RailSlot) => !(sl.kind === 'card' && sl.id === slotId)
+  return { ...r, slots: r.slots.filter(keep), ...(r.rows ? { rows: r.rows.map(row => row.filter(keep)) } : {}) }
 }
 
 export interface RailDock {
@@ -122,6 +139,8 @@ export const RAIL_GEOM = {
   // width — the strip opens with room for a full card in every column.
   emptyH: 280,
   needH: 40,        // an empty input spot under an effect card ("needs depth")
+  rowGap: 26,       // between the strip's row and a look row, and between look rows
+  addRowH: 30,      // the "+ Add a look" button under the rows
 } as const
 
 export interface Rect { x: number; y: number; width: number; height: number }
@@ -163,6 +182,21 @@ export interface RailLayout {
   /** Role and card columns in slot order (card slots without a card skipped). */
   columns: RailColumn[]
   tray: RailColumn
+  /** The look rows under the strip (RailData.rows), top to bottom. */
+  rows: RailRowLayout[]
+  /** "+ Add a look": a new empty look row. */
+  addRow: Rect
+}
+
+export interface RailRowLayout {
+  /** 1 for the first look row (0 is the strip's own). */
+  index: number
+  /** The row's band, and its label cell at the left (where the strip's "+" is). */
+  band: Rect
+  label: Rect
+  columns: RailColumn[]
+  /** Where an effect card dropped at the end of the row goes. */
+  end: Rect
 }
 
 export function isRail(n: FreeNodeData | undefined): n is FreeNodeData & { rail: RailData } {
@@ -282,32 +316,36 @@ export function railLayout(rail: FreeNodeData, members: Map<string, FreeNodeData
   const plusStart: Rect = { x, y: bodyTop, width: g.plusW * u, height: g.emptyH * u }
   x += (g.plusW + g.gap) * u
 
+  /** An effect card's column: the card, under it its inputs as a cascade,
+   *  then a spot for each input it takes and has not been given. */
+  const cardColumn = (slot: RailSlot, cards: FreeNodeData[], x: number, rowTop: number, bodyTop: number): RailColumn => {
+    const card = cards[0]
+    const takes = inputsTaken(card)
+    const inputs = cards.slice(1)
+    const inTop = bodyTop + (g.cardH + g.gap * 0.5) * u
+    const inBoxes = cascade(inputs, x, inTop, cardW, u).map(b => ({ ...b, order: b.order + 1 }))
+    const given = new Set(inputs.map(inputGiven))
+    let y = inBoxes.length ? inBoxes[inBoxes.length - 1].y + inBoxes[inBoxes.length - 1].height + g.gap * 0.5 * u : inTop
+    const needSpots = takes.filter(n => !given.has(n)).map(need => {
+      const box = { x, y, width: cardW, height: g.needH * u }
+      y += (g.needH + g.gap * 0.4) * u
+      return { need, box }
+    })
+    return {
+      slot, slotId: slot.id, kind: 'card', x, width: cardW,
+      head: { x, y: rowTop, width: cardW, height: g.headH * u },
+      bodyTop, bodyBottom: Math.max(bodyTop + g.cardH * u, y - g.gap * 0.4 * u),
+      cards: [{ id: card.id, order: 0, x, y: bodyTop, width: cardW, height: g.cardH * u }, ...inBoxes],
+      empty: false, takes, needSpots,
+    }
+  }
+
   const columns: RailColumn[] = []
   for (const slot of rail.rail.slots) {
     const cards = members?.get(slot.id) ?? []
     if (slot.kind === 'card') {
-      const card = cards[0]
-      if (!card) continue                    // its card left; the slot is moot
-      // Under the card: its inputs as a cascade, then a spot for each input
-      // it takes and has not been given.
-      const takes = inputsTaken(card)
-      const inputs = cards.slice(1)
-      const inTop = bodyTop + (g.cardH + g.gap * 0.5) * u
-      const inBoxes = cascade(inputs, x, inTop, cardW, u).map(b => ({ ...b, order: b.order + 1 }))
-      const given = new Set(inputs.map(inputGiven))
-      let y = inBoxes.length ? inBoxes[inBoxes.length - 1].y + inBoxes[inBoxes.length - 1].height + g.gap * 0.5 * u : inTop
-      const needSpots = takes.filter(n => !given.has(n)).map(need => {
-        const box = { x, y, width: cardW, height: g.needH * u }
-        y += (g.needH + g.gap * 0.4) * u
-        return { need, box }
-      })
-      columns.push({
-        slot, slotId: slot.id, kind: 'card', x, width: cardW,
-        head: { x, y: rowTop, width: cardW, height: g.headH * u },
-        bodyTop, bodyBottom: Math.max(bodyTop + g.cardH * u, y - g.gap * 0.4 * u),
-        cards: [{ id: card.id, order: 0, x, y: bodyTop, width: cardW, height: g.cardH * u }, ...inBoxes],
-        empty: false, takes, needSpots,
-      })
+      if (!cards[0]) continue                 // its card left; the slot is moot
+      columns.push(cardColumn(slot, cards, x, rowTop, bodyTop))
     } else {
       const w = columnWidth(cards, picW)
       const boxes = cascade(cards, x, bodyTop, w, u)
@@ -339,13 +377,36 @@ export function railLayout(rail: FreeNodeData, members: Map<string, FreeNodeData
     cards: trayCards, empty: trayCards.length === 0,
   }
 
-  const right = x + trayW + g.pad * u
-  const bottom = Math.max(tray.bodyBottom, plusEnd.y + plusEnd.height, ...columns.map(c => c.bodyBottom)) + g.pad * u
+  // The look rows, each under the one before: a label cell where the
+  // strip's "+" is, its effect columns from where the strip's columns
+  // start, and a drop spot at its end. Then "+ Add a look".
+  let top = Math.max(tray.bodyBottom, plusEnd.y + plusEnd.height, ...columns.map(c => c.bodyBottom)) + g.rowGap * u
+  const x0 = plusStart.x + (g.plusW + g.gap) * u
+  const rows: RailRowLayout[] = (rail.rail.rows ?? []).map((slots, k) => {
+    const rTop = top, rBody = rTop + (g.headH + g.gap * 0.5) * u
+    let cx = x0
+    const cols: RailColumn[] = []
+    for (const slot of slots) {
+      const cards = members?.get(slot.id) ?? []
+      if (slot.kind !== 'card' || !cards[0]) continue
+      cols.push(cardColumn(slot, cards, cx, rTop, rBody))
+      cx += cardW + g.gap * u
+    }
+    const end: Rect = { x: cx, y: rBody, width: cardW, height: g.cardH * u * 0.5 }
+    const bottomOf = Math.max(end.y + end.height, ...cols.map(c => c.bodyBottom))
+    const band: Rect = { x: plusStart.x, y: rTop, width: Math.max(cx + cardW, x) - plusStart.x, height: bottomOf - rTop }
+    top = bottomOf + g.rowGap * u
+    return { index: k + 1, band, label: { x: plusStart.x, y: rBody, width: g.plusW * u, height: bottomOf - rBody }, columns: cols, end }
+  })
+  const addRow: Rect = { x: x0, y: top - g.rowGap * u * 0.5, width: g.cardW * u, height: g.addRowH * u }
+
+  const right = Math.max(x + trayW, ...rows.map(r => r.band.x + r.band.width)) + g.pad * u
+  const bottom = addRow.y + addRow.height + g.pad * u
   return {
     railId: rail.id, unit: u,
     box: { x: rail.x, y: rail.y, width: right - rail.x, height: bottom - rail.y },
     arrow: { x: rail.x + g.pad * u, y: rail.y + g.pad * 0.6 * u, width: right - rail.x - 2 * g.pad * u, height: g.arrowH * u },
-    plusStart, plusEnd, columns, tray,
+    plusStart, plusEnd, columns, tray, rows, addRow,
   }
 }
 
@@ -359,14 +420,16 @@ export function railPlacements(nodes: Nodes): Map<string, Rect> {
     const L = railLayout(n, members.get(n.id))
     if (!L) continue
     out.set(n.id, L.box)
-    for (const col of [...L.columns, L.tray]) for (const c of col.cards) out.set(c.id, c)
+    for (const col of [...L.columns, L.tray, ...L.rows.flatMap(r => r.columns)]) for (const c of col.cards) out.set(c.id, c)
   }
   return out
 }
 
 export type RailDropTarget =
   | { railId: string; kind: 'column'; slotId: string; index: number }
-  | { railId: string; kind: 'row'; insertAt: number }
+  /** Into a row of effect slots: the strip's own (row 0 or absent) or look
+   *  row `row` (RailData.rows[row - 1]). */
+  | { railId: string; kind: 'row'; insertAt: number; row?: number }
   /** Tucked under the effect card in this card slot, as its input. */
   | { railId: string; kind: 'input'; slotId: string }
 
@@ -385,9 +448,18 @@ export function railDropTarget(L: RailLayout, rail: FreeNodeData, p: { x: number
     // under it as its input.
     const gives = inputGiven(dragged)
     if (gives) {
-      const col = L.columns.find(c => c.kind === 'card' && c.cards[0]?.id !== dragged.id && c.takes?.includes(gives) &&
+      const col = [...L.columns, ...L.rows.flatMap(r => r.columns)].find(c => c.kind === 'card' && c.cards[0]?.id !== dragged.id && c.takes?.includes(gives) &&
         p.x >= c.x && p.x <= c.x + c.width && p.y >= c.bodyTop + RAIL_GEOM.cardH * u * 0.6 && p.y <= c.bodyBottom + m)
       if (col) return { railId: rail.id, kind: 'input', slotId: col.slotId }
+    }
+    // Into a look row the point is over: between its slots.
+    const lr = L.rows.find(r => p.y >= r.band.y - m / 2 && p.y <= r.band.y + r.band.height + m / 2)
+    if (lr) {
+      const rowSlots = rail.rail.rows?.[lr.index - 1] ?? []
+      const rc = new Map(lr.columns.map(c => [c.slotId, c.x + c.width / 2]))
+      let at = 0
+      rowSlots.forEach((s, i) => { const cx = rc.get(s.id); if (cx !== undefined && cx < p.x) at = i + 1 })
+      return { railId: rail.id, kind: 'row', insertAt: at, row: lr.index }
     }
     // Between the slots: count the slots whose middle lies left of the point.
     const slots = rail.rail.slots

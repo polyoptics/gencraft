@@ -237,7 +237,7 @@ export const RailBody: React.FC<{
       ))}
       {/* ── Side inputs (utils/rail): under an effect card, a spot for each
               input it takes and has not been given — what to tuck there. ── */}
-      {L.columns.map(col => col.kind === 'card' && col.needSpots?.map(({ need, box }) => {
+      {[...L.columns, ...L.rows.flatMap(r => r.columns)].map(col => col.kind === 'card' && col.needSpots?.map(({ need, box }) => {
         const card = members?.get(col.slotId)?.[0]
         const def = card ? EFFECTS[effectKindOf(card)] : null
         const lit = drop?.target.kind === 'input' && drop.target.slotId === col.slotId
@@ -258,6 +258,63 @@ export const RailBody: React.FC<{
           </div>
         )
       }))}
+      {/* ── Look rows (utils/rail RailData.rows): each another look on the
+              strip's picture — its effect cards, a spot at its end to drop
+              one, and its label (Look 2, 3 …) with ×. A Combine card in the
+              strip's row lays them over its picture. Then "+ Add a look". ── */}
+      {L.rows.map(r => (
+        <React.Fragment key={`look-${r.index}`}>
+          <div style={{
+            position: 'absolute', left: pad / 2, right: pad / 2, top: r.band.y - rail.y - 4 * u,
+            height: (RAIL_GEOM.headH + 8) * u, background: C.track, borderRadius: 10 * u, opacity: 0.75,
+          }} />
+          <div data-rail-look={r.index} style={{
+            position: 'absolute', ...loc(r.label), display: 'flex', flexDirection: 'column', alignItems: 'center',
+            gap: 6 * u, paddingTop: 4 * u, color: 'rgba(255,255,255,0.7)',
+          }}>
+            <span style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', fontSize: Math.max(11 * u, MIN_TEXT_PX / zoom), fontWeight: 600, whiteSpace: 'nowrap' }}>
+              Look {r.index + 1}
+            </span>
+            <button
+              type="button"
+              title="Remove this look (its cards come off the strip)"
+              onPointerDown={stopPrimary}
+              onMouseDown={pressButton}
+              onDoubleClick={stop}
+              onClick={e => { e.stopPropagation(); checkpoint(); useFreeNodeStore.getState().removeRailRow(id, r.index) }}
+              style={{
+                width: 20 * u, height: 20 * u, padding: 0, border: 'none', borderRadius: 10 * u, cursor: 'pointer',
+                background: 'rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.7)', fontSize: 13 * u, lineHeight: 1,
+              }}
+            >×</button>
+          </div>
+          {r.columns.map(col => {
+            const card = members?.get(col.slotId)?.[0]
+            return card ? <CardHead key={col.slotId} card={card} rect={loc(col.head)} u={u} warning={warnings[col.slotId]} /> : null
+          })}
+          <div data-rail-look-end={r.index} style={{
+            position: 'absolute', ...loc(r.end), borderRadius: 10 * u, boxSizing: 'border-box',
+            border: `${1.5 * u}px dashed ${drop?.target.kind === 'row' && drop.target.row === r.index ? C.drop : 'rgba(255,255,255,0.22)'}`,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 10 * u, textAlign: 'center',
+            fontSize: Math.max(10 * u, MIN_TEXT_PX / zoom), color: 'rgba(255,255,255,0.5)', pointerEvents: 'none',
+          }}>{r.columns.length ? 'Drop another effect card' : 'Drop effect cards for this look: a Segment card first sets where it goes'}</div>
+        </React.Fragment>
+      ))}
+      <button
+        type="button"
+        data-rail-add-look
+        title="Add a look: another row of effect cards on the same picture. A Combine card in the first row lays the looks over it, each in its Segment card's mask"
+        onPointerDown={stopPrimary}
+        onMouseDown={pressButton}
+        onDoubleClick={stop}
+        onClick={e => { e.stopPropagation(); checkpoint(); useFreeNodeStore.getState().addRailRow(id) }}
+        style={{
+          position: 'absolute', ...loc(L.addRow), boxSizing: 'border-box', padding: 0, margin: 0,
+          border: `${1.2 * u}px dashed rgba(255,255,255,${hovered ? 0.3 : 0.15})`, borderRadius: 8 * u,
+          background: 'transparent', color: `rgba(255,255,255,${hovered ? 0.75 : 0.45})`,
+          fontFamily: 'inherit', fontSize: Math.max(11 * u, MIN_TEXT_PX / zoom), cursor: 'pointer',
+        }}
+      >+ Add a look</button>
       {L.tray.empty && !ghost && (
         <div style={{
           position: 'absolute', ...loc(bodyOf(L.tray)), borderRadius: 10 * u,

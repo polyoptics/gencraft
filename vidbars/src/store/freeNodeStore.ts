@@ -3,7 +3,7 @@ import { persist } from 'zustand/middleware'
 import { createDebouncedIDBStorage } from '../utils/debouncedIDBStorage'
 import { canJoinTileDeck, collapsePatches, expandPositions, expandTileIds, tileDeckIndex } from '../utils/tileDecks'
 import { DOCK_TOLERANCE, rectsTouch } from '../utils/viewportDocking'
-import { RAIL_GEOM, RAIL_TRAY } from '../utils/rail'
+import { RAIL_GEOM, RAIL_TRAY, railRows, withoutCardSlot, type RailSlot } from '../utils/rail'
 
 // 'list' | 'pool' | 'prompt' | 'history' are COMPONENTS rather than media: a
 // node whose body is a whole panel. They ride the same substrate as
@@ -220,6 +220,10 @@ interface FreeNodeStore {
   addRailRole: (railId: string, at: 'start' | 'end', name?: string) => string | null
   /** Remove an EMPTY role slot (a slot with cards stays). */
   removeRailSlot: (railId: string, slotId: string) => void
+  /** A new, empty look row under the strip (RailData.rows). */
+  addRailRow: (railId: string) => void
+  /** Remove look row `index` (1 = the first): its cards come off the strip. */
+  removeRailRow: (railId: string, index: number) => void
   /** Move slot `slotId` to before the slot now at `insertAt` (slots.length:
    *  the end), what is docked in it going along. */
   moveRailSlot: (railId: string, slotId: string, insertAt: number) => void
@@ -559,6 +563,9 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
       if (!rail?.rail || rail.pin) return s
       const nodes = { ...s.nodes }
       let slots = rail.rail.slots
+      // Look rows (RailData.rows): a 'row' target with row > 0 goes into one.
+      let rows = rail.rail.rows
+      const toRow = target.kind === 'row' ? target.row ?? 0 : 0
       let insertAt = target.kind === 'row' ? target.insertAt : 0
       // Off any rail first — a card slot it held goes with it.
       const ids = nodeIds.filter(id => nodes[id] && !nodes[id].pin && id !== target.railId)
@@ -576,17 +583,20 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
         const d = nodes[id].railDock
         if (!d) continue
         // An input leaving its card leaves the card's slot where it is.
-        if (d.order > 0 && rail.rail.slots.concat(nodes[d.railId]?.rail?.slots ?? []).some(sl => sl.kind === 'card' && sl.id === d.slotId)) continue
+        const own = nodes[d.railId]?.rail
+        if (d.order > 0 && own && railRows(own).flat().some(sl => sl.kind === 'card' && sl.id === d.slotId)) continue
         if (d.railId === target.railId) {
           // railDropTarget counted this card's own slot (still listed while
           // the card is lifted): removing it from before the insert point
-          // moves that point one to the left.
-          const was = slots.findIndex(sl => sl.kind === 'card' && sl.id === d.slotId)
+          // moves that point one to the left — in the row it is going into.
+          const inRow = toRow === 0 ? slots : rows?.[toRow - 1] ?? []
+          const was = inRow.findIndex(sl => sl.kind === 'card' && sl.id === d.slotId)
           if (was >= 0 && was < insertAt) insertAt--
-          slots = slots.filter(sl => !(sl.kind === 'card' && sl.id === d.slotId))
-        } else if (nodes[d.railId]?.rail) {
-          const other = nodes[d.railId]
-          nodes[d.railId] = { ...other, rail: { ...other.rail!, slots: other.rail!.slots.filter(sl => !(sl.kind === 'card' && sl.id === d.slotId)) } }
+          const r = withoutCardSlot({ ...rail.rail, slots, rows }, d.slotId)
+          slots = r.slots
+          rows = r.rows
+        } else if (own) {
+          nodes[d.railId] = { ...nodes[d.railId], rail: withoutCardSlot(own, d.slotId) }
         }
       }
       const keepSize = (n: FreeNodeData) => ({ prevW: n.railDock?.prevW ?? n.width, prevH: n.railDock?.prevH ?? n.height })
@@ -594,8 +604,12 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
         const id = ids.find(i => nodes[i].type === 'effect')
         if (!id) return s
         const slotId = crypto.randomUUID()
-        const at = Math.max(0, Math.min(insertAt, slots.length))
-        slots = [...slots.slice(0, at), { id: slotId, kind: 'card' as const }, ...slots.slice(at)]
+        const into = (row: RailSlot[]) => {
+          const at = Math.max(0, Math.min(insertAt, row.length))
+          return [...row.slice(0, at), { id: slotId, kind: 'card' as const }, ...row.slice(at)]
+        }
+        if (toRow > 0 && rows && rows[toRow - 1]) rows = rows.map((row, k) => (k === toRow - 1 ? into(row) : row))
+        else slots = into(slots)
         nodes[id] = { ...nodes[id], tileDeck: undefined, railDock: { railId: target.railId, slotId, order: 0, ...keepSize(nodes[id]) } }
         ;(followers.get(id) ?? []).forEach((fid, k) => {
           nodes[fid] = { ...nodes[fid], railDock: { ...nodes[fid].railDock!, railId: target.railId, slotId, order: k + 1 } }
@@ -624,7 +638,7 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
           nodes[fid] = { ...m, railDock: undefined, width: m.railDock?.prevW ?? m.width, height: m.railDock?.prevH ?? m.height }
         }
       }
-      nodes[target.railId] = { ...nodes[target.railId], rail: { ...rail.rail, slots } }
+      nodes[target.railId] = { ...nodes[target.railId], rail: { ...rail.rail, slots, ...(rows ? { rows } : {}) } }
       return { nodes }
     }),
 
@@ -637,11 +651,12 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
       nodes[nodeId] = { ...n, railDock: undefined, width: d.prevW ?? n.width, height: d.prevH ?? n.height }
       const rail = nodes[d.railId]
       // An input tucked under an effect card (order 1…) leaves the card's slot.
-      const isInput = d.order > 0 && !!rail?.rail?.slots.some(sl => sl.kind === 'card' && sl.id === d.slotId)
+      const cardSlot = !!rail?.rail && railRows(rail.rail).flat().some(sl => sl.kind === 'card' && sl.id === d.slotId)
+      const isInput = d.order > 0 && cardSlot
       if (rail?.rail && !isInput) {
-        nodes[d.railId] = { ...rail, rail: { ...rail.rail, slots: rail.rail.slots.filter(sl => !(sl.kind === 'card' && sl.id === d.slotId)) } }
+        nodes[d.railId] = { ...rail, rail: withoutCardSlot(rail.rail, d.slotId) }
         // An effect card leaving takes the inputs tucked under it off too.
-        if (n.type === 'effect' && rail.rail.slots.some(sl => sl.kind === 'card' && sl.id === d.slotId)) {
+        if (n.type === 'effect' && cardSlot) {
           for (const m of Object.values(nodes)) {
             if (m.id === nodeId || m.railDock?.railId !== d.railId || m.railDock.slotId !== d.slotId) continue
             nodes[m.id] = { ...m, railDock: undefined, width: m.railDock.prevW ?? m.width, height: m.railDock.prevH ?? m.height }
@@ -694,6 +709,30 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
       if (Object.values(s.nodes).some(n => n.railDock?.railId === railId && n.railDock.slotId === slotId)) return s
       const slots = rail.rail.slots.filter(sl => sl.id !== slotId)
       return { nodes: { ...s.nodes, [railId]: { ...rail, rail: { ...rail.rail, slots } } } }
+    }),
+
+  addRailRow: (railId) =>
+    set(s => {
+      const rail = s.nodes[railId]
+      if (!rail?.rail) return s
+      return { nodes: { ...s.nodes, [railId]: { ...rail, rail: { ...rail.rail, rows: [...(rail.rail.rows ?? []), []] } } } }
+    }),
+
+  removeRailRow: (railId, index) =>
+    set(s => {
+      const rail = s.nodes[railId]
+      const row = rail?.rail?.rows?.[index - 1]
+      if (!rail?.rail || !row) return s
+      const nodes = { ...s.nodes }
+      // Its cards, and the inputs under them, come off where they are.
+      const ids = new Set(row.map(sl => sl.id))
+      for (const m of Object.values(nodes)) {
+        if (m.railDock?.railId !== railId || !ids.has(m.railDock.slotId)) continue
+        nodes[m.id] = { ...m, railDock: undefined, width: m.railDock.prevW ?? m.width, height: m.railDock.prevH ?? m.height }
+      }
+      const rows = rail.rail.rows!.filter((_, k) => k !== index - 1)
+      nodes[railId] = { ...rail, rail: { ...rail.rail, rows: rows.length ? rows : undefined } }
+      return { nodes }
     }),
 
   // Results are kept, as a deleted strip's are: set down below the strip.

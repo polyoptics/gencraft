@@ -34,6 +34,7 @@ import { EFFECTS, effectKindOf } from './effects'
 
 type Members = Map<string, FreeNodeData[]> | undefined
 type SourceItem = Extract<ChainItem, { kind: 'source' }>
+type EffectItem = Extract<ChainItem, { kind: 'effect' }>
 
 /** One live slot of the recipe. Card slots whose card has left are skipped,
  *  as the layout skips them — so "directly after" means after on screen. */
@@ -43,6 +44,8 @@ type Step =
 
 interface Reading {
   steps: Step[]
+  /** The look rows (RailData.rows): each its effect cards, left to right. */
+  rows: Extract<Step, { kind: 'card' }>[][]
   /** The subject's role step, or null when the rail has no role slot. */
   subject: Extract<Step, { kind: 'role' }> | null
   /** Role slot id → the blend card slot id it feeds. */
@@ -57,7 +60,7 @@ function isBlend(card: FreeNodeData): boolean {
 }
 
 function read(rail: FreeNodeData, members: Members): Reading {
-  const out: Reading = { steps: [], subject: null, partners: {}, partnerOf: new Map(), ignored: [] }
+  const out: Reading = { steps: [], rows: [], subject: null, partners: {}, partnerOf: new Map(), ignored: [] }
   if (!isRail(rail)) return out
   for (const slot of rail.rail.slots) {
     const docked = members?.get(slot.id) ?? []
@@ -78,6 +81,14 @@ function read(rail: FreeNodeData, members: Members): Reading {
       out.steps.push({ kind: 'role', slot, cards })
     }
   }
+  // Look rows hold effect cards only (and the inputs tucked under them).
+  out.rows = (rail.rail.rows ?? []).map(row => row.flatMap(slot => {
+    const docked = members?.get(slot.id) ?? []
+    const card = docked[0]
+    return slot.kind === 'card' && card?.type === 'effect'
+      ? [{ kind: 'card' as const, slot, card, inputs: docked.slice(1).filter(n => n.type === 'effect') }]
+      : []
+  }))
   out.steps.forEach((s, i) => {
     if (s.kind !== 'role') return
     if (!out.subject) { out.subject = s; return }
@@ -190,12 +201,21 @@ export function railComboAt(
   const items: ChainItem[] = [sourceItem(subject, posters)]
   const sourceIds = [unitOwner(subject.id)]
   let label = subject.label || 'picture'
+  // An effect card as a chain item: its switches and the inputs tucked
+  // under it. A Combine card carries the look rows' items with it.
+  const effectItem = (card: FreeNodeData, under: FreeNodeData[]): EffectItem => {
+    const inputs = under.map(c => ({ id: c.id, effect: effectKindOf(c), params: c.effect?.params, text: c.effect?.text }))
+    return {
+      id: card.id, kind: 'effect', effect: effectKindOf(card), params: card.effect?.params, text: card.effect?.text,
+      off: card.effect?.off, solo: card.effect?.solo, ...(inputs.length ? { inputs } : {}),
+    }
+  }
   for (const s of r.steps) {
     if (s.kind !== 'card') continue
     const card = s.card
-    const inputs = s.inputs.map(c => ({ id: c.id, effect: effectKindOf(c), params: c.effect?.params, text: c.effect?.text }))
-    items.push({ id: card.id, kind: 'effect', effect: effectKindOf(card), params: card.effect?.params, text: card.effect?.text, off: card.effect?.off, solo: card.effect?.solo,
-      ...(inputs.length ? { inputs } : {}) })
+    const item = effectItem(card, s.inputs)
+    if (item.effect === 'combine' && r.rows.length) item.rows = r.rows.map(row => row.map(x => effectItem(x.card, x.inputs)))
+    items.push(item)
     const partnerStep = r.partnerOf.get(s.slot.id)
     const partner = partnerStep ? chosen.get(partnerStep.slot.id) : null
     if (partner) {

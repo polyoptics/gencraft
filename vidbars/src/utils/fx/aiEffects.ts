@@ -27,6 +27,8 @@ export interface AuxStep {
   id: string; effect: EffectKind; params?: Record<string, number>; text?: string
   /** Cards tucked under it on a loop strip (utils/rail side inputs). */
   inputs?: { id: string; effect: EffectKind; params?: Record<string, number>; text?: string }[]
+  /** A Combine card: the look rows it lays over its picture. */
+  rows?: AuxStep[][]
 }
 
 /** A Segment card's text: one thing per line, "name: phrase, phrase".
@@ -80,6 +82,8 @@ type Kept =
 
 interface Req {
   key: string; what: string
+  /** A Combine card's mask for look row `row` (0 = the first look row). */
+  row?: number
   job: { op: 'depth' | 'segment' | 'lines' | 'formhatch' | 'bghatch' | 'look'; look?: string; objects?: Record<string, string[]>; dials?: Record<string, number>; side?: number; engine?: Engine }
 }
 /** What finds the things a Segment card names: SAM 3 (descriptive phrases,
@@ -113,7 +117,7 @@ function hash(s: string): string {
   return (h >>> 0).toString(36) + s.length.toString(36)
 }
 
-const AUX_KINDS = new Set<EffectKind>(['depth', 'segment', 'filmline', 'linemix', 'formhatch', 'bghatch', 'shademix',
+const AUX_KINDS = new Set<EffectKind>(['depth', 'segment', 'filmline', 'linemix', 'formhatch', 'bghatch', 'shademix', 'combine',
   ...(Object.keys(LOOK_OF) as EffectKind[])])
 const isAuxKind = (k: EffectKind) => AUX_KINDS.has(k)
 /** Cards that read a Segment card's phrases (the things to draw). */
@@ -228,6 +232,22 @@ function requests(steps: AuxStep[], i: number, url: string): Req[] | null {
   // drawing card: whatever lies between the two then works on the re-mixed
   // drawing, as if the drawing had been made that way. Its note says which
   // drawing it mixes.
+  // Combine: each look row's mask, from the Segment card in that row (or one
+  // tucked under a card of it). A row with none covers the whole picture.
+  if (s.effect === 'combine') {
+    const rows = s.rows ?? []
+    if (!rows.length) { say(s.id, 'Add a look row under the strip'); return [] }
+    say(s.id, `Combines ${rows.length} look row${rows.length > 1 ? 's' : ''}`)
+    const out: Req[] = []
+    rows.forEach((row, k) => {
+      const seg = row.find(x => x.effect === 'segment') ?? row.flatMap(x => x.inputs ?? []).find(x => x.effect === 'segment')
+      const objects = seg ? parsePhrases(seg.text) : {}
+      if (!Object.keys(objects).length) return
+      const engine = engineOf(seg as AuxStep)
+      out.push({ key: `mask|${src}|${JSON.stringify(objects)}|${engine}`, what: 'mask', row: k, job: { op: 'segment', objects, engine } })
+    })
+    return out
+  }
   if (s.effect === 'shademix') {
     const n = steps.slice(0, i).filter(x => x.effect === 'formhatch' || x.effect === 'bghatch').length
     say(s.id, n ? `Mixes the ${n > 1 ? `${n} hatch cards` : 'hatch card'} before it` : 'Put a hatch card before it')
@@ -335,6 +355,7 @@ export function auxFor(e: FxEngine, plan: AuxPlan, steps: AuxStep[], i: number, 
     if (!k) { say(s.id, `Computing ${r.what}…`); releaseAux(e, aux); return null }
     if ('error' in k) { say(s.id, `${r.what[0].toUpperCase()}${r.what.slice(1)}: ${k.error}`); releaseAux(e, aux); return null }
     const tex = (n: string) => (k.imgs[n] ? fit(e, k.imgs[n]!, cur) : black(e, cur))
+    if (r.row !== undefined) { (aux.rowMasks ??= [])[r.row] = tex('mask'); continue }
     if (r.what === 'depth') aux.depth = tex('depth')
     else if (r.what === 'mask') {
       aux.mask = tex('mask')
@@ -359,7 +380,7 @@ export function auxFor(e: FxEngine, plan: AuxPlan, steps: AuxStep[], i: number, 
       colors: k.colors!, mix: lineSetup(steps, i).mix,
     }
   }
-  if (s.effect !== 'linemix' && s.effect !== 'shademix') say(s.id, '')
+  if (s.effect !== 'linemix' && s.effect !== 'shademix' && s.effect !== 'combine') say(s.id, '')
   return aux
 }
 
@@ -370,12 +391,15 @@ export function releaseAux(e: FxEngine, aux: Aux | null) {
   if (aux.lines) for (const t of [aux.lines.outline, aux.lines.inside, aux.lines.paper, aux.lines.pencil]) e.release(t)
   if (aux.hatch) for (const t of [aux.hatch.a, aux.hatch.k, aux.hatch.b, aux.hatch.h, aux.hatch.p]) e.release(t)
   if (aux.look) for (const l of aux.look.layers) { e.release(l.c); e.release(l.a) }
+  if (aux.rowMasks) for (const m of aux.rowMasks) e.release(m)
 }
 
 /** What the needs come to, handed to an effect's run. */
 export interface Aux {
   depth?: Tex
   mask?: Tex
+  /** A Combine card: each look row's mask (undefined: the row has none). */
+  rowMasks?: (Tex | undefined)[]
   /** The mask's phrases are what a later drawing card (outline, hatch) finds. */
   namesForLines?: boolean
   lines?: { outline: Tex; inside: Tex; paper: Tex; pencil: Tex; colors: LineColors; mix: Record<string, number> }

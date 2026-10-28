@@ -24,7 +24,10 @@ export type ChainItem =
       off?: boolean; solo?: boolean
       /** Cards tucked under it on a loop strip (utils/rail side inputs), in
        *  order: a Depth card's depth, a Segment card's mask. */
-      inputs?: { id: string; effect: EffectKind; params?: Record<string, number>; text?: string }[] }
+      inputs?: { id: string; effect: EffectKind; params?: Record<string, number>; text?: string }[]
+      /** A Combine card: the loop strip's look rows (utils/rail RailData.rows),
+       *  each a chain of effects run on the same picture. */
+      rows?: Extract<ChainItem, { kind: 'effect' }>[][] }
 
 export interface ChainPlan {
   sources: Extract<ChainItem, { kind: 'source' }>[]
@@ -142,6 +145,21 @@ export async function runChain(items: ChainItem[], maxSide: number, previewSide:
   const images = new Map(await Promise.all(urls.map(async u => [u, await loadImage(u)] as const)))
   const steps = plan.steps.map(s => s.item)
   const aux = await prepareAux(steps, plan.sources.map(s => ({ url: s.url, img: images.get(s.url) ?? null })), !opts.live)
+  // A Combine card's look rows: each run as a strip of its own on the same
+  // picture, here, before this run draws anything (a run ends by reclaiming
+  // the engine's targets). Combine lays them over its picture in the loop.
+  const looks = new Map<string, (HTMLCanvasElement | null)[]>()   // `${step} ${source url}` → per row
+  for (const [i, s] of plan.steps.entries()) {
+    if (s.item.effect !== 'combine' || !s.item.rows?.length) continue
+    for (const source of plan.sources) {
+      const outs: (HTMLCanvasElement | null)[] = []
+      for (const row of s.item.rows) {
+        const r = row.length ? await runChain([source, ...row], maxSide, false, opts) : null
+        outs.push(r?.outputs[0]?.canvas ?? null)
+      }
+      looks.set(`${i} ${source.url}`, outs)
+    }
+  }
 
   // Taken after the wait: a context lost meanwhile is rebuilt here.
   const e = fx()
@@ -176,7 +194,28 @@ export async function runChain(items: ChainItem[], maxSide: number, previewSide:
         let next = got
           ? def.run(e, cur, effectParams(s.item.effect, s.item.params), other ?? null, got)
           : e.pass('copy', e.target(cur.w, cur.h), { src: cur })
-        if (got?.mask && !def.blend && !def.needs) {
+        if (got && s.item.effect === 'combine') {
+          // The look rows over the picture: those without a mask first (a
+          // background look, over all of it), then each masked one in row
+          // order, limited to its mask; at Combine's strength.
+          const outs = looks.get(`${i} ${source.url}`) ?? []
+          const strength = effectParams('combine', s.item.params).strength
+          const order = outs.map((_, k) => k).sort((a, b) => Number(!!got.rowMasks?.[a]) - Number(!!got.rowMasks?.[b]))
+          for (const k of order) {
+            const canvas = outs[k]
+            if (!canvas) continue
+            const look = e.upload(canvas, Math.max(cur.w, cur.h))
+            const fit = look.w === cur.w && look.h === cur.h ? look : e.scaled(look, cur.w, cur.h)
+            const own = got.rowMasks?.[k]
+            const mask = own ?? e.pass('grade', e.target(cur.w, cur.h), { src: cur, exposure: 24, contrast: 1, saturation: 0, tint: [1, 1, 1], tintAmt: 0 })
+            const laid = e.pass('layerOver', e.target(cur.w, cur.h), { src: next, C: fit, A: mask, S: next, blendMode: 0, strength })
+            if (!own) e.release(mask)
+            if (fit !== look) e.release(look)
+            e.release(fit)
+            e.release(next)
+            next = laid
+          }
+        } else if (got?.mask && !def.blend && !def.needs) {
           const limited = e.pass('layerOver', e.target(cur.w, cur.h), { src: cur, C: next, A: got.mask, S: cur, blendMode: 0, strength: 1 })
           e.release(next)
           next = limited

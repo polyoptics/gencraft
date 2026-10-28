@@ -12,6 +12,7 @@ export type EffectKind =
   | 'halftone' | 'chroma' | 'grade' | 'multiply' | 'screen' | 'overlay'
   | 'depth' | 'segment' | 'filmline' | 'linemix' | 'formhatch' | 'bghatch' | 'shademix'
   | 'painthatch' | 'filmcel' | 'boilink' | 'misreg' | 'construction' | 'relight' | 'formlight' | 'bglayout' | 'bgwash'
+  | 'combine'
 
 /** What an effect may need besides its picture, made from the strip's
  *  SOURCE picture by a model or tool (aiEffects.ts): a depth map, a mask of
@@ -512,6 +513,17 @@ export const EFFECTS: Record<EffectKind, EffectDef> = {
     P('halo', 'Gap round subject', 0, 40, 0.5, 12), P('hi', 'Line threshold', 0.2, 1, 0.01, 0.6),
     P('seed', 'Variation', 0, 9999, 1, 3030), P('boil', 'Boil (frames held)', 1, 6, 1, 2),
   ], true),
+  // Combine looks: on a loop strip with look rows (utils/rail RailData.rows),
+  // lays each row's look over the picture it is given, each limited to the
+  // mask of the Segment card in that row (a row with none: everywhere,
+  // under the masked ones). runChain does the laying; `run` is the stand-in.
+  combine: {
+    kind: 'combine', label: 'Combine looks', glyph: '⊞', color: '#c9b38a',
+    blurb: 'Lays the look rows over it, each in its mask',
+    needs: ['mask'],
+    params: [P('strength', 'Strength', 0, 1, 0.01, 1)],
+    run(e, src) { return e.pass('copy', e.target(src.w, src.h), { src }) },
+  },
   bgwash: lookDef('bgwash', 'Background wash', '▒', '#8f9adc', 'A cool shadow wash and haze with distance', [
     P('haze', 'Haze', 0, 1, 0.01, 0.45), P('wash', 'Wash', 0, 1, 0.01, 0.48), P('core', 'Core accent', 0, 1, 0.01, 0.18),
     P('shade_hi', 'Shadow from', 0.5, 1, 0.01, 0.9), P('grain', 'Granulation', 0, 1, 0.01, 0.3), P('mottle', 'Mottle', 0, 0.5, 0.01, 0.12),
@@ -545,4 +557,4 @@ export function effectParams(kind: EffectKind, params: Record<string, number> | 
 
 /** In the order the add menu lists them. */
 export const EFFECT_ORDER: EffectKind[] = ['bloom', 'glare', 'glow', 'ink', 'cel', 'sketch', 'halftone', 'chroma', 'grade', 'multiply', 'screen', 'overlay', 'depth', 'segment', 'filmline', 'linemix', 'formhatch', 'bghatch', 'shademix',
-  'painthatch', 'filmcel', 'boilink', 'misreg', 'construction', 'relight', 'formlight', 'bglayout', 'bgwash']
+  'painthatch', 'filmcel', 'boilink', 'misreg', 'construction', 'relight', 'formlight', 'bglayout', 'bgwash', 'combine']
