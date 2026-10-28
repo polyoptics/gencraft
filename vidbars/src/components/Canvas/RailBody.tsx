@@ -26,6 +26,9 @@ import { useRailRunStore } from '../../store/railRunStore'
 import { useRailUiStore } from '../../store/railUiStore'
 import { RAIL_GEOM, RAIL_TRAY, isRail, railLayout, railMembers, type RailColumn, type RailSlot, type Rect } from '../../utils/rail'
 import { clientToCanvas } from '../../utils/fx/createEffect'
+import { createEffectCardGroup } from '../../utils/effectCards'
+import { useBoardsStore } from '../../store/boardsStore'
+import { railAtPoint } from './rail/railHit'
 import { railComboAt } from '../../utils/fx/railChain'
 import { EFFECTS, effectKindOf } from '../../utils/fx/effects'
 import { DragOutGrip } from '../UI/DragOutGrip'
@@ -370,47 +373,103 @@ const Badge: React.FC<{ u: number; title?: string; children: React.ReactNode }> 
 /** A role column's header: its name (double-click to rename), each / pick
  *  one, how many cards it holds — or an × to remove it while it is empty —
  *  and a warning when the run passes it by. */
+/** Where a slot dragged by its header would go: a place in a loop strip's
+ *  row — its own, or (an effect) another strip's — or, an effect let go
+ *  on a picture card, the end of that card's effect stack. */
+type SlotDrop = { kind: 'row'; railId: string; insertAt: number } | { kind: 'card'; groupId: string }
+
+/** The picture card (not an effect card) under client (x, y), if any. */
+function pictureCardAt(x: number, y: number): string | null {
+  const groups = useBoardsStore.getState().groups
+  for (const el of document.elementsFromPoint(x, y)) {
+    const id = el.closest<HTMLElement>('[data-group-card]')?.dataset.id
+    if (!id) continue
+    const g = groups.find(gr => gr.id === id)
+    return g && !g.effect ? id : null
+  }
+  return null
+}
+
+/** Insert position in rail `railId`'s row for canvas x `cx`: how many
+ *  slots' middles lie left of it. */
+function rowInsertAt(railId: string, cx: number): number | null {
+  const nodes = useFreeNodeStore.getState().nodes
+  const rail = nodes[railId]
+  if (!isRail(rail)) return null
+  const L = railLayout(rail, railMembers(nodes).get(railId))
+  if (!L) return null
+  const centre = new Map(L.columns.map(c => [c.slotId, c.x + c.width / 2]))
+  let i = 0
+  rail.rail.slots.forEach((sl, k) => { const c = centre.get(sl.id); if (c !== undefined && c < cx) i = k + 1 })
+  return i
+}
+
 /** Press on a slot's header — an effect step or a column of pictures — to
  *  drag it along the row: the strip marks where it would go (the row's
  *  insertion line, railUiStore), and letting go moves it there with what
- *  is docked in it, settings and all. One undo step; none if it ends where
- *  it began. */
+ *  is docked in it, settings and all. An effect can also go to another
+ *  strip's row, or onto a picture card on the canvas — the end of its
+ *  effect stack. One undo step; none if it ends where it began. */
 function slotDragDown(railId: string, slotId: string) {
   return (e: React.PointerEvent) => {
     if (e.button !== 0) return
     // The header owns the press: no rail move, no marquee.
     e.stopPropagation()
     const x0 = e.clientX, y0 = e.clientY
+    const tile = () => Object.values(useFreeNodeStore.getState().nodes)
+      .find(n => n.type === 'effect' && n.railDock?.railId === railId && n.railDock.slotId === slotId)
+    const isEffect = !!tile()
     let moved = false
-    let at: number | null = null
+    let drop: SlotDrop | null = null
     const ui = () => useRailUiStore.getState()
     const onMove = (ev: PointerEvent) => {
       if (!moved && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 4) return
       moved = true
-      const nodes = useFreeNodeStore.getState().nodes
-      const rail = nodes[railId]
-      if (!isRail(rail)) return
-      const L = railLayout(rail, railMembers(nodes).get(railId))
-      if (!L) return
-      // Between the slots: how many slots' middles lie left of the pointer.
       const { cx } = clientToCanvas(ev.clientX, ev.clientY)
-      const centre = new Map(L.columns.map(c => [c.slotId, c.x + c.width / 2]))
-      let i = 0
-      rail.rail.slots.forEach((sl, k) => { const c = centre.get(sl.id); if (c !== undefined && c < cx) i = k + 1 })
-      at = i
-      ui().setDrop({ target: { railId, kind: 'row', insertAt: i }, draggedId: slotId })
+      // Over a strip: this one, or (an effect) any other.
+      const over = railAtPoint(ev.clientX, ev.clientY, useFreeNodeStore.getState().nodes)
+      const target = over && (over === railId || isEffect) ? over : null
+      const at = target ? rowInsertAt(target, cx) : null
+      if (target && at !== null) {
+        drop = { kind: 'row', railId: target, insertAt: at }
+        ui().setDrop({ target: { railId: target, kind: 'row', insertAt: at }, draggedId: slotId })
+        return
+      }
+      if (ui().drop?.draggedId === slotId) ui().setDrop(null)
+      const card = isEffect ? pictureCardAt(ev.clientX, ev.clientY) : null
+      drop = card ? { kind: 'card', groupId: card } : null
     }
     const onUp = () => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
       if (ui().drop?.draggedId === slotId) ui().setDrop(null)
-      if (!moved || at === null) return
-      const slots = useFreeNodeStore.getState().nodes[railId]?.rail?.slots ?? []
+      const d = drop as SlotDrop | null
+      if (!moved || !d) return
+      const fs = useFreeNodeStore.getState()
+      const t = tile()
+      if (d.kind === 'card') {
+        // Off the strip, onto the canvas: an effect card at the end of
+        // that picture card's stack, same settings, switches and all.
+        if (!t?.effect) return
+        checkpoint()
+        const gid = createEffectCardGroup(t.effect.kind, { after: d.groupId })
+        useBoardsStore.setState(st => ({ groups: st.groups.map(g => g.id === gid ? { ...g, effect: { ...t.effect! } } : g) }))
+        fs.deleteFreeNode(t.id)
+        fs.removeRailSlot(railId, slotId)
+        return
+      }
+      if (d.railId !== railId) {
+        if (!t) return
+        checkpoint()
+        fs.dockToRail([t.id], { railId: d.railId, kind: 'row', insertAt: d.insertAt })
+        return
+      }
+      const slots = fs.nodes[railId]?.rail?.slots ?? []
       const from = slots.findIndex(sl => sl.id === slotId)
-      const to = at > from ? at - 1 : at
+      const to = d.insertAt > from ? d.insertAt - 1 : d.insertAt
       if (from < 0 || to === from) return
       checkpoint()
-      useFreeNodeStore.getState().moveRailSlot(railId, slotId, at)
+      fs.moveRailSlot(railId, slotId, d.insertAt)
     }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
