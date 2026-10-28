@@ -253,9 +253,17 @@ def find_instances(root, clip, objs):
 
 
 def segment_clip(req):
-    """The picture's clip whose matte folder holds what the request names: (root, clip, objects)."""
+    """The picture's clip whose matte folder holds what the request names: (root, clip, objects). Found here with
+    Grounding DINO + SAM2, or - engine "sam3" - already found by sam3_server.py (the worker asks it first), whose
+    clip this only completes with the frames."""
     root = base(req)
     objs = objects_of(req)
+    if req.get("engine") == "sam3":
+        clip = "s3_" + short(objs)
+        if not os.path.exists(os.path.join(root, "clips", clip + "_done.json")):
+            raise ValueError("SAM 3 has not segmented this picture")
+        clip_like(root, clip)
+        return root, clip, objs
     clip = "mi_" + short(objs)  # mi: every instance (m_ was matte_auto's one per object)
     done = os.path.join(root, "clips", clip + "_done.json")
     if not os.path.exists(done):

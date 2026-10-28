@@ -62,7 +62,14 @@ type Kept =
   | { imgs: Record<string, HTMLImageElement | null>; colors?: LineColors }
   | { error: string }
 
-interface Req { key: string; what: string; job: { op: 'depth' | 'segment' | 'lines' | 'formhatch' | 'bghatch'; objects?: Record<string, string[]>; dials?: Record<string, number>; side?: number } }
+interface Req {
+  key: string; what: string
+  job: { op: 'depth' | 'segment' | 'lines' | 'formhatch' | 'bghatch'; objects?: Record<string, string[]>; dials?: Record<string, number>; side?: number; engine?: Engine }
+}
+/** What finds the things a Segment card names: SAM 3 (descriptive phrases,
+ *  every instance, tracked through a sequence) or Grounding DINO + SAM2. */
+type Engine = 'sam3' | 'dino'
+const engineOf = (s: AuxStep | undefined): Engine => (s?.params?.engine ?? 0) >= 0.5 ? 'dino' : 'sam3'
 
 // Results by what they are made from; a few dozen pictures' worth.
 const kept = new Map<string, Kept>()
@@ -102,6 +109,13 @@ export const stripNeedsAux = (steps: { kind: string; effect?: EffectKind }[]) =>
 function phrasesFor(steps: AuxStep[], i: number): Record<string, string[]> | null {
   for (let j = i; j >= 0; j--) if (steps[j].effect === 'segment') return parsePhrases(steps[j].text)
   return null
+}
+
+/** The engine of the nearest Segment card at or before step i (SAM 3
+ *  without one). */
+function engineFor(steps: AuxStep[], i: number): Engine {
+  for (let j = i; j >= 0; j--) if (steps[j].effect === 'segment') return engineOf(steps[j])
+  return 'sam3'
 }
 
 /** A hatch card at step i: its dials, and the Shading mix cards after it
@@ -147,7 +161,8 @@ function requests(steps: AuxStep[], i: number, url: string): Req[] | null {
   if (s.effect === 'segment') {
     const objects = parsePhrases(s.text)
     if (!Object.keys(objects).length) { say(s.id, 'Name something to find'); return null }
-    return [{ key: `mask|${src}|${JSON.stringify(objects)}`, what: 'mask', job: { op: 'segment', objects } }]
+    const engine = engineOf(s)
+    return [{ key: `mask|${src}|${JSON.stringify(objects)}|${engine}`, what: 'mask', job: { op: 'segment', objects, engine } }]
   }
   if (s.effect === 'formhatch' || s.effect === 'bghatch') {
     // The figure hatch needs the things to hatch ("person" without a
@@ -155,9 +170,10 @@ function requests(steps: AuxStep[], i: number, url: string): Req[] | null {
     // Segment card the whole picture is background.
     const objects = phrasesFor(steps, i) ?? (s.effect === 'formhatch' ? { person: ['person'] } : undefined)
     const { dials } = hatchSetup(steps, i)
-    return [{ key: `${s.effect}|${src}|${JSON.stringify(objects ?? null)}|${JSON.stringify(dials)}|${LINE_SIDE}`,
+    const engine = engineFor(steps, i)
+    return [{ key: `${s.effect}|${src}|${JSON.stringify(objects ?? null)}|${engine}|${JSON.stringify(dials)}|${LINE_SIDE}`,
       what: s.effect === 'formhatch' ? 'hatching' : 'background hatching',
-      job: { op: s.effect, objects, dials, side: LINE_SIDE } }]
+      job: { op: s.effect, objects, dials, side: LINE_SIDE, engine } }]
   }
   if (s.effect === 'shademix') {
     if (!steps.slice(0, i).some(x => x.effect === 'formhatch' || x.effect === 'bghatch')) { say(s.id, 'Put a hatch card before it'); return null }
@@ -167,8 +183,9 @@ function requests(steps: AuxStep[], i: number, url: string): Req[] | null {
   if (s.effect === 'filmline') {
     const objects = phrasesFor(steps, i) ?? { person: ['person'] }
     const { dials } = lineSetup(steps, i)
-    return [{ key: `lines|${src}|${JSON.stringify(objects)}|${JSON.stringify(dials)}|${LINE_SIDE}`, what: 'outline',
-      job: { op: 'lines', objects, dials, side: LINE_SIDE } }]
+    const engine = engineFor(steps, i)
+    return [{ key: `lines|${src}|${JSON.stringify(objects)}|${engine}|${JSON.stringify(dials)}|${LINE_SIDE}`, what: 'outline',
+      job: { op: 'lines', objects, dials, side: LINE_SIDE, engine } }]
   }
   if (s.effect === 'linemix') {
     if (!steps.slice(0, i).some(x => x.effect === 'filmline')) { say(s.id, 'Put a Film outline before it'); return null }

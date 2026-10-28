@@ -54,9 +54,11 @@ export interface VidbarsDesktop {
   sketchRun?(job: {
     op: 'depth' | 'segment' | 'lines' | 'formhatch' | 'bghatch'; frames: string[]; objects?: Record<string, string[]>
     side?: number; dials?: Record<string, number>
+    /** What finds the things: SAM 3 (default where installed) or Grounding DINO + SAM2. */
+    engine?: 'sam3' | 'dino'
   }): Promise<{
     frames?: (string | Record<string, string>)[]; objects?: Record<string, string[]>
-    colors?: Record<string, string | number>; error?: string; log: string
+    colors?: Record<string, string | number>; error?: string; log: string; engine?: 'sam3' | 'dino'
   }>
 }
 

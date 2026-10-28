@@ -328,7 +328,8 @@ function registerBridge() {
     const dials = {}
     for (const [k, v] of Object.entries(job.dials || {})) if (/^[a-z_.]+$/.test(k) && Number.isFinite(v)) dials[k] = v
     const side = Number.isFinite(job.side) ? Math.max(64, Math.min(8192, Math.round(job.side))) : undefined
-    return require('./sketchWorker.cjs').run({ op: job.op, frames, objects, dials, side })
+    const engine = job.engine === 'dino' || job.engine === 'sam3' ? job.engine : undefined
+    return require('./sketchWorker.cjs').run({ op: job.op, frames, objects, dials, side, engine })
   })
 
   // An image the app MADE (a context sheet, an effect result), written as a

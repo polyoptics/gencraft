@@ -314,7 +314,10 @@ export const EFFECTS: Record<EffectKind, EffectDef> = {
     kind: 'segment', label: 'Segment', glyph: '◍', color: '#b9d98f',
     blurb: 'Finds the things you name and masks them',
     needs: ['mask'],
-    params: [P('cut', 'Cut out', 0, 1, 1, 0)],
+    // Find with: SAM 3 understands descriptions ("the man in the yellow
+    // jacket") and tracks through a sequence; DINO + SAM2 is the film's
+    // own matte_auto.py engine (and the fallback where SAM 3 is missing).
+    params: [P('cut', 'Cut out', 0, 1, 1, 0), { ...P('engine', 'Find with', 0, 1, 1, 0), names: ['SAM 3', 'DINO + SAM2'] }],
     run(e, src, p, _o, aux) {
       if (!aux?.mask) return e.pass('copy', e.target(src.w, src.h), { src })
       // Before a Film outline it only names what to outline: the picture
