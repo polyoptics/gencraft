@@ -317,6 +317,17 @@ function registerBridge() {
 
   ipcMain.handle('vb:stable-path', (e, p) => fromApp(e) && isStableMediaFile(p))
 
+  // Depth / Segment cards: sketchLook's depth and matte tools on this GPU.
+  // Frames come as data urls only — the page never names a file to read.
+  ipcMain.handle('vb:sketch-run', async (e, job) => {
+    if (!fromApp(e)) return { error: 'Not allowed', log: '' }
+    const frames = Array.isArray(job?.frames) ? job.frames.filter(f => typeof f === 'string' && f.startsWith('data:image/')) : []
+    if (!frames.length || frames.length > 600) return { error: 'no pictures', log: '' }
+    const objects = {}
+    for (const [k, v] of Object.entries(job.objects || {})) if (Array.isArray(v)) objects[String(k)] = v.map(String)
+    return require('./sketchWorker.cjs').run({ op: job.op, frames, objects })
+  })
+
   // An image the app MADE (a context sheet, an effect result), written as a
   // real file so it can be dragged out like any other:
   // Pictures\<folder for its kind>\<name> <stamp>.jpg. Never a path the page

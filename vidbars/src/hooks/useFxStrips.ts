@@ -51,7 +51,7 @@ function stripItem(n: FreeNodeData, posters: Record<string, string>): ChainItem 
   if (n.pin) return null
   // effectKindOf: a pasted or imported card may carry no `effect`, or a
   // kind this build lacks — it runs as the Bloom its face shows.
-  if (n.type === 'effect') return { id: n.id, kind: 'effect', effect: effectKindOf(n), params: n.effect?.params }
+  if (n.type === 'effect') return { id: n.id, kind: 'effect', effect: effectKindOf(n), params: n.effect?.params, text: n.effect?.text }
   if (n.type === 'image' && n.imageUrl) return { id: n.id, kind: 'source', url: n.imageUrl, label: n.label }
   // A video goes through as its poster frame — the frame its tile shows,
   // which is the LIVE map's first: the node's own copy can be a dead

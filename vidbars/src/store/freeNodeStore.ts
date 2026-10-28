@@ -90,7 +90,7 @@ export interface FreeNodeData {
   promptKit?: import('../utils/promptKit').PromptKit
   /** Effect cards: which operator, and its slider values (missing keys
    *  take their defaults — utils/fx/effects). */
-  effect?: { kind: import('../utils/fx/effects').EffectKind; params?: Record<string, number> }
+  effect?: { kind: import('../utils/fx/effects').EffectKind; params?: Record<string, number>; text?: string }
   /** COLLAPSED TILE DECK membership — present on EVERY member, the face
    *  included (face: anchor === own id, dx = dy = 0). Absent ⇒ open.
    *  Which tiles touch is derived; only "collapsed, and where each member

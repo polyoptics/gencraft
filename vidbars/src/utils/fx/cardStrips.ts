@@ -71,7 +71,7 @@ export function stripCards(
       id,
       rect: { id, x: r.screenLeft / zoom, y: r.screenTop / zoom, width: r.screenWidth / zoom, height: r.screenHeight / zoom },
       item: g.effect
-        ? { id, kind: 'effect', effect: knownKind(g.effect.kind), params: g.effect.params }
+        ? { id, kind: 'effect', effect: knownKind(g.effect.kind), params: g.effect.params, text: g.effect.text }
         : { id, kind: 'source', url: url!, label: g.name || 'Card' },
     })
   }

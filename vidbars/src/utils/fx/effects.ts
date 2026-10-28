@@ -9,6 +9,7 @@ import type { FxEngine, Tex } from './fxEngine'
 export type EffectKind =
   | 'bloom' | 'glare' | 'glow' | 'ink' | 'cel' | 'sketch'
   | 'halftone' | 'chroma' | 'grade' | 'multiply' | 'screen' | 'overlay'
+  | 'depth' | 'segment'
 
 export interface ParamDef { key: string; label: string; min: number; max: number; step: number; default: number }
 
@@ -267,6 +268,21 @@ export const EFFECTS: Record<EffectKind, EffectDef> = {
     params: [P('mix', 'Mix', 0, 1, 0.01, 1)],
     run(e, src, p, other) { return blendWith(e, src, other, 2, p.mix) },
   },
+  // Made by a model, not a shader: runChain runs these through aiEffects
+  // (the desktop's GPU). `run` here is only the stand-in for anything that
+  // calls an effect directly — the picture, unchanged.
+  depth: {
+    kind: 'depth', label: 'Depth', glyph: '◭', color: '#8fb3c9',
+    blurb: 'How far away everything is, in grey',
+    params: [P('far', 'Far is bright', 0, 1, 1, 0)],
+    run(e, src) { return e.pass('copy', e.target(src.w, src.h), { src }) },
+  },
+  segment: {
+    kind: 'segment', label: 'Segment', glyph: '◍', color: '#b9d98f',
+    blurb: 'Finds the things you name and masks them',
+    params: [P('cut', 'Cut out', 0, 1, 1, 0)],
+    run(e, src) { return e.pass('copy', e.target(src.w, src.h), { src }) },
+  },
 }
 
 /** An effect card's kind, safely: a node from a snapshot or another build
@@ -294,4 +310,4 @@ export function effectParams(kind: EffectKind, params: Record<string, number> | 
 }
 
 /** In the order the add menu lists them. */
-export const EFFECT_ORDER: EffectKind[] = ['bloom', 'glare', 'glow', 'ink', 'cel', 'sketch', 'halftone', 'chroma', 'grade', 'multiply', 'screen', 'overlay']
+export const EFFECT_ORDER: EffectKind[] = ['bloom', 'glare', 'glow', 'ink', 'cel', 'sketch', 'halftone', 'chroma', 'grade', 'multiply', 'screen', 'overlay', 'depth', 'segment']

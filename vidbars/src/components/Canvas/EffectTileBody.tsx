@@ -17,7 +17,7 @@
 // each control that edits takes its own. Anywhere else on the face moves
 // the card.
 
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import type { FreeNodeData } from '../../store/freeNodeStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useFxStore } from '../../store/fxStore'
@@ -93,7 +93,7 @@ export const EffectTileBody: React.FC<{
   updateFreeNode: (id: string, patch: Partial<FreeNodeData>) => void
   /** Where the live values are read from, when the face is not a tile's —
    *  an effect CARD (utils/effectCards) keeps them on its card. */
-  read?: () => { kind: EffectKind; stored: Record<string, number> | undefined } | null
+  read?: () => { kind: EffectKind; stored: Record<string, number> | undefined; text?: string } | null
 }> = ({ node, id, updateFreeNode, read }) => {
   const kind = effectKindOf(node)
   const def = EFFECTS[kind]
@@ -112,14 +112,14 @@ export const EffectTileBody: React.FC<{
   const paramsNow = () => {
     if (read) return read()
     const n = useFreeNodeStore.getState().nodes[id]
-    return n ? { kind: effectKindOf(n), stored: n.effect?.params } : null
+    return n ? { kind: effectKindOf(n), stored: n.effect?.params, text: n.effect?.text } : null
   }
   const setParam = (key: string, v: number) => {
     const cur = paramsNow()
     // Skip no-op writes: the pointer moving inside one step would otherwise
     // republish the strip (its items carry the params) on every frame.
     if (!cur || effectParams(cur.kind, cur.stored)[key] === v) return
-    updateFreeNode(id, { effect: { kind: cur.kind, params: { ...cur.stored, [key]: v } } })
+    updateFreeNode(id, { effect: { kind: cur.kind, params: { ...cur.stored, [key]: v }, text: cur.text } })
   }
   // Reset drops the override rather than writing the default, so the value
   // follows the effect's default if that is ever retuned. One undo step,
@@ -130,14 +130,25 @@ export const EffectTileBody: React.FC<{
     checkpoint()
     const rest = { ...cur.stored }
     delete rest[key]
-    updateFreeNode(id, { effect: { kind: cur.kind, params: rest } })
+    updateFreeNode(id, { effect: { kind: cur.kind, params: rest, text: cur.text } })
   }
   /** Every value back to the effect's default, as one undo step. */
   const resetAll = () => {
     const cur = paramsNow()
     if (!cur?.stored || Object.keys(cur.stored).length === 0) return
     checkpoint()
-    updateFreeNode(id, { effect: { kind: cur.kind, params: {} } })
+    updateFreeNode(id, { effect: { kind: cur.kind, params: {}, text: cur.text } })
+  }
+  /** Segment's phrases. Typed locally and written on leaving the box:
+   *  every write re-runs the strip, and a model run per keystroke would
+   *  queue up behind each other. */
+  const [phrases, setPhrases] = useState(node.effect?.text ?? '')
+  useEffect(() => { setPhrases(node.effect?.text ?? '') }, [node.effect?.text])
+  const commitPhrases = () => {
+    const cur = paramsNow()
+    if (!cur || (cur.text ?? '') === phrases) return
+    checkpoint()
+    updateFreeNode(id, { effect: { kind: cur.kind, params: cur.stored ?? {}, text: phrases } })
   }
   /** Anything moved off its default — what Reset all would undo. */
   const anyChanged = def.params.some(p => params[p.key] !== p.default)
@@ -360,6 +371,28 @@ export const EffectTileBody: React.FC<{
           )
         })}
       </div>
+      {kind === 'segment' && (
+        <textarea
+          value={phrases}
+          placeholder={'One thing per line:\nperson\nhat: hat, cap'}
+          title="What to find, one per line — name: phrase, phrase. Applied when you click away (or Ctrl+Enter)."
+          spellCheck={false}
+          onChange={e => setPhrases(e.target.value)}
+          onBlur={commitPhrases}
+          onKeyDown={e => {
+            e.stopPropagation()
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); commitPhrases() }
+          }}
+          onPointerDown={e => e.stopPropagation()}
+          onDoubleClick={stop}
+          style={{
+            position: 'relative', zIndex: CONTROL_Z, marginTop: 3 * u, flex: '1 1 auto', minHeight: 24 * u,
+            resize: 'none', boxSizing: 'border-box', width: '100%',
+            background: 'rgba(0,0,0,0.32)', color: 'inherit', border: 'none', borderRadius: 3.5 * u,
+            padding: `${2.5 * u}px ${3.5 * u}px`, fontSize: 8 * u, fontFamily: 'inherit', lineHeight: 1.3, outline: 'none',
+          }}
+        />
+      )}
     </div>
   )
 }

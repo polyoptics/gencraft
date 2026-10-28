@@ -76,4 +76,9 @@ contextBridge.exposeInMainWorld('vidbarsDesktop', {
    *  is a drag-out copy in the app's own Drag Cache, pruned to a budget.
    *  Never overwrites. Resolves { path } of the file written, or { error }. */
   saveImage: (kind, name, dataUrl) => ipcRenderer.invoke('vb:save-image', kind, name, dataUrl),
+
+  /** Depth / Segment: run sketchLook's depth or matte tool on pictures
+   *  (data urls; several = a short sequence). Resolves { frames } for depth,
+   *  { objects: { name: [...] } } for segment, or { error }; with `log`. */
+  sketchRun: (job) => ipcRenderer.invoke('vb:sketch-run', job),
 })

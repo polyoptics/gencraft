@@ -128,7 +128,7 @@ export interface ProjectGroup {
   /** An EFFECT card (utils/effectCards): its face is the effect's sliders,
    *  and lined up to the right of a picture card it processes that card's
    *  face. A real card otherwise — it moves, stacks and fans with a deck. */
-  effect?: { kind: import('../utils/fx/effects').EffectKind; params?: Record<string, number> }
+  effect?: { kind: import('../utils/fx/effects').EffectKind; params?: Record<string, number>; text?: string }
 }
 
 /** Find which group a board belongs to */

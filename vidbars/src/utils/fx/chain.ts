@@ -13,10 +13,13 @@
 import { fx, fitSource, type FxSource, type Tex } from './fxEngine'
 import { EFFECTS, FX_REF_SIDE, effectParams, knownKind, type EffectKind } from './effects'
 import { resolveMediaUrl } from '../useResolvedMedia'
+import { isAiEffect, runAiStep } from './aiEffects'
 
 export type ChainItem =
   | { id: string; kind: 'source'; url: string; label: string }
-  | { id: string; kind: 'effect'; effect: EffectKind; params?: Record<string, number> }
+  | { id: string; kind: 'effect'; effect: EffectKind; params?: Record<string, number>
+      /** Segment's phrases ("name: phrase, phrase" per line). */
+      text?: string }
 
 export interface ChainPlan {
   sources: Extract<ChainItem, { kind: 'source' }>[]
@@ -116,6 +119,17 @@ export interface ChainResult {
  *  the step previews' long edge; 0 or false makes none (a save never shows
  *  them). */
 export async function runChain(items: ChainItem[], maxSide: number, previewSide: number | false = 220): Promise<ChainResult> {
+  // A Depth / Segment step without its result yet shows the picture
+  // unchanged and asks for it; once it is in, the strip runs again.
+  for (let pass = 0; ; pass++) {
+    const pending: Promise<void>[] = []
+    const result = await runChainOnce(items, maxSide, previewSide, pending)
+    if (!pending.length || pass >= 2) return result
+    await Promise.all(pending)
+  }
+}
+
+async function runChainOnce(items: ChainItem[], maxSide: number, previewSide: number | false, pending: Promise<void>[]): Promise<ChainResult> {
   const plan = planChain(items)
   const unreadable: string[] = []
   const result: ChainResult = { outputs: [], stepPreviews: new Map(), ignored: plan.ignored, unreadable }
@@ -141,7 +155,14 @@ export async function runChain(items: ChainItem[], maxSide: number, previewSide:
       const first = result.outputs.length === 0
       let cur = e.upload(fitted(img, source.url, side), side)
       for (const s of plan.steps) {
-        const next = EFFECTS[s.item.effect].run(e, cur, effectParams(s.item.effect, s.item.params), s.other ? others.get(s.other.id) : null)
+        const params = effectParams(s.item.effect, s.item.params)
+        let next: Tex
+        if (isAiEffect(s.item.effect)) {
+          const ai = runAiStep(e, cur, s.item.effect, s.item.id, s.item.text, params)
+          if (ai.pending) pending.push(ai.pending)
+          if (ai.error) result.error = ai.error
+          next = ai.tex
+        } else next = EFFECTS[s.item.effect].run(e, cur, params, s.other ? others.get(s.other.id) : null)
         e.release(cur)
         cur = next
         if (first && previewSide) {

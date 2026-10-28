@@ -192,7 +192,7 @@ export function railComboAt(
   for (const s of r.steps) {
     if (s.kind !== 'card') continue
     const card = s.card
-    items.push({ id: card.id, kind: 'effect', effect: effectKindOf(card), params: card.effect?.params })
+    items.push({ id: card.id, kind: 'effect', effect: effectKindOf(card), params: card.effect?.params, text: card.effect?.text })
     const partnerStep = r.partnerOf.get(s.slot.id)
     const partner = partnerStep ? chosen.get(partnerStep.slot.id) : null
     if (partner) {

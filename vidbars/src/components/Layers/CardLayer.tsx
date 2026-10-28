@@ -2917,18 +2917,18 @@ const EffectCardFace: React.FC<{ group: ProjectGroup; width: number; height: num
   // The face reads a tile; an effect card hands it one made of the card.
   const node = useMemo(() => ({
     id, type: 'effect', x: 0, y: 0, width, height, label: group.name,
-    effect: { kind, params: group.effect?.params ?? {} },
-  }) as unknown as FreeNodeData, [id, width, height, group.name, kind, group.effect?.params])
+    effect: { kind, params: group.effect?.params ?? {}, text: group.effect?.text },
+  }) as unknown as FreeNodeData, [id, width, height, group.name, kind, group.effect?.params, group.effect?.text])
   const read = useCallback(() => {
     const g = useBoardsStore.getState().groups.find(x => x.id === group.id)
-    return g?.effect ? { kind: knownKind(g.effect.kind), stored: g.effect.params } : null
+    return g?.effect ? { kind: knownKind(g.effect.kind), stored: g.effect.params, text: g.effect.text } : null
   }, [group.id])
   const update = useCallback((_: string, patch: Partial<FreeNodeData>) => {
     if (!patch.effect && patch.label === undefined) return
     useBoardsStore.setState(st => ({
       groups: st.groups.map(g => g.id !== group.id ? g : {
         ...g,
-        ...(patch.effect ? { effect: { kind: knownKind(patch.effect.kind), params: patch.effect.params ?? {} } } : {}),
+        ...(patch.effect ? { effect: { kind: knownKind(patch.effect.kind), params: patch.effect.params ?? {}, text: patch.effect.text } } : {}),
         ...(patch.label !== undefined ? { name: patch.label } : {}),
       }),
     }))

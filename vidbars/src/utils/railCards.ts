@@ -256,7 +256,7 @@ export function dockCardsOnRail(ids: string[], t: RailDropTarget): number {
     const fx = cards.filter(g => g.effect)
     fx.forEach((g, i) => {
       const id = fs().addFreeNode(0, 0, 'effect')
-      fs().updateFreeNode(id, { effect: { kind: knownKind(g.effect!.kind), params: { ...(g.effect!.params ?? {}) } }, label: g.name })
+      fs().updateFreeNode(id, { effect: { kind: knownKind(g.effect!.kind), params: { ...(g.effect!.params ?? {}) }, text: g.effect!.text }, label: g.name })
       fs().dockToRail([id], { ...t, insertAt: t.insertAt + i })
     })
     return fx.length
