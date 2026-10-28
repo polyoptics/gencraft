@@ -299,7 +299,7 @@ def op_segment(req):
                         for o in sorted(os.listdir(mdir)) if os.path.isdir(os.path.join(mdir, o))}}
 
 
-def look_finish(res):
+def look_finish(res, e=0):
     """A compositor for the look that saves its four layers (alpha, 0..1) instead of compositing them."""
     def make(g):
         D = g["D"]
@@ -313,7 +313,7 @@ def look_finish(res):
                 s, a, p, q = s * keep, a * keep, p * keep, q * keep
             a = a * D["int_opacity"]
             for name, x in (("outline", s), ("inside", a), ("paper", p), ("pencil", q)):
-                cv2.imwrite(os.path.join(res, "%04d_%s.png" % (t, name)), np.clip(x * 255 + 0.5, 0, 255).astype(np.uint8))
+                cv2.imwrite(os.path.join(res, "%04d_%s.png" % (t, name)), np.clip(crop_edge(x, e) * 255 + 0.5, 0, 255).astype(np.uint8))
         return finish
     return make
 
@@ -330,7 +330,7 @@ def op_lines(req):
         for k, v in dials.items():
             argv += ["--dial", "%s=%r" % (k, v)]
         os.makedirs(res + ".tmp", exist_ok=True)
-        run_tool(LOOK, root, argv, [TOOLS_SCALE], finish=look_finish(res + ".tmp"))
+        run_tool(LOOK, root, argv, [TOOLS_SCALE], finish=look_finish(res + ".tmp", edge_of(clip)))
         os.replace(res + ".tmp", res)
     n = len([f for f in os.listdir(res) if f.endswith("_outline.png")])
     return {"frames": [{k: os.path.join(res, "%04d_%s.png" % (i, k)) for k in ("outline", "inside", "paper", "pencil")}
@@ -347,13 +347,34 @@ def ensure_depth(root):
     return [os.path.join(dd, f) for f in sorted(os.listdir(dd))]
 
 
+# A whole-picture subject ("wh": nothing named) is drawn on the picture mirrored out by EDGE px on every side, its
+# figure covering that too, so the subject's edge - where a look strokes its silhouette - lies outside the picture;
+# the layers are cropped back. Without it the outline would run along the picture's border.
+EDGE = 64
+
+
+def edge_of(clip):
+    """How far a look clip extends past the picture (EDGE for a whole-picture subject, else 0)."""
+    return EDGE if clip.endswith("_e") or "_e_" in clip else 0
+
+
+def crop_edge(x, e):
+    return x[e:-e, e:-e] if e else x
+
+
 def look_clip(root, mclip, side, depth=False, pad=False):
     """A clip for a look: the frames scaled to `side`, the segment's mattes at that size (mclip None: no matte
     folder - the whole frame is background; a segment that found nothing: an empty figure) and, with depth, the
     depth at that size. pad: a still gets its frame twice (the hatch looks read motion from a neighbouring frame;
     the same frame again is no motion). Made once; returns its name."""
-    name = "l%d_%s%s" % (side, mclip or "none", "_p" if pad else "")
+    e = EDGE if mclip == "wh" else 0
+    name = "l%d_%s%s%s" % (side, mclip or "none", "_p" if pad else "", "_e" if e else "")
     d = clip_like(root, name, side)
+    if e and not os.path.exists(os.path.join(root, "clips", name + "_edge.json")):
+        for f in sorted(os.listdir(d)):
+            p = os.path.join(d, f)
+            cv2.imwrite(p, cv2.copyMakeBorder(cv2.imread(p), e, e, e, e, cv2.BORDER_REFLECT))
+        json.dump(e, open(os.path.join(root, "clips", name + "_edge.json"), "w"))
     if pad and len(os.listdir(d)) == 1:
         shutil.copy(os.path.join(d, "0000.png"), os.path.join(d, "0001.png"))
     h, w = cv2.imread(os.path.join(d, "0000.png")).shape[:2]
@@ -375,8 +396,9 @@ def look_clip(root, mclip, side, depth=False, pad=False):
         os.makedirs(ddir + ".tmp", exist_ok=True)
         ds = ensure_depth(root)
         for i in range(n):
+            z = cv2.resize(np.load(ds[min(i, len(ds) - 1)]), (w - 2 * e, h - 2 * e), interpolation=cv2.INTER_AREA)
             np.save(os.path.join(ddir + ".tmp", "%04d.npy" % i),
-                    cv2.resize(np.load(ds[min(i, len(ds) - 1)]), (w, h), interpolation=cv2.INTER_AREA).astype(np.float32))
+                    (cv2.copyMakeBorder(z, e, e, e, e, cv2.BORDER_REFLECT) if e else z).astype(np.float32))
         os.replace(ddir + ".tmp", ddir)
     return name
 
@@ -425,7 +447,7 @@ def op_formhatch(req):
                 if t == k:
                     drw = {s: g["drawing_fields"](k // D["boil"], g["dials"](s))
                            for s in sorted({g["SC"].of(p, k) for p in g["parts"]})}
-                A, K, B, Hc = g["render"](t, k, (cx, cy, zm, axis, dark, light3, l2, drw))
+                A, K, B, Hc = (crop_edge(x, edge_of(clip)) for x in g["render"](t, k, (cx, cy, zm, axis, dark, light3, l2, drw)))
                 save_grey(os.path.join(res + ".tmp", "%04d_a.png" % t), A)
                 save_grey(os.path.join(res + ".tmp", "%04d_k.png" % t), K)
                 save_grey(os.path.join(res + ".tmp", "%04d_b.png" % t), B)
@@ -535,6 +557,7 @@ def op_look(req):
         for t in range(n_src):
             for i, (sub, _) in enumerate(spec["layers"]):
                 im = cv2.imread(layer(sub, t), cv2.IMREAD_UNCHANGED)
+                im = crop_edge(im, edge_of(clip)) if im is not None else None
                 if im is None:
                     raise ValueError("%s wrote no %s for frame %d" % (spec["script"], sub, t))
                 if im.ndim == 2 or im.shape[2] == 3:  # an opaque layer acts everywhere
