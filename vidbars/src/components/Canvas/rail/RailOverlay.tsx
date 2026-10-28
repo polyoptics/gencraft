@@ -59,20 +59,32 @@ export const RailOverlay: React.FC<{
       dropMark = <Bar dir="h" at={y} from={col.x - 8 * u} to={col.x + col.width + 8 * u} u={u} />
     }
   } else if (drop?.target.kind === 'row') {
-    const at = drop.target.insertAt
-    const order = new Map(slots.map((s, i) => [s.id, i]))
+    const t = drop.target
+    const at = t.insertAt
+    // The row it goes into: the strip's own, or look row `row` (utils/rail
+    // RailData.rows), whose columns are its slots in order.
+    const look = (t.row ?? 0) > 0 ? L.rows.find(r => r.index === t.row) : undefined
     const gap = RAIL_GEOM.gap * u
-    const after = L.columns.find(c => (order.get(c.slotId) ?? -1) >= at)
-    const before = L.columns.filter(c => (order.get(c.slotId) ?? Infinity) < at)
-    const last = before[before.length - 1]
+    let after: typeof L.columns[number] | undefined, last: typeof L.columns[number] | undefined
+    if (look) {
+      after = look.columns[at]
+      last = look.columns[Math.min(at, look.columns.length) - 1]
+    } else {
+      const order = new Map(slots.map((s, i) => [s.id, i]))
+      after = L.columns.find(c => (order.get(c.slotId) ?? -1) >= at)
+      const before = L.columns.filter(c => (order.get(c.slotId) ?? Infinity) < at)
+      last = before[before.length - 1]
+    }
     // Halfway across the gap between the slots either side of the insert;
-    // the "+" buttons sit one gap outside the first and last slot, so the
-    // ends land in those gaps too.
+    // the "+" buttons (a look row's label) sit one gap outside the first
+    // and last slot, so the ends land in those gaps too.
+    const start = look ? look.label : L.plusStart
     const x = after ? after.x - gap / 2
       : last ? last.x + last.width + gap / 2
-      : L.plusStart.x + L.plusStart.width + gap / 2
-    const top = L.tray.head.y - 4 * u
-    dropMark = <Bar dir="v" at={x} from={top} to={L.plusStart.y + RAIL_GEOM.cardH * u + 4 * u} u={u} />
+      : start.x + start.width + gap / 2
+    const top = look ? look.band.y - 4 * u : L.tray.head.y - 4 * u
+    const bodyTop = look ? look.label.y : L.plusStart.y
+    dropMark = <Bar dir="v" at={x} from={top} to={bodyTop + RAIL_GEOM.cardH * u + 4 * u} u={u} />
   }
 
   // ── Run highlight: each busy picture's VISIBLE band (its whole card when
