@@ -242,16 +242,16 @@ export const RailBody: React.FC<{
         const card = members?.get(col.slotId)?.[0]
         const def = card ? EFFECTS[effectKindOf(card)] : null
         // What it draws on without an input: the nearest Segment card before
-        // it in its own row (as aiEffects reads it), else "person".
+        // it in its own row (as aiEffects reads it), else the whole picture.
         const row = [slots, ...(rail.rail?.rows ?? [])].find(r => r.some(sl => sl.id === col.slotId)) ?? []
         const before = row.slice(0, row.findIndex(sl => sl.id === col.slotId)).reverse()
           .map(sl => members?.get(sl.id)?.[0]).find(c => c && effectKindOf(c) === 'segment')
         const named = before ? Object.keys(parsePhrases(before.effect?.text)).join(', ') : ''
-        const drawsOn = named || 'person'
+        const drawsOn = named ? `"${named}"` : 'the whole picture'
         const lit = drop?.target.kind === 'input' && drop.target.slotId === col.slotId
         const hint = need === 'depth' ? (def?.blend ? 'drop a Depth card: mixes its depth' : 'made for it, or drop a Depth card')
           : def?.blend ? 'drop a Segment card: mixes its mask'
-          : def?.needs ? `draws on "${drawsOn}", or drop a Segment card`
+          : def?.needs ? `draws on ${drawsOn}, or drop a Segment card`
           : 'drop a Segment card to limit it to a mask'
         return (
           <div key={`${col.slotId}-${need}`} data-rail-need={need} style={{
