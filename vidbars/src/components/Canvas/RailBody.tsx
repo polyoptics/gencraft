@@ -24,7 +24,7 @@ import { useShallow } from 'zustand/react/shallow'
 import { useFreeNodeStore, type FreeNodeData } from '../../store/freeNodeStore'
 import { useRailRunStore } from '../../store/railRunStore'
 import { useRailUiStore } from '../../store/railUiStore'
-import { RAIL_GEOM, RAIL_TRAY, isRail, railLayout, railMembers, type RailColumn, type RailSlot, type Rect } from '../../utils/rail'
+import { RAIL_GEOM, RAIL_TRAY, isRail, railDropTarget, railLayout, railMembers, railRows, type RailColumn, type RailDropTarget, type RailSlot, type Rect } from '../../utils/rail'
 import { clientToCanvas } from '../../utils/fx/createEffect'
 import { createEffectCardGroup } from '../../utils/effectCards'
 import { useBoardsStore } from '../../store/boardsStore'
@@ -440,13 +440,12 @@ const Badge: React.FC<{ u: number; title?: string; children: React.ReactNode }> 
   }}>{children}</span>
 )
 
-/** A role column's header: its name (double-click to rename), each / pick
- *  one, how many cards it holds — or an × to remove it while it is empty —
- *  and a warning when the run passes it by. */
-/** Where a slot dragged by its header would go: a place in a loop strip's
- *  row — its own, or (an effect) another strip's — or, an effect let go
- *  on a picture card, the end of that card's effect stack. */
-type SlotDrop = { kind: 'row'; railId: string; insertAt: number } | { kind: 'card'; groupId: string }
+/** Where a slot dragged by its header would go: a place on a loop strip
+ *  — a row of this strip or (an effect) another's: the strip's own row, a
+ *  look row, or under an effect as its side input (utils/rail
+ *  railDropTarget) — or, an effect let go on a picture card, the end of
+ *  that card's effect stack. */
+type SlotDrop = { kind: 'rail'; target: RailDropTarget } | { kind: 'card'; groupId: string }
 
 /** The picture card (not an effect card) under client (x, y), if any. */
 function pictureCardAt(x: number, y: number): string | null {
@@ -460,26 +459,43 @@ function pictureCardAt(x: number, y: number): string | null {
   return null
 }
 
-/** Insert position in rail `railId`'s row for canvas x `cx`: how many
- *  slots' middles lie left of it. */
-function rowInsertAt(railId: string, cx: number): number | null {
+/** Where on rail `railId` a slot let go at canvas (cx, cy) goes: for an
+ *  effect (`tile`), the strip's own drop target — any row, or a side
+ *  input; for a pictures column, a place in the strip's own row (row 0,
+ *  the only row that has columns). */
+function slotTarget(railId: string, cx: number, cy: number, tile: FreeNodeData | undefined): RailDropTarget | null {
   const nodes = useFreeNodeStore.getState().nodes
   const rail = nodes[railId]
   if (!isRail(rail)) return null
   const L = railLayout(rail, railMembers(nodes).get(railId))
   if (!L) return null
+  if (tile) return railDropTarget(L, rail, { x: cx, y: cy }, tile)
   const centre = new Map(L.columns.map(c => [c.slotId, c.x + c.width / 2]))
   let i = 0
   rail.rail.slots.forEach((sl, k) => { const c = centre.get(sl.id); if (c !== undefined && c < cx) i = k + 1 })
-  return i
+  return { railId, kind: 'row', insertAt: i }
+}
+
+/** Would `t` leave slot `slotId` of rail `railId` where it is? */
+function staysPut(railId: string, slotId: string, t: RailDropTarget): boolean {
+  if (t.railId !== railId || t.kind !== 'row') return false
+  const rail = useFreeNodeStore.getState().nodes[railId]
+  if (!isRail(rail)) return false
+  const rows = railRows(rail.rail)
+  const fromRow = rows.findIndex(r => r.some(sl => sl.id === slotId))
+  if (fromRow !== (t.row ?? 0)) return false
+  const from = rows[fromRow].findIndex(sl => sl.id === slotId)
+  return (t.insertAt > from ? t.insertAt - 1 : t.insertAt) === from
 }
 
 /** Press on a slot's header — an effect step or a column of pictures — to
- *  drag it along the row: the strip marks where it would go (the row's
- *  insertion line, railUiStore), and letting go moves it there with what
- *  is docked in it, settings and all. An effect can also go to another
- *  strip's row, or onto a picture card on the canvas — the end of its
- *  effect stack. One undo step; none if it ends where it began. */
+ *  drag it: the strip marks where it would go (railUiStore), and letting
+ *  go moves it there with what is docked in it, settings and all. A
+ *  pictures column moves along the strip's own row. An effect goes
+ *  anywhere a dragged effect card would: along its row, down or up into
+ *  another row of the strip (a look row), onto another strip, under an
+ *  effect as its side input — or onto a picture card on the canvas, the
+ *  end of its effect stack. One undo step; none if it ends where it began. */
 function slotDragDown(railId: string, slotId: string) {
   return (e: React.PointerEvent) => {
     if (e.button !== 0) return
@@ -495,14 +511,13 @@ function slotDragDown(railId: string, slotId: string) {
     const onMove = (ev: PointerEvent) => {
       if (!moved && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 4) return
       moved = true
-      const { cx } = clientToCanvas(ev.clientX, ev.clientY)
+      const { cx, cy } = clientToCanvas(ev.clientX, ev.clientY)
       // Over a strip: this one, or (an effect) any other.
       const over = railAtPoint(ev.clientX, ev.clientY, useFreeNodeStore.getState().nodes)
-      const target = over && (over === railId || isEffect) ? over : null
-      const at = target ? rowInsertAt(target, cx) : null
-      if (target && at !== null) {
-        drop = { kind: 'row', railId: target, insertAt: at }
-        ui().setDrop({ target: { railId: target, kind: 'row', insertAt: at }, draggedId: slotId })
+      const t = over && (over === railId || isEffect) ? slotTarget(over, cx, cy, tile()) : null
+      if (t) {
+        drop = { kind: 'rail', target: t }
+        ui().setDrop({ target: t, draggedId: slotId })
         return
       }
       if (ui().drop?.draggedId === slotId) ui().setDrop(null)
@@ -528,24 +543,22 @@ function slotDragDown(railId: string, slotId: string) {
         fs.removeRailSlot(railId, slotId)
         return
       }
-      if (d.railId !== railId) {
-        if (!t) return
-        checkpoint()
-        fs.dockToRail([t.id], { railId: d.railId, kind: 'row', insertAt: d.insertAt })
-        return
-      }
-      const slots = fs.nodes[railId]?.rail?.slots ?? []
-      const from = slots.findIndex(sl => sl.id === slotId)
-      const to = d.insertAt > from ? d.insertAt - 1 : d.insertAt
-      if (from < 0 || to === from) return
+      if (staysPut(railId, slotId, d.target)) return
       checkpoint()
-      fs.moveRailSlot(railId, slotId, d.insertAt)
+      // An effect docks there — the store takes its slot from whichever
+      // row held it, its side inputs going along. A pictures column moves
+      // along the strip's own row.
+      if (t) fs.dockToRail([t.id], d.target)
+      else if (d.target.kind === 'row') fs.moveRailSlot(railId, slotId, d.target.insertAt)
     }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
   }
 }
 
+/** A role column's header: its name (double-click to rename), each / pick
+ *  one, how many cards it holds — or an × to remove it while it is empty —
+ *  and a warning when the run passes it by. */
 const RoleHead: React.FC<{
   railId: string
   slot: RailSlot

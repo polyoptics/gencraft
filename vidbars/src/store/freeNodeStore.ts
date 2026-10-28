@@ -224,9 +224,10 @@ interface FreeNodeStore {
   addRailRow: (railId: string) => void
   /** Remove look row `index` (1 = the first): its cards come off the strip. */
   removeRailRow: (railId: string, index: number) => void
-  /** Move slot `slotId` to before the slot now at `insertAt` (slots.length:
-   *  the end), what is docked in it going along. */
-  moveRailSlot: (railId: string, slotId: string, insertAt: number) => void
+  /** Move slot `slotId` to before the slot now at `insertAt` (its length:
+   *  the end) in row `row` (0: the strip's own row; k: RailData.rows[k-1]),
+   *  what is docked in it going along. Pictures columns stay in row 0. */
+  moveRailSlot: (railId: string, slotId: string, insertAt: number, row?: number) => void
   /** Delete the result tiles in a rail's tray (the files stay on disk). */
   clearRailTray: (railId: string) => void
   deleteFreeNode: (id: string) => void
@@ -688,18 +689,22 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
     return slot.id
   },
 
-  moveRailSlot: (railId, slotId, insertAt) =>
+  moveRailSlot: (railId, slotId, insertAt, row = 0) =>
     set(s => {
       const rail = s.nodes[railId]
       if (!rail?.rail) return s
-      const from = rail.rail.slots.findIndex(sl => sl.id === slotId)
-      if (from < 0) return s
-      const to = insertAt > from ? insertAt - 1 : insertAt
-      if (to === from) return s
-      const slots = [...rail.rail.slots]
-      const [moved] = slots.splice(from, 1)
-      slots.splice(Math.max(0, Math.min(slots.length, to)), 0, moved)
-      return { nodes: { ...s.nodes, [railId]: { ...rail, rail: { ...rail.rail, slots } } } }
+      const rows = railRows(rail.rail)
+      const fromRow = rows.findIndex(r => r.some(sl => sl.id === slotId))
+      if (fromRow < 0 || !rows[row]) return s
+      const from = rows[fromRow].findIndex(sl => sl.id === slotId)
+      const moved = rows[fromRow][from]
+      if (moved.kind === 'role' && row !== 0) return s
+      const to = fromRow === row && insertAt > from ? insertAt - 1 : insertAt
+      if (fromRow === row && to === from) return s
+      const next = rows.map(r => r.filter(sl => sl.id !== slotId))
+      next[row].splice(Math.max(0, Math.min(next[row].length, to)), 0, moved)
+      const [slots, ...looks] = next
+      return { nodes: { ...s.nodes, [railId]: { ...rail, rail: { ...rail.rail, slots, ...(rail.rail.rows ? { rows: looks } : {}) } } } }
     }),
 
   removeRailSlot: (railId, slotId) =>
@@ -707,8 +712,9 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
       const rail = s.nodes[railId]
       if (!rail?.rail) return s
       if (Object.values(s.nodes).some(n => n.railDock?.railId === railId && n.railDock.slotId === slotId)) return s
-      const slots = rail.rail.slots.filter(sl => sl.id !== slotId)
-      return { nodes: { ...s.nodes, [railId]: { ...rail, rail: { ...rail.rail, slots } } } }
+      // From whichever row holds it (utils/rail withoutCardSlot).
+      const cleared = withoutCardSlot(rail.rail, slotId)
+      return { nodes: { ...s.nodes, [railId]: { ...rail, rail: { ...cleared, slots: cleared.slots.filter(sl => sl.id !== slotId) } } } }
     }),
 
   addRailRow: (railId) =>
