@@ -90,6 +90,93 @@ function transferablePoster(node: FreeNodeData): string | null {
 
 type Nodes = Record<string, FreeNodeData>
 
+/** One node's size and anchor when a resize drag began. */
+type ResizeStart = { id: string; w: number; h: number; nx: number; ny: number; u: number }
+
+function resizeStartOf(n: FreeNodeData): ResizeStart {
+  return {
+    id: n.id, w: n.width, h: n.height,
+    nx: n.pin ? n.pin.x : n.x,
+    ny: n.pin ? n.pin.y : n.y,
+    u: panelContentScale(n),
+  }
+}
+
+/** Whether a selected node joins when ANOTHER selected node's handle is
+ *  dragged: only one that shows resize handles of its own (not a tile-deck
+ *  face or member, a rail, or a card docked on one). */
+function resizableAlongside(n: FreeNodeData | undefined, nodes: Nodes): n is FreeNodeData {
+  return !!n && !n.tileDeck && n.type !== 'rail' && !isDocked(n, nodes)
+}
+
+/** The patch that resizes `node` from its drag-start `s` by a drag of
+ *  (dx, dy) in its own layout units on handle `dir`. Pure, so one drag can
+ *  resize every selected node as though each had been dragged alone. */
+function resizePatch(node: FreeNodeData, s: ResizeStart, dir: string, dx: number, dy: number, shift: boolean): Partial<FreeNodeData> {
+  // SCALE, as opposed to reshape. Two different intentions: the plain
+  // handles change the panel's SHAPE, and Shift on a corner scales the
+  // whole thing keeping the shape you already settled on — the thing that
+  // was missing once you had the aspect right and just wanted it bigger.
+  //
+  // A Rolodex tile is always in this mode: the drawer at its base sets how
+  // long the cabinet is, so its handles only grow the shape the drawer
+  // chose rather than fighting it.
+  //
+  // An effect card is always in this mode too, at its FIXED playing-card
+  // shape rather than whatever shape it starts the drag with.
+  const fixedRatio = FIXED_ASPECT[node.type]
+  const proportional = fixedRatio !== undefined || LOCKS_ASPECT.has(node.type) || (shift && dir.length === 2)
+  const k = node.pin ? node.pin.scale : 1
+  if (proportional) {
+    const ratio = fixedRatio ?? s.h / s.w
+    // Project the drag onto the diagonal (1, ratio) so both directions of
+    // pointer travel contribute and the corner tracks the cursor. West and
+    // north handles pull the other way, hence the sign.
+    const sx = dir.includes('w') ? -1 : 1
+    const sy = dir.includes('n') ? -1 : 1
+    // A fixed-shape card's SIDE handles follow their own axis instead: on
+    // the diagonal, a sideways pull moved the edge a third as far as the
+    // hand and a vertical one two thirds, so the edge slid off the cursor.
+    const t = fixedRatio !== undefined && dir.length === 1
+      ? (dir === 'e' || dir === 'w' ? dx * sx : (dy * sy) / ratio)
+      : (dx * sx + dy * sy * ratio) / (1 + ratio * ratio)
+    const w = Math.max(120, 80 / ratio, s.w + t)
+    const h = w * ratio
+    const patch: Partial<FreeNodeData> = { width: w, height: h }
+    // …and the CONTENTS scale with the box. Without this, a counter-scaled
+    // panel just gained room at the same text size, which is "bigger
+    // window, same squint" rather than "bigger panel". Growing uiScale by
+    // the same factor is what makes the gesture feel like zooming the whole
+    // component. Tiles have no uiScale and are unaffected.
+    if (isPanelType(node.type) && s.w > 0) {
+      patch.uiScale = clampUiScale(s.u * (w / s.w))
+    }
+    // Growing from a west/north handle has to move the opposite corner's
+    // anchor, or the node grows away from the hand holding it.
+    if (dir.includes('w') || dir.includes('n')) {
+      const nx = dir.includes('w') ? s.nx - (w - s.w) * k : s.nx
+      const ny = dir.includes('n') ? s.ny - (h - s.h) * k : s.ny
+      if (node.pin) patch.pin = { ...node.pin, x: nx, y: ny }
+      else { patch.x = nx; patch.y = ny }
+    }
+    return patch
+  }
+
+  const MIN_W = 120, MIN_H = 80
+  let w = s.w, h = s.h, nx = s.nx, ny = s.ny
+  if (dir.includes('e')) w = Math.max(MIN_W, s.w + dx)
+  if (dir.includes('s')) h = Math.max(MIN_H, s.h + dy)
+  if (dir.includes('w')) { w = Math.max(MIN_W, s.w - dx); nx = s.nx + (s.w - w) * k }
+  if (dir.includes('n')) { h = Math.max(MIN_H, s.h - dy); ny = s.ny + (s.h - h) * k }
+
+  const patch: Partial<FreeNodeData> = { width: w, height: h }
+  if (nx !== s.nx || ny !== s.ny) {
+    if (node.pin) patch.pin = { ...node.pin, x: nx, y: ny }
+    else { patch.x = nx; patch.y = ny }
+  }
+  return patch
+}
+
 /** Can a drag of this tile dock on a loop strip (utils/rail)? A picture —
  *  or a collapsed deck whose face is one, which deals the deck's pictures
  *  into the column — or a single effect card, which takes a slot in the
@@ -230,7 +317,8 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
   const wasSelectedOnDown = useRef(false)
   const resizeLastX = useRef(0)
   const resizeLastY = useRef(0)
-  const resizeStart = useRef({ x: 0, y: 0, w: 0, h: 0, nx: 0, ny: 0, u: 1 })
+  /** Where the resize press began, and every node it resizes as it stood then. */
+  const resizeStart = useRef<{ x: number; y: number; items: ResizeStart[] }>({ x: 0, y: 0, items: [] })
   /** Which handle is being dragged: any of n/s/e/w combined. */
   const resizeDir = useRef('se')
 
@@ -786,6 +874,9 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
 
   // Resize handles — eight of them, so a panel can be reshaped from any
   // edge or corner instead of only being dragged bigger from one corner.
+  // With this node in a multi-selection, the drag resizes every selected
+  // node that has handles of its own, each by the same amount from its own
+  // corner, as if each had been dragged on its own. One undo step.
   const onResizeDown = useCallback((e: React.PointerEvent) => {
     e.stopPropagation()
     useUndoCoordinator.getState().checkpoint()
@@ -796,88 +887,31 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
     // height floors clamp independently, so an incremental path lets one
     // axis stick at its floor while the other keeps going — the aspect
     // drifts, and a west/north drag walks the node sideways.
+    const { nodes, selectedIds } = useFreeNodeStore.getState()
+    const others = selectedIds.includes(id)
+      ? selectedIds.filter(sid => sid !== id).map(sid => nodes[sid]).filter(n => resizableAlongside(n, nodes))
+      : []
     resizeStart.current = {
       x: e.clientX, y: e.clientY,
-      w: node.width, h: node.height,
-      nx: node.pin ? node.pin.x : node.x,
-      ny: node.pin ? node.pin.y : node.y,
-      u: panelContentScale(node),
+      items: [resizeStartOf(node), ...others.map(resizeStartOf)],
     }
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
-  }, [node.width, node.height, node.x, node.y, node.pin])
+  }, [id, node])
 
   const onResizeMove = useCallback((e: React.PointerEvent) => {
     if (!(e.currentTarget as HTMLElement).hasPointerCapture(e.pointerId)) return
     const s = resizeStart.current
     const dir = resizeDir.current
-    const dx = (e.clientX - s.x) / gz
-    const dy = (e.clientY - s.y) / gz
-
-    // SCALE, as opposed to reshape. Two different intentions: the plain
-    // handles change the panel's SHAPE, and Shift on a corner scales the
-    // whole thing keeping the shape you already settled on — the thing that
-    // was missing once you had the aspect right and just wanted it bigger.
-    //
-    // A Rolodex tile is always in this mode: the drawer at its base sets how
-    // long the cabinet is, so its handles only grow the shape the drawer
-    // chose rather than fighting it.
-    //
-    // An effect card is always in this mode too, at its FIXED playing-card
-    // shape rather than whatever shape it starts the drag with.
-    const fixedRatio = FIXED_ASPECT[node.type]
-    const proportional = fixedRatio !== undefined || LOCKS_ASPECT.has(node.type) || (e.shiftKey && dir.length === 2)
-    if (proportional) {
-      const ratio = fixedRatio ?? s.h / s.w
-      // Project the drag onto the diagonal (1, ratio) so both directions of
-      // pointer travel contribute and the corner tracks the cursor. West and
-      // north handles pull the other way, hence the sign.
-      const sx = dir.includes('w') ? -1 : 1
-      const sy = dir.includes('n') ? -1 : 1
-      // A fixed-shape card's SIDE handles follow their own axis instead: on
-      // the diagonal, a sideways pull moved the edge a third as far as the
-      // hand and a vertical one two thirds, so the edge slid off the cursor.
-      const t = fixedRatio !== undefined && dir.length === 1
-        ? (dir === 'e' || dir === 'w' ? dx * sx : (dy * sy) / ratio)
-        : (dx * sx + dy * sy * ratio) / (1 + ratio * ratio)
-      const w = Math.max(120, 80 / ratio, s.w + t)
-      const h = w * ratio
-      const patch: Partial<FreeNodeData> = { width: w, height: h }
-      // …and the CONTENTS scale with the box. Without this, a counter-scaled
-      // panel just gained room at the same text size, which is "bigger
-      // window, same squint" rather than "bigger panel". Growing uiScale by
-      // the same factor is what makes the gesture feel like zooming the whole
-      // component. Tiles have no uiScale and are unaffected.
-      if (isPanelType(node.type) && s.w > 0) {
-        patch.uiScale = clampUiScale(s.u * (w / s.w))
-      }
-      // Growing from a west/north handle has to move the opposite corner's
-      // anchor, or the node grows away from the hand holding it.
-      const k = node.pin ? node.pin.scale : 1
-      if (dir.includes('w') || dir.includes('n')) {
-        const nx = dir.includes('w') ? s.nx - (w - s.w) * k : s.nx
-        const ny = dir.includes('n') ? s.ny - (h - s.h) * k : s.ny
-        if (node.pin) patch.pin = { ...node.pin, x: nx, y: ny }
-        else { patch.x = nx; patch.y = ny }
-      }
-      updateFreeNode(id, patch)
-      return
+    const nodes = useFreeNodeStore.getState().nodes
+    for (const item of s.items) {
+      const n = nodes[item.id]
+      if (!n) continue
+      // Each node measures the drag in its own layout units: a pinned one
+      // at its frozen pin scale, a canvas one at the live zoom.
+      const nz = n.pin ? n.pin.scale : zoom
+      updateFreeNode(item.id, resizePatch(n, item, dir, (e.clientX - s.x) / nz, (e.clientY - s.y) / nz, e.shiftKey))
     }
-
-    const MIN_W = 120, MIN_H = 80
-    let w = s.w, h = s.h, nx = s.nx, ny = s.ny
-    const k = node.pin ? node.pin.scale : 1
-    if (dir.includes('e')) w = Math.max(MIN_W, s.w + dx)
-    if (dir.includes('s')) h = Math.max(MIN_H, s.h + dy)
-    if (dir.includes('w')) { w = Math.max(MIN_W, s.w - dx); nx = s.nx + (s.w - w) * k }
-    if (dir.includes('n')) { h = Math.max(MIN_H, s.h - dy); ny = s.ny + (s.h - h) * k }
-
-    const patch: Partial<FreeNodeData> = { width: w, height: h }
-    if (nx !== s.nx || ny !== s.ny) {
-      if (node.pin) patch.pin = { ...node.pin, x: nx, y: ny }
-      else { patch.x = nx; patch.y = ny }
-    }
-    updateFreeNode(id, patch)
-  }, [id, node?.type, node.pin, updateFreeNode, gz])
+  }, [updateFreeNode, zoom])
 
   const commitRename = useCallback(() => {
     if (renameVal.trim()) updateFreeNode(id, { label: renameVal.trim() })

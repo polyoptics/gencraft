@@ -7,6 +7,7 @@
 import React, { useMemo, useState, useRef, useCallback } from 'react'
 import ReactDOM from 'react-dom'
 import { useBoardsStore, getGroupForBoard } from '../../store/boardsStore'
+import type { BoardData } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useNLEViewerStore } from '../../store/nleViewerStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
@@ -44,6 +45,23 @@ import { useSeedHoverFromCursor } from '../../utils/pointerTracker'
 const BOARD_PADDING_X = 20
 
 const BLOCK_HEADER_H = 57
+
+/** A block's content size (the floor it can't shrink below) and its shown
+ *  size, which a resize override can make larger. Null when it has no bars. */
+function blockBoxOf(board: BoardData): { contentW: number; contentH: number; width: number; height: number } | null {
+  const rootBars = board.rootIds.map(id => board.bars[id]).filter(Boolean)
+  if (rootBars.length === 0) return null
+  const bScale = board.boardScale ?? 1
+  const minX = Math.min(...rootBars.map(b => b.x))
+  const maxX = Math.max(...rootBars.map(b => b.x + b.width))
+  const contentW = (maxX - minX) * bScale
+  const contentH = Math.max(...rootBars.map(b => b.height), DEFAULT_H) * bScale
+  return {
+    contentW, contentH,
+    width: Math.max(contentW, board.layers?.block?.widthOverride ?? 0),
+    height: Math.max(contentH, board.layers?.block?.heightOverride ?? 0),
+  }
+}
 
 const GripDots: React.FC<{ size?: number; opacity?: number }> = ({ size = 10, opacity = 0.35 }) => (
   <svg width={size} height={size} viewBox="0 0 10 10" style={{ opacity, flexShrink: 0 }}>
@@ -370,6 +388,9 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
   // Left-edge drag pins the block's right edge in place: width grows/shrinks
   // and the block's X (nleX if grouped, canvasX if ungrouped) shifts by the
   // inverse delta. No top resize (we never grow blocks upward).
+  // With this block in a multi-selection, every selected block takes the
+  // same drag from its own edges, as if each had been resized on its own.
+  // One undo step.
   const onResizeDown = useCallback((e: React.PointerEvent, edge: 'right' | 'left' | 'bottom' | 'bottom-right' | 'bottom-left') => {
     if (e.button !== 0) return
     e.stopPropagation()
@@ -378,14 +399,20 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
 
     const startX = e.clientX
     const startY = e.clientY
-    const startW = width
-    const startH = height
     const bs0 = useBoardsStore.getState()
-    const startBoard = bs0.boards[boardId]
-    const startLeftX = isUngroupedBlock ? (startBoard?.canvasX ?? 0) : (startBoard?.nleX ?? 0)
-    const startRight = startLeftX + startW
-    const startCanvasY = startBoard?.canvasY ?? 0
-    const startNleRow = startBoard?.nleRow ?? 0
+    const canvasSel = useCanvasStore.getState().selectedBlockBoardIds
+    const ids = canvasSel.includes(boardId) ? canvasSel : [boardId]
+    const starts = ids.flatMap(bid => {
+      const b = bs0.boards[bid]
+      const box = b && blockBoxOf(b)
+      if (!b || !box) return []
+      const ungrouped = !getGroupForBoard(bs0.groups, bid)
+      const leftX = ungrouped ? (b.canvasX ?? 0) : (b.nleX ?? 0)
+      return [{
+        id: bid, ungrouped, ...box, leftX,
+        canvasY: b.canvasY ?? 0, nleRow: b.nleRow ?? 0,
+      }]
+    })
     const isLeftEdge   = edge === 'left'   || edge === 'bottom-left'
     const isRightEdge  = edge === 'right'  || edge === 'bottom-right'
     const isBottomEdge = edge === 'bottom' || edge === 'bottom-left' || edge === 'bottom-right'
@@ -394,30 +421,33 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
       const z = useCanvasStore.getState().zoom
       const dx = (ev.clientX - startX) / z
       const dy = (ev.clientY - startY) / z
+      const bs = useBoardsStore.getState()
 
-      let newW = startW
-      let newH = startH
-      let newX = startLeftX
-      if (isRightEdge) {
-        newW = Math.max(contentW, startW + dx)
-      } else if (isLeftEdge) {
-        newW = Math.max(contentW, startW - dx)
-        newX = startRight - newW
-      }
-      if (isBottomEdge) {
-        newH = Math.max(contentH, startH + dy)
-      }
+      for (const st of starts) {
+        let newW = st.width
+        let newH = st.height
+        let newX = st.leftX
+        if (isRightEdge) {
+          newW = Math.max(st.contentW, st.width + dx)
+        } else if (isLeftEdge) {
+          newW = Math.max(st.contentW, st.width - dx)
+          newX = st.leftX + st.width - newW
+        }
+        if (isBottomEdge) {
+          newH = Math.max(st.contentH, st.height + dy)
+        }
 
-      useBoardsStore.getState().setBlockSize(
-        boardId,
-        newW > contentW ? newW : undefined,
-        newH > contentH ? newH : undefined,
-      )
-      if (isLeftEdge && newX !== startLeftX) {
-        if (isUngroupedBlock) {
-          useBoardsStore.getState().setUngroupedBoardPos(boardId, newX, startCanvasY)
-        } else {
-          useBoardsStore.getState().setBoardNlePos(boardId, startNleRow, newX)
+        bs.setBlockSize(
+          st.id,
+          newW > st.contentW ? newW : undefined,
+          newH > st.contentH ? newH : undefined,
+        )
+        if (isLeftEdge && newX !== st.leftX) {
+          if (st.ungrouped) {
+            bs.setUngroupedBoardPos(st.id, newX, st.canvasY)
+          } else {
+            bs.setBoardNlePos(st.id, st.nleRow, newX)
+          }
         }
       }
     }
@@ -427,7 +457,7 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
     }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
-  }, [boardId, width, height, contentW, contentH, isUngroupedBlock])
+  }, [boardId])
 
   // ── Two-level positioning: group origin + local row ──
   const siblingRowKey = useBoardsStore(s => {

@@ -426,6 +426,44 @@ function cardGripUrl(g: ProjectGroup, boards: Record<string, BoardData>): string
   return cardGripUrlOf(g, boards, mayHaveDiskFile)
 }
 
+/** A group card's content bounds in canvas units: the extent of its
+ *  blocks before any resize override. Null when no block has bars. */
+function groupCardBounds(group: ProjectGroup, boards: Record<string, BoardData>): { minX: number; maxX: number; topY: number; bottomY: number } | null {
+  const groupLayout = computeGroupLayout(group.boardIds, boards)
+
+  let globalMinX = Infinity
+  let globalMaxX = -Infinity
+  let topY = Infinity
+  let bottomY = -Infinity
+
+  group.boardIds.forEach(bid => {
+    const board = boards[bid]
+    if (!board) return
+    const bScale = board.boardScale ?? 1
+    const rootBars = board.rootIds.map(rid => board.bars[rid]).filter(Boolean)
+    if (rootBars.length === 0) return
+
+    const bx = group.originX + (board.nleX ?? 0)
+    const localRow = board.nleRow ?? 0
+    const by = group.originY + getRowY(localRow, groupLayout)
+    const rowH = getRowHeight(localRow, groupLayout)
+    const rootH = Math.max(...rootBars.map(b => b.height), DEFAULT_H) * bScale
+    const visualH = Math.max(rowH, rootH)
+    const minX = Math.min(...rootBars.map(b => b.x))
+    const maxX = Math.max(...rootBars.map(b => b.x + b.width))
+    const left = bx + BOARD_PADDING_X + minX * bScale
+    const right = bx + BOARD_PADDING_X + maxX * bScale
+
+    if (left < globalMinX) globalMinX = left
+    if (right > globalMaxX) globalMaxX = right
+    if (by < topY) topY = by
+    if (by + visualH > bottomY) bottomY = by + visualH
+  })
+
+  if (globalMinX === Infinity) return null
+  return { minX: globalMinX, maxX: globalMaxX, topY, bottomY }
+}
+
 // ── Per-group card (screen-space) ──
 
 const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
@@ -663,44 +701,16 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
 
   // ── Geometry: compute bounding box from group layout ──
   const { screenLeft, screenTop, screenWidth, cardHeight, headerPad, contentCanvasW, contentCanvasH, color } = useMemo(() => {
-    const groupLayout = computeGroupLayout(group.boardIds, boards)
+    const bounds = groupCardBounds(group, boards)
 
-    let globalMinX = Infinity
-    let globalMaxX = -Infinity
-    let topY = Infinity
-    let bottomY = -Infinity
-
-    group.boardIds.forEach(bid => {
-      const board = boards[bid]
-      if (!board) return
-      const bScale = board.boardScale ?? 1
-      const rootBars = board.rootIds.map(rid => board.bars[rid]).filter(Boolean)
-      if (rootBars.length === 0) return
-
-      const bx = group.originX + (board.nleX ?? 0)
-      const localRow = board.nleRow ?? 0
-      const by = group.originY + getRowY(localRow, groupLayout)
-      const rowH = getRowHeight(localRow, groupLayout)
-      const rootH = Math.max(...rootBars.map(b => b.height), DEFAULT_H) * bScale
-      const visualH = Math.max(rowH, rootH)
-      const minX = Math.min(...rootBars.map(b => b.x))
-      const maxX = Math.max(...rootBars.map(b => b.x + b.width))
-      const left = bx + BOARD_PADDING_X + minX * bScale
-      const right = bx + BOARD_PADDING_X + maxX * bScale
-
-      if (left < globalMinX) globalMinX = left
-      if (right > globalMaxX) globalMaxX = right
-      if (by < topY) topY = by
-      if (by + visualH > bottomY) bottomY = by + visualH
-    })
-
-    if (globalMinX === Infinity) return { screenLeft: 0, screenTop: 0, screenWidth: 0, cardHeight: 0, headerPad: 0, contentCanvasW: 0, contentCanvasH: 0, color: group.color }
+    if (!bounds) return { screenLeft: 0, screenTop: 0, screenWidth: 0, cardHeight: 0, headerPad: 0, contentCanvasW: 0, contentCanvasH: 0, color: group.color }
 
     // Card visual bounds match the content exactly. Collision/push and deck
     // clustering use separate padded bounds (useCardDecks / nlePush).
 
-    const cW = globalMaxX - globalMinX
-    const cH = bottomY - topY
+    const { minX: globalMinX, topY } = bounds
+    const cW = bounds.maxX - globalMinX
+    const cH = bounds.bottomY - topY
     const finalW = Math.max(cW, group.cardWidthOverride ?? 0)
     const finalH = Math.max(cH, group.cardHeightOverride ?? 0)
 
@@ -758,20 +768,48 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
 
     const startX = e.clientX
     const startY = e.clientY
-    const startW = screenWidth / zoom
-    const startH = (cardHeight - headerPad) / zoom  // exclude header extension from canvas-space height
+    // This card, plus — when it is part of a multi-selection — every other
+    // selected card that stands on its own (a card inside a stacked or
+    // fanned deck has no handles of its own, so it stays as it is). Each
+    // takes the same drag from its own corner, as if resized one by one.
+    const bs0 = useBoardsStore.getState()
+    const peers = bs0.selectedGroupIds.includes(group.id)
+      ? bs0.groups.filter(g => g.id !== group.id && bs0.selectedGroupIds.includes(g.id)
+          && !g.deckAnchorId && (g.deckState ?? 'open') === 'open')
+      : []
+    const starts = [
+      {
+        id: group.id, contentW: contentCanvasW, contentH: contentCanvasH,
+        w: screenWidth / zoom,
+        h: (cardHeight - headerPad) / zoom,  // exclude header extension from canvas-space height
+      },
+      ...peers.flatMap(g => {
+        const b = groupCardBounds(g, bs0.boards)
+        if (!b) return []
+        const contentW = b.maxX - b.minX
+        const contentH = b.bottomY - b.topY
+        return [{
+          id: g.id, contentW, contentH,
+          w: Math.max(contentW, g.cardWidthOverride ?? 0),
+          h: Math.max(contentH, g.cardHeightOverride ?? 0),
+        }]
+      }),
+    ]
 
     const onMove = (ev: PointerEvent) => {
       const z = useCanvasStore.getState().zoom
       const dx = (ev.clientX - startX) / z
       const dy = (ev.clientY - startY) / z
-      const newW = edge === 'bottom' ? startW : Math.max(contentCanvasW, startW + dx)
-      const newH = edge === 'right' ? startH : Math.max(contentCanvasH, startH + dy)
-      useBoardsStore.getState().setGroupCardSize(
-        group.id,
-        newW > contentCanvasW ? newW : undefined,
-        newH > contentCanvasH ? newH : undefined,
-      )
+      const bs = useBoardsStore.getState()
+      for (const st of starts) {
+        const newW = edge === 'bottom' ? st.w : Math.max(st.contentW, st.w + dx)
+        const newH = edge === 'right' ? st.h : Math.max(st.contentH, st.h + dy)
+        bs.setGroupCardSize(
+          st.id,
+          newW > st.contentW ? newW : undefined,
+          newH > st.contentH ? newH : undefined,
+        )
+      }
     }
     const onUp = () => {
       window.removeEventListener('pointermove', onMove)
