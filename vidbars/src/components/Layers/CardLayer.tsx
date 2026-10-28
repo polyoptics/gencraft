@@ -558,15 +558,36 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
       setIsDragging(false)
       // Let go over a loop strip (utils/railCards): picture cards go into
       // the column as themselves, left to right as they lay — the strip
-      // places them; effect cards put a copy of their effect into the row
-      // and go back where they were. The press took the checkpoint: one
-      // undo puts it all back.
+      // places them; effect cards move into the row (the strip keeps their
+      // effect, settings and switches; the cards go). The press took the
+      // checkpoint: one undo puts it all back.
       const railT = !group.pin && (dxAccum !== 0 || dyAccum !== 0) ? cardRailTarget(draggingIds, ev.clientX, ev.clientY) : null
       previewCardRail(null, group.id)
       if (railT) {
         useBoardsStore.getState().setGroupPosBatch(Array.from(initialOrigins, ([gid, o]) => ({ groupId: gid, originY: o.y, originX: o.x })))
         const at = (id: string) => initialOrigins.get(id) ?? { x: 0, y: 0 }
-        dockCardsOnRail([...draggingIds].sort((a, b) => (at(a).x - at(b).x) || (at(a).y - at(b).y)), railT)
+        const order = [...draggingIds].sort((a, b) => (at(a).x - at(b).x) || (at(a).y - at(b).y))
+        const before = new Set(Object.keys(useFreeNodeStore.getState().nodes))
+        dockCardsOnRail(order, railT)
+        // Effect cards let go on a strip's row MOVE there: the strip's new
+        // steps take their switches too (in the same order), and the cards go.
+        if (railT.kind === 'row') {
+          const bs = useBoardsStore.getState()
+          const fx = order.map(gid => bs.groups.find(x => x.id === gid)).filter((g): g is ProjectGroup => !!g?.effect)
+          const fns = useFreeNodeStore.getState()
+          const made = Object.values(fns.nodes)
+            .filter(n => !before.has(n.id) && n.type === 'effect' && n.railDock?.railId === railT.railId)
+            .sort((a, b) => (fns.nodes[railT.railId]?.rail?.slots.findIndex(s => s.id === a.railDock!.slotId) ?? 0)
+              - (fns.nodes[railT.railId]?.rail?.slots.findIndex(s => s.id === b.railDock!.slotId) ?? 0))
+          made.forEach((n, i) => {
+            const src = fx[i]?.effect
+            if (src && (src.off || src.solo)) fns.updateFreeNode(n.id, { effect: { ...n.effect!, off: src.off, solo: src.solo } })
+          })
+          for (const g of fx) {
+            g.boardIds.forEach(bid => useBoardsStore.getState().deleteBoard(bid))
+            useBoardsStore.getState().deleteGroup(g.id)
+          }
+        }
         useMagnetPreviewStore.getState().setPreview(null)
         return
       }
