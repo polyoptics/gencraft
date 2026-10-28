@@ -46,6 +46,7 @@ import {
 } from '../../utils/rail'
 import { clientToCanvas } from '../../utils/fx/createEffect'
 import { railAtPoint } from './rail/railHit'
+import { copyEffect, hasEffectClip, pasteEffect } from '../../utils/fx/effectClipboard'
 import { snapRailToViewer } from '../../utils/railViewer'
 
 
@@ -1559,6 +1560,14 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
                 { label: 'Open deck', icon: '📂', action: () => { toggleTileDeck(); setNodeMenu(null) } },
               ] : menuCluster.length >= 2 ? [
                 { label: 'Stack touching tiles', icon: '📚', action: () => { toggleTileDeck(); setNodeMenu(null) } },
+              ] : []),
+              // An effect: copy it; a strip or an effect: paste a copied one
+              // into its row, after it (utils/fx/effectClipboard; Ctrl+C/V).
+              ...(node.type === 'effect' ? [
+                { label: 'Copy effect', icon: '⧉', action: () => { copyEffect({ nodeId: id }); setNodeMenu(null) } },
+              ] : []),
+              ...((node.type === 'effect' || isRailTile) && hasEffectClip() ? [
+                { label: isRailTile ? 'Paste effect into the row' : 'Paste effect after this', icon: '⎘', action: () => { pasteEffect({ nodeId: id }); setNodeMenu(null) } },
               ] : []),
               // Loop strip: empty its results tray onto the canvas, below the
               // strip (clearRailTray), in one undo step.

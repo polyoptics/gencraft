@@ -28,6 +28,7 @@ import { collectSubtree } from './utils/barOps'
 import { expandTileIds } from './utils/tileDecks'
 import { isRail } from './utils/rail'
 import { stackedDeckMembers, stepDeckFace, stepFace } from './utils/cardGrid'
+import { copyEffect, pasteEffect, selectedEffect } from './utils/fx/effectClipboard'
 
 /** Hosts useFxStrips, which subscribes to every tile, Viewer and zoom
  *  change. Called in App's body, each drag frame and wheel tick would
@@ -67,6 +68,9 @@ interface Clipboard {
 let clipboard: Clipboard | null = null
 let clipboardGroupId: string | null = null
 let freeNodeClipboard: FreeNodeData[] = []
+/** The last copy was ONE effect (utils/fx/effectClipboard): paste puts a
+ *  copy of it into the row or stack the selection names. */
+let clipIsEffect = false
 
 function remapIds(bars: Record<string, Bar>, rootIds: string[]): { bars: Record<string, Bar>; rootIds: string[] } {
   const idMap = new Map<string, string>()
@@ -116,6 +120,10 @@ function useKeyboardCopyPaste() {
       if (tag === 'INPUT' || tag === 'TEXTAREA') return
 
       if (e.key === 'c' || e.key === 'C') {
+        // One effect selected — a tile or an effect card: copy the effect.
+        const fxSel = selectedEffect()
+        clipIsEffect = !!fxSel && copyEffect(fxSel)
+        if (clipIsEffect) return
         // Free node copy: if any free nodes are selected, copy them
         const freeSelected = useFreeNodeStore.getState().selectedIds
         const freeNodes = useFreeNodeStore.getState().nodes
@@ -170,6 +178,9 @@ function useKeyboardCopyPaste() {
       }
 
       if (e.key === 'v' || e.key === 'V') {
+        // An effect: into the selected strip's row, after the selected
+        // effect, onto the selected card's stack — or mid-screen.
+        if (clipIsEffect && pasteEffect()) { e.preventDefault(); return }
         useUndoCoordinator.getState().checkpoint()
         // Free node paste
         if (freeNodeClipboard.length > 0) {

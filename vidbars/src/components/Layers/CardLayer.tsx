@@ -34,6 +34,7 @@ import { cardHitAt } from '../../utils/cardContent'
 import { cardFaceMedia, deckFaceSteps, faceSteps, mergeCardsInto, setFaceThumbnail, stepDeckFace, stepFace } from '../../utils/cardGrid'
 import { drawnRect, effectChain, snapEffectCard } from '../../utils/effectCards'
 import { cardRailTarget, dockCardsOnRail, endDockedDrag, liftDockedCards, previewCardRail } from '../../utils/railCards'
+import { copyEffect, hasEffectClip, pasteEffect } from '../../utils/fx/effectClipboard'
 import { EffectTileBody } from '../Canvas/EffectTileBody'
 import { knownKind } from '../../utils/fx/effects'
 import type { FreeNodeData } from '../../store/freeNodeStore'
@@ -102,6 +103,11 @@ const CardContextMenu: React.FC<{
   // (Deck-tether actions — "Go to deck" and "Check back in" — live on the
   // tether tint stripe in the header, not on the card-body context menu.
   // Right-click that stripe to access them.)
+
+  // An effect card: copy its effect. Any card: paste a copied effect onto
+  // the end of its effect stack (utils/fx/effectClipboard; Ctrl+C/V).
+  if (group.effect) menuItems.push({ label: 'Copy effect', icon: '⧉', action: () => { copyEffect({ groupId: group.id }); onClose() } })
+  if (hasEffectClip()) menuItems.push({ label: 'Paste effect', icon: '⎘', action: () => { pasteEffect({ groupId: group.id }); onClose() } })
 
   // A video face: the frame it shows now becomes its thumbnail (FaceVideo).
   {
