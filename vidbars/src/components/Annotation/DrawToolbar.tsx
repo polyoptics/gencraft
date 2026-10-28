@@ -39,6 +39,7 @@ import {
   readStrokes, hasStrokeClipboard, strokeClipboardSize,
 } from '../../utils/strokeActions'
 import { querySurfaceElement } from '../../utils/surfaceQuery'
+import { progressInZone } from '../../store/zoomZonesStore'
 
 const COLOR_PRESETS = [
   '#ffffff',  // white — the dark-canvas default
@@ -73,8 +74,9 @@ function toolbarScaleFor(kind: 'bar' | 'freeNode' | 'block' | 'card', zoom: numb
     case 'freeNode':
       return 1.0
     case 'block': {
-      // 1.2× the prior scale: 0.18 → 0.66, 0.30 → 1.2. Capped at 1.2.
-      const t = Math.max(0, Math.min(1, (zoom - 0.18) / 0.12))
+      // 1.2× the prior scale: bottom of the block zone → 0.66, top → 1.2.
+      // The ramp spans the block zone wherever the zoom bar puts it.
+      const t = progressInZone(zoom, 'block')
       return 0.66 + 0.54 * t
     }
     case 'card':

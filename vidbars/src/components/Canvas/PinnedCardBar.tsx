@@ -17,6 +17,7 @@ import { useCanvasStore } from '../../store/canvasStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { PinControl } from '../UI/PinControl'
 import { headerExtend } from '../NLE/NLETimelineHeader'
+import { CARD_TEXT_REF_ZOOM } from '../../store/zoomZonesStore'
 
 /** Control height — the buttons and the grip are all this tall. */
 const BAR_H = 18
@@ -96,7 +97,7 @@ export const PinnedCardBar: React.FC<{ group: ProjectGroup }> = ({ group }) => {
   // hold the bar at all — there, sized to the card beats hanging off its side.
   const NATURAL_W = 104
   const roomy = box.w > 0 ? box.w / NATURAL_W : 1
-  const s = Math.min(Math.max(group.pin.scale / 0.18, 1), 3, Math.max(roomy, 0.5))
+  const s = Math.min(Math.max(group.pin.scale / CARD_TEXT_REF_ZOOM, 1), 3, Math.max(roomy, 0.5))
   // The band the controls sit in, in the bar's own (pre-scale) units. At card
   // level a card's rect INCLUDES the header extension above its body, and
   // that band is the card's chrome strip — the right home for controls that

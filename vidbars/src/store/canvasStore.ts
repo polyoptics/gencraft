@@ -16,8 +16,8 @@ import {
 // the card chrome looks today; between MIN_ZOOM and CARD_FLOOR_ZOOM the
 // chrome scales down uniformly (via overviewScale) so the whole card
 // shrinks coherently instead of the headers/badges ballooning.
-const MIN_ZOOM = 0.045
-const MAX_ZOOM = 4
+export const MIN_ZOOM = 0.045
+export const MAX_ZOOM = 4
 const APP_TOOLBAR_H = 38
 const BOARD_PADDING_X = 20
 

@@ -17,6 +17,7 @@ import { cardScreenRect, GroupCardText } from '../Layers/CardLayer'
 import { useCardView } from '../Layers/cardView'
 import { NLE_HEADER_CANVAS_H } from '../NLE/NLETimelineHeader'
 import { getFirstImageUrl } from '../../types/bar'
+import { CARD_TEXT_REF_ZOOM } from '../../store/zoomZonesStore'
 
 interface Props {
   /** Group this clone represents. */
@@ -118,10 +119,10 @@ export const CloneDeck: React.FC<Props> = ({
   // content below it using the same headerPad offset GroupCard uses.
   const headerPad = Math.max(NLE_HEADER_CANVAS_H * zoom, 20) + 2 * zoom
 
-  // At card-zoom, textScale = zoom / 0.18. Use the same ratio so chips match
+  // At card-zoom, textScale = zoom / CARD_TEXT_REF_ZOOM. Same ratio so chips match
   // the card text's scale — but clamp minimum so chips don't vanish when the
   // canvas is scrolled far out.
-  const textScale = Math.max(zoom / 0.18, 0.25)
+  const textScale = Math.max(zoom / CARD_TEXT_REF_ZOOM, 0.25)
 
   // Nested expansions: clone's own outbound links whose path is active.
   const nestedExpanded: string[] = []

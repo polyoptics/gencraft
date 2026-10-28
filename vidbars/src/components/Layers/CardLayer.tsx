@@ -3450,6 +3450,7 @@ const DeckAffordance: React.FC<{ cluster: string[]; front: Deck | 'card' | null 
 
 // Alias to avoid name conflict with component-level import
 import { groupSlot as __groupSlot } from '../../utils/nlePush'
+import { CARD_TEXT_REF_ZOOM } from '../../store/zoomZonesStore'
 
 /** True if some other group is holding a ghostSlot for this card — i.e., the
  *  card is "extracted" out of that other group's deck. */
@@ -4227,7 +4228,7 @@ const CardLinkingLayer: React.FC<{
 
   // Same scale ratio the card text uses, so chips scale with the card.
   // Min clamp prevents chips disappearing at very low zoom.
-  const textScale = Math.max(zoom / 0.18, 0.25)
+  const textScale = Math.max(zoom / CARD_TEXT_REF_ZOOM, 0.25)
 
   // Find any chips of THIS card whose clone is currently expanded (paths of
   // length 2 that start with this group id).
@@ -4376,8 +4377,7 @@ export const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void
   const splitRatio = group?.textSplitRatio ?? 0.5
   ensureFontLoaded(headerTs.fontFamily); ensureFontLoaded(bodyTs.fontFamily)
   // Text locked to card — scales proportionally with the card (no screen-size compensation)
-  const CARD_MAX_ZOOM = 0.18
-  const textScale = zoom / CARD_MAX_ZOOM
+  const textScale = zoom / CARD_TEXT_REF_ZOOM
 
   const [editingField, setEditingField] = useState<'header' | 'body' | null>(null)
   const [activeField, setActiveField] = useState<TextFieldMode>('header')
@@ -4587,8 +4587,7 @@ const UngroupedCardText: React.FC<{ boardId: string }> = ({ boardId }) => {
   const splitRatio = useBoardsStore(s => s.boards[boardId]?.layers?.card?.textSplitRatio ?? 0.5)
   ensureFontLoaded(headerTs.fontFamily); ensureFontLoaded(bodyTs.fontFamily)
   // Text locked to card — scales proportionally with the card
-  const CARD_MAX_ZOOM = 0.18
-  const textScale = zoom / CARD_MAX_ZOOM
+  const textScale = zoom / CARD_TEXT_REF_ZOOM
 
   const [editingField, setEditingField] = useState<'header' | 'body' | null>(null)
   const [activeField, setActiveField] = useState<TextFieldMode>('header')

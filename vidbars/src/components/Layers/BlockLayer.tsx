@@ -1,4 +1,4 @@
-// BlockLayer — board-level block view (0.18 < zoom < 0.30)
+// BlockLayer — board-level block view (between the Cards and Boards zones; see store/zoomZonesStore)
 // Renders one solid colored rectangle per board + a thin NLE header bar.
 // Uses layer-specific data (board.layers.block.thumbnail / label).
 // Grip handle on block headers allows lifting a board to reassign it to a different group.

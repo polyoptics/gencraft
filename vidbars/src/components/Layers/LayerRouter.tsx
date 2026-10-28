@@ -3,28 +3,28 @@
 // Each layer is a self-contained component with its own data, interactions, and context menu.
 
 import React from 'react'
-import { useCanvasStore } from '../../store/canvasStore'
+import { useZoomZone } from '../../store/zoomZonesStore'
 import { CardLayer } from './CardLayer'
 import { BlockLayer } from './BlockLayer'
 import { BoardLayer } from './BoardLayer'
 
-const CARD_THRESHOLD = 0.18
-const BLOCK_THRESHOLD = 0.3
+// Where each level begins and ends lives in zoomZonesStore (dragged on the
+// ZoomZoneBar); this file only picks the layer for the level.
 
 /** Canvas-space content: rendered inside the transform container */
 export const LayerContent: React.FC = () => {
-  const zoom = useCanvasStore(s => s.zoom)
+  const zone = useZoomZone()
 
-  if (zoom <= CARD_THRESHOLD) return <CardLayer.Canvas />
-  if (zoom < BLOCK_THRESHOLD) return <BlockLayer.Canvas />
+  if (zone === 'card') return <CardLayer.Canvas />
+  if (zone === 'block') return <BlockLayer.Canvas />
   return <BoardLayer.Canvas />
 }
 
 /** Screen-space overlay: rendered outside the transform container (fixed position) */
 export const LayerOverlay: React.FC = () => {
-  const zoom = useCanvasStore(s => s.zoom)
+  const zone = useZoomZone()
 
-  if (zoom <= CARD_THRESHOLD) return <CardLayer.Overlay />
-  if (zoom < BLOCK_THRESHOLD) return <BlockLayer.Overlay />
+  if (zone === 'card') return <CardLayer.Overlay />
+  if (zone === 'block') return <BlockLayer.Overlay />
   return <BoardLayer.Overlay />
 }

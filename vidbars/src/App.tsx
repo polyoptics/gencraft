@@ -29,6 +29,8 @@ import { expandTileIds } from './utils/tileDecks'
 import { isRail } from './utils/rail'
 import { stackedDeckMembers, stepDeckFace, stepFace } from './utils/cardGrid'
 import { copyEffect, pasteEffect, selectedEffect } from './utils/fx/effectClipboard'
+import { currentZone } from './store/zoomZonesStore'
+import { ZoomZoneBar } from './components/UI/ZoomZoneBar'
 
 /** Hosts useFxStrips, which subscribes to every tile, Viewer and zoom
  *  change. Called in App's body, each drag frame and wheel tick would
@@ -140,9 +142,8 @@ function useKeyboardCopyPaste() {
         }
 
         freeNodeClipboard = []
-        const zoom = useCanvasStore.getState().zoom
         // Card-level copy: copy selected group
-        if (zoom <= 0.18) {
+        if (currentZone() === 'card') {
           const selectedGroupIds = useBoardsStore.getState().selectedGroupIds
           if (selectedGroupIds.length > 0) {
             clipboardGroupId = selectedGroupIds[0]
@@ -733,12 +734,14 @@ export default function App() {
       <TopIconBar />
 
       {/* ── Infinite Canvas ── */}
-      <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
+      <div data-zoom-bar-host style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
         <InfiniteCanvas initialCenterW={520} initialCenterH={310}>
           <LayerContent />
         </InfiniteCanvas>
         {/* Layer overlay renders outside the canvas transform (screen-space headers/cards) */}
         <LayerOverlay />
+        {/* Where Cards / Blocks / Boards begin and end — drag to retune */}
+        <ZoomZoneBar />
       </div>
 
       {/* Deck browser tray + link-drag overlay */}

@@ -18,7 +18,6 @@
 // never produce different results.
 
 import React from 'react'
-import { useCanvasStore } from '../../store/canvasStore'
 import { useViewport3DStore } from '../../store/viewport3dStore'
 import {
   addFreeNodeCentered,
@@ -28,6 +27,7 @@ import {
 } from '../../utils/canvasCreate'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { EffectPalette } from './EffectPalette'
+import { useZoomZone } from '../../store/zoomZonesStore'
 
 /** Tile edge in px. A shade over 1cm on a typical desktop monitor. */
 const TILE = 44
@@ -46,9 +46,6 @@ const A = {
   pink:   '#FF8FD1',
 }
 
-// Matches LayerRouter — card ≤ 0.18, block ≤ 0.3, board beyond.
-const CARD_THRESHOLD = 0.18
-const BLOCK_THRESHOLD = 0.3
 
 type SvgProps = { size: number }
 const svgBase = (size: number) => ({
@@ -220,19 +217,20 @@ const IconButton: React.FC<{
 
 export const TopIconBar: React.FC = () => {
   // The only thing this bar needs from the camera: which level "new" means.
-  const zoom = useCanvasStore(s => s.zoom)
+  // Same level LayerRouter is showing (zoomZonesStore).
+  const zone = useZoomZone()
   const newLabel =
-    zoom <= CARD_THRESHOLD ? 'New card'
-    : zoom <= BLOCK_THRESHOLD ? 'New block'
+    zone === 'card' ? 'New card'
+    : zone === 'block' ? 'New block'
     : 'New node'
   // The glyph's PROPORTION is the message — see the note above the three.
   const IcNew =
-    zoom <= CARD_THRESHOLD ? IcNewCard
-    : zoom <= BLOCK_THRESHOLD ? IcNewBlock
+    zone === 'card' ? IcNewCard
+    : zone === 'block' ? IcNewBlock
     : IcNewNode
 
   const onNew = () => {
-    if (zoom > BLOCK_THRESHOLD) {
+    if (zone === 'board') {
       // At board zoom the atomic thing on the canvas is a node, not a whole
       // board — making a card here would drop something far bigger than what
       // you are looking at.

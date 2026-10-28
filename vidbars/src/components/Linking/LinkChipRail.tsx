@@ -22,6 +22,7 @@ import { useUndoCoordinator } from '../../store/undoCoordinator'
 import {
   ownerRefs, resolveRef, refKey, refAttr, REF_GLYPH, type LinkRef,
 } from '../../utils/linkTargets'
+import { keepDesignZone } from '../../store/zoomZonesStore'
 
 interface Props {
   /** What these chips belong to. Also the drag source for the "+" chip. */
@@ -213,6 +214,7 @@ function goToRef(r: LinkRef) {
   const boardId = r.kind === 'board' ? r.id : r.boardId
   const owner = bs.groups.find(g => g.boardIds.includes(boardId))
   if (!owner) return
-  cs.setZoom(r.kind === 'board' ? 0.25 : 0.6)
+  // Inside the level's zone wherever the zoom bar has put it.
+  cs.setZoom(r.kind === 'board' ? keepDesignZone(0.25) : keepDesignZone(0.6))
   cs.jumpToGroup(owner.id)
 }

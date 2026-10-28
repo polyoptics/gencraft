@@ -10,6 +10,7 @@ import { SCAFFOLDS, instantiateScaffold } from '../../data/scaffolds'
 import type { ScaffoldData } from '../../data/scaffolds'
 import { insertProjectSnapshot } from '../../utils/projectInsert'
 import { getGroupHeight } from '../../utils/nleRows'
+import { keepDesignZone } from '../../store/zoomZonesStore'
 
 interface SnapshotMeta { id: string; name: string; savedAt: number; file: string }
 
@@ -163,7 +164,7 @@ export const TemplateMenu: React.FC = () => {
         useBoardsStore.getState().deleteBoard('primary')
       }
       if (t.freeNodes) useFreeNodeStore.setState({ nodes: t.freeNodes, selectedIds: [] })
-      setZoom(t.zoom)
+      setZoom(keepDesignZone(t.zoom))
       setPan(t.pan)
       if (t.boardPos) setBoardPos(t.boardPos)
       setOpen(false)
@@ -240,7 +241,7 @@ export const TemplateMenu: React.FC = () => {
           useBoardsStore.setState(st => ({ groups: st.groups.map(gr => gr.id === g.id ? { ...gr, layout: 'grid' as const } : gr) }))
         }
       }
-      setZoom(t.zoom)
+      setZoom(keepDesignZone(t.zoom))
       const toolbarH = 40
       const canvasH = window.innerHeight - toolbarH
       setPan({
@@ -290,7 +291,7 @@ export const TemplateMenu: React.FC = () => {
       })
 
       setBoardPos({ x: 0, y: 0 })
-      setZoom(0.85)
+      setZoom(keepDesignZone(0.85))
       setPan({ x: 100, y: 100 })
     }
     setOpen(false)

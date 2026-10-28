@@ -1,4 +1,4 @@
-// BoardLayer — full board/node editing view (zoom ≥ 0.3)
+// BoardLayer — full board/node editing view (the Boards zone; see store/zoomZonesStore)
 // Wraps the existing BoardsCanvas + FreeCanvas + NLETimelineHeader.
 // This is the richest layer with full bar trees, wires, free nodes, etc.
 

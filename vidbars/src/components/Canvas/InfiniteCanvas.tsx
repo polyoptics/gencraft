@@ -22,6 +22,7 @@ import { cardFaceSize, createMediaCard } from '../../utils/cardGrid'
 import { tileDeckIndex } from '../../utils/tileDecks'
 import { RAIL_GEOM, isRail, railDropTarget, railLayout, railMembers, type RailDropTarget } from '../../utils/rail'
 import { railAtPoint } from './rail/railHit'
+import { currentZone, useZoomZone } from '../../store/zoomZonesStore'
 
 // ── Media Pool drag-out ──────────────────────────────────────────────
 // A pool tile and a pool-fed Rolodex slot put this exact payload on the
@@ -273,6 +274,7 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
   const containerRef = useRef<HTMLDivElement>(null)
   const pan = useCanvasStore(s => s.pan)
   const zoom = useCanvasStore(s => s.zoom)
+  const zone = useZoomZone()
   const shiftPan = useCanvasStore(s => s.shiftPan)
   const zoomAtPoint = useCanvasStore(s => s.zoomAtPoint)
   const setPan = useCanvasStore(s => s.setPan)
@@ -889,8 +891,7 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
             const r = el.getBoundingClientRect()
             return r.left < selRight && r.right > selLeft && r.top < selBottom && r.bottom > selTop
           }
-          const currentZoom = useCanvasStore.getState().zoom
-          const isBlockZoom = currentZoom > 0.18 && currentZoom < 0.3
+          const isBlockZoom = currentZone() === 'block'
           if (isBlockZoom) {
             // Block zoom: select whole blocks (boards) instead of bars
             const hitBlockBoardIds = Array.from(document.querySelectorAll('[data-layer-block]'))
@@ -998,7 +999,7 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
         userSelect: 'none',
         pointerEvents: 'none',
       }}>
-        {Math.round(zoom * 100)}% · {zoom <= 0.18 ? 'Cards' : zoom < 0.3 ? 'Blocks' : 'Boards'} · scroll to zoom · middle-drag or space+drag to pan
+        {Math.round(zoom * 100)}% · {zone === 'card' ? 'Cards' : zone === 'block' ? 'Blocks' : 'Boards'} · scroll to zoom · middle-drag or space+drag to pan
       </div>
 
       {/* ── Rubber-band selection overlay ── */}
@@ -1072,7 +1073,7 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
                 setAddMenu(null)
               } },
               { label: '─────────────', action: null },
-              { label: zoom <= 0.18 ? '🎬  New Card' : '🎬  New Block',
+              { label: zone === 'card' ? '🎬  New Card' : '🎬  New Block',
                 action: () => {
                 // Shared with the top icon bar's + button — see
                 // utils/canvasCreate. Two copies of this sequence would drift.
@@ -1111,7 +1112,7 @@ const NLERowBands: React.FC<{ pan: { x: number; y: number }; zoom: number }> = R
   const deferredBoards = useDeferredValue(boards)
   const BOARD_PADDING_X = 20
   const BAND_PAD = 30 // breathing room around content edges
-  const isCardLevel = zoom <= 0.18
+  const isCardLevel = useZoomZone() === 'card'
 
   // Memoize the expensive JSX build — it only needs to change when the
   // deferred inputs (or the card-level flag) change. During a pointermove
