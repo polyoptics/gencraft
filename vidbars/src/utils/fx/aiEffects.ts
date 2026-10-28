@@ -84,7 +84,7 @@ interface Req {
   key: string; what: string
   /** A Combine card's mask for look row `row` (0 = the first look row). */
   row?: number
-  job: { op: 'depth' | 'segment' | 'lines' | 'formhatch' | 'bghatch' | 'look'; look?: string; objects?: Record<string, string[]>; dials?: Record<string, number>; side?: number; engine?: Engine }
+  job: { op: 'depth' | 'segment' | 'lines' | 'formhatch' | 'bghatch' | 'look'; look?: string; whole?: boolean; objects?: Record<string, string[]>; dials?: Record<string, number>; side?: number; engine?: Engine }
 }
 /** What finds the things a Segment card names: SAM 3 (descriptive phrases,
  *  every instance, tracked through a sequence) or Grounding DINO + SAM2. */
@@ -212,21 +212,26 @@ function requests(steps: AuxStep[], i: number, url: string): Req[] | null {
     // The figure hatch needs the things to hatch ("person" without a
     // Segment card); the background's subject is optional: without a
     // Segment card the whole picture is background.
-    const objects = phrasesFor(steps, i) ?? (s.effect === 'formhatch' ? { person: ['person'] } : undefined)
+    // No Segment card: the figure hatch takes the whole picture as its subject.
+    const objects = phrasesFor(steps, i) ?? undefined
+    const whole = s.effect === 'formhatch' && !objects
     const { dials } = hatchSetup(steps, i)
     const engine = engineFor(steps, i)
-    return [{ key: `${s.effect}|${src}|${JSON.stringify(objects ?? null)}|${engine}|${JSON.stringify(dials)}|${LINE_SIDE}`,
+    return [{ key: `${s.effect}|${src}|${JSON.stringify(objects ?? null)}|${whole ? 'whole' : engine}|${JSON.stringify(dials)}|${LINE_SIDE}`,
       what: s.effect === 'formhatch' ? 'hatching' : 'background hatching',
-      job: { op: s.effect, objects, dials, side: LINE_SIDE, engine } }]
+      job: { op: s.effect, objects, whole, dials, side: LINE_SIDE, engine } }]
   }
   const lk = LOOK_OF[s.effect]
   if (lk) {
-    const objects = phrasesFor(steps, i) ?? (lk.background ? undefined : { person: ['person'] })
+    // No Segment card: a subject look draws on the whole picture; a
+    // background look treats it all as background.
+    const objects = phrasesFor(steps, i) ?? undefined
+    const whole = !lk.background && !objects
     const dials: Record<string, number> = {}
     for (const [k, v] of Object.entries(s.params ?? {})) if (!LIVE_ONLY.has(k) && typeof v === 'number') dials[k] = v
     const engine = engineFor(steps, i)
-    return [{ key: `look|${lk.look}|${src}|${JSON.stringify(objects ?? null)}|${engine}|${JSON.stringify(dials)}|${LINE_SIDE}`,
-      what: 'drawing', job: { op: 'look', look: lk.look, objects, dials, side: LINE_SIDE, engine } }]
+    return [{ key: `look|${lk.look}|${src}|${JSON.stringify(objects ?? null)}|${whole ? 'whole' : engine}|${JSON.stringify(dials)}|${LINE_SIDE}`,
+      what: 'drawing', job: { op: 'look', look: lk.look, objects, whole, dials, side: LINE_SIDE, engine } }]
   }
   // A mix card changes how its drawing card mixes its layers, AT the
   // drawing card: whatever lies between the two then works on the re-mixed
@@ -254,11 +259,12 @@ function requests(steps: AuxStep[], i: number, url: string): Req[] | null {
     return n ? [] : null
   }
   if (s.effect === 'filmline') {
-    const objects = phrasesFor(steps, i) ?? { person: ['person'] }
+    // No Segment card: the outline draws on the whole picture.
+    const objects = phrasesFor(steps, i) ?? undefined
     const { dials } = lineSetup(steps, i)
     const engine = engineFor(steps, i)
-    return [{ key: `lines|${src}|${JSON.stringify(objects)}|${engine}|${JSON.stringify(dials)}|${LINE_SIDE}`, what: 'outline',
-      job: { op: 'lines', objects, dials, side: LINE_SIDE, engine } }]
+    return [{ key: `lines|${src}|${JSON.stringify(objects ?? null)}|${objects ? engine : 'whole'}|${JSON.stringify(dials)}|${LINE_SIDE}`, what: 'outline',
+      job: { op: 'lines', objects, whole: !objects, dials, side: LINE_SIDE, engine } }]
   }
   if (s.effect === 'linemix') {
     let j = i - 1

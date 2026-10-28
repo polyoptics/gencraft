@@ -58,6 +58,8 @@ export interface VidbarsDesktop {
     side?: number; dials?: Record<string, number>
     /** What finds the things: SAM 3 (default where installed) or Grounding DINO + SAM2. */
     engine?: 'sam3' | 'dino'
+    /** Nothing named: the whole picture is the subject (no segmenting). */
+    whole?: boolean
   }): Promise<{
     frames?: (string | Record<string, string>)[]; objects?: Record<string, string[]>
     colors?: Record<string, string | number>; error?: string; log: string; engine?: 'sam3' | 'dino'

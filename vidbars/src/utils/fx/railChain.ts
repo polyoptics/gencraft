@@ -204,7 +204,7 @@ export function railComboAt(
   // An effect card as a chain item: its switches and the inputs tucked
   // under it. A Combine card carries the look rows' items with it.
   const effectItem = (card: FreeNodeData, under: FreeNodeData[]): EffectItem => {
-    const inputs = under.map(c => ({ id: c.id, effect: effectKindOf(c), params: c.effect?.params, text: c.effect?.text }))
+    const inputs = under.map(c => ({ id: c.id, effect: effectKindOf(c), params: c.effect?.params, text: c.effect?.text, off: c.effect?.off, solo: c.effect?.solo }))
     return {
       id: card.id, kind: 'effect', effect: effectKindOf(card), params: card.effect?.params, text: card.effect?.text,
       off: card.effect?.off, solo: card.effect?.solo, ...(inputs.length ? { inputs } : {}),

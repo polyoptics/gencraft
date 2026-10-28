@@ -330,7 +330,7 @@ function registerBridge() {
     const side = Number.isFinite(job.side) ? Math.max(64, Math.min(8192, Math.round(job.side))) : undefined
     const engine = job.engine === 'dino' || job.engine === 'sam3' ? job.engine : undefined
     const look = typeof job.look === 'string' && /^[a-z_]+$/.test(job.look) ? job.look : undefined
-    return require('./sketchWorker.cjs').run({ op: job.op, look, frames, objects, dials, side, engine })
+    return require('./sketchWorker.cjs').run({ op: job.op, look, frames, objects, dials, side, engine, whole: job.whole === true })
   })
 
   // An image the app MADE (a context sheet, an effect result), written as a

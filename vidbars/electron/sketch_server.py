@@ -260,6 +260,21 @@ def segment_clip(req):
     Grounding DINO + SAM2, or - engine "sam3" - already found by sam3_server.py (the worker asks it first), whose
     clip this only completes with the frames."""
     root = base(req)
+    if req.get("whole"):
+        # nothing named: the whole picture is the subject - one element, the picture, and the figure all of it
+        clip = "wh"
+        mdir = os.path.join(root, "clips", clip + "_matte")
+        if not os.path.isdir(mdir):
+            clip_like(root, clip)
+            d = os.path.join(root, "clips", clip)
+            for o in ("figure", "picture"):
+                os.makedirs(os.path.join(mdir + ".tmp", o), exist_ok=True)
+                for f in sorted(os.listdir(d)):
+                    h, w = cv2.imread(os.path.join(d, f)).shape[:2]
+                    cv2.imwrite(os.path.join(mdir + ".tmp", o, f), np.full((h, w), 255, np.uint8))
+            os.replace(mdir + ".tmp", mdir)
+            json.dump(["picture"], open(os.path.join(root, "clips", clip + "_done.json"), "w"))
+        return root, clip, {}
     objs = objects_of(req)
     if req.get("engine") == "sam3":
         clip = "s3_" + short(objs)

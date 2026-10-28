@@ -24,7 +24,7 @@ export type ChainItem =
       off?: boolean; solo?: boolean
       /** Cards tucked under it on a loop strip (utils/rail side inputs), in
        *  order: a Depth card's depth, a Segment card's mask. */
-      inputs?: { id: string; effect: EffectKind; params?: Record<string, number>; text?: string }[]
+      inputs?: { id: string; effect: EffectKind; params?: Record<string, number>; text?: string; off?: boolean; solo?: boolean }[]
       /** A Combine card: the loop strip's look rows (utils/rail RailData.rows),
        *  each a chain of effects run on the same picture. */
       rows?: Extract<ChainItem, { kind: 'effect' }>[][] }
@@ -33,6 +33,53 @@ export interface ChainPlan {
   sources: Extract<ChainItem, { kind: 'source' }>[]
   steps: { item: Extract<ChainItem, { kind: 'effect' }>; other: Extract<ChainItem, { kind: 'source' }> | null }[]
   ignored: string[]
+}
+
+type EffectItem = Extract<ChainItem, { kind: 'effect' }>
+type InputItem = NonNullable<EffectItem['inputs']>[number]
+
+/** The strip as it runs: what it is with its switched-off cards taken out,
+ *  wherever they are — the strip's own row, a look row (a Combine card's
+ *  `rows`) or tucked under a card as its input (`inputs`) — so a card off
+ *  always gives what the strip would give without it: no input means the
+ *  card's fallback, no Segment card means no mask, a Combine card off means
+ *  no looks. Soloed, a card is the only one that runs, on the picture, with
+ *  its own inputs (as a solo in the strip's own row already is in
+ *  planChain), wherever it is. The strip's own row keeps its off cards
+ *  (planChain skips them, so a skipped blend still takes its partner).
+ *  runChain reads every strip through this, look rows included. */
+export function effectiveItems(items: ChainItem[]): ChainItem[] {
+  const on = <T extends { off?: boolean }>(x: T) => !x.off
+  const clean = (it: EffectItem): EffectItem => {
+    const out: EffectItem = { ...it }
+    delete out.inputs
+    delete out.rows
+    const inputs = (it.inputs as InputItem[] | undefined)?.filter(on)
+      .map(x => ({ id: x.id, effect: x.effect, params: x.params, text: x.text }))
+    if (inputs?.length) out.inputs = inputs
+    if (it.rows) out.rows = it.rows.map(row => row.filter(on).map(clean))
+    return out
+  }
+  // A solo below the strip's own row: in a look row, or an input.
+  let nested: EffectItem | null = null
+  const find = (list: EffectItem[]) => {
+    for (const it of list) {
+      if (nested) return
+      const inp = (it.inputs as InputItem[] | undefined)?.find(x => x.solo && !x.off)
+      if (inp) { nested = { id: inp.id, kind: 'effect', effect: inp.effect, params: inp.params, text: inp.text }; return }
+      for (const row of it.rows ?? []) {
+        const s = row.find(x => x.solo && !x.off)
+        if (s) { nested = s; return }
+        find(row)
+      }
+    }
+  }
+  const effects = items.filter((it): it is EffectItem => it.kind === 'effect')
+  if (!effects.some(it => it.solo && !it.off)) find(effects)
+  const out = items.map(it => (it.kind === 'effect' ? clean(it) : it))
+  if (!nested) return out
+  // Every card of the strip's row stands aside; the soloed one runs alone.
+  return [...out.map(it => (it.kind === 'effect' ? { ...it, solo: false } : it)), { ...clean(nested as EffectItem), solo: true, off: false }]
 }
 
 /** Read a left-to-right strip into sources and steps (no pixels yet).
@@ -136,7 +183,7 @@ export interface ChainResult {
  *  it lands, and the live strips run again then. Otherwise (a Run, a save,
  *  a drag-out) the run waits for it and draws once. */
 export async function runChain(items: ChainItem[], maxSide: number, previewSide: number | false = 220, opts: { live?: boolean } = {}): Promise<ChainResult> {
-  const plan = planChain(items)
+  const plan = planChain(effectiveItems(items))
   const unreadable: string[] = []
   const result: ChainResult = { outputs: [], stepPreviews: new Map(), ignored: plan.ignored, unreadable }
   if (plan.sources.length === 0) return { ...result, error: 'Put an image card at the start of the strip.' }

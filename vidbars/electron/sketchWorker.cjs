@@ -140,7 +140,7 @@ function run(job) {
   return p
 }
 
-async function runNow({ op, look, frames, objects, side, dials, engine }) {
+async function runNow({ op, look, frames, objects, side, dials, engine, whole }) {
   if (!available()) return { error: `sketchLook tools not found at ${POKT}`, log: '' }
   if (!OPS.has(op)) return { error: `unknown op ${op}`, log: '' }
   if (!frames?.length) return { error: 'no frames', log: '' }
@@ -148,8 +148,9 @@ async function runNow({ op, look, frames, objects, side, dials, engine }) {
     fs.mkdirSync(HOME, { recursive: true })
     const { hash, paths } = frameFiles(frames)
     // What finds the things: SAM 3 unless asked otherwise or not installed.
-    const finds = op === 'segment' || op === 'lines' || op === 'formhatch' || (op === 'look' && SUBJECT_LOOKS.has(look)) ||
-      ((op === 'bghatch' || op === 'look') && objects)
+    // `whole`: nothing named, the whole picture is the subject: nothing to find.
+    const finds = !whole && (op === 'segment' || op === 'lines' || op === 'formhatch' || (op === 'look' && SUBJECT_LOOKS.has(look)) ||
+      ((op === 'bghatch' || op === 'look') && objects))
     let used = finds ? (engine !== 'dino' && sam3Available() ? 'sam3' : 'dino') : undefined
     let note = ''
     if (used === 'sam3') {
@@ -162,7 +163,7 @@ async function runNow({ op, look, frames, objects, side, dials, engine }) {
         }
       }
     }
-    const reply = await sketch.request({ op, look, src: hash, frames: paths, objects, side, dials, engine: used })
+    const reply = await sketch.request({ op, look, src: hash, frames: paths, objects, side, dials, engine: used, whole: !!whole })
     if (reply.error) return { error: reply.error, log: note + (reply.log || '') }
     const out = { log: note + (reply.log || ''), seconds: reply.seconds, engine: used }
     if (op === 'depth') out.frames = reply.frames.map(toDataUrl)
