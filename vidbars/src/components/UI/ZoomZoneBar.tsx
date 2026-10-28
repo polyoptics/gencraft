@@ -195,6 +195,19 @@ export const ZoomZoneBar: React.FC = () => {
       </div>
 
       <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)', marginTop: 4, fontFamily: 'monospace' }}>out</div>
+      {/* Always in reach once the zones have been moved: one press puts all
+          three back the way they came. */}
+      {(cardMax !== DEFAULT_CARD_MAX || blockMax !== DEFAULT_BLOCK_MAX) && (
+        <button
+          title="Reset all zones to the default"
+          onClick={() => useZoomZonesStore.getState().resetBoundaries()}
+          style={{
+            marginTop: 6, width: 34, height: 18, padding: 0, cursor: 'pointer',
+            background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: 4,
+            color: 'rgba(255,255,255,0.75)', fontSize: 9, fontFamily: 'inherit', fontWeight: 700,
+          }}
+        >↺ Reset</button>
+      )}
 
       {(hover || dragging) && (
         <div
@@ -231,7 +244,7 @@ export const ZoomZoneBar: React.FC = () => {
             )
           })}
           <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
-            <PanelButton onClick={() => useZoomZonesStore.getState().resetBoundaries()}>Reset zones</PanelButton>
+            <PanelButton onClick={() => useZoomZonesStore.getState().resetBoundaries()}>Reset all zones</PanelButton>
             <PanelButton onClick={() => useZoomZonesStore.getState().resetTime()}>Reset times</PanelButton>
           </div>
           <div style={{ marginTop: 6, color: 'rgba(255,255,255,0.35)', fontSize: 10 }}>
