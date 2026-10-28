@@ -41,23 +41,30 @@ export interface StripCard {
   /** A picture card's face as a source; an effect card (utils/effectCards)
    *  as its effect. */
   item: ChainItem
+  /** Hidden in a closed (or fanned) deck — `deck` names it: such a card
+   *  joins a strip only with cards of its own deck (useFxStrips). */
+  tucked?: boolean
+  deck?: string
 }
 
 /** Every card on a strip: a picture card (its face picture as the source)
  *  or an effect card (its effect), on the canvas and not pinned. A card
  *  tucked inside a collapsed deck counts only with `tucked`: still read in
  *  place — a deck's members keep their open layout as it moves — so a
- *  collapsed row keeps processing, but never a target to snap onto. */
+ *  collapsed row keeps processing, but never a target to snap onto. It is
+ *  marked (`tucked`, `deck`), so it only ever joins its own deck's cards:
+ *  its open place is empty canvas while the deck is closed, and must not
+ *  pick up whatever lies there. */
 export function stripCards(
   groups: ProjectGroup[] = useBoardsStore.getState().groups,
   boards: Record<string, BoardData> = useBoardsStore.getState().boards,
   zoom: number = useCanvasStore.getState().zoom,
   tucked = false,
 ): StripCard[] {
-  const hidden = tucked ? new Set<string>() : getHiddenGroupIds(groups)
+  const hiddenAll = getHiddenGroupIds(groups)
   const out: StripCard[] = []
   for (const g of groups) {
-    if (g.pin || hidden.has(g.id)) continue
+    if (g.pin || (!tucked && hiddenAll.has(g.id))) continue
     const url = g.effect ? null : cardFacePicture(g, boards)
     if (!url && !g.effect) continue
     // The card as it is DRAWN at this zoom, in canvas units: its title band
@@ -73,6 +80,7 @@ export function stripCards(
       item: g.effect
         ? { id, kind: 'effect', effect: knownKind(g.effect.kind), params: g.effect.params, text: g.effect.text, off: g.effect.off, solo: g.effect.solo }
         : { id, kind: 'source', url: url!, label: g.name || 'Card' },
+      ...(hiddenAll.has(g.id) ? { tucked: true, deck: g.deckAnchorId ?? g.id } : g.deckState && g.deckState !== 'open' ? { deck: g.id } : {}),
     })
   }
   return out

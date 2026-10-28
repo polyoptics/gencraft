@@ -117,7 +117,7 @@ export function computeStrips(
   // for a deck's face — those of the members on its open strip, in deck
   // order (faceItems).
   const { faces, hidden } = tileDeckIndex(nodes)
-  const tiles: { n: { id: string; x: number; y: number; width: number; height: number }; items: ChainItem[] }[] = []
+  const tiles: { n: { id: string; x: number; y: number; width: number; height: number }; items: ChainItem[]; tucked?: boolean; deck?: string }[] = []
   for (const n of Object.values(nodes)) {
     // A pinned face has taken its deck off the canvas with it. A card on a
     // loop strip — lifted mid-drag included, until its release decides —
@@ -129,12 +129,16 @@ export function computeStrips(
     if (items.length) tiles.push({ n, items })
   }
   // A card stands in as its footprint, reading as its face picture.
-  for (const c of cards()) tiles.push({ n: c.rect, items: [c.item] })
+  for (const c of cards()) tiles.push({ n: c.rect, items: [c.item], tucked: c.tucked, deck: c.deck })
+  // A card hidden in a closed deck sits at its OPEN place, which is empty
+  // canvas while the deck is closed: it joins only its own deck's cards.
+  const canTouch = (a: typeof tiles[number], b: typeof tiles[number]) =>
+    !(a.tucked || b.tucked) || (!!a.deck && a.deck === b.deck)
   const parent = tiles.map((_, i) => i)
   const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])))
   for (let i = 0; i < tiles.length; i++) {
     for (let j = i + 1; j < tiles.length; j++) {
-      if (rectsTouch(tiles[i].n, tiles[j].n, DOCK_TOLERANCE)) parent[find(j)] = find(i)
+      if (canTouch(tiles[i], tiles[j]) && rectsTouch(tiles[i].n, tiles[j].n, DOCK_TOLERANCE)) parent[find(j)] = find(i)
     }
   }
   const groups = new Map<number, typeof tiles>()
@@ -156,7 +160,7 @@ export function computeStrips(
     // item of its own (a note) would otherwise re-key the strip — and drop
     // its result — every time the deck is collapsed or opened.
     const key = items[0].id
-    const win = winRects.find(w => members.some(m => rectsTouch(m.n, w, DOCK_TOLERANCE)))
+    const win = winRects.find(w => members.some(m => !m.tucked && rectsTouch(m.n, w, DOCK_TOLERANCE)))
     strips[key] = {
       key,
       items,
