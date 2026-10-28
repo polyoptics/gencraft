@@ -50,6 +50,16 @@ export const HATCH_DIALS: Partial<Record<EffectKind, string[]>> = {
   formhatch: ['spacing', 'weight', 'angle', 'wrap', 'tone1', 'default.cross', 'default.light', 'light_az', 'stroke_px', 'seed', 'boil'],
   bghatch: ['spacing', 'weight', 'opacity', 'far_opacity', 'far_cut', 'paint_hi', 'cross', 'pencil', 'stroke_px', 'seed', 'boil'],
 }
+/** The drawing-look cards: which sketchLook look each runs (electron
+ *  sketch_server.py LOOKS) and whether it draws the background (its subject
+ *  then optional). Every slider but Show and Strength is the look's dial. */
+export const LOOK_OF: Partial<Record<EffectKind, { look: string; background?: boolean }>> = {
+  painthatch: { look: 'hatch' }, filmcel: { look: 'cel' }, boilink: { look: 'boil' }, misreg: { look: 'misreg' },
+  construction: { look: 'construction' }, relight: { look: 'relight' }, formlight: { look: 'formlight' },
+  bglayout: { look: 'bg_layout', background: true }, bgwash: { look: 'bg_tonewash', background: true },
+}
+const LIVE_ONLY = new Set(['show', 'strength'])
+const BLEND = { normal: 0, multiply: 1, screen: 2, add: 3, hardlight: 4 } as Record<string, number>
 /** A Shading mix card's values that change nothing (the look mixer's
  *  neutral: mixer_bake.py NEUTRAL, for the hatch layers). */
 export const SHADE_NEUTRAL: Record<string, number> = { hatch: 1, bg: 1, hatch_weight: 1, bg_weight: 1, hatch_dark: 0, bg_dark: 0, light: 1 }
@@ -64,7 +74,7 @@ type Kept =
 
 interface Req {
   key: string; what: string
-  job: { op: 'depth' | 'segment' | 'lines' | 'formhatch' | 'bghatch'; objects?: Record<string, string[]>; dials?: Record<string, number>; side?: number; engine?: Engine }
+  job: { op: 'depth' | 'segment' | 'lines' | 'formhatch' | 'bghatch' | 'look'; look?: string; objects?: Record<string, string[]>; dials?: Record<string, number>; side?: number; engine?: Engine }
 }
 /** What finds the things a Segment card names: SAM 3 (descriptive phrases,
  *  every instance, tracked through a sequence) or Grounding DINO + SAM2. */
@@ -97,10 +107,11 @@ function hash(s: string): string {
   return (h >>> 0).toString(36) + s.length.toString(36)
 }
 
-const AUX_KINDS = new Set<EffectKind>(['depth', 'segment', 'filmline', 'linemix', 'formhatch', 'bghatch', 'shademix'])
+const AUX_KINDS = new Set<EffectKind>(['depth', 'segment', 'filmline', 'linemix', 'formhatch', 'bghatch', 'shademix',
+  ...(Object.keys(LOOK_OF) as EffectKind[])])
 const isAuxKind = (k: EffectKind) => AUX_KINDS.has(k)
 /** Cards that read a Segment card's phrases (the things to draw). */
-const READS_PHRASES = new Set<EffectKind>(['filmline', 'formhatch', 'bghatch'])
+const READS_PHRASES = new Set<EffectKind>(['filmline', 'formhatch', 'bghatch', ...(Object.keys(LOOK_OF) as EffectKind[])])
 /** Whether any step on the strip needs a model or tool (so its live result
  *  can change when one lands). */
 export const stripNeedsAux = (steps: { kind: string; effect?: EffectKind }[]) =>
@@ -174,6 +185,15 @@ function requests(steps: AuxStep[], i: number, url: string): Req[] | null {
     return [{ key: `${s.effect}|${src}|${JSON.stringify(objects ?? null)}|${engine}|${JSON.stringify(dials)}|${LINE_SIDE}`,
       what: s.effect === 'formhatch' ? 'hatching' : 'background hatching',
       job: { op: s.effect, objects, dials, side: LINE_SIDE, engine } }]
+  }
+  const lk = LOOK_OF[s.effect]
+  if (lk) {
+    const objects = phrasesFor(steps, i) ?? (lk.background ? undefined : { person: ['person'] })
+    const dials: Record<string, number> = {}
+    for (const [k, v] of Object.entries(s.params ?? {})) if (!LIVE_ONLY.has(k) && typeof v === 'number') dials[k] = v
+    const engine = engineFor(steps, i)
+    return [{ key: `look|${lk.look}|${src}|${JSON.stringify(objects ?? null)}|${engine}|${JSON.stringify(dials)}|${LINE_SIDE}`,
+      what: 'drawing', job: { op: 'look', look: lk.look, objects, dials, side: LINE_SIDE, engine } }]
   }
   if (s.effect === 'shademix') {
     if (!steps.slice(0, i).some(x => x.effect === 'formhatch' || x.effect === 'bghatch')) { say(s.id, 'Put a hatch card before it'); return null }
@@ -289,6 +309,10 @@ export function auxFor(e: FxEngine, plan: AuxPlan, steps: AuxStep[], i: number, 
       const next = steps.slice(i + 1).find(x => x.effect === 'segment' || READS_PHRASES.has(x.effect))
       aux.namesForLines = !!next && next.effect !== 'segment'
     }
+    else if (r.job.op === 'look') {
+      const modes = ((k.colors as unknown as { modes?: string[] } | undefined)?.modes ?? [])
+      aux.look = { layers: modes.map((m, n) => ({ c: tex(`c${n}`), a: tex(`a${n}`), mode: BLEND[m] ?? 0 })) }
+    }
     else if (r.job.op === 'formhatch' || r.job.op === 'bghatch') {
       const { mix } = hatchSetup(steps, i)
       aux.hatch = {
@@ -311,6 +335,7 @@ export function releaseAux(e: FxEngine, aux: Aux | null) {
   e.release(aux.mask)
   if (aux.lines) for (const t of [aux.lines.outline, aux.lines.inside, aux.lines.paper, aux.lines.pencil]) e.release(t)
   if (aux.hatch) for (const t of [aux.hatch.a, aux.hatch.k, aux.hatch.b, aux.hatch.h, aux.hatch.p]) e.release(t)
+  if (aux.look) for (const l of aux.look.layers) { e.release(l.c); e.release(l.a) }
 }
 
 /** What the needs come to, handed to an effect's run. */
@@ -323,5 +348,8 @@ export interface Aux {
   /** A hatch look's layers: dark strokes (a alpha, k ink colour: multiply),
    *  light strokes (b, h: screen), the far pencil (p: multiply by `pencil`). */
   hatch?: { a: Tex; k: Tex; b: Tex; h: Tex; p: Tex; pencil: string; background: boolean; mix: Record<string, number> }
+  /** A drawing look's layers in its order: colour, alpha and blend mode
+   *  (0 normal, 1 multiply, 2 screen, 3 add, 4 hard light). */
+  look?: { layers: { c: Tex; a: Tex; mode: number }[] }
 }
 export type { AuxKind }

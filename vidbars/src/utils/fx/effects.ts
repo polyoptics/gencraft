@@ -11,11 +11,12 @@ export type EffectKind =
   | 'bloom' | 'glare' | 'glow' | 'ink' | 'cel' | 'sketch'
   | 'halftone' | 'chroma' | 'grade' | 'multiply' | 'screen' | 'overlay'
   | 'depth' | 'segment' | 'filmline' | 'linemix' | 'formhatch' | 'bghatch' | 'shademix'
+  | 'painthatch' | 'filmcel' | 'boilink' | 'misreg' | 'construction' | 'relight' | 'formlight' | 'bglayout' | 'bgwash'
 
 /** What an effect may need besides its picture, made from the strip's
  *  SOURCE picture by a model or tool (aiEffects.ts): a depth map, a mask of
  *  the things a Segment card names, the film outline's line layers. */
-export type AuxKind = 'depth' | 'mask' | 'lines' | 'hatch'
+export type AuxKind = 'depth' | 'mask' | 'lines' | 'hatch' | 'look'
 
 export interface ParamDef {
   key: string; label: string; min: number; max: number; step: number; default: number
@@ -133,6 +134,35 @@ function hatchComp(e: FxEngine, src: Tex, p: Record<string, number>, aux?: Aux):
     strength: H.mix.strength, curve: 1 / Math.max(0.25, H.mix.weight), dark: H.mix.dark, light: H.mix.light,
     clipA: H.background ? 1 : 0, show: Math.round(p.show),
   })
+}
+
+/** A drawing look's layers (aux.look) over `src` in the look's own order
+ *  and blend modes, or on white (Show: Alone), at `Strength`; the picture
+ *  unchanged while they are being made. */
+function lookComp(e: FxEngine, src: Tex, p: Record<string, number>, aux?: Aux): Tex {
+  const L = aux?.look
+  if (!L) return e.pass('copy', e.target(src.w, src.h), { src })
+  let cur = p.show >= 0.5
+    ? e.pass('grade', e.target(src.w, src.h), { src, exposure: 24, contrast: 1, saturation: 0, tint: [1, 1, 1], tintAmt: 0 })
+    : e.pass('copy', e.target(src.w, src.h), { src })
+  for (const l of L.layers) {
+    const next = e.pass('layerOver', e.target(src.w, src.h), { src: cur, C: l.c, A: l.a, blendMode: l.mode, strength: p.strength })
+    e.release(cur)
+    cur = next
+  }
+  return cur
+}
+
+/** A card for one of the film's drawing looks (aiEffects LOOK_OF): Show and
+ *  Strength (live), then the look's own dials (each re-draws it). The
+ *  background looks need no subject. */
+function lookDef(kind: EffectKind, label: string, glyph: string, color: string, blurb: string, dials: ParamDef[], background = false): EffectDef {
+  return {
+    kind, label, glyph, color, blurb,
+    needs: background ? ['depth', 'look'] : ['depth', 'mask', 'look'],
+    params: [{ ...P('show', 'Show', 0, 1, 1, 0), names: ['Over picture', 'Alone'] }, P('strength', 'Strength', 0, 2, 0.01, 1), ...dials],
+    run(e, src, p, _o, aux) { return lookComp(e, src, p, aux) },
+  }
 }
 
 function blendWith(e: FxEngine, src: Tex, other: Tex | null | undefined, mode: number, mixAmt: number): Tex {
@@ -432,6 +462,61 @@ export const EFFECTS: Record<EffectKind, EffectDef> = {
     ],
     run(e, src) { return e.pass('copy', e.target(src.w, src.h), { src }) },
   },
+  // The film's other drawing looks (sketchLook tools_scale/look_*.py), each
+  // run whole by the tool on the picture; the layers it writes come back and
+  // go over the picture as the look itself lays them (lookComp). The subject
+  // looks draw on what a Segment card before them finds ("person" without
+  // one); the background ones leave that subject alone, or treat the whole
+  // picture as background when there is no Segment card.
+  painthatch: lookDef('painthatch', 'Painted-shadow hatch', '▧', '#b58a78', 'Hatches the shadows already painted in', [
+    P('spacing', 'Line spacing', 2, 16, 0.1, 6), P('width', 'Stroke width', 0.3, 4, 0.05, 1.4),
+    P('angle', 'Angle', -90, 90, 1, 58), P('form', 'Follow form', 0, 5, 0.05, 2.5), P('cross', 'Cross-hatch', 0, 2, 0.01, 1),
+    P('length', 'Stroke length', 5, 100, 1, 28), P('drop', 'Shadow depth', 0.1, 0.8, 0.01, 0.4),
+    P('seed', 'Variation', 0, 9999, 1, 3030), P('boil', 'Boil (frames held)', 1, 6, 1, 2),
+  ]),
+  filmcel: lookDef('filmcel', 'Cel shadows', '◒', '#7c8fd0', 'Flat designed shadow shapes on the form', [
+    P('light_deg', 'Light from', 0, 360, 1, 80), P('terminator', 'Shadow amount', -0.5, 1, 0.01, 0.3),
+    P('flatten', 'Flatten', 0, 1, 0.01, 0.85), P('hatch', 'Feather hatch', 0, 1, 0.01, 0.75),
+    P('cast', 'Cast shadows', 0, 1, 0.01, 0.8), P('agree', 'Follow painting', 0, 1, 0.01, 0.5),
+    P('jitter_px', 'Wobble', 0, 5, 0.05, 1.4), P('seed', 'Variation', 0, 9999, 1, 3030), P('boil', 'Boil (frames held)', 1, 6, 1, 2),
+  ]),
+  boilink: lookDef('boilink', 'Boiling ink', '〰', '#9a9aa8', 'A brush contour, heavy on the shadow side', [
+    P('weight_lit', 'Lit weight', 0.5, 8, 0.1, 2), P('weight_shadow', 'Shadow weight', 1, 16, 0.1, 7.5),
+    P('light_deg', 'Light from', 0, 360, 1, 135), P('texture', 'Dry brush', 0, 3, 0.05, 1.2),
+    P('stroke_len', 'Stroke length', 20, 300, 1, 100), P('lost_edges', 'Lost edges', 0, 1, 0.01, 0.45),
+    P('wobble', 'Wobble', 0, 3, 0.05, 0.35), P('seed', 'Variation', 0, 9999, 1, 3030), P('boil', 'Boil (frames held)', 1, 6, 1, 2),
+  ]),
+  misreg: lookDef('misreg', 'Misregistered line', '⧈', '#8f8fb8', 'A brush line printed slightly off', [
+    P('weight', 'Line weight', 1, 16, 0.1, 6), P('offset', 'Misregistration', 0, 30, 0.5, 8),
+    P('off_deg', 'Offset direction', 0, 360, 1, 215), P('gap', 'Lost edges', 0, 0.5, 0.01, 0.08),
+    P('dry', 'Dry brush', 0, 1, 0.01, 0.14), P('stroke_len', 'Stroke length', 20, 300, 1, 120),
+    P('tremor', 'Tremor', 0, 3, 0.05, 0.7), P('seed', 'Variation', 0, 9999, 1, 3030), P('boil', 'Boil (frames held)', 1, 6, 1, 2),
+  ]),
+  construction: lookDef('construction', 'Red pencil construction', '✐', '#d0604a', 'A searching red pencil drawing of the outline', [
+    P('weight', 'Line weight', 0.5, 10, 0.1, 4), P('passes', 'Searching passes', 0, 5, 1, 2),
+    P('pass_spread', 'Pass spread', 0, 12, 0.1, 3.5), P('overshoot', 'Overshoot', 0, 40, 0.5, 14),
+    P('construction', 'Construction lines', 0, 8, 0.1, 2), P('tone', 'Pencil darkness', 0, 1, 0.01, 0.94),
+    P('grain', 'Paper grain', 0, 1, 0.01, 0.55), P('seed', 'Variation', 0, 9999, 1, 7), P('boil', 'Boil (frames held)', 1, 6, 1, 2),
+  ]),
+  relight: lookDef('relight', 'Relight', '☀', '#e8c27a', 'Adds key light, rim light, shadow and haze', [
+    P('key_deg', 'Key from', 0, 360, 1, 135), P('key_elev', 'Key height', 0, 90, 1, 25),
+    P('key', 'Key light', 0, 1, 0.01, 0.14), P('shadow', 'Shadow', 0, 1, 0.01, 0.34), P('rim', 'Rim light', 0, 3, 0.05, 0.8),
+    P('spec', 'Shine', 0, 3, 0.05, 1), P('ao', 'Occlusion', 0, 1, 0.01, 0.42), P('haze', 'Background haze', 0, 0.5, 0.01, 0.07),
+  ]),
+  formlight: lookDef('formlight', 'Form light', '◓', '#9cc4ff', 'Rim light and wrap shadow on the form', [
+    P('rim', 'Rim light', 0, 4, 0.05, 1.6), P('shadow', 'Wrap shadow', 0, 2, 0.05, 1), P('glint', 'Glints', 0, 3, 0.05, 1),
+    P('depth', 'Roundness', 0.2, 2, 0.05, 1), P('env', 'Backdrop light', 0, 1, 0.01, 0.35), P('rim_spread', 'Rim spread', 10, 180, 1, 70),
+  ]),
+  bglayout: lookDef('bglayout', 'Background layout', '⌗', '#c87a5a', 'A red pencil layout drawing of the background', [
+    P('far_ratio', 'Reach', 2, 40, 0.5, 10), P('busy', 'Calm busy areas', 0, 2, 0.05, 1), P('horizon', 'Skyline', 0, 1, 0.01, 0.24),
+    P('halo', 'Gap round subject', 0, 40, 0.5, 12), P('hi', 'Line threshold', 0.2, 1, 0.01, 0.6),
+    P('seed', 'Variation', 0, 9999, 1, 3030), P('boil', 'Boil (frames held)', 1, 6, 1, 2),
+  ], true),
+  bgwash: lookDef('bgwash', 'Background wash', '▒', '#8f9adc', 'A cool shadow wash and haze with distance', [
+    P('haze', 'Haze', 0, 1, 0.01, 0.45), P('wash', 'Wash', 0, 1, 0.01, 0.48), P('core', 'Core accent', 0, 1, 0.01, 0.18),
+    P('shade_hi', 'Shadow from', 0.5, 1, 0.01, 0.9), P('grain', 'Granulation', 0, 1, 0.01, 0.3), P('mottle', 'Mottle', 0, 0.5, 0.01, 0.12),
+    P('seed', 'Variation', 0, 9999, 1, 3030), P('boil', 'Boil (frames held)', 1, 6, 1, 2),
+  ], true),
 }
 
 /** An effect card's kind, safely: a node from a snapshot or another build
@@ -459,4 +544,5 @@ export function effectParams(kind: EffectKind, params: Record<string, number> | 
 }
 
 /** In the order the add menu lists them. */
-export const EFFECT_ORDER: EffectKind[] = ['bloom', 'glare', 'glow', 'ink', 'cel', 'sketch', 'halftone', 'chroma', 'grade', 'multiply', 'screen', 'overlay', 'depth', 'segment', 'filmline', 'linemix', 'formhatch', 'bghatch', 'shademix']
+export const EFFECT_ORDER: EffectKind[] = ['bloom', 'glare', 'glow', 'ink', 'cel', 'sketch', 'halftone', 'chroma', 'grade', 'multiply', 'screen', 'overlay', 'depth', 'segment', 'filmline', 'linemix', 'formhatch', 'bghatch', 'shademix',
+  'painthatch', 'filmcel', 'boilink', 'misreg', 'construction', 'relight', 'formlight', 'bglayout', 'bgwash']

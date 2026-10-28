@@ -31,7 +31,10 @@ const SERVER = path.join(__dirname, 'sketch_server.py')
 const SAM3_PYTHON = process.env.VIDBARS_SAM3_PYTHON || path.join(path.dirname(POKT), '.sam3-venv', 'Scripts', 'python.exe')
 const SAM3_SERVER = path.join(__dirname, 'sam3_server.py')
 const HOME = path.join(os.tmpdir(), 'vidbars-sketch')
-const OPS = new Set(['depth', 'segment', 'lines', 'formhatch', 'bghatch'])
+const OPS = new Set(['depth', 'segment', 'lines', 'formhatch', 'bghatch', 'look'])
+// The looks that draw on the subject (and so need what Segment finds); the
+// background ones use it only when a Segment card names something.
+const SUBJECT_LOOKS = new Set(['hatch', 'cel', 'boil', 'misreg', 'construction', 'relight', 'formlight'])
 
 /** Whether this machine can run the tools at all. */
 function available() {
@@ -137,7 +140,7 @@ function run(job) {
   return p
 }
 
-async function runNow({ op, frames, objects, side, dials, engine }) {
+async function runNow({ op, look, frames, objects, side, dials, engine }) {
   if (!available()) return { error: `sketchLook tools not found at ${POKT}`, log: '' }
   if (!OPS.has(op)) return { error: `unknown op ${op}`, log: '' }
   if (!frames?.length) return { error: 'no frames', log: '' }
@@ -145,7 +148,8 @@ async function runNow({ op, frames, objects, side, dials, engine }) {
     fs.mkdirSync(HOME, { recursive: true })
     const { hash, paths } = frameFiles(frames)
     // What finds the things: SAM 3 unless asked otherwise or not installed.
-    const finds = op === 'segment' || op === 'lines' || op === 'formhatch' || (op === 'bghatch' && objects)
+    const finds = op === 'segment' || op === 'lines' || op === 'formhatch' || (op === 'look' && SUBJECT_LOOKS.has(look)) ||
+      ((op === 'bghatch' || op === 'look') && objects)
     let used = finds ? (engine !== 'dino' && sam3Available() ? 'sam3' : 'dino') : undefined
     let note = ''
     if (used === 'sam3') {
@@ -158,12 +162,12 @@ async function runNow({ op, frames, objects, side, dials, engine }) {
         }
       }
     }
-    const reply = await sketch.request({ op, src: hash, frames: paths, objects, side, dials, engine: used })
+    const reply = await sketch.request({ op, look, src: hash, frames: paths, objects, side, dials, engine: used })
     if (reply.error) return { error: reply.error, log: note + (reply.log || '') }
     const out = { log: note + (reply.log || ''), seconds: reply.seconds, engine: used }
     if (op === 'depth') out.frames = reply.frames.map(toDataUrl)
     if (op === 'segment') out.objects = Object.fromEntries(Object.entries(reply.objects).map(([n, fs_]) => [n, fs_.map(toDataUrl)]))
-    if (op === 'lines' || op === 'formhatch' || op === 'bghatch') {
+    if (op === 'lines' || op === 'formhatch' || op === 'bghatch' || op === 'look') {
       out.frames = reply.frames.map(f => Object.fromEntries(Object.entries(f).map(([k, v]) => [k, toDataUrl(v)])))
       out.colors = reply.colors
     }
@@ -181,7 +185,9 @@ function stop() {
 module.exports = { run, available, sam3Available, stop }
 
 if (require.main === module) {
-  const [op, ...rest] = process.argv.slice(2)
+  // node electron/sketchWorker.cjs look:cel pic.png ...  runs one of the drawing looks
+  const [opArg, ...rest] = process.argv.slice(2)
+  const [op, look] = opArg.split(':')
   const frames = rest.filter(a => !a.includes('='))
   const kv = rest.filter(a => a.includes('=')).map(a => a.split('='))
   const dials = Object.fromEntries(kv.filter(([, v]) => !isNaN(Number(v))).map(([k, v]) => [k, Number(v)]))
@@ -190,7 +196,7 @@ if (require.main === module) {
   const save = (name, url) => { const f = path.join(outDir, name); fs.writeFileSync(f, Buffer.from(url.split(',')[1], 'base64')); console.log('wrote', f) }
   const once = async () => {
     const t0 = Date.now()
-    const r = await run({ op, frames: frames.map(f => path.resolve(f)), objects, dials, side: 1400, engine: process.env.SKETCH_ENGINE })
+    const r = await run({ op, look, frames: frames.map(f => path.resolve(f)), objects, dials, side: 1400, engine: process.env.SKETCH_ENGINE })
     if (r.error) console.error('ERROR', r.error, r.log)
     console.log(`${op}: ${((Date.now() - t0) / 1000).toFixed(1)} s (worker ${r.seconds} s, ${r.engine ?? ''})`)
     return r

@@ -52,7 +52,9 @@ export interface VidbarsDesktop {
    *  bghatch their multiply and screen layers (look_formhatch.py,
    *  look_bg_depthhatch.py). */
   sketchRun?(job: {
-    op: 'depth' | 'segment' | 'lines' | 'formhatch' | 'bghatch'; frames: string[]; objects?: Record<string, string[]>
+    op: 'depth' | 'segment' | 'lines' | 'formhatch' | 'bghatch' | 'look'; frames: string[]
+    /** op 'look': which drawing look (sketch_server.py LOOKS). */
+    look?: string; objects?: Record<string, string[]>
     side?: number; dials?: Record<string, number>
     /** What finds the things: SAM 3 (default where installed) or Grounding DINO + SAM2. */
     engine?: 'sam3' | 'dino'

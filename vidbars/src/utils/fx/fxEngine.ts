@@ -301,6 +301,23 @@ const FRAG: Record<string, string> = {
       o = vec4(clamp(c, 0.0, 1.0), 1.0);
     }`,
 
+  // One layer of a drawing look over the picture, as the look documents it:
+  // blendMode 0 normal (over), 1 multiply, 2 screen, 3 add, 4 hard light;
+  // its alpha (A.r) times `strength`.
+  layerOver: `
+    uniform sampler2D src; uniform sampler2D C; uniform sampler2D A; uniform float blendMode; uniform float strength;
+    void main() {
+      vec3 f = texture(src, uv).rgb, c = texture(C, uv).rgb;
+      float a = clamp(texture(A, uv).r * strength, 0.0, 1.0);
+      vec3 r;
+      if (blendMode < 0.5) r = mix(f, c, a);
+      else if (blendMode < 1.5) r = f * (1.0 - a + a * c);
+      else if (blendMode < 2.5) r = 1.0 - (1.0 - f) * (1.0 - a * c);
+      else if (blendMode < 3.5) r = f + a * c;
+      else r = mix(f, mix(2.0 * f * c, 1.0 - 2.0 * (1.0 - f) * (1.0 - c), step(0.5, c)), a);
+      o = vec4(clamp(r, 0.0, 1.0), 1.0);
+    }`,
+
   invertGrey: `
     uniform sampler2D src;
     void main() { float g = dot(texture(src, uv).rgb, vec3(0.299, 0.587, 0.114)); o = vec4(vec3(1.0 - g), 1.0); }`,

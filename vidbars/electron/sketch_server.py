@@ -15,6 +15,9 @@ HASH names the picture (its bytes); everything made from it is kept under <cache
   lines   -> {"frames": [{"outline", "inside", "paper", "pencil": png}], "colors": {...}}
   formhatch -> {"frames": [{"a", "k", "b", "h": png}]}   dark hatch alpha, its ink colour, light strokes, their colour
   bghatch -> {"frames": [{"a", "k", "p": png}], "colors": {"pencil": hex}}   ink alpha, ink colour, far pencil alpha
+  {"op": "look", "look": NAME, ...}  -> {"frames": [{"c0", "a0", "c1", "a1" ...: png}], "colors": {"modes": [...]}}
+          one of LOOKS (hatch, cel, boil, misreg, construction, relight, formlight, bg_layout, bg_tonewash): each layer
+          the look writes as its colour (cN) and alpha (aN), and how it goes over the frame (modes, in order)
 
 How the tools run: each script is executed from its own file with __file__ pointing into the picture's cache folder,
 so its ROOT (the folder above tools/) is that folder and it reads and writes there, never in sketchLook.
@@ -460,7 +463,77 @@ def op_bghatch(req):
             "colors": json.load(open(os.path.join(res, "colors.json")))}
 
 
-OPS = {"depth": op_depth, "segment": op_segment, "lines": op_lines, "formhatch": op_formhatch, "bghatch": op_bghatch}
+# The drawing looks run as they are (each as __main__, ROOT = the picture's folder), then the layers they write are
+# read back: what each writes, and how its own docstring says the layers go over the frame (in order). mask: the
+# figure and element mattes are needed ("need") or used when a Segment card names something ("optional": without,
+# the whole picture is background). fixed: string dials the card always sets (the red pencil's hue).
+LOOKS = {
+    "hatch": dict(script="look_hatch.py", out="hatch", layers=[("layer", "normal")], mask="need"),
+    "cel": dict(script="look_cel.py", out="cel", layers=[("layer/multiply", "multiply"), ("layer/screen", "screen")],
+                mask="need"),
+    "boil": dict(script="look_boil.py", out="boil", layers=[("lines", "normal")], mask="need"),
+    "misreg": dict(script="look_misreg.py", out="misreg", layers=[("lines", "normal")], mask="need"),
+    "construction": dict(script="look_construction.py", out="construction", layers=[("lines", "normal")],
+                         mask="need", fixed={"color": "c8402a"}),
+    "relight": dict(script="look_relight.py", out="relight",
+                    layers=[("layer/multiply", "multiply"), ("layer/add", "add"), ("layer/haze", "normal")],
+                    mask="need"),
+    "formlight": dict(script="look_formlight.py", out="formlight", layers=[("layer", "hardlight")], mask="need"),
+    "bg_layout": dict(script="look_bg_layout.py", out="bg_layout", layers=[("layer", "multiply")], mask="optional",
+                      argv=["--name", "bg_layout"]),
+    "bg_tonewash": dict(script="look_bg_tonewash.py", out="bg_tonewash",
+                        layers=[("layer/haze", "normal"), ("layer/multiply", "multiply")], mask="optional",
+                        argv=["--name", "bg_tonewash"]),
+}
+
+
+def op_look(req):
+    """One of LOOKS on the picture: the script runs whole on the picture's clip (a still as two frames of itself,
+    since several read motion from a neighbour), and each RGBA layer it writes comes back as its colour and its
+    alpha (two PNGs: VidBars uploads pictures without their alpha). A script that stops in its movie or contact
+    sheets after writing every layer (they assume a long shot) has still made what is needed."""
+    spec = LOOKS[req["look"]]
+    if spec["mask"] == "need" or (spec["mask"] == "optional" and req.get("objects")):
+        root, mclip, _ = segment_clip(req)
+    else:
+        root, mclip = base(req), None
+    side = int(req.get("side") or 1400)
+    dials = {k: float(v) for k, v in (req.get("dials") or {}).items()}
+    res = os.path.join(root, "res", "%s_%d_%s_%s" % (req["look"], side, mclip or "none", short(dials)))
+    if not os.path.isdir(res):
+        clip = look_clip(root, mclip, side, depth=True, pad=True)
+        n_src = len(os.listdir(os.path.join(root, "clips", "src")))
+        out = os.path.join(root, "out", spec["out"])
+        shutil.rmtree(out, ignore_errors=True)
+        argv = [clip] + spec.get("argv", []) + dial_args(dials)
+        argv += [a for k, v in spec.get("fixed", {}).items() for a in ("--dial", "%s=%s" % (k, v))]
+        layer = lambda sub, t: os.path.join(out, sub, "%04d.png" % t)
+        try:
+            run_tool(os.path.join(TOOLS_SCALE, spec["script"]), root, argv, [TOOLS_SCALE])
+        except Exception:
+            if not all(os.path.exists(layer(sub, t)) for sub, _ in spec["layers"] for t in range(n_src)):
+                raise
+            print("(the look stopped after its layers: %s)" % traceback.format_exc().strip().splitlines()[-1])
+        os.makedirs(res + ".tmp", exist_ok=True)
+        for t in range(n_src):
+            for i, (sub, _) in enumerate(spec["layers"]):
+                im = cv2.imread(layer(sub, t), cv2.IMREAD_UNCHANGED)
+                if im is None:
+                    raise ValueError("%s wrote no %s for frame %d" % (spec["script"], sub, t))
+                if im.ndim == 2 or im.shape[2] == 3:  # an opaque layer acts everywhere
+                    im = np.dstack([im if im.ndim == 3 else cv2.cvtColor(im, cv2.COLOR_GRAY2BGR),
+                                    np.full(im.shape[:2], 255, np.uint8)])
+                cv2.imwrite(os.path.join(res + ".tmp", "%04d_c%d.png" % (t, i)), im[..., :3])
+                cv2.imwrite(os.path.join(res + ".tmp", "%04d_a%d.png" % (t, i)), im[..., 3])
+        os.replace(res + ".tmp", res)
+    n = len([f for f in os.listdir(res) if f.endswith("_a0.png")])
+    return {"frames": [{"%s%d" % (k, i): os.path.join(res, "%04d_%s%d.png" % (t, k, i))
+                        for i in range(len(spec["layers"])) for k in "ca"} for t in range(n)],
+            "colors": {"modes": [m for _, m in spec["layers"]]}}
+
+
+OPS = {"depth": op_depth, "segment": op_segment, "lines": op_lines, "formhatch": op_formhatch, "bghatch": op_bghatch,
+       "look": op_look}
 
 
 def prune(days=3):
