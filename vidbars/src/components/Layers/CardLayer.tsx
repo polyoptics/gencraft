@@ -41,7 +41,7 @@ import { useResolvedMedia } from '../../utils/useResolvedMedia'
 import type { MediaItem } from '../../types/bar'
 import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
 import { getFirstImageUrl } from '../../types/bar'
-import { groupFaceSource, groupImageSources, deckFaceSources, deckImageSources, gripSource } from '../../utils/mediaSources'
+import { groupFaceSource, groupImageSources, deckFaceSources, deckImageSources, cardGripUrl as cardGripUrlOf } from '../../utils/mediaSources'
 import { DragOutGrip } from '../UI/DragOutGrip'
 import { hexToHsl, hslToHex, selectionHighlight } from '../../utils/colorUtils'
 import { cssUrl } from '../../utils/diskUrl'
@@ -361,7 +361,9 @@ const CardFaceDragOut: React.FC<{
    *  does not end its container (a fan, whose strips run on past it). */
   faceRightOffset?: number
   zIndex?: number
-}> = ({ url, getUrls, allLabel, visible, size: sizeProp, faceRightOffset = 0, zIndex = 60 }) => {
+  /** The card it is on: dropped back on the canvas, a duplicate of it. */
+  card?: string
+}> = ({ url, getUrls, allLabel, visible, size: sizeProp, faceRightOffset = 0, zIndex = 60, card }) => {
   // The card's camera — frozen inside a pinned card — so the grip sizes
   // with the card it is on, not with the canvas it left.
   const { zoom } = useCardView()
@@ -375,6 +377,7 @@ const CardFaceDragOut: React.FC<{
       allLabel={allLabel}
       size={size}
       visible={visible}
+      card={card}
       style={{
         position: 'absolute',
         top: computeHeaderExtend(zoom) + CARD_TOOL_INSET,
@@ -414,8 +417,7 @@ function deckGripUrl(ids: string[]): string | null {
 
 /** The url a card's grip leads with — deckGripUrl's rule for one card. */
 function cardGripUrl(g: ProjectGroup, boards: Record<string, BoardData>): string | null {
-  if (!mayHaveDiskFile('/')) return null
-  return gripSource(groupFaceSource(g, boards), () => groupImageSources(g, boards), mayHaveDiskFile)
+  return cardGripUrlOf(g, boards, mayHaveDiskFile)
 }
 
 // ── Per-group card (screen-space) ──
@@ -933,6 +935,7 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
 
         {/* Drag-out — this card's face; Shift, every image in it. */}
         <CardFaceDragOut
+          card={group.id}
           url={gripUrl}
           getUrls={({ all }) => {
             if (!all) return []
@@ -2970,7 +2973,15 @@ function videoFrameUrl(v: HTMLVideoElement): string | null {
   } catch { return null }
 }
 
-const FaceVideo: React.FC<{ media: MediaItem; cardId: string; faceOf?: string; scale: number }> = ({ media, cardId, faceOf, scale }) => {
+export const FaceVideo: React.FC<{
+  media: MediaItem; cardId: string; faceOf?: string; scale: number
+  /** Where the buttons and the bar sit: along the bottom (a card face), or
+   *  along the top where the bottom is covered (the card browser, whose
+   *  next card lies over this one's lower half). */
+  chrome?: 'bottom' | 'top'
+  /** Space past the left end of a top bar (the browser's own chrome). */
+  topInset?: number
+}> = ({ media, cardId, faceOf, scale, chrome = 'bottom', topInset = 0 }) => {
   const src = useResolvedMedia(media.url)
   const ref = useRef<HTMLVideoElement>(null)
   const owner = faceOf ?? cardId
@@ -3111,7 +3122,7 @@ const FaceVideo: React.FC<{ media: MediaItem; cardId: string; faceOf?: string; s
         onTimeUpdate={e => { const v = e.currentTarget; if (v.duration > 0) setProgress(v.currentTime / v.duration) }}
         style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', borderRadius: 12, opacity: 0.85 }}
       />
-      <div style={{ position: 'absolute', zIndex: 3, right: 6 * k, bottom: barH + 6 * k, display: 'flex', gap: 4 * k }}>
+      <div style={{ position: 'absolute', zIndex: 3, right: 6 * k, ...(chrome === 'top' ? { top: barH + 6 * k + topInset } : { bottom: barH + 6 * k }), display: 'flex', gap: 4 * k }}>
         <button
           type="button" data-face-video-play title={playing ? 'Pause (Space)' : 'Play (Space)'}
           onPointerDown={stop} onDoubleClick={stop}
@@ -3138,11 +3149,13 @@ const FaceVideo: React.FC<{ media: MediaItem; cardId: string; faceOf?: string; s
         style={{
           // Starts clear of the reference chips hanging off the card's
           // bottom-left edge (PrimaryChipRail), so 0% can be clicked.
-          position: 'absolute', zIndex: 3, left: FACE_BAR_INSET * k, right: 0, bottom: 0, height: barH + 6 * k,
-          display: 'flex', alignItems: 'flex-end', cursor: 'pointer',
+          position: 'absolute', zIndex: 3, height: barH + 6 * k, cursor: 'pointer', display: 'flex',
+          ...(chrome === 'top'
+            ? { left: 0, right: 0, top: 0, alignItems: 'flex-start' }
+            : { left: FACE_BAR_INSET * k, right: 0, bottom: 0, alignItems: 'flex-end' }),
         }}
       >
-        <div style={{ width: '100%', height: barH, background: 'rgba(255,255,255,0.18)', borderRadius: '0 0 12px 0', overflow: 'hidden' }}>
+        <div style={{ width: '100%', height: barH, background: 'rgba(255,255,255,0.18)', borderRadius: chrome === 'top' ? '6px 6px 0 0' : '0 0 12px 0', overflow: 'hidden' }}>
           <div style={{ width: `${progress * 100}%`, height: '100%', background: 'rgba(255,255,255,0.85)' }} />
         </div>
       </div>

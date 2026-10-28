@@ -29,7 +29,11 @@ import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { useLinkDragStore } from '../../store/linkDragStore'
 import { HeroImageLayer } from '../Layers/HeroImageLayer'
 import { edgeColorFromHex } from '../../utils/colorUtils'
-import { getFirstImageUrl } from '../../types/bar'
+import type { MediaItem } from '../../types/bar'
+import { cardFaceMedia } from '../../utils/cardGrid'
+import { FaceVideo } from '../Layers/CardLayer'
+import { cardGripUrl } from '../../utils/mediaSources'
+import { DragOutGrip } from '../UI/DragOutGrip'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import type { FreeNodeData } from '../../store/freeNodeStore'
 import {
@@ -635,23 +639,22 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
   // then the first image found in any of the group's boards' root
   // bars. One pass over the (small) groups list per groups/boards
   // change keeps this cheap.
-  const heroImageMap = useMemo(() => {
-    const map = new Map<string, string | null>()
+  // Each card's face by the canvas's own rule (utils/cardGrid
+  // cardFaceMedia): the block it was stepped to, its hero, else its first
+  // picture or video. A video face plays here as on the canvas
+  // (CardLayer's FaceVideo); its poster stands in where a picture is
+  // needed. Plus the file its drag-out grip hands out.
+  const { heroImageMap, faceVideoMap, gripUrlMap } = useMemo(() => {
+    const heroImageMap = new Map<string, string | null>()
+    const faceVideoMap = new Map<string, MediaItem>()
+    const gripUrlMap = new Map<string, string | null>()
     for (const g of visibleGroups) {
-      if (g.cardHeroImage) { map.set(g.id, g.cardHeroImage); continue }
-      let img: string | null = null
-      for (const bid of g.boardIds) {
-        const board = boards[bid]
-        if (!board) continue
-        for (const rid of board.rootIds) {
-          const found = getFirstImageUrl(board.bars[rid]?.content)
-          if (found) { img = found; break }
-        }
-        if (img) break
-      }
-      map.set(g.id, img)
+      const m = cardFaceMedia(g, boards)
+      heroImageMap.set(g.id, m ? (m.type === 'video' ? m.posterUrl ?? null : m.url) : null)
+      if (m?.type === 'video') faceVideoMap.set(g.id, m)
+      gripUrlMap.set(g.id, cardGripUrl(g, boards, mayHaveDiskFile))
     }
-    return map
+    return { heroImageMap, faceVideoMap, gripUrlMap }
   }, [visibleGroups, boards])
 
   // ── Header drag — moves the panel by setting rolodexPos ───────
@@ -1949,6 +1952,8 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
                       level={row.level}
                       isDeck={row.isDeck}
                       heroImage={heroImageMap.get(row.group.id) ?? null}
+                      faceVideo={faceVideoMap.get(row.group.id) ?? null}
+                      gripUrl={gripUrlMap.get(row.group.id) ?? null}
                       isCollapsed={collapsedDeckIdSet.has(row.group.id)}
                       showCaret={view === 'tree' && row.isDeck}
                       onDoubleClick={() => onSlotDoubleClick(row.group)}
@@ -2627,6 +2632,10 @@ const RolodexSlot: React.FC<{
    *  by the parent so each slot doesn't need its own boards
    *  subscription. */
   heroImage: string | null
+  /** The face's video, when it shows one: it plays here as on the canvas. */
+  faceVideo?: MediaItem | null
+  /** The file the drag-out grip hands out (CardLayer's cardGripUrl). */
+  gripUrl?: string | null
   /** 0 (compact, peek-tab list) → 1 (fully expanded, active slot reveals
    *  the whole card). Used to scale up the hero image's opacity so the
    *  image is more visible at higher expansion, and to fade in the
@@ -2650,7 +2659,7 @@ const RolodexSlot: React.FC<{
   onToggleCollapsed: () => void
   onHoverEnter: () => void
   onHoverLeave: () => void
-}> = ({ group, level, isDeck, offset, top, zIndex, heroImage, expansionFraction, isCollapsed, showCaret, isHovered: isHoverActive, onClick, onDoubleClick, onToggleCollapsed, onHoverEnter, onHoverLeave }) => {
+}> = ({ group, level, isDeck, offset, top, zIndex, heroImage, faceVideo, gripUrl, expansionFraction, isCollapsed, showCaret, isHovered: isHoverActive, onClick, onDoubleClick, onToggleCollapsed, onHoverEnter, onHoverLeave }) => {
   const [isHovered, setIsHovered] = useState(false)
 
   // Continuous "centerness" used to tween visual emphasis (rim, shadow,
@@ -2868,7 +2877,25 @@ const RolodexSlot: React.FC<{
             the image with its color at, say, 20 % renders the same
             blend in the rolodex. Otherwise we'd whitewash the card
             color with a full-opacity image. */}
-      {heroImage && imageCenterness > 0.01 && (() => {
+      {/* The card face's video, as on the canvas, once the card is out
+            far enough to see it; tucked, its poster below stands in. */}
+      {faceVideo && imageCenterness > 0.5 && (
+        <div style={{ position: 'absolute', inset: 0, opacity: Math.min(1, imageCenterness * 1.2), borderRadius: 6, overflow: 'hidden' }}>
+          <FaceVideo key={faceVideo.url} media={faceVideo} cardId={group.id} scale={0.9} chrome="top" topInset={30} />
+        </div>
+      )}
+      {/* Drag-out, as on a canvas card: another app gets the file; the
+          canvas gets a duplicate of the card itself. */}
+      {imageCenterness > 0.5 && (
+        <DragOutGrip
+          url={gripUrl}
+          card={group.id}
+          size={16}
+          visible={isHovered || isHoverActive}
+          style={{ position: 'absolute', top: 6, right: 6, zIndex: 6, background: 'rgba(0,0,0,0.45)' }}
+        />
+      )}
+      {heroImage && !(faceVideo && imageCenterness > 0.5) && imageCenterness > 0.01 && (() => {
         // Hover NEVER touches the hero image — the hover effect is
         // always the compact "tiny peek" (4 px pop + text swap),
         // never revealing the card image. Image is driven solely by

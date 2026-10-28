@@ -15,7 +15,9 @@ import { createCardOrBoardAt } from '../../utils/canvasCreate'
 import { GLCanvasHost } from '../Viewport3D/GLCanvasHost'
 import { addMediaBlockToCard, cardHitOf, groupForCardHit, type CardHit } from '../../utils/cardContent'
 import { EFFECT_DRAG_MIME, clientToCanvas, createEffectCard, createLoopStrip, effectKindFromDrag } from '../../utils/fx/createEffect'
-import { takeDragOutShape } from '../../utils/dragOutSource'
+import { takeDragOutCard, takeDragOutShape } from '../../utils/dragOutSource'
+import { placeCard } from '../../utils/railCards'
+import { drawnRect } from '../../utils/effectCards'
 import { cardFaceSize, createMediaCard } from '../../utils/cardGrid'
 import { tileDeckIndex } from '../../utils/tileDecks'
 import { RAIL_GEOM, isRail, railDropTarget, railLayout, railMembers, type RailDropTarget } from '../../utils/rail'
@@ -742,6 +744,22 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
       if (floating || aim.target || !aim.onCanvas || own.length === 0) return
       // Taken even when unused, so a later drag can never inherit it.
       const shape = takeDragOutShape()
+      const fromCard = takeDragOutCard()
+      // Out of a card (on the canvas or in the card browser): a duplicate
+      // of that card as it is, centred where it was let go.
+      if (fromCard && useBoardsStore.getState().groups.some(g => g.id === fromCard)) {
+        useUndoCoordinator.getState().checkpoint()
+        const copy = useBoardsStore.getState().duplicateGroup(fromCard)
+        const bs = useBoardsStore.getState()
+        const g = copy ? bs.groups.find(x => x.id === copy) : undefined
+        const r = g ? drawnRect(g, bs.boards, useCanvasStore.getState().zoom) : null
+        if (copy && r) {
+          const at = clientToCanvas(e.clientX, e.clientY)
+          placeCard(copy, at.cx - r.width / 2, at.cy - r.height / 2)
+          bs.setSelectedGroup(copy)
+        }
+        return
+      }
       // Out of a card, block or bar (no tile shape), and not over a loop
       // strip: it lands the way an import does — a card of its own.
       if (!shape && !railAtPoint(e.clientX, e.clientY, useFreeNodeStore.getState().nodes)) {

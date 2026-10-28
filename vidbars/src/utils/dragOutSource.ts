@@ -23,6 +23,22 @@ export function noteDragOutShape(shape: DragOutShape | null): void {
   current = shape ? { shape, at: performance.now() } : null
 }
 
+let card: { id: string; at: number } | null = null
+
+/** Note the CARD a drag-out starts on (null: none). Dropped back on the
+ *  canvas, the drag makes a duplicate of that card as it is — its blocks,
+ *  face, shape and size — not a card made from the file. */
+export function noteDragOutCard(id: string | null): void {
+  card = id ? { id, at: performance.now() } : null
+}
+
+/** The noted card, once, as takeDragOutShape. */
+export function takeDragOutCard(): string | null {
+  const c = card
+  card = null
+  return c && performance.now() - c.at < 60_000 ? c.id : null
+}
+
 /** The noted shape, once: a later drag, from a grip with no shape to give,
  *  must never inherit it. Stale after a minute — no drag lasts that long. */
 export function takeDragOutShape(): DragOutShape | null {

@@ -1578,7 +1578,14 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
         ...g, boardIds: g.boardIds.filter(bid => !newBoardIds.includes(bid)),
       }))
       const remaining = cleaned.filter(g => g.boardIds.length > 0)
+      // Everything the card IS — its grid layout, face block, effect, size —
+      // but not where it belongs: no deck, pin, strip result or links.
+      const own: ProjectGroup = { ...group }
+      for (const k of ['deckState', 'deckAnchorId', 'deckOffsetX', 'deckOffsetY', 'deckFaceCard', 'pin', 'railSource', 'railBase'] as const) delete own[k]
+      const faceAt = group.faceBoardId ? group.boardIds.indexOf(group.faceBoardId) : -1
       const newGroup: ProjectGroup = {
+        ...own,
+        faceBoardId: faceAt >= 0 ? newBoardIds[faceAt] : undefined,
         id: newGroupId,
         name: group.name + ' copy',
         color: group.color,

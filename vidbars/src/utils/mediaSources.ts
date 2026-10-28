@@ -86,6 +86,14 @@ export function groupImageSources(g: ProjectGroup, boards: Boards, out: string[]
  *  pasted in before files were referenced in place lives in the app's own
  *  store, not on disk, and must not hide the files the container DOES
  *  hold. `isFile` is useFileMenu's mayHaveDiskFile. */
+/** The url a card's drag-out grip leads with: its face's file, else the
+ *  first image inside it that is on disk. `isFile` is useFileMenu's
+ *  mayHaveDiskFile. Shared by the canvas card and the card browser. */
+export function cardGripUrl(g: ProjectGroup, boards: Record<string, BoardData>, isFile: (u: string | null | undefined) => boolean): string | null {
+  if (!isFile('/')) return null
+  return gripSource(groupFaceSource(g, boards), () => groupImageSources(g, boards), isFile)
+}
+
 export function gripSource(
   face: string | null,
   inside: () => string[],
