@@ -156,11 +156,14 @@ export async function runChain(items: ChainItem[], maxSide: number, previewSide:
       if (!img) { unreadable.push(source.id); continue }
       const first = result.outputs.length === 0
       let cur = e.upload(fitted(img, source.url, side), side)
+      // The picture itself, kept through the steps: a look whose colours
+      // are the picture's (aiEffects) is re-coloured from what it is laid on.
+      const picture = e.pass('copy', e.target(cur.w, cur.h), { src: cur })
       for (const [i, s] of plan.steps.entries()) {
         const def = EFFECTS[s.item.effect]
         // What it needs from a model or tool; still missing, the picture
         // goes through unchanged (its card says why).
-        const got = def.needs ? auxFor(e, aux, steps, i, source.url, cur) : {}
+        const got = def.needs ? auxFor(e, aux, steps, i, source.url, cur, picture) : {}
         const next = got
           ? def.run(e, cur, effectParams(s.item.effect, s.item.params), s.other ? others.get(s.other.id) : null, got)
           : e.pass('copy', e.target(cur.w, cur.h), { src: cur })
@@ -175,6 +178,7 @@ export async function runChain(items: ChainItem[], maxSide: number, previewSide:
           e.release(small)
         }
       }
+      e.release(picture)
       result.outputs.push({ sourceId: source.id, label: source.label, canvas: e.toCanvas(cur) })
       e.release(cur)
     }
