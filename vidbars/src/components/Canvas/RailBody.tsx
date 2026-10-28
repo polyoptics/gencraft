@@ -24,7 +24,8 @@ import { useShallow } from 'zustand/react/shallow'
 import { useFreeNodeStore, type FreeNodeData } from '../../store/freeNodeStore'
 import { useRailRunStore } from '../../store/railRunStore'
 import { useRailUiStore } from '../../store/railUiStore'
-import { RAIL_GEOM, RAIL_TRAY, railMembers, type RailColumn, type RailSlot, type Rect } from '../../utils/rail'
+import { RAIL_GEOM, RAIL_TRAY, isRail, railLayout, railMembers, type RailColumn, type RailSlot, type Rect } from '../../utils/rail'
+import { clientToCanvas } from '../../utils/fx/createEffect'
 import { railComboAt } from '../../utils/fx/railChain'
 import { EFFECTS, effectKindOf } from '../../utils/fx/effects'
 import { DragOutGrip } from '../UI/DragOutGrip'
@@ -346,6 +347,53 @@ const Badge: React.FC<{ u: number; title?: string; children: React.ReactNode }> 
 /** A role column's header: its name (double-click to rename), each / pick
  *  one, how many cards it holds — or an × to remove it while it is empty —
  *  and a warning when the run passes it by. */
+/** Press on a slot's header — an effect step or a column of pictures — to
+ *  drag it along the row: the strip marks where it would go (the row's
+ *  insertion line, railUiStore), and letting go moves it there with what
+ *  is docked in it, settings and all. One undo step; none if it ends where
+ *  it began. */
+function slotDragDown(railId: string, slotId: string) {
+  return (e: React.PointerEvent) => {
+    if (e.button !== 0) return
+    // The header owns the press: no rail move, no marquee.
+    e.stopPropagation()
+    const x0 = e.clientX, y0 = e.clientY
+    let moved = false
+    let at: number | null = null
+    const ui = () => useRailUiStore.getState()
+    const onMove = (ev: PointerEvent) => {
+      if (!moved && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 4) return
+      moved = true
+      const nodes = useFreeNodeStore.getState().nodes
+      const rail = nodes[railId]
+      if (!isRail(rail)) return
+      const L = railLayout(rail, railMembers(nodes).get(railId))
+      if (!L) return
+      // Between the slots: how many slots' middles lie left of the pointer.
+      const { cx } = clientToCanvas(ev.clientX, ev.clientY)
+      const centre = new Map(L.columns.map(c => [c.slotId, c.x + c.width / 2]))
+      let i = 0
+      rail.rail.slots.forEach((sl, k) => { const c = centre.get(sl.id); if (c !== undefined && c < cx) i = k + 1 })
+      at = i
+      ui().setDrop({ target: { railId, kind: 'row', insertAt: i }, draggedId: slotId })
+    }
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      if (ui().drop?.draggedId === slotId) ui().setDrop(null)
+      if (!moved || at === null) return
+      const slots = useFreeNodeStore.getState().nodes[railId]?.rail?.slots ?? []
+      const from = slots.findIndex(sl => sl.id === slotId)
+      const to = at > from ? at - 1 : at
+      if (from < 0 || to === from) return
+      checkpoint()
+      useFreeNodeStore.getState().moveRailSlot(railId, slotId, at)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }
+}
+
 const RoleHead: React.FC<{
   railId: string
   slot: RailSlot
@@ -376,8 +424,8 @@ const RoleHead: React.FC<{
   }
 
   return (
-    <div data-rail-head={slot.id} style={{
-      ...chip(rect, u, C.head),
+    <div data-rail-head={slot.id} onPointerDown={slotDragDown(railId, slot.id)} style={{
+      ...chip(rect, u, C.head), cursor: 'grab',
       boxShadow: warning ? `inset 0 ${-2 * u}px 0 ${C.amber}` : `inset 0 0 0 ${u}px rgba(255,255,255,0.05)`,
     }}>
       {draft !== null ? (
@@ -406,13 +454,13 @@ const RoleHead: React.FC<{
         <>
           <span
             data-rail-name
-            title={`${note}\nDouble-click to rename`}
-            onPointerDown={stopPrimary}
+            title={`${note}\nDrag to move the column · double-click to rename`}
+            onPointerDown={slotDragDown(railId, slot.id)}
             onMouseDown={stopPrimary}
             onDoubleClick={e => { e.stopPropagation(); settled.current = false; setDraft(name) }}
             style={{
               flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis',
-              fontSize: 13 * u, fontWeight: 600, textShadow: shadow, cursor: 'default',
+              fontSize: 13 * u, fontWeight: 600, textShadow: shadow, cursor: 'grab',
             }}
           >{name}</span>
           {/* The header's empty middle moves the rail like its body does. */}
@@ -479,13 +527,15 @@ const RoleHead: React.FC<{
  *  effect's glyph beside its name. Not a control: pressing it moves the rail. */
 const CardHead: React.FC<{ card: FreeNodeData; rect: Local; u: number; warning?: string }> = ({ card, rect, u, warning }) => {
   const def = EFFECTS[effectKindOf(card)]
+  const dock = card.railDock
   return (
     <div
       data-rail-card-head={def.kind}
+      onPointerDown={dock ? slotDragDown(dock.railId, dock.slotId) : undefined}
       title={warning ?? (def.blend ? `${def.glyph} ${def.label} — mixes in the column right after it` : def.label)}
       style={{
         ...chip(rect, u, mixHex(def.color, C.ground, 0.24)),
-        justifyContent: 'center', gap: 5 * u,
+        justifyContent: 'center', gap: 5 * u, cursor: 'grab',
         boxShadow: warning ? `inset 0 ${-2 * u}px 0 ${C.amber}` : `inset 0 0 0 ${u}px rgba(255,255,255,0.06)`,
       }}
     >

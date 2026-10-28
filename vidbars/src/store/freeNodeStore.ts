@@ -216,6 +216,9 @@ interface FreeNodeStore {
   addRailRole: (railId: string, at: 'start' | 'end', name?: string) => string | null
   /** Remove an EMPTY role slot (a slot with cards stays). */
   removeRailSlot: (railId: string, slotId: string) => void
+  /** Move slot `slotId` to before the slot now at `insertAt` (slots.length:
+   *  the end), what is docked in it going along. */
+  moveRailSlot: (railId: string, slotId: string, insertAt: number) => void
   /** Delete the result tiles in a rail's tray (the files stay on disk). */
   clearRailTray: (railId: string) => void
   deleteFreeNode: (id: string) => void
@@ -634,6 +637,20 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
     set(s => ({ nodes: { ...s.nodes, [railId]: { ...s.nodes[railId], rail: { ...rail.rail!, slots } } } }))
     return slot.id
   },
+
+  moveRailSlot: (railId, slotId, insertAt) =>
+    set(s => {
+      const rail = s.nodes[railId]
+      if (!rail?.rail) return s
+      const from = rail.rail.slots.findIndex(sl => sl.id === slotId)
+      if (from < 0) return s
+      const to = insertAt > from ? insertAt - 1 : insertAt
+      if (to === from) return s
+      const slots = [...rail.rail.slots]
+      const [moved] = slots.splice(from, 1)
+      slots.splice(Math.max(0, Math.min(slots.length, to)), 0, moved)
+      return { nodes: { ...s.nodes, [railId]: { ...rail, rail: { ...rail.rail, slots } } } }
+    }),
 
   removeRailSlot: (railId, slotId) =>
     set(s => {
