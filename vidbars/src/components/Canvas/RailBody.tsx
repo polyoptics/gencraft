@@ -31,6 +31,7 @@ import { useBoardsStore } from '../../store/boardsStore'
 import { railAtPoint } from './rail/railHit'
 import { railComboAt } from '../../utils/fx/railChain'
 import { EFFECTS, effectKindOf } from '../../utils/fx/effects'
+import { parsePhrases } from '../../utils/fx/aiEffects'
 import { DragOutGrip } from '../UI/DragOutGrip'
 import { RailOverlay } from './rail/RailOverlay'
 import { RailRunArrow } from './rail/RailRunArrow'
@@ -240,10 +241,17 @@ export const RailBody: React.FC<{
       {[...L.columns, ...L.rows.flatMap(r => r.columns)].map(col => col.kind === 'card' && col.needSpots?.map(({ need, box }) => {
         const card = members?.get(col.slotId)?.[0]
         const def = card ? EFFECTS[effectKindOf(card)] : null
+        // What it draws on without an input: the nearest Segment card before
+        // it in its own row (as aiEffects reads it), else "person".
+        const row = [slots, ...(rail.rail?.rows ?? [])].find(r => r.some(sl => sl.id === col.slotId)) ?? []
+        const before = row.slice(0, row.findIndex(sl => sl.id === col.slotId)).reverse()
+          .map(sl => members?.get(sl.id)?.[0]).find(c => c && effectKindOf(c) === 'segment')
+        const named = before ? Object.keys(parsePhrases(before.effect?.text)).join(', ') : ''
+        const drawsOn = named || 'person'
         const lit = drop?.target.kind === 'input' && drop.target.slotId === col.slotId
         const hint = need === 'depth' ? (def?.blend ? 'drop a Depth card: mixes its depth' : 'made for it, or drop a Depth card')
           : def?.blend ? 'drop a Segment card: mixes its mask'
-          : def?.needs ? 'draws on "person", or drop a Segment card'
+          : def?.needs ? `draws on "${drawsOn}", or drop a Segment card`
           : 'drop a Segment card to limit it to a mask'
         return (
           <div key={`${col.slotId}-${need}`} data-rail-need={need} style={{
@@ -262,7 +270,10 @@ export const RailBody: React.FC<{
               strip's picture — its effect cards, a spot at its end to drop
               one, and its label (Look 2, 3 …) with ×. A Combine card in the
               strip's row lays them over its picture. Then "+ Add a look". ── */}
-      {L.rows.map(r => (
+      {L.rows.map(r => {
+        // The looks only show through a Combine card in the strip's own row.
+        const combined = slots.some(sl => { const c = members?.get(sl.id)?.[0]; return !!c && effectKindOf(c) === 'combine' })
+        return (
         <React.Fragment key={`look-${r.index}`}>
           <div style={{
             position: 'absolute', left: pad / 2, right: pad / 2, top: r.band.y - rail.y - 4 * u,
@@ -296,10 +307,12 @@ export const RailBody: React.FC<{
             position: 'absolute', ...loc(r.end), borderRadius: 10 * u, boxSizing: 'border-box',
             border: `${1.5 * u}px dashed ${drop?.target.kind === 'row' && drop.target.row === r.index ? C.drop : 'rgba(255,255,255,0.22)'}`,
             display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 10 * u, textAlign: 'center',
-            fontSize: Math.max(10 * u, MIN_TEXT_PX / zoom), color: 'rgba(255,255,255,0.5)', pointerEvents: 'none',
-          }}>{r.columns.length ? 'Drop another effect card' : 'Drop effect cards for this look: a Segment card first sets where it goes'}</div>
+            fontSize: Math.max(10 * u, MIN_TEXT_PX / zoom), color: combined ? 'rgba(255,255,255,0.5)' : C.amber, pointerEvents: 'none',
+          }}>{!combined ? 'Add a Combine card to the first row to use these looks'
+            : r.columns.length ? 'Drop another effect card' : 'Drop effect cards for this look: a Segment card first sets where it goes'}</div>
         </React.Fragment>
-      ))}
+        )
+      })}
       <button
         type="button"
         data-rail-add-look
