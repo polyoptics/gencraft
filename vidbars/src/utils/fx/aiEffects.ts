@@ -195,10 +195,14 @@ function requests(steps: AuxStep[], i: number, url: string): Req[] | null {
     return [{ key: `look|${lk.look}|${src}|${JSON.stringify(objects ?? null)}|${engine}|${JSON.stringify(dials)}|${LINE_SIDE}`,
       what: 'drawing', job: { op: 'look', look: lk.look, objects, dials, side: LINE_SIDE, engine } }]
   }
+  // A mix card changes how its drawing card mixes its layers, AT the
+  // drawing card: whatever lies between the two then works on the re-mixed
+  // drawing, as if the drawing had been made that way. Its note says which
+  // drawing it mixes.
   if (s.effect === 'shademix') {
-    if (!steps.slice(0, i).some(x => x.effect === 'formhatch' || x.effect === 'bghatch')) { say(s.id, 'Put a hatch card before it'); return null }
-    say(s.id, '')
-    return []
+    const n = steps.slice(0, i).filter(x => x.effect === 'formhatch' || x.effect === 'bghatch').length
+    say(s.id, n ? `Mixes the ${n > 1 ? `${n} hatch cards` : 'hatch card'} before it` : 'Put a hatch card before it')
+    return n ? [] : null
   }
   if (s.effect === 'filmline') {
     const objects = phrasesFor(steps, i) ?? { person: ['person'] }
@@ -208,9 +212,10 @@ function requests(steps: AuxStep[], i: number, url: string): Req[] | null {
       job: { op: 'lines', objects, dials, side: LINE_SIDE, engine } }]
   }
   if (s.effect === 'linemix') {
-    if (!steps.slice(0, i).some(x => x.effect === 'filmline')) { say(s.id, 'Put a Film outline before it'); return null }
-    say(s.id, '')
-    return []
+    let j = i - 1
+    while (j >= 0 && steps[j].effect !== 'filmline') j--
+    say(s.id, j < 0 ? 'Put a Film outline before it' : `Mixes the Film outline ${i - j > 1 ? `${i - j} cards back` : 'before it'}`)
+    return j < 0 ? null : []
   }
   return []
 }
@@ -325,7 +330,7 @@ export function auxFor(e: FxEngine, plan: AuxPlan, steps: AuxStep[], i: number, 
       colors: k.colors!, mix: lineSetup(steps, i).mix,
     }
   }
-  say(s.id, '')
+  if (s.effect !== 'linemix' && s.effect !== 'shademix') say(s.id, '')
   return aux
 }
 
