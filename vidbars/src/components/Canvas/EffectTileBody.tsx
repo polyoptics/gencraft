@@ -67,6 +67,7 @@ function stepPrecision(step: number): number {
 /** How a value reads on the face: whole numbers for whole steps, otherwise
  *  as many decimals as the step has, at most two. */
 function formatValue(p: ParamDef, v: number): string {
+  if (p.names) return p.names[Math.round((v - p.min) / p.step)] ?? String(v)
   return v.toFixed(p.step >= 1 ? 0 : Math.min(2, stepPrecision(p.step)))
 }
 
@@ -167,6 +168,13 @@ export const EffectTileBody: React.FC<{
   // u = 1% of the card's width, in canvas units (= CSS px: world space).
   const u = Math.min(node.width / 100, node.height / FACE_HEIGHT_U)
   const shadow = `0 ${0.4 * u}px ${1.2 * u}px rgba(0,0,0,0.75)`
+  // Up to five sliders sit at full size under the art. More (the film
+  // looks' dials) and the rows close up and the art gives way, so every
+  // one fits the card as it comes, with nothing to scroll or resize.
+  const n = def.params.length
+  const rowH = n > 5 ? Math.max(7, (96 - (n - 1)) / n) : 14
+  const rowGap = n > 5 ? 1 : 2
+  const rowFont = n > 5 ? Math.min(8.5, rowH * 0.74) : 8.5
 
   // A strip with no picture processes nothing, which reads the same as no
   // strip at all — so it gets the same hint, and its "no picture" error
@@ -185,7 +193,7 @@ export const EffectTileBody: React.FC<{
       {/* ── Art: the glyph on a flat tint. Static on purpose — the result
               is on the picture. Takes whatever height the rows leave. ── */}
       <div style={{
-        flex: '1 1 0', minHeight: 16 * u, position: 'relative', overflow: 'hidden',
+        flex: '1 1 0', minHeight: (n > 5 ? 6 : 16) * u, position: 'relative', overflow: 'hidden',
         borderRadius: 5 * u, background: mixIntoGround(def.color, 0.3),
         border: `${0.4 * u}px solid rgba(255,255,255,0.07)`,
         display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: u,
@@ -274,7 +282,7 @@ export const EffectTileBody: React.FC<{
       {/* ── Values: each row IS its slider. The fill shows the value; press
               anywhere to jump there and drag to follow; double-click for the
               default (the faint tick); arrow keys step it. ── */}
-      <div style={{ marginTop: 3 * u, flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: 2 * u }}>
+      <div style={{ marginTop: (n > 5 ? 2 : 3) * u, flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: rowGap * u }}>
         {def.params.map(p => {
           const v = params[p.key]
           const span = p.max - p.min
@@ -337,13 +345,13 @@ export const EffectTileBody: React.FC<{
               }}
               style={{
                 position: 'relative', zIndex: CONTROL_Z, flex: '0 0 auto',
-                height: 14 * u, borderRadius: 3.5 * u, overflow: 'hidden',
+                height: rowH * u, borderRadius: Math.min(3.5, rowH / 4) * u, overflow: 'hidden',
                 background: 'rgba(0,0,0,0.32)',
                 // An outline, not an inset shadow: the fill would paint over
                 // a shadow. Unset, the keyboard focus ring shows instead.
                 ...(dragKey === p.key ? { outline: `${0.5 * u}px solid ${def.color}`, outlineOffset: -0.5 * u } : null),
                 display: 'flex', alignItems: 'center', padding: `0 ${3.5 * u}px`,
-                fontSize: 8.5 * u, textShadow: shadow,
+                fontSize: rowFont * u, textShadow: shadow,
                 cursor: 'ew-resize', touchAction: 'none',
               }}
             >
@@ -372,7 +380,7 @@ export const EffectTileBody: React.FC<{
                     onDoubleClick={stop}
                     style={{
                       position: 'relative', flex: '0 0 auto', width: 7 * u, marginLeft: 1.5 * u, marginRight: -1.5 * u,
-                      textAlign: 'center', fontSize: 8 * u, lineHeight: 1, fontWeight: 700,
+                      textAlign: 'center', fontSize: rowFont * u, lineHeight: 1, fontWeight: 700,
                       opacity: show ? 0.9 : 0, cursor: show ? 'pointer' : 'ew-resize',
                       pointerEvents: show ? 'auto' : 'none', transition: 'opacity 120ms',
                     }}

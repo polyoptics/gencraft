@@ -41,16 +41,18 @@ export interface VidbarsDesktop {
    *  A bare string | null comes from a main older than this page — it only
    *  restarts with the window. Go through utils/saveImage.ts. */
   saveImage?(kind: SaveImageKind, name: string, dataUrl: string): Promise<{ path: string } | { error: string } | string | null>
-  /** Depth / Segment / Film outline cards: sketchLook's depth.py,
+  /** Depth / Segment / Film outline / hatch cards: sketchLook's depth.py,
    *  matte_auto.py or look_hybrid_colerase.py on this machine's GPU
    *  (electron/sketchWorker.cjs). `frames` are data urls; more than one is a
    *  short sequence. `objects`: phrases per thing to find (segment, lines).
    *  Depth gives a grey map per frame (near = bright); segment a mask per
    *  frame for each thing found, plus 'figure' (all of them); lines the
    *  outline, inside, paper and pencil layers per frame (alpha, grey) and
-   *  the look's colours, drawn at long edge `side` with `dials`. */
+   *  the look's colours, drawn at long edge `side` with `dials`; formhatch /
+   *  bghatch their multiply and screen layers (look_formhatch.py,
+   *  look_bg_depthhatch.py). */
   sketchRun?(job: {
-    op: 'depth' | 'segment' | 'lines'; frames: string[]; objects?: Record<string, string[]>
+    op: 'depth' | 'segment' | 'lines' | 'formhatch' | 'bghatch'; frames: string[]; objects?: Record<string, string[]>
     side?: number; dials?: Record<string, number>
   }): Promise<{
     frames?: (string | Record<string, string>)[]; objects?: Record<string, string[]>

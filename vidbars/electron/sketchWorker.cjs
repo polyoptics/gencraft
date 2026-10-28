@@ -26,7 +26,7 @@ const PYTHON = path.join(POKT, '.audio-venv', 'Scripts', 'python.exe')
 const SKETCH = path.join(POKT, 'sketchLook')
 const SERVER = path.join(__dirname, 'sketch_server.py')
 const HOME = path.join(os.tmpdir(), 'vidbars-sketch')
-const OPS = new Set(['depth', 'segment', 'lines'])
+const OPS = new Set(['depth', 'segment', 'lines', 'formhatch', 'bghatch'])
 
 /** Whether this machine can run the tools at all. */
 function available() {
@@ -125,7 +125,7 @@ async function runNow({ op, frames, objects, side, dials }) {
     const out = { log: reply.log || '', seconds: reply.seconds }
     if (op === 'depth') out.frames = reply.frames.map(toDataUrl)
     if (op === 'segment') out.objects = Object.fromEntries(Object.entries(reply.objects).map(([n, fs_]) => [n, fs_.map(toDataUrl)]))
-    if (op === 'lines') {
+    if (op === 'lines' || op === 'formhatch' || op === 'bghatch') {
       out.frames = reply.frames.map(f => Object.fromEntries(Object.entries(f).map(([k, v]) => [k, toDataUrl(v)])))
       out.colors = reply.colors
     }

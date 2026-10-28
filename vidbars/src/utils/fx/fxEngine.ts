@@ -277,6 +277,30 @@ const FRAG: Record<string, string> = {
       o = vec4(c, 1.0);
     }`,
 
+  // A hatch look's layers over the picture, as the looks composite them
+  // (look_formhatch.py main, look_bg_depthhatch.py main) with the look
+  // mixer's shading controls (mixer_bake.py remix_np): dark strokes
+  // multiplied in their ink (a, k), the far pencil multiplied in its hue
+  // (p), light strokes screened (b, h). clipA: the background's strength is
+  // clipped at 1, the figure's is not (as the mixer). show 1: on white.
+  hatchComp: `
+    uniform sampler2D src; uniform sampler2D A; uniform sampler2D K; uniform sampler2D B; uniform sampler2D Hc;
+    uniform sampler2D P; uniform vec3 penC; uniform float strength; uniform float curve; uniform float dark;
+    uniform float light; uniform float clipA; uniform float show;
+    void main() {
+      float a = pow(texture(A, uv).r, curve) * strength;
+      if (clipA > 0.5) a = clamp(a, 0.0, 1.0);
+      float p = clamp(pow(texture(P, uv).r, curve) * strength, 0.0, 1.0);
+      float b = clamp(pow(texture(B, uv).r, curve) * strength * light, 0.0, 1.0);
+      vec3 k = texture(K, uv).rgb;
+      k = dark > 0.0 ? k * (1.0 - dark) : k + (1.0 - k) * (-dark);
+      vec3 c = show < 0.5 ? texture(src, uv).rgb : vec3(1.0);
+      c = c * (1.0 - a + a * k);
+      c = c * (1.0 - p + p * penC);
+      c = 1.0 - (1.0 - c) * (1.0 - b * texture(Hc, uv).rgb);
+      o = vec4(clamp(c, 0.0, 1.0), 1.0);
+    }`,
+
   invertGrey: `
     uniform sampler2D src;
     void main() { float g = dot(texture(src, uv).rgb, vec3(0.299, 0.587, 0.114)); o = vec4(vec3(1.0 - g), 1.0); }`,

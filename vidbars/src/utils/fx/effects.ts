@@ -10,14 +10,18 @@ import type { Aux } from './aiEffects'
 export type EffectKind =
   | 'bloom' | 'glare' | 'glow' | 'ink' | 'cel' | 'sketch'
   | 'halftone' | 'chroma' | 'grade' | 'multiply' | 'screen' | 'overlay'
-  | 'depth' | 'segment' | 'filmline' | 'linemix'
+  | 'depth' | 'segment' | 'filmline' | 'linemix' | 'formhatch' | 'bghatch' | 'shademix'
 
 /** What an effect may need besides its picture, made from the strip's
  *  SOURCE picture by a model or tool (aiEffects.ts): a depth map, a mask of
  *  the things a Segment card names, the film outline's line layers. */
-export type AuxKind = 'depth' | 'mask' | 'lines'
+export type AuxKind = 'depth' | 'mask' | 'lines' | 'hatch'
 
-export interface ParamDef { key: string; label: string; min: number; max: number; step: number; default: number }
+export interface ParamDef {
+  key: string; label: string; min: number; max: number; step: number; default: number
+  /** A name per step, shown instead of the number (a choice, not an amount). */
+  names?: string[]
+}
 
 export interface EffectDef {
   kind: EffectKind
@@ -118,6 +122,18 @@ function blurTimes(e: FxEngine, src: Tex, spread: number, times: number): Tex {
 
 /** '0d0b0a' -> [r, g, b] in 0..1. */
 const hexRgb = (h: string) => [0, 2, 4].map(i => parseInt(h.slice(i, i + 2), 16) / 255)
+
+/** A hatch card's layers (aux.hatch) over `src`, or on white (Show:
+ *  Alone); the picture unchanged while they are being made. */
+function hatchComp(e: FxEngine, src: Tex, p: Record<string, number>, aux?: Aux): Tex {
+  const H = aux?.hatch
+  if (!H) return e.pass('copy', e.target(src.w, src.h), { src })
+  return e.pass('hatchComp', e.target(src.w, src.h), {
+    src, A: H.a, K: H.k, B: H.b, Hc: H.h, P: H.p, penC: hexRgb(H.pencil),
+    strength: H.mix.strength, curve: 1 / Math.max(0.25, H.mix.weight), dark: H.mix.dark, light: H.mix.light,
+    clipA: H.background ? 1 : 0, show: Math.round(p.show),
+  })
+}
 
 function blendWith(e: FxEngine, src: Tex, other: Tex | null | undefined, mode: number, mixAmt: number): Tex {
   if (!other) return e.pass('copy', e.target(src.w, src.h), { src })
@@ -319,7 +335,7 @@ export const EFFECTS: Record<EffectKind, EffectDef> = {
     blurb: 'The film’s brush outline, inside lines and red pencil',
     needs: ['mask', 'lines'],
     params: [
-      P('show', 'Show: all · outline · inside · pencil', 0, 3, 1, 0),
+      { ...P('show', 'Show', 0, 3, 1, 0), names: ['All', 'Outline', 'Inside', 'Pencil'] },
       P('contour_w', 'Outline weight', 0.5, 12, 0.1, 4.2), P('detail', 'Inside detail', 0, 1, 0.01, 0.6),
       P('interior_w', 'Inside weight', 0.2, 3, 0.05, 1), P('rough', 'Pencil', 0, 1.5, 0.01, 0.6),
       P('rough_opacity', 'Pencil opacity', 0, 1, 0.01, 0.85), P('wobble', 'Wobble', 0, 5, 0.05, 1.2),
@@ -359,6 +375,60 @@ export const EFFECTS: Record<EffectKind, EffectDef> = {
     ],
     run(e, src) { return e.pass('copy', e.target(src.w, src.h), { src }) },
   },
+  // The film's hatching (sketchLook look_formhatch.py), drawn by the tool:
+  // pen strokes that wrap round the form the depth gives each thing a
+  // Segment card before it finds ("person" without one), denser in shadow,
+  // in a deepened local colour, with optional light strokes. A Shading mix
+  // after it sets its strength, line weight and ink live.
+  formhatch: {
+    kind: 'formhatch', label: 'Form hatch', glyph: '▤', color: '#c98a6a',
+    blurb: 'Pen hatching that wraps round the form',
+    needs: ['depth', 'mask', 'hatch'],
+    params: [
+      { ...P('show', 'Show', 0, 1, 1, 0), names: ['Over picture', 'Alone'] },
+      P('spacing', 'Line spacing', 2, 20, 0.1, 6.5), P('weight', 'Stroke weight', 0.3, 4, 0.05, 1.5),
+      P('angle', 'Angle', -90, 90, 1, 62), P('wrap', 'Wrap round form', 0, 2, 0.01, 0.65),
+      P('tone1', 'Shade from', 0, 1, 0.01, 0.3), P('default.cross', 'Cross-hatch', 0, 1, 0.01, 1),
+      P('default.light', 'Light strokes', 0, 1, 0.01, 0), P('light_az', 'Light from', 0, 360, 1, 110),
+      P('stroke_px', 'Stroke length', 10, 200, 1, 80), P('seed', 'Variation', 0, 9999, 1, 3030),
+      P('boil', 'Boil (frames held)', 1, 6, 1, 2),
+    ],
+    run(e, src, p, _o, aux) { return hatchComp(e, src, p, aux) },
+  },
+  // The film's background hatching (sketchLook look_bg_depthhatch.py): the
+  // painting's own shadow shapes hatched by the same hand, quieter and
+  // finer with distance (from the depth), the subject a Segment card before
+  // it names left untouched (no Segment card: all of it is background).
+  bghatch: {
+    kind: 'bghatch', label: 'Background hatch', glyph: '▥', color: '#8aa0b8',
+    blurb: 'Hatches the background, quieter with distance',
+    needs: ['depth', 'hatch'],
+    params: [
+      { ...P('show', 'Show', 0, 1, 1, 0), names: ['Over picture', 'Alone'] },
+      P('spacing', 'Line spacing', 2, 20, 0.1, 6), P('weight', 'Stroke weight', 0.3, 4, 0.05, 1.3),
+      P('opacity', 'Ink, near', 0, 1, 0.01, 0.8), P('far_opacity', 'Ink, far', 0, 1, 0.01, 0.35),
+      P('far_cut', 'Far cut-off', 0, 0.5, 0.01, 0.08), P('paint_hi', 'Shadow from', 0.5, 1, 0.01, 0.84),
+      P('cross', 'Cross-hatch', 0, 1, 0.01, 1), P('pencil', 'Far pencil', 0, 1, 0.01, 0),
+      P('stroke_px', 'Stroke length', 10, 200, 1, 64), P('seed', 'Variation', 0, 9999, 1, 3030),
+      P('boil', 'Boil (frames held)', 1, 6, 1, 2),
+    ],
+    run(e, src, p, _o, aux) { return hatchComp(e, src, p, aux) },
+  },
+  // The look mixer's shading controls (sketchLook mixer_bake.py remix_np:
+  // bg / hatch strength, curve_*, dark_*, light): they change how the hatch
+  // cards before it mix, live, without re-drawing.
+  shademix: {
+    kind: 'shademix', label: 'Shading mix', glyph: '▦', color: '#a3a07a',
+    blurb: 'Mixes the hatching live',
+    needs: ['hatch'],
+    params: [
+      P('hatch', 'Figure shading', 0, 2, 0.01, 1), P('bg', 'Back shading', 0, 2, 0.01, 1),
+      P('hatch_weight', 'Figure weight', 0.25, 4, 0.01, 1), P('bg_weight', 'Back weight', 0.25, 4, 0.01, 1),
+      P('hatch_dark', 'Figure ink', -1, 1, 0.01, 0), P('bg_dark', 'Back ink', -1, 1, 0.01, 0),
+      P('light', 'Highlights', 0, 2, 0.01, 1),
+    ],
+    run(e, src) { return e.pass('copy', e.target(src.w, src.h), { src }) },
+  },
 }
 
 /** An effect card's kind, safely: a node from a snapshot or another build
@@ -386,4 +456,4 @@ export function effectParams(kind: EffectKind, params: Record<string, number> | 
 }
 
 /** In the order the add menu lists them. */
-export const EFFECT_ORDER: EffectKind[] = ['bloom', 'glare', 'glow', 'ink', 'cel', 'sketch', 'halftone', 'chroma', 'grade', 'multiply', 'screen', 'overlay', 'depth', 'segment', 'filmline', 'linemix']
+export const EFFECT_ORDER: EffectKind[] = ['bloom', 'glare', 'glow', 'ink', 'cel', 'sketch', 'halftone', 'chroma', 'grade', 'multiply', 'screen', 'overlay', 'depth', 'segment', 'filmline', 'linemix', 'formhatch', 'bghatch', 'shademix']

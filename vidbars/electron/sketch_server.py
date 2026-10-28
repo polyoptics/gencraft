@@ -13,18 +13,25 @@ HASH names the picture (its bytes); everything made from it is kept under <cache
   depth   -> {"frames": [png...]}                           grey, nearer = brighter, one range for the sequence
   segment -> {"objects": {name: [png...]}}                  white = the thing; "figure" = all of them; {} = none
   lines   -> {"frames": [{"outline", "inside", "paper", "pencil": png}], "colors": {...}}
+  formhatch -> {"frames": [{"a", "k", "b", "h": png}]}   dark hatch alpha, its ink colour, light strokes, their colour
+  bghatch -> {"frames": [{"a", "k", "p": png}], "colors": {"pencil": hex}}   ink alpha, ink colour, far pencil alpha
 
 How the tools run: each script is executed from its own file with __file__ pointing into the picture's cache folder,
 so its ROOT (the folder above tools/) is that folder and it reads and writes there, never in sketchLook.
   depth   tools/depth.py on a clip of the frames
-  segment tools/matte_auto.py, every default object switched off (--no-box) and the named ones searched (--phrase)
+  segment matte_auto.py's models and settings, but EVERY match kept (it keeps the best box per object): Grounding
+          DINO on the first frame, SAM2 tracking each box, matte_auto.py's own cleaning; one matte per instance
+  formhatch, bghatch  tools_scale/look_formhatch.py and look_bg_depthhatch.py driven through their own functions
+          (their main() is behind __name__), taking the layers render() returns - exactly what they write
   lines   tools_scale/look_hybrid_colerase.py on the frames scaled to `side`, over the segment's mattes. Its own
           compositor (finish) is swapped for one that saves its four layers apart - the silhouette ink (black
           outline), the interior ink (inside lines), the paper highlights and the col-erase pencil - so VidBars
           composites them live; every line it draws is the script's own.
 Models: from_pretrained is cached here, so Depth Anything, Grounding DINO and SAM2 load once per worker.
 """
+import ast
 import contextlib
+import functools
 import hashlib
 import io
 import json
@@ -138,10 +145,7 @@ def op_depth(req):
     root = base(req)
     res = os.path.join(root, "res", "depth")
     if not os.path.isdir(res):
-        clip_like(root, "d")
-        run_tool(os.path.join(TOOLS, "depth.py"), root, ["d"])
-        ds = [np.load(os.path.join(root, "clips", "d_depth", f))
-              for f in sorted(os.listdir(os.path.join(root, "clips", "d_depth")))]
+        ds = [np.load(p) for p in ensure_depth(root)]
         lo, hi = np.percentile(np.stack(ds[::max(1, len(ds) // 20)]), [1, 99])
         os.makedirs(res + ".tmp", exist_ok=True)
         for i, d in enumerate(ds):
@@ -162,20 +166,101 @@ def objects_of(req):
     return out or {"person": ["person"]}
 
 
+# matte_auto.py's detector settings and models, so a mask here is found as the film's were
+MIN_SCORE, TEXT_SCORE, MIN_AREA, SAME_BOX = 0.35, 0.25, 0.002, 0.6
+
+
+@functools.lru_cache(maxsize=1)
+def matte_cleaner():
+    """matte_auto.py's own fill_small_holes(), read from the file (the script runs its whole pipeline on import)."""
+    p = os.path.join(TOOLS, "matte_auto.py")
+    tree = ast.parse(open(p, encoding="utf-8").read())
+    keep = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "fill_small_holes"]
+    ns = {"cv2": cv2, "np": np}
+    exec(compile(ast.Module(body=keep, type_ignores=[]), p, "exec"), ns)
+    return ns["fill_small_holes"]
+
+
+def iou(a, b):
+    ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    inter = ix * iy
+    return inter / ((a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter + 1e-6)
+
+
+def find_instances(root, clip, objs):
+    """Every match of every phrase, each its own matte: Grounding DINO on the first frame keeps ALL its boxes above
+    the score (matte_auto.py keeps the best one per object), SAM2 tracks each through the clip from its box. Writes
+    clips/<clip>_matte/<name>/ per instance (name, or name_1, name_2 ... left to right when there are several) and
+    figure/ (all of them), cleaned with matte_auto.py's fill_small_holes; nothing found leaves no matte folder."""
+    import torch
+    from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
+    from sam2.sam2_video_predictor import SAM2VideoPredictor
+    d = os.path.join(root, "clips", clip)
+    frames = sorted(os.listdir(d))
+    first = cv2.imread(os.path.join(d, frames[0]))
+    H, W = first.shape[:2]
+    proc = AutoProcessor.from_pretrained("IDEA-Research/grounding-dino-base")
+    det = AutoModelForZeroShotObjectDetection.from_pretrained("IDEA-Research/grounding-dino-base").to("cuda").eval()
+    text = ". ".join(p for ps in objs.values() for p in ps) + "."
+    inp = proc(images=cv2.cvtColor(first, cv2.COLOR_BGR2RGB), text=text, return_tensors="pt").to("cuda")
+    with torch.inference_mode():
+        res = proc.post_process_grounded_object_detection(det(**inp), inp.input_ids, box_threshold=MIN_SCORE,
+                                                         text_threshold=TEXT_SCORE, target_sizes=[(H, W)])[0]
+    found = {o: [] for o in objs}
+    for box, score, lab in zip(res["boxes"].tolist(), res["scores"].tolist(), res["labels"]):
+        for o, ps in objs.items():
+            if any(p in lab for p in ps) and (box[2] - box[0]) * (box[3] - box[1]) >= MIN_AREA * W * H:
+                found[o].append((float(score), [float(v) for v in box]))
+                break
+    inst = []  # (name, box)
+    for o, hits in found.items():
+        kept = []
+        for s, b in sorted(hits, reverse=True):  # one box per thing: a lower box over a kept one is the same thing
+            if all(iou(b, k) < SAME_BOX for k in kept):
+                kept.append(b)
+        kept.sort(key=lambda b: b[0] + b[2])
+        inst += [(o if len(kept) == 1 else "%s_%d" % (o, i + 1), b) for i, b in enumerate(kept)]
+    mdir = os.path.join(root, "clips", clip + "_matte")
+    shutil.rmtree(mdir, ignore_errors=True)
+    if not inst:
+        return []
+    jpg = os.path.join(root, "clips", clip + "_jpg")
+    os.makedirs(jpg, exist_ok=True)
+    for i, f in enumerate(frames):
+        cv2.imwrite(os.path.join(jpg, "%05d.jpg" % i), cv2.imread(os.path.join(d, f)), [cv2.IMWRITE_JPEG_QUALITY, 97])
+    predictor = SAM2VideoPredictor.from_pretrained("facebook/sam2.1-hiera-base-plus")
+    masks = {n: {} for n, _ in inst}
+    with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+        state = predictor.init_state(video_path=jpg)
+        for oi, (_, b) in enumerate(inst, start=1):
+            predictor.add_new_points_or_box(inference_state=state, frame_idx=0, obj_id=oi, box=np.array(b, np.float32))
+        for fi, ids, logits in predictor.propagate_in_video(state):
+            for k, oid in enumerate(ids):
+                masks[inst[oid - 1][0]][fi] = (logits[k] > 0.0).float().cpu().numpy()[0]
+    clean = matte_cleaner()
+    zero = np.zeros((H, W), np.uint8)
+    names = [n for n, _ in inst]
+    for n in names:
+        masks[n] = {fi: clean(masks[n].get(fi, zero).astype(np.uint8), max_frac=0.01) for fi in range(len(frames))}
+    masks["figure"] = {fi: clean(np.maximum.reduce([masks[n][fi] for n in names])) for fi in range(len(frames))}
+    for n in names + ["figure"]:
+        os.makedirs(os.path.join(mdir, n))
+        for fi in range(len(frames)):
+            cv2.imwrite(os.path.join(mdir, n, "%04d.png" % fi), masks[n][fi] * 255)
+    print("found: %s" % ", ".join(names))
+    return names
+
+
 def segment_clip(req):
     """The picture's clip whose matte folder holds what the request names: (root, clip, objects)."""
     root = base(req)
     objs = objects_of(req)
-    clip = "m_" + short(objs)
+    clip = "mi_" + short(objs)  # mi: every instance (m_ was matte_auto's one per object)
     done = os.path.join(root, "clips", clip + "_done.json")
     if not os.path.exists(done):
         clip_like(root, clip)
-        argv = [clip]
-        for n, ps in objs.items():
-            argv += ["--phrase", "%s=%s" % (n, ",".join(ps))]
-        argv += [a for d in DEFAULT_OBJECTS if d not in objs for a in ("--no-box", d)]
-        run_tool(os.path.join(TOOLS, "matte_auto.py"), root, argv)
-        json.dump(objs, open(done, "w"))
+        json.dump(find_instances(root, clip, objs), open(done, "w"))
     return root, clip, objs
 
 
@@ -213,21 +298,8 @@ def op_lines(req):
     dials = {k: float(v) for k, v in (req.get("dials") or {}).items()}
     res = os.path.join(root, "res", "lines_%d_%s_%s" % (side, mclip, short(dials)))
     if not os.path.isdir(res):
-        clip = "l%d_%s" % (side, mclip[2:])
-        d = clip_like(root, clip, side)
-        h, w = cv2.imread(os.path.join(d, "0000.png")).shape[:2]
-        n = len(os.listdir(d))
-        mdir, ldir = os.path.join(root, "clips", mclip + "_matte"), os.path.join(root, "clips", clip + "_matte")
-        if not os.path.isdir(ldir):
-            # the segment's mattes at the look's size; nothing found = an empty figure (no outline to draw)
-            parts = [o for o in os.listdir(mdir) if os.path.isdir(os.path.join(mdir, o))] if os.path.isdir(mdir) else []
-            for o in parts or ["figure"]:
-                os.makedirs(os.path.join(ldir + ".tmp", o), exist_ok=True)
-                for i in range(n):
-                    m = cv2.imread(os.path.join(mdir, o, "%04d.png" % i), 0) if parts else None
-                    m = np.zeros((h, w), np.uint8) if m is None else cv2.resize(m, (w, h), interpolation=cv2.INTER_AREA)
-                    cv2.imwrite(os.path.join(ldir + ".tmp", o, "%04d.png" % i), np.where(m > 127, 255, 0).astype(np.uint8))
-            os.replace(ldir + ".tmp", ldir)
+        clip = look_clip(root, mclip, side)
+        n = len(os.listdir(os.path.join(root, "clips", clip)))
         argv = [clip, "--frames", ",".join(str(i) for i in range(n)), "--name", "vb"]
         for k, v in dials.items():
             argv += ["--dial", "%s=%r" % (k, v)]
@@ -240,7 +312,147 @@ def op_lines(req):
             "colors": json.load(open(os.path.join(res, "colors.json")))}
 
 
-OPS = {"depth": op_depth, "segment": op_segment, "lines": op_lines}
+def ensure_depth(root):
+    """The picture's depth (tools/depth.py on all its frames, once): the .npy paths."""
+    dd = os.path.join(root, "clips", "d_depth")
+    if not os.path.isdir(dd) or not os.listdir(dd):
+        clip_like(root, "d")
+        run_tool(os.path.join(TOOLS, "depth.py"), root, ["d"])
+    return [os.path.join(dd, f) for f in sorted(os.listdir(dd))]
+
+
+def look_clip(root, mclip, side, depth=False, pad=False):
+    """A clip for a look: the frames scaled to `side`, the segment's mattes at that size (mclip None: no matte
+    folder - the whole frame is background; a segment that found nothing: an empty figure) and, with depth, the
+    depth at that size. pad: a still gets its frame twice (the hatch looks read motion from a neighbouring frame;
+    the same frame again is no motion). Made once; returns its name."""
+    name = "l%d_%s%s" % (side, mclip or "none", "_p" if pad else "")
+    d = clip_like(root, name, side)
+    if pad and len(os.listdir(d)) == 1:
+        shutil.copy(os.path.join(d, "0000.png"), os.path.join(d, "0001.png"))
+    h, w = cv2.imread(os.path.join(d, "0000.png")).shape[:2]
+    n = len(os.listdir(d))
+    n_src = len(os.listdir(os.path.join(root, "clips", "src")))
+    ldir = os.path.join(root, "clips", name + "_matte")
+    if mclip and not os.path.isdir(ldir):
+        mdir = os.path.join(root, "clips", mclip + "_matte")
+        parts = [o for o in os.listdir(mdir) if os.path.isdir(os.path.join(mdir, o))] if os.path.isdir(mdir) else []
+        for o in parts or ["figure"]:
+            os.makedirs(os.path.join(ldir + ".tmp", o), exist_ok=True)
+            for i in range(n):
+                m = cv2.imread(os.path.join(mdir, o, "%04d.png" % min(i, n_src - 1)), 0) if parts else None
+                m = np.zeros((h, w), np.uint8) if m is None else cv2.resize(m, (w, h), interpolation=cv2.INTER_AREA)
+                cv2.imwrite(os.path.join(ldir + ".tmp", o, "%04d.png" % i), np.where(m > 127, 255, 0).astype(np.uint8))
+        os.replace(ldir + ".tmp", ldir)
+    ddir = os.path.join(root, "clips", name + "_depth")
+    if depth and not os.path.isdir(ddir):
+        os.makedirs(ddir + ".tmp", exist_ok=True)
+        ds = ensure_depth(root)
+        for i in range(n):
+            np.save(os.path.join(ddir + ".tmp", "%04d.npy" % i),
+                    cv2.resize(np.load(ds[min(i, len(ds) - 1)]), (w, h), interpolation=cv2.INTER_AREA).astype(np.float32))
+        os.replace(ddir + ".tmp", ddir)
+    return name
+
+
+def load_lib(script, root, extra_path):
+    """A look's module, executed from its own file without running its main (main() sits behind __name__), with
+    ROOT = root; extra_path stays on sys.path until restore_path()."""
+    for p in reversed(extra_path):
+        sys.path.insert(0, p)
+    g = {"__name__": "vb_" + os.path.splitext(os.path.basename(script))[0],
+         "__file__": os.path.join(root, "tools_scale", os.path.basename(script))}
+    exec(compile(open(script, encoding="utf-8").read(), script, "exec"), g)
+    return g
+
+
+def save_grey(path, x):
+    cv2.imwrite(path, np.clip(x * 255 + 0.5, 0, 255).astype(np.uint8))
+
+
+def dial_args(dials):
+    return [a for k, v in dials.items() for a in ("--dial", "%s=%r" % (k, v))]
+
+
+def op_formhatch(req):
+    """tools_scale/look_formhatch.py through its own functions (parse, init, tracks, setup_light, drawing_fields,
+    render - its main(), minus the files and videos): per frame the dark hatch alpha and ink colour (multiply) and
+    the light strokes' alpha and colour (screen), exactly as its main() writes them into layer/."""
+    root, mclip, _ = segment_clip(req)
+    side = int(req.get("side") or 1400)
+    dials = {k: float(v) for k, v in (req.get("dials") or {}).items()}
+    res = os.path.join(root, "res", "formhatch_%d_%s_%s" % (side, mclip, short(dials)))
+    if not os.path.isdir(res):
+        clip = look_clip(root, mclip, side, depth=True, pad=True)
+        n_src = len(os.listdir(os.path.join(root, "clips", "src")))
+        old = list(sys.path)
+        try:
+            g = load_lib(os.path.join(TOOLS_SCALE, "look_formhatch.py"), root, [TOOLS_SCALE])
+            g["parse"](dial_args(dials))
+            g["init"](clip)
+            D = g["D"]
+            cx, cy, zm, axis, dark = g["tracks"]()
+            light3, l2, az, el, fit = g["setup_light"](dark)
+            os.makedirs(res + ".tmp", exist_ok=True)
+            for t in range(n_src):
+                k = t - t % D["boil"]
+                if t == k:
+                    drw = {s: g["drawing_fields"](k // D["boil"], g["dials"](s))
+                           for s in sorted({g["SC"].of(p, k) for p in g["parts"]})}
+                A, K, B, Hc = g["render"](t, k, (cx, cy, zm, axis, dark, light3, l2, drw))
+                save_grey(os.path.join(res + ".tmp", "%04d_a.png" % t), A)
+                save_grey(os.path.join(res + ".tmp", "%04d_k.png" % t), K)
+                save_grey(os.path.join(res + ".tmp", "%04d_b.png" % t), B)
+                save_grey(os.path.join(res + ".tmp", "%04d_h.png" % t), Hc)
+            print("formhatch: light az %.0f el %.0f (fitted %s) | elements: %s" % (
+                az, el, fit, ", ".join("%s%s" % (p, " (dark)" if dk else "") for p, dk in zip(g["parts"], dark))))
+        finally:
+            sys.path[:] = old
+        os.replace(res + ".tmp", res)
+    n = len([f for f in os.listdir(res) if f.endswith("_a.png")])
+    return {"frames": [{k: os.path.join(res, "%04d_%s.png" % (i, k)) for k in "akbh"} for i in range(n)], "colors": {}}
+
+
+def op_bghatch(req):
+    """tools_scale/look_bg_depthhatch.py through its own functions (parse, prepare, analyse, drawing_fields,
+    render): per frame the ink alpha and colour (multiply) and the far col-erase pencil's alpha. With no objects
+    named there is no matte: the whole frame is background."""
+    named = bool(req.get("objects"))
+    if named:
+        root, mclip, _ = segment_clip(req)
+    else:
+        root, mclip = base(req), None
+    side = int(req.get("side") or 1400)
+    dials = {k: float(v) for k, v in (req.get("dials") or {}).items()}
+    res = os.path.join(root, "res", "bghatch_%d_%s_%s" % (side, mclip or "none", short(dials)))
+    if not os.path.isdir(res):
+        clip = look_clip(root, mclip, side, depth=True, pad=True)
+        n_src = len(os.listdir(os.path.join(root, "clips", "src")))
+        old = list(sys.path)
+        try:
+            g = load_lib(os.path.join(TOOLS_SCALE, "look_bg_depthhatch.py"), root, [TOOLS, TOOLS_SCALE])
+            g["FH"].ROOT = root  # the subject light fit reads the shot through look_formhatch: this picture's folder
+            g["parse"](dial_args(dials))
+            g["prepare"](clip)
+            D = g["D"]
+            os.makedirs(res + ".tmp", exist_ok=True)
+            for k in sorted({t - t % D["boil"] for t in range(n_src)}):
+                fk, drw = g["analyse"](k), g["drawing_fields"](k // D["boil"])
+                for t in range(k, min(k + D["boil"], n_src)):
+                    A, Kc, P = g["render"](t, fk, drw)
+                    save_grey(os.path.join(res + ".tmp", "%04d_a.png" % t), A)
+                    save_grey(os.path.join(res + ".tmp", "%04d_k.png" % t), Kc)
+                    save_grey(os.path.join(res + ".tmp", "%04d_p.png" % t), P)
+            json.dump({"pencil": D["pencil_hex"]}, open(os.path.join(res + ".tmp", "colors.json"), "w"))
+        finally:
+            sys.path[:] = old
+        os.replace(res + ".tmp", res)
+    n = len([f for f in os.listdir(res) if f.endswith("_a.png")])
+    return {"frames": [{k: os.path.join(res, "%04d_%s.png" % (i, k)) for k in "akp"} for i in range(n)],
+            "colors": json.load(open(os.path.join(res, "colors.json")))}
+
+
+OPS = {"depth": op_depth, "segment": op_segment, "lines": op_lines, "formhatch": op_formhatch, "bghatch": op_bghatch}
 
 
 def prune(days=3):
@@ -261,12 +473,19 @@ def main():
         req = json.loads(line)
         log = io.StringIO()
         t0 = time.time()
+        before = set(sys.modules)
         try:
             with contextlib.redirect_stdout(log), contextlib.redirect_stderr(log):
                 reply = OPS[req["op"]](req)
         except Exception:
             reply = {"error": traceback.format_exc().strip().splitlines()[-1]}
             log.write(traceback.format_exc())
+        finally:
+            # each look runs as if in its own process: modules it imported from sketchLook go (the background
+            # hatch imports tools/look_construction.py, the outline tools_scale's: a cached one is the wrong one)
+            for m in set(sys.modules) - before:
+                if os.path.normcase(str(getattr(sys.modules[m], "__file__", "") or "")).startswith(os.path.normcase(SKETCH)):
+                    del sys.modules[m]
         sys.stderr.write(log.getvalue())
         reply.update(id=req.get("id"), log=log.getvalue()[-4000:], seconds=round(time.time() - t0, 2))
         OUT.write(json.dumps(reply) + "\n")

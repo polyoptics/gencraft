@@ -45,6 +45,14 @@ export const LINE_SIDE = 1400
 /** The film outline's sliders that are the drawing's own dials (sent to the
  *  tool); its other sliders only change how the layers are shown. */
 export const LINE_DIALS = ['contour_w', 'detail', 'interior_w', 'rough', 'rough_opacity', 'wobble', 'dry', 'breaks', 'restroke', 'seed', 'boil']
+/** The hatch cards' sliders that are their look's own dials. */
+export const HATCH_DIALS: Partial<Record<EffectKind, string[]>> = {
+  formhatch: ['spacing', 'weight', 'angle', 'wrap', 'tone1', 'default.cross', 'default.light', 'light_az', 'stroke_px', 'seed', 'boil'],
+  bghatch: ['spacing', 'weight', 'opacity', 'far_opacity', 'far_cut', 'paint_hi', 'cross', 'pencil', 'stroke_px', 'seed', 'boil'],
+}
+/** A Shading mix card's values that change nothing (the look mixer's
+ *  neutral: mixer_bake.py NEUTRAL, for the hatch layers). */
+export const SHADE_NEUTRAL: Record<string, number> = { hatch: 1, bg: 1, hatch_weight: 1, bg_weight: 1, hatch_dark: 0, bg_dark: 0, light: 1 }
 /** A Line mix card's values that change nothing. */
 export const MIX_NEUTRAL: Record<string, number> = { strength: 1, pencil: 1, ink: 1, weight: 1, dark: 0, tint: 0, light: 1 }
 
@@ -54,7 +62,7 @@ type Kept =
   | { imgs: Record<string, HTMLImageElement | null>; colors?: LineColors }
   | { error: string }
 
-interface Req { key: string; what: string; job: { op: 'depth' | 'segment' | 'lines'; objects?: Record<string, string[]>; dials?: Record<string, number>; side?: number } }
+interface Req { key: string; what: string; job: { op: 'depth' | 'segment' | 'lines' | 'formhatch' | 'bghatch'; objects?: Record<string, string[]>; dials?: Record<string, number>; side?: number } }
 
 // Results by what they are made from; a few dozen pictures' worth.
 const kept = new Map<string, Kept>()
@@ -82,15 +90,37 @@ function hash(s: string): string {
   return (h >>> 0).toString(36) + s.length.toString(36)
 }
 
-const isAuxKind = (k: EffectKind) => k === 'depth' || k === 'segment' || k === 'filmline' || k === 'linemix'
+const AUX_KINDS = new Set<EffectKind>(['depth', 'segment', 'filmline', 'linemix', 'formhatch', 'bghatch', 'shademix'])
+const isAuxKind = (k: EffectKind) => AUX_KINDS.has(k)
+/** Cards that read a Segment card's phrases (the things to draw). */
+const READS_PHRASES = new Set<EffectKind>(['filmline', 'formhatch', 'bghatch'])
 /** Whether any step on the strip needs a model or tool (so its live result
  *  can change when one lands). */
 export const stripNeedsAux = (steps: { kind: string; effect?: EffectKind }[]) =>
   steps.some(s => s.kind === 'effect' && !!s.effect && isAuxKind(s.effect))
 
-function phrasesFor(steps: AuxStep[], i: number): Record<string, string[]> {
+function phrasesFor(steps: AuxStep[], i: number): Record<string, string[]> | null {
   for (let j = i; j >= 0; j--) if (steps[j].effect === 'segment') return parsePhrases(steps[j].text)
-  return { person: ['person'] }
+  return null
+}
+
+/** A hatch card at step i: its dials, and the Shading mix cards after it
+ *  folded into its strength, line weight, ink darkness and highlights. */
+function hatchSetup(steps: AuxStep[], i: number) {
+  const s = steps[i], p = s.params ?? {}
+  const dials: Record<string, number> = {}
+  for (const k of HATCH_DIALS[s.effect] ?? []) if (typeof p[k] === 'number') dials[k] = p[k]
+  const bg = s.effect === 'bghatch'
+  const mix = { strength: 1, weight: 1, dark: 0, light: 1 }
+  for (const x of steps.slice(i + 1)) {
+    if (x.effect !== 'shademix') continue
+    const m = { ...SHADE_NEUTRAL, ...x.params }
+    mix.strength *= bg ? m.bg : m.hatch
+    mix.weight *= bg ? m.bg_weight : m.hatch_weight
+    mix.dark = Math.max(-1, Math.min(1, mix.dark + (bg ? m.bg_dark : m.hatch_dark)))
+    mix.light *= m.light
+  }
+  return { dials, mix }
 }
 
 /** The film outline at step i: its dials, and the Line mix cards after it
@@ -119,8 +149,23 @@ function requests(steps: AuxStep[], i: number, url: string): Req[] | null {
     if (!Object.keys(objects).length) { say(s.id, 'Name something to find'); return null }
     return [{ key: `mask|${src}|${JSON.stringify(objects)}`, what: 'mask', job: { op: 'segment', objects } }]
   }
+  if (s.effect === 'formhatch' || s.effect === 'bghatch') {
+    // The figure hatch needs the things to hatch ("person" without a
+    // Segment card); the background's subject is optional: without a
+    // Segment card the whole picture is background.
+    const objects = phrasesFor(steps, i) ?? (s.effect === 'formhatch' ? { person: ['person'] } : undefined)
+    const { dials } = hatchSetup(steps, i)
+    return [{ key: `${s.effect}|${src}|${JSON.stringify(objects ?? null)}|${JSON.stringify(dials)}|${LINE_SIDE}`,
+      what: s.effect === 'formhatch' ? 'hatching' : 'background hatching',
+      job: { op: s.effect, objects, dials, side: LINE_SIDE } }]
+  }
+  if (s.effect === 'shademix') {
+    if (!steps.slice(0, i).some(x => x.effect === 'formhatch' || x.effect === 'bghatch')) { say(s.id, 'Put a hatch card before it'); return null }
+    say(s.id, '')
+    return []
+  }
   if (s.effect === 'filmline') {
-    const objects = phrasesFor(steps, i)
+    const objects = phrasesFor(steps, i) ?? { person: ['person'] }
     const { dials } = lineSetup(steps, i)
     return [{ key: `lines|${src}|${JSON.stringify(objects)}|${JSON.stringify(dials)}|${LINE_SIDE}`, what: 'outline',
       job: { op: 'lines', objects, dials, side: LINE_SIDE } }]
@@ -160,9 +205,10 @@ function ask(r: Req, img: HTMLImageElement): Promise<void> {
     if (r.job.op === 'depth') keep(r.key, { imgs: { depth: await decode(res.frames?.[0] as string | undefined) } })
     else if (r.job.op === 'segment') keep(r.key, { imgs: { mask: await decode(res.objects?.figure?.[0]) } })
     else {
+      // A drawing: its layers by name (lines: outline, inside, paper,
+      // pencil; formhatch: a k b h; bghatch: a k p).
       const f = (res.frames?.[0] ?? {}) as Record<string, string>
-      const names = ['outline', 'inside', 'paper', 'pencil']
-      const imgs = Object.fromEntries(await Promise.all(names.map(async n => [n, await decode(f[n])] as const)))
+      const imgs = Object.fromEntries(await Promise.all(Object.entries(f).map(async ([n, u]) => [n, await decode(u)] as const)))
       keep(r.key, { imgs, colors: res.colors as unknown as LineColors })
     }
   }).catch(err => keep(r.key, { error: String(err?.message ?? err) }))
@@ -223,8 +269,15 @@ export function auxFor(e: FxEngine, plan: AuxPlan, steps: AuxStep[], i: number, 
       aux.mask = tex('mask')
       // A Segment card a Film outline after it reads names what to outline:
       // its own mask is not the picture that outline should draw on.
-      const next = steps.slice(i + 1).find(x => x.effect === 'segment' || x.effect === 'filmline')
-      aux.namesForLines = next?.effect === 'filmline'
+      const next = steps.slice(i + 1).find(x => x.effect === 'segment' || READS_PHRASES.has(x.effect))
+      aux.namesForLines = !!next && next.effect !== 'segment'
+    }
+    else if (r.job.op === 'formhatch' || r.job.op === 'bghatch') {
+      const { mix } = hatchSetup(steps, i)
+      aux.hatch = {
+        a: tex('a'), k: tex('k'), b: tex('b'), h: tex('h'), p: tex('p'),
+        pencil: (k.colors as unknown as { pencil?: string } | undefined)?.pencil ?? 'c8402a', background: r.job.op === 'bghatch', mix,
+      }
     }
     else aux.lines = {
       outline: tex('outline'), inside: tex('inside'), paper: tex('paper'), pencil: tex('pencil'),
@@ -240,14 +293,18 @@ export function releaseAux(e: FxEngine, aux: Aux | null) {
   e.release(aux.depth)
   e.release(aux.mask)
   if (aux.lines) for (const t of [aux.lines.outline, aux.lines.inside, aux.lines.paper, aux.lines.pencil]) e.release(t)
+  if (aux.hatch) for (const t of [aux.hatch.a, aux.hatch.k, aux.hatch.b, aux.hatch.h, aux.hatch.p]) e.release(t)
 }
 
 /** What the needs come to, handed to an effect's run. */
 export interface Aux {
   depth?: Tex
   mask?: Tex
-  /** The mask's phrases are what a later Film outline finds. */
+  /** The mask's phrases are what a later drawing card (outline, hatch) finds. */
   namesForLines?: boolean
   lines?: { outline: Tex; inside: Tex; paper: Tex; pencil: Tex; colors: LineColors; mix: Record<string, number> }
+  /** A hatch look's layers: dark strokes (a alpha, k ink colour: multiply),
+   *  light strokes (b, h: screen), the far pencil (p: multiply by `pencil`). */
+  hatch?: { a: Tex; k: Tex; b: Tex; h: Tex; p: Tex; pencil: string; background: boolean; mix: Record<string, number> }
 }
 export type { AuxKind }

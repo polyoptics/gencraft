@@ -326,7 +326,7 @@ function registerBridge() {
     const objects = {}
     for (const [k, v] of Object.entries(job.objects || {})) if (Array.isArray(v)) objects[String(k)] = v.map(String)
     const dials = {}
-    for (const [k, v] of Object.entries(job.dials || {})) if (/^[a-z_]+$/.test(k) && Number.isFinite(v)) dials[k] = v
+    for (const [k, v] of Object.entries(job.dials || {})) if (/^[a-z_.]+$/.test(k) && Number.isFinite(v)) dials[k] = v
     const side = Number.isFinite(job.side) ? Math.max(64, Math.min(8192, Math.round(job.side))) : undefined
     return require('./sketchWorker.cjs').run({ op: job.op, frames, objects, dials, side })
   })
