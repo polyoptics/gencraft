@@ -5,11 +5,17 @@
 // placed right after them on the strip (see chain.ts).
 
 import type { FxEngine, Tex } from './fxEngine'
+import type { Aux } from './aiEffects'
 
 export type EffectKind =
   | 'bloom' | 'glare' | 'glow' | 'ink' | 'cel' | 'sketch'
   | 'halftone' | 'chroma' | 'grade' | 'multiply' | 'screen' | 'overlay'
-  | 'depth' | 'segment'
+  | 'depth' | 'segment' | 'filmline' | 'linemix'
+
+/** What an effect may need besides its picture, made from the strip's
+ *  SOURCE picture by a model or tool (aiEffects.ts): a depth map, a mask of
+ *  the things a Segment card names, the film outline's line layers. */
+export type AuxKind = 'depth' | 'mask' | 'lines'
 
 export interface ParamDef { key: string; label: string; min: number; max: number; step: number; default: number }
 
@@ -30,7 +36,11 @@ export interface EffectDef {
    *  so they leave the image as it is. */
   matte?: number
   params: ParamDef[]
-  run(e: FxEngine, src: Tex, p: Record<string, number>, other?: Tex | null): Tex
+  /** What it needs besides the picture (declared, so a strip can say what
+   *  is missing). runChain gets them first and passes them as `aux`; while
+   *  one is still being made the step shows its picture unchanged. */
+  needs?: AuxKind[]
+  run(e: FxEngine, src: Tex, p: Record<string, number>, other?: Tex | null, aux?: Aux): Tex
 }
 
 /** The long edge every size-like slider is measured against. A dot size,
@@ -105,6 +115,9 @@ function blurTimes(e: FxEngine, src: Tex, spread: number, times: number): Tex {
   }
   return cur
 }
+
+/** '0d0b0a' -> [r, g, b] in 0..1. */
+const hexRgb = (h: string) => [0, 2, 4].map(i => parseInt(h.slice(i, i + 2), 16) / 255)
 
 function blendWith(e: FxEngine, src: Tex, other: Tex | null | undefined, mode: number, mixAmt: number): Tex {
   if (!other) return e.pass('copy', e.target(src.w, src.h), { src })
@@ -268,19 +281,82 @@ export const EFFECTS: Record<EffectKind, EffectDef> = {
     params: [P('mix', 'Mix', 0, 1, 0.01, 1)],
     run(e, src, p, other) { return blendWith(e, src, other, 2, p.mix) },
   },
-  // Made by a model, not a shader: runChain runs these through aiEffects
-  // (the desktop's GPU). `run` here is only the stand-in for anything that
-  // calls an effect directly — the picture, unchanged.
+  // Made from the strip's SOURCE picture by sketchLook's tools on the
+  // desktop's GPU (aiEffects.ts). Without what they need they show the
+  // picture unchanged.
   depth: {
     kind: 'depth', label: 'Depth', glyph: '◭', color: '#8fb3c9',
     blurb: 'How far away everything is, in grey',
+    needs: ['depth'],
     params: [P('far', 'Far is bright', 0, 1, 1, 0)],
-    run(e, src) { return e.pass('copy', e.target(src.w, src.h), { src }) },
+    run(e, src, p, _o, aux) {
+      if (!aux?.depth) return e.pass('copy', e.target(src.w, src.h), { src })
+      return e.pass(p.far >= 0.5 ? 'invertGrey' : 'copy', e.target(src.w, src.h), { src: aux.depth })
+    },
   },
   segment: {
     kind: 'segment', label: 'Segment', glyph: '◍', color: '#b9d98f',
     blurb: 'Finds the things you name and masks them',
+    needs: ['mask'],
     params: [P('cut', 'Cut out', 0, 1, 1, 0)],
+    run(e, src, p, _o, aux) {
+      if (!aux?.mask) return e.pass('copy', e.target(src.w, src.h), { src })
+      // Before a Film outline it only names what to outline: the picture
+      // goes on (Cut out still cuts it).
+      if (p.cut < 0.5) return e.pass('copy', e.target(src.w, src.h), { src: aux.namesForLines ? src : aux.mask })
+      return e.pass('blend', e.target(src.w, src.h), { src, other: aux.mask, mode: 0, mixAmt: 1, bScale: [1, 1], bOffset: [0, 0] })
+    },
+  },
+  // The film's line look (sketchLook look_hybrid_colerase.py), drawn by
+  // the tool itself: a black brush outline round what a Segment card before
+  // it finds ("person" without one), ink lines inside, light paper lines on
+  // dark areas and the red col-erase pencil under it all. Its three outputs
+  // are those layers; Show picks all of them over the picture, or one alone
+  // on white. The drawing's dials re-draw it (seconds); a Line mix card
+  // after it changes how the layers mix (live).
+  filmline: {
+    kind: 'filmline', label: 'Film outline', glyph: '✍', color: '#e0785a',
+    blurb: 'The film’s brush outline, inside lines and red pencil',
+    needs: ['mask', 'lines'],
+    params: [
+      P('show', 'Show: all · outline · inside · pencil', 0, 3, 1, 0),
+      P('contour_w', 'Outline weight', 0.5, 12, 0.1, 4.2), P('detail', 'Inside detail', 0, 1, 0.01, 0.6),
+      P('interior_w', 'Inside weight', 0.2, 3, 0.05, 1), P('rough', 'Pencil', 0, 1.5, 0.01, 0.6),
+      P('rough_opacity', 'Pencil opacity', 0, 1, 0.01, 0.85), P('wobble', 'Wobble', 0, 5, 0.05, 1.2),
+      P('dry', 'Dry brush', 0, 1, 0.01, 0.85), P('breaks', 'Breaks', 0, 0.6, 0.01, 0.1),
+      P('restroke', 'Second stroke', 0, 1, 0.01, 0.8), P('seed', 'Variation', 0, 9999, 1, 3030),
+      P('boil', 'Boil (frames held)', 1, 6, 1, 2),
+    ],
+    run(e, src, p, _o, aux) {
+      const L = aux?.lines
+      if (!L) return e.pass('copy', e.target(src.w, src.h), { src })
+      const m = L.mix
+      // Ink to colour needs the colour under the line, blurred (the look's
+      // interior-ink deep shade).
+      const under = m.tint > 0 ? blurTimes(e, src, 1.5, 2) : null
+      const out = e.pass('lineComp', e.target(src.w, src.h), {
+        src, under: under ?? src, sil: L.outline, ink: L.inside, pap: L.paper, pen: L.pencil,
+        inkC: hexRgb(L.colors.ink), papC: hexRgb(L.colors.paper), hue: hexRgb(L.colors.pencil), graph: hexRgb(L.colors.graphite),
+        cs: L.colors.pencil_tint, show: Math.round(p.show),
+        strength: m.strength, pencilK: m.pencil, inkK: m.ink, curve: 1 / Math.max(0.25, m.weight),
+        dark: m.dark, tintAmt: m.tint, tintValue: 0.45, light: m.light,
+      })
+      e.release(under)
+      return out
+    },
+  },
+  // The look mixer's line controls (sketchLook tools_scale/mixer_bake.py
+  // remix_np): they change how the Film outline before it mixes its
+  // layers, live, without re-drawing. The card itself passes its picture on.
+  linemix: {
+    kind: 'linemix', label: 'Line mix', glyph: '⧉', color: '#d9a35f',
+    blurb: 'Mixes the film outline’s layers live',
+    needs: ['lines'],
+    params: [
+      P('strength', 'Line strength', 0, 2, 0.01, 1), P('pencil', 'Pencil', 0, 2, 0.01, 1), P('ink', 'Ink', 0, 2, 0.01, 1),
+      P('weight', 'Line weight', 0.25, 4, 0.01, 1), P('dark', 'Ink darkness', -1, 1, 0.01, 0),
+      P('tint', 'Ink to colour', 0, 1, 0.01, 0), P('light', 'Highlights', 0, 2, 0.01, 1),
+    ],
     run(e, src) { return e.pass('copy', e.target(src.w, src.h), { src }) },
   },
 }
@@ -310,4 +386,4 @@ export function effectParams(kind: EffectKind, params: Record<string, number> | 
 }
 
 /** In the order the add menu lists them. */
-export const EFFECT_ORDER: EffectKind[] = ['bloom', 'glare', 'glow', 'ink', 'cel', 'sketch', 'halftone', 'chroma', 'grade', 'multiply', 'screen', 'overlay', 'depth', 'segment']
+export const EFFECT_ORDER: EffectKind[] = ['bloom', 'glare', 'glow', 'ink', 'cel', 'sketch', 'halftone', 'chroma', 'grade', 'multiply', 'screen', 'overlay', 'depth', 'segment', 'filmline', 'linemix']

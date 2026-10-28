@@ -24,6 +24,7 @@ import { FX_REF_SIDE } from '../../utils/fx/effects'
 import { railComboAt, railFaceCombo } from '../../utils/fx/railChain'
 import { useBoardsStore } from '../../store/boardsStore'
 import { isRailRunning, unreadable } from '../../utils/fx/railRun'
+import { stripNeedsAux, useAuxStore } from '../../utils/fx/aiEffects'
 
 /** Quiet time after the last change before the preview re-renders — a
  *  slider drag renders once it rests, not on every tick. */
@@ -55,7 +56,7 @@ export function RailRunHost(): null {
         seen.add(railId)
         // What the face-up card shows: step it and the preview follows.
         const combo = railComboAt(rail, members.get(railId), railFaceCombo(rail, members.get(railId)), posters)
-        const sig = combo ? JSON.stringify(combo.items) : ''
+        const sig = combo ? JSON.stringify(combo.items) + (stripNeedsAux(combo.items) ? `#${useAuxStore.getState().version}` : '') : ''
         if (sigs.get(railId) === sig) continue
         sigs.set(railId, sig)
         window.clearTimeout(timers.get(railId))
@@ -77,7 +78,7 @@ export function RailRunHost(): null {
           // The run's own check first: runChain passes a partner it cannot
           // read, and the ghost would show a result the run then refuses.
           void unreadable(combo.items)
-            .then(why => why ? noResult(why) : runChain(combo.items, FX_REF_SIDE, false))
+            .then(why => why ? noResult(why) : runChain(combo.items, FX_REF_SIDE, false, { live: true }))
             // A run that throws is a result too, or `running` never clears.
             .catch(err => noResult(String((err as Error)?.message ?? err)))
             .then(r => {
@@ -124,11 +125,13 @@ export function RailRunHost(): null {
     const offPosters = usePosterMapStore.subscribe((s, prev) => { if (s.map !== prev.map) check() })
     // A docked card's face is the card's: stepped, the preview follows.
     const offCards = useBoardsStore.subscribe((s, prev) => { if (s.groups !== prev.groups) check() })
+    const offAux = useAuxStore.subscribe((s, prev) => { if (s.version !== prev.version) check() })
     return () => {
       dead = true
       offNodes()
       offPosters()
       offCards()
+      offAux()
       for (const t of timers.values()) window.clearTimeout(t)
     }
   }, [])

@@ -13,7 +13,7 @@
 import { fx, fitSource, type FxSource, type Tex } from './fxEngine'
 import { EFFECTS, FX_REF_SIDE, effectParams, knownKind, type EffectKind } from './effects'
 import { resolveMediaUrl } from '../useResolvedMedia'
-import { isAiEffect, runAiStep } from './aiEffects'
+import { prepareAux, auxFor, releaseAux } from './aiEffects'
 
 export type ChainItem =
   | { id: string; kind: 'source'; url: string; label: string }
@@ -117,19 +117,11 @@ export interface ChainResult {
 /** Run a strip. `maxSide` caps the working resolution (a live preview
  *  wants ~1400; a saved result the source's full size). `previewSide` is
  *  the step previews' long edge; 0 or false makes none (a save never shows
- *  them). */
-export async function runChain(items: ChainItem[], maxSide: number, previewSide: number | false = 220): Promise<ChainResult> {
-  // A Depth / Segment step without its result yet shows the picture
-  // unchanged and asks for it; once it is in, the strip runs again.
-  for (let pass = 0; ; pass++) {
-    const pending: Promise<void>[] = []
-    const result = await runChainOnce(items, maxSide, previewSide, pending)
-    if (!pending.length || pass >= 2) return result
-    await Promise.all(pending)
-  }
-}
-
-async function runChainOnce(items: ChainItem[], maxSide: number, previewSide: number | false, pending: Promise<void>[]): Promise<ChainResult> {
+ *  them). `live`: a preview, which never waits for what a step needs from a
+ *  model or tool (aiEffects) — the step shows its picture unchanged until
+ *  it lands, and the live strips run again then. Otherwise (a Run, a save,
+ *  a drag-out) the run waits for it and draws once. */
+export async function runChain(items: ChainItem[], maxSide: number, previewSide: number | false = 220, opts: { live?: boolean } = {}): Promise<ChainResult> {
   const plan = planChain(items)
   const unreadable: string[] = []
   const result: ChainResult = { outputs: [], stepPreviews: new Map(), ignored: plan.ignored, unreadable }
@@ -137,6 +129,8 @@ async function runChainOnce(items: ChainItem[], maxSide: number, previewSide: nu
 
   const urls = [...plan.sources.map(s => s.url), ...plan.steps.flatMap(s => s.other ? [s.other.url] : [])]
   const images = new Map(await Promise.all(urls.map(async u => [u, await loadImage(u)] as const)))
+  const steps = plan.steps.map(s => s.item)
+  const aux = await prepareAux(steps, plan.sources.map(s => ({ url: s.url, img: images.get(s.url) ?? null })), !opts.live)
 
   // Taken after the wait: a context lost meanwhile is rebuilt here.
   const e = fx()
@@ -154,15 +148,15 @@ async function runChainOnce(items: ChainItem[], maxSide: number, previewSide: nu
       if (!img) { unreadable.push(source.id); continue }
       const first = result.outputs.length === 0
       let cur = e.upload(fitted(img, source.url, side), side)
-      for (const s of plan.steps) {
-        const params = effectParams(s.item.effect, s.item.params)
-        let next: Tex
-        if (isAiEffect(s.item.effect)) {
-          const ai = runAiStep(e, cur, s.item.effect, s.item.id, s.item.text, params)
-          if (ai.pending) pending.push(ai.pending)
-          if (ai.error) result.error = ai.error
-          next = ai.tex
-        } else next = EFFECTS[s.item.effect].run(e, cur, params, s.other ? others.get(s.other.id) : null)
+      for (const [i, s] of plan.steps.entries()) {
+        const def = EFFECTS[s.item.effect]
+        // What it needs from a model or tool; still missing, the picture
+        // goes through unchanged (its card says why).
+        const got = def.needs ? auxFor(e, aux, steps, i, source.url, cur) : {}
+        const next = got
+          ? def.run(e, cur, effectParams(s.item.effect, s.item.params), s.other ? others.get(s.other.id) : null, got)
+          : e.pass('copy', e.target(cur.w, cur.h), { src: cur })
+        releaseAux(e, got)
         e.release(cur)
         cur = next
         if (first && previewSide) {

@@ -41,13 +41,21 @@ export interface VidbarsDesktop {
    *  A bare string | null comes from a main older than this page — it only
    *  restarts with the window. Go through utils/saveImage.ts. */
   saveImage?(kind: SaveImageKind, name: string, dataUrl: string): Promise<{ path: string } | { error: string } | string | null>
-  /** Depth / Segment cards: sketchLook's depth.py or matte_auto.py on this
-   *  machine's GPU (electron/sketchWorker.cjs). `frames` are data urls; more
-   *  than one is a short sequence. Segment's `objects` are phrases per thing
-   *  to find. Depth gives one grey map per frame (near = bright); segment a
-   *  mask per frame for each thing found, plus 'figure' (all of them). */
-  sketchRun?(job: { op: 'depth' | 'segment'; frames: string[]; objects?: Record<string, string[]> }):
-    Promise<{ frames?: string[]; objects?: Record<string, string[]>; error?: string; log: string }>
+  /** Depth / Segment / Film outline cards: sketchLook's depth.py,
+   *  matte_auto.py or look_hybrid_colerase.py on this machine's GPU
+   *  (electron/sketchWorker.cjs). `frames` are data urls; more than one is a
+   *  short sequence. `objects`: phrases per thing to find (segment, lines).
+   *  Depth gives a grey map per frame (near = bright); segment a mask per
+   *  frame for each thing found, plus 'figure' (all of them); lines the
+   *  outline, inside, paper and pencil layers per frame (alpha, grey) and
+   *  the look's colours, drawn at long edge `side` with `dials`. */
+  sketchRun?(job: {
+    op: 'depth' | 'segment' | 'lines'; frames: string[]; objects?: Record<string, string[]>
+    side?: number; dials?: Record<string, number>
+  }): Promise<{
+    frames?: (string | Record<string, string>)[]; objects?: Record<string, string[]>
+    colors?: Record<string, string | number>; error?: string; log: string
+  }>
 }
 
 /** Where a save lands: 'context-sheet' and 'effect' are the user's files

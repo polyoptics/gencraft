@@ -41,6 +41,7 @@ import { tileDeckIndex, tileDeckMembers } from '../utils/tileDecks'
 import { isDocked } from '../utils/rail'
 import { stripCards, type StripCard } from '../utils/fx/cardStrips'
 import { useBoardsStore } from '../store/boardsStore'
+import { stripNeedsAux, useAuxStore } from '../utils/fx/aiEffects'
 
 /** Working resolution for the live result (a saved result renders full). */
 export const LIVE_SIDE = 1400
@@ -183,6 +184,7 @@ export function useFxStrips(): void {
   const ranWith = useRef(new Map<string, string>())
   const timers = useRef(new Map<string, number>())
   const tokens = useRef(new Map<string, number>())
+  const auxVersion = useAuxStore(s => s.version)
 
   useEffect(() => {
     const next = computeStrips(nodes, windows, zoom, posters, () => stripCards(groups, boards, zoom, true))
@@ -202,7 +204,9 @@ export function useFxStrips(): void {
     }
 
     for (const s of Object.values(next)) {
-      const sig = JSON.stringify(s.items)
+      // A model or tool result landing changes what a strip that needs one
+      // shows: it runs again then (aiEffects).
+      const sig = JSON.stringify(s.items) + (stripNeedsAux(s.items) ? `#${auxVersion}` : '')
       if (ranWith.current.get(s.key) === sig) continue
       ranWith.current.set(s.key, sig)
       window.clearTimeout(timers.current.get(s.key))
@@ -213,7 +217,7 @@ export function useFxStrips(): void {
         // No step previews: the cards no longer show the picture at each
         // step (each would be a GPU readback per slider tick) — the result
         // shows on the source picture itself (FxResultLayer).
-        void runChain(s.items, LIVE_SIDE, false)
+        void runChain(s.items, LIVE_SIDE, false, { live: true })
           // A run that throws is a result too (its error shown on the
           // cards and the picture) — otherwise `running` never clears.
           .catch((err): ChainResult => ({
@@ -233,5 +237,5 @@ export function useFxStrips(): void {
       window.clearTimeout(timers.current.get(k))
       timers.current.delete(k)
     }
-  }, [nodes, windows, zoom, posters, groups, boards])
+  }, [nodes, windows, zoom, posters, groups, boards, auxVersion])
 }

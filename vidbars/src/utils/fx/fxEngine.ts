@@ -247,6 +247,36 @@ const FRAG: Record<string, string> = {
       o = vec4(mix(vec3(d), c * d, colorKeep), 1.0);
     }`,
 
+  // The film outline's layers (alpha maps in .r) over the picture, as the
+  // line look composites them (look_hybrid_colerase.py finish), with the
+  // look mixer's line controls (mixer_bake.py remix_np). show: 0 all over
+  // the picture; 1 the outline, 2 the inside lines, 3 the pencil, alone on
+  // white.
+  lineComp: `
+    uniform sampler2D src; uniform sampler2D under; uniform sampler2D sil; uniform sampler2D ink;
+    uniform sampler2D pap; uniform sampler2D pen;
+    uniform vec3 inkC; uniform vec3 papC; uniform vec3 hue; uniform vec3 graph; uniform float cs; uniform float show;
+    uniform float strength; uniform float pencilK; uniform float inkK; uniform float curve;
+    uniform float dark; uniform float tintAmt; uniform float tintValue; uniform float light;
+    void main() {
+      float s = pow(texture(sil, uv).r, curve), a = pow(texture(ink, uv).r, curve);
+      float p = pow(texture(pap, uv).r, curve), q = pow(texture(pen, uv).r, curve);
+      s = clamp(s * inkK * strength, 0.0, 1.0); a = clamp(a * inkK * strength, 0.0, 1.0);
+      p = clamp(p * inkK * light * strength, 0.0, 1.0); q = clamp(q * pencilK * strength, 0.0, 1.0);
+      vec3 ic = dark > 0.0 ? inkC * (1.0 - dark) : inkC + (1.0 - inkC) * (-dark);
+      if (tintAmt > 0.0) {
+        vec3 u = texture(under, uv).rgb;
+        vec3 deep = u * pow(u / max(max(u.r, max(u.g, u.b)), 1e-4), vec3(0.6)) * tintValue;
+        ic = mix(ic, deep, tintAmt);
+      }
+      vec3 c = show < 0.5 ? texture(src, uv).rgb : vec3(1.0);
+      if (show < 0.5 || show > 2.5) c = c * (1.0 - q) + q * ((1.0 - cs) * graph + cs * c * hue);
+      if (show < 0.5) c = mix(c, papC, p);
+      if (show < 0.5 || (show > 1.5 && show < 2.5)) c = mix(c, ic, a);
+      if (show < 1.5) c = mix(c, ic, s);
+      o = vec4(c, 1.0);
+    }`,
+
   invertGrey: `
     uniform sampler2D src;
     void main() { float g = dot(texture(src, uv).rgb, vec3(0.299, 0.587, 0.114)); o = vec4(vec3(1.0 - g), 1.0); }`,

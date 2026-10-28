@@ -325,7 +325,10 @@ function registerBridge() {
     if (!frames.length || frames.length > 600) return { error: 'no pictures', log: '' }
     const objects = {}
     for (const [k, v] of Object.entries(job.objects || {})) if (Array.isArray(v)) objects[String(k)] = v.map(String)
-    return require('./sketchWorker.cjs').run({ op: job.op, frames, objects })
+    const dials = {}
+    for (const [k, v] of Object.entries(job.dials || {})) if (/^[a-z_]+$/.test(k) && Number.isFinite(v)) dials[k] = v
+    const side = Number.isFinite(job.side) ? Math.max(64, Math.min(8192, Math.round(job.side))) : undefined
+    return require('./sketchWorker.cjs').run({ op: job.op, frames, objects, dials, side })
   })
 
   // An image the app MADE (a context sheet, an effect result), written as a
@@ -566,6 +569,7 @@ app.whenReady().then(async () => {
   } catch (err) {
     console.error('[vidbars]', err.message)
     stopDevServer()   // app.exit() skips will-quit
+    require('./sketchWorker.cjs').stop()
     app.exit(1)
     return
   }
@@ -573,4 +577,4 @@ app.whenReady().then(async () => {
 })
 
 app.on('window-all-closed', () => app.quit())
-app.on('will-quit', stopDevServer)
+app.on('will-quit', () => { stopDevServer(); require('./sketchWorker.cjs').stop() })

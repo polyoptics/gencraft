@@ -17,10 +17,11 @@
 // each control that edits takes its own. Anywhere else on the face moves
 // the card.
 
-import React, { useEffect, useState } from 'react'
+import React, { useState } from 'react'
 import type { FreeNodeData } from '../../store/freeNodeStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useFxStore } from '../../store/fxStore'
+import { useAuxStore } from '../../utils/fx/aiEffects'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { EFFECTS, EFFECT_ORDER, effectKindOf, effectParams, type EffectKind, type ParamDef } from '../../utils/fx/effects'
 
@@ -100,6 +101,8 @@ export const EffectTileBody: React.FC<{
   const params = effectParams(kind, node.effect?.params)
   const stripKey = useFxStore(s => s.byNode[id])
   const strip = useFxStore(s => (stripKey ? s.strips[stripKey] : undefined))
+  /** "Computing depth…", or why a model / tool result is missing. */
+  const auxNote = useAuxStore(s => s.byStep[id] ?? '')
   /** The row being dragged — lit while the pointer holds it. */
   const [dragKey, setDragKey] = useState<string | null>(null)
   /** Keyboard focus on the (invisible) effect picker — underlines the name. */
@@ -142,8 +145,11 @@ export const EffectTileBody: React.FC<{
   /** Segment's phrases. Typed locally and written on leaving the box:
    *  every write re-runs the strip, and a model run per keystroke would
    *  queue up behind each other. */
-  const [phrases, setPhrases] = useState(node.effect?.text ?? '')
-  useEffect(() => { setPhrases(node.effect?.text ?? '') }, [node.effect?.text])
+  const storedPhrases = node.effect?.text ?? ''
+  const [phrases, setPhrases] = useState(storedPhrases)
+  // An undo or another view changing the stored text replaces what is typed.
+  const [seenPhrases, setSeenPhrases] = useState(storedPhrases)
+  if (seenPhrases !== storedPhrases) { setSeenPhrases(storedPhrases); setPhrases(storedPhrases) }
   const commitPhrases = () => {
     const cur = paramsNow()
     if (!cur || (cur.text ?? '') === phrases) return
@@ -257,6 +263,12 @@ export const EffectTileBody: React.FC<{
           fontSize: 5.5 * u, opacity: 0.7, textAlign: 'center', marginTop: 0.5 * u, flex: '0 0 auto',
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textShadow: shadow,
         }}>Mixes in the next picture</div>
+      )}
+      {def.needs && auxNote && (
+        <div title={auxNote} style={{
+          fontSize: 5.5 * u, opacity: 0.75, textAlign: 'center', marginTop: 0.5 * u, flex: '0 0 auto',
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textShadow: shadow,
+        }}>{auxNote}</div>
       )}
 
       {/* ── Values: each row IS its slider. The fill shows the value; press
