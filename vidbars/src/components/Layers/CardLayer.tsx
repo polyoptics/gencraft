@@ -33,6 +33,7 @@ import { cardStripId } from '../../utils/fx/cardStrips'
 import { cardHitAt } from '../../utils/cardContent'
 import { cardFaceMedia, deckFaceSteps, faceSteps, mergeCardsInto, setFaceThumbnail, stepDeckFace, stepFace } from '../../utils/cardGrid'
 import { drawnRect, effectChain, snapEffectCard } from '../../utils/effectCards'
+import { showDockedCardInViewer } from '../../hooks/useDockedContent'
 import { cardRailTarget, dockCardsOnRail, endDockedDrag, liftDockedCards, previewCardRail } from '../../utils/railCards'
 import { copyEffect, hasEffectClip, pasteEffect } from '../../utils/fx/effectClipboard'
 import { EffectTileBody } from '../Canvas/EffectTileBody'
@@ -649,6 +650,8 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
       }
       // Off a strip: a docked card stays where it was let go.
       endDockedDrag(draggingIds, dxAccum !== 0 || dyAccum !== 0)
+      // A plain click on a card docked to a Viewer shows it there.
+      if (dxAccum === 0 && dyAccum === 0) showDockedCardInViewer(group.id)
       // Drop-on-ghost-slot return: if the card was released over a
       // [data-deck-slot-drop="<anchorId>:<cardId>"] element AND that cardId
       // matches this card, snap it back into the deck.
@@ -1522,6 +1525,14 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
           return
         }
         endDockedDrag([deck.anchorGroupId], dxAccum !== 0 || dyAccum !== 0)
+        // A plain click on a deck docked to a Viewer shows its front card's
+        // face there — what the deck shows is what the Viewer shows.
+        if (dxAccum === 0 && dyAccum === 0) {
+          const bs = useBoardsStore.getState()
+          const a = bs.groups.find(g => g.id === deck.anchorGroupId)
+          const front = a ? deckFaceSteps(a, deck.memberIds, bs.groups, bs.boards).card.id : deck.anchorGroupId
+          showDockedCardInViewer(deck.anchorGroupId, front)
+        }
       }
       // Drop-on-ghost-slot return for extracted sub-decks rendered as
       // StackedDeckCard: anchor might match a ghost slot on its former parent.
@@ -2280,6 +2291,8 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
         // member. Clicking the same member again clears the portal;
         // clicking a different member swaps it.
         useCanvasStore.getState().toggleDeckPortal(deck.anchorGroupId, groupId)
+        // …and, when the deck is docked to a Viewer, shows that card there.
+        showDockedCardInViewer(deck.anchorGroupId, groupId)
       }
       // Always release the fan-render handoff. After this clear, the card
       // either stays where dropped (rendered by CardLayer's main loop at

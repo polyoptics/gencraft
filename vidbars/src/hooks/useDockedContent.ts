@@ -39,6 +39,7 @@ import { isHiddenDeckMember, expandWithNestedMembers, cardVisualRect } from './u
 import { getFirstImageUrl } from '../types/bar'
 import { tileDeckIndex, tileDeckMembers } from '../utils/tileDecks'
 import { isDocked } from '../utils/rail'
+import { cardFaceMedia } from '../utils/cardGrid'
 
 export interface DockedSource {
   kind: 'tile' | 'card' | 'list'
@@ -337,4 +338,38 @@ export function computeCarriedEntities(windowId: string): { tileIds: string[]; g
     .map(id => id.slice(GROUP_PREFIX.length))
   const groupIds = expandWithNestedMembers(direct, bs.groups)
   return { tileIds, groupIds }
+}
+
+/** Non-hook: a plain click on a card or deck docked to a Viewer shows it
+ *  there — the same gesture a docked tile already has (FreeNode). The
+ *  Viewer's own arrows keep stepping through everything docked.
+ *  `dockedGroupId` is what sits in the cluster (a card, or a deck's
+ *  anchor); `showGroupId` is the card whose face to show — the deck's
+ *  front card, or the fan member clicked. Shows what that face shows,
+ *  else its first picture or video, else whatever it holds first. */
+export function showDockedCardInViewer(dockedGroupId: string, showGroupId: string = dockedGroupId): void {
+  const vs = useViewport3DStore.getState()
+  const nodes = useFreeNodeStore.getState().nodes
+  const bs = useBoardsStore.getState()
+  const zoom = useCanvasStore.getState().zoom
+  // Cards live in the canvas stratum only — see useDockedSources.
+  const winRects = windowRects(vs.windows, false, zoom)
+  if (winRects.length === 0) return
+  const { hidden } = tileDeckIndex(nodes)
+  const clusters = computeTileClusters(
+    [...contentTileItems(nodes, false, hidden), ...contentGroupItems(bs.groups, bs.boards, zoom)], winRects)
+  let winId: string | null = null
+  for (const [wid, ids] of clusters.byWindow) {
+    if (ids.includes(GROUP_PREFIX + dockedGroupId)) { winId = wid; break }
+  }
+  if (!winId) return
+
+  const items = collectDeckContent(showGroupId, bs.groups, bs.boards)
+  if (items.length === 0) return
+  const card = bs.groups.find(g => g.id === showGroupId)
+  const face = card ? cardFaceMedia(card, bs.boards) : null
+  const item = (face && items.find(i => i.kind === 'media' && i.url === face.url))
+    ?? items.find(i => i.kind === 'media' && i.mediaType !== 'audio')
+    ?? items[0]
+  vs.setActiveItem(winId, item)
 }
