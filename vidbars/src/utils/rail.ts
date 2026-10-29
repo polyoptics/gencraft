@@ -139,6 +139,8 @@ export const RAIL_GEOM = {
   // width — the strip opens with room for a full card in every column.
   emptyH: 280,
   needH: 40,        // an empty input spot under an effect card ("needs depth")
+  /** How far the tray's output overlaps the bottom of its preview. */
+  trayOverlap: 10,
   rowGap: 26,       // between the strip's row and a look row, and between look rows
   addRowH: 30,      // the "+ Add a look" button under the rows
 } as const
@@ -366,14 +368,19 @@ export function railLayout(rail: FreeNodeData, members: Map<string, FreeNodeData
   // The tray at its own scale: an empty one, or one of loose pictures, is
   // that much wider; result cards are scaled themselves (useRailSync).
   const trayW = columnWidth(members?.get(RAIL_TRAY) ?? [], picW * (rail.rail.trayScale ?? 1))
-  const trayCards = cascade(members?.get(RAIL_TRAY) ?? [], x, bodyTop, trayW, u)
+  // The live preview always heads the tray, at its picture's shape (or, with
+  // none yet and nothing on the tray, an empty card-sized spot); the run's
+  // output — result decks — cascades UNDER it, its top just over the
+  // preview's bottom edge. The two never share one pile.
+  const previewH = trayAspects.has(rail.id) ? trayW * trayAspects.get(rail.id)!
+    : (members?.get(RAIL_TRAY)?.length ? 0 : g.emptyH * u * (rail.rail.trayScale ?? 1))
+  const outputTop = previewH > 0 ? bodyTop + previewH - g.trayOverlap * u : bodyTop
+  const trayCards = cascade(members?.get(RAIL_TRAY) ?? [], x, outputTop, trayW, u)
   const trayLast = trayCards[trayCards.length - 1]
   const tray: RailColumn = {
     slot: null, slotId: RAIL_TRAY, kind: 'tray', x, width: trayW,
     head: { x, y: rowTop, width: trayW, height: g.headH * u },
-    // Empty, it is as tall as the preview it shows, at the preview's shape.
-    bodyTop, bodyBottom: trayLast ? trayLast.y + trayLast.height
-      : bodyTop + (trayAspects.has(rail.id) ? trayW * trayAspects.get(rail.id)! : g.emptyH * u * (rail.rail.trayScale ?? 1)),
+    bodyTop, bodyBottom: trayLast ? trayLast.y + trayLast.height : bodyTop + previewH,
     cards: trayCards, empty: trayCards.length === 0,
   }
 

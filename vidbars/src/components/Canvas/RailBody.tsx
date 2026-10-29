@@ -29,7 +29,7 @@ import { clientToCanvas } from '../../utils/fx/createEffect'
 import { createEffectCardGroup } from '../../utils/effectCards'
 import { useBoardsStore } from '../../store/boardsStore'
 import { railAtPoint } from './rail/railHit'
-import { railComboAt } from '../../utils/fx/railChain'
+import { railComboAt, railFaceCombo } from '../../utils/fx/railChain'
 import { EFFECTS, effectKindOf } from '../../utils/fx/effects'
 import { parsePhrases } from '../../utils/fx/aiEffects'
 import { DragOutGrip } from '../UI/DragOutGrip'
@@ -161,8 +161,16 @@ export const RailBody: React.FC<{
 
   const trayCards = members?.get(RAIL_TRAY) ?? []
   const lastResult = trayCards[trayCards.length - 1]
+  // The picture the preview is made from — its "before": the face-up
+  // input as the strip reads it (railFaceCombo, as RailRunHost previews).
+  let before: string | null = null
+  try {
+    const c = railComboAt(view.rail, view.members, railFaceCombo(view.rail, view.members))
+    const src = c?.items.find(i => i.kind === 'source')
+    before = src && src.kind === 'source' ? src.url || null : null
+  } catch { before = null }
   const ghost = !running && view.count > 0 && preview?.canvas
-    ? { canvas: preview.canvas, stale: preview.running }
+    ? { canvas: preview.canvas, stale: preview.running, before }
     : null
   const rowTop = L.tray.head.y - rail.y
   const pad = RAIL_GEOM.pad * u

@@ -6,19 +6,20 @@
 // Three marks must be seen over them:
 //   - where a dragged card would land (the insertion line / bar),
 //   - which pictures the run is making right now,
-//   - the live preview, as a ghost card at the NEXT place on the results
-//     pile — "this is what the run will make".
+//   - the live preview — "this is what the run will make" — always at the
+//     top of the results, its output decks below it; a Before / After
+//     button on it shows the input picture it is made from instead.
 // They are portalled into the world layer the tiles themselves live in (the
 // rail tile's parent: canvas units, tiles at left = x), as a zero-size,
 // pointer-transparent host with no z-index of its own, so each mark takes
-// its own z among the tiles. The ghost tops an empty tray and tucks under
-// a pile (z 9 — over the rail's face, under every result), so the face-up
-// result is never covered; the run highlight sits just under a peek-lifted
+// its own z among the tiles. The preview sits over the rail's face, under
+// the result decks (cards, drawn above the tiles); the run highlight sits
+// just under a peek-lifted
 // card (z 60); the drop mark is over
 // everything, the dragged card included — it is always under the pointer,
 // so beneath the card it would always be hidden.
 
-import React from 'react'
+import React, { useState } from 'react'
 import { createPortal } from 'react-dom'
 import { RAIL_GEOM, clampAspect, type RailDropTarget, type RailLayout, type RailSlot } from '../../../utils/rail'
 import { CanvasMirror } from '../../UI/CanvasMirror'
@@ -42,8 +43,10 @@ export const RailOverlay: React.FC<{
   /** The pictures the run is making now, subject first. */
   busyIds: string[] | null
   /** The live preview to deal as a ghost, or null (running, or none yet). */
-  ghost: { canvas: HTMLCanvasElement; stale: boolean } | null
+  ghost: { canvas: HTMLCanvasElement; stale: boolean; before: string | null } | null
 }> = ({ host, railId, layout: L, slots, drop, busyIds, ghost }) => {
+  /** The preview shows the input picture (Before) instead of the result. */
+  const [before, setBefore] = useState(false)
   const u = L.unit
 
   // ── Drop mark ──
@@ -113,37 +116,47 @@ export const RailOverlay: React.FC<{
     })
   }
 
-  // ── Ghost: where the next result lands. On an empty tray it IS the pile.
-  // Once results are there it tucks UNDER them: the face-up result must
-  // stay fully visible (solitaire), so the ghost shows only as the dashed
-  // edge peeking out below the last card, its tag on that edge. ──
+  // ── The live preview: always at the top of the results, the run's
+  // output decks cascading under it from just over its bottom edge
+  // (utils/rail). Before / After flips it to the input picture it is made
+  // from and back. ──
   let ghostCard: React.ReactNode = null
   if (ghost && ghost.canvas.width > 0 && ghost.canvas.height > 0) {
     const tray = L.tray
-    const tucked = tray.cards.length > 0
-    // Tucked, as wide as the card it tucks under (a card keeps its own size).
-    const w = tucked ? Math.min(tray.width, tray.cards[tray.cards.length - 1].width) : tray.width
-    // dockedHeight's clamp: the result tile will be laid out the same way.
+    const w = tray.width
+    // The layout's clamp: the tray is laid out at this shape.
     const aspect = clampAspect(ghost.canvas.height / ghost.canvas.width)
+    const showBefore = before && !!ghost.before
     ghostCard = (
-      <div data-rail-ghost={tucked ? 'tucked' : 'top'} style={{
-        position: 'absolute', zIndex: tucked ? 9 : 10,
-        left: tray.x, top: nextCascadeY(tray.cards, tray.bodyTop), width: w, height: w * aspect,
+      <div data-rail-ghost="top" style={{
+        position: 'absolute', zIndex: 10,
+        left: tray.x, top: tray.bodyTop, width: w, height: w * aspect,
         border: `${2 * u}px dashed ${C.orangeHi}`, borderRadius: 8 * u, overflow: 'hidden',
         background: 'rgba(22,23,31,0.6)', boxShadow: `0 ${3 * u}px ${12 * u}px rgba(0,0,0,0.45)`,
       }}>
-        <CanvasMirror source={ghost.canvas} maxSide={GHOST_SIDE} style={{
-          width: '100%', height: '100%', maxWidth: 'none', maxHeight: 'none',
-          // Full strength: "this is what the run will make" must look like
-          // it. Faded over the dark backing it read darker and punchier than
-          // the result that then landed. Dimmed only while it re-renders.
-          objectFit: 'cover', opacity: ghost.stale ? 0.55 : 1, transition: 'opacity 160ms',
-        }} />
-        <span style={{
-          position: 'absolute', left: 4 * u, ...(tucked ? { bottom: 4 * u } : { top: 4 * u }), padding: `${1.5 * u}px ${5 * u}px`,
-          borderRadius: 6 * u, background: C.orange, color: '#fff',
-          fontSize: 9 * u, fontWeight: 700, lineHeight: 1.1, letterSpacing: 0.3 * u,
-        }}>{ghost.stale ? 'next …' : 'next'}</span>
+        {showBefore
+          ? <img src={ghost.before!} draggable={false} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+          : <CanvasMirror source={ghost.canvas} maxSide={GHOST_SIDE} style={{
+              width: '100%', height: '100%', maxWidth: 'none', maxHeight: 'none',
+              // Full strength: "this is what the run will make" must look like
+              // it. Dimmed only while it re-renders.
+              objectFit: 'cover', opacity: ghost.stale ? 0.55 : 1, transition: 'opacity 160ms',
+            }} />}
+        {ghost.before && (
+          <button
+            type="button" data-rail-before={showBefore ? 'before' : 'after'}
+            title={showBefore ? 'Showing the picture before the effects — click for after' : 'Showing the result — click for the picture before the effects'}
+            onPointerDown={e => { if (e.button === 0) e.stopPropagation() }}
+            onDoubleClick={e => e.stopPropagation()}
+            onClick={e => { e.stopPropagation(); setBefore(b => !b) }}
+            style={{
+              position: 'absolute', right: 4 * u, top: 4 * u, pointerEvents: 'auto', cursor: 'pointer',
+              padding: `${1.5 * u}px ${6 * u}px`, borderRadius: 6 * u, border: `${u}px solid rgba(255,255,255,0.35)`,
+              background: showBefore ? 'rgba(255,255,255,0.9)' : 'rgba(12,13,20,0.7)', color: showBefore ? '#111' : '#fff',
+              fontSize: 9 * u, fontWeight: 700, lineHeight: 1.1, fontFamily: 'inherit',
+            }}
+          >{showBefore ? 'Before' : 'After'}</button>
+        )}
       </div>
     )
   }
