@@ -465,6 +465,12 @@ function createWindow() {
   })
 
   win.setMenuBarVisibility(false)
+  // Belt and braces: a lone Alt press or release never reaches the menu
+  // logic at all. Alt+click / Alt+drag still carry altKey on the mouse
+  // events, which is all the canvas reads.
+  win.webContents.on('before-input-event', (e, input) => {
+    if (input.key === 'Alt') e.preventDefault()
+  })
 
   win.once('ready-to-show', () => { if (!SELFTEST) win.show() })
 

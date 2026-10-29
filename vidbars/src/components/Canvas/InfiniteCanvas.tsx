@@ -964,7 +964,7 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
     >
       {/* ── Tilt stage: the world layers tip back together when the canvas is
              tilted (store/tiltStore). 'none' when flat — no change at all. ── */}
-      <div data-tilt-stage="world" style={{ position: 'absolute', inset: 0, transformOrigin: '50% 50%', transform: tiltTransform }}>
+      <div data-tilt-stage="world" data-tilted={tiltTransform === 'none' ? undefined : ''} style={{ position: 'absolute', inset: 0, transformOrigin: '50% 50%', transform: tiltTransform }}>
       <DotGrid panX={pan.x} panY={pan.y} />
 
       {/* ── NLE row lines (behind everything, in canvas space) ── */}

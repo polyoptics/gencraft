@@ -50,3 +50,10 @@ body {
 /* The overlay tilt stage (App TiltStage) passes clicks through itself but
    not through its children: they behave exactly as without the wrapper. */
 [data-tilt-stage="overlay"] > * { pointer-events: auto; }
+
+/* While tilted, nothing inside the plane is promoted to its own compositor
+   layer: layers nested under a perspective transform get re-rastered out of
+   step (an animated GIF repainting, a pan) and flash. One flat layer per
+   stage paints as a whole instead. */
+[data-tilt-stage][data-tilted] [style*="will-change"] { will-change: auto !important; }
+[data-tilt-stage][data-tilted] { backface-visibility: hidden; }

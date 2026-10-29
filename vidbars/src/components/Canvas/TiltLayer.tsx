@@ -7,12 +7,12 @@
 // and 3D viewer window stays exactly where it was on the plane.
 //
 // What this layer adds on top, only while tilted:
-//  - a pointer catcher: tilt is for looking, and every hit zone below
-//    assumes the flat view, so here drag pans (grabbing the ground under
-//    the cursor), the wheel zooms about the point under the cursor, and
-//    Alt+drag keeps tilting; Alt+middle-drag pans and Alt+right-drag or
-//    Alt+wheel zooms, so Alt never has to be let go. Esc, the Flat button, or tilting back down
-//    returns to the flat view where editing works as always.
+//  - input remapping: a press on a card or tile is re-sent to it at the
+//    flat point under the cursor, so moving and resizing work on the
+//    ground as they do flat. On bare ground drag pans and the wheel zooms.
+//    Alt+drag tilts; Alt+middle-drag pans and Alt+right-drag or Alt+wheel
+//    zooms, so Alt never has to be let go. Tilting back down to top-down
+//    (or Esc, or Flat) returns to the flat view.
 //  - one three.js canvas that stands each model card's model up above its
 //    card, with the same camera the CSS perspective uses.
 
@@ -195,6 +195,8 @@ interface Standing {
   size: THREE.Vector3
   phase: number
   dead: boolean
+  /** Frame it was last among the targets. */
+  seen: number
 }
 
 const WIRE_MAT = new THREE.MeshBasicMaterial({ color: 0x9fd0ff, wireframe: true, transparent: true, opacity: 0.85 })
@@ -207,46 +209,122 @@ const TiltedView: React.FC = () => {
   const turn = useTiltStore(s => s.turn)
   const tilt = useTiltStore(s => s.tilt)
 
-  // ── Pan + zoom on the tilted plane ──
+  // ── Working on the tilted plane ──
+  // The browser hit-tests the tilted DOM correctly, so a press lands on the
+  // card under the cursor. Everything that card does with the press,
+  // though, is flat-view math on clientX/Y. So the press and every move
+  // and release that follow are re-sent to it at the FLAT point under the
+  // cursor (the real ones are swallowed): dragging, resizing and
+  // repositioning work on the ground exactly as they do flat.
+  // Bare ground: left or middle drag pans, grabbing the ground under the
+  // cursor. The wheel zooms about the point under it. Right-click is left
+  // alone, so menus open where the cursor is.
   useEffect(() => {
     const root = rootRef.current!
-    const flatAt = (clientX: number, clientY: number) => {
-      const r = root.getBoundingClientRect()
+    const host = hostOf(root)!
+    const flatClient = (cx: number, cy: number) => {
+      const r = host.getBoundingClientRect()
       const { tilt: t, spin: s } = useTiltStore.getState()
-      const p = unprojectTilt(clientX - r.left - r.width / 2, clientY - r.top - r.height / 2, t, s)
-      return p && { x: p.x + r.width / 2, y: p.y + r.height / 2 }
+      const p = unprojectTilt(cx - r.left - r.width / 2, cy - r.top - r.height / 2, t, s)
+      return p && { x: p.x + r.width / 2 + r.left, y: p.y + r.height / 2 + r.top }
+    }
+    /** Pressed on the tilted canvas (not a pinned panel, the HUD, the zoom bar). */
+    const onPlane = (t: EventTarget | null) => {
+      const el = t as Element | null
+      return !!el?.closest?.('[data-tilt-stage]') && hostOf(el) === host
+    }
+    const isBareGround = (t: EventTarget | null) => (t as Element).matches('[data-tilt-stage="world"]')
+
+    const resend = (e: MouseEvent, type: string, to: EventTarget) => {
+      const p = flatClient(e.clientX, e.clientY)
+      if (!p) return
+      const init: PointerEventInit = {
+        bubbles: true, cancelable: true, composed: true, view: window, detail: e.detail,
+        clientX: p.x, clientY: p.y,
+        screenX: e.screenX + (p.x - e.clientX), screenY: e.screenY + (p.y - e.clientY),
+        button: e.button, buttons: e.buttons,
+        altKey: e.altKey, ctrlKey: e.ctrlKey, shiftKey: e.shiftKey, metaKey: e.metaKey,
+      }
+      if (type.startsWith('pointer')) {
+        const pe = e as PointerEvent
+        to.dispatchEvent(new PointerEvent(type, {
+          ...init, pointerId: pe.pointerId, pointerType: pe.pointerType, isPrimary: pe.isPrimary,
+          pressure: pe.pressure, width: pe.width, height: pe.height,
+        }))
+      } else {
+        to.dispatchEvent(new MouseEvent(type, init))
+      }
+    }
+
+    type Gesture =
+      | { kind: 'pan'; last: { x: number; y: number } }
+      | { kind: 'remap'; target: Element; pointerId: number }
+    let g: Gesture | null = null
+    const swallow = (e: Event) => { e.stopImmediatePropagation() }
+
+    const onDown = (e: PointerEvent) => {
+      if (!e.isTrusted || !onPlane(e.target)) return
+      // Alt+left / Alt+right belong to the orbit and dolly gestures.
+      if (e.altKey && e.button !== 1) return
+      if (e.button === 1 || (e.button === 0 && isBareGround(e.target))) {
+        e.preventDefault(); swallow(e)
+        g = { kind: 'pan', last: { x: e.clientX, y: e.clientY } }
+        return
+      }
+      if (e.button !== 0) return
+      // preventDefault also stops the browser's own mousedown/move/up for
+      // this press — they are re-sent below at the flat point instead.
+      e.preventDefault(); swallow(e)
+      const target = e.target as Element
+      g = { kind: 'remap', target, pointerId: e.pointerId }
+      resend(e, 'pointerdown', target)
+      resend(e, 'mousedown', target)
+    }
+    const onMove = (e: PointerEvent) => {
+      if (!e.isTrusted || !g) return
+      swallow(e)
+      if (g.kind === 'pan') {
+        const a = flatClient(g.last.x, g.last.y), b = flatClient(e.clientX, e.clientY)
+        g.last = { x: e.clientX, y: e.clientY }
+        if (a && b) useCanvasStore.getState().shiftPan(b.x - a.x, b.y - a.y)
+        return
+      }
+      // A card that captured the pointer gets it, as it would flat.
+      const real = e.target as Element
+      const to = real.hasPointerCapture?.(g.pointerId) ? real : g.target
+      resend(e, 'pointermove', to)
+      resend(e, 'mousemove', to)
+    }
+    const onUp = (e: PointerEvent) => {
+      if (!e.isTrusted || !g) return
+      swallow(e)
+      if (g.kind === 'remap') {
+        const real = e.target as Element
+        const to = real.hasPointerCapture?.(g.pointerId) ? real : g.target
+        resend(e, 'pointerup', to)
+        resend(e, 'mouseup', to)
+      }
+      g = null
     }
     const onWheel = (e: WheelEvent) => {
-      e.preventDefault()
-      const p = flatAt(e.clientX, e.clientY)
+      if (!onPlane(e.target)) return
+      e.preventDefault(); swallow(e)
+      const p = flatClient(e.clientX, e.clientY)
       if (!p) return
-      useCanvasStore.getState().zoomAtPoint(e.deltaY < 0 ? 1.12 : 1 / 1.12, p.x, p.y)
+      const r = host.getBoundingClientRect()
+      useCanvasStore.getState().zoomAtPoint(e.deltaY < 0 ? 1.12 : 1 / 1.12, p.x - r.left, p.y - r.top)
     }
-    const onDown = (e: PointerEvent) => {
-      // Left or middle drag pans, Alt held or not (Alt+left is the tilt,
-      // taken before it gets here).
-      if (e.button !== 0 && e.button !== 1) return
-      if ((e.target as Element).closest('[data-tilt-hud]')) return
-      e.preventDefault()
-      root.setPointerCapture(e.pointerId)
-      let last = { x: e.clientX, y: e.clientY }
-      const onMove = (ev: PointerEvent) => {
-        const a = flatAt(last.x, last.y), b = flatAt(ev.clientX, ev.clientY)
-        last = { x: ev.clientX, y: ev.clientY }
-        if (a && b) useCanvasStore.getState().shiftPan(b.x - a.x, b.y - a.y)
-      }
-      const onUp = () => {
-        root.removeEventListener('pointermove', onMove)
-        root.removeEventListener('pointerup', onUp)
-      }
-      root.addEventListener('pointermove', onMove)
-      root.addEventListener('pointerup', onUp)
-    }
-    root.addEventListener('wheel', onWheel, { passive: false })
-    root.addEventListener('pointerdown', onDown)
+    window.addEventListener('pointerdown', onDown, true)
+    window.addEventListener('pointermove', onMove, true)
+    window.addEventListener('pointerup', onUp, true)
+    window.addEventListener('pointercancel', onUp, true)
+    window.addEventListener('wheel', onWheel, { capture: true, passive: false })
     return () => {
-      root.removeEventListener('wheel', onWheel)
-      root.removeEventListener('pointerdown', onDown)
+      window.removeEventListener('pointerdown', onDown, true)
+      window.removeEventListener('pointermove', onMove, true)
+      window.removeEventListener('pointerup', onUp, true)
+      window.removeEventListener('pointercancel', onUp, true)
+      window.removeEventListener('wheel', onWheel, true)
     }
   }, [])
 
@@ -289,7 +367,7 @@ const TiltedView: React.FC = () => {
       const turnG = new THREE.Group()
       stand.add(turnG)
       ground.add(stand)
-      const s: Standing = { url, stand, turn: turnG, inst: null, size: new THREE.Vector3(), phase: Math.random() * 6.28, dead: false }
+      const s: Standing = { url, stand, turn: turnG, inst: null, size: new THREE.Vector3(), phase: Math.random() * 6.28, dead: false, seen: 0 }
       acquireModel(url).then(inst => {
         if (s.dead) { releaseModel(url); disposeInstance(inst); return }
         const box = computePosedBounds(inst)
@@ -311,8 +389,10 @@ const TiltedView: React.FC = () => {
     }
 
     let raf = 0
+    let frameNo = 0
     const frame = (now: number) => {
       raf = requestAnimationFrame(frame)
+      frameNo++
       const W = root.clientWidth, H = root.clientHeight
       if (!W || !H) return
       const { tilt: t, spin: sp, shading: sh, turn: on } = useTiltStore.getState()
@@ -344,7 +424,13 @@ const TiltedView: React.FC = () => {
         s.stand.visible = !!s.inst && ease > 0
         s.turn.rotation.y = on ? now / 1000 * 0.6 + s.phase : 0
       }
-      for (const [key, s] of standing) if (!keep.has(key)) drop(key, s)
+      // A card missing for a frame or two (a re-render, a deck shuffling)
+      // is only hidden: dropping it would reload the model and blink.
+      for (const [key, s] of standing) {
+        if (keep.has(key)) { s.seen = frameNo; continue }
+        s.stand.visible = false
+        if (frameNo - s.seen > 120) drop(key, s)
+      }
       renderer.render(scene, camera)
     }
     raf = requestAnimationFrame(frame)
@@ -368,7 +454,7 @@ const TiltedView: React.FC = () => {
   return (
     <div
       ref={rootRef}
-      style={{ position: 'absolute', inset: 0, zIndex: 850, cursor: 'grab', touchAction: 'none' }}
+      style={{ position: 'absolute', inset: 0, zIndex: 850, pointerEvents: 'none' }}
     >
       <div
         data-tilt-hud
@@ -377,10 +463,10 @@ const TiltedView: React.FC = () => {
           display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px',
           background: 'rgba(19,20,31,0.88)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 10,
           color: 'rgba(255,255,255,0.5)', fontSize: 11, cursor: 'default', userSelect: 'none',
-          whiteSpace: 'nowrap',
+          whiteSpace: 'nowrap', pointerEvents: 'auto',
         }}
       >
-        <span>Tilted {Math.round(tilt)}° · drag to pan · scroll to zoom · Alt+drag to tilt and turn</span>
+        <span>Tilted {Math.round(tilt)}° · drag cards to move them · drag the ground to pan · scroll to zoom · Alt+drag to orbit</span>
         <span style={{ width: 1, height: 14, background: 'rgba(255,255,255,0.12)' }} />
         {(['textured', 'shaded', 'wire'] as const).map(m => (
           <button key={m} style={btn(shading === m)} onClick={() => set.setShading(m)}>

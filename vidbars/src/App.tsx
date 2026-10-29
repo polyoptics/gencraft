@@ -786,7 +786,7 @@ export default function App() {
 function TiltStage({ children }: { children: React.ReactNode }) {
   const transform = useTiltStore(s => tiltCss(s.tilt, s.spin))
   return (
-    <div data-tilt-stage="overlay" style={{ position: 'absolute', inset: 0, pointerEvents: 'none', transformOrigin: '50% 50%', transform }}>
+    <div data-tilt-stage="overlay" data-tilted={transform === 'none' ? undefined : ''} style={{ position: 'absolute', inset: 0, pointerEvents: 'none', transformOrigin: '50% 50%', transform }}>
       {children}
     </div>
   )
