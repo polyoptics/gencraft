@@ -45,8 +45,10 @@ type InputItem = NonNullable<EffectItem['inputs']>[number]
  *  card's fallback, no Segment card means no mask, a Combine card off means
  *  no looks. Soloed, a card is the only one that runs, on the picture, with
  *  its own inputs (as a solo in the strip's own row already is in
- *  planChain), wherever it is. The strip's own row keeps its off cards
- *  (planChain skips them, so a skipped blend still takes its partner).
+ *  planChain), wherever it is — and a soloed card switched OFF leaves
+ *  nothing running: the original picture, until it is switched back on.
+ *  The strip's own row keeps its off cards (planChain skips them, so a
+ *  skipped blend still takes its partner).
  *  runChain reads every strip through this, look rows included. */
 export function effectiveItems(items: ChainItem[]): ChainItem[] {
   const on = <T extends { off?: boolean }>(x: T) => !x.off
@@ -65,26 +67,30 @@ export function effectiveItems(items: ChainItem[]): ChainItem[] {
   const find = (list: EffectItem[]) => {
     for (const it of list) {
       if (nested) return
-      const inp = (it.inputs as InputItem[] | undefined)?.find(x => x.solo && !x.off)
-      if (inp) { nested = { id: inp.id, kind: 'effect', effect: inp.effect, params: inp.params, text: inp.text }; return }
+      const inp = (it.inputs as InputItem[] | undefined)?.find(x => x.solo)
+      if (inp) { nested = { id: inp.id, kind: 'effect', effect: inp.effect, params: inp.params, text: inp.text, off: inp.off }; return }
       for (const row of it.rows ?? []) {
-        const s = row.find(x => x.solo && !x.off)
+        const s = row.find(x => x.solo)
         if (s) { nested = s; return }
         find(row)
       }
     }
   }
   const effects = items.filter((it): it is EffectItem => it.kind === 'effect')
-  if (!effects.some(it => it.solo && !it.off)) find(effects)
+  if (!effects.some(it => it.solo)) find(effects)
   const out = items.map(it => (it.kind === 'effect' ? clean(it) : it))
   if (!nested) return out
+  // The soloed card is switched off: nothing runs — every card of the
+  // strip's row stands aside (off), and the soloed one is not added.
+  if ((nested as EffectItem).off) return out.map(it => (it.kind === 'effect' ? { ...it, solo: false, off: true } : it))
   // Every card of the strip's row stands aside; the soloed one runs alone.
   return [...out.map(it => (it.kind === 'effect' ? { ...it, solo: false } : it)), { ...clean(nested as EffectItem), solo: true, off: false }]
 }
 
 /** Read a left-to-right strip into sources and steps (no pixels yet).
  *  An effect switched off is skipped; when one is soloed, it is the only
- *  effect that runs. A blend skipped either way still takes the picture
+ *  effect that runs — or, the soloed one switched off, none does. A blend
+ *  skipped either way still takes the picture
  *  after it — that picture is its partner, not a new batch picture — and
  *  mixes nothing in. */
 export function planChain(items: ChainItem[]): ChainPlan {
@@ -100,7 +106,7 @@ export function planChain(items: ChainItem[]): ChainPlan {
     const item = { ...it, effect: knownKind(it.effect) }
     let other: ChainPlan['steps'][number]['other'] = null
     if (EFFECTS[item.effect].blend && items[i + 1]?.kind === 'source') other = items[++i] as never
-    if (soloed ? !it.solo : it.off) continue
+    if (soloed ? !it.solo || it.off : it.off) continue
     plan.steps.push({ item, other })
   }
   return plan

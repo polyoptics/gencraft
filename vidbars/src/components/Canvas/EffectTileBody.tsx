@@ -209,13 +209,15 @@ export const EffectTileBody: React.FC<{
       background: mixIntoGround(def.color, 0.16), color: '#fff',
       position: 'relative',
     }}>
-      {/* ── On/off and solo, top-right of the card. Off: skipped in its
-              chain; solo: the only effect its chain runs (one per chain).
-              The face dims when this effect is not running. ── */}
+      {/* ── On/off and solo, top-LEFT of the card (an effect card's own
+              pen and drag-out grip hold its top-right). Off: skipped in its
+              chain; solo: the only effect its chain runs (one per chain) —
+              and switched off while soloed, nothing runs. The face dims
+              when this effect is not running. ── */}
       {(off || muted) && (
         <div style={{ position: 'absolute', inset: 0, zIndex: CONTROL_Z - 1, background: 'rgba(10,11,18,0.55)', pointerEvents: 'none' }} />
       )}
-      <div style={{ position: 'absolute', zIndex: CONTROL_Z + 1, top: 1.5 * u, right: 1.5 * u, display: 'flex', gap: 1.2 * u }}>
+      <div style={{ position: 'absolute', zIndex: CONTROL_Z + 1, top: 1.5 * u, left: 1.5 * u, display: 'flex', gap: 1.2 * u }}>
         <button
           type="button" data-fx-onoff={off ? 'off' : 'on'}
           title={off ? 'Switched off — click to switch on' : 'Switch this effect off'}
@@ -259,10 +261,11 @@ export const EffectTileBody: React.FC<{
             tooltip, the only place the strip error reads on the card,
             included. The ⚠ comes first so it holds the corner: "…" blinks
             on and off with every re-run, and would shove it sideways while
-            it is being hovered. CONTROL_Z lifts the marks over the nw resize
-            corner the way it lifts the rows. */}
+            it is being hovered. Just right of the on/off and solo buttons.
+            CONTROL_Z lifts the marks over the nw resize corner the way it
+            lifts the rows. */}
         {(strip?.running || error) && (
-          <div style={{ position: 'absolute', zIndex: CONTROL_Z, top: 1.5 * u, left: 2.5 * u, display: 'flex', gap: 1.5 * u, fontSize: 7 * u, lineHeight: 1 }}>
+          <div style={{ position: 'absolute', zIndex: CONTROL_Z, top: 1.5 * u, left: 17 * u, display: 'flex', gap: 1.5 * u, fontSize: 7 * u, lineHeight: 1 }}>
             {/* VS15 keeps the warning sign a text glyph, not an emoji. */}
             {error && <span title={error} style={{ color: '#ff9b9b', textShadow: shadow }}>{'⚠︎'}</span>}
             {strip?.running && <span title="Working…" style={{ opacity: 0.7 }}>…</span>}
