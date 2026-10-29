@@ -451,7 +451,10 @@ function createWindow() {
     height: 1000,
     backgroundColor: '#1e1e1e',
     show: false,
-    autoHideMenuBar: true,
+    // Alt is the canvas camera key (tilt), so it must not pop the menu
+    // bar: the menu stays (its shortcuts, like reload and DevTools, still
+    // work) but its bar is never shown — see setMenuBarVisibility below.
+    autoHideMenuBar: false,
     title: 'VidBars',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
@@ -460,6 +463,8 @@ function createWindow() {
       sandbox: true,
     },
   })
+
+  win.setMenuBarVisibility(false)
 
   win.once('ready-to-show', () => { if (!SELFTEST) win.show() })
 
