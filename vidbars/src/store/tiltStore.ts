@@ -30,9 +30,15 @@ interface TiltStore {
   shading: TiltShading
   /** Models turn slowly on their card. */
   turn: boolean
+  /** A back wall on each model card with its file name and size. */
+  walls: boolean
+  /** A person beside each model, for scale. */
+  figure: boolean
   setView: (tilt: number, spin: number) => void
   setShading: (s: TiltShading) => void
   setTurn: (on: boolean) => void
+  setWalls: (on: boolean) => void
+  setFigure: (on: boolean) => void
   /** Ease back to the flat view. */
   flatten: () => void
 }
@@ -44,12 +50,16 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
   spin: 0,
   shading: 'textured',
   turn: true,
+  walls: true,
+  figure: false,
   setView: (tilt, spin) => {
     if (flattenRaf !== null) { cancelAnimationFrame(flattenRaf); flattenRaf = null }
     set({ tilt: Math.max(0, Math.min(TILT_MAX, tilt)), spin })
   },
   setShading: shading => set({ shading }),
   setTurn: turn => set({ turn }),
+  setWalls: walls => set({ walls }),
+  setFigure: figure => set({ figure }),
   flatten: () => {
     if (flattenRaf !== null) cancelAnimationFrame(flattenRaf)
     const { tilt: t0, spin: s0raw } = get()

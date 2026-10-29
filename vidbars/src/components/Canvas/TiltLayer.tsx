@@ -17,16 +17,14 @@
 //    card, with the same camera the CSS perspective uses.
 
 import React, { useEffect, useRef } from 'react'
-import * as THREE from 'three'
 import {
-  useTiltStore, isTilted, unprojectTilt, TILT_PERSPECTIVE, TILT_SNAP, type TiltShading,
+  useTiltStore, isTilted, unprojectTilt, TILT_SNAP,
 } from '../../store/tiltStore'
 import { useCanvasStore, groupBounds, MIN_ZOOM, MAX_ZOOM } from '../../store/canvasStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useBoardsStore } from '../../store/boardsStore'
 import { getMediaItems } from '../../types/bar'
-import { acquireModel, releaseModel, disposeInstance } from '../../three/modelCache'
-import { computePosedBounds } from '../../three/orbitState'
+import { createTiltScene, type TiltTarget } from '../../three/tiltScene'
 
 /** Degrees of tilt / turn per pixel of Alt+drag. */
 const DRAG_DEG = 0.25
@@ -206,7 +204,6 @@ export const TiltLayer: React.FC = () => {
 
 // ── Model cards ──
 
-interface Target { key: string; url: string; u: number; v: number; w: number }
 
 /** Offset of `el` inside `stage`, in layout px — offsets ignore transforms,
  *  so this is where the card sits on the FLAT plane even while tilted. */
@@ -220,7 +217,10 @@ function offsetIn(el: HTMLElement, stage: HTMLElement): { x: number; y: number }
   return e === stage ? { x, y } : null
 }
 
-function cardModelUrl(id: string): string | null {
+/** A file's name from its url — nothing for a `mediaref:` (it has none). */
+const fileName = (url: string) => /^mediaref:/.test(url) ? '' : decodeURIComponent(url.split(/[\\/]/).pop()!.split('?')[0])
+
+function cardModel(id: string): { url: string; name: string } | null {
   const bs = useBoardsStore.getState()
   const g = bs.groups.find(gr => gr.id === id)
   for (const bid of g ? g.boardIds : [id]) {
@@ -228,15 +228,15 @@ function cardModelUrl(id: string): string | null {
     if (!board) continue
     for (const bar of Object.values(board.bars)) {
       const m = getMediaItems(bar.content).find(it => it.type === 'model')
-      if (m) return m.url
+      if (m) return { url: m.url, name: m.originalName || fileName(m.url) || g?.name || 'Model' }
     }
   }
   return null
 }
 
 /** Every model card in view, as flat px from the host centre. */
-function collectTargets(W: number, H: number): Target[] {
-  const out: Target[] = []
+function collectTargets(W: number, H: number): TiltTarget[] {
+  const out: TiltTarget[] = []
   const { pan, zoom } = useCanvasStore.getState()
   for (const n of Object.values(useFreeNodeStore.getState().nodes)) {
     if (n.type !== 'model' || n.pin || !n.imageUrl) continue
@@ -245,19 +245,22 @@ function collectTargets(W: number, H: number): Target[] {
       u: pan.x + (n.x + n.width / 2) * zoom - W / 2,
       v: pan.y + (n.y + n.height / 2) * zoom - H / 2,
       w: Math.min(n.width, n.height * 1.4) * zoom,
+      h: n.height * zoom,
+      name: fileName(n.imageUrl) || n.label || 'Model',
     })
   }
   const stage = document.querySelector<HTMLElement>('[data-tilt-stage="overlay"]')
   if (stage) {
     for (const el of stage.querySelectorAll<HTMLElement>('[data-group-card][data-id]')) {
-      const url = cardModelUrl(el.dataset.id!)
-      const at = url && offsetIn(el, stage)
-      if (!url || !at) continue
+      const model = cardModel(el.dataset.id!)
+      const at = model && offsetIn(el, stage)
+      if (!model || !at) continue
       out.push({
-        key: `card:${el.dataset.id}`, url,
+        key: `card:${el.dataset.id}`, url: model.url, name: model.name,
         u: at.x + el.offsetWidth / 2 - W / 2,
         v: at.y + el.offsetHeight / 2 - H / 2,
         w: Math.min(el.offsetWidth, el.offsetHeight * 1.4),
+        h: el.offsetHeight,
       })
     }
   }
@@ -266,26 +269,29 @@ function collectTargets(W: number, H: number): Target[] {
     .slice(0, MAX_MODELS)
 }
 
-interface Standing {
-  url: string
-  stand: THREE.Group      // on the plane; local +Y is the plane's normal
-  turn: THREE.Group       // turntable about that normal
-  inst: THREE.Object3D | null
-  size: THREE.Vector3
-  phase: number
-  dead: boolean
-  /** Frame it was last among the targets. */
-  seen: number
-}
 
-const WIRE_MAT = new THREE.MeshBasicMaterial({ color: 0x9fd0ff, wireframe: true, transparent: true, opacity: 0.85 })
-const SHADED_MAT = new THREE.MeshStandardMaterial({ color: 0xc8ccd8, roughness: 0.75, metalness: 0 })
-const overrideFor = (s: TiltShading) => s === 'wire' ? WIRE_MAT : s === 'shaded' ? SHADED_MAT : null
+/** Select the card or tile a model stands on. */
+function selectModel(key: string, add: boolean) {
+  const [kind, id] = [key.slice(0, key.indexOf(':')), key.slice(key.indexOf(':') + 1)]
+  const fs = useFreeNodeStore.getState(), bs = useBoardsStore.getState()
+  if (kind === 'node') {
+    fs.setFreeSelection(add ? [...new Set([...fs.selectedIds, id])] : [id])
+    if (!add) bs.clearGroupSelection()
+  } else {
+    bs.setSelectedGroups(add ? [...new Set([...bs.selectedGroupIds, id])] : [id])
+    if (!add) fs.setFreeSelection([])
+  }
+}
 
 const TiltedView: React.FC = () => {
   const rootRef = useRef<HTMLDivElement>(null)
+  /** Hit test into the 3D models: their key at a client point, or null. */
+  const pickRef = useRef<((x: number, y: number) => string | null) | null>(null)
+  const hoverRef = useRef<string | null>(null)
   const shading = useTiltStore(s => s.shading)
   const turn = useTiltStore(s => s.turn)
+  const walls = useTiltStore(s => s.walls)
+  const figure = useTiltStore(s => s.figure)
   const tilt = useTiltStore(s => s.tilt)
 
   // ── Working on the tilted plane ──
@@ -342,7 +348,18 @@ const TiltedView: React.FC = () => {
     const swallow = (e: Event) => { e.stopImmediatePropagation() }
 
     const onDown = (e: PointerEvent) => {
-      if (!e.isTrusted || !onPlane(e.target)) return
+      if (!e.isTrusted) return
+      // A model is clicked straight in 3D: it selects its card or tile
+      // (Shift adds to the selection).
+      if (e.button === 0 && !e.altKey && hostOf(e.target as Element) === host && !(e.target as Element).closest('[data-tilt-hud]')) {
+        const key = pickRef.current?.(e.clientX, e.clientY)
+        if (key) {
+          e.preventDefault(); swallow(e)
+          selectModel(key, e.shiftKey)
+          return
+        }
+      }
+      if (!onPlane(e.target)) return
       // Alt+left / Alt+right belong to the orbit and dolly gestures.
       if (e.altKey && e.button !== 1) return
       if (e.button === 1 || (e.button === 0 && isBareGround(e.target))) {
@@ -360,7 +377,13 @@ const TiltedView: React.FC = () => {
       resend(e, 'mousedown', target)
     }
     const onMove = (e: PointerEvent) => {
-      if (!e.isTrusted || !g) return
+      if (!e.isTrusted) return
+      if (!g) {
+        hoverRef.current = e.buttons === 0 && hostOf(e.target as Element) === host
+          ? pickRef.current?.(e.clientX, e.clientY) ?? null
+          : null
+        return
+      }
       swallow(e)
       if (g.kind === 'pan') {
         const a = flatClient(g.last.x, g.last.y), b = flatClient(e.clientX, e.clientY)
@@ -407,7 +430,7 @@ const TiltedView: React.FC = () => {
     }
   }, [])
 
-  // ── Models standing on their cards ──
+  // ── Models standing on their cards (three/tiltScene) ──
   useEffect(() => {
     // A fresh canvas per mount: a canvas whose context was lost (cleanup
     // below) can never give a working one again, and StrictMode remounts.
@@ -415,109 +438,37 @@ const TiltedView: React.FC = () => {
     const canvas = document.createElement('canvas')
     Object.assign(canvas.style, { position: 'absolute', inset: '0', width: '100%', height: '100%', pointerEvents: 'none' })
     root.prepend(canvas)
-    let renderer: THREE.WebGLRenderer
+    let view: ReturnType<typeof createTiltScene>
     try {
-      renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true })
+      view = createTiltScene(canvas)
     } catch {
       canvas.remove()   // no WebGL: the plane still tilts, models stay flat
       return
     }
-    renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1))
-    renderer.setClearColor(0x000000, 0)
-    const scene = new THREE.Scene()
-    scene.add(new THREE.HemisphereLight(0xffffff, 0x444466, 1.2))
-    const sun = new THREE.DirectionalLight(0xffffff, 1.5)
-    sun.position.set(300, 800, 900)
-    scene.add(sun)
-    const camera = new THREE.PerspectiveCamera(50, 1, 10, TILT_PERSPECTIVE * 20)
-    camera.position.set(0, 0, TILT_PERSPECTIVE)
-    // The plane: CSS rotateX(t) rotateZ(s), carried from CSS's y-down
-    // space into three's y-up space (F·R·F, F = flip y).
-    const ground = new THREE.Group()
-    ground.matrixAutoUpdate = false
-    scene.add(ground)
-    const F = new THREE.Matrix4().makeScale(1, -1, 1)
-    const R = new THREE.Matrix4(), Rz = new THREE.Matrix4()
-
-    const standing = new Map<string, Standing>()
-    const spawn = (key: string, url: string): Standing => {
-      const stand = new THREE.Group()
-      stand.rotation.x = Math.PI / 2   // model +Y → plane normal; its front faces the viewer
-      const turnG = new THREE.Group()
-      stand.add(turnG)
-      ground.add(stand)
-      const s: Standing = { url, stand, turn: turnG, inst: null, size: new THREE.Vector3(), phase: Math.random() * 6.28, dead: false, seen: 0 }
-      acquireModel(url).then(inst => {
-        if (s.dead) { releaseModel(url); disposeInstance(inst); return }
-        const box = computePosedBounds(inst)
-        const c = box.getCenter(new THREE.Vector3())
-        box.getSize(s.size)
-        // Feet on the card, centred on it.
-        inst.position.set(-c.x, -box.min.y, -c.z)
-        turnG.add(inst)
-        s.inst = inst
-      }).catch(() => { /* unreadable model: the card just stays flat */ })
-      standing.set(key, s)
-      return s
+    pickRef.current = (clientX, clientY) => {
+      const r = root.getBoundingClientRect()
+      return view.pick(clientX - r.left, clientY - r.top)
     }
-    const drop = (key: string, s: Standing) => {
-      s.dead = true
-      s.stand.removeFromParent()
-      if (s.inst) { disposeInstance(s.inst); releaseModel(s.url) }
-      standing.delete(key)
-    }
-
     let raf = 0
-    let frameNo = 0
     const frame = (now: number) => {
       raf = requestAnimationFrame(frame)
-      frameNo++
       const W = root.clientWidth, H = root.clientHeight
       if (!W || !H) return
-      const { tilt: t, spin: sp, shading: sh, turn: on } = useTiltStore.getState()
-      const size = renderer.getSize(new THREE.Vector2())
-      if (size.x !== W || size.y !== H) renderer.setSize(W, H, false)
-      camera.aspect = W / H
-      camera.fov = 2 * Math.atan(H / 2 / TILT_PERSPECTIVE) * 180 / Math.PI
-      camera.updateProjectionMatrix()
-      R.makeRotationX(t * Math.PI / 180).multiply(Rz.makeRotationZ(sp * Math.PI / 180))
-      ground.matrix.copy(F).multiply(R).multiply(F)
-      ground.matrixWorldNeedsUpdate = true
-      scene.overrideMaterial = overrideFor(sh)
-
-      // Models rise out of their cards as the plane tips back.
-      const rise = Math.min(1, Math.max(0, (t - 4) / 26))
-      const ease = rise * rise * (3 - 2 * rise)
-      const targets = collectTargets(W, H)
-      const keep = new Set<string>()
-      for (const tg of targets) {
-        keep.add(tg.key)
-        let s = standing.get(tg.key)
-        if (s && s.url !== tg.url) { drop(tg.key, s); s = undefined }
-        if (!s) s = spawn(tg.key, tg.url)
-        s.stand.position.set(tg.u, -tg.v, 0)
-        const foot = Math.max(s.size.x, s.size.z, 1e-6)
-        let k = (tg.w * 0.6) / foot
-        if (s.size.y * k > tg.w * 1.1) k = (tg.w * 1.1) / Math.max(s.size.y, 1e-6)
-        s.stand.scale.set(k, k * Math.max(ease, 0.001), k)
-        s.stand.visible = !!s.inst && ease > 0
-        s.turn.rotation.y = on ? now / 1000 * 0.6 + s.phase : 0
-      }
-      // A card missing for a frame or two (a re-render, a deck shuffling)
-      // is only hidden: dropping it would reload the model and blink.
-      for (const [key, s] of standing) {
-        if (keep.has(key)) { s.seen = frameNo; continue }
-        s.stand.visible = false
-        if (frameNo - s.seen > 120) drop(key, s)
-      }
-      renderer.render(scene, camera)
+      const ts = useTiltStore.getState()
+      const selected = new Set([
+        ...useFreeNodeStore.getState().selectedIds.map(id => `node:${id}`),
+        ...useBoardsStore.getState().selectedGroupIds.map(id => `card:${id}`),
+      ])
+      view.frame(now, W, H, collectTargets(W, H), {
+        tilt: ts.tilt, spin: ts.spin, shading: ts.shading, turn: ts.turn,
+        walls: ts.walls, figure: ts.figure, selected, hovered: hoverRef.current,
+      })
     }
     raf = requestAnimationFrame(frame)
     return () => {
       cancelAnimationFrame(raf)
-      for (const [key, s] of [...standing]) drop(key, s)
-      renderer.dispose()
-      renderer.forceContextLoss()
+      pickRef.current = null
+      view.dispose()
       canvas.remove()
     }
   }, [])
@@ -545,7 +496,7 @@ const TiltedView: React.FC = () => {
           whiteSpace: 'nowrap', pointerEvents: 'auto',
         }}
       >
-        <span>Tilted {Math.round(tilt)}° · drag cards to move them · drag the ground to pan · scroll to zoom · Alt+drag to orbit · F to frame</span>
+        <span>Tilted {Math.round(tilt)}° · click a model to select · Alt+drag orbits · F frames</span>
         <span style={{ width: 1, height: 14, background: 'rgba(255,255,255,0.12)' }} />
         {(['textured', 'shaded', 'wire'] as const).map(m => (
           <button key={m} style={btn(shading === m)} onClick={() => set.setShading(m)}>
@@ -553,6 +504,8 @@ const TiltedView: React.FC = () => {
           </button>
         ))}
         <button style={btn(turn)} onClick={() => set.setTurn(!turn)}>Turn</button>
+        <button style={btn(walls)} onClick={() => set.setWalls(!walls)} title="File name and size on a wall behind each model">Labels</button>
+        <button style={btn(figure)} onClick={() => set.setFigure(!figure)} title="A 1.75 m person beside each model, for scale">Person</button>
         <span style={{ width: 1, height: 14, background: 'rgba(255,255,255,0.12)' }} />
         <button style={btn(true)} onClick={() => set.flatten()}>Flat (Esc)</button>
       </div>
