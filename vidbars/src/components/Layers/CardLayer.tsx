@@ -42,7 +42,7 @@ import { useResolvedMedia } from '../../utils/useResolvedMedia'
 import type { MediaItem } from '../../types/bar'
 import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
 import { getFirstImageUrl } from '../../types/bar'
-import { groupFaceSource, groupImageSources, deckFaceSources, deckImageSources, cardGripUrl as cardGripUrlOf } from '../../utils/mediaSources'
+import { groupFaceSource, groupImageSources, deckImageSources, cardGripUrl as cardGripUrlOf } from '../../utils/mediaSources'
 import { DragOutGrip } from '../UI/DragOutGrip'
 import { hexToHsl, hslToHex, selectionHighlight } from '../../utils/colorUtils'
 import { cssUrl } from '../../utils/diskUrl'
@@ -342,8 +342,8 @@ const Canvas: React.FC = () => <><Viewport3DLayer /><FreeCanvas /></>
 //
 // Hands the file(s) behind a card to another app or a website's upload box.
 // The face is the card's move handle, so leaving the app needs its own grip.
-// You hold what you see — the face's file, then a deck's other faces; Shift
-// hands every image inside instead. Desktop only: DragOutGrip renders
+// You hold what you see — the face's file, on a deck the one face on top;
+// Shift hands every image inside instead. Desktop only: DragOutGrip renders
 // nothing in a plain browser, so hosts mount this unconditionally.
 //
 // Top-right of the BODY, just left of the pen and at its size, so the two
@@ -397,26 +397,38 @@ const CardFaceDragOut: React.FC<{
 }
 
 /** A deck's drag-out urls, read from the live store at dragstart. `ids` in
- *  hand-over order, front card first. Shift reaches into nested sub-decks
- *  too (after the cards you can see) — they are inside it, and travel
- *  with it; the faces are only the cards the deck shows. */
+ *  hand-over order, front card first. Without Shift the deck gives what
+ *  you see: the one face on top, as the arrows left it — nothing else is
+ *  added. Shift reaches every image of every card, nested sub-decks too
+ *  (they are inside it, and travel with it). */
 function deckDragOutUrls(ids: string[], all: boolean): string[] {
   const { groups, boards } = useBoardsStore.getState()
-  const members = (all ? expandWithNestedMembers(ids, groups) : ids)
+  if (!all) return []
+  const members = expandWithNestedMembers(ids, groups)
     .map(id => groups.find(g => g.id === id)).filter(Boolean) as ProjectGroup[]
-  return all ? deckImageSources(members, boards) : deckFaceSources(members, boards)
+  return deckImageSources(members, boards)
 }
 
-/** The url a deck's grip leads with: the first face that can be a file on
- *  disk, else the first such image inside any of its cards. So the grip is
- *  there whenever the deck has anything to give — not only when its front
- *  card shows a picture of its own (a text card, or a poster hero, shows
- *  none) — and the front face still leads when it has one. */
+/** The card on a deck's face: a closed deck shows the member its arrows
+ *  stepped to (utils/cardGrid stepDeckFace), else the front of `ids`. */
+function deckFaceCardOf(ids: string[], groups: ProjectGroup[]): ProjectGroup | undefined {
+  const anchor = groups.find(g => g.id === ids[0])
+  const faceId = anchor?.deckState === 'stacked' && anchor.deckFaceCard && ids.includes(anchor.deckFaceCard)
+    ? anchor.deckFaceCard : ids[0]
+  return groups.find(g => g.id === faceId)
+}
+
+/** The url a deck's grip hands over: the picture on its face — the face
+ *  card's stepped-to block, as the deck draws it. Only when that face has
+ *  no file on disk (a text card, a pasted-in picture) does it fall back to
+ *  the first such image in the deck, so the grip is still there for Shift. */
 function deckGripUrl(ids: string[]): string | null {
   // No desktop bridge, no grip — and no reason to walk every member's bars
   // on each pan/zoom render to find out.
   if (!mayHaveDiskFile('/')) return null
-  return deckDragOutUrls(ids, false).find(mayHaveDiskFile)
+  const { groups, boards } = useBoardsStore.getState()
+  const face = deckFaceCardOf(ids, groups)
+  return (face ? cardGripUrlOf(face, boards, mayHaveDiskFile) : null)
     ?? deckDragOutUrls(ids, true).find(mayHaveDiskFile)
     ?? null
 }
@@ -1757,8 +1769,8 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
             )
           })()}
 
-          {/* Drag-out — ONE grip for the whole deck: the front face, then
-              the faces behind it; Shift, every image in every card. Sized to
+          {/* Drag-out — ONE grip for the whole deck: the face on top, as the
+              arrows left it; Shift, every image in every card. Sized to
               this pen, which keeps its own (unscaled) formula above. Inside
               the face, so its stopped press never reaches onDeckDown. */}
           {(() => {
@@ -2879,7 +2891,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
 
       {/* Drag-out — the same deck grip as the stacked card, on the face as
           it rests: the portal-locked member while one is locked (the face
-          shows it), else the anchor; then the rest in fan order. Not the
+          shows it), else the anchor. Not the
           hovered strip's — the cursor has left the strip to reach the grip.
           A SIBLING of the primary, not a child: the primary drops beneath
           the surfaced overlay (20) while a portal is locked, and would take

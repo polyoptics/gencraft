@@ -28,9 +28,18 @@ function looksLikeImage(u: string): boolean {
     /\.(png|jpe?g|jfif|webp|gif|avif|bmp|svg|ico|tiff?|heic|jxl)$/i.test(p)
 }
 
-/** A card's face: its hero override, else the first bar with a picture
- *  (boardIds → rootIds), read for its SOURCE. */
+/** A card's face: the block the arrows stepped it to (faceBoardId — as
+ *  utils/cardGrid cardFaceMedia draws it), else its hero override, else the
+ *  first bar with a picture (boardIds → rootIds), read for its SOURCE. */
 export function groupFaceSource(g: ProjectGroup, boards: Boards): string | null {
+  if (g.faceBoardId && g.boardIds.includes(g.faceBoardId)) {
+    const board = boards[g.faceBoardId]
+    for (const rid of board?.rootIds ?? []) {
+      const content = board.bars[rid]?.content
+      const m = getMediaItems(content).find(x => x.type === 'image' || x.type === 'video')
+      if (m) return m.url
+    }
+  }
   if (g.cardHeroImage) return g.cardHeroImage
   for (const bid of g.boardIds) {
     const board = boards[bid]
