@@ -51,8 +51,10 @@ function useAltTiltGesture() {
       altUsed = true
       const { tilt: t0, spin: s0 } = useTiltStore.getState()
       const x0 = e.clientX, y0 = e.clientY
+      // Orbit like Blender/Maya: you grab the near part of the ground —
+      // drag up tips it away, drag right swings it right.
       const onMove = (ev: PointerEvent) => {
-        useTiltStore.getState().setView(t0 - (ev.clientY - y0) * DRAG_DEG, s0 + (ev.clientX - x0) * DRAG_DEG)
+        useTiltStore.getState().setView(t0 - (ev.clientY - y0) * DRAG_DEG, s0 - (ev.clientX - x0) * DRAG_DEG)
       }
       const onUp = () => {
         window.removeEventListener('pointermove', onMove, true)
