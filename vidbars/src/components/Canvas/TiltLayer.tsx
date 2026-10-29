@@ -10,7 +10,8 @@
 //  - a pointer catcher: tilt is for looking, and every hit zone below
 //    assumes the flat view, so here drag pans (grabbing the ground under
 //    the cursor), the wheel zooms about the point under the cursor, and
-//    Alt+drag keeps tilting. Esc, the Flat button, or tilting back down
+//    Alt+drag keeps tilting; Alt+middle-drag pans and Alt+right-drag or
+//    Alt+wheel zooms, so Alt never has to be let go. Esc, the Flat button, or tilting back down
 //    returns to the flat view where editing works as always.
 //  - one three.js canvas that stands each model card's model up above its
 //    card, with the same camera the CSS perspective uses.
@@ -40,8 +41,9 @@ const hostOf = (el: Element | null) => el?.closest('[data-zoom-bar-host]') as HT
 function useAltTiltGesture() {
   useEffect(() => {
     let altUsed = false
+    let swallowMenu = false
     const onDown = (e: PointerEvent) => {
-      if (e.button !== 0 || !e.altKey) return
+      if ((e.button !== 0 && e.button !== 2) || !e.altKey) return
       const target = e.target as Element | null
       const host = hostOf(target)
       if (!host) return
@@ -49,6 +51,7 @@ function useAltTiltGesture() {
       e.preventDefault()
       e.stopPropagation()
       altUsed = true
+      if (e.button === 2) { dolly(e, host); swallowMenu = true; return }
       const { tilt: t0, spin: s0 } = useTiltStore.getState()
       const x0 = e.clientX, y0 = e.clientY
       // Orbit like Blender/Maya: you grab the near part of the ground —
@@ -75,15 +78,45 @@ function useAltTiltGesture() {
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
       useTiltStore.getState().flatten()
     }
+    // Alt+right-drag zooms; the right button's context menu must not open
+    // when it lets go.
+    const onMenu = (e: MouseEvent) => {
+      if (swallowMenu) { e.preventDefault(); e.stopPropagation(); swallowMenu = false }
+    }
     window.addEventListener('pointerdown', onDown, true)
+    window.addEventListener('contextmenu', onMenu, true)
     window.addEventListener('keyup', onKeyUp, true)
     window.addEventListener('keydown', onKeyDown, true)
     return () => {
       window.removeEventListener('pointerdown', onDown, true)
+      window.removeEventListener('contextmenu', onMenu, true)
       window.removeEventListener('keyup', onKeyUp, true)
       window.removeEventListener('keydown', onKeyDown, true)
     }
   }, [])
+}
+
+/** Alt+right-drag: zoom about the point pressed, flat or tilted (Maya's
+ *  dolly) — right or up zooms in, left or down zooms out. */
+function dolly(e: PointerEvent, host: HTMLElement) {
+  const r = host.getBoundingClientRect()
+  const { tilt, spin } = useTiltStore.getState()
+  const sx = e.clientX - r.left, sy = e.clientY - r.top
+  const flat = isTilted(tilt) ? unprojectTilt(sx - r.width / 2, sy - r.height / 2, tilt, spin) : { x: sx - r.width / 2, y: sy - r.height / 2 }
+  if (!flat) return
+  const px = flat.x + r.width / 2, py = flat.y + r.height / 2
+  let last = { x: e.clientX, y: e.clientY }
+  const onMove = (ev: PointerEvent) => {
+    const d = (ev.clientX - last.x) - (ev.clientY - last.y)
+    last = { x: ev.clientX, y: ev.clientY }
+    if (d) useCanvasStore.getState().zoomAtPoint(Math.exp(d * 0.006), px, py)
+  }
+  const onUp = () => {
+    window.removeEventListener('pointermove', onMove, true)
+    window.removeEventListener('pointerup', onUp, true)
+  }
+  window.addEventListener('pointermove', onMove, true)
+  window.addEventListener('pointerup', onUp, true)
 }
 
 export const TiltLayer: React.FC = () => {
@@ -190,7 +223,9 @@ const TiltedView: React.FC = () => {
       useCanvasStore.getState().zoomAtPoint(e.deltaY < 0 ? 1.12 : 1 / 1.12, p.x, p.y)
     }
     const onDown = (e: PointerEvent) => {
-      if (e.altKey || (e.button !== 0 && e.button !== 1)) return
+      // Left or middle drag pans, Alt held or not (Alt+left is the tilt,
+      // taken before it gets here).
+      if (e.button !== 0 && e.button !== 1) return
       if ((e.target as Element).closest('[data-tilt-hud]')) return
       e.preventDefault()
       root.setPointerCapture(e.pointerId)
