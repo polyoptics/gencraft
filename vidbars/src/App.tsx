@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { InfiniteCanvas } from './components/Canvas/InfiniteCanvas'
 import { NLETimelineViewer } from './components/NLE/NLETimelineViewer'
 import { LayerContent, LayerOverlay } from './components/Layers/LayerRouter'
+import { TiltLayer } from './components/Canvas/TiltLayer'
+import { useTiltStore, tiltCss } from './store/tiltStore'
 import { Viewer } from './components/Viewer/Viewer'
 import { TemplateMenu } from './components/UI/TemplateMenu'
 import { TopIconBar } from './components/UI/TopIconBar'
@@ -741,7 +743,10 @@ export default function App() {
           <LayerContent />
         </InfiniteCanvas>
         {/* Layer overlay renders outside the canvas transform (screen-space headers/cards) */}
-        <LayerOverlay />
+        {/* Tilts with the world layers when the canvas is tilted */}
+        <TiltStage><LayerOverlay /></TiltStage>
+        {/* Tilted view: pan/zoom on the plane + model cards standing up */}
+        <TiltLayer />
         {/* Where Cards / Blocks / Boards begin and end — drag to retune */}
         <ZoomZoneBar />
       </div>
@@ -771,6 +776,18 @@ export default function App() {
       {/* Viewers render outside the canvas so they are fixed to the viewport */}
       <AllViewers />
       <NLETimelineViewer />
+    </div>
+  )
+}
+
+/** Wraps the screen-space layer overlay so it tilts with the world layers
+ *  (same box, origin and transform as InfiniteCanvas's tilt stage). Its
+ *  direct children get pointer-events back in index.css. */
+function TiltStage({ children }: { children: React.ReactNode }) {
+  const transform = useTiltStore(s => tiltCss(s.tilt, s.spin))
+  return (
+    <div data-tilt-stage="overlay" style={{ position: 'absolute', inset: 0, pointerEvents: 'none', transformOrigin: '50% 50%', transform }}>
+      {children}
     </div>
   )
 }

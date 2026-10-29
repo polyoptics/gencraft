@@ -1,5 +1,6 @@
 import React, { useRef, useCallback, useEffect, useState, useDeferredValue, useMemo } from 'react'
 import { useCanvasStore } from '../../store/canvasStore'
+import { useTiltStore, tiltCss } from '../../store/tiltStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { PinLayer } from './PinLayer'
 import { useBoardsStore } from '../../store/boardsStore'
@@ -297,6 +298,7 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
   panRef.current = pan
 
   // Rubber-band selection state (screen coords relative to container)
+  const tiltTransform = useTiltStore(st => tiltCss(st.tilt, st.spin))
   const [rubberBand, setRubberBand] = useState<{ sx: number; sy: number; ex: number; ey: number } | null>(null)
   const rubberBandRef = useRef<{ sx: number; sy: number; ex: number; ey: number } | null>(null)
   const rbStartCanvas = useRef<{ cx: number; cy: number } | null>(null)
@@ -960,6 +962,9 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
         setAddMenu({ sx: e.clientX, sy: e.clientY, cx, cy })
       }}
     >
+      {/* ── Tilt stage: the world layers tip back together when the canvas is
+             tilted (store/tiltStore). 'none' when flat — no change at all. ── */}
+      <div data-tilt-stage="world" style={{ position: 'absolute', inset: 0, transformOrigin: '50% 50%', transform: tiltTransform }}>
       <DotGrid panX={pan.x} panY={pan.y} />
 
       {/* ── NLE row lines (behind everything, in canvas space) ── */}
@@ -981,6 +986,7 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
         }}
       >
         {children}
+      </div>
       </div>
 
       {/* ── Screen-pinned nodes — OUTSIDE the world transform, but the

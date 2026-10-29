@@ -46,3 +46,7 @@ body {
 [data-portal-render], [data-portal-render] * {
   pointer-events: none !important;
 }
+
+/* The overlay tilt stage (App TiltStage) passes clicks through itself but
+   not through its children: they behave exactly as without the wrapper. */
+[data-tilt-stage="overlay"] > * { pointer-events: auto; }
