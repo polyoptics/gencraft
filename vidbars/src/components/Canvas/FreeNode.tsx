@@ -47,7 +47,7 @@ import {
 import { clientToCanvas } from '../../utils/fx/createEffect'
 import { railAtPoint } from './rail/railHit'
 import { copyEffect, hasEffectClip, pasteEffect } from '../../utils/fx/effectClipboard'
-import { snapRailToViewer } from '../../utils/railViewer'
+import { railHeaderBottom, railHeaderCarry, snapRailToViewer } from '../../utils/railViewer'
 
 
 /** Node types whose corner resize keeps the current proportions. A
@@ -314,6 +314,9 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
   const dragStart = useRef({ x: 0, y: 0 })
   /** Where the pointer pressed, client px — a drag is measured from here. */
   const dragPress = useRef({ x: 0, y: 0 })
+  /** A loop strip grabbed by its header: the Viewer it is docked to and
+   *  what that Viewer carries, moved with it (utils/railViewer). */
+  const railCarry = useRef<ReturnType<typeof railHeaderCarry>>(null)
   const wasSelectedOnDown = useRef(false)
   const resizeLastX = useRef(0)
   const resizeLastY = useRef(0)
@@ -382,6 +385,13 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
     railDragOk.current = false
     const at = useFreeNodeStore.getState().nodes[id]
     dragStart.current = { x: at?.x ?? 0, y: at?.y ?? 0 }
+    // A strip on a Viewer is the master: grabbed by its header (the run
+    // arrow band and the column headers) it brings the Viewer and all that
+    // hangs on it; grabbed by its body it goes alone.
+    railCarry.current = null
+    if (at && isRail(at) && !at.pin && clientToCanvas(e.clientX, e.clientY).cy < at.y + railHeaderBottom(at)) {
+      railCarry.current = railHeaderCarry(id, useCanvasStore.getState().zoom)
+    }
     wrapperRef.current?.setPointerCapture(e.pointerId)
   }, [id])
 
@@ -424,6 +434,21 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
       // then the rail owns its box, and moving it would only fight the sync
       // host that puts it back.
       if (self.railDock.lifted) moveFreeNode(id, dx, dy)
+    } else if (railCarry.current && !node?.pin) {
+      // Viewer first, then the strip and the tiles in ONE move, so the
+      // strip is never seen off its Viewer between the two.
+      const carry = railCarry.current
+      for (const wid of carry.windowIds) useViewport3DStore.getState().moveWindow(wid, dx, dy)
+      if (carry.groupIds.length > 0) {
+        const bs = useBoardsStore.getState()
+        bs.setGroupPosBatch(carry.groupIds.flatMap(gid => {
+          const g = bs.groups.find(x => x.id === gid)
+          return g ? [{ groupId: gid, originX: g.originX + dx, originY: g.originY + dy }] : []
+        }))
+      }
+      const inSel = sel.length > 1 && sel.includes(id)
+        ? sel.filter(sid => !all[sid]?.pin && !all[sid]?.railDock) : [id]
+      moveManyFreeNodes([...new Set([...inSel, ...carry.tileIds])], dx, dy)
     } else if (sel.length > 1 && sel.includes(id)) {
       // Docked tiles stay where their rails put them; a selected rail
       // carries its own cards along through the sync host.

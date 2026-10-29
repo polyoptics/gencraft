@@ -12,7 +12,8 @@ import type { FreeNodeData } from '../store/freeNodeStore'
 import { useFreeNodeStore } from '../store/freeNodeStore'
 import { useRailUiStore } from '../store/railUiStore'
 import { useViewport3DStore, type ViewportWindow3D } from '../store/viewport3dStore'
-import { isRail } from './rail'
+import { RAIL_GEOM, isRail } from './rail'
+import { computeCarriedEntities } from '../hooks/useDockedContent'
 import { DOCK_TOLERANCE, magnetRadiusForZoom, viewportVisualRect } from './viewportDocking'
 
 type Nodes = Record<string, FreeNodeData>
@@ -77,4 +78,38 @@ export function snapRailToViewer(railId: string, zoom: number): boolean {
 /** The strip `railId` was just used: it becomes the active one. */
 export function touchRail(railId: string | null | undefined): void {
   if (railId) useRailUiStore.getState().touch(railId)
+}
+
+/** Where a strip's HEADER ends, canvas units below its top: the run arrow
+ *  band and the row of column headers. Grabbed above this, the strip takes
+ *  its Viewer along; grabbed lower, in its body, it moves alone. */
+export function railHeaderBottom(rail: FreeNodeData): number {
+  const u = rail.rail?.unit ?? 1
+  return (RAIL_GEOM.pad + RAIL_GEOM.arrowH + RAIL_GEOM.headH + 4) * u
+}
+
+/** What a strip grabbed by its header carries: the strip is the master, so
+ *  the Viewer it is docked to comes along, with everything magneted to that
+ *  Viewer (computeCarriedEntities, the same set the Viewer's own header
+ *  drag carries) and any other strip docked to it. Null when the strip is
+ *  on no Viewer. Snapshotted at the press; the same delta moves it all. */
+export function railHeaderCarry(railId: string, zoom: number): { windowIds: string[]; tileIds: string[]; groupIds: string[] } | null {
+  const nodes = useFreeNodeStore.getState().nodes
+  const windows = useViewport3DStore.getState().windows
+  const windowIds: string[] = []
+  const tiles = new Set<string>()
+  const groups = new Set<string>()
+  for (const [wid, docked] of railViewerDocks(nodes, windows, zoom)) {
+    if (!docked.includes(railId)) continue
+    windowIds.push(wid)
+    for (const r of docked) tiles.add(r)
+    const c = computeCarriedEntities(wid)
+    for (const t of c.tileIds) tiles.add(t)
+    for (const g of c.groupIds) groups.add(g)
+  }
+  if (!windowIds.length) return null
+  tiles.delete(railId)
+  // Cards on a strip go where their strip goes (the sync host places them).
+  const tileIds = [...tiles].filter(t => !!nodes[t] && !nodes[t].pin && !nodes[t].railDock)
+  return { windowIds, tileIds, groupIds: [...groups] }
 }
