@@ -451,10 +451,8 @@ function createWindow() {
     height: 1000,
     backgroundColor: '#1e1e1e',
     show: false,
-    // Alt is the canvas camera key (tilt), so it must not pop the menu
-    // bar: the menu stays (its shortcuts, like reload and DevTools, still
-    // work) but its bar is never shown — see setMenuBarVisibility below.
-    autoHideMenuBar: false,
+    // Alt is the canvas camera key (tilt), so the window has NO menu at
+    // all (removeMenu below): with no menu, Alt has nothing to show.
     title: 'VidBars',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
@@ -464,12 +462,15 @@ function createWindow() {
     },
   })
 
-  win.setMenuBarVisibility(false)
-  // Belt and braces: a lone Alt press or release never reaches the menu
-  // logic at all. Alt+click / Alt+drag still carry altKey on the mouse
-  // events, which is all the canvas reads.
+  win.removeMenu()
+  // The shortcuts the default menu used to provide, kept by hand.
   win.webContents.on('before-input-event', (e, input) => {
-    if (input.key === 'Alt') e.preventDefault()
+    if (input.type !== 'keyDown') return
+    const ctrl = input.control || input.meta
+    const k = input.key.toLowerCase()
+    if (ctrl && k === 'r') { e.preventDefault(); input.shift ? win.webContents.reloadIgnoringCache() : win.webContents.reload() }
+    else if ((ctrl && input.shift && k === 'i') || input.key === 'F12') { e.preventDefault(); win.webContents.toggleDevTools() }
+    else if (input.key === 'F11') { e.preventDefault(); win.setFullScreen(!win.isFullScreen()) }
   })
 
   win.once('ready-to-show', () => { if (!SELFTEST) win.show() })
