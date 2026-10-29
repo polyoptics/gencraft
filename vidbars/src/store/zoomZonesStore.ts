@@ -147,3 +147,25 @@ export function designZone(zoom: number): ZoomZone {
 /** A zoom written for the default boundaries, moved onto the same level
  *  under the current ones (unchanged when it is already there). */
 export const keepDesignZone = (zoom: number) => zoomInZone(designZone(zoom), zoom)
+
+// ── Saved with a project ────────────────────────────────────────────
+// A project remembers how its zoom was split, so opening it brings back the
+// zones it was worked in. Projects saved before this carry none and leave
+// the current zones alone.
+
+export interface ZoomZonesSnapshot { cardMax: number; blockMax: number }
+
+export function zoomZonesSnapshot(): ZoomZonesSnapshot {
+  const { cardMax, blockMax } = useZoomZonesStore.getState()
+  return { cardMax, blockMax }
+}
+
+/** Restore a project's zones. Returns false (and changes nothing) when the
+ *  project has none or they are not usable numbers. */
+export function applyZoomZonesSnapshot(z: unknown): boolean {
+  const v = z as Partial<ZoomZonesSnapshot> | null | undefined
+  if (!v || typeof v.cardMax !== 'number' || typeof v.blockMax !== 'number'
+    || !isFinite(v.cardMax) || !isFinite(v.blockMax)) return false
+  useZoomZonesStore.setState(clampBoundaries(v.cardMax, v.blockMax))
+  return true
+}

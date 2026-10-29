@@ -10,7 +10,7 @@ import { SCAFFOLDS, instantiateScaffold } from '../../data/scaffolds'
 import type { ScaffoldData } from '../../data/scaffolds'
 import { insertProjectSnapshot } from '../../utils/projectInsert'
 import { getGroupHeight } from '../../utils/nleRows'
-import { keepDesignZone } from '../../store/zoomZonesStore'
+import { keepDesignZone, zoomZonesSnapshot, applyZoomZonesSnapshot } from '../../store/zoomZonesStore'
 
 interface SnapshotMeta { id: string; name: string; savedAt: number; file: string }
 
@@ -113,6 +113,8 @@ export const TemplateMenu: React.FC = () => {
       boardOrder: bs.boardOrder,
       groups: bs.groups,
       freeNodes: fn.nodes,
+      // How the zoom was split between Cards / Blocks / Boards.
+      zoomZones: zoomZonesSnapshot(),
     }
   }
 
@@ -164,7 +166,11 @@ export const TemplateMenu: React.FC = () => {
         useBoardsStore.getState().deleteBoard('primary')
       }
       if (t.freeNodes) useFreeNodeStore.setState({ nodes: t.freeNodes, selectedIds: [] })
-      setZoom(keepDesignZone(t.zoom))
+      // The project's own zoom zones when it saved them — then its zoom is
+      // already on the level it was saved at. Older projects keep the
+      // current zones and are moved onto the level they were made for.
+      if (applyZoomZonesSnapshot(t.zoomZones)) setZoom(t.zoom)
+      else setZoom(keepDesignZone(t.zoom))
       setPan(t.pan)
       if (t.boardPos) setBoardPos(t.boardPos)
       setOpen(false)

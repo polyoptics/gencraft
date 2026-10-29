@@ -19,6 +19,7 @@ import { zip, unzip, type AsyncZippable, type Unzipped } from 'fflate'
 import { useBoardsStore } from '../store/boardsStore'
 import type { BoardData, ProjectGroup } from '../store/boardsStore'
 import { useCanvasStore } from '../store/canvasStore'
+import { zoomZonesSnapshot, applyZoomZonesSnapshot, type ZoomZonesSnapshot } from '../store/zoomZonesStore'
 import { useFreeNodeStore } from '../store/freeNodeStore'
 import { isMediaRef, mediaRefId } from './mediaRef'
 import { getMedia, putMediaWithId } from './mediaStore'
@@ -43,6 +44,9 @@ export interface ProjectBackup {
     boards: { boards: Record<string, unknown>; boardOrder: string[]; groups: unknown[]; version: number }
     freenodes: { nodes: Record<string, unknown>; version: number }
     canvas: { prefs: Record<string, unknown>; version: number }
+    /** Where Cards / Blocks / Boards begin (store/zoomZonesStore). Absent in
+     *  files exported before the zoom bar. */
+    zoomZones?: ZoomZonesSnapshot
   }
 }
 
@@ -88,6 +92,7 @@ function buildBackup(): ProjectBackup {
       boards: { boards, boardOrder: bs.boardOrder, groups: bs.groups, version: BOARDS_VERSION },
       freenodes: { nodes: fn.nodes, version: FREENODES_VERSION },
       canvas: { prefs: canvasPrefs, version: CANVAS_VERSION },
+      zoomZones: zoomZonesSnapshot(),
     },
   }
 }
@@ -192,7 +197,9 @@ function validateBackup(data: unknown): asserts data is ProjectBackup {
  *  normal debounce) and clear transient selection/view state so nothing
  *  dangles against the freshly-loaded ids. UI updates live — no reload. */
 function setBackupState(backup: ProjectBackup): void {
-  const { boards, freenodes, canvas } = backup.stores
+  const { boards, freenodes, canvas, zoomZones } = backup.stores
+  // Before the canvas prefs land, so the saved zoom reads on its own zones.
+  applyZoomZonesSnapshot(zoomZones)
   useBoardsStore.setState({
     boards: boards.boards as never,
     boardOrder: boards.boardOrder,
