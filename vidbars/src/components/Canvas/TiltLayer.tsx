@@ -21,7 +21,7 @@ import * as THREE from 'three'
 import {
   useTiltStore, isTilted, unprojectTilt, TILT_PERSPECTIVE, TILT_SNAP, type TiltShading,
 } from '../../store/tiltStore'
-import { useCanvasStore } from '../../store/canvasStore'
+import { useCanvasStore, groupBounds, MIN_ZOOM, MAX_ZOOM } from '../../store/canvasStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useBoardsStore } from '../../store/boardsStore'
 import { getMediaItems } from '../../types/bar'
@@ -54,10 +54,25 @@ function useAltTiltGesture() {
       if (e.button === 2) { dolly(e, host); swallowMenu = true; return }
       const { tilt: t0, spin: s0 } = useTiltStore.getState()
       const x0 = e.clientX, y0 = e.clientY
+      // Tipping back from flat with something selected makes it the pivot:
+      // the view glides over to centre it while the plane tilts, wherever
+      // on screen it was.
+      const sel = t0 < TILT_SNAP ? frameBox(true) : null
+      const W = host.clientWidth, H = host.clientHeight
+      const { pan, zoom } = useCanvasStore.getState()
+      const cFrom = { x: (W / 2 - pan.x) / zoom, y: (H / 2 - pan.y) / zoom }
+      const cTo = sel && { x: (sel.x0 + sel.x1) / 2, y: (sel.y0 + sel.y1) / 2 }
       // Orbit like Blender/Maya: you grab the near part of the ground —
       // drag up tips it away, drag right swings it right.
       const onMove = (ev: PointerEvent) => {
         useTiltStore.getState().setView(t0 - (ev.clientY - y0) * DRAG_DEG, s0 - (ev.clientX - x0) * DRAG_DEG)
+        if (cTo) {
+          const u = Math.min(1, useTiltStore.getState().tilt / 20)
+          const k = u * u * (3 - 2 * u)
+          const z = useCanvasStore.getState().zoom
+          const cx = cFrom.x + (cTo.x - cFrom.x) * k, cy = cFrom.y + (cTo.y - cFrom.y) * k
+          useCanvasStore.getState().setPan({ x: W / 2 - cx * z, y: H / 2 - cy * z })
+        }
       }
       const onUp = () => {
         window.removeEventListener('pointermove', onMove, true)
@@ -119,8 +134,72 @@ function dolly(e: PointerEvent, host: HTMLElement) {
   window.addEventListener('pointerup', onUp, true)
 }
 
+type Rect = { x: number; y: number; w: number; h: number }
+
+/** Canvas-unit bounds of the selected cards and tiles — or of everything
+ *  on the canvas when nothing is selected. Pinned things never count. */
+function frameBox(onlySelection = false): { x0: number; y0: number; x1: number; y1: number; selected: boolean } | null {
+  const fs = useFreeNodeStore.getState(), bs = useBoardsStore.getState()
+  const pick = (nodeIds: string[], groupIds: string[]) => [
+    ...nodeIds.map(id => fs.nodes[id]).filter(n => n && !n.pin).map(n => ({ x: n.x, y: n.y, w: n.width, h: n.height })),
+    ...groupIds.filter(id => !bs.groups.find(g => g.id === id)?.pin).map(groupBounds),
+  ].filter((r): r is Rect => !!r)
+  let rects = pick(fs.selectedIds, bs.selectedGroupIds)
+  const selected = rects.length > 0
+  if (!selected && !onlySelection) rects = pick(Object.keys(fs.nodes), bs.groups.map(g => g.id))
+  if (!rects.length) return null
+  return {
+    x0: Math.min(...rects.map(r => r.x)), y0: Math.min(...rects.map(r => r.y)),
+    x1: Math.max(...rects.map(r => r.x + r.w)), y1: Math.max(...rects.map(r => r.y + r.h)),
+    selected,
+  }
+}
+
+/** F frames the selection — the cards and tiles selected — in the middle
+ *  of the view, which is also the pivot the tilted view orbits about. With
+ *  nothing selected, F frames everything on the canvas. Flat or tilted. */
+function useFrameKey() {
+  useEffect(() => {
+    let raf: number | null = null
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'f' && e.key !== 'F') return
+      if (e.ctrlKey || e.metaKey || e.altKey || e.repeat) return
+      const t = document.activeElement as HTMLElement | null
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return
+      const host = document.querySelector<HTMLElement>('[data-zoom-bar-host]')
+      if (!host) return
+      const box = frameBox()
+      if (!box) return
+      e.preventDefault()
+      const { x0, y0, x1, y1, selected } = box
+      const W = host.clientWidth, H = host.clientHeight
+      // Tilted, a model stands up out of its card: leave room above it.
+      const fill = selected ? (isTilted(useTiltStore.getState().tilt) ? 0.38 : 0.6) : 0.9
+      const zTo = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.min(W * fill / Math.max(x1 - x0, 1), H * fill / Math.max(y1 - y0, 1))))
+      const cTo = { x: (x0 + x1) / 2, y: (y0 + y1) / 2 }
+      const { pan, zoom: zFrom } = useCanvasStore.getState()
+      const cFrom = { x: (W / 2 - pan.x) / zFrom, y: (H / 2 - pan.y) / zFrom }
+      // Glide: the centre moves straight, the zoom evenly in notches.
+      if (raf !== null) cancelAnimationFrame(raf)
+      const start = performance.now()
+      const tick = () => {
+        const u = Math.min(1, (performance.now() - start) / 380)
+        const k = u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2
+        const z = Math.exp(Math.log(zFrom) + (Math.log(zTo) - Math.log(zFrom)) * k)
+        const cx = cFrom.x + (cTo.x - cFrom.x) * k, cy = cFrom.y + (cTo.y - cFrom.y) * k
+        useCanvasStore.setState({ zoom: z, pan: { x: W / 2 - cx * z, y: H / 2 - cy * z } })
+        raf = u < 1 ? requestAnimationFrame(tick) : null
+      }
+      raf = requestAnimationFrame(tick)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => { window.removeEventListener('keydown', onKeyDown); if (raf !== null) cancelAnimationFrame(raf) }
+  }, [])
+}
+
 export const TiltLayer: React.FC = () => {
   useAltTiltGesture()
+  useFrameKey()
   const tilted = useTiltStore(s => isTilted(s.tilt))
   return tilted ? <TiltedView /> : null
 }
@@ -466,7 +545,7 @@ const TiltedView: React.FC = () => {
           whiteSpace: 'nowrap', pointerEvents: 'auto',
         }}
       >
-        <span>Tilted {Math.round(tilt)}° · drag cards to move them · drag the ground to pan · scroll to zoom · Alt+drag to orbit</span>
+        <span>Tilted {Math.round(tilt)}° · drag cards to move them · drag the ground to pan · scroll to zoom · Alt+drag to orbit · F to frame</span>
         <span style={{ width: 1, height: 14, background: 'rgba(255,255,255,0.12)' }} />
         {(['textured', 'shaded', 'wire'] as const).map(m => (
           <button key={m} style={btn(shading === m)} onClick={() => set.setShading(m)}>

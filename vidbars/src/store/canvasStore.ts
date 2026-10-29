@@ -74,6 +74,41 @@ function animatePanTo(
   jumpAnimRaf = requestAnimationFrame(tick)
 }
 
+/** A card's bounds in canvas units — mirrors GroupCard's geometry math.
+ *  Null when the card has nothing in it to measure. */
+export function groupBounds(groupId: string): { x: number; y: number; w: number; h: number } | null {
+  const bs = useBoardsStore.getState()
+  const group = bs.groups.find(g => g.id === groupId)
+  if (!group) return null
+  const layout = computeGroupLayout(group.boardIds, bs.boards)
+  let minX = Infinity, maxX = -Infinity, topY = Infinity, bottomY = -Infinity
+  for (const bid of group.boardIds) {
+    const board = bs.boards[bid]
+    if (!board) continue
+    const bScale = board.boardScale ?? 1
+    const roots = board.rootIds.map(rid => board.bars[rid]).filter(Boolean)
+    if (roots.length === 0) continue
+    const bx = group.originX + (board.nleX ?? 0)
+    const by = group.originY + getRowY(board.nleRow ?? 0, layout)
+    const rowH = getRowHeight(board.nleRow ?? 0, layout)
+    const rootH = Math.max(...roots.map(b => b.height), DEFAULT_H) * bScale
+    const visualH = Math.max(rowH, rootH)
+    const lo = Math.min(...roots.map(b => b.x))
+    const hi = Math.max(...roots.map(b => b.x + b.width))
+    const l = bx + BOARD_PADDING_X + lo * bScale - 16
+    const r = bx + BOARD_PADDING_X + hi * bScale + 16
+    if (l < minX) minX = l
+    if (r > maxX) maxX = r
+    if (by < topY) topY = by
+    if (by + visualH > bottomY) bottomY = by + visualH
+  }
+  if (minX === Infinity) return null
+
+  const finalW = Math.max(maxX - minX, group.cardWidthOverride ?? 0)
+  const finalH = Math.max(bottomY - topY, group.cardHeightOverride ?? 0)
+  return { x: minX, y: topY, w: finalW, h: finalH }
+}
+
 interface CanvasStore {
   pan: { x: number; y: number }
   zoom: number
@@ -346,35 +381,10 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
       return
     }
 
-    // Compute the group's canvas bounds — mirrors GroupCard's geometry math.
-    const layout = computeGroupLayout(group.boardIds, bs.boards)
-    let minX = Infinity, maxX = -Infinity, topY = Infinity, bottomY = -Infinity
-    for (const bid of group.boardIds) {
-      const board = bs.boards[bid]
-      if (!board) continue
-      const bScale = board.boardScale ?? 1
-      const roots = board.rootIds.map(rid => board.bars[rid]).filter(Boolean)
-      if (roots.length === 0) continue
-      const bx = group.originX + (board.nleX ?? 0)
-      const by = group.originY + getRowY(board.nleRow ?? 0, layout)
-      const rowH = getRowHeight(board.nleRow ?? 0, layout)
-      const rootH = Math.max(...roots.map(b => b.height), DEFAULT_H) * bScale
-      const visualH = Math.max(rowH, rootH)
-      const lo = Math.min(...roots.map(b => b.x))
-      const hi = Math.max(...roots.map(b => b.x + b.width))
-      const l = bx + BOARD_PADDING_X + lo * bScale - 16
-      const r = bx + BOARD_PADDING_X + hi * bScale + 16
-      if (l < minX) minX = l
-      if (r > maxX) maxX = r
-      if (by < topY) topY = by
-      if (by + visualH > bottomY) bottomY = by + visualH
-    }
-    if (minX === Infinity) return // nothing to center on
-
-    const finalW = Math.max(maxX - minX, group.cardWidthOverride ?? 0)
-    const finalH = Math.max(bottomY - topY, group.cardHeightOverride ?? 0)
-    const centerCX = minX + finalW / 2
-    const centerCY = topY + finalH / 2
+    const b = groupBounds(groupId)
+    if (!b) return // nothing to center on
+    const centerCX = b.x + b.w / 2
+    const centerCY = b.y + b.h / 2
 
     const z = get().zoom
     const vpW = window.innerWidth
