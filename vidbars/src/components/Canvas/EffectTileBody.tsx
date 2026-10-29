@@ -25,6 +25,7 @@ import { useAuxStore } from '../../utils/fx/aiEffects'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { EFFECTS, EFFECT_ORDER, effectKindOf, effectParams, type EffectKind, type ParamDef } from '../../utils/fx/effects'
 import { soloedElsewhere, toggleEffectOff, toggleEffectSolo } from '../../utils/fx/effectToggles'
+import { startEffectDragOut } from '../../utils/fx/effectDragOut'
 
 const stop = (e: React.SyntheticEvent) => e.stopPropagation()
 const checkpoint = () => useUndoCoordinator.getState().checkpoint()
@@ -234,6 +235,24 @@ export const EffectTileBody: React.FC<{
           onClick={e => { e.stopPropagation(); toggleEffectSolo(id) }}
           style={toggleStyle(u, solo ? 'rgba(255,205,80,0.95)' : 'rgba(255,255,255,0.12)', solo ? '#1a1404' : 'rgba(255,255,255,0.7)')}
         >S</button>
+        {/* ↑: drag out a copy — into a row, under an effect as its
+            input, onto another strip or a card (utils/fx/effectDragOut). */}
+        <button
+          type="button" data-fx-drag-out
+          title="Drag out a copy of this effect — into a row, under an effect as its input, onto another strip or a card"
+          onPointerDown={e => startEffectDragOut(e, id)}
+          onClick={stop}
+          onDoubleClick={stop}
+          style={{ ...toggleStyle(u, 'rgba(0,0,0,0.45)', 'rgba(255,255,255,0.8)'), cursor: 'grab' }}
+        >
+          {/* The picture cards' drag-out arrow (DragOutGrip). */}
+          <svg width={6 * u} height={6 * u} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" style={{ pointerEvents: 'none' }}>
+            <path d="M12 15V3" />
+            <path d="M7 8l5-5 5 5" />
+            <path d="M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6" />
+          </svg>
+        </button>
       </div>
       {/* ── Art: the glyph on a flat tint. Static on purpose — the result
               is on the picture. Takes whatever height the rows leave. ── */}
@@ -261,11 +280,11 @@ export const EffectTileBody: React.FC<{
             tooltip, the only place the strip error reads on the card,
             included. The ⚠ comes first so it holds the corner: "…" blinks
             on and off with every re-run, and would shove it sideways while
-            it is being hovered. Just right of the on/off and solo buttons.
+            it is being hovered. Just right of the on/off, solo and ↑ buttons.
             CONTROL_Z lifts the marks over the nw resize corner the way it
             lifts the rows. */}
         {(strip?.running || error) && (
-          <div style={{ position: 'absolute', zIndex: CONTROL_Z, top: 1.5 * u, left: 17 * u, display: 'flex', gap: 1.5 * u, fontSize: 7 * u, lineHeight: 1 }}>
+          <div style={{ position: 'absolute', zIndex: CONTROL_Z, top: 1.5 * u, left: 26 * u, display: 'flex', gap: 1.5 * u, fontSize: 7 * u, lineHeight: 1 }}>
             {/* VS15 keeps the warning sign a text glyph, not an emoji. */}
             {error && <span title={error} style={{ color: '#ff9b9b', textShadow: shadow }}>{'⚠︎'}</span>}
             {strip?.running && <span title="Working…" style={{ opacity: 0.7 }}>…</span>}

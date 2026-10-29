@@ -29,6 +29,7 @@ import { clientToCanvas } from '../../utils/fx/createEffect'
 import { createEffectCardGroup } from '../../utils/effectCards'
 import { useBoardsStore } from '../../store/boardsStore'
 import { railAtPoint } from './rail/railHit'
+import { pictureCardAt } from '../../utils/fx/effectDragOut'
 import { railComboAt, railFaceCombo } from '../../utils/fx/railChain'
 import { EFFECTS, effectKindOf } from '../../utils/fx/effects'
 import { parsePhrases } from '../../utils/fx/aiEffects'
@@ -454,18 +455,6 @@ const Badge: React.FC<{ u: number; title?: string; children: React.ReactNode }> 
  *  railDropTarget) — or, an effect let go on a picture card, the end of
  *  that card's effect stack. */
 type SlotDrop = { kind: 'rail'; target: RailDropTarget } | { kind: 'card'; groupId: string }
-
-/** The picture card (not an effect card) under client (x, y), if any. */
-function pictureCardAt(x: number, y: number): string | null {
-  const groups = useBoardsStore.getState().groups
-  for (const el of document.elementsFromPoint(x, y)) {
-    const id = el.closest<HTMLElement>('[data-group-card]')?.dataset.id
-    if (!id) continue
-    const g = groups.find(gr => gr.id === id)
-    return g && !g.effect ? id : null
-  }
-  return null
-}
 
 /** Where on rail `railId` a slot let go at canvas (cx, cy) goes: for an
  *  effect (`tile`), the strip's own drop target — any row, or a side
