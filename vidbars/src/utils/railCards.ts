@@ -269,11 +269,11 @@ export function dockCardsOnRail(ids: string[], t: RailDropTarget): number {
  *  their own, one block per picture in the order given, docked like any
  *  card, and stepped in step with its input (`source`). False when the
  *  rail is gone. */
-export function landResultCard(railId: string, name: string, source: string, results: { url: string; w: number; h: number; label: string }[]): boolean {
+export function landResultCard(railId: string, name: string, source: string, results: { url: string; w: number; h: number; label: string }[]): string | null {
   const rail = useFreeNodeStore.getState().nodes[railId]
-  if (!isRail(rail) || results.length === 0) return false
+  if (!isRail(rail) || results.length === 0) return null
   const gid = createMediaCard({ cx: rail.x, cy: rail.y }, results.map(r => ({ media: { url: r.url, type: 'image' as const }, label: r.label })))
-  if (!gid) return false
+  if (!gid) return null
   const bs = useBoardsStore.getState()
   bs.renameGroup(gid, name)
   // Their shapes are known: lay the grid out now.
@@ -290,7 +290,37 @@ export function landResultCard(railId: string, name: string, source: string, res
   const face = made ? cardEntries(made, st.boards)[at]?.boardId : undefined
   useBoardsStore.setState(s => ({ groups: s.groups.map(x => x.id === gid ? { ...x, railSource: source, faceBoardId: face } : x) }))
   bs.setSelectedGroup(null)
-  return dockCards([gid], { railId, kind: 'column', slotId: RAIL_TRAY, index: Infinity }) > 0
+  return dockCards([gid], { railId, kind: 'column', slotId: RAIL_TRAY, index: Infinity }) > 0 ? gid : null
+}
+
+/** A run's result cards (`gids`, in input order) gathered into ONE closed
+ *  deck on the tray, where the run's single result used to land: the first
+ *  card is its face and stays docked; the others leave the tray, line up
+ *  behind it and close into the deck. It is an ordinary deck — step it,
+ *  fan it, drag it off the strip onto the canvas. A run that made only one
+ *  card leaves it a card. The caller holds the undo checkpoint. */
+export function deckRunResults(gids: string[]): void {
+  const ids = gids.filter(id => useBoardsStore.getState().groups.some(g => g.id === id))
+  if (ids.length < 2) return
+  // Off the tray: only the face is docked there (a deck docks by its face).
+  const fs = useFreeNodeStore.getState()
+  for (const n of standIns(ids.slice(1))) fs.deleteFreeNode(n.id)
+  // Side by side to the right of the face, as an open deck would lie, then
+  // closed: its cards keep that layout to open into (setDeckState).
+  const zoom = useCanvasStore.getState().zoom
+  const rect = (id: string) => {
+    const s = useBoardsStore.getState()
+    const g = s.groups.find(x => x.id === id)
+    return g ? drawnRect(g, s.boards, zoom) : null
+  }
+  const front = rect(ids[0])
+  if (!front) return
+  let x = front.x + front.width
+  for (const id of ids.slice(1)) {
+    placeCard(id, x, front.y)
+    x += rect(id)?.width ?? front.width
+  }
+  useBoardsStore.getState().setDeckState(ids, 'stacked')
 }
 
 /** Result cards step with the card they were made from (`railSource`):

@@ -3,7 +3,8 @@
 // face-up onto the rail's results tray. Results made from a docked CARD's
 // pictures land together as one card (utils/railCards' landResultCard),
 // its pictures in the order they were made — one result card per input
-// card.
+// card — and, the run done, those cards close into one deck on the tray
+// (deckRunResults): the run's results, in input order, to take away whole.
 //
 // One undo step for the whole run: Ctrl+Z afterwards takes every result
 // back off the tray (the files stay on disk, as a saved strip's do). The
@@ -27,7 +28,7 @@ import { useRailRunStore } from '../../store/railRunStore'
 import { onUndoRestore, useUndoCoordinator } from '../../store/undoCoordinator'
 import { usePosterMapStore } from '../../three/posterService'
 import { RAIL_GEOM, RAIL_TRAY, isRail, railMembers } from '../rail'
-import { landResultCard, unitCardId } from '../railCards'
+import { deckRunResults, landResultCard, unitCardId } from '../railCards'
 import { useBoardsStore } from '../../store/boardsStore'
 import { diskFileUrl } from '../diskUrl'
 import { saveCanvasImage } from '../saveImage'
@@ -177,10 +178,15 @@ export async function runRail(railId: string): Promise<void> {
   let checkpointed = false
   // A card's results so far: they land together once its pictures are done.
   let pending: { card: string; name: string; results: { url: string; w: number; h: number; label: string }[] } | null = null
+  /** This run's result cards, in input order: one deck at the end. */
+  const runCards: string[] = []
   const flush = (): boolean => {
     const p = pending
     pending = null
-    return !p || landResultCard(railId, p.name, unitCardId(p.card), p.results)
+    if (!p) return true
+    const gid = landResultCard(railId, p.name, unitCardId(p.card), p.results)
+    if (gid) runCards.push(gid)
+    return !!gid
   }
   const isGone = () => !isRail(useFreeNodeStore.getState().nodes[railId])
   const stopping = () => stopAsked.has(railId) || isGone()
@@ -221,6 +227,9 @@ export async function runRail(railId: string): Promise<void> {
     }
     // The last card's results — also when stopped: what was made is kept.
     if (!gone && !discarded.has(railId) && !flush()) gone = true
+    // The run's result cards, one per input card: gathered into one deck
+    // where the single result used to land (utils/railCards).
+    if (!gone && !discarded.has(railId)) deckRunResults(runCards)
   } catch (err) {
     // Outside any one combination (landing a tile, the store): end the run
     // with the reason rather than leave the arrow spinning.
