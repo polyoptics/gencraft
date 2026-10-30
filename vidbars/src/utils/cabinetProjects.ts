@@ -280,7 +280,11 @@ export function takeProjectOutBelow(ref: DrawerRef, copy = false) {
     const map = drawerOf(ref)?.project?.map
     if (!map) return
     const host = document.querySelector('[data-tilt-stage="world"]')?.parentElement?.getBoundingClientRect()
-    if (host) cs.setPan({ x: host.width / 2 - (x + map.w / 2) * cs.zoom, y: host.height / 2 - (y + map.h / 2) * cs.zoom })
+    if (!host) return
+    // All of it in view: a whole project is usually far bigger than the screen.
+    const zoom = Math.min(cs.zoom, 0.9 * Math.min(host.width / map.w, host.height / map.h))
+    if (zoom !== cs.zoom) cs.setZoom(zoom)
+    cs.setPan({ x: host.width / 2 - (x + map.w / 2) * zoom, y: host.height / 2 - (y + map.h / 2) * zoom })
   })
 }
 
