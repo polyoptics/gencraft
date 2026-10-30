@@ -39,6 +39,8 @@ interface PoolDragPayload {
 }
 
 const POOL_KINDS: readonly MediaType[] = ['image', 'video', 'audio', 'model']
+/** Media that comes in as a card of its own (dropAsCards). */
+const CARD_KINDS: readonly MediaType[] = ['image', 'video', 'model']
 
 /** Parse a pool payload defensively — a drag can carry text from anywhere,
  *  and a malformed one must fall through to the file path rather than
@@ -530,24 +532,23 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
     return nodeId
   }, [addFreeNode, updateFreeNode, setFreeSelection])
 
-  /** Cards-first: what comes in onto bare canvas becomes a CARD — a picture
-   *  or a video, one card each (utils/cardGrid), side by side from the drop
-   *  point, the first centred on it. Anything else (audio, 3D) is still a
-   *  tile. One undo step for the lot. Files upload first: a card is made
+  /** Cards-first: what comes in onto bare canvas becomes a CARD — a picture,
+   *  a video or a 3D model, one card each (utils/cardGrid), side by side from
+   *  the drop point, the first centred on it. Audio is still a tile. One undo step for the lot. Files upload first: a card is made
    *  around the media it holds. Returns nothing to deal onto a rail — a drop
    *  over a loop strip keeps making tiles (see handleDrop). */
   const dropAsCards = useCallback((e: React.DragEvent, files: File[], pool?: PoolDragPayload) => {
     const at = clientToCanvas(e.clientX, e.clientY)
     const step = cardFaceSize().w * 1.08
     if (pool) {
-      if (pool.kind !== 'image' && pool.kind !== 'video') { dropPoolItem(e, pool); return }
+      if (!CARD_KINDS.includes(pool.kind)) { dropPoolItem(e, pool); return }
       useUndoCoordinator.getState().checkpoint()
       const label = pool.label.replace(/\.[^.]+$/, '')
       const gid = createMediaCard(at, [{ media: { url: pool.url, type: pool.kind, originalName: pool.label }, label }])
       if (gid) useBoardsStore.getState().setSelectedGroup(gid)
       return
     }
-    const media = files.filter(f => { const t = classifyFile(f); return t === 'image' || t === 'video' })
+    const media = files.filter(f => CARD_KINDS.includes(classifyFile(f)))
     const rest = files.filter(f => !media.includes(f))
     if (rest.length) dropOnBareCanvas(e, rest)
     if (media.length === 0) return

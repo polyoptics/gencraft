@@ -19,6 +19,7 @@ import { useCanvasStore } from '../store/canvasStore'
 import { createScaleFor } from './canvasCreate'
 import { loadImage } from './fx/chain'
 import { getMediaItems, type MediaItem } from '../types/bar'
+import { ensureModelPoster } from '../three/posterService'
 
 /** The card face on screen at the zoom it is made at: the Blank card as it
  *  was set by hand (963 × 1419 at 13%). Canvas size = this × createScaleFor. */
@@ -293,6 +294,18 @@ export function addMediaToGridCard(groupId: string, media: MediaItem, label?: st
   // Its own shape once the picture has been read. Not an undo step of its
   // own: it only finishes what this one began.
   void measure(media).then(aspect => { if (aspect) layoutCardGrid(groupId, { [boardId]: aspect }) })
+  // A 3D model shows on the card face by its poster (getFirstImageUrl):
+  // render one now if it has none, and give it to the block once made.
+  if (media.type === 'model' && !media.posterUrl) {
+    void ensureModelPoster(media.url).then(posterUrl => {
+      if (!posterUrl) return
+      const st = useBoardsStore.getState()
+      const bar = st.boards[boardId]?.bars[rootBar]
+      const items = bar?.content.media ?? []
+      if (!items.some(m => m.url === media.url && !m.posterUrl)) return
+      st.setContent(boardId, rootBar, { media: items.map(m => m.url === media.url && !m.posterUrl ? { ...m, posterUrl } : m) })
+    })
+  }
   return boardId
 }
 
