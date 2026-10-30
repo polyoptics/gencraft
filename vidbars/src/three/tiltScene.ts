@@ -68,6 +68,9 @@ export interface TiltSlab {
   hinge?: { v: number; z: number; a: number }
   /** Draw its top in its side colour: nothing in the DOM covers it. */
   cap?: boolean
+  /** How far past the face, px, its depth-only top reaches: a selection
+   *  ring the DOM draws round it, kept clear of what stands behind it. */
+  ring?: number
   /** A raised rim round the edge (a tray): its width and height, px. */
   rim?: { w: number; h: number }
   /** A small raised part (a header, button or banner): the sheen covers
@@ -86,7 +89,9 @@ export interface TiltSlab {
  *  (centre u, v and size w, h in flat px, z its height). The light's
  *  shadows and sheen never fall on these: artwork shows exactly as it is
  *  (Brian 2026-10-30). */
-export interface TiltArt { u: number; v: number; w: number; h: number; z: number }
+/** A picture's rect, flat px from the centre, at height `z`; on a standing
+ *  card (or Viewer), turned with it on its hinge. */
+export interface TiltArt { u: number; v: number; w: number; h: number; z: number; hinge?: { v: number; z: number; a: number } }
 
 export interface TiltFrameState {
   tilt: number
@@ -474,7 +479,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
 
   /** Which side triangles are furniture, and whose (pick()). */
   const decoTris: { from: number; to: number; owner: string }[] = []
-  const SLAB_MAX = 200, CORNER_SEG = 4
+  const SLAB_MAX = 400, CORNER_SEG = 4
   const RING = 4 * (CORNER_SEG + 1)
   const SIDE_V = SLAB_MAX * (RING * 8 + 2), SIDE_I = SLAB_MAX * RING * 24
   const sideGeo = new THREE.BufferGeometry()
@@ -578,6 +583,14 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       const a = art[k], o = k * 12
       const x0 = a.u - a.w / 2, x1 = a.u + a.w / 2, y0 = -(a.v - a.h / 2), y1 = -(a.v + a.h / 2)
       artPos.set([x0, y0, a.z, x1, y0, a.z, x1, y1, a.z, x0, y1, a.z], o)
+      if (a.hinge) {
+        // As buildSlabs' turn(): the far side rises.
+        const h = a.hinge, c = Math.cos(h.a), sn = Math.sin(h.a), hy = -h.v
+        for (let p = o; p < o + 12; p += 3) {
+          const dy = artPos[p + 1] - hy, dz = artPos[p + 2] - h.z
+          artPos[p + 1] = hy + dy * c - dz * sn; artPos[p + 2] = h.z + dy * sn + dz * c
+        }
+      }
     }
     artGeo.getAttribute('position').needsUpdate = true
     artGeo.setDrawRange(0, n * 6)
@@ -694,8 +707,11 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       }
       // Depth-only top at the face.
       const top0 = tv / 3
+      const g = s.ring ?? 0
+      if (g) outline(s.u, s.v, hw + g, hh + g, s.r + g, ix, iy)
+      const tx = g ? ix : ox, ty = g ? iy : oy
       topPos[tv++] = s.u; topPos[tv++] = -s.v; topPos[tv++] = z
-      for (let i = 0; i < RING; i++) { topPos[tv++] = ox[i]; topPos[tv++] = oy[i]; topPos[tv++] = z }
+      for (let i = 0; i < RING; i++) { topPos[tv++] = tx[i]; topPos[tv++] = ty[i]; topPos[tv++] = z }
       for (let i = 0; i < RING; i++) { topIdx[ti++] = top0; topIdx[ti++] = top0 + 1 + i; topIdx[ti++] = top0 + 1 + ((i + 1) % RING) }
       // Not a leaning face: its normals stay the flat ones, so it would
       // catch and cast askew. Its turned walls still cast.
@@ -729,14 +745,17 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       }
       if (s.hinge) turn(sheenPos, null, hv0, hv / 3, s.hinge)
     }
-    sheenGeo.getAttribute('position').needsUpdate = true
-    sheenGeo.index!.needsUpdate = true
+    // Only what was written goes up to the GPU (the buffers are sized for
+    // SLAB_MAX, most frames use far fewer).
+    const upload = (a: THREE.BufferAttribute, n: number) => { a.clearUpdateRanges(); a.addUpdateRange(0, n); a.needsUpdate = true }
+    upload(sheenGeo.getAttribute('position') as THREE.BufferAttribute, hv)
+    upload(sheenGeo.index!, hi)
     sheenGeo.setDrawRange(0, hi)
-    for (const g of [sideGeo, topGeo]) {
-      for (const a of Object.values(g.attributes)) (a as THREE.BufferAttribute).needsUpdate = true
-      g.index!.needsUpdate = true
-    }
-    liftGeo.index!.needsUpdate = true
+    for (const a of ['position', 'normal', 'color']) upload(sideGeo.getAttribute(a) as THREE.BufferAttribute, sv * 3)
+    upload(sideGeo.index!, si)
+    upload(topGeo.getAttribute('position') as THREE.BufferAttribute, tv)
+    upload(topGeo.index!, ti)
+    upload(liftGeo.index!, li)
     sideGeo.setDrawRange(0, si)
     topGeo.setDrawRange(0, ti)
     liftGeo.setDrawRange(0, li)
