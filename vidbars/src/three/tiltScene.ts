@@ -454,6 +454,9 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     transparent: true, blending: THREE.CustomBlending, blendEquation: THREE.AddEquation,
     blendSrc: THREE.OneFactor, blendDst: THREE.OneFactor, blendSrcAlpha: THREE.ZeroFactor, blendDstAlpha: THREE.OneFactor,
     depthWrite: false, depthFunc: THREE.LessEqualDepth,
+    // In the plane of the depth-only tops but triangulated differently: pulled
+    // a hair towards the camera, or it fights them and buzzes.
+    polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4,
   })
   // Where the sheen goes (Brian 2026-10-30): a band round each face's
   // border and the whole of small raised parts — never across a face,
@@ -602,6 +605,9 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       if (z > 0.5) for (let i = 0; i < RING; i++) { liftIdx[li++] = top0; liftIdx[li++] = top0 + 1 + i; liftIdx[li++] = top0 + 1 + ((i + 1) % RING) }
       // Sheen: the outline, and an inset ring (or the centre, for a small
       // raised part), wound the same way as the top's fan.
+      // Round buttons get none: a highlight on a disc reads as a second,
+      // misregistered disc.
+      if (s.pop && Math.max(s.w, s.h) < Math.min(s.w, s.h) * 1.6) continue
       const o0 = hv / 3
       for (let i = 0; i < RING; i++) { sheenPos[hv++] = ox[i]; sheenPos[hv++] = oy[i]; sheenPos[hv++] = z }
       if (s.pop) {
