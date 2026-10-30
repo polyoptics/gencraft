@@ -9,10 +9,11 @@
 // pick() is the hit test, so a model can be clicked straight in 3D.
 
 import * as THREE from 'three'
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import { toCreasedNormals } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { acquireModel, releaseModel, disposeInstance } from './modelCache'
 import { computePosedBounds } from './orbitState'
-import { TILT_PERSPECTIVE, type TiltWire } from '../store/tiltStore'
+import { TILT_PERSPECTIVE, type TiltWire, type TiltLight } from '../store/tiltStore'
 
 export interface TiltTarget {
   key: string
@@ -33,6 +34,7 @@ export interface TiltFrameState {
   texture: boolean
   flat: boolean
   wire: TiltWire
+  light: TiltLight
   turn: boolean
   walls: boolean
   figure: boolean
@@ -192,6 +194,14 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true })
   renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1))
   renderer.setClearColor(0x000000, 0)
+  // Brighter, with highlights (Brian 2026-10-30): a soft studio environment
+  // the models reflect, and a tone map so the bright parts roll off
+  // instead of washing out.
+  renderer.toneMapping = THREE.NeutralToneMapping
+  renderer.toneMappingExposure = 1
+  const pmrem = new THREE.PMREMGenerator(renderer)
+  const envRT = pmrem.fromScene(new RoomEnvironment(), 0.04)
+  pmrem.dispose()
 
   const lights = () => {
     const l = new THREE.Group()
@@ -205,7 +215,13 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   // must not). Both share the plane transform and the depth buffer, so a
   // model still stands in front of its wall.
   const scene = new THREE.Scene()
-  const litRig = lights(); scene.add(litRig)
+  scene.environment = envRT.texture
+  // Lit: a key light the Light panel moves (it lives on the plane, so it
+  // turns with it), a soft sky/ground fill, and the environment.
+  const litRig = new THREE.Group()
+  const litFill = new THREE.HemisphereLight(0xffffff, 0x40404c, 0.5)
+  litRig.add(litFill)
+  scene.add(litRig)
   // Flat: mostly even ambient, a weak key from the viewer's side for just
   // enough form, so neither texture nor clay goes dark on one side.
   const flatRig = new THREE.Group()
@@ -217,6 +233,8 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   scene.add(flatRig)
   const deco = new THREE.Scene(); deco.add(lights())
   const ground = new THREE.Group(); ground.matrixAutoUpdate = false; scene.add(ground)
+  const key = new THREE.DirectionalLight(0xffffff, 2)
+  ground.add(key, key.target)
   const groundDeco = new THREE.Group(); groundDeco.matrixAutoUpdate = false; deco.add(groundDeco)
 
   const camera = new THREE.PerspectiveCamera(50, 1, 10, TILT_PERSPECTIVE * 20)
@@ -248,7 +266,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     ground.add(stand)
     const wall = new THREE.Mesh(
       new THREE.PlaneGeometry(1, 1),
-      new THREE.MeshBasicMaterial({ transparent: true, side: THREE.DoubleSide, depthWrite: false }),
+      new THREE.MeshBasicMaterial({ transparent: true, side: THREE.DoubleSide, depthWrite: false, toneMapped: false }),
     )
     wall.rotation.x = Math.PI / 2    // stands up off the plane, facing the viewer
     wall.visible = false
@@ -379,7 +397,16 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     renderer.setRenderTarget(into)
     renderer.autoClear = true
     litRig.visible = !st.flat
+    key.visible = !st.flat
     flatRig.visible = st.flat
+    {
+      const L = st.light
+      const az = (L.azimuth * Math.PI / 180) + (L.spin && st.turn ? now / 1000 * 0.6 : 0)
+      const el = Math.max(2, Math.min(90, L.elevation)) * Math.PI / 180
+      key.position.set(Math.cos(el) * Math.sin(az) * 1000, -Math.cos(el) * Math.cos(az) * 1000, Math.sin(el) * 1000)
+      key.intensity = L.power
+      scene.environmentIntensity = st.flat ? 0.6 : L.env
+    }
     if (st.wire === 'only') {
       scene.overrideMaterial = WIRE_MAT
       renderer.render(scene, camera)
@@ -460,6 +487,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     maskRT.dispose()
     warmRT.dispose()
     outlineMat.dispose()
+    envRT.dispose()
     renderer.dispose()
     renderer.forceContextLoss()
   }

@@ -19,7 +19,9 @@ import { createDebouncedIDBStorage } from '../utils/debouncedIDBStorage'
 
 /** CSS perspective distance (px) — also the three.js camera distance. */
 export const TILT_PERSPECTIVE = 1200
-export const TILT_MAX = 75
+/** Just short of edge-on: the plane can be seen from the side (Brian
+ *  2026-10-30), never from below. Exactly 90 has no ground under the cursor. */
+export const TILT_MAX = 89
 /** Let go below this and the view eases the rest of the way to flat — tilting back up to top-down is the way home. */
 export const TILT_SNAP = 10
 
@@ -27,6 +29,20 @@ export const TILT_SNAP = 10
  *  their own textures or plain clay; lit, or flat (even light, smooth
  *  normals); and a wireframe off, over the surface, or on its own. */
 export type TiltWire = 'off' | 'over' | 'only'
+
+/** The key light on the models, set in the Light panel. Angles in degrees,
+ *  in the plane's frame: azimuth round the card, elevation up from it. */
+export interface TiltLight {
+  azimuth: number
+  elevation: number
+  /** Key light strength. */
+  power: number
+  /** Reflections from the studio environment (what makes highlights). */
+  env: number
+  /** The light turns with the turntable, so a model keeps its lit side. */
+  spin: boolean
+}
+export const DEFAULT_LIGHT: TiltLight = { azimuth: -40, elevation: 45, power: 3, env: 0.35, spin: false }
 
 interface TiltStore {
   /** Degrees the plane is tipped back; 0 = flat. */
@@ -38,6 +54,7 @@ interface TiltStore {
   /** Even, low-contrast light with smooth normals instead of the lit look. */
   flat: boolean
   wire: TiltWire
+  light: TiltLight
   /** Models turn slowly on their card. */
   turn: boolean
   /** A back wall on each model card with its file name and size. */
@@ -48,6 +65,7 @@ interface TiltStore {
   setTexture: (on: boolean) => void
   setFlat: (on: boolean) => void
   setWire: (w: TiltWire) => void
+  setLight: (patch: Partial<TiltLight>) => void
   setTurn: (on: boolean) => void
   setWalls: (on: boolean) => void
   setFigure: (on: boolean) => void
@@ -63,6 +81,7 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
   texture: true,
   flat: false,
   wire: 'off',
+  light: DEFAULT_LIGHT,
   turn: true,
   walls: true,
   figure: false,
@@ -73,6 +92,7 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
   setTexture: texture => set({ texture }),
   setFlat: flat => set({ flat }),
   setWire: wire => set({ wire }),
+  setLight: patch => set(s => ({ light: { ...s.light, ...patch } })),
   setTurn: turn => set({ turn }),
   setWalls: walls => set({ walls }),
   setFigure: figure => set({ figure }),
