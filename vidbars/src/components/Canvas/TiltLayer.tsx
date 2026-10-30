@@ -926,6 +926,15 @@ const TiltedView: React.FC = () => {
       // A lifted tile is pressed at its own height, not the floor's.
       const p = flatClient(e.clientX, e.clientY, height)
       if (!p) return
+      // While the re-sent event runs, a handler asking what is under its
+      // (flat) point is asking what is under the cursor: the browser hit-tests
+      // the tilted DOM, so it is answered at the real point. Asked at the flat
+      // point, a card let go over nothing found whatever card is drawn THERE
+      // and was merged into it (Brian 2026-10-30: cards "deleted" by a drag).
+      hitAt = { fx: p.x, fy: p.y, rx: e.clientX, ry: e.clientY }
+      try { send(e, type, to, p) } finally { hitAt = null }
+    }
+    const send = (e: MouseEvent, type: string, to: EventTarget, p: { x: number; y: number }) => {
       const init: PointerEventInit = {
         bubbles: true, cancelable: true, composed: true, view: window, detail: e.detail,
         clientX: p.x, clientY: p.y,
@@ -943,6 +952,13 @@ const TiltedView: React.FC = () => {
         to.dispatchEvent(new MouseEvent(type, init))
       }
     }
+
+    // Hit tests during a re-sent event: see resend.
+    let hitAt: { fx: number; fy: number; rx: number; ry: number } | null = null
+    const real = (x: number, y: number) => hitAt && Math.abs(x - hitAt.fx) < 0.5 && Math.abs(y - hitAt.fy) < 0.5 ? [hitAt.rx, hitAt.ry] : [x, y]
+    const fromPoint = document.elementFromPoint, fromPoints = document.elementsFromPoint
+    document.elementFromPoint = function (x: number, y: number) { const [a, b] = real(x, y); return fromPoint.call(this, a, b) }
+    document.elementsFromPoint = function (x: number, y: number) { const [a, b] = real(x, y); return fromPoints.call(this, a, b) }
 
     type Gesture =
       | { kind: 'pan'; last: { x: number; y: number } }
@@ -1076,6 +1092,8 @@ const TiltedView: React.FC = () => {
       window.removeEventListener('pointerup', onUp, true)
       window.removeEventListener('pointercancel', onUp, true)
       window.removeEventListener('wheel', onWheel, true)
+      document.elementFromPoint = fromPoint
+      document.elementsFromPoint = fromPoints
     }
   }, [])
 
