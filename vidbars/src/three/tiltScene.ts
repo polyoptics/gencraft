@@ -18,8 +18,9 @@ import { TILT_PERSPECTIVE, DEFAULT_LIGHT, type TiltWire, type TiltLight } from '
 const DEFAULT_SHADOWS = DEFAULT_LIGHT.shadows, DEFAULT_SHEEN = DEFAULT_LIGHT.sheen
 /** How long a model's pop onto a Viewer takes. */
 const POP_MS = 320
-/** How long the sheen and models take to come in as the canvas tips. */
-const FADE_MS = 500
+/** How long the sheen, models and raised parts take to come in as the
+ *  canvas tips, and to go as it lies back flat. */
+export const FADE_MS = 500
 
 /** Drawn only where the artwork mask (stencil 1) is not. */
 const SKIP_ART = {
@@ -102,6 +103,10 @@ export interface TiltFrameState {
   /** Cards, decks, tiles and Viewers, for their thickness. */
   slabs: TiltSlab[]
   art: TiltArt[]
+  /** How far in the 3D look has come (0 → 1 as the canvas tips back, and
+   *  1 → 0 as it lies flat again), eased: the sheen and models follow it.
+   *  The raised parts come already scaled by it. */
+  fade: number
 }
 
 /** A person, in metres, for scale. */
@@ -680,13 +685,6 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
 
   let lastW = 0, lastH = 0
 
-  /** Since the canvas tipped (and since `from`, if later), 0 → 1 over
-   *  FADE_MS, easing out: the sheen and models come in on it. */
-  let tiltFrom = 0
-  function fadeIn(now: number, from: number): number {
-    const t0 = Math.max(tiltFrom, from)
-    return tiltFrom ? 1 - (1 - Math.min(1, (now - t0) / FADE_MS)) ** 3 : 0
-  }
 
   function frame(now: number, W: number, H: number, targets: TiltTarget[], st: TiltFrameState, into: THREE.WebGLRenderTarget | null = null) {
     frameNo++
@@ -714,8 +712,6 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     groundArt.matrix.copy(ground.matrix)
     groundArt.matrixWorldNeedsUpdate = true
 
-    if (st.tilt <= 0.5) tiltFrom = 0
-    else if (!tiltFrom) tiltFrom = now
     // Models rise out of their cards as the plane tips back.
     const rise = Math.min(1, Math.max(0, (st.tilt - 4) / 26))
     const ease = rise * rise * (3 - 2 * rise)
@@ -740,7 +736,8 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
         const c = 1.7, y = x - 1
         k *= Math.max(0.001, 1 + (c + 1) * y * y * y + c * y * y)
       }
-      const grow = fadeIn(now, tg.pop ? 0 : s.shownAt)
+      const since = s.shownAt ? 1 - (1 - Math.min(1, (now - s.shownAt) / FADE_MS)) ** 3 : 0
+      const grow = Math.min(st.fade, tg.pop ? 1 : since)
       s.stand.scale.set(k, k * Math.max(ease * grow, 0.001), k)
       const wantSmooth = st.flat && !!s.inst
       if (wantSmooth && !s.smooth) s.smooth = smoothSwaps(s.inst!)
@@ -794,7 +791,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     renderer.setRenderTarget(into)
     // The artwork mask goes in first, on a cleared buffer (stencil too);
     // every pass after draws over it without clearing.
-    buildArt(st.tilt > 0.5 ? st.art : [])
+    buildArt(st.tilt > 0.5 || st.fade > 0 ? st.art : [])
     renderer.autoClear = true
     renderer.render(artScene, camera)
     renderer.autoClear = false
@@ -833,9 +830,9 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       }
       // The sheen follows the light's strength, but never glares.
       SHEEN_MAT.opacity = Math.min(1, sheen * L.power / 3)
-      // It fades up as the canvas tips, rather than switching on (Brian
-      // 2026-10-30).
-      SHEEN_MAT.specular.copy(SHEEN_SPEC).multiplyScalar(fadeIn(now, 0))
+      // It fades up as the canvas tips, and away as it lies flat, rather
+      // than switching on and off (Brian 2026-10-30).
+      SHEEN_MAT.specular.copy(SHEEN_SPEC).multiplyScalar(st.fade)
       sheenMesh.visible = sheen > 0.01 && !st.flat
     }
     // The catcher must not take the clay or wireframe look: it is drawn on
@@ -869,7 +866,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       for (const s of shown) s.stand.visible = true
     }
     renderer.shadowMap.needsUpdate = true
-    buildSlabs(st.tilt > 0.5 ? st.slabs : [])
+    buildSlabs(st.tilt > 0.5 || st.fade > 0 ? st.slabs : [])
     // The slabs' shadow map, fitted round what stands up off the plane.
     decoKey.castShadow = shadowsOn && fitShadow(decoKey, slabBox)
     liftCatch.visible = decoKey.castShadow
@@ -936,7 +933,6 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   const warmRT = new THREE.WebGLRenderTarget(4, 4)
   function warm(W: number, H: number, targets: TiltTarget[], st: TiltFrameState) {
     frame(performance.now(), W, H, targets, { ...st, tilt: 30, shiftX: 0, shiftY: 0 }, warmRT)
-    tiltFrom = 0   // the real tilt still fades in
   }
 
   /** The url and model units per metre of a model on screen. */

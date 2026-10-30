@@ -88,6 +88,9 @@ interface TiltStore {
   setFigure: (on: boolean) => void
   /** Ease back to the flat view. */
   flatten: () => void
+  /** True while flatten() eases the view down: the 3D look fades out with
+   *  it, instead of waiting for the canvas to land flat. */
+  leaving: boolean
 }
 
 let flattenRaf: number | null = null
@@ -109,9 +112,10 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
   walls: true,
   figure: false,
   console: readConsole(),
+  leaving: false,
   setConsole: on => { set({ console: on }); try { localStorage.setItem(CONSOLE_KEY, on ? '1' : '0') } catch { /* private window */ } },
   setView: (tilt, spin) => {
-    if (flattenRaf !== null) { cancelAnimationFrame(flattenRaf); flattenRaf = null }
+    if (flattenRaf !== null) { cancelAnimationFrame(flattenRaf); flattenRaf = null; set({ leaving: false }) }
     // Orbit about what is in the middle of the screen: the ground point
     // there stays there as the view turns or tips.
     const g = centreGround(get())
@@ -142,7 +146,7 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
       // which TiltLayer then hands to the canvas pan.
       const tilt = t < 1 ? t0 * (1 - k) : 0, spin = t < 1 ? s0 * (1 - k) : 0
       if (t >= 1) flattenRaf = null
-      set({ tilt, spin, ...(g ? shiftKeeping(g, tilt, spin) : {}) })
+      set({ tilt, spin, leaving: t < 1, ...(g ? shiftKeeping(g, tilt, spin) : {}) })
       if (t < 1) flattenRaf = requestAnimationFrame(tick)
     }
     flattenRaf = requestAnimationFrame(tick)

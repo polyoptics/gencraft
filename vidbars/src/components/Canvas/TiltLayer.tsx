@@ -27,7 +27,7 @@ import { useViewport3DStore } from '../../store/viewport3dStore'
 import { useBoardsStore } from '../../store/boardsStore'
 import { getMediaItems } from '../../types/bar'
 import { faceBlocks } from '../../utils/cardGrid'
-import { createTiltScene, type TiltTarget, type TiltFrameState, type TiltSlab, type TiltArt } from '../../three/tiltScene'
+import { createTiltScene, FADE_MS, type TiltTarget, type TiltFrameState, type TiltSlab, type TiltArt } from '../../three/tiltScene'
 
 /** Degrees of tilt / turn per pixel of Alt+drag. */
 const DRAG_DEG = 0.25
@@ -317,6 +317,16 @@ const models: {
   at: { x: number; y: number } | null
 } = { pick: null, info: null, hovered: null, at: null }
 
+/** How far the 3D look has come in, 0..1, stepped each frame by TiltModels:
+ *  up over FADE_MS as the canvas tips, down as it lies flat again (from the
+ *  moment flatten() starts). The raised parts, sheen and models all follow
+ *  it, so leaving 3D fades as entering does (Brian 2026-10-30). */
+let fadeLevel = 0
+/** fadeLevel eased: quick at first, settling. */
+const fadeShown = () => 1 - (1 - fadeLevel) ** 3
+/** Whether anything 3D is on screen: tilted, or still fading out. */
+const live3d = () => isTilted(useTiltStore.getState().tilt) || fadeLevel > 0
+
 const frameState = (): TiltFrameState => {
   const ts = useTiltStore.getState()
   const { unitsPerMetre: scales, sizeOf } = useModelScaleStore.getState()
@@ -329,8 +339,9 @@ const frameState = (): TiltFrameState => {
     ]),
     unitsFor: url => scales[url],
     sizeFor: key => sizeOf[key] ?? 1,
-    slabs: isTilted(ts.tilt) ? collectSlabs() : (dropLifts(), []),
-    art: isTilted(ts.tilt) ? lastArt : [],
+    slabs: live3d() ? collectSlabs(fadeShown()) : (dropLifts(), []),
+    art: live3d() ? lastArt : [],
+    fade: fadeShown(),
   }
 }
 
@@ -352,19 +363,31 @@ const TiltModels: React.FC = () => {
 
     const warm = () => {
       const W = root.clientWidth, H = root.clientHeight
-      if (!view || !W || !H || isTilted(useTiltStore.getState().tilt)) return
+      if (!view || !W || !H || live3d()) return
       view.warm(W, H, collectTargets(W, H), frameState())
     }
     const warmSoon = () => {
       if (warmTimer) clearTimeout(warmTimer)
       warmTimer = setTimeout(warm, 500)
     }
+    let last = 0
     const frame = (now: number) => {
       raf = requestAnimationFrame(frame)
       if (!view || !canvas) return
-      const tilted = isTilted(useTiltStore.getState().tilt)
-      if (tilted !== shown) { shown = tilted; canvas.style.display = tilted ? 'block' : 'none' }
-      if (!tilted) return
+      const ts = useTiltStore.getState()
+      // A long gap (a hidden tab, the first frame) counts as one frame.
+      const dt = Math.min(50, last ? now - last : 0)
+      last = now
+      fadeLevel = isTilted(ts.tilt) && !ts.leaving
+        ? Math.min(1, fadeLevel + dt / FADE_MS)
+        : Math.max(0, fadeLevel - dt / FADE_MS)
+      const live = live3d()
+      if (live !== shown) {
+        shown = live
+        canvas.style.display = live ? 'block' : 'none'
+        if (!live) dropLifts()
+      }
+      if (!live) return
       const W = root.clientWidth, H = root.clientHeight
       if (models.at) models.hovered = models.pick?.(models.at.x, models.at.y) ?? null
       if (W && H) view.frame(now, W, H, collectTargets(W, H), frameState())
@@ -479,7 +502,7 @@ function radiusOf(el: HTMLElement): number {
 /** Every card, deck, tile and Viewer on the tilted plane, as slabs (flat px
  *  from the host centre). Read from layout offsets, which tilting does not
  *  change, so this is cheap enough for every frame. */
-function collectSlabs(): TiltSlab[] {
+function collectSlabs(K = 1): TiltSlab[] {
   const out: TiltSlab[] = []
   const lifting = new Map<HTMLElement, number>()
   /** Cards on a loop strip, by group id: how high their stand-in stands. */
@@ -630,7 +653,7 @@ function collectSlabs(): TiltSlab[] {
           if (n > 1) hideEdges(el)
           const L = Math.min(n - 1, DECK_SLICES), below = thick - per
           if (lift !== undefined && (stands.has(id) || (g?.deckAnchorId !== undefined && stands.has(g.deckAnchorId)))) {
-            hinge = { v: at.y + h - H / 2, z: card.z, a: CONSOLE_DEG * Math.PI / 180 }
+            hinge = { v: at.y + h - H / 2, z: card.z, a: CONSOLE_DEG * K * Math.PI / 180 }
             stand(el, hinge)
             card.hinge = hinge
           }
@@ -655,6 +678,18 @@ function collectSlabs(): TiltSlab[] {
       const w = el.offsetWidth, h = el.offsetHeight, m = Math.min(w, h)
       add(at.x, at.y, w, h, m * THICK.card, SIDE.card, Math.min(12, m * 0.08))
     }
+  }
+  // Fading in or out, everything raised stands that share of its height.
+  if (K < 1) {
+    for (const [el, z] of lifting) lifting.set(el, z * K)
+    const hinges = new Set<Hinge>()
+    for (const s of out) {
+      s.t *= K
+      if (s.z !== undefined) s.z *= K
+      if (s.rim) s.rim = { ...s.rim, h: s.rim.h * K }
+      if (s.hinge) hinges.add(s.hinge)
+    }
+    for (const h of hinges) h.z *= K
   }
   setLifts(lifting)
   // Artwork — pictures, videos, Viewer screens — read after the lifts are
@@ -935,8 +970,9 @@ function liftOf(el: Element | null): number {
 }
 function dropLifts() { if (lifted.size) setLifts(new Map()) }
 // The 3D view may stop drawing once flat, so settle back here too: nothing
-// stays lifted or unclipped in the flat view.
-useTiltStore.subscribe(s => { if (!isTilted(s.tilt)) dropLifts() })
+// stays lifted or unclipped in the flat view (once the fade-out is done;
+// TiltModels drops them then).
+useTiltStore.subscribe(s => { if (!isTilted(s.tilt) && fadeLevel <= 0) dropLifts() })
 
 /** Every model card in view, as flat px from the host centre. */
 function collectTargets(W: number, H: number): TiltTarget[] {
@@ -1095,9 +1131,16 @@ const TiltedView: React.FC = () => {
       return el.matches('[data-tilt-stage="world"]') || !el.closest('[data-tilt-stage]')
     }
 
+    // The last flat point a re-sent event went to. Where the cursor shows no
+    // plane under it (past the horizon, or so near it the point is lost),
+    // a release still has to arrive, or the drag it ends never ends and the
+    // card sticks to the cursor (Brian 2026-10-30): it goes here.
+    let lastFlat: { x: number; y: number } | null = null
     const resend = (e: MouseEvent, type: string, to: EventTarget, height = 0) => {
       // A lifted tile is pressed at its own height, not the floor's.
-      const p = flatClient(e.clientX, e.clientY, height, hingeOf(to as Element))
+      let p = flatClient(e.clientX, e.clientY, height, hingeOf(to as Element))
+      if (p) lastFlat = p
+      else if (lastFlat && /up$|cancel$/.test(type)) p = lastFlat
       if (!p) return
       // While the re-sent event runs, a handler asking what is under its
       // (flat) point is asking what is under the cursor: the browser hit-tests
@@ -1107,7 +1150,15 @@ const TiltedView: React.FC = () => {
       hitAt = { fx: p.x, fy: p.y, rx: e.clientX, ry: e.clientY }
       try { send(e, type, to, p) } finally { hitAt = null }
     }
+    // The card pressed can be re-rendered away mid-drag (a deck leaving a
+    // Viewer's side swaps how it is drawn). Events sent to the old,
+    // detached element reach nobody, not even the window listeners that
+    // run the drag: the card stopped following, the release never ended
+    // the drag, and it then stuck to the cursor (Brian 2026-10-30). Sent to
+    // the page instead, they still reach those listeners.
+    const reachable = (to: EventTarget) => (to instanceof Node && !to.isConnected ? document.body : to)
     const send = (e: MouseEvent, type: string, to: EventTarget, p: { x: number; y: number }) => {
+      to = reachable(to)
       const init: PointerEventInit = {
         bubbles: true, cancelable: true, composed: true, view: window, detail: e.detail,
         clientX: p.x, clientY: p.y,
