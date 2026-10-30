@@ -198,7 +198,7 @@ export const RailBody: React.FC<{
       }}
     >
       {/* ── The rail proper: the band every header hangs on. ── */}
-      <div style={{
+      <div data-rail-band style={{
         position: 'absolute', left: pad / 2, right: pad / 2, top: rowTop - 4 * u,
         height: (RAIL_GEOM.headH + 8) * u, background: C.track, borderRadius: 10 * u,
       }} />

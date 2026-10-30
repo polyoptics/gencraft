@@ -515,6 +515,35 @@ function collectSlabs(): TiltSlab[] {
         const u = fs.nodes[node.dataset.id!]?.rail?.unit || 1
         if (k > 0) slab.rim = { w: TRAY.rimW * u * zoom, h: TRAY.rimH * u * zoom * k }
         slab.color = SIDE.tray
+        // The run arrow and the band of headers under it stand up out of
+        // the tray, above its rim and the cards (Brian 2026-10-30).
+        if (k > 0) {
+          // Clear of the cards on it too (their tops, a single card thick).
+          let top = 0
+          for (const o of Object.values(fs.nodes)) {
+            const d = o.railDock
+            if (!d || d.railId !== node.dataset.id || d.lifted) continue
+            const om = Math.min(o.width, o.height) * zoom
+            top = Math.max(top, (dockLift(om, d.order ?? 0) + om * THICK.card) * k)
+          }
+          const H = Math.max(TRAY.rimH * TRAY.band * u * zoom * k, top + TRAY.rimH * u * zoom * k)
+          for (const part of el.querySelectorAll<HTMLElement>('[data-rail-band], [data-rail-arrow]')) {
+            const a = offsetIn(part, world)
+            if (!a || !part.offsetWidth) continue
+            const s = add(pan.x + a.x * zoom, pan.y + a.y * zoom, part.offsetWidth * zoom, part.offsetHeight * zoom, H,
+              SIDE.tray, (radiusOf(part) || 6 * u) * zoom)
+            if (s) s.z = H
+            lifting.set(part, H)
+            chain(part, world)
+            // Solid, its sides the colour of its face, as a raised button's.
+            const face = fill(part)
+            if (s && face) s.color = (face[0] << 16) | (face[1] << 8) | face[2]
+          }
+          for (const head of el.querySelectorAll<HTMLElement>('[data-rail-head], [data-rail-card-head], [data-rail-tray-head]')) {
+            lifting.set(head, H)
+            chain(head, world)
+          }
+        }
       } else if (node.hasAttribute('data-rail-docked')) {
         // Cards docked in a strip sit on its floor, each in the column a
         // little above the one before: a real stack, with its own sides.
@@ -819,7 +848,7 @@ function settleChains() {
 
 /** How a loop strip reads as a tray, in its own units (and cards'
  *  thickness inside it as a share of their shorter side). */
-const TRAY = { rimW: 6, rimH: 7, card: 0.03, stack: 0.9 }
+const TRAY = { rimW: 6, rimH: 7, card: 0.03, stack: 0.9, band: 2.2 }
 /** How far a docked card's underside stands off the strip's floor: never
  *  less than GAP px, so the two faces are never level and never flicker. */
 const GAP = 6
