@@ -19,7 +19,30 @@ import { useCanvasStore } from '../store/canvasStore'
 import { createScaleFor } from './canvasCreate'
 import { loadImage } from './fx/chain'
 import { getMediaItems, type MediaItem } from '../types/bar'
-import { ensureModelPoster, getModelPoster } from '../three/posterService'
+import { ensureModelPoster, getModelPoster, usePosterMapStore } from '../three/posterService'
+
+// A new poster for a model (the Viewer's SNAP, or one just rendered)
+// goes onto every block holding that model at once, so card faces, block
+// thumbnails and anything reading `posterUrl` show it straight away.
+// One url at a time only: the store loading from disk changes them all,
+// and that is not a new poster.
+usePosterMapStore.subscribe((s, prev) => {
+  const changed = Object.keys(s.map).filter(k => s.map[k] && s.map[k] !== prev.map[k])
+  if (changed.length !== 1) return
+  const url = changed[0], poster = s.map[url]
+  const { boards } = useBoardsStore.getState()
+  let next: Record<string, BoardData> | null = null
+  for (const [bid, board] of Object.entries(boards)) {
+    for (const [rid, bar] of Object.entries(board.bars)) {
+      const media = bar.content.media
+      if (!media?.some(m => m.type === 'model' && m.url === url && m.posterUrl !== poster)) continue
+      next ??= { ...boards }
+      const nb = next[bid] === board ? (next[bid] = { ...board, bars: { ...board.bars } }) : next[bid]
+      nb.bars[rid] = { ...bar, content: { ...bar.content, media: media.map(m => m.type === 'model' && m.url === url ? { ...m, posterUrl: poster } : m) } }
+    }
+  }
+  if (next) useBoardsStore.setState({ boards: next })
+})
 
 /** The card face on screen at the zoom it is made at: the Blank card as it
  *  was set by hand (963 × 1419 at 13%). Canvas size = this × createScaleFor. */
