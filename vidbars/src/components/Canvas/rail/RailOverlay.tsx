@@ -87,7 +87,7 @@ export const RailOverlay: React.FC<{
       : start.x + start.width + gap / 2
     const top = look ? look.band.y - 4 * u : L.tray.head.y - 4 * u
     const bodyTop = look ? look.label.y : L.plusStart.y
-    dropMark = <Bar dir="v" at={x} from={top} to={bodyTop + RAIL_GEOM.cardH * u + 4 * u} u={u} />
+    dropMark = <Bar dir="v" at={x} from={top} to={bodyTop + RAIL_GEOM.cardH * u + 4 * u} u={u} split={top + (RAIL_GEOM.headH + 8) * u} />
   }
 
   // ── Run highlight: each busy picture's VISIBLE band (its whole card when
@@ -174,9 +174,27 @@ export const RailOverlay: React.FC<{
 
 /** The insertion mark: a bright line with round ends, outlined dark so it
  *  reads over any picture. `dir` h — across a column at y = at; v — down
- *  the slot row at x = at. */
-const Bar: React.FC<{ dir: 'h' | 'v'; at: number; from: number; to: number; u: number }> = ({ dir, at, from, to, u }) => {
+ *  the slot row at x = at. `split`: a row's mark is made in two parts, over
+ *  its header bar (from..split) and down its cards (split..to), one line
+ *  flat; the 3D console stands each up with what it lies on (TiltLayer). */
+const Bar: React.FC<{ dir: 'h' | 'v'; at: number; from: number; to: number; u: number; split?: number }> = ({ dir, at, from, to, u, split }) => {
   const t = 4 * u, dot = 11 * u
+  if (dir === 'v' && split !== undefined && split > from && split < to) {
+    const ring = `0 0 0 ${u}px rgba(0,0,0,0.5)`
+    // Each part a box down its stretch of the line, its own end's dot in
+    // it; square and unringed where the two meet.
+    const part = (p0: number, p1: number, which: 'band' | 'row') => (
+      <div data-rail-drop-mark-part={which} style={{ position: 'absolute', zIndex: Z_DROP, left: at - dot / 2, top: p0, width: dot, height: p1 - p0 }}>
+        <div style={{
+          position: 'absolute', left: (dot - t) / 2, top: 0, width: t, height: p1 - p0, background: C.drop, boxShadow: ring,
+          borderRadius: which === 'band' ? `${t / 2}px ${t / 2}px 0 0` : `0 0 ${t / 2}px ${t / 2}px`,
+          clipPath: which === 'band' ? `inset(${-u}px ${-u}px 0 ${-u}px)` : `inset(0 ${-u}px ${-u}px ${-u}px)`,
+        }} />
+        <div style={{ position: 'absolute', left: 0, top: (which === 'band' ? 0 : p1 - p0) - dot / 2, width: dot, height: dot, borderRadius: '50%', background: C.drop, boxShadow: ring }} />
+      </div>
+    )
+    return <div data-rail-drop-mark={dir}>{part(from, split, 'band')}{part(split, to, 'row')}</div>
+  }
   const line: React.CSSProperties = dir === 'h'
     ? { left: from, top: at - t / 2, width: to - from, height: t }
     : { left: at - t / 2, top: from, width: t, height: to - from }

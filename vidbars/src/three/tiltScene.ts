@@ -479,6 +479,9 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
 
   /** Which side triangles are furniture, and whose (pick()). */
   const decoTris: { from: number; to: number; owner: string }[] = []
+  /** Top triangles grown past their face for a selection ring (see
+   *  TiltSlab.ring), and that face: the margin is drawn, not pressed. */
+  const ringTops: { from: number; to: number; u: number; v: number; hw: number; hh: number; hinge?: { v: number; z: number; a: number } }[] = []
   const SLAB_MAX = 400, CORNER_SEG = 4
   const RING = 4 * (CORNER_SEG + 1)
   const SIDE_V = SLAB_MAX * (RING * 8 + 2), SIDE_I = SLAB_MAX * RING * 24
@@ -620,6 +623,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     let sv = 0, si = 0, tv = 0, ti = 0, li = 0, hv = 0, hi = 0
     slabBox.makeEmpty()
     decoTris.length = 0
+    ringTops.length = 0
     const vert = (x: number, y: number, z: number, nx: number, ny: number, nz: number, shade: number) => {
       const o = sv * 3
       sidePos[o] = x; sidePos[o + 1] = y; sidePos[o + 2] = z
@@ -712,6 +716,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       const tx = g ? ix : ox, ty = g ? iy : oy
       topPos[tv++] = s.u; topPos[tv++] = -s.v; topPos[tv++] = z
       for (let i = 0; i < RING; i++) { topPos[tv++] = tx[i]; topPos[tv++] = ty[i]; topPos[tv++] = z }
+      if (g) ringTops.push({ from: ti / 3, to: ti / 3 + RING, u: s.u, v: s.v, hw, hh, hinge: s.hinge })
       for (let i = 0; i < RING; i++) { topIdx[ti++] = top0; topIdx[ti++] = top0 + 1 + i; topIdx[ti++] = top0 + 1 + ((i + 1) % RING) }
       // Not a leaning face: its normals stay the flat ones, so it would
       // catch and cast askew. Its turned walls still cast.
@@ -1009,7 +1014,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     let best: { key: string; d: number } | null = null
     for (const m of [topMesh, sideMesh]) {
       m.geometry.computeBoundingSphere()
-      const hit = raycaster.intersectObject(m, false)[0]
+      const hit = raycaster.intersectObject(m, false).find(h => m !== topMesh || !inRing(h))
       if (!hit || (best && hit.distance >= best.d)) continue
       const f = m === sideMesh && hit.faceIndex != null ? decoTris.find(d => hit.faceIndex! >= d.from && hit.faceIndex! < d.to) : undefined
       best = { key: f ? `deco|${f.owner}` : '', d: hit.distance }
@@ -1022,7 +1027,21 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       const man = s.figure.visible ? raycaster.intersectObject(s.figure, true)[0] : undefined
       if (man && (!best || man.distance < best.d)) best = { key: `person|${key}`, d: man.distance }
     }
-    return best?.key || null
+    // '' is a slab hit (a solid part with no owner of its own).
+    return best ? best.key : null
+  }
+  /** A top hit in a selection ring's margin, outside its face. */
+  function inRing(hit: THREE.Intersection): boolean {
+    const r = hit.faceIndex != null ? ringTops.find(t => hit.faceIndex! >= t.from && hit.faceIndex! < t.to) : undefined
+    if (!r) return false
+    const p = groundDeco.worldToLocal(hit.point.clone())
+    let y = p.y
+    if (r.hinge) {
+      // Laid back down off its hinge (turn(), undone).
+      const c = Math.cos(r.hinge.a), sn = Math.sin(r.hinge.a), y0 = -r.hinge.v
+      y = y0 + (p.y - y0) * c + (p.z - r.hinge.z) * sn
+    }
+    return Math.abs(p.x - r.u) > r.hw || Math.abs(y + r.v) > r.hh
   }
 
   /** Load and upload what the cards in view need — models, wall labels,
