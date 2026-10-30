@@ -558,6 +558,7 @@ function collectSlabs(): TiltSlab[] {
   const stage = document.querySelector<HTMLElement>('[data-tilt-stage="overlay"]')
   if (stage) {
     const groups = useBoardsStore.getState().groups
+    const zones = hitZones(stage)
     for (const el of stage.querySelectorAll<HTMLElement>('[data-group-card][data-id]')) {
       const at = offsetIn(el, stage)
       if (!at) continue
@@ -586,6 +587,7 @@ function collectSlabs(): TiltSlab[] {
           card.z = base + thick
           lifting.set(el, card.z)
           chain(el, stage)
+          riseZones(zones, at, w, h, card.z, lifting, stage)
           if (n > 1) hideEdges(el)
           const L = Math.min(n - 1, DECK_SLICES), below = thick - per
           for (let j = 1; j <= L; j++) {
@@ -755,6 +757,29 @@ function fanSlabs(el: HTMLElement, stage: HTMLElement, at: { x: number; y: numbe
       i % 2 ? SIDE.card : SIDE.edge, 6)
     if (s) s.z = z
   })
+}
+
+/** Invisible hit zones laid over a card (an opened deck's front card has
+ *  one: its double-click closes the deck). Flat, they sit above the card
+ *  by z-index; tilted, the card stands up through them, so a zone over a
+ *  raised card is raised with it, a hair above, and takes its clicks as it
+ *  does flat. */
+function hitZones(stage: HTMLElement): { el: HTMLElement; at: { x: number; y: number } }[] {
+  const out: { el: HTMLElement; at: { x: number; y: number } }[] = []
+  for (const el of stage.querySelectorAll<HTMLElement>('div[style*="pointer-events: all"]')) {
+    if (el.childElementCount || el.closest('[data-group-card]') || el.hasAttribute('data-freenode')) continue
+    const at = offsetIn(el, stage)
+    if (at) out.push({ el, at })
+  }
+  return out
+}
+function riseZones(zones: ReturnType<typeof hitZones>, at: { x: number; y: number }, w: number, h: number, z: number,
+                   lifting: Map<HTMLElement, number>, stage: HTMLElement) {
+  for (const zn of zones) {
+    if (Math.abs(zn.at.x - at.x) > 1 || Math.abs(zn.at.y - at.y) > 1 || Math.abs(zn.el.offsetWidth - w) > 1 || Math.abs(zn.el.offsetHeight - h) > 1) continue
+    lifting.set(zn.el, z + 0.5)
+    chain(zn.el, stage)
+  }
 }
 
 /** A closed deck's flat edge lines (its outline children, which take no

@@ -868,7 +868,14 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   function pick(x: number, y: number): string | null {
     if (!lastW || !lastH) return null
     raycaster.setFromCamera(new THREE.Vector2((x / lastW) * 2 - 1, -(y / lastH) * 2 + 1), camera)
+    // A raised part (a button, an arrow, a nearer card) in front of a model
+    // hides it, and takes the click: only a model nearer than those counts.
     let best: { key: string; d: number } | null = null
+    for (const m of [topMesh, sideMesh]) {
+      m.geometry.computeBoundingSphere()
+      const hit = raycaster.intersectObject(m, false)[0]
+      if (hit && (!best || hit.distance < best.d)) best = { key: '', d: hit.distance }
+    }
     for (const [key, s] of standing) {
       if (!s.stand.visible || !s.inst) continue
       const hit = raycaster.intersectObject(s.turn, true)[0]
@@ -876,7 +883,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       const man = s.figure.visible ? raycaster.intersectObject(s.figure, true)[0] : undefined
       if (man && (!best || man.distance < best.d)) best = { key: `person|${key}`, d: man.distance }
     }
-    return best?.key ?? null
+    return best?.key || null
   }
 
   /** Load and upload what the cards in view need — models, wall labels,
