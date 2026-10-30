@@ -451,8 +451,10 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   const topMesh = new THREE.Mesh(topGeo, new THREE.MeshBasicMaterial({ colorWrite: false, side: THREE.DoubleSide }))
   // The sheen: the key light's highlight on the faces (the DOM draws them;
   // this adds only the shine, black plus specular, added on top).
+  const SHEEN_SPEC = new THREE.Color(0x9aa4bc), SHEEN_FADE = 500
+  let sheenFrom = 0
   const SHEEN_MAT = new THREE.MeshPhongMaterial({
-    color: 0x000000, specular: 0x9aa4bc, shininess: 14, side: THREE.DoubleSide, ...SKIP_ART,
+    color: 0x000000, specular: SHEEN_SPEC.clone(), shininess: 14, side: THREE.DoubleSide, ...SKIP_ART,
     // Added to the colour only: the canvas's alpha stays as it was, so the
     // DOM face under it still shows (adding alpha too paints it black).
     transparent: true, blending: THREE.CustomBlending, blendEquation: THREE.AddEquation,
@@ -784,6 +786,12 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       }
       // The sheen follows the light's strength, but never glares.
       SHEEN_MAT.opacity = Math.min(1, sheen * L.power / 3)
+      // It fades up as the canvas tips, rather than switching on (Brian
+      // 2026-10-30): SHEEN_FADE ms, easing out.
+      if (st.tilt <= 0.5) sheenFrom = 0
+      else if (!sheenFrom) sheenFrom = now
+      const f = sheenFrom ? 1 - (1 - Math.min(1, (now - sheenFrom) / SHEEN_FADE)) ** 3 : 0
+      SHEEN_MAT.specular.copy(SHEEN_SPEC).multiplyScalar(f)
       sheenMesh.visible = sheen > 0.01 && !st.flat
     }
     // The catcher must not take the clay or wireframe look: it is drawn on
@@ -877,6 +885,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   const warmRT = new THREE.WebGLRenderTarget(4, 4)
   function warm(W: number, H: number, targets: TiltTarget[], st: TiltFrameState) {
     frame(performance.now(), W, H, targets, { ...st, tilt: 30, shiftX: 0, shiftY: 0 }, warmRT)
+    sheenFrom = 0   // the real tilt still fades it in
   }
 
   /** The url and model units per metre of a model on screen. */
