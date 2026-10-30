@@ -35,6 +35,7 @@ import { expandWithNestedMembers } from './hooks/useCardDecks'
 import { copyEffect, pasteEffect, selectedEffect } from './utils/fx/effectClipboard'
 import { currentZone } from './store/zoomZonesStore'
 import { ZoomZoneBar, ZoomZoneHeaderButton } from './components/UI/ZoomZoneBar'
+import { ConsoleToggleButton } from './components/UI/ConsoleToggleButton'
 
 /** Hosts useFxStrips, which subscribes to every tile, Viewer and zoom
  *  change. Called in App's body, each drag frame and wheel tick would
@@ -770,6 +771,7 @@ export default function App() {
           Decks
         </button>
         <RolodexToggleButton />
+        <ConsoleToggleButton />
         <div style={{ width: 1, height: 16, background: 'rgba(255,255,255,0.1)' }} />
         <span style={{ color: 'rgba(255,255,255,0.22)', fontSize: 11 }}>a canvas for creative work</span>
         <div style={{ flex: 1 }} />

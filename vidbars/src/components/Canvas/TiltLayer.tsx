@@ -581,11 +581,16 @@ function collectSlabs(): TiltSlab[] {
   // A card (or deck) on a strip has an invisible stand-in tile that is never
   // drawn, so its lift is worked out from the store: it stands on the
   // strip's floor, clear of it, like a docked tile.
+  // In console mode the card on top of each column stands up on its bottom
+  // edge, like a panel on a machine.
+  const stands = new Set<string>()
+  const consoleOn = useTiltStore.getState().console
   for (const n of Object.values(useFreeNodeStore.getState().nodes)) {
     if (!n.cardRef || !n.railDock || n.railDock.lifted) continue
     const strip = host.querySelector<HTMLElement>(`[data-freenode][data-id="${n.railDock.railId}"] [data-rail-body]`)
     const k = strip ? detail(strip.offsetWidth * zoom) : 0
     if (k > 0) docked.set(n.cardRef, dockLift(Math.min(n.width, n.height) * zoom, n.railDock.order ?? 0) * k)
+    if (k > 0 && consoleOn && !coversOf(n.id).length) stands.add(n.cardRef)
   }
   // Card layer: cards and closed decks, already in screen px.
   const stage = document.querySelector<HTMLElement>('[data-tilt-stage="overlay"]')
@@ -605,6 +610,7 @@ function collectSlabs(): TiltSlab[] {
       const lift = docked.get(id) ?? (g?.deckAnchorId ? docked.get(g.deckAnchorId) : undefined)
       const k = detail(w)
       let card: TiltSlab | undefined
+      let hinge: Hinge | undefined
       if (k <= 0 && lift === undefined) {
         card = add(at.x, at.y, w, h, m * THICK.card, SIDE.card, r)
       } else {
@@ -623,9 +629,14 @@ function collectSlabs(): TiltSlab[] {
           riseZones(zones, at, w, h, card.z, lifting, stage)
           if (n > 1) hideEdges(el)
           const L = Math.min(n - 1, DECK_SLICES), below = thick - per
+          if (lift !== undefined && (stands.has(id) || (g?.deckAnchorId !== undefined && stands.has(g.deckAnchorId)))) {
+            hinge = { v: at.y + h - H / 2, z: card.z, a: CONSOLE_DEG * Math.PI / 180 }
+            stand(el, hinge)
+            card.hinge = hinge
+          }
           for (let j = 1; j <= L; j++) {
             const s = add(at.x, at.y, w - reserve + reserve * j / L, h, below / L, j % 2 ? SIDE.edge : SIDE.card, r)
-            if (s) { s.z = base + below * (1 - (j - 1) / L); s.cap = true }
+            if (s) { s.z = base + below * (1 - (j - 1) / L); s.cap = true; if (hinge) s.hinge = hinge }
           }
         }
       }
@@ -633,7 +644,7 @@ function collectSlabs(): TiltSlab[] {
         const a = offsetIn(part, stage)
         if (!a) return
         const p = add(a.x, a.y, part.offsetWidth, part.offsetHeight, t, SIDE.pop, radiusOf(part))
-        if (p) { p.z = z; p.pop = true }
+        if (p) { p.z = z; p.pop = true; if (hinge) p.hinge = hinge }
         return p
       })
     }
@@ -869,6 +880,32 @@ function detail(screenW: number): number {
   return x * x * (3 - 2 * x) * y * y * (3 - 2 * y)
 }
 
+/** Console mode: how far a standing card turns up off the tray, degrees. */
+const CONSOLE_DEG = 62
+/** A card stood up on its bottom edge: the edge at flat `v` (px from the
+ *  centre, y down) and height `z`, turned up by `a` radians. */
+type Hinge = { v: number; z: number; a: number }
+let stood = new Map<HTMLElement, { hinge: Hinge; rotate: string; origin: string }>()
+let standing = new Map<HTMLElement, { hinge: Hinge; rotate: string; origin: string }>()
+function stand(el: HTMLElement, hinge: Hinge) {
+  const was = stood.get(el) ?? { hinge, rotate: el.style.rotate, origin: el.style.transformOrigin }
+  standing.set(el, { ...was, hinge })
+  el.style.rotate = `x ${(-hinge.a * 180 / Math.PI).toFixed(2)}deg`
+  el.style.transformOrigin = '50% 100%'
+}
+function settleStands() {
+  for (const [el, was] of stood) if (!standing.has(el)) { el.style.rotate = was.rotate; el.style.transformOrigin = was.origin }
+  stood = standing
+  standing = new Map()
+}
+/** The hinge `el` stands on, if it is (or is on) a standing card. */
+function hingeOf(el: Element | null): Hinge | undefined {
+  for (let e = el; e; e = e.parentElement) {
+    const h = stood.get(e as HTMLElement)
+    if (h) return h.hinge
+  }
+}
+
 /** The DOM tiles lifted off the plane (docked cards), and by how much. The
  *  lift is the CSS `translate` property, which leaves the tile's own
  *  transform alone; tilting flat puts them all back. */
@@ -883,6 +920,7 @@ function setLifts(next: Map<HTMLElement, number>) {
   }
   lifted = next
   settleChains()
+  settleStands()
 }
 /** How high `el` stands: the lifts of everything raised that holds it
  *  (a button on a docked card stands on the card's lift), or 0. */
@@ -1017,10 +1055,25 @@ const TiltedView: React.FC = () => {
   useEffect(() => {
     const root = rootRef.current!
     const host = hostOf(root)!
-    const flatClient = (cx: number, cy: number, height = 0) => {
+    const flatClient = (cx: number, cy: number, height = 0, hinge?: Hinge) => {
       const r = host.getBoundingClientRect()
       const { tilt: t, spin: s, shiftX, shiftY } = useTiltStore.getState()
-      const p = unprojectTilt(cx - r.left - r.width / 2, cy - r.top - r.height / 2, t, s, shiftX, shiftY, height)
+      const sx = cx - r.left - r.width / 2, sy = cy - r.top - r.height / 2
+      let p = unprojectTilt(sx, sy, t, s, shiftX, shiftY, height)
+      if (hinge) {
+        // A standing card: find the height at which the ray meets its face
+        // (a point d behind the hinge line on the plane stands d·tan a up),
+        // then lay that point back down flat on the card.
+        const tan = Math.tan(hinge.a)
+        const off = (h: number) => {
+          const q = unprojectTilt(sx, sy, t, s, shiftX, shiftY, h)
+          return q ? h - hinge.z - Math.max(0, hinge.v - q.y) * tan : 1
+        }
+        let lo = hinge.z, hi = hinge.z + Math.max(r.width, r.height) * 2
+        for (let i = 0; i < 32; i++) { const mid = (lo + hi) / 2; if (off(mid) > 0) hi = mid; else lo = mid }
+        const q = unprojectTilt(sx, sy, t, s, shiftX, shiftY, lo)
+        p = q && { x: q.x, y: hinge.v - Math.max(0, hinge.v - q.y) / Math.cos(hinge.a) }
+      }
       return p && { x: p.x + r.width / 2 + r.left, y: p.y + r.height / 2 + r.top }
     }
     /** Pressed on the tilted canvas (not a pinned panel, the HUD, the zoom bar). */
@@ -1040,7 +1093,7 @@ const TiltedView: React.FC = () => {
 
     const resend = (e: MouseEvent, type: string, to: EventTarget, height = 0) => {
       // A lifted tile is pressed at its own height, not the floor's.
-      const p = flatClient(e.clientX, e.clientY, height)
+      const p = flatClient(e.clientX, e.clientY, height, hingeOf(to as Element))
       if (!p) return
       // While the re-sent event runs, a handler asking what is under its
       // (flat) point is asking what is under the cursor: the browser hit-tests

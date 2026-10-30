@@ -61,6 +61,10 @@ export interface TiltSlab {
   /** Height of the face above the plane, px: a card lifted off a tray's
    *  floor. Default 0. */
   z?: number
+  /** Stood up on a hinge (console mode): turned by `a` radians about the
+   *  line across the plane at flat `v` (px from the centre, y down) and
+   *  height `z`, its far side rising. A card and its raised parts share one. */
+  hinge?: { v: number; z: number; a: number }
   /** Draw its top in its side colour: nothing in the DOM covers it. */
   cap?: boolean
   /** A raised rim round the edge (a tray): its width and height, px. */
@@ -578,10 +582,20 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
         else { sideIdx[si++] = a; sideIdx[si++] = a2; sideIdx[si++] = b; sideIdx[si++] = a2; sideIdx[si++] = b2; sideIdx[si++] = b }
       }
     }
+    // Stand a slab's vertices up on its hinge (positions, and normals).
+    const turn = (P: Float32Array, N: Float32Array | null, from: number, to: number, h: { v: number; z: number; a: number }) => {
+      const c = Math.cos(h.a), sn = Math.sin(h.a), y0 = -h.v
+      for (let o = from * 3; o < to * 3; o += 3) {
+        const dy = P[o + 1] - y0, dz = P[o + 2] - h.z
+        P[o + 1] = y0 + dy * c - dz * sn; P[o + 2] = h.z + dy * sn + dz * c
+        if (N) { const ny = N[o + 1], nz = N[o + 2]; N[o + 1] = ny * c - nz * sn; N[o + 2] = ny * sn + nz * c }
+      }
+    }
     for (let k = 0; k < n; k++) {
       const s = slabs[k]
       const hw = s.w / 2, hh = s.h / 2
       const z = s.z ?? 0
+      const sv0 = sv, tv0 = tv / 3, hv0 = hv / 3
       col.setHex(s.color)
       outline(s.u, s.v, hw, hh, s.r, ox, oy, onx, ony)
       const rimH = s.rim ? s.rim.h : 0
@@ -624,6 +638,11 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       if (z > 0.5) for (let i = 0; i < RING; i++) { liftIdx[li++] = top0; liftIdx[li++] = top0 + 1 + i; liftIdx[li++] = top0 + 1 + ((i + 1) % RING) }
       // Sheen: the outline, and an inset ring (or the centre, for a small
       // raised part), wound the same way as the top's fan.
+      if (s.hinge) {
+        turn(sidePos, sideNrm, sv0, sv, s.hinge)
+        turn(topPos, null, tv0, tv / 3, s.hinge)
+        slabBox.expandByPoint(fitC.set(s.u, -s.v, z + s.h))
+      }
       // Round buttons get none: a highlight on a disc reads as a second,
       // misregistered disc.
       if (s.pop && Math.max(s.w, s.h) < Math.min(s.w, s.h) * 1.6) continue
@@ -644,6 +663,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
           sheenIdx[hi++] = i0 + i; sheenIdx[hi++] = o0 + j; sheenIdx[hi++] = i0 + j
         }
       }
+      if (s.hinge) turn(sheenPos, null, hv0, hv / 3, s.hinge)
     }
     sheenGeo.getAttribute('position').needsUpdate = true
     sheenGeo.index!.needsUpdate = true

@@ -72,6 +72,11 @@ interface TiltStore {
   walls: boolean
   /** A person beside each model, for scale. */
   figure: boolean
+  /** Console mode: the loop strip's cards stand up off the tray on their
+   *  bottom edges, like a machine's panels; off = they lie in it. Kept
+   *  across reloads. */
+  console: boolean
+  setConsole: (on: boolean) => void
   setView: (tilt: number, spin: number) => void
   setShift: (x: number, y: number) => void
   setTexture: (on: boolean) => void
@@ -86,6 +91,10 @@ interface TiltStore {
 }
 
 let flattenRaf: number | null = null
+const CONSOLE_KEY = 'vidbars.tiltConsole'
+function readConsole(): boolean {
+  try { return localStorage.getItem(CONSOLE_KEY) === '1' } catch { return false }
+}
 
 export const useTiltStore = create<TiltStore>()((set, get) => ({
   tilt: 0,
@@ -99,6 +108,8 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
   turn: true,
   walls: true,
   figure: false,
+  console: readConsole(),
+  setConsole: on => { set({ console: on }); try { localStorage.setItem(CONSOLE_KEY, on ? '1' : '0') } catch { /* private window */ } },
   setView: (tilt, spin) => {
     if (flattenRaf !== null) { cancelAnimationFrame(flattenRaf); flattenRaf = null }
     // Orbit about what is in the middle of the screen: the ground point
