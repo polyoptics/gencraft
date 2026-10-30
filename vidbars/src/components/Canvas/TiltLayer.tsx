@@ -25,7 +25,7 @@ import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useBoardsStore } from '../../store/boardsStore'
 import { getMediaItems } from '../../types/bar'
 import { faceBlocks } from '../../utils/cardGrid'
-import { createTiltScene, type TiltTarget, type TiltFrameState } from '../../three/tiltScene'
+import { createTiltScene, type TiltTarget, type TiltFrameState, type TiltSlab } from '../../three/tiltScene'
 
 /** Degrees of tilt / turn per pixel of Alt+drag. */
 const DRAG_DEG = 0.25
@@ -272,6 +272,7 @@ const frameState = (): TiltFrameState => {
     ]),
     unitsFor: url => scales[url],
     sizeFor: key => sizeOf[key] ?? 1,
+    slabs: isTilted(ts.tilt) ? collectSlabs() : [],
   }
 }
 
@@ -396,6 +397,63 @@ function cardModel(id: string): { url: string; name: string } | null {
     return m.type === 'model' ? { url: m.url, name: m.originalName || fileName(m.url) || name || 'Model' } : null
   }
   return null
+}
+
+/** How thick things are, as a share of their shorter side: a Viewer like
+ *  a phone on a table, a tile a bit less, a card thinner, and a closed deck
+ *  as thick as the cards in it. */
+const THICK = { viewer: 0.1, tile: 0.06, card: 0.05, deckCard: 0.022, deckMax: 0.45 }
+const SIDE = { viewer: 0x4a4e5c, tile: 0x7a829e, card: 0x8a93b4 }
+
+/** Every card, deck, tile and Viewer on the tilted plane, as slabs (flat px
+ *  from the host centre). Read from layout offsets, which tilting does not
+ *  change, so this is cheap enough for every frame. */
+function collectSlabs(): TiltSlab[] {
+  const out: TiltSlab[] = []
+  const host = document.querySelector<HTMLElement>('[data-tilt-stage="world"]')
+  if (!host) return out
+  const W = host.offsetWidth, H = host.offsetHeight
+  const add = (x: number, y: number, w: number, h: number, t: number, color: number, r: number) => {
+    const u = x + w / 2 - W / 2, v = y + h / 2 - H / 2
+    if (w < 3 || h < 3 || Math.abs(u) > W * 1.5 || Math.abs(v) > H * 1.5) return
+    out.push({ u, v, w, h, t, color, r })
+  }
+  // World layer: tiles and Viewers, in world units under the pan/zoom.
+  const { pan, zoom } = useCanvasStore.getState()
+  for (const world of host.querySelectorAll<HTMLElement>(':scope > div[style*="scale("]')) {
+    for (const el of world.querySelectorAll<HTMLElement>('[data-viewport3d]:not([data-pinned]), [data-freenode][data-id]:not([data-pinned])')) {
+      const at = offsetIn(el, world)
+      if (!at) continue
+      const viewer = el.hasAttribute('data-viewport3d')
+      const w = el.offsetWidth * zoom, h = el.offsetHeight * zoom
+      const m = Math.min(w, h)
+      add(pan.x + at.x * zoom, pan.y + at.y * zoom, w, h,
+        m * (viewer ? THICK.viewer : THICK.tile), viewer ? SIDE.viewer : SIDE.tile, m * (viewer ? 0.03 : 0.05))
+    }
+  }
+  // Card layer: cards and closed decks, already in screen px.
+  const stage = document.querySelector<HTMLElement>('[data-tilt-stage="overlay"]')
+  if (stage) {
+    const groups = useBoardsStore.getState().groups
+    for (const el of stage.querySelectorAll<HTMLElement>('[data-group-card][data-id]')) {
+      const at = offsetIn(el, stage)
+      if (!at) continue
+      const id = el.dataset.id!
+      const g = groups.find(gr => gr.id === id)
+      if (g?.deckState === 'fanned') continue   // the wrapper spans the whole fan
+      const n = g?.deckState === 'stacked' ? 1 + groups.filter(o => o.deckAnchorId === id && o.deckState === 'stacked').length : 1
+      const w = el.offsetWidth, h = el.offsetHeight, m = Math.min(w, h)
+      add(at.x, at.y, w, h, Math.min(m * THICK.deckMax, m * (THICK.card + (n - 1) * THICK.deckCard)), SIDE.card, m * 0.06)
+    }
+    // Zoomed in to Blocks or Boards, a card is drawn as its outline.
+    for (const el of stage.querySelectorAll<HTMLElement>('[data-group-outline]')) {
+      const at = offsetIn(el, stage)
+      if (!at) continue
+      const w = el.offsetWidth, h = el.offsetHeight, m = Math.min(w, h)
+      add(at.x, at.y, w, h, m * THICK.card, SIDE.card, Math.min(12, m * 0.08))
+    }
+  }
+  return out
 }
 
 /** Every model card in view, as flat px from the host centre. */

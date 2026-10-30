@@ -28,6 +28,22 @@ export interface TiltTarget {
   name: string
 }
 
+/** A flat element given thickness on the tilted plane: a rounded slab
+ *  whose top is the element itself (at the plane) and whose sides go down
+ *  `t` px. Centre and size in flat px from the host centre. */
+export interface TiltSlab {
+  u: number
+  v: number
+  w: number
+  h: number
+  /** Corner radius, px. */
+  r: number
+  /** Thickness, px. */
+  t: number
+  /** Side colour. */
+  color: number
+}
+
 export interface TiltFrameState {
   tilt: number
   spin: number
@@ -44,6 +60,8 @@ export interface TiltFrameState {
   unitsFor: (url: string) => number | undefined
   /** Display size multiplier for a card's model (dragging the model). */
   sizeFor: (key: string) => number
+  /** Cards, decks, tiles and Viewers, for their thickness. */
+  slabs: TiltSlab[]
 }
 
 /** A person, in metres, for scale. */
@@ -309,6 +327,78 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     standing.delete(key)
   }
 
+  // ── Thickness (Brian 2026-10-30) ──
+  // Every card, deck, tile and Viewer is a slab: the DOM element is its top
+  // face, at the plane, and its sides are drawn here going down from it. All
+  // slabs are rebuilt into one pair of buffers each frame (they move with
+  // every pan and zoom): the sides, lit, and the tops, depth only, so a
+  // nearer slab hides the sides of the ones behind it as a solid would.
+  const SLAB_MAX = 160, CORNER_SEG = 4
+  const RING = 4 * (CORNER_SEG + 1)
+  const sideGeo = new THREE.BufferGeometry()
+  const sidePos = new Float32Array(SLAB_MAX * RING * 2 * 3)
+  const sideNrm = new Float32Array(SLAB_MAX * RING * 2 * 3)
+  const sideCol = new Float32Array(SLAB_MAX * RING * 2 * 3)
+  const sideIdx = new Uint32Array(SLAB_MAX * RING * 6)
+  sideGeo.setAttribute('position', new THREE.BufferAttribute(sidePos, 3).setUsage(THREE.DynamicDrawUsage))
+  sideGeo.setAttribute('normal', new THREE.BufferAttribute(sideNrm, 3).setUsage(THREE.DynamicDrawUsage))
+  sideGeo.setAttribute('color', new THREE.BufferAttribute(sideCol, 3).setUsage(THREE.DynamicDrawUsage))
+  sideGeo.setIndex(new THREE.BufferAttribute(sideIdx, 1))
+  const topGeo = new THREE.BufferGeometry()
+  const topPos = new Float32Array(SLAB_MAX * (RING + 1) * 3)
+  const topIdx = new Uint32Array(SLAB_MAX * RING * 3)
+  topGeo.setAttribute('position', new THREE.BufferAttribute(topPos, 3).setUsage(THREE.DynamicDrawUsage))
+  topGeo.setIndex(new THREE.BufferAttribute(topIdx, 1))
+  const sideMesh = new THREE.Mesh(sideGeo, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6, metalness: 0, emissive: 0x2a2e3c }))
+  const topMesh = new THREE.Mesh(topGeo, new THREE.MeshBasicMaterial({ colorWrite: false, side: THREE.DoubleSide }))
+  sideMesh.frustumCulled = topMesh.frustumCulled = false
+  topMesh.renderOrder = -1
+  groundDeco.add(topMesh, sideMesh)
+  const col = new THREE.Color()
+
+  function buildSlabs(slabs: TiltSlab[]) {
+    const n = Math.min(slabs.length, SLAB_MAX)
+    let sv = 0, si = 0, tv = 0, ti = 0
+    for (let k = 0; k < n; k++) {
+      const s = slabs[k]
+      const hw = s.w / 2, hh = s.h / 2
+      const r = Math.max(0, Math.min(s.r, hw, hh))
+      col.setHex(s.color)
+      // Outline, corner by corner (y is flipped: the plane's y is down).
+      const base = sv / 3 / 1, top0 = tv / 3
+      topPos[tv++] = s.u; topPos[tv++] = -s.v; topPos[tv++] = 0
+      const corners = [[hw - r, hh - r, 0], [-(hw - r), hh - r, Math.PI / 2], [-(hw - r), -(hh - r), Math.PI], [hw - r, -(hh - r), Math.PI * 1.5]] as const
+      let p = 0
+      for (const [cx, cy, a0] of corners) {
+        for (let i = 0; i <= CORNER_SEG; i++, p++) {
+          const a = a0 + (i / CORNER_SEG) * (Math.PI / 2)
+          const nx = Math.cos(a), ny = Math.sin(a)
+          const x = s.u + cx + nx * r, y = -s.v - (cy + ny * r)
+          for (const z of [0, -s.t]) {
+            sidePos[sv] = x; sidePos[sv + 1] = y; sidePos[sv + 2] = z
+            sideNrm[sv] = nx; sideNrm[sv + 1] = -ny; sideNrm[sv + 2] = 0
+            const shade = z === 0 ? 1 : 0.7
+            sideCol[sv] = col.r * shade; sideCol[sv + 1] = col.g * shade; sideCol[sv + 2] = col.b * shade
+            sv += 3
+          }
+          topPos[tv++] = x; topPos[tv++] = y; topPos[tv++] = 0
+        }
+      }
+      for (let i = 0; i < RING; i++) {
+        const a = base + i * 2, b = base + ((i + 1) % RING) * 2
+        sideIdx[si++] = a; sideIdx[si++] = b; sideIdx[si++] = a + 1
+        sideIdx[si++] = b; sideIdx[si++] = b + 1; sideIdx[si++] = a + 1
+        topIdx[ti++] = top0; topIdx[ti++] = top0 + 1 + i; topIdx[ti++] = top0 + 1 + ((i + 1) % RING)
+      }
+    }
+    for (const g of [sideGeo, topGeo]) {
+      for (const a of Object.values(g.attributes)) (a as THREE.BufferAttribute).needsUpdate = true
+      g.index!.needsUpdate = true
+    }
+    sideGeo.setDrawRange(0, si)
+    topGeo.setDrawRange(0, ti)
+  }
+
   let lastW = 0, lastH = 0
 
   function frame(now: number, W: number, H: number, targets: TiltTarget[], st: TiltFrameState, into: THREE.WebGLRenderTarget | null = null) {
@@ -421,6 +511,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       }
     }
     scene.overrideMaterial = null
+    buildSlabs(st.tilt > 0.5 ? st.slabs : [])
     renderer.render(deco, camera)
     if (into) { renderer.setRenderTarget(null); return }
 
