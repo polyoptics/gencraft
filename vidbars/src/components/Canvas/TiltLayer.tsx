@@ -461,8 +461,10 @@ function cardModel(id: string): { url: string; name: string } | null {
 /** How thick things are, as a share of their shorter side: a Viewer like
  *  a phone on a table, a tile a bit less, a card thinner, and a closed deck
  *  as thick as the cards in it. */
-const THICK = { viewer: 0.05, tile: 0.03, card: 0.025, deckCard: 0.011, deckMax: 0.25 }
-const SIDE = { viewer: 0x4a4e5c, tile: 0x7a829e, card: 0x8a93b4, tray: 0x464c60, pop: 0x6a7088 }
+const THICK = { viewer: 0.05, tile: 0.03, card: 0.012, deckMax: 0.25 }
+const SIDE = { viewer: 0x4a4e5c, tile: 0x7a829e, card: 0x8a93b4, tray: 0x464c60, pop: 0x6a7088, edge: 0xc4c9d8 }
+/** The most slices a deck's side is built from (its cards, or bands of them). */
+const DECK_SLICES = 10
 
 /** An element's corner radius in its own px, so a slab's corners match
  *  the rounded box drawn on top of it. */
@@ -564,16 +566,33 @@ function collectSlabs(): TiltSlab[] {
       if (g?.deckState === 'fanned') continue   // the wrapper spans the whole fan
       const n = g?.deckState === 'stacked' ? 1 + groups.filter(o => o.deckAnchorId === id && o.deckState === 'stacked').length : 1
       const w = el.offsetWidth, h = el.offsetHeight, m = Math.min(w, h)
-      const thick = Math.min(m * THICK.deckMax, m * (THICK.card + (n - 1) * THICK.deckCard))
-      const card = add(at.x, at.y, w, h, thick, SIDE.card, radiusOf((el.firstElementChild as HTMLElement | null) ?? el) || m * 0.06)
-      // On a loop strip: lifted off the tray's floor like a docked tile,
-      // its whole thickness (a deck's too) standing above the floor.
+      const r = radiusOf((el.firstElementChild as HTMLElement | null) ?? el) || m * 0.06
+      // On a loop strip it stands on the tray's floor, else on the canvas.
       const lift = docked.get(id) ?? (g?.deckAnchorId ? docked.get(g.deckAnchorId) : undefined)
-      if (card && lift !== undefined) {
-        card.z = lift + thick
-        card.t = card.z
-        lifting.set(el, card.z)
-        chain(el, stage)
+      const k = detail(w)
+      let card: TiltSlab | undefined
+      if (k <= 0 && lift === undefined) {
+        card = add(at.x, at.y, w, h, m * THICK.card, SIDE.card, r)
+      } else {
+        // A card stands on what holds it, its thickness above it; a deck is
+        // as tall as its cards, each a slice, the lower ones stepping out to
+        // the right as its flat edges do. Its face rides on top.
+        const per = m * THICK.card * Math.max(k, lift === undefined ? 0 : 1)
+        const thick = Math.min(m * THICK.deckMax, per * n)
+        const base = lift ?? 0
+        const reserve = n > 1 ? Math.min(10, w * 0.05) : 0
+        card = add(at.x, at.y, w - reserve, h, lift === undefined ? per : thick, SIDE.card, r)
+        if (card) {
+          card.z = base + thick
+          lifting.set(el, card.z)
+          chain(el, stage)
+          if (n > 1) hideEdges(el)
+          const L = Math.min(n - 1, DECK_SLICES), below = thick - per
+          for (let j = 1; j <= L; j++) {
+            const s = add(at.x, at.y, w - reserve + reserve * j / L, h, below / L, j % 2 ? SIDE.edge : SIDE.card, r)
+            if (s) { s.z = base + below * (1 - (j - 1) / L); s.cap = true }
+          }
+        }
       }
       popParts(el, stage, card?.z ?? 0, m, detail(w), lifting, (part, z, t) => {
         const a = offsetIn(part, stage)
@@ -700,12 +719,27 @@ function fill(el: HTMLElement): number[] {
   if (parseFloat(cs.borderTopWidth) > 0 && rgba(cs.borderTopColor).join() !== rgba(css).join()) el.style.borderColor = css
   return was.rgb
 }
+/** A closed deck's flat edge lines (its outline children, which take no
+ *  clicks) give way to the modelled edges while it stands up. */
+let hidden = new Set<HTMLElement>()
+let hiding = new Set<HTMLElement>()
+function hideEdges(deck: HTMLElement) {
+  for (const c of deck.children) {
+    const e = c as HTMLElement
+    if (e.style.pointerEvents !== 'none' || e.offsetWidth > 16) continue
+    hiding.add(e)
+    if (!hidden.has(e)) e.style.visibility = 'hidden'
+  }
+}
 function rgba(css: string): number[] {
   const n = css.match(/[\d.]+/g)?.map(Number) ?? []
   return n.length >= 3 ? [n[0], n[1], n[2], n[3] ?? 1] : [0, 0, 0, 0]
 }
 function settleChains() {
   for (const [e, was] of filled) if (!filling.has(e)) { e.style.boxShadow = was.bs; e.style.borderColor = was.bc }
+  for (const e of hidden) if (!hiding.has(e)) e.style.visibility = ''
+  hidden = hiding
+  hiding = new Set()
   filled = filling
   filling = new Map()
   for (const [e, was] of chained) {
@@ -793,6 +827,7 @@ function collectTargets(W: number, H: number): TiltTarget[] {
         v: at.y + el.offsetHeight / 2 - H / 2,
         w: Math.min(el.offsetWidth, el.offsetHeight * 1.4),
         h: el.offsetHeight,
+        z: liftOf(el),
       })
     }
   }

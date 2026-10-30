@@ -34,6 +34,8 @@ export interface TiltTarget {
   h: number
   /** What the back wall says. */
   name: string
+  /** How high the card it stands on is (px): a deck's or a lifted card's top. */
+  z?: number
 }
 
 /** A flat element given thickness on the tilted plane: a rounded slab
@@ -53,6 +55,8 @@ export interface TiltSlab {
   /** Height of the face above the plane, px: a card lifted off a tray's
    *  floor. Default 0. */
   z?: number
+  /** Draw its top in its side colour: nothing in the DOM covers it. */
+  cap?: boolean
   /** A raised rim round the edge (a tray): its width and height, px. */
   rim?: { w: number; h: number }
   /** A small raised part (a header, button or banner): the sheen covers
@@ -422,7 +426,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
 
   const SLAB_MAX = 200, CORNER_SEG = 4
   const RING = 4 * (CORNER_SEG + 1)
-  const SIDE_V = SLAB_MAX * (RING * 7 + 1), SIDE_I = SLAB_MAX * RING * 21
+  const SIDE_V = SLAB_MAX * (RING * 8 + 2), SIDE_I = SLAB_MAX * RING * 24
   const sideGeo = new THREE.BufferGeometry()
   const sidePos = new Float32Array(SIDE_V * 3)
   const sideNrm = new Float32Array(SIDE_V * 3)
@@ -597,6 +601,12 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       const c0 = vert(s.u, -s.v, z - s.t, 0, 0, -1, 0.45)
       const b0 = sv; for (let i = 0; i < RING; i++) vert(ox[i], oy[i], z - s.t, 0, 0, -1, 0.45)
       for (let i = 0; i < RING; i++) { sideIdx[si++] = c0; sideIdx[si++] = b0 + i; sideIdx[si++] = b0 + ((i + 1) % RING) }
+      // A coloured top, for a slab no DOM face covers (a deck's lower cards).
+      if (s.cap) {
+        const c1 = vert(s.u, -s.v, z, 0, 0, 1, 1)
+        const b1 = sv; for (let i = 0; i < RING; i++) vert(ox[i], oy[i], z, 0, 0, 1, 1)
+        for (let i = 0; i < RING; i++) { sideIdx[si++] = c1; sideIdx[si++] = b1 + ((i + 1) % RING); sideIdx[si++] = b1 + i }
+      }
       // Depth-only top at the face.
       const top0 = tv / 3
       topPos[tv++] = s.u; topPos[tv++] = -s.v; topPos[tv++] = z
@@ -677,7 +687,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       if (s && s.url !== tg.url) { drop(tg.key, s); s = undefined }
       if (!s) s = spawn(tg.key, tg.url)
       s.seen = frameNo
-      s.stand.position.set(tg.u, -tg.v, 0)
+      s.stand.position.set(tg.u, -tg.v, tg.z ?? 0)
       const foot = Math.max(s.size.x, s.size.z, 1e-6)
       let k = (tg.w * 0.6) / foot
       if (s.size.y * k > tg.w * 1.1) k = (tg.w * 1.1) / Math.max(s.size.y, 1e-6)
