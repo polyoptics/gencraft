@@ -472,6 +472,8 @@ function radiusOf(el: HTMLElement): number {
 function collectSlabs(): TiltSlab[] {
   const out: TiltSlab[] = []
   const lifting = new Map<HTMLElement, number>()
+  /** Cards on a loop strip, by group id: how high their stand-in stands. */
+  const docked = new Map<string, number>()
   const host = document.querySelector<HTMLElement>('[data-tilt-stage="world"]')
   if (!host) return out
   const W = host.offsetWidth, H = host.offsetHeight
@@ -515,6 +517,14 @@ function collectSlabs(): TiltSlab[] {
           slab.t = slab.z    // stacked on the floor, so its sides reach it
           lifting.set(node, slab.z)
         }
+        // A card (or deck) on a strip is drawn by the card layer over an
+        // invisible stand-in tile: the card takes the stand-in's place in
+        // the stack (below), and the stand-in has no slab of its own.
+        if (n?.cardRef) {
+          if (k > 0) docked.set(n.cardRef, slab.z!)
+          out.pop()
+          continue
+        }
       }
       popParts(node, world, slab.z ?? 0, m, detail(w), lifting, (el, z, t) => {
         const a = offsetIn(el, world)
@@ -536,8 +546,18 @@ function collectSlabs(): TiltSlab[] {
       if (g?.deckState === 'fanned') continue   // the wrapper spans the whole fan
       const n = g?.deckState === 'stacked' ? 1 + groups.filter(o => o.deckAnchorId === id && o.deckState === 'stacked').length : 1
       const w = el.offsetWidth, h = el.offsetHeight, m = Math.min(w, h)
-      add(at.x, at.y, w, h, Math.min(m * THICK.deckMax, m * (THICK.card + (n - 1) * THICK.deckCard)), SIDE.card, radiusOf((el.firstElementChild as HTMLElement | null) ?? el) || m * 0.06)
-      popParts(el, stage, 0, m, detail(w), lifting, (part, z, t) => {
+      const thick = Math.min(m * THICK.deckMax, m * (THICK.card + (n - 1) * THICK.deckCard))
+      const card = add(at.x, at.y, w, h, thick, SIDE.card, radiusOf((el.firstElementChild as HTMLElement | null) ?? el) || m * 0.06)
+      // On a loop strip: lifted off the tray's floor like a docked tile,
+      // its whole thickness (a deck's too) standing above the floor.
+      const lift = docked.get(id) ?? (g?.deckAnchorId ? docked.get(g.deckAnchorId) : undefined)
+      if (card && lift !== undefined) {
+        card.z = lift + thick
+        card.t = card.z
+        lifting.set(el, card.z)
+        chain(el, stage)
+      }
+      popParts(el, stage, card?.z ?? 0, m, detail(w), lifting, (part, z, t) => {
         const a = offsetIn(part, stage)
         if (!a) return
         const p = add(a.x, a.y, part.offsetWidth, part.offsetHeight, t, SIDE.pop, radiusOf(part))
