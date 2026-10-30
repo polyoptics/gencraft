@@ -42,6 +42,11 @@ export interface TiltSlab {
   t: number
   /** Side colour. */
   color: number
+  /** Height of the face above the plane, px: a card lifted off a tray's
+   *  floor. Default 0. */
+  z?: number
+  /** A raised rim round the edge (a tray): its width and height, px. */
+  rim?: { w: number; h: number }
 }
 
 export interface TiltFrameState {
@@ -339,17 +344,21 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
 
   // ── Thickness (Brian 2026-10-30) ──
   // Every card, deck, tile and Viewer is a slab: the DOM element is its top
-  // face, at the plane, and its sides are drawn here going down from it. All
-  // slabs are rebuilt into one pair of buffers each frame (they move with
-  // every pan and zoom): the sides, lit, and the tops, depth only, so a
-  // nearer slab hides the sides of the ones behind it as a solid would.
-  const SLAB_MAX = 160, CORNER_SEG = 4
+  // face and its sides are drawn here, going down from it. A loop strip is
+  // a tray: a rim stands up round its edge, and the cards docked in it are
+  // lifted off its floor (the DOM is moved up too, TiltLayer), each with
+  // its own sides. All slabs are rebuilt into one pair of buffers each
+  // frame (they move with every pan and zoom): the sides, lit, and the
+  // tops, depth only, so a nearer slab hides what is behind it as a solid
+  // would.
+  const SLAB_MAX = 200, CORNER_SEG = 4
   const RING = 4 * (CORNER_SEG + 1)
+  const SIDE_V = SLAB_MAX * (RING * 7 + 1), SIDE_I = SLAB_MAX * RING * 21
   const sideGeo = new THREE.BufferGeometry()
-  const sidePos = new Float32Array(SLAB_MAX * RING * 2 * 3)
-  const sideNrm = new Float32Array(SLAB_MAX * RING * 2 * 3)
-  const sideCol = new Float32Array(SLAB_MAX * RING * 2 * 3)
-  const sideIdx = new Uint32Array(SLAB_MAX * RING * 6)
+  const sidePos = new Float32Array(SIDE_V * 3)
+  const sideNrm = new Float32Array(SIDE_V * 3)
+  const sideCol = new Float32Array(SIDE_V * 3)
+  const sideIdx = new Uint32Array(SIDE_I)
   sideGeo.setAttribute('position', new THREE.BufferAttribute(sidePos, 3).setUsage(THREE.DynamicDrawUsage))
   sideGeo.setAttribute('normal', new THREE.BufferAttribute(sideNrm, 3).setUsage(THREE.DynamicDrawUsage))
   sideGeo.setAttribute('color', new THREE.BufferAttribute(sideCol, 3).setUsage(THREE.DynamicDrawUsage))
@@ -366,40 +375,75 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   groundDeco.add(topMesh, sideMesh)
   const col = new THREE.Color()
 
+  /** A rounded-rect outline: RING points (x, y in the plane's y-up frame)
+   *  with their outward normals. */
+  const ox = new Float32Array(RING), oy = new Float32Array(RING), onx = new Float32Array(RING), ony = new Float32Array(RING)
+  const ix = new Float32Array(RING), iy = new Float32Array(RING)
+  function outline(u: number, v: number, hw: number, hh: number, r: number, X: Float32Array, Y: Float32Array, NX?: Float32Array, NY?: Float32Array) {
+    r = Math.max(0, Math.min(r, hw, hh))
+    const corners = [[hw - r, hh - r, 0], [-(hw - r), hh - r, Math.PI / 2], [-(hw - r), -(hh - r), Math.PI], [hw - r, -(hh - r), Math.PI * 1.5]] as const
+    let p = 0
+    for (const [cx, cy, a0] of corners) {
+      for (let i = 0; i <= CORNER_SEG; i++, p++) {
+        const a = a0 + (i / CORNER_SEG) * (Math.PI / 2)
+        const nx = Math.cos(a), ny = Math.sin(a)
+        X[p] = u + cx + nx * r; Y[p] = -v - (cy + ny * r)
+        if (NX && NY) { NX[p] = nx; NY[p] = -ny }
+      }
+    }
+  }
+
   function buildSlabs(slabs: TiltSlab[]) {
     const n = Math.min(slabs.length, SLAB_MAX)
     let sv = 0, si = 0, tv = 0, ti = 0
+    const vert = (x: number, y: number, z: number, nx: number, ny: number, nz: number, shade: number) => {
+      const o = sv * 3
+      sidePos[o] = x; sidePos[o + 1] = y; sidePos[o + 2] = z
+      sideNrm[o] = nx; sideNrm[o + 1] = ny; sideNrm[o + 2] = nz
+      sideCol[o] = col.r * shade; sideCol[o + 1] = col.g * shade; sideCol[o + 2] = col.b * shade
+      return sv++
+    }
+    /** A band of quads between two rings of vertices (a0.., b0..). */
+    const band = (a0: number, b0: number, flip: boolean) => {
+      for (let i = 0; i < RING; i++) {
+        const j = (i + 1) % RING
+        const a = a0 + i, a2 = a0 + j, b = b0 + i, b2 = b0 + j
+        if (flip) { sideIdx[si++] = a; sideIdx[si++] = b; sideIdx[si++] = a2; sideIdx[si++] = a2; sideIdx[si++] = b; sideIdx[si++] = b2 }
+        else { sideIdx[si++] = a; sideIdx[si++] = a2; sideIdx[si++] = b; sideIdx[si++] = a2; sideIdx[si++] = b2; sideIdx[si++] = b }
+      }
+    }
     for (let k = 0; k < n; k++) {
       const s = slabs[k]
       const hw = s.w / 2, hh = s.h / 2
-      const r = Math.max(0, Math.min(s.r, hw, hh))
+      const z = s.z ?? 0
       col.setHex(s.color)
-      // Outline, corner by corner (y is flipped: the plane's y is down).
-      const base = sv / 3 / 1, top0 = tv / 3
-      topPos[tv++] = s.u; topPos[tv++] = -s.v; topPos[tv++] = 0
-      const corners = [[hw - r, hh - r, 0], [-(hw - r), hh - r, Math.PI / 2], [-(hw - r), -(hh - r), Math.PI], [hw - r, -(hh - r), Math.PI * 1.5]] as const
-      let p = 0
-      for (const [cx, cy, a0] of corners) {
-        for (let i = 0; i <= CORNER_SEG; i++, p++) {
-          const a = a0 + (i / CORNER_SEG) * (Math.PI / 2)
-          const nx = Math.cos(a), ny = Math.sin(a)
-          const x = s.u + cx + nx * r, y = -s.v - (cy + ny * r)
-          for (const z of [0, -s.t]) {
-            sidePos[sv] = x; sidePos[sv + 1] = y; sidePos[sv + 2] = z
-            sideNrm[sv] = nx; sideNrm[sv + 1] = -ny; sideNrm[sv + 2] = 0
-            const shade = z === 0 ? 1 : 0.7
-            sideCol[sv] = col.r * shade; sideCol[sv + 1] = col.g * shade; sideCol[sv + 2] = col.b * shade
-            sv += 3
-          }
-          topPos[tv++] = x; topPos[tv++] = y; topPos[tv++] = 0
-        }
+      outline(s.u, s.v, hw, hh, s.r, ox, oy, onx, ony)
+      const rimH = s.rim ? s.rim.h : 0
+      // Outer wall: from the rim's top (or the face) down to the bottom.
+      const up = sv; for (let i = 0; i < RING; i++) vert(ox[i], oy[i], z + rimH, onx[i], ony[i], 0, 1)
+      const dn = sv; for (let i = 0; i < RING; i++) vert(ox[i], oy[i], z - s.t, onx[i], ony[i], 0, 0.7)
+      band(up, dn, false)
+      if (s.rim) {
+        const rw = s.rim.w
+        outline(s.u, s.v, hw - rw, hh - rw, s.r - rw, ix, iy)
+        // The rim's top, then its inner wall down to the floor (the face).
+        const o0 = sv; for (let i = 0; i < RING; i++) vert(ox[i], oy[i], z + rimH, 0, 0, 1, 1.1)
+        const i0 = sv; for (let i = 0; i < RING; i++) vert(ix[i], iy[i], z + rimH, 0, 0, 1, 1.1)
+        band(o0, i0, true)
+        const w0 = sv; for (let i = 0; i < RING; i++) vert(ix[i], iy[i], z + rimH, -onx[i], -ony[i], 0, 0.9)
+        const w1 = sv; for (let i = 0; i < RING; i++) vert(ix[i], iy[i], z, -onx[i], -ony[i], 0, 0.6)
+        band(w0, w1, true)
       }
-      for (let i = 0; i < RING; i++) {
-        const a = base + i * 2, b = base + ((i + 1) % RING) * 2
-        sideIdx[si++] = a; sideIdx[si++] = b; sideIdx[si++] = a + 1
-        sideIdx[si++] = b; sideIdx[si++] = b + 1; sideIdx[si++] = a + 1
-        topIdx[ti++] = top0; topIdx[ti++] = top0 + 1 + i; topIdx[ti++] = top0 + 1 + ((i + 1) % RING)
-      }
+      // A bottom, for a camera panned down under the canvas (Brian
+      // 2026-10-30): from below a slab is solid, not hollow.
+      const c0 = vert(s.u, -s.v, z - s.t, 0, 0, -1, 0.45)
+      const b0 = sv; for (let i = 0; i < RING; i++) vert(ox[i], oy[i], z - s.t, 0, 0, -1, 0.45)
+      for (let i = 0; i < RING; i++) { sideIdx[si++] = c0; sideIdx[si++] = b0 + i; sideIdx[si++] = b0 + ((i + 1) % RING) }
+      // Depth-only top at the face.
+      const top0 = tv / 3
+      topPos[tv++] = s.u; topPos[tv++] = -s.v; topPos[tv++] = z
+      for (let i = 0; i < RING; i++) { topPos[tv++] = ox[i]; topPos[tv++] = oy[i]; topPos[tv++] = z }
+      for (let i = 0; i < RING; i++) { topIdx[ti++] = top0; topIdx[ti++] = top0 + 1 + i; topIdx[ti++] = top0 + 1 + ((i + 1) % RING) }
     }
     for (const g of [sideGeo, topGeo]) {
       for (const a of Object.values(g.attributes)) (a as THREE.BufferAttribute).needsUpdate = true

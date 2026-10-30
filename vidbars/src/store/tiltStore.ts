@@ -140,7 +140,7 @@ export function tiltCss(tilt: number, spin: number, shiftX = 0, shiftY = 0): str
 /** Where a point on SCREEN (px from the host centre) lands on the tilted
  *  plane, in FLAT px from the centre — i.e. the flat-view point now drawn
  *  under it. Null above the horizon. */
-export function unprojectTilt(sx: number, sy: number, tiltDeg: number, spinDeg: number, shiftX = 0, shiftY = 0): { x: number; y: number } | null {
+export function unprojectTilt(sx: number, sy: number, tiltDeg: number, spinDeg: number, shiftX = 0, shiftY = 0, height = 0): { x: number; y: number } | null {
   const P = TILT_PERSPECTIVE
   const t = tiltDeg * Math.PI / 180, s = spinDeg * Math.PI / 180
   const ct = Math.cos(t), st = Math.sin(t)
@@ -149,7 +149,8 @@ export function unprojectTilt(sx: number, sy: number, tiltDeg: number, spinDeg: 
   // n = Rx(t)·(0,0,1) = (0,-sin t, cos t).
   const denom = sy * st + P * ct
   if (denom <= 1e-3) return null
-  const lam = (shiftY * st + P * ct) / denom
+  // `height`: a plane that far above the canvas (a lifted tile's face).
+  const lam = (shiftY * st + P * ct - height) / denom
   if (lam <= 0) return null
   const qx = -shiftX + lam * sx, qy = -shiftY + lam * sy, qz = P - lam * P
   // Back into plane coordinates: Rz(-s)·Rx(-t)·q.

@@ -57,3 +57,8 @@ body {
    stage paints as a whole instead. */
 [data-tilt-stage][data-tilted] [style*="will-change"] { will-change: auto !important; }
 [data-tilt-stage][data-tilted] { backface-visibility: hidden; will-change: transform; }
+/* Tilted, the world layer is a real 3D space, so a card docked in a loop
+   strip can be lifted off the strip's floor (TiltLayer sets its translate).
+   Only while something is lifted: a flat stage composites as one layer. */
+[data-tilt-stage="world"][data-tilted][data-tilt-3d],
+[data-tilt-stage="world"][data-tilted][data-tilt-3d] > div[style*="scale("] { transform-style: preserve-3d; }

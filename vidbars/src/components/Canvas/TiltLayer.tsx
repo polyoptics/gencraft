@@ -296,7 +296,7 @@ const frameState = (): TiltFrameState => {
     ]),
     unitsFor: url => scales[url],
     sizeFor: key => sizeOf[key] ?? 1,
-    slabs: isTilted(ts.tilt) ? collectSlabs() : [],
+    slabs: isTilted(ts.tilt) ? collectSlabs() : (dropLifts(), []),
   }
 }
 
@@ -427,7 +427,7 @@ function cardModel(id: string): { url: string; name: string } | null {
  *  a phone on a table, a tile a bit less, a card thinner, and a closed deck
  *  as thick as the cards in it. */
 const THICK = { viewer: 0.05, tile: 0.03, card: 0.025, deckCard: 0.011, deckMax: 0.25 }
-const SIDE = { viewer: 0x4a4e5c, tile: 0x7a829e, card: 0x8a93b4 }
+const SIDE = { viewer: 0x4a4e5c, tile: 0x7a829e, card: 0x8a93b4, tray: 0x464c60 }
 
 /** An element's corner radius in its own px, so a slab's corners match
  *  the rounded box drawn on top of it. */
@@ -440,6 +440,7 @@ function radiusOf(el: HTMLElement): number {
  *  change, so this is cheap enough for every frame. */
 function collectSlabs(): TiltSlab[] {
   const out: TiltSlab[] = []
+  const lifting = new Map<HTMLElement, number>()
   const host = document.querySelector<HTMLElement>('[data-tilt-stage="world"]')
   if (!host) return out
   const W = host.offsetWidth, H = host.offsetHeight
@@ -447,6 +448,7 @@ function collectSlabs(): TiltSlab[] {
     const u = x + w / 2 - W / 2, v = y + h / 2 - H / 2
     if (w < 3 || h < 3 || Math.abs(u) > W * 1.5 || Math.abs(v) > H * 1.5) return
     out.push({ u, v, w, h, t, color, r })
+    return out[out.length - 1]
   }
   // World layer: tiles and Viewers, in world units under the pan/zoom.
   const { pan, zoom } = useCanvasStore.getState()
@@ -460,8 +462,29 @@ function collectSlabs(): TiltSlab[] {
       const viewer = node.hasAttribute('data-viewport3d')
       const w = el.offsetWidth * zoom, h = el.offsetHeight * zoom
       const m = Math.min(w, h)
-      add(pan.x + at.x * zoom, pan.y + at.y * zoom, w, h,
+      const slab = add(pan.x + at.x * zoom, pan.y + at.y * zoom, w, h,
         m * (viewer ? THICK.viewer : THICK.tile), viewer ? SIDE.viewer : SIDE.tile, radiusOf(el) * zoom)
+      if (!slab) continue
+      const fs = useFreeNodeStore.getState()
+      if (node.hasAttribute('data-rail')) {
+        // A loop strip is a tray: a rim round its edge, its floor the face.
+        // Far off (small on screen) it settles back to a plain slab.
+        const k = detail(w)
+        const u = fs.nodes[node.dataset.id!]?.rail?.unit || 1
+        if (k > 0) slab.rim = { w: TRAY.rimW * u * zoom, h: TRAY.rimH * u * zoom * k }
+        slab.color = SIDE.tray
+      } else if (node.hasAttribute('data-rail-docked')) {
+        // Cards docked in a strip sit on its floor, each in the column a
+        // little above the one before: a real stack, with its own sides.
+        const n = fs.nodes[node.dataset.id!]
+        const strip = n?.railDock && world.querySelector<HTMLElement>(`[data-freenode][data-id="${n.railDock.railId}"] [data-rail-body]`)
+        const k = strip ? detail(strip.offsetWidth * zoom) : 0
+        if (k > 0) {
+          slab.z = m * TRAY.card * (1 + (n?.railDock?.order ?? 0) * TRAY.stack) * k
+          slab.t = slab.z    // stacked on the floor, so its sides reach it
+          lifting.set(node, slab.z)
+        }
+      }
     }
   }
   // Card layer: cards and closed decks, already in screen px.
@@ -486,8 +509,46 @@ function collectSlabs(): TiltSlab[] {
       add(at.x, at.y, w, h, m * THICK.card, SIDE.card, Math.min(12, m * 0.08))
     }
   }
+  setLifts(lifting)
   return out
 }
+
+/** How a loop strip reads as a tray, in its own units (and cards'
+ *  thickness inside it as a share of their shorter side). */
+const TRAY = { rimW: 6, rimH: 7, card: 0.03, stack: 0.9 }
+
+/** Detail by distance: how much of the raised 3D (rims, lifts) a thing
+ *  shows, by its width on screen — none below DETAIL_FROM px, all of it
+ *  from DETAIL_FULL px, eased between. */
+const DETAIL_FROM = 160, DETAIL_FULL = 360
+function detail(screenW: number): number {
+  const x = Math.max(0, Math.min(1, (screenW - DETAIL_FROM) / (DETAIL_FULL - DETAIL_FROM)))
+  return x * x * (3 - 2 * x)
+}
+
+/** The DOM tiles lifted off the plane (docked cards), and by how much. The
+ *  lift is the CSS `translate` property, which leaves the tile's own
+ *  transform alone; tilting flat puts them all back. */
+let lifted = new Map<HTMLElement, number>()
+function setLifts(next: Map<HTMLElement, number>) {
+  for (const [el, z] of next) {
+    if (Math.abs((lifted.get(el) ?? -1) - z) > 0.05) el.style.translate = `0 0 ${z.toFixed(2)}px`
+  }
+  for (const el of lifted.keys()) if (!next.has(el)) el.style.translate = ''
+  if (!!next.size !== !!lifted.size) {
+    document.querySelector('[data-tilt-stage="world"]')?.toggleAttribute('data-tilt-3d', next.size > 0)
+  }
+  lifted = next
+}
+/** How high the lifted tile holding `el` stands, or 0. */
+function liftOf(el: Element | null): number {
+  for (let e = el; e; e = e.parentElement) {
+    const z = lifted.get(e as HTMLElement)
+    if (z !== undefined) return z
+  }
+  return 0
+}
+function dropLifts() { if (lifted.size) setLifts(new Map()) }
 
 /** Every model card in view, as flat px from the host centre. */
 function collectTargets(W: number, H: number): TiltTarget[] {
@@ -589,21 +650,30 @@ const TiltedView: React.FC = () => {
   useEffect(() => {
     const root = rootRef.current!
     const host = hostOf(root)!
-    const flatClient = (cx: number, cy: number) => {
+    const flatClient = (cx: number, cy: number, height = 0) => {
       const r = host.getBoundingClientRect()
       const { tilt: t, spin: s, shiftX, shiftY } = useTiltStore.getState()
-      const p = unprojectTilt(cx - r.left - r.width / 2, cy - r.top - r.height / 2, t, s, shiftX, shiftY)
+      const p = unprojectTilt(cx - r.left - r.width / 2, cy - r.top - r.height / 2, t, s, shiftX, shiftY, height)
       return p && { x: p.x + r.width / 2 + r.left, y: p.y + r.height / 2 + r.top }
     }
     /** Pressed on the tilted canvas (not a pinned panel, the HUD, the zoom bar). */
+    // Seen low or side-on, much of the screen shows no plane at all, only
+    // the canvas behind it: that counts as the canvas too (bare ground), so
+    // the camera can be grabbed anywhere.
+    const canvasBox = () => document.querySelector('[data-tilt-stage="world"]')?.parentElement ?? null
     const onPlane = (t: EventTarget | null) => {
       const el = t as Element | null
-      return !!el?.closest?.('[data-tilt-stage]') && hostOf(el) === host
+      if (!el?.closest || hostOf(el) !== host) return false
+      return !!el.closest('[data-tilt-stage]') || !!canvasBox()?.contains(el)
     }
-    const isBareGround = (t: EventTarget | null) => (t as Element).matches('[data-tilt-stage="world"]')
+    const isBareGround = (t: EventTarget | null) => {
+      const el = t as Element
+      return el.matches('[data-tilt-stage="world"]') || !el.closest('[data-tilt-stage]')
+    }
 
-    const resend = (e: MouseEvent, type: string, to: EventTarget) => {
-      const p = flatClient(e.clientX, e.clientY)
+    const resend = (e: MouseEvent, type: string, to: EventTarget, height = 0) => {
+      // A lifted tile is pressed at its own height, not the floor's.
+      const p = flatClient(e.clientX, e.clientY, height)
       if (!p) return
       const init: PointerEventInit = {
         bubbles: true, cancelable: true, composed: true, view: window, detail: e.detail,
@@ -628,7 +698,7 @@ const TiltedView: React.FC = () => {
       | { kind: 'marquee'; x0: number; y0: number; x1: number; y1: number }
       | { kind: 'person'; url: string; unit0: number; y0: number }
       | { kind: 'model'; key: string; k0: number; y0: number; moved: boolean }
-      | { kind: 'remap'; target: Element; pointerId: number }
+      | { kind: 'remap'; target: Element; pointerId: number; height: number }
     let g: Gesture | null = null
     const swallow = (e: Event) => { e.stopImmediatePropagation() }
 
@@ -677,9 +747,10 @@ const TiltedView: React.FC = () => {
       // this press — they are re-sent below at the flat point instead.
       e.preventDefault(); swallow(e)
       const target = e.target as Element
-      g = { kind: 'remap', target, pointerId: e.pointerId }
-      resend(e, 'pointerdown', target)
-      resend(e, 'mousedown', target)
+      const height = liftOf(target)
+      g = { kind: 'remap', target, pointerId: e.pointerId, height }
+      resend(e, 'pointerdown', target, height)
+      resend(e, 'mousedown', target, height)
     }
     const onMove = (e: PointerEvent) => {
       if (!e.isTrusted) return
@@ -722,8 +793,8 @@ const TiltedView: React.FC = () => {
       // A card that captured the pointer gets it, as it would flat.
       const real = e.target as Element
       const to = real.hasPointerCapture?.(g.pointerId) ? real : g.target
-      resend(e, 'pointermove', to)
-      resend(e, 'mousemove', to)
+      resend(e, 'pointermove', to, g.height)
+      resend(e, 'mousemove', to, g.height)
     }
     const onUp = (e: PointerEvent) => {
       if (!e.isTrusted || !g) return
@@ -731,8 +802,8 @@ const TiltedView: React.FC = () => {
       if (g.kind === 'remap') {
         const real = e.target as Element
         const to = real.hasPointerCapture?.(g.pointerId) ? real : g.target
-        resend(e, 'pointerup', to)
-        resend(e, 'mouseup', to)
+        resend(e, 'pointerup', to, g.height)
+        resend(e, 'mouseup', to, g.height)
       }
       if (g.kind === 'marquee') { marqueeSelect(g, e.shiftKey); setBand(null) }
       g = null
