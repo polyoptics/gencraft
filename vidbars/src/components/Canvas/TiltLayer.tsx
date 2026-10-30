@@ -563,7 +563,7 @@ function collectSlabs(): TiltSlab[] {
       if (!at) continue
       const id = el.dataset.id!
       const g = groups.find(gr => gr.id === id)
-      if (g?.deckState === 'fanned') continue   // the wrapper spans the whole fan
+      if (g?.deckState === 'fanned') { fanSlabs(el, stage, at, add, lifting, docked.get(id)); continue }
       const n = g?.deckState === 'stacked' ? 1 + groups.filter(o => o.deckAnchorId === id && o.deckState === 'stacked').length : 1
       const w = el.offsetWidth, h = el.offsetHeight, m = Math.min(w, h)
       const r = radiusOf((el.firstElementChild as HTMLElement | null) ?? el) || m * 0.06
@@ -719,6 +719,40 @@ function fill(el: HTMLElement): number[] {
   if (parseFloat(cs.borderTopWidth) > 0 && rgba(cs.borderTopColor).join() !== rgba(css).join()) el.style.borderColor = css
   return was.rgb
 }
+/** A fanned deck stands up too: its front card on top, and each strip
+ *  peeking out to the right a card lower than the one before, a stair of
+ *  cards down to the canvas. The strips follow their slide as the fan
+ *  opens or closes (their animated transform). The wrapper rides at the
+ *  front card's height and the strips are lowered from it, so everything
+ *  else on the fan (the face it surfaces, its controls) stays on top. */
+type AddSlab = (x: number, y: number, w: number, h: number, t: number, color: number, r: number) => TiltSlab | undefined
+function fanSlabs(el: HTMLElement, stage: HTMLElement, at: { x: number; y: number }, add: AddSlab,
+                  lifting: Map<HTMLElement, number>, lift: number | undefined) {
+  const kids = [...el.children].filter(c => (c as HTMLElement).matches('[data-card-drop], [data-deck-slot-drop]')) as HTMLElement[]
+  if (!kids.length) return
+  const front = kids.reduce((a, b) => (b.offsetLeft === 0 && b.offsetWidth >= a.offsetWidth ? b : a))
+  const strips = kids.filter(c => c !== front).sort((a, b) => a.offsetLeft - b.offsetLeft)
+  const w = front.offsetWidth, h = front.offsetHeight, m = Math.min(w, h)
+  const k = lift === undefined ? detail(w) : 1
+  if (k <= 0) { add(at.x, at.y, w, h, m * THICK.card, SIDE.card, 12); return }
+  const per = m * THICK.card * k
+  const base = lift ?? 0
+  const top = base + per * (strips.length + 1)
+  lifting.set(el, top)
+  chain(el, stage)
+  const c = add(at.x + front.offsetLeft, at.y + front.offsetTop, w, h, top - base, SIDE.card, radiusOf(front) || 12)
+  if (c) c.z = top
+  strips.forEach((st, i) => {
+    const z = top - per * (i + 1)
+    lifting.set(st, z - top)
+    chain(st, stage)
+    const mx = new DOMMatrix(getComputedStyle(st).transform)
+    const s = add(at.x + st.offsetLeft + mx.m41, at.y + st.offsetTop, st.offsetWidth * mx.a, st.offsetHeight, z - base,
+      i % 2 ? SIDE.card : SIDE.edge, 6)
+    if (s) s.z = z
+  })
+}
+
 /** A closed deck's flat edge lines (its outline children, which take no
  *  clicks) give way to the modelled edges while it stands up. */
 let hidden = new Set<HTMLElement>()
