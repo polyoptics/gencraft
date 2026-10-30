@@ -14,6 +14,7 @@ import { ContextSheetHost } from './components/UI/ContextSheetDialog'
 import { useFxStrips } from './hooks/useFxStrips'
 import { useRailSync } from './hooks/useRailSync'
 import { RailRunHost } from './components/Canvas/RailRunHost'
+import { MakeCardsButton } from './components/UI/MakeCardsButton'
 import { DeckBrowserTray } from './components/DeckBrowser/DeckBrowserTray'
 import { LinkDragOverlay } from './components/Linking/LinkDragOverlay'
 import { DrawToolbar } from './components/Annotation/DrawToolbar'
@@ -30,6 +31,7 @@ import { collectSubtree } from './utils/barOps'
 import { expandTileIds } from './utils/tileDecks'
 import { isRail } from './utils/rail'
 import { stackedDeckMembers, stepDeckFace, stepFace } from './utils/cardGrid'
+import { expandWithNestedMembers } from './hooks/useCardDecks'
 import { copyEffect, pasteEffect, selectedEffect } from './utils/fx/effectClipboard'
 import { currentZone } from './store/zoomZonesStore'
 import { ZoomZoneBar, ZoomZoneHeaderButton } from './components/UI/ZoomZoneBar'
@@ -413,7 +415,15 @@ function useKeyboardDelete() {
       // Group/card delete
       const selGroups = useBoardsStore.getState().selectedGroupIds
       if (selGroups.length > 0) {
-        for (const gid of selGroups) {
+        // A closed deck goes whole: every card in it, sub-decks too. The
+        // checkpoint above brings it all back in one undo.
+        const { groups } = useBoardsStore.getState()
+        const closed = selGroups.filter(gid => {
+          const g = groups.find(gr => gr.id === gid)
+          return g && (g.deckState === 'stacked' || g.deckState === 'fanned')
+        })
+        const doomed = [...new Set([...selGroups, ...expandWithNestedMembers(closed, groups)])]
+        for (const gid of doomed) {
           const bs = useBoardsStore.getState()
           if (bs.groups.length <= 1) break  // keep at least one group
           const g = bs.groups.find(gr => gr.id === gid)
@@ -772,6 +782,7 @@ export default function App() {
             preview of what each rail's run will make */}
       <RailSyncHost />
       <RailRunHost />
+      <MakeCardsButton />
 
       {/* Viewers render outside the canvas so they are fixed to the viewport */}
       <AllViewers />
