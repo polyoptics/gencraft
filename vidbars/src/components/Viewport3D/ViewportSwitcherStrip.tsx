@@ -1,4 +1,4 @@
-// ViewportSwitcherStrip.tsx — the source "playlist" at the bottom of a
+// ViewportSwitcherStrip.tsx — the source "playlist" in the footer of a
 // browser window. One chip per connected SOURCE: tiles show their poster/
 // image (or a kind glyph); cards/decks show the card's FACE (hero) with a
 // ×N badge when they hold several items — clicking a card chip shows its
@@ -16,7 +16,12 @@ import { useCanvasStore } from '../../store/canvasStore'
 import { useDockedSources, flattenSourceItems, type DockedSource } from '../../hooks/useDockedContent'
 import { defaultBrowseItem } from '../../utils/contentTraversal'
 import { useResolvedMedia } from '../../utils/useResolvedMedia'
-import { applyAnimationFromUrl } from '../../three/viewportRenderer'
+import { applyAnimationFromUrl, setViewFooterInset } from '../../three/viewportRenderer'
+
+/** The strip's height in SCREEN px. It is the Viewer's footer: it sits in
+ *  its own row under the work area, and the GL rect is shortened by this
+ *  much, so neither an image nor a model is ever drawn underneath it. */
+export const SWITCHER_STRIP_SCREEN_H = 46
 
 /** Glyph per item kind for chips without a face image. */
 function chipGlyph(source: DockedSource): string {
@@ -91,7 +96,12 @@ export const ViewportSwitcherStrip: React.FC<{
 
   // Show whenever something is connected and showing — this is the
   // "now viewing" provenance card, not a picker.
-  if (!win || !active || flat.length === 0) return null
+  const shown = !!win && !!active && flat.length > 0
+  useEffect(() => {
+    setViewFooterInset(windowId, shown ? SWITCHER_STRIP_SCREEN_H : 0)
+  }, [windowId, shown])
+  useEffect(() => () => setViewFooterInset(windowId, 0), [windowId])
+  if (!win || !active || !shown) return null
 
   const iz = 1 / zoom
   // The SOURCE the active item belongs to (first source containing it).
@@ -116,12 +126,14 @@ export const ViewportSwitcherStrip: React.FC<{
       onPointerDown={e => { if (e.button === 0) e.stopPropagation() }}
       onWheel={e => e.stopPropagation()}
       style={{
-        position: 'absolute', left: 0, right: 0, bottom: 0,
+        // A footer ROW under the work area, not an overlay on it.
+        position: 'relative', flexShrink: 0, boxSizing: 'border-box',
+        height: SWITCHER_STRIP_SCREEN_H * iz,
         display: 'flex', alignItems: 'center', gap: 6 * iz,
-        padding: `${4 * iz}px ${8 * iz + reserveRight}px ${Math.max(4 * iz, reserveBottom + 2 * iz)}px ${8 * iz + reserveLeft}px`,
+        padding: `0 ${8 * iz + reserveRight}px ${reserveBottom}px ${8 * iz + reserveLeft}px`,
         background: 'rgba(13,14,26,0.88)',
         borderTop: `${Math.max(1, 1 / zoom)}px solid rgba(140,170,255,0.15)`,
-        zIndex: 2,   // above DOM content views in the body
+        zIndex: 2,
       }}
     >
       <button style={navBtn} onClick={() => step(-1)} title="Previous item">‹</button>

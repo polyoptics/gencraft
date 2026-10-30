@@ -65,6 +65,16 @@ let lastFrameMs = 0
 let resizeObserver: ResizeObserver | null = null
 const unsubscribers: Array<() => void> = []
 const views = new Map<string, ViewRuntime>()
+/** Screen px at the bottom of each window's body taken by its footer (the
+ *  switcher strip). The GL rect stops above it, so a model is framed in the
+ *  work area instead of drawing behind the footer. */
+const footerInsets = new Map<string, number>()
+
+export function setViewFooterInset(id: string, px: number): void {
+  if ((footerInsets.get(id) ?? 0) === px) return
+  if (px > 0) footerInsets.set(id, px); else footerInsets.delete(id)
+  requestRender()
+}
 
 // ── Display modes ──
 // Applied as scene.overrideMaterial rather than by touching the model's
@@ -233,7 +243,8 @@ function renderFrame(): void {
     const sx = win.pin ? win.pin.x : pan.x + win.x * zoom
     const sy = win.pin ? win.pin.y : pan.y + win.y * zoom
     const sw = win.width * (win.pin ? win.pin.scale : zoom)
-    const sh = win.height * (win.pin ? win.pin.scale : zoom)
+    const sh = win.height * (win.pin ? win.pin.scale : zoom) - (footerInsets.get(win.id) ?? 0)
+    if (sh <= 0) continue
     if (sx + sw < 0 || sy + sh < 0 || sx > W || sy > H) continue   // offscreen
     if (sw < MIN_GL_PX) continue                                    // poster takes over
     const view = views.get(win.id)

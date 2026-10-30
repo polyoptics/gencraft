@@ -568,10 +568,17 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
           borderBottom: `${borderW}px solid rgba(140,170,255,${edge})`,
           borderLeft: `${borderW}px solid rgba(140,170,255,${edge})`,
           borderRight: `${borderW}px solid rgba(140,170,255,${edge})`,
-          cursor: modelActive && status.status === 'ready' ? 'grab' : 'default',
           overflow: 'hidden',
+          // Work area on top, switcher strip as a footer row under it, so
+          // the strip never covers the image (the GL rect is shortened by
+          // the same amount — setViewFooterInset).
+          display: 'flex', flexDirection: 'column',
         }}
       >
+        <div style={{
+          flex: 1, minHeight: 0, position: 'relative', overflow: 'hidden',
+          cursor: modelActive && status.status === 'ready' ? 'grab' : 'default',
+        }}>
         {/* DOM content views (image/video/audio/text) — models paint via GL.
             zoom={gz}, NOT the live canvas zoom: ContentView counter-scales
             its controls and text against its ANCESTOR's scale, and for a
@@ -657,7 +664,7 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
             <div
               onPointerDown={e => e.stopPropagation()}
               style={{
-                position: 'absolute', left: 6 * iz, bottom: 34 * iz,
+                position: 'absolute', left: 6 * iz, bottom: 6 * iz,
                 display: 'flex', alignItems: 'center', gap: 4 * iz,
                 padding: `${3 * iz}px ${4 * iz}px`, borderRadius: 4 * iz,
                 background: 'rgba(8,10,20,0.72)', border: `${1 * iz}px solid rgba(140,190,255,0.22)`,
@@ -690,8 +697,10 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
           )
         })()}
 
-        {/* Content playlist — appears when ≥2 items are docked; also owns
-            active-item reconciliation, so it mounts unconditionally. */}
+        </div>
+
+        {/* Content playlist — the footer; also owns active-item
+            reconciliation, so it mounts unconditionally. */}
         <ViewportSwitcherStrip windowId={id}
           reserveRight={grabZone} reserveLeft={cornerZone} reserveBottom={edgeZone} />
       </div>
