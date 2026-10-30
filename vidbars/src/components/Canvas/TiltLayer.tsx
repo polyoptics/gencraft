@@ -748,10 +748,29 @@ function popParts(root: HTMLElement, stage: HTMLElement, base: number, m: number
     if (p === false) continue
     lifting.set(el, t)
     chain(el, stage)
+    level(el, root, lifting)
     // One piece: the part's sides are the colour of its face, and a button's
     // ring goes the same colour, so no rim reads as a second disc on top.
     const face = fill(el)
     if (p && face) p.color = (face[0] << 16) | (face[1] << 8) | face[2]
+  }
+}
+
+/** Chromium hit-tests a transformed box (a card's scaled text layer,
+ *  data-card-text) inside a flat, untransformed one (the face's content
+ *  area) at the wrong depth once its ancestors keep 3D: in the far half of
+ *  the tilted view it outranks parts raised well above it, so a face arrow
+ *  showed but never took the cursor or the press, and the press grabbed
+ *  the card instead (Brian 2026-10-30). A zero lift on each box beside the
+ *  raised part's path up to its card makes that box a plane of its own,
+ *  hit where it really is. Cleared with the other lifts when flat. */
+function level(part: HTMLElement, root: HTMLElement, lifting: Map<HTMLElement, number>) {
+  for (let e = part.parentElement; e && e !== root.parentElement; e = e.parentElement) {
+    for (const c of e.children) {
+      const h = c as HTMLElement
+      if (h === part || h.contains(part) || lifting.has(h)) continue
+      lifting.set(h, 0)
+    }
   }
 }
 
