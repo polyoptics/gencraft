@@ -335,7 +335,8 @@ function placeItem(item: CabinetItem, x: number, y: number) {
 export function canvasPointAt(clientX: number, clientY: number, flat = false): { cx: number; cy: number } | null {
   const host = document.querySelector('[data-tilt-stage="world"]')?.parentElement
   const under = document.elementFromPoint(clientX, clientY)
-  if (!host || !under || !host.contains(under)) return null
+  // Cards are in their own overlay stage, beside the world's.
+  if (!host || !under || !(host.contains(under) || under.closest('[data-tilt-stage]'))) return null
   const t = useTiltStore.getState()
   if (flat || !isTilted(t.tilt)) return clientToCanvas(clientX, clientY)
   const r = host.getBoundingClientRect()

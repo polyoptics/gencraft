@@ -56,7 +56,7 @@ let samples: { t: number; x: number; y: number }[] = []
 
 /** What can be picked up, as drawn on screen right now. */
 function tableBodies(): Body[] {
-  const { zoom } = useCanvasStore.getState()
+  const { zoom, pan } = useCanvasStore.getState()
   const out: Body[] = []
   const fns = useFreeNodeStore.getState()
   for (const n of Object.values(fns.nodes)) {
@@ -70,9 +70,17 @@ function tableBodies(): Body[] {
     if (g.deckAnchorId && g.deckAnchorId !== g.id && g.deckState && g.deckState !== 'open') continue
     const el = document.querySelector<HTMLElement>(`[data-group-card][data-id="${g.id}"]`)
     if (!el) continue
-    // Its own layout size, which the tilt does not change.
-    const k = el.closest('[data-tilt-stage="overlay"]') ? 1 / zoom : 1
-    out.push({ kind: 'card', id: g.id, x: g.originX, y: g.originY, w: el.offsetWidth * k, h: el.offsetHeight * k, vx: 0, vy: 0, moved: false, touching: new Set() })
+    // Its own layout box, which the tilt does not change, in canvas units: a
+    // card is not drawn at its origin. Only ever moved by deltas, so that is fine.
+    let left = 0, top = 0
+    for (let e: HTMLElement | null = el; e && !e.hasAttribute('data-tilt-stage'); e = e.offsetParent as HTMLElement | null) {
+      left += e.offsetLeft; top += e.offsetTop
+    }
+    out.push({
+      kind: 'card', id: g.id,
+      x: (left - pan.x) / zoom, y: (top - pan.y) / zoom, w: el.offsetWidth / zoom, h: el.offsetHeight / zoom,
+      vx: 0, vy: 0, moved: false, touching: new Set(),
+    })
   }
   return out
 }
@@ -99,7 +107,7 @@ function openTrayAt(cx: number, cy: number): DrawerRef | null {
     if (!open || open.project || n.pin) continue
     const tray = document.querySelector<HTMLElement>(`[data-freenode][data-id="${n.id}"] [data-cabinet-tray]`)
     if (!tray) continue
-    if (cx >= n.x && cx <= n.x + n.width && cy >= n.y + n.height && cy <= n.y + n.height + tray.offsetHeight) {
+    if (cx >= n.x && cx <= n.x + n.width && cy >= n.y + tray.offsetTop && cy <= n.y + tray.offsetTop + tray.offsetHeight) {
       return { nodeId: n.id, drawerId: open.id }
     }
   }

@@ -1564,10 +1564,21 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
       updateDeckMagnetPreview(canDock, deck.anchorGroupId)
       // Over a loop strip: where the deck would go (utils/railCards).
       previewCardRail(cardRailTarget(allDragIds, ev.clientX, ev.clientY), deck.anchorGroupId)
+      aimCabinet(ev.clientX, ev.clientY, allDragIds)
     }
     const onUp = (ev: PointerEvent) => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
+      // Let go over a project cabinet's drawer: the deck goes in whole.
+      useCabinetUi.getState().setAim(null)
+      const drawer = !anchorGroup.pin && (dxAccum !== 0 || dyAccum !== 0) ? cabinetDrawerAt(ev.clientX, ev.clientY, allDragIds) : null
+      if (drawer) {
+        previewCardRail(null, deck.anchorGroupId)
+        useBoardsStore.getState().setGroupPosBatch(Array.from(initialOrigins, ([gid, o]) => ({ groupId: gid, originY: o.y, originX: o.x })))
+        stowCards(allDragIds, drawer)
+        useMagnetPreviewStore.getState().setPreview(null)
+        return
+      }
       // A deck let go over a loop strip goes into the column as ONE deck,
       // by its front card (utils/railCards). One undo puts it back.
       {
@@ -2158,6 +2169,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
         liftDockedCards([deck.anchorGroupId])
       }
       if (fanMoved) previewCardRail(cardRailTarget(allDragIds, ev.clientX, ev.clientY), deck.anchorGroupId)
+      if (fanMoved) aimCabinet(ev.clientX, ev.clientY, allDragIds)
       // Pinned fan: screen delta to the pin — see the stacked-deck handler.
       if (anchorGroup.pin) {
         const pdx = ev.clientX - lastX
@@ -2201,6 +2213,15 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
       window.removeEventListener('pointerup', onUp)
       if (!fanMoved) {
         useBoardsStore.getState().setDeckState(deck.memberIds, 'stacked')
+        return
+      }
+      // Let go over a project cabinet's drawer: the fan goes in whole.
+      useCabinetUi.getState().setAim(null)
+      const drawer = !anchorGroup.pin ? cabinetDrawerAt(ev.clientX, ev.clientY, allDragIds) : null
+      if (drawer) {
+        previewCardRail(null, deck.anchorGroupId)
+        useBoardsStore.getState().setGroupPosBatch(Array.from(initialOrigins, ([gid, o]) => ({ groupId: gid, originY: o.y, originX: o.x })))
+        stowCards(allDragIds, drawer)
         return
       }
       // Let go over a loop strip: the fan goes into the column as one deck,
