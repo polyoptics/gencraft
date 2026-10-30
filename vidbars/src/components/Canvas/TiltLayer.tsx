@@ -1027,9 +1027,10 @@ function collectTargets(W: number, H: number): TiltTarget[] {
       name: fileName(n.imageUrl) || n.label || 'Model',
     })
   }
-  // A Viewer showing a model, or with a card holding one docked beside it:
-  // the model stands up on the Viewer, popping in, and leaves the card
-  // (Brian 2026-10-30).
+  // A Viewer showing a model: the model stands up on the Viewer, popping
+  // in, and leaves the card it came from (Brian 2026-10-30). Once the
+  // Viewer shows something else (a picture from another card docked to
+  // it), the model hops back onto its card (Brian 2026-10-30).
   const viewers = Object.values(useViewport3DStore.getState().windows).map(w => {
     const it = w.activeItem
     const x0 = pan.x + w.x * zoom, y0 = pan.y + w.y * zoom
@@ -1051,7 +1052,6 @@ function collectTargets(W: number, H: number): TiltTarget[] {
       if (!model || !at) continue
       const x = at.x, y = at.y, w = el.offsetWidth, h = el.offsetHeight
       const v = viewers.find(r => x <= r.x1 + GAP && x + w >= r.x0 - GAP && y <= r.y1 + GAP && y + h >= r.y0 - GAP)
-      if (v && !v.url) { v.url = model.url; onViewer(v, model.url, model.name) }
       if (v?.url === model.url) continue
       out.push({
         key: `card:${el.dataset.id}`, url: model.url, name: model.name,
