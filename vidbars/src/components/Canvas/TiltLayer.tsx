@@ -312,7 +312,9 @@ const models: {
   pick: ((clientX: number, clientY: number) => string | null) | null
   info: ((key: string) => { url: string; unit: number } | null) | null
   hovered: string | null
-} = { pick: null, info: null, hovered: null }
+  /** Where the cursor rests over the plane with no button down, or null. */
+  at: { x: number; y: number } | null
+} = { pick: null, info: null, hovered: null, at: null }
 
 const frameState = (): TiltFrameState => {
   const ts = useTiltStore.getState()
@@ -363,6 +365,7 @@ const TiltModels: React.FC = () => {
       if (tilted !== shown) { shown = tilted; canvas.style.display = tilted ? 'block' : 'none' }
       if (!tilted) return
       const W = root.clientWidth, H = root.clientHeight
+      if (models.at) models.hovered = models.pick?.(models.at.x, models.at.y) ?? null
       if (W && H) view.frame(now, W, H, collectTargets(W, H), frameState())
     }
     const build = () => {
@@ -1034,6 +1037,7 @@ const TiltedView: React.FC = () => {
 
     const onDown = (e: PointerEvent) => {
       if (!e.isTrusted) return
+      models.at = null
       // A model is clicked straight in 3D: it selects its card or tile
       // (Shift adds to the selection).
       if (e.button === 0 && !e.altKey && hostOf(e.target as Element) === host && !(e.target as Element).closest('[data-tilt-hud]')) {
@@ -1094,9 +1098,11 @@ const TiltedView: React.FC = () => {
         g = null
       }
       if (!g) {
-        models.hovered = e.buttons === 0 && !e.altKey && hostOf(e.target as Element) === host
-          ? models.pick?.(e.clientX, e.clientY) ?? null
-          : null
+        // Asked again every frame (TiltModels), not only as the mouse
+        // moves: a model that was hidden for a frame (its card re-rendering)
+        // as the cursor came to rest would otherwise stay unlit under it.
+        models.at = e.buttons === 0 && !e.altKey && hostOf(e.target as Element) === host ? { x: e.clientX, y: e.clientY } : null
+        models.hovered = models.at && (models.pick?.(models.at.x, models.at.y) ?? null)
         return
       }
       swallow(e)
@@ -1172,6 +1178,7 @@ const TiltedView: React.FC = () => {
       window.removeEventListener('pointerup', onUp, true)
       window.removeEventListener('pointercancel', onUp, true)
       window.removeEventListener('wheel', onWheel, true)
+      models.at = null; models.hovered = null
       document.elementFromPoint = fromPoint
       document.elementsFromPoint = fromPoints
     }

@@ -16,6 +16,8 @@ import { computePosedBounds } from './orbitState'
 import { TILT_PERSPECTIVE, DEFAULT_LIGHT, type TiltWire, type TiltLight } from '../store/tiltStore'
 
 const DEFAULT_SHADOWS = DEFAULT_LIGHT.shadows, DEFAULT_SHEEN = DEFAULT_LIGHT.sheen
+/** How long the sheen and models take to come in as the canvas tips. */
+const FADE_MS = 500
 
 /** Drawn only where the artwork mask (stencil 1) is not. */
 const SKIP_ART = {
@@ -122,6 +124,8 @@ interface Standing {
   phase: number
   dead: boolean
   seen: number
+  /** When its model first showed (ms), to grow it in from. */
+  shownAt: number
 }
 
 const WIRE_MAT = new THREE.MeshBasicMaterial({ color: 0x9fd0ff, wireframe: true, transparent: true, opacity: 0.85 })
@@ -354,7 +358,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     groundDeco.add(wall)
     const s: Standing = {
       url, stand, turn, inst: null, size: new THREE.Vector3(), unit: 1, unitSet: false, triangles: 0,
-      figure, wall, wallText: '', smooth: null, smoothOn: false, phase: Math.random() * 6.28, dead: false, seen: frameNo,
+      figure, wall, wallText: '', smooth: null, smoothOn: false, phase: Math.random() * 6.28, dead: false, seen: frameNo, shownAt: 0,
     }
     acquireModel(url).then(inst => {
       if (s.dead) { releaseModel(url); disposeInstance(inst); return }
@@ -451,8 +455,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   const topMesh = new THREE.Mesh(topGeo, new THREE.MeshBasicMaterial({ colorWrite: false, side: THREE.DoubleSide }))
   // The sheen: the key light's highlight on the faces (the DOM draws them;
   // this adds only the shine, black plus specular, added on top).
-  const SHEEN_SPEC = new THREE.Color(0x9aa4bc), SHEEN_FADE = 500
-  let sheenFrom = 0
+  const SHEEN_SPEC = new THREE.Color(0x9aa4bc)
   const SHEEN_MAT = new THREE.MeshPhongMaterial({
     color: 0x000000, specular: SHEEN_SPEC.clone(), shininess: 14, side: THREE.DoubleSide, ...SKIP_ART,
     // Added to the colour only: the canvas's alpha stays as it was, so the
@@ -653,6 +656,14 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
 
   let lastW = 0, lastH = 0
 
+  /** Since the canvas tipped (and since `from`, if later), 0 → 1 over
+   *  FADE_MS, easing out: the sheen and models come in on it. */
+  let tiltFrom = 0
+  function fadeIn(now: number, from: number): number {
+    const t0 = Math.max(tiltFrom, from)
+    return tiltFrom ? 1 - (1 - Math.min(1, (now - t0) / FADE_MS)) ** 3 : 0
+  }
+
   function frame(now: number, W: number, H: number, targets: TiltTarget[], st: TiltFrameState, into: THREE.WebGLRenderTarget | null = null) {
     frameNo++
     if (W !== lastW || H !== lastH) {
@@ -679,6 +690,8 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     groundArt.matrix.copy(ground.matrix)
     groundArt.matrixWorldNeedsUpdate = true
 
+    if (st.tilt <= 0.5) tiltFrom = 0
+    else if (!tiltFrom) tiltFrom = now
     // Models rise out of their cards as the plane tips back.
     const rise = Math.min(1, Math.max(0, (st.tilt - 4) / 26))
     const ease = rise * rise * (3 - 2 * rise)
@@ -694,7 +707,11 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       let k = (tg.w * 0.6) / foot
       if (s.size.y * k > tg.w * 1.1) k = (tg.w * 1.1) / Math.max(s.size.y, 1e-6)
       k *= st.sizeFor(tg.key)
-      s.stand.scale.set(k, k * Math.max(ease, 0.001), k)
+      // ...and grow up out of them when the tilt starts, or when one
+      // turns up while tilted, rather than popping on.
+      if (s.inst && !s.shownAt) s.shownAt = now
+      const grow = fadeIn(now, s.shownAt)
+      s.stand.scale.set(k, k * Math.max(ease * grow, 0.001), k)
       const wantSmooth = st.flat && !!s.inst
       if (wantSmooth && !s.smooth) s.smooth = smoothSwaps(s.inst!)
       if (s.smooth && wantSmooth !== s.smoothOn) {
@@ -787,11 +804,8 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       // The sheen follows the light's strength, but never glares.
       SHEEN_MAT.opacity = Math.min(1, sheen * L.power / 3)
       // It fades up as the canvas tips, rather than switching on (Brian
-      // 2026-10-30): SHEEN_FADE ms, easing out.
-      if (st.tilt <= 0.5) sheenFrom = 0
-      else if (!sheenFrom) sheenFrom = now
-      const f = sheenFrom ? 1 - (1 - Math.min(1, (now - sheenFrom) / SHEEN_FADE)) ** 3 : 0
-      SHEEN_MAT.specular.copy(SHEEN_SPEC).multiplyScalar(f)
+      // 2026-10-30).
+      SHEEN_MAT.specular.copy(SHEEN_SPEC).multiplyScalar(fadeIn(now, 0))
       sheenMesh.visible = sheen > 0.01 && !st.flat
     }
     // The catcher must not take the clay or wireframe look: it is drawn on
@@ -892,7 +906,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   const warmRT = new THREE.WebGLRenderTarget(4, 4)
   function warm(W: number, H: number, targets: TiltTarget[], st: TiltFrameState) {
     frame(performance.now(), W, H, targets, { ...st, tilt: 30, shiftX: 0, shiftY: 0 }, warmRT)
-    sheenFrom = 0   // the real tilt still fades it in
+    tiltFrom = 0   // the real tilt still fades in
   }
 
   /** The url and model units per metre of a model on screen. */
