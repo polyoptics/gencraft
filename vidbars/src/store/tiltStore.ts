@@ -23,14 +23,21 @@ export const TILT_MAX = 75
 /** Let go below this and the view eases the rest of the way to flat — tilting back up to top-down is the way home. */
 export const TILT_SNAP = 10
 
-export type TiltShading = 'textured' | 'shaded' | 'flat' | 'wire'
+/** How models are drawn, as three independent choices (Brian 2026-10-30):
+ *  their own textures or plain clay; lit, or flat (even light, smooth
+ *  normals); and a wireframe off, over the surface, or on its own. */
+export type TiltWire = 'off' | 'over' | 'only'
 
 interface TiltStore {
   /** Degrees the plane is tipped back; 0 = flat. */
   tilt: number
   /** Degrees the plane is turned about its normal. */
   spin: number
-  shading: TiltShading
+  /** The model's own materials and textures; off = plain clay. */
+  texture: boolean
+  /** Even, low-contrast light with smooth normals instead of the lit look. */
+  flat: boolean
+  wire: TiltWire
   /** Models turn slowly on their card. */
   turn: boolean
   /** A back wall on each model card with its file name and size. */
@@ -38,7 +45,9 @@ interface TiltStore {
   /** A person beside each model, for scale. */
   figure: boolean
   setView: (tilt: number, spin: number) => void
-  setShading: (s: TiltShading) => void
+  setTexture: (on: boolean) => void
+  setFlat: (on: boolean) => void
+  setWire: (w: TiltWire) => void
   setTurn: (on: boolean) => void
   setWalls: (on: boolean) => void
   setFigure: (on: boolean) => void
@@ -51,7 +60,9 @@ let flattenRaf: number | null = null
 export const useTiltStore = create<TiltStore>()((set, get) => ({
   tilt: 0,
   spin: 0,
-  shading: 'textured',
+  texture: true,
+  flat: false,
+  wire: 'off',
   turn: true,
   walls: true,
   figure: false,
@@ -59,7 +70,9 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
     if (flattenRaf !== null) { cancelAnimationFrame(flattenRaf); flattenRaf = null }
     set({ tilt: Math.max(0, Math.min(TILT_MAX, tilt)), spin })
   },
-  setShading: shading => set({ shading }),
+  setTexture: texture => set({ texture }),
+  setFlat: flat => set({ flat }),
+  setWire: wire => set({ wire }),
   setTurn: turn => set({ turn }),
   setWalls: walls => set({ walls }),
   setFigure: figure => set({ figure }),

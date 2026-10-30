@@ -12,7 +12,7 @@ import * as THREE from 'three'
 import { toCreasedNormals } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { acquireModel, releaseModel, disposeInstance } from './modelCache'
 import { computePosedBounds } from './orbitState'
-import { TILT_PERSPECTIVE, type TiltShading } from '../store/tiltStore'
+import { TILT_PERSPECTIVE, type TiltWire } from '../store/tiltStore'
 
 export interface TiltTarget {
   key: string
@@ -30,7 +30,9 @@ export interface TiltTarget {
 export interface TiltFrameState {
   tilt: number
   spin: number
-  shading: TiltShading
+  texture: boolean
+  flat: boolean
+  wire: TiltWire
   turn: boolean
   walls: boolean
   figure: boolean
@@ -73,11 +75,11 @@ interface Standing {
 }
 
 const WIRE_MAT = new THREE.MeshBasicMaterial({ color: 0x9fd0ff, wireframe: true, transparent: true, opacity: 0.85 })
-const SHADED_MAT = new THREE.MeshStandardMaterial({ color: 0xc8ccd8, roughness: 0.75, metalness: 0 })
-// Flat = a flat, soft clay look (Brian 2026-10-30): no highlights, and a
-// strong emissive lift so the dark side stays close to the lit side.
-const FLAT_MAT = new THREE.MeshLambertMaterial({ color: 0x9da2ae, emissive: 0x5c606a })
-const overrideFor = (s: TiltShading) => s === 'wire' ? WIRE_MAT : s === 'shaded' ? SHADED_MAT : s === 'flat' ? FLAT_MAT : null
+/** Over a surface the wire is drawn where the surface is, so it may sit
+ *  exactly on it: LessEqual lets it win those ties. */
+const WIRE_OVER_MAT = new THREE.MeshBasicMaterial({ color: 0x9fd0ff, wireframe: true, transparent: true, opacity: 0.55, depthFunc: THREE.LessEqualDepth, depthWrite: false })
+/** Texture off: plain clay. Flat comes from the light rig, not this. */
+const CLAY_MAT = new THREE.MeshStandardMaterial({ color: 0xc8ccd8, roughness: 0.85, metalness: 0 })
 // Silhouette masks: red channel = selected, green = under the cursor.
 const MASK_SEL = new THREE.MeshBasicMaterial({ color: 0xff0000 })
 const MASK_HOVER = new THREE.MeshBasicMaterial({ color: 0x00ff00 })
@@ -148,7 +150,7 @@ void main() {
   else discard;
 }`
 
-/** Smooth-normal copies of model geometry for the Flat mode: many models
+/** Smooth-normal copies of model geometry for Flat: many models
  *  arrive with split, faceted normals. Normals are averaged across faces
  *  that meet at under SMOOTH_CREASE, so curves go smooth and hard edges
  *  stay hard. Textured keeps the model's own normals. The cached source
@@ -202,7 +204,17 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   // Models in one scene (shading override applies), walls in another (it
   // must not). Both share the plane transform and the depth buffer, so a
   // model still stands in front of its wall.
-  const scene = new THREE.Scene(); scene.add(lights())
+  const scene = new THREE.Scene()
+  const litRig = lights(); scene.add(litRig)
+  // Flat: mostly even ambient, a weak key from the viewer's side for just
+  // enough form, so neither texture nor clay goes dark on one side.
+  const flatRig = new THREE.Group()
+  flatRig.add(new THREE.AmbientLight(0xffffff, 2.1))
+  const flatKey = new THREE.DirectionalLight(0xffffff, 0.6)
+  flatKey.position.set(0, 400, 1200)
+  flatRig.add(flatKey)
+  flatRig.visible = false
+  scene.add(flatRig)
   const deco = new THREE.Scene(); deco.add(lights())
   const ground = new THREE.Group(); ground.matrixAutoUpdate = false; scene.add(ground)
   const groundDeco = new THREE.Group(); groundDeco.matrixAutoUpdate = false; deco.add(groundDeco)
@@ -319,7 +331,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       if (s.size.y * k > tg.w * 1.1) k = (tg.w * 1.1) / Math.max(s.size.y, 1e-6)
       k *= st.sizeFor(tg.key)
       s.stand.scale.set(k, k * Math.max(ease, 0.001), k)
-      const wantSmooth = st.shading === 'flat' && !!s.inst
+      const wantSmooth = st.flat && !!s.inst
       if (wantSmooth && !s.smooth) s.smooth = smoothSwaps(s.inst!)
       if (s.smooth && wantSmooth !== s.smoothOn) {
         s.smoothOn = wantSmooth
@@ -366,9 +378,22 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
 
     renderer.setRenderTarget(into)
     renderer.autoClear = true
-    scene.overrideMaterial = overrideFor(st.shading)
-    renderer.render(scene, camera)
-    renderer.autoClear = false
+    litRig.visible = !st.flat
+    flatRig.visible = st.flat
+    if (st.wire === 'only') {
+      scene.overrideMaterial = WIRE_MAT
+      renderer.render(scene, camera)
+      renderer.autoClear = false
+    } else {
+      scene.overrideMaterial = st.texture ? null : CLAY_MAT
+      renderer.render(scene, camera)
+      renderer.autoClear = false
+      if (st.wire === 'over') {
+        scene.overrideMaterial = WIRE_OVER_MAT
+        renderer.render(scene, camera)
+      }
+    }
+    scene.overrideMaterial = null
     renderer.render(deco, camera)
     if (into) { renderer.setRenderTarget(null); return }
 
