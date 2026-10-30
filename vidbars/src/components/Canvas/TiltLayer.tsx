@@ -35,6 +35,25 @@ const MAX_MODELS = 12
 
 const hostOf = (el: Element | null) => el?.closest('[data-zoom-bar-host]') as HTMLElement | null
 
+/** Ease the view's centre from `from` to `to` (canvas units) over
+ *  GLIDE_MS, whatever the zoom does meanwhile. Slow in and out: moving
+ *  your place on the canvas should never jolt. */
+const GLIDE_MS = 1100
+let glideRaf: number | null = null
+function glideTo(from: { x: number; y: number }, to: { x: number; y: number }, W: number, H: number) {
+  if (glideRaf !== null) cancelAnimationFrame(glideRaf)
+  const start = performance.now()
+  const tick = () => {
+    const u = Math.min(1, (performance.now() - start) / GLIDE_MS)
+    const k = u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2
+    const z = useCanvasStore.getState().zoom
+    const cx = from.x + (to.x - from.x) * k, cy = from.y + (to.y - from.y) * k
+    useCanvasStore.getState().setPan({ x: W / 2 - cx * z, y: H / 2 - cy * z })
+    glideRaf = u < 1 ? requestAnimationFrame(tick) : null
+  }
+  glideRaf = requestAnimationFrame(tick)
+}
+
 /** Alt+left-drag anywhere on the canvas host tilts it — over bare canvas
  *  or a card, flat or already tilted. Free nodes and 3D viewer windows
  *  keep Alt for their own use (effect reset, image studio pan). */
@@ -62,6 +81,7 @@ function useAltTiltGesture() {
       const { pan, zoom } = useCanvasStore.getState()
       const cFrom = { x: (W / 2 - pan.x) / zoom, y: (H / 2 - pan.y) / zoom }
       const cTo = sel && { x: (sel.x0 + sel.x1) / 2, y: (sel.y0 + sel.y1) / 2 }
+      let glideStarted = false
       // Orbit like Blender/Maya: you grab the near part of the ground —
       // drag up tips it away, drag right swings it right.
       const onMove = (ev: PointerEvent) => {
@@ -70,12 +90,9 @@ function useAltTiltGesture() {
         const dx = ev.clientX - x0
         const turnPx = Math.sign(dx) * Math.max(0, Math.abs(dx) - TURN_SLOP)
         useTiltStore.getState().setView(t0 - (ev.clientY - y0) * DRAG_DEG, s0 - turnPx * DRAG_DEG)
-        if (cTo) {
-          const u = Math.min(1, useTiltStore.getState().tilt / 20)
-          const k = u * u * (3 - 2 * u)
-          const z = useCanvasStore.getState().zoom
-          const cx = cFrom.x + (cTo.x - cFrom.x) * k, cy = cFrom.y + (cTo.y - cFrom.y) * k
-          useCanvasStore.getState().setPan({ x: W / 2 - cx * z, y: H / 2 - cy * z })
+        if (cTo && !glideStarted && useTiltStore.getState().tilt > 0.5) {
+          glideStarted = true
+          glideTo(cFrom, cTo, W, H)
         }
       }
       const onUp = () => {
@@ -187,7 +204,7 @@ function useFrameKey() {
       if (raf !== null) cancelAnimationFrame(raf)
       const start = performance.now()
       const tick = () => {
-        const u = Math.min(1, (performance.now() - start) / 380)
+        const u = Math.min(1, (performance.now() - start) / GLIDE_MS)
         const k = u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2
         const z = Math.exp(Math.log(zFrom) + (Math.log(zTo) - Math.log(zFrom)) * k)
         const cx = cFrom.x + (cTo.x - cFrom.x) * k, cy = cFrom.y + (cTo.y - cFrom.y) * k
