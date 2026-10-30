@@ -244,7 +244,7 @@ const models: {
 
 const frameState = (): TiltFrameState => {
   const ts = useTiltStore.getState()
-  const scales = useModelScaleStore.getState().unitsPerMetre
+  const { unitsPerMetre: scales, sizeOf } = useModelScaleStore.getState()
   return {
     tilt: ts.tilt, spin: ts.spin, shading: ts.shading, turn: ts.turn,
     walls: ts.walls, figure: ts.figure, hovered: models.hovered,
@@ -253,6 +253,7 @@ const frameState = (): TiltFrameState => {
       ...useBoardsStore.getState().selectedGroupIds.map(id => `card:${id}`),
     ]),
     unitsFor: url => scales[url],
+    sizeFor: key => sizeOf[key] ?? 1,
   }
 }
 
@@ -503,6 +504,7 @@ const TiltedView: React.FC = () => {
       | { kind: 'pan'; last: { x: number; y: number } }
       | { kind: 'marquee'; x0: number; y0: number; x1: number; y1: number }
       | { kind: 'person'; url: string; unit0: number; y0: number }
+      | { kind: 'model'; key: string; k0: number; y0: number; moved: boolean }
       | { kind: 'remap'; target: Element; pointerId: number }
     let g: Gesture | null = null
     const swallow = (e: Event) => { e.stopImmediatePropagation() }
@@ -523,8 +525,11 @@ const TiltedView: React.FC = () => {
           return
         }
         if (key) {
+          // A click selects; a drag up or down sizes the model on its card,
+          // the same way the person is sized.
           e.preventDefault(); swallow(e)
           selectModel(key, e.shiftKey)
+          g = { kind: 'model', key, k0: useModelScaleStore.getState().sizeOf[key] ?? 1, y0: e.clientY, moved: false }
           return
         }
       }
@@ -567,6 +572,14 @@ const TiltedView: React.FC = () => {
         // the model's units, means a smaller model in metres).
         const u = g.unit0 * Math.exp(-(e.clientY - g.y0) / 160)
         useModelScaleStore.getState().setUnitsPerMetre(g.url, u)
+        return
+      }
+      if (g.kind === 'model') {
+        const dy = e.clientY - g.y0
+        if (!g.moved && Math.abs(dy) < 4) return
+        g.moved = true
+        const k = Math.min(8, Math.max(0.1, g.k0 * Math.exp(-dy / 160)))
+        useModelScaleStore.getState().setSize(g.key, k)
         return
       }
       if (g.kind === 'marquee') {

@@ -138,12 +138,20 @@ export function useTiltStage() {
 interface ModelScaleStore {
   unitsPerMetre: Record<string, number>
   setUnitsPerMetre: (url: string, u: number) => void
+  /** How big a model stands on its card in the tilted view, × the fit to
+   *  the card. Keyed by the card or tile ('card:<id>' / 'node:<id>'), set
+   *  by dragging the model up or down. Absent: 1. */
+  sizeOf: Record<string, number>
+  setSize: (key: string, k: number) => void
 }
 
 export const useModelScaleStore = create<ModelScaleStore>()(persist(set => ({
   unitsPerMetre: {},
   setUnitsPerMetre: (url, u) => set(s => ({ unitsPerMetre: { ...s.unitsPerMetre, [url]: u } })),
+  sizeOf: {},
+  setSize: (key, k) => set(s => ({ sizeOf: { ...s.sizeOf, [key]: k } })),
 }), {
   name: 'vidbars-model-scale',
+  partialize: s => ({ unitsPerMetre: s.unitsPerMetre, sizeOf: s.sizeOf }),
   storage: createDebouncedIDBStorage(400),
 }))
