@@ -60,8 +60,7 @@ function glideTo(from: { x: number; y: number }, to: { x: number; y: number }, W
 }
 
 /** Alt+left-drag anywhere on the canvas host tilts it — over bare canvas
- *  or a card, flat or already tilted. Free nodes and 3D viewer windows
- *  keep Alt for their own use (effect reset, image studio pan). */
+ *  or a card, a tile or a 3D Viewer, flat or already tilted. */
 function useAltTiltGesture() {
   useEffect(() => {
     let altUsed = false
@@ -69,15 +68,41 @@ function useAltTiltGesture() {
     let swallowClick = false
     // Alt is the camera and nothing else (Brian 2026-10-30): with it held,
     // a press anywhere on the canvas, cards and tiles included, only moves
-    // the view. Nothing under it selects, drags or changes. A 3D Viewer
-    // keeps Alt for its own camera; the HUD's buttons still work.
+    // the view. Nothing under it selects, drags or changes — 3D Viewers
+    // included, whatever the button (Brian 2026-10-30: no outliers). The
+    // HUD's buttons still work.
     const onDown = (e: PointerEvent) => {
       swallowClick = false
-      if ((e.button !== 0 && e.button !== 2) || !e.altKey) return
+      if (!e.altKey) return
       const target = e.target as Element | null
       const host = hostOf(target)
       if (!host) return
-      if (target?.closest('input,textarea,select,[contenteditable="true"],[data-viewport3d],[data-tilt-hud]')) return
+      if (target?.closest('input,textarea,select,[contenteditable="true"],[data-tilt-hud]')) return
+      if (e.button === 1) {
+        // Tilted, Alt+middle is the 3D pan (TiltedView). Flat, a Viewer
+        // would pan its own picture: the canvas pans instead, as it does
+        // everywhere else.
+        if (!target?.closest('[data-viewport3d]') || isTilted(useTiltStore.getState().tilt)) return
+        e.preventDefault()
+        e.stopImmediatePropagation()
+        altUsed = true
+        swallowClick = true
+        let last = { x: e.clientX, y: e.clientY }
+        const onMove = (ev: PointerEvent) => {
+          ev.stopImmediatePropagation()
+          useCanvasStore.getState().shiftPan(ev.clientX - last.x, ev.clientY - last.y)
+          last = { x: ev.clientX, y: ev.clientY }
+        }
+        const onUp = (ev: PointerEvent) => {
+          ev.stopImmediatePropagation()
+          window.removeEventListener('pointermove', onMove, true)
+          window.removeEventListener('pointerup', onUp, true)
+        }
+        window.addEventListener('pointermove', onMove, true)
+        window.addEventListener('pointerup', onUp, true)
+        return
+      }
+      if (e.button !== 0 && e.button !== 2) return
       e.preventDefault()
       e.stopImmediatePropagation()
       altUsed = true
@@ -1003,6 +1028,16 @@ function LightPanel({ onClose }: { onClose: () => void }) {
           <span style={{ width: 70 }}>Reflections</span>
           <input type="range" min={0} max={2.5} step={0.05} value={light.env}
             onChange={e => setLight({ env: +e.target.value })} style={{ flex: 1 }} />
+        </div>
+        <div style={row}>
+          <span style={{ width: 70 }}>Shadows</span>
+          <input type="range" min={0} max={1} step={0.02} value={light.shadows ?? DEFAULT_LIGHT.shadows}
+            onChange={e => setLight({ shadows: +e.target.value })} style={{ flex: 1 }} />
+        </div>
+        <div style={row}>
+          <span style={{ width: 70 }}>Sheen</span>
+          <input type="range" min={0} max={1} step={0.02} value={light.sheen ?? DEFAULT_LIGHT.sheen}
+            onChange={e => setLight({ sheen: +e.target.value })} style={{ flex: 1 }} />
         </div>
         <label style={{ ...row, cursor: 'pointer' }}>
           <input type="checkbox" checked={light.spin} onChange={e => setLight({ spin: e.target.checked })} />

@@ -41,8 +41,13 @@ export interface TiltLight {
   env: number
   /** The light turns with the turntable, so a model keeps its lit side. */
   spin: boolean
+  /** The same light across everything raised (Brian 2026-10-30): how
+   *  dark the shadows it casts on the canvas are, 0-1, and how strong the
+   *  highlight it puts on card and tile faces is, 0-1. */
+  shadows: number
+  sheen: number
 }
-export const DEFAULT_LIGHT: TiltLight = { azimuth: -40, elevation: 45, power: 3, env: 0.35, spin: false }
+export const DEFAULT_LIGHT: TiltLight = { azimuth: -40, elevation: 45, power: 3, env: 0.35, spin: false, shadows: 0.45, sheen: 0.5 }
 
 interface TiltStore {
   /** Degrees the plane is tipped back; 0 = flat. */

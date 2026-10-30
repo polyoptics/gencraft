@@ -13,7 +13,9 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import { toCreasedNormals } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { acquireModel, releaseModel, disposeInstance } from './modelCache'
 import { computePosedBounds } from './orbitState'
-import { TILT_PERSPECTIVE, type TiltWire, type TiltLight } from '../store/tiltStore'
+import { TILT_PERSPECTIVE, DEFAULT_LIGHT, type TiltWire, type TiltLight } from '../store/tiltStore'
+
+const DEFAULT_SHADOWS = DEFAULT_LIGHT.shadows, DEFAULT_SHEEN = DEFAULT_LIGHT.sheen
 
 export interface TiltTarget {
   key: string
@@ -227,18 +229,15 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   // instead of washing out.
   renderer.toneMapping = THREE.NeutralToneMapping
   renderer.toneMappingExposure = 1
+  // Shadows from the one light (key) onto the canvas. Updated by hand, once
+  // per pass that needs it: the clay and wireframe passes reuse the map.
+  renderer.shadowMap.enabled = true
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap
+  renderer.shadowMap.autoUpdate = false
   const pmrem = new THREE.PMREMGenerator(renderer)
   const envRT = pmrem.fromScene(new RoomEnvironment(), 0.04)
   pmrem.dispose()
 
-  const lights = () => {
-    const l = new THREE.Group()
-    l.add(new THREE.HemisphereLight(0xffffff, 0x444466, 1.2))
-    const sun = new THREE.DirectionalLight(0xffffff, 1.5)
-    sun.position.set(300, 800, 900)
-    l.add(sun)
-    return l
-  }
   // Models in one scene (shading override applies), walls in another (it
   // must not). Both share the plane transform and the depth buffer, so a
   // model still stands in front of its wall.
@@ -259,11 +258,37 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   flatRig.add(flatKey)
   flatRig.visible = false
   scene.add(flatRig)
-  const deco = new THREE.Scene(); deco.add(lights())
+  const deco = new THREE.Scene()
+  deco.add(new THREE.HemisphereLight(0xffffff, 0x444466, 1.2))
   const ground = new THREE.Group(); ground.matrixAutoUpdate = false; scene.add(ground)
-  const key = new THREE.DirectionalLight(0xffffff, 2)
-  ground.add(key, key.target)
   const groundDeco = new THREE.Group(); groundDeco.matrixAutoUpdate = false; deco.add(groundDeco)
+  // One light for the whole view (Brian 2026-10-30): the Light panel's key
+  // lights the models, the slabs' sides and a sheen on every face, and
+  // casts shadows on the canvas. It lives on the plane, so it turns with
+  // it. Two copies, one per scene, kept in step each frame.
+  const shadowLight = (l: THREE.DirectionalLight) => {
+    l.castShadow = true
+    l.shadow.mapSize.set(2048, 2048)
+    l.shadow.bias = -0.0006
+    l.shadow.normalBias = 0.5
+    l.shadow.radius = 3
+    return l
+  }
+  const key = shadowLight(new THREE.DirectionalLight(0xffffff, 2))
+  ground.add(key, key.target)
+  const decoKey = shadowLight(new THREE.DirectionalLight(0xffffff, 1.5))
+  groundDeco.add(decoKey, decoKey.target)
+  // The canvas as a shadow catcher: invisible but for the shadows on it.
+  // No depth write, so slab sides drawn below the plane still show.
+  const catcher = () => {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShadowMaterial({ opacity: 0.45, depthWrite: false }))
+    m.receiveShadow = true
+    m.renderOrder = 10
+    m.frustumCulled = false
+    return m
+  }
+  const modelShadow = catcher(); ground.add(modelShadow)
+  const slabShadow = catcher(); groundDeco.add(slabShadow)
 
   const camera = new THREE.PerspectiveCamera(50, 1, 10, TILT_PERSPECTIVE * 20)
   camera.position.set(0, 0, TILT_PERSPECTIVE)
@@ -324,6 +349,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       }
       s.size.copy(m.size)
       s.triangles = m.triangles
+      inst.traverse(o => { if ((o as THREE.Mesh).isMesh) o.castShadow = true })
       inst.position.set(-m.centre.x, -m.minY, -m.centre.z)   // feet on the card, centred on it
       turn.add(inst)
       s.inst = inst
@@ -367,12 +393,27 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   const topPos = new Float32Array(SLAB_MAX * (RING + 1) * 3)
   const topIdx = new Uint32Array(SLAB_MAX * RING * 3)
   topGeo.setAttribute('position', new THREE.BufferAttribute(topPos, 3).setUsage(THREE.DynamicDrawUsage))
+  // Every face looks straight up off the plane. The top fans wind
+  // clockwise as seen from above, so three draws them as back faces and
+  // flips their normal: store it pointing down.
+  const topNrm = new Float32Array(topPos.length)
+  for (let i = 2; i < topNrm.length; i += 3) topNrm[i] = -1
+  topGeo.setAttribute('normal', new THREE.BufferAttribute(topNrm, 3))
   topGeo.setIndex(new THREE.BufferAttribute(topIdx, 1))
   const sideMesh = new THREE.Mesh(sideGeo, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6, metalness: 0, emissive: 0x2a2e3c }))
   const topMesh = new THREE.Mesh(topGeo, new THREE.MeshBasicMaterial({ colorWrite: false, side: THREE.DoubleSide }))
-  sideMesh.frustumCulled = topMesh.frustumCulled = false
+  // The sheen: the key light's highlight on the faces (the DOM draws them;
+  // this adds only the shine, black plus specular, added on top).
+  const SHEEN_MAT = new THREE.MeshPhongMaterial({
+    color: 0x000000, specular: 0x9aa4bc, shininess: 14, side: THREE.DoubleSide,
+    transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, depthFunc: THREE.LessEqualDepth,
+  })
+  const sheenMesh = new THREE.Mesh(topGeo, SHEEN_MAT)
+  sideMesh.frustumCulled = topMesh.frustumCulled = sheenMesh.frustumCulled = false
   topMesh.renderOrder = -1
-  groundDeco.add(topMesh, sideMesh)
+  sheenMesh.renderOrder = 11
+  sideMesh.castShadow = topMesh.castShadow = true
+  groundDeco.add(topMesh, sideMesh, sheenMesh)
   const col = new THREE.Color()
 
   /** A rounded-rect outline: RING points (x, y in the plane's y-up frame)
@@ -553,10 +594,34 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       const L = st.light
       const az = (L.azimuth * Math.PI / 180) + (L.spin && st.turn ? now / 1000 * 0.6 : 0)
       const el = Math.max(2, Math.min(90, L.elevation)) * Math.PI / 180
-      key.position.set(Math.cos(el) * Math.sin(az) * 1000, -Math.cos(el) * Math.cos(az) * 1000, Math.sin(el) * 1000)
+      // Far off, so its shadow camera's box spans the whole view.
+      const span = Math.max(W, H) * 1.6
+      for (const l of [key, decoKey]) {
+        l.position.set(Math.cos(el) * Math.sin(az) * span, -Math.cos(el) * Math.cos(az) * span, Math.sin(el) * span)
+        const c = l.shadow.camera
+        c.left = c.bottom = -span; c.right = c.top = span
+        c.near = 1; c.far = span * 2.5
+        c.updateProjectionMatrix()
+      }
       key.intensity = L.power
+      decoKey.intensity = L.power * 0.5
       scene.environmentIntensity = st.flat ? 0.6 : L.env
+      const shadows = L.shadows ?? DEFAULT_SHADOWS, sheen = L.sheen ?? DEFAULT_SHEEN
+      for (const m of [modelShadow, slabShadow]) {
+        m.scale.set(span * 2, span * 2, 1)
+        ;(m.material as THREE.ShadowMaterial).opacity = shadows
+      }
+      key.castShadow = decoKey.castShadow = shadows > 0.01 && !st.flat
+      // The sheen follows the light's strength, but never glares.
+      SHEEN_MAT.opacity = Math.min(1, sheen * L.power / 3)
+      sheenMesh.visible = sheen > 0.01 && !st.flat
     }
+    // The catcher must not take the clay or wireframe look: it is drawn on
+    // its own after those passes, with the models hidden and the shadow
+    // map they made.
+    const overridden = st.wire === 'only' || !st.texture
+    modelShadow.visible = key.castShadow && !overridden
+    renderer.shadowMap.needsUpdate = true
     if (st.wire === 'only') {
       scene.overrideMaterial = WIRE_MAT
       renderer.render(scene, camera)
@@ -566,11 +631,22 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       renderer.render(scene, camera)
       renderer.autoClear = false
       if (st.wire === 'over') {
+        const was = modelShadow.visible
+        modelShadow.visible = false
         scene.overrideMaterial = WIRE_OVER_MAT
         renderer.render(scene, camera)
+        modelShadow.visible = was
       }
     }
     scene.overrideMaterial = null
+    if (overridden && key.castShadow) {
+      const shown = [...standing.values()].filter(s => s.stand.visible)
+      for (const s of shown) s.stand.visible = false
+      modelShadow.visible = true
+      renderer.render(scene, camera)
+      for (const s of shown) s.stand.visible = true
+    }
+    renderer.shadowMap.needsUpdate = true
     buildSlabs(st.tilt > 0.5 ? st.slabs : [])
     renderer.render(deco, camera)
     if (into) { renderer.setRenderTarget(null); return }
