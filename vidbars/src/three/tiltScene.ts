@@ -820,6 +820,9 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     if (outlined.length) {
       const vis = new Map<THREE.Object3D, boolean>()
       for (const s of standing.values()) { vis.set(s.stand, s.stand.visible); vis.set(s.figure, s.figure.visible); s.figure.visible = false }
+      // The shadow catcher is a plane as big as the view: in the mask it
+      // would ring the whole ground and swamp the models on it.
+      vis.set(modelShadow, modelShadow.visible); modelShadow.visible = false
       renderer.setRenderTarget(maskRT)
       renderer.setClearColor(0x000000, 0)
       renderer.clear()

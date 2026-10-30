@@ -439,7 +439,11 @@ function cardModel(id: string): { url: string; name: string } | null {
   let bid: string | null = id
   let name = ''
   if (g) {
-    const face = (g.deckState === 'stacked' && g.deckFaceCard && bs.groups.find(gr => gr.id === g.deckFaceCard)) || g
+    // A fanned deck's face shows the member clicked in the fan (its portal),
+    // so the model above it follows that click.
+    const portal = g.deckState === 'fanned' ? useCanvasStore.getState().deckPortalSelections[g.id] : undefined
+    const face = (g.deckState === 'stacked' && g.deckFaceCard && bs.groups.find(gr => gr.id === g.deckFaceCard))
+      || (portal && bs.groups.find(gr => gr.id === portal)) || g
     const blocks = faceBlocks(face, bs.boards)
     bid = face.faceBoardId && blocks.includes(face.faceBoardId) ? face.faceBoardId
       : face.cardHeroImage ? null : blocks[0] ?? null
