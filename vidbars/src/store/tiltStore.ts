@@ -23,7 +23,7 @@ export const TILT_MAX = 75
 /** Let go below this and the view eases the rest of the way to flat — tilting back up to top-down is the way home. */
 export const TILT_SNAP = 10
 
-export type TiltShading = 'textured' | 'shaded' | 'wire'
+export type TiltShading = 'textured' | 'shaded' | 'flat' | 'wire'
 
 interface TiltStore {
   /** Degrees the plane is tipped back; 0 = flat. */

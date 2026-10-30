@@ -666,16 +666,16 @@ const TiltedView: React.FC = () => {
       >
         <span>Tilted {Math.round(tilt)}° · click to select · drag a box to select many · Alt+drag orbits · Alt+middle pans · F frames</span>
         <span style={{ width: 1, height: 14, background: 'rgba(255,255,255,0.12)' }} />
-        {(['textured', 'shaded', 'wire'] as const).map(m => (
+        {(['textured', 'shaded', 'flat', 'wire'] as const).map(m => (
           <button key={m} style={btn(shading === m)} onClick={() => set.setShading(m)}>
-            {m === 'textured' ? 'Textured' : m === 'shaded' ? 'Shaded' : 'Wireframe'}
+            {m === 'textured' ? 'Textured' : m === 'shaded' ? 'Shaded' : m === 'flat' ? 'Flat' : 'Wireframe'}
           </button>
         ))}
         <button style={btn(turn)} onClick={() => set.setTurn(!turn)}>Turn</button>
         <button style={btn(walls)} onClick={() => set.setWalls(!walls)} title="File name and size on a wall behind each model">Labels</button>
         <button style={btn(figure)} onClick={() => set.setFigure(!figure)} title="A 1.75 m person beside each model. Drag them up or down to set how big the model really is.">Person</button>
         <span style={{ width: 1, height: 14, background: 'rgba(255,255,255,0.12)' }} />
-        <button style={btn(true)} onClick={() => set.flatten()}>Flat (Esc)</button>
+        <button style={btn(true)} onClick={() => set.flatten()}>Exit 3D (Esc)</button>
       </div>
     </div>
   )

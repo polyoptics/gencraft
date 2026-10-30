@@ -9,6 +9,7 @@
 // pick() is the hit test, so a model can be clicked straight in 3D.
 
 import * as THREE from 'three'
+import { toCreasedNormals } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { acquireModel, releaseModel, disposeInstance } from './modelCache'
 import { computePosedBounds } from './orbitState'
 import { TILT_PERSPECTIVE, type TiltShading } from '../store/tiltStore'
@@ -37,6 +38,8 @@ export interface TiltFrameState {
   hovered: string | null
   /** The model units per metre the user set for a url, if any. */
   unitsFor: (url: string) => number | undefined
+  /** Display size multiplier for a card's model (dragging the model). */
+  sizeFor: (key: string) => number
 }
 
 /** A person, in metres, for scale. */
@@ -61,6 +64,9 @@ interface Standing {
   figure: THREE.Group
   wall: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>
   wallText: string
+  /** Smooth-normal geometry for the Flat mode (null until first needed). */
+  smooth: Swap[] | null
+  smoothOn: boolean
   phase: number
   dead: boolean
   seen: number
@@ -68,7 +74,10 @@ interface Standing {
 
 const WIRE_MAT = new THREE.MeshBasicMaterial({ color: 0x9fd0ff, wireframe: true, transparent: true, opacity: 0.85 })
 const SHADED_MAT = new THREE.MeshStandardMaterial({ color: 0xc8ccd8, roughness: 0.75, metalness: 0 })
-const overrideFor = (s: TiltShading) => s === 'wire' ? WIRE_MAT : s === 'shaded' ? SHADED_MAT : null
+// Flat = a flat, soft clay look (Brian 2026-10-30): no highlights, and a
+// strong emissive lift so the dark side stays close to the lit side.
+const FLAT_MAT = new THREE.MeshLambertMaterial({ color: 0x9da2ae, emissive: 0x5c606a })
+const overrideFor = (s: TiltShading) => s === 'wire' ? WIRE_MAT : s === 'shaded' ? SHADED_MAT : s === 'flat' ? FLAT_MAT : null
 // Silhouette masks: red channel = selected, green = under the cursor.
 const MASK_SEL = new THREE.MeshBasicMaterial({ color: 0xff0000 })
 const MASK_HOVER = new THREE.MeshBasicMaterial({ color: 0x00ff00 })
@@ -139,6 +148,44 @@ void main() {
   else discard;
 }`
 
+/** Smooth-normal copies of model geometry for the Flat mode: many models
+ *  arrive with split, faceted normals. Normals are averaged across faces
+ *  that meet at under SMOOTH_CREASE, so curves go smooth and hard edges
+ *  stay hard. Textured keeps the model's own normals. The cached source
+ *  geometry is shared with the Viewers, so only tilted instances swap to
+ *  the copy, ref-counted per source and built the first time Flat shows. */
+const SMOOTH_CREASE = Math.PI * 70 / 180
+const SMOOTH_MAX_TRIS = 400_000
+const smoothed = new Map<THREE.BufferGeometry, { geo: THREE.BufferGeometry; refs: number }>()
+type Swap = { mesh: THREE.Mesh; orig: THREE.BufferGeometry; smooth: THREE.BufferGeometry }
+
+function smoothSwaps(root: THREE.Object3D): Swap[] {
+  const out: Swap[] = []
+  root.traverse(o => {
+    const mesh = o as THREE.Mesh
+    const src = mesh.isMesh ? mesh.geometry : null
+    if (!src?.attributes.position || (mesh as THREE.SkinnedMesh).isSkinnedMesh) return
+    const tris = src.index ? src.index.count / 3 : src.attributes.position.count / 3
+    if (tris > SMOOTH_MAX_TRIS) return
+    let e = smoothed.get(src)
+    if (!e) {
+      try { e = { geo: toCreasedNormals(src, SMOOTH_CREASE), refs: 0 } } catch { return }
+      smoothed.set(src, e)
+    }
+    e.refs++
+    out.push({ mesh, orig: src, smooth: e.geo })
+  })
+  return out
+}
+
+function releaseSwaps(swaps: Swap[] | null) {
+  for (const w of swaps ?? []) {
+    w.mesh.geometry = w.orig
+    const e = smoothed.get(w.orig)
+    if (e && --e.refs <= 0) { e.geo.dispose(); smoothed.delete(w.orig) }
+  }
+}
+
 export function createTiltScene(canvas: HTMLCanvasElement) {
   const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true })
   renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1))
@@ -196,7 +243,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     groundDeco.add(wall)
     const s: Standing = {
       url, stand, turn, inst: null, size: new THREE.Vector3(), unit: 1, unitSet: false, triangles: 0,
-      figure, wall, wallText: '', phase: Math.random() * 6.28, dead: false, seen: frameNo,
+      figure, wall, wallText: '', smooth: null, smoothOn: false, phase: Math.random() * 6.28, dead: false, seen: frameNo,
     }
     acquireModel(url).then(inst => {
       if (s.dead) { releaseModel(url); disposeInstance(inst); return }
@@ -228,7 +275,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     s.wall.material.map?.dispose()
     s.wall.material.dispose()
     s.wall.geometry.dispose()
-    if (s.inst) { disposeInstance(s.inst); releaseModel(s.url) }
+    if (s.inst) { disposeInstance(s.inst); releaseSwaps(s.smooth); releaseModel(s.url) }
     standing.delete(key)
   }
 
@@ -270,7 +317,14 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       const foot = Math.max(s.size.x, s.size.z, 1e-6)
       let k = (tg.w * 0.6) / foot
       if (s.size.y * k > tg.w * 1.1) k = (tg.w * 1.1) / Math.max(s.size.y, 1e-6)
+      k *= st.sizeFor(tg.key)
       s.stand.scale.set(k, k * Math.max(ease, 0.001), k)
+      const wantSmooth = st.shading === 'flat' && !!s.inst
+      if (wantSmooth && !s.smooth) s.smooth = smoothSwaps(s.inst!)
+      if (s.smooth && wantSmooth !== s.smoothOn) {
+        s.smoothOn = wantSmooth
+        for (const w of s.smooth) w.mesh.geometry = wantSmooth ? w.smooth : w.orig
+      }
       s.stand.visible = !!s.inst && ease > 0
       s.turn.rotation.y = st.turn ? now / 1000 * 0.6 + s.phase : 0
       // glTF is in metres; something over 30 units tall is far likelier a
