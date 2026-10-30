@@ -27,7 +27,7 @@ import { useViewport3DStore } from '../../store/viewport3dStore'
 import { useBoardsStore } from '../../store/boardsStore'
 import { getMediaItems } from '../../types/bar'
 import { faceBlocks } from '../../utils/cardGrid'
-import { createTiltScene, FADE_MS, type TiltTarget, type TiltFrameState, type TiltSlab, type TiltArt } from '../../three/tiltScene'
+import { createTiltScene, type TiltTarget, type TiltFrameState, type TiltSlab, type TiltArt } from '../../three/tiltScene'
 
 /** Degrees of tilt / turn per pixel of Alt+drag. */
 const DRAG_DEG = 0.25
@@ -317,24 +317,18 @@ const models: {
   at: { x: number; y: number } | null
 } = { pick: null, info: null, hovered: null, at: null }
 
-/** How far the 3D look has come in, 0..1, stepped each frame by TiltModels:
- *  up over FADE_MS as the canvas tips, down as it lies flat again (from the
- *  moment flatten() starts). The raised parts, sheen and models all follow
- *  it, so leaving 3D fades as entering does (Brian 2026-10-30). */
-let fadeLevel = 0
-/** Which way fadeLevel is heading. Both ways the look changes quickest at
- *  the start, so leaving 3D drops straight away instead of hanging on and
- *  trailing the tilt (Brian 2026-10-30). */
-let fadeRising = true
-/** Leaving is quicker than arriving: done before flatten() lands the view. */
-const FADE_OUT_MS = 280
-/** fadeLevel eased, and never more than the tilt allows, so a slow
- *  Alt+drag back to flat fades the sheen over the last few degrees too. */
-const fadeShown = () =>
-  Math.min(fadeRising ? 1 - (1 - fadeLevel) ** 3 : fadeLevel ** 2,
-    useTiltStore.getState().tilt / DETAIL_TILT, 1)
-/** Whether anything 3D is on screen: tilted, or still fading out. */
-const live3d = () => isTilted(useTiltStore.getState().tilt) || fadeLevel > 0
+/** The camera angle the 3D look fades over: the sheen, raised parts and
+ *  models come in over the first FADE_TILT degrees of tipping and go over
+ *  the last ones of lying back flat, so they move with the camera rather
+ *  than after it, the same both ways (Brian 2026-10-30). */
+const FADE_TILT = 15
+/** How far the 3D look is in at this angle, 0..1, eased at both ends. */
+const fadeShown = () => {
+  const x = Math.min(1, useTiltStore.getState().tilt / FADE_TILT)
+  return x * x * (3 - 2 * x)
+}
+/** Whether anything 3D is on screen. */
+const live3d = () => isTilted(useTiltStore.getState().tilt)
 
 const frameState = (): TiltFrameState => {
   const ts = useTiltStore.getState()
@@ -379,24 +373,9 @@ const TiltModels: React.FC = () => {
       if (warmTimer) clearTimeout(warmTimer)
       warmTimer = setTimeout(warm, 500)
     }
-    let last = 0
     const frame = (now: number) => {
       raf = requestAnimationFrame(frame)
       if (!view || !canvas) return
-      const ts = useTiltStore.getState()
-      // A long gap (a hidden tab, the first frame) counts as one frame.
-      const dt = Math.min(50, last ? now - last : 0)
-      last = now
-      const rising = isTilted(ts.tilt) && !ts.leaving
-      if (rising !== fadeRising) {
-        // Turning round mid-fade: carry on from what is on screen.
-        const was = fadeRising ? 1 - (1 - fadeLevel) ** 3 : fadeLevel ** 2
-        fadeRising = rising
-        fadeLevel = rising ? 1 - Math.cbrt(1 - was) : Math.sqrt(was)
-      }
-      fadeLevel = rising
-        ? Math.min(1, fadeLevel + dt / FADE_MS)
-        : Math.max(0, fadeLevel - dt / FADE_OUT_MS)
       const live = live3d()
       if (live !== shown) {
         shown = live
@@ -986,9 +965,8 @@ function liftOf(el: Element | null): number {
 }
 function dropLifts() { if (lifted.size) setLifts(new Map()) }
 // The 3D view may stop drawing once flat, so settle back here too: nothing
-// stays lifted or unclipped in the flat view (once the fade-out is done;
-// TiltModels drops them then).
-useTiltStore.subscribe(s => { if (!isTilted(s.tilt) && fadeLevel <= 0) dropLifts() })
+// stays lifted or unclipped in the flat view.
+useTiltStore.subscribe(s => { if (!isTilted(s.tilt)) dropLifts() })
 
 /** Every model card in view, as flat px from the host centre. */
 function collectTargets(W: number, H: number): TiltTarget[] {

@@ -18,8 +18,8 @@ import { TILT_PERSPECTIVE, DEFAULT_LIGHT, type TiltWire, type TiltLight } from '
 const DEFAULT_SHADOWS = DEFAULT_LIGHT.shadows, DEFAULT_SHEEN = DEFAULT_LIGHT.sheen
 /** How long a model's pop onto a Viewer takes. */
 const POP_MS = 320
-/** How long the sheen, models and raised parts take to come in as the
- *  canvas tips, and to go as it lies back flat. */
+/** How long a model takes to grow in when it comes into view in 3D (the
+ *  tilt itself fades the whole look in and out: TiltLayer's FADE_TILT). */
 export const FADE_MS = 500
 
 /** Drawn only where the artwork mask (stencil 1) is not. */
