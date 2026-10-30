@@ -19,7 +19,7 @@ import { useCanvasStore } from '../store/canvasStore'
 import { createScaleFor } from './canvasCreate'
 import { loadImage } from './fx/chain'
 import { getMediaItems, type MediaItem } from '../types/bar'
-import { ensureModelPoster } from '../three/posterService'
+import { ensureModelPoster, getModelPoster } from '../three/posterService'
 
 /** The card face on screen at the zoom it is made at: the Blank card as it
  *  was set by hand (963 × 1419 at 13%). Canvas size = this × createScaleFor. */
@@ -117,14 +117,28 @@ export function layoutCardGrid(groupId: string, aspects: Record<string, number> 
   })
 }
 
+/** What a media item shows on a card face: a picture or a video as
+ *  itself, a 3D model as its rendered poster (the thumbnail its tile
+ *  showed), anything else nothing. */
+function faceable(m: MediaItem): MediaItem | null {
+  if (m.type === 'image' || m.type === 'video') return m
+  if (m.type === 'model') {
+    const poster = getModelPoster(m.url) ?? m.posterUrl
+    return poster ? { url: poster, type: 'image', originalName: m.originalName } : null
+  }
+  return null
+}
+
 /** The face block's first media item, or the first block's that has one. */
 export function faceMedia(g: ProjectGroup, boards: Record<string, BoardData>): { boardId: string; media: MediaItem } | null {
   const order = gridOrder(g, boards)
   const pick = (bid: string) => {
     const b = boards[bid]
     for (const rid of b?.rootIds ?? []) {
-      const m = getMediaItems(b.bars[rid]?.content).find(x => x.type === 'image' || x.type === 'video')
-      if (m) return { boardId: bid, media: m }
+      for (const x of getMediaItems(b.bars[rid]?.content)) {
+        const m = faceable(x)
+        if (m) return { boardId: bid, media: m }
+      }
     }
     return null
   }
@@ -151,12 +165,12 @@ export function cardFaceMedia(g: ProjectGroup, boards: Record<string, BoardData>
   return faceMedia(g, boards)?.media ?? null
 }
 
-/** A card's blocks the face can show — those with a picture or video — in
- *  reading order. A note-only block would leave the face blank. */
+/** A card's blocks the face can show — those with a picture, video or 3D
+ *  model — in reading order. A note-only block would leave the face blank. */
 export function faceBlocks(g: ProjectGroup, boards: Record<string, BoardData>): string[] {
   return gridOrder(g, boards).filter(bid => {
     const b = boards[bid]
-    return b.rootIds.some(rid => getMediaItems(b.bars[rid]?.content).some(m => m.type === 'image' || m.type === 'video'))
+    return b.rootIds.some(rid => getMediaItems(b.bars[rid]?.content).some(m => m.type === 'image' || m.type === 'video' || m.type === 'model'))
   })
 }
 
