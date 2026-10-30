@@ -106,16 +106,19 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
   setFigure: figure => set({ figure }),
   flatten: () => {
     if (flattenRaf !== null) cancelAnimationFrame(flattenRaf)
-    const { tilt: t0, spin: s0raw, shiftX: x0, shiftY: y0 } = get()
+    const { tilt: t0, spin: s0raw } = get()
     // Unwind the spin the short way round.
     const s0 = ((s0raw % 360) + 540) % 360 - 180
     const start = performance.now()
     const tick = () => {
       const t = Math.min(1, (performance.now() - start) / 320)
       const k = 1 - Math.pow(1 - t, 3)
-      set({ tilt: t0 * (1 - k), spin: s0 * (1 - k), shiftX: x0 * (1 - k), shiftY: y0 * (1 - k) })
+      // The camera's sideways move stays put while it eases flat: flat, it
+      // is a plain slide of the canvas, which TiltLayer then hands to the
+      // canvas pan. Leaving 3D keeps the view where it is (Brian 2026-10-30).
+      set({ tilt: t0 * (1 - k), spin: s0 * (1 - k) })
       if (t < 1) flattenRaf = requestAnimationFrame(tick)
-      else { flattenRaf = null; set({ tilt: 0, spin: 0, shiftX: 0, shiftY: 0 }) }
+      else { flattenRaf = null; set({ tilt: 0, spin: 0 }) }
     }
     flattenRaf = requestAnimationFrame(tick)
   },

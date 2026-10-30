@@ -250,9 +250,22 @@ function useFrameKey() {
   }, [])
 }
 
+/** Back flat with the camera still moved sideways: that move is now just a
+ *  slide of the flat canvas, so it becomes the canvas pan and the shift
+ *  goes. The view does not move; nothing is remembered for next time. */
+function useShiftToPan() {
+  useEffect(() => useTiltStore.subscribe(s => {
+    if (s.tilt !== 0 || s.spin !== 0 || (!s.shiftX && !s.shiftY)) return
+    useCanvasStore.getState().shiftPan(s.shiftX, s.shiftY)
+    // After React has drawn the new pan, so the two never show at once.
+    queueMicrotask(() => useTiltStore.getState().setShift(0, 0))
+  }), [])
+}
+
 export const TiltLayer: React.FC = () => {
   useAltTiltGesture()
   useFrameKey()
+  useShiftToPan()
   const tilted = useTiltStore(s => isTilted(s.tilt))
   return (
     <>
@@ -413,8 +426,14 @@ function cardModel(id: string): { url: string; name: string } | null {
 /** How thick things are, as a share of their shorter side: a Viewer like
  *  a phone on a table, a tile a bit less, a card thinner, and a closed deck
  *  as thick as the cards in it. */
-const THICK = { viewer: 0.1, tile: 0.06, card: 0.05, deckCard: 0.022, deckMax: 0.45 }
+const THICK = { viewer: 0.05, tile: 0.03, card: 0.025, deckCard: 0.011, deckMax: 0.25 }
 const SIDE = { viewer: 0x4a4e5c, tile: 0x7a829e, card: 0x8a93b4 }
+
+/** An element's corner radius in its own px, so a slab's corners match
+ *  the rounded box drawn on top of it. */
+function radiusOf(el: HTMLElement): number {
+  return parseFloat(el.style.borderRadius || getComputedStyle(el).borderTopLeftRadius) || 0
+}
 
 /** Every card, deck, tile and Viewer on the tilted plane, as slabs (flat px
  *  from the host centre). Read from layout offsets, which tilting does not
@@ -432,14 +451,17 @@ function collectSlabs(): TiltSlab[] {
   // World layer: tiles and Viewers, in world units under the pan/zoom.
   const { pan, zoom } = useCanvasStore.getState()
   for (const world of host.querySelectorAll<HTMLElement>(':scope > div[style*="scale("]')) {
-    for (const el of world.querySelectorAll<HTMLElement>('[data-viewport3d]:not([data-pinned]), [data-freenode][data-id]:not([data-pinned])')) {
+    for (const node of world.querySelectorAll<HTMLElement>('[data-viewport3d]:not([data-pinned]), [data-freenode][data-id]:not([data-pinned])')) {
+      // A loop strip paints its face on its own body, which can sit off the
+      // tile's box and outgrow it: the slab follows the body.
+      const el = node.hasAttribute('data-rail') ? node.querySelector<HTMLElement>('[data-rail-body]') ?? node : node
       const at = offsetIn(el, world)
       if (!at) continue
-      const viewer = el.hasAttribute('data-viewport3d')
+      const viewer = node.hasAttribute('data-viewport3d')
       const w = el.offsetWidth * zoom, h = el.offsetHeight * zoom
       const m = Math.min(w, h)
       add(pan.x + at.x * zoom, pan.y + at.y * zoom, w, h,
-        m * (viewer ? THICK.viewer : THICK.tile), viewer ? SIDE.viewer : SIDE.tile, m * (viewer ? 0.03 : 0.05))
+        m * (viewer ? THICK.viewer : THICK.tile), viewer ? SIDE.viewer : SIDE.tile, radiusOf(el) * zoom)
     }
   }
   // Card layer: cards and closed decks, already in screen px.
@@ -454,7 +476,7 @@ function collectSlabs(): TiltSlab[] {
       if (g?.deckState === 'fanned') continue   // the wrapper spans the whole fan
       const n = g?.deckState === 'stacked' ? 1 + groups.filter(o => o.deckAnchorId === id && o.deckState === 'stacked').length : 1
       const w = el.offsetWidth, h = el.offsetHeight, m = Math.min(w, h)
-      add(at.x, at.y, w, h, Math.min(m * THICK.deckMax, m * (THICK.card + (n - 1) * THICK.deckCard)), SIDE.card, m * 0.06)
+      add(at.x, at.y, w, h, Math.min(m * THICK.deckMax, m * (THICK.card + (n - 1) * THICK.deckCard)), SIDE.card, radiusOf((el.firstElementChild as HTMLElement | null) ?? el) || m * 0.06)
     }
     // Zoomed in to Blocks or Boards, a card is drawn as its outline.
     for (const el of stage.querySelectorAll<HTMLElement>('[data-group-outline]')) {
