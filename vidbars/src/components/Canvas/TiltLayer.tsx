@@ -635,25 +635,36 @@ function collectSlabs(K = 1): TiltSlab[] {
         // A card stands on what holds it, its thickness above it; a deck is
         // as tall as its cards, each a slice, the lower ones stepping out to
         // the right as its flat edges do. Its face rides on top.
-        const per = m * THICK.card * Math.max(k, lift === undefined ? 0 : 1)
+        const f = Math.max(k, lift === undefined ? 0 : 1)
+        const per = m * THICK.card * f
         const thick = Math.min(m * THICK.deckMax, per * n)
         const base = lift ?? 0
         const reserve = n > 1 ? Math.min(10, w * 0.05) : 0
+        // Each card under the top one reaches a step further right than the
+        // one above, so the deck's right side is an angled run of page edges
+        // you can see (and click to fan) without the pile leaning: past the
+        // flat deck's edge strip, grown in with the 3D look (Brian 2026-10-30).
+        const L = Math.min(n - 1, DECK_SLICES)
+        const spread = reserve + Math.max(0, Math.min(w * 0.08, L * Math.min(6, Math.max(2, w * 0.012))) - reserve) * f * K
         card = add(at.x, at.y, w - reserve, h, lift === undefined ? per : thick, SIDE.card, r)
         if (card) {
           card.z = base + thick
           lifting.set(el, card.z)
           chain(el, stage)
           riseZones(zones, at, w, h, card.z, lifting, stage)
-          if (n > 1) hideEdges(el)
-          const L = Math.min(n - 1, DECK_SLICES), below = thick - per
+          const below = thick - per
+          // Its cards show once they stand clear of each other: any thinner,
+          // in the first degrees of tilt, their tops flicker through the
+          // face, so the flat deck's edge lines stay till then.
+          const slices = n > 1 && per * K >= 1 && below * K >= L * 0.75
+          if (slices) hideEdges(el, spread - reserve)
           if (lift !== undefined && (stands.has(id) || (g?.deckAnchorId !== undefined && stands.has(g.deckAnchorId)))) {
             hinge = { v: at.y + h - H / 2, z: card.z, a: CONSOLE_DEG * K * Math.PI / 180 }
             stand(el, hinge)
             card.hinge = hinge
           }
-          for (let j = 1; j <= L; j++) {
-            const s = add(at.x, at.y, w - reserve + reserve * j / L, h, below / L, j % 2 ? SIDE.edge : SIDE.card, r)
+          for (let j = 1; slices && j <= L; j++) {
+            const s = add(at.x, at.y, w - reserve + spread * j / L, h, below / L, j % 2 ? SIDE.edge : SIDE.card, r)
             if (s) { s.z = base + below * (1 - (j - 1) / L); s.cap = true; if (hinge) s.hinge = hinge }
           }
         }
@@ -864,9 +875,20 @@ function riseZones(zones: ReturnType<typeof hitZones>, at: { x: number; y: numbe
  *  clicks) give way to the modelled edges while it stands up. */
 let hidden = new Set<HTMLElement>()
 let hiding = new Set<HTMLElement>()
-function hideEdges(deck: HTMLElement) {
+let widened = new Map<HTMLElement, string>()
+let widening = new Map<HTMLElement, string>()
+/** Hide a stacked deck's flat edge lines (its slices draw them in 3D) and
+ *  stretch its click-to-fan strip `reach` px further right, over the pages
+ *  that step out past it. */
+function hideEdges(deck: HTMLElement, reach = 0) {
   for (const c of deck.children) {
     const e = c as HTMLElement
+    if (e.style.cursor === 'pointer' && e.style.pointerEvents === 'all' && e.offsetLeft > deck.offsetWidth / 2) {
+      const was = widened.get(e) ?? e.style.width
+      widening.set(e, was)
+      e.style.width = `${(parseFloat(was) || 0) + reach}px`
+      continue
+    }
     if (e.style.pointerEvents !== 'none' || e.offsetWidth > 16) continue
     hiding.add(e)
     if (!hidden.has(e)) e.style.visibility = 'hidden'
@@ -881,6 +903,9 @@ function settleChains() {
   for (const e of hidden) if (!hiding.has(e)) e.style.visibility = ''
   hidden = hiding
   hiding = new Set()
+  for (const [e, was] of widened) if (!widening.has(e)) e.style.width = was
+  widened = widening
+  widening = new Map()
   filled = filling
   filling = new Map()
   for (const [e, was] of chained) {

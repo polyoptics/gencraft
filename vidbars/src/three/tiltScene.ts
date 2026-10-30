@@ -139,6 +139,11 @@ interface Standing {
   seen: number
   /** When its model first showed (ms), to grow or pop it in from. */
   shownAt: number
+  /** Its model's own materials (copies: the cached ones are shared with the
+   *  Viewers and posters), each with the opacity and transparency it came
+   *  with, and the fade they were last set to. */
+  mats: { m: THREE.Material; o: number; t: boolean }[]
+  alpha: number
 }
 
 const WIRE_MAT = new THREE.MeshBasicMaterial({ color: 0x9fd0ff, wireframe: true, transparent: true, opacity: 0.85 })
@@ -147,6 +152,12 @@ const WIRE_MAT = new THREE.MeshBasicMaterial({ color: 0x9fd0ff, wireframe: true,
 const WIRE_OVER_MAT = new THREE.MeshBasicMaterial({ color: 0x9fd0ff, wireframe: true, transparent: true, opacity: 0.55, depthFunc: THREE.LessEqualDepth, depthWrite: false })
 /** Texture off: plain clay. Flat comes from the light rig, not this. */
 const CLAY_MAT = new THREE.MeshStandardMaterial({ color: 0xc8ccd8, roughness: 0.85, metalness: 0 })
+/** Set `m` to `o` × the 3D look's fade, see-through only while fading. */
+function fadeMat(m: THREE.Material, o: number, t: boolean, fade: number) {
+  m.opacity = o * fade
+  const see = t || fade < 1
+  if (m.transparent !== see) { m.transparent = see; m.needsUpdate = true }
+}
 const PLACARD_GEO = new THREE.BoxGeometry(0.985, 0.96, 1)
 const PLACARD_MAT = new THREE.MeshStandardMaterial({ color: 0x1a1c28, roughness: 0.7, emissive: 0x15161f })
 // Silhouette masks: red channel = selected, green = under the cursor.
@@ -372,6 +383,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     const s: Standing = {
       url, stand, turn, inst: null, size: new THREE.Vector3(), unit: 1, unitSet: false, triangles: 0,
       figure, wall, wallText: '', smooth: null, smoothOn: false, phase: Math.random() * 6.28, dead: false, seen: frameNo, shownAt: 0,
+      mats: [], alpha: -1,
     }
     acquireModel(url).then(inst => {
       if (s.dead) { releaseModel(url); disposeInstance(inst); return }
@@ -390,6 +402,17 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       s.size.copy(m.size)
       s.triangles = m.triangles
       inst.traverse(o => { if ((o as THREE.Mesh).isMesh) o.castShadow = true })
+      // Its own materials, so it can fade with the tilt and not fade the
+      // same model in a Viewer or a poster.
+      const own = (m: THREE.Material) => {
+        const c = m.clone()
+        s.mats.push({ m: c, o: c.opacity, t: c.transparent })
+        return c
+      }
+      inst.traverse(o => {
+        const mesh = o as THREE.Mesh
+        if (mesh.isMesh) mesh.material = Array.isArray(mesh.material) ? mesh.material.map(own) : own(mesh.material)
+      })
       inst.position.set(-m.centre.x, -m.minY, -m.centre.z)   // feet on the card, centred on it
       turn.add(inst)
       s.inst = inst
@@ -405,6 +428,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     s.wall.material.dispose()
     s.wall.geometry.dispose()
     if (s.inst) { disposeInstance(s.inst); releaseSwaps(s.smooth); releaseModel(s.url) }
+    for (const { m } of s.mats) m.dispose()
     standing.delete(key)
   }
 
@@ -737,8 +761,16 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
         k *= Math.max(0.001, 1 + (c + 1) * y * y * y + c * y * y)
       }
       const since = s.shownAt ? 1 - (1 - Math.min(1, (now - s.shownAt) / FADE_MS)) ** 3 : 0
-      const grow = Math.min(st.fade, tg.pop ? 1 : since)
-      s.stand.scale.set(k, k * Math.max(ease * grow, 0.001), k)
+      // Tipping in, a model fades in with the rest of the 3D look, already
+      // standing some way up: grown up from flat, it lay over its card's
+      // picture as a flat print of its footprint in the first degrees of
+      // tilt (Brian 2026-10-30). A Viewer's still pops up from flat.
+      const up = tg.pop ? ease : 0.4 + 0.6 * ease
+      s.stand.scale.set(k, k * Math.max(up * (tg.pop ? 1 : since), 0.001), k)
+      if (s.alpha !== st.fade) {
+        s.alpha = st.fade
+        for (const x of s.mats) fadeMat(x.m, x.o, x.t, st.fade)
+      }
       const wantSmooth = st.flat && !!s.inst
       if (wantSmooth && !s.smooth) s.smooth = smoothSwaps(s.inst!)
       if (s.smooth && wantSmooth !== s.smoothOn) {
@@ -821,6 +853,12 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       const shadows = L.shadows ?? DEFAULT_SHADOWS, sheen = L.sheen ?? DEFAULT_SHEEN
       for (const m of [modelShadow, slabShadow]) m.scale.set(span * 2, span * 2, 1)
       for (const m of [modelShadow, slabShadow, liftCatch]) (m.material as THREE.ShadowMaterial).opacity = shadows
+      ;(modelShadow.material as THREE.ShadowMaterial).opacity = shadows * st.fade
+      // The clay, wire and person looks fade in and out with the models.
+      fadeMat(CLAY_MAT, 1, false, st.fade)
+      fadeMat(WIRE_MAT, 0.85, true, st.fade)
+      fadeMat(WIRE_OVER_MAT, 0.55, true, st.fade)
+      fadeMat(FIGURE_MAT, 0.85, true, st.fade)
       shadowsOn = shadows > 0.01 && !st.flat
       key.castShadow = shadowsOn && modelCast
       const type = L.soft ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap
