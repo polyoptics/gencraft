@@ -31,6 +31,7 @@ import { collectSubtree } from './utils/barOps'
 import { expandTileIds } from './utils/tileDecks'
 import { isRail } from './utils/rail'
 import { stackedDeckMembers, stepDeckFace, stepFace } from './utils/cardGrid'
+import { followFaceInViewer } from './hooks/useDockedContent'
 import { expandWithNestedMembers } from './hooks/useCardDecks'
 import { copyEffect, pasteEffect, selectedEffect } from './utils/fx/effectClipboard'
 import { currentZone } from './store/zoomZonesStore'
@@ -369,6 +370,8 @@ function useKeyboardCardFace() {
       const members = stackedDeckMembers(sel[0], bs.groups)
       if (members.length > 1) stepDeckFace(sel[0], members, dir)
       else stepFace(sel[0], dir)
+      // A Viewer it is docked to shows the new face too.
+      followFaceInViewer(sel[0], members)
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)

@@ -34,7 +34,7 @@ import { cardStripId } from '../../utils/fx/cardStrips'
 import { cardHitAt } from '../../utils/cardContent'
 import { cardFaceMedia, deckFaceSteps, faceSteps, mergeCardsInto, setFaceThumbnail, stepDeckFace, stepFace } from '../../utils/cardGrid'
 import { drawnRect, effectChain, snapEffectCard } from '../../utils/effectCards'
-import { showDockedCardInViewer } from '../../hooks/useDockedContent'
+import { followFaceInViewer, showDockedCardInViewer } from '../../hooks/useDockedContent'
 import { cardRailTarget, dockCardsOnRail, endDockedDrag, liftDockedCards, previewCardRail } from '../../utils/railCards'
 import { copyEffect, hasEffectClip, pasteEffect } from '../../utils/fx/effectClipboard'
 import { EffectTileBody } from '../Canvas/EffectTileBody'
@@ -890,8 +890,8 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
         {/* Step the face through the card's blocks, in reading order. */}
         {isHovered && steps.count > 1 && (
           <>
-            <FaceArrow side="left" scale={overviewScale(zoom)} onStep={() => stepFace(group.id, -1)} />
-            <FaceArrow side="right" scale={overviewScale(zoom)} onStep={() => stepFace(group.id, 1)} />
+            <FaceArrow side="left" scale={overviewScale(zoom)} onStep={() => { stepFace(group.id, -1); followFaceInViewer(group.id, []) }} />
+            <FaceArrow side="right" scale={overviewScale(zoom)} onStep={() => { stepFace(group.id, 1); followFaceInViewer(group.id, []) }} />
             <div data-card-face-count style={{
               position: 'absolute', zIndex: 3, left: 0, right: 0, bottom: 6, textAlign: 'center', pointerEvents: 'none',
               fontSize: 10 * overviewScale(zoom), fontWeight: 700, color: 'rgba(255,255,255,0.85)',
@@ -1738,8 +1738,8 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
           {/* Step the face through every card's pictures, in deck order. */}
           {isHovered && deckFace.entries.length > 1 && (
             <>
-              <FaceArrow side="left" scale={overviewScale(zoom)} onStep={() => stepDeckFace(anchorGroup.id, deck.memberIds, -1)} />
-              <FaceArrow side="right" scale={overviewScale(zoom)} onStep={() => stepDeckFace(anchorGroup.id, deck.memberIds, 1)} />
+              <FaceArrow side="left" scale={overviewScale(zoom)} onStep={() => { stepDeckFace(anchorGroup.id, deck.memberIds, -1); followFaceInViewer(anchorGroup.id, deck.memberIds) }} />
+              <FaceArrow side="right" scale={overviewScale(zoom)} onStep={() => { stepDeckFace(anchorGroup.id, deck.memberIds, 1); followFaceInViewer(anchorGroup.id, deck.memberIds) }} />
               <div data-deck-face-count style={{
                 position: 'absolute', zIndex: 3, left: 0, right: 0, bottom: 22 * overviewScale(zoom), textAlign: 'center', pointerEvents: 'none',
                 fontSize: 10 * overviewScale(zoom), fontWeight: 700, color: 'rgba(255,255,255,0.85)',

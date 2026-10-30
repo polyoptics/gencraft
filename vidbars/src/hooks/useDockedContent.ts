@@ -39,7 +39,7 @@ import { isHiddenDeckMember, expandWithNestedMembers, cardVisualRect } from './u
 import { getFirstImageUrl } from '../types/bar'
 import { tileDeckIndex, tileDeckMembers } from '../utils/tileDecks'
 import { isDocked } from '../utils/rail'
-import { cardFaceMedia } from '../utils/cardGrid'
+import { cardFaceSourceUrl, deckFaceSteps, stackedDeckMembers } from '../utils/cardGrid'
 
 export interface DockedSource {
   kind: 'tile' | 'card' | 'list'
@@ -367,9 +367,24 @@ export function showDockedCardInViewer(dockedGroupId: string, showGroupId: strin
   const items = collectDeckContent(showGroupId, bs.groups, bs.boards)
   if (items.length === 0) return
   const card = bs.groups.find(g => g.id === showGroupId)
-  const face = card ? cardFaceMedia(card, bs.boards) : null
-  const item = (face && items.find(i => i.kind === 'media' && i.url === face.url))
+  // Matched by the face's file, not the picture the face draws: a model's
+  // face is its poster, which no item holds, so a deck of models always
+  // went back to its first.
+  const face = card ? cardFaceSourceUrl(card, bs.boards) : null
+  const item = (face ? items.find(i => i.kind === 'media' && i.url === face) : undefined)
     ?? items.find(i => i.kind === 'media' && i.mediaType !== 'audio')
     ?? items[0]
   vs.setActiveItem(winId, item)
+}
+
+/** Non-hook: card or deck `anchorId` has just turned its face (its arrows,
+ *  the keyboard), so a Viewer it is docked to shows the new face too: the
+ *  two never disagree. `memberIds`: a closed deck's cards, front first, as
+ *  its arrows step them. Nothing when it is not docked. */
+export function followFaceInViewer(anchorId: string, memberIds?: string[]): void {
+  const bs = useBoardsStore.getState()
+  const a = bs.groups.find(g => g.id === anchorId)
+  if (!a) return
+  const ids = memberIds ?? stackedDeckMembers(anchorId, bs.groups)
+  showDockedCardInViewer(anchorId, ids.length > 1 ? deckFaceSteps(a, ids, bs.groups, bs.boards).card.id : anchorId)
 }

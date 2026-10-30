@@ -15,6 +15,7 @@ import type { ActiveItem } from '../../store/viewport3dStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useDockedSources, flattenSourceItems, type DockedSource } from '../../hooks/useDockedContent'
 import { defaultBrowseItem } from '../../utils/contentTraversal'
+import { turnFaceToUrl } from '../../utils/cardGrid'
 import { useResolvedMedia } from '../../utils/useResolvedMedia'
 import { applyAnimationFromUrl, setViewFooterInset } from '../../three/viewportRenderer'
 
@@ -36,6 +37,15 @@ function chipGlyph(source: DockedSource): string {
     case 'image': return '🖼'
     default: return '◆'
   }
+}
+
+/** A card or deck docked here turns its face to the item the Viewer has
+ *  stepped to, so stepping the Viewer walks the deck on the canvas too
+ *  (its standing model in 3D with it), not only the picture in here. */
+function turnSource(sources: DockedSource[], item: ActiveItem): void {
+  if (item.kind !== 'media') return
+  const src = sources.find(s => s.items.some(i => activeItemKey(i) === activeItemKey(item)))
+  if (src?.kind === 'card') turnFaceToUrl(src.id, item.url)
 }
 
 export const ViewportSwitcherStrip: React.FC<{
@@ -110,7 +120,9 @@ export const ViewportSwitcherStrip: React.FC<{
   const step = (dir: 1 | -1) => {
     if (flat.length === 0) return
     const cur = flatIdx < 0 ? 0 : flatIdx
-    setActiveItem(windowId, flat[(cur + dir + flat.length) % flat.length])
+    const next = flat[(cur + dir + flat.length) % flat.length]
+    setActiveItem(windowId, next)
+    turnSource(sources, next)
   }
 
   const navBtn: React.CSSProperties = {
@@ -162,6 +174,7 @@ const NowViewingCard: React.FC<{
     if (source.items.length < 2 || idxInSource < 0) return
     const next = source.items[(idxInSource + 1) % source.items.length]
     useViewport3DStore.getState().setActiveItem(windowId, next)
+    turnSource([source], next)
   }
   /** Shift-click DONATES this source's animation to whatever rig the
    *  window is already showing, instead of replacing it. That is the

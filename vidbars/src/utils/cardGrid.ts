@@ -190,6 +190,53 @@ export function cardFaceMedia(g: ProjectGroup, boards: Record<string, BoardData>
   return faceMedia(g, boards)?.media ?? null
 }
 
+/** The file a card's face is on, as its block holds it: a 3D model's own
+ *  url, not the poster the face draws it with. The same choice as
+ *  cardFaceMedia. A Viewer matches the face by this, so clicking a deck of
+ *  models shows the one on its face there, not the deck's first. */
+export function cardFaceSourceUrl(g: ProjectGroup, boards: Record<string, BoardData>): string | null {
+  const blocks = faceBlocks(g, boards)
+  const stepped = !!g.faceBoardId && blocks.includes(g.faceBoardId)
+  if (!stepped && g.cardHeroImage) return g.cardHeroImage
+  const b = boards[stepped ? g.faceBoardId! : blocks[0]]
+  for (const rid of b?.rootIds ?? []) {
+    for (const m of getMediaItems(b.bars[rid]?.content)) {
+      if (m.type === 'image' || m.type === 'video' || m.type === 'model') return m.url
+    }
+  }
+  return null
+}
+
+/** Turn card `anchorId`, or the card of its deck that holds `url`, to the
+ *  block with that file: a Viewer it is docked to stepped there, and the
+ *  deck shows what the Viewer shows (Brian 2026-10-30). A stacked deck
+ *  brings that card to its face. A view, not an undo step. False when no
+ *  block of theirs holds it (a text page, a nested deck's card). */
+export function turnFaceToUrl(anchorId: string, url: string): boolean {
+  const s = useBoardsStore.getState()
+  const anchor = s.groups.find(g => g.id === anchorId)
+  if (!anchor) return false
+  const stacked = anchor.deckState === 'stacked'
+  const cards = [anchor, ...s.groups.filter(g => g.id !== anchorId && g.deckAnchorId === anchorId)]
+  for (const g of cards) {
+    if (g.effect) continue
+    const holds = (bid: string) => s.boards[bid].rootIds.some(rid => getMediaItems(s.boards[bid].bars[rid]?.content).some(m => m.url === url))
+    const block = faceBlocks(g, s.boards).find(holds)
+    const hero = !block && g.cardHeroImage === url
+    if (!block && !hero) continue
+    useBoardsStore.setState(st => ({
+      groups: st.groups.map(x => {
+        let out = x
+        if (x.id === g.id && x.faceBoardId !== block) out = { ...out, faceBoardId: block }
+        if (stacked && x.id === anchorId && x.deckFaceCard !== g.id) out = { ...out, deckFaceCard: g.id }
+        return out
+      }),
+    }))
+    return true
+  }
+  return false
+}
+
 /** A card's blocks the face can show — those with a picture, video or 3D
  *  model — in reading order. A note-only block would leave the face blank. */
 export function faceBlocks(g: ProjectGroup, boards: Record<string, BoardData>): string[] {
