@@ -690,9 +690,13 @@ function popParts(root: HTMLElement, stage: HTMLElement, base: number, m: number
                   lifting: Map<HTMLElement, number>, slab: (el: HTMLElement, z: number, t: number) => false | TiltSlab | undefined) {
   if (k <= 0) return
   const parts = new Set<HTMLElement>()
-  const head = root.querySelector<HTMLElement>(':scope > [data-freenode-header]')
+  // A tile's header, and a Viewer's (as an fx card's).
+  const head = root.querySelector<HTMLElement>(':scope > [data-freenode-header], :scope > [data-viewer-chrome]')
   if (head) parts.add(head)
   for (const b of root.querySelectorAll<HTMLElement>('[data-fx-onoff], [data-fx-solo], [data-fx-drag-out], [data-card-face-arrow]')) parts.add(b)
+  // A Viewer's buttons, its picture tools (outline, crop and the rest) among
+  // them, stand up as pucks.
+  if (root.hasAttribute('data-viewport3d')) for (const b of root.querySelectorAll<HTMLElement>('button')) parts.add(b)
   for (const b of root.querySelectorAll<HTMLElement>('select[aria-label="Effect"]')) {
     if (b.parentElement) parts.add(b.parentElement)
   }
