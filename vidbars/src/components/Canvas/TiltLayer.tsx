@@ -16,7 +16,7 @@
 //  - one three.js canvas that stands each model card's model up above its
 //    card, with the same camera the CSS perspective uses.
 
-import React, { useEffect, useRef } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import {
   useTiltStore, useModelScaleStore, isTilted, unprojectTilt, TILT_SNAP,
 } from '../../store/tiltStore'
@@ -39,6 +39,9 @@ const hostOf = (el: Element | null) => el?.closest('[data-zoom-bar-host]') as HT
  *  GLIDE_MS, whatever the zoom does meanwhile. Slow in and out: moving
  *  your place on the canvas should never jolt. */
 const GLIDE_MS = 1100
+/** Tipping back from flat glides the view to the selection. Off for now:
+ *  Brian found it didn't feel right (2026-10-30). F still frames. */
+const GLIDE_ON_TILT = false
 let glideRaf: number | null = null
 function glideTo(from: { x: number; y: number }, to: { x: number; y: number }, W: number, H: number) {
   if (glideRaf !== null) cancelAnimationFrame(glideRaf)
@@ -76,7 +79,7 @@ function useAltTiltGesture() {
       // Tipping back from flat with something selected makes it the pivot:
       // the view glides over to centre it while the plane tilts, wherever
       // on screen it was.
-      const sel = t0 < TILT_SNAP ? frameBox(true) : null
+      const sel = GLIDE_ON_TILT && t0 < TILT_SNAP ? frameBox(true) : null
       const W = host.clientWidth, H = host.clientHeight
       const { pan, zoom } = useCanvasStore.getState()
       const cFrom = { x: (W / 2 - pan.x) / zoom, y: (H / 2 - pan.y) / zoom }
@@ -401,6 +404,32 @@ function collectTargets(W: number, H: number): TiltTarget[] {
 }
 
 
+/** Select what a screen-space box drawn on the tilted view covers. The
+ *  cards' and tiles' on-screen boxes are their tilted outlines, so the test
+ *  is in screen space, where the box was drawn. A click without a drag
+ *  clears the selection, as on bare flat canvas. */
+function marqueeSelect(m: { x0: number; y0: number; x1: number; y1: number }, add: boolean) {
+  const fs = useFreeNodeStore.getState(), bs = useBoardsStore.getState()
+  if (Math.abs(m.x1 - m.x0) < 4 && Math.abs(m.y1 - m.y0) < 4) {
+    if (add) return
+    fs.setFreeSelection([])
+    bs.clearGroupSelection()
+    bs.clearAllSelections()
+    useCanvasStore.getState().clearAllDeckPortals()
+    return
+  }
+  const l = Math.min(m.x0, m.x1), r = Math.max(m.x0, m.x1), t = Math.min(m.y0, m.y1), b = Math.max(m.y0, m.y1)
+  const hits = (el: Element) => {
+    const rc = el.getBoundingClientRect()
+    return rc.right > l && rc.left < r && rc.bottom > t && rc.top < b
+  }
+  const ids = (sel: string) => Array.from(document.querySelectorAll<HTMLElement>(sel)).filter(hits).map(el => el.dataset.id!)
+  const nodes = ids('[data-tilt-stage] [data-freenode][data-id]:not([data-pinned])')
+  const cards = ids('[data-tilt-stage] [data-group-card][data-id]')
+  fs.setFreeSelection(add ? [...new Set([...fs.selectedIds, ...nodes])] : nodes)
+  bs.setSelectedGroups(add ? [...new Set([...bs.selectedGroupIds, ...cards])] : cards)
+}
+
 /** Select the card or tile a model stands on. */
 function selectModel(key: string, add: boolean) {
   const [kind, id] = [key.slice(0, key.indexOf(':')), key.slice(key.indexOf(':') + 1)]
@@ -416,6 +445,7 @@ function selectModel(key: string, add: boolean) {
 
 const TiltedView: React.FC = () => {
   const rootRef = useRef<HTMLDivElement>(null)
+  const [band, setBand] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
   const shading = useTiltStore(s => s.shading)
   const turn = useTiltStore(s => s.turn)
   const walls = useTiltStore(s => s.walls)
@@ -471,6 +501,7 @@ const TiltedView: React.FC = () => {
 
     type Gesture =
       | { kind: 'pan'; last: { x: number; y: number } }
+      | { kind: 'marquee'; x0: number; y0: number; x1: number; y1: number }
       | { kind: 'person'; url: string; unit0: number; y0: number }
       | { kind: 'remap'; target: Element; pointerId: number }
     let g: Gesture | null = null
@@ -500,7 +531,15 @@ const TiltedView: React.FC = () => {
       if (!onPlane(e.target)) return
       // Alt+left / Alt+right belong to the orbit and dolly gestures.
       if (e.altKey && e.button !== 1) return
-      if (e.button === 1 || (e.button === 0 && isBareGround(e.target))) {
+      // Bare ground: left-drag draws a selection box, a plain click clears
+      // the selection — as flat. Panning is the camera's job (middle drag,
+      // or Alt+middle).
+      if (e.button === 0 && isBareGround(e.target)) {
+        e.preventDefault(); swallow(e)
+        g = { kind: 'marquee', x0: e.clientX, y0: e.clientY, x1: e.clientX, y1: e.clientY }
+        return
+      }
+      if (e.button === 1) {
         e.preventDefault(); swallow(e)
         g = { kind: 'pan', last: { x: e.clientX, y: e.clientY } }
         return
@@ -530,6 +569,12 @@ const TiltedView: React.FC = () => {
         useModelScaleStore.getState().setUnitsPerMetre(g.url, u)
         return
       }
+      if (g.kind === 'marquee') {
+        g.x1 = e.clientX; g.y1 = e.clientY
+        const r = host.getBoundingClientRect()
+        setBand({ x: Math.min(g.x0, g.x1) - r.left, y: Math.min(g.y0, g.y1) - r.top, w: Math.abs(g.x1 - g.x0), h: Math.abs(g.y1 - g.y0) })
+        return
+      }
       if (g.kind === 'pan') {
         const a = flatClient(g.last.x, g.last.y), b = flatClient(e.clientX, e.clientY)
         g.last = { x: e.clientX, y: e.clientY }
@@ -551,6 +596,7 @@ const TiltedView: React.FC = () => {
         resend(e, 'pointerup', to)
         resend(e, 'mouseup', to)
       }
+      if (g.kind === 'marquee') { marqueeSelect(g, e.shiftKey); setBand(null) }
       g = null
     }
     const onWheel = (e: WheelEvent) => {
@@ -588,6 +634,13 @@ const TiltedView: React.FC = () => {
       ref={rootRef}
       style={{ position: 'absolute', inset: 0, zIndex: 850, pointerEvents: 'none' }}
     >
+      {band && (
+        <div style={{
+          position: 'absolute', left: band.x, top: band.y, width: band.w, height: band.h,
+          border: '1.5px solid rgba(120,170,255,0.8)', background: 'rgba(100,150,255,0.08)',
+          borderRadius: 3, pointerEvents: 'none',
+        }} />
+      )}
       <div
         data-tilt-hud
         style={{
@@ -598,7 +651,7 @@ const TiltedView: React.FC = () => {
           whiteSpace: 'nowrap', pointerEvents: 'auto',
         }}
       >
-        <span>Tilted {Math.round(tilt)}° · click a model to select · Alt+drag orbits · F frames</span>
+        <span>Tilted {Math.round(tilt)}° · click to select · drag a box to select many · Alt+drag orbits · Alt+middle pans · F frames</span>
         <span style={{ width: 1, height: 14, background: 'rgba(255,255,255,0.12)' }} />
         {(['textured', 'shaded', 'wire'] as const).map(m => (
           <button key={m} style={btn(shading === m)} onClick={() => set.setShading(m)}>
