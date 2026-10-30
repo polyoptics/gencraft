@@ -627,7 +627,7 @@ function popParts(root: HTMLElement, stage: HTMLElement, base: number, m: number
   const parts = new Set<HTMLElement>()
   const head = root.querySelector<HTMLElement>(':scope > [data-freenode-header]')
   if (head) parts.add(head)
-  for (const b of root.querySelectorAll<HTMLElement>('[data-fx-onoff], [data-fx-solo], [data-fx-drag-out]')) parts.add(b)
+  for (const b of root.querySelectorAll<HTMLElement>('[data-fx-onoff], [data-fx-solo], [data-fx-drag-out], [data-card-face-arrow]')) parts.add(b)
   for (const b of root.querySelectorAll<HTMLElement>('select[aria-label="Effect"]')) {
     if (b.parentElement) parts.add(b.parentElement)
   }
