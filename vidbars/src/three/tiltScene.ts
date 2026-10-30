@@ -100,6 +100,8 @@ const WIRE_MAT = new THREE.MeshBasicMaterial({ color: 0x9fd0ff, wireframe: true,
 const WIRE_OVER_MAT = new THREE.MeshBasicMaterial({ color: 0x9fd0ff, wireframe: true, transparent: true, opacity: 0.55, depthFunc: THREE.LessEqualDepth, depthWrite: false })
 /** Texture off: plain clay. Flat comes from the light rig, not this. */
 const CLAY_MAT = new THREE.MeshStandardMaterial({ color: 0xc8ccd8, roughness: 0.85, metalness: 0 })
+const PLACARD_GEO = new THREE.BoxGeometry(0.985, 0.96, 1)
+const PLACARD_MAT = new THREE.MeshStandardMaterial({ color: 0x1a1c28, roughness: 0.7, emissive: 0x15161f })
 // Silhouette masks: red channel = selected, green = under the cursor.
 const MASK_SEL = new THREE.MeshBasicMaterial({ color: 0xff0000 })
 const MASK_HOVER = new THREE.MeshBasicMaterial({ color: 0x00ff00 })
@@ -287,6 +289,11 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       new THREE.MeshBasicMaterial({ transparent: true, side: THREE.DoubleSide, depthWrite: false, toneMapped: false }),
     )
     wall.rotation.x = Math.PI / 2    // stands up off the plane, facing the viewer
+    // A little thickness behind the label, so it reads as a placard and
+    // not a sheet of paper from the side.
+    const back = new THREE.Mesh(PLACARD_GEO, PLACARD_MAT)
+    back.name = 'placard'
+    wall.add(back)
     wall.visible = false
     groundDeco.add(wall)
     const s: Standing = {
@@ -473,6 +480,10 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       const wallW = tg.w, wallH = tg.w / 4
       s.wall.scale.set(wallW, wallH * Math.max(ease, 0.001), 1)
       s.wall.position.set(tg.u, -(tg.v - tg.h / 2), (wallH * ease) / 2)
+      const d = Math.max(1.5, wallH * 0.07)
+      const back = s.wall.getObjectByName('placard')!
+      back.scale.z = d
+      back.position.z = -d / 2 - 0.3
       s.wall.visible = st.walls && !!text && ease > 0
     }
     // A card missing for a frame or two (a re-render, a deck shuffling) is
