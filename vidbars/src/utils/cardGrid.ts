@@ -11,10 +11,12 @@
 //
 // Every import becomes a grid card of its own (createMediaCard), and
 // dropping cards onto a card merges them into it as blocks (mergeCardsInto).
+// Each block remembers the card it was, and pulled out comes back as that
+// card (extractBlockToCard).
 // Older cards keep the layout they were built with: nothing here touches a
 // card that is not a grid card.
 
-import { useBoardsStore, type BoardData, type ProjectGroup } from '../store/boardsStore'
+import { NEW_CARD_FACE, useBoardsStore, type BoardData, type ProjectGroup } from '../store/boardsStore'
 import { useCanvasStore } from '../store/canvasStore'
 import { createScaleFor } from './canvasCreate'
 import { loadImage } from './fx/chain'
@@ -387,7 +389,7 @@ export function mergeCardsInto(targetId: string, sourceIds: string[]): boolean {
     moving.forEach((bid, i) => {
       // Behind the target's own blocks in reading order: the grid places
       // them; a non-grid target gets them on a row of their own.
-      if (boards[bid]) boards[bid] = { ...boards[bid], nleRow: nextRow, nleX: i * 1e-3 + (isGridCard(target) ? 1e6 : 0) }
+      if (boards[bid]) boards[bid] = { ...remembered(boards[bid], sources.find(g => g.boardIds.includes(bid))), nleRow: nextRow, nleX: i * 1e-3 + (isGridCard(target) ? 1e6 : 0) }
     })
     if (!isGridCard(target)) {
       let x = 0
@@ -406,4 +408,80 @@ export function mergeCardsInto(targetId: string, sourceIds: string[]): boolean {
   })
   layoutCardGrid(targetId)
   return true
+}
+
+/** A block about to join another card, carrying what its card was. A block
+ *  that already carries one keeps it: it goes home, not to the last stop. */
+function remembered(b: BoardData, source: ProjectGroup | undefined): BoardData {
+  if (b.fromCard || !source) return b
+  const card: Partial<ProjectGroup> = { ...source }
+  // Where it was, not what it is: it comes back wherever it is dropped.
+  for (const k of ['boardIds', 'originX', 'originY', 'deckState', 'deckAnchorId', 'nestedDeck', 'deckOffsetX', 'deckOffsetY', 'deckFaceCard', 'ghostSlots', 'pin', 'home', 'pinnedLayer', 'railBase'] as const) delete card[k]
+  const root = isSimpleBlock(b) ? b.bars[b.rootIds[0]] : undefined
+  return {
+    ...b,
+    fromCard: {
+      card: card as NonNullable<BoardData['fromCard']>['card'],
+      boardScale: b.boardScale,
+      root: root && { x: root.x, width: root.width, height: root.height },
+    },
+  }
+}
+
+/** Move one block to card `targetId`, remembering the card it leaves, and
+ *  tidy both grids. The caller takes the undo checkpoint. */
+export function moveBlockToCard(boardId: string, targetId: string, at: { x: number; y: number }): void {
+  const s = useBoardsStore.getState()
+  const source = s.groups.find(g => g.boardIds.includes(boardId))
+  const b = s.boards[boardId]
+  if (!b || source?.id === targetId) return
+  useBoardsStore.setState(st => ({ boards: { ...st.boards, [boardId]: remembered(b, source) } }))
+  useBoardsStore.getState().reassignBoard(boardId, targetId, at)
+  layoutCardGrid(targetId)
+  if (source) layoutCardGrid(source.id)
+}
+
+/** Pull a block out of its card into a card of its own, top-left at `at`
+ *  (or where the block is). A block that was merged in comes back as the
+ *  card it was, under its own id while that is free, so links to it hold;
+ *  any other takes its name from what it holds and its card's kind. A
+ *  card's only block is already its card. The caller takes the undo
+ *  checkpoint. Returns the block's card. */
+export function extractBlockToCard(boardId: string, at?: { x: number; y: number }): string | null {
+  const s = useBoardsStore.getState()
+  const b = s.boards[boardId]
+  if (!b) return null
+  const source = s.groups.find(g => g.boardIds.includes(boardId))
+  if (source?.boardIds.length === 1) return source.id
+  const pos = at ?? { x: (source?.originX ?? 0) + b.nleX, y: source?.originY ?? 0 }
+  const was = b.fromCard
+  const id = was && !s.groups.some(g => g.id === was.card.id) ? was.card.id : crypto.randomUUID()
+  const media = b.rootIds.flatMap(rid => getMediaItems(b.bars[rid]?.content))
+  const card: ProjectGroup = was
+    ? { ...was.card, id, boardIds: [boardId], originX: pos.x, originY: pos.y, faceBoardId: was.card.faceBoardId === boardId ? boardId : undefined }
+    : {
+        id, boardIds: [boardId], originX: pos.x, originY: pos.y,
+        name: b.layers?.block?.label || media.find(m => m.originalName)?.originalName || b.projectName || '',
+        color: b.color ?? source?.color ?? '#5b8dd9',
+        cardHeroImage: null, cardSummary: '', cardText: '', cardHeaderText: '',
+        cardHeroTransform: { ...NEW_CARD_FACE },
+        ...(isGridCard(source) ? { layout: 'grid' as const, cardWidthOverride: source!.cardWidthOverride, cardHeightOverride: source!.cardHeightOverride } : {}),
+      }
+  useBoardsStore.setState(st => {
+    const { fromCard: _, ...rest } = st.boards[boardId]
+    const next: BoardData = { ...rest, nleRow: 0, nleX: 0, canvasX: undefined, canvasY: undefined }
+    if (was) {
+      next.boardScale = was.boardScale
+      const root = next.bars[next.rootIds[0]]
+      if (was.root && root) next.bars = { ...next.bars, [root.id]: { ...root, ...was.root } }
+    }
+    return {
+      boards: { ...st.boards, [boardId]: next },
+      groups: [...st.groups.map(g => g.id === source?.id ? { ...g, boardIds: g.boardIds.filter(bid => bid !== boardId) } : g), card],
+      selectedGroupIds: [id],
+    }
+  })
+  layoutCardGrid(id)
+  if (source) layoutCardGrid(source.id)
+  return id
 }

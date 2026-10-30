@@ -220,6 +220,13 @@ export interface BoardData {
   pristine: boolean
   boardScale: number   // content zoom (primary only, but stored per-board for generality)
   layers: BoardLayerData  // layer-specific metadata for card/block zoom levels
+  /** The card this block was before it joined another, and its own shape
+   *  then: pulling it back out restores both (utils/cardGrid). */
+  fromCard?: {
+    card: Omit<ProjectGroup, 'boardIds' | 'originX' | 'originY'>
+    boardScale: number
+    root?: { x: number; width: number; height: number }
+  }
 }
 
 /** True if board is not in any group's boardIds */

@@ -35,6 +35,7 @@ import { Viewport3DLayer } from '../Viewport3D/Viewport3DLayer'
 import { NLETimelineHeader } from '../NLE/NLETimelineHeader'
 import { CardOutline } from './CardOutline'
 import { useCardView } from './cardView'
+import { extractBlockToCard, layoutCardGrid, moveBlockToCard } from '../../utils/cardGrid'
 import { LinkChipRail } from '../Linking/LinkChipRail'
 import { getHiddenBoardIds, getHiddenGroupIds } from '../../hooks/useCardDecks'
 import { selectionHighlight } from '../../utils/colorUtils'
@@ -45,6 +46,8 @@ import { useSeedHoverFromCursor } from '../../utils/pointerTracker'
 const BOARD_PADDING_X = 20
 
 const BLOCK_HEADER_H = 57
+/** How far past its card's edge (screen px) a dragged block tears off. */
+const TEAR_MARGIN_PX = 24
 
 /** A block's content size (the floor it can't shrink below) and its shown
  *  size, which a resize override can make larger. Null when it has no bars. */
@@ -92,6 +95,8 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
   const [renameVal, setRenameVal] = useState('')
   const nameInputRef = useRef<HTMLInputElement>(null)
   const [gripDragging, setGripDragging] = useState(false)
+  // Torn off its card: how far it has been carried, in canvas units.
+  const [torn, setTorn] = useState<{ dx: number; dy: number } | null>(null)
   const [isHovered, setIsHovered] = useState(false)
   const blockHoverRef = useRef<HTMLDivElement>(null)
   // Seed hover from current cursor — covers zoom-layer transitions where
@@ -297,6 +302,25 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
     const initialX = b0.nleX ?? 0
     const sourceGroupId = group?.id
     const gripLay = computeGroupLayout(group?.boardIds ?? [boardId], bs0.boards)
+    // Tearing off: within its card this drag moves the block along the
+    // timeline. Once the middle of its header passes the card's edge, the
+    // block lifts out and follows freely; back inside, it drops back in. The
+    // edge is the card as pressed, since the outline grows with the block,
+    // and both are in canvas units so it holds in the tilted view too. A
+    // card's only block has nothing to tear from.
+    const outline = group && group.boardIds.length > 1 && !group.pin
+      ? document.querySelector<HTMLElement>(`[data-group-outline="${group.id}"]`)
+      : null
+    const cam = useCanvasStore.getState()
+    const edge = outline && {
+      left: (outline.offsetLeft - cam.pan.x) / cam.zoom,
+      top: (outline.offsetTop - cam.pan.y) / cam.zoom,
+      right: (outline.offsetLeft + outline.offsetWidth - cam.pan.x) / cam.zoom,
+      bottom: (outline.offsetTop + outline.offsetHeight - cam.pan.y) / cam.zoom,
+    }
+    const headX = boardX + left + width / 2
+    const headY = boardY + BLOCK_HEADER_H / 2
+    let lifted = false
 
     // Visual highlight for drop target group outline
     let highlightedOutline: HTMLElement | null = null
@@ -344,10 +368,26 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
       lastY = ev.clientY
       dyAccum += dy
       xAccum += dx
-      const newRow = Math.max(0, initialRow + dyToRowDelta(dyAccum, initialRow, gripLay))
-      useBoardsStore.getState().setBoardNlePos(boardId, newRow, initialX + xAccum)
       // Highlight target group
       const targetId = findTarget(ev)
+      if (edge) {
+        const hx = headX + xAccum, hy = headY + dyAccum
+        const m = TEAR_MARGIN_PX / z
+        if (targetId || hx < edge.left - m || hx > edge.right + m || hy < edge.top - m || hy > edge.bottom + m) {
+          // Lifting leaves its slot where it was pressed.
+          if (!lifted) useBoardsStore.getState().setBoardNlePos(boardId, initialRow, initialX)
+          lifted = true
+        } else if (hx >= edge.left && hx <= edge.right && hy >= edge.top && hy <= edge.bottom) {
+          lifted = false
+        }
+      }
+      if (lifted) {
+        setTorn({ dx: xAccum, dy: dyAccum })
+      } else {
+        setTorn(null)
+        const newRow = Math.max(0, initialRow + dyToRowDelta(dyAccum, initialRow, gripLay))
+        useBoardsStore.getState().setBoardNlePos(boardId, newRow, initialX + xAccum)
+      }
       if (targetId) {
         const outlineEl = document.querySelector(`[data-group-outline="${targetId}"]`) as HTMLElement | null
         setHL(outlineEl)
@@ -362,22 +402,22 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
       setGripDragging(false)
       setHL(null)
 
+      setTorn(null)
+
       // Check for drop on another group
-      const targetGroupId = findTarget(ev)
+      const targetGroupId = edge && !lifted ? null : findTarget(ev)
       if (targetGroupId) {
         const z = useCanvasStore.getState().zoom
         const pan = useCanvasStore.getState().pan
-        const dropPos = { x: (ev.clientX - pan.x) / z, y: (ev.clientY - pan.y) / z }
-        useBoardsStore.getState().reassignBoard(boardId, targetGroupId, dropPos)
+        moveBlockToCard(boardId, targetGroupId, { x: (ev.clientX - pan.x) / z, y: (ev.clientY - pan.y) / z })
         return
       }
-
-      const currentGroup = getGroupForBoard(useBoardsStore.getState().groups, boardId)
-      if (currentGroup && currentGroup.boardIds.length > 1 && (Math.abs(xAccum) > 50 || Math.abs(dyAccum) > 50)) {
-        // Dragging a board out of its group spins it into its own new
-        // card/group anywhere on the unified work area.
-        useBoardsStore.getState().moveToNewGroup(boardId)
+      if (lifted) {
+        extractBlockToCard(boardId, { x: boardX + xAccum, y: boardY + dyAccum })
+        return
       }
+      // Let go inside its card: a grid card puts it in its new cell.
+      if (sourceGroupId) layoutCardGrid(sourceGroupId)
     }
 
     window.addEventListener('pointermove', onMove)
@@ -476,9 +516,24 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
   const totalW = Math.max(maxX * bScale, 200, width + left)
 
   return (
+    <>
+    {torn && (
+      <div style={{
+        position: 'absolute', left: boardX + left, top: boardY, width, height: height + BLOCK_HEADER_H,
+        boxSizing: 'border-box', border: `${1.5 / zoom}px dashed rgba(255,255,255,0.35)`, borderRadius: 14,
+        pointerEvents: 'none',
+      }} />
+    )}
     <div
       ref={blockHoverRef}
-      style={{ position: 'absolute', left: boardX, top: boardY, width: totalW, height: height + BLOCK_HEADER_H }}
+      style={{
+        position: 'absolute', left: boardX, top: boardY, width: totalW, height: height + BLOCK_HEADER_H,
+        ...(torn ? {
+          transform: `translate(${torn.dx}px, ${torn.dy}px) rotate(-1.5deg) scale(1.04)`,
+          filter: `drop-shadow(0 ${14 / zoom}px ${22 / zoom}px rgba(0,0,0,0.6))`,
+          zIndex: 1000, pointerEvents: 'none' as const,
+        } : {}),
+      }}
       onPointerDownCapture={e => {
         if (e.button !== 0) return
         // The link rail is chrome ON the block, not the block. This runs in
@@ -890,7 +945,7 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
               }}] : []),
               { label: 'Move to New Group', icon: '📦', action: () => {
                 useUndoCoordinator.getState().checkpoint()
-                useBoardsStore.getState().moveToNewGroup(boardId)
+                extractBlockToCard(boardId)
                 setBlockMenu(null)
               }},
               // Per-group destination entries removed — drag-and-drop is the
@@ -932,6 +987,7 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
         document.body
       )}
     </div>
+    </>
   )
 })
 
