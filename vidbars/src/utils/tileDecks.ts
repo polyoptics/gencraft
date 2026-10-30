@@ -35,7 +35,7 @@ type Nodes = Record<string, FreeNodeData>
  *  (no `nodes` here): a railDock whose rail is gone is cleared by the rail
  *  sync host within the same change. */
 export function canJoinTileDeck(n: FreeNodeData | undefined): n is FreeNodeData {
-  return !!n && !n.pin && !isPanelType(n.type) && n.type !== 'rail' && !n.railDock
+  return !!n && !n.pin && !isPanelType(n.type) && n.type !== 'rail' && n.type !== 'cabinet' && !n.railDock
 }
 
 /** The face of a collapsed deck: anchors itself, and at least one other

@@ -39,6 +39,8 @@ import { currentPointerPos, useSeedHoverFromCursor } from '../../utils/pointerTr
 import { useFileMenuItems } from '../../hooks/useFileMenu'
 import { useMenuClamp } from '../../hooks/useMenuClamp'
 import { RailBody } from './RailBody'
+import { CabinetBody } from './cabinet/CabinetBody'
+import { aimCabinet, addDrawer, cabinetDrawerAt, cabinetTargets, canStowTile, emptyCabinet, itemCount, removeEmptyDrawer, stowSelection, stowTiles, toggleDrawer, useCabinetUi } from '../../utils/cabinet'
 import { useRailUiStore } from '../../store/railUiStore'
 import {
   RAIL_GEOM, RAIL_TRAY, isDocked, isRail, isRailPicture, railDropTarget, railLayout, railMembers,
@@ -367,6 +369,8 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
   const fxDrag = useFxDragUrl(id, isHovered)
 
   // Drag the whole card — anything except textarea/input/select/button/[data-resize]
+  /** The drawer front a press landed on: a plain click there opens it. */
+  const pressedDrawer = useRef<string | null>(null)
   const onNodeDown = useCallback((e: React.PointerEvent) => {
     if (e.button !== 0) return
     const tag = (e.target as HTMLElement).tagName
@@ -377,6 +381,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
     if ((e.target as Element).closest('[data-pen-button]')) return
     e.stopPropagation()
     useUndoCoordinator.getState().checkpoint()
+    pressedDrawer.current = (e.target as Element).closest<HTMLElement>('[data-cabinet-front]')?.dataset.cabinetFront ?? null
     dragLastX.current = e.clientX
     dragLastY.current = e.clientY
     dragPress.current = { x: e.clientX, y: e.clientY }
@@ -465,6 +470,11 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
     // Magnet affordance: dockable tiles (content-bearing + lists) near a
     // browser window edge show a "will snap here" ghost.
     const n = useFreeNodeStore.getState().nodes[id]
+    // Over a drawer: which one a release would put it in.
+    if (n && !n.pin && canStowTile(n)) {
+      const fs = useFreeNodeStore.getState()
+      aimCabinet(e.clientX, e.clientY, fs.selectedIds.includes(id) ? fs.selectedIds : [id])
+    }
     // LOOP STRIP drop preview: where a release would dock, under the
     // pointer. The tile writes it; the rail (RailBody) draws the marker.
     // Outranks the Viewer magnet below, as the release does.
@@ -562,7 +572,9 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
       dragHasMoved.current = false
       return
     }
+    useCabinetUi.getState().setAim(null)
     if (!dragHasMoved.current) {
+      if (pressedDrawer.current) toggleDrawer(id, pressedDrawer.current)
       if (e.shiftKey) toggleFreeSelection(id)
       else {
         // If text node was already selected before this click, single click on body → enter edit
@@ -577,6 +589,18 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
           const item = tileBrowseItem(node)
           if (item) useViewport3DStore.getState().setActiveItem(connectedWindowId, item)
         }
+      }
+    }
+    // ── Project cabinet ── a tile let go over a drawer goes in, and so does
+    // the selection it was dragged with. The press took the checkpoint.
+    if (dragHasMoved.current && !node.pin && canStowTile(node)) {
+      const sel = useFreeNodeStore.getState().selectedIds
+      const ids = sel.includes(id) ? sel : [id]
+      const drawer = cabinetDrawerAt(e.clientX, e.clientY, ids)
+      if (drawer && stowTiles(ids, drawer)) {
+        useMagnetPreviewStore.getState().setPreview(null)
+        useRailUiStore.getState().setDrop(null)
+        return
       }
     }
     // ── Loop strip ── FIRST, before the Viewer dock, the strip snap and the
@@ -990,6 +1014,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
    *  RailBody paints — no title bar, no handles (it sizes itself to its
    *  layout), no pen, no pin. */
   const isRailTile = node.type === 'rail'
+  const isCabinet = node.type === 'cabinet'
   /** The rail's own unit — every rail size scales by it, like a card made
    *  at that zoom. */
   const railU = node.rail?.unit && node.rail.unit > 0 ? node.rail.unit : 1
@@ -1181,7 +1206,9 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
   const canvasZ: number = isRailTile ? (isHovered ? 4 : 3)
     : lifted || aimingAtRail ? 65
     : docked ? (peeking ? 60 : 10 + Math.min(dockOrder, 39))
-    : isHovered ? 50 : 5
+    : isHovered ? 50
+    // An open cabinet's tray lies over the tiles beside it.
+    : isCabinet && node.cabinet?.open ? 6 : 5
 
   const tile = (
     <div
@@ -1240,7 +1267,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
         flexDirection: 'column',
         // Not on a rail: its chrome may reach a hair past the box (a marker
         // across a column edge), and there is no tile content to clip.
-        overflow: isRailTile ? 'visible' : 'hidden',
+        overflow: isRailTile || isCabinet ? 'visible' : 'hidden',
         transition: 'border-color 0.12s, box-shadow 0.12s',
         cursor: 'grab',
       }}
@@ -1275,7 +1302,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
         if (dragHasMoved.current) return
         // A rail's double-clicks belong to its own controls (RailBody stops
         // them); on its bare frame there is nothing to do.
-        if (isRailTile) return
+        if (isRailTile || isCabinet) return
         // While the crop editor is open the tile is its canvas: stacking or
         // opening the deck under it would unmount or remount the editor and
         // lose the crop in progress.
@@ -1444,6 +1471,8 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
               so pressing it moves the rail like any tile. */}
       {isRailTile ? (
         <RailBody id={id} node={node} hovered={isHovered} zoom={gz} />
+      ) : isCabinet ? (
+        <CabinetBody id={id} node={node} hovered={isHovered} />
       ) : (
         <FreeNodeBody node={node} id={id} iz={iz} dz={dz} pad={pad} faceW={faceW} hovered={isHovered} updateFreeNode={updateFreeNode} isEditing={textEditing} setIsEditing={setTextEditing} />
       )}
@@ -1657,6 +1686,22 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
                     setNodeMenu(null)
                   } },
               ] : []),
+              // Project cabinet: its drawers, and everything back on the canvas.
+              ...(isCabinet ? [
+                { label: 'Add drawer', icon: '＋', action: () => { useUndoCoordinator.getState().checkpoint(); addDrawer(id); setNodeMenu(null) } },
+                { label: 'Remove an empty drawer', icon: '－', action: () => { useUndoCoordinator.getState().checkpoint(); removeEmptyDrawer(id); setNodeMenu(null) } },
+                { label: `Empty all (${itemCount(node.cabinet)})`, icon: '↓', action: () => { useUndoCoordinator.getState().checkpoint(); emptyCabinet(id); setNodeMenu(null) } },
+              ] : []),
+              // Put this tile away, and the selection it is part of.
+              ...(nodeMenu && canStowTile(node) ? cabinetTargets().map(t => ({
+                label: `Put in ${t.label}`, icon: '🗄️',
+                action: () => {
+                  const fs = useFreeNodeStore.getState()
+                  useUndoCoordinator.getState().checkpoint()
+                  stowSelection([], fs.selectedIds.includes(id) ? fs.selectedIds : [id], t)
+                  setNodeMenu(null)
+                },
+              })) : []),
               // The ONLY placement gesture. Dragging a pinned panel "off
               // the canvas" deliberately does NOT unpin — a mode should
               // never change by accident during a move. Not for a deck
@@ -1664,7 +1709,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
               // it would stay on the canvas. Not for a loop strip or a card
               // on one either (v1): a pinned rail would leave its cards on
               // the canvas, and a pinned card would leave its column.
-              ...(isDeckFace || isRailTile || docked ? [] : [{ label: node.pin ? 'Drop on canvas' : 'Pin to screen',
+              ...(isDeckFace || isRailTile || isCabinet || docked ? [] : [{ label: node.pin ? 'Drop on canvas' : 'Pin to screen',
                 icon: node.pin ? '📤' : '📌',
                 action: () => {
                   const cs = useCanvasStore.getState()
@@ -1684,7 +1729,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
               ] : []),
               // On a face this deletes the whole deck (deleteFreeNode), so it
               // says so; a rail likewise takes every card docked on it.
-              { label: isRailTile ? 'Delete strip' : isDeckFace ? 'Delete deck' : 'Delete', icon: '🗑️', danger: true, action: () => { useUndoCoordinator.getState().checkpoint(); deleteFreeNode(id); setNodeMenu(null) } },
+              { label: isRailTile ? 'Delete strip' : isDeckFace ? 'Delete deck' : isCabinet && itemCount(node.cabinet) > 0 ? 'Delete (empty it first)' : 'Delete', icon: '🗑️', danger: true, action: () => { useUndoCoordinator.getState().checkpoint(); deleteFreeNode(id); setNodeMenu(null) } },
               ...fileItems,
             ].map(item => (
               <React.Fragment key={item.label}>

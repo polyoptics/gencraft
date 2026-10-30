@@ -96,7 +96,7 @@ interface DropAim {
  *  spot in the cascade (see railDropAt), the way a dragged tile is — not
  *  swapped for the card it landed on. */
 function takesMedia(n: FreeNodeData): boolean {
-  return !n.pin && !isPanelType(n.type) && n.type !== 'effect' && n.type !== 'rail' && !n.railDock
+  return !n.pin && !isPanelType(n.type) && n.type !== 'effect' && n.type !== 'rail' && n.type !== 'cabinet' && !n.railDock
 }
 
 /** A stand-in for something not made yet — railDropTarget judges a drop

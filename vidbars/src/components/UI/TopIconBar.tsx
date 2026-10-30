@@ -28,6 +28,7 @@ import {
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { EffectPalette } from './EffectPalette'
 import { useZoomZone } from '../../store/zoomZonesStore'
+import { useCabinetUi } from '../../utils/cabinet'
 
 /** Tile edge in px. A shade over 1cm on a typical desktop monitor. */
 const TILE = 44
@@ -90,6 +91,15 @@ const IcHistory: React.FC<SvgProps> = ({ size }) => (
     <path d="M3.6 12a8.4 8.4 0 1 0 2.6-6.1" stroke={S} />
     <path d="M12 7.5V12l3 1.8" stroke={S} />
     <path d="M3.2 4v4.2h4.2" stroke={A.coral} />
+  </svg>
+)
+
+/** Project cabinet — a chest of drawers. Accent: the pulls. */
+const IcCabinet: React.FC<SvgProps> = ({ size }) => (
+  <svg {...svgBase(size)}>
+    <rect x="4.5" y="3.5" width="15" height="17" rx="1.6" stroke={S} />
+    <path d="M4.5 9.2h15M4.5 14.8h15" stroke={S} />
+    <path d="M10 6.4h4M10 12h4M10 17.6h4" stroke={A.coral} />
   </svg>
 )
 
@@ -243,6 +253,7 @@ export const TopIconBar: React.FC = () => {
   // The Effects palette. Its own memoised component: this bar re-renders on
   // every zoom tick, the palette has no reason to.
   const [fxOpen, setFxOpen] = React.useState(false)
+  const cabinetsOn = useCabinetUi(s => s.enabled)
   const fxBtnRef = React.useRef<HTMLDivElement>(null)
   const closeFx = React.useCallback(() => setFxOpen(false), [])
 
@@ -294,6 +305,13 @@ export const TopIconBar: React.FC = () => {
         title="Card Browser — leaf through every card in the project"
         onClick={() => addBrowserNode()}
       />
+      {cabinetsOn && (
+        <IconButton
+          Icon={IcCabinet}
+          title="Project cabinet — drawers to put cards away in"
+          onClick={() => addFreeNodeCentered('cabinet')}
+        />
+      )}
       {/* A wrapper for the ref: the palette hangs under it, and a press on
           it must not count as "outside" (IconButton forwards no ref). */}
       <div ref={fxBtnRef} style={{ display: 'flex' }}>

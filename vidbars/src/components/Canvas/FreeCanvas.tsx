@@ -8,6 +8,7 @@ import { useViewportBounds, intersectsViewport } from '../../hooks/useViewportBo
 import { computeTileClusters, type DockableItem, type WindowRect } from '../../utils/viewportDocking'
 import { isDockableTile } from '../../utils/contentTraversal'
 import { tileDeckIndex } from '../../utils/tileDecks'
+import { useCabinetUi } from '../../utils/cabinet'
 
 export const FreeCanvas: React.FC = React.memo(() => {
   // Only re-render when nodes are added/removed, not when node content changes
@@ -15,6 +16,7 @@ export const FreeCanvas: React.FC = React.memo(() => {
   const nodes = useFreeNodeStore(s => s.nodes)
   const windows = useViewport3DStore(s => s.windows)
   const vp = useViewportBounds()
+  const cabinetsOn = useCabinetUi(s => s.enabled)
   // Collapsed tile decks, in one pass: the tiles hidden behind a face are
   // not drawn and are not geometry — the deck is its face's rect.
   const deckIdx = useMemo(() => tileDeckIndex(nodes), [nodes])
@@ -35,9 +37,10 @@ export const FreeCanvas: React.FC = React.memo(() => {
       if (!n || n.pin) return false     // pinned ⇒ PinLayer renders it
       if (deckIdx.hidden.has(id)) return false   // behind a deck face
       if (n.cardRef) return false        // a card's stand-in: the card is drawn
+      if (n.type === 'cabinet' && !cabinetsOn) return false   // the Cabinets switch
       return intersectsViewport(vp, n.x, n.y, n.width, n.height)
     })
-  }, [nodeIds, nodes, vp, deckIdx])
+  }, [nodeIds, nodes, vp, deckIdx, cabinetsOn])
 
   // Deck-style tile connections: CONTENT-bearing tiles touching each
   // other join a cluster; a cluster touching a browser window is

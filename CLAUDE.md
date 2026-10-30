@@ -172,6 +172,7 @@ keep scanning, or a drop falls through onto whatever lies behind it.
 | `components/Linking/PrimaryChipRail.tsx` | Card reference chips — **the scale-wrapper reference** |
 | `components/Viewport3D/` | 3D/content Viewer windows, GL host |
 | `components/Rolodex/CardRolodex.tsx` | Card browser panel |
+| `utils/cabinet.ts`, `components/Canvas/cabinet/` | Project cabinet node: drawers hold cards and tiles moved off the canvas, stored on the node (`utils/cabinetData.ts`) |
 | `utils/linkTargets.ts` | `LinkRef`, `refAttr`/`parseRef`, `ownerRefs`, `remapRefs` |
 | `utils/nleRows.ts` | Group layout, row positioning |
 | `utils/nlePush.ts` | Collision/push for group dragging |

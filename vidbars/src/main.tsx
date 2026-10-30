@@ -16,6 +16,8 @@ import { useContextSheetStore } from './store/contextSheetStore'
 import { useFxStore } from './store/fxStore'
 import { useRailRunStore } from './store/railRunStore'
 import { useRailUiStore } from './store/railUiStore'
+import { useTiltStore } from './store/tiltStore'
+import { useCabinetUi } from './utils/cabinet'
 
 // Expose stores for debugging. Anything you want to OBSERVE has to be here:
 // reaching a store through a dynamic import gets a second copy of the module
@@ -27,6 +29,8 @@ import { useRailUiStore } from './store/railUiStore'
   useLinkDragStore, useLinkingStore, usePinTravelStore, useContextSheetStore, useFxStore,
   // Loop strips: run progress + live preview, and the drag's drop preview.
   useRailRunStore, useRailUiStore,
+  // Project cabinets, and the tilted view they rise in.
+  useCabinetUi, useTiltStore,
 }
 
 createRoot(document.getElementById('root')!).render(

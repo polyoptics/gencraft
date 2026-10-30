@@ -4,6 +4,7 @@ import { createDebouncedIDBStorage } from '../utils/debouncedIDBStorage'
 import { canJoinTileDeck, collapsePatches, expandPositions, expandTileIds, tileDeckIndex } from '../utils/tileDecks'
 import { DOCK_TOLERANCE, rectsTouch } from '../utils/viewportDocking'
 import { RAIL_GEOM, RAIL_TRAY, railRows, withoutCardSlot, type RailSlot } from '../utils/rail'
+import { newCabinet } from '../utils/cabinetData'
 
 // 'list' | 'pool' | 'prompt' | 'history' are COMPONENTS rather than media: a
 // node whose body is a whole panel. They ride the same substrate as
@@ -18,6 +19,7 @@ export type FreeNodeType =
   | 'history'  // history lens — shows the kind of history it is docked to
   | 'effect'   // an effect card — one image operator on an effect strip (utils/fx)
   | 'rail'     // a loop strip — a rail of slots that runs a workflow (utils/rail)
+  | 'cabinet'  // a project cabinet — drawers that hold cards (utils/cabinet)
 
 export interface TextStyle {
   fontSize: number       // in px (base, before zoom scaling)
@@ -113,6 +115,8 @@ export interface FreeNodeData {
    *  The rail decides this tile's x/y/size while it is docked (the rail sync
    *  host writes them); undocking restores the size it had. */
   railDock?: import('../utils/rail').RailDock
+  /** Project cabinets: the drawers and what is put away in them. */
+  cabinet?: import('../utils/cabinetData').CabinetData
   /** A STAND-IN for a canvas card (or the deck it fronts) on a loop strip:
    *  never drawn, it holds the card's place in its column, and the card is
    *  moved to it (utils/railCards, useRailSync). */
@@ -273,7 +277,7 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
     const labels: Record<FreeNodeType, string> = {
       image: 'Image', note: 'Note', text: 'Text', video: 'Video', audio: 'Audio', model: 'Model',
       list: 'List', pool: 'Media Pool', prompt: 'Prompt Pad', history: 'History',
-      effect: 'Effect', rail: 'Loop strip',
+      effect: 'Effect', rail: 'Loop strip', cabinet: 'Project cabinet',
     }
     // COMPONENTS start twice as big per side — four times the area. They are
     // tools, not tiles: a Media Pool wants a readable grid, a Prompt Pad
@@ -284,6 +288,7 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
       image: 180, note: 160, text: 180, video: 180, audio: 120, model: 180,
       list: 880, pool: 840, prompt: 720, history: 800, effect: 252,
       rail: 360,   // a placeholder: the rail sizes itself to its layout
+      cabinet: 280,
     }
     const widths: Partial<Record<FreeNodeType, number>> = {
       audio: 260,
@@ -296,6 +301,7 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
       // A playing card, 5:7 (FreeNode holds that ratio on resize). The
       // whole tile is the card's face: name, then a slider per value.
       effect: 180,
+      cabinet: 320,
     }
     const node: FreeNodeData = {
       id, x, y,
@@ -307,6 +313,7 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
       imageUrl: null,
       mediaType: null,
       color,
+      ...(type === 'cabinet' ? { cabinet: newCabinet() } : {}),
     }
     set(s => ({ nodes: { ...s.nodes, [id]: node } }))
     return id
@@ -754,6 +761,9 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
 
   deleteFreeNode: (id) =>
     set(s => {
+      // A cabinet holding anything stays: its contents exist nowhere else.
+      // Empty all (its menu) puts them on the canvas first.
+      if (s.nodes[id]?.cabinet?.drawers.some(d => d.items.length > 0)) return s
       // A face takes its hidden members with it: deleting only the face
       // would orphan them, and orphans SHOW again (isHiddenTile) — a delete
       // that made tiles appear.

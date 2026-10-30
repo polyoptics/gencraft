@@ -2,6 +2,7 @@
 // Renders one composite card per project group. Each group collapses its
 // boards into a single draggable card with a hero image and summary.
 
+import { aimCabinet, cabinetDrawerAt, cabinetTargets, stowCards, stowSelection, useCabinetUi } from '../../utils/cabinet'
 import React, { useMemo, useState, useCallback, useRef, useLayoutEffect, useEffect, useDeferredValue, Fragment } from 'react'
 import ReactDOM from 'react-dom'
 import { useBoardsStore, getUngroupedBoardIds } from '../../store/boardsStore'
@@ -261,6 +262,16 @@ const CardContextMenu: React.FC<{
         },
       })
     }
+  }
+
+  // Put this card away, and the selection it is part of.
+  if (!group.pin) for (const t of cabinetTargets()) {
+    menuItems.push({ label: `Put in ${t.label}`, icon: '🗄️', action: () => {
+      const bs = useBoardsStore.getState()
+      useUndoCoordinator.getState().checkpoint()
+      stowSelection(bs.selectedGroupIds.includes(group.id) ? bs.selectedGroupIds : [group.id], [], t)
+      onClose()
+    }})
   }
 
   // Delete
@@ -611,11 +622,25 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
       updateDeckMagnetPreview(canDock, group.id)
       // Over a loop strip: where it would go (utils/railCards).
       previewCardRail(cardRailTarget(draggingIds, ev.clientX, ev.clientY), group.id)
+      // Over a drawer: which one a release would put it in.
+      aimCabinet(ev.clientX, ev.clientY, draggingIds)
     }
     const onUp = (ev: PointerEvent) => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
       setIsDragging(false)
+      // Let go over a project cabinet's drawer: put away, from where the drag
+      // began. The press took the checkpoint: one undo puts it all back.
+      useCabinetUi.getState().setAim(null)
+      const moved = dxAccum !== 0 || dyAccum !== 0
+      const drawer = !group.pin && moved ? cabinetDrawerAt(ev.clientX, ev.clientY, draggingIds) : null
+      if (drawer) {
+        previewCardRail(null, group.id)
+        useBoardsStore.getState().setGroupPosBatch(Array.from(initialOrigins, ([gid, o]) => ({ groupId: gid, originY: o.y, originX: o.x })))
+        stowCards(draggingIds, drawer)
+        useMagnetPreviewStore.getState().setPreview(null)
+        return
+      }
       // Let go over a loop strip (utils/railCards): picture cards go into
       // the column as themselves, left to right as they lay — the strip
       // places them; effect cards move into the row (the strip keeps their
