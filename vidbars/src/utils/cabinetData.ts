@@ -41,6 +41,7 @@ export type CabinetItem = CabinetCardItem | CabinetTileItem
 
 export interface CabinetDrawer {
   id: string
+  /** Empty until named: it then shows a grey "Drawer n" (utils/cabinet drawerName). */
   label: string
   items: CabinetItem[]
 }
@@ -56,5 +57,5 @@ export function newCabinetDrawer(label: string): CabinetDrawer {
 }
 
 export function newCabinet(): CabinetData {
-  return { drawers: [1, 2, 3, 4].map(n => newCabinetDrawer(`Drawer ${n}`)), open: null }
+  return { drawers: [1, 2, 3, 4].map(() => newCabinetDrawer('')), open: null }
 }

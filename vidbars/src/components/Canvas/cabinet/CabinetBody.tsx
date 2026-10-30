@@ -10,38 +10,47 @@ import type { FreeNodeData } from '../../../store/freeNodeStore'
 import { useUndoCoordinator } from '../../../store/undoCoordinator'
 import { cssUrl } from '../../../utils/diskUrl'
 import { useResolvedMedia } from '../../../utils/useResolvedMedia'
-import { cabinetDrawerAt, canvasPointAt, moveItem, renameDrawer, takeOutAt, useCabinetUi } from '../../../utils/cabinet'
+import { cabinetDrawerAt, canvasPointAt, drawerName, itemPicture, itemWords, moveItem, renameDrawer, takeOutAt, useCabinetUi } from '../../../utils/cabinet'
 import type { CabinetItem } from '../../../utils/cabinetData'
 
-const TILE_RATIO = 2 / 3
-/** The tile in a drag's hand, screen px: the same at any zoom. */
-const GHOST_W = 132
+/** The tile in a drag's hand, screen px high: the same at any zoom. */
+const GHOST_H = 110
 
-const ItemFace: React.FC<{ item: CabinetItem; width: number; fontSize: number }> = ({ item, width, fontSize }) => {
-  const thumb = useResolvedMedia(item.thumb)
+/** A tiny picture of what is put away, in its real shape: its image, or its
+ *  words where it has none. Never just a name (Brian 2026-10-30). */
+const ItemFace: React.FC<{ item: CabinetItem; height: number }> = ({ item, height }) => {
+  const picture = useResolvedMedia(itemPicture(item))
+  const words = itemWords(item)
   const count = item.kind === 'card' ? item.groups.length : item.nodes.length
+  const aspect = Math.min(2.4, Math.max(0.4, item.w / Math.max(1, item.h)))
+  const width = height * aspect
+  const radius = height * 0.07
+  const face: React.CSSProperties = {
+    position: 'absolute', inset: 0, boxSizing: 'border-box', borderRadius: radius, background: item.color,
+    border: '1px solid rgba(255,255,255,0.18)',
+  }
   return (
-    <div style={{
-      position: 'relative', width, height: width * TILE_RATIO, boxSizing: 'border-box',
-      borderRadius: width * 0.07, overflow: 'hidden', background: item.color,
-      border: '1px solid rgba(255,255,255,0.18)', boxShadow: '0 2px 8px rgba(0,0,0,0.45)',
-    }}>
-      {thumb && (
-        <div style={{
-          position: 'absolute', inset: 0, opacity: 0.72,
-          backgroundImage: cssUrl(thumb), backgroundSize: 'cover', backgroundPosition: 'center top',
-        }} />
-      )}
-      <div style={{
-        position: 'absolute', left: 0, right: 0, bottom: 0, padding: `${fontSize * 0.25}px ${fontSize * 0.5}px`,
-        background: 'rgba(0,0,0,0.5)', color: '#fff', fontSize, fontWeight: 600,
-        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-      }}>{count > 1 ? `${item.name} (${count})` : item.name}</div>
+    <div style={{ position: 'relative', width, height, flexShrink: 0 }}>
+      {/* A deck shows as a deck: its edges peek out behind the face. */}
+      {count > 1 && <div style={{ ...face, transform: `translate(${height * 0.05}px, ${height * 0.03}px)`, opacity: 0.55 }} />}
+      <div style={{ ...face, overflow: 'hidden', boxShadow: '0 1px 5px rgba(0,0,0,0.5)' }}>
+        {picture ? (
+          <div style={{
+            position: 'absolute', inset: 0,
+            backgroundImage: cssUrl(picture), backgroundSize: 'cover', backgroundPosition: 'center',
+          }} />
+        ) : (
+          <div style={{
+            padding: height * 0.05, color: 'rgba(255,255,255,0.85)', fontSize: height * 0.085,
+            lineHeight: 1.25, overflow: 'hidden', height: '100%', boxSizing: 'border-box', wordBreak: 'break-word',
+          }}>{words || item.name}</div>
+        )}
+      </div>
     </div>
   )
 }
 
-const TrayItem: React.FC<{ item: CabinetItem; nodeId: string; drawerId: string; width: number; fontSize: number }> = ({ item, nodeId, drawerId, width, fontSize }) => {
+const TrayItem: React.FC<{ item: CabinetItem; nodeId: string; drawerId: string; height: number }> = ({ item, nodeId, drawerId, height }) => {
   const [ghost, setGhost] = useState<{ x: number; y: number } | null>(null)
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return
@@ -87,13 +96,13 @@ const TrayItem: React.FC<{ item: CabinetItem; nodeId: string; drawerId: string; 
       title={`${item.name}: drag onto the canvas to take it out`}
       style={{ cursor: 'grab', touchAction: 'none', opacity: ghost ? 0.35 : 1 }}
     >
-      <ItemFace item={item} width={width} fontSize={fontSize} />
+      <ItemFace item={item} height={height} />
       {ghost && ReactDOM.createPortal(
         <div style={{
-          position: 'fixed', left: ghost.x - GHOST_W / 2, top: ghost.y - GHOST_W * TILE_RATIO / 2,
+          position: 'fixed', left: ghost.x - GHOST_H * 0.4, top: ghost.y - GHOST_H / 2,
           zIndex: 9999, pointerEvents: 'none', transform: 'rotate(-2deg)',
         }}>
-          <ItemFace item={item} width={GHOST_W} fontSize={11} />
+          <ItemFace item={item} height={GHOST_H} />
         </div>,
         document.body,
       )}
@@ -101,23 +110,28 @@ const TrayItem: React.FC<{ item: CabinetItem; nodeId: string; drawerId: string; 
   )
 }
 
-export const CabinetBody: React.FC<{ id: string; node: FreeNodeData; hovered: boolean }> = ({ id, node, hovered }) => {
+export const CabinetBody: React.FC<{ id: string; node: FreeNodeData }> = ({ id, node }) => {
   const aim = useCabinetUi(s => s.aim)
-  const [renaming, setRenaming] = useState<{ drawerId: string; value: string } | null>(null)
+  // A double-click on a name asks for this (FreeNode, as the press captures
+  // the pointer); the field keeps its own text while it is open.
+  const renamingId = useCabinetUi(s => s.renaming?.startsWith(`${id}:`) ? s.renaming.slice(id.length + 1) : null)
+  const [draft, setDraft] = useState<string | null>(null)
   const cabinet = node.cabinet
   if (!cabinet) return null
   // Everything is sized by the cabinet: it is an object on the canvas, and
   // grows and shrinks with it as a tile's contents do.
   const u = node.width / 320
   const open = cabinet.drawers.find(d => d.id === cabinet.open)
-  const commit = () => {
-    if (renaming?.value.trim()) {
+  const stopRenaming = () => { setDraft(null); useCabinetUi.getState().setRenaming(null) }
+  const commit = (drawerId: string) => {
+    // Left empty it goes back to its grey default.
+    if (draft !== null) {
       useUndoCoordinator.getState().checkpoint()
-      renameDrawer(id, renaming.drawerId, renaming.value.trim())
+      renameDrawer(id, drawerId, draft.trim())
     }
-    setRenaming(null)
+    stopRenaming()
   }
-  const tileW = 92 * u
+  const tileH = 62 * u
   const gap = 8 * u
   return (
     <>
@@ -125,7 +139,8 @@ export const CabinetBody: React.FC<{ id: string; node: FreeNodeData; hovered: bo
         flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 5 * u, padding: 7 * u,
         background: 'linear-gradient(180deg, #2a2c40 0%, #1d1f2f 100%)',
       }}>
-        {cabinet.drawers.map(d => {
+        {cabinet.drawers.map((d, i) => {
+          const name = drawerName(d, i)
           const isOpen = d.id === cabinet.open
           const aimed = aim === `${id}:${d.id}`
           return (
@@ -143,16 +158,17 @@ export const CabinetBody: React.FC<{ id: string; node: FreeNodeData; hovered: bo
                 transition: 'background 0.1s, border-color 0.1s',
               }}
             >
-              {renaming?.drawerId === d.id ? (
+              {renamingId === d.id ? (
                 <input
                   autoFocus
-                  value={renaming.value}
-                  onChange={e => setRenaming({ drawerId: d.id, value: e.target.value })}
-                  onBlur={commit}
+                  value={draft ?? (name.ghost ? '' : name.text)}
+                  placeholder={`Drawer ${i + 1}`}
+                  onChange={e => setDraft(e.target.value)}
+                  onBlur={() => commit(d.id)}
                   onKeyDown={e => {
                     e.stopPropagation()
-                    if (e.key === 'Enter') commit()
-                    if (e.key === 'Escape') setRenaming(null)
+                    if (e.key === 'Enter') commit(d.id)
+                    if (e.key === 'Escape') stopRenaming()
                   }}
                   onPointerDown={e => e.stopPropagation()}
                   style={{
@@ -161,20 +177,11 @@ export const CabinetBody: React.FC<{ id: string; node: FreeNodeData; hovered: bo
                   }}
                 />
               ) : (
-                <span style={{
+                <span data-cabinet-label={d.id} style={{
                   flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                  color: 'rgba(255,255,255,0.86)', fontSize: 14 * u, fontWeight: 600, userSelect: 'none',
-                }}>{d.label}</span>
-              )}
-              {hovered && !renaming && (
-                <button
-                  title="Rename this drawer"
-                  onClick={() => setRenaming({ drawerId: d.id, value: d.label })}
-                  style={{
-                    background: 'none', border: 'none', padding: 0, cursor: 'pointer', lineHeight: 1,
-                    color: 'rgba(255,255,255,0.55)', fontSize: 12 * u,
-                  }}
-                >✎</button>
+                  color: name.ghost ? 'rgba(255,255,255,0.38)' : 'rgba(255,255,255,0.86)',
+                  fontSize: 14 * u, fontWeight: name.ghost ? 500 : 600, userSelect: 'none',
+                }}>{name.text}</span>
               )}
               {d.items.length > 0 && (
                 <span style={{ color: 'rgba(255,255,255,0.55)', fontSize: 12 * u, fontVariantNumeric: 'tabular-nums', userSelect: 'none' }}>
@@ -194,7 +201,7 @@ export const CabinetBody: React.FC<{ id: string; node: FreeNodeData; hovered: bo
           onWheel={e => e.stopPropagation()}
           style={{
             position: 'absolute', left: 0, right: 0, top: '100%', marginTop: 4 * u,
-            boxSizing: 'border-box', minHeight: tileW * TILE_RATIO + gap * 2, maxHeight: node.height * 1.6,
+            boxSizing: 'border-box', minHeight: tileH + gap * 2, maxHeight: node.height * 1.6,
             overflowY: 'auto', padding: gap, display: 'flex', flexWrap: 'wrap', alignContent: 'flex-start', gap,
             borderRadius: 7 * u,
             background: aim === `${id}:${open.id}` ? 'rgba(46,62,92,0.97)' : 'rgba(22,23,36,0.97)',
@@ -203,11 +210,11 @@ export const CabinetBody: React.FC<{ id: string; node: FreeNodeData; hovered: bo
           }}
         >
           {open.items.map(item => (
-            <TrayItem key={item.id} item={item} nodeId={id} drawerId={open.id} width={tileW} fontSize={11 * u} />
+            <TrayItem key={item.id} item={item} nodeId={id} drawerId={open.id} height={tileH} />
           ))}
           {open.items.length === 0 && (
             <span style={{ margin: 'auto', color: 'rgba(255,255,255,0.4)', fontSize: 12 * u, userSelect: 'none' }}>
-              Drag cards here to put them away
+              Empty
             </span>
           )}
         </div>

@@ -19,7 +19,8 @@ import { canJoinTileDeck, expandTileIds } from './tileDecks'
 import { insertProjectSnapshot } from './projectInsert'
 import { clientToCanvas } from './fx/createEffect'
 import { newCabinetDrawer } from './cabinetData'
-import type { CabinetCardItem, CabinetData, CabinetItem, CabinetTileItem } from './cabinetData'
+import type { CabinetCardItem, CabinetData, CabinetDrawer, CabinetItem, CabinetTileItem } from './cabinetData'
+import { getFirstImageUrl } from '../types/bar'
 
 const ENABLED_KEY = 'vidbars.cabinets'
 function readEnabled(): boolean {
@@ -33,6 +34,9 @@ interface CabinetUi {
   /** The drawer a drag in flight would land in, 'nodeId:drawerId'. */
   aim: string | null
   setAim: (aim: string | null) => void
+  /** The drawer whose name is being edited, 'nodeId:drawerId'. */
+  renaming: string | null
+  setRenaming: (renaming: string | null) => void
 }
 
 export const useCabinetUi = create<CabinetUi>()(set => ({
@@ -43,7 +47,46 @@ export const useCabinetUi = create<CabinetUi>()(set => ({
   },
   aim: null,
   setAim: aim => set(s => (s.aim === aim ? s : { aim })),
+  renaming: null,
+  setRenaming: renaming => set({ renaming }),
 }))
+
+/** What a drawer is called, and whether that is only its grey default, which
+ *  stays until a name is typed over it. */
+export function drawerName(d: CabinetDrawer, index: number): { text: string; ghost: boolean } {
+  return d.label && !/^Drawer \d+$/.test(d.label)
+    ? { text: d.label, ghost: false }
+    : { text: `Drawer ${index + 1}`, ghost: true }
+}
+
+/** The picture to draw an item by: never a raw video or model url. */
+export function itemPicture(item: CabinetItem): string | null {
+  if (item.kind === 'tile') {
+    const n = item.nodes.find(m => m.id === item.nodes[0].tileDeck?.anchor) ?? item.nodes[0]
+    return n.mediaType === 'video' || n.mediaType === 'model' || n.type === 'video' || n.type === 'model' || n.type === 'audio'
+      ? n.posterUrl ?? null
+      : n.imageUrl
+  }
+  if (item.thumb) return item.thumb
+  for (const b of item.boards) {
+    for (const bar of Object.values(b.bars)) {
+      const url = getFirstImageUrl(bar.content)
+      if (url) return url
+    }
+  }
+  return null
+}
+
+/** The words to draw an item by when it has no picture. */
+export function itemWords(item: CabinetItem): string {
+  if (item.kind === 'tile') return item.nodes[0].text
+  const g = item.groups[0]
+  if (g.cardSummary || g.cardText) return g.cardText || g.cardSummary || ''
+  for (const b of item.boards) {
+    for (const bar of Object.values(b.bars)) if (bar.content?.text) return bar.content.text
+  }
+  return ''
+}
 
 export interface DrawerRef { nodeId: string; drawerId: string }
 
@@ -204,10 +247,10 @@ export function stowSelection(groupIds: string[], nodeIds: string[], ref: Drawer
 export function cabinetTargets(): (DrawerRef & { label: string })[] {
   if (!useCabinetUi.getState().enabled) return []
   const cabinets = Object.values(useFreeNodeStore.getState().nodes).filter(n => n.type === 'cabinet' && !n.pin && n.cabinet)
-  return cabinets.flatMap(n => n.cabinet!.drawers.map(d => ({
+  return cabinets.flatMap(n => n.cabinet!.drawers.map((d, i) => ({
     nodeId: n.id,
     drawerId: d.id,
-    label: cabinets.length > 1 ? `${n.label}: ${d.label}` : d.label,
+    label: cabinets.length > 1 ? `${n.label}: ${drawerName(d, i).text}` : drawerName(d, i).text,
   })))
 }
 
@@ -323,7 +366,7 @@ export function renameDrawer(nodeId: string, drawerId: string, label: string) {
 
 export function addDrawer(nodeId: string) {
   const c = cabinetOf(nodeId)
-  if (c) writeCabinet(nodeId, { ...c, drawers: [...c.drawers, newCabinetDrawer(`Drawer ${c.drawers.length + 1}`)] })
+  if (c) writeCabinet(nodeId, { ...c, drawers: [...c.drawers, newCabinetDrawer('')] })
 }
 
 /** The last empty drawer goes; one always stays. */

@@ -1302,7 +1302,14 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
         if (dragHasMoved.current) return
         // A rail's double-clicks belong to its own controls (RailBody stops
         // them); on its bare frame there is nothing to do.
-        if (isRailTile || isCabinet) return
+        // On a drawer's name, it edits the name.
+        if (isCabinet) {
+          const under = document.elementFromPoint(e.clientX, e.clientY)
+          const label = under?.closest<HTMLElement>('[data-cabinet-label]')?.dataset.cabinetLabel
+          if (label) useCabinetUi.getState().setRenaming(`${id}:${label}`)
+          return
+        }
+        if (isRailTile) return
         // While the crop editor is open the tile is its canvas: stacking or
         // opening the deck under it would unmount or remount the editor and
         // lose the crop in progress.
@@ -1472,7 +1479,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
       {isRailTile ? (
         <RailBody id={id} node={node} hovered={isHovered} zoom={gz} />
       ) : isCabinet ? (
-        <CabinetBody id={id} node={node} hovered={isHovered} />
+        <CabinetBody id={id} node={node} />
       ) : (
         <FreeNodeBody node={node} id={id} iz={iz} dz={dz} pad={pad} faceW={faceW} hovered={isHovered} updateFreeNode={updateFreeNode} isEditing={textEditing} setIsEditing={setTextEditing} />
       )}
