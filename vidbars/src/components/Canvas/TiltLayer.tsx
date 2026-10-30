@@ -1228,7 +1228,6 @@ function consoleFurniture(leaning: Leaning[], screens: Screen[], zoom: number): 
       deco: `viewer:${sc.id}`, hinge: { v: foot, z: 0, a: Math.PI - Math.atan2(rise, run) } })
   }
   if (!leaning.length) return out
-  if (!leaning.length) return
   const nodes = useFreeNodeStore.getState().nodes
   const byRail = new Map<string, Leaning[]>()
   for (const l of leaning) byRail.set(l.rail, [...(byRail.get(l.rail) ?? []), l])
