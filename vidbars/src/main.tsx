@@ -18,6 +18,7 @@ import { useRailRunStore } from './store/railRunStore'
 import { useRailUiStore } from './store/railUiStore'
 import { useTiltStore } from './store/tiltStore'
 import { useCabinetUi } from './utils/cabinet'
+import { usePickMode } from './utils/cabinetPick'
 
 // Expose stores for debugging. Anything you want to OBSERVE has to be here:
 // reaching a store through a dynamic import gets a second copy of the module
@@ -30,7 +31,7 @@ import { useCabinetUi } from './utils/cabinet'
   // Loop strips: run progress + live preview, and the drag's drop preview.
   useRailRunStore, useRailUiStore,
   // Project cabinets, and the tilted view they rise in.
-  useCabinetUi, useTiltStore,
+  useCabinetUi, useTiltStore, usePickMode,
 }
 
 createRoot(document.getElementById('root')!).render(

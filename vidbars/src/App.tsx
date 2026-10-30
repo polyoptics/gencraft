@@ -37,7 +37,7 @@ import { copyEffect, pasteEffect, selectedEffect } from './utils/fx/effectClipbo
 import { currentZone } from './store/zoomZonesStore'
 import { ZoomZoneBar, ZoomZoneHeaderButton } from './components/UI/ZoomZoneBar'
 import { ConsoleToggleButton } from './components/UI/ConsoleToggleButton'
-import { CabinetToggleButton } from './components/UI/CabinetToggleButton'
+import { CabinetToggleButton, PickModeButton } from './components/UI/CabinetToggleButton'
 
 /** Hosts useFxStrips, which subscribes to every tile, Viewer and zoom
  *  change. Called in App's body, each drag frame and wheel tick would
@@ -777,6 +777,7 @@ export default function App() {
         <RolodexToggleButton />
         <ConsoleToggleButton />
         <CabinetToggleButton />
+        <PickModeButton />
         <div style={{ width: 1, height: 16, background: 'rgba(255,255,255,0.1)' }} />
         <span style={{ color: 'rgba(255,255,255,0.22)', fontSize: 11 }}>a canvas for creative work</span>
         <div style={{ flex: 1 }} />
