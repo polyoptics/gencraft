@@ -24,6 +24,7 @@ import { useCanvasStore, groupBounds, MIN_ZOOM, MAX_ZOOM } from '../../store/can
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useBoardsStore } from '../../store/boardsStore'
 import { getMediaItems } from '../../types/bar'
+import { faceBlocks } from '../../utils/cardGrid'
 import { createTiltScene, type TiltTarget, type TiltFrameState } from '../../three/tiltScene'
 
 /** Degrees of tilt / turn per pixel of Alt+drag. */
@@ -355,16 +356,27 @@ function offsetIn(el: HTMLElement, stage: HTMLElement): { x: number; y: number }
 /** A file's name from its url — nothing for a `mediaref:` (it has none). */
 const fileName = (url: string) => /^mediaref:/.test(url) ? '' : decodeURIComponent(url.split(/[\\/]/).pop()!.split('?')[0])
 
+/** The model a card's FRONT shows, if it is one: a closed deck shows its
+ *  face card, and a card the block its face is stepped to (else its first
+ *  picture block) — so flipping a deck or a card swaps the standing model.
+ *  A bare block element (data-id is a board) uses that block. */
 function cardModel(id: string): { url: string; name: string } | null {
   const bs = useBoardsStore.getState()
   const g = bs.groups.find(gr => gr.id === id)
-  for (const bid of g ? g.boardIds : [id]) {
-    const board = bs.boards[bid]
-    if (!board) continue
-    for (const bar of Object.values(board.bars)) {
-      const m = getMediaItems(bar.content).find(it => it.type === 'model')
-      if (m) return { url: m.url, name: m.originalName || fileName(m.url) || g?.name || 'Model' }
-    }
+  let bid: string | null = id
+  let name = ''
+  if (g) {
+    const face = (g.deckState === 'stacked' && g.deckFaceCard && bs.groups.find(gr => gr.id === g.deckFaceCard)) || g
+    const blocks = faceBlocks(face, bs.boards)
+    bid = face.faceBoardId && blocks.includes(face.faceBoardId) ? face.faceBoardId
+      : face.cardHeroImage ? null : blocks[0] ?? null
+    name = face.name
+  }
+  const board = bid ? bs.boards[bid] : undefined
+  for (const rid of board?.rootIds ?? []) {
+    const m = getMediaItems(board!.bars[rid]?.content).find(it => it.type === 'image' || it.type === 'video' || it.type === 'model')
+    if (!m) continue
+    return m.type === 'model' ? { url: m.url, name: m.originalName || fileName(m.url) || name || 'Model' } : null
   }
   return null
 }
