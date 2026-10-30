@@ -118,6 +118,46 @@ function recipeCopy(ids: string[], nodes: Record<string, FreeNodeData>): string[
   return [...kept, ...recipe]
 }
 
+/** Paste a copied card. A closed deck comes whole, as Delete takes it:
+ *  every card in it, sub-decks too, each duplicated and the copies tied
+ *  back into a deck of their own — same shape, same face, same offsets
+ *  (duplicateGroup moves every card by the same amount). Only the anchor
+ *  is named a copy; ghost slots stay with the original, whose checked-out
+ *  cards they are. The caller takes the undo checkpoint. */
+function pasteCardOrDeck(groupId: string) {
+  const bs = useBoardsStore.getState()
+  const src = bs.groups.find(g => g.id === groupId)
+  const closed = src && (src.deckState === 'stacked' || src.deckState === 'fanned')
+  const members = closed ? expandWithNestedMembers([groupId], bs.groups) : [groupId]
+  if (members.length < 2) { bs.duplicateGroup(groupId); return }
+  const idMap = new Map<string, string>()
+  for (const id of members) {
+    const copy = useBoardsStore.getState().duplicateGroup(id)
+    if (copy) idMap.set(id, copy)
+  }
+  const remap = (id: string | undefined) => id ? idMap.get(id) : undefined
+  const sources = new Map(bs.groups.map(g => [g.id, g]))
+  useBoardsStore.setState(st => ({
+    groups: st.groups.map(g => {
+      const from = [...idMap].find(([, to]) => to === g.id)?.[0]
+      const o = from ? sources.get(from) : undefined
+      if (!o) return g
+      return {
+        ...g,
+        name: from === groupId ? g.name : o.name,
+        deckState: o.deckState,
+        deckAnchorId: remap(o.deckAnchorId),
+        deckOffsetX: o.deckOffsetX,
+        deckOffsetY: o.deckOffsetY,
+        deckFaceCard: remap(o.deckFaceCard),
+        nestedDeck: o.nestedDeck,
+        ghostSlots: undefined,
+      }
+    }),
+    selectedGroupIds: idMap.has(groupId) ? [idMap.get(groupId)!] : st.selectedGroupIds,
+  }))
+}
+
 function useKeyboardCopyPaste() {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -291,7 +331,7 @@ function useKeyboardCopyPaste() {
         }
         // Card-level paste: duplicate group
         if (clipboardGroupId) {
-          useBoardsStore.getState().duplicateGroup(clipboardGroupId)
+          pasteCardOrDeck(clipboardGroupId)
           return
         }
         if (!clipboard) return
