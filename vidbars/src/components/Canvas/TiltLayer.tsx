@@ -1103,8 +1103,11 @@ const TiltedView: React.FC = () => {
       if (g.kind === 'remap') {
         const real = e.target as Element
         const to = real.hasPointerCapture?.(g.pointerId) ? real : g.target
-        resend(e, 'pointerup', to, g.height)
-        resend(e, 'mouseup', to, g.height)
+        // A cancelled press is not a release: re-sent as an up, it let go of
+        // a dragged card mid-drag, and it merged into whatever was under it
+        // (Brian 2026-10-30: a card "jumps into a deck before I let go").
+        if (e.type === 'pointercancel') resend(e, 'pointercancel', to, g.height)
+        else { resend(e, 'pointerup', to, g.height); resend(e, 'mouseup', to, g.height) }
       }
       if (g.kind === 'marquee') { marqueeSelect(g, e.shiftKey); setBand(null) }
       g = null
@@ -1115,12 +1118,17 @@ const TiltedView: React.FC = () => {
       const c = viewCentre(host)
       if (c) useCanvasStore.getState().zoomAtPoint(e.deltaY < 0 ? 1.12 : 1 / 1.12, c.x, c.y)
     }
+    // The browser's own drag (of a picture under the cursor) cancels the
+    // pointer mid-gesture; while a press is being re-sent there is none.
+    const onDragStart = (e: DragEvent) => { if (g?.kind === 'remap') e.preventDefault() }
+    window.addEventListener('dragstart', onDragStart, true)
     window.addEventListener('pointerdown', onDown, true)
     window.addEventListener('pointermove', onMove, true)
     window.addEventListener('pointerup', onUp, true)
     window.addEventListener('pointercancel', onUp, true)
     window.addEventListener('wheel', onWheel, { capture: true, passive: false })
     return () => {
+      window.removeEventListener('dragstart', onDragStart, true)
       window.removeEventListener('pointerdown', onDown, true)
       window.removeEventListener('pointermove', onMove, true)
       window.removeEventListener('pointerup', onUp, true)
