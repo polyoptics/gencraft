@@ -535,6 +535,7 @@ function collectSlabs(): TiltSlab[] {
         if (over.some(r => a.x < r.x + r.width && r.x < a.x + el.offsetWidth && a.y < r.y + r.height && r.y < a.y + el.offsetHeight)) return false
         const p = add(pan.x + a.x * zoom, pan.y + a.y * zoom, el.offsetWidth * zoom, el.offsetHeight * zoom, t, SIDE.pop, radiusOf(el) * zoom)
         if (p) { p.z = z; p.pop = true }
+        return p
       })
     }
   }
@@ -575,6 +576,7 @@ function collectSlabs(): TiltSlab[] {
         if (!a) return
         const p = add(a.x, a.y, part.offsetWidth, part.offsetHeight, t, SIDE.pop, radiusOf(part))
         if (p) { p.z = z; p.pop = true }
+        return p
       })
     }
     // Zoomed in to Blocks or Boards, a card is drawn as its outline.
@@ -616,7 +618,7 @@ let lastArt: TiltArt[] = []
  *  and its name banner. Raised by a share of the card's shorter side. */
 const POP = 0.025
 function popParts(root: HTMLElement, stage: HTMLElement, base: number, m: number, k: number,
-                  lifting: Map<HTMLElement, number>, slab: (el: HTMLElement, z: number, t: number) => false | void) {
+                  lifting: Map<HTMLElement, number>, slab: (el: HTMLElement, z: number, t: number) => false | TiltSlab | undefined) {
   if (k <= 0) return
   const parts = new Set<HTMLElement>()
   const head = root.querySelector<HTMLElement>(':scope > [data-freenode-header]')
@@ -628,10 +630,14 @@ function popParts(root: HTMLElement, stage: HTMLElement, base: number, m: number
   const t = m * POP * k
   for (const el of parts) {
     if (!el.offsetWidth || !el.offsetHeight) continue
-    if (slab(el, base + t, t) === false) continue
+    const p = slab(el, base + t, t)
+    if (p === false) continue
     lifting.set(el, t)
     chain(el, stage)
-    fill(el)
+    // One piece: the part's sides are the colour of its face, and a button's
+    // ring goes the same colour, so no rim reads as a second disc on top.
+    const face = fill(el)
+    if (p && face) p.color = (face[0] << 16) | (face[1] << 8) | face[2]
   }
 }
 
@@ -666,28 +672,36 @@ function chain(el: HTMLElement, stage: HTMLElement) {
 /** A raised part has to be solid: one with a see-through background would
  *  show the face under it through its lid. While raised it is filled with
  *  the colour it shows flat (its own over what is behind it). */
-let filled = new Map<HTMLElement, string>()
-let filling = new Map<HTMLElement, string>()
-function fill(el: HTMLElement) {
-  const was = filled.get(el) ?? el.style.backgroundColor
+type Filled = { bs: string; bc: string; rgb: number[] }
+let filled = new Map<HTMLElement, Filled>()
+let filling = new Map<HTMLElement, Filled>()
+function fill(el: HTMLElement): number[] {
+  // Read again each frame: a toggle's colour changes as it is pressed.
+  const was = filled.get(el) ?? { bs: el.style.boxShadow, bc: el.style.borderColor, rgb: [0, 0, 0] }
   filling.set(el, was)
-  if (filled.has(el)) return
-  const own = rgba(getComputedStyle(el).backgroundColor)
-  if (own[3] >= 1) return
+  const cs = getComputedStyle(el)
+  const own = rgba(cs.backgroundColor)
   let under: number[] = [24, 24, 30, 1]
-  for (let e = el.parentElement; e; e = e.parentElement) {
+  for (let e = el.parentElement; own[3] < 1 && e; e = e.parentElement) {
     const c = rgba(getComputedStyle(e).backgroundColor)
     if (c[3] >= 1) { under = c; break }
   }
   const a = own[3]
-  el.style.backgroundColor = `rgb(${[0, 1, 2].map(i => Math.round(own[i] * a + under[i] * (1 - a))).join(',')})`
+  was.rgb = [0, 1, 2].map(i => Math.round(own[i] * a + under[i] * (1 - a)))
+  const css = `rgb(${was.rgb.join(',')})`
+  // Painted as an inset shadow over the background, not as the background
+  // itself, which React owns (a toggle sets it as it is pressed).
+  const bs = a < 1 ? `inset 0 0 0 9999px ${css}${was.bs ? ', ' + was.bs : ''}` : was.bs
+  if (el.style.boxShadow !== bs) el.style.boxShadow = bs
+  if (parseFloat(cs.borderTopWidth) > 0 && rgba(cs.borderTopColor).join() !== rgba(css).join()) el.style.borderColor = css
+  return was.rgb
 }
 function rgba(css: string): number[] {
   const n = css.match(/[\d.]+/g)?.map(Number) ?? []
   return n.length >= 3 ? [n[0], n[1], n[2], n[3] ?? 1] : [0, 0, 0, 0]
 }
 function settleChains() {
-  for (const [e, was] of filled) if (!filling.has(e)) e.style.backgroundColor = was
+  for (const [e, was] of filled) if (!filling.has(e)) { e.style.boxShadow = was.bs; e.style.borderColor = was.bc }
   filled = filling
   filling = new Map()
   for (const [e, was] of chained) {
