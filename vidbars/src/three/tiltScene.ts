@@ -17,6 +17,12 @@ import { TILT_PERSPECTIVE, DEFAULT_LIGHT, type TiltWire, type TiltLight } from '
 
 const DEFAULT_SHADOWS = DEFAULT_LIGHT.shadows, DEFAULT_SHEEN = DEFAULT_LIGHT.sheen
 
+/** Drawn only where the artwork mask (stencil 1) is not. */
+const SKIP_ART = {
+  stencilWrite: true, stencilRef: 1, stencilFunc: THREE.NotEqualStencilFunc,
+  stencilFail: THREE.KeepStencilOp, stencilZFail: THREE.KeepStencilOp, stencilZPass: THREE.KeepStencilOp,
+} as const
+
 export interface TiltTarget {
   key: string
   url: string
@@ -51,6 +57,12 @@ export interface TiltSlab {
   rim?: { w: number; h: number }
 }
 
+/** Artwork on the plane — a picture, video or Viewer screen — as a rect
+ *  (centre u, v and size w, h in flat px, z its height). The light's
+ *  shadows and sheen never fall on these: artwork shows exactly as it is
+ *  (Brian 2026-10-30). */
+export interface TiltArt { u: number; v: number; w: number; h: number; z: number }
+
 export interface TiltFrameState {
   tilt: number
   /** The camera's sideways move (screen px), tiltStore's shiftX/Y. */
@@ -72,6 +84,7 @@ export interface TiltFrameState {
   sizeFor: (key: string) => number
   /** Cards, decks, tiles and Viewers, for their thickness. */
   slabs: TiltSlab[]
+  art: TiltArt[]
 }
 
 /** A person, in metres, for scale. */
@@ -221,7 +234,7 @@ function releaseSwaps(swaps: Swap[] | null) {
 }
 
 export function createTiltScene(canvas: HTMLCanvasElement) {
-  const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true })
+  const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, stencil: true })
   renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1))
   renderer.setClearColor(0x000000, 0)
   // Brighter, with highlights (Brian 2026-10-30): a soft studio environment
@@ -232,7 +245,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   // Shadows from the one light (key) onto the canvas. Updated by hand, once
   // per pass that needs it: the clay and wireframe passes reuse the map.
   renderer.shadowMap.enabled = true
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap
+  renderer.shadowMap.type = THREE.PCFShadowMap
   renderer.shadowMap.autoUpdate = false
   const pmrem = new THREE.PMREMGenerator(renderer)
   const envRT = pmrem.fromScene(new RoomEnvironment(), 0.04)
@@ -281,7 +294,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   // The canvas as a shadow catcher: invisible but for the shadows on it.
   // No depth write, so slab sides drawn below the plane still show.
   const catcher = () => {
-    const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShadowMaterial({ opacity: 0.45, depthWrite: false }))
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShadowMaterial({ opacity: 0.45, depthWrite: false, ...SKIP_ART }))
     m.receiveShadow = true
     m.renderOrder = 10
     m.frustumCulled = false
@@ -405,15 +418,56 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   // The sheen: the key light's highlight on the faces (the DOM draws them;
   // this adds only the shine, black plus specular, added on top).
   const SHEEN_MAT = new THREE.MeshPhongMaterial({
-    color: 0x000000, specular: 0x9aa4bc, shininess: 14, side: THREE.DoubleSide,
+    color: 0x000000, specular: 0x9aa4bc, shininess: 14, side: THREE.DoubleSide, ...SKIP_ART,
     transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, depthFunc: THREE.LessEqualDepth,
   })
   const sheenMesh = new THREE.Mesh(topGeo, SHEEN_MAT)
   sideMesh.frustumCulled = topMesh.frustumCulled = sheenMesh.frustumCulled = false
   topMesh.renderOrder = -1
   sheenMesh.renderOrder = 11
-  sideMesh.castShadow = topMesh.castShadow = true
-  groundDeco.add(topMesh, sideMesh, sheenMesh)
+  // Shadows come from the sides and from faces lifted off the plane (a
+  // docked card). A face flush with the canvas would only shade itself
+  // (the speckle Brian saw), so those tops cast nothing.
+  const liftGeo = new THREE.BufferGeometry()
+  liftGeo.setAttribute('position', topGeo.getAttribute('position'))
+  const liftIdx = new Uint32Array(topIdx.length)
+  liftGeo.setIndex(new THREE.BufferAttribute(liftIdx, 1))
+  const liftMesh = new THREE.Mesh(liftGeo, new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false, side: THREE.DoubleSide }))
+  liftMesh.frustumCulled = false
+  liftMesh.castShadow = true
+  sideMesh.castShadow = true
+  groundDeco.add(topMesh, sideMesh, sheenMesh, liftMesh)
+
+  // ── Artwork mask: each picture's rect goes into the stencil first, and
+  // the shadow catchers and the sheen skip it. ──
+  const ART_MAX = 200
+  const artPos = new Float32Array(ART_MAX * 4 * 3)
+  const artIdx = new Uint32Array(ART_MAX * 6)
+  for (let i = 0; i < ART_MAX; i++) {
+    const o = i * 6, v = i * 4
+    artIdx.set([v, v + 1, v + 2, v, v + 2, v + 3], o)
+  }
+  const artGeo = new THREE.BufferGeometry()
+  artGeo.setAttribute('position', new THREE.BufferAttribute(artPos, 3).setUsage(THREE.DynamicDrawUsage))
+  artGeo.setIndex(new THREE.BufferAttribute(artIdx, 1))
+  const artMesh = new THREE.Mesh(artGeo, new THREE.MeshBasicMaterial({
+    colorWrite: false, depthWrite: false, depthTest: false, side: THREE.DoubleSide,
+    stencilWrite: true, stencilRef: 1, stencilFunc: THREE.AlwaysStencilFunc, stencilZPass: THREE.ReplaceStencilOp,
+  }))
+  artMesh.frustumCulled = false
+  const artScene = new THREE.Scene()
+  const groundArt = new THREE.Group(); groundArt.matrixAutoUpdate = false
+  groundArt.add(artMesh); artScene.add(groundArt)
+  function buildArt(art: TiltArt[]) {
+    const n = Math.min(art.length, ART_MAX)
+    for (let k = 0; k < n; k++) {
+      const a = art[k], o = k * 12
+      const x0 = a.u - a.w / 2, x1 = a.u + a.w / 2, y0 = -(a.v - a.h / 2), y1 = -(a.v + a.h / 2)
+      artPos.set([x0, y0, a.z, x1, y0, a.z, x1, y1, a.z, x0, y1, a.z], o)
+    }
+    artGeo.getAttribute('position').needsUpdate = true
+    artGeo.setDrawRange(0, n * 6)
+  }
   const col = new THREE.Color()
 
   /** A rounded-rect outline: RING points (x, y in the plane's y-up frame)
@@ -436,7 +490,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
 
   function buildSlabs(slabs: TiltSlab[]) {
     const n = Math.min(slabs.length, SLAB_MAX)
-    let sv = 0, si = 0, tv = 0, ti = 0
+    let sv = 0, si = 0, tv = 0, ti = 0, li = 0
     const vert = (x: number, y: number, z: number, nx: number, ny: number, nz: number, shade: number) => {
       const o = sv * 3
       sidePos[o] = x; sidePos[o + 1] = y; sidePos[o + 2] = z
@@ -485,13 +539,16 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       topPos[tv++] = s.u; topPos[tv++] = -s.v; topPos[tv++] = z
       for (let i = 0; i < RING; i++) { topPos[tv++] = ox[i]; topPos[tv++] = oy[i]; topPos[tv++] = z }
       for (let i = 0; i < RING; i++) { topIdx[ti++] = top0; topIdx[ti++] = top0 + 1 + i; topIdx[ti++] = top0 + 1 + ((i + 1) % RING) }
+      if (z > 0.5) for (let i = 0; i < RING; i++) { liftIdx[li++] = top0; liftIdx[li++] = top0 + 1 + i; liftIdx[li++] = top0 + 1 + ((i + 1) % RING) }
     }
     for (const g of [sideGeo, topGeo]) {
       for (const a of Object.values(g.attributes)) (a as THREE.BufferAttribute).needsUpdate = true
       g.index!.needsUpdate = true
     }
+    liftGeo.index!.needsUpdate = true
     sideGeo.setDrawRange(0, si)
     topGeo.setDrawRange(0, ti)
+    liftGeo.setDrawRange(0, li)
   }
 
   let lastW = 0, lastH = 0
@@ -519,6 +576,8 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     ground.matrixWorldNeedsUpdate = true
     groundDeco.matrix.copy(ground.matrix)
     groundDeco.matrixWorldNeedsUpdate = true
+    groundArt.matrix.copy(ground.matrix)
+    groundArt.matrixWorldNeedsUpdate = true
 
     // Models rise out of their cards as the plane tips back.
     const rise = Math.min(1, Math.max(0, (st.tilt - 4) / 26))
@@ -586,7 +645,12 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     }
 
     renderer.setRenderTarget(into)
+    // The artwork mask goes in first, on a cleared buffer (stencil too);
+    // every pass after draws over it without clearing.
+    buildArt(st.tilt > 0.5 ? st.art : [])
     renderer.autoClear = true
+    renderer.render(artScene, camera)
+    renderer.autoClear = false
     litRig.visible = !st.flat
     key.visible = !st.flat
     flatRig.visible = st.flat
@@ -612,6 +676,11 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
         ;(m.material as THREE.ShadowMaterial).opacity = shadows
       }
       key.castShadow = decoKey.castShadow = shadows > 0.01 && !st.flat
+      const type = L.soft ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap
+      if (renderer.shadowMap.type !== type) {
+        renderer.shadowMap.type = type
+        for (const m of [modelShadow, slabShadow]) (m.material as THREE.Material).needsUpdate = true
+      }
       // The sheen follows the light's strength, but never glares.
       SHEEN_MAT.opacity = Math.min(1, sheen * L.power / 3)
       sheenMesh.visible = sheen > 0.01 && !st.flat

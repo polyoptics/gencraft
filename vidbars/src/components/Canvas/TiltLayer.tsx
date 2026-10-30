@@ -26,7 +26,7 @@ import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useBoardsStore } from '../../store/boardsStore'
 import { getMediaItems } from '../../types/bar'
 import { faceBlocks } from '../../utils/cardGrid'
-import { createTiltScene, type TiltTarget, type TiltFrameState, type TiltSlab } from '../../three/tiltScene'
+import { createTiltScene, type TiltTarget, type TiltFrameState, type TiltSlab, type TiltArt } from '../../three/tiltScene'
 
 /** Degrees of tilt / turn per pixel of Alt+drag. */
 const DRAG_DEG = 0.25
@@ -327,6 +327,7 @@ const frameState = (): TiltFrameState => {
     unitsFor: url => scales[url],
     sizeFor: key => sizeOf[key] ?? 1,
     slabs: isTilted(ts.tilt) ? collectSlabs() : (dropLifts(), []),
+    art: isTilted(ts.tilt) ? lastArt : [],
   }
 }
 
@@ -552,8 +553,29 @@ function collectSlabs(): TiltSlab[] {
     }
   }
   setLifts(lifting)
+  // Artwork — pictures, videos, Viewer screens — read after the lifts are
+  // set, so a lifted card's picture is masked at its height.
+  lastArt = []
+  const art = (x: number, y: number, w: number, h: number, z: number) => {
+    if (w < 12 || h < 12 || lastArt.length >= 200) return
+    lastArt.push({ u: x + w / 2 - W / 2, v: y + h / 2 - H / 2, w, h, z })
+  }
+  for (const world of host.querySelectorAll<HTMLElement>(':scope > div[style*="scale("]')) {
+    for (const el of world.querySelectorAll<HTMLElement>(ART)) {
+      const at = offsetIn(el, world)
+      if (at) art(pan.x + at.x * zoom, pan.y + at.y * zoom, el.offsetWidth * zoom, el.offsetHeight * zoom, liftOf(el))
+    }
+  }
+  if (stage) {
+    for (const el of stage.querySelectorAll<HTMLElement>(ART)) {
+      const at = offsetIn(el, stage)
+      if (at) art(at.x, at.y, el.offsetWidth, el.offsetHeight, liftOf(el))
+    }
+  }
   return out
 }
+const ART = 'img, video, canvas'
+let lastArt: TiltArt[] = []
 
 /** The bits of a face that stand proud of it when tilted, near enough:
  *  a tile's header bar, and on an effect face its on/off-solo-↑ buttons
@@ -1039,6 +1061,10 @@ function LightPanel({ onClose }: { onClose: () => void }) {
           <input type="range" min={0} max={1} step={0.02} value={light.sheen ?? DEFAULT_LIGHT.sheen}
             onChange={e => setLight({ sheen: +e.target.value })} style={{ flex: 1 }} />
         </div>
+        <label style={{ ...row, cursor: 'pointer' }}>
+          <input type="checkbox" checked={!!light.soft} onChange={e => setLight({ soft: e.target.checked })} />
+          Soft shadow edges
+        </label>
         <label style={{ ...row, cursor: 'pointer' }}>
           <input type="checkbox" checked={light.spin} onChange={e => setLight({ spin: e.target.checked })} />
           Light turns with the turntable
