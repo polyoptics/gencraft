@@ -23,6 +23,7 @@ import {
 } from '../../store/tiltStore'
 import { useCanvasStore, groupBounds, MIN_ZOOM, MAX_ZOOM } from '../../store/canvasStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
+import { useViewport3DStore } from '../../store/viewport3dStore'
 import { useBoardsStore } from '../../store/boardsStore'
 import { getMediaItems } from '../../types/bar'
 import { faceBlocks } from '../../utils/cardGrid'
@@ -910,12 +911,32 @@ function collectTargets(W: number, H: number): TiltTarget[] {
       name: fileName(n.imageUrl) || n.label || 'Model',
     })
   }
+  // A Viewer showing a model, or with a card holding one docked beside it:
+  // the model stands up on the Viewer, popping in, and leaves the card
+  // (Brian 2026-10-30).
+  const viewers = Object.values(useViewport3DStore.getState().windows).map(w => {
+    const it = w.activeItem
+    const x0 = pan.x + w.x * zoom, y0 = pan.y + w.y * zoom
+    return { id: w.id, x0, y0, x1: x0 + w.width * zoom, y1: y0 + w.height * zoom,
+      url: it?.kind === 'media' && it.mediaType === 'model' ? it.url : null, name: it?.kind === 'media' ? it.name : undefined }
+  })
+  const onViewer = (v: typeof viewers[number], url: string, name?: string) => out.push({
+    key: `viewer:${v.id}`, url, name: name || fileName(url) || 'Model', pop: true,
+    u: (v.x0 + v.x1) / 2 - W / 2, v: (v.y0 + v.y1) / 2 - H / 2,
+    w: Math.min(v.x1 - v.x0, (v.y1 - v.y0) * 1.4) * 0.7, h: v.y1 - v.y0,
+  })
+  for (const v of viewers) if (v.url) onViewer(v, v.url, v.name)
+  const GAP = 14
   const stage = document.querySelector<HTMLElement>('[data-tilt-stage="overlay"]')
   if (stage) {
     for (const el of stage.querySelectorAll<HTMLElement>('[data-group-card][data-id]')) {
       const model = cardModel(el.dataset.id!)
       const at = model && offsetIn(el, stage)
       if (!model || !at) continue
+      const x = at.x, y = at.y, w = el.offsetWidth, h = el.offsetHeight
+      const v = viewers.find(r => x <= r.x1 + GAP && x + w >= r.x0 - GAP && y <= r.y1 + GAP && y + h >= r.y0 - GAP)
+      if (v && !v.url) { v.url = model.url; onViewer(v, model.url, model.name) }
+      if (v?.url === model.url) continue
       out.push({
         key: `card:${el.dataset.id}`, url: model.url, name: model.name,
         u: at.x + el.offsetWidth / 2 - W / 2,

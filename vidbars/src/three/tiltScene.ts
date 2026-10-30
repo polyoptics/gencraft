@@ -16,6 +16,8 @@ import { computePosedBounds } from './orbitState'
 import { TILT_PERSPECTIVE, DEFAULT_LIGHT, type TiltWire, type TiltLight } from '../store/tiltStore'
 
 const DEFAULT_SHADOWS = DEFAULT_LIGHT.shadows, DEFAULT_SHEEN = DEFAULT_LIGHT.sheen
+/** How long a model's pop onto a Viewer takes. */
+const POP_MS = 320
 /** How long the sheen and models take to come in as the canvas tips. */
 const FADE_MS = 500
 
@@ -38,6 +40,8 @@ export interface TiltTarget {
   name: string
   /** How high the card it stands on is (px): a deck's or a lifted card's top. */
   z?: number
+  /** Arrives with a quick scale-up pop (a model moving onto a Viewer). */
+  pop?: boolean
 }
 
 /** A flat element given thickness on the tilted plane: a rounded slab
@@ -124,7 +128,7 @@ interface Standing {
   phase: number
   dead: boolean
   seen: number
-  /** When its model first showed (ms), to grow it in from. */
+  /** When its model first showed (ms), to grow or pop it in from. */
   shownAt: number
 }
 
@@ -710,7 +714,13 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       // ...and grow up out of them when the tilt starts, or when one
       // turns up while tilted, rather than popping on.
       if (s.inst && !s.shownAt) s.shownAt = now
-      const grow = fadeIn(now, s.shownAt)
+      if (tg.pop) {
+        // Overshoot a touch and settle: 0 → 1 over POP_MS.
+        const x = s.shownAt ? Math.min(1, (now - s.shownAt) / POP_MS) : 0
+        const c = 1.7, y = x - 1
+        k *= Math.max(0.001, 1 + (c + 1) * y * y * y + c * y * y)
+      }
+      const grow = fadeIn(now, tg.pop ? 0 : s.shownAt)
       s.stand.scale.set(k, k * Math.max(ease * grow, 0.001), k)
       const wantSmooth = st.flat && !!s.inst
       if (wantSmooth && !s.smooth) s.smooth = smoothSwaps(s.inst!)
