@@ -322,8 +322,17 @@ const models: {
  *  moment flatten() starts). The raised parts, sheen and models all follow
  *  it, so leaving 3D fades as entering does (Brian 2026-10-30). */
 let fadeLevel = 0
-/** fadeLevel eased: quick at first, settling. */
-const fadeShown = () => 1 - (1 - fadeLevel) ** 3
+/** Which way fadeLevel is heading. Both ways the look changes quickest at
+ *  the start, so leaving 3D drops straight away instead of hanging on and
+ *  trailing the tilt (Brian 2026-10-30). */
+let fadeRising = true
+/** Leaving is quicker than arriving: done before flatten() lands the view. */
+const FADE_OUT_MS = 280
+/** fadeLevel eased, and never more than the tilt allows, so a slow
+ *  Alt+drag back to flat fades the sheen over the last few degrees too. */
+const fadeShown = () =>
+  Math.min(fadeRising ? 1 - (1 - fadeLevel) ** 3 : fadeLevel ** 2,
+    useTiltStore.getState().tilt / DETAIL_TILT, 1)
 /** Whether anything 3D is on screen: tilted, or still fading out. */
 const live3d = () => isTilted(useTiltStore.getState().tilt) || fadeLevel > 0
 
@@ -378,9 +387,16 @@ const TiltModels: React.FC = () => {
       // A long gap (a hidden tab, the first frame) counts as one frame.
       const dt = Math.min(50, last ? now - last : 0)
       last = now
-      fadeLevel = isTilted(ts.tilt) && !ts.leaving
+      const rising = isTilted(ts.tilt) && !ts.leaving
+      if (rising !== fadeRising) {
+        // Turning round mid-fade: carry on from what is on screen.
+        const was = fadeRising ? 1 - (1 - fadeLevel) ** 3 : fadeLevel ** 2
+        fadeRising = rising
+        fadeLevel = rising ? 1 - Math.cbrt(1 - was) : Math.sqrt(was)
+      }
+      fadeLevel = rising
         ? Math.min(1, fadeLevel + dt / FADE_MS)
-        : Math.max(0, fadeLevel - dt / FADE_MS)
+        : Math.max(0, fadeLevel - dt / FADE_OUT_MS)
       const live = live3d()
       if (live !== shown) {
         shown = live
