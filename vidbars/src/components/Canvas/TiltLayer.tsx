@@ -17,6 +17,7 @@
 //    card, with the same camera the CSS perspective uses.
 
 import React, { useEffect, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import {
   useTiltStore, useModelScaleStore, isTilted, unprojectTilt, TILT_SNAP, DEFAULT_LIGHT,
 } from '../../store/tiltStore'
@@ -256,9 +257,13 @@ function useFrameKey() {
 function useShiftToPan() {
   useEffect(() => useTiltStore.subscribe(s => {
     if (s.tilt !== 0 || s.spin !== 0 || (!s.shiftX && !s.shiftY)) return
-    useCanvasStore.getState().shiftPan(s.shiftX, s.shiftY)
-    // After React has drawn the new pan, so the two never show at once.
-    queueMicrotask(() => useTiltStore.getState().setShift(0, 0))
+    // The pan is drawn by React and the shift straight on the stage: draw
+    // the new pan now (flushSync), then drop the shift, so the next frame
+    // shows both changes together and the view does not move. Clearing the
+    // shift here, not later, also stops a second store update moving the
+    // pan twice.
+    flushSync(() => useCanvasStore.getState().shiftPan(s.shiftX, s.shiftY))
+    useTiltStore.getState().setShift(0, 0)
   }), [])
 }
 
@@ -583,10 +588,13 @@ const TRAY = { rimW: 6, rimH: 7, card: 0.03, stack: 0.9 }
 /** Detail by distance: how much of the raised 3D (rims, lifts) a thing
  *  shows, by its width on screen — none below DETAIL_FROM px, all of it
  *  from DETAIL_FULL px, eased between. */
-const DETAIL_FROM = 160, DETAIL_FULL = 360
+const DETAIL_FROM = 160, DETAIL_FULL = 360, DETAIL_TILT = 20
 function detail(screenW: number): number {
   const x = Math.max(0, Math.min(1, (screenW - DETAIL_FROM) / (DETAIL_FULL - DETAIL_FROM)))
-  return x * x * (3 - 2 * x)
+  // And by tilt: the raised parts grow out of the face over the first
+  // DETAIL_TILT degrees, so tipping in or out of 3D never pops them.
+  const y = Math.min(1, useTiltStore.getState().tilt / DETAIL_TILT)
+  return x * x * (3 - 2 * x) * y * y * (3 - 2 * y)
 }
 
 /** The DOM tiles lifted off the plane (docked cards), and by how much. The

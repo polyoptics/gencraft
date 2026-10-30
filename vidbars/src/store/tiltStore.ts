@@ -94,7 +94,11 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
   figure: false,
   setView: (tilt, spin) => {
     if (flattenRaf !== null) { cancelAnimationFrame(flattenRaf); flattenRaf = null }
-    set({ tilt: Math.max(0, Math.min(TILT_MAX, tilt)), spin })
+    // Orbit about what is in the middle of the screen: the ground point
+    // there stays there as the view turns or tips.
+    const g = centreGround(get())
+    tilt = Math.max(0, Math.min(TILT_MAX, tilt))
+    set({ tilt, spin, ...(g ? shiftKeeping(g, tilt, spin) : {}) })
   },
   setShift: (shiftX, shiftY) => set({ shiftX, shiftY }),
   setTexture: texture => set({ texture }),
@@ -109,22 +113,41 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
     const { tilt: t0, spin: s0raw } = get()
     // Unwind the spin the short way round.
     const s0 = ((s0raw % 360) + 540) % 360 - 180
+    // What is in the middle of the screen stays there all the way down, so
+    // the flat view lands exactly where you were looking (Brian 2026-10-30).
+    const g = centreGround(get())
     const start = performance.now()
     const tick = () => {
       const t = Math.min(1, (performance.now() - start) / 320)
       const k = 1 - Math.pow(1 - t, 3)
-      // The camera's sideways move stays put while it eases flat: flat, it
-      // is a plain slide of the canvas, which TiltLayer then hands to the
-      // canvas pan. Leaving 3D keeps the view where it is (Brian 2026-10-30).
-      set({ tilt: t0 * (1 - k), spin: s0 * (1 - k) })
+      // Flat, the camera's sideways move is a plain slide of the canvas,
+      // which TiltLayer then hands to the canvas pan.
+      const tilt = t < 1 ? t0 * (1 - k) : 0, spin = t < 1 ? s0 * (1 - k) : 0
+      if (t >= 1) flattenRaf = null
+      set({ tilt, spin, ...(g ? shiftKeeping(g, tilt, spin) : {}) })
       if (t < 1) flattenRaf = requestAnimationFrame(tick)
-      else { flattenRaf = null; set({ tilt: 0, spin: 0 }) }
     }
     flattenRaf = requestAnimationFrame(tick)
   },
 }))
 
 export const isTilted = (tilt: number) => tilt > 0.01
+
+/** The ground point (flat px from the host centre) drawn at the middle of
+ *  the screen, or null when the middle shows sky. */
+function centreGround(s: { tilt: number; spin: number; shiftX: number; shiftY: number }) {
+  return unprojectTilt(0, 0, s.tilt, s.spin, s.shiftX, s.shiftY)
+}
+/** The camera shift that puts ground point `g` at the middle of the screen
+ *  for this tilt and spin — unprojectTilt run backwards: the point sits at
+ *  q = Rx(tilt)·Rz(spin)·g, and the middle's ray is the line x = -shiftX,
+ *  y = -shiftY. Flat, it is just -g. */
+function shiftKeeping(g: { x: number; y: number }, tiltDeg: number, spinDeg: number) {
+  const t = tiltDeg * Math.PI / 180, s = spinDeg * Math.PI / 180
+  const x1 = g.x * Math.cos(s) - g.y * Math.sin(s)
+  const y1 = g.x * Math.sin(s) + g.y * Math.cos(s)
+  return { shiftX: -x1, shiftY: -y1 * Math.cos(t) }
+}
 
 /** The CSS transform for a tilted layer whose box is the canvas host and
  *  whose transform-origin is its centre. 'none' when flat, so the flat view
