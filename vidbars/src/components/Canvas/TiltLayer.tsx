@@ -628,9 +628,27 @@ function collectSlabs(K = 1): TiltSlab[] {
             const front = node.querySelector<HTMLElement>(`[data-cabinet-front="${id}"]`)
             const at = front && offsetIn(front, node)
             // Up the face from its bottom edge to the bottom of this drawer.
-            const raise = at ? Math.max(0, node.offsetHeight - at.y - front!.offsetHeight) * x : 0
-            stand(tray, { v: hinge.v, z: raise * zoom * Math.sin(a), a: -a }, zoom, '50% 0%')
+            const raise = at ? Math.max(0, node.offsetHeight - at.y - front!.offsetHeight) : 0
+            const z = raise * zoom * Math.sin(a)
+            stand(tray, { v: hinge.v, z, a: -a }, zoom, '50% 0%')
             tray.style.translate = `0 ${-raise}px`
+            // The drawer as a box: its sides under the tray, a rim round it,
+            // and its front panel gone out to the far end, as far from the
+            // dark opening it left as the drawer is long.
+            const boxAt = offsetIn(tray, world)
+            if (boxAt && front) {
+              const bw = tray.offsetWidth * zoom, bh = tray.offsetHeight * zoom, fh = front.offsetHeight * zoom
+              const box = add(pan.x + boxAt.x * zoom, pan.y + boxAt.y * zoom, bw, bh, Math.min(fh, z), SIDE.tile, 4 * zoom)
+              if (box) {
+                box.z = z
+                box.rim = { w: Math.max(2, bw * CABINET.rim), h: fh * CABINET.rimH }
+              }
+              const panel = add(pan.x + boxAt.x * zoom, pan.y + boxAt.y * zoom + bh - fh, bw, fh, Math.max(2, bw * CABINET.rim), SIDE.tile, 4 * zoom)
+              if (panel) {
+                panel.hinge = { v: panel.v + fh / 2, z: Math.max(0, z - fh * 0.15), a }
+                panel.cap = true
+              }
+            }
           }
         }
       } else if (node.hasAttribute('data-rail-docked')) {
@@ -1188,7 +1206,7 @@ const CONSOLE = { slot: 45, viewer: 68, strutAt: 0.62, from: 4, easeMs: 220 }
 const RUN_RGB = parseInt(RAIL_COLORS.orange.slice(1), 16)
 const RUN_RGB_A = [RUN_RGB >> 16, (RUN_RGB >> 8) & 255, RUN_RGB & 255]
 /** A project cabinet standing: degrees up from the canvas, its depth × width. */
-const CABINET = { stand: 85, depth: 0.45 }
+const CABINET = { stand: 85, depth: 0.45, rim: 0.012, rimH: 0.35 }
 /** A leaning card, and the flat top of its tab riding with it, if any. */
 type Leaning = { id: string; rail: string; slab: TiltSlab; hinge: Hinge; top?: number }
 type Screen = { id: string; slab: TiltSlab; hinge: Hinge }

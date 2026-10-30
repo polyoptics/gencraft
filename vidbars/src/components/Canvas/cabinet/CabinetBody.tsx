@@ -4,9 +4,10 @@
 // since the press captures the pointer on the tile). The tray lies on the canvas
 // just below the face, so it covers the same patch in the flat and tilted views.
 
-import React, { useState } from 'react'
+import React, { useLayoutEffect, useRef, useState } from 'react'
 import ReactDOM from 'react-dom'
 import type { FreeNodeData } from '../../../store/freeNodeStore'
+import { isTilted, useTiltStore } from '../../../store/tiltStore'
 import { useUndoCoordinator } from '../../../store/undoCoordinator'
 import { cssUrl } from '../../../utils/diskUrl'
 import { useResolvedMedia } from '../../../utils/useResolvedMedia'
@@ -123,6 +124,20 @@ export const CabinetBody: React.FC<{ id: string; node: FreeNodeData }> = ({ id, 
   // the pointer); the field keeps its own text while it is open.
   const renamingId = useCabinetUi(s => s.renaming?.startsWith(`${id}:`) ? s.renaming.slice(id.length + 1) : null)
   const [draft, setDraft] = useState<string | null>(null)
+  const tilted = useTiltStore(s => isTilted(s.tilt))
+  // Where the open drawer's front ends: its tray comes out from there, over the
+  // drawers below it. Flat, that is this tray's top. Tilted, it keeps its place
+  // in the layout and TiltLayer carries it up the standing face to the same spot.
+  const facesRef = useRef<HTMLDivElement>(null)
+  const [drawerEnd, setDrawerEnd] = useState<number | null>(null)
+  useLayoutEffect(() => {
+    const front = facesRef.current?.querySelector<HTMLElement>(`[data-cabinet-front="${node.cabinet?.open}"]`)
+    const box = facesRef.current?.parentElement
+    if (!front || !box) { setDrawerEnd(null); return }
+    let top = front.offsetTop + front.offsetHeight
+    for (let e = front.offsetParent as HTMLElement | null; e && e !== box && box.contains(e); e = e.offsetParent as HTMLElement | null) top += e.offsetTop
+    setDrawerEnd(top)
+  }, [node.cabinet?.open, node.height, node.width, node.cabinet?.drawers.length])
   const cabinet = node.cabinet
   if (!cabinet) return null
   // Everything is sized by the cabinet: it is an object on the canvas, and
@@ -142,7 +157,7 @@ export const CabinetBody: React.FC<{ id: string; node: FreeNodeData }> = ({ id, 
   const gap = 8 * u
   return (
     <>
-      <div style={{
+      <div ref={facesRef} style={{
         flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 5 * u, padding: 7 * u,
         background: 'linear-gradient(180deg, #2a2c40 0%, #1d1f2f 100%)',
       }}>
@@ -159,7 +174,8 @@ export const CabinetBody: React.FC<{ id: string; node: FreeNodeData }> = ({ id, 
               style={{
                 flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', gap: 8 * u, padding: `0 ${10 * u}px`,
                 boxSizing: 'border-box', borderRadius: 5 * u,
-                background: aimed ? 'rgba(120,180,255,0.32)' : isOpen ? 'rgba(255,255,255,0.13)' : 'rgba(255,255,255,0.06)',
+                // An open drawer leaves a dark opening in the cabinet.
+                background: aimed ? 'rgba(120,180,255,0.32)' : isOpen ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.06)',
                 border: `${Math.max(1, 1.5 * u)}px solid ${aimed ? 'rgba(120,180,255,0.95)' : 'rgba(255,255,255,0.12)'}`,
                 boxShadow: '0 1px 2px rgba(0,0,0,0.45)',
                 transition: 'background 0.1s, border-color 0.1s',
@@ -209,7 +225,7 @@ export const CabinetBody: React.FC<{ id: string; node: FreeNodeData }> = ({ id, 
           data-cabinet-drawer={`${id}:${open.id}`}
           onWheel={e => e.stopPropagation()}
           style={{
-            position: 'absolute', left: 0, right: 0, top: '100%',
+            zIndex: 2, position: 'absolute', left: 0, right: 0, top: !tilted && drawerEnd !== null ? drawerEnd : '100%',
             boxSizing: 'border-box', minHeight: tileH + gap * 2, maxHeight: node.height * 1.6,
             overflowY: 'auto', padding: gap, display: 'flex', flexWrap: 'wrap', alignContent: 'flex-start', gap,
             borderRadius: 7 * u,
