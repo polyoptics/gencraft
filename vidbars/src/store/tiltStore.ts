@@ -178,10 +178,17 @@ export function tiltCss(tilt: number, spin: number, shiftX = 0, shiftY = 0): str
   return `perspective(${TILT_PERSPECTIVE}px) translate(${shiftX}px, ${shiftY}px) rotateX(${tilt}deg) rotateZ(${spin}deg)`
 }
 
+/** How far off the plane is still pressed, as a multiple of the eye's
+ *  distance to the screen (what is there shows 1/TILT_FAR its size). Just
+ *  under the horizon a pixel of mouse is thousands of flat px: a card
+ *  dragged up there was flung off out of sight and came back, and let go
+ *  there it landed far away (Brian 2026-10-30). Past this it is sky. */
+export const TILT_FAR = 16
+
 /** Where a point on SCREEN (px from the host centre) lands on the tilted
  *  plane, in FLAT px from the centre — i.e. the flat-view point now drawn
- *  under it. Null above the horizon. */
-export function unprojectTilt(sx: number, sy: number, tiltDeg: number, spinDeg: number, shiftX = 0, shiftY = 0, height = 0): { x: number; y: number } | null {
+ *  under it. Null above the horizon, or past `far` (see TILT_FAR). */
+export function unprojectTilt(sx: number, sy: number, tiltDeg: number, spinDeg: number, shiftX = 0, shiftY = 0, height = 0, far = Infinity): { x: number; y: number } | null {
   const P = TILT_PERSPECTIVE
   const t = tiltDeg * Math.PI / 180, s = spinDeg * Math.PI / 180
   const ct = Math.cos(t), st = Math.sin(t)
@@ -192,7 +199,7 @@ export function unprojectTilt(sx: number, sy: number, tiltDeg: number, spinDeg: 
   if (denom <= 1e-3) return null
   // `height`: a plane that far above the canvas (a lifted tile's face).
   const lam = (shiftY * st + P * ct - height) / denom
-  if (lam <= 0) return null
+  if (lam <= 0 || lam > far) return null
   const qx = -shiftX + lam * sx, qy = -shiftY + lam * sy, qz = P - lam * P
   // Back into plane coordinates: Rz(-s)·Rx(-t)·q.
   const y1 = qy * ct + qz * st

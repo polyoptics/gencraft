@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import { useCanvasStore } from '../store/canvasStore'
+import { isTilted, useTiltStore } from '../store/tiltStore'
 
 export interface ViewportRect {
   left: number
@@ -17,8 +18,13 @@ const MARGIN = 200 // canvas-space px buffer to prevent pop-in
 export function useViewportBounds(): ViewportRect {
   const pan = useCanvasStore(s => s.pan)
   const zoom = useCanvasStore(s => s.zoom)
+  const tilted = useTiltStore(s => isTilted(s.tilt))
 
   return useMemo(() => {
+    // Tilted, the view reaches far past the flat screen (toward the
+    // horizon, and round the sides as it turns), and a Viewer or tile
+    // dragged out there was unmounted mid-drag: nothing is culled then.
+    if (tilted) return { left: -Infinity, top: -Infinity, right: Infinity, bottom: Infinity }
     const w = typeof window !== 'undefined' ? window.innerWidth : 1920
     const h = typeof window !== 'undefined' ? window.innerHeight : 1080
     return {
@@ -27,7 +33,7 @@ export function useViewportBounds(): ViewportRect {
       right: -pan.x / zoom + w / zoom + MARGIN,
       bottom: -pan.y / zoom + h / zoom + MARGIN,
     }
-  }, [pan.x, pan.y, zoom])
+  }, [pan.x, pan.y, zoom, tilted])
 }
 
 /** Check if a canvas-space rect intersects the viewport */

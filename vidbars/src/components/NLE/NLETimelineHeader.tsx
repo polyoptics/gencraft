@@ -1,6 +1,7 @@
 import React, { useMemo, useState, useRef, useCallback } from 'react'
 import { useBoardsStore } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
+import { isTilted, useTiltStore } from '../../store/tiltStore'
 import { useCardView } from '../Layers/cardView'
 import { useNLEViewerStore } from '../../store/nleViewerStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
@@ -67,6 +68,8 @@ interface Props {
 
 const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, iconMode }) => {
   const mode: IconMode = iconMode ?? { kind: 'viewer' }
+  // Tilted, the ground past the screen's top and side edges is in view.
+  const tilted = useTiltStore(st => isTilted(st.tilt))
   const previewHovered = useCanvasStore(s =>
     mode.kind === 'deckPreview' ? s.previewHoveredDeckId === mode.deckId : false
   )
@@ -289,7 +292,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, icon
   const effectiveWidth = Math.max(screenWidth, 40)
   const isTiny = effectiveWidth < 50
 
-  if (screenLeft + screenWidth < 0 || screenTop + screenHeight < 0) return null
+  if (!tilted && (screenLeft + screenWidth < 0 || screenTop + screenHeight < 0)) return null
 
   // Compute header fill: group color brightened 15%, at 25% opacity
   const groupColor = group?.color ?? '#5b8dd9'

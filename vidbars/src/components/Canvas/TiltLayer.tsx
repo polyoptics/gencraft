@@ -19,7 +19,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import {
-  useTiltStore, useModelScaleStore, isTilted, unprojectTilt, TILT_SNAP, DEFAULT_LIGHT,
+  useTiltStore, useModelScaleStore, isTilted, unprojectTilt, TILT_SNAP, TILT_FAR, DEFAULT_LIGHT,
 } from '../../store/tiltStore'
 import { useCanvasStore, groupBounds, MIN_ZOOM, MAX_ZOOM } from '../../store/canvasStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
@@ -1137,7 +1137,7 @@ const TiltedView: React.FC = () => {
       const r = host.getBoundingClientRect()
       const { tilt: t, spin: s, shiftX, shiftY } = useTiltStore.getState()
       const sx = cx - r.left - r.width / 2, sy = cy - r.top - r.height / 2
-      let p = unprojectTilt(sx, sy, t, s, shiftX, shiftY, height)
+      let p = unprojectTilt(sx, sy, t, s, shiftX, shiftY, height, TILT_FAR)
       if (hinge) {
         // A standing card: find the height at which the ray meets its face
         // (a point d behind the hinge line on the plane stands d·tan a up),
@@ -1149,7 +1149,7 @@ const TiltedView: React.FC = () => {
         }
         let lo = hinge.z, hi = hinge.z + Math.max(r.width, r.height) * 2
         for (let i = 0; i < 32; i++) { const mid = (lo + hi) / 2; if (off(mid) > 0) hi = mid; else lo = mid }
-        const q = unprojectTilt(sx, sy, t, s, shiftX, shiftY, lo)
+        const q = unprojectTilt(sx, sy, t, s, shiftX, shiftY, lo, TILT_FAR)
         p = q && { x: q.x, y: hinge.v - Math.max(0, hinge.v - q.y) / Math.cos(hinge.a) }
       }
       return p && { x: p.x + r.width / 2 + r.left, y: p.y + r.height / 2 + r.top }
@@ -1174,9 +1174,9 @@ const TiltedView: React.FC = () => {
     // a release still has to arrive, or the drag it ends never ends and the
     // card sticks to the cursor (Brian 2026-10-30): it goes here.
     let lastFlat: { x: number; y: number } | null = null
-    const resend = (e: MouseEvent, type: string, to: EventTarget, height = 0) => {
+    const resend = (e: MouseEvent, type: string, to: EventTarget, height = 0, at?: { x: number; y: number }) => {
       // A lifted tile is pressed at its own height, not the floor's.
-      let p = flatClient(e.clientX, e.clientY, height, hingeOf(to as Element))
+      let p = at ?? flatClient(e.clientX, e.clientY, height, hingeOf(to as Element))
       if (p) lastFlat = p
       else if (lastFlat && /up$|cancel$/.test(type)) p = lastFlat
       if (!p) return
@@ -1185,6 +1185,18 @@ const TiltedView: React.FC = () => {
       // flatHit.
       hitAt = true
       try { send(e, type, to, p) } finally { hitAt = false }
+    }
+    /** Let go of a re-sent press whose own release never came: as a
+     *  release, left button, so every drag handler takes it as one. At the
+     *  flat point given, else where its last event went. */
+    const release = (e: MouseEvent, r: { target: Element; height: number }, at?: { x: number; y: number } | null) => {
+      const up = { button: 0, buttons: 0, detail: e.detail, clientX: e.clientX, clientY: e.clientY, screenX: e.screenX, screenY: e.screenY,
+        altKey: e.altKey, ctrlKey: e.ctrlKey, shiftKey: e.shiftKey, metaKey: e.metaKey,
+        pointerId: (e as PointerEvent).pointerId ?? 1, pointerType: (e as PointerEvent).pointerType ?? 'mouse', isPrimary: true,
+        pressure: 0, width: 1, height: 1 } as unknown as PointerEvent
+      const p = at ?? lastFlat ?? undefined
+      resend(up, 'pointerup', r.target, r.height, p)
+      resend(up, 'mouseup', r.target, r.height, p)
     }
     // The card pressed can be re-rendered away mid-drag (a deck leaving a
     // Viewer's side swaps how it is drawn). Events sent to the old,
@@ -1251,6 +1263,12 @@ const TiltedView: React.FC = () => {
 
     const onDown = (e: PointerEvent) => {
       if (!e.isTrusted) return
+      // A press still open from before (its release lost on the way) is let
+      // go where it was, before this one starts: replaced unended, its card
+      // kept following the bare mouse (Brian's deck stuck to the cursor).
+      if (g?.kind === 'remap') release(e, g)
+      g = null
+      lastFlat = null
       models.at = null
       // A model is clicked straight in 3D: it selects its card or tile
       // (Shift adds to the selection).
@@ -1307,7 +1325,13 @@ const TiltedView: React.FC = () => {
       // standing, it kept every later move to itself, and models stopped
       // lighting up under the cursor or taking clicks until a reload.
       if (g && e.buttons === 0) {
-        if (g.kind === 'remap') { resend(e, 'pointerup', g.target, g.height); resend(e, 'mouseup', g.target, g.height) }
+        if (g.kind === 'remap') {
+          // Brought to here first (moves can have stopped coming, after a
+          // cancel), then let go here.
+          resend(e, 'pointermove', g.target, g.height)
+          resend(e, 'mousemove', g.target, g.height)
+          release(e, g)
+        }
         if (g.kind === 'marquee') setBand(null)
         g = null
       }
@@ -1364,8 +1388,13 @@ const TiltedView: React.FC = () => {
         // A cancelled press is not a release: re-sent as an up, it let go of
         // a dragged card mid-drag, and it merged into whatever was under it
         // (Brian 2026-10-30: a card "jumps into a deck before I let go").
-        if (e.type === 'pointercancel') resend(e, 'pointercancel', to, g.height)
-        else { resend(e, 'pointerup', to, g.height); resend(e, 'mouseup', to, g.height) }
+        // Nor is it the end of the drag: a card's drag ignores it and goes
+        // on till the button comes up, as flat. So the press stays open, its
+        // moves still re-sent at the flat point (dropped, they were sent
+        // as they came, tilted, and the card drifted off the cursor), until
+        // its release or the next move with no button down.
+        if (e.type === 'pointercancel') { resend(e, 'pointercancel', to, g.height); return }
+        resend(e, 'pointerup', to, g.height); resend(e, 'mouseup', to, g.height)
       }
       if (g.kind === 'marquee') { marqueeSelect(g, e.shiftKey); setBand(null) }
       g = null

@@ -7,6 +7,7 @@ import ReactDOM from 'react-dom'
 import { useBoardsStore, getUngroupedBoardIds } from '../../store/boardsStore'
 import type { ProjectGroup, BoardData } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
+import { isTilted, useTiltStore } from '../../store/tiltStore'
 import { useCardView } from './cardView'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { DEFAULT_HEADER_STYLE, DEFAULT_BODY_STYLE, useFreeNodeStore } from '../../store/freeNodeStore'
@@ -488,6 +489,8 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
 
   const boards       = useBoardsStore(s => s.boards)
   const isSelected   = useBoardsStore(s => s.selectedGroupIds.includes(group.id))
+  // Tilted, the ground past the screen's top and side edges is in view.
+  const tilted       = useTiltStore(s => isTilted(s.tilt))
 
   const [isDragging, setIsDragging] = useState(false)
   const [cardMenu, setCardMenu] = useState<{ x: number; y: number } | null>(null)
@@ -835,7 +838,9 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
   }, [group.id, screenWidth, cardHeight, headerPad, contentCanvasW, contentCanvasH, zoom])
 
   if (screenWidth === 0) return null
-  if (screenLeft + screenWidth < 0 || screenTop + cardHeight < 0) return null
+  // Off the flat screen is not off the tilted one: there a card dragged up
+  // toward the horizon vanished under the cursor (Brian 2026-10-30).
+  if (!tilted && (screenLeft + screenWidth < 0 || screenTop + cardHeight < 0)) return null
 
   const selFx = isSelected ? selectionHighlight(color) : null
 
