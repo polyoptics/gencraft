@@ -55,6 +55,9 @@ export interface TiltSlab {
   z?: number
   /** A raised rim round the edge (a tray): its width and height, px. */
   rim?: { w: number; h: number }
+  /** A small raised part (a header, button or banner): the sheen covers
+   *  all of it. Elsewhere it only runs round the face's border. */
+  pop?: boolean
 }
 
 /** Artwork on the plane — a picture, video or Viewer screen — as a rect
@@ -448,7 +451,19 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     color: 0x000000, specular: 0x9aa4bc, shininess: 14, side: THREE.DoubleSide, ...SKIP_ART,
     transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, depthFunc: THREE.LessEqualDepth,
   })
-  const sheenMesh = new THREE.Mesh(topGeo, SHEEN_MAT)
+  // Where the sheen goes (Brian 2026-10-30): a band round each face's
+  // border and the whole of small raised parts — never across a face,
+  // where the work is (pictures, an effect card's text).
+  const SHEEN_V = SLAB_MAX * (RING * 2 + 1)
+  const sheenPos = new Float32Array(SHEEN_V * 3)
+  const sheenNrm = new Float32Array(SHEEN_V * 3)
+  for (let i = 2; i < sheenNrm.length; i += 3) sheenNrm[i] = -1   // as the tops: wound as back faces
+  const sheenIdx = new Uint32Array(SLAB_MAX * RING * 6)
+  const sheenGeo = new THREE.BufferGeometry()
+  sheenGeo.setAttribute('position', new THREE.BufferAttribute(sheenPos, 3).setUsage(THREE.DynamicDrawUsage))
+  sheenGeo.setAttribute('normal', new THREE.BufferAttribute(sheenNrm, 3))
+  sheenGeo.setIndex(new THREE.BufferAttribute(sheenIdx, 1))
+  const sheenMesh = new THREE.Mesh(sheenGeo, SHEEN_MAT)
   sideMesh.frustumCulled = topMesh.frustumCulled = sheenMesh.frustumCulled = false
   topMesh.renderOrder = -1
   sheenMesh.renderOrder = 11
@@ -525,7 +540,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
 
   function buildSlabs(slabs: TiltSlab[]) {
     const n = Math.min(slabs.length, SLAB_MAX)
-    let sv = 0, si = 0, tv = 0, ti = 0, li = 0
+    let sv = 0, si = 0, tv = 0, ti = 0, li = 0, hv = 0, hi = 0
     slabBox.makeEmpty()
     const vert = (x: number, y: number, z: number, nx: number, ny: number, nz: number, shade: number) => {
       const o = sv * 3
@@ -581,7 +596,29 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       for (let i = 0; i < RING; i++) { topPos[tv++] = ox[i]; topPos[tv++] = oy[i]; topPos[tv++] = z }
       for (let i = 0; i < RING; i++) { topIdx[ti++] = top0; topIdx[ti++] = top0 + 1 + i; topIdx[ti++] = top0 + 1 + ((i + 1) % RING) }
       if (z > 0.5) for (let i = 0; i < RING; i++) { liftIdx[li++] = top0; liftIdx[li++] = top0 + 1 + i; liftIdx[li++] = top0 + 1 + ((i + 1) % RING) }
+      // Sheen: the outline, and an inset ring (or the centre, for a small
+      // raised part), wound the same way as the top's fan.
+      const o0 = hv / 3
+      for (let i = 0; i < RING; i++) { sheenPos[hv++] = ox[i]; sheenPos[hv++] = oy[i]; sheenPos[hv++] = z }
+      if (s.pop) {
+        const c = hv / 3
+        sheenPos[hv++] = s.u; sheenPos[hv++] = -s.v; sheenPos[hv++] = z
+        for (let i = 0; i < RING; i++) { sheenIdx[hi++] = c; sheenIdx[hi++] = o0 + i; sheenIdx[hi++] = o0 + (i + 1) % RING }
+      } else {
+        const bw = Math.max(2, Math.min(14, Math.min(s.w, s.h) * 0.05))
+        outline(s.u, s.v, hw - bw, hh - bw, Math.max(0, s.r - bw), ix, iy)
+        const i0 = hv / 3
+        for (let i = 0; i < RING; i++) { sheenPos[hv++] = ix[i]; sheenPos[hv++] = iy[i]; sheenPos[hv++] = z }
+        for (let i = 0; i < RING; i++) {
+          const j = (i + 1) % RING
+          sheenIdx[hi++] = i0 + i; sheenIdx[hi++] = o0 + i; sheenIdx[hi++] = o0 + j
+          sheenIdx[hi++] = i0 + i; sheenIdx[hi++] = o0 + j; sheenIdx[hi++] = i0 + j
+        }
+      }
     }
+    sheenGeo.getAttribute('position').needsUpdate = true
+    sheenGeo.index!.needsUpdate = true
+    sheenGeo.setDrawRange(0, hi)
     for (const g of [sideGeo, topGeo]) {
       for (const a of Object.values(g.attributes)) (a as THREE.BufferAttribute).needsUpdate = true
       g.index!.needsUpdate = true

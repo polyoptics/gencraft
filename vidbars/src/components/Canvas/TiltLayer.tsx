@@ -530,7 +530,7 @@ function collectSlabs(): TiltSlab[] {
         const a = offsetIn(el, world)
         if (!a) return
         const p = add(pan.x + a.x * zoom, pan.y + a.y * zoom, el.offsetWidth * zoom, el.offsetHeight * zoom, t, SIDE.pop, radiusOf(el) * zoom)
-        if (p) p.z = z
+        if (p) { p.z = z; p.pop = true }
       })
     }
   }
@@ -561,7 +561,7 @@ function collectSlabs(): TiltSlab[] {
         const a = offsetIn(part, stage)
         if (!a) return
         const p = add(a.x, a.y, part.offsetWidth, part.offsetHeight, t, SIDE.pop, radiusOf(part))
-        if (p) p.z = z
+        if (p) { p.z = z; p.pop = true }
       })
     }
     // Zoomed in to Blocks or Boards, a card is drawn as its outline.
@@ -656,7 +656,7 @@ const TRAY = { rimW: 6, rimH: 7, card: 0.03, stack: 0.9 }
 /** Detail by distance: how much of the raised 3D (rims, lifts) a thing
  *  shows, by its width on screen — none below DETAIL_FROM px, all of it
  *  from DETAIL_FULL px, eased between. */
-const DETAIL_FROM = 160, DETAIL_FULL = 360, DETAIL_TILT = 20
+const DETAIL_FROM = 36, DETAIL_FULL = 80, DETAIL_TILT = 6
 function detail(screenW: number): number {
   const x = Math.max(0, Math.min(1, (screenW - DETAIL_FROM) / (DETAIL_FULL - DETAIL_FROM)))
   // And by tilt: the raised parts grow out of the face over the first
