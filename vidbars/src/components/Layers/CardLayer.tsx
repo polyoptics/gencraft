@@ -43,7 +43,7 @@ import type { FreeNodeData } from '../../store/freeNodeStore'
 import { useResolvedMedia } from '../../utils/useResolvedMedia'
 import type { MediaItem } from '../../types/bar'
 import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
-import { getFirstImageUrl } from '../../types/bar'
+import { getFirstImageUrl, getMediaItems } from '../../types/bar'
 import { groupFaceSource, groupImageSources, deckImageSources, cardGripUrl as cardGripUrlOf } from '../../utils/mediaSources'
 import { DragOutGrip } from '../UI/DragOutGrip'
 import { hexToHsl, hslToHex, selectionHighlight } from '../../utils/colorUtils'
@@ -1262,11 +1262,22 @@ const barHasImage = (bar: { content?: unknown }) => {
   return !!c && (!!c.imageUrl || !!c.image || !!c.imageTransform)
 }
 
-/** Count "meaningful content" across a deck: every authored unit (a
- *  card with text/header/summary/hero/name, a block with a label or
- *  text, a bar with content/image/name) contributes 1 to a single
- *  overall total. An image or even a single word counts — anything
- *  that reflects user intention. Empty placeholders don't.
+/** A media url's file name, lowercased, with and without its extension —
+ *  what an import names its card, block and bar after. */
+function mediaNames(url: string): string[] {
+  let p = url.split(/[?#]/)[0]
+  try { p = decodeURIComponent(p) } catch { /* keep raw */ }
+  const file = (p.split(/[\\/]/).pop() ?? '').trim().toLowerCase()
+  return file ? [file, file.replace(/\.[^.]+$/, '')] : []
+}
+
+/** Count the UNIQUE things in a deck — what the deck badge shows. Every
+ *  card, block and bar is looked at, but each distinct picture, text or
+ *  authored name counts once, wherever it appears. An image dragged in
+ *  makes a card, a block and a bar that all carry that one picture under
+ *  its file name, so it counts 1; its block or bar only adds to the count
+ *  once it holds something of its own (a note, a different name, another
+ *  picture). Empty placeholders don't count.
  *
  *  Recurses through nested sub-decks: a deck's `memberIds` lists only
  *  its TOP-LEVEL members, but a member can itself be a sub-deck anchor
@@ -1291,36 +1302,51 @@ function countMeaningfulContent(
       }
     }
   }
-  let total = 0
+  const seen = new Set<string>()
   for (const gid of ids) {
     const g = groups.find(gr => gr.id === gid)
     if (!g) continue
-    // Card-level intention — counted once per card (matches the
-    // "this card means something" read, regardless of how many of
-    // its fields are filled).
-    const cardMeaningful =
-      hasText(g.cardText) || hasText(g.cardHeaderText) || hasText(g.cardSummary) ||
-      !!g.cardHeroImage || isAuthoredName(g.name)
-    if (cardMeaningful) total += 1
-    // Block-level + bar-level intention — counted per board / per bar
-    // so a richly developed card scores higher than a one-liner.
+    // Pictures first, so a name that is only a picture's file name is
+    // known to be that picture, not something new.
+    const media: string[] = []
+    const originals: string[] = []
+    const texts: (string | undefined)[] = [g.cardText, g.cardHeaderText, g.cardSummary]
+    const names: (string | undefined)[] = [g.name]
+    if (g.cardHeroImage) media.push(g.cardHeroImage)
     for (const bid of g.boardIds) {
       const board = boards[bid]
       if (!board) continue
       const blk = board.layers?.block
-      if (blk && (hasText(blk.text) || hasText(blk.label) || hasText(blk.headerText) || !!blk.thumbnail)) {
-        total += 1
+      if (blk) {
+        if (blk.thumbnail) media.push(blk.thumbnail)
+        texts.push(blk.text, blk.headerText)
+        names.push(blk.label)
       }
       for (const barId of Object.keys(board.bars || {})) {
         const bar = board.bars[barId]
         if (!bar) continue
-        if (hasText(bar.content?.text) || barHasImage(bar) || isAuthoredName(bar.name)) {
-          total += 1
+        for (const m of getMediaItems(bar.content)) {
+          media.push(m.url)
+          if (m.originalName) originals.push(m.originalName)
         }
+        if (barHasImage(bar) && getMediaItems(bar.content).length === 0) media.push(`bar:${bid}:${barId}`)
+        texts.push(bar.content?.text)
+        names.push(bar.name)
       }
     }
+    // The names a picture came in under — its file's, and the card's own
+    // name, which an import (or a snip, or a rail run) takes from it.
+    const fileNames = new Set([...media, ...originals].flatMap(mediaNames))
+    if (media.length > 0 && g.name) fileNames.add(g.name.trim().toLowerCase())
+    for (const u of media) seen.add(`m:${u}`)
+    const addText = (t: string) => {
+      const k = t.trim().toLowerCase()
+      if (!fileNames.has(k)) seen.add(`t:${k}`)
+    }
+    for (const t of texts) if (hasText(t)) addText(t!)
+    for (const n of names) if (isAuthoredName(n)) addText(n!)
   }
-  return total
+  return seen.size
 }
 
 /** Stacked deck — only anchor visible, peek tabs behind, badge + controls */
