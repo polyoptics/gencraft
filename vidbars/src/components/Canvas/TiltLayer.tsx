@@ -612,7 +612,8 @@ function collectSlabs(K = 1): TiltSlab[] {
       } else if (fs.nodes[node.dataset.id!]?.type === 'cabinet') {
         // A project cabinet: the flat face is its front lying down, and it
         // stands up on its bottom edge as the canvas tips. An open drawer's
-        // tray stays on the canvas, on the same patch as in the flat view.
+        // tray comes straight out of its front, at that drawer's height, over
+        // the same patch of canvas as in the flat view.
         const x = Math.max(0, Math.min(1, (useTiltStore.getState().tilt - CONSOLE.from) / (FADE_TILT - CONSOLE.from)))
         const a = CABINET.stand * x * x * (3 - 2 * x) * detail(w) * Math.PI / 180
         if (a > 0) {
@@ -623,7 +624,13 @@ function collectSlabs(K = 1): TiltSlab[] {
           const tray = node.querySelector<HTMLElement>('[data-cabinet-tray]')
           if (tray) {
             chain(tray, world)
-            stand(tray, { v: hinge.v, z: 0, a: -a }, zoom, '50% 0%')
+            const id = tray.dataset.cabinetDrawer?.split(':')[1]
+            const front = node.querySelector<HTMLElement>(`[data-cabinet-front="${id}"]`)
+            const at = front && offsetIn(front, node)
+            // Up the face from its bottom edge to the bottom of this drawer.
+            const raise = at ? Math.max(0, node.offsetHeight - at.y - front!.offsetHeight) * x : 0
+            stand(tray, { v: hinge.v, z: raise * zoom * Math.sin(a), a: -a }, zoom, '50% 0%')
+            tray.style.translate = `0 ${-raise}px`
           }
         }
       } else if (node.hasAttribute('data-rail-docked')) {
@@ -1292,6 +1299,7 @@ function stand(el: HTMLElement, hinge: Hinge, zoom = 1, origin = '50% 100%') {
 function settleStands() {
   for (const [el, was] of stood) {
     if (standing.has(el)) continue
+    if (el.hasAttribute('data-cabinet-tray')) el.style.translate = ''
     el.style.rotate = was.rotate
     el.style.transformOrigin = was.origin
     // Only what was written here goes back: React may have set it since.
@@ -1329,7 +1337,12 @@ function setLifts(next: Map<HTMLElement, number>) {
  *  (a button on a docked card stands on the card's lift), or 0. */
 function liftOf(el: Element | null): number {
   let z = 0
-  for (let e = el; e; e = e.parentElement) z += lifted.get(e as HTMLElement) ?? 0
+  for (let e = el; e; e = e.parentElement) {
+    z += lifted.get(e as HTMLElement) ?? 0
+    // A cabinet's open tray, out of its drawer at that drawer's height.
+    const h = stood.get(e as HTMLElement)?.hinge
+    if (h && h.a < 0) z += h.z
+  }
   return z
 }
 function dropLifts() {
@@ -1651,7 +1664,7 @@ const TiltedView: React.FC = () => {
     const layFlat = () => {
       if (flatUndo) return
       const undo: (() => void)[] = flatUndo = []
-      const put = (el: HTMLElement, prop: 'transform' | 'rotate' | 'overflow' | 'width' | 'borderRadius', v: string) => {
+      const put = (el: HTMLElement, prop: 'transform' | 'rotate' | 'translate' | 'overflow' | 'width' | 'borderRadius', v: string) => {
         const was = el.style[prop]
         if (was === v) return
         el.style[prop] = v
@@ -1660,7 +1673,11 @@ const TiltedView: React.FC = () => {
         undo.push(() => { if (el.style[prop] === v) el.style[prop] = was })
       }
       for (const st of document.querySelectorAll<HTMLElement>('[data-tilt-stage]')) put(st, 'transform', 'none')
-      for (const [el, was] of stood) { put(el, 'rotate', was.rotate); if (was.wrote) put(el, 'transform', was.transform) }
+      for (const [el, was] of stood) {
+        put(el, 'rotate', was.rotate)
+        if (was.wrote) put(el, 'transform', was.transform)
+        if (el.hasAttribute('data-cabinet-tray')) put(el, 'translate', '')
+      }
       for (const [el, was] of chained) put(el, 'overflow', was.ov)
       // And what 3D reshapes that takes the pointer: a deck's click-to-fan
       // strip stretched over its stepped pages, Run's pill corners.

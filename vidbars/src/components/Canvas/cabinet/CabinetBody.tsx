@@ -223,7 +223,7 @@ export const CabinetBody: React.FC<{ id: string; node: FreeNodeData }> = ({ id, 
           ))}
           {open.project
             ? <ProjectTray drawer={{ nodeId: id, drawerId: open.id }} project={open.project} u={u} height={tileH * 2.4} />
-            : open.items.length === 0 && <EmptyDrawerActions drawer={{ nodeId: id, drawerId: open.id }} u={u} />}
+            : open.items.length === 0 && <EmptyDrawerActions key={open.id} drawer={{ nodeId: id, drawerId: open.id }} u={u} />}
           <DrawerStatus drawerId={open.id} u={u} />
         </div>
       )}
