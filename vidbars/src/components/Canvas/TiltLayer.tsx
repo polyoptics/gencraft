@@ -65,15 +65,22 @@ function useAltTiltGesture() {
   useEffect(() => {
     let altUsed = false
     let swallowMenu = false
+    let swallowClick = false
+    // Alt is the camera and nothing else (Brian 2026-10-30): with it held,
+    // a press anywhere on the canvas, cards and tiles included, only moves
+    // the view. Nothing under it selects, drags or changes. A 3D Viewer
+    // keeps Alt for its own camera; the HUD's buttons still work.
     const onDown = (e: PointerEvent) => {
+      swallowClick = false
       if ((e.button !== 0 && e.button !== 2) || !e.altKey) return
       const target = e.target as Element | null
       const host = hostOf(target)
       if (!host) return
-      if (target?.closest('input,textarea,select,[contenteditable="true"],[data-viewport3d],[data-freenode],[data-tilt-hud]')) return
+      if (target?.closest('input,textarea,select,[contenteditable="true"],[data-viewport3d],[data-tilt-hud]')) return
       e.preventDefault()
-      e.stopPropagation()
+      e.stopImmediatePropagation()
       altUsed = true
+      swallowClick = true
       if (e.button === 2) { dolly(e, host); swallowMenu = true; return }
       const { tilt: t0, spin: s0 } = useTiltStore.getState()
       const x0 = e.clientX, y0 = e.clientY
@@ -123,13 +130,23 @@ function useAltTiltGesture() {
     const onMenu = (e: MouseEvent) => {
       if (swallowMenu) { e.preventDefault(); e.stopPropagation(); swallowMenu = false }
     }
+    // The click (and double-click) a camera press ends in reaches nothing;
+    // the next press clears this.
+    const onClick = (e: MouseEvent) => {
+      if (!swallowClick) return
+      e.preventDefault(); e.stopImmediatePropagation()
+    }
     window.addEventListener('pointerdown', onDown, true)
     window.addEventListener('contextmenu', onMenu, true)
+    window.addEventListener('click', onClick, true)
+    window.addEventListener('dblclick', onClick, true)
     window.addEventListener('keyup', onKeyUp, true)
     window.addEventListener('keydown', onKeyDown, true)
     return () => {
       window.removeEventListener('pointerdown', onDown, true)
       window.removeEventListener('contextmenu', onMenu, true)
+      window.removeEventListener('click', onClick, true)
+      window.removeEventListener('dblclick', onClick, true)
       window.removeEventListener('keyup', onKeyUp, true)
       window.removeEventListener('keydown', onKeyDown, true)
     }
@@ -575,7 +592,7 @@ const TiltedView: React.FC = () => {
     const onMove = (e: PointerEvent) => {
       if (!e.isTrusted) return
       if (!g) {
-        models.hovered = e.buttons === 0 && hostOf(e.target as Element) === host
+        models.hovered = e.buttons === 0 && !e.altKey && hostOf(e.target as Element) === host
           ? models.pick?.(e.clientX, e.clientY) ?? null
           : null
         return
