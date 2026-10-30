@@ -49,7 +49,7 @@ export const ContentView: React.FC<{ windowId: string; item: ActiveItem; zoom: n
 /** Child CSS px == screen px at any canvas zoom. Layout box still fills
  *  the body exactly. Factor clamped so extreme zoom-out doesn't create
  *  absurdly large layout surfaces. */
-const CounterScaled: React.FC<{ zoom: number; children: React.ReactNode }> = ({ zoom, children }) => {
+export const CounterScaled: React.FC<{ zoom: number; children: React.ReactNode }> = ({ zoom, children }) => {
   const z = Math.max(zoom, 0.1)
   return (
     <div style={{

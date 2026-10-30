@@ -103,6 +103,10 @@ export interface FreeNodeData {
    *  on collapse; expanding puts each member at face + (dx, dy). Helpers:
    *  utils/tileDecks. */
   tileDeck?: { anchor: string; dx: number; dy: number }
+  /** Snipped / cropped / painted out of this source image url in a Viewer
+   *  (ImageStudio), on tiles from before pieces became cards. Make cards
+   *  (utils/snipCards) reads it to deck them by source. */
+  snipOf?: string
   /** Loop strips: the RECIPE — slots left to right (utils/rail). */
   rail?: import('../utils/rail').RailData
   /** Docked on a loop strip: which rail, which slot, where in its column.

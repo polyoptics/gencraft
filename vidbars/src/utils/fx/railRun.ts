@@ -95,6 +95,18 @@ export async function unreadable(items: ChainItem[]): Promise<string | null> {
   return bad ? `could not read ${bad.label ? `“${bad.label}”` : 'a picture'}` : null
 }
 
+/** One combination rendered as a Run would size it, without keeping it: the
+ *  canvas is the caller's to release (utils/fx/railFullFrame). Takes its turn
+ *  in the lane, so it never stacks on a render in flight. */
+export function renderRailFrame(items: ChainItem[]): Promise<HTMLCanvasElement | null> {
+  return exclusive(async () => {
+    if (await unreadable(items)) return null
+    const r = await runChain(items, desktopSaves() ? RUN_SIDE : BROWSER_SIDE, false)
+    for (const o of r.outputs.slice(1)) o.canvas.width = o.canvas.height = 0
+    return r.outputs[0]?.canvas ?? null
+  })
+}
+
 type Made = { url: string; w: number; h: number } | { error: string } | { stopped: true }
 
 /** Render one combination and keep it: a file on the desktop, a data: url

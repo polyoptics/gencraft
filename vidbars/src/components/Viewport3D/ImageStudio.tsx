@@ -16,10 +16,17 @@
 
 import React, { useRef, useState, useEffect, useCallback } from 'react'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
+import { useBoardsStore } from '../../store/boardsStore'
+import { tileDeckIndex } from '../../utils/tileDecks'
+import { cardFaceSize } from '../../utils/cardGrid'
+import { drawnRect } from '../../utils/effectCards'
+import { landSnip } from '../../utils/snipCards'
 import { useViewport3DStore } from '../../store/viewport3dStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { useResolvedMedia } from '../../utils/useResolvedMedia'
+import { CanvasMirror } from '../UI/CanvasMirror'
+import type { FullFrame } from '../../utils/fx/railFullFrame'
 
 interface ImgViewState { scale: number; tx: number; ty: number }
 const imgViews = new Map<string, ImgViewState>()
@@ -69,6 +76,16 @@ function areaToNaturalScale(aw: number, ah: number, view: ImgViewState, nat: { w
   return 1 / (fitBox(aw, ah, nat.w, nat.h).s * view.scale)
 }
 
+function cardRects(): { x: number; y: number; width: number; height: number }[] {
+  const { groups, boards } = useBoardsStore.getState()
+  const zoom = useCanvasStore.getState().zoom
+  return groups.flatMap(g => {
+    if (g.pin) return []
+    const r = drawnRect(g, boards, zoom)
+    return r ? [r] : []
+  })
+}
+
 /** First free spot to the RIGHT of the window that fits w×h, scanning
  *  down then wrapping to the next column. Avoids existing tiles AND
  *  windows so stamps never land on top of anything. */
@@ -77,14 +94,19 @@ function findFreeSlotRightOf(
   w: number, h: number,
 ): { x: number; y: number } {
   type R = { x: number; y: number; width: number; height: number }
+  const nodes = useFreeNodeStore.getState().nodes
+  const { hidden } = tileDeckIndex(nodes)
   const occupied: R[] = [
-    ...Object.values(useFreeNodeStore.getState().nodes)
+    ...Object.values(nodes)
       // A pinned node reserves no world space — counting it would
-      // displace stamped tiles around wherever it used to sit.
-      .filter(n => !n.pin)
+      // displace stamped tiles around wherever it used to sit. Nor does a
+      // tile hidden behind a deck face: it is not geometry.
+      .filter(n => !n.pin && !hidden.has(n.id))
       .map(n => ({ x: n.x, y: n.y, width: n.width, height: n.height })),
     ...Object.values(useViewport3DStore.getState().windows)
       .map(v => ({ x: v.x, y: v.y, width: v.width, height: v.height })),
+    // Pieces land as cards, so cards are in the way too.
+    ...cardRects(),
   ]
   const gap = Math.max(16, w * 0.08)
   const hits = (a: R, b: R) => !(
@@ -102,8 +124,15 @@ function findFreeSlotRightOf(
   return { x: win.x + win.width + gap, y: win.y }
 }
 
-export const ImageStudio: React.FC<{ windowId: string; url: string; name?: string }> = ({ windowId, url, name }) => {
-  const resolved = useResolvedMedia(url)
+/** Cut from a live canvas instead of a stored picture: `canvas` is what the
+ *  Viewer shows, `full` renders the same frame at full size for the cut. */
+export interface ImageStudioLive {
+  canvas: HTMLCanvasElement
+  full: () => Promise<FullFrame | null>
+}
+
+export const ImageStudio: React.FC<{ windowId: string; url: string; name?: string; live?: ImageStudioLive }> = ({ windowId, url, name, live }) => {
+  const resolved = useResolvedMedia(live ? null : url)
   const key = `${windowId}|${url}`
   const [, bump] = useState(0)
   const [mode, setMode] = useState<ImgMode>('view')
@@ -114,8 +143,19 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
   const [brushColor, setBrushColor] = useState(PAINT_COLORS[1])
   const [brushSize, setBrushSize] = useState(6)
   const [busy, setBusy] = useState(false)
+  // Full-size px per shown px of a live canvas, once a cut has measured it.
+  const [liveK, setLiveK] = useState<number | null>(null)
+  // Stamps in flight. A live cut can wait on a render: later cuts queue on
+  // it rather than being dropped, so busy is a count, not a gate.
+  const inFlight = useRef(0)
+  const liveRef = useRef(live)
+  liveRef.current = live
   const [flash, setFlash] = useState(0)          // stamp counter → toast
   const areaRef = useRef<HTMLDivElement>(null)
+  const liveW = live?.canvas.width, liveH = live?.canvas.height
+  useEffect(() => {
+    if (liveW && liveH) setNatural({ w: liveW, h: liveH })
+  }, [liveW, liveH])
   const imgRef = useRef<HTMLImageElement>(null)
   const dragLast = useRef<{ x: number; y: number } | null>(null)
   const boxStart = useRef<{ x: number; y: number } | null>(null)
@@ -166,8 +206,8 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
    *  optionally with the paint strokes burned in, and drop it as a tile
    *  to the right of the window. The SOURCE IS NEVER TOUCHED. */
   const stamp = useCallback(async (region: Box | null, withStrokes: boolean) => {
-    const img = imgRef.current, area = areaRef.current
-    if (!img || !area || !natural || busy) return
+    const img = imgRef.current, area = areaRef.current, live = liveRef.current
+    if ((!live && !img) || !area || !natural) return
     const aw = area.offsetWidth, ah = area.offsetHeight
     const v = imgViews.get(key) ?? { scale: 1, tx: 0, ty: 0 }
     let sx = 0, sy = 0, sw = natural.w, sh = natural.h
@@ -185,12 +225,24 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
       sw = Math.abs(x1 - x0); sh = Math.abs(y1 - y0)
       if (sw < 2 || sh < 2) return
     }
+    inFlight.current++
     setBusy(true)
+    let frame: FullFrame | null = null
     try {
+      if (live) {
+        frame = await live.full()
+        if (!frame) console.warn('[image-studio] no full-size frame; cutting from the preview')
+      }
+      const src: HTMLCanvasElement | HTMLImageElement = frame?.canvas ?? live?.canvas ?? img!
+      // Region and strokes are in shown pixels; the frame may hold more.
+      const r = frame ? frame.canvas.width / natural.w : 1
+      if (live) setLiveK(r)
+      const outW = Math.max(1, Math.round(sw * r)), outH = Math.max(1, Math.round(sh * r))
       const cnv = document.createElement('canvas')
-      cnv.width = sw; cnv.height = sh
+      cnv.width = outW; cnv.height = outH
       const ctx = cnv.getContext('2d')!
-      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh)
+      ctx.drawImage(src, sx * r, sy * r, sw * r, sh * r, 0, 0, outW, outH)
+      ctx.scale(r, r)
       if (withStrokes && strokes.length > 0) {
         const k = areaToNaturalScale(aw, ah, v, natural)
         ctx.lineCap = 'round'; ctx.lineJoin = 'round'
@@ -217,7 +269,7 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
       // is a multi-megabyte string that then rides every persist of this
       // node. The source pixels are already composited onto an opaque
       // canvas by the drawImage above, so dropping alpha costs nothing.
-      const px = sw * sh
+      const px = outW * outH
       const ref = px <= 1_200_000
         ? cnv.toDataURL('image/png')
         : cnv.toDataURL('image/jpeg', 0.92)
@@ -225,30 +277,21 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
 
       const win = useViewport3DStore.getState().windows[windowId]
       if (!win) return
-      // Tile sized for a comfortable on-screen read at the current zoom,
-      // preserving the stamped aspect ratio.
-      const z = useCanvasStore.getState().zoom
-      const k = Math.max(0.6, Math.min(10, 1 / z))
-      const tileW = 200 * k
-      const tileH = Math.max(60 * k, tileW * (sh / sw))
-      const slot = findFreeSlotRightOf(win, tileW, tileH)
-
       useUndoCoordinator.getState().checkpoint()
-      const fns = useFreeNodeStore.getState()
-      const nid = fns.addFreeNode(slot.x, slot.y, 'image')
-      fns.updateFreeNode(nid, {
-        width: tileW, height: tileH,
-        imageUrl: ref, mediaType: 'image',
-        label: `${name ?? 'Image'} ✂`,
-      })
+      const face = cardFaceSize()
+      landSnip(
+        { url: ref, aspect: outH / outW, label: `${name ?? 'Image'} ✂`, source: url },
+        () => findFreeSlotRightOf(win, face.w, face.h),
+      )
       setFlash(f => f + 1)
     } catch (err) {
       // e.g. a cross-origin image tainting the canvas — nothing written.
       console.warn('[image-studio] stamp failed', err)
     } finally {
-      setBusy(false)
+      frame?.release()
+      if (--inFlight.current === 0) setBusy(false)
     }
-  }, [natural, busy, strokes, windowId, name, key])
+  }, [natural, strokes, windowId, name, key, url])
 
   // Toast fades on its own.
   useEffect(() => {
@@ -391,7 +434,7 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
     ;(e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId)
   }
 
-  if (!resolved) {
+  if (!resolved && !live) {
     return (
       <div style={{
         position: 'absolute', inset: 0, display: 'flex', alignItems: 'center',
@@ -491,17 +534,28 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
           touchAction: 'none',
         }}
       >
-        <img
-          ref={imgRef}
-          src={resolved}
-          draggable={false}
-          onLoad={e => setNatural({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
-          style={{
-            position: 'absolute', inset: 0, width: '100%', height: '100%',
-            objectFit: 'contain',
-            transform: `translate(${view.tx}px, ${view.ty}px) scale(${view.scale})`,
-          }}
-        />
+        {live ? (
+          <CanvasMirror
+            source={live.canvas}
+            style={{
+              position: 'absolute', inset: 0, width: '100%', height: '100%',
+              maxWidth: 'none', maxHeight: 'none', objectFit: 'contain',
+              transform: `translate(${view.tx}px, ${view.ty}px) scale(${view.scale})`,
+            }}
+          />
+        ) : (
+          <img
+            ref={imgRef}
+            src={resolved ?? undefined}
+            draggable={false}
+            onLoad={e => setNatural({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
+            style={{
+              position: 'absolute', inset: 0, width: '100%', height: '100%',
+              objectFit: 'contain',
+              transform: `translate(${view.tx}px, ${view.ty}px) scale(${view.scale})`,
+            }}
+          />
+        )}
 
         {/* Paint overlay */}
         {mode === 'paint' && strokes.length > 0 && (
@@ -570,7 +624,7 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
               >
                 {busy ? '…' : '⎘ Stamp'}
                 <span style={{ fontSize: 9, fontWeight: 600, opacity: 0.65 }}>
-                  {Math.max(1, Math.round(cropBox.w * naturalPerArea))}×{Math.max(1, Math.round(cropBox.h * naturalPerArea))}
+                  {(!live || liveK) && <>{Math.max(1, Math.round(cropBox.w * naturalPerArea * (liveK ?? 1)))}×{Math.max(1, Math.round(cropBox.h * naturalPerArea * (liveK ?? 1)))}</>}
                 </span>
               </div>
             )}

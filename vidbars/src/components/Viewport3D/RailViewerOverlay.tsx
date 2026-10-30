@@ -11,7 +11,9 @@ import { useRailRunStore } from '../../store/railRunStore'
 import { useRailUiStore } from '../../store/railUiStore'
 import { useViewport3DStore } from '../../store/viewport3dStore'
 import { railViewerDocks, viewerRail } from '../../utils/railViewer'
-import { CanvasMirror } from '../UI/CanvasMirror'
+import { railFullFrame } from '../../utils/fx/railFullFrame'
+import { CounterScaled } from './ContentViews'
+import { ImageStudio } from './ImageStudio'
 
 const stop = (e: React.SyntheticEvent) => e.stopPropagation()
 
@@ -26,6 +28,7 @@ export const RailViewerOverlay: React.FC<{ windowId: string; fontSize: number }>
   if (!railId) return null
   const rail = nodes[railId]
   const canvas = preview?.canvas ?? null
+  const full = () => railFullFrame(railId)
   return (
     <div
       data-rail-viewer={railId}
@@ -40,7 +43,20 @@ export const RailViewerOverlay: React.FC<{ windowId: string; fontSize: number }>
       </div>
       <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
         {canvas
-          ? <CanvasMirror source={canvas} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+          ? (
+            // The image tools stay on: pieces are cut straight from this
+            // frame, at the size a Run would make (railFullFrame).
+            <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+              <CounterScaled zoom={zoom}>
+                <ImageStudio
+                  windowId={windowId}
+                  url={`rail:${railId}`}
+                  name={rail?.label || 'Loop strip'}
+                  live={{ canvas, full }}
+                />
+              </CounterScaled>
+            </div>
+          )
           : <span style={{ fontSize, color: 'rgba(255,255,255,0.45)' }}>{preview?.error ?? 'Dock pictures under the first column'}</span>}
       </div>
     </div>

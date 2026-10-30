@@ -83,6 +83,7 @@ export interface ProjectGroup {
   cardWidthOverride?: number   // user-set card width (screen px)
   cardHeightOverride?: number  // user-set card height (screen px)
   deckState?: 'open' | 'fanned' | 'stacked'  // deck visual state (default: 'open')
+  snipOf?: string         // cut from this source in a Viewer; its pieces share a deck (utils/snipCards)
   deckAnchorId?: string   // group ID of the deck anchor (leftmost card); set when deckState !== 'open'
   nestedDeck?: boolean    // true if this group is a sub-deck anchor (persists through fan/stack cycles)
   deckOffsetX?: number    // offset from OWN anchor at stacking time (for position restore on open)
