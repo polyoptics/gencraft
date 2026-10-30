@@ -37,6 +37,9 @@ interface CabinetUi {
   /** The drawer whose name is being edited, 'nodeId:drawerId'. */
   renaming: string | null
   setRenaming: (renaming: string | null) => void
+  /** A slow step's word on a drawer, or why it failed, by drawer id. */
+  busy: Record<string, string>
+  setBusy: (drawerId: string, word: string | null) => void
 }
 
 export const useCabinetUi = create<CabinetUi>()(set => ({
@@ -49,6 +52,11 @@ export const useCabinetUi = create<CabinetUi>()(set => ({
   setAim: aim => set(s => (s.aim === aim ? s : { aim })),
   renaming: null,
   setRenaming: renaming => set({ renaming }),
+  busy: {},
+  setBusy: (drawerId, word) => set(s => {
+    const { [drawerId]: _was, ...busy } = s.busy
+    return { busy: word ? { ...busy, [drawerId]: word } : busy }
+  }),
 }))
 
 /** What a drawer is called, and whether that is only its grey default, which
@@ -117,7 +125,8 @@ export function cabinetDrawerAt(clientX: number, clientY: number, dragged: strin
     const hit = el.closest<HTMLElement>('[data-cabinet-drawer]')?.dataset.cabinetDrawer
     if (hit) {
       const [nodeId, drawerId] = hit.split(':')
-      return { nodeId, drawerId }
+      // A project's drawer takes no loose things.
+      return cabinetOf(nodeId)?.drawers.find(d => d.id === drawerId)?.project ? null : { nodeId, drawerId }
     }
     if (owner) return null
   }
@@ -263,11 +272,11 @@ export function stowSelection(groupIds: string[], nodeIds: string[], ref: Drawer
 export function cabinetTargets(): (DrawerRef & { label: string })[] {
   if (!useCabinetUi.getState().enabled) return []
   const cabinets = Object.values(useFreeNodeStore.getState().nodes).filter(n => n.type === 'cabinet' && !n.pin && n.cabinet)
-  return cabinets.flatMap(n => n.cabinet!.drawers.map((d, i) => ({
+  return cabinets.flatMap(n => n.cabinet!.drawers.flatMap((d, i) => d.project ? [] : [{
     nodeId: n.id,
     drawerId: d.id,
     label: cabinets.length > 1 ? `${n.label}: ${drawerName(d, i).text}` : drawerName(d, i).text,
-  })))
+  }]))
 }
 
 function takeFrom(nodeId: string, drawerId: string, itemId: string): CabinetItem | null {
@@ -389,6 +398,6 @@ export function addDrawer(nodeId: string) {
 export function removeEmptyDrawer(nodeId: string) {
   const c = cabinetOf(nodeId)
   if (!c || c.drawers.length <= 1) return
-  const last = [...c.drawers].reverse().find(d => d.items.length === 0)
+  const last = [...c.drawers].reverse().find(d => d.items.length === 0 && !d.project)
   if (last) writeCabinet(nodeId, { ...c, drawers: c.drawers.filter(d => d.id !== last.id), open: c.open === last.id ? null : c.open })
 }

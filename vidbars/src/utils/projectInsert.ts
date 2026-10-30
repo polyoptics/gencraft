@@ -71,6 +71,9 @@ type RefMaps = {
 export function insertProjectSnapshot(
   snapshot: ProjectSnapshot,
   targetY: number,
+  /** keepDecks: a project coming back whole (a cabinet drawer): its decks and
+   *  card-to-card links stay, remapped, instead of being cleared. */
+  opts: { keepDecks?: boolean } = {},
 ): string[] {
   // ── 1. Build ID maps ────────────────────────────────────────
   const boardIdMap = new Map<string, string>()
@@ -116,7 +119,7 @@ export function insertProjectSnapshot(
   // Primary → becomes a fresh extra board
   if (snapshot.bars && Object.keys(snapshot.bars).length > 0) {
     const primaryNewId = boardIdMap.get('primary')!
-    const remappedBars = remapBars(snapshot.bars, barIdMap)
+    const remappedBars = remapBars(snapshot.bars, barIdMap, opts.keepDecks ? refMaps : undefined)
     const remappedRootIds = (snapshot.rootIds ?? []).map(rid => barIdMap.get(rid) ?? rid)
     newBoards.push({
       id: primaryNewId,
@@ -175,6 +178,18 @@ export function insertProjectSnapshot(
     // the copy and survive remap exactly; anything pointing outside is
     // dropped rather than left aimed at the original document.
     linkedRefs: remapRefs(g.linkedRefs, refMaps),
+    ...(opts.keepDecks ? {
+      deckState: g.deckState,
+      deckAnchorId: g.deckAnchorId && groupIdMap.get(g.deckAnchorId),
+      deckOffsetX: g.deckOffsetX,
+      deckOffsetY: g.deckOffsetY,
+      nestedDeck: g.nestedDeck,
+      ghostSlots: g.ghostSlots?.flatMap(sl => groupIdMap.has(sl.cardId) ? [{ ...sl, cardId: groupIdMap.get(sl.cardId)! }] : []),
+      linkedGroupIds: (g.linkedGroupIds ?? []).flatMap(id => groupIdMap.has(id) ? [groupIdMap.get(id)!] : []),
+      faceBoardId: g.faceBoardId && boardIdMap.get(g.faceBoardId),
+      deckFaceCard: g.deckFaceCard && groupIdMap.get(g.deckFaceCard),
+      railSource: g.railSource && groupIdMap.get(g.railSource),
+    } : {}),
   }))
 
   // If the snapshot had no groups but did have boards, wrap them in a default
@@ -236,7 +251,13 @@ export function insertProjectSnapshot(
           : d
             ? { railDock: undefined, width: d.prevW ?? rest.width, height: d.prevH ?? rest.height }
             : {}
-        updated[newId] = { ...rest, id: newId, y: (rest.y ?? 0) + dy, tileDeck: undefined, ...docked }
+        updated[newId] = {
+          ...rest, id: newId, y: (rest.y ?? 0) + dy, tileDeck: undefined, ...docked,
+          ...(opts.keepDecks ? {
+            tileDeck: rest.tileDeck && nodeIdMap.has(rest.tileDeck.anchor) ? { ...rest.tileDeck, anchor: nodeIdMap.get(rest.tileDeck.anchor)! } : undefined,
+            cardRef: rest.cardRef && groupIdMap.get(rest.cardRef),
+          } : {}),
+        }
       }
       return { nodes: updated }
     })

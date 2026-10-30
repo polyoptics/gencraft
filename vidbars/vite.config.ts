@@ -195,6 +195,61 @@ function snapshotsApi(): Plugin {
         })
       })
 
+      // A project cabinet's own files, in a folder of their own so they stay
+      // out of the Templates list (utils/cabinetProjects). Written whole to a
+      // temp file and then renamed: a failed save leaves nothing half-written.
+      const cabinetDir = path.join(dir, 'cabinet')
+      const cabinetFile = (req: { url?: string }) => {
+        const name = (req.url ?? '').replace(/^\//, '').split('?')[0]
+        return /^[\w-]+\.json$/.test(name) ? name : null
+      }
+      server.middlewares.use('/api/snapshots/cabinet/save/', (req, res) => {
+        const name = cabinetFile(req)
+        if (req.method !== 'POST' || !name) { res.statusCode = 400; res.end('{}'); return }
+        fs.mkdirSync(cabinetDir, { recursive: true })
+        const tmp = path.join(cabinetDir, `${name}.tmp`)
+        const out = fs.createWriteStream(tmp)
+        req.pipe(out)
+        const fail = () => { res.statusCode = 500; res.end('{}'); fs.rm(tmp, { force: true }, () => {}) }
+        out.on('error', fail)
+        req.on('error', fail)
+        out.on('finish', () => {
+          try {
+            fs.renameSync(tmp, path.join(cabinetDir, name))
+            res.setHeader('Content-Type', 'application/json')
+            res.end(JSON.stringify({ ok: true, file: name }))
+          } catch { fail() }
+        })
+      })
+      server.middlewares.use('/api/snapshots/cabinet/load/', (req, res) => {
+        const name = cabinetFile(req)
+        const filePath = name ? path.join(cabinetDir, name) : ''
+        if (!name || !fs.existsSync(filePath)) { res.statusCode = 404; res.end('{}'); return }
+        res.setHeader('Content-Type', 'application/json')
+        fs.createReadStream(filePath).pipe(res)
+      })
+      // A copy of a project saved through Templates.
+      server.middlewares.use('/api/snapshots/cabinet/adopt/', (req, res) => {
+        const name = cabinetFile(req)
+        const from = new URL(req.url ?? '', 'http://x').searchParams.get('from') ?? ''
+        const source = path.join(dir, path.basename(from))
+        if (req.method !== 'POST' || !name || !from.endsWith('.json') || !fs.existsSync(source)) { res.statusCode = 400; res.end('{}'); return }
+        fs.mkdirSync(cabinetDir, { recursive: true })
+        fs.copyFile(source, path.join(cabinetDir, name), err => {
+          if (err) { res.statusCode = 500; res.end('{}'); return }
+          res.setHeader('Content-Type', 'application/json')
+          res.end(JSON.stringify({ ok: true, file: name }))
+        })
+      })
+      server.middlewares.use('/api/snapshots/cabinet/delete/', (req, res) => {
+        const name = cabinetFile(req)
+        if (req.method !== 'DELETE' || !name) { res.statusCode = 400; res.end('{}'); return }
+        fs.rm(path.join(cabinetDir, name), { force: true }, () => {
+          res.setHeader('Content-Type', 'application/json')
+          res.end('{"ok":true}')
+        })
+      })
+
       // Delete a snapshot
       server.middlewares.use('/api/snapshots/delete/', (req, res) => {
         if (req.method !== 'DELETE') { res.statusCode = 405; res.end('{}'); return }

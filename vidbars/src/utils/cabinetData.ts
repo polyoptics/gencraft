@@ -39,11 +39,31 @@ export interface CabinetTileItem extends ItemBase {
 
 export type CabinetItem = CabinetCardItem | CabinetTileItem
 
+/** One card or tile on a project's map, in the project's canvas units. */
+export interface ProjectMapPart { x: number; y: number; w: number; h: number; color: string; pic: string | null }
+/** A project's footprint and what lies on it. */
+export interface ProjectMap { x: number; y: number; w: number; h: number; parts: ProjectMapPart[] }
+
+/** A whole project in a drawer: a pointer to its file and a map to see it by
+ *  (utils/cabinetProjects). */
+export interface CabinetProject {
+  file: string
+  /** Its files on disk, oldest first, the current one last. */
+  versions?: string[]
+  name: string
+  savedAt: number
+  map: ProjectMap
+  /** Out on the canvas: what was already there, which is not part of it. */
+  out?: { leftGroups: string[]; leftNodes: string[] }
+}
+
 export interface CabinetDrawer {
   id: string
   /** Empty until named: it then shows a grey "Drawer n" (utils/cabinet drawerName). */
   label: string
   items: CabinetItem[]
+  /** A drawer holds loose items or one project, never both. */
+  project?: CabinetProject
 }
 
 export interface CabinetData {

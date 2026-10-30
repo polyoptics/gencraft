@@ -12,6 +12,7 @@ import { cssUrl } from '../../../utils/diskUrl'
 import { useResolvedMedia } from '../../../utils/useResolvedMedia'
 import { cabinetDrawerAt, canvasPointAt, drawerName, itemPicture, itemWords, moveItem, renameDrawer, takeOutAt, useCabinetUi } from '../../../utils/cabinet'
 import type { CabinetItem } from '../../../utils/cabinetData'
+import { DrawerStatus, EmptyDrawerActions, FrontPicture, ProjectTray } from './ProjectTray'
 
 /** The tile in a drag's hand, screen px high: the same at any zoom. */
 const GHOST_H = 110
@@ -189,6 +190,7 @@ export const CabinetBody: React.FC<{ id: string; node: FreeNodeData }> = ({ id, 
                   fontSize: 14 * u, fontWeight: name.ghost ? 500 : 600, userSelect: 'none',
                 }}>{name.text}</span>
               )}
+              {d.project && <FrontPicture map={d.project.map} height={24 * u} dim={!!d.project.out} />}
               {d.items.length > 0 && (
                 <span style={{ color: 'rgba(255,255,255,0.55)', fontSize: 12 * u, fontVariantNumeric: 'tabular-nums', userSelect: 'none' }}>
                   {d.items.length}
@@ -219,11 +221,10 @@ export const CabinetBody: React.FC<{ id: string; node: FreeNodeData }> = ({ id, 
           {open.items.map(item => (
             <TrayItem key={item.id} item={item} nodeId={id} drawerId={open.id} height={tileH} />
           ))}
-          {open.items.length === 0 && (
-            <span style={{ margin: 'auto', color: 'rgba(255,255,255,0.4)', fontSize: 12 * u, userSelect: 'none' }}>
-              Empty
-            </span>
-          )}
+          {open.project
+            ? <ProjectTray drawer={{ nodeId: id, drawerId: open.id }} project={open.project} u={u} height={tileH * 2.4} />
+            : open.items.length === 0 && <EmptyDrawerActions drawer={{ nodeId: id, drawerId: open.id }} u={u} />}
+          <DrawerStatus drawerId={open.id} u={u} />
         </div>
       )}
     </>
