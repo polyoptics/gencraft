@@ -1084,6 +1084,15 @@ const TiltedView: React.FC = () => {
     }
     const onMove = (e: PointerEvent) => {
       if (!e.isTrusted) return
+      // A press whose release never reached us (let go outside the window,
+      // or swallowed on the way) is over once no button is down: left
+      // standing, it kept every later move to itself, and models stopped
+      // lighting up under the cursor or taking clicks until a reload.
+      if (g && e.buttons === 0) {
+        if (g.kind === 'remap') { resend(e, 'pointerup', g.target, g.height); resend(e, 'mouseup', g.target, g.height) }
+        if (g.kind === 'marquee') setBand(null)
+        g = null
+      }
       if (!g) {
         models.hovered = e.buttons === 0 && !e.altKey && hostOf(e.target as Element) === host
           ? models.pick?.(e.clientX, e.clientY) ?? null
