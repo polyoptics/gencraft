@@ -574,7 +574,8 @@ function collectSlabs(): TiltSlab[] {
   }
   return out
 }
-const ART = 'img, video, canvas'
+// A card face's picture can also be a background image.
+const ART = 'img, video, canvas, [style*="background-image: url"]'
 let lastArt: TiltArt[] = []
 
 /** The bits of a face that stand proud of it when tilted, near enough:

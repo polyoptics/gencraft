@@ -302,6 +302,9 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   }
   const modelShadow = catcher(); ground.add(modelShadow)
   const slabShadow = catcher(); groundDeco.add(slabShadow)
+  // It lies in the same plane as the faces' depth-only tops: pulled a hair
+  // towards the camera so it is not lost behind them.
+  Object.assign(slabShadow.material, { polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 })
 
   const camera = new THREE.PerspectiveCamera(50, 1, 10, TILT_PERSPECTIVE * 20)
   camera.position.set(0, 0, TILT_PERSPECTIVE)
@@ -390,6 +393,30 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   // frame (they move with every pan and zoom): the sides, lit, and the
   // tops, depth only, so a nearer slab hides what is behind it as a solid
   // would.
+  // ── Fitting a shadow map round its casters ──
+  const lightDir = new THREE.Vector3(0, 0, 1)
+  const invGround = new THREE.Matrix4()
+  const fitBox = new THREE.Box3(), tmpBox = new THREE.Box3(), slabBox = new THREE.Box3()
+  const fitC = new THREE.Vector3(), fitS = new THREE.Vector3()
+  let shadowsOn = false, modelCast = false
+  /** Aim `l` down lightDir at the middle of `box` (plane coordinates) with
+   *  a shadow camera just wide enough for it: its shadows fall inside that
+   *  prism, whatever the light's angle. False when nothing casts. */
+  function fitShadow(l: THREE.DirectionalLight, box: THREE.Box3): boolean {
+    if (box.isEmpty()) return false
+    box.getCenter(fitC)
+    const r = box.getSize(fitS).length() / 2 + 4
+    const D = r * 2 + 100
+    l.target.position.copy(fitC)
+    l.position.copy(fitC).addScaledVector(lightDir, D)
+    const c = l.shadow.camera
+    c.left = c.bottom = -r; c.right = c.top = r
+    c.near = Math.max(1, D - r - 10)
+    c.far = D + r + (fitC.z + r) / Math.max(0.05, lightDir.z)
+    c.updateProjectionMatrix()
+    return true
+  }
+
   const SLAB_MAX = 200, CORNER_SEG = 4
   const RING = 4 * (CORNER_SEG + 1)
   const SIDE_V = SLAB_MAX * (RING * 7 + 1), SIDE_I = SLAB_MAX * RING * 21
@@ -435,8 +462,16 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   const liftMesh = new THREE.Mesh(liftGeo, new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false, side: THREE.DoubleSide }))
   liftMesh.frustumCulled = false
   liftMesh.castShadow = true
+  // Lifted faces catch shadows too (a raised button's, on its card).
+  liftGeo.setAttribute('normal', topGeo.getAttribute('normal'))
+  const liftCatch = new THREE.Mesh(liftGeo, new THREE.ShadowMaterial({
+    opacity: 0.45, depthWrite: false, depthFunc: THREE.LessEqualDepth, side: THREE.DoubleSide, ...SKIP_ART,
+  }))
+  liftCatch.receiveShadow = true
+  liftCatch.renderOrder = 10
+  liftCatch.frustumCulled = false
   sideMesh.castShadow = true
-  groundDeco.add(topMesh, sideMesh, sheenMesh, liftMesh)
+  groundDeco.add(topMesh, sideMesh, sheenMesh, liftMesh, liftCatch)
 
   // ── Artwork mask: each picture's rect goes into the stencil first, and
   // the shadow catchers and the sheen skip it. ──
@@ -491,6 +526,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   function buildSlabs(slabs: TiltSlab[]) {
     const n = Math.min(slabs.length, SLAB_MAX)
     let sv = 0, si = 0, tv = 0, ti = 0, li = 0
+    slabBox.makeEmpty()
     const vert = (x: number, y: number, z: number, nx: number, ny: number, nz: number, shade: number) => {
       const o = sv * 3
       sidePos[o] = x; sidePos[o + 1] = y; sidePos[o + 2] = z
@@ -514,6 +550,11 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       col.setHex(s.color)
       outline(s.u, s.v, hw, hh, s.r, ox, oy, onx, ony)
       const rimH = s.rim ? s.rim.h : 0
+      // What stands up off the plane casts the slabs' shadows.
+      if (z > 0.5 || rimH > 0) {
+        slabBox.expandByPoint(fitC.set(s.u - hw, -s.v - hh, 0))
+        slabBox.expandByPoint(fitC.set(s.u + hw, -s.v + hh, z + rimH))
+      }
       // Outer wall: from the rim's top (or the face) down to the bottom.
       const up = sv; for (let i = 0; i < RING; i++) vert(ox[i], oy[i], z + rimH, onx[i], ony[i], 0, 1)
       const dn = sv; for (let i = 0; i < RING; i++) vert(ox[i], oy[i], z - s.t, onx[i], ony[i], 0, 0.7)
@@ -658,28 +699,31 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       const L = st.light
       const az = (L.azimuth * Math.PI / 180) + (L.spin && st.turn ? now / 1000 * 0.6 : 0)
       const el = Math.max(2, Math.min(90, L.elevation)) * Math.PI / 180
-      // Far off, so its shadow camera's box spans the whole view.
       const span = Math.max(W, H) * 1.6
-      for (const l of [key, decoKey]) {
-        l.position.set(Math.cos(el) * Math.sin(az) * span, -Math.cos(el) * Math.cos(az) * span, Math.sin(el) * span)
-        const c = l.shadow.camera
-        c.left = c.bottom = -span; c.right = c.top = span
-        c.near = 1; c.far = span * 2.5
-        c.updateProjectionMatrix()
+      lightDir.set(Math.cos(el) * Math.sin(az), -Math.cos(el) * Math.cos(az), Math.sin(el))
+      // The models' shadow map is fitted round the models alone, so every
+      // texel is small and the edges stay crisp.
+      ground.updateMatrixWorld(true)
+      invGround.copy(ground.matrixWorld).invert()
+      fitBox.makeEmpty()
+      for (const s of standing.values()) {
+        if (!s.stand.visible) continue
+        s.stand.updateWorldMatrix(false, true)
+        fitBox.union(tmpBox.setFromObject(s.stand).applyMatrix4(invGround))
       }
+      modelCast = fitShadow(key, fitBox)
       key.intensity = L.power
       decoKey.intensity = L.power * 0.5
       scene.environmentIntensity = st.flat ? 0.6 : L.env
       const shadows = L.shadows ?? DEFAULT_SHADOWS, sheen = L.sheen ?? DEFAULT_SHEEN
-      for (const m of [modelShadow, slabShadow]) {
-        m.scale.set(span * 2, span * 2, 1)
-        ;(m.material as THREE.ShadowMaterial).opacity = shadows
-      }
-      key.castShadow = decoKey.castShadow = shadows > 0.01 && !st.flat
+      for (const m of [modelShadow, slabShadow]) m.scale.set(span * 2, span * 2, 1)
+      for (const m of [modelShadow, slabShadow, liftCatch]) (m.material as THREE.ShadowMaterial).opacity = shadows
+      shadowsOn = shadows > 0.01 && !st.flat
+      key.castShadow = shadowsOn && modelCast
       const type = L.soft ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap
       if (renderer.shadowMap.type !== type) {
         renderer.shadowMap.type = type
-        for (const m of [modelShadow, slabShadow]) (m.material as THREE.Material).needsUpdate = true
+        for (const m of [modelShadow, slabShadow, liftCatch]) (m.material as THREE.Material).needsUpdate = true
       }
       // The sheen follows the light's strength, but never glares.
       SHEEN_MAT.opacity = Math.min(1, sheen * L.power / 3)
@@ -717,6 +761,9 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     }
     renderer.shadowMap.needsUpdate = true
     buildSlabs(st.tilt > 0.5 ? st.slabs : [])
+    // The slabs' shadow map, fitted round what stands up off the plane.
+    decoKey.castShadow = shadowsOn && fitShadow(decoKey, slabBox)
+    liftCatch.visible = decoKey.castShadow
     renderer.render(deco, camera)
     if (into) { renderer.setRenderTarget(null); return }
 
