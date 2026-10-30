@@ -25,6 +25,7 @@ import { useCanvasStore, groupBounds, MIN_ZOOM, MAX_ZOOM } from '../../store/can
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useViewport3DStore } from '../../store/viewport3dStore'
 import { useBoardsStore } from '../../store/boardsStore'
+import { useRailUiStore } from '../../store/railUiStore'
 import { getMediaItems } from '../../types/bar'
 import { faceBlocks } from '../../utils/cardGrid'
 import { createTiltScene, type TiltTarget, type TiltFrameState, type TiltSlab, type TiltArt } from '../../three/tiltScene'
@@ -513,6 +514,7 @@ function collectSlabs(K = 1): TiltSlab[] {
   }
   // World layer: tiles and Viewers, in world units under the pan/zoom.
   const { pan, zoom } = useCanvasStore.getState()
+  const lean = consoleLean(host, zoom)
   for (const world of host.querySelectorAll<HTMLElement>(':scope > div[style*="scale("]')) {
     for (const node of world.querySelectorAll<HTMLElement>('[data-viewport3d]:not([data-pinned]), [data-freenode][data-id]:not([data-pinned])')) {
       // A loop strip paints its face on its own body, which can sit off the
@@ -526,6 +528,7 @@ function collectSlabs(K = 1): TiltSlab[] {
       const slab = add(pan.x + at.x * zoom, pan.y + at.y * zoom, w, h,
         m * (viewer ? THICK.viewer : THICK.tile), viewer ? SIDE.viewer : SIDE.tile, radiusOf(el) * zoom)
       if (!slab) continue
+      let hinge: Hinge | undefined
       const fs = useFreeNodeStore.getState()
       if (node.hasAttribute('data-rail')) {
         // A loop strip is a tray: a rim round its edge, its floor the face.
@@ -573,6 +576,15 @@ function collectSlabs(K = 1): TiltSlab[] {
           slab.z = dockLift(m, n?.railDock?.order ?? 0) * k
           slab.t = slab.z    // stacked on the floor, so its sides reach it
           lifting.set(node, slab.z)
+          // Console: an effect card leans back on its bottom edge, a plate
+          // a card thick (Brian 2026-10-30).
+          const a = lean.get(node.dataset.id!)
+          if (a) {
+            hinge = { v: slab.v + slab.h / 2, z: slab.z, a }
+            slab.t = Math.min(slab.z, m * THICK.tile)
+            slab.hinge = hinge
+            stand(node, hinge, zoom)
+          }
         }
         // A card (or deck) on a strip is drawn by the card layer over an
         // invisible stand-in tile: the card takes the stand-in's place in
@@ -591,7 +603,7 @@ function collectSlabs(K = 1): TiltSlab[] {
         if (!a) return
         if (over.some(r => a.x < r.x + r.width && r.x < a.x + el.offsetWidth && a.y < r.y + r.height && r.y < a.y + el.offsetHeight)) return false
         const p = add(pan.x + a.x * zoom, pan.y + a.y * zoom, el.offsetWidth * zoom, el.offsetHeight * zoom, t, SIDE.pop, radiusOf(el) * zoom)
-        if (p) { p.z = z; p.pop = true }
+        if (p) { p.z = z; p.pop = true; if (hinge) p.hinge = hinge }
         return p
       })
     }
@@ -599,16 +611,11 @@ function collectSlabs(K = 1): TiltSlab[] {
   // A card (or deck) on a strip has an invisible stand-in tile that is never
   // drawn, so its lift is worked out from the store: it stands on the
   // strip's floor, clear of it, like a docked tile.
-  // In console mode the card on top of each column stands up on its bottom
-  // edge, like a panel on a machine.
-  const stands = new Set<string>()
-  const consoleOn = useTiltStore.getState().console
   for (const n of Object.values(useFreeNodeStore.getState().nodes)) {
     if (!n.cardRef || !n.railDock || n.railDock.lifted) continue
     const strip = host.querySelector<HTMLElement>(`[data-freenode][data-id="${n.railDock.railId}"] [data-rail-body]`)
     const k = strip ? detail(strip.offsetWidth * zoom) : 0
     if (k > 0) docked.set(n.cardRef, dockLift(Math.min(n.width, n.height) * zoom, n.railDock.order ?? 0) * k)
-    if (k > 0 && consoleOn && !coversOf(n.id).length) stands.add(n.cardRef)
   }
   // Card layer: cards and closed decks, already in screen px.
   const stage = document.querySelector<HTMLElement>('[data-tilt-stage="overlay"]')
@@ -628,7 +635,6 @@ function collectSlabs(K = 1): TiltSlab[] {
       const lift = docked.get(id) ?? (g?.deckAnchorId ? docked.get(g.deckAnchorId) : undefined)
       const k = detail(w)
       let card: TiltSlab | undefined
-      let hinge: Hinge | undefined
       if (k <= 0 && lift === undefined) {
         card = add(at.x, at.y, w, h, m * THICK.card, SIDE.card, r)
       } else {
@@ -658,14 +664,9 @@ function collectSlabs(K = 1): TiltSlab[] {
           // face, so the flat deck's edge lines stay till then.
           const slices = n > 1 && per * K >= 1 && below * K >= L * 0.75
           if (slices) hideEdges(el, spread - reserve)
-          if (lift !== undefined && (stands.has(id) || (g?.deckAnchorId !== undefined && stands.has(g.deckAnchorId)))) {
-            hinge = { v: at.y + h - H / 2, z: card.z, a: CONSOLE_DEG * K * Math.PI / 180 }
-            stand(el, hinge)
-            card.hinge = hinge
-          }
           for (let j = 1; slices && j <= L; j++) {
             const s = add(at.x, at.y, w - reserve + spread * j / L, h, below / L, j % 2 ? SIDE.edge : SIDE.card, r)
-            if (s) { s.z = base + below * (1 - (j - 1) / L); s.cap = true; if (hinge) s.hinge = hinge }
+            if (s) { s.z = base + below * (1 - (j - 1) / L); s.cap = true }
           }
         }
       }
@@ -673,7 +674,7 @@ function collectSlabs(K = 1): TiltSlab[] {
         const a = offsetIn(part, stage)
         if (!a) return
         const p = add(a.x, a.y, part.offsetWidth, part.offsetHeight, t, SIDE.pop, radiusOf(part))
-        if (p) { p.z = z; p.pop = true; if (hinge) p.hinge = hinge }
+        if (p) { p.z = z; p.pop = true }
         return p
       })
     }
@@ -958,21 +959,87 @@ function detail(screenW: number): number {
   return x * x * (3 - 2 * x) * y * y * (3 - 2 * y)
 }
 
-/** Console mode: how far a standing card turns up off the tray, degrees. */
-const CONSOLE_DEG = 62
+/** Console mode: which docked effect tiles lean back, and by how much
+ *  (radians), by tile id. Each strip eases between standing and flat:
+ *  flat while something is dragged off it or onto it (Brian's rule: 3D
+ *  works exactly as 2D, so a drop is judged on the flat strip). */
+const consoleEase = new Map<string, number>()
+let consoleAt = 0
+function consoleLean(host: HTMLElement, zoom: number): Map<string, number> {
+  const out = new Map<string, number>()
+  const { console: on, tilt } = useTiltStore.getState()
+  const now = performance.now()
+  const dt = Math.min(100, Math.max(0, now - consoleAt))
+  consoleAt = now
+  const x = Math.max(0, Math.min(1, (tilt - CONSOLE.from) / (FADE_TILT - CONSOLE.from)))
+  const grown = x * x * (3 - 2 * x)
+  const nodes = useFreeNodeStore.getState().nodes
+  const drop = useRailUiStore.getState().drop
+  const seen = new Set<string>()
+  for (const n of Object.values(nodes)) {
+    const r = n.rail
+    if (!r || n.pin) continue
+    seen.add(n.id)
+    const held = drop?.target.railId === n.id ||
+      Object.values(nodes).some(o => o.railDock?.railId === n.id && o.railDock.lifted)
+    const goal = on && !held ? 1 : 0
+    const was = consoleEase.get(n.id) ?? goal
+    const e = goal > was ? Math.min(goal, was + dt / CONSOLE.easeMs) : Math.max(goal, was - dt / CONSOLE.easeMs)
+    consoleEase.set(n.id, e)
+    if (e <= 0 || grown <= 0) continue
+    const body = host.querySelector<HTMLElement>(`[data-freenode][data-id="${n.id}"] [data-rail-body]`)
+    const k = body ? detail(body.offsetWidth * zoom) : 0
+    const s = grown * k * e * e * (3 - 2 * e)
+    if (s <= 0) continue
+    const cards = new Set([...r.slots, ...(r.rows ?? []).flat()].filter(sl => sl.kind === 'card').map(sl => sl.id))
+    for (const t of Object.values(nodes)) {
+      const d = t.railDock
+      if (t.type !== 'effect' || !d || d.railId !== n.id || d.lifted || (d.order ?? 0) !== 0 || !cards.has(d.slotId)) continue
+      out.set(t.id, CONSOLE.slot * s * Math.PI / 180)
+    }
+  }
+  for (const id of consoleEase.keys()) if (!seen.has(id)) consoleEase.delete(id)
+  return out
+}
+
+/** Console mode (Brian 2026-10-30: the strip as the mockup's machine): the
+ *  strip's effect cards lean back off its floor on their bottom edges, as
+ *  on a sloped panel; its cast and results stay down in their columns.
+ *  Degrees up from the floor. They rise from `from` degrees of tilt, full
+ *  by FADE_TILT, and a strip eases down flat over `easeMs` while something
+ *  is dragged onto it, so every drop lands by the flat view's rules. */
+const CONSOLE = { slot: 45, from: 4, easeMs: 220 }
 /** A card stood up on its bottom edge: the edge at flat `v` (px from the
  *  centre, y down) and height `z`, turned up by `a` radians. */
 type Hinge = { v: number; z: number; a: number }
-let stood = new Map<HTMLElement, { hinge: Hinge; rotate: string; origin: string }>()
-let standing = new Map<HTMLElement, { hinge: Hinge; rotate: string; origin: string }>()
-function stand(el: HTMLElement, hinge: Hinge) {
-  const was = stood.get(el) ?? { hinge, rotate: el.style.rotate, origin: el.style.transformOrigin }
-  standing.set(el, { ...was, hinge })
-  el.style.rotate = `x ${(-hinge.a * 180 / Math.PI).toFixed(2)}deg`
+type Stood = { hinge: Hinge; rotate: string; origin: string; transform: string; wrote: string }
+let stood = new Map<HTMLElement, Stood>()
+let standing = new Map<HTMLElement, Stood>()
+/** Stand `el` up on `hinge`. A world element sits under the world's
+ *  scale(zoom), which scales across but not up: turned there plainly it
+ *  would stretch, so it is scaled to screen size, turned, and scaled back
+ *  (rigid on screen). */
+function stand(el: HTMLElement, hinge: Hinge, zoom = 1) {
+  const was = stood.get(el) ?? { hinge, rotate: el.style.rotate, origin: el.style.transformOrigin, transform: el.style.transform, wrote: '' }
+  const deg = (-hinge.a * 180 / Math.PI).toFixed(2)
+  if (zoom === 1) {
+    el.style.rotate = `x ${deg}deg`
+  } else {
+    const t = `scale3d(${1 / zoom}, ${1 / zoom}, 1) rotateX(${deg}deg) scale3d(${zoom}, ${zoom}, 1)`
+    if (el.style.transform !== t) el.style.transform = t
+    was.wrote = el.style.transform
+  }
   el.style.transformOrigin = '50% 100%'
+  standing.set(el, { ...was, hinge })
 }
 function settleStands() {
-  for (const [el, was] of stood) if (!standing.has(el)) { el.style.rotate = was.rotate; el.style.transformOrigin = was.origin }
+  for (const [el, was] of stood) {
+    if (standing.has(el)) continue
+    el.style.rotate = was.rotate
+    el.style.transformOrigin = was.origin
+    // Only what was written here goes back: React may have set it since.
+    if (was.wrote && el.style.transform === was.wrote) el.style.transform = was.transform
+  }
   stood = standing
   standing = new Map()
 }
@@ -1184,7 +1251,23 @@ const TiltedView: React.FC = () => {
       // (a card let go: what it drops into) gets the flat view's answer: see
       // flatHit.
       hitAt = true
-      try { send(e, type, to, p) } finally { hitAt = false }
+      try { send(e, type, to, p) } finally { hitAt = false; standBack() }
+    }
+    /** What a press hits, as the flat view has it. The browser's own hit
+     *  test on a tilted or leaning card can pick a layer under the one in
+     *  front at steep angles (the card's face under a slider row: the
+     *  slider never saw the press). The flat view at the same point, kept
+     *  to the tile, card or Viewer pressed, is what 2D would hit. */
+    const flatTarget = (e: MouseEvent, target: Element, height: number): Element => {
+      const unit = target.closest('[data-freenode][data-id], [data-group-card], [data-viewport3d]')
+      if (!unit) return target
+      const p = flatClient(e.clientX, e.clientY, height, hingeOf(target))
+      if (!p) return target
+      hitAt = true
+      try {
+        for (const el of document.elementsFromPoint(p.x, p.y)) if (unit.contains(el)) return el
+      } finally { hitAt = false; standBack() }
+      return target
     }
     /** Let go of a re-sent press whose own release never came: as a
      *  release, left button, so every drag handler takes it as one. At the
@@ -1233,24 +1316,42 @@ const TiltedView: React.FC = () => {
     // in front of it (a deck's tall stack, a card on a Viewer), and a card
     // let go there was merged into that one: only ever in 3D (Brian
     // 2026-10-30, cards found "inside another random card").
+    // Boxes measured then (a slider's track under a re-sent flat point, a
+    // drop slot) are the flat view's too: measured tilted, a slider on a
+    // tilted card jumped to the wrong value. Laid flat at the first ask and
+    // stood back up once the event is done, so many asks cost one.
     let hitAt = false
-    const flatHit = <T,>(ask: () => T): T => {
-      if (!hitAt) return ask()
-      const undo: (() => void)[] = []
+    let flatUndo: (() => void)[] | null = null
+    const layFlat = () => {
+      if (flatUndo) return
+      const undo: (() => void)[] = flatUndo = []
       const put = (el: HTMLElement, prop: 'transform' | 'rotate' | 'overflow', v: string) => {
         const was = el.style[prop]
         if (was === v) return
         el.style[prop] = v
-        undo.push(() => { el.style[prop] = was })
+        // Put back only if nothing has written it since (the camera moving
+        // the stage within the event).
+        undo.push(() => { if (el.style[prop] === v) el.style[prop] = was })
       }
       for (const st of document.querySelectorAll<HTMLElement>('[data-tilt-stage]')) put(st, 'transform', 'none')
-      for (const [el, was] of stood) put(el, 'rotate', was.rotate)
+      for (const [el, was] of stood) { put(el, 'rotate', was.rotate); if (was.wrote) put(el, 'transform', was.transform) }
       for (const [el, was] of chained) put(el, 'overflow', was.ov)
-      try { return ask() } finally { for (let i = undo.length - 1; i >= 0; i--) undo[i]() }
+    }
+    const standBack = () => {
+      const undo = flatUndo
+      flatUndo = null
+      if (undo) for (let i = undo.length - 1; i >= 0; i--) undo[i]()
+    }
+    const flatHit = <T,>(ask: () => T): T => {
+      if (hitAt) layFlat()
+      return ask()
     }
     const fromPoint = document.elementFromPoint, fromPoints = document.elementsFromPoint
+    const rectOf = Element.prototype.getBoundingClientRect, rectsOf = Element.prototype.getClientRects
     document.elementFromPoint = function (x: number, y: number) { return flatHit(() => fromPoint.call(this, x, y)) }
     document.elementsFromPoint = function (x: number, y: number) { return flatHit(() => fromPoints.call(this, x, y)) }
+    Element.prototype.getBoundingClientRect = function () { return flatHit(() => rectOf.call(this)) }
+    Element.prototype.getClientRects = function () { return flatHit(() => rectsOf.call(this)) }
 
     type Gesture =
       | { kind: 'pan'; last: { x: number; y: number } }
@@ -1312,8 +1413,8 @@ const TiltedView: React.FC = () => {
       // preventDefault also stops the browser's own mousedown/move/up for
       // this press — they are re-sent below at the flat point instead.
       e.preventDefault(); swallow(e)
-      const target = e.target as Element
-      const height = liftOf(target)
+      const height = liftOf(e.target as Element)
+      const target = flatTarget(e, e.target as Element, height)
       g = { kind: 'remap', target, pointerId: e.pointerId, height }
       resend(e, 'pointerdown', target, height)
       resend(e, 'mousedown', target, height)
@@ -1424,6 +1525,8 @@ const TiltedView: React.FC = () => {
       models.at = null; models.hovered = null
       document.elementFromPoint = fromPoint
       document.elementsFromPoint = fromPoints
+      Element.prototype.getBoundingClientRect = rectOf
+      Element.prototype.getClientRects = rectsOf
     }
   }, [])
 
