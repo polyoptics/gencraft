@@ -1161,13 +1161,11 @@ const TiltedView: React.FC = () => {
       if (p) lastFlat = p
       else if (lastFlat && /up$|cancel$/.test(type)) p = lastFlat
       if (!p) return
-      // While the re-sent event runs, a handler asking what is under its
-      // (flat) point is asking what is under the cursor: the browser hit-tests
-      // the tilted DOM, so it is answered at the real point. Asked at the flat
-      // point, a card let go over nothing found whatever card is drawn THERE
-      // and was merged into it (Brian 2026-10-30: cards "deleted" by a drag).
-      hitAt = { fx: p.x, fy: p.y, rx: e.clientX, ry: e.clientY }
-      try { send(e, type, to, p) } finally { hitAt = null }
+      // While the re-sent event runs, a handler asking what is under a point
+      // (a card let go: what it drops into) gets the flat view's answer: see
+      // flatHit.
+      hitAt = true
+      try { send(e, type, to, p) } finally { hitAt = false }
     }
     // The card pressed can be re-rendered away mid-drag (a deck leaving a
     // Viewer's side swaps how it is drawn). Events sent to the old,
@@ -1196,12 +1194,32 @@ const TiltedView: React.FC = () => {
       }
     }
 
-    // Hit tests during a re-sent event: see resend.
-    let hitAt: { fx: number; fy: number; rx: number; ry: number } | null = null
-    const real = (x: number, y: number) => hitAt && Math.abs(x - hitAt.fx) < 0.5 && Math.abs(y - hitAt.fy) < 0.5 ? [hitAt.rx, hitAt.ry] : [x, y]
+    // Hit tests during a re-sent event. Its handlers work in flat points, so
+    // they are answered from the flat view: the stages are laid flat (and
+    // anything stood up or unclipped for 3D put back) for the moment of the
+    // ask; no frame is drawn in between. Answered from the tilted view, the
+    // cursor's ray reached on past the card in hand into whatever stands up
+    // in front of it (a deck's tall stack, a card on a Viewer), and a card
+    // let go there was merged into that one: only ever in 3D (Brian
+    // 2026-10-30, cards found "inside another random card").
+    let hitAt = false
+    const flatHit = <T,>(ask: () => T): T => {
+      if (!hitAt) return ask()
+      const undo: (() => void)[] = []
+      const put = (el: HTMLElement, prop: 'transform' | 'rotate' | 'overflow', v: string) => {
+        const was = el.style[prop]
+        if (was === v) return
+        el.style[prop] = v
+        undo.push(() => { el.style[prop] = was })
+      }
+      for (const st of document.querySelectorAll<HTMLElement>('[data-tilt-stage]')) put(st, 'transform', 'none')
+      for (const [el, was] of stood) put(el, 'rotate', was.rotate)
+      for (const [el, was] of chained) put(el, 'overflow', was.ov)
+      try { return ask() } finally { for (let i = undo.length - 1; i >= 0; i--) undo[i]() }
+    }
     const fromPoint = document.elementFromPoint, fromPoints = document.elementsFromPoint
-    document.elementFromPoint = function (x: number, y: number) { const [a, b] = real(x, y); return fromPoint.call(this, a, b) }
-    document.elementsFromPoint = function (x: number, y: number) { const [a, b] = real(x, y); return fromPoints.call(this, a, b) }
+    document.elementFromPoint = function (x: number, y: number) { return flatHit(() => fromPoint.call(this, x, y)) }
+    document.elementsFromPoint = function (x: number, y: number) { return flatHit(() => fromPoints.call(this, x, y)) }
 
     type Gesture =
       | { kind: 'pan'; last: { x: number; y: number } }
