@@ -49,6 +49,10 @@ interface TiltStore {
   tilt: number
   /** Degrees the plane is turned about its normal. */
   spin: number
+  /** The camera moved in its own view plane (Maya's pan, Alt+middle), in
+   *  screen px: the whole tilted view slides, nothing on it moves. */
+  shiftX: number
+  shiftY: number
   /** The model's own materials and textures; off = plain clay. */
   texture: boolean
   /** Even, low-contrast light with smooth normals instead of the lit look. */
@@ -62,6 +66,7 @@ interface TiltStore {
   /** A person beside each model, for scale. */
   figure: boolean
   setView: (tilt: number, spin: number) => void
+  setShift: (x: number, y: number) => void
   setTexture: (on: boolean) => void
   setFlat: (on: boolean) => void
   setWire: (w: TiltWire) => void
@@ -78,6 +83,8 @@ let flattenRaf: number | null = null
 export const useTiltStore = create<TiltStore>()((set, get) => ({
   tilt: 0,
   spin: 0,
+  shiftX: 0,
+  shiftY: 0,
   texture: true,
   flat: false,
   wire: 'off',
@@ -89,6 +96,7 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
     if (flattenRaf !== null) { cancelAnimationFrame(flattenRaf); flattenRaf = null }
     set({ tilt: Math.max(0, Math.min(TILT_MAX, tilt)), spin })
   },
+  setShift: (shiftX, shiftY) => set({ shiftX, shiftY }),
   setTexture: texture => set({ texture }),
   setFlat: flat => set({ flat }),
   setWire: wire => set({ wire }),
@@ -98,16 +106,16 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
   setFigure: figure => set({ figure }),
   flatten: () => {
     if (flattenRaf !== null) cancelAnimationFrame(flattenRaf)
-    const { tilt: t0, spin: s0raw } = get()
+    const { tilt: t0, spin: s0raw, shiftX: x0, shiftY: y0 } = get()
     // Unwind the spin the short way round.
     const s0 = ((s0raw % 360) + 540) % 360 - 180
     const start = performance.now()
     const tick = () => {
       const t = Math.min(1, (performance.now() - start) / 320)
       const k = 1 - Math.pow(1 - t, 3)
-      set({ tilt: t0 * (1 - k), spin: s0 * (1 - k) })
+      set({ tilt: t0 * (1 - k), spin: s0 * (1 - k), shiftX: x0 * (1 - k), shiftY: y0 * (1 - k) })
       if (t < 1) flattenRaf = requestAnimationFrame(tick)
-      else { flattenRaf = null; set({ tilt: 0, spin: 0 }) }
+      else { flattenRaf = null; set({ tilt: 0, spin: 0, shiftX: 0, shiftY: 0 }) }
     }
     flattenRaf = requestAnimationFrame(tick)
   },
@@ -119,24 +127,28 @@ export const isTilted = (tilt: number) => tilt > 0.01
  *  whose transform-origin is its centre. 'none' when flat, so the flat view
  *  is byte-for-byte what it was before tilt existed (no containing block
  *  for fixed children, no stacking context). */
-export function tiltCss(tilt: number, spin: number): string {
-  if (!isTilted(tilt) && Math.abs(spin) < 0.01) return 'none'
-  return `perspective(${TILT_PERSPECTIVE}px) rotateX(${tilt}deg) rotateZ(${spin}deg)`
+export function tiltCss(tilt: number, spin: number, shiftX = 0, shiftY = 0): string {
+  if (!isTilted(tilt) && Math.abs(spin) < 0.01 && Math.abs(shiftX) + Math.abs(shiftY) < 0.01) return 'none'
+  // The shift comes before the perspective: it moves the camera sideways,
+  // so near and far slide alike on screen, as in Maya.
+  return `perspective(${TILT_PERSPECTIVE}px) translate(${shiftX}px, ${shiftY}px) rotateX(${tilt}deg) rotateZ(${spin}deg)`
 }
 
 /** Where a point on SCREEN (px from the host centre) lands on the tilted
  *  plane, in FLAT px from the centre — i.e. the flat-view point now drawn
  *  under it. Null above the horizon. */
-export function unprojectTilt(sx: number, sy: number, tiltDeg: number, spinDeg: number): { x: number; y: number } | null {
+export function unprojectTilt(sx: number, sy: number, tiltDeg: number, spinDeg: number, shiftX = 0, shiftY = 0): { x: number; y: number } | null {
   const P = TILT_PERSPECTIVE
   const t = tiltDeg * Math.PI / 180, s = spinDeg * Math.PI / 180
   const ct = Math.cos(t), st = Math.sin(t)
-  // Ray from the eye (0,0,P) through (sx,sy,0) meets the plane n·p = 0,
+  // Undo the shift by moving the eye instead: the ray from (-shift, P)
+  // through (screen - shift, 0) meets the plane n·p = 0,
   // n = Rx(t)·(0,0,1) = (0,-sin t, cos t).
   const denom = sy * st + P * ct
   if (denom <= 1e-3) return null
-  const lam = (P * ct) / denom
-  const qx = lam * sx, qy = lam * sy, qz = P - lam * P
+  const lam = (shiftY * st + P * ct) / denom
+  if (lam <= 0) return null
+  const qx = -shiftX + lam * sx, qy = -shiftY + lam * sy, qz = P - lam * P
   // Back into plane coordinates: Rz(-s)·Rx(-t)·q.
   const y1 = qy * ct + qz * st
   const cs = Math.cos(s), ss = Math.sin(s)
@@ -148,8 +160,8 @@ export function unprojectTilt(sx: number, sy: number, tiltDeg: number, spinDeg: 
  *  through React would re-render the whole canvas each time. */
 export function bindTiltStage(el: HTMLElement): () => void {
   let last = ''
-  const apply = (s: { tilt: number; spin: number }) => {
-    const t = tiltCss(s.tilt, s.spin)
+  const apply = (s: { tilt: number; spin: number; shiftX: number; shiftY: number }) => {
+    const t = tiltCss(s.tilt, s.spin, s.shiftX, s.shiftY)
     if (t === last) return
     last = t
     el.style.transform = t

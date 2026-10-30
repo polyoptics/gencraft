@@ -46,6 +46,9 @@ export interface TiltSlab {
 
 export interface TiltFrameState {
   tilt: number
+  /** The camera's sideways move (screen px), tiltStore's shiftX/Y. */
+  shiftX: number
+  shiftY: number
   spin: number
   texture: boolean
   flat: boolean
@@ -425,7 +428,9 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     // The plane: CSS rotateX(t) rotateZ(s), carried from CSS's y-down
     // space into three's y-up space (F·R·F, F = flip y).
     R.makeRotationX(st.tilt * Math.PI / 180).multiply(Rz.makeRotationZ(st.spin * Math.PI / 180))
-    ground.matrix.copy(F).multiply(R).multiply(F)
+    // CSS translate(shift) before the rotations is a move in three's view
+    // plane too (y flipped).
+    ground.matrix.makeTranslation(st.shiftX, -st.shiftY, 0).multiply(F).multiply(R).multiply(F)
     ground.matrixWorldNeedsUpdate = true
     groundDeco.matrix.copy(ground.matrix)
     groundDeco.matrixWorldNeedsUpdate = true
@@ -575,7 +580,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
    *  nothing left to do. Draws nothing on screen. */
   const warmRT = new THREE.WebGLRenderTarget(4, 4)
   function warm(W: number, H: number, targets: TiltTarget[], st: TiltFrameState) {
-    frame(performance.now(), W, H, targets, { ...st, tilt: 30 }, warmRT)
+    frame(performance.now(), W, H, targets, { ...st, tilt: 30, shiftX: 0, shiftY: 0 }, warmRT)
   }
 
   /** The url and model units per metre of a model on screen. */

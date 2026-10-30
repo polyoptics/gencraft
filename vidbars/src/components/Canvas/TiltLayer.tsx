@@ -153,15 +153,12 @@ function useAltTiltGesture() {
   }, [])
 }
 
-/** Alt+right-drag: zoom about the point pressed, flat or tilted (Maya's
- *  dolly) — right or up zooms in, left or down zooms out. */
+/** Alt+right-drag: zoom straight toward the middle of the view, flat or
+ *  tilted (Maya's dolly) — right or up zooms in, left or down zooms out. */
 function dolly(e: PointerEvent, host: HTMLElement) {
-  const r = host.getBoundingClientRect()
-  const { tilt, spin } = useTiltStore.getState()
-  const sx = e.clientX - r.left, sy = e.clientY - r.top
-  const flat = isTilted(tilt) ? unprojectTilt(sx - r.width / 2, sy - r.height / 2, tilt, spin) : { x: sx - r.width / 2, y: sy - r.height / 2 }
-  if (!flat) return
-  const px = flat.x + r.width / 2, py = flat.y + r.height / 2
+  const c = viewCentre(host)
+  if (!c) return
+  const px = c.x, py = c.y
   let last = { x: e.clientX, y: e.clientY }
   const onMove = (ev: PointerEvent) => {
     const d = (ev.clientX - last.x) - (ev.clientY - last.y)
@@ -174,6 +171,17 @@ function dolly(e: PointerEvent, host: HTMLElement) {
   }
   window.addEventListener('pointermove', onMove, true)
   window.addEventListener('pointerup', onUp, true)
+}
+
+/** Where the camera is looking: the flat-view point (px in the host) at the
+ *  middle of the screen. Zooming goes straight in and out along that line
+ *  (Brian 2026-10-30), not toward the cursor. */
+function viewCentre(host: HTMLElement): { x: number; y: number } | null {
+  const W = host.clientWidth, H = host.clientHeight
+  const { tilt, spin, shiftX, shiftY } = useTiltStore.getState()
+  if (!isTilted(tilt)) return { x: W / 2, y: H / 2 }
+  const p = unprojectTilt(0, 0, tilt, spin, shiftX, shiftY)
+  return p && { x: p.x + W / 2, y: p.y + H / 2 }
 }
 
 type Rect = { x: number; y: number; w: number; h: number }
@@ -221,6 +229,8 @@ function useFrameKey() {
       const cTo = { x: (x0 + x1) / 2, y: (y0 + y1) / 2 }
       const { pan, zoom: zFrom } = useCanvasStore.getState()
       const cFrom = { x: (W / 2 - pan.x) / zFrom, y: (H / 2 - pan.y) / zFrom }
+      // The camera comes back square on the framed thing too.
+      const { shiftX: sx0, shiftY: sy0 } = useTiltStore.getState()
       // Glide: the centre moves straight, the zoom evenly in notches.
       if (raf !== null) cancelAnimationFrame(raf)
       const start = performance.now()
@@ -230,6 +240,7 @@ function useFrameKey() {
         const z = Math.exp(Math.log(zFrom) + (Math.log(zTo) - Math.log(zFrom)) * k)
         const cx = cFrom.x + (cTo.x - cFrom.x) * k, cy = cFrom.y + (cTo.y - cFrom.y) * k
         useCanvasStore.setState({ zoom: z, pan: { x: W / 2 - cx * z, y: H / 2 - cy * z } })
+        if (sx0 || sy0) useTiltStore.getState().setShift(sx0 * (1 - k), sy0 * (1 - k))
         raf = u < 1 ? requestAnimationFrame(tick) : null
       }
       raf = requestAnimationFrame(tick)
@@ -264,7 +275,7 @@ const frameState = (): TiltFrameState => {
   const ts = useTiltStore.getState()
   const { unitsPerMetre: scales, sizeOf } = useModelScaleStore.getState()
   return {
-    tilt: ts.tilt, spin: ts.spin, texture: ts.texture, flat: ts.flat, wire: ts.wire, light: ts.light, turn: ts.turn,
+    tilt: ts.tilt, spin: ts.spin, shiftX: ts.shiftX, shiftY: ts.shiftY, texture: ts.texture, flat: ts.flat, wire: ts.wire, light: ts.light, turn: ts.turn,
     walls: ts.walls, figure: ts.figure, hovered: models.hovered,
     selected: new Set([
       ...useFreeNodeStore.getState().selectedIds.map(id => `node:${id}`),
@@ -550,16 +561,16 @@ const TiltedView: React.FC = () => {
   // and release that follow are re-sent to it at the FLAT point under the
   // cursor (the real ones are swallowed): dragging, resizing and
   // repositioning work on the ground exactly as they do flat.
-  // Bare ground: left or middle drag pans, grabbing the ground under the
-  // cursor. The wheel zooms about the point under it. Right-click is left
-  // alone, so menus open where the cursor is.
+  // Middle drag moves the camera in its own view plane (Maya's pan). The
+  // wheel zooms straight in toward the middle of the view. Right-click is
+  // left alone, so menus open where the cursor is.
   useEffect(() => {
     const root = rootRef.current!
     const host = hostOf(root)!
     const flatClient = (cx: number, cy: number) => {
       const r = host.getBoundingClientRect()
-      const { tilt: t, spin: s } = useTiltStore.getState()
-      const p = unprojectTilt(cx - r.left - r.width / 2, cy - r.top - r.height / 2, t, s)
+      const { tilt: t, spin: s, shiftX, shiftY } = useTiltStore.getState()
+      const p = unprojectTilt(cx - r.left - r.width / 2, cy - r.top - r.height / 2, t, s, shiftX, shiftY)
       return p && { x: p.x + r.width / 2 + r.left, y: p.y + r.height / 2 + r.top }
     }
     /** Pressed on the tilted canvas (not a pinned panel, the HUD, the zoom bar). */
@@ -679,9 +690,11 @@ const TiltedView: React.FC = () => {
         return
       }
       if (g.kind === 'pan') {
-        const a = flatClient(g.last.x, g.last.y), b = flatClient(e.clientX, e.clientY)
+        // Maya's pan: the camera slides in its own view plane, so the whole
+        // view follows the mouse evenly, near and far alike.
+        const ts = useTiltStore.getState()
+        ts.setShift(ts.shiftX + e.clientX - g.last.x, ts.shiftY + e.clientY - g.last.y)
         g.last = { x: e.clientX, y: e.clientY }
-        if (a && b) useCanvasStore.getState().shiftPan(b.x - a.x, b.y - a.y)
         return
       }
       // A card that captured the pointer gets it, as it would flat.
@@ -705,10 +718,8 @@ const TiltedView: React.FC = () => {
     const onWheel = (e: WheelEvent) => {
       if (!onPlane(e.target)) return
       e.preventDefault(); swallow(e)
-      const p = flatClient(e.clientX, e.clientY)
-      if (!p) return
-      const r = host.getBoundingClientRect()
-      useCanvasStore.getState().zoomAtPoint(e.deltaY < 0 ? 1.12 : 1 / 1.12, p.x - r.left, p.y - r.top)
+      const c = viewCentre(host)
+      if (c) useCanvasStore.getState().zoomAtPoint(e.deltaY < 0 ? 1.12 : 1 / 1.12, c.x, c.y)
     }
     window.addEventListener('pointerdown', onDown, true)
     window.addEventListener('pointermove', onMove, true)
