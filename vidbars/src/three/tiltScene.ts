@@ -35,10 +35,17 @@ export interface TiltFrameState {
   figure: boolean
   selected: Set<string>
   hovered: string | null
+  /** The model units per metre the user set for a url, if any. */
+  unitsFor: (url: string) => number | undefined
 }
 
 /** A person, in metres, for scale. */
-const PERSON_H = 1.75
+export const PERSON_H = 1.75
+
+/** What a model measures, per url — a skinned model's posed bounds walk
+ *  every vertex, which is far too slow to redo each time a card comes
+ *  back into view. */
+const measured = new Map<string, { size: THREE.Vector3; centre: THREE.Vector3; minY: number; triangles: number }>()
 
 interface Standing {
   url: string
@@ -46,8 +53,10 @@ interface Standing {
   turn: THREE.Group        // turntable about that normal
   inst: THREE.Object3D | null
   size: THREE.Vector3
-  /** Model units per metre: 1 for glTF, 100 when it reads as centimetres. */
+  /** Model units per metre: set by the user, or guessed — 1 for glTF,
+   *  100 when it reads as centimetres. */
   unit: number
+  unitSet: boolean
   triangles: number
   figure: THREE.Group
   wall: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>
@@ -186,28 +195,27 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     wall.visible = false
     groundDeco.add(wall)
     const s: Standing = {
-      url, stand, turn, inst: null, size: new THREE.Vector3(), unit: 1, triangles: 0,
+      url, stand, turn, inst: null, size: new THREE.Vector3(), unit: 1, unitSet: false, triangles: 0,
       figure, wall, wallText: '', phase: Math.random() * 6.28, dead: false, seen: frameNo,
     }
     acquireModel(url).then(inst => {
       if (s.dead) { releaseModel(url); disposeInstance(inst); return }
-      const box = computePosedBounds(inst)
-      const c = box.getCenter(new THREE.Vector3())
-      box.getSize(s.size)
-      // glTF is in metres; something over 30 units tall is far likelier a
-      // centimetre file (FBX's habit) than a 30 m model.
-      s.unit = s.size.y > 30 ? 100 : 1
-      inst.traverse(o => {
-        const m = o as THREE.Mesh
-        const pos = m.isMesh ? m.geometry?.attributes?.position : null
-        if (pos) s.triangles += m.geometry.index ? m.geometry.index.count / 3 : pos.count / 3
-      })
-      inst.position.set(-c.x, -box.min.y, -c.z)   // feet on the card, centred on it
+      let m = measured.get(url)
+      if (!m) {
+        const box = computePosedBounds(inst)
+        let triangles = 0
+        inst.traverse(o => {
+          const mesh = o as THREE.Mesh
+          const pos = mesh.isMesh ? mesh.geometry?.attributes?.position : null
+          if (pos) triangles += mesh.geometry.index ? mesh.geometry.index.count / 3 : pos.count / 3
+        })
+        m = { size: box.getSize(new THREE.Vector3()), centre: box.getCenter(new THREE.Vector3()), minY: box.min.y, triangles }
+        measured.set(url, m)
+      }
+      s.size.copy(m.size)
+      s.triangles = m.triangles
+      inst.position.set(-m.centre.x, -m.minY, -m.centre.z)   // feet on the card, centred on it
       turn.add(inst)
-      // The person stands beside the model, clear of its widest reach.
-      const reach = Math.hypot(s.size.x, s.size.z) / 2
-      s.figure.scale.setScalar(s.unit)
-      s.figure.position.set(reach + 0.45 * s.unit, 0, 0)
       s.inst = inst
     }).catch(() => { /* unreadable model: the card just stays flat */ })
     standing.set(key, s)
@@ -226,7 +234,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
 
   let lastW = 0, lastH = 0
 
-  function frame(now: number, W: number, H: number, targets: TiltTarget[], st: TiltFrameState) {
+  function frame(now: number, W: number, H: number, targets: TiltTarget[], st: TiltFrameState, into: THREE.WebGLRenderTarget | null = null) {
     frameNo++
     if (W !== lastW || H !== lastH) {
       renderer.setSize(W, H, false)
@@ -265,9 +273,18 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       s.stand.scale.set(k, k * Math.max(ease, 0.001), k)
       s.stand.visible = !!s.inst && ease > 0
       s.turn.rotation.y = st.turn ? now / 1000 * 0.6 + s.phase : 0
-      // A person only where they would read: not a giant beside a teacup.
-      const personH = PERSON_H * s.unit
-      s.figure.visible = st.figure && personH < s.size.y * 5
+      // glTF is in metres; something over 30 units tall is far likelier a
+      // centimetre file (FBX's habit) than a 30 m model — unless the user
+      // sized the person, which settles it.
+      const set = st.unitsFor(s.url)
+      s.unitSet = set !== undefined
+      s.unit = set ?? (s.size.y > 30 ? 100 : 1)
+      // The person stands beside the model, clear of its widest reach.
+      s.figure.scale.setScalar(s.unit)
+      s.figure.position.set(Math.hypot(s.size.x, s.size.z) / 2 + 0.45 * s.unit, 0, 0)
+      // A guessed person only where they would read: not a giant beside a
+      // teacup. One the user sized always shows.
+      s.figure.visible = st.figure && !!s.inst && (s.unitSet || PERSON_H * s.unit < s.size.y * 5)
 
       // Back wall: stands on the card's top edge.
       const text = s.inst
@@ -293,11 +310,13 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       if (frameNo - s.seen > 120) drop(key, s)
     }
 
+    renderer.setRenderTarget(into)
     renderer.autoClear = true
     scene.overrideMaterial = overrideFor(st.shading)
     renderer.render(scene, camera)
     renderer.autoClear = false
     renderer.render(deco, camera)
+    if (into) { renderer.setRenderTarget(null); return }
 
     // Outlines: paint the silhouettes into a mask, then ring them.
     const outlined = [...standing.entries()].filter(([key, s]) =>
@@ -328,7 +347,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
 
   const raycaster = new THREE.Raycaster()
   /** The key of the model drawn at this point (px from the canvas's
-   *  top-left), or null. */
+   *  top-left), `person|<key>` for the person beside one, or null. */
   function pick(x: number, y: number): string | null {
     if (!lastW || !lastH) return null
     raycaster.setFromCamera(new THREE.Vector2((x / lastW) * 2 - 1, -(y / lastH) * 2 + 1), camera)
@@ -337,17 +356,34 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       if (!s.stand.visible || !s.inst) continue
       const hit = raycaster.intersectObject(s.turn, true)[0]
       if (hit && (!best || hit.distance < best.d)) best = { key, d: hit.distance }
+      const man = s.figure.visible ? raycaster.intersectObject(s.figure, true)[0] : undefined
+      if (man && (!best || man.distance < best.d)) best = { key: `person|${key}`, d: man.distance }
     }
     return best?.key ?? null
+  }
+
+  /** Load and upload what the cards in view need — models, wall labels,
+   *  shaders — while still flat, so the first frames of a tilt have
+   *  nothing left to do. Draws nothing on screen. */
+  const warmRT = new THREE.WebGLRenderTarget(4, 4)
+  function warm(W: number, H: number, targets: TiltTarget[], st: TiltFrameState) {
+    frame(performance.now(), W, H, targets, { ...st, tilt: 30 }, warmRT)
+  }
+
+  /** The url and model units per metre of a model on screen. */
+  function info(key: string): { url: string; unit: number } | null {
+    const s = standing.get(key)
+    return s ? { url: s.url, unit: s.unit } : null
   }
 
   function dispose() {
     for (const [key, s] of [...standing]) drop(key, s)
     maskRT.dispose()
+    warmRT.dispose()
     outlineMat.dispose()
     renderer.dispose()
     renderer.forceContextLoss()
   }
 
-  return { frame, pick, dispose }
+  return { frame, warm, pick, info, dispose }
 }

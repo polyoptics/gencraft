@@ -3,7 +3,7 @@ import { InfiniteCanvas } from './components/Canvas/InfiniteCanvas'
 import { NLETimelineViewer } from './components/NLE/NLETimelineViewer'
 import { LayerContent, LayerOverlay } from './components/Layers/LayerRouter'
 import { TiltLayer } from './components/Canvas/TiltLayer'
-import { useTiltStore, tiltCss } from './store/tiltStore'
+import { useTiltStage } from './store/tiltStore'
 import { Viewer } from './components/Viewer/Viewer'
 import { TemplateMenu } from './components/UI/TemplateMenu'
 import { TopIconBar } from './components/UI/TopIconBar'
@@ -784,9 +784,9 @@ export default function App() {
  *  (same box, origin and transform as InfiniteCanvas's tilt stage). Its
  *  direct children get pointer-events back in index.css. */
 function TiltStage({ children }: { children: React.ReactNode }) {
-  const transform = useTiltStore(s => tiltCss(s.tilt, s.spin))
+  const ref = useTiltStage()
   return (
-    <div data-tilt-stage="overlay" data-tilted={transform === 'none' ? undefined : ''} style={{ position: 'absolute', inset: 0, pointerEvents: 'none', transformOrigin: '50% 50%', transform }}>
+    <div ref={ref} data-tilt-stage="overlay" style={{ position: 'absolute', inset: 0, pointerEvents: 'none', transformOrigin: '50% 50%' }}>
       {children}
     </div>
   )

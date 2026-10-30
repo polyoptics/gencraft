@@ -18,16 +18,18 @@
 
 import React, { useEffect, useRef } from 'react'
 import {
-  useTiltStore, isTilted, unprojectTilt, TILT_SNAP,
+  useTiltStore, useModelScaleStore, isTilted, unprojectTilt, TILT_SNAP,
 } from '../../store/tiltStore'
 import { useCanvasStore, groupBounds, MIN_ZOOM, MAX_ZOOM } from '../../store/canvasStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useBoardsStore } from '../../store/boardsStore'
 import { getMediaItems } from '../../types/bar'
-import { createTiltScene, type TiltTarget } from '../../three/tiltScene'
+import { createTiltScene, type TiltTarget, type TiltFrameState } from '../../three/tiltScene'
 
 /** Degrees of tilt / turn per pixel of Alt+drag. */
 const DRAG_DEG = 0.25
+/** Sideways px an Alt+drag can wander before it starts turning the plane. */
+const TURN_SLOP = 14
 /** Most models stood up at once — they are heavy. */
 const MAX_MODELS = 12
 
@@ -63,7 +65,11 @@ function useAltTiltGesture() {
       // Orbit like Blender/Maya: you grab the near part of the ground —
       // drag up tips it away, drag right swings it right.
       const onMove = (ev: PointerEvent) => {
-        useTiltStore.getState().setView(t0 - (ev.clientY - y0) * DRAG_DEG, s0 - (ev.clientX - x0) * DRAG_DEG)
+        // A little sideways slop while tipping back must not twist the
+        // plane: turning starts only past a few px of real sideways drag.
+        const dx = ev.clientX - x0
+        const turnPx = Math.sign(dx) * Math.max(0, Math.abs(dx) - TURN_SLOP)
+        useTiltStore.getState().setView(t0 - (ev.clientY - y0) * DRAG_DEG, s0 - turnPx * DRAG_DEG)
         if (cTo) {
           const u = Math.min(1, useTiltStore.getState().tilt / 20)
           const k = u * u * (3 - 2 * u)
@@ -199,7 +205,115 @@ export const TiltLayer: React.FC = () => {
   useAltTiltGesture()
   useFrameKey()
   const tilted = useTiltStore(s => isTilted(s.tilt))
-  return tilted ? <TiltedView /> : null
+  return (
+    <>
+      <TiltModels />
+      {tilted && <TiltedView />}
+    </>
+  )
+}
+
+/** The 3D side, shared between the always-on TiltModels and the input in
+ *  TiltedView. */
+const models: {
+  /** Hit test at a client point: a model's key, `person|<key>`, or null. */
+  pick: ((clientX: number, clientY: number) => string | null) | null
+  info: ((key: string) => { url: string; unit: number } | null) | null
+  hovered: string | null
+} = { pick: null, info: null, hovered: null }
+
+const frameState = (): TiltFrameState => {
+  const ts = useTiltStore.getState()
+  const scales = useModelScaleStore.getState().unitsPerMetre
+  return {
+    tilt: ts.tilt, spin: ts.spin, shading: ts.shading, turn: ts.turn,
+    walls: ts.walls, figure: ts.figure, hovered: models.hovered,
+    selected: new Set([
+      ...useFreeNodeStore.getState().selectedIds.map(id => `node:${id}`),
+      ...useBoardsStore.getState().selectedGroupIds.map(id => `card:${id}`),
+    ]),
+    unitsFor: url => scales[url],
+  }
+}
+
+/** Models standing on their cards (three/tiltScene). Mounted for the whole
+ *  session, not just while tilted: the 3D view is built once, when the app
+ *  is idle, and the models on screen are loaded and uploaded while still
+ *  flat (when the view settles, and the moment Alt goes down). The first
+ *  frames of a tilt then only draw. Only the cards in view are kept — at
+ *  most MAX_MODELS — so memory follows what is on screen. */
+const TiltModels: React.FC = () => {
+  const rootRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const root = rootRef.current!
+    let view: ReturnType<typeof createTiltScene> | null = null
+    let canvas: HTMLCanvasElement | null = null
+    let raf = 0
+    let warmTimer: ReturnType<typeof setTimeout> | null = null
+    let shown = false
+
+    const warm = () => {
+      const W = root.clientWidth, H = root.clientHeight
+      if (!view || !W || !H || isTilted(useTiltStore.getState().tilt)) return
+      view.warm(W, H, collectTargets(W, H), frameState())
+    }
+    const warmSoon = () => {
+      if (warmTimer) clearTimeout(warmTimer)
+      warmTimer = setTimeout(warm, 500)
+    }
+    const frame = (now: number) => {
+      raf = requestAnimationFrame(frame)
+      if (!view || !canvas) return
+      const tilted = isTilted(useTiltStore.getState().tilt)
+      if (tilted !== shown) { shown = tilted; canvas.style.display = tilted ? 'block' : 'none' }
+      if (!tilted) return
+      const W = root.clientWidth, H = root.clientHeight
+      if (W && H) view.frame(now, W, H, collectTargets(W, H), frameState())
+    }
+    const build = () => {
+      // A fresh canvas per mount: a canvas whose context was lost (cleanup
+      // below) can never give a working one again, and StrictMode remounts.
+      canvas = document.createElement('canvas')
+      Object.assign(canvas.style, { position: 'absolute', inset: '0', width: '100%', height: '100%', pointerEvents: 'none', display: 'none' })
+      root.prepend(canvas)
+      try {
+        view = createTiltScene(canvas)
+      } catch {
+        canvas.remove(); canvas = null   // no WebGL: the plane still tilts, models stay flat
+        return
+      }
+      const v = view
+      models.pick = (clientX, clientY) => {
+        const r = root.getBoundingClientRect()
+        return v.pick(clientX - r.left, clientY - r.top)
+      }
+      models.info = key => v.info(key)
+      warm()
+      raf = requestAnimationFrame(frame)
+    }
+    const idle = window.requestIdleCallback
+      ? window.requestIdleCallback(build, { timeout: 2500 })
+      : window.setTimeout(build, 1200)
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Alt' && !e.repeat) warm() }
+    window.addEventListener('keydown', onKey, true)
+    const unsubs = [
+      useCanvasStore.subscribe(warmSoon),
+      useFreeNodeStore.subscribe(warmSoon),
+      useBoardsStore.subscribe(warmSoon),
+    ]
+    return () => {
+      if (window.cancelIdleCallback) window.cancelIdleCallback(idle as number)
+      else clearTimeout(idle as ReturnType<typeof setTimeout>)
+      window.removeEventListener('keydown', onKey, true)
+      unsubs.forEach(u => u())
+      if (warmTimer) clearTimeout(warmTimer)
+      cancelAnimationFrame(raf)
+      models.pick = null; models.info = null
+      view?.dispose()
+      canvas?.remove()
+    }
+  }, [])
+  return <div ref={rootRef} style={{ position: 'absolute', inset: 0, zIndex: 850, pointerEvents: 'none' }} />
 }
 
 // ── Model cards ──
@@ -285,9 +399,6 @@ function selectModel(key: string, add: boolean) {
 
 const TiltedView: React.FC = () => {
   const rootRef = useRef<HTMLDivElement>(null)
-  /** Hit test into the 3D models: their key at a client point, or null. */
-  const pickRef = useRef<((x: number, y: number) => string | null) | null>(null)
-  const hoverRef = useRef<string | null>(null)
   const shading = useTiltStore(s => s.shading)
   const turn = useTiltStore(s => s.turn)
   const walls = useTiltStore(s => s.walls)
@@ -343,6 +454,7 @@ const TiltedView: React.FC = () => {
 
     type Gesture =
       | { kind: 'pan'; last: { x: number; y: number } }
+      | { kind: 'person'; url: string; unit0: number; y0: number }
       | { kind: 'remap'; target: Element; pointerId: number }
     let g: Gesture | null = null
     const swallow = (e: Event) => { e.stopImmediatePropagation() }
@@ -352,7 +464,16 @@ const TiltedView: React.FC = () => {
       // A model is clicked straight in 3D: it selects its card or tile
       // (Shift adds to the selection).
       if (e.button === 0 && !e.altKey && hostOf(e.target as Element) === host && !(e.target as Element).closest('[data-tilt-hud]')) {
-        const key = pickRef.current?.(e.clientX, e.clientY)
+        const key = models.pick?.(e.clientX, e.clientY)
+        if (key?.startsWith('person|')) {
+          // Size the person: drag up to grow them, down to shrink. How big
+          // they are against the model IS the model's real-world scale, so
+          // it is kept for that model file (and its wall's height follows).
+          e.preventDefault(); swallow(e)
+          const info = models.info?.(key.slice('person|'.length))
+          if (info) g = { kind: 'person', url: info.url, unit0: info.unit, y0: e.clientY }
+          return
+        }
         if (key) {
           e.preventDefault(); swallow(e)
           selectModel(key, e.shiftKey)
@@ -379,12 +500,19 @@ const TiltedView: React.FC = () => {
     const onMove = (e: PointerEvent) => {
       if (!e.isTrusted) return
       if (!g) {
-        hoverRef.current = e.buttons === 0 && hostOf(e.target as Element) === host
-          ? pickRef.current?.(e.clientX, e.clientY) ?? null
+        models.hovered = e.buttons === 0 && hostOf(e.target as Element) === host
+          ? models.pick?.(e.clientX, e.clientY) ?? null
           : null
         return
       }
       swallow(e)
+      if (g.kind === 'person') {
+        // Units per metre grows as the person does (a bigger person, in
+        // the model's units, means a smaller model in metres).
+        const u = g.unit0 * Math.exp(-(e.clientY - g.y0) / 160)
+        useModelScaleStore.getState().setUnitsPerMetre(g.url, u)
+        return
+      }
       if (g.kind === 'pan') {
         const a = flatClient(g.last.x, g.last.y), b = flatClient(e.clientX, e.clientY)
         g.last = { x: e.clientX, y: e.clientY }
@@ -430,49 +558,6 @@ const TiltedView: React.FC = () => {
     }
   }, [])
 
-  // ── Models standing on their cards (three/tiltScene) ──
-  useEffect(() => {
-    // A fresh canvas per mount: a canvas whose context was lost (cleanup
-    // below) can never give a working one again, and StrictMode remounts.
-    const root = rootRef.current!
-    const canvas = document.createElement('canvas')
-    Object.assign(canvas.style, { position: 'absolute', inset: '0', width: '100%', height: '100%', pointerEvents: 'none' })
-    root.prepend(canvas)
-    let view: ReturnType<typeof createTiltScene>
-    try {
-      view = createTiltScene(canvas)
-    } catch {
-      canvas.remove()   // no WebGL: the plane still tilts, models stay flat
-      return
-    }
-    pickRef.current = (clientX, clientY) => {
-      const r = root.getBoundingClientRect()
-      return view.pick(clientX - r.left, clientY - r.top)
-    }
-    let raf = 0
-    const frame = (now: number) => {
-      raf = requestAnimationFrame(frame)
-      const W = root.clientWidth, H = root.clientHeight
-      if (!W || !H) return
-      const ts = useTiltStore.getState()
-      const selected = new Set([
-        ...useFreeNodeStore.getState().selectedIds.map(id => `node:${id}`),
-        ...useBoardsStore.getState().selectedGroupIds.map(id => `card:${id}`),
-      ])
-      view.frame(now, W, H, collectTargets(W, H), {
-        tilt: ts.tilt, spin: ts.spin, shading: ts.shading, turn: ts.turn,
-        walls: ts.walls, figure: ts.figure, selected, hovered: hoverRef.current,
-      })
-    }
-    raf = requestAnimationFrame(frame)
-    return () => {
-      cancelAnimationFrame(raf)
-      pickRef.current = null
-      view.dispose()
-      canvas.remove()
-    }
-  }, [])
-
   const btn = (active: boolean): React.CSSProperties => ({
     background: active ? 'rgba(120,170,255,0.25)' : 'transparent',
     border: '1px solid rgba(255,255,255,0.14)', borderRadius: 6,
@@ -505,7 +590,7 @@ const TiltedView: React.FC = () => {
         ))}
         <button style={btn(turn)} onClick={() => set.setTurn(!turn)}>Turn</button>
         <button style={btn(walls)} onClick={() => set.setWalls(!walls)} title="File name and size on a wall behind each model">Labels</button>
-        <button style={btn(figure)} onClick={() => set.setFigure(!figure)} title="A 1.75 m person beside each model, for scale">Person</button>
+        <button style={btn(figure)} onClick={() => set.setFigure(!figure)} title="A 1.75 m person beside each model. Drag them up or down to set how big the model really is.">Person</button>
         <span style={{ width: 1, height: 14, background: 'rgba(255,255,255,0.12)' }} />
         <button style={btn(true)} onClick={() => set.flatten()}>Flat (Esc)</button>
       </div>

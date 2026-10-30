@@ -1,6 +1,6 @@
 import React, { useRef, useCallback, useEffect, useState, useDeferredValue, useMemo } from 'react'
 import { useCanvasStore } from '../../store/canvasStore'
-import { useTiltStore, tiltCss } from '../../store/tiltStore'
+import { useTiltStage } from '../../store/tiltStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { PinLayer } from './PinLayer'
 import { useBoardsStore } from '../../store/boardsStore'
@@ -298,7 +298,9 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
   panRef.current = pan
 
   // Rubber-band selection state (screen coords relative to container)
-  const tiltTransform = useTiltStore(st => tiltCss(st.tilt, st.spin))
+  // Tilt is applied straight to the stage element (useTiltStage), so a
+  // tilting frame does not re-render this component.
+  const tiltStageRef = useTiltStage()
   const [rubberBand, setRubberBand] = useState<{ sx: number; sy: number; ex: number; ey: number } | null>(null)
   const rubberBandRef = useRef<{ sx: number; sy: number; ex: number; ey: number } | null>(null)
   const rbStartCanvas = useRef<{ cx: number; cy: number } | null>(null)
@@ -964,7 +966,7 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
     >
       {/* ── Tilt stage: the world layers tip back together when the canvas is
              tilted (store/tiltStore). 'none' when flat — no change at all. ── */}
-      <div data-tilt-stage="world" data-tilted={tiltTransform === 'none' ? undefined : ''} style={{ position: 'absolute', inset: 0, transformOrigin: '50% 50%', transform: tiltTransform }}>
+      <div ref={tiltStageRef} data-tilt-stage="world" style={{ position: 'absolute', inset: 0, transformOrigin: '50% 50%' }}>
       <DotGrid panX={pan.x} panY={pan.y} />
 
       {/* ── NLE row lines (behind everything, in canvas space) ── */}

@@ -56,4 +56,4 @@ body {
    step (an animated GIF repainting, a pan) and flash. One flat layer per
    stage paints as a whole instead. */
 [data-tilt-stage][data-tilted] [style*="will-change"] { will-change: auto !important; }
-[data-tilt-stage][data-tilted] { backface-visibility: hidden; }
+[data-tilt-stage][data-tilted] { backface-visibility: hidden; will-change: transform; }

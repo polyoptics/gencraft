@@ -12,7 +12,10 @@
 // camera at distance TILT_PERSPECTIVE in front of the host's centre,
 // plane rotated rotateX(tilt) rotateZ(spin) about that centre.
 
+import { useCallback } from 'react'
 import { create } from 'zustand'
+import { persist } from 'zustand/middleware'
+import { createDebouncedIDBStorage } from '../utils/debouncedIDBStorage'
 
 /** CSS perspective distance (px) — also the three.js camera distance. */
 export const TILT_PERSPECTIVE = 1200
@@ -106,3 +109,41 @@ export function unprojectTilt(sx: number, sy: number, tiltDeg: number, spinDeg: 
   const cs = Math.cos(s), ss = Math.sin(s)
   return { x: qx * cs + y1 * ss, y: -qx * ss + y1 * cs }
 }
+
+/** Keep a tilt stage element's transform in step with the store, straight
+ *  on the element: the transform changes every frame of a tilt, and going
+ *  through React would re-render the whole canvas each time. */
+export function bindTiltStage(el: HTMLElement): () => void {
+  let last = ''
+  const apply = (s: { tilt: number; spin: number }) => {
+    const t = tiltCss(s.tilt, s.spin)
+    if (t === last) return
+    last = t
+    el.style.transform = t
+    if (t === 'none') el.removeAttribute('data-tilted')
+    else el.setAttribute('data-tilted', '')
+  }
+  apply(useTiltStore.getState())
+  return useTiltStore.subscribe(apply)
+}
+
+/** Callback ref for a tilt stage — see bindTiltStage. */
+export function useTiltStage() {
+  return useCallback((el: HTMLDivElement | null) => (el ? bindTiltStage(el) : undefined), [])
+}
+
+/** Model units per metre, set by sizing the person beside a model in the
+ *  tilted view. Keyed by the model's url, so every card showing the same
+ *  file shares its scale. Absent: guessed (see three/tiltScene). */
+interface ModelScaleStore {
+  unitsPerMetre: Record<string, number>
+  setUnitsPerMetre: (url: string, u: number) => void
+}
+
+export const useModelScaleStore = create<ModelScaleStore>()(persist(set => ({
+  unitsPerMetre: {},
+  setUnitsPerMetre: (url, u) => set(s => ({ unitsPerMetre: { ...s.unitsPerMetre, [url]: u } })),
+}), {
+  name: 'vidbars-model-scale',
+  storage: createDebouncedIDBStorage(400),
+}))
