@@ -1,8 +1,9 @@
 // ConsoleToggleButton — on the top bar: how the tilted 3D view shows a loop
-// strip. Off, its cards lie in the tray (the pop-up 3D); on, they stand up
-// on their bottom edges like a machine's panels (console mode). Only the
-// loop strip takes it for now (Brian 2026-10-30); everything it does flat
-// it still does standing.
+// strip. Off, its cards lie in the tray (the pop-up 3D); on, the strip is a
+// machine (console mode, Brian 2026-10-30): its effect cards lean back on a
+// sloped back with their tabs, a docked Viewer stands like a screen, Run is
+// a raised button, and the pictures stay down in their columns. Everything
+// it does flat it still does standing.
 
 import React from 'react'
 import { useTiltStore } from '../../store/tiltStore'
@@ -13,8 +14,8 @@ export const ConsoleToggleButton: React.FC = () => {
     <button
       onClick={() => useTiltStore.getState().setConsole(!on)}
       title={on
-        ? 'Console view: loop strip cards stand up in 3D. Click for the flat tray.'
-        : 'Flat tray: loop strip cards lie in the strip in 3D. Click to stand them up as a console.'}
+        ? 'Console view: in 3D the loop strip stands up as a machine. Effect cards lean back, a docked Viewer stands like a screen, pictures stay in their columns. Click for the flat tray.'
+        : 'Flat tray: in 3D the loop strip\'s cards lie in the strip. Click to stand it up as a console.'}
       style={{
         height: 24,
         padding: '0 8px',

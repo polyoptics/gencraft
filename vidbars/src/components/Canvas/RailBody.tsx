@@ -693,6 +693,7 @@ const CardHead: React.FC<{ card: FreeNodeData; rect: Local; u: number; warning?:
   return (
     <div
       data-rail-card-head={def.kind}
+      data-rail-card-id={card.id}
       onPointerDown={dock ? slotDragDown(dock.railId, dock.slotId) : undefined}
       title={warning ?? (def.blend ? `${def.glyph} ${def.label} — mixes in the column right after it` : def.label)}
       style={{

@@ -27,6 +27,7 @@ import { useViewport3DStore } from '../../store/viewport3dStore'
 import { useBoardsStore } from '../../store/boardsStore'
 import { useRailUiStore } from '../../store/railUiStore'
 import { railViewerDocks, viewerRail } from '../../utils/railViewer'
+import { RAIL_COLORS } from './rail/railStyle'
 import { setGlHidden } from '../../three/viewportRenderer'
 import { getMediaItems } from '../../types/bar'
 import { faceBlocks } from '../../utils/cardGrid'
@@ -526,6 +527,8 @@ function collectSlabs(K = 1): TiltSlab[] {
   const lean = consoleLean(host, zoom)
   const leaning: Leaning[] = []
   const screens: Screen[] = []
+  /** Console: column heads whose card leans (they ride up with it). */
+  const riders: { head: HTMLElement; world: HTMLElement }[] = []
   for (const world of host.querySelectorAll<HTMLElement>(':scope > div[style*="scale("]')) {
     for (const node of world.querySelectorAll<HTMLElement>('[data-viewport3d]:not([data-pinned]), [data-freenode][data-id]:not([data-pinned])')) {
       // A loop strip paints its face on its own body, which can sit off the
@@ -586,6 +589,21 @@ function collectSlabs(K = 1): TiltSlab[] {
           for (const head of el.querySelectorAll<HTMLElement>('[data-rail-head], [data-rail-card-head], [data-rail-tray-head]')) {
             lifting.set(head, H)
             chain(head, world)
+            if (head.dataset.railCardId && lean.has(head.dataset.railCardId)) riders.push({ head, world })
+          }
+          // Console: Run stands up off the arrow as a pill, the machine's
+          // button. Not while running: its progress and stop show as flat.
+          const sr = railStand.get(node.dataset.id!) ?? 0
+          const run = sr > 0 ? el.querySelector<HTMLElement>('[data-rail-arrow] button[data-rail-run="idle"]') : null
+          const ra = run && offsetIn(run, world)
+          if (run && ra && run.offsetWidth) {
+            const P = TRAY.rimH * u * zoom * k * sr
+            const rh = run.offsetHeight * zoom
+            const ps = add(pan.x + ra.x * zoom, pan.y + ra.y * zoom, run.offsetWidth * zoom, rh, P, RUN_RGB, rh / 2)
+            if (ps) ps.z = H + P
+            lifting.set(run, P)
+            chain(run, world)
+            fill(run, { rgb: RUN_RGB_A, round: true })
           }
         }
       } else if (fs.nodes[node.dataset.id!]?.type === 'cabinet') {
@@ -623,7 +641,7 @@ function collectSlabs(K = 1): TiltSlab[] {
             slab.t = Math.min(slab.z, m * THICK.tile)
             slab.hinge = hinge
             stand(node, hinge, zoom)
-            leaning.push({ rail: n!.railDock!.railId, slab, hinge })
+            leaning.push({ id: n!.id, rail: n!.railDock!.railId, slab, hinge })
           }
         }
         // A card (or deck) on a strip is drawn by the card layer over an
@@ -647,6 +665,30 @@ function collectSlabs(K = 1): TiltSlab[] {
         return p
       })
     }
+  }
+  // Console: a leaning card's tab (its column head, the strip's header band
+  // above it) rides up with it, the card's own header above its top edge,
+  // where it can still be seen and grabbed. It leaves the band as the card
+  // turns and is level with the card's face once up.
+  for (const { head, world } of riders) {
+    const l = leaning.find(c => c.id === head.dataset.railCardId)
+    const tile = l && world.querySelector<HTMLElement>(`[data-freenode][data-id="${l.id}"]`)
+    const at = l && offsetIn(head, world), ta = tile && offsetIn(tile, world)
+    if (!l || !tile || !at || !ta) continue
+    const band = lifting.get(head) ?? 0
+    const up = l.hinge.a / (CONSOLE.slot * Math.PI / 180)
+    const hinge = { v: l.hinge.v, z: band + (l.hinge.z - band) * up, a: l.hinge.a }
+    lifting.set(head, hinge.z)
+    stand(head, hinge, zoom, `50% ${ta.y + tile.offsetHeight - at.y}px`)
+    // Its own plate, or the band's sides would show through it.
+    const s = add(pan.x + at.x * zoom, pan.y + at.y * zoom, head.offsetWidth * zoom, head.offsetHeight * zoom,
+      Math.max(1, l.slab.t), SIDE.tray, radiusOf(head) * zoom)
+    if (!s) continue
+    s.z = hinge.z
+    s.hinge = hinge
+    const face = fill(head)
+    s.color = (face[0] << 16) | (face[1] << 8) | face[2]
+    l.top = Math.min(l.top ?? Infinity, s.v - s.h / 2)
   }
   // A card (or deck) on a strip has an invisible stand-in tile that is never
   // drawn, so its lift is worked out from the store: it stands on the
@@ -848,13 +890,25 @@ function chain(el: HTMLElement, stage: HTMLElement) {
 /** A raised part has to be solid: one with a see-through background would
  *  show the face under it through its lid. While raised it is filled with
  *  the colour it shows flat (its own over what is behind it). */
-type Filled = { bs: string; bc: string; rgb: number[] }
+type Filled = { bs: string; bc: string; rgb: number[]; br?: string }
 let filled = new Map<HTMLElement, Filled>()
 let filling = new Map<HTMLElement, Filled>()
-function fill(el: HTMLElement): number[] {
+/** `as`: filled with this colour instead, and with `round`, made a pill
+ *  (console mode's Run button). */
+function fill(el: HTMLElement, as?: { rgb: number[]; round?: boolean }): number[] {
   // Read again each frame: a toggle's colour changes as it is pressed.
   const was = filled.get(el) ?? { bs: el.style.boxShadow, bc: el.style.borderColor, rgb: [0, 0, 0] }
   filling.set(el, was)
+  if (as) {
+    was.rgb = as.rgb
+    const bs = `inset 0 0 0 9999px rgb(${as.rgb.join(',')})${was.bs ? ', ' + was.bs : ''}`
+    if (el.style.boxShadow !== bs) el.style.boxShadow = bs
+    if (as.round) {
+      if (was.br === undefined) was.br = el.style.borderRadius
+      el.style.borderRadius = `${el.offsetHeight / 2}px`
+    }
+    return was.rgb
+  }
   const cs = getComputedStyle(el)
   const own = rgba(cs.backgroundColor)
   let under: number[] = [24, 24, 30, 1]
@@ -961,7 +1015,11 @@ function rgba(css: string): number[] {
   return n.length >= 3 ? [n[0], n[1], n[2], n[3] ?? 1] : [0, 0, 0, 0]
 }
 function settleChains() {
-  for (const [e, was] of filled) if (!filling.has(e)) { e.style.boxShadow = was.bs; e.style.borderColor = was.bc }
+  for (const [e, was] of filled) {
+    if (filling.has(e)) continue
+    e.style.boxShadow = was.bs; e.style.borderColor = was.bc
+    if (was.br !== undefined) e.style.borderRadius = was.br
+  }
   for (const e of hidden) if (!hiding.has(e)) e.style.visibility = ''
   hidden = hiding
   hiding = new Set()
@@ -1020,11 +1078,16 @@ function consoleLean(host: HTMLElement, zoom: number): Map<string, number> {
   const seen = new Set<string>()
   /** How far up each strip stands, 0..1. */
   const standing = new Map<string, number>()
+  railStand.clear()
   for (const n of Object.values(nodes)) {
     const r = n.rail
     if (!r || n.pin) continue
     seen.add(n.id)
-    const held = drop?.target.railId === n.id ||
+    // Not for one of its own columns moved along it by its tab: that tab
+    // rides its card, in line with the others, so the drag reads along
+    // the standing row (folding, the row fell away from the cursor).
+    const own = drop && [...r.slots, ...(r.rows ?? []).flat()].some(sl => sl.id === drop.draggedId)
+    const held = (drop?.target.railId === n.id && !own) ||
       Object.values(nodes).some(o => o.railDock?.railId === n.id && o.railDock.lifted)
     const goal = on && !held ? 1 : 0
     const was = consoleEase.get(n.id) ?? goal
@@ -1035,6 +1098,7 @@ function consoleLean(host: HTMLElement, zoom: number): Map<string, number> {
     const k = body ? detail(body.offsetWidth * zoom) : 0
     const s = grown * k * e * e * (3 - 2 * e)
     standing.set(n.id, s)
+    railStand.set(n.id, s)
     if (s <= 0) continue
     const cards = new Set([...r.slots, ...(r.rows ?? []).flat()].filter(sl => sl.kind === 'card').map(sl => sl.id))
     for (const t of Object.values(nodes)) {
@@ -1064,6 +1128,8 @@ function consoleLean(host: HTMLElement, zoom: number): Map<string, number> {
   return out
 }
 const screenEase = new Map<string, number>()
+/** How far up each console strip stands this frame, 0..1, by id. */
+const railStand = new Map<string, number>()
 /** The standing Viewer being dragged by its header, if one is. */
 let carried: string | null = null
 /** The Viewers standing this frame: their GL bodies are not drawn (they
@@ -1082,9 +1148,13 @@ function standScreens(ids: string[]) {
  *  by FADE_TILT, and a strip eases down flat over `easeMs` while something
  *  is dragged onto it, so every drop lands by the flat view's rules. */
 const CONSOLE = { slot: 45, viewer: 68, strutAt: 0.62, from: 4, easeMs: 220 }
+/** Console's Run pill: the strip's own Run orange. */
+const RUN_RGB = parseInt(RAIL_COLORS.orange.slice(1), 16)
+const RUN_RGB_A = [RUN_RGB >> 16, (RUN_RGB >> 8) & 255, RUN_RGB & 255]
 /** A project cabinet standing: degrees up from the canvas, its depth × width. */
 const CABINET = { stand: 85, depth: 0.45 }
-type Leaning = { rail: string; slab: TiltSlab; hinge: Hinge }
+/** A leaning card, and the flat top of its tab riding with it, if any. */
+type Leaning = { id: string; rail: string; slab: TiltSlab; hinge: Hinge; top?: number }
 type Screen = { id: string; slab: TiltSlab; hinge: Hinge }
 /** Console furniture, as on the mockup's machine. Behind each run of
  *  leaning cards, a sloped back just behind their backs, so nothing shows
@@ -1119,7 +1189,8 @@ function consoleFurniture(leaning: Leaning[], screens: Screen[], out: TiltSlab[]
       // One strip, one angle; one row, one hinge line.
       const { v, z, a } = run[0].hinge
       const t = Math.max(...run.map(c => c.slab.t))
-      const h = Math.max(...run.map(c => c.slab.h))
+      // As far up as the cards, or their tabs riding on them.
+      const h = Math.max(...run.map(c => v - Math.min(c.slab.v - c.slab.h / 2, c.top ?? Infinity)))
       const back = t + 0.5
       const vB = v - back * Math.sin(a), zB = Math.max(0.25, z - back * Math.cos(a))
       const L = h + 2 * u
