@@ -50,6 +50,12 @@ const ItemFace: React.FC<{ item: CabinetItem; height: number }> = ({ item, heigh
   )
 }
 
+/** A drawer slides out when it opens. The `scale` property, as the tilted view
+ *  writes this element's transform. */
+const slideOut = (el: HTMLDivElement | null) => {
+  el?.animate({ scale: ['1 0', '1 1'], transformOrigin: ['50% 0%', '50% 0%'] }, { duration: 170, easing: 'cubic-bezier(0.2, 0.8, 0.3, 1)' })
+}
+
 const TrayItem: React.FC<{ item: CabinetItem; nodeId: string; drawerId: string; height: number }> = ({ item, nodeId, drawerId, height }) => {
   const [ghost, setGhost] = useState<{ x: number; y: number } | null>(null)
   const onPointerDown = (e: React.PointerEvent) => {
@@ -196,11 +202,12 @@ export const CabinetBody: React.FC<{ id: string; node: FreeNodeData }> = ({ id, 
       </div>
       {open && (
         <div
+          ref={slideOut}
           data-cabinet-tray
           data-cabinet-drawer={`${id}:${open.id}`}
           onWheel={e => e.stopPropagation()}
           style={{
-            position: 'absolute', left: 0, right: 0, top: '100%', marginTop: 4 * u,
+            position: 'absolute', left: 0, right: 0, top: '100%',
             boxSizing: 'border-box', minHeight: tileH + gap * 2, maxHeight: node.height * 1.6,
             overflowY: 'auto', padding: gap, display: 'flex', flexWrap: 'wrap', alignContent: 'flex-start', gap,
             borderRadius: 7 * u,

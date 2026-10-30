@@ -88,6 +88,19 @@ export function itemWords(item: CabinetItem): string {
   return ''
 }
 
+// A standing cabinet is not on the flat plane, so a drop on it cannot be judged
+// by the flat point the tilted view re-sends (TiltLayer flatHit): that is the
+// ground under the ray. It is judged by what the cursor really shows: the real
+// pointer, tracked ahead of TiltLayer's listeners, and the browser's own hit
+// test, kept before TiltLayer answers it from the flat view.
+const nativeHits = document.elementsFromPoint.bind(document)
+const realPointer = { x: 0, y: 0 }
+for (const type of ['pointerdown', 'pointermove', 'pointerup'] as const) {
+  window.addEventListener(type, e => {
+    if (e.isTrusted) { realPointer.x = e.clientX; realPointer.y = e.clientY }
+  }, true)
+}
+
 export interface DrawerRef { nodeId: string; drawerId: string }
 
 /** The drawer under the pointer, or null. The topmost thing wins, as with link
@@ -95,7 +108,10 @@ export interface DrawerRef { nodeId: string; drawerId: string }
  *  (`dragged`, card or tile ids) is always under the hand, so it is skipped. */
 export function cabinetDrawerAt(clientX: number, clientY: number, dragged: string[] = []): DrawerRef | null {
   if (!useCabinetUi.getState().enabled) return null
-  for (const el of document.elementsFromPoint(clientX, clientY)) {
+  const hits = isTilted(useTiltStore.getState().tilt)
+    ? nativeHits(realPointer.x, realPointer.y)
+    : document.elementsFromPoint(clientX, clientY)
+  for (const el of hits) {
     const owner = el.closest<HTMLElement>('[data-freenode],[data-group-card]')
     if (owner?.dataset.id && dragged.includes(owner.dataset.id)) continue
     const hit = el.closest<HTMLElement>('[data-cabinet-drawer]')?.dataset.cabinetDrawer

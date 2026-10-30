@@ -566,6 +566,23 @@ function collectSlabs(K = 1): TiltSlab[] {
             chain(head, world)
           }
         }
+      } else if (fs.nodes[node.dataset.id!]?.type === 'cabinet') {
+        // A project cabinet: the flat face is its front lying down, and it
+        // stands up on its bottom edge as the canvas tips. An open drawer's
+        // tray stays on the canvas, on the same patch as in the flat view.
+        const x = Math.max(0, Math.min(1, (useTiltStore.getState().tilt - CONSOLE.from) / (FADE_TILT - CONSOLE.from)))
+        const a = CABINET.stand * x * x * (3 - 2 * x) * detail(w) * Math.PI / 180
+        if (a > 0) {
+          hinge = { v: slab.v + slab.h / 2, z: 0, a }
+          slab.t = w * CABINET.depth
+          slab.hinge = hinge
+          stand(node, hinge, zoom)
+          const tray = node.querySelector<HTMLElement>('[data-cabinet-tray]')
+          if (tray) {
+            chain(tray, world)
+            stand(tray, { v: hinge.v, z: 0, a: -a }, zoom, '50% 0%')
+          }
+        }
       } else if (node.hasAttribute('data-rail-docked')) {
         // Cards docked in a strip sit on its floor, each in the column a
         // little above the one before: a real stack, with its own sides.
@@ -1009,6 +1026,8 @@ function consoleLean(host: HTMLElement, zoom: number): Map<string, number> {
  *  by FADE_TILT, and a strip eases down flat over `easeMs` while something
  *  is dragged onto it, so every drop lands by the flat view's rules. */
 const CONSOLE = { slot: 45, from: 4, easeMs: 220 }
+/** A project cabinet standing: degrees up from the canvas, its depth × width. */
+const CABINET = { stand: 85, depth: 0.45 }
 /** A card stood up on its bottom edge: the edge at flat `v` (px from the
  *  centre, y down) and height `z`, turned up by `a` radians. */
 type Hinge = { v: number; z: number; a: number }
@@ -1019,7 +1038,7 @@ let standing = new Map<HTMLElement, Stood>()
  *  scale(zoom), which scales across but not up: turned there plainly it
  *  would stretch, so it is scaled to screen size, turned, and scaled back
  *  (rigid on screen). */
-function stand(el: HTMLElement, hinge: Hinge, zoom = 1) {
+function stand(el: HTMLElement, hinge: Hinge, zoom = 1, origin = '50% 100%') {
   const was = stood.get(el) ?? { hinge, rotate: el.style.rotate, origin: el.style.transformOrigin, transform: el.style.transform, wrote: '' }
   const deg = (-hinge.a * 180 / Math.PI).toFixed(2)
   if (zoom === 1) {
@@ -1029,7 +1048,7 @@ function stand(el: HTMLElement, hinge: Hinge, zoom = 1) {
     if (el.style.transform !== t) el.style.transform = t
     was.wrote = el.style.transform
   }
-  el.style.transformOrigin = '50% 100%'
+  el.style.transformOrigin = origin
   standing.set(el, { ...was, hinge })
 }
 function settleStands() {
@@ -1047,7 +1066,8 @@ function settleStands() {
 function hingeOf(el: Element | null): Hinge | undefined {
   for (let e = el; e; e = e.parentElement) {
     const h = stood.get(e as HTMLElement)
-    if (h) return h.hinge
+    // A negative turn lays a tray back down on the canvas: no hinge to it.
+    if (h) return h.hinge.a > 0 ? h.hinge : undefined
   }
 }
 
