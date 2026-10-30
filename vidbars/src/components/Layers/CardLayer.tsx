@@ -14,7 +14,8 @@ import type { TextStyle } from '../../store/freeNodeStore'
 import type { TextFieldMode } from '../UI/TextFormatToolbar'
 import { TextFormatToolbar, hexToRgba, ensureFontLoaded } from '../UI/TextFormatToolbar'
 import { ColorPickerPopup } from '../Bar/ColorPickerPopup'
-import { computeGroupLayout, getRowY, getRowHeight, snapToCardGrid, CARD_GRID_SPACING } from '../../utils/nleRows'
+import { computeGroupLayout, getRowY, getRowHeight } from '../../utils/nleRows'
+import { cardCornerOffset, snapCardToDots } from '../../utils/dotGrid'
 import { PrimaryChipRail } from '../Linking/PrimaryChipRail'
 import { BackRefChipRail } from '../Linking/BackRefChipRail'
 import { CloneDeck } from '../Linking/CloneDeck'
@@ -543,6 +544,7 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
     }
     const initialOriginY = initialOrigins.get(group.id)?.y ?? 0
     const initialOriginX = initialOrigins.get(group.id)?.x ?? 0
+    const corner = cardCornerOffset(group, bs0.boards)
 
     const myLayout = computeGroupLayout(group.boardIds, bs0.boards)
     const mySlot = groupSlot(group.id, group.boardIds, bs0.boards, initialOriginX, initialOriginY, myLayout)
@@ -585,11 +587,9 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
       dyAccum += dy
       dxAccum += dx
 
-      const rawY = initialOriginY + dyAccum
-      // Soft-snap to coarse grid
-      const { y: snapY, snapped } = snapToCardGrid(rawY, CARD_GRID_SPACING, 80)
-      const preClampY = snapped ? snapY : rawY
-      const preClampX = initialOriginX + dxAccum
+      // Top-left corner onto the background dots (utils/dotGrid)
+      const { x: preClampX, y: preClampY } = snapCardToDots(
+        initialOriginX + dxAccum, initialOriginY + dyAccum, corner, z, computeHeaderExtend(z), ev.ctrlKey)
       // Clamp against other groups (only in timeline zone)
       let finalDx: number, finalDy: number
       if (mySlot && obstacles.length > 0) {
@@ -1445,6 +1445,7 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
 
     const anchorOrigin = initialOrigins.get(deck.anchorGroupId)
     const anchorLayout = computeGroupLayout(anchorGroup.boardIds, bs0.boards)
+    const corner = cardCornerOffset(anchorGroup, bs0.boards)
     const mySlot = anchorOrigin
       ? groupSlot(deck.anchorGroupId, anchorGroup.boardIds, bs0.boards, anchorOrigin.x, anchorOrigin.y, anchorLayout)
       : null
@@ -1486,10 +1487,8 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
 
       const anchorInitY = anchorOrigin?.y ?? 0
       const anchorInitX = anchorOrigin?.x ?? 0
-      const rawY = anchorInitY + dyAccum
-      const { y: snapY, snapped } = snapToCardGrid(rawY, CARD_GRID_SPACING, 80)
-      const preClampY = snapped ? snapY : rawY
-      const preClampX = anchorInitX + dxAccum
+      const { x: preClampX, y: preClampY } = snapCardToDots(
+        anchorInitX + dxAccum, anchorInitY + dyAccum, corner, z, computeHeaderExtend(z), ev.ctrlKey)
 
       let finalDx: number, finalDy: number
       if (mySlot && obstacles.length > 0) {
@@ -2087,6 +2086,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
 
     const draggingSet = new Set(allDragIds)
     const anchorLayout = computeGroupLayout(anchorGroup.boardIds, bs0.boards)
+    const corner = cardCornerOffset(anchorGroup, bs0.boards)
     const mySlot = anchorOrigin
       ? groupSlot(deck.anchorGroupId, anchorGroup.boardIds, bs0.boards, anchorOrigin.x, anchorOrigin.y, anchorLayout)
       : null
@@ -2121,10 +2121,8 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
 
       const anchorInitY = anchorOrigin?.y ?? 0
       const anchorInitX = anchorOrigin?.x ?? 0
-      const rawY = anchorInitY + dyAccum
-      const { y: snapY, snapped } = snapToCardGrid(rawY, CARD_GRID_SPACING, 80)
-      const preClampY = snapped ? snapY : rawY
-      const preClampX = anchorInitX + dxAccum
+      const { x: preClampX, y: preClampY } = snapCardToDots(
+        anchorInitX + dxAccum, anchorInitY + dyAccum, corner, z, computeHeaderExtend(z), ev.ctrlKey)
 
       let finalDx: number, finalDy: number
       if (mySlot && obstacles.length > 0) {
@@ -3378,6 +3376,8 @@ const DeckAffordance: React.FC<{ cluster: string[]; front: Deck | 'card' | null 
       if (g) initialOrigins.set(gid, { x: g.originX, y: g.originY })
     }
     const primaryOrigin = initialOrigins.get(cluster[0])
+    const primaryGroup = bs0.groups.find(gr => gr.id === cluster[0])
+    const corner = primaryGroup ? cardCornerOffset(primaryGroup, bs0.boards) : null
 
     const onMove = (ev: PointerEvent) => {
       const z = useCanvasStore.getState().zoom
@@ -3389,10 +3389,11 @@ const DeckAffordance: React.FC<{ cluster: string[]; front: Deck | 'card' | null 
       dxAccum += dx
 
       const anchorInitY = primaryOrigin?.y ?? 0
-      const rawY = anchorInitY + dyAccum
-      const { y: snapY, snapped } = snapToCardGrid(rawY, CARD_GRID_SPACING, 80)
-      const finalDy = (snapped ? snapY : rawY) - anchorInitY
-      const finalDx = dxAccum
+      const anchorInitX = primaryOrigin?.x ?? 0
+      const snapped = snapCardToDots(
+        anchorInitX + dxAccum, anchorInitY + dyAccum, corner, z, computeHeaderExtend(z), ev.ctrlKey)
+      const finalDy = snapped.y - anchorInitY
+      const finalDx = snapped.x - anchorInitX
 
       useBoardsStore.getState().setGroupPosBatch(
         Array.from(initialOrigins, ([gid, origin]) => ({

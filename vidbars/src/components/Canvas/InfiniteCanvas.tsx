@@ -8,6 +8,7 @@ import { uploadFile, classifyFile, isAcceptedMediaFile } from '../../utils/uploa
 import type { FreeNodeType, FreeNodeData } from '../../store/freeNodeStore'
 import type { MediaType } from '../../types/bar'
 import { computeGroupLayout, getRowY, getRowHeight, CARD_GRID_SPACING } from '../../utils/nleRows'
+import { DOT_SPACING, dotStep } from '../../utils/dotGrid'
 import { useViewport3DStore, VIEWPORT3D_DEFAULT_W, VIEWPORT3D_DEFAULT_H } from '../../store/viewport3dStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { nextFreeEdgeSlot } from '../../utils/viewportDocking'
@@ -968,7 +969,7 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
       {/* ── Tilt stage: the world layers tip back together when the canvas is
              tilted (store/tiltStore). 'none' when flat — no change at all. ── */}
       <div ref={tiltStageRef} data-tilt-stage="world" style={{ position: 'absolute', inset: 0, transformOrigin: '50% 50%' }}>
-      <DotGrid panX={pan.x} panY={pan.y} />
+      <DotGrid panX={pan.x} panY={pan.y} zoom={zoom} />
 
       {/* ── NLE row lines (behind everything, in canvas space) ── */}
       <NLERowBands pan={pan} zoom={zoom} />
@@ -1230,17 +1231,27 @@ const NLERowBands: React.FC<{ pan: { x: number; y: number }; zoom: number }> = R
   )
 })
 
-const DotGrid: React.FC<{ panX: number; panY: number }> = ({ panX, panY }) => {
-  const spacing = 40
-  const ox = ((panX % spacing) + spacing) % spacing
-  const oy = ((panY % spacing) + spacing) % spacing
+// World-space dots: one every DOT_SPACING canvas units, fainter in-between
+// dots once zoomed in far enough (utils/dotGrid). Cards snap to them.
+const DotGrid: React.FC<{ panX: number; panY: number; zoom: number }> = ({ panX, panY, zoom }) => {
+  const layer = (id: string, step: number, r: number, fill: string) => {
+    const s = step * zoom
+    const ox = ((panX % s) + s) % s
+    const oy = ((panY % s) + s) % s
+    return (
+      <pattern id={id} x={ox - s / 2} y={oy - s / 2} width={s} height={s} patternUnits="userSpaceOnUse">
+        <circle cx={s / 2} cy={s / 2} r={r} fill={fill} />
+      </pattern>
+    )
+  }
+  const sub = dotStep(zoom)
   return (
     <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
       <defs>
-        <pattern id="dot-grid" x={ox} y={oy} width={spacing} height={spacing} patternUnits="userSpaceOnUse">
-          <circle cx="1" cy="1" r="1.2" fill="rgba(120,120,180,0.22)" />
-        </pattern>
+        {layer('dot-grid', DOT_SPACING, 1.2, 'rgba(120,120,180,0.22)')}
+        {sub < DOT_SPACING && layer('dot-grid-sub', sub, 0.9, 'rgba(120,120,180,0.11)')}
       </defs>
+      {sub < DOT_SPACING && <rect width="100%" height="100%" fill="url(#dot-grid-sub)" />}
       <rect width="100%" height="100%" fill="url(#dot-grid)" />
     </svg>
   )

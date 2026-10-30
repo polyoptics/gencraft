@@ -4,7 +4,8 @@ import { useCanvasStore } from '../../store/canvasStore'
 import { useCardView } from '../Layers/cardView'
 import { useNLEViewerStore } from '../../store/nleViewerStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
-import { computeGroupLayout, snapToCardGrid, CARD_GRID_SPACING } from '../../utils/nleRows'
+import { computeGroupLayout } from '../../utils/nleRows'
+import { cardCornerOffset, snapCardToDots } from '../../utils/dotGrid'
 import { groupSlot, clampGroupMove } from '../../utils/nlePush'
 import type { GroupSlot } from '../../utils/nlePush'
 import { expandWithNestedMembers, canvasObstacleGroups } from '../../hooks/useCardDecks'
@@ -149,6 +150,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, icon
       if (gg) initialOrigins.set(gid, { x: gg.originX, y: gg.originY })
     }
     const draggingSet = new Set(dragIds)
+    const corner = g ? cardCornerOffset(g, bs0.boards) : null
 
     // Build collision slots — clamp against everything that isn't part
     // of the drag set (so nested members don't collide with themselves).
@@ -177,11 +179,9 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, icon
 
       if (!groupId || initialOrigins.size === 0) return
 
-      const rawY = initialOriginY + dyAccum
-      // Soft-snap to coarse grid
-      const { y: snapY, snapped } = snapToCardGrid(rawY, CARD_GRID_SPACING, 80)
-      const preClampY = snapped ? snapY : rawY
-      const preClampX = initialOriginX + dxAccum
+      // Top-left corner onto the background dots (utils/dotGrid)
+      const { x: preClampX, y: preClampY } = snapCardToDots(
+        initialOriginX + dxAccum, initialOriginY + dyAccum, corner, z, headerExtend(z), ev.ctrlKey)
       // Clamp against other groups (only in timeline zone)
       let finalDx: number, finalDy: number
       if (mySlot && obstacles.length > 0) {
