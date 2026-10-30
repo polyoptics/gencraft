@@ -722,9 +722,9 @@ function fill(el: HTMLElement): number[] {
 /** A fanned deck stands up too: its front card on top, and each strip
  *  peeking out to the right a card lower than the one before, a stair of
  *  cards down to the canvas. The strips follow their slide as the fan
- *  opens or closes (their animated transform). The wrapper rides at the
- *  front card's height and the strips are lowered from it, so everything
- *  else on the fan (the face it surfaces, its controls) stays on top. */
+ *  opens or closes (their animated transform). Everything else on the
+ *  fan (the face it surfaces, its controls) rides at the front card's
+ *  height, on top. */
 type AddSlab = (x: number, y: number, w: number, h: number, t: number, color: number, r: number) => TiltSlab | undefined
 function fanSlabs(el: HTMLElement, stage: HTMLElement, at: { x: number; y: number }, add: AddSlab,
                   lifting: Map<HTMLElement, number>, lift: number | undefined) {
@@ -738,13 +738,17 @@ function fanSlabs(el: HTMLElement, stage: HTMLElement, at: { x: number; y: numbe
   const per = m * THICK.card * k
   const base = lift ?? 0
   const top = base + per * (strips.length + 1)
-  lifting.set(el, top)
+  // The wrapper stays at the deck's base and its children rise from it:
+  // a lifted wrapper (it takes the pointer) would sit over the lowered
+  // strips and steal their hover, so a strip would never surface.
+  if (base) lifting.set(el, base)
   chain(el, stage)
+  for (const c of el.children) if (!strips.includes(c as HTMLElement)) { lifting.set(c as HTMLElement, top - base); chain(c as HTMLElement, stage) }
   const c = add(at.x + front.offsetLeft, at.y + front.offsetTop, w, h, top - base, SIDE.card, radiusOf(front) || 12)
   if (c) c.z = top
   strips.forEach((st, i) => {
     const z = top - per * (i + 1)
-    lifting.set(st, z - top)
+    lifting.set(st, z - base)
     chain(st, stage)
     const mx = new DOMMatrix(getComputedStyle(st).transform)
     const s = add(at.x + st.offsetLeft + mx.m41, at.y + st.offsetTop, st.offsetWidth * mx.a, st.offsetHeight, z - base,
