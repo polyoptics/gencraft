@@ -61,4 +61,5 @@ body {
    strip can be lifted off the strip's floor (TiltLayer sets its translate).
    Only while something is lifted: a flat stage composites as one layer. */
 [data-tilt-stage="world"][data-tilted][data-tilt-3d],
-[data-tilt-stage="world"][data-tilted][data-tilt-3d] > div[style*="scale("] { transform-style: preserve-3d; }
+[data-tilt-stage="world"][data-tilted][data-tilt-3d] > div[style*="scale("],
+[data-tilt-stage="overlay"][data-tilted][data-tilt-3d] { transform-style: preserve-3d; }

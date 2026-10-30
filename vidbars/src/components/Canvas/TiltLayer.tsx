@@ -427,7 +427,7 @@ function cardModel(id: string): { url: string; name: string } | null {
  *  a phone on a table, a tile a bit less, a card thinner, and a closed deck
  *  as thick as the cards in it. */
 const THICK = { viewer: 0.05, tile: 0.03, card: 0.025, deckCard: 0.011, deckMax: 0.25 }
-const SIDE = { viewer: 0x4a4e5c, tile: 0x7a829e, card: 0x8a93b4, tray: 0x464c60 }
+const SIDE = { viewer: 0x4a4e5c, tile: 0x7a829e, card: 0x8a93b4, tray: 0x464c60, pop: 0x6a7088 }
 
 /** An element's corner radius in its own px, so a slab's corners match
  *  the rounded box drawn on top of it. */
@@ -485,6 +485,12 @@ function collectSlabs(): TiltSlab[] {
           lifting.set(node, slab.z)
         }
       }
+      popParts(node, world, slab.z ?? 0, m, detail(w), lifting, (el, z, t) => {
+        const a = offsetIn(el, world)
+        if (!a) return
+        const p = add(pan.x + a.x * zoom, pan.y + a.y * zoom, el.offsetWidth * zoom, el.offsetHeight * zoom, t, SIDE.pop, radiusOf(el) * zoom)
+        if (p) p.z = z
+      })
     }
   }
   // Card layer: cards and closed decks, already in screen px.
@@ -500,6 +506,12 @@ function collectSlabs(): TiltSlab[] {
       const n = g?.deckState === 'stacked' ? 1 + groups.filter(o => o.deckAnchorId === id && o.deckState === 'stacked').length : 1
       const w = el.offsetWidth, h = el.offsetHeight, m = Math.min(w, h)
       add(at.x, at.y, w, h, Math.min(m * THICK.deckMax, m * (THICK.card + (n - 1) * THICK.deckCard)), SIDE.card, radiusOf((el.firstElementChild as HTMLElement | null) ?? el) || m * 0.06)
+      popParts(el, stage, 0, m, detail(w), lifting, (part, z, t) => {
+        const a = offsetIn(part, stage)
+        if (!a) return
+        const p = add(a.x, a.y, part.offsetWidth, part.offsetHeight, t, SIDE.pop, radiusOf(part))
+        if (p) p.z = z
+      })
     }
     // Zoomed in to Blocks or Boards, a card is drawn as its outline.
     for (const el of stage.querySelectorAll<HTMLElement>('[data-group-outline]')) {
@@ -511,6 +523,57 @@ function collectSlabs(): TiltSlab[] {
   }
   setLifts(lifting)
   return out
+}
+
+/** The bits of a face that stand proud of it when tilted, near enough:
+ *  a tile's header bar, and on an effect face its on/off-solo-↑ buttons
+ *  and its name banner. Raised by a share of the card's shorter side. */
+const POP = 0.05
+function popParts(root: HTMLElement, stage: HTMLElement, base: number, m: number, k: number,
+                  lifting: Map<HTMLElement, number>, slab: (el: HTMLElement, z: number, t: number) => void) {
+  if (k <= 0) return
+  const parts = new Set<HTMLElement>()
+  const head = root.querySelector<HTMLElement>(':scope > [data-freenode-header]')
+  if (head) parts.add(head)
+  for (const b of root.querySelectorAll<HTMLElement>('[data-fx-onoff], [data-fx-solo], [data-fx-drag-out]')) parts.add(b)
+  for (const b of root.querySelectorAll<HTMLElement>('select[aria-label="Effect"]')) {
+    if (b.parentElement) parts.add(b.parentElement)
+  }
+  const t = m * POP * k
+  for (const el of parts) {
+    if (!el.offsetWidth || !el.offsetHeight) continue
+    lifting.set(el, t)
+    chain(el, stage)
+    slab(el, base + t, t)
+  }
+}
+
+/** For a raised bit to really stand off its face, every box between it and
+ *  the stage has to keep its children in 3D (preserve-3d), and none may
+ *  clip: overflow hidden (and clip, in Chromium) flattens them back onto
+ *  the face. So those boxes stop clipping while tilted; tilting flat
+ *  restores them. */
+let chained = new Map<HTMLElement, { ts: string; ov: string }>()
+let chaining = new Map<HTMLElement, { ts: string; ov: string }>()
+function chain(el: HTMLElement, stage: HTMLElement) {
+  for (let e = el.parentElement; e && e !== stage; e = e.parentElement) {
+    if (chaining.has(e)) continue
+    const was = chained.get(e) ?? { ts: e.style.transformStyle, ov: e.style.overflow }
+    chaining.set(e, was)
+    if (!chained.has(e)) {
+      e.style.transformStyle = 'preserve-3d'
+      if (getComputedStyle(e).overflow !== 'visible') e.style.overflow = 'visible'
+    }
+  }
+}
+function settleChains() {
+  for (const [e, was] of chained) {
+    if (chaining.has(e)) continue
+    e.style.transformStyle = was.ts
+    e.style.overflow = was.ov
+  }
+  chained = chaining
+  chaining = new Map()
 }
 
 /** How a loop strip reads as a tray, in its own units (and cards'
@@ -536,19 +599,22 @@ function setLifts(next: Map<HTMLElement, number>) {
   }
   for (const el of lifted.keys()) if (!next.has(el)) el.style.translate = ''
   if (!!next.size !== !!lifted.size) {
-    document.querySelector('[data-tilt-stage="world"]')?.toggleAttribute('data-tilt-3d', next.size > 0)
+    for (const st of document.querySelectorAll('[data-tilt-stage]')) st.toggleAttribute('data-tilt-3d', next.size > 0)
   }
   lifted = next
+  settleChains()
 }
-/** How high the lifted tile holding `el` stands, or 0. */
+/** How high `el` stands: the lifts of everything raised that holds it
+ *  (a button on a docked card stands on the card's lift), or 0. */
 function liftOf(el: Element | null): number {
-  for (let e = el; e; e = e.parentElement) {
-    const z = lifted.get(e as HTMLElement)
-    if (z !== undefined) return z
-  }
-  return 0
+  let z = 0
+  for (let e = el; e; e = e.parentElement) z += lifted.get(e as HTMLElement) ?? 0
+  return z
 }
 function dropLifts() { if (lifted.size) setLifts(new Map()) }
+// The 3D view may stop drawing once flat, so settle back here too: nothing
+// stays lifted or unclipped in the flat view.
+useTiltStore.subscribe(s => { if (!isTilted(s.tilt)) dropLifts() })
 
 /** Every model card in view, as flat px from the host centre. */
 function collectTargets(W: number, H: number): TiltTarget[] {
