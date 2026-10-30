@@ -26,6 +26,8 @@ import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useViewport3DStore } from '../../store/viewport3dStore'
 import { useBoardsStore } from '../../store/boardsStore'
 import { useRailUiStore } from '../../store/railUiStore'
+import { railViewerDocks, viewerRail } from '../../utils/railViewer'
+import { setGlHidden } from '../../three/viewportRenderer'
 import { getMediaItems } from '../../types/bar'
 import { faceBlocks } from '../../utils/cardGrid'
 import { createTiltScene, type TiltTarget, type TiltFrameState, type TiltSlab, type TiltArt } from '../../three/tiltScene'
@@ -310,13 +312,19 @@ export const TiltLayer: React.FC = () => {
 /** The 3D side, shared between the always-on TiltModels and the input in
  *  TiltedView. */
 const models: {
-  /** Hit test at a client point: a model's key, `person|<key>`, or null. */
+  /** Hit test at a client point: a model's key, `person|<key>`,
+   *  `deco|<owner>` (console furniture), or null. */
   pick: ((clientX: number, clientY: number) => string | null) | null
+  /** How high the last furniture pick hit it, px off the plane. */
+  pickZ: (() => number) | null
   info: ((key: string) => { url: string; unit: number } | null) | null
   hovered: string | null
   /** Where the cursor rests over the plane with no button down, or null. */
   at: { x: number; y: number } | null
-} = { pick: null, info: null, hovered: null, at: null }
+} = { pick: null, pickZ: null, info: null, hovered: null, at: null }
+/** A pick that lights up under the cursor: a model or a person, not
+ *  furniture. */
+const modelKey = (k: string | null | undefined) => (k && !k.startsWith('deco|') ? k : null)
 
 /** The camera angle the 3D look fades over: the sheen, raised parts and
  *  models come in over the first FADE_TILT degrees of tipping and go over
@@ -385,7 +393,7 @@ const TiltModels: React.FC = () => {
       }
       if (!live) return
       const W = root.clientWidth, H = root.clientHeight
-      if (models.at) models.hovered = models.pick?.(models.at.x, models.at.y) ?? null
+      if (models.at) models.hovered = modelKey(models.pick?.(models.at.x, models.at.y))
       if (W && H) view.frame(now, W, H, collectTargets(W, H), frameState())
     }
     const build = () => {
@@ -405,6 +413,7 @@ const TiltModels: React.FC = () => {
         const r = root.getBoundingClientRect()
         return v.pick(clientX - r.left, clientY - r.top)
       }
+      models.pickZ = v.pickZ
       models.info = key => v.info(key)
       warm()
       raf = requestAnimationFrame(frame)
@@ -426,7 +435,7 @@ const TiltModels: React.FC = () => {
       unsubs.forEach(u => u())
       if (warmTimer) clearTimeout(warmTimer)
       cancelAnimationFrame(raf)
-      models.pick = null; models.info = null
+      models.pick = null; models.pickZ = null; models.info = null
       view?.dispose()
       canvas?.remove()
     }
@@ -515,6 +524,8 @@ function collectSlabs(K = 1): TiltSlab[] {
   // World layer: tiles and Viewers, in world units under the pan/zoom.
   const { pan, zoom } = useCanvasStore.getState()
   const lean = consoleLean(host, zoom)
+  const leaning: Leaning[] = []
+  const screens: Screen[] = []
   for (const world of host.querySelectorAll<HTMLElement>(':scope > div[style*="scale("]')) {
     for (const node of world.querySelectorAll<HTMLElement>('[data-viewport3d]:not([data-pinned]), [data-freenode][data-id]:not([data-pinned])')) {
       // A loop strip paints its face on its own body, which can sit off the
@@ -530,7 +541,18 @@ function collectSlabs(K = 1): TiltSlab[] {
       if (!slab) continue
       let hinge: Hinge | undefined
       const fs = useFreeNodeStore.getState()
-      if (node.hasAttribute('data-rail')) {
+      const sa = viewer ? lean.get(node.dataset.viewport3d!) : undefined
+      if (sa) {
+        // Console: the Viewer a strip shows on stands up off the plane on
+        // its bottom edge, a screen on a strut (Brian 2026-10-30, the
+        // mockup machine), its slab under it.
+        slab.z = slab.t
+        lifting.set(node, slab.t)
+        hinge = { v: slab.v + slab.h / 2, z: slab.z, a: sa }
+        slab.hinge = hinge
+        stand(node, hinge, zoom)
+        screens.push({ id: node.dataset.viewport3d!, slab, hinge })
+      } else if (node.hasAttribute('data-rail')) {
         // A loop strip is a tray: a rim round its edge, its floor the face.
         // Far off (small on screen) it settles back to a plain slab.
         const k = detail(w)
@@ -601,6 +623,7 @@ function collectSlabs(K = 1): TiltSlab[] {
             slab.t = Math.min(slab.z, m * THICK.tile)
             slab.hinge = hinge
             stand(node, hinge, zoom)
+            leaning.push({ rail: n!.railDock!.railId, slab, hinge })
           }
         }
         // A card (or deck) on a strip is drawn by the card layer over an
@@ -715,7 +738,9 @@ function collectSlabs(K = 1): TiltSlab[] {
     }
     for (const h of hinges) h.z *= K
   }
+  consoleFurniture(leaning, screens, out, zoom)
   setLifts(lifting)
+  standScreens(screens.map(s => s.id))
   // Artwork — pictures, videos, Viewer screens — read after the lifts are
   // set, so a lifted card's picture is masked at its height.
   lastArt = []
@@ -993,6 +1018,8 @@ function consoleLean(host: HTMLElement, zoom: number): Map<string, number> {
   const nodes = useFreeNodeStore.getState().nodes
   const drop = useRailUiStore.getState().drop
   const seen = new Set<string>()
+  /** How far up each strip stands, 0..1. */
+  const standing = new Map<string, number>()
   for (const n of Object.values(nodes)) {
     const r = n.rail
     if (!r || n.pin) continue
@@ -1007,6 +1034,7 @@ function consoleLean(host: HTMLElement, zoom: number): Map<string, number> {
     const body = host.querySelector<HTMLElement>(`[data-freenode][data-id="${n.id}"] [data-rail-body]`)
     const k = body ? detail(body.offsetWidth * zoom) : 0
     const s = grown * k * e * e * (3 - 2 * e)
+    standing.set(n.id, s)
     if (s <= 0) continue
     const cards = new Set([...r.slots, ...(r.rows ?? []).flat()].filter(sl => sl.kind === 'card').map(sl => sl.id))
     for (const t of Object.values(nodes)) {
@@ -1016,7 +1044,35 @@ function consoleLean(host: HTMLElement, zoom: number): Map<string, number> {
     }
   }
   for (const id of consoleEase.keys()) if (!seen.has(id)) consoleEase.delete(id)
+  // A Viewer stands while the strip it shows does, easing on its own (it
+  // can be pulled off its strip).
+  const shown = new Map<string, number>()
+  const windows = useViewport3DStore.getState().windows
+  for (const [wid, docked] of railViewerDocks(nodes, windows, zoom)) {
+    const rid = viewerRail(docked, useRailUiStore.getState().active)
+    if (rid) shown.set(wid, standing.get(rid) ?? 0)
+  }
+  for (const wid of new Set([...shown.keys(), ...screenEase.keys()])) {
+    // Carried by its header, it stays as it is till let go (taken off its
+    // strip, it lies down then).
+    const was = screenEase.get(wid) ?? shown.get(wid) ?? 0
+    const goal = carried === wid ? was : shown.get(wid) ?? 0
+    const e = goal > was ? Math.min(goal, was + dt / CONSOLE.easeMs) : Math.max(goal, was - dt / CONSOLE.easeMs)
+    if (e <= 0 && goal <= 0) screenEase.delete(wid); else screenEase.set(wid, e)
+    if (e > 0 && windows[wid] && !windows[wid].pin) out.set(wid, CONSOLE.viewer * e * Math.PI / 180)
+  }
   return out
+}
+const screenEase = new Map<string, number>()
+/** The standing Viewer being dragged by its header, if one is. */
+let carried: string | null = null
+/** The Viewers standing this frame: their GL bodies are not drawn (they
+ *  would stay on the floor where the Viewer lay). */
+let stoodScreens: string[] = []
+function standScreens(ids: string[]) {
+  if (ids.join() === stoodScreens.join()) return
+  stoodScreens = ids
+  setGlHidden(ids)
 }
 
 /** Console mode (Brian 2026-10-30: the strip as the mockup's machine): the
@@ -1025,9 +1081,66 @@ function consoleLean(host: HTMLElement, zoom: number): Map<string, number> {
  *  Degrees up from the floor. They rise from `from` degrees of tilt, full
  *  by FADE_TILT, and a strip eases down flat over `easeMs` while something
  *  is dragged onto it, so every drop lands by the flat view's rules. */
-const CONSOLE = { slot: 45, from: 4, easeMs: 220 }
+const CONSOLE = { slot: 45, viewer: 68, strutAt: 0.62, from: 4, easeMs: 220 }
 /** A project cabinet standing: degrees up from the canvas, its depth × width. */
 const CABINET = { stand: 85, depth: 0.45 }
+type Leaning = { rail: string; slab: TiltSlab; hinge: Hinge }
+type Screen = { id: string; slab: TiltSlab; hinge: Hinge }
+/** Console furniture, as on the mockup's machine. Behind each run of
+ *  leaning cards, a sloped back just behind their backs, so nothing shows
+ *  through between or above them; in front, along their bottom edges, a
+ *  dark lip they stand in. Built from the cards' final heights (after the
+ *  fade). Three.js alone draws them ('deco'): a press on one is a press on
+ *  its strip's band. */
+function consoleFurniture(leaning: Leaning[], screens: Screen[], out: TiltSlab[], zoom: number) {
+  // A standing Viewer's strut: a bar from the floor behind it up to its
+  // back, a little over halfway up.
+  for (const sc of screens) {
+    const { v, a } = sc.hinge
+    if (a < 20 * Math.PI / 180 || a >= 87 * Math.PI / 180) continue
+    const d = CONSOLE.strutAt * sc.slab.h
+    const rise = d * Math.sin(a), run = 0.416 * rise
+    const foot = v - d * Math.cos(a) - run
+    const L = Math.hypot(rise, run)
+    const w = Math.max(3, 0.03 * sc.slab.w), t = 0.6 * w
+    out.push({ u: sc.slab.u, v: foot - L / 2, w, h: L, r: w / 3, t, z: t, color: 0x3a4053, cap: true,
+      deco: `viewer:${sc.id}`, hinge: { v: foot, z: t, a: Math.PI - Math.atan2(rise, run) } })
+  }
+  if (!leaning.length) return
+  const nodes = useFreeNodeStore.getState().nodes
+  const byRail = new Map<string, Leaning[]>()
+  for (const l of leaning) byRail.set(l.rail, [...(byRail.get(l.rail) ?? []), l])
+  for (const [rail, cards] of byRail) {
+    const u = (nodes[rail]?.rail?.unit || 1) * zoom
+    const owner = `rail:${rail}`
+    const build = (run: Leaning[]) => {
+      const x0 = Math.min(...run.map(c => c.slab.u - c.slab.w / 2)) - 4 * u
+      const x1 = Math.max(...run.map(c => c.slab.u + c.slab.w / 2)) + 4 * u
+      // One strip, one angle; one row, one hinge line.
+      const { v, z, a } = run[0].hinge
+      const t = Math.max(...run.map(c => c.slab.t))
+      const h = Math.max(...run.map(c => c.slab.h))
+      const back = t + 0.5
+      const vB = v - back * Math.sin(a), zB = Math.max(0.25, z - back * Math.cos(a))
+      const L = h + 2 * u
+      out.push({ u: (x0 + x1) / 2, v: vB - L / 2, w: x1 - x0, h: L, r: 4 * u, t: zB, z: zB,
+        color: 0x59607a, cap: true, loft: true, deco: owner, hinge: { v: vB, z: zB, a } })
+      out.push({ u: (x0 + x1) / 2, v: v + 3 * u, w: x1 - x0, h: 6 * u, r: 2 * u, t: z + t, z: z + t,
+        color: 0x1e2230, cap: true, deco: owner })
+    }
+    // A run: neighbours in one row with no other column between them.
+    cards.sort((a, b) => a.hinge.v - b.hinge.v || a.slab.u - b.slab.u)
+    let run: Leaning[] = []
+    for (const c of cards) {
+      const last = run[run.length - 1]
+      if (last && (Math.abs(last.hinge.v - c.hinge.v) > 1 || c.slab.u - c.slab.w / 2 - (last.slab.u + last.slab.w / 2) > 0.3 * c.slab.w)) {
+        build(run); run = []
+      }
+      run.push(c)
+    }
+    if (run.length) build(run)
+  }
+}
 /** A card stood up on its bottom edge: the edge at flat `v` (px from the
  *  centre, y down) and height `z`, turned up by `a` radians. */
 type Hinge = { v: number; z: number; a: number }
@@ -1094,7 +1207,7 @@ function liftOf(el: Element | null): number {
   for (let e = el; e; e = e.parentElement) z += lifted.get(e as HTMLElement) ?? 0
   return z
 }
-function dropLifts() { if (lifted.size) setLifts(new Map()) }
+function dropLifts() { if (lifted.size) setLifts(new Map()); standScreens([]) }
 // The 3D view may stop drawing once flat, so settle back here too: nothing
 // stays lifted or unclipped in the flat view.
 useTiltStore.subscribe(s => { if (!isTilted(s.tilt)) dropLifts() })
@@ -1129,7 +1242,9 @@ function collectTargets(W: number, H: number): TiltTarget[] {
     u: (v.x0 + v.x1) / 2 - W / 2, v: (v.y0 + v.y1) / 2 - H / 2,
     w: Math.min(v.x1 - v.x0, (v.y1 - v.y0) * 1.4) * 0.7, h: v.y1 - v.y0,
   })
-  for (const v of viewers) if (v.url) onViewer(v, v.url, v.name)
+  // Not on a Viewer standing as console mode's screen: its body there is
+  // the strip's result.
+  for (const v of viewers) if (v.url && !stoodScreens.includes(v.id)) onViewer(v, v.url, v.name)
   const GAP = 14
   const stage = document.querySelector<HTMLElement>('[data-tilt-stage="overlay"]')
   if (stage) {
@@ -1261,9 +1376,23 @@ const TiltedView: React.FC = () => {
     // a release still has to arrive, or the drag it ends never ends and the
     // card sticks to the cursor (Brian 2026-10-30): it goes here.
     let lastFlat: { x: number; y: number } | null = null
+    /** A press that drags something standing (a console Viewer by its
+     *  header) or furniture (a strip by its sloped back): its moves are
+     *  read on the level plane through the point grabbed, `h` px up, and
+     *  sent relative to the press (`p0`, sent; `q0`, that plane's point
+     *  then). Read on the standing face itself, the face moving with the
+     *  drag moved the point read, and the Viewer ran off. */
+    let rel: { h: number; q0: { x: number; y: number }; p0: { x: number; y: number } } | null = null
+    /** A press on furniture: its native click (and double-click) would go to
+     *  whatever is hidden behind it (a strip's header): kept from it. */
+    let eatClick = false
     const resend = (e: MouseEvent, type: string, to: EventTarget, height = 0, at?: { x: number; y: number }) => {
       // A lifted tile is pressed at its own height, not the floor's.
-      let p = at ?? flatClient(e.clientX, e.clientY, height, hingeOf(to as Element))
+      let p = at ?? null
+      if (!p && rel) {
+        const q = flatClient(e.clientX, e.clientY, rel.h)
+        p = q && { x: rel.p0.x + q.x - rel.q0.x, y: rel.p0.y + q.y - rel.q0.y }
+      } else if (!p) p = flatClient(e.clientX, e.clientY, height, hingeOf(to as Element))
       if (p) lastFlat = p
       else if (lastFlat && /up$|cancel$/.test(type)) p = lastFlat
       if (!p) return
@@ -1390,11 +1519,39 @@ const TiltedView: React.FC = () => {
       if (g?.kind === 'remap') release(e, g)
       g = null
       lastFlat = null
+      rel = null
+      eatClick = false
+      carried = null
       models.at = null
       // A model is clicked straight in 3D: it selects its card or tile
       // (Shift adds to the selection).
       if (e.button === 0 && !e.altKey && hostOf(e.target as Element) === host && !(e.target as Element).closest('[data-tilt-hud]')) {
         const key = models.pick?.(e.clientX, e.clientY)
+        if (key?.startsWith('deco|')) {
+          // Console furniture. A strip's sloped back or lip is pressed as
+          // its band (as in 2D: the strip moves, its Viewer with it); a
+          // Viewer's strut as its header.
+          const [kind, id] = key.slice('deco|'.length).split(':')
+          const to = kind === 'rail'
+            ? document.querySelector<HTMLElement>(`[data-freenode][data-id="${id}"] [data-rail-band]`)
+            : document.querySelector<HTMLElement>(`[data-viewport3d="${id}"] [data-viewer-chrome]`)
+          const h = models.pickZ?.() ?? 0
+          const q0 = to && flatClient(e.clientX, e.clientY, h)
+          if (to && q0) {
+            e.preventDefault(); swallow(e)
+            hitAt = true
+            let r: DOMRect
+            try { r = to.getBoundingClientRect() } finally { hitAt = false; standBack() }
+            // On the band under the cursor; on the header at its middle.
+            const p0 = { x: kind === 'rail' ? q0.x : r.left + r.width / 2, y: r.top + r.height / 2 }
+            rel = { h, q0, p0 }
+            eatClick = true
+            g = { kind: 'remap', target: to, pointerId: e.pointerId, height: 0 }
+            resend(e, 'pointerdown', to, 0, p0)
+            resend(e, 'mousedown', to, 0, p0)
+            return
+          }
+        }
         if (key?.startsWith('person|')) {
           // Size the person: drag up to grow them, down to shrink. How big
           // they are against the model IS the model's real-world scale, so
@@ -1404,7 +1561,7 @@ const TiltedView: React.FC = () => {
           if (info) g = { kind: 'person', url: info.url, unit0: info.unit, y0: e.clientY }
           return
         }
-        if (key) {
+        if (key && !key.startsWith('deco|')) {
           // A click selects; a drag up or down sizes the model on its card,
           // the same way the person is sized.
           e.preventDefault(); swallow(e)
@@ -1436,6 +1593,17 @@ const TiltedView: React.FC = () => {
       const height = liftOf(e.target as Element)
       const target = flatTarget(e, e.target as Element, height)
       g = { kind: 'remap', target, pointerId: e.pointerId, height }
+      // A standing Viewer dragged by its header slides on the level plane
+      // through the point grabbed (see rel).
+      const hinge = hingeOf(target)
+      if (hinge && target.closest('[data-viewer-chrome]')) {
+        const p0 = flatClient(e.clientX, e.clientY, height, hinge)
+        const r = host.getBoundingClientRect()
+        const h = p0 && hinge.z + Math.max(0, hinge.v - (p0.y - r.top - r.height / 2)) * Math.sin(hinge.a)
+        const q0 = p0 && flatClient(e.clientX, e.clientY, h!)
+        if (p0 && q0) rel = { h: h!, q0, p0 }
+        carried = target.closest<HTMLElement>('[data-viewport3d]')?.dataset.viewport3d ?? null
+      }
       resend(e, 'pointerdown', target, height)
       resend(e, 'mousedown', target, height)
     }
@@ -1455,13 +1623,14 @@ const TiltedView: React.FC = () => {
         }
         if (g.kind === 'marquee') setBand(null)
         g = null
+        carried = null
       }
       if (!g) {
         // Asked again every frame (TiltModels), not only as the mouse
         // moves: a model that was hidden for a frame (its card re-rendering)
         // as the cursor came to rest would otherwise stay unlit under it.
         models.at = e.buttons === 0 && !e.altKey && hostOf(e.target as Element) === host ? { x: e.clientX, y: e.clientY } : null
-        models.hovered = models.at && (models.pick?.(models.at.x, models.at.y) ?? null)
+        models.hovered = models.at && modelKey(models.pick?.(models.at.x, models.at.y))
         return
       }
       swallow(e)
@@ -1519,6 +1688,7 @@ const TiltedView: React.FC = () => {
       }
       if (g.kind === 'marquee') { marqueeSelect(g, e.shiftKey); setBand(null) }
       g = null
+      carried = null
     }
     const onWheel = (e: WheelEvent) => {
       if (!onPlane(e.target)) return
@@ -1529,7 +1699,10 @@ const TiltedView: React.FC = () => {
     // The browser's own drag (of a picture under the cursor) cancels the
     // pointer mid-gesture; while a press is being re-sent there is none.
     const onDragStart = (e: DragEvent) => { if (g?.kind === 'remap') e.preventDefault() }
+    const onClick = (e: MouseEvent) => { if (e.isTrusted && eatClick) { e.preventDefault(); swallow(e) } }
     window.addEventListener('dragstart', onDragStart, true)
+    window.addEventListener('click', onClick, true)
+    window.addEventListener('dblclick', onClick, true)
     window.addEventListener('pointerdown', onDown, true)
     window.addEventListener('pointermove', onMove, true)
     window.addEventListener('pointerup', onUp, true)
@@ -1537,6 +1710,8 @@ const TiltedView: React.FC = () => {
     window.addEventListener('wheel', onWheel, { capture: true, passive: false })
     return () => {
       window.removeEventListener('dragstart', onDragStart, true)
+      window.removeEventListener('click', onClick, true)
+      window.removeEventListener('dblclick', onClick, true)
       window.removeEventListener('pointerdown', onDown, true)
       window.removeEventListener('pointermove', onMove, true)
       window.removeEventListener('pointerup', onUp, true)

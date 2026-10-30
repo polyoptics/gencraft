@@ -73,6 +73,13 @@ export interface TiltSlab {
   /** A small raised part (a header, button or banner): the sheen covers
    *  all of it. Elsewhere it only runs round the face's border. */
   pop?: boolean
+  /** With a hinge: only its top turns; its walls drop straight to the
+   *  floor from the turned top's edge (a wedge, sloped on top). */
+  loft?: boolean
+  /** Furniture three.js alone draws (console mode's sloped back), owned by
+   *  this key: its top is coloured and solid, it gets no sheen, and pick()
+   *  answers `deco|<owner>` for it. */
+  deco?: string
 }
 
 /** Artwork on the plane — a picture, video or Viewer screen — as a rect
@@ -465,6 +472,8 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     return true
   }
 
+  /** Which side triangles are furniture, and whose (pick()). */
+  const decoTris: { from: number; to: number; owner: string }[] = []
   const SLAB_MAX = 200, CORNER_SEG = 4
   const RING = 4 * (CORNER_SEG + 1)
   const SIDE_V = SLAB_MAX * (RING * 8 + 2), SIDE_I = SLAB_MAX * RING * 24
@@ -514,6 +523,8 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   const sheenIdx = new Uint32Array(SLAB_MAX * RING * 6)
   const sheenGeo = new THREE.BufferGeometry()
   sheenGeo.setAttribute('position', new THREE.BufferAttribute(sheenPos, 3).setUsage(THREE.DynamicDrawUsage))
+  // Not turned with a leaning face: turned, its shine faced the camera and
+  // washed out its name and edges. Lit as if flat, it reads as before.
   sheenGeo.setAttribute('normal', new THREE.BufferAttribute(sheenNrm, 3))
   sheenGeo.setIndex(new THREE.BufferAttribute(sheenIdx, 1))
   const sheenMesh = new THREE.Mesh(sheenGeo, SHEEN_MAT)
@@ -595,6 +606,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     const n = Math.min(slabs.length, SLAB_MAX)
     let sv = 0, si = 0, tv = 0, ti = 0, li = 0, hv = 0, hi = 0
     slabBox.makeEmpty()
+    decoTris.length = 0
     const vert = (x: number, y: number, z: number, nx: number, ny: number, nz: number, shade: number) => {
       const o = sv * 3
       sidePos[o] = x; sidePos[o + 1] = y; sidePos[o + 2] = z
@@ -624,7 +636,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       const s = slabs[k]
       const hw = s.w / 2, hh = s.h / 2
       const z = s.z ?? 0
-      const sv0 = sv, tv0 = tv / 3, hv0 = hv / 3
+      const sv0 = sv, tv0 = tv / 3, hv0 = hv / 3, si0 = si
       col.setHex(s.color)
       outline(s.u, s.v, hw, hh, s.r, ox, oy, onx, ony)
       const rimH = s.rim ? s.rim.h : 0
@@ -654,23 +666,46 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       const b0 = sv; for (let i = 0; i < RING; i++) vert(ox[i], oy[i], z - s.t, 0, 0, -1, 0.45)
       for (let i = 0; i < RING; i++) { sideIdx[si++] = c0; sideIdx[si++] = b0 + i; sideIdx[si++] = b0 + ((i + 1) % RING) }
       // A coloured top, for a slab no DOM face covers (a deck's lower cards).
+      const capAt = sv
       if (s.cap) {
         const c1 = vert(s.u, -s.v, z, 0, 0, 1, 1)
         const b1 = sv; for (let i = 0; i < RING; i++) vert(ox[i], oy[i], z, 0, 0, 1, 1)
         for (let i = 0; i < RING; i++) { sideIdx[si++] = c1; sideIdx[si++] = b1 + ((i + 1) % RING); sideIdx[si++] = b1 + i }
+      }
+      if (s.deco) {
+        // Solid and coloured all through, and nothing of the DOM's: no
+        // depth-only top, no sheen, casts by its walls.
+        if (s.hinge && s.loft) {
+          turn(sidePos, null, up, up + RING, s.hinge)
+          turn(sidePos, sideNrm, capAt, sv, s.hinge)
+          // The walls and the bottom drop straight down from the turned edge.
+          for (let i = 0; i < RING; i++) {
+            const f = (up + i) * 3
+            for (const r of [dn, b0]) { const o = (r + i) * 3; sidePos[o] = sidePos[f]; sidePos[o + 1] = sidePos[f + 1] }
+          }
+          const m = (capAt) * 3
+          if (s.cap) { sidePos[c0 * 3] = sidePos[m]; sidePos[c0 * 3 + 1] = sidePos[m + 1] }
+        } else if (s.hinge) {
+          turn(sidePos, sideNrm, sv0, sv, s.hinge)
+        }
+        for (let o = sv0 * 3; o < sv * 3; o += 3) slabBox.expandByPoint(fitC.set(sidePos[o], sidePos[o + 1], sidePos[o + 2]))
+        decoTris.push({ from: si0 / 3, to: si / 3, owner: s.deco })
+        continue
       }
       // Depth-only top at the face.
       const top0 = tv / 3
       topPos[tv++] = s.u; topPos[tv++] = -s.v; topPos[tv++] = z
       for (let i = 0; i < RING; i++) { topPos[tv++] = ox[i]; topPos[tv++] = oy[i]; topPos[tv++] = z }
       for (let i = 0; i < RING; i++) { topIdx[ti++] = top0; topIdx[ti++] = top0 + 1 + i; topIdx[ti++] = top0 + 1 + ((i + 1) % RING) }
-      if (z > 0.5) for (let i = 0; i < RING; i++) { liftIdx[li++] = top0; liftIdx[li++] = top0 + 1 + i; liftIdx[li++] = top0 + 1 + ((i + 1) % RING) }
+      // Not a leaning face: its normals stay the flat ones, so it would
+      // catch and cast askew. Its turned walls still cast.
+      if (z > 0.5 && !s.hinge) for (let i = 0; i < RING; i++) { liftIdx[li++] = top0; liftIdx[li++] = top0 + 1 + i; liftIdx[li++] = top0 + 1 + ((i + 1) % RING) }
       // Sheen: the outline, and an inset ring (or the centre, for a small
       // raised part), wound the same way as the top's fan.
       if (s.hinge) {
         turn(sidePos, sideNrm, sv0, sv, s.hinge)
         turn(topPos, null, tv0, tv / 3, s.hinge)
-        slabBox.expandByPoint(fitC.set(s.u, -s.v, z + s.h))
+        for (let o = sv0 * 3; o < sv * 3; o += 3) slabBox.expandByPoint(fitC.set(sidePos[o], sidePos[o + 1], sidePos[o + 2]))
       }
       // Round buttons get none: a highlight on a disc reads as a second,
       // misregistered disc.
@@ -944,16 +979,22 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   const raycaster = new THREE.Raycaster()
   /** The key of the model drawn at this point (px from the canvas's
    *  top-left), `person|<key>` for the person beside one, or null. */
+  /** How high (px off the plane) the last furniture pick hit it. */
+  let pickedZ = 0
   function pick(x: number, y: number): string | null {
     if (!lastW || !lastH) return null
     raycaster.setFromCamera(new THREE.Vector2((x / lastW) * 2 - 1, -(y / lastH) * 2 + 1), camera)
     // A raised part (a button, an arrow, a nearer card) in front of a model
     // hides it, and takes the click: only a model nearer than those counts.
+    // Furniture three.js alone draws answers for its owner.
     let best: { key: string; d: number } | null = null
     for (const m of [topMesh, sideMesh]) {
       m.geometry.computeBoundingSphere()
       const hit = raycaster.intersectObject(m, false)[0]
-      if (hit && (!best || hit.distance < best.d)) best = { key: '', d: hit.distance }
+      if (!hit || (best && hit.distance >= best.d)) continue
+      const f = m === sideMesh && hit.faceIndex != null ? decoTris.find(d => hit.faceIndex! >= d.from && hit.faceIndex! < d.to) : undefined
+      best = { key: f ? `deco|${f.owner}` : '', d: hit.distance }
+      if (f) pickedZ = groundDeco.worldToLocal(hit.point.clone()).z
     }
     for (const [key, s] of standing) {
       if (!s.stand.visible || !s.inst) continue
@@ -989,5 +1030,5 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     renderer.forceContextLoss()
   }
 
-  return { frame, warm, pick, info, dispose }
+  return { frame, warm, pick, pickZ: () => pickedZ, info, dispose }
 }

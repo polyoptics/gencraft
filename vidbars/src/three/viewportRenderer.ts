@@ -70,6 +70,16 @@ const views = new Map<string, ViewRuntime>()
  *  work area instead of drawing behind the footer. */
 const footerInsets = new Map<string, number>()
 
+/** Windows whose GL body is not drawn: a Viewer stood up off the plane
+ *  (console mode's screen) leaves its flat footprint, where its model
+ *  would otherwise go on being drawn. */
+const glHidden = new Set<string>()
+export function setGlHidden(ids: Iterable<string>): void {
+  glHidden.clear()
+  for (const id of ids) glHidden.add(id)
+  requestRender()
+}
+
 export function setViewFooterInset(id: string, px: number): void {
   if ((footerInsets.get(id) ?? 0) === px) return
   if (px > 0) footerInsets.set(id, px); else footerInsets.delete(id)
@@ -247,6 +257,7 @@ function renderFrame(): void {
     if (sh <= 0) continue
     if (sx + sw < 0 || sy + sh < 0 || sx > W || sy > H) continue   // offscreen
     if (sw < MIN_GL_PX) continue                                    // poster takes over
+    if (glHidden.has(win.id)) continue                              // stood up (TiltLayer)
     const view = views.get(win.id)
     if (!view || view.status !== 'ready') continue
     const target = win.pin ? pinRenderer : renderer
