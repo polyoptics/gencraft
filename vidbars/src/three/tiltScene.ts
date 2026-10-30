@@ -449,7 +449,11 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   // this adds only the shine, black plus specular, added on top).
   const SHEEN_MAT = new THREE.MeshPhongMaterial({
     color: 0x000000, specular: 0x9aa4bc, shininess: 14, side: THREE.DoubleSide, ...SKIP_ART,
-    transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, depthFunc: THREE.LessEqualDepth,
+    // Added to the colour only: the canvas's alpha stays as it was, so the
+    // DOM face under it still shows (adding alpha too paints it black).
+    transparent: true, blending: THREE.CustomBlending, blendEquation: THREE.AddEquation,
+    blendSrc: THREE.OneFactor, blendDst: THREE.OneFactor, blendSrcAlpha: THREE.ZeroFactor, blendDstAlpha: THREE.OneFactor,
+    depthWrite: false, depthFunc: THREE.LessEqualDepth,
   })
   // Where the sheen goes (Brian 2026-10-30): a band round each face's
   // border and the whole of small raised parts — never across a face,

@@ -513,7 +513,7 @@ function collectSlabs(): TiltSlab[] {
         const strip = n?.railDock && world.querySelector<HTMLElement>(`[data-freenode][data-id="${n.railDock.railId}"] [data-rail-body]`)
         const k = strip ? detail(strip.offsetWidth * zoom) : 0
         if (k > 0) {
-          slab.z = m * TRAY.card * (1 + (n?.railDock?.order ?? 0) * TRAY.stack) * k
+          slab.z = dockLift(m, n?.railDock?.order ?? 0) * k
           slab.t = slab.z    // stacked on the floor, so its sides reach it
           lifting.set(node, slab.z)
         }
@@ -526,13 +526,26 @@ function collectSlabs(): TiltSlab[] {
           continue
         }
       }
+      // In a solitaire stack the cards above cover part of this one: what
+      // they cover stays flat, so none of it pokes up through them.
+      const over = coversOf(node.dataset.id)
       popParts(node, world, slab.z ?? 0, m, detail(w), lifting, (el, z, t) => {
         const a = offsetIn(el, world)
         if (!a) return
+        if (over.some(r => a.x < r.x + r.width && r.x < a.x + el.offsetWidth && a.y < r.y + r.height && r.y < a.y + el.offsetHeight)) return false
         const p = add(pan.x + a.x * zoom, pan.y + a.y * zoom, el.offsetWidth * zoom, el.offsetHeight * zoom, t, SIDE.pop, radiusOf(el) * zoom)
         if (p) { p.z = z; p.pop = true }
       })
     }
+  }
+  // A card (or deck) on a strip has an invisible stand-in tile that is never
+  // drawn, so its lift is worked out from the store: it stands on the
+  // strip's floor, clear of it, like a docked tile.
+  for (const n of Object.values(useFreeNodeStore.getState().nodes)) {
+    if (!n.cardRef || !n.railDock || n.railDock.lifted) continue
+    const strip = host.querySelector<HTMLElement>(`[data-freenode][data-id="${n.railDock.railId}"] [data-rail-body]`)
+    const k = strip ? detail(strip.offsetWidth * zoom) : 0
+    if (k > 0) docked.set(n.cardRef, dockLift(Math.min(n.width, n.height) * zoom, n.railDock.order ?? 0) * k)
   }
   // Card layer: cards and closed decks, already in screen px.
   const stage = document.querySelector<HTMLElement>('[data-tilt-stage="overlay"]')
@@ -601,9 +614,9 @@ let lastArt: TiltArt[] = []
 /** The bits of a face that stand proud of it when tilted, near enough:
  *  a tile's header bar, and on an effect face its on/off-solo-↑ buttons
  *  and its name banner. Raised by a share of the card's shorter side. */
-const POP = 0.05
+const POP = 0.025
 function popParts(root: HTMLElement, stage: HTMLElement, base: number, m: number, k: number,
-                  lifting: Map<HTMLElement, number>, slab: (el: HTMLElement, z: number, t: number) => void) {
+                  lifting: Map<HTMLElement, number>, slab: (el: HTMLElement, z: number, t: number) => false | void) {
   if (k <= 0) return
   const parts = new Set<HTMLElement>()
   const head = root.querySelector<HTMLElement>(':scope > [data-freenode-header]')
@@ -615,10 +628,21 @@ function popParts(root: HTMLElement, stage: HTMLElement, base: number, m: number
   const t = m * POP * k
   for (const el of parts) {
     if (!el.offsetWidth || !el.offsetHeight) continue
+    if (slab(el, base + t, t) === false) continue
     lifting.set(el, t)
     chain(el, stage)
-    slab(el, base + t, t)
+    fill(el)
   }
+}
+
+/** The boxes (world units) of the cards stacked over docked tile `id` in
+ *  its strip column: the ones after it, which stand higher. */
+function coversOf(id: string | undefined): { x: number; y: number; width: number; height: number }[] {
+  const nodes = useFreeNodeStore.getState().nodes
+  const d = id ? nodes[id]?.railDock : undefined
+  if (!d || d.lifted) return []
+  return Object.values(nodes).filter(o => o.id !== id && o.railDock && !o.railDock.lifted &&
+    o.railDock.railId === d.railId && o.railDock.slotId === d.slotId && (o.railDock.order ?? 0) > (d.order ?? 0))
 }
 
 /** For a raised bit to really stand off its face, every box between it and
@@ -639,7 +663,33 @@ function chain(el: HTMLElement, stage: HTMLElement) {
     }
   }
 }
+/** A raised part has to be solid: one with a see-through background would
+ *  show the face under it through its lid. While raised it is filled with
+ *  the colour it shows flat (its own over what is behind it). */
+let filled = new Map<HTMLElement, string>()
+let filling = new Map<HTMLElement, string>()
+function fill(el: HTMLElement) {
+  const was = filled.get(el) ?? el.style.backgroundColor
+  filling.set(el, was)
+  if (filled.has(el)) return
+  const own = rgba(getComputedStyle(el).backgroundColor)
+  if (own[3] >= 1) return
+  let under: number[] = [24, 24, 30, 1]
+  for (let e = el.parentElement; e; e = e.parentElement) {
+    const c = rgba(getComputedStyle(e).backgroundColor)
+    if (c[3] >= 1) { under = c; break }
+  }
+  const a = own[3]
+  el.style.backgroundColor = `rgb(${[0, 1, 2].map(i => Math.round(own[i] * a + under[i] * (1 - a))).join(',')})`
+}
+function rgba(css: string): number[] {
+  const n = css.match(/[\d.]+/g)?.map(Number) ?? []
+  return n.length >= 3 ? [n[0], n[1], n[2], n[3] ?? 1] : [0, 0, 0, 0]
+}
 function settleChains() {
+  for (const [e, was] of filled) if (!filling.has(e)) e.style.backgroundColor = was
+  filled = filling
+  filling = new Map()
   for (const [e, was] of chained) {
     if (chaining.has(e)) continue
     e.style.transformStyle = was.ts
@@ -652,6 +702,12 @@ function settleChains() {
 /** How a loop strip reads as a tray, in its own units (and cards'
  *  thickness inside it as a share of their shorter side). */
 const TRAY = { rimW: 6, rimH: 7, card: 0.03, stack: 0.9 }
+/** How far a docked card's underside stands off the strip's floor: never
+ *  less than GAP px, so the two faces are never level and never flicker. */
+const GAP = 6
+function dockLift(m: number, order: number): number {
+  return Math.max(GAP, m * TRAY.card) * (1 + order * TRAY.stack)
+}
 
 /** Detail by distance: how much of the raised 3D (rims, lifts) a thing
  *  shows, by its width on screen — none below DETAIL_FROM px, all of it
