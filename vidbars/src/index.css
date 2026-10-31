@@ -56,7 +56,12 @@ body {
    step (an animated GIF repainting, a pan) and flash. One flat layer per
    stage paints as a whole instead. */
 [data-tilt-stage][data-tilted] [style*="will-change"] { will-change: auto !important; }
-[data-tilt-stage][data-tilted] { backface-visibility: hidden; will-change: transform; }
+[data-tilt-stage][data-tilted] { backface-visibility: hidden; }
+/* will-change only while the view moves (utils/rasterSettle): a promoted
+   layer keeps the bitmap it was rastered at and stretches it, so text went
+   grainy at many zooms. At rest the hint comes off and it paints crisp. */
+[data-tilt-stage][data-tilted][data-moving] { will-change: transform; }
+[data-tilt-stage]:not([data-tilted])[data-moving] [data-raster-layer] { will-change: transform; }
 /* Tilted, the world layer is a real 3D space, so a card docked in a loop
    strip can be lifted off the strip's floor (TiltLayer sets its translate).
    Only while something is lifted: a flat stage composites as one layer. */

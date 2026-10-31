@@ -1,5 +1,6 @@
 import React, { useRef, useCallback, useEffect, useState, useDeferredValue, useMemo } from 'react'
 import { useCanvasStore } from '../../store/canvasStore'
+import { markMoving } from '../../utils/rasterSettle'
 import { useTiltStage } from '../../store/tiltStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { PinLayer } from './PinLayer'
@@ -304,6 +305,14 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
   // Tilt is applied straight to the stage element (useTiltStage), so a
   // tilting frame does not re-render this component.
   const tiltStageRef = useTiltStage()
+  // will-change only while panning/zooming, so the world re-rasters crisp
+  // at the zoom it comes to rest on (utils/rasterSettle).
+  const tiltStageEl = useRef<HTMLDivElement | null>(null)
+  const stageRef = useCallback((el: HTMLDivElement | null) => {
+    tiltStageEl.current = el
+    return tiltStageRef(el)
+  }, [tiltStageRef])
+  useEffect(() => { markMoving(tiltStageEl.current) }, [pan.x, pan.y, zoom])
   const [rubberBand, setRubberBand] = useState<{ sx: number; sy: number; ex: number; ey: number } | null>(null)
   const rubberBandRef = useRef<{ sx: number; sy: number; ex: number; ey: number } | null>(null)
   const rbStartCanvas = useRef<{ cx: number; cy: number } | null>(null)
@@ -968,7 +977,7 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
     >
       {/* ── Tilt stage: the world layers tip back together when the canvas is
              tilted (store/tiltStore). 'none' when flat — no change at all. ── */}
-      <div ref={tiltStageRef} data-tilt-stage="world" style={{ position: 'absolute', inset: 0, transformOrigin: '50% 50%' }}>
+      <div ref={stageRef} data-tilt-stage="world" style={{ position: 'absolute', inset: 0, transformOrigin: '50% 50%' }}>
       <DotGrid panX={pan.x} panY={pan.y} zoom={zoom} />
 
       {/* ── NLE row lines (behind everything, in canvas space) ── */}
@@ -986,8 +995,8 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
           top: 0,
           transformOrigin: '0 0',
           transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-          willChange: 'transform',
         }}
+        data-raster-layer=""
       >
         {children}
       </div>
@@ -1223,8 +1232,7 @@ const NLERowBands: React.FC<{ pan: { x: number; y: number }; zoom: number }> = R
       transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
       transformOrigin: '0 0',
       pointerEvents: 'none',
-      willChange: 'transform',
-    }}>
+    }} data-raster-layer="">
       {cardGridLines}
       {rowBands}
     </div>

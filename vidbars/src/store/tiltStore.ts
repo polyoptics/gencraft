@@ -16,6 +16,7 @@ import { useCallback } from 'react'
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { createDebouncedIDBStorage } from '../utils/debouncedIDBStorage'
+import { markMoving } from '../utils/rasterSettle'
 
 /** CSS perspective distance (px) — also the three.js camera distance. */
 export const TILT_PERSPECTIVE = 1200
@@ -217,6 +218,7 @@ export function bindTiltStage(el: HTMLElement): () => void {
     if (t === last) return
     last = t
     el.style.transform = t
+    markMoving(el)
     if (t === 'none') el.removeAttribute('data-tilted')
     else el.setAttribute('data-tilted', '')
   }
