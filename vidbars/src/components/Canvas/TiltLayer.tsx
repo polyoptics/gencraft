@@ -345,7 +345,7 @@ const frameState = (): TiltFrameState => {
   const ts = useTiltStore.getState()
   const { unitsPerMetre: scales, sizeOf } = useModelScaleStore.getState()
   return {
-    tilt: ts.tilt, spin: ts.spin, shiftX: ts.shiftX, shiftY: ts.shiftY, texture: ts.texture, flat: ts.flat, wire: ts.wire, light: ts.light, turn: ts.turn,
+    tilt: ts.tilt, spin: ts.spin, shiftX: ts.shiftX, shiftY: ts.shiftY, glide: ts.glide, texture: ts.texture, flat: ts.flat, wire: ts.wire, light: ts.light, turn: ts.turn,
     walls: ts.walls, figure: ts.figure, hovered: models.hovered,
     selected: new Set([
       ...useFreeNodeStore.getState().selectedIds.map(id => `node:${id}`),
@@ -2269,12 +2269,51 @@ const TiltedView: React.FC = () => {
       g = null
       carried = null
     }
+    // Wheel zoom glides (tiltStore TiltGlide): the clicks ease a scale on
+    // the painted plane, and the canvas zoom takes it once the wheel rests.
+    let wz: { target: number; k: number; x: number; y: number; last: number; at: number; raf: number } | null = null
+    const settleZoom = () => {
+      const w = wz
+      if (!w) return
+      cancelAnimationFrame(w.raf)
+      w.k = w.target
+      wz = null
+      // The new zoom drawn now (flushSync), then the glide dropped, so the
+      // same frame shows both and nothing jumps.
+      flushSync(() => useCanvasStore.getState().zoomAtPoint(w.k, w.x + host.clientWidth / 2, w.y + host.clientHeight / 2))
+      useTiltStore.getState().setGlide(null)
+    }
+    const glideFrame = (now: number) => {
+      const w = wz
+      if (!w) return
+      const dt = Math.min(64, now - w.at)
+      w.at = now
+      const a = 1 - Math.exp(-dt / 55)
+      w.k = Math.exp(Math.log(w.k) + (Math.log(w.target) - Math.log(w.k)) * a)
+      const there = Math.abs(Math.log(w.target / w.k)) < 0.003
+      if (there) w.k = w.target
+      if (there && now - w.last > 140) { settleZoom(); return }
+      useTiltStore.getState().setGlide({ k: w.k, x: w.x, y: w.y })
+      w.raf = requestAnimationFrame(glideFrame)
+    }
     const onWheel = (e: WheelEvent) => {
       if (!onPlane(e.target)) return
       e.preventDefault(); swallow(e)
       const c = viewCentre(host)
-      if (c) useCanvasStore.getState().zoomAtPoint(e.deltaY < 0 ? 1.12 : 1 / 1.12, c.x, c.y)
+      if (!c) return
+      const now = performance.now()
+      if (!wz) {
+        wz = { target: 1, k: 1, x: c.x - host.clientWidth / 2, y: c.y - host.clientHeight / 2, last: now, at: now, raf: 0 }
+        wz.raf = requestAnimationFrame(glideFrame)
+      }
+      const z = useCanvasStore.getState().zoom
+      const step = e.deltaY < 0 ? 1.12 : 1 / 1.12
+      wz.target = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z * wz.target * step)) / z
+      wz.last = now
     }
+    // A press lands on the zoom it sees, so a glide still easing settles
+    // first.
+    const onPressSettle = () => settleZoom()
     // The browser's own drag (of a picture under the cursor) cancels the
     // pointer mid-gesture; while a press is being re-sent there is none.
     const onDragStart = (e: DragEvent) => { if (g?.kind === 'remap') e.preventDefault() }
@@ -2311,12 +2350,22 @@ const TiltedView: React.FC = () => {
     window.addEventListener('click', onClick, true)
     window.addEventListener('dblclick', onClick, true)
     window.addEventListener('contextmenu', onMenu, true)
+    window.addEventListener('pointerdown', onPressSettle, true)
     window.addEventListener('pointerdown', onDown, true)
     window.addEventListener('pointermove', onMove, true)
     window.addEventListener('pointerup', onUp, true)
     window.addEventListener('pointercancel', onUp, true)
     window.addEventListener('wheel', onWheel, { capture: true, passive: false })
     return () => {
+      window.removeEventListener('pointerdown', onPressSettle, true)
+      // Leaving mid-glide (inside React's commit, so no flushSync): the
+      // zoom it was heading to.
+      if (wz) {
+        cancelAnimationFrame(wz.raf)
+        useCanvasStore.getState().zoomAtPoint(wz.target, wz.x + host.clientWidth / 2, wz.y + host.clientHeight / 2)
+        wz = null
+        useTiltStore.getState().setGlide(null)
+      }
       window.removeEventListener('dragstart', onDragStart, true)
       window.removeEventListener('click', onClick, true)
       window.removeEventListener('dblclick', onClick, true)

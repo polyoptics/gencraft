@@ -73,6 +73,9 @@ interface TiltStore {
   walls: boolean
   /** A person beside each model, for scale. */
   figure: boolean
+  /** A wheel zoom easing in, not yet the canvas zoom (TiltGlide). */
+  glide: TiltGlide | null
+  setGlide: (g: TiltGlide | null) => void
   /** Console mode: the loop strip's cards stand up off the tray on their
    *  bottom edges, like a machine's panels; off = they lie in it. Kept
    *  across reloads. */
@@ -109,6 +112,8 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
   turn: true,
   walls: true,
   figure: false,
+  glide: null,
+  setGlide: glide => set({ glide }),
   console: readConsole(),
   setConsole: on => { set({ console: on }); try { localStorage.setItem(CONSOLE_KEY, on ? '1' : '0') } catch { /* private window */ } },
   setView: (tilt, spin) => {
@@ -172,12 +177,23 @@ function shiftKeeping(g: { x: number; y: number }, tiltDeg: number, spinDeg: num
  *  whose transform-origin is its centre. 'none' when flat, so the flat view
  *  is byte-for-byte what it was before tilt existed (no containing block
  *  for fixed children, no stacking context). */
-export function tiltCss(tilt: number, spin: number, shiftX = 0, shiftY = 0): string {
-  if (!isTilted(tilt) && Math.abs(spin) < 0.01 && Math.abs(shiftX) + Math.abs(shiftY) < 0.01) return 'none'
+export function tiltCss(tilt: number, spin: number, shiftX = 0, shiftY = 0, glide: TiltGlide | null = null): string {
+  if (!glide && !isTilted(tilt) && Math.abs(spin) < 0.01 && Math.abs(shiftX) + Math.abs(shiftY) < 0.01) return 'none'
   // The shift comes before the perspective: it moves the camera sideways,
   // so near and far slide alike on screen, as in Maya.
-  return `perspective(${TILT_PERSPECTIVE}px) translate(${shiftX}px, ${shiftY}px) rotateX(${tilt}deg) rotateZ(${spin}deg)`
+  const base = `perspective(${TILT_PERSPECTIVE}px) translate(${shiftX}px, ${shiftY}px) rotateX(${tilt}deg) rotateZ(${spin}deg)`
+  // A wheel zoom in progress: the plane scaled about the zoom point, on the
+  // compositor, until the zoom settles into the canvas zoom (see TiltGlide).
+  return glide ? `${base} translate(${glide.x}px, ${glide.y}px) scale3d(${glide.k}, ${glide.k}, ${glide.k}) translate(${-glide.x}px, ${-glide.y}px)` : base
 }
+
+/** A tilted wheel zoom on its way: the plane drawn `k` times bigger about
+ *  (x, y) (flat px from the host centre) without touching the canvas zoom.
+ *  Each wheel click used to change the canvas zoom, so every card was
+ *  painted again at every click (Brian 2026-10-31). Now the clicks ease the
+ *  scale on the already-painted plane, and the canvas zoom takes it in one
+ *  go once the wheel rests: one crisp repaint at the end. */
+export interface TiltGlide { k: number; x: number; y: number }
 
 /** How far off the plane is still pressed, as a multiple of the eye's
  *  distance to the screen (what is there shows 1/TILT_FAR its size). Just
@@ -213,8 +229,8 @@ export function unprojectTilt(sx: number, sy: number, tiltDeg: number, spinDeg: 
  *  through React would re-render the whole canvas each time. */
 export function bindTiltStage(el: HTMLElement): () => void {
   let last = ''
-  const apply = (s: { tilt: number; spin: number; shiftX: number; shiftY: number }) => {
-    const t = tiltCss(s.tilt, s.spin, s.shiftX, s.shiftY)
+  const apply = (s: { tilt: number; spin: number; shiftX: number; shiftY: number; glide: TiltGlide | null }) => {
+    const t = tiltCss(s.tilt, s.spin, s.shiftX, s.shiftY, s.glide)
     if (t === last) return
     last = t
     el.style.transform = t

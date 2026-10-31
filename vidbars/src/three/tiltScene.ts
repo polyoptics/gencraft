@@ -98,6 +98,9 @@ export interface TiltArt { u: number; v: number; w: number; h: number; z: number
 
 export interface TiltFrameState {
   tilt: number
+  /** A wheel zoom easing in (tiltStore TiltGlide): the plane scaled about
+   *  a point, as the CSS stage is. */
+  glide?: { k: number; x: number; y: number } | null
   /** The camera's sideways move (screen px), tiltStore's shiftX/Y. */
   shiftX: number
   shiftY: number
@@ -774,6 +777,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   }
 
   let lastW = 0, lastH = 0
+  const glideM = new THREE.Matrix4()
 
 
   function frame(now: number, W: number, H: number, targets: TiltTarget[], st: TiltFrameState, into: THREE.WebGLRenderTarget | null = null) {
@@ -796,6 +800,13 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     // CSS translate(shift) before the rotations is a move in three's view
     // plane too (y flipped).
     ground.matrix.makeTranslation(st.shiftX, -st.shiftY, 0).multiply(F).multiply(R).multiply(F)
+    if (st.glide) {
+      const { k, x, y } = st.glide
+      ground.matrix
+        .multiply(glideM.makeTranslation(x, -y, 0))
+        .multiply(glideM.makeScale(k, k, k))
+        .multiply(glideM.makeTranslation(-x, y, 0))
+    }
     ground.matrixWorldNeedsUpdate = true
     groundDeco.matrix.copy(ground.matrix)
     groundDeco.matrixWorldNeedsUpdate = true
