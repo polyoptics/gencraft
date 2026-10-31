@@ -39,6 +39,12 @@ type Handle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'move'
 const PAINT_COLORS = ['#ffffff', '#f87171', '#fbbf24', '#34d399', '#60a5fa', '#a78bfa', '#111318']
 const MIN_BOX = 10
 
+/** The tool row's fixed height. It never changes, so the image area under
+ *  it never moves while a tool is in use. */
+const TOOLBAR_H = 32
+/** Stamp keeps its width while it reads "…" (a cut in flight). */
+const STAMP_SLOT: React.CSSProperties = { minWidth: 58, textAlign: 'center' }
+
 const tbBtn = (active: boolean): React.CSSProperties => ({
   background: active ? 'rgba(120,170,255,0.25)' : 'rgba(255,255,255,0.05)',
   border: `1px solid ${active ? 'rgba(140,190,255,0.5)' : 'rgba(255,255,255,0.1)'}`,
@@ -455,12 +461,18 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
 
   return (
     <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column' }}>
-      {/* Toolbar */}
+      {/* Toolbar — ONE fixed-height row, never wrapping. Its contents change
+          with the tool and mid-gesture (hints come and go, Stamp turns to
+          "…" while a cut is in flight); a wrapping row grew and shrank with
+          them and bumped the image up and down under the pointer. Whatever
+          does not fit scrolls sideways (no scrollbar, so it adds no height). */}
       <div
         onPointerDown={e => e.stopPropagation()}
         style={{
-          display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap',
-          padding: '6px 10px', background: 'rgba(20,22,38,0.95)',
+          display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'nowrap',
+          height: TOOLBAR_H, boxSizing: 'border-box', whiteSpace: 'nowrap',
+          overflowX: 'auto', overflowY: 'hidden', scrollbarWidth: 'none',
+          padding: '0 10px', background: 'rgba(20,22,38,0.95)',
           borderBottom: '1px solid rgba(255,255,255,0.08)', flexShrink: 0,
         }}
       >
@@ -481,7 +493,7 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
               <span style={{ fontSize: 9.5, color: 'rgba(255,255,255,0.45)' }}>drag to place a frame</span>
             )}
             <button
-              style={{ ...tbBtn(true), opacity: hasCropFrame && !busy ? 1 : 0.4 }}
+              style={{ ...tbBtn(true), ...STAMP_SLOT, opacity: hasCropFrame && !busy ? 1 : 0.4 }}
               disabled={!hasCropFrame || busy}
               onClick={() => cropBox && void stamp(cropBox, false)}
               title="Save this frame as a new image (the frame stays put)"
@@ -507,7 +519,7 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
             </div>
             <div style={{ display: 'flex', gap: 4, marginLeft: 'auto' }}>
               <button
-                style={{ ...tbBtn(true), opacity: strokes.length && !busy ? 1 : 0.4 }}
+                style={{ ...tbBtn(true), ...STAMP_SLOT, opacity: strokes.length && !busy ? 1 : 0.4 }}
                 disabled={!strokes.length || busy}
                 onClick={() => void stamp(null, true)}
                 title="Save a painted copy as a new image"

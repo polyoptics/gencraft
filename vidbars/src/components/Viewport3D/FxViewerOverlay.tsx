@@ -57,7 +57,10 @@ export const FxViewerOverlay: React.FC<{ windowId: string; fontSize: number }> =
       onPointerDown={stop} onWheel={stop} onDoubleClick={stop}
       style={{ position: 'absolute', inset: 0, zIndex: 5, background: '#0c0d14', display: 'flex', flexDirection: 'column' }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 6px', fontSize, color: 'rgba(255,255,255,0.8)', background: 'rgba(255,255,255,0.05)', flexShrink: 0 }}>
+      {/* Fixed height, one line: what it says changes while you work
+          ("updating…", a save, a grip), and the picture under it must not
+          move when it does. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 6px', height: Math.round(fontSize * 2.2), boxSizing: 'border-box', overflow: 'hidden', whiteSpace: 'nowrap', fontSize, color: 'rgba(255,255,255,0.8)', background: 'rgba(255,255,255,0.05)', flexShrink: 0 }}>
         <span style={{ color: '#f2b84b' }}>✦</span>
         <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{chainName || 'Effect strip'}{strip.running ? ' …' : ''}</span>
         {outputs.length > 1 && <>
