@@ -40,7 +40,8 @@ import { useFileMenuItems } from '../../hooks/useFileMenu'
 import { useMenuClamp } from '../../hooks/useMenuClamp'
 import { RailBody } from './RailBody'
 import { CabinetBody } from './cabinet/CabinetBody'
-import { aimCabinet, addDrawer, cabinetDrawerAt, cabinetTargets, canStowTile, emptyCabinet, itemCount, removeEmptyDrawer, stowSelection, stowTiles, toggleDrawer, useCabinetUi } from '../../utils/cabinet'
+import { saveCanvasToDrawer } from '../../utils/cabinetProjects'
+import { aimCabinet, addDrawer, cabinetDrawerAt, cabinetTargets, canStowTile, drawerName, emptyCabinet, itemCount, removeEmptyDrawer, stowSelection, stowTiles, toggleDrawer, useCabinetUi } from '../../utils/cabinet'
 import { useRailUiStore } from '../../store/railUiStore'
 import {
   RAIL_GEOM, RAIL_TRAY, isDocked, isRail, isRailPicture, railDropTarget, railLayout, railMembers,
@@ -371,6 +372,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
   // Drag the whole card — anything except textarea/input/select/button/[data-resize]
   /** The drawer front a press landed on: a plain click there opens it. */
   const pressedDrawer = useRef<string | null>(null)
+  const menuDrawer = useRef<string | null>(null)
   const onNodeDown = useCallback((e: React.PointerEvent) => {
     if (e.button !== 0) return
     const tag = (e.target as HTMLElement).tagName
@@ -1352,6 +1354,8 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
       }}
       onContextMenu={e => {
         e.preventDefault(); e.stopPropagation()
+        // Which drawer of a cabinet was clicked: its menu offers it a project.
+        menuDrawer.current = (e.target as Element).closest<HTMLElement>('[data-cabinet-drawer]')?.dataset.cabinetDrawer?.split(':')[1] ?? node.cabinet?.open ?? null
         setNodeMenu({ x: e.clientX, y: e.clientY })
       }}
     >
@@ -1697,6 +1701,17 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
               ...(isCabinet ? [
                 { label: 'Add drawer', icon: '＋', action: () => { useUndoCoordinator.getState().checkpoint(); addDrawer(id); setNodeMenu(null) } },
                 { label: 'Remove an empty drawer', icon: '－', action: () => { useUndoCoordinator.getState().checkpoint(); removeEmptyDrawer(id); setNodeMenu(null) } },
+                // For an empty drawer: a whole project instead of loose things.
+                ...(() => {
+                  const d = node.cabinet?.drawers.find(x => x.id === menuDrawer.current)
+                  if (!d || d.project || d.items.length > 0) return []
+                  const name = drawerName(d, node.cabinet!.drawers.indexOf(d)).text
+                  const show = () => { const c = useFreeNodeStore.getState().nodes[id]?.cabinet; if (c && c.open !== d.id) toggleDrawer(id, d.id) }
+                  return [
+                    { label: `Save canvas to ${name}`, icon: '💾', action: () => { show(); saveCanvasToDrawer({ nodeId: id, drawerId: d.id }); setNodeMenu(null) } },
+                    { label: `Choose a saved project for ${name}`, icon: '📁', action: () => { show(); useCabinetUi.getState().setChoosing(d.id); setNodeMenu(null) } },
+                  ]
+                })(),
                 { label: `Empty all (${itemCount(node.cabinet)})`, icon: '↓', action: () => { useUndoCoordinator.getState().checkpoint(); emptyCabinet(id); setNodeMenu(null) } },
               ] : []),
               // Put this tile away, and the selection it is part of.

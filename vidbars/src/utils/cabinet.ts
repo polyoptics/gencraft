@@ -40,6 +40,9 @@ interface CabinetUi {
   /** A slow step's word on a drawer, or why it failed, by drawer id. */
   busy: Record<string, string>
   setBusy: (drawerId: string, word: string | null) => void
+  /** The drawer showing the list of saved projects to choose from. */
+  choosing: string | null
+  setChoosing: (drawerId: string | null) => void
 }
 
 export const useCabinetUi = create<CabinetUi>()(set => ({
@@ -52,6 +55,8 @@ export const useCabinetUi = create<CabinetUi>()(set => ({
   setAim: aim => set(s => (s.aim === aim ? s : { aim })),
   renaming: null,
   setRenaming: renaming => set({ renaming }),
+  choosing: null,
+  setChoosing: choosing => set({ choosing }),
   busy: {},
   setBusy: (drawerId, word) => set(s => {
     const { [drawerId]: _was, ...busy } = s.busy

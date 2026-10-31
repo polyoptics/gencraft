@@ -3,7 +3,7 @@
 // picture. Dragged out, a ghost of its real footprint lies on the canvas, so you
 // can see the room it needs before letting go.
 
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import ReactDOM from 'react-dom'
 import { useCanvasStore } from '../../../store/canvasStore'
 import { cssUrl } from '../../../utils/diskUrl'
@@ -11,7 +11,7 @@ import { useResolvedMedia } from '../../../utils/useResolvedMedia'
 import { cabinetDrawerAt, canvasPointAt, useCabinetUi } from '../../../utils/cabinet'
 import type { DrawerRef } from '../../../utils/cabinet'
 import type { CabinetProject, ProjectMap, ProjectMapPart } from '../../../utils/cabinetData'
-import { adoptSavedProject, forgetProject, putProjectAway, saveCanvasToDrawer, saveProject, takeProjectOut, takeProjectOutBelow } from '../../../utils/cabinetProjects'
+import { adoptSavedProject, forgetProject, putProjectAway, saveProject, takeProjectOut, takeProjectOutBelow } from '../../../utils/cabinetProjects'
 
 const Part: React.FC<{ part: ProjectMapPart; map: ProjectMap; k: number; grow: number }> = ({ part, map, k, grow }) => {
   const pic = useResolvedMedia(part.pic)
@@ -71,25 +71,27 @@ const Chip: React.FC<{ u: number; onClick: () => void; title?: string; children:
 
 interface SnapshotMeta { name: string; file: string }
 
+/** An empty drawer is just an empty tray, ready for what is dragged into it. A
+ *  project goes in from the cabinet's right-click menu, which opens this list. */
 export const EmptyDrawerActions: React.FC<{ drawer: DrawerRef; u: number }> = ({ drawer, u }) => {
-  const [saved, setSaved] = useState<SnapshotMeta[] | 'loading' | null>(null)
-  const choose = () => {
-    setSaved('loading')
-    fetch('/api/snapshots/list').then(r => r.json()).then(setSaved).catch(() => setSaved(null))
+  const choosing = useCabinetUi(s => s.choosing === drawer.drawerId)
+  const [saved, setSaved] = useState<SnapshotMeta[] | null>(null)
+  useEffect(() => {
+    if (!choosing) { setSaved(null); return }
+    let live = true
+    fetch('/api/snapshots/list').then(r => r.json()).then(list => { if (live) setSaved(list) })
+      .catch(() => { if (live) useCabinetUi.getState().setChoosing(null) })
+    return () => { live = false }
+  }, [choosing])
+  if (!choosing) {
+    return <span style={{ margin: 'auto', color: 'rgba(255,255,255,0.35)', fontSize: 12 * u, userSelect: 'none' }}>Drag cards here</span>
   }
-  if (saved === 'loading') return <span style={{ margin: 'auto', color: 'rgba(255,255,255,0.5)', fontSize: 12 * u }}>Reading your saved projects…</span>
-  if (saved) {
-    return (
-      <div onPointerDown={e => e.stopPropagation()} style={{ display: 'flex', flexWrap: 'wrap', gap: 4 * u, width: '100%' }}>
-        {saved.map(s => <Chip key={s.file} u={u} onClick={() => { setSaved(null); adoptSavedProject(drawer, s.file, s.name) }}>{s.name}</Chip>)}
-        <Chip u={u} onClick={() => setSaved(null)}>Cancel</Chip>
-      </div>
-    )
-  }
+  if (!saved) return <span style={{ margin: 'auto', color: 'rgba(255,255,255,0.5)', fontSize: 12 * u }}>Reading your saved projects…</span>
+  const close = () => useCabinetUi.getState().setChoosing(null)
   return (
-    <div style={{ margin: 'auto', display: 'flex', gap: 6 * u, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'center' }}>
-      <Chip u={u} onClick={() => saveCanvasToDrawer(drawer)} title="Save everything on the canvas as this drawer's project">Save canvas here</Chip>
-      <Chip u={u} onClick={choose} title="Put a project saved through Templates in this drawer">Choose saved…</Chip>
+    <div onPointerDown={e => e.stopPropagation()} style={{ display: 'flex', flexWrap: 'wrap', gap: 4 * u, width: '100%' }}>
+      {saved.map(s => <Chip key={s.file} u={u} onClick={() => { close(); adoptSavedProject(drawer, s.file, s.name) }}>{s.name}</Chip>)}
+      <Chip u={u} onClick={close}>Cancel</Chip>
     </div>
   )
 }
