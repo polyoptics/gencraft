@@ -83,6 +83,9 @@ export interface TiltSlab {
    *  this key: its top is coloured and solid, it gets no sheen, and pick()
    *  answers `deco|<owner>` for it. */
   deco?: string
+  /** pick() sees through it: the plate under a mark the page draws with
+   *  no pointer events (a drop mark), so the press is what is behind. */
+  nopick?: boolean
 }
 
 /** Artwork on the plane — a picture, video or Viewer screen — as a rect
@@ -482,6 +485,8 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   /** Top triangles grown past their face for a selection ring (see
    *  TiltSlab.ring), and that face: the margin is drawn, not pressed. */
   const ringTops: { from: number; to: number; u: number; v: number; hw: number; hh: number; hinge?: { v: number; z: number; a: number } }[] = []
+  /** Top and side triangles of slabs pick() sees through (TiltSlab.nopick). */
+  const noPick: { mesh: 'top' | 'side'; from: number; to: number }[] = []
   const SLAB_MAX = 400, CORNER_SEG = 4
   const RING = 4 * (CORNER_SEG + 1)
   const SIDE_V = SLAB_MAX * (RING * 8 + 2), SIDE_I = SLAB_MAX * RING * 24
@@ -624,6 +629,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     slabBox.makeEmpty()
     decoTris.length = 0
     ringTops.length = 0
+    noPick.length = 0
     const vert = (x: number, y: number, z: number, nx: number, ny: number, nz: number, shade: number) => {
       const o = sv * 3
       sidePos[o] = x; sidePos[o + 1] = y; sidePos[o + 2] = z
@@ -717,6 +723,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       topPos[tv++] = s.u; topPos[tv++] = -s.v; topPos[tv++] = z
       for (let i = 0; i < RING; i++) { topPos[tv++] = tx[i]; topPos[tv++] = ty[i]; topPos[tv++] = z }
       if (g) ringTops.push({ from: ti / 3, to: ti / 3 + RING, u: s.u, v: s.v, hw, hh, hinge: s.hinge })
+      if (s.nopick) noPick.push({ mesh: 'top', from: ti / 3, to: ti / 3 + RING }, { mesh: 'side', from: si0 / 3, to: si / 3 })
       for (let i = 0; i < RING; i++) { topIdx[ti++] = top0; topIdx[ti++] = top0 + 1 + i; topIdx[ti++] = top0 + 1 + ((i + 1) % RING) }
       // Not a leaning face: its normals stay the flat ones, so it would
       // catch and cast askew. Its turned walls still cast.
@@ -1014,7 +1021,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     let best: { key: string; d: number } | null = null
     for (const m of [topMesh, sideMesh]) {
       m.geometry.computeBoundingSphere()
-      const hit = raycaster.intersectObject(m, false).find(h => m !== topMesh || !inRing(h))
+      const hit = raycaster.intersectObject(m, false).find(h => !seenThrough(h, m === topMesh ? 'top' : 'side') && (m !== topMesh || !inRing(h)))
       if (!hit || (best && hit.distance >= best.d)) continue
       const f = m === sideMesh && hit.faceIndex != null ? decoTris.find(d => hit.faceIndex! >= d.from && hit.faceIndex! < d.to) : undefined
       best = { key: f ? `deco|${f.owner}` : '', d: hit.distance }
@@ -1029,6 +1036,11 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     }
     // '' is a slab hit (a solid part with no owner of its own).
     return best ? best.key : null
+  }
+  /** A hit on a slab pick() sees through. */
+  function seenThrough(hit: THREE.Intersection, mesh: 'top' | 'side'): boolean {
+    const f = hit.faceIndex
+    return f != null && noPick.some(t => t.mesh === mesh && f >= t.from && f < t.to)
   }
   /** A top hit in a selection ring's margin, outside its face. */
   function inRing(hit: THREE.Intersection): boolean {

@@ -162,14 +162,14 @@ export const RailOverlay: React.FC<{
   }
 
   if (!dropMark && busy.length === 0 && !ghostCard) return null
-  return createPortal(
-    <div data-rail-overlay={railId} style={{ position: 'absolute', left: 0, top: 0, width: 0, height: 0, pointerEvents: 'none' }}>
-      {ghostCard}
-      {busy}
-      {dropMark}
-    </div>,
-    host,
-  )
+  // The drop mark in a host of its own: in 3D its parts stand up off the
+  // strip (TiltLayer), which makes their host keep 3D, and the preview and
+  // the run highlight sharing it then sank under the strip's face.
+  const box: React.CSSProperties = { position: 'absolute', left: 0, top: 0, width: 0, height: 0, pointerEvents: 'none' }
+  return <>
+    {(ghostCard || busy.length > 0) && createPortal(<div data-rail-overlay={railId} style={box}>{ghostCard}{busy}</div>, host)}
+    {dropMark && createPortal(<div data-rail-overlay={railId} style={box}>{dropMark}</div>, host)}
+  </>
 }
 
 /** The insertion mark: a bright line with round ends, outlined dark so it

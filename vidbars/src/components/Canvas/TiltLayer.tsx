@@ -19,10 +19,10 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import {
-  useTiltStore, useModelScaleStore, isTilted, unprojectTilt, TILT_SNAP, TILT_FAR, DEFAULT_LIGHT,
+  useTiltStore, useModelScaleStore, isTilted, unprojectTilt, TILT_SNAP, TILT_FAR, TILT_PERSPECTIVE, DEFAULT_LIGHT,
 } from '../../store/tiltStore'
 import { useCanvasStore, groupBounds, MIN_ZOOM, MAX_ZOOM } from '../../store/canvasStore'
-import { useFreeNodeStore } from '../../store/freeNodeStore'
+import { useFreeNodeStore, type FreeNodeData } from '../../store/freeNodeStore'
 import { useViewport3DStore } from '../../store/viewport3dStore'
 import { useBoardsStore } from '../../store/boardsStore'
 import { useRailUiStore } from '../../store/railUiStore'
@@ -524,7 +524,9 @@ function collectSlabs(K = 1): TiltSlab[] {
   const decks: Deck[] = []
   const add = (x: number, y: number, w: number, h: number, t: number, color: number, r: number) => {
     const u = x + w / 2 - W / 2, v = y + h / 2 - H / 2
-    if (w < 3 || h < 3 || Math.abs(u) > W * 1.5 || Math.abs(v) > H * 1.5) return
+    // Off by its nearest edge, not its centre: a long strip still filling
+    // the screen kept its deck and bars only while its middle was near.
+    if (w < 3 || h < 3 || Math.abs(u) - w / 2 > W * 1.5 || Math.abs(v) - h / 2 > H * 1.5) return
     out.push({ u, v, w, h, t, color, r })
     return out[out.length - 1]
   }
@@ -536,7 +538,7 @@ function collectSlabs(K = 1): TiltSlab[] {
   /** Console: column heads whose card leans (they ride up with it). */
   const riders: { head: HTMLElement; world: HTMLElement }[] = []
   /** Console: the cards' part of a row's insertion mark (see below). */
-  const marks: { part: HTMLElement; world: HTMLElement; rail: string }[] = []
+  const marks: { part: HTMLElement; world: HTMLElement; rail: string; z: number; band?: boolean }[] = []
   for (const world of host.querySelectorAll<HTMLElement>(':scope > div[style*="scale("]')) {
     for (const node of world.querySelectorAll<HTMLElement>('[data-viewport3d]:not([data-pinned]), [data-freenode][data-id]:not([data-pinned])')) {
       // A loop strip paints its face on its own body, which can sit off the
@@ -595,7 +597,9 @@ function collectSlabs(K = 1): TiltSlab[] {
               const d = o.railDock, a = lean.get(o.id)
               if (!a || !d || d.railId !== rid || !main.has(d.slotId)) continue
               const om = Math.min(o.width, o.height) * zoom
-              D = Math.max(D, dockLift(om, 0) * k + o.height * zoom * Math.sin(a) + DECK.clear * u * zoom * sr)
+              // Its rise is the card's own, not faded with the lifts below
+              // (scaled by K there), so the deck tops it at every tilt.
+              D = Math.max(D, dockLift(om, 0) * k + o.height * zoom * Math.sin(a) / Math.max(K, 1e-3) + DECK.clear * u * zoom * sr)
             }
           }
           const band = el.querySelector<HTMLElement>('[data-rail-band]')
@@ -614,7 +618,9 @@ function collectSlabs(K = 1): TiltSlab[] {
             const a = offsetIn(part, world)
             if (!a || !part.offsetWidth) continue
             const z = part.hasAttribute('data-rail-arrow') ? A : D
-            const s = add(pan.x + a.x * zoom, pan.y + a.y * zoom, part.offsetWidth * zoom, part.offsetHeight * zoom, z,
+            // Up on the deck (or its tier), a plate: the deck is its body, so
+            // the wall under it is the strip's furniture, pressed as its band.
+            const s = add(pan.x + a.x * zoom, pan.y + a.y * zoom, part.offsetWidth * zoom, part.offsetHeight * zoom, z > H ? Math.min(z, 2) : z,
               SIDE.tray, (radiusOf(part) || 6 * u) * zoom)
             if (s) s.z = z
             lifting.set(part, z)
@@ -628,7 +634,9 @@ function collectSlabs(K = 1): TiltSlab[] {
             // there rides up on it.
             const cid = head.dataset.railCardId
             const look = !!cid && !main.has(fs.nodes[cid]?.railDock?.slotId ?? '')
-            lifting.set(head, look ? H : D)
+            // On the deck a hair over the header bar, a plane of its own: at
+            // the bar's height the page's hit test took it for the bar.
+            lifting.set(head, look ? H : D > H ? D + 0.5 : D)
             chain(head, world)
             if (look && lean.has(cid!)) riders.push({ head, world })
           }
@@ -637,16 +645,20 @@ function collectSlabs(K = 1): TiltSlab[] {
           // with them (below, once they lean). Flat on the floor it was
           // under the deck and the cards.
           const drop = useRailUiStore.getState().drop
+          const lookRow = drop?.target.kind === 'row' && (drop.target.row ?? 0) > 0
           for (const part of world.querySelectorAll<HTMLElement>(`[data-rail-overlay="${rid}"] [data-rail-drop-mark-part]`)) {
             chain(part, world)
-            if (part.dataset.railDropMarkPart !== 'band') { marks.push({ part, world, rail: rid }); continue }
+            // A look row's tabs ride its leaning cards: its part over them
+            // stands as they do (below, with the riders).
+            const band = part.dataset.railDropMarkPart === 'band'
+            if (!band || lookRow) { marks.push({ part, world, rail: rid, z: H, band }); continue }
             // Its own plate (an opening in the 3D view over its line), or
-            // the deck drawn over the page would hide it.
-            const z = drop?.target.kind === 'row' && (drop.target.row ?? 0) > 0 ? H : D
+            // the deck drawn over the page would hide it; over the heads.
+            const z = (D > H ? D + 0.5 : D) + 0.5
             const a = offsetIn(part, world)
             const s = a && add(pan.x + a.x * zoom, pan.y + a.y * zoom, part.offsetWidth * zoom, part.offsetHeight * zoom, 0.5, DROP_RGB, part.offsetWidth * zoom / 2)
-            if (s) s.z = z + 0.5
-            lifting.set(part, z + 0.5)
+            if (s) { s.z = z; s.nopick = true }
+            lifting.set(part, z)
           }
           // Console: Run stands up off the arrow as a pill, the machine's
           // button. Not while running: its progress and stop show as flat.
@@ -775,25 +787,39 @@ function collectSlabs(K = 1): TiltSlab[] {
     l.top = Math.min(l.top ?? Infinity, s.v - s.h / 2)
   }
   // The cards' part of an insertion mark leans with the cards it lies
-  // between, from their bottom edges: on their plane, in the gap.
-  for (const { part, world, rail } of marks) {
+  // between, from their bottom edges: on their plane, in the gap. A look
+  // row's part over its tabs rides with them, above its cards' tops. Each
+  // on a plate of its own (see above) that pick() sees through, as the
+  // page's hit test sees through the mark: a drag goes on over it.
+  for (const { part, world, rail, z, band } of marks) {
     const at = offsetIn(part, world)
     if (!at) continue
     const foot = at.y + part.offsetHeight
-    let best: { l: Leaning; y: number } | undefined
+    let best: { l: Leaning; y: number; bottom: number } | undefined
     for (const l of leaning) {
       const tile = l.rail === rail ? world.querySelector<HTMLElement>(`[data-freenode][data-id="${l.id}"]`) : null
       const ta = tile && offsetIn(tile, world)
-      const y = ta && ta.y + tile!.offsetHeight
-      if (y != null && Math.abs(y - foot) < part.offsetHeight / 2 && (!best || Math.abs(y - foot) < Math.abs(best.y - foot))) best = { l, y }
+      if (!ta) continue
+      const bottom = ta.y + tile!.offsetHeight, y = band ? ta.y : bottom
+      if (Math.abs(y - foot) < part.offsetHeight / 2 && (!best || Math.abs(y - foot) < Math.abs(best.y - foot))) best = { l, y, bottom }
     }
-    if (!best) continue
-    // Just proud of their faces, on a plate of its own (see above).
-    const hinge = { ...best.l.hinge, z: best.l.hinge.z + 0.5 }
+    const plate = (hinge?: Hinge) => {
+      const s = add(pan.x + at.x * zoom, pan.y + at.y * zoom, part.offsetWidth * zoom, part.offsetHeight * zoom, 0.5, DROP_RGB, part.offsetWidth * zoom / 2)
+      if (s) { s.z = hinge ? hinge.z : z + 0.5; s.hinge = hinge; s.nopick = true }
+    }
+    if (!best) {
+      // Nothing leans there (a strip held flat, 3D without the console):
+      // over the cards at the header bar's level.
+      lifting.set(part, z + 0.5)
+      plate()
+      continue
+    }
+    const { l } = best
+    const up = band ? l.hinge.a / (CONSOLE.slot * Math.PI / 180) : 1
+    const hinge = { v: l.hinge.v, z: (band ? z + (l.hinge.z - z) * up : l.hinge.z) + 0.5, a: l.hinge.a }
     lifting.set(part, hinge.z)
-    stand(part, hinge, zoom, `50% ${best.y - at.y}px`)
-    const s = add(pan.x + at.x * zoom, pan.y + at.y * zoom, part.offsetWidth * zoom, part.offsetHeight * zoom, 0.5, DROP_RGB, part.offsetWidth * zoom / 2)
-    if (s) { s.z = hinge.z; s.hinge = hinge }
+    stand(part, hinge, zoom, `50% ${best.bottom - at.y}px`)
+    plate(hinge)
   }
   // A card (or deck) on a strip has an invisible stand-in tile that is never
   // drawn, so its lift is worked out from the store: it stands on the
@@ -1183,6 +1209,31 @@ function detail(screenW: number): number {
  *  works exactly as 2D, so a drop is judged on the flat strip). */
 const consoleEase = new Map<string, number>()
 let consoleAt = 0
+/** How far a console strip may stand, 0..1. Zoomed in (or seen low), its
+ *  deck on its main row's leaning cards' tops (collectSlabs) would rise to
+ *  the eye's own height over the canvas, drawn edge-on along the horizon
+ *  and out of reach at any pan: it stands only as far as keeps the top of
+ *  its loop strip bar (and Run on it) under DECK.reach of that height. */
+function standRoom(rail: FreeNodeData, k: number, zoom: number): number {
+  const { tilt, shiftY } = useTiltStore.getState(), t = tilt * Math.PI / 180
+  const room = DECK.reach * (TILT_PERSPECTIVE * Math.cos(t) + shiftY * Math.sin(t))
+  const main = new Set(rail.rail?.slots.filter(sl => sl.kind === 'card').map(sl => sl.id) ?? [])
+  const cards: { base: number; h: number }[] = []
+  for (const o of Object.values(useFreeNodeStore.getState().nodes)) {
+    const d = o.railDock
+    if (o.type !== 'effect' || !d || d.railId !== rail.id || d.lifted || (d.order ?? 0) !== 0 || !main.has(d.slotId)) continue
+    cards.push({ base: dockLift(Math.min(o.width, o.height) * zoom, 0) * k, h: o.height * zoom })
+  }
+  if (!cards.length) return 1
+  const u = (rail.rail?.unit || 1) * zoom
+  const top = (s: number) => Math.max(...cards.map(c => c.base + c.h * Math.sin(CONSOLE.slot * s * Math.PI / 180)))
+    + (DECK.clear + DECK.step + TRAY.rimH) * u * s
+  if (top(1) <= room) return 1
+  if (top(0) >= room) return 0
+  let lo = 0, hi = 1
+  for (let i = 0; i < 14; i++) { const m = (lo + hi) / 2; if (top(m) > room) hi = m; else lo = m }
+  return lo
+}
 function consoleLean(host: HTMLElement, zoom: number): Map<string, number> {
   const out = new Map<string, number>()
   const { console: on, tilt } = useTiltStore.getState()
@@ -1218,7 +1269,7 @@ function consoleLean(host: HTMLElement, zoom: number): Map<string, number> {
     const body = host.querySelector<HTMLElement>(`[data-freenode][data-id="${n.id}"] [data-rail-body]`)
     const k = body ? detail(body.offsetWidth * zoom) : 0
     standing.set(n.id, { e, k })
-    const s = grown * k * e * e * (3 - 2 * e)
+    const s = Math.min(grown * k * e * e * (3 - 2 * e), standRoom(n, k, zoom))
     if (s <= 0) continue
     railStand.set(n.id, s)
     const cards = new Set([...r.slots, ...(r.rows ?? []).flat()].filter(sl => sl.kind === 'card').map(sl => sl.id))
@@ -1290,10 +1341,11 @@ type Leaning = { id: string; rail: string; slab: TiltSlab; hinge: Hinge; top?: n
  *  unit on screen, `band` the header bar's own span. */
 type Deck = { rail: string; D: number; A: number; s: number; u: number; front: number; back: number; x0: number; x1: number; band: { v0: number; v1: number } }
 /** The deck's height over the cards' tops, and the loop strip bar's step
- *  up behind the header bar, in strip units; its colours: the deck, the
+ *  up behind the header bar, in strip units; the most of the eye's height
+ *  over the canvas its top may reach (standRoom); its colours: the deck, the
  *  bar's tier, the sloped back and the ribs between its slots, the bright
  *  trim along its crest, the lip. */
-const DECK = { clear: 10, step: 12, gap: 0.6, top: 0x2b2f3d, tier: 0x1a1c25, slope: 0x59607a, rib: 0x6a7290, trim: 0xa7aec4, lip: 0x1e2230 }
+const DECK = { clear: 10, step: 12, reach: 0.5, gap: 0.6, top: 0x2b2f3d, tier: 0x1a1c25, slope: 0x59607a, rib: 0x6a7290, trim: 0xa7aec4, lip: 0x1e2230 }
 type Screen = { id: string; slab: TiltSlab; hinge: Hinge }
 /** Console furniture, as on the mockup's machine. Behind each run of
  *  leaning cards, a sloped back just behind their backs, so nothing shows
@@ -1350,6 +1402,8 @@ function consoleFurniture(leaning: Leaning[], screens: Screen[], decks: Deck[], 
   }
   if (!leaning.length) return out
   const nodes = useFreeNodeStore.getState().nodes
+  /** Each deck's span across that a run's shelf fronts (below). */
+  const shelved = new Map<string, [number, number][]>()
   const byRail = new Map<string, Leaning[]>()
   for (const l of leaning) byRail.set(l.rail, [...(byRail.get(l.rail) ?? []), l])
   for (const [rail, cards] of byRail) {
@@ -1373,6 +1427,7 @@ function consoleFurniture(leaning: Leaning[], screens: Screen[], decks: Deck[], 
       const deck = run[0].main ? deckOf.get(rail) : undefined
       let L = (h + 2 * u) * f
       if (deck && a > 0) {
+        shelved.set(rail, [...(shelved.get(rail) ?? []), [x0, x1]])
         L = Math.max(0, Math.min((deck.Dk - zB) / Math.sin(a), (vB - deck.front) / Math.max(1e-3, Math.cos(a))))
         const vT = vB - L * Math.cos(a)
         if (vT - deck.front >= 0.5) {
@@ -1416,6 +1471,23 @@ function consoleFurniture(leaning: Leaning[], screens: Screen[], decks: Deck[], 
       run.push(c)
     }
     if (run.length) build(run)
+  }
+  // Bright trim along the top of the deck's front wall where no shelf
+  // runs out from it (over the end columns), a lip under the header bar,
+  // so the deck reads as one bridge across the strip.
+  for (const d of deckOf.values()) {
+    const th = 8 * d.u * d.s
+    if (th < 0.5) continue
+    let from = d.x0
+    const piece = (to: number) => {
+      if (to - from >= 1) out.push({ u: (from + to) / 2, v: d.front + 0.5, w: to - from, h: 1, r: 0.5, t: th, z: d.Dk,
+        color: DECK.trim, cap: true, deco: `rail:${d.rail}` })
+    }
+    for (const [x0, x1] of (shelved.get(d.rail) ?? []).sort((p, q) => p[0] - q[0])) {
+      piece(Math.min(x0, d.x1))
+      from = Math.max(from, x1)
+    }
+    piece(d.x1)
   }
   return out
 }
@@ -1776,11 +1848,23 @@ const TiltedView: React.FC = () => {
           const q = flatClient(e.clientX, e.clientY, pl.z)
           if (q && within(pl, local(q))) return { height: pl.z }
         }
+        // A strip's rows each have their slope: the one hit, the one whose
+        // plane the ray meets nearest the height hit (the look row's in front
+        // of the strip's own row can lie inside both spans).
+        let slope: { pl: typeof decoPlanes[number]; off: number } | undefined
         for (const pl of decoPlanes) {
-          if (pl.owner !== owner || !pl.hinge) continue
-          const q = flatClient(e.clientX, e.clientY, 0, pl.hinge)
-          if (q && within(pl, local(q))) return { height: pl.hinge.z, hinge: pl.hinge }
+          const h = pl.hinge
+          if (pl.owner !== owner || !h) continue
+          const q = flatClient(e.clientX, e.clientY, 0, h)
+          const f = q && local(q)
+          if (!f || !within(pl, f)) continue
+          const off = Math.abs(h.z + Math.max(0, h.v - f.y) * Math.sin(h.a) - z)
+          if (!slope || off < slope.off) slope = { pl, off }
         }
+        if (slope) return { height: slope.pl.hinge!.z, hinge: slope.pl.hinge }
+        // A wall of it (the deck's front, the bar tier's): the level through
+        // the point hit, straight under it, not the floor seen past it.
+        return { height: z }
       }
       return { height: liftOf(real), hinge: hingeOf(real) }
     }
