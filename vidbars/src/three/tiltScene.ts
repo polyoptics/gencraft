@@ -76,6 +76,9 @@ export interface TiltSlab {
   /** A small raised part (a header, button or banner): the sheen covers
    *  all of it. Elsewhere it only runs round the face's border. */
   pop?: boolean
+  /** No sheen at all: a raised part that is mostly text (an effect card's
+   *  name), where a shine greyed the words over in 3D alone. */
+  bare?: boolean
   /** With a hinge: only its top turns; its walls drop straight to the
    *  floor from the turned top's edge (a wedge, sloped on top). */
   loft?: boolean
@@ -99,17 +102,21 @@ export interface TiltSlab {
 }
 
 /** Console finishes (Brian 2026-11-01: "like a million dollars"): roughness,
- *  metalness, glow (emissive, × its colour) and how much of the studio
- *  around it it reflects, for a slab's walls. A card's painted edge
- *  reflects none of it: it looks as it always has. */
+ *  metalness, glow (emissive, × its colour), how much of the studio
+ *  around it it reflects, and how much of the even lift every wall gets
+ *  (sideMat's emissive), for a slab's walls. A card's painted edge
+ *  reflects none of it and keeps all the lift: it looks as it always has.
+ *  The console's furniture keeps little of it, so its shape comes from
+ *  the light: lit tops, darker walls, the rim light along its back. */
 export const FINISH = {
-  paint: [0.6, 0, 0, 0],
-  body: [0.48, 0.25, 0, 0.4],
-  alu: [0.24, 0.95, 0, 1],
-  dark: [0.55, 0.1, 0, 0.35],
-  gloss: [0.12, 0.05, 0, 0.9],
-  rubber: [0.92, 0, 0, 0.15],
-  glow: [0.4, 0, 1.6, 0],
+  paint: [0.6, 0, 0, 0, 1],
+  body: [0.48, 0.25, 0, 0.4, 0.2],
+  rim: [0.36, 0.3, 0, 0.55, 0.2],
+  alu: [0.24, 0.95, 0, 1, 0.2],
+  dark: [0.55, 0.1, 0, 0.35, 0.2],
+  gloss: [0.12, 0.05, 0, 0.9, 0.2],
+  rubber: [0.92, 0, 0, 0.15, 0.2],
+  glow: [0.4, 0, 1.6, 0, 0],
 } as const
 export type TiltFinish = keyof typeof FINISH
 /** A seam's metal (TiltSlab.seam). */
@@ -355,7 +362,20 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   flatRig.visible = false
   scene.add(flatRig)
   const deco = new THREE.Scene()
-  deco.add(new THREE.HemisphereLight(0xffffff, 0x444466, 1.2))
+  // A cool sky over a dark table, so tops read lit and walls fall darker
+  // (the mockup machine's light), and a cool rim from behind the view: it
+  // runs along the far edges and bevels, so the furniture stands out
+  // against the canvas. Only the slabs' sides and furniture take it; the
+  // DOM draws the faces and pictures as they are.
+  deco.add(new THREE.HemisphereLight(0xdfe6ff, 0x262836, 1.25))
+  const rimLight = new THREE.DirectionalLight(0x9db4ff, 0.6)
+  rimLight.position.set(0.45, 0.6, -1)
+  // And a soft fill from over the viewer's shoulder: a wall the key does
+  // not reach (the far side, turned to the camera) still shows its shape
+  // and its seams, not a black box.
+  const viewFill = new THREE.DirectionalLight(0xdfe6ff, 0.7)
+  viewFill.position.set(-0.3, 0.5, 1)
+  deco.add(rimLight, viewFill)
   // The console's metal and gloss reflect the same soft studio the models do.
   deco.environment = envRT.texture
   const ground = new THREE.Group(); ground.matrixAutoUpdate = false; scene.add(ground)
@@ -374,7 +394,8 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   }
   const key = shadowLight(new THREE.DirectionalLight(0xffffff, 2))
   ground.add(key, key.target)
-  const decoKey = shadowLight(new THREE.DirectionalLight(0xffffff, 1.5))
+  // Warm, as a studio key: the cool sky and rim set it off.
+  const decoKey = shadowLight(new THREE.DirectionalLight(0xfff1dc, 1.5))
   groundDeco.add(decoKey, decoKey.target)
   // The canvas as a shadow catcher: invisible but for the shadows on it.
   // No depth write, so slab sides drawn below the plane still show.
@@ -530,11 +551,13 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   const sideNrm = new Float32Array(SIDE_V * 3)
   const sideCol = new Float32Array(SIDE_V * 3)
   const sideFin = new Float32Array(SIDE_V * 4)
+  const sideLift = new Float32Array(SIDE_V)
   const sideIdx = new Uint32Array(SIDE_I)
   sideGeo.setAttribute('position', new THREE.BufferAttribute(sidePos, 3).setUsage(THREE.DynamicDrawUsage))
   sideGeo.setAttribute('normal', new THREE.BufferAttribute(sideNrm, 3).setUsage(THREE.DynamicDrawUsage))
   sideGeo.setAttribute('color', new THREE.BufferAttribute(sideCol, 3).setUsage(THREE.DynamicDrawUsage))
   sideGeo.setAttribute('finish', new THREE.BufferAttribute(sideFin, 4).setUsage(THREE.DynamicDrawUsage))
+  sideGeo.setAttribute('lift', new THREE.BufferAttribute(sideLift, 1).setUsage(THREE.DynamicDrawUsage))
   sideGeo.setIndex(new THREE.BufferAttribute(sideIdx, 1))
   const topGeo = new THREE.BufferGeometry()
   const topPos = new Float32Array(SLAB_MAX * (RING + 1) * 3)
@@ -551,14 +574,14 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   // Each vertex says what it is made of (FINISH): one draw for all of it.
   sideMat.onBeforeCompile = sh => {
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nattribute vec4 finish;\nvarying vec4 vFinish;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvFinish = finish;')
+      .replace('#include <common>', '#include <common>\nattribute vec4 finish;\nattribute float lift;\nvarying vec4 vFinish;\nvarying float vLift;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvFinish = finish;\nvLift = lift;')
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying vec4 vFinish;')
+      .replace('#include <common>', '#include <common>\nvarying vec4 vFinish;\nvarying float vLift;')
       .replace('#include <lights_fragment_maps>', '#include <lights_fragment_maps>\niblIrradiance *= vFinish.w;\nradiance *= vFinish.w;')
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = vFinish.x;')
       .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\nmetalnessFactor = vFinish.y;')
-      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance = totalEmissiveRadiance * (1.0 - 0.75 * vFinish.y) + vColor.rgb * vFinish.z;')
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance = totalEmissiveRadiance * vLift * (1.0 - 0.75 * vFinish.y) + vColor.rgb * vFinish.z;')
   }
   const sideMesh = new THREE.Mesh(sideGeo, sideMat)
   const topMesh = new THREE.Mesh(topGeo, new THREE.MeshBasicMaterial({ colorWrite: false, side: THREE.DoubleSide }))
@@ -687,6 +710,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       sideCol[o] = col.r * shade; sideCol[o + 1] = col.g * shade; sideCol[o + 2] = col.b * shade
       const f = sv * 4
       sideFin[f] = fin[0]; sideFin[f + 1] = fin[1]; sideFin[f + 2] = fin[2]; sideFin[f + 3] = fin[3]
+      sideLift[sv] = fin[4]
       return sv++
     }
     /** A band of quads between two rings of vertices (a0.., b0..). */
@@ -827,7 +851,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       }
       // Round buttons get none: a highlight on a disc reads as a second,
       // misregistered disc.
-      if (s.pop && Math.max(s.w, s.h) < Math.min(s.w, s.h) * 1.6) continue
+      if (s.bare || (s.pop && Math.max(s.w, s.h) < Math.min(s.w, s.h) * 1.6)) continue
       const o0 = hv / 3
       for (let i = 0; i < RING; i++) { sheenPos[hv++] = ox[i]; sheenPos[hv++] = oy[i]; sheenPos[hv++] = z }
       if (s.pop) {
@@ -855,6 +879,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     sheenGeo.setDrawRange(0, hi)
     for (const a of ['position', 'normal', 'color']) upload(sideGeo.getAttribute(a) as THREE.BufferAttribute, sv * 3)
     upload(sideGeo.getAttribute('finish') as THREE.BufferAttribute, sv * 4)
+    upload(sideGeo.getAttribute('lift') as THREE.BufferAttribute, sv)
     upload(sideGeo.index!, si)
     upload(topGeo.getAttribute('position') as THREE.BufferAttribute, tv)
     upload(topGeo.index!, ti)
