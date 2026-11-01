@@ -21,6 +21,7 @@
 import React from 'react'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
+import { useWorldZoom } from '../Canvas/worldZoom'
 import type { FreeNodeData } from '../../store/freeNodeStore'
 
 /** The multiplier the canvas applies to a node: the live zoom, or the zoom
@@ -34,6 +35,11 @@ export function panelScale(node: FreeNodeData | undefined, zoom: number): number
  *  the browser to lay out an absurdly large surface. */
 export const CounterScaled: React.FC<{ gz: number; children: React.ReactNode }> = ({ gz, children }) => {
   const z = Math.max(gz, 0.1)
+  // On the tilted canvas, laid out at the zoom: zoomed back up, not scaled
+  // (see worldZoom). The same box and the same px inside.
+  if (useWorldZoom() !== null) return (
+    <div style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', zoom: 1 / z }}>{children}</div>
+  )
   return (
     <div style={{
       position: 'absolute', left: 0, top: 0,
@@ -81,6 +87,9 @@ export function clampUiScale(v: number): number {
  *  instead of rearranging it under you. */
 export const ContentScaled: React.FC<{ factor: number; children: React.ReactNode }> = ({ factor, children }) => {
   const f = clampUiScale(factor)
+  if (useWorldZoom() !== null) return (
+    <div style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', zoom: f }}>{children}</div>
+  )
   return (
     <div style={{
       position: 'absolute', left: 0, top: 0,

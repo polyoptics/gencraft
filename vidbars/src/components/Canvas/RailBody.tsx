@@ -45,6 +45,10 @@ import { RenameInput } from '../UI/RenameInput'
 
 /** VS15 keeps the warning sign a text glyph, not an emoji. */
 const WARN = '⚠︎'
+/** The strip's outline as solid colour on its ground: its edge colour
+ *  (white at 0.09), and the accent (0.55) while a Viewer shows it. */
+const RING_EDGE = mixHex('#ffffff', C.ground, 0.09)
+const RING_SHOWN = mixHex('#8fd3ff', C.ground, 0.55)
 
 /** A rect in the rail's own coordinates (CSS px inside the tile). */
 type Local = { left: number; top: number; width: number; height: number }
@@ -189,15 +193,21 @@ export const RailBody: React.FC<{
       style={{
         // left/top: set by the layout effect above (the tile's border).
         position: 'absolute', width: L.box.width, height: L.box.height,
-        background: C.ground, borderRadius: 14 * u,
-        // Inset, not a border: a border would move every child by its width.
-        boxShadow: shown
-          ? `inset 0 0 0 ${1.5 * u}px rgba(143,211,255,0.55), 0 0 ${10 * u}px rgba(143,211,255,0.18)`
-          : `inset 0 0 0 ${1.5 * u}px ${C.edge}`,
+        // The outline is the body's own colour showing round the ground laid
+        // over it (below), not a border or an inset shadow: either of those
+        // makes the browser paint every pixel of the whole strip again in
+        // the tilted view, where a big strip is drawn at full size, and the
+        // pictures ran out of room and vanished (Brian 2026-11-01).
+        background: shown ? RING_SHOWN : RING_EDGE, borderRadius: 14 * u,
+        boxShadow: shown ? `0 0 ${10 * u}px rgba(143,211,255,0.18)` : 'none',
         color: '#fff', userSelect: 'none', lineHeight: 1.2,
         fontFamily: 'system-ui, -apple-system, sans-serif',
       }}
     >
+      <div data-rail-ground aria-hidden style={{
+        position: 'absolute', inset: 1.5 * u, borderRadius: 12.5 * u,
+        background: C.ground, pointerEvents: 'none',
+      }} />
       {/* ── The rail proper: the band every header hangs on. ── */}
       <div data-rail-band style={{
         position: 'absolute', left: pad / 2, right: pad / 2, top: rowTop - 4 * u,

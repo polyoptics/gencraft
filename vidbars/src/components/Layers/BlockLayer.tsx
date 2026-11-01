@@ -567,6 +567,9 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
     >
       {/* ── Header bar ── */}
       <div
+        // Drawn over a loop strip it lies across: in 3D it rests on the
+        // strip's top (TiltLayer).
+        data-block-head={boardId}
         style={{
           position: 'absolute', top: 0,
           left, width,

@@ -266,6 +266,7 @@ export const CabinetBody: React.FC<{ id: string; node: FreeNodeData }> = ({ id, 
           data-cabinet-tray
           data-cabinet-drawer={`${id}:${open.id}`}
           onWheel={e => e.stopPropagation()}
+          data-wheel-own=""
           style={{
             zIndex: 2, position: 'absolute', left: 0, right: 0, top: !tilted && drawerEnd !== null ? drawerEnd : '100%',
             boxSizing: 'border-box', minHeight: tileH + gap * 2,

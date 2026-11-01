@@ -22,17 +22,18 @@ import {
   useTiltStore, useModelScaleStore, isTilted, unprojectTilt, TILT_SNAP, TILT_FAR, TILT_PERSPECTIVE, DEFAULT_LIGHT,
 } from '../../store/tiltStore'
 import { useCanvasStore, groupBounds, MIN_ZOOM, MAX_ZOOM } from '../../store/canvasStore'
-import { useFreeNodeStore, type FreeNodeData } from '../../store/freeNodeStore'
+import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useViewport3DStore } from '../../store/viewport3dStore'
 import { useBoardsStore } from '../../store/boardsStore'
 import { useRailUiStore } from '../../store/railUiStore'
 import { railViewerDocks, viewerRail } from '../../utils/railViewer'
+import { viewportVisualRect } from '../../utils/viewportDocking'
 import { RAIL_COLORS } from './rail/railStyle'
-import { RAIL_GEOM } from '../../utils/rail'
+import { RAIL_TRAY } from '../../utils/rail'
 import { setGlHidden } from '../../three/viewportRenderer'
 import { getMediaItems } from '../../types/bar'
 import { faceBlocks } from '../../utils/cardGrid'
-import { createTiltScene, type TiltTarget, type TiltFrameState, type TiltSlab, type TiltArt } from '../../three/tiltScene'
+import { createTiltScene, ART_MAX, type TiltTarget, type TiltFrameState, type TiltSlab, type TiltArt } from '../../three/tiltScene'
 
 /** Degrees of tilt / turn per pixel of Alt+drag. */
 const DRAG_DEG = 0.25
@@ -359,6 +360,43 @@ const frameState = (): TiltFrameState => {
   }
 }
 
+/** A fingerprint of everything a frame without models draws from: the
+ *  camera, the view's settings, every slab and picture. Equal → the canvas
+ *  already shows it. */
+function frameSig(st: TiltFrameState, W: number, H: number): string {
+  let h1 = 0x811c9dc5 | 0, h2 = 7
+  const n = (x: number | undefined | null) => {
+    const v = x === undefined || x === null ? -1234567 : Math.round(x * 64)
+    h1 = Math.imul(h1 ^ v, 16777619)
+    h2 = (Math.imul(h2, 31) + v) | 0
+  }
+  const str = (x: string | undefined | null) => {
+    if (x === undefined || x === null) { n(-7); return }
+    for (let i = 0; i < x.length; i++) n(x.charCodeAt(i))
+    n(x.length)
+  }
+  const b = (x: boolean | undefined) => n(x ? 1 : 0)
+  // Ratios finer than px: a 1/64 step of the wheel glide's scale is a few
+  // px at the screen's edge, and the furniture stopped following the
+  // cards for the tail of a tilted wheel zoom.
+  const r = (x: number | undefined) => n(x === undefined ? undefined : x * 64)
+  n(W); n(H); n(st.tilt); n(st.spin); n(st.shiftX); n(st.shiftY); r(st.fade)
+  r(st.glide?.k); n(st.glide?.x); n(st.glide?.y)
+  b(st.texture); b(st.flat); str(String(st.wire)); b(st.turn); b(st.walls); b(st.figure); str(st.hovered)
+  for (const k of Object.keys(st.light).sort()) { str(k); const v = (st.light as unknown as Record<string, unknown>)[k]; if (typeof v === 'number') n(v); else str(String(v)) }
+  for (const k of [...st.selected].sort()) str(k)
+  n(st.slabs.length)
+  for (const sl of st.slabs) {
+    n(sl.u); n(sl.v); n(sl.w); n(sl.h); n(sl.r); n(sl.t); n(sl.color); n(sl.z)
+    n(sl.hinge?.v); n(sl.hinge?.z); n(sl.hinge?.a)
+    b(sl.cap); n(sl.ring); n(sl.rim?.w); n(sl.rim?.h); b(sl.pop); b(sl.loft); str(sl.deco); b(sl.nopick)
+    str(sl.finish); n(sl.bevel); n(sl.seam)
+  }
+  n(st.art.length)
+  for (const a of st.art) { n(a.u); n(a.v); n(a.w); n(a.h); n(a.z); n(a.hinge?.v); n(a.hinge?.z); n(a.hinge?.a) }
+  return `${h1}:${h2}`
+}
+
 /** Models standing on their cards (three/tiltScene). Mounted for the whole
  *  session, not just while tilted: the 3D view is built once, when the app
  *  is idle, and the models on screen are loaded and uploaded while still
@@ -374,6 +412,15 @@ const TiltModels: React.FC = () => {
     let raf = 0
     let warmTimer: ReturnType<typeof setTimeout> | null = null
     let shown = false
+    /** What the last frame drawn showed (frameSig); '' = draw the next. */
+    let lastSig = ''
+    /** Frames the picture has stayed the same. Quiet, the page is read for
+     *  it every 4th frame only, and every frame again as soon as anything
+     *  is touched (a store, the page, the pointer) or animates: reading
+     *  every card and strip each frame was a steady cost at rest. */
+    let poked = true, calm = 0, tick = 0
+    const poke = () => { poked = true }
+    const animating = () => document.getAnimations?.().some(a => a.playState === 'running') ?? false
 
     const warm = () => {
       const W = root.clientWidth, H = root.clientHeight
@@ -384,22 +431,59 @@ const TiltModels: React.FC = () => {
       if (warmTimer) clearTimeout(warmTimer)
       warmTimer = setTimeout(warm, 500)
     }
-    const frame = (now: number) => {
+    // The page is read and the 3D layer drawn after every other animation
+    // callback of the frame, just before it is painted: a ResizeObserver
+    // on a 1px marker runs then. As one of the callbacks, the read came
+    // before the ones that move the camera (leaving 3D with Esc, F, the
+    // wheel glide) and before a zoom-zone change re-made the tiles, so the
+    // furniture was drawn a frame behind the cards and, crossing a zone,
+    // everything standing fell flat for a frame (hunt 2026-11-01). The
+    // marker sits outside <body>, which the idle read watches, and only
+    // moves while the view is in 3D or leaving it.
+    const marker = document.createElement('div')
+    Object.assign(marker.style, { position: 'fixed', left: '0', top: '0', width: '1px', height: '1px', visibility: 'hidden', pointerEvents: 'none' })
+    document.documentElement.appendChild(marker)
+    let markerW = 1
+    const post = new ResizeObserver(() => draw(performance.now()))
+    post.observe(marker)
+    const frame = () => {
       raf = requestAnimationFrame(frame)
+      if (!view || !canvas || !(shown || live3d())) return
+      markerW = 3 - markerW
+      marker.style.width = markerW + 'px'
+    }
+    const draw = (now: number) => {
       if (!view || !canvas) return
       const live = live3d()
       if (live !== shown) {
         shown = live
         canvas.style.display = live ? 'block' : 'none'
         if (!live) dropLifts()
+        lastSig = ''
       }
       if (!live) return
+      tick++
+      if (!poked && calm > 30 && tick % 4 && !animating()) return
+      poked = false
       const W = root.clientWidth, H = root.clientHeight
       if (models.at) models.hovered = modelKey(models.pick?.(models.at.x, models.at.y))
       // The slabs first: what stands this frame (a Viewer as a screen, a
       // card's lift) is what the models stand on.
       const st = W && H ? frameState() : null
-      if (st) view.frame(now, W, H, collectTargets(W, H), st)
+      if (st) {
+        // Drawn again only when something in it changed (Brian 2026-11-01:
+        // "is this too resource-expensive?"): two shadow maps and a full
+        // multisampled pass every frame while nothing moved was most of the
+        // 3D view's cost. Standing models animate (turn, pop, fade), so
+        // with any in view every frame is drawn as before.
+        const targets = collectTargets(W, H)
+        const sig = targets.length ? '' : frameSig(st, W, H)
+        if (!sig || sig !== lastSig) view.frame(now, W, H, targets, st)
+        calm = sig && sig === lastSig ? calm + 1 : 0
+        lastSig = sig
+      }
+      // What this pass wrote (lifts, stands) is not a change to answer.
+      seen.takeRecords()
     }
     const build = () => {
       // A fresh canvas per mount: a canvas whose context was lost (cleanup
@@ -432,14 +516,22 @@ const TiltModels: React.FC = () => {
       useCanvasStore.subscribe(warmSoon),
       useFreeNodeStore.subscribe(warmSoon),
       useBoardsStore.subscribe(warmSoon),
+      ...[useTiltStore, useCanvasStore, useFreeNodeStore, useBoardsStore, useViewport3DStore, useRailUiStore, useModelScaleStore].map(s => s.subscribe(poke)),
     ]
+    const pokes = ['pointermove', 'pointerdown', 'pointerup', 'wheel', 'keydown', 'keyup', 'resize'] as const
+    for (const t of pokes) window.addEventListener(t, poke, { capture: true, passive: true })
+    const seen = new MutationObserver(poke)
+    seen.observe(document.body, { subtree: true, childList: true, attributes: true, characterData: true })
     return () => {
       if (window.cancelIdleCallback) window.cancelIdleCallback(idle as number)
       else clearTimeout(idle as ReturnType<typeof setTimeout>)
       window.removeEventListener('keydown', onKey, true)
+      for (const t of pokes) window.removeEventListener(t, poke, { capture: true })
+      seen.disconnect()
       unsubs.forEach(u => u())
       if (warmTimer) clearTimeout(warmTimer)
       cancelAnimationFrame(raf)
+      post.disconnect(); marker.remove()
       models.pick = null; models.pickZ = null; models.info = null
       view?.dispose()
       canvas?.remove()
@@ -454,13 +546,30 @@ const TiltModels: React.FC = () => {
 /** Offset of `el` inside `stage`, in layout px — offsets ignore transforms,
  *  so this is where the card sits on the FLAT plane even while tilted. */
 function offsetIn(el: HTMLElement, stage: HTMLElement): { x: number; y: number } | null {
-  let x = 0, y = 0
+  const at = offsetScaled(el, stage, false)
+  return at && { x: at.x, y: at.y }
+}
+
+/** offsetIn, through plain 2D `scale(k)` boxes (origin top left) on the
+ *  way, such as a Viewer's CounterScaled: `k` is the scale it is drawn at
+ *  relative to the stage. And through CSS zoom (the tilted canvas, laid
+ *  out at the zoom, and the boxes in it that zoom back up): each box's
+ *  offsets are in its own zoom's px, so they are taken to drawn px and
+ *  back to the units of the box at the top. Without `scaled`, the plain
+ *  boxes' scale is left out (offsetIn). */
+function offsetScaled(el: HTMLElement, stage: HTMLElement, scaled = true): { x: number; y: number; k: number } | null {
+  let x = 0, y = 0, k = cssZoomOf(el), top = 1
   let e: HTMLElement | null = el
   while (e && e !== stage) {
-    x += e.offsetLeft; y += e.offsetTop
-    e = e.offsetParent as HTMLElement | null
+    const c = cssZoomOf(e)
+    top = c
+    x += e.offsetLeft * c; y += e.offsetTop * c
+    const parent = e.offsetParent as HTMLElement | null
+    const m = scaled && parent && parent !== stage ? /^scale\(([\d.e+-]+)\)$/.exec(parent.style.transform) : null
+    if (m && /^(0(px)?|left) (0(px)?|top)$/.test(parent!.style.transformOrigin)) { const f = parseFloat(m[1]); x *= f; y *= f; k *= f }
+    e = parent
   }
-  return e === stage ? { x, y } : null
+  return e === stage ? { x: x / top, y: y / top, k: k / top } : null
 }
 
 /** A file's name from its url — nothing for a `mediaref:` (it has none). */
@@ -499,6 +608,15 @@ function cardModel(id: string): { url: string; name: string } | null {
  *  a phone on a table, a tile a bit less, a card thinner, and a closed deck
  *  as thick as the cards in it. */
 const THICK = { viewer: 0.05, tile: 0.03, card: 0.012, deckMax: 0.25 }
+/** A free card's thickness, canvas units: card stock is card stock, so
+ *  every card off a strip is as thick as every other (a card made at the
+ *  widest Cards zoom, 1250 across, at THICK.card). Sized by its own sides, a
+ *  big card stood higher than a small one laid over it and hid it, against
+ *  the flat view's order. */
+const CARD_STOCK = 15
+/** How far a card stands over one painted under it that it overlaps, px:
+ *  enough to keep the flat view's order, too little to see. */
+const OVER = 0.1
 const SIDE = { viewer: 0x4a4e5c, tile: 0x7a829e, card: 0x8a93b4, tray: 0x464c60, pop: 0x6a7088, edge: 0xc4c9d8 }
 /** The most slices a deck's side is built from (its cards, or bands of them). */
 const DECK_SLICES = 10
@@ -523,14 +641,39 @@ function collectSlabs(K = 1): TiltSlab[] {
   const W_ = W, H_ = H
   /** Console decks, by strip (see consoleFurniture). */
   const decks: Deck[] = []
+  /** Each loop strip's body (host px) and how high its top stands: what
+   *  lies loose over a strip flat is drawn over it, so in 3D it rests on
+   *  that top (see rest). */
+  const crowns: { x0: number; y0: number; x1: number; y1: number; z: number }[] = []
+  const restOn = (x: number, y: number, w: number, h: number) =>
+    crowns.reduce((z, c) => x < c.x1 && c.x0 < x + w && y < c.y1 && c.y0 < y + h ? Math.max(z, c.z) : z, 0)
+  /** Cards resting on a strip's top, by group id: the height of their face. */
+  const rested = new Map<string, number>()
+  restTick()
   /** `keep`: a part of a strip whose body is kept, which stays with it. */
+  const seen = seenGround(W, H)
+  /** Near enough the screen to matter: within a screen and a half of its
+   *  middle on the flat canvas, or on the ground the tipped camera sees. */
+  const inView = (u: number, v: number, w: number, h: number) =>
+    (Math.abs(u) - w / 2 <= W * 1.5 && Math.abs(v) - h / 2 <= H * 1.5) ||
+    (!!seen && u + w / 2 >= seen.x0 && u - w / 2 <= seen.x1 && v + h / 2 >= seen.y0 && v - h / 2 <= seen.y1)
   const add = (x: number, y: number, w: number, h: number, t: number, color: number, r: number, keep = false) => {
     const u = x + w / 2 - W / 2, v = y + h / 2 - H / 2
     // Off by its nearest edge, not its centre: a long strip still filling
     // the screen kept its deck and bars only while its middle was near.
-    if (w < 3 || h < 3 || (!keep && (Math.abs(u) - w / 2 > W * 1.5 || Math.abs(v) - h / 2 > H * 1.5))) return
+    // Kept too while on the ground the camera sees: tipped well back, the
+    // top of the screen is far more than a screen away on the flat canvas,
+    // and a cabinet up there fell flat (Brian 2026-11-01).
+    if (w < 3 || h < 3) return
+    if (!keep && !inView(u, v, w, h)) return
     out.push({ u, v, w, h, t, color, r })
     return out[out.length - 1]
+  }
+  /** A thin plate under a part raised over a strip, so the 3D view drawn
+   *  over the page does not hide it (the strip's rim, its deck). */
+  const plate = (x: number, y: number, w: number, h: number, z: number, r: number) => {
+    const s = add(x, y, w, h, 0.5, SIDE.pop, r)
+    if (s) s.z = z
   }
   // World layer: tiles and Viewers, in world units under the pan/zoom.
   const { pan, zoom } = useCanvasStore.getState()
@@ -545,7 +688,15 @@ function collectSlabs(K = 1): TiltSlab[] {
   const colMarks: { el: HTMLElement; world: HTMLElement; rail: string; slot: string; index: number; dragged: string }[] = []
   /** Cards and decks on the card layer: the height of their tops. */
   const cardTops = new Map<string, number>()
-  for (const world of host.querySelectorAll<HTMLElement>(':scope > div[style*="scale("]')) {
+  /** Console: cards on a strip that lean back, by group id (radians). */
+  const cardLean = new Map<string, number>()
+  /** …and where each of those is docked, for the furniture behind it. */
+  const cardDock = new Map<string, Omit<Leaning, 'id' | 'slab' | 'hinge'>>()
+  /** Console: those cards' blocks and boards, standing with them, all but
+   *  what shows over their strip flat hidden (see veil). */
+  const buried: HTMLElement[] = []
+  const worlds = [...host.querySelectorAll<HTMLElement>(':scope > div[style*="scale("]')]
+  for (const world of worlds) {
     for (const node of world.querySelectorAll<HTMLElement>('[data-viewport3d]:not([data-pinned]), [data-freenode][data-id]:not([data-pinned])')) {
       // A loop strip paints its face on its own body, which can sit off the
       // tile's box and outgrow it: the slab follows the body.
@@ -567,6 +718,9 @@ function collectSlabs(K = 1): TiltSlab[] {
         // mockup machine), its slab under it.
         slab.z = slab.t
         lifting.set(node, slab.t)
+        // A screen's bezel: black gloss.
+        slab.color = 0x15171c
+        slab.finish = 'gloss'
         hinge = { v: slab.v + slab.h / 2, z: slab.z, a: sa }
         slab.hinge = hinge
         stand(node, hinge, zoom)
@@ -576,7 +730,10 @@ function collectSlabs(K = 1): TiltSlab[] {
         // Far off (small on screen) it settles back to a plain slab.
         const k = detail(w)
         const u = fs.nodes[node.dataset.id!]?.rail?.unit || 1
-        if (k > 0) slab.rim = { w: TRAY.rimW * u * zoom, h: TRAY.rimH * u * zoom * k }
+        // Its width grows in with its height: at full width from the start,
+        // its top lay almost level with the floor in the first degrees, a
+        // dark band over the strip's edge and over anything lying across it.
+        if (k > 0) slab.rim = { w: TRAY.rimW * u * zoom * k, h: TRAY.rimH * u * zoom * k }
         slab.color = SIDE.tray
         // The run arrow and the band of headers under it stand up out of
         // the tray, above its rim and the cards (Brian 2026-10-30).
@@ -596,8 +753,38 @@ function collectSlabs(K = 1): TiltSlab[] {
           // their lean.
           const rid = node.dataset.id!
           const sr = railStand.get(rid) ?? 0
-          const main = new Set(fs.nodes[rid]?.rail?.slots.map(sl => sl.id) ?? [])
+          // Console: the strip's body is the machine's chassis, deep and
+          // graphite, its rim's edges machined bright.
+          if (sr > 0) {
+            slab.color = DECK.body
+            slab.finish = 'body'
+            slab.bevel = 2 * u * zoom
+            slab.t = Math.max(slab.t, 16 * u * zoom * sr)
+            // Two-part case: a bright parting line round its wall.
+            if (slab.t >= 6) slab.seam = slab.t * 0.42
+          }
+          const main = new Set([...(fs.nodes[rid]?.rail?.slots.map(sl => sl.id) ?? []), RAIL_TRAY])
           let D = H, A = H
+          // Console: the live preview heads the results, so it leans back
+          // at their head as a card would, the results' leaning in front.
+          const ghost = sr > 0 ? world.querySelector<HTMLElement>(`[data-rail-overlay="${rid}"] [data-rail-ghost]`) : null
+          const ga = ghost && offsetIn(ghost, world)
+          let ghostRise = 0
+          if (ghost && ga && ghost.offsetWidth) {
+            const gw = ghost.offsetWidth * zoom, gh = ghost.offsetHeight * zoom, gm = Math.min(gw, gh)
+            const a = leanOf.get(rid) ?? CONSOLE.slot * sr * Math.PI / 180
+            const gz = dockLift(gm, 0) * k
+            const gs = add(pan.x + ga.x * zoom, pan.y + ga.y * zoom, gw, gh, Math.min(gz, gm * THICK.tile), SIDE.card, radiusOf(ghost) * zoom, true)
+            if (gs) {
+              gs.z = gz
+              gs.hinge = { v: gs.v + gs.h / 2, z: gz, a }
+              lifting.set(ghost, gz)
+              chain(ghost, world)
+              stand(ghost, gs.hinge, zoom)
+              leaning.push({ id: `ghost:${rid}`, rail: rid, slot: RAIL_TRAY, order: -1, slab: gs, hinge: gs.hinge, main: true })
+              ghostRise = gz + gh * Math.sin(a) / Math.max(K, 1e-3)
+            }
+          }
           if (sr > 0) {
             for (const o of Object.values(fs.nodes)) {
               const d = o.railDock, a = lean.get(o.id)
@@ -607,11 +794,12 @@ function collectSlabs(K = 1): TiltSlab[] {
               // (scaled by K there), so the deck tops it at every tilt.
               D = Math.max(D, dockLift(om, 0) * k + o.height * zoom * Math.sin(a) / Math.max(K, 1e-3) + DECK.clear * u * zoom * sr)
             }
+            if (ghostRise) D = Math.max(D, ghostRise + DECK.clear * u * zoom * sr)
           }
           const band = el.querySelector<HTMLElement>('[data-rail-band]')
           const ba = band && offsetIn(band, world), ea = offsetIn(el, world)
           if (D > H && band && ba && ea) {
-            const rim = TRAY.rimW * u * zoom
+            const rim = TRAY.rimW * u * zoom * k
             // The loop strip bar a step up again behind the header bar, so
             // each tier shows over the one in front, as on a meter bridge.
             A = D + DECK.step * u * zoom * sr
@@ -635,6 +823,13 @@ function collectSlabs(K = 1): TiltSlab[] {
             // Solid, its sides the colour of its face, as a raised button's.
             const face = fill(part)
             if (s && face) s.color = (face[0] << 16) | (face[1] << 8) | face[2]
+            // Console: set in a machined bezel; the Run bar lit from within.
+            if (s && sr > 0 && z > H) {
+              const b = 2.5 * u * zoom * sr
+              if (part.hasAttribute('data-rail-arrow')) s.finish = 'glow'
+              if (b >= 0.5) out.push({ u: s.u, v: s.v, w: s.w + 2 * b, h: s.h + 2 * b, r: s.r + b, t: Math.min(z, 1.5 * b), z: z - 0.35,
+                color: DECK.alu, finish: 'alu', bevel: b * 0.6, cap: true, deco: `rail:${rid}` })
+            }
           }
           for (const head of el.querySelectorAll<HTMLElement>('[data-rail-head], [data-rail-card-head], [data-rail-tray-head]')) {
             // A look row's heads stay down with their row; a leaning card's
@@ -678,8 +873,16 @@ function collectSlabs(K = 1): TiltSlab[] {
           // button. Not while running: its progress and stop show as flat.
           const run = sr > 0 ? el.querySelector<HTMLElement>('[data-rail-arrow] button[data-rail-run="idle"]') : null
           const ra = run && offsetIn(run, world)
+          // Its top, for what lies loose over it: over all of it the deck
+          // with the heads on it (the bars, flat), which the leaning cards
+          // stay under; behind the header bar the loop strip bar's tier.
+          const cx = slab.u - slab.w / 2 + W_ / 2, cy = slab.v - slab.h / 2 + H_ / 2
+          crowns.push({ x0: cx, y0: cy, x1: cx + slab.w, y1: cy + slab.h, z: D > H ? D + 0.5 : D })
+          if (A > D && ba) crowns.push({ x0: cx, y0: cy, x1: cx + slab.w, y1: pan.y + ba.y * zoom, z: A })
           if (run && ra && run.offsetWidth) {
             const P = TRAY.rimH * u * zoom * k * sr
+            // And Run's pill, up off the tier.
+            crowns.push({ x0: pan.x + ra.x * zoom, y0: pan.y + ra.y * zoom, x1: pan.x + ra.x * zoom + run.offsetWidth * zoom, y1: pan.y + ra.y * zoom + run.offsetHeight * zoom, z: A + P })
             const rh = run.offsetHeight * zoom
             const ps = add(pan.x + ra.x * zoom, pan.y + ra.y * zoom, run.offsetWidth * zoom, rh, P, RUN_RGB, rh / 2, true)
             if (ps) ps.z = A + P
@@ -710,21 +913,30 @@ function collectSlabs(K = 1): TiltSlab[] {
             const raise = at ? Math.max(0, node.offsetHeight - at.y - front!.offsetHeight) : 0
             const z = raise * zoom * Math.sin(a)
             stand(tray, { v: hinge.v, z, a: -a }, zoom, '50% 0%')
-            tray.style.translate = `0 ${-raise}px`
+            setStyle(tray, 'translate', `0 ${-raise}px`)
             // The drawer as a box: its sides under the tray, a rim round it,
             // and its front panel gone out to the far end, as far from the
             // dark opening it left as the drawer is long.
             const boxAt = offsetIn(tray, world)
             if (boxAt && front) {
               const bw = tray.offsetWidth * zoom, bh = tray.offsetHeight * zoom, fh = front.offsetHeight * zoom
-              const box = add(pan.x + boxAt.x * zoom, pan.y + boxAt.y * zoom, bw, bh, Math.min(fh, z), SIDE.tile, 4 * zoom)
+              // Where the tray really is: carried `raise` up the leaning face,
+              // it starts that much less far out (and offsetIn leaves out the
+              // cabinet's border). A thin floor under it, its walls the rim:
+              // walls a whole drawer deep hung down over the drawer below.
+              const bb = parseFloat(getComputedStyle(node).borderBottomWidth) || 0
+              const back = (raise * Math.cos(a) - bb) * zoom
+              const box = add(pan.x + boxAt.x * zoom, pan.y + boxAt.y * zoom - back, bw, bh, Math.max(2, fh * 0.08), SIDE.tile, 4 * zoom)
               if (box) {
                 box.z = z
                 box.rim = { w: Math.max(2, bw * CABINET.rim), h: fh * CABINET.rimH }
               }
-              const panel = add(pan.x + boxAt.x * zoom, pan.y + boxAt.y * zoom + bh - fh, bw, fh, Math.max(2, bw * CABINET.rim), SIDE.tile, 4 * zoom)
+              const panel = add(pan.x + boxAt.x * zoom, pan.y + boxAt.y * zoom + bh - fh - back, bw, fh, Math.max(2, bw * CABINET.rim), SIDE.tile, 4 * zoom)
               if (panel) {
                 panel.hinge = { v: panel.v + fh / 2, z: Math.max(0, z - fh * 0.15), a }
+                // Its face at the hinge's height: left on the floor, it swung
+                // back about the hinge into the cabinet, never seen.
+                panel.z = panel.hinge.z
                 panel.cap = true
               }
             }
@@ -740,8 +952,10 @@ function collectSlabs(K = 1): TiltSlab[] {
           slab.z = dockLift(m, n?.railDock?.order ?? 0) * k
           slab.t = slab.z    // stacked on the floor, so its sides reach it
           lifting.set(node, slab.z)
-          // Console: an effect card leans back on its bottom edge, a plate
-          // a card thick (Brian 2026-10-30).
+          // Console: whatever is docked leans back on its bottom edge, a
+          // plate a card thick (Brian 2026-10-30; the cast and the results
+          // too, 2026-11-01). A card's stand-in only says how: the card
+          // layer stands the card itself (below).
           const a = lean.get(node.dataset.id!)
           if (a) {
             hinge = { v: slab.v + slab.h / 2, z: slab.z, a }
@@ -749,9 +963,11 @@ function collectSlabs(K = 1): TiltSlab[] {
             slab.hinge = hinge
             // Its selection ring shows over the sloped back behind it.
             if (fs.selectedIds.includes(n!.id)) slab.ring = 3
-            stand(node, hinge, zoom)
-            leaning.push({ id: n!.id, rail: n!.railDock!.railId, slab, hinge,
-              main: !!fs.nodes[n!.railDock!.railId]?.rail?.slots.some(sl => sl.id === n!.railDock!.slotId) })
+            const d = n!.railDock!
+            const at = { rail: d.railId, slot: d.slotId, order: d.order ?? 0,
+              main: d.slotId === RAIL_TRAY || !!fs.nodes[d.railId]?.rail?.slots.some(sl => sl.id === d.slotId) }
+            if (n!.cardRef) { cardLean.set(n!.cardRef, a); cardDock.set(n!.cardRef, at) }
+            else { stand(node, hinge, zoom); leaning.push({ id: n!.id, ...at, slab, hinge }) }
           }
         }
         // A card (or deck) on a strip is drawn by the card layer over an
@@ -767,10 +983,12 @@ function collectSlabs(K = 1): TiltSlab[] {
       // they cover stays flat, so none of it pokes up through them.
       const over = coversOf(node.dataset.id)
       popParts(node, world, slab.z ?? 0, m, detail(w), lifting, (el, z, t) => {
-        const a = offsetIn(el, world)
+        // Through a Viewer's screen-sized contents too (offsetScaled).
+        const a = offsetScaled(el, world)
         if (!a) return
-        if (over.some(r => a.x < r.x + r.width && r.x < a.x + el.offsetWidth && a.y < r.y + r.height && r.y < a.y + el.offsetHeight)) return false
-        const p = add(pan.x + a.x * zoom, pan.y + a.y * zoom, el.offsetWidth * zoom, el.offsetHeight * zoom, t, SIDE.pop, radiusOf(el) * zoom)
+        const ew = el.offsetWidth * a.k, eh = el.offsetHeight * a.k
+        if (over.some(r => a.x < r.x + r.width && r.x < a.x + ew && a.y < r.y + r.height && r.y < a.y + eh)) return false
+        const p = add(pan.x + a.x * zoom, pan.y + a.y * zoom, ew * zoom, eh * zoom, t, SIDE.pop, radiusOf(el) * a.k * zoom)
         if (p) { p.z = z; p.pop = true; if (hinge) p.hinge = hinge }
         return p
       })
@@ -786,7 +1004,7 @@ function collectSlabs(K = 1): TiltSlab[] {
     const at = l && offsetIn(head, world), ta = tile && offsetIn(tile, world)
     if (!l || !tile || !at || !ta) continue
     const band = lifting.get(head) ?? 0
-    const up = grownIn(l.rail, l.hinge.a, CONSOLE.slot)
+    const up = grownIn(l.hinge.a, CONSOLE.slot)
     const hinge = { v: l.hinge.v, z: band + (l.hinge.z - band) * up, a: l.hinge.a }
     lifting.set(head, hinge.z)
     stand(head, hinge, zoom, `50% ${ta.y + tile.offsetHeight - at.y}px`)
@@ -829,7 +1047,7 @@ function collectSlabs(K = 1): TiltSlab[] {
       continue
     }
     const { l } = best
-    const up = band ? grownIn(l.rail, l.hinge.a, CONSOLE.slot) : 1
+    const up = band ? grownIn(l.hinge.a, CONSOLE.slot) : 1
     const hinge = { v: l.hinge.v, z: (band ? z + (l.hinge.z - z) * up : l.hinge.z) + 0.5, a: l.hinge.a }
     lifting.set(part, hinge.z)
     stand(part, hinge, zoom, `50% ${best.bottom - at.y}px`)
@@ -843,35 +1061,69 @@ function collectSlabs(K = 1): TiltSlab[] {
     const strip = host.querySelector<HTMLElement>(`[data-freenode][data-id="${n.railDock.railId}"] [data-rail-body]`)
     const k = strip ? detail(strip.offsetWidth * zoom) : 0
     if (k > 0) docked.set(n.cardRef, dockLift(Math.min(n.width, n.height) * zoom, n.railDock.order ?? 0) * k)
+    // Console: it leans as the strip's tiles do (Brian 2026-11-01: the cast
+    // and the results too), the card layer standing the card itself.
+    const a = k > 0 ? lean.get(n.id) : undefined
+    if (a && !cardLean.has(n.cardRef)) {
+      const d = n.railDock, nodes = useFreeNodeStore.getState().nodes
+      cardLean.set(n.cardRef, a)
+      cardDock.set(n.cardRef, { rail: d.railId, slot: d.slotId, order: d.order ?? 0,
+        main: d.slotId === RAIL_TRAY || !!nodes[d.railId]?.rail?.slots.some(sl => sl.id === d.slotId) })
+    }
   }
   // Card layer: cards and closed decks, already in screen px.
   const stage = document.querySelector<HTMLElement>('[data-tilt-stage="overlay"]')
   if (stage) {
     const groups = useBoardsStore.getState().groups
     const zones = hitZones(stage)
-    for (const el of stage.querySelectorAll<HTMLElement>('[data-group-card][data-id]')) {
+    // Each card's name band (header) is drawn beside it, not in it.
+    const heads = new Map<string, HTMLElement>()
+    for (const head of stage.querySelectorAll<HTMLElement>('[data-card-header]')) heads.set(head.dataset.cardHeader!, head)
+    // In the flat view's paint order (see paintZ), so that each card can
+    // stand over the cards painted under it that it overlaps.
+    const cards = [...stage.querySelectorAll<HTMLElement>('[data-group-card][data-id]')]
+      .map((el, i) => ({ el, i, z: paintZ(el, stage) }))
+      .sort((a, b) => a.z - b.z || a.i - b.i)
+    /** The raised cards placed so far that lie flat: their boxes and tops. */
+    const under: { x0: number; y0: number; x1: number; y1: number; z: number }[] = []
+    for (const { el } of cards) {
       const at = offsetIn(el, stage)
       if (!at) continue
       const id = el.dataset.id!
       const g = groups.find(gr => gr.id === id)
-      if (g?.deckState === 'fanned') { fanSlabs(el, stage, at, add, lifting, docked.get(id)); continue }
+      if (g?.deckState === 'fanned') { fanSlabs(el, stage, at, add, lifting, docked.get(id), heads.get(id)); continue }
       const n = g?.deckState === 'stacked' ? 1 + groups.filter(o => o.deckAnchorId === id && o.deckState === 'stacked').length : 1
       const w = el.offsetWidth, h = el.offsetHeight, m = Math.min(w, h)
       const r = radiusOf((el.firstElementChild as HTMLElement | null) ?? el) || m * 0.06
       // On a loop strip it stands on the tray's floor, else on the canvas.
-      const lift = docked.get(id) ?? (g?.deckAnchorId ? docked.get(g.deckAnchorId) : undefined)
+      let lift = docked.get(id) ?? (g?.deckAnchorId ? docked.get(g.deckAnchorId) : undefined)
+      // Loose over a strip, it is drawn over the strip flat: on its top in
+      // 3D, not under its rim and bars.
+      const resting = lift === undefined ? rest(`card:${id}`, restOn(at.x, at.y, el.offsetWidth, el.offsetHeight)) : 0
+      if (resting > 0) lift = resting
+      // Console: leaning back on its bottom edge, as its stand-in says.
+      const tip = cardLean.get(id) ?? (g?.deckAnchorId ? cardLean.get(g.deckAnchorId) : undefined)
       const k = detail(w)
       let card: TiltSlab | undefined
-      if (k <= 0 && lift === undefined) {
+      let tilt: Hinge | undefined
+      // Off a strip, the highest top of the cards painted under it that it
+      // overlaps: flat, it shows over them, so it stands over them here.
+      let overTop: number | undefined
+      if (lift === undefined) {
+        for (const u of under) if (u.x0 < at.x + w && at.x < u.x1 && u.y0 < at.y + h && at.y < u.y1) overTop = Math.max(overTop ?? 0, u.z)
+      }
+      if (k <= 0 && lift === undefined && overTop === undefined) {
         card = add(at.x, at.y, w, h, m * THICK.card, SIDE.card, r)
       } else {
         // A card stands on what holds it, its thickness above it; a deck is
         // as tall as its cards, each a slice, the lower ones stepping out to
-        // the right as its flat edges do. Its face rides on top.
+        // the right as its flat edges do. Its face rides on top. Off a strip
+        // every card is one card stock thick, whatever its size.
         const f = Math.max(k, lift === undefined ? 0 : 1)
-        const per = m * THICK.card * f
+        const per = (lift === undefined ? CARD_STOCK * zoom : m * THICK.card) * f
         const thick = Math.min(m * THICK.deckMax, per * n)
-        const base = lift ?? 0
+        // Lying over a card painted under it, a hair above that card's top.
+        const base = lift ?? Math.max(0, (overTop ?? -Infinity) + OVER - thick)
         const reserve = n > 1 ? Math.min(10, w * 0.05) : 0
         // Each card under the top one reaches a step further right than the
         // one above, so the deck's right side is an angled run of page edges
@@ -879,13 +1131,35 @@ function collectSlabs(K = 1): TiltSlab[] {
         // flat deck's edge strip, grown in with the 3D look (Brian 2026-10-30).
         const L = Math.min(n - 1, DECK_SLICES)
         const spread = reserve + Math.max(0, Math.min(w * 0.08, L * Math.min(6, Math.max(2, w * 0.012))) - reserve) * f * K
-        card = add(at.x, at.y, w - reserve, h, lift === undefined ? per : thick, SIDE.card, r)
+        // A free card's sides go down to the canvas, lifted over another or not.
+        card = add(at.x, at.y, w - reserve, h, lift !== undefined ? thick : n > 1 ? per : base + per, SIDE.card, r)
         if (card) {
           card.z = base + thick
           cardTops.set(id, card.z)
+          if (resting > 0) rested.set(id, card.z)
           lifting.set(el, card.z)
           chain(el, stage)
-          riseZones(zones, at, w, h, card.z, lifting, stage)
+          tilt = tip ? { v: card.v + card.h / 2, z: card.z, a: tip } : undefined
+          if (tilt) {
+            card.hinge = tilt
+            stand(el, tilt)
+            const d = cardDock.get(id) ?? (g?.deckAnchorId ? cardDock.get(g.deckAnchorId) : undefined)
+            if (d) leaning.push({ id, ...d, slab: card, hinge: tilt })
+          } else {
+            under.push({ x0: at.x, y0: at.y, x1: at.x + w, y1: at.y + h, z: card.z })
+          }
+          riseZones(zones, at, w, h, card.z, lifting, stage, tilt)
+          // Its name band rides on it, over the hover zone over it as flat
+          // (band 51, zone 41, card 40), and leans with it on a strip. Left
+          // on the floor it was under the raised card (gone from 1° of tilt),
+          // and a double-click on the name went to the zone, which stacks.
+          const head = heads.get(id)
+          const ha = head && offsetIn(head, stage)
+          if (head && ha) {
+            lifting.set(head, card.z + 1)
+            chain(head, stage)
+            if (tilt) stand(head, { ...tilt, z: card.z + 1 }, 1, `50% ${at.y + h - ha.y}px`)
+          }
           const below = thick - per
           // Its cards show once they stand clear of each other: any thinner,
           // in the first degrees of tilt, their tops flicker through the
@@ -894,7 +1168,7 @@ function collectSlabs(K = 1): TiltSlab[] {
           if (slices) hideEdges(el, spread - reserve)
           for (let j = 1; slices && j <= L; j++) {
             const s = add(at.x, at.y, w - reserve + spread * j / L, h, below / L, j % 2 ? SIDE.edge : SIDE.card, r)
-            if (s) { s.z = base + below * (1 - (j - 1) / L); s.cap = true }
+            if (s) { s.z = base + below * (1 - (j - 1) / L); s.cap = true; s.hinge = tilt }
           }
         }
       }
@@ -902,16 +1176,118 @@ function collectSlabs(K = 1): TiltSlab[] {
         const a = offsetIn(part, stage)
         if (!a) return
         const p = add(a.x, a.y, part.offsetWidth, part.offsetHeight, t, SIDE.pop, radiusOf(part))
-        if (p) { p.z = z; p.pop = true }
+        if (p) { p.z = z; p.pop = true; p.hinge = tilt }
         return p
       })
+      if (card?.z) unshadow(el, K)
     }
     // Zoomed in to Blocks or Boards, a card is drawn as its outline.
     for (const el of stage.querySelectorAll<HTMLElement>('[data-group-outline]')) {
       const at = offsetIn(el, stage)
       if (!at) continue
       const w = el.offsetWidth, h = el.offsetHeight, m = Math.min(w, h)
-      add(at.x, at.y, w, h, m * THICK.card, SIDE.card, Math.min(12, m * 0.08))
+      const s = add(at.x, at.y, w, h, m * THICK.card, SIDE.card, Math.min(12, m * 0.08))
+      // On a strip in console it leans as it does as a card (Brian
+      // 2026-11-01: at every zoom): its outline, its header and its
+      // blocks, all on its bottom edge, standing on the strip's floor.
+      const id = el.dataset.groupOutline!
+      const g = useBoardsStore.getState().groups.find(gr => gr.id === id)
+      const tip = cardLean.get(id) ?? (g?.deckAnchorId ? cardLean.get(g.deckAnchorId) : undefined)
+      const lift = docked.get(id) ?? (g?.deckAnchorId ? docked.get(g.deckAnchorId) : undefined)
+      if (s && lift === undefined) {
+        // Loose over a strip, on its top as a card (above).
+        const resting = rest(`card:${id}`, restOn(at.x, at.y, w, h))
+        if (resting <= 0) continue
+        s.z = resting + s.t
+        lifting.set(el, s.z)
+        chain(el, stage)
+        rested.set(id, s.z)
+        continue
+      }
+      if (!s || !g || !tip || lift === undefined) continue
+      s.z = lift + s.t
+      const tilt: Hinge = { v: s.v + s.h / 2, z: s.z, a: tip }
+      s.hinge = tilt
+      lifting.set(el, s.z)
+      chain(el, stage)
+      stand(el, tilt)
+      const bottom = at.y + h
+      const head = stage.querySelector<HTMLElement>(`[data-card-header="${id}"]`)
+      const hat = head && offsetIn(head, stage)
+      if (hat) {
+        lifting.set(head!, s.z + 0.5)
+        chain(head!, stage)
+        stand(head!, { ...tilt, z: s.z + 0.5 }, 1, `50% ${bottom - hat.y}px`)
+      }
+      const d = cardDock.get(id) ?? (g.deckAnchorId ? cardDock.get(g.deckAnchorId) : undefined)
+      const strip = d && host.querySelector<HTMLElement>(`[data-freenode][data-id="${d.rail}"]`)
+      for (const bid of g.boardIds) {
+        // Boards zoom: its dashed block outlines, over the card as flat.
+        const bo = stage.querySelector<HTMLElement>(`[data-block-outline="${bid}"]`)
+        const bat = bo && offsetIn(bo, stage)
+        if (bat) {
+          lifting.set(bo!, s.z + 0.25)
+          chain(bo!, stage)
+          stand(bo!, { ...tilt, z: s.z + 0.25 }, 1, `50% ${bottom - bat.y}px`)
+        }
+        // Its block (Blocks zoom) or board (Boards zoom), in the world layer.
+        const wrap = host.querySelector<HTMLElement>(`[data-layer-block="${bid}"]`)?.parentElement
+          ?? host.querySelector<HTMLElement>(`[data-block][data-board-id="${bid}"]`)?.closest<HTMLElement>('[data-board]')
+        const world = wrap && worlds.find(wd => wd.contains(wrap))
+        // Not one torn off and carried: that one follows the cursor (its
+        // own transform, not the one standing it wrote).
+        if (!wrap || !world || (wrap.style.transform && wrap.style.transform !== stood.get(wrap)?.wrote)) continue
+        const wat = offsetIn(wrap, world)
+        if (!wat) continue
+        lifting.set(wrap, s.z + 0.25)
+        chain(wrap, world)
+        stand(wrap, { ...tilt, z: s.z + 0.25 }, zoom, `50% ${(bottom - (pan.y + wat.y * zoom)) / zoom}px`)
+        // Flat, the strip (the table the cards lie on) paints over the
+        // block's picture and the board's bars: only what is stacked above
+        // it shows, such as their headers. Stood with the card, only those
+        // show. Shown whole, the pictures came up out of the strip in 3D
+        // alone.
+        if (strip) { veil(wrap, overStrip(wrap, strip)); buried.push(wrap) }
+      }
+      if (d) leaning.push({ id, ...d, slab: s, hinge: tilt })
+    }
+    // A resting card's header tab over its top edge, and its link chips
+    // half over its bottom edge: up with it, over its face as flat.
+    for (const [id, z] of rested) {
+      const head = stage.querySelector<HTMLElement>(`[data-card-header="${id}"]`)
+      const hat = head && offsetIn(head, stage)
+      if (!hat) continue
+      lifting.set(head!, z + 0.5)
+      chain(head!, stage)
+      plate(hat.x, hat.y, head!.offsetWidth, head!.offsetHeight, z + 0.5, radiusOf(head!))
+    }
+    for (const rail of rested.size ? stage.querySelectorAll<HTMLElement>('[data-primary-rail]') : []) {
+      const z = rested.get(rail.dataset.primaryRail ?? '')
+      if (z === undefined) continue
+      lifting.set(rail, z + 0.25)
+      chain(rail, stage)
+      for (const c of rail.querySelectorAll<HTMLElement>(':scope > * > *')) {
+        const a = offsetScaled(c, stage)
+        if (a) plate(a.x, a.y, c.offsetWidth * a.k, c.offsetHeight * a.k, z + 0.25, c.offsetHeight * a.k / 2)
+      }
+    }
+  }
+  // A block's header bar is drawn over a strip it lies across flat (the
+  // block itself under the strip): in 3D it rests on the strip's top.
+  const blockHeads: HTMLElement[] = []
+  for (const world of crowns.length ? worlds : []) {
+    for (const head of world.querySelectorAll<HTMLElement>('[data-block-head]')) {
+      // Not one standing with its card's outline (above).
+      if (head.parentElement && lifting.has(head.parentElement)) continue
+      const a = offsetIn(head, world)
+      if (!a) continue
+      const x = pan.x + a.x * zoom, y = pan.y + a.y * zoom, w = head.offsetWidth * zoom, h = head.offsetHeight * zoom
+      const r = rest(`head:${head.dataset.blockHead}`, restOn(x, y, w, h))
+      if (r <= 0) continue
+      lifting.set(head, r + 0.5)
+      chain(head, world)
+      blockHeads.push(head)
+      plate(x, y, w, h, r + 0.5, radiusOf(head) * zoom)
     }
   }
   for (const m of colMarks) {
@@ -945,6 +1321,12 @@ function collectSlabs(K = 1): TiltSlab[] {
     }
     for (const h of hinges) h.z *= K
   }
+  // Lifting a block's header makes its block keep 3D, and so stack as one
+  // piece, header and all, under the strip (flat, the header's z-index puts
+  // it over the strip). Planes within a hair of each other the browser
+  // draws in stacking order, so in the first degrees the header went under
+  // the strip: it stands at least that hair up.
+  for (const el of blockHeads) lifting.set(el, Math.max(lifting.get(el) ?? 0, 0.2))
   // First in the list: past the slab budget it is the far, small things
   // that go, never the machine.
   out.unshift(...consoleFurniture(leaning, screens, decks, zoom, K))
@@ -953,15 +1335,24 @@ function collectSlabs(K = 1): TiltSlab[] {
   // Artwork — pictures, videos, Viewer screens — read after the lifts are
   // set, so a lifted card's picture is masked at its height.
   lastArt = []
+  // Only those in view: counted over the whole page, a big project's
+  // pictures past the cap took the shadow and sheen meant to skip them
+  // (darker and grainy in 3D).
   const art = (x: number, y: number, w: number, h: number, z: number, hinge?: Hinge) => {
-    if (w < 12 || h < 12 || lastArt.length >= 200) return
-    lastArt.push({ u: x + w / 2 - W / 2, v: y + h / 2 - H / 2, w, h, z, hinge })
+    const u = x + w / 2 - W / 2, v = y + h / 2 - H / 2
+    if (w < 12 || h < 12 || lastArt.length >= ART_MAX || !inView(u, v, w, h)) return
+    lastArt.push({ u, v, w, h, z, hinge })
   }
   for (const world of host.querySelectorAll<HTMLElement>(':scope > div[style*="scale("]')) {
     for (const el of world.querySelectorAll<HTMLElement>(ART)) {
-      const at = offsetIn(el, world)
+      // Not a picture hidden as under its strip: the shadows and the sheen
+      // skipped where nothing of it shows.
+      if (buried.some(b => b.contains(el)) && getComputedStyle(el).visibility === 'hidden') continue
+      // A Viewer's picture is drawn through CounterScaled's scale(1/zoom),
+      // which layout offsets ignore: offsetScaled undoes it.
+      const at = offsetScaled(el, world)
       // On a leaning card or a standing Viewer, it stands with it.
-      if (at) art(pan.x + at.x * zoom, pan.y + at.y * zoom, el.offsetWidth * zoom, el.offsetHeight * zoom, liftOf(el), hingeOf(el))
+      if (at) art(pan.x + at.x * zoom, pan.y + at.y * zoom, el.offsetWidth * at.k * zoom, el.offsetHeight * at.k * zoom, liftOf(el), hingeOf(el))
     }
   }
   if (stage) {
@@ -970,11 +1361,83 @@ function collectSlabs(K = 1): TiltSlab[] {
       if (at) art(at.x, at.y, el.offsetWidth, el.offsetHeight, liftOf(el))
     }
   }
+  // A standing card, tile or Viewer seen from behind shows its slab's back,
+  // not its face: edge-on, the face drawn under the slab showed through as
+  // a dotted line along it (a GIF's orange through the cast cards' backs).
+  // Every point of its plane faces the eye alike, so its hinge line says.
+  const eye = eyeOnPlane()
+  const behind = new Set<HTMLElement>()
+  for (const [el, { hinge: h }] of stood) {
+    if (h.a > 0 && (eye.y - h.v) * Math.sin(h.a) + (eye.z - h.z) * Math.cos(h.a) < 0) behind.add(el)
+  }
+  turnAway(behind)
+  restDone()
   return out
 }
 // A card face's picture can also be a background image.
 const ART = 'img, video, canvas, [style*="background-image: url"]'
 let lastArt: TiltArt[] = []
+/** Standing faces seen from behind (see collectSlabs), see-through: what
+ *  they showed before, and what was written. Opacity, not visibility, so
+ *  a press on a card's back still finds the card, as from the front. */
+let turned = new Map<HTMLElement, { was: string; wrote: string }>()
+function turnAway(next: Set<HTMLElement>) {
+  for (const [e, t] of turned) if (!next.has(e) && e.style.opacity === t.wrote) e.style.opacity = t.was
+  const now = new Map<HTMLElement, { was: string; wrote: string }>()
+  for (const e of next) {
+    const t = turned.get(e)
+    if (t && e.style.opacity === t.wrote) { now.set(e, t); continue }
+    const was = e.style.opacity
+    e.style.opacity = '0'
+    now.set(e, { was, wrote: e.style.opacity })
+  }
+  turned = now
+}
+/** What lies loose over a strip (a card, its outline, a block's header):
+ *  how high each rests (before the fade), by key, on the strip's top under
+ *  it, as it rises and falls. The one pressed is held where it was, so
+ *  dragged off a strip (or onto one) it stays at the height its drag is
+ *  read at (TiltedView's remap); let go, it settles from there (`off`). */
+const restEase = new Map<string, { z: number; off: number }>()
+const restSeen = new Set<string>()
+let restLast = 0, restDt = 0
+/** The rest key of what is pressed in the 3D view, if it rests. */
+let heldRest: string | null = null
+/** The rest key of the loose thing `el` is part of (see rest). */
+function restKeyOf(el: Element | null): string | null {
+  const c = el?.closest<HTMLElement>('[data-group-card], [data-group-outline], [data-card-header]')
+  if (c) return `card:${c.dataset.groupOutline ?? c.dataset.cardHeader ?? c.dataset.id}`
+  const h = el?.closest<HTMLElement>('[data-block-head]')
+  return h ? `head:${h.dataset.blockHead}` : null
+}
+function restTick() {
+  const now = performance.now()
+  restDt = Math.min(100, Math.max(0, now - restLast))
+  restLast = now
+}
+function rest(key: string, goal: number): number {
+  const was = restEase.get(key)
+  if (!was && goal <= 0) return 0
+  restSeen.add(key)
+  let off = was ? was.off * Math.exp(-restDt / (CONSOLE.easeMs / 3)) : 0
+  if (key === heldRest) off = (was?.z ?? 0) - goal
+  else if (Math.abs(off) < 0.05) off = 0
+  const z = goal + off
+  if (z > 0 || off) restEase.set(key, { z, off }); else restEase.delete(key)
+  return z
+}
+function restDone() {
+  for (const k of restEase.keys()) if (!restSeen.has(k)) restEase.delete(k)
+  restSeen.clear()
+}
+/** Where the eye is in the plane's own frame (flat px from the host
+ *  centre, y down, z up off the plane): the camera of unprojectTilt. */
+function eyeOnPlane(): { y: number; z: number } {
+  const { tilt, spin, shiftX, shiftY } = useTiltStore.getState()
+  const t = tilt * Math.PI / 180, s = spin * Math.PI / 180
+  const y1 = -shiftY * Math.cos(t) + TILT_PERSPECTIVE * Math.sin(t)
+  return { y: shiftX * Math.sin(s) + y1 * Math.cos(s), z: shiftY * Math.sin(t) + TILT_PERSPECTIVE * Math.cos(t) }
+}
 
 /** The bits of a face that stand proud of it when tilted, near enough:
  *  a tile's header bar, and on an effect face its on/off-solo-↑ buttons
@@ -997,6 +1460,9 @@ function popParts(root: HTMLElement, stage: HTMLElement, base: number, m: number
   const t = m * POP * k
   for (const el of parts) {
     if (!el.offsetWidth || !el.offsetHeight) continue
+    // A panel body laid out in canvas units (CanvasUnits) stays one flat
+    // layer: a part raised in it would have it drawn at canvas size.
+    if (el.closest('[data-canvas-units]')) continue
     const p = slab(el, base + t, t)
     if (p === false) continue
     lifting.set(el, t)
@@ -1037,6 +1503,44 @@ function coversOf(id: string | undefined): { x: number; y: number; width: number
     o.railDock.railId === d.railId && o.railDock.slotId === d.slotId && (o.railDock.order ?? 0) > (d.order ?? 0))
 }
 
+/** The parts of `el` (a docked card's block or board, in the world layer)
+ *  that the flat view paints over its `strip`: what is stacked above it (a
+ *  header at 30, a hovered or selected bar, a block's pen and its resize
+ *  grips). A positioned box with a z-index is painted whole at it; any
+ *  other box that stacks its contents (a transform, a filter, opacity)
+ *  whole at 0, under the strip; the rest are looked into. At the strip's
+ *  own z-index, what comes after it in the page is over it. */
+function overStrip(el: HTMLElement, strip: HTMLElement): HTMLElement[] {
+  const out: HTMLElement[] = []
+  const z0 = parseInt(getComputedStyle(strip).zIndex) || 0
+  const after = !!(strip.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING)
+  const look = (box: Element) => {
+    for (const c of box.children) {
+      const cs = getComputedStyle(c)
+      if (cs.display === 'none') continue
+      if (cs.position !== 'static' && cs.zIndex !== 'auto') {
+        const z = parseInt(cs.zIndex)
+        if (z > z0 || (z === z0 && after)) out.push(c as HTMLElement)
+      } else if (cs.transform === 'none' && cs.filter === 'none' && parseFloat(cs.opacity) >= 1) look(c)
+    }
+  }
+  look(el)
+  return out
+}
+
+/** Hidden while tilted, all of `el` but the parts `shown` (each with what
+ *  it holds): visibility, so they keep the order they paint in flat on the
+ *  one plane `el` stands as. Put back flat, and for the flat view's hit
+ *  tests (layFlat), where the hidden parts are there to be found. */
+let veiled = new Map<HTMLElement, string>()
+let veiling = new Map<HTMLElement, string>()
+function veil(el: HTMLElement, shown: HTMLElement[]) {
+  for (const [e, v] of [[el, 'hidden'] as const, ...shown.map(p => [p, 'visible'] as const)]) {
+    veiling.set(e, veiled.get(e) ?? e.style.visibility)
+    if (e.style.visibility !== v) e.style.visibility = v
+  }
+}
+
 /** For a raised bit to really stand off its face, every box between it and
  *  the stage has to keep its children in 3D (preserve-3d), and none may
  *  clip: overflow hidden (and clip, in Chromium) flattens them back onto
@@ -1055,6 +1559,21 @@ function chain(el: HTMLElement, stage: HTMLElement) {
     }
   }
 }
+/** The flat canvas the tipped camera sees (px from the host's middle, with
+ *  a margin), from a grid of screen points taken down to it; null flat. */
+function seenGround(W: number, H: number): { x0: number; x1: number; y0: number; y1: number } | null {
+  const { tilt, spin, shiftX, shiftY } = useTiltStore.getState()
+  if (tilt < 0.5) return null
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity
+  for (let i = 0; i <= 8; i++) for (let j = 0; j <= 8; j++) {
+    const q = unprojectTilt((i / 8 - 0.5) * W, (j / 8 - 0.5) * H, tilt, spin, shiftX, shiftY, 0, TILT_FAR)
+    if (!q) continue
+    x0 = Math.min(x0, q.x); x1 = Math.max(x1, q.x); y0 = Math.min(y0, q.y); y1 = Math.max(y1, q.y)
+  }
+  if (x0 > x1) return null
+  const m = Math.max(W, H) * 0.5
+  return { x0: x0 - m, x1: x1 + m, y0: y0 - m, y1: y1 + m }
+}
 /** A raised part has to be solid: one with a see-through background would
  *  show the face under it through its lid. While raised it is filled with
  *  the colour it shows flat (its own over what is behind it). */
@@ -1062,8 +1581,9 @@ type Styled = 'boxShadow' | 'borderRadius' | 'borderTopColor' | 'borderRightColo
 /** What it showed before (`was`), and what was last written here (`wrote`,
  *  as the browser reads it back), by style. A border's colour is kept side
  *  by side: a Viewer's header has only top, left and right set, so its
- *  shorthand reads '', and put back as that it wiped all three. */
-type Filled = { rgb: number[]; was: Partial<Record<Styled, string>>; wrote: Partial<Record<Styled, string>> }
+ *  shorthand reads '', and put back as that it wiped all three. `rim`: each
+ *  border's colour as it is flat. */
+type Filled = { rgb: number[]; was: Partial<Record<Styled, string>>; wrote: Partial<Record<Styled, string>>; rim?: Partial<Record<Styled, number[]>> }
 let filled = new Map<HTMLElement, Filled>()
 let filling = new Map<HTMLElement, Filled>()
 /** Write `v` to `el`'s style `prop`, kept in `f`. Anything else there now
@@ -1071,8 +1591,7 @@ let filling = new Map<HTMLElement, Filled>()
  *  what it shows flat from now on, under the fill. */
 function restyle(el: HTMLElement, f: Filled, prop: Styled, v: (base: string) => string) {
   if (!(prop in f.was) || (f.wrote[prop] !== undefined && el.style[prop] !== f.wrote[prop])) f.was[prop] = el.style[prop]
-  const next = v(f.was[prop] ?? '')
-  if (el.style[prop] !== next) el.style[prop] = next
+  setStyle(el, prop, v(f.was[prop] ?? ''))
   f.wrote[prop] = el.style[prop]
 }
 const SIDES = ['Top', 'Right', 'Bottom', 'Left'] as const
@@ -1090,19 +1609,58 @@ function fill(el: HTMLElement, as?: { rgb: number[]; round?: boolean }): number[
   }
   const cs = getComputedStyle(el)
   const own = rgba(cs.backgroundColor)
-  let under: number[] = [24, 24, 30, 1]
+  // Down through every see-through box behind it to the first solid one:
+  // a Viewer's pin and x show its header's colour, not a darker square of
+  // the canvas under it.
+  const behind: number[][] = []
   for (let e = el.parentElement; own[3] < 1 && e; e = e.parentElement) {
-    const c = rgba(getComputedStyle(e).backgroundColor)
-    if (c[3] >= 1) { under = c; break }
+    // A strip's body shows its outline colour; inside it, its ground.
+    const c = rgba(getComputedStyle(e.querySelector<HTMLElement>(':scope > [data-rail-ground]') ?? e).backgroundColor)
+    if (c[3] > 0) behind.push(c)
+    if (c[3] >= 1) break
   }
-  const a = own[3]
-  was.rgb = [0, 1, 2].map(i => Math.round(own[i] * a + under[i] * (1 - a)))
+  const over = (c: number[], under: number[]) => [0, 1, 2].map(i => c[i] * c[3] + under[i] * (1 - c[3]))
+  const shown = [...behind.reverse(), own].reduce((under, c) => over(c, under), [24, 24, 30])
+  was.rgb = shown.map(Math.round)
   const css = `rgb(${was.rgb.join(',')})`
   // Painted as an inset shadow over the background, not as the background
   // itself, which React owns (a toggle sets it as it is pressed).
-  restyle(el, was, 'boxShadow', bs => (a < 1 ? `inset 0 0 0 9999px ${css}${bs ? ', ' + bs : ''}` : bs))
-  for (const side of SIDES) if (parseFloat(cs[`border${side}Width`]) > 0) restyle(el, was, `border${side}Color`, () => css)
+  restyle(el, was, 'boxShadow', bs => (own[3] < 1 ? `inset 0 0 0 9999px ${css}${bs ? ', ' + bs : ''}` : bs))
+  // Its outline stays, as flat shows it over the fill, made solid too: a
+  // Viewer's tool buttons and its header's edge read as they do flat. Its
+  // flat colour is read while it is React's (not yet written here, or
+  // changed since), as React set it: the browser's own reading can be
+  // halfway through a fade (the Viewer header's, as it is hovered). After
+  // that it is ours, and so kept.
+  for (const side of SIDES) {
+    const prop = `border${side}Color` as const
+    if (!(parseFloat(cs[`border${side}Width`]) > 0)) continue
+    const set = el.style[prop]
+    if (set !== was.wrote[prop]) (was.rim ??= {})[prop] = rgba(/^rgba?\(/.test(set) ? set : cs[prop])
+    const c = was.rim?.[prop] ?? [0, 0, 0, 0]
+    restyle(el, was, prop, () => `rgb(${over(c, shown).map(Math.round).join(',')})`)
+  }
   return was.rgb
+}
+/** A raised card's drop shadow (its dark box-shadow, a deck's on its front
+ *  card) fades out as the 3D look comes in, by `K`: drawn in the card's own
+ *  plane, on a leaning card it hung out over the pictures behind it and
+ *  darkened them. The light's shadows take its place. A coloured glow (the
+ *  selection's) stays. */
+const DARK = /rgba?\(0, 0, 0(?:, ([\d.]+))?\)/
+const unshadowed = new WeakSet<Filled>()
+function unshadow(card: HTMLElement, K: number) {
+  for (const el of [card, ...card.children] as HTMLElement[]) {
+    // A raised part is fill()'s (popParts, run first).
+    if (filling.has(el)) continue
+    let f = filled.get(el)
+    if (f ? !unshadowed.has(f) : !DARK.test(el.style.boxShadow)) continue
+    if (!f) unshadowed.add(f = { rgb: [0, 0, 0], was: {}, wrote: {} })
+    filling.set(el, f)
+    restyle(el, f, 'boxShadow', bs => bs.split(/,(?![^(]*\))/)
+      .map(s => s.replace(DARK, (_, a) => `rgba(0, 0, 0, ${(Number(a ?? 1) * (1 - K)).toFixed(3)})`))
+      .filter(s => !/rgba\(0, 0, 0, 0\.000\)/.test(s)).join(','))
+  }
 }
 /** A fanned deck stands up too: its front card on top, and each strip
  *  peeking out to the right a card lower than the one before, a stair of
@@ -1112,7 +1670,7 @@ function fill(el: HTMLElement, as?: { rgb: number[]; round?: boolean }): number[
  *  height, on top. */
 type AddSlab = (x: number, y: number, w: number, h: number, t: number, color: number, r: number) => TiltSlab | undefined
 function fanSlabs(el: HTMLElement, stage: HTMLElement, at: { x: number; y: number }, add: AddSlab,
-                  lifting: Map<HTMLElement, number>, lift: number | undefined) {
+                  lifting: Map<HTMLElement, number>, lift: number | undefined, head?: HTMLElement) {
   const kids = [...el.children].filter(c => (c as HTMLElement).matches('[data-card-drop], [data-deck-slot-drop]')) as HTMLElement[]
   if (!kids.length) return
   const front = kids.reduce((a, b) => (b.offsetLeft === 0 && b.offsetWidth >= a.offsetWidth ? b : a))
@@ -1129,6 +1687,8 @@ function fanSlabs(el: HTMLElement, stage: HTMLElement, at: { x: number; y: numbe
   if (base) lifting.set(el, base)
   chain(el, stage)
   for (const c of el.children) if (!strips.includes(c as HTMLElement)) { lifting.set(c as HTMLElement, top - base); chain(c as HTMLElement, stage) }
+  // Its name band over its front card, as flat (band 51, fan 50).
+  if (head) { lifting.set(head, top + 1); chain(head, stage) }
   const c = add(at.x + front.offsetLeft, at.y + front.offsetTop, w, h, top - base, SIDE.card, radiusOf(front) || 12)
   if (c) c.z = top
   strips.forEach((st, i) => {
@@ -1140,6 +1700,18 @@ function fanSlabs(el: HTMLElement, stage: HTMLElement, at: { x: number; y: numbe
       i % 2 ? SIDE.card : SIDE.edge, 6)
     if (s) s.z = z
   })
+}
+
+/** Where a card comes in the flat view's paint order among the cards: the
+ *  outermost z-index it sits under (a fanned deck's bundle, 55, is over the
+ *  plain cards' 40). Page order settles the rest. */
+function paintZ(el: HTMLElement, stage: HTMLElement): number {
+  let z = 0
+  for (let e: HTMLElement | null = el; e && e !== stage; e = e.parentElement) {
+    const v = parseInt(e.style.zIndex)
+    if (!isNaN(v)) z = v
+  }
+  return z
 }
 
 /** Invisible hit zones laid over a card (an opened deck's front card has
@@ -1157,11 +1729,13 @@ function hitZones(stage: HTMLElement): { el: HTMLElement; at: { x: number; y: nu
   return out
 }
 function riseZones(zones: ReturnType<typeof hitZones>, at: { x: number; y: number }, w: number, h: number, z: number,
-                   lifting: Map<HTMLElement, number>, stage: HTMLElement) {
+                   lifting: Map<HTMLElement, number>, stage: HTMLElement, hinge?: Hinge) {
   for (const zn of zones) {
     if (Math.abs(zn.at.x - at.x) > 1 || Math.abs(zn.at.y - at.y) > 1 || Math.abs(zn.el.offsetWidth - w) > 1 || Math.abs(zn.el.offsetHeight - h) > 1) continue
     lifting.set(zn.el, z + 0.5)
     chain(zn.el, stage)
+    // On a leaning card, it leans with it.
+    if (hinge) stand(zn.el, { ...hinge, z: z + 0.5 })
   }
 }
 
@@ -1180,7 +1754,7 @@ function hideEdges(deck: HTMLElement, reach = 0) {
     if (e.style.cursor === 'pointer' && e.style.pointerEvents === 'all' && e.offsetLeft > deck.offsetWidth / 2) {
       const was = widened.get(e) ?? e.style.width
       widening.set(e, was)
-      e.style.width = `${(parseFloat(was) || 0) + reach}px`
+      setStyle(e, 'width', `${(parseFloat(was) || 0) + reach}px`)
       continue
     }
     if (e.style.pointerEvents !== 'none' || e.offsetWidth > 16) continue
@@ -1201,6 +1775,9 @@ function settleChains() {
   for (const e of hidden) if (!hiding.has(e)) e.style.visibility = ''
   hidden = hiding
   hiding = new Set()
+  for (const [e, was] of veiled) if (!veiling.has(e)) e.style.visibility = was
+  veiled = veiling
+  veiling = new Map()
   for (const [e, was] of widened) if (!widening.has(e)) e.style.width = was
   widened = widening
   widening = new Map()
@@ -1243,50 +1820,6 @@ function detail(screenW: number): number {
  *  works exactly as 2D, so a drop is judged on the flat strip). */
 const consoleEase = new Map<string, number>()
 let consoleAt = 0
-/** The most a console's standing parts may rise over the canvas, px: a
- *  share (DECK.reach) of the eye's height over it. Higher, zoomed in or
- *  seen low, a part is drawn edge-on along the horizon or past it, out of
- *  reach at any pan. */
-function eyeRoom(): number {
-  const { tilt, shiftY } = useTiltStore.getState(), t = tilt * Math.PI / 180
-  return DECK.reach * (TILT_PERSPECTIVE * Math.cos(t) + shiftY * Math.sin(t))
-}
-/** How far a console strip may stand, 0..1: as far as keeps its top under
- *  eyeRoom. Its top is the deck on its main row's leaning cards (and the
- *  loop strip bar and Run a step up on it, see collectSlabs), or a look
- *  row's cards and the tabs riding above them. */
-function standRoom(rail: FreeNodeData, k: number, zoom: number): number {
-  const room = eyeRoom()
-  const ids = (sl: { id: string; kind: string }[]) => new Set(sl.filter(x => x.kind === 'card').map(x => x.id))
-  const main = ids(rail.rail?.slots ?? []), look = ids((rail.rail?.rows ?? []).flat())
-  const u = (rail.rail?.unit || 1) * zoom
-  const cards: { base: number; h: number; over: number }[] = []
-  for (const o of Object.values(useFreeNodeStore.getState().nodes)) {
-    const d = o.railDock
-    if (o.type !== 'effect' || !d || d.railId !== rail.id || d.lifted || (d.order ?? 0) !== 0) continue
-    const deck = main.has(d.slotId)
-    if (!deck && !look.has(d.slotId)) continue
-    cards.push({ base: dockLift(Math.min(o.width, o.height) * zoom, 0) * k,
-      h: o.height * zoom + (deck ? 0 : (RAIL_GEOM.headH + RAIL_GEOM.gap * 0.5) * u),
-      over: deck ? (DECK.clear + DECK.step + TRAY.rimH) * u : 0 })
-  }
-  if (!cards.length) return 1
-  const top = (s: number) => Math.max(...cards.map(c => c.base + c.h * Math.sin(CONSOLE.slot * s * Math.PI / 180) + c.over * s))
-  if (top(1) <= room) return 1
-  if (top(0) >= room) return 0
-  let lo = 0, hi = 1
-  for (let i = 0; i < 14; i++) { const m = (lo + hi) / 2; if (top(m) > room) hi = m; else lo = m }
-  return lo
-}
-/** How far a strip's Viewer may stand, 0..1: its top (it stands on its
- *  bottom edge, its slab under it) under eyeRoom, as its strip's is. */
-function screenRoom(el: HTMLElement | null, zoom: number): number {
-  if (!el) return 1
-  const w = el.offsetWidth * zoom, h = el.offsetHeight * zoom
-  const sin = (eyeRoom() - Math.min(w, h) * THICK.viewer) / Math.max(1, h)
-  const full = CONSOLE.viewer * Math.PI / 180
-  return sin <= 0 ? 0 : sin >= Math.sin(full) ? 1 : Math.asin(sin) / full
-}
 function consoleLean(host: HTMLElement, zoom: number): Map<string, number> {
   const out = new Map<string, number>()
   const { console: on, tilt } = useTiltStore.getState()
@@ -1298,11 +1831,15 @@ function consoleLean(host: HTMLElement, zoom: number): Map<string, number> {
   const nodes = useFreeNodeStore.getState().nodes
   const drop = useRailUiStore.getState().drop
   const seen = new Set<string>()
+  // Where things are on the flat plane, px from the host's centre (as
+  // collectSlabs reads them), for nearFit.
+  const { pan } = useCanvasStore.getState()
+  const W = host.offsetWidth, H = host.offsetHeight
   /** Each strip's own ease (held flat or not, console on or off) and its
    *  detail: what its Viewer follows. */
   const standing = new Map<string, { e: number; k: number }>()
   railStand.clear()
-  standFull.clear()
+  leanOf.clear()
   for (const n of Object.values(nodes)) {
     const r = n.rail
     if (!r || n.pin) continue
@@ -1323,17 +1860,39 @@ function consoleLean(host: HTMLElement, zoom: number): Map<string, number> {
     const body = host.querySelector<HTMLElement>(`[data-freenode][data-id="${n.id}"] [data-rail-body]`)
     const k = body ? detail(body.offsetWidth * zoom) : 0
     standing.set(n.id, { e, k })
-    const room = standRoom(n, k, zoom)
-    const s = Math.min(grown * k * e * e * (3 - 2 * e), room)
+    // One angle for all of it, whatever the camera does: it is grown in out
+    // of the flat view as the camera leaves the top and that is all. Seen
+    // from lower, it faces you more, as a real thing on a table does. (Only
+    // with the eye right up against it does it lean less: nearFit.)
+    const s = grown * k * e * e * (3 - 2 * e)
     if (s <= 0) continue
     railStand.set(n.id, s)
-    standFull.set(n.id, room)
-    const cards = new Set([...r.slots, ...(r.rows ?? []).flat()].filter(sl => sl.kind === 'card').map(sl => sl.id))
-    for (const t of Object.values(nodes)) {
-      const d = t.railDock
-      if (t.type !== 'effect' || !d || d.railId !== n.id || d.lifted || (d.order ?? 0) !== 0 || !cards.has(d.slotId)) continue
-      out.set(t.id, CONSOLE.slot * s * Math.PI / 180)
+    // Everything docked on it leans back, the cast and the results as the
+    // effects (Brian 2026-11-01): each card on its own bottom edge, a
+    // column's cards parallel, one behind the other.
+    const docked = Object.values(nodes).filter(t => t.railDock?.railId === n.id && !t.railDock.lifted)
+    // One angle for the whole strip (its rack is one plane behind them
+    // all): as far back as its nearest card may lean (nearFit). A card's
+    // stand-in is where the card layer draws the card.
+    const full = CONSOLE.slot * s * Math.PI / 180
+    let a = full
+    for (const t of docked) {
+      const m = Math.min(t.width, t.height) * zoom
+      a = Math.min(a, nearFit(full, pan.x + t.x * zoom - W / 2, pan.x + (t.x + t.width) * zoom - W / 2, pan.y + (t.y + t.height) * zoom - H / 2,
+        dockLift(m, t.railDock!.order ?? 0) * k + m * THICK.card, t.height * zoom))
     }
+    // The live preview at the results' head leans with them (collectSlabs).
+    const ghost = host.querySelector<HTMLElement>(`[data-rail-overlay="${n.id}"] [data-rail-ghost]`)
+    let world = ghost?.parentElement
+    while (world && world.parentElement !== host) world = world.parentElement
+    const ga = ghost && world && ghost.offsetWidth ? offsetIn(ghost, world) : null
+    if (ga) {
+      const gw = ghost!.offsetWidth * zoom, gh = ghost!.offsetHeight * zoom
+      a = Math.min(a, nearFit(full, pan.x + ga.x * zoom - W / 2, pan.x + ga.x * zoom + gw - W / 2, pan.y + ga.y * zoom + gh - H / 2,
+        dockLift(Math.min(gw, gh), 0) * k, gh))
+    }
+    leanOf.set(n.id, a)
+    for (const t of docked) out.set(t.id, a)
   }
   for (const id of consoleEase.keys()) if (!seen.has(id)) consoleEase.delete(id)
   // A Viewer stands while the strip it shows does, easing on its own (it
@@ -1355,23 +1914,77 @@ function consoleLean(host: HTMLElement, zoom: number): Map<string, number> {
     const e = goal > was ? Math.min(goal, was + dt / CONSOLE.easeMs) : Math.max(goal, was - dt / CONSOLE.easeMs)
     const k = sh?.k ?? last?.k ?? 0
     if (e <= 0 && goal <= 0) screenEase.delete(wid); else screenEase.set(wid, { e, k })
-    const room = screenRoom(host.querySelector<HTMLElement>(`[data-viewport3d="${wid}"]`), zoom)
-    const s = Math.min(grown * k * e * e * (3 - 2 * e), room)
-    standFull.set(wid, room)
-    if (s > 0 && windows[wid] && !windows[wid].pin) out.set(wid, CONSOLE.viewer * s * Math.PI / 180)
+    const s = grown * k * e * e * (3 - 2 * e)
+    const w = windows[wid]
+    if (s <= 0 || !w || w.pin) continue
+    // Its box takes in its header, a strip of fixed screen px above it.
+    const vr = viewportVisualRect(w, zoom), m = Math.min(vr.width, vr.height) * zoom
+    out.set(wid, nearFit(CONSOLE.viewer * s * Math.PI / 180, pan.x + vr.x * zoom - W / 2, pan.x + (vr.x + vr.width) * zoom - W / 2,
+      pan.y + (vr.y + vr.height) * zoom - H / 2, m * THICK.viewer, vr.height * zoom))
   }
   return out
 }
 const screenEase = new Map<string, { e: number; k: number }>()
 /** How far up each console strip stands this frame, 0..1, by id. */
 const railStand = new Map<string, number>()
-/** How far up each strip (and Viewer) stands at most this frame, by id:
- *  less than all the way, zoomed in (standRoom, screenRoom). */
-const standFull = new Map<string, number>()
+/** Each standing strip's lean this frame (radians), by id. */
+const leanOf = new Map<string, number>()
 /** How far a lean `a` (radians) has grown in, 0..1, out of `full` (the
- *  lean at all the way up), for one standing at most `id`'s share. */
-function grownIn(id: string, a: number, full: number): number {
-  return Math.min(1, a / (full * Math.PI / 180 * Math.max(1e-3, standFull.get(id) ?? 1)))
+ *  lean at all the way up, degrees). Laid lower by nearFit, the furniture
+ *  and the tabs riding on the cards go with the angle, as when growing in. */
+function grownIn(a: number, full: number): number {
+  return Math.min(1, a / (full * Math.PI / 180))
+}
+
+/** How near the eye a standing piece may come, as a share of the eye's
+ *  distance to the screen (TILT_PERSPECTIVE), and how far short of its
+ *  nearest a piece seen from behind starts to give way (nearFit). */
+const NEAR = 0.2, BEND = Math.PI / 6
+/** Console: how far back (radians, up to `full`) a piece standing on its
+ *  bottom edge may lean and still be wholly in front of the eye with NEAR
+ *  to spare. Its bottom edge runs `x0`..`x1` at flat `v` (px from the host
+ *  centre, as collectSlabs reads it), `z` up, and it is `h` long. The lean
+ *  is a fixed angle (Brian: the same from every camera angle), but what
+ *  stands grows with the zoom while the eye stays put: zoomed in close, a
+ *  68 deg Viewer rose past the eye and the browser drew none of it (it
+ *  drops a layer that reaches the camera), the leaning cards the same.
+ *  So only when a piece would come that near does it lean less, just
+ *  enough, and back up as you zoom out or turn away. Read off the camera
+ *  as tiltCss places it, a wheel zoom's glide too, so it follows the zoom
+ *  and the orbit smoothly; the three.js slabs and furniture take the same
+ *  angle from the hinge. */
+function nearFit(full: number, x0: number, x1: number, v: number, z: number, h: number): number {
+  const { tilt, spin, glide } = useTiltStore.getState()
+  const P = TILT_PERSPECTIVE
+  const t = tilt * Math.PI / 180, sp = spin * Math.PI / 180
+  const st = Math.sin(t), ct = Math.cos(t), ss = Math.sin(sp), cs = Math.cos(sp)
+  const k = glide?.k ?? 1, gx = glide?.x ?? 0, gy = glide?.y ?? 0
+  // How far towards the eye a point on the bottom edge is drawn (CSS z,
+  // after the glide's scale and the tilt); its nearer end counts.
+  const toward = (x: number) => ((gx + k * (x - gx)) * ss + (gy + k * (v - gy)) * cs) * st + k * z * ct
+  const near = Math.max(toward(x0), toward(x1))
+  // With its bottom edge itself that near, no angle keeps it all in front:
+  // it lies down as the edge comes on, flat by the time the edge reaches
+  // the eye. Stood up across the eye it was dropped; lying on the floor,
+  // as the canvas does, it is still drawn.
+  const most = full * Math.max(0, Math.min(1, (P - near) / (NEAR * P)))
+  if (k * h < 1e-3) return most
+  // Leaning back by `a`, its top edge comes k·h·f(a) nearer than its
+  // bottom edge, f(a) = sin a cos t - cos a cos(spin) sin t = R sin(a - th):
+  // seen from the front it rises towards the eye as it stands up. The top
+  // goes no nearer than NEAR, nor than the bottom edge once that is nearer.
+  const q = Math.max(0, (1 - NEAR) * P - near) / (k * h)
+  const R = Math.hypot(ct, cs * st), th = Math.atan2(cs * st, ct)
+  // Seen from behind, it leans towards the eye, nearest at th + 90 deg and
+  // less near past that, so standing a little less brought it nearer and
+  // the angle had to drop a long way at once. Over the last BEND before
+  // that it counts as nearer than it is, rising straight on, so the angle
+  // always gives way smoothly as you come close.
+  const bend = th + Math.PI / 2 - BEND, rise = R * Math.sin(BEND), atBend = R * Math.cos(BEND)
+  const need = (a: number) => a <= bend ? R * Math.sin(a - th) : atBend + rise * (a - bend)
+  if (need(most) <= q) return most
+  if (q >= atBend) return Math.max(0, bend + (q - atBend) / rise)
+  return Math.max(0, th + Math.asin(q / R))
 }
 /** The standing Viewer being dragged by its header, if one is. */
 let carried: string | null = null
@@ -1399,7 +2012,7 @@ const DROP_RGB = parseInt(RAIL_COLORS.drop.slice(1), 16)
 /** A project cabinet standing: degrees up from the canvas, its depth × width. */
 const CABINET = { stand: 85, depth: 0.45, rim: 0.012, rimH: 0.35 }
 /** A leaning card, and the flat top of its tab riding with it, if any. */
-type Leaning = { id: string; rail: string; slab: TiltSlab; hinge: Hinge; top?: number; main?: boolean }
+type Leaning = { id: string; rail: string; slot: string; order: number; slab: TiltSlab; hinge: Hinge; top?: number; main?: boolean }
 /** A console strip's deck: the raised top its header bar and loop strip
  *  bar stand on, `D` px up (before the fade), from its back inside the rim
  *  (`back`) to the header bar's front edge (`front`), across `x0`..`x1`
@@ -1407,11 +2020,10 @@ type Leaning = { id: string; rail: string; slab: TiltSlab; hinge: Hinge; top?: n
  *  unit on screen, `band` the header bar's own span. */
 type Deck = { rail: string; D: number; A: number; s: number; u: number; front: number; back: number; x0: number; x1: number; band: { v0: number; v1: number } }
 /** The deck's height over the cards' tops, and the loop strip bar's step
- *  up behind the header bar, in strip units; the most of the eye's height
- *  over the canvas its top may reach (standRoom); its colours: the deck, the
+ *  up behind the header bar, in strip units; its colours: the deck, the
  *  bar's tier, the sloped back and the ribs between its slots, the bright
  *  trim along its crest, the lip. */
-const DECK = { clear: 10, step: 12, reach: 0.5, gap: 0.6, top: 0x2b2f3d, tier: 0x1a1c25, slope: 0x59607a, rib: 0x6a7290, trim: 0xa7aec4, lip: 0x1e2230 }
+const DECK = { clear: 10, step: 12, gap: 0.6, top: 0x15171c, tier: 0x15171c, slope: 0x0f1115, rib: 0xb4bbc8, trim: 0xd2d7e0, lip: 0x16181d, foot: 0x16181d, alu: 0xb4bbc8, body: 0x20232b }
 type Screen = { id: string; slab: TiltSlab; hinge: Hinge }
 /** Console furniture, as on the mockup's machine. Behind each run of
  *  leaning cards, a sloped back just behind their backs, so nothing shows
@@ -1431,12 +2043,12 @@ function consoleFurniture(leaning: Leaning[], screens: Screen[], decks: Deck[], 
     const { v, z, a } = sc.hinge
     if (a >= 87 * Math.PI / 180) continue
     // Grown in with the lean, not popped on.
-    const f = grownIn(sc.id, a, CONSOLE.viewer)
+    const f = grownIn(a, CONSOLE.viewer)
     // Under its bottom edge, a dark base down to the floor (it stands on
     // its face's edge, its thickness up).
     const back = z * Math.sin(a), front = z * 0.25 * f
     if (back + front >= 0.5) out.push({ u: sc.slab.u, v: v + (front - back) / 2, w: sc.slab.w, h: back + front, r: Math.min(4, z / 2),
-      t: z, z, color: 0x1e2230, cap: true, deco: `viewer:${sc.id}` })
+      t: z, z, color: DECK.foot, finish: 'body', bevel: 2, cap: true, deco: `viewer:${sc.id}` })
     // A strut: a bar from the floor behind it up to its back, a little
     // over halfway up. Its underside starts on the floor at its foot.
     if (f < 0.05) continue
@@ -1445,7 +2057,7 @@ function consoleFurniture(leaning: Leaning[], screens: Screen[], decks: Deck[], 
     const foot = v - d * Math.cos(a) - run
     const L = Math.hypot(rise, run)
     const w = Math.max(3, 0.03 * sc.slab.w), t = 0.6 * w
-    out.push({ u: sc.slab.u, v: foot - L / 2, w, h: L, r: w / 3, t, z: 0, color: 0x3a4053, cap: true,
+    out.push({ u: sc.slab.u, v: foot - L / 2, w, h: L, r: w / 3, t, z: 0, color: DECK.alu, finish: 'alu', cap: true,
       deco: `viewer:${sc.id}`, hinge: { v: foot, z: 0, a: Math.PI - Math.atan2(rise, run) } })
   }
   // The deck: a raised top across the back of the strip, from inside its
@@ -1456,13 +2068,13 @@ function consoleFurniture(leaning: Leaning[], screens: Screen[], decks: Deck[], 
     const Dk = d.D * K - DECK.gap
     deckOf.set(d.rail, { ...d, Dk })
     out.push({ u: (d.x0 + d.x1) / 2, v: (d.back + d.front) / 2, w: d.x1 - d.x0, h: d.front - d.back, r: 6 * d.u,
-      t: Dk, z: Dk, color: DECK.top, cap: true, deco: `rail:${d.rail}` })
+      t: Dk, z: Dk, color: DECK.top, finish: 'dark', bevel: 2.5 * d.u, cap: true, deco: `rail:${d.rail}` })
     decoPlanes.push({ owner: `rail:${d.rail}`, z: Dk, x0: d.x0, x1: d.x1, v0: d.back, v1: d.front })
     // The loop strip bar's tier, back to the header bar's back edge.
     const Ak = d.A * K - DECK.gap
     if (Ak > Dk + 0.5 && d.band.v0 - d.back >= 1) {
       out.push({ u: (d.x0 + d.x1) / 2, v: (d.back + d.band.v0) / 2, w: d.x1 - d.x0, h: d.band.v0 - d.back, r: 6 * d.u,
-        t: Ak, z: Ak, color: DECK.tier, cap: true, deco: `rail:${d.rail}` })
+        t: Ak, z: Ak, color: DECK.tier, finish: 'dark', bevel: 2.5 * d.u, cap: true, deco: `rail:${d.rail}` })
       decoPlanes.push({ owner: `rail:${d.rail}`, z: Ak, x0: d.x0, x1: d.x1, v0: d.back, v1: d.band.v0 })
     }
   }
@@ -1470,66 +2082,96 @@ function consoleFurniture(leaning: Leaning[], screens: Screen[], decks: Deck[], 
   const nodes = useFreeNodeStore.getState().nodes
   /** Each deck's span across that a run's shelf fronts (below). */
   const shelved = new Map<string, [number, number][]>()
+  // The sloped back stands behind each column's back card (the first in
+  // its cascade); the cards in front lean parallel to it, each on its own
+  // bottom edge.
+  const backCard = new Map<string, Leaning>()
+  for (const l of leaning) {
+    const key = `${l.rail}|${l.slot}`, was = backCard.get(key)
+    if (!was || l.order < was.order) backCard.set(key, l)
+  }
   const byRail = new Map<string, Leaning[]>()
-  for (const l of leaning) byRail.set(l.rail, [...(byRail.get(l.rail) ?? []), l])
+  for (const l of backCard.values()) byRail.set(l.rail, [...(byRail.get(l.rail) ?? []), l])
   for (const [rail, cards] of byRail) {
     const u = (nodes[rail]?.rail?.unit || 1) * zoom
     const owner = `rail:${rail}`
     const build = (run: Leaning[]) => {
-      // One strip, one angle; one row, one hinge line.
-      const { v, z, a } = run[0].hinge
+      // One strip, one angle; the rack one plane behind the back-most card.
+      const a = run[0].hinge.a, sa = Math.sin(a), ca = Math.cos(a)
       // Grown in with the lean (and shrunk with it), not popped on.
-      const f = grownIn(rail, a, CONSOLE.slot)
+      const f = grownIn(a, CONSOLE.slot)
       const x0 = Math.min(...run.map(c => c.slab.u - c.slab.w / 2)) - 4 * u * f
       const x1 = Math.max(...run.map(c => c.slab.u + c.slab.w / 2)) + 4 * u * f
       const t = Math.max(...run.map(c => c.slab.t))
-      // As far up as the cards, or their tabs riding on them.
-      const h = Math.max(...run.map(c => v - Math.min(c.slab.v - c.slab.h / 2, c.top ?? Infinity)))
+      // Its plane: parallel to the cards, just behind the one furthest back
+      // (each card leans on its own bottom edge, a column's cascade and the
+      // row's tiles alike), so one rack runs behind its columns, no wall
+      // between them (Brian 2026-11-01: like the mockup's one wedge).
+      const ref = run.reduce((m, c) => c.hinge.v * sa + c.hinge.z * ca < m.hinge.v * sa + m.hinge.z * ca ? c : m)
+      const { v, z } = ref.hinge
       const back = t + 0.5
-      const vB = v - back * Math.sin(a), zB = Math.max(0.25, z - back * Math.cos(a))
+      const vB = v - back * sa, zB = Math.max(0.25, z - back * ca)
+      // As far up its plane as the cards reach, or their tabs riding on them.
+      const reach = Math.max(...run.map(c => {
+        const len = c.hinge.v - Math.min(c.slab.v - c.slab.h / 2, c.top ?? Infinity)
+        return (c.hinge.v - len * ca - vB) * -ca + (c.hinge.z + len * sa - zB) * sa
+      }))
       // Under the deck (the strip's own row), the sloped back runs up to it
       // and a shelf at its height closes the gap to the header bar; a look
       // row's stops a little past its cards' tops.
       const deck = run[0].main ? deckOf.get(rail) : undefined
-      let L = (h + 2 * u) * f
+      let L = (reach + 2 * u) * f
       if (deck && a > 0) {
         shelved.set(rail, [...(shelved.get(rail) ?? []), [x0, x1]])
-        L = Math.max(0, Math.min((deck.Dk - zB) / Math.sin(a), (vB - deck.front) / Math.max(1e-3, Math.cos(a))))
-        const vT = vB - L * Math.cos(a)
+        L = Math.max(0, Math.min((deck.Dk - zB) / sa, (vB - deck.front) / Math.max(1e-3, ca)))
+        const vT = vB - L * ca
         if (vT - deck.front >= 0.5) {
           out.push({ u: (x0 + x1) / 2, v: (vT + deck.front) / 2, w: x1 - x0, h: vT - deck.front + 1, r: Math.min(4 * u, (vT - deck.front) / 2),
-            t: deck.Dk, z: deck.Dk, color: DECK.top, cap: true, deco: owner })
+            t: deck.Dk, z: deck.Dk, color: DECK.top, finish: 'dark', cap: true, deco: owner })
           decoPlanes.push({ owner, z: deck.Dk, x0, x1, v0: deck.front, v1: vT })
         }
       }
+      const rack: Hinge = { v: vB, z: zB, a }
       if (L >= 1) out.push({ u: (x0 + x1) / 2, v: vB - L / 2, w: x1 - x0, h: L, r: 4 * u * f, t: zB, z: zB,
-        color: DECK.slope, cap: true, loft: true, deco: owner, hinge: { v: vB, z: zB, a } })
-      // A rib up the slope in each gap between its cards: a rack of slots.
+        color: DECK.slope, finish: 'dark', cap: true, loft: true, deco: owner, hinge: rack })
+      // A rib up the slope in each gap between its columns: a rack of slots.
       const rib = 3 * u * f
+      const cols = [...run].sort((p, q) => p.slab.u - q.slab.u)
       if (L >= 1 && rib >= 0.5) {
-        for (let i = 1; i < run.length; i++) {
-          const l = run[i - 1].slab, r = run[i].slab
+        for (let i = 1; i < cols.length; i++) {
+          const l = cols[i - 1].slab, r = cols[i].slab
           const gu = (l.u + l.w / 2 + r.u - r.w / 2) / 2
           out.push({ u: gu, v: vB - L / 2, w: rib, h: L, r: rib / 2, t: 2 * u * f, z: zB + 2 * u * f,
-            color: DECK.rib, cap: true, deco: owner, hinge: { v: vB, z: zB, a } })
+            color: DECK.rib, finish: 'alu', bevel: rib / 3, cap: true, deco: owner, hinge: rack })
         }
       }
       // Bright trim along the crest, where the slope meets the deck.
       if (deck && a > 0 && 3 * u * f >= 0.5) {
-        const vC = Math.max(deck.front, vB - L * Math.cos(a))
+        const vC = Math.max(deck.front, vB - L * ca)
         out.push({ u: (x0 + x1) / 2, v: vC, w: x1 - x0, h: 3 * u * f, r: 1.5 * u * f, t: 1, z: deck.Dk + 0.4,
-          color: DECK.trim, cap: true, deco: owner })
+          color: DECK.trim, finish: 'alu', cap: true, deco: owner })
       }
-      if (6 * u * f >= 1) out.push({ u: (x0 + x1) / 2, v: v + 3 * u * f, w: x1 - x0, h: 6 * u * f, r: 2 * u * f, t: z + t, z: z + t,
-        color: DECK.lip, cap: true, deco: owner })
-      // The lip, read at its cards' bottom edges; the slope, on their plane.
-      decoPlanes.push({ owner, z: z + t, x0, x1, v0: v, v1: v + 6 * u * f })
-      decoPlanes.push({ owner, hinge: run[0].hinge, z, x0, x1, v0: v - L - back - 2 * u, v1: v })
+      // The slope, read on the back-most card's plane: what is there flat.
+      decoPlanes.push({ owner, hinge: ref.hinge, z, x0, x1, v0: v - L - back - 2 * u, v1: v })
     }
-    // A run: neighbours in one row with no other column between them.
+    // A run: a row's columns side by side. The strip's own row is racked
+    // end to end, a rack to each run of columns whose back cards share a
+    // plane, so every rack touches its cards' backs: one rack behind them
+    // all stood behind the card furthest back (the results' short preview,
+    // the cast's shorter cards), and the effects stood well clear of it,
+    // with a void between seen from the side. A look row's split where a
+    // column is missing.
     cards.sort((a, b) => a.hinge.v - b.hinge.v || a.slab.u - b.slab.u)
+    const main = cards.filter(c => c.main).sort((p, q) => p.slab.u - q.slab.u), looks = cards.filter(c => !c.main)
+    const plane = (c: Leaning) => c.hinge.v * Math.sin(c.hinge.a) + c.hinge.z * Math.cos(c.hinge.a)
     let run: Leaning[] = []
-    for (const c of cards) {
+    for (const c of main) {
+      if (run.length && Math.abs(plane(run[run.length - 1]) - plane(c)) > 1) { build(run); run = [] }
+      run.push(c)
+    }
+    if (run.length) build(run)
+    run = []
+    for (const c of looks) {
       const last = run[run.length - 1]
       if (last && (Math.abs(last.hinge.v - c.hinge.v) > 1 || c.slab.u - c.slab.w / 2 - (last.slab.u + last.slab.w / 2) > 0.3 * c.slab.w)) {
         build(run); run = []
@@ -1538,6 +2180,29 @@ function consoleFurniture(leaning: Leaning[], screens: Screen[], decks: Deck[], 
     }
     if (run.length) build(run)
   }
+  // A dark lip along every leaning card's bottom edge, the card stood in
+  // it as in a slot: side by side ones on one hinge line share one.
+  const feet = [...leaning].sort((p, q) => p.rail.localeCompare(q.rail) || p.hinge.v - q.hinge.v || p.slab.u - q.slab.u)
+  let foot: Leaning[] = []
+  const lip = (run: Leaning[]) => {
+    const { v, z, a } = run[0].hinge
+    const u = (nodes[run[0].rail]?.rail?.unit || 1) * zoom, f = grownIn(a, CONSOLE.slot)
+    const t = Math.max(...run.map(c => c.slab.t))
+    const x0 = Math.min(...run.map(c => c.slab.u - c.slab.w / 2)) - 2 * u * f
+    const x1 = Math.max(...run.map(c => c.slab.u + c.slab.w / 2)) + 2 * u * f
+    if (6 * u * f < 1) return
+    const owner = `rail:${run[0].rail}`
+    out.push({ u: (x0 + x1) / 2, v: v + 3 * u * f, w: x1 - x0, h: 6 * u * f, r: 2 * u * f, t: z + t, z: z + t,
+      color: DECK.lip, finish: 'body', bevel: 1.5 * u * f, cap: true, deco: owner })
+    decoPlanes.push({ owner, z: z + t, x0, x1, v0: v, v1: v + 6 * u * f })
+  }
+  for (const c of feet) {
+    const last = foot[foot.length - 1]
+    if (last && (last.rail !== c.rail || Math.abs(last.hinge.v - c.hinge.v) > 1 || Math.abs(last.hinge.z - c.hinge.z) > 1 ||
+      c.slab.u - c.slab.w / 2 - (last.slab.u + last.slab.w / 2) > 0.3 * c.slab.w)) { lip(foot); foot = [] }
+    foot.push(c)
+  }
+  if (foot.length) lip(foot)
   // Bright trim along the top of the deck's front wall where no shelf
   // runs out from it (over the end columns), a lip under the header bar,
   // so the deck reads as one bridge across the strip. It stops where the
@@ -1550,7 +2215,7 @@ function consoleFurniture(leaning: Leaning[], screens: Screen[], decks: Deck[], 
     let from = d.x0 + rc
     const piece = (to: number) => {
       if (to - from >= 1) out.push({ u: (from + to) / 2, v: d.front + 0.5, w: to - from, h: 1, r: 0.5, t: th, z: d.Dk - 0.05,
-        color: DECK.trim, cap: true, deco: `rail:${d.rail}` })
+        color: DECK.trim, finish: 'alu', cap: true, deco: `rail:${d.rail}` })
     }
     for (const [x0, x1] of (shelved.get(d.rail) ?? []).sort((p, q) => p[0] - q[0])) {
       piece(Math.min(x0 + rs, d.x1 - rc))
@@ -1559,6 +2224,20 @@ function consoleFurniture(leaning: Leaning[], screens: Screen[], decks: Deck[], 
     piece(d.x1 - rc)
   }
   return out
+}
+/** What was last asked of each element's style here, and what the browser
+ *  read back: written again only when either changed. Writing the same
+ *  value each frame still restyled the page and woke the frame loop's
+ *  page watcher, so a 3D view at rest never rested. */
+const asked = new WeakMap<HTMLElement, Map<string, { raw: string; out: string }>>()
+type StyleKey = 'rotate' | 'transform' | 'transformOrigin' | 'translate' | 'width' | Styled
+function setStyle(el: HTMLElement, prop: StyleKey, v: string) {
+  let m = asked.get(el)
+  if (!m) asked.set(el, m = new Map())
+  const a = m.get(prop)
+  if (a && a.raw === v && el.style[prop] === a.out) return
+  el.style[prop] = v
+  m.set(prop, { raw: v, out: el.style[prop] })
 }
 /** A card stood up on its bottom edge: the edge at flat `v` (px from the
  *  centre, y down) and height `z`, turned up by `a` radians. */
@@ -1571,6 +2250,9 @@ let standing = new Map<HTMLElement, Stood>()
  *  would stretch, so it is scaled to screen size, turned, and scaled back
  *  (rigid on screen). */
 function stand(el: HTMLElement, hinge: Hinge, zoom = 1, origin = '50% 100%') {
+  // Laid out at the zoom (the tilted canvas, InfiniteCanvas worldStyle), it
+  // scales up as across: turned plainly.
+  if (zoom !== 1 && el.closest('[data-tilt-zoomed]')) zoom = 1
   const was = stood.get(el) ?? { hinge, rotate: el.style.rotate, origin: el.style.transformOrigin, transform: el.style.transform, wrote: '' }
   const deg = (-hinge.a * 180 / Math.PI).toFixed(2)
   // Each way first undoes the other's, or a zoom crossing exactly 1 left
@@ -1578,14 +2260,13 @@ function stand(el: HTMLElement, hinge: Hinge, zoom = 1, origin = '50% 100%') {
   if (zoom === 1) {
     if (was.wrote && el.style.transform === was.wrote) el.style.transform = was.transform
     was.wrote = ''
-    el.style.rotate = `x ${deg}deg`
+    setStyle(el, 'rotate', `x ${deg}deg`)
   } else {
-    el.style.rotate = was.rotate
-    const t = `scale3d(${1 / zoom}, ${1 / zoom}, 1) rotateX(${deg}deg) scale3d(${zoom}, ${zoom}, 1)`
-    if (el.style.transform !== t) el.style.transform = t
+    setStyle(el, 'rotate', was.rotate)
+    setStyle(el, 'transform', `scale3d(${1 / zoom}, ${1 / zoom}, 1) rotateX(${deg}deg) scale3d(${zoom}, ${zoom}, 1)`)
     was.wrote = el.style.transform
   }
-  el.style.transformOrigin = origin
+  setStyle(el, 'transformOrigin', origin)
   standing.set(el, { ...was, hinge })
 }
 function settleStands() {
@@ -1613,10 +2294,18 @@ function hingeOf(el: Element | null): Hinge | undefined {
  *  lift is the CSS `translate` property, which leaves the tile's own
  *  transform alone; tilting flat puts them all back. */
 let lifted = new Map<HTMLElement, number>()
+/** The CSS zoom each lift was written at: on the tilted canvas, laid out
+ *  at the zoom (InfiniteCanvas worldStyle), a length is drawn that many
+ *  times over, so a lift is written as screen px over it. */
+let liftK = new Map<HTMLElement, number>()
 function setLifts(next: Map<HTMLElement, number>) {
+  const nextK = new Map<HTMLElement, number>()
   for (const [el, z] of next) {
-    if (Math.abs((lifted.get(el) ?? -1) - z) > 0.05) el.style.translate = `0 0 ${z.toFixed(2)}px`
+    const k = cssZoomOf(el)
+    nextK.set(el, k)
+    if (Math.abs((lifted.get(el) ?? -1) - z) > 0.05 || liftK.get(el) !== k) el.style.translate = `0 0 ${(z / k).toFixed(3)}px`
   }
+  liftK = nextK
   for (const el of lifted.keys()) if (!next.has(el)) el.style.translate = ''
   if (!!next.size !== !!lifted.size) {
     for (const st of document.querySelectorAll('[data-tilt-stage]')) st.toggleAttribute('data-tilt-3d', next.size > 0)
@@ -1624,6 +2313,11 @@ function setLifts(next: Map<HTMLElement, number>) {
   lifted = next
   settleChains()
   settleStands()
+}
+/** The CSS zoom `el` is laid out at: its own and its boxes' together. */
+function cssZoomOf(el: HTMLElement): number {
+  const k = (el as HTMLElement & { currentCSSZoom?: number }).currentCSSZoom
+  return k && k > 0 ? k : 1
 }
 /** How high `el` stands: the lifts of everything raised that holds it
  *  (a button on a docked card stands on the card's lift), or 0. */
@@ -1640,6 +2334,9 @@ function liftOf(el: Element | null): number {
 function dropLifts() {
   if (lifted.size) setLifts(new Map())
   standScreens([])
+  turnAway(new Set())
+  restEase.clear()
+  heldRest = null
   decoPlanes = []
   // Nothing carries over a flat spell (Console turned off, or on, in 2D):
   // the next tilt starts each strip and Viewer afresh.
@@ -1772,7 +2469,8 @@ const TiltedView: React.FC = () => {
   // cursor (the real ones are swallowed): dragging, resizing and
   // repositioning work on the ground exactly as they do flat.
   // Middle drag moves the camera in its own view plane (Maya's pan). The
-  // wheel zooms straight in toward the middle of the view. Right-click is
+  // wheel zooms straight in toward the middle of the view, but over a panel
+  // that keeps it flat (a list scrolling), the panel has it. Right-click is
   // left alone, so menus open where the cursor is.
   useEffect(() => {
     const root = rootRef.current!
@@ -1854,7 +2552,7 @@ const TiltedView: React.FC = () => {
       // (a card let go: what it drops into) gets the flat view's answer: see
       // flatHit.
       hitAt = true
-      try { send(e, type, to, p) } finally { hitAt = false; standBack() }
+      try { return send(e, type, to, p) } finally { hitAt = false; standBack() }
     }
     /** What a press hits, as the flat view has it. The browser's own hit
      *  test on a tilted or leaning card can pick a layer under the one in
@@ -1873,6 +2571,7 @@ const TiltedView: React.FC = () => {
       if (hinge) for (let t: Element | null = target; t && t !== unit; t = t.parentElement) if ((lifted.get(t as HTMLElement) ?? 0) > 0) { part = t; break }
       hitAt = true
       try {
+        layFlat(target, unit)
         for (const el of document.elementsFromPoint(p.x, p.y)) {
           if (!unit.contains(el)) continue
           // A raised part is seen a little off its flat place, so near its
@@ -1971,13 +2670,16 @@ const TiltedView: React.FC = () => {
       }
       if (type.startsWith('pointer')) {
         const pe = e as PointerEvent
-        to.dispatchEvent(new PointerEvent(type, {
+        return to.dispatchEvent(new PointerEvent(type, {
           ...init, pointerId: pe.pointerId, pointerType: pe.pointerType, isPrimary: pe.isPrimary,
           pressure: pe.pressure, width: pe.width, height: pe.height,
         }))
-      } else {
-        to.dispatchEvent(new MouseEvent(type, init))
       }
+      if (type === 'wheel') {
+        const we = e as WheelEvent
+        return to.dispatchEvent(new WheelEvent(type, { ...init, deltaX: we.deltaX, deltaY: we.deltaY, deltaZ: we.deltaZ, deltaMode: we.deltaMode }))
+      }
+      return to.dispatchEvent(new MouseEvent(type, init))
     }
 
     // Hit tests during a re-sent event. Its handlers work in flat points, so
@@ -1994,10 +2696,10 @@ const TiltedView: React.FC = () => {
     // stood back up once the event is done, so many asks cost one.
     let hitAt = false
     let flatUndo: (() => void)[] | null = null
-    const layFlat = () => {
+    const layFlat = (along?: Element, unit?: Element) => {
       if (flatUndo) return
       const undo: (() => void)[] = flatUndo = []
-      const put = (el: HTMLElement, prop: 'transform' | 'rotate' | 'translate' | 'overflow' | 'width' | 'borderRadius', v: string) => {
+      const put = (el: HTMLElement, prop: 'transform' | 'rotate' | 'translate' | 'overflow' | 'width' | 'borderRadius' | 'visibility' | 'transformStyle', v: string) => {
         const was = el.style[prop]
         if (was === v) return
         el.style[prop] = v
@@ -2012,10 +2714,23 @@ const TiltedView: React.FC = () => {
         if (el.hasAttribute('data-cabinet-tray')) put(el, 'translate', '')
       }
       for (const [el, was] of chained) put(el, 'overflow', was.ov)
+      for (const [el, was] of veiled) put(el, 'visibility', was)
       // And what 3D reshapes that takes the pointer: a deck's click-to-fan
       // strip stretched over its stepped pages, Run's pill corners.
       for (const [el, was] of widened) put(el, 'width', was)
       for (const [el, f] of filled) if (f.was.borderRadius !== undefined) put(el, 'borderRadius', f.was.borderRadius)
+      // And what a press is on (`along`, up to its tile, card or Viewer:
+      // `unit`) neither raised nor kept in 3D. Each raised box, and each one
+      // kept in 3D round a raised part, is a stacking layer of its own, so
+      // what flat lifts over its neighbours by z-index sank under them: the
+      // Viewer's x went under its NE resize corner, and a press on it
+      // resized (or did nothing). Raised parts elsewhere stay as they are.
+      for (let t: Element | null = along ?? null; unit && t && t !== unit.parentElement; t = t.parentElement) {
+        const el = t as HTMLElement
+        if (lifted.has(el)) put(el, 'translate', '')
+        const was = chained.get(el)
+        if (was) put(el, 'transformStyle', was.ts)
+      }
     }
     const standBack = () => {
       const undo = flatUndo
@@ -2053,6 +2768,7 @@ const TiltedView: React.FC = () => {
       !!r.stood && (r.free ||= Math.hypot(e.clientX - (r.x0 ?? e.clientX), e.clientY - (r.y0 ?? e.clientY)) >= 6)
     const onDown = (e: PointerEvent) => {
       if (!e.isTrusted) return
+      heldRest = null
       // A press still open from before (its release lost on the way) is let
       // go where it was, before this one starts: replaced unended, its card
       // kept following the bare mouse (Brian's deck stuck to the cursor).
@@ -2144,6 +2860,7 @@ const TiltedView: React.FC = () => {
       const height = liftOf(e.target as Element)
       const target = flatTarget(e, e.target as Element, height)
       const hinge = hingeOf(target)
+      heldRest = restKeyOf(target)
       // Something standing, or a column's head up on the console's deck: a
       // drag from it goes where the cursor goes (see surfaceAt).
       g = { kind: 'remap', target, pointerId: e.pointerId, height, stood: !!hinge || (height > 0 && !!target.closest('[data-rail-card-head], [data-rail-head]')), x0: e.clientX, y0: e.clientY }
@@ -2165,7 +2882,26 @@ const TiltedView: React.FC = () => {
         carried = target.closest<HTMLElement>('[data-viewport3d]')?.dataset.viewport3d ?? null
       }
       resend(e, 'pointerdown', target, height)
-      resend(e, 'mousedown', target, height)
+      const pressed = resend(e, 'mousedown', target, height)
+      // The browser's own press was held back (preventDefault, above) and a
+      // re-sent one has no default action, so a text field, note or picker
+      // pressed in 3D never took the focus: nothing could be typed (hunt
+      // 2026-11-01). As flat, unless the press was refused: the field takes
+      // the focus with the caret where it was pressed, and a picker opens.
+      const field = pressed !== false ? (target as Element).closest?.<HTMLElement>('input, textarea, select, [contenteditable="true"]') : null
+      if (field && !(field as HTMLInputElement).disabled) {
+        if (document.activeElement !== field) field.focus({ preventScroll: true })
+        const at = lastFlat as { x: number; y: number } | null
+        if (at && (field instanceof HTMLTextAreaElement || (field instanceof HTMLInputElement && /^(text|search|url|tel|password|email|)$/.test(field.type)))) {
+          hitAt = true; layFlat()
+          try {
+            const cp = (document as Document & { caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null }).caretPositionFromPoint?.(at.x, at.y)
+            if (cp && cp.offsetNode === field) field.setSelectionRange(cp.offset, cp.offset)
+          } catch { /* a field without a caret */ } finally { hitAt = false; standBack() }
+        } else if (field instanceof HTMLSelectElement) {
+          try { field.showPicker() } catch { /* opened by the keyboard instead */ }
+        }
+      }
       // A column's tab on the deck is seen at a slant: a 3px jitter of the
       // hand there reads as 6px on the strip, past flat's 4px drag start,
       // and a click became a drag. Till the hand has moved 4px, its moves
@@ -2174,6 +2910,7 @@ const TiltedView: React.FC = () => {
     }
     const onMove = (e: PointerEvent) => {
       if (!e.isTrusted) return
+      if (e.buttons === 0) heldRest = null
       // A press whose release never reached us (let go outside the window,
       // or swallowed on the way) is over once no button is down: left
       // standing, it kept every later move to itself, and models stopped
@@ -2243,7 +2980,10 @@ const TiltedView: React.FC = () => {
       resend(e, 'mousemove', to, g.height, undefined, on)
     }
     const onUp = (e: PointerEvent) => {
-      if (!e.isTrusted || !g) return
+      if (!e.isTrusted) return
+      // Let go: what rests on a strip settles where it now lies.
+      if (e.type !== 'pointercancel') heldRest = null
+      if (!g) return
       swallow(e)
       if (g.kind === 'remap') {
         const real = e.target as Element
@@ -2286,7 +3026,9 @@ const TiltedView: React.FC = () => {
     const glideFrame = (now: number) => {
       const w = wz
       if (!w) return
-      const dt = Math.min(64, now - w.at)
+      // The frame's time can be before the wheel event's (handled in the
+      // same frame): a negative step zoomed the wrong way first.
+      const dt = Math.max(0, Math.min(64, now - w.at))
       w.at = now
       const a = 1 - Math.exp(-dt / 55)
       w.k = Math.exp(Math.log(w.k) + (Math.log(w.target) - Math.log(w.k)) * a)
@@ -2297,7 +3039,31 @@ const TiltedView: React.FC = () => {
       w.raf = requestAnimationFrame(glideFrame)
     }
     const onWheel = (e: WheelEvent) => {
-      if (!onPlane(e.target)) return
+      if (!e.isTrusted || !onPlane(e.target)) return
+      // A panel that keeps the wheel flat (data-wheel-own: Prompt Pad's,
+      // History's and the Pool's lists scroll, the List rolls, a Viewer
+      // zooms its picture or turns its model) keeps it here too: zoomed
+      // instead, its list could not be scrolled at all in 3D. Pinned, it is
+      // not on the plane: its wheel is left as it comes. On the plane, the
+      // panel is asked as a press is, at the flat point on what the flat
+      // view has there (the browser's own hit can be the box holding the
+      // Viewer's picture, not the picture). The browser's own wheel is not
+      // prevented, so the list under the cursor still scrolls natively;
+      // only the copy reaches the page. Not through furniture or a model
+      // drawn in front of it.
+      const real = e.target as Element
+      if (real.closest('[data-wheel-own]') && !real.closest('[data-tilt-stage]')) return
+      if (real.closest('[data-freenode][data-id], [data-viewport3d]')?.querySelector('[data-wheel-own]') &&
+          !(overView(real) && models.pick?.(e.clientX, e.clientY))) {
+        const height = liftOf(real)
+        const to = flatTarget(e, real, height)
+        const p = to.closest('[data-wheel-own]') && flatClient(e.clientX, e.clientY, height, hingeOf(to))
+        if (p) {
+          swallow(e)
+          resend(e, 'wheel', to, height, p)
+          return
+        }
+      }
       e.preventDefault(); swallow(e)
       const c = viewCentre(host)
       if (!c) return

@@ -540,11 +540,15 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
             useViewport3DStore.getState().rehomePinnedWindow(id, { pan: cs.pan, zoom: cs.zoom })
           } : undefined}
         />
+        {/* Lifted over the reshape handles too, as the grip is: the x sits
+            inside the NE corner's zone, which took every press on it as a
+            resize, so it never closed the window. */}
         <button
           onClick={() => { useUndoCoordinator.getState().checkpoint(); removeWindow(id) }}
           onPointerDown={e => e.stopPropagation()}
           title="Close viewport"
           style={{
+            position: 'relative', zIndex: 21,
             background: 'none', border: 'none', cursor: 'pointer',
             color: 'rgba(255,255,255,0.45)', fontSize: fontSize * 1.1,
             padding: 0, lineHeight: 1, flexShrink: 0,
@@ -559,6 +563,7 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
         onPointerMove={onBodyMove}
         onPointerUp={onBodyUp}
         onWheel={onBodyWheel}
+        data-wheel-own=""
         onContextMenu={onBodyContextMenu}
         style={{
           flex: 1, position: 'relative',

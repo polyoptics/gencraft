@@ -114,6 +114,7 @@ export const PromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
     <div
       onPointerDown={e => e.stopPropagation()}
       onWheel={e => e.stopPropagation()}
+      data-wheel-own=""
       style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: '#12131f' }}
     >
       {/* Every CSS px below is a SCREEN px, so the pad reads the same at

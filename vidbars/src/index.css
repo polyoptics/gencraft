@@ -66,5 +66,27 @@ body {
    strip can be lifted off the strip's floor (TiltLayer sets its translate).
    Only while something is lifted: a flat stage composites as one layer. */
 [data-tilt-stage="world"][data-tilted][data-tilt-3d],
-[data-tilt-stage="world"][data-tilted][data-tilt-3d] > div[style*="scale("],
+[data-tilt-stage="world"][data-tilted][data-tilt-3d] > [data-world],
 [data-tilt-stage="overlay"][data-tilted][data-tilt-3d] { transform-style: preserve-3d; }
+
+/* Tilted, the world stage's own box takes no hits, only what is on it: a
+   Viewer or tile lying on the plane is at the stage's own depth, and the
+   browser's hit test picked one or the other pixel by pixel, so hover
+   flickered on and off (Brian 2026-11-01: "the viewer flickers"). A press
+   on bare ground reaches the canvas behind, which is bare ground too. */
+[data-tilt-stage="world"][data-tilted] { pointer-events: none; }
+[data-tilt-stage="world"][data-tilted] > div[style*="scale("] { pointer-events: auto; }
+
+/* A selected loop strip's ring (FreeNode data-sel-ring): plain colour laid
+   under the strip, round its rounded corners, not a box-shadow. A shadow
+   round a whole strip made the tilted view paint every pixel of the strip
+   again at full size, and the pictures ran out of room (Brian 2026-11-01). */
+[data-freenode][data-sel-ring]::before {
+  content: '';
+  position: absolute;
+  inset: calc(-1 * var(--ring-w));
+  border-radius: calc(var(--ring-r) + var(--ring-w));
+  background: rgba(120, 180, 255, 0.9);
+  z-index: -1;
+  pointer-events: none;
+}

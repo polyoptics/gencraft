@@ -476,6 +476,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, icon
 
   return (
     <div
+      data-card-header={groupId}
       style={{
         position: 'absolute',
         left: screenLeft,

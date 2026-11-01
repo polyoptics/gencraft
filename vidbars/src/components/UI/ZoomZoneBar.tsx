@@ -16,6 +16,7 @@
 
 import React, { useEffect, useRef, useState } from 'react'
 import { useCanvasStore } from '../../store/canvasStore'
+import { useTiltStore } from '../../store/tiltStore'
 import {
   useZoomZonesStore, useZoomZone, zoomToBar, barToZoom, notchesBetween, currentZone,
   DEFAULT_CARD_MAX, DEFAULT_BLOCK_MAX, type ZoomZone,
@@ -74,6 +75,9 @@ function zoomCanvasTo(zoom: number, host: HTMLElement | null) {
 export const ZoomZoneBar: React.FC = () => {
   useZoneTimer()
   const zoom = useCanvasStore(s => s.zoom)
+  // A tilted wheel zoom glides the plane first and takes the zoom when the
+  // wheel rests: the marker follows the glide, as flat it follows the wheel.
+  const glideK = useTiltStore(s => s.glide?.k ?? 1)
   const cardMax = useZoomZonesStore(s => s.cardMax)
   const blockMax = useZoomZonesStore(s => s.blockMax)
   const open = useZoomZonesStore(s => s.barOpen)
@@ -164,7 +168,7 @@ export const ZoomZoneBar: React.FC = () => {
         }}
       >
         <TrackFill bounds={bounds} here={here} />
-        <Tick t={zoomToBar(zoom)} />
+        <Tick t={zoomToBar(zoom * glideK)} />
         {(['card', 'block'] as const).map(which => (
           <Grip
             key={which}

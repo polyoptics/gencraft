@@ -52,6 +52,7 @@ import { railAtPoint } from './rail/railHit'
 import { copyEffect, hasEffectClip, pasteEffect } from '../../utils/fx/effectClipboard'
 import { railHeaderBottom, railHeaderCarry, snapRailToViewer } from '../../utils/railViewer'
 import { RenameInput } from '../UI/RenameInput'
+import { CanvasUnits } from './CanvasUnits'
 
 
 /** Node types whose corner resize keeps the current proportions. A
@@ -1108,6 +1109,15 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
   const deckReserve = isDeckFace ? peek * 2 + Math.min(4 * iz, node.width * 0.025) : 0
   /** The width the tile's own box is drawn at — narrower on a deck face. */
   const faceW = node.width - deckReserve
+  /** The tile's border: none on a panel or a rail. */
+  const edgeW = isPanel || isRailTile ? 0 : borderW
+  /** As flat lays it out: a border is a whole number of screen pixels at
+   *  the page's own zoom (at least one), so a 11.1 border takes 11. */
+  const dpr = window.devicePixelRatio || 1
+  const edgeSnap = !edgeW ? 0 : edgeW * dpr < 1 ? 1 / dpr : Math.floor(edgeW * dpr) / dpr
+  /** The tile's corner radius, and the one inside its border. */
+  const tileR = (isPanel ? 12 : 10) / gz
+  const innerR = Math.max(0, tileR - edgeSnap)
 
   /** Drag-out carries the whole selection when this tile is part of it,
    *  this tile first. Read at dragstart rather than subscribed, so the grip
@@ -1240,10 +1250,12 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
       data-id={id}
       data-pinned={node.pin ? 'true' : undefined}
       data-rail={isRailTile ? 'true' : undefined}
+      data-sel-ring={isRailTile && isSelected ? 'true' : undefined}
       data-rail-docked={docked ? node.railDock!.slotId : undefined}
       data-rail-lifted={lifted ? 'true' : undefined}
       style={{
         position: 'absolute',
+        ...(isRailTile ? { '--ring-w': `${2.5 / gz}px`, '--ring-r': `${14 * railU}px` } as React.CSSProperties : {}),
         // left/top come from whichever space this node lives in; width and
         // height ALWAYS come from node.width/height, which never change
         // basis. The pin's scale is applied as this wrapper's own
@@ -1267,19 +1279,21 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
         // placements, so pinning it to the screen or setting it down on
         // the canvas never changes how it looks. A rail rounds like its
         // own frame (RailBody), so the selection ring hugs it.
-        borderRadius: isRailTile ? 14 * railU : (isPanel ? 12 : 10) / gz,
+        borderRadius: isRailTile ? 14 * railU : tileR,
         // An effect card paints its own face edge to edge; the tile's random
         // colour would only show through the translucent border as a ring.
         // A rail paints its own frame entirely.
         background: isRailTile ? 'transparent' : node.type === 'effect' ? '#15161f' : node.color,
         // Connected-to-viewport model tiles carry the accent tint — the
         // same "these things are linked" language as touching deck cards.
-        border: isPanel || isRailTile ? 'none' : `${borderW}px solid ${connectedWindowId
+        border: !edgeW ? 'none' : `${edgeW}px solid ${connectedWindowId
           ? `rgba(120,170,255,${isHovered ? 0.65 : 0.45})`
           : `rgba(255,255,255,${isHovered ? 0.18 : 0.08})`}`,
+        // A rail's ring when selected is laid under it as plain colour
+        // (index.css, data-sel-ring): as a box-shadow round a whole strip,
+        // the tilted view painted every pixel of the strip again.
         boxShadow: isRailTile
-          // Flat: the ring when selected, nothing else.
-          ? (isSelected ? `0 0 0 ${2.5 / gz}px rgba(120,180,255,0.9)` : 'none')
+          ? 'none'
           : isPanel
           ? `${isSelected ? `0 0 0 ${2.5 / gz}px rgba(120,180,255,0.9), ` : ''}` +
             `0 ${10 / gz}px ${28 / gz}px rgba(0,0,0,0.6), 0 ${2 / gz}px ${6 / gz}px rgba(0,0,0,0.5)`
@@ -1396,6 +1410,10 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
         // padding above stacks on top of it and the cap stops holding.
         boxSizing: 'border-box',
         flexShrink: 0, height: headerH, overflow: 'hidden',
+        // Its own top corners: in 3D the tile stops clipping (a raised
+        // header cannot stand out of a clipping box), and a square bar
+        // showed past the tile's round corners.
+        borderTopLeftRadius: innerR, borderTopRightRadius: innerR,
       }}>
         {node.type === 'text' ? (
           <span style={{ fontSize: fontSize * 0.9, fontWeight: 800, color: 'rgba(255,255,255,0.4)', lineHeight: 1, flexShrink: 0 }}>T</span>
@@ -1500,7 +1518,8 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
       ) : isCabinet ? (
         <CabinetBody id={id} node={node} />
       ) : (
-        <FreeNodeBody node={node} id={id} iz={iz} dz={dz} pad={pad} faceW={faceW} hovered={isHovered} updateFreeNode={updateFreeNode} isEditing={textEditing} setIsEditing={setTextEditing} />
+        <FreeNodeBody node={node} id={id} iz={iz} dz={dz} pad={pad} faceW={faceW} hovered={isHovered} updateFreeNode={updateFreeNode} isEditing={textEditing} setIsEditing={setTextEditing}
+          bodyW={faceW - 2 * edgeSnap} bodyH={node.height - 2 * edgeSnap - bodyTop} bodyR={innerR} />
       )}
 
       {/* A rail has no title bar to type a name into: the rename field sits
@@ -1837,10 +1856,15 @@ const FreeNodeBody: React.FC<{
   faceW: number
   /** The tile is hovered — reveals the fx result's chrome on a picture. */
   hovered: boolean
+  /** The body's size in canvas units, flat, and its bottom corners'
+   *  radius (for CanvasUnits). */
+  bodyW: number
+  bodyH: number
+  bodyR: number
   updateFreeNode: (id: string, patch: Partial<FreeNodeData>) => void
   isEditing: boolean
   setIsEditing: (v: boolean) => void
-}> = ({ node, id, iz, dz, pad, faceW, hovered, updateFreeNode, isEditing, setIsEditing }) => {
+}> = ({ node, id, iz, dz, pad, faceW, hovered, updateFreeNode, isEditing, setIsEditing, bodyW, bodyH, bodyR }) => {
   const textRef = useRef<HTMLTextAreaElement>(null)
   // node.imageUrl may be a `mediaref:` pointer — resolve to a usable URL
   // (null while loading / if missing). Called unconditionally before any
@@ -1864,39 +1888,40 @@ const FreeNodeBody: React.FC<{
   // ── Component bodies: a whole panel inside a node. Each is a plain
   //    component reading a shared store, so magneting two of them together
   //    is the only "wiring" the composition needs. ──
+  //    In CanvasUnits: laid out the same in 2D and 3D.
   if (node.type === 'pool') {
     return (
-      <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
+      <CanvasUnits w={bodyW} h={bodyH} r={bodyR}><div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
         <MediaPool nodeId={id} />
-      </div>
+      </div></CanvasUnits>
     )
   }
   if (node.type === 'prompt') {
     return (
-      <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
+      <CanvasUnits w={bodyW} h={bodyH} r={bodyR}><div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
         <PromptPad nodeId={id} />
-      </div>
+      </div></CanvasUnits>
     )
   }
   if (node.type === 'history') {
     return (
-      <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
+      <CanvasUnits w={bodyW} h={bodyH} r={bodyR}><div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
         <HistoryPanel nodeId={id} />
-      </div>
+      </div></CanvasUnits>
     )
   }
   if (node.type === 'list') {
     return (
-      <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
+      <CanvasUnits w={bodyW} h={bodyH} r={bodyR}><div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
         <CardRolodex embedded={{ nodeId: id }} />
-      </div>
+      </div></CanvasUnits>
     )
   }
 
   // ── Note type: always-editable textarea ──
   if (node.type === 'note') {
     return (
-      <textarea
+      <CanvasUnits w={bodyW} h={bodyH} r={bodyR}><textarea
         value={node.text}
         onChange={e => updateFreeNode(id, { text: e.target.value })}
         onPointerDown={e => e.stopPropagation()}
@@ -1908,7 +1933,7 @@ const FreeNodeBody: React.FC<{
           padding: `${8 * iz}px ${pad}px ${28 * iz}px`,
           resize: 'none', fontFamily: 'inherit', cursor: 'text',
         }}
-      />
+      /></CanvasUnits>
     )
   }
 
@@ -1940,9 +1965,10 @@ const FreeNodeBody: React.FC<{
       wordBreak: 'break-word',
     }
 
+    // In CanvasUnits, both: the words break in the same places in 3D.
     if (isEditing) {
       return (
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative' }}>
+        <CanvasUnits w={bodyW} h={bodyH} r={bodyR}><div style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative' }}>
           <textarea
             ref={textRef}
             value={node.text}
@@ -1959,11 +1985,11 @@ const FreeNodeBody: React.FC<{
               resize: 'none', cursor: 'text',
             }}
           />
-        </div>
+        </div></CanvasUnits>
       )
     }
     return (
-      <div
+      <CanvasUnits w={bodyW} h={bodyH} r={bodyR}><div
         style={{
           ...textCss,
           flex: 1, padding: renderPad,
@@ -1976,7 +2002,7 @@ const FreeNodeBody: React.FC<{
         }}
       >
         <div>{node.text || 'Double-click to edit…'}</div>
-      </div>
+      </div></CanvasUnits>
     )
   }
 

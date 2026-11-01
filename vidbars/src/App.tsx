@@ -3,7 +3,8 @@ import { InfiniteCanvas } from './components/Canvas/InfiniteCanvas'
 import { NLETimelineViewer } from './components/NLE/NLETimelineViewer'
 import { LayerContent, LayerOverlay } from './components/Layers/LayerRouter'
 import { TiltLayer } from './components/Canvas/TiltLayer'
-import { useTiltStage } from './store/tiltStore'
+import { useTiltOverlayHost } from './store/tiltStore'
+import { createPortal } from 'react-dom'
 import { Viewer } from './components/Viewer/Viewer'
 import { TemplateMenu } from './components/UI/TemplateMenu'
 import { TopIconBar } from './components/UI/TopIconBar'
@@ -839,14 +840,11 @@ export default function App() {
   )
 }
 
-/** Wraps the screen-space layer overlay so it tilts with the world layers
- *  (same box, origin and transform as InfiniteCanvas's tilt stage). Its
- *  direct children get pointer-events back in index.css. */
+/** Draws the screen-space layer overlay into its box inside the world tilt
+ *  stage (InfiniteCanvas, store/tiltStore useTiltOverlayHost), so it tilts
+ *  with the world layers as one 3D space. Its direct children get
+ *  pointer-events back in index.css. */
 function TiltStage({ children }: { children: React.ReactNode }) {
-  const ref = useTiltStage()
-  return (
-    <div ref={ref} data-tilt-stage="overlay" style={{ position: 'absolute', inset: 0, pointerEvents: 'none', transformOrigin: '50% 50%' }}>
-      {children}
-    </div>
-  )
+  const host = useTiltOverlayHost(s => s.el)
+  return host ? createPortal(children, host) : null
 }

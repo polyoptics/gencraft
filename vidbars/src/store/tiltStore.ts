@@ -226,15 +226,18 @@ export function unprojectTilt(sx: number, sy: number, tiltDeg: number, spinDeg: 
 
 /** Keep a tilt stage element's transform in step with the store, straight
  *  on the element: the transform changes every frame of a tilt, and going
- *  through React would re-render the whole canvas each time. */
-export function bindTiltStage(el: HTMLElement): () => void {
+ *  through React would re-render the whole canvas each time. An `inner`
+ *  stage sits inside another and tips with it: it only takes the marks. */
+export function bindTiltStage(el: HTMLElement, inner = false): () => void {
   let last = ''
   const apply = (s: { tilt: number; spin: number; shiftX: number; shiftY: number; glide: TiltGlide | null }) => {
     const t = tiltCss(s.tilt, s.spin, s.shiftX, s.shiftY, s.glide)
     if (t === last) return
     last = t
-    el.style.transform = t
-    markMoving(el)
+    if (!inner) {
+      el.style.transform = t
+      markMoving(el)
+    }
     if (t === 'none') el.removeAttribute('data-tilted')
     else el.setAttribute('data-tilted', '')
   }
@@ -243,9 +246,21 @@ export function bindTiltStage(el: HTMLElement): () => void {
 }
 
 /** Callback ref for a tilt stage — see bindTiltStage. */
-export function useTiltStage() {
-  return useCallback((el: HTMLDivElement | null) => (el ? bindTiltStage(el) : undefined), [])
+export function useTiltStage(inner = false) {
+  return useCallback((el: HTMLDivElement | null) => (el ? bindTiltStage(el, inner) : undefined), [inner])
 }
+
+/** The box the screen-space layer overlay (App's TiltStage: cards, block and
+ *  board headers) is drawn into. It is inside the world tilt stage, so
+ *  tilted, the cards and the tiles are one 3D space: what stands in front
+ *  hides what is behind it, whichever layer either is in. As two stages
+ *  side by side, the browser painted the whole overlay over the whole
+ *  world, and a leaning effect card showed the cards behind it through
+ *  itself (Brian 2026-11-01). */
+export const useTiltOverlayHost = create<{ el: HTMLElement | null; set: (el: HTMLElement | null) => void }>(set => ({
+  el: null,
+  set: el => set({ el }),
+}))
 
 /** Model units per metre, set by sizing the person beside a model in the
  *  tilted view. Keyed by the model's url, so every card showing the same

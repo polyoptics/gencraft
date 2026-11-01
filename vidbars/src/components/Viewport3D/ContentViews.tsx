@@ -25,6 +25,7 @@ import {
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { useTextVersionStore, type TextVersion } from '../../store/textVersionStore'
 import { ImageStudio } from './ImageStudio'
+import { useWorldZoom } from '../Canvas/worldZoom'
 
 export const ContentView: React.FC<{ windowId: string; item: ActiveItem; zoom: number }> = ({ windowId, item, zoom }) => {
   if (item.kind === 'text') {
@@ -51,6 +52,11 @@ export const ContentView: React.FC<{ windowId: string; item: ActiveItem; zoom: n
  *  absurdly large layout surfaces. */
 export const CounterScaled: React.FC<{ zoom: number; children: React.ReactNode }> = ({ zoom, children }) => {
   const z = Math.max(zoom, 0.1)
+  // On the tilted canvas, laid out at the zoom: zoomed back up, not scaled
+  // (see Canvas/worldZoom). The same box and the same px inside.
+  if (useWorldZoom() !== null) return (
+    <div style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', zoom: 1 / z }}>{children}</div>
+  )
   return (
     <div style={{
       position: 'absolute', left: 0, top: 0,

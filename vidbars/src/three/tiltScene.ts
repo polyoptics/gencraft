@@ -86,7 +86,34 @@ export interface TiltSlab {
   /** pick() sees through it: the plate under a mark the page draws with
    *  no pointer events (a drop mark), so the press is what is behind. */
   nopick?: boolean
+  /** What its walls (and coloured top) are made of (FINISH): how rough,
+   *  how metal, how much it glows. Default: a card's painted edge. */
+  finish?: TiltFinish
+  /** A bright machined line round its outer wall, this far below its top
+   *  (px): the parting line of a two-part case. */
+  seam?: number
+  /** A chamfer round its top edge, px (and its rim's): a machined edge
+   *  that catches the light. Only on a slab no DOM face covers to its
+   *  edge (a rim, or furniture). */
+  bevel?: number
 }
+
+/** Console finishes (Brian 2026-11-01: "like a million dollars"): roughness,
+ *  metalness, glow (emissive, × its colour) and how much of the studio
+ *  around it it reflects, for a slab's walls. A card's painted edge
+ *  reflects none of it: it looks as it always has. */
+export const FINISH = {
+  paint: [0.6, 0, 0, 0],
+  body: [0.48, 0.25, 0, 0.4],
+  alu: [0.24, 0.95, 0, 1],
+  dark: [0.55, 0.1, 0, 0.35],
+  gloss: [0.12, 0.05, 0, 0.9],
+  rubber: [0.92, 0, 0, 0.15],
+  glow: [0.4, 0, 1.6, 0],
+} as const
+export type TiltFinish = keyof typeof FINISH
+/** A seam's metal (TiltSlab.seam). */
+const SEAM_RGB = 0xc4cad4
 
 /** Artwork on the plane — a picture, video or Viewer screen — as a rect
  *  (centre u, v and size w, h in flat px, z its height). The light's
@@ -286,6 +313,9 @@ function releaseSwaps(swaps: Swap[] | null) {
   }
 }
 
+/** Pictures masked from the shadow and sheen at most (the ones in view). */
+export const ART_MAX = 1000
+
 export function createTiltScene(canvas: HTMLCanvasElement) {
   const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, stencil: true })
   renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1))
@@ -326,6 +356,8 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   scene.add(flatRig)
   const deco = new THREE.Scene()
   deco.add(new THREE.HemisphereLight(0xffffff, 0x444466, 1.2))
+  // The console's metal and gloss reflect the same soft studio the models do.
+  deco.environment = envRT.texture
   const ground = new THREE.Group(); ground.matrixAutoUpdate = false; scene.add(ground)
   const groundDeco = new THREE.Group(); groundDeco.matrixAutoUpdate = false; deco.add(groundDeco)
   // One light for the whole view (Brian 2026-10-30): the Light panel's key
@@ -492,15 +524,17 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   const noPick: { mesh: 'top' | 'side'; from: number; to: number }[] = []
   const SLAB_MAX = 400, CORNER_SEG = 4
   const RING = 4 * (CORNER_SEG + 1)
-  const SIDE_V = SLAB_MAX * (RING * 8 + 2), SIDE_I = SLAB_MAX * RING * 24
+  const SIDE_V = SLAB_MAX * (RING * 14 + 4), SIDE_I = SLAB_MAX * RING * 44
   const sideGeo = new THREE.BufferGeometry()
   const sidePos = new Float32Array(SIDE_V * 3)
   const sideNrm = new Float32Array(SIDE_V * 3)
   const sideCol = new Float32Array(SIDE_V * 3)
+  const sideFin = new Float32Array(SIDE_V * 4)
   const sideIdx = new Uint32Array(SIDE_I)
   sideGeo.setAttribute('position', new THREE.BufferAttribute(sidePos, 3).setUsage(THREE.DynamicDrawUsage))
   sideGeo.setAttribute('normal', new THREE.BufferAttribute(sideNrm, 3).setUsage(THREE.DynamicDrawUsage))
   sideGeo.setAttribute('color', new THREE.BufferAttribute(sideCol, 3).setUsage(THREE.DynamicDrawUsage))
+  sideGeo.setAttribute('finish', new THREE.BufferAttribute(sideFin, 4).setUsage(THREE.DynamicDrawUsage))
   sideGeo.setIndex(new THREE.BufferAttribute(sideIdx, 1))
   const topGeo = new THREE.BufferGeometry()
   const topPos = new Float32Array(SLAB_MAX * (RING + 1) * 3)
@@ -513,7 +547,20 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   for (let i = 2; i < topNrm.length; i += 3) topNrm[i] = -1
   topGeo.setAttribute('normal', new THREE.BufferAttribute(topNrm, 3))
   topGeo.setIndex(new THREE.BufferAttribute(topIdx, 1))
-  const sideMesh = new THREE.Mesh(sideGeo, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6, metalness: 0, emissive: 0x2a2e3c }))
+  const sideMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6, metalness: 0, emissive: 0x2a2e3c, envMapIntensity: 0.9 })
+  // Each vertex says what it is made of (FINISH): one draw for all of it.
+  sideMat.onBeforeCompile = sh => {
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute vec4 finish;\nvarying vec4 vFinish;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvFinish = finish;')
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec4 vFinish;')
+      .replace('#include <lights_fragment_maps>', '#include <lights_fragment_maps>\niblIrradiance *= vFinish.w;\nradiance *= vFinish.w;')
+      .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = vFinish.x;')
+      .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\nmetalnessFactor = vFinish.y;')
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance = totalEmissiveRadiance * (1.0 - 0.75 * vFinish.y) + vColor.rgb * vFinish.z;')
+  }
+  const sideMesh = new THREE.Mesh(sideGeo, sideMat)
   const topMesh = new THREE.Mesh(topGeo, new THREE.MeshBasicMaterial({ colorWrite: false, side: THREE.DoubleSide }))
   // The sheen: the key light's highlight on the faces (the DOM draws them;
   // this adds only the shine, black plus specular, added on top).
@@ -570,7 +617,6 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
 
   // ── Artwork mask: each picture's rect goes into the stencil first, and
   // the shadow catchers and the sheen skip it. ──
-  const ART_MAX = 200
   const artPos = new Float32Array(ART_MAX * 4 * 3)
   const artIdx = new Uint32Array(ART_MAX * 6)
   for (let i = 0; i < ART_MAX; i++) {
@@ -633,11 +679,14 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     decoTris.length = 0
     ringTops.length = 0
     noPick.length = 0
+    let fin: readonly number[] = FINISH.paint
     const vert = (x: number, y: number, z: number, nx: number, ny: number, nz: number, shade: number) => {
       const o = sv * 3
       sidePos[o] = x; sidePos[o + 1] = y; sidePos[o + 2] = z
       sideNrm[o] = nx; sideNrm[o + 1] = ny; sideNrm[o + 2] = nz
       sideCol[o] = col.r * shade; sideCol[o + 1] = col.g * shade; sideCol[o + 2] = col.b * shade
+      const f = sv * 4
+      sideFin[f] = fin[0]; sideFin[f + 1] = fin[1]; sideFin[f + 2] = fin[2]; sideFin[f + 3] = fin[3]
       return sv++
     }
     /** A band of quads between two rings of vertices (a0.., b0..). */
@@ -664,27 +713,63 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       const z = s.z ?? 0
       const sv0 = sv, tv0 = tv / 3, hv0 = hv / 3, si0 = si
       col.setHex(s.color)
+      fin = FINISH[s.finish ?? 'paint']
       outline(s.u, s.v, hw, hh, s.r, ox, oy, onx, ony)
       const rimH = s.rim ? s.rim.h : 0
+      // A chamfer round the top edge: no deeper than the slab (or its rim),
+      // no wider than a third of its rim or of its shorter side.
+      const bev = s.bevel && !s.loft && (s.rim || s.cap || s.deco)
+        ? Math.max(0, Math.min(s.bevel, (s.rim ? Math.min(s.rim.w, rimH) : Math.min(hw, hh, s.t)) / 3)) : 0
       // What stands up off the plane casts the slabs' shadows.
       if (z > 0.5 || rimH > 0) {
         slabBox.expandByPoint(fitC.set(s.u - hw, -s.v - hh, 0))
         slabBox.expandByPoint(fitC.set(s.u + hw, -s.v + hh, z + rimH))
       }
       // Outer wall: from the rim's top (or the face) down to the bottom.
-      const up = sv; for (let i = 0; i < RING; i++) vert(ox[i], oy[i], z + rimH, onx[i], ony[i], 0, 1)
+      const up = sv; for (let i = 0; i < RING; i++) vert(ox[i], oy[i], z + rimH - bev, onx[i], ony[i], 0, 1)
       const dn = sv; for (let i = 0; i < RING; i++) vert(ox[i], oy[i], z - s.t, onx[i], ony[i], 0, 0.7)
       band(up, dn, false)
+      // The parting line: a band just proud of the wall, bright metal.
+      if (s.seam && s.seam < s.t) {
+        const sw = Math.max(0.6, Math.min(2.5, s.t * 0.07)), keep = fin, kc = col.getHex()
+        fin = FINISH.alu; col.setHex(SEAM_RGB)
+        outline(s.u, s.v, hw + 0.35, hh + 0.35, s.r + 0.35, ix, iy)
+        const s0 = sv; for (let i = 0; i < RING; i++) vert(ix[i], iy[i], z - s.seam + sw / 2, onx[i], ony[i], 0, 1)
+        const s1 = sv; for (let i = 0; i < RING; i++) vert(ix[i], iy[i], z - s.seam - sw / 2, onx[i], ony[i], 0, 0.8)
+        band(s0, s1, false)
+        fin = keep; col.setHex(kc)
+      }
+      // The chamfer: from the wall's top edge in and up to the top, its
+      // normals half out, half up, so it catches the light as a bright line.
+      let topRing = up
+      if (bev) {
+        outline(s.u, s.v, hw - bev, hh - bev, s.r - bev, ix, iy)
+        const c1 = sv; for (let i = 0; i < RING; i++) vert(ix[i], iy[i], z + rimH, onx[i] * 0.7, ony[i] * 0.7, 0.7, 1.25)
+        const c0 = sv; for (let i = 0; i < RING; i++) vert(ox[i], oy[i], z + rimH - bev, onx[i] * 0.7, ony[i] * 0.7, 0.7, 1.25)
+        band(c1, c0, false)
+        topRing = c1
+      }
       if (s.rim) {
         const rw = s.rim.w
-        outline(s.u, s.v, hw - rw, hh - rw, s.r - rw, ix, iy)
-        // The rim's top, then its inner wall down to the floor (the face).
-        const o0 = sv; for (let i = 0; i < RING; i++) vert(ox[i], oy[i], z + rimH, 0, 0, 1, 1.1)
+        // The rim's top, then its inner wall down to the floor (the face),
+        // its inner edge chamfered as its outer.
+        const o0 = sv
+        if (bev) { outline(s.u, s.v, hw - bev, hh - bev, s.r - bev, ix, iy); for (let i = 0; i < RING; i++) vert(ix[i], iy[i], z + rimH, 0, 0, 1, 1.1) }
+        else for (let i = 0; i < RING; i++) vert(ox[i], oy[i], z + rimH, 0, 0, 1, 1.1)
+        outline(s.u, s.v, hw - rw + bev, hh - rw + bev, s.r - rw + bev, ix, iy)
         const i0 = sv; for (let i = 0; i < RING; i++) vert(ix[i], iy[i], z + rimH, 0, 0, 1, 1.1)
         band(o0, i0, true)
-        const w0 = sv; for (let i = 0; i < RING; i++) vert(ix[i], iy[i], z + rimH, -onx[i], -ony[i], 0, 0.9)
+        if (bev) {
+          const e0 = sv; for (let i = 0; i < RING; i++) vert(ix[i], iy[i], z + rimH, -onx[i] * 0.7, -ony[i] * 0.7, 0.7, 1.2)
+          outline(s.u, s.v, hw - rw, hh - rw, s.r - rw, ix, iy)
+          const e1 = sv; for (let i = 0; i < RING; i++) vert(ix[i], iy[i], z + rimH - bev, -onx[i] * 0.7, -ony[i] * 0.7, 0.7, 1.2)
+          band(e0, e1, true)
+        } else {
+          outline(s.u, s.v, hw - rw, hh - rw, s.r - rw, ix, iy)
+        }
+        const wt = sv; for (let i = 0; i < RING; i++) vert(ix[i], iy[i], z + rimH - bev, -onx[i], -ony[i], 0, 0.9)
         const w1 = sv; for (let i = 0; i < RING; i++) vert(ix[i], iy[i], z, -onx[i], -ony[i], 0, 0.6)
-        band(w0, w1, true)
+        band(wt, w1, true)
       }
       // A bottom, for a camera panned down under the canvas (Brian
       // 2026-10-30): from below a slab is solid, not hollow.
@@ -695,7 +780,9 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       const capAt = sv
       if (s.cap) {
         const c1 = vert(s.u, -s.v, z, 0, 0, 1, 1)
-        const b1 = sv; for (let i = 0; i < RING; i++) vert(ox[i], oy[i], z, 0, 0, 1, 1)
+        const b1 = sv
+        if (bev && !s.rim) { for (let i = 0; i < RING; i++) { const o = (topRing + i) * 3; vert(sidePos[o], sidePos[o + 1], z, 0, 0, 1, 1) } }
+        else for (let i = 0; i < RING; i++) vert(ox[i], oy[i], z, 0, 0, 1, 1)
         for (let i = 0; i < RING; i++) { sideIdx[si++] = c1; sideIdx[si++] = b1 + ((i + 1) % RING); sideIdx[si++] = b1 + i }
       }
       if (s.deco) {
@@ -767,6 +854,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     upload(sheenGeo.index!, hi)
     sheenGeo.setDrawRange(0, hi)
     for (const a of ['position', 'normal', 'color']) upload(sideGeo.getAttribute(a) as THREE.BufferAttribute, sv * 3)
+    upload(sideGeo.getAttribute('finish') as THREE.BufferAttribute, sv * 4)
     upload(sideGeo.index!, si)
     upload(topGeo.getAttribute('position') as THREE.BufferAttribute, tv)
     upload(topGeo.index!, ti)

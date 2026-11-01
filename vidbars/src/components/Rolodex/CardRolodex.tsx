@@ -1550,6 +1550,7 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
         data-rolodex
         ref={embedded ? embedRootRef : undefined}
         onWheel={onWheel}
+        data-wheel-own=""
         onPointerEnter={onHoverEnter}
         onPointerLeave={onHoverLeave}
         // FLOATING: whole-panel drag (see onPanelPointerDown). EMBEDDED:

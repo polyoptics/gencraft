@@ -432,6 +432,7 @@ export const MediaPool: React.FC<{ nodeId: string }> = ({ nodeId }) => {
     <div
       onPointerDown={e => e.stopPropagation()}
       onWheel={e => e.stopPropagation()}
+      data-wheel-own=""
       // A pool drag released back over the pool used to bubble to the canvas,
       // which happily made a node UNDER the opaque panel — invisible, plus an
       // undo step and a selection change for something you never saw. Letting

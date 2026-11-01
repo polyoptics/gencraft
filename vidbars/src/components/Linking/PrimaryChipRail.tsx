@@ -54,7 +54,8 @@ export const PrimaryChipRail: React.FC<Props> = ({ groupId, hostRect, path, scal
 
   return (
     <div
-      data-primary-rail
+      // Whose chips: in 3D they ride up with their card (TiltLayer).
+      data-primary-rail={groupId}
       style={{
         position: 'absolute',
         left, top,

@@ -1,7 +1,7 @@
 import React, { useRef, useCallback, useEffect, useState, useDeferredValue, useMemo } from 'react'
 import { useCanvasStore } from '../../store/canvasStore'
 import { markMoving } from '../../utils/rasterSettle'
-import { useTiltStage } from '../../store/tiltStore'
+import { useTiltStage, useTiltOverlayHost, useTiltStore, isTilted } from '../../store/tiltStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { PinLayer } from './PinLayer'
 import { useBoardsStore } from '../../store/boardsStore'
@@ -16,6 +16,7 @@ import { nextFreeEdgeSlot } from '../../utils/viewportDocking'
 import { isPanelType } from '../../utils/componentLinks'
 import { createCardOrBoardAt } from '../../utils/canvasCreate'
 import { GLCanvasHost } from '../Viewport3D/GLCanvasHost'
+import { WorldZoom } from './worldZoom'
 import { addMediaBlockToCard, cardHitOf, groupForCardHit, type CardHit } from '../../utils/cardContent'
 import { EFFECT_DRAG_MIME, clientToCanvas, createEffectCard, createLoopStrip, effectKindFromDrag } from '../../utils/fx/createEffect'
 import { takeDragOutCard, takeDragOutShape } from '../../utils/dragOutSource'
@@ -279,6 +280,8 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
   const containerRef = useRef<HTMLDivElement>(null)
   const pan = useCanvasStore(s => s.pan)
   const zoom = useCanvasStore(s => s.zoom)
+  // Tilted, the canvas is laid out at screen scale (see worldStyle).
+  const tilted = useTiltStore(s => isTilted(s.tilt))
   const zone = useZoomZone()
   const shiftPan = useCanvasStore(s => s.shiftPan)
   const zoomAtPoint = useCanvasStore(s => s.zoomAtPoint)
@@ -313,6 +316,14 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
     return tiltStageRef(el)
   }, [tiltStageRef])
   useEffect(() => { markMoving(tiltStageEl.current) }, [pan.x, pan.y, zoom])
+  // The overlay's box, in the world stage (store/tiltStore useTiltOverlayHost).
+  const overlayStageRef = useTiltStage(true)
+  const overlayRef = useCallback((el: HTMLDivElement | null) => {
+    useTiltOverlayHost.getState().set(el)
+    const unbind = overlayStageRef(el)
+    // React 19 calls this on unmount in place of the ref with null.
+    return () => { unbind?.(); if (useTiltOverlayHost.getState().el === el) useTiltOverlayHost.getState().set(null) }
+  }, [overlayStageRef])
   const [rubberBand, setRubberBand] = useState<{ sx: number; sy: number; ex: number; ey: number } | null>(null)
   const rubberBandRef = useRef<{ sx: number; sy: number; ex: number; ey: number } | null>(null)
   const rbStartCanvas = useRef<{ cx: number; cy: number } | null>(null)
@@ -850,13 +861,14 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
     }
   }, [dropPoolItem, dropPoolOnTarget, dropFilesOnTarget, dropOnBareCanvas, dropAsCards])
 
-  // Card faces, block and bar headers render in App's LayerOverlay, NEXT TO
-  // this container rather than inside it — so a file dropped on a card at
-  // card zoom never reached the handlers above, and did nothing at all.
-  // Catch drag-over/drop on the shared parent for targets OUTSIDE the
-  // container and route them through the same handlers; everything inside
-  // the container is React's (onDragOver/onDrop below), so it is skipped
-  // here and nothing is handled twice. The native events carry the same
+  // Card faces, block and bar headers render in App's LayerOverlay, drawn
+  // into the overlay stage in this container's tilt stage but a React child
+  // of App, not of this component — so a file dropped on a card at card
+  // zoom never reached the handlers above, and did nothing at all. Catch
+  // drag-over/drop on the shared parent for targets outside the container
+  // or in the overlay and route them through the same handlers; everything
+  // else in the container is React's (onDragOver/onDrop below), so it is
+  // skipped here and nothing is handled twice. The native events carry the same
   // dataTransfer / clientX / preventDefault the handlers use. They come in
   // `floating`: only a real target under the overlay takes the drop.
   const dragOverRef = useRef(handleDragOver)
@@ -866,7 +878,8 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
   useEffect(() => {
     const host = containerRef.current?.parentElement
     if (!host) return
-    const outside = (e: Event) => !containerRef.current?.contains(e.target as Node)
+    const outside = (e: Event) => !containerRef.current?.contains(e.target as Node) ||
+      !!(e.target as Element).closest?.('[data-tilt-stage="overlay"]')
     const over = (e: DragEvent) => { if (outside(e)) dragOverRef.current(e as unknown as React.DragEvent, true) }
     const drop = (e: DragEvent) => { if (outside(e)) dropRef.current(e as unknown as React.DragEvent, true) }
     host.addEventListener('dragover', over)
@@ -981,7 +994,7 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
       <DotGrid panX={pan.x} panY={pan.y} zoom={zoom} />
 
       {/* ── NLE row lines (behind everything, in canvas space) ── */}
-      <NLERowBands pan={pan} zoom={zoom} />
+      <NLERowBands pan={pan} zoom={zoom} tilted={tilted} />
 
       {/* ── Shared WebGL canvas for 3D viewport windows — painted BEFORE the
              world transform container so GL pixels sit under all canvas
@@ -989,17 +1002,17 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
       <GLCanvasHost containerRef={containerRef} />
 
       <div
-        style={{
-          position: 'absolute',
-          left: 0,
-          top: 0,
-          transformOrigin: '0 0',
-          transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-        }}
+        style={worldStyle(pan, zoom, tilted)}
         data-raster-layer=""
+        data-world=""
+        data-tilt-zoomed={tilted ? '' : undefined}
       >
-        {children}
+        <WorldZoom.Provider value={tilted ? zoom : null}>{children}</WorldZoom.Provider>
       </div>
+      {/* ── The screen-space layer overlay (cards, block and board headers),
+             drawn here by App's TiltStage: last in the world stage, over
+             the tiles as before, and tilted, in the same 3D space. ── */}
+      <div ref={overlayRef} data-tilt-stage="overlay" style={{ position: 'absolute', inset: 0, pointerEvents: 'none', transformOrigin: '50% 50%' }} />
       </div>
 
       {/* ── Screen-pinned nodes — OUTSIDE the world transform, but the
@@ -1123,7 +1136,22 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
  *  Decorative background — can lag one frame behind a drag without the user
  *  noticing. Uses useDeferredValue so the heavy JSX work happens on idle time
  *  while the dragged card itself updates immediately. */
-const NLERowBands: React.FC<{ pan: { x: number; y: number }; zoom: number }> = React.memo(({ pan, zoom }) => {
+/** The canvas container's place on screen. Flat: scaled down by the zoom.
+ *  Tilted: laid out at the zoom instead (CSS zoom), at screen size. Under
+ *  the 3D view's perspective the browser draws every layer at its own CSS
+ *  size, however small it is shown, so a strip or Viewer made zoomed out
+ *  was drawn at up to hundreds of times its pixels on screen, over the
+ *  page's picture memory, and pictures vanished or blinked (Brian
+ *  2026-11-01). On screen the two are the same; everything inside keeps
+ *  its canvas units (offsetWidth and the rest read the same), only the
+ *  pixels drawn change. scale(1) keeps it found as the canvas layer. */
+function worldStyle(pan: { x: number; y: number }, zoom: number, tilted: boolean): React.CSSProperties {
+  return tilted
+    ? { position: 'absolute', left: 0, top: 0, transformOrigin: '0 0', transform: `translate(${pan.x / zoom}px, ${pan.y / zoom}px) scale(1)`, zoom }
+    : { position: 'absolute', left: 0, top: 0, transformOrigin: '0 0', transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }
+}
+
+const NLERowBands: React.FC<{ pan: { x: number; y: number }; zoom: number; tilted: boolean }> = React.memo(({ pan, zoom, tilted }) => {
   const boards = useBoardsStore(s => s.boards)
   const groups = useBoardsStore(s => s.groups)
   // Defer the inputs so card drags don't block on rebuilding all band JSX.
@@ -1154,7 +1182,7 @@ const NLERowBands: React.FC<{ pan: { x: number; y: number }; zoom: number }> = R
           <div key={`cg-${y}`} style={{
             position: 'absolute',
             left: -8000, width: 20000,
-            top: y, height: 1,
+            top: y, height: 'var(--hair)', opacity: 'var(--hair-a)',
             background: 'rgba(130,180,255,0.06)',
           }} />
         )
@@ -1216,7 +1244,7 @@ const NLERowBands: React.FC<{ pan: { x: number; y: number }; zoom: number }> = R
                 position: 'absolute',
                 left: groupLeft, width: bandWidth,
                 top: rowTop,
-                height: 1,
+                height: 'var(--hair)', opacity: 'var(--hair-a)',
                 background: i === minOccupied ? 'rgba(255,255,255,0.07)' : 'rgba(255,255,255,0.03)',
               }} />
             </React.Fragment>
@@ -1226,13 +1254,14 @@ const NLERowBands: React.FC<{ pan: { x: number; y: number }; zoom: number }> = R
     return { cardGridLines, rowBands }
   }, [deferredGroups, deferredBoards, isCardLevel])
 
+  // A line 1 unit thick. Flat it is drawn a fraction of a pixel thin, so
+  // it all but vanishes zoomed out; laid out at the zoom (tilted) it would
+  // round up to a whole pixel and show. There it is a pixel thinned out by
+  // the same fraction instead, so the lines look the same in 2D and 3D.
+  const hair = tilted && zoom < 1
+  const lines = { '--hair': hair ? `${1 / zoom}px` : '1px', '--hair-a': hair ? zoom : 1 } as React.CSSProperties
   return (
-    <div style={{
-      position: 'absolute', left: 0, top: 0,
-      transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-      transformOrigin: '0 0',
-      pointerEvents: 'none',
-    }} data-raster-layer="">
+    <div style={{ ...worldStyle(pan, zoom, tilted), ...lines, pointerEvents: 'none' }} data-raster-layer="">
       {cardGridLines}
       {rowBands}
     </div>
