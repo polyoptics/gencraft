@@ -137,15 +137,19 @@ const CardContextMenu: React.FC<{
 
   // Rename
   menuItems.push({ label: 'Rename', icon: '✏️', action: () => {
-    const val = prompt('Card name:', group.name)
-    if (val !== null) useBoardsStore.getState().renameGroup(group.id, val)
+    askText(group.name, pos.x, pos.y, val => {
+      useUndoCoordinator.getState().checkpoint()
+      useBoardsStore.getState().renameGroup(group.id, val)
+    })
     onClose()
   }})
 
   // Edit Summary
   menuItems.push({ label: 'Edit Summary', icon: '📝', action: () => {
-    const val = prompt('Card summary:', group.cardSummary)
-    if (val !== null) useBoardsStore.getState().setGroupCardSummary(group.id, val)
+    askText(group.cardSummary ?? '', pos.x, pos.y, val => {
+      useUndoCoordinator.getState().checkpoint()
+      useBoardsStore.getState().setGroupCardSummary(group.id, val)
+    })
     onClose()
   }})
 
@@ -3592,6 +3596,7 @@ const DeckAffordance: React.FC<{ cluster: string[]; front: Deck | 'card' | null 
 // Alias to avoid name conflict with component-level import
 import { groupSlot as __groupSlot } from '../../utils/nlePush'
 import { CARD_TEXT_REF_ZOOM } from '../../store/zoomZonesStore'
+import { askText } from '../UI/RenameInput'
 
 /** True if some other group is holding a ghostSlot for this card — i.e., the
  *  card is "extracted" out of that other group's deck. */

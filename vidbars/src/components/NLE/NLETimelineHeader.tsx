@@ -13,6 +13,7 @@ import { expandWithNestedMembers, canvasObstacleGroups } from '../../hooks/useCa
 import { hexToHsl, hslToHex } from '../../utils/colorUtils'
 import { updateDeckMagnetPreview, finishDeckMagnetDock } from '../../utils/deckDockDrag'
 import { groupHasBrowsableContent } from '../../utils/contentTraversal'
+import { RenameInput } from '../UI/RenameInput'
 
 const BOARD_PADDING_X = 20
 export const NLE_HEADER_CANVAS_H = 36
@@ -428,7 +429,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, icon
   // mode.kind === 'hidden' → headerIcon stays null; the trailing flex slot is omitted.
 
   const nameEl = renaming ? (
-    <input
+    <RenameInput
       ref={inputRef}
       autoFocus
       value={renameVal}

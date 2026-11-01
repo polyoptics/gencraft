@@ -41,6 +41,7 @@ import { buildRailView, railNodesOf } from './rail/railView'
 import { railOnViewer, touchRail } from '../../utils/railViewer'
 import { useViewport3DStore } from '../../store/viewport3dStore'
 import { RAIL_COLORS as C, checkpoint, mixHex, pressButton, railShadow, stop, stopPrimary } from './rail/railStyle'
+import { RenameInput } from '../UI/RenameInput'
 
 /** VS15 keeps the warning sign a text glyph, not an emoji. */
 const WARN = '⚠︎'
@@ -591,7 +592,7 @@ const RoleHead: React.FC<{
       boxShadow: warning ? `inset 0 ${-2 * u}px 0 ${C.amber}` : `inset 0 0 0 ${u}px rgba(255,255,255,0.05)`,
     }}>
       {draft !== null ? (
-        <input
+        <RenameInput
           data-rail-rename
           autoFocus
           value={draft}

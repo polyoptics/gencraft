@@ -14,6 +14,7 @@
 // Sending records a prompt entry in the shared history and stops there.
 // There is no generator behind it and nothing pretends otherwise.
 
+import { RenameInput } from '../UI/RenameInput'
 import React, { useMemo, useState } from 'react'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { CounterScaled, usePanelChrome } from '../UI/PanelSurface'
@@ -33,7 +34,7 @@ const InlineEdit: React.FC<{
 }> = ({ value, onCommit, onCancel, style, placeholder }) => {
   const [draft, setDraft] = useState(value)
   return (
-    <input
+    <RenameInput
       autoFocus
       value={draft}
       placeholder={placeholder}

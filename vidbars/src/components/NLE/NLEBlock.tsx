@@ -25,6 +25,7 @@ import { DEFAULT_HEADER_STYLE, DEFAULT_BODY_STYLE } from '../../store/freeNodeSt
 import { DrawableSurface } from '../Annotation/DrawableSurface'
 import { PenButton } from '../Annotation/PenButton'
 import { useSeedHoverFromCursor } from '../../utils/pointerTracker'
+import { RenameInput } from '../UI/RenameInput'
 
 interface Props {
   id: string
@@ -876,7 +877,7 @@ export const NLEBlock: React.FC<Props> = React.memo(({ id, top, blockHeight, off
             }}
             onPointerDown={e => e.stopPropagation()}
           >
-            <input ref={nameRef} value={renameVal}
+            <RenameInput ref={nameRef} value={renameVal}
               onChange={e => setRenameVal(e.target.value)}
               onBlur={commitRename}
               onKeyDown={e => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') setIsRenaming(false) }}

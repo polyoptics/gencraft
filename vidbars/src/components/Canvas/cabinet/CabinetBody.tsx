@@ -15,6 +15,7 @@ import { cssUrl } from '../../../utils/diskUrl'
 import { useResolvedMedia } from '../../../utils/useResolvedMedia'
 import { cabinetDrawerAt, canvasPointAt, drawerName, itemPicture, itemWords, moveDrawer, moveItem, renameDrawer, setDrawerLength, takeOutAt, useCabinetUi } from '../../../utils/cabinet'
 import type { CabinetItem } from '../../../utils/cabinetData'
+import { RenameInput } from '../../UI/RenameInput'
 import { DrawerStatus, EmptyDrawerActions, FrontPicture, ProjectTray } from './ProjectTray'
 
 /** The tile in a drag's hand, screen px high: the same at any zoom. */
@@ -162,11 +163,11 @@ export const CabinetBody: React.FC<{ id: string; node: FreeNodeData }> = ({ id, 
   const u = node.width / 320
   const open = cabinet.drawers.find(d => d.id === cabinet.open)
   const stopRenaming = () => { setDraft(null); useCabinetUi.getState().setRenaming(null) }
-  const commit = (drawerId: string) => {
-    // Left empty it goes back to its grey default.
+  const commit = (drawerId: string, greyDefault: string | null) => {
+    // Left as its grey default, or left empty, it stays that grey default.
     if (draft !== null) {
       useUndoCoordinator.getState().checkpoint()
-      renameDrawer(id, drawerId, draft.trim())
+      renameDrawer(id, drawerId, draft.trim() === greyDefault ? '' : draft.trim())
     }
     stopRenaming()
   }
@@ -222,22 +223,15 @@ export const CabinetBody: React.FC<{ id: string; node: FreeNodeData }> = ({ id, 
               }}
             >
               {renamingId === d.id ? (
-                <input
-                  autoFocus
-                  value={draft ?? (name.ghost ? '' : name.text)}
-                  placeholder={`Drawer ${i + 1}`}
+                <RenameInput
+                  value={draft ?? name.text}
                   onChange={e => setDraft(e.target.value)}
-                  onBlur={() => commit(d.id)}
+                  onBlur={() => commit(d.id, name.ghost ? name.text : null)}
                   onKeyDown={e => {
-                    e.stopPropagation()
-                    if (e.key === 'Enter') commit(d.id)
+                    if (e.key === 'Enter') commit(d.id, name.ghost ? name.text : null)
                     if (e.key === 'Escape') stopRenaming()
                   }}
-                  onPointerDown={e => e.stopPropagation()}
-                  style={{
-                    flex: 1, minWidth: 0, background: 'rgba(0,0,0,0.3)', border: 'none', outline: 'none',
-                    color: '#fff', fontSize: 14 * u, fontFamily: 'inherit', padding: `${2 * u}px ${4 * u}px`,
-                  }}
+                  style={{ flex: 1, minWidth: 0, height: 18 * u, fontSize: 14 * u, border: 'none', padding: 0 }}
                 />
               ) : (
                 <span data-cabinet-label={d.id} style={{

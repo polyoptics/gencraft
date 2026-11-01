@@ -12,6 +12,7 @@ import type { BoardSlot } from '../../utils/nlePush'
 import { computeGroupLayout, getRowY, dyToRowDelta } from '../../utils/nleRows'
 import type { RowLayout } from '../../utils/nleRows'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
+import { RenameInput } from '../UI/RenameInput'
 
 interface Props { boardId: string }
 
@@ -375,7 +376,7 @@ export const Board: React.FC<Props> = React.memo(({ boardId }) => {
           onPointerUp={onHeaderUp}
         >
           {renaming ? (
-            <input
+            <RenameInput
               ref={nameInputRef}
               autoFocus
               value={renameVal}

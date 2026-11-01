@@ -51,6 +51,7 @@ import { clientToCanvas } from '../../utils/fx/createEffect'
 import { railAtPoint } from './rail/railHit'
 import { copyEffect, hasEffectClip, pasteEffect } from '../../utils/fx/effectClipboard'
 import { railHeaderBottom, railHeaderCarry, snapRailToViewer } from '../../utils/railViewer'
+import { RenameInput } from '../UI/RenameInput'
 
 
 /** Node types whose corner resize keeps the current proportions. A
@@ -1184,7 +1185,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
   ) : null
 
   const renameInput = (size: number) => (
-    <input
+    <RenameInput
       ref={renameRef}
       value={renameVal}
       onChange={e => setRenameVal(e.target.value)}

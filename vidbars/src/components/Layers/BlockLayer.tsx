@@ -42,6 +42,7 @@ import { selectionHighlight } from '../../utils/colorUtils'
 import { DrawableSurface } from '../Annotation/DrawableSurface'
 import { PenButton } from '../Annotation/PenButton'
 import { useSeedHoverFromCursor } from '../../utils/pointerTracker'
+import { RenameInput, askText } from '../UI/RenameInput'
 
 const BOARD_PADDING_X = 20
 
@@ -595,7 +596,7 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
         )}
 
         {renaming ? (
-          <input
+          <RenameInput
             ref={nameInputRef}
             autoFocus
             value={renameVal}
@@ -926,8 +927,10 @@ const BlockItem: React.FC<{ boardId: string }> = React.memo(({ boardId }) => {
             {[
               { label: 'Set Color', icon: '🎨', action: () => { setColorPicker({ x: blockMenu.x, y: blockMenu.y }); setBlockMenu(null) } },
               { label: 'Set Label', icon: '✏️', action: () => {
-                const val = prompt('Block label:', board.layers?.block?.label || board.projectName)
-                if (val !== null) useBoardsStore.getState().setBlockLabel(boardId, val)
+                askText(board.layers?.block?.label || board.projectName, blockMenu.x, blockMenu.y, val => {
+                  useUndoCoordinator.getState().checkpoint()
+                  useBoardsStore.getState().setBlockLabel(boardId, val)
+                })
                 setBlockMenu(null)
               }},
               ...(thumbnail ? [

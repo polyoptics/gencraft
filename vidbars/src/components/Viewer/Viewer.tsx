@@ -3,6 +3,7 @@ import { useBoardsStore } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { computeGroupLayout, getRowY } from '../../utils/nleRows'
 import { getGroupForBoard } from '../../store/boardsStore'
+import { RenameInput } from '../UI/RenameInput'
 
 interface Frame {
   id: string
@@ -274,7 +275,7 @@ export const Viewer: React.FC<Props> = ({ boardId }) => {
         >
           <div style={{ width: 10, height: 10, borderRadius: '50%', background: barColor, flexShrink: 0 }} />
           {renamingTitle ? (
-            <input
+            <RenameInput
               ref={titleInputRef}
               value={titleVal}
               onChange={e => setTitleVal(e.target.value)}

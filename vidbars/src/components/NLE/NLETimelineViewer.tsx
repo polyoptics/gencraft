@@ -4,6 +4,7 @@ import { useCanvasStore } from '../../store/canvasStore'
 import { useNLEViewerStore } from '../../store/nleViewerStore'
 import { NLE_HEADER_CANVAS_H } from './NLETimelineHeader'
 import { computeGroupLayout, getRowY } from '../../utils/nleRows'
+import { RenameInput } from '../UI/RenameInput'
 
 interface Frame {
   id: string
@@ -298,7 +299,7 @@ const NLEGroupViewer: React.FC<Props> = ({ scopeKey }) => {
         >
           <div style={{ width: 10, height: 10, borderRadius: '50%', background: groupColor, flexShrink: 0 }} />
           {renaming ? (
-            <input
+            <RenameInput
               ref={titleInputRef}
               autoFocus
               value={renameVal}
