@@ -8,10 +8,12 @@ import React, { useLayoutEffect, useRef, useState } from 'react'
 import ReactDOM from 'react-dom'
 import type { FreeNodeData } from '../../../store/freeNodeStore'
 import { isTilted, useTiltStore } from '../../../store/tiltStore'
+import { useFreeNodeStore } from '../../../store/freeNodeStore'
+import { useCanvasStore } from '../../../store/canvasStore'
 import { useUndoCoordinator } from '../../../store/undoCoordinator'
 import { cssUrl } from '../../../utils/diskUrl'
 import { useResolvedMedia } from '../../../utils/useResolvedMedia'
-import { cabinetDrawerAt, canvasPointAt, drawerName, itemPicture, itemWords, moveItem, renameDrawer, takeOutAt, useCabinetUi } from '../../../utils/cabinet'
+import { cabinetDrawerAt, canvasPointAt, drawerName, itemPicture, itemWords, moveDrawer, moveItem, renameDrawer, setDrawerLength, takeOutAt, useCabinetUi } from '../../../utils/cabinet'
 import type { CabinetItem } from '../../../utils/cabinetData'
 import { DrawerStatus, EmptyDrawerActions, FrontPicture, ProjectTray } from './ProjectTray'
 
@@ -56,6 +58,21 @@ const ItemFace: React.FC<{ item: CabinetItem; height: number }> = ({ item, heigh
  *  writes this element's transform. */
 const slideOut = (el: HTMLDivElement | null) => {
   el?.animate({ scale: ['1 0', '1 1'], transformOrigin: ['50% 0%', '50% 0%'] }, { duration: 170, easing: 'cubic-bezier(0.2, 0.8, 0.3, 1)' })
+}
+
+/** A press that follows the pointer until let go. */
+function follow(e: React.PointerEvent, onMove: (ev: PointerEvent) => void) {
+  e.stopPropagation()
+  e.preventDefault()
+  useUndoCoordinator.getState().checkpoint()
+  const end = () => {
+    window.removeEventListener('pointermove', onMove)
+    window.removeEventListener('pointerup', end)
+    window.removeEventListener('pointercancel', end)
+  }
+  window.addEventListener('pointermove', onMove)
+  window.addEventListener('pointerup', end)
+  window.addEventListener('pointercancel', end)
 }
 
 const TrayItem: React.FC<{ item: CabinetItem; nodeId: string; drawerId: string; height: number }> = ({ item, nodeId, drawerId, height }) => {
@@ -154,6 +171,29 @@ export const CabinetBody: React.FC<{ id: string; node: FreeNodeData }> = ({ id, 
     stopRenaming()
   }
   const tileH = 62 * u
+  // A drawer's handle moves it up and down the cabinet: it takes the place of
+  // whichever drawer the pointer comes over.
+  const onPullDown = (e: React.PointerEvent, drawerId: string) => {
+    if (e.button !== 0) return
+    follow(e, ev => {
+      const over = document.elementsFromPoint(ev.clientX, ev.clientY)
+        .map(el => el.closest<HTMLElement>('[data-cabinet-front]')?.dataset.cabinetFront).find(Boolean)
+      const c = useFreeNodeStore.getState().nodes[id]?.cabinet
+      const to = c?.drawers.findIndex(d => d.id === over) ?? -1
+      if (to >= 0) moveDrawer(id, drawerId, to)
+    })
+  }
+  // The bottom edge of the tray pulls the drawer out, as far as you like.
+  const onLengthDown = (e: React.PointerEvent, drawerId: string) => {
+    if (e.button !== 0) return
+    const tray = (e.currentTarget as HTMLElement).closest<HTMLElement>('[data-cabinet-tray]')
+    const start = tray?.offsetHeight ?? 0
+    const y0 = e.clientY
+    follow(e, ev => {
+      const dy = (ev.clientY - y0) / useCanvasStore.getState().zoom
+      setDrawerLength(id, drawerId, Math.max(tileH + 24 * u, start + dy))
+    })
+  }
   const gap = 8 * u
   return (
     <>
@@ -201,11 +241,12 @@ export const CabinetBody: React.FC<{ id: string; node: FreeNodeData }> = ({ id, 
                 />
               ) : (
                 <span data-cabinet-label={d.id} style={{
-                  flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                   color: name.ghost ? 'rgba(255,255,255,0.38)' : 'rgba(255,255,255,0.86)',
                   fontSize: 14 * u, fontWeight: name.ghost ? 500 : 600, userSelect: 'none',
                 }}>{name.text}</span>
               )}
+              <span style={{ flex: 1 }} />
               {d.project && <FrontPicture map={d.project.map} height={24 * u} dim={!!d.project.out} />}
               {d.items.length > 0 && (
                 <span style={{ color: 'rgba(255,255,255,0.55)', fontSize: 12 * u, fontVariantNumeric: 'tabular-nums', userSelect: 'none' }}>
@@ -213,7 +254,14 @@ export const CabinetBody: React.FC<{ id: string; node: FreeNodeData }> = ({ id, 
                 </span>
               )}
               {/* The pull. */}
-              <span style={{ width: 34 * u, height: 5 * u, borderRadius: 3 * u, background: 'rgba(255,255,255,0.32)', flexShrink: 0 }} />
+              <span
+                data-cabinet-pull
+                onPointerDown={e => onPullDown(e, d.id)}
+                title="Drag up or down to move this drawer"
+                style={{ padding: `${8 * u}px ${4 * u}px`, cursor: 'ns-resize', flexShrink: 0, touchAction: 'none' }}
+              >
+                <span style={{ display: 'block', width: 34 * u, height: 5 * u, borderRadius: 3 * u, background: 'rgba(255,255,255,0.32)' }} />
+              </span>
             </div>
           )
         })}
@@ -226,7 +274,8 @@ export const CabinetBody: React.FC<{ id: string; node: FreeNodeData }> = ({ id, 
           onWheel={e => e.stopPropagation()}
           style={{
             zIndex: 2, position: 'absolute', left: 0, right: 0, top: !tilted && drawerEnd !== null ? drawerEnd : '100%',
-            boxSizing: 'border-box', minHeight: tileH + gap * 2, maxHeight: node.height * 1.6,
+            boxSizing: 'border-box', minHeight: tileH + gap * 2,
+            ...(open.trayH ? { height: open.trayH } : { maxHeight: node.height * 1.6 }),
             overflowY: 'auto', padding: gap, display: 'flex', flexWrap: 'wrap', alignContent: 'flex-start', gap,
             borderRadius: 7 * u,
             background: aim === `${id}:${open.id}` ? 'rgba(46,62,92,0.97)' : 'rgba(22,23,36,0.97)',
@@ -241,6 +290,18 @@ export const CabinetBody: React.FC<{ id: string; node: FreeNodeData }> = ({ id, 
             ? <ProjectTray drawer={{ nodeId: id, drawerId: open.id }} project={open.project} u={u} height={tileH * 2.4} />
             : open.items.length === 0 && <EmptyDrawerActions key={open.id} drawer={{ nodeId: id, drawerId: open.id }} u={u} />}
           <DrawerStatus drawerId={open.id} u={u} />
+          {/* Its bottom edge pulls it further out. */}
+          <div
+            data-cabinet-length
+            onPointerDown={e => onLengthDown(e, open.id)}
+            title="Drag to pull this drawer further open"
+            style={{
+              position: 'sticky', bottom: -gap, width: '100%', marginTop: 'auto', height: 12 * u, flexShrink: 0,
+              cursor: 'ns-resize', touchAction: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}
+          >
+            <span style={{ width: 44 * u, height: 3 * u, borderRadius: 2 * u, background: 'rgba(255,255,255,0.28)' }} />
+          </div>
         </div>
       )}
     </>

@@ -395,6 +395,23 @@ export function renameDrawer(nodeId: string, drawerId: string, label: string) {
   if (c) writeCabinet(nodeId, { ...c, drawers: c.drawers.map(d => d.id === drawerId ? { ...d, label } : d) })
 }
 
+/** How far a drawer is pulled open. */
+export function setDrawerLength(nodeId: string, drawerId: string, trayH: number) {
+  const c = cabinetOf(nodeId)
+  if (c) writeCabinet(nodeId, { ...c, drawers: c.drawers.map(d => d.id === drawerId ? { ...d, trayH } : d) })
+}
+
+/** Move a drawer to another place in its cabinet. */
+export function moveDrawer(nodeId: string, drawerId: string, toIndex: number) {
+  const c = cabinetOf(nodeId)
+  const from = c?.drawers.findIndex(d => d.id === drawerId) ?? -1
+  if (!c || from < 0 || from === toIndex) return
+  const drawers = [...c.drawers]
+  const [d] = drawers.splice(from, 1)
+  drawers.splice(toIndex, 0, d)
+  writeCabinet(nodeId, { ...c, drawers })
+}
+
 export function addDrawer(nodeId: string) {
   const c = cabinetOf(nodeId)
   if (c) writeCabinet(nodeId, { ...c, drawers: [...c.drawers, newCabinetDrawer('')] })

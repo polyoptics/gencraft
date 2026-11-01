@@ -373,6 +373,8 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
   /** The drawer front a press landed on: a plain click there opens it. */
   const pressedDrawer = useRef<string | null>(null)
   const menuDrawer = useRef<string | null>(null)
+  const pressedName = useRef(false)
+  const lastNameClick = useRef<{ drawerId: string; timer: number } | null>(null)
   const onNodeDown = useCallback((e: React.PointerEvent) => {
     if (e.button !== 0) return
     const tag = (e.target as HTMLElement).tagName
@@ -384,6 +386,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
     e.stopPropagation()
     useUndoCoordinator.getState().checkpoint()
     pressedDrawer.current = (e.target as Element).closest<HTMLElement>('[data-cabinet-front]')?.dataset.cabinetFront ?? null
+    pressedName.current = !!(e.target as Element).closest('[data-cabinet-label]')
     dragLastX.current = e.clientX
     dragLastY.current = e.clientY
     dragPress.current = { x: e.clientX, y: e.clientY }
@@ -576,7 +579,24 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
     }
     useCabinetUi.getState().setAim(null)
     if (!dragHasMoved.current) {
-      if (pressedDrawer.current) toggleDrawer(id, pressedDrawer.current)
+      if (pressedDrawer.current) {
+        // On a drawer's name, a second click soon after edits it. So a single
+        // click there waits to see, and the drawer does not flap open and shut.
+        const drawerId = pressedDrawer.current
+        const last = lastNameClick.current
+        if (!pressedName.current) toggleDrawer(id, drawerId)
+        else if (last && last.drawerId === drawerId) {
+          clearTimeout(last.timer)
+          lastNameClick.current = null
+          useCabinetUi.getState().setRenaming(`${id}:${drawerId}`)
+        } else {
+          if (last) clearTimeout(last.timer)
+          lastNameClick.current = {
+            drawerId,
+            timer: window.setTimeout(() => { lastNameClick.current = null; toggleDrawer(id, drawerId) }, 300),
+          }
+        }
+      }
       if (e.shiftKey) toggleFreeSelection(id)
       else {
         // If text node was already selected before this click, single click on body → enter edit
@@ -1304,14 +1324,8 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
         if (dragHasMoved.current) return
         // A rail's double-clicks belong to its own controls (RailBody stops
         // them); on its bare frame there is nothing to do.
-        // On a drawer's name, it edits the name.
-        if (isCabinet) {
-          const under = document.elementFromPoint(e.clientX, e.clientY)
-          const label = under?.closest<HTMLElement>('[data-cabinet-label]')?.dataset.cabinetLabel
-          if (label) useCabinetUi.getState().setRenaming(`${id}:${label}`)
-          return
-        }
-        if (isRailTile) return
+        // A cabinet counts its own clicks on a drawer's name (onNodeUp).
+        if (isRailTile || isCabinet) return
         // While the crop editor is open the tile is its canvas: stacking or
         // opening the deck under it would unmount or remount the editor and
         // lose the crop in progress.

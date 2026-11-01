@@ -62,6 +62,8 @@ export interface CabinetDrawer {
   /** Empty until named: it then shows a grey "Drawer n" (utils/cabinet drawerName). */
   label: string
   items: CabinetItem[]
+  /** How far it has been pulled open, canvas units. Absent: as far as its contents need. */
+  trayH?: number
   /** A drawer holds loose items or one project, never both. */
   project?: CabinetProject
 }
