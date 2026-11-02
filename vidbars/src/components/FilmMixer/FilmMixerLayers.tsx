@@ -11,7 +11,7 @@ import { useCanvasStore } from '../../store/canvasStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useTiltStore } from '../../store/tiltStore'
 import { LAYER_GAP, LayerCanvas, layerFan, unmix } from '../Viewport3D/ExplodedStrip'
-import { PAGE_H, PAGE_W } from './FilmMixerBody'
+import { PAGE_H, PAGE_W, useFilmLayersOn } from './FilmMixerBody'
 
 /** The look's strengths per layer, bottom up. */
 const GROUPS = [
@@ -115,7 +115,9 @@ function useBaked(open: boolean): Baked | null {
 /** On the canvas only: a pinned mixer has left the plane the layers hang from. */
 export const FilmMixerLayers: React.FC = () => {
   const node = useFreeNodeStore(s => Object.values(s.nodes).find(n => n.type === 'filmMixer' && !n.pin))
-  const fan = useTiltStore(layerFan)
+  const on = useFilmLayersOn(s => s.on)
+  const swing = useTiltStore(layerFan)
+  const fan = on ? swing : 0
   const pan = useCanvasStore(s => s.pan)
   const zoom = useCanvasStore(s => s.zoom)
   const baked = useBaked(!!node && fan > 0)

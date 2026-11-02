@@ -26,6 +26,37 @@ export const FILM_MIXER_ASPECT = 860 / 1240
 /** How much of the canvas it comes down filling, whatever the zoom. */
 const START_FILL = 0.9
 
+const LAYERS_KEY = 'vidbars.filmLayers'
+/** Whether the mixer's layers show when the canvas swings. On unless switched
+ *  off, kept across reloads; only ever a switch, it never touches the camera. */
+export const useFilmLayersOn = create<{ on: boolean; toggle: () => void }>((set, get) => ({
+  on: (() => { try { return localStorage.getItem(LAYERS_KEY) !== '0' } catch { return true } })(),
+  toggle: () => {
+    const on = !get().on
+    set({ on })
+    try { localStorage.setItem(LAYERS_KEY, on ? '1' : '0') } catch { /* private window */ }
+  },
+}))
+
+/** The title bar's switch. A fixed label, lit when on. */
+export function FilmLayersToggle({ fontSize }: { fontSize: number }) {
+  const on = useFilmLayersOn(s => s.on)
+  const toggle = useFilmLayersOn(s => s.toggle)
+  return (
+    <button
+      data-film-layers-toggle=""
+      title={on ? 'Layers on: swing the canvas sideways to see them. Click to turn off' : 'Layers off. Click to turn on'}
+      onClick={toggle}
+      style={{
+        flexShrink: 0, fontSize, lineHeight: 1.2, padding: `0 ${fontSize * 0.6}px`, borderRadius: fontSize * 0.4,
+        fontFamily: 'inherit', fontWeight: 600, cursor: 'pointer', color: on ? '#a8c8ff' : 'rgba(255,255,255,0.45)',
+        background: on ? 'rgba(120,170,255,0.22)' : 'transparent',
+        border: `${fontSize * 0.08}px solid ${on ? 'rgba(120,170,255,0.5)' : 'rgba(255,255,255,0.15)'}`,
+      }}
+    >Layers</button>
+  )
+}
+
 /** One mixer: its page lets only one copy of itself be live. The button adds
  *  it, or brings the camera to the one on the canvas. */
 export function openFilmMixer() {
