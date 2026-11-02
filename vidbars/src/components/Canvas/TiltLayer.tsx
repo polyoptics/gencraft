@@ -1897,19 +1897,24 @@ function settleChains() {
 /** How a loop strip reads as a tray, in its own units (and cards'
  *  thickness inside it as a share of their shorter side). */
 const TRAY = { rimW: 6, rimH: 7, card: 0.03, stack: 0.9, band: 2.2 }
-/** How far a docked card's underside stands off the strip's floor: never
- *  less than GAP px, so the two faces are never level and never flicker. */
-const GAP = 6
+/** How far a docked card's underside stands off the strip's floor: a share
+ *  of its size, so it keeps its proportions at every zoom. GAP px at the
+ *  least, so the two faces are never level and never flicker: 6 px here made
+ *  a far-off card up to 4x too thick, popping in when a wheel zoom rested
+ *  (Brian 2026-11-02). */
+const GAP = 1
 function dockLift(m: number, order: number): number {
   return Math.max(GAP, m * TRAY.card) * (1 + order * TRAY.stack)
 }
 
 /** Detail by distance: how much of the raised 3D (rims, lifts) a thing
  *  shows, by its width on screen — none below DETAIL_FROM px, all of it
- *  from DETAIL_FULL px, eased between. */
+ *  from DETAIL_FULL px, eased between. A wheel zoom's glide counts: that is
+ *  the width it shows, and when the wheel rests nothing changes. */
 const DETAIL_FROM = 36, DETAIL_FULL = 80, DETAIL_TILT = 6
 function detail(screenW: number): number {
-  const x = Math.max(0, Math.min(1, (screenW - DETAIL_FROM) / (DETAIL_FULL - DETAIL_FROM)))
+  const w = screenW * (useTiltStore.getState().glide?.k ?? 1)
+  const x = Math.max(0, Math.min(1, (w - DETAIL_FROM) / (DETAIL_FULL - DETAIL_FROM)))
   // And by tilt: the raised parts grow out of the face over the first
   // DETAIL_TILT degrees, so tipping in or out of 3D never pops them.
   const y = Math.min(1, useTiltStore.getState().tilt / DETAIL_TILT)
