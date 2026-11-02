@@ -138,6 +138,8 @@ function moveCard(railId: string, order: string[]): void {
 const GAP = 0.5
 /** How far round a swing has fully fanned the panes, degrees. */
 const FAN_AT = 35
+/** How far tipped back they have fully closed again, degrees. */
+const CLOSE_AT = 40
 
 const Canvas: React.FC<{ canvas: HTMLCanvasElement; opacity?: number }> = ({ canvas, opacity = 1 }) => {
   const host = useRef<HTMLDivElement>(null)
@@ -163,8 +165,10 @@ const StripLayers: React.FC<{ railId: string; rect: { x: number; y: number; widt
   const effects = (items ?? []).filter((it): it is EffectItem => it.kind === 'effect')
   const soloed = effects.find(e => e.solo)?.id ?? null
   const fan = useTiltStore(s => {
-    const k = Math.min(1, Math.abs(s.yaw) / FAN_AT)
-    return Math.round(k * k * (3 - 2 * k) * 40) / 40
+    // Open when swung from top-down; tipping the view closes them, smoothly,
+    // since then you are looking round a model, not at the layers.
+    const smooth = (k: number) => { const c = Math.min(1, k); return c * c * (3 - 2 * c) }
+    return Math.round(smooth(Math.abs(s.yaw) / FAN_AT) * (1 - smooth(s.tilt / CLOSE_AT)) * 200) / 200
   })
 
   // Re-baked when what the layers are made of changes; not for a solo.
@@ -229,7 +233,7 @@ const StripLayers: React.FC<{ railId: string; rect: { x: number; y: number; widt
     window.addEventListener('pointerup', up)
   }
 
-  if (!baked) return null
+  if (!baked || fan === 0) return null
   const left = rect.x + (rect.width - boxW) / 2, top = rect.y + (rect.height - boxH) / 2
   const edge = (c: string) => `1.5px solid ${c}`
   const header: React.CSSProperties = { position: 'absolute', left: 0, right: 0, bottom: '100%', display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap', fontSize: 13, color: '#fff', padding: '5px 8px', borderRadius: '7px 7px 0 0', boxSizing: 'border-box' }
