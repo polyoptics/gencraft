@@ -121,7 +121,7 @@ export interface DrawerRef { nodeId: string; drawerId: string }
  *  (`dragged`, card or tile ids) is always under the hand, so it is skipped. */
 export function cabinetDrawerAt(clientX: number, clientY: number, dragged: string[] = []): DrawerRef | null {
   if (!useCabinetUi.getState().enabled) return null
-  const hits = isTilted(useTiltStore.getState().tilt)
+  const hits = isTilted(useTiltStore.getState())
     ? nativeHits(realPointer.x, realPointer.y)
     : document.elementsFromPoint(clientX, clientY)
   for (const el of hits) {
@@ -343,7 +343,7 @@ export function canvasPointAt(clientX: number, clientY: number, flat = false): {
   // Cards are in their own overlay stage, beside the world's.
   if (!host || !under || !(host.contains(under) || under.closest('[data-tilt-stage]'))) return null
   const t = useTiltStore.getState()
-  if (flat || !isTilted(t.tilt)) return clientToCanvas(clientX, clientY)
+  if (flat || !isTilted(t)) return clientToCanvas(clientX, clientY)
   const r = host.getBoundingClientRect()
   const mx = r.left + r.width / 2, my = r.top + r.height / 2
   const g = unprojectTilt(clientX - mx, clientY - my, t.tilt, t.spin, t.shiftX, t.shiftY)

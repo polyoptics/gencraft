@@ -19,7 +19,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import {
-  useTiltStore, useModelScaleStore, isTilted, unprojectTilt, TILT_SNAP, TILT_FAR, TILT_PERSPECTIVE, DEFAULT_LIGHT,
+  useTiltStore, useModelScaleStore, isTilted, offFlat, unprojectTilt, TILT_SNAP, TILT_FAR, TILT_PERSPECTIVE, DEFAULT_LIGHT,
 } from '../../store/tiltStore'
 import { useCanvasStore, groupBounds, MIN_ZOOM, MAX_ZOOM } from '../../store/canvasStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
@@ -90,7 +90,7 @@ function useAltTiltGesture() {
         // Tilted, Alt+middle is the 3D pan (TiltedView). Flat, a Viewer
         // would pan its own picture: the canvas pans instead, as it does
         // everywhere else.
-        if (!target?.closest('[data-viewport3d]') || isTilted(useTiltStore.getState().tilt)) return
+        if (!target?.closest('[data-viewport3d]') || isTilted(useTiltStore.getState())) return
         e.preventDefault()
         e.stopImmediatePropagation()
         altUsed = true
@@ -116,7 +116,10 @@ function useAltTiltGesture() {
       altUsed = true
       swallowClick = true
       if (e.button === 2) { dolly(e, host); swallowMenu = true; return }
-      const { tilt: t0, spin: s0 } = useTiltStore.getState()
+      const { tilt: t0, spin: s0, yaw: b0 } = useTiltStore.getState()
+      // Sideways from flat swings the view round; once tipped back it turns
+      // the ground like a turntable, until any swing there is comes back.
+      const swings = t0 < TILT_SNAP || Math.abs(b0) > 0.5
       const x0 = e.clientX, y0 = e.clientY
       // Tipping back from flat with something selected makes it the pivot:
       // the view glides over to centre it while the plane tilts, wherever
@@ -134,7 +137,7 @@ function useAltTiltGesture() {
         // plane: turning starts only past a few px of real sideways drag.
         const dx = ev.clientX - x0
         const turnPx = Math.sign(dx) * Math.max(0, Math.abs(dx) - TURN_SLOP)
-        useTiltStore.getState().setView(t0 - (ev.clientY - y0) * DRAG_DEG, s0 - turnPx * DRAG_DEG)
+        useTiltStore.getState().setView(t0 - (ev.clientY - y0) * DRAG_DEG, swings ? s0 : s0 - turnPx * DRAG_DEG, swings ? b0 + turnPx * DRAG_DEG : b0)
         if (cTo && !glideStarted && useTiltStore.getState().tilt > 0.5) {
           glideStarted = true
           glideTo(cFrom, cTo, W, H)
@@ -143,7 +146,7 @@ function useAltTiltGesture() {
       const onUp = () => {
         window.removeEventListener('pointermove', onMove, true)
         window.removeEventListener('pointerup', onUp, true)
-        if (useTiltStore.getState().tilt < TILT_SNAP) useTiltStore.getState().flatten()
+        if (offFlat(useTiltStore.getState()) < TILT_SNAP) useTiltStore.getState().flatten()
       }
       window.addEventListener('pointermove', onMove, true)
       window.addEventListener('pointerup', onUp, true)
@@ -154,7 +157,7 @@ function useAltTiltGesture() {
     }
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Alt') altUsed = false
-      if (e.key !== 'Escape' || !isTilted(useTiltStore.getState().tilt)) return
+      if (e.key !== 'Escape' || !isTilted(useTiltStore.getState())) return
       const t = document.activeElement as HTMLElement | null
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
       useTiltStore.getState().flatten()
@@ -212,8 +215,8 @@ function dolly(e: PointerEvent, host: HTMLElement) {
  *  (Brian 2026-10-30), not toward the cursor. */
 function viewCentre(host: HTMLElement): { x: number; y: number } | null {
   const W = host.clientWidth, H = host.clientHeight
-  const { tilt, spin, shiftX, shiftY } = useTiltStore.getState()
-  if (!isTilted(tilt)) return { x: W / 2, y: H / 2 }
+  const { tilt, yaw, spin, shiftX, shiftY } = useTiltStore.getState()
+  if (!isTilted({ tilt, yaw })) return { x: W / 2, y: H / 2 }
   const p = unprojectTilt(0, 0, tilt, spin, shiftX, shiftY)
   return p && { x: p.x + W / 2, y: p.y + H / 2 }
 }
@@ -258,7 +261,7 @@ function useFrameKey() {
       const { x0, y0, x1, y1, selected } = box
       const W = host.clientWidth, H = host.clientHeight
       // Tilted, a model stands up out of its card: leave room above it.
-      const fill = selected ? (isTilted(useTiltStore.getState().tilt) ? 0.38 : 0.6) : 0.9
+      const fill = selected ? (isTilted(useTiltStore.getState()) ? 0.38 : 0.6) : 0.9
       const zTo = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.min(W * fill / Math.max(x1 - x0, 1), H * fill / Math.max(y1 - y0, 1))))
       const cTo = { x: (x0 + x1) / 2, y: (y0 + y1) / 2 }
       const { pan, zoom: zFrom } = useCanvasStore.getState()
@@ -289,7 +292,7 @@ function useFrameKey() {
  *  goes. The view does not move; nothing is remembered for next time. */
 function useShiftToPan() {
   useEffect(() => useTiltStore.subscribe(s => {
-    if (s.tilt !== 0 || s.spin !== 0 || (!s.shiftX && !s.shiftY)) return
+    if (s.tilt !== 0 || s.spin !== 0 || s.yaw !== 0 || (!s.shiftX && !s.shiftY)) return
     // The pan is drawn by React and the shift straight on the stage: draw
     // the new pan now (flushSync), then drop the shift, so the next frame
     // shows both changes together and the view does not move. Clearing the
@@ -304,7 +307,7 @@ export const TiltLayer: React.FC = () => {
   useAltTiltGesture()
   useFrameKey()
   useShiftToPan()
-  const tilted = useTiltStore(s => isTilted(s.tilt))
+  const tilted = useTiltStore(s => isTilted(s))
   return (
     <>
       <TiltModels />
@@ -337,17 +340,17 @@ const modelKey = (k: string | null | undefined) => (k && !k.startsWith('deco|') 
 const FADE_TILT = 15
 /** How far the 3D look is in at this angle, 0..1, eased at both ends. */
 const fadeShown = () => {
-  const x = Math.min(1, useTiltStore.getState().tilt / FADE_TILT)
+  const x = Math.min(1, offFlat(useTiltStore.getState()) / FADE_TILT)
   return x * x * (3 - 2 * x)
 }
 /** Whether anything 3D is on screen. */
-const live3d = () => isTilted(useTiltStore.getState().tilt)
+const live3d = () => isTilted(useTiltStore.getState())
 
 const frameState = (): TiltFrameState => {
   const ts = useTiltStore.getState()
   const { unitsPerMetre: scales, sizeOf } = useModelScaleStore.getState()
   return {
-    tilt: ts.tilt, spin: ts.spin, shiftX: ts.shiftX, shiftY: ts.shiftY, glide: ts.glide, texture: ts.texture, shade: ts.shade, wire: ts.wire, light: ts.light, turn: ts.turn,
+    tilt: ts.tilt, spin: ts.spin, yaw: ts.yaw, shiftX: ts.shiftX, shiftY: ts.shiftY, glide: ts.glide, texture: ts.texture, shade: ts.shade, wire: ts.wire, light: ts.light, turn: ts.turn,
     walls: ts.walls, figure: ts.figure, hovered: models.hovered,
     selected: new Set([
       ...useFreeNodeStore.getState().selectedIds.map(id => `node:${id}`),
@@ -381,7 +384,7 @@ function frameSig(st: TiltFrameState, W: number, H: number): string {
   // px at the screen's edge, and the furniture stopped following the
   // cards for the tail of a tilted wheel zoom.
   const r = (x: number | undefined) => n(x === undefined ? undefined : x * 64)
-  n(W); n(H); n(st.tilt); n(st.spin); n(st.shiftX); n(st.shiftY); r(st.fade)
+  n(W); n(H); n(st.tilt); n(st.spin); n(st.yaw); n(st.shiftX); n(st.shiftY); r(st.fade)
   r(st.glide?.k); n(st.glide?.x); n(st.glide?.y)
   b(st.texture); str(String(st.shade)); b(st.wire); b(st.turn); b(st.walls); b(st.figure); str(st.hovered)
   for (const k of Object.keys(st.light).sort()) { str(k); const v = (st.light as unknown as Record<string, unknown>)[k]; if (typeof v === 'number') n(v); else str(String(v)) }
@@ -944,7 +947,7 @@ function collectSlabs(K = 1): TiltSlab[] {
         // stands up on its bottom edge as the canvas tips. An open drawer's
         // tray comes straight out of its front, at that drawer's height, over
         // the same patch of canvas as in the flat view.
-        const x = Math.max(0, Math.min(1, (useTiltStore.getState().tilt - CONSOLE.from) / (FADE_TILT - CONSOLE.from)))
+        const x = Math.max(0, Math.min(1, (offFlat(useTiltStore.getState()) - CONSOLE.from) / (FADE_TILT - CONSOLE.from)))
         const a = CABINET.stand * x * x * (3 - 2 * x) * detail(w) * Math.PI / 180
         if (a > 0) {
           hinge = { v: slab.v + slab.h / 2, z: 0, a }
@@ -1519,10 +1522,11 @@ function restDone() {
 /** Where the eye is in the plane's own frame (flat px from the host
  *  centre, y down, z up off the plane): the camera of unprojectTilt. */
 function eyeOnPlane(): { y: number; z: number } {
-  const { tilt, spin, shiftX, shiftY } = useTiltStore.getState()
-  const t = tilt * Math.PI / 180, s = spin * Math.PI / 180
-  const y1 = -shiftY * Math.cos(t) + TILT_PERSPECTIVE * Math.sin(t)
-  return { y: shiftX * Math.sin(s) + y1 * Math.cos(s), z: shiftY * Math.sin(t) + TILT_PERSPECTIVE * Math.cos(t) }
+  const { tilt, spin, yaw, shiftX, shiftY } = useTiltStore.getState()
+  const t = tilt * Math.PI / 180, s = spin * Math.PI / 180, b = yaw * Math.PI / 180
+  const x0 = -shiftX * Math.cos(b) - TILT_PERSPECTIVE * Math.sin(b), z0 = -shiftX * Math.sin(b) + TILT_PERSPECTIVE * Math.cos(b)
+  const y1 = -shiftY * Math.cos(t) + z0 * Math.sin(t)
+  return { y: -x0 * Math.sin(s) + y1 * Math.cos(s), z: shiftY * Math.sin(t) + z0 * Math.cos(t) }
 }
 
 /** The bits of a face that stand proud of it when tilted, near enough:
@@ -1651,8 +1655,8 @@ function chain(el: HTMLElement, stage: HTMLElement) {
 /** The flat canvas the tipped camera sees (px from the host's middle, with
  *  a margin), from a grid of screen points taken down to it; null flat. */
 function seenGround(W: number, H: number): { x0: number; x1: number; y0: number; y1: number } | null {
-  const { tilt, spin, shiftX, shiftY } = useTiltStore.getState()
-  if (tilt < 0.5) return null
+  const { tilt, yaw, spin, shiftX, shiftY } = useTiltStore.getState()
+  if (offFlat({ tilt, yaw }) < 0.5) return null
   let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity
   for (let i = 0; i <= 8; i++) for (let j = 0; j <= 8; j++) {
     const q = unprojectTilt((i / 8 - 0.5) * W, (j / 8 - 0.5) * H, tilt, spin, shiftX, shiftY, 0, TILT_FAR)
@@ -1917,7 +1921,7 @@ function detail(screenW: number): number {
   const x = Math.max(0, Math.min(1, (w - DETAIL_FROM) / (DETAIL_FULL - DETAIL_FROM)))
   // And by tilt: the raised parts grow out of the face over the first
   // DETAIL_TILT degrees, so tipping in or out of 3D never pops them.
-  const y = Math.min(1, useTiltStore.getState().tilt / DETAIL_TILT)
+  const y = Math.min(1, offFlat(useTiltStore.getState()) / DETAIL_TILT)
   return x * x * (3 - 2 * x) * y * y * (3 - 2 * y)
 }
 
@@ -1929,7 +1933,8 @@ const consoleEase = new Map<string, number>()
 let consoleAt = 0
 function consoleLean(host: HTMLElement, zoom: number): Map<string, number> {
   const out = new Map<string, number>()
-  const { console: on, tilt } = useTiltStore.getState()
+  const { console: on } = useTiltStore.getState()
+  const tilt = offFlat(useTiltStore.getState())
   const now = performance.now()
   const dt = Math.min(100, Math.max(0, now - consoleAt))
   consoleAt = now
@@ -2067,14 +2072,18 @@ const NEAR = 0.2, BEND = Math.PI / 6
  *  and the orbit smoothly; the three.js slabs and furniture take the same
  *  angle from the hinge. */
 function nearFit(full: number, x0: number, x1: number, v: number, z: number, h: number): number {
-  const { tilt, spin, glide } = useTiltStore.getState()
+  const { tilt, spin, yaw, glide } = useTiltStore.getState()
   const P = TILT_PERSPECTIVE
   const t = tilt * Math.PI / 180, sp = spin * Math.PI / 180
   const st = Math.sin(t), ct = Math.cos(t), ss = Math.sin(sp), cs = Math.cos(sp)
+  const by = yaw * Math.PI / 180, sb = Math.sin(by), cb = Math.cos(by)
   const k = glide?.k ?? 1, gx = glide?.x ?? 0, gy = glide?.y ?? 0
   // How far towards the eye a point on the bottom edge is drawn (CSS z,
   // after the glide's scale and the tilt); its nearer end counts.
-  const toward = (x: number) => ((gx + k * (x - gx)) * ss + (gy + k * (v - gy)) * cs) * st + k * z * ct
+  const toward = (x: number) => {
+    const X = gx + k * (x - gx), Y = gy + k * (v - gy)
+    return -(X * cs - Y * ss) * sb + ((X * ss + Y * cs) * st + k * z * ct) * cb
+  }
   const near = Math.max(toward(x0), toward(x1))
   // With its bottom edge itself that near, no angle keeps it all in front:
   // it lies down as the edge comes on, flat by the time the edge reaches
@@ -2470,7 +2479,7 @@ function dropLifts() {
 }
 // The 3D view may stop drawing once flat, so settle back here too: nothing
 // stays lifted or unclipped in the flat view.
-useTiltStore.subscribe(s => { if (!isTilted(s.tilt)) dropLifts() })
+useTiltStore.subscribe(s => { if (!isTilted(s)) dropLifts() })
 
 /** Every model card in view, as flat px from the host centre. */
 function collectTargets(W: number, H: number): TiltTarget[] {
@@ -2582,7 +2591,7 @@ const TiltedView: React.FC = () => {
   const turn = useTiltStore(s => s.turn)
   const walls = useTiltStore(s => s.walls)
   const figure = useTiltStore(s => s.figure)
-  const tilt = useTiltStore(s => s.tilt)
+  const tilt = useTiltStore(offFlat)
 
   // ── Working on the tilted plane ──
   // The browser hit-tests the tilted DOM correctly, so a press lands on the
@@ -3035,6 +3044,8 @@ const TiltedView: React.FC = () => {
       if ((e.target as Element).closest('[data-pin-host]')) return
       // Alt+left / Alt+right belong to the orbit and dolly gestures.
       if (e.altKey && e.button !== 1) return
+      // A strip's layers, behind the plane, take their own presses.
+      if (e.button === 0 && (e.target as Element).closest('[data-layer-pane]')) return
       // Bare ground: left-drag draws a selection box, a plain click clears
       // the selection — as flat. Panning is the camera's job (middle drag,
       // or Alt+middle).

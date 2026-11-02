@@ -18,7 +18,7 @@ const MARGIN = 200 // canvas-space px buffer to prevent pop-in
 export function useViewportBounds(): ViewportRect {
   const pan = useCanvasStore(s => s.pan)
   const zoom = useCanvasStore(s => s.zoom)
-  const tilted = useTiltStore(s => isTilted(s.tilt))
+  const tilted = useTiltStore(s => isTilted(s))
 
   return useMemo(() => {
     // Tilted, the view reaches far past the flat screen (toward the

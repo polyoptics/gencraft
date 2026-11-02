@@ -26,6 +26,8 @@ export const TILT_PERSPECTIVE = 1200
 export const TILT_MAX = 89
 /** Let go below this and the view eases the rest of the way to flat — tilting back up to top-down is the way home. */
 export const TILT_SNAP = 10
+/** How far the view can tip upward past flat. */
+export const TILT_UP = 45
 
 /** The key light on the models, set in the Light panel. Angles in degrees,
  *  in the plane's frame: azimuth round the card, elevation up from it. */
@@ -49,10 +51,14 @@ export interface TiltLight {
 export const DEFAULT_LIGHT: TiltLight = { azimuth: -40, elevation: 45, power: 3, env: 0.35, spin: false, shadows: 0.45, sheen: 0.5, soft: false }
 
 interface TiltStore {
-  /** Degrees the plane is tipped back; 0 = flat. */
+  /** Degrees the plane is tipped back; 0 = flat, below 0 tipped the other
+   *  way, down to -TILT_UP. */
   tilt: number
   /** Degrees the plane is turned about its normal. */
   spin: number
+  /** Degrees the view is swung round the screen's vertical: the sideways
+   *  look, with no pole at flat. 0 is the tilt as it always was. */
+  yaw: number
   /** The camera moved in its own view plane (Maya's pan, Alt+middle), in
    *  screen px: the whole tilted view slides, nothing on it moves. */
   shiftX: number
@@ -76,7 +82,7 @@ interface TiltStore {
    *  across reloads. */
   console: boolean
   setConsole: (on: boolean) => void
-  setView: (tilt: number, spin: number) => void
+  setView: (tilt: number, spin: number, yaw?: number) => void
   setShift: (x: number, y: number) => void
   setTexture: (on: boolean) => void
   setShade: (shade: ModelShade) => void
@@ -98,6 +104,7 @@ function readConsole(): boolean {
 export const useTiltStore = create<TiltStore>()((set, get) => ({
   tilt: 0,
   spin: 0,
+  yaw: 0,
   shiftX: 0,
   shiftY: 0,
   texture: true,
@@ -111,13 +118,14 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
   setGlide: glide => set({ glide }),
   console: readConsole(),
   setConsole: on => { set({ console: on }); try { localStorage.setItem(CONSOLE_KEY, on ? '1' : '0') } catch { /* private window */ } },
-  setView: (tilt, spin) => {
+  setView: (tilt, spin, yaw = get().yaw) => {
     if (flattenRaf !== null) { cancelAnimationFrame(flattenRaf); flattenRaf = null }
     // Orbit about what is in the middle of the screen: the ground point
     // there stays there as the view turns or tips.
     const g = centreGround(get())
-    tilt = Math.max(0, Math.min(TILT_MAX, tilt))
-    set({ tilt, spin, ...(g ? shiftKeeping(g, tilt, spin) : {}) })
+    tilt = Math.max(-TILT_UP, Math.min(TILT_MAX, tilt))
+    yaw = Math.max(-TILT_MAX, Math.min(TILT_MAX, yaw))
+    set({ tilt, spin, yaw, ...(g ? shiftKeeping(g, tilt, spin, yaw) : {}) })
   },
   setShift: (shiftX, shiftY) => set({ shiftX, shiftY }),
   setTexture: texture => set({ texture }),
@@ -129,7 +137,7 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
   setFigure: figure => set({ figure }),
   flatten: () => {
     if (flattenRaf !== null) cancelAnimationFrame(flattenRaf)
-    const { tilt: t0, spin: s0raw } = get()
+    const { tilt: t0, spin: s0raw, yaw: y0 } = get()
     // Unwind the spin the short way round.
     const s0 = ((s0raw % 360) + 540) % 360 - 180
     // What is in the middle of the screen stays there all the way down, so
@@ -141,42 +149,45 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
       const k = 1 - Math.pow(1 - t, 3)
       // Flat, the camera's sideways move is a plain slide of the canvas,
       // which TiltLayer then hands to the canvas pan.
-      const tilt = t < 1 ? t0 * (1 - k) : 0, spin = t < 1 ? s0 * (1 - k) : 0
+      const tilt = t < 1 ? t0 * (1 - k) : 0, spin = t < 1 ? s0 * (1 - k) : 0, yaw = t < 1 ? y0 * (1 - k) : 0
       if (t >= 1) flattenRaf = null
-      set({ tilt, spin, ...(g ? shiftKeeping(g, tilt, spin) : {}) })
+      set({ tilt, spin, yaw, ...(g ? shiftKeeping(g, tilt, spin, yaw) : {}) })
       if (t < 1) flattenRaf = requestAnimationFrame(tick)
     }
     flattenRaf = requestAnimationFrame(tick)
   },
 }))
 
-export const isTilted = (tilt: number) => tilt > 0.01
+/** How far off the flat view the camera is, by either axis, in degrees. */
+export const offFlat = (s: { tilt: number; yaw: number }) => Math.max(Math.abs(s.tilt), Math.abs(s.yaw))
+/** Is the camera off the flat view at all? */
+export const isTilted = (s: { tilt: number; yaw: number }) => offFlat(s) > 0.01
 
 /** The ground point (flat px from the host centre) drawn at the middle of
  *  the screen, or null when the middle shows sky. */
-function centreGround(s: { tilt: number; spin: number; shiftX: number; shiftY: number }) {
-  return unprojectTilt(0, 0, s.tilt, s.spin, s.shiftX, s.shiftY)
+function centreGround(s: { tilt: number; spin: number; yaw: number; shiftX: number; shiftY: number }) {
+  return unprojectTilt(0, 0, s.tilt, s.spin, s.shiftX, s.shiftY, 0, Infinity, s.yaw)
 }
 /** The camera shift that puts ground point `g` at the middle of the screen
  *  for this tilt and spin — unprojectTilt run backwards: the point sits at
- *  q = Rx(tilt)·Rz(spin)·g, and the middle's ray is the line x = -shiftX,
+ *  q = Ry(yaw)·Rx(tilt)·Rz(spin)·g, and the middle's ray is the line x = -shiftX,
  *  y = -shiftY. Flat, it is just -g. */
-function shiftKeeping(g: { x: number; y: number }, tiltDeg: number, spinDeg: number) {
-  const t = tiltDeg * Math.PI / 180, s = spinDeg * Math.PI / 180
+function shiftKeeping(g: { x: number; y: number }, tiltDeg: number, spinDeg: number, yawDeg: number) {
+  const t = tiltDeg * Math.PI / 180, s = spinDeg * Math.PI / 180, b = yawDeg * Math.PI / 180
   const x1 = g.x * Math.cos(s) - g.y * Math.sin(s)
   const y1 = g.x * Math.sin(s) + g.y * Math.cos(s)
-  return { shiftX: -x1, shiftY: -y1 * Math.cos(t) }
+  return { shiftX: -(x1 * Math.cos(b) + y1 * Math.sin(t) * Math.sin(b)), shiftY: -y1 * Math.cos(t) }
 }
 
 /** The CSS transform for a tilted layer whose box is the canvas host and
  *  whose transform-origin is its centre. 'none' when flat, so the flat view
  *  is byte-for-byte what it was before tilt existed (no containing block
  *  for fixed children, no stacking context). */
-export function tiltCss(tilt: number, spin: number, shiftX = 0, shiftY = 0, glide: TiltGlide | null = null): string {
-  if (!glide && !isTilted(tilt) && Math.abs(spin) < 0.01 && Math.abs(shiftX) + Math.abs(shiftY) < 0.01) return 'none'
+export function tiltCss(tilt: number, spin: number, shiftX = 0, shiftY = 0, glide: TiltGlide | null = null, yaw = 0): string {
+  if (!glide && !isTilted({ tilt, yaw }) && Math.abs(spin) < 0.01 && Math.abs(shiftX) + Math.abs(shiftY) < 0.01) return 'none'
   // The shift comes before the perspective: it moves the camera sideways,
   // so near and far slide alike on screen, as in Maya.
-  const base = `perspective(${TILT_PERSPECTIVE}px) translate(${shiftX}px, ${shiftY}px) rotateX(${tilt}deg) rotateZ(${spin}deg)`
+  const base = `perspective(${TILT_PERSPECTIVE}px) translate(${shiftX}px, ${shiftY}px) rotateY(${yaw}deg) rotateX(${tilt}deg) rotateZ(${spin}deg)`
   // A wheel zoom in progress: the plane scaled about the zoom point, on the
   // compositor, until the zoom settles into the canvas zoom (see TiltGlide).
   return glide ? `${base} translate(${glide.x}px, ${glide.y}px) scale3d(${glide.k}, ${glide.k}, ${glide.k}) translate(${-glide.x}px, ${-glide.y}px)` : base
@@ -200,23 +211,26 @@ export const TILT_FAR = 16
 /** Where a point on SCREEN (px from the host centre) lands on the tilted
  *  plane, in FLAT px from the centre — i.e. the flat-view point now drawn
  *  under it. Null above the horizon, or past `far` (see TILT_FAR). */
-export function unprojectTilt(sx: number, sy: number, tiltDeg: number, spinDeg: number, shiftX = 0, shiftY = 0, height = 0, far = Infinity): { x: number; y: number } | null {
+export function unprojectTilt(sx: number, sy: number, tiltDeg: number, spinDeg: number, shiftX = 0, shiftY = 0, height = 0, far = Infinity, yawDeg = useTiltStore.getState().yaw): { x: number; y: number } | null {
   const P = TILT_PERSPECTIVE
   const t = tiltDeg * Math.PI / 180, s = spinDeg * Math.PI / 180
   const ct = Math.cos(t), st = Math.sin(t)
+  const b = yawDeg * Math.PI / 180, cb = Math.cos(b), sb = Math.sin(b)
   // Undo the shift by moving the eye instead: the ray from (-shift, P)
   // through (screen - shift, 0) meets the plane n·p = 0,
-  // n = Rx(t)·(0,0,1) = (0,-sin t, cos t).
-  const denom = sy * st + P * ct
+  // n = Ry(b)·Rx(t)·(0,0,1) = (cos t sin b, -sin t, cos t cos b).
+  const nx = ct * sb, nz = ct * cb
+  const denom = -nx * sx + sy * st + P * nz
   if (denom <= 1e-3) return null
   // `height`: a plane that far above the canvas (a lifted tile's face).
-  const lam = (shiftY * st + P * ct - height) / denom
+  const lam = (-nx * shiftX + shiftY * st + P * nz - height) / denom
   if (lam <= 0 || lam > far) return null
   const qx = -shiftX + lam * sx, qy = -shiftY + lam * sy, qz = P - lam * P
-  // Back into plane coordinates: Rz(-s)·Rx(-t)·q.
-  const y1 = qy * ct + qz * st
+  // Back into plane coordinates: Rz(-s)·Rx(-t)·Ry(-b)·q.
+  const x0 = qx * cb - qz * sb, z0 = qx * sb + qz * cb
+  const y1 = qy * ct + z0 * st
   const cs = Math.cos(s), ss = Math.sin(s)
-  return { x: qx * cs + y1 * ss, y: -qx * ss + y1 * cs }
+  return { x: x0 * cs + y1 * ss, y: -x0 * ss + y1 * cs }
 }
 
 /** Keep a tilt stage element's transform in step with the store, straight
@@ -225,8 +239,8 @@ export function unprojectTilt(sx: number, sy: number, tiltDeg: number, spinDeg: 
  *  stage sits inside another and tips with it: it only takes the marks. */
 export function bindTiltStage(el: HTMLElement, inner = false): () => void {
   let last = ''
-  const apply = (s: { tilt: number; spin: number; shiftX: number; shiftY: number; glide: TiltGlide | null }) => {
-    const t = tiltCss(s.tilt, s.spin, s.shiftX, s.shiftY, s.glide)
+  const apply = (s: { tilt: number; spin: number; yaw: number; shiftX: number; shiftY: number; glide: TiltGlide | null }) => {
+    const t = tiltCss(s.tilt, s.spin, s.shiftX, s.shiftY, s.glide, s.yaw)
     if (t === last) return
     last = t
     if (!inner) {

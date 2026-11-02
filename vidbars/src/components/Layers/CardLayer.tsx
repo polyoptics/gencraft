@@ -505,7 +505,7 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
   const boards       = useBoardsStore(s => s.boards)
   const isSelected   = useBoardsStore(s => s.selectedGroupIds.includes(group.id))
   // Tilted, the ground past the screen's top and side edges is in view.
-  const tilted       = useTiltStore(s => isTilted(s.tilt))
+  const tilted       = useTiltStore(s => isTilted(s))
 
   const [isDragging, setIsDragging] = useState(false)
   const [cardMenu, setCardMenu] = useState<{ x: number; y: number } | null>(null)

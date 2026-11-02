@@ -18,6 +18,8 @@ import { railBeforePicture } from '../../utils/fx/railChain'
 import { railFullFrame } from '../../utils/fx/railFullFrame'
 import { CounterScaled } from './ContentViews'
 import { ImageStudio, tbBtn } from './ImageStudio'
+import { swingToLayers } from './ExplodedStrip'
+import { useTiltStore } from '../../store/tiltStore'
 
 const stop = (e: React.SyntheticEvent) => e.stopPropagation()
 
@@ -31,18 +33,30 @@ export const RailViewerOverlay: React.FC<{ windowId: string; fontSize: number }>
   const railId = viewerRail(docked, active)
   const fxOff = useRailUiStore(s => (railId ? !!s.fxOff[railId] : false))
   const preview = useRailRunStore(s => (railId ? s.preview[railId] : undefined))
+  const swung = useTiltStore(s => Math.abs(s.yaw) > 1)
   if (!railId) return null
   const rail = nodes[railId]
   const before = railBeforePicture(rail, railMembers(nodes).get(railId))
   const showBefore = fxOff ? before : null
   // The same switch as the one on the strip's preview.
   const fx = before && (
-    <button
-      data-rail-viewer-fx={fxOff ? 'off' : 'on'}
-      style={tbBtn(!fxOff)}
-      title="Effects: lit shows the result, dimmed the picture before them"
-      onClick={() => useRailUiStore.getState().toggleFx(railId)}
-    >FX</button>
+    <>
+      <button
+        data-rail-viewer-fx={fxOff ? 'off' : 'on'}
+        style={tbBtn(!fxOff)}
+        title="Effects: lit shows the result, dimmed the picture before them"
+        onClick={() => useRailUiStore.getState().toggleFx(railId)}
+      >FX</button>
+      <button
+        data-rail-viewer-layers=""
+        style={tbBtn(swung)}
+        title="Swing round and see the strip's layers behind the Viewer"
+        onClick={e => {
+          const r = e.currentTarget.closest('[data-viewport3d]')?.getBoundingClientRect()
+          if (r) swingToLayers(r)
+        }}
+      >Layers</button>
+    </>
   )
   const canvas = preview?.canvas ?? null
   const full = () => railFullFrame(railId)
