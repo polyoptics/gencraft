@@ -1787,7 +1787,8 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
               ] : []),
               // On a face this deletes the whole deck (deleteFreeNode), so it
               // says so; a rail likewise takes every card docked on it.
-              { label: isRailTile ? 'Delete strip' : isDeckFace ? 'Delete deck' : isCabinet && itemCount(node.cabinet) > 0 ? 'Delete (empty it first)' : 'Delete', icon: '🗑️', danger: true, action: () => { useUndoCoordinator.getState().checkpoint(); deleteFreeNode(id); setNodeMenu(null) } },
+              // A cabinet sets down what it holds, below where it was.
+              { label: isRailTile ? 'Delete strip' : isDeckFace ? 'Delete deck' : isCabinet && itemCount(node.cabinet) > 0 ? 'Delete (contents stay on the canvas)' : 'Delete', icon: '🗑️', danger: true, action: () => { useUndoCoordinator.getState().checkpoint(); emptyCabinet(id); deleteFreeNode(id); setNodeMenu(null) } },
               ...fileItems,
             ].map(item => (
               <React.Fragment key={item.label}>

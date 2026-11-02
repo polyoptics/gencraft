@@ -765,7 +765,7 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
   deleteFreeNode: (id) =>
     set(s => {
       // A cabinet holding anything stays: its contents exist nowhere else.
-      // Empty all (its menu) puts them on the canvas first.
+      // Delete and Empty all put them on the canvas first (emptyCabinet).
       if (s.nodes[id]?.cabinet?.drawers.some(d => d.items.length > 0)) return s
       // A face takes its hidden members with it: deleting only the face
       // would orphan them, and orphans SHOW again (isHiddenTile) — a delete

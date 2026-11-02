@@ -39,6 +39,7 @@ import { currentZone } from './store/zoomZonesStore'
 import { ZoomZoneBar, ZoomZoneHeaderButton } from './components/UI/ZoomZoneBar'
 import { ConsoleToggleButton } from './components/UI/ConsoleToggleButton'
 import { CabinetToggleButton, PickModeButton } from './components/UI/CabinetToggleButton'
+import { emptyCabinet } from './utils/cabinet'
 
 /** Hosts useFxStrips, which subscribes to every tile, Viewer and zoom
  *  change. Called in App's body, each drag frame and wheel tick would
@@ -406,7 +407,9 @@ function useKeyboardDelete() {
       const freeSelected = useFreeNodeStore.getState().selectedIds
       if (freeSelected.length > 0) {
         const homeId = useCanvasStore.getState().homeRolodexId
-        ;[...freeSelected].forEach(id => useFreeNodeStore.getState().deleteFreeNode(id))
+        // A cabinet sets down what it holds first (emptyCabinet does nothing
+        // for any other node), so a delete never loses what is put away.
+        ;[...freeSelected].forEach(id => { emptyCabinet(id); useFreeNodeStore.getState().deleteFreeNode(id) })
         useFreeNodeStore.getState().clearFreeSelection()
         if (homeId && freeSelected.includes(homeId)) {
           // The home Rolodex really deletes. The pointer goes null and the
