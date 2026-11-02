@@ -26,7 +26,7 @@ export const TILT_PERSPECTIVE = 1200
 export const TILT_MAX = 89
 /** Let go below this and the view eases the rest of the way to flat — tilting back up to top-down is the way home. */
 export const TILT_SNAP = 10
-/** How far the view can tip upward past flat, once swung sideways. */
+/** How far the view can tip upward past flat. */
 export const TILT_UP = 45
 
 /** The key light on the models, set in the Light panel. Angles in degrees,
@@ -52,7 +52,7 @@ export const DEFAULT_LIGHT: TiltLight = { azimuth: -40, elevation: 45, power: 3,
 
 interface TiltStore {
   /** Degrees the plane is tipped back; 0 = flat, below 0 tipped the other
-   *  way (only while swung sideways: see setView). */
+   *  way, down to -TILT_UP. */
   tilt: number
   /** Degrees the plane is turned about its normal. */
   spin: number
@@ -123,9 +123,7 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
     // Orbit about what is in the middle of the screen: the ground point
     // there stays there as the view turns or tips.
     const g = centreGround(get())
-    // Swung sideways the view can also look up from under the plane; the
-    // room for it opens with the swing, so nothing jumps on the way to flat.
-    tilt = Math.max(-TILT_UP * Math.min(1, Math.abs(yaw) / 25), Math.min(TILT_MAX, tilt))
+    tilt = Math.max(-TILT_UP, Math.min(TILT_MAX, tilt))
     yaw = Math.max(-TILT_MAX, Math.min(TILT_MAX, yaw))
     set({ tilt, spin, yaw, ...(g ? shiftKeeping(g, tilt, spin, yaw) : {}) })
   },

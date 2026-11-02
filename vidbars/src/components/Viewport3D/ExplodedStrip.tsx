@@ -165,11 +165,11 @@ const StripLayers: React.FC<{ railId: string; rect: { x: number; y: number; widt
   const effects = (items ?? []).filter((it): it is EffectItem => it.kind === 'effect')
   const soloed = effects.find(e => e.solo)?.id ?? null
   const fan = useTiltStore(s => {
-    // Open when swung from top-down; tipping the view back closes them, smoothly,
-    // since then you are looking round a model, not at the layers. Tipped the
-    // other way no model stands up, so they stay open.
+    // Open when swung from top-down or tipped up past flat; tipping the view
+    // back closes them, smoothly, since then you are looking round a model,
+    // not at the layers. Tipped up no model stands, so nothing closes them.
     const smooth = (k: number) => { const c = Math.max(0, Math.min(1, k)); return c * c * (3 - 2 * c) }
-    return Math.round(smooth(Math.abs(s.yaw) / FAN_AT) * (1 - smooth(Math.max(0, s.tilt) / CLOSE_AT)) * 200) / 200
+    return Math.round(Math.max(smooth(Math.abs(s.yaw) / FAN_AT), smooth(-s.tilt / FAN_AT)) * (1 - smooth(Math.max(0, s.tilt) / CLOSE_AT)) * 200) / 200
   })
 
   // Re-baked when what the layers are made of changes; not for a solo.
@@ -284,7 +284,7 @@ const StripLayers: React.FC<{ railId: string; rect: { x: number; y: number; widt
  *  camera. Flat it shows nothing and costs nothing. */
 export const StripLayersStage: React.FC = () => {
   const stage = useTiltStage()
-  const swung = useTiltStore(s => Math.abs(s.yaw) > 0.5)
+  const swung = useTiltStore(s => Math.abs(s.yaw) > 0.5 || s.tilt < -0.5)
   const zoom = useCanvasStore(s => s.zoom)
   const pan = useCanvasStore(s => s.pan)
   const nodes = useFreeNodeStore(s => s.nodes)
