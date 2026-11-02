@@ -58,7 +58,9 @@ export function snapCardToDots(
 ): { x: number; y: number } {
   if (free || !corner) return { x: rawX, y: rawY }
   const step = dotStep(zoom)
-  const reach = SNAP_PX / zoom
+  // Never more than a sixth of the way to the next dot: zoomed out the dots
+  // close up, and a flat reach would leave nowhere between them to stop.
+  const reach = Math.min(SNAP_PX / zoom, step / 6)
   const pull = (v: number) => {
     const n = Math.round(v / step) * step
     return Math.abs(n - v) <= reach ? n - v : 0

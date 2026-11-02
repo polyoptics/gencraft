@@ -17,8 +17,16 @@ export const MAGNET_RADIUS = 20
  *  Kept deliberately TIGHT — a generous reach made windows grab every
  *  nearby card/tile while being repositioned. */
 export const MAGNET_RADIUS_PX = 26
+/** Zoomed out, cards are small on screen and the reach has to shrink with
+ *  them: a flat 26px was half a card at 7%, so nothing could sit close to a
+ *  Viewer or another card without being pulled in. Full reach from this zoom
+ *  up, then in step with the cards down to the floor below. */
+const MAGNET_FULL_ZOOM = 0.25
+const MAGNET_MIN_PX = 8
 export function magnetRadiusForZoom(zoom: number): number {
-  return Math.max(MAGNET_RADIUS, MAGNET_RADIUS_PX / Math.max(0.01, zoom))
+  const z = Math.max(0.01, zoom)
+  const px = Math.max(MAGNET_MIN_PX, MAGNET_RADIUS_PX * Math.min(1, z / MAGNET_FULL_ZOOM))
+  return Math.max(MAGNET_RADIUS, px / z)
 }
 /** Derived-dock test tolerance — MUST equal useCardDecks' TOUCH_TOLERANCE
  *  so the two spatial systems agree about "touching". Zoom-independent by
