@@ -1,3 +1,4 @@
+import { seedExplodedDemo } from './explodedDemo'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
@@ -33,6 +34,8 @@ import { usePickMode } from './utils/cabinetPick'
   // Project cabinets, and the tilted view they rise in.
   useCabinetUi, useTiltStore, usePickMode,
 }
+
+window.setTimeout(seedExplodedDemo, 2500)
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
