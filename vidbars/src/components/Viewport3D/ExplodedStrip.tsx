@@ -1,13 +1,19 @@
-// ExplodedStrip — a loop strip's effect cards fanned out in depth behind the
-// Viewer. The picture is the back plate; each effect card is a pane in strip
-// order holding only what that card changes. Seen straight on the stack is
-// exactly the strip's result; swung round, it says which layer does what.
+// ExplodedStrip — a loop strip's effect cards hung in depth behind its Viewer,
+// seen by swinging the canvas sideways (store/tiltStore yaw). The picture is
+// the back plate; each effect card is a pane in strip order holding only what
+// that card changes. They live on a stage of their own under the tilted world,
+// with its transform, so the plane and what is on it hide them as they should.
 //
 // Experimental (branch exploded-strip). Nothing is stored here: panes are baked
 // from the strip's own run, and solo, FX and reorder write to the strip itself.
 
+
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { useCanvasStore } from '../../store/canvasStore'
+import { useRailUiStore } from '../../store/railUiStore'
+import { useTiltStage, useTiltStore } from '../../store/tiltStore'
+import { useViewport3DStore } from '../../store/viewport3dStore'
+import { railViewerDocks, viewerRail } from '../../utils/railViewer'
 import { useFreeNodeStore, type FreeNodeData } from '../../store/freeNodeStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { isRail, railMembers, type RailSlot } from '../../utils/rail'
@@ -128,11 +134,10 @@ function moveCard(railId: string, order: string[]): void {
   updateFreeNode(railId, { rail: { ...rail.rail, slots } })
 }
 
-const POSES = {
-  front: { yaw: 0, pitch: 0 },
-  side: { yaw: 58, pitch: 12 },
-  behind: { yaw: 142, pitch: 10 },
-}
+/** Space between panes, as a share of the pane's height. */
+const GAP = 0.5
+/** How far round a swing has fully fanned the panes, degrees. */
+const FAN_AT = 35
 
 const Canvas: React.FC<{ canvas: HTMLCanvasElement; opacity?: number }> = ({ canvas, opacity = 1 }) => {
   const host = useRef<HTMLDivElement>(null)
@@ -142,10 +147,11 @@ const Canvas: React.FC<{ canvas: HTMLCanvasElement; opacity?: number }> = ({ can
     canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;display:block'
     el.replaceChildren(canvas)
   }, [canvas])
-  return <div ref={host} style={{ position: 'absolute', inset: 0, opacity, transition: 'opacity .5s', pointerEvents: 'none' }} />
+  return <div ref={host} style={{ position: 'absolute', inset: 0, opacity, pointerEvents: 'none' }} />
 }
 
-export const ExplodedStrip: React.FC<{ railId: string; onClose: () => void }> = ({ railId, onClose }) => {
+/** One Viewer's strip, hanging behind it. */
+const StripLayers: React.FC<{ railId: string; rect: { x: number; y: number; width: number; height: number } }> = ({ railId, rect }) => {
   const nodes = useFreeNodeStore(s => s.nodes)
   const rail = nodes[railId] as FreeNodeData | undefined
   const combo = useMemo(() => {
@@ -156,6 +162,10 @@ export const ExplodedStrip: React.FC<{ railId: string; onClose: () => void }> = 
   const items = combo?.items
   const effects = (items ?? []).filter((it): it is EffectItem => it.kind === 'effect')
   const soloed = effects.find(e => e.solo)?.id ?? null
+  const fan = useTiltStore(s => {
+    const k = Math.min(1, Math.abs(s.yaw) / FAN_AT)
+    return Math.round(k * k * (3 - 2 * k) * 40) / 40
+  })
 
   // Re-baked when what the layers are made of changes; not for a solo.
   const sig = JSON.stringify((items ?? []).map(it => (it.kind === 'effect' ? { ...it, solo: false } : it)))
@@ -170,82 +180,36 @@ export const ExplodedStrip: React.FC<{ railId: string; onClose: () => void }> = 
     return () => { dead = true; window.clearTimeout(t) }
   }, [sig])
 
-  // The stack starts exactly over the Viewer's picture, then swings round.
-  const from = useRef(document.querySelector(`[data-rail-viewer="${railId}"]`)?.getBoundingClientRect() ?? null)
-  const [open, setOpen] = useState(false)
-  const [yaw, setYaw] = useState(POSES.side.yaw)
-  const [pitch, setPitch] = useState(POSES.side.pitch)
-  const [spread, setSpread] = useState(190)
-  const [held, setHeld] = useState(false)
   const [drag, setDrag] = useState<{ id: string; dz: number } | null>(null)
-  useEffect(() => {
-    if (!baked || open) return
-    const t = window.setTimeout(() => setOpen(true), 60)
-    return () => window.clearTimeout(t)
-  }, [baked, open])
-  const close = useRef(() => {})
-  close.current = () => {
-    setOpen(false)
-    window.setTimeout(onClose, 650)
-  }
-  useEffect(() => {
-    const key = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); close.current() } }
-    window.addEventListener('keydown', key, true)
-    return () => window.removeEventListener('keydown', key, true)
-  }, [])
-
-  const W = window.innerWidth, H = window.innerHeight
-  const aspect = baked ? baked.plate.width / baked.plate.height : 1
-  const boxH = Math.min(H * 0.56, (W * 0.42) / aspect), boxW = boxH * aspect
-  const homeK = from.current ? Math.min(from.current.width / boxW, from.current.height / boxH) : 1
-  const homeX = from.current ? from.current.x + from.current.width / 2 - W / 2 : 0
-  const homeY = from.current ? from.current.y + from.current.height / 2 - H / 2 : 0
-  const y = open ? yaw : 0, p = open ? pitch : 0
-  // Straight on the panes close up and show exactly the strip's result.
-  const flat = !open || (Math.abs(Math.sin(yaw * Math.PI / 180)) < 0.03 && Math.cos(yaw * Math.PI / 180) > 0 && Math.abs(pitch) < 2)
-  const gap = flat ? 0 : spread
-
-  // Plate at the back, each layer nearer: the strip's order, read in depth.
   const order = effects.map(e => e.id)
-  const shown = useMemo(() => {
+  const aspect = baked ? baked.plate.width / baked.plate.height : 1
+  const boxH = Math.min(rect.height, rect.width / aspect), boxW = boxH * aspect
+  const spread = Math.max(40, boxH * GAP)
+  const gap = spread * fan
+  // Plate furthest back; the last card right behind the Viewer's own face.
+  const zOf = (i: number) => -(order.length - i) * gap
+  const stepTo = (id: string, dz: number) => Math.max(0, Math.min(order.length - 1, order.indexOf(id) + Math.round(dz / spread)))
+  const shown = (() => {
     if (!drag) return order
-    const from = order.indexOf(drag.id)
-    const to = Math.max(0, Math.min(order.length - 1, from + Math.round(drag.dz / Math.max(1, spread))))
     const next = order.filter(id => id !== drag.id)
-    next.splice(to, 0, drag.id)
+    next.splice(stepTo(drag.id, drag.dz), 0, drag.id)
     return next
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [drag, order.join(), spread])
-  const mid = (order.length + 1) / 2
-  const zOf = (i: number) => (i + 1 - mid) * gap
-
-  const startOrbit = (e: React.PointerEvent) => {
-    e.stopPropagation()
-    const sx = e.clientX, sy = e.clientY, y0 = yaw, p0 = pitch
-    setHeld(true)
-    const move = (m: PointerEvent) => {
-      setYaw(y0 + (m.clientX - sx) * 0.3)
-      setPitch(Math.max(-60, Math.min(60, p0 - (m.clientY - sy) * 0.2)))
-    }
-    const up = () => { setHeld(false); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
-    window.addEventListener('pointermove', move)
-    window.addEventListener('pointerup', up)
-  }
+  })()
 
   // A press on a pane: dragged, it moves in depth; let go in place, a solo.
   const startPane = (e: React.PointerEvent, id: string) => {
-    // Alt is the camera modifier: with it held, a pane is just more view.
-    if (e.altKey) { startOrbit(e); return }
     e.stopPropagation()
-    const sx = e.clientX, sy = e.clientY
-    const ry = yaw * Math.PI / 180, rp = pitch * Math.PI / 180
-    const vx = Math.sin(ry), vy = -Math.cos(ry) * Math.sin(rp)
+    const { tilt, yaw } = useTiltStore.getState()
+    const b = yaw * Math.PI / 180, t = tilt * Math.PI / 180
+    // Which way depth runs on the screen: the plane's normal, Ry·Rx·z.
+    const vx = Math.cos(t) * Math.sin(b), vy = -Math.sin(t)
     const len2 = vx * vx + vy * vy
+    const sx = e.clientX, sy = e.clientY
     let moved = false, dz = 0
     const move = (m: PointerEvent) => {
       const dx = m.clientX - sx, dy = m.clientY - sy
       if (!moved && Math.hypot(dx, dy) < 6) return
-      if (len2 < 0.02) return   // Straight on, depth has no direction on screen.
+      if (len2 < 0.02) return
       moved = true
       dz = (dx * vx + dy * vy) / len2
       setDrag({ id, dz })
@@ -255,9 +219,8 @@ export const ExplodedStrip: React.FC<{ railId: string; onClose: () => void }> = 
       window.removeEventListener('pointerup', up)
       setDrag(null)
       if (!moved) { toggleEffectSolo(id); return }
-      const at = order.indexOf(id)
-      const to = Math.max(0, Math.min(order.length - 1, at + Math.round(dz / Math.max(1, spread))))
-      if (to === at) return
+      const to = stepTo(id, dz)
+      if (to === order.indexOf(id)) return
       const next = order.filter(x => x !== id)
       next.splice(to, 0, id)
       moveCard(railId, next)
@@ -266,86 +229,113 @@ export const ExplodedStrip: React.FC<{ railId: string; onClose: () => void }> = 
     window.addEventListener('pointerup', up)
   }
 
-  const eased = held || drag ? 'none' : 'transform .65s cubic-bezier(.3,.7,.2,1)'
-  const chip: React.CSSProperties = { padding: '5px 12px', fontSize: 12, border: '1px solid rgba(255,255,255,.2)', borderRadius: 6, background: 'rgba(255,255,255,.07)', color: 'rgba(255,255,255,.85)', cursor: 'pointer' }
-  const label: React.CSSProperties = { position: 'absolute', left: 0, bottom: '100%', marginBottom: 5, display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap', fontSize: 13, color: '#fff', textShadow: '0 1px 3px #000' }
-
-  return createPortal(
-    <div
-      data-exploded-strip={railId}
-      onPointerDown={startOrbit}
-      onWheel={e => { e.stopPropagation(); setSpread(s => Math.max(30, Math.min(400, s - e.deltaY * 0.25))) }}
-      onClick={e => e.stopPropagation()}
-      onContextMenu={e => e.stopPropagation()}
-      onDoubleClick={e => e.stopPropagation()}
-      style={{
-        position: 'fixed', inset: 0, zIndex: 100000, overflow: 'hidden', cursor: held ? 'grabbing' : 'grab', userSelect: 'none',
-        perspective: 1800, background: open ? 'rgba(8,9,14,.88)' : 'rgba(8,9,14,0)', transition: 'background .5s',
-      }}
-    >
-      {baked && (
-        <div style={{
-          position: 'absolute', left: '50%', top: '50%', width: boxW, height: boxH, marginLeft: -boxW / 2, marginTop: -boxH / 2,
-          transformStyle: 'preserve-3d', transition: eased,
-          transform: `translate(${open ? 0 : homeX}px, ${open ? 0 : homeY}px) scale(${open ? 1 : homeK}) rotateX(${p}deg) rotateY(${y}deg)`,
-        }}>
-          <div style={{ position: 'absolute', inset: 0, transform: `translateZ(${zOf(-1)}px)`, transition: eased, outline: flat ? 'none' : '1px solid rgba(255,255,255,.25)' }}>
-            <Canvas canvas={baked.plate} />
-            {!flat && <div style={label}>Picture</div>}
-          </div>
-          {shown.map((id, at) => {
-            const it = effects.find(e => e.id === id)!
-            const pane = baked.panes.find(b => b.id === id)
-            const def = EFFECTS[knownKind(it.effect)]
-            const dragged = drag?.id === id
-            const z = dragged ? zOf(order.indexOf(id)) + drag!.dz : zOf(at)
-            const dim = !!it.off || (!!soloed && soloed !== id)
-            return (
-              <div
-                key={id}
-                data-pane={id}
-                onPointerDown={e => startPane(e, id)}
-                style={{
-                  position: 'absolute', inset: 0, cursor: 'pointer', transition: dragged ? 'none' : `transform .3s, opacity .25s`,
-                  transform: `translateZ(${z}px)`,
-                  outline: flat ? 'none' : `1.5px solid ${soloed === id ? '#fff' : dim ? 'rgba(255,255,255,.18)' : def.color}`, outlineOffset: -1,
-                  background: open ? 'rgba(255,255,255,.015)' : 'transparent',
-                }}
-              >
-                {pane && <>
-                  <Canvas canvas={pane.exact} opacity={!it.off && !dim && flat ? 1 : 0} />
-                  <Canvas canvas={pane.boosted} opacity={flat ? 0 : dim ? 0.1 : 1} />
-                </>}
-                {!flat && (
-                  <div style={{ ...label, right: 0, marginBottom: 0, padding: '5px 8px', borderRadius: '7px 7px 0 0', background: `color-mix(in srgb, ${def.color} 28%, #16171f)`, outline: `1.5px solid ${soloed === id ? '#fff' : dim ? 'rgba(255,255,255,.18)' : def.color}`, outlineOffset: -1 }}>
-                    <span style={{ color: def.color }}>{def.glyph}</span>
-                    <span>{def.label}</span>
-                    <span style={{ flex: 1 }} />
-                    <button
-                      data-pane-fx={it.off ? 'off' : 'on'}
-                      title="Switch this card on or off"
-                      onPointerDown={e => e.stopPropagation()}
-                      onClick={e => { e.stopPropagation(); toggleEffectOff(id) }}
-                      style={{ ...chip, padding: '1px 6px', fontSize: 11, background: it.off ? 'transparent' : 'rgba(255,255,255,.2)', opacity: it.off ? 0.6 : 1 }}
-                    >FX</button>
-                  </div>
-                )}
-              </div>
-            )
-          })}
-        </div>
-      )}
-      <div
-        onPointerDown={e => e.stopPropagation()}
-        style={{ position: 'absolute', left: '50%', bottom: 22, transform: 'translateX(-50%)', display: 'flex', gap: 8, alignItems: 'center', opacity: open ? 1 : 0, transition: 'opacity .4s' }}
-      >
-        {(Object.keys(POSES) as (keyof typeof POSES)[]).map(k => (
-          <button key={k} style={{ ...chip, textTransform: 'capitalize' }} onClick={() => { setYaw(POSES[k].yaw); setPitch(POSES[k].pitch) }}>{k}</button>
-        ))}
-        <span style={{ fontSize: 12, color: 'rgba(255,255,255,.5)', margin: '0 8px' }}>drag to swing · scroll to spread · click a pane to solo · drag a pane to reorder</span>
-        <button style={chip} onClick={() => close.current()}>Close</button>
+  if (!baked) return null
+  const left = rect.x + (rect.width - boxW) / 2, top = rect.y + (rect.height - boxH) / 2
+  const edge = (c: string) => `1.5px solid ${c}`
+  const header: React.CSSProperties = { position: 'absolute', left: 0, right: 0, bottom: '100%', display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap', fontSize: 13, color: '#fff', padding: '5px 8px', borderRadius: '7px 7px 0 0', boxSizing: 'border-box' }
+  const pos = (z: number): React.CSSProperties => ({ position: 'absolute', left, top, width: boxW, height: boxH, transform: `translateZ(${z}px)` })
+  return (
+    <>
+      <div style={{ ...pos(zOf(-1)), outline: edge('rgba(255,255,255,.25)'), pointerEvents: 'none' }}>
+        <Canvas canvas={baked.plate} />
+        <div style={{ ...header, background: '#23252f' }}>Picture</div>
       </div>
-    </div>,
-    document.body,
+      {shown.map((id, at) => {
+        const it = effects.find(e => e.id === id)!
+        const pane = baked.panes.find(p => p.id === id)
+        const def = EFFECTS[knownKind(it.effect)]
+        const dragged = drag?.id === id
+        const z = dragged ? zOf(order.indexOf(id)) + drag!.dz : zOf(at)
+        const dim = !!it.off || (!!soloed && soloed !== id)
+        const line = soloed === id ? '#fff' : dim ? 'rgba(255,255,255,.18)' : def.color
+        return (
+          <div
+            key={id}
+            data-layer-pane={id}
+            onPointerDown={e => startPane(e, id)}
+            style={{ ...pos(z), cursor: 'pointer', outline: edge(line), outlineOffset: -1, pointerEvents: 'auto' }}
+          >
+            {pane && <Canvas canvas={pane.boosted} opacity={dim ? 0.1 : 1} />}
+            <div style={{ ...header, background: `color-mix(in srgb, ${def.color} 28%, #16171f)`, outline: edge(line), outlineOffset: -1 }}>
+              <span style={{ color: def.color }}>{def.glyph}</span>
+              <span>{def.label}</span>
+              <span style={{ flex: 1 }} />
+              <button
+                data-pane-fx={it.off ? 'off' : 'on'}
+                title="Switch this card on or off"
+                onPointerDown={e => e.stopPropagation()}
+                onClick={e => { e.stopPropagation(); toggleEffectOff(id) }}
+                style={{ padding: '1px 6px', fontSize: 11, border: '1px solid rgba(255,255,255,.25)', borderRadius: 5, color: '#fff', cursor: 'pointer', background: it.off ? 'transparent' : 'rgba(255,255,255,.2)', opacity: it.off ? 0.6 : 1 }}
+              >FX</button>
+            </div>
+          </div>
+        )
+      })}
+    </>
   )
+}
+
+/** Under the tilted world: every docked strip's layers, drawn with the same
+ *  camera. Flat it shows nothing and costs nothing. */
+export const StripLayersStage: React.FC = () => {
+  const stage = useTiltStage()
+  const swung = useTiltStore(s => Math.abs(s.yaw) > 0.5)
+  const zoom = useCanvasStore(s => s.zoom)
+  const pan = useCanvasStore(s => s.pan)
+  const nodes = useFreeNodeStore(s => s.nodes)
+  const windows = useViewport3DStore(s => s.windows)
+  const active = useRailUiStore(s => s.active)
+  const docks = swung ? railViewerDocks(nodes, windows, zoom) : null
+  return (
+    <div ref={stage} data-tilt-layers="" style={{ position: 'absolute', inset: 0, transformOrigin: '50% 50%', transformStyle: 'preserve-3d', pointerEvents: 'none' }}>
+      {docks && [...docks].map(([winId, docked]) => {
+        const railId = viewerRail(docked, active)
+        const w = windows[winId]
+        if (!railId || !w) return null
+        return <StripLayers key={winId} railId={railId} rect={{ x: pan.x + w.x * zoom, y: pan.y + w.y * zoom, width: w.width * zoom, height: w.height * zoom }} />
+      })}
+    </div>
+  )
+}
+
+/** The view the Layers button left, to come back to. */
+let flatView: { pan: { x: number; y: number }; zoom: number } | null = null
+
+function easeCanvas(to: { pan: { x: number; y: number }; zoom: number }, each: (k: number) => void): void {
+  const from = useCanvasStore.getState(), pan0 = from.pan, zoom0 = from.zoom, start = performance.now()
+  const step = () => {
+    const t = Math.min(1, (performance.now() - start) / 600)
+    const k = 1 - Math.pow(1 - t, 3)
+    useCanvasStore.setState({
+      pan: { x: pan0.x + (to.pan.x - pan0.x) * k, y: pan0.y + (to.pan.y - pan0.y) * k },
+      zoom: zoom0 + (to.zoom - zoom0) * k,
+    })
+    each(k)
+    if (t < 1) requestAnimationFrame(step)
+  }
+  requestAnimationFrame(step)
+}
+
+/** Ease the camera to a sideways look at a Viewer, its layers running off to
+ *  the right, clear of the strip on its left; or back where it was. */
+export function swingToLayers(rect: DOMRect): void {
+  const tilt = useTiltStore.getState()
+  if (Math.abs(tilt.yaw) > 1) {
+    tilt.flatten()
+    if (flatView) easeCanvas(flatView, () => {})
+    flatView = null
+    return
+  }
+  const host = document.querySelector('[data-tilt-layers]')?.parentElement?.getBoundingClientRect()
+  if (!host) return
+  const { pan, zoom } = useCanvasStore.getState()
+  flatView = { pan, zoom }
+  const z1 = zoom * Math.min(2, host.height * 0.5 / rect.height)
+  const cx = (rect.x + rect.width / 2 - host.x - pan.x) / zoom, cy = (rect.y + rect.height / 2 - host.y - pan.y) / zoom
+  // The Viewer a little left of the middle, for its layers to the right of it.
+  const to = { x: host.width * 0.38 - cx * z1, y: host.height * 0.5 - cy * z1 }
+  easeCanvas({ pan: to, zoom: z1 }, k => {
+    const s = useTiltStore.getState()
+    s.setView(s.tilt, s.spin, -48 * k)
+  })
 }

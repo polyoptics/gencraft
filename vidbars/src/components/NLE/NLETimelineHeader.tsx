@@ -70,7 +70,7 @@ interface Props {
 const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, iconMode }) => {
   const mode: IconMode = iconMode ?? { kind: 'viewer' }
   // Tilted, the ground past the screen's top and side edges is in view.
-  const tilted = useTiltStore(st => isTilted(st.tilt))
+  const tilted = useTiltStore(st => isTilted(st))
   const previewHovered = useCanvasStore(s =>
     mode.kind === 'deckPreview' ? s.previewHoveredDeckId === mode.deckId : false
   )

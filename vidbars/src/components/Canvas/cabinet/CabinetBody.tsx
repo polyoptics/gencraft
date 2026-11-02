@@ -142,7 +142,7 @@ export const CabinetBody: React.FC<{ id: string; node: FreeNodeData }> = ({ id, 
   // the pointer); the field keeps its own text while it is open.
   const renamingId = useCabinetUi(s => s.renaming?.startsWith(`${id}:`) ? s.renaming.slice(id.length + 1) : null)
   const [draft, setDraft] = useState<string | null>(null)
-  const tilted = useTiltStore(s => isTilted(s.tilt))
+  const tilted = useTiltStore(s => isTilted(s))
   // Where the open drawer's front ends: its tray comes out from there, over the
   // drawers below it. Flat, that is this tray's top. Tilted, it keeps its place
   // in the layout and TiltLayer carries it up the standing face to the same spot.

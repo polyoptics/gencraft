@@ -1,6 +1,7 @@
 import React, { useRef, useCallback, useEffect, useState, useDeferredValue, useMemo } from 'react'
 import { useCanvasStore } from '../../store/canvasStore'
 import { markMoving } from '../../utils/rasterSettle'
+import { StripLayersStage } from '../Viewport3D/ExplodedStrip'
 import { useTiltStage, useTiltOverlayHost, useTiltStore, isTilted } from '../../store/tiltStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { PinLayer } from './PinLayer'
@@ -281,7 +282,7 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
   const pan = useCanvasStore(s => s.pan)
   const zoom = useCanvasStore(s => s.zoom)
   // Tilted, the canvas is laid out at screen scale (see worldStyle).
-  const tilted = useTiltStore(s => isTilted(s.tilt))
+  const tilted = useTiltStore(s => isTilted(s))
   const zone = useZoomZone()
   const shiftPan = useCanvasStore(s => s.shiftPan)
   const zoomAtPoint = useCanvasStore(s => s.zoomAtPoint)
@@ -990,6 +991,7 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
     >
       {/* ── Tilt stage: the world layers tip back together when the canvas is
              tilted (store/tiltStore). 'none' when flat — no change at all. ── */}
+      <StripLayersStage />
       <div ref={stageRef} data-tilt-stage="world" style={{ position: 'absolute', inset: 0, transformOrigin: '50% 50%' }}>
       <DotGrid panX={pan.x} panY={pan.y} zoom={zoom} />
 

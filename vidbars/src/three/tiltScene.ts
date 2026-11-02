@@ -132,6 +132,8 @@ export interface TiltArt { u: number; v: number; w: number; h: number; z: number
 
 export interface TiltFrameState {
   tilt: number
+  /** The sideways swing, degrees (tiltStore). */
+  yaw: number
   /** A wheel zoom easing in (tiltStore TiltGlide): the plane scaled about
    *  a point, as the CSS stage is. */
   glide?: { k: number; x: number; y: number } | null
@@ -866,7 +868,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     camera.updateProjectionMatrix()
     // The plane: CSS rotateX(t) rotateZ(s), carried from CSS's y-down
     // space into three's y-up space (F·R·F, F = flip y).
-    R.makeRotationX(st.tilt * Math.PI / 180).multiply(Rz.makeRotationZ(st.spin * Math.PI / 180))
+    R.makeRotationY(st.yaw * Math.PI / 180).multiply(Rz.makeRotationX(st.tilt * Math.PI / 180)).multiply(Rz.makeRotationZ(st.spin * Math.PI / 180))
     // CSS translate(shift) before the rotations is a move in three's view
     // plane too (y flipped).
     ground.matrix.makeTranslation(st.shiftX, -st.shiftY, 0).multiply(F).multiply(R).multiply(F)
@@ -886,7 +888,8 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     groundTop.matrixWorldNeedsUpdate = true
 
     // Models rise out of their cards as the plane tips back.
-    const rise = Math.min(1, Math.max(0, (st.tilt - 4) / 26))
+    const off = Math.max(st.tilt, Math.abs(st.yaw))
+    const rise = Math.min(1, Math.max(0, (off - 4) / 26))
     const ease = rise * rise * (3 - 2 * rise)
     const keep = new Set<string>()
     for (const tg of targets) {
@@ -967,11 +970,11 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     renderer.setRenderTarget(into)
     // The artwork mask goes in first, on a cleared buffer (stencil too);
     // every pass after draws over it without clearing.
-    buildArt(st.tilt > 0.5 || st.fade > 0 ? st.art : [])
+    buildArt(off > 0.5 || st.fade > 0 ? st.art : [])
     renderer.autoClear = true
     renderer.render(artScene, camera)
     renderer.autoClear = false
-    buildSlabs(st.tilt > 0.5 || st.fade > 0 ? st.slabs : [])
+    buildSlabs(off > 0.5 || st.fade > 0 ? st.slabs : [])
     renderer.render(topFirstScene, camera)
     const surface = st.texture || st.shade !== null
     {
