@@ -18,8 +18,7 @@ import { railBeforePicture } from '../../utils/fx/railChain'
 import { railFullFrame } from '../../utils/fx/railFullFrame'
 import { CounterScaled } from './ContentViews'
 import { ImageStudio, tbBtn } from './ImageStudio'
-import { swingToLayers, useLayersOut } from './ExplodedStrip'
-import { useTiltStore } from '../../store/tiltStore'
+import { useLayersOut, useStripLayers } from './ExplodedStrip'
 
 const stop = (e: React.SyntheticEvent) => e.stopPropagation()
 
@@ -33,7 +32,7 @@ export const RailViewerOverlay: React.FC<{ windowId: string; fontSize: number }>
   const railId = viewerRail(docked, active)
   const fxOff = useRailUiStore(s => (railId ? !!s.fxOff[railId] : false))
   const preview = useRailRunStore(s => (railId ? s.preview[railId] : undefined))
-  const swung = useTiltStore(s => Math.abs(s.yaw) > 1)
+  const layersOn = useStripLayers(s => s.on)
   // Exploded, the result has gone back into the stack behind this window,
   // which is left an open frame to see it through.
   const out = useLayersOut(s => (railId ? !!s[railId] : false))
@@ -48,10 +47,6 @@ export const RailViewerOverlay: React.FC<{ windowId: string; fontSize: number }>
   const before = railBeforePicture(rail, railMembers(nodes).get(railId))
   const showBefore = fxOff ? before : null
   // The same switch as the one on the strip's preview.
-  const swing = (e: React.MouseEvent<HTMLElement>) => {
-    const r = e.currentTarget.closest('[data-viewport3d]')?.getBoundingClientRect()
-    if (r) swingToLayers(r)
-  }
   const fx = before && (
     <>
       <button
@@ -62,9 +57,9 @@ export const RailViewerOverlay: React.FC<{ windowId: string; fontSize: number }>
       >FX</button>
       <button
         data-rail-viewer-layers=""
-        style={tbBtn(swung)}
-        title="Swing round and see the strip's layers behind the Viewer"
-        onClick={swing}
+        style={tbBtn(layersOn)}
+        title="Layers: lit, swinging sideways shows the strip's layers behind the Viewer"
+        onClick={() => useStripLayers.getState().toggle()}
       >Layers</button>
     </>
   )
@@ -85,7 +80,7 @@ export const RailViewerOverlay: React.FC<{ windowId: string; fontSize: number }>
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{rail?.label || 'Loop strip'}</span>
         {docked.length > 1 && <span style={{ opacity: 0.55 }}>· {docked.indexOf(railId) + 1} of {docked.length} strips</span>}
         {preview?.running && <span style={{ marginLeft: 'auto', opacity: 0.55 }}>updating…</span>}
-        {out && <button style={{ ...tbBtn(true), marginLeft: 'auto', pointerEvents: 'auto' }} title="Back to the flat view" onClick={swing}>Layers</button>}
+        {out && <button style={{ ...tbBtn(true), marginLeft: 'auto', pointerEvents: 'auto' }} title="Layers: lit, swinging sideways shows the strip's layers behind the Viewer" onClick={() => useStripLayers.getState().toggle()}>Layers</button>}
       </div>
       <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', visibility: out ? 'hidden' : undefined }}>
         {showBefore

@@ -139,7 +139,7 @@ function moveCard(railId: string, order: string[]): void {
 }
 
 /** Space between panes, as a share of the pane's height. */
-export const LAYER_GAP = 0.5
+export const LAYER_GAP = 0.2
 /** How far round a swing has fully fanned the panes, degrees. */
 const FAN_AT = 35
 /** How far tipped back they have fully closed again, degrees. */
@@ -164,6 +164,18 @@ export const LayerCanvas: React.FC<{ canvas: HTMLCanvasElement; opacity?: number
   }, [canvas])
   return <div ref={host} style={{ position: 'absolute', inset: 0, opacity, pointerEvents: 'none' }} />
 }
+
+const LAYERS_KEY = 'vidbars.stripLayers'
+/** The Viewer's Layers switch: whether swinging sideways explodes a strip.
+ *  On unless switched off; kept across reloads. */
+export const useStripLayers = create<{ on: boolean; toggle: () => void }>((set, get) => ({
+  on: (() => { try { return localStorage.getItem(LAYERS_KEY) !== '0' } catch { return true } })(),
+  toggle: () => {
+    const on = !get().on
+    set({ on })
+    try { localStorage.setItem(LAYERS_KEY, on ? '1' : '0') } catch { /* private window */ }
+  },
+}))
 
 /** Strips whose result has left their Viewer's face for the stack behind it. */
 export const useLayersOut = create<Record<string, boolean>>(() => ({}))
@@ -315,7 +327,8 @@ export const StripLayersStage: React.FC = () => {
   const nodes = useFreeNodeStore(s => s.nodes)
   const windows = useViewport3DStore(s => s.windows)
   const active = useRailUiStore(s => s.active)
-  const docks = swung ? railViewerDocks(nodes, windows, zoom) : null
+  const layersOn = useStripLayers(s => s.on)
+  const docks = swung && layersOn ? railViewerDocks(nodes, windows, zoom) : null
   return (
     <div ref={stage} data-tilt-layers="" style={{ position: 'absolute', inset: 0, transformOrigin: '50% 50%', transformStyle: 'preserve-3d', pointerEvents: 'none' }}>
       {docks && [...docks].map(([winId, docked]) => {
@@ -327,46 +340,4 @@ export const StripLayersStage: React.FC = () => {
       {swung && <FilmMixerLayers />}
     </div>
   )
-}
-
-/** The view the Layers button left, to come back to. */
-let flatView: { pan: { x: number; y: number }; zoom: number } | null = null
-
-function easeCanvas(to: { pan: { x: number; y: number }; zoom: number }, each: (k: number) => void): void {
-  const from = useCanvasStore.getState(), pan0 = from.pan, zoom0 = from.zoom, start = performance.now()
-  const step = () => {
-    const t = Math.min(1, (performance.now() - start) / 600)
-    const k = 1 - Math.pow(1 - t, 3)
-    useCanvasStore.setState({
-      pan: { x: pan0.x + (to.pan.x - pan0.x) * k, y: pan0.y + (to.pan.y - pan0.y) * k },
-      zoom: zoom0 + (to.zoom - zoom0) * k,
-    })
-    each(k)
-    if (t < 1) requestAnimationFrame(step)
-  }
-  requestAnimationFrame(step)
-}
-
-/** Ease the camera to a sideways look at a Viewer, its layers running off to
- *  the right, clear of the strip on its left; or back where it was. */
-export function swingToLayers(rect: DOMRect): void {
-  const tilt = useTiltStore.getState()
-  if (Math.abs(tilt.yaw) > 1) {
-    tilt.flatten()
-    if (flatView) easeCanvas(flatView, () => {})
-    flatView = null
-    return
-  }
-  const host = document.querySelector('[data-tilt-layers]')?.parentElement?.getBoundingClientRect()
-  if (!host) return
-  const { pan, zoom } = useCanvasStore.getState()
-  flatView = { pan, zoom }
-  const z1 = zoom * Math.min(2, host.height * 0.5 / rect.height)
-  const cx = (rect.x + rect.width / 2 - host.x - pan.x) / zoom, cy = (rect.y + rect.height / 2 - host.y - pan.y) / zoom
-  // The Viewer a little left of the middle, for its layers to the right of it.
-  const to = { x: host.width * 0.38 - cx * z1, y: host.height * 0.5 - cy * z1 }
-  easeCanvas({ pan: to, zoom: z1 }, k => {
-    const s = useTiltStore.getState()
-    s.setView(s.tilt, s.spin, -48 * k)
-  })
 }
