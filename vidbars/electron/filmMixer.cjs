@@ -102,9 +102,10 @@ function stop() {
 const VIEW_SCRIPT = `(() => {
   const e = S.pl[S.i]
   if (!e) return null
-  const k = e.seg, s = F.segs[k]
+  const k = e.seg, s = F.segs[k], r = document.getElementById('cv').getBoundingClientRect()
   return {
     seg: k, i: e.i, clip: s.clip, overlay: !!s.overlay, cardOn: !!S.cardOn, playing: !!S.playing,
+    picture: { x: r.x, y: r.y, width: r.width, height: r.height },
     look: s.look ? ((k === F.cur ? curLook() : segLook(k)) || zeroLook()) : null,
   }
 })()`
@@ -112,11 +113,24 @@ const VIEW_SCRIPT = `(() => {
 /** The look layers read the current shot, frame and look from the mixer's own
  *  page, or null while it has none. */
 async function view(mainFrame) {
-  const frame = mainFrame.framesInSubtree.find(f => {
+  const page = pageFrame(mainFrame)
+  if (!page) return null
+  try { return await page.executeJavaScript(VIEW_SCRIPT) } catch { return null }
+}
+
+function pageFrame(mainFrame) {
+  return mainFrame.framesInSubtree.find(f => {
     try { return new URL(f.url).origin === new URL(URL_BASE).origin } catch { return false }
   })
-  if (!frame) return null
-  try { return await frame.executeJavaScript(VIEW_SCRIPT) } catch { return null }
+}
+
+/** The page's own picture leaves it while the layers are open: it has gone to
+ *  the back of the stack. */
+async function showPicture(mainFrame, shown) {
+  const page = pageFrame(mainFrame)
+  if (!page) return
+  const css = shown ? 'visible' : 'hidden'
+  try { await page.executeJavaScript(`document.getElementById('cv').style.visibility = '${css}'`) } catch { /* page reloading */ }
 }
 
 /** One frame as a data url, so the page can read its pixels (it could not read
@@ -139,4 +153,4 @@ function frame({ seg, i, look, card }) {
   })
 }
 
-module.exports = { status, start, stop, ownsRunning, view, frame }
+module.exports = { status, start, stop, ownsRunning, view, showPicture, frame }

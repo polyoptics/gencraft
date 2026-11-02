@@ -95,4 +95,7 @@ contextBridge.exposeInMainWorld('vidbarsDesktop', {
   /** One frame with this look, as a PNG data url: { url }, { loading: true }
    *  while the shot loads, or { error }. */
   mixerFrame: (job) => ipcRenderer.invoke('vb:mixer-frame', job),
+
+  /** Show or hide the picture in the mixer's page. */
+  mixerShowPicture: (shown) => ipcRenderer.invoke('vb:mixer-picture', shown),
 })

@@ -19,8 +19,8 @@ const DEFAULT_URL = 'http://localhost:8766'
 /** The page's own layout, the same at every zoom and node size: the node
  *  scales it like a picture, so nothing in it ever rearranges. Under 900 wide
  *  the mixer's page stacks into one long column. */
-const PAGE_W = 1240
-const PAGE_H = 838
+export const PAGE_W = 1240
+export const PAGE_H = 838
 /** The node's shape, height ÷ width, title bar included. It only ever scales. */
 export const FILM_MIXER_ASPECT = 860 / 1240
 /** How much of the canvas it comes down filling, whatever the zoom. */

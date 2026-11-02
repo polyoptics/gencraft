@@ -55,11 +55,14 @@ export interface VidbarsDesktop {
   mixerStart?(): Promise<{ url?: string; error?: string; log?: string }>
   mixerView?(): Promise<{
     seg: number; i: number; clip: string; overlay: boolean; cardOn: boolean; playing: boolean
+    /** Where the picture sits in the page, in the page's own pixels. */
+    picture: { x: number; y: number; width: number; height: number }
     /** Null on a graphics-only shot. */
     look: Record<string, number> | null
   } | null>
   mixerFrame?(job: { seg: number; i: number; look: Record<string, number> | null; card: boolean }):
     Promise<{ url?: string; loading?: boolean; error?: string }>
+  mixerShowPicture?(shown: boolean): Promise<void>
   sketchRun?(job: {
     op: 'depth' | 'segment' | 'lines' | 'formhatch' | 'bghatch' | 'look'; frames: string[]
     /** op 'look': which drawing look (sketch_server.py LOOKS). */
