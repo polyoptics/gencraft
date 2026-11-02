@@ -81,4 +81,11 @@ contextBridge.exposeInMainWorld('vidbarsDesktop', {
    *  (data urls; several = a short sequence). Resolves { frames } for depth,
    *  { objects: { name: [...] } } for segment, or { error }; with `log`. */
   sketchRun: (job) => ipcRenderer.invoke('vb:sketch-run', job),
+
+  /** The Film Look panel: is the look mixer's server up, and its address. */
+  mixerStatus: () => ipcRenderer.invoke('vb:mixer-status'),
+
+  /** Start the look mixer, or use the one running. Resolves { url } when its
+   *  page can be shown, or { error, log }. */
+  mixerStart: () => ipcRenderer.invoke('vb:mixer-start'),
 })

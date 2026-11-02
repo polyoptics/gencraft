@@ -333,6 +333,11 @@ function registerBridge() {
     return require('./sketchWorker.cjs').run({ op: job.op, look, frames, objects, dials, side, engine, whole: job.whole === true })
   })
 
+  // The Film Look panel: the look mixer's server. The page only ever asks
+  // for it to be up; the program and its folder are fixed in filmMixer.cjs.
+  ipcMain.handle('vb:mixer-status', (e) => (fromApp(e) ? require('./filmMixer.cjs').status() : null))
+  ipcMain.handle('vb:mixer-start', (e) => (fromApp(e) ? require('./filmMixer.cjs').start() : { error: 'Not allowed' }))
+
   // An image the app MADE (a context sheet, an effect result), written as a
   // real file so it can be dragged out like any other:
   // Pictures\<folder for its kind>\<name> <stamp>.jpg. Never a path the page
@@ -481,8 +486,8 @@ function createWindow() {
   win.webContents.on('will-navigate', (e, url) => {
     if (!isAppPage(url)) e.preventDefault()
   })
-  // The app has no iframes. A same-origin one could reach the bridge
-  // through `top`, so none may load at all.
+  // The app's only iframe is the Film Look mixer, on its own origin. A
+  // same-origin one could reach the bridge through `top`, so none may load.
   win.webContents.on('will-frame-navigate', (e) => {
     try { if (!e.isMainFrame && new URL(e.url).origin === DEV_ORIGIN) e.preventDefault() } catch { /* not a url */ }
   })
@@ -591,4 +596,14 @@ app.whenReady().then(async () => {
 })
 
 app.on('window-all-closed', () => app.quit())
+// A mixer started here goes with the app, and frees the GPU. Asking takes a
+// moment, so the quit waits for the answer once.
+let mixerAsked = false
+app.on('before-quit', (e) => {
+  const mixer = require('./filmMixer.cjs')
+  if (mixerAsked || !mixer.ownsRunning()) return
+  mixerAsked = true
+  e.preventDefault()
+  void mixer.stop().finally(() => app.quit())
+})
 app.on('will-quit', () => { stopDevServer(); require('./sketchWorker.cjs').stop() })

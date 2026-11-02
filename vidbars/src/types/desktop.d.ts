@@ -51,6 +51,8 @@ export interface VidbarsDesktop {
    *  the look's colours, drawn at long edge `side` with `dials`; formhatch /
    *  bghatch their multiply and screen layers (look_formhatch.py,
    *  look_bg_depthhatch.py). */
+  mixerStatus?(): Promise<{ running: boolean; starting: boolean; url: string }>
+  mixerStart?(): Promise<{ url?: string; error?: string; log?: string }>
   sketchRun?(job: {
     op: 'depth' | 'segment' | 'lines' | 'formhatch' | 'bghatch' | 'look'; frames: string[]
     /** op 'look': which drawing look (sketch_server.py LOOKS). */
