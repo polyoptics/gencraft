@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { create } from 'zustand'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
+import { useTiltStore } from '../../store/tiltStore'
 import { addFreeNodeCentered } from '../../utils/canvasCreate'
 
 /** The Film Look node: the look mixer, laid out on the canvas like any panel.
@@ -27,14 +28,32 @@ export const FILM_MIXER_ASPECT = 860 / 1240
 const START_FILL = 0.9
 
 const LAYERS_KEY = 'vidbars.filmLayers'
+const GAP_KEY = 'vidbars.filmLayerGap'
+const GAP_START = 0.2, GAP_MIN = 0.02, GAP_MAX = 3
+/** The title bar grip: spacing per screen pixel dragged. */
+const SPACING_PER_PX = 0.005
 /** Whether the mixer's layers show when the canvas swings. On unless switched
  *  off, kept across reloads; only ever a switch, it never touches the camera. */
-export const useFilmLayersOn = create<{ on: boolean; toggle: () => void }>((set, get) => ({
+export const useFilmLayersOn = create<{ on: boolean; toggle: () => void; gap: number; setGap: (gap: number) => void }>((set, get) => ({
   on: (() => { try { return localStorage.getItem(LAYERS_KEY) !== '0' } catch { return true } })(),
   toggle: () => {
     const on = !get().on
     set({ on })
     try { localStorage.setItem(LAYERS_KEY, on ? '1' : '0') } catch { /* private window */ }
+  },
+  /** Space between layers, as a share of a layer's height: what the back
+   *  layer's handles set, kept across reloads. Its ceiling is high enough to
+   *  bring the stack out from behind the mixer's own panel. */
+  gap: (() => {
+    try {
+      const g = Number(localStorage.getItem(GAP_KEY))
+      return g > 0 ? Math.max(GAP_MIN, Math.min(GAP_MAX, g)) : GAP_START
+    } catch { return GAP_START }
+  })(),
+  setGap: gap => {
+    gap = Math.max(GAP_MIN, Math.min(GAP_MAX, gap))
+    set({ gap })
+    try { localStorage.setItem(GAP_KEY, String(gap)) } catch { /* private window */ }
   },
 }))
 
@@ -46,7 +65,13 @@ export function FilmLayersToggle({ fontSize }: { fontSize: number }) {
     <button
       data-film-layers-toggle=""
       title={on ? 'Layers on: swing the canvas sideways to see them. Click to turn off' : 'Layers off. Click to turn on'}
-      onClick={toggle}
+      // On the press, not the click: tilted, the view takes the pointer over
+      // and no click would ever arrive.
+      onPointerDown={e => {
+        if (e.button !== 0) return
+        e.stopPropagation()
+        toggle()
+      }}
       style={{
         flexShrink: 0, fontSize, lineHeight: 1.2, padding: `0 ${fontSize * 0.6}px`, borderRadius: fontSize * 0.4,
         fontFamily: 'inherit', fontWeight: 600, cursor: 'pointer', color: on ? '#a8c8ff' : 'rgba(255,255,255,0.45)',
@@ -54,6 +79,36 @@ export function FilmLayersToggle({ fontSize }: { fontSize: number }) {
         border: `${fontSize * 0.08}px solid ${on ? 'rgba(120,170,255,0.5)' : 'rgba(255,255,255,0.15)'}`,
       }}
     >Layers</button>
+  )
+}
+
+/** The title bar's spacing grip. The back layer has corner handles too, but
+ *  the mixer's own panel covers them until the layers are far apart, so this
+ *  one is always in reach. Drag the way the layers run to spread them. */
+export function FilmLayersSpacing({ fontSize }: { fontSize: number }) {
+  return (
+    <span
+      data-film-layers-spacing=""
+      title="Drag to set how far the layers spread"
+      onPointerDown={e => {
+        if (e.button !== 0) return
+        e.stopPropagation()
+        e.preventDefault()
+        const way = useTiltStore.getState().yaw > 0 ? -1 : 1
+        const sx = e.clientX, gap0 = useFilmLayersOn.getState().gap
+        const move = (m: PointerEvent) => useFilmLayersOn.getState().setGap(gap0 + (m.clientX - sx) * way * SPACING_PER_PX)
+        const up = () => {
+          window.removeEventListener('pointermove', move)
+          window.removeEventListener('pointerup', up)
+        }
+        window.addEventListener('pointermove', move)
+        window.addEventListener('pointerup', up)
+      }}
+      style={{
+        flexShrink: 0, fontSize, lineHeight: 1.2, padding: `0 ${fontSize * 0.5}px`, cursor: 'ew-resize', userSelect: 'none',
+        color: 'rgba(255,255,255,0.6)', touchAction: 'none',
+      }}
+    >⇔</span>
   )
 }
 

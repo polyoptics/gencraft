@@ -10,7 +10,7 @@ import React, { useEffect, useState } from 'react'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useTiltStore } from '../../store/tiltStore'
-import { LAYER_GAP, LayerCanvas, layerFan, unmix } from '../Viewport3D/ExplodedStrip'
+import { LayerCanvas, layerFan, unmix } from '../Viewport3D/ExplodedStrip'
 import { PAGE_H, PAGE_W, useFilmLayersOn } from './FilmMixerBody'
 
 /** The look's strengths per layer, bottom up. */
@@ -116,6 +116,7 @@ export const FilmMixerLayers: React.FC = () => {
   const on = useFilmLayersOn(s => s.on)
   const swing = useTiltStore(layerFan)
   const fan = on ? swing : 0
+  const layerGap = useFilmLayersOn(s => s.gap)
   const pan = useCanvasStore(s => s.pan)
   const zoom = useCanvasStore(s => s.zoom)
   const baked = useBaked(!!node && fan > 0)
@@ -132,7 +133,7 @@ export const FilmMixerLayers: React.FC = () => {
   const boxH = boxW / aspect
   const left = pan.x + (node.x + (node.width - PAGE_W * fit) / 2 + from.x * fit) * zoom + (from.width * fit * zoom - boxW) / 2
   const top = pan.y + (node.y + headerH + from.y * fit) * zoom + (from.height * fit * zoom - boxH) / 2
-  const gap = Math.max(40, boxH * LAYER_GAP) * fan
+  const gap = boxH * layerGap * fan
   const pos = (z: number): React.CSSProperties => ({
     position: 'absolute', left, top, width: boxW, height: boxH, transform: `translateZ(${z}px)`, pointerEvents: 'none',
   })
@@ -143,11 +144,55 @@ export const FilmMixerLayers: React.FC = () => {
   // Plate furthest back; the last layer right behind the node's own face.
   const count = baked.panes.length
 
+  // A corner of the back layer, dragged: the back layer follows the cursor in
+  // depth, and every gap opens or closes with it (as ExplodedStrip's handles).
+  const startHandle = (e: React.PointerEvent) => {
+    e.stopPropagation()
+    e.preventDefault()
+    const { tilt, yaw } = useTiltStore.getState()
+    const b = yaw * Math.PI / 180, t = tilt * Math.PI / 180
+    const vx = Math.sin(b), vy = -Math.sin(t) * Math.cos(b)
+    const len2 = vx * vx + vy * vy
+    if (len2 < 0.02) return
+    const sx = e.clientX, sy = e.clientY, depth = boxH * (count + 1) * fan
+    const gap0 = layerGap
+    const move = (m: PointerEvent) => {
+      const dz = ((m.clientX - sx) * vx + (m.clientY - sy) * vy) / len2
+      useFilmLayersOn.getState().setGap(gap0 - dz / depth)
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
+
   return (
     <>
       <div data-film-layer="plate" style={{ ...pos(-(count + 1) * gap), outline: '1.5px solid rgba(255,255,255,.25)' }}>
         <LayerCanvas canvas={baked.plate} />
-        <div style={header('#23252f')}>Plate · {baked.clip}</div>
+        <div data-layer-pane="" style={{ ...header('#23252f'), display: 'flex', alignItems: 'center', gap: 6, pointerEvents: 'auto' }}>
+          <span>Plate · {baked.clip}</span>
+          <span style={{ flex: 1 }} />
+          <button
+            data-film-layers-back-toggle=""
+            title="Layers: lit, swinging sideways shows the mixer's layers behind it"
+            onPointerDown={e => e.stopPropagation()}
+            onClick={e => { e.stopPropagation(); useFilmLayersOn.getState().toggle() }}
+            style={{ padding: '1px 6px', fontSize: 11, border: '1px solid rgba(255,255,255,.25)', borderRadius: 5, color: '#fff', cursor: 'pointer', background: 'rgba(120,170,255,.35)' }}
+          >Layers</button>
+        </div>
+        {[{ left: -7, top: -7 }, { right: -7, top: -7 }, { left: -7, bottom: -7 }, { right: -7, bottom: -7 }].map((at, i) => (
+          <div
+            key={i}
+            data-layer-pane=""
+            data-film-layer-handle=""
+            title="Drag to set how far the layers spread"
+            onPointerDown={startHandle}
+            style={{ position: 'absolute', ...at, width: 14, height: 14, borderRadius: 4, background: '#cfe2ff', border: '2px solid #16171f', boxSizing: 'border-box', cursor: 'grab', pointerEvents: 'auto' }}
+          />
+        ))}
       </div>
       {baked.panes.map((p, n) => (
         // A pale wash: most of these marks are dark ink, lost on the dark canvas.

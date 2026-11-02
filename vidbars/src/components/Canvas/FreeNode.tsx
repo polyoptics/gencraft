@@ -26,7 +26,7 @@ import { tileBrowseItem, isDockableTile } from '../../utils/contentTraversal'
 import { snapPanelToPanel, isPanelType } from '../../utils/componentLinks'
 import { panelContentScale, clampUiScale } from '../UI/PanelSurface'
 import { CardRolodex } from '../Rolodex/CardRolodex'
-import { FILM_MIXER_ASPECT, FilmLayersToggle, FilmMixerBody } from '../FilmMixer/FilmMixerBody'
+import { FILM_MIXER_ASPECT, FilmLayersSpacing, FilmLayersToggle, FilmMixerBody } from '../FilmMixer/FilmMixerBody'
 import { MediaPool } from '../Pool/MediaPool'
 import { PromptPad } from '../Prompt/PromptPad'
 import { HistoryPanel } from '../History/HistoryPanel'
@@ -1487,6 +1487,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
                 pinning a Media Pool is the same gesture as pinning the
                 Rolodex or the Viewer. Media tiles keep using the context
                 menu: a 20px tile has no room for header buttons. */}
+        {node.type === 'filmMixer' && <FilmLayersSpacing fontSize={fontSize} />}
         {node.type === 'filmMixer' && <FilmLayersToggle fontSize={fontSize} />}
         {isPanel && (
           <PinControl
