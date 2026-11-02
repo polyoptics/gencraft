@@ -62,7 +62,6 @@ export interface VidbarsDesktop {
   } | null>
   mixerFrame?(job: { seg: number; i: number; look: Record<string, number> | null; card: boolean }):
     Promise<{ url?: string; loading?: boolean; error?: string }>
-  mixerShowPicture?(shown: boolean): Promise<void>
   sketchRun?(job: {
     op: 'depth' | 'segment' | 'lines' | 'formhatch' | 'bghatch' | 'look'; frames: string[]
     /** op 'look': which drawing look (sketch_server.py LOOKS). */

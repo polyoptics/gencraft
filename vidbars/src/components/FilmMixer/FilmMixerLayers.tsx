@@ -31,8 +31,7 @@ interface Baked {
   clip: string
   plate: HTMLCanvasElement
   panes: Pane[]
-  /** The finished frame, and where it sits in the mixer's page. */
-  picture: HTMLCanvasElement
+  /** Where the picture sits in the mixer's page. */
   from: View['picture']
 }
 
@@ -57,7 +56,7 @@ async function bake(view: View): Promise<Baked | 'loading' | null> {
   // Graphics-only shot: the edit's own frame, no layers to pull apart.
   if (!look) {
     const plate = await frameCanvas(view, null, false)
-    return plate instanceof HTMLCanvasElement ? { clip: view.clip, plate, panes: [], picture: plate, from: view.picture } : plate
+    return plate instanceof HTMLCanvasElement ? { clip: view.clip, plate, panes: [], from: view.picture } : plate
   }
   const without = (from: number) => {
     const l = { ...look }
@@ -78,9 +77,8 @@ async function bake(view: View): Promise<Baked | 'loading' | null> {
     const after = await frameCanvas(view, look, true)
     if (!(after instanceof HTMLCanvasElement)) return after
     panes.push({ ...GRAPHICS, canvas: unmix(prev, after).boosted })
-    prev = after
   }
-  return { clip: view.clip, plate, panes, picture: prev, from: view.picture }
+  return { clip: view.clip, plate, panes, from: view.picture }
 }
 
 /** Follows the mixer while the layers are open. Holds the last bake until the
@@ -122,21 +120,19 @@ export const FilmMixerLayers: React.FC = () => {
   const zoom = useCanvasStore(s => s.zoom)
   const baked = useBaked(!!node && fan > 0)
 
-  // The picture has left the page for the stack; collapsed, it is back.
-  const away = !!node && !!baked && fan > 0
-  useEffect(() => {
-    if (!away) return
-    void window.vidbarsDesktop?.mixerShowPicture?.(false)
-    return () => { void window.vidbarsDesktop?.mixerShowPicture?.(true) }
-  }, [away])
+  if (!node || !baked || fan === 0 || baked.panes.length === 0) return null
 
-  if (!node || !baked || fan === 0) return null
-
-  const rect = { x: pan.x + node.x * zoom, y: pan.y + node.y * zoom, width: node.width * zoom, height: node.height * zoom }
+  // Exactly behind the picture in the mixer's page, which stays where it is:
+  // the layers pull straight back from behind it.
+  const headerH = Math.min(22 / zoom, node.height * 0.28)
+  const fit = Math.min(node.width / PAGE_W, (node.height - headerH) / PAGE_H)
+  const from = baked.from
   const aspect = baked.plate.width / baked.plate.height
-  const boxH = Math.min(rect.height, rect.width / aspect), boxW = boxH * aspect
+  const boxW = Math.min(from.width, from.height * aspect) * fit * zoom
+  const boxH = boxW / aspect
+  const left = pan.x + (node.x + (node.width - PAGE_W * fit) / 2 + from.x * fit) * zoom + (from.width * fit * zoom - boxW) / 2
+  const top = pan.y + (node.y + headerH + from.y * fit) * zoom + (from.height * fit * zoom - boxH) / 2
   const gap = Math.max(40, boxH * LAYER_GAP) * fan
-  const left = rect.x + (rect.width - boxW) / 2, top = rect.y + (rect.height - boxH) / 2
   const pos = (z: number): React.CSSProperties => ({
     position: 'absolute', left, top, width: boxW, height: boxH, transform: `translateZ(${z}px)`, pointerEvents: 'none',
   })
@@ -147,38 +143,12 @@ export const FilmMixerLayers: React.FC = () => {
   // Plate furthest back; the last layer right behind the node's own face.
   const count = baked.panes.length
 
-  // The picture starts where the page draws it and travels back past every
-  // layer to the far end, growing to the layers' size on the way. Same open
-  // amount both ways, so collapsing runs it home.
-  const headerH = Math.min(22 / zoom, node.height * 0.28)
-  const fit = Math.min(node.width / PAGE_W, (node.height - headerH) / PAGE_H)
-  const onPage = {
-    x: pan.x + (node.x + (node.width - PAGE_W * fit) / 2 + baked.from.x * fit) * zoom,
-    y: pan.y + (node.y + headerH + baked.from.y * fit) * zoom,
-    w: baked.from.width * fit * zoom,
-    h: baked.from.height * fit * zoom,
-  }
-  const mix = (a: number, b: number) => a + (b - a) * fan
-
   return (
     <>
-      <div
-        data-film-layer="picture"
-        style={{
-          position: 'absolute', pointerEvents: 'none', outline: '1.5px solid rgba(255,255,255,.4)',
-          left: mix(onPage.x, left), top: mix(onPage.y, top), width: mix(onPage.w, boxW), height: mix(onPage.h, boxH),
-          transform: `translateZ(${-(count + 2) * gap}px)`,
-        }}
-      >
-        <LayerCanvas canvas={baked.picture} />
-        <div style={header('#23252f')}>Picture · {baked.clip}</div>
+      <div data-film-layer="plate" style={{ ...pos(-(count + 1) * gap), outline: '1.5px solid rgba(255,255,255,.25)' }}>
+        <LayerCanvas canvas={baked.plate} />
+        <div style={header('#23252f')}>Plate · {baked.clip}</div>
       </div>
-      {count > 0 && (
-        <div data-film-layer="plate" style={{ ...pos(-(count + 1) * gap), outline: '1.5px solid rgba(255,255,255,.25)' }}>
-          <LayerCanvas canvas={baked.plate} />
-          <div style={header('#23252f')}>Plate</div>
-        </div>
-      )}
       {baked.panes.map((p, n) => (
         // A pale wash: most of these marks are dark ink, lost on the dark canvas.
         <div key={p.id} data-film-layer={p.id} style={{ ...pos(-(count - n) * gap), outline: `1.5px solid ${p.color}`, outlineOffset: -1, background: 'rgba(235,232,222,.32)' }}>

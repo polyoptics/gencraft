@@ -124,15 +124,6 @@ function pageFrame(mainFrame) {
   })
 }
 
-/** The page's own picture leaves it while the layers are open: it has gone to
- *  the back of the stack. */
-async function showPicture(mainFrame, shown) {
-  const page = pageFrame(mainFrame)
-  if (!page) return
-  const css = shown ? 'visible' : 'hidden'
-  try { await page.executeJavaScript(`document.getElementById('cv').style.visibility = '${css}'`) } catch { /* page reloading */ }
-}
-
 /** One frame as a data url, so the page can read its pixels (it could not read
  *  an image from the mixer's origin). { loading: true } while the shot loads. */
 function frame({ seg, i, look, card }) {
@@ -153,4 +144,4 @@ function frame({ seg, i, look, card }) {
   })
 }
 
-module.exports = { status, start, stop, ownsRunning, view, showPicture, frame }
+module.exports = { status, start, stop, ownsRunning, view, frame }
