@@ -151,7 +151,8 @@ export const RailOverlay: React.FC<{
             onDoubleClick={e => e.stopPropagation()}
             onClick={e => { e.stopPropagation(); useRailUiStore.getState().toggleFx(railId) }}
             style={{
-              position: 'absolute', right: 4 * u, top: 4 * u, pointerEvents: 'auto', cursor: 'pointer',
+              // Lower left, clear of the result decks over the bottom edge.
+              position: 'absolute', left: 4 * u, bottom: (RAIL_GEOM.trayOverlap + 3) * u, pointerEvents: 'auto', cursor: 'pointer',
               padding: `${1.5 * u}px ${6 * u}px`, borderRadius: 6 * u,
               border: `${u}px solid ${showBefore ? 'rgba(255,255,255,0.18)' : 'rgba(140,190,255,0.7)'}`,
               background: showBefore ? 'rgba(12,13,20,0.7)' : 'rgba(46,72,120,0.92)', color: showBefore ? 'rgba(255,255,255,0.45)' : '#cfe2ff',
