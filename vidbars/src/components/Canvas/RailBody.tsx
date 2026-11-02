@@ -378,6 +378,7 @@ export const RailBody: React.FC<{
         count={trayCards.length}
         lastUrl={lastResult?.imageUrl ?? null}
         hovered={hovered}
+        hasBefore={!!before}
       />
 
       {/* ── Extend the rail at either end. ── */}
@@ -719,8 +720,31 @@ const CardHead: React.FC<{ card: FreeNodeData; rect: Local; u: number; warning?:
   )
 }
 
-/** The tray's header: "Results", how many, a drag-out grip for the face-up
- *  result (Shift: all of them), and Clear. */
+/** The strip's effects on or off, the same switch as the Viewer's: lit shows
+ *  the result, dimmed the picture before them. */
+const FxToggle: React.FC<{ railId: string; u: number }> = ({ railId, u }) => {
+  const off = useRailUiStore(s => !!s.fxOff[railId])
+  return (
+    <button
+      type="button"
+      data-rail-fx={off ? 'off' : 'on'}
+      title="Effects: lit shows the result, dimmed the picture before them"
+      onPointerDown={stopPrimary}
+      onMouseDown={pressButton}
+      onDoubleClick={stop}
+      onClick={e => { e.stopPropagation(); useRailUiStore.getState().toggleFx(railId) }}
+      style={{
+        flex: '0 0 auto', height: 18 * u, padding: `0 ${6 * u}px`, margin: 0, borderRadius: 5 * u,
+        border: `${u}px solid ${off ? 'rgba(255,255,255,0.18)' : 'rgba(140,190,255,0.7)'}`,
+        background: off ? 'transparent' : 'rgba(46,72,120,0.92)', color: off ? 'rgba(255,255,255,0.45)' : '#cfe2ff',
+        fontFamily: 'inherit', fontSize: 10 * u, fontWeight: 700, lineHeight: 1, cursor: 'pointer',
+      }}
+    >FX</button>
+  )
+}
+
+/** The tray's header: "Results", how many, FX, a drag-out grip for the
+ *  face-up result (Shift: all of them), and Clear. */
 const TrayHead: React.FC<{
   railId: string
   rect: Local
@@ -728,7 +752,8 @@ const TrayHead: React.FC<{
   count: number
   lastUrl: string | null
   hovered: boolean
-}> = ({ railId, rect, u, count, lastUrl, hovered }) => (
+  hasBefore: boolean
+}> = ({ railId, rect, u, count, lastUrl, hovered, hasBefore }) => (
   <div data-rail-tray-head style={{
     ...chip(rect, u, mixHex(C.orange, C.ground, 0.18)),
     boxShadow: `inset 0 0 0 ${u}px rgba(216,90,48,0.3)`,
@@ -736,6 +761,7 @@ const TrayHead: React.FC<{
     <span style={{ flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 13 * u, fontWeight: 600, textShadow: railShadow(u) }}>Results</span>
     <Badge u={u}>{count}</Badge>
     <span style={{ flex: '1 1 0', alignSelf: 'stretch' }} />
+    {hasBefore && <FxToggle railId={railId} u={u} />}
     <DragOutGrip
       url={lastUrl}
       getUrls={({ all }) => (all ? trayUrls(railId) : [])}

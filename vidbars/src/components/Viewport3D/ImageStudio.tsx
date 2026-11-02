@@ -45,7 +45,7 @@ const TOOLBAR_H = 32
 /** Stamp keeps its width while it reads "…" (a cut in flight). */
 const STAMP_SLOT: React.CSSProperties = { minWidth: 58, textAlign: 'center' }
 
-const tbBtn = (active: boolean): React.CSSProperties => ({
+export const tbBtn = (active: boolean): React.CSSProperties => ({
   background: active ? 'rgba(120,170,255,0.25)' : 'rgba(255,255,255,0.05)',
   border: `1px solid ${active ? 'rgba(140,190,255,0.5)' : 'rgba(255,255,255,0.1)'}`,
   borderRadius: 4, color: active ? '#fff' : 'rgba(255,255,255,0.6)',
@@ -137,7 +137,7 @@ export interface ImageStudioLive {
   full: () => Promise<FullFrame | null>
 }
 
-export const ImageStudio: React.FC<{ windowId: string; url: string; name?: string; live?: ImageStudioLive }> = ({ windowId, url, name, live }) => {
+export const ImageStudio: React.FC<{ windowId: string; url: string; name?: string; live?: ImageStudioLive; toolbarStart?: React.ReactNode }> = ({ windowId, url, name, live, toolbarStart }) => {
   const resolved = useResolvedMedia(live ? null : url)
   const key = `${windowId}|${url}`
   const [, bump] = useState(0)
@@ -476,6 +476,7 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
           borderBottom: '1px solid rgba(255,255,255,0.08)', flexShrink: 0,
         }}
       >
+        {toolbarStart}
         {modeBtn('view', '⤢', 'View — wheel zoom · drag pan · double-click reset')}
         {modeBtn('snip', '✂', 'Snip — drag a box; releasing saves it out. Keep snipping. (Esc to exit)')}
         {modeBtn('crop', '⛶', 'Crop — place a frame, resize/move it, Stamp as many as you like. (Esc to exit)')}
