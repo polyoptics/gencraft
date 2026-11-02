@@ -13,7 +13,7 @@ export const ConsoleToggleButton: React.FC = () => {
   return (
     <button
       onClick={() => useTiltStore.getState().setConsole(!on)}
-      title="Console: in 3D the loop strip stands up as a machine. Effect cards lean back, a docked Viewer stands like a screen, pictures stay in their columns. Lit is on; unlit, the cards lie flat in the strip."
+      title="In 3D, a loop strip's effect cards lean back and a docked Viewer stands like a screen; pictures stay in their columns. Lit is on; unlit, the cards lie flat in the strip."
       aria-pressed={on}
       style={{
         height: 24,
@@ -29,7 +29,7 @@ export const ConsoleToggleButton: React.FC = () => {
       }}
     >
       <span style={{ fontSize: 13 }}>🎛️</span>
-      Console
+      Stand cards up
     </button>
   )
 }
