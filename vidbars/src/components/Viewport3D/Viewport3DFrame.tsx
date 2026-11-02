@@ -16,6 +16,7 @@
 //    flushed to the store once per gesture end (no store churn at 120 Hz).
 
 import React, { useRef, useState, useCallback } from 'react'
+import { DEFAULT_LOOK } from '../../three/modelLook'
 import { useViewport3DStore } from '../../store/viewport3dStore'
 import type { ViewportWindow3D } from '../../store/viewport3dStore'
 import { useCanvasStore } from '../../store/canvasStore'
@@ -479,19 +480,19 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
             padding: `${1 * iz}px ${4 * iz}px`, cursor: 'pointer',
             fontFamily: 'inherit', lineHeight: 1.5, flexShrink: 0,
           })
-          const mode = win.viewMode ?? 'textured'
+          const look = win.look ?? DEFAULT_LOOK
           const v3 = useViewport3DStore.getState()
           return (
             <div style={{ display: 'flex', alignItems: 'center', gap: 2 * iz, flexShrink: 0 }}
                  onPointerDown={e => e.stopPropagation()}>
-              {(['textured', 'shaded', 'wireframe'] as const).map(m => (
-                <button key={m} style={btn(mode === m)} onClick={() => v3.setViewMode(id, m)}
-                  title={m === 'textured' ? 'Textured — the model as authored'
-                       : m === 'shaded' ? 'Shaded — flat material, no maps'
-                       : 'Wireframe'}>
-                  {m === 'textured' ? 'TEX' : m === 'shaded' ? 'SHD' : 'WIRE'}
-                </button>
-              ))}
+              <button style={btn(look.texture)} onClick={() => v3.setLook(id, { ...look, texture: !look.texture })}
+                title="The model's own textures; off is plain grey">Texture</button>
+              <button style={btn(look.shade === 'flat')} onClick={() => v3.setLook(id, { ...look, shade: look.shade === 'flat' ? null : 'flat' })}
+                title="Flat shading: every face shows">Flat</button>
+              <button style={btn(look.shade === 'smooth')} onClick={() => v3.setLook(id, { ...look, shade: look.shade === 'smooth' ? null : 'smooth' })}
+                title="Smooth shading. With Flat and Smooth both off the model is unshaded: its bare texture, or hollow with Texture off">Smooth</button>
+              <button style={btn(look.wire)} onClick={() => v3.setLook(id, { ...look, wire: !look.wire })}
+                title="The wireframe, over whatever else shows">Wireframe</button>
               <button style={btn(win.showSkin === false)} onClick={() => v3.toggleShowSkin(id)}
                 title="Hide the skinned mesh and show the skeleton">SKEL</button>
               <button style={btn(!!win.showStats)} onClick={() => v3.toggleShowStats(id)}

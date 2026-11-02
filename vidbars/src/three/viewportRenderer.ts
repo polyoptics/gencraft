@@ -21,6 +21,7 @@ import { useCanvasStore } from '../store/canvasStore'
 import { useViewport3DStore, type ViewportWindow3D } from '../store/viewport3dStore'
 import { acquireModel, releaseModel, disposeInstance } from './modelCache'
 import { applyOrbit, frameModel, dollyBounds, type OrbitState } from './orbitState'
+import { DEFAULT_LOOK, createLook, applyLook, disposeLook, type LookInstance } from './modelLook'
 
 /** Below this on-screen width (px) a window skips GL (frame shows poster). */
 export const MIN_GL_PX = 80
@@ -46,6 +47,7 @@ export interface ViewRuntime {
   dollyMax: number
   modelUrl: string | null       // raw ref currently loaded/loading
   modelRoot: THREE.Object3D | null
+  look?: LookInstance
   status: ViewStatus
   errorMsg?: string
   hasRenderedOnce: boolean
@@ -86,15 +88,20 @@ export function setViewFooterInset(id: string, px: number): void {
   requestRender()
 }
 
-// ── Display modes ──
-// Applied as scene.overrideMaterial rather than by touching the model's
-// own materials: instances made by SkeletonUtils.clone SHARE materials, so
-// mutating one would change every window showing that model.
+// ── Display look ── see modelLook.ts. Grey and the wire are applied as
+// scene.overrideMaterial; texture and shading on this view's own materials.
 const WIREFRAME_MAT = new THREE.MeshBasicMaterial({
   color: 0x9fd0ff, wireframe: true, transparent: true, opacity: 0.85,
 })
-const SHADED_MAT = new THREE.MeshStandardMaterial({
+const WIRE_OVER_MAT = new THREE.MeshBasicMaterial({
+  color: 0x9fd0ff, wireframe: true, transparent: true, opacity: 0.2,
+  depthFunc: THREE.LessEqualDepth, depthWrite: false,
+})
+const GRAY_MAT = new THREE.MeshStandardMaterial({
   color: 0xc8ccd8, roughness: 0.75, metalness: 0.0,
+})
+const GRAY_FLAT_MAT = new THREE.MeshStandardMaterial({
+  color: 0xc8ccd8, roughness: 0.75, metalness: 0.0, flatShading: true,
 })
 
 export interface ModelStats {
@@ -145,10 +152,8 @@ function computeStats(root: THREE.Object3D, animations: number): ModelStats {
 const skeletons = new Map<string, THREE.SkeletonHelper>()
 
 function applyDisplayMode(id: string, view: ViewRuntime, win: ViewportWindow3D): void {
-  view.scene.overrideMaterial =
-    win.viewMode === 'wireframe' ? WIREFRAME_MAT
-    : win.viewMode === 'shaded' ? SHADED_MAT
-    : null
+  const { texture, shade } = win.look ?? DEFAULT_LOOK
+  if (view.look) applyLook(view.look, texture, shade)
 
   const skinVisible = win.showSkin !== false
   let hasSkinned = false
@@ -160,14 +165,38 @@ function applyDisplayMode(id: string, view: ViewRuntime, win: ViewportWindow3D):
   if (!skinVisible && hasSkinned && view.modelRoot && !helper) {
     helper = new THREE.SkeletonHelper(view.modelRoot)
     // Drawn on top of everything so bones inside a body are still readable.
-    // (In wireframe/shaded mode the scene override also applies to these
-    // lines; they stay legible, just in the override's colour.)
+    // (The grey and wire overrides also apply to these lines; they stay
+    // legible, just in the override's colour.)
     ;(helper.material as THREE.LineBasicMaterial).depthTest = false
     helper.renderOrder = 999
     skeletons.set(id, helper)
     view.scene.add(helper)
   }
   if (helper) helper.visible = !skinVisible
+}
+
+/** Draw a view: the surface, then the wire over it. The caller has cleared
+ *  and set the target, and autoClear is off, so the wire keeps the depth. */
+function renderLook(target: THREE.WebGLRenderer, view: ViewRuntime, win: ViewportWindow3D | undefined): void {
+  const { texture, shade, wire } = win?.look ?? DEFAULT_LOOK
+  const surface = texture || shade !== null
+  const root = view.modelRoot
+  // Hidden rather than skipped, so a skeleton still draws over a hollow model.
+  if (root) root.visible = surface
+  view.scene.overrideMaterial = texture ? null : shade === 'flat' ? GRAY_FLAT_MAT : GRAY_MAT
+  target.render(view.scene, view.camera)
+  if (root) root.visible = true
+  if (wire) {
+    view.scene.overrideMaterial = surface ? WIRE_OVER_MAT : WIREFRAME_MAT
+    target.render(view.scene, view.camera)
+  }
+  view.scene.overrideMaterial = null
+}
+
+/** Take the model out of a view, with its look. */
+function dropModelRoot(view: ViewRuntime): void {
+  if (view.look) { disposeLook(view.look); view.look = undefined }
+  if (view.modelRoot) { disposeInstance(view.modelRoot); view.modelRoot = null }
 }
 
 // ── Status pub/sub (for useViewStatus — mirrors useResolvedMedia's pattern) ──
@@ -275,7 +304,7 @@ function renderFrame(): void {
     view.camera.aspect = sw / sh
     applyOrbit(view.camera, view.orbit)
     view.camera.updateProjectionMatrix()
-    target.render(view.scene, view.camera)
+    renderLook(target, view, win)
 
     if (!view.hasRenderedOnce) {
       view.hasRenderedOnce = true
@@ -445,7 +474,7 @@ export function captureViewPoster(id: string, w = 512, h = 384): string | null {
     view.camera.aspect = w / h
     applyOrbit(view.camera, view.orbit)
     view.camera.updateProjectionMatrix()
-    r.render(view.scene, view.camera)
+    renderLook(r, view, win)
     const pixels = new Uint8Array(w * h * 4)
     r.readRenderTargetPixels(target, 0, 0, w, h, pixels)
     r.setRenderTarget(prevTarget)
@@ -487,7 +516,7 @@ export function captureViewPoster(id: string, w = 512, h = 384): string | null {
 function destroyView(id: string): void {
   const view = views.get(id)
   if (!view) return
-  if (view.modelRoot) disposeInstance(view.modelRoot)
+  dropModelRoot(view)
   if (view.modelUrl) releaseModel(view.modelUrl)
   views.delete(id)
   notifyStatus(id)
@@ -496,7 +525,7 @@ function destroyView(id: string): void {
 async function loadModelIntoView(view: ViewRuntime, url: string, savedCamera: OrbitState | undefined): Promise<void> {
   const seq = ++view.loadSeq
   // Drop the previous model
-  if (view.modelRoot) { disposeInstance(view.modelRoot); view.modelRoot = null }
+  dropModelRoot(view)
   if (view.modelUrl) { releaseModel(view.modelUrl); view.modelUrl = null }
   const oldHelper = skeletons.get(view.id)
   if (oldHelper) { view.scene.remove(oldHelper); oldHelper.dispose?.(); skeletons.delete(view.id) }
@@ -518,6 +547,7 @@ async function loadModelIntoView(view: ViewRuntime, url: string, savedCamera: Or
       return
     }
     view.modelRoot = root
+    view.look = createLook(root)
     view.scene.add(root)
     const clips = root.animations ?? []
     view.clips = clips
@@ -568,7 +598,7 @@ function syncViews(): void {
         void loadModelIntoView(view, targetUrl, win.camera)
       } else {
         ++view.loadSeq   // cancel any in-flight load
-        if (view.modelRoot) { disposeInstance(view.modelRoot); view.modelRoot = null }
+        dropModelRoot(view)
         if (view.modelUrl) { releaseModel(view.modelUrl); view.modelUrl = null }
         view.status = 'empty'
         view.hasRenderedOnce = false

@@ -15,6 +15,7 @@
 import { useCallback } from 'react'
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { DEFAULT_LOOK, type ModelShade } from '../three/modelLook'
 import { createDebouncedIDBStorage } from '../utils/debouncedIDBStorage'
 import { markMoving } from '../utils/rasterSettle'
 
@@ -56,15 +57,9 @@ interface TiltStore {
    *  screen px: the whole tilted view slides, nothing on it moves. */
   shiftX: number
   shiftY: number
-  /** How models are drawn, as on/off toggles that keep their labels (Brian
-   *  2026-11-02). The model's own materials and textures; off with Clay off
-   *  too leaves no surface, just an empty wireframe. */
+  /** How models are drawn: see three/modelLook.ts. */
   texture: boolean
-  /** A plain clay surface in place of the textures. */
-  clay: boolean
-  /** Even, low-contrast light with smooth normals instead of the lit look. */
-  flat: boolean
-  /** A wireframe over the surface. */
+  shade: ModelShade
   wire: boolean
   light: TiltLight
   /** Models turn slowly on their card. */
@@ -84,8 +79,7 @@ interface TiltStore {
   setView: (tilt: number, spin: number) => void
   setShift: (x: number, y: number) => void
   setTexture: (on: boolean) => void
-  setClay: (on: boolean) => void
-  setFlat: (on: boolean) => void
+  setShade: (shade: ModelShade) => void
   setWire: (on: boolean) => void
   setLight: (patch: Partial<TiltLight>) => void
   setTurn: (on: boolean) => void
@@ -107,8 +101,7 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
   shiftX: 0,
   shiftY: 0,
   texture: true,
-  clay: false,
-  flat: false,
+  shade: DEFAULT_LOOK.shade,
   wire: false,
   light: DEFAULT_LIGHT,
   turn: true,
@@ -128,8 +121,7 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
   },
   setShift: (shiftX, shiftY) => set({ shiftX, shiftY }),
   setTexture: texture => set({ texture }),
-  setClay: clay => set({ clay }),
-  setFlat: flat => set({ flat }),
+  setShade: shade => set({ shade }),
   setWire: wire => set({ wire }),
   setLight: patch => set(s => ({ light: { ...s.light, ...patch } })),
   setTurn: turn => set({ turn }),

@@ -10,9 +10,9 @@
 
 import * as THREE from 'three'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
-import { toCreasedNormals } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { acquireModel, releaseModel, disposeInstance } from './modelCache'
 import { computePosedBounds } from './orbitState'
+import { createLook, applyLook, disposeLook, type LookInstance, type ModelShade } from './modelLook'
 import { TILT_PERSPECTIVE, DEFAULT_LIGHT, type TiltLight } from '../store/tiltStore'
 
 const DEFAULT_SHADOWS = DEFAULT_LIGHT.shadows, DEFAULT_SHEEN = DEFAULT_LIGHT.sheen
@@ -140,8 +140,7 @@ export interface TiltFrameState {
   shiftY: number
   spin: number
   texture: boolean
-  clay: boolean
-  flat: boolean
+  shade: ModelShade
   wire: boolean
   light: TiltLight
   turn: boolean
@@ -184,9 +183,8 @@ interface Standing {
   figure: THREE.Group
   wall: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>
   wallText: string
-  /** Smooth-normal geometry for the Flat mode (null until first needed). */
-  smooth: Swap[] | null
-  smoothOn: boolean
+  /** Its own materials and normals, once loaded. */
+  look: LookInstance | null
   phase: number
   dead: boolean
   seen: number
@@ -202,9 +200,10 @@ interface Standing {
 const WIRE_MAT = new THREE.MeshBasicMaterial({ color: 0x9fd0ff, wireframe: true, transparent: true, opacity: 0.85 })
 /** Over a surface the wire is drawn where the surface is, so it may sit
  *  exactly on it: LessEqual lets it win those ties. */
-const WIRE_OVER_MAT = new THREE.MeshBasicMaterial({ color: 0x9fd0ff, wireframe: true, transparent: true, opacity: 0.55, depthFunc: THREE.LessEqualDepth, depthWrite: false })
-/** Texture off: plain clay. Flat comes from the light rig, not this. */
-const CLAY_MAT = new THREE.MeshStandardMaterial({ color: 0xc8ccd8, roughness: 0.85, metalness: 0 })
+const WIRE_OVER_MAT = new THREE.MeshBasicMaterial({ color: 0x9fd0ff, wireframe: true, transparent: true, opacity: 0.2, depthFunc: THREE.LessEqualDepth, depthWrite: false })
+/** Texture off: plain grey, smooth or faceted. */
+const GRAY_MAT = new THREE.MeshStandardMaterial({ color: 0xc8ccd8, roughness: 0.85, metalness: 0 })
+const GRAY_FLAT_MAT = new THREE.MeshStandardMaterial({ color: 0xc8ccd8, roughness: 0.85, metalness: 0, flatShading: true })
 /** Set `m` to `o` × the 3D look's fade, see-through only while fading. */
 function fadeMat(m: THREE.Material, o: number, t: boolean, fade: number) {
   m.opacity = o * fade
@@ -283,43 +282,6 @@ void main() {
   else discard;
 }`
 
-/** Smooth-normal copies of model geometry for Flat: many models
- *  arrive with split, faceted normals. Normals are averaged across faces
- *  that meet at under SMOOTH_CREASE, so curves go smooth and hard edges
- *  stay hard. Textured keeps the model's own normals. The cached source
- *  geometry is shared with the Viewers, so only tilted instances swap to
- *  the copy, ref-counted per source and built the first time Flat shows. */
-const SMOOTH_CREASE = Math.PI * 70 / 180
-const SMOOTH_MAX_TRIS = 400_000
-const smoothed = new Map<THREE.BufferGeometry, { geo: THREE.BufferGeometry; refs: number }>()
-type Swap = { mesh: THREE.Mesh; orig: THREE.BufferGeometry; smooth: THREE.BufferGeometry }
-
-function smoothSwaps(root: THREE.Object3D): Swap[] {
-  const out: Swap[] = []
-  root.traverse(o => {
-    const mesh = o as THREE.Mesh
-    const src = mesh.isMesh ? mesh.geometry : null
-    if (!src?.attributes.position || (mesh as THREE.SkinnedMesh).isSkinnedMesh) return
-    const tris = src.index ? src.index.count / 3 : src.attributes.position.count / 3
-    if (tris > SMOOTH_MAX_TRIS) return
-    let e = smoothed.get(src)
-    if (!e) {
-      try { e = { geo: toCreasedNormals(src, SMOOTH_CREASE), refs: 0 } } catch { return }
-      smoothed.set(src, e)
-    }
-    e.refs++
-    out.push({ mesh, orig: src, smooth: e.geo })
-  })
-  return out
-}
-
-function releaseSwaps(swaps: Swap[] | null) {
-  for (const w of swaps ?? []) {
-    w.mesh.geometry = w.orig
-    const e = smoothed.get(w.orig)
-    if (e && --e.refs <= 0) { e.geo.dispose(); smoothed.delete(w.orig) }
-  }
-}
 
 /** Pictures masked from the shadow and sheen at most (the ones in view). */
 export const ART_MAX = 1000
@@ -353,15 +315,6 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   const litFill = new THREE.HemisphereLight(0xffffff, 0x40404c, 0.5)
   litRig.add(litFill)
   scene.add(litRig)
-  // Flat: mostly even ambient, a weak key from the viewer's side for just
-  // enough form, so neither texture nor clay goes dark on one side.
-  const flatRig = new THREE.Group()
-  flatRig.add(new THREE.AmbientLight(0xffffff, 2.1))
-  const flatKey = new THREE.DirectionalLight(0xffffff, 0.6)
-  flatKey.position.set(0, 400, 1200)
-  flatRig.add(flatKey)
-  flatRig.visible = false
-  scene.add(flatRig)
   const deco = new THREE.Scene()
   // A cool sky over a dark table, so tops read lit and walls fall darker
   // (the mockup machine's light), and a cool rim from behind the view: it
@@ -454,7 +407,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     groundDeco.add(wall)
     const s: Standing = {
       url, stand, turn, inst: null, size: new THREE.Vector3(), unit: 1, unitSet: false, triangles: 0,
-      figure, wall, wallText: '', smooth: null, smoothOn: false, phase: Math.random() * 6.28, dead: false, seen: frameNo, shownAt: 0,
+      figure, wall, wallText: '', look: null, phase: Math.random() * 6.28, dead: false, seen: frameNo, shownAt: 0,
       mats: [], alpha: -1,
     }
     acquireModel(url).then(inst => {
@@ -476,15 +429,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       inst.traverse(o => { if ((o as THREE.Mesh).isMesh) o.castShadow = true })
       // Its own materials, so it can fade with the tilt and not fade the
       // same model in a Viewer or a poster.
-      const own = (m: THREE.Material) => {
-        const c = m.clone()
-        s.mats.push({ m: c, o: c.opacity, t: c.transparent })
-        return c
-      }
-      inst.traverse(o => {
-        const mesh = o as THREE.Mesh
-        if (mesh.isMesh) mesh.material = Array.isArray(mesh.material) ? mesh.material.map(own) : own(mesh.material)
-      })
+      s.look = createLook(inst, c => s.mats.push({ m: c, o: c.opacity, t: c.transparent }))
       inst.position.set(-m.centre.x, -m.minY, -m.centre.z)   // feet on the card, centred on it
       turn.add(inst)
       s.inst = inst
@@ -499,8 +444,8 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     s.wall.material.map?.dispose()
     s.wall.material.dispose()
     s.wall.geometry.dispose()
-    if (s.inst) { disposeInstance(s.inst); releaseSwaps(s.smooth); releaseModel(s.url) }
-    for (const { m } of s.mats) m.dispose()
+    if (s.inst) { disposeInstance(s.inst); releaseModel(s.url) }
+    if (s.look) disposeLook(s.look)
     standing.delete(key)
   }
 
@@ -975,12 +920,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
         s.alpha = st.fade
         for (const x of s.mats) fadeMat(x.m, x.o, x.t, st.fade)
       }
-      const wantSmooth = st.flat && !!s.inst
-      if (wantSmooth && !s.smooth) s.smooth = smoothSwaps(s.inst!)
-      if (s.smooth && wantSmooth !== s.smoothOn) {
-        s.smoothOn = wantSmooth
-        for (const w of s.smooth) w.mesh.geometry = wantSmooth ? w.smooth : w.orig
-      }
+      if (s.look) applyLook(s.look, st.texture, st.shade)
       s.stand.visible = !!s.inst && ease > 0
       s.turn.rotation.y = st.turn ? now / 1000 * 0.6 + s.phase : 0
       // glTF is in metres; something over 30 units tall is far likelier a
@@ -1033,9 +973,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     renderer.autoClear = false
     buildSlabs(st.tilt > 0.5 || st.fade > 0 ? st.slabs : [])
     renderer.render(topFirstScene, camera)
-    litRig.visible = !st.flat
-    key.visible = !st.flat
-    flatRig.visible = st.flat
+    const surface = st.texture || st.shade !== null
     {
       const L = st.light
       const az = (L.azimuth * Math.PI / 180) + (L.spin && st.turn ? now / 1000 * 0.6 : 0)
@@ -1055,18 +993,19 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       modelCast = fitShadow(key, fitBox)
       key.intensity = L.power
       decoKey.intensity = L.power * 0.5
-      scene.environmentIntensity = st.flat ? 0.6 : L.env
+      scene.environmentIntensity = L.env
       const shadows = L.shadows ?? DEFAULT_SHADOWS, sheen = L.sheen ?? DEFAULT_SHEEN
       for (const m of [modelShadow, slabShadow]) m.scale.set(span * 2, span * 2, 1)
       for (const m of [modelShadow, slabShadow, liftCatch]) (m.material as THREE.ShadowMaterial).opacity = shadows
       ;(modelShadow.material as THREE.ShadowMaterial).opacity = shadows * st.fade
-      // The clay, wire and person looks fade in and out with the models.
-      fadeMat(CLAY_MAT, 1, false, st.fade)
+      // The grey, wire and person looks fade in and out with the models.
+      fadeMat(GRAY_MAT, 1, false, st.fade)
+      fadeMat(GRAY_FLAT_MAT, 1, false, st.fade)
       fadeMat(WIRE_MAT, 0.85, true, st.fade)
-      fadeMat(WIRE_OVER_MAT, 0.55, true, st.fade)
+      fadeMat(WIRE_OVER_MAT, 0.2, true, st.fade)
       fadeMat(FIGURE_MAT, 0.85, true, st.fade)
-      shadowsOn = shadows > 0.01 && !st.flat
-      key.castShadow = shadowsOn && modelCast
+      shadowsOn = shadows > 0.01
+      key.castShadow = shadowsOn && modelCast && surface
       const type = L.soft ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap
       if (renderer.shadowMap.type !== type) {
         renderer.shadowMap.type = type
@@ -1077,30 +1016,24 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       // It fades up as the canvas tips, and away as it lies flat, rather
       // than switching on and off (Brian 2026-10-30).
       SHEEN_MAT.specular.copy(SHEEN_SPEC).multiplyScalar(st.fade)
-      sheenMesh.visible = sheen > 0.01 && !st.flat
+      sheenMesh.visible = sheen > 0.01
     }
-    // The catcher must not take the clay or wireframe look: it is drawn on
+    // The catcher must not take the grey or wireframe look: it is drawn on
     // its own after those passes, with the models hidden and the shadow
     // map they made.
-    const textured = st.texture && !st.clay
-    const overridden = !textured
+    const overridden = !st.texture
     modelShadow.visible = key.castShadow && !overridden
     renderer.shadowMap.needsUpdate = true
-    if (!st.texture && !st.clay) {
-      scene.overrideMaterial = WIRE_MAT
+    if (surface) {
+      scene.overrideMaterial = st.texture ? null : st.shade === 'flat' ? GRAY_FLAT_MAT : GRAY_MAT
       renderer.render(scene, camera)
-      renderer.autoClear = false
-    } else {
-      scene.overrideMaterial = textured ? null : CLAY_MAT
+    }
+    if (st.wire) {
+      const was = modelShadow.visible
+      modelShadow.visible = false
+      scene.overrideMaterial = surface ? WIRE_OVER_MAT : WIRE_MAT
       renderer.render(scene, camera)
-      renderer.autoClear = false
-      if (st.wire) {
-        const was = modelShadow.visible
-        modelShadow.visible = false
-        scene.overrideMaterial = WIRE_OVER_MAT
-        renderer.render(scene, camera)
-        modelShadow.visible = was
-      }
+      modelShadow.visible = was
     }
     scene.overrideMaterial = null
     if (overridden && key.castShadow) {

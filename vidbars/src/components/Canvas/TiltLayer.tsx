@@ -347,7 +347,7 @@ const frameState = (): TiltFrameState => {
   const ts = useTiltStore.getState()
   const { unitsPerMetre: scales, sizeOf } = useModelScaleStore.getState()
   return {
-    tilt: ts.tilt, spin: ts.spin, shiftX: ts.shiftX, shiftY: ts.shiftY, glide: ts.glide, texture: ts.texture, clay: ts.clay, flat: ts.flat, wire: ts.wire, light: ts.light, turn: ts.turn,
+    tilt: ts.tilt, spin: ts.spin, shiftX: ts.shiftX, shiftY: ts.shiftY, glide: ts.glide, texture: ts.texture, shade: ts.shade, wire: ts.wire, light: ts.light, turn: ts.turn,
     walls: ts.walls, figure: ts.figure, hovered: models.hovered,
     selected: new Set([
       ...useFreeNodeStore.getState().selectedIds.map(id => `node:${id}`),
@@ -383,7 +383,7 @@ function frameSig(st: TiltFrameState, W: number, H: number): string {
   const r = (x: number | undefined) => n(x === undefined ? undefined : x * 64)
   n(W); n(H); n(st.tilt); n(st.spin); n(st.shiftX); n(st.shiftY); r(st.fade)
   r(st.glide?.k); n(st.glide?.x); n(st.glide?.y)
-  b(st.texture); b(st.clay); b(st.flat); b(st.wire); b(st.turn); b(st.walls); b(st.figure); str(st.hovered)
+  b(st.texture); str(String(st.shade)); b(st.wire); b(st.turn); b(st.walls); b(st.figure); str(st.hovered)
   for (const k of Object.keys(st.light).sort()) { str(k); const v = (st.light as unknown as Record<string, unknown>)[k]; if (typeof v === 'number') n(v); else str(String(v)) }
   for (const k of [...st.selected].sort()) str(k)
   n(st.slabs.length)
@@ -2576,8 +2576,7 @@ const TiltedView: React.FC = () => {
   const rootRef = useRef<HTMLDivElement>(null)
   const [band, setBand] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
   const texture = useTiltStore(s => s.texture)
-  const clay = useTiltStore(s => s.clay)
-  const flat = useTiltStore(s => s.flat)
+  const shade = useTiltStore(s => s.shade)
   const wire = useTiltStore(s => s.wire)
   const [lightOpen, setLightOpen] = useState(false)
   const turn = useTiltStore(s => s.turn)
@@ -3362,7 +3361,6 @@ const TiltedView: React.FC = () => {
     fontSize: 11, padding: '3px 8px', cursor: 'pointer',
   })
   const set = useTiltStore.getState()
-  const noSurface = !texture && !clay
 
   return (
     <div
@@ -3389,10 +3387,10 @@ const TiltedView: React.FC = () => {
       >
         <span>Tilted {Math.round(tilt)}° · click to select · drag a box to select many · Alt+drag orbits · Alt+middle pans · F frames</span>
         <span style={{ width: 1, height: 14, background: 'rgba(255,255,255,0.12)' }} />
-        <button style={{ ...btn(texture), opacity: clay ? 0.4 : 1 }} disabled={clay} onClick={() => set.setTexture(!texture)} title="The model's own textures. Off, with Clay off too, leaves an empty wireframe. Clay covers the textures while it is on.">Texture</button>
-        <button style={btn(clay)} onClick={() => set.setClay(!clay)} title="A plain clay surface instead of the textures">Clay</button>
-        <button style={{ ...btn(flat), opacity: noSurface ? 0.4 : 1 }} disabled={noSurface} onClick={() => set.setFlat(!flat)} title="Even, low-contrast light and smooth surfaces">Flat</button>
-        <button style={{ ...btn(wire || noSurface), opacity: noSurface ? 0.4 : 1 }} disabled={noSurface} onClick={() => set.setWire(!wire)} title="A wireframe over the surface. With no surface the wireframe is all there is, so it stays on.">Wireframe</button>
+        <button style={btn(texture)} onClick={() => set.setTexture(!texture)} title="The model's own textures; off is plain grey">Texture</button>
+        <button style={btn(shade === 'flat')} onClick={() => set.setShade(shade === 'flat' ? null : 'flat')} title="Flat shading: every face shows">Flat</button>
+        <button style={btn(shade === 'smooth')} onClick={() => set.setShade(shade === 'smooth' ? null : 'smooth')} title="Smooth shading. With Flat and Smooth both off the model is unshaded: its bare texture, or hollow with Texture off">Smooth</button>
+        <button style={btn(wire)} onClick={() => set.setWire(!wire)} title="The wireframe, over whatever else shows">Wireframe</button>
         <button style={btn(lightOpen)} onClick={() => setLightOpen(o => !o)} title="Move the light, brightness and reflections">Light</button>
         <button style={btn(turn)} onClick={() => set.setTurn(!turn)}>Turn</button>
         <button style={btn(walls)} onClick={() => set.setWalls(!walls)} title="File name and size on a wall behind each model">Labels</button>

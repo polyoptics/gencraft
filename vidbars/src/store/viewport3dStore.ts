@@ -27,6 +27,7 @@ import { persist } from 'zustand/middleware'
 import { createDebouncedIDBStorage } from '../utils/debouncedIDBStorage'
 import type { MediaType } from '../types/bar'
 import { recordHistory } from './historyStore'
+import type { ModelLook } from '../three/modelLook'
 
 export interface Viewport3DCamera {
   theta: number   // azimuth (rad)
@@ -105,9 +106,8 @@ export interface ViewportWindow3D {
   /** Canvas spot to return to on unpin — same meaning as a free node's
    *  `home`. See freeNodeStore for why a pin does not move a thing. */
   home?: { x: number; y: number; width: number; height: number }
-  /** How the model is drawn. Applied as a scene-wide override, so the
-   *  model's own materials are never mutated (instances share them). */
-  viewMode?: 'textured' | 'shaded' | 'wireframe'
+  /** How the model is drawn; undefined means DEFAULT_LOOK. */
+  look?: ModelLook
   /** false ⇒ hide the skinned meshes and show the skeleton instead. */
   showSkin?: boolean
   /** Vertex/triangle readout over the model. */
@@ -151,7 +151,7 @@ interface Viewport3DStore {
                        view: { pan: { x: number; y: number }; zoom: number }) => void
   /** SCREEN-px delta for a pinned window. */
   movePinnedWindow: (id: string, dx: number, dy: number) => void
-  setViewMode: (id: string, mode: 'textured' | 'shaded' | 'wireframe') => void
+  setLook: (id: string, look: ModelLook) => void
   toggleShowSkin: (id: string) => void
   toggleShowStats: (id: string) => void
   /** View-only text zoom for ONE page (itemKey = activeItemKey's
@@ -339,11 +339,11 @@ export const useViewport3DStore = create<Viewport3DStore>()(persist((set, get) =
       } } }
     }),
 
-  setViewMode: (id, viewMode) =>
+  setLook: (id, look) =>
     set(s => {
       const w = s.windows[id]
-      if (!w || w.viewMode === viewMode) return s
-      return { windows: { ...s.windows, [id]: { ...w, viewMode } } }
+      if (!w) return s
+      return { windows: { ...s.windows, [id]: { ...w, look } } }
     }),
 
   toggleShowSkin: (id) =>
@@ -404,9 +404,10 @@ export const useViewport3DStore = create<Viewport3DStore>()(persist((set, get) =
   // v2: activeModelUrl → discriminated activeItem; '3D View' → 'Viewer';
   // camera ownership recorded in cameraUrl.
   // v3: window-wide textScale → per-page textScales + defaultTextScale.
-  version: 3,
+  // v4: pick-one viewMode → independent look toggles.
+  version: 4,
   migrate: (persisted, version) => {
-    type LegacyWin = ViewportWindow3D & { activeModelUrl?: string | null; textScale?: number }
+    type LegacyWin = ViewportWindow3D & { activeModelUrl?: string | null; textScale?: number; viewMode?: string }
     const p = persisted as { windows?: Record<string, LegacyWin> }
     if (version < 2 && p?.windows) {
       for (const w of Object.values(p.windows)) {
@@ -430,6 +431,13 @@ export const useViewport3DStore = create<Viewport3DStore>()(persist((set, get) =
         const k = activeItemKey(w.activeItem)
         if (k && k.startsWith('text:')) w.textScales = { [k]: w.defaultTextScale }
         delete w.textScale
+      }
+    }
+    if (version < 4 && p?.windows) {
+      for (const w of Object.values(p.windows)) {
+        if (w.viewMode === 'shaded') w.look = { texture: false, shade: 'smooth', wire: false }
+        else if (w.viewMode === 'wireframe') w.look = { texture: false, shade: null, wire: true }
+        delete w.viewMode
       }
     }
     return p as never
