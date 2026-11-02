@@ -7,8 +7,8 @@
 //   - where a dragged card would land (the insertion line / bar),
 //   - which pictures the run is making right now,
 //   - the live preview — "this is what the run will make" — always at the
-//     top of the results, its output decks below it; an FX button on
-//     it, dimmed, shows the input picture it is made from instead.
+//     top of the results, its output decks below it; FX off (the
+//     results header) shows the input picture it is made from instead.
 // They are portalled into the world layer the tiles themselves live in (the
 // rail tile's parent: canvas units, tiles at left = x), as a zero-size,
 // pointer-transparent host with no z-index of its own, so each mark takes
@@ -119,8 +119,7 @@ export const RailOverlay: React.FC<{
 
   // ── The live preview: always at the top of the results, the run's
   // output decks cascading under it from just over its bottom edge
-  // (utils/rail). FX flips it to the input picture it is made from and
-  // back. ──
+  // (utils/rail). FX off flips it to the input picture it is made from. ──
   let ghostCard: React.ReactNode = null
   if (ghost && ghost.canvas.width > 0 && ghost.canvas.height > 0) {
     const tray = L.tray
@@ -143,23 +142,6 @@ export const RailOverlay: React.FC<{
               // it. Dimmed only while it re-renders.
               objectFit: 'cover', opacity: ghost.stale ? 0.55 : 1, transition: 'opacity 160ms',
             }} />}
-        {ghost.before && (
-          <button
-            type="button" data-rail-fx={showBefore ? 'off' : 'on'}
-            title="Effects: lit shows the result, dimmed the picture before them"
-            onPointerDown={e => { if (e.button === 0) e.stopPropagation() }}
-            onDoubleClick={e => e.stopPropagation()}
-            onClick={e => { e.stopPropagation(); useRailUiStore.getState().toggleFx(railId) }}
-            style={{
-              // Lower left, clear of the result decks over the bottom edge.
-              position: 'absolute', left: 4 * u, bottom: (RAIL_GEOM.trayOverlap + 3) * u, pointerEvents: 'auto', cursor: 'pointer',
-              padding: `${1.5 * u}px ${6 * u}px`, borderRadius: 6 * u,
-              border: `${u}px solid ${showBefore ? 'rgba(255,255,255,0.18)' : 'rgba(140,190,255,0.7)'}`,
-              background: showBefore ? 'rgba(12,13,20,0.7)' : 'rgba(46,72,120,0.92)', color: showBefore ? 'rgba(255,255,255,0.45)' : '#cfe2ff',
-              fontSize: 9 * u, fontWeight: 700, lineHeight: 1.1, fontFamily: 'inherit',
-            }}
-          >FX</button>
-        )}
       </div>
     )
   }
