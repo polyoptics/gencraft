@@ -9,12 +9,14 @@
 // away, the Viewer shows its own item again.
 
 import type { FreeNodeData } from '../store/freeNodeStore'
+import { useCanvasStore } from '../store/canvasStore'
 import { useFreeNodeStore } from '../store/freeNodeStore'
 import { useRailUiStore } from '../store/railUiStore'
-import { useViewport3DStore, type ViewportWindow3D } from '../store/viewport3dStore'
+import { useUndoCoordinator } from '../store/undoCoordinator'
+import { useViewport3DStore, VIEWPORT3D_MIN_H, VIEWPORT3D_MIN_W, type ViewportWindow3D } from '../store/viewport3dStore'
 import { RAIL_GEOM, isRail } from './rail'
 import { computeCarriedEntities } from '../hooks/useDockedContent'
-import { DOCK_TOLERANCE, magnetRadiusForZoom, viewportVisualRect } from './viewportDocking'
+import { DOCK_TOLERANCE, VIEWPORT_HEADER_SCREEN_H, magnetRadiusForZoom, viewportVisualRect } from './viewportDocking'
 
 type Nodes = Record<string, FreeNodeData>
 type Windows = Record<string, ViewportWindow3D>
@@ -73,6 +75,37 @@ export function snapRailToViewer(railId: string, zoom: number): boolean {
   if (!best || Math.abs(best.x - r.x) < 1e-3) return !!best
   fs.updateFreeNode(railId, { x: best.x })
   return true
+}
+
+/** A strip's Viewer button. Its Viewer, if it has one, comes forward with
+ *  this strip showing; otherwise a new one docks to its right end, as tall
+ *  as the strip. Either way it is selected, and the view glides to it unless
+ *  it is all on screen. */
+export function openRailViewer(railId: string): void {
+  const rail = useFreeNodeStore.getState().nodes[railId]
+  if (!isRail(rail) || rail.pin) return
+  const zoom = useCanvasStore.getState().zoom
+  const v3 = useViewport3DStore.getState()
+  let id = [...railViewerDocks(useFreeNodeStore.getState().nodes, v3.windows, zoom)]
+    .find(([, docked]) => docked.includes(railId))?.[0]
+  if (id) {
+    v3.raiseWindow(id)
+  } else {
+    useUndoCoordinator.getState().checkpoint()
+    const header = VIEWPORT_HEADER_SCREEN_H / Math.max(0.01, zoom)
+    const height = Math.max(VIEWPORT3D_MIN_H, rail.height - header)
+    id = v3.addWindow(rail.x + rail.width, rail.y + header)
+    v3.updateWindow(id, { width: Math.max(VIEWPORT3D_MIN_W, height * 4 / 3), height })
+  }
+  touchRail(railId)
+  const shown = useViewport3DStore.getState()
+  shown.setViewerSelection([id])
+  const vr = viewportVisualRect(shown.windows[id], zoom)
+  const { pan } = useCanvasStore.getState()
+  const left = pan.x + vr.x * zoom, top = pan.y + vr.y * zoom
+  if (left < 0 || top < 0 || left + vr.width * zoom > window.innerWidth || top + vr.height * zoom > window.innerHeight) {
+    useCanvasStore.getState().jumpToPoint(vr.x + vr.width / 2, vr.y + vr.height / 2)
+  }
 }
 
 /** The strip `railId` was just used: it becomes the active one. */

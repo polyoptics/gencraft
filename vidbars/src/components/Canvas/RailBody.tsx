@@ -38,7 +38,7 @@ import { RailOverlay } from './rail/RailOverlay'
 import { RailRunArrow } from './rail/RailRunArrow'
 import { RailResizeGrip } from './rail/RailResizeGrip'
 import { buildRailView, railNodesOf } from './rail/railView'
-import { railOnViewer, touchRail } from '../../utils/railViewer'
+import { openRailViewer, railOnViewer, touchRail } from '../../utils/railViewer'
 import { useViewport3DStore } from '../../store/viewport3dStore'
 import { RAIL_COLORS as C, checkpoint, mixHex, pressButton, railShadow, stop, stopPrimary } from './rail/railStyle'
 import { RenameInput } from '../UI/RenameInput'
@@ -379,6 +379,7 @@ export const RailBody: React.FC<{
         lastUrl={lastResult?.imageUrl ?? null}
         hovered={hovered}
         hasBefore={!!before}
+        pinned={!!rail.pin}
       />
 
       {/* ── Extend the rail at either end. ── */}
@@ -743,8 +744,33 @@ const FxToggle: React.FC<{ railId: string; u: number }> = ({ railId, u }) => {
   )
 }
 
-/** The tray's header: "Results", how many, FX, a drag-out grip for the
- *  face-up result (Shift: all of them), and Clear. */
+/** Opens the strip's Viewer, or brings it forward (openRailViewer). */
+const ViewerButton: React.FC<{ railId: string; u: number }> = ({ railId, u }) => (
+  <button
+    type="button"
+    data-rail-open-viewer
+    title="Show this strip's result in a Viewer"
+    onPointerDown={stopPrimary}
+    onMouseDown={pressButton}
+    onDoubleClick={stop}
+    onClick={e => { e.stopPropagation(); openRailViewer(railId) }}
+    style={{
+      flex: '0 0 auto', width: 20 * u, height: 18 * u, padding: 0, margin: 0, borderRadius: 5 * u,
+      border: `${u}px solid rgba(255,255,255,0.2)`, background: 'transparent',
+      color: 'rgba(255,255,255,0.78)', cursor: 'pointer',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+    }}
+  >
+    <svg width={13 * u} height={13 * u} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <rect x="2.5" y="3.5" width="15" height="10.5" rx="1.5" />
+      <path d="M8.5 6.5 L12.5 8.75 L8.5 11 Z" fill="currentColor" stroke="none" />
+      <path d="M6.5 17 H13.5" />
+    </svg>
+  </button>
+)
+
+/** The tray's header: "Results", how many, FX, the Viewer button, a drag-out
+ *  grip for the face-up result (Shift: all of them), and Clear. */
 const TrayHead: React.FC<{
   railId: string
   rect: Local
@@ -753,7 +779,8 @@ const TrayHead: React.FC<{
   lastUrl: string | null
   hovered: boolean
   hasBefore: boolean
-}> = ({ railId, rect, u, count, lastUrl, hovered, hasBefore }) => (
+  pinned: boolean
+}> = ({ railId, rect, u, count, lastUrl, hovered, hasBefore, pinned }) => (
   <div data-rail-tray-head style={{
     ...chip(rect, u, mixHex(C.orange, C.ground, 0.18)),
     boxShadow: `inset 0 0 0 ${u}px rgba(216,90,48,0.3)`,
@@ -762,6 +789,7 @@ const TrayHead: React.FC<{
     <Badge u={u}>{count}</Badge>
     <span style={{ flex: '1 1 0', alignSelf: 'stretch' }} />
     {hasBefore && <FxToggle railId={railId} u={u} />}
+    {!pinned && <ViewerButton railId={railId} u={u} />}
     <DragOutGrip
       url={lastUrl}
       getUrls={({ all }) => (all ? trayUrls(railId) : [])}

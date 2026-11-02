@@ -134,6 +134,8 @@ interface Viewport3DStore {
   resizeWindow: (id: string, dw: number, dh: number) => void
   updateWindow: (id: string, patch: Partial<ViewportWindow3D>) => void
   removeWindow: (id: string) => void
+  /** Draw this window over the other Viewers: they paint in key order. */
+  raiseWindow: (id: string) => void
   setViewerSelection: (ids: string[]) => void
   toggleViewerSelection: (id: string) => void
   clearViewerSelection: () => void
@@ -211,6 +213,12 @@ export const useViewport3DStore = create<Viewport3DStore>()(persist((set, get) =
       const w = s.windows[id]
       if (!w) return s
       return { windows: { ...s.windows, [id]: { ...w, ...patch } } }
+    }),
+
+  raiseWindow: (id) =>
+    set(s => {
+      const { [id]: w, ...rest } = s.windows
+      return w ? { windows: { ...rest, [id]: w } } : s
     }),
 
   removeWindow: (id) =>

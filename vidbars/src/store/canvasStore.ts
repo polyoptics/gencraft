@@ -225,6 +225,8 @@ interface CanvasStore {
   /** Pan (keeping current zoom) so the given group is centered in the viewport. */
   jumpToGroup: (groupId: string) => void
   jumpToFreeNode: (nodeId: string) => void
+  /** Glide so this canvas point lands in the middle of the view. */
+  jumpToPoint: (x: number, y: number) => void
   // ── Annotation / draw mode ──
   setDrawSurface: (s: DrawSurface | null) => void
   setDrawTool: (t: 'pen' | 'eraser') => void
@@ -410,6 +412,14 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
     animatePanTo({
       x: vpW / 2 - (n.x + n.width / 2) * z,
       y: vpH / 2 - (n.y + n.height / 2) * z,
+    }, set, get)
+  },
+
+  jumpToPoint: (x, y) => {
+    const z = get().zoom
+    animatePanTo({
+      x: window.innerWidth / 2 - x * z,
+      y: (window.innerHeight - APP_TOOLBAR_H) / 2 - y * z,
     }, set, get)
   },
 }), {
