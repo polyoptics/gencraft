@@ -81,51 +81,57 @@ export function snapRailToViewer(railId: string, zoom: number): boolean {
   return true
 }
 
-const REVEAL_SETTLE_FRAMES = 8
-const REVEAL_WAIT_MS = 1500
-const REVEAL_GLIDE_MS = 320
-/** Tilted, only the screen knows where a Viewer is: it stands up and leans.
- *  Wait for it to come to rest, then, unless it is all on screen, slide the
- *  camera by what it is off the middle (the camera shift moves everything
- *  alike on screen, px for px). Standing depends on where it is, so look
- *  again after each slide. */
-function revealTilted(id: string, passes = 3, sliding = false): void {
+/** How long a Viewer gets to stand up before "all on screen" is believed. */
+const REVEAL_STAND_MS = 500
+const REVEAL_MAX_MS = 2500
+/** The slide's easing: the time it takes to close most of the distance. */
+const REVEAL_EASE_MS = 140
+/** Tilted, only the screen knows where a Viewer is: it stands up and leans,
+ *  and how far depends on where it is. So the slide starts at once and each
+ *  frame eases the camera toward where the Viewer is drawn now, ending on
+ *  where it comes to rest (the camera shift moves everything alike on
+ *  screen, px for px). All on screen once standing, nothing moves. */
+function revealTilted(id: string): void {
   const start = performance.now()
-  let last: DOMRect | null = null, still = 0
-  const watch = () => {
-    if (!isTilted(useTiltStore.getState())) return
-    const r = document.querySelector(`[data-viewport3d="${id}"]`)?.getBoundingClientRect() ?? null
-    still = r && last && Math.abs(r.left - last.left) + Math.abs(r.top - last.top) + Math.abs(r.width - last.width) + Math.abs(r.height - last.height) < 0.5 ? still + 1 : 0
-    last = r
-    const waited = performance.now() - start
-    if (still < REVEAL_SETTLE_FRAMES && waited < REVEAL_WAIT_MS) { requestAnimationFrame(watch); return }
+  let last = start, sliding = false, jumped = false
+  const step = () => {
+    const now = performance.now()
+    const t = now - start, dt = now - last
+    last = now
+    if (!isTilted(useTiltStore.getState()) || t > REVEAL_MAX_MS) return
+    const r = document.querySelector(`[data-viewport3d="${id}"]`)?.getBoundingClientRect()
     if (!r) {
-      // Not drawn at all: too far off to measure. Bring it near, then look.
+      // Not drawn at all: too far off to measure. Bring it near first.
       const w = useViewport3DStore.getState().windows[id]
-      if (!w || passes <= 0) return
-      const vr = viewportVisualRect(w, useCanvasStore.getState().zoom)
-      useCanvasStore.getState().jumpToPoint(vr.x + vr.width / 2, vr.y + vr.height / 2)
-      window.setTimeout(() => revealTilted(id, passes - 1, true), REVEAL_GLIDE_MS)
+      if (!w) return
+      if (!jumped) {
+        jumped = sliding = true
+        const vr = viewportVisualRect(w, useCanvasStore.getState().zoom)
+        useCanvasStore.getState().jumpToPoint(vr.x + vr.width / 2, vr.y + vr.height / 2)
+      }
+      requestAnimationFrame(step)
       return
     }
-    const top = APP_BAR_H
-    // All on screen at the first look: leave it. Once sliding, finish the job.
-    if (!sliding && r.left >= 0 && r.top >= top && r.right <= window.innerWidth && r.bottom <= window.innerHeight) return
-    if (passes <= 0) return
-    const dx = window.innerWidth / 2 - (r.left + r.right) / 2
-    const dy = (top + window.innerHeight) / 2 - (r.top + r.bottom) / 2
-    if (Math.abs(dx) + Math.abs(dy) < 4) return
-    const { shiftX, shiftY } = useTiltStore.getState()
-    const from = performance.now()
-    const glide = () => {
-      const u = Math.min(1, (performance.now() - from) / REVEAL_GLIDE_MS)
-      const k = u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2
-      useTiltStore.getState().setShift(shiftX + dx * k, shiftY + dy * k)
-      if (u < 1) requestAnimationFrame(glide); else revealTilted(id, passes - 1, true)
+    // Just mounted, the 3D view has not placed it yet: a sliver far off, not
+    // a place to go to.
+    if (r.width < 40 || r.height < 40) { requestAnimationFrame(step); return }
+    if (!sliding) {
+      const onScreen = r.left >= 0 && r.top >= APP_BAR_H && r.right <= window.innerWidth && r.bottom <= window.innerHeight
+      if (onScreen && t > REVEAL_STAND_MS) return
+      sliding = !onScreen
     }
-    requestAnimationFrame(glide)
+    if (sliding) {
+      const dx = window.innerWidth / 2 - (r.left + r.right) / 2
+      const dy = (APP_BAR_H + window.innerHeight) / 2 - (r.top + r.bottom) / 2
+      // Close enough, and it has had its time to stand: done.
+      if (Math.abs(dx) + Math.abs(dy) < 2 && t > REVEAL_STAND_MS) return
+      const k = 1 - Math.exp(-dt / REVEAL_EASE_MS)
+      const { shiftX, shiftY } = useTiltStore.getState()
+      useTiltStore.getState().setShift(shiftX + dx * k, shiftY + dy * k)
+    }
+    requestAnimationFrame(step)
   }
-  requestAnimationFrame(watch)
+  requestAnimationFrame(step)
 }
 
 /** A strip's Viewer button. Its Viewer, if it has one, comes forward with

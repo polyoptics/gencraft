@@ -445,9 +445,10 @@ const chip = (rect: Local, u: number, background: string): React.CSSProperties =
 })
 
 /** A small round count. */
-const Badge: React.FC<{ u: number; title?: string; children: React.ReactNode }> = ({ u, title, children }) => (
+const Badge: React.FC<{ u: number; title?: string; fixedWidth?: number; children: React.ReactNode }> = ({ u, title, fixedWidth, children }) => (
   <span title={title} style={{
-    flex: '0 0 auto', minWidth: 17 * u, height: 17 * u, padding: `0 ${4 * u}px`, boxSizing: 'border-box',
+    flex: '0 0 auto', height: 17 * u, boxSizing: 'border-box',
+    ...(fixedWidth ? { width: fixedWidth * u } : { minWidth: 17 * u, padding: `0 ${4 * u}px` }),
     borderRadius: 8.5 * u, background: 'rgba(255,255,255,0.12)',
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
     fontSize: 10 * u, fontWeight: 700, lineHeight: 1, fontVariantNumeric: 'tabular-nums',
@@ -735,7 +736,7 @@ const FxToggle: React.FC<{ railId: string; u: number }> = ({ railId, u }) => {
       onDoubleClick={stop}
       onClick={e => { e.stopPropagation(); useRailUiStore.getState().toggleFx(railId) }}
       style={{
-        flex: '0 0 auto', height: 18 * u, padding: `0 ${4 * u}px`, margin: 0, borderRadius: 5 * u,
+        flex: '0 0 auto', height: 18 * u, padding: `0 ${3 * u}px`, margin: 0, borderRadius: 5 * u,
         border: `${u}px solid ${off ? 'rgba(255,255,255,0.18)' : 'rgba(140,190,255,0.7)'}`,
         background: off ? 'transparent' : 'rgba(46,72,120,0.92)', color: off ? 'rgba(255,255,255,0.45)' : '#cfe2ff',
         fontFamily: 'inherit', fontSize: 10 * u, fontWeight: 700, lineHeight: 1, cursor: 'pointer',
@@ -786,7 +787,8 @@ const TrayHead: React.FC<{
     boxShadow: `inset 0 0 0 ${u}px rgba(216,90,48,0.3)`,
   }}>
     <span style={{ flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 13 * u, fontWeight: 600, textShadow: railShadow(u) }}>Results</span>
-    <Badge u={u}>{count}</Badge>
+    {/* Fixed, room for three digits: what follows must not move as it counts. */}
+    <Badge u={u} fixedWidth={22}>{count}</Badge>
     {hasBefore && <FxToggle railId={railId} u={u} />}
     {!pinned && <ViewerButton railId={railId} u={u} />}
     {/* What comes and goes (the grip on hover, Take off with results) sits
@@ -813,7 +815,7 @@ const TrayHead: React.FC<{
           useFreeNodeStore.getState().clearRailTray(railId)
         }}
         style={{
-          flex: '0 0 auto', height: 18 * u, padding: `0 ${4 * u}px`, margin: 0, borderRadius: 5 * u,
+          flex: '0 0 auto', height: 18 * u, padding: `0 ${3 * u}px`, margin: 0, borderRadius: 5 * u,
           border: `${u}px solid rgba(255,255,255,0.2)`, background: 'transparent',
           color: 'rgba(255,255,255,0.78)', fontFamily: 'inherit', fontSize: 10 * u, fontWeight: 600, lineHeight: 1,
           cursor: 'pointer',
