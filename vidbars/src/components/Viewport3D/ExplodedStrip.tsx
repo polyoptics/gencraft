@@ -177,6 +177,10 @@ export const useStripLayers = create<{ on: boolean; toggle: () => void }>((set, 
   },
 }))
 
+/** Where each Viewer's picture sits, canvas units from the window's corner,
+ *  read off the flat view: the stack hangs exactly behind it. */
+export const pictureAreas = new Map<string, { x: number; y: number; width: number; height: number }>()
+
 /** Strips whose result has left their Viewer's face for the stack behind it. */
 export const useLayersOut = create<Record<string, boolean>>(() => ({}))
 
@@ -336,7 +340,8 @@ export const StripLayersStage: React.FC = () => {
         const railId = viewerRail(docked, active)
         const w = windows[winId]
         if (!railId || !w) return null
-        return <StripLayers key={winId} railId={railId} rect={{ x: pan.x + w.x * zoom, y: pan.y + w.y * zoom, width: w.width * zoom, height: w.height * zoom }} />
+        const a = pictureAreas.get(winId) ?? { x: 0, y: 0, width: w.width, height: w.height }
+        return <StripLayers key={winId} railId={railId} rect={{ x: pan.x + (w.x + a.x) * zoom, y: pan.y + (w.y + a.y) * zoom, width: a.width * zoom, height: a.height * zoom }} />
       })}
       {swung && <FilmMixerLayers />}
     </div>

@@ -6,7 +6,7 @@
 // the image toolbar, and on the strip's preview) shows the picture before the
 // effects instead.
 
-import React, { useEffect, useRef } from 'react'
+import React, { useEffect, useLayoutEffect, useRef } from 'react'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useRailRunStore } from '../../store/railRunStore'
@@ -18,7 +18,8 @@ import { railBeforePicture } from '../../utils/fx/railChain'
 import { railFullFrame } from '../../utils/fx/railFullFrame'
 import { CounterScaled } from './ContentViews'
 import { ImageStudio, tbBtn } from './ImageStudio'
-import { useLayersOut, useStripLayers } from './ExplodedStrip'
+import { pictureAreas, useLayersOut, useStripLayers } from './ExplodedStrip'
+import { isTilted, useTiltStore } from '../../store/tiltStore'
 
 const stop = (e: React.SyntheticEvent) => e.stopPropagation()
 
@@ -42,6 +43,26 @@ export const RailViewerOverlay: React.FC<{ windowId: string; fontSize: number }>
     frame?.toggleAttribute('data-layers-out', out)
     return () => frame?.removeAttribute('data-layers-out')
   }, [out])
+  // Where the picture sits, for the stack behind it. Read while flat: tilted,
+  // the DOM's rects are the tilted ones.
+  useLayoutEffect(() => {
+    const measure = () => {
+      if (isTilted(useTiltStore.getState())) return
+      const area = root.current?.querySelector('canvas, img')?.parentElement
+      const host = document.querySelector('[data-tilt-layers]')?.parentElement
+      const w = useViewport3DStore.getState().windows[windowId]
+      if (!area || !host || !w) return
+      const r = area.getBoundingClientRect(), h = host.getBoundingClientRect()
+      const { pan, zoom } = useCanvasStore.getState()
+      pictureAreas.set(windowId, { x: (r.x - h.x - pan.x) / zoom - w.x, y: (r.y - h.y - pan.y) / zoom - w.y, width: r.width / zoom, height: r.height / zoom })
+    }
+    measure()
+    const el = root.current
+    if (!el) return
+    const watch = new ResizeObserver(measure)
+    watch.observe(el)
+    return () => watch.disconnect()
+  })
   if (!railId) return null
   const rail = nodes[railId]
   const before = railBeforePicture(rail, railMembers(nodes).get(railId))
