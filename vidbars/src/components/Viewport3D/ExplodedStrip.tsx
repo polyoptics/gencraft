@@ -234,6 +234,8 @@ export const ExplodedStrip: React.FC<{ railId: string; onClose: () => void }> = 
 
   // A press on a pane: dragged, it moves in depth; let go in place, a solo.
   const startPane = (e: React.PointerEvent, id: string) => {
+    // Alt is the camera modifier: with it held, a pane is just more view.
+    if (e.altKey) { startOrbit(e); return }
     e.stopPropagation()
     const sx = e.clientX, sy = e.clientY
     const ry = yaw * Math.PI / 180, rp = pitch * Math.PI / 180
@@ -315,9 +317,10 @@ export const ExplodedStrip: React.FC<{ railId: string; onClose: () => void }> = 
                   <Canvas canvas={pane.boosted} opacity={flat ? 0 : dim ? 0.1 : 1} />
                 </>}
                 {!flat && (
-                  <div style={{ ...label, opacity: 1 }}>
+                  <div style={{ ...label, right: 0, marginBottom: 0, padding: '5px 8px', borderRadius: '7px 7px 0 0', background: `color-mix(in srgb, ${def.color} 28%, #16171f)`, outline: `1.5px solid ${soloed === id ? '#fff' : dim ? 'rgba(255,255,255,.18)' : def.color}`, outlineOffset: -1 }}>
                     <span style={{ color: def.color }}>{def.glyph}</span>
                     <span>{def.label}</span>
+                    <span style={{ flex: 1 }} />
                     <button
                       data-pane-fx={it.off ? 'off' : 'on'}
                       title="Switch this card on or off"
