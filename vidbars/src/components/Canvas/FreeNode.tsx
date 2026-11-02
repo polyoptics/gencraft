@@ -26,6 +26,7 @@ import { tileBrowseItem, isDockableTile } from '../../utils/contentTraversal'
 import { snapPanelToPanel, isPanelType } from '../../utils/componentLinks'
 import { panelContentScale, clampUiScale } from '../UI/PanelSurface'
 import { CardRolodex } from '../Rolodex/CardRolodex'
+import { FilmMixerBody } from '../FilmMixer/FilmMixerBody'
 import { MediaPool } from '../Pool/MediaPool'
 import { PromptPad } from '../Prompt/PromptPad'
 import { HistoryPanel } from '../History/HistoryPanel'
@@ -1901,6 +1902,11 @@ const FreeNodeBody: React.FC<{
       <CanvasUnits w={bodyW} h={bodyH} r={bodyR}><div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
         <PromptPad nodeId={id} />
       </div></CanvasUnits>
+    )
+  }
+  if (node.type === 'filmMixer') {
+    return (
+      <CanvasUnits w={bodyW} h={bodyH} r={bodyR}><FilmMixerBody pinned={!!node.pin} bodyW={bodyW} bodyH={bodyH} /></CanvasUnits>
     )
   }
   if (node.type === 'history') {

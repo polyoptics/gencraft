@@ -20,6 +20,7 @@ export type FreeNodeType =
   | 'effect'   // an effect card — one image operator on an effect strip (utils/fx)
   | 'rail'     // a loop strip — a rail of slots that runs a workflow (utils/rail)
   | 'cabinet'  // a project cabinet — drawers that hold cards (utils/cabinet)
+  | 'filmMixer' // the film's look mixer (components/FilmMixer)
 
 export interface TextStyle {
   fontSize: number       // in px (base, before zoom scaling)
@@ -277,7 +278,7 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
     const labels: Record<FreeNodeType, string> = {
       image: 'Image', note: 'Note', text: 'Text', video: 'Video', audio: 'Audio', model: 'Model',
       list: 'List', pool: 'Media Pool', prompt: 'Prompt Pad', history: 'History',
-      effect: 'Effect', rail: 'Loop strip', cabinet: 'Project cabinet',
+      effect: 'Effect', rail: 'Loop strip', cabinet: 'Project cabinet', filmMixer: 'Film Look',
     }
     // COMPONENTS start twice as big per side — four times the area. They are
     // tools, not tiles: a Media Pool wants a readable grid, a Prompt Pad
@@ -289,6 +290,7 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
       list: 880, pool: 840, prompt: 720, history: 800, effect: 252,
       rail: 360,   // a placeholder: the rail sizes itself to its layout
       cabinet: 280,
+      filmMixer: 860,
     }
     const widths: Partial<Record<FreeNodeType, number>> = {
       audio: 260,
@@ -302,6 +304,8 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
       // whole tile is the card's face: name, then a slider per value.
       effect: 180,
       cabinet: 320,
+      // Under 900 the mixer's page stacks into one long column.
+      filmMixer: 1240,
     }
     const node: FreeNodeData = {
       id, x, y,

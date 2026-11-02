@@ -38,7 +38,6 @@ import { copyEffect, pasteEffect, selectedEffect } from './utils/fx/effectClipbo
 import { currentZone } from './store/zoomZonesStore'
 import { ZoomZoneBar, ZoomZoneHeaderButton } from './components/UI/ZoomZoneBar'
 import { ConsoleToggleButton } from './components/UI/ConsoleToggleButton'
-import { FilmMixerDock, FilmMixerToggleButton } from './components/FilmMixer/FilmMixerDock'
 import { CabinetToggleButton, PickModeButton } from './components/UI/CabinetToggleButton'
 
 /** Hosts useFxStrips, which subscribes to every tile, Viewer and zoom
@@ -787,7 +786,6 @@ export default function App() {
         <span style={{ color: 'rgba(255,255,255,0.15)', fontSize: 10 }}>
           drag header · resize edges · dbl-click empty space to collapse all · Del to delete selected
         </span>
-        <FilmMixerToggleButton />
         <DynamicRowToggle />
         <ProjectBackupMenu />
         <TemplateMenu />
@@ -799,21 +797,17 @@ export default function App() {
       <TopIconBar />
 
       {/* ── Infinite Canvas ── */}
-      <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
-        <div data-zoom-bar-host style={{ flex: 1, minWidth: 0, overflow: 'hidden', position: 'relative' }}>
-          <InfiniteCanvas initialCenterW={520} initialCenterH={310}>
-            <LayerContent />
-          </InfiniteCanvas>
-          {/* Layer overlay renders outside the canvas transform (screen-space headers/cards) */}
-          {/* Tilts with the world layers when the canvas is tilted */}
-          <TiltStage><LayerOverlay /></TiltStage>
-          {/* Tilted view: pan/zoom on the plane + model cards standing up */}
-          <TiltLayer />
-          {/* Where Cards / Blocks / Boards begin and end — drag to retune */}
-          <ZoomZoneBar />
-        </div>
-        {/* The look mixer, beside the canvas */}
-        <FilmMixerDock />
+      <div data-zoom-bar-host style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
+        <InfiniteCanvas initialCenterW={520} initialCenterH={310}>
+          <LayerContent />
+        </InfiniteCanvas>
+        {/* Layer overlay renders outside the canvas transform (screen-space headers/cards) */}
+        {/* Tilts with the world layers when the canvas is tilted */}
+        <TiltStage><LayerOverlay /></TiltStage>
+        {/* Tilted view: pan/zoom on the plane + model cards standing up */}
+        <TiltLayer />
+        {/* Where Cards / Blocks / Boards begin and end — drag to retune */}
+        <ZoomZoneBar />
       </div>
 
       {/* Deck browser tray + link-drag overlay */}

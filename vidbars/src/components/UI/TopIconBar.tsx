@@ -29,6 +29,7 @@ import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { EffectPalette } from './EffectPalette'
 import { useZoomZone } from '../../store/zoomZonesStore'
 import { useCabinetUi } from '../../utils/cabinet'
+import { openFilmMixer } from '../FilmMixer/FilmMixerBody'
 
 /** Tile edge in px. A shade over 1cm on a typical desktop monitor. */
 const TILE = 44
@@ -91,6 +92,15 @@ const IcHistory: React.FC<SvgProps> = ({ size }) => (
     <path d="M3.6 12a8.4 8.4 0 1 0 2.6-6.1" stroke={S} />
     <path d="M12 7.5V12l3 1.8" stroke={S} />
     <path d="M3.2 4v4.2h4.2" stroke={A.coral} />
+  </svg>
+)
+
+/** Film Look — a strip of film. Accent: the frame with a look on it. */
+const IcFilm: React.FC<SvgProps> = ({ size }) => (
+  <svg {...svgBase(size)}>
+    <rect x="3" y="4" width="18" height="16" rx="2" stroke={S} />
+    <path d="M7 4v16M17 4v16M3 8.5h4M3 12h4M3 15.5h4M17 8.5h4M17 12h4M17 15.5h4" stroke={S} strokeWidth="1.4" />
+    <rect x="9.5" y="8.5" width="5" height="7" rx="0.8" fill={A.yellow} />
   </svg>
 )
 
@@ -304,6 +314,11 @@ export const TopIconBar: React.FC = () => {
         Icon={IcBrowser}
         title="Card Browser — leaf through every card in the project"
         onClick={() => addBrowserNode()}
+      />
+      <IconButton
+        Icon={IcFilm}
+        title="Film Look — every shot of the film and its look"
+        onClick={openFilmMixer}
       />
       {cabinetsOn && (
         <IconButton
