@@ -1,7 +1,8 @@
 // cabinetPick.ts — Pick mode: sorting through things on the table by hand.
 // Clicking and dragging are as ever, on or off (selecting, docking on a strip,
 // decks, drawers). While it is on, a card or tile flicked and let go on the table
-// also keeps its momentum, slides to a stop and knocks what it hits.
+// also keeps its momentum and slides to a stop. It bumps what it hits, never
+// sliding over it, and snaps onto a Viewer's magnet it reaches.
 //
 // A small simulation on the canvas plane, in canvas units, so it behaves the
 // same flat and tilted. It only ever moves things: nothing is lost by a flick,
@@ -12,6 +13,10 @@ import { useBoardsStore } from '../store/boardsStore'
 import { useCanvasStore } from '../store/canvasStore'
 import { useFreeNodeStore } from '../store/freeNodeStore'
 import { canStowTile, canvasPointAt, stowCards, stowTiles, type DrawerRef } from './cabinet'
+import { useViewport3DStore } from '../store/viewport3dStore'
+import { isDockableTile, tileBrowseItem } from './contentTraversal'
+import { dockSlidingGroup, viewportWindowRects } from './deckDockDrag'
+import { findMagnetCandidate, magnetRadiusForZoom } from './viewportDocking'
 
 const KEY = 'vidbars.pickMode'
 function readOn(): boolean {
@@ -32,8 +37,15 @@ const FRICTION = 0.93
 const STOP_SPEED = 25
 /** A release below this just lands, and hits nothing: how piles get made. */
 const THROW_SPEED = 220
-/** How much of a hit goes into what it hits. */
-const KNOCK = 0.7
+/** How much speed two cards keep between them when they hit. */
+const BOUNCE = 0.7
+/** Canvas units two things bumping stop apart: clear of what makes cards a deck
+ *  (their ±16 cluster rect and TOUCH_TOLERANCE) and a tile a neighbour. */
+const BUMP_GAP = 52
+/** The furthest a sliding card goes between checks, on-screen px. */
+const STEP_PX = 10
+/** How far a card slides before a magnet can take it, on-screen px. */
+const MAGNET_AFTER_PX = 40
 /** The hardest throw, on-screen px per second (÷ zoom). */
 const MAX_SPEED = 2600
 
@@ -43,8 +55,8 @@ interface Body {
   x: number; y: number; w: number; h: number
   vx: number; vy: number
   moved: boolean
-  /** Who it is touching: a hit passes on once, when they first touch. */
-  touching: Set<Body>
+  /** How far it has slid since let go, canvas units. */
+  slid: number
 }
 
 let bodies: Body[] = []
@@ -61,7 +73,7 @@ function tableBodies(): Body[] {
   for (const n of Object.values(fns.nodes)) {
     if (!canStowTile(n) || (n.tileDeck && n.tileDeck.anchor !== n.id)) continue
     if (document.querySelector(`[data-freenode][data-id="${n.id}"]`)) {
-      out.push({ kind: 'tile', id: n.id, x: n.x, y: n.y, w: n.width, h: n.height, vx: 0, vy: 0, moved: false, touching: new Set() })
+      out.push({ kind: 'tile', id: n.id, x: n.x, y: n.y, w: n.width, h: n.height, vx: 0, vy: 0, moved: false, slid: 0 })
     }
   }
   for (const g of useBoardsStore.getState().groups) {
@@ -80,7 +92,7 @@ function tableBodies(): Body[] {
     out.push({
       kind: 'card', id: g.id,
       x: (left - pan.x) / zoom, y: (top - pan.y) / zoom, w: el.offsetWidth / zoom, h: el.offsetHeight / zoom,
-      vx: 0, vy: 0, moved: false, touching: new Set(),
+      vx: 0, vy: 0, moved: false, slid: 0,
     })
   }
   return out
@@ -139,45 +151,79 @@ function bounceOffView(b: Body) {
   if (dx || dy) moveBody(b, dx, dy)
 }
 
-const overlap = (a: Body, b: Body) =>
-  a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+/** A card reaching a Viewer's magnet snaps onto it, as let go there by hand. */
+function magnetIfNear(b: Body): boolean {
+  // Not till it has gone a little way: thrown off a Viewer, it is leaving.
+  if (b.slid * useCanvasStore.getState().zoom < MAGNET_AFTER_PX) return false
+  let docked = false
+  if (b.kind === 'card') {
+    const groups = useBoardsStore.getState().groups
+    docked = dockSlidingGroup(b.id, groups
+      .filter(g => g.id === b.id || (g.deckAnchorId === b.id && g.deckState && g.deckState !== 'open'))
+      .map(g => g.id))
+  } else {
+    const fns = useFreeNodeStore.getState(), n = fns.nodes[b.id]
+    const zoom = useCanvasStore.getState().zoom
+    const wins = viewportWindowRects()
+    const cand = n && isDockableTile(n) && wins.length > 0 ? findMagnetCandidate(n, wins, magnetRadiusForZoom(zoom)) : null
+    if (n && cand) {
+      fns.moveFreeNode(b.id, cand.snapped.x - n.x, cand.snapped.y - n.y)
+      const item = tileBrowseItem(n)
+      if (item) useViewport3DStore.getState().setActiveItem(cand.windowId, item)
+      docked = true
+    }
+  }
+  if (docked) bodies = bodies.filter(o => o !== b)
+  return docked
+}
+
+/** Hard against whatever it is closing on: stopped short of it and the two
+ *  bounce, so nothing slides on top of anything. Pairs already together (a
+ *  pile, or a card leaving one) are left to come apart. */
+function bump(b: Body) {
+  for (const o of bodies) {
+    if (o === b) continue
+    const ox = Math.min(b.x + b.w, o.x + o.w) - Math.max(b.x, o.x) + BUMP_GAP
+    const oy = Math.min(b.y + b.h, o.y + o.h) - Math.max(b.y, o.y) + BUMP_GAP
+    if (ox <= 0 || oy <= 0) continue
+    const nx = o.x + o.w / 2 - (b.x + b.w / 2), ny = o.y + o.h / 2 - (b.y + b.h / 2)
+    // Across the side they first meet on, the one nearest to clear.
+    const across = ox < oy
+    const closing = across ? (b.vx - o.vx) * Math.sign(nx) : (b.vy - o.vy) * Math.sign(ny)
+    if (closing <= 0) continue
+    if (across) {
+      moveBody(b, -Math.sign(nx) * ox, 0)
+      const dv = (b.vx - o.vx) * (1 + BOUNCE) / 2
+      b.vx -= dv; o.vx += dv
+    } else {
+      moveBody(b, 0, -Math.sign(ny) * oy)
+      const dv = (b.vy - o.vy) * (1 + BOUNCE) / 2
+      b.vy -= dv; o.vy += dv
+    }
+  }
+}
 
 function tick(last: number) {
   raf = requestAnimationFrame(now => {
     const dt = Math.min(0.05, (now - last) / 1000)
-    const stop = STOP_SPEED / useCanvasStore.getState().zoom
-    const hard = THROW_SPEED / useCanvasStore.getState().zoom
+    const zoom = useCanvasStore.getState().zoom
+    const stop = STOP_SPEED / zoom
     let any = false
     for (const b of [...bodies]) {
-      if (b === held) continue
       const speed = Math.hypot(b.vx, b.vy)
       if (speed < stop) { b.vx = b.vy = 0; continue }
       any = true
-      moveBody(b, b.vx * dt, b.vy * dt)
+      // In short steps: in one, a fast card could jump a magnet or a card.
+      const steps = Math.max(1, Math.ceil(speed * dt * zoom / STEP_PX))
+      for (let i = 0; i < steps; i++) {
+        moveBody(b, b.vx * dt / steps, b.vy * dt / steps)
+        b.slid += Math.hypot(b.vx, b.vy) * dt / steps
+        bounceOffView(b)
+        if (putAwayIfInTray(b) || magnetIfNear(b)) break
+        bump(b)
+      }
       const f = Math.pow(FRICTION, dt * 60)
       b.vx *= f; b.vy *= f
-      bounceOffView(b)
-      if (putAwayIfInTray(b)) continue
-      // Only what is really moving knocks anything: a card eased onto a pile
-      // stays on it.
-      if (speed < hard / 2) { b.touching.clear(); continue }
-      for (const o of bodies) {
-        if (o === b || o === held) continue
-        if (!overlap(b, o)) { b.touching.delete(o); continue }
-        if (b.touching.has(o)) continue
-        b.touching.add(o)
-        o.touching.add(b)
-        // Along the line between their centres, never backwards: a fast card
-        // can be past the other's centre by the frame they first touch.
-        const nx = o.x + o.w / 2 - (b.x + b.w / 2), ny = o.y + o.h / 2 - (b.y + b.h / 2)
-        const d = Math.hypot(nx, ny) || 1
-        const ahead = nx * b.vx + ny * b.vy > 0
-        const ux = ahead ? nx / d : b.vx / speed, uy = ahead ? ny / d : b.vy / speed
-        o.vx += ux * speed * KNOCK
-        o.vy += uy * speed * KNOCK
-        b.vx *= 1 - KNOCK / 2
-        b.vy *= 1 - KNOCK / 2
-      }
     }
     if (any) tick(now)
     else { raf = null; flying = false }

@@ -15,7 +15,7 @@ import { useCanvasStore } from '../store/canvasStore'
 import { useViewport3DStore } from '../store/viewport3dStore'
 import { useMagnetPreviewStore } from '../store/magnetPreviewStore'
 import { findMagnetCandidate, magnetRadiusForZoom, viewportVisualRect, type WindowRect } from './viewportDocking'
-import { collectDeckContent, defaultBrowseItem } from './contentTraversal'
+import { collectDeckContent, defaultBrowseItem, groupHasBrowsableContent } from './contentTraversal'
 import { cardVisualRect } from '../hooks/useCardDecks'
 
 export function viewportWindowRects(): WindowRect[] {
@@ -89,6 +89,27 @@ export function finishDeckMagnetDock(
   // now that panels share the affordance, so the guard is real rather than
   // ceremonial.
   if (first && preview.windowId) useViewport3DStore.getState().setActiveItem(preview.windowId, first)
+  return true
+}
+
+/** A card or closed deck sliding (Pick mode): if it has reached a window's
+ *  magnet, snap it flush with the cards it carries and load its first model.
+ *  Returns true when it docked. */
+export function dockSlidingGroup(groupId: string, carried: string[]): boolean {
+  const bs = useBoardsStore.getState()
+  if (!groupHasBrowsableContent(groupId, bs.groups, bs.boards)) return false
+  const rect = liveCardRect(groupId)
+  if (!rect) return false
+  const wins = viewportWindowRects()
+  const cand = wins.length > 0 ? findMagnetCandidate(rect, wins, magnetRadiusForZoom(useCanvasStore.getState().zoom)) : null
+  if (!cand) return false
+  const ddx = cand.snapped.x - rect.x, ddy = cand.snapped.y - rect.y
+  bs.setGroupPosBatch(carried.flatMap(gid => {
+    const g = bs.groups.find(x => x.id === gid)
+    return g ? [{ groupId: gid, originX: g.originX + ddx, originY: g.originY + ddy }] : []
+  }))
+  const first = defaultBrowseItem(collectDeckContent(groupId, bs.groups, bs.boards))
+  if (first) useViewport3DStore.getState().setActiveItem(cand.windowId, first)
   return true
 }
 
