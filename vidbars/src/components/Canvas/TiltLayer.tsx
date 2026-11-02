@@ -3029,6 +3029,11 @@ const TiltedView: React.FC = () => {
         }
       }
       if (!onPlane(e.target)) return
+      // A pinned panel (the card browser, a pinned Viewer) lies in the canvas
+      // box but not on the plane: its presses are its own, as flat. Taken for
+      // bare ground, a drag on it drew a selection box instead, so it could
+      // not be moved or resized in 3D (Brian 2026-11-02).
+      if ((e.target as Element).closest('[data-pin-host]')) return
       // Alt+left / Alt+right belong to the orbit and dolly gestures.
       if (e.altKey && e.button !== 1) return
       // Bare ground: left-drag draws a selection box, a plain click clears
