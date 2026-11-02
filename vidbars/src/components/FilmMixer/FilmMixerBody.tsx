@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { create } from 'zustand'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { addFreeNodeCentered } from '../../utils/canvasCreate'
@@ -79,30 +80,89 @@ async function probe(): Promise<{ running: boolean; url: string; canStart: boole
   }
 }
 
+// Pinning hands the node from FreeCanvas to PinLayer, a whole new React subtree,
+// and an iframe that leaves the document reloads. So what must outlive that
+// lives outside React: the phase in a store, and the page in one element that
+// is carried to whichever body is showing (moveBefore keeps a frame running as
+// it moves; appendChild, where that is missing, reloads it). Between bodies it
+// waits in a parking lot off screen, still in the document.
+const useMixerPhase = create<{ phase: Phase }>(() => ({ phase: { kind: 'checking' } }))
+const setPhase = (phase: Phase) => useMixerPhase.setState({ phase })
+
+let frame: HTMLIFrameElement | null = null
+let parking: HTMLDivElement | null = null
+
+function moveTo(to: HTMLElement, el: HTMLElement) {
+  const mover = to as HTMLElement & { moveBefore?: (node: Node, child: Node | null) => void }
+  try {
+    if (mover.moveBefore && el.isConnected) { mover.moveBefore(el, null); return }
+  } catch { /* falls through: a reload beats a lost page */ }
+  to.appendChild(el)
+}
+
+function frameFor(url: string): HTMLIFrameElement {
+  if (frame) return frame
+  frame = document.createElement('iframe')
+  frame.src = url
+  frame.title = 'Film Look mixer'
+  frame.style.cssText = `display:block;border:none;width:${PAGE_W}px;height:${PAGE_H}px`
+  return frame
+}
+
+function park() {
+  if (!frame) return
+  if (!parking) {
+    parking = document.createElement('div')
+    parking.style.cssText = 'position:fixed;left:-99999px;top:0;width:0;height:0;overflow:hidden'
+    document.body.appendChild(parking)
+  }
+  moveTo(parking, frame)
+  // The next body takes it in the same commit. None coming means the node is
+  // gone: the page goes with it, and a new node looks for the mixer afresh.
+  setTimeout(() => {
+    if (frame?.parentElement !== parking) return
+    if (Object.values(useFreeNodeStore.getState().nodes).some(n => n.type === 'filmMixer')) return
+    dropFrame()
+    setPhase({ kind: 'checking' })
+  }, 0)
+}
+
+function dropFrame() {
+  frame?.remove()
+  frame = null
+}
+
+async function startMixer() {
+  const d = window.vidbarsDesktop
+  if (!d?.mixerStart) { setPhase({ kind: 'needsRestart' }); return }
+  setPhase({ kind: 'starting' })
+  const r = await d.mixerStart()
+  setPhase(r.url ? { kind: 'ready', url: r.url } : { kind: 'failed', error: r.error ?? 'The mixer did not start', log: r.log })
+}
+
 export function FilmMixerBody({ pinned, bodyW, bodyH }: { pinned: boolean; bodyW: number; bodyH: number }) {
-  const [phase, setPhase] = useState<Phase>({ kind: 'checking' })
+  const phase = useMixerPhase(s => s.phase)
   const [active, setActive] = useState(false)
   const [hover, setHover] = useState(false)
-
-  const start = async () => {
-    const d = window.vidbarsDesktop
-    if (!d?.mixerStart) { setPhase({ kind: 'needsRestart' }); return }
-    setPhase({ kind: 'starting' })
-    const r = await d.mixerStart()
-    setPhase(r.url ? { kind: 'ready', url: r.url } : { kind: 'failed', error: r.error ?? 'The mixer did not start', log: r.log })
-  }
+  const slot = useRef<HTMLDivElement>(null)
 
   // Showing the node starts the mixer, or uses the one already running.
   useEffect(() => {
-    let alive = true
+    if (useMixerPhase.getState().phase.kind !== 'checking') return
     void probe().then(p => {
-      if (!alive) return
+      if (useMixerPhase.getState().phase.kind !== 'checking') return
       if (p.running) setPhase({ kind: 'ready', url: p.url })
-      else if (p.canStart) void start()
+      else if (p.canStart) void startMixer()
       else setPhase({ kind: 'needsRestart' })
     })
-    return () => { alive = false }
   }, [])
+
+  const url = phase.kind === 'ready' ? phase.url : null
+  useLayoutEffect(() => {
+    if (!url || !slot.current) return
+    moveTo(slot.current, frameFor(url))
+    return park
+  }, [url])
 
   // The mixer's own Quit button ends the server under the page. Say so, and
   // leave starting it again to a click: Quit means free the GPU.
@@ -110,7 +170,11 @@ export function FilmMixerBody({ pinned, bodyW, bodyH }: { pinned: boolean; bodyW
   useEffect(() => {
     if (!ready) return
     const t = setInterval(() => {
-      void probe().then(p => { if (!p.running) setPhase({ kind: 'stopped' }) })
+      void probe().then(p => {
+        if (p.running) return
+        dropFrame()
+        setPhase({ kind: 'stopped' })
+      })
     }, 3000)
     return () => clearInterval(t)
   }, [ready])
@@ -133,17 +197,16 @@ export function FilmMixerBody({ pinned, bodyW, bodyH }: { pinned: boolean; bodyW
         // Fitted, not stretched: the title bar holds its screen size, so the
         // body's shape changes with the zoom, and the page must not reflow
         // as the wheel turns. The spare room is a margin.
-        ? <iframe
-            src={phase.url}
-            title="Film Look mixer"
+        ? <div
+            ref={slot}
             style={{
-              position: 'absolute', top: 0, border: 'none', display: 'block',
+              position: 'absolute', top: 0,
               left: (bodyW - PAGE_W * fit) / 2,
               width: PAGE_W, height: PAGE_H,
               transform: `scale(${fit})`, transformOrigin: '0 0',
             }}
           />
-        : <PhaseMessage phase={phase} onStart={() => void start()} />}
+        : <PhaseMessage phase={phase} onStart={() => void startMixer()} />}
       {shielded && (
         <div
           data-film-mixer-shield
