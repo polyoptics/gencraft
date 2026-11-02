@@ -166,9 +166,24 @@ export const LayerCanvas: React.FC<{ canvas: HTMLCanvasElement; opacity?: number
 }
 
 const LAYERS_KEY = 'vidbars.stripLayers'
+const GAP_KEY = 'vidbars.stripLayerGap'
+const GAP_MIN = 0.02, GAP_MAX = 1.5
 /** The Viewer's Layers switch: whether swinging sideways explodes a strip.
  *  On unless switched off; kept across reloads. */
-export const useStripLayers = create<{ on: boolean; toggle: () => void }>((set, get) => ({
+export const useStripLayers = create<{ on: boolean; toggle: () => void; gap: number; setGap: (gap: number) => void }>((set, get) => ({
+  /** Space between layers, as a share of a layer's height: what the handles
+   *  on the back layer set. Kept across reloads. */
+  gap: (() => {
+    try {
+      const g = Number(localStorage.getItem(GAP_KEY))
+      return g > 0 ? Math.max(GAP_MIN, Math.min(GAP_MAX, g)) : LAYER_GAP
+    } catch { return LAYER_GAP }
+  })(),
+  setGap: gap => {
+    gap = Math.max(GAP_MIN, Math.min(GAP_MAX, gap))
+    set({ gap })
+    try { localStorage.setItem(GAP_KEY, String(gap)) } catch { /* private window */ }
+  },
   on: (() => { try { return localStorage.getItem(LAYERS_KEY) !== '0' } catch { return true } })(),
   toggle: () => {
     const on = !get().on
@@ -215,7 +230,8 @@ const StripLayers: React.FC<{ railId: string; rect: { x: number; y: number; widt
   const order = effects.map(e => e.id)
   const aspect = baked ? baked.plate.width / baked.plate.height : 1
   const boxH = Math.min(rect.height, rect.width / aspect), boxW = boxH * aspect
-  const spread = Math.max(40, boxH * LAYER_GAP)
+  const layerGap = useStripLayers(s => s.gap)
+  const spread = boxH * layerGap
   // The result leaves the Viewer's face and travels back through the stack,
   // to end behind the plate. The panes ride with it, just behind it, and each
   // is left behind at its own place: the last card first, the plate last.
@@ -231,6 +247,29 @@ const StripLayers: React.FC<{ railId: string; rect: { x: number; y: number; widt
     next.splice(stepTo(drag.id, drag.dz), 0, drag.id)
     return next
   })()
+
+  // A corner of the back layer, dragged: the back layer follows the cursor in
+  // depth, and every gap opens or closes with it.
+  const startHandle = (e: React.PointerEvent) => {
+    e.stopPropagation()
+    e.preventDefault()
+    const { tilt, yaw } = useTiltStore.getState()
+    const b = yaw * Math.PI / 180, t = tilt * Math.PI / 180
+    const vx = Math.sin(b), vy = -Math.sin(t) * Math.cos(b)
+    const len2 = vx * vx + vy * vy
+    if (len2 < 0.02 || fan <= 0) return
+    const sx = e.clientX, sy = e.clientY, gap0 = layerGap, depth = boxH * (order.length + 2) * fan
+    const move = (m: PointerEvent) => {
+      const dz = ((m.clientX - sx) * vx + (m.clientY - sy) * vy) / len2
+      useStripLayers.getState().setGap(gap0 - dz / depth)
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
 
   // A press on a pane: dragged, it moves in depth; let go in place, a solo.
   const startPane = (e: React.PointerEvent, id: string) => {
@@ -281,7 +320,26 @@ const StripLayers: React.FC<{ railId: string; rect: { x: number; y: number; widt
     <>
       <div style={{ ...pos(travel), outline: edge('rgba(255,255,255,.25)'), pointerEvents: 'none' }}>
         <LayerCanvas canvas={baked.result} />
-        <div style={{ ...header, background: '#23252f' }}>Result</div>
+        <div data-layer-pane="" style={{ ...header, background: '#23252f', pointerEvents: 'auto' }}>
+          <span>Result</span>
+          <span style={{ flex: 1 }} />
+          <button
+            title="Layers: lit, swinging sideways shows the strip's layers behind the Viewer"
+            onPointerDown={e => e.stopPropagation()}
+            onClick={e => { e.stopPropagation(); useStripLayers.getState().toggle() }}
+            style={{ padding: '1px 6px', fontSize: 11, border: '1px solid rgba(255,255,255,.25)', borderRadius: 5, color: '#fff', cursor: 'pointer', background: 'rgba(120,170,255,.35)' }}
+          >Layers</button>
+        </div>
+        {[{ left: -7, top: -7 }, { right: -7, top: -7 }, { left: -7, bottom: -7 }, { right: -7, bottom: -7 }].map((at, i) => (
+          <div
+            key={i}
+            data-layer-pane=""
+            data-layer-handle=""
+            title="Drag to set how far the layers spread"
+            onPointerDown={startHandle}
+            style={{ position: 'absolute', ...at, width: 14, height: 14, borderRadius: 4, background: '#cfe2ff', border: '2px solid #16171f', boxSizing: 'border-box', cursor: 'grab', pointerEvents: 'auto' }}
+          />
+        ))}
       </div>
       <div style={{ ...pos(zOf(-1)), outline: edge('rgba(255,255,255,.25)'), pointerEvents: 'none' }}>
         <LayerCanvas canvas={baked.plate} />
