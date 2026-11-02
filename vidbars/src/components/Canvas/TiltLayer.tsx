@@ -1528,9 +1528,9 @@ function restDone() {
 function eyeOnPlane(): { y: number; z: number } {
   const { tilt, spin, yaw, shiftX, shiftY } = useTiltStore.getState()
   const t = tilt * Math.PI / 180, s = spin * Math.PI / 180, b = yaw * Math.PI / 180
-  const x0 = -shiftX * Math.cos(b) - TILT_PERSPECTIVE * Math.sin(b), z0 = -shiftX * Math.sin(b) + TILT_PERSPECTIVE * Math.cos(b)
-  const y1 = -shiftY * Math.cos(t) + z0 * Math.sin(t)
-  return { y: -x0 * Math.sin(s) + y1 * Math.cos(s), z: shiftY * Math.sin(t) + z0 * Math.cos(t) }
+  const y1 = -shiftY * Math.cos(t) + TILT_PERSPECTIVE * Math.sin(t), z1 = shiftY * Math.sin(t) + TILT_PERSPECTIVE * Math.cos(t)
+  const x0 = -shiftX * Math.cos(b) - z1 * Math.sin(b)
+  return { y: -x0 * Math.sin(s) + y1 * Math.cos(s), z: -shiftX * Math.sin(b) + z1 * Math.cos(b) }
 }
 
 /** The bits of a face that stand proud of it when tilted, near enough:
@@ -2086,7 +2086,7 @@ function nearFit(full: number, x0: number, x1: number, v: number, z: number, h: 
   // after the glide's scale and the tilt); its nearer end counts.
   const toward = (x: number) => {
     const X = gx + k * (x - gx), Y = gy + k * (v - gy)
-    return -(X * cs - Y * ss) * sb + ((X * ss + Y * cs) * st + k * z * ct) * cb
+    return (X * ss + Y * cs) * st + (-(X * cs - Y * ss) * sb + k * z * cb) * ct
   }
   const near = Math.max(toward(x0), toward(x1))
   // With its bottom edge itself that near, no angle keeps it all in front:

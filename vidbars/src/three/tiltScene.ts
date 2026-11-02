@@ -868,7 +868,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     camera.updateProjectionMatrix()
     // The plane: CSS rotateX(t) rotateZ(s), carried from CSS's y-down
     // space into three's y-up space (F·R·F, F = flip y).
-    R.makeRotationY(st.yaw * Math.PI / 180).multiply(Rz.makeRotationX(st.tilt * Math.PI / 180)).multiply(Rz.makeRotationZ(st.spin * Math.PI / 180))
+    R.makeRotationX(st.tilt * Math.PI / 180).multiply(Rz.makeRotationY(st.yaw * Math.PI / 180)).multiply(Rz.makeRotationZ(st.spin * Math.PI / 180))
     // CSS translate(shift) before the rotations is a move in three's view
     // plane too (y flipped).
     ground.matrix.makeTranslation(st.shiftX, -st.shiftY, 0).multiply(F).multiply(R).multiply(F)

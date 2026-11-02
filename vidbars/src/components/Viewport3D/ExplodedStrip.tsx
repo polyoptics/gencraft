@@ -233,8 +233,8 @@ const StripLayers: React.FC<{ railId: string; rect: { x: number; y: number; widt
     e.stopPropagation()
     const { tilt, yaw } = useTiltStore.getState()
     const b = yaw * Math.PI / 180, t = tilt * Math.PI / 180
-    // Which way depth runs on the screen: the plane's normal, Ry·Rx·z.
-    const vx = Math.cos(t) * Math.sin(b), vy = -Math.sin(t)
+    // Which way depth runs on the screen: the plane's normal, Rx·Ry·z.
+    const vx = Math.sin(b), vy = -Math.sin(t) * Math.cos(b)
     const len2 = vx * vx + vy * vy
     const sx = e.clientX, sy = e.clientY
     let moved = false, dz = 0
@@ -261,13 +261,14 @@ const StripLayers: React.FC<{ railId: string; rect: { x: number; y: number; widt
     window.addEventListener('pointerup', up)
   }
 
-  const out = !!baked && fan > 0
+  // No effect cards, no layers: the Viewer keeps its picture.
+  const out = !!baked && fan > 0 && effects.length > 0
   useEffect(() => {
     useLayersOut.setState({ [railId]: out })
     return () => useLayersOut.setState({ [railId]: false })
   }, [railId, out])
 
-  if (!baked || fan === 0) return null
+  if (!out) return null
   const left = rect.x + (rect.width - boxW) / 2, top = rect.y + (rect.height - boxH) / 2
   const edge = (c: string) => `1.5px solid ${c}`
   const header: React.CSSProperties = { position: 'absolute', left: 0, right: 0, bottom: '100%', display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap', fontSize: 13, color: '#fff', padding: '5px 8px', borderRadius: '7px 7px 0 0', boxSizing: 'border-box' }

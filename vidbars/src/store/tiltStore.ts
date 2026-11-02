@@ -28,14 +28,20 @@ export const TILT_MAX = 89
 export const TILT_SNAP = 10
 /** How far the view can tip upward past flat. */
 export const TILT_UP = 45
-/** How far tipped back a sideways drag has become pure turntable, degrees. */
-const TURNTABLE_AT = 20
+/** Tipped back this far a sideways drag still only swings, degrees: near
+ *  top-down a turn of the ground would just twist the picture on screen. */
+const SWING_TO = 20
+/** Tipped back this far it has become pure turntable, degrees. */
+const TURNTABLE_AT = 32
+const smooth01 = (k: number) => { const c = Math.max(0, Math.min(1, k)); return c * c * (3 - 2 * c) }
 /** 0 near flat or tipped up, where a sideways drag swings the view; 1 tipped
  *  back, where it turns the ground about its normal. Between, a blend. */
 export function turntableShare(tilt: number): number {
-  const k = Math.max(0, Math.min(1, tilt / TURNTABLE_AT))
-  return k * k * (3 - 2 * k)
+  return smooth01((tilt - SWING_TO) / (TURNTABLE_AT - SWING_TO))
 }
+/** How far the ground can be turned at this tilt: not at all top-down, so
+ *  coming back up to top-down always arrives untwisted. */
+const spinRoom = (tilt: number) => 180 * smooth01(tilt / SWING_TO)
 
 /** The key light on the models, set in the Light panel. Angles in degrees,
  *  in the plane's frame: azimuth round the card, elevation up from it. */
@@ -136,6 +142,8 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
     // a swing would lean it, which reads as the camera rolling.
     const room = TILT_MAX * (1 - turntableShare(tilt))
     yaw = Math.max(-room, Math.min(room, yaw))
+    const turn = ((spin % 360) + 540) % 360 - 180, turnRoom = spinRoom(tilt)
+    spin = Math.max(-turnRoom, Math.min(turnRoom, turn))
     set({ tilt, spin, yaw, ...(g ? shiftKeeping(g, tilt, spin, yaw) : {}) })
   },
   setShift: (shiftX, shiftY) => set({ shiftX, shiftY }),
@@ -181,13 +189,13 @@ function centreGround(s: { tilt: number; spin: number; yaw: number; shiftX: numb
 }
 /** The camera shift that puts ground point `g` at the middle of the screen
  *  for this tilt and spin — unprojectTilt run backwards: the point sits at
- *  q = Ry(yaw)·Rx(tilt)·Rz(spin)·g, and the middle's ray is the line x = -shiftX,
+ *  q = Rx(tilt)·Ry(yaw)·Rz(spin)·g, and the middle's ray is the line x = -shiftX,
  *  y = -shiftY. Flat, it is just -g. */
 function shiftKeeping(g: { x: number; y: number }, tiltDeg: number, spinDeg: number, yawDeg: number) {
   const t = tiltDeg * Math.PI / 180, s = spinDeg * Math.PI / 180, b = yawDeg * Math.PI / 180
   const x1 = g.x * Math.cos(s) - g.y * Math.sin(s)
   const y1 = g.x * Math.sin(s) + g.y * Math.cos(s)
-  return { shiftX: -(x1 * Math.cos(b) + y1 * Math.sin(t) * Math.sin(b)), shiftY: -y1 * Math.cos(t) }
+  return { shiftX: -x1 * Math.cos(b), shiftY: -(y1 * Math.cos(t) + x1 * Math.sin(b) * Math.sin(t)) }
 }
 
 /** The CSS transform for a tilted layer whose box is the canvas host and
@@ -198,7 +206,7 @@ export function tiltCss(tilt: number, spin: number, shiftX = 0, shiftY = 0, glid
   if (!glide && !isTilted({ tilt, yaw }) && Math.abs(spin) < 0.01 && Math.abs(shiftX) + Math.abs(shiftY) < 0.01) return 'none'
   // The shift comes before the perspective: it moves the camera sideways,
   // so near and far slide alike on screen, as in Maya.
-  const base = `perspective(${TILT_PERSPECTIVE}px) translate(${shiftX}px, ${shiftY}px) rotateY(${yaw}deg) rotateX(${tilt}deg) rotateZ(${spin}deg)`
+  const base = `perspective(${TILT_PERSPECTIVE}px) translate(${shiftX}px, ${shiftY}px) rotateX(${tilt}deg) rotateY(${yaw}deg) rotateZ(${spin}deg)`
   // A wheel zoom in progress: the plane scaled about the zoom point, on the
   // compositor, until the zoom settles into the canvas zoom (see TiltGlide).
   return glide ? `${base} translate(${glide.x}px, ${glide.y}px) scale3d(${glide.k}, ${glide.k}, ${glide.k}) translate(${-glide.x}px, ${-glide.y}px)` : base
@@ -229,17 +237,18 @@ export function unprojectTilt(sx: number, sy: number, tiltDeg: number, spinDeg: 
   const b = yawDeg * Math.PI / 180, cb = Math.cos(b), sb = Math.sin(b)
   // Undo the shift by moving the eye instead: the ray from (-shift, P)
   // through (screen - shift, 0) meets the plane n·p = 0,
-  // n = Ry(b)·Rx(t)·(0,0,1) = (cos t sin b, -sin t, cos t cos b).
-  const nx = ct * sb, nz = ct * cb
-  const denom = -nx * sx + sy * st + P * nz
+  // n = Rx(t)·Ry(b)·(0,0,1) = (sin b, -sin t cos b, cos t cos b): swung first
+  // and tipped after, so the canvas's own up stays upright on the screen.
+  const nx = sb, ny = -st * cb, nz = ct * cb
+  const denom = -nx * sx - ny * sy + P * nz
   if (denom <= 1e-3) return null
   // `height`: a plane that far above the canvas (a lifted tile's face).
-  const lam = (-nx * shiftX + shiftY * st + P * nz - height) / denom
+  const lam = (-nx * shiftX - ny * shiftY + P * nz - height) / denom
   if (lam <= 0 || lam > far) return null
   const qx = -shiftX + lam * sx, qy = -shiftY + lam * sy, qz = P - lam * P
-  // Back into plane coordinates: Rz(-s)·Rx(-t)·Ry(-b)·q.
-  const x0 = qx * cb - qz * sb, z0 = qx * sb + qz * cb
-  const y1 = qy * ct + z0 * st
+  // Back into plane coordinates: Rz(-s)·Ry(-b)·Rx(-t)·q.
+  const y1 = qy * ct + qz * st, z1 = -qy * st + qz * ct
+  const x0 = qx * cb - z1 * sb
   const cs = Math.cos(s), ss = Math.sin(s)
   return { x: x0 * cs + y1 * ss, y: -x0 * ss + y1 * cs }
 }
