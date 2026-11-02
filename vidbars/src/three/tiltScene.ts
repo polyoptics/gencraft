@@ -13,7 +13,7 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import { toCreasedNormals } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { acquireModel, releaseModel, disposeInstance } from './modelCache'
 import { computePosedBounds } from './orbitState'
-import { TILT_PERSPECTIVE, DEFAULT_LIGHT, type TiltWire, type TiltLight } from '../store/tiltStore'
+import { TILT_PERSPECTIVE, DEFAULT_LIGHT, type TiltLight } from '../store/tiltStore'
 
 const DEFAULT_SHADOWS = DEFAULT_LIGHT.shadows, DEFAULT_SHEEN = DEFAULT_LIGHT.sheen
 /** How long a model's pop onto a Viewer takes. */
@@ -140,8 +140,9 @@ export interface TiltFrameState {
   shiftY: number
   spin: number
   texture: boolean
+  clay: boolean
   flat: boolean
-  wire: TiltWire
+  wire: boolean
   light: TiltLight
   turn: boolean
   walls: boolean
@@ -1081,18 +1082,19 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     // The catcher must not take the clay or wireframe look: it is drawn on
     // its own after those passes, with the models hidden and the shadow
     // map they made.
-    const overridden = st.wire === 'only' || !st.texture
+    const textured = st.texture && !st.clay
+    const overridden = !textured
     modelShadow.visible = key.castShadow && !overridden
     renderer.shadowMap.needsUpdate = true
-    if (st.wire === 'only') {
+    if (!st.texture && !st.clay) {
       scene.overrideMaterial = WIRE_MAT
       renderer.render(scene, camera)
       renderer.autoClear = false
     } else {
-      scene.overrideMaterial = st.texture ? null : CLAY_MAT
+      scene.overrideMaterial = textured ? null : CLAY_MAT
       renderer.render(scene, camera)
       renderer.autoClear = false
-      if (st.wire === 'over') {
+      if (st.wire) {
         const was = modelShadow.visible
         modelShadow.visible = false
         scene.overrideMaterial = WIRE_OVER_MAT

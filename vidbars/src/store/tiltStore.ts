@@ -26,11 +26,6 @@ export const TILT_MAX = 89
 /** Let go below this and the view eases the rest of the way to flat — tilting back up to top-down is the way home. */
 export const TILT_SNAP = 10
 
-/** How models are drawn, as three independent choices (Brian 2026-10-30):
- *  their own textures or plain clay; lit, or flat (even light, smooth
- *  normals); and a wireframe off, over the surface, or on its own. */
-export type TiltWire = 'off' | 'over' | 'only'
-
 /** The key light on the models, set in the Light panel. Angles in degrees,
  *  in the plane's frame: azimuth round the card, elevation up from it. */
 export interface TiltLight {
@@ -61,11 +56,16 @@ interface TiltStore {
    *  screen px: the whole tilted view slides, nothing on it moves. */
   shiftX: number
   shiftY: number
-  /** The model's own materials and textures; off = plain clay. */
+  /** How models are drawn, as on/off toggles that keep their labels (Brian
+   *  2026-11-02). The model's own materials and textures; off with Clay off
+   *  too leaves no surface, just an empty wireframe. */
   texture: boolean
+  /** A plain clay surface in place of the textures. */
+  clay: boolean
   /** Even, low-contrast light with smooth normals instead of the lit look. */
   flat: boolean
-  wire: TiltWire
+  /** A wireframe over the surface. */
+  wire: boolean
   light: TiltLight
   /** Models turn slowly on their card. */
   turn: boolean
@@ -84,8 +84,9 @@ interface TiltStore {
   setView: (tilt: number, spin: number) => void
   setShift: (x: number, y: number) => void
   setTexture: (on: boolean) => void
+  setClay: (on: boolean) => void
   setFlat: (on: boolean) => void
-  setWire: (w: TiltWire) => void
+  setWire: (on: boolean) => void
   setLight: (patch: Partial<TiltLight>) => void
   setTurn: (on: boolean) => void
   setWalls: (on: boolean) => void
@@ -106,8 +107,9 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
   shiftX: 0,
   shiftY: 0,
   texture: true,
+  clay: false,
   flat: false,
-  wire: 'off',
+  wire: false,
   light: DEFAULT_LIGHT,
   turn: true,
   walls: true,
@@ -126,6 +128,7 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
   },
   setShift: (shiftX, shiftY) => set({ shiftX, shiftY }),
   setTexture: texture => set({ texture }),
+  setClay: clay => set({ clay }),
   setFlat: flat => set({ flat }),
   setWire: wire => set({ wire }),
   setLight: patch => set(s => ({ light: { ...s.light, ...patch } })),
