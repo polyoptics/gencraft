@@ -735,7 +735,7 @@ const FxToggle: React.FC<{ railId: string; u: number }> = ({ railId, u }) => {
       onDoubleClick={stop}
       onClick={e => { e.stopPropagation(); useRailUiStore.getState().toggleFx(railId) }}
       style={{
-        flex: '0 0 auto', height: 18 * u, padding: `0 ${6 * u}px`, margin: 0, borderRadius: 5 * u,
+        flex: '0 0 auto', height: 18 * u, padding: `0 ${4 * u}px`, margin: 0, borderRadius: 5 * u,
         border: `${u}px solid ${off ? 'rgba(255,255,255,0.18)' : 'rgba(140,190,255,0.7)'}`,
         background: off ? 'transparent' : 'rgba(46,72,120,0.92)', color: off ? 'rgba(255,255,255,0.45)' : '#cfe2ff',
         fontFamily: 'inherit', fontSize: 10 * u, fontWeight: 700, lineHeight: 1, cursor: 'pointer',
@@ -755,7 +755,7 @@ const ViewerButton: React.FC<{ railId: string; u: number }> = ({ railId, u }) =>
     onDoubleClick={stop}
     onClick={e => { e.stopPropagation(); openRailViewer(railId) }}
     style={{
-      flex: '0 0 auto', width: 20 * u, height: 18 * u, padding: 0, margin: 0, borderRadius: 5 * u,
+      flex: '0 0 auto', width: 18 * u, height: 18 * u, padding: 0, margin: 0, borderRadius: 5 * u,
       border: `${u}px solid rgba(255,255,255,0.2)`, background: 'transparent',
       color: 'rgba(255,255,255,0.78)', cursor: 'pointer',
       display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -787,9 +787,11 @@ const TrayHead: React.FC<{
   }}>
     <span style={{ flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 13 * u, fontWeight: 600, textShadow: railShadow(u) }}>Results</span>
     <Badge u={u}>{count}</Badge>
-    <span style={{ flex: '1 1 0', alignSelf: 'stretch' }} />
     {hasBefore && <FxToggle railId={railId} u={u} />}
     {!pinned && <ViewerButton railId={railId} u={u} />}
+    {/* What comes and goes (the grip on hover, Take off with results) sits
+        past this, against the far end: the buttons above never move. */}
+    <span style={{ flex: '1 1 0', alignSelf: 'stretch' }} />
     <DragOutGrip
       url={lastUrl}
       getUrls={({ all }) => (all ? trayUrls(railId) : [])}
@@ -811,7 +813,7 @@ const TrayHead: React.FC<{
           useFreeNodeStore.getState().clearRailTray(railId)
         }}
         style={{
-          flex: '0 0 auto', height: 18 * u, padding: `0 ${6 * u}px`, margin: 0, borderRadius: 5 * u,
+          flex: '0 0 auto', height: 18 * u, padding: `0 ${4 * u}px`, margin: 0, borderRadius: 5 * u,
           border: `${u}px solid rgba(255,255,255,0.2)`, background: 'transparent',
           color: 'rgba(255,255,255,0.78)', fontFamily: 'inherit', fontSize: 10 * u, fontWeight: 600, lineHeight: 1,
           cursor: 'pointer',
