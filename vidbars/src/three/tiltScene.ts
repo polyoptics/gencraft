@@ -637,6 +637,17 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   liftCatch.frustumCulled = false
   sideMesh.castShadow = true
   groundDeco.add(topMesh, sideMesh, sheenMesh, liftMesh, liftCatch)
+  // The faces' depth again, before the models. The DOM draws a face under
+  // this canvas, so a model painted first stays painted whatever is in front
+  // of it: it showed through a leaning card. Pushed back a hair, so the
+  // shadow catcher lying in the same plane as a flat face still shows on it.
+  const topFirst = new THREE.Mesh(topGeo, new THREE.MeshBasicMaterial({
+    colorWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 4,
+  }))
+  topFirst.frustumCulled = false
+  const topFirstScene = new THREE.Scene()
+  const groundTop = new THREE.Group(); groundTop.matrixAutoUpdate = false
+  groundTop.add(topFirst); topFirstScene.add(groundTop)
 
   // ── Artwork mask: each picture's rect goes into the stencil first, and
   // the shadow catchers and the sheen skip it. ──
@@ -925,6 +936,8 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     groundDeco.matrixWorldNeedsUpdate = true
     groundArt.matrix.copy(ground.matrix)
     groundArt.matrixWorldNeedsUpdate = true
+    groundTop.matrix.copy(ground.matrix)
+    groundTop.matrixWorldNeedsUpdate = true
 
     // Models rise out of their cards as the plane tips back.
     const rise = Math.min(1, Math.max(0, (st.tilt - 4) / 26))
@@ -1017,6 +1030,8 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     renderer.autoClear = true
     renderer.render(artScene, camera)
     renderer.autoClear = false
+    buildSlabs(st.tilt > 0.5 || st.fade > 0 ? st.slabs : [])
+    renderer.render(topFirstScene, camera)
     litRig.visible = !st.flat
     key.visible = !st.flat
     flatRig.visible = st.flat
@@ -1094,7 +1109,6 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       for (const s of shown) s.stand.visible = true
     }
     renderer.shadowMap.needsUpdate = true
-    buildSlabs(st.tilt > 0.5 || st.fade > 0 ? st.slabs : [])
     // The slabs' shadow map, fitted round what stands up off the plane.
     decoKey.castShadow = shadowsOn && fitShadow(decoKey, slabBox)
     liftCatch.visible = decoKey.castShadow
