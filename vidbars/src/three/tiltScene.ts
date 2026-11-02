@@ -888,7 +888,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     groundTop.matrixWorldNeedsUpdate = true
 
     // Models rise out of their cards as the plane tips back.
-    const off = Math.max(st.tilt, Math.abs(st.yaw))
+    const off = Math.max(Math.abs(st.tilt), Math.abs(st.yaw))
     const rise = Math.min(1, Math.max(0, (off - 4) / 26))
     const ease = rise * rise * (3 - 2 * rise)
     const keep = new Set<string>()
