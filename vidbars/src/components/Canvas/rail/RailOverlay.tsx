@@ -7,8 +7,8 @@
 //   - where a dragged card would land (the insertion line / bar),
 //   - which pictures the run is making right now,
 //   - the live preview — "this is what the run will make" — always at the
-//     top of the results, its output decks below it; a Before / After
-//     button on it shows the input picture it is made from instead.
+//     top of the results, its output decks below it; an FX button on
+//     it, dimmed, shows the input picture it is made from instead.
 // They are portalled into the world layer the tiles themselves live in (the
 // rail tile's parent: canvas units, tiles at left = x), as a zero-size,
 // pointer-transparent host with no z-index of its own, so each mark takes
@@ -19,8 +19,9 @@
 // everything, the dragged card included — it is always under the pointer,
 // so beneath the card it would always be hidden.
 
-import React, { useState } from 'react'
+import React from 'react'
 import { createPortal } from 'react-dom'
+import { useRailUiStore } from '../../../store/railUiStore'
 import { RAIL_GEOM, clampAspect, type RailDropTarget, type RailLayout, type RailSlot } from '../../../utils/rail'
 import { CanvasMirror } from '../../UI/CanvasMirror'
 import { RAIL_COLORS as C } from './railStyle'
@@ -45,8 +46,8 @@ export const RailOverlay: React.FC<{
   /** The live preview to deal as a ghost, or null (running, or none yet). */
   ghost: { canvas: HTMLCanvasElement; stale: boolean; before: string | null } | null
 }> = ({ host, railId, layout: L, slots, drop, busyIds, ghost }) => {
-  /** The preview shows the input picture (Before) instead of the result. */
-  const [before, setBefore] = useState(false)
+  /** FX off: the preview shows the input picture instead of the result. */
+  const fxOff = useRailUiStore(s => !!s.fxOff[railId])
   const u = L.unit
 
   // ── Drop mark ──
@@ -118,15 +119,15 @@ export const RailOverlay: React.FC<{
 
   // ── The live preview: always at the top of the results, the run's
   // output decks cascading under it from just over its bottom edge
-  // (utils/rail). Before / After flips it to the input picture it is made
-  // from and back. ──
+  // (utils/rail). FX flips it to the input picture it is made from and
+  // back. ──
   let ghostCard: React.ReactNode = null
   if (ghost && ghost.canvas.width > 0 && ghost.canvas.height > 0) {
     const tray = L.tray
     const w = tray.width
     // The layout's clamp: the tray is laid out at this shape.
     const aspect = clampAspect(ghost.canvas.height / ghost.canvas.width)
-    const showBefore = before && !!ghost.before
+    const showBefore = fxOff && !!ghost.before
     ghostCard = (
       <div data-rail-ghost="top" style={{
         position: 'absolute', zIndex: 10,
@@ -144,18 +145,19 @@ export const RailOverlay: React.FC<{
             }} />}
         {ghost.before && (
           <button
-            type="button" data-rail-before={showBefore ? 'before' : 'after'}
-            title={showBefore ? 'Showing the picture before the effects — click for after' : 'Showing the result — click for the picture before the effects'}
+            type="button" data-rail-fx={showBefore ? 'off' : 'on'}
+            title="Effects: lit shows the result, dimmed the picture before them"
             onPointerDown={e => { if (e.button === 0) e.stopPropagation() }}
             onDoubleClick={e => e.stopPropagation()}
-            onClick={e => { e.stopPropagation(); setBefore(b => !b) }}
+            onClick={e => { e.stopPropagation(); useRailUiStore.getState().toggleFx(railId) }}
             style={{
               position: 'absolute', right: 4 * u, top: 4 * u, pointerEvents: 'auto', cursor: 'pointer',
-              padding: `${1.5 * u}px ${6 * u}px`, borderRadius: 6 * u, border: `${u}px solid rgba(255,255,255,0.35)`,
-              background: showBefore ? 'rgba(255,255,255,0.9)' : 'rgba(12,13,20,0.7)', color: showBefore ? '#111' : '#fff',
+              padding: `${1.5 * u}px ${6 * u}px`, borderRadius: 6 * u,
+              border: `${u}px solid ${showBefore ? 'rgba(255,255,255,0.18)' : 'rgba(140,190,255,0.7)'}`,
+              background: showBefore ? 'rgba(12,13,20,0.7)' : 'rgba(46,72,120,0.92)', color: showBefore ? 'rgba(255,255,255,0.45)' : '#cfe2ff',
               fontSize: 9 * u, fontWeight: 700, lineHeight: 1.1, fontFamily: 'inherit',
             }}
-          >{showBefore ? 'Before' : 'After'}</button>
+          >FX</button>
         )}
       </div>
     )

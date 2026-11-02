@@ -42,7 +42,7 @@ import { FileContextMenu } from '../UI/FileMenu'
 import { mayHaveDiskFile } from '../../hooks/useFileMenu'
 import { DragOutGrip } from '../UI/DragOutGrip'
 import { FxViewerOverlay } from './FxViewerOverlay'
-import { RailViewerOverlay } from './RailViewerOverlay'
+import { RailViewerFx, RailViewerOverlay } from './RailViewerOverlay'
 
 /** Selecting a Viewer takes over the canvas selection outright, so the
  *  Delete key's priority chain is never asked to arbitrate between two lit
@@ -405,6 +405,16 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
   const glPoster = modelActive && status.status === 'ready' && glTooSmall
   const showBodyOverlay = showEmpty || showLoading || showError || glPoster
 
+  const btn = (active: boolean): React.CSSProperties => ({
+    background: active ? 'rgba(120,170,255,0.28)' : 'rgba(255,255,255,0.06)',
+    border: `1px solid ${active ? 'rgba(140,190,255,0.6)' : 'rgba(255,255,255,0.12)'}`,
+    borderRadius: 3 * iz,
+    color: active ? '#cfe2ff' : 'rgba(255,255,255,0.55)',
+    fontSize: fontSize * 0.72, fontWeight: 700, letterSpacing: '0.3px',
+    padding: `${1 * iz}px ${4 * iz}px`, cursor: 'pointer',
+    fontFamily: 'inherit', lineHeight: 1.5, flexShrink: 0,
+  })
+
   const frame = (
     <div
       ref={wrapperRef}
@@ -469,17 +479,11 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
           userSelect: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>{win.title}</span>
 
+        {/* Showing a loop strip: its effects on or off. */}
+        <RailViewerFx windowId={id} style={btn} />
+
         {/* ── Model controls — only meaningful while a model is loaded ── */}
         {modelActive && (() => {
-          const btn = (active: boolean): React.CSSProperties => ({
-            background: active ? 'rgba(120,170,255,0.28)' : 'rgba(255,255,255,0.06)',
-            border: `1px solid ${active ? 'rgba(140,190,255,0.6)' : 'rgba(255,255,255,0.12)'}`,
-            borderRadius: 3 * iz,
-            color: active ? '#cfe2ff' : 'rgba(255,255,255,0.55)',
-            fontSize: fontSize * 0.72, fontWeight: 700, letterSpacing: '0.3px',
-            padding: `${1 * iz}px ${4 * iz}px`, cursor: 'pointer',
-            fontFamily: 'inherit', lineHeight: 1.5, flexShrink: 0,
-          })
           const look = win.look ?? DEFAULT_LOOK
           const v3 = useViewport3DStore.getState()
           return (

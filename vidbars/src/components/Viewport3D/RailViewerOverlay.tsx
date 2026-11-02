@@ -2,7 +2,9 @@
 // (utils/railViewer) shows the live "next" preview of the active one,
 // over whatever the window holds. It follows the strip as it changes: a
 // slider moved, an input stepped. Nothing here is stored: move the strips
-// away and the window shows its own item again.
+// away and the window shows its own item again. FX off (the switch in the
+// window's header, and on the strip's preview) shows the picture before the
+// effects instead.
 
 import React from 'react'
 import { useCanvasStore } from '../../store/canvasStore'
@@ -10,23 +12,51 @@ import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useRailRunStore } from '../../store/railRunStore'
 import { useRailUiStore } from '../../store/railUiStore'
 import { useViewport3DStore } from '../../store/viewport3dStore'
+import { railMembers } from '../../utils/rail'
 import { railViewerDocks, viewerRail } from '../../utils/railViewer'
+import { railBeforePicture } from '../../utils/fx/railChain'
 import { railFullFrame } from '../../utils/fx/railFullFrame'
 import { CounterScaled } from './ContentViews'
 import { ImageStudio } from './ImageStudio'
 
 const stop = (e: React.SyntheticEvent) => e.stopPropagation()
 
-export const RailViewerOverlay: React.FC<{ windowId: string; fontSize: number }> = ({ windowId, fontSize }) => {
+/** The strip this window shows, and the picture its effects start from. */
+function useShownRail(windowId: string) {
   const zoom = useCanvasStore(s => s.zoom)
   const nodes = useFreeNodeStore(s => s.nodes)
   const windows = useViewport3DStore(s => s.windows)
   const active = useRailUiStore(s => s.active)
   const docked = railViewerDocks(nodes, windows, zoom).get(windowId) ?? []
   const railId = viewerRail(docked, active)
+  const rail = railId ? nodes[railId] : undefined
+  const before = rail ? railBeforePicture(rail, railMembers(nodes).get(rail.id)) : null
+  return { zoom, docked, railId, rail, before }
+}
+
+/** The window header's FX switch, while it shows a strip with a picture to
+ *  go back to: the same switch as the one on the strip's preview. */
+export const RailViewerFx: React.FC<{ windowId: string; style: (lit: boolean) => React.CSSProperties }> = ({ windowId, style }) => {
+  const { railId, before } = useShownRail(windowId)
+  const off = useRailUiStore(s => (railId ? !!s.fxOff[railId] : false))
+  if (!railId || !before) return null
+  return (
+    <button
+      data-rail-viewer-fx={off ? 'off' : 'on'}
+      style={style(!off)}
+      title="Effects: lit shows the result, dimmed the picture before them"
+      onPointerDown={stop}
+      onClick={() => useRailUiStore.getState().toggleFx(railId)}
+    >FX</button>
+  )
+}
+
+export const RailViewerOverlay: React.FC<{ windowId: string; fontSize: number }> = ({ windowId, fontSize }) => {
+  const { zoom, docked, railId, rail, before } = useShownRail(windowId)
+  const fxOff = useRailUiStore(s => (railId ? !!s.fxOff[railId] : false))
   const preview = useRailRunStore(s => (railId ? s.preview[railId] : undefined))
   if (!railId) return null
-  const rail = nodes[railId]
+  const showBefore = fxOff ? before : null
   const canvas = preview?.canvas ?? null
   const full = () => railFullFrame(railId)
   return (
@@ -45,13 +75,22 @@ export const RailViewerOverlay: React.FC<{ windowId: string; fontSize: number }>
         {preview?.running && <span style={{ marginLeft: 'auto', opacity: 0.55 }}>updating…</span>}
       </div>
       <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
-        {canvas
+        {showBefore
+          ? (
+            <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+              <CounterScaled zoom={zoom}>
+                <ImageStudio key="before" windowId={windowId} url={showBefore} name={rail?.label || 'Loop strip'} />
+              </CounterScaled>
+            </div>
+          )
+          : canvas
           ? (
             // The image tools stay on: pieces are cut straight from this
             // frame, at the size a Run would make (railFullFrame).
             <div style={{ position: 'relative', width: '100%', height: '100%' }}>
               <CounterScaled zoom={zoom}>
                 <ImageStudio
+                  key="live"
                   windowId={windowId}
                   url={`rail:${railId}`}
                   name={rail?.label || 'Loop strip'}

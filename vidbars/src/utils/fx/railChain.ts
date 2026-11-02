@@ -158,6 +158,16 @@ export function railFaceCombo(rail: FreeNodeData, members: Members): number {
   return at * cols.slice(1).reduce((n, c) => n * c.radix, 1)
 }
 
+/** The picture the live preview is made from — its "before": the face-up
+ *  input as the strip reads it. Null with none. */
+export function railBeforePicture(rail: FreeNodeData, members: Members): string | null {
+  try {
+    const c = railComboAt(rail, members, railFaceCombo(rail, members))
+    const src = c?.items.find(i => i.kind === 'source')
+    return src && src.kind === 'source' ? src.url || null : null
+  } catch { return null }
+}
+
 /** How many results a run makes: the product over the subject and partner
  *  columns ('each' → its card count, 'pick' → 1). 0 while the subject
  *  column is empty. */

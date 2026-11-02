@@ -14,11 +14,21 @@ interface RailUiState {
    *  (utils/railViewer). */
   active: string[]
   touch: (railId: string) => void
+  /** Strips showing the picture before their effects: on their preview and
+   *  on the Viewer showing them, the one FX switch for both. Absent is on. */
+  fxOff: Record<string, true>
+  toggleFx: (railId: string) => void
 }
 
 export const useRailUiStore = create<RailUiState>(set => ({
   drop: null,
   active: [],
+  fxOff: {},
+  toggleFx: railId => set(s => {
+    const fxOff = { ...s.fxOff }
+    if (fxOff[railId]) delete fxOff[railId]; else fxOff[railId] = true
+    return { fxOff }
+  }),
   touch: railId => set(s => (s.active[0] === railId ? s : { active: [railId, ...s.active.filter(x => x !== railId)].slice(0, 32) })),
   setDrop: drop => set(s => {
     const a = s.drop, b = drop
