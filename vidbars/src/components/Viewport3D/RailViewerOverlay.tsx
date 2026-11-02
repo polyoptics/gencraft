@@ -18,6 +18,7 @@ import { railBeforePicture } from '../../utils/fx/railChain'
 import { railFullFrame } from '../../utils/fx/railFullFrame'
 import { CounterScaled } from './ContentViews'
 import { ImageStudio } from './ImageStudio'
+import { ExplodedStrip } from './ExplodedStrip'
 
 const stop = (e: React.SyntheticEvent) => e.stopPropagation()
 
@@ -48,6 +49,25 @@ export const RailViewerFx: React.FC<{ windowId: string; style: (lit: boolean) =>
       onPointerDown={stop}
       onClick={() => useRailUiStore.getState().toggleFx(railId)}
     >FX</button>
+  )
+}
+
+/** The window header's Layers button: the strip fanned out in depth. */
+export const RailViewerLayers: React.FC<{ windowId: string; style: (lit: boolean) => React.CSSProperties }> = ({ windowId, style }) => {
+  const { railId, before } = useShownRail(windowId)
+  const [open, setOpen] = React.useState(false)
+  if (!railId || !before) return null
+  return (
+    <>
+      <button
+        data-rail-viewer-layers=""
+        style={style(open)}
+        title="Swing round and see the strip's layers in depth"
+        onPointerDown={stop}
+        onClick={() => setOpen(true)}
+      >Layers</button>
+      {open && <ExplodedStrip railId={railId} onClose={() => setOpen(false)} />}
+    </>
   )
 }
 

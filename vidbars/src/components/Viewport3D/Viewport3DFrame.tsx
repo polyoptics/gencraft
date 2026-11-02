@@ -42,7 +42,7 @@ import { FileContextMenu } from '../UI/FileMenu'
 import { mayHaveDiskFile } from '../../hooks/useFileMenu'
 import { DragOutGrip } from '../UI/DragOutGrip'
 import { FxViewerOverlay } from './FxViewerOverlay'
-import { RailViewerFx, RailViewerOverlay } from './RailViewerOverlay'
+import { RailViewerFx, RailViewerLayers, RailViewerOverlay } from './RailViewerOverlay'
 
 /** Selecting a Viewer takes over the canvas selection outright, so the
  *  Delete key's priority chain is never asked to arbitrate between two lit
@@ -481,6 +481,7 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
 
         {/* Showing a loop strip: its effects on or off. */}
         <RailViewerFx windowId={id} style={btn} />
+        <RailViewerLayers windowId={id} style={btn} />
 
         {/* ── Model controls — only meaningful while a model is loaded ── */}
         {modelActive && (() => {
