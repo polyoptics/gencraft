@@ -22,7 +22,7 @@ export const MAGNET_RADIUS_PX = 26
  *  Viewer or another card without being pulled in. Full reach from this zoom
  *  up, then in step with the cards down to the floor below. */
 const MAGNET_FULL_ZOOM = 0.25
-const MAGNET_MIN_PX = 8
+const MAGNET_MIN_PX = 4
 export function magnetRadiusForZoom(zoom: number): number {
   const z = Math.max(0.01, zoom)
   const px = Math.max(MAGNET_MIN_PX, MAGNET_RADIUS_PX * Math.min(1, z / MAGNET_FULL_ZOOM))
