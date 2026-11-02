@@ -432,27 +432,6 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
   const flDisplayMode = useCanvasStore(s => s.rolodexDisplayMode)
   const setFlDisplayMode = useCanvasStore(s => s.setRolodexDisplayMode)
 
-  // Hovered-zone state shared between the panel and the side dock.
-  // The dock only appears while the cursor is inside the panel OR
-  // the dock itself; leaving fires after a small grace period so
-  // moving the cursor from panel→dock (or back) doesn't flash the
-  // dock off and back on between the two pointerleave/enter events.
-  const [rolodexHovered, setRolodexHovered] = useState(false)
-  const hoverLeaveTimerRef = useRef<number | null>(null)
-  const onHoverEnter = useCallback(() => {
-    if (hoverLeaveTimerRef.current) {
-      clearTimeout(hoverLeaveTimerRef.current)
-      hoverLeaveTimerRef.current = null
-    }
-    setRolodexHovered(true)
-  }, [])
-  const onHoverLeave = useCallback(() => {
-    if (hoverLeaveTimerRef.current) clearTimeout(hoverLeaveTimerRef.current)
-    hoverLeaveTimerRef.current = window.setTimeout(() => {
-      setRolodexHovered(false)
-      hoverLeaveTimerRef.current = null
-    }, 80)
-  }, [])
   // Live view transform — the dock's anchor is derived from these.
   const cvPan = useCanvasStore(s => s.pan)
   const cvZoom = useCanvasStore(s => s.zoom)
@@ -1106,6 +1085,20 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
     startTween()
   }, [rows.length, startTween])
 
+  // A list-mode button interrupts a scroll in flight: the list stops on the
+  // row it had reached and the new mode applies straight away.
+  const pickDisplayMode = useCallback((m: 'auto' | 'compact' | 'full') => {
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current)
+      rafRef.current = null
+    }
+    const landed = Math.round(positionRef.current)
+    targetRef.current = landed
+    positionRef.current = landed
+    setDisplayMode(m)
+    bumpRender()
+  }, [setDisplayMode, bumpRender])
+
   // ── Rolodex → Viewer ──────────────────────────────────────────────
   // The link is geometry (a Viewer magneted to this panel); the MODE is
   // intent, and lives on the node. Turning a row into something the Viewer
@@ -1498,10 +1491,9 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
         const FINAL_OFFSET = 26 + 3 * SLOT_PEEK_H // 116 — beside active row
         const approxPanelH = APPROX_HEADER_H + LIST_AREA_H + CABINET_BAR_H
         const dockOffset = Math.max(0, Math.min(FINAL_OFFSET, approxPanelH - DOCK_H))
-        // Dock only shows while the rolodex (or the dock itself) is
-        // hovered. Still gated on LIST_AREA_H > 0 so a fully-collapsed
-        // panel doesn't flash the dock when the cursor passes over.
-        const fade = (LIST_AREA_H > 0 && rolodexHovered) ? 1 : 0
+        // Fade out when fully collapsed; pop in as soon as any list
+        // area appears.
+        const fade = LIST_AREA_H > 0 ? 1 : 0
         // If the panel is dragged so close to the left edge that the
         // left-side dock would clip offscreen, flip to the right side
         // of the panel. Threshold = dock width so the dock is always
@@ -1532,7 +1524,7 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
         return ReactDOM.createPortal(
           <DisplayModeDock
             mode={displayMode}
-            setMode={setDisplayMode}
+            setMode={pickDisplayMode}
             left={dockLeft}
             top={anchorY}
             slideOffset={dockOffset}
@@ -1540,8 +1532,6 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
             flipRight={flipRight}
             onPointerDownBg={onPanelPointerDown}
             onWheel={onWheel}
-            onHoverEnter={onHoverEnter}
-            onHoverLeave={onHoverLeave}
           />,
           document.body,
         )
@@ -1551,8 +1541,6 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
         ref={embedded ? embedRootRef : undefined}
         onWheel={onWheel}
         data-wheel-own=""
-        onPointerEnter={onHoverEnter}
-        onPointerLeave={onHoverLeave}
         // FLOATING: whole-panel drag (see onPanelPointerDown). EMBEDDED:
         // let background pointerdowns bubble to the FreeNode wrapper so
         // the TILE drags instead; inner controls stopPropagation on their
@@ -3207,6 +3195,46 @@ const SortToggle: React.FC<{
   >{mode === 'creation' ? '#' : 'A→Z'}</button>
 )
 
+// Lives outside DisplayModeDock on purpose: declared inside, it was a new
+// component type on every render, so while the list scrolled (a render per
+// frame) the button was replaced between press and release and the click
+// never landed.
+const DisplayModeBtn: React.FC<{
+  mode: 'auto' | 'compact' | 'full'
+  setMode: (m: 'auto' | 'compact' | 'full') => void
+  value: 'auto' | 'compact' | 'full'
+  label: string
+  title: string
+}> = ({ mode, setMode, value, label, title }) => {
+  const isActive = mode === value
+  return (
+    <button
+      title={title}
+      // Stop propagation on pointerdown too — the dock background
+      // is draggable, and we don't want a click on the button to
+      // also initiate a panel drag.
+      onPointerDown={e => e.stopPropagation()}
+      onClick={() => setMode(value)}
+      style={{
+        width: 22, height: 22,
+        background: isActive ? 'rgba(255,255,255,0.18)' : 'transparent',
+        border: `1px solid rgba(255,255,255,${isActive ? 0.45 : 0.14})`,
+        color: `rgba(255,255,255,${isActive ? 0.95 : 0.55})`,
+        borderRadius: 3,
+        cursor: 'pointer',
+        fontFamily: 'inherit',
+        fontSize: 11,
+        fontWeight: 700,
+        lineHeight: 1,
+        padding: 0,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}
+    >{label}</button>
+  )
+}
+
 // Side dock attached to the LEFT edge of the Rolodex panel. Three
 // buttons toggle the active-card display mode (see canvasStore's
 // rolodexDisplayMode). The dock's background reuses the panel's own
@@ -3236,48 +3264,12 @@ const DisplayModeDock: React.FC<{
   flipRight: boolean
   onPointerDownBg: (e: React.PointerEvent) => void
   onWheel: (e: React.WheelEvent) => void
-  onHoverEnter: () => void
-  onHoverLeave: () => void
-}> = ({ mode, setMode, left, top, slideOffset, fade, flipRight, onPointerDownBg, onWheel, onHoverEnter, onHoverLeave }) => {
-  const Btn: React.FC<{ value: 'auto' | 'compact' | 'full'; label: string; title: string }> = ({ value, label, title }) => {
-    const isActive = mode === value
-    return (
-      <button
-        title={title}
-        // Stop propagation on pointerdown too — the dock background
-        // is draggable, and we don't want a click on the button to
-        // also initiate a panel drag.
-        onPointerDown={e => e.stopPropagation()}
-        onClick={() => setMode(value)}
-        style={{
-          width: 22, height: 22,
-          background: isActive ? 'rgba(255,255,255,0.18)' : 'transparent',
-          border: `1px solid rgba(255,255,255,${isActive ? 0.45 : 0.14})`,
-          color: `rgba(255,255,255,${isActive ? 0.95 : 0.55})`,
-          borderRadius: 3,
-          cursor: 'pointer',
-          fontFamily: 'inherit',
-          fontSize: 11,
-          fontWeight: 700,
-          lineHeight: 1,
-          padding: 0,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >{label}</button>
-    )
-  }
+}> = ({ mode, setMode, left, top, slideOffset, fade, flipRight, onPointerDownBg, onWheel }) => {
   return (
     <div
       data-rolodex-dock
       onPointerDown={onPointerDownBg}
       onWheel={onWheel}
-      onPointerEnter={onHoverEnter}
-      onPointerLeave={onHoverLeave}
-      // (handlers passed through from the parent so the panel and
-      // dock share a single hover-zone state — moving the cursor
-      // between them doesn't flash the dock off.)
       style={{
         position: 'fixed',
         left,
@@ -3322,9 +3314,9 @@ const DisplayModeDock: React.FC<{
         pointerEvents: fade < 0.05 ? 'none' : 'auto',
       }}
     >
-      <Btn value="compact" label="≡" title="Compact — all rows as peek tabs, active never grows" />
-      <Btn value="full" label="▣" title="Full — active card always at hero size when possible" />
-      <Btn value="auto" label="A" title="Auto — drag the cabinet to control active growth" />
+      <DisplayModeBtn mode={mode} setMode={setMode} value="compact" label="≡" title="Compact — all rows as peek tabs, active never grows" />
+      <DisplayModeBtn mode={mode} setMode={setMode} value="full" label="▣" title="Full — active card always at hero size when possible" />
+      <DisplayModeBtn mode={mode} setMode={setMode} value="auto" label="A" title="Auto — drag the cabinet to control active growth" />
     </div>
   )
 }
