@@ -34,7 +34,6 @@ import { usePickMode } from './utils/cabinetPick'
   useCabinetUi, useTiltStore, usePickMode,
 }
 
-
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <App />

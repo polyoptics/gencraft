@@ -2,8 +2,8 @@
 // (utils/railViewer) shows the live "next" preview of the active one,
 // over whatever the window holds. It follows the strip as it changes: a
 // slider moved, an input stepped. Nothing here is stored: move the strips
-// away and the window shows its own item again. FX off (the switch in the
-// window's header, and on the strip's preview) shows the picture before the
+// away and the window shows its own item again. FX off (the switch first in
+// the image toolbar, and on the strip's preview) shows the picture before the
 // effects instead.
 
 import React from 'react'
@@ -17,68 +17,47 @@ import { railViewerDocks, viewerRail } from '../../utils/railViewer'
 import { railBeforePicture } from '../../utils/fx/railChain'
 import { railFullFrame } from '../../utils/fx/railFullFrame'
 import { CounterScaled } from './ContentViews'
-import { ImageStudio } from './ImageStudio'
+import { ImageStudio, tbBtn } from './ImageStudio'
 import { swingToLayers } from './ExplodedStrip'
 import { useTiltStore } from '../../store/tiltStore'
 
 const stop = (e: React.SyntheticEvent) => e.stopPropagation()
 
-/** The strip this window shows, and the picture its effects start from. */
-function useShownRail(windowId: string) {
+
+export const RailViewerOverlay: React.FC<{ windowId: string; fontSize: number }> = ({ windowId, fontSize }) => {
   const zoom = useCanvasStore(s => s.zoom)
   const nodes = useFreeNodeStore(s => s.nodes)
   const windows = useViewport3DStore(s => s.windows)
   const active = useRailUiStore(s => s.active)
   const docked = railViewerDocks(nodes, windows, zoom).get(windowId) ?? []
   const railId = viewerRail(docked, active)
-  const rail = railId ? nodes[railId] : undefined
-  const before = rail ? railBeforePicture(rail, railMembers(nodes).get(rail.id)) : null
-  return { zoom, docked, railId, rail, before }
-}
-
-/** The window header's FX switch, while it shows a strip with a picture to
- *  go back to: the same switch as the one on the strip's preview. */
-export const RailViewerFx: React.FC<{ windowId: string; style: (lit: boolean) => React.CSSProperties }> = ({ windowId, style }) => {
-  const { railId, before } = useShownRail(windowId)
-  const off = useRailUiStore(s => (railId ? !!s.fxOff[railId] : false))
-  if (!railId || !before) return null
-  return (
-    <button
-      data-rail-viewer-fx={off ? 'off' : 'on'}
-      style={style(!off)}
-      title="Effects: lit shows the result, dimmed the picture before them"
-      onPointerDown={stop}
-      onClick={() => useRailUiStore.getState().toggleFx(railId)}
-    >FX</button>
-  )
-}
-
-/** The window header's Layers button: swing round to see the strip's layers
- *  behind the Viewer, and back. */
-export const RailViewerLayers: React.FC<{ windowId: string; style: (lit: boolean) => React.CSSProperties }> = ({ windowId, style }) => {
-  const { railId, before } = useShownRail(windowId)
-  const swung = useTiltStore(s => Math.abs(s.yaw) > 1)
-  if (!railId || !before) return null
-  return (
-    <button
-      data-rail-viewer-layers=""
-      style={style(swung)}
-      title="Swing round and see the strip's layers behind the Viewer"
-      onPointerDown={stop}
-      onClick={e => {
-        const r = e.currentTarget.closest('[data-viewport3d]')?.getBoundingClientRect()
-        if (r) swingToLayers(r)
-      }}
-    >Layers</button>
-  )
-}
-
-export const RailViewerOverlay: React.FC<{ windowId: string; fontSize: number }> = ({ windowId, fontSize }) => {
-  const { zoom, docked, railId, rail, before } = useShownRail(windowId)
   const fxOff = useRailUiStore(s => (railId ? !!s.fxOff[railId] : false))
   const preview = useRailRunStore(s => (railId ? s.preview[railId] : undefined))
+  const swung = useTiltStore(s => Math.abs(s.yaw) > 1)
   if (!railId) return null
+  const rail = nodes[railId]
+  const before = railBeforePicture(rail, railMembers(nodes).get(railId))
   const showBefore = fxOff ? before : null
+  // The same switch as the one on the strip's preview.
+  const fx = before && (
+    <>
+      <button
+        data-rail-viewer-fx={fxOff ? 'off' : 'on'}
+        style={tbBtn(!fxOff)}
+        title="Effects: lit shows the result, dimmed the picture before them"
+        onClick={() => useRailUiStore.getState().toggleFx(railId)}
+      >FX</button>
+      <button
+        data-rail-viewer-layers=""
+        style={tbBtn(swung)}
+        title="Swing round and see the strip's layers behind the Viewer"
+        onClick={e => {
+          const r = e.currentTarget.closest('[data-viewport3d]')?.getBoundingClientRect()
+          if (r) swingToLayers(r)
+        }}
+      >Layers</button>
+    </>
+  )
   const canvas = preview?.canvas ?? null
   const full = () => railFullFrame(railId)
   return (
@@ -101,7 +80,7 @@ export const RailViewerOverlay: React.FC<{ windowId: string; fontSize: number }>
           ? (
             <div style={{ position: 'relative', width: '100%', height: '100%' }}>
               <CounterScaled zoom={zoom}>
-                <ImageStudio key="before" windowId={windowId} url={showBefore} name={rail?.label || 'Loop strip'} />
+                <ImageStudio key="before" windowId={windowId} url={showBefore} name={rail?.label || 'Loop strip'} toolbarStart={fx} />
               </CounterScaled>
             </div>
           )
@@ -117,6 +96,7 @@ export const RailViewerOverlay: React.FC<{ windowId: string; fontSize: number }>
                   url={`rail:${railId}`}
                   name={rail?.label || 'Loop strip'}
                   live={{ canvas, full }}
+                  toolbarStart={fx}
                 />
               </CounterScaled>
             </div>
