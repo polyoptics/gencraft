@@ -1,7 +1,7 @@
-// cabinetPick.ts — Pick mode: sorting through things on the table by hand. While
-// it is on, a card or tile follows the cursor, keeps its momentum when let go,
-// slides to a stop and knocks what it hits. Let go slowly it just lands, so
-// things can be piled. Off, nothing here runs and dragging is as ever.
+// cabinetPick.ts — Pick mode: sorting through things on the table by hand.
+// Clicking and dragging are as ever, on or off (selecting, docking on a strip,
+// decks, drawers). While it is on, a card or tile flicked and let go on the table
+// also keeps its momentum, slides to a stop and knocks what it hits.
 //
 // A small simulation on the canvas plane, in canvas units, so it behaves the
 // same flat and tilted. It only ever moves things: nothing is lost by a flick,
@@ -11,7 +11,6 @@ import { create } from 'zustand'
 import { useBoardsStore } from '../store/boardsStore'
 import { useCanvasStore } from '../store/canvasStore'
 import { useFreeNodeStore } from '../store/freeNodeStore'
-import { useUndoCoordinator } from '../store/undoCoordinator'
 import { canStowTile, canvasPointAt, stowCards, stowTiles, type DrawerRef } from './cabinet'
 
 const KEY = 'vidbars.pickMode'
@@ -68,7 +67,9 @@ function tableBodies(): Body[] {
   for (const g of useBoardsStore.getState().groups) {
     if (g.pin) continue
     if (g.deckAnchorId && g.deckAnchorId !== g.id && g.deckState && g.deckState !== 'open') continue
-    const el = document.querySelector<HTMLElement>(`[data-group-card][data-id="${g.id}"]`)
+    // On a loop strip, it stays where the strip holds it.
+    if (Object.values(fns.nodes).some(n => n.cardRef === g.id && n.railDock)) continue
+    const el =document.querySelector<HTMLElement>(`[data-group-card][data-id="${g.id}"]`)
     if (!el) continue
     // Its own layout box, which the tilt does not change, in canvas units: a
     // card is not drawn at its origin. Only ever moved by deltas, so that is fine.
@@ -194,16 +195,12 @@ function onDown(e: PointerEvent) {
   const el = e.target.closest<HTMLElement>('[data-freenode][data-id], [data-group-card][data-id]')
   const id = el?.dataset.id
   if (!id) return
-  // Fresh unless things are still sliding: then what is moving keeps moving.
-  if (!flying) bodies = tableBodies()
-  const b = bodies.find(o => o.id === id)
+  const b = tableBodies().find(o => o.id === id)
   const at = point(e)
   if (!b || !at) return
-  e.stopImmediatePropagation()
-  e.preventDefault()
-  useUndoCoordinator.getState().checkpoint()
+  // The hand has it now: the rest of what is sliding keeps sliding.
+  bodies = bodies.filter(o => o.id !== id)
   held = b
-  b.vx = b.vy = 0
   samples = [{ t: e.timeStamp, x: at.cx, y: at.cy }]
   window.addEventListener('pointermove', onMove, true)
   window.addEventListener('pointerup', onUp, true)
@@ -214,9 +211,6 @@ function onMove(e: PointerEvent) {
   if (!held) return
   const at = point(e)
   if (!at) return
-  e.stopImmediatePropagation()
-  const prev = samples[samples.length - 1]
-  moveBody(held, at.cx - prev.x, at.cy - prev.y)
   samples.push({ t: e.timeStamp, x: at.cx, y: at.cy })
   if (samples.length > 6) samples.shift()
 }
@@ -225,10 +219,9 @@ function onUp(e: PointerEvent) {
   window.removeEventListener('pointermove', onMove, true)
   window.removeEventListener('pointerup', onUp, true)
   window.removeEventListener('pointercancel', onUp, true)
-  const b = held
+  const pressed = held
   held = null
-  if (!b) return
-  e.stopImmediatePropagation()
+  if (!pressed || e.type === 'pointercancel') return
   // The hand's speed over its last moments, not its last twitch.
   const recent = samples.filter(s => e.timeStamp - s.t < 100)
   const first = recent[0], last = recent[recent.length - 1]
@@ -239,11 +232,20 @@ function onUp(e: PointerEvent) {
   const clamp = raw > max ? max / raw : 1
   const vx = span > 0 ? ((last.x - first.x) / span) * clamp : 0
   const vy = span > 0 ? ((last.y - first.y) / span) * clamp : 0
-  if (putAwayIfInTray(b)) return
-  if (Math.hypot(vx, vy) < hard) return
-  b.vx = vx; b.vy = vy
-  flying = true
-  if (raf === null) tick(performance.now())
+  // This listener runs first: wait for the drag's own release to finish. What
+  // it put somewhere (a strip, a deck, a drawer) is no longer on the table.
+  setTimeout(() => {
+    const fresh = tableBodies()
+    const b = fresh.find(o => o.id === pressed.id)
+    if (!flying) bodies = fresh
+    else if (b) bodies.push(b)
+    // Not dragged (a click, a shift-click), or let go slowly: it stays.
+    if (!b || (b.x === pressed.x && b.y === pressed.y) || Math.hypot(vx, vy) < hard) return
+    if (putAwayIfInTray(b)) return
+    b.vx = vx; b.vy = vy
+    flying = true
+    if (raf === null) tick(performance.now())
+  })
 }
 
 // Ahead of the card and tile handlers, which listen further down the tree.
