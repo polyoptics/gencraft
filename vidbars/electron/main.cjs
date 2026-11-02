@@ -337,6 +337,8 @@ function registerBridge() {
   // for it to be up; the program and its folder are fixed in filmMixer.cjs.
   ipcMain.handle('vb:mixer-status', (e) => (fromApp(e) ? require('./filmMixer.cjs').status() : null))
   ipcMain.handle('vb:mixer-start', (e) => (fromApp(e) ? require('./filmMixer.cjs').start() : { error: 'Not allowed' }))
+  ipcMain.handle('vb:mixer-view', (e) => (fromApp(e) ? require('./filmMixer.cjs').view(e.sender.mainFrame) : null))
+  ipcMain.handle('vb:mixer-frame', (e, job) => (fromApp(e) ? require('./filmMixer.cjs').frame(job ?? {}) : { error: 'Not allowed' }))
 
   // An image the app MADE (a context sheet, an effect result), written as a
   // real file so it can be dragged out like any other:

@@ -22,6 +22,7 @@ import { railComboAt, railFaceCombo } from '../../utils/fx/railChain'
 import { EFFECTS, knownKind } from '../../utils/fx/effects'
 import { LIVE_SIDE } from '../../hooks/useFxStrips'
 import { toggleEffectOff, toggleEffectSolo } from '../../utils/fx/effectToggles'
+import { FilmMixerLayers } from '../FilmMixer/FilmMixerLayers'
 
 type EffectItem = Extract<ChainItem, { kind: 'effect' }>
 
@@ -33,7 +34,7 @@ interface Pane { id: string; exact: HTMLCanvasElement; boosted: HTMLCanvasElemen
 /** What `after` lays over `before`, as colour and alpha: the least alpha that
  *  can make the change, so laying the pane over `before` gives back `after`
  *  (`exact`). `boosted` lifts faint alpha so it can be seen on its own. */
-function unmix(before: HTMLCanvasElement, after: HTMLCanvasElement): Pane & { id: '' } {
+export function unmix(before: HTMLCanvasElement, after: HTMLCanvasElement): Pane & { id: '' } {
   const { width: w, height: h } = after
   const g = before.getContext('2d')!
   const b = (before.width === w && before.height === h ? g : (() => {
@@ -135,13 +136,22 @@ function moveCard(railId: string, order: string[]): void {
 }
 
 /** Space between panes, as a share of the pane's height. */
-const GAP = 0.5
+export const LAYER_GAP = 0.5
 /** How far round a swing has fully fanned the panes, degrees. */
 const FAN_AT = 35
 /** How far tipped back they have fully closed again, degrees. */
 const CLOSE_AT = 40
 
-const Canvas: React.FC<{ canvas: HTMLCanvasElement; opacity?: number }> = ({ canvas, opacity = 1 }) => {
+/** How open layers are, 0-1. Open when swung from top-down or tipped up past
+ *  flat; tipping the view back closes them, smoothly, since then you are looking
+ *  round a model, not at the layers. Tipped up no model stands, so nothing
+ *  closes them. */
+export function layerFan(s: { tilt: number; yaw: number }): number {
+  const smooth = (k: number) => { const c = Math.max(0, Math.min(1, k)); return c * c * (3 - 2 * c) }
+  return Math.round(Math.max(smooth(Math.abs(s.yaw) / FAN_AT), smooth(-s.tilt / FAN_AT)) * (1 - smooth(Math.max(0, s.tilt) / CLOSE_AT)) * 200) / 200
+}
+
+export const LayerCanvas: React.FC<{ canvas: HTMLCanvasElement; opacity?: number }> = ({ canvas, opacity = 1 }) => {
   const host = useRef<HTMLDivElement>(null)
   useEffect(() => {
     const el = host.current
@@ -164,13 +174,7 @@ const StripLayers: React.FC<{ railId: string; rect: { x: number; y: number; widt
   const items = combo?.items
   const effects = (items ?? []).filter((it): it is EffectItem => it.kind === 'effect')
   const soloed = effects.find(e => e.solo)?.id ?? null
-  const fan = useTiltStore(s => {
-    // Open when swung from top-down or tipped up past flat; tipping the view
-    // back closes them, smoothly, since then you are looking round a model,
-    // not at the layers. Tipped up no model stands, so nothing closes them.
-    const smooth = (k: number) => { const c = Math.max(0, Math.min(1, k)); return c * c * (3 - 2 * c) }
-    return Math.round(Math.max(smooth(Math.abs(s.yaw) / FAN_AT), smooth(-s.tilt / FAN_AT)) * (1 - smooth(Math.max(0, s.tilt) / CLOSE_AT)) * 200) / 200
-  })
+  const fan = useTiltStore(layerFan)
 
   // Re-baked when what the layers are made of changes; not for a solo.
   const sig = JSON.stringify((items ?? []).map(it => (it.kind === 'effect' ? { ...it, solo: false } : it)))
@@ -189,7 +193,7 @@ const StripLayers: React.FC<{ railId: string; rect: { x: number; y: number; widt
   const order = effects.map(e => e.id)
   const aspect = baked ? baked.plate.width / baked.plate.height : 1
   const boxH = Math.min(rect.height, rect.width / aspect), boxW = boxH * aspect
-  const spread = Math.max(40, boxH * GAP)
+  const spread = Math.max(40, boxH * LAYER_GAP)
   const gap = spread * fan
   // Plate furthest back; the last card right behind the Viewer's own face.
   const zOf = (i: number) => -(order.length - i) * gap
@@ -242,7 +246,7 @@ const StripLayers: React.FC<{ railId: string; rect: { x: number; y: number; widt
   return (
     <>
       <div style={{ ...pos(zOf(-1)), outline: edge('rgba(255,255,255,.25)'), pointerEvents: 'none' }}>
-        <Canvas canvas={baked.plate} />
+        <LayerCanvas canvas={baked.plate} />
         <div style={{ ...header, background: '#23252f' }}>Picture</div>
       </div>
       {shown.map((id, at) => {
@@ -260,7 +264,7 @@ const StripLayers: React.FC<{ railId: string; rect: { x: number; y: number; widt
             onPointerDown={e => startPane(e, id)}
             style={{ ...pos(z), cursor: 'pointer', outline: edge(line), outlineOffset: -1, pointerEvents: 'auto' }}
           >
-            {pane && <Canvas canvas={pane.boosted} opacity={dim ? 0.1 : 1} />}
+            {pane && <LayerCanvas canvas={pane.boosted} opacity={dim ? 0.1 : 1} />}
             <div style={{ ...header, background: `color-mix(in srgb, ${def.color} 28%, #16171f)`, outline: edge(line), outlineOffset: -1 }}>
               <span style={{ color: def.color }}>{def.glyph}</span>
               <span>{def.label}</span>
@@ -299,6 +303,7 @@ export const StripLayersStage: React.FC = () => {
         if (!railId || !w) return null
         return <StripLayers key={winId} railId={railId} rect={{ x: pan.x + w.x * zoom, y: pan.y + w.y * zoom, width: w.width * zoom, height: w.height * zoom }} />
       })}
+      {swung && <FilmMixerLayers />}
     </div>
   )
 }

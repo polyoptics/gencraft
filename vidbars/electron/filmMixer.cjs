@@ -97,4 +97,46 @@ function stop() {
   })
 }
 
-module.exports = { status, start, stop, ownsRunning }
+// What the page is showing, read from inside it: the frame's origin keeps the
+// app from reaching in itself. A fixed read, nothing from the app goes into it.
+const VIEW_SCRIPT = `(() => {
+  const e = S.pl[S.i]
+  if (!e) return null
+  const k = e.seg, s = F.segs[k]
+  return {
+    seg: k, i: e.i, clip: s.clip, overlay: !!s.overlay, cardOn: !!S.cardOn, playing: !!S.playing,
+    look: s.look ? ((k === F.cur ? curLook() : segLook(k)) || zeroLook()) : null,
+  }
+})()`
+
+/** The look layers read the current shot, frame and look from the mixer's own
+ *  page, or null while it has none. */
+async function view(mainFrame) {
+  const frame = mainFrame.framesInSubtree.find(f => {
+    try { return new URL(f.url).origin === new URL(URL_BASE).origin } catch { return false }
+  })
+  if (!frame) return null
+  try { return await frame.executeJavaScript(VIEW_SCRIPT) } catch { return null }
+}
+
+/** One frame as a data url, so the page can read its pixels (it could not read
+ *  an image from the mixer's origin). { loading: true } while the shot loads. */
+function frame({ seg, i, look, card }) {
+  if (!Number.isInteger(seg) || !Number.isInteger(i)) return Promise.resolve({ error: 'no such frame' })
+  const q = `seg=${seg}&i=${i}&fmt=png&card=${card ? 1 : 0}` + (look ? `&look=${encodeURIComponent(JSON.stringify(look))}` : '')
+  return new Promise(resolve => {
+    const req = http.get(`${URL_BASE}/frame?${q}`, res => {
+      const parts = []
+      res.on('data', d => parts.push(d))
+      res.on('end', () => {
+        if (res.statusCode === 409) resolve({ loading: true })
+        else if (res.statusCode !== 200) resolve({ error: `the mixer answered ${res.statusCode}` })
+        else resolve({ url: 'data:image/png;base64,' + Buffer.concat(parts).toString('base64') })
+      })
+    })
+    req.on('error', err => resolve({ error: err.message }))
+    req.setTimeout(10_000, () => { req.destroy(); resolve({ error: 'the mixer took too long' }) })
+  })
+}
+
+module.exports = { status, start, stop, ownsRunning, view, frame }

@@ -88,4 +88,11 @@ contextBridge.exposeInMainWorld('vidbarsDesktop', {
   /** Start the look mixer, or use the one running. Resolves { url } when its
    *  page can be shown, or { error, log }. */
   mixerStart: () => ipcRenderer.invoke('vb:mixer-start'),
+
+  /** The shot, frame and look the mixer's page is showing, or null. */
+  mixerView: () => ipcRenderer.invoke('vb:mixer-view'),
+
+  /** One frame with this look, as a PNG data url: { url }, { loading: true }
+   *  while the shot loads, or { error }. */
+  mixerFrame: (job) => ipcRenderer.invoke('vb:mixer-frame', job),
 })

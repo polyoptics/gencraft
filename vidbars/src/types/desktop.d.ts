@@ -53,6 +53,13 @@ export interface VidbarsDesktop {
    *  look_bg_depthhatch.py). */
   mixerStatus?(): Promise<{ running: boolean; starting: boolean; url: string }>
   mixerStart?(): Promise<{ url?: string; error?: string; log?: string }>
+  mixerView?(): Promise<{
+    seg: number; i: number; clip: string; overlay: boolean; cardOn: boolean; playing: boolean
+    /** Null on a graphics-only shot. */
+    look: Record<string, number> | null
+  } | null>
+  mixerFrame?(job: { seg: number; i: number; look: Record<string, number> | null; card: boolean }):
+    Promise<{ url?: string; loading?: boolean; error?: string }>
   sketchRun?(job: {
     op: 'depth' | 'segment' | 'lines' | 'formhatch' | 'bghatch' | 'look'; frames: string[]
     /** op 'look': which drawing look (sketch_server.py LOOKS). */
