@@ -90,3 +90,7 @@ body {
   z-index: -1;
   pointer-events: none;
 }
+
+/* A strip exploded: its result has gone back into the stack behind the Viewer. */
+[data-viewport3d][data-layers-out] [data-viewer-body] { background: transparent !important; }
+[data-viewport3d][data-layers-out] [data-viewer-content] { visibility: hidden; }

@@ -19,7 +19,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import {
-  useTiltStore, useModelScaleStore, isTilted, offFlat, unprojectTilt, TILT_SNAP, TILT_FAR, TILT_PERSPECTIVE, DEFAULT_LIGHT,
+  useTiltStore, useModelScaleStore, isTilted, offFlat, turntableShare, unprojectTilt, TILT_SNAP, TILT_FAR, TILT_PERSPECTIVE, DEFAULT_LIGHT,
 } from '../../store/tiltStore'
 import { useCanvasStore, groupBounds, MIN_ZOOM, MAX_ZOOM } from '../../store/canvasStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
@@ -116,10 +116,8 @@ function useAltTiltGesture() {
       altUsed = true
       swallowClick = true
       if (e.button === 2) { dolly(e, host); swallowMenu = true; return }
-      const { tilt: t0, spin: s0, yaw: b0 } = useTiltStore.getState()
-      // Sideways from flat swings the view round; once tipped back it turns
-      // the ground like a turntable, until any swing there is comes back.
-      const swings = t0 < TILT_SNAP || Math.abs(b0) > 0.5
+      const { tilt: t0 } = useTiltStore.getState()
+      let turned = 0
       const x0 = e.clientX, y0 = e.clientY
       // Tipping back from flat with something selected makes it the pivot:
       // the view glides over to centre it while the plane tilts, wherever
@@ -137,7 +135,13 @@ function useAltTiltGesture() {
         // plane: turning starts only past a few px of real sideways drag.
         const dx = ev.clientX - x0
         const turnPx = Math.sign(dx) * Math.max(0, Math.abs(dx) - TURN_SLOP)
-        useTiltStore.getState().setView(t0 - (ev.clientY - y0) * DRAG_DEG, swings ? s0 : s0 - turnPx * DRAG_DEG, swings ? b0 + turnPx * DRAG_DEG : b0)
+        // Each bit of sideways drag swings the view near flat and turns the
+        // ground once tipped back, by the tilt it is made at.
+        const tilt = t0 - (ev.clientY - y0) * DRAG_DEG
+        const d = (turnPx - turned) * DRAG_DEG, share = turntableShare(tilt)
+        turned = turnPx
+        const s = useTiltStore.getState()
+        s.setView(tilt, s.spin - d * share, s.yaw + d * (1 - share))
         if (cTo && !glideStarted && useTiltStore.getState().tilt > 0.5) {
           glideStarted = true
           glideTo(cFrom, cTo, W, H)

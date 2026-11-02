@@ -28,6 +28,14 @@ export const TILT_MAX = 89
 export const TILT_SNAP = 10
 /** How far the view can tip upward past flat. */
 export const TILT_UP = 45
+/** How far tipped back a sideways drag has become pure turntable, degrees. */
+const TURNTABLE_AT = 20
+/** 0 near flat or tipped up, where a sideways drag swings the view; 1 tipped
+ *  back, where it turns the ground about its normal. Between, a blend. */
+export function turntableShare(tilt: number): number {
+  const k = Math.max(0, Math.min(1, tilt / TURNTABLE_AT))
+  return k * k * (3 - 2 * k)
+}
 
 /** The key light on the models, set in the Light panel. Angles in degrees,
  *  in the plane's frame: azimuth round the card, elevation up from it. */
@@ -124,7 +132,10 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
     // there stays there as the view turns or tips.
     const g = centreGround(get())
     tilt = Math.max(-TILT_UP, Math.min(TILT_MAX, tilt))
-    yaw = Math.max(-TILT_MAX, Math.min(TILT_MAX, yaw))
+    // Tipped back any swing eases out: with the ground standing under models,
+    // a swing would lean it, which reads as the camera rolling.
+    const room = TILT_MAX * (1 - turntableShare(tilt))
+    yaw = Math.max(-room, Math.min(room, yaw))
     set({ tilt, spin, yaw, ...(g ? shiftKeeping(g, tilt, spin, yaw) : {}) })
   },
   setShift: (shiftX, shiftY) => set({ shiftX, shiftY }),

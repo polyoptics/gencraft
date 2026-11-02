@@ -6,7 +6,7 @@
 // the image toolbar, and on the strip's preview) shows the picture before the
 // effects instead.
 
-import React from 'react'
+import React, { useEffect, useRef } from 'react'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useRailRunStore } from '../../store/railRunStore'
@@ -18,7 +18,7 @@ import { railBeforePicture } from '../../utils/fx/railChain'
 import { railFullFrame } from '../../utils/fx/railFullFrame'
 import { CounterScaled } from './ContentViews'
 import { ImageStudio, tbBtn } from './ImageStudio'
-import { swingToLayers } from './ExplodedStrip'
+import { swingToLayers, useLayersOut } from './ExplodedStrip'
 import { useTiltStore } from '../../store/tiltStore'
 
 const stop = (e: React.SyntheticEvent) => e.stopPropagation()
@@ -34,11 +34,24 @@ export const RailViewerOverlay: React.FC<{ windowId: string; fontSize: number }>
   const fxOff = useRailUiStore(s => (railId ? !!s.fxOff[railId] : false))
   const preview = useRailRunStore(s => (railId ? s.preview[railId] : undefined))
   const swung = useTiltStore(s => Math.abs(s.yaw) > 1)
+  // Exploded, the result has gone back into the stack behind this window,
+  // which is left an open frame to see it through.
+  const out = useLayersOut(s => (railId ? !!s[railId] : false))
+  const root = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const frame = root.current?.closest<HTMLElement>('[data-viewport3d]')
+    frame?.toggleAttribute('data-layers-out', out)
+    return () => frame?.removeAttribute('data-layers-out')
+  }, [out])
   if (!railId) return null
   const rail = nodes[railId]
   const before = railBeforePicture(rail, railMembers(nodes).get(railId))
   const showBefore = fxOff ? before : null
   // The same switch as the one on the strip's preview.
+  const swing = (e: React.MouseEvent<HTMLElement>) => {
+    const r = e.currentTarget.closest('[data-viewport3d]')?.getBoundingClientRect()
+    if (r) swingToLayers(r)
+  }
   const fx = before && (
     <>
       <button
@@ -51,10 +64,7 @@ export const RailViewerOverlay: React.FC<{ windowId: string; fontSize: number }>
         data-rail-viewer-layers=""
         style={tbBtn(swung)}
         title="Swing round and see the strip's layers behind the Viewer"
-        onClick={e => {
-          const r = e.currentTarget.closest('[data-viewport3d]')?.getBoundingClientRect()
-          if (r) swingToLayers(r)
-        }}
+        onClick={swing}
       >Layers</button>
     </>
   )
@@ -62,9 +72,10 @@ export const RailViewerOverlay: React.FC<{ windowId: string; fontSize: number }>
   const full = () => railFullFrame(railId)
   return (
     <div
+      ref={root}
       data-rail-viewer={railId}
       onPointerDown={stop} onWheel={stop} onDoubleClick={stop}
-      style={{ position: 'absolute', inset: 0, zIndex: 5, background: '#0c0d14', display: 'flex', flexDirection: 'column' }}
+      style={{ position: 'absolute', inset: 0, zIndex: 5, background: out ? 'transparent' : '#0c0d14', display: 'flex', flexDirection: 'column', pointerEvents: out ? 'none' : undefined }}
     >
       {/* Fixed height, one line: what it says changes while you work
           ("updating…", a save, a grip), and the picture under it must not
@@ -74,8 +85,9 @@ export const RailViewerOverlay: React.FC<{ windowId: string; fontSize: number }>
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{rail?.label || 'Loop strip'}</span>
         {docked.length > 1 && <span style={{ opacity: 0.55 }}>· {docked.indexOf(railId) + 1} of {docked.length} strips</span>}
         {preview?.running && <span style={{ marginLeft: 'auto', opacity: 0.55 }}>updating…</span>}
+        {out && <button style={{ ...tbBtn(true), marginLeft: 'auto', pointerEvents: 'auto' }} title="Back to the flat view" onClick={swing}>Layers</button>}
       </div>
-      <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', visibility: out ? 'hidden' : undefined }}>
         {showBefore
           ? (
             <div style={{ position: 'relative', width: '100%', height: '100%' }}>

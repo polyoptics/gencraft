@@ -566,6 +566,7 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
         onWheel={onBodyWheel}
         data-wheel-own=""
         onContextMenu={onBodyContextMenu}
+        data-viewer-body=""
         style={{
           flex: 1, position: 'relative',
           // Transparent for GL/empty (grid shows around, GL beneath);
@@ -593,7 +594,7 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
             canvas zoomed underneath it, while the window itself stood
             perfectly still. */}
         {active && !modelActive && (
-          <ContentView windowId={id} item={active} zoom={gz} />
+          <div data-viewer-content="" style={{ display: 'contents' }}><ContentView windowId={id} item={active} zoom={gz} /></div>
         )}
         {/* An effect strip touching this window shows its output here,
             over whatever the window holds (utils/fx, useFxStrips). */}
@@ -602,7 +603,7 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
             result (utils/railViewer). */}
         <RailViewerOverlay windowId={id} fontSize={fontSize} />
         {showBodyOverlay && (
-          <div style={{
+          <div data-viewer-content="" style={{
             position: 'absolute', inset: 0,
             display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
             gap: 6 * iz,

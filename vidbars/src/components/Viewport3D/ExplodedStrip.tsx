@@ -9,6 +9,7 @@
 
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { create } from 'zustand'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useRailUiStore } from '../../store/railUiStore'
 import { useTiltStage, useTiltStore } from '../../store/tiltStore'
@@ -69,10 +70,12 @@ export function unmix(before: HTMLCanvasElement, after: HTMLCanvasElement): Pane
   return { id: '', exact, boosted }
 }
 
-/** The stack's pictures: the plate, and a pane per effect card. A card
+interface Baked { plate: HTMLCanvasElement; panes: Pane[]; result: HTMLCanvasElement }
+
+/** The stack's pictures: the result, the plate, and a pane per effect card. A card
  *  switched off gets the pane it would have, there to switch back on. Solo is
  *  left out, so every pane keeps its layer while one is soloed. */
-async function bake(items: ChainItem[]): Promise<{ plate: HTMLCanvasElement; panes: Pane[] } | null> {
+async function bake(items: ChainItem[]): Promise<Baked | null> {
   const on = items.map(it => (it.kind === 'effect' ? { ...it, solo: false } : it))
   const r = await runChain(on, LIVE_SIDE, BAKE_SIDE, { live: true })
   const source = on.find(it => it.kind === 'source')
@@ -107,7 +110,7 @@ async function bake(items: ChainItem[]): Promise<{ plate: HTMLCanvasElement; pan
     panes.push({ ...unmix(prev, after), id: it.id })
     prev = after
   }
-  return { plate, panes }
+  return { plate, panes, result: out }
 }
 
 /** The strip's slots with its effect cards in this order. A card takes the
@@ -162,6 +165,9 @@ export const LayerCanvas: React.FC<{ canvas: HTMLCanvasElement; opacity?: number
   return <div ref={host} style={{ position: 'absolute', inset: 0, opacity, pointerEvents: 'none' }} />
 }
 
+/** Strips whose result has left their Viewer's face for the stack behind it. */
+export const useLayersOut = create<Record<string, boolean>>(() => ({}))
+
 /** One Viewer's strip, hanging behind it. */
 const StripLayers: React.FC<{ railId: string; rect: { x: number; y: number; width: number; height: number } }> = ({ railId, rect }) => {
   const nodes = useFreeNodeStore(s => s.nodes)
@@ -178,7 +184,7 @@ const StripLayers: React.FC<{ railId: string; rect: { x: number; y: number; widt
 
   // Re-baked when what the layers are made of changes; not for a solo.
   const sig = JSON.stringify((items ?? []).map(it => (it.kind === 'effect' ? { ...it, solo: false } : it)))
-  const [baked, setBaked] = useState<{ plate: HTMLCanvasElement; panes: Pane[] } | null>(null)
+  const [baked, setBaked] = useState<Baked | null>(null)
   const latest = useRef(items)
   latest.current = items
   useEffect(() => {
@@ -194,9 +200,14 @@ const StripLayers: React.FC<{ railId: string; rect: { x: number; y: number; widt
   const aspect = baked ? baked.plate.width / baked.plate.height : 1
   const boxH = Math.min(rect.height, rect.width / aspect), boxW = boxH * aspect
   const spread = Math.max(40, boxH * LAYER_GAP)
-  const gap = spread * fan
-  // Plate furthest back; the last card right behind the Viewer's own face.
-  const zOf = (i: number) => -(order.length - i) * gap
+  // The result leaves the Viewer's face and travels back through the stack,
+  // to end behind the plate. The panes ride with it, just behind it, and each
+  // is left behind at its own place: the last card first, the plate last.
+  const travel = -(order.length + 2) * spread * fan
+  const zOf = (i: number) => {
+    const place = -(order.length - i) * spread
+    return place > travel ? place : travel - 1 - (order.length - i) * 0.1
+  }
   const stepTo = (id: string, dz: number) => Math.max(0, Math.min(order.length - 1, order.indexOf(id) + Math.round(dz / spread)))
   const shown = (() => {
     if (!drag) return order
@@ -238,6 +249,12 @@ const StripLayers: React.FC<{ railId: string; rect: { x: number; y: number; widt
     window.addEventListener('pointerup', up)
   }
 
+  const out = !!baked && fan > 0
+  useEffect(() => {
+    useLayersOut.setState({ [railId]: out })
+    return () => useLayersOut.setState({ [railId]: false })
+  }, [railId, out])
+
   if (!baked || fan === 0) return null
   const left = rect.x + (rect.width - boxW) / 2, top = rect.y + (rect.height - boxH) / 2
   const edge = (c: string) => `1.5px solid ${c}`
@@ -245,6 +262,10 @@ const StripLayers: React.FC<{ railId: string; rect: { x: number; y: number; widt
   const pos = (z: number): React.CSSProperties => ({ position: 'absolute', left, top, width: boxW, height: boxH, transform: `translateZ(${z}px)` })
   return (
     <>
+      <div style={{ ...pos(travel), outline: edge('rgba(255,255,255,.25)'), pointerEvents: 'none' }}>
+        <LayerCanvas canvas={baked.result} />
+        <div style={{ ...header, background: '#23252f' }}>Result</div>
+      </div>
       <div style={{ ...pos(zOf(-1)), outline: edge('rgba(255,255,255,.25)'), pointerEvents: 'none' }}>
         <LayerCanvas canvas={baked.plate} />
         <div style={{ ...header, background: '#23252f' }}>Picture</div>
