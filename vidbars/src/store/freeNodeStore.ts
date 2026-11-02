@@ -304,8 +304,7 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
       // whole tile is the card's face: name, then a slider per value.
       effect: 180,
       cabinet: 320,
-      // Under 900 the mixer's page stacks into one long column.
-      filmMixer: 1240,
+      filmMixer: 1240,  // the button sizes it to the screen (openFilmMixer)
     }
     const node: FreeNodeData = {
       id, x, y,

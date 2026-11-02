@@ -15,20 +15,40 @@ import { addFreeNodeCentered } from '../../utils/canvasCreate'
  *  the shield back. Pinned, it is a tool on the screen and needs no shield. */
 
 const DEFAULT_URL = 'http://localhost:8766'
-/** Under 900 the mixer's page stacks into one long column. */
+/** The page's own layout, the same at every zoom and node size: the node
+ *  scales it like a picture, so nothing in it ever rearranges. Under 900 wide
+ *  the mixer's page stacks into one long column. */
 const PAGE_W = 1240
+const PAGE_H = 838
+/** The node's shape, height ÷ width, title bar included. It only ever scales. */
+export const FILM_MIXER_ASPECT = 860 / 1240
+/** How much of the canvas it comes down filling, whatever the zoom. */
+const START_FILL = 0.9
 
 /** One mixer: its page lets only one copy of itself be live. The button adds
  *  it, or brings the camera to the one on the canvas. */
 export function openFilmMixer() {
   const fns = useFreeNodeStore.getState()
   const have = Object.values(fns.nodes).find(n => n.type === 'filmMixer')
-  if (!have) { addFreeNodeCentered('filmMixer'); return }
-  fns.setFreeSelection([have.id])
-  if (have.pin) return
   const cs = useCanvasStore.getState()
   const host = document.querySelector('[data-zoom-bar-host]')?.getBoundingClientRect()
   const w = host?.width ?? window.innerWidth, h = host?.height ?? window.innerHeight
+  if (!have) {
+    // Sized from the screen rather than createScaleFor, whose clamps let it
+    // come down huge zoomed in and small zoomed far out.
+    const id = addFreeNodeCentered('filmMixer')
+    const n = useFreeNodeStore.getState().nodes[id]
+    const width = Math.min(w, h / FILM_MIXER_ASPECT) * START_FILL / cs.zoom
+    const height = width * FILM_MIXER_ASPECT
+    useFreeNodeStore.getState().updateFreeNode(id, {
+      width, height,
+      x: n.x + n.width / 2 - width / 2,
+      y: n.y + n.height / 2 - height / 2,
+    })
+    return
+  }
+  fns.setFreeSelection([have.id])
+  if (have.pin) return
   useCanvasStore.setState({ pan: {
     x: w / 2 - (have.x + have.width / 2) * cs.zoom,
     y: h / 2 - (have.y + have.height / 2) * cs.zoom,
@@ -105,20 +125,22 @@ export function FilmMixerBody({ pinned, bodyW, bodyH }: { pinned: boolean; bodyW
   }, [active])
 
   const shielded = ready && !pinned && !active
+  const fit = Math.max(0.001, Math.min(bodyW / PAGE_W, bodyH / PAGE_H))
 
   return (
     <div style={{ flex: 1, minHeight: 0, position: 'relative', overflow: 'hidden', background: '#14151c' }}>
       {phase.kind === 'ready'
-        // Always laid out PAGE_W wide and drawn to the node's size, like a
-        // picture: a node added zoomed out is thousands of units wide, and
-        // the page laid out at that would be all gaps and specks of text.
+        // Fitted, not stretched: the title bar holds its screen size, so the
+        // body's shape changes with the zoom, and the page must not reflow
+        // as the wheel turns. The spare room is a margin.
         ? <iframe
             src={phase.url}
             title="Film Look mixer"
             style={{
-              position: 'absolute', left: 0, top: 0, border: 'none', display: 'block',
-              width: PAGE_W, height: Math.max(1, bodyH * PAGE_W / Math.max(1, bodyW)),
-              transform: `scale(${bodyW / PAGE_W})`, transformOrigin: '0 0',
+              position: 'absolute', top: 0, border: 'none', display: 'block',
+              left: (bodyW - PAGE_W * fit) / 2,
+              width: PAGE_W, height: PAGE_H,
+              transform: `scale(${fit})`, transformOrigin: '0 0',
             }}
           />
         : <PhaseMessage phase={phase} onStart={() => void start()} />}
