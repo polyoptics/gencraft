@@ -7,7 +7,8 @@
 //    to the side to grow a branch from it.
 //  - Drag a point's tick up or down: its stem above or below the line.
 //  - Drag a line's end: longer or shorter (not past its points).
-//  - Drag a line itself: the whole storyline moves.
+//  - Drag a line itself, or the grab handle left of where it starts (a
+//    lone point too): the whole storyline moves.
 //  - Click a point to select it; click it again quickly (or its title) to
 //    name it. Delete removes the selected point and what branches from it.
 //
@@ -52,6 +53,8 @@ const DRAG_PX = 4
  *  along it; further off to the side, it grows a branch. */
 const ALONG_COS = 0.82
 const DOUBLE_MS = 400
+/** Screen px between the grab handle and the root line's start. */
+const GRAB_GAP = 10
 
 const C_LINE = 'rgba(196,208,255,0.78)'
 const C_POINT = '#8fc2ff'
@@ -276,7 +279,7 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
       if (role === 'tip-up' || role === 'tip-down') return pointId ? { kind: 'tip', point: pointId, side: role === 'tip-up' ? 'up' : 'down' } : null
       if (role === 'start' && lineId) return { kind: 'start', line: lineId }
       if (role === 'end' && lineId) return pointsOn(lineId).length ? { kind: 'end', line: lineId } : { kind: 'grow', line: lineId }
-      if (role === 'line') return { kind: 'move', cards: cardOrigins(d0, new Set(d0.points.map(p => p.id))) }
+      if (role === 'line' || role === 'grab') return { kind: 'move', cards: cardOrigins(d0, new Set(d0.points.map(p => p.id))) }
       if ((role === 'point' || role === 'title') && pointId && lineId) {
         const lg = at(lineId)
         if (!lg) return null
@@ -437,6 +440,11 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
       onPointerLeave={onPointerLeave}
     >
       <StorySvg id={id} d={d} g={g} w={node.width} h={node.height} px={px} sel={sel} hover={hover} linking={linking} />
+      {(() => {
+        const root = d.lines.find(l => !l.from)
+        const lg = root && g.lines[root.id]
+        return lg ? <StoryGrab x={lg.sx} y={lg.sy} px={px} /> : null
+      })()}
       {d.points.map(p => {
         const pg = g.points[p.id]
         if (!pg) return null
@@ -556,6 +564,30 @@ const Cap: React.FC<{ x: number; y: number; px: number; role: 'start' | 'end'; l
         onPointerEnter={() => setHot(true)} onPointerLeave={() => setHot(false)}
       />
     </g>
+  )
+}
+
+/** The grab handle: a small header tab, always just left of where the root
+ *  line starts (where a storyline's first point was put down), at one size
+ *  on screen. Dragging it moves the whole storyline, as a line drag does. */
+const StoryGrab: React.FC<{ x: number; y: number; px: number }> = ({ x, y, px }) => {
+  const dot = { width: 3, height: 3, borderRadius: '50%', background: 'rgba(196,208,255,0.7)' }
+  return (
+    <div
+      data-role="grab"
+      title="Drag to move the storyline"
+      style={{
+        position: 'absolute', left: x, top: y,
+        transformOrigin: '0 0',
+        // Its right edge GAP px left of the start, its middle on the line.
+        transform: `scale(${px}) translate(calc(-100% - ${GRAB_GAP}px), -50%)`,
+        display: 'grid', gridTemplateColumns: 'repeat(2, 3px)', gap: 3, padding: '5px 4px',
+        background: 'rgba(24,27,46,0.9)', border: '1px solid rgba(140,170,255,0.35)', borderRadius: 4,
+        cursor: 'grab',
+      }}
+    >
+      {Array.from({ length: 6 }, (_, i) => <div key={i} style={dot} />)}
+    </div>
   )
 }
 
