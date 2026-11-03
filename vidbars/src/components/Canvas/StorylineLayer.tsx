@@ -1,18 +1,21 @@
 // StorylineLayer — draws every Storyline on the canvas and runs its gestures
 // (data and geometry: utils/storyline).
 //
-//  - A point on a line of no length: drag out from it to grow the line.
+//  - Every dot is a point, line ends and the root's start included. A point
+//    on a line of no length: drag out from it to grow the line.
 //  - Hover a line: a glowing tick follows the mouse; click to make it a point.
-//  - Drag a point along its line to move it earlier or later; drag it off
-//    to the side to grow a branch from it.
+//  - A point has two grab zones, each lit on hover. Its centre dot: drag it
+//    along its line to move it earlier or later (a line's end point takes
+//    the end with it: the line grows or shortens), off to the side to grow
+//    a branch from it, or onto another line to hop what it holds (title and
+//    cards) to a new point there, leaving a plain dot behind. Its outer
+//    ring: the point with everything growing from it (lit as you hover);
+//    along its line it slides, onto another line it re-attaches there.
 //  - Drag a point's tick up or down: its stem above or below the line.
-//  - Drag a line's end: longer or shorter (not past its points).
 //  - Drag a line itself, or the grab handle left of where it starts (a
 //    lone point too): the whole storyline moves.
 //  - Click a point to select it; click it again quickly (or its title) to
 //    name it. Delete takes the point off its line, which stays whole.
-//    So with a line's end handle (shortens it) and the ring where a deleted
-//    point still holds a branch, on any line of the tree.
 //  - Click the grab handle to select the whole storyline (ringed, as tiles
 //    are); Delete then removes it, as it does a tile.
 //  - Right-click a point, line or the handle: delete the point, the branch
@@ -47,7 +50,8 @@ import { useTiltStore, isTilted, unprojectTilt, TILT_FAR } from '../../store/til
 import { clientToCanvas } from '../../utils/fx/createEffect'
 import { dotStep } from '../../utils/dotGrid'
 import {
-  deleteStoryAnchor, deleteStoryBranch, deleteStoryEnd, deleteStoryPoint, normalizeStoryline, pointAndBranches, storyGeom, storylineEmpty, unlinkStoryCard,
+  branchesOf, canonicalStoryline, deleteStoryBranch, deleteStoryPoint, normalizeStoryline, pointAndBranches, pointHolds,
+  reattachStoryPoint, slideStoryPoint, storyGeom, storylineEmpty, unlinkStoryCard,
   type StoryGeom, type StorylineData,
 } from '../../utils/storyline'
 
@@ -55,20 +59,27 @@ import {
 const LINE_W = 2
 const LINE_HIT = 14
 const DOT_R = 5
-const DOT_HIT = 10
-/** A point's tick, each way across its line, before its stem outgrows it. */
-const TICK = 10
+/** A point's two grab zones: its centre dot, out to DOT_ZONE, and its outer
+ *  ring (drawn at RING_R) out to RING_HIT. */
+const DOT_ZONE = 6
+const RING_R = 9
+const RING_HIT = 13
+/** A point's tick, each way across its line, before its stem outgrows it:
+ *  past the ring, so its ends can be grabbed. */
+const TICK = 16
 const TIP_HIT = 10
-const CAP_R = 3
-const CAP_HIT = 9
 const DRAG_PX = 4
+/** Screen px off its line at which a point's slide turns into a drag off
+ *  to the side. */
+const LEAVE_PX = 28
 /** Dragged closer to its line than this (cos of ~35°), a point slides
  *  along it; further off to the side, it grows a branch. */
 const ALONG_COS = 0.82
 const DOUBLE_MS = 400
 const NONE: string[] = []
-/** Screen px between the grab handle and the root line's start. */
-const GRAB_GAP = 10
+/** Screen px between the grab handle and the root line's start: clear of
+ *  the start point's ring. */
+const GRAB_GAP = 16
 
 const C_LINE = 'rgba(196,208,255,0.78)'
 const C_POINT = '#8fc2ff'
@@ -79,22 +90,24 @@ const C_RING = 'rgba(120,180,255,0.9)'
 const RING_W = 2.5
 
 interface StoryUi {
-  /** The selected point (or anchor). */
+  /** The selected point. */
   sel: { node: string; point: string } | null
-  /** The selected end handle of a line. */
-  selEnd: { node: string; line: string; which: 'start' | 'end' } | null
-  /** Points (and anchors) picked out by a selection box or Shift/Ctrl+click,
+  /** Points picked out by a selection box or Shift/Ctrl+click,
    *  by storyline: selected along with the cards and tiles around them. */
   parts: Record<string, string[]>
   /** The glowing tick under the mouse. */
   hover: { node: string; line: string; t: number } | null
   /** The point whose title is being typed. */
   editing: { node: string; point: string } | null
+  /** The grab zone under the mouse: a point's centre dot, or its ring. */
+  zone: { node: string; point: string; ring: boolean } | null
+  /** Where a point dragged onto a line would land, lit while it is over it. */
+  drop: { node: string; line: string; t: number } | null
   set: (patch: Partial<Omit<StoryUi, 'set'>>) => void
 }
 
 const useStoryUi = create<StoryUi>(set => ({
-  sel: null, selEnd: null, parts: {}, hover: null, editing: null,
+  sel: null, parts: {}, hover: null, editing: null, zone: null, drop: null,
   set: patch => set(patch),
 }))
 
@@ -123,8 +136,9 @@ function snapper(d: StorylineData, free: boolean) {
   return (v: number) => (on ? Math.round(v / step) * step : v)
 }
 
+/** Every write keeps every dot a point (canonicalStoryline). */
 function writeStoryline(id: string, x: number, y: number, d: StorylineData) {
-  useFreeNodeStore.getState().updateFreeNode(id, normalizeStoryline(x, y, d))
+  useFreeNodeStore.getState().updateFreeNode(id, normalizeStoryline(x, y, canonicalStoryline(d)))
 }
 
 /** Edit a storyline as one undo step; one left with nothing to show goes. */
@@ -151,14 +165,14 @@ function selectStoryline(id: string) {
   const v3 = useViewport3DStore.getState()
   if (v3.selectedIds.length > 0) v3.setViewerSelection([])
   useFreeNodeStore.getState().setFreeSelection([id])
-  useStoryUi.getState().set({ sel: null, selEnd: null, parts: {} })
+  useStoryUi.getState().set({ sel: null, parts: {} })
 }
 
 /** A point selected: the whole storyline is not. */
 function selectStoryPoint(id: string, point: string, editing = false) {
   const fs = useFreeNodeStore.getState()
   if (fs.selectedIds.includes(id)) fs.setFreeSelection(fs.selectedIds.filter(x => x !== id))
-  useStoryUi.getState().set({ sel: { node: id, point }, selEnd: null, parts: {}, ...(editing ? { editing: { node: id, point } } : {}) })
+  useStoryUi.getState().set({ sel: { node: id, point }, parts: {}, ...(editing ? { editing: { node: id, point } } : {}) })
 }
 
 /** Shift/Ctrl+click: a point in or out of the selection, the rest kept. */
@@ -173,7 +187,7 @@ function toggleStoryPart(id: string, point: string) {
   if (mine.has(point)) mine.delete(point); else mine.add(point)
   parts[id] = [...mine]
   if (!parts[id].length) delete parts[id]
-  ui.set({ sel: null, selEnd: null, parts })
+  ui.set({ sel: null, parts })
 }
 
 /** Every point selected: the one clicked and those picked out. */
@@ -199,7 +213,7 @@ export function selectStorylinesInBox(l: number, t: number, r: number, b: number
   const inside = (rc: DOMRect) => rc.left >= l - LINE_HIT && rc.right <= r + LINE_HIT && rc.top >= t - LINE_HIT && rc.bottom <= b + LINE_HIT
   for (const wrap of document.querySelectorAll<HTMLElement>('[data-world] [data-storyline]')) {
     const id = wrap.dataset.storyline!
-    const pts = [...wrap.querySelectorAll<SVGElement>('[data-role="point"], [data-role="anchor"]')]
+    const pts = [...wrap.querySelectorAll<SVGElement>('[data-role="point"]')]
     const lines = [...wrap.querySelectorAll<SVGElement>('[data-role="line"]')]
     const hit = pts.filter(el => centreIn(el.getBoundingClientRect())).map(el => el.dataset.point!)
     if (hit.length === pts.length && lines.every(el => inside(el.getBoundingClientRect()))) {
@@ -209,7 +223,7 @@ export function selectStorylinesInBox(l: number, t: number, r: number, b: number
       parts[id] = [...new Set([...(add ? parts[id] ?? [] : []), ...hit])]
     }
   }
-  ui.set({ parts, sel: add ? ui.sel : null, selEnd: null })
+  ui.set({ parts, sel: add ? ui.sel : null })
   return whole
 }
 
@@ -282,9 +296,8 @@ function applyGroupDelta(b: GroupBase, dx: number, dy: number, sn: (v: number) =
     for (const q of b.pts) {
       const base = b.nodes.get(q.node)!
       const wx = sn(q.sx + q.ux * q.t0 + dx), wy = sn(q.sy + q.uy * q.t0 + dy)
-      const t = Math.max(0, Math.min(q.len, (wx - q.sx) * q.ux + (wy - q.sy) * q.uy))
       const d = edits.get(q.node) ?? base.d
-      edits.set(q.node, { ...d, points: d.points.map(p => (p.id === q.point ? { ...p, t } : p)) })
+      edits.set(q.node, slideStoryPoint(d, q.point, (wx - q.sx) * q.ux + (wy - q.sy) * q.uy))
     }
     // Each linked card goes as far as its point went, which counts the
     // points it hangs from down the tree too.
@@ -362,26 +375,62 @@ function useStoryFollow() {
   }, [])
 }
 
-/** A line's end handle selected. */
-function selectStoryEnd(id: string, line: string, which: 'start' | 'end') {
-  const fs = useFreeNodeStore.getState()
-  if (fs.selectedIds.includes(id)) fs.setFreeSelection(fs.selectedIds.filter(x => x !== id))
-  useStoryUi.getState().set({ sel: null, selEnd: { node: id, line, which } })
-}
-
-/** Delete the points, anchors and end handle selected, each by its rule;
- *  one undo step (`checkpoint` false: the canvas's Delete took it). */
-function deleteStorySelected(list: { node: string; point: string }[], end: { node: string; line: string; which: 'start' | 'end' } | null, checkpoint: boolean) {
+/** Delete the points selected, each by its rule; one undo step
+ *  (`checkpoint` false: the canvas's Delete took it). */
+function deleteStorySelected(list: { node: string; point: string }[], checkpoint: boolean) {
   if (checkpoint) useUndoCoordinator.getState().checkpoint()
-  for (const node of new Set([...list.map(q => q.node), ...(end ? [end.node] : [])])) {
+  for (const node of new Set(list.map(q => q.node))) {
     editStoryline(node, d => {
-      for (const { point } of list.filter(q => q.node === node)) {
-        const p = d.points.find(q => q.id === point)
-        if (p) d = p.anchor ? deleteStoryAnchor(d, p.id) : deleteStoryPoint(d, p.id)
-      }
-      return end?.node === node ? deleteStoryEnd(d, end.line, end.which) : d
+      for (const { point } of list.filter(q => q.node === node)) d = deleteStoryPoint(d, point)
+      return d
     }, false)
   }
+}
+
+/** A storyline line under client point (x, y), other than those `skip`
+ *  rules out: the drop target of a point dragged onto a line. Read through
+ *  everything there (points and cards lie on lines). */
+function lineUnder(x: number, y: number, skip: (node: string, line: string) => boolean): { node: string; line: string } | null {
+  for (const el of document.elementsFromPoint(x, y)) {
+    if (el.getAttribute('data-role') !== 'line') continue
+    const line = el.getAttribute('data-line')
+    const node = el.closest<HTMLElement>('[data-storyline]')?.dataset.storyline
+    if (line && node && !skip(node, line)) return { node, line }
+  }
+  return null
+}
+
+/** Where on line `line` of storyline `node` canvas point `c` lands: the
+ *  dot nearest it (`sn`), along the line, kept on it. */
+function tOnLine(node: string, line: string, c: { x: number; y: number }, sn: (v: number) => number): number | null {
+  const n = useFreeNodeStore.getState().nodes[node]
+  const lg = n?.storyline && storyGeom(n.storyline).lines[line]
+  if (!n || !lg) return null
+  const sx = n.x + lg.sx, sy = n.y + lg.sy
+  return Math.max(0, Math.min(lg.len, (sn(c.x) - sx) * lg.ux + (sn(c.y) - sy) * lg.uy))
+}
+
+/** Hop what point `pointId` holds — its title and cards — to a new point
+ *  at `to`, on this storyline or another: the point stays, a plain dot, so
+ *  no line moves. The cards go as far as the contents did. */
+function hopStoryContents(id: string, pointId: string, to: { node: string; line: string; t: number }) {
+  const fs = useFreeNodeStore.getState()
+  const src = fs.nodes[id], dst = fs.nodes[to.node]
+  const p = src?.storyline?.points.find(q => q.id === pointId)
+  if (!src?.storyline || !dst?.storyline || !p) return
+  const from = storyGeom(src.storyline).points[pointId]
+  const cards = cardOrigins(src.storyline, new Set([pointId]))
+  const q = { id: crypto.randomUUID(), line: to.line, t: to.t, up: 0, down: 0, title: p.title, cards: p.cards }
+  const stripped = { ...src.storyline, points: src.storyline.points.map(x => (x.id === pointId ? { ...x, title: '', cards: undefined } : x)) }
+  if (to.node === id) writeStoryline(id, src.x, src.y, { ...stripped, points: [...stripped.points, q] })
+  else {
+    writeStoryline(id, src.x, src.y, stripped)
+    writeStoryline(to.node, dst.x, dst.y, { ...dst.storyline, points: [...dst.storyline.points, q] })
+  }
+  const now = useFreeNodeStore.getState().nodes[to.node]
+  const there = now?.storyline && storyGeom(now.storyline).points[q.id]
+  if (from && there) moveCards(cards, now.x + there.x - (src.x + from.x), now.y + there.y - (src.y + from.y))
+  selectStoryPoint(to.node, q.id)
 }
 
 /** Which way a label sits off the spot it hangs from, given the way out
@@ -448,27 +497,27 @@ function useStoryKeys() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const ui = useStoryUi.getState()
-      const list = storyPartsList(), end = ui.selEnd
-      if ((!list.length && !end) || ui.editing) return
+      const list = storyPartsList()
+      if (!list.length || ui.editing) return
       const tag = (document.activeElement as HTMLElement | null)?.tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA') return
-      if (e.key === 'Escape') { ui.set({ sel: null, selEnd: null, parts: {} }); return }
+      if (e.key === 'Escape') { ui.set({ sel: null, parts: {} }); return }
       if (e.key !== 'Delete' && e.key !== 'Backspace') return
-      ui.set({ sel: null, selEnd: null, parts: {}, hover: null })
+      ui.set({ sel: null, parts: {}, hover: null })
       // Selected along with cards or tiles: the canvas's Delete takes them,
       // and its checkpoint first, so the points go right after it, in the
       // same undo step.
       const fs = useFreeNodeStore.getState(), bs = useBoardsStore.getState()
       const cs = useCanvasStore.getState(), v3 = useViewport3DStore.getState()
       if (fs.selectedIds.length || bs.selectedGroupIds.length || v3.selectedIds.length || cs.selectedBlockBoardIds.length) {
-        setTimeout(() => deleteStorySelected(list, end, false), 0)
+        setTimeout(() => deleteStorySelected(list, false), 0)
         return
       }
       // Ours alone: the canvas's own Delete would otherwise fall through
       // to whatever board has the focus.
       e.preventDefault()
       e.stopImmediatePropagation()
-      deleteStorySelected(list, end, true)
+      deleteStorySelected(list, true)
     }
     const onDown = (e: PointerEvent) => {
       const t = e.target as Element | null
@@ -481,7 +530,7 @@ function useStoryKeys() {
       if ((card && useBoardsStore.getState().selectedGroupIds.includes(card)) ||
           (tile && useFreeNodeStore.getState().selectedIds.includes(tile))) return
       const ui = useStoryUi.getState()
-      if (ui.sel || ui.selEnd || Object.keys(ui.parts).length) ui.set({ sel: null, selEnd: null, parts: {} })
+      if (ui.sel || Object.keys(ui.parts).length) ui.set({ sel: null, parts: {} })
     }
     window.addEventListener('keydown', onKey, true)
     window.addEventListener('pointerdown', onDown, true)
@@ -496,9 +545,8 @@ type Gesture =
   | { kind: 'grow'; line: string }
   | { kind: 'branch'; point: string; line: string }
   | { kind: 'slide'; point: string; cards: Map<string, { x: number; y: number }> }
+  | { kind: 'carry'; point: string }
   | { kind: 'tip'; point: string; side: 'up' | 'down' }
-  | { kind: 'end'; line: string }
-  | { kind: 'start'; line: string }
   | { kind: 'move'; cards: Map<string, { x: number; y: number }> }
   | { kind: 'group'; base: GroupBase; last: { dx: number; dy: number } }
 
@@ -507,14 +555,23 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
   const zoom = useCanvasStore(s => s.zoom)
   const sel = useStoryUi(s => (s.sel?.node === id ? s.sel.point : null))
   const parts = useStoryUi(s => s.parts[id] ?? NONE)
-  const selEnd = useStoryUi(s => (s.selEnd?.node === id ? `${s.selEnd.which}:${s.selEnd.line}` : null))
+  const zone = useStoryUi(s => (s.zone?.node === id ? s.zone : null))
+  const drop = useStoryUi(s => (s.drop?.node === id ? s.drop : null))
   const hover = useStoryUi(s => (s.hover?.node === id ? s.hover : null))
   const editing = useStoryUi(s => (s.editing?.node === id ? s.editing.point : null))
   const linking = useLinkDragStore(s => s.active && s.source?.kind === 'group')
   const busy = useRef(false)
   const lastClick = useRef<{ point: string; at: number } | null>(null)
   const picked = useFreeNodeStore(s => s.selectedIds.includes(id))
-  const [menu, setMenu] = useState<{ x: number; y: number; point?: string; line?: string; end?: 'start' | 'end' } | null>(null)
+  const [menu, setMenu] = useState<{ x: number; y: number; point?: string; line?: string } | null>(null)
+  // Saved before every dot was a point: made so once, as it loads.
+  const raw = node?.storyline
+  useEffect(() => {
+    if (raw && canonicalStoryline(raw) !== raw) {
+      const n = useFreeNodeStore.getState().nodes[id]
+      if (n) writeStoryline(id, n.x, n.y, raw)
+    }
+  }, [id, raw])
 
   const d = node?.storyline
   if (!node || !d) return null
@@ -534,8 +591,8 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
     if (t < 0 || t > lg.len) t = (c.x - sx) * lg.ux + (c.y - sy) * lg.uy
     t = Math.max(0, Math.min(lg.len, t))
     // Not on a point, nor on a line's ends (a branch starts on its point).
-    const near = DOT_HIT * px
-    if (d.points.some(p => p.line === lineId && !p.anchor && Math.abs(p.t - t) < near)) return null
+    const near = RING_HIT * px
+    if (d.points.some(p => p.line === lineId && Math.abs(p.t - t) < near)) return null
     if (t < near || lg.len - t < near) return null
     return t
   }
@@ -544,6 +601,12 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
     if (busy.current) return
     const ui = useStoryUi.getState()
     const role = (e.target as Element).closest<HTMLElement | SVGElement>('[data-role]')
+    // The grab zone under the mouse, lit.
+    const zp = role?.dataset.role === 'point' || role?.dataset.role === 'ring' ? role.dataset.point : undefined
+    const ring = role?.dataset.role === 'ring'
+    if (zp ? ui.zone?.node !== id || ui.zone.point !== zp || ui.zone.ring !== ring : ui.zone?.node === id) {
+      ui.set({ zone: zp ? { node: id, point: zp, ring } : null })
+    }
     const lineId = role?.dataset.role === 'line' ? role.dataset.line : undefined
     const c = lineId ? toCanvas(e.nativeEvent, e.currentTarget) : null
     const t = lineId && c ? tickAt(lineId, c, e.ctrlKey) : null
@@ -552,7 +615,9 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
     } else if (ui.hover?.node === id) ui.set({ hover: null })
   }
   const onPointerLeave = () => {
-    if (!busy.current && useStoryUi.getState().hover?.node === id) useStoryUi.getState().set({ hover: null })
+    if (busy.current) return
+    const ui = useStoryUi.getState()
+    if (ui.hover?.node === id || ui.zone?.node === id) ui.set({ hover: null, zone: null })
   }
 
   const onPointerDown = (e: React.PointerEvent) => {
@@ -578,14 +643,11 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
       const lg = g0.lines[lid]
       return lg && { sx: x0 + lg.sx, sy: y0 + lg.sy, ux: lg.ux, uy: lg.uy, len: lg.len }
     }
-    const pointsOn = (lid: string) => d0.points.filter(p => p.line === lid)
 
     const decide = (c: { x: number; y: number }): Gesture | null => {
       if (role === 'tip-up' || role === 'tip-down') return pointId ? { kind: 'tip', point: pointId, side: role === 'tip-up' ? 'up' : 'down' } : null
-      if (role === 'start' && lineId) return { kind: 'start', line: lineId }
-      if (role === 'end' && lineId) return pointsOn(lineId).length ? { kind: 'end', line: lineId } : { kind: 'grow', line: lineId }
       if (role === 'line' || role === 'grab') return { kind: 'move', cards: cardOrigins(d0, new Set(d0.points.map(p => p.id))) }
-      if ((role === 'point' || role === 'title' || role === 'anchor') && pointId && lineId) {
+      if ((role === 'point' || role === 'title' || role === 'ring') && pointId && lineId) {
         // One of several things selected: they all go, this one as ever.
         const ui = useStoryUi.getState()
         const mine = ui.sel?.node === id && ui.sel.point === pointId || (ui.parts[id] ?? []).includes(pointId)
@@ -599,18 +661,37 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
         const vx = c.x - c0.x, vy = c.y - c0.y
         const along = Math.abs(vx * lg.ux + vy * lg.uy) / Math.max(1e-9, Math.hypot(vx, vy))
         if (along >= ALONG_COS) return { kind: 'slide', point: pointId, cards: cardOrigins(d0, pointAndBranches(d0, pointId).points) }
+        // Off to the side: the ring carries the point and what grows from
+        // it to another line; the dot grows a branch, or hops its contents.
+        if (role === 'ring') return { kind: 'carry', point: pointId }
         return { kind: 'branch', point: pointId, line: crypto.randomUUID() }
       }
       return null
     }
 
-    const apply = (c: { x: number; y: number }, free: boolean) => {
+    const apply = (c: { x: number; y: number }, free: boolean, client: { x: number; y: number }) => {
       if (!gesture) return
       const sn = snapper(d0, free)
       const snapPt = { x: sn(c.x), y: sn(c.y) }
       switch (gesture.kind) {
+        case 'carry': {
+          // Onto a line of this storyline, not its own nor one growing from it.
+          const below = branchesOf(d0, gesture.point).lines
+          const hit = lineUnder(client.x, client.y, (n, l) => n !== id || l === lineId || below.has(l))
+          const t = hit && tOnLine(hit.node, hit.line, c, sn)
+          useStoryUi.getState().set({ drop: hit && t !== null ? { ...hit, t } : null })
+          return
+        }
         case 'grow': case 'branch': {
           const lid = gesture.line
+          // Over another line, the dot's contents would hop there: the branch
+          // waits at nothing, and the line it would land on is lit.
+          if (gesture.kind === 'branch') {
+            const hit = lineUnder(client.x, client.y, (n, l) => l === lid || (n === id && l === lineId))
+            const t = hit && pointHolds(d0.points.find(p => p.id === pointId)!) ? tOnLine(hit.node, hit.line, c, sn) : null
+            useStoryUi.getState().set({ drop: hit && t !== null ? { ...hit, t } : null })
+            if (hit && t !== null) { writeStoryline(id, x0, y0, d0); return }
+          }
           let sx: number, sy: number
           let lines = d0.lines
           if (gesture.kind === 'branch') {
@@ -632,11 +713,21 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
           const p = d0.points.find(q => q.id === pid)
           const lg = p && at(p.line)
           if (!p || !lg) return
-          let t = (snapPt.x - lg.sx) * lg.ux + (snapPt.y - lg.sy) * lg.uy
-          t = Math.max(0, Math.min(lg.len, t))
-          writeStoryline(id, x0, y0, { ...d0, points: d0.points.map(q => (q.id === pid ? { ...q, t } : q)) })
-          const was = Math.max(0, Math.min(lg.len, p.t))
-          moveCards(gesture.cards, (t - was) * lg.ux, (t - was) * lg.uy)
+          // Taken well off its line, a slide becomes the drag off to the side
+          // (a carry from the ring, a branch or hop from the dot), from where
+          // it started.
+          if (Math.abs((c.x - lg.sx) * lg.uy - (c.y - lg.sy) * lg.ux) * zoom > LEAVE_PX) {
+            writeStoryline(id, x0, y0, d0)
+            moveCards(gesture.cards, 0, 0)
+            gesture = role === 'ring' ? { kind: 'carry', point: pid } : { kind: 'branch', point: pid, line: crypto.randomUUID() }
+            apply(c, free, client)
+            return
+          }
+          const next = slideStoryPoint(d0, pid, (snapPt.x - lg.sx) * lg.ux + (snapPt.y - lg.sy) * lg.uy)
+          writeStoryline(id, x0, y0, next)
+          // Its cards, and those down the tree from it, go as far as it did.
+          const a = g0.points[pid], z = storyGeom(next).points[pid]
+          if (a && z) moveCards(gesture.cards, z.x - a.x, z.y - a.y)
           return
         }
         case 'tip': {
@@ -646,29 +737,6 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
           const v = (c.x - x0 - pg.x) * pg.nx + (c.y - y0 - pg.y) * pg.ny
           const len = Math.max(0, sn(side === 'up' ? v : -v))
           writeStoryline(id, x0, y0, { ...d0, points: d0.points.map(q => (q.id === pid ? { ...q, [side]: len } : q)) })
-          return
-        }
-        case 'end': {
-          const lid = gesture.line
-          const lg = at(lid)
-          if (!lg) return
-          const most = Math.max(0, ...pointsOn(lid).map(p => p.t))
-          const len = Math.max(most, (snapPt.x - lg.sx) * lg.ux + (snapPt.y - lg.sy) * lg.uy)
-          writeStoryline(id, x0, y0, { ...d0, lines: d0.lines.map(l => (l.id === lid ? { ...l, dx: lg.ux * len, dy: lg.uy * len } : l)) })
-          return
-        }
-        case 'start': {
-          const lid = gesture.line
-          const lg = at(lid)
-          if (!lg) return
-          const on = pointsOn(lid)
-          const least = on.length ? Math.min(...on.map(p => p.t)) : lg.len
-          const k = Math.min(least, (snapPt.x - lg.sx) * lg.ux + (snapPt.y - lg.sy) * lg.uy)
-          writeStoryline(id, x0, y0, {
-            ...d0,
-            lines: d0.lines.map(l => (l.id === lid ? { ...l, x: l.x + lg.ux * k, y: l.y + lg.uy * k, dx: lg.ux * (lg.len - k), dy: lg.uy * (lg.len - k) } : l)),
-            points: d0.points.map(p => (p.line === lid ? { ...p, t: p.t - k } : p)),
-          })
           return
         }
         case 'group': {
@@ -694,15 +762,34 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
         if (Math.hypot(c.x - c0.x, c.y - c0.y) * zoom < DRAG_PX) return
         gesture = decide(c)
         if (!gesture) return
-        useUndoCoordinator.getState().checkpoint()
+        // A carry changes nothing until it is let go on a line.
+        if (gesture.kind !== 'carry') useUndoCoordinator.getState().checkpoint()
       }
-      apply(c, ev.ctrlKey)
+      apply(c, ev.ctrlKey, { x: ev.clientX, y: ev.clientY })
     }
     const finish = (ev: PointerEvent, cancelled: boolean) => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
       window.removeEventListener('pointercancel', onCancel)
       busy.current = false
+      const drop = useStoryUi.getState().drop
+      if (drop) useStoryUi.getState().set({ drop: null })
+      if (gesture?.kind === 'carry') {
+        if (!drop || cancelled) return
+        useUndoCoordinator.getState().checkpoint()
+        const next = reattachStoryPoint(d0, gesture.point, drop.line, drop.t)
+        writeStoryline(id, x0, y0, next)
+        const a = g0.points[gesture.point], z = storyGeom(next).points[gesture.point]
+        if (a && z) moveCards(cardOrigins(d0, pointAndBranches(d0, gesture.point).points), z.x - a.x, z.y - a.y)
+        selectStoryPoint(id, gesture.point)
+        return
+      }
+      if (gesture?.kind === 'branch' && drop && !cancelled) {
+        // Let go over another line: the contents hop, the branch is not grown.
+        writeStoryline(id, x0, y0, d0)
+        hopStoryContents(id, gesture.point, drop)
+        return
+      }
       if (gesture) {
         // A branch, or a line grown from a lone point, let go where it
         // started is no line at all.
@@ -723,12 +810,8 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
         const t = hover0?.node === id && hover0.line === lineId ? hover0.t : tickAt(lineId, c, ev.ctrlKey)
         if (t === null) return
         useUndoCoordinator.getState().checkpoint()
-        // Where a deleted point still holds branches: it comes back.
-        const anchor = d0.points.find(p => p.line === lineId && p.anchor && Math.abs(p.t - t) < DOT_HIT * px)
-        const pid = anchor?.id ?? crypto.randomUUID()
-        writeStoryline(id, x0, y0, anchor
-          ? { ...d0, points: d0.points.map(p => (p.id === pid ? { ...p, anchor: undefined } : p)) }
-          : { ...d0, points: [...d0.points, { id: pid, line: lineId, t, up: 0, down: 0, title: '' }] })
+        const pid = crypto.randomUUID()
+        writeStoryline(id, x0, y0, { ...d0, points: [...d0.points, { id: pid, line: lineId, t, up: 0, down: 0, title: '' }] })
         selectStoryPoint(id, pid)
         return
       }
@@ -736,25 +819,16 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
         selectStoryline(id)
         return
       }
-      if ((role === 'point' || role === 'anchor') && pointId && (ev.shiftKey || ev.ctrlKey)) {
+      if ((role === 'point' || role === 'ring') && pointId && (ev.shiftKey || ev.ctrlKey)) {
         toggleStoryPart(id, pointId)
         return
       }
-      if ((role === 'point' || role === 'title' || role === 'anchor') && pointId) {
+      if ((role === 'point' || role === 'title' || role === 'ring') && pointId) {
         const last = lastClick.current
         const now = performance.now()
         const again = role === 'title' || (last?.point === pointId && now - last.at < DOUBLE_MS)
         lastClick.current = { point: pointId, at: now }
-        // An anchor named becomes a point again.
-        if (again && role === 'anchor') {
-          useUndoCoordinator.getState().checkpoint()
-          writeStoryline(id, x0, y0, { ...d0, points: d0.points.map(p => (p.id === pointId ? { ...p, anchor: undefined } : p)) })
-        }
         selectStoryPoint(id, pointId, again)
-        return
-      }
-      if ((role === 'start' || role === 'end') && lineId) {
-        selectStoryEnd(id, lineId, role)
         return
       }
       if (role === 'tip-up' || role === 'tip-down') {
@@ -782,15 +856,13 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
         e.preventDefault(); e.stopPropagation()
         const point = el?.dataset.point
         const line = el?.dataset.line ?? (point ? d.points.find(p => p.id === point)?.line : undefined)
-        const end = role === 'start' || role === 'end' ? role : undefined
         // What the menu acts on is selected first, as on tiles and cards.
         if (point) selectStoryPoint(id, point)
-        else if (end && line) selectStoryEnd(id, line, end)
         else selectStoryline(id)
-        setMenu({ x: e.clientX, y: e.clientY, point, line: role === 'grab' ? undefined : line, end })
+        setMenu({ x: e.clientX, y: e.clientY, point, line: role === 'grab' ? undefined : line })
       }}
     >
-      <StorySvg id={id} d={d} g={g} w={node.width} h={node.height} px={px} sel={sel} parts={parts} selEnd={selEnd} hover={hover} linking={linking} picked={picked} />
+      <StorySvg id={id} d={d} g={g} w={node.width} h={node.height} px={px} sel={sel} parts={parts} zone={zone} drop={drop} hover={hover} linking={linking} picked={picked} />
       {(() => {
         const root = d.lines.find(l => !l.from)
         const lg = root && g.lines[root.id]
@@ -799,7 +871,7 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
       {menu && <StoryMenu id={id} d={d} at={menu} onClose={() => setMenu(null)} />}
       {d.points.map(p => {
         const pg = g.points[p.id]
-        if (!pg || p.anchor) return null
+        if (!pg) return null
         const isEditing = editing === p.id
         if (!p.title && !isEditing) return null
         const reach = Math.max(p.up, TICK * px) + 6 * px
@@ -813,7 +885,6 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
       {sel && g.points[sel] && (() => {
         const pg = g.points[sel]
         const p = d.points.find(q => q.id === sel)!
-        if (p.anchor) return null
         const reach = Math.max(p.down, TICK * px) + 10 * px
         return <StoryOptions nodeId={id} snap={d.snap !== false} x={pg.x - pg.nx * reach} y={pg.y - pg.ny * reach} side={sideFor(-pg.nx, -pg.ny)} px={px} />
       })()}
@@ -823,11 +894,15 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
 
 const StorySvg: React.FC<{
   id: string; d: StorylineData; g: StoryGeom; w: number; h: number; px: number
-  sel: string | null; parts: string[]; selEnd: string | null; hover: { line: string; t: number } | null; linking: boolean; picked: boolean
-}> = ({ id, d, g, w, h, px, sel, parts, selEnd, hover, linking, picked }) => {
+  sel: string | null; parts: string[]; hover: { line: string; t: number } | null; linking: boolean; picked: boolean
+  zone: { point: string; ring: boolean } | null; drop: { line: string; t: number } | null
+}> = ({ id, d, g, w, h, px, sel, parts, zone, drop, hover, linking, picked }) => {
   // Room round the box for handles and ticks, which reach past the lines.
   const M = 60 * px + Math.max(0, ...d.points.map(p => Math.max(p.up, p.down)))
   const hl = hover && g.lines[hover.line]
+  // Hovering a ring: the part of the tree that moves with it, lit.
+  const chain = zone?.ring ? pointAndBranches(d, zone.point) : null
+  const dl = drop && g.lines[drop.line]
   return (
     <svg
       style={{ position: 'absolute', left: -M, top: -M, width: w + 2 * M, height: h + 2 * M, overflow: 'visible', pointerEvents: 'none' }}
@@ -840,6 +915,9 @@ const StorySvg: React.FC<{
           return (
             <g key={l.id}>
               {picked && <line x1={lg.sx} y1={lg.sy} x2={ex} y2={ey} stroke={C_RING} strokeWidth={(LINE_W + 2 * RING_W) * px} />}
+              {(chain?.lines.has(l.id) || drop?.line === l.id) && (
+                <line x1={lg.sx} y1={lg.sy} x2={ex} y2={ey} stroke={C_GLOW} strokeOpacity={0.45} strokeWidth={(LINE_W + 6) * px} pointerEvents="none" />
+              )}
               <line x1={lg.sx} y1={lg.sy} x2={ex} y2={ey} stroke={C_LINE} strokeWidth={LINE_W * px} />
               <line
                 x1={lg.sx} y1={lg.sy} x2={ex} y2={ey} stroke="transparent" strokeWidth={LINE_HIT * px}
@@ -859,34 +937,13 @@ const StorySvg: React.FC<{
             </g>
           )
         })()}
-        {d.lines.map(l => {
-          const lg = g.lines[l.id]
-          if (!lg || lg.len < 1e-6) return null
-          const ex = lg.sx + lg.ux * lg.len, ey = lg.sy + lg.uy * lg.len
-          const on = d.points.filter(p => p.line === l.id)
-          const startFree = !l.from && !on.some(p => p.t < DOT_HIT * px)
-          const endFree = !on.some(p => lg.len - p.t < DOT_HIT * px)
-          return (
-            <g key={l.id}>
-              {endFree && <Cap x={ex} y={ey} px={px} role="end" line={l.id} selected={selEnd === `end:${l.id}`} />}
-              {startFree && <Cap x={lg.sx} y={lg.sy} px={px} role="start" line={l.id} selected={selEnd === `start:${l.id}`} />}
-            </g>
-          )
-        })}
+        {dl && (
+          // Where it would land: a dot ringed on the lit line.
+          <circle cx={dl.sx + dl.ux * drop!.t} cy={dl.sy + dl.uy * drop!.t} r={RING_R * px} fill="none" stroke={C_GLOW} strokeWidth={2 * px} pointerEvents="none" />
+        )}
         {d.points.map(p => {
           const pg = g.points[p.id]
           if (!pg) return null
-          if (p.anchor) {
-            // Where a deleted point still holds a branch: a ring on the line,
-            // selectable and deletable as a point is.
-            return (
-              <g key={p.id}>
-                <circle cx={pg.x} cy={pg.y} r={CAP_R * px} fill="#12131f" stroke={sel === p.id ? C_SEL : parts.includes(p.id) || picked ? C_RING : C_LINE} strokeWidth={1.5 * px} pointerEvents="none" />
-                <circle cx={pg.x} cy={pg.y} r={CAP_HIT * px} fill="transparent" pointerEvents="all" style={{ cursor: 'grab' }}
-                        data-role="anchor" data-point={p.id} />
-              </g>
-            )
-          }
           const up = Math.max(p.up, TICK * px), down = Math.max(p.down, TICK * px)
           const selected = sel === p.id
           const color = selected ? C_SEL : C_POINT
@@ -895,20 +952,31 @@ const StorySvg: React.FC<{
             <g key={p.id}>
               <line x1={pg.x - pg.nx * down} y1={pg.y - pg.ny * down} x2={pg.x + pg.nx * up} y2={pg.y + pg.ny * up}
                     stroke={color} strokeWidth={LINE_W * px} />
-              <line x1={pg.x + pg.nx * r0} y1={pg.y + pg.ny * r0} x2={pg.x + pg.nx * (up + 3 * px)} y2={pg.y + pg.ny * (up + 3 * px)}
+              <line x1={pg.x + pg.nx * RING_HIT * px} y1={pg.y + pg.ny * RING_HIT * px} x2={pg.x + pg.nx * (up + 3 * px)} y2={pg.y + pg.ny * (up + 3 * px)}
                     stroke="transparent" strokeWidth={TIP_HIT * px} pointerEvents="stroke" style={{ cursor: 'ns-resize' }}
                     data-role="tip-up" data-point={p.id} />
-              <line x1={pg.x - pg.nx * r0} y1={pg.y - pg.ny * r0} x2={pg.x - pg.nx * (down + 3 * px)} y2={pg.y - pg.ny * (down + 3 * px)}
+              <line x1={pg.x - pg.nx * RING_HIT * px} y1={pg.y - pg.ny * RING_HIT * px} x2={pg.x - pg.nx * (down + 3 * px)} y2={pg.y - pg.ny * (down + 3 * px)}
                     stroke="transparent" strokeWidth={TIP_HIT * px} pointerEvents="stroke" style={{ cursor: 'ns-resize' }}
                     data-role="tip-down" data-point={p.id} />
-              {linking && <circle cx={pg.x} cy={pg.y} r={DOT_HIT * px} fill={C_GLOW} fillOpacity={0.25} pointerEvents="none" />}
-              {(p.cards?.length ?? 0) > 0 && (
-                <circle cx={pg.x} cy={pg.y} r={(DOT_R + 3) * px} fill="none" stroke={color} strokeWidth={1.5 * px} pointerEvents="none" />
-              )}
+              {linking && <circle cx={pg.x} cy={pg.y} r={RING_HIT * px} fill={C_GLOW} fillOpacity={0.25} pointerEvents="none" />}
               {(picked || parts.includes(p.id)) && <circle cx={pg.x} cy={pg.y} r={r0 + RING_W * px} fill={C_RING} pointerEvents="none" />}
+              {/* The outer ring: its own grab zone. Bolder when it holds cards. */}
+              <circle cx={pg.x} cy={pg.y} r={RING_R * px} fill="none" stroke={color}
+                      strokeOpacity={(p.cards?.length ?? 0) > 0 ? 1 : 0.45} strokeWidth={1.5 * px} pointerEvents="none" />
               <circle cx={pg.x} cy={pg.y} r={r0} fill={color} stroke="#12131f" strokeWidth={1.5 * px} pointerEvents="none" />
+              {/* Hover lights, on top: the zone the mouse is in; for the ring,
+                  every point down the chain from it too. */}
+              {(zone?.ring ? chain?.points.has(p.id) : zone?.point === p.id && !zone.ring) && (zone?.ring ? (
+                <circle cx={pg.x} cy={pg.y} r={RING_R * px} fill="none" stroke={C_GLOW} strokeOpacity={0.8} strokeWidth={4 * px} pointerEvents="none" />
+              ) : (
+                <circle cx={pg.x} cy={pg.y} r={(DOT_R + 2) * px} fill={C_GLOW} fillOpacity={0.5} pointerEvents="none" />
+              ))}
               <circle
-                cx={pg.x} cy={pg.y} r={DOT_HIT * px} fill="transparent" pointerEvents="all" style={{ cursor: 'grab' }}
+                cx={pg.x} cy={pg.y} r={RING_HIT * px} fill="transparent" pointerEvents="all" style={{ cursor: 'move' }}
+                data-role="ring" data-point={p.id} data-link-drop={`story:${id}:${p.id}`}
+              />
+              <circle
+                cx={pg.x} cy={pg.y} r={DOT_ZONE * px} fill="transparent" pointerEvents="all" style={{ cursor: 'grab' }}
                 data-role="point" data-point={p.id} data-link-drop={`story:${id}:${p.id}`}
               />
             </g>
@@ -916,20 +984,6 @@ const StorySvg: React.FC<{
         })}
       </g>
     </svg>
-  )
-}
-
-const Cap: React.FC<{ x: number; y: number; px: number; role: 'start' | 'end'; line: string; selected: boolean }> = ({ x, y, px, role, line, selected }) => {
-  const [hot, setHot] = useState(false)
-  return (
-    <g>
-      <circle cx={x} cy={y} r={CAP_R * px} fill={selected ? C_SEL : hot ? C_GLOW : C_LINE} pointerEvents="none" />
-      <circle
-        cx={x} cy={y} r={CAP_HIT * px} fill="transparent" pointerEvents="all" style={{ cursor: 'grab' }}
-        data-role={role} data-line={line}
-        onPointerEnter={() => setHot(true)} onPointerLeave={() => setHot(false)}
-      />
-    </g>
   )
 }
 
@@ -962,7 +1016,7 @@ const StoryGrab: React.FC<{ x: number; y: number; px: number; picked: boolean }>
  *  as a tile's menu (FreeNode). Each action is one undo step. */
 const StoryMenu: React.FC<{
   id: string; d: StorylineData
-  at: { x: number; y: number; point?: string; line?: string; end?: 'start' | 'end' }
+  at: { x: number; y: number; point?: string; line?: string }
   onClose: () => void
 }> = ({ id, d, at, onClose }) => {
   const groups = useBoardsStore(s => s.groups)
@@ -975,24 +1029,17 @@ const StoryMenu: React.FC<{
     label: grown.length > 1 ? `Delete branch from here ${k + 1}` : 'Delete branch from here', icon: '🗑️', danger: true,
     action: () => editStoryline(id, x => deleteStoryBranch(x, l.id)),
   }))
-  if (point?.anchor) {
-    // It goes only with nothing on what grows from it (deleteStoryAnchor).
-    if (!grown.some(l => d.points.some(p => p.line === l.id))) {
-      items.push({ label: 'Delete point', icon: '🗑️', danger: true, action: () => editStoryline(id, x => deleteStoryAnchor(x, point.id)) })
-    }
-    fromHere()
-  } else if (point) {
+  if (point) {
     for (const gid of point.cards ?? []) {
       const g = groups.find(x => x.id === gid)
       const name = g?.cardHeaderText || g?.name || 'card'
       items.push({ label: `Unlink ${name}`, icon: '⛓️', action: () => editStoryline(id, x => unlinkStoryCard(x, point.id, gid)) })
     }
-    items.push({ label: 'Delete point', icon: '🗑️', danger: true, action: () => editStoryline(id, x => deleteStoryPoint(x, point.id)) })
+    // A plain point with branches growing from it holds them: it cannot go.
+    if (!grown.length || pointHolds(point)) {
+      items.push({ label: 'Delete point', icon: '🗑️', danger: true, action: () => editStoryline(id, x => deleteStoryPoint(x, point.id)) })
+    }
     fromHere()
-  }
-  if (at.end && line) {
-    const end = at.end
-    items.push({ label: 'Delete end', icon: '🗑️', danger: true, action: () => editStoryline(id, x => deleteStoryEnd(x, line.id, end)) })
   }
   if (line?.from) {
     items.push({ label: 'Delete branch', icon: '🗑️', danger: true, action: () => editStoryline(id, x => deleteStoryBranch(x, line.id)) })
@@ -1018,7 +1065,7 @@ const StoryMenu: React.FC<{
         }}
       >
         <div style={{ padding: '4px 12px 6px', borderBottom: '1px solid rgba(255,255,255,0.07)', marginBottom: 4 }}>
-          <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: 11 }}>{point ? point.title || 'Point' : at.end ? 'Line end' : line?.from ? 'Branch' : 'Storyline'}</span>
+          <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: 11 }}>{point ? point.title || 'Point' : line?.from ? 'Branch' : 'Storyline'}</span>
         </div>
         {items.map(item => (
           <button

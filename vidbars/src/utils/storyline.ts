@@ -19,6 +19,10 @@
 // Cards linked to a point (`cards`, group ids) move with it when it is
 // dragged. A link is made by dropping a card's link "+" on the point (the
 // target owns the reference, as everywhere else — see LinkDragOverlay).
+//
+// Every dot is a point: each line's end has one, and so has the root's start
+// (canonicalStoryline keeps it so, and turns older storylines' held spots and
+// bare ends into points as they load).
 
 export interface StoryLine {
   id: string
@@ -43,9 +47,8 @@ export interface StoryPoint {
   title: string
   /** Linked cards (group ids): they move with the point. */
   cards?: string[]
-  /** Deleted, but branches still grow from it: not drawn, only holding
-   *  their place on the line (deleteStoryPoint). Clicking there on the line
-   *  makes it a point again. */
+  /** Older storylines: a deleted point still holding a branch. Read as a
+   *  plain point (canonicalStoryline). */
   anchor?: boolean
 }
 
@@ -155,24 +158,48 @@ export function pointAndBranches(d: StorylineData, pointId: string): { lines: Se
 
 const EPS = 1e-6
 
+/** A plain point at `t` on `line`. */
+const plainPoint = (line: string, t: number): StoryPoint => ({ id: crypto.randomUUID(), line, t, up: 0, down: 0, title: '' })
+
+/** Every dot a point: older held spots read as plain points, and a point is
+ *  put at each line's end (and the root's start) that has none. */
+export function canonicalStoryline(d: StorylineData): StorylineData {
+  let points = d.points.some(p => p.anchor) ? d.points.map(p => (p.anchor ? { ...p, anchor: undefined } : p)) : d.points
+  const add: StoryPoint[] = []
+  for (const l of d.lines) {
+    const len = Math.hypot(l.dx, l.dy)
+    const on = points.filter(p => p.line === l.id)
+    if (!l.from && !on.some(p => p.t <= EPS)) add.push(plainPoint(l.id, 0))
+    if (len > EPS && !on.some(p => p.t >= len - EPS)) add.push(plainPoint(l.id, len))
+  }
+  if (add.length) points = [...points, ...add]
+  return points === d.points ? d : { ...d, points }
+}
+
+/** Whether a point holds anything: a title or cards. */
+export function pointHolds(p: StoryPoint): boolean {
+  return !!p.title || (p.cards?.length ?? 0) > 0
+}
+
 /** Delete a point, keeping its line whole: the points either side stay on
- *  it, its linked cards are let go where they stand, and branches growing
- *  from it stay where they are on the line (it becomes an anchor). Deleting
- *  the point at a line's end shortens the line to the next point (on the
- *  root line, at its start too). The last point on a branch, with nothing
- *  growing from it, takes the branch with it; the root's last point shortens
- *  the root back to where it starts. */
+ *  it and its linked cards are let go where they stand. One with branches
+ *  growing from it stays, emptied, holding them (a plain one cannot go:
+ *  Delete branch takes its branches). Deleting the point at a line's end
+ *  shortens the line to the next point (on the root line, at its start
+ *  too). The last point on a branch takes the branch with it; the root's
+ *  last point shortens the root back to where it starts. */
 export function deleteStoryPoint(d: StorylineData, pointId: string): StorylineData {
   const p = d.points.find(q => q.id === pointId)
   const l = p && d.lines.find(q => q.id === p.line)
   if (!p || !l) return d
   if (d.lines.some(q => q.from === pointId)) {
-    return { ...d, points: d.points.map(q => (q.id === pointId ? { id: q.id, line: q.line, t: q.t, up: 0, down: 0, title: '', anchor: true } : q)) }
+    if (!pointHolds(p)) return d
+    return { ...d, points: d.points.map(q => (q.id === pointId ? { ...q, title: '', cards: undefined } : q)) }
   }
   const points = d.points.filter(q => q.id !== pointId)
   const others = points.filter(q => q.line === l.id)
   if (!others.length) {
-    if (l.from) return dropLine({ ...d, points }, l.id)
+    if (l.from) return { ...d, points, lines: d.lines.filter(q => q.id !== l.id) }
     return { ...d, points, lines: d.lines.map(q => (q.id === l.id ? { ...q, dx: 0, dy: 0 } : q)) }
   }
   const len = Math.hypot(l.dx, l.dy)
@@ -199,52 +226,60 @@ function trimStart(d: StorylineData, lineId: string, k: number): StorylineData {
   }
 }
 
-/** Take branch `lineId` off (its points and theirs must be gone already),
- *  and the anchor it grew from if that now holds nothing: deleted as a
- *  point, so its own line closes up behind it the same way. */
-function dropLine(d: StorylineData, lineId: string): StorylineData {
-  const line = d.lines.find(l => l.id === lineId)
-  const out = { ...d, lines: d.lines.filter(l => l.id !== lineId) }
-  const from = line?.from ? out.points.find(p => p.id === line.from) : undefined
-  return from?.anchor && !out.lines.some(l => l.from === from.id) ? deleteStoryPoint(out, from.id) : out
+/** Slide point `pointId` to `t` along its line (in the line's units as it
+ *  stands). A line's end point takes the end with it, and the root's start
+ *  point its start: past them the line grows, back from them it shortens,
+ *  never past its other points. Any other point stays on the line. */
+export function slideStoryPoint(d: StorylineData, pointId: string, t: number): StorylineData {
+  const p = d.points.find(q => q.id === pointId)
+  const l = p && d.lines.find(q => q.id === p.line)
+  if (!p || !l) return d
+  const len = Math.hypot(l.dx, l.dy)
+  if (len < EPS) return d
+  const ux = l.dx / len, uy = l.dy / len
+  const others = d.points.filter(q => q.line === l.id && q.id !== pointId)
+  if (!l.from && p.t <= EPS) {
+    const k = Math.min(t, others.length ? Math.min(...others.map(q => q.t)) : len)
+    return {
+      ...d,
+      lines: d.lines.map(q => (q.id === l.id ? { ...q, x: q.x + ux * k, y: q.y + uy * k, dx: ux * (len - k), dy: uy * (len - k) } : q)),
+      points: d.points.map(q => (q.line === l.id && q.id !== pointId ? { ...q, t: q.t - k } : q)),
+    }
+  }
+  if (p.t >= len - EPS) {
+    const to = Math.max(t, others.length ? Math.max(...others.map(q => q.t)) : 0)
+    return {
+      ...d,
+      lines: d.lines.map(q => (q.id === l.id ? { ...q, dx: ux * to, dy: uy * to } : q)),
+      points: d.points.map(q => (q.id === pointId ? { ...q, t: to } : q)),
+    }
+  }
+  const at = Math.max(0, Math.min(len, t))
+  return { ...d, points: d.points.map(q => (q.id === pointId ? { ...q, t: at } : q)) }
 }
 
 /** Delete a branch: the line, its points and everything branching from
- *  them. An anchor left holding nothing goes too. */
+ *  them. */
 export function deleteStoryBranch(d: StorylineData, lineId: string): StorylineData {
   const line = d.lines.find(l => l.id === lineId)
   if (!line?.from) return d
-  const lines = new Set<string>(), points = new Set<string>()
+  const lines = new Set<string>([lineId]), points = new Set<string>()
   for (const p of d.points) {
     if (p.line !== lineId) continue
     const b = pointAndBranches(d, p.id)
     b.lines.forEach(x => lines.add(x))
     b.points.forEach(x => points.add(x))
   }
-  return dropLine({ ...d, lines: d.lines.filter(l => !lines.has(l.id)), points: d.points.filter(p => !points.has(p.id)) }, lineId)
+  return { ...d, lines: d.lines.filter(l => !lines.has(l.id)), points: d.points.filter(p => !points.has(p.id)) }
 }
 
-/** Delete the spot a branch leaves its line from (an anchor): only when
- *  what grows from it holds nothing (no point on any of its branches) —
- *  those go with it. A branch with things on it needs Delete branch. */
-export function deleteStoryAnchor(d: StorylineData, anchorId: string): StorylineData {
-  const grown = d.lines.filter(l => l.from === anchorId)
-  if (grown.some(l => d.points.some(p => p.line === l.id))) return d
-  return deleteStoryPoint({ ...d, lines: d.lines.filter(l => l.from !== anchorId) }, anchorId)
-}
-
-/** Delete a line's end handle: the line shortens to its last point (its
- *  first, from the root's start); with none on it, back to where it starts
- *  — a branch with nothing on it goes. */
-export function deleteStoryEnd(d: StorylineData, lineId: string, which: 'start' | 'end'): StorylineData {
-  const l = d.lines.find(q => q.id === lineId)
-  if (!l) return d
-  const on = d.points.filter(p => p.line === lineId)
-  if (!on.length) return l.from ? dropLine(d, lineId) : { ...d, lines: d.lines.map(q => (q.id === lineId ? { ...q, dx: 0, dy: 0 } : q)) }
-  if (which === 'start') return l.from ? d : trimStart(d, lineId, Math.min(...on.map(p => p.t)))
-  const len = Math.hypot(l.dx, l.dy)
-  const to = Math.max(...on.map(p => p.t))
-  return len < EPS ? d : { ...d, lines: d.lines.map(q => (q.id === lineId ? { ...q, dx: l.dx / len * to, dy: l.dy / len * to } : q)) }
+/** Re-attach point `pointId`, with everything growing from it, at `t` on
+ *  line `lineId`: it leaves its own line, which stays whole. Not onto its
+ *  own line (that is a slide) or anything growing from it. */
+export function reattachStoryPoint(d: StorylineData, pointId: string, lineId: string, t: number): StorylineData {
+  const p = d.points.find(q => q.id === pointId)
+  if (!p || p.line === lineId || branchesOf(d, pointId).lines.has(lineId)) return d
+  return { ...d, points: d.points.map(q => (q.id === pointId ? { ...q, line: lineId, t } : q)) }
 }
 
 /** Let card `groupId` go from point `pointId`; it stays where it is. */
