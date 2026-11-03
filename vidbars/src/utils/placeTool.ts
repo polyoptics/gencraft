@@ -28,8 +28,9 @@ import {
 } from './canvasCreate'
 import { openFilmMixer, filmMixerSize } from '../components/FilmMixer/FilmMixerBody'
 import { openRoughCut, roughCutSize } from '../components/RoughCut/RoughCutBody'
+import { createLoopStrip, loopStripSize } from './fx/createEffect'
 
-export type PlaceKind = 'viewer' | 'pool' | 'prompt' | 'history' | 'browser' | 'filmMixer' | 'storyline' | 'cabinet' | 'roughCut' | 'new'
+export type PlaceKind = 'viewer' | 'pool' | 'prompt' | 'history' | 'browser' | 'filmMixer' | 'storyline' | 'cabinet' | 'roughCut' | 'loopStrip' | 'new'
 
 interface PlaceState {
   /** What is being placed, or null. */
@@ -67,6 +68,7 @@ function footprint(kind: PlaceKind, zoom: number): Footprint {
     case 'browser': return freeNodeFootprint('list', zoom)
     case 'filmMixer': { const s = filmMixerSize(); return { w: s.width, h: s.height, dy: 0 } }
     case 'roughCut': { const s = roughCutSize(); return { w: s.width, h: s.height, dy: 0 } }
+    case 'loopStrip': { const s = loopStripSize(zoom); return { w: s.width, h: s.height, dy: 0 } }
     case 'storyline': return { w: 0, h: 0, dy: 0 }
     case 'new': return newIsNote() ? freeNodeFootprint('note', zoom) : cardFootprint(zoom)
     default: return freeNodeFootprint(kind, zoom)
@@ -126,6 +128,7 @@ function placeAt(kind: PlaceKind, box: PlaceBox) {
     case 'browser': addBrowserNode(at); break
     case 'filmMixer': openFilmMixer(at); break
     case 'roughCut': openRoughCut(at); break
+    case 'loopStrip': createLoopStrip({ x: box.left, y: box.top }); break
     case 'storyline': createStorylineAt(at); break
     case 'new': if (newIsNote()) addFreeNodeCentered('note', at); else createCardOrBoardAt(at); break
     default: addFreeNodeCentered(kind, at)

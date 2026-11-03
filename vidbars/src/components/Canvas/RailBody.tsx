@@ -25,7 +25,7 @@ import { useFreeNodeStore, type FreeNodeData } from '../../store/freeNodeStore'
 import { useRailRunStore } from '../../store/railRunStore'
 import { useRailUiStore } from '../../store/railUiStore'
 import { RAIL_GEOM, RAIL_TRAY, isRail, railDropTarget, railLayout, railMembers, railRows, type RailColumn, type RailDropTarget, type RailSlot, type Rect } from '../../utils/rail'
-import { clientToCanvas } from '../../utils/fx/createEffect'
+import { clientToCanvas, createEffectCard } from '../../utils/fx/createEffect'
 import { createEffectCardGroup } from '../../utils/effectCards'
 import { useBoardsStore } from '../../store/boardsStore'
 import { railAtPoint } from './rail/railHit'
@@ -267,16 +267,25 @@ export const RailBody: React.FC<{
           : def?.needs ? `draws on ${drawsOn}, or drop a Segment card`
           : 'drop a Segment card to limit it to a mask'
         return (
-          <div key={`${col.slotId}-${need}`} data-rail-need={need} style={{
-            position: 'absolute', ...loc(box), borderRadius: 8 * u, boxSizing: 'border-box',
+          // A button: a click puts a new card of the right kind there (a
+          // Depth card for depth, a Segment card for a mask), as its input.
+          <button key={`${col.slotId}-${need}`} type="button" data-rail-need={need}
+            title={need === 'depth' ? 'Click: a new Depth card here' : 'Click: a new Segment card here'}
+            onPointerDown={stopPrimary}
+            onMouseDown={pressButton}
+            onDoubleClick={stop}
+            onClick={e => { e.stopPropagation(); createEffectCard(need === 'depth' ? 'depth' : 'segment', { rail: { railId: id, kind: 'input', slotId: col.slotId } }) }}
+            style={{
+            position: 'absolute', ...loc(box), borderRadius: 8 * u, boxSizing: 'border-box', margin: 0,
             border: `${1.2 * u}px dashed ${lit ? C.drop : 'rgba(255,255,255,0.2)'}`,
             background: lit ? 'rgba(143,211,255,0.08)' : 'transparent',
-            display: 'flex', flexDirection: 'column', justifyContent: 'center', padding: `0 ${8 * u}px`,
-            color: 'rgba(255,255,255,0.55)', lineHeight: 1.25, overflow: 'hidden', pointerEvents: 'none',
+            display: 'flex', flexDirection: 'column', alignItems: 'stretch', justifyContent: 'center', padding: `0 ${8 * u}px`,
+            color: 'rgba(255,255,255,0.55)', lineHeight: 1.25, overflow: 'hidden', cursor: 'pointer',
+            fontFamily: 'inherit', textAlign: 'left',
           }}>
             <span style={{ fontSize: Math.max(10 * u, MIN_TEXT_PX / zoom), fontWeight: 600 }}>needs {need}</span>
             <span style={{ fontSize: Math.max(8 * u, MIN_TEXT_PX / zoom), opacity: 0.8, whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>{hint}</span>
-          </div>
+          </button>
         )
       }))}
       {/* ── Look rows (utils/rail RailData.rows): each another look on the

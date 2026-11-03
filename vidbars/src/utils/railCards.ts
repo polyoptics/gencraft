@@ -32,7 +32,7 @@ import { createMediaCard, deckFaceSteps, gridOrder, layoutCardGrid } from './car
 import { drawnRect } from './effectCards'
 import { clientToCanvas } from './fx/createEffect'
 import { knownKind } from './fx/effects'
-import { RAIL_TRAY, isRail, railDropTarget, railLayout, railMembers, type RailDropTarget } from './rail'
+import { RAIL_TRAY, inputGiven, isRail, railDropTarget, railLayout, railMembers, type RailDropTarget } from './rail'
 
 /** One picture: the card and block it is in, and what it shows. */
 export interface Entry { groupId: string; boardId: string; media: MediaItem; label: string }
@@ -195,9 +195,16 @@ export function placeCard(id: string, x: number, y: number): boolean {
   return true
 }
 
-/** A stand-in tile for railDropTarget, which only reads its type. */
-function probe(type: FreeNodeType): FreeNodeData {
-  return { id: '', x: 0, y: 0, width: 0, height: 0, type, label: '', text: '', imageUrl: 'probe', color: '' }
+/** A stand-in tile for railDropTarget, which reads its type and, for an
+ *  effect, its kind (a Depth or Segment card can be tucked as an input). */
+function probe(type: FreeNodeType, kind?: string): FreeNodeData {
+  return { id: '', x: 0, y: 0, width: 0, height: 0, type, label: '', text: '', imageUrl: 'probe', color: '', ...(kind ? { effect: { kind: knownKind(kind), params: {} } } : {}) } as FreeNodeData
+}
+
+/** What an effect card gives tucked under another card on a strip (a
+ *  Depth card its depth, a Segment card its mask), or null. */
+export function cardGivesInput(g: ProjectGroup | undefined): 'depth' | 'mask' | null {
+  return g?.effect ? inputGiven(probe('effect', g.effect.kind)) : null
 }
 
 /** The loop strip under client (x, y), looking PAST cards — the card being
@@ -220,19 +227,49 @@ function railUnder(x: number, y: number): FreeNodeData | null {
   return null
 }
 
+/** The topmost unpinned loop strip whose box holds canvas point (x, y). */
+function railHolding(x: number, y: number): FreeNodeData | null {
+  const nodes = useFreeNodeStore.getState().nodes
+  const members = railMembers(nodes)
+  let hit: FreeNodeData | null = null
+  for (const n of Object.values(nodes)) {
+    if (!isRail(n) || n.pin) continue
+    const b = railLayout(n, members.get(n.id))?.box
+    if (b && x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height) hit = n
+  }
+  return hit
+}
+
 /** Where the dragged cards would go on a loop strip, let go at client
- *  (x, y): a column for picture cards, the slot row for effect cards. */
+ *  (x, y): a column for picture cards; for effect cards the slot row, or,
+ *  for a Depth or Segment card, under an effect card as its input. Read at
+ *  the pointer, or — the pointer off every strip but the card over one —
+ *  at the middle of the card in hand, so a card held by its bottom edge
+ *  still finds the strip it is over. */
 export function cardRailTarget(ids: string[], x: number, y: number): RailDropTarget | null {
-  const { groups } = useBoardsStore.getState()
+  const { groups, boards } = useBoardsStore.getState()
   const cards = ids.map(id => groups.find(g => g.id === id)).filter((g): g is ProjectGroup => !!g)
-  const effects = cards.length > 0 && cards.every(g => g.effect)
-  const rail = railUnder(x, y)
-  if (!rail || cards.length === 0) return null
+  if (cards.length === 0) return null
+  const effects = cards.every(g => g.effect)
+  const gives = effects ? cardGivesInput(cards[0]) : null
+  const sameInput = !!gives && cards.every(g => cardGivesInput(g) === gives)
+  const tile = probe(effects ? 'effect' : 'image', sameInput ? cards[0].effect!.kind : undefined)
+  let rail = railUnder(x, y)
+  let { cx, cy } = clientToCanvas(x, y)
+  if (!rail && !document.elementsFromPoint(x, y).some(el => el.closest('[data-pinned]'))) {
+    const r = drawnRect(cards[0], boards, useCanvasStore.getState().zoom)
+    if (r) {
+      cx = r.x + r.width / 2; cy = r.y + r.height / 2
+      rail = railHolding(cx, cy)
+    }
+  }
+  if (!rail) return null
   const nodes = useFreeNodeStore.getState().nodes
   const L = railLayout(rail, railMembers(nodes).get(rail.id))
-  const { cx, cy } = clientToCanvas(x, y)
-  const t = L ? railDropTarget(L, rail, { x: cx, y: cy }, probe(effects ? 'effect' : 'image')) : null
-  return t && (t.kind === 'row') === effects ? t : null
+  const t = L ? railDropTarget(L, rail, { x: cx, y: cy }, tile) : null
+  if (!t) return null
+  if (effects) return t.kind === 'row' || t.kind === 'input' ? t : null
+  return t.kind === 'column' ? t : null
 }
 
 /** While a card drag is over a strip: the strip draws where it would land
@@ -261,7 +298,17 @@ export function dockCardsOnRail(ids: string[], t: RailDropTarget): number {
     })
     return fx.length
   }
-  if (t.kind === 'input') return 0   // a card from the canvas is never a side input (utils/rail)
+  if (t.kind === 'input') {
+    // Depth / Segment cards tucked straight from the canvas under an effect
+    // card, as a copy of their effect, settings and all.
+    const fx = cards.filter(g => cardGivesInput(g))
+    for (const g of fx) {
+      const id = fs().addFreeNode(0, 0, 'effect')
+      fs().updateFreeNode(id, { effect: { kind: knownKind(g.effect!.kind), params: { ...(g.effect!.params ?? {}) }, text: g.effect!.text }, label: g.name })
+      fs().dockToRail([id], t)
+    }
+    return fx.length
+  }
   return dockCards(cards.filter(g => !g.effect).map(g => g.id), t)
 }
 

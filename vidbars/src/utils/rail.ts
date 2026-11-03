@@ -441,8 +441,8 @@ export type RailDropTarget =
   | { railId: string; kind: 'input'; slotId: string }
 
 /** Where a tile released at `p` (canvas units) would dock on this rail, or
- *  null. Pictures go into a role column at the cascade position under the
- *  pointer; effect cards go into the slot row, between the slots either side
+ *  null. Pictures go into the role column under the pointer (or the nearest
+ *  one), at the cascade position under it; effect cards go into the slot row, between the slots either side
  *  of the pointer. Nothing docks into the tray — the run deals results there. */
 export function railDropTarget(L: RailLayout, rail: FreeNodeData, p: { x: number; y: number }, dragged: FreeNodeData): RailDropTarget | null {
   if (!isRail(rail)) return null
@@ -476,7 +476,12 @@ export function railDropTarget(L: RailLayout, rail: FreeNodeData, p: { x: number
     return { railId: rail.id, kind: 'row', insertAt }
   }
   if (!isRailPicture(dragged)) return null
-  const col = L.columns.find(c => c.kind === 'role' && p.x >= c.x - m / 2 && p.x <= c.x + c.width + m / 2)
+  // Anywhere on the strip: the picture column under the point, else the
+  // nearest one — over an effect card, the tray or a look row a picture
+  // still has a place to go, so the strip always shows one.
+  const roles = L.columns.filter(c => c.kind === 'role')
+  const off = (c: RailColumn) => Math.max(0, c.x - p.x, p.x - (c.x + c.width))
+  const col = roles.reduce<RailColumn | null>((best, c) => (!best || off(c) < off(best) ? c : best), null)
   if (!col) return null
   // Insert above the first card whose visible band starts below the point.
   const others = col.cards.filter(c => c.id !== dragged.id)

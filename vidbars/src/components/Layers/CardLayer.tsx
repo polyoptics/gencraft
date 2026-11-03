@@ -38,7 +38,7 @@ import { cardHitAt } from '../../utils/cardContent'
 import { cardFaceMedia, deckFaceSteps, faceSteps, mergeCardsInto, setFaceThumbnail, stepDeckFace, stepFace } from '../../utils/cardGrid'
 import { drawnRect, effectChain, snapEffectCard } from '../../utils/effectCards'
 import { followFaceInViewer, showDockedCardInViewer } from '../../hooks/useDockedContent'
-import { cardRailTarget, dockCardsOnRail, endDockedDrag, liftDockedCards, previewCardRail } from '../../utils/railCards'
+import { cardGivesInput, cardRailTarget, dockCardsOnRail, endDockedDrag, liftDockedCards, previewCardRail } from '../../utils/railCards'
 import { copyEffect, hasEffectClip, pasteEffect } from '../../utils/fx/effectClipboard'
 import { EffectTileBody } from '../Canvas/EffectTileBody'
 import { knownKind } from '../../utils/fx/effects'
@@ -663,9 +663,11 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
         dockCardsOnRail(order, railT)
         // Effect cards let go on a strip's row MOVE there: the strip's new
         // steps take their switches too (in the same order), and the cards go.
-        if (railT.kind === 'row') {
+        // So do Depth / Segment cards tucked under an effect card as inputs.
+        if (railT.kind === 'row' || railT.kind === 'input') {
           const bs = useBoardsStore.getState()
-          const fx = order.map(gid => bs.groups.find(x => x.id === gid)).filter((g): g is ProjectGroup => !!g?.effect)
+          const fx = order.map(gid => bs.groups.find(x => x.id === gid))
+            .filter((g): g is ProjectGroup => !!g?.effect && (railT.kind === 'row' || !!cardGivesInput(g)))
           const fns = useFreeNodeStore.getState()
           const made = Object.values(fns.nodes)
             .filter(n => !before.has(n.id) && n.type === 'effect' && n.railDock?.railId === railT.railId)

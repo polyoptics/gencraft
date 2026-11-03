@@ -109,6 +109,19 @@ const IcFilm: React.FC<SvgProps> = ({ size }) => (
   </svg>
 )
 
+/** Loop strip — the run band across the top, cards docked in columns
+ *  under it. Accent: the run arrow and the cards. */
+const IcLoopStrip: React.FC<SvgProps> = ({ size }) => (
+  <svg {...svgBase(size)}>
+    <rect x="2.5" y="3.5" width="19" height="17" rx="2.2" stroke={S} />
+    <path d="M2.5 9.2h19" stroke={S} />
+    <path d="M6 6.35h10.5M14.3 4.9l2.4 1.45-2.4 1.45" stroke={A.green} strokeWidth="1.6" />
+    <rect x="5.2" y="11.8" width="3.6" height="5.8" rx="0.8" fill={A.green} stroke="none" />
+    <rect x="10.2" y="11.8" width="3.6" height="5.8" rx="0.8" fill={A.green} opacity="0.6" stroke="none" />
+    <rect x="15.2" y="11.8" width="3.6" height="5.8" rx="0.8" fill={A.green} opacity="0.35" stroke="none" />
+  </svg>
+)
+
 /** Project cabinet — a chest of drawers. Accent: the pulls. */
 const IcCabinet: React.FC<SvgProps> = ({ size }) => (
   <svg {...svgBase(size)}>
@@ -348,6 +361,11 @@ export const TopIconBar: React.FC = () => {
           {...place('cabinet')}
         />
       )}
+      <IconButton
+        Icon={IcLoopStrip}
+        title="Loop strip — drop cards in and run effects over them"
+        {...place('loopStrip')}
+      />
       {/* A wrapper for the ref: the palette hangs under it, and a press on
           it must not count as "outside" (IconButton forwards no ref). */}
       <div ref={fxBtnRef} style={{ display: 'flex' }}>

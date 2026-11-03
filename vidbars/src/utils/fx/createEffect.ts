@@ -323,6 +323,18 @@ export function createEffectCard(
   return id
 }
 
+/** The size a new loop strip would be made at this zoom (its first
+ *  layout), for the toolbar's outline (utils/placeTool). */
+export function loopStripSize(zoom: number): { width: number; height: number } {
+  const unit = createScaleFor(zoom)
+  const probe: FreeNodeData = {
+    id: '', x: 0, y: 0, width: 600 * unit, height: 360 * unit, type: 'rail', label: '', text: '', imageUrl: null, mediaType: null, color: '',
+    rail: { unit, output: 'process', slots: [{ id: 'p', kind: 'role', name: 'Pictures', mode: 'each' }] },
+  }
+  const L = railLayout(probe, undefined)
+  return L ? { width: L.box.width, height: L.box.height } : { width: probe.width, height: probe.height }
+}
+
 /** Make a loop strip (utils/rail): one empty "Pictures" column, the run
  *  arrow, the results tray. `at` is its TOP-LEFT corner in canvas units —
  *  the canvas menu hangs it from the cursor, the way a menu hangs from its
