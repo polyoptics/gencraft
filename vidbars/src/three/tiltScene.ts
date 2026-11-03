@@ -887,9 +887,12 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     groundTop.matrix.copy(ground.matrix)
     groundTop.matrixWorldNeedsUpdate = true
 
-    // Models rise out of their cards as the plane tips back.
+    // Models rise out of their cards as the plane tips back, and only then:
+    // swung sideways or tipped up, the card faces stay clear for the layers
+    // hanging behind them. The swing lowers them again smoothly.
     const off = Math.max(Math.abs(st.tilt), Math.abs(st.yaw))
-    const rise = Math.min(1, Math.max(0, (off - 4) / 26))
+    const swingK = Math.min(1, Math.abs(st.yaw) / 35)
+    const rise = Math.min(1, Math.max(0, (st.tilt - 4) / 26)) * (1 - swingK * swingK * (3 - 2 * swingK))
     const ease = rise * rise * (3 - 2 * rise)
     const keep = new Set<string>()
     for (const tg of targets) {
