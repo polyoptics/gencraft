@@ -503,6 +503,11 @@ export const EFFECTS: Record<EffectKind, EffectDef> = {
     P('key_deg', 'Key from', 0, 360, 1, 135), P('key_elev', 'Key height', 0, 90, 1, 25),
     P('key', 'Key light', 0, 1, 0.01, 0.14), P('shadow', 'Shadow', 0, 1, 0.01, 0.34), P('rim', 'Rim light', 0, 3, 0.05, 0.8),
     P('spec', 'Shine', 0, 3, 0.05, 1), P('ao', 'Occlusion', 0, 1, 0.01, 0.42), P('haze', 'Background haze', 0, 0.5, 0.01, 0.07),
+    // How much the picture's own light holds the new light back. The film's
+    // tool holds it fully back (1) on busy, already-lit painting, which on
+    // most pictures left nothing to see: the card starts low (aiEffects
+    // CARD_DIALS sends it even when untouched).
+    P('respect', "Follow picture's light", 0, 1, 0.01, 0.3),
   ]),
   formlight: lookDef('formlight', 'Form light', '◓', '#9cc4ff', 'Rim light and wrap shadow on the form', [
     P('rim', 'Rim light', 0, 4, 0.05, 1.6), P('shadow', 'Wrap shadow', 0, 2, 0.05, 1), P('glint', 'Glints', 0, 3, 0.05, 1),
