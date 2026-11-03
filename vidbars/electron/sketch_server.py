@@ -35,6 +35,7 @@ Models: from_pretrained is cached here, so Depth Anything, Grounding DINO and SA
 import ast
 import contextlib
 import functools
+import glob
 import hashlib
 import io
 import json
@@ -80,10 +81,154 @@ def warm_models():
 
 
 # ------------------------------------------------------------------------------------------- running a tool
+# ------------------------------------------------------------------------------------------- output size
+# A bake bigger than the preview draws at its own size (res_factor k): the looks' pixel-size DIALS are scaled (PX,
+# scaled_dials), but some sizes are written into the scripts' code - a blur radius, a morphology disk. Those are
+# scaled too, as each script is loaded: PX_SRC lists, per script, exact pieces of its source and the same piece with
+# the size times VB_K (the run's k, put in the script's globals). The files are never changed; a piece that is not
+# found (the script was edited) is reported in the log and left as it is. Scripts executed here (run_tool, load_lib)
+# and the modules they import (look_formhatch, the frozen copy tools_marks reads, ...) are patched alike.
+VB_K = [1.0]
+PX_SRC = {
+    # the background depth hatch (and its frozen copy in tools_marks/_frozen, which Stipple and Halftone read)
+    "look_bg_depthhatch.py": [
+        ("x = blur(x, 4.0)", "x = blur(x, 4.0 * VB_K)"),
+        ("    Ls = blur(L, 1.0)\n    return blur(np.hypot(cv2.Sobel(Ls, cv2.CV_32F, 1, 0), cv2.Sobel(Ls, cv2.CV_32F, 0, 1)) / 8, 6 / F)",
+         # the detail energy: a gradient per px, so per preview px (x k) - the air thresholds hold at any size
+         "    Ls = blur(L, 1.0 * VB_K)\n    return blur(np.hypot(cv2.Sobel(Ls, cv2.CV_32F, 1, 0), cv2.Sobel(Ls, cv2.CV_32F, 0, 1)) / 8 * VB_K, 6 * VB_K / F)"),
+        ("disk(8 / F)", "disk(8 * VB_K / F)"),
+        ("cv2.erode(sup, disk(4))", "cv2.erode(sup, disk(4 * VB_K))"),
+        ("cv2.erode(mb.astype(np.uint8), disk(3 / F))", "cv2.erode(mb.astype(np.uint8), disk(3 * VB_K / F))"),
+        ("band &= cv2.dilate((fig > 0.5).astype(np.uint8), disk(2))", "band &= cv2.dilate((fig > 0.5).astype(np.uint8), disk(2 * VB_K))"),
+        ("bg = 1 - cv2.dilate((fig > 0.5).astype(np.uint8), disk(3))", "bg = 1 - cv2.dilate((fig > 0.5).astype(np.uint8), disk(3 * VB_K))"),
+        ("if m.sum() < 20:", "if m.sum() < 20 * VB_K * VB_K:"),
+        ("blur(L, 0.7)", "blur(L, 0.7 * VB_K)"),
+        ("blur(np.maximum.reduce(sp), 3)", "blur(np.maximum.reduce(sp), 3 * VB_K)"),
+        # a reduced stroke keeps its ink when it is thinner than a PREVIEW pixel (the preview's look; in the bake's
+        # own pixels the far strokes are never that thin, and the distance drew half as dark)
+        ("hh = np.maximum(hw[r], 0)", "hh = np.maximum(hw[r], 0) / VB_K"),
+    ],
+    # tools_marks' fields (Stipple, Halftone): its masks' and steadying's own radii
+    "fields.py": [
+        ("md = blur(cv2.dilate(figh, disk(2)), 1.5)", "md = blur(cv2.dilate(figh, disk(2 * VB_K)), 1.5 * VB_K)"),
+        ("core = cv2.erode((m > 0.5).astype(np.uint8), disk(3)) > 0", "core = cv2.erode((m > 0.5).astype(np.uint8), disk(3 * VB_K)) > 0"),
+        ("cv2.MORPH_OPEN, disk(3))", "cv2.MORPH_OPEN, disk(3 * VB_K))"),
+        ("np.maximum(blur(keep, 1.0), keep)", "np.maximum(blur(keep, 1.0 * VB_K), keep)"),
+        ("[blur(m, 1) + 2 * m for m in ms]", "[blur(m, VB_K) + 2 * m for m in ms]"),
+        ("region = blur(fig, 0.7) * blur(nondark.astype(np.float32), 0.7)",
+         "region = blur(fig, 0.7 * VB_K) * blur(nondark.astype(np.float32), 0.7 * VB_K)"),
+        ("dil = cv2.dilate(c, disk(3))", "dil = cv2.dilate(c, disk(3 * VB_K))"),
+        ("g = blur(c, 0.8)", "g = blur(c, 0.8 * VB_K)"),
+        ("BG.half(t)[2] > 0.5).astype(np.uint8), disk(2))", "BG.half(t)[2] > 0.5).astype(np.uint8), disk(2 * VB_K))"),
+        ("0.3 * blur(j, 24)", "0.3 * blur(j, 24 * VB_K)"),
+        ("wf = blur(ok, 6)", "wf = blur(ok, 6 * VB_K)"),
+        ("blur(x * ok[..., None], 6)", "blur(x * ok[..., None], 6 * VB_K)"),
+    ],
+    "printkit.py": [("def rel_ndl(fl, kind, win, reg, sigma=32.0):", "def rel_ndl(fl, kind, win, reg, sigma=32.0 * VB_K):")],
+    # the Film outline: its matte clean-up, the flecks it drops, the pencil's inside-tone probe and the held frame's
+    # reach (not its interior-line detector, which finds as many lines unscaled, nor the 1-px antialiasing of its
+    # distance maps, which thins the lines when scaled)
+    "look_hybrid_colerase.py": [
+        ("cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))", "cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * round(5 * VB_K) + 1,) * 2)"),
+        ("cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))), 3)", "cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * round(4 * VB_K) + 1,) * 2)), 3 * VB_K)"),
+        ("cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)))", "cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * round(1 * VB_K) + 1,) * 2))"),
+        ("cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))", "cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * round(2 * VB_K) + 1,) * 2))"),
+        ("back = blur(back, 6)", "back = blur(back, 6 * VB_K)"),
+        ("    Ls = blur(L, 1.0)\n    gx, gy = cv2.Sobel(Ls", "    Ls = blur(L, 1.0 * VB_K)\n    gx, gy = cv2.Sobel(Ls"),
+        ("return blur(cv2.dilate(ok[lab], np.ones((5, 5), np.uint8)), 1)", "return blur(cv2.dilate(ok[lab], np.ones((2 * round(2 * VB_K) + 1,) * 2, np.uint8)), VB_K)"),
+        ("r = 4 if not isinstance(S, np.ndarray) and S >= 1 else max(1, int(round(4 * float(np.max(S)))))",
+         "r = max(1, int(round(4 * VB_K * (1 if not isinstance(S, np.ndarray) and S >= 1 else float(np.max(S))))))"),
+        ("small = np.hypot(st[:, 2], st[:, 3]) < np.maximum(size * at_centres(S, cen)",
+         "small = np.hypot(st[:, 2], st[:, 3]) < np.maximum(size * VB_K * at_centres(S, cen)"),
+        ("m = soften(fig, 1.0)", "m = soften(fig, 1.0 * VB_K)"),
+        ('blur(m, 1.0 + D["motion_soft"] * s)', 'blur(m, 1.0 * VB_K + D["motion_soft"] * s)'),
+        ("mb = blur(m, 4)", "mb = blur(m, 4 * VB_K)"),
+        ("s = smoothstep(0.1, 0.4, blur(cv2.dilate(sc, np.ones((5, 5), np.uint8)), 1.0))",
+         "s = smoothstep(0.1, 0.4, blur(cv2.dilate(sc, np.ones((2 * round(2 * VB_K) + 1,) * 2, np.uint8)), 1.0 * VB_K))"),
+        ("sl = smoothstep(0.1, 0.4, blur(cv2.dilate(lo * crest, np.ones((5, 5), np.uint8)), 1.0))",
+         "sl = smoothstep(0.1, 0.4, blur(cv2.dilate(lo * crest, np.ones((2 * round(2 * VB_K) + 1,) * 2, np.uint8)), 1.0 * VB_K))"),
+        ("onl, _ = gaps(rng2, 0.25, 70, nz)", "onl, _ = gaps(rng2, 0.25, 70 * VB_K, nz)"),
+        ("lumc = blur(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), 1.5)", "lumc = blur(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), 1.5 * VB_K)"),
+        ("e = int(round(5 * s))", "e = int(round(5 * s * VB_K))"),
+        ("return blur(lumc * fm, 8 * s) / (blur(fm, 8 * s) + 1e-3)", "return blur(lumc * fm, 8 * s * VB_K) / (blur(fm, 8 * s * VB_K) + 1e-3)"),
+        ("r.standard_normal((H, W)).astype(np.float32), 0.6))", "r.standard_normal((H, W)).astype(np.float32), 0.6 * VB_K))"),
+        ('r = int(10 + 30 * D["trail"])', 'r = int((10 + 30 * D["trail"]) * VB_K)'),
+        ("(2 * r + 1, 2 * r + 1))), 2)", "(2 * r + 1, 2 * r + 1))), 2 * VB_K)"),
+        ("smoothstep(90, 60, cv2.distanceTransform", "smoothstep(90 * VB_K, 60 * VB_K, cv2.distanceTransform"),
+        ("under = cv2.GaussianBlur(img, (0, 0), 3)", "under = cv2.GaussianBlur(img, (0, 0), 3 * VB_K)"),
+    ],
+    # Boiling ink: how far it looks across an edge (shape thickness, colour edge, darkness), its smoothing along the
+    # contour (1 px samples), the thinnest stroke, and the dry brush's own px
+    "look_boil.py": [
+        ("cv2.COLOR_BGR2GRAY).astype(np.float32) / 255, (0, 0), 2)", "cv2.COLOR_BGR2GRAY).astype(np.float32) / 255, (0, 0), 2 * VB_K)"),
+        ("cv2.GaussianBlur(frame, (0, 0), 1.5)", "cv2.GaussianBlur(frame, (0, 0), 1.5 * VB_K)"),
+        ("for k in (1.5, 3, 4.5)]", "for k in (1.5 * VB_K, 3 * VB_K, 4.5 * VB_K)]"),
+        ("at(lab, q[:, :2] + 3 * q[:, 2:4]) - at(lab, q[:, :2] - 3 * q[:, 2:4])",
+         "at(lab, q[:, :2] + 3 * VB_K * q[:, 2:4]) - at(lab, q[:, :2] - 3 * VB_K * q[:, 2:4])"),
+        ('axis=1), 5, mode="wrap")', 'axis=1), 5 * VB_K, mode="wrap")'),
+        ("(at(fd, q[:, :2]) > 4)", "(at(fd, q[:, :2]) > 4 * VB_K)"),
+        ("dark(at(lum, q[:, :2] - 3 * q[:, 2:4])), dark(at(lum, q[:, :2] + 3 * q[:, 2:4]))",
+         "dark(at(lum, q[:, :2] - 3 * VB_K * q[:, 2:4])), dark(at(lum, q[:, :2] + 3 * VB_K * q[:, 2:4]))"),
+        ("for k in np.arange(1, 17, 1.5)]", "for k in np.arange(1, 17, 1.5) * VB_K]"),
+        ("sm(thick, 4), sm(at(spd[part], q[:, :2]), 6)", "sm(thick, 4 * VB_K), sm(at(spd[part], q[:, :2]), 6 * VB_K)"),
+        ("def concavity(q, closed, r=8):", "def concavity(q, closed, r=max(1, int(round(8 * VB_K)))):"),
+        ("* q[:, 2:4], 1) / 3, 0, 1)", "* q[:, 2:4], 1) / (3 * VB_K), 0, 1)"),
+        ("u(0, 1), u(1.5, 6), rng.uniform()", "u(0, 1), u(1.5 * VB_K, 6 * VB_K), rng.uniform()"),
+        ("wobl=u(25, 70)", "wobl=u(25 * VB_K, 70 * VB_K)"),
+        ("interp(curve, s, closed)[:, 8] / 10", "interp(curve, s, closed)[:, 8] / (10 * VB_K)"),
+        ('np.maximum(D["thin"] * 2 * thick, 1.2)', 'np.maximum(D["thin"] * 2 * thick, 1.2 * VB_K)'),
+        ("np.clip((w - 1.2) / 3.5, 0.25, 1)", "np.clip((w - 1.2 * VB_K) / (3.5 * VB_K), 0.25, 1)"),
+        ("torch.clamp(hw / 1.2, 0, 1)", "torch.clamp(hw / (1.2 * VB_K), 0, 1)"),
+        ("(ue / 4 * 10 + rx)", "(ue / (4 * VB_K) * 10 + rx)"),
+        ("if not closed and n - 1 - s < 12:", "if not closed and n - 1 - s < 12 * VB_K:"),
+    ],
+}
+
+
+def px_source(path, src):
+    """src with its PX_SRC pieces scaled for the run's VB_K."""
+    subs = PX_SRC.get(os.path.basename(path))
+    if not subs or abs(VB_K[0] - 1) < 1e-3:
+        return src
+    for old, new in subs:
+        if old in src:
+            src = src.replace(old, new)
+        else:
+            print("(output size: %s no longer has %r; left at the preview's size)" % (os.path.basename(path), old[:60]))
+    return src
+
+
+class PxImport:
+    """Imports PX_SRC's modules from sketchLook with their sizes scaled (while a bigger-than-preview run is on)."""
+
+    def find_spec(self, name, path=None, target=None):
+        base = name.rsplit(".", 1)[-1] + ".py"
+        if base not in PX_SRC or abs(VB_K[0] - 1) < 1e-3:
+            return None
+        import importlib.util
+        for d in (path or sys.path):
+            f = os.path.join(d, base)
+            if os.path.isfile(f):
+                if not os.path.normcase(os.path.abspath(f)).startswith(os.path.normcase(SKETCH)):
+                    return None
+                return importlib.util.spec_from_file_location(name, f, loader=self)
+        return None
+
+    def create_module(self, spec):
+        return None
+
+    def exec_module(self, m):
+        m.VB_K = VB_K[0]
+        exec(compile(px_source(m.__file__, open(m.__file__, encoding="utf-8").read()), m.__file__, "exec"), m.__dict__)
+
+
+sys.meta_path.insert(0, PxImport())
+
+
 def run_tool(script, root, argv, extra_path=(), finish=None):
     """Execute `script` as __main__ with ROOT = root. finish: replaces the look's compositor (see LOOK_SPLIT)."""
-    src = open(script, encoding="utf-8").read()
-    g = {"__name__": "__main__", "__file__": os.path.join(root, "tools", os.path.basename(script))}
+    src = px_source(script, open(script, encoding="utf-8").read())
+    g = {"__name__": "__main__", "__file__": os.path.join(root, "tools", os.path.basename(script)), "VB_K": VB_K[0]}
     old_argv, old_path = sys.argv, list(sys.path)
     sys.argv = [script] + argv
     for p in reversed(extra_path):
@@ -343,8 +488,7 @@ PX = {
     "look_bg_depthhatch.py": ("air_px broad_px ground_px form_px paint_px glint_px close_px core_px shape_px "
                               "far_shape_px edge_soft mass_px occ_px occ_depth spacing weight min_weight stroke_px "
                               "wobble wobble_px grain min_spacing min_line scale_px edge_px hold_px motion_px relief_max",
-                              # its air test: luminance gradient per px, which a bigger picture spreads thinner
-                              "", "air_energy sky_energy"),
+                              "", ""),
     "look_hatch.py": ("jitter_px speck_px material_px inset overrun core_px spacing spacing_core length length_core "
                       "width contour_px curve_px tooth_px", "min_area", ""),
     "look_cel.py": ("form_px round_px cast_px ao_px simplify_px inset_px edge_soft jitter_px jitter_cell hatch_len "
@@ -373,7 +517,8 @@ def dial_defaults(script):
     for line in (m.group(1) if m else "").split("\n"):
         mm = re.match(r'\s+"([\w.]+)":\s*([-0-9.]+),', line)
         if mm:
-            out[mm.group(1)] = float(mm.group(2))
+            v = mm.group(2)
+            out[mm.group(1)] = float(v) if "." in v else int(v)  # whole-number dials stay so (scaled_dials)
     return out
 
 
@@ -399,7 +544,8 @@ def scaled_dials(script, dials, k):
         for key in keys:
             v = dials.get(key, base.get(key))
             if v is not None:
-                out[key] = v * f
+                # a whole-number dial stays one (look_misreg reads its dials back as their defaults' types)
+                out[key] = int(round(v * f)) if isinstance(base.get(key), int) and not isinstance(base.get(key), bool) else v * f
     return out
 
 
@@ -464,10 +610,12 @@ def subject_scales(root, mclip, req):
     return groups, area
 
 
-def use_scales(root, groups, area):
-    """scale.Scale, for the looks run in this job, serving these measured scales (each subject its own body)."""
-    sys.path.insert(0, TOOLS_SCALE)
-    import scale as S
+def use_scales(root, groups, area, S=None):
+    """scale.Scale, for the looks run in this job, serving these measured scales (each subject its own body). S: the
+    scale module to serve them from (default tools_scale's; op_marks: tools_marks' frozen copy)."""
+    if S is None:
+        sys.path.insert(0, TOOLS_SCALE)
+        import scale as S
     S.ROOT = root
 
     class Measured(S.Scale):
@@ -491,14 +639,15 @@ def op_scales(req):
 def size_key(req, dials, k):
     """What a drawing depends on besides the picture and its subject: the dials, the Segment card's scale settings
     and the output factor."""
-    return short([dials, req.get("scale") or {}, round(k, 3)])
+    # (bigger than the preview: also the code's own sizes, PX_SRC - its version, so older bakes are not reused)
+    return short([dials, req.get("scale") or {}, round(k, 3)] + (["px11"] if abs(k - 1) > 1e-3 else []))
 
 
 def op_lines(req):
     root, mclip, objs = segment_clip(req)
     side = int(req.get("side") or LIVE)
     dials = {k: float(v) for k, v in (req.get("dials") or {}).items()}
-    k = res_factor(root, side)
+    k = VB_K[0] = res_factor(root, side)
     res = os.path.join(root, "res", "lines_%d_%s_%s" % (side, mclip, size_key(req, dials, k)))
     if not os.path.isdir(res):
         clip = look_clip(root, mclip, side)
@@ -590,8 +739,8 @@ def load_lib(script, root, extra_path):
     for p in reversed(extra_path):
         sys.path.insert(0, p)
     g = {"__name__": "vb_" + os.path.splitext(os.path.basename(script))[0],
-         "__file__": os.path.join(root, "tools_scale", os.path.basename(script))}
-    exec(compile(open(script, encoding="utf-8").read(), script, "exec"), g)
+         "__file__": os.path.join(root, "tools_scale", os.path.basename(script)), "VB_K": VB_K[0]}
+    exec(compile(px_source(script, open(script, encoding="utf-8").read()), script, "exec"), g)
     return g
 
 
@@ -610,7 +759,7 @@ def op_formhatch(req):
     root, mclip, _ = segment_clip(req)
     side = int(req.get("side") or LIVE)
     dials = {k: float(v) for k, v in (req.get("dials") or {}).items()}
-    kf = res_factor(root, side)
+    kf = VB_K[0] = res_factor(root, side)
     res = os.path.join(root, "res", "formhatch_%d_%s_%s" % (side, mclip, size_key(req, dials, kf)))
     if not os.path.isdir(res):
         clip = look_clip(root, mclip, side, depth=True, pad=True)
@@ -655,7 +804,7 @@ def op_bghatch(req):
         root, mclip = base(req), None
     side = int(req.get("side") or LIVE)
     dials = {k: float(v) for k, v in (req.get("dials") or {}).items()}
-    kf = res_factor(root, side)
+    kf = VB_K[0] = res_factor(root, side)
     res = os.path.join(root, "res", "bghatch_%d_%s_%s" % (side, mclip or "none", size_key(req, dials, kf)))
     if not os.path.isdir(res):
         clip = look_clip(root, mclip, side, depth=True, pad=True)
@@ -780,7 +929,7 @@ def op_marks(req):
     else:
         root, mclip = (segment_clip(req)[:2] if named else (base(req), None))
     # at the output's size: every pixel size (the hatches' own, the fields', the pattern's) x kf, as for the looks
-    kf = res_factor(root, side)
+    kf = VB_K[0] = res_factor(root, side)
     res = os.path.join(root, "res", "%s_%d_%s_%d_%s" % (look, side, mclip or "none", where, size_key(req, dials, kf)))
     if not os.path.isdir(res):
         sub = dict(req, dials={}, side=side, scale=req.get("scale"))
@@ -814,6 +963,9 @@ def op_marks(req):
                 f = fh["frames"][s]
                 bgra(os.path.join(out, SUBJECT_LAYER % mk, "layer", "multiply", name), pad(grey(f["k"])), pad(grey(f["a"])))
                 bgra(os.path.join(out, SUBJECT_LAYER % mk, "layer", "screen", name), pad(grey(f["h"])), pad(grey(f["b"])))
+        # the subjects' scale as the hatches had it: measured at the preview's size (subject_scales), so the
+        # frozen scale below sizes the marks at any output size as it does in the preview
+        sgroups, sarea = subject_scales(root, mclip, req)
         # tools_marks, fresh (the hatches above imported tools_scale's own look_bg_depthhatch / scale, which its
         # frozen copies must not meet), with its data under this picture's folder
         for m in [m for m in sys.modules if os.path.normcase(str(getattr(sys.modules[m], "__file__", "") or "")).startswith(os.path.normcase(SKETCH))]:
@@ -844,6 +996,10 @@ def op_marks(req):
                 fields.SU.update({k: v for k, v in scaled_dials("look_formhatch.py", dict(fields.SU), kf).items() if k in fields.SU})
                 for c, f_ in MARK_PX[look]:
                     setattr(pat, c, getattr(pat, c) * f_(kf))
+            use_scales(root, sgroups, sarea, sys.modules[fields.scale.__name__])
+            # its shot set-up cache knows nothing of the scales served here: made afresh with them
+            for p in glob.glob(os.path.join(root, "out", "marks", "_cache", mk + "_shot.pkl")):
+                os.remove(p)
             fn = marks.get(look)
             shot = fields.Shot(mk)
             use = [k for k in kinds if k != "subject" or shot.has_subject]
@@ -879,7 +1035,7 @@ def op_look(req):
         root, mclip = base(req), None
     side = int(req.get("side") or LIVE)
     dials = {k: float(v) for k, v in (req.get("dials") or {}).items()}
-    kf = res_factor(root, side)
+    kf = VB_K[0] = res_factor(root, side)
     res = os.path.join(root, "res", "%s_%d_%s_%s" % (req["look"], side, mclip or "none", size_key(req, dials, kf)))
     if not os.path.isdir(res):
         clip = look_clip(root, mclip, side, depth=True, pad=True)
@@ -948,6 +1104,7 @@ def main():
         log = io.StringIO()
         t0 = time.time()
         before = set(sys.modules)
+        VB_K[0] = 1.0  # each op sets its own
         try:
             with contextlib.redirect_stdout(log), contextlib.redirect_stderr(log):
                 reply = OPS[req["op"]](req)
