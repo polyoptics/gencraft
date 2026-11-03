@@ -18,6 +18,15 @@ import { forgetImage, runChain, type ChainItem } from './chain'
 
 /** Clips longer than this ask first: every frame is a full-size drawing. */
 const ASK_FRAMES = 900
+/** Frames per chunk, at most: the clip is cut into equal chunks of about this. */
+const CHUNK = 120
+/** Each chunk is drawn with this many frames more on either side, which are
+ *  then not used: the tools carry state from drawing to drawing (the
+ *  outline's line strength, the scale's smoothing, optical flow), and a
+ *  sequence that starts or ends at the chunk's edge draws its first and last
+ *  frames differently — a visible jump in line weight at every seam. Even,
+ *  so the drawings on twos fall on the same frames in every chunk. */
+const OVERLAP = 16
 
 export type ClipMade = { url: string; w: number; h: number; video: true } | { error: string } | { stopped: true }
 
@@ -36,36 +45,39 @@ export async function makeClip(items: ChainItem[], maxSide: number, name: string
   if (info.n > ASK_FRAMES && !window.confirm(
     `“${src.label || 'This clip'}” is ${info.n} frames (${(info.n / info.fps).toFixed(0)} s). Draw every frame of it?`)) return { stopped: true }
   const bake = Array.from(crypto.getRandomValues(new Uint8Array(8)), b => b.toString(16).padStart(2, '0')).join('')
-  const CHUNK = 120
+  // Equal chunks (no short one at the end), each an even number of frames.
+  const size = 2 * Math.ceil(info.n / Math.ceil(info.n / CHUNK) / 2)
   let w = 0, h = 0, encoded = false
   try {
-    for (let start = 0; start < info.n; start += CHUNK) {
-      const count = Math.min(CHUNK, info.n - start)
+    for (let start = 0; start < info.n; start += size) {
+      const count = Math.min(size, info.n - start)
+      const lo = Math.max(0, start - OVERLAP), hi = Math.min(info.n, start + count + OVERLAP)
       if (stopped()) return { stopped: true }
       note(`Reading frames ${start + 1}–${start + count} of ${info.n}…`)
-      const got = await d.sketchClipFrames({ id: info.id, start, count })
+      const got = await d.sketchClipFrames({ id: info.id, start: lo, count: hi - lo })
       if ('error' in got) return { error: got.error }
       // The file can hold fewer frames than its header says: the clip ends there.
       const urls = got.paths.map(p => diskFileUrl(p))
-      setClipChunk({ id: info.id, start, count, total: info.n, urls })
-      for (let t = 0; t < urls.length; t++) {
+      setClipChunk({ id: info.id, start: lo, count: hi - lo, total: info.n, urls })
+      const last = Math.min(urls.length, start - lo + count)
+      for (let t = start - lo; t < last; t++) {
         if (stopped()) return { stopped: true }
-        note(t === 0 ? `Drawing frames ${start + 1}–${start + count} of ${info.n}…` : `Frame ${start + t + 1} of ${info.n}`)
+        note(t === start - lo ? `Drawing frames ${start + 1}–${start + count} of ${info.n}…` : `Frame ${lo + t + 1} of ${info.n}`)
         const r = await runChain([{ ...src, url: urls[t], video: undefined }, ...items.slice(1)], maxSide, false)
         forgetImage(urls[t])
         const failed = clipChunkError()
         if (failed) return { error: `frames ${start + 1}–${start + count}: ${failed}` }
         const out = r.outputs[0]
         for (const o of r.outputs.slice(1)) o.canvas.width = o.canvas.height = 0
-        if (!out) return { error: `frame ${start + t + 1}: ${r.error ?? 'nothing came out'}` }
+        if (!out) return { error: `frame ${lo + t + 1}: ${r.error ?? 'nothing came out'}` }
         w = out.canvas.width; h = out.canvas.height
         const jpg = out.canvas.toDataURL('image/jpeg', 0.95)
         out.canvas.width = out.canvas.height = 0
-        if (jpg.length < 64) return { error: `frame ${start + t + 1} came back empty` }
-        const s = await d.sketchBakeFrame(bake, start + t, jpg)
+        if (jpg.length < 64) return { error: `frame ${lo + t + 1} came back empty` }
+        const s = await d.sketchBakeFrame(bake, lo + t, jpg)
         if (s.error) return { error: s.error }
       }
-      if (urls.length < count) { info.n = start + urls.length; break }
+      if (last < start - lo + count) { info.n = lo + last; break }
     }
     note('Making the video…')
     // (The encode takes the bake's frames away, made or not.)

@@ -275,7 +275,17 @@ async function runNow({ op, look, frames, clip, objects, side, dials, engine, wh
         }
       }
     }
-    const reply = await sketch.request({ op, look, src: hash, frames: paths, objects, side, dials, engine: used, whole: !!whole, scale })
+    const job = { op, look, src: hash, frames: paths, objects, side, dials, engine: used, whole: !!whole, scale }
+    let reply = await sketch.request(job)
+    // Out of GPU memory (another program, or SAM 3's worker, holding it): free what this worker caches and try
+    // once more, rather than hand back a drawing that is not there.
+    if (reply.error && /out of memory|CUDA error|cudaMalloc|CUBLAS_STATUS_ALLOC/i.test(`${reply.error}
+${reply.log || ''}`)) {
+      note += `ran out of GPU memory (${reply.error}); tried again
+`
+      await sketch.request({ op: 'free' })
+      reply = await sketch.request(job)
+    }
     if (reply.error) return { error: reply.error, log: note + (reply.log || '') }
     const out = { log: note + (reply.log || ''), seconds: reply.seconds, engine: used }
     if (op === 'depth') out.frames = reply.frames.map(toUrl)

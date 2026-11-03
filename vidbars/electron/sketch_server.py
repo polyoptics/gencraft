@@ -343,7 +343,8 @@ PX = {
     "look_bg_depthhatch.py": ("air_px broad_px ground_px form_px paint_px glint_px close_px core_px shape_px "
                               "far_shape_px edge_soft mass_px occ_px occ_depth spacing weight min_weight stroke_px "
                               "wobble wobble_px grain min_spacing min_line scale_px edge_px hold_px motion_px relief_max",
-                              "", ""),
+                              # its air test: luminance gradient per px, which a bigger picture spreads thinner
+                              "", "air_energy sky_energy"),
     "look_hatch.py": ("jitter_px speck_px material_px inset overrun core_px spacing spacing_core length length_core "
                       "width contour_px curve_px tooth_px", "min_area", ""),
     "look_cel.py": ("form_px round_px cast_px ao_px simplify_px inset_px edge_soft jitter_px jitter_cell hatch_len "
@@ -723,6 +724,9 @@ MARKS = {"stipple": "pat_stipple", "halftone": "pat_halftone"}
 MARK_DIALS = {"stipple": {"ink": "INK", "dot": "DOT", "jitter": "JITTER", "edge": "EDGE", "form": "FORM",
                           "shiver": "BOIL", "dark": "CALIB"},
               "halftone": {"cell": "CELL", "ink": "INK", "form": "FORM", "drift": "DRIFT", "angle": "ANGLE"}}
+# the patterns' own pixel sizes (lengths x k, areas x k^2); the rest are in units of the hatch's pitch
+MARK_PX = {"stipple": [(c, lambda k: k) for c in ("DOT", "DOT_MIN", "EDGE_PX", "MOD_PX", "FORM_PX")],
+           "halftone": [("DRIFT", lambda k: k), ("MOD_PX", lambda k: k), ("MIN_DOT", lambda k: k * k)]}
 BG_LAYER = "%s_s_bg_depthhatch"         # fields.py: out/<clip>_s_bg_depthhatch/layer/NNNN.png
 SUBJECT_LAYER = "%s_hatch_s_bg_depthhatch"  # fields.py: out/<clip>_hatch_s_bg_depthhatch/layer/{multiply,screen}/
 
@@ -770,12 +774,14 @@ def op_marks(req):
     where = int(round(dials.pop("where", 0)))
     named = bool(req.get("objects"))
     kinds = ["subject"] if where == 0 else ["bg"] if where == 1 or not named else ["bg", "subject"]
-    side = min(int(req.get("side") or LIVE), LIVE)  # the patterns' sizes are px at the film's size: drawn there
+    side = int(req.get("side") or LIVE)
     if "subject" in kinds:
         root, mclip, _ = segment_clip(dict(req, whole=not named))
     else:
         root, mclip = (segment_clip(req)[:2] if named else (base(req), None))
-    res = os.path.join(root, "res", "%s_%d_%s_%d_%s" % (look, side, mclip or "none", where, size_key(req, dials, 1)))
+    # at the output's size: every pixel size (the hatches' own, the fields', the pattern's) x kf, as for the looks
+    kf = res_factor(root, side)
+    res = os.path.join(root, "res", "%s_%d_%s_%d_%s" % (look, side, mclip or "none", where, size_key(req, dials, kf)))
     if not os.path.isdir(res):
         sub = dict(req, dials={}, side=side, scale=req.get("scale"))
         n_src = len(os.listdir(os.path.join(root, "clips", "src")))
@@ -832,6 +838,12 @@ def op_marks(req):
                     setattr(pat, c, {kk: v for kk in getattr(pat, c)})
                 else:
                     setattr(pat, c, v)
+            if abs(kf - 1) > 1e-3:
+                BGm = sys.modules["look_bg_depthhatch"]  # the frozen copy: fields' pitch, width and relief come from it
+                BGm.D.update(scaled_dials("look_bg_depthhatch.py", dict(BGm.D), kf))
+                fields.SU.update({k: v for k, v in scaled_dials("look_formhatch.py", dict(fields.SU), kf).items() if k in fields.SU})
+                for c, f_ in MARK_PX[look]:
+                    setattr(pat, c, getattr(pat, c) * f_(kf))
             fn = marks.get(look)
             shot = fields.Shot(mk)
             use = [k for k in kinds if k != "subject" or shot.has_subject]
@@ -903,8 +915,18 @@ def op_look(req):
             "colors": {"modes": [m for _, m in spec["layers"]]}}
 
 
+def op_free(req):
+    """Give back what the GPU holds between jobs (asked before a job is retried after running out of memory)."""
+    import gc
+    gc.collect()
+    torch = sys.modules.get("torch")
+    if torch is not None and torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    return {}
+
+
 OPS = {"depth": op_depth, "segment": op_segment, "lines": op_lines, "formhatch": op_formhatch, "bghatch": op_bghatch,
-       "look": op_look, "scales": op_scales}
+       "look": op_look, "scales": op_scales, "free": op_free}
 
 
 def prune(days=3):
