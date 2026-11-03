@@ -140,7 +140,7 @@ function run(job) {
   return p
 }
 
-async function runNow({ op, look, frames, objects, side, dials, engine, whole }) {
+async function runNow({ op, look, frames, objects, side, dials, engine, whole, scale }) {
   if (!available()) return { error: `sketchLook tools not found at ${POKT}`, log: '' }
   if (!OPS.has(op)) return { error: `unknown op ${op}`, log: '' }
   if (!frames?.length) return { error: 'no frames', log: '' }
@@ -157,17 +157,22 @@ async function runNow({ op, look, frames, objects, side, dials, engine, whole })
       const r = await sam3.request({ op: 'segment', src: hash, frames: paths, objects })
       if (r.error) { used = 'dino'; note = `SAM 3 failed (${r.error}); used Grounding DINO + SAM2\n${r.log || ''}` }
       else if (op === 'segment') {
+        // What SAM 3 found, and how big each thing is on screen (the card shows it).
+        const sc = await sketch.request({ op: 'scales', src: hash, frames: paths, objects, engine: used, scale })
         return {
           objects: Object.fromEntries(Object.entries(r.objects).map(([n, fs_]) => [n, fs_.map(toDataUrl)])),
-          log: r.log || '', seconds: r.seconds, engine: used,
+          scales: sc.scales ?? {}, log: r.log || '', seconds: r.seconds, engine: used,
         }
       }
     }
-    const reply = await sketch.request({ op, look, src: hash, frames: paths, objects, side, dials, engine: used, whole: !!whole })
+    const reply = await sketch.request({ op, look, src: hash, frames: paths, objects, side, dials, engine: used, whole: !!whole, scale })
     if (reply.error) return { error: reply.error, log: note + (reply.log || '') }
     const out = { log: note + (reply.log || ''), seconds: reply.seconds, engine: used }
     if (op === 'depth') out.frames = reply.frames.map(toDataUrl)
-    if (op === 'segment') out.objects = Object.fromEntries(Object.entries(reply.objects).map(([n, fs_]) => [n, fs_.map(toDataUrl)]))
+    if (op === 'segment') {
+      out.objects = Object.fromEntries(Object.entries(reply.objects).map(([n, fs_]) => [n, fs_.map(toDataUrl)]))
+      out.scales = (await sketch.request({ op: 'scales', src: hash, frames: paths, objects, engine: used, scale })).scales ?? {}
+    }
     if (op === 'lines' || op === 'formhatch' || op === 'bghatch' || op === 'look') {
       out.frames = reply.frames.map(f => Object.fromEntries(Object.entries(f).map(([k, v]) => [k, toDataUrl(v)])))
       out.colors = reply.colors

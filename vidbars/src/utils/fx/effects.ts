@@ -348,7 +348,15 @@ export const EFFECTS: Record<EffectKind, EffectDef> = {
     // Find with: SAM 3 understands descriptions ("the man in the yellow
     // jacket") and tracks through a sequence; DINO + SAM2 is the film's
     // own matte_auto.py engine (and the fallback where SAM 3 is missing).
-    params: [P('cut', 'Cut out', 0, 1, 1, 0), { ...P('engine', 'Find with', 0, 1, 1, 0), names: ['SAM 3', 'DINO + SAM2'] }],
+    // Scale (the film's tools_scale/scale.py): how big each thing it finds is
+    // on screen sets how tightly the drawing cards draw it. Reference size:
+    // the size in px a thing is drawn at as tuned; Minimum scale: the
+    // smallest it goes; Spacing follows scale: how much hatch spacing
+    // follows it (look_formhatch's hatch_scale). Under these, per thing it
+    // found, its measured scale or a fixed one, and "partly in view".
+    params: [P('cut', 'Cut out', 0, 1, 1, 0), { ...P('engine', 'Find with', 0, 1, 1, 0), names: ['SAM 3', 'DINO + SAM2'] },
+      P('ref', 'Reference size', 100, 1500, 10, 500), P('lo', 'Minimum scale', 0.05, 1, 0.05, 0.25),
+      P('spacing_follow', 'Spacing follows scale', 0, 1, 0.05, 0.5)],
     run(e, src, p, _o, aux) {
       if (!aux?.mask) return e.pass('copy', e.target(src.w, src.h), { src })
       // Before a Film outline it only names what to outline: the picture

@@ -318,17 +318,195 @@ def look_finish(res, e=0):
     return make
 
 
+# ------------------------------------------------------------------------------------------- size: subject and output
+# Two factors, kept apart and multiplied:
+#   subject scale  how big each subject is on screen (tools_scale/scale.py): a small or distant subject is drawn as
+#                  tight as a close-up. Measured here from the Segment masks AT THE LIVE DRAWING SIZE with scale.py's
+#                  own measure() and the Segment card's settings (reference size, minimum, partly-in-view per
+#                  subject, a fixed scale per subject), then handed to the looks that read it (Film outline, Form
+#                  hatch, Background hatch) by standing in for scale.Scale - their own code does the rest.
+#   output size    a bake drawn bigger than the live preview (LIVE px long edge) is drawn at its own size, every
+#                  pixel-size dial of the look multiplied by k = drawn / live (areas by k^2, per-px rates by 1/k), so
+#                  it looks like the preview, only sharper.
+LIVE = 1400
+
+# Each look's pixel-size dials (its DIALS; the construction pencil's are look_construction's own, which the outline
+# and the background layout borrow): (lengths, areas, per-length rates).
+PX = {
+    "look_hybrid_colerase.py": ("contour_w contour_out lap_px detail_px min_len width_px wobble wobble_px break_px "
+                                "bristle_px grain grain_px motion_soft motion_px part_w rough_spread rough_overshoot "
+                                "rough_min_w min_w solid_w", "", "rough_tangents"),
+    "look_construction.py": ("weight pass_spread jitter wobble seek stroke_len overshoot short constr_len constr_offset "
+                             "offset smooth min_len min_w", "", "construction"),
+    "look_formhatch.py": ("z_px form_px edge_px paint_px local_px colour_px occ_px occ_depth spacing weight min_weight "
+                          "stroke_px wobble wobble_px grain min_spacing min_line min_stroke motion_px", "", ""),
+    "look_bg_depthhatch.py": ("air_px broad_px ground_px form_px paint_px glint_px close_px core_px shape_px "
+                              "far_shape_px edge_soft mass_px occ_px occ_depth spacing weight min_weight stroke_px "
+                              "wobble wobble_px grain min_spacing min_line scale_px edge_px hold_px motion_px relief_max",
+                              "", ""),
+    "look_hatch.py": ("jitter_px speck_px material_px inset overrun core_px spacing spacing_core length length_core "
+                      "width contour_px curve_px tooth_px", "min_area", ""),
+    "look_cel.py": ("form_px round_px cast_px ao_px simplify_px inset_px edge_soft jitter_px jitter_cell hatch_len "
+                    "hatch_gap hatch_w", "min_shape", ""),
+    "look_boil.py": ("weight_lit weight_shadow stroke_len attack release flick pos_jitter drift wobble sit bristle_px "
+                     "streak_len ragged dark_weight dark_gap smooth min_len motion_px", "", ""),
+    "look_misreg.py": ("weight max_w rough_px taper stroke_len overlap overshoot tremor streak_px offset offset_jitter "
+                       "smooth", "inner_area min_area", ""),
+    "look_relight.py": ("rim_in rim_px ao_px painted_px core_px relief", "", "rim_sharp"),
+    "look_formlight.py": ("smooth_px tuck_px normal_px open_px rim_reach_px inset_px cloth_edge_px metal_edge_px "
+                          "motion_px cloth_bump", "", ""),
+    "look_bg_layout.py": ("sky_far_px sky_reach ms_sp busy_px sky_clip halo bleed min_len smooth weight stroke_len "
+                          "pass_spread overshoot constr_len hatch_spacing hatch_w hatch_len", "", "sky_tex dep_norm tangents"),
+    "look_bg_tonewash.py": ("bleed_px shade_px shape_px pool_px grain_px mottle_px pencil_weight pencil_min pencil_len "
+                            "clear_px edge_px", "", "busy_lo busy_hi"),
+}
+
+
+@functools.lru_cache(maxsize=None)
+def dial_defaults(script):
+    """A look's numeric DIALS defaults, read from its file."""
+    import re
+    src = open(os.path.join(TOOLS_SCALE, script), encoding="utf-8").read()
+    m = re.search(r"\nDIALS = \{(.*?)\n\}", src, re.S)
+    out = {}
+    for line in (m.group(1) if m else "").split("\n"):
+        mm = re.match(r'\s+"([\w.]+)":\s*([-0-9.]+),', line)
+        if mm:
+            out[mm.group(1)] = float(mm.group(2))
+    return out
+
+
+def src_long(root):
+    return max(cv2.imread(os.path.join(root, "clips", "src", "0000.png")).shape[:2])
+
+
+def res_factor(root, side):
+    """k = the long edge this run draws at / the live preview's (both no bigger than the picture)."""
+    L = src_long(root)
+    return min(side, L) / min(LIVE, L)
+
+
+def scaled_dials(script, dials, k):
+    """dials (the card's) with every pixel-size dial of `script` multiplied for output factor k (its default where the
+    card does not set it)."""
+    if abs(k - 1) < 1e-3 or script not in PX:
+        return dials
+    lin, area, rate = (s.split() for s in PX[script])
+    base = dial_defaults(script)
+    out = dict(dials)
+    for keys, f in ((lin, k), (area, k * k), (rate, 1 / k)):
+        for key in keys:
+            v = dials.get(key, base.get(key))
+            if v is not None:
+                out[key] = v * f
+    return out
+
+
+def scale_pencil(k):
+    """The construction pencil's own dials (look_construction.DIALS, which the outline and the background layout
+    draw their pencil with) for output factor k: the module, imported for this job only, is changed in place."""
+    if abs(k - 1) < 1e-3:
+        return
+    sys.path.insert(0, TOOLS_SCALE)
+    import look_construction as C
+    lin, area, rate = (s.split() for s in PX["look_construction.py"])
+    for keys, f in ((lin, k), (rate, 1 / k)):
+        for key in keys:
+            if isinstance(C.DIALS.get(key), (int, float)) and not isinstance(C.DIALS.get(key), bool):
+                C.DIALS[key] = type(C.DIALS[key])(C.DIALS[key] * f)
+
+
+def scale_settings(req):
+    """The Segment card's scale settings: reference size (px a subject is drawn at as tuned), minimum scale, and per
+    subject a partly-in-view factor and a fixed scale (0 = measured)."""
+    s = req.get("scale") or {}
+    num = lambda d: {str(k): float(v) for k, v in (d or {}).items() if isinstance(v, (int, float))}
+    return float(s.get("ref", 500)), float(s.get("lo", 0.25)), num(s.get("view")), num(s.get("fixed"))
+
+
+def subject_scales(root, mclip, req):
+    """({subject: scale per frame}, {subject: px per frame}) measured with scale.py's measure() on the Segment masks
+    at the live drawing size; {} with nothing segmented (or the whole picture)."""
+    if not mclip or mclip == "wh":
+        return {}, {}
+    ref, lo, view, fixed = scale_settings(req)
+    clip = look_clip(root, mclip, min(LIVE, src_long(root)))
+    mdir = os.path.join(root, "clips", clip + "_matte")
+    elements = sorted(e for e in os.listdir(mdir) if e != "figure" and os.path.isdir(os.path.join(mdir, e)))
+    if not elements:
+        return {}, {}
+    sys.path.insert(0, TOOLS_SCALE)
+    import scale as S
+    S.ROOT = root
+    S.REF = dict({e: ref for e in elements}, subject=ref)
+    S.LO = lo
+    n = len(os.listdir(os.path.join(mdir, elements[0])))
+    if n < 4:
+        # scale.py smooths each subject's size over time with a 9-frame median, which scipy returns as 0 for a
+        # series under 4 frames: a still is measured on its masks repeated to 4 frames
+        long = clip + "_m4"
+        ldir = os.path.join(root, "clips", long + "_matte")
+        if not os.path.isdir(ldir):
+            for e in os.listdir(mdir):
+                if os.path.isdir(os.path.join(mdir, e)):
+                    os.makedirs(os.path.join(ldir, e), exist_ok=True)
+                    for i in range(4):
+                        shutil.copy(os.path.join(mdir, e, "%04d.png" % (i % n)), os.path.join(ldir, e, "%04d.png" % i))
+        clip = long
+    S.VIEW = {clip: {e: v for e, v in view.items() if e in elements}}
+    groups, area = S.measure(clip, {e: e for e in elements})
+    groups = {e: v[:n] for e, v in groups.items()}
+    area = {e: a[:n] for e, a in area.items()}
+    for e, v in fixed.items():
+        if e in groups and v > 0:
+            groups[e] = np.full_like(groups[e], v)
+    return groups, area
+
+
+def use_scales(root, groups, area):
+    """scale.Scale, for the looks run in this job, serving these measured scales (each subject its own body)."""
+    sys.path.insert(0, TOOLS_SCALE)
+    import scale as S
+    S.ROOT = root
+
+    class Measured(S.Scale):
+        def __init__(self, clip):
+            n = len(os.listdir(os.path.join(root, "clips", clip)))
+            fit = lambda v: np.concatenate([np.asarray(v, np.float32), np.repeat(np.asarray(v[-1:], np.float32), max(0, n - len(v)))])[:n]
+            self.on = bool(groups) and os.environ.get("SCALE_OFF") != "1"
+            self.members = {e: e for e in groups}
+            self.groups = {e: fit(v) for e, v in groups.items()} if self.on else {}
+            self.area = {e: fit(a) for e, a in area.items()} if self.on else {}
+    S.Scale = Measured
+
+
+def op_scales(req):
+    """The subjects a Segment card found and their measured scale (the median over the clip) with its settings."""
+    root, mclip, _ = segment_clip(req)
+    groups, _ = subject_scales(root, mclip, req)
+    return {"scales": {e: round(float(np.median(v)), 3) for e, v in groups.items()}}
+
+
+def size_key(req, dials, k):
+    """What a drawing depends on besides the picture and its subject: the dials, the Segment card's scale settings
+    and the output factor."""
+    return short([dials, req.get("scale") or {}, round(k, 3)])
+
+
 def op_lines(req):
     root, mclip, objs = segment_clip(req)
-    side = int(req.get("side") or 1400)
+    side = int(req.get("side") or LIVE)
     dials = {k: float(v) for k, v in (req.get("dials") or {}).items()}
-    res = os.path.join(root, "res", "lines_%d_%s_%s" % (side, mclip, short(dials)))
+    k = res_factor(root, side)
+    res = os.path.join(root, "res", "lines_%d_%s_%s" % (side, mclip, size_key(req, dials, k)))
     if not os.path.isdir(res):
         clip = look_clip(root, mclip, side)
         n = len(os.listdir(os.path.join(root, "clips", clip)))
+        use_scales(root, *subject_scales(root, mclip, req))
+        scale_pencil(k)
         argv = [clip, "--frames", ",".join(str(i) for i in range(n)), "--name", "vb"]
-        for k, v in dials.items():
-            argv += ["--dial", "%s=%r" % (k, v)]
+        for key, v in scaled_dials("look_hybrid_colerase.py", dials, k).items():
+            argv += ["--dial", "%s=%r" % (key, v)]
         os.makedirs(res + ".tmp", exist_ok=True)
         run_tool(LOOK, root, argv, [TOOLS_SCALE], finish=look_finish(res + ".tmp", edge_of(clip)))
         os.replace(res + ".tmp", res)
@@ -354,8 +532,10 @@ EDGE = 64
 
 
 def edge_of(clip):
-    """How far a look clip extends past the picture (EDGE for a whole-picture subject, else 0)."""
-    return EDGE if clip.endswith("_e") or "_e_" in clip else 0
+    """How far a look clip extends past the picture (a whole-picture subject's mirrored edge, else 0)."""
+    import re
+    m = re.search(r"_e(\d+)$", clip)
+    return int(m.group(1)) if m else 0
 
 
 def crop_edge(x, e):
@@ -367,8 +547,8 @@ def look_clip(root, mclip, side, depth=False, pad=False):
     folder - the whole frame is background; a segment that found nothing: an empty figure) and, with depth, the
     depth at that size. pad: a still gets its frame twice (the hatch looks read motion from a neighbouring frame;
     the same frame again is no motion). Made once; returns its name."""
-    e = EDGE if mclip == "wh" else 0
-    name = "l%d_%s%s%s" % (side, mclip or "none", "_p" if pad else "", "_e" if e else "")
+    e = int(round(EDGE * res_factor(root, side))) if mclip == "wh" else 0
+    name = "l%d_%s%s%s" % (side, mclip or "none", "_p" if pad else "", "_e%d" % e if e else "")
     d = clip_like(root, name, side)
     if e and not os.path.exists(os.path.join(root, "clips", name + "_edge.json")):
         for f in sorted(os.listdir(d)):
@@ -427,16 +607,18 @@ def op_formhatch(req):
     render - its main(), minus the files and videos): per frame the dark hatch alpha and ink colour (multiply) and
     the light strokes' alpha and colour (screen), exactly as its main() writes them into layer/."""
     root, mclip, _ = segment_clip(req)
-    side = int(req.get("side") or 1400)
+    side = int(req.get("side") or LIVE)
     dials = {k: float(v) for k, v in (req.get("dials") or {}).items()}
-    res = os.path.join(root, "res", "formhatch_%d_%s_%s" % (side, mclip, short(dials)))
+    kf = res_factor(root, side)
+    res = os.path.join(root, "res", "formhatch_%d_%s_%s" % (side, mclip, size_key(req, dials, kf)))
     if not os.path.isdir(res):
         clip = look_clip(root, mclip, side, depth=True, pad=True)
         n_src = len(os.listdir(os.path.join(root, "clips", "src")))
         old = list(sys.path)
         try:
+            use_scales(root, *subject_scales(root, mclip, req))
             g = load_lib(os.path.join(TOOLS_SCALE, "look_formhatch.py"), root, [TOOLS_SCALE])
-            g["parse"](dial_args(dials))
+            g["parse"](dial_args(scaled_dials("look_formhatch.py", dials, kf)))
             g["init"](clip)
             D = g["D"]
             cx, cy, zm, axis, dark = g["tracks"]()
@@ -470,17 +652,19 @@ def op_bghatch(req):
         root, mclip, _ = segment_clip(req)
     else:
         root, mclip = base(req), None
-    side = int(req.get("side") or 1400)
+    side = int(req.get("side") or LIVE)
     dials = {k: float(v) for k, v in (req.get("dials") or {}).items()}
-    res = os.path.join(root, "res", "bghatch_%d_%s_%s" % (side, mclip or "none", short(dials)))
+    kf = res_factor(root, side)
+    res = os.path.join(root, "res", "bghatch_%d_%s_%s" % (side, mclip or "none", size_key(req, dials, kf)))
     if not os.path.isdir(res):
         clip = look_clip(root, mclip, side, depth=True, pad=True)
         n_src = len(os.listdir(os.path.join(root, "clips", "src")))
         old = list(sys.path)
         try:
+            use_scales(root, *subject_scales(root, mclip, req))
             g = load_lib(os.path.join(TOOLS_SCALE, "look_bg_depthhatch.py"), root, [TOOLS, TOOLS_SCALE])
             g["FH"].ROOT = root  # the subject light fit reads the shot through look_formhatch: this picture's folder
-            g["parse"](dial_args(dials))
+            g["parse"](dial_args(scaled_dials("look_bg_depthhatch.py", dials, kf)))
             g["prepare"](clip)
             D = g["D"]
             os.makedirs(res + ".tmp", exist_ok=True)
@@ -536,15 +720,17 @@ def op_look(req):
         root, mclip, _ = segment_clip(req)
     else:
         root, mclip = base(req), None
-    side = int(req.get("side") or 1400)
+    side = int(req.get("side") or LIVE)
     dials = {k: float(v) for k, v in (req.get("dials") or {}).items()}
-    res = os.path.join(root, "res", "%s_%d_%s_%s" % (req["look"], side, mclip or "none", short(dials)))
+    kf = res_factor(root, side)
+    res = os.path.join(root, "res", "%s_%d_%s_%s" % (req["look"], side, mclip or "none", size_key(req, dials, kf)))
     if not os.path.isdir(res):
         clip = look_clip(root, mclip, side, depth=True, pad=True)
         n_src = len(os.listdir(os.path.join(root, "clips", "src")))
         out = os.path.join(root, "out", spec["out"])
         shutil.rmtree(out, ignore_errors=True)
-        argv = [clip] + spec.get("argv", []) + dial_args(dials)
+        scale_pencil(kf)
+        argv = [clip] + spec.get("argv", []) + dial_args(scaled_dials(spec["script"], dials, kf))
         argv += [a for k, v in spec.get("fixed", {}).items() for a in ("--dial", "%s=%s" % (k, v))]
         layer = lambda sub, t: os.path.join(out, sub, "%04d.png" % t)
         try:
@@ -573,7 +759,7 @@ def op_look(req):
 
 
 OPS = {"depth": op_depth, "segment": op_segment, "lines": op_lines, "formhatch": op_formhatch, "bghatch": op_bghatch,
-       "look": op_look}
+       "look": op_look, "scales": op_scales}
 
 
 def prune(days=3):

@@ -330,7 +330,11 @@ function registerBridge() {
     const side = Number.isFinite(job.side) ? Math.max(64, Math.min(8192, Math.round(job.side))) : undefined
     const engine = job.engine === 'dino' || job.engine === 'sam3' ? job.engine : undefined
     const look = typeof job.look === 'string' && /^[a-z_]+$/.test(job.look) ? job.look : undefined
-    return require('./sketchWorker.cjs').run({ op: job.op, look, frames, objects, dials, side, engine, whole: job.whole === true })
+    // The Segment card's scale settings: numbers only.
+    const num = o => Object.fromEntries(Object.entries(o && typeof o === 'object' ? o : {}).filter(([, v]) => Number.isFinite(v)).map(([k2, v]) => [String(k2), v]))
+    const sj = job.scale && typeof job.scale === 'object' ? job.scale : null
+    const scale = sj ? { ref: Number.isFinite(sj.ref) ? sj.ref : undefined, lo: Number.isFinite(sj.lo) ? sj.lo : undefined, view: num(sj.view), fixed: num(sj.fixed) } : undefined
+    return require('./sketchWorker.cjs').run({ op: job.op, look, frames, objects, dials, side, engine, whole: job.whole === true, scale })
   })
 
   // The Film Look panel: the look mixer's server. The page only ever asks

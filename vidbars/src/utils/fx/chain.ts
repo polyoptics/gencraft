@@ -197,7 +197,7 @@ export async function runChain(items: ChainItem[], maxSide: number, previewSide:
   const urls = [...plan.sources.map(s => s.url), ...plan.steps.flatMap(s => s.other ? [s.other.url] : [])]
   const images = new Map(await Promise.all(urls.map(async u => [u, await loadImage(u)] as const)))
   const steps = plan.steps.map(s => s.item)
-  const aux = await prepareAux(steps, plan.sources.map(s => ({ url: s.url, img: images.get(s.url) ?? null })), !opts.live)
+  const aux = await prepareAux(steps, plan.sources.map(s => ({ url: s.url, img: images.get(s.url) ?? null })), !opts.live, opts.live ? undefined : maxSide)
   // A Combine card's look rows: each run as a strip of its own on the same
   // picture, here, before this run draws anything (a run ends by reclaiming
   // the engine's targets). Combine lays them over its picture in the loop.

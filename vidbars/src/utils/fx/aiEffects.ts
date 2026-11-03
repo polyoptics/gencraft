@@ -80,14 +80,36 @@ export const MIX_NEUTRAL: Record<string, number> = { strength: 1, pencil: 1, ink
 export interface LineColors { ink: string; paper: string; pencil: string; graphite: string; pencil_tint: number }
 
 type Kept =
-  | { imgs: Record<string, HTMLImageElement | null>; colors?: LineColors }
+  | { imgs: Record<string, HTMLImageElement | null>; colors?: LineColors; scales?: Record<string, number> }
   | { error: string }
+
+/** A Segment card's scale settings (the film's tools_scale/scale.py): the
+ *  size a subject is drawn at as tuned (Reference size, px), the smallest
+ *  scale, and per thing it found a "partly in view" factor (only part of it
+ *  shows: it is this many times bigger) and a fixed scale (0 = measured). */
+export interface ScaleSettings { ref?: number; lo?: number; view: Record<string, number>; fixed: Record<string, number> }
+function scaleOf(seg: AuxStep | undefined): ScaleSettings | undefined {
+  if (!seg) return undefined
+  const p = seg.params ?? {}
+  const pick = (pre: string) => Object.fromEntries(Object.entries(p).filter(([k, v]) => k.startsWith(pre) && typeof v === 'number').map(([k, v]) => [k.slice(pre.length), v]))
+  const view = Object.fromEntries(Object.entries(pick('view:')).filter(([, v]) => v !== 1))
+  const fixed = Object.fromEntries(Object.entries(pick('scale:')).filter(([, v]) => v > 0))
+  return { ...(typeof p.ref === 'number' ? { ref: p.ref } : {}), ...(typeof p.lo === 'number' ? { lo: p.lo } : {}), view, fixed }
+}
+
+/** The long edge this pass draws at (prepareAux sets it per picture): the
+ *  live preview's, or a bake's own size when the picture is bigger. */
+let drawSide = 1400
 
 interface Req {
   key: string; what: string
   /** A Combine card's mask for look row `row` (0 = the first look row). */
   row?: number
-  job: { op: 'depth' | 'segment' | 'lines' | 'formhatch' | 'bghatch' | 'look'; look?: string; whole?: boolean; objects?: Record<string, string[]>; dials?: Record<string, number>; side?: number; engine?: Engine }
+  /** The Segment card this mask is (its card shows what it found). */
+  segId?: string
+  /** Asked only so that Segment card learns what it found (a drawing card's input). */
+  quiet?: boolean
+  job: { op: 'depth' | 'segment' | 'lines' | 'formhatch' | 'bghatch' | 'look'; look?: string; whole?: boolean; objects?: Record<string, string[]>; dials?: Record<string, number>; side?: number; engine?: Engine; scale?: ScaleSettings }
 }
 /** What finds the things a Segment card names: SAM 3 (descriptive phrases,
  *  every instance, tracked through a sequence) or Grounding DINO + SAM2. */
@@ -101,7 +123,13 @@ let queue: Promise<unknown> = Promise.resolve()
 
 /** Per step: what its card should say ('' = nothing), and a counter that
  *  ticks whenever a result lands (live strips re-run on it). */
-export const useAuxStore = create<{ version: number; byStep: Record<string, string> }>(() => ({ version: 0, byStep: {} }))
+export const useAuxStore = create<{ version: number; byStep: Record<string, string>; subjects: Record<string, Record<string, number>> }>(() => ({ version: 0, byStep: {}, subjects: {} }))
+
+/** What a Segment card found, and each thing's measured scale on screen. */
+function setSubjects(segId: string, scales: Record<string, number>) {
+  const s = useAuxStore.getState()
+  if (JSON.stringify(s.subjects[segId] ?? {}) !== JSON.stringify(scales)) useAuxStore.setState({ subjects: { ...s.subjects, [segId]: scales } })
+}
 
 function say(stepId: string, text: string) {
   const s = useAuxStore.getState()
@@ -185,6 +213,17 @@ function lineSetup(steps: AuxStep[], i: number) {
   return { dials, mix }
 }
 
+/** A drawing card's Segment input, asked for as a mask too: the drawing
+ *  segments by itself (the worker shares the result), and this is how the
+ *  Segment card learns what it found and how big each thing is. */
+function inputMask(steps: AuxStep[], i: number, src: string): Req[] {
+  const x = steps[i].inputs?.find(y => y.effect === 'segment')
+  const objects = x ? parsePhrases(x.text) : {}
+  if (!x || !Object.keys(objects).length) return []
+  const engine = engineOf(x), scale = scaleOf(x)
+  return [{ key: `mask|${src}|${JSON.stringify(objects)}|${engine}|${JSON.stringify(scale)}`, what: 'mask', quiet: true, segId: x.id, job: { op: 'segment', objects, engine, scale } }]
+}
+
 /** What step i asks for, for the source with this url. [] = nothing, null =
  *  it cannot run (its card says why). */
 function requests(steps: AuxStep[], i: number, url: string): Req[] | null {
@@ -198,8 +237,8 @@ function requests(steps: AuxStep[], i: number, url: string): Req[] | null {
       if (x.effect === 'segment' && !out.some(r => r.what === 'mask')) {
         const objects = parsePhrases(x.text)
         if (!Object.keys(objects).length) { say(s.id, 'Name something on the Segment card under it'); return null }
-        const engine = engineOf(x)
-        out.push({ key: `mask|${src}|${JSON.stringify(objects)}|${engine}`, what: 'mask', job: { op: 'segment', objects, engine } })
+        const engine = engineOf(x), scale = scaleOf(x)
+        out.push({ key: `mask|${src}|${JSON.stringify(objects)}|${engine}|${JSON.stringify(scale)}`, what: 'mask', segId: x.id, job: { op: 'segment', objects, engine, scale } })
       }
     }
     return out
@@ -208,8 +247,8 @@ function requests(steps: AuxStep[], i: number, url: string): Req[] | null {
   if (s.effect === 'segment') {
     const objects = parsePhrases(s.text)
     if (!Object.keys(objects).length) { say(s.id, 'Name something to find'); return null }
-    const engine = engineOf(s)
-    return [{ key: `mask|${src}|${JSON.stringify(objects)}|${engine}`, what: 'mask', job: { op: 'segment', objects, engine } }]
+    const engine = engineOf(s), scale = scaleOf(s)
+    return [{ key: `mask|${src}|${JSON.stringify(objects)}|${engine}|${JSON.stringify(scale)}`, what: 'mask', segId: s.id, job: { op: 'segment', objects, engine, scale } }]
   }
   if (s.effect === 'formhatch' || s.effect === 'bghatch') {
     // The figure hatch needs the things to hatch ("person" without a
@@ -220,9 +259,12 @@ function requests(steps: AuxStep[], i: number, url: string): Req[] | null {
     const whole = s.effect === 'formhatch' && !objects
     const { dials } = hatchSetup(steps, i)
     const engine = engineFor(steps, i)
-    return [{ key: `${s.effect}|${src}|${JSON.stringify(objects ?? null)}|${whole ? 'whole' : engine}|${JSON.stringify(dials)}|${LINE_SIDE}`,
+    const seg = segmentFor(steps, i), scale = objects ? scaleOf(seg) : undefined
+    // The Segment card's "Spacing follows scale": look_formhatch's hatch_scale.
+    if (s.effect === 'formhatch' && typeof seg?.params?.spacing_follow === 'number') dials.hatch_scale = seg.params.spacing_follow
+    return [{ key: `${s.effect}|${src}|${JSON.stringify(objects ?? null)}|${whole ? 'whole' : engine}|${JSON.stringify(dials)}|${JSON.stringify(scale)}|${drawSide}`,
       what: s.effect === 'formhatch' ? 'hatching' : 'background hatching',
-      job: { op: s.effect, objects, whole, dials, side: LINE_SIDE, engine } }]
+      job: { op: s.effect, objects, whole, dials, side: drawSide, engine, scale } }, ...inputMask(steps, i, src)]
   }
   const lk = LOOK_OF[s.effect]
   if (lk) {
@@ -233,8 +275,8 @@ function requests(steps: AuxStep[], i: number, url: string): Req[] | null {
     const dials: Record<string, number> = { ...(CARD_DIALS[s.effect] ?? {}) }
     for (const [k, v] of Object.entries(s.params ?? {})) if (!LIVE_ONLY.has(k) && typeof v === 'number') dials[k] = v
     const engine = engineFor(steps, i)
-    return [{ key: `look|${lk.look}|${src}|${JSON.stringify(objects ?? null)}|${whole ? 'whole' : engine}|${JSON.stringify(dials)}|${LINE_SIDE}`,
-      what: 'drawing', job: { op: 'look', look: lk.look, objects, whole, dials, side: LINE_SIDE, engine } }]
+    return [{ key: `look|${lk.look}|${src}|${JSON.stringify(objects ?? null)}|${whole ? 'whole' : engine}|${JSON.stringify(dials)}|${drawSide}`,
+      what: 'drawing', job: { op: 'look', look: lk.look, objects, whole, dials, side: drawSide, engine } }, ...inputMask(steps, i, src)]
   }
   // A mix card changes how its drawing card mixes its layers, AT the
   // drawing card: whatever lies between the two then works on the re-mixed
@@ -266,8 +308,9 @@ function requests(steps: AuxStep[], i: number, url: string): Req[] | null {
     const objects = phrasesFor(steps, i) ?? undefined
     const { dials } = lineSetup(steps, i)
     const engine = engineFor(steps, i)
-    return [{ key: `lines|${src}|${JSON.stringify(objects ?? null)}|${objects ? engine : 'whole'}|${JSON.stringify(dials)}|${LINE_SIDE}`, what: 'outline',
-      job: { op: 'lines', objects, whole: !objects, dials, side: LINE_SIDE, engine } }]
+    const scale = objects ? scaleOf(segmentFor(steps, i)) : undefined
+    return [{ key: `lines|${src}|${JSON.stringify(objects ?? null)}|${objects ? engine : 'whole'}|${JSON.stringify(dials)}|${JSON.stringify(scale)}|${drawSide}`, what: 'outline',
+      job: { op: 'lines', objects, whole: !objects, dials, side: drawSide, engine, scale } }, ...inputMask(steps, i, src)]
   }
   if (s.effect === 'linemix') {
     let j = i - 1
@@ -303,7 +346,7 @@ function ask(r: Req, img: HTMLImageElement): Promise<void> {
     const res = await run({ ...r.job, frames: [pictureOf(img)] })
     if (res.error) { console.warn(`[fx] ${r.what}:`, res.error, res.log); keep(r.key, { error: res.error }); return }
     if (r.job.op === 'depth') keep(r.key, { imgs: { depth: await decode(res.frames?.[0] as string | undefined) } })
-    else if (r.job.op === 'segment') keep(r.key, { imgs: { mask: await decode(res.objects?.figure?.[0]) } })
+    else if (r.job.op === 'segment') keep(r.key, { imgs: { mask: await decode(res.objects?.figure?.[0]) }, scales: (res as { scales?: Record<string, number> }).scales })
     else {
       // A drawing: its layers by name (lines: outline, inside, paper,
       // pencil; formhatch: a k b h; bghatch: a k p).
@@ -323,10 +366,14 @@ const planKey = (stepIndex: number, url: string) => `${stepIndex} ${url}`
 
 /** Ask for what the strip's steps need. A bake (`wait`) waits for all of
  *  it; a live run only starts what is missing and goes on. */
-export async function prepareAux(steps: AuxStep[], sources: { url: string; img: HTMLImageElement | null }[], wait: boolean): Promise<AuxPlan> {
+export async function prepareAux(steps: AuxStep[], sources: { url: string; img: HTMLImageElement | null }[], wait: boolean, side = LINE_SIDE): Promise<AuxPlan> {
   const plan: AuxPlan = { reqs: new Map(), pending: [] }
   for (const { url, img } of sources) {
     if (!img) continue
+    // Drawn at the preview's size, or a bake's own when the picture is bigger
+    // (the worker scales every pixel-size dial to match): a picture no bigger
+    // than the preview's size bakes as the preview draws it.
+    drawSide = Math.max(LINE_SIDE, Math.min(side, Math.max(img.naturalWidth, img.naturalHeight), 4096))
     for (let i = 0; i < steps.length; i++) {
       if (!isAuxKind(steps[i].effect) && !steps[i].inputs?.length) continue
       const rs = requests(steps, i, url)
@@ -365,6 +412,8 @@ export function auxFor(e: FxEngine, plan: AuxPlan, steps: AuxStep[], i: number, 
     if ('error' in k) { say(s.id, `${r.what[0].toUpperCase()}${r.what.slice(1)}: ${k.error}`); releaseAux(e, aux); return null }
     const tex = (n: string) => (k.imgs[n] ? fit(e, k.imgs[n]!, cur) : black(e, cur))
     if (r.row !== undefined) { (aux.rowMasks ??= [])[r.row] = tex('mask'); continue }
+    if (r.segId && k.scales) setSubjects(r.segId, k.scales)
+    if (r.quiet) continue
     if (r.what === 'depth') aux.depth = tex('depth')
     else if (r.what === 'mask') {
       aux.mask = tex('mask')

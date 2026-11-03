@@ -75,6 +75,20 @@ function stepPrecision(step: number): number {
 
 /** How a value reads on the face: whole numbers for whole steps, otherwise
  *  as many decimals as the step has, at most two. */
+/** A Segment card's rows for what it found (aiEffects subjects): each
+ *  thing's scale — measured ("Auto") or fixed — and how partly it is in
+ *  view (tools_scale/scale.py's VIEW: only part of it shows, so it is this
+ *  many times bigger). Kept on the card as `scale:<name>` / `view:<name>`. */
+function subjectRows(found: Record<string, number>): ParamDef[] {
+  return Object.entries(found).flatMap(([name, measured]) => [
+    {
+      key: `scale:${name}`, label: `${name}: scale`, min: 0, max: 1, step: 0.05, default: 0,
+      names: [`Auto ${measured.toFixed(2)}`, ...Array.from({ length: 20 }, (_, i) => ((i + 1) * 0.05).toFixed(2))],
+    },
+    { key: `view:${name}`, label: `${name}: partly in view`, min: 1, max: 3, step: 0.05, default: 1 },
+  ])
+}
+
 function formatValue(p: ParamDef, v: number): string {
   if (p.names) return p.names[Math.round((v - p.min) / p.step)] ?? String(v)
   return v.toFixed(p.step >= 1 ? 0 : Math.min(2, stepPrecision(p.step)))
@@ -113,6 +127,10 @@ export const EffectTileBody: React.FC<{
   const strip = useFxStore(s => (stripKey ? s.strips[stripKey] : undefined))
   /** "Computing depth…", or why a model / tool result is missing. */
   const auxNote = useAuxStore(s => s.byStep[id] ?? '')
+  /** A Segment card: what it found and how big each is on screen. */
+  const found = useAuxStore(s => (kind === 'segment' ? s.subjects[id] : undefined))
+  const rows: ParamDef[] = found ? [...def.params, ...subjectRows(found)] : def.params
+  const valueOf = (p: ParamDef) => params[p.key] ?? node.effect?.params?.[p.key] ?? p.default
   /** The row being dragged — lit while the pointer holds it. */
   const [dragKey, setDragKey] = useState<string | null>(null)
   /** Keyboard focus on the (invisible) effect picker — underlines the name. */
@@ -183,7 +201,7 @@ export const EffectTileBody: React.FC<{
   // Up to five sliders sit at full size under the art. More (the film
   // looks' dials) and the rows close up and the art gives way, so every
   // one fits the card as it comes, with nothing to scroll or resize.
-  const n = def.params.length
+  const n = rows.length
   const rowH = n > 5 ? Math.max(7, (96 - (n - 1)) / n) : 14
   const rowGap = n > 5 ? 1 : 2
   const rowFont = n > 5 ? Math.min(8.5, rowH * 0.74) : 8.5
@@ -348,8 +366,8 @@ export const EffectTileBody: React.FC<{
               anywhere to jump there and drag to follow; double-click for the
               default (the faint tick); arrow keys step it. ── */}
       <div style={{ marginTop: (n > 5 ? 2 : 3) * u, flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: rowGap * u }}>
-        {def.params.map(p => {
-          const v = params[p.key]
+        {rows.map(p => {
+          const v = valueOf(p)
           const span = p.max - p.min
           const frac = span > 0 ? (v - p.min) / span : 0
           const defFrac = span > 0 ? (p.default - p.min) / span : 0
@@ -394,7 +412,7 @@ export const EffectTileBody: React.FC<{
               onKeyDown={e => {
                 const cur = paramsNow()
                 if (!cur) return
-                const was = effectParams(cur.kind, cur.stored)[p.key]
+                const was = effectParams(cur.kind, cur.stored)[p.key] ?? cur.stored?.[p.key] ?? p.default
                 const by = p.step * (e.shiftKey ? 10 : 1)
                 const next =
                   e.key === 'ArrowRight' || e.key === 'ArrowUp' ? was + by
