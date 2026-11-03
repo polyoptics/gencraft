@@ -92,6 +92,15 @@ const IcHistory: React.FC<SvgProps> = ({ size }) => (
 )
 
 /** Film Look — a strip of film. Accent: the frame with a look on it. */
+/** Rough Cut — clips end to end. Accent: the cut between two of them. */
+const IcCut: React.FC<SvgProps> = ({ size }) => (
+  <svg {...svgBase(size)}>
+    <rect x="2.5" y="8" width="8" height="8" rx="1.5" stroke={S} />
+    <rect x="13.5" y="8" width="8" height="8" rx="1.5" stroke={S} />
+    <path d="M12 4.5v15" stroke={A.coral} strokeWidth="2" />
+  </svg>
+)
+
 const IcFilm: React.FC<SvgProps> = ({ size }) => (
   <svg {...svgBase(size)}>
     <rect x="3" y="4" width="18" height="16" rx="2" stroke={S} />
@@ -321,6 +330,11 @@ export const TopIconBar: React.FC = () => {
         // takes the camera to it instead.
         onClick={() => { if (existingFilmMixer()) openFilmMixer(); else togglePlacing('filmMixer') }}
         active={placing === 'filmMixer'}
+      />
+      <IconButton
+        Icon={IcCut}
+        title="Rough Cut — put clips in order and trim them"
+        {...place('roughCut')}
       />
       <IconButton
         Icon={IcStoryline}

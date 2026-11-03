@@ -9,7 +9,8 @@
 import { useBoardsStore, type BoardData, type ProjectGroup } from '../store/boardsStore'
 import { useCanvasStore } from '../store/canvasStore'
 import { useUndoCoordinator } from '../store/undoCoordinator'
-import type { FreeNodeData } from '../store/freeNodeStore'
+import { useFreeNodeStore, type FreeNodeData } from '../store/freeNodeStore'
+import { roughCutShots } from './roughCut'
 import { getMediaItems } from '../types/bar'
 import { cardFaceSize, createMediaCard, gridOrder } from './cardGrid'
 import { DOCK_TOLERANCE, rectsTouch, type Rect } from './viewportDocking'
@@ -67,6 +68,13 @@ export function dockedShots(node: FreeNodeData, groups: ProjectGroup[], boards: 
   const out: string[] = []
   for (const g of dockedCards(node, groups, boards)) {
     for (const s of cardShots(g, boards)) if (!seen.has(s)) { seen.add(s); out.push(s) }
+  }
+  // A Rough Cut touching the mixer feeds it its shots, in cut order.
+  const tol = DOCK_TOLERANCE / Math.max(0.05, useCanvasStore.getState().zoom)
+  const nodeRect = { x: node.x, y: node.y, width: node.width, height: node.height }
+  for (const n of Object.values(useFreeNodeStore.getState().nodes)) {
+    if (n.type !== 'roughCut' || n.pin || !rectsTouch(nodeRect, { x: n.x, y: n.y, width: n.width, height: n.height }, tol)) continue
+    for (const s of roughCutShots(n)) if (!seen.has(s)) { seen.add(s); out.push(s) }
   }
   return out
 }

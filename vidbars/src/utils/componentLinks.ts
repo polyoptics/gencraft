@@ -81,7 +81,7 @@ export function poolFeedingList(
 }
 
 /** The panel types that magnet to each other — the modular apps. */
-const PANEL_TYPES = new Set(['list', 'pool', 'prompt', 'history', 'filmMixer'])
+const PANEL_TYPES = new Set(['list', 'pool', 'prompt', 'history', 'filmMixer', 'roughCut'])
 
 export function isPanelType(t: string): boolean {
   return PANEL_TYPES.has(t)

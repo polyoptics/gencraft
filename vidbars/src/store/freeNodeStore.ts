@@ -23,6 +23,7 @@ export type FreeNodeType =
   | 'cabinet'  // a project cabinet — drawers that hold cards (utils/cabinet)
   | 'filmMixer' // the film's look mixer (components/FilmMixer)
   | 'storyline' // points on lines that branch (utils/storyline)
+  | 'roughCut' // clips in a row, trimmed and ordered (utils/roughCut)
 
 export interface TextStyle {
   fontSize: number       // in px (base, before zoom scaling)
@@ -120,6 +121,8 @@ export interface FreeNodeData {
   railDock?: import('../utils/rail').RailDock
   /** Project cabinets: the drawers and what is put away in them. */
   cabinet?: import('../utils/cabinetData').CabinetData
+  /** Rough cuts: the clips in order, each trimmed (utils/roughCut). */
+  roughCut?: import('../utils/roughCut').RoughCutData
   /** Storylines: the lines and the points on them, relative to x/y
    *  (utils/storyline). x/y/width/height are kept the bounding box. */
   storyline?: import('../utils/storyline').StorylineData
@@ -194,6 +197,7 @@ const DEFAULT_HEIGHTS: Record<FreeNodeType, number> = {
   cabinet: 280,
   filmMixer: 860,
   storyline: 0,   // its box is its lines' (utils/storyline)
+  roughCut: 562,
 }
 const DEFAULT_WIDTHS: Partial<Record<FreeNodeType, number>> = {
   audio: 260,
@@ -210,6 +214,7 @@ const DEFAULT_WIDTHS: Partial<Record<FreeNodeType, number>> = {
   effect: 180,
   cabinet: 320,
   filmMixer: 1240,  // the button sizes it to the screen (openFilmMixer)
+  roughCut: 1400,   // and so does this one's (openRoughCut)
 }
 
 /** A new free node's size before any zoom compensation. addFreeNode makes
@@ -321,7 +326,7 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
       image: 'Image', note: 'Note', text: 'Text', video: 'Video', audio: 'Audio', model: 'Model',
       list: 'List', pool: 'Media Pool', prompt: 'Prompt Pad', history: 'History',
       effect: 'Effect', rail: 'Loop strip', cabinet: 'Project cabinet', filmMixer: 'Film Look',
-      storyline: 'Storyline',
+      storyline: 'Storyline', roughCut: 'Rough Cut',
     }
     const node: FreeNodeData = {
       id, x, y,
@@ -334,6 +339,7 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
       color,
       ...(type === 'cabinet' ? { cabinet: newCabinet() } : {}),
       ...(type === 'storyline' ? { width: 0, storyline: newStoryline() } : {}),
+      ...(type === 'roughCut' ? { roughCut: { clips: [], pps: 60 } } : {}),
     }
     set(s => ({ nodes: { ...s.nodes, [id]: node } }))
     return id

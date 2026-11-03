@@ -26,6 +26,7 @@ import { tileBrowseItem, isDockableTile } from '../../utils/contentTraversal'
 import { snapPanelToPanel, isPanelType } from '../../utils/componentLinks'
 import { panelContentScale, clampUiScale } from '../UI/PanelSurface'
 import { CardRolodex } from '../Rolodex/CardRolodex'
+import { ROUGH_CUT_ASPECT, RoughCutBody } from '../RoughCut/RoughCutBody'
 import { FILM_MIXER_ASPECT, FilmLayersSpacing, FilmLayersToggle, FilmMixerBody } from '../FilmMixer/FilmMixerBody'
 import { MediaPool } from '../Pool/MediaPool'
 import { PromptPad } from '../Prompt/PromptPad'
@@ -68,7 +69,7 @@ const LOCKS_ASPECT = new Set<FreeNodeData['type']>(['list'])
  *  has, and also gives it the Rolodex's drawer-safe handles. An effect card
  *  is a playing card (5:7) whatever it was before, so a card made at the
  *  old size takes the right shape on its first resize. */
-const FIXED_ASPECT: Partial<Record<FreeNodeData['type'], number>> = { effect: 7 / 5, filmMixer: FILM_MIXER_ASPECT }
+const FIXED_ASPECT: Partial<Record<FreeNodeData['type'], number>> = { effect: 7 / 5, filmMixer: FILM_MIXER_ASPECT, roughCut: ROUGH_CUT_ASPECT }
 
 /** EffectTileBody's FACE_HEIGHT_U — the tallest face in its unit u, which
  *  it takes as min(width / 100, height / this). The resize grip has to
@@ -1910,6 +1911,11 @@ const FreeNodeBody: React.FC<{
       <CanvasUnits w={bodyW} h={bodyH} r={bodyR}><div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
         <PromptPad nodeId={id} />
       </div></CanvasUnits>
+    )
+  }
+  if (node.type === 'roughCut') {
+    return (
+      <CanvasUnits w={bodyW} h={bodyH} r={bodyR}><RoughCutBody id={id} node={node} bodyW={bodyW} bodyH={bodyH} /></CanvasUnits>
     )
   }
   if (node.type === 'filmMixer') {
