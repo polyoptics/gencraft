@@ -16,6 +16,7 @@ import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { nextFreeEdgeSlot } from '../../utils/viewportDocking'
 import { isPanelType } from '../../utils/componentLinks'
 import { addFreeNodeCentered, createCardOrBoardAt, createStorylineAt } from '../../utils/canvasCreate'
+import { selectStorylinesInBox } from './StorylineLayer'
 import { GLCanvasHost } from '../Viewport3D/GLCanvasHost'
 import { WorldZoom } from './worldZoom'
 import { addMediaBlockToCard, cardHitOf, groupForCardHit, type CardHit } from '../../utils/cardContent'
@@ -951,6 +952,8 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
           // not something the user was selecting.
           const nodeIds = Array.from(document.querySelectorAll('[data-freenode][data-id]:not([data-pinned])'))
             .filter(hits).map(el => (el as HTMLElement).dataset.id!)
+          // Storylines: the points covered, or a storyline covered whole.
+          nodeIds.push(...selectStorylinesInBox(selLeft, selTop, selRight, selBottom, false))
           if (nodeIds.length > 0) setFreeSelection(nodeIds)
           // Card group hit-test
           const hitGroups = Array.from(document.querySelectorAll('[data-group-card][data-id]'))

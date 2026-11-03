@@ -34,6 +34,7 @@ import { setGlHidden } from '../../three/viewportRenderer'
 import { getMediaItems } from '../../types/bar'
 import { faceBlocks } from '../../utils/cardGrid'
 import { clientToCanvas } from '../../utils/fx/createEffect'
+import { selectStorylinesInBox } from './StorylineLayer'
 import { createTiltScene, ART_MAX, type TiltTarget, type TiltFrameState, type TiltSlab, type TiltArt } from '../../three/tiltScene'
 
 /** Degrees of tilt / turn per pixel of Alt+drag. */
@@ -2566,7 +2567,8 @@ function marqueeSelect(m: { x0: number; y0: number; x1: number; y1: number }, ad
     return rc.right > l && rc.left < r && rc.bottom > t && rc.top < b
   }
   const ids = (sel: string) => Array.from(document.querySelectorAll<HTMLElement>(sel)).filter(hits).map(el => el.dataset.id!)
-  const nodes = ids('[data-tilt-stage] [data-freenode][data-id]:not([data-pinned])')
+  // Storylines: the points covered, or a storyline covered whole.
+  const nodes = [...ids('[data-tilt-stage] [data-freenode][data-id]:not([data-pinned])'), ...selectStorylinesInBox(l, t, r, b, add)]
   const cards = ids('[data-tilt-stage] [data-group-card][data-id]')
   fs.setFreeSelection(add ? [...new Set([...fs.selectedIds, ...nodes])] : nodes)
   bs.setSelectedGroups(add ? [...new Set([...bs.selectedGroupIds, ...cards])] : cards)
