@@ -94,9 +94,12 @@ const NO_TETHERS: Tether[] = []
 interface Tether { point: string; card: string; x1: number; y1: number; x2: number; y2: number }
 
 /** Every linked card's tether. Not for a card pinned off the canvas, or one
- *  the point sits on. The face: the card's block extent (groupBounds, less
- *  its 16-unit docking margin) at least its set size. */
-function storyTethers(d: StorylineData, g: StoryGeom, ox: number, oy: number, groups: ProjectGroup[]): Tether[] {
+ *  its tether's start sits on. It starts at the point, or — a card linked
+ *  on a stem's tick end (StoryPoint.hang) — at that end, wherever the stem
+ *  is drawn to (`px`: one screen px, for the tick's least length). The face:
+ *  the card's block extent (groupBounds, less its 16-unit docking margin)
+ *  at least its set size. */
+function storyTethers(d: StorylineData, g: StoryGeom, ox: number, oy: number, groups: ProjectGroup[], px: number): Tether[] {
   const out: Tether[] = []
   for (const p of d.points) {
     const pg = g.points[p.id]
@@ -105,11 +108,14 @@ function storyTethers(d: StorylineData, g: StoryGeom, ox: number, oy: number, gr
       const grp = groups.find(x => x.id === card)
       const b = grp && !grp.pin ? groupBounds(card) : null
       if (!grp || !b) continue
+      const side = p.hang?.[card]
+      const k = side === 'up' ? Math.max(p.up, TICK * px) : side === 'down' ? -Math.max(p.down, TICK * px) : 0
+      const sx = pg.x + pg.nx * k, sy = pg.y + pg.ny * k
       const x0 = b.x + 16, w = Math.max(b.w - 32, grp.cardWidthOverride ?? 0), h = Math.max(b.h, grp.cardHeightOverride ?? 0)
-      const px0 = ox + pg.x, py0 = oy + pg.y
+      const px0 = ox + sx, py0 = oy + sy
       const cx = Math.max(x0, Math.min(x0 + w, px0)), cy = Math.max(b.y, Math.min(b.y + h, py0))
       if (cx === px0 && cy === py0) continue
-      out.push({ point: p.id, card, x1: pg.x, y1: pg.y, x2: cx - ox, y2: cy - oy })
+      out.push({ point: p.id, card, x1: sx, y1: sy, x2: cx - ox, y2: cy - oy })
     }
   }
   return out
@@ -481,8 +487,8 @@ function hopStoryContents(id: string, pointId: string, to: { node: string; line:
   const from = storyGeom(src.storyline).points[pointId]
   const cards = cardOrigins(src.storyline, new Set([pointId]))
   // Its stems go with it; the dot left behind has the default.
-  const q = { id: crypto.randomUUID(), line: to.line, t: to.t, up: p.up, down: p.down, title: p.title, cards: p.cards }
-  const stripped = { ...src.storyline, points: src.storyline.points.map(x => (x.id === pointId ? { ...x, title: '', cards: undefined, up: 0, down: 0 } : x)) }
+  const q = { id: crypto.randomUUID(), line: to.line, t: to.t, up: p.up, down: p.down, title: p.title, cards: p.cards, hang: p.hang }
+  const stripped = { ...src.storyline, points: src.storyline.points.map(x => (x.id === pointId ? { ...x, title: '', cards: undefined, hang: undefined, up: 0, down: 0 } : x)) }
   if (to.node === id) writeStoryline(id, src.x, src.y, { ...stripped, points: [...stripped.points, q] })
   else {
     writeStoryline(id, src.x, src.y, stripped)
@@ -524,9 +530,11 @@ function moveCards(from: Map<string, { x: number; y: number }>, dx: number, dy: 
 }
 
 /** Link card `groupId` to point `pointId` (a card's link "+" let go on
- *  it; LinkDragOverlay). A card follows one point: off any other first.
- *  The caller takes the undo checkpoint. */
-export function linkCardToStoryPoint(nodeId: string, pointId: string, groupId: string) {
+ *  it; LinkDragOverlay), hanging from its stem's tick end `side` if it was
+ *  let go there. A card follows one point: off any other first. The caller
+ *  takes the undo checkpoint. */
+export function linkCardToStoryPoint(nodeId: string, pointId: string, groupId: string, side?: string) {
+  const hangs = side === 'up' || side === 'down' ? side : undefined
   const fs = useFreeNodeStore.getState()
   if (!fs.nodes[nodeId]?.storyline?.points.some(p => p.id === pointId)) return
   for (const n of Object.values(fs.nodes)) {
@@ -535,9 +543,15 @@ export function linkCardToStoryPoint(nodeId: string, pointId: string, groupId: s
     const points = n.storyline.points.map(p => {
       const has = p.cards?.includes(groupId) ?? false
       const want = n.id === nodeId && p.id === pointId
-      if (has === want) return p
+      if (has === want && (!want || p.hang?.[groupId] === hangs)) return p
       changed = true
-      return { ...p, cards: want ? [...(p.cards ?? []), groupId] : p.cards!.filter(c => c !== groupId) }
+      const { [groupId]: _was, ...hang } = p.hang ?? {}
+      if (want && hangs) hang[groupId] = hangs
+      return {
+        ...p,
+        cards: want ? (has ? p.cards : [...(p.cards ?? []), groupId]) : p.cards!.filter(c => c !== groupId),
+        hang: Object.keys(hang).length ? hang : undefined,
+      }
     })
     if (changed) fs.updateFreeNode(n.id, { storyline: { ...n.storyline, points } })
   }
@@ -646,7 +660,7 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
   if (!node || !d) return null
   const px = 1 / zoom
   const g = storyGeom(d)
-  const tethers = hasCards ? storyTethers(d, g, node.x, node.y, groups) : NO_TETHERS
+  const tethers = hasCards ? storyTethers(d, g, node.x, node.y, groups, px) : NO_TETHERS
 
   /** The tick for a hover at canvas point `c` over line `lineId`, or null
    *  where a point or a line's end already is. */
@@ -1110,7 +1124,7 @@ const StorySvg: React.FC<{
                       <circle cx={tx} cy={ty} r={(TIP_R - 2) * px} fill={C_GLOW} fillOpacity={0.85} pointerEvents="none" />
                     )}
                     <circle cx={tx} cy={ty} r={TIP_R * px} fill="transparent" pointerEvents="all" style={{ cursor: 'ns-resize' }}
-                            data-role={`tip-${side}`} data-point={p.id} data-link-drop={`story:${id}:${p.id}`} />
+                            data-role={`tip-${side}`} data-point={p.id} data-link-drop={`story:${id}:${p.id}:${side}`} />
                   </g>
                 )
               })}

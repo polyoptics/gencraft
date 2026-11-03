@@ -47,6 +47,9 @@ export interface StoryPoint {
   title: string
   /** Linked cards (group ids): they move with the point. */
   cards?: string[]
+  /** Cards linked on a stem's tick end: which end each hangs from (its
+   *  tether starts there). A card not listed hangs from the point. */
+  hang?: Record<string, 'up' | 'down'>
   /** Older storylines: a deleted point still holding a branch. Read as a
    *  plain point (canonicalStoryline). */
   anchor?: boolean
@@ -185,8 +188,10 @@ export function canonicalStoryline(d: StorylineData): StorylineData {
     const keep = byId.get(keepId)!
     const all = [keep, ...others]
     const cards = [...new Set(all.flatMap(p => p.cards ?? []))]
+    const hang = Object.assign({}, ...all.map(p => p.hang ?? {}).reverse())
     byId.set(keepId, {
       ...keep,
+      hang: Object.keys(hang).length ? hang : undefined,
       title: [...new Set(all.map(p => p.title).filter(Boolean))].join(' / '),
       up: Math.max(...all.map(p => p.up)), down: Math.max(...all.map(p => p.down)),
       ...(cards.length ? { cards } : {}),
@@ -248,7 +253,7 @@ export function deleteStoryPoint(d: StorylineData, pointId: string): StorylineDa
   if (!p || !l) return d
   if (d.lines.some(q => q.from === pointId)) {
     if (!pointHolds(p)) return d
-    return { ...d, points: d.points.map(q => (q.id === pointId ? { ...q, title: '', cards: undefined } : q)) }
+    return { ...d, points: d.points.map(q => (q.id === pointId ? { ...q, title: '', cards: undefined, hang: undefined } : q)) }
   }
   const points = d.points.filter(q => q.id !== pointId)
   const others = points.filter(q => q.line === l.id)
@@ -343,7 +348,11 @@ export function reattachStoryPoint(d: StorylineData, pointId: string, lineId: st
 
 /** Let card `groupId` go from point `pointId`; it stays where it is. */
 export function unlinkStoryCard(d: StorylineData, pointId: string, groupId: string): StorylineData {
-  return { ...d, points: d.points.map(p => (p.id === pointId && p.cards ? { ...p, cards: p.cards.filter(c => c !== groupId) } : p)) }
+  return { ...d, points: d.points.map(p => {
+    if (p.id !== pointId || !p.cards) return p
+    const { [groupId]: _was, ...hang } = p.hang ?? {}
+    return { ...p, cards: p.cards.filter(c => c !== groupId), hang: Object.keys(hang).length ? hang : undefined }
+  }) }
 }
 
 /** Nothing left to show: no point and no line of any length. */

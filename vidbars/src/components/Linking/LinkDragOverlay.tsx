@@ -30,8 +30,8 @@ export const LinkDragOverlay: React.FC = () => {
       // Find drop target: look for [data-link-drop] ancestor at release point
       const els = document.elementsFromPoint(e.clientX, e.clientY)
       let target: LinkRef | null = null
-      // A Storyline's point ("story:<node>:<point>"): a card let go on it
-      // moves with it (StorylineLayer).
+      // A Storyline's point ("story:<node>:<point>", ":up"/":down" on a stem's
+      // tick end): a card let go on it moves with it (StorylineLayer).
       let story: string[] | null = null
       for (const el of els) {
         const attr = (el as HTMLElement).closest?.('[data-link-drop]')?.getAttribute('data-link-drop')
@@ -55,7 +55,7 @@ export const LinkDragOverlay: React.FC = () => {
       }
       if (story && source.kind === 'group') {
         useUndoCoordinator.getState().checkpoint()
-        linkCardToStoryPoint(story[1], story[2], source.id)
+        linkCardToStoryPoint(story[1], story[2], source.id, story[3])
       }
       if (target) {
         // Checkpoint HERE, not when the drag began: a checkpoint per
