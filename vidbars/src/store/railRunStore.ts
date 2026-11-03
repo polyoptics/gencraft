@@ -30,6 +30,8 @@ export interface RailRunState {
   currentIds?: string[]
   /** Results that landed in the tray. */
   made?: number
+  /** How the result in flight is going, when it takes a while ('Frame 12 of 381'). */
+  note?: string
   /** Stop was asked; the combination in flight finishes first. */
   stopping?: boolean
   /** The run ended because it was stopped, not because it was done. */

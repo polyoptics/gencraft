@@ -81,6 +81,11 @@ contextBridge.exposeInMainWorld('vidbarsDesktop', {
    *  (data urls; several = a short sequence). Resolves { frames } for depth,
    *  { objects: { name: [...] } } for segment, or { error }; with `log`. */
   sketchRun: (job) => ipcRenderer.invoke('vb:sketch-run', job),
+  sketchClip: (u) => ipcRenderer.invoke('vb:sketch-clip', u),
+  sketchClipFrames: (c) => ipcRenderer.invoke('vb:sketch-clip-frames', c),
+  sketchBakeFrame: (bake, i, dataUrl) => ipcRenderer.invoke('vb:sketch-bake-frame', bake, i, dataUrl),
+  sketchBakeDrop: (bake) => ipcRenderer.invoke('vb:sketch-bake-drop', bake),
+  sketchBakeEncode: (bake, c, name) => ipcRenderer.invoke('vb:sketch-bake-encode', bake, c, name),
 
   /** The Film Look panel: is the look mixer's server up, and its address. */
   mixerStatus: () => ipcRenderer.invoke('vb:mixer-status'),

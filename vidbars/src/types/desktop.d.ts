@@ -74,10 +74,24 @@ export interface VidbarsDesktop {
     engine?: 'sam3' | 'dino'
     /** Nothing named: the whole picture is the subject (no segmenting). */
     whole?: boolean
+    /** A chunk of a clip sketchClip opened, in place of `frames`: drawn as
+     *  one sequence, its results handed back as file paths, not data urls. */
+    clip?: { id: string; start: number; count: number }
   }): Promise<{
     frames?: (string | Record<string, string>)[]; objects?: Record<string, string[]>
     colors?: Record<string, string | number>; error?: string; log: string; engine?: 'sam3' | 'dino'
   }>
+  /** A video card's file, opened for a bake through the sketch looks (by
+   *  its stored url): its id, frame rate, frame count and size. */
+  sketchClip?(url: string): Promise<{ id: string; fps: number; n: number; w: number; h: number; audio: boolean } | { error: string }>
+  /** Frames start .. start+count of an opened clip, read out as PNG files. */
+  sketchClipFrames?(c: { id: string; start: number; count: number }): Promise<{ paths: string[] } | { error: string }>
+  /** One drawn frame (a JPEG data url) of a clip bake, frame i of the clip. */
+  sketchBakeFrame?(bake: string, i: number, dataUrl: string): Promise<{ error?: string }>
+  /** A stopped bake: its frames go. */
+  sketchBakeDrop?(bake: string): Promise<void>
+  /** A bake's frames as an MP4 (with the clip's sound) in Pictures\VidBars Effects. */
+  sketchBakeEncode?(bake: string, c: { id: string; start: number; count: number }, name: string): Promise<{ path: string } | { error: string }>
 }
 
 /** Where a save lands: 'context-sheet' and 'effect' are the user's files

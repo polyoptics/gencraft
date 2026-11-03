@@ -21,6 +21,7 @@
 import { create } from 'zustand'
 import type { FxEngine, Tex } from './fxEngine'
 import type { EffectKind, AuxKind } from './effects'
+import { diskFileUrl } from '../diskUrl'
 
 /** The strip step, as aiEffects reads it (chain.ts's effect item). */
 export interface AuxStep {
@@ -120,6 +121,33 @@ const engineOf = (s: AuxStep | undefined): Engine => (s?.params?.engine ?? 0) >=
 const kept = new Map<string, Kept>()
 const asked = new Map<string, Promise<void>>()
 let queue: Promise<unknown> = Promise.resolve()
+
+/** A clip being baked (utils/fx/clipRun): one chunk of its frames, which
+ *  the worker draws as ONE sequence (so boil, optical flow, temporal
+ *  steadying and SAM 3's tracking see the motion), its results kept per
+ *  frame as the worker's files and decoded a frame at a time. `urls`: each
+ *  frame's url → its place in the chunk; `total`: the clip's frame count. */
+interface ClipChunk { id: string; start: number; count: number; total: number; urls: Map<string, number> }
+let chunk: ClipChunk | null = null
+type ChunkKept = { files: Record<string, string>; colors?: LineColors; scales?: Record<string, number> } | { error: string }
+const chunkFiles = new Map<string, ChunkKept>()
+/** The decoded results of the frame drawn last: they go when the next one is. */
+let shown: string[] = []
+/** What failed for the chunk, if anything ('outline: CUDA out of memory'). */
+let chunkFailed: string | null = null
+/** Why the chunk being baked has no drawing (a bake must not quietly pass
+ *  its frames through), or null. */
+export const clipChunkError = () => chunkFailed
+
+/** Start (or, with null, end) baking a clip's chunk: runChain on one of its
+ *  frames' urls then reads that frame's results from the chunk's. */
+export function setClipChunk(c: { id: string; start: number; count: number; total: number; urls: string[] } | null) {
+  chunk = c ? { ...c, urls: new Map(c.urls.map((u, i) => [u, i])) } : null
+  chunkFiles.clear()
+  chunkFailed = null
+  for (const k of shown) kept.delete(k)
+  shown = []
+}
 
 /** Per step: what its card should say ('' = nothing), and a counter that
  *  ticks whenever a result lands (live strips re-run on it). */
@@ -360,6 +388,46 @@ function ask(r: Req, img: HTMLImageElement): Promise<void> {
   return p
 }
 
+/** A frame of the chunk (its key ends #frame): its result, from the chunk's (asked once for the
+ *  whole chunk, under the key without the frame). */
+function askChunk(r: Req, stepId: string): Promise<void> {
+  const c = chunk!
+  const whole = r.key.slice(0, r.key.lastIndexOf('#'))
+  const all = (v: ChunkKept) => {
+    if ('error' in v) chunkFailed ??= `${r.what}: ${v.error}`
+    for (let j = 0; j < c.count; j++) chunkFiles.set(`${whole}#${j}`, v)
+  }
+  let p = chunkFiles.has(r.key) ? Promise.resolve() : asked.get(whole)
+  if (!p) {
+    p = (queue = queue.then(async () => {
+      const run = window.vidbarsDesktop?.sketchRun
+      if (!run) { all({ error: 'Runs in the VidBars desktop app' }); return }
+      say(stepId, `Drawing frames ${c.start + 1}–${c.start + c.count} of ${c.total}…`)
+      const res = await run({ ...r.job, frames: [], clip: { id: c.id, start: c.start, count: c.count } })
+      say(stepId, '')
+      if (res.error) { console.warn(`[fx] ${r.what}:`, res.error, res.log); all({ error: res.error }); return }
+      const scales = (res as { scales?: Record<string, number> }).scales
+      for (let j = 0; j < c.count; j++) {
+        const files: Record<string, string> = r.job.op === 'depth' ? { depth: res.frames?.[j] as string }
+          : r.job.op === 'segment' ? { mask: res.objects?.figure?.[j] as string }
+          : (res.frames?.[j] ?? {}) as Record<string, string>
+        chunkFiles.set(`${whole}#${j}`, { files, colors: res.colors as unknown as LineColors, scales })
+      }
+    }).catch(err => all({ error: String(err?.message ?? err) })))
+    asked.set(whole, p)
+    void p.finally(() => asked.delete(whole))
+  }
+  return p.then(async () => {
+    const k = chunkFiles.get(r.key)
+    if (!k) { keep(r.key, { error: 'nothing came back for this frame' }); return }
+    if ('error' in k) { keep(r.key, k); return }
+    const imgs = Object.fromEntries(await Promise.all(Object.entries(k.files)
+      .map(async ([n, p_]) => [n, p_ ? await decode(diskFileUrl(p_)) : null] as const)))
+    keep(r.key, { imgs, colors: k.colors, scales: k.scales })
+    shown.push(r.key)
+  })
+}
+
 /** The needs of every step for every source, gathered before drawing. */
 export interface AuxPlan { reqs: Map<string, Req[] | null>; pending: Promise<void>[] }
 const planKey = (stepIndex: number, url: string) => `${stepIndex} ${url}`
@@ -374,6 +442,20 @@ export async function prepareAux(steps: AuxStep[], sources: { url: string; img: 
     // (the worker scales every pixel-size dial to match): a picture no bigger
     // than the preview's size bakes as the preview draws it.
     drawSide = Math.max(LINE_SIDE, Math.min(side, Math.max(img.naturalWidth, img.naturalHeight), 4096))
+    // A frame of the clip being baked: its results come from its chunk's.
+    const f = chunk?.urls.get(url)
+    if (chunk && f !== undefined) {
+      for (const k of shown) kept.delete(k)
+      shown = []
+      const base = `clip:${chunk.id}:${chunk.start}:${chunk.count}`
+      for (let i = 0; i < steps.length; i++) {
+        if (!isAuxKind(steps[i].effect) && !steps[i].inputs?.length) continue
+        const rs = requests(steps, i, base)?.map(r => ({ ...r, key: `${r.key}#${f}` })) ?? null
+        plan.reqs.set(planKey(i, url), rs)
+        for (const r of rs ?? []) if (!kept.has(r.key)) plan.pending.push(askChunk(r, steps[i].id))
+      }
+      continue
+    }
     for (let i = 0; i < steps.length; i++) {
       if (!isAuxKind(steps[i].effect) && !steps[i].inputs?.length) continue
       const rs = requests(steps, i, url)

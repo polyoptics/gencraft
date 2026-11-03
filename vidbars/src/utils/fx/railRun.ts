@@ -34,6 +34,7 @@ import { diskFileUrl } from '../diskUrl'
 import { saveCanvasImage } from '../saveImage'
 import { loadImage, runChain, type ChainItem } from './chain'
 import { railComboAt, railComboCount } from './railChain'
+import { makeClip } from './clipRun'
 import { resultName } from './saveStrip'
 
 /** Results render at up to this long edge on the desktop — the sources' own
@@ -107,17 +108,21 @@ export function renderRailFrame(items: ChainItem[]): Promise<HTMLCanvasElement |
   })
 }
 
-type Made = { url: string; w: number; h: number } | { error: string } | { stopped: true }
+type Made = { url: string; w: number; h: number; video?: true } | { error: string } | { stopped: true }
 
 /** Render one combination and keep it: a file on the desktop, a data: url
  *  in a browser. Checks for a stop between the render and the save, so a
  *  stop never leaves a file on disk that no tile points at. */
-async function make(items: ChainItem[], name: string, stopped: () => boolean): Promise<Made> {
+async function make(items: ChainItem[], name: string, stopped: () => boolean, note: (s: string) => void = () => {}): Promise<Made> {
   // Stop may have been asked while this waited for another rail's turn.
   if (stopped()) return { stopped: true }
   const why = await unreadable(items)
   if (why) return { error: why }
   const desktop = desktopSaves()
+  // A video card: the whole clip, as a video (utils/fx/clipRun). In a plain
+  // browser there is no worker to draw it: its poster frame, as before.
+  const first = items[0]
+  if (desktop && first?.kind === 'source' && first.video && window.vidbarsDesktop?.sketchClip) return makeClip(items, RUN_SIDE, name, stopped, note)
   const r = await runChain(items, desktop ? RUN_SIDE : BROWSER_SIDE, false)
   const out = r.outputs[0]
   // One subject per combination, so one output; drop any stray others.
@@ -140,15 +145,16 @@ async function make(items: ChainItem[], name: string, stopped: () => boolean): P
  *  face-up on the pile. Sized to the rail's card width at its own aspect,
  *  which is the size it keeps if it is later pulled off the rail. False
  *  when the rail is gone. */
-function land(railId: string, made: { url: string; w: number; h: number }, label: string): boolean {
+function land(railId: string, made: { url: string; w: number; h: number; video?: true }, label: string): boolean {
   const fs = useFreeNodeStore.getState()
   const rail = fs.nodes[railId]
   if (!isRail(rail)) return false
   const u = rail.rail.unit > 0 ? rail.rail.unit : 1
   const width = RAIL_GEOM.picW * u
   const height = width * (made.h > 0 && made.w > 0 ? made.h / made.w : 0.75)
-  const id = fs.addFreeNode(rail.x, rail.y, 'image')
-  fs.updateFreeNode(id, { imageUrl: made.url, mediaType: 'image', label, width, height })
+  const kind = made.video ? 'video' : 'image'
+  const id = fs.addFreeNode(rail.x, rail.y, kind)
+  fs.updateFreeNode(id, { imageUrl: made.url, mediaType: kind, label, width, height })
   fs.dockToRail([id], { railId, kind: 'column', slotId: RAIL_TRAY, index: Infinity })
   return true
 }
@@ -211,7 +217,8 @@ export async function runRail(railId: string): Promise<void> {
       if (!combo) { failures.push(`combination ${i + 1}: nothing to run`); continue }
       let out: Made
       try {
-        out = await exclusive(() => make(combo.items, resultName(`${railLabel} — ${combo.label}`, combo.items), stopping))
+        const note = (s: string) => useRailRunStore.getState().patchRun(railId, { note: s || undefined })
+        out = await exclusive(() => make(combo.items, resultName(`${railLabel} — ${combo.label}`, combo.items), stopping, note))
       } catch (err) {
         out = { error: String((err as Error)?.message ?? err) }
       }
@@ -221,7 +228,8 @@ export async function runRail(railId: string): Promise<void> {
       else {
         if (!checkpointed) { useUndoCoordinator.getState().checkpoint(); checkpointed = true }
         const name = resultName(combo.label, combo.items)
-        if (combo.subjectCard) {
+        // (A baked clip lands as a video tile of its own: a result card holds pictures.)
+        if (combo.subjectCard && !out.video) {
           if (pending && pending.card !== combo.subjectCard && !flush()) { gone = true; break }
           if (!pending) {
             const input = useBoardsStore.getState().groups.find(g => g.id === unitCardId(combo.subjectCard!))

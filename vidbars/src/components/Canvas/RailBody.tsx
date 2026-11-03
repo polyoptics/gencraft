@@ -417,7 +417,7 @@ export const RailBody: React.FC<{
         count={view.count}
         run={run}
         previewError={preview?.error}
-        currentLabel={busy?.label ?? null}
+        currentLabel={run?.note ? `${busy?.label ? `${busy.label} — ` : ''}${run.note}` : busy?.label ?? null}
       />
 
       <RailResizeGrip railId={id} width={L.box.width} height={L.box.height} u={u} hovered={hovered} />

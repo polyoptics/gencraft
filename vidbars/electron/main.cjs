@@ -322,7 +322,9 @@ function registerBridge() {
   ipcMain.handle('vb:sketch-run', async (e, job) => {
     if (!fromApp(e)) return { error: 'Not allowed', log: '' }
     const frames = Array.isArray(job?.frames) ? job.frames.filter(f => typeof f === 'string' && f.startsWith('data:image/')) : []
-    if (!frames.length || frames.length > 600) return { error: 'no pictures', log: '' }
+    // Or a chunk of a clip vb:sketch-clip opened (by its id: never a path).
+    const clip = clipRange(job?.clip)
+    if (!clip && (!frames.length || frames.length > 600)) return { error: 'no pictures', log: '' }
     const objects = {}
     for (const [k, v] of Object.entries(job.objects || {})) if (Array.isArray(v)) objects[String(k)] = v.map(String)
     const dials = {}
@@ -334,7 +336,52 @@ function registerBridge() {
     const num = o => Object.fromEntries(Object.entries(o && typeof o === 'object' ? o : {}).filter(([, v]) => Number.isFinite(v)).map(([k2, v]) => [String(k2), v]))
     const sj = job.scale && typeof job.scale === 'object' ? job.scale : null
     const scale = sj ? { ref: Number.isFinite(sj.ref) ? sj.ref : undefined, lo: Number.isFinite(sj.lo) ? sj.lo : undefined, view: num(sj.view), fixed: num(sj.fixed) } : undefined
-    return require('./sketchWorker.cjs').run({ op: job.op, look, frames, objects, dials, side, engine, whole: job.whole === true, scale })
+    return require('./sketchWorker.cjs').run({ op: job.op, look, frames: clip ? undefined : frames, clip, objects, dials, side, engine, whole: job.whole === true, scale })
+  })
+
+  // A video card baked through the sketch looks (utils/fx/clipRun): the page
+  // opens the clip by its STORED url (main finds the file), then names it
+  // only by the id handed back. Frames are read out a chunk at a time.
+  const clipRange = c => c && typeof c === 'object' && /^[0-9a-f]{16}$/.test(c.id) && Number.isInteger(c.start) && c.start >= 0 &&
+    Number.isInteger(c.count) && c.count > 0 && c.count <= 600 ? { id: c.id, start: c.start, count: c.count } : undefined
+  const bakeId = b => typeof b === 'string' && /^[0-9a-f]{16}$/.test(b)
+  ipcMain.handle('vb:sketch-clip', async (e, u) => {
+    if (!fromApp(e)) return { error: 'Not allowed' }
+    const p = realPath(mediaPath(u))
+    if (!p || !/\.(mp4|webm|mov|m4v|mkv|ogv)$/i.test(p)) return { error: 'not a video file on this computer' }
+    try { return await require('./sketchWorker.cjs').clipInfo(p) } catch (err) { return { error: String(err.message || err) } }
+  })
+  ipcMain.handle('vb:sketch-clip-frames', async (e, c) => {
+    const r = fromApp(e) && clipRange(c)
+    if (!r) return { error: 'Not allowed' }
+    try { return { paths: await require('./sketchWorker.cjs').clipChunk(r.id, r.start, r.count) } } catch (err) { return { error: String(err.message || err) } }
+  })
+  ipcMain.handle('vb:sketch-bake-frame', (e, bake, i, dataUrl) => {
+    if (!fromApp(e) || !bakeId(bake) || !Number.isInteger(i) || i < 0 || typeof dataUrl !== 'string') return { error: 'Not allowed' }
+    try { require('./sketchWorker.cjs').bakeFrame(bake, i, dataUrl); return {} } catch (err) { return { error: String(err.message || err) } }
+  })
+  ipcMain.handle('vb:sketch-bake-drop', (e, bake) => { if (fromApp(e) && bakeId(bake)) require('./sketchWorker.cjs').bakeDrop(bake) })
+  // The bake's frames as Pictures\VidBars Effects\<name> <stamp>.mp4 (named as
+  // vb:save-image names an effect picture). Resolves { path } or { error }.
+  ipcMain.handle('vb:sketch-bake-encode', async (e, bake, c, name) => {
+    // (A whole clip: any length.)
+    const r = fromApp(e) && bakeId(bake) && c && clipRange({ ...c, count: Math.min(600, c.count) }) ? { id: c.id, start: c.start, count: c.count } : null
+    if (!r) return { error: 'Not allowed' }
+    const dir = saveDir('effect')
+    if (!dir) return { error: 'Pictures is on a network share, which VidBars cannot read files back from' }
+    let safe = Array.from(String(name || '').toWellFormed().replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_'))
+      .slice(0, 80).join('').replace(/^[.\s]+|[.\s]+$/g, '') || 'clip'
+    if (safe.includes('.') && RESERVED_STEM.test(safe.split('.')[0].trimEnd())) safe = '_' + safe
+    const d = new Date()
+    const pad = n => String(n).padStart(2, '0')
+    const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
+    let file = null
+    for (let n = 1; n <= 99 && !file; n++) {
+      const f = path.join(dir, `${safe} ${stamp}${n > 1 ? ` (${n})` : ''}.mp4`)
+      if (!fs.existsSync(f)) file = f
+    }
+    if (!file) return { error: 'Too many files of this name saved this second' }
+    try { return { path: await require('./sketchWorker.cjs').bakeEncode(bake, r.id, r.start, r.count, file) } } catch (err) { return { error: String(err.message || err) } }
   })
 
   // The Film Look panel: the look mixer's server. The page only ever asks

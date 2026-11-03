@@ -16,7 +16,10 @@ import { resolveMediaUrl } from '../useResolvedMedia'
 import { prepareAux, auxFor, releaseAux } from './aiEffects'
 
 export type ChainItem =
-  | { id: string; kind: 'source'; url: string; label: string }
+  | { id: string; kind: 'source'; url: string; label: string
+      /** A video card's own stored url (`url` is its poster frame): a Run
+       *  draws the whole clip (utils/fx/clipRun). */
+      video?: string }
   | { id: string; kind: 'effect'; effect: EffectKind; params?: Record<string, number>
       /** Segment's phrases ("name: phrase, phrase" per line). */
       text?: string
@@ -148,6 +151,11 @@ export function loadImage(url: string): Promise<HTMLImageElement | null> {
   void p.then(img => { if (!img && imageCache.get(url) === p) imageCache.delete(url) })
   if (imageCache.size > 64) imageCache.delete(imageCache.keys().next().value!)
   return p
+}
+
+/** Drop a decoded picture that will not be asked for again (a baked clip's frame). */
+export function forgetImage(url: string): void {
+  imageCache.delete(url)
 }
 
 // Sources already fitted to a live working size, by size and url: a 24 MP
