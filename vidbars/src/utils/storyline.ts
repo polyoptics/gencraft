@@ -159,7 +159,9 @@ const EPS = 1e-6
  *  it, its linked cards are let go where they stand, and branches growing
  *  from it stay where they are on the line (it becomes an anchor). Deleting
  *  the point at a line's end shortens the line to the next point (on the
- *  root line, at its start too). Nothing else goes. */
+ *  root line, at its start too). The last point on a branch, with nothing
+ *  growing from it, takes the branch with it; the root's last point shortens
+ *  the root back to where it starts. */
 export function deleteStoryPoint(d: StorylineData, pointId: string): StorylineData {
   const p = d.points.find(q => q.id === pointId)
   const l = p && d.lines.find(q => q.id === p.line)
@@ -169,22 +171,42 @@ export function deleteStoryPoint(d: StorylineData, pointId: string): StorylineDa
   }
   const points = d.points.filter(q => q.id !== pointId)
   const others = points.filter(q => q.line === l.id)
+  if (!others.length) {
+    if (l.from) return dropLine({ ...d, points }, l.id)
+    return { ...d, points, lines: d.lines.map(q => (q.id === l.id ? { ...q, dx: 0, dy: 0 } : q)) }
+  }
   const len = Math.hypot(l.dx, l.dy)
-  if (!others.length || len < EPS) return { ...d, points }
+  if (len < EPS) return { ...d, points }
   const ux = l.dx / len, uy = l.dy / len
   if (p.t >= len - EPS) {
     const to = Math.max(...others.map(q => q.t))
     return { ...d, points, lines: d.lines.map(q => (q.id === l.id ? { ...q, dx: ux * to, dy: uy * to } : q)) }
   }
-  if (!l.from && p.t <= EPS) {
-    const k = Math.min(...others.map(q => q.t))
-    return {
-      ...d,
-      lines: d.lines.map(q => (q.id === l.id ? { ...q, x: q.x + ux * k, y: q.y + uy * k, dx: ux * (len - k), dy: uy * (len - k) } : q)),
-      points: points.map(q => (q.line === l.id ? { ...q, t: q.t - k } : q)),
-    }
-  }
+  if (!l.from && p.t <= EPS) return trimStart({ ...d, points }, l.id, Math.min(...others.map(q => q.t)))
   return { ...d, points }
+}
+
+/** The root line `lineId` starting `k` further along: its points stay put. */
+function trimStart(d: StorylineData, lineId: string, k: number): StorylineData {
+  const l = d.lines.find(q => q.id === lineId)!
+  const len = Math.hypot(l.dx, l.dy)
+  if (len < EPS) return d
+  const ux = l.dx / len, uy = l.dy / len
+  return {
+    ...d,
+    lines: d.lines.map(q => (q.id === lineId ? { ...q, x: q.x + ux * k, y: q.y + uy * k, dx: ux * (len - k), dy: uy * (len - k) } : q)),
+    points: d.points.map(q => (q.line === lineId ? { ...q, t: q.t - k } : q)),
+  }
+}
+
+/** Take branch `lineId` off (its points and theirs must be gone already),
+ *  and the anchor it grew from if that now holds nothing: deleted as a
+ *  point, so its own line closes up behind it the same way. */
+function dropLine(d: StorylineData, lineId: string): StorylineData {
+  const line = d.lines.find(l => l.id === lineId)
+  const out = { ...d, lines: d.lines.filter(l => l.id !== lineId) }
+  const from = line?.from ? out.points.find(p => p.id === line.from) : undefined
+  return from?.anchor && !out.lines.some(l => l.from === from.id) ? deleteStoryPoint(out, from.id) : out
 }
 
 /** Delete a branch: the line, its points and everything branching from
@@ -192,17 +214,37 @@ export function deleteStoryPoint(d: StorylineData, pointId: string): StorylineDa
 export function deleteStoryBranch(d: StorylineData, lineId: string): StorylineData {
   const line = d.lines.find(l => l.id === lineId)
   if (!line?.from) return d
-  const lines = new Set([lineId]), points = new Set<string>()
+  const lines = new Set<string>(), points = new Set<string>()
   for (const p of d.points) {
     if (p.line !== lineId) continue
     const b = pointAndBranches(d, p.id)
     b.lines.forEach(x => lines.add(x))
     b.points.forEach(x => points.add(x))
   }
-  const left = d.lines.filter(l => !lines.has(l.id))
-  const from = d.points.find(p => p.id === line.from)
-  if (from?.anchor && !left.some(l => l.from === from.id)) points.add(from.id)
-  return { ...d, lines: left, points: d.points.filter(p => !points.has(p.id)) }
+  return dropLine({ ...d, lines: d.lines.filter(l => !lines.has(l.id)), points: d.points.filter(p => !points.has(p.id)) }, lineId)
+}
+
+/** Delete the spot a branch leaves its line from (an anchor): only when
+ *  what grows from it holds nothing (no point on any of its branches) —
+ *  those go with it. A branch with things on it needs Delete branch. */
+export function deleteStoryAnchor(d: StorylineData, anchorId: string): StorylineData {
+  const grown = d.lines.filter(l => l.from === anchorId)
+  if (grown.some(l => d.points.some(p => p.line === l.id))) return d
+  return deleteStoryPoint({ ...d, lines: d.lines.filter(l => l.from !== anchorId) }, anchorId)
+}
+
+/** Delete a line's end handle: the line shortens to its last point (its
+ *  first, from the root's start); with none on it, back to where it starts
+ *  — a branch with nothing on it goes. */
+export function deleteStoryEnd(d: StorylineData, lineId: string, which: 'start' | 'end'): StorylineData {
+  const l = d.lines.find(q => q.id === lineId)
+  if (!l) return d
+  const on = d.points.filter(p => p.line === lineId)
+  if (!on.length) return l.from ? dropLine(d, lineId) : { ...d, lines: d.lines.map(q => (q.id === lineId ? { ...q, dx: 0, dy: 0 } : q)) }
+  if (which === 'start') return l.from ? d : trimStart(d, lineId, Math.min(...on.map(p => p.t)))
+  const len = Math.hypot(l.dx, l.dy)
+  const to = Math.max(...on.map(p => p.t))
+  return len < EPS ? d : { ...d, lines: d.lines.map(q => (q.id === lineId ? { ...q, dx: l.dx / len * to, dy: l.dy / len * to } : q)) }
 }
 
 /** Let card `groupId` go from point `pointId`; it stays where it is. */

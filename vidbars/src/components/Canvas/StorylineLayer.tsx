@@ -11,6 +11,8 @@
 //    lone point too): the whole storyline moves.
 //  - Click a point to select it; click it again quickly (or its title) to
 //    name it. Delete takes the point off its line, which stays whole.
+//    So with a line's end handle (shortens it) and the ring where a deleted
+//    point still holds a branch, on any line of the tree.
 //  - Click the grab handle to select the whole storyline (ringed, as tiles
 //    are); Delete then removes it, as it does a tile.
 //  - Right-click a point, line or the handle: delete the point, the branch
@@ -41,7 +43,7 @@ import { useTiltStore, isTilted, unprojectTilt, TILT_FAR } from '../../store/til
 import { clientToCanvas } from '../../utils/fx/createEffect'
 import { dotStep } from '../../utils/dotGrid'
 import {
-  deleteStoryBranch, deleteStoryPoint, normalizeStoryline, pointAndBranches, storyGeom, storylineEmpty, unlinkStoryCard,
+  deleteStoryAnchor, deleteStoryBranch, deleteStoryEnd, deleteStoryPoint, normalizeStoryline, pointAndBranches, storyGeom, storylineEmpty, unlinkStoryCard,
   type StoryGeom, type StorylineData,
 } from '../../utils/storyline'
 
@@ -72,8 +74,10 @@ const C_RING = 'rgba(120,180,255,0.9)'
 const RING_W = 2.5
 
 interface StoryUi {
-  /** The selected point. */
+  /** The selected point (or anchor). */
   sel: { node: string; point: string } | null
+  /** The selected end handle of a line. */
+  selEnd: { node: string; line: string; which: 'start' | 'end' } | null
   /** The glowing tick under the mouse. */
   hover: { node: string; line: string; t: number } | null
   /** The point whose title is being typed. */
@@ -82,7 +86,7 @@ interface StoryUi {
 }
 
 const useStoryUi = create<StoryUi>(set => ({
-  sel: null, hover: null, editing: null,
+  sel: null, selEnd: null, hover: null, editing: null,
   set: patch => set(patch),
 }))
 
@@ -139,14 +143,38 @@ function selectStoryline(id: string) {
   const v3 = useViewport3DStore.getState()
   if (v3.selectedIds.length > 0) v3.setViewerSelection([])
   useFreeNodeStore.getState().setFreeSelection([id])
-  useStoryUi.getState().set({ sel: null })
+  useStoryUi.getState().set({ sel: null, selEnd: null })
 }
 
 /** A point selected: the whole storyline is not. */
 function selectStoryPoint(id: string, point: string, editing = false) {
   const fs = useFreeNodeStore.getState()
   if (fs.selectedIds.includes(id)) fs.setFreeSelection(fs.selectedIds.filter(x => x !== id))
-  useStoryUi.getState().set({ sel: { node: id, point }, ...(editing ? { editing: { node: id, point } } : {}) })
+  useStoryUi.getState().set({ sel: { node: id, point }, selEnd: null, ...(editing ? { editing: { node: id, point } } : {}) })
+}
+
+/** A line's end handle selected. */
+function selectStoryEnd(id: string, line: string, which: 'start' | 'end') {
+  const fs = useFreeNodeStore.getState()
+  if (fs.selectedIds.includes(id)) fs.setFreeSelection(fs.selectedIds.filter(x => x !== id))
+  useStoryUi.getState().set({ sel: null, selEnd: { node: id, line, which } })
+}
+
+/** Delete the point, anchor or end handle selected. */
+function deleteStorySelected(node: string, point: string | null, end: { line: string; which: 'start' | 'end' } | null) {
+  editStoryline(node, d => {
+    if (end) return deleteStoryEnd(d, end.line, end.which)
+    const p = d.points.find(q => q.id === point)
+    if (!p) return d
+    return p.anchor ? deleteStoryAnchor(d, p.id) : deleteStoryPoint(d, p.id)
+  })
+}
+
+/** Which way a label sits off the spot it hangs from, given the way out
+ *  (dx, dy): beyond it, so it never covers the point it belongs to. */
+function sideFor(dx: number, dy: number): Side {
+  if (Math.abs(dy) >= Math.abs(dx)) return dy > 0 ? 'below' : 'above'
+  return dx > 0 ? 'right' : 'left'
 }
 
 /** The cards linked to these points, with the cards stacked in their decks,
@@ -205,22 +233,23 @@ function useStoryKeys() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const ui = useStoryUi.getState()
-      if (!ui.sel || ui.editing) return
+      if ((!ui.sel && !ui.selEnd) || ui.editing) return
       const tag = (document.activeElement as HTMLElement | null)?.tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA') return
-      if (e.key === 'Escape') { ui.set({ sel: null }); return }
+      if (e.key === 'Escape') { ui.set({ sel: null, selEnd: null }); return }
       if (e.key !== 'Delete' && e.key !== 'Backspace') return
       // Ours alone: the canvas's own Delete would also take selected cards.
       e.preventDefault()
       e.stopImmediatePropagation()
-      const { node, point } = ui.sel
-      ui.set({ sel: null, hover: null })
-      editStoryline(node, d => deleteStoryPoint(d, point))
+      const node = (ui.sel ?? ui.selEnd)!.node
+      const point = ui.sel?.point ?? null, end = ui.selEnd
+      ui.set({ sel: null, selEnd: null, hover: null })
+      deleteStorySelected(node, point, end)
     }
     const onDown = (e: PointerEvent) => {
       if ((e.target as Element | null)?.closest?.('[data-storyline]')) return
       const ui = useStoryUi.getState()
-      if (ui.sel) ui.set({ sel: null })
+      if (ui.sel || ui.selEnd) ui.set({ sel: null, selEnd: null })
     }
     window.addEventListener('keydown', onKey, true)
     window.addEventListener('pointerdown', onDown, true)
@@ -244,13 +273,14 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
   const node = useFreeNodeStore(s => s.nodes[id]) as FreeNodeData | undefined
   const zoom = useCanvasStore(s => s.zoom)
   const sel = useStoryUi(s => (s.sel?.node === id ? s.sel.point : null))
+  const selEnd = useStoryUi(s => (s.selEnd?.node === id ? `${s.selEnd.which}:${s.selEnd.line}` : null))
   const hover = useStoryUi(s => (s.hover?.node === id ? s.hover : null))
   const editing = useStoryUi(s => (s.editing?.node === id ? s.editing.point : null))
   const linking = useLinkDragStore(s => s.active && s.source?.kind === 'group')
   const busy = useRef(false)
   const lastClick = useRef<{ point: string; at: number } | null>(null)
   const picked = useFreeNodeStore(s => s.selectedIds.includes(id))
-  const [menu, setMenu] = useState<{ x: number; y: number; point?: string; line?: string } | null>(null)
+  const [menu, setMenu] = useState<{ x: number; y: number; point?: string; line?: string; end?: 'start' | 'end' } | null>(null)
 
   const d = node?.storyline
   if (!node || !d) return null
@@ -321,7 +351,7 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
       if (role === 'start' && lineId) return { kind: 'start', line: lineId }
       if (role === 'end' && lineId) return pointsOn(lineId).length ? { kind: 'end', line: lineId } : { kind: 'grow', line: lineId }
       if (role === 'line' || role === 'grab') return { kind: 'move', cards: cardOrigins(d0, new Set(d0.points.map(p => p.id))) }
-      if ((role === 'point' || role === 'title') && pointId && lineId) {
+      if ((role === 'point' || role === 'title' || role === 'anchor') && pointId && lineId) {
         const lg = at(lineId)
         if (!lg) return null
         if (lg.len < 1e-6) return { kind: 'grow', line: lineId }
@@ -461,12 +491,21 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
         selectStoryline(id)
         return
       }
-      if ((role === 'point' || role === 'title') && pointId) {
+      if ((role === 'point' || role === 'title' || role === 'anchor') && pointId) {
         const last = lastClick.current
         const now = performance.now()
         const again = role === 'title' || (last?.point === pointId && now - last.at < DOUBLE_MS)
         lastClick.current = { point: pointId, at: now }
+        // An anchor named becomes a point again.
+        if (again && role === 'anchor') {
+          useUndoCoordinator.getState().checkpoint()
+          writeStoryline(id, x0, y0, { ...d0, points: d0.points.map(p => (p.id === pointId ? { ...p, anchor: undefined } : p)) })
+        }
         selectStoryPoint(id, pointId, again)
+        return
+      }
+      if ((role === 'start' || role === 'end') && lineId) {
+        selectStoryEnd(id, lineId, role)
         return
       }
       if (role === 'tip-up' || role === 'tip-down') {
@@ -494,13 +533,15 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
         e.preventDefault(); e.stopPropagation()
         const point = el?.dataset.point
         const line = el?.dataset.line ?? (point ? d.points.find(p => p.id === point)?.line : undefined)
+        const end = role === 'start' || role === 'end' ? role : undefined
         // What the menu acts on is selected first, as on tiles and cards.
         if (point) selectStoryPoint(id, point)
+        else if (end && line) selectStoryEnd(id, line, end)
         else selectStoryline(id)
-        setMenu({ x: e.clientX, y: e.clientY, point, line: role === 'grab' ? undefined : line })
+        setMenu({ x: e.clientX, y: e.clientY, point, line: role === 'grab' ? undefined : line, end })
       }}
     >
-      <StorySvg id={id} d={d} g={g} w={node.width} h={node.height} px={px} sel={sel} hover={hover} linking={linking} picked={picked} />
+      <StorySvg id={id} d={d} g={g} w={node.width} h={node.height} px={px} sel={sel} selEnd={selEnd} hover={hover} linking={linking} picked={picked} />
       {(() => {
         const root = d.lines.find(l => !l.from)
         const lg = root && g.lines[root.id]
@@ -516,15 +557,16 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
         return (
           <StoryTitle
             key={p.id} nodeId={id} pointId={p.id} title={p.title} editing={isEditing}
-            x={pg.x + pg.nx * reach} y={pg.y + pg.ny * reach} px={px} selected={sel === p.id}
+            x={pg.x + pg.nx * reach} y={pg.y + pg.ny * reach} side={sideFor(pg.nx, pg.ny)} px={px} selected={sel === p.id}
           />
         )
       })}
       {sel && g.points[sel] && (() => {
         const pg = g.points[sel]
         const p = d.points.find(q => q.id === sel)!
+        if (p.anchor) return null
         const reach = Math.max(p.down, TICK * px) + 10 * px
-        return <StoryOptions nodeId={id} snap={d.snap !== false} x={pg.x - pg.nx * reach} y={pg.y - pg.ny * reach} px={px} />
+        return <StoryOptions nodeId={id} snap={d.snap !== false} x={pg.x - pg.nx * reach} y={pg.y - pg.ny * reach} side={sideFor(-pg.nx, -pg.ny)} px={px} />
       })()}
     </div>
   )
@@ -532,8 +574,8 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
 
 const StorySvg: React.FC<{
   id: string; d: StorylineData; g: StoryGeom; w: number; h: number; px: number
-  sel: string | null; hover: { line: string; t: number } | null; linking: boolean; picked: boolean
-}> = ({ id, d, g, w, h, px, sel, hover, linking, picked }) => {
+  sel: string | null; selEnd: string | null; hover: { line: string; t: number } | null; linking: boolean; picked: boolean
+}> = ({ id, d, g, w, h, px, sel, selEnd, hover, linking, picked }) => {
   // Room round the box for handles and ticks, which reach past the lines.
   const M = 60 * px + Math.max(0, ...d.points.map(p => Math.max(p.up, p.down)))
   const hl = hover && g.lines[hover.line]
@@ -577,14 +619,25 @@ const StorySvg: React.FC<{
           const endFree = !on.some(p => lg.len - p.t < DOT_HIT * px)
           return (
             <g key={l.id}>
-              {endFree && <Cap x={ex} y={ey} px={px} role="end" line={l.id} />}
-              {startFree && <Cap x={lg.sx} y={lg.sy} px={px} role="start" line={l.id} />}
+              {endFree && <Cap x={ex} y={ey} px={px} role="end" line={l.id} selected={selEnd === `end:${l.id}`} />}
+              {startFree && <Cap x={lg.sx} y={lg.sy} px={px} role="start" line={l.id} selected={selEnd === `start:${l.id}`} />}
             </g>
           )
         })}
         {d.points.map(p => {
           const pg = g.points[p.id]
-          if (!pg || p.anchor) return null
+          if (!pg) return null
+          if (p.anchor) {
+            // Where a deleted point still holds a branch: a ring on the line,
+            // selectable and deletable as a point is.
+            return (
+              <g key={p.id}>
+                <circle cx={pg.x} cy={pg.y} r={CAP_R * px} fill="#12131f" stroke={sel === p.id ? C_SEL : C_LINE} strokeWidth={1.5 * px} pointerEvents="none" />
+                <circle cx={pg.x} cy={pg.y} r={CAP_HIT * px} fill="transparent" pointerEvents="all" style={{ cursor: 'grab' }}
+                        data-role="anchor" data-point={p.id} />
+              </g>
+            )
+          }
           const up = Math.max(p.up, TICK * px), down = Math.max(p.down, TICK * px)
           const selected = sel === p.id
           const color = selected ? C_SEL : C_POINT
@@ -617,11 +670,11 @@ const StorySvg: React.FC<{
   )
 }
 
-const Cap: React.FC<{ x: number; y: number; px: number; role: 'start' | 'end'; line: string }> = ({ x, y, px, role, line }) => {
+const Cap: React.FC<{ x: number; y: number; px: number; role: 'start' | 'end'; line: string; selected: boolean }> = ({ x, y, px, role, line, selected }) => {
   const [hot, setHot] = useState(false)
   return (
     <g>
-      <circle cx={x} cy={y} r={CAP_R * px} fill={hot ? C_GLOW : C_LINE} pointerEvents="none" />
+      <circle cx={x} cy={y} r={CAP_R * px} fill={selected ? C_SEL : hot ? C_GLOW : C_LINE} pointerEvents="none" />
       <circle
         cx={x} cy={y} r={CAP_HIT * px} fill="transparent" pointerEvents="all" style={{ cursor: 'grab' }}
         data-role={role} data-line={line}
@@ -660,20 +713,37 @@ const StoryGrab: React.FC<{ x: number; y: number; px: number; picked: boolean }>
  *  as a tile's menu (FreeNode). Each action is one undo step. */
 const StoryMenu: React.FC<{
   id: string; d: StorylineData
-  at: { x: number; y: number; point?: string; line?: string }
+  at: { x: number; y: number; point?: string; line?: string; end?: 'start' | 'end' }
   onClose: () => void
 }> = ({ id, d, at, onClose }) => {
   const groups = useBoardsStore(s => s.groups)
   const point = at.point ? d.points.find(p => p.id === at.point) : undefined
   const line = at.line ? d.lines.find(l => l.id === at.line) : undefined
   const items: { label: string; icon: string; danger?: boolean; action: () => void }[] = []
-  if (point) {
+  // Branches growing from the point: each can go from here.
+  const grown = point ? d.lines.filter(l => l.from === point.id) : []
+  const fromHere = () => grown.forEach((l, k) => items.push({
+    label: grown.length > 1 ? `Delete branch from here ${k + 1}` : 'Delete branch from here', icon: '🗑️', danger: true,
+    action: () => editStoryline(id, x => deleteStoryBranch(x, l.id)),
+  }))
+  if (point?.anchor) {
+    // It goes only with nothing on what grows from it (deleteStoryAnchor).
+    if (!grown.some(l => d.points.some(p => p.line === l.id))) {
+      items.push({ label: 'Delete point', icon: '🗑️', danger: true, action: () => editStoryline(id, x => deleteStoryAnchor(x, point.id)) })
+    }
+    fromHere()
+  } else if (point) {
     for (const gid of point.cards ?? []) {
       const g = groups.find(x => x.id === gid)
       const name = g?.cardHeaderText || g?.name || 'card'
       items.push({ label: `Unlink ${name}`, icon: '⛓️', action: () => editStoryline(id, x => unlinkStoryCard(x, point.id, gid)) })
     }
     items.push({ label: 'Delete point', icon: '🗑️', danger: true, action: () => editStoryline(id, x => deleteStoryPoint(x, point.id)) })
+    fromHere()
+  }
+  if (at.end && line) {
+    const end = at.end
+    items.push({ label: 'Delete end', icon: '🗑️', danger: true, action: () => editStoryline(id, x => deleteStoryEnd(x, line.id, end)) })
   }
   if (line?.from) {
     items.push({ label: 'Delete branch', icon: '🗑️', danger: true, action: () => editStoryline(id, x => deleteStoryBranch(x, line.id)) })
@@ -699,7 +769,7 @@ const StoryMenu: React.FC<{
         }}
       >
         <div style={{ padding: '4px 12px 6px', borderBottom: '1px solid rgba(255,255,255,0.07)', marginBottom: 4 }}>
-          <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: 11 }}>{point ? point.title || 'Point' : line?.from ? 'Branch' : 'Storyline'}</span>
+          <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: 11 }}>{point ? point.title || 'Point' : at.end ? 'Line end' : line?.from ? 'Branch' : 'Storyline'}</span>
         </div>
         {items.map(item => (
           <button
@@ -725,19 +795,25 @@ const StoryMenu: React.FC<{
   )
 }
 
+type Side = 'above' | 'below' | 'left' | 'right'
+const SIDE_SHIFT: Record<Side, string> = {
+  above: 'translate(-50%, -100%)', below: 'translate(-50%, 0)',
+  left: 'translate(-100%, -50%)', right: 'translate(0, -50%)',
+}
+
 /** Labels at a constant size on screen: laid out at natural size and scaled
- *  down by the zoom, their bottom (or top) middle at (`x`, `y`). */
-const atScreenSize = (x: number, y: number, px: number, anchor: 'bottom' | 'top'): React.CSSProperties => ({
+ *  down by the zoom, lying on `side` of (`x`, `y`), centred along it. */
+const atScreenSize = (x: number, y: number, px: number, side: Side): React.CSSProperties => ({
   position: 'absolute', left: x, top: y,
   transformOrigin: '0 0',
-  transform: `scale(${px}) translate(-50%, ${anchor === 'bottom' ? '-100%' : '0'})`,
+  transform: `scale(${px}) ${SIDE_SHIFT[side]}`,
   whiteSpace: 'nowrap',
 })
 
 const StoryTitle: React.FC<{
   nodeId: string; pointId: string; title: string; editing: boolean
-  x: number; y: number; px: number; selected: boolean
-}> = ({ nodeId, pointId, title, editing, x, y, px, selected }) => {
+  x: number; y: number; side: Side; px: number; selected: boolean
+}> = ({ nodeId, pointId, title, editing, x, y, side, px, selected }) => {
   const [text, setText] = useState(title)
   const done = useRef(false)
   useEffect(() => { if (editing) { setText(title); done.current = false } }, [editing, title])
@@ -759,7 +835,7 @@ const StoryTitle: React.FC<{
   }
   if (editing) {
     return (
-      <div style={atScreenSize(x, y, px, 'bottom')} data-role="ui">
+      <div style={atScreenSize(x, y, px, side)} data-role="ui">
         <input
           autoFocus value={text} maxLength={80} placeholder="Title"
           onChange={e => setText(e.target.value)}
@@ -781,7 +857,7 @@ const StoryTitle: React.FC<{
   return (
     <div
       data-role="title" data-point={pointId}
-      style={{ ...atScreenSize(x, y, px, 'bottom'), ...font, cursor: 'text', userSelect: 'none', padding: '0 3px',
+      style={{ ...atScreenSize(x, y, px, side), ...font, cursor: 'text', userSelect: 'none', padding: '0 3px',
                color: selected ? C_SEL : '#fff' }}
     >{title}</div>
   )
@@ -789,10 +865,10 @@ const StoryTitle: React.FC<{
 
 /** The selected storyline's options, under its selected point. On/off
  *  switches, each with a label that never changes. */
-const StoryOptions: React.FC<{ nodeId: string; snap: boolean; x: number; y: number; px: number }> = ({ nodeId, snap, x, y, px }) => (
+const StoryOptions: React.FC<{ nodeId: string; snap: boolean; x: number; y: number; side: Side; px: number }> = ({ nodeId, snap, x, y, side, px }) => (
   <div
     data-role="ui"
-    style={{ ...atScreenSize(x, y, px, 'top'), display: 'flex', gap: 4, padding: 3, background: 'rgba(14,15,26,0.92)',
+    style={{ ...atScreenSize(x, y, px, side), display: 'flex', gap: 4, padding: 3, background: 'rgba(14,15,26,0.92)',
              border: '1px solid rgba(255,255,255,0.12)', borderRadius: 6 }}
     onPointerDown={e => e.stopPropagation()}
   >
