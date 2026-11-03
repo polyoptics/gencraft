@@ -21,6 +21,7 @@ import { flushSync } from 'react-dom'
 import {
   useTiltStore, useModelScaleStore, isTilted, offFlat, standTilt, turntableShare, unprojectTilt, TILT_SNAP, TILT_FAR, TILT_PERSPECTIVE, DEFAULT_LIGHT,
 } from '../../store/tiltStore'
+import { peekAt, usePeek } from '../../utils/peek'
 import { useCanvasStore, groupBounds, MIN_ZOOM, MAX_ZOOM } from '../../store/canvasStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useViewport3DStore } from '../../store/viewport3dStore'
@@ -117,8 +118,16 @@ function useAltTiltGesture() {
       altUsed = true
       swallowClick = true
       if (e.button === 2) { dolly(e, host); swallowMenu = true; return }
-      const { tilt: t0 } = useTiltStore.getState()
+      const { tilt: t0, yaw: yaw0 } = useTiltStore.getState()
       let turned = 0
+      // A sideways swing is a peek (utils/peek): it only starts over
+      // something that can be peeked into, and that is what it turns about.
+      // Once swung, the swing can always be brought back, from anywhere.
+      const peek = peekAt(target, host)
+      if (peek) usePeek.setState({ target: peek.target })
+      const swung = Math.abs(yaw0) > 0.5
+      if (!peek && !swung) useTiltStore.getState().setPivot(null)
+      let pivoted = false
       const x0 = e.clientX, y0 = e.clientY
       // Tipping back from flat with something selected makes it the pivot:
       // the view glides over to centre it while the plane tilts, wherever
@@ -142,7 +151,10 @@ function useAltTiltGesture() {
         const d = (turnPx - turned) * DRAG_DEG, share = turntableShare(tilt)
         turned = turnPx
         const s = useTiltStore.getState()
-        s.setView(tilt, s.spin - d * share, s.yaw + d * (1 - share))
+        // The pivot is taken where the twist starts, so a plain tip back
+        // still turns about the middle of the screen.
+        if (peek && d && !pivoted) { pivoted = true; s.setPivot(peek.g) }
+        s.setView(tilt, s.spin - d * share, peek || swung ? s.yaw + d * (1 - share) : s.yaw)
         if (cTo && !glideStarted && useTiltStore.getState().tilt > 0.5) {
           glideStarted = true
           glideTo(cFrom, cTo, W, H)

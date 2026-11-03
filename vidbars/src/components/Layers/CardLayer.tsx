@@ -56,6 +56,7 @@ import { useMenuClamp } from '../../hooks/useMenuClamp'
 import { DrawableSurface } from '../Annotation/DrawableSurface'
 import { PenButton } from '../Annotation/PenButton'
 import { useSeedHoverFromCursor } from '../../utils/pointerTracker'
+import { deckAreas } from '../../utils/peek'
 import { useContextSheetStore } from '../../store/contextSheetStore'
 
 const BOARD_PADDING_X = 20
@@ -1450,6 +1451,12 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
   // Effects on that card show on the deck's face too — hooked here, above
   // the early return, so the hook order never changes.
   const deckFx = useCardFxFace(deckFace.card.id)
+  // Where this deck is, for an Alt-twist peek into it (utils/peek).
+  if (screenWidth > 0) deckAreas.set(anchorGroup.id, {
+    x: (screenLeft - pan.x) / zoom, y: (screenTop - pan.y) / zoom, width: screenWidth / zoom, height: screenHeight / zoom,
+    memberIds: [anchorGroup.id, ...deck.memberIds.filter(id => id !== anchorGroup.id)],
+  })
+  useEffect(() => () => { deckAreas.delete(anchorGroup.id) }, [anchorGroup.id])
 
   if (screenWidth === 0) return null
 

@@ -24,6 +24,8 @@ import { EFFECTS, knownKind } from '../../utils/fx/effects'
 import { LIVE_SIDE } from '../../hooks/useFxStrips'
 import { toggleEffectOff, toggleEffectSolo } from '../../utils/fx/effectToggles'
 import { FilmMixerLayers } from '../FilmMixer/FilmMixerLayers'
+import { usePeek } from '../../utils/peek'
+import { DeckPeek } from './DeckPeek'
 
 type EffectItem = Extract<ChainItem, { kind: 'effect' }>
 
@@ -380,8 +382,9 @@ const StripLayers: React.FC<{ railId: string; rect: { x: number; y: number; widt
   )
 }
 
-/** Under the tilted world: every docked strip's layers, drawn with the same
- *  camera. Flat it shows nothing and costs nothing. */
+/** Under the tilted world: the layers of what the view is peeking into
+ *  (utils/peek), drawn with the same camera. Flat it shows nothing and costs
+ *  nothing. */
 export const StripLayersStage: React.FC = () => {
   const stage = useTiltStage()
   const swung = useTiltStore(s => Math.abs(s.yaw) > 0.5 || s.tilt < -0.5)
@@ -391,17 +394,19 @@ export const StripLayersStage: React.FC = () => {
   const windows = useViewport3DStore(s => s.windows)
   const active = useRailUiStore(s => s.active)
   const layersOn = useStripLayers(s => s.on)
-  const docks = swung && layersOn ? railViewerDocks(nodes, windows, zoom) : null
+  const peek = usePeek(s => s.target)
+  const docks = swung && layersOn && peek?.kind === 'viewer' ? railViewerDocks(nodes, windows, zoom) : null
   return (
     <div ref={stage} data-tilt-layers="" style={{ position: 'absolute', inset: 0, transformOrigin: '50% 50%', transformStyle: 'preserve-3d', pointerEvents: 'none' }}>
-      {docks && [...docks].map(([winId, docked]) => {
+      {docks && [...docks].filter(([winId]) => winId === peek?.id).map(([winId, docked]) => {
         const railId = viewerRail(docked, active)
         const w = windows[winId]
         if (!railId || !w) return null
         const a = pictureAreas.get(winId) ?? { x: 0, y: 0, width: w.width, height: w.height }
         return <StripLayers key={winId} railId={railId} rect={{ x: pan.x + (w.x + a.x) * zoom, y: pan.y + (w.y + a.y) * zoom, width: a.width * zoom, height: a.height * zoom }} />
       })}
-      {swung && <FilmMixerLayers />}
+      {swung && peek?.kind === 'mixer' && <FilmMixerLayers />}
+      {peek?.kind === 'deck' && <DeckPeek anchorId={peek.id} />}
     </div>
   )
 }

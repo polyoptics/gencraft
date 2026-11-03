@@ -77,6 +77,11 @@ interface TiltStore {
    *  screen px: the whole tilted view slides, nothing on it moves. */
   shiftX: number
   shiftY: number
+  /** The flat point (px from the host centre) the view turns about, held
+   *  where it is on screen: what an Alt-twist peek started over
+   *  (utils/peek). Null: the middle of the screen. */
+  pivot: { x: number; y: number } | null
+  setPivot: (pivot: { x: number; y: number } | null) => void
   /** How models are drawn: see three/modelLook.ts. */
   texture: boolean
   shade: ModelShade
@@ -121,6 +126,8 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
   yaw: 0,
   shiftX: 0,
   shiftY: 0,
+  pivot: null,
+  setPivot: pivot => set({ pivot }),
   texture: true,
   shade: DEFAULT_LOOK.shade,
   wire: false,
@@ -134,9 +141,9 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
   setConsole: on => { set({ console: on }); try { localStorage.setItem(CONSOLE_KEY, on ? '1' : '0') } catch { /* private window */ } },
   setView: (tilt, spin, yaw = get().yaw) => {
     if (flattenRaf !== null) { cancelAnimationFrame(flattenRaf); flattenRaf = null }
-    // Orbit about what is in the middle of the screen: the ground point
-    // there stays there as the view turns or tips.
-    const g = centreGround(get())
+    // Orbit about what is in the middle of the screen (or the pivot): the
+    // ground point there stays there as the view turns or tips.
+    const keep = keeping(get())
     tilt = Math.max(-TILT_UP, Math.min(TILT_MAX, tilt))
     // Tipped back any swing eases out: with the ground standing under models,
     // a swing would lean it, which reads as the camera rolling.
@@ -144,7 +151,7 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
     yaw = Math.max(-room, Math.min(room, yaw))
     const turn = ((spin % 360) + 540) % 360 - 180, turnRoom = spinRoom(tilt)
     spin = Math.max(-turnRoom, Math.min(turnRoom, turn))
-    set({ tilt, spin, yaw, ...(g ? shiftKeeping(g, tilt, spin, yaw) : {}) })
+    set({ tilt, spin, yaw, ...(keep ? shiftKeeping(keep.g, tilt, spin, yaw, keep.at) : {}) })
   },
   setShift: (shiftX, shiftY) => set({ shiftX, shiftY }),
   setTexture: texture => set({ texture }),
@@ -161,7 +168,8 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
     const s0 = ((s0raw % 360) + 540) % 360 - 180
     // What is in the middle of the screen stays there all the way down, so
     // the flat view lands exactly where you were looking (Brian 2026-10-30).
-    const g = centreGround(get())
+    // With a pivot, it stays put instead, so a peek lands back exactly.
+    const keep = keeping(get())
     const start = performance.now()
     const tick = () => {
       const t = Math.min(1, (performance.now() - start) / 320)
@@ -170,7 +178,8 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
       // which TiltLayer then hands to the canvas pan.
       const tilt = t < 1 ? t0 * (1 - k) : 0, spin = t < 1 ? s0 * (1 - k) : 0, yaw = t < 1 ? y0 * (1 - k) : 0
       if (t >= 1) flattenRaf = null
-      set({ tilt, spin, yaw, ...(g ? shiftKeeping(g, tilt, spin, yaw) : {}) })
+      set({ tilt, spin, yaw, ...(keep ? shiftKeeping(keep.g, tilt, spin, yaw, keep.at) : {}) })
+      if (t >= 1) set({ pivot: null })
       if (t < 1) flattenRaf = requestAnimationFrame(tick)
     }
     flattenRaf = requestAnimationFrame(tick)
@@ -194,15 +203,36 @@ export const isTilted = (s: { tilt: number; yaw: number }) => offFlat(s) > 0.01
 function centreGround(s: { tilt: number; spin: number; yaw: number; shiftX: number; shiftY: number }) {
   return unprojectTilt(0, 0, s.tilt, s.spin, s.shiftX, s.shiftY, 0, Infinity, s.yaw)
 }
-/** The camera shift that puts ground point `g` at the middle of the screen
- *  for this tilt and spin — unprojectTilt run backwards: the point sits at
- *  q = Rx(tilt)·Ry(yaw)·Rz(spin)·g, and the middle's ray is the line x = -shiftX,
- *  y = -shiftY. Flat, it is just -g. */
-function shiftKeeping(g: { x: number; y: number }, tiltDeg: number, spinDeg: number, yawDeg: number) {
+/** Ground point `g` turned into view space: q = Rx(tilt)·Ry(yaw)·Rz(spin)·g. */
+function viewPoint(g: { x: number; y: number }, tiltDeg: number, spinDeg: number, yawDeg: number) {
   const t = tiltDeg * Math.PI / 180, s = spinDeg * Math.PI / 180, b = yawDeg * Math.PI / 180
   const x1 = g.x * Math.cos(s) - g.y * Math.sin(s)
   const y1 = g.x * Math.sin(s) + g.y * Math.cos(s)
-  return { shiftX: -x1 * Math.cos(b), shiftY: -(y1 * Math.cos(t) + x1 * Math.sin(b) * Math.sin(t)) }
+  return { x: x1 * Math.cos(b), y: y1 * Math.cos(t) + x1 * Math.sin(b) * Math.sin(t), z: y1 * Math.sin(t) - x1 * Math.sin(b) * Math.cos(t) }
+}
+/** The camera shift that puts ground point `g` at screen point `at` (px from
+ *  the middle; default the middle) for this tilt and spin — unprojectTilt
+ *  run backwards: the point at q is drawn at (q + shift)·P/(P - q.z). Flat,
+ *  it is just at - g. */
+function shiftKeeping(g: { x: number; y: number }, tiltDeg: number, spinDeg: number, yawDeg: number, at = { x: 0, y: 0 }) {
+  const q = viewPoint(g, tiltDeg, spinDeg, yawDeg)
+  const k = (TILT_PERSPECTIVE - q.z) / TILT_PERSPECTIVE
+  return { shiftX: at.x * k - q.x, shiftY: at.y * k - q.y }
+}
+/** Where ground point `g` is drawn now, px from the screen's middle; null
+ *  when it is behind the eye. */
+function screenOf(g: { x: number; y: number }, s: { tilt: number; spin: number; yaw: number; shiftX: number; shiftY: number }) {
+  const q = viewPoint(g, s.tilt, s.spin, s.yaw)
+  const k = (TILT_PERSPECTIVE - q.z) / TILT_PERSPECTIVE
+  return k > 0.05 ? { x: (q.x + s.shiftX) / k, y: (q.y + s.shiftY) / k } : null
+}
+/** What a turn of the view keeps still: the pivot where it is drawn, else
+ *  the ground point at the middle of the screen. */
+function keeping(s: { tilt: number; spin: number; yaw: number; shiftX: number; shiftY: number; pivot: { x: number; y: number } | null }) {
+  const at = s.pivot && screenOf(s.pivot, s)
+  if (s.pivot && at) return { g: s.pivot, at }
+  const g = centreGround(s)
+  return g && { g, at: { x: 0, y: 0 } }
 }
 
 /** The CSS transform for a tilted layer whose box is the canvas host and
