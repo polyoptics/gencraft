@@ -1,66 +1,41 @@
-// ─── Storyline: points on lines that branch ───
+// ─── Storyline: dots joined by straight lines ───
 //
-// A storyline starts as one point. Dragging out from it grows its line;
-// clicking on a line puts a point there; dragging from a point off to the
-// side grows a new line from it (a branch), and branches branch the same
-// way — story branches, family trees, a faction's leader to followers.
+// A storyline is dots, each at a free position, joined by straight lines —
+// a tree of polylines (story branches, family trees, a faction's leader to
+// its followers). Nothing else: a dot is dragged anywhere and its lines
+// follow; a line is split by putting a dot on it; a new dot is grown out of
+// a dot's ring (from an end that extends the line, from a middle dot it
+// starts a branch); two dots let go on each other become one.
 //
 // Stored on its free node (FreeNodeData.storyline), RELATIVE to the node's
-// x/y, which this module keeps the bounding box of the lines (normalized),
+// x/y, which this module keeps the bounding box of the dots (normalized),
 // so everything that moves or frames a node by its box (cabinet projects,
-// F to frame) carries a storyline whole.
+// F to frame) carries a storyline whole. The first dot is its start (the
+// root): the grab handle sits by it, "Delete branch" reads onward from it.
 //
-// A line is a straight segment. The first line is the ROOT: its start is
-// stored (x, y). Every other line starts at the point it grew from (`from`)
-// and goes along (dx, dy) from there, so moving that point takes the branch
-// with it. A point sits `t` canvas units along its line from the start, with
-// a stem `up` / `down` units across it each way.
-//
-// Cards linked to a point (`cards`, group ids) move with it when it is
-// dragged. A link is made by dropping a card's link "+" on the point (the
+// Cards linked to a dot (`cards`, group ids) move with it when it is
+// dragged. A link is made by dropping a card's link "+" on the dot (the
 // target owns the reference, as everywhere else — see LinkDragOverlay).
-//
-// Every dot is a point: each line's end has one, and so has the root's start
-// (canonicalStoryline keeps it so, and turns older storylines' held spots and
-// bare ends into points as they load).
 
-export interface StoryLine {
+export interface StoryDot {
   id: string
-  /** The point this line grows from; null on the root line. */
-  from: string | null
-  /** Root line only: its start, relative to the node's x/y. */
+  /** Relative to the node's x/y, canvas units. */
   x: number
   y: number
-  /** From its start to its end, canvas units. */
-  dx: number
-  dy: number
+  title: string
+  /** Linked cards (group ids): they move with the dot. */
+  cards?: string[]
 }
 
-export interface StoryPoint {
-  id: string
-  line: string
-  /** Canvas units along its line from the start. */
-  t: number
-  /** Stem lengths across the line, canvas units: `up` toward the title. */
-  up: number
-  down: number
-  title: string
-  /** Linked cards (group ids): they move with the point. */
-  cards?: string[]
-  /** Cards linked on a stem's tick end: which end each hangs from (its
-   *  tether starts there). A card not listed hangs from the point. */
-  hang?: Record<string, 'up' | 'down'>
-  /** Older storylines: a deleted point still holding a branch. Read as a
-   *  plain point (canonicalStoryline). */
-  anchor?: boolean
-}
+/** A straight line between two dots. */
+export interface StoryEdge { a: string; b: string }
 
 export interface StorylineData {
-  lines: StoryLine[]
-  points: StoryPoint[]
+  dots: StoryDot[]
+  edges: StoryEdge[]
   /** Snap to the dot grid. Absent means on. */
   snap?: boolean
-  /** Its lines', ticks' and points' colour; absent, the default. */
+  /** Its lines' and dots' colour; absent, the default. */
   color?: string
   /** Line thickness, screen px (the same at every zoom); absent, the default. */
   weight?: number
@@ -69,34 +44,17 @@ export interface StorylineData {
   /** The line it stands up about (canvas units, absolute), kept from when
    *  it was flipped: moved afterwards, it moves along and up the wall. */
   wallFoot?: { x: number; y: number; ux: number; uy: number }
+  /** Before dots: lines with points along them (migrateStoryline reads them
+   *  once, and they go). */
+  lines?: LegacyLine[]
+  points?: LegacyPoint[]
 }
+
+interface LegacyLine { id: string; from: string | null; x: number; y: number; dx: number; dy: number }
+interface LegacyPoint { id: string; line: string; t: number; up?: number; down?: number; title?: string; cards?: string[]; hang?: Record<string, 'up' | 'down'> }
 
 export function newStoryline(): StorylineData {
-  const line = crypto.randomUUID()
-  return {
-    lines: [{ id: line, from: null, x: 0, y: 0, dx: 0, dy: 0 }],
-    points: [{ id: crypto.randomUUID(), line, t: 0, up: 0, down: 0, title: '' }],
-  }
-}
-
-export interface LineGeom {
-  /** Start, relative to the node. */
-  sx: number; sy: number
-  /** Unit direction (along +x for a line of no length yet). */
-  ux: number; uy: number
-  len: number
-}
-
-export interface PointGeom {
-  x: number; y: number
-  /** Unit normal toward `up`: screen-up for a lying line, left for a
-   *  standing one, whichever way the line was drawn. */
-  nx: number; ny: number
-}
-
-export interface StoryGeom {
-  lines: Record<string, LineGeom>
-  points: Record<string, PointGeom>
+  return { dots: [{ id: crypto.randomUUID(), x: 0, y: 0, title: '' }], edges: [] }
 }
 
 export function upNormal(ux: number, uy: number): { nx: number; ny: number } {
@@ -105,308 +63,232 @@ export function upNormal(ux: number, uy: number): { nx: number; ny: number } {
   return { nx, ny }
 }
 
-/** Where every line and point is, relative to the node. A line whose `from`
- *  point is gone (or a cycle, which edits never make) is left out. */
-export function storyGeom(d: StorylineData): StoryGeom {
-  const lines: Record<string, LineGeom> = {}
-  const points: Record<string, PointGeom> = {}
-  const lineById = new Map(d.lines.map(l => [l.id, l]))
-  const pointById = new Map(d.points.map(p => [p.id, p]))
-  const busy = new Set<string>()
-  const line = (id: string): LineGeom | null => {
-    if (lines[id]) return lines[id]
-    const l = lineById.get(id)
-    if (!l || busy.has(id)) return null
-    busy.add(id)
+/** Dots this close (canvas units) are one spot. */
+const SAME_SPOT = 0.5
+
+/** A storyline as dots and lines: as stored, or — saved before dots — its
+ *  lines' points made dots, in order along each line and joined there, each
+ *  branch's first dot joined to the point it grew from, a stem drawn out a
+ *  dot of its own off its point (its hung cards on it), points on one spot
+ *  one dot. Every card link is kept. Returns `d` itself when it has dots. */
+export function migrateStoryline(d: StorylineData): StorylineData {
+  if (Array.isArray(d.dots) && !d.lines && !d.points) return d
+  if (Array.isArray(d.dots)) { const { lines: _l, points: _p, ...rest } = d; return rest }
+  const lines = d.lines ?? [], points = d.points ?? []
+  const byLine = new Map<string, LegacyLine>(lines.map(l => [l.id, l]))
+  const at = new Map<string, { x: number; y: number; nx: number; ny: number }>()
+  const geom = (l: LegacyLine, seen = new Set<string>()): { sx: number; sy: number; ux: number; uy: number; len: number } | null => {
+    if (seen.has(l.id)) return null
+    seen.add(l.id)
     let sx = l.x, sy = l.y
     if (l.from) {
-      const p = point(l.from)
+      const p = pointAt(l.from, seen)
       if (!p) return null
       sx = p.x; sy = p.y
     }
     const len = Math.hypot(l.dx, l.dy)
-    const g = { sx, sy, ux: len > 1e-9 ? l.dx / len : 1, uy: len > 1e-9 ? l.dy / len : 0, len }
-    lines[id] = g
-    return g
+    return { sx, sy, ux: len > 1e-9 ? l.dx / len : 1, uy: len > 1e-9 ? l.dy / len : 0, len }
   }
-  const point = (id: string): PointGeom | null => {
-    if (points[id]) return points[id]
-    const p = pointById.get(id)
-    const g = p && line(p.line)
+  const pointAt = (id: string, seen = new Set<string>()): { x: number; y: number; nx: number; ny: number } | null => {
+    const hit = at.get(id)
+    if (hit) return hit
+    const p = points.find(q => q.id === id)
+    const l = p && byLine.get(p.line)
+    const g = l && geom(l, seen)
     if (!p || !g) return null
     const t = Math.max(0, Math.min(g.len, p.t))
-    const pg = { x: g.sx + g.ux * t, y: g.sy + g.uy * t, ...upNormal(g.ux, g.uy) }
-    points[id] = pg
-    return pg
+    const r = { x: g.sx + g.ux * t, y: g.sy + g.uy * t, ...upNormal(g.ux, g.uy) }
+    at.set(id, r)
+    return r
   }
-  for (const l of d.lines) line(l.id)
-  for (const p of d.points) point(p.id)
-  return { lines, points }
-}
-
-/** Lines growing from point `pointId`, and from points on those, all the
- *  way down. */
-export function branchesOf(d: StorylineData, pointId: string): { lines: Set<string>; points: Set<string> } {
-  const lines = new Set<string>(), points = new Set<string>()
-  const queue = [pointId]
-  while (queue.length) {
-    const pid = queue.pop()!
-    for (const l of d.lines) {
-      if (l.from !== pid || lines.has(l.id)) continue
-      lines.add(l.id)
-      for (const p of d.points) if (p.line === l.id && !points.has(p.id)) { points.add(p.id); queue.push(p.id) }
+  const dots: StoryDot[] = []
+  const edges: StoryEdge[] = []
+  const same = new Map<string, string>()   // legacy point id → dot id
+  const root = lines.find(l => !l.from)
+  // Each line after the line its branch grows from, so its first dot can
+  // join the dot it grew from.
+  const order: LegacyLine[] = root ? [root] : []
+  for (let grew = true; grew;) {
+    grew = false
+    for (const l of lines) {
+      if (order.includes(l)) continue
+      const parent = l.from ? points.find(q => q.id === l.from)?.line : undefined
+      if (!l.from || !parent || order.some(o => o.id === parent)) { order.push(l); grew = true }
     }
   }
-  return { lines, points }
-}
-
-/** The point and everything branching from it: what goes when it is
- *  deleted, whose cards move when it does. */
-export function pointAndBranches(d: StorylineData, pointId: string): { lines: Set<string>; points: Set<string> } {
-  const b = branchesOf(d, pointId)
-  b.points.add(pointId)
-  return b
-}
-
-const EPS = 1e-6
-
-/** A plain point at `t` on `line`. */
-const plainPoint = (line: string, t: number): StoryPoint => ({ id: crypto.randomUUID(), line, t, up: 0, down: 0, title: '' })
-
-/** Points this close along one line (canvas units) are one spot. */
-export const SAME_SPOT = 0.5
-
-/** Every dot a point: older held spots read as plain points, older stems
- *  drawn out become branches, points stacked
- *  on one spot of a line become one (their cards and titles kept, branches
- *  re-hung on it), and a point is put at each line's end (and the root's
- *  start) that has none. Returns `d` itself when nothing changes. */
-export function canonicalStoryline(d: StorylineData): StorylineData {
-  let points = d.points.some(p => p.anchor) ? d.points.map(p => (p.anchor ? { ...p, anchor: undefined } : p)) : d.points
-  let lines = d.lines
-  // Stacked points: on one spot of a line, and on a branch's very start
-  // (which is the point it grows from). One keeps the spot — on a branch's
-  // start, the point it grows from; else the first holding something — and
-  // takes the others' cards and titles; branches from them hang on it.
-  const byId = new Map(points.map(p => [p.id, p]))
-  const gone = new Map<string, string>()
-  const merge = (keepId: string, others: StoryPoint[]) => {
-    const keep = byId.get(keepId)!
-    const all = [keep, ...others]
-    const cards = [...new Set(all.flatMap(p => p.cards ?? []))]
-    const hang = Object.assign({}, ...all.map(p => p.hang ?? {}).reverse())
-    byId.set(keepId, {
-      ...keep,
-      hang: Object.keys(hang).length ? hang : undefined,
-      title: [...new Set(all.map(p => p.title).filter(Boolean))].join(' / '),
-      up: Math.max(...all.map(p => p.up)), down: Math.max(...all.map(p => p.down)),
-      ...(cards.length ? { cards } : {}),
-    })
-    for (const p of others) { gone.set(p.id, keepId); byId.delete(p.id) }
-  }
-  for (const l of d.lines) {
-    const on = [...byId.values()].filter(p => p.line === l.id).sort((a, b) => a.t - b.t)
-    for (let i = 0; i < on.length;) {
-      let j = i + 1
-      while (j < on.length && on[j].t - on[i].t < SAME_SPOT) j++
-      if (j - i > 1) {
-        const spot = on.slice(i, j)
-        const keep = spot.find(pointHolds) ?? spot[0]
-        merge(keep.id, spot.filter(p => p !== keep))
+  for (const l of order) {
+    const on = points.filter(p => p.line === l.id).sort((a, b) => a.t - b.t)
+    let prev: string | null = l.from ? same.get(l.from) ?? null : null
+    let prevT = -Infinity
+    for (const p of on) {
+      const pos = pointAt(p.id)
+      if (!pos) continue
+      if (prev && p.t - prevT < SAME_SPOT && dots.find(x => x.id === prev)) {
+        // On the same spot as the one before: one dot, holding both.
+        const dot = dots.find(x => x.id === prev)!
+        dot.cards = [...new Set([...(dot.cards ?? []), ...(p.cards ?? [])])]
+        if (!dot.cards.length) delete dot.cards
+        dot.title = [dot.title, p.title].filter(Boolean).join(' / ')
+        same.set(p.id, prev)
+        continue
       }
-      i = j
-    }
-  }
-  const root = (id: string) => { while (gone.has(id)) id = gone.get(id)!; return id }
-  for (const l of d.lines) {
-    if (!l.from) continue
-    const parent = root(l.from)
-    const start = [...byId.values()].filter(p => p.line === l.id && p.t < SAME_SPOT && p.id !== parent)
-    if (start.length && byId.has(parent)) merge(parent, start)
-  }
-  if (gone.size) {
-    points = [...byId.values()]
-    lines = lines.map(l => (l.from && gone.has(l.from) ? { ...l, from: root(l.from) } : l))
-  }
-  const add: StoryPoint[] = []
-  for (const l of lines) {
-    const len = Math.hypot(l.dx, l.dy)
-    const on = points.filter(p => p.line === l.id)
-    // Within a spot's width, so what is added is never itself a stack (and
-    // a branch shorter than that is no line yet).
-    if (!l.from && !on.some(p => p.t < SAME_SPOT)) add.push(plainPoint(l.id, 0))
-    if (len >= SAME_SPOT && !on.some(p => p.t > len - SAME_SPOT)) add.push(plainPoint(l.id, len))
-  }
-  if (add.length) points = [...points, ...add]
-  // Stems drawn out (before a stem became a branch): each a branch from its
-  // point, straight across its line, its cards hung on that end now on the
-  // branch's end point.
-  if (points.some(p => p.up > 0 || p.down > 0)) {
-    const g = storyGeom({ ...d, points, lines })
-    const grown: StoryLine[] = []
-    const ends: StoryPoint[] = []
-    points = points.map(p => {
-      const pg = g.points[p.id]
-      if (!pg || (p.up <= 0 && p.down <= 0)) return p
-      let cards = p.cards
-      const hang: Record<string, 'up' | 'down'> = { ...(p.hang ?? {}) }
+      const drawn = (side: 'up' | 'down') => (p[side] ?? 0) >= SAME_SPOT
+      const hung = (side: 'up' | 'down') => (p.cards ?? []).filter(c => p.hang?.[c] === side)
+      const own = (p.cards ?? []).filter(c => !p.hang?.[c] || !drawn(p.hang[c]))
+      dots.push({ id: p.id, x: pos.x, y: pos.y, title: p.title ?? '', ...(own.length ? { cards: own } : {}) })
+      same.set(p.id, p.id)
+      if (prev) edges.push({ a: prev, b: p.id })
       for (const side of ['up', 'down'] as const) {
-        const len = side === 'up' ? p.up : p.down
-        if (len < SAME_SPOT) continue
+        const len = p[side] ?? 0
+        if (!drawn(side)) continue
         const k = side === 'up' ? 1 : -1
         const id = crypto.randomUUID()
-        grown.push({ id, from: p.id, x: 0, y: 0, dx: pg.nx * len * k, dy: pg.ny * len * k })
-        const moved = (cards ?? []).filter(c => hang[c] === side)
-        ends.push({ ...plainPoint(id, len), ...(moved.length ? { cards: moved } : {}) })
-        cards = cards?.filter(c => hang[c] !== side)
-        for (const c of moved) delete hang[c]
+        const cards = hung(side)
+        dots.push({ id, x: pos.x + pos.nx * len * k, y: pos.y + pos.ny * len * k, title: '', ...(cards.length ? { cards } : {}) })
+        edges.push({ a: p.id, b: id })
       }
-      return { ...p, up: 0, down: 0, cards: cards?.length ? cards : undefined, hang: Object.keys(hang).length ? hang : undefined }
-    })
-    lines = [...lines, ...grown]
-    points = [...points, ...ends]
-  }
-  return points === d.points && lines === d.lines ? d : { ...d, points, lines }
-}
-
-/** Whether a point holds anything: a title or cards. */
-export function pointHolds(p: StoryPoint): boolean {
-  return !!p.title || (p.cards?.length ?? 0) > 0
-}
-
-/** Delete a point, keeping its line whole: the points either side stay on
- *  it and its linked cards are let go where they stand. One with branches
- *  growing from it stays, emptied, holding them (a plain one cannot go:
- *  Delete branch takes its branches). Deleting the point at a line's end
- *  shortens the line to the next point (on the root line, at its start
- *  too). The last point on a branch takes the branch with it; the root's
- *  last point shortens the root back to where it starts. */
-export function deleteStoryPoint(d: StorylineData, pointId: string): StorylineData {
-  const p = d.points.find(q => q.id === pointId)
-  const l = p && d.lines.find(q => q.id === p.line)
-  if (!p || !l) return d
-  if (d.lines.some(q => q.from === pointId)) {
-    if (!pointHolds(p)) return d
-    return { ...d, points: d.points.map(q => (q.id === pointId ? { ...q, title: '', cards: undefined, hang: undefined } : q)) }
-  }
-  const points = d.points.filter(q => q.id !== pointId)
-  const others = points.filter(q => q.line === l.id)
-  if (!others.length) {
-    if (l.from) return { ...d, points, lines: d.lines.filter(q => q.id !== l.id) }
-    return { ...d, points, lines: d.lines.map(q => (q.id === l.id ? { ...q, dx: 0, dy: 0 } : q)) }
-  }
-  const len = Math.hypot(l.dx, l.dy)
-  if (len < EPS) return { ...d, points }
-  const ux = l.dx / len, uy = l.dy / len
-  if (p.t >= len - EPS) {
-    const to = Math.max(...others.map(q => q.t))
-    return { ...d, points, lines: d.lines.map(q => (q.id === l.id ? { ...q, dx: ux * to, dy: uy * to } : q)) }
-  }
-  if (!l.from && p.t <= EPS) return trimStart({ ...d, points }, l.id, Math.min(...others.map(q => q.t)))
-  return { ...d, points }
-}
-
-/** The root line `lineId` starting `k` further along: its points stay put. */
-function trimStart(d: StorylineData, lineId: string, k: number): StorylineData {
-  const l = d.lines.find(q => q.id === lineId)!
-  const len = Math.hypot(l.dx, l.dy)
-  if (len < EPS) return d
-  const ux = l.dx / len, uy = l.dy / len
-  return {
-    ...d,
-    lines: d.lines.map(q => (q.id === lineId ? { ...q, x: q.x + ux * k, y: q.y + uy * k, dx: ux * (len - k), dy: uy * (len - k) } : q)),
-    points: d.points.map(q => (q.line === lineId ? { ...q, t: q.t - k } : q)),
-  }
-}
-
-/** Slide point `pointId` to `t` along its line (in the line's units as it
- *  stands). A line's end point takes the end with it, and the root's start
- *  point its start: past them the line grows, back from them it shortens,
- *  never past its other points. Any other point stays between its
- *  neighbours. */
-export function slideStoryPoint(d: StorylineData, pointId: string, t: number): StorylineData {
-  const p = d.points.find(q => q.id === pointId)
-  const l = p && d.lines.find(q => q.id === p.line)
-  if (!p || !l) return d
-  const len = Math.hypot(l.dx, l.dy)
-  if (len < EPS) return d
-  const ux = l.dx / len, uy = l.dy / len
-  const others = d.points.filter(q => q.line === l.id && q.id !== pointId)
-  if (!l.from && p.t <= EPS) {
-    const k = Math.min(t, others.length ? Math.min(...others.map(q => q.t)) : len)
-    return {
-      ...d,
-      lines: d.lines.map(q => (q.id === l.id ? { ...q, x: q.x + ux * k, y: q.y + uy * k, dx: ux * (len - k), dy: uy * (len - k) } : q)),
-      points: d.points.map(q => (q.line === l.id && q.id !== pointId ? { ...q, t: q.t - k } : q)),
+      prev = p.id
+      prevT = p.t
     }
   }
-  if (p.t >= len - EPS) {
-    const to = Math.max(t, others.length ? Math.max(...others.map(q => q.t)) : 0)
-    return {
-      ...d,
-      lines: d.lines.map(q => (q.id === l.id ? { ...q, dx: ux * to, dy: uy * to } : q)),
-      points: d.points.map(q => (q.id === pointId ? { ...q, t: to } : q)),
+  if (!dots.length) dots.push({ id: crypto.randomUUID(), x: root?.x ?? 0, y: root?.y ?? 0, title: '' })
+  const { lines: _l, points: _p, ...rest } = d
+  return { ...rest, dots, edges }
+}
+
+/** The dots joined to `id`. */
+export function neighbours(d: StorylineData, id: string): string[] {
+  const out: string[] = []
+  for (const e of d.edges) {
+    if (e.a === id) out.push(e.b)
+    else if (e.b === id) out.push(e.a)
+  }
+  return out
+}
+
+/** Dots that can be reached from the start without passing `cut`. */
+function reached(d: StorylineData, cut?: string): Set<string> {
+  const start = d.dots[0]?.id
+  const seen = new Set<string>()
+  if (!start || start === cut) return seen
+  const queue = [start]
+  seen.add(start)
+  while (queue.length) {
+    const id = queue.pop()!
+    for (const n of neighbours(d, id)) if (n !== cut && !seen.has(n)) { seen.add(n); queue.push(n) }
+  }
+  return seen
+}
+
+/** The neighbour of `id` on the way back to the start (its "before"). */
+function before(d: StorylineData, id: string): string | null {
+  const start = d.dots[0]?.id
+  if (!start || start === id) return null
+  const prev = new Map<string, string>([[start, start]])
+  const queue = [start]
+  while (queue.length) {
+    const cur = queue.shift()!
+    for (const n of neighbours(d, cur)) {
+      if (prev.has(n)) continue
+      prev.set(n, cur)
+      if (n === id) return cur
+      queue.push(n)
     }
   }
-  // Between its neighbours: it can come to one (and merge into it), never
-  // pass it.
-  const lo = Math.max(0, ...others.filter(q => q.t <= p.t).map(q => q.t))
-  const hi = Math.min(len, ...others.filter(q => q.t >= p.t).map(q => q.t))
-  const at = Math.max(lo, Math.min(hi, t))
-  return { ...d, points: d.points.map(q => (q.id === pointId ? { ...q, t: at } : q)) }
+  return null
 }
 
-/** Delete a branch: the line, its points and everything branching from
- *  them. */
-export function deleteStoryBranch(d: StorylineData, lineId: string): StorylineData {
-  const line = d.lines.find(l => l.id === lineId)
-  if (!line?.from) return d
-  const lines = new Set<string>([lineId]), points = new Set<string>()
-  for (const p of d.points) {
-    if (p.line !== lineId) continue
-    const b = pointAndBranches(d, p.id)
-    b.lines.forEach(x => lines.add(x))
-    b.points.forEach(x => points.add(x))
+/** A line split at a new dot (x, y) between dots `a` and `b`. */
+export function insertDot(d: StorylineData, a: string, b: string, x: number, y: number): { d: StorylineData; id: string } {
+  const id = crypto.randomUUID()
+  const edges = d.edges.filter(e => !((e.a === a && e.b === b) || (e.a === b && e.b === a)))
+  return { id, d: { ...d, dots: [...d.dots, { id, x, y, title: '' }], edges: [...edges, { a, b: id }, { a: id, b }] } }
+}
+
+/** A new dot at (x, y) joined to dot `from`: from an end it extends the
+ *  line, from a middle dot it starts a branch. */
+export function growDot(d: StorylineData, from: string, x: number, y: number): { d: StorylineData; id: string } {
+  const id = crypto.randomUUID()
+  return { id, d: { ...d, dots: [...d.dots, { id, x, y, title: '' }], edges: [...d.edges, { a: from, b: id }] } }
+}
+
+/** Delete a dot, its lines closing up: between two lines they join
+ *  directly; an end just goes; where three or more meet, the others join
+ *  the dot before it (on the way back to the start). Its linked cards are
+ *  let go where they stand. */
+export function deleteDot(d: StorylineData, id: string): StorylineData {
+  const ns = neighbours(d, id)
+  const edges = d.edges.filter(e => e.a !== id && e.b !== id)
+  const add: StoryEdge[] = []
+  if (ns.length === 2) add.push({ a: ns[0], b: ns[1] })
+  else if (ns.length > 2) {
+    const hub = before(d, id) ?? ns[0]
+    for (const n of ns) if (n !== hub) add.push({ a: hub, b: n })
   }
-  return { ...d, lines: d.lines.filter(l => !lines.has(l.id)), points: d.points.filter(p => !points.has(p.id)) }
+  const dots = d.dots.filter(x => x.id !== id)
+  return { ...d, dots, edges: dedupe([...edges, ...add]) }
 }
 
-/** Re-attach point `pointId`, with everything growing from it, at `t` on
- *  line `lineId`: it leaves its own line, which stays whole. Not onto its
- *  own line (that is a slide) or anything growing from it. */
-export function reattachStoryPoint(d: StorylineData, pointId: string, lineId: string, t: number): StorylineData {
-  const p = d.points.find(q => q.id === pointId)
-  if (!p || p.line === lineId || branchesOf(d, pointId).lines.has(lineId)) return d
-  return { ...d, points: d.points.map(q => (q.id === pointId ? { ...q, line: lineId, t } : q)) }
+/** Delete the branch from dot `id` onward: it and everything that hangs off
+ *  it, away from the start. From the start, the whole storyline. */
+export function deleteBranchFrom(d: StorylineData, id: string): StorylineData {
+  const keep = reached(d, id)
+  return { ...d, dots: d.dots.filter(x => keep.has(x.id)), edges: d.edges.filter(e => keep.has(e.a) && keep.has(e.b)) }
 }
 
-/** Let card `groupId` go from point `pointId`; it stays where it is. */
-export function unlinkStoryCard(d: StorylineData, pointId: string, groupId: string): StorylineData {
-  return { ...d, points: d.points.map(p => {
-    if (p.id !== pointId || !p.cards) return p
-    const { [groupId]: _was, ...hang } = p.hang ?? {}
-    return { ...p, cards: p.cards.filter(c => c !== groupId), hang: Object.keys(hang).length ? hang : undefined }
+/** Dot `from` let go on dot `into`: one dot, at `into`, holding both's
+ *  cards and titles, with both's lines. */
+export function mergeDots(d: StorylineData, from: string, into: string): StorylineData {
+  if (from === into) return d
+  const a = d.dots.find(x => x.id === from), b = d.dots.find(x => x.id === into)
+  if (!a || !b) return d
+  const cards = [...new Set([...(b.cards ?? []), ...(a.cards ?? [])])]
+  const title = [...new Set([b.title, a.title].filter(Boolean))].join(' / ')
+  const dots = d.dots.filter(x => x.id !== from).map(x => (x.id === into ? { ...x, title, ...(cards.length ? { cards } : {}) } : x))
+  const edges = d.edges.map(e => ({ a: e.a === from ? into : e.a, b: e.b === from ? into : e.b })).filter(e => e.a !== e.b)
+  return { ...d, dots, edges: dedupe(edges) }
+}
+
+function dedupe(edges: StoryEdge[]): StoryEdge[] {
+  const seen = new Set<string>()
+  return edges.filter(e => {
+    const k = e.a < e.b ? `${e.a}|${e.b}` : `${e.b}|${e.a}`
+    if (seen.has(k)) return false
+    seen.add(k)
+    return true
+  })
+}
+
+/** Let card `groupId` go from dot `dotId`; it stays where it is. */
+export function unlinkStoryCard(d: StorylineData, dotId: string, groupId: string): StorylineData {
+  return { ...d, dots: d.dots.map(x => {
+    if (x.id !== dotId || !x.cards) return x
+    const cards = x.cards.filter(c => c !== groupId)
+    return { ...x, cards: cards.length ? cards : undefined }
   }) }
 }
 
-/** Nothing left to show: no point and no line of any length. */
+/** Nothing left to show. */
 export function storylineEmpty(d: StorylineData): boolean {
-  return d.points.length === 0 && d.lines.every(l => Math.hypot(l.dx, l.dy) < EPS)
+  return d.dots.length === 0
 }
 
-/** Keep the node's x/y/width/height the box round its lines and points,
- *  without moving anything on the canvas: what the box gains on the left
- *  or top, the root's start gives back. */
+/** The main line's way: from the start to the first dot joined to it;
+ *  along +x while the start stands alone. */
+export function mainWay(d: StorylineData): { ux: number; uy: number } {
+  const s = d.dots[0]
+  const n = s && neighbours(d, s.id).map(id => d.dots.find(x => x.id === id)).find(Boolean)
+  const len = s && n ? Math.hypot(n.x - s.x, n.y - s.y) : 0
+  return s && n && len > 1e-6 ? { ux: (n.x - s.x) / len, uy: (n.y - s.y) / len } : { ux: 1, uy: 0 }
+}
+
+/** Keep the node's x/y/width/height the box round its dots, without moving
+ *  anything on the canvas: what the box gains on the left or top, the dots
+ *  give back. */
 export function normalizeStoryline(x: number, y: number, d: StorylineData): { x: number; y: number; width: number; height: number; storyline: StorylineData } {
-  const g = storyGeom(d)
-  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity
-  const add = (px: number, py: number) => {
-    x0 = Math.min(x0, px); y0 = Math.min(y0, py); x1 = Math.max(x1, px); y1 = Math.max(y1, py)
-  }
-  for (const l of Object.values(g.lines)) { add(l.sx, l.sy); add(l.sx + l.ux * l.len, l.sy + l.uy * l.len) }
-  for (const p of Object.values(g.points)) add(p.x, p.y)
-  if (x0 === Infinity) return { x, y, width: 0, height: 0, storyline: d }
-  const lines = x0 === 0 && y0 === 0 ? d.lines
-    : d.lines.map(l => (l.from ? l : { ...l, x: l.x - x0, y: l.y - y0 }))
-  return { x: x + x0, y: y + y0, width: x1 - x0, height: y1 - y0, storyline: { ...d, lines } }
+  if (!d.dots.length) return { x, y, width: 0, height: 0, storyline: d }
+  const x0 = Math.min(...d.dots.map(p => p.x)), y0 = Math.min(...d.dots.map(p => p.y))
+  const x1 = Math.max(...d.dots.map(p => p.x)), y1 = Math.max(...d.dots.map(p => p.y))
+  const dots = x0 === 0 && y0 === 0 ? d.dots : d.dots.map(p => ({ ...p, x: p.x - x0, y: p.y - y0 }))
+  return { x: x + x0, y: y + y0, width: x1 - x0, height: y1 - y0, storyline: { ...d, dots } }
 }
