@@ -67,7 +67,7 @@ export const LOOK_OF: Partial<Record<EffectKind, { look: string; background?: bo
 const LIVE_ONLY = new Set(['show', 'strength'])
 /** Look dials whose card default differs from the film tool's own, so they
  *  are sent even when the slider was never moved. */
-const CARD_DIALS: Partial<Record<EffectKind, Record<string, number>>> = { relight: { respect: 0.3 } }
+const CARD_DIALS: Partial<Record<EffectKind, Record<string, number>>> = { relight: { respect: 0.3, key: 0.4, shadow: 0.6 } }
 // 'follow': a normal layer whose colour the look took from the picture (a
 // deepened local colour): laid on another picture, it takes that one's.
 const BLEND = { normal: 0, multiply: 1, screen: 2, add: 3, hardlight: 4, follow: 5 } as Record<string, number>

@@ -509,7 +509,7 @@ export const EFFECTS: Record<EffectKind, EffectDef> = {
   ]),
   relight: lookDef('relight', 'Relight', '☀', '#e8c27a', 'Adds key light, rim light, shadow and haze', [
     P('key_deg', 'Key from', 0, 360, 1, 135), P('key_elev', 'Key height', 0, 90, 1, 25),
-    P('key', 'Key light', 0, 1, 0.01, 0.14), P('shadow', 'Shadow', 0, 1, 0.01, 0.34), P('rim', 'Rim light', 0, 3, 0.05, 0.8),
+    P('key', 'Key light', 0, 1, 0.01, 0.4), P('shadow', 'Shadow', 0, 1, 0.01, 0.6), P('rim', 'Rim light', 0, 3, 0.05, 0.8),
     P('spec', 'Shine', 0, 3, 0.05, 1), P('ao', 'Occlusion', 0, 1, 0.01, 0.42), P('haze', 'Background haze', 0, 0.5, 0.01, 0.07),
     // How much the picture's own light holds the new light back. The film's
     // tool holds it fully back (1) on busy, already-lit painting, which on
