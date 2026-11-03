@@ -29,6 +29,15 @@ export function dotStep(zoom: number): number {
   return step
 }
 
+/** One coordinate pulled onto the dots as a card's corner is (snapCardToDots):
+ *  the finest dots showing, and only when it comes close to one. */
+export function snapToDots(v: number, zoom: number): number {
+  const step = dotStep(zoom)
+  const reach = Math.min(SNAP_PX / zoom, step / 6)
+  const n = Math.round(v / step) * step
+  return Math.abs(n - v) <= reach ? n : v
+}
+
 /** A card's top-left content corner in canvas units, relative to its origin
  *  (the same extent CardLayer draws the card from). Null when it has no bars. */
 export function cardCornerOffset(group: ProjectGroup, boards: Record<string, BoardData>): { x: number; y: number } | null {

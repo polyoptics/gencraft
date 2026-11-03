@@ -166,7 +166,7 @@ const EPS = 1e-6
 const plainPoint = (line: string, t: number): StoryPoint => ({ id: crypto.randomUUID(), line, t, up: 0, down: 0, title: '' })
 
 /** Points this close along one line (canvas units) are one spot. */
-const SAME_SPOT = 0.5
+export const SAME_SPOT = 0.5
 
 /** Every dot a point: older held spots read as plain points, points stacked
  *  on one spot of a line become one (their cards and titles kept, branches
@@ -283,7 +283,8 @@ function trimStart(d: StorylineData, lineId: string, k: number): StorylineData {
 /** Slide point `pointId` to `t` along its line (in the line's units as it
  *  stands). A line's end point takes the end with it, and the root's start
  *  point its start: past them the line grows, back from them it shortens,
- *  never past its other points. Any other point stays on the line. */
+ *  never past its other points. Any other point stays between its
+ *  neighbours. */
 export function slideStoryPoint(d: StorylineData, pointId: string, t: number): StorylineData {
   const p = d.points.find(q => q.id === pointId)
   const l = p && d.lines.find(q => q.id === p.line)
@@ -308,7 +309,11 @@ export function slideStoryPoint(d: StorylineData, pointId: string, t: number): S
       points: d.points.map(q => (q.id === pointId ? { ...q, t: to } : q)),
     }
   }
-  const at = Math.max(0, Math.min(len, t))
+  // Between its neighbours: it can come to one (and merge into it), never
+  // pass it.
+  const lo = Math.max(0, ...others.filter(q => q.t <= p.t).map(q => q.t))
+  const hi = Math.min(len, ...others.filter(q => q.t >= p.t).map(q => q.t))
+  const at = Math.max(lo, Math.min(hi, t))
   return { ...d, points: d.points.map(q => (q.id === pointId ? { ...q, t: at } : q)) }
 }
 
