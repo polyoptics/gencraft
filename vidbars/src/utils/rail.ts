@@ -52,8 +52,10 @@ export function inputsTaken(card: FreeNodeData | undefined): RailInput[] {
   const def = EFFECTS[kind]
   if (def.blend) return ['depth', 'mask']
   const needs = def.needs ?? []
-  // A drawing card: what to draw on (a mask), and depth when its look uses it.
-  if (needs.some(x => x === 'lines' || x === 'hatch' || x === 'look')) return needs.includes('depth') ? ['depth', 'mask'] : ['mask']
+  // A drawing card: only what to draw on (a mask). It works out its own
+  // depth, and a Depth card tucked under it would change nothing
+  // (aiEffects requests), so it gets no depth spot.
+  if (needs.some(x => x === 'lines' || x === 'hatch' || x === 'look')) return ['mask']
   return ['mask']
 }
 
