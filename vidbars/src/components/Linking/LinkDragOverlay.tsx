@@ -9,7 +9,7 @@ import { useLinkDragStore } from '../../store/linkDragStore'
 import { useBoardsStore } from '../../store/boardsStore'
 import { parseRef, sameRef, type LinkRef } from '../../utils/linkTargets'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
-import { linkCardToStoryPoint, standingStoryDrop } from '../Canvas/StorylineLayer'
+import { linkCardToStoryPoint, standingStoryDrop, storyLinkOf, unlinkCardFromStorylines } from '../Canvas/StorylineLayer'
 
 export const LinkDragOverlay: React.FC = () => {
   const active = useLinkDragStore(s => s.active)
@@ -58,6 +58,14 @@ export const LinkDragOverlay: React.FC = () => {
       // It was the topmost drop target in the view as seen, so it wins.
       const onWall = standingStoryDrop()
       if (onWall) { story = onWall.split(':'); target = null }
+      // A card's link "+" let go on bare canvas (nothing to link to, not
+      // back on itself): a card hanging on a storyline is let go from it.
+      const bare = !story && !target && els.some(el => (el as HTMLElement).matches?.('[data-tilt-stage="world"], [data-world]'))
+        && !els.some(el => (el as HTMLElement).closest?.('[data-link-drop], [data-group-card]'))
+      if (bare && source.kind === 'group' && storyLinkOf(source.id)) {
+        useUndoCoordinator.getState().checkpoint()
+        unlinkCardFromStorylines(source.id)
+      }
       if (story && source.kind === 'group') {
         useUndoCoordinator.getState().checkpoint()
         linkCardToStoryPoint(story[1], story[2], source.id, story[3])

@@ -176,7 +176,8 @@ const plainPoint = (line: string, t: number): StoryPoint => ({ id: crypto.random
 /** Points this close along one line (canvas units) are one spot. */
 export const SAME_SPOT = 0.5
 
-/** Every dot a point: older held spots read as plain points, points stacked
+/** Every dot a point: older held spots read as plain points, older stems
+ *  drawn out become branches, points stacked
  *  on one spot of a line become one (their cards and titles kept, branches
  *  re-hung on it), and a point is put at each line's end (and the root's
  *  start) that has none. Returns `d` itself when nothing changes. */
@@ -237,6 +238,34 @@ export function canonicalStoryline(d: StorylineData): StorylineData {
     if (len >= SAME_SPOT && !on.some(p => p.t > len - SAME_SPOT)) add.push(plainPoint(l.id, len))
   }
   if (add.length) points = [...points, ...add]
+  // Stems drawn out (before a stem became a branch): each a branch from its
+  // point, straight across its line, its cards hung on that end now on the
+  // branch's end point.
+  if (points.some(p => p.up > 0 || p.down > 0)) {
+    const g = storyGeom({ ...d, points, lines })
+    const grown: StoryLine[] = []
+    const ends: StoryPoint[] = []
+    points = points.map(p => {
+      const pg = g.points[p.id]
+      if (!pg || (p.up <= 0 && p.down <= 0)) return p
+      let cards = p.cards
+      const hang: Record<string, 'up' | 'down'> = { ...(p.hang ?? {}) }
+      for (const side of ['up', 'down'] as const) {
+        const len = side === 'up' ? p.up : p.down
+        if (len < SAME_SPOT) continue
+        const k = side === 'up' ? 1 : -1
+        const id = crypto.randomUUID()
+        grown.push({ id, from: p.id, x: 0, y: 0, dx: pg.nx * len * k, dy: pg.ny * len * k })
+        const moved = (cards ?? []).filter(c => hang[c] === side)
+        ends.push({ ...plainPoint(id, len), ...(moved.length ? { cards: moved } : {}) })
+        cards = cards?.filter(c => hang[c] !== side)
+        for (const c of moved) delete hang[c]
+      }
+      return { ...p, up: 0, down: 0, cards: cards?.length ? cards : undefined, hang: Object.keys(hang).length ? hang : undefined }
+    })
+    lines = [...lines, ...grown]
+    points = [...points, ...ends]
+  }
   return points === d.points && lines === d.lines ? d : { ...d, points, lines }
 }
 

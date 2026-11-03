@@ -14,7 +14,9 @@
 //    plain dot behind. Off to the side it stays on its line. Its outer ring:
 //    the point with everything growing from it (lit as you hover); along its
 //    line it slides, onto another line it re-attaches there. Its tick ends:
-//    drag up or down for its stem above or below the line.
+//    drag up or down to grow a branch straight across its line from it (a
+//    real line, with an end point, that takes points and branches as any
+//    line does).
 //  - Drag the grab handle beside where it starts: the whole storyline moves.
 //  - A linked card hangs off its point by a thin tether, drawn behind the
 //    cards to the card's nearest edge; hover lights it, right-click unlinks.
@@ -635,6 +637,24 @@ function moveCards(from: Map<string, { x: number; y: number }>, dx: number, dy: 
     [...from].map(([groupId, o]) => ({ groupId, originX: o.x + dx, originY: o.y + dy })))
 }
 
+/** The storyline point card `groupId` is linked to, if any. */
+export function storyLinkOf(groupId: string): { node: string; point: string } | null {
+  for (const n of Object.values(useFreeNodeStore.getState().nodes)) {
+    const p = n.storyline?.points.find(q => q.cards?.includes(groupId))
+    if (p) return { node: n.id, point: p.id }
+  }
+  return null
+}
+
+/** Let card `groupId` go from whatever storyline point holds it; it stays
+ *  where it is. The caller takes the undo checkpoint. */
+export function unlinkCardFromStorylines(groupId: string) {
+  const at = storyLinkOf(groupId)
+  if (!at) return
+  const n = useFreeNodeStore.getState().nodes[at.node]
+  if (n?.storyline) useFreeNodeStore.getState().updateFreeNode(at.node, { storyline: unlinkStoryCard(n.storyline, at.point, groupId) })
+}
+
 /** Link card `groupId` to point `pointId` (a card's link "+" let go on
  *  it; LinkDragOverlay), hanging from its stem's tick end `side` if it was
  *  let go there. A card follows one point: off any other first. The caller
@@ -752,7 +772,7 @@ type Gesture =
   /** A point along its line. Let go over another line: `hop`, its contents
    *  go there (the dot); `carry`, it goes there with all below it (the ring). */
   | { kind: 'slide'; point: string; cards: Map<string, { x: number; y: number }>; hop: boolean; carry: boolean }
-  | { kind: 'tip'; point: string; side: 'up' | 'down' }
+  | { kind: 'tip'; point: string; side: 'up' | 'down'; line: string }
   | { kind: 'move'; cards: Map<string, { x: number; y: number }> }
   | { kind: 'group'; base: GroupBase; last: { dx: number; dy: number } }
 
@@ -923,7 +943,7 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
     }
 
     const decide = (c: { x: number; y: number }): Gesture | null => {
-      if (role === 'tip-up' || role === 'tip-down') return pointId ? { kind: 'tip', point: pointId, side: role === 'tip-up' ? 'up' : 'down' } : null
+      if (role === 'tip-up' || role === 'tip-down') return pointId ? { kind: 'tip', point: pointId, side: role === 'tip-up' ? 'up' : 'down', line: crypto.randomUUID() } : null
       if (role === 'grab') return { kind: 'move', cards: cardOrigins(d0, new Set(d0.points.map(p => p.id))) }
       if (role === 'line' && lineId) {
         // Sideways from an empty spot on the line: a branch grows from a new
@@ -1017,12 +1037,15 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
           return
         }
         case 'tip': {
+          // A branch straight across the line from the point, as long as the
+          // drag (onto a dot's distance when snapping); short of its tick, none.
           const pid = gesture.point, side = gesture.side
           const pg = g0.points[pid]
           if (!pg) return
-          const v = (c.x - x0 - pg.x) * pg.nx + (c.y - y0 - pg.y) * pg.ny
-          const len = Math.max(0, sn(side === 'up' ? v : -v))
-          writeStoryline(id, x0, y0, { ...d0, points: d0.points.map(q => (q.id === pid ? { ...q, [side]: len } : q)) })
+          const k = side === 'up' ? 1 : -1
+          const len = sn(((c.x - x0 - pg.x) * pg.nx + (c.y - y0 - pg.y) * pg.ny) * k)
+          if (len * zoom < TICK) { writeStoryline(id, x0, y0, d0); return }
+          writeStoryline(id, x0, y0, { ...d0, lines: [...d0.lines, { id: gesture.line, from: pid, x: 0, y: 0, dx: pg.nx * len * k, dy: pg.ny * len * k }] })
           return
         }
         case 'group': {
@@ -1082,7 +1105,7 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
           const now = useFreeNodeStore.getState().nodes[id]
           if (now?.storyline) writeStoryline(id, now.x, now.y, now.storyline)
         }
-        if (gesture.kind === 'slide' || gesture.kind === 'tip') selectStoryPoint(id, gesture.point)
+        if (gesture.kind === 'slide') selectStoryPoint(id, gesture.point)
         if (gesture.kind === 'sprout' && useFreeNodeStore.getState().nodes[id]?.storyline?.points.some(q => q.id === (gesture as { point: string }).point)) {
           selectStoryPoint(id, gesture.point)
         }
@@ -1188,10 +1211,18 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
         const isEditing = editing === p.id
         if (!p.title && !isEditing) return null
         const reach = Math.max(p.up, TICK * px) + 6 * px
+        // A title sits up from its point, unless a branch grows that way: it
+        // would lie across the branch and take its presses. Then it sits off
+        // to the side, back along its line.
+        const lg = g.lines[p.line]
+        const upward = d.lines.some(l => l.from === p.id && (l.dx * pg.nx + l.dy * pg.ny) > 0.7 * Math.hypot(l.dx, l.dy))
+        const aside = upward && lg
+        const tx = aside ? pg.x - lg.ux * (RING_HIT + 4) * px : pg.x + pg.nx * reach
+        const ty = aside ? pg.y - lg.uy * (RING_HIT + 4) * px : pg.y + pg.ny * reach
         return (
           <StoryTitle
             key={p.id} nodeId={id} pointId={p.id} title={p.title} editing={isEditing}
-            x={pg.x + pg.nx * reach} y={pg.y + pg.ny * reach} side={sideFor(pg.nx, pg.ny)} px={px} selected={sel === p.id}
+            x={tx} y={ty} side={aside ? sideFor(-lg.ux, -lg.uy) : sideFor(pg.nx, pg.ny)} px={px} selected={sel === p.id}
           />
         )
       })}
@@ -1279,6 +1310,20 @@ const StorySvg: React.FC<{
             </g>
           )
         })}
+        {/* The tick ends' grab zones, under the lines: where a line runs
+            across one (a branch passing by), the line takes the press. */}
+        {d.points.map(p => {
+          const pg = g.points[p.id]
+          if (!pg) return null
+          return (['up', 'down'] as const).map(side => {
+            const k = (side === 'up' ? 1 : -1) * Math.max(side === 'up' ? p.up : p.down, TICK * px)
+            return (
+              <circle key={`${p.id}:${side}`} cx={pg.x + pg.nx * k} cy={pg.y + pg.ny * k} r={TIP_R * px} fill="transparent"
+                      pointerEvents="all" style={{ cursor: 'ns-resize' }}
+                      data-role={`tip-${side}`} data-point={p.id} data-link-drop={`story:${id}:${p.id}:${side}`} />
+            )
+          })
+        })}
         {d.lines.map(l => {
           const lg = g.lines[l.id]
           if (!lg || lg.len < 1e-6) return null
@@ -1337,8 +1382,6 @@ const StorySvg: React.FC<{
                     {zone?.point === p.id && zone.tip === side && (
                       <circle cx={tx} cy={ty} r={(TIP_R - 2) * px} fill={C_GLOW} fillOpacity={0.85} pointerEvents="none" />
                     )}
-                    <circle cx={tx} cy={ty} r={TIP_R * px} fill="transparent" pointerEvents="all" style={{ cursor: 'ns-resize' }}
-                            data-role={`tip-${side}`} data-point={p.id} data-link-drop={`story:${id}:${p.id}:${side}`} />
                   </g>
                 )
               })}
