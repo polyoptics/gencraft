@@ -10,8 +10,13 @@
 // Stored on its free node (FreeNodeData.storyline), RELATIVE to the node's
 // x/y, which this module keeps the bounding box of the dots (normalized),
 // so everything that moves or frames a node by its box (cabinet projects,
-// F to frame) carries a storyline whole. The first dot is its start (the
-// root): the grab handle sits by it, "Delete branch" reads onward from it.
+// F to frame) carries a storyline whole.
+//
+// Its base line (`base`) anchors it: a straight horizontal line, dots in
+// order left to right, all at one height, that its dots slide along. The
+// base's first dot is the storyline's start (the root): the grab handle sits
+// by it, "Delete branch" reads onward from it, and everything else hangs off
+// the base as branches, freeform. (Room is kept under it for a time scale.)
 //
 // Cards linked to a dot (`cards`, group ids) move with it when it is
 // dragged. A link is made by dropping a card's link "+" on the dot (the
@@ -44,6 +49,8 @@ export interface StorylineData {
   /** The line it stands up about (canvas units, absolute), kept from when
    *  it was flipped: moved afterwards, it moves along and up the wall. */
   wallFoot?: { x: number; y: number; ux: number; uy: number }
+  /** The base line: its dots, left to right, at one height. */
+  base?: string[]
   /** Before dots: lines with points along them (migrateStoryline reads them
    *  once, and they go). */
   lines?: LegacyLine[]
@@ -54,7 +61,8 @@ interface LegacyLine { id: string; from: string | null; x: number; y: number; dx
 interface LegacyPoint { id: string; line: string; t: number; up?: number; down?: number; title?: string; cards?: string[]; hang?: Record<string, 'up' | 'down'> }
 
 export function newStoryline(): StorylineData {
-  return { dots: [{ id: crypto.randomUUID(), x: 0, y: 0, title: '' }], edges: [] }
+  const id = crypto.randomUUID()
+  return { dots: [{ id, x: 0, y: 0, title: '' }], edges: [], base: [id] }
 }
 
 export function upNormal(ux: number, uy: number): { nx: number; ny: number } {
@@ -72,6 +80,36 @@ const SAME_SPOT = 0.5
  *  dot of its own off its point (its hung cards on it), points on one spot
  *  one dot. Every card link is kept. Returns `d` itself when it has dots. */
 export function migrateStoryline(d: StorylineData): StorylineData {
+  if (Array.isArray(d.dots) && d.base && !d.lines && !d.points) return d
+  const m = toDots(d)
+  return m.base ? m : withBase(m)
+}
+
+/** A storyline without a base line given one: its main line from the start,
+ *  dot to dot along the first line from each, as long as it keeps going the
+ *  one way across — straightened level at the start's height, each dot kept
+ *  at its x. */
+function withBase(d: StorylineData): StorylineData {
+  const s = d.dots[0]
+  if (!s) return { ...d, base: [] }
+  const path = [s.id]
+  const seen = new Set(path)
+  let cur = s, dir = 0
+  for (;;) {
+    const nid = neighbours(d, cur.id).find(n => !seen.has(n))
+    const nx = nid ? d.dots.find(p => p.id === nid) : undefined
+    if (!nx) break
+    const sgn = Math.sign(nx.x - cur.x)
+    if (!sgn || (dir && sgn !== dir)) break
+    dir = sgn
+    path.push(nx.id); seen.add(nx.id); cur = nx
+  }
+  if (dir < 0) path.reverse()
+  const on = new Set(path)
+  return { ...d, base: path, dots: d.dots.map(p => (on.has(p.id) ? { ...p, y: s.y } : p)) }
+}
+
+function toDots(d: StorylineData): StorylineData {
   if (Array.isArray(d.dots) && !d.lines && !d.points) return d
   if (Array.isArray(d.dots)) { const { lines: _l, points: _p, ...rest } = d; return rest }
   const lines = d.lines ?? [], points = d.points ?? []
@@ -166,9 +204,29 @@ export function neighbours(d: StorylineData, id: string): string[] {
   return out
 }
 
+/** The start: the base line's first dot. */
+export function rootOf(d: StorylineData): string | undefined {
+  return d.base?.[0] ?? d.dots[0]?.id
+}
+
+/** What moves with dot `id` when it is dragged: it and every dot further
+ *  from the base that is reached only through it (with loops, only those
+ *  whose every way back to the base passes it). A base dot brings its
+ *  branches, not the rest of the base. */
+export function downstream(d: StorylineData, id: string): Set<string> {
+  const from = (d.base?.length ? d.base : [rootOf(d) ?? '']).filter(x => x && x !== id)
+  const seen = new Set<string>(from)
+  const queue = [...from]
+  while (queue.length) {
+    const cur = queue.pop()!
+    for (const n of neighbours(d, cur)) if (n !== id && !seen.has(n)) { seen.add(n); queue.push(n) }
+  }
+  return new Set(d.dots.map(p => p.id).filter(x => !seen.has(x)))
+}
+
 /** Dots that can be reached from the start without passing `cut`. */
 function reached(d: StorylineData, cut?: string): Set<string> {
-  const start = d.dots[0]?.id
+  const start = rootOf(d)
   const seen = new Set<string>()
   if (!start || start === cut) return seen
   const queue = [start]
@@ -182,7 +240,7 @@ function reached(d: StorylineData, cut?: string): Set<string> {
 
 /** The neighbour of `id` on the way back to the start (its "before"). */
 function before(d: StorylineData, id: string): string | null {
-  const start = d.dots[0]?.id
+  const start = rootOf(d)
   if (!start || start === id) return null
   const prev = new Map<string, string>([[start, start]])
   const queue = [start]
@@ -202,14 +260,43 @@ function before(d: StorylineData, id: string): string | null {
 export function insertDot(d: StorylineData, a: string, b: string, x: number, y: number): { d: StorylineData; id: string } {
   const id = crypto.randomUUID()
   const edges = d.edges.filter(e => !((e.a === a && e.b === b) || (e.a === b && e.b === a)))
-  return { id, d: { ...d, dots: [...d.dots, { id, x, y, title: '' }], edges: [...edges, { a, b: id }, { a: id, b }] } }
+  // On the base line: a base dot, level with it, in its place along it.
+  const base = d.base ?? []
+  const ia = base.indexOf(a), ib = base.indexOf(b)
+  const onBase = ia >= 0 && ib >= 0 && Math.abs(ia - ib) === 1
+  const at = Math.max(ia, ib)
+  const by = onBase ? d.dots.find(p => p.id === a)?.y ?? y : y
+  return { id, d: {
+    ...d, dots: [...d.dots, { id, x, y: by, title: '' }], edges: [...edges, { a, b: id }, { a: id, b }],
+    ...(onBase ? { base: [...base.slice(0, at), id, ...base.slice(at)] } : {}),
+  } }
 }
 
-/** A new dot at (x, y) joined to dot `from`: from an end it extends the
- *  line, from a middle dot it starts a branch. */
+/** Whether the line a–b is a stretch of the base. */
+export function isBaseEdge(d: StorylineData, a: string, b: string): boolean {
+  const base = d.base ?? []
+  const ia = base.indexOf(a), ib = base.indexOf(b)
+  return ia >= 0 && ib >= 0 && Math.abs(ia - ib) === 1
+}
+
+/** A new dot at (x, y) joined to dot `from`: a branch. From a storyline's
+ *  one dot, its first line: the base. */
 export function growDot(d: StorylineData, from: string, x: number, y: number): { d: StorylineData; id: string } {
   const id = crypto.randomUUID()
-  return { id, d: { ...d, dots: [...d.dots, { id, x, y, title: '' }], edges: [...d.edges, { a: from, b: id }] } }
+  const first = d.base?.length === 1 && d.base[0] === from
+  const fy = first ? d.dots.find(p => p.id === from)?.y ?? y : y
+  return { id, d: {
+    ...d, dots: [...d.dots, { id, x, y: fy, title: '' }], edges: [...d.edges, { a: from, b: id }],
+    ...(first ? { base: [from, id] } : {}),
+  } }
+}
+
+/** The base kept in order left to right (a two-dot base may swap ends). */
+export function sortBase(d: StorylineData): StorylineData {
+  if (!d.base || d.base.length < 2) return d
+  const x = new Map(d.dots.map(p => [p.id, p.x]))
+  const base = [...d.base].sort((a, b) => (x.get(a) ?? 0) - (x.get(b) ?? 0))
+  return base.every((id, i) => id === d.base![i]) ? d : { ...d, base }
 }
 
 /** Delete a dot, its lines closing up: between two lines they join
@@ -220,6 +307,19 @@ export function deleteDot(d: StorylineData, id: string): StorylineData {
   const ns = neighbours(d, id)
   const edges = d.edges.filter(e => e.a !== id && e.b !== id)
   const add: StoryEdge[] = []
+  const base = d.base ?? []
+  const i = base.indexOf(id)
+  if (i >= 0) {
+    // On the base: the base closes up, and its branches join the base dot
+    // before it (after it, for the first).
+    const prev = base[i - 1], next = base[i + 1]
+    const hub = prev ?? next
+    if (prev && next) add.push({ a: prev, b: next })
+    for (const n of ns) if (n !== prev && n !== next && hub) add.push({ a: hub, b: n })
+    const dots = d.dots.filter(x => x.id !== id)
+    const left = base.filter(x => x !== id)
+    return { ...d, dots, edges: dedupe([...edges, ...add]), base: left.length || !dots.length ? left : [dots[0].id] }
+  }
   if (ns.length === 2) add.push({ a: ns[0], b: ns[1] })
   else if (ns.length > 2) {
     const hub = before(d, id) ?? ns[0]
@@ -233,7 +333,8 @@ export function deleteDot(d: StorylineData, id: string): StorylineData {
  *  it, away from the start. From the start, the whole storyline. */
 export function deleteBranchFrom(d: StorylineData, id: string): StorylineData {
   const keep = reached(d, id)
-  return { ...d, dots: d.dots.filter(x => keep.has(x.id)), edges: d.edges.filter(e => keep.has(e.a) && keep.has(e.b)) }
+  return { ...d, dots: d.dots.filter(x => keep.has(x.id)), edges: d.edges.filter(e => keep.has(e.a) && keep.has(e.b)),
+           ...(d.base ? { base: d.base.filter(x => keep.has(x)) } : {}) }
 }
 
 /** Dot `from` let go on dot `into`: one dot, at `into`, holding both's
@@ -244,9 +345,13 @@ export function mergeDots(d: StorylineData, from: string, into: string): Storyli
   if (!a || !b) return d
   const cards = [...new Set([...(b.cards ?? []), ...(a.cards ?? [])])]
   const title = [...new Set([b.title, a.title].filter(Boolean))].join(' / ')
-  const dots = d.dots.filter(x => x.id !== from).map(x => (x.id === into ? { ...x, title, ...(cards.length ? { cards } : {}) } : x))
+  // A base dot let go on a dot off the base: that one takes its place on it.
+  const base = d.base ?? []
+  const swap = base.includes(from) && !base.includes(into)
+  const dots = d.dots.filter(x => x.id !== from).map(x => (x.id === into ? { ...x, title, ...(swap ? { y: a.y } : {}), ...(cards.length ? { cards } : {}) } : x))
   const edges = d.edges.map(e => ({ a: e.a === from ? into : e.a, b: e.b === from ? into : e.b })).filter(e => e.a !== e.b)
-  return { ...d, dots, edges: dedupe(edges) }
+  return { ...d, dots, edges: dedupe(edges),
+           ...(d.base ? { base: swap ? base.map(x => (x === from ? into : x)) : base.filter(x => x !== from) } : {}) }
 }
 
 function dedupe(edges: StoryEdge[]): StoryEdge[] {
@@ -273,9 +378,10 @@ export function storylineEmpty(d: StorylineData): boolean {
   return d.dots.length === 0
 }
 
-/** The main line's way: from the start to the first dot joined to it;
- *  along +x while the start stands alone. */
+/** The main line's way: along the base (+x); without one, from the start
+ *  to the first dot joined to it. */
 export function mainWay(d: StorylineData): { ux: number; uy: number } {
+  if (d.base?.length) return { ux: 1, uy: 0 }
   const s = d.dots[0]
   const n = s && neighbours(d, s.id).map(id => d.dots.find(x => x.id === id)).find(Boolean)
   const len = s && n ? Math.hypot(n.x - s.x, n.y - s.y) : 0

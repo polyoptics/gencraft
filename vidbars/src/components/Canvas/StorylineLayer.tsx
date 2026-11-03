@@ -2,9 +2,14 @@
 // (data: utils/storyline). A storyline is dots joined by straight lines, and
 // editing it is as plain as that:
 //
-//  - Drag a dot's centre: it goes anywhere (snapped as cards are), its lines
-//    follow, its linked cards come with it. Let go on another dot (lit
-//    first), the two become one.
+//  - Its base line: straight and level, a little stronger than the rest.
+//    Its dots slide along it only; drag an end dot outward to lengthen it.
+//    Everything else hangs off it as branches, freeform.
+//  - Drag a dot's centre: it goes anywhere (snapped as cards are) with
+//    everything downstream of it — the dots further from the base reached
+//    through it, and their cards (lit as the mouse is over it); a base dot
+//    slides with its branches. Shift+drag: that dot alone. Let go on another
+//    dot (lit first), the two become one.
 //  - Click a line: a dot goes in there, splitting it. Press on a line and
 //    drag: the dot goes in and is dragged at once, bending the line.
 //  - Drag out from a dot's outer ring: a new dot, joined to it, is dragged
@@ -12,8 +17,9 @@
 //  - Click a dot to select it; double-click it (or its title) to name it.
 //    Delete takes it out, its lines closing up (see deleteDot). Right-click a
 //    dot or line: Delete, Delete branch (from a dot onward), Unlink a card.
-//  - The grab handle by the first dot moves the whole storyline; right-click
-//    it for colour, thickness and Flip up in 3D view. Click it to select the
+//  - The grab handle at the base's start moves the whole storyline (flipped
+//    up, across the floor); right-click it for colour, thickness and Flip up
+//    in 3D view. Click it to select the
 //    storyline whole (ringed, as tiles are): Delete removes it.
 //  - The canvas's selection box picks out the dots it covers (or the whole
 //    storyline), with cards and tiles; a drag moves them all.
@@ -30,8 +36,10 @@
 // (toCanvas).
 //
 // "Flip up in 3D view" (StorylineData.standUp): tilted, the storyline stands
-// up about its main line (its foot, kept from when it was flipped) like a
-// wall, rising with the tilt as the standing cards do (tiltStore standRise).
+// up like a wall about its foot — a level line on the floor through its
+// lowest point (dots and linked cards), fixed from when it starts to rise
+// until it lies flat again, and below which nothing on the wall is dragged.
+// Its 2D layout is the only truth: standing up and lying down moves nothing, rising with the tilt as the standing cards do (tiltStore standRise).
 // TiltLayer re-sends presses at the ground's flat point, which is not where
 // a wall is, so a standing storyline takes its own presses (data-layer-pane)
 // and reads the cursor on the wall's plane (wallPoint). Its linked cards
@@ -57,8 +65,8 @@ import { clientToCanvas } from '../../utils/fx/createEffect'
 import { snapToDots } from '../../utils/dotGrid'
 import { PRESET_COLORS } from '../UI/TextFormatToolbar'
 import {
-  deleteBranchFrom, deleteDot, growDot, insertDot, mainWay, mergeDots, migrateStoryline, normalizeStoryline,
-  storylineEmpty, unlinkStoryCard, upNormal, type StoryDot, type StorylineData,
+  deleteBranchFrom, deleteDot, downstream, growDot, insertDot, isBaseEdge, mergeDots, migrateStoryline,
+  normalizeStoryline, rootOf, sortBase, storylineEmpty, unlinkStoryCard, upNormal, type StoryDot, type StorylineData,
 } from '../../utils/storyline'
 
 // Screen px — divided by the zoom where drawn.
@@ -78,10 +86,10 @@ const DOUBLE_MS = 400
 const NONE: string[] = []
 const NO_GROUPS: ProjectGroup[] = []
 const NO_TETHERS: Tether[] = []
-/** Screen px from the first dot straight down to the grab handle's
- *  middle: clear of the dot's ring, title and options, whatever its
- *  lines do. */
-const GRAB_OFF = 62
+/** Screen px from the base's start leftward to the grab handle's middle:
+ *  on the base's own height, clear of the start dot's ring, title and
+ *  options and of the room under the base, whatever its lines do. */
+const GRAB_OFF = 34
 /** World layers holding a standing storyline, and how many. */
 const standingWalls = new Map<HTMLElement, number>()
 
@@ -107,11 +115,13 @@ interface StoryUi {
   zone: { node: string; point: string; ring: boolean } | null
   /** The dot a dragged dot let go now would merge into, lit. */
   merge: { node: string; point: string } | null
+  /** Shift held: a drag moves its dot alone. */
+  shift: boolean
   set: (patch: Partial<Omit<StoryUi, 'set'>>) => void
 }
 
 const useStoryUi = create<StoryUi>(set => ({
-  sel: null, parts: {}, hover: null, editing: null, zone: null, merge: null,
+  sel: null, parts: {}, hover: null, editing: null, zone: null, merge: null, shift: false,
   set: patch => set(patch),
 }))
 
@@ -214,29 +224,51 @@ function wallPoint(clientX: number, clientY: number, el: Element, w: Wall): { x:
 let wallDrop: string | null = null
 export function standingStoryDrop(): string | null { return wallDrop }
 
-/** Where a storyline flipped up stands: the line it turns up about (canvas
- *  units), kept from when it was flipped so moving the storyline moves it
- *  along and up its wall; else its main line as it lies. */
+/** While a storyline stands (from when it starts to rise until it lies
+ *  flat again): its foot, as how far below its base line it lies. Fixed
+ *  then, so nothing done on the wall tips it about another line; moving the
+ *  whole storyline moves it along. */
+const frozenFeet = new Map<string, number>()
+let feetVersion = 0
+
+/** The lowest point (canvas y) of storyline `n`'s dots — `only` those —
+ *  and the bottoms of the cards linked to them. */
+function lowestOf(n: FreeNodeData, only?: Set<string>): number {
+  let y = -Infinity
+  const groups = useBoardsStore.getState().groups
+  for (const p of n.storyline?.dots ?? []) {
+    if (only && !only.has(p.id)) continue
+    y = Math.max(y, n.y + p.y)
+    for (const c of p.cards ?? []) {
+      const g = groups.find(x => x.id === c)
+      const b = g && !g.pin ? groupBounds(c) : null
+      if (g && b) y = Math.max(y, b.y + Math.max(b.h, g.cardHeightOverride ?? 0))
+    }
+  }
+  return y
+}
+
+/** Where a storyline flipped up stands: a level line through its lowest
+ *  point, on the floor just where it lies flat (canvas units), so it stands
+ *  up from the same 2D place it lies down in. */
 function wallFootOf(n: FreeNodeData): Wall | null {
   const d = n.storyline
   if (!d?.dots?.length) return null
-  const f = d.wallFoot
-  if (f) {
-    const { nx, ny } = upNormal(f.ux, f.uy)
-    return { x0: f.x, y0: f.y, ux: f.ux, uy: f.uy, nx, ny }
-  }
-  const s = d.dots[0], u = mainWay(d)
-  const { nx, ny } = upNormal(u.ux, u.uy)
-  return { x0: n.x + s.x, y0: n.y + s.y, ux: u.ux, uy: u.uy, nx, ny }
+  const rid = rootOf(d)
+  const s = d.dots.find(p => p.id === rid) ?? d.dots[0]
+  const by = n.y + s.y
+  const off = frozenFeet.get(n.id) ?? lowestOf(n) - by
+  const { nx, ny } = upNormal(1, 0)
+  return { x0: n.x + s.x, y0: by + off, ux: 1, uy: 0, nx, ny }
 }
 
 /** For TiltLayer: the canvas y of the wall a linked card stands up on with
  *  its storyline (flipped up, its foot lying across the view, as standing
  *  cards stand), or null. */
-let wallCards: { nodes: unknown; map: Map<string, number> } | null = null
+let wallCards: { nodes: unknown; feet: number; map: Map<string, number> } | null = null
 export function storyWallOf(groupId: string): number | null {
   const nodes = useFreeNodeStore.getState().nodes
-  if (wallCards?.nodes !== nodes) {
+  if (wallCards?.nodes !== nodes || wallCards.feet !== feetVersion) {
     const map = new Map<string, number>()
     for (const n of Object.values(nodes)) {
       if (!n.storyline?.standUp || n.pin || !n.storyline.dots) continue
@@ -244,7 +276,7 @@ export function storyWallOf(groupId: string): number | null {
       if (!w || Math.abs(w.uy) > 1e-6) continue
       for (const p of n.storyline.dots) for (const c of p.cards ?? []) map.set(c, w.y0)
     }
-    wallCards = { nodes, map }
+    wallCards = { nodes, feet: feetVersion, map }
   }
   // Only cards are turned with it: zoomed in, they are blocks and boards.
   return currentZone() === 'card' ? wallCards.map.get(groupId) ?? null : null
@@ -408,7 +440,11 @@ function applyGroupDelta(b: GroupBase, dx: number, dy: number, sn: (v: number) =
       // Its first selected dot onto a dot of the grid; the rest as far.
       const lead = e.d.dots.find(p => e.dots.has(p.id))
       const mx = lead ? sn(e.x + lead.x + dx) - (e.x + lead.x) : dx, my = lead ? sn(e.y + lead.y + dy) - (e.y + lead.y) : dy
-      writeStoryline(node, e.x, e.y, { ...e.d, dots: e.d.dots.map(p => (e.dots.has(p.id) ? { ...p, x: p.x + mx, y: p.y + my } : p)) })
+      // Base dots keep to the base, unless all of it moves.
+      const base = new Set(e.d.base ?? [])
+      const level = [...base].every(b => e.dots.has(b))
+      writeStoryline(node, e.x, e.y, sortBase({ ...e.d, dots: e.d.dots.map(p => (e.dots.has(p.id)
+        ? { ...p, x: p.x + mx, y: p.y + (base.has(p.id) && !level ? 0 : my) } : p)) }))
       for (const [groupId, o] of e.cards) moves.push({ groupId, originX: o.x + mx, originY: o.y + my })
     }
     const fs = useFreeNodeStore.getState()
@@ -585,7 +621,12 @@ function useWallDrops() {
  *  selected is the canvas's Delete, as a tile. */
 function useStoryKeys() {
   useEffect(() => {
+    const onShift = (e: KeyboardEvent) => {
+      if (e.key === 'Shift' && useStoryUi.getState().shift !== (e.type === 'keydown')) useStoryUi.getState().set({ shift: e.type === 'keydown' })
+    }
+    const onBlur = () => { if (useStoryUi.getState().shift) useStoryUi.getState().set({ shift: false }) }
     const onKey = (e: KeyboardEvent) => {
+      onShift(e)
       const ui = useStoryUi.getState()
       const list = storyPartsList()
       if (!list.length || ui.editing) return
@@ -623,9 +664,13 @@ function useStoryKeys() {
       if (ui.sel || Object.keys(ui.parts).length) ui.set({ sel: null, parts: {} })
     }
     window.addEventListener('keydown', onKey, true)
+    window.addEventListener('keyup', onShift, true)
+    window.addEventListener('blur', onBlur)
     window.addEventListener('pointerdown', onDown, true)
     return () => {
       window.removeEventListener('keydown', onKey, true)
+      window.removeEventListener('keyup', onShift, true)
+      window.removeEventListener('blur', onBlur)
       window.removeEventListener('pointerdown', onDown, true)
     }
   }, [])
@@ -668,10 +713,11 @@ function screenHits(host: HTMLElement, n: FreeNodeData, wall: Wall | null): Scre
   return out
 }
 
-/** A drag in hand: one dot moving (`cards` its cards, where they were), or
- *  the whole storyline, or the selection. */
+/** A drag in hand: a dot moving with the dots it brings (`moves`, it among
+ *  them; `cards` theirs, where they were; `slide` along the base), or the
+ *  whole storyline, or the selection. */
 type Gesture =
-  | { kind: 'dot'; dot: string; d: StorylineData; cards: Map<string, { x: number; y: number }> }
+  | { kind: 'dot'; dot: string; d: StorylineData; moves: Set<string>; slide: boolean; cards: Map<string, { x: number; y: number }>; low?: number }
   | { kind: 'move'; cards: Map<string, { x: number; y: number }> }
   | { kind: 'group'; base: GroupBase; last: { dx: number; dy: number } }
 
@@ -684,6 +730,7 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
   const merge = useStoryUi(s => (s.merge?.node === id ? s.merge.point : null))
   const hover = useStoryUi(s => (s.hover?.node === id ? s.hover : null))
   const editing = useStoryUi(s => (s.editing?.node === id ? s.editing.point : null))
+  const shift = useStoryUi(s => s.shift)
   const linking = useLinkDragStore(s => s.active && s.source?.kind === 'group')
   const busy = useRef(false)
   const lastClick = useRef<{ point: string; at: number } | null>(null)
@@ -694,7 +741,14 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
   useEffect(() => {
     if (raw && migrateStoryline(raw) !== raw) {
       const n = useFreeNodeStore.getState().nodes[id]
-      if (n) writeStoryline(id, n.x, n.y, migrateStoryline(raw))
+      if (!n) return
+      const m = migrateStoryline(raw)
+      // Dots its base straightened bring their cards.
+      for (const p of m.dots) {
+        const was = raw.dots?.find(q => q.id === p.id)
+        if (was && p.cards?.length && (was.x !== p.x || was.y !== p.y)) moveCards(cardOrigins(raw, new Set([p.id])), p.x - was.x, p.y - was.y)
+      }
+      writeStoryline(id, n.x, n.y, m)
     }
   }, [id, raw])
 
@@ -709,6 +763,15 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
   // Up as far as the standing cards are, following the tilt.
   const rise = useTiltStore(s => (raw?.standUp ? standRise(s) : 0))
   const standing = tilted && !!raw?.standUp && rise > 0
+  // Its foot fixed as it starts to rise, let go once it lies flat again.
+  if (standing && !frozenFeet.has(id) && node?.storyline?.dots) {
+    const f = wallFootOf(node)
+    const s = node.storyline.dots.find(p => p.id === rootOf(node.storyline!))
+    if (f && s) { frozenFeet.set(id, f.y0 - (node.y + s.y)); feetVersion++ }
+  }
+  useEffect(() => {
+    if (!standing && frozenFeet.delete(id)) feetVersion++
+  }, [standing, id])
   const worldRef = useRef<HTMLElement | null>(null)
   useLayoutEffect(() => {
     // The world layer and its tilt stage pass the wall's turn on into the 3D
@@ -764,15 +827,17 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
   // while its foot lies across the view: TiltLayer turns them about the same
   // foot by the same angle, so they stay at their offsets from their dots.
   const cardsStand = !!wall && Math.abs(wall.uy) <= 1e-6 && zone3 === 'card'
+  // Over a dot's centre: what a drag of it moves, lit.
+  const lit = zone && !zone.ring && byId.has(zone.point) ? (shift ? new Set([zone.point]) : downstream(d, zone.point)) : null
 
   /** A dot under client point (x, y) other than `self` (in this storyline),
    *  read off the view: what a dragged dot let go there merges into. */
-  const dotUnder = (x: number, y: number, self: string): string | null => {
+  const dotUnder = (x: number, y: number, self: Set<string>): string | null => {
     for (const el of document.elementsFromPoint(x, y)) {
       const r = el.getAttribute('data-role')
       if (r !== 'point' && r !== 'ring') continue
       const p = el.getAttribute('data-point')
-      if (p && p !== self && el.closest<HTMLElement>('[data-storyline]')?.dataset.storyline === id) return p
+      if (p && !self.has(p) && el.closest<HTMLElement>('[data-storyline]')?.dataset.storyline === id) return p
     }
     return null
   }
@@ -780,6 +845,7 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
   const onPointerMove = (e: React.PointerEvent) => {
     if (busy.current) return
     const ui = useStoryUi.getState()
+    if (e.shiftKey && !ui.shift) ui.set({ shift: true })
     const role = (e.target as Element).closest<HTMLElement | SVGElement>('[data-role]')
     // The grab zone under the mouse, lit.
     const r = role?.dataset.role
@@ -811,7 +877,11 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
     e.stopPropagation()
     e.preventDefault()
     const host = e.currentTarget
-    const c0 = toCanvas(e.nativeEvent, host, wall)
+    // The grab handle moves it across the floor, flipped up or not; all
+    // else is read on the wall.
+    const plane = role === 'grab' ? null : wall
+    const one = e.shiftKey || useStoryUi.getState().shift
+    const c0 = toCanvas(e.nativeEvent, host, plane)
     if (!c0) return
     const d0 = d
     const x0 = node.x, y0 = node.y
@@ -834,19 +904,21 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
         if (mine && storyPartsList().length + bs.selectedGroupIds.length + fs.selectedIds.length > 1) {
           return { kind: 'group', base: captureGroupBase(), last: { dx: 0, dy: 0 } }
         }
-        return { kind: 'dot', dot: pointId, d: d0, cards: cardOrigins(d0, new Set([pointId])) }
+        const moves = one ? new Set([pointId]) : downstream(d0, pointId)
+        return { kind: 'dot', dot: pointId, d: d0, moves, slide: !!d0.base?.includes(pointId), cards: cardOrigins(d0, moves),
+                 low: wall ? lowestOf(node, moves) : undefined }
       }
       if (role === 'ring' && pointId) {
         const p = byId.get(pointId)!
         const grown = growDot(d0, pointId, p.x, p.y)
-        return { kind: 'dot', dot: grown.id, d: grown.d, cards: new Map() }
+        return { kind: 'dot', dot: grown.id, d: grown.d, moves: new Set([grown.id]), slide: !!grown.d.base?.includes(grown.id), cards: new Map() }
       }
       if (role === 'line' && ea && eb) {
         const a = byId.get(ea), b = byId.get(eb)
         if (!a || !b) return null
         const q = onSegment(a, b, c0.x - x0, c0.y - y0)
         const put = insertDot(d0, ea, eb, q.x, q.y)
-        return { kind: 'dot', dot: put.id, d: put.d, cards: new Map() }
+        return { kind: 'dot', dot: put.id, d: put.d, moves: new Set([put.id]), slide: !!put.d.base?.includes(put.id), cards: new Map() }
       }
       return null
     }
@@ -856,30 +928,44 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
       const sn = snapper(d0, free)
       if (gesture.kind === 'group') { applyGroupDelta(gesture.base, c.x - c0.x, c.y - c0.y, sn, true, gesture.last); return }
       if (gesture.kind === 'move') {
-        // Its first dot onto a dot of the grid: the whole storyline keeps to it.
-        const s = d0.dots[0]
+        // Its start onto a dot of the grid: the whole storyline keeps to it.
+        const s = d0.dots.find(q => q.id === rootOf(d0))
         const rx = x0 + (s?.x ?? 0), ry = y0 + (s?.y ?? 0)
         const dx = sn(rx + c.x - c0.x) - rx, dy = sn(ry + c.y - c0.y) - ry
         useFreeNodeStore.getState().updateFreeNode(id, { x: x0 + dx, y: y0 + dy })
         moveCards(gesture.cards, dx, dy)
         return
       }
-      // A dot, to the cursor's spot (snapped), its lines following. Over
-      // another dot: that one is lit, and letting go merges them.
+      // A dot, to the cursor's spot (snapped), with what it brings, its
+      // lines following; a base dot along the base, no further than the
+      // base dots either side (a two-dot base may swap ends). Over another
+      // dot: that one is lit, and letting go merges them.
       const g = gesture
       const p = g.d.dots.find(q => q.id === g.dot)
       if (!p) return
-      const was = d0.dots.find(q => q.id === g.dot) ?? p
-      const nx = sn(c.x) - x0, ny = sn(c.y) - y0
-      writeStoryline(id, x0, y0, { ...g.d, dots: g.d.dots.map(q => (q.id === g.dot ? { ...q, x: nx, y: ny } : q)) })
-      moveCards(g.cards, nx - was.x, ny - was.y)
-      const over = dotUnder(client.x, client.y, g.dot)
+      let nx = sn(c.x) - x0, ny = sn(c.y) - y0
+      if (g.slide) {
+        ny = p.y
+        const base = g.d.base ?? []
+        const i = base.indexOf(g.dot)
+        const at = (k: number) => g.d.dots.find(q => q.id === base[k])?.x
+        const lo = base.length > 2 ? at(i - 1) : undefined, hi = base.length > 2 ? at(i + 1) : undefined
+        if (lo !== undefined) nx = Math.max(lo, nx)
+        if (hi !== undefined) nx = Math.min(hi, nx)
+      }
+      // Standing: the floor is as low as it goes.
+      const low = g.low ?? (wall ? y0 + p.y : undefined)
+      if (wall && low !== undefined) ny = Math.min(ny, p.y + wall.y0 - low)
+      const dx = nx - p.x, dy = ny - p.y
+      writeStoryline(id, x0, y0, sortBase({ ...g.d, dots: g.d.dots.map(q => (g.moves.has(q.id) ? { ...q, x: q.x + dx, y: q.y + dy } : q)) }))
+      moveCards(g.cards, dx, dy)
+      const over = dotUnder(client.x, client.y, g.moves)
       const ui = useStoryUi.getState()
       if ((ui.merge?.point ?? null) !== over) ui.set({ merge: over ? { node: id, point: over } : null })
     }
 
     const onMove = (ev: PointerEvent) => {
-      const c = toCanvas(ev, host, wall)
+      const c = toCanvas(ev, host, plane)
       if (!c) return
       if (!gesture) {
         if (Math.hypot(c.x - c0.x, c.y - c0.y) * zoom < DRAG_PX) return
@@ -947,7 +1033,7 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
     window.addEventListener('pointercancel', onCancel)
   }
 
-  const start = d.dots[0]
+  const start = byId.get(rootOf(d) ?? '')
 
   return (
     <div
@@ -986,12 +1072,12 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
           rotate: foot ? `${foot.ux} ${foot.uy} 0 ${standing ? turn * rise : 0}deg` : undefined,
         }}
       >
-        <StorySvg id={id} d={d} w={node.width} h={node.height} px={px} sel={sel} parts={parts} zone={zone} merge={merge} hover={hover}
+        <StorySvg id={id} d={d} w={node.width} h={node.height} px={px} sel={sel} parts={parts} zone={zone} merge={merge} hover={hover} moving={lit}
                   linking={linking} picked={picked} tethers={standing && !cardsStand ? NO_TETHERS : tethers} hits={hits} />
         {start && (
-          // Straight below the first dot (titles go above), a fixed
-          // distance on screen: nothing done to its lines moves it.
-          <StoryGrab x={start.x} y={start.y + GRAB_OFF * px} px={px} picked={picked} />
+          // Left of the base's start, on its line (titles go above, the room
+          // under the base is kept clear), a fixed distance on screen.
+          <StoryGrab x={start.x - GRAB_OFF * px} y={start.y} px={px} picked={picked} />
         )}
         {d.dots.map(p => {
           const isEditing = editing === p.id
@@ -1055,8 +1141,8 @@ const StorySvg: React.FC<{
   id: string; d: StorylineData; w: number; h: number; px: number
   sel: string | null; parts: string[]; hover: { x: number; y: number } | null; linking: boolean; picked: boolean
   zone: { point: string; ring: boolean } | null; merge: string | null; tethers: Tether[]
-  hits: ScreenHits | null
-}> = ({ id, d, w, h, px, sel, parts, zone, merge, hover, linking, picked, tethers, hits }) => {
+  hits: ScreenHits | null; moving: Set<string> | null
+}> = ({ id, d, w, h, px, sel, parts, zone, merge, hover, linking, picked, tethers, hits, moving }) => {
   const [lit, setLit] = useState<string | null>(null)
   // Room round the box for rings and handles, and out to every tether's
   // card: the box is what takes the pointer.
@@ -1089,12 +1175,17 @@ const StorySvg: React.FC<{
         {d.edges.map(e => {
           const a = byId.get(e.a), b = byId.get(e.b)
           if (!a || !b) return null
+          // The base line a little stronger than the rest.
+          const lw = isBaseEdge(d, e.a, e.b) ? LINE_W * 1.6 : LINE_W
           return (
             <g key={`${e.a}|${e.b}`}>
-              {picked && <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={C_RING} strokeWidth={(LINE_W + 2 * RING_W) * px} />}
+              {picked && <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={C_RING} strokeWidth={(lw + 2 * RING_W) * px} />}
+              {moving?.has(e.a) && moving.has(e.b) && (
+                <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={C_GLOW} strokeOpacity={0.35} strokeWidth={(lw + 8) * px} />
+              )}
               {/* A soft glow of its own colour round the line. */}
-              <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={tone} strokeOpacity={0.18} strokeWidth={(LINE_W + 6) * px} />
-              <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={tone} strokeOpacity={0.9} strokeWidth={LINE_W * px} />
+              <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={tone} strokeOpacity={0.18} strokeWidth={(lw + 6) * px} />
+              <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={tone} strokeOpacity={lw > LINE_W ? 1 : 0.9} strokeWidth={lw * px} />
               <line
                 x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="transparent" strokeWidth={Math.max(LINE_HIT, LINE_W + 8) * px}
                 pointerEvents="stroke" style={{ cursor: 'copy' }} data-role="line" data-a={e.a} data-b={e.b}
@@ -1115,6 +1206,8 @@ const StorySvg: React.FC<{
           const r0 = DOT_R * px
           return (
             <g key={p.id}>
+              {/* What a drag of the dot under the mouse moves, lit. */}
+              {moving?.has(p.id) && <circle cx={p.x} cy={p.y} r={(RING_R + 3) * px} fill={C_GLOW} fillOpacity={0.22} pointerEvents="none" />}
               {linking && <circle cx={p.x} cy={p.y} r={RING_HIT * px} fill={C_GLOW} fillOpacity={0.25} pointerEvents="none" />}
               {(picked || parts.includes(p.id)) && <circle cx={p.x} cy={p.y} r={r0 + RING_W * px} fill={C_RING} pointerEvents="none" />}
               {/* The outer ring: grows a new dot. Bolder when it holds cards. */}
@@ -1205,7 +1298,8 @@ const StoryMenu: React.FC<{
     // A line: its far end, away from the start, is where its branch begins.
     const [a, b] = at.line
     const far = d.dots[0]?.id === a ? b : d.dots[0]?.id === b ? b : b
-    items.push({ label: 'Delete', icon: '🗑️', danger: true, action: () => editStoryline(id, x => ({ ...x, edges: x.edges.filter(e => !((e.a === a && e.b === b) || (e.a === b && e.b === a))) }) ) })
+    // The base stays whole: only branch lines come out on their own.
+    if (!isBaseEdge(d, a, b)) items.push({ label: 'Delete', icon: '🗑️', danger: true, action: () => editStoryline(id, x => ({ ...x, edges: x.edges.filter(e => !((e.a === a && e.b === b) || (e.a === b && e.b === a))) }) ) })
     items.push({ label: 'Delete branch', icon: '🗑️', danger: true, action: () => editStoryline(id, x => deleteBranchFrom(x, far)) })
   }
   if (!at.tether) items.push({ label: 'Delete storyline', icon: '🗑️', danger: true, action: () => {
@@ -1305,11 +1399,8 @@ const StoryLook: React.FC<{ id: string; d: StorylineData; custom: boolean; setCu
       {/* An on/off box; its label never changes. */}
       <label style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px 0', color: '#e2e8f0', fontSize: 13, cursor: 'pointer' }}>
         <input type="checkbox" checked={!!d.standUp} onChange={e => {
-          // Flipped up, it stands on its main line as it lies now; moved
-          // afterwards it moves along and up that wall.
-          const n = useFreeNodeStore.getState().nodes[id]
-          const w = e.target.checked && n ? wallFootOf(n) : null
-          setStoryLook(id, { standUp: e.target.checked || undefined, wallFoot: w ? { x: w.x0, y: w.y0, ux: w.ux, uy: w.uy } : undefined })
+          // Flipped up, it stands on its base line, where the base lies.
+          setStoryLook(id, { standUp: e.target.checked || undefined, wallFoot: undefined })
         }} />
         Flip up in 3D view
       </label>
