@@ -78,9 +78,10 @@ const DOUBLE_MS = 400
 const NONE: string[] = []
 const NO_GROUPS: ProjectGroup[] = []
 const NO_TETHERS: Tether[] = []
-/** Screen px from the first dot to the grab handle's middle, across the
- *  main line on its down side: clear of the dot's ring and title. */
-const GRAB_OFF = 40
+/** Screen px from the first dot straight down to the grab handle's
+ *  middle: clear of the dot's ring, title and options, whatever its
+ *  lines do. */
+const GRAB_OFF = 62
 /** World layers holding a standing storyline, and how many. */
 const standingWalls = new Map<HTMLElement, number>()
 
@@ -638,6 +639,35 @@ function onSegment(a: StoryDot, b: StoryDot, x: number, y: number): { x: number;
   return { x: a.x + vx * k, y: a.y + vy * k, k }
 }
 
+/** Per dot, its two grab zones' outlines (SVG points, node units). */
+type ScreenHits = Record<string, { ring: string; point: string }>
+
+/** Tilted, each dot's grab zones as circles on screen: round the dot's
+ *  middle as drawn (its box's centre, as the view projects it), at the
+ *  zones' radii in screen px, laid back on the plane — or, standing, the
+ *  wall — point by point (toCanvas). A dot not on screen keeps its circles. */
+function screenHits(host: HTMLElement, n: FreeNodeData, wall: Wall | null): ScreenHits {
+  const out: ScreenHits = {}
+  const ring = (cx: number, cy: number, r: number): string | null => {
+    const pts: string[] = []
+    for (let i = 0; i < 20; i++) {
+      const a = (i / 20) * Math.PI * 2
+      const c = toCanvas({ clientX: cx + Math.cos(a) * r, clientY: cy + Math.sin(a) * r, isTrusted: true }, host, wall)
+      if (!c) return null
+      pts.push(`${(c.x - n.x).toFixed(2)},${(c.y - n.y).toFixed(2)}`)
+    }
+    return pts.join(' ')
+  }
+  for (const el of host.querySelectorAll<SVGElement>('[data-dot-centre]')) {
+    const r = el.getBoundingClientRect()
+    if (!r.width && !r.height) continue
+    const cx = r.left + r.width / 2, cy = r.top + r.height / 2
+    const a = ring(cx, cy, RING_HIT), b = ring(cx, cy, DOT_ZONE)
+    if (a && b) out[el.dataset.dotCentre!] = { ring: a, point: b }
+  }
+  return out
+}
+
 /** A drag in hand: one dot moving (`cards` its cards, where they were), or
  *  the whole storyline, or the selection. */
 type Gesture =
@@ -696,6 +726,28 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
       else { standingWalls.delete(world); world.style.transformStyle = ''; stage.style.transformStyle = '' }
     }
   }, [standing])
+
+  // Tilted: each dot's grab zones as the shapes on the plane (or wall) that
+  // show as circles on screen, round its dot as drawn, so its ring is as
+  // easy to take from any side. Remeasured as the view moves.
+  const [hits, setHits] = useState<ScreenHits | null>(null)
+  const outerRef = useRef<HTMLDivElement | null>(null)
+  const view = useTiltStore(s => (isTilted(s) ? `${s.tilt}|${s.spin}|${s.shiftX}|${s.shiftY}|${rise}` : ''))
+  useCanvasStore(s => s.pan)
+  useLayoutEffect(() => {
+    // Measured just after, not here: a press TiltLayer re-sends lays the
+    // view's boxes flat while it runs, and this can run inside one.
+    const t = setTimeout(() => {
+      const host = outerRef.current
+      const n = useFreeNodeStore.getState().nodes[id]
+      if (!view || !host || !n?.storyline?.dots) { setHits(h => (h ? null : h)); return }
+      const f = wallFootOf(n)
+      const w: Wall | null = standing && f ? { ...f, a: Math.PI / 2 * rise } : null
+      const next = screenHits(host, n, w)
+      setHits(h => (h && JSON.stringify(h) === JSON.stringify(next) ? h : next))
+    }, 0)
+    return () => clearTimeout(t)
+  })
 
   if (!node || !raw?.dots) return null
   const d = raw
@@ -896,12 +948,10 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
   }
 
   const start = d.dots[0]
-  const way = mainWay(d)
-  const wn = upNormal(way.ux, way.uy)
 
   return (
     <div
-      ref={el => { worldRef.current = el?.closest<HTMLElement>('[data-world]') ?? null }}
+      ref={el => { outerRef.current = el; worldRef.current = el?.closest<HTMLElement>('[data-world]') ?? null }}
       data-storyline={id}
       // Standing, its presses are its own (read on the wall, wallPoint).
       data-layer-pane={standing ? '' : undefined}
@@ -937,11 +987,11 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
         }}
       >
         <StorySvg id={id} d={d} w={node.width} h={node.height} px={px} sel={sel} parts={parts} zone={zone} merge={merge} hover={hover}
-                  linking={linking} picked={picked} tethers={standing && !cardsStand ? NO_TETHERS : tethers} />
+                  linking={linking} picked={picked} tethers={standing && !cardsStand ? NO_TETHERS : tethers} hits={hits} />
         {start && (
-          // By the first dot, across the main line on its down side (titles
-          // go up), a fixed distance on screen.
-          <StoryGrab x={start.x - wn.nx * GRAB_OFF * px} y={start.y - wn.ny * GRAB_OFF * px} px={px} picked={picked} />
+          // Straight below the first dot (titles go above), a fixed
+          // distance on screen: nothing done to its lines moves it.
+          <StoryGrab x={start.x} y={start.y + GRAB_OFF * px} px={px} picked={picked} />
         )}
         {d.dots.map(p => {
           const isEditing = editing === p.id
@@ -1005,7 +1055,8 @@ const StorySvg: React.FC<{
   id: string; d: StorylineData; w: number; h: number; px: number
   sel: string | null; parts: string[]; hover: { x: number; y: number } | null; linking: boolean; picked: boolean
   zone: { point: string; ring: boolean } | null; merge: string | null; tethers: Tether[]
-}> = ({ id, d, w, h, px, sel, parts, zone, merge, hover, linking, picked, tethers }) => {
+  hits: ScreenHits | null
+}> = ({ id, d, w, h, px, sel, parts, zone, merge, hover, linking, picked, tethers, hits }) => {
   const [lit, setLit] = useState<string | null>(null)
   // Room round the box for rings and handles, and out to every tether's
   // card: the box is what takes the pointer.
@@ -1069,7 +1120,7 @@ const StorySvg: React.FC<{
               {/* The outer ring: grows a new dot. Bolder when it holds cards. */}
               <circle cx={p.x} cy={p.y} r={RING_R * px} fill="none" stroke={color}
                       strokeOpacity={(p.cards?.length ?? 0) > 0 ? 1 : 0.45} strokeWidth={1.5 * px} pointerEvents="none" />
-              <circle cx={p.x} cy={p.y} r={r0} fill={color} stroke="#12131f" strokeWidth={1.5 * px} pointerEvents="none" />
+              <circle cx={p.x} cy={p.y} r={r0} fill={color} stroke="#12131f" strokeWidth={1.5 * px} pointerEvents="none" data-dot-centre={p.id} />
               {merge === p.id && (
                 // Let go now and the dragged dot merges into this one.
                 <circle cx={p.x} cy={p.y} r={RING_R * px} fill="none" stroke={C_SEL} strokeOpacity={0.9} strokeWidth={4 * px} pointerEvents="none" />
@@ -1079,14 +1130,26 @@ const StorySvg: React.FC<{
               ) : (
                 <circle cx={p.x} cy={p.y} r={(DOT_R + 2) * px} fill={C_GLOW} fillOpacity={0.5} pointerEvents="none" />
               ))}
-              <circle
-                cx={p.x} cy={p.y} r={RING_HIT * px} fill="transparent" pointerEvents="all" style={{ cursor: 'crosshair' }}
-                data-role="ring" data-point={p.id} data-link-drop={`story:${id}:${p.id}`}
-              />
-              <circle
-                cx={p.x} cy={p.y} r={DOT_ZONE * px} fill="transparent" pointerEvents="all" style={{ cursor: 'grab' }}
-                data-role="point" data-point={p.id} data-link-drop={`story:${id}:${p.id}`}
-              />
+              {/* Its two grab zones: tilted, the shapes on the plane that
+                  look round on screen (screenHits). */}
+              {hits?.[p.id] ? (
+                <polygon points={hits[p.id].ring} fill="transparent" pointerEvents="all" style={{ cursor: 'crosshair' }}
+                         data-role="ring" data-point={p.id} data-link-drop={`story:${id}:${p.id}`} />
+              ) : (
+                <circle
+                  cx={p.x} cy={p.y} r={RING_HIT * px} fill="transparent" pointerEvents="all" style={{ cursor: 'crosshair' }}
+                  data-role="ring" data-point={p.id} data-link-drop={`story:${id}:${p.id}`}
+                />
+              )}
+              {hits?.[p.id] ? (
+                <polygon points={hits[p.id].point} fill="transparent" pointerEvents="all" style={{ cursor: 'grab' }}
+                         data-role="point" data-point={p.id} data-link-drop={`story:${id}:${p.id}`} />
+              ) : (
+                <circle
+                  cx={p.x} cy={p.y} r={DOT_ZONE * px} fill="transparent" pointerEvents="all" style={{ cursor: 'grab' }}
+                  data-role="point" data-point={p.id} data-link-drop={`story:${id}:${p.id}`}
+                />
+              )}
             </g>
           )
         })}
