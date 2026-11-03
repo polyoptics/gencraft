@@ -26,7 +26,7 @@ import { EFFECT_DRAG_MIME, clientToCanvas, createEffectCard, createLoopStrip, ef
 import { takeDragOutCard, takeDragOutShape } from '../../utils/dragOutSource'
 import { placeCard } from '../../utils/railCards'
 import { drawnRect } from '../../utils/effectCards'
-import { cardFaceSize, createMediaCard } from '../../utils/cardGrid'
+import { cardFaceSize, createMediaCard, createTextCard } from '../../utils/cardGrid'
 import { tileDeckIndex } from '../../utils/tileDecks'
 import { RAIL_GEOM, isRail, railDropTarget, railLayout, railMembers, type RailDropTarget } from '../../utils/rail'
 import { railAtPoint } from './rail/railHit'
@@ -47,7 +47,10 @@ interface PoolDragPayload {
 
 const POOL_KINDS: readonly MediaType[] = ['image', 'video', 'audio', 'model']
 /** Media that comes in as a card of its own (dropAsCards). */
-const CARD_KINDS: readonly MediaType[] = ['image', 'video', 'model']
+const CARD_KINDS: readonly MediaType[] = ['image', 'video', 'model', 'audio']
+
+/** A text file that comes in as a text card (plain text or Markdown). */
+const isTextFile = (f: File) => f.type === 'text/plain' || f.type === 'text/markdown' || /\.(txt|md|markdown)$/i.test(f.name)
 
 /** Parse a pool payload defensively — a drag can carry text from anywhere,
  *  and a malformed one must fall through to the file path rather than
@@ -462,7 +465,16 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
         floating || !effectDropAllowed(e.clientX, e.clientY) ? 'none' : 'copy'
       return
     }
-    if (!e.dataTransfer.types.includes('Files') && !e.dataTransfer.types.includes(POOL_DRAG_MIME)) return
+    // Dragged text (from a browser, an editor) makes a text card on bare
+    // canvas, and only there.
+    if (!e.dataTransfer.types.includes('Files') && !e.dataTransfer.types.includes(POOL_DRAG_MIME)) {
+      if (!e.dataTransfer.types.includes('text/plain')) return
+      const aim = aimDrop(e.clientX, e.clientY)
+      if (floating || aim.target || !aim.onCanvas) return
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'copy'
+      return
+    }
     // Accepted only where letting go would do something: over a target, or
     // over bare canvas to make a tile on. Over a pinned panel, or over a
     // header with nothing that takes it beneath, the drag is refused.
@@ -558,8 +570,8 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
   }, [addFreeNode, updateFreeNode, setFreeSelection])
 
   /** Cards-first: what comes in onto bare canvas becomes a CARD — a picture,
-   *  a video or a 3D model, one card each (utils/cardGrid), side by side from
-   *  the drop point, the first centred on it. Audio is still a tile. One undo step for the lot. Files upload first: a card is made
+   *  a video, a 3D model or a sound, one card each (utils/cardGrid), side by
+   *  side from the drop point, the first centred on it. One undo step for the lot. Files upload first: a card is made
    *  around the media it holds. Returns nothing to deal onto a rail — a drop
    *  over a loop strip keeps making tiles (see handleDrop). */
   const dropAsCards = useCallback((e: React.DragEvent, files: File[], pool?: PoolDragPayload) => {
@@ -840,6 +852,34 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
     // Accepts image/video/audio AND 3D models (.glb/.gltf — MIME is often
     // empty on Windows, so filtering lives in isAcceptedMediaFile).
     const files = payload ? [] : Array.from(e.dataTransfer.files).filter(isAcceptedMediaFile)
+    // Text — .txt/.md files, or text dragged in — comes in as text cards,
+    // on bare canvas (not over a loop strip), beside any media dropped with it.
+    const textFiles = payload ? [] : Array.from(e.dataTransfer.files).filter(isTextFile)
+    const dragged = payload || e.dataTransfer.types.includes('Files') ? '' : e.dataTransfer.getData('text/plain').trim()
+    if (textFiles.length || dragged) {
+      const aimT = aimDrop(e.clientX, e.clientY)
+      if (!floating && !aimT.target && aimT.onCanvas && !railAtPoint(e.clientX, e.clientY, useFreeNodeStore.getState().nodes)) {
+        e.preventDefault()
+        const at = clientToCanvas(e.clientX, e.clientY)
+        const step = cardFaceSize().w * 1.08
+        // After any media cards made from the same drop.
+        const first = files.length
+        useUndoCoordinator.getState().checkpoint()
+        if (dragged) {
+          const gid = createTextCard(at, { body: dragged })
+          if (!files.length) useBoardsStore.getState().setSelectedGroup(gid)
+        } else {
+          void (async () => {
+            const made: string[] = []
+            for (const [i, f] of textFiles.entries()) {
+              const body = await f.text().catch(() => '')
+              made.push(createTextCard({ cx: at.cx + (first + i) * step, cy: at.cy }, { title: f.name.replace(/\.[^.]+$/, ''), body }))
+            }
+            if (made.length === 1 && !files.length) useBoardsStore.getState().setSelectedGroup(made[0])
+          })()
+        }
+      }
+    }
     if (!payload && files.length === 0) return
     e.preventDefault()
 
@@ -1078,7 +1118,12 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
           }}>
             {[
               { label: '📝  Add note',  action: () => { addNodeAtCursor('note',  200, 160); setAddMenu(null) } },
-              { label: 'T   Add text',  action: () => { addNodeAtCursor('text',  200, 180); setAddMenu(null) } },
+              { label: 'T   Add text',  action: () => {
+                // Text is a card, like every other media (cards-first).
+                useUndoCoordinator.getState().checkpoint()
+                useBoardsStore.getState().setSelectedGroup(createTextCard({ cx: addMenu.cx, cy: addMenu.cy }, {}))
+                setAddMenu(null)
+              } },
               { label: '🖼  Add image', action: () => { addNodeAtCursor('image', 200, 180); setAddMenu(null) } },
               // An effect card starts as Bloom; its face switches the kind.
               // Line it up right of an image card to start a strip. Made

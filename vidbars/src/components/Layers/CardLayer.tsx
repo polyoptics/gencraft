@@ -29,13 +29,14 @@ import { useMagnetPreviewStore } from '../../store/magnetPreviewStore'
 import { updateDeckMagnetPreview, finishDeckMagnetDock } from '../../utils/deckDockDrag'
 import { groupHasBrowsableContent } from '../../utils/contentTraversal'
 import { FreeCanvas } from '../Canvas/FreeCanvas'
+import { storyLinkOf, unlinkCardFromStorylines } from '../Canvas/StorylineLayer'
 import { Viewport3DLayer } from '../Viewport3D/Viewport3DLayer'
 import { NLETimelineHeader, NLE_HEADER_CANVAS_H, headerExtend as computeHeaderExtend, headerScreenH, overviewScale } from '../NLE/NLETimelineHeader'
 import { HeroImageLayer } from './HeroImageLayer'
 import { useFxStore } from '../../store/fxStore'
 import { cardStripId } from '../../utils/fx/cardStrips'
 import { cardHitAt } from '../../utils/cardContent'
-import { cardFaceMedia, deckFaceSteps, faceSteps, mergeCardsInto, setFaceThumbnail, stepDeckFace, stepFace } from '../../utils/cardGrid'
+import { cardFaceAudio, cardFaceMedia, deckFaceSteps, faceSteps, mergeCardsInto, setFaceThumbnail, stepDeckFace, stepFace } from '../../utils/cardGrid'
 import { drawnRect, effectChain, snapEffectCard } from '../../utils/effectCards'
 import { followFaceInViewer, showDockedCardInViewer } from '../../hooks/useDockedContent'
 import { cardGivesInput, cardRailTarget, dockCardsOnRail, endDockedDrag, liftDockedCards, previewCardRail } from '../../utils/railCards'
@@ -279,6 +280,13 @@ const CardContextMenu: React.FC<{
       onClose()
     }})
   }
+
+  // Hanging on a storyline point: let it go from there (it stays put).
+  if (storyLinkOf(group.id)) menuItems.push({ label: 'Unlink from storyline', icon: '⛓️', action: () => {
+    useUndoCoordinator.getState().checkpoint()
+    unlinkCardFromStorylines(group.id)
+    onClose()
+  }})
 
   // Delete
   if (groups.length > 1) menuItems.push({ label: 'Delete Card', icon: '🗑', danger: true, separator: true, action: () => {
@@ -790,6 +798,8 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
   const faceItem = useMemo(() => cardFaceMedia(group, boards), [group, boards])
   const heroImage = faceItem?.type === 'image' ? faceItem.url : (faceItem?.posterUrl ?? null)
   const faceVideo = faceItem?.type === 'video' ? faceItem : null
+  // An audio card has no picture: its face plays the sound.
+  const faceAudio = useMemo(() => cardFaceAudio(group, boards), [group, boards])
   const steps = useMemo(() => faceSteps(group, boards), [group, boards])
   // Effects snapped to the card (utils/fx/cardStrips): the face shows its
   // picture through them, the way a picture tile does. The result goes in
@@ -927,6 +937,7 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
         {faceVideo && !(fxFace && !fxOff)
           ? <FaceVideo key={faceVideo.url} media={faceVideo} cardId={group.id} scale={overviewScale(zoom)} />
           : shownHero && <HeroImageLayer heroImage={shownHero} transform={group.cardHeroTransform} />}
+        {faceAudio && <FaceAudio key={faceAudio.url} media={faceAudio} scale={overviewScale(zoom)} />}
         {/* Step the face through the card's blocks, in reading order. */}
         {isHovered && steps.count > 1 && (
           <>
@@ -1650,6 +1661,7 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
   const heroImage = faceItem ? (faceItem.type === 'image' ? faceItem.url : faceItem.posterUrl ?? null) : null
   // A video face plays here as on the card itself (FaceVideo).
   const faceVideo = faceItem?.type === 'video' && !deckFx.shown ? faceItem : null
+  const faceAudio = useMemo(() => (deckFx.shown ? null : cardFaceAudio(faceCard, boards)), [deckFx.shown, faceCard, boards])
 
   // Stacked card outlines — right-side only, max 2 edges to keep primary card wide.
   const PEEK_RIGHT = 3  // px each edge step
@@ -1793,6 +1805,7 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
           {faceVideo
             ? <FaceVideo key={faceVideo.url} media={faceVideo} cardId={anchorGroup.id} faceOf={faceCard.id} scale={overviewScale(zoom)} />
             : (deckFx.shown ?? heroImage) && <HeroImageLayer heroImage={(deckFx.shown ?? heroImage)!} transform={faceCard.cardHeroTransform} />}
+          {faceAudio && <FaceAudio key={faceAudio.url} media={faceAudio} scale={overviewScale(zoom)} />}
           {/* Step the face through every card's pictures, in deck order. */}
           {isHovered && deckFace.entries.length > 1 && (
             <>
@@ -3339,6 +3352,95 @@ export const FaceVideo: React.FC<{
         }}
       >
         <div style={{ width: '100%', height: barH, background: 'rgba(255,255,255,0.18)', borderRadius: chrome === 'top' ? '6px 6px 0 0' : '0 0 12px 0', overflow: 'hidden' }}>
+          <div style={{ width: `${progress * 100}%`, height: '100%', background: 'rgba(255,255,255,0.85)' }} />
+        </div>
+      </div>
+    </>
+  )
+}
+
+/** An audio card's face: a note and the clip's name, a play button and a
+ *  bar to seek along, the way a video face has them. Paused off-screen. */
+export const FaceAudio: React.FC<{ media: MediaItem; scale: number }> = ({ media, scale }) => {
+  const src = useResolvedMedia(media.url)
+  const ref = useRef<HTMLAudioElement>(null)
+  const [playing, setPlaying] = useState(false)
+  const [progress, setProgress] = useState(0)
+  const k = Math.max(0.7, scale)
+  useEffect(() => {
+    const a = ref.current
+    const face = a?.parentElement
+    if (!a || !face) return
+    const io = new IntersectionObserver(([en]) => { if (!en.isIntersecting && !a.paused) a.pause() })
+    io.observe(face)
+    return () => { io.disconnect(); a.pause() }
+  }, [])
+  const seekTo = (clientX: number, bar: HTMLElement) => {
+    const a = ref.current
+    if (!a || !(a.duration > 0)) return
+    const r = bar.getBoundingClientRect()
+    a.currentTime = Math.max(0, Math.min(1, (clientX - r.left) / Math.max(1, r.width))) * a.duration
+    setProgress(a.currentTime / a.duration)
+  }
+  const stop = (e: React.SyntheticEvent) => e.stopPropagation()
+  const s = 22 * k
+  const barH = 4 * k
+  const name = media.originalName?.replace(/\.[^.]+$/, '') || 'Audio'
+  return (
+    <>
+      <audio
+        ref={ref}
+        data-card-face-audio
+        src={src ?? undefined}
+        preload="metadata"
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onEnded={() => setPlaying(false)}
+        onTimeUpdate={e => { const a = e.currentTarget; if (a.duration > 0) setProgress(a.currentTime / a.duration) }}
+      />
+      <div style={{
+        position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+        gap: 4 * k, pointerEvents: 'none', color: 'rgba(255,255,255,0.8)', padding: `0 ${8 * k}px`,
+      }}>
+        <div style={{ fontSize: 44 * k, lineHeight: 1, opacity: 0.55 }}>♪</div>
+        <div style={{
+          fontSize: 11 * k, fontWeight: 600, maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          textShadow: '0 1px 3px rgba(0,0,0,0.6)',
+        }}>{name}</div>
+      </div>
+      <button
+        type="button" data-face-audio-play title={playing ? 'Pause' : 'Play'}
+        onPointerDown={stop} onDoubleClick={stop}
+        onClick={e => {
+          e.stopPropagation()
+          const a = ref.current
+          if (!a) return
+          if (a.paused) void a.play().catch(() => setPlaying(false))
+          else a.pause()
+        }}
+        style={{
+          position: 'absolute', zIndex: 3, right: 6 * k, bottom: barH + 6 * k,
+          width: s, height: s, padding: 0, borderRadius: '50%', border: '1px solid rgba(255,255,255,0.35)',
+          background: 'rgba(12,13,20,0.6)', color: 'rgba(255,255,255,0.92)', fontSize: s * 0.5, lineHeight: 1,
+          cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'inherit',
+        }}
+      >{playing ? '❚❚' : '▶'}</button>
+      <div
+        data-face-audio-bar
+        onPointerDown={e => {
+          if (e.button !== 0) return
+          e.stopPropagation()
+          e.currentTarget.setPointerCapture(e.pointerId)
+          seekTo(e.clientX, e.currentTarget)
+        }}
+        onPointerMove={e => { if (e.currentTarget.hasPointerCapture(e.pointerId)) seekTo(e.clientX, e.currentTarget) }}
+        onDoubleClick={stop}
+        style={{
+          position: 'absolute', zIndex: 3, height: barH + 6 * k, cursor: 'pointer', display: 'flex',
+          left: FACE_BAR_INSET * k, right: 0, bottom: 0, alignItems: 'flex-end',
+        }}
+      >
+        <div style={{ width: '100%', height: barH, background: 'rgba(255,255,255,0.18)', borderRadius: '0 0 12px 0', overflow: 'hidden' }}>
           <div style={{ width: `${progress * 100}%`, height: '100%', background: 'rgba(255,255,255,0.85)' }} />
         </div>
       </div>

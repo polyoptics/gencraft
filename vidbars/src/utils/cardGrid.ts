@@ -395,15 +395,14 @@ export function addMediaToGridCard(groupId: string, media: MediaItem, label?: st
   return boardId
 }
 
-/** A new grid card holding `items`, one block each, its frame's top-left
- *  at (cx, cy) less half its size (centred there). Named after the first
- *  item. The caller takes the undo checkpoint. Returns the group id. */
-export function createMediaCard(at: { cx: number; cy: number }, items: { media: MediaItem; label?: string }[]): string | null {
-  if (items.length === 0) return null
+/** An empty grid card, its frame's top-left at (cx, cy) less half its size
+ *  (centred there), with one untouched block. The caller takes the undo
+ *  checkpoint. */
+function newGridCard(at: { cx: number; cy: number }, name: string): { groupId: string; boardId: string } {
   const size = cardFaceSize()
   const bs = useBoardsStore.getState()
   const boardId = bs.createBoard(0, 0)
-  const groupId = bs.createGroup(items[0].label || 'Card', [boardId])
+  const groupId = bs.createGroup(name, [boardId])
   useBoardsStore.setState(st => ({
     groups: st.groups.map(gr => gr.id === groupId ? {
       ...gr, layout: 'grid' as const,
@@ -413,8 +412,46 @@ export function createMediaCard(at: { cx: number; cy: number }, items: { media: 
       originX: at.cx - size.w / 2 - 20, originY: at.cy - size.h / 2,
     } : gr),
   }))
+  return { groupId, boardId }
+}
+
+/** A new grid card holding `items`, one block each, its frame's top-left
+ *  at (cx, cy) less half its size (centred there). Named after the first
+ *  item. The caller takes the undo checkpoint. Returns the group id. */
+export function createMediaCard(at: { cx: number; cy: number }, items: { media: MediaItem; label?: string }[]): string | null {
+  if (items.length === 0) return null
+  const { groupId, boardId } = newGridCard(at, items[0].label || 'Card')
   items.forEach((it, i) => addMediaToGridCard(groupId, it.media, it.label, i === 0 ? boardId : null))
   return groupId
+}
+
+/** Text coming in (a dropped .txt/.md file, dragged text, "Add text") is a
+ *  card like any other media: its words on the face, the title above the
+ *  body. Edited there as any card's text is. The caller takes the undo
+ *  checkpoint. Returns the group id. */
+export function createTextCard(at: { cx: number; cy: number }, text: { title?: string; body?: string }): string {
+  const title = (text.title ?? '').trim()
+  const { groupId } = newGridCard(at, title || 'Text')
+  const st = useBoardsStore.getState()
+  st.setGroupCardHeaderText(groupId, title)
+  st.setGroupCardText(groupId, text.body ?? '')
+  // Most of the face for the words; the title keeps a line of its own.
+  st.setGroupTextSplitRatio(groupId, title ? 0.18 : 0.12)
+  return groupId
+}
+
+/** The sound on a card whose face has no picture, video or model to show:
+ *  its first audio clip in reading order, which the face plays. */
+export function cardFaceAudio(g: ProjectGroup, boards: Record<string, BoardData>): MediaItem | null {
+  if (cardFaceMedia(g, boards)) return null
+  for (const bid of gridOrder(g, boards)) {
+    const b = boards[bid]
+    for (const rid of b?.rootIds ?? []) {
+      const m = getMediaItems(b.bars[rid]?.content).find(x => x.type === 'audio')
+      if (m) return m
+    }
+  }
+  return null
 }
 
 /** Merge `sourceIds` cards into `targetId`: every block of each source
