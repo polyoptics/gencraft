@@ -195,6 +195,14 @@ export const standTilt = (s: { tilt: number; yaw: number }) => {
   const k = Math.min(1, Math.abs(s.yaw) / 35)
   return Math.max(0, s.tilt) * (1 - k * k * (3 - 2 * k))
 }
+/** How far what stands up in the tilted view is up, 0..1: rising over the
+ *  first degrees of tipping back and lying down again over the last, eased
+ *  at both ends — the same as a project cabinet and a console's cards
+ *  (TiltLayer, CONSOLE.from to FADE_TILT), so all of them rise together. */
+export const standRise = (s: { tilt: number; yaw: number }) => {
+  const x = Math.max(0, Math.min(1, (standTilt(s) - 4) / (15 - 4)))
+  return x * x * (3 - 2 * x)
+}
 /** Is the camera off the flat view at all? */
 export const isTilted = (s: { tilt: number; yaw: number }) => offFlat(s) > 0.01
 

@@ -39,8 +39,16 @@
 // cursor, so drags read their events as they do flat. Plain hovering is not
 // re-sent: a trusted move while tilted is laid down on the plane here
 // (toCanvas), so the tick sits under the cursor in 3D too.
+//
+// "Flip up in 3D view" (StorylineData.standUp, from the grab handle's menu):
+// tilted, the storyline stands up about its main line like a wall, as the
+// standing cards do (TiltLayer stand). TiltLayer re-sends presses at the
+// ground's flat point, which is not where a wall is, so a standing storyline
+// takes its own presses (data-layer-pane) and reads the cursor on the wall's
+// plane (wallPoint). Tethers there run in 3D from the raised points down to
+// the cards (Tether3D).
 
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import ReactDOM from 'react-dom'
 import { HexColorPicker } from 'react-colorful'
 import { create } from 'zustand'
@@ -52,7 +60,9 @@ import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { useLinkDragStore } from '../../store/linkDragStore'
 import { useViewport3DStore } from '../../store/viewport3dStore'
 import { useMenuClamp } from '../../hooks/useMenuClamp'
-import { useTiltStore, isTilted, unprojectTilt, TILT_FAR } from '../../store/tiltStore'
+import { useTiltStore, isTilted, standRise, unprojectTilt, TILT_FAR } from '../../store/tiltStore'
+import { useWorldZoom } from './worldZoom'
+import { useZoomZone, currentZone } from '../../store/zoomZonesStore'
 import { clientToCanvas } from '../../utils/fx/createEffect'
 import { snapToDots } from '../../utils/dotGrid'
 import { PRESET_COLORS } from '../UI/TextFormatToolbar'
@@ -88,6 +98,8 @@ const DOUBLE_MS = 400
 const NONE: string[] = []
 const NO_GROUPS: ProjectGroup[] = []
 const NO_TETHERS: Tether[] = []
+/** World layers holding a standing storyline, and how many. */
+const standingWalls = new Map<HTMLElement, number>()
 
 /** A linked card's tether: from its point to the nearest spot on the card's
  *  face, relative to the storyline's node. */
@@ -164,9 +176,10 @@ const useStoryUi = create<StoryUi>(set => ({
 /** Client px → canvas units. A trusted event while tilted is where the
  *  cursor is on the tipped plane, laid flat here; a re-sent one (TiltLayer)
  *  is flat already. */
-function toCanvas(e: { clientX: number; clientY: number; isTrusted: boolean }, el: Element): { x: number; y: number } | null {
+function toCanvas(e: { clientX: number; clientY: number; isTrusted: boolean }, el: Element, wall?: Wall | null): { x: number; y: number } | null {
   let cx = e.clientX, cy = e.clientY
   const ts = useTiltStore.getState()
+  if (wall && isTilted(ts)) return wallPoint(cx, cy, el, wall)
   if (e.isTrusted && isTilted(ts)) {
     const host = el.closest('[data-zoom-bar-host]')
     if (!host) return null
@@ -183,6 +196,99 @@ function toCanvas(e: { clientX: number; clientY: number; isTrusted: boolean }, e
 /** Snapping as a card's corner snaps (utils/dotGrid snapToDots): pulled onto
  *  a dot only when close to one, so zoomed far out it stays as tight as the
  *  cards it is composed with. */
+/** A standing storyline's wall: its foot line (canvas units), its up normal
+ *  (the side that rises), and how far it is up (`a`, radians from flat). */
+interface Wall { x0: number; y0: number; ux: number; uy: number; nx: number; ny: number; a?: number }
+
+/** The canvas container's rect (the [data-pin-host] box `pan` is measured
+ *  from), as clientToCanvas reads it. */
+const canvasBox = () => document.querySelector('[data-pin-host]')?.getBoundingClientRect() ?? null
+
+/** Where the cursor meets a standing wall, as the canvas point it shows
+ *  (flat, before it stood): the height at which the cursor's ray meets the
+ *  wall (a point d up it lies d·cos a out from its foot, d·sin a high), then
+ *  that far up it from its foot. */
+function wallPoint(clientX: number, clientY: number, el: Element, w: Wall): { x: number; y: number } | null {
+  const host = el.closest('[data-zoom-bar-host]')
+  const box = canvasBox()
+  if (!host || !box) return null
+  const r = host.getBoundingClientRect()
+  const ts = useTiltStore.getState()
+  const { pan, zoom } = useCanvasStore.getState()
+  const sx = clientX - r.left - r.width / 2, sy = clientY - r.top - r.height / 2
+  const ground = (h: number) => {
+    const q = unprojectTilt(sx, sy, ts.tilt, ts.spin, ts.shiftX, ts.shiftY, h, TILT_FAR)
+    return q && { x: (q.x + r.left + r.width / 2 - box.left - pan.x) / zoom, y: (q.y + r.top + r.height / 2 - box.top - pan.y) / zoom }
+  }
+  const a = w.a ?? Math.PI / 2
+  const cot = Math.cos(a) / Math.max(1e-6, Math.sin(a))
+  // Out from the wall's foot (along its up normal) at height h (screen px),
+  // less where the wall is at that height.
+  const off = (h: number) => { const q = ground(h); return q ? (q.x - w.x0) * w.nx + (q.y - w.y0) * w.ny - h * cot / zoom : NaN }
+  // As high (and as deep) as the cursor's ray still meets the ground: past
+  // that the eye is passed or the view's far limit (TILT_FAR) is.
+  let lo = -4000, hi = 4000
+  while (hi > 1 && Number.isNaN(off(hi))) hi /= 2
+  while (lo < -1 && Number.isNaN(off(lo))) lo /= 2
+  const flo = off(lo), fhi = off(hi)
+  if (!(flo * fhi < 0)) return null
+  for (let i = 0; i < 40; i++) {
+    const mid = (lo + hi) / 2, f = off(mid)
+    if (Number.isNaN(f)) return null
+    if ((f < 0) === (flo < 0)) lo = mid; else hi = mid
+  }
+  const h = (lo + hi) / 2
+  const q = ground(h)
+  if (!q) return null
+  const along = (q.x - w.x0) * w.ux + (q.y - w.y0) * w.uy
+  const up = h / zoom / Math.max(1e-6, Math.sin(a))
+  return { x: w.x0 + w.ux * along + w.nx * up, y: w.y0 + w.uy * along + w.ny * up }
+}
+
+/** The card-link drop a standing storyline's point (or tick end) is under
+ *  the cursor, read as the cursor moves. TiltLayer re-sends the drop at the
+ *  ground's flat point, where a wall is not (LinkDragOverlay asks here). */
+let wallDrop: string | null = null
+export function standingStoryDrop(): string | null { return wallDrop }
+
+/** Where a storyline flipped up stands: the line it turns up about (canvas
+ *  units), kept from when it was flipped so moving the storyline moves it
+ *  along and up its wall; else its main line as it lies. */
+function wallFootOf(n: FreeNodeData): Wall | null {
+  const d = n.storyline
+  if (!d) return null
+  const f = d.wallFoot
+  if (f) {
+    const { nx, ny } = upNormal(f.ux, f.uy)
+    return { x0: f.x, y0: f.y, ux: f.ux, uy: f.uy, nx, ny }
+  }
+  const root = d.lines.find(l => !l.from)
+  const lg = root && storyGeom(d).lines[root.id]
+  if (!lg) return null
+  const { nx, ny } = upNormal(lg.ux, lg.uy)
+  return { x0: n.x + lg.sx, y0: n.y + lg.sy, ux: lg.ux, uy: lg.uy, nx, ny }
+}
+
+/** For TiltLayer: the canvas y of the wall a linked card stands up on with
+ *  its storyline (flipped up, its foot lying across the view, as standing
+ *  cards stand), or null. */
+let wallCards: { nodes: unknown; map: Map<string, number> } | null = null
+export function storyWallOf(groupId: string): number | null {
+  const nodes = useFreeNodeStore.getState().nodes
+  if (wallCards?.nodes !== nodes) {
+    const map = new Map<string, number>()
+    for (const n of Object.values(nodes)) {
+      if (!n.storyline?.standUp || n.pin) continue
+      const w = wallFootOf(n)
+      if (!w || Math.abs(w.uy) > 1e-6) continue
+      for (const p of n.storyline.points) for (const c of p.cards ?? []) map.set(c, w.y0)
+    }
+    wallCards = { nodes, map }
+  }
+  // Only cards are turned with it: zoomed in, they are blocks and boards.
+  return currentZone() === 'card' ? wallCards.map.get(groupId) ?? null : null
+}
+
 function snapper(d: StorylineData, free: boolean) {
   const zoom = useCanvasStore.getState().zoom
   const on = d.snap !== false && !free
@@ -562,8 +668,32 @@ export const StorylineLayer: React.FC = React.memo(() => {
     Object.values(s.nodes).filter(n => n.type === 'storyline' && n.storyline && !n.pin).map(n => n.id)))
   useStoryKeys()
   useStoryFollow()
+  useWallDrops()
   return <>{ids.map(id => <Storyline key={id} id={id} />)}</>
 })
+
+/** While a card's link "+" is dragged over the tilted view: which standing
+ *  storyline point (or tick end) is under the cursor, from the real (tipped)
+ *  view, so a drop there finds it (standingStoryDrop). */
+function useWallDrops() {
+  const linking = useLinkDragStore(s => s.active)
+  useEffect(() => {
+    wallDrop = null
+    if (!linking) return
+    const onMove = (e: PointerEvent) => {
+      if (!e.isTrusted) return
+      wallDrop = null
+      for (const el of document.elementsFromPoint(e.clientX, e.clientY)) {
+        const attr = el.getAttribute('data-link-drop')
+        if (attr === null) continue
+        if (attr.startsWith('story:') && el.closest('[data-story-wall="up"]')) wallDrop = attr
+        break
+      }
+    }
+    window.addEventListener('pointermove', onMove, true)
+    return () => { window.removeEventListener('pointermove', onMove, true); wallDrop = null }
+  }, [linking])
+}
 
 /** Delete / Backspace takes the selected point off its line (see
  *  deleteStoryPoint). Esc lets go of it. A press anywhere else lets go of it
@@ -656,11 +786,46 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
   const groups = useBoardsStore(s => (hasCards ? s.groups : NO_GROUPS))
   useBoardsStore(s => (hasCards ? s.boards : null))
 
+  // Flipped up, in the tilted view: a wall standing on its main line.
+  const tilted = useTiltStore(s => isTilted(s))
+  const zone3 = useZoomZone()
+  // Up as far as the standing cards are, following the tilt.
+  const rise = useTiltStore(s => (raw?.standUp ? standRise(s) : 0))
+  const standing = tilted && !!raw?.standUp && rise > 0
+  const worldRef = useRef<HTMLElement | null>(null)
+  useLayoutEffect(() => {
+    // The world layer and its tilt stage pass the wall's turn on into the 3D
+    // view, as TiltLayer's lifts make them (index.css data-tilt-3d): only
+    // while one stands, so a flat stage still paints as one layer.
+    const world = worldRef.current
+    const stage = world?.closest<HTMLElement>('[data-tilt-stage]')
+    if (!standing || !world || !stage) return
+    standingWalls.set(world, (standingWalls.get(world) ?? 0) + 1)
+    world.style.transformStyle = 'preserve-3d'
+    stage.style.transformStyle = 'preserve-3d'
+    return () => {
+      const k = (standingWalls.get(world) ?? 1) - 1
+      if (k > 0) standingWalls.set(world, k)
+      else { standingWalls.delete(world); world.style.transformStyle = ''; stage.style.transformStyle = '' }
+    }
+  }, [standing])
+
   const d = node?.storyline
   if (!node || !d) return null
   const px = 1 / zoom
   const g = storyGeom(d)
   const tethers = hasCards ? storyTethers(d, g, node.x, node.y, groups, px) : NO_TETHERS
+  // It stands on its foot (kept from when it was flipped), relative to the
+  // node; the up side rises: a quarter turn about it, the way that takes its
+  // up normal to the viewer (+z).
+  const foot = wallFootOf(node)
+  const turn = foot && foot.ux * foot.ny - foot.uy * foot.nx < 0 ? -90 : 90
+  const wall: Wall | null = standing && foot ? { ...foot, a: Math.PI / 2 * rise } : null
+  // Its cards stand on the wall too, at card zoom (where they are cards)
+  // while its foot lies across the view: TiltLayer turns them about the same
+  // foot by the same angle, so they stay at their offsets from their points.
+  // Their tethers then run on the wall, with it.
+  const cardsStand = !!wall && Math.abs(wall.uy) <= 1e-6 && zone3 === 'card'
 
   /** The tick for a hover at canvas point `c` over line `lineId`, or null
    *  where a point or a line's end already is. */
@@ -694,7 +859,7 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
       ui.set({ zone: zp ? { node: id, point: zp, ring, tip } : null })
     }
     const lineId = role?.dataset.role === 'line' ? role.dataset.line : undefined
-    const c = lineId ? toCanvas(e.nativeEvent, e.currentTarget) : null
+    const c = lineId ? toCanvas(e.nativeEvent, e.currentTarget, wall) : null
     const t = lineId && c ? tickAt(lineId, c, e.ctrlKey) : null
     if (lineId && t !== null) {
       if (ui.hover?.node !== id || ui.hover.line !== lineId || ui.hover.t !== t) ui.set({ hover: { node: id, line: lineId, t } })
@@ -715,7 +880,7 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
     e.stopPropagation()
     e.preventDefault()
     const host = e.currentTarget
-    const c0 = toCanvas(e.nativeEvent, host)
+    const c0 = toCanvas(e.nativeEvent, host, wall)
     if (!c0) return
     const d0 = d
     const x0 = node.x, y0 = node.y
@@ -877,7 +1042,7 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
     }
 
     const onMove = (ev: PointerEvent) => {
-      const c = toCanvas(ev, host)
+      const c = toCanvas(ev, host, wall)
       if (!c) return
       if (!gesture) {
         if (Math.hypot(c.x - c0.x, c.y - c0.y) * zoom < DRAG_PX) return
@@ -929,7 +1094,7 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
       if (moved) { lastClick.current = null; return }
       // A click.
       if (role === 'line' && lineId) {
-        const c = toCanvas(ev, host) ?? c0
+        const c = toCanvas(ev, host, wall) ?? c0
         const t = hover0?.node === id && hover0.line === lineId ? hover0.t : tickAt(lineId, c, ev.ctrlKey)
         if (t === null) return
         useUndoCoordinator.getState().checkpoint()
@@ -968,8 +1133,12 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
 
   return (
     <div
+      ref={el => { worldRef.current = el?.closest<HTMLElement>('[data-world]') ?? null }}
       data-storyline={id}
-      style={{ position: 'absolute', left: node.x, top: node.y, width: 0, height: 0, overflow: 'visible' }}
+      // Standing, its presses are its own (read on the wall, wallPoint).
+      data-layer-pane={standing ? '' : undefined}
+      style={{ position: 'absolute', left: node.x, top: node.y, width: 0, height: 0, overflow: 'visible',
+               transformStyle: standing ? 'preserve-3d' : undefined }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerLeave={onPointerLeave}
@@ -990,7 +1159,19 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
         setMenu({ x: e.clientX, y: e.clientY, point, line: role === 'grab' ? undefined : line, grab: role === 'grab' })
       }}
     >
-      <StorySvg id={id} d={d} g={g} w={node.width} h={node.height} px={px} sel={sel} parts={parts} zone={zone} drop={drop} flash={flash} merge={merge} hover={hover} linking={linking} picked={picked} tethers={tethers} />
+      {/* The storyline itself: lying flat, or turned up about its foot as
+          far as the view's tilt stands things up (standRise), so it rises
+          and lies down with the standing cards; nothing else changes size
+          or place. */}
+      <div
+        data-story-wall={standing ? 'up' : 'flat'}
+        style={{
+          position: 'absolute', left: 0, top: 0, width: 0, height: 0, overflow: 'visible',
+          transformOrigin: foot ? `${foot.x0 - node.x}px ${foot.y0 - node.y}px` : '0 0',
+          rotate: foot ? `${foot.ux} ${foot.uy} 0 ${standing ? turn * rise : 0}deg` : undefined,
+        }}
+      >
+      <StorySvg id={id} d={d} g={g} w={node.width} h={node.height} px={px} sel={sel} parts={parts} zone={zone} drop={drop} flash={flash} merge={merge} hover={hover} linking={linking} picked={picked} tethers={standing && !cardsStand ? NO_TETHERS : tethers} />
       {(() => {
         const root = d.lines.find(l => !l.from)
         const lg = root && g.lines[root.id]
@@ -1001,7 +1182,6 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
         const n = upNormal(lg.ux, lg.uy)
         return <StoryGrab x={lg.sx - n.nx * GRAB_OFF * px} y={lg.sy - n.ny * GRAB_OFF * px} px={px} picked={picked} />
       })()}
-      {menu && <StoryMenu id={id} d={d} at={menu} onClose={() => setMenu(null)} />}
       {d.points.map(p => {
         const pg = g.points[p.id]
         if (!pg) return null
@@ -1021,6 +1201,40 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
         const reach = Math.max(p.down, TICK * px) + 10 * px
         return <StoryOptions nodeId={id} snap={d.snap !== false} x={pg.x - pg.nx * reach} y={pg.y - pg.ny * reach} side={sideFor(-pg.nx, -pg.ny)} px={px} />
       })()}
+      </div>
+      {wall && !cardsStand && tethers.map(t => {
+        // From the raised point down to the card on the ground.
+        const fx = wall.x0 - node.x, fy = wall.y0 - node.y
+        const along = (t.x1 - fx) * wall.ux + (t.y1 - fy) * wall.uy
+        const up = (t.x1 - fx) * wall.nx + (t.y1 - fy) * wall.ny
+        return <Tether3D key={`${t.point}:${t.card}`} t={t} sx={fx + wall.ux * along} sy={fy + wall.uy * along} sz={up} px={px} tone={d.color ?? C_DEFAULT} />
+      })}
+      {menu && <StoryMenu id={id} d={d} at={menu} onClose={() => setMenu(null)} />}
+    </div>
+  )
+}
+
+/** A tether in 3D: a thin bar from the card's edge on the ground (t.x2,
+ *  t.y2) up to a standing point (sx, sy at height sz), canvas units. */
+const Tether3D: React.FC<{ t: Tether; sx: number; sy: number; sz: number; px: number; tone: string }> = ({ t, sx, sy, sz, px, tone }) => {
+  const [on, setOn] = useState(false)
+  const vx = sx - t.x2, vy = sy - t.y2
+  const flat = Math.hypot(vx, vy)
+  const len = Math.hypot(flat, sz)
+  const yaw = Math.atan2(vy, vx), pitch = Math.atan2(sz, flat)
+  const w = 10 * px
+  return (
+    <div
+      data-role="tether" data-point={t.point} data-card={t.card}
+      onPointerEnter={() => setOn(true)} onPointerLeave={() => setOn(false)}
+      style={{
+        position: 'absolute', left: t.x2, top: t.y2 - w / 2, width: len, height: w,
+        transformOrigin: `0 ${w / 2}px`, transform: `rotateZ(${yaw}rad) rotateY(${-pitch}rad)`,
+        display: 'flex', alignItems: 'center', pointerEvents: 'auto',
+      }}
+    >
+      <div style={{ width: '100%', height: 1.5 * px, background: on ? C_GLOW : tone, opacity: on ? 1 : 0.75,
+                    boxShadow: `0 0 ${(on ? 6 : 4) * px}px ${tone}` }} />
     </div>
   )
 }
@@ -1173,14 +1387,11 @@ const StorySvg: React.FC<{
 const StoryGrab: React.FC<{ x: number; y: number; px: number; picked: boolean }> = ({ x, y, px, picked }) => {
   const dot = { width: 3, height: 3, borderRadius: '50%', background: 'rgba(196,208,255,0.7)' }
   return (
+    <AtScreen x={x} y={y} px={px} side="centre">
     <div
       data-role="grab"
       title="Drag to move the storyline"
       style={{
-        position: 'absolute', left: x, top: y,
-        transformOrigin: '0 0',
-        // Centred on (x, y).
-        transform: `scale(${px}) translate(-50%, -50%)`,
         display: 'grid', gridTemplateColumns: 'repeat(2, 3px)', gap: 3, padding: '5px 4px',
         background: 'rgba(24,27,46,0.9)', border: '1px solid rgba(140,170,255,0.35)', borderRadius: 4,
         cursor: 'grab',
@@ -1189,6 +1400,7 @@ const StoryGrab: React.FC<{ x: number; y: number; px: number; picked: boolean }>
     >
       {Array.from({ length: 6 }, (_, i) => <div key={i} style={dot} />)}
     </div>
+    </AtScreen>
   )
 }
 
@@ -1283,7 +1495,7 @@ const StoryMenu: React.FC<{
 
 /** Set a storyline's look (colour, thickness). `checkpoint` false while a
  *  picker drag goes on: its press took the one undo step. */
-function setStoryLook(id: string, patch: Pick<StorylineData, 'color' | 'weight'>, checkpoint = true) {
+function setStoryLook(id: string, patch: Pick<StorylineData, 'color' | 'weight' | 'standUp' | 'wallFoot'>, checkpoint = true) {
   const n = useFreeNodeStore.getState().nodes[id]
   if (!n?.storyline) return
   if (checkpoint) useUndoCoordinator.getState().checkpoint()
@@ -1327,24 +1539,45 @@ const StoryLook: React.FC<{ id: string; d: StorylineData; custom: boolean; setCu
           </button>
         ))}
       </div>
+      {/* An on/off box; its label never changes. */}
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px 0', color: '#e2e8f0', fontSize: 13, cursor: 'pointer' }}>
+        <input type="checkbox" checked={!!d.standUp} onChange={e => {
+          // Flipped up, it stands on its main line as it lies now; moved
+          // afterwards it moves along and up that wall.
+          const n = useFreeNodeStore.getState().nodes[id]
+          const w = e.target.checked && n ? wallFootOf(n) : null
+          setStoryLook(id, { standUp: e.target.checked || undefined, wallFoot: w ? { x: w.x0, y: w.y0, ux: w.ux, uy: w.uy } : undefined })
+        }} />
+        Flip up in 3D view
+      </label>
     </div>
   )
 }
 
-type Side = 'above' | 'below' | 'left' | 'right'
+type Side = 'above' | 'below' | 'left' | 'right' | 'centre'
 const SIDE_SHIFT: Record<Side, string> = {
   above: 'translate(-50%, -100%)', below: 'translate(-50%, 0)',
   left: 'translate(-100%, -50%)', right: 'translate(0, -50%)',
+  centre: 'translate(-50%, -50%)',
 }
 
-/** Labels at a constant size on screen: laid out at natural size and scaled
- *  down by the zoom, lying on `side` of (`x`, `y`), centred along it. */
-const atScreenSize = (x: number, y: number, px: number, side: Side): React.CSSProperties => ({
-  position: 'absolute', left: x, top: y,
-  transformOrigin: '0 0',
-  transform: `scale(${px}) ${SIDE_SHIFT[side]}`,
-  whiteSpace: 'nowrap',
-})
+/** Chrome at a constant size on screen, lying on `side` of (`x`, `y`),
+ *  centred along it. Flat it is laid out at natural size and scaled down by
+ *  the zoom; on the tilted canvas, laid out at the zoom (worldZoom), it is
+ *  zoomed back up instead, as CounterScaled does: scaled, it was drawn far
+ *  too big there. */
+const AtScreen: React.FC<{ x: number; y: number; px: number; side: Side; children: React.ReactNode }> = ({ x, y, px, side, children }) => {
+  const z = useWorldZoom()
+  return (
+    <div style={{ position: 'absolute', left: x, top: y, width: 0, height: 0 }}>
+      <div style={z !== null
+        ? { position: 'absolute', left: 0, top: 0, zoom: 1 / z, transform: SIDE_SHIFT[side], whiteSpace: 'nowrap' }
+        : { position: 'absolute', left: 0, top: 0, transformOrigin: '0 0', transform: `scale(${px}) ${SIDE_SHIFT[side]}`, whiteSpace: 'nowrap' }}>
+        {children}
+      </div>
+    </div>
+  )
+}
 
 const StoryTitle: React.FC<{
   nodeId: string; pointId: string; title: string; editing: boolean
@@ -1371,7 +1604,7 @@ const StoryTitle: React.FC<{
   }
   if (editing) {
     return (
-      <div style={atScreenSize(x, y, px, side)} data-role="ui">
+      <AtScreen x={x} y={y} px={px} side={side}><div data-role="ui">
         <input
           autoFocus value={text} maxLength={80} placeholder="Title"
           onChange={e => setText(e.target.value)}
@@ -1387,24 +1620,26 @@ const StoryTitle: React.FC<{
             border: '1px solid rgba(143,194,255,0.6)', borderRadius: 4, outline: 'none', textAlign: 'center',
           }}
         />
-      </div>
+      </div></AtScreen>
     )
   }
   return (
-    <div
-      data-role="title" data-point={pointId}
-      style={{ ...atScreenSize(x, y, px, side), ...font, cursor: 'text', userSelect: 'none', padding: '0 3px',
-               color: selected ? C_SEL : '#fff' }}
-    >{title}</div>
+    <AtScreen x={x} y={y} px={px} side={side}>
+      <div
+        data-role="title" data-point={pointId}
+        style={{ ...font, cursor: 'text', userSelect: 'none', padding: '0 3px', color: selected ? C_SEL : '#fff' }}
+      >{title}</div>
+    </AtScreen>
   )
 }
 
 /** The selected storyline's options, under its selected point. On/off
  *  switches, each with a label that never changes. */
 const StoryOptions: React.FC<{ nodeId: string; snap: boolean; x: number; y: number; side: Side; px: number }> = ({ nodeId, snap, x, y, side, px }) => (
+  <AtScreen x={x} y={y} px={px} side={side}>
   <div
     data-role="ui"
-    style={{ ...atScreenSize(x, y, px, side), display: 'flex', gap: 4, padding: 3, background: 'rgba(14,15,26,0.92)',
+    style={{ display: 'flex', gap: 4, padding: 3, background: 'rgba(14,15,26,0.92)',
              border: '1px solid rgba(255,255,255,0.12)', borderRadius: 6 }}
     onPointerDown={e => e.stopPropagation()}
   >
@@ -1426,4 +1661,5 @@ const StoryOptions: React.FC<{ nodeId: string; snap: boolean; x: number; y: numb
       }}
     >Snap</button>
   </div>
+  </AtScreen>
 )

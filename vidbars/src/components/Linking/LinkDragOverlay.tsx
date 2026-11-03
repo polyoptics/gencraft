@@ -9,7 +9,7 @@ import { useLinkDragStore } from '../../store/linkDragStore'
 import { useBoardsStore } from '../../store/boardsStore'
 import { parseRef, sameRef, type LinkRef } from '../../utils/linkTargets'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
-import { linkCardToStoryPoint } from '../Canvas/StorylineLayer'
+import { linkCardToStoryPoint, standingStoryDrop } from '../Canvas/StorylineLayer'
 
 export const LinkDragOverlay: React.FC = () => {
   const active = useLinkDragStore(s => s.active)
@@ -53,6 +53,11 @@ export const LinkDragOverlay: React.FC = () => {
         if (!sameRef(hit, source)) target = hit
         break
       }
+      // Over a storyline standing up in the tilted view: the drop is re-sent at
+      // the ground's flat point, where the wall is not; it saw the point.
+      // It was the topmost drop target in the view as seen, so it wins.
+      const onWall = standingStoryDrop()
+      if (onWall) { story = onWall.split(':'); target = null }
       if (story && source.kind === 'group') {
         useUndoCoordinator.getState().checkpoint()
         linkCardToStoryPoint(story[1], story[2], source.id, story[3])

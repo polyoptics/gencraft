@@ -64,6 +64,11 @@ export interface StorylineData {
   color?: string
   /** Line thickness, screen px (the same at every zoom); absent, the default. */
   weight?: number
+  /** In the tilted view, stand up about the main line like a wall. */
+  standUp?: boolean
+  /** The line it stands up about (canvas units, absolute), kept from when
+   *  it was flipped: moved afterwards, it moves along and up the wall. */
+  wallFoot?: { x: number; y: number; ux: number; uy: number }
 }
 
 export function newStoryline(): StorylineData {

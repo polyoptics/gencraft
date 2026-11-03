@@ -19,7 +19,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import {
-  useTiltStore, useModelScaleStore, isTilted, offFlat, standTilt, turntableShare, unprojectTilt, TILT_SNAP, TILT_FAR, TILT_PERSPECTIVE, DEFAULT_LIGHT,
+  useTiltStore, useModelScaleStore, isTilted, offFlat, standTilt, standRise, turntableShare, unprojectTilt, TILT_SNAP, TILT_FAR, TILT_PERSPECTIVE, DEFAULT_LIGHT,
 } from '../../store/tiltStore'
 import { peekAt, usePeek } from '../../utils/peek'
 import { useCanvasStore, groupBounds, MIN_ZOOM, MAX_ZOOM } from '../../store/canvasStore'
@@ -35,7 +35,7 @@ import { setGlHidden } from '../../three/viewportRenderer'
 import { getMediaItems } from '../../types/bar'
 import { faceBlocks } from '../../utils/cardGrid'
 import { clientToCanvas } from '../../utils/fx/createEffect'
-import { selectStorylinesInBox } from './StorylineLayer'
+import { selectStorylinesInBox, storyWallOf } from './StorylineLayer'
 import { createTiltScene, ART_MAX, type TiltTarget, type TiltFrameState, type TiltSlab, type TiltArt } from '../../three/tiltScene'
 
 /** Degrees of tilt / turn per pixel of Alt+drag. */
@@ -1169,8 +1169,13 @@ function collectSlabs(K = 1): TiltSlab[] {
       // 3D, not under its rim and bars.
       const resting = lift === undefined ? rest(`card:${id}`, restOn(at.x, at.y, el.offsetWidth, el.offsetHeight)) : 0
       if (resting > 0) lift = resting
+      // Linked to a storyline flipped up as a wall: it stands with it, turned
+      // up on the wall's foot (stage px `wallY`), where it lies on the wall
+      // as it lies by the line flat (StorylineLayer storyWallOf).
+      const footY = storyWallOf(id) ?? (g?.deckAnchorId ? storyWallOf(g.deckAnchorId) : null)
+      const wallY = footY === null ? null : pan.y + footY * zoom
       // Console: leaning back on its bottom edge, as its stand-in says.
-      const tip = cardLean.get(id) ?? (g?.deckAnchorId ? cardLean.get(g.deckAnchorId) : undefined)
+      const tip = wallY !== null ? Math.PI / 2 * standRise(useTiltStore.getState()) : cardLean.get(id) ?? (g?.deckAnchorId ? cardLean.get(g.deckAnchorId) : undefined)
       const k = detail(w)
       let card: TiltSlab | undefined
       let tilt: Hinge | undefined
@@ -1180,7 +1185,7 @@ function collectSlabs(K = 1): TiltSlab[] {
       if (lift === undefined) {
         for (const u of under) if (u.x0 < at.x + w && at.x < u.x1 && u.y0 < at.y + h && at.y < u.y1) overTop = Math.max(overTop ?? 0, u.z)
       }
-      if (k <= 0 && lift === undefined && overTop === undefined) {
+      if (k <= 0 && lift === undefined && overTop === undefined && wallY === null) {
         card = add(at.x, at.y, w, h, m * THICK.card, SIDE.card, r)
       } else {
         // A card stands on what holds it, its thickness above it; a deck is
@@ -1207,16 +1212,16 @@ function collectSlabs(K = 1): TiltSlab[] {
           if (resting > 0) rested.set(id, card.z)
           lifting.set(el, card.z)
           chain(el, stage)
-          tilt = tip ? { v: card.v + card.h / 2, z: card.z, a: tip } : undefined
+          tilt = tip ? { v: wallY !== null ? wallY - H / 2 : card.v + card.h / 2, z: card.z, a: tip } : undefined
           if (tilt) {
             card.hinge = tilt
-            stand(el, tilt)
+            stand(el, tilt, 1, wallY !== null ? `50% ${wallY - at.y}px` : undefined)
             const d = cardDock.get(id) ?? (g?.deckAnchorId ? cardDock.get(g.deckAnchorId) : undefined)
             if (d) leaning.push({ id, ...d, slab: card, hinge: tilt })
           } else {
             under.push({ x0: at.x, y0: at.y, x1: at.x + w, y1: at.y + h, z: card.z })
           }
-          riseZones(zones, at, w, h, card.z, lifting, stage, tilt)
+          riseZones(zones, at, w, h, card.z, lifting, stage, tilt, wallY ?? undefined)
           // Its name band rides on it, over the hover zone over it as flat
           // (band 51, zone 41, card 40), and leans with it on a strip. Left
           // on the floor it was under the raised card (gone from 1° of tilt),
@@ -1226,7 +1231,7 @@ function collectSlabs(K = 1): TiltSlab[] {
           if (head && ha) {
             lifting.set(head, card.z + 1)
             chain(head, stage)
-            if (tilt) stand(head, { ...tilt, z: card.z + 1 }, 1, `50% ${at.y + h - ha.y}px`)
+            if (tilt) stand(head, { ...tilt, z: card.z + 1 }, 1, `50% ${(wallY ?? at.y + h) - ha.y}px`)
           }
           // Leaning, its link chips half over its bottom edge ('+', a link's
           // drag start, among them) lean with it as its name band does, over
@@ -1237,7 +1242,7 @@ function collectSlabs(K = 1): TiltSlab[] {
           if (chips && ca) {
             lifting.set(chips, card.z + 0.25)
             chain(chips, stage)
-            stand(chips, { ...tilt!, z: card.z + 0.25 }, 1, `50% ${at.y + h - ca.y}px`)
+            stand(chips, { ...tilt!, z: card.z + 0.25 }, 1, `50% ${(wallY ?? at.y + h) - ca.y}px`)
             for (const c of chips.querySelectorAll<HTMLElement>(':scope > * > *')) {
               const a = offsetScaled(c, stage)
               const s = a && add(a.x, a.y, c.offsetWidth * a.k, c.offsetHeight * a.k, 0.5, SIDE.pop, c.offsetHeight * a.k / 2)
@@ -1852,13 +1857,14 @@ function hitZones(stage: HTMLElement): { el: HTMLElement; at: { x: number; y: nu
   return out
 }
 function riseZones(zones: ReturnType<typeof hitZones>, at: { x: number; y: number }, w: number, h: number, z: number,
-                   lifting: Map<HTMLElement, number>, stage: HTMLElement, hinge?: Hinge) {
+                   lifting: Map<HTMLElement, number>, stage: HTMLElement, hinge?: Hinge, hingeY?: number) {
   for (const zn of zones) {
     if (Math.abs(zn.at.x - at.x) > 1 || Math.abs(zn.at.y - at.y) > 1 || Math.abs(zn.el.offsetWidth - w) > 1 || Math.abs(zn.el.offsetHeight - h) > 1) continue
     lifting.set(zn.el, z + 0.5)
     chain(zn.el, stage)
-    // On a leaning card, it leans with it.
-    if (hinge) stand(zn.el, { ...hinge, z: z + 0.5 })
+    // On a leaning card, it leans with it (on its hinge line, `hingeY` stage
+    // px, when that is not the card's own bottom edge).
+    if (hinge) stand(zn.el, { ...hinge, z: z + 0.5 }, 1, hingeY !== undefined ? `50% ${hingeY - zn.at.y}px` : undefined)
   }
 }
 
