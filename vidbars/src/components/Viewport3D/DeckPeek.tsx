@@ -1,6 +1,7 @@
 // DeckPeek — a stacked deck seen with an Alt-twist (utils/peek): the cards
-// under its face pull back behind it and shuffle off to the side, like the
-// fan, so a quick swing shows what is in the deck. Drawn on the layers stage
+// under its face spread out on the canvas, the way the view is turned and
+// further the more it turns (Brian 2026-11-03), so a peek can look past
+// whatever is beside the deck. Drawn on the layers stage
 // under the tilted world (ExplodedStrip's StripLayersStage), so the deck's
 // own face hides what is right behind it. Nothing here is stored or pressed.
 
@@ -11,15 +12,19 @@ import { useTiltStore } from '../../store/tiltStore'
 import { cardFaceMedia } from '../../utils/cardGrid'
 import { deckAreas } from '../../utils/peek'
 import { HeroImageLayer } from '../Layers/HeroImageLayer'
-import { layerFan } from './ExplodedStrip'
 
-/** How far back each card steps, as a share of the card's height. */
-const STEP_BACK = 0.18
-/** How far to the side each card steps, as a share of the card's width. */
-const STEP_SIDE = 0.3
-/** However many cards, the whole fan reaches no further than this many card
- *  widths to the side. */
-const MOST_SIDE = 1.6
+/** How far each card steps out from the one in front, as a share of the
+ *  card's size, at a full peek. */
+const STEP = 0.45
+/** However many cards, the whole spread reaches no further than this many
+ *  card sizes at a full peek. */
+const MOST = 2.4
+/** Degrees of turn for a full peek; twisting further spreads them on, up to
+ *  FURTHEST times as wide. */
+const FULL_AT = 30
+const FURTHEST = 2.2
+/** The little depth each card sits behind the one in front, px. */
+const BACK = 3
 
 const PeekCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
   const boards = useBoardsStore(s => s.boards)
@@ -36,21 +41,32 @@ const PeekCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
   )
 }
 
+/** How far the view is turned, as a screen direction: swung right is right,
+ *  tipped back is up. The spread goes that way, so a peek can look past
+ *  whatever is on that side of the deck. */
+function turned(s: { tilt: number; yaw: number }): { x: number; y: number; k: number } {
+  const x = s.yaw, y = -s.tilt
+  const a = Math.hypot(x, y)
+  if (a < 0.01) return { x: 0, y: 0, k: 0 }
+  return { x: x / a, y: y / a, k: Math.min(FURTHEST, a / FULL_AT) }
+}
+
 export const DeckPeek: React.FC<{ anchorId: string }> = ({ anchorId }) => {
-  const fan = useTiltStore(layerFan)
-  const side = useTiltStore(s => (s.yaw < 0 ? 1 : -1))
+  const tilt = useTiltStore(s => Math.round(s.tilt * 10) / 10)
+  const yaw = useTiltStore(s => Math.round(s.yaw * 10) / 10)
+  const turn = turned({ tilt, yaw })
   const pan = useCanvasStore(s => s.pan)
   const zoom = useCanvasStore(s => s.zoom)
   const groups = useBoardsStore(s => s.groups)
   const area = deckAreas.get(anchorId)
-  if (!area || fan <= 0) return null
+  if (!area || turn.k <= 0) return null
   const behind = area.memberIds.slice(1).map(id => groups.find(g => g.id === id)).filter(Boolean) as ProjectGroup[]
   if (!behind.length) return null
   const left = pan.x + area.x * zoom, top = pan.y + area.y * zoom
   const w = area.width * zoom, h = area.height * zoom
-  const stepX = Math.min(STEP_SIDE, MOST_SIDE / behind.length) * w * fan * side
-  const stepZ = Math.min(STEP_BACK, (MOST_SIDE * STEP_BACK / STEP_SIDE) / behind.length) * h * fan
-  // The last card furthest back: drawn first.
+  // On the canvas plane, along the turn: each card a step further out.
+  const step = Math.min(STEP, MOST / behind.length) * turn.k
+  const dx = turn.x * w * step, dy = turn.y * h * step
   return (
     <>
       {behind.map((g, i) => ({ g, n: i + 1 })).reverse().map(({ g, n }) => (
@@ -59,7 +75,7 @@ export const DeckPeek: React.FC<{ anchorId: string }> = ({ anchorId }) => {
           data-deck-peek={g.id}
           style={{
             position: 'absolute', left, top, width: w, height: h, boxSizing: 'border-box',
-            transform: `translate3d(${n * stepX}px, 0, ${-n * stepZ}px)`,
+            transform: `translate3d(${n * dx}px, ${n * dy}px, ${-n * BACK}px)`,
             borderRadius: 12, background: g.color, overflow: 'hidden',
             border: '1.5px solid rgba(255,255,255,.3)', boxShadow: '0 6px 24px rgba(0,0,0,.45)',
             pointerEvents: 'none',
