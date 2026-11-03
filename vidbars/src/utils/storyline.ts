@@ -165,19 +165,69 @@ const EPS = 1e-6
 /** A plain point at `t` on `line`. */
 const plainPoint = (line: string, t: number): StoryPoint => ({ id: crypto.randomUUID(), line, t, up: 0, down: 0, title: '' })
 
-/** Every dot a point: older held spots read as plain points, and a point is
- *  put at each line's end (and the root's start) that has none. */
+/** Points this close along one line (canvas units) are one spot. */
+const SAME_SPOT = 0.5
+
+/** Every dot a point: older held spots read as plain points, points stacked
+ *  on one spot of a line become one (their cards and titles kept, branches
+ *  re-hung on it), and a point is put at each line's end (and the root's
+ *  start) that has none. Returns `d` itself when nothing changes. */
 export function canonicalStoryline(d: StorylineData): StorylineData {
   let points = d.points.some(p => p.anchor) ? d.points.map(p => (p.anchor ? { ...p, anchor: undefined } : p)) : d.points
-  const add: StoryPoint[] = []
+  let lines = d.lines
+  // Stacked points: on one spot of a line, and on a branch's very start
+  // (which is the point it grows from). One keeps the spot — on a branch's
+  // start, the point it grows from; else the first holding something — and
+  // takes the others' cards and titles; branches from them hang on it.
+  const byId = new Map(points.map(p => [p.id, p]))
+  const gone = new Map<string, string>()
+  const merge = (keepId: string, others: StoryPoint[]) => {
+    const keep = byId.get(keepId)!
+    const all = [keep, ...others]
+    const cards = [...new Set(all.flatMap(p => p.cards ?? []))]
+    byId.set(keepId, {
+      ...keep,
+      title: [...new Set(all.map(p => p.title).filter(Boolean))].join(' / '),
+      up: Math.max(...all.map(p => p.up)), down: Math.max(...all.map(p => p.down)),
+      ...(cards.length ? { cards } : {}),
+    })
+    for (const p of others) { gone.set(p.id, keepId); byId.delete(p.id) }
+  }
   for (const l of d.lines) {
+    const on = [...byId.values()].filter(p => p.line === l.id).sort((a, b) => a.t - b.t)
+    for (let i = 0; i < on.length;) {
+      let j = i + 1
+      while (j < on.length && on[j].t - on[i].t < SAME_SPOT) j++
+      if (j - i > 1) {
+        const spot = on.slice(i, j)
+        const keep = spot.find(pointHolds) ?? spot[0]
+        merge(keep.id, spot.filter(p => p !== keep))
+      }
+      i = j
+    }
+  }
+  const root = (id: string) => { while (gone.has(id)) id = gone.get(id)!; return id }
+  for (const l of d.lines) {
+    if (!l.from) continue
+    const parent = root(l.from)
+    const start = [...byId.values()].filter(p => p.line === l.id && p.t < SAME_SPOT && p.id !== parent)
+    if (start.length && byId.has(parent)) merge(parent, start)
+  }
+  if (gone.size) {
+    points = [...byId.values()]
+    lines = lines.map(l => (l.from && gone.has(l.from) ? { ...l, from: root(l.from) } : l))
+  }
+  const add: StoryPoint[] = []
+  for (const l of lines) {
     const len = Math.hypot(l.dx, l.dy)
     const on = points.filter(p => p.line === l.id)
-    if (!l.from && !on.some(p => p.t <= EPS)) add.push(plainPoint(l.id, 0))
-    if (len > EPS && !on.some(p => p.t >= len - EPS)) add.push(plainPoint(l.id, len))
+    // Within a spot's width, so what is added is never itself a stack (and
+    // a branch shorter than that is no line yet).
+    if (!l.from && !on.some(p => p.t < SAME_SPOT)) add.push(plainPoint(l.id, 0))
+    if (len >= SAME_SPOT && !on.some(p => p.t > len - SAME_SPOT)) add.push(plainPoint(l.id, len))
   }
   if (add.length) points = [...points, ...add]
-  return points === d.points ? d : { ...d, points }
+  return points === d.points && lines === d.lines ? d : { ...d, points, lines }
 }
 
 /** Whether a point holds anything: a title or cards. */
