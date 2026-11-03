@@ -11,6 +11,7 @@ import { useFreeNodeStore } from '../store/freeNodeStore'
 import type { FreeNodeType } from '../store/freeNodeStore'
 import { useUndoCoordinator } from '../store/undoCoordinator'
 import { dotStep } from './dotGrid'
+import { clampUiScale } from '../components/UI/PanelSurface'
 
 /** A card's origin is its content corner; the drawn card starts this far left
  *  of it. Needed to centre a new card on a point rather than hang it off one. */
@@ -57,6 +58,10 @@ export function addFreeNodeCentered(
   const h = (made?.height ?? 160) * k
   useFreeNodeStore.getState().updateFreeNode(id, {
     width: w, height: h, x: cx - w / 2, y: cy - h / 2,
+    // A Media Pool's text and tiles grow with it, the way a loop strip's
+    // unit does: created zoomed out, it reads at the same screen size as a
+    // strip made at that zoom instead of being a big window of specks.
+    ...(type === 'pool' ? { uiScale: clampUiScale(k) } : {}),
   })
   return id
 }

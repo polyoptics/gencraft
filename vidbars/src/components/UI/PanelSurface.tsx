@@ -72,7 +72,7 @@ export const UI_SCALE_MIN = 0.6
  *  you hit rather than one you never reach. Nothing here is resolution-
  *  bound — thumbnails are 384px and the chrome is vector — so the only cost
  *  of a higher cap is the room it takes. */
-export const UI_SCALE_MAX = 6
+export const UI_SCALE_MAX = 10   // = createScaleFor's cap, so a pool made far out reads like a strip made there
 export function clampUiScale(v: number): number {
   return Math.max(UI_SCALE_MIN, Math.min(UI_SCALE_MAX, v))
 }

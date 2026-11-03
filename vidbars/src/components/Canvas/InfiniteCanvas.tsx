@@ -15,7 +15,7 @@ import { useViewport3DStore, VIEWPORT3D_DEFAULT_W, VIEWPORT3D_DEFAULT_H } from '
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { nextFreeEdgeSlot } from '../../utils/viewportDocking'
 import { isPanelType } from '../../utils/componentLinks'
-import { createCardOrBoardAt, createStorylineAt } from '../../utils/canvasCreate'
+import { addFreeNodeCentered, createCardOrBoardAt, createStorylineAt } from '../../utils/canvasCreate'
 import { GLCanvasHost } from '../Viewport3D/GLCanvasHost'
 import { WorldZoom } from './worldZoom'
 import { addMediaBlockToCard, cardHitOf, groupForCardHit, type CardHit } from '../../utils/cardContent'
@@ -1102,7 +1102,10 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
                 if (newest) useViewport3DStore.getState().updateWindow(newest.id, { width: w, height: h })
                 setAddMenu(null)
               } },
-              { label: '▦  Add Media Pool', action: () => { addNodeAtCursor('pool', 520, 420); setAddMenu(null) } },
+              { label: '▦  Add Media Pool', action: () => {
+                useFreeNodeStore.getState().setFreeSelection([addFreeNodeCentered('pool', { cx: addMenu.cx, cy: addMenu.cy })])
+                setAddMenu(null)
+              } },
               { label: '✎  Add Prompt Pad', action: () => { addNodeAtCursor('prompt', 460, 360); setAddMenu(null) } },
               { label: '⟲  Add History', action: () => { addNodeAtCursor('history', 260, 400); setAddMenu(null) } },
               { label: '≔  Add List', action: () => {
