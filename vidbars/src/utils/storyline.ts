@@ -57,6 +57,10 @@ export interface StorylineData {
   points: StoryPoint[]
   /** Snap to the dot grid. Absent means on. */
   snap?: boolean
+  /** Its lines', ticks' and points' colour; absent, the default. */
+  color?: string
+  /** Line thickness, screen px (the same at every zoom); absent, the default. */
+  weight?: number
 }
 
 export function newStoryline(): StorylineData {

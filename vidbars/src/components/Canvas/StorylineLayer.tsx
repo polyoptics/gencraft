@@ -17,7 +17,8 @@
 //  - Click a point to select it; click it again quickly (or its title) to
 //    name it. Delete takes the point off its line, which stays whole.
 //  - Click the grab handle to select the whole storyline (ringed, as tiles
-//    are); Delete then removes it, as it does a tile.
+//    are); Delete then removes it, as it does a tile. Right-click it for the
+//    storyline's options: its line colour and thickness.
 //  - Right-click a point, line or the handle: delete the point, the branch
 //    or the storyline, or unlink a card from the point.
 //  - The canvas's selection box picks out the points it covers, or the whole
@@ -37,6 +38,7 @@
 
 import React, { useEffect, useRef, useState } from 'react'
 import ReactDOM from 'react-dom'
+import { HexColorPicker } from 'react-colorful'
 import { create } from 'zustand'
 import { useShallow } from 'zustand/react/shallow'
 import { useFreeNodeStore, type FreeNodeData } from '../../store/freeNodeStore'
@@ -49,6 +51,7 @@ import { useMenuClamp } from '../../hooks/useMenuClamp'
 import { useTiltStore, isTilted, unprojectTilt, TILT_FAR } from '../../store/tiltStore'
 import { clientToCanvas } from '../../utils/fx/createEffect'
 import { dotStep } from '../../utils/dotGrid'
+import { PRESET_COLORS } from '../UI/TextFormatToolbar'
 import {
   branchesOf, canonicalStoryline, deleteStoryBranch, deleteStoryPoint, normalizeStoryline, pointAndBranches, pointHolds,
   reattachStoryPoint, slideStoryPoint, storyGeom, storylineEmpty, unlinkStoryCard,
@@ -56,7 +59,10 @@ import {
 } from '../../utils/storyline'
 
 // Screen px — divided by the zoom where drawn.
-const LINE_W = 2
+/** Line thickness choices, screen px; a storyline without one has the
+ *  default. Its ticks and point rings follow, a little lighter. */
+const WEIGHTS = [2, 3.5, 5, 8]
+const DEFAULT_WEIGHT = 3.5
 const LINE_HIT = 14
 const DOT_R = 5
 /** A point's two grab zones: its centre dot, out to DOT_ZONE, and its outer
@@ -81,7 +87,9 @@ const NONE: string[] = []
  *  the start point's ring. */
 const GRAB_GAP = 16
 
-const C_LINE = 'rgba(196,208,255,0.78)'
+/** A storyline's colour, unless it has its own (StorylineData.color):
+ *  lines, ticks and points alike. */
+const C_DEFAULT = '#8fc2ff'
 const C_POINT = '#8fc2ff'
 const C_GLOW = '#9fe0ff'
 const C_SEL = '#ffd24a'
@@ -563,7 +571,7 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
   const busy = useRef(false)
   const lastClick = useRef<{ point: string; at: number } | null>(null)
   const picked = useFreeNodeStore(s => s.selectedIds.includes(id))
-  const [menu, setMenu] = useState<{ x: number; y: number; point?: string; line?: string } | null>(null)
+  const [menu, setMenu] = useState<{ x: number; y: number; point?: string; line?: string; grab?: boolean } | null>(null)
   // Saved before every dot was a point: made so once, as it loads.
   const raw = node?.storyline
   useEffect(() => {
@@ -859,7 +867,7 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
         // What the menu acts on is selected first, as on tiles and cards.
         if (point) selectStoryPoint(id, point)
         else selectStoryline(id)
-        setMenu({ x: e.clientX, y: e.clientY, point, line: role === 'grab' ? undefined : line })
+        setMenu({ x: e.clientX, y: e.clientY, point, line: role === 'grab' ? undefined : line, grab: role === 'grab' })
       }}
     >
       <StorySvg id={id} d={d} g={g} w={node.width} h={node.height} px={px} sel={sel} parts={parts} zone={zone} drop={drop} hover={hover} linking={linking} picked={picked} />
@@ -903,6 +911,10 @@ const StorySvg: React.FC<{
   // Hovering a ring: the part of the tree that moves with it, lit.
   const chain = zone?.ring ? pointAndBranches(d, zone.point) : null
   const dl = drop && g.lines[drop.line]
+  const tone = d.color ?? C_DEFAULT
+  const LINE_W = d.weight ?? DEFAULT_WEIGHT
+  // Ticks and point rings, lighter than the line at its heavier weights.
+  const TICK_W = Math.min(LINE_W, 2 + LINE_W / 4)
   return (
     <svg
       style={{ position: 'absolute', left: -M, top: -M, width: w + 2 * M, height: h + 2 * M, overflow: 'visible', pointerEvents: 'none' }}
@@ -915,12 +927,14 @@ const StorySvg: React.FC<{
           return (
             <g key={l.id}>
               {picked && <line x1={lg.sx} y1={lg.sy} x2={ex} y2={ey} stroke={C_RING} strokeWidth={(LINE_W + 2 * RING_W) * px} />}
+              {/* A soft glow of its own colour round the line. */}
+              <line x1={lg.sx} y1={lg.sy} x2={ex} y2={ey} stroke={tone} strokeOpacity={0.18} strokeWidth={(LINE_W + 6) * px} />
               {(chain?.lines.has(l.id) || drop?.line === l.id) && (
                 <line x1={lg.sx} y1={lg.sy} x2={ex} y2={ey} stroke={C_GLOW} strokeOpacity={0.45} strokeWidth={(LINE_W + 6) * px} pointerEvents="none" />
               )}
-              <line x1={lg.sx} y1={lg.sy} x2={ex} y2={ey} stroke={C_LINE} strokeWidth={LINE_W * px} />
+              <line x1={lg.sx} y1={lg.sy} x2={ex} y2={ey} stroke={tone} strokeOpacity={0.9} strokeWidth={LINE_W * px} />
               <line
-                x1={lg.sx} y1={lg.sy} x2={ex} y2={ey} stroke="transparent" strokeWidth={LINE_HIT * px}
+                x1={lg.sx} y1={lg.sy} x2={ex} y2={ey} stroke="transparent" strokeWidth={Math.max(LINE_HIT, LINE_W + 8) * px}
                 pointerEvents="stroke" style={{ cursor: 'pointer' }} data-role="line" data-line={l.id}
               />
             </g>
@@ -933,7 +947,7 @@ const StorySvg: React.FC<{
           return (
             <g pointerEvents="none">
               <line x1={cx - nx * k} y1={cy - ny * k} x2={cx + nx * k} y2={cy + ny * k} stroke={C_GLOW} strokeOpacity={0.3} strokeWidth={7 * px} />
-              <line x1={cx - nx * k} y1={cy - ny * k} x2={cx + nx * k} y2={cy + ny * k} stroke={C_GLOW} strokeWidth={LINE_W * px} />
+              <line x1={cx - nx * k} y1={cy - ny * k} x2={cx + nx * k} y2={cy + ny * k} stroke={C_GLOW} strokeWidth={TICK_W * px} />
             </g>
           )
         })()}
@@ -946,12 +960,12 @@ const StorySvg: React.FC<{
           if (!pg) return null
           const up = Math.max(p.up, TICK * px), down = Math.max(p.down, TICK * px)
           const selected = sel === p.id
-          const color = selected ? C_SEL : C_POINT
+          const color = selected ? C_SEL : tone
           const r0 = DOT_R * px
           return (
             <g key={p.id}>
               <line x1={pg.x - pg.nx * down} y1={pg.y - pg.ny * down} x2={pg.x + pg.nx * up} y2={pg.y + pg.ny * up}
-                    stroke={color} strokeWidth={LINE_W * px} />
+                    stroke={color} strokeWidth={TICK_W * px} />
               <line x1={pg.x + pg.nx * RING_HIT * px} y1={pg.y + pg.ny * RING_HIT * px} x2={pg.x + pg.nx * (up + 3 * px)} y2={pg.y + pg.ny * (up + 3 * px)}
                     stroke="transparent" strokeWidth={TIP_HIT * px} pointerEvents="stroke" style={{ cursor: 'ns-resize' }}
                     data-role="tip-up" data-point={p.id} />
@@ -1016,9 +1030,10 @@ const StoryGrab: React.FC<{ x: number; y: number; px: number; picked: boolean }>
  *  as a tile's menu (FreeNode). Each action is one undo step. */
 const StoryMenu: React.FC<{
   id: string; d: StorylineData
-  at: { x: number; y: number; point?: string; line?: string }
+  at: { x: number; y: number; point?: string; line?: string; grab?: boolean }
   onClose: () => void
 }> = ({ id, d, at, onClose }) => {
+  const [custom, setCustom] = useState(false)
   const groups = useBoardsStore(s => s.groups)
   const point = at.point ? d.points.find(p => p.id === at.point) : undefined
   const line = at.line ? d.lines.find(l => l.id === at.line) : undefined
@@ -1048,7 +1063,7 @@ const StoryMenu: React.FC<{
     useUndoCoordinator.getState().checkpoint()
     useFreeNodeStore.getState().deleteFreeNode(id)
   } })
-  const { ref, top } = useMenuClamp(at.y, items.length)
+  const { ref, top } = useMenuClamp(at.y, `${items.length}:${custom}`)
   return ReactDOM.createPortal(
     <>
       <div style={{ position: 'fixed', inset: 0, zIndex: 9998 }} onPointerDown={onClose} onContextMenu={e => { e.preventDefault(); onClose() }} />
@@ -1057,8 +1072,8 @@ const StoryMenu: React.FC<{
         data-storyline={id}
         onPointerDown={e => e.stopPropagation()}
         style={{
-          position: 'fixed', left: Math.min(at.x, window.innerWidth - 200), top,
-          minWidth: 170, zIndex: 9999,
+          position: 'fixed', left: Math.min(at.x, window.innerWidth - (at.grab ? 230 : 200)), top,
+          minWidth: at.grab ? 220 : 170, zIndex: 9999,
           background: '#1e1f30', border: '1px solid rgba(255,255,255,0.1)',
           borderRadius: 10, boxShadow: '0 12px 40px rgba(0,0,0,0.6)',
           padding: '5px 0', fontFamily: 'system-ui, sans-serif',
@@ -1067,6 +1082,7 @@ const StoryMenu: React.FC<{
         <div style={{ padding: '4px 12px 6px', borderBottom: '1px solid rgba(255,255,255,0.07)', marginBottom: 4 }}>
           <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: 11 }}>{point ? point.title || 'Point' : line?.from ? 'Branch' : 'Storyline'}</span>
         </div>
+        {at.grab && <StoryLook id={id} d={d} custom={custom} setCustom={setCustom} />}
         {items.map(item => (
           <button
             key={item.label}
@@ -1088,6 +1104,56 @@ const StoryMenu: React.FC<{
       </div>
     </>,
     document.body,
+  )
+}
+
+/** Set a storyline's look (colour, thickness). `checkpoint` false while a
+ *  picker drag goes on: its press took the one undo step. */
+function setStoryLook(id: string, patch: Pick<StorylineData, 'color' | 'weight'>, checkpoint = true) {
+  const n = useFreeNodeStore.getState().nodes[id]
+  if (!n?.storyline) return
+  if (checkpoint) useUndoCoordinator.getState().checkpoint()
+  useFreeNodeStore.getState().updateFreeNode(id, { storyline: { ...n.storyline, ...patch } })
+}
+
+/** The grab handle's options: line colour (swatches, and a custom picker
+ *  behind its own switch) and thickness. Each change is one undo step. */
+const StoryLook: React.FC<{ id: string; d: StorylineData; custom: boolean; setCustom: (on: boolean) => void }> = ({ id, d, custom, setCustom }) => {
+  const tone = d.color ?? C_DEFAULT
+  const weight = d.weight ?? DEFAULT_WEIGHT
+  const label: React.CSSProperties = { color: 'rgba(255,255,255,0.55)', fontSize: 11, padding: '2px 14px 4px' }
+  const chip = (on: boolean): React.CSSProperties => ({
+    border: `1px solid ${on ? '#e2e8f0' : 'rgba(255,255,255,0.15)'}`, borderRadius: 5, cursor: 'pointer',
+    background: on ? 'rgba(255,255,255,0.1)' : 'none', padding: 0,
+  })
+  return (
+    <div style={{ paddingBottom: 6, marginBottom: 4, borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
+      <div style={label}>Line colour</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '0 14px 6px' }}>
+        {[C_DEFAULT, ...PRESET_COLORS].map(c => (
+          <button key={c} title={c} onClick={() => setStoryLook(id, { color: c })}
+                  style={{ ...chip(tone.toLowerCase() === c.toLowerCase()), width: 20, height: 20, padding: 2 }}>
+            <span style={{ display: 'block', width: '100%', height: '100%', borderRadius: 3, background: c }} />
+          </button>
+        ))}
+        <button title="Pick any colour" aria-pressed={custom} onClick={() => setCustom(!custom)}
+                style={{ ...chip(custom), height: 20, padding: '0 6px', color: '#e2e8f0', fontSize: 11 }}>Custom</button>
+      </div>
+      {custom && (
+        <div style={{ padding: '0 14px 8px' }} onPointerDownCapture={() => useUndoCoordinator.getState().checkpoint()}>
+          <HexColorPicker color={tone} onChange={c => setStoryLook(id, { color: c }, false)} style={{ width: '100%', height: 120 }} />
+        </div>
+      )}
+      <div style={label}>Thickness</div>
+      <div style={{ display: 'flex', gap: 6, padding: '0 14px' }}>
+        {WEIGHTS.map(w => (
+          <button key={w} title={`${w}px`} onClick={() => setStoryLook(id, { weight: w })}
+                  style={{ ...chip(weight === w), flex: 1, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <span style={{ display: 'block', width: '70%', height: w, borderRadius: w, background: tone }} />
+          </button>
+        ))}
+      </div>
+    </div>
   )
 }
 
