@@ -35,6 +35,7 @@ import { FaceVideo } from '../Layers/CardLayer'
 import { cardGripUrl } from '../../utils/mediaSources'
 import { DragOutGrip } from '../UI/DragOutGrip'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
+import { useTiltOverlayHost } from '../../store/tiltStore'
 import type { FreeNodeData } from '../../store/freeNodeStore'
 import {
   type ContentKind, type ListQuery, KIND_LABELS, groupHasContentOfKind, freeNodeInResults,
@@ -431,6 +432,10 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
   const setFlView = useCanvasStore(s => s.setRolodexView)
   const flDisplayMode = useCanvasStore(s => s.rolodexDisplayMode)
   const setFlDisplayMode = useCanvasStore(s => s.setRolodexDisplayMode)
+  // The canvas overlay box inside the tilt stage: a dock beside a panel
+  // that sits on the canvas is drawn there, so it tips with the panel in the
+  // 3D view instead of staying put on the screen.
+  const tiltOverlayHost = useTiltOverlayHost(s => s.el)
 
   // Live view transform — the dock's anchor is derived from these.
   const cvPan = useCanvasStore(s => s.pan)
@@ -1516,6 +1521,27 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
           : en!.width * (en!.pin ? en!.pin.scale : cvZoom)
         const flipRight = anchorX < DOCK_W
         const dockLeft = flipRight ? anchorX + panelWidth : anchorX - DOCK_W
+        // A panel ON THE CANVAS (embedded, not pinned) lives in the world
+        // stage, which the 3D view tips. Its dock goes in the canvas
+        // overlay box of that same stage, positioned in canvas-container
+        // px (the box's origin, so no toolbar offset), and tips with it.
+        if (embedded && !en!.pin && tiltOverlayHost) {
+          return ReactDOM.createPortal(
+            <DisplayModeDock
+              mode={displayMode}
+              setMode={pickDisplayMode}
+              left={dockLeft}
+              top={anchorY - APP_TOOLBAR_H}
+              position="absolute"
+              slideOffset={dockOffset}
+              fade={fade}
+              flipRight={flipRight}
+              onPointerDownBg={onPanelPointerDown}
+              onWheel={onWheel}
+            />,
+            tiltOverlayHost,
+          )
+        }
         // PORTAL to <body>, not just position:fixed. An embedded panel
         // carries a scale() transform, and a transformed ancestor becomes
         // the containing block for fixed descendants — so a correct
@@ -3262,16 +3288,18 @@ const DisplayModeDock: React.FC<{
    *  when the panel is dragged to the very left of the screen, where
    *  a left-side dock would be cut off. */
   flipRight: boolean
+  /** 'fixed' (screen) unless drawn inside the canvas overlay box. */
+  position?: 'fixed' | 'absolute'
   onPointerDownBg: (e: React.PointerEvent) => void
   onWheel: (e: React.WheelEvent) => void
-}> = ({ mode, setMode, left, top, slideOffset, fade, flipRight, onPointerDownBg, onWheel }) => {
+}> = ({ mode, setMode, left, top, slideOffset, fade, flipRight, position = 'fixed', onPointerDownBg, onWheel }) => {
   return (
     <div
       data-rolodex-dock
       onPointerDown={onPointerDownBg}
       onWheel={onWheel}
       style={{
-        position: 'fixed',
+        position,
         left,
         // top tracks the panel anchor 1:1 — NO transition here, so
         // when the user drags the whole window the dock stays glued
