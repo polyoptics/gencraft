@@ -41,11 +41,12 @@ const PeekCard: React.FC<{ group: ProjectGroup }> = ({ group }) => {
   )
 }
 
-/** How far the view is turned, as a screen direction: swung right is right,
- *  tipped back is up. The spread goes that way, so a peek can look past
- *  whatever is on that side of the deck. */
+/** How far the view is turned, as a screen direction: swung right spreads
+ *  left, tipped back spreads down (Brian 2026-11-03: the other way read
+ *  backwards). The spread goes that way, so a peek can look past whatever
+ *  is on that side of the deck. */
 function turned(s: { tilt: number; yaw: number }): { x: number; y: number; k: number } {
-  const x = s.yaw, y = -s.tilt
+  const x = -s.yaw, y = s.tilt
   const a = Math.hypot(x, y)
   if (a < 0.01) return { x: 0, y: 0, k: 0 }
   return { x: x / a, y: y / a, k: Math.min(FURTHEST, a / FULL_AT) }
