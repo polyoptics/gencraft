@@ -156,6 +156,9 @@ PX_SRC = {
         ("(2 * r + 1, 2 * r + 1))), 2)", "(2 * r + 1, 2 * r + 1))), 2 * VB_K)"),
         ("smoothstep(90, 60, cv2.distanceTransform", "smoothstep(90 * VB_K, 60 * VB_K, cv2.distanceTransform"),
         ("under = cv2.GaussianBlur(img, (0, 0), 3)", "under = cv2.GaussianBlur(img, (0, 0), 3 * VB_K)"),
+        # the margin inside the silhouette kept clear of interior and part lines (px, times the line's width scale):
+        # unscaled, a part's own edge along the silhouette was inked as a second line at 4K
+        ("inner = smoothstep(2.5 * wi, 6 * wi,", "inner = smoothstep(2.5 * wi * VB_K, 6 * wi * VB_K,"),
     ],
     # Boiling ink: how far it looks across an edge (shape thickness, colour edge, darkness), its smoothing along the
     # contour (1 px samples), the thinnest stroke, and the dry brush's own px
@@ -640,7 +643,7 @@ def size_key(req, dials, k):
     """What a drawing depends on besides the picture and its subject: the dials, the Segment card's scale settings
     and the output factor."""
     # (bigger than the preview: also the code's own sizes, PX_SRC - its version, so older bakes are not reused)
-    return short([dials, req.get("scale") or {}, round(k, 3)] + (["px11"] if abs(k - 1) > 1e-3 else []))
+    return short([dials, req.get("scale") or {}, round(k, 3)] + (["px14"] if abs(k - 1) > 1e-3 else []))
 
 
 def op_lines(req):
