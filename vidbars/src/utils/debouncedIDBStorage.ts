@@ -14,17 +14,41 @@
 // pressure that was causing silent save failures, and is one-shot —
 // subsequent reads hit IDB only.
 //
-// Failure surfacing mirrors `debouncedJSONStorage`: any error fires a
-// `storage-write-failed` window event so the StoragePersistenceBanner
-// can show it. (IDB failures are rare in practice — usually only on
-// truly catastrophic disk-full scenarios — but we surface them anyway.)
+// Failure surfacing mirrors `debouncedJSONStorage`: a write that still
+// fails after one retry fires a `storage-write-failed` window event, and
+// every successful write fires `storage-write-ok`, so the
+// StoragePersistenceBanner shows only problems that are still happening.
+//
+// Never write over saved data the store hasn't seen. Zustand's persist
+// writes on every set(), including sets that run before the async IDB
+// read has finished, when the store still holds its EMPTY defaults
+// (startup, or a store module re-run by HMR). Hydration then restores the
+// real data in memory without writing, so that queued empty write landed
+// a moment later and the next reload came up blank. So:
+//   - writes for a key are ignored until this storage has read that key
+//     (hydration replaces that state anyway), and a read cancels any write
+//     still queued from before it;
+//   - if the read fails (after one retry), saving that key stays off for
+//     the session and the banner says so, instead of saving defaults;
+//   - with `isEmpty`, an empty value is only written over non-empty saved
+//     data when this storage has itself seen that key hold content (so the
+//     emptiness came from a delete in this session, not from a store that
+//     never got its data).
 
 import type { PersistStorage, StorageValue } from 'zustand/middleware'
-import type { StorageWriteFailedDetail } from './debouncedJSONStorage'
+import {
+  STORAGE_WRITE_FAILED,
+  notifyStorageWriteOk,
+  type StorageWriteFailedDetail,
+} from './debouncedJSONStorage'
 
 const DB_NAME = 'vidbars-zustand'
 const STORE_NAME = 'kv'
 const DB_VERSION = 1
+// How long to wait before retrying a failed write. Long enough for a
+// passing transaction abort to clear, short enough that a real failure
+// is reported while the artist is still at the same edit.
+const RETRY_DELAY_MS = 1500
 
 // Lazy singleton so multiple stores share one connection. Resolves on the
 // first request and is reused for the lifetime of the page.
@@ -107,14 +131,70 @@ function surfaceWriteFailure(name: string, e: unknown, payloadBytes: number) {
   )
   if (typeof window !== 'undefined' && typeof CustomEvent === 'function') {
     try {
-      window.dispatchEvent(new CustomEvent('storage-write-failed', { detail }))
+      window.dispatchEvent(new CustomEvent(STORAGE_WRITE_FAILED, { detail }))
     } catch { /* ignore */ }
   }
 }
 
-export function createDebouncedIDBStorage<T>(delay = 400): PersistStorage<T> {
+/** Read a key: IDB first, then a one-shot migration from localStorage.
+ *  Throws when IDB itself can't be read (as opposed to holding nothing). */
+async function readSaved<T>(name: string): Promise<StorageValue<T> | null> {
+  const idbValue = await idbGet<StorageValue<T>>(name)
+  if (idbValue != null) return idbValue
+  // Migration: nothing in IDB, but maybe localStorage has it from
+  // before the swap. Copy across, then clear localStorage so we
+  // free up the quota that was choking writes.
+  if (typeof localStorage === 'undefined') return null
+  const lsRaw = localStorage.getItem(name)
+  if (!lsRaw) return null
+  let parsed: StorageValue<T> | null = null
+  try {
+    parsed = JSON.parse(lsRaw) as StorageValue<T>
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error(`[debouncedIDBStorage] migration parse failed for "${name}":`, e)
+    return null
+  }
+  try {
+    await idbSet(name, parsed)
+    // Only clear localStorage AFTER IDB has the data — no
+    // mid-migration data loss.
+    localStorage.removeItem(name)
+    // eslint-disable-next-line no-console
+    console.info(
+      `[debouncedIDBStorage] migrated "${name}" from localStorage → IDB ` +
+      `(${lsRaw.length} bytes); localStorage entry removed.`,
+    )
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error(`[debouncedIDBStorage] migration write failed for "${name}":`, e)
+    // Leave localStorage data in place; we'll retry next load.
+  }
+  return parsed
+}
+
+export interface DebouncedIDBStorageOptions<T> {
+  /** True when a persisted state holds nothing worth keeping. Enables the
+   *  empty-overwrite guard described at the top of this file. */
+  isEmpty?: (state: T) => boolean
+}
+
+export function createDebouncedIDBStorage<T>(
+  delay = 400,
+  opts: DebouncedIDBStorageOptions<T> = {},
+): PersistStorage<T> {
+  // Per key: 'reading' until the saved value has been read, 'ready' once
+  // writes are safe, 'failed' when it couldn't be read (saving stays off).
+  // A key with no entry has not been read yet, so writes wait as well.
+  const loadState = new Map<string, 'reading' | 'ready' | 'failed'>()
+  // Keys this storage has seen hold content (read or written).
+  const seenContent = new Set<string>()
+  const isEmpty = opts.isEmpty
   const timers = new Map<string, ReturnType<typeof setTimeout>>()
   const pending = new Map<string, StorageValue<T>>()
+  // Bumped on every setItem, so a retry can tell that a newer value has
+  // since been queued or written and must not be overwritten.
+  const generation = new Map<string, number>()
 
   const flush = async (name: string) => {
     const value = pending.get(name)
@@ -123,8 +203,32 @@ export function createDebouncedIDBStorage<T>(delay = 400): PersistStorage<T> {
     if (t) clearTimeout(t)
     timers.delete(name)
     if (value === undefined) return
+    const gen = generation.get(name)
+    if (isEmpty && !seenContent.has(name) && isEmpty(value.state)) {
+      // Empty, and this storage never saw the key hold anything: only
+      // write it if what is saved is empty too.
+      let saved: StorageValue<T> | null
+      try { saved = await idbGet<StorageValue<T>>(name) } catch { return }
+      if (generation.get(name) !== gen) return
+      if (saved && !isEmpty(saved.state)) {
+        // eslint-disable-next-line no-console
+        console.warn(`[debouncedIDBStorage] refused to overwrite saved "${name}" with an empty state.`)
+        return
+      }
+    }
     try {
       await idbSet(name, value)
+      notifyStorageWriteOk(name)
+      return
+    } catch { /* retried below */ }
+    // One retry: transactions can abort for passing reasons, and a single
+    // blip is not lost work. If a newer value was set meanwhile, its own
+    // flush supersedes this one and reports how it went.
+    await new Promise(r => setTimeout(r, RETRY_DELAY_MS))
+    if (generation.get(name) !== gen) return
+    try {
+      await idbSet(name, value)
+      notifyStorageWriteOk(name)
     } catch (e) {
       // Estimate payload size for diagnostics — cheap stringify; if it
       // blows up just report 0.
@@ -153,47 +257,44 @@ export function createDebouncedIDBStorage<T>(delay = 400): PersistStorage<T> {
 
   return {
     getItem: async (name) => {
-      try {
-        // Read from IDB first.
-        const idbValue = await idbGet<StorageValue<T>>(name)
-        if (idbValue != null) return idbValue
-        // Migration: nothing in IDB, but maybe localStorage has it from
-        // before the swap. Copy across, then clear localStorage so we
-        // free up the quota that was choking writes.
-        if (typeof localStorage === 'undefined') return null
-        const lsRaw = localStorage.getItem(name)
-        if (!lsRaw) return null
-        let parsed: StorageValue<T> | null = null
+      // Anything queued before this read came from state the read is
+      // about to replace: drop it.
+      loadState.set(name, 'reading')
+      const t = timers.get(name)
+      if (t) clearTimeout(t)
+      timers.delete(name)
+      pending.delete(name)
+      generation.set(name, (generation.get(name) ?? 0) + 1)
+      let lastErr: unknown
+      for (let attempt = 0; attempt < 2; attempt++) {
+        if (attempt > 0) await new Promise(r => setTimeout(r, RETRY_DELAY_MS))
         try {
-          parsed = JSON.parse(lsRaw) as StorageValue<T>
+          const value = await readSaved<T>(name)
+          loadState.set(name, 'ready')
+          if (value && isEmpty && !isEmpty(value.state)) seenContent.add(name)
+          return value
         } catch (e) {
-          // eslint-disable-next-line no-console
-          console.error(`[debouncedIDBStorage] migration parse failed for "${name}":`, e)
-          return null
+          lastErr = e
         }
-        try {
-          await idbSet(name, parsed)
-          // Only clear localStorage AFTER IDB has the data — no
-          // mid-migration data loss.
-          localStorage.removeItem(name)
-          // eslint-disable-next-line no-console
-          console.info(
-            `[debouncedIDBStorage] migrated "${name}" from localStorage → IDB ` +
-            `(${lsRaw.length} bytes); localStorage entry removed.`,
-          )
-        } catch (e) {
-          // eslint-disable-next-line no-console
-          console.error(`[debouncedIDBStorage] migration write failed for "${name}":`, e)
-          // Leave localStorage data in place; we'll retry next load.
-        }
-        return parsed
-      } catch (e) {
-        // eslint-disable-next-line no-console
-        console.error(`[debouncedIDBStorage] getItem failed for "${name}":`, e)
-        return null
       }
+      // Couldn't read what is saved. The store will run on its defaults;
+      // saving them would wipe the real data, so saving stays off.
+      loadState.set(name, 'failed')
+      // eslint-disable-next-line no-console
+      console.error(`[debouncedIDBStorage] getItem failed for "${name}"; saving is off for it:`, lastErr)
+      const why = lastErr instanceof Error ? lastErr.message : String(lastErr)
+      surfaceWriteFailure(
+        name,
+        new Error(`Couldn't load saved data (${why}). Saving is paused so it isn't overwritten; reload to try again.`),
+        0,
+      )
+      return null
     },
     setItem: (name, value) => {
+      // Not before the saved value has been read (see top of file).
+      if (loadState.get(name) !== 'ready') return
+      if (isEmpty && !isEmpty(value.state)) seenContent.add(name)
+      generation.set(name, (generation.get(name) ?? 0) + 1)
       pending.set(name, value)
       const existing = timers.get(name)
       if (existing) clearTimeout(existing)
@@ -204,6 +305,7 @@ export function createDebouncedIDBStorage<T>(delay = 400): PersistStorage<T> {
       if (existing) clearTimeout(existing)
       timers.delete(name)
       pending.delete(name)
+      generation.set(name, (generation.get(name) ?? 0) + 1)
       try { await idbDelete(name) } catch { /* swallow */ }
     },
   }

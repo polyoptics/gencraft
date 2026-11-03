@@ -1,175 +1,144 @@
 /**
- * StoragePersistenceBanner — surfaces localStorage write failures so they
- * stop being silent.
+ * StoragePersistenceBanner — tells the artist when saving has genuinely
+ * stopped working, and stays out of the way otherwise.
  *
- * Background: every Zustand store in this app persists via
- * `createDebouncedJSONStorage`, which used to swallow `setItem` errors
- * silently. localStorage in browser/Electron has a hard quota (5–10 MB
- * total across all keys; in this app we've measured ~50 MB before
- * QuotaExceededError fires). Once the quota is hit, every save fails on
- * the floor and the app appears to "lose" recent edits because every
- * reload rehydrates the last successful write — which can be days old.
+ * Every persisted store saves through `createDebouncedIDBStorage`, which
+ * retries a failed write once before reporting it, and reports every
+ * successful write too. The banner keeps a per-store list of what is
+ * currently failing:
+ *   - `storage-write-failed` (after the retry) adds that store;
+ *   - `storage-write-ok` removes it again.
+ * So a passing hiccup never shows, and the banner clears by itself as soon
+ * as the store saves again. It used to latch on the first failure and stay
+ * red until reload, even when the very next save went through.
  *
- * This banner does two things:
- *   1. Listens for the `storage-write-failed` window event dispatched by
- *      `debouncedJSONStorage` and displays a sticky red bar describing
- *      the most recent failure. Stays until reload (intentionally
- *      non-dismissible — losing edits is not something to dismiss).
- *   2. Runs a lightweight quota probe at mount (a small write +
- *      remove) so we surface the problem BEFORE the user makes edits
- *      that would silently fail.
- *
- * The actual fix (moving persistence to IndexedDB, slimming the
- * payload) is separate — this is the diagnostic layer that makes the
- * problem visible.
+ * It also asks the browser how full its storage is (navigator.storage
+ * .estimate, which covers IndexedDB) and warns only past 90%. The old probe
+ * measured localStorage, which nothing saves to any more, and wrote up to
+ * 10 MB on every launch to do it.
  */
 import React, { useEffect, useState } from 'react'
-import type { StorageWriteFailedDetail } from '../../utils/debouncedJSONStorage'
+import {
+  STORAGE_WRITE_FAILED,
+  STORAGE_WRITE_OK,
+  type StorageWriteFailedDetail,
+  type StorageWriteOkDetail,
+} from '../../utils/debouncedJSONStorage'
 
-type Status =
-  | { kind: 'ok' }
-  | { kind: 'quota-warning'; usedBytes: number; ceilingBytes: number }
-  | { kind: 'write-failed'; detail: StorageWriteFailedDetail }
-
-function totalLocalStorageBytes(): number {
-  if (typeof localStorage === 'undefined') return 0
-  let total = 0
-  try {
-    for (const k of Object.keys(localStorage)) {
-      total += k.length + (localStorage.getItem(k)?.length ?? 0)
-    }
-  } catch { /* ignore */ }
-  return total
+/** Plain names for the persisted stores, in the artist's terms. */
+const STORE_LABELS: Record<string, string> = {
+  'vidbars-boards': 'boards',
+  'vidbars-canvas': 'canvas layout',
+  'vidbars-freenodes': 'canvas items',
+  'vidbars-history': 'history',
+  'vidbars-text-versions': 'text versions',
+  'vidbars-viewports3d': '3D viewports',
+  'vidbars-model-posters': 'model previews',
+  'vidbars-media': 'images and media',
 }
+const labelFor = (key: string) => STORE_LABELS[key] ?? key
 
-/** Probe how much headroom localStorage has. Writes incrementally larger
- *  test payloads and finds the first size that throws. Returns the
- *  estimated ceiling in bytes. */
-function probeQuotaCeiling(): { used: number; ceiling: number } {
-  const used = totalLocalStorageBytes()
-  // Test sizes (in MB) to probe headroom. Stop at first failure.
-  const probes = [0.5, 1, 2, 5, 10]
-  let lastSuccess = used
-  const probeKey = '__quota_probe_banner'
-  try { localStorage.removeItem(probeKey) } catch { /* ignore */ }
-  for (const mb of probes) {
-    const payload = 'x'.repeat(Math.floor(mb * 1024 * 1024))
-    try {
-      localStorage.setItem(probeKey, payload)
-      lastSuccess = used + payload.length
-      try { localStorage.removeItem(probeKey) } catch { /* ignore */ }
-    } catch {
-      try { localStorage.removeItem(probeKey) } catch { /* ignore */ }
-      // Ceiling is between `lastSuccess` and `used + payload.length`.
-      // Use `lastSuccess` as the conservative lower bound for the ceiling.
-      return { used, ceiling: lastSuccess }
-    }
-  }
-  // We could write all probes successfully → plenty of headroom.
-  return { used, ceiling: used + probes[probes.length - 1] * 1024 * 1024 }
-}
+const NEARLY_FULL_RATIO = 0.9
 
 const fmtMB = (bytes: number) => (bytes / 1024 / 1024).toFixed(1) + ' MB'
+const fmtSize = (bytes: number) =>
+  bytes >= 1024 ** 3 ? (bytes / 1024 ** 3).toFixed(1) + ' GB' : fmtMB(bytes)
 
-/** Identity of a report, so dismissing one failure does not hide the NEXT,
- *  different one. Keyed by kind + which store + the error, deliberately not
- *  by timestamp: the same store failing the same way every 600 ms is one
- *  problem being retried, not a thousand problems. */
-function dismissKey(s: Status): string {
-  if (s.kind === 'write-failed') return `w:${s.detail.key}:${s.detail.errorName}`
-  if (s.kind === 'quota-warning') return 'quota'
-  return 'ok'
+function listLabels(keys: string[]): string {
+  const labels = keys.map(labelFor)
+  if (labels.length <= 1) return labels[0] ?? ''
+  return labels.slice(0, -1).join(', ') + ' and ' + labels[labels.length - 1]
+}
+
+/** Identity of what is showing, so dismissing it does not hide a NEW,
+ *  different problem. Keyed by store + error, not by timestamp: the same
+ *  store failing the same way on every edit is one problem, not many. */
+function failureSignature(failures: Record<string, StorageWriteFailedDetail>): string {
+  return Object.values(failures)
+    .map(d => `${d.key}:${d.errorName}`)
+    .sort()
+    .join('|')
 }
 
 export const StoragePersistenceBanner: React.FC = () => {
-  const [status, setStatus] = useState<Status>({ kind: 'ok' })
+  const [failures, setFailures] = useState<Record<string, StorageWriteFailedDetail>>({})
+  const [nearlyFull, setNearlyFull] = useState<{ usage: number; quota: number } | null>(null)
   const [dismissed, setDismissed] = useState<string | null>(null)
+  const [showDetails, setShowDetails] = useState(false)
 
-  // Initial probe — runs once on mount.
   useEffect(() => {
-    const { used, ceiling } = probeQuotaCeiling()
-    // If the available headroom is under 5 MB, warn proactively. This
-    // catches the "you're going to start losing edits soon" case before
-    // any actual write fails. 5 MB is the threshold because a single
-    // store rewrite (which Zustand triggers on every set) carries the
-    // full ~30 MB current state — but Chromium does in-place rewrites
-    // so what matters is the GROWTH headroom, and even small edits
-    // (one bar add, one image transform) can push the JSON up by
-    // 100 KB+ at a time. Below 5 MB headroom is "you're going to start
-    // losing saves any minute now."
-    const headroom = ceiling - used
-    if (headroom < 5 * 1024 * 1024) {
-      setStatus({ kind: 'quota-warning', usedBytes: used, ceilingBytes: ceiling })
-    }
+    let cancelled = false
+    navigator.storage?.estimate?.()
+      .then(({ usage, quota }) => {
+        if (cancelled || !usage || !quota) return
+        if (usage / quota >= NEARLY_FULL_RATIO) setNearlyFull({ usage, quota })
+      })
+      .catch(() => { /* no estimate available: nothing to warn about */ })
+    return () => { cancelled = true }
   }, [])
 
-  // Listen for actual write failures. These take priority over the
-  // proactive warning since they represent a real lost-write event.
   useEffect(() => {
     const onFail = (e: Event) => {
       const detail = (e as CustomEvent<StorageWriteFailedDetail>).detail
-      setStatus({ kind: 'write-failed', detail })
+      setFailures(f => ({ ...f, [detail.key]: detail }))
     }
-    window.addEventListener('storage-write-failed', onFail as EventListener)
-    return () => window.removeEventListener('storage-write-failed', onFail as EventListener)
+    const onOk = (e: Event) => {
+      const { key } = (e as CustomEvent<StorageWriteOkDetail>).detail
+      setFailures(f => {
+        if (!(key in f)) return f
+        const next = { ...f }
+        delete next[key]
+        return next
+      })
+    }
+    window.addEventListener(STORAGE_WRITE_FAILED, onFail)
+    window.addEventListener(STORAGE_WRITE_OK, onOk)
+    return () => {
+      window.removeEventListener(STORAGE_WRITE_FAILED, onFail)
+      window.removeEventListener(STORAGE_WRITE_OK, onOk)
+    }
   }, [])
 
-  if (status.kind === 'ok') return null
-  if (dismissed === dismissKey(status)) return null
+  const failing = Object.keys(failures)
+  const isFailure = failing.length > 0
+  if (!isFailure && !nearlyFull) return null
+  const signature = isFailure ? failureSignature(failures) : 'nearly-full'
+  if (dismissed === signature) return null
 
-  const isFailure = status.kind === 'write-failed'
-  const bg = isFailure ? 'rgba(180, 30, 35, 0.96)' : 'rgba(170, 110, 30, 0.96)'
   const headline = isFailure
-    ? 'Save FAILED — your recent edits did not persist'
-    : 'Storage almost full — saves will start failing soon'
+    ? "Some changes aren't saving right now"
+    : 'Storage is nearly full'
 
-  let body: React.ReactNode
-  if (status.kind === 'write-failed') {
-    const d = status.detail
-    body = (
-      <>
-        <div style={{ fontSize: 11, opacity: 0.92 }}>
-          Tried to write <code>{d.key}</code> ({fmtMB(d.payloadBytes)}).{' '}
-          {d.isQuotaExceeded
-            ? `Browser quota exceeded — current localStorage usage ~${fmtMB(d.totalLocalStorageBytes)}.`
-            : `${d.errorName}: ${d.errorMessage}`}
-        </div>
-        <div style={{ fontSize: 11, opacity: 0.92, marginTop: 2 }}>
-          Reload the app and your work will revert to the last successful save (which may be old).
-          To preserve current state: save a snapshot via Templates → Save now.
-        </div>
-      </>
-    )
-  } else {
-    body = (
-      <div style={{ fontSize: 11, opacity: 0.92 }}>
-        Used <strong>{fmtMB(status.usedBytes)}</strong> of an estimated{' '}
-        <strong>{fmtMB(status.ceilingBytes)}</strong> ceiling. Save a snapshot
-        soon (Templates → Save) so you don't lose work when writes start
-        failing.
-      </div>
-    )
-  }
+  const body = isFailure ? (
+    <div style={{ fontSize: 11, opacity: 0.9 }}>
+      Your work is still here, and VidBars keeps trying to save your {listLabels(failing)}.
+      Until this clears, reloading could bring back an older version. To be safe,
+      use Backup → Export project to file.
+    </div>
+  ) : (
+    <div style={{ fontSize: 11, opacity: 0.9 }}>
+      VidBars is using {fmtSize(nearlyFull!.usage)} of the {fmtSize(nearlyFull!.quota)} this
+      device allows. Saving still works. Exporting a backup (Backup → Export project to file)
+      keeps your work safe if space runs out.
+    </div>
+  )
 
   return (
     <div
-      role="alert"
-      aria-live="assertive"
+      role="status"
+      aria-live="polite"
       style={{
         // In normal flex flow at the top of the App column — pushes the
-        // toolbar (and everything below) down rather than overlapping
-        // them. Sticky+top-0 so it stays visible if the host column
-        // ever scrolls (currently the App fills the viewport so this
-        // mostly behaves like a static block).
+        // toolbar (and everything below) down rather than overlapping it.
         position: 'sticky',
         top: 0,
         zIndex: 99999,
-        background: bg,
+        background: isFailure ? 'rgba(120, 72, 28, 0.97)' : 'rgba(64, 60, 40, 0.97)',
+        borderBottom: '1px solid rgba(255, 200, 120, 0.35)',
         color: '#fff',
-        padding: '8px 14px',
+        padding: '7px 14px',
         fontFamily: 'inherit',
         fontSize: 12,
-        boxShadow: '0 2px 12px rgba(0,0,0,0.6)',
         display: 'flex',
         flexDirection: 'column',
         gap: 2,
@@ -179,21 +148,40 @@ export const StoragePersistenceBanner: React.FC = () => {
     >
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontWeight: 700, fontSize: 13, letterSpacing: '0.4px' }}>
-            ⚠ {headline}
-          </div>
+          <div style={{ fontWeight: 600, fontSize: 12.5 }}>{headline}</div>
           {body}
+          {isFailure && (
+            <button
+              onClick={() => setShowDetails(s => !s)}
+              style={{
+                marginTop: 3, padding: 0, background: 'none', border: 'none',
+                color: 'rgba(255,255,255,0.7)', fontSize: 10.5, cursor: 'pointer',
+                textDecoration: 'underline', fontFamily: 'inherit',
+              }}
+            >
+              {showDetails ? 'Hide details' : 'Details'}
+            </button>
+          )}
+          {isFailure && showDetails && (
+            <div style={{ fontSize: 10.5, opacity: 0.8, marginTop: 2, fontFamily: 'monospace' }}>
+              {Object.values(failures).map(d => (
+                <div key={d.key}>
+                  {d.key}: {d.errorName}: {d.errorMessage}
+                  {d.payloadBytes > 0 ? ` (${fmtMB(d.payloadBytes)})` : ''}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
-        {/* An alarm you cannot silence stops being an alarm. Dismissing it
-            hides THIS report; a genuinely new failure raises a new one, so
-            nothing real gets suppressed. */}
+        {/* Dismissing hides THIS report; a different store or error
+            raises it again, and it clears itself once saving recovers. */}
         <button
-          onClick={() => setDismissed(dismissKey(status))}
-          title="Dismiss — a new failure will raise this again"
+          onClick={() => setDismissed(signature)}
+          title="Hide — it comes back if something new goes wrong"
           style={{
-            flexShrink: 0, background: 'rgba(0,0,0,0.22)',
-            border: '1px solid rgba(255,255,255,0.35)', borderRadius: 4,
-            color: '#fff', fontSize: 14, lineHeight: 1,
+            flexShrink: 0, background: 'rgba(0,0,0,0.18)',
+            border: '1px solid rgba(255,255,255,0.25)', borderRadius: 4,
+            color: '#fff', fontSize: 13, lineHeight: 1,
             padding: '3px 8px', cursor: 'pointer', fontFamily: 'inherit',
           }}
         >×</button>

@@ -5,7 +5,11 @@
 // project state holds `mediaref:<id>` pointers (see mediaRef.ts); the
 // actual bytes live here as native Blobs.
 
-import type { StorageWriteFailedDetail } from './debouncedJSONStorage'
+import {
+  STORAGE_WRITE_FAILED,
+  notifyStorageWriteOk,
+  type StorageWriteFailedDetail,
+} from './debouncedJSONStorage'
 
 const DB_NAME = 'vidbars-media'
 const STORE_NAME = 'blobs'
@@ -64,7 +68,7 @@ function surfaceFailure(err: unknown): void {
     totalLocalStorageBytes: 0,
     timestamp: Date.now(),
   }
-  try { window.dispatchEvent(new CustomEvent('storage-write-failed', { detail })) } catch { /* ignore */ }
+  try { window.dispatchEvent(new CustomEvent(STORAGE_WRITE_FAILED, { detail })) } catch { /* ignore */ }
 }
 
 /** Store a Blob and return its new id. Throws on failure so the caller
@@ -81,6 +85,7 @@ export async function putMedia(blob: Blob): Promise<string> {
       tx.onerror = () => reject(tx.error)
       tx.onabort = () => reject(tx.error ?? new Error('media tx aborted'))
     })
+    notifyStorageWriteOk(DB_NAME)
     return id
   } catch (err) {
     surfaceFailure(err)
@@ -102,6 +107,7 @@ export async function putMediaWithId(id: string, blob: Blob): Promise<void> {
       tx.onerror = () => reject(tx.error)
       tx.onabort = () => reject(tx.error ?? new Error('media tx aborted'))
     })
+    notifyStorageWriteOk(DB_NAME)
   } catch (err) {
     surfaceFailure(err)
     throw err

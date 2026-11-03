@@ -39,6 +39,22 @@ export interface StorageWriteFailedDetail {
   timestamp: number
 }
 
+export interface StorageWriteOkDetail {
+  key: string
+}
+
+/** Window events the StoragePersistenceBanner listens for. A failure is
+ *  reported per store key; the next successful write of that key clears it. */
+export const STORAGE_WRITE_FAILED = 'storage-write-failed'
+export const STORAGE_WRITE_OK = 'storage-write-ok'
+
+export function notifyStorageWriteOk(key: string): void {
+  if (typeof window === 'undefined' || typeof CustomEvent !== 'function') return
+  try {
+    window.dispatchEvent(new CustomEvent<StorageWriteOkDetail>(STORAGE_WRITE_OK, { detail: { key } }))
+  } catch { /* ignore */ }
+}
+
 function isQuotaError(e: unknown): boolean {
   if (!(e instanceof Error)) return false
   // QuotaExceededError on Chrome/Edge/Electron, NS_ERROR_DOM_QUOTA_REACHED
@@ -83,6 +99,7 @@ export function createDebouncedJSONStorage<T>(delay = 400): PersistStorage<T> {
     }
     try {
       localStorage.setItem(name, payload)
+      notifyStorageWriteOk(name)
     } catch (e) {
       surfaceWriteFailure(name, e, payload.length)
     }
@@ -108,7 +125,7 @@ export function createDebouncedJSONStorage<T>(delay = 400): PersistStorage<T> {
     )
     if (typeof window !== 'undefined' && typeof CustomEvent === 'function') {
       try {
-        window.dispatchEvent(new CustomEvent('storage-write-failed', { detail }))
+        window.dispatchEvent(new CustomEvent(STORAGE_WRITE_FAILED, { detail }))
       } catch { /* ignore */ }
     }
   }

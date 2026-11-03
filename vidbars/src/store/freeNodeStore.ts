@@ -820,6 +820,8 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
   clearFreeSelection: () => set({ selectedIds: [] }),
 }), {
   name: 'vidbars-freenodes',
-  storage: createDebouncedIDBStorage(400),
+  // An empty tile set never replaces saved tiles unless they were deleted
+  // in this session (utils/debouncedIDBStorage).
+  storage: createDebouncedIDBStorage<Pick<FreeNodeStore, 'nodes'>>(400, { isEmpty: (s) => Object.keys(s.nodes ?? {}).length === 0 }),
   partialize: (s) => ({ nodes: s.nodes }),  // selectedIds is transient
 }))
