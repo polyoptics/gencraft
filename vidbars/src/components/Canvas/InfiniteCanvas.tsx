@@ -17,6 +17,8 @@ import { nextFreeEdgeSlot } from '../../utils/viewportDocking'
 import { isPanelType } from '../../utils/componentLinks'
 import { addFreeNodeCentered, addViewerCentered, createCardOrBoardAt, createStorylineAt } from '../../utils/canvasCreate'
 import { selectStorylinesInBox } from './StorylineLayer'
+import { PlaceGhost } from './PlaceGhost'
+import { canvasPointUnder } from '../../utils/placeTool'
 import { GLCanvasHost } from '../Viewport3D/GLCanvasHost'
 import { WorldZoom } from './worldZoom'
 import { addMediaBlockToCard, cardHitOf, groupForCardHit, type CardHit } from '../../utils/cardContent'
@@ -986,10 +988,11 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
       onContextMenu={e => {
         if ((e.target as Element).closest('[data-block],[data-board],[data-freenode],[data-viewport3d]')) return
         e.preventDefault()
-        const rect = containerRef.current!.getBoundingClientRect()
-        const cx = (e.clientX - rect.left - pan.x) / zoom
-        const cy = (e.clientY - rect.top - pan.y) / zoom
-        setAddMenu({ sx: e.clientX, sy: e.clientY, cx, cy })
+        // Through the tilt when tilted, so "Add X" lands under the cursor in
+        // 3D as it does flat. TiltLayer leaves right-clicks unsent.
+        const p = canvasPointUnder(e.clientX, e.clientY)
+        if (!p) return
+        setAddMenu({ sx: e.clientX, sy: e.clientY, cx: p.cx, cy: p.cy })
       }}
     >
       {/* ── Tilt stage: the world layers tip back together when the canvas is
@@ -1018,6 +1021,9 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
              drawn here by App's TiltStage: last in the world stage, over
              the tiles as before, and tilted, in the same 3D space. ── */}
       <div ref={overlayRef} data-tilt-stage="overlay" style={{ position: 'absolute', inset: 0, pointerEvents: 'none', transformOrigin: '50% 50%' }} />
+      {/* ── A toolbar button's outline on the mouse (utils/placeTool):
+             last in the stage, over the cards, tilted with them. ── */}
+      <PlaceGhost />
       </div>
 
       {/* ── Screen-pinned nodes — OUTSIDE the world transform, but the

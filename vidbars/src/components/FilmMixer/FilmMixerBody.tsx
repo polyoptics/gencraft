@@ -115,21 +115,34 @@ export function FilmLayersSpacing({ fontSize }: { fontSize: number }) {
   )
 }
 
+/** A new mixer's size, in canvas units: sized from the screen rather than
+ *  createScaleFor, whose clamps let it come down huge zoomed in and small
+ *  zoomed far out. */
+export function filmMixerSize(): { width: number; height: number } {
+  const host = document.querySelector('[data-zoom-bar-host]')?.getBoundingClientRect()
+  const w = host?.width ?? window.innerWidth, h = host?.height ?? window.innerHeight
+  const width = Math.min(w, h / FILM_MIXER_ASPECT) * START_FILL / useCanvasStore.getState().zoom
+  return { width, height: width * FILM_MIXER_ASPECT }
+}
+
+/** The mixer on the canvas, if there is one (there is only ever one). */
+export function existingFilmMixer(): string | null {
+  return Object.values(useFreeNodeStore.getState().nodes).find(n => n.type === 'filmMixer')?.id ?? null
+}
+
 /** One mixer: its page lets only one copy of itself be live. The button adds
- *  it, or brings the camera to the one on the canvas. */
-export function openFilmMixer() {
+ *  it (centred on `at`, the middle of the view by default), or brings the
+ *  camera to the one on the canvas. */
+export function openFilmMixer(at?: { cx: number; cy: number }) {
   const fns = useFreeNodeStore.getState()
   const have = Object.values(fns.nodes).find(n => n.type === 'filmMixer')
   const cs = useCanvasStore.getState()
   const host = document.querySelector('[data-zoom-bar-host]')?.getBoundingClientRect()
   const w = host?.width ?? window.innerWidth, h = host?.height ?? window.innerHeight
   if (!have) {
-    // Sized from the screen rather than createScaleFor, whose clamps let it
-    // come down huge zoomed in and small zoomed far out.
-    const id = addFreeNodeCentered('filmMixer')
+    const id = addFreeNodeCentered('filmMixer', at)
     const n = useFreeNodeStore.getState().nodes[id]
-    const width = Math.min(w, h / FILM_MIXER_ASPECT) * START_FILL / cs.zoom
-    const height = width * FILM_MIXER_ASPECT
+    const { width, height } = filmMixerSize()
     useFreeNodeStore.getState().updateFreeNode(id, {
       width, height,
       x: n.x + n.width / 2 - width / 2,

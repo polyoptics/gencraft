@@ -182,6 +182,43 @@ export interface FreeNodeData {
 const COLORS = ['#1e2235', '#1e3028', '#2e1e35', '#35281e', '#1e2e35', '#2e351e']
 let colorIdx = 0
 
+// COMPONENTS start twice as big per side — four times the area. They are
+// tools, not tiles: a Media Pool wants a readable grid, a Prompt Pad
+// wants its sections side by side, and at the old sizes every one of
+// them had to be resized before it was usable. Media tiles keep their
+// modest defaults; a dropped image is content, not an instrument.
+const DEFAULT_HEIGHTS: Record<FreeNodeType, number> = {
+  image: 180, note: 160, text: 180, video: 180, audio: 120, model: 180,
+  list: 880, pool: 1080, prompt: 720, history: 800, effect: 252,
+  rail: 360,   // a placeholder: the rail sizes itself to its layout
+  cabinet: 280,
+  filmMixer: 860,
+  storyline: 0,   // its box is its lines' (utils/storyline)
+}
+const DEFAULT_WIDTHS: Partial<Record<FreeNodeType, number>> = {
+  audio: 260,
+  // Lists host a full embedded Rolodex — size for its natural panel
+  // width (LEFTCOL_W 196 + margins), doubled.
+  list: 480,
+  // Brian's own pool (2026-11-03): about nine 'mid' tiles across. This
+  // is its content size at uiScale 1; addFreeNodeCentered scales it.
+  pool: 780,
+  prompt: 920,
+  history: 520,
+  // A playing card, 5:7 (FreeNode holds that ratio on resize). The
+  // whole tile is the card's face: name, then a slider per value.
+  effect: 180,
+  cabinet: 320,
+  filmMixer: 1240,  // the button sizes it to the screen (openFilmMixer)
+}
+
+/** A new free node's size before any zoom compensation. addFreeNode makes
+ *  nodes this size; the toolbar's placing outline (utils/placeTool) reads it
+ *  so the outline is the size of what lands. */
+export function freeNodeDefaultSize(type: FreeNodeType): { width: number; height: number } {
+  return { width: DEFAULT_WIDTHS[type] ?? 200, height: DEFAULT_HEIGHTS[type] ?? 160 }
+}
+
 interface FreeNodeStore {
   nodes: Record<string, FreeNodeData>
   selectedIds: string[]
@@ -286,39 +323,9 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
       effect: 'Effect', rail: 'Loop strip', cabinet: 'Project cabinet', filmMixer: 'Film Look',
       storyline: 'Storyline',
     }
-    // COMPONENTS start twice as big per side — four times the area. They are
-    // tools, not tiles: a Media Pool wants a readable grid, a Prompt Pad
-    // wants its sections side by side, and at the old sizes every one of
-    // them had to be resized before it was usable. Media tiles keep their
-    // modest defaults; a dropped image is content, not an instrument.
-    const heights: Record<FreeNodeType, number> = {
-      image: 180, note: 160, text: 180, video: 180, audio: 120, model: 180,
-      list: 880, pool: 1080, prompt: 720, history: 800, effect: 252,
-      rail: 360,   // a placeholder: the rail sizes itself to its layout
-      cabinet: 280,
-      filmMixer: 860,
-      storyline: 0,   // its box is its lines' (utils/storyline)
-    }
-    const widths: Partial<Record<FreeNodeType, number>> = {
-      audio: 260,
-      // Lists host a full embedded Rolodex — size for its natural panel
-      // width (LEFTCOL_W 196 + margins), doubled.
-      list: 480,
-      // Brian's own pool (2026-11-03): about nine 'mid' tiles across. This
-      // is its content size at uiScale 1; addFreeNodeCentered scales it.
-      pool: 780,
-      prompt: 920,
-      history: 520,
-      // A playing card, 5:7 (FreeNode holds that ratio on resize). The
-      // whole tile is the card's face: name, then a slider per value.
-      effect: 180,
-      cabinet: 320,
-      filmMixer: 1240,  // the button sizes it to the screen (openFilmMixer)
-    }
     const node: FreeNodeData = {
       id, x, y,
-      width: widths[type] ?? 200,
-      height: heights[type] ?? 160,
+      ...freeNodeDefaultSize(type),
       type,
       label: labels[type] ?? type,
       text: '',

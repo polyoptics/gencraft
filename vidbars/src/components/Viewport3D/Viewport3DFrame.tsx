@@ -43,6 +43,7 @@ import { mayHaveDiskFile } from '../../hooks/useFileMenu'
 import { DragOutGrip } from '../UI/DragOutGrip'
 import { FxViewerOverlay } from './FxViewerOverlay'
 import { RailViewerOverlay } from './RailViewerOverlay'
+import { useFreshOnTop, FRESH_Z } from '../../utils/freshOnTop'
 
 /** Selecting a Viewer takes over the canvas selection outright, so the
  *  Delete key's priority chain is never asked to arbitrate between two lit
@@ -81,6 +82,8 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
   const setPoster = usePosterMapStore(s => s.setPoster)
 
   const [isHovered, setIsHovered] = useState(false)
+  // Newest on the canvas: over the tiles and bars beside it until moved.
+  const isFresh = useFreshOnTop(s => s.id === id)
   /** Transport state lives in the view registry (it changes at frame rate,
    *  not React rate); this just forces a re-read after a button press. */
   const [, setAnimTick] = useState(0)
@@ -424,7 +427,7 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
         } : {
           left: win.x,
           top: win.y - headerH,      // header sits ABOVE the GL body rect
-          zIndex: 1,                 // under free nodes (5) and bars (≥2)
+          zIndex: isFresh ? FRESH_Z : 1,   // under free nodes (5) and bars (≥2), unless newest
         }),
         width: win.width,
         height: win.height + headerH,

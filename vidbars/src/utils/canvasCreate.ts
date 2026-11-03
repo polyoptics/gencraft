@@ -9,6 +9,9 @@ import { useBoardsStore } from '../store/boardsStore'
 import { useCanvasStore } from '../store/canvasStore'
 import { useFreeNodeStore } from '../store/freeNodeStore'
 import { useViewport3DStore, VIEWPORT3D_DEFAULT_W, VIEWPORT3D_DEFAULT_H } from '../store/viewport3dStore'
+import { INIT_W, INIT_H } from '../store/boardsStore'
+import { freeNodeDefaultSize } from '../store/freeNodeStore'
+import { NLE_HEADER_CANVAS_H } from '../components/NLE/NLETimelineHeader'
 import type { FreeNodeType } from '../store/freeNodeStore'
 import { useUndoCoordinator } from '../store/undoCoordinator'
 import { dotStep } from './dotGrid'
@@ -39,11 +42,10 @@ export function viewportCenterInCanvas(): { cx: number; cy: number } {
 /** Add a free node centred on a canvas point, sized for the current zoom.
  *  Returns the new node's id.
  *
- *  The per-type default size belongs to `addFreeNode` — it is tuned there
- *  (a Media Pool needs a readable grid, a Prompt Pad needs its sections side
- *  by side). So create the node first, read back what the store chose, and
- *  only apply the zoom compensation. Passing our own base sizes in would be a
- *  second table to keep in step with that one. */
+ *  The per-type default size belongs to freeNodeStore (freeNodeDefaultSize)
+ *  — it is tuned there (a Media Pool needs a readable grid, a Prompt Pad
+ *  needs its sections side by side). freeNodeFootprint applies the zoom
+ *  compensation, and the placing outline reads the same function. */
 export function addFreeNodeCentered(
   type: FreeNodeType,
   at?: { cx: number; cy: number },
@@ -51,20 +53,11 @@ export function addFreeNodeCentered(
   const { cx, cy } = at ?? viewportCenterInCanvas()
   const zoom = useCanvasStore.getState().zoom
   useUndoCoordinator.getState().checkpoint()
-  const k = createScaleFor(zoom)
-  const fs = useFreeNodeStore.getState()
-  const id = fs.addFreeNode(cx, cy, type)
-  const made = useFreeNodeStore.getState().nodes[id]
-  // A Media Pool scales its contents and its window together, so it opens
-  // the way Brian set his by hand (2026-11-03): text about a loop strip's
-  // size at that zoom, the window just big enough for that content. The
-  // 22/zoom is FreeNode's header, which is a constant 22 screen pixels.
-  const s = type === 'pool' ? clampUiScale(k * POOL_TEXT_VS_STRIP) : k
-  const w = (made?.width ?? 200) * s
-  const h = (made?.height ?? 160) * s + (type === 'pool' ? 22 / zoom : 0)
+  const id = useFreeNodeStore.getState().addFreeNode(cx, cy, type)
+  const { w, h } = freeNodeFootprint(type, zoom)
   useFreeNodeStore.getState().updateFreeNode(id, {
     width: w, height: h, x: cx - w / 2, y: cy - h / 2,
-    ...(type === 'pool' ? { uiScale: s } : {}),
+    ...(type === 'pool' ? { uiScale: poolUiScale(zoom) } : {}),
   })
   return id
 }
@@ -73,6 +66,42 @@ export function addFreeNodeCentered(
  *  zoom. Read off Brian's hand-set pool: 8.3x at 6% zoom, where a strip's
  *  unit is 10. */
 const POOL_TEXT_VS_STRIP = 0.83
+
+/** A Media Pool scales its contents and its window together, so it opens
+ *  the way Brian set his by hand (2026-11-03): text about a loop strip's
+ *  size at that zoom, the window just big enough for that content. */
+function poolUiScale(zoom: number): number {
+  return clampUiScale(createScaleFor(zoom) * POOL_TEXT_VS_STRIP)
+}
+
+/** What a create makes, as the placing outline draws it (utils/placeTool):
+ *  a w x h box in canvas units whose middle sits `dy` above the point the
+ *  create is centred on (a Viewer's and a card's header hang above the
+ *  middle of their body). Each one is worked out the way its create sizes
+ *  the thing, so the outline is what lands. */
+export interface Footprint { w: number; h: number; dy: number }
+
+/** addFreeNodeCentered's size: the type's default, zoom-compensated. The
+ *  22/zoom on a pool is FreeNode's header, a constant 22 screen pixels. */
+export function freeNodeFootprint(type: FreeNodeType, zoom: number): Footprint {
+  const base = freeNodeDefaultSize(type)
+  const s = type === 'pool' ? poolUiScale(zoom) : createScaleFor(zoom)
+  return { w: base.width * s, h: base.height * s + (type === 'pool' ? 22 / zoom : 0), dy: 0 }
+}
+
+/** addViewerCentered's window, header (22 screen px) included. */
+export function viewerFootprint(zoom: number): Footprint {
+  const k = createScaleFor(zoom), hdr = 22 / zoom
+  return { w: VIEWPORT3D_DEFAULT_W * k, h: VIEWPORT3D_DEFAULT_H * k + hdr, dy: hdr / 2 }
+}
+
+/** createCardOrBoardAt's card: its content, and the header band above it
+ *  (cardVisualRect's headerExtend). */
+export function cardFootprint(zoom: number): Footprint {
+  const k = createScaleFor(zoom)
+  const hdr = (Math.max(NLE_HEADER_CANVAS_H * zoom, 20) + 2 * zoom) / zoom
+  return { w: INIT_W * k, h: INIT_H * k + hdr, dy: hdr / 2 }
+}
 
 /** A new Viewer centred on a canvas point, sized for the current zoom the
  *  same way addFreeNodeCentered sizes a node. The toolbar button and the

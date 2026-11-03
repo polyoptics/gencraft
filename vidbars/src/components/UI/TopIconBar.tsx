@@ -13,22 +13,19 @@
 // be near-black; on black it inverts to near-white, and the accents stay
 // saturated so they read at a glance in a row of seven.
 //
-// Everything here creates something ON THE CANVAS, centred in the viewport,
-// via utils/canvasCreate so a button and the canvas right-click menu can
-// never produce different results.
+// Everything here creates something ON THE CANVAS via utils/canvasCreate,
+// so a button and the canvas right-click menu can never produce different
+// results. A button doesn't drop it in the middle of the view: it picks it
+// up, an outline of it follows the mouse, and the next click on the canvas
+// sets it down there (utils/placeTool). The button stays lit while you aim;
+// Esc or the button again puts it back.
 
 import React from 'react'
-import {
-  addFreeNodeCentered,
-  addBrowserNode,
-  addViewerCentered,
-  createCardOrBoardAt,
-  createStorylineAt,
-} from '../../utils/canvasCreate'
+import { usePlacing, togglePlacing, type PlaceKind } from '../../utils/placeTool'
 import { EffectPalette } from './EffectPalette'
 import { useZoomZone } from '../../store/zoomZonesStore'
 import { useCabinetUi } from '../../utils/cabinet'
-import { openFilmMixer } from '../FilmMixer/FilmMixerBody'
+import { openFilmMixer, existingFilmMixer } from '../FilmMixer/FilmMixerBody'
 
 /** Tile edge in px. A shade over 1cm on a typical desktop monitor. */
 const TILE = 44
@@ -211,8 +208,8 @@ const IconButton: React.FC<{
   Icon: React.FC<SvgProps>
   title: string
   onClick: () => void
-  /** Lit while what it opens is open (the Effects palette). A toggle only;
-   *  plain create buttons leave it out. */
+  /** Lit while what it opens is open (the Effects palette), or while the
+   *  mouse is carrying what it places (utils/placeTool). */
   active?: boolean
 }> = ({ Icon, title, onClick, active }) => {
   const [hover, setHover] = React.useState(false)
@@ -258,16 +255,12 @@ export const TopIconBar: React.FC = () => {
     : zone === 'block' ? IcNewBlock
     : IcNewNode
 
-  const onNew = () => {
-    if (zone === 'board') {
-      // At board zoom the atomic thing on the canvas is a node, not a whole
-      // board — making a card here would drop something far bigger than what
-      // you are looking at.
-      addFreeNodeCentered('note')
-      return
-    }
-    createCardOrBoardAt()
-  }
+  // At board zoom "new" places a note, not a whole board — a card there
+  // would be far bigger than what you are looking at (utils/placeTool).
+
+  // What the mouse is carrying, so its button stays lit while you aim.
+  const placing = usePlacing(s => s.kind)
+  const place = (kind: PlaceKind) => ({ onClick: () => togglePlacing(kind), active: placing === kind })
 
   // The Effects palette. Its own memoised component: this bar re-renders on
   // every zoom tick, the palette has no reason to.
@@ -278,6 +271,7 @@ export const TopIconBar: React.FC = () => {
 
   return (
     <div
+      data-top-icon-bar=""
       style={{
         // Fixed and centred: floats over the toolbar instead of taking a row.
         // Out of flow, so the canvas keeps its full height.
@@ -298,43 +292,46 @@ export const TopIconBar: React.FC = () => {
       <IconButton
         Icon={IcViewer}
         title="Viewer — a window for models, video and images"
-        onClick={() => { addViewerCentered() }}
+        {...place('viewer')}
       />
       <IconButton
         Icon={IcPool}
         title="Media Pool — a folder on disk"
-        onClick={() => addFreeNodeCentered('pool')}
+        {...place('pool')}
       />
       <IconButton
         Icon={IcPrompt}
         title="Prompt Pad"
-        onClick={() => addFreeNodeCentered('prompt')}
+        {...place('prompt')}
       />
       <IconButton
         Icon={IcHistory}
         title="History"
-        onClick={() => addFreeNodeCentered('history')}
+        {...place('history')}
       />
       <IconButton
         Icon={IcBrowser}
         title="Card Browser — leaf through every card in the project"
-        onClick={() => addBrowserNode()}
+        {...place('browser')}
       />
       <IconButton
         Icon={IcFilm}
         title="Film Look — every shot of the film and its look"
-        onClick={openFilmMixer}
+        // Only ever one mixer: with one on the canvas already, the button
+        // takes the camera to it instead.
+        onClick={() => { if (existingFilmMixer()) openFilmMixer(); else togglePlacing('filmMixer') }}
+        active={placing === 'filmMixer'}
       />
       <IconButton
         Icon={IcStoryline}
         title="Storyline — points on lines that branch; drag out from the point"
-        onClick={() => createStorylineAt()}
+        {...place('storyline')}
       />
       {cabinetsOn && (
         <IconButton
           Icon={IcCabinet}
           title="Project cabinet — drawers to put cards away in"
-          onClick={() => addFreeNodeCentered('cabinet')}
+          {...place('cabinet')}
         />
       )}
       {/* A wrapper for the ref: the palette hangs under it, and a press on
@@ -351,7 +348,7 @@ export const TopIconBar: React.FC = () => {
 
       <div style={{ width: 1, height: TILE * 0.55, background: 'rgba(255,255,255,0.12)', margin: '0 2px' }} />
 
-      <IconButton Icon={IcNew} title={newLabel} onClick={onNew} />
+      <IconButton Icon={IcNew} title={newLabel} {...place('new')} />
     </div>
   )
 }

@@ -54,6 +54,7 @@ import { copyEffect, hasEffectClip, pasteEffect } from '../../utils/fx/effectCli
 import { railHeaderBottom, railHeaderCarry, snapRailToViewer } from '../../utils/railViewer'
 import { RenameInput } from '../UI/RenameInput'
 import { CanvasUnits } from './CanvasUnits'
+import { useFreshOnTop, FRESH_Z } from '../../utils/freshOnTop'
 
 
 /** Node types whose corner resize keeps the current proportions. A
@@ -291,6 +292,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
   const gz = node?.pin ? node.pin.scale : zoom
 
   const [isHovered, setIsHovered] = useState(false)
+  const isFresh = useFreshOnTop(s => s.id === id)
   /** A docked card the pointer has rested on (PEEK_DWELL_MS) — lifted above
    *  its column so all of it shows: the solitaire peek. */
   const [rested, setRested] = useState(false)
@@ -1240,6 +1242,8 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
   const canvasZ: number = isRailTile ? (isHovered ? 4 : 3)
     : lifted || aimingAtRail ? 65
     : docked ? (peeking ? 60 : 10 + Math.min(dockOrder, 39))
+    // The newest thing on the canvas is over its neighbours until moved.
+    : isFresh ? FRESH_Z
     : isHovered ? 50
     // An open cabinet's tray lies over the tiles beside it.
     : isCabinet && node.cabinet?.open ? 6 : 5
