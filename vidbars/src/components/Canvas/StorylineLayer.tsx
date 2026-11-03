@@ -1097,17 +1097,20 @@ const StorySvg: React.FC<{
             <g key={p.id}>
               <line x1={pg.x - pg.nx * down} y1={pg.y - pg.ny * down} x2={pg.x + pg.nx * up} y2={pg.y + pg.ny * up}
                     stroke={color} strokeWidth={TICK_W * px} />
-              {/* The tick ends: a grab zone each, clear of the ring, lit on hover. */}
+              {/* The tick ends: a grab zone each, clear of the ring, lit on hover.
+                  A card's link "+" let go on one links the card to this point,
+                  so a raised stem takes cards as the point does. */}
               {(['up', 'down'] as const).map(side => {
                 const k = side === 'up' ? up : -down
                 const tx = pg.x + pg.nx * k, ty = pg.y + pg.ny * k
                 return (
                   <g key={side}>
+                    {linking && <circle cx={tx} cy={ty} r={TIP_R * px} fill={C_GLOW} fillOpacity={0.25} pointerEvents="none" />}
                     {zone?.point === p.id && zone.tip === side && (
                       <circle cx={tx} cy={ty} r={(TIP_R - 2) * px} fill={C_GLOW} fillOpacity={0.85} pointerEvents="none" />
                     )}
                     <circle cx={tx} cy={ty} r={TIP_R * px} fill="transparent" pointerEvents="all" style={{ cursor: 'ns-resize' }}
-                            data-role={`tip-${side}`} data-point={p.id} />
+                            data-role={`tip-${side}`} data-point={p.id} data-link-drop={`story:${id}:${p.id}`} />
                   </g>
                 )
               })}
