@@ -19,7 +19,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import {
-  useTiltStore, useModelScaleStore, isTilted, offFlat, turntableShare, unprojectTilt, TILT_SNAP, TILT_FAR, TILT_PERSPECTIVE, DEFAULT_LIGHT,
+  useTiltStore, useModelScaleStore, isTilted, offFlat, standTilt, turntableShare, unprojectTilt, TILT_SNAP, TILT_FAR, TILT_PERSPECTIVE, DEFAULT_LIGHT,
 } from '../../store/tiltStore'
 import { useCanvasStore, groupBounds, MIN_ZOOM, MAX_ZOOM } from '../../store/canvasStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
@@ -951,7 +951,7 @@ function collectSlabs(K = 1): TiltSlab[] {
         // stands up on its bottom edge as the canvas tips. An open drawer's
         // tray comes straight out of its front, at that drawer's height, over
         // the same patch of canvas as in the flat view.
-        const x = Math.max(0, Math.min(1, (offFlat(useTiltStore.getState()) - CONSOLE.from) / (FADE_TILT - CONSOLE.from)))
+        const x = Math.max(0, Math.min(1, (standTilt(useTiltStore.getState()) - CONSOLE.from) / (FADE_TILT - CONSOLE.from)))
         const a = CABINET.stand * x * x * (3 - 2 * x) * detail(w) * Math.PI / 180
         if (a > 0) {
           hinge = { v: slab.v + slab.h / 2, z: 0, a }
@@ -1938,7 +1938,7 @@ let consoleAt = 0
 function consoleLean(host: HTMLElement, zoom: number): Map<string, number> {
   const out = new Map<string, number>()
   const { console: on } = useTiltStore.getState()
-  const tilt = offFlat(useTiltStore.getState())
+  const tilt = standTilt(useTiltStore.getState())
   const now = performance.now()
   const dt = Math.min(100, Math.max(0, now - consoleAt))
   consoleAt = now

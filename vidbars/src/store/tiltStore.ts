@@ -179,6 +179,13 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
 
 /** How far off the flat view the camera is, by either axis, in degrees. */
 export const offFlat = (s: { tilt: number; yaw: number }) => Math.max(Math.abs(s.tilt), Math.abs(s.yaw))
+/** How far tipped back things stand up for, in degrees: models out of their
+ *  cards, cards off the console. Only tipped back, and less as the view swings
+ *  sideways, so swung round the faces lie flat for the layers behind them. */
+export const standTilt = (s: { tilt: number; yaw: number }) => {
+  const k = Math.min(1, Math.abs(s.yaw) / 35)
+  return Math.max(0, s.tilt) * (1 - k * k * (3 - 2 * k))
+}
 /** Is the camera off the flat view at all? */
 export const isTilted = (s: { tilt: number; yaw: number }) => offFlat(s) > 0.01
 
