@@ -94,4 +94,13 @@ contextBridge.exposeInMainWorld('vidbarsDesktop', {
 
   /** One frame with this look, as a PNG data url: { url }, { loading: true }
    *  while the shot loads, or { error }. */
-  mixerFrame: (job) => ipcRenderer.invoke('vb:mixer-frame', job),})
+  mixerFrame: (job) => ipcRenderer.invoke('vb:mixer-frame', job),
+
+  /** Drive the mixer's page from the canvas: 'shots' lists what it can mix,
+   *  'embed' hides its own whole-film strip, 'use' selects these shots,
+   *  'go' goes to one. Shot names only. */
+  mixerCall: (op, clips) => ipcRenderer.invoke('vb:mixer-call', op, clips),
+
+  /** A shot's thumbnail as a data url, or null. */
+  mixerThumb: (seg) => ipcRenderer.invoke('vb:mixer-thumb', seg),
+})

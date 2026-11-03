@@ -11,6 +11,9 @@ export interface MediaItem {
   posterTime?: number
   /** The poster it had before a thumbnail was chosen, for "Reset thumbnail". */
   posterOriginal?: string
+  /** A shot of the film the Film Look mixer can mix (its clip name, f18h):
+   *  set on the shot cards it makes, and how a card docked to it fills it. */
+  filmShot?: string
 }
 
 export interface BarTextStyle {

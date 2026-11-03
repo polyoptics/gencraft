@@ -1910,7 +1910,7 @@ const FreeNodeBody: React.FC<{
   }
   if (node.type === 'filmMixer') {
     return (
-      <CanvasUnits w={bodyW} h={bodyH} r={bodyR}><FilmMixerBody pinned={!!node.pin} bodyW={bodyW} bodyH={bodyH} /></CanvasUnits>
+      <CanvasUnits w={bodyW} h={bodyH} r={bodyR}><FilmMixerBody nodeId={id} pinned={!!node.pin} bodyW={bodyW} bodyH={bodyH} /></CanvasUnits>
     )
   }
   if (node.type === 'history') {

@@ -4,6 +4,9 @@ import { useCanvasStore } from '../../store/canvasStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useTiltStore } from '../../store/tiltStore'
 import { addFreeNodeCentered } from '../../utils/canvasCreate'
+import { useBoardsStore } from '../../store/boardsStore'
+import { cardFaceMedia } from '../../utils/cardGrid'
+import { dockedShots, makeShotCards } from '../../utils/filmShots'
 
 /** The Film Look node: the look mixer, laid out on the canvas like any panel.
  *
@@ -226,7 +229,7 @@ async function startMixer() {
   setPhase(r.url ? { kind: 'ready', url: r.url } : { kind: 'failed', error: r.error ?? 'The mixer did not start', log: r.log })
 }
 
-export function FilmMixerBody({ pinned, bodyW, bodyH }: { pinned: boolean; bodyW: number; bodyH: number }) {
+export function FilmMixerBody({ nodeId, pinned, bodyW, bodyH }: { nodeId: string; pinned: boolean; bodyW: number; bodyH: number }) {
   const phase = useMixerPhase(s => s.phase)
   const [active, setActive] = useState(false)
   const [hover, setHover] = useState(false)
@@ -274,7 +277,12 @@ export function FilmMixerBody({ pinned, bodyW, bodyH }: { pinned: boolean; bodyW
     return () => document.removeEventListener('pointerdown', onDown, true)
   }, [active])
 
-  const shielded = ready && !pinned && !active
+  const shots = useDockedShots(nodeId, pinned)
+  usePageFollows(ready, shots)
+  const [making, setMaking] = useState<string | null>(null)
+  const empty = ready && shots.length === 0
+
+  const shielded = ready && !pinned && !active && !empty
   const fit = Math.max(0.001, Math.min(bodyW / PAGE_W, bodyH / PAGE_H))
 
   return (
@@ -314,8 +322,91 @@ export function FilmMixerBody({ pinned, bodyW, bodyH }: { pinned: boolean; bodyW
           )}
         </div>
       )}
+      {/* Opens empty: it mixes the shot cards docked to it. */}
+      {empty && (
+        <div data-film-mixer-empty="" style={{
+          position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center',
+          justifyContent: 'center', gap: 14, background: '#14151c', color: 'rgba(255,255,255,0.7)',
+          fontSize: 15 * fit, textAlign: 'center', padding: 24 * fit,
+        }}>
+          <div>No shots yet. Dock a deck of shot cards to the mixer, or lay a shot card on its title bar.</div>
+          <button
+            data-film-make-shots=""
+            disabled={!!making}
+            onPointerDown={e => e.stopPropagation()}
+            onClick={async () => {
+              const node = useFreeNodeStore.getState().nodes[nodeId]
+              if (!node) return
+              setMaking('Making shot cards…')
+              const r = await makeShotCards(node)
+              setMaking('error' in r ? r.error : null)
+            }}
+            style={{
+              fontSize: 13 * fit, padding: `${5 * fit}px ${14 * fit}px`, borderRadius: 6 * fit,
+              cursor: making ? 'default' : 'pointer', fontFamily: 'inherit', fontWeight: 600,
+              background: 'rgba(120,170,255,0.22)', border: '1px solid rgba(120,170,255,0.5)', color: '#a8c8ff',
+            }}
+          >Make shot cards</button>
+          {making && <div style={{ fontSize: 12 * fit, opacity: 0.7 }}>{making}</div>}
+        </div>
+      )}
     </div>
   )
+}
+
+/** The shots on the cards docked to the mixer, worked out again as cards move
+ *  (a beat after, not on every frame of a drag). Pinned, it keeps the ones it
+ *  had: a pinned mixer has left the canvas its cards are on. */
+function useDockedShots(nodeId: string, pinned: boolean): string[] {
+  const [shots, setShots] = useState<string[]>([])
+  useEffect(() => {
+    if (pinned) return
+    let t = 0
+    const work = () => {
+      const node = useFreeNodeStore.getState().nodes[nodeId]
+      if (!node) return
+      const { groups, boards } = useBoardsStore.getState()
+      const next = dockedShots(node, groups, boards)
+      setShots(prev => (prev.length === next.length && prev.every((s, i) => s === next[i]) ? prev : next))
+    }
+    const later = () => { window.clearTimeout(t); t = window.setTimeout(work, 150) }
+    work()
+    const a = useBoardsStore.subscribe(later)
+    const b = useFreeNodeStore.subscribe(later)
+    return () => { window.clearTimeout(t); a(); b() }
+  }, [nodeId, pinned])
+  return shots
+}
+
+/** The page shows what the cards say: its own whole-film strip hidden, these
+ *  shots selected, and a click on one of the docked cards goes to its shot. */
+function usePageFollows(ready: boolean, shots: string[]): void {
+  const sig = shots.join(',')
+  useEffect(() => {
+    const d = window.vidbarsDesktop
+    if (!ready || !d?.mixerCall) return
+    let dead = false, tries = 0
+    // The page answers once it has loaded its film; until then, try again.
+    const go = async () => {
+      if (dead) return
+      const ok = await d.mixerCall!('embed')
+      const used = ok && shots.length ? await d.mixerCall!('use', shots) : ok
+      if (!dead && !used && tries++ < 60) window.setTimeout(go, 1000)
+    }
+    void go()
+    return () => { dead = true }
+  }, [ready, sig])
+
+  useEffect(() => {
+    const d = window.vidbarsDesktop
+    if (!ready || !d?.mixerCall || !shots.length) return
+    return useBoardsStore.subscribe((s, was) => {
+      if (s.selectedGroupIds === was.selectedGroupIds || s.selectedGroupIds.length !== 1) return
+      const g = s.groups.find(x => x.id === s.selectedGroupIds[0])
+      const shot = g ? cardFaceMedia(g, s.boards)?.filmShot : undefined
+      if (shot && shots.includes(shot)) void d.mixerCall!('go', [shot])
+    })
+  }, [ready, sig])
 }
 
 function PhaseMessage({ phase, onStart }: { phase: Phase; onStart: () => void }) {

@@ -144,4 +144,63 @@ function frame({ seg, i, look, card }) {
   })
 }
 
-module.exports = { status, start, stop, ownsRunning, view, frame }
+// The canvas fills the mixer from cards: these drive its own page. Fixed
+// scripts; what the app sends is only shot names, checked and JSON-encoded.
+const SHOT_NAME = /^[A-Za-z0-9_-]{1,40}$/
+const PAGE_SCRIPTS = {
+  // Every shot the mixer can mix, in film order.
+  shots: () => `F.segs.map((s, k) => ({ k, clip: s.clip, look: !!s.look, n: s.n, outside: !!s.outside })).filter(s => s.look && !s.outside)`,
+  // Hide the page's own whole-film strip: the canvas holds the shots now.
+  embed: () => `(() => {
+    if (!document.getElementById('vb-embed')) {
+      const st = document.createElement('style')
+      st.id = 'vb-embed'
+      st.textContent = '#timeline, #ruler, #strip { display: none !important }'
+      document.head.appendChild(st)
+    }
+    return true
+  })()`,
+  // These shots, selected, the first (or the one already on) current.
+  use: (clips) => `(() => {
+    const want = ${JSON.stringify(clips)}
+    const ks = want.map(c => F.segs.findIndex(s => s.clip === c && s.look)).filter(k => k >= 0)
+    if (!ks.length) return 0
+    if (!ks.includes(F.cur)) jumpTo(ks[0])
+    F.sel = new Set(ks)
+    F.anchor = ks[0]
+    selChanged()
+    return ks.length
+  })()`,
+  // Go to one shot, keeping the selection.
+  go: (clips) => `(() => {
+    const k = F.segs.findIndex(s => s.clip === ${JSON.stringify(clips[0])} && s.look)
+    if (k < 0 || k === F.cur) return false
+    jumpTo(k, { keepSel: true })
+    return true
+  })()`,
+}
+
+async function call(mainFrame, op, clips) {
+  const make = Object.hasOwn(PAGE_SCRIPTS, op) ? PAGE_SCRIPTS[op] : null
+  const names = Array.isArray(clips) ? clips.filter(c => typeof c === 'string' && SHOT_NAME.test(c)).slice(0, 500) : []
+  if (!make || ((op === 'use' || op === 'go') && !names.length)) return null
+  const page = pageFrame(mainFrame)
+  if (!page) return null
+  try { return await page.executeJavaScript(make(names)) } catch { return null }
+}
+
+/** A shot's thumbnail as a data url (cards keep their media as data). */
+function thumb(seg) {
+  if (!Number.isInteger(seg) || seg < 0) return Promise.resolve(null)
+  return new Promise(resolve => {
+    const req = http.get(`${URL_BASE}/thumb?seg=${seg}`, res => {
+      const parts = []
+      res.on('data', d => parts.push(d))
+      res.on('end', () => resolve(res.statusCode === 200 ? 'data:image/jpeg;base64,' + Buffer.concat(parts).toString('base64') : null))
+    })
+    req.on('error', () => resolve(null))
+    req.setTimeout(10_000, () => { req.destroy(); resolve(null) })
+  })
+}
+
+module.exports = { status, start, stop, ownsRunning, view, frame, call, thumb }
