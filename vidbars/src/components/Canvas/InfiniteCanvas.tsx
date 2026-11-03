@@ -15,7 +15,7 @@ import { useViewport3DStore, VIEWPORT3D_DEFAULT_W, VIEWPORT3D_DEFAULT_H } from '
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { nextFreeEdgeSlot } from '../../utils/viewportDocking'
 import { isPanelType } from '../../utils/componentLinks'
-import { createCardOrBoardAt } from '../../utils/canvasCreate'
+import { createCardOrBoardAt, createStorylineAt } from '../../utils/canvasCreate'
 import { GLCanvasHost } from '../Viewport3D/GLCanvasHost'
 import { WorldZoom } from './worldZoom'
 import { addMediaBlockToCard, cardHitOf, groupForCardHit, type CardHit } from '../../utils/cardContent'
@@ -99,7 +99,7 @@ interface DropAim {
  *  spot in the cascade (see railDropAt), the way a dragged tile is — not
  *  swapped for the card it landed on. */
 function takesMedia(n: FreeNodeData): boolean {
-  return !n.pin && !isPanelType(n.type) && n.type !== 'effect' && n.type !== 'rail' && n.type !== 'cabinet' && !n.railDock
+  return !n.pin && !isPanelType(n.type) && n.type !== 'effect' && n.type !== 'rail' && n.type !== 'cabinet' && n.type !== 'storyline' && !n.railDock
 }
 
 /** A stand-in for something not made yet — railDropTarget judges a drop
@@ -1084,6 +1084,12 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
               // as slots and cards go on, so that corner is the stable one.
               { label: '⟳  Add loop strip', action: () => {
                 createLoopStrip({ x: addMenu.cx, y: addMenu.cy })
+                setAddMenu(null)
+              } },
+              // One point, on the dot nearest the cursor: drag out from it
+              // to grow its line (StorylineLayer).
+              { label: '⑂  Add Storyline', action: () => {
+                createStorylineAt({ cx: addMenu.cx, cy: addMenu.cy })
                 setAddMenu(null)
               } },
               { label: '◆  Add Viewer', action: () => {

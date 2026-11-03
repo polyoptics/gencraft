@@ -10,6 +10,7 @@ import { useCanvasStore } from '../store/canvasStore'
 import { useFreeNodeStore } from '../store/freeNodeStore'
 import type { FreeNodeType } from '../store/freeNodeStore'
 import { useUndoCoordinator } from '../store/undoCoordinator'
+import { dotStep } from './dotGrid'
 
 /** A card's origin is its content corner; the drawn card starts this far left
  *  of it. Needed to centre a new card on a point rather than hang it off one. */
@@ -101,4 +102,18 @@ export function createCardOrBoardAt(at?: { cx: number; cy: number }): string {
     )
   }
   return boardId
+}
+
+/** A new Storyline: one point, on the dot nearest the given canvas point
+ *  (the viewport's middle by default). Dragging out from it grows its line
+ *  (components/Canvas/StorylineLayer). Returns the node's id. */
+export function createStorylineAt(at?: { cx: number; cy: number }): string {
+  const { cx, cy } = at ?? viewportCenterInCanvas()
+  const step = dotStep(useCanvasStore.getState().zoom)
+  useUndoCoordinator.getState().checkpoint()
+  const id = useFreeNodeStore.getState().addFreeNode(0, 0, 'storyline')
+  useFreeNodeStore.getState().updateFreeNode(id, {
+    x: Math.round(cx / step) * step, y: Math.round(cy / step) * step, width: 0, height: 0,
+  })
+  return id
 }

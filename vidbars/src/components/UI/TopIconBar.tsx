@@ -23,6 +23,7 @@ import {
   addFreeNodeCentered,
   addBrowserNode,
   createCardOrBoardAt,
+  createStorylineAt,
   viewportCenterInCanvas,
 } from '../../utils/canvasCreate'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
@@ -110,6 +111,16 @@ const IcCabinet: React.FC<SvgProps> = ({ size }) => (
     <rect x="4.5" y="3.5" width="15" height="17" rx="1.6" stroke={S} />
     <path d="M4.5 9.2h15M4.5 14.8h15" stroke={S} />
     <path d="M10 6.4h4M10 12h4M10 17.6h4" stroke={A.coral} />
+  </svg>
+)
+
+/** Storyline — a line of points with a branch off it. Accent: the points. */
+const IcStoryline: React.FC<SvgProps> = ({ size }) => (
+  <svg {...svgBase(size)}>
+    <path d="M3 15h18M9 15l6-8h6" stroke={S} />
+    <circle cx="9" cy="15" r="2.2" fill={A.cyan} stroke="none" />
+    <circle cx="16" cy="15" r="2.2" fill={A.cyan} stroke="none" />
+    <circle cx="18" cy="7" r="2.2" fill={A.cyan} stroke="none" />
   </svg>
 )
 
@@ -319,6 +330,11 @@ export const TopIconBar: React.FC = () => {
         Icon={IcFilm}
         title="Film Look — every shot of the film and its look"
         onClick={openFilmMixer}
+      />
+      <IconButton
+        Icon={IcStoryline}
+        title="Storyline — points on lines that branch; drag out from the point"
+        onClick={() => createStorylineAt()}
       />
       {cabinetsOn && (
         <IconButton

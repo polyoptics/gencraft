@@ -9,6 +9,7 @@ import { useLinkDragStore } from '../../store/linkDragStore'
 import { useBoardsStore } from '../../store/boardsStore'
 import { parseRef, sameRef, type LinkRef } from '../../utils/linkTargets'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
+import { linkCardToStoryPoint } from '../Canvas/StorylineLayer'
 
 export const LinkDragOverlay: React.FC = () => {
   const active = useLinkDragStore(s => s.active)
@@ -29,9 +30,13 @@ export const LinkDragOverlay: React.FC = () => {
       // Find drop target: look for [data-link-drop] ancestor at release point
       const els = document.elementsFromPoint(e.clientX, e.clientY)
       let target: LinkRef | null = null
+      // A Storyline's point ("story:<node>:<point>"): a card let go on it
+      // moves with it (StorylineLayer).
+      let story: string[] | null = null
       for (const el of els) {
         const attr = (el as HTMLElement).closest?.('[data-link-drop]')?.getAttribute('data-link-drop')
         if (!attr) continue
+        if (attr.startsWith('story:')) { story = attr.split(':'); break }
         // "group:<id>" / "board:<id>" / "bar:<boardId>:<barId>", plus the
         // legacy "card:"/"chip:" spellings the card layer still emits.
         const hit = parseRef(attr)
@@ -47,6 +52,10 @@ export const LinkDragOverlay: React.FC = () => {
         // should do anyway.
         if (!sameRef(hit, source)) target = hit
         break
+      }
+      if (story && source.kind === 'group') {
+        useUndoCoordinator.getState().checkpoint()
+        linkCardToStoryPoint(story[1], story[2], source.id)
       }
       if (target) {
         // Checkpoint HERE, not when the drag began: a checkpoint per

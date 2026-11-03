@@ -9,6 +9,7 @@ import { computeTileClusters, type DockableItem, type WindowRect } from '../../u
 import { isDockableTile } from '../../utils/contentTraversal'
 import { tileDeckIndex } from '../../utils/tileDecks'
 import { useCabinetUi } from '../../utils/cabinet'
+import { StorylineLayer } from './StorylineLayer'
 
 export const FreeCanvas: React.FC = React.memo(() => {
   // Only re-render when nodes are added/removed, not when node content changes
@@ -38,6 +39,7 @@ export const FreeCanvas: React.FC = React.memo(() => {
       if (deckIdx.hidden.has(id)) return false   // behind a deck face
       if (n.cardRef) return false        // a card's stand-in: the card is drawn
       if (n.type === 'cabinet' && !cabinetsOn) return false   // the Cabinets switch
+      if (n.type === 'storyline') return false   // drawn by StorylineLayer
       return intersectsViewport(vp, n.x, n.y, n.width, n.height)
     })
   }, [nodeIds, nodes, vp, deckIdx, cabinetsOn])
@@ -63,6 +65,7 @@ export const FreeCanvas: React.FC = React.memo(() => {
 
   return (
     <>
+      <StorylineLayer />
       {visibleIds.map(id => (
         <FreeNode key={id} id={id} connectedWindowId={tileConnections.get(id) ?? null} />
       ))}

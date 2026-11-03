@@ -5,6 +5,7 @@ import { canJoinTileDeck, collapsePatches, expandPositions, expandTileIds, tileD
 import { DOCK_TOLERANCE, rectsTouch } from '../utils/viewportDocking'
 import { RAIL_GEOM, RAIL_TRAY, railRows, withoutCardSlot, type RailSlot } from '../utils/rail'
 import { newCabinet } from '../utils/cabinetData'
+import { newStoryline } from '../utils/storyline'
 
 // 'list' | 'pool' | 'prompt' | 'history' are COMPONENTS rather than media: a
 // node whose body is a whole panel. They ride the same substrate as
@@ -21,6 +22,7 @@ export type FreeNodeType =
   | 'rail'     // a loop strip — a rail of slots that runs a workflow (utils/rail)
   | 'cabinet'  // a project cabinet — drawers that hold cards (utils/cabinet)
   | 'filmMixer' // the film's look mixer (components/FilmMixer)
+  | 'storyline' // points on lines that branch (utils/storyline)
 
 export interface TextStyle {
   fontSize: number       // in px (base, before zoom scaling)
@@ -118,6 +120,9 @@ export interface FreeNodeData {
   railDock?: import('../utils/rail').RailDock
   /** Project cabinets: the drawers and what is put away in them. */
   cabinet?: import('../utils/cabinetData').CabinetData
+  /** Storylines: the lines and the points on them, relative to x/y
+   *  (utils/storyline). x/y/width/height are kept the bounding box. */
+  storyline?: import('../utils/storyline').StorylineData
   /** A STAND-IN for a canvas card (or the deck it fronts) on a loop strip:
    *  never drawn, it holds the card's place in its column, and the card is
    *  moved to it (utils/railCards, useRailSync). */
@@ -279,6 +284,7 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
       image: 'Image', note: 'Note', text: 'Text', video: 'Video', audio: 'Audio', model: 'Model',
       list: 'List', pool: 'Media Pool', prompt: 'Prompt Pad', history: 'History',
       effect: 'Effect', rail: 'Loop strip', cabinet: 'Project cabinet', filmMixer: 'Film Look',
+      storyline: 'Storyline',
     }
     // COMPONENTS start twice as big per side — four times the area. They are
     // tools, not tiles: a Media Pool wants a readable grid, a Prompt Pad
@@ -291,6 +297,7 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
       rail: 360,   // a placeholder: the rail sizes itself to its layout
       cabinet: 280,
       filmMixer: 860,
+      storyline: 0,   // its box is its lines' (utils/storyline)
     }
     const widths: Partial<Record<FreeNodeType, number>> = {
       audio: 260,
@@ -317,6 +324,7 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
       mediaType: null,
       color,
       ...(type === 'cabinet' ? { cabinet: newCabinet() } : {}),
+      ...(type === 'storyline' ? { width: 0, storyline: newStoryline() } : {}),
     }
     set(s => ({ nodes: { ...s.nodes, [id]: node } }))
     return id
