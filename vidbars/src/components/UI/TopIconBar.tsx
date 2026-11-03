@@ -18,15 +18,13 @@
 // never produce different results.
 
 import React from 'react'
-import { useViewport3DStore } from '../../store/viewport3dStore'
 import {
   addFreeNodeCentered,
   addBrowserNode,
+  addViewerCentered,
   createCardOrBoardAt,
   createStorylineAt,
-  viewportCenterInCanvas,
 } from '../../utils/canvasCreate'
-import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { EffectPalette } from './EffectPalette'
 import { useZoomZone } from '../../store/zoomZonesStore'
 import { useCabinetUi } from '../../utils/cabinet'
@@ -300,11 +298,7 @@ export const TopIconBar: React.FC = () => {
       <IconButton
         Icon={IcViewer}
         title="Viewer — a window for models, video and images"
-        onClick={() => {
-          const { cx, cy } = viewportCenterInCanvas()
-          useUndoCoordinator.getState().checkpoint()
-          useViewport3DStore.getState().addWindow(cx, cy)
-        }}
+        onClick={() => { addViewerCentered() }}
       />
       <IconButton
         Icon={IcPool}

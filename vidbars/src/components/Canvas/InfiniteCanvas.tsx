@@ -11,11 +11,11 @@ import type { FreeNodeType, FreeNodeData } from '../../store/freeNodeStore'
 import type { MediaType } from '../../types/bar'
 import { computeGroupLayout, getRowY, getRowHeight, CARD_GRID_SPACING } from '../../utils/nleRows'
 import { DOT_SPACING, dotStep } from '../../utils/dotGrid'
-import { useViewport3DStore, VIEWPORT3D_DEFAULT_W, VIEWPORT3D_DEFAULT_H } from '../../store/viewport3dStore'
+import { useViewport3DStore } from '../../store/viewport3dStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { nextFreeEdgeSlot } from '../../utils/viewportDocking'
 import { isPanelType } from '../../utils/componentLinks'
-import { addFreeNodeCentered, createCardOrBoardAt, createStorylineAt } from '../../utils/canvasCreate'
+import { addFreeNodeCentered, addViewerCentered, createCardOrBoardAt, createStorylineAt } from '../../utils/canvasCreate'
 import { selectStorylinesInBox } from './StorylineLayer'
 import { GLCanvasHost } from '../Viewport3D/GLCanvasHost'
 import { WorldZoom } from './worldZoom'
@@ -1096,13 +1096,7 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
                 setAddMenu(null)
               } },
               { label: '◆  Add Viewer', action: () => {
-                useUndoCoordinator.getState().checkpoint()
-                const k = createScale()
-                const w = VIEWPORT3D_DEFAULT_W * k, h = VIEWPORT3D_DEFAULT_H * k
-                useViewport3DStore.getState().addWindow(addMenu.cx - w / 2, addMenu.cy - h / 2)
-                const wins = useViewport3DStore.getState().windows
-                const newest = Object.values(wins).reduce((a, b) => (a && a.createdAt >= b.createdAt ? a : b))
-                if (newest) useViewport3DStore.getState().updateWindow(newest.id, { width: w, height: h })
+                addViewerCentered({ cx: addMenu.cx, cy: addMenu.cy })
                 setAddMenu(null)
               } },
               { label: '▦  Add Media Pool', action: () => {

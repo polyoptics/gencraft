@@ -117,8 +117,11 @@ export interface ViewportWindow3D {
 
 export const VIEWPORT3D_MIN_W = 240
 export const VIEWPORT3D_MIN_H = 180
-export const VIEWPORT3D_DEFAULT_W = 480
-export const VIEWPORT3D_DEFAULT_H = 360
+// 680×510 (2026-11-03): sized so a new Viewer sits alongside a new Media
+// Pool and loop strip made at the same zoom instead of looking small next
+// to them. Its chrome is screen-sized already, so only the window grows.
+export const VIEWPORT3D_DEFAULT_W = 680
+export const VIEWPORT3D_DEFAULT_H = 510
 
 interface Viewport3DStore {
   windows: Record<string, ViewportWindow3D>

@@ -8,6 +8,7 @@
 import { useBoardsStore } from '../store/boardsStore'
 import { useCanvasStore } from '../store/canvasStore'
 import { useFreeNodeStore } from '../store/freeNodeStore'
+import { useViewport3DStore, VIEWPORT3D_DEFAULT_W, VIEWPORT3D_DEFAULT_H } from '../store/viewport3dStore'
 import type { FreeNodeType } from '../store/freeNodeStore'
 import { useUndoCoordinator } from '../store/undoCoordinator'
 import { dotStep } from './dotGrid'
@@ -72,6 +73,20 @@ export function addFreeNodeCentered(
  *  zoom. Read off Brian's hand-set pool: 8.3x at 6% zoom, where a strip's
  *  unit is 10. */
 const POOL_TEXT_VS_STRIP = 0.83
+
+/** A new Viewer centred on a canvas point, sized for the current zoom the
+ *  same way addFreeNodeCentered sizes a node. The toolbar button and the
+ *  canvas menu both use it, so they open the same Viewer. */
+export function addViewerCentered(at?: { cx: number; cy: number }): string {
+  const { cx, cy } = at ?? viewportCenterInCanvas()
+  const k = createScaleFor(useCanvasStore.getState().zoom)
+  useUndoCoordinator.getState().checkpoint()
+  const w = VIEWPORT3D_DEFAULT_W * k, h = VIEWPORT3D_DEFAULT_H * k
+  const v3 = useViewport3DStore.getState()
+  const id = v3.addWindow(cx - w / 2, cy - h / 2)
+  v3.updateWindow(id, { width: w, height: h })
+  return id
+}
 
 /** The Rolodex node wants a query seeded or it opens empty. */
 export function addBrowserNode(at?: { cx: number; cy: number }): string {
