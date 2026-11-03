@@ -43,6 +43,10 @@ export interface StoryPoint {
   title: string
   /** Linked cards (group ids): they move with the point. */
   cards?: string[]
+  /** Deleted, but branches still grow from it: not drawn, only holding
+   *  their place on the line (deleteStoryPoint). Clicking there on the line
+   *  makes it a point again. */
+  anchor?: boolean
 }
 
 export interface StorylineData {
@@ -149,14 +153,66 @@ export function pointAndBranches(d: StorylineData, pointId: string): { lines: Se
   return b
 }
 
-/** Remove point `pointId` and what branches from it. */
-export function withoutPoint(d: StorylineData, pointId: string): StorylineData {
-  const gone = pointAndBranches(d, pointId)
-  return {
-    ...d,
-    lines: d.lines.filter(l => !gone.lines.has(l.id)),
-    points: d.points.filter(p => !gone.points.has(p.id)),
+const EPS = 1e-6
+
+/** Delete a point, keeping its line whole: the points either side stay on
+ *  it, its linked cards are let go where they stand, and branches growing
+ *  from it stay where they are on the line (it becomes an anchor). Deleting
+ *  the point at a line's end shortens the line to the next point (on the
+ *  root line, at its start too). Nothing else goes. */
+export function deleteStoryPoint(d: StorylineData, pointId: string): StorylineData {
+  const p = d.points.find(q => q.id === pointId)
+  const l = p && d.lines.find(q => q.id === p.line)
+  if (!p || !l) return d
+  if (d.lines.some(q => q.from === pointId)) {
+    return { ...d, points: d.points.map(q => (q.id === pointId ? { id: q.id, line: q.line, t: q.t, up: 0, down: 0, title: '', anchor: true } : q)) }
   }
+  const points = d.points.filter(q => q.id !== pointId)
+  const others = points.filter(q => q.line === l.id)
+  const len = Math.hypot(l.dx, l.dy)
+  if (!others.length || len < EPS) return { ...d, points }
+  const ux = l.dx / len, uy = l.dy / len
+  if (p.t >= len - EPS) {
+    const to = Math.max(...others.map(q => q.t))
+    return { ...d, points, lines: d.lines.map(q => (q.id === l.id ? { ...q, dx: ux * to, dy: uy * to } : q)) }
+  }
+  if (!l.from && p.t <= EPS) {
+    const k = Math.min(...others.map(q => q.t))
+    return {
+      ...d,
+      lines: d.lines.map(q => (q.id === l.id ? { ...q, x: q.x + ux * k, y: q.y + uy * k, dx: ux * (len - k), dy: uy * (len - k) } : q)),
+      points: points.map(q => (q.line === l.id ? { ...q, t: q.t - k } : q)),
+    }
+  }
+  return { ...d, points }
+}
+
+/** Delete a branch: the line, its points and everything branching from
+ *  them. An anchor left holding nothing goes too. */
+export function deleteStoryBranch(d: StorylineData, lineId: string): StorylineData {
+  const line = d.lines.find(l => l.id === lineId)
+  if (!line?.from) return d
+  const lines = new Set([lineId]), points = new Set<string>()
+  for (const p of d.points) {
+    if (p.line !== lineId) continue
+    const b = pointAndBranches(d, p.id)
+    b.lines.forEach(x => lines.add(x))
+    b.points.forEach(x => points.add(x))
+  }
+  const left = d.lines.filter(l => !lines.has(l.id))
+  const from = d.points.find(p => p.id === line.from)
+  if (from?.anchor && !left.some(l => l.from === from.id)) points.add(from.id)
+  return { ...d, lines: left, points: d.points.filter(p => !points.has(p.id)) }
+}
+
+/** Let card `groupId` go from point `pointId`; it stays where it is. */
+export function unlinkStoryCard(d: StorylineData, pointId: string, groupId: string): StorylineData {
+  return { ...d, points: d.points.map(p => (p.id === pointId && p.cards ? { ...p, cards: p.cards.filter(c => c !== groupId) } : p)) }
+}
+
+/** Nothing left to show: no point and no line of any length. */
+export function storylineEmpty(d: StorylineData): boolean {
+  return d.points.length === 0 && d.lines.every(l => Math.hypot(l.dx, l.dy) < EPS)
 }
 
 /** Keep the node's x/y/width/height the box round its lines and points,

@@ -10,7 +10,11 @@
 //  - Drag a line itself, or the grab handle left of where it starts (a
 //    lone point too): the whole storyline moves.
 //  - Click a point to select it; click it again quickly (or its title) to
-//    name it. Delete removes the selected point and what branches from it.
+//    name it. Delete takes the point off its line, which stays whole.
+//  - Click the grab handle to select the whole storyline (ringed, as tiles
+//    are); Delete then removes it, as it does a tile.
+//  - Right-click a point, line or the handle: delete the point, the branch
+//    or the storyline, or unlink a card from the point.
 //
 // World space (CLAUDE.md invariant 4): it lives inside the canvas transform,
 // so every stroke, handle and label is divided by the zoom and stays the
@@ -23,6 +27,7 @@
 // (toCanvas), so the tick sits under the cursor in 3D too.
 
 import React, { useEffect, useRef, useState } from 'react'
+import ReactDOM from 'react-dom'
 import { create } from 'zustand'
 import { useShallow } from 'zustand/react/shallow'
 import { useFreeNodeStore, type FreeNodeData } from '../../store/freeNodeStore'
@@ -30,11 +35,13 @@ import { useCanvasStore } from '../../store/canvasStore'
 import { useBoardsStore, type ProjectGroup } from '../../store/boardsStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { useLinkDragStore } from '../../store/linkDragStore'
+import { useViewport3DStore } from '../../store/viewport3dStore'
+import { useMenuClamp } from '../../hooks/useMenuClamp'
 import { useTiltStore, isTilted, unprojectTilt, TILT_FAR } from '../../store/tiltStore'
 import { clientToCanvas } from '../../utils/fx/createEffect'
 import { dotStep } from '../../utils/dotGrid'
 import {
-  normalizeStoryline, pointAndBranches, storyGeom, withoutPoint,
+  deleteStoryBranch, deleteStoryPoint, normalizeStoryline, pointAndBranches, storyGeom, storylineEmpty, unlinkStoryCard,
   type StoryGeom, type StorylineData,
 } from '../../utils/storyline'
 
@@ -60,6 +67,9 @@ const C_LINE = 'rgba(196,208,255,0.78)'
 const C_POINT = '#8fc2ff'
 const C_GLOW = '#9fe0ff'
 const C_SEL = '#ffd24a'
+/** The selection ring tiles and cards get. */
+const C_RING = 'rgba(120,180,255,0.9)'
+const RING_W = 2.5
 
 interface StoryUi {
   /** The selected point. */
@@ -103,6 +113,40 @@ function snapper(d: StorylineData, free: boolean) {
 
 function writeStoryline(id: string, x: number, y: number, d: StorylineData) {
   useFreeNodeStore.getState().updateFreeNode(id, normalizeStoryline(x, y, d))
+}
+
+/** Edit a storyline as one undo step; one left with nothing to show goes. */
+function editStoryline(id: string, edit: (d: StorylineData) => StorylineData) {
+  const fs = useFreeNodeStore.getState()
+  const n = fs.nodes[id]
+  if (!n?.storyline) return
+  useUndoCoordinator.getState().checkpoint()
+  const d = edit(n.storyline)
+  if (storylineEmpty(d)) fs.deleteFreeNode(n.id)
+  else writeStoryline(n.id, n.x, n.y, d)
+}
+
+/** Select the whole storyline as a tile is selected: it takes the canvas
+ *  selection, so the canvas's Delete removes it (App useKeyboardDelete). */
+function selectStoryline(id: string) {
+  const bs = useBoardsStore.getState()
+  if (bs.selectedGroupIds.length > 0) bs.clearGroupSelection()
+  bs.clearAllSelections()
+  const cs = useCanvasStore.getState()
+  if (cs.selectedBlockBoardIds.length > 0) cs.clearSelectedBlockBoardIds()
+  if (cs.selectedGhostGroupIds.length > 0) cs.clearSelectedGhostGroupIds()
+  if (cs.focusedBoardId !== null) cs.setFocusedBoard(null)
+  const v3 = useViewport3DStore.getState()
+  if (v3.selectedIds.length > 0) v3.setViewerSelection([])
+  useFreeNodeStore.getState().setFreeSelection([id])
+  useStoryUi.getState().set({ sel: null })
+}
+
+/** A point selected: the whole storyline is not. */
+function selectStoryPoint(id: string, point: string, editing = false) {
+  const fs = useFreeNodeStore.getState()
+  if (fs.selectedIds.includes(id)) fs.setFreeSelection(fs.selectedIds.filter(x => x !== id))
+  useStoryUi.getState().set({ sel: { node: id, point }, ...(editing ? { editing: { node: id, point } } : {}) })
 }
 
 /** The cards linked to these points, with the cards stacked in their decks,
@@ -154,9 +198,9 @@ export const StorylineLayer: React.FC = React.memo(() => {
   return <>{ids.map(id => <Storyline key={id} id={id} />)}</>
 })
 
-/** Delete / Backspace removes the selected point (and its branches; the
- *  last point takes the storyline with it). Esc lets go of it. A press
- *  anywhere else lets go of it too. */
+/** Delete / Backspace takes the selected point off its line (see
+ *  deleteStoryPoint). Esc lets go of it. A press anywhere else lets go of it
+ *  too. A whole storyline selected is the canvas's Delete, as a tile. */
 function useStoryKeys() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -169,14 +213,9 @@ function useStoryKeys() {
       // Ours alone: the canvas's own Delete would also take selected cards.
       e.preventDefault()
       e.stopImmediatePropagation()
-      const fs = useFreeNodeStore.getState()
-      const n = fs.nodes[ui.sel.node]
+      const { node, point } = ui.sel
       ui.set({ sel: null, hover: null })
-      if (!n?.storyline) return
-      useUndoCoordinator.getState().checkpoint()
-      const d = withoutPoint(n.storyline, ui.sel.point)
-      if (d.points.length === 0) fs.deleteFreeNode(n.id)
-      else writeStoryline(n.id, n.x, n.y, d)
+      editStoryline(node, d => deleteStoryPoint(d, point))
     }
     const onDown = (e: PointerEvent) => {
       if ((e.target as Element | null)?.closest?.('[data-storyline]')) return
@@ -210,6 +249,8 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
   const linking = useLinkDragStore(s => s.active && s.source?.kind === 'group')
   const busy = useRef(false)
   const lastClick = useRef<{ point: string; at: number } | null>(null)
+  const picked = useFreeNodeStore(s => s.selectedIds.includes(id))
+  const [menu, setMenu] = useState<{ x: number; y: number; point?: string; line?: string } | null>(null)
 
   const d = node?.storyline
   if (!node || !d) return null
@@ -230,7 +271,7 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
     t = Math.max(0, Math.min(lg.len, t))
     // Not on a point, nor on a line's ends (a branch starts on its point).
     const near = DOT_HIT * px
-    if (d.points.some(p => p.line === lineId && Math.abs(p.t - t) < near)) return null
+    if (d.points.some(p => p.line === lineId && !p.anchor && Math.abs(p.t - t) < near)) return null
     if (t < near || lg.len - t < near) return null
     return t
   }
@@ -397,7 +438,7 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
             writeStoryline(id, now.x, now.y, { ...now.storyline, lines: now.storyline.lines.filter(q => q.id !== l.id) })
           }
         }
-        if (gesture.kind === 'slide' || gesture.kind === 'tip') useStoryUi.getState().set({ sel: { node: id, point: gesture.point } })
+        if (gesture.kind === 'slide' || gesture.kind === 'tip') selectStoryPoint(id, gesture.point)
         return
       }
       if (cancelled) return
@@ -407,9 +448,17 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
         const t = hover0?.node === id && hover0.line === lineId ? hover0.t : tickAt(lineId, c, ev.ctrlKey)
         if (t === null) return
         useUndoCoordinator.getState().checkpoint()
-        const pid = crypto.randomUUID()
-        writeStoryline(id, x0, y0, { ...d0, points: [...d0.points, { id: pid, line: lineId, t, up: 0, down: 0, title: '' }] })
-        useStoryUi.getState().set({ sel: { node: id, point: pid } })
+        // Where a deleted point still holds branches: it comes back.
+        const anchor = d0.points.find(p => p.line === lineId && p.anchor && Math.abs(p.t - t) < DOT_HIT * px)
+        const pid = anchor?.id ?? crypto.randomUUID()
+        writeStoryline(id, x0, y0, anchor
+          ? { ...d0, points: d0.points.map(p => (p.id === pid ? { ...p, anchor: undefined } : p)) }
+          : { ...d0, points: [...d0.points, { id: pid, line: lineId, t, up: 0, down: 0, title: '' }] })
+        selectStoryPoint(id, pid)
+        return
+      }
+      if (role === 'grab') {
+        selectStoryline(id)
         return
       }
       if ((role === 'point' || role === 'title') && pointId) {
@@ -417,11 +466,11 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
         const now = performance.now()
         const again = role === 'title' || (last?.point === pointId && now - last.at < DOUBLE_MS)
         lastClick.current = { point: pointId, at: now }
-        useStoryUi.getState().set({ sel: { node: id, point: pointId }, ...(again ? { editing: { node: id, point: pointId } } : {}) })
+        selectStoryPoint(id, pointId, again)
         return
       }
       if (role === 'tip-up' || role === 'tip-down') {
-        if (pointId) useStoryUi.getState().set({ sel: { node: id, point: pointId } })
+        if (pointId) selectStoryPoint(id, pointId)
       }
     }
     const onUp = (ev: PointerEvent) => finish(ev, false)
@@ -438,16 +487,29 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerLeave={onPointerLeave}
+      onContextMenu={e => {
+        const el = (e.target as Element).closest<HTMLElement | SVGElement>('[data-role]')
+        const role = el?.dataset.role
+        if (!role || role === 'ui') return
+        e.preventDefault(); e.stopPropagation()
+        const point = el?.dataset.point
+        const line = el?.dataset.line ?? (point ? d.points.find(p => p.id === point)?.line : undefined)
+        // What the menu acts on is selected first, as on tiles and cards.
+        if (point) selectStoryPoint(id, point)
+        else selectStoryline(id)
+        setMenu({ x: e.clientX, y: e.clientY, point, line: role === 'grab' ? undefined : line })
+      }}
     >
-      <StorySvg id={id} d={d} g={g} w={node.width} h={node.height} px={px} sel={sel} hover={hover} linking={linking} />
+      <StorySvg id={id} d={d} g={g} w={node.width} h={node.height} px={px} sel={sel} hover={hover} linking={linking} picked={picked} />
       {(() => {
         const root = d.lines.find(l => !l.from)
         const lg = root && g.lines[root.id]
-        return lg ? <StoryGrab x={lg.sx} y={lg.sy} px={px} /> : null
+        return lg ? <StoryGrab x={lg.sx} y={lg.sy} px={px} picked={picked} /> : null
       })()}
+      {menu && <StoryMenu id={id} d={d} at={menu} onClose={() => setMenu(null)} />}
       {d.points.map(p => {
         const pg = g.points[p.id]
-        if (!pg) return null
+        if (!pg || p.anchor) return null
         const isEditing = editing === p.id
         if (!p.title && !isEditing) return null
         const reach = Math.max(p.up, TICK * px) + 6 * px
@@ -470,8 +532,8 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
 
 const StorySvg: React.FC<{
   id: string; d: StorylineData; g: StoryGeom; w: number; h: number; px: number
-  sel: string | null; hover: { line: string; t: number } | null; linking: boolean
-}> = ({ id, d, g, w, h, px, sel, hover, linking }) => {
+  sel: string | null; hover: { line: string; t: number } | null; linking: boolean; picked: boolean
+}> = ({ id, d, g, w, h, px, sel, hover, linking, picked }) => {
   // Room round the box for handles and ticks, which reach past the lines.
   const M = 60 * px + Math.max(0, ...d.points.map(p => Math.max(p.up, p.down)))
   const hl = hover && g.lines[hover.line]
@@ -486,6 +548,7 @@ const StorySvg: React.FC<{
           const ex = lg.sx + lg.ux * lg.len, ey = lg.sy + lg.uy * lg.len
           return (
             <g key={l.id}>
+              {picked && <line x1={lg.sx} y1={lg.sy} x2={ex} y2={ey} stroke={C_RING} strokeWidth={(LINE_W + 2 * RING_W) * px} />}
               <line x1={lg.sx} y1={lg.sy} x2={ex} y2={ey} stroke={C_LINE} strokeWidth={LINE_W * px} />
               <line
                 x1={lg.sx} y1={lg.sy} x2={ex} y2={ey} stroke="transparent" strokeWidth={LINE_HIT * px}
@@ -521,7 +584,7 @@ const StorySvg: React.FC<{
         })}
         {d.points.map(p => {
           const pg = g.points[p.id]
-          if (!pg) return null
+          if (!pg || p.anchor) return null
           const up = Math.max(p.up, TICK * px), down = Math.max(p.down, TICK * px)
           const selected = sel === p.id
           const color = selected ? C_SEL : C_POINT
@@ -540,6 +603,7 @@ const StorySvg: React.FC<{
               {(p.cards?.length ?? 0) > 0 && (
                 <circle cx={pg.x} cy={pg.y} r={(DOT_R + 3) * px} fill="none" stroke={color} strokeWidth={1.5 * px} pointerEvents="none" />
               )}
+              {picked && <circle cx={pg.x} cy={pg.y} r={r0 + RING_W * px} fill={C_RING} pointerEvents="none" />}
               <circle cx={pg.x} cy={pg.y} r={r0} fill={color} stroke="#12131f" strokeWidth={1.5 * px} pointerEvents="none" />
               <circle
                 cx={pg.x} cy={pg.y} r={DOT_HIT * px} fill="transparent" pointerEvents="all" style={{ cursor: 'grab' }}
@@ -570,7 +634,7 @@ const Cap: React.FC<{ x: number; y: number; px: number; role: 'start' | 'end'; l
 /** The grab handle: a small header tab, always just left of where the root
  *  line starts (where a storyline's first point was put down), at one size
  *  on screen. Dragging it moves the whole storyline, as a line drag does. */
-const StoryGrab: React.FC<{ x: number; y: number; px: number }> = ({ x, y, px }) => {
+const StoryGrab: React.FC<{ x: number; y: number; px: number; picked: boolean }> = ({ x, y, px, picked }) => {
   const dot = { width: 3, height: 3, borderRadius: '50%', background: 'rgba(196,208,255,0.7)' }
   return (
     <div
@@ -584,10 +648,80 @@ const StoryGrab: React.FC<{ x: number; y: number; px: number }> = ({ x, y, px })
         display: 'grid', gridTemplateColumns: 'repeat(2, 3px)', gap: 3, padding: '5px 4px',
         background: 'rgba(24,27,46,0.9)', border: '1px solid rgba(140,170,255,0.35)', borderRadius: 4,
         cursor: 'grab',
+        boxShadow: picked ? `0 0 0 ${RING_W}px ${C_RING}` : 'none',
       }}
     >
       {Array.from({ length: 6 }, (_, i) => <div key={i} style={dot} />)}
     </div>
+  )
+}
+
+/** The right-click menu: on a point, a line or the grab handle. Laid out
+ *  as a tile's menu (FreeNode). Each action is one undo step. */
+const StoryMenu: React.FC<{
+  id: string; d: StorylineData
+  at: { x: number; y: number; point?: string; line?: string }
+  onClose: () => void
+}> = ({ id, d, at, onClose }) => {
+  const groups = useBoardsStore(s => s.groups)
+  const point = at.point ? d.points.find(p => p.id === at.point) : undefined
+  const line = at.line ? d.lines.find(l => l.id === at.line) : undefined
+  const items: { label: string; icon: string; danger?: boolean; action: () => void }[] = []
+  if (point) {
+    for (const gid of point.cards ?? []) {
+      const g = groups.find(x => x.id === gid)
+      const name = g?.cardHeaderText || g?.name || 'card'
+      items.push({ label: `Unlink ${name}`, icon: '⛓️', action: () => editStoryline(id, x => unlinkStoryCard(x, point.id, gid)) })
+    }
+    items.push({ label: 'Delete point', icon: '🗑️', danger: true, action: () => editStoryline(id, x => deleteStoryPoint(x, point.id)) })
+  }
+  if (line?.from) {
+    items.push({ label: 'Delete branch', icon: '🗑️', danger: true, action: () => editStoryline(id, x => deleteStoryBranch(x, line.id)) })
+  }
+  items.push({ label: 'Delete storyline', icon: '🗑️', danger: true, action: () => {
+    useUndoCoordinator.getState().checkpoint()
+    useFreeNodeStore.getState().deleteFreeNode(id)
+  } })
+  const { ref, top } = useMenuClamp(at.y, items.length)
+  return ReactDOM.createPortal(
+    <>
+      <div style={{ position: 'fixed', inset: 0, zIndex: 9998 }} onPointerDown={onClose} onContextMenu={e => { e.preventDefault(); onClose() }} />
+      <div
+        ref={ref}
+        data-storyline={id}
+        onPointerDown={e => e.stopPropagation()}
+        style={{
+          position: 'fixed', left: Math.min(at.x, window.innerWidth - 200), top,
+          minWidth: 170, zIndex: 9999,
+          background: '#1e1f30', border: '1px solid rgba(255,255,255,0.1)',
+          borderRadius: 10, boxShadow: '0 12px 40px rgba(0,0,0,0.6)',
+          padding: '5px 0', fontFamily: 'system-ui, sans-serif',
+        }}
+      >
+        <div style={{ padding: '4px 12px 6px', borderBottom: '1px solid rgba(255,255,255,0.07)', marginBottom: 4 }}>
+          <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: 11 }}>{point ? point.title || 'Point' : line?.from ? 'Branch' : 'Storyline'}</span>
+        </div>
+        {items.map(item => (
+          <button
+            key={item.label}
+            onClick={() => { onClose(); item.action() }}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 9,
+              width: '100%', padding: '7px 14px',
+              background: 'none', border: 'none', cursor: 'pointer',
+              color: item.danger ? '#f87171' : '#e2e8f0',
+              fontSize: 13, textAlign: 'left', borderRadius: 4, whiteSpace: 'nowrap',
+            }}
+            onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.07)')}
+            onMouseLeave={e => (e.currentTarget.style.background = 'none')}
+          >
+            <span style={{ fontSize: 14, width: 18, textAlign: 'center' }}>{item.icon}</span>
+            {item.label}
+          </button>
+        ))}
+      </div>
+    </>,
+    document.body,
   )
 }
 
