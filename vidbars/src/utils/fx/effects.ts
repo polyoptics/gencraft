@@ -12,6 +12,7 @@ export type EffectKind =
   | 'halftone' | 'chroma' | 'grade' | 'multiply' | 'screen' | 'overlay'
   | 'depth' | 'segment' | 'filmline' | 'linemix' | 'formhatch' | 'bghatch' | 'shademix'
   | 'painthatch' | 'filmcel' | 'boilink' | 'misreg' | 'construction' | 'relight' | 'formlight' | 'bglayout' | 'bgwash'
+  | 'stipple' | 'halftoneshade'
   | 'combine'
 
 /** What an effect may need besides its picture, made from the strip's
@@ -147,7 +148,7 @@ function lookComp(e: FxEngine, src: Tex, p: Record<string, number>, aux?: Aux): 
     ? e.pass('grade', e.target(src.w, src.h), { src, exposure: 24, contrast: 1, saturation: 0, tint: [1, 1, 1], tintAmt: 0 })
     : e.pass('copy', e.target(src.w, src.h), { src })
   for (const l of L.layers) {
-    const next = e.pass('layerOver', e.target(src.w, src.h), { src: cur, C: l.c, A: l.a, S: L.picture, blendMode: l.mode, strength: p.strength })
+    const next = e.pass('layerOver', e.target(src.w, src.h), { src: cur, C: l.c, A: l.a, S: L.picture, blendMode: l.mode, strength: p.strength * (L.strength ?? 1) })
     e.release(cur)
     cur = next
   }
@@ -468,6 +469,8 @@ export const EFFECTS: Record<EffectKind, EffectDef> = {
       P('hatch_weight', 'Figure weight', 0.25, 4, 0.01, 1), P('bg_weight', 'Back weight', 0.25, 4, 0.01, 1),
       P('hatch_dark', 'Figure ink', -1, 1, 0.01, 0), P('bg_dark', 'Back ink', -1, 1, 0.01, 0),
       P('light', 'Highlights', 0, 2, 0.01, 1),
+      // The Stipple and Halftone cards before it: their strength.
+      P('stipple', 'Stipple', 0, 2, 0.01, 1), P('halftone', 'Halftone', 0, 2, 0.01, 1),
     ],
     run(e, src) { return e.pass('copy', e.target(src.w, src.h), { src }) },
   },
@@ -537,6 +540,22 @@ export const EFFECTS: Record<EffectKind, EffectDef> = {
     params: [P('strength', 'Strength', 0, 1, 0.01, 1)],
     run(e, src) { return e.pass('copy', e.target(src.w, src.h), { src }) },
   },
+  // The hatching's shading drawn as other marks (sketchLook tools_marks
+  // pat_stipple.py, pat_halftone.py): the worker draws both hatches first
+  // and reads their shading from them, as the film's export does. Where:
+  // the figure (what a Segment card before it finds; without one, the whole
+  // picture), the background, or both.
+  stipple: lookDef('stipple', 'Stipple', '⁘', '#a89a86', "The hatching's shading as pen stippling", [
+    { ...P('where', 'Where', 0, 2, 1, 0), names: ['Figure', 'Background', 'Both'] },
+    P('ink', 'Ink', 0.1, 1, 0.01, 0.62), P('dot', 'Dot size', 0.5, 4, 0.05, 1.6), P('dark', 'Darkness', 0.2, 2, 0.01, 0.87),
+    P('edge', 'Edge accent', 0, 1.5, 0.01, 0.7), P('form', 'Follow form', 0, 1, 0.01, 0.3),
+    P('jitter', 'Hand', 0, 0.5, 0.01, 0.3), P('shiver', 'Boil', 0, 0.4, 0.01, 0.14),
+  ], true),
+  halftoneshade: lookDef('halftoneshade', 'Halftone', '⣿', '#8a9cae', "The hatching's shading as a printed halftone", [
+    { ...P('where', 'Where', 0, 2, 1, 0), names: ['Figure', 'Background', 'Both'] },
+    P('cell', 'Screen size', 0.8, 4, 0.05, 1.9), P('ink', 'Ink', 0.1, 1, 0.01, 0.5), P('angle', 'Screen angle', 0, 90, 1, 45),
+    P('form', 'Follow form', 0, 1, 0.01, 0.35), P('drift', 'Registration drift', 0, 2, 0.01, 0.45),
+  ], true),
   bgwash: lookDef('bgwash', 'Background wash', '▒', '#8f9adc', 'A cool shadow wash and haze with distance', [
     P('haze', 'Haze', 0, 1, 0.01, 0.45), P('wash', 'Wash', 0, 1, 0.01, 0.48), P('core', 'Core accent', 0, 1, 0.01, 0.18),
     P('shade_hi', 'Shadow from', 0.5, 1, 0.01, 0.9), P('grain', 'Granulation', 0, 1, 0.01, 0.3), P('mottle', 'Mottle', 0, 0.5, 0.01, 0.12),
@@ -570,4 +589,4 @@ export function effectParams(kind: EffectKind, params: Record<string, number> | 
 
 /** In the order the add menu lists them. */
 export const EFFECT_ORDER: EffectKind[] = ['bloom', 'glare', 'glow', 'ink', 'cel', 'sketch', 'halftone', 'chroma', 'grade', 'multiply', 'screen', 'overlay', 'depth', 'segment', 'filmline', 'linemix', 'formhatch', 'bghatch', 'shademix',
-  'painthatch', 'filmcel', 'boilink', 'misreg', 'construction', 'relight', 'formlight', 'bglayout', 'bgwash', 'combine']
+  'painthatch', 'filmcel', 'boilink', 'misreg', 'construction', 'relight', 'formlight', 'bglayout', 'bgwash', 'stipple', 'halftoneshade', 'combine']

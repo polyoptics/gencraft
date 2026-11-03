@@ -710,11 +710,156 @@ LOOKS = {
 }
 
 
+# ------------------------------------------------------------------------------------------- marks
+# Stipple and halftone (sketchLook tools_marks/pat_stipple.py, pat_halftone.py): the hatching's shading drawn as
+# other marks. They read the film's "fields" (tools_marks/fields.py), which are made from a shot's two saved hatch
+# layers - the background's depth hatching and the subject's form hatching - plus its frames, mattes and depth. So
+# here both hatches are drawn first (op_bghatch, op_formhatch), their layers written into the picture's folder under
+# the names fields.py reads, and fields.ROOT pointed at that folder. tools_marks runs as it is (its frozen copy of
+# the background hatch included); nothing is written into sketchLook.
+TOOLS_MARKS = os.path.join(SKETCH, "tools_marks")
+MARKS = {"stipple": "pat_stipple", "halftone": "pat_halftone"}
+# a card's dials -> the pattern module's constants (halftone's INK and ANGLE are per layer kind)
+MARK_DIALS = {"stipple": {"ink": "INK", "dot": "DOT", "jitter": "JITTER", "edge": "EDGE", "form": "FORM",
+                          "shiver": "BOIL", "dark": "CALIB"},
+              "halftone": {"cell": "CELL", "ink": "INK", "form": "FORM", "drift": "DRIFT", "angle": "ANGLE"}}
+BG_LAYER = "%s_s_bg_depthhatch"         # fields.py: out/<clip>_s_bg_depthhatch/layer/NNNN.png
+SUBJECT_LAYER = "%s_hatch_s_bg_depthhatch"  # fields.py: out/<clip>_hatch_s_bg_depthhatch/layer/{multiply,screen}/
+
+
+def grey(p):
+    im = cv2.imread(p, cv2.IMREAD_UNCHANGED)
+    return im.astype(np.float32) / 255
+
+
+def bgra(path, rgb, a):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    cv2.imwrite(path, np.clip(np.dstack([rgb, a]) * 255 + 0.5, 0, 255).astype(np.uint8))
+
+
+def marks_clip(root, lclip, n_src):
+    """lclip's frames, mattes and depth as clips/<lclip>_mk, at least 4 frames (a still repeated): the background
+    hatch's frozen scale measurement takes a 9-frame median, which reads nothing from fewer than 4."""
+    name = lclip + "_mk"
+    c = os.path.join(root, "clips")
+    if os.path.isdir(os.path.join(c, name)):
+        return name
+    n = max(4, n_src)
+    for sub, ext in (("", ".png"), ("_depth", ".npy")):
+        src = os.path.join(c, lclip + sub)
+        if os.path.isdir(src):
+            os.makedirs(os.path.join(c, name + sub), exist_ok=True)
+            for t in range(n):
+                shutil.copy(os.path.join(src, "%04d%s" % (min(t, n_src - 1), ext)), os.path.join(c, name + sub, "%04d%s" % (t, ext)))
+    md = os.path.join(c, lclip + "_matte")
+    if os.path.isdir(md):
+        for o in os.listdir(md):
+            if os.path.isdir(os.path.join(md, o)):
+                os.makedirs(os.path.join(c, name + "_matte", o), exist_ok=True)
+                for t in range(n):
+                    shutil.copy(os.path.join(md, o, "%04d.png" % min(t, n_src - 1)), os.path.join(c, name + "_matte", o, "%04d.png" % t))
+    return name
+
+
+def op_marks(req):
+    """Stipple or halftone where the dials' "where" says: 0 the figure (what Segment finds; nothing named: the whole
+    picture), 1 the background (nothing named: the whole picture), 2 both. Comes back like a look: one multiply
+    layer per place, colour and alpha."""
+    look = req["look"]
+    dials = {k: float(v) for k, v in (req.get("dials") or {}).items()}
+    where = int(round(dials.pop("where", 0)))
+    named = bool(req.get("objects"))
+    kinds = ["subject"] if where == 0 else ["bg"] if where == 1 or not named else ["bg", "subject"]
+    side = min(int(req.get("side") or LIVE), LIVE)  # the patterns' sizes are px at the film's size: drawn there
+    if "subject" in kinds:
+        root, mclip, _ = segment_clip(dict(req, whole=not named))
+    else:
+        root, mclip = (segment_clip(req)[:2] if named else (base(req), None))
+    res = os.path.join(root, "res", "%s_%d_%s_%d_%s" % (look, side, mclip or "none", where, size_key(req, dials, 1)))
+    if not os.path.isdir(res):
+        sub = dict(req, dials={}, side=side, scale=req.get("scale"))
+        n_src = len(os.listdir(os.path.join(root, "clips", "src")))
+        lclip = look_clip(root, mclip, side, depth=True, pad=True)
+        e = edge_of(lclip)
+        pad = lambda x: cv2.copyMakeBorder(x, e, e, e, e, cv2.BORDER_REFLECT) if e else x
+        # the two hatches, as fields.py reads them (tools_scale/look_bg_depthhatch.py and look_formhatch.py main())
+        bg = op_bghatch(dict(sub, whole=False)) if mclip != "wh" else None
+        fh = op_formhatch(sub) if mclip else None
+        mk = marks_clip(root, lclip, n_src)
+        n = len(os.listdir(os.path.join(root, "clips", mk)))
+        out = os.path.join(root, "out")
+        shutil.rmtree(os.path.join(out, BG_LAYER % mk), ignore_errors=True)
+        shutil.rmtree(os.path.join(out, SUBJECT_LAYER % mk), ignore_errors=True)
+        h, w = cv2.imread(os.path.join(root, "clips", mk, "0000.png")).shape[:2]
+        pen = None if bg is None else np.array([int(bg["colors"]["pencil"][i:i + 2], 16) for i in (4, 2, 0)], np.float32) / 255
+        for t in range(n):
+            s = min(t, n_src - 1)
+            name = "%04d.png" % t
+            if bg is not None:
+                f = bg["frames"][s]
+                A, K, P = pad(grey(f["a"])), pad(grey(f["k"])), pad(grey(f["p"]))
+                M = (1 - A[..., None] + A[..., None] * K) * (1 - P[..., None] + P[..., None] * pen)
+                a = (1 - M).max(-1)
+                rgb = 1 - (1 - M) / np.maximum(a, 1e-6)[..., None]
+                bgra(os.path.join(out, BG_LAYER % mk, "layer", name), np.where(a[..., None] > 0, rgb, 1), a)
+            else:
+                bgra(os.path.join(out, BG_LAYER % mk, "layer", name), np.ones((h, w, 3), np.float32), np.zeros((h, w), np.float32))
+            if fh is not None:
+                f = fh["frames"][s]
+                bgra(os.path.join(out, SUBJECT_LAYER % mk, "layer", "multiply", name), pad(grey(f["k"])), pad(grey(f["a"])))
+                bgra(os.path.join(out, SUBJECT_LAYER % mk, "layer", "screen", name), pad(grey(f["h"])), pad(grey(f["b"])))
+        # tools_marks, fresh (the hatches above imported tools_scale's own look_bg_depthhatch / scale, which its
+        # frozen copies must not meet), with its data under this picture's folder
+        for m in [m for m in sys.modules if os.path.normcase(str(getattr(sys.modules[m], "__file__", "") or "")).startswith(os.path.normcase(SKETCH))]:
+            del sys.modules[m]
+        old = list(sys.path)
+        try:
+            sys.path.insert(0, TOOLS_MARKS)
+            import fields
+            import marks
+            fields.ROOT = root
+            for m in ("look_bg_depthhatch", "look_formhatch", "look_construction", "scale", "veil"):
+                if m in sys.modules:
+                    sys.modules[m].ROOT = root
+            pat = sys.modules[MARKS[look]]
+            for k, v in dials.items():
+                c = MARK_DIALS[look].get(k)
+                if c is None:
+                    continue
+                if look == "halftone" and c == "ANGLE":
+                    pat.ANGLE = {"bg": v, "subject": v + 30}
+                elif isinstance(getattr(pat, c), dict):
+                    setattr(pat, c, {kk: v for kk in getattr(pat, c)})
+                else:
+                    setattr(pat, c, v)
+            fn = marks.get(look)
+            shot = fields.Shot(mk)
+            use = [k for k in kinds if k != "subject" or shot.has_subject]
+            os.makedirs(res + ".tmp", exist_ok=True)
+            for t in range(n_src):
+                fl = shot.fields(t)
+                for i, kind in enumerate(kinds):
+                    r = marks.normalize(fn(fl, kind, fl.d, marks.rng_for(look, kind, fl.d)), fl, kind) if kind in use else None
+                    a = r["alpha"] if r is not None else np.zeros((fl.H, fl.W), np.float32)
+                    ink = r["ink"] if r is not None else np.ones((fl.H, fl.W, 3), np.float32)
+                    save_grey(os.path.join(res + ".tmp", "%04d_c%d.png" % (t, i)), crop_edge(ink, e))
+                    save_grey(os.path.join(res + ".tmp", "%04d_a%d.png" % (t, i)), crop_edge(a, e))
+            print("%s: %s on %s (%d frame%s)" % (look, "+".join(kinds), mclip or "the whole picture", n_src, "s" * (n_src > 1)))
+        finally:
+            sys.path[:] = old
+        os.replace(res + ".tmp", res)
+    n = len([f for f in os.listdir(res) if f.endswith("_a0.png")])
+    return {"frames": [{"%s%d" % (k, i): os.path.join(res, "%04d_%s%d.png" % (t, k, i)) for i in range(len(kinds)) for k in "ca"}
+                       for t in range(n)], "colors": {"modes": ["multiply"] * len(kinds)}}
+
+
 def op_look(req):
     """One of LOOKS on the picture: the script runs whole on the picture's clip (a still as two frames of itself,
     since several read motion from a neighbour), and each RGBA layer it writes comes back as its colour and its
     alpha (two PNGs: VidBars uploads pictures without their alpha). A script that stops in its movie or contact
     sheets after writing every layer (they assume a long shot) has still made what is needed."""
+    if req["look"] in MARKS:
+        return op_marks(req)
     spec = LOOKS[req["look"]]
     if spec["mask"] == "need" or (spec["mask"] == "optional" and req.get("objects")):
         root, mclip, _ = segment_clip(req)

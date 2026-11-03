@@ -64,7 +64,12 @@ export const LOOK_OF: Partial<Record<EffectKind, { look: string; background?: bo
   painthatch: { look: 'hatch' }, filmcel: { look: 'cel' }, boilink: { look: 'boil' }, misreg: { look: 'misreg' },
   construction: { look: 'construction' }, relight: { look: 'relight' }, formlight: { look: 'formlight' },
   bglayout: { look: 'bg_layout', background: true }, bgwash: { look: 'bg_tonewash', background: true },
+  // Subject optional: with no Segment card the worker takes the whole picture
+  // as the figure or the background, as the card's Where says.
+  stipple: { look: 'stipple', background: true }, halftoneshade: { look: 'halftone', background: true },
 }
+/** The mark cards Shading mix also mixes (their strength), by its slider. */
+const MARK_MIX: Partial<Record<EffectKind, string>> = { stipple: 'stipple', halftoneshade: 'halftone' }
 const LIVE_ONLY = new Set(['show', 'strength'])
 /** Look dials whose card default differs from the film tool's own, so they
  *  are sent even when the slider was never moved. */
@@ -74,7 +79,7 @@ const CARD_DIALS: Partial<Record<EffectKind, Record<string, number>>> = { religh
 const BLEND = { normal: 0, multiply: 1, screen: 2, add: 3, hardlight: 4, follow: 5 } as Record<string, number>
 /** A Shading mix card's values that change nothing (the look mixer's
  *  neutral: mixer_bake.py NEUTRAL, for the hatch layers). */
-export const SHADE_NEUTRAL: Record<string, number> = { hatch: 1, bg: 1, hatch_weight: 1, bg_weight: 1, hatch_dark: 0, bg_dark: 0, light: 1 }
+export const SHADE_NEUTRAL: Record<string, number> = { hatch: 1, bg: 1, hatch_weight: 1, bg_weight: 1, hatch_dark: 0, bg_dark: 0, light: 1, stipple: 1, halftone: 1 }
 /** A Line mix card's values that change nothing. */
 export const MIX_NEUTRAL: Record<string, number> = { strength: 1, pencil: 1, ink: 1, weight: 1, dark: 0, tint: 0, light: 1 }
 
@@ -327,8 +332,8 @@ function requests(steps: AuxStep[], i: number, url: string): Req[] | null {
     return out
   }
   if (s.effect === 'shademix') {
-    const n = steps.slice(0, i).filter(x => x.effect === 'formhatch' || x.effect === 'bghatch').length
-    say(s.id, n ? `Mixes the ${n > 1 ? `${n} hatch cards` : 'hatch card'} before it` : 'Put a hatch card before it')
+    const n = steps.slice(0, i).filter(x => x.effect === 'formhatch' || x.effect === 'bghatch' || !!MARK_MIX[x.effect]).length
+    say(s.id, n ? `Mixes the ${n > 1 ? `${n} shading cards` : 'shading card'} before it` : 'Put a hatch, Stipple or Halftone card before it')
     return n ? [] : null
   }
   if (s.effect === 'filmline') {
@@ -506,7 +511,10 @@ export function auxFor(e: FxEngine, plan: AuxPlan, steps: AuxStep[], i: number, 
     }
     else if (r.job.op === 'look') {
       const modes = ((k.colors as unknown as { modes?: string[] } | undefined)?.modes ?? [])
-      aux.look = { layers: modes.map((m, n) => ({ c: tex(`c${n}`), a: tex(`a${n}`), mode: BLEND[m] ?? 0 })), picture: picture ?? cur }
+      // A Stipple / Halftone card: the Shading mix cards after it scale it.
+      const mk = MARK_MIX[s.effect]
+      const strength = mk ? steps.slice(i + 1).filter(x => x.effect === 'shademix').reduce((v, x) => v * ({ ...SHADE_NEUTRAL, ...x.params })[mk], 1) : 1
+      aux.look = { layers: modes.map((m, n) => ({ c: tex(`c${n}`), a: tex(`a${n}`), mode: BLEND[m] ?? 0 })), picture: picture ?? cur, strength }
     }
     else if (r.job.op === 'formhatch' || r.job.op === 'bghatch') {
       const { mix } = hatchSetup(steps, i)
@@ -550,6 +558,8 @@ export interface Aux {
    *  (0 normal, 1 multiply, 2 screen, 3 add, 4 hard light, 5 normal in
    *  the colour of what it is laid on); `picture` is the strip's source
    *  picture (not to be released: runChain owns it). */
-  look?: { layers: { c: Tex; a: Tex; mode: number }[]; picture: Tex }
+  look?: { layers: { c: Tex; a: Tex; mode: number }[]; picture: Tex
+    /** Times the card's own Strength (a Shading mix after a Stipple / Halftone card). */
+    strength?: number }
 }
 export type { AuxKind }
