@@ -7,6 +7,7 @@ import { useNLEViewerStore } from '../../store/nleViewerStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { computeGroupLayout } from '../../utils/nleRows'
 import { cardCornerOffset, snapCardToDots } from '../../utils/dotGrid'
+import { cardEdgeSnapFor } from '../../utils/cardEdgeSnap'
 import { groupSlot, clampGroupMove } from '../../utils/nlePush'
 import type { GroupSlot } from '../../utils/nlePush'
 import { expandWithNestedMembers, canvasObstacleGroups } from '../../hooks/useCardDecks'
@@ -155,6 +156,8 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, icon
     }
     const draggingSet = new Set(dragIds)
     const corner = g ? cardCornerOffset(g, bs0.boards) : null
+    // Side edges onto neighbouring cards (utils/cardEdgeSnap)
+    const edges = groupId ? cardEdgeSnapFor(groupId, dragIds, bs0.groups, bs0.boards, useCanvasStore.getState().zoom) : null
 
     // Build collision slots — clamp against everything that isn't part
     // of the drag set (so nested members don't collide with themselves).
@@ -185,7 +188,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, icon
 
       // Top-left corner onto the background dots (utils/dotGrid)
       const { x: preClampX, y: preClampY } = snapCardToDots(
-        initialOriginX + dxAccum, initialOriginY + dyAccum, corner, z, headerExtend(z), ev.ctrlKey)
+        initialOriginX + dxAccum, initialOriginY + dyAccum, corner, z, headerExtend(z), ev.ctrlKey, edges)
       // Clamp against other groups (only in timeline zone)
       let finalDx: number, finalDy: number
       if (mySlot && obstacles.length > 0) {

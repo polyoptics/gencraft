@@ -11,6 +11,7 @@
 
 import { CARD_GRID_SPACING, computeGroupLayout, getRowY } from './nleRows'
 import type { ProjectGroup, BoardData } from '../store/boardsStore'
+import { snapCardEdges, type CardEdgeSnap } from './cardEdgeSnap'
 
 export const DOT_SPACING = CARD_GRID_SPACING
 /** In-between dots show (and snap) once they are this far apart on screen. */
@@ -50,13 +51,16 @@ export function cardCornerOffset(group: ProjectGroup, boards: Record<string, Boa
 /** Pull a dragged card's origin so its top-left corner lands on a dot.
  *  `corner` is from cardCornerOffset; `headerPx` the card's header band
  *  above its content (NLETimelineHeader headerExtend) at this zoom. Each
- *  axis snaps on its own; `free` (Ctrl held) skips snapping. */
+ *  axis snaps on its own; `free` (Ctrl held) skips snapping. `edges`
+ *  (cardEdgeSnapFor) lets a neighbouring card's edge win over the dots. */
 export function snapCardToDots(
   rawX: number, rawY: number,
   corner: { x: number; y: number } | null,
-  zoom: number, headerPx: number, free = false,
+  zoom: number, headerPx: number, free = false, edges?: CardEdgeSnap | null,
 ): { x: number; y: number } {
-  if (free || !corner) return { x: rawX, y: rawY }
+  if (free) return { x: rawX, y: rawY }
+  const edge = edges ? snapCardEdges(rawX, rawY, edges, zoom) : { dx: null, dy: null }
+  if (!corner) return { x: rawX + (edge.dx ?? 0), y: rawY + (edge.dy ?? 0) }
   const step = dotStep(zoom)
   // Never more than a sixth of the way to the next dot: zoomed out the dots
   // close up, and a flat reach would leave nowhere between them to stop.
@@ -66,7 +70,7 @@ export function snapCardToDots(
     return Math.abs(n - v) <= reach ? n - v : 0
   }
   return {
-    x: rawX + pull(rawX + corner.x),
-    y: rawY + pull(rawY + corner.y - headerPx / zoom),
+    x: rawX + (edge.dx ?? pull(rawX + corner.x)),
+    y: rawY + (edge.dy ?? pull(rawY + corner.y - headerPx / zoom)),
   }
 }
