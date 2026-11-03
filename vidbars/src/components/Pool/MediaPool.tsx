@@ -476,9 +476,13 @@ export const MediaPool: React.FC<{ nodeId: string }> = ({ nodeId }) => {
                 onClick={() => { setPathDraft(contents?.dir ?? dir); setEditingPath(true) }}
                 title="Click to type a folder path"
                 style={{
+                  // The same box as the input that replaces it (border,
+                  // padding, left-aligned), so clicking to type does not move
+                  // the text: you type where you were looking.
                   flex: 1, minWidth: 0, fontSize: 12, color: 'rgba(255,255,255,0.62)',
                   fontFamily: 'ui-monospace, monospace', cursor: 'text',
-                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', direction: 'rtl',
+                  border: '1px solid transparent', borderRadius: 4, padding: '3px 6px',
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                 }}
               >{contents?.dir ?? dir}</div>
             )}

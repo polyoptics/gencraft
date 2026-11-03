@@ -293,7 +293,7 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
     // modest defaults; a dropped image is content, not an instrument.
     const heights: Record<FreeNodeType, number> = {
       image: 180, note: 160, text: 180, video: 180, audio: 120, model: 180,
-      list: 880, pool: 1260, prompt: 720, history: 800, effect: 252,
+      list: 880, pool: 1080, prompt: 720, history: 800, effect: 252,
       rail: 360,   // a placeholder: the rail sizes itself to its layout
       cabinet: 280,
       filmMixer: 860,
@@ -304,9 +304,9 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
       // Lists host a full embedded Rolodex — size for its natural panel
       // width (LEFTCOL_W 196 + margins), doubled.
       list: 480,
-      // A grid needs room before it reads as a grid, and the path bar needs
-      // the width to show a whole folder path rather than its tail.
-      pool: 1560,
+      // Brian's own pool (2026-11-03): about nine 'mid' tiles across. This
+      // is its content size at uiScale 1; addFreeNodeCentered scales it.
+      pool: 780,
       prompt: 920,
       history: 520,
       // A playing card, 5:7 (FreeNode holds that ratio on resize). The

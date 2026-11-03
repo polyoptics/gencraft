@@ -54,17 +54,24 @@ export function addFreeNodeCentered(
   const fs = useFreeNodeStore.getState()
   const id = fs.addFreeNode(cx, cy, type)
   const made = useFreeNodeStore.getState().nodes[id]
-  const w = (made?.width ?? 200) * k
-  const h = (made?.height ?? 160) * k
+  // A Media Pool scales its contents and its window together, so it opens
+  // the way Brian set his by hand (2026-11-03): text about a loop strip's
+  // size at that zoom, the window just big enough for that content. The
+  // 22/zoom is FreeNode's header, which is a constant 22 screen pixels.
+  const s = type === 'pool' ? clampUiScale(k * POOL_TEXT_VS_STRIP) : k
+  const w = (made?.width ?? 200) * s
+  const h = (made?.height ?? 160) * s + (type === 'pool' ? 22 / zoom : 0)
   useFreeNodeStore.getState().updateFreeNode(id, {
     width: w, height: h, x: cx - w / 2, y: cy - h / 2,
-    // A Media Pool's text and tiles grow with it, the way a loop strip's
-    // unit does: created zoomed out, it reads at the same screen size as a
-    // strip made at that zoom instead of being a big window of specks.
-    ...(type === 'pool' ? { uiScale: clampUiScale(k) } : {}),
+    ...(type === 'pool' ? { uiScale: s } : {}),
   })
   return id
 }
+
+/** How a new Media Pool's text compares with a loop strip made at the same
+ *  zoom. Read off Brian's hand-set pool: 8.3x at 6% zoom, where a strip's
+ *  unit is 10. */
+const POOL_TEXT_VS_STRIP = 0.83
 
 /** The Rolodex node wants a query seeded or it opens empty. */
 export function addBrowserNode(at?: { cx: number; cy: number }): string {
