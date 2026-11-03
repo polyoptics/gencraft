@@ -1493,6 +1493,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
           <PinControl
             pinned={!!node.pin}
             size={Math.max(11, Math.min(16 * iz, headerH * 0.8))}
+            hit={headerH * 1.5}
             onToggle={() => {
               const cs = useCanvasStore.getState()
               useUndoCoordinator.getState().checkpoint()
