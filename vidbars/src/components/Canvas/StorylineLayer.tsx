@@ -16,6 +16,8 @@
 //    line it slides, onto another line it re-attaches there. Its tick ends:
 //    drag up or down for its stem above or below the line.
 //  - Drag the grab handle beside where it starts: the whole storyline moves.
+//  - A linked card hangs off its point by a thin tether, drawn behind the
+//    cards to the card's nearest edge; hover lights it, right-click unlinks.
 //  - Click a point to select it; double-click it (or click its title) to
 //    name it. Delete takes the point off its line, which stays whole.
 //  - Click the grab handle to select the whole storyline (ringed, as tiles
@@ -44,7 +46,7 @@ import { HexColorPicker } from 'react-colorful'
 import { create } from 'zustand'
 import { useShallow } from 'zustand/react/shallow'
 import { useFreeNodeStore, type FreeNodeData } from '../../store/freeNodeStore'
-import { useCanvasStore } from '../../store/canvasStore'
+import { useCanvasStore, groupBounds } from '../../store/canvasStore'
 import { useBoardsStore, type ProjectGroup } from '../../store/boardsStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { useLinkDragStore } from '../../store/linkDragStore'
@@ -84,6 +86,34 @@ const DRAG_PX = 4
 const ALONG_COS = 0.82
 const DOUBLE_MS = 400
 const NONE: string[] = []
+const NO_GROUPS: ProjectGroup[] = []
+const NO_TETHERS: Tether[] = []
+
+/** A linked card's tether: from its point to the nearest spot on the card's
+ *  face, relative to the storyline's node. */
+interface Tether { point: string; card: string; x1: number; y1: number; x2: number; y2: number }
+
+/** Every linked card's tether. Not for a card pinned off the canvas, or one
+ *  the point sits on. The face: the card's block extent (groupBounds, less
+ *  its 16-unit docking margin) at least its set size. */
+function storyTethers(d: StorylineData, g: StoryGeom, ox: number, oy: number, groups: ProjectGroup[]): Tether[] {
+  const out: Tether[] = []
+  for (const p of d.points) {
+    const pg = g.points[p.id]
+    if (!pg || !p.cards?.length) continue
+    for (const card of p.cards) {
+      const grp = groups.find(x => x.id === card)
+      const b = grp && !grp.pin ? groupBounds(card) : null
+      if (!grp || !b) continue
+      const x0 = b.x + 16, w = Math.max(b.w - 32, grp.cardWidthOverride ?? 0), h = Math.max(b.h, grp.cardHeightOverride ?? 0)
+      const px0 = ox + pg.x, py0 = oy + pg.y
+      const cx = Math.max(x0, Math.min(x0 + w, px0)), cy = Math.max(b.y, Math.min(b.y + h, py0))
+      if (cx === px0 && cy === py0) continue
+      out.push({ point: p.id, card, x1: pg.x, y1: pg.y, x2: cx - ox, y2: cy - oy })
+    }
+  }
+  return out
+}
 /** Screen px from the root line's start to the grab handle's middle, across
  *  the line: clear of the start point's ring and tick. */
 const GRAB_OFF = 40
@@ -597,7 +627,7 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
   const busy = useRef(false)
   const lastClick = useRef<{ point: string; at: number } | null>(null)
   const picked = useFreeNodeStore(s => s.selectedIds.includes(id))
-  const [menu, setMenu] = useState<{ x: number; y: number; point?: string; line?: string; grab?: boolean } | null>(null)
+  const [menu, setMenu] = useState<{ x: number; y: number; point?: string; line?: string; grab?: boolean; tether?: string } | null>(null)
   // Saved before every dot was a point: made so once, as it loads.
   const raw = node?.storyline
   useEffect(() => {
@@ -607,10 +637,16 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
     }
   }, [id, raw])
 
+  // Linked cards, followed where they sit (their tethers).
+  const hasCards = !!raw?.points.some(p => p.cards?.length)
+  const groups = useBoardsStore(s => (hasCards ? s.groups : NO_GROUPS))
+  useBoardsStore(s => (hasCards ? s.boards : null))
+
   const d = node?.storyline
   if (!node || !d) return null
   const px = 1 / zoom
   const g = storyGeom(d)
+  const tethers = hasCards ? storyTethers(d, g, node.x, node.y, groups) : NO_TETHERS
 
   /** The tick for a hover at canvas point `c` over line `lineId`, or null
    *  where a point or a line's end already is. */
@@ -660,7 +696,8 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
     if (e.button !== 0 || e.altKey) return
     const el = (e.target as Element).closest<HTMLElement | SVGElement>('[data-role]')
     const role = el?.dataset.role
-    if (!role || role === 'ui') return
+    // A tether takes only its menu: a press on it is the canvas's.
+    if (!role || role === 'ui' || role === 'tether') return
     e.stopPropagation()
     e.preventDefault()
     const host = e.currentTarget
@@ -928,6 +965,10 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
         if (!role || role === 'ui') return
         e.preventDefault(); e.stopPropagation()
         const point = el?.dataset.point
+        if (role === 'tether') {
+          setMenu({ x: e.clientX, y: e.clientY, point, tether: el?.dataset.card })
+          return
+        }
         const line = el?.dataset.line ?? (point ? d.points.find(p => p.id === point)?.line : undefined)
         // What the menu acts on is selected first, as on tiles and cards.
         if (point) selectStoryPoint(id, point)
@@ -935,7 +976,7 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
         setMenu({ x: e.clientX, y: e.clientY, point, line: role === 'grab' ? undefined : line, grab: role === 'grab' })
       }}
     >
-      <StorySvg id={id} d={d} g={g} w={node.width} h={node.height} px={px} sel={sel} parts={parts} zone={zone} drop={drop} flash={flash} merge={merge} hover={hover} linking={linking} picked={picked} />
+      <StorySvg id={id} d={d} g={g} w={node.width} h={node.height} px={px} sel={sel} parts={parts} zone={zone} drop={drop} flash={flash} merge={merge} hover={hover} linking={linking} picked={picked} tethers={tethers} />
       {(() => {
         const root = d.lines.find(l => !l.from)
         const lg = root && g.lines[root.id]
@@ -974,10 +1015,14 @@ const StorySvg: React.FC<{
   id: string; d: StorylineData; g: StoryGeom; w: number; h: number; px: number
   sel: string | null; parts: string[]; hover: { line: string; t: number } | null; linking: boolean; picked: boolean
   zone: { point: string; ring: boolean; tip?: 'up' | 'down' } | null; drop: { line: string; t: number } | null
-  flash: { point: string; at: number } | null; merge: string | null
-}> = ({ id, d, g, w, h, px, sel, parts, zone, drop, flash, merge, hover, linking, picked }) => {
-  // Room round the box for handles and ticks, which reach past the lines.
+  flash: { point: string; at: number } | null; merge: string | null; tethers: Tether[]
+}> = ({ id, d, g, w, h, px, sel, parts, zone, drop, flash, merge, hover, linking, picked, tethers }) => {
+  const [lit, setLit] = useState<string | null>(null)
+  // Room round the box for handles and ticks, which reach past the lines,
+  // and out to every tether's card: the box is what takes the pointer.
   const M = 60 * px + Math.max(0, ...d.points.map(p => Math.max(p.up, p.down)))
+  const bx0 = Math.min(0, ...tethers.map(t => t.x2)) - M, by0 = Math.min(0, ...tethers.map(t => t.y2)) - M
+  const bx1 = Math.max(w, ...tethers.map(t => t.x2)) + M, by1 = Math.max(h, ...tethers.map(t => t.y2)) + M
   const hl = hover && g.lines[hover.line]
   // Hovering a ring: the part of the tree that moves with it, lit.
   const chain = zone?.ring ? pointAndBranches(d, zone.point) : null
@@ -988,9 +1033,24 @@ const StorySvg: React.FC<{
   const TICK_W = Math.min(LINE_W, 2 + LINE_W / 4)
   return (
     <svg
-      style={{ position: 'absolute', left: -M, top: -M, width: w + 2 * M, height: h + 2 * M, overflow: 'visible', pointerEvents: 'none' }}
+      style={{ position: 'absolute', left: bx0, top: by0, width: bx1 - bx0, height: by1 - by0, overflow: 'visible', pointerEvents: 'none' }}
     >
-      <g transform={`translate(${M} ${M})`} strokeLinecap="round">
+      <g transform={`translate(${-bx0} ${-by0})`} strokeLinecap="round">
+        {/* Tethers: behind the lines and points, as the cards are in front. */}
+        {tethers.map(t => {
+          const key = `${t.point}:${t.card}`
+          const on = lit === key
+          return (
+            <g key={key}>
+              <line x1={t.x1} y1={t.y1} x2={t.x2} y2={t.y2} stroke={tone} strokeOpacity={on ? 0.4 : 0.15} strokeWidth={(on ? 7 : 5) * px} pointerEvents="none" />
+              <line x1={t.x1} y1={t.y1} x2={t.x2} y2={t.y2} stroke={on ? C_GLOW : tone} strokeOpacity={on ? 1 : 0.7} strokeWidth={1.5 * px} pointerEvents="none" />
+              <circle cx={t.x2} cy={t.y2} r={2.5 * px} fill={on ? C_GLOW : tone} pointerEvents="none" />
+              <line x1={t.x1} y1={t.y1} x2={t.x2} y2={t.y2} stroke="transparent" strokeWidth={10 * px} pointerEvents="stroke"
+                    data-role="tether" data-point={t.point} data-card={t.card}
+                    onPointerEnter={() => setLit(key)} onPointerLeave={() => setLit(x => (x === key ? null : x))} />
+            </g>
+          )
+        })}
         {d.lines.map(l => {
           const lg = g.lines[l.id]
           if (!lg || lg.len < 1e-6) return null
@@ -1119,7 +1179,7 @@ const StoryGrab: React.FC<{ x: number; y: number; px: number; picked: boolean }>
  *  as a tile's menu (FreeNode). Each action is one undo step. */
 const StoryMenu: React.FC<{
   id: string; d: StorylineData
-  at: { x: number; y: number; point?: string; line?: string; grab?: boolean }
+  at: { x: number; y: number; point?: string; line?: string; grab?: boolean; tether?: string }
   onClose: () => void
 }> = ({ id, d, at, onClose }) => {
   const [custom, setCustom] = useState(false)
@@ -1133,7 +1193,12 @@ const StoryMenu: React.FC<{
     label: grown.length > 1 ? `Delete branch from here ${k + 1}` : 'Delete branch from here', icon: '🗑️', danger: true,
     action: () => editStoryline(id, x => deleteStoryBranch(x, l.id)),
   }))
-  if (point) {
+  if (point && at.tether) {
+    // A tether's own menu: just this card's link.
+    const gid = at.tether
+    const g = groups.find(x => x.id === gid)
+    items.push({ label: `Unlink ${g?.cardHeaderText || g?.name || 'card'}`, icon: '⛓️', action: () => editStoryline(id, x => unlinkStoryCard(x, point.id, gid)) })
+  } else if (point) {
     for (const gid of point.cards ?? []) {
       const g = groups.find(x => x.id === gid)
       const name = g?.cardHeaderText || g?.name || 'card'
@@ -1149,7 +1214,7 @@ const StoryMenu: React.FC<{
   if (line?.from) {
     items.push({ label: 'Delete branch', icon: '🗑️', danger: true, action: () => editStoryline(id, x => deleteStoryBranch(x, line.id)) })
   }
-  items.push({ label: 'Delete storyline', icon: '🗑️', danger: true, action: () => {
+  if (!at.tether) items.push({ label: 'Delete storyline', icon: '🗑️', danger: true, action: () => {
     useUndoCoordinator.getState().checkpoint()
     useFreeNodeStore.getState().deleteFreeNode(id)
   } })
@@ -1170,7 +1235,7 @@ const StoryMenu: React.FC<{
         }}
       >
         <div style={{ padding: '4px 12px 6px', borderBottom: '1px solid rgba(255,255,255,0.07)', marginBottom: 4 }}>
-          <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: 11 }}>{point ? point.title || 'Point' : line?.from ? 'Branch' : 'Storyline'}</span>
+          <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: 11 }}>{at.tether ? 'Tether' : point ? point.title || 'Point' : line?.from ? 'Branch' : 'Storyline'}</span>
         </div>
         {at.grab && <StoryLook id={id} d={d} custom={custom} setCustom={setCustom} />}
         {items.map(item => (
