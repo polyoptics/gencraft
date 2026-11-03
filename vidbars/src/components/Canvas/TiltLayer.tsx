@@ -152,9 +152,8 @@ function useAltTiltGesture() {
         turned = turnPx
         const s = useTiltStore.getState()
         // The pivot is taken where the twist starts, so a plain tip back
-        // still turns about the middle of the screen. Over a deck any turn
-        // is a peek (its cards spread the way the view turns, DeckPeek).
-        if (peek && !pivoted && (d || (peek.target.kind === 'deck' && tilt !== t0))) { pivoted = true; s.setPivot(peek.g) }
+        // still turns about the middle of the screen.
+        if (peek && d && !pivoted) { pivoted = true; s.setPivot(peek.g) }
         s.setView(tilt, s.spin - d * share, peek || swung ? s.yaw + d * (1 - share) : s.yaw)
         if (cTo && !glideStarted && useTiltStore.getState().tilt > 0.5) {
           glideStarted = true
