@@ -330,7 +330,7 @@ const StripLayers: React.FC<{ railId: string; rect: { x: number; y: number; widt
       window.removeEventListener('pointerup', up)
       setDrag(null)
       if (!moved && dir) {
-        const k = 0.7
+        const k = 1.05
         setPopped(p => ({ ...p, [id]: dir === 'l' ? { x: -boxW * k, y: 0 } : dir === 'r' ? { x: boxW * k, y: 0 } : dir === 't' ? { x: 0, y: -boxH * k } : { x: 0, y: boxH * k } }))
         return
       }
