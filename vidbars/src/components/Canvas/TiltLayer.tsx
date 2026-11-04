@@ -19,7 +19,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import {
-  useTiltStore, useModelScaleStore, isTilted, offFlat, standTilt, standRise, turntableShare, unprojectTilt, TILT_SNAP, TILT_FAR, TILT_PERSPECTIVE, DEFAULT_LIGHT,
+  useTiltStore, useModelScaleStore, isTilted, offFlat, standTilt, standRise, unprojectTilt, TILT_SNAP, TILT_FAR, TILT_PERSPECTIVE, DEFAULT_LIGHT,
 } from '../../store/tiltStore'
 import { peekAt, usePeek } from '../../utils/peek'
 import { useCanvasStore, groupBounds, MIN_ZOOM, MAX_ZOOM } from '../../store/canvasStore'
@@ -42,8 +42,8 @@ import { createTiltScene, ART_MAX, type TiltTarget, type TiltFrameState, type Ti
 const DRAG_DEG = 0.25
 /** Sideways px an Alt+drag can wander before it starts turning the plane. */
 const TURN_SLOP = 14
-/** Px an orbit drag moves before it picks its one job for the whole drag:
- *  up/down tips the view, side to side turns the ground (Brian 2026-11-04). */
+/** Px the drag that leaves the flat view (over something peekable) moves
+ *  before it picks the camera for that visit to 3D (Brian 2026-11-04). */
 const LOCK_PX = 8
 /** How far a model turns per px of Alt-drag on it (radians). */
 const SPIN_RAD = 0.6 * Math.PI / 180
@@ -81,6 +81,8 @@ function useAltTiltGesture() {
     let altUsed = false
     let swallowMenu = false
     let swallowClick = false
+    // The camera picked by the drag that left the flat view (see below).
+    let camMode: 'orbit' | 'swing' | null = null
     // Alt is the camera and nothing else (Brian 2026-10-30): with it held,
     // a press anywhere on the canvas, cards and tiles included, only moves
     // the view. Nothing under it selects, drags or changes — 3D Viewers
@@ -169,59 +171,41 @@ function useAltTiltGesture() {
       const cFrom = { x: (W / 2 - pan.x) / zoom, y: (H / 2 - pan.y) / zoom }
       const cTo = sel && { x: (sel.x0 + sel.x1) / 2, y: (sel.y0 + sel.y1) / 2 }
       let glideStarted = false
-      // A plain orbit (not a peek) picks one job from how the drag starts and
-      // keeps it until let go (Brian 2026-11-04): up/down only tips, side to
-      // side only turns. Tipped back, the turn is the pure turntable, never
-      // part swing, so it cannot roll the picture. A view still swung from a
-      // peek swings back as before. Flat, side to side does nothing yet.
-      const swungAtPress = Math.abs(useTiltStore.getState().yaw) > 0.5
-      let lock: 'tilt' | 'turn' | null = null
-      let ox = x0, oy = y0
-      const onOrbit = (ev: PointerEvent) => {
-        if (!lock) {
-          const ax = Math.abs(ev.clientX - x0), ay = Math.abs(ev.clientY - y0)
-          if (Math.max(ax, ay) < LOCK_PX) return
-          lock = ax > ay ? 'turn' : 'tilt'
-          // Counted from here, so nothing jumps when the job is picked.
-          ox = ev.clientX; oy = ev.clientY
-        }
-        const s = useTiltStore.getState()
-        if (lock === 'tilt') {
-          s.setView(t0 - (ev.clientY - oy) * DRAG_DEG, s.spin, s.yaw)
-          if (cTo && !glideStarted && useTiltStore.getState().tilt > 0.5) {
-            glideStarted = true
-            glideTo(cFrom, cTo, W, H)
-          }
-          return
-        }
-        if (flat) return
-        const d = (ev.clientX - ox) * DRAG_DEG
-        ox = ev.clientX
-        if (!d) return
-        if (swungAtPress) {
-          const share = turntableShare(s.tilt)
-          s.setView(s.tilt, s.spin - d * share, s.yaw + d * (1 - share))
-        } else s.setView(s.tilt, s.spin - d, s.yaw)
-      }
+      // The drag that takes the flat canvas into 3D picks the camera for the
+      // whole visit, until the view is flat again (Brian 2026-11-04): started
+      // side to side over something peekable it is the SWING (side to side
+      // swings, never turns the ground); otherwise the ORBIT (side to side
+      // is the turntable, never a swing, so it cannot roll the picture). Up
+      // and down tips in both. No blend between the two.
+      if (flat) camMode = peek ? null : 'orbit'
+      else if (!camMode) camMode = 'orbit'
+      const ox = x0
+      let oy = y0
       // Orbit like Blender/Maya: you grab the near part of the ground —
       // drag up tips it away, drag right swings it right.
       const onMove = (ev: PointerEvent) => {
-        if (!peek) { onOrbit(ev); return }
-        // A little sideways slop while tipping back must not twist the
+        if (!camMode) {
+          const ax = Math.abs(ev.clientX - x0), ay = Math.abs(ev.clientY - y0)
+          if (Math.max(ax, ay) < LOCK_PX) return
+          camMode = ax > ay ? 'swing' : 'orbit'
+          // Tilt counted from here, so nothing jumps when the camera is
+          // picked (side to side already waits out TURN_SLOP from the press).
+          oy = ev.clientY
+        }
+        // A little sideways slop while tipping back must not turn the
         // plane: turning starts only past a few px of real sideways drag.
-        const dx = ev.clientX - x0
+        const dx = ev.clientX - ox
         const turnPx = Math.sign(dx) * Math.max(0, Math.abs(dx) - TURN_SLOP)
-        // Each bit of sideways drag swings the view near flat and turns the
-        // ground once tipped back, by the tilt it is made at.
-        const tilt = t0 - (ev.clientY - y0) * DRAG_DEG
-        const d = (turnPx - turned) * DRAG_DEG, share = turntableShare(tilt)
+        const tilt = t0 - (ev.clientY - oy) * DRAG_DEG
+        const d = (turnPx - turned) * DRAG_DEG
         turned = turnPx
         const s = useTiltStore.getState()
         // The pivot is taken where the twist starts, so a plain tip back
         // still turns about the middle of the screen. Over a deck a tip is
         // a peek too (its cards fan out above or below, DeckPeek).
         if (peek && !pivoted && (d || (peek.target.kind === 'deck' && tilt !== t0))) { pivoted = true; s.setPivot(peek.g) }
-        s.setView(tilt, s.spin - d * share, peek || swung ? s.yaw + d * (1 - share) : s.yaw)
+        if (camMode === 'swing') s.setView(tilt, s.spin, peek || swung ? s.yaw + d : s.yaw)
+        else s.setView(tilt, s.spin - d, s.yaw)
         if (cTo && !glideStarted && useTiltStore.getState().tilt > 0.5) {
           glideStarted = true
           glideTo(cFrom, cTo, W, H)
