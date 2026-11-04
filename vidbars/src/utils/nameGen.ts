@@ -5,7 +5,7 @@
 // runs to many thousands. Brian's own examples are community names, so
 // they, and respellings of them, are never made.
 
-export type NameKind = 'character' | 'faction' | 'location' | 'prop'
+export type NameKind = 'character' | 'faction' | 'family' | 'location' | 'prop'
 
 type Rnd = () => number
 const pick = <T,>(rnd: Rnd, xs: readonly T[]): T => xs[Math.floor(rnd() * xs.length) % xs.length]
@@ -124,6 +124,14 @@ const MAKE: Record<NameKind, (rnd: Rnd) => string> = {
     if (r < 0.5) return `The ${pick(rnd, [...GRIT, ...PLACE_MOD])} ${pick(rnd, CREW)}`
     if (r < 0.75) return `${pick(rnd, ['Sons', 'Daughters', 'Children', 'Keepers', 'Saints', 'Widows', 'Heirs'])} of ${pick(rnd, CREED)}`
     return `${street([pick(rnd, GRIT)], rnd, 0.5)} ${pick(rnd, ['Kult', 'Krew', 'Born', 'Mob', 'Syndikate', 'Kartel', 'Klub', 'Kommune'])}`
+  },
+  family: rnd => {
+    const r = rnd()
+    const kin = funky(pick(rnd, [...SOLO, ...BITS]), rnd)
+    if (r < 0.45) return `The ${kin} family`
+    if (r < 0.7) return `House ${kin}`
+    if (r < 0.85) return `The ${kin} clan`
+    return `${kin} kin`
   },
   location: rnd => {
     const r = rnd()

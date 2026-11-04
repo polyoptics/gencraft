@@ -14,6 +14,7 @@ import { useLinkDragStore } from '../../store/linkDragStore'
 import { edgeColorFromHex, hexToHsl, hslToHex } from '../../utils/colorUtils'
 import { CARD_TYPES, CARD_TYPE_ORDER, cardTypeOf, detailShown, factionMembers, factionsOf, isAbove, newDetailId, typeColor, type CardDetail, type CardType } from '../../utils/cardTypes'
 import { ColorPickerPopup } from '../Bar/ColorPickerPopup'
+import { areSiblings, arePartners, familiesOf, familyTree, isAncestor as isKinAbove, relationsOf, setChildOf, setPartners, setSiblings, type Kin } from '../../utils/family'
 
 /** The back is laid out at a new card's own size and scaled with the card,
  *  so it reads the same at every zoom: nothing reflows as you zoom. */
@@ -219,6 +220,8 @@ type MenuItem = {
   onSwatch?: (e: React.MouseEvent) => void
   separator?: boolean
   hint?: string
+  /** Shown, but can't be picked (it would make no sense here). */
+  disabled?: boolean
 }
 const BackMenu: React.FC<{ at: { x: number; y: number }; title: string; items: MenuItem[]; onClose: () => void }> = ({ at, title, items, onClose }) => {
   useEffect(() => {
@@ -259,12 +262,14 @@ const BackMenu: React.FC<{ at: { x: number; y: number }; title: string; items: M
               <button
                 type="button"
                 data-back-menu-item={it.label}
-                onClick={() => it.onClick()}
-                onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.07)')}
+                disabled={it.disabled}
+                onClick={() => { if (!it.disabled) it.onClick() }}
+                onMouseEnter={e => { if (!it.disabled) e.currentTarget.style.background = 'rgba(255,255,255,0.07)' }}
                 onMouseLeave={e => (e.currentTarget.style.background = 'none')}
                 style={{
                   flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px 6px 10px',
-                  background: 'none', border: 'none', cursor: 'pointer', color: '#e2e8f0', fontSize: 13, textAlign: 'left', borderRadius: 4,
+                  background: 'none', border: 'none', cursor: it.disabled ? 'default' : 'pointer', color: '#e2e8f0', fontSize: 13, textAlign: 'left', borderRadius: 4,
+                  opacity: it.disabled ? 0.35 : 1,
                 }}
               >
                 <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -310,6 +315,9 @@ export const CardBack: React.FC<{
   const me = groups.find(g => g.id === groupId)
   const members = type === 'faction' && me ? factionMembers(groups, me) : []
   const memberOf = factionsOf(groups, groupId)
+  // A family: its tree; any card: the families it is in, and its kin there.
+  const tree = type === 'family' && me ? familyTree(groups, me) : []
+  const kinOf = familiesOf(groups, groupId).map(family => ({ family, rel: relationsOf(groups, family, groupId) }))
   // A card's link "+" being dragged (not this card's own): the details
   // light up as places to let it go.
   const linking = useLinkDragStore(s => s.active && s.source?.kind === 'group' && s.source.id !== groupId)
@@ -321,6 +329,8 @@ export const CardBack: React.FC<{
   // to ('top': onto MEMBERS, it reports to no one). `ok`: it can go there
   // (never under someone below it).
   const [mdrag, setMdrag] = useState<{ id: string; over: string | null; ok: boolean } | null>(null)
+  // A family member let go on another: how are they related? (a, b: ids)
+  const [kinMenu, setKinMenu] = useState<{ a: string; b: string; x: number; y: number } | null>(null)
 
   // Laid out at a new card's size, then scaled to this card.
   const s = Math.max(0.01, Math.min(width / BACK_W, height / BACK_H))
@@ -373,10 +383,12 @@ export const CardBack: React.FC<{
   }
   const typeClick = useClick(where, e => setMenu({ x: e.clientX, y: e.clientY, kind: 'type' }))
 
-  /** Press on a member: drag it onto the one it reports to. Shift on
-   *  letting go: as well as its boss now (or no longer, if it already
-   *  reports to that one). Found by what is under the pointer, which the
-   *  3D view answers for its re-sent flat points too. */
+  /** Press on a member: drag it onto another. In a faction, onto the one
+   *  it reports to (Shift on letting go: as well as its boss now, or no
+   *  longer if it already reports to that one). In a family, onto a
+   *  relative: a menu asks how they are related. Found by what is under
+   *  the pointer, which the 3D view answers for its re-sent flat points
+   *  too. */
   const onMemberDown = (e: React.PointerEvent, id: string) => {
     if (e.button !== 0) return
     e.stopPropagation()
@@ -388,8 +400,8 @@ export const CardBack: React.FC<{
         const back = el.closest('[data-card-back]')
         if (!back) continue
         if (back.getAttribute('data-card-back') !== groupId) return null
-        const row = el.closest<HTMLElement>('[data-faction-member]')
-        if (row) return row.dataset.factionMember ?? null
+        const row = el.closest<HTMLElement>('[data-member-row]')
+        if (row) return row.dataset.memberRow ?? null
         return el.closest('[data-faction-top]') ? 'top' : null
       }
       return null
@@ -397,6 +409,7 @@ export const CardBack: React.FC<{
     const okAt = (over: string | null) => {
       const f = useBoardsStore.getState().groups.find(g => g.id === groupId)
       if (!f || !over || over === id) return false
+      if (f.cardType === 'family') return over !== 'top'
       return over === 'top' || !isAbove(f, id, over)
     }
     const end = () => {
@@ -415,6 +428,16 @@ export const CardBack: React.FC<{
       const over = live ? at(ev) : null
       end()
       if (!over || !okAt(over)) return
+      if (useBoardsStore.getState().groups.find(g => g.id === groupId)?.cardType === 'family') {
+        // Beside the relative let go on, where it shows (measured once the
+        // 3D view has the card tilted again).
+        const fx = ev.clientX, fy = ev.clientY
+        requestAnimationFrame(() => {
+          const r = document.querySelector(`[data-card-back="${groupId}"] [data-member-row="${over}"]`)?.getBoundingClientRect()
+          setKinMenu({ a: id, b: over, x: r ? r.right + 6 : fx, y: r ? r.top : fy })
+        })
+        return
+      }
       useUndoCoordinator.getState().checkpoint()
       useBoardsStore.getState().setReportsTo(groupId, id, over === 'top' ? null : over, over !== 'top' && ev.shiftKey)
     }
@@ -427,8 +450,20 @@ export const CardBack: React.FC<{
   const ink = edgeColorFromHex(color, 0.9)
   // The names' column fits the longest name (within reason), the same for
   // every row, so the values line up.
-  const longest = Math.max(4, ...details.map(d => d.name.length), memberOf.length ? (memberOf.some(m => m.bosses.length) ? 10 : 7) : 0)
-  const cols = `${Math.round(Math.min(w * 0.58, Math.max(w * 0.3, longest * 5.2 + 8)))}px minmax(0, 1fr)`
+  type ReadRow = { key: string; k: string; v: string; dot?: string; attr?: Record<string, string> }
+  const readRows: ReadRow[] = [
+    ...memberOf.flatMap(({ faction, rank, bosses }): ReadRow[] => [
+      { key: faction.id + ':f', k: 'FACTION', v: faction.name || 'Untitled', dot: faction.color, attr: { 'data-member-of': faction.id } },
+      { key: faction.id + ':r', k: 'RANK', v: String(rank) },
+      ...(bosses.length ? [{ key: faction.id + ':b', k: 'REPORTS TO', v: bosses.map(b => b.name || 'Untitled').join(', '), dot: bosses[0].color, attr: { 'data-member-boss': faction.id } }] : []),
+    ]),
+    ...kinOf.flatMap(({ family, rel }): ReadRow[] => [
+      { key: family.id + ':f', k: 'FAMILY', v: family.name || 'Untitled', dot: family.color, attr: { 'data-kin-of': family.id } },
+      ...rel.map(r => ({ key: family.id + ':' + r.label, k: r.label.toUpperCase(), v: r.cards.map(c => c.name || 'Untitled').join(', '), dot: r.cards[0].color, attr: { 'data-kin-rel': r.label } })),
+    ]),
+  ]
+  const longest = Math.max(4, ...details.map(d => d.name.length), ...readRows.map(r => r.k.length))
+  const cols = `${Math.round(Math.min(w * 0.58, Math.max(w * 0.3, longest * 5.6 + 10)))}px minmax(0, 1fr)`
   const typeMenu = (): MenuItem[] => {
     const bs = useBoardsStore.getState()
     const me = bs.groups.find(g => g.id === groupId)
@@ -458,6 +493,23 @@ export const CardBack: React.FC<{
       onClick: () => { useUndoCoordinator.getState().checkpoint(); bs.setGroupOwnColor(groupId, false); setMenu(null) },
     })
     return items
+  }
+  const kinItems = (a: string, b: string): MenuItem[] => {
+    const bs = useBoardsStore.getState()
+    const kin: Kin = bs.groups.find(g => g.id === groupId)?.kin ?? {}
+    const name = (id: string) => bs.groups.find(g => g.id === id)?.name || 'Untitled'
+    const apply = (next: Kin) => { useUndoCoordinator.getState().checkpoint(); bs.setFamilyKin(groupId, next); setKinMenu(null) }
+    const child = (kin.parents?.[a] ?? []).includes(b)
+    const parent = (kin.parents?.[b] ?? []).includes(a)
+    const partners = arePartners(kin, a, b)
+    const sibs = areSiblings(kin, a, b)
+    // Ticked: they are. Pick a ticked one to undo it.
+    return [
+      { label: `Child of ${name(b)}`, checked: child, disabled: !child && isKinAbove(kin, a, b), onClick: () => apply(setChildOf(kin, a, b, !child)) },
+      { label: `Parent of ${name(b)}`, checked: parent, disabled: !parent && isKinAbove(kin, b, a), onClick: () => apply(setChildOf(kin, b, a, !parent)) },
+      { label: `Partner of ${name(b)}`, checked: partners, onClick: () => apply(setPartners(kin, a, b, !partners)) },
+      { label: `Sibling of ${name(b)}`, checked: sibs, disabled: !sibs && (isKinAbove(kin, a, b) || isKinAbove(kin, b, a)), onClick: () => apply(setSiblings(kin, a, b, !sibs)) },
+    ]
   }
   const linkMenu = (id: string): MenuItem[] => {
     const all = useBoardsStore.getState().groups
@@ -534,6 +586,7 @@ export const CardBack: React.FC<{
                 <div
                   key={card.id}
                   data-faction-member={card.id}
+                  data-member-row={card.id}
                   data-member-depth={depth}
                   title="Drag onto the member it reports to (Shift: as well as its boss now). Onto MEMBERS: the top."
                   onPointerDown={e => onMemberDown(e, card.id)}
@@ -574,6 +627,73 @@ export const CardBack: React.FC<{
                     >×</button>
                   )}
                 </div>
+                )
+              })}
+              <div style={{ fontSize: 7, fontWeight: 800, letterSpacing: 1, color: ink, opacity: 0.6, padding: '4px 2px 0' }}>DETAILS</div>
+            </>
+          )}
+          {/* A family: its tree, each under their parents, a partner from
+              outside just after the one they are with. */}
+          {type === 'family' && me && (
+            <>
+              <div style={{ fontSize: 7, fontWeight: 800, letterSpacing: 1, color: ink, opacity: 0.6, padding: '1px 2px 0' }}>MEMBERS</div>
+              {tree.length === 0 && (
+                <div style={{ fontSize: 8, opacity: 0.45, padding: '0 2px 2px' }}>Drag a card’s + here to add it.</div>
+              )}
+              {tree.map(row => {
+                const elbow = row.depth > 0 && !row.partnerOf && <span style={{ width: 4, height: 6, marginTop: -5, flexShrink: 0, borderLeft: '1px solid rgba(255,255,255,0.35)', borderBottom: '1px solid rgba(255,255,255,0.35)' }} />
+                if (!row.card) return (
+                  <div key={row.id} data-family-unknown style={{ display: 'flex', alignItems: 'center', gap: 3, marginLeft: row.depth * 7, minHeight: 13, fontSize: 8.5, fontStyle: 'italic', opacity: 0.5, borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+                    {elbow}Unknown parent
+                  </div>
+                )
+                const card = row.card
+                const target = mdrag?.over === card.id && mdrag.ok
+                return (
+                  <div
+                    key={row.id}
+                    data-family-member={card.id}
+                    data-member-row={card.id}
+                    data-member-depth={row.depth}
+                    title="Drag onto another member to say how they are related"
+                    onPointerDown={e => onMemberDown(e, card.id)}
+                    onPointerEnter={() => setRowHover('m:' + card.id)}
+                    onPointerLeave={() => setRowHover(r => r === 'm:' + card.id ? null : r)}
+                    style={{
+                      position: 'relative', display: 'flex', alignItems: 'center', gap: 3, marginLeft: row.depth * 7,
+                      borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: 1, minHeight: 13, borderRadius: 2,
+                      cursor: mdrag ? (mdrag.ok ? 'grabbing' : 'no-drop') : 'grab',
+                      opacity: mdrag?.id === card.id ? 0.45 : 1,
+                      outline: target ? '1px dashed rgba(255,255,255,0.8)' : undefined,
+                      background: target ? 'rgba(255,255,255,0.1)' : undefined,
+                    }}
+                  >
+                    {elbow}
+                    {/* With the one above: their partner. */}
+                    {row.partnerOf && <span style={{ fontSize: 8.5, fontWeight: 700, opacity: 0.6, flexShrink: 0 }}>&amp;</span>}
+                    <span style={{ width: 6, height: 6, borderRadius: 2, background: card.color, flexShrink: 0, border: '1px solid rgba(255,255,255,0.5)' }} />
+                    <span style={{ fontSize: 9.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: '0 1 auto' }}>{card.name || 'Untitled'}</span>
+                    {/* Partners shown at their own place in the tree. */}
+                    {row.partners.length > 0 && (
+                      <span data-member-also title={'Partner of ' + row.partners.map(b => b.name || 'Untitled').join(', ')} style={{ fontSize: 7.5, opacity: 0.6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: '0 1000 auto' }}>
+                        &amp; {row.partners.map(b => b.name || 'Untitled').join(', ')}
+                      </span>
+                    )}
+                    {rowHover === 'm:' + card.id && !linking && !mdrag && (
+                      <button
+                        type="button"
+                        data-faction-member-remove
+                        title="Take out of this family"
+                        onPointerDown={stopPress}
+                        onClick={e => { e.stopPropagation(); useUndoCoordinator.getState().checkpoint(); useBoardsStore.getState().removeMember(groupId, card.id) }}
+                        style={{
+                          position: 'absolute', right: 0, top: 1, width: 11, height: 11, padding: 0, lineHeight: '9px',
+                          fontSize: 9, borderRadius: 3, border: 'none', cursor: 'pointer',
+                          background: 'rgba(0,0,0,0.6)', color: 'rgba(255,255,255,0.85)',
+                        }}
+                      >×</button>
+                    )}
+                  </div>
                 )
               })}
               <div style={{ fontSize: 7, fontWeight: 800, letterSpacing: 1, color: ink, opacity: 0.6, padding: '4px 2px 0' }}>DETAILS</div>
@@ -635,25 +755,22 @@ export const CardBack: React.FC<{
               </div>
             )
           })}
-          {details.length === 0 && type !== 'faction' && memberOf.length === 0 && (
+          {details.length === 0 && type !== 'faction' && type !== 'family' && readRows.length === 0 && (
             <div style={{ fontSize: 8.5, opacity: 0.45, padding: '2px 2px 0' }}>No details yet.</div>
           )}
-          {/* The factions it is in, read from them: name and rank. */}
-          {memberOf.flatMap(({ faction, rank, bosses }) => [
-            { k: 'FACTION', v: faction.name || 'Untitled', dot: faction.color, attr: { 'data-member-of': faction.id } },
-            { k: 'RANK', v: String(rank) },
-            ...(bosses.length ? [{ k: 'REPORTS TO', v: bosses.map(b => b.name || 'Untitled').join(', '), dot: bosses[0].color, attr: { 'data-member-boss': faction.id } }] : []),
-          ].map(({ k, v, dot, attr }) => (
-            <div key={faction.id + k} {...attr} style={{
+          {/* The factions it is in, read from them: name, rank and boss;
+              the families: name, and its kin there. */}
+          {readRows.map(({ key, k, v, dot, attr }) => (
+            <div key={key} {...attr} style={{
               display: 'grid', gridTemplateColumns: cols, alignItems: 'baseline', gap: 3,
               borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: 1,
             }}>
-              <div style={{ fontSize: 8, fontWeight: 700, color: ink, opacity: 0.85, letterSpacing: 0.2, padding: '0 3px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{k}</div>
-              <div style={{ fontSize: 10, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', padding: '0 3px' }}>
+              <div title={k} style={{ fontSize: 8, fontWeight: 700, color: ink, opacity: 0.85, letterSpacing: 0.2, padding: '0 3px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{k}</div>
+              <div title={v} style={{ fontSize: 10, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', padding: '0 3px' }}>
                 {dot ? <LinkShown text={v} color={dot} whole /> : v}
               </div>
             </div>
-          )))}
+          ))}
           <button
             type="button"
             data-card-detail-add
@@ -675,6 +792,7 @@ export const CardBack: React.FC<{
       </div>
       {menu?.kind === 'type' && <BackMenu at={menu} title="Card type" items={typeMenu()} onClose={() => setMenu(null)} />}
       {menu?.kind === 'link' && <BackMenu at={menu} title="This detail shows" items={linkMenu(menu.id)} onClose={() => setMenu(null)} />}
+      {kinMenu && <BackMenu at={kinMenu} title={`${groups.find(g => g.id === kinMenu.a)?.name || 'Untitled'} is…`} items={kinItems(kinMenu.a, kinMenu.b)} onClose={() => setKinMenu(null)} />}
       {picker && ReactDOM.createPortal(
         <ColorPickerPopup
           color={typeColor(picker.type, useBoardsStore.getState().typeColors)}

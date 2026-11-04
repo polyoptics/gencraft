@@ -28,7 +28,7 @@ const BUILD: Record<Body, { age: [number, number]; height: [number, number]; per
 
 /** The kind of name a card of this type gets (none: it keeps its own). */
 export function nameKindOf(type: CardType): NameKind | null {
-  return type === 'character' || type === 'faction' || type === 'location' || type === 'prop' ? type : null
+  return type === 'character' || type === 'faction' || type === 'family' || type === 'location' || type === 'prop' ? type : null
 }
 
 /** A card still named what it came with: nothing, "Untitled", or its
@@ -73,6 +73,8 @@ const KIND: { kind: string; ammo?: string; cap: (r: Rnd) => string }[] = [
   { kind: 'Grapple gun', ammo: 'Cable', cap: r => `${int(r, 15, 60)} m` },
   { kind: 'Scout drone', ammo: 'Battery cells', cap: r => `${int(r, 10, 45)} min` },
 ]
+const MOTTO = ['Salt keeps', 'Lights on, doors shut', 'We mend', 'Nobody walks alone', 'Last to leave', 'Waste nothing',
+  'Blood and batteries', 'The well remembers', 'Keep the fire low', 'Owe no one', 'Dig deep, stand tall', 'Never the last can']
 const MOOD = ['Grim', 'Tense', 'Hopeful', 'Dusty', 'Wired', 'Hollow', 'Feral', 'Dreamy', 'Hazy', 'Driving', 'Mournful', 'Restless', 'Electric', 'Quiet']
 const TIME = ['Dawn', 'Morning', 'Noon', 'Afternoon', 'Dusk', 'Night', 'Small hours', 'Blackout', 'Dust storm']
 const NOTE = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B']
@@ -119,6 +121,11 @@ export function fillCard(card: ProjectGroup, groups: ProjectGroup[], taken: Set<
     link('rivals', rival)
     const friends = rivals.filter(g => g !== rival)
     if (friends.length) link('allies', pick(rnd, friends))
+  } else if (type === 'family') {
+    const places = others('location')
+    if (places.length) link('home', pick(rnd, places)); else put('home', placeName(rnd))
+    put('origin', placeName(rnd))
+    put('motto', pick(rnd, MOTTO))
   } else if (type === 'location') {
     const [building, floors] = pick(rnd, BUILDING)
     put('place', placeName(rnd))

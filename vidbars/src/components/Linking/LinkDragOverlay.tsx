@@ -98,12 +98,13 @@ export const LinkDragOverlay: React.FC = () => {
         // A onto B means "B references A" — B gets a prominent primary chip
         // pointing at A, A gets a small back-ref chip pointing at B.
         useBoardsStore.getState().linkRefs(target, source)
-        // Onto a FACTION, a card that is one of several selected brings
-        // them all in as members (CardBack): fifty characters sort into
-        // factions a selection at a time, not one link at a time.
+        // Onto a FACTION or a FAMILY, a card that is one of several
+        // selected brings them all in as members (CardBack): fifty
+        // characters sort into factions a selection at a time, not one
+        // link at a time.
         const bs = useBoardsStore.getState()
         const t = target
-        if (t.kind === 'group' && source.kind === 'group' && bs.groups.find(g => g.id === t.id)?.cardType === 'faction'
+        if (t.kind === 'group' && source.kind === 'group' && ['faction', 'family'].includes(bs.groups.find(g => g.id === t.id)?.cardType ?? '')
           && bs.selectedGroupIds.includes(source.id)) {
           for (const id of bs.selectedGroupIds) if (id !== t.id) bs.linkGroups(t.id, id)
         }

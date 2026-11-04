@@ -9,6 +9,7 @@ import { TEMPLATES } from '../data/templates'
 import { CARD_TYPES, cardTypeOf, isAbove, newDetailId, typeColor, withTypeDetails, type CardType } from '../utils/cardTypes'
 import { fillCard, nameKindOf } from '../utils/fillDetails'
 import { makeName, nameKey } from '../utils/nameGen'
+import { removeFromKin, type Kin } from '../utils/family'
 import { newSceneLayout, putCards, type SceneDiv } from '../utils/sceneCard'
 import { getBoardAbsolutePos, computeGroupLayout, yToRow } from '../utils/nleRows'
 import {
@@ -157,6 +158,9 @@ export interface ProjectGroup {
   reportsTo?: Record<string, string[]>
   /** A SCENE card's face: its divisions (utils/sceneCard). */
   scene?: SceneDiv
+  /** A FAMILY's ties: who is whose parent and partner (utils/family). Its
+   *  members are the cards it links to (linkedGroupIds). */
+  kin?: Kin
 }
 
 /** Find which group a board belongs to */
@@ -353,13 +357,15 @@ interface BoardsState {
    *  top), or with `also`, that one added to its bosses (taken off if it
    *  is one already). Never someone below it. */
   setReportsTo: (factionId: string, memberId: string, bossId: string | null, also?: boolean) => void
+  /** A family's ties, all at once (utils/family makes them). */
+  setFamilyKin: (familyId: string, kin: Kin) => void
   /** The cards' empty details made up to fit their types, and a new name
    *  for each still named what it came with (utils/fillDetails). */
   fillInDetails: (groupIds: string[]) => void
   /** A new name for each card whose type names its cards. */
   giveNewNames: (groupIds: string[]) => void
-  /** Out of the faction: unlinked; those who reported only to it report
-   *  to its bosses instead. */
+  /** Out of the faction (or family): unlinked; those who reported only to
+   *  it report to its bosses instead (a family: utils/family removeFromKin). */
   removeMember: (factionId: string, memberId: string) => void
   setGroupDetails: (groupId: string, details: import('../utils/cardTypes').CardDetail[]) => void
   setGroupCardHeroImage: (groupId: string, url: string | null) => void
@@ -1093,6 +1099,10 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
     }) }))
   },
 
+  setFamilyKin(familyId, kin) {
+    set(s => ({ groups: s.groups.map(g => g.id === familyId ? { ...g, kin } : g) }))
+  },
+
   fillInDetails(groupIds) {
     const st = get()
     const taken = new Set([...st.usedNames, ...st.groups.map(g => nameKey(g.name ?? '')).filter(Boolean)])
@@ -1131,6 +1141,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
   removeMember(factionId, memberId) {
     get().unlinkGroups(factionId, memberId)
     set(s => ({ groups: s.groups.map(g => {
+      if (g.id === factionId && g.kin) return { ...g, kin: removeFromKin(g.kin, memberId) }
       if (g.id !== factionId || !g.reportsTo) return g
       const { [memberId]: theirs = [], ...rest } = g.reportsTo
       const tree: Record<string, string[]> = {}
