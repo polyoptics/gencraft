@@ -172,8 +172,10 @@ export function layoutCutCard(groupId: string, order?: string[]): void {
       x += w + gap
     })
     for (const bid of empty) delete boards[bid]
+    // A Rough Cut always has its one shape: as wide as its row, CUT_ASPECT
+    // tall (this also mends a frame whose width was lost).
     const groups = st.groups.map(gr => gr.id === groupId
-      ? { ...gr, boardIds: [...keep, ...gr.boardIds.filter(b => !keep.includes(b) && !empty.includes(b))] }
+      ? { ...gr, cardWidthOverride: frameW, cardHeightOverride: frameW * CUT_ASPECT, boardIds: [...keep, ...gr.boardIds.filter(b => !keep.includes(b) && !empty.includes(b))] }
       : gr)
     return { boards, groups, boardOrder: empty.length ? st.boardOrder.filter(id => !empty.includes(id)) : st.boardOrder }
   })

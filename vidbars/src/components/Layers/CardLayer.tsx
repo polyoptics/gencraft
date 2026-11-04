@@ -37,6 +37,7 @@ import { useFxStore } from '../../store/fxStore'
 import { cardStripId } from '../../utils/fx/cardStrips'
 import { cardHitAt } from '../../utils/cardContent'
 import { FaceCut } from '../RoughCut/FaceCut'
+import { CUT_ASPECT } from '../../utils/cutCard'
 import { cardFaceAudio, cardFaceMedia, deckFaceSteps, faceSteps, layoutCardGrid, mergeCardsInto, setFaceThumbnail, stepDeckFace, stepFace } from '../../utils/cardGrid'
 import { drawnRect, effectChain, snapEffectCard } from '../../utils/effectCards'
 import { followFaceInViewer, showDockedCardInViewer } from '../../hooks/useDockedContent'
@@ -869,7 +870,7 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
         // A Rough Cut is a picture of its timeline: it scales whole, keeping
         // its shape, whichever edge is pulled (its clips are relaid on release).
         if (st.cut) {
-          const aspect = st.h / Math.max(1, st.w)
+          const aspect = CUT_ASPECT
           const byH = (st.h + dy) / aspect
           const w = edge === 'right' ? st.w + dx : edge === 'bottom' ? byH : Math.max(st.w + dx, byH)
           const cw = Math.max(st.w * 0.25, Math.min(st.w * 6, w))

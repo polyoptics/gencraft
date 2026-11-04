@@ -6,7 +6,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useBoardsStore, type ProjectGroup } from '../../store/boardsStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
-import { clipLen, cutClips, cutTotal } from '../../utils/cutCard'
+import { CUT_ASPECT, clipLen, cutClips, cutTotal, layoutCutCard } from '../../utils/cutCard'
 import { useCutPlay } from '../../utils/cutMedia'
 import { CutMonitor } from './CutMonitor'
 
@@ -29,6 +29,10 @@ export const FaceCut: React.FC<{ group: ProjectGroup; scale: number }> = ({ grou
     setFaceW(el.getBoundingClientRect().width)
     return () => ro.disconnect()
   }, [])
+  // A frame out of shape (a width lost to an older resize): mend it.
+  useEffect(() => {
+    if (group.cardWidthOverride == null || Math.abs((group.cardHeightOverride ?? 0) - group.cardWidthOverride * CUT_ASPECT) > 1) layoutCutCard(group.id)
+  }, [group.id, group.cardWidthOverride, group.cardHeightOverride])
   const k = faceW ? Math.max(1, Math.min(2.4, faceW / 300)) : Math.max(1, scale)
 
   const play = (on: boolean) => {

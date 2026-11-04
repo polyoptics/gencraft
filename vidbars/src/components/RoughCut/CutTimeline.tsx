@@ -14,7 +14,7 @@ import { useBoardsStore, type ProjectGroup } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import {
-  addNote, clipAtTime, clipLen, cutClips, cutTotal, fmtTime, insertCards, MIN_CLIP, pullOutDeck, removeClip, removeNote,
+  addNote, clipAtTime, CUT_ASPECT, cutCardSize, layoutCutCard, clipLen, cutClips, cutTotal, fmtTime, insertCards, MIN_CLIP, pullOutDeck, removeClip, removeNote,
   reorderClips, setClipRange, setCut, setNoteText, splitClip, type CutAudio, type CutClip,
 } from '../../utils/cutCard'
 import { extractBlockToCard, cardFaceSize, layoutCardGrid } from '../../utils/cardGrid'
@@ -55,8 +55,12 @@ export const CutTimeline: React.FC<{ group: ProjectGroup }> = ({ group }) => {
   const clips = live ?? stored
   const audio = group.cut?.audio ?? []
   const total = cutTotal(clips)
-  const W = group.cardWidthOverride ?? 800
-  const H = group.cardHeightOverride ?? W * 0.62
+  const W = group.cardWidthOverride ?? cutCardSize().w
+  const H = W * CUT_ASPECT
+  // A frame out of shape (a width lost to an older resize): mend it.
+  useEffect(() => {
+    if (group.cardWidthOverride == null || Math.abs((group.cardHeightOverride ?? 0) - group.cardWidthOverride * CUT_ASPECT) > 1) layoutCutCard(group.id)
+  }, [group.id, group.cardWidthOverride, group.cardHeightOverride])
   const DH = DW * (H / W)
   const k = W / DW
 
@@ -221,7 +225,7 @@ export const CutTimeline: React.FC<{ group: ProjectGroup }> = ({ group }) => {
     e.preventDefault()
     useUndoCoordinator.getState().checkpoint()
     const x0 = e.clientX, y0 = e.clientY
-    const w0 = W, aspect = H / W
+    const w0 = W, aspect = CUT_ASPECT
     const move = (m: PointerEvent) => {
       const z = useCanvasStore.getState().zoom
       // Along the diagonal: whichever way the pointer went further.
