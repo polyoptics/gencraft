@@ -163,9 +163,12 @@ export interface TiltFrameState {
   fade: number
 }
 
-/** How long a model turned by hand takes to drift back (ms). */
-const DRIFT_MS = 5000
-const NO_TURN = new THREE.Quaternion()
+/** How long a model turned by hand takes to roll back (ms). */
+const DRIFT_MS = 3500
+/** Its rock into place: radians per (radian per second) it was turning
+ *  at when let go, and at most ROCK_MAX — kept subtle. */
+const ROCK_PER_SPEED = 0.02
+const ROCK_MAX = 3 * Math.PI / 180
 
 /** A person, in metres, for scale. */
 export const PERSON_H = 1.75
@@ -181,8 +184,11 @@ interface Standing {
   turn: THREE.Group        // turntable about that normal
   /** The user's own turn of the model (Alt-drag on it), about its middle. */
   orient: THREE.Group
-  /** Let go after a turn: it drifts back from this over DRIFT_MS. */
-  back: { q: THREE.Quaternion; at: number } | null
+  /** Let go after a turn: it drifts back about `axis` from `angle` to
+   *  none over DRIFT_MS, rocking past by up to `rock` (radians). */
+  back: { axis: THREE.Vector3; angle: number; rock: number; at: number } | null
+  /** The last moments of a turn (when, how far, radians): its speed. */
+  spun: { t: number; a: number }[]
   inst: THREE.Object3D | null
   size: THREE.Vector3
   /** Model units per metre: set by the user, or guessed — 1 for glTF,
@@ -418,7 +424,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     wall.visible = false
     groundDeco.add(wall)
     const s: Standing = {
-      url, stand, turn, orient, back: null, inst: null, size: new THREE.Vector3(), unit: 1, unitSet: false, triangles: 0,
+      url, stand, turn, orient, back: null, spun: [], inst: null, size: new THREE.Vector3(), unit: 1, unitSet: false, triangles: 0,
       figure, wall, wallText: '', look: null, phase: Math.random() * 6.28, dead: false, seen: frameNo, shownAt: 0,
       mats: [], alpha: -1,
     }
@@ -943,11 +949,15 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       s.stand.visible = !!s.inst && ease > 0
       s.turn.rotation.y = st.turn ? now / 1000 * 0.6 + s.phase : 0
       if (s.back) {
-        // Let go after an Alt-drag: it drifts back to how it stood, slowly
-        // (Brian 2026-11-04), easing in and out.
-        const u = Math.min(1, (now - s.back.at) / DRIFT_MS), e = u * u * (3 - 2 * u)
-        s.orient.quaternion.slerpQuaternions(s.back.q, NO_TURN, e)
-        if (u >= 1) s.back = null
+        // Let go after an Alt-drag: it rolls back to how it stood (Brian
+        // 2026-11-04), easing in and out, and rocks a little past and back
+        // into place as it lands, more the faster it was turning.
+        const u = Math.min(1, (now - s.back.at) / DRIFT_MS)
+        const x = Math.min(1, u / 0.7), e = x * x * (3 - 2 * x)
+        const v = (u - 0.6) / 0.4
+        const r = v > 0 ? Math.sin(3 * Math.PI * v) * (1 - v) ** 2 : 0
+        s.orient.quaternion.setFromAxisAngle(s.back.axis, s.back.angle * (1 - e) - s.back.rock * r)
+        if (u >= 1) { s.back = null; s.orient.quaternion.identity() }
       }
       // glTF is in metres; something over 30 units tall is far likelier a
       // centimetre file (FBX's habit) than a 30 m model — unless the user
@@ -1144,6 +1154,8 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     const s = standing.get(key)
     if (!s || !s.inst) return false
     s.back = null
+    const t = performance.now()
+    s.spun = s.spun.filter(x => t - x.t < 150)
     const len = Math.hypot(dx, dy)
     if (len) {
       // In the camera's space: right is +x, up +y, toward the eye +z.
@@ -1154,13 +1166,26 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       spinAxis.applyQuaternion(parentQ).normalize()
       spinQ.setFromAxisAngle(spinAxis, len * rad)
       s.orient.quaternion.premultiply(spinQ).normalize()
+      s.spun.push({ t, a: len * rad })
     }
     return true
   }
   /** Let go of a model being turned: it starts drifting back. */
   function letGo(key: string) {
     const s = standing.get(key)
-    if (s) s.back = { q: s.orient.quaternion.clone(), at: performance.now() }
+    if (!s) return
+    const now = performance.now()
+    // How fast it was turning as it was let go (rad/s), over the last 120 ms.
+    const speed = s.spun.filter(x => now - x.t < 120).reduce((a, x) => a + x.a, 0) / 0.12
+    s.spun = []
+    const q = s.orient.quaternion.clone()
+    if (q.w < 0) q.set(-q.x, -q.y, -q.z, -q.w)
+    const angle = 2 * Math.acos(Math.min(1, q.w)), sn = Math.sin(angle / 2)
+    if (sn < 1e-6) { s.orient.quaternion.identity(); return }
+    s.back = {
+      axis: new THREE.Vector3(q.x / sn, q.y / sn, q.z / sn), angle, at: now,
+      rock: Math.min(ROCK_MAX, speed * ROCK_PER_SPEED, angle * 0.3),
+    }
   }
 
   /** A hit on a slab pick() sees through. */

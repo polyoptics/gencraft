@@ -42,8 +42,8 @@ import { createTiltScene, ART_MAX, type TiltTarget, type TiltFrameState, type Ti
 const DRAG_DEG = 0.25
 /** Sideways px an Alt+drag can wander before it starts turning the plane. */
 const TURN_SLOP = 14
-/** Px the drag that leaves the flat view (over something peekable) moves
- *  before it picks the camera for that visit to 3D (Brian 2026-11-04). */
+/** Px the drag that leaves the flat view moves before it picks the camera
+ *  for that visit (see pickCamera). */
 const LOCK_PX = 8
 /** How far a model turns per px of Alt-drag on it (radians). */
 const SPIN_RAD = 0.6 * Math.PI / 180
@@ -76,13 +76,40 @@ function glideTo(from: { x: number; y: number }, to: { x: number; y: number }, W
 
 /** Alt+left-drag anywhere on the canvas host tilts it — over bare canvas
  *  or a card, a tile or a 3D Viewer, flat or already tilted. */
+/** The two cameras (Brian's rules, 2026-11-04). The Alt-drag that leaves
+ *  the flat view picks one, and it holds until the view is flat again:
+ *  - '3d': started up or down. Up/down tips the view (all the way), side
+ *    to side turns the ground like a turntable. Never swings, never peeks.
+ *  - 'peek': started side to side over a deck or Viewer (utils/peek).
+ *    Side to side swings round it, up/down tips a little (PEEK_TIP) to see
+ *    over what is in the way on a crowded canvas, but never into the full
+ *    tilted view, and the ground never turns. Alt on another deck or Viewer
+ *    hops to it at the same turn.
+ *  Started side to side over empty canvas: nothing, for now.
+ *  Either way, let go near straight on and it settles flat (TILT_SNAP).
+ *  Every Alt-drag goes through pickCamera and moveCamera, nothing else. */
+type CamMode = '3d' | 'peek'
+/** How far a peek can tip up or down, degrees. */
+const PEEK_TIP = 20
+function pickCamera(dx: number, dy: number, overPeek: boolean): CamMode | 'none' | null {
+  if (Math.max(Math.abs(dx), Math.abs(dy)) < LOCK_PX) return null
+  if (Math.abs(dy) >= Math.abs(dx)) return '3d'
+  return overPeek ? 'peek' : 'none'
+}
+/** Move the camera: `tilt` where the drag puts it, `d` degrees of turn. */
+function moveCamera(mode: CamMode, tilt: number, d: number) {
+  const s = useTiltStore.getState()
+  if (mode === 'peek') s.setView(Math.max(-PEEK_TIP, Math.min(PEEK_TIP, tilt)), s.spin, s.yaw + d)
+  else s.setView(tilt, s.spin - d, s.yaw)
+}
+
 function useAltTiltGesture() {
   useEffect(() => {
     let altUsed = false
     let swallowMenu = false
     let swallowClick = false
     // The camera picked by the drag that left the flat view (see below).
-    let camMode: 'orbit' | 'swing' | null = null
+    let camMode: CamMode | null = null
     // Alt is the camera and nothing else (Brian 2026-10-30): with it held,
     // a press anywhere on the canvas, cards and tiles included, only moves
     // the view. Nothing under it selects, drags or changes — 3D Viewers
@@ -148,20 +175,20 @@ function useAltTiltGesture() {
       }
       const { tilt: t0 } = useTiltStore.getState()
       let turned = 0
-      // From the flat view a sideways swing is a peek (utils/peek): it only
-      // starts over something that can be peeked into, and that is what it
-      // turns about. A tilt that did not come from a peek never starts one
-      // (Brian 2026-11-04): Alt-drag there is the plain orbit. While peeking,
-      // a press on another deck or Viewer peeks into it straight away, at
-      // the same turn. Once swung, the swing can always be brought back,
-      // from anywhere.
       const flat = !isTilted(useTiltStore.getState())
-      const peek = flat || usePeek.getState().target ? peekAt(target, host) : null
-      if (peek || flat) usePeek.setState({ target: peek?.target ?? null })
-      const swung = !flat
-      if (!peek && !swung) useTiltStore.getState().setPivot(null)
+      // Which camera this drag moves: see pickCamera / moveCamera, the one
+      // place the rules live. A press while flat starts a new choice.
+      if (flat) { camMode = null; useTiltStore.getState().setPivot(null) }
+      else if (!camMode) camMode = Math.abs(useTiltStore.getState().yaw) > 0.5 ? 'peek' : '3d'
+      let mode: CamMode | 'none' | null = camMode
+      // What under the press can be peeked into: from flat, a peek starts
+      // there if the drag starts side to side; while peeking, pressing on
+      // another deck or Viewer hops to it at the same turn. Never in 3D.
+      const peek = mode === '3d' ? null : peekAt(target, host)
+      if (mode === 'peek' && peek) usePeek.setState({ target: peek.target })
       let pivoted = false
       const x0 = e.clientX, y0 = e.clientY
+      let oy = y0
       // Tipping back from flat with something selected makes it the pivot:
       // the view glides over to centre it while the plane tilts, wherever
       // on screen it was.
@@ -171,42 +198,31 @@ function useAltTiltGesture() {
       const cFrom = { x: (W / 2 - pan.x) / zoom, y: (H / 2 - pan.y) / zoom }
       const cTo = sel && { x: (sel.x0 + sel.x1) / 2, y: (sel.y0 + sel.y1) / 2 }
       let glideStarted = false
-      // The drag that takes the flat canvas into 3D picks the camera for the
-      // whole visit, until the view is flat again (Brian 2026-11-04): started
-      // side to side over something peekable it is the SWING (side to side
-      // swings, never turns the ground); otherwise the ORBIT (side to side
-      // is the turntable, never a swing, so it cannot roll the picture). Up
-      // and down tips in both. No blend between the two.
-      if (flat) camMode = peek ? null : 'orbit'
-      else if (!camMode) camMode = 'orbit'
-      const ox = x0
-      let oy = y0
       // Orbit like Blender/Maya: you grab the near part of the ground —
       // drag up tips it away, drag right swings it right.
       const onMove = (ev: PointerEvent) => {
-        if (!camMode) {
-          const ax = Math.abs(ev.clientX - x0), ay = Math.abs(ev.clientY - y0)
-          if (Math.max(ax, ay) < LOCK_PX) return
-          camMode = ax > ay ? 'swing' : 'orbit'
+        if (mode === 'none') return
+        if (mode === null) {
+          mode = pickCamera(ev.clientX - x0, ev.clientY - y0, !!peek)
+          if (mode === null || mode === 'none') return
+          camMode = mode
+          if (mode === 'peek' && peek) usePeek.setState({ target: peek.target })
           // Tilt counted from here, so nothing jumps when the camera is
           // picked (side to side already waits out TURN_SLOP from the press).
           oy = ev.clientY
         }
-        // A little sideways slop while tipping back must not turn the
-        // plane: turning starts only past a few px of real sideways drag.
-        const dx = ev.clientX - ox
+        // A little sideways slop while tipping must not turn the view:
+        // turning starts only past a few px of real sideways drag.
+        const dx = ev.clientX - x0
         const turnPx = Math.sign(dx) * Math.max(0, Math.abs(dx) - TURN_SLOP)
         const tilt = t0 - (ev.clientY - oy) * DRAG_DEG
         const d = (turnPx - turned) * DRAG_DEG
         turned = turnPx
-        const s = useTiltStore.getState()
-        // The pivot is taken where the twist starts, so a plain tip back
-        // still turns about the middle of the screen. Over a deck a tip is
-        // a peek too (its cards fan out above or below, DeckPeek).
-        if (peek && !pivoted && (d || (peek.target.kind === 'deck' && tilt !== t0))) { pivoted = true; s.setPivot(peek.g) }
-        if (camMode === 'swing') s.setView(tilt, s.spin, peek || swung ? s.yaw + d : s.yaw)
-        else s.setView(tilt, s.spin - d, s.yaw)
-        if (cTo && !glideStarted && useTiltStore.getState().tilt > 0.5) {
+        // A peek turns about the deck or Viewer it is into, taken when the
+        // view first moves, so it stays put on screen.
+        if (mode === 'peek' && peek && !pivoted && (d || tilt !== t0)) { pivoted = true; useTiltStore.getState().setPivot(peek.g) }
+        moveCamera(mode, tilt, d)
+        if (mode === '3d' && cTo && !glideStarted && useTiltStore.getState().tilt > 0.5) {
           glideStarted = true
           glideTo(cFrom, cTo, W, H)
         }
