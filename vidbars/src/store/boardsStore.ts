@@ -148,6 +148,9 @@ export interface ProjectGroup {
   /** Coloured by hand: keeps its colour when its type, or its type's
    *  colour, changes. Otherwise it wears its type's colour. */
   ownColor?: boolean
+  /** A FACTION's ranks: member card id → its rank (1 = the top). Its
+   *  members are the cards it links to (linkedGroupIds). */
+  ranks?: Record<string, number>
 }
 
 /** Find which group a board belongs to */
@@ -334,6 +337,10 @@ interface BoardsState {
    *  detail now shows the card dropped ('new': a new row for it, named
    *  after its type). */
   linkGroupDetail: (groupId: string, detailId: string | 'new', cardId: string) => void
+  /** A member's rank in a faction (null: unranked). */
+  setMemberRank: (factionId: string, memberId: string, rank: number | null) => void
+  /** Out of the faction: unlinked, and its rank forgotten. */
+  removeMember: (factionId: string, memberId: string) => void
   setGroupDetails: (groupId: string, details: import('../utils/cardTypes').CardDetail[]) => void
   setGroupCardHeroImage: (groupId: string, url: string | null) => void
   /** Flip cards between screen-pinned and canvas-placed. Takes an ARRAY so a
@@ -1035,6 +1042,19 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
       }
       return { ...g, details: details.map(d => d.id === detailId ? { ...d, link: { card: cardId } } : d) }
     }) }))
+  },
+
+  setMemberRank(factionId, memberId, rank) {
+    set(s => ({ groups: s.groups.map(g => {
+      if (g.id !== factionId) return g
+      const { [memberId]: _old, ...rest } = g.ranks ?? {}
+      return { ...g, ranks: rank == null ? rest : { ...rest, [memberId]: rank } }
+    }) }))
+  },
+
+  removeMember(factionId, memberId) {
+    get().unlinkGroups(factionId, memberId)
+    get().setMemberRank(factionId, memberId, null)
   },
 
   setGroupDetails(groupId, details) {

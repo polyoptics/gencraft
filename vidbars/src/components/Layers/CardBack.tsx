@@ -12,7 +12,7 @@ import { useBoardsStore } from '../../store/boardsStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { useLinkDragStore } from '../../store/linkDragStore'
 import { edgeColorFromHex, hexToHsl, hslToHex } from '../../utils/colorUtils'
-import { CARD_TYPES, CARD_TYPE_ORDER, cardTypeOf, detailShown, newDetailId, typeColor, type CardDetail, type CardType } from '../../utils/cardTypes'
+import { CARD_TYPES, CARD_TYPE_ORDER, cardTypeOf, detailShown, factionMembers, factionsOf, newDetailId, typeColor, type CardDetail, type CardType } from '../../utils/cardTypes'
 import { ColorPickerPopup } from '../Bar/ColorPickerPopup'
 
 /** The back is laid out at a new card's own size and scaled with the card,
@@ -289,6 +289,53 @@ const LinkShown: React.FC<{ text: string; color?: string; missing?: boolean; who
   </span>
 )
 
+/** A member's rank in a faction: click to type it (1 = the top; empty:
+ *  unranked). */
+const RankChip: React.FC<{ rank?: number; color: string; where: () => { x: number; y: number }; onSet: (r: number | null) => void }> = ({ rank, color, where, onSet }) => {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState('')
+  const ref = useRef<HTMLInputElement>(null)
+  const done = useRef(false)
+  const click = useClick(where, () => { done.current = false; setDraft(rank ? String(rank) : ''); setEditing(true); requestAnimationFrame(() => { ref.current?.focus(); ref.current?.select() }) })
+  const box: React.CSSProperties = {
+    width: 15, height: 11, flexShrink: 0, boxSizing: 'border-box', borderRadius: 3, fontSize: 8, fontWeight: 800, lineHeight: '9px',
+    textAlign: 'center', fontFamily: 'inherit', color: '#fff', border: `1px solid ${edgeColorFromHex(color, 0.5)}`, padding: 0,
+  }
+  if (editing) {
+    const commit = () => {
+      if (done.current) return
+      done.current = true
+      const n = parseInt(draft, 10)
+      onSet(Number.isFinite(n) && n > 0 ? Math.min(99, n) : null)
+      setEditing(false)
+    }
+    return (
+      <input
+        ref={ref}
+        data-member-rank-input
+        value={draft}
+        inputMode="numeric"
+        onChange={e => setDraft(e.target.value.replace(/[^0-9]/g, '').slice(0, 2))}
+        onPointerDown={stopPress}
+        onDoubleClick={e => e.stopPropagation()}
+        onKeyDown={e => {
+          e.stopPropagation()
+          if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); commit() }
+          else if (e.key === 'Escape') { e.preventDefault(); done.current = true; setEditing(false) }
+        }}
+        onBlur={commit}
+        style={{ ...box, background: 'rgba(0,0,0,0.5)', outline: 'none', userSelect: 'text' }}
+      />
+    )
+  }
+  return (
+    <div data-member-rank={rank ?? ''} title="Rank in this faction (1 = the top): click to set" {...click}
+      style={{ ...box, cursor: 'pointer', background: rank ? edgeColorFromHex(color, 0.3) : 'rgba(0,0,0,0.25)', opacity: rank ? 1 : 0.6 }}>
+      {rank ?? '–'}
+    </div>
+  )
+}
+
 /** The details side, filling the card's body (below its name tab). */
 export const CardBack: React.FC<{
   groupId: string; color: string; width: number; height: number; hovered: boolean
@@ -298,6 +345,9 @@ export const CardBack: React.FC<{
   const details = useBoardsStore(s => s.groups.find(g => g.id === groupId)?.details) ?? NONE
   const type = useBoardsStore(s => cardTypeOf(s.groups.find(g => g.id === groupId)))
   const groups = useBoardsStore(s => s.groups)
+  const me = groups.find(g => g.id === groupId)
+  const members = type === 'faction' && me ? factionMembers(groups, me) : []
+  const memberOf = factionsOf(groups, groupId)
   // A card's link "+" being dragged (not this card's own): the details
   // light up as places to let it go.
   const linking = useLinkDragStore(s => s.active && s.source?.kind === 'group' && s.source.id !== groupId)
@@ -358,6 +408,10 @@ export const CardBack: React.FC<{
   const typeClick = useClick(where, e => setMenu({ x: e.clientX, y: e.clientY, kind: 'type' }))
 
   const ink = edgeColorFromHex(color, 0.9)
+  // The names' column fits the longest name (within reason), the same for
+  // every row, so the values line up.
+  const longest = Math.max(4, ...details.map(d => d.name.length), memberOf.length ? 7 : 0)
+  const cols = `${Math.round(Math.min(w * 0.58, Math.max(w * 0.3, longest * 5.2 + 8)))}px minmax(0, 1fr)`
   const typeMenu = (): MenuItem[] => {
     const bs = useBoardsStore.getState()
     const me = bs.groups.find(g => g.id === groupId)
@@ -430,6 +484,43 @@ export const CardBack: React.FC<{
           onWheel={e => { const el = e.currentTarget; if (el.scrollHeight > el.clientHeight + 1) e.stopPropagation() }}
           style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', display: 'flex', flexDirection: 'column', gap: 2, scrollbarWidth: 'thin' }}
         >
+          {/* A faction: its members, by rank. */}
+          {type === 'faction' && me && (
+            <>
+              <div style={{ fontSize: 7, fontWeight: 800, letterSpacing: 1, color: ink, opacity: 0.6, padding: '1px 2px 0' }}>MEMBERS</div>
+              {members.length === 0 && (
+                <div style={{ fontSize: 8, opacity: 0.45, padding: '0 2px 2px' }}>Drag a card’s + here to add it.</div>
+              )}
+              {members.map(({ card, rank }) => (
+                <div
+                  key={card.id}
+                  data-faction-member={card.id}
+                  onPointerEnter={() => setRowHover('m:' + card.id)}
+                  onPointerLeave={() => setRowHover(r => r === 'm:' + card.id ? null : r)}
+                  style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 4, borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: 1, minHeight: 13 }}
+                >
+                  <RankChip rank={rank} color={color} where={where} onSet={r => { useUndoCoordinator.getState().checkpoint(); useBoardsStore.getState().setMemberRank(groupId, card.id, r) }} />
+                  <span style={{ width: 6, height: 6, borderRadius: 2, background: card.color, flexShrink: 0, border: '1px solid rgba(255,255,255,0.5)' }} />
+                  <span style={{ fontSize: 9.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{card.name || 'Untitled'}</span>
+                  {rowHover === 'm:' + card.id && !linking && (
+                    <button
+                      type="button"
+                      data-faction-member-remove
+                      title="Take out of this faction"
+                      onPointerDown={stopPress}
+                      onClick={e => { e.stopPropagation(); useUndoCoordinator.getState().checkpoint(); useBoardsStore.getState().removeMember(groupId, card.id) }}
+                      style={{
+                        position: 'absolute', right: 0, top: 1, width: 11, height: 11, padding: 0, lineHeight: '9px',
+                        fontSize: 9, borderRadius: 3, border: 'none', cursor: 'pointer',
+                        background: 'rgba(0,0,0,0.6)', color: 'rgba(255,255,255,0.85)',
+                      }}
+                    >×</button>
+                  )}
+                </div>
+              ))}
+              <div style={{ fontSize: 7, fontWeight: 800, letterSpacing: 1, color: ink, opacity: 0.6, padding: '4px 2px 0' }}>DETAILS</div>
+            </>
+          )}
           {details.map(d => {
             const linked = d.link ? detailShown(groups, d) : null
             return (
@@ -439,7 +530,7 @@ export const CardBack: React.FC<{
                 onPointerEnter={() => setRowHover(d.id)}
                 onPointerLeave={() => setRowHover(r => r === d.id ? null : r)}
                 style={{
-                  position: 'relative', display: 'grid', gridTemplateColumns: 'minmax(0, 47%) minmax(0, 1fr)', alignItems: 'baseline', gap: 3,
+                  position: 'relative', display: 'grid', gridTemplateColumns: cols, alignItems: 'baseline', gap: 3,
                   borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: 1,
                 }}
               >
@@ -486,9 +577,21 @@ export const CardBack: React.FC<{
               </div>
             )
           })}
-          {details.length === 0 && (
+          {details.length === 0 && type !== 'faction' && memberOf.length === 0 && (
             <div style={{ fontSize: 8.5, opacity: 0.45, padding: '2px 2px 0' }}>No details yet.</div>
           )}
+          {/* The factions it is in, read from them: name and rank. */}
+          {memberOf.flatMap(({ faction, rank }) => [['FACTION', faction.name || 'Untitled'], ...(rank ? [['RANK', String(rank)]] : [])].map(([k, v], i) => (
+            <div key={faction.id + k} data-member-of={i === 0 ? faction.id : undefined} style={{
+              display: 'grid', gridTemplateColumns: cols, alignItems: 'baseline', gap: 3,
+              borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: 1,
+            }}>
+              <div style={{ fontSize: 8, fontWeight: 700, color: ink, opacity: 0.85, letterSpacing: 0.2, padding: '0 3px' }}>{k}</div>
+              <div style={{ fontSize: 10, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', padding: '0 3px' }}>
+                {i === 0 ? <LinkShown text={v} color={faction.color} whole /> : v}
+              </div>
+            </div>
+          )))}
           <button
             type="button"
             data-card-detail-add

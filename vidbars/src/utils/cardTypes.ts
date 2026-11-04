@@ -38,7 +38,7 @@ export interface CardTypeInfo {
 export const CARD_TYPES: Record<CardType, CardTypeInfo> = {
   element:   { label: 'Element',   color: '#5b8dd9', details: [] },
   character: { label: 'Character', color: '#c8463f', details: ['ID', 'Licence', 'Age', 'Height', 'Role', 'Stats'] },
-  faction:   { label: 'Faction',   color: '#7d55c7', details: ['Leader', 'Territory', 'Allies', 'Rivals'] },
+  faction:   { label: 'Faction',   color: '#7d55c7', details: ['Territory', 'Allies', 'Rivals'] },
   location:  { label: 'Location',  color: '#23897e', details: ['Place', 'Building', 'Use', 'Floors', 'Basement'] },
   prop:      { label: 'Prop',      color: '#c97a2c', details: ['Kind', 'Ammo', 'Capacity', 'Owner'] },
   audio:     { label: 'Audio',     color: '#b0478a', details: ['Artist', 'Length', 'Tempo', 'Key', 'Mood'] },
@@ -91,4 +91,24 @@ export function detailText(groups: ProjectGroup[], cardId: string, name: string)
   const card = groups.find(g => g.id === cardId)
   const d = card?.details?.find(x => x.name.trim().toLowerCase() === name.trim().toLowerCase())
   return d ? detailShown(groups, d).text : undefined
+}
+
+/** A faction's members: the cards it links to (a card's link "+" let go
+ *  on the faction), each with its rank there (1 = the top). Ranked first,
+ *  by rank, then the unranked, in the order they joined. */
+export function factionMembers(groups: ProjectGroup[], faction: ProjectGroup): { card: ProjectGroup; rank?: number }[] {
+  const ids = faction.linkedGroupIds ?? []
+  const list = ids.flatMap((id, i) => {
+    const card = groups.find(g => g.id === id)
+    return card ? [{ card, rank: faction.ranks?.[id], i }] : []
+  })
+  list.sort((a, b) => (a.rank ?? Infinity) - (b.rank ?? Infinity) || a.i - b.i)
+  return list.map(({ card, rank }) => ({ card, rank }))
+}
+
+/** The factions a card is a member of, and its rank in each. */
+export function factionsOf(groups: ProjectGroup[], cardId: string): { faction: ProjectGroup; rank?: number }[] {
+  return groups
+    .filter(g => g.cardType === 'faction' && (g.linkedGroupIds ?? []).includes(cardId))
+    .map(faction => ({ faction, rank: faction.ranks?.[cardId] }))
 }
