@@ -65,10 +65,11 @@ type IconMode =
 interface Props {
   groupId?: string
   rightInset?: number  // screen px to trim from right edge (e.g. deck edge reserve)
+  leftInset?: number   // the same off the left edge (a deck whose edges are on its left)
   iconMode?: IconMode
 }
 
-const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, iconMode }) => {
+const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, leftInset = 0, iconMode }) => {
   const mode: IconMode = iconMode ?? { kind: 'viewer' }
   // Tilted, the ground past the screen's top and side edges is in view.
   const tilted = useTiltStore(st => isTilted(st))
@@ -264,8 +265,8 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, icon
 
   if (segments.length === 0) return null
 
-  const screenLeft   = pan.x + globalCanvasLeft * zoom
-  const screenWidth  = (globalCanvasRight - globalCanvasLeft) * zoom - rightInset
+  const screenLeft   = pan.x + globalCanvasLeft * zoom + leftInset
+  const screenWidth  = (globalCanvasRight - globalCanvasLeft) * zoom - rightInset - leftInset
 
   const commitRename = () => {
     const trimmed = renameVal.trim()

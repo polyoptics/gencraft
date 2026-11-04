@@ -33,6 +33,7 @@ import { drawnRect } from './effectCards'
 import { clientToCanvas } from './fx/createEffect'
 import { knownKind } from './fx/effects'
 import { RAIL_TRAY, inputGiven, isRail, railDropTarget, railLayout, railMembers, type RailDropTarget } from './rail'
+import { byLay, deckOnStoryline } from './deckAway'
 
 /** One picture: the card and block it is in, and what it shows. */
 export interface Entry { groupId: string; boardId: string; media: MediaItem; label: string }
@@ -69,8 +70,8 @@ export function deckCards(anchorId: string, groups: ProjectGroup[]): string[] {
   const anchor = groups.find(g => g.id === anchorId)
   if (!anchor) return []
   if (!anchor.deckState || anchor.deckState === 'open') return [anchorId]
-  const rest = groups.filter(g => g.id !== anchorId && g.deckAnchorId === anchorId && g.deckState && g.deckState !== 'open')
-    .sort((a, b) => ((a.deckOffsetX ?? 0) - (b.deckOffsetX ?? 0)) || ((a.deckOffsetY ?? 0) - (b.deckOffsetY ?? 0)))
+  const kids = groups.filter(g => g.id !== anchorId && g.deckAnchorId === anchorId && g.deckState && g.deckState !== 'open')
+  const rest = byLay(kids, deckOnStoryline([anchorId, ...kids.map(g => g.id)]))
   return [anchorId, ...rest.map(g => g.id)]
 }
 
@@ -368,7 +369,7 @@ export function deckRunResults(gids: string[]): void {
     placeCard(id, x, front.y)
     x += rect(id)?.width ?? front.width
   }
-  useBoardsStore.getState().setDeckState(ids, 'stacked')
+  useBoardsStore.getState().setDeckState(ids, 'stacked', { asGiven: true })
 }
 
 /** Result cards step with the card they were made from (`railSource`):

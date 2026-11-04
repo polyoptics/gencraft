@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { createDebouncedIDBStorage } from '../utils/debouncedIDBStorage'
-import { useBoardsStore } from './boardsStore'
+import { useBoardsStore, type BoardData, type ProjectGroup } from './boardsStore'
 import { useFreeNodeStore } from './freeNodeStore'
 import { computeGroupLayout, getRowY, getRowHeight } from '../utils/nleRows'
 import { DEFAULT_H } from '../utils/barConstants'
@@ -79,11 +79,15 @@ function animatePanTo(
 export function groupBounds(groupId: string): { x: number; y: number; w: number; h: number } | null {
   const bs = useBoardsStore.getState()
   const group = bs.groups.find(g => g.id === groupId)
-  if (!group) return null
-  const layout = computeGroupLayout(group.boardIds, bs.boards)
+  return group ? boundsOf(group, bs.boards) : null
+}
+
+/** groupBounds for a card in hand, with the boards to measure it by. */
+export function boundsOf(group: ProjectGroup, boards: Record<string, BoardData>): { x: number; y: number; w: number; h: number } | null {
+  const layout = computeGroupLayout(group.boardIds, boards)
   let minX = Infinity, maxX = -Infinity, topY = Infinity, bottomY = -Infinity
   for (const bid of group.boardIds) {
-    const board = bs.boards[bid]
+    const board = boards[bid]
     if (!board) continue
     const bScale = board.boardScale ?? 1
     const roots = board.rootIds.map(rid => board.bars[rid]).filter(Boolean)

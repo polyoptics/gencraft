@@ -23,6 +23,7 @@ import { loadImage } from './fx/chain'
 import { getMediaItems, type MediaItem } from '../types/bar'
 import { layoutCutCard, readClipLengths } from './cutCard'
 import { ensureModelPoster, getModelPoster, usePosterMapStore } from '../three/posterService'
+import { byLay, deckOnStoryline } from './deckAway'
 
 // A new poster for a model (the Viewer's SNAP, or one just rendered)
 // goes onto every block holding that model at once, so card faces, block
@@ -310,8 +311,8 @@ export function stepDeckFace(anchorId: string, memberIds: string[], dir: 1 | -1)
 export function stackedDeckMembers(anchorId: string, groups: ProjectGroup[]): string[] {
   const anchor = groups.find(g => g.id === anchorId)
   if (anchor?.deckState !== 'stacked') return []
-  const rest = groups.filter(g => g.id !== anchorId && g.deckAnchorId === anchorId && g.deckState === 'stacked')
-    .sort((a, b) => ((a.deckOffsetX ?? 0) - (b.deckOffsetX ?? 0)) || ((a.deckOffsetY ?? 0) - (b.deckOffsetY ?? 0)))
+  const kids = groups.filter(g => g.id !== anchorId && g.deckAnchorId === anchorId && g.deckState === 'stacked')
+  const rest = byLay(kids, deckOnStoryline([anchorId, ...kids.map(g => g.id)]))
   return [anchorId, ...rest.map(g => g.id)]
 }
 

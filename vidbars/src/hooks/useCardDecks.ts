@@ -7,6 +7,7 @@ import type { ProjectGroup, BoardData } from '../store/boardsStore'
 import { type GroupSlot } from '../utils/nlePush'
 import { computeGroupLayout, getRowY, getRowHeight } from '../utils/nleRows'
 import { DEFAULT_H } from '../utils/barConstants'
+import { lyingLeft, storyCardsKey } from '../utils/deckAway'
 import { NLE_HEADER_CANVAS_H } from '../components/NLE/NLETimelineHeader'
 
 /** Returns true if this group is a non-anchor member of a stacked/fanned deck (visually hidden). */
@@ -137,7 +138,11 @@ export function useCardDecks(
   // hints with their column neighbours.
   const dockedKey = useFreeNodeStore(s => Object.values(s.nodes)
     .filter(n => n.cardRef && n.railDock && !n.railDock.lifted).map(n => n.cardRef).sort().join('|'))
+  // The cards linked to a storyline: a deck holding one reads from its
+  // front card leftward when its cards lie left of it (utils/deckAway).
+  const storyCards = useFreeNodeStore(s => storyCardsKey(s.nodes))
   return useMemo(() => {
+    const onLine = new Set(storyCards ? storyCards.split('|') : [])
     if (groups.length < 2) {
       return { decks: [], touchingClusters: [], getDeckForGroup: () => null }
     }
@@ -327,8 +332,15 @@ export function useCardDecks(
       if (!anchorGroup) continue
       if (fullMembers.length < 2) continue
 
-      // Sort by left edge (anchor first by convention)
+      // Sort by left edge (anchor first by convention). A deck on a
+      // storyline whose cards all lie left of its front card (opened away
+      // from the line, utils/deckAway) reads from it leftward instead: front
+      // first, then nearest, as a deck laid out to the right does.
       const sorted = fullMembers.sort((a, b) => (rects.get(a)?.left ?? 0) - (rects.get(b)?.left ?? 0))
+      const aL = rects.get(anchorId)?.left ?? 0
+      const rest = sorted.filter(id => id !== anchorId)
+      if (rest.length && sorted.some(id => onLine.has(id)) && lyingLeft(rest.map(id => ({ deckOffsetX: (rects.get(id)?.left ?? aL) - aL }))))
+        sorted.splice(0, sorted.length, anchorId, ...rest.reverse())
 
       // Derive deck state: anchor's deckState is authoritative when non-open.
       // Fall back to member analysis only when anchor is 'open' (sub-deck anchor case,
@@ -369,7 +381,7 @@ export function useCardDecks(
       touchingClusters,
       getDeckForGroup: (gid: string) => groupToDeck.get(gid) ?? null,
     }
-  }, [groups, boards, zoom, dockedKey])
+  }, [groups, boards, zoom, dockedKey, storyCards])
 }
 
 /** The groups a canvas drag has to steer around.

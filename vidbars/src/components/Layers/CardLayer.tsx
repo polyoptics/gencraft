@@ -30,6 +30,7 @@ import { updateDeckMagnetPreview, finishDeckMagnetDock } from '../../utils/deckD
 import { groupHasBrowsableContent } from '../../utils/contentTraversal'
 import { FreeCanvas } from '../Canvas/FreeCanvas'
 import { storyLinkOf, unlinkCardFromStorylines } from '../Canvas/StorylineLayer'
+import { deckLay, linkedLines, storyLinksKey, type DeckLay, type DeckSide } from '../../utils/deckAway'
 import { Viewport3DLayer } from '../Viewport3D/Viewport3DLayer'
 import { NLETimelineHeader, NLE_HEADER_CANVAS_H, headerExtend as computeHeaderExtend, headerScreenH, overviewScale } from '../NLE/NLETimelineHeader'
 import { HeroImageLayer } from './HeroImageLayer'
@@ -1488,7 +1489,7 @@ function countMeaningfulContent(
 }
 
 /** Stacked deck — only anchor visible, peek tabs behind, badge + controls */
-const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; isNested?: boolean }> = ({ deck, anchorGroup, isNested }) => {
+const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; isNested?: boolean; side?: DeckSide }> = ({ deck, anchorGroup, isNested, side }) => {
   // Frozen inside a pinned deck — same camera as every other card piece.
   const { pan, zoom } = useCardView()
   const boards = useBoardsStore(s => s.boards)
@@ -1750,12 +1751,19 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
   const faceVideo = faceItem?.type === 'video' && !deckFx.shown ? faceItem : null
   const faceAudio = useMemo(() => (deckFx.shown ? null : cardFaceAudio(faceCard, boards)), [deckFx.shown, faceCard, boards])
 
-  // Stacked card outlines — right-side only, max 2 edges to keep primary card wide.
+  // Stacked card outlines — max 2 edges to keep primary card wide. On the
+  // right, or on the left for a deck whose cards lie left of its front
+  // card (opened away from a storyline, utils/deckAway): mirrored, the face
+  // then starts past the edges.
   const PEEK_RIGHT = 3  // px each edge step
   const showCount  = Math.min(secondaryCards.length, 1) // always show max 2 edges (1 = has secondaries)
-  const EDGE_RESERVE = showCount >= 1 ? PEEK_RIGHT * 2 + 4 : 0 // space reserved for 2 edges on right
+  const EDGE_RESERVE = showCount >= 1 ? PEEK_RIGHT * 2 + 4 : 0 // space reserved for 2 edges
   const cardWidth = screenWidth - EDGE_RESERVE // primary card is slimmer
   const edgeBaseX = cardWidth - 1 // edges start at right edge of slimmed card
+  const lefty = side === 'left'
+  const faceX = lefty ? EDGE_RESERVE : 0
+  // An edge piece at `x` (as on the right), mirrored onto the left.
+  const edgeX = (x: number, w: number) => lefty ? screenWidth - x - w : x
 
   const stackSelFx = isSelected ? selectionHighlight(anchorGroup.color) : null
 
@@ -1767,6 +1775,7 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
         data-group-card="true"
         data-link-drop={`card:${anchorGroup.id}`}
         data-id={anchorGroup.id}
+        data-deck-side={side ?? 'right'}
         style={{
           position: 'absolute',
           left: screenLeft,
@@ -1806,14 +1815,14 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
             key="stack-edge-0"
             style={{
               position: 'absolute',
-              left: edgeBaseX,
+              left: edgeX(edgeBaseX, PEEK_RIGHT + 2),
               top: 5,
               width: PEEK_RIGHT + 2,
               height: screenHeight - 10,
-              borderRadius: '0 12px 12px 0',
+              borderRadius: lefty ? '12px 0 0 12px' : '0 12px 12px 0',
               background: 'transparent',
               borderTop: `2px solid ${edgeColor(anchorGroup.color, 0.6)}`,
-              borderRight: `2px solid ${edgeColor(anchorGroup.color, 0.6)}`,
+              [lefty ? 'borderLeft' : 'borderRight']: `2px solid ${edgeColor(anchorGroup.color, 0.6)}`,
               borderBottom: `2px solid ${edgeColor(anchorGroup.color, 0.6)}`,
               zIndex: 37,
               pointerEvents: 'none',
@@ -1826,16 +1835,16 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
             key="stack-edge-1"
             style={{
               position: 'absolute',
-              left: edgeBaseX + PEEK_RIGHT + 1,
+              left: edgeX(edgeBaseX + PEEK_RIGHT + 1, PEEK_RIGHT + 2),
               top: screenHeight * 0.05,
               width: PEEK_RIGHT + 2,
               height: screenHeight * 0.9,
-              borderRadius: '0 6px 6px 0',
+              borderRadius: lefty ? '6px 0 0 6px' : '0 6px 6px 0',
               background: 'transparent',
-              borderRight: `2px solid ${edgeColor(anchorGroup.color, 0.42)}`,
+              borderRight: lefty ? 'none' : `2px solid ${edgeColor(anchorGroup.color, 0.42)}`,
               borderTop: 'none',
               borderBottom: 'none',
-              borderLeft: 'none',
+              borderLeft: lefty ? `2px solid ${edgeColor(anchorGroup.color, 0.42)}` : 'none',
               zIndex: 36,
               pointerEvents: 'none',
             }}
@@ -1845,9 +1854,13 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
         {showCount >= 1 && (
           <div
             key="stack-hit-area"
+            // Tilted, 3D stretches this over the page edges that step out
+            // past it (TiltModels hideEdges): on the left it is held by its
+            // right side, so a wider strip grows outward.
+            data-fan-edge={lefty ? 'left' : 'right'}
             style={{
               position: 'absolute',
-              left: edgeBaseX,
+              ...(lefty ? { right: edgeBaseX } : { left: edgeBaseX }),
               top: 0,
               width: EDGE_RESERVE + 4,
               height: screenHeight,
@@ -1867,7 +1880,7 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
         <div
           style={{
             position: 'absolute',
-            left: 0,
+            left: faceX,
             top: 0,
             width: cardWidth,
             height: screenHeight,
@@ -2019,7 +2032,7 @@ const StackedDeckCard = React.memo(StackedDeckCardInner)
 
 /** Fanned deck — primary card unchanged, secondary cards as ~40px strips peeking right.
  *  Hover a strip to surface that card fully; mouse away to slide it back. */
-const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> = ({ deck, groups }) => {
+const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[]; lay?: DeckLay }> = ({ deck, groups, lay }) => {
   // Frozen inside a pinned deck — same camera as every other card piece.
   const { pan, zoom } = useCardView()
   const boards = useBoardsStore(s => s.boards)
@@ -2130,16 +2143,20 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
       return leftDelta === Infinity ? 0 : leftDelta
     }
 
+    // Turned away from a storyline (utils/deckAway), by where they will open.
+    const turned = lay?.flipped ? lay : null
     const real: StripItem[] = deck.memberIds
       .filter(id => id !== anchorGroup.id)
       .map(id => {
         const g = groups.find(gr => gr.id === id)
         if (!g) return null
-        const sortKey = deck.rects.get(id)?.left ?? (anchorGroup.originX + (g.deckOffsetX ?? 0) + contentLeftOffset(g))
+        const spot = turned?.spots.get(id)
+        const sortKey = spot ? spot.x + contentLeftOffset(g)
+          : deck.rects.get(id)?.left ?? (anchorGroup.originX + (g.deckOffsetX ?? 0) + contentLeftOffset(g))
         return { kind: 'real' as const, group: g, deckOffsetX: g.deckOffsetX ?? 0, sortKey }
       })
       .filter(Boolean) as StripItem[]
-    const ghosts: StripItem[] = (anchorGroup.ghostSlots ?? []).map(s => {
+    const ghosts: StripItem[] = ((turned ? turned.ghosts : anchorGroup.ghostSlots) ?? []).map(s => {
       const card = allGroups.find(g => g.id === s.cardId) ?? null
       // Reconstruct the ghost's would-be rect.left as if the card were still
       // a deck member at slot.deckOffsetX from the anchor.
@@ -2153,8 +2170,11 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
         sortKey,
       }
     })
-    return [...real, ...ghosts].sort((a, b) => a.sortKey - b.sortKey)
-  }, [deck.memberIds, deck.rects, anchorGroup.id, anchorGroup.originX, anchorGroup.ghostSlots, groups, allGroups, boards])
+    // Nearest the front card first: left to right, or right to left when
+    // the cards lie left of it.
+    const k = lay?.side === 'left' ? -1 : 1
+    return [...real, ...ghosts].sort((a, b) => k * (a.sortKey - b.sortKey))
+  }, [deck.memberIds, deck.rects, anchorGroup.id, anchorGroup.originX, anchorGroup.ghostSlots, groups, allGroups, boards, lay])
 
   // Fan-strip geometry is in SCREEN px (this overlay is screen-space), so
   // it normally stays a fixed size while the primary card scales by zoom.
@@ -2170,6 +2190,11 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
   const STRIP_OVERLAP = 12 * fanOv
   const STRIP_RADIUS = 8 * fanOv
   const totalFanWidth = screenWidth + secondaryItems.length * FAN_STRIP_WIDTH
+  // The strips run out to the right of the front card, or to its left for
+  // a deck whose cards lie left of it (utils/deckAway): then the wrapper
+  // starts that far left and the front card sits at `faceX` in it.
+  const lefty = lay?.side === 'left'
+  const faceX = lefty ? secondaryItems.length * FAN_STRIP_WIDTH : 0
 
   const fanSelFx = isSelected ? selectionHighlight(anchorGroup.color) : null
 
@@ -2194,7 +2219,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
         el.style.transform = ''
         return
       }
-      const tuckOffset = -(i + 1) * FAN_STRIP_WIDTH
+      const tuckOffset = (lefty ? 1 : -1) * (i + 1) * FAN_STRIP_WIDTH
       // Stagger scales with deck size — small decks (≤5 strips) keep the
       // tight 8ms cascade, larger decks spread out so each strip is
       // individually readable. Capped at 20ms so the longest deck doesn't
@@ -2214,7 +2239,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
         el.style.transform = `translateX(${tuckOffset}px)`
       }
     })
-  }, [fanTransition, anchorGroup.id, secondaryItems])
+  }, [fanTransition, anchorGroup.id, secondaryItems, lefty, FAN_STRIP_WIDTH])
 
   // Refs to the two portal-connector bars so the transition effect can
   // animate their width in lockstep with the locked strip's slide.
@@ -2410,8 +2435,11 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
     // Grab-point: cursor lands ~1/3 of the way in from the card's left
     // edge. Pulling-from-the-strip-edge feels unnatural — the user expects
     // to be holding the card by its body, not pinching its corner.
-    // 2/3 from the right == 1/3 from the left.
-    const rightInsetCanvas = widthCanvas * (2 / 3)
+    // 2/3 from the right == 1/3 from the left. A fan on the left is pulled
+    // out leftward: 1/3 in from the right edge, the rest trailing away
+    // from the deck.
+    const leftFan = (stripEl.closest('[data-deck-side]') as HTMLElement | null)?.dataset.deckSide === 'left'
+    const rightInsetCanvas = widthCanvas * (leftFan ? 1 / 3 : 2 / 3)
     let dragged = false
 
     const computeOrigin = (clientX: number, clientY: number) => {
@@ -2548,7 +2576,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
     const stripStagger = Math.max(8, Math.min(20, Math.floor(N * 1.5)))
     const stagger = lockedStripIdx * stripStagger
     for (const el of connectorEls) {
-      el.style.transformOrigin = 'left center'
+      el.style.transformOrigin = lefty ? 'right center' : 'left center'
       if (fanTransition!.phase === 'fanning') {
         el.style.transition = 'none'
         el.style.transform = `scaleX(${tuckRatio})`
@@ -2560,7 +2588,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
         el.style.transform = `scaleX(${tuckRatio})`
       }
     }
-  }, [fanTransition, anchorGroup.id, secondaryItems, lockedStripIdx])
+  }, [fanTransition, anchorGroup.id, secondaryItems, lockedStripIdx, lefty])
 
   // When a secondary card is surfaced (hovered or portal-locked),
   // render it full-size on top of the primary card.
@@ -2603,9 +2631,10 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
       data-group-card="true"
       data-link-drop={`card:${anchorGroup.id}`}
       data-id={anchorGroup.id}
+      data-deck-side={lefty ? 'left' : 'right'}
       style={{
         position: 'absolute',
-        left: screenLeft,
+        left: screenLeft - faceX,
         top: screenTop,
         width: totalFanWidth,
         height: screenHeight,
@@ -2639,9 +2668,12 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
     >
       {/* Secondary strips — real members and ghost slots, sorted by visual rect.left */}
       {secondaryItems.map((item, i) => {
-        const stripX = screenWidth + FAN_STRIP_WIDTH * i - STRIP_OVERLAP
+        // On the left each strip reaches STRIP_OVERLAP right, under the
+        // piece in front of it, as on the right it reaches left.
+        const stripX = lefty ? faceX - FAN_STRIP_WIDTH * (i + 1) : screenWidth + FAN_STRIP_WIDTH * i - STRIP_OVERLAP
         const stripW = FAN_STRIP_WIDTH + STRIP_OVERLAP
-        const stripRadius = `0 ${STRIP_RADIUS}px ${STRIP_RADIUS}px 0`
+        const stripRadius = lefty ? `${STRIP_RADIUS}px 0 0 ${STRIP_RADIUS}px` : `0 ${STRIP_RADIUS}px ${STRIP_RADIUS}px 0`
+        const labelInset = lefty ? { left: 4, right: STRIP_OVERLAP + 4 } : { left: STRIP_OVERLAP + 4, right: 4 }
         const stripZ = 1 + secondaryItems.length - i
 
         // ── Ghost slot (extracted card placeholder) ──
@@ -2727,7 +2759,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
                   flipped hierarchy. */}
               {ghostName && (
                 <div style={{
-                  position: 'absolute', top: 8, left: STRIP_OVERLAP + 4, right: 4, bottom: 8,
+                  position: 'absolute', top: 8, ...labelInset, bottom: 8,
                   writingMode: 'vertical-rl', textOrientation: 'mixed',
                   textShadow: '0 1px 3px rgba(0,0,0,0.7)',
                   display: 'flex', alignItems: 'center', justifyContent: 'flex-start',
@@ -2815,7 +2847,8 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
               // card's top/bottom edges, so they read as connected.
               // borderLeft stays absent so the strip's left side is
               // open onto the primary, no vertical wall.
-              borderRight: isPortalLocked
+              // (Mirrored for a fan on the left: its outer side is its left.)
+              [lefty ? 'borderLeft' : 'borderRight']: isPortalLocked
                 ? '2px solid rgba(255,255,255,0.92)'
                 : '1px solid rgba(255,255,255,0.2)',
               borderTop: isPortalLocked
@@ -2872,7 +2905,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
               }} />
             )}
             <div style={{
-              position: 'absolute', top: 8, left: STRIP_OVERLAP + 4, right: 4, bottom: 8,
+              position: 'absolute', top: 8, ...labelInset, bottom: 8,
               writingMode: 'vertical-rl', textOrientation: 'mixed',
               color: 'rgba(255,255,255,0.85)', fontSize: 10 * overviewScale(zoom), fontWeight: 600,
               textShadow: '0 1px 3px rgba(0,0,0,0.8)',
@@ -2884,7 +2917,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
             {isSubDeck && (
               <div style={{
                 position: 'absolute',
-                left: STRIP_OVERLAP, bottom: '100%',
+                left: lefty ? 0 : STRIP_OVERLAP, bottom: '100%',
                 width: FAN_STRIP_WIDTH,
                 height: 18,
                 pointerEvents: 'none',
@@ -2952,7 +2985,9 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
           PRIMARY_RADIUS + (lockedStripIdx + 1) * FAN_STRIP_WIDTH - STRIP_RADIUS
         const barStyle: React.CSSProperties = {
           position: 'absolute',
-          left: screenWidth - PRIMARY_RADIUS,
+          // On the left: from the locked strip's straight edge into the
+          // front card's top-left / bottom-left corner.
+          left: lefty ? faceX + PRIMARY_RADIUS - connectorWidth : screenWidth - PRIMARY_RADIUS,
           width: connectorWidth,
           height: 2,
           background: 'rgba(255,255,255,0.92)',
@@ -2992,7 +3027,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
         <div
           style={{
             position: 'absolute',
-            left: 0,
+            left: faceX,
             top: 0,
             width: screenWidth,
             height: screenHeight,
@@ -3026,19 +3061,19 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
             <>
               <div style={{
                 position: 'absolute',
-                right: -5, top: 0, width: 5, height: '100%',
+                [lefty ? 'left' : 'right']: -5, top: 0, width: 5, height: '100%',
                 borderTop: `2px solid ${edgeColor(surfacedGroup.color, 0.6)}`,
-                borderRight: `2px solid ${edgeColor(surfacedGroup.color, 0.6)}`,
+                [lefty ? 'borderLeft' : 'borderRight']: `2px solid ${edgeColor(surfacedGroup.color, 0.6)}`,
                 borderBottom: `2px solid ${edgeColor(surfacedGroup.color, 0.6)}`,
-                borderRadius: '0 8px 8px 0',
+                borderRadius: lefty ? '8px 0 0 8px' : '0 8px 8px 0',
                 pointerEvents: 'none',
                 zIndex: 21,
               }} />
               <div style={{
                 position: 'absolute',
-                right: -9, top: '3%', width: 4, height: '94%',
-                borderRight: `2px solid ${edgeColor(surfacedGroup.color, 0.42)}`,
-                borderRadius: '0 6px 6px 0',
+                [lefty ? 'left' : 'right']: -9, top: '3%', width: 4, height: '94%',
+                [lefty ? 'borderLeft' : 'borderRight']: `2px solid ${edgeColor(surfacedGroup.color, 0.42)}`,
+                borderRadius: lefty ? '6px 0 0 6px' : '0 6px 6px 0',
                 pointerEvents: 'none',
                 zIndex: 21,
               }} />
@@ -3054,9 +3089,11 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
         // face lands HERE — and goes into the card the face is showing:
         // the surfaced (portal-locked) member while one is up.
         data-card-drop={(surfacedGroup ?? anchorGroup).id}
+        // The front card, wherever the strips put it (TiltModels fanSlabs).
+        data-fan-front="true"
         style={{
           position: 'absolute',
-          left: 0,
+          left: faceX,
           top: 0,
           width: screenWidth,
           height: screenHeight,
@@ -3115,7 +3152,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
             getUrls={({ all }) => deckDragOutUrls(ids, all)}
             allLabel="every image in every card of this deck"
             visible={isHovered}
-            faceRightOffset={totalFanWidth - screenWidth}
+            faceRightOffset={lefty ? 0 : totalFanWidth - screenWidth}
             zIndex={Math.max(21, secondaryItems.length + 3)}
           />
         )
@@ -3149,7 +3186,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[] }> =
             key={`extracting-${card.id}`}
             style={{
               position: 'absolute',
-              left: -screenLeft,
+              left: faceX - screenLeft,
               top: -screenTop,
               zIndex: slotZ,
               // Suppress GroupCard's interactions during the drag — pointer
@@ -3679,7 +3716,7 @@ const clusterFront = new Map<string, { drag: (e: React.PointerEvent) => void; ho
  *  `front` is what the primary is drawn as (see Overlay's affordanceFront):
  *  a plain card, a stacked deck it anchors, or null for anything drawn
  *  above this zone. */
-const DeckAffordance: React.FC<{ cluster: string[]; front: Deck | 'card' | null }> = ({ cluster, front }) => {
+const DeckAffordance: React.FC<{ cluster: string[]; front: Deck | 'card' | null; frontSide?: DeckSide }> = ({ cluster, front, frontSide }) => {
   // Frozen inside a pinned deck — this control travels WITH the deck, so it
   // has to be measured by the deck's own camera or it lands elsewhere.
   const { pan, zoom } = useCardView()
@@ -3841,7 +3878,7 @@ const DeckAffordance: React.FC<{ cluster: string[]; front: Deck | 'card' | null 
             // StackedDeckCard's pen size, and its EDGE_RESERVE: the face
             // stops short of the zone's right edge by the peek edges.
             size={Math.min(32, Math.max(16, Math.max(NLE_HEADER_CANVAS_H * zoom, 20) * 0.85))}
-            faceRightOffset={front.memberIds.length > 1 ? 3 * 2 + 4 : 0}
+            faceRightOffset={front.memberIds.length > 1 && frontSide !== 'left' ? 3 * 2 + 4 : 0}
           />
         )}
       </div>
@@ -4040,7 +4077,7 @@ const GhostCardSlot: React.FC<{ anchor: ProjectGroup; slot: { cardId: string; de
  *  pointer-events: none, zIndex 25 — purely visual, sits above the canvas
  *  backdrop but below ghost slots (30) and far below all card surfaces (40+),
  *  so the deck always draws on top of any overlapping preview rect. */
-const DeckOpenPreview: React.FC<{ deck: Deck }> = ({ deck }) => {
+const DeckOpenPreview: React.FC<{ deck: Deck; lay?: DeckLay }> = ({ deck, lay }) => {
   const boards = useBoardsStore(s => s.boards)
   const allGroups = useBoardsStore(s => s.groups)
   // Frozen inside a pinned deck — the footprint belongs to that deck.
@@ -4069,17 +4106,19 @@ const DeckOpenPreview: React.FC<{ deck: Deck }> = ({ deck }) => {
       // GhostCardSlot uses (lines ~2050-2054). cardScreenRect bakes in
       // BOARD_PADDING_X, minX*bScale, getRowY, cardWidthOverride, and the
       // headerExtend, so this matches the actual card render exactly.
+      // Turned away from a storyline, where it will really open (utils/deckAway).
+      const spot = lay?.flipped ? lay.spots.get(member.id) : undefined
       const virtualMember: ProjectGroup = {
         ...member,
-        originX: anchor.originX + (member.deckOffsetX ?? 0),
-        originY: anchor.originY + (member.deckOffsetY ?? 0),
+        originX: spot ? spot.x : anchor.originX + (member.deckOffsetX ?? 0),
+        originY: spot ? spot.y : anchor.originY + (member.deckOffsetY ?? 0),
       }
       const rect = cardScreenRect(virtualMember, boards, pan, zoom)
       if (!rect) continue
       out.push({ id: member.id, color: member.color, rect })
     }
     return out
-  }, [active, deck.memberIds, deck.anchorGroupId, allGroups, boards, pan, zoom])
+  }, [active, deck.memberIds, deck.anchorGroupId, allGroups, boards, pan, zoom, lay])
 
   if (previews.length === 0) return null
 
@@ -4185,7 +4224,7 @@ const TetherTab: React.FC<{ cardId: string; touchingClusters: string[][] }> = ({
             // Reorder so this card is first → it becomes the sub-deck
             // anchor. Other cluster members get tethered to it.
             const ordered = [card.id, ...foldCluster.filter(id => id !== card.id)]
-            useBoardsStore.getState().setDeckState(ordered, 'stacked')
+            useBoardsStore.getState().setDeckState(ordered, 'stacked', { asGiven: true })
           }
           useBoardsStore.getState().returnToDeck(card.id)
         }}
@@ -4298,7 +4337,7 @@ const TetherTab: React.FC<{ cardId: string; touchingClusters: string[][] }> = ({
                 // cards along as a sub-deck so the whole group returns home.
                 if (foldCluster) {
                   const ordered = [card.id, ...foldCluster.filter(id => id !== card.id)]
-                  useBoardsStore.getState().setDeckState(ordered, 'stacked')
+                  useBoardsStore.getState().setDeckState(ordered, 'stacked', { asGiven: true })
                 }
                 useBoardsStore.getState().returnToDeck(card.id)
                 setMenu(null)
@@ -4358,6 +4397,23 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
     [groups, deferredBoards]
   )
   const { decks, touchingClusters, getDeckForGroup } = useCardDecks(groups, deferredBoards, zoom)
+  // Where each closed deck's cards open and which side of its front card
+  // they lie on: a deck linked to a storyline opens away from the line
+  // (utils/deckAway). Its edges, fan and open preview follow.
+  const storyKey = useFreeNodeStore(s => storyLinksKey(s.nodes))
+  const lays = useMemo(() => {
+    const byId = new Map(groups.map(g => [g.id, g]))
+    // No storyline holds a card: nothing to look up (storyKey is '').
+    const lines = storyKey ? linkedLines(useFreeNodeStore.getState().nodes) : []
+    const out = new Map<string, DeckLay>()
+    for (const d of decks) {
+      const a = byId.get(d.anchorGroupId)
+      if (a) out.set(d.id, deckLay(a, d.memberIds, byId, deferredBoards, lines))
+    }
+    return out
+    // storyKey: the storylines' dots, read through getState above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [decks, groups, deferredBoards, storyKey])
 
   // Track which groups are rendered by decks so we skip them
   const renderedByDeck = useMemo(() => {
@@ -4466,10 +4522,11 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
             <Fragment key={g.id}>
               <NLETimelineHeader
                 groupId={g.id}
-                rightInset={deck.memberIds.length > 1 ? 10 : 0}
+                rightInset={deck.memberIds.length > 1 && lays.get(deck.id)?.side !== 'left' ? 10 : 0}
+                leftInset={deck.memberIds.length > 1 && lays.get(deck.id)?.side === 'left' ? 10 : 0}
                 iconMode={{ kind: 'deckPreview', deckId: deck.id, count: countMeaningfulContent(deck.memberIds, groups, boards), onDoubleClick: stackedDoubleClick }}
               />
-              <StackedDeckCard deck={deck} anchorGroup={g} isNested={nested} />
+              <StackedDeckCard deck={deck} anchorGroup={g} isNested={nested} side={lays.get(deck.id)?.side} />
             </Fragment>
           )
         }
@@ -4497,7 +4554,7 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
                   groupId={g.id}
                   iconMode={{ kind: 'deckPreview', deckId: deck.id, count: countMeaningfulContent(deck.memberIds, groups, boards), onDoubleClick: fannedDoubleClick }}
                 />
-                <FannedDeckOverlay deck={deck} groups={memberGroups} />
+                <FannedDeckOverlay deck={deck} groups={memberGroups} lay={lays.get(deck.id)} />
               </div>
             )
           }
@@ -4524,10 +4581,10 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
           Same rule stated once: does this belong to this deck, or to the
           canvas it is floating above? */}
       {decks.filter(d => !onlySet || d.memberIds.some(id => onlySet.has(id))).map(d => (
-        <DeckOpenPreview key={`preview-${d.id}`} deck={d} />
+        <DeckOpenPreview key={`preview-${d.id}`} deck={d} lay={lays.get(d.id)} />
       ))}
       {affordanceClusters.filter(c => !onlySet || c.some(id => onlySet.has(id))).map(cluster => (
-        <DeckAffordance key={cluster.join('|')} cluster={cluster} front={affordanceFront(cluster[0])} />
+        <DeckAffordance key={cluster.join('|')} cluster={cluster} front={affordanceFront(cluster[0])} frontSide={(() => { const f = affordanceFront(cluster[0]); return f && f !== 'card' ? lays.get(f.id)?.side : undefined })()} />
       ))}
       {!scoped && ungroupedIds.map(bid => (
         <UngroupedBoardCard key={bid} boardId={bid} />

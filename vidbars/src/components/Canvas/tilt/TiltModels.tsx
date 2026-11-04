@@ -892,7 +892,9 @@ function collectSlabs(K = 1): TiltSlab[] {
       if (g?.deckState === 'fanned') { fanSlabs(el, stage, at, add, lifting, docked.get(id), heads.get(id)); continue }
       const n = g?.deckState === 'stacked' ? 1 + groups.filter(o => o.deckAnchorId === id && o.deckState === 'stacked').length : 1
       const w = el.offsetWidth, h = el.offsetHeight, m = Math.min(w, h)
-      const r = radiusOf((el.firstElementChild as HTMLElement | null) ?? el) || m * 0.06
+      // A deck's first child is its first page edge; one drawn on the left
+      // has its rounding first, so read it as the right one reads (none).
+      const r = (el.dataset.deckSide === 'left' ? 0 : radiusOf((el.firstElementChild as HTMLElement | null) ?? el)) || m * 0.06
       // On a loop strip it stands on the tray's floor, else on the canvas.
       let lift = docked.get(id) ?? (g?.deckAnchorId ? docked.get(g.deckAnchorId) : undefined)
       // Loose over a strip, it is drawn over the strip flat: on its top in
@@ -934,8 +936,13 @@ function collectSlabs(K = 1): TiltSlab[] {
         // flat deck's edge strip, grown in with the 3D look (Brian 2026-10-30).
         const L = Math.min(n - 1, DECK_SLICES)
         const spread = reserve + Math.max(0, Math.min(w * 0.08, L * Math.min(6, Math.max(2, w * 0.012))) - reserve) * f * K
+        // A deck whose cards lie left of its front card (opened away from a
+        // storyline) has its edges on the left as flat: its pages step out
+        // leftward, the face past them (CardLayer StackedDeckCard).
+        const lefty = el.dataset.deckSide === 'left'
+        const faceX = lefty ? at.x + reserve : at.x
         // A free card's sides go down to the canvas, lifted over another or not.
-        card = add(at.x, at.y, w - reserve, h, lift !== undefined ? thick : n > 1 ? per : base + per, SIDE.card, r)
+        card = add(faceX, at.y, w - reserve, h, lift !== undefined ? thick : n > 1 ? per : base + per, SIDE.card, r)
         if (card) {
           card.z = base + thick
           cardTops.set(id, card.z)
@@ -987,7 +994,7 @@ function collectSlabs(K = 1): TiltSlab[] {
           const slices = n > 1 && per * K >= 1 && below * K >= L * 0.75
           if (slices) hideEdges(el, spread - reserve)
           for (let j = 1; slices && j <= L; j++) {
-            const s = add(at.x, at.y, w - reserve + spread * j / L, h, below / L, j % 2 ? SIDE.edge : SIDE.card, r)
+            const s = add(lefty ? faceX - spread * j / L : at.x, at.y, w - reserve + spread * j / L, h, below / L, j % 2 ? SIDE.edge : SIDE.card, r)
             if (s) { s.z = base + below * (1 - (j - 1) / L); s.cap = true; s.hinge = tilt }
           }
         }
@@ -1544,7 +1551,8 @@ function unshadow(card: HTMLElement, K: number) {
   }
 }
 /** A fanned deck stands up too: its front card on top, and each strip
- *  peeking out to the right a card lower than the one before, a stair of
+ *  peeking out to the right (or the left, a deck opened away from a
+ *  storyline) a card lower than the one before, a stair of
  *  cards down to the canvas. The strips follow their slide as the fan
  *  opens or closes (their animated transform). Everything else on the
  *  fan (the face it surfaces, its controls) rides at the front card's
@@ -1554,11 +1562,12 @@ function fanSlabs(el: HTMLElement, stage: HTMLElement, at: { x: number; y: numbe
                   lifting: Map<HTMLElement, number>, lift: number | undefined, head?: HTMLElement) {
   const kids = [...el.children].filter(c => (c as HTMLElement).matches('[data-card-drop], [data-deck-slot-drop]')) as HTMLElement[]
   if (!kids.length) return
-  const front = kids.reduce((a, b) => (b.offsetLeft === 0 && b.offsetWidth >= a.offsetWidth ? b : a))
-  const strips = kids.filter(c => c !== front).sort((a, b) => a.offsetLeft - b.offsetLeft)
+  const front = kids.find(c => c.dataset.fanFront) ?? kids.reduce((a, b) => (b.offsetLeft === 0 && b.offsetWidth >= a.offsetWidth ? b : a))
+  // Nearest the front card first, whichever side they run out on.
+  const strips = kids.filter(c => c !== front).sort((a, b) => Math.abs(a.offsetLeft - front.offsetLeft) - Math.abs(b.offsetLeft - front.offsetLeft))
   const w = front.offsetWidth, h = front.offsetHeight, m = Math.min(w, h)
   const k = lift === undefined ? detail(w) : 1
-  if (k <= 0) { add(at.x, at.y, w, h, m * THICK.card, SIDE.card, 12); return }
+  if (k <= 0) { add(at.x + front.offsetLeft, at.y + front.offsetTop, w, h, m * THICK.card, SIDE.card, 12); return }
   const per = m * THICK.card * k
   const base = lift ?? 0
   const top = base + per * (strips.length + 1)
@@ -1628,12 +1637,13 @@ let hiding = new Set<HTMLElement>()
 export let widened = new Map<HTMLElement, string>()
 let widening = new Map<HTMLElement, string>()
 /** Hide a stacked deck's flat edge lines (its slices draw them in 3D) and
- *  stretch its click-to-fan strip `reach` px further right, over the pages
- *  that step out past it. */
+ *  stretch its click-to-fan strip `reach` px further out, over the pages
+ *  that step out past it (on the left the strip is held by its right side,
+ *  so it grows leftward). */
 function hideEdges(deck: HTMLElement, reach = 0) {
   for (const c of deck.children) {
     const e = c as HTMLElement
-    if (e.style.cursor === 'pointer' && e.style.pointerEvents === 'all' && e.offsetLeft > deck.offsetWidth / 2) {
+    if (e.dataset.fanEdge || (e.style.cursor === 'pointer' && e.style.pointerEvents === 'all' && e.offsetLeft > deck.offsetWidth / 2)) {
       const was = widened.get(e) ?? e.style.width
       widening.set(e, was)
       setStyle(e, 'width', `${(parseFloat(was) || 0) + reach}px`)

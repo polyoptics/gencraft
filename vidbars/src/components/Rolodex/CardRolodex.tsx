@@ -60,6 +60,7 @@ import {
 import { ensureFontLoaded, hexToRgba } from '../UI/TextFormatToolbar'
 import { FileContextMenu } from '../UI/FileMenu'
 import { mayHaveDiskFile } from '../../hooks/useFileMenu'
+import { deckOnStoryline, lyingLeft } from '../../utils/deckAway'
 
 // Card width — uniform across active and tucked cards. The active card
 // "rises" only via vertical growth (expansion); it's never wider than
@@ -280,7 +281,10 @@ type RolodexRow =
  *  this matches what you see when the deck is fanned on canvas, and
  *  it stays stable regardless of the user's flat-mode sort choice. */
 function sortByFanOrder(arr: ProjectGroup[]): ProjectGroup[] {
-  return [...arr].sort((a, b) => (a.deckOffsetX ?? 0) - (b.deckOffsetX ?? 0))
+  // Right to left for a deck on a storyline lying left of its front card
+  // (utils/deckAway).
+  const k = lyingLeft(arr) && deckOnStoryline(arr.flatMap(g => g.deckAnchorId ? [g.id, g.deckAnchorId] : [g.id])) ? -1 : 1
+  return [...arr].sort((a, b) => k * ((a.deckOffsetX ?? 0) - (b.deckOffsetX ?? 0)))
 }
 
 /** Flat list — every group as a level-0 row, sorted by sortMode. The

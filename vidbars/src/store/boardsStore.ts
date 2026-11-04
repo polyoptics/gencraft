@@ -10,6 +10,8 @@ import { CARD_TYPES, cardTypeOf, isAbove, newDetailId, typeColor, withTypeDetail
 import { fillCard, nameKindOf } from '../utils/fillDetails'
 import { makeName, nameKey } from '../utils/nameGen'
 import { removeFromKin, type Kin } from '../utils/family'
+import { deckLay, frontFirst, frontOf, linkedLines } from '../utils/deckAway'
+import { useFreeNodeStore } from './freeNodeStore'
 import { newSceneLayout, putCards, type SceneDiv } from '../utils/sceneCard'
 import { getBoardAbsolutePos, computeGroupLayout, yToRow } from '../utils/nleRows'
 import {
@@ -93,6 +95,7 @@ export interface ProjectGroup {
   nestedDeck?: boolean    // true if this group is a sub-deck anchor (persists through fan/stack cycles)
   deckOffsetX?: number    // offset from OWN anchor at stacking time (for position restore on open)
   deckOffsetY?: number
+  deckLastFront?: string  // the card that fronted this card's deck when it last opened (utils/deckAway frontFirst)
   /**
    * When THIS group is a deck anchor, ghostSlots holds "checked-out" entries
    * for cards that were extracted from this deck. Each entry remembers where
@@ -400,7 +403,9 @@ interface BoardsState {
   setBarStrokes: (boardId: string, barId: string, strokes: import('../types/stroke').Stroke[]) => void
   setBlockStrokes: (boardId: string, strokes: import('../types/stroke').Stroke[]) => void
   setCardStrokes: (groupId: string, strokes: import('../types/stroke').Stroke[]) => void
-  setDeckState: (groupIds: string[], state: 'open' | 'fanned' | 'stacked') => void
+  /** `asGiven`: groupIds[0] fronts it and the cards close as laid (a new
+   *  card's deck, a check-in), with no front card picked or storyline flip. */
+  setDeckState: (groupIds: string[], state: 'open' | 'fanned' | 'stacked', opts?: { asGiven?: boolean }) => void
   /** Pull a card out of its deck onto the canvas. The parent gets a ghostSlots
    *  entry remembering the slot's offset so the card can return. The card
    *  itself becomes independent (deckAnchorId/deckOffset cleared). If the
@@ -1359,11 +1364,29 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
     set(s => ({ groups: s.groups.map(g => g.id === groupId ? { ...g, cardStrokes: strokes } : g) }))
   },
 
-  setDeckState(groupIds, state) {
+  setDeckState(ids, state, opts) {
+    // For stacking/fanning: the new deck anchor is groupIds[0] — the first
+    // (leftmost in the cluster), or on a storyline the deck's own front card
+    // if it is one already, else a card linked to the line. utils/deckAway
+    // frontFirst.
+    const nodes = useFreeNodeStore.getState().nodes
+    const groupIds = state === 'open' || opts?.asGiven ? ids : frontFirst(get().groups, ids, nodes, get().boards)
     const idSet = new Set(groupIds)
-    // For stacking/fanning: the new deck anchor is groupIds[0] (leftmost in
-    // the cluster). For opening: anchorId is undefined (no deck after open).
+    // For opening: anchorId is undefined (no deck after open).
     const anchorId = state === 'open' ? undefined : groupIds[0]
+    // Opening: the deck's front card. Its cards remember it (deckLastFront)
+    // so they close onto it again on a storyline.
+    const openFront = state === 'open' ? frontOf(get().groups, groupIds) : null
+    // Linked to a storyline, its cards open away from the line: flipped to
+    // the front card's far side (utils/deckAway). Opening, that is their
+    // offsets; closing, their open places (hidden under the front card).
+    const away = opts?.asGiven ? null : (() => {
+      const all = get().groups
+      const front = state === 'open' ? openFront : all.find(g => g.id === anchorId)
+      if (!front) return null
+      const lay = deckLay(front, groupIds, new Map(all.map(g => [g.id, g])), get().boards, linkedLines(nodes))
+      return lay.flipped ? { front, lay } : null
+    })()
     // Detect a stack ↔ fan crossing. When firing, mark the deck for
     // animation in canvasStore — FannedDeckOverlay's strips imperatively
     // slide out (fanning) or back in (stacking). For 'stacking', CardLayer
@@ -1397,7 +1420,18 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
         }, clearAfter)
       }
     }
-    set(s => {
+    set(s0 => {
+      const s = !away ? s0 : {
+        ...s0,
+        groups: s0.groups.map(g => {
+          if (g.id === away.front.id) return away.lay.ghosts ? { ...g, ghostSlots: away.lay.ghosts } : g
+          const p = away.lay.spots.get(g.id)
+          if (!p) return g
+          return state === 'open'
+            ? { ...g, deckOffsetX: p.x - away.front.originX, deckOffsetY: p.y - away.front.originY }
+            : { ...g, originX: p.x, originY: p.y }
+        }),
+      }
       // Detect sub-deck anchors: members whose ID is referenced by
       // deckAnchorId of COLLAPSED groups OUTSIDE this set (they anchor a
       // nested sub-deck). An open card's leftover pointer is not a sub-deck
@@ -1499,12 +1533,12 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
               ox = anchor.originX + g.deckOffsetX
               oy = anchor.originY + g.deckOffsetY
             }
-            return { ...g, deckState: state, deckAnchorId: anchorId, nestedDeck: undefined, originX: ox, originY: oy, deckOffsetX: undefined, deckOffsetY: undefined }
+            return { ...g, deckState: state, deckAnchorId: anchorId, nestedDeck: undefined, originX: ox, originY: oy, deckOffsetX: undefined, deckOffsetY: undefined, deckLastFront: openFront?.id }
           }
           // Stacking/fanning: store offset from anchor
           const offX = anchorGroup ? g.originX - anchorGroup.originX : g.deckOffsetX
           const offY = anchorGroup ? g.originY - anchorGroup.originY : g.deckOffsetY
-          return { ...g, deckState: state, deckAnchorId: anchorId, nestedDeck: g.nestedDeck, deckOffsetX: offX, deckOffsetY: offY }
+          return { ...g, deckState: state, deckAnchorId: anchorId, nestedDeck: g.nestedDeck, deckOffsetX: offX, deckOffsetY: offY, deckLastFront: undefined }
         })
       }
     })
