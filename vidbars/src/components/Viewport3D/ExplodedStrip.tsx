@@ -229,6 +229,10 @@ const StripLayers: React.FC<{ railId: string; rect: { x: number; y: number; widt
   }, [sig])
 
   const [drag, setDrag] = useState<{ id: string; dz: number } | null>(null)
+  // Layers pulled out of the stack sideways, by how far (px, in the layer's
+  // own plane), and the one being slid now.
+  const [popped, setPopped] = useState<Record<string, { x: number; y: number }>>({})
+  const [sliding, setSliding] = useState<string | null>(null)
   const order = effects.map(e => e.id)
   const aspect = baked ? baked.plate.width / baked.plate.height : 1
   const boxH = Math.min(rect.height, rect.width / aspect), boxW = boxH * aspect
@@ -273,11 +277,41 @@ const StripLayers: React.FC<{ railId: string; rect: { x: number; y: number; widt
     window.addEventListener('pointerup', up)
   }
 
-  // A press on a pane: dragged, it moves in depth; let go in place, a solo.
-  const startPane = (e: React.PointerEvent, id: string) => {
+  // A press on a pane. In the stack: dragged, it moves in depth; let go in
+  // place, a solo, or, pressed on an edge (`dir`), it pops partway out that
+  // way. Popped out: dragged, it slides in its own plane; clicked, back in.
+  const startPane = (e: React.PointerEvent, id: string, dir?: 'l' | 'r' | 't' | 'b') => {
     e.stopPropagation()
-    const { tilt, yaw } = useTiltStore.getState()
+    const { tilt, yaw, spin } = useTiltStore.getState()
     const b = yaw * Math.PI / 180, t = tilt * Math.PI / 180
+    const out0 = popped[id]
+    if (out0) {
+      // The layer's own x and y on screen (perspective aside): Rx·Ry·Rz.
+      const sp = spin * Math.PI / 180, cs = Math.cos(sp), ss = Math.sin(sp)
+      const cb = Math.cos(b), sb = Math.sin(b), ct = Math.cos(t), st = Math.sin(t)
+      const ax = cb * cs, ay = sb * st * cs + ct * ss
+      const bx = -cb * ss, by = -sb * st * ss + ct * cs
+      const det = ax * by - bx * ay
+      const sx = e.clientX, sy = e.clientY
+      let moved = false
+      const move = (m: PointerEvent) => {
+        const dx = m.clientX - sx, dy = m.clientY - sy
+        if (!moved && Math.hypot(dx, dy) < 6) return
+        if (Math.abs(det) < 0.05) return
+        if (!moved) setSliding(id)
+        moved = true
+        setPopped(p => ({ ...p, [id]: { x: out0.x + (dx * by - dy * bx) / det, y: out0.y + (dy * ax - dx * ay) / det } }))
+      }
+      const up = () => {
+        window.removeEventListener('pointermove', move)
+        window.removeEventListener('pointerup', up)
+        setSliding(null)
+        if (!moved) setPopped(({ [id]: _, ...rest }) => rest)
+      }
+      window.addEventListener('pointermove', move)
+      window.addEventListener('pointerup', up)
+      return
+    }
     // Which way depth runs on the screen: the plane's normal, Rx·Ry·z.
     const vx = Math.sin(b), vy = -Math.sin(t) * Math.cos(b)
     const len2 = vx * vx + vy * vy
@@ -295,6 +329,11 @@ const StripLayers: React.FC<{ railId: string; rect: { x: number; y: number; widt
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
       setDrag(null)
+      if (!moved && dir) {
+        const k = 0.7
+        setPopped(p => ({ ...p, [id]: dir === 'l' ? { x: -boxW * k, y: 0 } : dir === 'r' ? { x: boxW * k, y: 0 } : dir === 't' ? { x: 0, y: -boxH * k } : { x: 0, y: boxH * k } }))
+        return
+      }
       if (!moved) { toggleEffectSolo(id); return }
       const to = stepTo(id, dz)
       if (to === order.indexOf(id)) return
@@ -352,6 +391,8 @@ const StripLayers: React.FC<{ railId: string; rect: { x: number; y: number; widt
         const def = EFFECTS[knownKind(it.effect)]
         const dragged = drag?.id === id
         const z = dragged ? zOf(order.indexOf(id)) + drag!.dz : zOf(at)
+        const pop = popped[id]
+        const band = Math.max(14, Math.min(boxW, boxH) * 0.14)
         const dim = !!it.off || (!!soloed && soloed !== id)
         const line = soloed === id ? '#fff' : dim ? 'rgba(255,255,255,.18)' : def.color
         return (
@@ -359,9 +400,29 @@ const StripLayers: React.FC<{ railId: string; rect: { x: number; y: number; widt
             key={id}
             data-layer-pane={id}
             onPointerDown={e => startPane(e, id)}
-            style={{ ...pos(z), cursor: 'pointer', outline: edge(line), outlineOffset: -1, pointerEvents: 'auto' }}
+            style={{
+              ...pos(z), cursor: pop ? 'grab' : 'pointer', outline: edge(line), outlineOffset: -1, pointerEvents: 'auto',
+              transform: `translate3d(${pop?.x ?? 0}px, ${pop?.y ?? 0}px, ${z}px)`,
+              transition: sliding === id || dragged ? 'none' : 'transform .25s ease-out',
+            }}
           >
             {pane && <LayerCanvas canvas={pane.boosted} opacity={dim ? 0.1 : 1} />}
+            {/* Its edges: pressed in the stack, it pops out that way. */}
+            {!pop && ([
+              ['t', { left: band, right: band, top: 0, height: band }],
+              ['b', { left: band, right: band, bottom: 0, height: band }],
+              ['l', { left: 0, top: 0, bottom: 0, width: band }],
+              ['r', { right: 0, top: 0, bottom: 0, width: band }],
+            ] as const).map(([d, at]) => (
+              <div
+                key={d}
+                data-layer-pane={id}
+                data-layer-edge={d}
+                title="Click to pull this layer out that way"
+                onPointerDown={e => startPane(e, id, d)}
+                style={{ position: 'absolute', ...at, cursor: d === 'l' || d === 'r' ? 'ew-resize' : 'ns-resize' }}
+              />
+            ))}
             <div style={{ ...header, background: `color-mix(in srgb, ${def.color} 28%, #16171f)`, outline: edge(line), outlineOffset: -1 }}>
               <span style={{ color: def.color }}>{def.glyph}</span>
               <span>{def.label}</span>
