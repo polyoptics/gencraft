@@ -66,6 +66,7 @@ import { useContextSheetStore } from '../../store/contextSheetStore'
 import { cardTypeOf } from '../../utils/cardTypes'
 import { nameKindOf } from '../../utils/fillDetails'
 import { copiedFaceStyle, copyFaceStyle, fillFields } from '../../utils/faceStyle'
+import { showFactionTree } from '../../utils/factionTree'
 
 const BOARD_PADDING_X = 20
 
@@ -168,6 +169,11 @@ const CardContextMenu: React.FC<{
     if (nameable.length) menuItems.push({ label: `New name${nameable.length > 1 ? ` (${nameable.length})` : ''}`, icon: '🏷', action: () => {
       useUndoCoordinator.getState().checkpoint()
       useBoardsStore.getState().giveNewNames(nameable)
+      onClose()
+    }})
+    // A faction: its members as a tree on a new storyline beside it.
+    if (group.cardType === 'faction' && group.linkedGroupIds?.length) menuItems.push({ label: 'Show as a tree on a storyline', icon: '🌳', action: () => {
+      showFactionTree(group.id)
       onClose()
     }})
     // Style: this face's text and how it is set, onto other cards, once
