@@ -106,6 +106,7 @@ export function railUnits(n: FreeNodeData, mode: 'each' | 'pick'): FreeNodeData[
     type: e.media.type === 'video' ? 'video' as const : 'image' as const,
     imageUrl: e.media.url, mediaType: e.media.type, posterUrl: e.media.posterUrl ?? null,
     label: e.label,
+    ...(e.media.type === 'video' && (e.media.clipIn !== undefined || e.media.clipOut !== undefined) ? { clipIn: e.media.clipIn, clipOut: e.media.clipOut } : {}),
   }))
 }
 

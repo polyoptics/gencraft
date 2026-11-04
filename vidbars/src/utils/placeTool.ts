@@ -27,7 +27,7 @@ import {
   freeNodeFootprint, viewerFootprint, cardFootprint, type Footprint,
 } from './canvasCreate'
 import { openFilmMixer, filmMixerSize } from '../components/FilmMixer/FilmMixerBody'
-import { openRoughCut, roughCutSize } from '../components/RoughCut/RoughCutBody'
+import { createCutCard, cutCardSize } from './cutCard'
 import { createLoopStrip, loopStripSize } from './fx/createEffect'
 
 export type PlaceKind = 'viewer' | 'pool' | 'prompt' | 'history' | 'browser' | 'filmMixer' | 'storyline' | 'cabinet' | 'roughCut' | 'loopStrip' | 'new'
@@ -67,7 +67,7 @@ function footprint(kind: PlaceKind, zoom: number): Footprint {
     case 'viewer': return viewerFootprint(zoom)
     case 'browser': return freeNodeFootprint('list', zoom)
     case 'filmMixer': { const s = filmMixerSize(); return { w: s.width, h: s.height, dy: 0 } }
-    case 'roughCut': { const s = roughCutSize(); return { w: s.width, h: s.height, dy: 0 } }
+    case 'roughCut': { const s = cutCardSize(zoom); return { w: s.w, h: s.h, dy: 0 } }
     case 'loopStrip': { const s = loopStripSize(zoom); return { w: s.width, h: s.height, dy: 0 } }
     case 'storyline': return { w: 0, h: 0, dy: 0 }
     case 'new': return newIsNote() ? freeNodeFootprint('note', zoom) : cardFootprint(zoom)
@@ -99,7 +99,7 @@ export function placeBox(kind: PlaceKind, at: { cx: number; cy: number }, zoom: 
     }
     left = pull(left); top = pull(top)
   }
-  const isCard = kind === 'new' && !newIsNote()
+  const isCard = (kind === 'new' && !newIsNote()) || kind === 'roughCut'
   if (!isCard && currentZone() === 'card') top = riseClearOfCards(left, top, fp.w, fp.h, zoom)
   return { left, top, w: fp.w, h: fp.h, dy: fp.dy }
 }
@@ -127,7 +127,7 @@ function placeAt(kind: PlaceKind, box: PlaceBox) {
     case 'viewer': addViewerCentered(at); break
     case 'browser': addBrowserNode(at); break
     case 'filmMixer': openFilmMixer(at); break
-    case 'roughCut': openRoughCut(at); break
+    case 'roughCut': createCutCard(at); break
     case 'loopStrip': createLoopStrip({ x: box.left, y: box.top }); break
     case 'storyline': createStorylineAt(at); break
     case 'new': if (newIsNote()) addFreeNodeCentered('note', at); else createCardOrBoardAt(at); break

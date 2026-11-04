@@ -130,6 +130,10 @@ export interface FreeNodeData {
    *  never drawn, it holds the card's place in its column, and the card is
    *  moved to it (utils/railCards, useRailSync). */
   cardRef?: string
+  /** A run unit of a trimmed video clip (utils/railCards railUnits): the
+   *  part of it a Run draws, seconds. */
+  clipIn?: number
+  clipOut?: number
   /** SCREEN-PINNED instances. Present ⇒ this node is rendered by
    *  <PinLayer/> OUTSIDE the world transform and is SKIPPED by
    *  FreeCanvas. Absent ⇒ canvas-placed. That is the whole model.

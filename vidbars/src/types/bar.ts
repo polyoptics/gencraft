@@ -14,6 +14,12 @@ export interface MediaItem {
   /** A shot of the film the Film Look mixer can mix (its clip name, f18h):
    *  set on the shot cards it makes, and how a card docked to it fills it. */
   filmShot?: string
+  /** A trimmed clip (a Rough Cut's blocks, and the cards pulled out of one):
+   *  the part of the source it plays, in seconds. Absent: all of it. */
+  clipIn?: number
+  clipOut?: number
+  /** The source's own length, seconds, once read (videos and audio). */
+  duration?: number
 }
 
 export interface BarTextStyle {
@@ -102,4 +108,7 @@ export interface Bar {
   /** Annotation layer — vector strokes drawn on this bar at board zoom.
    *  Same shape across every drawable surface; see types/stroke.ts. */
   strokes?: import('./stroke').Stroke[]
+  /** A note made in a Rough Cut, on the clip it is about: its time in the
+   *  clip's source (seconds). Lives on the node layer, under the clip's bar. */
+  cutNote?: { t: number }
 }

@@ -21,6 +21,7 @@ import { useCanvasStore } from '../store/canvasStore'
 import { createScaleFor } from './canvasCreate'
 import { loadImage } from './fx/chain'
 import { getMediaItems, type MediaItem } from '../types/bar'
+import { layoutCutCard, readClipLengths } from './cutCard'
 import { ensureModelPoster, getModelPoster, usePosterMapStore } from '../three/posterService'
 
 // A new poster for a model (the Viewer's SNAP, or one just rendered)
@@ -116,6 +117,8 @@ export function layoutCardGrid(groupId: string, aspects: Record<string, number> 
   const s = useBoardsStore.getState()
   const g = s.groups.find(gr => gr.id === groupId)
   if (!g || !isGridCard(g)) return
+  // A Rough Cut lays its clips out as a cut, not a grid.
+  if (g.cut) { layoutCutCard(groupId); void readClipLengths(groupId); return }
   const { cellW, gap } = cellGeometry(g)
   const order = gridOrder(g, s.boards)
   useBoardsStore.setState(st => {

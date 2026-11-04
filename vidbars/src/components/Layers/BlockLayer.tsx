@@ -43,6 +43,7 @@ import { DrawableSurface } from '../Annotation/DrawableSurface'
 import { PenButton } from '../Annotation/PenButton'
 import { useSeedHoverFromCursor } from '../../utils/pointerTracker'
 import { RenameInput, askText } from '../UI/RenameInput'
+import { CutTimeline } from '../RoughCut/CutTimeline'
 
 const BOARD_PADDING_X = 20
 
@@ -1035,6 +1036,9 @@ const Canvas: React.FC<{ only?: string[] }> = ({ only }) => {
     () => getHiddenBoardIds(groups, !!only),
     [groups, only],
   )
+  // A Rough Cut's blocks are its clips, drawn by its timeline, not one by one.
+  const cutCards = useMemo(() => groups.filter(g => g.cut && !g.boardIds.some(b => hiddenBoards.has(b))), [groups, hiddenBoards])
+  const cutBoards = useMemo(() => new Set(groups.filter(g => g.cut).flatMap(g => g.boardIds)), [groups])
   // 'primary' is deleted with its card; see BoardsCanvas.
   const hasPrimary = useBoardsStore(s => !!s.boards.primary)
 
@@ -1076,6 +1080,8 @@ const Canvas: React.FC<{ only?: string[] }> = ({ only }) => {
           second copy of the entire canvas inside it. */}
       {!only && <Viewport3DLayer />}
       {!only && <FreeCanvas />}
+      {/* Under the blocks, so a card carried over a Rough Cut shows on top. */}
+      {cutCards.map(g => <CutTimeline key={g.id} group={g} />)}
       {/* 'primary' is a real board like any other and is very often the one
           a card owns — excluding it wholesale when scoped left pinned cards
           rendering nothing at all. */}
@@ -1090,6 +1096,7 @@ const Canvas: React.FC<{ only?: string[] }> = ({ only }) => {
         .filter(id => !effectiveHiddenBoards.has(id))
         .filter(id => !scopedBoards || scopedBoards.has(id))
         .filter(id => !pinnedAwayBoards?.has(id))
+        .filter(id => !cutBoards.has(id))
         .map(id => <BlockItem key={id} boardId={id} />)}
       {/* Portal renderings: each one wraps the locked member's blocks in
           a translate so they land at the anchor's canvas position.

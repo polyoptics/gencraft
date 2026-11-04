@@ -36,6 +36,7 @@ import { HeroImageLayer } from './HeroImageLayer'
 import { useFxStore } from '../../store/fxStore'
 import { cardStripId } from '../../utils/fx/cardStrips'
 import { cardHitAt } from '../../utils/cardContent'
+import { FaceCut } from '../RoughCut/FaceCut'
 import { cardFaceAudio, cardFaceMedia, deckFaceSteps, faceSteps, mergeCardsInto, setFaceThumbnail, stepDeckFace, stepFace } from '../../utils/cardGrid'
 import { drawnRect, effectChain, snapEffectCard } from '../../utils/effectCards'
 import { followFaceInViewer, showDockedCardInViewer } from '../../hooks/useDockedContent'
@@ -934,12 +935,14 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
             <EffectCardFace group={group} width={screenWidth} height={Math.max(1, cardHeight - headerPad)} />
           </div>
         ) : (<>
-        {faceVideo && !(fxFace && !fxOff)
-          ? <FaceVideo key={faceVideo.url} media={faceVideo} cardId={group.id} scale={overviewScale(zoom)} />
+        {group.cut
+          ? <FaceCut group={group} scale={overviewScale(zoom)} />
+          : faceVideo && !(fxFace && !fxOff)
+          ? <FaceVideo key={`${faceVideo.url}|${faceVideo.clipIn ?? ""}|${faceVideo.clipOut ?? ""}`} media={faceVideo} cardId={group.id} scale={overviewScale(zoom)} />
           : shownHero && <HeroImageLayer heroImage={shownHero} transform={group.cardHeroTransform} />}
         {faceAudio && <FaceAudio key={faceAudio.url} media={faceAudio} scale={overviewScale(zoom)} />}
         {/* Step the face through the card's blocks, in reading order. */}
-        {isHovered && steps.count > 1 && (
+        {isHovered && steps.count > 1 && !group.cut && (
           <>
             <FaceArrow side="left" scale={overviewScale(zoom)} onStep={() => { stepFace(group.id, -1); followFaceInViewer(group.id, []) }} />
             <FaceArrow side="right" scale={overviewScale(zoom)} onStep={() => { stepFace(group.id, 1); followFaceInViewer(group.id, []) }} />
@@ -1802,8 +1805,10 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
             useBoardsStore.getState().setDeckState(deck.memberIds, isSubDeck ? 'fanned' : 'open')
           }}
         >
-          {faceVideo
-            ? <FaceVideo key={faceVideo.url} media={faceVideo} cardId={anchorGroup.id} faceOf={faceCard.id} scale={overviewScale(zoom)} />
+          {faceCard.cut
+            ? <FaceCut group={faceCard} scale={overviewScale(zoom)} />
+            : faceVideo
+            ? <FaceVideo key={`${faceVideo.url}|${faceVideo.clipIn ?? ""}|${faceVideo.clipOut ?? ""}`} media={faceVideo} cardId={anchorGroup.id} faceOf={faceCard.id} scale={overviewScale(zoom)} />
             : (deckFx.shown ?? heroImage) && <HeroImageLayer heroImage={(deckFx.shown ?? heroImage)!} transform={faceCard.cardHeroTransform} />}
           {faceAudio && <FaceAudio key={faceAudio.url} media={faceAudio} scale={overviewScale(zoom)} />}
           {/* Step the face through every card's pictures, in deck order. */}
@@ -3190,13 +3195,18 @@ export const FaceVideo: React.FC<{
     faceVideoEls.set(owner, v)
     return () => { if (faceVideoEls.get(owner) === v) faceVideoEls.delete(owner) }
   }, [owner])
+  // A trimmed clip (a Rough Cut's, or a card pulled out of one) plays only
+  // its part: everything below runs between these two.
+  const lo = media.clipIn ?? 0
+  const hiOf = (v: HTMLVideoElement) => Math.min(v.duration, media.clipOut ?? v.duration)
+  const frac = (v: HTMLVideoElement) => Math.max(0, Math.min(1, (v.currentTime - lo) / Math.max(1e-3, hiOf(v) - lo)))
   // At rest it shows its thumbnail's frame (or the first).
-  const rest = media.posterTime ?? 0
+  const rest = media.posterTime !== undefined && media.posterTime >= lo && media.posterTime <= (media.clipOut ?? Infinity) ? media.posterTime : lo
   const toRest = () => {
     const v = ref.current
     if (v && v.paused && v.duration > 0 && Math.abs(v.currentTime - rest) > 0.01) {
       v.currentTime = Math.min(rest, v.duration)
-      setProgress(v.currentTime / v.duration)
+      setProgress(frac(v))
     }
   }
   const toRestRef = useRef(toRest)
@@ -3258,8 +3268,8 @@ export const FaceVideo: React.FC<{
       if (!v.paused || !(v.duration > 0) || e.buttons) return
       if ((e.target as Element).closest('[data-face-video-bar],[data-face-video-play],[data-face-video-sound],[data-card-face-arrow]')) return
       const r = v.getBoundingClientRect()
-      v.currentTime = Math.max(0, Math.min(1, (e.clientX - r.left) / Math.max(1, r.width))) * v.duration
-      setProgress(v.currentTime / v.duration)
+      v.currentTime = lo + Math.max(0, Math.min(1, (e.clientX - r.left) / Math.max(1, r.width))) * (hiOf(v) - lo)
+      setProgress(frac(v))
     }
     const leave = () => toRestRef.current()
     const snap = () => {
@@ -3291,8 +3301,8 @@ export const FaceVideo: React.FC<{
     const v = ref.current
     if (!v || !(v.duration > 0)) return
     const r = bar.getBoundingClientRect()
-    v.currentTime = Math.max(0, Math.min(1, (clientX - r.left) / Math.max(1, r.width))) * v.duration
-    setProgress(v.currentTime / v.duration)
+    v.currentTime = lo + Math.max(0, Math.min(1, (clientX - r.left) / Math.max(1, r.width))) * (hiOf(v) - lo)
+    setProgress(frac(v))
   }
   const stop = (e: React.SyntheticEvent) => e.stopPropagation()
   const btn = (s: number): React.CSSProperties => ({
@@ -3315,7 +3325,13 @@ export const FaceVideo: React.FC<{
         onLoadedMetadata={toRest}
         onPlay={() => setPlaying(true)}
         onPause={() => setPlaying(false)}
-        onTimeUpdate={e => { const v = e.currentTarget; if (v.duration > 0) setProgress(v.currentTime / v.duration) }}
+        onTimeUpdate={e => {
+          const v = e.currentTarget
+          if (!(v.duration > 0)) return
+          // Round its own part, not the whole file.
+          if (!v.paused && (v.currentTime >= hiOf(v) - 0.03 || v.currentTime < lo - 0.05)) v.currentTime = lo
+          setProgress(frac(v))
+        }}
         style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', borderRadius: 12, opacity: 0.85 }}
       />
       <div style={{ position: 'absolute', zIndex: 3, right: 6 * k, ...(chrome === 'top' ? { top: barH + 6 * k + topInset } : { bottom: barH + 6 * k }), display: 'flex', gap: 4 * k }}>

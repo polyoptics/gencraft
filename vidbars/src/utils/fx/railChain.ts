@@ -120,7 +120,10 @@ function sourceItem(n: FreeNodeData, posters: Record<string, string>): SourceIte
   const url = n.type === 'video'
     ? (n.posterUrl?.startsWith('data:') ? n.posterUrl : undefined) ?? (n.imageUrl ? posters[n.imageUrl] : undefined) ?? n.posterUrl ?? ''
     : n.imageUrl ?? ''
-  return { id: n.id, kind: 'source', url, label: n.label, ...(n.type === 'video' && n.imageUrl ? { video: n.imageUrl } : {}) }
+  return {
+    id: n.id, kind: 'source', url, label: n.label,
+    ...(n.type === 'video' && n.imageUrl ? { video: n.imageUrl, clipIn: n.clipIn, clipOut: n.clipOut } : {}),
+  }
 }
 
 /** Which role slots the run reads, and as what: `subject` is the first role

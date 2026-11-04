@@ -19,7 +19,9 @@ export type ChainItem =
   | { id: string; kind: 'source'; url: string; label: string
       /** A video card's own stored url (`url` is its poster frame): a Run
        *  draws the whole clip (utils/fx/clipRun). */
-      video?: string }
+      video?: string
+      /** A trimmed clip: the part of the video a Run draws, seconds. */
+      clipIn?: number; clipOut?: number }
   | { id: string; kind: 'effect'; effect: EffectKind; params?: Record<string, number>
       /** Segment's phrases ("name: phrase, phrase" per line). */
       text?: string

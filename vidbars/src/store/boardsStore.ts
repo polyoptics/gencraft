@@ -113,6 +113,10 @@ export interface ProjectGroup {
    *  order, rather than growing a block to the right each time. Imports
    *  and Blank make these; older cards keep their own layout. */
   layout?: 'grid'
+  /** A ROUGH CUT card (utils/cutCard): a grid card whose blocks are clips,
+   *  in cut order, each trimmed (its media's clipIn/clipOut). Zoomed in to
+   *  blocks it is a timeline; its face plays the cut. */
+  cut?: import('../utils/cutCard').CutCardData
   /** The block the face shows (stepped with the arrows), when not the
    *  first. A block that has left the card falls back to the first. */
   faceBoardId?: string

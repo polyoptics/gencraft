@@ -42,18 +42,23 @@ export async function makeClip(items: ChainItem[], maxSide: number, name: string
   note('Opening the clip…')
   const info = await d.sketchClip(src.video)
   if ('error' in info) return { error: info.error }
-  if (info.n > ASK_FRAMES && !window.confirm(
-    `“${src.label || 'This clip'}” is ${info.n} frames (${(info.n / info.fps).toFixed(0)} s). Draw every frame of it?`)) return { stopped: true }
+  // A trimmed clip (a Rough Cut's) draws only its part: frames [first, end).
+  const first = src.clipIn ? Math.max(0, Math.min(info.n - 1, Math.floor(src.clipIn * info.fps))) : 0
+  const end = src.clipOut ? Math.max(first + 1, Math.min(info.n, Math.ceil(src.clipOut * info.fps))) : info.n
+  const frames = end - first
+  if (frames > ASK_FRAMES && !window.confirm(
+    `“${src.label || 'This clip'}” is ${frames} frames (${(frames / info.fps).toFixed(0)} s). Draw every frame of it?`)) return { stopped: true }
   const bake = Array.from(crypto.getRandomValues(new Uint8Array(8)), b => b.toString(16).padStart(2, '0')).join('')
   // Equal chunks (no short one at the end), each an even number of frames.
-  const size = 2 * Math.ceil(info.n / Math.ceil(info.n / CHUNK) / 2)
+  const size = 2 * Math.ceil(frames / Math.ceil(frames / CHUNK) / 2)
+  let stop = end
   let w = 0, h = 0, encoded = false
   try {
-    for (let start = 0; start < info.n; start += size) {
-      const count = Math.min(size, info.n - start)
+    for (let start = first; start < stop; start += size) {
+      const count = Math.min(size, stop - start)
       const lo = Math.max(0, start - OVERLAP), hi = Math.min(info.n, start + count + OVERLAP)
       if (stopped()) return { stopped: true }
-      note(`Reading frames ${start + 1}–${start + count} of ${info.n}…`)
+      note(`Reading frames ${start - first + 1}–${start - first + count} of ${frames}…`)
       const got = await d.sketchClipFrames({ id: info.id, start: lo, count: hi - lo })
       if ('error' in got) return { error: got.error }
       // The file can hold fewer frames than its header says: the clip ends there.
@@ -62,7 +67,7 @@ export async function makeClip(items: ChainItem[], maxSide: number, name: string
       const last = Math.min(urls.length, start - lo + count)
       for (let t = start - lo; t < last; t++) {
         if (stopped()) return { stopped: true }
-        note(t === start - lo ? `Drawing frames ${start + 1}–${start + count} of ${info.n}…` : `Frame ${lo + t + 1} of ${info.n}`)
+        note(t === start - lo ? `Drawing frames ${start - first + 1}–${start - first + count} of ${frames}…` : `Frame ${lo + t - first + 1} of ${frames}`)
         const r = await runChain([{ ...src, url: urls[t], video: undefined }, ...items.slice(1)], maxSide, false)
         forgetImage(urls[t])
         const failed = clipChunkError()
@@ -77,12 +82,12 @@ export async function makeClip(items: ChainItem[], maxSide: number, name: string
         const s = await d.sketchBakeFrame(bake, lo + t, jpg)
         if (s.error) return { error: s.error }
       }
-      if (last < start - lo + count) { info.n = lo + last; break }
+      if (last < start - lo + count) { stop = lo + last; break }
     }
     note('Making the video…')
     // (The encode takes the bake's frames away, made or not.)
     encoded = true
-    const s = await d.sketchBakeEncode(bake, { id: info.id, start: 0, count: info.n }, name)
+    const s = await d.sketchBakeEncode(bake, { id: info.id, start: first, count: stop - first }, name)
     return 'error' in s ? { error: s.error } : { url: diskFileUrl(s.path), w, h, video: true }
   } finally {
     if (!encoded) void d.sketchBakeDrop?.(bake)
