@@ -99,7 +99,7 @@ function transferablePoster(node: FreeNodeData): string | null {
 type Nodes = Record<string, FreeNodeData>
 
 /** One node's size and anchor when a resize drag began. */
-type ResizeStart = { id: string; w: number; h: number; nx: number; ny: number; u: number }
+type ResizeStart = { id: string; w: number; h: number; nx: number; ny: number; u: number; ru?: number }
 
 function resizeStartOf(n: FreeNodeData): ResizeStart {
   return {
@@ -107,6 +107,7 @@ function resizeStartOf(n: FreeNodeData): ResizeStart {
     nx: n.pin ? n.pin.x : n.x,
     ny: n.pin ? n.pin.y : n.y,
     u: panelContentScale(n),
+    ru: n.roughCut?.ui,
   }
 }
 
@@ -159,6 +160,8 @@ function resizePatch(node: FreeNodeData, s: ResizeStart, dir: string, dx: number
     if (isPanelType(node.type) && s.w > 0) {
       patch.uiScale = clampUiScale(s.u * (w / s.w))
     }
+    // A Rough Cut's controls keep their own size (roughCut.ui): scaled, they grow with it.
+    if (node.roughCut && s.ru && s.w > 0) patch.roughCut = { ...node.roughCut, ui: s.ru * (w / s.w) }
     // Growing from a west/north handle has to move the opposite corner's
     // anchor, or the node grows away from the hand holding it.
     if (dir.includes('w') || dir.includes('n')) {

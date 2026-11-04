@@ -30,12 +30,12 @@ const EDGE = 12
 const SNAP = 12
 const PPS_MIN = 6, PPS_MAX = 600
 
-/** A new Rough Cut's size: about half the canvas, whatever the zoom (like the
+/** A new Rough Cut's size: about a sixth of the canvas across, whatever the zoom (like the
  *  Film Look mixer, not createScaleFor's clamped scale). */
 export function roughCutSize(): { width: number; height: number } {
   const host = document.querySelector('[data-zoom-bar-host]')?.getBoundingClientRect()
   const w = host?.width ?? window.innerWidth, h = host?.height ?? window.innerHeight
-  const width = Math.min(w, h / ROUGH_CUT_ASPECT) * 0.45 / useCanvasStore.getState().zoom
+  const width = Math.min(w, h / ROUGH_CUT_ASPECT) * 0.15 / useCanvasStore.getState().zoom
   return { width, height: width * ROUGH_CUT_ASPECT }
 }
 
