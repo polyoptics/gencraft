@@ -37,7 +37,7 @@ import { useFxStore } from '../../store/fxStore'
 import { cardStripId } from '../../utils/fx/cardStrips'
 import { cardHitAt } from '../../utils/cardContent'
 import { FaceCut } from '../RoughCut/FaceCut'
-import { cardFaceAudio, cardFaceMedia, deckFaceSteps, faceSteps, mergeCardsInto, setFaceThumbnail, stepDeckFace, stepFace } from '../../utils/cardGrid'
+import { cardFaceAudio, cardFaceMedia, deckFaceSteps, faceSteps, layoutCardGrid, mergeCardsInto, setFaceThumbnail, stepDeckFace, stepFace } from '../../utils/cardGrid'
 import { drawnRect, effectChain, snapEffectCard } from '../../utils/effectCards'
 import { followFaceInViewer, showDockedCardInViewer } from '../../hooks/useDockedContent'
 import { cardGivesInput, cardRailTarget, dockCardsOnRail, endDockedDrag, liftDockedCards, previewCardRail } from '../../utils/railCards'
@@ -843,7 +843,7 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
       : []
     const starts = [
       {
-        id: group.id, contentW: contentCanvasW, contentH: contentCanvasH,
+        id: group.id, contentW: contentCanvasW, contentH: contentCanvasH, cut: !!group.cut,
         w: screenWidth / zoom,
         h: (cardHeight - headerPad) / zoom,  // exclude header extension from canvas-space height
       },
@@ -853,7 +853,7 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
         const contentW = b.maxX - b.minX
         const contentH = b.bottomY - b.topY
         return [{
-          id: g.id, contentW, contentH,
+          id: g.id, contentW, contentH, cut: !!g.cut,
           w: Math.max(contentW, g.cardWidthOverride ?? 0),
           h: Math.max(contentH, g.cardHeightOverride ?? 0),
         }]
@@ -866,6 +866,16 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
       const dy = (ev.clientY - startY) / z
       const bs = useBoardsStore.getState()
       for (const st of starts) {
+        // A Rough Cut is a picture of its timeline: it scales whole, keeping
+        // its shape, whichever edge is pulled (its clips are relaid on release).
+        if (st.cut) {
+          const aspect = st.h / Math.max(1, st.w)
+          const byH = (st.h + dy) / aspect
+          const w = edge === 'right' ? st.w + dx : edge === 'bottom' ? byH : Math.max(st.w + dx, byH)
+          const cw = Math.max(st.w * 0.25, Math.min(st.w * 6, w))
+          bs.setGroupCardSize(st.id, cw, cw * aspect)
+          continue
+        }
         const newW = edge === 'bottom' ? st.w : Math.max(st.contentW, st.w + dx)
         const newH = edge === 'right' ? st.h : Math.max(st.contentH, st.h + dy)
         bs.setGroupCardSize(
@@ -878,10 +888,11 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
     const onUp = () => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
+      for (const st of starts) if (st.cut) layoutCardGrid(st.id)
     }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
-  }, [group.id, screenWidth, cardHeight, headerPad, contentCanvasW, contentCanvasH, zoom])
+  }, [group.id, group.cut, screenWidth, cardHeight, headerPad, contentCanvasW, contentCanvasH, zoom])
 
   if (screenWidth === 0) return null
   // Off the flat screen is not off the tilted one: there a card dragged up
