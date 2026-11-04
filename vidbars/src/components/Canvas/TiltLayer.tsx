@@ -36,12 +36,14 @@ import { getMediaItems } from '../../types/bar'
 import { faceBlocks } from '../../utils/cardGrid'
 import { clientToCanvas } from '../../utils/fx/createEffect'
 import { selectStorylinesInBox, storyWallOf } from './StorylineLayer'
-import { createTiltScene, ART_MAX, type TiltTarget, type TiltFrameState, type TiltSlab, type TiltArt } from '../../three/tiltScene'
+import { createTiltScene, ART_MAX, type TiltTarget, type TiltFrameState, type TiltSlab, type TiltArt, type Quat } from '../../three/tiltScene'
 
 /** Degrees of tilt / turn per pixel of Alt+drag. */
 const DRAG_DEG = 0.25
 /** Sideways px an Alt+drag can wander before it starts turning the plane. */
 const TURN_SLOP = 14
+/** How far a model turns per px of Alt-drag on it (radians). */
+const SPIN_RAD = 0.6 * Math.PI / 180
 /** Most models stood up at once — they are heavy. */
 const MAX_MODELS = 12
 
@@ -118,6 +120,26 @@ function useAltTiltGesture() {
       altUsed = true
       swallowClick = true
       if (e.button === 2) { dolly(e, host); swallowMenu = true; return }
+      // Over a standing model, tilted, Alt+left turns the model itself,
+      // freely, as a trackball (Brian 2026-11-04); the camera stays put.
+      const onView = !!target?.closest('[data-tilt-stage]') || target === document.querySelector('[data-tilt-stage="world"]')?.parentElement
+      const spun = isTilted(useTiltStore.getState()) && onView ? modelKey(models.pick?.(e.clientX, e.clientY)) : null
+      if (spun && !spun.startsWith('person|') && models.spin) {
+        const spin = models.spin
+        let last = { x: e.clientX, y: e.clientY }
+        const onMove = (ev: PointerEvent) => {
+          const q = spin(spun, ev.clientX - last.x, ev.clientY - last.y, SPIN_RAD)
+          last = { x: ev.clientX, y: ev.clientY }
+          if (q) useModelScaleStore.getState().setOrient(spun, q)
+        }
+        const onUp = () => {
+          window.removeEventListener('pointermove', onMove, true)
+          window.removeEventListener('pointerup', onUp, true)
+        }
+        window.addEventListener('pointermove', onMove, true)
+        window.addEventListener('pointerup', onUp, true)
+        return
+      }
       const { tilt: t0, yaw: yaw0 } = useTiltStore.getState()
       let turned = 0
       // A sideways swing is a peek (utils/peek): it only starts over
@@ -343,10 +365,12 @@ const models: {
   /** How high the last furniture pick hit it, px off the plane. */
   pickZ: (() => number) | null
   info: ((key: string) => { url: string; unit: number } | null) | null
+  /** Turn a model by a drag of (dx, dy) px: its new turn, or null. */
+  spin: ((key: string, dx: number, dy: number, rad: number) => Quat | null) | null
   hovered: string | null
   /** Where the cursor rests over the plane with no button down, or null. */
   at: { x: number; y: number } | null
-} = { pick: null, pickZ: null, info: null, hovered: null, at: null }
+} = { pick: null, pickZ: null, info: null, spin: null, hovered: null, at: null }
 /** A pick that lights up under the cursor: a model or a person, not
  *  furniture. */
 const modelKey = (k: string | null | undefined) => (k && !k.startsWith('deco|') ? k : null)
@@ -366,7 +390,7 @@ const live3d = () => isTilted(useTiltStore.getState())
 
 const frameState = (): TiltFrameState => {
   const ts = useTiltStore.getState()
-  const { unitsPerMetre: scales, sizeOf } = useModelScaleStore.getState()
+  const { unitsPerMetre: scales, sizeOf, orientOf } = useModelScaleStore.getState()
   return {
     tilt: ts.tilt, spin: ts.spin, yaw: ts.yaw, shiftX: ts.shiftX, shiftY: ts.shiftY, glide: ts.glide, texture: ts.texture, shade: ts.shade, wire: ts.wire, light: ts.light, turn: ts.turn,
     walls: ts.walls, figure: ts.figure, hovered: models.hovered,
@@ -376,6 +400,7 @@ const frameState = (): TiltFrameState => {
     ]),
     unitsFor: url => scales[url],
     sizeFor: key => sizeOf[key] ?? 1,
+    orientFor: key => orientOf[key],
     slabs: live3d() ? collectSlabs(fadeShown()) : (dropLifts(), []),
     art: live3d() ? lastArt : [],
     fade: fadeShown(),
@@ -526,6 +551,7 @@ const TiltModels: React.FC = () => {
       }
       models.pickZ = v.pickZ
       models.info = key => v.info(key)
+      models.spin = v.spinBy
       warm()
       raf = requestAnimationFrame(frame)
     }
@@ -554,7 +580,7 @@ const TiltModels: React.FC = () => {
       if (warmTimer) clearTimeout(warmTimer)
       cancelAnimationFrame(raf)
       post.disconnect(); marker.remove()
-      models.pick = null; models.pickZ = null; models.info = null
+      models.pick = null; models.pickZ = null; models.info = null; models.spin = null
       view?.dispose()
       canvas?.remove()
     }

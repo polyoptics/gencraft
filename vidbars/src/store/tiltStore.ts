@@ -347,6 +347,11 @@ interface ModelScaleStore {
    *  by dragging the model up or down. Absent: 1. */
   sizeOf: Record<string, number>
   setSize: (key: string, k: number) => void
+  /** How a model is turned on its card in the tilted view, a quaternion
+   *  [x, y, z, w]. Keyed as sizeOf, set by Alt-dragging the model.
+   *  Absent: as it came. */
+  orientOf: Record<string, [number, number, number, number]>
+  setOrient: (key: string, q: [number, number, number, number]) => void
 }
 
 export const useModelScaleStore = create<ModelScaleStore>()(persist(set => ({
@@ -354,8 +359,10 @@ export const useModelScaleStore = create<ModelScaleStore>()(persist(set => ({
   setUnitsPerMetre: (url, u) => set(s => ({ unitsPerMetre: { ...s.unitsPerMetre, [url]: u } })),
   sizeOf: {},
   setSize: (key, k) => set(s => ({ sizeOf: { ...s.sizeOf, [key]: k } })),
+  orientOf: {},
+  setOrient: (key, q) => set(s => ({ orientOf: { ...s.orientOf, [key]: q } })),
 }), {
   name: 'vidbars-model-scale',
-  partialize: s => ({ unitsPerMetre: s.unitsPerMetre, sizeOf: s.sizeOf }),
+  partialize: s => ({ unitsPerMetre: s.unitsPerMetre, sizeOf: s.sizeOf, orientOf: s.orientOf }),
   storage: createDebouncedIDBStorage(400),
 }))

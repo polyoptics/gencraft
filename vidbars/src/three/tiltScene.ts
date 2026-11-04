@@ -154,6 +154,9 @@ export interface TiltFrameState {
   unitsFor: (url: string) => number | undefined
   /** Display size multiplier for a card's model (dragging the model). */
   sizeFor: (key: string) => number
+  /** How the user turned a card's model (Alt-drag on it): a quaternion
+   *  [x, y, z, w], or undefined for as it came. */
+  orientFor: (key: string) => Quat | undefined
   /** Cards, decks, tiles and Viewers, for their thickness. */
   slabs: TiltSlab[]
   art: TiltArt[]
@@ -162,6 +165,8 @@ export interface TiltFrameState {
    *  The raised parts come already scaled by it. */
   fade: number
 }
+
+export type Quat = [number, number, number, number]
 
 /** A person, in metres, for scale. */
 export const PERSON_H = 1.75
@@ -175,6 +180,8 @@ interface Standing {
   url: string
   stand: THREE.Group       // on the plane; local +Y is the plane's normal
   turn: THREE.Group        // turntable about that normal
+  /** The user's own turn of the model (Alt-drag on it), about its middle. */
+  orient: THREE.Group
   inst: THREE.Object3D | null
   size: THREE.Vector3
   /** Model units per metre: set by the user, or guessed — 1 for glTF,
@@ -391,6 +398,8 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     stand.rotation.x = Math.PI / 2   // model +Y → plane normal; its front faces the viewer
     const turn = new THREE.Group()
     stand.add(turn)
+    const orient = new THREE.Group()
+    turn.add(orient)
     const figure = makeFigure()
     figure.visible = false
     stand.add(figure)
@@ -408,7 +417,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     wall.visible = false
     groundDeco.add(wall)
     const s: Standing = {
-      url, stand, turn, inst: null, size: new THREE.Vector3(), unit: 1, unitSet: false, triangles: 0,
+      url, stand, turn, orient, inst: null, size: new THREE.Vector3(), unit: 1, unitSet: false, triangles: 0,
       figure, wall, wallText: '', look: null, phase: Math.random() * 6.28, dead: false, seen: frameNo, shownAt: 0,
       mats: [], alpha: -1,
     }
@@ -432,8 +441,11 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       // Its own materials, so it can fade with the tilt and not fade the
       // same model in a Viewer or a poster.
       s.look = createLook(inst, c => s.mats.push({ m: c, o: c.opacity, t: c.transparent }))
-      inst.position.set(-m.centre.x, -m.minY, -m.centre.z)   // feet on the card, centred on it
-      turn.add(inst)
+      // Feet on the card, centred on it; the user's turn (orient) is about
+      // the model's middle, half its height up.
+      orient.position.set(0, m.size.y / 2, 0)
+      inst.position.set(-m.centre.x, -m.minY - m.size.y / 2, -m.centre.z)
+      orient.add(inst)
       s.inst = inst
     }).catch(() => { /* unreadable model: the card just stays flat */ })
     standing.set(key, s)
@@ -929,6 +941,9 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       if (s.look) applyLook(s.look, st.texture, st.shade)
       s.stand.visible = !!s.inst && ease > 0
       s.turn.rotation.y = st.turn ? now / 1000 * 0.6 + s.phase : 0
+      const q = st.orientFor(tg.key)
+      if (q) s.orient.quaternion.fromArray(q)
+      else s.orient.quaternion.identity()
       // glTF is in metres; something over 30 units tall is far likelier a
       // centimetre file (FBX's habit) than a 30 m model — unless the user
       // sized the person, which settles it.
@@ -1116,6 +1131,27 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     // '' is a slab hit (a solid part with no owner of its own).
     return best ? best.key : null
   }
+  /** Turn a model freely, as a trackball: a drag of (dx, dy) screen px
+   *  rolls its near side the way the cursor goes, about its middle,
+   *  whichever way the camera looks. Returns its new turn, or null. */
+  const spinAxis = new THREE.Vector3(), spinQ = new THREE.Quaternion(), parentQ = new THREE.Quaternion()
+  function spinBy(key: string, dx: number, dy: number, rad: number): Quat | null {
+    const s = standing.get(key)
+    if (!s || !s.inst) return null
+    const len = Math.hypot(dx, dy)
+    if (len) {
+      // In the camera's space: right is +x, up +y, toward the eye +z.
+      // Dragging right turns about +y, dragging down about +x.
+      spinAxis.set(dy, dx, 0).normalize().applyQuaternion(camera.quaternion)
+      s.turn.updateWorldMatrix(true, false)
+      s.turn.getWorldQuaternion(parentQ).invert()
+      spinAxis.applyQuaternion(parentQ).normalize()
+      spinQ.setFromAxisAngle(spinAxis, len * rad)
+      s.orient.quaternion.premultiply(spinQ).normalize()
+    }
+    return s.orient.quaternion.toArray() as Quat
+  }
+
   /** A hit on a slab pick() sees through. */
   function seenThrough(hit: THREE.Intersection, mesh: 'top' | 'side'): boolean {
     const f = hit.faceIndex
@@ -1159,5 +1195,5 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     renderer.forceContextLoss()
   }
 
-  return { frame, warm, pick, pickZ: () => pickedZ, info, dispose }
+  return { frame, warm, pick, pickZ: () => pickedZ, info, spinBy, dispose }
 }
