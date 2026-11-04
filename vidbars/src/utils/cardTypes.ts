@@ -34,15 +34,17 @@ export interface CardTypeInfo {
 
 /** In the order the picker lists them. Element: a card that is not (yet)
  *  any of the others, a loose bit of context. Every card without a type
- *  is one. */
+ *  is one (and keeps whatever colour it had until made one on purpose).
+ *  Colours: Brian's picks (character red, prop blue, faction purple),
+ *  the rest each its own. */
 export const CARD_TYPES: Record<CardType, CardTypeInfo> = {
-  element:   { label: 'Element',   color: '#5b8dd9', details: [] },
+  element:   { label: 'Element',   color: '#6b7280', details: [] },
   character: { label: 'Character', color: '#c8463f', details: ['ID', 'Licence', 'Age', 'Height', 'Role', 'Stats'] },
   faction:   { label: 'Faction',   color: '#7d55c7', details: ['Territory', 'Allies', 'Rivals'] },
   location:  { label: 'Location',  color: '#23897e', details: ['Place', 'Building', 'Use', 'Floors', 'Basement'] },
-  prop:      { label: 'Prop',      color: '#c97a2c', details: ['Kind', 'Ammo', 'Capacity', 'Owner'] },
+  prop:      { label: 'Prop',      color: '#2f64c9', details: ['Kind', 'Ammo', 'Capacity', 'Owner'] },
   audio:     { label: 'Audio',     color: '#b0478a', details: ['Artist', 'Length', 'Tempo', 'Key', 'Mood'] },
-  scene:     { label: 'Scene',     color: '#3f6fd0', details: ['Act', 'Location', 'Time of day', 'Mood'] },
+  scene:     { label: 'Scene',     color: '#c9962a', details: ['Act', 'Location', 'Time of day', 'Mood'] },
 }
 export const CARD_TYPE_ORDER = Object.keys(CARD_TYPES) as CardType[]
 

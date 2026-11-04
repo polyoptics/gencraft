@@ -7,6 +7,7 @@ import { sameRef, type LinkRef } from '../utils/linkTargets'
 import type { Bar } from '../types/bar'
 import { TEMPLATES } from '../data/templates'
 import { CARD_TYPES, cardTypeOf, newDetailId, typeColor, withTypeDetails, type CardType } from '../utils/cardTypes'
+import { newSceneLayout, putCards, type SceneDiv } from '../utils/sceneCard'
 import { getBoardAbsolutePos, computeGroupLayout, yToRow } from '../utils/nleRows'
 import {
   makeBar,
@@ -151,6 +152,8 @@ export interface ProjectGroup {
   /** A FACTION's ranks: member card id → its rank (1 = the top). Its
    *  members are the cards it links to (linkedGroupIds). */
   ranks?: Record<string, number>
+  /** A SCENE card's face: its divisions (utils/sceneCard). */
+  scene?: SceneDiv
 }
 
 /** Find which group a board belongs to */
@@ -337,6 +340,9 @@ interface BoardsState {
    *  detail now shows the card dropped ('new': a new row for it, named
    *  after its type). */
   linkGroupDetail: (groupId: string, detailId: string | 'new', cardId: string) => void
+  setGroupScene: (groupId: string, scene: SceneDiv) => void
+  /** Cards let go on one of a scene's divisions: in it (out of the others). */
+  putCardsInDivision: (sceneId: string, divId: string, cardIds: string[]) => void
   /** A member's rank in a faction (null: unranked). */
   setMemberRank: (factionId: string, memberId: string, rank: number | null) => void
   /** Out of the faction: unlinked, and its rank forgotten. */
@@ -1012,6 +1018,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
       ...g,
       cardType: type === 'element' ? undefined : type,
       details: withTypeDetails(g.details, type),
+      ...(type === 'scene' && !g.scene ? { scene: newSceneLayout() } : {}),
       ...(g.ownColor ? {} : { color: typeColor(type, chosen) }),
     }) }))
   },
@@ -1042,6 +1049,16 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
       }
       return { ...g, details: details.map(d => d.id === detailId ? { ...d, link: { card: cardId } } : d) }
     }) }))
+  },
+
+  setGroupScene(groupId, scene) {
+    set(s => ({ groups: s.groups.map(g => g.id === groupId ? { ...g, scene } : g) }))
+  },
+
+  putCardsInDivision(sceneId, divId, cardIds) {
+    const ids = cardIds.filter(id => id !== sceneId)
+    if (!ids.length) return
+    set(s => ({ groups: s.groups.map(g => g.id === sceneId && g.scene ? { ...g, scene: putCards(g.scene, divId, ids) } : g) }))
   },
 
   setMemberRank(factionId, memberId, rank) {

@@ -34,6 +34,7 @@ import { Viewport3DLayer } from '../Viewport3D/Viewport3DLayer'
 import { NLETimelineHeader, NLE_HEADER_CANVAS_H, headerExtend as computeHeaderExtend, headerScreenH, overviewScale } from '../NLE/NLETimelineHeader'
 import { HeroImageLayer } from './HeroImageLayer'
 import { CardBack, FlipButton, backColor, useCardFlip } from './CardBack'
+import { SceneFace } from './SceneFace'
 import { useFxStore } from '../../store/fxStore'
 import { cardStripId } from '../../utils/fx/cardStrips'
 import { cardHitAt } from '../../utils/cardContent'
@@ -962,6 +963,12 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
         ) : group.effect ? (
           <div style={{ position: 'absolute', top: headerPad, left: 0, right: 0, bottom: 0, overflow: 'hidden', borderRadius: '0 0 12px 12px', display: 'flex', flexDirection: 'column' }}>
             <EffectCardFace group={group} width={screenWidth} height={Math.max(1, cardHeight - headerPad)} />
+          </div>
+        ) : group.cardType === 'scene' && group.scene ? (
+          // A scene card's face is its divisions (Brian's storyMap).
+          <div style={{ position: 'absolute', top: headerPad, left: 0, right: 0, bottom: 0 }}>
+            <SceneFace group={group} width={screenWidth} height={Math.max(1, cardHeight - headerPad)}
+              reserve={6 + Math.min(32, Math.max(8, 16 * overviewScale(zoom), headerScreenH(zoom) * 0.85)) + 3} />
           </div>
         ) : (<>
         {group.cut
