@@ -6,7 +6,7 @@ import { usePinTravelStore } from './pinTravelStore'
 import { sameRef, type LinkRef } from '../utils/linkTargets'
 import type { Bar } from '../types/bar'
 import { TEMPLATES } from '../data/templates'
-import { CARD_TYPES, cardTypeOf, newDetailId, typeColor, withTypeDetails, type CardType } from '../utils/cardTypes'
+import { CARD_TYPES, cardTypeOf, isAbove, newDetailId, typeColor, withTypeDetails, type CardType } from '../utils/cardTypes'
 import { newSceneLayout, putCards, type SceneDiv } from '../utils/sceneCard'
 import { getBoardAbsolutePos, computeGroupLayout, yToRow } from '../utils/nleRows'
 import {
@@ -149,9 +149,10 @@ export interface ProjectGroup {
   /** Coloured by hand: keeps its colour when its type, or its type's
    *  colour, changes. Otherwise it wears its type's colour. */
   ownColor?: boolean
-  /** A FACTION's ranks: member card id → its rank (1 = the top). Its
-   *  members are the cards it links to (linkedGroupIds). */
-  ranks?: Record<string, number>
+  /** A FACTION's tree: member card id → the members it reports to. Its
+   *  members are the cards it links to (linkedGroupIds); a member's rank
+   *  is worked out from this (utils/cardTypes factionMembers). */
+  reportsTo?: Record<string, string[]>
   /** A SCENE card's face: its divisions (utils/sceneCard). */
   scene?: SceneDiv
 }
@@ -343,9 +344,12 @@ interface BoardsState {
   setGroupScene: (groupId: string, scene: SceneDiv) => void
   /** Cards let go on one of a scene's divisions: in it (out of the others). */
   putCardsInDivision: (sceneId: string, divId: string, cardIds: string[]) => void
-  /** A member's rank in a faction (null: unranked). */
-  setMemberRank: (factionId: string, memberId: string, rank: number | null) => void
-  /** Out of the faction: unlinked, and its rank forgotten. */
+  /** Who a faction member reports to: `bossId` alone (null: no one, the
+   *  top), or with `also`, that one added to its bosses (taken off if it
+   *  is one already). Never someone below it. */
+  setReportsTo: (factionId: string, memberId: string, bossId: string | null, also?: boolean) => void
+  /** Out of the faction: unlinked; those who reported only to it report
+   *  to its bosses instead. */
   removeMember: (factionId: string, memberId: string) => void
   setGroupDetails: (groupId: string, details: import('../utils/cardTypes').CardDetail[]) => void
   setGroupCardHeroImage: (groupId: string, url: string | null) => void
@@ -1061,17 +1065,36 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
     set(s => ({ groups: s.groups.map(g => g.id === sceneId && g.scene ? { ...g, scene: putCards(g.scene, divId, ids) } : g) }))
   },
 
-  setMemberRank(factionId, memberId, rank) {
+  setReportsTo(factionId, memberId, bossId, also) {
     set(s => ({ groups: s.groups.map(g => {
       if (g.id !== factionId) return g
-      const { [memberId]: _old, ...rest } = g.ranks ?? {}
-      return { ...g, ranks: rank == null ? rest : { ...rest, [memberId]: rank } }
+      const tree = { ...(g.reportsTo ?? {}) }
+      const now = tree[memberId] ?? []
+      let next: string[]
+      if (bossId == null) next = []
+      else {
+        if (bossId === memberId || isAbove(g, memberId, bossId)) return g
+        next = also ? (now.includes(bossId) ? now.filter(b => b !== bossId) : [...now, bossId]) : [bossId]
+      }
+      if (next.length) tree[memberId] = next
+      else delete tree[memberId]
+      return { ...g, reportsTo: tree }
     }) }))
   },
 
   removeMember(factionId, memberId) {
     get().unlinkGroups(factionId, memberId)
-    get().setMemberRank(factionId, memberId, null)
+    set(s => ({ groups: s.groups.map(g => {
+      if (g.id !== factionId || !g.reportsTo) return g
+      const { [memberId]: theirs = [], ...rest } = g.reportsTo
+      const tree: Record<string, string[]> = {}
+      for (const [id, bosses] of Object.entries(rest)) {
+        const left = bosses.filter(b => b !== memberId)
+        const next = bosses.includes(memberId) && !left.length ? theirs.filter(b => b !== id) : left
+        if (next.length) tree[id] = next
+      }
+      return { ...g, reportsTo: tree }
+    }) }))
   },
 
   setGroupDetails(groupId, details) {

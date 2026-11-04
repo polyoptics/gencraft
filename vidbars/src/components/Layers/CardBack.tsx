@@ -12,7 +12,7 @@ import { useBoardsStore } from '../../store/boardsStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { useLinkDragStore } from '../../store/linkDragStore'
 import { edgeColorFromHex, hexToHsl, hslToHex } from '../../utils/colorUtils'
-import { CARD_TYPES, CARD_TYPE_ORDER, cardTypeOf, detailShown, factionMembers, factionsOf, newDetailId, typeColor, type CardDetail, type CardType } from '../../utils/cardTypes'
+import { CARD_TYPES, CARD_TYPE_ORDER, cardTypeOf, detailShown, factionMembers, factionsOf, isAbove, newDetailId, typeColor, type CardDetail, type CardType } from '../../utils/cardTypes'
 import { ColorPickerPopup } from '../Bar/ColorPickerPopup'
 
 /** The back is laid out at a new card's own size and scaled with the card,
@@ -289,52 +289,14 @@ const LinkShown: React.FC<{ text: string; color?: string; missing?: boolean; who
   </span>
 )
 
-/** A member's rank in a faction: click to type it (1 = the top; empty:
- *  unranked). */
-const RankChip: React.FC<{ rank?: number; color: string; where: () => { x: number; y: number }; onSet: (r: number | null) => void }> = ({ rank, color, where, onSet }) => {
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState('')
-  const ref = useRef<HTMLInputElement>(null)
-  const done = useRef(false)
-  const click = useClick(where, () => { done.current = false; setDraft(rank ? String(rank) : ''); setEditing(true); requestAnimationFrame(() => { ref.current?.focus(); ref.current?.select() }) })
-  const box: React.CSSProperties = {
-    width: 15, height: 11, flexShrink: 0, boxSizing: 'border-box', borderRadius: 3, fontSize: 8, fontWeight: 800, lineHeight: '9px',
-    textAlign: 'center', fontFamily: 'inherit', color: '#fff', border: `1px solid ${edgeColorFromHex(color, 0.5)}`, padding: 0,
-  }
-  if (editing) {
-    const commit = () => {
-      if (done.current) return
-      done.current = true
-      const n = parseInt(draft, 10)
-      onSet(Number.isFinite(n) && n > 0 ? Math.min(99, n) : null)
-      setEditing(false)
-    }
-    return (
-      <input
-        ref={ref}
-        data-member-rank-input
-        value={draft}
-        inputMode="numeric"
-        onChange={e => setDraft(e.target.value.replace(/[^0-9]/g, '').slice(0, 2))}
-        onPointerDown={stopPress}
-        onDoubleClick={e => e.stopPropagation()}
-        onKeyDown={e => {
-          e.stopPropagation()
-          if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); commit() }
-          else if (e.key === 'Escape') { e.preventDefault(); done.current = true; setEditing(false) }
-        }}
-        onBlur={commit}
-        style={{ ...box, background: 'rgba(0,0,0,0.5)', outline: 'none', userSelect: 'text' }}
-      />
-    )
-  }
-  return (
-    <div data-member-rank={rank ?? ''} title="Rank in this faction (1 = the top): click to set" {...click}
-      style={{ ...box, cursor: 'pointer', background: rank ? edgeColorFromHex(color, 0.3) : 'rgba(0,0,0,0.25)', opacity: rank ? 1 : 0.6 }}>
-      {rank ?? '–'}
-    </div>
-  )
-}
+/** A member's rank in a faction: steps down from the top (1). Read
+ *  from who reports to whom, so it is shown, not typed. */
+const RankBadge: React.FC<{ rank: number; color: string }> = ({ rank, color }) => (
+  <div data-member-rank={rank} title="Rank: steps down from the top" style={{
+    width: 13, height: 11, flexShrink: 0, boxSizing: 'border-box', borderRadius: 3, fontSize: 8, fontWeight: 800, lineHeight: '9px',
+    textAlign: 'center', color: '#fff', border: `1px solid ${edgeColorFromHex(color, 0.5)}`, background: edgeColorFromHex(color, 0.3),
+  }}>{rank}</div>
+)
 
 /** The details side, filling the card's body (below its name tab). */
 export const CardBack: React.FC<{
@@ -355,6 +317,10 @@ export const CardBack: React.FC<{
   const [rowHover, setRowHover] = useState<string | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number; kind: 'type' } | { x: number; y: number; kind: 'link'; id: string } | null>(null)
   const [picker, setPicker] = useState<{ x: number; y: number; type: CardType } | null>(null)
+  // A member being dragged in a faction's list: onto the member it reports
+  // to ('top': onto MEMBERS, it reports to no one). `ok`: it can go there
+  // (never under someone below it).
+  const [mdrag, setMdrag] = useState<{ id: string; over: string | null; ok: boolean } | null>(null)
 
   // Laid out at a new card's size, then scaled to this card.
   const s = Math.max(0.01, Math.min(width / BACK_W, height / BACK_H))
@@ -407,10 +373,61 @@ export const CardBack: React.FC<{
   }
   const typeClick = useClick(where, e => setMenu({ x: e.clientX, y: e.clientY, kind: 'type' }))
 
+  /** Press on a member: drag it onto the one it reports to. Shift on
+   *  letting go: as well as its boss now (or no longer, if it already
+   *  reports to that one). Found by what is under the pointer, which the
+   *  3D view answers for its re-sent flat points too. */
+  const onMemberDown = (e: React.PointerEvent, id: string) => {
+    if (e.button !== 0) return
+    e.stopPropagation()
+    e.preventDefault()
+    const x0 = e.clientX, y0 = e.clientY
+    let live = false
+    const at = (ev: PointerEvent): string | null => {
+      for (const el of document.elementsFromPoint(ev.clientX, ev.clientY)) {
+        const back = el.closest('[data-card-back]')
+        if (!back) continue
+        if (back.getAttribute('data-card-back') !== groupId) return null
+        const row = el.closest<HTMLElement>('[data-faction-member]')
+        if (row) return row.dataset.factionMember ?? null
+        return el.closest('[data-faction-top]') ? 'top' : null
+      }
+      return null
+    }
+    const okAt = (over: string | null) => {
+      const f = useBoardsStore.getState().groups.find(g => g.id === groupId)
+      if (!f || !over || over === id) return false
+      return over === 'top' || !isAbove(f, id, over)
+    }
+    const end = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('keydown', onKey, true)
+      setMdrag(null)
+    }
+    const onMove = (ev: PointerEvent) => {
+      if (!live && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 3) return
+      live = true
+      const over = at(ev)
+      setMdrag({ id, over, ok: okAt(over) })
+    }
+    const onUp = (ev: PointerEvent) => {
+      const over = live ? at(ev) : null
+      end()
+      if (!over || !okAt(over)) return
+      useUndoCoordinator.getState().checkpoint()
+      useBoardsStore.getState().setReportsTo(groupId, id, over === 'top' ? null : over, over !== 'top' && ev.shiftKey)
+    }
+    const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') { ev.stopPropagation(); end() } }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('keydown', onKey, true)
+  }
+
   const ink = edgeColorFromHex(color, 0.9)
   // The names' column fits the longest name (within reason), the same for
   // every row, so the values line up.
-  const longest = Math.max(4, ...details.map(d => d.name.length), memberOf.length ? 7 : 0)
+  const longest = Math.max(4, ...details.map(d => d.name.length), memberOf.length ? (memberOf.some(m => m.bosses.length) ? 10 : 7) : 0)
   const cols = `${Math.round(Math.min(w * 0.58, Math.max(w * 0.3, longest * 5.2 + 8)))}px minmax(0, 1fr)`
   const typeMenu = (): MenuItem[] => {
     const bs = useBoardsStore.getState()
@@ -487,22 +504,51 @@ export const CardBack: React.FC<{
           {/* A faction: its members, by rank. */}
           {type === 'faction' && me && (
             <>
-              <div style={{ fontSize: 7, fontWeight: 800, letterSpacing: 1, color: ink, opacity: 0.6, padding: '1px 2px 0' }}>MEMBERS</div>
+              <div
+                data-faction-top
+                title="Drag a member here: it reports to no one (the top)"
+                style={{
+                  fontSize: 7, fontWeight: 800, letterSpacing: 1, color: ink, padding: '1px 2px 0', borderRadius: 2,
+                  opacity: mdrag?.over === 'top' && mdrag.ok ? 1 : 0.6,
+                  outline: mdrag?.over === 'top' && mdrag.ok ? '1px dashed rgba(255,255,255,0.8)' : undefined,
+                  background: mdrag?.over === 'top' && mdrag.ok ? 'rgba(255,255,255,0.1)' : undefined,
+                }}
+              >MEMBERS</div>
               {members.length === 0 && (
                 <div style={{ fontSize: 8, opacity: 0.45, padding: '0 2px 2px' }}>Drag a card’s + here to add it.</div>
               )}
-              {members.map(({ card, rank }) => (
+              {members.map(({ card, rank, depth, bosses }) => {
+                const target = mdrag?.over === card.id && mdrag.ok
+                return (
                 <div
                   key={card.id}
                   data-faction-member={card.id}
+                  data-member-depth={depth}
+                  title="Drag onto the member it reports to (Shift: as well as its boss now). Onto MEMBERS: the top."
+                  onPointerDown={e => onMemberDown(e, card.id)}
                   onPointerEnter={() => setRowHover('m:' + card.id)}
                   onPointerLeave={() => setRowHover(r => r === 'm:' + card.id ? null : r)}
-                  style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 4, borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: 1, minHeight: 13 }}
+                  style={{
+                    position: 'relative', display: 'flex', alignItems: 'center', gap: 3, marginLeft: depth * 7,
+                    borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: 1, minHeight: 13, borderRadius: 2,
+                    cursor: mdrag ? (mdrag.ok ? 'grabbing' : 'no-drop') : 'grab',
+                    opacity: mdrag?.id === card.id ? 0.45 : 1,
+                    outline: target ? '1px dashed rgba(255,255,255,0.8)' : undefined,
+                    background: target ? 'rgba(255,255,255,0.1)' : undefined,
+                  }}
                 >
-                  <RankChip rank={rank} color={color} where={where} onSet={r => { useUndoCoordinator.getState().checkpoint(); useBoardsStore.getState().setMemberRank(groupId, card.id, r) }} />
+                  {/* Under the member above it that it reports to. */}
+                  {depth > 0 && <span style={{ width: 4, height: 6, marginTop: -5, flexShrink: 0, borderLeft: '1px solid rgba(255,255,255,0.35)', borderBottom: '1px solid rgba(255,255,255,0.35)' }} />}
+                  <RankBadge rank={rank} color={color} />
                   <span style={{ width: 6, height: 6, borderRadius: 2, background: card.color, flexShrink: 0, border: '1px solid rgba(255,255,255,0.5)' }} />
-                  <span style={{ fontSize: 9.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{card.name || 'Untitled'}</span>
-                  {rowHover === 'm:' + card.id && !linking && (
+                  <span style={{ fontSize: 9.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: '0 1 auto' }}>{card.name || 'Untitled'}</span>
+                  {/* Its other bosses: it reports to them too. */}
+                  {bosses.length > 1 && (
+                    <span data-member-also title={'Also reports to ' + bosses.slice(1).map(b => b.name || 'Untitled').join(', ')} style={{ fontSize: 7.5, opacity: 0.6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: '0 1000 auto' }}>
+                      &amp; {bosses.slice(1).map(b => b.name || 'Untitled').join(', ')}
+                    </span>
+                  )}
+                  {rowHover === 'm:' + card.id && !linking && !mdrag && (
                     <button
                       type="button"
                       data-faction-member-remove
@@ -517,7 +563,8 @@ export const CardBack: React.FC<{
                     >×</button>
                   )}
                 </div>
-              ))}
+                )
+              })}
               <div style={{ fontSize: 7, fontWeight: 800, letterSpacing: 1, color: ink, opacity: 0.6, padding: '4px 2px 0' }}>DETAILS</div>
             </>
           )}
@@ -581,14 +628,18 @@ export const CardBack: React.FC<{
             <div style={{ fontSize: 8.5, opacity: 0.45, padding: '2px 2px 0' }}>No details yet.</div>
           )}
           {/* The factions it is in, read from them: name and rank. */}
-          {memberOf.flatMap(({ faction, rank }) => [['FACTION', faction.name || 'Untitled'], ...(rank ? [['RANK', String(rank)]] : [])].map(([k, v], i) => (
-            <div key={faction.id + k} data-member-of={i === 0 ? faction.id : undefined} style={{
+          {memberOf.flatMap(({ faction, rank, bosses }) => [
+            { k: 'FACTION', v: faction.name || 'Untitled', dot: faction.color, attr: { 'data-member-of': faction.id } },
+            { k: 'RANK', v: String(rank) },
+            ...(bosses.length ? [{ k: 'REPORTS TO', v: bosses.map(b => b.name || 'Untitled').join(', '), dot: bosses[0].color, attr: { 'data-member-boss': faction.id } }] : []),
+          ].map(({ k, v, dot, attr }) => (
+            <div key={faction.id + k} {...attr} style={{
               display: 'grid', gridTemplateColumns: cols, alignItems: 'baseline', gap: 3,
               borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: 1,
             }}>
-              <div style={{ fontSize: 8, fontWeight: 700, color: ink, opacity: 0.85, letterSpacing: 0.2, padding: '0 3px' }}>{k}</div>
+              <div style={{ fontSize: 8, fontWeight: 700, color: ink, opacity: 0.85, letterSpacing: 0.2, padding: '0 3px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{k}</div>
               <div style={{ fontSize: 10, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', padding: '0 3px' }}>
-                {i === 0 ? <LinkShown text={v} color={faction.color} whole /> : v}
+                {dot ? <LinkShown text={v} color={dot} whole /> : v}
               </div>
             </div>
           )))}

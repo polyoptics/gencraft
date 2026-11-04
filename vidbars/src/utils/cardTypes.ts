@@ -95,22 +95,91 @@ export function detailText(groups: ProjectGroup[], cardId: string, name: string)
   return d ? detailShown(groups, d).text : undefined
 }
 
-/** A faction's members: the cards it links to (a card's link "+" let go
- *  on the faction), each with its rank there (1 = the top). Ranked first,
- *  by rank, then the unranked, in the order they joined. */
-export function factionMembers(groups: ProjectGroup[], faction: ProjectGroup): { card: ProjectGroup; rank?: number }[] {
-  const ids = faction.linkedGroupIds ?? []
-  const list = ids.flatMap((id, i) => {
-    const card = groups.find(g => g.id === id)
-    return card ? [{ card, rank: faction.ranks?.[id], i }] : []
-  })
-  list.sort((a, b) => (a.rank ?? Infinity) - (b.rank ?? Infinity) || a.i - b.i)
-  return list.map(({ card, rank }) => ({ card, rank }))
+/** A faction member's place in it. */
+export interface FactionMember {
+  card: ProjectGroup
+  /** Steps down from the top (the top is 1): one below the lowest of the
+   *  members it reports to. Worked out from who reports to whom, never
+   *  typed, so it cannot disagree with the tree. */
+  rank: number
+  /** How far in it sits in the faction's list (0: the top). */
+  depth: number
+  /** The members it reports to. The first is the one it sits under in
+   *  the list (the lowest of them); any others are its other bosses. */
+  bosses: ProjectGroup[]
 }
 
-/** The factions a card is a member of, and its rank in each. */
-export function factionsOf(groups: ProjectGroup[], cardId: string): { faction: ProjectGroup; rank?: number }[] {
+/** The members `memberId` reports to in `faction` (members only). */
+function bossIdsOf(faction: ProjectGroup, memberId: string, members: Set<string>): string[] {
+  return [...new Set(faction.reportsTo?.[memberId] ?? [])].filter(b => b !== memberId && members.has(b))
+}
+
+/** A faction's members, read as its tree, top down: the cards it links to
+ *  (a card's link "+" let go on the faction), each under the member it
+ *  reports to (faction.reportsTo), in the order they joined. Someone who
+ *  reports to more than one sits under the lowest of them. */
+export function factionMembers(groups: ProjectGroup[], faction: ProjectGroup): FactionMember[] {
+  const byId = new Map(groups.map(g => [g.id, g]))
+  const ids = [...new Set(faction.linkedGroupIds ?? [])].filter(id => byId.has(id))
+  const members = new Set(ids)
+  const rank = new Map<string, number>()
+  const rankOf = (id: string, path: Set<string>): number => {
+    const known = rank.get(id)
+    if (known) return known
+    if (path.has(id)) return 0 // a loop (should never be stored): read as above the top
+    path.add(id)
+    const bs = bossIdsOf(faction, id, members)
+    const r = bs.length ? 1 + Math.max(...bs.map(b => rankOf(b, path))) : 1
+    path.delete(id)
+    rank.set(id, Math.max(1, r))
+    return Math.max(1, r)
+  }
+  ids.forEach(id => rankOf(id, new Set()))
+  const bossesOf = new Map(ids.map(id => {
+    const bs = bossIdsOf(faction, id, members)
+    // The one it sits under first: the lowest of its bosses.
+    const low = Math.max(0, ...bs.map(b => rank.get(b) ?? 0))
+    const i = bs.findIndex(b => rank.get(b) === low)
+    return [id, i > 0 ? [bs[i], ...bs.slice(0, i), ...bs.slice(i + 1)] : bs] as const
+  }))
+  const under = new Map<string, string[]>()
+  const tops: string[] = []
+  for (const id of ids) {
+    const first = bossesOf.get(id)![0]
+    if (first && (rank.get(first) ?? 0) < (rank.get(id) ?? 0)) under.set(first, [...(under.get(first) ?? []), id])
+    else tops.push(id)
+  }
+  const out: FactionMember[] = []
+  const seen = new Set<string>()
+  const walk = (id: string, depth: number) => {
+    if (seen.has(id)) return
+    seen.add(id)
+    out.push({ card: byId.get(id)!, rank: rank.get(id) ?? 1, depth, bosses: bossesOf.get(id)!.map(b => byId.get(b)!) })
+    for (const k of under.get(id) ?? []) walk(k, depth + 1)
+  }
+  tops.forEach(id => walk(id, 0))
+  ids.forEach(id => walk(id, 0))
+  return out
+}
+
+/** Whether `memberId` is above `otherId` in the faction: `otherId`
+ *  reports to it, or to someone who does, and so on. */
+export function isAbove(faction: ProjectGroup, memberId: string, otherId: string): boolean {
+  const seen = new Set<string>()
+  const up = (id: string): boolean => {
+    if (seen.has(id)) return false
+    seen.add(id)
+    return (faction.reportsTo?.[id] ?? []).some(b => b === memberId || up(b))
+  }
+  return up(otherId)
+}
+
+/** The factions a card is a member of: its rank and bosses in each. */
+export function factionsOf(groups: ProjectGroup[], cardId: string): { faction: ProjectGroup; rank: number; bosses: ProjectGroup[] }[] {
   return groups
     .filter(g => g.cardType === 'faction' && (g.linkedGroupIds ?? []).includes(cardId))
-    .map(faction => ({ faction, rank: faction.ranks?.[cardId] }))
+    .flatMap(faction => {
+      const m = factionMembers(groups, faction).find(x => x.card.id === cardId)
+      return m ? [{ faction, rank: m.rank, bosses: m.bosses }] : []
+    })
 }
