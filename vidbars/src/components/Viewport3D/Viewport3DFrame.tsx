@@ -43,6 +43,7 @@ import { mayHaveDiskFile } from '../../hooks/useFileMenu'
 import { DragOutGrip } from '../UI/DragOutGrip'
 import { FxViewerOverlay } from './FxViewerOverlay'
 import { RailViewerOverlay } from './RailViewerOverlay'
+import { RoughCutViewerOverlay } from '../RoughCut/RoughCutScreen'
 import { useFreshOnTop, FRESH_Z } from '../../utils/freshOnTop'
 
 /** Selecting a Viewer takes over the canvas selection outright, so the
@@ -605,6 +606,8 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
         {/* Loop strips docked to its left edge: the active one's live
             result (utils/railViewer). */}
         <RailViewerOverlay windowId={id} fontSize={fontSize} />
+        {/* A Rough Cut touching it: the movie, at the cut's playhead. */}
+        <RoughCutViewerOverlay windowId={id} fontSize={fontSize} />
         {showBodyOverlay && (
           <div data-viewer-content="" style={{
             position: 'absolute', inset: 0,

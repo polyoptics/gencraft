@@ -1,25 +1,33 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
+import ReactDOM from 'react-dom'
+import { useUndoCoordinator } from '../../store/undoCoordinator'
+import { createMediaCard } from '../../utils/cardGrid'
+import { clientToCanvas } from '../../utils/fx/createEffect'
 import { useBoardsStore } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useFreeNodeStore, type FreeNodeData } from '../../store/freeNodeStore'
 import { addFreeNodeCentered } from '../../utils/canvasCreate'
 import { cardScreenRect } from '../Layers/CardLayer'
 import { useResolvedMedia } from '../../utils/useResolvedMedia'
+import { useCutPlay } from '../../utils/cutMedia'
+import { openRoughCutViewer, playRoughCut, RoughCutScreen } from './RoughCutScreen'
 import {
-  appendCards, clipAt, clipLength, cutLength, MIN_CLIP, ROW_FIT_W, setRoughCut, type RoughClip,
+  appendCards, clipAt, clipLength, clipMedia, clipRow, clipStart, clipEnd, cutLength, MIN_CLIP, placed, setRoughCut, type RoughClip,
 } from '../../utils/roughCut'
 
-/** The Rough Cut node: a preview on top, the cut below as one row of clips,
- *  each as wide as it is long. Laid out at one design size and scaled to the
- *  node like the Film Look mixer, so it reads the same at every zoom. */
+/** The Rough Cut node: a preview on top, the timeline below: rows of clips,
+ *  each as wide as it is long, placed freely in time. Its controls keep one
+ *  size (set when it is made); stretching the node gives the timeline more
+ *  length, and pulling it down gives it more rows. */
 const DW = 1400
-const DH = 540
-/** The node's shape, height ÷ width, title bar included. It only ever scales. */
+/** A new node's shape, height ÷ width, title bar included (one row). */
 export const ROUGH_CUT_ASPECT = 562 / 1400
 const PREVIEW_H = 300
 const RULER_H = 26
 const TRACK_H = 150
+const LEFT = 20
 const EDGE = 12
+const SNAP = 12
 const PPS_MIN = 6, PPS_MAX = 600
 
 /** A new Rough Cut's size: most of the canvas, whatever the zoom (like the
@@ -38,6 +46,7 @@ export function openRoughCut(at?: { cx: number; cy: number }) {
   const { width, height } = roughCutSize()
   useFreeNodeStore.getState().updateFreeNode(id, {
     width, height, x: n.x + n.width / 2 - width / 2, y: n.y + n.height / 2 - height / 2,
+    roughCut: { clips: [], pps: 60, ...n.roughCut, ui: width / DW },
   })
 }
 
@@ -52,41 +61,70 @@ const scaleOf = (el: HTMLElement) => el.getBoundingClientRect().width / Math.max
 
 export function RoughCutBody({ id, node, bodyW, bodyH }: { id: string; node: FreeNodeData; bodyW: number; bodyH: number }) {
   const cut = node.roughCut ?? { clips: [], pps: 60 }
-  const clips = cut.clips
+  const clips = useMemo(() => placed(cut.clips), [cut.clips])
   const pps = cut.pps
   const total = cutLength(clips)
-  const fit = Math.max(0.001, Math.min(bodyW / DW, bodyH / DH))
+  // Older ones had no fixed control size: they keep the one they have now.
+  const ui = Math.max(0.001, cut.ui ?? Math.min(bodyW / DW, bodyH / (DW * ROUGH_CUT_ASPECT - 22)))
+  useEffect(() => {
+    if (cut.ui == null && node.roughCut) useFreeNodeStore.getState().updateFreeNode(id, { roughCut: { ...node.roughCut, ui } })
+  }, [id, cut.ui, ui, node.roughCut])
+  const W = bodyW / ui, H = bodyH / ui
+  const fitRows = Math.max(1, Math.floor((H - PREVIEW_H - RULER_H - 14) / TRACK_H))
+  const usedRows = clips.reduce((a, c) => Math.max(a, clipRow(c) + 1), 1)
+  const rows = Math.max(fitRows, usedRows)
 
-  const [t, setT] = useState(0)
-  const [playing, setPlaying] = useState(false)
+  // The playhead is shared with a Viewer touching it (RoughCutScreen).
+  const t = useCutPlay(s => s.t[id] ?? 0)
+  const playing = useCutPlay(s => s.playing === id)
+  const setT = (v: number | ((p: number) => number)) => {
+    const st = useCutPlay.getState()
+    st.setT(id, typeof v === 'function' ? v(st.t[id] ?? 0) : v)
+  }
+  const setPlaying = (on: boolean | ((p: boolean) => boolean)) =>
+    playRoughCut(id, typeof on === 'function' ? on(useCutPlay.getState().playing === id) : on)
   const [selected, setSelected] = useState<string | null>(null)
   /** A trim or move in flight: drawn from this, written once on release. */
   const [live, setLive] = useState<RoughClip[] | null>(null)
-  const [insertAt, setInsertAt] = useState<number | null>(null)
   const [dropHover, setDropHover] = useState(false)
+  /** A clip carried off the Rough Cut, drawn at the pointer. */
+  const [carry, setCarry] = useState<{ clip: RoughClip; x: number; y: number } | null>(null)
   const shown = live ?? clips
   const scroller = useRef<HTMLDivElement>(null)
 
-  useCardDrops(id, node, setDropHover)
+  /** Where a canvas point falls on the timeline: its time and row, or null off it. */
+  const geo = useRef({ ui, pps, rows, bodyH })
+  geo.current = { ui, pps, rows, bodyH }
+  const timelineAt = (cx: number, cy: number): { t: number; row: number } | null => {
+    const n = useFreeNodeStore.getState().nodes[id]
+    const el = scroller.current
+    if (!n || !el) return null
+    const g = geo.current
+    const x = (cx - n.x) / g.ui + el.scrollLeft
+    const y = (cy - (n.y + n.height - g.bodyH)) / g.ui - PREVIEW_H + el.scrollTop
+    const row = Math.floor((y - RULER_H) / TRACK_H)
+    if (y < 0 || row >= g.rows) return null
+    return { t: Math.max(0, (x - LEFT) / g.pps), row: Math.max(0, row) }
+  }
+  useCardDrops(id, node, setDropHover, timelineAt)
 
   // Playback: the playhead runs on the clock, and stops at the end.
   useEffect(() => {
     if (!playing) return
     let last = performance.now(), raf = 0
     const step = (now: number) => {
-      const dt = (now - last) / 1000
+      const dt = Math.min(0.1, (now - last) / 1000)
       last = now
-      setT(prev => {
-        const next = prev + dt
-        if (next >= total) { setPlaying(false); return total }
-        return next
-      })
+      const st = useCutPlay.getState()
+      const next = (st.t[id] ?? 0) + dt
+      if (next >= total) { st.setT(id, total); st.setPlaying(null); return }
+      st.setT(id, next)
       raf = requestAnimationFrame(step)
     }
     raf = requestAnimationFrame(step)
     return () => cancelAnimationFrame(raf)
-  }, [playing, total])
-  useEffect(() => { if (t > total) setT(total) }, [t, total])
+  }, [playing, total, id])
+  useEffect(() => { if (t > total) useCutPlay.getState().setT(id, total) }, [t, total, id])
 
   // The timeline's own zoom: the wheel over it, about the cursor. Native, so
   // it can stop the canvas zooming too.
@@ -98,33 +136,44 @@ export function RoughCutBody({ id, node, bodyW, bodyH }: { id: string; node: Fre
       e.stopPropagation()
       const k = scaleOf(el)
       const x = (e.clientX - el.getBoundingClientRect().left) / k + el.scrollLeft
-      const at = x / pps
+      const at = (x - LEFT) / pps
       const next = Math.max(PPS_MIN, Math.min(PPS_MAX, pps * (e.deltaY < 0 ? 1.15 : 1 / 1.15)))
       setRoughCut(id, { pps: next }, false)
-      requestAnimationFrame(() => { el.scrollLeft = Math.max(0, at * next - (x - el.scrollLeft)) })
+      requestAnimationFrame(() => { el.scrollLeft = Math.max(0, at * next + LEFT - (x - el.scrollLeft)) })
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
   }, [id, pps])
 
-  const starts = useMemo(() => {
-    let a = 0
-    return shown.map(c => { const s = a; a += clipLength(c); return s })
-  }, [shown])
+  /** Times a moved or trimmed edge pulls to: other clips' edges, the start, the playhead. */
+  const snapTo = (v: number, skip: string): number => {
+    const edges = [0, t]
+    for (const c of clips) if (c.id !== skip) edges.push(clipStart(c), clipEnd(c))
+    let best = v, d = SNAP / pps
+    for (const e of edges) if (Math.abs(e - v) < d) { d = Math.abs(e - v); best = e }
+    return best
+  }
 
-  /** Edge drag: trim the clip; the ones after it ride along (ripple). */
+  /** Edge drag: trim the clip. Its other end stays where it is. */
   const startTrim = (e: React.PointerEvent, index: number, side: 'in' | 'out') => {
     e.stopPropagation()
     e.preventDefault()
     const k = scaleOf(scroller.current!)
     const sx = e.clientX
     const c0 = clips[index]
+    const s0 = clipStart(c0), end0 = clipEnd(c0)
     let next = clips
     const move = (m: PointerEvent) => {
       const dt = (m.clientX - sx) / k / pps
-      const c = side === 'in'
-        ? { ...c0, in: Math.max(0, Math.min(c0.out - MIN_CLIP, c0.in + dt)) }
-        : { ...c0, out: Math.max(c0.in + MIN_CLIP, Math.min(c0.full, c0.out + dt)) }
+      let c: RoughClip
+      if (side === 'in') {
+        const lo = Math.max(c0.in - s0, -c0.in) // not past the timeline's start or the source's
+        const d = Math.max(Math.max(lo, -c0.in), Math.min(c0.out - MIN_CLIP - c0.in, snapTo(s0 + dt, c0.id) - s0))
+        c = { ...c0, in: c0.in + d, start: s0 + d }
+      } else {
+        const d = Math.max(c0.in + MIN_CLIP - c0.out, Math.min(c0.full - c0.out, snapTo(end0 + dt, c0.id) - end0))
+        c = { ...c0, out: c0.out + d }
+      }
       next = clips.map((x, i) => (i === index ? c : x))
       setLive(next)
     }
@@ -138,40 +187,51 @@ export function RoughCutBody({ id, node, bodyW, bodyH }: { id: string; node: Fre
     window.addEventListener('pointerup', up)
   }
 
-  /** Middle drag: move the clip to where it is let go. A click: go to it. */
+  /** Middle drag: carry the clip anywhere, any row; gaps stay gaps. A click: go to it. */
   const startMove = (e: React.PointerEvent, index: number) => {
     if (e.button !== 0) return
     e.stopPropagation()
     e.preventDefault()
-    const el = scroller.current!
-    const k = scaleOf(el)
-    const sx = e.clientX
-    let moved = false, to = index
-    const timeAt = (clientX: number) => ((clientX - el.getBoundingClientRect().left) / k + el.scrollLeft) / pps
+    const k = scaleOf(scroller.current!)
+    const sx = e.clientX, sy = e.clientY
+    const c0 = clips[index]
+    const s0 = clipStart(c0), len = clipLength(c0), r0 = clipRow(c0)
+    let moved = false, next = clips, outside = false
+    const body = scroller.current!.closest('[data-rough-cut]')!
     const move = (m: PointerEvent) => {
-      if (!moved && Math.abs(m.clientX - sx) < 5) return
+      if (!moved && Math.hypot(m.clientX - sx, m.clientY - sy) < 5) return
       moved = true
-      const at = timeAt(m.clientX)
-      // The gap nearest the pointer: before the first clip whose middle is past it.
-      let gap = clips.length
-      for (let i = 0; i < clips.length; i++) if (at < starts[i] + clipLength(clips[i]) / 2) { gap = i; break }
-      to = gap
-      setInsertAt(gap)
+      // Off the Rough Cut: it comes out as a card, trimmed, where let go.
+      const r = body.getBoundingClientRect()
+      outside = m.clientX < r.left || m.clientX > r.right || m.clientY < r.top || m.clientY > r.bottom
+      setCarry(outside ? { clip: c0, x: m.clientX, y: m.clientY } : null)
+      if (outside) { next = clips; setLive(clips.filter((_, i) => i !== index)); return }
+      let st = Math.max(0, s0 + (m.clientX - sx) / k / pps)
+      // Either end pulls to a nearby edge.
+      const a = snapTo(st, c0.id), b = snapTo(st + len, c0.id) - len
+      st = Math.abs(a - st) <= Math.abs(b - st) ? a : Math.max(0, b)
+      const row = Math.max(0, Math.min(rows - 1, r0 + Math.round((m.clientY - sy) / k / TRACK_H)))
+      next = clips.map((x, i) => (i === index ? { ...c0, start: st, row } : x))
+      setLive(next)
     }
-    const up = () => {
+    const up = (u: PointerEvent) => {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
-      setInsertAt(null)
+      setLive(null)
+      setCarry(null)
+      if (moved && outside) {
+        useUndoCoordinator.getState().checkpoint()
+        createMediaCard(clientToCanvas(u.clientX, u.clientY), [{ media: clipMedia(c0), label: c0.label }])
+        setRoughCut(id, { clips: clips.filter(c => c.id !== c0.id) }, false)
+        return
+      }
       if (!moved) {
-        setSelected(clips[index].id)
-        setT(starts[index])
+        setSelected(c0.id)
+        setT(s0)
         setPlaying(false)
         return
       }
-      if (to === index || to === index + 1) return
-      const next = clips.filter((_, i) => i !== index)
-      next.splice(to > index ? to - 1 : to, 0, clips[index])
-      setRoughCut(id, { clips: next })
+      if (next !== clips) setRoughCut(id, { clips: next })
     }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
@@ -183,7 +243,7 @@ export function RoughCutBody({ id, node, bodyW, bodyH }: { id: string; node: Fre
     e.preventDefault()
     const el = scroller.current!
     const k = scaleOf(el)
-    const at = (clientX: number) => Math.max(0, Math.min(total, ((clientX - el.getBoundingClientRect().left) / k + el.scrollLeft) / pps))
+    const at = (clientX: number) => Math.max(0, Math.min(total, ((clientX - el.getBoundingClientRect().left) / k + el.scrollLeft - LEFT) / pps))
     setPlaying(false)
     setT(at(e.clientX))
     const move = (m: PointerEvent) => setT(at(m.clientX))
@@ -195,7 +255,7 @@ export function RoughCutBody({ id, node, bodyW, bodyH }: { id: string; node: Fre
   const remove = (clipId: string) => setRoughCut(id, { clips: clips.filter(c => c.id !== clipId) })
   const fitAll = () => {
     if (!total || !scroller.current) return
-    setRoughCut(id, { pps: Math.max(PPS_MIN, Math.min(PPS_MAX, ROW_FIT_W / total)) }, false)
+    setRoughCut(id, { pps: Math.max(PPS_MIN, Math.min(PPS_MAX, (W - LEFT * 2 - 40) / total)) }, false)
     scroller.current.scrollLeft = 0
   }
   const zoomBy = (f: number) => setRoughCut(id, { pps: Math.max(PPS_MIN, Math.min(PPS_MAX, pps * f)) }, false)
@@ -204,21 +264,22 @@ export function RoughCutBody({ id, node, bodyW, bodyH }: { id: string; node: Fre
   const btn: React.CSSProperties = {
     height: 30, minWidth: 30, padding: '0 12px', borderRadius: 7, cursor: 'pointer', fontFamily: 'inherit', fontSize: 14,
     fontWeight: 600, color: 'rgba(255,255,255,0.85)', background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.16)',
+    flexShrink: 0,
   }
   const stop = (e: React.PointerEvent) => e.stopPropagation()
-  const rowW = Math.max(DW, total * pps + 240)
+  const rowW = Math.max(W, total * pps + 240)
 
   return (
     <div data-rough-cut="" style={{ flex: 1, minHeight: 0, position: 'relative', overflow: 'hidden', background: '#121319' }}>
       <div style={{
-        position: 'absolute', top: 0, left: (bodyW - DW * fit) / 2, width: DW, height: DH,
-        transform: `scale(${fit})`, transformOrigin: '0 0', color: '#fff', fontSize: 14,
+        position: 'absolute', top: 0, left: 0, width: W, height: H,
+        transform: `scale(${ui})`, transformOrigin: '0 0', color: '#fff', fontSize: 14,
         display: 'flex', flexDirection: 'column',
       }}>
         {/* ── Preview and transport ── */}
-        <div style={{ height: PREVIEW_H, display: 'flex', gap: 20, padding: 16, boxSizing: 'border-box' }}>
-          <Preview clip={at?.clip ?? null} local={at?.local ?? 0} playing={playing} />
-          <div onPointerDown={stop} style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }}>
+        <div style={{ height: PREVIEW_H, flexShrink: 0, display: 'flex', gap: 20, padding: 16, boxSizing: 'border-box' }}>
+          <Preview id={id} clips={shown} shot={at?.clip.shot ?? null} empty={!clips.length} />
+          <div onPointerDown={stop} style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0, maxWidth: 860 }}>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 14 }}>
               <span style={{ fontSize: 22, fontWeight: 700 }}>Rough Cut</span>
               <span style={{ color: 'rgba(255,255,255,0.55)', fontVariantNumeric: 'tabular-nums' }}>
@@ -227,15 +288,16 @@ export function RoughCutBody({ id, node, bodyW, bodyH }: { id: string; node: Fre
             </div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               <button data-rough-play="" style={{ ...btn, width: 86 }} disabled={!clips.length}
-                onClick={() => { if (!playing && t >= total - 0.01) setT(0); setPlaying(p => !p) }}>
+                onClick={() => setPlaying(!playing)}>
                 {playing ? 'Pause' : 'Play'}
               </button>
               <button style={btn} onClick={() => { setPlaying(false); setT(0) }} title="To the start">⏮</button>
-              <span style={{ fontVariantNumeric: 'tabular-nums', width: 120, color: 'rgba(255,255,255,0.75)' }}>{fmt(t)} / {fmt(total)}</span>
+              <button data-rough-open-viewer="" style={btn} onClick={() => openRoughCutViewer(id)} title="A Viewer at its end that plays the movie">Viewer</button>
+              <span style={{ fontVariantNumeric: 'tabular-nums', width: 120, flexShrink: 0, whiteSpace: 'nowrap', color: 'rgba(255,255,255,0.75)' }}>{fmt(t)} / {fmt(total)}</span>
               <span style={{ flex: 1 }} />
-              <button style={btn} onClick={() => zoomBy(1 / 1.4)} title="Zoom the row out">−</button>
+              <button style={btn} onClick={() => zoomBy(1 / 1.4)} title="Zoom the timeline out">−</button>
               <button style={btn} onClick={fitAll} title="Fit the whole cut">Fit</button>
-              <button style={btn} onClick={() => zoomBy(1.4)} title="Zoom the row in">+</button>
+              <button style={btn} onClick={() => zoomBy(1.4)} title="Zoom the timeline in">+</button>
             </div>
             {at && (
               <div style={{ color: 'rgba(255,255,255,0.7)', lineHeight: 1.6, fontVariantNumeric: 'tabular-nums' }}>
@@ -244,39 +306,40 @@ export function RoughCutBody({ id, node, bodyW, bodyH }: { id: string; node: Fre
               </div>
             )}
             <div style={{ marginTop: 'auto', color: 'rgba(255,255,255,0.4)', fontSize: 12.5, lineHeight: 1.5 }}>
-              Drop cards here to add their clips. Drag a clip's edge to trim it, drag its middle to move it.
-              The wheel over the row zooms it. Docked to the Film Look mixer, it feeds the mixer its shots.
+              Drop cards where their clips should go. Drag a clip's edge to trim it, its middle to move it anywhere, any row;
+              empty time plays black, and the top row is the one seen. Stretch this longer for more timeline, taller for more rows.
+              The wheel over the timeline zooms it.
             </div>
           </div>
         </div>
 
-        {/* ── The cut ── */}
+        {/* ── The timeline ── */}
         <div
           ref={scroller}
           data-rough-row=""
           onPointerDown={stop}
-          style={{ flex: 1, minHeight: 0, overflowX: 'auto', overflowY: 'hidden', position: 'relative', borderTop: '1px solid rgba(255,255,255,0.08)' }}
+          style={{ flex: 1, minHeight: 0, overflow: 'auto', position: 'relative', borderTop: '1px solid rgba(255,255,255,0.08)' }}
         >
-          <div style={{ position: 'relative', width: rowW, height: RULER_H + TRACK_H + 40 }}>
+          <div style={{ position: 'relative', width: rowW, height: RULER_H + rows * TRACK_H + 8 }}>
             <Ruler pps={pps} width={rowW} onPointerDown={startScrub} />
+            {Array.from({ length: rows }, (_, r) => (
+              <div key={r} data-rough-track={r} style={{
+                position: 'absolute', left: 0, width: rowW, top: RULER_H + r * TRACK_H + 4, height: TRACK_H - 8,
+                background: r % 2 ? 'rgba(255,255,255,0.025)' : 'rgba(255,255,255,0.045)',
+              }} />
+            ))}
             {shown.map((c, i) => (
               <ClipBlock
-                key={c.id} clip={c} x={starts[i] * pps + 20} w={clipLength(c) * pps}
-                selected={selected === c.id}
+                key={c.id} clip={c} x={clipStart(c) * pps + LEFT} y={RULER_H + clipRow(c) * TRACK_H} w={clipLength(c) * pps}
+                selected={selected === c.id} lifted={!!live && live[i] !== clips[i]}
                 onMove={e => startMove(e, i)}
                 onTrimIn={e => startTrim(e, i, 'in')}
                 onTrimOut={e => startTrim(e, i, 'out')}
                 onRemove={() => remove(c.id)}
               />
             ))}
-            {insertAt !== null && (
-              <div style={{
-                position: 'absolute', top: RULER_H + 6, height: TRACK_H - 12, width: 4, borderRadius: 2, background: '#6fb3ff',
-                left: (insertAt < starts.length ? starts[insertAt] : total) * pps + 18,
-              }} />
-            )}
             {/* The playhead */}
-            <div style={{ position: 'absolute', top: 0, bottom: 0, left: t * pps + 20, width: 2, background: '#ff5a4f', pointerEvents: 'none' }}>
+            <div style={{ position: 'absolute', top: 0, bottom: 0, left: t * pps + LEFT, width: 2, background: '#ff5a4f', pointerEvents: 'none', zIndex: 3 }}>
               <div style={{ position: 'absolute', top: 0, left: -6, width: 14, height: 10, background: '#ff5a4f', borderRadius: '2px 2px 7px 7px' }} />
             </div>
             {!clips.length && (
@@ -287,6 +350,7 @@ export function RoughCutBody({ id, node, bodyW, bodyH }: { id: string; node: Fre
           </div>
         </div>
       </div>
+      {carry && ReactDOM.createPortal(<CarriedClip {...carry} />, document.body)}
       {dropHover && (
         <div style={{ position: 'absolute', inset: 0, boxShadow: 'inset 0 0 0 4px rgba(111,179,255,0.8)', pointerEvents: 'none', background: 'rgba(111,179,255,0.08)' }} />
       )}
@@ -310,15 +374,29 @@ const Ruler: React.FC<{ pps: number; width: number; onPointerDown: (e: React.Poi
   )
 }
 
+/** A clip being taken out: a little card at the pointer. */
+const CarriedClip: React.FC<{ clip: RoughClip; x: number; y: number }> = ({ clip, x, y }) => {
+  const poster = useResolvedMedia(clip.poster ?? (clip.kind === 'image' ? clip.url : null))
+  return (
+    <div data-rough-carry="" style={{
+      position: 'fixed', left: x - 80, top: y - 50, width: 160, height: 100, zIndex: 100000, pointerEvents: 'none',
+      borderRadius: 8, overflow: 'hidden', border: '2px solid #fff', boxShadow: '0 12px 30px rgba(0,0,0,0.6)',
+      background: poster ? `#000 url("${poster}") center / cover` : '#2a2c38', color: '#fff', fontSize: 12, fontWeight: 600,
+    }}>
+      <div style={{ padding: '4px 8px', background: 'linear-gradient(rgba(0,0,0,0.75), rgba(0,0,0,0))' }}>{clip.label} · {fmt(clipLength(clip))}</div>
+    </div>
+  )
+}
+
 const KIND_COLOR: Record<RoughClip['kind'], string> = { shot: '#ffb35c', video: '#6fb7ff', image: '#9fd49a' }
 
 const ClipBlock: React.FC<{
-  clip: RoughClip; x: number; w: number; selected: boolean
+  clip: RoughClip; x: number; y: number; w: number; selected: boolean; lifted?: boolean
   onMove: (e: React.PointerEvent) => void
   onTrimIn: (e: React.PointerEvent) => void
   onTrimOut: (e: React.PointerEvent) => void
   onRemove: () => void
-}> = ({ clip, x, w, selected, onMove, onTrimIn, onTrimOut, onRemove }) => {
+}> = ({ clip, x, y, w, selected, lifted, onMove, onTrimIn, onTrimOut, onRemove }) => {
   const poster = useResolvedMedia(clip.poster ?? (clip.kind === 'image' ? clip.url : null))
   const [hover, setHover] = useState(false)
   const color = KIND_COLOR[clip.kind]
@@ -329,7 +407,8 @@ const ClipBlock: React.FC<{
       onPointerEnter={() => setHover(true)}
       onPointerLeave={() => setHover(false)}
       style={{
-        position: 'absolute', left: x, top: RULER_H + 8, width: Math.max(4, w - 3), height: TRACK_H - 16,
+        position: 'absolute', left: x, top: y + 8, width: Math.max(4, w - 3), height: TRACK_H - 16, zIndex: lifted ? 2 : 1,
+        boxShadow: lifted ? '0 10px 24px rgba(0,0,0,0.6)' : undefined,
         borderRadius: 8, overflow: 'hidden', cursor: 'grab', boxSizing: 'border-box',
         background: poster ? `#000 url("${poster}") left center / auto 100% repeat-x` : '#2a2c38',
         border: `2px solid ${selected ? '#fff' : color}`,
@@ -357,20 +436,9 @@ const ClipBlock: React.FC<{
   )
 }
 
-/** What is under the playhead. A video plays from its own file; a still or a
- *  film shot shows its picture (the Film Look mixer is where a shot's look is
- *  judged), and the mixer, if it is on the canvas, follows to that shot. */
-const Preview: React.FC<{ clip: RoughClip | null; local: number; playing: boolean }> = ({ clip, local, playing }) => {
-  const src = useResolvedMedia(clip ? (clip.kind === 'video' ? clip.url : clip.poster ?? clip.url) : null)
-  const video = useRef<HTMLVideoElement>(null)
-  useEffect(() => {
-    const v = video.current
-    if (!v || clip?.kind !== 'video') return
-    if (!playing || Math.abs(v.currentTime - local) > 0.35) v.currentTime = local
-    if (playing && v.paused) void v.play().catch(() => {})
-    if (!playing && !v.paused) v.pause()
-  }, [clip, local, playing])
-  const shot = clip?.shot ?? null
+/** What is under the playhead (RoughCutScreen: black where nothing is).
+ *  A film shot also sends the Film Look mixer, if one is up, to that shot. */
+const Preview: React.FC<{ id: string; clips: RoughClip[]; shot: string | null; empty: boolean }> = ({ id, clips, shot, empty }) => {
   useEffect(() => {
     if (shot && Object.values(useFreeNodeStore.getState().nodes).some(n => n.type === 'filmMixer')) {
       void window.vidbarsDesktop?.mixerCall?.('go', [shot])
@@ -378,10 +446,8 @@ const Preview: React.FC<{ clip: RoughClip | null; local: number; playing: boolea
   }, [shot])
   return (
     <div style={{ width: 476, height: PREVIEW_H - 32, flexShrink: 0, background: '#000', borderRadius: 8, overflow: 'hidden', position: 'relative' }}>
-      {clip && src && (clip.kind === 'video'
-        ? <video ref={video} src={src} muted playsInline style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-        : <img src={src} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />)}
-      {!clip && <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', color: 'rgba(255,255,255,0.35)' }}>No clips yet</div>}
+      <RoughCutScreen cutId={id} clips={clips} muted />
+      {empty && <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', color: 'rgba(255,255,255,0.35)' }}>No clips yet</div>}
     </div>
   )
 }
@@ -390,7 +456,9 @@ const Preview: React.FC<{ clip: RoughClip | null; local: number; playing: boolea
  *  card goes back where it was picked up. The card drag is the canvas's own,
  *  so this watches it from outside: where every card was when the button went
  *  down, and which moved over the Rough Cut when it came up. */
-function useCardDrops(id: string, node: FreeNodeData, setHover: (on: boolean) => void): void {
+function useCardDrops(id: string, node: FreeNodeData, setHover: (on: boolean) => void, timelineAt: (cx: number, cy: number) => { t: number; row: number } | null): void {
+  const atRef = useRef(timelineAt)
+  atRef.current = timelineAt
   const pinned = !!node.pin
   useEffect(() => {
     if (pinned) return
@@ -427,7 +495,10 @@ function useCardDrops(id: string, node: FreeNodeData, setHover: (on: boolean) =>
       if (!hits.length || !was) return
       // After the canvas has finished its own drop (snapping, decks).
       window.setTimeout(() => {
-        void appendCards(id, hits.map(g => g.id))
+        // Where the first card was let go: its centre's time and row.
+        const r = cardScreenRect(hits[0], useBoardsStore.getState().boards, { x: 0, y: 0 }, 1)
+        const at = r ? atRef.current(r.screenLeft + r.screenWidth / 2, r.screenTop + r.screenHeight / 2) : null
+        void appendCards(id, hits.map(g => g.id), at ?? undefined)
         useBoardsStore.setState(s => ({
           groups: s.groups.map(g => {
             const p = hits.some(h => h.id === g.id) ? was.get(g.id) : undefined
