@@ -234,9 +234,9 @@ const StripLayers: React.FC<{ railId: string; rect: { x: number; y: number; widt
   const boxH = Math.min(rect.height, rect.width / aspect), boxW = boxH * aspect
   const layerGap = useStripLayers(s => s.gap)
   const spread = boxH * layerGap
-  // The result leaves the Viewer's face and travels back through the stack,
-  // to end behind the plate. The panes ride with it, just behind it, and each
-  // is left behind at its own place: the last card first, the plate last.
+  // The layers leave the Viewer's face together and travel back, each left
+  // behind at its own place: the last card first, the picture last. (The
+  // result itself is not in the stack: the Viewer is an open frame onto it.)
   const travel = -(order.length + 2) * spread * fan
   const zOf = (i: number) => {
     const place = -(order.length - i) * spread
@@ -320,10 +320,13 @@ const StripLayers: React.FC<{ railId: string; rect: { x: number; y: number; widt
   const pos = (z: number): React.CSSProperties => ({ position: 'absolute', left, top, width: boxW, height: boxH, transform: `translateZ(${z}px)` })
   return (
     <>
-      <div style={{ ...pos(travel), outline: edge('rgba(255,255,255,.25)'), pointerEvents: 'none' }}>
-        <LayerCanvas canvas={baked.result} />
+      {/* No result in the stack (Brian 2026-11-04): pulled apart you see
+          through the layers that make it, down to the picture at the back.
+          Collapsed and seen from the front, the Viewer shows the result. */}
+      <div style={{ ...pos(zOf(-1)), outline: edge('rgba(255,255,255,.25)'), pointerEvents: 'none' }}>
+        <LayerCanvas canvas={baked.plate} />
         <div data-layer-pane="" style={{ ...header, background: '#23252f', pointerEvents: 'auto' }}>
-          <span>Result</span>
+          <span>Picture</span>
           <span style={{ flex: 1 }} />
           <button
             title="Layers: lit, swinging sideways shows the strip's layers behind the Viewer"
@@ -342,10 +345,6 @@ const StripLayers: React.FC<{ railId: string; rect: { x: number; y: number; widt
             style={{ position: 'absolute', ...at, width: 14, height: 14, borderRadius: 4, background: '#cfe2ff', border: '2px solid #16171f', boxSizing: 'border-box', cursor: 'grab', pointerEvents: 'auto' }}
           />
         ))}
-      </div>
-      <div style={{ ...pos(zOf(-1)), outline: edge('rgba(255,255,255,.25)'), pointerEvents: 'none' }}>
-        <LayerCanvas canvas={baked.plate} />
-        <div style={{ ...header, background: '#23252f' }}>Picture</div>
       </div>
       {shown.map((id, at) => {
         const it = effects.find(e => e.id === id)!
