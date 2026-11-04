@@ -65,6 +65,7 @@ import { deckAreas } from '../../utils/peek'
 import { useContextSheetStore } from '../../store/contextSheetStore'
 import { cardTypeOf } from '../../utils/cardTypes'
 import { nameKindOf } from '../../utils/fillDetails'
+import { copiedFaceStyle, copyFaceStyle, fillFields } from '../../utils/faceStyle'
 
 const BOARD_PADDING_X = 20
 
@@ -167,6 +168,15 @@ const CardContextMenu: React.FC<{
     if (nameable.length) menuItems.push({ label: `New name${nameable.length > 1 ? ` (${nameable.length})` : ''}`, icon: '🏷', action: () => {
       useUndoCoordinator.getState().checkpoint()
       useBoardsStore.getState().giveNewNames(nameable)
+      onClose()
+    }})
+    // Style: this face's text and how it is set, onto other cards, once
+    // (utils/faceStyle). Each shows its own {Name} and details.
+    menuItems.push({ label: 'Copy style', icon: '🖌', action: () => { copyFaceStyle(group); onClose() } })
+    const style = copiedFaceStyle()
+    if (style) menuItems.push({ label: `Paste style${ids.length > 1 ? ` (${ids.length})` : ''}`, icon: '🖌', action: () => {
+      useUndoCoordinator.getState().checkpoint()
+      useBoardsStore.getState().pasteFaceStyle(ids, style)
       onClose()
     }})
   }
@@ -4778,6 +4788,10 @@ export const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void
   const rawHeaderStyle = group?.cardHeaderTextStyle
   const headerTs: TextStyle = useMemo(() => ({ ...DEFAULT_HEADER_STYLE, ...rawHeaderStyle }), [rawHeaderStyle])
   const splitRatio = group?.textSplitRatio ?? 0.5
+  // Shown with its {fields} filled in from the card ({Name}, {Age}…);
+  // edited as typed (utils/faceStyle).
+  const headerShown = useBoardsStore(s => fillFields(headerText, s.groups, groupId))
+  const bodyShown = useBoardsStore(s => fillFields(bodyText, s.groups, groupId))
   ensureFontLoaded(headerTs.fontFamily); ensureFontLoaded(bodyTs.fontFamily)
   // Text locked to card — scales proportionally with the card (no screen-size compensation)
   const textScale = zoom / CARD_TEXT_REF_ZOOM
@@ -4947,7 +4961,7 @@ export const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void
             <div
               onDoubleClick={e => { e.stopPropagation(); startEditHeader() }}
               style={{ ...cardDisplayStyle(headerTs, headerBg, !!headerText), pointerEvents: 'auto' }}
-            >{headerText || null}</div>
+            >{headerShown || null}</div>
           )}
         </div>
         {/* Draggable divider */}
@@ -4970,7 +4984,7 @@ export const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void
             <div
               onDoubleClick={e => { e.stopPropagation(); startEditBody() }}
               style={{ ...cardDisplayStyle(bodyTs, bodyBg, !!bodyText), pointerEvents: 'auto' }}
-            >{bodyText || null}</div>
+            >{bodyShown || null}</div>
           )}
         </div>
       </div>

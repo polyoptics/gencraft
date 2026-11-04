@@ -357,6 +357,9 @@ interface BoardsState {
    *  top), or with `also`, that one added to its bosses (taken off if it
    *  is one already). Never someone below it. */
   setReportsTo: (factionId: string, memberId: string, bossId: string | null, also?: boolean) => void
+  /** A face copied from one card put on these (utils/faceStyle): its text,
+   *  how it is set, and the line between title and body. Once, not tied. */
+  pasteFaceStyle: (groupIds: string[], style: import('../utils/faceStyle').FaceStyle) => void
   /** A family's ties, all at once (utils/family makes them). */
   setFamilyKin: (familyId: string, kin: Kin) => void
   /** The cards' empty details made up to fit their types, and a new name
@@ -1096,6 +1099,17 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
       if (next.length) tree[memberId] = next
       else delete tree[memberId]
       return { ...g, reportsTo: tree }
+    }) }))
+  },
+
+  pasteFaceStyle(groupIds, style) {
+    set(s => ({ groups: s.groups.map(g => !groupIds.includes(g.id) ? g : {
+      ...g,
+      cardHeaderText: style.header,
+      cardText: style.body,
+      cardHeaderTextStyle: style.headerStyle,
+      cardTextStyle: style.bodyStyle,
+      textSplitRatio: style.split,
     }) }))
   },
 
