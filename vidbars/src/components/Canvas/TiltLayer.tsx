@@ -36,7 +36,7 @@ import { getMediaItems } from '../../types/bar'
 import { faceBlocks } from '../../utils/cardGrid'
 import { clientToCanvas } from '../../utils/fx/createEffect'
 import { selectStorylinesInBox, storyWallOf } from './StorylineLayer'
-import { createTiltScene, ART_MAX, type TiltTarget, type TiltFrameState, type TiltSlab, type TiltArt, type Quat } from '../../three/tiltScene'
+import { createTiltScene, ART_MAX, type TiltTarget, type TiltFrameState, type TiltSlab, type TiltArt } from '../../three/tiltScene'
 
 /** Degrees of tilt / turn per pixel of Alt+drag. */
 const DRAG_DEG = 0.25
@@ -128,13 +128,14 @@ function useAltTiltGesture() {
         const spin = models.spin
         let last = { x: e.clientX, y: e.clientY }
         const onMove = (ev: PointerEvent) => {
-          const q = spin(spun, ev.clientX - last.x, ev.clientY - last.y, SPIN_RAD)
+          spin(spun, ev.clientX - last.x, ev.clientY - last.y, SPIN_RAD)
           last = { x: ev.clientX, y: ev.clientY }
-          if (q) useModelScaleStore.getState().setOrient(spun, q)
         }
+        // Let go, it drifts back to how it stood (Brian 2026-11-04).
         const onUp = () => {
           window.removeEventListener('pointermove', onMove, true)
           window.removeEventListener('pointerup', onUp, true)
+          models.letGo?.(spun)
         }
         window.addEventListener('pointermove', onMove, true)
         window.addEventListener('pointerup', onUp, true)
@@ -366,11 +367,13 @@ const models: {
   pickZ: (() => number) | null
   info: ((key: string) => { url: string; unit: number } | null) | null
   /** Turn a model by a drag of (dx, dy) px: its new turn, or null. */
-  spin: ((key: string, dx: number, dy: number, rad: number) => Quat | null) | null
+  spin: ((key: string, dx: number, dy: number, rad: number) => boolean) | null
+  /** Let go of a model being turned: it drifts back. */
+  letGo: ((key: string) => void) | null
   hovered: string | null
   /** Where the cursor rests over the plane with no button down, or null. */
   at: { x: number; y: number } | null
-} = { pick: null, pickZ: null, info: null, spin: null, hovered: null, at: null }
+} = { pick: null, pickZ: null, info: null, spin: null, letGo: null, hovered: null, at: null }
 /** A pick that lights up under the cursor: a model or a person, not
  *  furniture. */
 const modelKey = (k: string | null | undefined) => (k && !k.startsWith('deco|') ? k : null)
@@ -390,7 +393,7 @@ const live3d = () => isTilted(useTiltStore.getState())
 
 const frameState = (): TiltFrameState => {
   const ts = useTiltStore.getState()
-  const { unitsPerMetre: scales, sizeOf, orientOf } = useModelScaleStore.getState()
+  const { unitsPerMetre: scales, sizeOf } = useModelScaleStore.getState()
   return {
     tilt: ts.tilt, spin: ts.spin, yaw: ts.yaw, shiftX: ts.shiftX, shiftY: ts.shiftY, glide: ts.glide, texture: ts.texture, shade: ts.shade, wire: ts.wire, light: ts.light, turn: ts.turn,
     walls: ts.walls, figure: ts.figure, hovered: models.hovered,
@@ -400,7 +403,6 @@ const frameState = (): TiltFrameState => {
     ]),
     unitsFor: url => scales[url],
     sizeFor: key => sizeOf[key] ?? 1,
-    orientFor: key => orientOf[key],
     slabs: live3d() ? collectSlabs(fadeShown()) : (dropLifts(), []),
     art: live3d() ? lastArt : [],
     fade: fadeShown(),
@@ -552,6 +554,7 @@ const TiltModels: React.FC = () => {
       models.pickZ = v.pickZ
       models.info = key => v.info(key)
       models.spin = v.spinBy
+      models.letGo = v.letGo
       warm()
       raf = requestAnimationFrame(frame)
     }
@@ -580,7 +583,7 @@ const TiltModels: React.FC = () => {
       if (warmTimer) clearTimeout(warmTimer)
       cancelAnimationFrame(raf)
       post.disconnect(); marker.remove()
-      models.pick = null; models.pickZ = null; models.info = null; models.spin = null
+      models.pick = null; models.pickZ = null; models.info = null; models.spin = null; models.letGo = null
       view?.dispose()
       canvas?.remove()
     }

@@ -154,9 +154,6 @@ export interface TiltFrameState {
   unitsFor: (url: string) => number | undefined
   /** Display size multiplier for a card's model (dragging the model). */
   sizeFor: (key: string) => number
-  /** How the user turned a card's model (Alt-drag on it): a quaternion
-   *  [x, y, z, w], or undefined for as it came. */
-  orientFor: (key: string) => Quat | undefined
   /** Cards, decks, tiles and Viewers, for their thickness. */
   slabs: TiltSlab[]
   art: TiltArt[]
@@ -166,7 +163,9 @@ export interface TiltFrameState {
   fade: number
 }
 
-export type Quat = [number, number, number, number]
+/** How long a model turned by hand takes to drift back (ms). */
+const DRIFT_MS = 5000
+const NO_TURN = new THREE.Quaternion()
 
 /** A person, in metres, for scale. */
 export const PERSON_H = 1.75
@@ -182,6 +181,8 @@ interface Standing {
   turn: THREE.Group        // turntable about that normal
   /** The user's own turn of the model (Alt-drag on it), about its middle. */
   orient: THREE.Group
+  /** Let go after a turn: it drifts back from this over DRIFT_MS. */
+  back: { q: THREE.Quaternion; at: number } | null
   inst: THREE.Object3D | null
   size: THREE.Vector3
   /** Model units per metre: set by the user, or guessed — 1 for glTF,
@@ -417,7 +418,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     wall.visible = false
     groundDeco.add(wall)
     const s: Standing = {
-      url, stand, turn, orient, inst: null, size: new THREE.Vector3(), unit: 1, unitSet: false, triangles: 0,
+      url, stand, turn, orient, back: null, inst: null, size: new THREE.Vector3(), unit: 1, unitSet: false, triangles: 0,
       figure, wall, wallText: '', look: null, phase: Math.random() * 6.28, dead: false, seen: frameNo, shownAt: 0,
       mats: [], alpha: -1,
     }
@@ -941,9 +942,13 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       if (s.look) applyLook(s.look, st.texture, st.shade)
       s.stand.visible = !!s.inst && ease > 0
       s.turn.rotation.y = st.turn ? now / 1000 * 0.6 + s.phase : 0
-      const q = st.orientFor(tg.key)
-      if (q) s.orient.quaternion.fromArray(q)
-      else s.orient.quaternion.identity()
+      if (s.back) {
+        // Let go after an Alt-drag: it drifts back to how it stood, slowly
+        // (Brian 2026-11-04), easing in and out.
+        const u = Math.min(1, (now - s.back.at) / DRIFT_MS), e = u * u * (3 - 2 * u)
+        s.orient.quaternion.slerpQuaternions(s.back.q, NO_TURN, e)
+        if (u >= 1) s.back = null
+      }
       // glTF is in metres; something over 30 units tall is far likelier a
       // centimetre file (FBX's habit) than a 30 m model — unless the user
       // sized the person, which settles it.
@@ -1133,11 +1138,12 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   }
   /** Turn a model freely, as a trackball: a drag of (dx, dy) screen px
    *  rolls its near side the way the cursor goes, about its middle,
-   *  whichever way the camera looks. Returns its new turn, or null. */
+   *  whichever way the camera looks. Whether there was a model to turn. */
   const spinAxis = new THREE.Vector3(), spinQ = new THREE.Quaternion(), parentQ = new THREE.Quaternion()
-  function spinBy(key: string, dx: number, dy: number, rad: number): Quat | null {
+  function spinBy(key: string, dx: number, dy: number, rad: number): boolean {
     const s = standing.get(key)
-    if (!s || !s.inst) return null
+    if (!s || !s.inst) return false
+    s.back = null
     const len = Math.hypot(dx, dy)
     if (len) {
       // In the camera's space: right is +x, up +y, toward the eye +z.
@@ -1149,7 +1155,12 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       spinQ.setFromAxisAngle(spinAxis, len * rad)
       s.orient.quaternion.premultiply(spinQ).normalize()
     }
-    return s.orient.quaternion.toArray() as Quat
+    return true
+  }
+  /** Let go of a model being turned: it starts drifting back. */
+  function letGo(key: string) {
+    const s = standing.get(key)
+    if (s) s.back = { q: s.orient.quaternion.clone(), at: performance.now() }
   }
 
   /** A hit on a slab pick() sees through. */
@@ -1195,5 +1206,5 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     renderer.forceContextLoss()
   }
 
-  return { frame, warm, pick, pickZ: () => pickedZ, info, spinBy, dispose }
+  return { frame, warm, pick, pickZ: () => pickedZ, info, spinBy, letGo, dispose }
 }
