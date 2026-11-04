@@ -226,6 +226,37 @@ const IcNewNode: React.FC<SvgProps> = ({ size }) => (
   </svg>
 )
 
+// ── Button order ──
+// The bar's buttons by id, in the order they ship in. The saved order wins;
+// any button added later that isn't in it yet goes in after the one it
+// follows here.
+type BarId =
+  | 'viewer' | 'pool' | 'prompt' | 'history' | 'browser' | 'filmMixer'
+  | 'roughCut' | 'storyline' | 'cabinet' | 'loopStrip' | 'effects'
+const DEFAULT_ORDER: BarId[] = [
+  'viewer', 'pool', 'prompt', 'history', 'browser', 'filmMixer',
+  'roughCut', 'storyline', 'cabinet', 'loopStrip', 'effects',
+]
+const ORDER_KEY = 'vidbars.topIconBar.order'
+
+function loadOrder(): BarId[] {
+  let saved: unknown = null
+  try { saved = JSON.parse(localStorage.getItem(ORDER_KEY) || 'null') } catch { /* private window */ }
+  if (!Array.isArray(saved)) return DEFAULT_ORDER.slice()
+  const out = saved.filter((x, i): x is BarId =>
+    DEFAULT_ORDER.includes(x as BarId) && saved.indexOf(x) === i)
+  DEFAULT_ORDER.forEach((id, i) => {
+    if (out.includes(id)) return
+    const prev = DEFAULT_ORDER.slice(0, i).reverse().find(p => out.includes(p))
+    out.splice(prev ? out.indexOf(prev) + 1 : 0, 0, id)
+  })
+  return out
+}
+
+function saveOrder(order: BarId[]) {
+  try { localStorage.setItem(ORDER_KEY, JSON.stringify(order)) } catch { /* private window */ }
+}
+
 const IconButton: React.FC<{
   Icon: React.FC<SvgProps>
   title: string
@@ -291,6 +322,121 @@ export const TopIconBar: React.FC = () => {
   const fxBtnRef = React.useRef<HTMLDivElement>(null)
   const closeFx = React.useCallback(() => setFxOpen(false), [])
 
+  // Every button, by id. The ORDER they sit in is Brian's: drag one along
+  // the bar to move it, and the order is saved (localStorage) so it is the
+  // same after a reload. "New" stays on its own past the divider.
+  const buttons: Record<BarId, React.ReactNode> = {
+    viewer: <IconButton Icon={IcViewer} title="Viewer — a window for models, video and images" {...place('viewer')} />,
+    pool: <IconButton Icon={IcPool} title="Media Pool — a folder on disk" {...place('pool')} />,
+    prompt: <IconButton Icon={IcPrompt} title="Prompt Pad" {...place('prompt')} />,
+    history: <IconButton Icon={IcHistory} title="History" {...place('history')} />,
+    browser: <IconButton Icon={IcBrowser} title="Card Browser — leaf through every card in the project" {...place('browser')} />,
+    filmMixer: (
+      <IconButton
+        Icon={IcFilm}
+        title="Film Look — every shot of the film and its look"
+        // Only ever one mixer: with one on the canvas already, the button
+        // takes the camera to it instead.
+        onClick={() => { if (existingFilmMixer()) openFilmMixer(); else togglePlacing('filmMixer') }}
+        active={placing === 'filmMixer'}
+      />
+    ),
+    roughCut: <IconButton Icon={IcCut} title="Rough Cut — put clips in order and trim them" {...place('roughCut')} />,
+    storyline: <IconButton Icon={IcStoryline} title="Storyline — points on lines that branch; drag out from the point" {...place('storyline')} />,
+    cabinet: <IconButton Icon={IcCabinet} title="Project cabinet — drawers to put cards away in" {...place('cabinet')} />,
+    loopStrip: <IconButton Icon={IcLoopStrip} title="Loop strip — drop cards in and run effects over them" {...place('loopStrip')} />,
+    // The Effects wrapper carries fxBtnRef: the palette hangs under it, and
+    // a press on it must not count as "outside" (IconButton forwards no ref).
+    effects: (
+      <IconButton
+        Icon={IcEffects}
+        title="Effects — pick one to add to the selected picture's strip"
+        active={fxOpen}
+        onClick={() => setFxOpen(o => !o)}
+      />
+    ),
+  }
+
+  const [order, setOrder] = React.useState<BarId[]>(loadOrder)
+  const shown = order.filter(id => id !== 'cabinet' || cabinetsOn)
+
+  // ── Drag to reorder ──
+  // Press and move a few px sideways: the icon lifts and follows the mouse,
+  // the others slide aside to show where it will land. A press that doesn't
+  // move is an ordinary click.
+  const [drag, setDrag] = React.useState<{ id: BarId; from: number; to: number; dx: number } | null>(null)
+  const dragRef = React.useRef<{ id: BarId; x0: number; from: number; centers: number[]; live: boolean; to: number } | null>(null)
+  const justDragged = React.useRef(false)
+  // One frame with no slide on drop, so the icons don't animate back out of
+  // the slots they've just been moved into.
+  const [settling, setSettling] = React.useState(false)
+  const STEP = TILE + 8 // tile + the bar's gap
+
+  const onGrab = (e: React.PointerEvent<HTMLDivElement>, id: BarId) => {
+    if (e.button !== 0) return
+    const wrap = e.currentTarget
+    const row = Array.from(wrap.parentElement!.querySelectorAll<HTMLElement>('[data-top-icon]'))
+    const centers = row.map(el => { const r = el.getBoundingClientRect(); return r.left + r.width / 2 })
+    dragRef.current = { id, x0: e.clientX, from: row.indexOf(wrap), centers, live: false, to: row.indexOf(wrap) }
+    const move = (ev: PointerEvent) => {
+      const d = dragRef.current
+      if (!d) return
+      const dx = ev.clientX - d.x0
+      if (!d.live) {
+        if (Math.abs(dx) < 6) return
+        d.live = true
+      }
+      // Clamp to the ends of the row so it can't wander off the bar.
+      const min = d.centers[0] - d.centers[d.from]
+      const max = d.centers[d.centers.length - 1] - d.centers[d.from]
+      const cdx = Math.max(min, Math.min(max, dx))
+      const x = d.centers[d.from] + cdx
+      let to = 0, best = Infinity
+      d.centers.forEach((c, i) => { const dd = Math.abs(c - x); if (dd < best) { best = dd; to = i } })
+      d.to = to
+      setDrag({ id: d.id, from: d.from, to, dx: cdx })
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', up)
+      const d = dragRef.current
+      dragRef.current = null
+      if (!d?.live) { setDrag(null); return }
+      justDragged.current = true
+      setTimeout(() => { justDragged.current = false }, 0)
+      setSettling(true)
+      requestAnimationFrame(() => requestAnimationFrame(() => setSettling(false)))
+      setDrag(null)
+      if (d.from === d.to) return
+      const vis = order.filter(x => x !== 'cabinet' || cabinetsOn)
+      const next = vis.slice()
+      const [m] = next.splice(d.from, 1)
+      next.splice(d.to, 0, m)
+      // Put a hidden cabinet back where it was.
+      const ci = order.indexOf('cabinet')
+      if (!cabinetsOn && ci >= 0) next.splice(Math.min(ci, next.length), 0, 'cabinet')
+      saveOrder(next)
+      setOrder(next)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', up)
+  }
+
+  // The click that ends a drag is not a press of the button.
+  const swallowClickAfterDrag = (e: React.MouseEvent) => {
+    if (justDragged.current) { e.stopPropagation(); e.preventDefault() }
+  }
+
+  const shiftFor = (i: number) => {
+    if (!drag) return 0
+    if (i === drag.from) return drag.dx
+    if (drag.from < drag.to && i > drag.from && i <= drag.to) return -STEP
+    if (drag.from > drag.to && i < drag.from && i >= drag.to) return STEP
+    return 0
+  }
+
   return (
     <div
       data-top-icon-bar=""
@@ -311,71 +457,25 @@ export const TopIconBar: React.FC = () => {
         zIndex: 700,
       }}
     >
-      <IconButton
-        Icon={IcViewer}
-        title="Viewer — a window for models, video and images"
-        {...place('viewer')}
-      />
-      <IconButton
-        Icon={IcPool}
-        title="Media Pool — a folder on disk"
-        {...place('pool')}
-      />
-      <IconButton
-        Icon={IcPrompt}
-        title="Prompt Pad"
-        {...place('prompt')}
-      />
-      <IconButton
-        Icon={IcHistory}
-        title="History"
-        {...place('history')}
-      />
-      <IconButton
-        Icon={IcBrowser}
-        title="Card Browser — leaf through every card in the project"
-        {...place('browser')}
-      />
-      <IconButton
-        Icon={IcFilm}
-        title="Film Look — every shot of the film and its look"
-        // Only ever one mixer: with one on the canvas already, the button
-        // takes the camera to it instead.
-        onClick={() => { if (existingFilmMixer()) openFilmMixer(); else togglePlacing('filmMixer') }}
-        active={placing === 'filmMixer'}
-      />
-      <IconButton
-        Icon={IcCut}
-        title="Rough Cut — put clips in order and trim them"
-        {...place('roughCut')}
-      />
-      <IconButton
-        Icon={IcStoryline}
-        title="Storyline — points on lines that branch; drag out from the point"
-        {...place('storyline')}
-      />
-      {cabinetsOn && (
-        <IconButton
-          Icon={IcCabinet}
-          title="Project cabinet — drawers to put cards away in"
-          {...place('cabinet')}
-        />
-      )}
-      <IconButton
-        Icon={IcLoopStrip}
-        title="Loop strip — drop cards in and run effects over them"
-        {...place('loopStrip')}
-      />
-      {/* A wrapper for the ref: the palette hangs under it, and a press on
-          it must not count as "outside" (IconButton forwards no ref). */}
-      <div ref={fxBtnRef} style={{ display: 'flex' }}>
-        <IconButton
-          Icon={IcEffects}
-          title="Effects — pick one to add to the selected picture's strip"
-          active={fxOpen}
-          onClick={() => setFxOpen(o => !o)}
-        />
-      </div>
+      {shown.map((id, i) => (
+        <div
+          key={id}
+          ref={id === 'effects' ? fxBtnRef : undefined}
+          data-top-icon={id}
+          onPointerDown={e => onGrab(e, id)}
+          onClickCapture={swallowClickAfterDrag}
+          style={{
+            display: 'flex',
+            transform: `translateX(${shiftFor(i)}px)`,
+            transition: drag?.id === id || settling ? 'none' : 'transform 0.15s',
+            position: 'relative',
+            zIndex: drag?.id === id ? 1 : 0,
+            touchAction: 'none',
+          }}
+        >
+          {buttons[id]}
+        </div>
+      ))}
       <EffectPalette open={fxOpen} anchorRef={fxBtnRef} onClose={closeFx} />
 
       <div style={{ width: 1, height: TILE * 0.55, background: 'rgba(255,255,255,0.12)', margin: '0 2px' }} />
