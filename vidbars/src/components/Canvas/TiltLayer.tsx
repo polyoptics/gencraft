@@ -2609,6 +2609,9 @@ useTiltStore.subscribe(s => { if (!isTilted(s)) dropLifts() })
 
 /** Every model card in view, as flat px from the host centre. */
 function collectTargets(W: number, H: number): TiltTarget[] {
+  // Models stand up out of their cards in the 3D mode only; peeking, they
+  // stay flat in their cards (Brian 2026-11-04).
+  if (usePeek.getState().target) return []
   const out: TiltTarget[] = []
   const { pan, zoom } = useCanvasStore.getState()
   for (const n of Object.values(useFreeNodeStore.getState().nodes)) {
