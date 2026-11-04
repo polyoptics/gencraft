@@ -60,7 +60,6 @@ import { useViewport3DStore } from '../../store/viewport3dStore'
 import { useMenuClamp } from '../../hooks/useMenuClamp'
 import { useTiltStore, isTilted, standRise, unprojectTilt, TILT_FAR } from '../../store/tiltStore'
 import { useWorldZoom } from './worldZoom'
-import { useZoomZone, currentZone } from '../../store/zoomZonesStore'
 import { clientToCanvas } from '../../utils/fx/createEffect'
 import { snapToDots } from '../../utils/dotGrid'
 import { PRESET_COLORS } from '../UI/TextFormatToolbar'
@@ -278,8 +277,9 @@ export function storyWallOf(groupId: string): number | null {
     }
     wallCards = { nodes, feet: feetVersion, map }
   }
-  // Only cards are turned with it: zoomed in, they are blocks and boards.
-  return currentZone() === 'card' ? wallCards.map.get(groupId) ?? null : null
+  // At every zoom: a card, or zoomed in its outline with its blocks or
+  // boards, all of it as one piece.
+  return wallCards.map.get(groupId) ?? null
 }
 
 /** Snapping as a card's corner snaps (utils/dotGrid snapToDots): pulled onto
@@ -759,7 +759,6 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
 
   // Flipped up, in the tilted view: a wall standing on its main line.
   const tilted = useTiltStore(s => isTilted(s))
-  const zone3 = useZoomZone()
   // Up as far as the standing cards are, following the tilt.
   const rise = useTiltStore(s => (raw?.standUp ? standRise(s) : 0))
   const standing = tilted && !!raw?.standUp && rise > 0
@@ -826,7 +825,7 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
   // Its cards stand on the wall too, at card zoom (where they are cards)
   // while its foot lies across the view: TiltLayer turns them about the same
   // foot by the same angle, so they stay at their offsets from their dots.
-  const cardsStand = !!wall && Math.abs(wall.uy) <= 1e-6 && zone3 === 'card'
+  const cardsStand = !!wall && Math.abs(wall.uy) <= 1e-6
   // Over a dot's centre: what a drag of it moves, lit.
   const lit = zone && !zone.ring && byId.has(zone.point) ? (shift ? new Set([zone.point]) : downstream(d, zone.point)) : null
 

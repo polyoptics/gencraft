@@ -1169,6 +1169,19 @@ function collectSlabs(K = 1): TiltSlab[] {
         main: d.slotId === RAIL_TRAY || !!nodes[d.railId]?.rail?.slots.some(sl => sl.id === d.slotId) })
     }
   }
+  // A card standing up with a storyline brings its row bands (the faint
+  // stripes behind its rows, in the grid layer, InfiniteCanvas data-row-band)
+  // up with it, on the same foot: nothing of it is left on the floor.
+  const standBands = (id: string, hinge: Hinge, footY: number) => {
+    for (const band of host.querySelectorAll<HTMLElement>(`[data-row-band="${id}"]`)) {
+      const world = worlds.find(wd => wd.contains(band)) ?? band.parentElement
+      const bat = world && offsetIn(band, world)
+      if (!world || !bat) continue
+      lifting.set(band, hinge.z)
+      chain(band, world)
+      stand(band, hinge, zoom, `50% ${(footY - (pan.y + bat.y * zoom)) / zoom}px`)
+    }
+  }
   // Card layer: cards and closed decks, already in screen px.
   const stage = document.querySelector<HTMLElement>('[data-tilt-stage="overlay"]')
   if (stage) {
@@ -1279,6 +1292,7 @@ function collectSlabs(K = 1): TiltSlab[] {
               if (s) { s.z = card.z + 0.25; s.hinge = tilt }
             }
           }
+          if (tilt && wallY !== null) standBands(id, { ...tilt, z: card.z }, wallY)
           const below = thick - per
           // Its cards show once they stand clear of each other: any thinner,
           // in the first degrees of tilt, their tops flicker through the
@@ -1309,10 +1323,16 @@ function collectSlabs(K = 1): TiltSlab[] {
       // On a strip in console it leans as it does as a card (Brian
       // 2026-11-01: at every zoom): its outline, its header and its
       // blocks, all on its bottom edge, standing on the strip's floor.
+      // Linked to a storyline flipped up, it stands with the wall the same
+      // way at every zoom, all of it as one piece: on the wall's foot (stage
+      // px `wallY`), as on the card layer above.
       const id = el.dataset.groupOutline!
       const g = useBoardsStore.getState().groups.find(gr => gr.id === id)
-      const tip = cardLean.get(id) ?? (g?.deckAnchorId ? cardLean.get(g.deckAnchorId) : undefined)
-      const lift = docked.get(id) ?? (g?.deckAnchorId ? docked.get(g.deckAnchorId) : undefined)
+      const footY = storyWallOf(id) ?? (g?.deckAnchorId ? storyWallOf(g.deckAnchorId) : null)
+      const wallY = footY === null ? null : pan.y + footY * zoom
+      const tip = wallY !== null ? Math.PI / 2 * standRise(useTiltStore.getState())
+        : cardLean.get(id) ?? (g?.deckAnchorId ? cardLean.get(g.deckAnchorId) : undefined)
+      const lift = wallY !== null ? 0 : docked.get(id) ?? (g?.deckAnchorId ? docked.get(g.deckAnchorId) : undefined)
       if (s && lift === undefined) {
         // Loose over a strip, on its top as a card (above).
         const resting = rest(`card:${id}`, restOn(at.x, at.y, w, h))
@@ -1325,12 +1345,21 @@ function collectSlabs(K = 1): TiltSlab[] {
       }
       if (!s || !g || !tip || lift === undefined) continue
       s.z = lift + s.t
-      const tilt: Hinge = { v: s.v + s.h / 2, z: s.z, a: tip }
+      const tilt: Hinge = { v: wallY !== null ? wallY - H / 2 : s.v + s.h / 2, z: s.z, a: tip }
       s.hinge = tilt
       lifting.set(el, s.z)
       chain(el, stage)
-      stand(el, tilt)
-      const bottom = at.y + h
+      stand(el, tilt, 1, wallY !== null ? `50% ${wallY - at.y}px` : undefined)
+      // The line it turns up on: its bottom edge, or the wall's foot.
+      const bottom = wallY ?? at.y + h
+      // Its link chips, half over its bottom edge, up with it.
+      const chips = wallY !== null ? stage.querySelector<HTMLElement>(`[data-primary-rail="${id}"]`) : null
+      const ca = chips && offsetIn(chips, stage)
+      if (chips && ca) {
+        lifting.set(chips, s.z + 0.25)
+        chain(chips, stage)
+        stand(chips, { ...tilt, z: s.z + 0.25 }, 1, `50% ${bottom - ca.y}px`)
+      }
       const head = stage.querySelector<HTMLElement>(`[data-card-header="${id}"]`)
       const hat = head && offsetIn(head, stage)
       if (hat) {
@@ -1381,6 +1410,7 @@ function collectSlabs(K = 1): TiltSlab[] {
         // alone.
         if (strip) { veil(wrap, overStrip(wrap, strip)); buried.push(wrap) }
       }
+      if (wallY !== null) standBands(id, { ...tilt, z: s.z }, wallY)
       if (d) leaning.push({ id, ...d, slab: s, hinge: tilt })
     }
     // A resting card's header tab over its top edge, and its link chips

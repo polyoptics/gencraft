@@ -1289,8 +1289,10 @@ const NLERowBands: React.FC<{ pan: { x: number; y: number }; zoom: number; tilte
           const rowH = getRowHeight(i, layout)
           rowBands.push(
             <React.Fragment key={`${group.id}-${i}`}>
+              {/* Marked with their card (data-row-band): in 3D they stand
+                  with it when it stands up with a storyline (TiltLayer). */}
               {i % 2 === 0 && (
-                <div style={{
+                <div data-row-band={group.id} style={{
                   position: 'absolute',
                   left: groupLeft, width: bandWidth,
                   top: rowTop,
@@ -1299,7 +1301,7 @@ const NLERowBands: React.FC<{ pan: { x: number; y: number }; zoom: number; tilte
                   borderRadius: 6,
                 }} />
               )}
-              <div style={{
+              <div data-row-band={group.id} style={{
                 position: 'absolute',
                 left: groupLeft, width: bandWidth,
                 top: rowTop,
