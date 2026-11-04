@@ -141,14 +141,19 @@ function useAltTiltGesture() {
         window.addEventListener('pointerup', onUp, true)
         return
       }
-      const { tilt: t0, yaw: yaw0 } = useTiltStore.getState()
+      const { tilt: t0 } = useTiltStore.getState()
       let turned = 0
-      // A sideways swing is a peek (utils/peek): it only starts over
-      // something that can be peeked into, and that is what it turns about.
-      // Once swung, the swing can always be brought back, from anywhere.
-      const peek = peekAt(target, host)
-      if (peek) usePeek.setState({ target: peek.target })
-      const swung = Math.abs(yaw0) > 0.5
+      // From the flat view a sideways swing is a peek (utils/peek): it only
+      // starts over something that can be peeked into, and that is what it
+      // turns about. A tilt that did not come from a peek never starts one
+      // (Brian 2026-11-04): Alt-drag there is the plain orbit. While peeking,
+      // a press on another deck or Viewer peeks into it straight away, at
+      // the same turn. Once swung, the swing can always be brought back,
+      // from anywhere.
+      const flat = !isTilted(useTiltStore.getState())
+      const peek = flat || usePeek.getState().target ? peekAt(target, host) : null
+      if (peek || flat) usePeek.setState({ target: peek?.target ?? null })
+      const swung = !flat
       if (!peek && !swung) useTiltStore.getState().setPivot(null)
       let pivoted = false
       const x0 = e.clientX, y0 = e.clientY
