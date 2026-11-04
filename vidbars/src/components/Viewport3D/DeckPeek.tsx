@@ -21,8 +21,9 @@ const PER_CARD = 16
 /** Where the hand is held: this far below the card's bottom, as a share of
  *  its height. The cards turn about it. */
 const HOLD = 0.35
-/** How far the cards rise up behind the front card, share of its height. */
-const RISE = 0.16
+/** How far the cards rise up behind the front card, share of its height,
+ *  in the centred hand (less to one side). */
+const RISE = 0.55
 /** Degrees of turn by which the hand has faded fully in. */
 const FULL_AT = 25
 /** Turning on past that, the hand opens a little more: at most this much
@@ -31,7 +32,10 @@ const EXTRA = 0.2
 const EXTRA_AT = 40
 /** How far back each card steps behind the one in front, as a share of the
  *  card's height. */
-const DEPTH = 0.06
+const DEPTH = 0.1
+/** To one side, each card also slides out this far past the one in front,
+ *  as a share of the card's width. */
+const SIDE_STEP = 0.3
 /** The mess: up to this much extra turn (degrees) per card, fixed for it. */
 const MESS_TURN = 2
 
@@ -97,19 +101,22 @@ export const DeckPeek: React.FC<{ anchorId: string }> = ({ anchorId }) => {
     const centred = (i % 2 ? -1 : 1) * (Math.floor(i / 2) + 1) / Math.ceil(n / 2) * 0.6
     const sided = Math.sign(lean || 1) * (i + 1) / n
     const at = centred * (1 - Math.abs(lean)) + sided * Math.abs(lean)
-    return { g, turn: at * spread + jitter(g.id, 1) * MESS_TURN * open, out: Math.abs(at) }
+    const slide = Math.sign(lean || 1) * (i + 1) * SIDE_STEP * w * open * Math.abs(lean)
+    return { g, turn: at * spread + jitter(g.id, 1) * MESS_TURN * open, out: Math.abs(at), slide }
   })
-  // The outermost furthest back, as in a held hand.
+  // The outermost furthest back, as in a held hand, each a step behind the
+  // one in front.
   cards.sort((p, q) => q.out - p.out)
+  const steps = cards.length
   return (
     <>
-      {cards.map(({ g, turn, out }) => (
+      {cards.map(({ g, turn, slide }, r) => (
         <div
           key={g.id}
           data-deck-peek={g.id}
           style={{
             position: 'absolute', left, top, width: w, height: h, boxSizing: 'border-box',
-            transform: `translate3d(0, ${-RISE * h * open}px, ${-(1 + out * n) * DEPTH * h * open}px) rotate(${turn}deg)`,
+            transform: `translate3d(${slide}px, ${-RISE * h * open * (1 - 0.6 * Math.abs(lean))}px, ${-(steps - r) * DEPTH * h * open}px) rotate(${turn}deg)`,
             transformOrigin: `50% ${(1 + HOLD) * 100}%`, opacity: k,
             borderRadius: 12, background: g.color, overflow: 'hidden',
             border: '1.5px solid rgba(255,255,255,.25)', boxShadow: '0 6px 32px rgba(0,0,0,.5)',
