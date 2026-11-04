@@ -261,6 +261,34 @@ function wallFootOf(n: FreeNodeData): Wall | null {
   return { x0: n.x + s.x, y0: by + off, ux: 1, uy: 0, nx, ny }
 }
 
+/** For TiltLayer: each storyline standing up in the tilted view, as it
+ *  lies flat (canvas units): the y of its foot, how far up it is (0..1, as
+ *  StorylineLayer stands it), its lines (x1, y1, x2, y2), its dots and the
+ *  lines' thickness (screen px). TiltLayer lays a depth-only plate under
+ *  each on the wall, so the 3D slabs' sides stand in front of it or behind
+ *  it by real depth instead of painting over it. */
+export function standingStories(): { footY: number; rise: number; segs: [number, number, number, number][]; dots: [number, number][]; weight: number }[] {
+  const ts = useTiltStore.getState()
+  if (!isTilted(ts)) return []
+  const rise = standRise(ts)
+  if (rise <= 0) return []
+  const out: ReturnType<typeof standingStories> = []
+  for (const n of Object.values(useFreeNodeStore.getState().nodes)) {
+    const d = n.storyline
+    if (!d?.standUp || n.pin || !d.dots?.length) continue
+    const w = wallFootOf(n)
+    if (!w) continue
+    const at = new Map(d.dots.map(p => [p.id, p]))
+    const segs: [number, number, number, number][] = []
+    for (const e of d.edges) {
+      const a = at.get(e.a), b = at.get(e.b)
+      if (a && b) segs.push([n.x + a.x, n.y + a.y, n.x + b.x, n.y + b.y])
+    }
+    out.push({ footY: w.y0, rise, segs, dots: d.dots.map(p => [n.x + p.x, n.y + p.y]), weight: d.weight ?? DEFAULT_WEIGHT })
+  }
+  return out
+}
+
 /** For TiltLayer: the canvas y of the wall a linked card stands up on with
  *  its storyline (flipped up, its foot lying across the view, as standing
  *  cards stand), or null. */

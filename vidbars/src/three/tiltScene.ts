@@ -99,6 +99,14 @@ export interface TiltSlab {
    *  that catches the light. Only on a slab no DOM face covers to its
    *  edge (a rim, or furniture). */
   bevel?: number
+  /** Turned in the plane about its own middle, radians (y down): a plate
+   *  laid along a slanting line (a standing storyline's). */
+  spin?: number
+  /** Only its depth-only top: no walls, no bottom, no sheen, so it casts
+   *  nothing and shows nothing of its own, seen from either side. It hides
+   *  what is behind it and is hidden by what is in front (a standing
+   *  storyline's lines and dots, which the page draws). */
+  ghost?: boolean
 }
 
 /** Console finishes (Brian 2026-11-01: "like a million dollars"): roughness,
@@ -659,6 +667,8 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
    *  with their outward normals. */
   const ox = new Float32Array(RING), oy = new Float32Array(RING), onx = new Float32Array(RING), ony = new Float32Array(RING)
   const ix = new Float32Array(RING), iy = new Float32Array(RING)
+  /** The slab being built's turn in the plane (TiltSlab.spin). */
+  let spinC = 1, spinS = 0
   function outline(u: number, v: number, hw: number, hh: number, r: number, X: Float32Array, Y: Float32Array, NX?: Float32Array, NY?: Float32Array) {
     r = Math.max(0, Math.min(r, hw, hh))
     const corners = [[hw - r, hh - r, 0], [-(hw - r), hh - r, Math.PI / 2], [-(hw - r), -(hh - r), Math.PI], [hw - r, -(hh - r), Math.PI * 1.5]] as const
@@ -667,8 +677,9 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       for (let i = 0; i <= CORNER_SEG; i++, p++) {
         const a = a0 + (i / CORNER_SEG) * (Math.PI / 2)
         const nx = Math.cos(a), ny = Math.sin(a)
-        X[p] = u + cx + nx * r; Y[p] = -v - (cy + ny * r)
-        if (NX && NY) { NX[p] = nx; NY[p] = -ny }
+        const dx = cx + nx * r, dy = cy + ny * r
+        X[p] = u + dx * spinC - dy * spinS; Y[p] = -v - (dx * spinS + dy * spinC)
+        if (NX && NY) { NX[p] = nx * spinC - ny * spinS; NY[p] = -(nx * spinS + ny * spinC) }
       }
     }
   }
@@ -716,6 +727,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       const sv0 = sv, tv0 = tv / 3, hv0 = hv / 3, si0 = si
       col.setHex(s.color)
       fin = FINISH[s.finish ?? 'paint']
+      spinC = Math.cos(s.spin ?? 0); spinS = Math.sin(s.spin ?? 0)
       outline(s.u, s.v, hw, hh, s.r, ox, oy, onx, ony)
       const rimH = s.rim ? s.rim.h : 0
       // A chamfer round the top edge: no deeper than the slab (or its rim),
@@ -807,6 +819,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
         decoTris.push({ from: si0 / 3, to: si / 3, owner: s.deco })
         continue
       }
+      if (s.ghost) { sv = sv0; si = si0 }
       // Depth-only top at the face.
       const top0 = tv / 3
       const g = s.ring ?? 0
@@ -829,7 +842,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       }
       // Round buttons get none: a highlight on a disc reads as a second,
       // misregistered disc.
-      if (s.bare || (s.pop && Math.max(s.w, s.h) < Math.min(s.w, s.h) * 1.6)) continue
+      if (s.ghost || s.bare || (s.pop && Math.max(s.w, s.h) < Math.min(s.w, s.h) * 1.6)) continue
       const o0 = hv / 3
       for (let i = 0; i < RING; i++) { sheenPos[hv++] = ox[i]; sheenPos[hv++] = oy[i]; sheenPos[hv++] = z }
       if (s.pop) {

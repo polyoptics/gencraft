@@ -35,7 +35,7 @@ import { setGlHidden } from '../../three/viewportRenderer'
 import { getMediaItems } from '../../types/bar'
 import { faceBlocks } from '../../utils/cardGrid'
 import { clientToCanvas } from '../../utils/fx/createEffect'
-import { selectStorylinesInBox, storyWallOf } from './StorylineLayer'
+import { selectStorylinesInBox, standingStories, storyWallOf } from './StorylineLayer'
 import { createTiltScene, ART_MAX, type TiltTarget, type TiltFrameState, type TiltSlab, type TiltArt } from '../../three/tiltScene'
 
 /** Degrees of tilt / turn per pixel of Alt+drag. */
@@ -1210,6 +1210,29 @@ function collectSlabs(K = 1): TiltSlab[] {
       cardLean.set(n.cardRef, a)
       cardDock.set(n.cardRef, { rail: d.railId, slot: d.slotId, order: d.order ?? 0,
         main: d.slotId === RAIL_TRAY || !!nodes[d.railId]?.rail?.slots.some(sl => sl.id === d.slotId) })
+    }
+  }
+  // A storyline standing up (StorylineLayer, CSS 3D) is no slab, so the
+  // slabs' sides, drawn over the page, painted over its lines wherever they
+  // crossed on screen, even from behind it: a strip's front edge sliced its
+  // stem. A depth-only plate under each of its lines and dots, turned up on
+  // its wall as it stands, lets them hide what is behind them and still be
+  // hidden by what is in front. Tops alone (ghost): they cast no shadow and
+  // show nothing of their own.
+  for (const st of standingStories()) {
+    const hinge: Hinge = { v: pan.y + st.footY * zoom - H / 2, z: 0, a: Math.PI / 2 * st.rise }
+    const wide = st.weight + 3
+    for (const [x1, y1, x2, y2] of st.segs) {
+      const len = Math.hypot(x2 - x1, y2 - y1) * zoom
+      if (len < 1) continue
+      const cx = pan.x + (x1 + x2) / 2 * zoom, cy = pan.y + (y1 + y2) / 2 * zoom
+      const s = add(cx - len / 2, cy - wide / 2, len, wide, 0.01, SIDE.pop, wide / 2)
+      if (s) { s.spin = Math.atan2(y2 - y1, x2 - x1); s.hinge = hinge; s.nopick = true; s.ghost = true }
+    }
+    for (const [x, y] of st.dots) {
+      const d = 20
+      const s = add(pan.x + x * zoom - d / 2, pan.y + y * zoom - d / 2, d, d, 0.01, SIDE.pop, d / 2)
+      if (s) { s.hinge = hinge; s.nopick = true; s.ghost = true }
     }
   }
   // A card standing up with a storyline brings its row bands (the faint
