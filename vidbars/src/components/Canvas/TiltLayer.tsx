@@ -42,6 +42,9 @@ import { createTiltScene, ART_MAX, type TiltTarget, type TiltFrameState, type Ti
 const DRAG_DEG = 0.25
 /** Sideways px an Alt+drag can wander before it starts turning the plane. */
 const TURN_SLOP = 14
+/** Px an orbit drag moves before it picks its one job for the whole drag:
+ *  up/down tips the view, side to side turns the ground (Brian 2026-11-04). */
+const LOCK_PX = 8
 /** How far a model turns per px of Alt-drag on it (radians). */
 const SPIN_RAD = 0.6 * Math.PI / 180
 /** Most models stood up at once — they are heavy. */
@@ -166,9 +169,44 @@ function useAltTiltGesture() {
       const cFrom = { x: (W / 2 - pan.x) / zoom, y: (H / 2 - pan.y) / zoom }
       const cTo = sel && { x: (sel.x0 + sel.x1) / 2, y: (sel.y0 + sel.y1) / 2 }
       let glideStarted = false
+      // A plain orbit (not a peek) picks one job from how the drag starts and
+      // keeps it until let go (Brian 2026-11-04): up/down only tips, side to
+      // side only turns. Tipped back, the turn is the pure turntable, never
+      // part swing, so it cannot roll the picture. A view still swung from a
+      // peek swings back as before. Flat, side to side does nothing yet.
+      const swungAtPress = Math.abs(useTiltStore.getState().yaw) > 0.5
+      let lock: 'tilt' | 'turn' | null = null
+      let ox = x0, oy = y0
+      const onOrbit = (ev: PointerEvent) => {
+        if (!lock) {
+          const ax = Math.abs(ev.clientX - x0), ay = Math.abs(ev.clientY - y0)
+          if (Math.max(ax, ay) < LOCK_PX) return
+          lock = ax > ay ? 'turn' : 'tilt'
+          // Counted from here, so nothing jumps when the job is picked.
+          ox = ev.clientX; oy = ev.clientY
+        }
+        const s = useTiltStore.getState()
+        if (lock === 'tilt') {
+          s.setView(t0 - (ev.clientY - oy) * DRAG_DEG, s.spin, s.yaw)
+          if (cTo && !glideStarted && useTiltStore.getState().tilt > 0.5) {
+            glideStarted = true
+            glideTo(cFrom, cTo, W, H)
+          }
+          return
+        }
+        if (flat) return
+        const d = (ev.clientX - ox) * DRAG_DEG
+        ox = ev.clientX
+        if (!d) return
+        if (swungAtPress) {
+          const share = turntableShare(s.tilt)
+          s.setView(s.tilt, s.spin - d * share, s.yaw + d * (1 - share))
+        } else s.setView(s.tilt, s.spin - d, s.yaw)
+      }
       // Orbit like Blender/Maya: you grab the near part of the ground —
       // drag up tips it away, drag right swings it right.
       const onMove = (ev: PointerEvent) => {
+        if (!peek) { onOrbit(ev); return }
         // A little sideways slop while tipping back must not twist the
         // plane: turning starts only past a few px of real sideways drag.
         const dx = ev.clientX - x0

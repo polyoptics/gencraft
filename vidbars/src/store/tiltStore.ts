@@ -40,8 +40,9 @@ export function turntableShare(tilt: number): number {
   return smooth01((tilt - SWING_TO) / (TURNTABLE_AT - SWING_TO))
 }
 /** How far the ground can be turned at this tilt: not at all top-down, so
- *  coming back up to top-down always arrives untwisted. */
-const spinRoom = (tilt: number) => 180 * smooth01(tilt / SWING_TO)
+ *  coming back up to top-down always arrives untwisted. Tipped up past flat
+ *  the same, so the turntable works there too (Brian 2026-11-04). */
+const spinRoom = (tilt: number) => 180 * smooth01(Math.abs(tilt) / SWING_TO)
 
 /** The key light on the models, set in the Light panel. Angles in degrees,
  *  in the plane's frame: azimuth round the card, elevation up from it. */
