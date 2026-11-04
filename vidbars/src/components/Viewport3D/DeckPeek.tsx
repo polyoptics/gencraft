@@ -8,11 +8,12 @@
 import React from 'react'
 import { useBoardsStore, type ProjectGroup } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
-import { useTiltStore } from '../../store/tiltStore'
+import { standRise, useTiltStore } from '../../store/tiltStore'
 import { cardFaceMedia } from '../../utils/cardGrid'
 import { deckAreas } from '../../utils/peek'
 import { HeroImageLayer } from '../Layers/HeroImageLayer'
 import { headerExtend, overviewScale } from '../NLE/NLETimelineHeader'
+import { storyWallOf } from '../Canvas/StorylineLayer'
 
 /** How far each card sticks out past the one in front, as a share of the
  *  card's size along the fan, in the pose. */
@@ -38,6 +39,12 @@ const FAN_TURN = 6
  *  each card. */
 const MESS_TURN = 3
 const MESS_DRIFT = 0.1
+
+/** Fanning up or down (looking from above or below), every other card
+ *  also goes out to one side and the next to the other, each pair further
+ *  out, so the room either side is used too (Brian 2026-11-04). As a share
+ *  of the card's width per pair. */
+const SPLIT = 0.35
 
 /** A steady number in -1..1 for this card, so its mess never changes. */
 function jitter(id: string, salt: number): number {
@@ -78,9 +85,15 @@ export const DeckPeek: React.FC<{ anchorId: string }> = ({ anchorId }) => {
   const zoom = useCanvasStore(s => s.zoom)
   const groups = useBoardsStore(s => s.groups)
   const area = deckAreas.get(anchorId)
+  // Stood up on a storyline flipped up (TiltLayer stands the deck about the
+  // wall's foot), the fan stands with it, turned up about the same line.
+  const rise = useTiltStore(s => Math.round(standRise(s) * 200) / 200)
+  const footY = storyWallOf(anchorId)
+  const standing = footY !== null && rise > 0
   // Which way the fan goes: the opposite way to the turn on screen (swung
   // right, out to the left; tipped back, out below; tipped up, out above).
-  const vx = -yaw, vy = tilt
+  // Standing, below is the floor: it fans out above instead.
+  const vx = -yaw, vy = standing ? -Math.abs(tilt) : tilt
   const a = Math.hypot(vx, vy)
   const c = Math.min(1, a / FULL_AT), k = c * c * (3 - 2 * c)
   if (!area || k <= 0) return null
@@ -93,14 +106,15 @@ export const DeckPeek: React.FC<{ anchorId: string }> = ({ anchorId }) => {
   const along = Math.abs(ux) * w + Math.abs(uy) * h, across = Math.abs(uy) * w + Math.abs(ux) * h
   const open = k * (1 + EXTRA * Math.min(1, Math.max(0, a - FULL_AT) / EXTRA_AT))
   const step = Math.min(STEP, MOST / behind.length) * along * open
-  // A hand of cards turns away from the way it fans: right or down, clockwise.
-  const spin = ux + uy
-  return (
+  const fan = (
     <>
       {behind.map((g, i) => ({ g, n: i + 1 })).reverse().map(({ g, n }) => {
-        const turn = (n * FAN_TURN * spin + jitter(g.id, 1) * MESS_TURN) * open
+        const alt = n % 2 ? 1 : -1, pair = Math.ceil(n / 2)
+        const vert = Math.abs(uy)
+        const turn = (n * FAN_TURN * ux + alt * pair * FAN_TURN * vert + jitter(g.id, 1) * MESS_TURN) * open
         const drift = ((n % 2 ? -1 : 1) * (0.6 + 0.4 * Math.abs(jitter(g.id, 2))) * MESS_DRIFT) * across * open
-        const x = n * step * ux - drift * uy, y = n * step * uy + drift * ux
+        const split = alt * pair * SPLIT * w * vert * open
+        const x = n * step * ux - drift * uy + split, y = n * step * uy + drift * ux
         return (
           <div
             key={g.id}
@@ -119,5 +133,12 @@ export const DeckPeek: React.FC<{ anchorId: string }> = ({ anchorId }) => {
         )
       })}
     </>
+  )
+  if (!standing) return fan
+  return (
+    <div style={{
+      position: 'absolute', inset: 0, transformStyle: 'preserve-3d', pointerEvents: 'none',
+      rotate: `x ${(-90 * rise).toFixed(2)}deg`, transformOrigin: `50% ${pan.y + footY! * zoom}px`,
+    }}>{fan}</div>
   )
 }
