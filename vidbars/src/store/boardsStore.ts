@@ -6,6 +6,7 @@ import { usePinTravelStore } from './pinTravelStore'
 import { sameRef, type LinkRef } from '../utils/linkTargets'
 import type { Bar } from '../types/bar'
 import { TEMPLATES } from '../data/templates'
+import { CARD_TYPES, cardTypeOf, newDetailId, typeColor, withTypeDetails, type CardType } from '../utils/cardTypes'
 import { getBoardAbsolutePos, computeGroupLayout, yToRow } from '../utils/nleRows'
 import {
   makeBar,
@@ -142,6 +143,11 @@ export interface ProjectGroup {
   flipped?: boolean
   /** The rows on its details side (utils/cardTypes). */
   details?: import('../utils/cardTypes').CardDetail[]
+  /** What kind of card it is (utils/cardTypes). Absent: an element card. */
+  cardType?: CardType
+  /** Coloured by hand: keeps its colour when its type, or its type's
+   *  colour, changes. Otherwise it wears its type's colour. */
+  ownColor?: boolean
 }
 
 /** Find which group a board belongs to */
@@ -252,6 +258,8 @@ interface BoardsState {
   boards: Record<string, BoardData>
   boardOrder: string[]    // does NOT include 'primary'
   groups: ProjectGroup[]  // project groups — each collapses to one card
+  /** The colour picked for each card type, where it is not the type's own. */
+  typeColors: Partial<Record<CardType, string>>
 
   createBoard: (nleRow: number, nleX: number) => string
   duplicateBoard: (sourceBoardId: string) => string
@@ -315,6 +323,17 @@ interface BoardsState {
   renameGroup: (groupId: string, name: string) => void
   setGroupColor: (groupId: string, color: string) => void
   setGroupFlipped: (groupId: string, flipped: boolean) => void
+  /** Make it that type: it takes the type's starting details it lacks,
+   *  and its colour, unless coloured by hand. */
+  setGroupCardType: (groupId: string, type: CardType) => void
+  /** Coloured by hand, or (false) back to its type's colour. */
+  setGroupOwnColor: (groupId: string, own: boolean) => void
+  /** A type's colour, worn by every card of it not coloured by hand. */
+  setTypeColor: (type: CardType, color: string) => void
+  /** A card's link "+" let go on one of another card's details: that
+   *  detail now shows the card dropped ('new': a new row for it, named
+   *  after its type). */
+  linkGroupDetail: (groupId: string, detailId: string | 'new', cardId: string) => void
   setGroupDetails: (groupId: string, details: import('../utils/cardTypes').CardDetail[]) => void
   setGroupCardHeroImage: (groupId: string, url: string | null) => void
   /** Flip cards between screen-pinned and canvas-placed. Takes an ARRAY so a
@@ -474,6 +493,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
   boardOrder: [],
   groups: [DEFAULT_GROUP],
   selectedGroupIds: [],
+  typeColors: {},
 
   createBoard(nleRow, nleX) {
     const id = crypto.randomUUID()
@@ -977,6 +997,44 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
 
   setGroupFlipped(groupId, flipped) {
     set(s => ({ groups: s.groups.map(g => g.id === groupId ? { ...g, flipped: flipped || undefined } : g) }))
+  },
+
+  setGroupCardType(groupId, type) {
+    const chosen = get().typeColors
+    set(s => ({ groups: s.groups.map(g => g.id !== groupId ? g : {
+      ...g,
+      cardType: type === 'element' ? undefined : type,
+      details: withTypeDetails(g.details, type),
+      ...(g.ownColor ? {} : { color: typeColor(type, chosen) }),
+    }) }))
+  },
+
+  setGroupOwnColor(groupId, own) {
+    const chosen = get().typeColors
+    set(s => ({ groups: s.groups.map(g => g.id !== groupId ? g : own
+      ? { ...g, ownColor: true }
+      : { ...g, ownColor: undefined, color: typeColor(cardTypeOf(g), chosen) }) }))
+  },
+
+  setTypeColor(type, color) {
+    set(s => ({
+      typeColors: { ...s.typeColors, [type]: color },
+      groups: s.groups.map(g => !g.ownColor && cardTypeOf(g) === type && g.cardType ? { ...g, color } : g),
+    }))
+  },
+
+  linkGroupDetail(groupId, detailId, cardId) {
+    const src = get().groups.find(g => g.id === cardId)
+    if (!src || cardId === groupId) return
+    set(s => ({ groups: s.groups.map(g => {
+      if (g.id !== groupId) return g
+      const details = g.details ?? []
+      if (detailId === 'new') {
+        const name = src.cardType ? CARD_TYPES[src.cardType].label : 'Link'
+        return { ...g, details: [...details, { id: newDetailId(), name, value: '', link: { card: cardId } }] }
+      }
+      return { ...g, details: details.map(d => d.id === detailId ? { ...d, link: { card: cardId } } : d) }
+    }) }))
   },
 
   setGroupDetails(groupId, details) {
@@ -2068,6 +2126,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
     ),
     boardOrder: s.boardOrder,
     groups: s.groups,
+    typeColors: s.typeColors,
   }),
 }))
 

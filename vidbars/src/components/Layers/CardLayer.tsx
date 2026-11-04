@@ -357,6 +357,8 @@ const CardContextMenu: React.FC<{
           onChange={c => {
             useUndoCoordinator.getState().checkpoint()
             useBoardsStore.getState().setGroupColor(group.id, c)
+            // Coloured by hand: it keeps this colour whatever its type.
+            useBoardsStore.getState().setGroupOwnColor(group.id, true)
           }}
           onClose={() => { setColorPicker(null); onClose() }}
         />

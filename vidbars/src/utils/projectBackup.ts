@@ -41,7 +41,9 @@ export interface ProjectBackup {
   exportedAt: string
   app: string
   stores: {
-    boards: { boards: Record<string, unknown>; boardOrder: string[]; groups: unknown[]; version: number }
+    boards: { boards: Record<string, unknown>; boardOrder: string[]; groups: unknown[]; version: number
+      /** Card type colours (utils/cardTypes). Absent in older files. */
+      typeColors?: Record<string, string> }
     freenodes: { nodes: Record<string, unknown>; version: number }
     canvas: { prefs: Record<string, unknown>; version: number }
     /** Where Cards / Blocks / Boards begin (store/zoomZonesStore). Absent in
@@ -89,7 +91,7 @@ function buildBackup(): ProjectBackup {
     exportedAt: new Date().toISOString(),
     app: 'genCraft',
     stores: {
-      boards: { boards, boardOrder: bs.boardOrder, groups: bs.groups, version: BOARDS_VERSION },
+      boards: { boards, boardOrder: bs.boardOrder, groups: bs.groups, typeColors: bs.typeColors, version: BOARDS_VERSION },
       freenodes: { nodes: fn.nodes, version: FREENODES_VERSION },
       canvas: { prefs: canvasPrefs, version: CANVAS_VERSION },
       zoomZones: zoomZonesSnapshot(),
@@ -204,6 +206,7 @@ function setBackupState(backup: ProjectBackup): void {
     boards: boards.boards as never,
     boardOrder: boards.boardOrder,
     groups: boards.groups as never,
+    typeColors: (boards.typeColors ?? {}) as never,
     selectedGroupIds: [],
   })
   useFreeNodeStore.setState({ nodes: (freenodes?.nodes ?? {}) as never, selectedIds: [] })

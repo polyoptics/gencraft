@@ -33,10 +33,14 @@ export const LinkDragOverlay: React.FC = () => {
       // A Storyline's point ("story:<node>:<point>", ":up"/":down" on a stem's
       // tick end): a card let go on it moves with it (StorylineLayer).
       let story: string[] | null = null
+      // A detail on a card's back ("detail:<card>:<detail id>|new"): a
+      // card let go there is what that detail shows (CardBack).
+      let detail: string[] | null = null
       for (const el of els) {
         const attr = (el as HTMLElement).closest?.('[data-link-drop]')?.getAttribute('data-link-drop')
         if (!attr) continue
         if (attr.startsWith('story:')) { story = attr.split(':'); break }
+        if (attr.startsWith('detail:')) { detail = attr.split(':'); break }
         // "group:<id>" / "board:<id>" / "bar:<boardId>:<barId>", plus the
         // legacy "card:"/"chip:" spellings the card layer still emits.
         const hit = parseRef(attr)
@@ -65,6 +69,10 @@ export const LinkDragOverlay: React.FC = () => {
       if (bare && source.kind === 'group' && storyLinkOf(source.id)) {
         useUndoCoordinator.getState().checkpoint()
         unlinkCardFromStorylines(source.id)
+      }
+      if (detail && source.kind === 'group' && source.id !== detail[1]) {
+        useUndoCoordinator.getState().checkpoint()
+        useBoardsStore.getState().linkGroupDetail(detail[1], detail[2], source.id)
       }
       if (story && source.kind === 'group') {
         useUndoCoordinator.getState().checkpoint()
