@@ -39,7 +39,7 @@ export interface CardTypeInfo {
  *  the rest each its own. */
 export const CARD_TYPES: Record<CardType, CardTypeInfo> = {
   element:   { label: 'Element',   color: '#6b7280', details: [] },
-  character: { label: 'Character', color: '#c8463f', details: ['ID', 'Licence', 'Age', 'Height', 'Role', 'Stats'] },
+  character: { label: 'Character', color: '#c8463f', details: ['ID', 'Licence', 'Body', 'Age', 'Height', 'Weight', 'Role', 'Stats'] },
   faction:   { label: 'Faction',   color: '#7d55c7', details: ['Territory', 'Allies', 'Rivals'] },
   location:  { label: 'Location',  color: '#23897e', details: ['Place', 'Building', 'Use', 'Floors', 'Basement'] },
   prop:      { label: 'Prop',      color: '#2f64c9', details: ['Kind', 'Ammo', 'Capacity', 'Owner'] },

@@ -7,6 +7,8 @@ import { sameRef, type LinkRef } from '../utils/linkTargets'
 import type { Bar } from '../types/bar'
 import { TEMPLATES } from '../data/templates'
 import { CARD_TYPES, cardTypeOf, isAbove, newDetailId, typeColor, withTypeDetails, type CardType } from '../utils/cardTypes'
+import { fillCard, nameKindOf } from '../utils/fillDetails'
+import { makeName, nameKey } from '../utils/nameGen'
 import { newSceneLayout, putCards, type SceneDiv } from '../utils/sceneCard'
 import { getBoardAbsolutePos, computeGroupLayout, yToRow } from '../utils/nleRows'
 import {
@@ -267,6 +269,9 @@ interface BoardsState {
   groups: ProjectGroup[]  // project groups — each collapses to one card
   /** The colour picked for each card type, where it is not the type's own. */
   typeColors: Partial<Record<CardType, string>>
+  /** Every name "Fill in details" or "New name" has handed out (nameKey),
+   *  so none comes again, even after its card is gone. */
+  usedNames: string[]
 
   createBoard: (nleRow: number, nleX: number) => string
   duplicateBoard: (sourceBoardId: string) => string
@@ -348,6 +353,11 @@ interface BoardsState {
    *  top), or with `also`, that one added to its bosses (taken off if it
    *  is one already). Never someone below it. */
   setReportsTo: (factionId: string, memberId: string, bossId: string | null, also?: boolean) => void
+  /** The cards' empty details made up to fit their types, and a new name
+   *  for each still named what it came with (utils/fillDetails). */
+  fillInDetails: (groupIds: string[]) => void
+  /** A new name for each card whose type names its cards. */
+  giveNewNames: (groupIds: string[]) => void
   /** Out of the faction: unlinked; those who reported only to it report
    *  to its bosses instead. */
   removeMember: (factionId: string, memberId: string) => void
@@ -511,6 +521,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
   groups: [DEFAULT_GROUP],
   selectedGroupIds: [],
   typeColors: {},
+  usedNames: [],
 
   createBoard(nleRow, nleX) {
     const id = crypto.randomUUID()
@@ -1080,6 +1091,41 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
       else delete tree[memberId]
       return { ...g, reportsTo: tree }
     }) }))
+  },
+
+  fillInDetails(groupIds) {
+    const st = get()
+    const taken = new Set([...st.usedNames, ...st.groups.map(g => nameKey(g.name ?? '')).filter(Boolean)])
+    const fresh: string[] = []
+    const patch = new Map<string, Partial<ProjectGroup>>()
+    for (const id of groupIds) {
+      const g = st.groups.find(x => x.id === id)
+      if (!g) continue
+      const p = fillCard(g, st.groups, taken)
+      if (p.name) fresh.push(nameKey(p.name))
+      patch.set(id, p)
+    }
+    if (!patch.size) return
+    set(s => ({
+      usedNames: [...s.usedNames, ...fresh],
+      groups: s.groups.map(g => patch.has(g.id) ? { ...g, ...patch.get(g.id) } : g),
+    }))
+  },
+
+  giveNewNames(groupIds) {
+    const st = get()
+    const taken = new Set([...st.usedNames, ...st.groups.map(g => nameKey(g.name ?? '')).filter(Boolean)])
+    const named = new Map<string, string>()
+    for (const id of groupIds) {
+      const g = st.groups.find(x => x.id === id)
+      const kind = g && nameKindOf(cardTypeOf(g))
+      if (kind) named.set(id, makeName(kind, taken))
+    }
+    if (!named.size) return
+    set(s => ({
+      usedNames: [...s.usedNames, ...[...named.values()].map(nameKey)],
+      groups: s.groups.map(g => named.has(g.id) ? { ...g, name: named.get(g.id)! } : g),
+    }))
   },
 
   removeMember(factionId, memberId) {
@@ -2187,6 +2233,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
     boardOrder: s.boardOrder,
     groups: s.groups,
     typeColors: s.typeColors,
+    usedNames: s.usedNames,
   }),
 }))
 

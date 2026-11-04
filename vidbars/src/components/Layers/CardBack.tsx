@@ -442,6 +442,17 @@ export const CardBack: React.FC<{
         setMenu(null)
       },
     }))
+    // Fill in: the empty details made up to fit the type (and the other
+    // selected cards', when this is one of them).
+    if (type !== 'element') items.push({
+      label: 'Fill in details', separator: true,
+      onClick: () => {
+        const ids = bs.selectedGroupIds.includes(groupId) ? bs.selectedGroupIds : [groupId]
+        useUndoCoordinator.getState().checkpoint()
+        bs.fillInDetails(ids)
+        setMenu(null)
+      },
+    })
     if (me?.ownColor) items.push({
       label: 'Use the type’s colour', separator: true,
       onClick: () => { useUndoCoordinator.getState().checkpoint(); bs.setGroupOwnColor(groupId, false); setMenu(null) },

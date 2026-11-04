@@ -63,6 +63,8 @@ import { PenButton } from '../Annotation/PenButton'
 import { useSeedHoverFromCursor } from '../../utils/pointerTracker'
 import { deckAreas } from '../../utils/peek'
 import { useContextSheetStore } from '../../store/contextSheetStore'
+import { cardTypeOf } from '../../utils/cardTypes'
+import { nameKindOf } from '../../utils/fillDetails'
 
 const BOARD_PADDING_X = 20
 
@@ -150,6 +152,24 @@ const CardContextMenu: React.FC<{
     })
     onClose()
   }})
+
+  // Fill in details / New name: this card, or the selection it is in.
+  {
+    const bs = useBoardsStore.getState()
+    const ids = bs.selectedGroupIds.includes(group.id) && bs.selectedGroupIds.length > 1 ? bs.selectedGroupIds : [group.id]
+    const typed = ids.filter(id => bs.groups.find(g => g.id === id)?.cardType)
+    const nameable = ids.filter(id => { const g = bs.groups.find(x => x.id === id); return g && nameKindOf(cardTypeOf(g)) })
+    if (typed.length) menuItems.push({ label: `Fill in details${typed.length > 1 ? ` (${typed.length})` : ''}`, icon: '🎲', action: () => {
+      useUndoCoordinator.getState().checkpoint()
+      useBoardsStore.getState().fillInDetails(typed)
+      onClose()
+    }})
+    if (nameable.length) menuItems.push({ label: `New name${nameable.length > 1 ? ` (${nameable.length})` : ''}`, icon: '🏷', action: () => {
+      useUndoCoordinator.getState().checkpoint()
+      useBoardsStore.getState().giveNewNames(nameable)
+      onClose()
+    }})
+  }
 
   // Edit Summary
   menuItems.push({ label: 'Edit Summary', icon: '📝', action: () => {
