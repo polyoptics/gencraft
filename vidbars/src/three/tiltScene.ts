@@ -172,7 +172,13 @@ export interface TiltFrameState {
 }
 
 /** How long a model turned by hand takes to roll back (ms). */
-const DRIFT_MS = 3500
+const DRIFT_MS = 3000
+/** Let go mid-turn, it carries on turning the way it went, slowing with
+ *  this time constant (s), while it rolls home (Brian 2026-11-04). */
+const COAST_S = 0.45
+/** The fastest it carries on at (rad/s), so a hard flick stays sane. */
+const COAST_MAX = 12
+const coastAxis = new THREE.Vector3(), coastQ = new THREE.Quaternion(), rockQ = new THREE.Quaternion()
 /** Its rock into place: radians per (radian per second) it was turning
  *  at when let go, and at most ROCK_MAX — kept subtle. */
 const ROCK_PER_SPEED = 0.02
@@ -194,9 +200,14 @@ interface Standing {
   orient: THREE.Group
   /** Let go after a turn: it drifts back about `axis` from `angle` to
    *  none over DRIFT_MS, rocking past by up to `rock` (radians). */
-  back: { axis: THREE.Vector3; angle: number; rock: number; at: number } | null
-  /** The last moments of a turn (when, how far, radians): its speed. */
-  spun: { t: number; a: number }[]
+  back: {
+    axis: THREE.Vector3; angle: number; rock: number; at: number
+    /** How it stood when let go, and the turn it was carrying on with
+     *  (about `coast`, in rad/s; zero when it was held still). */
+    from: THREE.Quaternion; coast: THREE.Vector3
+  } | null
+  /** The last moments of a turn (when, about what, radians): its speed. */
+  spun: { t: number; axis: THREE.Vector3; a: number }[]
   inst: THREE.Object3D | null
   size: THREE.Vector3
   /** Model units per metre: set by the user, or guessed — 1 for glTF,
@@ -964,12 +975,20 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       if (s.back) {
         // Let go after an Alt-drag: it rolls back to how it stood (Brian
         // 2026-11-04), easing in and out, and rocks a little past and back
-        // into place as it lands, more the faster it was turning.
+        // into place as it lands, more the faster it was turning. Let go
+        // mid-turn, it first carries on the way it was going, slowing down,
+        // while that roll home takes over (the same 3 s).
         const u = Math.min(1, (now - s.back.at) / DRIFT_MS)
         const x = Math.min(1, u / 0.7), e = x * x * (3 - 2 * x)
         const v = (u - 0.6) / 0.4
         const r = v > 0 ? Math.sin(3 * Math.PI * v) * (1 - v) ** 2 : 0
-        s.orient.quaternion.setFromAxisAngle(s.back.axis, s.back.angle * (1 - e) - s.back.rock * r)
+        // (The coast is scaled to end exactly on time, so it lands home.)
+        const w = s.back.coast.length()
+        const turned = w * COAST_S * (1 - Math.exp(-u * DRIFT_MS / 1000 / COAST_S)) / (1 - Math.exp(-DRIFT_MS / 1000 / COAST_S))
+        if (w > 0) coastAxis.copy(s.back.coast).divideScalar(w)
+        coastQ.setFromAxisAngle(coastAxis, w > 0 ? turned : 0).multiply(s.back.from)
+        rockQ.setFromAxisAngle(s.back.axis, -s.back.angle * e - s.back.rock * r)
+        s.orient.quaternion.multiplyQuaternions(rockQ, coastQ)
         if (u >= 1) { s.back = null; s.orient.quaternion.identity() }
       }
       // glTF is in metres; something over 30 units tall is far likelier a
@@ -1179,7 +1198,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       spinAxis.applyQuaternion(parentQ).normalize()
       spinQ.setFromAxisAngle(spinAxis, len * rad)
       s.orient.quaternion.premultiply(spinQ).normalize()
-      s.spun.push({ t, a: len * rad })
+      s.spun.push({ t, axis: spinAxis.clone(), a: len * rad })
     }
     return true
   }
@@ -1189,15 +1208,24 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     if (!s) return
     const now = performance.now()
     // How fast it was turning as it was let go (rad/s), over the last 120 ms.
-    const speed = s.spun.filter(x => now - x.t < 120).reduce((a, x) => a + x.a, 0) / 0.12
+    // And which way: the turn it carries on with (rad/s about its axis).
+    const coast = new THREE.Vector3()
+    for (const x of s.spun) if (now - x.t < 120) coast.addScaledVector(x.axis, x.a / 0.12)
+    const speed = coast.length()
+    if (speed > COAST_MAX) coast.multiplyScalar(COAST_MAX / speed)
     s.spun = []
-    const q = s.orient.quaternion.clone()
+    const from = s.orient.quaternion.clone()
+    // Where the carrying on would leave it: it rolls home from there (the
+    // roll and the coast run together, so it never stops on the way).
+    const total = coast.length() * COAST_S
+    const q = new THREE.Quaternion().setFromAxisAngle(coast.clone().normalize(), total).multiply(from)
     if (q.w < 0) q.set(-q.x, -q.y, -q.z, -q.w)
     const angle = 2 * Math.acos(Math.min(1, q.w)), sn = Math.sin(angle / 2)
-    if (sn < 1e-6) { s.orient.quaternion.identity(); return }
+    if (sn < 1e-6 && speed < 1e-3) { s.orient.quaternion.identity(); return }
     s.back = {
-      axis: new THREE.Vector3(q.x / sn, q.y / sn, q.z / sn), angle, at: now,
+      axis: sn < 1e-6 ? coast.clone().normalize() : new THREE.Vector3(q.x / sn, q.y / sn, q.z / sn), angle, at: now,
       rock: Math.min(ROCK_MAX, speed * ROCK_PER_SPEED, angle * 0.3),
+      from, coast,
     }
   }
 
