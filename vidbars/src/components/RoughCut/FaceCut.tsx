@@ -18,7 +18,18 @@ export const FaceCut: React.FC<{ group: ProjectGroup; scale: number }> = ({ grou
   const playing = useCutPlay(s => s.playing === group.id)
   const [muted, setMuted] = useState(true)
   const host = useRef<HTMLDivElement>(null)
-  const k = Math.max(0.7, scale)
+  // The buttons and bar size with the face itself, so they stay readable
+  // however far out the canvas is zoomed (the card is wide, not a small face).
+  const [faceW, setFaceW] = useState(0)
+  useEffect(() => {
+    const el = host.current
+    if (!el) return
+    const ro = new ResizeObserver(() => setFaceW(el.getBoundingClientRect().width))
+    ro.observe(el)
+    setFaceW(el.getBoundingClientRect().width)
+    return () => ro.disconnect()
+  }, [])
+  const k = faceW ? Math.max(1, Math.min(2.4, faceW / 300)) : Math.max(1, scale)
 
   const play = (on: boolean) => {
     const st = useCutPlay.getState()

@@ -15,6 +15,7 @@
 
 import { NEW_CARD_FACE, useBoardsStore, type BoardData, type ProjectGroup } from '../store/boardsStore'
 import { useUndoCoordinator } from '../store/undoCoordinator'
+import { useZoomZonesStore } from '../store/zoomZonesStore'
 import { getMediaItems, type Bar, type MediaItem } from '../types/bar'
 import { makeBar } from './barOps'
 import { cardFaceSize, createMediaCard, gridOrder } from './cardGrid'
@@ -45,8 +46,6 @@ export const IMAGE_HOLD = 2
 export const IMAGE_MAX = 60
 /** A video whose length could not be read yet. */
 const UNKNOWN_LEN = 5
-/** A Rough Cut card's frame, in card faces: wide, like a screen. */
-const CUT_W_FACES = 5
 export const CUT_ASPECT = 0.6
 
 export const isCutCard = (g: ProjectGroup | undefined | null): boolean => !!g?.cut
@@ -139,7 +138,7 @@ export function layoutCutCard(groupId: string, order?: string[]): void {
   const clipIds = ids.filter(id => s.boards[id] && blockClip(s.boards[id]))
   const empty = clipIds.length ? ids.filter(id => !clipIds.includes(id)) : []
   const keep = clipIds.length ? clipIds : ids
-  const frameW = g.cardWidthOverride ?? cardFaceSize().w * CUT_W_FACES
+  const frameW = g.cardWidthOverride ?? cutCardSize().w
   const lens = keep.map(id => { const c = blockClip(s.boards[id]); return c ? clipLen(mediaRange(c.media)) : 1 })
   const total = Math.max(0.001, lens.reduce((a, b) => a + b, 0))
   const gap = frameW * 0.004
@@ -180,9 +179,13 @@ export function layoutCutCard(groupId: string, order?: string[]): void {
   })
 }
 
-/** A new Rough Cut card's frame, canvas units, at the zoom now. */
-export function cutCardSize(zoom?: number): { w: number; h: number } {
-  const w = cardFaceSize(zoom).w * CUT_W_FACES
+/** A new Rough Cut card's frame, canvas units: whatever the zoom it is made
+ *  at, about CUT_SCREEN_W screen px wide in the middle of the Blocks zone,
+ *  where its timeline is worked in, so the timeline is big enough to use. */
+const CUT_SCREEN_W = 1150
+export function cutCardSize(_zoom?: number): { w: number; h: number } {
+  const { cardMax, blockMax } = useZoomZonesStore.getState()
+  const w = CUT_SCREEN_W / Math.sqrt(Math.max(0.01, cardMax) * Math.max(0.01, blockMax))
   return { w, h: w * CUT_ASPECT }
 }
 

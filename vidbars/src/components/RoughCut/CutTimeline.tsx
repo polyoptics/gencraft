@@ -214,6 +214,30 @@ export const CutTimeline: React.FC<{ group: ProjectGroup }> = ({ group }) => {
     window.addEventListener('pointerup', up)
   }
 
+  // ── Resize: the corner grip, keeping the card's shape ──
+  const startResize = (e: React.PointerEvent) => {
+    if (e.button !== 0) return
+    e.stopPropagation()
+    e.preventDefault()
+    useUndoCoordinator.getState().checkpoint()
+    const x0 = e.clientX, y0 = e.clientY
+    const w0 = W, aspect = H / W
+    const move = (m: PointerEvent) => {
+      const z = useCanvasStore.getState().zoom
+      // Along the diagonal: whichever way the pointer went further.
+      const d = Math.max((m.clientX - x0) / z, (m.clientY - y0) / z / aspect)
+      const w = Math.max(w0 * 0.25, Math.min(w0 * 6, w0 + d))
+      useBoardsStore.getState().setGroupCardSize(group.id, w, w * aspect)
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      layoutCardGrid(group.id)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
+
   // ── The ruler and empty track: put the playhead there ──
   const startScrub = (e: React.PointerEvent) => {
     if (e.button !== 0) return
@@ -488,6 +512,20 @@ export const CutTimeline: React.FC<{ group: ProjectGroup }> = ({ group }) => {
           Edge: trim · Middle: move, or off the card to take it out · Drop cards in · Space play · S split · I / O trim to playhead · N note
         </span>
       </div>
+      </div>
+      {/* Resize: the corner grip scales the whole Rough Cut, keeping its shape. */}
+      <div
+        data-cut-resize=""
+        title="Drag to make the Rough Cut bigger or smaller"
+        onPointerDown={startResize}
+        style={{
+          position: 'absolute', right: -6, bottom: -6, width: 44, height: 44, cursor: 'nwse-resize', zIndex: 45,
+          borderRadius: '0 0 18px 0', display: 'grid', placeItems: 'center',
+        }}
+      >
+        <svg width="26" height="26" viewBox="0 0 26 26" style={{ pointerEvents: 'none' }}>
+          <path d="M24 8 L8 24 M24 15 L15 24 M24 22 L22 24" stroke="rgba(255,255,255,0.7)" strokeWidth="3" strokeLinecap="round" />
+        </svg>
       </div>
       {/* The clip being carried: over everything, and off the card too. */}
       {drag?.kind === 'move' && (() => {
