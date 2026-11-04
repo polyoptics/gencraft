@@ -232,10 +232,10 @@ const IcNewNode: React.FC<SvgProps> = ({ size }) => (
 // follows here.
 type BarId =
   | 'viewer' | 'pool' | 'prompt' | 'history' | 'browser' | 'filmMixer'
-  | 'roughCut' | 'storyline' | 'cabinet' | 'loopStrip' | 'effects'
+  | 'roughCut' | 'storyline' | 'cabinet' | 'loopStrip' | 'effects' | 'new'
 const DEFAULT_ORDER: BarId[] = [
   'viewer', 'pool', 'prompt', 'history', 'browser', 'filmMixer',
-  'roughCut', 'storyline', 'cabinet', 'loopStrip', 'effects',
+  'roughCut', 'storyline', 'cabinet', 'loopStrip', 'effects', 'new',
 ]
 const ORDER_KEY = 'vidbars.topIconBar.order'
 
@@ -247,6 +247,8 @@ function loadOrder(): BarId[] {
     DEFAULT_ORDER.includes(x as BarId) && saved.indexOf(x) === i)
   DEFAULT_ORDER.forEach((id, i) => {
     if (out.includes(id)) return
+    // Orders saved before New could move have no 'new': it was at the end.
+    if (id === 'new') { out.push(id); return }
     const prev = DEFAULT_ORDER.slice(0, i).reverse().find(p => out.includes(p))
     out.splice(prev ? out.indexOf(prev) + 1 : 0, 0, id)
   })
@@ -324,7 +326,7 @@ export const TopIconBar: React.FC = () => {
 
   // Every button, by id. The ORDER they sit in is Brian's: drag one along
   // the bar to move it, and the order is saved (localStorage) so it is the
-  // same after a reload. "New" stays on its own past the divider.
+  // same after a reload. Every button moves, "New" included.
   const buttons: Record<BarId, React.ReactNode> = {
     viewer: <IconButton Icon={IcViewer} title="Viewer — a window for models, video and images" {...place('viewer')} />,
     pool: <IconButton Icon={IcPool} title="Media Pool — a folder on disk" {...place('pool')} />,
@@ -355,6 +357,7 @@ export const TopIconBar: React.FC = () => {
         onClick={() => setFxOpen(o => !o)}
       />
     ),
+    new: <IconButton Icon={IcNew} title={newLabel} {...place('new')} />,
   }
 
   const [order, setOrder] = React.useState<BarId[]>(loadOrder)
@@ -458,8 +461,11 @@ export const TopIconBar: React.FC = () => {
       }}
     >
       {shown.map((id, i) => (
+        <React.Fragment key={id}>
+        {id === 'new' && i === shown.length - 1 && (
+          <div style={{ width: 1, height: TILE * 0.55, background: 'rgba(255,255,255,0.12)', margin: '0 2px' }} />
+        )}
         <div
-          key={id}
           ref={id === 'effects' ? fxBtnRef : undefined}
           data-top-icon={id}
           onPointerDown={e => onGrab(e, id)}
@@ -475,12 +481,9 @@ export const TopIconBar: React.FC = () => {
         >
           {buttons[id]}
         </div>
+        </React.Fragment>
       ))}
       <EffectPalette open={fxOpen} anchorRef={fxBtnRef} onClose={closeFx} />
-
-      <div style={{ width: 1, height: TILE * 0.55, background: 'rgba(255,255,255,0.12)', margin: '0 2px' }} />
-
-      <IconButton Icon={IcNew} title={newLabel} {...place('new')} />
     </div>
   )
 }
