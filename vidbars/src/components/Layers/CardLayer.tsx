@@ -3174,6 +3174,18 @@ function videoFrameUrl(v: HTMLVideoElement): string | null {
   } catch { return null }
 }
 
+// The face's buttons keep one size on screen at every zoom, so they can
+// still be seen and hit with the canvas zoomed out.
+const FACE_BTN_PX = 22
+const SpeakerIcon: React.FC<{ muted: boolean }> = ({ muted }) => (
+  <svg width={14} height={14} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>
+    <path d="M2.5 6h2.5l3.5-3v10l-3.5-3h-2.5z" fill="currentColor" />
+    {muted
+      ? <path d="M11 6l3.5 4M14.5 6l-3.5 4" />
+      : <path d="M11 5.5a3.5 3.5 0 0 1 0 5M12.8 3.8a6 6 0 0 1 0 8.4" />}
+  </svg>
+)
+
 export const FaceVideo: React.FC<{
   media: MediaItem; cardId: string; faceOf?: string; scale: number
   /** Where the buttons and the bar sit: along the bottom (a card face), or
@@ -3188,6 +3200,9 @@ export const FaceVideo: React.FC<{
   const owner = faceOf ?? cardId
   const [playing, setPlaying] = useState(false)
   const [muted, setMuted] = useState(true)
+  // Too small on screen to play: no buttons (they would not fit, and Play
+  // would do nothing there).
+  const [tiny, setTiny] = useState(false)
   const [progress, setProgress] = useState(0)
   useEffect(() => {
     const v = ref.current
@@ -3202,10 +3217,15 @@ export const FaceVideo: React.FC<{
   const frac = (v: HTMLVideoElement) => Math.max(0, Math.min(1, (v.currentTime - lo) / Math.max(1e-3, hiOf(v) - lo)))
   // At rest it shows its thumbnail's frame (or the first).
   const rest = media.posterTime !== undefined && media.posterTime >= lo && media.posterTime <= (media.clipOut ?? Infinity) ? media.posterTime : lo
+  // Where Play starts: a spot clicked on the bar, or where it was paused.
+  // Hovering only previews a frame and never moves this, so reaching for
+  // the play button at the right edge can't drag it to the end.
+  const held = useRef<number | null>(null)
   const toRest = () => {
     const v = ref.current
-    if (v && v.paused && v.duration > 0 && Math.abs(v.currentTime - rest) > 0.01) {
-      v.currentTime = Math.min(rest, v.duration)
+    const at = held.current ?? rest
+    if (v && v.paused && v.duration > 0 && Math.abs(v.currentTime - at) > 0.01) {
+      v.currentTime = Math.min(at, v.duration)
       setProgress(frac(v))
     }
   }
@@ -3213,7 +3233,7 @@ export const FaceVideo: React.FC<{
   const ownerRef = useRef(owner)
   useLayoutEffect(() => { toRestRef.current = toRest; ownerRef.current = owner })
   // A new thumbnail chosen: show it now.
-  useEffect(() => { toRestRef.current() }, [rest])
+  useEffect(() => { held.current = null; toRestRef.current() }, [rest])
   const k = Math.max(0.7, scale)
 
   const play = useCallback((on: boolean) => {
@@ -3266,7 +3286,8 @@ export const FaceVideo: React.FC<{
     if (!v || !face) return
     const move = (e: PointerEvent) => {
       if (!v.paused || !(v.duration > 0) || e.buttons) return
-      if ((e.target as Element).closest('[data-face-video-bar],[data-face-video-play],[data-face-video-sound],[data-card-face-arrow]')) return
+      // Over the buttons or the bar: back to where Play will start.
+      if ((e.target as Element).closest('[data-face-video-bar],[data-face-video-play],[data-face-video-sound],[data-card-face-arrow]')) { toRestRef.current(); return }
       const r = v.getBoundingClientRect()
       v.currentTime = lo + Math.max(0, Math.min(1, (e.clientX - r.left) / Math.max(1, r.width))) * (hiOf(v) - lo)
       setProgress(frac(v))
@@ -3292,7 +3313,11 @@ export const FaceVideo: React.FC<{
     if (!v) return
     const io = new IntersectionObserver(([en]) => { if (!en.isIntersecting && !v.paused) v.pause() })
     io.observe(v)
-    const ro = new ResizeObserver(() => { if (v.getBoundingClientRect().width < FACE_VIDEO_MIN_PX && !v.paused) v.pause() })
+    const ro = new ResizeObserver(() => {
+      const small = v.getBoundingClientRect().width < FACE_VIDEO_MIN_PX
+      setTiny(small)
+      if (small && !v.paused) v.pause()
+    })
     ro.observe(v)
     return () => { io.disconnect(); ro.disconnect() }
   }, [])
@@ -3302,6 +3327,7 @@ export const FaceVideo: React.FC<{
     if (!v || !(v.duration > 0)) return
     const r = bar.getBoundingClientRect()
     v.currentTime = lo + Math.max(0, Math.min(1, (clientX - r.left) / Math.max(1, r.width))) * (hiOf(v) - lo)
+    held.current = v.currentTime
     setProgress(frac(v))
   }
   const stop = (e: React.SyntheticEvent) => e.stopPropagation()
@@ -3324,7 +3350,7 @@ export const FaceVideo: React.FC<{
         poster={media.posterUrl}
         onLoadedMetadata={toRest}
         onPlay={() => setPlaying(true)}
-        onPause={() => setPlaying(false)}
+        onPause={e => { held.current = e.currentTarget.currentTime; setPlaying(false) }}
         onTimeUpdate={e => {
           const v = e.currentTarget
           if (!(v.duration > 0)) return
@@ -3334,20 +3360,20 @@ export const FaceVideo: React.FC<{
         }}
         style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', borderRadius: 12, opacity: 0.85 }}
       />
-      <div style={{ position: 'absolute', zIndex: 3, right: 6 * k, ...(chrome === 'top' ? { top: barH + 6 * k + topInset } : { bottom: barH + 6 * k }), display: 'flex', gap: 4 * k }}>
+      {!tiny && <div style={{ position: 'absolute', zIndex: 3, right: 6 * k, ...(chrome === 'top' ? { top: barH + 6 * k + topInset } : { bottom: barH + 6 * k }), display: 'flex', gap: 4 * k }}>
         <button
           type="button" data-face-video-play title={playing ? 'Pause (Space)' : 'Play (Space)'}
           onPointerDown={stop} onDoubleClick={stop}
           onClick={e => { e.stopPropagation(); play(!playing) }}
-          style={btn(22 * k)}
+          style={btn(FACE_BTN_PX)}
         >{playing ? '❚❚' : '▶'}</button>
         <button
           type="button" data-face-video-sound title={muted ? 'Sound on' : 'Mute'}
           onPointerDown={stop} onDoubleClick={stop}
           onClick={e => { e.stopPropagation(); setMuted(m => !m) }}
-          style={btn(18 * k)}
-        >{muted ? '🔇' : '🔊'}</button>
-      </div>
+          style={btn(FACE_BTN_PX)}
+        ><SpeakerIcon muted={muted} /></button>
+      </div>}
       <div
         data-face-video-bar
         onPointerDown={e => {
@@ -3361,7 +3387,10 @@ export const FaceVideo: React.FC<{
         style={{
           // Starts clear of the reference chips hanging off the card's
           // bottom-left edge (PrimaryChipRail), so 0% can be clicked.
-          position: 'absolute', zIndex: 3, height: barH + 6 * k, cursor: 'pointer', display: 'flex',
+          // Above the card's bottom resize strip (z 50), which otherwise
+          // takes every click on the bar; under its corner grip (z 51,
+          // later in the card).
+          position: 'absolute', zIndex: 51, height: barH + 6 * k, cursor: 'pointer', display: 'flex',
           ...(chrome === 'top'
             ? { left: 0, right: 0, top: 0, alignItems: 'flex-start' }
             : { left: FACE_BAR_INSET * k, right: 0, bottom: 0, alignItems: 'flex-end' }),
