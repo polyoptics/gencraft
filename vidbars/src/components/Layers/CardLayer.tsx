@@ -33,6 +33,7 @@ import { storyLinkOf, unlinkCardFromStorylines } from '../Canvas/StorylineLayer'
 import { Viewport3DLayer } from '../Viewport3D/Viewport3DLayer'
 import { NLETimelineHeader, NLE_HEADER_CANVAS_H, headerExtend as computeHeaderExtend, headerScreenH, overviewScale } from '../NLE/NLETimelineHeader'
 import { HeroImageLayer } from './HeroImageLayer'
+import { CardBack, FlipButton, backColor, useCardFlip } from './CardBack'
 import { useFxStore } from '../../store/fxStore'
 import { cardStripId } from '../../utils/fx/cardStrips'
 import { cardHitAt } from '../../utils/cardContent'
@@ -527,6 +528,9 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
   const onCardDown = useCallback((e: React.PointerEvent) => {
     if (e.button !== 0) return
     if ((e.target as HTMLElement).tagName === 'INPUT') return
+    // The front card of a touching line, turned over: it moves the line.
+    const line = useBoardsStore.getState().groups.find(g => g.id === group.id)?.flipped ? clusterFront.get(group.id) : undefined
+    if (line && !e.shiftKey) { line.drag(e); return }
     // Belt-and-braces: skip drag init if the pointerdown originated on the
     // pen-button affordance (or any descendant of it). The button itself
     // already calls stopPropagation, but this guard catches any event-flow
@@ -761,6 +765,10 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
   // (covers zoom-layer transitions where the card swaps in under a static
   // cursor — pointerenter wouldn't fire otherwise).
   useSeedHoverFromCursor(cardRef, setIsHovered)
+  // Turned over, the card shows its back: its details (CardBack). An
+  // effect card's face is its controls, so it has no back to turn to.
+  const canFlip = !group.effect
+  const showBack = useCardFlip(canFlip && !!group.flipped, cardRef, !tilted)
 
   // ── Geometry: compute bounding box from group layout ──
   const { screenLeft, screenTop, screenWidth, cardHeight, headerPad, contentCanvasW, contentCanvasH, color } = useMemo(() => {
@@ -924,25 +932,32 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
           borderRadius: 12,
           // Solid card color regardless of hero presence. Hero renders ON
           // TOP at its own opacity — fading the hero reveals the card
-          // color underneath rather than the canvas behind.
-          background: color,
+          // color underneath rather than the canvas behind. The back is
+          // the same colour, deeper.
+          background: showBack ? backColor(color) : color,
           touchAction: 'none',
           border: selFx ? selFx.border : '1.5px solid rgba(255,255,255,0.25)',
           boxShadow: selFx ? selFx.boxShadow : '0 4px 24px rgba(0,0,0,0.4)',
           overflow: 'hidden',
         }}
         onPointerDown={onCardDown}
-        onPointerEnter={() => setIsHovered(true)}
-        onPointerLeave={() => setIsHovered(false)}
+        onPointerEnter={() => { setIsHovered(true); clusterFront.get(group.id)?.hover(true) }}
+        onPointerLeave={() => { setIsHovered(false); clusterFront.get(group.id)?.hover(false) }}
         onWheel={onWheel}
         onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setCardMenu({ x: e.clientX, y: e.clientY }) }}
         onDoubleClick={e => {
           e.stopPropagation()
+          if (showBack) return
           const el = e.currentTarget.querySelector('[data-card-text]') as HTMLElement | null
           el?.dispatchEvent(new CustomEvent('start-edit', { bubbles: false }))
         }}
       >
-        {group.effect ? (
+        {showBack ? (
+          <div style={{ position: 'absolute', top: headerPad, left: 0, right: 0, bottom: 0 }}>
+            <CardBack groupId={group.id} color={color} width={screenWidth} height={Math.max(1, cardHeight - headerPad)} hovered={isHovered}
+              reserve={6 + Math.min(32, Math.max(8, 16 * overviewScale(zoom), headerScreenH(zoom) * 0.85)) + 4} />
+          </div>
+        ) : group.effect ? (
           <div style={{ position: 'absolute', top: headerPad, left: 0, right: 0, bottom: 0, overflow: 'hidden', borderRadius: '0 0 12px 12px', display: 'flex', flexDirection: 'column' }}>
             <EffectCardFace group={group} width={screenWidth} height={Math.max(1, cardHeight - headerPad)} />
           </div>
@@ -1030,8 +1045,8 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
 
         {/* ── Annotation layer — body region only (excludes header extension).
                 Renders saved cardStrokes always; pointer-event-active only when
-                draw mode targets THIS card. */}
-        <div style={{
+                draw mode targets THIS card. Drawn on the face, so not on the back. */}
+        {!showBack && <div style={{
           position: 'absolute',
           top: headerPad, left: 0, right: 0, bottom: 0,
           pointerEvents: 'none',
@@ -1044,7 +1059,7 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
             height={Math.max(0, cardHeight - headerPad)}
             strokes={group.cardStrokes ?? []}
           />
-        </div>
+        </div>}
 
         {/* Pen toggle — top-right corner of the card BODY (not the header).
                 Sits just below the header band; size scales with the timeline
@@ -1058,8 +1073,20 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
           const screenHeight = headerScreenH(zoom)
           const penSize = Math.min(32, Math.max(8, 16 * overviewScale(zoom), screenHeight * 0.85))
           const PEN_INSET = 6   // distance from right edge and from header band
-          return (
-            <div
+          return (<>
+            {/* Flip — the top-left corner of the body, the same spot on
+                either side, so it never moves under the cursor. */}
+            {canFlip && (
+              <FlipButton
+                flipped={!!group.flipped}
+                onFlip={() => useBoardsStore.getState().setGroupFlipped(group.id, !group.flipped)}
+                baseColor={color}
+                size={penSize}
+                visible={isHovered}
+                style={{ top: headerPad + PEN_INSET, left: PEN_INSET }}
+              />
+            )}
+            {!showBack && <div
               data-pen-button="true"
               style={{
                 position: 'absolute',
@@ -1075,12 +1102,12 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
                 size={penSize}
                 visible={isHovered}
               />
-            </div>
-          )
+            </div>}
+          </>)
         })()}
 
         {/* Drag-out — this card's face; Shift, every image in it. */}
-        <CardFaceDragOut
+        {!showBack && <CardFaceDragOut
           card={group.id}
           url={gripUrl}
           getUrls={({ all }) => {
@@ -1091,7 +1118,7 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
           }}
           allLabel="every image in this card"
           visible={isHovered}
-        />
+        />}
       </div>
 
       {cardMenu && (
@@ -3597,6 +3624,12 @@ export function cardScreenRect(g: ProjectGroup, boards: Record<string, import('.
   }
 }
 
+/** A touching line's front card, while it is turned over: DeckAffordance's
+ *  zone lets presses through to its back (so its details can be edited),
+ *  and the card hands a press on its back to the line here instead, so it
+ *  still moves the whole line, and its hover still lights the line up. */
+const clusterFront = new Map<string, { drag: (e: React.PointerEvent) => void; hover: (on: boolean) => void }>()
+
 /** Affordance shown when open cards are touching — hover on primary shows outline + stack/fan.
  *  `front` is what the primary is drawn as (see Overlay's affordanceFront):
  *  a plain card, a stacked deck it anchors, or null for anything drawn
@@ -3676,8 +3709,16 @@ const DeckAffordance: React.FC<{ cluster: string[]; front: Deck | 'card' | null 
   }, [cluster, groups, boards, pan, zoom])
 
   const primary = memberRects[0]
+  const primaryGroup = primary ? groups.find(gr => gr.id === primary.gid) : undefined
+  // The front card turned over: its back takes presses itself (see clusterFront).
+  const frontFlipped = front === 'card' && !!primaryGroup?.flipped && !primaryGroup.effect
+  const frontId = primaryGroup?.id
+  useEffect(() => {
+    if (!frontId || !frontFlipped) return
+    clusterFront.set(frontId, { drag: onClusterDragDown, hover: setIsHovered })
+    return () => { if (clusterFront.get(frontId)?.drag === onClusterDragDown) clusterFront.delete(frontId) }
+  }, [frontId, frontFlipped, onClusterDragDown])
   if (!primary) return null
-  const primaryGroup = groups.find(gr => gr.id === primary.gid)
 
   return (
     <>
@@ -3690,7 +3731,7 @@ const DeckAffordance: React.FC<{ cluster: string[]; front: Deck | 'card' | null 
           width: primary.screenWidth,
           height: primary.screenHeight,
           zIndex: 41,
-          pointerEvents: 'all',
+          pointerEvents: frontFlipped ? 'none' : 'all',
           cursor: 'grab',
         }}
         onPointerEnter={() => setIsHovered(true)}
@@ -3719,6 +3760,19 @@ const DeckAffordance: React.FC<{ cluster: string[]; front: Deck | 'card' | null 
             card's, header band included, so it lands in the same spot. It
             stops its own press, click and double-click: neither the
             cluster drag nor stack-on-double-click fires from it. */}
+        {/* The front card's Flip, for the same reason as its drag-out: the
+            zone covers the card's own. Turned over, the zone lets presses
+            through and the card's own Flip takes them. */}
+        {primaryGroup && front === 'card' && !primaryGroup.effect && !frontFlipped && (
+          <FlipButton
+            flipped={false}
+            onFlip={() => useBoardsStore.getState().setGroupFlipped(primaryGroup.id, true)}
+            baseColor={primaryGroup.color}
+            size={Math.min(32, Math.max(8, 16 * overviewScale(zoom), headerScreenH(zoom) * 0.85))}
+            visible={isHovered}
+            style={{ top: computeHeaderExtend(zoom) + CARD_TOOL_INSET, left: CARD_TOOL_INSET }}
+          />
+        )}
         {primaryGroup && front === 'card' && (
           <CardFaceDragOut
             url={isHovered ? cardGripUrl(primaryGroup, boards) : null}

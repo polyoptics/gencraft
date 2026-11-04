@@ -138,6 +138,10 @@ export interface ProjectGroup {
     off?: boolean
     /** Soloed: the only effect its chain runs. One per chain (effectToggles). */
     solo?: boolean }
+  /** Turned over: the card shows its back, the DETAILS side (CardBack). */
+  flipped?: boolean
+  /** The rows on its details side (utils/cardTypes). */
+  details?: import('../utils/cardTypes').CardDetail[]
 }
 
 /** Find which group a board belongs to */
@@ -310,6 +314,8 @@ interface BoardsState {
   deleteGroup: (groupId: string) => void
   renameGroup: (groupId: string, name: string) => void
   setGroupColor: (groupId: string, color: string) => void
+  setGroupFlipped: (groupId: string, flipped: boolean) => void
+  setGroupDetails: (groupId: string, details: import('../utils/cardTypes').CardDetail[]) => void
   setGroupCardHeroImage: (groupId: string, url: string | null) => void
   /** Flip cards between screen-pinned and canvas-placed. Takes an ARRAY so a
    *  multi-selection converts in one set — same shape as setNodePlacement. */
@@ -967,6 +973,14 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
 
   setGroupColor(groupId, color) {
     set(s => ({ groups: s.groups.map(g => g.id === groupId ? { ...g, color } : g) }))
+  },
+
+  setGroupFlipped(groupId, flipped) {
+    set(s => ({ groups: s.groups.map(g => g.id === groupId ? { ...g, flipped: flipped || undefined } : g) }))
+  },
+
+  setGroupDetails(groupId, details) {
+    set(s => ({ groups: s.groups.map(g => g.id === groupId ? { ...g, details } : g) }))
   },
 
   setGroupCardHeroImage(groupId, url) {
