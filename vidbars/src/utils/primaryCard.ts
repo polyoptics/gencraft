@@ -20,6 +20,14 @@ export function setRows(clusters: string[][]) {
   rows.clear()
   for (const c of clusters) for (const id of c) rows.set(id, c)
   rowsVersion++
+  for (const f of rowsListeners) f()
+}
+const rowsListeners = new Set<() => void>()
+/** Called whenever the rows are drawn anew (for useSyncExternalStore with
+ *  rowsSeen). */
+export function onRows(f: () => void): () => void {
+  rowsListeners.add(f)
+  return () => { rowsListeners.delete(f) }
 }
 /** Card `id`'s row as drawn, its primary card first (none when it is in none). */
 export const rowOf = (id: string): string[] | undefined => rows.get(id)

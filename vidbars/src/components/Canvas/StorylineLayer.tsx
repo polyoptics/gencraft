@@ -17,6 +17,9 @@
 //  - Click a dot to select it; double-click it (or its title) to name it.
 //    Delete takes it out, its lines closing up (see deleteDot). Right-click a
 //    dot or line: Delete, Delete branch (from a dot onward), Unlink a card.
+//  - Each base dot has a decks button (StoryDecks), away from its branches:
+//    click it to open every deck on its chain (the dot and the branches
+//    hanging off it), again to close them all. Lit while they are open.
 //  - The grab handle at the base's start moves the whole storyline (flipped
 //    up, across the floor); right-click it for colour, thickness and Flip up
 //    in 3D view. Click it to select the
@@ -46,7 +49,7 @@
 // stand with it at card zoom (TiltLayer, storyWallOf); otherwise tethers run
 // in 3D from the raised dots down to them (Tether3D).
 
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import ReactDOM from 'react-dom'
 import { HexColorPicker } from 'react-colorful'
 import { create } from 'zustand'
@@ -63,7 +66,7 @@ import { useTiltStore, isTilted, standRise, unprojectTilt, TILT_FAR } from '../.
 import { useWorldZoom } from './worldZoom'
 import { clientToCanvas } from '../../utils/fx/createEffect'
 import { snapToDots } from '../../utils/dotGrid'
-import { openDeckOf, rowOf, rowsSeen } from '../../utils/primaryCard'
+import { onRows, openDeckOf, rowOf, rowsSeen } from '../../utils/primaryCard'
 import { isHiddenDeckMember } from '../../hooks/useCardDecks'
 import { PRESET_COLORS } from '../UI/TextFormatToolbar'
 import {
@@ -919,6 +922,7 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
   const d = raw
   const px = 1 / zoom
   const byId = new Map(d.dots.map(p => [p.id, p]))
+  const baseSet = new Set(d.base ?? [])
   const tethers = hasCards ? storyTethers(d, node.x, node.y, groups) : NO_TETHERS
   // It stands on its foot (kept from when it was flipped), relative to the
   // node; the up side rises: a quarter turn about it, the way that takes its
@@ -1186,21 +1190,31 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
           const isEditing = editing === p.id
           if (!p.title && !isEditing) return null
           // Above its dot, unless a line leaves it upward: then to its left.
-          const up = d.edges.some(e => {
-            const o = e.a === p.id ? byId.get(e.b) : e.b === p.id ? byId.get(e.a) : undefined
-            return o && o.y < p.y && Math.abs(o.x - p.x) < Math.abs(o.y - p.y)
-          })
+          const up = leaves(d, byId, p, -1)
           const reach = (RING_HIT + 4) * px
+          // Over a base dot's decks button, when that sits above it.
+          const lift = baseSet.has(p.id) && decksAbove(d, byId, p) ? DECKS_H * px : 0
           return (
             <StoryTitle
               key={p.id} nodeId={id} pointId={p.id} title={p.title} editing={isEditing}
-              x={up ? p.x - reach : p.x} y={up ? p.y : p.y - reach} side={up ? 'left' : 'above'} px={px} selected={sel === p.id}
+              x={up ? p.x - reach : p.x} y={up ? p.y : p.y - reach - lift} side={up ? 'left' : 'above'} px={px} selected={sel === p.id}
             />
           )
         })}
+        {(d.base ?? []).map(b => {
+          // A base dot's decks button: below it, or above it when its
+          // branches go down only.
+          const p = byId.get(b)
+          if (!p) return null
+          const above = decksAbove(d, byId, p)
+          const reach = (RING_HIT + 3) * px
+          return <StoryDecks key={b} nodeId={id} dotId={b} x={p.x} y={above ? p.y - reach : p.y + reach} side={above ? 'above' : 'below'} px={px} />
+        })}
         {sel && byId.get(sel) && (() => {
           const p = byId.get(sel)!
-          return <StoryOptions nodeId={id} snap={d.snap !== false} x={p.x} y={p.y + (RING_HIT + 8) * px} side="below" px={px} />
+          // Under a base dot's decks button, when that sits below it.
+          const drop = baseSet.has(p.id) && !decksAbove(d, byId, p) ? DECKS_H * px : 0
+          return <StoryOptions nodeId={id} snap={d.snap !== false} x={p.x} y={p.y + (RING_HIT + 8) * px + drop} side="below" px={px} />
         })()}
       </div>
       {wall && !cardsStand && tethers.map(t => {
@@ -1351,6 +1365,105 @@ const StorySvg: React.FC<{
         })}
       </g>
     </svg>
+  )
+}
+
+/** Whether a line leaves dot `p` mostly upward (`way` -1) or downward (1). */
+function leaves(d: StorylineData, byId: Map<string, StoryDot>, p: StoryDot, way: 1 | -1): boolean {
+  return d.edges.some(e => {
+    const o = e.a === p.id ? byId.get(e.b) : e.b === p.id ? byId.get(e.a) : undefined
+    return !!o && (o.y - p.y) * way > 0 && Math.abs(o.x - p.x) < Math.abs(o.y - p.y)
+  })
+}
+/** A base dot's decks button sits above it only when its branches go down
+ *  and none goes up; else below it. */
+const decksAbove = (d: StorylineData, byId: Map<string, StoryDot>, p: StoryDot) => leaves(d, byId, p, 1) && !leaves(d, byId, p, -1)
+/** Screen px a base dot's decks button takes up (with its gap). */
+const DECKS_H = 22
+
+const isClosedDeck = (g: ProjectGroup | undefined) => !!g && !!g.deckState && g.deckState !== 'open'
+
+/** The decks on base dot `dotId`'s chain (the dot and every dot hanging off
+ *  it, utils/storyline downstream): each closed deck a linked card is in or
+ *  fronts (its front card first), and each open row of touching cards a
+ *  linked card is in, unless the row holds a card linked to a dot off the
+ *  chain (that one is the other chain's to close). */
+function chainDecks(nodeId: string, dotId: string): { closed: string[][]; open: string[][] } {
+  const nodes = useFreeNodeStore.getState().nodes
+  const d = nodes[nodeId]?.storyline
+  if (!d?.dots) return { closed: [], open: [] }
+  const chain = downstream(d, dotId)
+  const mine = new Set<string>(), elsewhere = new Set<string>()
+  for (const [nid, n] of Object.entries(nodes)) for (const p of n.storyline?.dots ?? []) for (const c of p.cards ?? []) {
+    if (nid === nodeId && chain.has(p.id)) mine.add(c)
+    else elsewhere.add(c)
+  }
+  const groups = useBoardsStore.getState().groups
+  const byId = new Map(groups.map(g => [g.id, g]))
+  const closed: string[][] = [], open: string[][] = []
+  const seen = new Set<string>()
+  for (const c of mine) {
+    const f = shownAs(c, byId)
+    const front = byId.get(f)
+    if (!front) continue
+    if (isClosedDeck(front)) {
+      if (seen.has(f)) continue
+      seen.add(f)
+      const kids = groups.filter(g => g.id !== f && g.deckAnchorId === f && isClosedDeck(g)).map(g => g.id)
+      if (kids.length) closed.push([f, ...kids])
+      continue
+    }
+    const row = rowOf(f)
+    if (!row || row.length < 2 || seen.has(row[0])) continue
+    seen.add(row[0])
+    if (!row.some(m => elsewhere.has(m) && !mine.has(m))) open.push(row)
+  }
+  return { closed, open }
+}
+
+/** A base dot's decks button: opens every deck on its chain, or — with all
+ *  of them open — closes them all. One label and icon; lit while its
+ *  chain's decks are all open. Faint when its chain has none. */
+const StoryDecks: React.FC<{ nodeId: string; dotId: string; x: number; y: number; side: Side; px: number }> = ({ nodeId, dotId, x, y, side, px }) => {
+  useBoardsStore(s => s.groups)
+  useFreeNodeStore(s => s.nodes)
+  useSyncExternalStore(onRows, rowsSeen)
+  const { closed, open } = chainDecks(nodeId, dotId)
+  const lit = !closed.length && open.length > 0
+  const none = !closed.length && !open.length
+  return (
+    <AtScreen x={x} y={y} px={px} side={side}>
+    <button
+      data-role="ui"
+      data-story-decks={dotId}
+      title="Open all decks on this chain; click again to close them"
+      aria-pressed={lit}
+      onPointerDown={e => e.stopPropagation()}
+      onClick={e => {
+        e.stopPropagation()
+        const now = chainDecks(nodeId, dotId)
+        if (!now.closed.length && !now.open.length) return
+        useUndoCoordinator.getState().checkpoint()
+        const set = useBoardsStore.getState().setDeckState
+        if (now.closed.length) for (const m of now.closed) set(m, 'open')
+        else for (const r of now.open) set(r, 'stacked')
+      }}
+      style={{
+        display: 'block', width: 20, height: 16, padding: 0, borderRadius: 4, cursor: 'pointer',
+        background: lit ? C_POINT : 'rgba(14,15,26,0.92)',
+        border: `1px solid ${lit ? C_POINT : 'rgba(140,170,255,0.4)'}`,
+        opacity: none ? 0.4 : 1,
+      }}
+    >
+      <svg width={18} height={14} viewBox="0 0 18 14" style={{ display: 'block' }}>
+        {/* Three cards laid out side by side: a deck opened. */}
+        {[2, 7, 12].map(cx => (
+          <rect key={cx} x={cx - 1.5} y={3} width={5} height={8} rx={1} fill="none"
+                stroke={lit ? '#12131f' : 'rgba(196,208,255,0.85)'} strokeWidth={1.2} />
+        ))}
+      </svg>
+    </button>
+    </AtScreen>
   )
 }
 
