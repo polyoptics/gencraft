@@ -608,7 +608,7 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
             result (utils/railViewer). */}
         <RailViewerOverlay windowId={id} fontSize={fontSize} />
         {/* A Rough Cut touching it: the movie, at the cut's playhead. */}
-        <RoughCutViewerOverlay windowId={id} fontSize={fontSize} />
+        <RoughCutViewerOverlay windowId={id} fontSize={fontSize} corner={grabZone} edge={edgeZone} />
         {showBodyOverlay && (
           <div data-viewer-content="" style={{
             position: 'absolute', inset: 0,

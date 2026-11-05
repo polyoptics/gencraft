@@ -400,38 +400,47 @@ export function RoughCutBody({ id, node, bodyW, bodyH }: { id: string; node: Fre
         {/* ── Preview and transport ── */}
         <div style={{ height: PREVIEW_H, flexShrink: 0, display: 'flex', gap: 20, padding: 16, boxSizing: 'border-box' }}>
           <Preview id={id} clips={shown} shot={at?.clip.shot ?? null} empty={!clips.length} />
-          <div onPointerDown={stop} style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0, maxWidth: 860 }}>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 14 }}>
-              <span style={{ fontSize: 22, fontWeight: 700 }}>Rough Cut</span>
-              <span style={{ color: 'rgba(255,255,255,0.55)', fontVariantNumeric: 'tabular-nums' }}>
+          <div onPointerDown={stop} style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 14, minWidth: 0, maxWidth: 860 }}>
+            {/* Name, size, and the timeline's zoom */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 22, fontWeight: 700, cursor: 'help' }}
+                title={"Drop cards where their clips should go. Drag a clip's edge to trim it, its middle to move it anywhere, any row; "
+                  + 'empty time plays black, and the top row is the one seen. Drag a clip off to copy it out as a card (Alt moves it out). '
+                  + 'Stretch this longer for more timeline, taller for more rows. The wheel over the timeline zooms it. '
+                  + 'Keys: ← → a frame, S split, P pick, Delete drop.'}>Rough Cut</span>
+              <span style={{ color: 'rgba(255,255,255,0.55)', fontVariantNumeric: 'tabular-nums', marginLeft: 6 }}>
                 {clips.length} {clips.length === 1 ? 'clip' : 'clips'} · {fmt(total)}
               </span>
-            </div>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <button data-rough-play="" style={{ ...btn, width: 86 }} disabled={!clips.length}
-                onClick={() => setPlaying(!playing)}>
-                {playing ? 'Pause' : 'Play'}
-              </button>
-              <button style={btn} onClick={() => { setPlaying(false); setT(0) }} title="To the start">⏮</button>
-              <button data-rough-split="" style={btn} onClick={() => splitRef.current()} title="Split the clip at the playhead (S)">Split</button>
-              <button data-rough-find-shots="" style={{ ...btn, ...(scan ? { background: 'rgba(111,179,255,0.35)', border: '1px solid rgba(111,179,255,0.8)' } : null) }}
-                onClick={() => void findShots()} title="Find the cuts in the clicked clip and split it into its shots">Find shots</button>
-              <button data-rough-open-viewer="" style={btn} onClick={() => openRoughCutViewer(id)} title="A Viewer at its end that plays the movie">Viewer</button>
-              <span style={{ fontVariantNumeric: 'tabular-nums', width: 120, flexShrink: 0, whiteSpace: 'nowrap', color: 'rgba(255,255,255,0.75)' }}>{fmt(t)} / {fmt(total)}</span>
               <span style={{ flex: 1 }} />
               <button style={btn} onClick={() => zoomBy(1 / 1.4)} title="Zoom the timeline out">−</button>
               <button style={btn} onClick={fitAll} title="Fit the whole cut">Fit</button>
               <button style={btn} onClick={() => zoomBy(1.4)} title="Zoom the timeline in">+</button>
             </div>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <button data-rough-pick="" style={{ ...btn, ...(at?.clip.pick ? { background: 'rgba(255,200,80,0.35)', border: '1px solid rgba(255,200,80,0.9)' } : null) }}
-                onClick={() => pickRef.current()} title="Pick the shot at the playhead, or unpick it (P). Delete drops it.">Pick</button>
-              <button data-rough-deck-picks="" style={btn} onClick={outputPicks}
-                title="Lay the picked shots out below as a deck of cards, in the order they play">Deck of picks</button>
-              <span style={{ color: 'rgba(255,255,255,0.55)', fontVariantNumeric: 'tabular-nums' }}>
-                {clips.filter(c => c.pick).length} picked
-              </span>
+            {/* Play · Cut · Choose */}
+            <div style={{ display: 'flex', gap: 22, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+              <Group name="Play">
+                <button data-rough-play="" style={{ ...btn, width: 70, ...(playing ? { background: 'rgba(255,179,92,0.35)', border: '1px solid rgba(255,179,92,0.9)' } : null) }}
+                  disabled={!clips.length} onClick={() => setPlaying(!playing)} title="Play or pause the cut">Play</button>
+                <button style={btn} onClick={() => { setPlaying(false); setT(0) }} title="To the start">⏮</button>
+                <button data-rough-open-viewer="" style={btn} onClick={() => openRoughCutViewer(id)} title="A Viewer at its end that plays the movie">Viewer</button>
+                <span style={{ fontVariantNumeric: 'tabular-nums', width: 112, flexShrink: 0, whiteSpace: 'nowrap', color: 'rgba(255,255,255,0.75)', marginLeft: 4 }}>{fmt(t)} / {fmt(total)}</span>
+              </Group>
+              <Group name="Cut">
+                <button data-rough-split="" style={btn} onClick={() => splitRef.current()} title="Split the clip at the playhead (S)">Split</button>
+                <button data-rough-find-shots="" style={{ ...btn, ...(scan ? { background: 'rgba(111,179,255,0.35)', border: '1px solid rgba(111,179,255,0.8)' } : null) }}
+                  onClick={() => void findShots()} title="Find the cuts in the clicked clip and split it into its shots">Find shots</button>
+              </Group>
+              <Group name="Choose">
+                <button data-rough-pick="" style={{ ...btn, ...(at?.clip.pick ? { background: 'rgba(255,200,80,0.35)', border: '1px solid rgba(255,200,80,0.9)' } : null) }}
+                  onClick={() => pickRef.current()} title="Pick the shot at the playhead, or unpick it (P). Delete drops it.">Pick</button>
+                <button data-rough-deck-picks="" style={btn} onClick={outputPicks}
+                  title="Lay the picked shots out below as a deck of cards, in the order they play">Deck of picks</button>
+                <span style={{ color: 'rgba(255,255,255,0.55)', fontVariantNumeric: 'tabular-nums', marginLeft: 4, whiteSpace: 'nowrap' }}>
+                  {clips.filter(c => c.pick).length} picked
+                </span>
+              </Group>
             </div>
+            {/* The shot at the playhead */}
             {(scan || shotNote) && (
               <div data-rough-shot-note="" style={{ color: '#9fcbff', fontWeight: 600 }}>
                 {scan ? `Finding shots… ${Math.round(scan.f * 100)}%` : shotNote}
@@ -443,11 +452,6 @@ export function RoughCutBody({ id, node, bodyW, bodyH }: { id: string; node: Fre
                 <div>in {fmt(at.clip.in)} · out {fmt(at.clip.out)} · {fmt(clipLength(at.clip))} of {fmt(at.clip.kind === 'image' ? clipLength(at.clip) : at.clip.full)}</div>
               </div>
             )}
-            <div style={{ marginTop: 'auto', color: 'rgba(255,255,255,0.4)', fontSize: 12.5, lineHeight: 1.5 }}>
-              Drop cards where their clips should go. Drag a clip's edge to trim it, its middle to move it anywhere, any row;
-              empty time plays black, and the top row is the one seen. Stretch this longer for more timeline, taller for more rows.
-              The wheel over the timeline zooms it.
-            </div>
           </div>
         </div>
 
@@ -496,6 +500,14 @@ export function RoughCutBody({ id, node, bodyW, bodyH }: { id: string; node: Fre
     </div>
   )
 }
+
+/** A few buttons that belong together, under a small name. */
+const Group: React.FC<{ name: string; children: React.ReactNode }> = ({ name, children }) => (
+  <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+    <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', color: 'rgba(255,255,255,0.4)' }}>{name}</span>
+    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>{children}</div>
+  </div>
+)
 
 const Ruler: React.FC<{ pps: number; width: number; onPointerDown: (e: React.PointerEvent) => void }> = ({ pps, width, onPointerDown }) => {
   // A tick every 1, 2, 5, 10... seconds, whichever leaves room for its label.
