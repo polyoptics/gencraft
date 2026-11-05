@@ -7,7 +7,7 @@ import React, { useMemo, useState, useCallback, useRef, useLayoutEffect, useEffe
 import ReactDOM from 'react-dom'
 import { useBoardsStore, getUngroupedBoardIds } from '../../store/boardsStore'
 import type { ProjectGroup, BoardData } from '../../store/boardsStore'
-import { useCanvasStore } from '../../store/canvasStore'
+import { useCanvasStore, groupBounds } from '../../store/canvasStore'
 import { isTilted, useTiltStore } from '../../store/tiltStore'
 import { useCardView } from './cardView'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
@@ -69,7 +69,7 @@ import { CARD_TYPES, CARD_TYPE_ORDER, cardTypeOf, factionMembers, typeColor, typ
 import { nameKindOf } from '../../utils/fillDetails'
 import { copiedFaceStyle, copyFaceStyle, fillFields } from '../../utils/faceStyle'
 import { showFactionTree } from '../../utils/factionTree'
-import { bakeStoryline, chartOutOf, recallChart } from '../../utils/chartCard'
+import { bakeStoryline, chartArea, chartOutOf, chartSpotBeside, recallChart, setChartSpot } from '../../utils/chartCard'
 import { cardOrigins } from '../Canvas/StorylineLayer'
 import { rowOf, setRows } from '../../utils/primaryCard'
 import { wallRoom } from '../../utils/wallRoom'
@@ -121,7 +121,12 @@ const CardContextMenu: React.FC<{
   const [typeList, setTypeList] = useState<{ x: number; y: number; ids: string[] } | null>(null)
   const fileItems = useFileMenuItems(mediaSource, onClose)
 
-  const menuItems: { label: string; icon: string; action: (e: React.MouseEvent<HTMLButtonElement>) => void; danger?: boolean; separator?: boolean }[] = []
+  const menuItems: { label: string; icon: string; action: (e: React.MouseEvent<HTMLButtonElement>) => void; danger?: boolean; separator?: boolean
+    /** Pointer over the item (true) or off it (false): e.g. show where it will act. */
+    hover?: (on: boolean) => void }[] = []
+  // A dashed outline on the canvas while a chart item is pointed at: where
+  // the chart comes out (canvas units).
+  const [chartGhost, setChartGhost] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
 
   // (Deck-tether actions — "Go to deck" and "Check back in" — live on the
   // tether tint stripe in the header, not on the card-body context menu.
@@ -193,10 +198,24 @@ const CardContextMenu: React.FC<{
     // A chart baked into it: out where it was, with linked cards; or,
     // out, folded back in (utils/chartCard).
     if (group.chart) {
+      const chart = group.chart
       const out = chartOutOf(group.id)
-      menuItems.push(out
-        ? { label: 'Bake chart back in', icon: '📥', action: () => { bakeStoryline(out, cardOrigins); onClose() } }
-        : { label: 'Recall chart', icon: '📤', action: () => { recallChart(group.id); onClose() } })
+      // Pointed at, Recall shows where the chart comes out; Move chart here
+      // shows where it would come out beside this card, and makes that its
+      // place (Brian 2026-11-05).
+      const area = chartArea(chart)
+      const b = groupBounds(group.id)
+      const card = b ? { x: b.x + 16, y: b.y, w: Math.max(1, b.w - 32), h: b.h } : null
+      const beside = card ? chartSpotBeside(chart, card) : null
+      if (out) menuItems.push({ label: 'Bake chart back in', icon: '📥', action: () => { bakeStoryline(out, cardOrigins); onClose() } })
+      else {
+        menuItems.push({ label: 'Recall chart', icon: '📤', hover: on => setChartGhost(on ? area : null), action: () => { recallChart(group.id); onClose() } })
+        if (beside) menuItems.push({
+          label: 'Move chart here', icon: '📌',
+          hover: on => setChartGhost(on ? { ...area, x: area.x + beside.x - chart.node.x, y: area.y + beside.y - chart.node.y } : null),
+          action: () => { setChartSpot(group.id, beside); onClose() },
+        })
+      }
     }
     // Style: this face's text and how it is set, onto other cards, once
     // (utils/faceStyle). Each shows its own {Name} and details.
@@ -410,8 +429,8 @@ const CardContextMenu: React.FC<{
                 background: 'none', border: 'none', cursor: 'pointer',
                 color: item.danger ? '#f87171' : '#e2e8f0', fontSize: 13, textAlign: 'left', borderRadius: 4,
               }}
-              onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.07)')}
-              onMouseLeave={e => (e.currentTarget.style.background = 'none')}
+              onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.07)'; item.hover?.(true) }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'none'; item.hover?.(false) }}
             >
               <span style={{ fontSize: 14, width: 18, textAlign: 'center' }}>{item.icon}</span>
               {item.label}
@@ -419,6 +438,22 @@ const CardContextMenu: React.FC<{
           </React.Fragment>
         ))}
       </div>
+      {chartGhost && (() => {
+        // Canvas units → the screen, against the canvas container.
+        const host = document.querySelector('[data-pin-host]')?.getBoundingClientRect()
+        const { pan, zoom } = useCanvasStore.getState()
+        const ox = (host?.left ?? 0) + pan.x, oy = (host?.top ?? 0) + pan.y
+        return ReactDOM.createPortal(
+          <div data-chart-ghost style={{
+            position: 'fixed', zIndex: 9997, pointerEvents: 'none',
+            left: ox + chartGhost.x * zoom, top: oy + chartGhost.y * zoom,
+            width: chartGhost.w * zoom, height: chartGhost.h * zoom,
+            border: '2px dashed rgba(170,200,255,0.85)', borderRadius: 10,
+            background: 'rgba(120,160,255,0.08)',
+          }} />,
+          document.body,
+        )
+      })()}
       {typeList && (() => {
         const bs = useBoardsStore.getState()
         const types = new Set(typeList.ids.map(id => { const g = bs.groups.find(x => x.id === id); return g ? cardTypeOf(g) : 'element' }))

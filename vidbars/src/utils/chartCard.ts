@@ -172,3 +172,32 @@ export function recallChart(cardId: string): string | null {
   })
   return id
 }
+
+/** The ground a chart covers when recalled (canvas units): its storyline
+ *  and the cards on it, where they were. */
+export function chartArea(chart: ChartData): { x: number; y: number; w: number; h: number } {
+  const n = chart.node
+  let x0 = n.x, y0 = n.y, x1 = n.x + (n.width || 0), y1 = n.y + (n.height || 0)
+  for (const p of chart.places) {
+    const x = n.x + p.dx, y = n.y + p.dy
+    x0 = Math.min(x0, x); y0 = Math.min(y0, y)
+    x1 = Math.max(x1, x + (p.w ?? 0)); y1 = Math.max(y1, y + (p.h ?? 0))
+  }
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }
+}
+
+/** Where the chart would sit beside card `cardId`: its area's top-left just
+ *  right of the card, level with its top. */
+export function chartSpotBeside(chart: ChartData, card: { x: number; y: number; w: number; h: number }): { x: number; y: number } {
+  const a = chartArea(chart)
+  const nx = card.x + card.w + card.w * 0.25, ny = card.y
+  return { x: chart.node.x + (nx - a.x), y: chart.node.y + (ny - a.y) }
+}
+
+/** Moves where card `cardId`'s chart is recalled to: node x/y `at`. */
+export function setChartSpot(cardId: string, at: { x: number; y: number }): void {
+  useUndoCoordinator.getState().checkpoint()
+  useBoardsStore.setState(s => ({
+    groups: s.groups.map(g => g.id === cardId && g.chart ? { ...g, chart: { ...g.chart, node: { ...g.chart.node, x: at.x, y: at.y } } } : g),
+  }))
+}
