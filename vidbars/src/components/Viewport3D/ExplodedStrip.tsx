@@ -168,11 +168,26 @@ export const LayerCanvas: React.FC<{ canvas: HTMLCanvasElement; opacity?: number
 }
 
 const LAYERS_KEY = 'vidbars.stripLayers'
+const POPPED_KEY = 'vidbars.stripLayersPopped'
+export type PopSide = 'l' | 'r' | 't' | 'b'
+type Popped = Record<string, Record<string, PopSide>>
 const GAP_KEY = 'vidbars.stripLayerGap'
 const GAP_MIN = 0.02, GAP_MAX = 1.5
 /** The Viewer's Layers switch: whether swinging sideways explodes a strip.
  *  On unless switched off; kept across reloads. */
-export const useStripLayers = create<{ on: boolean; toggle: () => void; gap: number; setGap: (gap: number) => void }>((set, get) => ({
+export const useStripLayers = create<{
+  on: boolean; toggle: () => void; gap: number; setGap: (gap: number) => void
+  /** Layers pulled out of their stack: strip id → card id → the side it went
+   *  out to. They stay out, in 3D and flat, until put back. Kept across reloads. */
+  popped: Popped; setPopped: (railId: string, cardId: string, side: PopSide | null) => void
+}>((set, get) => ({
+  popped: (() => { try { return JSON.parse(localStorage.getItem(POPPED_KEY) ?? '{}') as Popped } catch { return {} } })(),
+  setPopped: (railId, cardId, side) => {
+    const { [cardId]: _, ...rest } = get().popped[railId] ?? {}
+    const popped = { ...get().popped, [railId]: side ? { ...rest, [cardId]: side } : rest }
+    set({ popped })
+    try { localStorage.setItem(POPPED_KEY, JSON.stringify(popped)) } catch { /* private window */ }
+  },
   /** Space between layers, as a share of a layer's height: what the handles
    *  on the back layer set. Kept across reloads. */
   gap: (() => {
@@ -231,7 +246,15 @@ const StripLayers: React.FC<{ railId: string; rect: { x: number; y: number; widt
   const [drag, setDrag] = useState<{ id: string; dz: number } | null>(null)
   // Layers pulled out of the stack sideways, by how far (px, in the layer's
   // own plane), and the one being slid now.
-  const [popped, setPopped] = useState<Record<string, { x: number; y: number }>>({})
+  const sides = useStripLayers(s => s.popped[railId])
+  // How far each popped layer has been slid since, px in its own plane.
+  const [slid, setSlid] = useState<Record<string, { x: number; y: number }>>({})
+  const k = 1.05
+  const base = (side: PopSide) => side === 'l' ? { x: -boxW * k, y: 0 } : side === 'r' ? { x: boxW * k, y: 0 } : side === 't' ? { x: 0, y: -boxH * k } : { x: 0, y: boxH * k }
+  const popped: Record<string, { x: number; y: number }> = Object.fromEntries(Object.entries(sides ?? {}).map(([id, side]) => {
+    const b = base(side), s = slid[id]
+    return [id, { x: b.x + (s?.x ?? 0), y: b.y + (s?.y ?? 0) }]
+  }))
   const [sliding, setSliding] = useState<string | null>(null)
   const order = effects.map(e => e.id)
   const aspect = baked ? baked.plate.width / baked.plate.height : 1
@@ -284,7 +307,7 @@ const StripLayers: React.FC<{ railId: string; rect: { x: number; y: number; widt
     e.stopPropagation()
     const { tilt, yaw, spin } = useTiltStore.getState()
     const b = yaw * Math.PI / 180, t = tilt * Math.PI / 180
-    const out0 = popped[id]
+    const out0 = popped[id], slid0 = slid[id]
     if (out0) {
       // The layer's own x and y on screen (perspective aside): Rx·Ry·Rz.
       const sp = spin * Math.PI / 180, cs = Math.cos(sp), ss = Math.sin(sp)
@@ -300,13 +323,16 @@ const StripLayers: React.FC<{ railId: string; rect: { x: number; y: number; widt
         if (Math.abs(det) < 0.05) return
         if (!moved) setSliding(id)
         moved = true
-        setPopped(p => ({ ...p, [id]: { x: out0.x + (dx * by - dy * bx) / det, y: out0.y + (dy * ax - dx * ay) / det } }))
+        setSlid(p => ({ ...p, [id]: { x: (slid0?.x ?? 0) + (dx * by - dy * bx) / det, y: (slid0?.y ?? 0) + (dy * ax - dx * ay) / det } }))
       }
       const up = () => {
         window.removeEventListener('pointermove', move)
         window.removeEventListener('pointerup', up)
         setSliding(null)
-        if (!moved) setPopped(({ [id]: _, ...rest }) => rest)
+        if (!moved) {
+          useStripLayers.getState().setPopped(railId, id, null)
+          setSlid(({ [id]: _, ...rest }) => rest)
+        }
       }
       window.addEventListener('pointermove', move)
       window.addEventListener('pointerup', up)
@@ -330,8 +356,7 @@ const StripLayers: React.FC<{ railId: string; rect: { x: number; y: number; widt
       window.removeEventListener('pointerup', up)
       setDrag(null)
       if (!moved && dir) {
-        const k = 1.05
-        setPopped(p => ({ ...p, [id]: dir === 'l' ? { x: -boxW * k, y: 0 } : dir === 'r' ? { x: boxW * k, y: 0 } : dir === 't' ? { x: 0, y: -boxH * k } : { x: 0, y: boxH * k } }))
+        useStripLayers.getState().setPopped(railId, id, dir)
         return
       }
       if (!moved) { toggleEffectSolo(id); return }
@@ -468,5 +493,107 @@ export const StripLayersStage: React.FC = () => {
       {swung && peek?.kind === 'mixer' && <FilmMixerLayers />}
       {peek?.kind === 'deck' && <DeckPeek anchorId={peek.id} />}
     </div>
+  )
+}
+
+/** The Viewer's popped-out layers, back in the flat view: one sheet per side
+ *  they were pulled out to, beside the picture. A side's layers lie on top of
+ *  each other in strip order; its tabs show one alone, ✕ puts one back, and a
+ *  click on the sheet puts back the top one. Hidden while the layers are out
+ *  in 3D, where the popped layers hang beside the stack instead. */
+export const PoppedLayerSheets: React.FC<{ windowId: string }> = ({ windowId }) => {
+  const zoom = useCanvasStore(s => s.zoom)
+  const nodes = useFreeNodeStore(s => s.nodes)
+  const windows = useViewport3DStore(s => s.windows)
+  const active = useRailUiStore(s => s.active)
+  const w = windows[windowId]
+  const docked = w && !w.pin ? railViewerDocks(nodes, windows, zoom).get(windowId) ?? [] : []
+  const railId = viewerRail(docked, active)
+  const sides = useStripLayers(s => (railId ? s.popped[railId] : undefined))
+  const out = useLayersOut(s => (railId ? !!s[railId] : false))
+  const rail = railId ? nodes[railId] as FreeNodeData | undefined : undefined
+  const items = useMemo(() => {
+    if (!rail || !railId) return undefined
+    const members = railMembers(nodes).get(railId)
+    return railComboAt(rail, members, railFaceCombo(rail, members))?.items
+  }, [nodes, rail, railId])
+  const effects = (items ?? []).filter((it): it is EffectItem => it.kind === 'effect')
+  const any = !!sides && effects.some(e => sides[e.id])
+  const sig = any ? JSON.stringify((items ?? []).map(it => (it.kind === 'effect' ? { ...it, solo: false } : it))) : ''
+  const [baked, setBaked] = useState<Baked | null>(null)
+  const latest = useRef(items)
+  latest.current = items
+  useEffect(() => {
+    if (!sig) return
+    let dead = false
+    const t = window.setTimeout(() => {
+      if (latest.current) void bake(latest.current).then(b => { if (!dead && b) setBaked(b) })
+    }, 120)
+    return () => { dead = true; window.clearTimeout(t) }
+  }, [sig])
+  // Per side, the one tab shown alone, or none (all of them, layered).
+  const [alone, setAlone] = useState<Partial<Record<PopSide, string>>>({})
+  if (!w || !railId || !sides || !any || !baked || out) return null
+
+  const a = pictureAreas.get(windowId) ?? { x: 0, y: 0, width: w.width, height: w.height }
+  const fs = Math.min(40, 12 / zoom), headH = fs * 2.1, gap = 16 / zoom
+  const at: Record<PopSide, { left: number; top: number }> = {
+    r: { left: w.x + w.width + gap, top: w.y + a.y },
+    l: { left: w.x - gap - a.width, top: w.y + a.y },
+    t: { left: w.x + a.x, top: w.y - headH * 2 - gap - a.height },
+    b: { left: w.x + a.x, top: w.y + w.height + headH + gap },
+  }
+  const stop = (e: React.SyntheticEvent) => e.stopPropagation()
+  const putBack = (id: string) => {
+    useStripLayers.getState().setPopped(railId, id, null)
+    setAlone(s => Object.fromEntries(Object.entries(s).filter(([, v]) => v !== id)))
+  }
+  return (
+    <>
+      {(['l', 'r', 't', 'b'] as PopSide[]).map(side => {
+        const here = effects.filter(e => sides[e.id] === side)
+        if (!here.length) return null
+        const shown = alone[side] && here.some(e => e.id === alone[side]) ? here.filter(e => e.id === alone[side]) : here
+        return (
+          <div
+            key={side}
+            data-popped-sheet={side}
+            onPointerDown={stop} onMouseDown={stop} onWheel={stop} onDoubleClick={stop} onContextMenu={stop}
+            onClick={() => putBack(shown[shown.length - 1].id)}
+            title="Click to put the top layer back"
+            style={{ position: 'absolute', left: at[side].left, top: at[side].top, width: a.width, height: a.height, background: '#0c0d14', outline: `${1.5 / zoom}px solid rgba(255,255,255,.3)`, cursor: 'pointer', zIndex: 2 }}
+          >
+            {shown.map(e => {
+              const pane = baked.panes.find(p => p.id === e.id)
+              return pane ? <LayerCanvas key={e.id} canvas={pane.boosted} /> : null
+            })}
+            <div style={{ position: 'absolute', left: 0, right: 0, bottom: '100%', height: headH, display: 'flex', alignItems: 'flex-end', gap: 3 / zoom, overflow: 'hidden' }}>
+              {here.map(e => {
+                const def = EFFECTS[knownKind(e.effect)]
+                const lit = !alone[side] || alone[side] === e.id
+                return (
+                  <div
+                    key={e.id}
+                    data-popped-tab={e.id}
+                    onClick={ev => { ev.stopPropagation(); setAlone(s => ({ ...s, [side]: s[side] === e.id ? undefined : e.id })) }}
+                    title="Show this layer alone; again for all of them"
+                    style={{ display: 'flex', alignItems: 'center', gap: 4 / zoom, padding: `${3 / zoom}px ${6 / zoom}px`, fontSize: fs, color: '#fff', whiteSpace: 'nowrap', borderRadius: `${6 / zoom}px ${6 / zoom}px 0 0`, background: `color-mix(in srgb, ${def.color} ${lit ? 40 : 14}%, #16171f)`, opacity: lit ? 1 : 0.65, cursor: 'pointer' }}
+                  >
+                    <span style={{ color: def.color }}>{def.glyph}</span>
+                    <span>{def.label}</span>
+                    <span
+                      data-popped-close={e.id}
+                      title="Put this layer back"
+                      onClick={ev => { ev.stopPropagation(); putBack(e.id) }}
+                      style={{ marginLeft: 2 / zoom, opacity: 0.75, cursor: 'pointer' }}
+                    >✕</span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )
+      })}
+    </>
   )
 }

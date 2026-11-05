@@ -43,6 +43,7 @@ import { mayHaveDiskFile } from '../../hooks/useFileMenu'
 import { DragOutGrip } from '../UI/DragOutGrip'
 import { FxViewerOverlay } from './FxViewerOverlay'
 import { RailViewerOverlay } from './RailViewerOverlay'
+import { PoppedLayerSheets } from './ExplodedStrip'
 import { RoughCutViewerOverlay } from '../RoughCut/RoughCutScreen'
 import { useFreshOnTop, FRESH_Z } from '../../utils/freshOnTop'
 
@@ -780,6 +781,7 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
   return (
     <>
       {frame}
+      <PoppedLayerSheets windowId={id} />
       {fileMenu && (
         <FileContextMenu x={fileMenu.x} y={fileMenu.y} url={fileMenu.url} onClose={closeFileMenu} />
       )}
