@@ -4,7 +4,8 @@
 // stay as they are.
 //
 // drop  0..1: dots off the base line come down to it (1 = all on it).
-// slide 0..1: the dropped line slides into the card's side (1 = all at `to`).
+// slide 0..1: the dropped line slides sideways into the card's side, at its
+//   own height (1 = all at `to.x`).
 // tether 0..1: how far each card's tether reaches from its dot to the card.
 
 import { create } from 'zustand'
@@ -37,7 +38,9 @@ export function morphStoryline(d: StorylineData, m: ChartMotion | undefined): St
     ...d,
     dots: d.dots.map(p => {
       const x = p.x, y = p.y + (by - p.y) * m.drop
-      return { ...p, x: x + (m.to.x - x) * m.slide, y: y + (m.to.y - y) * m.slide }
+      // The slide is sideways only, at the base line's own height (Brian
+      // 2026-11-05: no move, it slides out to the side).
+      return { ...p, x: x + (m.to.x - x) * m.slide, y }
     }),
   }
 }
