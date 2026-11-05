@@ -942,7 +942,8 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
   const px = 1 / zoom
   const byId = new Map(d.dots.map(p => [p.id, p]))
   const baseSet = new Set(d.base ?? [])
-  const tethers = hasCards ? storyTethers(d, node.x, node.y, groups) : NO_TETHERS
+  // Not while folding or showing: its cards ride on the compositor then.
+  const tethers = hasCards && !motion ? storyTethers(d, node.x, node.y, groups) : NO_TETHERS
   // It stands on its foot (kept from when it was flipped), relative to the
   // node; the up side rises: a quarter turn about it, the way that takes its
   // up normal to the viewer (+z).

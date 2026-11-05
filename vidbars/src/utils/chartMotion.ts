@@ -41,18 +41,20 @@ export function morphStoryline(d: StorylineData, m: ChartMotion | undefined): St
   }
 }
 
-export const ease = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2)
-
-/** Runs `frame` with eased 0..1 over `ms` (the first frame at once, so
- *  nothing shows a frame early), then `done`. */
-export function play(ms: number, frame: (k: number) => void, done?: () => void): void {
-  frame(0)
-  const t0 = performance.now()
-  const step = (now: number) => {
-    const t = Math.min(1, (now - t0) / ms)
-    frame(ease(t))
-    if (t < 1) requestAnimationFrame(step)
-    else done?.()
+/** Runs `frame` with time 0..1 over `ms` (the first frame at once, so
+ *  nothing shows a frame early; `at` in ms), then `done`. Timed by an animation clock,
+ *  the same one the cards' own animations run on, so the line and the
+ *  cards keep together. */
+export function play(ms: number, frame: (t: number, at: number) => void, done?: () => void): void {
+  frame(0, 0)
+  const clock = document.documentElement.animate([], { duration: ms })
+  let over = false
+  const step = () => {
+    if (over) return
+    const at = Math.min(ms, Number(clock.currentTime ?? 0))
+    frame(at / ms, at)
+    requestAnimationFrame(step)
   }
   requestAnimationFrame(step)
+  clock.finished.then(() => { over = true; frame(1, ms); done?.() }, () => { over = true; done?.() })
 }

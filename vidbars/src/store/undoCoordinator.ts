@@ -168,6 +168,8 @@ interface UndoCoordinatorState {
 const undoStack: Snapshot[] = []
 const redoStack: Snapshot[] = []
 let restoring = false
+/** Whether an undo or redo is putting a snapshot back right now. */
+export const isUndoRestoring = () => restoring
 
 /** Called after every undo or redo has restored a snapshot — for work that
  *  is still writing into the state the user just stepped back from (a loop
