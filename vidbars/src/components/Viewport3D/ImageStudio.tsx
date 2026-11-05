@@ -478,6 +478,11 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
       >
         {toolbarStart}
         {modeBtn('view', '⤢', 'View — wheel zoom · drag pan · double-click reset')}
+        {/* Zoomed or panned into, the picture is cut off at its edges: one click
+            shows all of it again (double-click does too). */}
+        {(view.scale !== 1 || view.tx !== 0 || view.ty !== 0) && (
+          <button style={tbBtn(true)} title="Zoomed in: show the whole picture (double-click does too)" onClick={() => setView({ scale: 1, tx: 0, ty: 0 })}>Fit</button>
+        )}
         {modeBtn('snip', '✂', 'Snip — drag a box; releasing saves it out. Keep snipping. (Esc to exit)')}
         {modeBtn('crop', '⛶', 'Crop — place a frame, resize/move it, Stamp as many as you like. (Esc to exit)')}
         {modeBtn('paint', '✎', 'Paint — brush, then Stamp a painted copy. (Esc to exit)')}
