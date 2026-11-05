@@ -504,7 +504,7 @@ function remembered(b: BoardData, source: ProjectGroup | undefined): BoardData {
   if (b.fromCard || !source) return b
   const card: Partial<ProjectGroup> = { ...source }
   // Where it was, not what it is: it comes back wherever it is dropped.
-  for (const k of ['boardIds', 'originX', 'originY', 'deckState', 'deckAnchorId', 'nestedDeck', 'deckOffsetX', 'deckOffsetY', 'deckFaceCard', 'ghostSlots', 'pin', 'home', 'pinnedLayer', 'railBase', 'deckLastFront'] as const) delete card[k]
+  for (const k of ['boardIds', 'originX', 'originY', 'deckState', 'deckAnchorId', 'nestedDeck', 'deckOffsetX', 'deckOffsetY', 'deckFaceCard', 'ghostSlots', 'pin', 'home', 'pinnedLayer', 'railBase', 'deckLastFront', 'deckLock'] as const) delete card[k]
   const root = isSimpleBlock(b) ? b.bars[b.rootIds[0]] : undefined
   return {
     ...b,

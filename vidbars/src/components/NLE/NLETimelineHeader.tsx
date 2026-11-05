@@ -1,4 +1,5 @@
 import React, { useMemo, useState, useRef, useCallback } from 'react'
+import { withLockMates } from '../../utils/deckLock'
 import { useBoardsStore } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { isTilted, useTiltStore } from '../../store/tiltStore'
@@ -152,7 +153,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
 
     // Expand to include any nested sub-deck members so hidden cards
     // stay locked to their anchor during a header drag.
-    const dragIds = groupId ? expandWithNestedMembers([groupId], bs0.groups) : []
+    const dragIds = groupId ? expandWithNestedMembers(withLockMates([groupId], bs0.groups), bs0.groups) : []
     const initialOrigins = new Map<string, { x: number; y: number }>()
     for (const gid of dragIds) {
       const gg = bs0.groups.find(gr => gr.id === gid)

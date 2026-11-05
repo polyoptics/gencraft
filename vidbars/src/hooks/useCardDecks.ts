@@ -9,6 +9,7 @@ import { computeGroupLayout, getRowY, getRowHeight } from '../utils/nleRows'
 import { DEFAULT_H } from '../utils/barConstants'
 import { nearer } from '../utils/deckAway'
 import { primaryFirst } from '../utils/primaryCard'
+import { liveLocks, lockOf } from '../utils/deckLock'
 import { NLE_HEADER_CANVAS_H } from '../components/NLE/NLETimelineHeader'
 
 /** Returns true if this group is a non-anchor member of a stacked/fanned deck (visually hidden). */
@@ -198,6 +199,11 @@ export function useCardDecks(
     // parent's ghost slot bridges identically regardless of whether the
     // extracted thing was a single card or a sub-deck anchor with members.
     const groupMap = new Map(groups.map(g => [g.id, g]))
+    // A locked deck (utils/deckLock) holds its own cards whatever touches
+    // them, and no others: two cards join only when they carry the same
+    // lock or none, and the cards of one lock always join.
+    const live = liveLocks(groups)
+    const ghostLock = new Map<string, string | undefined>()
     type GhostBridge = { rect: GroupSlot; logicalTop: number }
     const ghostBridges: GhostBridge[] = []
     for (const g of groups) {
@@ -217,6 +223,7 @@ export function useCardDecks(
         // current origin and where the slot sits in the parent.
         const dx = (g.originX + slot.deckOffsetX) - card.originX
         const dy = (g.originY + slot.deckOffsetY) - card.originY
+        ghostLock.set(`ghost:${g.id}:${slot.cardId}`, lockOf(g, live))
         ghostBridges.push({
           rect: {
             id: `ghost:${g.id}:${slot.cardId}`,
@@ -250,8 +257,20 @@ export function useCardDecks(
       // groupCount..totalNodes-1 are ghost bridges.
       const nodeRect = (i: number): GroupSlot | undefined =>
         i < groupCount ? rects.get(zoneGroups[i].id) : zoneGhosts[i - groupCount]
+      const nodeLock = (i: number): string | undefined =>
+        i < groupCount ? lockOf(zoneGroups[i], live) : ghostLock.get(zoneGhosts[i - groupCount].id)
+      const locks = Array.from({ length: totalNodes }, (_, i) => nodeLock(i))
+      const lockFirst = new Map<string, number>()
+      for (let i = 0; i < totalNodes; i++) {
+        const l = locks[i]
+        if (!l) continue
+        const f = lockFirst.get(l)
+        if (f === undefined) lockFirst.set(l, i)
+        else uf.union(f, i)
+      }
       for (let i = 0; i < totalNodes; i++) {
         for (let j = i + 1; j < totalNodes; j++) {
+          if (locks[i] !== locks[j]) continue
           const ri = nodeRect(i)
           const rj = nodeRect(j)
           if (ri && rj && rectsTouch(touchRect(ri), touchRect(rj), TOUCH_TOLERANCE)) {

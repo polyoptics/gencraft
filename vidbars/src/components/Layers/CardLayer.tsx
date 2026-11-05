@@ -35,6 +35,8 @@ import { Viewport3DLayer } from '../Viewport3D/Viewport3DLayer'
 import { NLETimelineHeader, NLE_HEADER_CANVAS_H, headerExtend as computeHeaderExtend, headerScreenH, overviewScale } from '../NLE/NLETimelineHeader'
 import { HeroImageLayer } from './HeroImageLayer'
 import { CardBack, FlipButton, backColor, useCardFlip } from './CardBack'
+import { DeckLockButton } from './DeckLockButton'
+import { liveLocks, lockOf, withLockMates } from '../../utils/deckLock'
 import { SceneFace } from './SceneFace'
 import { useFxStore } from '../../store/fxStore'
 import { cardStripId } from '../../utils/fx/cardStrips'
@@ -725,6 +727,9 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
     // The front card of a touching line, turned over: it moves the line.
     const line = useBoardsStore.getState().groups.find(g => g.id === group.id)?.flipped ? clusterFront.get(group.id) : undefined
     if (line && !e.shiftKey) { line.drag(e); return }
+    // A card of a locked deck: the whole deck moves, as one (utils/deckLock).
+    const locked = e.shiftKey ? undefined : lockedDragFor(group.id)
+    if (locked) { locked(e); return }
     // Belt-and-braces: skip drag init if the pointerdown originated on the
     // pen-button affordance (or any descendant of it). The button itself
     // already calls stopPropagation, but this guard catches any event-flow
@@ -2626,6 +2631,8 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[]; lay
     // the pre-threshold window and strip 0 (at z=N+1) sits in front of it
     // for the few frames before extraction kicks in.
     setSurfacedId(null)
+    // A locked deck gives up no card: the press moves the whole fan.
+    if (withLockMates([groupId], useBoardsStore.getState().groups).length > 1) { onFanDragDown(e); return }
 
     const startX = e.clientX
     const startY = e.clientY
@@ -2740,7 +2747,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[]; lay
     }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
-  }, [])
+  }, [onFanDragDown])
 
   // Portal selection from the global store — a click on a fan member
   // sets this to the member's ID for THIS deck's anchor, locking the
@@ -3927,6 +3934,21 @@ export function cardScreenRect(g: ProjectGroup, boards: Record<string, import('.
  *  still moves the whole line, and its hover still lights the line up. */
 const clusterFront = new Map<string, { drag: (e: React.PointerEvent) => void; hover: (on: boolean) => void }>()
 
+/** Each locked deck's whole-deck move, by its primary card (utils/deckLock):
+ *  a press on any of its cards moves the deck as one, as its primary does. */
+const lockedRowDrag = new Map<string, (e: React.PointerEvent) => void>()
+/** The whole-deck move for card `id`, while it is in a locked open deck. */
+function lockedDragFor(id: string): ((e: React.PointerEvent) => void) | undefined {
+  const row = rowOf(id)
+  if (!row || row.length < 2) return undefined
+  const groups = useBoardsStore.getState().groups
+  const live = liveLocks(groups)
+  if (!live.size) return undefined
+  const lock = lockOf(groups.find(g => g.id === id), live)
+  if (!lock || !row.every(r => lockOf(groups.find(g => g.id === r), live) === lock)) return undefined
+  return lockedRowDrag.get(row[0])
+}
+
 /** Affordance shown when open cards are touching — hover on primary shows outline + stack/fan.
  *  `front` is what the primary is drawn as (see Overlay's affordanceFront):
  *  a plain card, a stacked deck it anchors, or null for anything drawn
@@ -4016,6 +4038,17 @@ const DeckAffordance: React.FC<{ cluster: string[]; front: Deck | 'card' | null;
   // The front card turned over: its back takes presses itself (see clusterFront).
   const frontFlipped = front === 'card' && !!primaryGroup?.flipped && !primaryGroup.effect
   const frontId = primaryGroup?.id
+  // Locked: every card of the row carries one lock (utils/deckLock).
+  const lock = (() => {
+    const live = liveLocks(groups)
+    const l = lockOf(primaryGroup, live)
+    return l && cluster.every(id => lockOf(groups.find(g => g.id === id), live) === l) ? l : undefined
+  })()
+  useEffect(() => {
+    if (!frontId || !lock) return
+    lockedRowDrag.set(frontId, onClusterDragDown)
+    return () => { if (lockedRowDrag.get(frontId) === onClusterDragDown) lockedRowDrag.delete(frontId) }
+  }, [frontId, lock, onClusterDragDown])
   useEffect(() => {
     if (!frontId || !frontFlipped) return
     clusterFront.set(frontId, { drag: onClusterDragDown, hover: setIsHovered })
@@ -4077,6 +4110,27 @@ const DeckAffordance: React.FC<{ cluster: string[]; front: Deck | 'card' | null;
             style={{ top: computeHeaderExtend(zoom) + CARD_TOOL_INSET, left: CARD_TOOL_INSET }}
           />
         )}
+        {primaryGroup && front && !primaryGroup.effect && (() => {
+          const size = Math.min(32, Math.max(8, 16 * overviewScale(zoom), headerScreenH(zoom) * 0.85))
+          return (
+            <DeckLockButton
+              locked={!!lock}
+              onToggle={() => {
+                useUndoCoordinator.getState().checkpoint()
+                const bs = useBoardsStore.getState()
+                if (lock) { bs.setDeckLock(primaryGroup.id, null); return }
+                // The row, and the cards hidden in any deck inside it.
+                const ids = expandWithNestedMembers(cluster, bs.groups)
+                bs.setRowPrimary(primaryGroup.id, ids)
+                bs.setDeckLock(primaryGroup.id, ids)
+              }}
+              baseColor={primaryGroup.color}
+              size={size}
+              visible={isHovered || !!lock}
+              style={{ top: computeHeaderExtend(zoom) + CARD_TOOL_INSET, left: CARD_TOOL_INSET + size + CARD_TOOL_GAP }}
+            />
+          )
+        })()}
         {primaryGroup && front === 'card' && (
           <CardFaceDragOut
             url={isHovered ? cardGripUrl(primaryGroup, boards) : null}
