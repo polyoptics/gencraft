@@ -1,5 +1,6 @@
-import React, { useMemo, useState, useRef, useCallback } from 'react'
+import React, { useMemo, useState, useRef, useCallback, useSyncExternalStore } from 'react'
 import { withLockMates } from '../../utils/deckLock'
+import { onRows, rowOf, rowsSeen } from '../../utils/primaryCard'
 import { useBoardsStore } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { isTilted, useTiltStore } from '../../store/tiltStore'
@@ -114,6 +115,16 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
   }, [group, allGroupsFallback, groupGone])
 
   const defaultName = group?.name ?? 'Card'
+
+  // Lock (utils/deckLock): on a deck's face card, open or closed, always
+  // shown in the bar, lit while the deck is locked.
+  useSyncExternalStore(onRows, rowsSeen)
+  const locked = useBoardsStore(s => {
+    const l = groupId ? s.groups.find(g => g.id === groupId)?.deckLock : undefined
+    return !!l && s.groups.some(o => o.id !== groupId && o.deckLock === l)
+  })
+  const openRow = groupId ? rowOf(groupId) : undefined
+  const isFace = !!groupId && (mode.kind === 'deckPreview' || (!!openRow && openRow.length > 1 && openRow[0] === groupId))
 
   const [headerName, setHeaderName] = useState(defaultName)
   const [renaming, setRenaming] = useState(false)
@@ -441,6 +452,45 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
   }
   // mode.kind === 'hidden' → headerIcon stays null; the trailing flex slot is omitted.
 
+  const lockH = screenHeight * 0.7
+  const lockEl = isFace && groupId ? (
+    <div
+      data-deck-lock
+      title="Lock the deck: it keeps its cards and moves as one"
+      onPointerDown={e => e.stopPropagation()}
+      onDoubleClick={e => e.stopPropagation()}
+      onClick={e => {
+        e.stopPropagation()
+        useUndoCoordinator.getState().checkpoint()
+        const bs = useBoardsStore.getState()
+        if (locked) { bs.setDeckLock(groupId, null); return }
+        // The open row, or the closed deck, with the cards hidden in it.
+        const row = rowOf(groupId)
+        const ids = expandWithNestedMembers(row && row[0] === groupId ? row : [groupId], bs.groups)
+        if (ids.length < 2) return
+        bs.setRowPrimary(groupId, ids)
+        bs.setDeckLock(groupId, ids)
+      }}
+      style={{
+        flex: '0 0 auto', marginLeft: isTiny ? 0 : 'auto',
+        width: lockH, height: lockH,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        borderRadius: Math.max(1 * ov, screenHeight * 0.12),
+        background: locked ? 'rgba(127,209,255,0.32)' : 'transparent',
+        color: locked ? 'rgba(127,209,255,0.98)' : 'rgba(255,255,255,0.55)',
+        cursor: 'pointer',
+        transition: 'background 0.12s, color 0.12s',
+      }}
+    >
+      <svg width={lockH * 0.8} height={lockH * 0.8} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+        {/* A padlock: same glyph locked or not, only lit when locked. */}
+        <rect x="3" y="7" width="10" height="7.5" rx="1.2" />
+        <path d="M5.2 7 V4.8 a2.8 2.8 0 0 1 5.6 0 V7" />
+        <path d="M8 10 v1.8" />
+      </svg>
+    </div>
+  ) : null
+
   const nameEl = renaming ? (
     <RenameInput
       ref={inputRef}
@@ -523,7 +573,8 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
         overflow: 'hidden',
       }}>
         {!isTiny && nameEl}
-        {headerIcon && <div style={{ flex: '0 0 auto', marginLeft: isTiny ? 0 : 'auto' }}>{headerIcon}</div>}
+        {lockEl}
+        {headerIcon && <div style={{ flex: '0 0 auto', marginLeft: lockEl || isTiny ? 0 : 'auto' }}>{headerIcon}</div>}
       </div>
     </div>
   )

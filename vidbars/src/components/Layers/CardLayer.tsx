@@ -35,7 +35,6 @@ import { Viewport3DLayer } from '../Viewport3D/Viewport3DLayer'
 import { NLETimelineHeader, NLE_HEADER_CANVAS_H, headerExtend as computeHeaderExtend, headerScreenH, overviewScale } from '../NLE/NLETimelineHeader'
 import { HeroImageLayer } from './HeroImageLayer'
 import { CardBack, FlipButton, backColor, useCardFlip } from './CardBack'
-import { DeckLockButton } from './DeckLockButton'
 import { liveLocks, lockOf, withLockMates } from '../../utils/deckLock'
 import { SceneFace } from './SceneFace'
 import { useFxStore } from '../../store/fxStore'
@@ -4110,27 +4109,6 @@ const DeckAffordance: React.FC<{ cluster: string[]; front: Deck | 'card' | null;
             style={{ top: computeHeaderExtend(zoom) + CARD_TOOL_INSET, left: CARD_TOOL_INSET }}
           />
         )}
-        {primaryGroup && front && !primaryGroup.effect && (() => {
-          const size = Math.min(32, Math.max(8, 16 * overviewScale(zoom), headerScreenH(zoom) * 0.85))
-          return (
-            <DeckLockButton
-              locked={!!lock}
-              onToggle={() => {
-                useUndoCoordinator.getState().checkpoint()
-                const bs = useBoardsStore.getState()
-                if (lock) { bs.setDeckLock(primaryGroup.id, null); return }
-                // The row, and the cards hidden in any deck inside it.
-                const ids = expandWithNestedMembers(cluster, bs.groups)
-                bs.setRowPrimary(primaryGroup.id, ids)
-                bs.setDeckLock(primaryGroup.id, ids)
-              }}
-              baseColor={primaryGroup.color}
-              size={size}
-              visible={isHovered || !!lock}
-              style={{ top: computeHeaderExtend(zoom) + CARD_TOOL_INSET, left: CARD_TOOL_INSET + size + CARD_TOOL_GAP }}
-            />
-          )
-        })()}
         {primaryGroup && front === 'card' && (
           <CardFaceDragOut
             url={isHovered ? cardGripUrl(primaryGroup, boards) : null}
