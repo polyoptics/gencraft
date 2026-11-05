@@ -78,7 +78,9 @@ function playChart(nodeId: string, to: { x: number; y: number }, ride: Ride[], a
   // is hidden till then, so no card shows before its time (Brian
   // 2026-11-05: showing, the cards are the very last thing to appear;
   // folding, the very first to go).
-  const sel = (id: string) => `[data-layer-card="${id}"], [data-card-header="${id}"], [data-primary-rail="${id}"]`
+  // A card on its own, or a closed or fanned deck it fronts (Brian
+  // 2026-11-05: decks were left behind), with its header and chips.
+  const sel = (id: string) => `[data-layer-card="${id}"], [data-group-card][data-id="${id}"], [data-card-header="${id}"], [data-primary-rail="${id}"]`
   const hide = document.createElement('style')
   hide.textContent = `${ride.flatMap(c => sel(c.id).split(', ').map(x => `${x}:not([data-chart-riding])`)).join(', ')} { opacity: 0 !important; }`
   if (ride.length) document.head.appendChild(hide)
