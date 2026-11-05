@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { flushSync } from 'react-dom'
-import { useTiltStore, isTilted, offFlat, unprojectTilt, TILT_SNAP } from '../../../store/tiltStore'
+import { useTiltStore, isTilted, offFlat, unprojectTilt, standRise, TILT_SNAP, TILT_PERSPECTIVE } from '../../../store/tiltStore'
+import { storyWallOf } from '../StorylineLayer'
 import { peekAt, usePeek } from '../../../utils/peek'
 import { useCanvasStore, groupBounds, MIN_ZOOM, MAX_ZOOM } from '../../../store/canvasStore'
 import { useFreeNodeStore } from '../../../store/freeNodeStore'
@@ -274,13 +275,53 @@ export function viewCentre(host: HTMLElement): { x: number; y: number } | null {
 
 type Rect = { x: number; y: number; w: number; h: number }
 
+/** A card standing up on a storyline's wall (tilted): its foot (canvas
+ *  y), how far up the wall its middle is (`d`, canvas units) and the
+ *  wall's turn (`a`). Null on the floor. */
+function onWall(id: string, r: Rect): { foot: number; d: number; a: number } | null {
+  const ts = useTiltStore.getState()
+  if (!isTilted(ts)) return null
+  const g = useBoardsStore.getState().groups.find(x => x.id === id)
+  const foot = storyWallOf(id) ?? (g?.deckAnchorId ? storyWallOf(g.deckAnchorId) : null)
+  const a = Math.PI / 2 * standRise(ts)
+  const d = foot === null ? 0 : foot - (r.y + r.h / 2)
+  return foot !== null && a > 0 && d > 0 ? { foot, d, a } : null
+}
+
+/** Framed at `zoom`, the canvas rect the view centres on to show a card on
+ *  a storyline's wall where it stands, not where it lies (Brian
+ *  2026-11-05: F aimed at its spot on the floor): its middle, `h` up, is
+ *  seen at the view's middle over the floor that far beyond it (tiltStore
+ *  unprojectTilt at the middle, `h` up). */
+function seenOnWall(id: string, r: Rect, zoom: number | undefined): Rect {
+  const w = zoom === undefined ? null : onWall(id, r)
+  if (!w || zoom === undefined) return r
+  const ts = useTiltStore.getState()
+  const q = unprojectTilt(0, 0, ts.tilt, ts.spin, 0, 0, w.d * Math.sin(w.a) * zoom)
+  if (!q) return r
+  return { ...r, x: r.x - q.x / zoom, y: w.foot - w.d * Math.cos(w.a) - r.h / 2 - q.y / zoom }
+}
+
 /** Canvas-unit bounds of the selected cards and tiles — or of everything
- *  on the canvas when nothing is selected. Pinned things never count. */
-function frameBox(onlySelection = false): { x0: number; y0: number; x1: number; y1: number; selected: boolean } | null {
+ *  on the canvas when nothing is selected. Pinned things never count.
+ *  `zoom`: framed at that zoom, cards on a storyline's wall where seen. */
+function frameBox(onlySelection = false, zoom?: number): { x0: number; y0: number; x1: number; y1: number; selected: boolean; near: number } | null {
   const fs = useFreeNodeStore.getState(), bs = useBoardsStore.getState()
+  // How far toward the eye the nearest card up on a wall stands (canvas
+  // units): seen nearer, it looks bigger, so it is framed a little wider.
+  // Its middle is framed on the view's middle ray (seenOnWall), h up it
+  // and so h / cos(tilt) along it toward the eye.
+  let near = 0
+  const ts0 = useTiltStore.getState()
+  const along = Math.max(1e-3, Math.cos(ts0.tilt * Math.PI / 180) * Math.cos((ts0.yaw ?? 0) * Math.PI / 180))
   const pick = (nodeIds: string[], groupIds: string[]) => [
     ...nodeIds.map(id => fs.nodes[id]).filter(n => n && !n.pin).map(n => ({ x: n.x, y: n.y, w: n.width, h: n.height })),
-    ...groupIds.filter(id => !bs.groups.find(g => g.id === id)?.pin).map(groupBounds),
+    ...groupIds.filter(id => !bs.groups.find(g => g.id === id)?.pin).map(id => {
+      const r = groupBounds(id)
+      const w = r && onWall(id, r)
+      if (w) near = Math.max(near, w.d * Math.sin(w.a) / along)
+      return r && seenOnWall(id, r, zoom)
+    }),
   ].filter((r): r is Rect => !!r)
   let rects = pick(fs.selectedIds, bs.selectedGroupIds)
   const selected = rects.length > 0
@@ -289,7 +330,7 @@ function frameBox(onlySelection = false): { x0: number; y0: number; x1: number; 
   return {
     x0: Math.min(...rects.map(r => r.x)), y0: Math.min(...rects.map(r => r.y)),
     x1: Math.max(...rects.map(r => r.x + r.w)), y1: Math.max(...rects.map(r => r.y + r.h)),
-    selected,
+    selected, near,
   }
 }
 
@@ -313,8 +354,15 @@ export function useFrameKey() {
       const W = host.clientWidth, H = host.clientHeight
       // Tilted, a model stands up out of its card: leave room above it.
       const fill = selected ? (isTilted(useTiltStore.getState()) ? 0.38 : 0.6) : 0.9
-      const zTo = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.min(W * fill / Math.max(x1 - x0, 1), H * fill / Math.max(y1 - y0, 1))))
-      const cTo = { x: (x0 + x1) / 2, y: (y0 + y1) / 2 }
+      // Seen `near` toward the eye, a size s shows s·z·P/(P − near·z): the
+      // zoom that shows it at the size wanted (the plain W·fill/s at 0).
+      const P = TILT_PERSPECTIVE, A = box.near
+      const fit = (F: number, sz: number) => F * P / (Math.max(sz, 1) * P + F * A)
+      // Never so near that the framed card reaches the eye.
+      const zTo = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, A > 0 ? 0.95 * P / A : Infinity, Math.min(fit(W * fill, x1 - x0), fit(H * fill, y1 - y0))))
+      // Aimed where the framed cards are seen at that zoom (seenOnWall).
+      const at = frameBox(false, zTo) ?? box
+      const cTo = { x: (at.x0 + at.x1) / 2, y: (at.y0 + at.y1) / 2 }
       const { pan, zoom: zFrom } = useCanvasStore.getState()
       const cFrom = { x: (W / 2 - pan.x) / zFrom, y: (H / 2 - pan.y) / zFrom }
       // The camera comes back square on the framed thing too.

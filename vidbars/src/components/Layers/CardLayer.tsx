@@ -72,6 +72,7 @@ import { showFactionTree } from '../../utils/factionTree'
 import { bakeStoryline, chartOutOf, recallChart } from '../../utils/chartCard'
 import { cardOrigins } from '../Canvas/StorylineLayer'
 import { rowOf, setRows } from '../../utils/primaryCard'
+import { wallRoom } from '../../utils/wallRoom'
 
 const BOARD_PADDING_X = 20
 
@@ -767,18 +768,21 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
       const { x: preClampX, y: preClampY } = snapCardToDots(
         initialOriginX + dxAccum, initialOriginY + dyAccum, corner, z, computeHeaderExtend(z), ev.ctrlKey, edges)
       // Clamp against other groups (only in timeline zone)
+      // Nothing standing on a storyline's wall goes below its foot, into
+      // the floor (utils/wallRoom).
+      const room = wallRoom(initialOrigins)
       let finalDx: number, finalDy: number
       if (mySlot && obstacles.length > 0) {
-        const { dx: cdx, dy: cdy } = clampGroupMove(mySlot, preClampX - initialOriginX, preClampY - initialOriginY, obstacles)
+        const { dx: cdx, dy: cdy } = clampGroupMove(mySlot, preClampX - initialOriginX, Math.min(preClampY - initialOriginY, room), obstacles, undefined, room)
         finalDx = cdx
         finalDy = cdy
       } else {
         finalDx = preClampX - initialOriginX
-        finalDy = preClampY - initialOriginY
+        finalDy = Math.min(preClampY - initialOriginY, room)
       }
       // Move all dragging groups by the same delta — single batched store update
       const updates = Array.from(initialOrigins, ([gid, origin]) => ({
-        groupId: gid, originY: origin.y + finalDy, originX: origin.x + finalDx,
+        groupId: gid, originY: origin.y + Math.min(finalDy, room), originX: origin.x + finalDx,
       }))
       useBoardsStore.getState().setGroupPosBatch(updates)
       updateDeckMagnetPreview(canDock, group.id)
@@ -1795,19 +1799,22 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
       const { x: preClampX, y: preClampY } = snapCardToDots(
         anchorInitX + dxAccum, anchorInitY + dyAccum, corner, z, computeHeaderExtend(z), ev.ctrlKey, edges)
 
+      // Nothing standing on a storyline's wall goes below its foot, into
+      // the floor (utils/wallRoom).
+      const room = wallRoom(initialOrigins)
       let finalDx: number, finalDy: number
       if (mySlot && obstacles.length > 0) {
-        const { dx: cdx, dy: cdy } = clampGroupMove(mySlot, preClampX - anchorInitX, preClampY - anchorInitY, obstacles)
+        const { dx: cdx, dy: cdy } = clampGroupMove(mySlot, preClampX - anchorInitX, Math.min(preClampY - anchorInitY, room), obstacles, undefined, room)
         finalDx = cdx
         finalDy = cdy
       } else {
         finalDx = preClampX - anchorInitX
-        finalDy = preClampY - anchorInitY
+        finalDy = Math.min(preClampY - anchorInitY, room)
       }
 
       useBoardsStore.getState().setGroupPosBatch(
         Array.from(initialOrigins, ([gid, origin]) => ({
-          groupId: gid, originY: origin.y + finalDy, originX: origin.x + finalDx,
+          groupId: gid, originY: origin.y + Math.min(finalDy, room), originX: origin.x + finalDx,
         }))
       )
       updateDeckMagnetPreview(canDock, deck.anchorGroupId)
@@ -2472,19 +2479,22 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[]; lay
       const { x: preClampX, y: preClampY } = snapCardToDots(
         anchorInitX + dxAccum, anchorInitY + dyAccum, corner, z, computeHeaderExtend(z), ev.ctrlKey, edges)
 
+      // Nothing standing on a storyline's wall goes below its foot, into
+      // the floor (utils/wallRoom).
+      const room = wallRoom(initialOrigins)
       let finalDx: number, finalDy: number
       if (mySlot && obstacles.length > 0) {
-        const { dx: cdx, dy: cdy } = clampGroupMove(mySlot, preClampX - anchorInitX, preClampY - anchorInitY, obstacles)
+        const { dx: cdx, dy: cdy } = clampGroupMove(mySlot, preClampX - anchorInitX, Math.min(preClampY - anchorInitY, room), obstacles, undefined, room)
         finalDx = cdx
         finalDy = cdy
       } else {
         finalDx = preClampX - anchorInitX
-        finalDy = preClampY - anchorInitY
+        finalDy = Math.min(preClampY - anchorInitY, room)
       }
 
       useBoardsStore.getState().setGroupPosBatch(
         Array.from(initialOrigins, ([gid, origin]) => ({
-          groupId: gid, originY: origin.y + finalDy, originX: origin.x + finalDx,
+          groupId: gid, originY: origin.y + Math.min(finalDy, room), originX: origin.x + finalDx,
         }))
       )
     }
@@ -3900,10 +3910,13 @@ const DeckAffordance: React.FC<{ cluster: string[]; front: Deck | 'card' | null;
         anchorInitX + dxAccum, anchorInitY + dyAccum, corner, z, computeHeaderExtend(z), ev.ctrlKey, edges)
       const finalDy = snapped.y - anchorInitY
       const finalDx = snapped.x - anchorInitX
+      // Nothing standing on a storyline's wall goes below its foot, into
+      // the floor (utils/wallRoom).
+      const room = wallRoom(initialOrigins)
 
       useBoardsStore.getState().setGroupPosBatch(
         Array.from(initialOrigins, ([gid, origin]) => ({
-          groupId: gid, originY: origin.y + finalDy, originX: origin.x + finalDx,
+          groupId: gid, originY: origin.y + Math.min(finalDy, room), originX: origin.x + finalDx,
         }))
       )
     }

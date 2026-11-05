@@ -197,9 +197,11 @@ export function clampGroupMove(
   dy: number,
   obstacles: GroupSlot[],
   gap = DEFAULT_GAP,
+  /** The furthest down it may go (a storyline wall's foot, utils/wallRoom). */
+  maxDy = Infinity,
 ): { dx: number; dy: number } {
   let clampedDx = dx
-  let clampedDy = dy
+  let clampedDy = Math.min(dy, maxDy)
 
   for (const obs of obstacles) {
     const ml = moving.left   + clampedDx
@@ -222,7 +224,9 @@ export function clampGroupMove(
     const pushUp    = ot - mb    // push moving upward (negative)
 
     const minAbsX = Math.abs(pushRight) < Math.abs(pushLeft) ? pushRight : pushLeft
-    const minAbsY = Math.abs(pushDown)  < Math.abs(pushUp)   ? pushDown  : pushUp
+    // A push down past maxDy is never taken: the overlap goes sideways or up.
+    const down = clampedDy + pushDown <= maxDy ? pushDown : Infinity
+    const minAbsY = Math.abs(down)  < Math.abs(pushUp)   ? down  : pushUp
 
     // Resolve on whichever axis needs the smaller correction
     if (Math.abs(minAbsX) < Math.abs(minAbsY)) {

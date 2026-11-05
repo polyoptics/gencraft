@@ -9,6 +9,7 @@ import { computeGroupLayout } from '../../utils/nleRows'
 import { cardCornerOffset, snapCardToDots } from '../../utils/dotGrid'
 import { cardEdgeSnapFor } from '../../utils/cardEdgeSnap'
 import { groupSlot, clampGroupMove } from '../../utils/nlePush'
+import { wallRoom } from '../../utils/wallRoom'
 import type { GroupSlot } from '../../utils/nlePush'
 import { expandWithNestedMembers, canvasObstacleGroups } from '../../hooks/useCardDecks'
 import { hexToHsl, hslToHex } from '../../utils/colorUtils'
@@ -191,14 +192,17 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
       const { x: preClampX, y: preClampY } = snapCardToDots(
         initialOriginX + dxAccum, initialOriginY + dyAccum, corner, z, headerExtend(z), ev.ctrlKey, edges)
       // Clamp against other groups (only in timeline zone)
+      // Nothing standing on a storyline's wall goes below its foot, into
+      // the floor (utils/wallRoom).
+      const room = wallRoom(initialOrigins)
       let finalDx: number, finalDy: number
       if (mySlot && obstacles.length > 0) {
-        const { dx: cdx, dy: cdy } = clampGroupMove(mySlot, preClampX - initialOriginX, preClampY - initialOriginY, obstacles)
+        const { dx: cdx, dy: cdy } = clampGroupMove(mySlot, preClampX - initialOriginX, Math.min(preClampY - initialOriginY, room), obstacles, undefined, room)
         finalDx = cdx
         finalDy = cdy
       } else {
         finalDx = preClampX - initialOriginX
-        finalDy = preClampY - initialOriginY
+        finalDy = Math.min(preClampY - initialOriginY, room)
       }
       // Move all dragging groups by the same delta — single batched store update
       useBoardsStore.getState().setGroupPosBatch(

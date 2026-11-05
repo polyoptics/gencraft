@@ -889,7 +889,34 @@ function collectSlabs(K = 1): TiltSlab[] {
       if (!at) continue
       const id = el.dataset.id!
       const g = groups.find(gr => gr.id === id)
-      if (g?.deckState === 'fanned') { fanSlabs(el, stage, at, add, lifting, docked.get(id), heads.get(id)); continue }
+      if (g?.deckState === 'fanned') {
+        // On a storyline's wall it stands with it, fanned as stacked (Brian
+        // 2026-11-05: fanned there, it dropped back to the floor).
+        const fy = storyWallOf(id) ?? (g.deckAnchorId ? storyWallOf(g.deckAnchorId) : null)
+        const wy = fy === null ? null : pan.y + fy * zoom
+        const a = wy === null ? 0 : Math.PI / 2 * standRise(useTiltStore.getState())
+        const wall = wy !== null && a > 0 ? { v: wy - H / 2, y: wy, a } : undefined
+        const top = fanSlabs(el, stage, at, add, lifting, docked.get(id), heads.get(id), wall)
+        // On a wall, its link chips (and their "+") and its row bands stand
+        // with it, over its front card, as a stacked deck's do.
+        if (wall && top !== undefined) {
+          const hinge: Hinge = { v: wall.v, z: top, a: wall.a }
+          const chips = stage.querySelector<HTMLElement>(`[data-primary-rail="${id}"]`)
+          const ca = chips && offsetIn(chips, stage)
+          if (chips && ca) {
+            lifting.set(chips, top + 0.25)
+            chain(chips, stage)
+            stand(chips, { ...hinge, z: top + 0.25 }, 1, `50% ${wall.y - ca.y}px`)
+            for (const c of chips.querySelectorAll<HTMLElement>(':scope > * > *')) {
+              const p = offsetScaled(c, stage)
+              const s = p && add(p.x, p.y, c.offsetWidth * p.k, c.offsetHeight * p.k, 0.5, SIDE.pop, c.offsetHeight * p.k / 2)
+              if (s) { s.z = top + 0.25; s.hinge = hinge }
+            }
+          }
+          standBands(id, hinge, wall.y)
+        }
+        continue
+      }
       const n = g?.deckState === 'stacked' ? 1 + groups.filter(o => o.deckAnchorId === id && o.deckState === 'stacked').length : 1
       const w = el.offsetWidth, h = el.offsetHeight, m = Math.min(w, h)
       // A deck's first child is its first page edge; one drawn on the left
@@ -1559,17 +1586,26 @@ function unshadow(card: HTMLElement, K: number) {
  *  height, on top. */
 type AddSlab = (x: number, y: number, w: number, h: number, t: number, color: number, r: number) => TiltSlab | undefined
 function fanSlabs(el: HTMLElement, stage: HTMLElement, at: { x: number; y: number }, add: AddSlab,
-                  lifting: Map<HTMLElement, number>, lift: number | undefined, head?: HTMLElement) {
+                  lifting: Map<HTMLElement, number>, lift: number | undefined, head?: HTMLElement,
+                  wall?: { v: number; y: number; a: number }): number | undefined {
   const kids = [...el.children].filter(c => (c as HTMLElement).matches('[data-card-drop], [data-deck-slot-drop]')) as HTMLElement[]
-  if (!kids.length) return
+  if (!kids.length) return undefined
   const front = kids.find(c => c.dataset.fanFront) ?? kids.reduce((a, b) => (b.offsetLeft === 0 && b.offsetWidth >= a.offsetWidth ? b : a))
   // Nearest the front card first, whichever side they run out on.
   const strips = kids.filter(c => c !== front).sort((a, b) => Math.abs(a.offsetLeft - front.offsetLeft) - Math.abs(b.offsetLeft - front.offsetLeft))
   const w = front.offsetWidth, h = front.offsetHeight, m = Math.min(w, h)
   const k = lift === undefined ? detail(w) : 1
-  if (k <= 0) { add(at.x + front.offsetLeft, at.y + front.offsetTop, w, h, m * THICK.card, SIDE.card, 12); return }
-  const per = m * THICK.card * k
   const base = lift ?? 0
+  // Standing on a storyline's wall (stage px `wall.y` its foot): the whole
+  // fan turns up on it, as a stacked deck does, its pages proud of it.
+  const hinge: Hinge | undefined = wall && { v: wall.v, z: base, a: wall.a }
+  if (hinge) stand(el, hinge, 1, `50% ${wall!.y - at.y}px`)
+  if (k <= 0) {
+    const s = add(at.x + front.offsetLeft, at.y + front.offsetTop, w, h, m * THICK.card, SIDE.card, 12)
+    if (s) s.hinge = hinge
+    return base + m * THICK.card
+  }
+  const per = m * THICK.card * k
   const top = base + per * (strips.length + 1)
   // The wrapper stays at the deck's base and its children rise from it:
   // a lifted wrapper (it takes the pointer) would sit over the lowered
@@ -1578,9 +1614,20 @@ function fanSlabs(el: HTMLElement, stage: HTMLElement, at: { x: number; y: numbe
   chain(el, stage)
   for (const c of el.children) if (!strips.includes(c as HTMLElement)) { lifting.set(c as HTMLElement, top - base); chain(c as HTMLElement, stage) }
   // Its name band over its front card, as flat (band 51, fan 50).
-  if (head) { lifting.set(head, top + 1); chain(head, stage) }
+  if (head) {
+    const ha = hinge && offsetIn(head, stage)
+    if (ha) {
+      // On a wall it turns up as the fan does, on the same foot, and its
+      // contents ride proud of it as the front card does inside the fan:
+      // turned up on its own lifted foot, it stood behind the front card,
+      // hidden.
+      lifting.set(head, base); chain(head, stage)
+      stand(head, hinge!, 1, `50% ${wall!.y - ha.y}px`)
+      for (const hc of head.children) { lifting.set(hc as HTMLElement, top + 1 - base); chain(hc as HTMLElement, stage) }
+    } else { lifting.set(head, top + 1); chain(head, stage) }
+  }
   const c = add(at.x + front.offsetLeft, at.y + front.offsetTop, w, h, top - base, SIDE.card, radiusOf(front) || 12)
-  if (c) c.z = top
+  if (c) { c.z = top; c.hinge = hinge }
   strips.forEach((st, i) => {
     const z = top - per * (i + 1)
     lifting.set(st, z - base)
@@ -1588,8 +1635,9 @@ function fanSlabs(el: HTMLElement, stage: HTMLElement, at: { x: number; y: numbe
     const mx = new DOMMatrix(getComputedStyle(st).transform)
     const s = add(at.x + st.offsetLeft + mx.m41, at.y + st.offsetTop, st.offsetWidth * mx.a, st.offsetHeight, z - base,
       i % 2 ? SIDE.card : SIDE.edge, 6)
-    if (s) s.z = z
+    if (s) { s.z = z; s.hinge = hinge }
   })
+  return top
 }
 
 /** Where a card comes in the flat view's paint order among the cards: the

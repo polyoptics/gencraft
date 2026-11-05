@@ -74,6 +74,7 @@ import { snapToDots } from '../../utils/dotGrid'
 import { bakeStoryline } from '../../utils/chartCard'
 import { onRows, openDeckOf, rowOf, rowsSeen } from '../../utils/primaryCard'
 import { isHiddenDeckMember } from '../../hooks/useCardDecks'
+import { setStoryWallOf } from '../../utils/wallRoom'
 import { PRESET_COLORS } from '../UI/TextFormatToolbar'
 import {
   deleteBranchFrom, deleteDot, downstream, growDot, insertDot, isBaseEdge, mergeDots, migrateStoryline,
@@ -372,6 +373,7 @@ export function storyWallOf(groupId: string): number | null {
   // boards, all of it as one piece.
   return wallCards.map.get(groupId) ?? null
 }
+setStoryWallOf(storyWallOf)
 
 /** Snapping as a card's corner snaps (utils/dotGrid snapToDots): pulled onto
  *  a dot only when close to one, so zoomed far out it stays as tight as the
@@ -711,21 +713,24 @@ export const StorylineLayer: React.FC = React.memo(() => {
 /** While a card's link "+" is dragged over the tilted view: which standing
  *  storyline dot is under the cursor, from the real (tipped) view, so a drop
  *  there finds it (standingStoryDrop). */
+/** The standing storyline's dot under the cursor (client px, as seen
+ *  tilted), as a card's link "+" is dragged: TiltedView asks with each
+ *  move it takes, as it keeps the move from listeners after it. */
+export function seeWallDrop(clientX: number, clientY: number) {
+  wallDrop = null
+  for (const el of document.elementsFromPoint(clientX, clientY)) {
+    const attr = el.getAttribute('data-link-drop')
+    if (attr === null) continue
+    if (attr.startsWith('story:') && el.closest('[data-story-wall="up"]')) wallDrop = attr
+    break
+  }
+}
 function useWallDrops() {
   const linking = useLinkDragStore(s => s.active)
   useEffect(() => {
     wallDrop = null
     if (!linking) return
-    const onMove = (e: PointerEvent) => {
-      if (!e.isTrusted) return
-      wallDrop = null
-      for (const el of document.elementsFromPoint(e.clientX, e.clientY)) {
-        const attr = el.getAttribute('data-link-drop')
-        if (attr === null) continue
-        if (attr.startsWith('story:') && el.closest('[data-story-wall="up"]')) wallDrop = attr
-        break
-      }
-    }
+    const onMove = (e: PointerEvent) => { if (e.isTrusted) seeWallDrop(e.clientX, e.clientY) }
     window.addEventListener('pointermove', onMove, true)
     return () => { window.removeEventListener('pointermove', onMove, true); wallDrop = null }
   }, [linking])

@@ -10,6 +10,8 @@ import {
   grip, models, modelKey, restKeyOf, veiled, chained, filled, widened, consoleEase, decoPlanes, type Hinge, stood, hingeOf, lifted, liftOf, marqueeSelect, selectModel,
 } from './TiltModels'
 import { LightPanel } from './LightPanel'
+import { seeWallDrop, storyWallOf } from '../StorylineLayer'
+import { useLinkDragStore } from '../../../store/linkDragStore'
 
 export const TiltedView: React.FC = () => {
   const rootRef = useRef<HTMLDivElement>(null)
@@ -328,7 +330,7 @@ export const TiltedView: React.FC = () => {
       | { kind: 'marquee'; x0: number; y0: number; x1: number; y1: number; add: boolean }
       | { kind: 'person'; url: string; unit0: number; y0: number }
       | { kind: 'model'; key: string; k0: number; y0: number; moved: boolean }
-      | { kind: 'remap'; target: Element; pointerId: number; height: number; stood?: boolean; x0?: number; y0?: number; free?: boolean; tab?: { at: { x: number; y: number }; went?: boolean }; lay?: Map<string, string>; last?: { x: number; y: number } }
+      | { kind: 'remap'; target: Element; pointerId: number; height: number; stood?: boolean; x0?: number; y0?: number; free?: boolean; tab?: { at: { x: number; y: number }; went?: boolean }; lay?: Map<string, string>; last?: { x: number; y: number }; wall?: Hinge }
     let g: Gesture | null = null
     /** A right press on furniture: its menu is its owner's (see onMenu). */
     let menuTo: Element | null = null
@@ -403,6 +405,46 @@ export const TiltedView: React.FC = () => {
       const c = p && clientToCanvas(p.x, p.y)
       grip.handAt = c ? { x: c.cx, y: c.cy } : null
       return on
+    }
+    /** On a standing storyline's wall: the card pressed is (`id`), or one
+     *  the press carries is (`moved`), or a closed deck it is in. */
+    const onWall = (id: string | undefined) => {
+      if (!id) return false
+      if (storyWallOf(id) !== null) return true
+      const a = useBoardsStore.getState().groups.find(x => x.id === id)?.deckAnchorId
+      return !!a && storyWallOf(a) !== null
+    }
+    /** The surface a move or release of `r` is read on, if not its own.
+     *  A card's link "+" goes where the cursor goes, onto a face standing
+     *  or lying: read on the floor under a standing face (from a card on
+     *  the floor), it was let go on the card behind, or on the card where
+     *  the face's detail was. A card, deck or row pressed on a storyline's
+     *  wall stays on that wall's plane while it stays on the wall, as flat
+     *  it follows the cursor: read on what is under the cursor (the floor
+     *  behind the wall), it jumped off the cursor and drifted (2026-11-05).
+     *  Carried off the wall (pulled out of its deck), it goes where the
+     *  cursor goes from then on. */
+    const readFor = (r: Extract<Gesture, { kind: 'remap' }>, e: MouseEvent, real: Element, held: boolean): Surface | undefined => {
+      if (useLinkDragStore.getState().active) {
+        // A standing storyline's dot under it (its own listener never
+        // sees the move, kept from it here): the drop goes there.
+        seeWallDrop(e.clientX, e.clientY)
+        return surfaceAt(e, held ? fromPoint.call(document, e.clientX, e.clientY) ?? real : real)
+      }
+      if (r.wall) {
+        const mine = carriedBy(r)
+        const still = !mine || useBoardsStore.getState().groups.some(x => mine(x.id) && onWall(x.id))
+        if (still) return { height: r.height, hinge: r.wall }
+        r.wall = undefined
+        r.free = true
+      }
+      return held ? undefined : readOn(r, e, real)
+    }
+    /** Space held down on the page (not typing), as InfiniteCanvas reads it. */
+    let spaceHeld = false
+    const onSpace = (e: Event) => {
+      if (e.type === 'blur') spaceHeld = false
+      else if ((e as KeyboardEvent).code === 'Space') spaceHeld = e.type === 'keydown' ? spaceHeld || e.target === document.body : false
     }
     const onDown = (e: PointerEvent) => {
       if (!e.isTrusted) return
@@ -491,6 +533,17 @@ export const TiltedView: React.FC = () => {
       // Bare ground: left-drag draws a selection box, a plain click clears
       // the selection — as flat. Panning is the camera's job (middle drag,
       // or Alt+middle).
+      // A press on bare ground takes the focus off a field or button, as
+      // flat (the browser's own, held back here): Space then pans.
+      if (e.button === 0 && isBareGround(e.target)) (document.activeElement as HTMLElement | null)?.blur?.()
+      // Space held: left-drag pans, as flat (InfiniteCanvas). The press
+      // still reaches the window's other listeners (a playing card video's
+      // Space, which a pan must not toggle).
+      if (e.button === 0 && spaceHeld && isBareGround(e.target)) {
+        e.preventDefault(); e.stopPropagation()
+        g = { kind: 'pan', last: { x: e.clientX, y: e.clientY } }
+        return
+      }
       if (e.button === 0 && isBareGround(e.target)) {
         e.preventDefault(); swallow(e)
         g = { kind: 'marquee', x0: e.clientX, y0: e.clientY, x1: e.clientX, y1: e.clientY, add: e.shiftKey }
@@ -507,13 +560,25 @@ export const TiltedView: React.FC = () => {
       e.preventDefault(); swallow(e)
       const height = liftOf(e.target as Element)
       const target = flatTarget(e, e.target as Element, height)
-      const hinge = hingeOf(target)
+      // A row's zone over its primary card (flatTarget) lies flat by the
+      // card, not stood up with it: pressed on the card standing, it is
+      // pressed on that card's face (on its floor, the row's drag started
+      // off the cursor and drifted).
+      const own = hingeOf(target)
+      const hinge = own ?? (target.closest('[data-row-of]') ? hingeOf(e.target as Element) : undefined)
+      const face: Surface | undefined = !own && hinge ? { height, hinge } : undefined
       grip.heldRest = restKeyOf(target)
       // Something standing, or a column's head up on the console's deck: a
       // drag from it goes where the cursor goes (see surfaceAt). So does a
       // loose card's, once carried (inHand).
       g = { kind: 'remap', target, pointerId: e.pointerId, height, stood: !!hinge || (height > 0 && !!target.closest('[data-rail-card-head], [data-rail-head]')), x0: e.clientX, y0: e.clientY,
         lay: new Map(useBoardsStore.getState().groups.map(x => [x.id, `${x.originX},${x.originY}`])) }
+      // A card, deck or row on a storyline's wall: its drag is read on the
+      // wall (readFor).
+      const card = target.closest<HTMLElement>('[data-group-card][data-id]')?.dataset.id
+        ?? target.closest<HTMLElement>('[data-card-header]')?.dataset.cardHeader
+        ?? target.closest<HTMLElement>('[data-row-of]')?.dataset.rowOf
+      if (hinge && onWall(card)) g.wall = hinge
       // A standing Viewer dragged by its header slides on the level plane
       // through the point grabbed (see rel); by its bottom edge (on the
       // hinge line), on the level plane there, so the edge follows the
@@ -531,8 +596,8 @@ export const TiltedView: React.FC = () => {
         if (p0 && q0) rel = { h: h!, q0, p0 }
         grip.carried = target.closest<HTMLElement>('[data-viewport3d]')?.dataset.viewport3d ?? null
       }
-      resend(e, 'pointerdown', target, height)
-      const pressed = resend(e, 'mousedown', target, height)
+      resend(e, 'pointerdown', target, height, undefined, face)
+      const pressed = resend(e, 'mousedown', target, height, undefined, face)
       // The browser's own press was held back (preventDefault, above) and a
       // re-sent one has no default action, so a text field, note or picker
       // pressed in 3D never took the focus: nothing could be typed (hunt
@@ -569,7 +634,7 @@ export const TiltedView: React.FC = () => {
         if (g.kind === 'remap') {
           // Brought to here first (moves can have stopped coming, after a
           // cancel), then let go here.
-          const on = readOn(g, e, e.target as Element)
+          const on = readFor(g, e, e.target as Element, false)
           resend(e, 'pointermove', g.target, g.height, undefined, on)
           resend(e, 'mousemove', g.target, g.height, undefined, on)
           release(e, g)
@@ -626,7 +691,7 @@ export const TiltedView: React.FC = () => {
         resend(e, 'mousemove', to, g.height, g.tab.at)
         return
       }
-      const on = !held ? readOn(g, e, real) : undefined
+      const on = readFor(g, e, real, !!held)
       g.last = { x: e.clientX, y: e.clientY }
       resend(e, 'pointermove', to, g.height, undefined, on)
       resend(e, 'mousemove', to, g.height, undefined, on)
@@ -641,7 +706,7 @@ export const TiltedView: React.FC = () => {
         const real = e.target as Element
         const held = real.hasPointerCapture?.(g.pointerId)
         const to = held ? real : g.target
-        const on = !held ? readOn(g, e, real) : undefined
+        const on = readFor(g, e, real, !!held)
         // A cancelled press is not a release: re-sent as an up, it let go of
         // a dragged card mid-drag, and it merged into whatever was under it
         // (Brian 2026-10-30: a card "jumps into a deck before I let go").
@@ -788,6 +853,9 @@ export const TiltedView: React.FC = () => {
     window.addEventListener('contextmenu', onMenu, true)
     window.addEventListener('pointerdown', onPressSettle, true)
     window.addEventListener('pointerdown', onDown, true)
+    window.addEventListener('keydown', onSpace)
+    window.addEventListener('keyup', onSpace)
+    window.addEventListener('blur', onSpace)
     window.addEventListener('pointermove', onMove, true)
     window.addEventListener('pointerup', onUp, true)
     window.addEventListener('pointercancel', onUp, true)
@@ -807,6 +875,9 @@ export const TiltedView: React.FC = () => {
       window.removeEventListener('dblclick', onClick, true)
       window.removeEventListener('contextmenu', onMenu, true)
       window.removeEventListener('pointerdown', onDown, true)
+      window.removeEventListener('keydown', onSpace)
+      window.removeEventListener('keyup', onSpace)
+      window.removeEventListener('blur', onSpace)
       window.removeEventListener('pointermove', onMove, true)
       window.removeEventListener('pointerup', onUp, true)
       window.removeEventListener('pointercancel', onUp, true)
