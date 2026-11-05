@@ -1,4 +1,10 @@
-// CloneDeck — a read-only, in-sync visual of a linked group, rendered as a
+// CloneDeck — a linked card's showing under its host (Brian 2026-11-05):
+// the master card itself, shown again. Its header is hatched like any linked
+// card's (utils/linkedCards); its text is edited in place and its back
+// (flip) too, and every edit is the master's. Go to master jumps to it;
+// dragging it out leaves a plain copy of it on the canvas.
+//
+// Before: a read-only, in-sync visual of a linked group, rendered as a
 // parented "clone" of its host. Visually matches the canonical card (same
 // hero, text, geometry) with a small CLONE badge and coral accent stripe to
 // make its status obvious. Double-clicking the title or the jump button pans
@@ -18,6 +24,8 @@ import { useCardView } from '../Layers/cardView'
 import { NLE_HEADER_CANVAS_H } from '../NLE/NLETimelineHeader'
 import { getFirstImageUrl } from '../../types/bar'
 import { CARD_TEXT_REF_ZOOM } from '../../store/zoomZonesStore'
+import { CardBack, FlipButton } from '../Layers/CardBack'
+import { useUndoCoordinator } from '../../store/undoCoordinator'
 
 interface Props {
   /** Group this clone represents. */
@@ -43,6 +51,8 @@ export const CloneDeck: React.FC<Props> = ({
   targetGroupId, hostRect, path, childIndex, hostGroupId, positionOverride,
 }) => {
   const [jumpHovered, setJumpHovered] = useState(false)
+  // Turned over here only: the master on the canvas stays as it is.
+  const [flipped, setFlipped] = useState(false)
 
   const target = useBoardsStore(s => s.groups.find(g => g.id === targetGroupId))
   const hostGroupName = useBoardsStore(s => s.groups.find(g => g.id === hostGroupId)?.name ?? null)
@@ -147,9 +157,36 @@ export const CloneDeck: React.FC<Props> = ({
 
   const onClose = () => setExpanded(path, false)
   const onJump = () => jumpToGroup(targetGroupId)
-  const onUnlinkHost = () => {
-    unlink(hostGroupId, targetGroupId)
-    setExpanded(path, false)
+  void unlink
+  /** Dragged out (past a few pixels): a plain copy of the card, made where
+   *  this showing is and carried under the pointer until let go. */
+  const onCopyDown = (e: React.PointerEvent) => {
+    if (e.button !== 0) return
+    if ((e.target as Element).closest('button, textarea, input, [data-card-back] [data-detail-row], [contenteditable="true"]')) return
+    e.stopPropagation()
+    const x0 = e.clientX, y0 = e.clientY
+    let copy: string | null = null
+    let o = { x: 0, y: 0 }
+    const onMove = (ev: PointerEvent) => {
+      const bs = useBoardsStore.getState()
+      if (!copy) {
+        if (Math.hypot(ev.clientX - x0, ev.clientY - y0) < 5) return
+        useUndoCoordinator.getState().checkpoint()
+        const m = bs.groups.find(g => g.id === targetGroupId)
+        const mr = m && cardScreenRect(m, bs.boards, pan, zoom)
+        copy = bs.duplicateGroup(targetGroupId)
+        if (!copy || !m || !mr) return
+        o = { x: m.originX + (left - mr.screenLeft) / zoom, y: m.originY + (top - mr.screenTop) / zoom }
+        bs.setSelectedGroup(copy)
+      }
+      useBoardsStore.getState().setGroupPos(copy, o.y + (ev.clientY - y0) / zoom, o.x + (ev.clientX - x0) / zoom)
+    }
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
   }
   const onToggleMembers = () => {
     if (membersOpen) closeDeck(membersPath)
@@ -164,6 +201,8 @@ export const CloneDeck: React.FC<Props> = ({
       <div
         data-clone-deck={targetGroupId}
         data-link-drop={`card:${targetGroupId}`}
+        onPointerDown={onCopyDown}
+        title="Drag out to leave a copy of this card"
         style={{
           position: 'absolute',
           left, top, width, height,
@@ -186,37 +225,6 @@ export const CloneDeck: React.FC<Props> = ({
           />
         )}
 
-        {/* Invisible double-click catcher over the card BODY only (below the
-            CLONE-badge header band, so its buttons stay clickable).
-            Double-click → toggle deck members (if the target IS a deck anchor).
-            If the target has no deck members, double-click falls back to
-            jumping to the canonical — preserving a useful affordance. */}
-        {hasMembers ? (
-          <div
-            onDoubleClick={e => { e.stopPropagation(); onToggleMembers() }}
-            style={{
-              position: 'absolute',
-              top: headerPad, left: 0, right: 0, bottom: 0,
-              zIndex: 6,
-              cursor: 'zoom-in',
-              background: 'transparent',
-            }}
-            title={membersOpen ? 'Double-click to close deck' : 'Double-click to open deck'}
-          />
-        ) : (
-          <div
-            onDoubleClick={e => { e.stopPropagation(); onJump() }}
-            style={{
-              position: 'absolute',
-              top: headerPad, left: 0, right: 0, bottom: 0,
-              zIndex: 6,
-              cursor: 'pointer',
-              background: 'transparent',
-            }}
-            title="Double-click to jump to canonical"
-          />
-        )}
-
         {/* Content area — mirrors GroupCard's inner layout so the embedded
             GroupCardText renders exactly like the canonical (same fonts, same
             header/body styles, same split ratio). pointerEvents:none keeps
@@ -227,9 +235,11 @@ export const CloneDeck: React.FC<Props> = ({
             top: headerPad, left: 0, right: 0, bottom: 0,
             overflow: 'hidden',
             borderRadius: '0 0 12px 12px',
-            pointerEvents: 'none',
           }}
         >
+          {flipped ? (
+            <CardBack groupId={targetGroupId} color={color} width={width} height={Math.max(1, height - headerPad)} hovered reserve={4} />
+          ) : (<>
           <GroupCardText groupId={targetGroupId} heroImage={heroImage} />
           <div style={{
             position: 'absolute', bottom: 6, left: 8, zIndex: 2,
@@ -239,40 +249,28 @@ export const CloneDeck: React.FC<Props> = ({
           }}>
             {target.cardSummary || `${target.boardIds.length} block${target.boardIds.length !== 1 ? 's' : ''}`}
           </div>
+          </>)}
         </div>
 
-        {/* Coral-accented "header" surrogate occupying the top band where the
-            canonical's NLETimelineHeader would be. Carries the CLONE badge
-            and the controls. */}
-        <div style={{
+        {/* Its header band, hatched as a linked card's is (CardLayer
+            data-linked-mark): flip, its name, and its controls. */}
+        <div data-linked-mark style={{
           position: 'absolute',
           top: 0, left: 0, right: 0,
           height: headerPad,
-          background: 'linear-gradient(180deg, rgba(217,122,98,0.22) 0%, rgba(217,122,98,0) 100%)',
-          borderBottom: '1.5px solid rgba(217,122,98,0.55)',
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          padding: '0 8px',
+          background: `repeating-linear-gradient(135deg, rgba(0,0,0,0.16) 0 ${Math.max(1.5, headerPad * 0.18)}px, rgba(255,255,255,0.05) ${Math.max(1.5, headerPad * 0.18)}px ${Math.max(3, headerPad * 0.36)}px)`,
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4,
+          padding: '0 6px',
           zIndex: 5,
         }}>
-          <div
-            title={`Clone of ${target.name} — linked from ${hostLabel}. Read-only.`}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 5,
-              padding: '2px 8px 2px 5px',
-              background: '#d97a62',
-              border: '1px solid rgba(255,255,255,0.35)',
-              borderRadius: 9,
-              color: '#fff',
-              fontSize: 9, fontWeight: 800,
-              letterSpacing: '0.8px',
-              boxShadow: '0 2px 6px rgba(0,0,0,0.5)',
-              userSelect: 'none',
-            }}
-          >
-            <span style={{ fontSize: 10, lineHeight: 1 }}>↗</span>
-            CLONE
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
+            <FlipButton flipped={flipped} onFlip={() => setFlipped(f => !f)} baseColor={color} size={16} visible style={{ position: 'relative', left: 0, top: 0, flexShrink: 0 }} />
+            <span
+              title={`${target.name} — linked from ${hostLabel}. Edits here are the card's own.`}
+              style={{ color: '#fff', fontSize: 10, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textShadow: '0 1px 3px rgba(0,0,0,0.8)' }}
+            >{target.name}</span>
           </div>
-          <div style={{ display: 'flex', gap: 4 }}>
+          <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
             {(hasMembers || membersOpen) && (
               <button
                 onClick={onToggleMembers}
@@ -286,11 +284,10 @@ export const CloneDeck: React.FC<Props> = ({
               onClick={onJump}
               onPointerEnter={() => setJumpHovered(true)}
               onPointerLeave={() => setJumpHovered(false)}
-              title="Jump to canonical card"
+              title="Go to the master card"
               style={cornerBtn(jumpHovered)}
             >⤤</button>
-            <button onClick={onUnlinkHost} title="Unlink from host" style={cornerBtn(false)}>⌀</button>
-            <button onClick={onClose} title="Close this clone" style={cornerBtn(false)}>×</button>
+            <button onClick={onClose} title="Close" style={cornerBtn(false)}>×</button>
           </div>
         </div>
       </div>
