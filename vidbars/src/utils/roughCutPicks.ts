@@ -2,7 +2,7 @@
 //
 // Play through, press P on the shots worth keeping (clip.pick), and Deck of
 // picks lays them out under the Rough Cut as cards in the order they play,
-// closed into a deck. Each card keeps its clip's trim.
+// closed into a locked deck. Each card keeps its clip's trim.
 
 import { useFreeNodeStore } from '../store/freeNodeStore'
 import { useBoardsStore } from '../store/boardsStore'
@@ -29,8 +29,12 @@ export function deckOfPicks(nodeId: string): number {
     const id = createMediaCard({ cx: x0 + n * face.w, cy: y0 }, [{ media: clipOutMedia(c), label: c.label }])
     if (id) made.push(id)
   })
-  // Closed, so it is its own deck and takes in no cards where it lands.
-  if (made.length > 1) useBoardsStore.getState().setDeckState(made, 'stacked')
+  // Closed and locked, so it is its own deck: nothing snaps onto it or joins it where it lands.
+  if (made.length > 1) {
+    useBoardsStore.getState().setDeckState(made, 'stacked')
+    useBoardsStore.getState().setRowPrimary(made[0], made)
+    useBoardsStore.getState().setDeckLock(made[0], made)
+  }
   useBoardsStore.getState().setSelectedGroups(made)
   return made.length
 }
