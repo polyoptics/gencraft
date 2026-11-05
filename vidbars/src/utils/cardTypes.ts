@@ -20,6 +20,8 @@ export interface CardDetail {
   name: string
   value: string
   link?: DetailLink
+  /** A long value folded to one line on the card's back. */
+  collapsed?: boolean
 }
 
 export type CardType = 'element' | 'character' | 'faction' | 'family' | 'location' | 'prop' | 'audio' | 'scene'

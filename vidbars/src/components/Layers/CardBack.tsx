@@ -155,10 +155,20 @@ const BackField: React.FC<{
   drop?: string
   /** Lit as a place to let go: a link is being dragged. */
   lit?: boolean
-  /** Long text runs onto more lines instead of being cut. */
+  /** Long text runs onto more lines instead of being cut (unless folded). */
   wrap?: boolean
-}> = ({ value, placeholder, editing, onStart, onCommit, onCancel, style, field, where, shown, onPick, drop, lit, wrap }) => {
+  folded?: boolean
+  /** Told whether the text is more than one line long. */
+  onLong?: (long: boolean) => void
+}> = ({ value, placeholder, editing, onStart, onCommit, onCancel, style, field, where, shown, onPick, drop, lit, wrap, folded, onLong }) => {
   const [draft, setDraft] = useState(value)
+  const textRef = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const el = textRef.current
+    if (!el || !onLong) return
+    const line = parseFloat(String(style.lineHeight ?? 12)) || 12
+    onLong(folded ? el.scrollWidth > el.clientWidth + 1 : el.clientHeight > line * 1.5 + 2)
+  })
   const inputRef = useRef<HTMLInputElement>(null)
   const done = useRef(false)
   const click = useClick(where, e => (shown !== undefined && onPick ? onPick(e) : onStart()))
@@ -198,14 +208,16 @@ const BackField: React.FC<{
   }
   return (
     <div
+      ref={textRef}
       data-card-detail={field}
       data-link-drop={drop}
       {...click}
       style={{
         ...style, minWidth: 0, overflow: 'hidden',
-        ...(wrap ? { whiteSpace: 'normal', overflowWrap: 'anywhere' } : { textOverflow: 'ellipsis', whiteSpace: 'nowrap' }),
+        ...(wrap && !folded ? { whiteSpace: 'normal', overflowWrap: 'anywhere' } : { textOverflow: 'ellipsis', whiteSpace: 'nowrap' }),
         cursor: shown !== undefined ? 'pointer' : 'text', padding: '0 2px', borderRadius: 2,
-        border: lit ? '1px dashed rgba(255,255,255,0.7)' : '1px solid transparent',
+        // An outline, not a border: it takes no room between the rows.
+        outline: lit ? '1px dashed rgba(255,255,255,0.7)' : 'none', outlineOffset: -1,
         background: lit ? 'rgba(255,255,255,0.08)' : undefined,
       }}
     >{shown !== undefined ? shown : (value || <span style={{ opacity: 0.4 }}>{placeholder}</span>)}</div>
@@ -340,6 +352,8 @@ export const CardBack: React.FC<{
   const w = width / s, h = height / s
   // More details below than the back shows (it fades out at the bottom).
   const listRef = useRef<HTMLDivElement>(null)
+  // Details whose value runs past one line (they get a fold button).
+  const [longRows, setLongRows] = useState<Set<string>>(() => new Set())
   const [more, setMore] = useState(false)
   const checkMore = () => {
     const el = listRef.current
@@ -477,10 +491,11 @@ export const CardBack: React.FC<{
   // card's whole width: the same on every card shape.
   const rowStyle: React.CSSProperties = {
     position: 'relative', display: 'flex', flexDirection: 'column', gap: 0,
-    borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: 2,
+    borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: 1,
   }
-  const labelStyle: React.CSSProperties = { fontSize: 6.5, fontWeight: 700, color: ink, opacity: 0.8, textTransform: 'uppercase', letterSpacing: 0.4, lineHeight: '9px' }
-  const valueStyle: React.CSSProperties = { fontSize: 10, fontWeight: 500, color: 'rgba(255,255,255,0.95)', lineHeight: '12px' }
+  const labelStyle: React.CSSProperties = { fontSize: 6.5, fontWeight: 700, color: ink, opacity: 0.8, textTransform: 'uppercase', letterSpacing: 0.4, lineHeight: '8px', paddingTop: 1 }
+  const valueStyle: React.CSSProperties = { fontSize: 10, fontWeight: 500, color: 'rgba(255,255,255,0.95)', lineHeight: '11.5px' }
+  const setFolded = (id: string, folded: boolean) => write(cur().map(d => d.id === id ? (folded ? { ...d, collapsed: true } : (({ collapsed: _c, ...rest }) => rest)(d)) : d))
   const typeMenu = (): MenuItem[] => {
     const bs = useBoardsStore.getState()
     const me = bs.groups.find(g => g.id === groupId)
@@ -582,7 +597,7 @@ export const CardBack: React.FC<{
           onScroll={checkMore}
           onWheel={e => { const el = e.currentTarget; if (el.scrollHeight > el.clientHeight + 1) e.stopPropagation() }}
           style={{
-            flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', display: 'flex', flexDirection: 'column', gap: 2, scrollbarWidth: 'none',
+            flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', display: 'flex', flexDirection: 'column', gap: 1, scrollbarWidth: 'none',
             // No scrollbar: the details use the whole back; a soft fade at
             // the bottom says there is more to wheel down to.
             ...(more ? { maskImage: 'linear-gradient(to bottom, #000 calc(100% - 14px), transparent)', WebkitMaskImage: 'linear-gradient(to bottom, #000 calc(100% - 14px), transparent)' } : null),
@@ -758,8 +773,25 @@ export const CardBack: React.FC<{
                   drop={`detail:${groupId}:${d.id}`}
                   lit={linking}
                   wrap
+                  folded={d.collapsed}
+                  onLong={l => setLongRows(prev => prev.has(d.id) === l ? prev : (n => (l ? n.add(d.id) : n.delete(d.id), n))(new Set(prev)))}
                   style={valueStyle}
                 />
+                {/* A long value: fold it to one line, or open it again. */}
+                {longRows.has(d.id) && !(editing?.id === d.id) && (
+                  <button
+                    type="button"
+                    data-card-detail-fold
+                    title="Fold to one line (lit: folded)"
+                    onPointerDown={stopPress}
+                    onClick={e => { e.stopPropagation(); setFolded(d.id, !d.collapsed) }}
+                    style={{
+                      position: 'absolute', right: 13, top: 0, height: 9, padding: '0 3px', lineHeight: '9px',
+                      fontSize: 6.5, fontWeight: 700, borderRadius: 3, border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+                      background: d.collapsed ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.3)', color: d.collapsed ? '#fff' : ink, opacity: d.collapsed ? 1 : 0.55,
+                    }}
+                  >FOLD</button>
+                )}
                 {rowHover === d.id && !editing && !linking && (
                   <button
                     type="button"
