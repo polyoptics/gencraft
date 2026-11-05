@@ -12,9 +12,10 @@ import { useResolvedMedia } from '../../utils/useResolvedMedia'
 import { useCutPlay } from '../../utils/cutMedia'
 import { openRoughCutViewer, playRoughCut, RoughCutScreen } from './RoughCutScreen'
 import { findCuts } from '../../utils/shotDetect'
-import { deckOfPicks } from '../../utils/roughCutPicks'
+import { clipOutMedia, deckOfPicks, shotFrameTime } from '../../utils/roughCutPicks'
+import { useClipFrame } from '../../utils/clipFrames'
 import {
-  appendCards, splitClipAt, FILM_FPS, clipAt, clipLength, clipMedia, clipRow, clipStart, clipEnd, cutLength, MIN_CLIP, placed, setRoughCut, type RoughClip,
+  appendCards, splitClipAt, FILM_FPS, clipAt, clipLength, clipRow, clipStart, clipEnd, cutLength, MIN_CLIP, placed, setRoughCut, type RoughClip,
 } from '../../utils/roughCut'
 
 /** The Rough Cut node: a preview on top, the timeline below: rows of clips,
@@ -320,11 +321,12 @@ export function RoughCutBody({ id, node, bodyW, bodyH }: { id: string; node: Fre
     const move = (m: PointerEvent) => {
       if (!moved && Math.hypot(m.clientX - sx, m.clientY - sy) < 5) return
       moved = true
-      // Off the Rough Cut: it comes out as a card, trimmed, where let go.
+      // Off the Rough Cut: a copy comes out as a card, trimmed, where let go
+      // (with Alt held, the clip itself: it leaves the cut).
       const r = body.getBoundingClientRect()
       outside = m.clientX < r.left || m.clientX > r.right || m.clientY < r.top || m.clientY > r.bottom
       setCarry(outside ? { clip: c0, x: m.clientX, y: m.clientY } : null)
-      if (outside) { next = clips; setLive(clips.filter((_, i) => i !== index)); return }
+      if (outside) { next = clips; setLive(m.altKey ? clips.filter((_, i) => i !== index) : clips); return }
       let st = Math.max(0, s0 + (m.clientX - sx) / k / pps)
       // Either end pulls to a nearby edge.
       const a = snapTo(st, c0.id), b = snapTo(st + len, c0.id) - len
@@ -340,8 +342,8 @@ export function RoughCutBody({ id, node, bodyW, bodyH }: { id: string; node: Fre
       setCarry(null)
       if (moved && outside) {
         useUndoCoordinator.getState().checkpoint()
-        createMediaCard(clientToCanvas(u.clientX, u.clientY), [{ media: clipMedia(c0), label: c0.label }])
-        setRoughCut(id, { clips: clips.filter(c => c.id !== c0.id) }, false)
+        createMediaCard(clientToCanvas(u.clientX, u.clientY), [{ media: clipOutMedia(c0), label: c0.label }])
+        if (u.altKey) setRoughCut(id, { clips: clips.filter(c => c.id !== c0.id) }, false)
         return
       }
       if (!moved) {
@@ -513,7 +515,9 @@ const Ruler: React.FC<{ pps: number; width: number; onPointerDown: (e: React.Poi
 
 /** A clip being taken out: a little card at the pointer. */
 const CarriedClip: React.FC<{ clip: RoughClip; x: number; y: number }> = ({ clip, x, y }) => {
-  const poster = useResolvedMedia(clip.poster ?? (clip.kind === 'image' ? clip.url : null))
+  const stored = useResolvedMedia(clip.poster ?? (clip.kind === 'image' ? clip.url : null))
+  // A video shows its own first frame (a shot cut from a movie is not the movie's poster).
+  const poster = useClipFrame(clip.kind === 'video' ? clip.url : null, shotFrameTime(clip)) ?? stored
   return (
     <div data-rough-carry="" style={{
       position: 'fixed', left: x - 80, top: y - 50, width: 160, height: 100, zIndex: 100000, pointerEvents: 'none',
@@ -536,7 +540,9 @@ const ClipBlock: React.FC<{
   onTrimOut: (e: React.PointerEvent) => void
   onRemove: () => void
 }> = ({ clip, x, y, w, selected, lifted, scanning, onMove, onTrimIn, onTrimOut, onRemove }) => {
-  const poster = useResolvedMedia(clip.poster ?? (clip.kind === 'image' ? clip.url : null))
+  const stored = useResolvedMedia(clip.poster ?? (clip.kind === 'image' ? clip.url : null))
+  // A video shows its own first frame (a shot cut from a movie is not the movie's poster).
+  const poster = useClipFrame(clip.kind === 'video' ? clip.url : null, shotFrameTime(clip)) ?? stored
   const [hover, setHover] = useState(false)
   const color = KIND_COLOR[clip.kind]
   return (

@@ -8,7 +8,9 @@ import { useFreeNodeStore } from '../store/freeNodeStore'
 import { useBoardsStore } from '../store/boardsStore'
 import { useUndoCoordinator } from '../store/undoCoordinator'
 import { cardFaceSize, createMediaCard } from './cardGrid'
-import { clipAt, clipMedia, clipRow, clipStart, placed, setRoughCut } from './roughCut'
+import { clipAt, clipMedia, clipRow, clipStart, placed, setRoughCut, type RoughClip } from './roughCut'
+import { getClipFrame } from './clipFrames'
+import type { MediaItem } from '../types/bar'
 
 /** Lay the picked clips out as a deck under the Rough Cut. Returns how many cards were made. */
 export function deckOfPicks(nodeId: string): number {
@@ -24,7 +26,7 @@ export function deckOfPicks(nodeId: string): number {
   const y0 = node.y + node.height + face.h + face.h / 2
   const made: string[] = []
   picks.forEach((c, n) => {
-    const id = createMediaCard({ cx: x0 + n * face.w, cy: y0 }, [{ media: clipMedia(c), label: c.label }])
+    const id = createMediaCard({ cx: x0 + n * face.w, cy: y0 }, [{ media: clipOutMedia(c), label: c.label }])
     if (id) made.push(id)
   })
   useBoardsStore.getState().setSelectedGroups(made)
@@ -39,4 +41,16 @@ export function togglePickAt(nodeId: string, t: number): void {
   const c = clipAt(clips, t)?.clip
   if (!c) return
   setRoughCut(nodeId, { clips: clips.map(x => (x.id === c.id ? { ...x, pick: !x.pick } : x)) })
+}
+
+/** Where a clip's picture is taken: just inside its in point. */
+export const shotFrameTime = (c: RoughClip) => Math.min(c.in + 0.02, Math.max(c.in, c.out - 0.02))
+
+/** A clip as a card's media (its trim kept), with its own first frame as the
+ *  card's poster when that has been made. */
+export function clipOutMedia(c: RoughClip): MediaItem {
+  const m = clipMedia(c)
+  if (c.kind !== 'video') return m
+  const frame = getClipFrame(c.url, shotFrameTime(c))
+  return frame ? { ...m, posterUrl: frame } : m
 }
