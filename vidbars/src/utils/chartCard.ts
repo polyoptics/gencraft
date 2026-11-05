@@ -20,41 +20,35 @@ import type { ChartData, ChartPlace, ChartTier } from './chartData'
 import { makeLinkedCard, masterOf } from './linkedCards'
 import { newGroupId, type FactionGroup } from './factionGroups'
 import type { StorylineData } from './storyline'
-import { baseYOf, play, setChartMotion } from './chartMotion'
+import { play, setChartMotion } from './chartMotion'
 import { flushSync } from 'react-dom'
 import { useCanvasStore } from '../store/canvasStore'
 
 /** Folding and unfolding are played out (Brian 2026-11-05: "so we can
  *  tell what's happening"; the storyline too: "all the points drop, and the
  *  line slides into the side"), as ONE quick motion ("chunky... smooth it
- *  into a nice motion"): the points drop to the base line as the line slides
- *  into the card's side; showing, the reverse. utils/chartMotion draws the
- *  storyline; the linked cards ride along as transform animations on their
+ *  into a nice motion"). Showing, the line comes first, then the cards
+ *  jump out; folding, the cards go in first, then the line goes (Brian
+ *  2026-11-05): its points drop to the base line as it slides into the
+ *  card's side. utils/chartMotion draws the storyline; the linked cards
+ *  move as transform animations on their
  *  own elements (moving them in the store every frame redrew every card and
  *  dropped frames). Their positions are written once. While one plays,
  *  another fold or show waits it out. */
-const MOTION_MS = 360
+const MOTION_MS = 480
 let moving = false
 const clamp01 = (t: number) => Math.max(0, Math.min(1, t))
 const easeOut = (t: number) => 1 - Math.pow(1 - t, 3)
 const easeInOut = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2)
 type Phase = { drop: number; slide: number }
-/** Folding at time t (0..1): the drop leads, the slide follows on. */
-const foldAt = (t: number): Phase => ({ drop: easeOut(clamp01(t / 0.5)), slide: easeInOut(clamp01((t - 0.3) / 0.7)) })
-/** Showing: the slide out leads, the rise settles it. */
-const showAt = (t: number): Phase => ({ drop: 1 - easeOut(clamp01((t - 0.5) / 0.5)), slide: 1 - easeInOut(clamp01(t / 0.7)) })
-
-/** How far each linked card drops with its dot to the base line. */
-function dropsOf(d: StorylineData, tiers: { dot: string; cards: string[] }[], idOf: (c: string) => string | undefined): Map<string, number> {
-  const by = baseYOf(d)
-  const out = new Map<string, number>()
-  for (const t of tiers) {
-    const p = d.dots.find(q => q.id === t.dot)
-    if (!p) continue
-    for (const c of t.cards) { const id = idOf(c); if (id && !out.has(id)) out.set(id, by - p.y) }
-  }
-  return out
-}
+/** Folding at time t (0..1): the cards go in (cardsIn), then the line
+ *  drops and slides in. */
+const foldAt = (t: number): Phase => ({ drop: easeOut(clamp01((t - 0.42) / 0.3)), slide: easeInOut(clamp01((t - 0.52) / 0.48)) })
+const cardsIn = (t: number) => easeInOut(clamp01(t / 0.5))
+/** Showing: the line slides out and rises, then the cards jump out
+ *  (cardsOut). */
+const showAt = (t: number): Phase => ({ slide: 1 - easeInOut(clamp01(t / 0.4)), drop: 1 - easeOut(clamp01((t - 0.3) / 0.28)) })
+const cardsOut = (t: number) => easeOut(clamp01((t - 0.5) / 0.5))
 
 /** The side of card `g` the line slides into (node units of `n`): the side
  *  facing the storyline, half way down. */
@@ -65,20 +59,19 @@ function sideOf(g: ProjectGroup, n: { x: number; y: number; width?: number }): {
   return { x: (right ? g.originX + w : g.originX) - n.x, y: g.originY + h / 2 - n.y }
 }
 
-/** A linked card riding the motion: where it is in the store, and how far
- *  its dot drops. */
-type Ride = { id: string; x: number; y: number; dy: number }
+/** A linked card in the motion: where it is in the store. */
+type Ride = { id: string; x: number; y: number }
 
 /** Plays the motion on storyline `nodeId`: drawn each frame, its cards
  *  animated from where they are in the store to `at` (canvas units) on the
  *  compositor; then `done`. `hold` keeps the cards where they end up until
  *  they go (a fold). */
-function playChart(nodeId: string, to: { x: number; y: number }, ride: Ride[], at: (c: Ride, m: Phase) => { x: number; y: number }, phase: (t: number) => Phase, hold: boolean, done: () => void): void {
+function playChart(nodeId: string, to: { x: number; y: number }, ride: Ride[], at: (c: Ride, t: number) => { x: number; y: number; o: number }, phase: (t: number) => Phase, hold: boolean, done: () => void): void {
   const zoom = useCanvasStore.getState().zoom
   const N = 18
   const frames = new Map(ride.map(c => [c.id, Array.from({ length: N + 1 }, (_, i) => {
-    const p = at(c, phase(i / N))
-    return { transform: `translate(${(p.x - c.x) * zoom}px, ${(p.y - c.y) * zoom}px)` }
+    const p = at(c, i / N)
+    return { transform: `translate(${(p.x - c.x) * zoom}px, ${(p.y - c.y) * zoom}px)`, o: p.o }
   })]))
   // Each card's elements ride; one drawn anew part way (React may redraw a
   // card it has just put down) picks the ride up where it has got to.
@@ -88,8 +81,11 @@ function playChart(nodeId: string, to: { x: number; y: number }, ride: Ride[], a
       for (const el of document.querySelectorAll(`[data-layer-card="${id}"], [data-card-header="${id}"], [data-primary-rail="${id}"]`)) {
         if (riding.has(el)) continue
         riding.add(el)
-        const a = (el as HTMLElement).animate(f, { duration: MOTION_MS, easing: 'linear', composite: 'add', fill: hold ? 'forwards' : 'none' })
+        const how = { duration: MOTION_MS, easing: 'linear', fill: hold ? 'forwards' : 'none' } as const
+        const a = (el as HTMLElement).animate(f.map(k => ({ transform: k.transform })), { ...how, composite: 'add' })
+        const b = (el as HTMLElement).animate(f.map(k => ({ opacity: k.o })), how)
         a.currentTime = ms
+        b.currentTime = ms
       }
     }
   }
@@ -198,8 +194,9 @@ export function bakeStoryline(nodeId: string, cardsOf: CardsOfDots): string | nu
     }),
   }))
 
-  // The points drop to the base line as the line slides into the card's
-  // side, the linked cards riding along into the card, and they go. The masters stay where they are.
+  // The linked cards go into the card, then the line goes (its points
+  // drop to the base line as it slides into the card's side), and they go.
+  // The masters stay where they are.
   const home = useBoardsStore.getState().groups.find(g => g.id === cardId)
   const links = [...on.keys()].flatMap(id => { const g = useBoardsStore.getState().groups.find(x => x.id === id); return g?.linkOf ? [g] : [] })
   const gone = () => {
@@ -214,17 +211,13 @@ export function bakeStoryline(nodeId: string, cardsOf: CardsOfDots): string | nu
     moving = false
   }
   if (!home) { gone(); return cardId }
-  const isLink = new Set(links.map(g => g.id))
-  const drops = new Map<string, number>()
-  const by = baseYOf(d)
-  for (const p of d.dots) for (const c of cardsOf(d, new Set([p.id])).keys()) if (isLink.has(c) && !drops.has(c)) drops.set(c, by - p.y)
-  const ride: Ride[] = links.map(g => ({ id: g.id, x: g.originX, y: g.originY, dy: drops.get(g.id) ?? 0 }))
+  const ride: Ride[] = links.map(g => ({ id: g.id, x: g.originX, y: g.originY }))
   const to = sideOf(home, n)
   const hx = home.originX, hy = home.originY
   moving = true
-  playChart(nodeId, to, ride, (c, m) => {
-    const y = c.y + c.dy * m.drop
-    return { x: c.x + (hx - c.x) * m.slide, y: y + (hy - y) * m.slide }
+  playChart(nodeId, to, ride, (c, t) => {
+    const k = cardsIn(t)
+    return { x: c.x + (hx - c.x) * k, y: c.y + (hy - c.y) * k, o: 1 - clamp01((k - 0.75) / 0.25) }
   }, foldAt, true, gone)
   return cardId
 }
@@ -239,7 +232,7 @@ export function recallChart(cardId: string): string | null {
   // All of it drawn at once (flushSync), already started on its way out,
   // so the cards are there to animate and nothing shows where it lands
   // first.
-  const { id, link, at, node } = flushSync(() => {
+  const { id, at, node } = flushSync(() => {
     const link = new Map<string, string>()
     for (const p of chart.places) {
       const id = makeLinkedCard(p.card)
@@ -271,18 +264,17 @@ export function recallChart(cardId: string): string | null {
     const live: StorylineData = { ...d, chartCard: cardId, dots: d.dots.map(p => ({ ...p, cards: p.cards?.flatMap(c => link.get(c) ?? []) })) }
     fs.updateFreeNode(id, { ...node, storyline: live })
     setChartMotion(id, { ...showAt(0), to: sideOf(card, node) })
-    return { id, link, at, node }
+    return { id, at, node }
   })
-  // The line slides out of the card's side, the cards riding out with it;
-  // then the points rise to their places.
-  const drops = dropsOf(node.storyline!, chart.tiers, c => link.get(c))
+  // The line slides out of the card's side and its points rise to their
+  // places; then the cards jump out to theirs.
   const ride: Ride[] = useBoardsStore.getState().groups.filter(g => at.has(g.id))
-    .map(g => ({ id: g.id, x: g.originX, y: g.originY, dy: drops.get(g.id) ?? 0 }))
+    .map(g => ({ id: g.id, x: g.originX, y: g.originY }))
   const fx = card.originX, fy = card.originY
   moving = true
-  playChart(id, sideOf(card, node), ride, (c, m) => {
-    const y = c.y + c.dy * m.drop
-    return { x: c.x + (fx - c.x) * m.slide, y: y + (fy - y) * m.slide }
+  playChart(id, sideOf(card, node), ride, (c, t) => {
+    const k = cardsOut(t)
+    return { x: fx + (c.x - fx) * k, y: fy + (c.y - fy) * k, o: clamp01(k / 0.25) }
   }, showAt, false, () => { setChartMotion(id, null); moving = false })
   return id
 }
