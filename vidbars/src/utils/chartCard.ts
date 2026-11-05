@@ -41,15 +41,24 @@ const clamp01 = (t: number) => Math.max(0, Math.min(1, t))
 const easeOut = (t: number) => 1 - Math.pow(1 - t, 3)
 const easeInOut = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2)
 type Phase = { drop: number; slide: number; tether: number }
-/** Folding at time t (0..1): the cards go in (cardsIn), their tethers
+/** Folding at time t (0..1): the cards go (cardsGone), their tethers
  *  pull back into the dots, then the line drops and slides in. */
 const foldAt = (t: number): Phase => ({ tether: 1 - easeInOut(clamp01((t - 0.385) / 0.095)), drop: easeOut(clamp01((t - 0.48) / 0.21)), slide: easeInOut(clamp01((t - 0.54) / 0.46)) })
-const cardsIn = (t: number) => easeInOut(clamp01(t / 0.385))
+/** The cards don't travel (Brian 2026-11-05): each just appears where it
+ *  sits, quickly, one after another from the bottom up, and goes the same
+ *  way top down. Card `i` of `n` in that order: shown 0..1 at time t. */
+const POP = 0.07
+const cardsGone = (i: number, n: number, t: number) => 1 - clamp01((t - (0.385 - POP) * (n > 1 ? i / (n - 1) : 0)) / POP)
 /** Showing: the line slides out and rises, the tethers grow out of the
- *  dots to where the cards will be (Brian 2026-11-05), then the cards jump
- *  out (cardsOut). */
+ *  dots to where the cards will be (Brian 2026-11-05), then the cards
+ *  appear (cardsShown). */
 const showAt = (t: number): Phase => ({ slide: 1 - easeInOut(clamp01(t / 0.33)), drop: 1 - easeOut(clamp01((t - 0.26) / 0.21)), tether: easeOut(clamp01((t - 0.47) / 0.15)) })
-const cardsOut = (t: number) => easeOut(clamp01((t - 0.62) / 0.38))
+const cardsShown = (i: number, n: number, t: number) => clamp01((t - 0.62 - (0.38 - POP) * (n > 1 ? i / (n - 1) : 0)) / POP)
+/** Ride order for popping: lowest card first (`up`), else highest. */
+const popOrder = (ride: Ride[], up: boolean) => {
+  const by = [...ride].sort((a, b) => (up ? b.y - a.y : a.y - b.y))
+  return new Map(by.map((c, i) => [c.id, i]))
+}
 
 /** The side of card `g` the line slides into (node units of `n`): the side
  *  facing the storyline, half way down. */
@@ -231,12 +240,9 @@ export function bakeStoryline(nodeId: string, cardsOf: CardsOfDots): string | nu
   if (!home) { gone(); return cardId }
   const ride: Ride[] = links.map(g => ({ id: g.id, x: g.originX, y: g.originY }))
   const to = sideOf(home, n)
-  const hx = home.originX, hy = home.originY
   moving = true
-  playChart(nodeId, to, ride, (c, t) => {
-    const k = cardsIn(t)
-    return { x: c.x + (hx - c.x) * k, y: c.y + (hy - c.y) * k, o: 1 - clamp01((k - 0.75) / 0.25) }
-  }, foldAt, true, gone)
+  const order = popOrder(ride, false)
+  playChart(nodeId, to, ride, (c, t) => ({ x: c.x, y: c.y, o: cardsGone(order.get(c.id) ?? 0, ride.length, t) }), foldAt, true, gone)
   return cardId
 }
 
@@ -288,12 +294,9 @@ export function recallChart(cardId: string): string | null {
   // places; then the cards jump out to theirs.
   const ride: Ride[] = useBoardsStore.getState().groups.filter(g => at.has(g.id))
     .map(g => ({ id: g.id, x: g.originX, y: g.originY }))
-  const fx = card.originX, fy = card.originY
   moving = true
-  playChart(id, sideOf(card, node), ride, (c, t) => {
-    const k = cardsOut(t)
-    return { x: fx + (c.x - fx) * k, y: fy + (c.y - fy) * k, o: clamp01(k / 0.25) }
-  }, showAt, false, () => { setChartMotion(id, null); moving = false })
+  const order = popOrder(ride, true)
+  playChart(id, sideOf(card, node), ride, (c, t) => ({ x: c.x, y: c.y, o: cardsShown(order.get(c.id) ?? 0, ride.length, t) }), showAt, false, () => { setChartMotion(id, null); moving = false })
   return id
 }
 
