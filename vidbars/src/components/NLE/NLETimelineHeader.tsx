@@ -131,6 +131,11 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
   const flipId = pickedInFan ?? groupId
   const flipCard = useBoardsStore(s => flipId ? s.groups.find(g => g.id === flipId) : undefined)
   const flipLit = !!flipCard?.flipped
+  // A linked card's master (utils/linkedCards), while it is still there.
+  const linkMasterId = useBoardsStore(s => {
+    const l = group?.linkOf
+    return l && s.groups.some(o => o.id === l) ? l : undefined
+  })
 
   const [headerName, setHeaderName] = useState(defaultName)
   const [renaming, setRenaming] = useState(false)
@@ -459,6 +464,46 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
   // mode.kind === 'hidden' → headerIcon stays null; the trailing flex slot is omitted.
 
   const lockH = screenHeight * 0.7
+  // Go to master (Brian 2026-11-05): on a linked card, an arrow that takes
+  // the canvas to its master card, centred and selected. Always shown on a
+  // linked card, so the bar never shifts. A master hidden in a closed deck
+  // is shown by its deck's face card.
+  const goEl = linkMasterId ? (
+    <div
+      data-go-to-master
+      title="Go to the master card"
+      onPointerDown={e => e.stopPropagation()}
+      onDoubleClick={e => e.stopPropagation()}
+      onClick={e => {
+        e.stopPropagation()
+        const gs = useBoardsStore.getState().groups
+        let to = gs.find(g => g.id === linkMasterId)
+        for (let i = 0; to?.deckAnchorId && i < 32; i++) {
+          const up = gs.find(g => g.id === to!.deckAnchorId)
+          if (!up) break
+          to = up
+        }
+        if (!to) return
+        useCanvasStore.getState().jumpToGroup(to.id)
+        useBoardsStore.getState().setSelectedGroup(to.id)
+      }}
+      style={{
+        flex: '0 0 auto', marginLeft: isTiny ? 0 : 'auto',
+        width: lockH, height: lockH,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        borderRadius: Math.max(1 * ov, screenHeight * 0.12),
+        color: 'rgba(255,255,255,0.55)',
+        cursor: 'pointer',
+      }}
+    >
+      <svg width={lockH * 0.8} height={lockH * 0.8} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+        {/* An arrow out of a box: off to the card this one shows. */}
+        <path d="M7 3.5 H3.5 a1 1 0 0 0 -1 1 V12.5 a1 1 0 0 0 1 1 H11.5 a1 1 0 0 0 1 -1 V9" />
+        <path d="M8 8 L13.5 2.5" />
+        <path d="M9.5 2.5 H13.5 V6.5" />
+      </svg>
+    </div>
+  ) : null
   const flipEl = isFace && flipCard && !flipCard.effect ? (
     <div
       data-card-flip
@@ -471,7 +516,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
         useBoardsStore.getState().setGroupFlipped(flipCard.id, !flipCard.flipped)
       }}
       style={{
-        flex: '0 0 auto', marginLeft: isTiny ? 0 : 'auto',
+        flex: '0 0 auto', marginLeft: goEl || isTiny ? 0 : 'auto',
         width: lockH, height: lockH,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         borderRadius: Math.max(1 * ov, screenHeight * 0.12),
@@ -509,7 +554,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
         bs.setDeckLock(groupId, ids)
       }}
       style={{
-        flex: '0 0 auto', marginLeft: flipEl || isTiny ? 0 : 'auto',
+        flex: '0 0 auto', marginLeft: flipEl || goEl || isTiny ? 0 : 'auto',
         width: lockH, height: lockH,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         borderRadius: Math.max(1 * ov, screenHeight * 0.12),
@@ -610,9 +655,10 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
         overflow: 'hidden',
       }}>
         {!isTiny && nameEl}
+        {goEl}
         {flipEl}
         {lockEl}
-        {headerIcon && <div style={{ flex: '0 0 auto', marginLeft: lockEl || isTiny ? 0 : 'auto' }}>{headerIcon}</div>}
+        {headerIcon && <div style={{ flex: '0 0 auto', marginLeft: lockEl || goEl || isTiny ? 0 : 'auto' }}>{headerIcon}</div>}
       </div>
     </div>
   )
