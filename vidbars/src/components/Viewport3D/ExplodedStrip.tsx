@@ -535,7 +535,12 @@ export const PoppedLayerSheets: React.FC<{ windowId: string }> = ({ windowId }) 
   const [alone, setAlone] = useState<Partial<Record<PopSide, string>>>({})
   if (!w || !railId || !sides || !any || !baked || out) return null
 
-  const a = pictureAreas.get(windowId) ?? { x: 0, y: 0, width: w.width, height: w.height }
+  // The picture's own box in its area (as the Viewer fits it), so a sheet is
+  // the picture's size and shape.
+  const area = pictureAreas.get(windowId) ?? { x: 0, y: 0, width: w.width, height: w.height }
+  const aspect = baked.plate.width / baked.plate.height
+  const ph = Math.min(area.height, area.width / aspect), pw = ph * aspect
+  const a = { x: area.x + (area.width - pw) / 2, y: area.y + (area.height - ph) / 2, width: pw, height: ph }
   const fs = Math.min(40, 12 / zoom), headH = fs * 2.1, gap = 16 / zoom
   const at: Record<PopSide, { left: number; top: number }> = {
     r: { left: w.x + w.width + gap, top: w.y + a.y },
