@@ -247,10 +247,17 @@ const CardContextMenu: React.FC<{
     // Style: this face's text and how it is set, onto other cards, once
     // (utils/faceStyle). Each shows its own {Name} and details.
     menuItems.push({ label: 'Copy style', icon: '🖌', action: () => { copyFaceStyle(group); onClose() } })
+    // Pasted on a deck, closed or open, every card in it takes the style,
+    // cards of decks inside it too (Brian 2026-11-05); a selection wins.
     const style = copiedFaceStyle()
-    if (style) menuItems.push({ label: `Paste style${ids.length > 1 ? ` (${ids.length})` : ''}`, icon: '🖌', action: () => {
+    const deckIds = ids.length > 1 ? null
+      : deckMemberIds && deckMemberIds.length >= 2 ? [group.id, ...deckMemberIds]
+      : (rowOf(group.id)?.length ?? 0) >= 2 ? rowOf(group.id)!
+      : null
+    const pasteIds = deckIds ? expandWithNestedMembers([...new Set(deckIds)], bs.groups) : ids
+    if (style) menuItems.push({ label: `Paste style${pasteIds.length > 1 ? ` (${pasteIds.length})` : ''}`, icon: '🖌', action: () => {
       useUndoCoordinator.getState().checkpoint()
-      useBoardsStore.getState().pasteFaceStyle(ids, style)
+      useBoardsStore.getState().pasteFaceStyle(pasteIds, style)
       onClose()
     }})
   }
