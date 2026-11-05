@@ -11,6 +11,7 @@ import { useCanvasStore } from '../store/canvasStore'
 import { useUndoCoordinator } from '../store/undoCoordinator'
 import { useFreeNodeStore, type FreeNodeData } from '../store/freeNodeStore'
 import { roughCutShots } from './roughCut'
+import { mediaShots } from './filmPlan'
 import { getMediaItems } from '../types/bar'
 import { cardFaceSize, createMediaCard, gridOrder } from './cardGrid'
 import { DOCK_TOLERANCE, rectsTouch, type Rect } from './viewportDocking'
@@ -23,7 +24,7 @@ export function cardShots(g: ProjectGroup, boards: Record<string, BoardData>): s
   for (const bid of gridOrder(g, boards)) {
     const b = boards[bid]
     for (const rid of b.rootIds) {
-      for (const m of getMediaItems(b.bars[rid]?.content)) if (m.filmShot) out.push(m.filmShot)
+      for (const m of getMediaItems(b.bars[rid]?.content)) out.push(...mediaShots(m))
     }
   }
   return out
@@ -64,9 +65,17 @@ export function dockedCards(node: FreeNodeData, groups: ProjectGroup[], boards: 
 
 /** The shots the mixer should mix: every shot on its docked cards, once. */
 export function dockedShots(node: FreeNodeData, groups: ProjectGroup[], boards: Record<string, BoardData>): string[] {
+  return docked(node, groups, boards).shots
+}
+
+/** The mixer's shots on what is docked to it, and how many cards and Rough
+ *  Cuts are docked at all (so an empty mixer can say why it stays empty). */
+export function docked(node: FreeNodeData, groups: ProjectGroup[], boards: Record<string, BoardData>): { shots: string[]; things: number } {
   const seen = new Set<string>()
   const out: string[] = []
-  for (const g of dockedCards(node, groups, boards)) {
+  const cards = dockedCards(node, groups, boards)
+  let things = cards.length
+  for (const g of cards) {
     for (const s of cardShots(g, boards)) if (!seen.has(s)) { seen.add(s); out.push(s) }
   }
   // A Rough Cut touching the mixer feeds it its shots, in cut order.
@@ -74,9 +83,10 @@ export function dockedShots(node: FreeNodeData, groups: ProjectGroup[], boards: 
   const nodeRect = { x: node.x, y: node.y, width: node.width, height: node.height }
   for (const n of Object.values(useFreeNodeStore.getState().nodes)) {
     if (n.type !== 'roughCut' || n.pin || !rectsTouch(nodeRect, { x: n.x, y: n.y, width: n.width, height: n.height }, tol)) continue
+    things++
     for (const s of roughCutShots(n)) if (!seen.has(s)) { seen.add(s); out.push(s) }
   }
-  return out
+  return { shots: out, things }
 }
 
 /** Every shot the mixer can mix, as a deck of cards below the mixer: one card

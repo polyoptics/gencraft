@@ -149,7 +149,7 @@ function frame({ seg, i, look, card }) {
 const SHOT_NAME = /^[A-Za-z0-9_-]{1,40}$/
 const PAGE_SCRIPTS = {
   // Every shot the mixer can mix, in film order.
-  shots: () => `F.segs.map((s, k) => ({ k, clip: s.clip, look: !!s.look, n: s.n, outside: !!s.outside })).filter(s => s.look && !s.outside)`,
+  shots: () => `F.segs.map((s, k) => ({ k, clip: s.clip, look: !!s.look, n: s.n, outside: !!s.outside, start: s.start, end: s.end })).filter(s => s.look && !s.outside)`,
   // Hide the page's own whole-film strip: the canvas holds the shots now.
   embed: () => `(() => {
     if (!document.getElementById('vb-embed')) {
@@ -171,6 +171,10 @@ const PAGE_SCRIPTS = {
     selChanged()
     return ks.length
   })()`,
+  // The film's length in frames, and where each mixable shot starts and ends in it.
+  film: () => `({ frames: Math.max(0, ...F.segs.filter(s => !s.outside && typeof s.end === 'number').map(s => s.end)), shots: F.segs.filter(s => s.look && !s.outside && typeof s.start === 'number').map(s => ({ clip: s.clip, start: s.start, end: s.end })) })`,
+  // The shots selected now.
+  sel: () => `[...F.sel].map(k => F.segs[k] && F.segs[k].clip).filter(Boolean)`,
   // Go to one shot, keeping the selection.
   go: (clips) => `(() => {
     const k = F.segs.findIndex(s => s.clip === ${JSON.stringify(clips[0])} && s.look)

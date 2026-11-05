@@ -6,7 +6,8 @@ import { useTiltStore } from '../../store/tiltStore'
 import { addFreeNodeCentered } from '../../utils/canvasCreate'
 import { useBoardsStore } from '../../store/boardsStore'
 import { cardFaceMedia } from '../../utils/cardGrid'
-import { dockedShots, makeShotCards } from '../../utils/filmShots'
+import { docked, makeShotCards } from '../../utils/filmShots'
+import { hasFilmPlan, loadFilmPlan } from '../../utils/filmPlan'
 
 /** The Film Look node: the look mixer, laid out on the canvas like any panel.
  *
@@ -290,7 +291,7 @@ export function FilmMixerBody({ nodeId, pinned, bodyW, bodyH }: { nodeId: string
     return () => document.removeEventListener('pointerdown', onDown, true)
   }, [active])
 
-  const shots = useDockedShots(nodeId, pinned)
+  const { shots, things } = useDockedShots(nodeId, pinned, ready)
   usePageFollows(ready, shots)
   const [making, setMaking] = useState<string | null>(null)
   const empty = ready && shots.length === 0
@@ -342,7 +343,9 @@ export function FilmMixerBody({ nodeId, pinned, bodyW, bodyH }: { nodeId: string
           justifyContent: 'center', gap: 14, background: '#14151c', color: 'rgba(255,255,255,0.7)',
           fontSize: 15 * fit, textAlign: 'center', padding: 24 * fit,
         }}>
-          <div>No shots yet. Dock a deck of shot cards to the mixer, or lay a shot card on its title bar.</div>
+          <div data-film-mixer-empty-why={things ? 'nothing-mixable' : 'nothing-docked'}>{things
+            ? `${things === 1 ? 'What is docked here holds' : `The ${things} things docked here hold`} no shots of the film. The mixer mixes the film's own shots: cards from Make shot cards, or clips cut from the film's edit video.`
+            : 'No shots yet. Dock a deck of shot cards to the mixer, or lay a shot card on its title bar.'}</div>
           <button
             data-film-make-shots=""
             disabled={!!making}
@@ -370,8 +373,9 @@ export function FilmMixerBody({ nodeId, pinned, bodyW, bodyH }: { nodeId: string
 /** The shots on the cards docked to the mixer, worked out again as cards move
  *  (a beat after, not on every frame of a drag). Pinned, it keeps the ones it
  *  had: a pinned mixer has left the canvas its cards are on. */
-function useDockedShots(nodeId: string, pinned: boolean): string[] {
+function useDockedShots(nodeId: string, pinned: boolean, ready: boolean): { shots: string[]; things: number } {
   const [shots, setShots] = useState<string[]>([])
+  const [things, setThings] = useState(0)
   useEffect(() => {
     if (pinned) return
     let t = 0
@@ -379,16 +383,23 @@ function useDockedShots(nodeId: string, pinned: boolean): string[] {
       const node = useFreeNodeStore.getState().nodes[nodeId]
       if (!node) return
       const { groups, boards } = useBoardsStore.getState()
-      const next = dockedShots(node, groups, boards)
-      setShots(prev => (prev.length === next.length && prev.every((s, i) => s === next[i]) ? prev : next))
+      const d = docked(node, groups, boards)
+      setThings(d.things)
+      setShots(prev => (prev.length === d.shots.length && prev.every((s, i) => s === d.shots[i]) ? prev : d.shots))
     }
     const later = () => { window.clearTimeout(t); t = window.setTimeout(work, 150) }
     work()
+    // Clips cut from the film's edit video are its shots once the mixer has
+    // said where each shot starts and ends.
+    // Asked again until the page has loaded its film.
+    const ask = () => { if (ready && !hasFilmPlan()) void loadFilmPlan().then(work) }
+    ask()
+    const again = window.setInterval(ask, 2000)
     const a = useBoardsStore.subscribe(later)
     const b = useFreeNodeStore.subscribe(later)
-    return () => { window.clearTimeout(t); a(); b() }
-  }, [nodeId, pinned])
-  return shots
+    return () => { window.clearTimeout(t); window.clearInterval(again); a(); b() }
+  }, [nodeId, pinned, ready])
+  return { shots, things }
 }
 
 /** The page shows what the cards say: its own whole-film strip hidden, these
@@ -398,13 +409,19 @@ function usePageFollows(ready: boolean, shots: string[]): void {
   useEffect(() => {
     const d = window.vidbarsDesktop
     if (!ready || !d?.mixerCall) return
-    let dead = false, tries = 0
-    // The page answers once it has loaded its film; until then, try again.
+    let dead = false
+    // Kept in step, not set once: the page answers only once it has loaded
+    // its film, and its own start-up (and any jump to a shot in it) puts the
+    // selection back to one shot. So look every so often and put it right.
     const go = async () => {
       if (dead) return
       const ok = await d.mixerCall!('embed')
-      const used = ok && shots.length ? await d.mixerCall!('use', shots) : ok
-      if (!dead && !used && tries++ < 60) window.setTimeout(go, 1000)
+      if (ok && shots.length) {
+        const now = await d.mixerCall!('sel')
+        const same = Array.isArray(now) && now.length === shots.length && shots.every(s => now.includes(s))
+        if (!same) await d.mixerCall!('use', shots)
+      }
+      if (!dead) window.setTimeout(go, ok ? 1500 : 1000)
     }
     void go()
     return () => { dead = true }

@@ -13,6 +13,7 @@ import { useUndoCoordinator } from '../store/undoCoordinator'
 import { getMediaItems, type MediaItem } from '../types/bar'
 import { gridOrder } from './cardGrid'
 import { resolveMediaUrl } from './useResolvedMedia'
+import { shotsInFilmRange } from './filmPlan'
 
 export interface RoughClip {
   id: string
@@ -202,7 +203,7 @@ export function setRoughCut(nodeId: string, patch: Partial<RoughCutData>, checkp
  *  Rough Cut is docked to it. */
 export function roughCutShots(node: FreeNodeData): string[] {
   const clips = [...placed(node.roughCut?.clips ?? [])].sort((a, b) => clipStart(a) - clipStart(b) || clipRow(a) - clipRow(b))
-  return clips.flatMap(c => (c.shot ? [c.shot] : []))
+  return clips.flatMap(c => (c.shot ? [c.shot] : c.kind === 'video' ? shotsInFilmRange(c.full, c.in, c.out) : []))
 }
 
 /** A clip as a card's media, its trim kept: what a clip dragged out becomes. */

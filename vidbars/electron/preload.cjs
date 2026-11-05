@@ -102,7 +102,7 @@ contextBridge.exposeInMainWorld('vidbarsDesktop', {
   mixerFrame: (job) => ipcRenderer.invoke('vb:mixer-frame', job),
 
   /** Drive the mixer's page from the canvas: 'shots' lists what it can mix,
-   *  'embed' hides its own whole-film strip, 'use' selects these shots,
+   *  'embed' hides its own whole-film strip, 'use' selects these shots, 'sel' says which are,
    *  'go' goes to one. Shot names only. */
   mixerCall: (op, clips) => ipcRenderer.invoke('vb:mixer-call', op, clips),
 

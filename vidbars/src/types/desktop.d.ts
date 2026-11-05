@@ -60,7 +60,9 @@ export interface VidbarsDesktop {
     /** Null on a graphics-only shot. */
     look: Record<string, number> | null
   } | null>
-  mixerCall?(op: 'shots', clips?: string[]): Promise<{ k: number; clip: string; look: boolean; n: number }[] | null>
+  mixerCall?(op: 'shots', clips?: string[]): Promise<{ k: number; clip: string; look: boolean; n: number; start: number | null; end: number | null }[] | null>
+  mixerCall?(op: 'sel', clips?: string[]): Promise<string[] | null>
+  mixerCall?(op: 'film', clips?: string[]): Promise<{ frames: number; shots: { clip: string; start: number; end: number }[] } | null>
   mixerCall?(op: 'embed' | 'use' | 'go', clips?: string[]): Promise<unknown>
   mixerThumb?(seg: number): Promise<string | null>
   mixerFrame?(job: { seg: number; i: number; look: Record<string, number> | null; card: boolean }):
