@@ -43,12 +43,12 @@ const easeInOut = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t 
 type Phase = { drop: number; slide: number }
 /** Folding at time t (0..1): the cards go in (cardsIn), then the line
  *  drops and slides in. */
-const foldAt = (t: number): Phase => ({ drop: easeOut(clamp01((t - 0.42) / 0.3)), slide: easeInOut(clamp01((t - 0.52) / 0.48)) })
-const cardsIn = (t: number) => easeInOut(clamp01(t / 0.5))
+const foldAt = (t: number): Phase => ({ drop: easeOut(clamp01((t - 0.45) / 0.25)), slide: easeInOut(clamp01((t - 0.52) / 0.48)) })
+const cardsIn = (t: number) => easeInOut(clamp01(t / 0.45))
 /** Showing: the line slides out and rises, then the cards jump out
  *  (cardsOut). */
-const showAt = (t: number): Phase => ({ slide: 1 - easeInOut(clamp01(t / 0.4)), drop: 1 - easeOut(clamp01((t - 0.3) / 0.28)) })
-const cardsOut = (t: number) => easeOut(clamp01((t - 0.5) / 0.5))
+const showAt = (t: number): Phase => ({ slide: 1 - easeInOut(clamp01(t / 0.38)), drop: 1 - easeOut(clamp01((t - 0.3) / 0.25)) })
+const cardsOut = (t: number) => easeOut(clamp01((t - 0.55) / 0.45))
 
 /** The side of card `g` the line slides into (node units of `n`): the side
  *  facing the storyline, half way down. */
@@ -74,22 +74,37 @@ function playChart(nodeId: string, to: { x: number; y: number }, ride: Ride[], a
     return { transform: `translate(${(p.x - c.x) * zoom}px, ${(p.y - c.y) * zoom}px)`, o: p.o }
   })]))
   // Each card's elements ride; one drawn anew part way (React may redraw a
-  // card it has just put down) picks the ride up where it has got to.
+  // card it has just put down) picks the ride up where it has got to, and
+  // is hidden till then, so no card shows before its time (Brian
+  // 2026-11-05: showing, the cards are the very last thing to appear;
+  // folding, the very first to go).
+  const sel = (id: string) => `[data-layer-card="${id}"], [data-card-header="${id}"], [data-primary-rail="${id}"]`
+  const hide = document.createElement('style')
+  hide.textContent = `${ride.flatMap(c => sel(c.id).split(', ').map(x => `${x}:not([data-chart-riding])`)).join(', ')} { opacity: 0 !important; }`
+  if (ride.length) document.head.appendChild(hide)
+  const fades: Animation[] = []
   const riding = new WeakSet<Element>()
   const ridden = (ms: number) => {
     for (const [id, f] of frames) {
-      for (const el of document.querySelectorAll(`[data-layer-card="${id}"], [data-card-header="${id}"], [data-primary-rail="${id}"]`)) {
+      for (const el of document.querySelectorAll(sel(id))) {
         if (riding.has(el)) continue
         riding.add(el)
+        el.setAttribute('data-chart-riding', '')
         const how = { duration: MOTION_MS, easing: 'linear', fill: hold ? 'forwards' : 'none' } as const
         const a = (el as HTMLElement).animate(f.map(k => ({ transform: k.transform })), { ...how, composite: 'add' })
-        const b = (el as HTMLElement).animate(f.map(k => ({ opacity: k.o })), how)
+        const b = (el as HTMLElement).animate(f.map(k => ({ opacity: k.o })), { ...how, fill: 'forwards' })
+        fades.push(b)
         a.currentTime = ms
         b.currentTime = ms
       }
     }
   }
-  play(MOTION_MS, (t, ms) => { ridden(ms); setChartMotion(nodeId, { ...phase(t), to }) }, done)
+  play(MOTION_MS, (t, ms) => { ridden(ms); setChartMotion(nodeId, { ...phase(t), to }) }, () => {
+    // Showing, the cards stay shown; folding, hidden till they go.
+    if (!hold) { hide.remove(); fades.forEach(b => b.cancel()); document.querySelectorAll('[data-chart-riding]').forEach(e => e.removeAttribute('data-chart-riding')) }
+    done()
+    if (hold) requestAnimationFrame(() => hide.remove())
+  })
 }
 
 /** The cards that go with these dots, as the storyline moves them
