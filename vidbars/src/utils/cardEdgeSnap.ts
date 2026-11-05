@@ -8,6 +8,7 @@
 // places freely. The reach is a few screen px, but never more than a small
 // share of the card itself, so zoomed far out it stays tight to the cards.
 
+import { liveLocks, lockOf } from './deckLock'
 import type { ProjectGroup, BoardData } from '../store/boardsStore'
 import { cardVisualRect, canvasObstacleGroups, isHiddenDeckMember } from '../hooks/useCardDecks'
 
@@ -50,7 +51,10 @@ export function cardEdgeSnapFor(
   if (!rel) return null
   rel = { left: rel.left - anchor.originX, right: rel.right - anchor.originX, top: rel.top - anchor.originY, bottom: rel.bottom - anchor.originY }
   const others: Rect[] = []
+  // A locked card or deck (utils/deckLock) pulls nothing onto it.
+  const live = liveLocks(groups)
   for (const g of canvasObstacleGroups(groups, dragging)) {
+    if (lockOf(g, live)) continue
     const v = cardVisualRect(g, boards, zoom)
     if (v) others.push(v.rect)
   }

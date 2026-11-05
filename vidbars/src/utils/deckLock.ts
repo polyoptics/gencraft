@@ -5,15 +5,21 @@
 // under it where they are. Unlocked, it goes back to touching rules.
 // Every card of the deck carries the lock (ProjectGroup.deckLock, the id
 // of the card that was primary when it was locked); the lock counts only
-// while two or more cards carry it.
+// while two or more cards carry it, or a card carries its own.
 
 import type { ProjectGroup } from '../store/boardsStore'
 
-/** Lock ids carried by two or more cards: the locks that hold. */
+/** The locks that hold: carried by two or more cards, or a card's lock of
+ *  its own (a single card locked with its chain on a storyline: it joins
+ *  nothing it touches). */
 export function liveLocks(groups: ProjectGroup[]): Set<string> {
   const n = new Map<string, number>()
-  for (const g of groups) if (g.deckLock) n.set(g.deckLock, (n.get(g.deckLock) ?? 0) + 1)
-  return new Set([...n].filter(([, c]) => c >= 2).map(([k]) => k))
+  const own = new Set<string>()
+  for (const g of groups) if (g.deckLock) {
+    n.set(g.deckLock, (n.get(g.deckLock) ?? 0) + 1)
+    if (g.deckLock === g.id) own.add(g.id)
+  }
+  return new Set([...n].filter(([k, c]) => c >= 2 || own.has(k)).map(([k]) => k))
 }
 
 /** The lock card `g` is held by (undefined: none). */

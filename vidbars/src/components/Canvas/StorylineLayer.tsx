@@ -76,7 +76,8 @@ import { snapToDots } from '../../utils/dotGrid'
 import { bakeStoryline } from '../../utils/chartCard'
 import { morphStoryline, useChartMotion } from '../../utils/chartMotion'
 import { onRows, openDeckOf, rowOf, rowsSeen } from '../../utils/primaryCard'
-import { isHiddenDeckMember } from '../../hooks/useCardDecks'
+import { expandWithNestedMembers, isHiddenDeckMember } from '../../hooks/useCardDecks'
+import { liveLocks, lockOf } from '../../utils/deckLock'
 import { setStoryWallOf } from '../../utils/wallRoom'
 import { PRESET_COLORS, TextFormatToolbar, ensureFontLoaded, hexToRgba, type TextFieldMode } from '../UI/TextFormatToolbar'
 import {
@@ -1243,7 +1244,13 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
           if (!p) return null
           const above = decksAbove(d, byId, p)
           const reach = (RING_HIT + 3) * px
-          return <StoryDecks key={b} nodeId={id} dotId={b} x={p.x} y={above ? p.y - reach : p.y + reach} side={above ? 'above' : 'below'} px={px} />
+          return (
+            <React.Fragment key={b}>
+              <StoryDecks nodeId={id} dotId={b} x={p.x} y={above ? p.y - reach : p.y + reach} side={above ? 'above' : 'below'} px={px} />
+              {/* Beside it, to its right: lock the chain (StoryLock). */}
+              <StoryLock nodeId={id} dotId={b} x={p.x + 24 * px} y={above ? p.y - reach : p.y + reach} side={above ? 'above' : 'below'} px={px} />
+            </React.Fragment>
+          )
         })}
         {sel && byId.get(sel) && (() => {
           const p = byId.get(sel)!
@@ -1481,6 +1488,86 @@ function chainDecks(nodeId: string, dotId: string): { closed: string[][]; open: 
     if (!row.some(m => elsewhere.has(m) && !mine.has(m))) open.push(row)
   }
   return { closed, open }
+}
+
+/** Every card on base dot `dotId`'s chain, as the locks they take
+ *  (utils/deckLock): each deck (closed, or an open row) under its front or
+ *  primary card, with the cards hidden in it; a card in no deck alone. */
+function chainLocks(nodeId: string, dotId: string): Map<string, string[]> {
+  const nodes = useFreeNodeStore.getState().nodes
+  const d = nodes[nodeId]?.storyline
+  const out = new Map<string, string[]>()
+  if (!d?.dots) return out
+  const chain = downstream(d, dotId)
+  const groups = useBoardsStore.getState().groups
+  const byId = new Map(groups.map(g => [g.id, g]))
+  const taken = new Set<string>()
+  const { closed, open } = chainDecks(nodeId, dotId)
+  for (const ids of [...closed, ...open]) {
+    const all = expandWithNestedMembers(ids, groups).filter(id => !taken.has(id))
+    all.forEach(id => taken.add(id))
+    if (all.length) out.set(ids[0], all)
+  }
+  for (const p of d.dots) if (chain.has(p.id)) for (const c of p.cards ?? []) {
+    const f = shownAs(c, byId)
+    if (!byId.has(f) || taken.has(f)) continue
+    const row = rowOf(f)
+    if (row && row.length > 1) continue // a row the chain does not own
+    taken.add(f)
+    out.set(f, expandWithNestedMembers([f], groups))
+  }
+  return out
+}
+
+/** A base dot's lock button (Brian 2026-11-05): locks every deck and card
+ *  on its chain, so dragged over other cards the chart picks none up and
+ *  nothing snaps to it; again to unlock them. One label and icon; lit
+ *  while all of them are locked. Faint when its chain has no cards. */
+const StoryLock: React.FC<{ nodeId: string; dotId: string; x: number; y: number; side: Side; px: number }> = ({ nodeId, dotId, x, y, side, px }) => {
+  const groups = useBoardsStore(s => s.groups)
+  useFreeNodeStore(s => s.nodes)
+  useSyncExternalStore(onRows, rowsSeen)
+  const locks = chainLocks(nodeId, dotId)
+  const byId = new Map(groups.map(g => [g.id, g]))
+  const live = liveLocks(groups)
+  const ids = [...locks.values()].flat()
+  const lit = ids.length > 0 && ids.every(id => !!lockOf(byId.get(id), live))
+  const none = !ids.length
+  return (
+    <AtScreen x={x} y={y} px={px} side={side}>
+    <button
+      data-role="ui"
+      data-story-lock={dotId}
+      title="Lock every deck and card on this chain; click again to unlock them"
+      aria-pressed={lit}
+      onPointerDown={e => e.stopPropagation()}
+      onClick={e => {
+        e.stopPropagation()
+        const now = chainLocks(nodeId, dotId)
+        if (!now.size) return
+        useUndoCoordinator.getState().checkpoint()
+        const bs = useBoardsStore.getState()
+        if (lit) { for (const all of now.values()) for (const id of all) bs.setDeckLock(id, null); return }
+        for (const [front, all] of now) {
+          if (all.length > 1) bs.setRowPrimary(front, all)
+          bs.setDeckLock(front, all)
+        }
+      }}
+      style={{
+        display: 'block', width: 20, height: 16, padding: 0, borderRadius: 4, cursor: 'pointer',
+        background: lit ? C_POINT : 'rgba(14,15,26,0.92)',
+        border: `1px solid ${lit ? C_POINT : 'rgba(140,170,255,0.4)'}`,
+        opacity: none ? 0.4 : 1,
+      }}
+    >
+      <svg width={18} height={14} viewBox="0 0 18 14" style={{ display: 'block' }}>
+        {/* A padlock, drawn like the decks button's cards. */}
+        <rect x={5} y={6} width={8} height={6} rx={1} fill="none" stroke={lit ? '#12131f' : 'rgba(196,208,255,0.85)'} strokeWidth={1.2} />
+        <path d="M6.8 6 V4.4 a2.2 2.2 0 0 1 4.4 0 V6" fill="none" stroke={lit ? '#12131f' : 'rgba(196,208,255,0.85)'} strokeWidth={1.2} />
+      </svg>
+    </button>
+    </AtScreen>
+  )
 }
 
 /** A base dot's decks button: opens every deck on its chain, or — with all
