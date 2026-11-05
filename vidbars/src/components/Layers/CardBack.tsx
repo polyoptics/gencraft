@@ -155,7 +155,9 @@ const BackField: React.FC<{
   drop?: string
   /** Lit as a place to let go: a link is being dragged. */
   lit?: boolean
-}> = ({ value, placeholder, editing, onStart, onCommit, onCancel, style, field, where, shown, onPick, drop, lit }) => {
+  /** Long text runs onto more lines instead of being cut. */
+  wrap?: boolean
+}> = ({ value, placeholder, editing, onStart, onCommit, onCancel, style, field, where, shown, onPick, drop, lit, wrap }) => {
   const [draft, setDraft] = useState(value)
   const inputRef = useRef<HTMLInputElement>(null)
   const done = useRef(false)
@@ -200,7 +202,8 @@ const BackField: React.FC<{
       data-link-drop={drop}
       {...click}
       style={{
-        ...style, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        ...style, minWidth: 0, overflow: 'hidden',
+        ...(wrap ? { whiteSpace: 'normal', overflowWrap: 'anywhere' } : { textOverflow: 'ellipsis', whiteSpace: 'nowrap' }),
         cursor: shown !== undefined ? 'pointer' : 'text', padding: '0 2px', borderRadius: 2,
         border: lit ? '1px dashed rgba(255,255,255,0.7)' : '1px solid transparent',
         background: lit ? 'rgba(255,255,255,0.08)' : undefined,
@@ -335,6 +338,14 @@ export const CardBack: React.FC<{
   // Laid out at a new card's size, then scaled to this card.
   const s = Math.max(0.01, Math.min(width / BACK_W, height / BACK_H))
   const w = width / s, h = height / s
+  // More details below than the back shows (it fades out at the bottom).
+  const listRef = useRef<HTMLDivElement>(null)
+  const [more, setMore] = useState(false)
+  const checkMore = () => {
+    const el = listRef.current
+    setMore(!!el && el.scrollTop + el.clientHeight < el.scrollHeight - 1)
+  }
+  useLayoutEffect(checkMore)
 
   const cur = () => useBoardsStore.getState().groups.find(g => g.id === groupId)?.details ?? []
   const write = (next: CardDetail[]) => {
@@ -462,8 +473,14 @@ export const CardBack: React.FC<{
       ...rel.map(r => ({ key: family.id + ':' + r.label, k: r.label.toUpperCase(), v: r.cards.map(c => c.name || 'Untitled').join(', '), dot: r.cards[0].color, attr: { 'data-kin-rel': r.label } })),
     ]),
   ]
-  const longest = Math.max(4, ...details.map(d => d.name.length), ...readRows.map(r => r.k.length))
-  const cols = `${Math.round(Math.min(w * 0.58, Math.max(w * 0.3, longest * 5.6 + 10)))}px minmax(0, 1fr)`
+  // Every detail is its name, small, over its value, which gets the
+  // card's whole width: the same on every card shape.
+  const rowStyle: React.CSSProperties = {
+    position: 'relative', display: 'flex', flexDirection: 'column', gap: 0,
+    borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: 2,
+  }
+  const labelStyle: React.CSSProperties = { fontSize: 6.5, fontWeight: 700, color: ink, opacity: 0.8, textTransform: 'uppercase', letterSpacing: 0.4, lineHeight: '9px' }
+  const valueStyle: React.CSSProperties = { fontSize: 10, fontWeight: 500, color: 'rgba(255,255,255,0.95)', lineHeight: '12px' }
   const typeMenu = (): MenuItem[] => {
     const bs = useBoardsStore.getState()
     const me = bs.groups.find(g => g.id === groupId)
@@ -561,8 +578,15 @@ export const CardBack: React.FC<{
         </div>
         <div
           data-wheel-own
+          ref={listRef}
+          onScroll={checkMore}
           onWheel={e => { const el = e.currentTarget; if (el.scrollHeight > el.clientHeight + 1) e.stopPropagation() }}
-          style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', display: 'flex', flexDirection: 'column', gap: 2, scrollbarWidth: 'thin' }}
+          style={{
+            flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', display: 'flex', flexDirection: 'column', gap: 2, scrollbarWidth: 'none',
+            // No scrollbar: the details use the whole back; a soft fade at
+            // the bottom says there is more to wheel down to.
+            ...(more ? { maskImage: 'linear-gradient(to bottom, #000 calc(100% - 14px), transparent)', WebkitMaskImage: 'linear-gradient(to bottom, #000 calc(100% - 14px), transparent)' } : null),
+          }}
         >
           {/* A faction: its members, by rank. */}
           {type === 'faction' && me && (
@@ -707,10 +731,7 @@ export const CardBack: React.FC<{
                 data-card-detail-row={d.id}
                 onPointerEnter={() => setRowHover(d.id)}
                 onPointerLeave={() => setRowHover(r => r === d.id ? null : r)}
-                style={{
-                  position: 'relative', display: 'grid', gridTemplateColumns: cols, alignItems: 'baseline', gap: 3,
-                  borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: 1,
-                }}
+                style={rowStyle}
               >
                 <BackField
                   field="name"
@@ -721,7 +742,7 @@ export const CardBack: React.FC<{
                   onStart={() => setEditing({ id: d.id, part: 'name' })}
                   onCommit={(v, n) => commit(d.id, 'name', v, n)}
                   onCancel={() => cancel(d.id)}
-                  style={{ fontSize: 8, fontWeight: 700, color: ink, opacity: 0.85, textTransform: 'uppercase', letterSpacing: 0.2 }}
+                  style={labelStyle}
                 />
                 <BackField
                   field="value"
@@ -736,7 +757,8 @@ export const CardBack: React.FC<{
                   onPick={e => setMenu({ x: e.clientX, y: e.clientY, kind: 'link', id: d.id })}
                   drop={`detail:${groupId}:${d.id}`}
                   lit={linking}
-                  style={{ fontSize: 10, fontWeight: 500, color: 'rgba(255,255,255,0.95)' }}
+                  wrap
+                  style={valueStyle}
                 />
                 {rowHover === d.id && !editing && !linking && (
                   <button
@@ -761,12 +783,9 @@ export const CardBack: React.FC<{
           {/* The factions it is in, read from them: name, rank and boss;
               the families: name, and its kin there. */}
           {readRows.map(({ key, k, v, dot, attr }) => (
-            <div key={key} {...attr} style={{
-              display: 'grid', gridTemplateColumns: cols, alignItems: 'baseline', gap: 3,
-              borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: 1,
-            }}>
-              <div title={k} style={{ fontSize: 8, fontWeight: 700, color: ink, opacity: 0.85, letterSpacing: 0.2, padding: '0 3px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{k}</div>
-              <div title={v} style={{ fontSize: 10, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', padding: '0 3px' }}>
+            <div key={key} {...attr} style={rowStyle}>
+              <div title={k} style={{ ...labelStyle, padding: '0 3px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{k}</div>
+              <div title={v} style={{ ...valueStyle, overflowWrap: 'anywhere', padding: '0 3px' }}>
                 {dot ? <LinkShown text={v} color={dot} whole /> : v}
               </div>
             </div>
