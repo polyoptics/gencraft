@@ -127,12 +127,6 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
   })
   const openRow = groupId ? rowOf(groupId) : undefined
   const isFace = !!groupId && (mode.kind === 'deckPreview' || (!!openRow && openRow.length > 1 && openRow[0] === groupId))
-  // Flip (Brian 2026-11-05): beside the Lock, it turns over the card the
-  // face shows: in a fan, the card picked from it, else the face card.
-  const pickedInFan = useCanvasStore(s => groupId && group?.deckState === 'fanned' ? s.deckPortalSelections[groupId] : undefined)
-  const flipId = pickedInFan ?? groupId
-  const flipCard = useBoardsStore(s => flipId ? s.groups.find(g => g.id === flipId) : undefined)
-  const flipLit = !!flipCard?.flipped
   const hasRefs = useBoardsStore(s => !!groupId && getBackRefs(groupId, s.groups).length > 0)
   // A linked card's master (utils/linkedCards), while it is still there.
   const linkMasterId = useBoardsStore(s => {
@@ -507,37 +501,6 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
       </svg>
     </div>
   ) : null
-  const flipEl = isFace && flipCard && !flipCard.effect ? (
-    <div
-      data-card-flip
-      title="Flip the card on the face over"
-      onPointerDown={e => e.stopPropagation()}
-      onDoubleClick={e => e.stopPropagation()}
-      onClick={e => {
-        e.stopPropagation()
-        useUndoCoordinator.getState().checkpoint()
-        useBoardsStore.getState().setGroupFlipped(flipCard.id, !flipCard.flipped)
-      }}
-      style={{
-        flex: '0 0 auto', marginLeft: goEl || hasRefs || isTiny ? 0 : 'auto',
-        width: lockH, height: lockH,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        borderRadius: Math.max(1 * ov, screenHeight * 0.12),
-        background: flipLit ? 'rgba(127,209,255,0.32)' : 'transparent',
-        color: flipLit ? 'rgba(127,209,255,0.98)' : 'rgba(255,255,255,0.55)',
-        cursor: 'pointer',
-        transition: 'background 0.12s, color 0.12s',
-      }}
-    >
-      <svg width={lockH * 0.8} height={lockH * 0.8} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        {/* A card, and the arrow that turns it over (as the card's own Flip). */}
-        <rect x="2" y="5.5" width="6.5" height="8.5" rx="1" />
-        <path d="M10.5 13.5 h2 a1 1 0 0 0 1 -1 v-6" strokeDasharray="1.6 1.6" />
-        <path d="M4.5 3.2 C6.5 0.8 11 1.2 12.6 4.3" />
-        <path d="M12.9 1.9 L12.7 4.5 L10.2 4.1" />
-      </svg>
-    </div>
-  ) : null
   const lockEl = isFace && groupId ? (
     <div
       data-deck-lock
@@ -557,7 +520,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
         bs.setDeckLock(groupId, ids)
       }}
       style={{
-        flex: '0 0 auto', marginLeft: flipEl || goEl || hasRefs || isTiny ? 0 : 'auto',
+        flex: '0 0 auto', marginLeft: goEl || hasRefs || isTiny ? 0 : 'auto',
         width: lockH, height: lockH,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         borderRadius: Math.max(1 * ov, screenHeight * 0.12),
@@ -662,7 +625,6 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
           <div style={{ flex: '0 0 auto', marginLeft: 'auto', display: 'flex' }}><BackRefDot groupId={groupId} size={lockH} /></div>
         )}
         {goEl}
-        {flipEl}
         {lockEl}
         {headerIcon && <div style={{ flex: '0 0 auto', marginLeft: lockEl || goEl || hasRefs || isTiny ? 0 : 'auto' }}>{headerIcon}</div>}
       </div>

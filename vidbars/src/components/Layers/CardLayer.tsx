@@ -2206,6 +2206,18 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
             )
           })()}
 
+          {/* Flip, on hover as on a card: turns the face card over. */}
+          {!anchorGroup.effect && (
+            <FlipButton
+              flipped={!!anchorGroup.flipped}
+              onFlip={() => { useUndoCoordinator.getState().checkpoint(); useBoardsStore.getState().setGroupFlipped(anchorGroup.id, !anchorGroup.flipped) }}
+              baseColor={anchorGroup.color}
+              size={Math.min(32, Math.max(8, 16 * overviewScale(zoom), headerScreenH(zoom) * 0.85))}
+              visible={isHovered}
+              style={{ top: headerPad + CARD_TOOL_INSET, left: CARD_TOOL_INSET }}
+            />
+          )}
+
           {/* Drag-out — ONE grip for the whole deck: the face on top, as the
               arrows left it; Shift, every image in every card. Sized to
               this pen, which keeps its own (unscaled) formula above. Inside
@@ -3387,7 +3399,21 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[]; lay
         const fanIds = [anchorGroup.id, ...secondaryItems.flatMap(it => it.kind === 'real' ? [it.group.id] : [])]
         const frontId = portalMemberId && fanIds.includes(portalMemberId) ? portalMemberId : anchorGroup.id
         const ids = [frontId, ...fanIds.filter(id => id !== frontId)]
+        // Flip, on hover as on a card: turns over the card the face shows,
+        // the one picked from the fan, else the face card.
+        const shown = allGroups.find(g => g.id === frontId)
         return (
+          <>
+          {shown && !shown.effect && (
+            <FlipButton
+              flipped={!!shown.flipped}
+              onFlip={() => { useUndoCoordinator.getState().checkpoint(); useBoardsStore.getState().setGroupFlipped(shown.id, !shown.flipped) }}
+              baseColor={shown.color}
+              size={Math.min(32, Math.max(8, 16 * overviewScale(zoom), headerScreenH(zoom) * 0.85))}
+              visible={isHovered}
+              style={{ top: headerPad + CARD_TOOL_INSET, left: faceX + CARD_TOOL_INSET, zIndex: Math.max(22, secondaryItems.length + 4) }}
+            />
+          )}
           <CardFaceDragOut
             url={deckGripUrl(ids)}
             getUrls={({ all }) => deckDragOutUrls(ids, all)}
@@ -3396,6 +3422,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[]; lay
             faceRightOffset={lefty ? 0 : totalFanWidth - screenWidth}
             zIndex={Math.max(21, secondaryItems.length + 3)}
           />
+          </>
         )
       })()}
 
@@ -4125,6 +4152,16 @@ const DeckAffordance: React.FC<{ cluster: string[]; front: Deck | 'card' | null;
         {/* The front card's Flip, for the same reason as its drag-out: the
             zone covers the card's own. Turned over, the zone lets presses
             through and the card's own Flip takes them. */}
+        {primaryGroup && front === 'card' && !primaryGroup.effect && !frontFlipped && (
+          <FlipButton
+            flipped={false}
+            onFlip={() => useBoardsStore.getState().setGroupFlipped(primaryGroup.id, true)}
+            baseColor={primaryGroup.color}
+            size={Math.min(32, Math.max(8, 16 * overviewScale(zoom), headerScreenH(zoom) * 0.85))}
+            visible={isHovered}
+            style={{ top: computeHeaderExtend(zoom) + CARD_TOOL_INSET, left: CARD_TOOL_INSET }}
+          />
+        )}
         {primaryGroup && front === 'card' && (
           <CardFaceDragOut
             url={isHovered ? cardGripUrl(primaryGroup, boards) : null}
