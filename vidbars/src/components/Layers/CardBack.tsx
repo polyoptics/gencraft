@@ -414,7 +414,20 @@ export const CardBack: React.FC<{
   const commit = (id: string, part: 'name' | 'value', v: string, next?: 'next' | 'prev') => {
     const rows = cur()
     const row = rows.find(d => d.id === id)
-    if (row && row[part] !== v) write(rows.map(d => d.id === id ? { ...d, [part]: v } : d))
+    if (row && row[part] !== v) {
+      write(rows.map(d => d.id === id ? { ...d, [part]: v } : d))
+      // A value set on one of several selected cards: the other selected
+      // cards that have a detail of the same name get it too (not linked ones).
+      const bs = useBoardsStore.getState()
+      const key = row.name.trim().toLowerCase()
+      if (part === 'value' && key && bs.selectedGroupIds.length > 1 && bs.selectedGroupIds.includes(groupId)) {
+        for (const other of bs.groups) {
+          if (other.id === groupId || !bs.selectedGroupIds.includes(other.id) || !other.details) continue
+          if (!other.details.some(d => !d.link && d.name.trim().toLowerCase() === key && d.value !== v)) continue
+          bs.setGroupDetails(other.id, other.details.map(d => !d.link && d.name.trim().toLowerCase() === key ? { ...d, value: v } : d))
+        }
+      }
+    }
     // Done with a row, or tabbed off its value: an empty row goes.
     if (!next || part === 'value') dropIfEmpty(id)
     if (!next) { setEditing(null); return }
