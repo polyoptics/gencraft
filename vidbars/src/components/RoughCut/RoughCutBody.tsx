@@ -12,7 +12,7 @@ import { useResolvedMedia } from '../../utils/useResolvedMedia'
 import { useCutPlay } from '../../utils/cutMedia'
 import { openRoughCutViewer, playRoughCut, RoughCutScreen } from './RoughCutScreen'
 import { findCuts } from '../../utils/shotDetect'
-import { clipOutMedia, deckOfPicks, shotFrameTime } from '../../utils/roughCutPicks'
+import { clipOutMedia, deckOfPicks, shotFrameTime, togglePickAt } from '../../utils/roughCutPicks'
 import { useClipFrame } from '../../utils/clipFrames'
 import {
   appendCards, splitClipAt, FILM_FPS, clipAt, clipLength, clipRow, clipStart, clipEnd, cutLength, MIN_CLIP, placed, setRoughCut, type RoughClip,
@@ -599,6 +599,25 @@ const Preview: React.FC<{ id: string; clips: RoughClip[]; shot: string | null; e
     <div style={{ width: 476, height: PREVIEW_H - 32, flexShrink: 0, background: '#000', borderRadius: 8, overflow: 'hidden', position: 'relative' }}>
       <RoughCutScreen cutId={id} clips={clips} muted />
       {empty && <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', color: 'rgba(255,255,255,0.35)' }}>No clips yet</div>}
+      {!empty && <PreviewBar id={id} clips={clips} />}
+    </div>
+  )
+}
+
+/** Play and Pick on the preview itself, to choose shots while watching there. */
+const PreviewBar: React.FC<{ id: string; clips: RoughClip[] }> = ({ id, clips }) => {
+  const playing = useCutPlay(s => s.playing === id)
+  const t = useCutPlay(s => s.t[id] ?? 0)
+  const picked = !!clipAt(clips, t)?.clip.pick
+  const b = (lit: boolean, color: string): React.CSSProperties => ({
+    height: 28, padding: '0 12px', borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, fontWeight: 600,
+    color: '#fff', background: lit ? color : 'rgba(0,0,0,0.55)', border: '1px solid rgba(255,255,255,0.25)',
+  })
+  return (
+    <div onPointerDown={e => e.stopPropagation()} style={{ position: 'absolute', left: 8, bottom: 8, display: 'flex', gap: 6 }}>
+      <button data-rough-preview-play="" style={b(playing, 'rgba(255,179,92,0.55)')} onClick={() => playRoughCut(id, !playing)}>Play</button>
+      <button data-rough-preview-pick="" style={b(picked, 'rgba(255,200,80,0.55)')} title="Pick the shot playing now, or unpick it (P)"
+        onClick={() => togglePickAt(id, useCutPlay.getState().t[id] ?? 0)}>Pick</button>
     </div>
   )
 }
