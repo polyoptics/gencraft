@@ -740,6 +740,26 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
         useMagnetPreviewStore.getState().setPreview(null)
         return
       }
+      // Let go over a faction's or a family's back (turned over): the cards
+      // join it as members, as their link "+" does, and go back to where
+      // they were picked up. Never merged into it as blocks. The press took
+      // the checkpoint: one undo puts it all back.
+      if (!group.pin && moved) {
+        const bs = useBoardsStore.getState()
+        const own = new Set(draggingIds)
+        const hit = cardHitAt(document.elementsFromPoint(ev.clientX, ev.clientY).filter(el => {
+          const c = (el as HTMLElement).closest?.('[data-layer-card]') as HTMLElement | null
+          return !(c && own.has(c.dataset.layerCard ?? ''))
+        }))
+        const back = hit && 'groupId' in hit && !own.has(hit.groupId) ? bs.groups.find(g => g.id === hit.groupId) : undefined
+        if (back?.flipped && (back.cardType === 'faction' || back.cardType === 'family')) {
+          bs.setGroupPosBatch(Array.from(initialOrigins, ([gid, o]) => ({ groupId: gid, originY: o.y, originX: o.x })))
+          endDockedDrag(draggingIds, false)
+          for (const id of picked) if (!bs.groups.find(g => g.id === id)?.effect) bs.linkGroups(back.id, id)
+          useMagnetPreviewStore.getState().setPreview(null)
+          return
+        }
+      }
       // Off a strip: a docked card stays where it was let go.
       endDockedDrag(draggingIds, dxAccum !== 0 || dyAccum !== 0)
       // A plain click on a card docked to a Viewer shows it there.
