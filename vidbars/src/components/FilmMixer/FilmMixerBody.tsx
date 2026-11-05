@@ -6,7 +6,8 @@ import { useTiltStore } from '../../store/tiltStore'
 import { addFreeNodeCentered } from '../../utils/canvasCreate'
 import { useBoardsStore } from '../../store/boardsStore'
 import { cardFaceMedia } from '../../utils/cardGrid'
-import { docked, makeShotCards } from '../../utils/filmShots'
+import { docked, makeShotCards, type DockedClip } from '../../utils/filmShots'
+import { DeckPlayer } from './DeckPlayer'
 import { hasFilmPlan, loadFilmPlan } from '../../utils/filmPlan'
 
 /** The Film Look node: the look mixer, laid out on the canvas like any panel.
@@ -291,7 +292,7 @@ export function FilmMixerBody({ nodeId, pinned, bodyW, bodyH }: { nodeId: string
     return () => document.removeEventListener('pointerdown', onDown, true)
   }, [active])
 
-  const { shots, things } = useDockedShots(nodeId, pinned, ready)
+  const { shots, things, clips } = useDockedShots(nodeId, pinned, ready)
   usePageFollows(ready, shots)
   const [making, setMaking] = useState<string | null>(null)
   const empty = ready && shots.length === 0
@@ -337,7 +338,10 @@ export function FilmMixerBody({ nodeId, pinned, bodyW, bodyH }: { nodeId: string
         </div>
       )}
       {/* Opens empty: it mixes the shot cards docked to it. */}
-      {empty && (
+      {empty && clips.length > 0 && (
+        <DeckPlayer clips={clips} fit={fit} width={bodyW} height={bodyH} />
+      )}
+      {empty && !clips.length && (
         <div data-film-mixer-empty="" style={{
           position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center',
           justifyContent: 'center', gap: 14, background: '#14151c', color: 'rgba(255,255,255,0.7)',
@@ -373,9 +377,10 @@ export function FilmMixerBody({ nodeId, pinned, bodyW, bodyH }: { nodeId: string
 /** The shots on the cards docked to the mixer, worked out again as cards move
  *  (a beat after, not on every frame of a drag). Pinned, it keeps the ones it
  *  had: a pinned mixer has left the canvas its cards are on. */
-function useDockedShots(nodeId: string, pinned: boolean, ready: boolean): { shots: string[]; things: number } {
+function useDockedShots(nodeId: string, pinned: boolean, ready: boolean): { shots: string[]; things: number; clips: DockedClip[] } {
   const [shots, setShots] = useState<string[]>([])
   const [things, setThings] = useState(0)
+  const [clips, setClips] = useState<DockedClip[]>([])
   useEffect(() => {
     if (pinned) return
     let t = 0
@@ -385,6 +390,8 @@ function useDockedShots(nodeId: string, pinned: boolean, ready: boolean): { shot
       const { groups, boards } = useBoardsStore.getState()
       const d = docked(node, groups, boards)
       setThings(d.things)
+      const sig = (l: DockedClip[]) => l.map(c => `${c.key}|${c.url}|${c.in}|${c.out}`).join(',')
+      setClips(prev => (sig(prev) === sig(d.clips) ? prev : d.clips))
       setShots(prev => (prev.length === d.shots.length && prev.every((s, i) => s === d.shots[i]) ? prev : d.shots))
     }
     const later = () => { window.clearTimeout(t); t = window.setTimeout(work, 150) }
@@ -399,7 +406,7 @@ function useDockedShots(nodeId: string, pinned: boolean, ready: boolean): { shot
     const b = useFreeNodeStore.subscribe(later)
     return () => { window.clearTimeout(t); window.clearInterval(again); a(); b() }
   }, [nodeId, pinned, ready])
-  return { shots, things }
+  return { shots, things, clips }
 }
 
 /** The page shows what the cards say: its own whole-film strip hidden, these

@@ -68,9 +68,47 @@ export function dockedShots(node: FreeNodeData, groups: ProjectGroup[], boards: 
   return docked(node, groups, boards).shots
 }
 
-/** The mixer's shots on what is docked to it, and how many cards and Rough
- *  Cuts are docked at all (so an empty mixer can say why it stays empty). */
-export function docked(node: FreeNodeData, groups: ProjectGroup[], boards: Record<string, BoardData>): { shots: string[]; things: number } {
+/** A picture or video on a docked card, as the mixer's deck player plays it:
+ *  from its in point to its out point (seconds; a still is held). */
+export interface DockedClip {
+  key: string
+  label: string
+  kind: 'video' | 'image'
+  url: string
+  poster?: string
+  in: number
+  /** NaN for a video whose length is not known: it plays to its end. */
+  out: number
+}
+
+/** How long a still holds in the deck player when nothing says otherwise. */
+const STILL_HOLD = 2
+
+/** Every picture and video on the docked cards, in the deck's reading order. */
+function clipsOf(cards: ProjectGroup[], boards: Record<string, BoardData>): DockedClip[] {
+  const out: DockedClip[] = []
+  for (const g of cards) {
+    for (const bid of gridOrder(g, boards)) {
+      const b = boards[bid]
+      for (const rid of b.rootIds) {
+        const bar = b.bars[rid]
+        getMediaItems(bar?.content).forEach((m, n) => {
+          if (m.type !== 'video' && m.type !== 'image') return
+          const label = bar?.name || g.name || 'Shot'
+          const key = `${g.id}:${bid}:${n}`
+          if (m.type === 'image') out.push({ key, label, kind: 'image', url: m.url, poster: m.url, in: 0, out: m.clipOut ?? STILL_HOLD })
+          else out.push({ key, label, kind: 'video', url: m.url, poster: m.posterUrl, in: m.clipIn ?? 0, out: m.clipOut ?? m.duration ?? NaN })
+        })
+      }
+    }
+  }
+  return out
+}
+
+/** The mixer's shots on what is docked to it, every clip on the docked cards
+ *  (for the deck player, when there are no shots to mix), and how many cards
+ *  and Rough Cuts are docked at all (so an empty mixer can say why). */
+export function docked(node: FreeNodeData, groups: ProjectGroup[], boards: Record<string, BoardData>): { shots: string[]; things: number; clips: DockedClip[] } {
   const seen = new Set<string>()
   const out: string[] = []
   const cards = dockedCards(node, groups, boards)
@@ -86,7 +124,7 @@ export function docked(node: FreeNodeData, groups: ProjectGroup[], boards: Recor
     things++
     for (const s of roughCutShots(n)) if (!seen.has(s)) { seen.add(s); out.push(s) }
   }
-  return { shots: out, things }
+  return { shots: out, things, clips: clipsOf(cards, boards) }
 }
 
 /** Every shot the mixer can mix, as a deck of cards below the mixer: one card
