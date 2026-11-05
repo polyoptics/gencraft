@@ -35,20 +35,21 @@ import { useCanvasStore } from '../store/canvasStore'
  *  own elements (moving them in the store every frame redrew every card and
  *  dropped frames). Their positions are written once. While one plays,
  *  another fold or show waits it out. */
-const MOTION_MS = 480
+const MOTION_MS = 560
 let moving = false
 const clamp01 = (t: number) => Math.max(0, Math.min(1, t))
 const easeOut = (t: number) => 1 - Math.pow(1 - t, 3)
 const easeInOut = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2)
-type Phase = { drop: number; slide: number }
-/** Folding at time t (0..1): the cards go in (cardsIn), then the line
- *  drops and slides in. */
-const foldAt = (t: number): Phase => ({ drop: easeOut(clamp01((t - 0.45) / 0.25)), slide: easeInOut(clamp01((t - 0.52) / 0.48)) })
-const cardsIn = (t: number) => easeInOut(clamp01(t / 0.45))
-/** Showing: the line slides out and rises, then the cards jump out
- *  (cardsOut). */
-const showAt = (t: number): Phase => ({ slide: 1 - easeInOut(clamp01(t / 0.38)), drop: 1 - easeOut(clamp01((t - 0.3) / 0.25)) })
-const cardsOut = (t: number) => easeOut(clamp01((t - 0.55) / 0.45))
+type Phase = { drop: number; slide: number; tether: number }
+/** Folding at time t (0..1): the cards go in (cardsIn), their tethers
+ *  pull back into the dots, then the line drops and slides in. */
+const foldAt = (t: number): Phase => ({ tether: 1 - easeInOut(clamp01((t - 0.385) / 0.095)), drop: easeOut(clamp01((t - 0.48) / 0.21)), slide: easeInOut(clamp01((t - 0.54) / 0.46)) })
+const cardsIn = (t: number) => easeInOut(clamp01(t / 0.385))
+/** Showing: the line slides out and rises, the tethers grow out of the
+ *  dots to where the cards will be (Brian 2026-11-05), then the cards jump
+ *  out (cardsOut). */
+const showAt = (t: number): Phase => ({ slide: 1 - easeInOut(clamp01(t / 0.33)), drop: 1 - easeOut(clamp01((t - 0.26) / 0.21)), tether: easeOut(clamp01((t - 0.47) / 0.15)) })
+const cardsOut = (t: number) => easeOut(clamp01((t - 0.62) / 0.38))
 
 /** The side of card `g` the line slides into (node units of `n`): the side
  *  facing the storyline, half way down. */

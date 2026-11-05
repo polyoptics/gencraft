@@ -5,11 +5,12 @@
 //
 // drop  0..1: dots off the base line come down to it (1 = all on it).
 // slide 0..1: the dropped line slides into the card's side (1 = all at `to`).
+// tether 0..1: how far each card's tether reaches from its dot to the card.
 
 import { create } from 'zustand'
 import { rootOf, type StorylineData } from './storyline'
 
-export interface ChartMotion { drop: number; slide: number; to: { x: number; y: number } }
+export interface ChartMotion { drop: number; slide: number; to: { x: number; y: number }; tether?: number }
 
 export const useChartMotion = create<{ m: Record<string, ChartMotion> }>(() => ({ m: {} }))
 
