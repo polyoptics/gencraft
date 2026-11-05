@@ -66,6 +66,7 @@ import { useTiltStore, isTilted, standRise, unprojectTilt, TILT_FAR } from '../.
 import { useWorldZoom } from './worldZoom'
 import { clientToCanvas } from '../../utils/fx/createEffect'
 import { snapToDots } from '../../utils/dotGrid'
+import { bakeStoryline } from '../../utils/chartCard'
 import { onRows, openDeckOf, rowOf, rowsSeen } from '../../utils/primaryCard'
 import { isHiddenDeckMember } from '../../hooks/useCardDecks'
 import { PRESET_COLORS } from '../UI/TextFormatToolbar'
@@ -630,7 +631,7 @@ function deleteStorySelected(list: { node: string; point: string }[], checkpoint
 /** The cards linked to these dots, with their decks' cards (closed, or
  *  open with the linked card as primary: withDeck), where each one is now.
  *  Pinned cards have left the canvas: they stay. */
-function cardOrigins(d: StorylineData, dotIds: Set<string>): Map<string, { x: number; y: number }> {
+export function cardOrigins(d: StorylineData, dotIds: Set<string>): Map<string, { x: number; y: number }> {
   const groups = useBoardsStore.getState().groups
   const byId = new Map(groups.map(g => [g.id, g]))
   const links = linksOf(byId)
@@ -1519,6 +1520,10 @@ const StoryMenu: React.FC<{
     if (!isBaseEdge(d, a, b)) items.push({ label: 'Delete', icon: '🗑️', danger: true, action: () => editStoryline(id, x => ({ ...x, edges: x.edges.filter(e => !((e.a === a && e.b === b) || (e.a === b && e.b === a))) }) ) })
     items.push({ label: 'Delete branch', icon: '🗑️', danger: true, action: () => editStoryline(id, x => deleteBranchFrom(x, far)) })
   }
+  // Fold it into a card: its title, groups and layout (utils/chartCard).
+  if (at.grab && d.dots.some(p => p.cards?.length)) items.push({ label: d.chartCard ? 'Bake back into its card' : 'Bake into a card', icon: '📥', action: () => {
+    bakeStoryline(id, cardOrigins)
+  } })
   if (!at.tether) items.push({ label: 'Delete storyline', icon: '🗑️', danger: true, action: () => {
     useUndoCoordinator.getState().checkpoint()
     useFreeNodeStore.getState().deleteFreeNode(id)

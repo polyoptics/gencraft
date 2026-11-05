@@ -329,10 +329,12 @@ export const CardBack: React.FC<{
   const groups = useBoardsStore(s => s.groups)
   const me = groups.find(g => g.id === groupId)
   const members = type === 'faction' && me ? factionMembers(groups, me) : []
-  const memberOf = factionsOf(groups, groupId)
+  // A linked card is its master shown again: its factions and kin are the master's.
+  const meId = me?.linkOf ?? groupId
+  const memberOf = factionsOf(groups, meId)
   // A family: its tree; any card: the families it is in, and its kin there.
   const tree = type === 'family' && me ? familyTree(groups, me) : []
-  const kinOf = familiesOf(groups, groupId).map(family => ({ family, rel: relationsOf(groups, family, groupId) }))
+  const kinOf = familiesOf(groups, meId).map(family => ({ family, rel: relationsOf(groups, family, meId) }))
   // A card's link "+" being dragged (not this card's own): the details
   // light up as places to let it go.
   const linking = useLinkDragStore(s => s.active && s.source?.kind === 'group' && s.source.id !== groupId)
@@ -603,8 +605,39 @@ export const CardBack: React.FC<{
             ...(more ? { maskImage: 'linear-gradient(to bottom, #000 calc(100% - 14px), transparent)', WebkitMaskImage: 'linear-gradient(to bottom, #000 calc(100% - 14px), transparent)' } : null),
           }}
         >
+          {/* A chart baked into it (utils/chartCard): its groups top to
+              bottom, each led by the card linked to its dot. */}
+          {me?.chart && (
+            <>
+              <div data-chart-groups style={{ fontSize: 7, fontWeight: 800, letterSpacing: 1, color: ink, opacity: 0.6, padding: '1px 2px 0' }}>GROUPS</div>
+              {me.chart.tiers.map((t, i) => {
+                const cards = t.cards.flatMap(id => groups.find(g => g.id === id) ?? [])
+                if (!cards.length) return null
+                return (
+                  <div key={t.dot} data-chart-tier={i + 1} style={{ display: 'flex', flexDirection: 'column', gap: 1, borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: 2 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 3, minHeight: 13 }}>
+                      <RankBadge rank={i + 1} color={color} />
+                      <span style={{ width: 6, height: 6, borderRadius: 2, background: cards[0].color, flexShrink: 0, border: '1px solid rgba(255,255,255,0.5)' }} />
+                      <span style={{ fontSize: 9.5, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+                        {t.title.trim() || cards[0].name || 'Untitled'}
+                      </span>
+                      <span style={{ fontSize: 7.5, opacity: 0.55, flexShrink: 0 }}>{cards.length}</span>
+                    </div>
+                    <div style={{ fontSize: 8.5, lineHeight: 1.3, marginLeft: 7, opacity: 0.85, overflowWrap: 'anywhere' }}>
+                      {cards.map((c, j) => (
+                        <span key={c.id} data-chart-member={c.id} style={{ fontWeight: j === 0 ? 700 : 400 }}>
+                          {j > 0 ? ', ' : ''}{c.name || 'Untitled'}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })}
+              <div style={{ fontSize: 7, fontWeight: 800, letterSpacing: 1, color: ink, opacity: 0.6, padding: '4px 2px 0' }}>DETAILS</div>
+            </>
+          )}
           {/* A faction: its members, by rank. */}
-          {type === 'faction' && me && (
+          {type === 'faction' && me && !me.chart && (
             <>
               <div
                 data-faction-top
@@ -809,7 +842,7 @@ export const CardBack: React.FC<{
               </div>
             )
           })}
-          {details.length === 0 && type !== 'faction' && type !== 'family' && readRows.length === 0 && (
+          {details.length === 0 && type !== 'faction' && type !== 'family' && !me?.chart && readRows.length === 0 && (
             <div style={{ fontSize: 8.5, opacity: 0.45, padding: '2px 2px 0' }}>No details yet.</div>
           )}
           {/* The factions it is in, read from them: name, rank and boss;

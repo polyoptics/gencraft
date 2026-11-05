@@ -6,6 +6,7 @@
 // details by name (detailText).
 
 import type { ProjectGroup } from '../store/boardsStore'
+import { chartRankOf } from './chartData'
 
 /** Where a detail's value comes from when it is linked: another card (its
  *  name), or one detail on it (that detail's value, live). */
@@ -182,6 +183,13 @@ export function factionsOf(groups: ProjectGroup[], cardId: string): { faction: P
   return groups
     .filter(g => g.cardType === 'faction' && (g.linkedGroupIds ?? []).includes(cardId))
     .flatMap(faction => {
+      // A baked chart (utils/chartData): its group counted from the top,
+      // under the card that leads that group.
+      if (faction.chart) {
+        const r = chartRankOf(faction.chart, cardId)
+        const lead = r?.leader ? groups.find(g => g.id === r.leader) : undefined
+        return r ? [{ faction, rank: r.rank, bosses: lead ? [lead] : [] }] : []
+      }
       const m = factionMembers(groups, faction).find(x => x.card.id === cardId)
       return m ? [{ faction, rank: m.rank, bosses: m.bosses }] : []
     })

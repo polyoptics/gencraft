@@ -51,6 +51,9 @@ export interface StorylineData {
   wallFoot?: { x: number; y: number; ux: number; uy: number }
   /** The base line: its dots, left to right, at one height. */
   base?: string[]
+  /** A chart recalled from this card (utils/chartCard): baking it again
+   *  folds it back into the same card. */
+  chartCard?: string
   /** Before dots: lines with points along them (migrateStoryline reads them
    *  once, and they go). */
   lines?: LegacyLine[]

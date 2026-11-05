@@ -168,6 +168,12 @@ export interface ProjectGroup {
   /** A FAMILY's ties: who is whose parent and partner (utils/family). Its
    *  members are the cards it links to (linkedGroupIds). */
   kin?: Kin
+  /** A LINKED card: another showing of this master card (utils/linkedCards).
+   *  An edit on either is an edit on both, and on every other showing. */
+  linkOf?: string
+  /** A chart baked into this card: a storyline and its cards, folded in
+   *  (utils/chartCard). Its back lists the chart's groups. */
+  chart?: import('../utils/chartData').ChartData
 }
 
 /** Find which group a board belongs to */
@@ -1878,7 +1884,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
       // Everything the card IS — its grid layout, face block, effect, size —
       // but not where it belongs: no deck, pin, strip result or links.
       const own: ProjectGroup = { ...group }
-      for (const k of ['deckState', 'deckAnchorId', 'deckOffsetX', 'deckOffsetY', 'deckFaceCard', 'pin', 'railSource', 'railBase', 'deckLastFront'] as const) delete own[k]
+      for (const k of ['deckState', 'deckAnchorId', 'deckOffsetX', 'deckOffsetY', 'deckFaceCard', 'pin', 'railSource', 'railBase', 'deckLastFront', 'linkOf'] as const) delete own[k]
       const faceAt = group.faceBoardId ? group.boardIds.indexOf(group.faceBoardId) : -1
       const newGroup: ProjectGroup = {
         ...own,

@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
 import { useBoardsStore } from './store/boardsStore'
+import { startLinkedCardSync } from './utils/linkedCards'
 import { useCanvasStore } from './store/canvasStore'
 import { useFreeNodeStore } from './store/freeNodeStore'
 import { useUserTemplateStore } from './store/userTemplateStore'
@@ -33,6 +34,9 @@ import { usePickMode } from './utils/cabinetPick'
   // Project cabinets, and the tilted view they rise in.
   useCabinetUi, useTiltStore, usePickMode,
 }
+
+// One card shown in several places: an edit on one is on all (utils/linkedCards).
+startLinkedCardSync()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

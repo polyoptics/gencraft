@@ -68,6 +68,8 @@ import { CARD_TYPES, CARD_TYPE_ORDER, cardTypeOf, typeColor, type CardType } fro
 import { nameKindOf } from '../../utils/fillDetails'
 import { copiedFaceStyle, copyFaceStyle, fillFields } from '../../utils/faceStyle'
 import { showFactionTree } from '../../utils/factionTree'
+import { bakeStoryline, chartOutOf, recallChart } from '../../utils/chartCard'
+import { cardOrigins } from '../Canvas/StorylineLayer'
 import { rowOf, setRows } from '../../utils/primaryCard'
 
 const BOARD_PADDING_X = 20
@@ -185,6 +187,14 @@ const CardContextMenu: React.FC<{
       showFactionTree(group.id)
       onClose()
     }})
+    // A chart baked into it: out where it was, with linked cards; or,
+    // out, folded back in (utils/chartCard).
+    if (group.chart) {
+      const out = chartOutOf(group.id)
+      menuItems.push(out
+        ? { label: 'Bake chart back in', icon: '📥', action: () => { bakeStoryline(out, cardOrigins); onClose() } }
+        : { label: 'Recall chart', icon: '📤', action: () => { recallChart(group.id); onClose() } })
+    }
     // Style: this face's text and how it is set, onto other cards, once
     // (utils/faceStyle). Each shows its own {Name} and details.
     menuItems.push({ label: 'Copy style', icon: '🖌', action: () => { copyFaceStyle(group); onClose() } })
@@ -1079,6 +1089,13 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
           el?.dispatchEvent(new CustomEvent('start-edit', { bubbles: false }))
         }}
       >
+        {/* A linked card (utils/linkedCards): its header hatched with stripes. */}
+        {group.linkOf && headerPad > 0 && (
+          <div data-linked-mark style={{
+            position: 'absolute', left: 0, right: 0, top: 0, height: headerPad, pointerEvents: 'none',
+            background: `repeating-linear-gradient(135deg, rgba(0,0,0,0.38) 0 ${Math.max(1.5, headerPad * 0.18)}px, rgba(255,255,255,0.10) ${Math.max(1.5, headerPad * 0.18)}px ${Math.max(3, headerPad * 0.36)}px)`,
+          }} />
+        )}
         {showBack ? (
           <div style={{ position: 'absolute', top: headerPad, left: 0, right: 0, bottom: 0 }}>
             <CardBack groupId={group.id} color={color} width={screenWidth} height={Math.max(1, cardHeight - headerPad)} hovered={isHovered}
