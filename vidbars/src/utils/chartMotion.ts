@@ -6,12 +6,13 @@
 // drop  0..1: dots off the base line come down to it (1 = all on it).
 // slide 0..1: the dropped line slides sideways into the card's side, at its
 //   own height (1 = all at `to.x`).
+// lead 0..1: the start dot's way to the card's side (1 = at `to.x`).
 // tether 0..1: how far each card's tether reaches from its dot to the card.
 
 import { create } from 'zustand'
 import { rootOf, type StorylineData } from './storyline'
 
-export interface ChartMotion { drop: number; slide: number; to: { x: number; y: number }; tether?: number }
+export interface ChartMotion { drop: number; slide: number; to: { x: number; y: number }; tether?: number; lead?: number }
 
 export const useChartMotion = create<{ m: Record<string, ChartMotion> }>(() => ({ m: {} }))
 
@@ -32,15 +33,20 @@ export function baseYOf(d: StorylineData): number {
 
 /** The storyline as drawn part way through motion `m`. */
 export function morphStoryline(d: StorylineData, m: ChartMotion | undefined): StorylineData {
-  if (!m || (!m.drop && !m.slide)) return d
+  if (!m || (!m.drop && !m.slide && !m.lead)) return d
   const by = baseYOf(d)
+  // Its start dot (and the grab handle beside it) pops out of the card's
+  // side first, as one quick move (`lead`); then the rest grows out of it
+  // sideways (`slide`), at the base line's own height (Brian 2026-11-05:
+  // "it goes pop pop").
+  const start = d.base?.[0] ?? rootOf(d)
+  const s0 = d.dots.find(p => p.id === start)
+  const sx = s0 ? s0.x + (m.to.x - s0.x) * (m.lead ?? m.slide) : m.to.x
   return {
     ...d,
     dots: d.dots.map(p => {
-      const x = p.x, y = p.y + (by - p.y) * m.drop
-      // The slide is sideways only, at the base line's own height (Brian
-      // 2026-11-05: no move, it slides out to the side).
-      return { ...p, x: x + (m.to.x - x) * m.slide, y }
+      const y = p.y + (by - p.y) * m.drop
+      return { ...p, x: p.id === start ? sx : p.x + (sx - p.x) * m.slide, y }
     }),
   }
 }

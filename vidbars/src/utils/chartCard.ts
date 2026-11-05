@@ -40,19 +40,20 @@ let moving = false
 const clamp01 = (t: number) => Math.max(0, Math.min(1, t))
 const easeOut = (t: number) => 1 - Math.pow(1 - t, 3)
 const easeInOut = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2)
-type Phase = { drop: number; slide: number; tether: number }
+type Phase = { drop: number; slide: number; tether: number; lead: number }
 /** Folding at time t (0..1): the cards go (cardsGone), their tethers
- *  pull back into the dots, then the line drops and slides in. */
-const foldAt = (t: number): Phase => ({ tether: 1 - easeInOut(clamp01((t - 0.239) / 0.117)), drop: easeOut(clamp01((t - 0.356) / 0.261)), slide: easeInOut(clamp01((t - 0.429) / 0.571)) })
+ *  pull back into the dots, then the line drops and slides into its start
+ *  dot, which pops into the card. */
+const foldAt = (t: number): Phase => ({ tether: 1 - easeInOut(clamp01((t - 0.239) / 0.117)), drop: easeOut(clamp01((t - 0.356) / 0.261)), slide: easeInOut(clamp01((t - 0.429) / 0.441)), lead: easeOut(clamp01((t - 0.87) / 0.13)) })
 /** The cards don't travel (Brian 2026-11-05): each just appears where it
  *  sits, quickly, one after another from the bottom up, and goes the same
  *  way top down. Card `i` of `n` in that order: shown 0..1 at time t. */
 const POP = 0.044
 const cardsGone = (i: number, n: number, t: number) => 1 - clamp01((t - (0.239 - POP) * (n > 1 ? i / (n - 1) : 0)) / POP)
-/** Showing: the line slides out and rises, the tethers grow out of the
+/** Showing: the start dot pops out, the line grows out of it and rises, the tethers grow out of the
  *  dots to where the cards will be (Brian 2026-11-05), then the cards
  *  appear (cardsShown). */
-const showAt = (t: number): Phase => ({ slide: 1 - easeInOut(clamp01(t / 0.409)), drop: 1 - easeOut(clamp01((t - 0.323) / 0.259)), tether: easeOut(clamp01((t - 0.582) / 0.186)) })
+const showAt = (t: number): Phase => ({ lead: 1 - easeOut(clamp01(t / 0.13)), slide: 1 - easeInOut(clamp01((t - 0.13) / 0.279)), drop: 1 - easeOut(clamp01((t - 0.323) / 0.259)), tether: easeOut(clamp01((t - 0.582) / 0.186)) })
 const cardsShown = (i: number, n: number, t: number) => clamp01((t - 0.768 - (0.232 - POP) * (n > 1 ? i / (n - 1) : 0)) / POP)
 /** Ride order for popping: lowest card first (`up`), else highest. */
 const popOrder = (ride: Ride[], up: boolean) => {
