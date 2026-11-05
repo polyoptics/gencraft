@@ -20,6 +20,11 @@
 //  - Each base dot has a decks button (StoryDecks), away from its branches:
 //    click it to open every deck on its chain (the dot and the branches
 //    hanging off it), again to close them all. Lit while they are open.
+//  - Its label (title and description) sits under the base line from its
+//    start, in canvas units, so it scales with the cards round it. Right-click
+//    the grab handle (or the label): Title and description; double-click the
+//    label to edit it. Pressed, the label acts as the grab handle: a click
+//    selects the storyline, a drag moves it.
 //  - The grab handle at the base's start moves the whole storyline (flipped
 //    up, across the floor); right-click it for colour, thickness and Flip up
 //    in 3D view. Click it to select the
@@ -117,6 +122,8 @@ interface StoryUi {
   hover: { node: string; x: number; y: number } | null
   /** The dot whose title is being typed. */
   editing: { node: string; point: string } | null
+  /** The storyline whose label (title and description) is being typed. */
+  labelEditing: string | null
   /** The grab zone under the mouse: a dot's centre, or its ring. */
   zone: { node: string; point: string; ring: boolean } | null
   /** The dot a dragged dot let go now would merge into, lit. */
@@ -127,7 +134,7 @@ interface StoryUi {
 }
 
 const useStoryUi = create<StoryUi>(set => ({
-  sel: null, parts: {}, hover: null, editing: null, zone: null, merge: null, shift: false,
+  sel: null, parts: {}, hover: null, editing: null, labelEditing: null, zone: null, merge: null, shift: false,
   set: patch => set(patch),
 }))
 
@@ -838,6 +845,7 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
   const merge = useStoryUi(s => (s.merge?.node === id ? s.merge.point : null))
   const hover = useStoryUi(s => (s.hover?.node === id ? s.hover : null))
   const editing = useStoryUi(s => (s.editing?.node === id ? s.editing.point : null))
+  const labelEditing = useStoryUi(s => s.labelEditing === id)
   const shift = useStoryUi(s => s.shift)
   const linking = useLinkDragStore(s => s.active && s.source?.kind === 'group')
   const busy = useRef(false)
@@ -985,9 +993,9 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
     e.stopPropagation()
     e.preventDefault()
     const host = e.currentTarget
-    // The grab handle moves it across the floor, flipped up or not; all
-    // else is read on the wall.
-    const plane = role === 'grab' ? null : wall
+    // The grab handle (and the label, which acts as it) moves it across the
+    // floor, flipped up or not; all else is read on the wall.
+    const plane = role === 'grab' || role === 'label' ? null : wall
     const one = e.shiftKey || useStoryUi.getState().shift
     const c0 = toCanvas(e.nativeEvent, host, plane)
     if (!c0) return
@@ -1004,7 +1012,7 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
      *  dot grown from a ring or put into a line and moving, the selection,
      *  or the whole storyline. */
     const decide = (): Gesture | null => {
-      if (role === 'grab') return { kind: 'move', cards: cardOrigins(d0, new Set(d0.dots.map(p => p.id))) }
+      if (role === 'grab' || role === 'label') return { kind: 'move', cards: cardOrigins(d0, new Set(d0.dots.map(p => p.id))) }
       if ((role === 'point' || role === 'title') && pointId) {
         const ui = useStoryUi.getState()
         const mine = ui.sel?.node === id && ui.sel.point === pointId || (ui.parts[id] ?? []).includes(pointId)
@@ -1125,6 +1133,16 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
         return
       }
       if (role === 'grab') { selectStoryline(id); return }
+      if (role === 'label') {
+        // One click selects the storyline; a double-click edits the label.
+        const last = lastClick.current
+        const t = performance.now()
+        const again = last?.point === LABEL_CLICK && t - last.at < DOUBLE_MS
+        lastClick.current = again ? null : { point: LABEL_CLICK, at: t }
+        selectStoryline(id)
+        if (again) useStoryUi.getState().set({ labelEditing: id })
+        return
+      }
       if ((role === 'point' || role === 'ring') && pointId && (ev.shiftKey || ev.ctrlKey)) { toggleStoryPart(id, pointId); return }
       if ((role === 'point' || role === 'title' || role === 'ring') && pointId) {
         // A double-click, on the dot or its title, names it; one click selects.
@@ -1166,7 +1184,7 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
         // What the menu acts on is selected first, as on tiles and cards.
         if (point) selectStoryPoint(id, point)
         else selectStoryline(id)
-        setMenu({ x: e.clientX, y: e.clientY, point, line, grab: role === 'grab' })
+        setMenu({ x: e.clientX, y: e.clientY, point, line, grab: role === 'grab' || role === 'label' })
       }}
     >
       {/* The storyline itself: lying flat, or turned up about its foot as
@@ -1219,6 +1237,17 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
           return <StoryOptions nodeId={id} snap={d.snap !== false} x={p.x} y={p.y + (RING_HIT + 8) * px + drop} side="below" px={px} />
         })()}
       </div>
+        {start && (labelEditing || d.title || d.description) && (() => {
+          // Under the base from its start, clear of the decks buttons, as
+          // wide as the base (a short base, a little wider). Outside the
+          // wall: flipped up, it stays lying on the floor in front of it.
+          const xs = (d.base ?? []).map(b => byId.get(b)?.x).filter((x): x is number => x !== undefined)
+          const len = xs.length ? Math.max(...xs) - start.x : 0
+          return (
+            <StoryLabel nodeId={id} title={d.title ?? ''} description={d.description ?? ''} editing={labelEditing}
+                        x={start.x} y={start.y + LABEL_GAP * px} w={Math.max(LABEL_MIN_W, len)} />
+          )
+        })()}
       {wall && !cardsStand && tethers.map(t => {
         // From the raised dot down to the card on the ground.
         const fx = wall.x0 - node.x, fy = wall.y0 - node.y
@@ -1382,6 +1411,14 @@ function leaves(d: StorylineData, byId: Map<string, StoryDot>, p: StoryDot, way:
 const decksAbove = (d: StorylineData, byId: Map<string, StoryDot>, p: StoryDot) => leaves(d, byId, p, 1) && !leaves(d, byId, p, -1)
 /** Screen px a base dot's decks button takes up (with its gap). */
 const DECKS_H = 22
+/** Screen px from the base line down to its label: past the decks buttons. */
+const LABEL_GAP = RING_HIT + 3 + DECKS_H + 8
+/** The label's narrowest, its title's and description's sizes: canvas units. */
+const LABEL_MIN_W = 320
+const LABEL_TITLE = 28
+const LABEL_TEXT = 15
+/** lastClick's key for the label (no dot has it). */
+const LABEL_CLICK = '\u0000label'
 
 const isClosedDeck = (g: ProjectGroup | undefined) => !!g && !!g.deckState && g.deckState !== 'open'
 
@@ -1524,6 +1561,7 @@ const StoryMenu: React.FC<{
   if (at.grab && d.dots.some(p => p.cards?.length)) items.push({ label: d.chartCard ? 'Bake back into its card' : 'Bake into a card', icon: '📥', action: () => {
     bakeStoryline(id, cardOrigins)
   } })
+  if (at.grab) items.push({ label: 'Title and description', icon: '✏️', action: () => useStoryUi.getState().set({ labelEditing: id }) })
   if (!at.tether) items.push({ label: 'Delete storyline', icon: '🗑️', danger: true, action: () => {
     useUndoCoordinator.getState().checkpoint()
     useFreeNodeStore.getState().deleteFreeNode(id)
@@ -1705,6 +1743,89 @@ const StoryTitle: React.FC<{
         style={{ ...font, cursor: 'text', userSelect: 'none', padding: '0 3px', color: selected ? C_SEL : '#fff' }}
       >{title}</div>
     </AtScreen>
+  )
+}
+
+/** A storyline's label: its title, and a description under it, left-aligned
+ *  at (`x`, `y`) and `w` wide, canvas units. In canvas units, not at one size
+ *  on screen: it is part of the picture, as the cards are. Laid out at
+ *  canvas size when tilted too (as CanvasUnits does), so its lines break the
+ *  same in 2D and 3D. Editing, the same box takes the typing, at the same
+ *  size and place. */
+const StoryLabel: React.FC<{
+  nodeId: string; title: string; description: string; editing: boolean; x: number; y: number; w: number
+}> = ({ nodeId, title, description, editing, x, y, w }) => {
+  const z = useWorldZoom()
+  const zoomed = z !== null && z !== 1
+  const [t, setT] = useState(title)
+  const [text, setText] = useState(description)
+  const done = useRef(false)
+  const box = useRef<HTMLDivElement | null>(null)
+  const textRef = useRef<HTMLTextAreaElement | null>(null)
+  useEffect(() => { if (editing) { setT(title); setText(description); done.current = false } }, [editing]) // eslint-disable-line react-hooks/exhaustive-deps
+  const commit = (keep: boolean) => {
+    if (done.current) return
+    done.current = true
+    useStoryUi.getState().set({ labelEditing: null })
+    const nt = t.trim().slice(0, 120), nd = text.replace(/\s+$/, '').slice(0, 2000)
+    const n = useFreeNodeStore.getState().nodes[nodeId]
+    if (!keep || !n?.storyline || (nt === title && nd === description)) return
+    useUndoCoordinator.getState().checkpoint()
+    const { title: _t, description: _d, ...rest } = n.storyline
+    useFreeNodeStore.getState().updateFreeNode(nodeId, {
+      storyline: { ...rest, ...(nt ? { title: nt } : {}), ...(nd ? { description: nd } : {}) },
+    })
+  }
+  const titleFont: React.CSSProperties = {
+    fontSize: LABEL_TITLE, lineHeight: 1.2, fontWeight: 600, fontFamily: 'system-ui, sans-serif',
+    color: '#eef2ff', textShadow: '0 1px 4px rgba(0,0,0,0.85)', overflowWrap: 'anywhere',
+  }
+  const textFont: React.CSSProperties = {
+    fontSize: LABEL_TEXT, lineHeight: 1.4, fontFamily: 'system-ui, sans-serif',
+    color: 'rgba(220,228,255,0.78)', textShadow: '0 1px 3px rgba(0,0,0,0.85)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere',
+  }
+  // Fields with no chrome of their own, so typing shows as the label does.
+  const field: React.CSSProperties = {
+    display: 'block', width: '100%', boxSizing: 'border-box', margin: 0, padding: 0,
+    background: 'transparent', border: 'none', outline: 'none', resize: 'none', textShadow: 'none',
+  }
+  return (
+    <div style={{ position: 'absolute', left: x, top: y, width: 0, height: 0 }}>
+      <div style={zoomed
+        ? { position: 'absolute', left: 0, top: 0, width: w, zoom: 1 / z, transform: `scale(${z})`, transformOrigin: '0 0' }
+        : { position: 'absolute', left: 0, top: 0, width: w }}>
+        {editing ? (
+          <div
+            ref={box} data-role="ui" data-story-label={nodeId}
+            onPointerDown={e => e.stopPropagation()}
+            onBlur={e => { if (!box.current?.contains(e.relatedTarget as Node | null)) commit(true) }}
+            onKeyDown={e => {
+              e.stopPropagation()
+              if (e.key === 'Escape') commit(false)
+              else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) commit(true)
+            }}
+            style={{ outline: '1px solid rgba(143,194,255,0.6)', outlineOffset: 4, borderRadius: 2, background: 'rgba(18,19,31,0.6)' }}
+          >
+            <input
+              autoFocus value={t} maxLength={120} placeholder="Title"
+              onChange={e => setT(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) { e.preventDefault(); textRef.current?.focus() } }}
+              style={{ ...titleFont, ...field }}
+            />
+            <textarea
+              ref={textRef} value={text} maxLength={2000} placeholder="Description" rows={1}
+              onChange={e => setText(e.target.value)}
+              style={{ ...textFont, ...field, fieldSizing: 'content', minHeight: '1.4em', marginTop: 4 } as React.CSSProperties}
+            />
+          </div>
+        ) : (
+          <div data-role="label" data-story-label={nodeId} style={{ cursor: 'grab', userSelect: 'none' }}>
+            {title && <div style={titleFont}>{title}</div>}
+            {description && <div style={{ ...textFont, marginTop: title ? 4 : 0 }}>{description}</div>}
+          </div>
+        )}
+      </div>
+    </div>
   )
 }
 

@@ -54,6 +54,10 @@ export interface StorylineData {
   /** A chart recalled from this card (utils/chartCard): baking it again
    *  folds it back into the same card. */
   chartCard?: string
+  /** Its label, under the base line from its start: a title, and a
+   *  description under it. Absent or empty, nothing shows. */
+  title?: string
+  description?: string
   /** Before dots: lines with points along them (migrateStoryline reads them
    *  once, and they go). */
   lines?: LegacyLine[]
