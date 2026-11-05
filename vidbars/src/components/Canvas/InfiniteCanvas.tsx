@@ -334,6 +334,8 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
   const [rubberBand, setRubberBand] = useState<{ sx: number; sy: number; ex: number; ey: number } | null>(null)
   const rubberBandRef = useRef<{ sx: number; sy: number; ex: number; ey: number } | null>(null)
   const rbStartCanvas = useRef<{ cx: number; cy: number } | null>(null)
+  /** Shift held as the band began: the band adds to the selection. */
+  const rbAdd = useRef(false)
 
   // Center on first launch only — skip if pan was restored from localStorage
   useEffect(() => {
@@ -406,6 +408,9 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
       rubberBandRef.current = initial
       setRubberBand(initial)
       ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+      // Shift + band adds to what is selected, so nothing is cleared.
+      rbAdd.current = e.shiftKey
+      if (e.shiftKey) return
       clearFreeSelection()
       // Clear selection on ALL boards + card groups — single batched update
       useBoardsStore.getState().clearGroupSelection()
@@ -939,13 +944,14 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
       isPanning.current = false
       return
     }
+    const add = !!rbStartCanvas.current && (rbAdd.current || e.shiftKey)
     // Clear card-level selection when clicking empty canvas (not on a card/node)
     const upTarget = e.target as Element
-    if (!upTarget.closest('[data-group-card],[data-freenode]')) {
+    if (!add && !upTarget.closest('[data-group-card],[data-freenode]')) {
       useBoardsStore.getState().clearGroupSelection()
     }
     // Clear block-layer selection when clicking empty canvas (not on a block)
-    if (!upTarget.closest('[data-layer-block]')) {
+    if (!add && !upTarget.closest('[data-layer-block]')) {
       useCanvasStore.getState().clearSelectedBlockBoardIds()
     }
     if (rbStartCanvas.current) {
@@ -971,7 +977,8 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
               .map(el => (el as HTMLElement).dataset.layerBlock!)
               .filter(Boolean)
             if (hitBlockBoardIds.length > 0) {
-              useCanvasStore.getState().setSelectedBlockBoardIds(hitBlockBoardIds)
+              const had = add ? useCanvasStore.getState().selectedBlockBoardIds : []
+              useCanvasStore.getState().setSelectedBlockBoardIds([...new Set([...had, ...hitBlockBoardIds])])
             }
           } else {
             // Board zoom: select individual bars, grouped by board
@@ -986,7 +993,8 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
               perBoard.get(bid)!.push(id)
             })
             perBoard.forEach((ids, bid) => {
-              useBoardsStore.getState().setSelection(bid, ids)
+              const had = add ? useBoardsStore.getState().boards[bid]?.selectedIds ?? [] : []
+              useBoardsStore.getState().setSelection(bid, [...new Set([...had, ...ids])])
             })
           }
           // Pinned nodes are excluded: the band is a canvas-space gesture,
@@ -995,12 +1003,18 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
           const nodeIds = Array.from(document.querySelectorAll('[data-freenode][data-id]:not([data-pinned])'))
             .filter(hits).map(el => (el as HTMLElement).dataset.id!)
           // Storylines: the points covered, or a storyline covered whole.
-          nodeIds.push(...selectStorylinesInBox(selLeft, selTop, selRight, selBottom, false))
-          if (nodeIds.length > 0) setFreeSelection(nodeIds)
+          nodeIds.push(...selectStorylinesInBox(selLeft, selTop, selRight, selBottom, add))
+          if (nodeIds.length > 0) {
+            const had = add ? useFreeNodeStore.getState().selectedIds : []
+            setFreeSelection([...new Set([...had, ...nodeIds])])
+          }
           // Card group hit-test
           const hitGroups = Array.from(document.querySelectorAll('[data-group-card][data-id]'))
             .filter(hits).map(el => (el as HTMLElement).dataset.id!)
-          if (hitGroups.length > 0) useBoardsStore.getState().setSelectedGroups(hitGroups)
+          if (hitGroups.length > 0) {
+            const had = add ? useBoardsStore.getState().selectedGroupIds : []
+            useBoardsStore.getState().setSelectedGroups([...new Set([...had, ...hitGroups])])
+          }
         }
       }
       rbStartCanvas.current = null

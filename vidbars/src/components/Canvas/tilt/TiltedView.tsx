@@ -314,7 +314,7 @@ export const TiltedView: React.FC = () => {
 
     type Gesture =
       | { kind: 'pan'; last: { x: number; y: number } }
-      | { kind: 'marquee'; x0: number; y0: number; x1: number; y1: number }
+      | { kind: 'marquee'; x0: number; y0: number; x1: number; y1: number; add: boolean }
       | { kind: 'person'; url: string; unit0: number; y0: number }
       | { kind: 'model'; key: string; k0: number; y0: number; moved: boolean }
       | { kind: 'remap'; target: Element; pointerId: number; height: number; stood?: boolean; x0?: number; y0?: number; free?: boolean; tab?: { at: { x: number; y: number }; went?: boolean }; lay?: Map<string, string>; last?: { x: number; y: number } }
@@ -481,7 +481,7 @@ export const TiltedView: React.FC = () => {
       // or Alt+middle).
       if (e.button === 0 && isBareGround(e.target)) {
         e.preventDefault(); swallow(e)
-        g = { kind: 'marquee', x0: e.clientX, y0: e.clientY, x1: e.clientX, y1: e.clientY }
+        g = { kind: 'marquee', x0: e.clientX, y0: e.clientY, x1: e.clientX, y1: e.clientY, add: e.shiftKey }
         return
       }
       if (e.button === 1) {
@@ -650,7 +650,7 @@ export const TiltedView: React.FC = () => {
         const btn = g.target.closest('button')
         if (btn && g.x0 !== undefined && Math.hypot(e.clientX - g.x0, e.clientY - g.y0!) < 4 && !btn.contains(real)) clickTo = btn
       }
-      if (g.kind === 'marquee') { marqueeSelect(g, e.shiftKey); setBand(null) }
+      if (g.kind === 'marquee') { marqueeSelect(g, g.add || e.shiftKey); setBand(null) }
       g = null
       grip.carried = null
     }
