@@ -104,6 +104,25 @@ function startOverlayPan(e: React.PointerEvent) {
   window.addEventListener('pointerup', onUp)
 }
 
+/** A dashed outline on the canvas where a baked chart comes out (canvas
+ *  units in, drawn over everything, never in the way). */
+const ChartGhost: React.FC<{ area: { x: number; y: number; w: number; h: number } }> = ({ area }) => {
+  const pan = useCanvasStore(s => s.pan)
+  const zoom = useCanvasStore(s => s.zoom)
+  const host = document.querySelector('[data-pin-host]')?.getBoundingClientRect()
+  const ox = (host?.left ?? 0) + pan.x, oy = (host?.top ?? 0) + pan.y
+  return ReactDOM.createPortal(
+    <div data-chart-ghost style={{
+      position: 'fixed', zIndex: 9997, pointerEvents: 'none',
+      left: ox + area.x * zoom, top: oy + area.y * zoom,
+      width: area.w * zoom, height: area.h * zoom,
+      border: '2px dashed rgba(170,200,255,0.85)', borderRadius: 10,
+      background: 'rgba(120,160,255,0.08)',
+    }} />,
+    document.body,
+  )
+}
+
 /** Shared context menu for all card types (GroupCard, StackedDeckCard, FannedDeckOverlay) */
 const CardContextMenu: React.FC<{
   pos: { x: number; y: number }
@@ -453,22 +472,7 @@ const CardContextMenu: React.FC<{
           </React.Fragment>
         ))}
       </div>
-      {chartGhost && (() => {
-        // Canvas units → the screen, against the canvas container.
-        const host = document.querySelector('[data-pin-host]')?.getBoundingClientRect()
-        const { pan, zoom } = useCanvasStore.getState()
-        const ox = (host?.left ?? 0) + pan.x, oy = (host?.top ?? 0) + pan.y
-        return ReactDOM.createPortal(
-          <div data-chart-ghost style={{
-            position: 'fixed', zIndex: 9997, pointerEvents: 'none',
-            left: ox + chartGhost.x * zoom, top: oy + chartGhost.y * zoom,
-            width: chartGhost.w * zoom, height: chartGhost.h * zoom,
-            border: '2px dashed rgba(170,200,255,0.85)', borderRadius: 10,
-            background: 'rgba(120,160,255,0.08)',
-          }} />,
-          document.body,
-        )
-      })()}
+      {chartGhost && <ChartGhost area={chartGhost} />}
       {typeList && (() => {
         const bs = useBoardsStore.getState()
         const types = new Set(typeList.ids.map(id => { const g = bs.groups.find(x => x.id === id); return g ? cardTypeOf(g) : 'element' }))
@@ -979,6 +983,9 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
   }, [group.id])
 
   const [isHovered, setIsHovered] = useState(false)
+  // A chart baked into it is out on the canvas (utils/chartCard).
+  const chartOut = useFreeNodeStore(s => !!group.chart && Object.values(s.nodes).some(n => n.storyline?.chartCard === group.id))
+  const chartPreview = useCanvasStore(s => s.previewHoveredDeckId === 'chart:' + group.id)
   const cardRef = useRef<HTMLDivElement>(null)
   // Seed hover state if the cursor is already over this card when it mounts
   // (covers zoom-layer transitions where the card swaps in under a static
@@ -1166,6 +1173,15 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
         onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setCardMenu({ x: e.clientX, y: e.clientY }) }}
         onDoubleClick={e => {
           e.stopPropagation()
+          // A card with a chart baked in works as a deck's face card (Brian
+          // 2026-11-05): double-click shows the chart or folds it in; its
+          // text and its back's fields still edit on their own double-click.
+          if (group.chart) {
+            const out = chartOutOf(group.id)
+            if (out) bakeStoryline(out, cardOrigins)
+            else recallChart(group.id)
+            return
+          }
           if (showBack) return
           const el = e.currentTarget.querySelector('[data-card-text]') as HTMLElement | null
           el?.dispatchEvent(new CustomEvent('start-edit', { bubbles: false }))
@@ -1179,6 +1195,9 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
             background: `repeating-linear-gradient(135deg, rgba(0,0,0,0.16) 0 ${Math.max(1.5, headerPad * 0.18)}px, rgba(255,255,255,0.05) ${Math.max(1.5, headerPad * 0.18)}px ${Math.max(3, headerPad * 0.36)}px)`,
           }} />
         )}
+        {/* Its header's chart icon pointed at (NLETimelineHeader, as a
+            deck's): where the folded chart comes out. */}
+        {chartPreview && group.chart && !chartOut && <ChartGhost area={chartArea(group.chart)} />}
         {showBack ? (
           <div style={{ position: 'absolute', top: headerPad, left: 0, right: 0, bottom: 0 }}>
             <CardBack groupId={group.id} color={color} width={screenWidth} height={Math.max(1, cardHeight - headerPad)} hovered={isHovered}
@@ -4604,6 +4623,8 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
   // they lie on: a deck linked to a storyline opens away from the line
   // (utils/deckAway). Its edges, fan and open preview follow.
   const storyKey = useFreeNodeStore(s => storyLinksKey(s.nodes))
+  // Cards whose chart is out (their deck icon is lit).
+  const chartsOut = useFreeNodeStore(s => Object.values(s.nodes).flatMap(n => (n.storyline?.chartCard ? [n.storyline.chartCard] : [])).join(' '))
   const lays = useMemo(() => {
     const byId = new Map(groups.map(g => [g.id, g]))
     // No storyline holds a card: nothing to look up (storyKey is '').
@@ -4744,7 +4765,18 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
         // Normal open card
         return (
           <Fragment key={g.id}>
-            <NLETimelineHeader groupId={g.id} iconMode={{ kind: 'hidden' }} />
+            <NLETimelineHeader groupId={g.id} iconMode={g.chart ? {
+              // A card with a chart baked in: a deck's icon (Brian
+              // 2026-11-05), pointed at to see where the chart comes out,
+              // double-clicked to show it or fold it in; lit while out.
+              kind: 'deckPreview', deckId: 'chart:' + g.id, count: g.chart.places.length,
+              lit: chartsOut.split(' ').includes(g.id),
+              onDoubleClick: () => {
+                const out = chartOutOf(g.id)
+                if (out) bakeStoryline(out, cardOrigins)
+                else recallChart(g.id)
+              },
+            } : { kind: 'hidden' }} />
             <GroupCard group={g} />
           </Fragment>
         )

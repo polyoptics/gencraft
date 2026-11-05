@@ -74,6 +74,7 @@ import { useWorldZoom } from './worldZoom'
 import { clientToCanvas } from '../../utils/fx/createEffect'
 import { snapToDots } from '../../utils/dotGrid'
 import { bakeStoryline } from '../../utils/chartCard'
+import { morphStoryline, useChartMotion } from '../../utils/chartMotion'
 import { onRows, openDeckOf, rowOf, rowsSeen } from '../../utils/primaryCard'
 import { isHiddenDeckMember } from '../../hooks/useCardDecks'
 import { setStoryWallOf } from '../../utils/wallRoom'
@@ -858,6 +859,8 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
   const busy = useRef(false)
   const lastClick = useRef<{ point: string; at: number } | null>(null)
   const picked = useFreeNodeStore(s => s.selectedIds.includes(id))
+  // Folding into its card or coming out of it (utils/chartMotion).
+  const motion = useChartMotion(s => s.m[id])
   const [menu, setMenu] = useState<{ x: number; y: number; point?: string; line?: [string, string]; grab?: boolean; tether?: string } | null>(null)
   // Saved before dots: made dots once, as it loads.
   const raw = node?.storyline
@@ -935,7 +938,7 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
   })
 
   if (!node || !raw?.dots) return null
-  const d = raw
+  const d = morphStoryline(raw, motion)
   const px = 1 / zoom
   const byId = new Map(d.dots.map(p => [p.id, p]))
   const baseSet = new Set(d.base ?? [])

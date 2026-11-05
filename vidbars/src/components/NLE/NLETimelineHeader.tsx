@@ -60,7 +60,9 @@ interface Segment {
  *    standalone cards (no viewer at this zoom, no deck to preview). */
 type IconMode =
   | { kind: 'viewer' }
-  | { kind: 'deckPreview'; deckId: string; count: number; onDoubleClick?: () => void }
+  | { kind: 'deckPreview'; deckId: string; count: number; onDoubleClick?: () => void
+      /** On (e.g. a card's chart is out): drawn lit. */
+      lit?: boolean }
   | { kind: 'hidden' }
 
 interface Props {
@@ -400,11 +402,13 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
           width: iconW,
           height: iconH,
           border: `${borderW}px dashed ${
+            mode.lit ? 'rgba(127,209,255,0.95)' :
             active ? 'rgba(255,255,255,0.95)' :
             hint   ? 'rgba(255,255,255,0.85)' :
                      'rgba(255,255,255,0.7)'
           }`,
-          background: active ? 'rgba(255,255,255,0.26)' :
+          background: mode.lit ? 'rgba(127,209,255,0.32)' :
+                      active ? 'rgba(255,255,255,0.26)' :
                       hint   ? 'rgba(255,255,255,0.20)' :
                                'rgba(255,255,255,0.14)',
           borderRadius: radius,

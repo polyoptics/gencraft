@@ -20,6 +20,43 @@ import type { ChartData, ChartPlace, ChartTier } from './chartData'
 import { makeLinkedCard, masterOf } from './linkedCards'
 import { newGroupId, type FactionGroup } from './factionGroups'
 import type { StorylineData } from './storyline'
+import { baseYOf, play, setChartMotion } from './chartMotion'
+
+/** Folding and unfolding are played out (Brian 2026-11-05: "so we can
+ *  tell what's happening"; the storyline too: "all the points drop, and the
+ *  line slides into the side"). utils/chartMotion draws the storyline; the
+ *  linked cards ride with it, each a plain position write per frame (one
+ *  undo was taken). While one plays, another fold or show waits it out. */
+const DROP_MS = 300
+const SLIDE_MS = 380
+let moving = false
+
+/** How far each linked card drops with its dot to the base line. */
+function dropsOf(d: StorylineData, tiers: { dot: string; cards: string[] }[], idOf: (c: string) => string | undefined): Map<string, number> {
+  const by = baseYOf(d)
+  const out = new Map<string, number>()
+  for (const t of tiers) {
+    const p = d.dots.find(q => q.id === t.dot)
+    if (!p) continue
+    for (const c of t.cards) { const id = idOf(c); if (id && !out.has(id)) out.set(id, by - p.y) }
+  }
+  return out
+}
+
+/** The side of card `g` the line slides into (node units of `n`): the side
+ *  facing the storyline, half way down. */
+function sideOf(g: ProjectGroup, n: { x: number; y: number; width?: number }): { x: number; y: number } {
+  const size = cardFaceSize()
+  const w = g.cardWidthOverride ?? size.w, h = g.cardHeightOverride ?? size.h
+  const right = n.x + (n.width || 0) / 2 > g.originX + w / 2
+  return { x: (right ? g.originX + w : g.originX) - n.x, y: g.originY + h / 2 - n.y }
+}
+
+type Ride = { id: string; x: number; y: number; dy: number }
+function put(cards: Ride[], at: (c: Ride) => { x: number; y: number }): void {
+  if (!cards.length) return
+  useBoardsStore.getState().setGroupPosBatch(cards.map(c => { const p = at(c); return { groupId: c.id, originX: p.x, originY: p.y } }))
+}
 
 /** The cards that go with these dots, as the storyline moves them
  *  (StorylineLayer cardOrigins): card id → origin. */
@@ -48,7 +85,7 @@ export function bakeStoryline(nodeId: string, cardsOf: CardsOfDots): string | nu
   const fs = useFreeNodeStore.getState()
   const n = fs.nodes[nodeId]
   const d = n?.storyline
-  if (!n || !d) return null
+  if (!n || !d || moving) return null
   const groups = useBoardsStore.getState().groups
   const byId = new Map(groups.map(g => [g.id, g]))
   const on = cardsOf(d, new Set(d.dots.map(p => p.id)))
@@ -116,15 +153,38 @@ export function bakeStoryline(nodeId: string, cardsOf: CardsOfDots): string | nu
     }),
   }))
 
-  // The linked cards on it fold away; the masters stay where they are.
-  const bs = useBoardsStore.getState()
-  for (const id of on.keys()) {
-    const g = bs.groups.find(x => x.id === id)
-    if (!g?.linkOf || useBoardsStore.getState().groups.length <= 1) continue
-    g.boardIds.forEach(bid => useBoardsStore.getState().deleteBoard(bid))
-    useBoardsStore.getState().deleteGroup(id)
+  // The points drop to the base line, the linked cards riding them; then
+  // the line slides into the card's side as the cards fly into it, and they
+  // go. The masters stay where they are.
+  const home = useBoardsStore.getState().groups.find(g => g.id === cardId)
+  const links = [...on.keys()].flatMap(id => { const g = useBoardsStore.getState().groups.find(x => x.id === id); return g?.linkOf ? [g] : [] })
+  const gone = () => {
+    for (const g0 of links) {
+      const g = useBoardsStore.getState().groups.find(x => x.id === g0.id)
+      if (!g || useBoardsStore.getState().groups.length <= 1) continue
+      g.boardIds.forEach(bid => useBoardsStore.getState().deleteBoard(bid))
+      useBoardsStore.getState().deleteGroup(g.id)
+    }
+    useFreeNodeStore.getState().deleteFreeNode(nodeId)
+    setChartMotion(nodeId, null)
+    moving = false
   }
-  fs.deleteFreeNode(nodeId)
+  if (!home) { gone(); return cardId }
+  const isLink = new Set(links.map(g => g.id))
+  const drops = new Map<string, number>()
+  const by = baseYOf(d)
+  for (const p of d.dots) for (const c of cardsOf(d, new Set([p.id])).keys()) if (isLink.has(c) && !drops.has(c)) drops.set(c, by - p.y)
+  const ride: Ride[] = links.map(g => ({ id: g.id, x: g.originX, y: g.originY, dy: drops.get(g.id) ?? 0 }))
+  const to = sideOf(home, n)
+  const hx = home.originX, hy = home.originY
+  moving = true
+  play(DROP_MS, k => {
+    setChartMotion(nodeId, { drop: k, slide: 0, to })
+    put(ride, c => ({ x: c.x, y: c.y + c.dy * k }))
+  }, () => play(SLIDE_MS, k => {
+    setChartMotion(nodeId, { drop: 1, slide: k, to })
+    put(ride, c => ({ x: c.x + (hx - c.x) * k, y: c.y + c.dy + (hy - c.y - c.dy) * k }))
+  }, gone))
   return cardId
 }
 
@@ -133,7 +193,7 @@ export function bakeStoryline(nodeId: string, cardsOf: CardsOfDots): string | nu
 export function recallChart(cardId: string): string | null {
   const card = useBoardsStore.getState().groups.find(g => g.id === cardId)
   const chart = card?.chart
-  if (!chart || chartOutOf(cardId)) return null
+  if (!chart || chartOutOf(cardId) || moving) return null
   useUndoCoordinator.getState().checkpoint()
   const link = new Map<string, string>()
   for (const p of chart.places) {
@@ -163,13 +223,24 @@ export function recallChart(cardId: string): string | null {
   const fs = useFreeNodeStore.getState()
   const id = fs.addFreeNode(node.x, node.y, 'storyline')
   const d = node.storyline!
-  fs.updateFreeNode(id, {
-    ...node,
-    storyline: {
-      ...d, chartCard: cardId,
-      dots: d.dots.map(p => ({ ...p, cards: p.cards?.flatMap(c => link.get(c) ?? []) })),
-    },
-  })
+  const live: StorylineData = { ...d, chartCard: cardId, dots: d.dots.map(p => ({ ...p, cards: p.cards?.flatMap(c => link.get(c) ?? []) })) }
+  fs.updateFreeNode(id, { ...node, storyline: live })
+  // The line slides out of the card's side as the cards fly out to it,
+  // dropped onto it; then the points rise to their places, the cards riding
+  // them.
+  const drops = dropsOf(d, chart.tiers, c => link.get(c))
+  const ride: Ride[] = useBoardsStore.getState().groups.filter(g => at.has(g.id))
+    .map(g => ({ id: g.id, x: g.originX, y: g.originY, dy: drops.get(g.id) ?? 0 }))
+  const to = sideOf(card, node)
+  const fx = card.originX, fy = card.originY
+  moving = true
+  play(SLIDE_MS, k => {
+    setChartMotion(id, { drop: 1, slide: 1 - k, to })
+    put(ride, c => ({ x: fx + (c.x - fx) * k, y: fy + (c.y + c.dy - fy) * k }))
+  }, () => play(DROP_MS, k => {
+    setChartMotion(id, { drop: 1 - k, slide: 0, to })
+    put(ride, c => ({ x: c.x, y: c.y + c.dy * (1 - k) }))
+  }, () => { setChartMotion(id, null); moving = false }))
   return id
 }
 
