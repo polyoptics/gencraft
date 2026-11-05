@@ -24,7 +24,8 @@
 //    start, in canvas units, so it scales with the cards round it. Right-click
 //    the grab handle (or the label): Title and description; double-click the
 //    label to edit it. Pressed, the label acts as the grab handle: a click
-//    selects the storyline, a drag moves it.
+//    selects the storyline, a drag moves it. Its corner handle resizes it:
+//    a drag changes its width (the text wraps), Shift+drag scales it whole.
 //  - The grab handle at the base's start moves the whole storyline (flipped
 //    up, across the floor); right-click it for colour, thickness and Flip up
 //    in 3D view. Click it to select the
@@ -1248,9 +1249,11 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
           // wall: flipped up, it stays lying on the floor in front of it.
           const xs = (d.base ?? []).map(b => byId.get(b)?.x).filter((x): x is number => x !== undefined)
           const len = xs.length ? Math.max(...xs) - start.x : 0
+          const k = d.labelScale ?? LABEL_SCALE
           return (
             <StoryLabel nodeId={id} title={d.title ?? ''} description={d.description ?? ''} editing={labelEditing}
-                        x={start.x} y={start.y + LABEL_GAP * px} w={Math.max(LABEL_MIN_W, len)} />
+                        x={start.x} y={start.y + LABEL_GAP * px} k={k} px={px}
+                        w={d.labelWidth ?? Math.max(LABEL_MIN_W, len / k)} />
           )
         })()}
       {wall && !cardsStand && tethers.map(t => {
@@ -1422,6 +1425,10 @@ const LABEL_GAP = RING_HIT + 3 + DECKS_H + 8
 const LABEL_MIN_W = 320
 const LABEL_TITLE = 28
 const LABEL_TEXT = 15
+/** A new label's scale, times the sizes above. */
+const LABEL_SCALE = 10
+/** The label's resize handle: screen px. */
+const LABEL_GRIP = 14
 /** lastClick's key for the label (no dot has it). */
 const LABEL_CLICK = '\u0000label'
 
@@ -1758,8 +1765,10 @@ const StoryTitle: React.FC<{
  *  same in 2D and 3D. Editing, the same box takes the typing, at the same
  *  size and place. */
 const StoryLabel: React.FC<{
-  nodeId: string; title: string; description: string; editing: boolean; x: number; y: number; w: number
-}> = ({ nodeId, title, description, editing, x, y, w }) => {
+  nodeId: string; title: string; description: string; editing: boolean; x: number; y: number
+  /** Width before the scale, and the scale. */
+  w: number; k: number; px: number
+}> = ({ nodeId, title, description, editing, x, y, w, k, px }) => {
   const z = useWorldZoom()
   const zoomed = z !== null && z !== 1
   const [t, setT] = useState(title)
@@ -1794,9 +1803,54 @@ const StoryLabel: React.FC<{
     display: 'block', width: '100%', boxSizing: 'border-box', margin: 0, padding: 0,
     background: 'transparent', border: 'none', outline: 'none', resize: 'none', textShadow: 'none',
   }
+  const [over, setOver] = useState(false)
+  const [sizing, setSizing] = useState(false)
+  // Its corner handle: a drag sets its width (the text wraps), Shift+drag
+  // scales it whole, from its top-left corner. One undo step.
+  const onGrip = (e: React.PointerEvent) => {
+    if (e.button !== 0) return
+    e.stopPropagation(); e.preventDefault()
+    const el = box.current ?? (e.currentTarget.parentElement as HTMLElement)
+    const r0 = el.getBoundingClientRect()
+    const cx = e.clientX, cy = e.clientY
+    // Screen px per canvas unit along the label, as it lies now (tilted too).
+    const along = r0.width / (w * k)
+    const n0 = useFreeNodeStore.getState().nodes[nodeId]
+    if (!n0?.storyline || along <= 0) return
+    useUndoCoordinator.getState().checkpoint()
+    setSizing(true)
+    const move = (ev: PointerEvent) => {
+      const n = useFreeNodeStore.getState().nodes[nodeId]
+      if (!n?.storyline) return
+      const grown = (r0.width + ev.clientX - cx) / along // canvas units, scaled
+      if (ev.shiftKey) {
+        // Whole: by how far the corner went out, along its diagonal.
+        const d0 = Math.hypot(r0.width, r0.height)
+        const d1 = Math.hypot(r0.width + ev.clientX - cx, r0.height + ev.clientY - cy)
+        const nk = Math.max(0.5, Math.min(100, k * d1 / Math.max(1, d0)))
+        useFreeNodeStore.getState().updateFreeNode(nodeId, { storyline: { ...n.storyline, labelScale: nk, labelWidth: w } })
+      } else {
+        useFreeNodeStore.getState().updateFreeNode(nodeId, { storyline: { ...n.storyline, labelScale: k, labelWidth: Math.max(60, grown / k) } })
+      }
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', up)
+      setSizing(false)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', up)
+  }
+  // The handle at one size on screen, on the label's bottom-right corner.
+  const gripPx = LABEL_GRIP * px / k
   return (
     <div style={{ position: 'absolute', left: x, top: y, width: 0, height: 0 }}>
-      <div style={zoomed
+      <div style={{ position: 'absolute', left: 0, top: 0, transformOrigin: '0 0', transform: `scale(${k})` }}>
+      <div
+        onPointerEnter={() => setOver(true)} onPointerLeave={() => setOver(false)}
+        style={zoomed
         ? { position: 'absolute', left: 0, top: 0, width: w, zoom: 1 / z, transform: `scale(${z})`, transformOrigin: '0 0' }
         : { position: 'absolute', left: 0, top: 0, width: w }}>
         {editing ? (
@@ -1824,11 +1878,27 @@ const StoryLabel: React.FC<{
             />
           </div>
         ) : (
-          <div data-role="label" data-story-label={nodeId} style={{ cursor: 'grab', userSelect: 'none' }}>
+          <div ref={box} data-role="label" data-story-label={nodeId}
+               style={{ position: 'relative', cursor: 'grab', userSelect: 'none',
+                        outline: over || sizing ? `${1.5 * px / k}px dashed rgba(143,194,255,0.5)` : 'none', outlineOffset: 4 }}>
             {title && <div style={titleFont}>{title}</div>}
             {description && <div style={{ ...textFont, marginTop: title ? 4 : 0 }}>{description}</div>}
+            {/* Resize: drag for width, Shift+drag to scale it whole. Shown
+                while the mouse is over the label. */}
+            <div
+              data-role="ui" data-story-label-grip={nodeId}
+              title="Drag to change the width; Shift+drag to scale the label"
+              onPointerDown={onGrip}
+              style={{
+                position: 'absolute', right: -gripPx / 2 - 4, bottom: -gripPx / 2 - 4, width: gripPx, height: gripPx,
+                borderRadius: gripPx * 0.25, cursor: 'nwse-resize',
+                background: 'rgba(14,15,26,0.92)', border: `${1.5 * px / k}px solid rgba(143,194,255,0.8)`,
+                opacity: over || sizing ? 1 : 0,
+              }}
+            />
           </div>
         )}
+      </div>
       </div>
     </div>
   )
