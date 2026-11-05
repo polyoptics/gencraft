@@ -24,9 +24,13 @@ function field(groups: ProjectGroup[], card: ProjectGroup, key: string): string 
   // The back's DETAILS list, a line each, those filled in (Brian
   // 2026-11-05: {details} on a faction's face showed nothing).
   if (k === 'details') {
+    // A line written in a row's name alone is shown as it is (Brian's
+    // faction, 2026-11-05); an empty row the card's type made up is not.
+    const made = new Set(CARD_TYPES[cardTypeOf(card)].details.map(s => s.toLowerCase()))
     return (card.details ?? []).flatMap(d => {
       const v = detailShown(groups, d).text.trim(), n = d.name.trim()
-      return v ? [n ? `${n}: ${v}` : v] : []
+      if (v) return [n ? `${n}: ${v}` : v]
+      return n && !made.has(n.toLowerCase()) ? [n] : []
     }).join('\n')
   }
   const f = factionsOf(groups, card.id)[0]
