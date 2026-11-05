@@ -690,11 +690,14 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
           return
         }
         // Pulled off its strip and let go elsewhere: a free tile again, at
-        // its own size, still held at the same spot under the hand.
+        // its own size, still held at the same spot under the hand. An
+        // effect card keeps the size it had on the strip (Brian 2026-11-05).
         const held = clientToCanvas(e.clientX, e.clientY)
         const fx = node.width > 0 ? Math.min(1, Math.max(0, (held.cx - node.x) / node.width)) : 0
         const fy = node.height > 0 ? Math.min(1, Math.max(0, (held.cy - node.y) / node.height)) : 0
+        const stripSize = fns.nodes[id]
         fns.undockFromRail(id)
+        if (node.type === 'effect' && stripSize) fns.updateFreeNode(id, { width: stripSize.width, height: stripSize.height })
         const free = useFreeNodeStore.getState().nodes[id]
         if (free) fns.updateFreeNode(id, { x: held.cx - fx * free.width, y: held.cy - fy * free.height })
         // An effect card still lines up with a strip it lands beside — it is
