@@ -804,7 +804,7 @@ export const TextFormatToolbar: React.FC<TextFormatToolbarProps> = ({
           <div style={{ width: 14, height: 4, borderRadius: 1, background: ts.color, border: '1px solid rgba(255,255,255,0.15)' }} />
         </button>
         {showPopup === 'text' && (
-          <ColorSwatchPopup colors={PRESET_COLORS} selected={ts.color} onSelect={c => { setStyle({ color: c }); setShowPopup(null) }} onClose={() => setShowPopup(null)} />
+          <ColorSwatchPopup colors={PRESET_COLORS} selected={ts.color} onSelect={c => setStyle({ color: c })} onClose={() => setShowPopup(null)} />
         )}
       </div>
 
@@ -818,7 +818,7 @@ export const TextFormatToolbar: React.FC<TextFormatToolbarProps> = ({
           }} />
         </button>
         {showPopup === 'bg' && (
-          <BgPickerPopup bgColor={ts.bgColor} bgOpacity={ts.bgOpacity} onColorSelect={c => setStyle({ bgColor: c })} onOpacityChange={o => setStyle({ bgOpacity: o })} onClose={() => setShowPopup(null)} />
+          <BgPickerPopup bgColor={ts.bgColor} bgOpacity={ts.bgOpacity} onColorSelect={c => setStyle(ts.bgOpacity > 0 ? { bgColor: c } : { bgColor: c, bgOpacity: 1 })} onOpacityChange={o => setStyle({ bgOpacity: o })} onClose={() => setShowPopup(null)} />
         )}
       </div>
 

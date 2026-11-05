@@ -106,7 +106,7 @@ export const ColorPickerPopup: React.FC<Props> = ({ color, anchorX, anchorY, onC
         {PALETTE.map(c => (
           <button
             key={c}
-            onClick={() => { onChange(c); onClose() }}
+            onClick={() => onChange(c)}
             style={{
               width: 28,
               height: 28,
