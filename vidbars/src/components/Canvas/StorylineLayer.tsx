@@ -54,6 +54,7 @@ import { useShallow } from 'zustand/react/shallow'
 import { useFreeNodeStore, type FreeNodeData } from '../../store/freeNodeStore'
 import { useCanvasStore, groupBounds } from '../../store/canvasStore'
 import { useBoardsStore, type ProjectGroup } from '../../store/boardsStore'
+import { cardTitle } from '../../utils/faceStyle'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { useLinkDragStore } from '../../store/linkDragStore'
 import { useViewport3DStore } from '../../store/viewport3dStore'
@@ -1386,7 +1387,7 @@ const StoryMenu: React.FC<{
   const groups = useBoardsStore(s => s.groups)
   const point = at.point ? d.dots.find(p => p.id === at.point) : undefined
   const items: { label: string; icon: string; danger?: boolean; action: () => void }[] = []
-  const name = (gid: string) => { const g = groups.find(x => x.id === gid); return g?.cardHeaderText || g?.name || 'card' }
+  const name = (gid: string) => { const g = groups.find(x => x.id === gid); return (g && cardTitle(groups, g)) || 'card' }
   if (point && at.tether) {
     const gid = at.tether
     items.push({ label: `Unlink ${name(gid)}`, icon: '⛓️', action: () => editStoryline(id, x => unlinkStoryCard(x, point.id, gid)) })

@@ -16,6 +16,7 @@ import { useLinkDragStore } from '../../store/linkDragStore'
 import type { ProjectGroup } from '../../store/boardsStore'
 import { RefChip } from './LinkChipRail'
 import { refKey } from '../../utils/linkTargets'
+import { cardTitle } from '../../utils/faceStyle'
 
 interface Props {
   /** Group whose outbound link chips we're rendering. */
@@ -106,7 +107,7 @@ const PrimaryChip: React.FC<{ host: ProjectGroup; linked: ProjectGroup; path: st
   const unlink = useBoardsStore(s => s.unlinkGroups)
   const closeContaining = useLinkingStore(s => s.closeContaining)
 
-  const label = (linked.cardHeaderText || linked.name || 'card').slice(0, 14)
+  const label = (useBoardsStore(s => cardTitle(s.groups, linked)) || 'card').slice(0, 14)
   const color = linked.color || '#5b8dd9'
 
   return (

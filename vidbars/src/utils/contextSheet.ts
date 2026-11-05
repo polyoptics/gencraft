@@ -12,6 +12,7 @@
 import type { BoardData, ProjectGroup } from '../store/boardsStore'
 import { getMediaItems } from '../types/bar'
 import { resolveMediaUrl } from './useResolvedMedia'
+import { cardTitle, fillFields } from './faceStyle'
 
 export interface SheetPicture {
   /** A DRAWABLE url: the image itself, or a video/model's poster. */
@@ -74,10 +75,10 @@ export function collectSheet(groups: ProjectGroup[], boards: Record<string, Boar
     }
 
     return {
-      title: g.cardHeaderText?.trim() || g.name || 'Untitled',
+      title: cardTitle(groups, g) || 'Untitled',
       color: g.color || '#5b8dd9',
       summary: g.cardSummary?.trim() ?? '',
-      body: g.cardText?.trim() ?? '',
+      body: fillFields(g.cardText ?? '', groups, g.id).trim(),
       pictures,
       notes,
     }

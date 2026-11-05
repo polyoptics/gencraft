@@ -3894,6 +3894,7 @@ const DeckAffordance: React.FC<{ cluster: string[]; front: Deck | 'card' | null;
     <>
       {/* Invisible hover zone over the primary card — extends down to cover button area */}
       <div
+        data-row-of={primary.gid}
         style={{
           position: 'absolute',
           left: primary.screenLeft,

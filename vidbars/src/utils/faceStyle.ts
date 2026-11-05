@@ -4,14 +4,14 @@
 // put on others. A one-time copy: the cards are not tied after it.
 //
 // Face text can show a card's own details: {Name}, {Age}, {Role}, any
-// detail by its name, and {Type}, {Faction}, {Rank}, {Reports to},
-// {Family}. So a face copied from one character shows each character's
+// detail by its name, {Details} for its whole DETAILS list, and {Type},
+// {Faction}, {Rank}, {Reports to}, {Family}. So a face copied from one character shows each character's
 // own. Copying turns the card's own name in its text into {Name}, so a
 // face that says "Ratchet" on Ratchet says each card's name on the rest.
 
 import type { ProjectGroup } from '../store/boardsStore'
 import type { TextStyle } from '../store/freeNodeStore'
-import { CARD_TYPES, cardTypeOf, detailText, factionsOf } from './cardTypes'
+import { CARD_TYPES, cardTypeOf, detailShown, detailText, factionsOf } from './cardTypes'
 import { familiesOf } from './family'
 
 /** What a field shows on a card ('' if it has none). */
@@ -21,6 +21,14 @@ function field(groups: ProjectGroup[], card: ProjectGroup, key: string): string 
   if (k === 'type') return CARD_TYPES[cardTypeOf(card)].label
   const own = detailText(groups, card.id, k)
   if (own !== undefined) return own
+  // The back's DETAILS list, a line each, those filled in (Brian
+  // 2026-11-05: {details} on a faction's face showed nothing).
+  if (k === 'details') {
+    return (card.details ?? []).flatMap(d => {
+      const v = detailShown(groups, d).text.trim(), n = d.name.trim()
+      return v ? [n ? `${n}: ${v}` : v] : []
+    }).join('\n')
+  }
   const f = factionsOf(groups, card.id)[0]
   if (k === 'faction') return f?.faction.name ?? ''
   if (k === 'rank') return f ? String(f.rank) : ''
@@ -35,6 +43,13 @@ export function fillFields(text: string, groups: ProjectGroup[], cardId: string)
   const card = groups.find(g => g.id === cardId)
   if (!card) return text
   return text.replace(/\{([^{}\n]{1,40})\}/g, (_m, key: string) => field(groups, card, key))
+}
+
+/** A card's title as shown: its header with its {fields} filled in, else
+ *  its name. For the chips, menus and lists that name a card (Brian
+ *  2026-11-05: a link chip said "{Name}"). */
+export function cardTitle(groups: ProjectGroup[], card: ProjectGroup): string {
+  return fillFields(card.cardHeaderText ?? '', groups, card.id).trim() || card.name || ''
 }
 
 export interface FaceStyle {

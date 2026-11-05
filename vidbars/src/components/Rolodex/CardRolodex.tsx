@@ -24,6 +24,7 @@ import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react'
 import ReactDOM from 'react-dom'
 import { useBoardsStore } from '../../store/boardsStore'
 import type { ProjectGroup } from '../../store/boardsStore'
+import { fillFields } from '../../utils/faceStyle'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { useLinkDragStore } from '../../store/linkDragStore'
@@ -2152,8 +2153,9 @@ const RolodexCardPreview: React.FC<{
   group: ProjectGroup
   opacity: number
 }> = ({ group, opacity }) => {
-  const headerText = group.cardHeaderText ?? ''
-  const bodyText   = group.cardText ?? ''
+  // With its {fields} filled in, as the card shows it (utils/faceStyle).
+  const headerText = useBoardsStore(s => fillFields(group.cardHeaderText ?? '', s.groups, group.id))
+  const bodyText   = useBoardsStore(s => fillFields(group.cardText ?? '', s.groups, group.id))
   const headerStyle: TextStyle = useMemo(
     () => ({ ...DEFAULT_HEADER_STYLE, ...(group.cardHeaderTextStyle ?? {}) }),
     [group.cardHeaderTextStyle],

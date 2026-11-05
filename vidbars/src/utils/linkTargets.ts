@@ -13,6 +13,7 @@
 
 import type { ProjectGroup, BoardData } from '../store/boardsStore'
 import type { Bar } from '../types/bar'
+import { cardTitle } from './faceStyle'
 
 export type LinkRef =
   | { kind: 'group'; id: string }
@@ -68,7 +69,7 @@ export function resolveRef(
   if (r.kind === 'group') {
     const g = groups.find(x => x.id === r.id)
     if (!g) return null
-    return { label: g.cardHeaderText || g.name || 'card', color: g.color || '#5b8dd9', kind: 'group' }
+    return { label: cardTitle(groups, g) || 'card', color: g.color || '#5b8dd9', kind: 'group' }
   }
   if (r.kind === 'board') {
     const b = boards[r.id]

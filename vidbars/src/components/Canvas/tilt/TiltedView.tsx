@@ -54,7 +54,11 @@ export const TiltedView: React.FC = () => {
         let lo = hinge.z, hi = hinge.z + Math.max(r.width, r.height) * 2
         for (let i = 0; i < 32; i++) { const mid = (lo + hi) / 2; if (off(mid) > 0) hi = mid; else lo = mid }
         const q = unprojectTilt(sx, sy, t, s, shiftX, shiftY, lo, TILT_FAR)
-        p = q && { x: q.x, y: hinge.v - Math.max(0, hinge.v - q.y) / Math.cos(hinge.a) }
+        // How far up the face that point is: its run across the plane and
+        // its rise, as one length. Straight up (a storyline's wall) the run
+        // is nothing, and read off it alone (run / cos a) it ran away to
+        // ten billion px: the card flew off and the app froze drawing it.
+        p = q && { x: q.x, y: hinge.v - Math.hypot(Math.max(0, hinge.v - q.y), lo - hinge.z) }
       }
       return p && { x: p.x + r.width / 2 + r.left, y: p.y + r.height / 2 + r.top }
     }
@@ -98,6 +102,9 @@ export const TiltedView: React.FC = () => {
     let eatClick = false
     /** A button a press was re-sent to, for its click (see onClick). */
     let clickTo: HTMLElement | null = null
+    /** A row's zone a press was re-sent to (see flatTarget), for its
+     *  double-click: the browser's own goes to the card it sees standing. */
+    let dblTo: HTMLElement | null = null
     /** `on`: read on this surface (see surfaceAt), not on `to`'s own. */
     const resend = (e: MouseEvent, type: string, to: EventTarget, height = 0, at?: { x: number; y: number }, on?: Surface) => {
       // A lifted tile is pressed at its own height, not the floor's.
@@ -124,6 +131,10 @@ export const TiltedView: React.FC = () => {
     const flatTarget = (e: MouseEvent, target: Element, height: number): Element => {
       const unit = target.closest('[data-freenode][data-id], [data-group-card], [data-viewport3d]')
       if (!unit) return target
+      // A row's zone over its primary card (CardLayer DeckAffordance) lies
+      // over that card flat, so flat it takes the press: the row's drag,
+      // its grip and Flip, its double-click to close. It is part of it here.
+      const row = unit.matches('[data-group-card][data-id]') ? (unit as HTMLElement).dataset.id : undefined
       const hinge = hingeOf(target)
       const p = flatClient(e.clientX, e.clientY, height, hinge)
       if (!p) return target
@@ -135,7 +146,7 @@ export const TiltedView: React.FC = () => {
       try {
         layFlat(target, unit)
         for (const el of document.elementsFromPoint(p.x, p.y)) {
-          if (!unit.contains(el)) continue
+          if (!unit.contains(el) && !(row && el.closest<HTMLElement>('[data-row-of]')?.dataset.rowOf === row)) continue
           // A raised part is seen a little off its flat place, so near its
           // edge the flat point can miss it, for what holds it or the face
           // beside it (the on/off button's bottom edge, over the card's
@@ -408,6 +419,7 @@ export const TiltedView: React.FC = () => {
       rel = null
       eatClick = false
       clickTo = null
+      dblTo = null
       grip.carried = null
       menuTo = null
       models.at = null
@@ -649,6 +661,8 @@ export const TiltedView: React.FC = () => {
         // test missed: the click is that button's, as flat.
         const btn = g.target.closest('button')
         if (btn && g.x0 !== undefined && Math.hypot(e.clientX - g.x0, e.clientY - g.y0!) < 4 && !btn.contains(real)) clickTo = btn
+        const zone = g.target.closest<HTMLElement>('[data-row-of]')
+        dblTo = zone && g.x0 !== undefined && Math.hypot(e.clientX - g.x0, e.clientY - g.y0!) < 4 && !zone.contains(real) ? zone : null
       }
       if (g.kind === 'marquee') { marqueeSelect(g, g.add || e.shiftKey); setBand(null) }
       g = null
@@ -735,6 +749,17 @@ export const TiltedView: React.FC = () => {
       const b = clickTo
       clickTo = null
       if (eatClick) { e.preventDefault(); swallow(e); return }
+      if (e.type === 'dblclick') {
+        const to = dblTo
+        dblTo = null
+        if (to?.isConnected && !(e.target instanceof Node && to.contains(e.target))) {
+          e.preventDefault(); swallow(e)
+          to.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, composed: true, view: window, detail: e.detail,
+            clientX: lastFlat?.x ?? e.clientX, clientY: lastFlat?.y ?? e.clientY,
+            altKey: e.altKey, ctrlKey: e.ctrlKey, shiftKey: e.shiftKey, metaKey: e.metaKey }))
+        }
+        return
+      }
       // A button pressed where it shows, but not by the browser's own hit
       // (Run's pill corners, which the rounding left out): its click.
       if (b?.isConnected && !(e.target instanceof Node && b.contains(e.target))) {

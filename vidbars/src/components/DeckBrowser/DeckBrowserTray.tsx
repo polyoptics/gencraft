@@ -12,6 +12,7 @@ import { useCanvasStore } from '../../store/canvasStore'
 import { useLinkDragStore } from '../../store/linkDragStore'
 import { cssUrl } from '../../utils/diskUrl'
 import { useResolvedMedia } from '../../utils/useResolvedMedia'
+import { cardTitle } from '../../utils/faceStyle'
 
 const APP_TOOLBAR_H = 38
 const TRAY_HEIGHT = 150
@@ -119,7 +120,7 @@ const DeckTile: React.FC<{
   // Resolved: a `mediaref:` hero (every browser drop) is not a loadable
   // CSS url, so the tile showed nothing.
   const hero = useResolvedMedia(group.cardHeroImage ?? null)
-  const name = group.cardHeaderText || group.name || 'Card'
+  const name = useBoardsStore(s => cardTitle(s.groups, group)) || 'Card'
   const board1 = group.boardIds.length
 
   const onPointerDown = (e: React.PointerEvent) => {

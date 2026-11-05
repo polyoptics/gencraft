@@ -13,6 +13,7 @@ import { useShallow } from 'zustand/react/shallow'
 import { useBoardsStore } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { getBackRefs } from '../../utils/linkRefs'
+import { cardTitle } from '../../utils/faceStyle'
 import type { ProjectGroup } from '../../store/boardsStore'
 
 interface Props {
@@ -93,7 +94,7 @@ export const BackRefChipRail: React.FC<Props> = ({ groupId, hostRect, scale, top
 
 const BackRefChip: React.FC<{ ref_: ProjectGroup; onJump: () => void }> = ({ ref_, onJump }) => {
   const color = ref_.color || '#5b8dd9'
-  const label = (ref_.cardHeaderText || ref_.name || 'card').slice(0, 10)
+  const label = (useBoardsStore(s => cardTitle(s.groups, ref_)) || 'card').slice(0, 10)
   return (
     <div
       onClick={e => { e.stopPropagation(); onJump() }}
