@@ -20,7 +20,6 @@ import { computeGroupLayout, getRowY, getRowHeight } from '../../utils/nleRows'
 import { cardCornerOffset, snapCardToDots } from '../../utils/dotGrid'
 import { cardEdgeSnapFor } from '../../utils/cardEdgeSnap'
 import { PrimaryChipRail } from '../Linking/PrimaryChipRail'
-import { BackRefChipRail } from '../Linking/BackRefChipRail'
 import { CloneDeck } from '../Linking/CloneDeck'
 import { useLinkingStore } from '../../store/linkingStore'
 import { DEFAULT_H } from '../../utils/barConstants'
@@ -4971,11 +4970,6 @@ const CardLinkingLayer: React.FC<{
         groupId={group.id}
         hostRect={hostRect}
         path={[group.id]}
-        scale={textScale}
-      />
-      <BackRefChipRail
-        groupId={group.id}
-        hostRect={hostRect}
         scale={textScale}
       />
       {expandedChildIds.map((cid, i) => (

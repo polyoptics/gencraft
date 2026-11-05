@@ -1,5 +1,7 @@
 import React, { useMemo, useState, useRef, useCallback, useSyncExternalStore } from 'react'
 import { withLockMates } from '../../utils/deckLock'
+import { BackRefDot } from '../Linking/BackRefDot'
+import { getBackRefs } from '../../utils/linkRefs'
 import { onRows, rowOf, rowsSeen } from '../../utils/primaryCard'
 import { useBoardsStore } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
@@ -131,6 +133,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
   const flipId = pickedInFan ?? groupId
   const flipCard = useBoardsStore(s => flipId ? s.groups.find(g => g.id === flipId) : undefined)
   const flipLit = !!flipCard?.flipped
+  const hasRefs = useBoardsStore(s => !!groupId && getBackRefs(groupId, s.groups).length > 0)
   // A linked card's master (utils/linkedCards), while it is still there.
   const linkMasterId = useBoardsStore(s => {
     const l = group?.linkOf
@@ -488,7 +491,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
         useBoardsStore.getState().setSelectedGroup(to.id)
       }}
       style={{
-        flex: '0 0 auto', marginLeft: isTiny ? 0 : 'auto',
+        flex: '0 0 auto', marginLeft: hasRefs || isTiny ? 0 : 'auto',
         width: lockH, height: lockH,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         borderRadius: Math.max(1 * ov, screenHeight * 0.12),
@@ -516,7 +519,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
         useBoardsStore.getState().setGroupFlipped(flipCard.id, !flipCard.flipped)
       }}
       style={{
-        flex: '0 0 auto', marginLeft: goEl || isTiny ? 0 : 'auto',
+        flex: '0 0 auto', marginLeft: goEl || hasRefs || isTiny ? 0 : 'auto',
         width: lockH, height: lockH,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         borderRadius: Math.max(1 * ov, screenHeight * 0.12),
@@ -554,7 +557,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
         bs.setDeckLock(groupId, ids)
       }}
       style={{
-        flex: '0 0 auto', marginLeft: flipEl || goEl || isTiny ? 0 : 'auto',
+        flex: '0 0 auto', marginLeft: flipEl || goEl || hasRefs || isTiny ? 0 : 'auto',
         width: lockH, height: lockH,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         borderRadius: Math.max(1 * ov, screenHeight * 0.12),
@@ -655,10 +658,13 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
         overflow: 'hidden',
       }}>
         {!isTiny && nameEl}
+        {hasRefs && groupId && !isTiny && (
+          <div style={{ flex: '0 0 auto', marginLeft: 'auto', display: 'flex' }}><BackRefDot groupId={groupId} size={lockH} /></div>
+        )}
         {goEl}
         {flipEl}
         {lockEl}
-        {headerIcon && <div style={{ flex: '0 0 auto', marginLeft: lockEl || goEl || isTiny ? 0 : 'auto' }}>{headerIcon}</div>}
+        {headerIcon && <div style={{ flex: '0 0 auto', marginLeft: lockEl || goEl || hasRefs || isTiny ? 0 : 'auto' }}>{headerIcon}</div>}
       </div>
     </div>
   )
