@@ -209,3 +209,16 @@ export function clipMedia(c: RoughClip): MediaItem {
   if (c.kind === 'shot') return { url: c.url, type: 'image', filmShot: c.shot }
   return { url: c.url, type: 'image', clipIn: 0, clipOut: clipLength(c) }
 }
+
+/** Split one clip at timeline time t into two, end to end, each with its own
+ *  trim; null when t is not inside it with at least MIN_CLIP on both sides. */
+export function splitClipAt(clips: RoughClip[], clipId: string, t: number): RoughClip[] | null {
+  const i = clips.findIndex(c => c.id === clipId)
+  const c = clips[i]
+  if (!c) return null
+  const local = c.in + (t - clipStart(c))
+  if (local - c.in < MIN_CLIP || c.out - local < MIN_CLIP) return null
+  const a: RoughClip = { ...c, out: local }
+  const b: RoughClip = { ...c, id: crypto.randomUUID(), in: local, start: clipStart(c) + (local - c.in) }
+  return [...clips.slice(0, i), a, b, ...clips.slice(i + 1)]
+}

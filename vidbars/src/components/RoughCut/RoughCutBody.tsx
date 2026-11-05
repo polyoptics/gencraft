@@ -12,7 +12,7 @@ import { useResolvedMedia } from '../../utils/useResolvedMedia'
 import { useCutPlay } from '../../utils/cutMedia'
 import { openRoughCutViewer, playRoughCut, RoughCutScreen } from './RoughCutScreen'
 import {
-  appendCards, clipAt, clipLength, clipMedia, clipRow, clipStart, clipEnd, cutLength, MIN_CLIP, placed, setRoughCut, type RoughClip,
+  appendCards, splitClipAt, FILM_FPS, clipAt, clipLength, clipMedia, clipRow, clipStart, clipEnd, cutLength, MIN_CLIP, placed, setRoughCut, type RoughClip,
 } from '../../utils/roughCut'
 
 /** The Rough Cut node: a preview on top, the timeline below: rows of clips,
@@ -107,6 +107,54 @@ export function RoughCutBody({ id, node, bodyW, bodyH }: { id: string; node: Fre
     return { t: Math.max(0, (x - LEFT) / g.pps), row: Math.max(0, row) }
   }
   useCardDrops(id, node, setDropHover, timelineAt)
+
+  /** Split at the playhead: the selected clip if it is there, else the one seen there. */
+  const splitRef = useRef<() => void>(() => {})
+  splitRef.current = () => {
+    const tt = useCutPlay.getState().t[id] ?? 0
+    const sel = clips.find(c => c.id === selected && tt > clipStart(c) && tt < clipEnd(c))
+    const target = sel ?? clipAt(clips, tt)?.clip
+    if (!target) return
+    const next = splitClipAt(clips, target.id, tt)
+    if (next) setRoughCut(id, { clips: next })
+  }
+
+  // ← / → step one frame, S splits, on the Rough Cut under the pointer or last clicked.
+  const root = useRef<HTMLDivElement>(null)
+  const totalRef = useRef(total)
+  totalRef.current = total
+  useEffect(() => {
+    const el = root.current
+    if (!el) return
+    let over = false, last = false
+    const enter = () => { over = true }
+    const leave = () => { over = false }
+    const down = (e: PointerEvent) => { last = el.contains(e.target as Node) }
+    const key = (e: KeyboardEvent) => {
+      const split = (e.key === 's' || e.key === 'S') && !e.shiftKey
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight' && !split) return
+      if (!(over || last) || e.ctrlKey || e.metaKey || e.altKey) return
+      const a = document.activeElement as HTMLElement | null
+      if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.tagName === 'SELECT' || a.isContentEditable)) return
+      e.preventDefault()
+      e.stopPropagation()
+      if (split) { splitRef.current(); return }
+      const st = useCutPlay.getState()
+      if (st.playing === id) st.setPlaying(null)
+      const f = Math.round((st.t[id] ?? 0) * FILM_FPS) + (e.key === 'ArrowLeft' ? -1 : 1)
+      st.setT(id, Math.max(0, Math.min(totalRef.current, f / FILM_FPS)))
+    }
+    el.addEventListener('pointerenter', enter)
+    el.addEventListener('pointerleave', leave)
+    window.addEventListener('pointerdown', down, true)
+    window.addEventListener('keydown', key, true)
+    return () => {
+      el.removeEventListener('pointerenter', enter)
+      el.removeEventListener('pointerleave', leave)
+      window.removeEventListener('pointerdown', down, true)
+      window.removeEventListener('keydown', key, true)
+    }
+  }, [id])
 
   // Playback: the playhead runs on the clock, and stops at the end.
   useEffect(() => {
@@ -270,7 +318,7 @@ export function RoughCutBody({ id, node, bodyW, bodyH }: { id: string; node: Fre
   const rowW = Math.max(W, total * pps + 240)
 
   return (
-    <div data-rough-cut="" style={{ flex: 1, minHeight: 0, position: 'relative', overflow: 'hidden', background: '#121319' }}>
+    <div ref={root} data-rough-cut="" style={{ flex: 1, minHeight: 0, position: 'relative', overflow: 'hidden', background: '#121319' }}>
       <div style={{
         position: 'absolute', top: 0, left: 0, width: W, height: H,
         transform: `scale(${ui})`, transformOrigin: '0 0', color: '#fff', fontSize: 14,
@@ -292,6 +340,7 @@ export function RoughCutBody({ id, node, bodyW, bodyH }: { id: string; node: Fre
                 {playing ? 'Pause' : 'Play'}
               </button>
               <button style={btn} onClick={() => { setPlaying(false); setT(0) }} title="To the start">⏮</button>
+              <button data-rough-split="" style={btn} onClick={() => splitRef.current()} title="Split the clip at the playhead (S)">Split</button>
               <button data-rough-open-viewer="" style={btn} onClick={() => openRoughCutViewer(id)} title="A Viewer at its end that plays the movie">Viewer</button>
               <span style={{ fontVariantNumeric: 'tabular-nums', width: 120, flexShrink: 0, whiteSpace: 'nowrap', color: 'rgba(255,255,255,0.75)' }}>{fmt(t)} / {fmt(total)}</span>
               <span style={{ flex: 1 }} />
