@@ -572,7 +572,7 @@ export const PoppedLayerSheets: React.FC<{ windowId: string }> = ({ windowId }) 
               const pane = baked.panes.find(p => p.id === e.id)
               return pane ? <LayerCanvas key={e.id} canvas={pane.boosted} /> : null
             })}
-            <div style={{ position: 'absolute', left: 0, right: 0, bottom: '100%', height: headH, display: 'flex', alignItems: 'flex-end', gap: 3 / zoom, overflow: 'hidden' }}>
+            <div style={{ position: 'absolute', left: 0, minWidth: '100%', bottom: '100%', height: headH, display: 'flex', alignItems: 'flex-end', gap: 3 / zoom }}>
               {here.map(e => {
                 const def = EFFECTS[knownKind(e.effect)]
                 const lit = !alone[side] || alone[side] === e.id

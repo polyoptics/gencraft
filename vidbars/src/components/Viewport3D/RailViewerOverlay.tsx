@@ -61,6 +61,9 @@ export const RailViewerOverlay: React.FC<{ windowId: string; fontSize: number }>
     if (!el) return
     const watch = new ResizeObserver(measure)
     watch.observe(el)
+    // The picture's own area too: its toolbar arriving resizes it, not the overlay.
+    const area = el.querySelector('canvas, img')?.parentElement
+    if (area) watch.observe(area)
     return () => watch.disconnect()
   })
   if (!railId) return null
