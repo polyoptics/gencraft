@@ -11,6 +11,7 @@ import { cardScreenRect } from '../Layers/CardLayer'
 import { useResolvedMedia } from '../../utils/useResolvedMedia'
 import { useCutPlay } from '../../utils/cutMedia'
 import { openRoughCutViewer, playRoughCut, RoughCutScreen } from './RoughCutScreen'
+import { findCuts } from '../../utils/shotDetect'
 import {
   appendCards, splitClipAt, FILM_FPS, clipAt, clipLength, clipMedia, clipRow, clipStart, clipEnd, cutLength, MIN_CLIP, placed, setRoughCut, type RoughClip,
 } from '../../utils/roughCut'
@@ -117,6 +118,50 @@ export function RoughCutBody({ id, node, bodyW, bodyH }: { id: string; node: Fre
     if (!target) return
     const next = splitClipAt(clips, target.id, tt)
     if (next) setRoughCut(id, { clips: next })
+  }
+
+  /** Find shots: look through the selected clip (else the one seen at the
+   *  playhead) for its cuts, and split it at every one: one undo step. */
+  const [scan, setScan] = useState<{ clipId: string; f: number } | null>(null)
+  const [shotNote, setShotNote] = useState<string | null>(null)
+  const scanning = useRef(false)
+  const gone = useRef(false)
+  useEffect(() => {
+    gone.current = false
+    return () => { gone.current = true }
+  }, [])
+  const findShots = async () => {
+    if (scanning.current) return
+    const tt = useCutPlay.getState().t[id] ?? 0
+    const target = clips.find(c => c.id === selected) ?? clipAt(clips, tt)?.clip
+    if (!target || target.kind !== 'video') { setShotNote('Click a video clip first.'); return }
+    scanning.current = true
+    setShotNote(null)
+    setScan({ clipId: target.id, f: 0 })
+    let cuts: number[] = []
+    try {
+      cuts = await findCuts(target.url, target.in, target.out, f => { if (!gone.current) setScan({ clipId: target.id, f }) }, () => gone.current)
+    } catch (err) {
+      if (!gone.current) setShotNote(err instanceof Error ? err.message : 'The video could not be read.')
+    }
+    scanning.current = false
+    if (gone.current) return
+    setScan(null)
+    // Split the clip as it is now (it may have moved while being looked through).
+    let cl = placed(useFreeNodeStore.getState().nodes[id]?.roughCut?.clips ?? [])
+    let cur = cl.find(c => c.id === target.id)
+    let n = 0
+    for (const cut of cuts) {
+      if (!cur) break
+      const next = splitClipAt(cl, cur.id, clipStart(cur) + (cut - cur.in))
+      if (!next) continue
+      cur = next[next.findIndex(c => c.id === cur!.id) + 1]
+      cl = next
+      n++
+    }
+    if (n) setRoughCut(id, { clips: cl })
+    setShotNote(n ? `Split into ${n + 1} shots.` : 'No cuts found in this clip.')
+    window.setTimeout(() => { if (!gone.current) setShotNote(null) }, 4000)
   }
 
   // ← / → step one frame, S splits, on the Rough Cut under the pointer or last clicked.
@@ -341,6 +386,8 @@ export function RoughCutBody({ id, node, bodyW, bodyH }: { id: string; node: Fre
               </button>
               <button style={btn} onClick={() => { setPlaying(false); setT(0) }} title="To the start">⏮</button>
               <button data-rough-split="" style={btn} onClick={() => splitRef.current()} title="Split the clip at the playhead (S)">Split</button>
+              <button data-rough-find-shots="" style={{ ...btn, ...(scan ? { background: 'rgba(111,179,255,0.35)', border: '1px solid rgba(111,179,255,0.8)' } : null) }}
+                onClick={() => void findShots()} title="Find the cuts in the clicked clip and split it into its shots">Find shots</button>
               <button data-rough-open-viewer="" style={btn} onClick={() => openRoughCutViewer(id)} title="A Viewer at its end that plays the movie">Viewer</button>
               <span style={{ fontVariantNumeric: 'tabular-nums', width: 120, flexShrink: 0, whiteSpace: 'nowrap', color: 'rgba(255,255,255,0.75)' }}>{fmt(t)} / {fmt(total)}</span>
               <span style={{ flex: 1 }} />
@@ -348,6 +395,11 @@ export function RoughCutBody({ id, node, bodyW, bodyH }: { id: string; node: Fre
               <button style={btn} onClick={fitAll} title="Fit the whole cut">Fit</button>
               <button style={btn} onClick={() => zoomBy(1.4)} title="Zoom the timeline in">+</button>
             </div>
+            {(scan || shotNote) && (
+              <div data-rough-shot-note="" style={{ color: '#9fcbff', fontWeight: 600 }}>
+                {scan ? `Finding shots… ${Math.round(scan.f * 100)}%` : shotNote}
+              </div>
+            )}
             {at && (
               <div style={{ color: 'rgba(255,255,255,0.7)', lineHeight: 1.6, fontVariantNumeric: 'tabular-nums' }}>
                 <div style={{ fontSize: 16, color: '#fff', fontWeight: 600 }}>{at.clip.label}</div>
@@ -381,6 +433,7 @@ export function RoughCutBody({ id, node, bodyW, bodyH }: { id: string; node: Fre
               <ClipBlock
                 key={c.id} clip={c} x={clipStart(c) * pps + LEFT} y={RULER_H + clipRow(c) * TRACK_H} w={clipLength(c) * pps}
                 selected={selected === c.id} lifted={!!live && live[i] !== clips[i]}
+                scanning={scan?.clipId === c.id ? scan.f : null}
                 onMove={e => startMove(e, i)}
                 onTrimIn={e => startTrim(e, i, 'in')}
                 onTrimOut={e => startTrim(e, i, 'out')}
@@ -441,11 +494,13 @@ const KIND_COLOR: Record<RoughClip['kind'], string> = { shot: '#ffb35c', video: 
 
 const ClipBlock: React.FC<{
   clip: RoughClip; x: number; y: number; w: number; selected: boolean; lifted?: boolean
+  /** Being looked through for its shots: how far along, 0..1. */
+  scanning?: number | null
   onMove: (e: React.PointerEvent) => void
   onTrimIn: (e: React.PointerEvent) => void
   onTrimOut: (e: React.PointerEvent) => void
   onRemove: () => void
-}> = ({ clip, x, y, w, selected, lifted, onMove, onTrimIn, onTrimOut, onRemove }) => {
+}> = ({ clip, x, y, w, selected, lifted, scanning, onMove, onTrimIn, onTrimOut, onRemove }) => {
   const poster = useResolvedMedia(clip.poster ?? (clip.kind === 'image' ? clip.url : null))
   const [hover, setHover] = useState(false)
   const color = KIND_COLOR[clip.kind]
@@ -477,6 +532,9 @@ const ClipBlock: React.FC<{
           onClick={e => { e.stopPropagation(); onRemove() }}
           style={{ position: 'absolute', right: 16, top: 4, width: 22, height: 22, borderRadius: 11, border: 'none', cursor: 'pointer', background: 'rgba(0,0,0,0.6)', color: '#fff', fontSize: 14, lineHeight: '22px', padding: 0 }}
         >×</button>
+      )}
+      {scanning != null && (
+        <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${scanning * 100}%`, background: 'rgba(111,179,255,0.35)', borderRight: '2px solid #9fcbff', pointerEvents: 'none' }} />
       )}
       {/* Trim handles, as wide as a fingertip, lit on hover */}
       <div data-rough-trim="in" onPointerDown={onTrimIn} style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: EDGE, cursor: 'ew-resize', background: hover ? `${color}cc` : 'transparent' }} />
