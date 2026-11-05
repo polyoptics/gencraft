@@ -41,6 +41,13 @@ export function expandWithNestedMembers(baseIds: string[], allGroups: ProjectGro
 }
 
 const TOUCH_TOLERANCE = 16 // canvas units — slightly > DEFAULT_GAP (12)
+// The header band above a card is drawn with a screen-pixel floor, so in
+// canvas units it grows as you zoom out. Touching is judged with the band
+// at its own canvas size instead, so how near two cards must be to join a
+// deck is the same at every zoom (Brian 2026-11-05: zoomed far out, open
+// decks a little apart merged into one).
+const TOUCH_HEADER = NLE_HEADER_CANVAS_H + 2
+const headerExtendCanvasAt = (zoom: number) => (Math.max(NLE_HEADER_CANVAS_H * zoom, 20) + 2 * zoom) / zoom
 
 /** THE card-geometry authority: a group's VISUAL card rect in canvas
  *  units — mirrors CardLayer's GroupCard exactly (per-board visual
@@ -81,7 +88,7 @@ export function cardVisualRect(
   if (left === Infinity) return null
   const finalW = Math.max(right - left, g.cardWidthOverride ?? 0)
   const finalH = Math.max(bottom - top, g.cardHeightOverride ?? 0)
-  const headerExtendCanvas = (Math.max(NLE_HEADER_CANVAS_H * zoom, 20) + 2 * zoom) / zoom
+  const headerExtendCanvas = headerExtendCanvasAt(zoom)
   return {
     rect: { id: g.id, left, right: left + finalW, top: top - headerExtendCanvas, bottom: top + finalH },
     contentTop: top,
@@ -229,6 +236,10 @@ export function useCardDecks(
     // participate as virtual nodes — they help union groups across an
     // extracted-card gap, but are filtered out before cluster IDs are
     // returned (only real groups become deck members).
+    // Every rect here carries the zoom's header band; swap it for the
+    // fixed one (TOUCH_HEADER) before testing touch.
+    const headerSlack = headerExtendCanvasAt(zoom) - TOUCH_HEADER
+    const touchRect = (r: GroupSlot): GroupSlot => ({ ...r, top: r.top + headerSlack })
     function findClusters(zoneGroups: ProjectGroup[], zoneGhosts: GroupSlot[]): string[][] {
       const groupCount = zoneGroups.length
       const totalNodes = groupCount + zoneGhosts.length
@@ -243,7 +254,7 @@ export function useCardDecks(
         for (let j = i + 1; j < totalNodes; j++) {
           const ri = nodeRect(i)
           const rj = nodeRect(j)
-          if (ri && rj && rectsTouch(ri, rj, TOUCH_TOLERANCE)) {
+          if (ri && rj && rectsTouch(touchRect(ri), touchRect(rj), TOUCH_TOLERANCE)) {
             uf.union(i, j)
           }
         }
