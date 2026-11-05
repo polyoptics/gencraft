@@ -4,6 +4,7 @@ import './index.css'
 import App from './App.tsx'
 import { useBoardsStore } from './store/boardsStore'
 import { startLinkedCardSync } from './utils/linkedCards'
+import { startDecksOpenRight } from './utils/deckRight'
 import { useCanvasStore } from './store/canvasStore'
 import { useFreeNodeStore } from './store/freeNodeStore'
 import { useUserTemplateStore } from './store/userTemplateStore'
@@ -37,6 +38,8 @@ import { usePickMode } from './utils/cabinetPick'
 
 // One card shown in several places: an edit on one is on all (utils/linkedCards).
 startLinkedCardSync()
+// Decks off every storyline open to the right (utils/deckRight).
+startDecksOpenRight()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
