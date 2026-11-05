@@ -11,7 +11,7 @@
 
 import type { ProjectGroup } from '../store/boardsStore'
 import type { TextStyle } from '../store/freeNodeStore'
-import { CARD_TYPES, cardTypeOf, detailShown, detailText, factionsOf } from './cardTypes'
+import { CARD_TYPES, CARD_TYPE_ORDER, cardTypeOf, detailShown, detailText, factionsOf } from './cardTypes'
 import { familiesOf } from './family'
 
 /** What a field shows on a card ('' if it has none). */
@@ -25,8 +25,10 @@ function field(groups: ProjectGroup[], card: ProjectGroup, key: string): string 
   // 2026-11-05: {details} on a faction's face showed nothing).
   if (k === 'details') {
     // A line written in a row's name alone is shown as it is (Brian's
-    // faction, 2026-11-05); an empty row the card's type made up is not.
-    const made = new Set(CARD_TYPES[cardTypeOf(card)].details.map(s => s.toLowerCase()))
+    // faction, 2026-11-05); an empty row a card type made up is not, its
+    // own type's or one left from a type it was before (Brian's chart
+    // card showed a scene's Act, Location, Time of day).
+    const made = new Set(CARD_TYPE_ORDER.flatMap(t => CARD_TYPES[t].details.map(s => s.toLowerCase())))
     return (card.details ?? []).flatMap(d => {
       const v = detailShown(groups, d).text.trim(), n = d.name.trim()
       if (v) return [n ? `${n}: ${v}` : v]
