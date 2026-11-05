@@ -76,8 +76,8 @@ import { snapToDots } from '../../utils/dotGrid'
 import { bakeStoryline } from '../../utils/chartCard'
 import { morphStoryline, useChartMotion } from '../../utils/chartMotion'
 import { onRows, openDeckOf, rowOf, rowsSeen } from '../../utils/primaryCard'
-import { expandWithNestedMembers, isHiddenDeckMember } from '../../hooks/useCardDecks'
 import { liveLocks, lockOf } from '../../utils/deckLock'
+import { chainDecks, chainLocks, shownAs } from '../../utils/chainLock'
 import { setStoryWallOf } from '../../utils/wallRoom'
 import { PRESET_COLORS, TextFormatToolbar, ensureFontLoaded, hexToRgba, type TextFieldMode } from '../UI/TextFormatToolbar'
 import {
@@ -251,17 +251,6 @@ export function standingStoryDrop(): string | null { return wallDrop }
 const frozenFeet = new Map<string, number>()
 let feetVersion = 0
 
-/** The card `c` is shown as: itself, or, hidden in a closed deck, that
- *  deck's front card. */
-function shownAs(c: string, byId: Map<string, ProjectGroup>): string {
-  let id = c
-  for (let k = 0; k < 32; k++) {
-    const g = byId.get(id)
-    if (!g || !isHiddenDeckMember(g) || !byId.has(g.deckAnchorId!)) break
-    id = g.deckAnchorId!
-  }
-  return id
-}
 
 /** The cards linked to a storyline dot (`linked`: each goes with its own
  *  dot), and each card on the canvas that is one or holds some hidden in
@@ -1449,75 +1438,6 @@ const LABEL_SCALE = 10
 const LABEL_GRIP = 14
 /** lastClick's key for the label (no dot has it). */
 const LABEL_CLICK = '\u0000label'
-
-const isClosedDeck = (g: ProjectGroup | undefined) => !!g && !!g.deckState && g.deckState !== 'open'
-
-/** The decks on base dot `dotId`'s chain (the dot and every dot hanging off
- *  it, utils/storyline downstream): each closed deck a linked card is in or
- *  fronts (its front card first), and each open row of touching cards a
- *  linked card is in, unless the row holds a card linked to a dot off the
- *  chain (that one is the other chain's to close). */
-function chainDecks(nodeId: string, dotId: string): { closed: string[][]; open: string[][] } {
-  const nodes = useFreeNodeStore.getState().nodes
-  const d = nodes[nodeId]?.storyline
-  if (!d?.dots) return { closed: [], open: [] }
-  const chain = downstream(d, dotId)
-  const mine = new Set<string>(), elsewhere = new Set<string>()
-  for (const [nid, n] of Object.entries(nodes)) for (const p of n.storyline?.dots ?? []) for (const c of p.cards ?? []) {
-    if (nid === nodeId && chain.has(p.id)) mine.add(c)
-    else elsewhere.add(c)
-  }
-  const groups = useBoardsStore.getState().groups
-  const byId = new Map(groups.map(g => [g.id, g]))
-  const closed: string[][] = [], open: string[][] = []
-  const seen = new Set<string>()
-  for (const c of mine) {
-    const f = shownAs(c, byId)
-    const front = byId.get(f)
-    if (!front) continue
-    if (isClosedDeck(front)) {
-      if (seen.has(f)) continue
-      seen.add(f)
-      const kids = groups.filter(g => g.id !== f && g.deckAnchorId === f && isClosedDeck(g)).map(g => g.id)
-      if (kids.length) closed.push([f, ...kids])
-      continue
-    }
-    const row = rowOf(f)
-    if (!row || row.length < 2 || seen.has(row[0])) continue
-    seen.add(row[0])
-    if (!row.some(m => elsewhere.has(m) && !mine.has(m))) open.push(row)
-  }
-  return { closed, open }
-}
-
-/** Every card on base dot `dotId`'s chain, as the locks they take
- *  (utils/deckLock): each deck (closed, or an open row) under its front or
- *  primary card, with the cards hidden in it; a card in no deck alone. */
-function chainLocks(nodeId: string, dotId: string): Map<string, string[]> {
-  const nodes = useFreeNodeStore.getState().nodes
-  const d = nodes[nodeId]?.storyline
-  const out = new Map<string, string[]>()
-  if (!d?.dots) return out
-  const chain = downstream(d, dotId)
-  const groups = useBoardsStore.getState().groups
-  const byId = new Map(groups.map(g => [g.id, g]))
-  const taken = new Set<string>()
-  const { closed, open } = chainDecks(nodeId, dotId)
-  for (const ids of [...closed, ...open]) {
-    const all = expandWithNestedMembers(ids, groups).filter(id => !taken.has(id))
-    all.forEach(id => taken.add(id))
-    if (all.length) out.set(ids[0], all)
-  }
-  for (const p of d.dots) if (chain.has(p.id)) for (const c of p.cards ?? []) {
-    const f = shownAs(c, byId)
-    if (!byId.has(f) || taken.has(f)) continue
-    const row = rowOf(f)
-    if (row && row.length > 1) continue // a row the chain does not own
-    taken.add(f)
-    out.set(f, expandWithNestedMembers([f], groups))
-  }
-  return out
-}
 
 /** A base dot's lock button (Brian 2026-11-05): locks every deck and card
  *  on its chain, so dragged over other cards the chart picks none up and

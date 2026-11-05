@@ -23,6 +23,8 @@ export interface ChartPlace {
   deckOffsetY?: number
   deckLastFront?: string
   nestedDeck?: boolean
+  /** Its lock (utils/deckLock), a master id. */
+  deckLock?: string
 }
 
 /** One dot's group: its cards (master ids), the one linked to the dot first. */
@@ -39,6 +41,9 @@ export interface ChartData {
   places: ChartPlace[]
   /** Top to bottom, as the dots sat. */
   tiers: ChartTier[]
+  /** It has been shown before, so its places hold its locks as they were
+   *  left. Absent: never shown, and it comes out locked (Brian 2026-11-05). */
+  lockSet?: boolean
 }
 
 /** Where `cardId` (a master id) stands on a chart: its group, counted from

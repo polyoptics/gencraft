@@ -11,6 +11,7 @@
 // showing those masters (utils/linkedCards), each where it sat, in its deck
 // as it was. Edits on them are edits on the masters.
 
+import { lockChains } from './chainLock'
 import { useBoardsStore, type ProjectGroup } from '../store/boardsStore'
 import { useFreeNodeStore, type FreeNodeData } from '../store/freeNodeStore'
 import { isUndoRestoring, useUndoCoordinator } from '../store/undoCoordinator'
@@ -169,6 +170,7 @@ export function bakeStoryline(nodeId: string, cardsOf: CardsOfDots): string | nu
       w: g.cardWidthOverride, h: g.cardHeightOverride, flipped: g.flipped,
       ...(inDeck ? { deckState: g.deckState, deckAnchorId: anchor, deckOffsetX: g.deckOffsetX, deckOffsetY: g.deckOffsetY, nestedDeck: g.nestedDeck } : {}),
       ...(g.deckLastFront && onMasters.has(master(g.deckLastFront)) ? { deckLastFront: master(g.deckLastFront) } : {}),
+      ...(g.deckLock && (g.deckLock === g.id || onMasters.has(master(g.deckLock))) ? { deckLock: master(g.deckLock) } : {}),
     })
   }
 
@@ -187,7 +189,9 @@ export function bakeStoryline(nodeId: string, cardsOf: CardsOfDots): string | nu
   const { id: _id, ...rest } = n
   void _id
   const storyline: StorylineData = { ...d, chartCard: undefined, dots: d.dots.map(p => ({ ...p, cards: p.cards?.map(master) })) }
-  const chart: ChartData = { title: chartTitle(n), node: { ...rest, storyline }, places, tiers }
+  // A chart that was shown keeps its locks as they were left; one baked
+  // from a plain storyline comes out locked the first time.
+  const chart: ChartData = { title: chartTitle(n), node: { ...rest, storyline }, places, tiers, ...(d.chartCard ? { lockSet: true } : {}) }
 
   useUndoCoordinator.getState().checkpoint()
   let cardId = d.chartCard && byId.has(d.chartCard) ? d.chartCard : null
@@ -280,6 +284,7 @@ export function recallChart(cardId: string): string | null {
           deckOffsetY: anchor ? p.deckOffsetY : undefined,
           nestedDeck: anchor ? p.nestedDeck : undefined,
           deckLastFront: p.deckLastFront ? link.get(p.deckLastFront) : undefined,
+          deckLock: p.deckLock ? link.get(p.deckLock) : undefined,
         }
       }),
     }))
@@ -297,7 +302,11 @@ export function recallChart(cardId: string): string | null {
     .map(g => ({ id: g.id, x: g.originX, y: g.originY }))
   moving = true
   const order = popOrder(ride, true)
-  playChart(id, sideOf(card, node), ride, (c, t) => ({ x: c.x, y: c.y, o: cardsShown(order.get(c.id) ?? 0, ride.length, t) }), showAt, false, () => { setChartMotion(id, null); moving = false })
+  playChart(id, sideOf(card, node), ride, (c, t) => ({ x: c.x, y: c.y, o: cardsShown(order.get(c.id) ?? 0, ride.length, t) }), showAt, false, () => {
+    setChartMotion(id, null); moving = false
+    // Shown for the first time: it comes out locked (Brian 2026-11-05).
+    if (!chart.lockSet) lockChains(id)
+  })
   return id
 }
 
