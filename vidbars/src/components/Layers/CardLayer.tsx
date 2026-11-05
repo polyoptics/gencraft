@@ -247,13 +247,17 @@ const CardContextMenu: React.FC<{
     // (utils/faceStyle). Each shows its own {Name} and details.
     menuItems.push({ label: 'Copy style', icon: '🖌', action: () => { copyFaceStyle(group); onClose() } })
     // Pasted on a deck, closed or open, every card in it takes the style,
-    // cards of decks inside it too (Brian 2026-11-05); a selection wins.
+    // cards of decks inside it too (Brian 2026-11-05). With several cards
+    // selected: each selected closed deck, and each open deck whose primary
+    // card is selected, gives all its cards; other selected cards just
+    // themselves.
     const style = copiedFaceStyle()
-    const deckIds = ids.length > 1 ? null
+    const deckIds = ids.length > 1
+      ? ids.flatMap(id => { const r = rowOf(id); return r && r.length >= 2 && r[0] === id ? r : [id] })
       : deckMemberIds && deckMemberIds.length >= 2 ? [group.id, ...deckMemberIds]
       : (rowOf(group.id)?.length ?? 0) >= 2 ? rowOf(group.id)!
-      : null
-    const pasteIds = deckIds ? expandWithNestedMembers([...new Set(deckIds)], bs.groups) : ids
+      : ids
+    const pasteIds = expandWithNestedMembers([...new Set(deckIds)], bs.groups)
     if (style) menuItems.push({ label: `Paste style${pasteIds.length > 1 ? ` (${pasteIds.length})` : ''}`, icon: '🖌', action: () => {
       useUndoCoordinator.getState().checkpoint()
       useBoardsStore.getState().pasteFaceStyle(pasteIds, style)
@@ -3981,6 +3985,12 @@ const DeckAffordance: React.FC<{ cluster: string[]; front: Deck | 'card' | null;
     if (e.button !== 0) return
     e.stopPropagation()
     e.preventDefault()
+    // Shift+click: the open deck joins or leaves the selection, by its
+    // primary card, as a closed deck does by its front card.
+    if (e.shiftKey) {
+      useBoardsStore.getState().toggleGroupSelection(cluster[0])
+      return
+    }
     useUndoCoordinator.getState().checkpoint()
 
     let lastX = e.clientX
