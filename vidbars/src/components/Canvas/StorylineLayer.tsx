@@ -24,8 +24,9 @@
 //    start, in canvas units, so it scales with the cards round it. Right-click
 //    the grab handle (or the label): Title and description; double-click the
 //    label to edit it. Pressed, the label acts as the grab handle: a click
-//    selects the storyline, a drag moves it. Its corner handle resizes it:
-//    a drag changes its width (the text wraps), Shift+drag scales it whole.
+//    selects the storyline, a drag moves it. Its corner handle scales all
+//    its text (drag down to grow). Editing it shows the card face's text
+//    toolbar, for the title and the description.
 //  - The grab handle at the base's start moves the whole storyline (flipped
 //    up, across the floor); right-click it for colour, thickness and Flip up
 //    in 3D view. Click it to select the
@@ -60,7 +61,7 @@ import ReactDOM from 'react-dom'
 import { HexColorPicker } from 'react-colorful'
 import { create } from 'zustand'
 import { useShallow } from 'zustand/react/shallow'
-import { useFreeNodeStore, type FreeNodeData } from '../../store/freeNodeStore'
+import { useFreeNodeStore, type FreeNodeData, type TextStyle, DEFAULT_HEADER_STYLE, DEFAULT_BODY_STYLE } from '../../store/freeNodeStore'
 import { useCanvasStore, groupBounds } from '../../store/canvasStore'
 import { useBoardsStore, type ProjectGroup } from '../../store/boardsStore'
 import { cardTitle } from '../../utils/faceStyle'
@@ -76,7 +77,7 @@ import { bakeStoryline } from '../../utils/chartCard'
 import { onRows, openDeckOf, rowOf, rowsSeen } from '../../utils/primaryCard'
 import { isHiddenDeckMember } from '../../hooks/useCardDecks'
 import { setStoryWallOf } from '../../utils/wallRoom'
-import { PRESET_COLORS } from '../UI/TextFormatToolbar'
+import { PRESET_COLORS, TextFormatToolbar, ensureFontLoaded, hexToRgba, type TextFieldMode } from '../UI/TextFormatToolbar'
 import {
   deleteBranchFrom, deleteDot, downstream, growDot, insertDot, isBaseEdge, mergeDots, migrateStoryline,
   normalizeStoryline, rootOf, sortBase, storylineEmpty, unlinkStoryCard, upNormal, type StoryDot, type StorylineData,
@@ -1245,15 +1246,16 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
       </div>
         {start && (labelEditing || d.title || d.description) && (() => {
           // Under the base from its start, clear of the decks buttons, as
-          // wide as the base (a short base, a little wider). Outside the
+          // wide as the base (a short base, a little wider), whatever its
+          // scale: the text wraps there. Outside the
           // wall: flipped up, it stays lying on the floor in front of it.
           const xs = (d.base ?? []).map(b => byId.get(b)?.x).filter((x): x is number => x !== undefined)
           const len = xs.length ? Math.max(...xs) - start.x : 0
           const k = d.labelScale ?? LABEL_SCALE
           return (
-            <StoryLabel nodeId={id} title={d.title ?? ''} description={d.description ?? ''} editing={labelEditing}
+            <StoryLabel nodeId={id} d={d} editing={labelEditing}
                         x={start.x} y={start.y + LABEL_GAP * px} k={k} px={px}
-                        w={d.labelWidth ?? Math.max(LABEL_MIN_W, len / k)} />
+                        w={Math.max(LABEL_MIN_W * LABEL_SCALE, len) / k} />
           )
         })()}
       {wall && !cardsStand && tethers.map(t => {
@@ -1423,8 +1425,9 @@ const DECKS_H = 22
 const LABEL_GAP = RING_HIT + 3 + DECKS_H + 8
 /** The label's narrowest, its title's and description's sizes: canvas units. */
 const LABEL_MIN_W = 320
-const LABEL_TITLE = 28
-const LABEL_TEXT = 15
+/** The label's title and description as they start (the card face's). */
+const LABEL_TITLE_STYLE: TextStyle = { ...DEFAULT_HEADER_STYLE, fontSize: 28, align: 'left', lineHeight: 1.2, fontWeight: 600 }
+const LABEL_TEXT_STYLE: TextStyle = { ...DEFAULT_BODY_STYLE, fontSize: 15, color: '#dce4ff', lineHeight: 1.4 }
 /** A new label's scale, times the sizes above. */
 const LABEL_SCALE = 10
 /** The label's resize handle: screen px. */
@@ -1758,25 +1761,49 @@ const StoryTitle: React.FC<{
   )
 }
 
+/** Presses, for a label being edited: listened for as this module loads,
+ *  before the tilted view's own listener (TiltedView), which swallows a
+ *  press on the floor and would leave the label editing. */
+const labelPress = new Set<(e: PointerEvent) => void>()
+if (typeof window !== 'undefined') {
+  window.addEventListener('pointerdown', e => { for (const f of [...labelPress]) f(e) }, true)
+}
+
 /** A storyline's label: its title, and a description under it, left-aligned
- *  at (`x`, `y`) and `w` wide, canvas units. In canvas units, not at one size
- *  on screen: it is part of the picture, as the cards are. Laid out at
- *  canvas size when tilted too (as CanvasUnits does), so its lines break the
- *  same in 2D and 3D. Editing, the same box takes the typing, at the same
- *  size and place. */
+ *  at (`x`, `y`), `w` wide before its scale `k`, canvas units. In canvas
+ *  units, not at one size on screen: it is part of the picture, as the cards
+ *  are. Laid out at canvas size when tilted too (as CanvasUnits does), so its
+ *  lines break the same in 2D and 3D. Editing, the same box takes the
+ *  typing, at the same size and place, with the card face's text toolbar
+ *  (font, size, weight, colour, alignment...) for the title and the
+ *  description. Its corner handle scales all of it (drag down to grow). */
 const StoryLabel: React.FC<{
-  nodeId: string; title: string; description: string; editing: boolean; x: number; y: number
-  /** Width before the scale, and the scale. */
+  nodeId: string; d: StorylineData; editing: boolean; x: number; y: number
   w: number; k: number; px: number
-}> = ({ nodeId, title, description, editing, x, y, w, k, px }) => {
+}> = ({ nodeId, d, editing, x, y, w, k, px }) => {
+  const title = d.title ?? '', description = d.description ?? ''
+  const titleTs: TextStyle = { ...LABEL_TITLE_STYLE, ...d.titleStyle }
+  const textTs: TextStyle = { ...LABEL_TEXT_STYLE, ...d.descriptionStyle }
+  ensureFontLoaded(titleTs.fontFamily); ensureFontLoaded(textTs.fontFamily)
   const z = useWorldZoom()
   const zoomed = z !== null && z !== 1
   const [t, setT] = useState(title)
   const [text, setText] = useState(description)
+  const [field, setField] = useState<TextFieldMode>('header')
   const done = useRef(false)
   const box = useRef<HTMLDivElement | null>(null)
+  const titleRef = useRef<HTMLTextAreaElement | null>(null)
   const textRef = useRef<HTMLTextAreaElement | null>(null)
-  useEffect(() => { if (editing) { setT(title); setText(description); done.current = false } }, [editing]) // eslint-disable-line react-hooks/exhaustive-deps
+  const [rect, setRect] = useState<{ left: number; top: number; right: number; bottom: number } | null>(null)
+  useEffect(() => { if (editing) { setT(title); setText(description); setField('header'); done.current = false } }, [editing]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Where the toolbar goes: under the label as it shows on screen.
+  useLayoutEffect(() => {
+    if (!editing || !box.current) { if (rect) setRect(null); return }
+    const r = box.current.getBoundingClientRect()
+    if (!rect || rect.left !== r.left || rect.top !== r.top || rect.right !== r.right || rect.bottom !== r.bottom) {
+      setRect({ left: r.left, top: r.top, right: r.right, bottom: r.bottom })
+    }
+  })
   const commit = (keep: boolean) => {
     if (done.current) return
     done.current = true
@@ -1790,48 +1817,58 @@ const StoryLabel: React.FC<{
       storyline: { ...rest, ...(nt ? { title: nt } : {}), ...(nd ? { description: nd } : {}) },
     })
   }
-  const titleFont: React.CSSProperties = {
-    fontSize: LABEL_TITLE, lineHeight: 1.2, fontWeight: 600, fontFamily: 'system-ui, sans-serif',
-    color: '#eef2ff', textShadow: '0 1px 4px rgba(0,0,0,0.85)', overflowWrap: 'anywhere',
+  // A press anywhere else ends the editing, kept (labelPress: seen before
+  // the tilted view takes presses for itself).
+  const commitRef = useRef(commit)
+  commitRef.current = commit
+  useEffect(() => {
+    if (!editing) return
+    const onDown = (e: PointerEvent) => {
+      const el = e.target as Element | null
+      if (box.current?.contains(el) || el?.closest?.('[data-text-format-toolbar]')) return
+      commitRef.current(true)
+    }
+    labelPress.add(onDown)
+    return () => { labelPress.delete(onDown) }
+  }, [editing])
+  const setStyle = (key: 'titleStyle' | 'descriptionStyle', s: TextStyle) => {
+    const n = useFreeNodeStore.getState().nodes[nodeId]
+    if (!n?.storyline) return
+    useUndoCoordinator.getState().checkpoint()
+    useFreeNodeStore.getState().updateFreeNode(nodeId, { storyline: { ...n.storyline, [key]: s } })
   }
-  const textFont: React.CSSProperties = {
-    fontSize: LABEL_TEXT, lineHeight: 1.4, fontFamily: 'system-ui, sans-serif',
-    color: 'rgba(220,228,255,0.78)', textShadow: '0 1px 3px rgba(0,0,0,0.85)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere',
-  }
+  const css = (ts: TextStyle, pre: boolean): React.CSSProperties => ({
+    fontSize: ts.fontSize, lineHeight: ts.lineHeight ?? 1.3,
+    fontWeight: ts.fontWeight ?? (ts.bold ? 700 : 400), fontStyle: ts.italic ? 'italic' : 'normal',
+    fontFamily: ts.fontFamily || 'system-ui, sans-serif', textAlign: ts.align,
+    letterSpacing: ts.letterSpacing ?? 0, textTransform: ts.textTransform ?? 'none',
+    color: ts.color, background: ts.bgOpacity > 0 ? hexToRgba(ts.bgColor, ts.bgOpacity) : 'transparent',
+    textShadow: '0 1px 4px rgba(0,0,0,0.85)', overflowWrap: 'anywhere', whiteSpace: pre ? 'pre-wrap' : 'normal',
+  })
+  const titleFont = css(titleTs, false), textFont = css(textTs, true)
   // Fields with no chrome of their own, so typing shows as the label does.
-  const field: React.CSSProperties = {
+  const plain: React.CSSProperties = {
     display: 'block', width: '100%', boxSizing: 'border-box', margin: 0, padding: 0,
-    background: 'transparent', border: 'none', outline: 'none', resize: 'none', textShadow: 'none',
-  }
+    border: 'none', outline: 'none', resize: 'none', textShadow: 'none', fieldSizing: 'content',
+  } as React.CSSProperties
   const [over, setOver] = useState(false)
   const [sizing, setSizing] = useState(false)
-  // Its corner handle: a drag sets its width (the text wraps), Shift+drag
-  // scales it whole, from its top-left corner. One undo step.
+  // Its corner handle: a drag scales the whole label from its top-left
+  // corner, by how far the corner goes down (and up to shrink). One undo step.
   const onGrip = (e: React.PointerEvent) => {
     if (e.button !== 0) return
     e.stopPropagation(); e.preventDefault()
     const el = box.current ?? (e.currentTarget.parentElement as HTMLElement)
-    const r0 = el.getBoundingClientRect()
-    const cx = e.clientX, cy = e.clientY
-    // Screen px per canvas unit along the label, as it lies now (tilted too).
-    const along = r0.width / (w * k)
-    const n0 = useFreeNodeStore.getState().nodes[nodeId]
-    if (!n0?.storyline || along <= 0) return
+    const h0 = Math.max(8, el.getBoundingClientRect().height)
+    const cy = e.clientY
+    if (!useFreeNodeStore.getState().nodes[nodeId]?.storyline) return
     useUndoCoordinator.getState().checkpoint()
     setSizing(true)
     const move = (ev: PointerEvent) => {
       const n = useFreeNodeStore.getState().nodes[nodeId]
       if (!n?.storyline) return
-      const grown = (r0.width + ev.clientX - cx) / along // canvas units, scaled
-      if (ev.shiftKey) {
-        // Whole: by how far the corner went out, along its diagonal.
-        const d0 = Math.hypot(r0.width, r0.height)
-        const d1 = Math.hypot(r0.width + ev.clientX - cx, r0.height + ev.clientY - cy)
-        const nk = Math.max(0.5, Math.min(100, k * d1 / Math.max(1, d0)))
-        useFreeNodeStore.getState().updateFreeNode(nodeId, { storyline: { ...n.storyline, labelScale: nk, labelWidth: w } })
-      } else {
-        useFreeNodeStore.getState().updateFreeNode(nodeId, { storyline: { ...n.storyline, labelScale: k, labelWidth: Math.max(60, grown / k) } })
-      }
+      const nk = Math.max(0.5, Math.min(100, k * (h0 + ev.clientY - cy) / h0))
+      useFreeNodeStore.getState().updateFreeNode(nodeId, { storyline: { ...n.storyline, labelScale: nk } })
     }
     const up = () => {
       window.removeEventListener('pointermove', move)
@@ -1857,24 +1894,33 @@ const StoryLabel: React.FC<{
           <div
             ref={box} data-role="ui" data-story-label={nodeId}
             onPointerDown={e => e.stopPropagation()}
-            onBlur={e => { if (!box.current?.contains(e.relatedTarget as Node | null)) commit(true) }}
             onKeyDown={e => {
               e.stopPropagation()
               if (e.key === 'Escape') commit(false)
               else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) commit(true)
             }}
-            style={{ outline: '1px solid rgba(143,194,255,0.6)', outlineOffset: 4, borderRadius: 2, background: 'rgba(18,19,31,0.6)' }}
+            style={{ outline: `${1.5 * px / k}px solid rgba(143,194,255,0.6)`, outlineOffset: 4, borderRadius: 2, background: 'rgba(18,19,31,0.6)' }}
           >
-            <input
-              autoFocus value={t} maxLength={120} placeholder="Title"
-              onChange={e => setT(e.target.value)}
+            <textarea
+              ref={titleRef} autoFocus value={t} maxLength={120} placeholder="Title" rows={1}
+              onChange={e => setT(e.target.value.replace(/\n/g, ' '))}
+              onFocus={() => setField('header')}
               onKeyDown={e => { if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) { e.preventDefault(); textRef.current?.focus() } }}
-              style={{ ...titleFont, ...field }}
+              style={{ ...titleFont, ...plain, color: titleTs.color }}
             />
             <textarea
               ref={textRef} value={text} maxLength={2000} placeholder="Description" rows={1}
               onChange={e => setText(e.target.value)}
-              style={{ ...textFont, ...field, fieldSizing: 'content', minHeight: '1.4em', marginTop: 4 } as React.CSSProperties}
+              onFocus={() => setField('body')}
+              style={{ ...textFont, ...plain, color: textTs.color, minHeight: '1.4em', marginTop: 4 }}
+            />
+            <TextFormatToolbar
+              headerStyle={titleTs} bodyStyle={textTs}
+              onHeaderStyleChange={s => setStyle('titleStyle', s)}
+              onBodyStyleChange={s => setStyle('descriptionStyle', s)}
+              activeField={field}
+              onActiveFieldChange={f => { setField(f); (f === 'header' ? titleRef : textRef).current?.focus() }}
+              anchorRect={rect} preferBelow onClose={() => commit(true)}
             />
           </div>
         ) : (
@@ -1883,11 +1929,10 @@ const StoryLabel: React.FC<{
                         outline: over || sizing ? `${1.5 * px / k}px dashed rgba(143,194,255,0.5)` : 'none', outlineOffset: 4 }}>
             {title && <div style={titleFont}>{title}</div>}
             {description && <div style={{ ...textFont, marginTop: title ? 4 : 0 }}>{description}</div>}
-            {/* Resize: drag for width, Shift+drag to scale it whole. Shown
-                while the mouse is over the label. */}
+            {/* Drag to scale it all. Shown while the mouse is over it. */}
             <div
               data-role="ui" data-story-label-grip={nodeId}
-              title="Drag to change the width; Shift+drag to scale the label"
+              title="Drag to scale the title and description"
               onPointerDown={onGrip}
               style={{
                 position: 'absolute', right: -gripPx / 2 - 4, bottom: -gripPx / 2 - 4, width: gripPx, height: gripPx,

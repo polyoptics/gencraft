@@ -60,9 +60,9 @@ export interface StorylineData {
   description?: string
   /** The label's size, times its plain size (absent: LABEL_SCALE, 10). */
   labelScale?: number
-  /** The label's width before its scale, canvas units (absent: as wide as
-   *  the base). */
-  labelWidth?: number
+  /** The title's and description's text styles (the card face's). */
+  titleStyle?: import('../store/freeNodeStore').TextStyle
+  descriptionStyle?: import('../store/freeNodeStore').TextStyle
   /** Before dots: lines with points along them (migrateStoryline reads them
    *  once, and they go). */
   lines?: LegacyLine[]
