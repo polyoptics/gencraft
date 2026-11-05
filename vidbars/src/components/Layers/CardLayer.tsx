@@ -2146,6 +2146,10 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
             </div>
           </div>
 
+          {/* Turned over (its header's Flip): the face shows its back. */}
+          {anchorGroup.flipped && <div data-face-back style={{ position: 'absolute', top: headerPad, left: 0, right: 0, bottom: 0, zIndex: 6, overflow: 'hidden', borderRadius: '0 0 12px 12px', background: backColor(anchorGroup.color) }}>
+            <CardBack groupId={anchorGroup.id} color={anchorGroup.color} width={screenWidth} height={Math.max(1, screenHeight - headerPad)} hovered={isHovered} reserve={6 + Math.min(32, Math.max(8, 16 * overviewScale(zoom), headerScreenH(zoom) * 0.85)) + 4} />
+          </div>}
           {/* ── Card-zoom annotation layer for the deck's primary card.
                   Draws on the anchor group's cardStrokes — same surface as
                   the open card uses, so leaving stack/fan state preserves
@@ -3263,6 +3267,9 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[]; lay
           }}
         >
           {surfacedHero && <HeroImageLayer heroImage={surfacedHero} transform={surfacedGroup.cardHeroTransform} />}
+          {surfacedGroup.flipped && <div data-face-back style={{ position: 'absolute', top: headerPad, left: 0, right: 0, bottom: 0, zIndex: 6, overflow: 'hidden', borderRadius: '0 0 12px 12px', background: backColor(surfacedGroup.color) }}>
+            <CardBack groupId={surfacedGroup.id} color={surfacedGroup.color} width={screenWidth} height={Math.max(1, screenHeight - headerPad)} hovered={isHovered} reserve={6 + Math.min(32, Math.max(8, 16 * overviewScale(zoom), headerScreenH(zoom) * 0.85)) + 4} />
+          </div>}
           {/* Content area — offset below header extension */}
           <div style={{ position: 'absolute', top: headerPad, left: 0, right: 0, bottom: 0, overflow: 'hidden', borderRadius: '0 0 12px 12px' }}>
             <GroupCardText groupId={surfacedGroup.id} />
@@ -3351,6 +3358,9 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[]; lay
             {anchorGroup.cardSummary || anchorGroup.name}
           </div>
         </div>
+        {anchorGroup.flipped && <div data-face-back style={{ position: 'absolute', top: headerPad, left: 0, right: 0, bottom: 0, zIndex: 6, overflow: 'hidden', borderRadius: '0 0 12px 12px', background: backColor(anchorGroup.color) }}>
+            <CardBack groupId={anchorGroup.id} color={anchorGroup.color} width={screenWidth} height={Math.max(1, screenHeight - headerPad)} hovered={isHovered} reserve={6 + Math.min(32, Math.max(8, 16 * overviewScale(zoom), headerScreenH(zoom) * 0.85)) + 4} />
+          </div>}
         {/* The deck-member count now lives inside the dashed-rect
             affordance in the header (one element, two jobs). */}
       </div>
@@ -4099,16 +4109,6 @@ const DeckAffordance: React.FC<{ cluster: string[]; front: Deck | 'card' | null;
         {/* The front card's Flip, for the same reason as its drag-out: the
             zone covers the card's own. Turned over, the zone lets presses
             through and the card's own Flip takes them. */}
-        {primaryGroup && front === 'card' && !primaryGroup.effect && !frontFlipped && (
-          <FlipButton
-            flipped={false}
-            onFlip={() => useBoardsStore.getState().setGroupFlipped(primaryGroup.id, true)}
-            baseColor={primaryGroup.color}
-            size={Math.min(32, Math.max(8, 16 * overviewScale(zoom), headerScreenH(zoom) * 0.85))}
-            visible={isHovered}
-            style={{ top: computeHeaderExtend(zoom) + CARD_TOOL_INSET, left: CARD_TOOL_INSET }}
-          />
-        )}
         {primaryGroup && front === 'card' && (
           <CardFaceDragOut
             url={isHovered ? cardGripUrl(primaryGroup, boards) : null}
