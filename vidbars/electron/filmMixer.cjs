@@ -173,6 +173,8 @@ const PAGE_SCRIPTS = {
   })()`,
   // The film's length in frames, and where each mixable shot starts and ends in it.
   film: () => `({ frames: Math.max(0, ...F.segs.filter(s => !s.outside && typeof s.end === 'number').map(s => s.end)), shots: F.segs.filter(s => s.look && !s.outside && typeof s.start === 'number').map(s => ({ clip: s.clip, start: s.start, end: s.end })) })`,
+  // The saved looks, by name and colour, for the mixer mockup.
+  looks: () => `Object.keys(S.looks).map(name => ({ name, colour: colourOf(name) }))`,
   // The shots selected now.
   sel: () => `[...F.sel].map(k => F.segs[k] && F.segs[k].clip).filter(Boolean)`,
   // Go to one shot, keeping the selection.

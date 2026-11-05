@@ -62,6 +62,7 @@ export interface VidbarsDesktop {
   } | null>
   mixerCall?(op: 'shots', clips?: string[]): Promise<{ k: number; clip: string; look: boolean; n: number; start: number | null; end: number | null }[] | null>
   mixerCall?(op: 'sel', clips?: string[]): Promise<string[] | null>
+  mixerCall?(op: 'looks', clips?: string[]): Promise<{ name: string; colour: string }[] | null>
   mixerCall?(op: 'film', clips?: string[]): Promise<{ frames: number; shots: { clip: string; start: number; end: number }[] } | null>
   mixerCall?(op: 'embed' | 'use' | 'go', clips?: string[]): Promise<unknown>
   mixerThumb?(seg: number): Promise<string | null>
