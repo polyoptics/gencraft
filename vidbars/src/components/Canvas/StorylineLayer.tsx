@@ -1570,7 +1570,7 @@ const StoryMenu: React.FC<{
     items.push({ label: 'Delete branch', icon: '🗑️', danger: true, action: () => editStoryline(id, x => deleteBranchFrom(x, far)) })
   }
   // Fold it into a card: its title, groups and layout (utils/chartCard).
-  if (at.grab && d.dots.some(p => p.cards?.length)) items.push({ label: d.chartCard ? 'Bake back into its card' : 'Bake into a card', icon: '📥', action: () => {
+  if (at.grab && d.dots.some(p => p.cards?.length)) items.push({ label: d.chartCard ? 'Fold into its card' : 'Bake into a card', icon: '📥', action: () => {
     bakeStoryline(id, cardOrigins)
   } })
   if (at.grab) items.push({ label: 'Title and description', icon: '✏️', action: () => useStoryUi.getState().set({ labelEditing: id }) })

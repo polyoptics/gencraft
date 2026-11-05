@@ -123,7 +123,9 @@ const CardContextMenu: React.FC<{
 
   const menuItems: { label: string; icon: string; action: (e: React.MouseEvent<HTMLButtonElement>) => void; danger?: boolean; separator?: boolean
     /** Pointer over the item (true) or off it (false): e.g. show where it will act. */
-    hover?: (on: boolean) => void }[] = []
+    hover?: (on: boolean) => void
+    /** An on/off item: lit while on. Its label never changes. */
+    lit?: boolean }[] = []
   // A dashed outline on the canvas while a chart item is pointed at: where
   // the chart comes out (canvas units).
   const [chartGhost, setChartGhost] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
@@ -207,9 +209,14 @@ const CardContextMenu: React.FC<{
       const b = groupBounds(group.id)
       const card = b ? { x: b.x + 16, y: b.y, w: Math.max(1, b.w - 32), h: b.h } : null
       const beside = card ? chartSpotBeside(chart, card) : null
-      if (out) menuItems.push({ label: 'Bake chart back in', icon: '📥', action: () => { bakeStoryline(out, cardOrigins); onClose() } })
-      else {
-        menuItems.push({ label: 'Recall chart', icon: '📤', hover: on => setChartGhost(on ? area : null), action: () => { recallChart(group.id); onClose() } })
+      // One on/off item (Brian 2026-11-05): on, the chart is out; off, it
+      // folds back in, saved as it stands, where it stands.
+      menuItems.push({
+        label: 'Show chart', icon: '📊', lit: !!out,
+        hover: on => setChartGhost(on && !out ? area : null),
+        action: () => { if (out) bakeStoryline(out, cardOrigins); else recallChart(group.id); onClose() },
+      })
+      if (!out) {
         if (beside) menuItems.push({
           label: 'Move chart here', icon: '📌',
           hover: on => setChartGhost(on ? { ...area, x: area.x + beside.x - chart.node.x, y: area.y + beside.y - chart.node.y } : null),
@@ -434,6 +441,14 @@ const CardContextMenu: React.FC<{
             >
               <span style={{ fontSize: 14, width: 18, textAlign: 'center' }}>{item.icon}</span>
               {item.label}
+              {item.lit !== undefined && (
+                <span data-menu-lit={item.lit ? 'on' : 'off'} style={{
+                  marginLeft: 'auto', width: 8, height: 8, borderRadius: '50%',
+                  background: item.lit ? '#7fd1ff' : 'transparent',
+                  border: '1.5px solid ' + (item.lit ? '#7fd1ff' : 'rgba(255,255,255,0.35)'),
+                  boxShadow: item.lit ? '0 0 6px #7fd1ff' : 'none',
+                }} />
+              )}
             </button>
           </React.Fragment>
         ))}
