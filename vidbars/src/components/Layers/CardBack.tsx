@@ -319,6 +319,38 @@ const RankBadge: React.FC<{ rank: number; color: string }> = ({ rank, color }) =
   }}>{rank}</div>
 )
 
+/** FOLD on a faction's back (lit: folded), as a long detail's FOLD looks. */
+const MemberFold: React.FC<{ folded: boolean; ink: string; title: string; onClick: () => void; attr: Record<string, string> }> = ({ folded, ink, title, onClick, attr }) => (
+  <button
+    type="button"
+    {...attr}
+    title={title}
+    onPointerDown={stopPress}
+    onClick={e => { e.stopPropagation(); onClick() }}
+    style={{
+      flexShrink: 0, marginLeft: 'auto', marginRight: 12, height: 9, padding: '0 3px', lineHeight: '9px',
+      fontSize: 6.5, fontWeight: 700, borderRadius: 3, border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+      background: folded ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.3)', color: folded ? '#fff' : ink, opacity: folded ? 1 : 0.55,
+    }}
+  >FOLD</button>
+)
+
+/** A faction's members as listed (depth first, utils/cardTypes
+ *  factionMembers) less those under a folded one; `crew`: a row has some
+ *  under it, to fold. */
+function unfolded(list: FactionMember[], folded: ReadonlySet<string>): { m: FactionMember; crew: boolean }[] {
+  const out: { m: FactionMember; crew: boolean }[] = []
+  let hideBelow = Infinity
+  list.forEach((m, i) => {
+    if (m.depth > hideBelow) return
+    hideBelow = Infinity
+    const crew = (list[i + 1]?.depth ?? -1) > m.depth
+    out.push({ m, crew })
+    if (crew && folded.has(m.card.id)) hideBelow = m.depth
+  })
+  return out
+}
+
 /** The details side, filling the card's body (below its name tab). */
 export const CardBack: React.FC<{
   groupId: string; color: string; width: number; height: number; hovered: boolean
@@ -537,8 +569,16 @@ export const CardBack: React.FC<{
     window.addEventListener('keydown', onKey, true)
   }
 
-  /** One member's row in a faction's list (by rank, or inside its group). */
-  const memberRow = ({ card, rank, depth, bosses }: FactionMember, showRank: boolean) => {
+  // Members folded on this back: those under them are hidden.
+  const folded = new Set(me?.foldedMembers ?? [])
+  const setFolds = (ids: string[], f: boolean) => {
+    useUndoCoordinator.getState().checkpoint()
+    useBoardsStore.getState().setMembersFolded(groupId, ids, f)
+  }
+
+  /** One member's row in a faction's list (by rank, or inside its group).
+   *  `crew`: some are under it, so it can be folded. */
+  const memberRow = ({ card, rank, depth, bosses }: FactionMember, showRank: boolean, crew = false) => {
                 const target = mdrag?.over === card.id && mdrag.ok
                 return (
                 <div
@@ -569,6 +609,16 @@ export const CardBack: React.FC<{
                     <span data-member-also title={'Also reports to ' + bosses.slice(1).map(b => b.name || 'Untitled').join(', ')} style={{ fontSize: 7.5, opacity: 0.6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: '0 1000 auto' }}>
                       &amp; {bosses.slice(1).map(b => b.name || 'Untitled').join(', ')}
                     </span>
+                  )}
+                  {/* Fold away those under it (lit: folded). */}
+                  {crew && (
+                    <MemberFold
+                      folded={folded.has(card.id)}
+                      ink={ink}
+                      title="Fold away those under them (lit: folded)"
+                      attr={{ 'data-member-fold': card.id }}
+                      onClick={() => setFolds([card.id], !folded.has(card.id))}
+                    />
                   )}
                   {rowHover === 'm:' + card.id && !linking && !mdrag && (
                     <button
@@ -725,12 +775,17 @@ export const CardBack: React.FC<{
             <>
               <div
                 data-faction-top
-                title="Drag a group's heading onto another group to move it there"
+                title="Drag a section's heading onto another section to move it there"
                 style={{ fontSize: 7, fontWeight: 800, letterSpacing: 1, color: ink, opacity: 0.6, padding: '1px 2px 0' }}
-              >GROUPS</div>
+              >SECTION MEMBERS</div>
               {fgroups.map((fg, i) => {
                 const sub = factionMembers(groups, { ...me, linkedGroupIds: fg.cards })
                 const lead = sub[0]?.card
+                // Its leaders with some under them: FOLD on the heading
+                // folds the section down to its leaders (lit: all folded).
+                const rows = unfolded(sub, folded)
+                const leaders = sub.filter((m, k) => m.depth === 0 && (sub[k + 1]?.depth ?? -1) > 0).map(m => m.card.id)
+                const allFolded = leaders.length > 0 && leaders.every(id => folded.has(id))
                 const into = (mdrag?.over === 'group:' + fg.id && mdrag.ok) || (!!gdrag && gdrag.over === fg.id && gdrag.id !== fg.id)
                 return (
                   <div key={fg.id} data-faction-group={fg.id} style={{
@@ -742,7 +797,7 @@ export const CardBack: React.FC<{
                   }}>
                     <div
                       data-group-head={fg.id}
-                      title="Drag onto another group to move it there. Drag a member here to put it in this group."
+                      title="Drag onto another section to move it there. Drag a member here to put it in this section."
                       onPointerDown={e => onGroupDown(e, fg.id)}
                       style={{ display: 'flex', alignItems: 'center', gap: 3, minHeight: 13, cursor: gdrag ? 'grabbing' : 'grab' }}
                     >
@@ -751,9 +806,18 @@ export const CardBack: React.FC<{
                         {fg.title?.trim() || lead?.name || 'Untitled'}
                       </span>
                       <span style={{ fontSize: 7.5, opacity: 0.55, flexShrink: 0 }}>{fg.cards.length}</span>
+                      {leaders.length > 0 && (
+                        <MemberFold
+                          folded={allFolded}
+                          ink={ink}
+                          title="Fold the section down to its leaders (lit: folded)"
+                          attr={{ 'data-section-fold': fg.id }}
+                          onClick={() => setFolds(leaders, !allFolded)}
+                        />
+                      )}
                     </div>
                     <div style={{ marginLeft: 5, display: 'flex', flexDirection: 'column', gap: 1 }}>
-                      {sub.map(m => memberRow(m, false))}
+                      {rows.map(({ m, crew }) => memberRow(m, false, crew))}
                     </div>
                   </div>
                 )
@@ -777,7 +841,7 @@ export const CardBack: React.FC<{
               {members.length === 0 && (
                 <div style={{ fontSize: 8, opacity: 0.45, padding: '0 2px 2px' }}>Drag a card’s + here to add it.</div>
               )}
-              {members.map(m => memberRow(m, true))}
+              {unfolded(members, folded).map(({ m, crew }) => memberRow(m, true, crew))}
               <div style={{ fontSize: 7, fontWeight: 800, letterSpacing: 1, color: ink, opacity: 0.6, padding: '4px 2px 0' }}>DETAILS</div>
             </>
           )}

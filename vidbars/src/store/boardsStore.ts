@@ -179,6 +179,10 @@ export interface ProjectGroup {
   chart?: import('../utils/chartData').ChartData
   /** A FACTION's groups, top to bottom (utils/factionGroups). Absent: it has none. */
   factionGroups?: import('../utils/factionGroups').FactionGroup[]
+  /** A FACTION's members folded on its back: those under them are hidden
+   *  (Brian 2026-11-05: fold a section down to its leaders, or to the
+   *  leader and the seconds-in-command). */
+  foldedMembers?: string[]
 }
 
 /** Find which group a board belongs to */
@@ -380,6 +384,8 @@ interface BoardsState {
   setReportsTo: (factionId: string, memberId: string, bossId: string | null, also?: boolean) => void
   /** A faction's groups, who reports to whom and its members, at once (utils/factionGroups). */
   setFactionShape: (factionId: string, shape: Pick<ProjectGroup, 'factionGroups' | 'reportsTo' | 'linkedGroupIds'>) => void
+  /** Fold (or open) these members on a faction's back: hide those under them. */
+  setMembersFolded: (factionId: string, memberIds: string[], folded: boolean) => void
   /** A face copied from one card put on these (utils/faceStyle): its text,
    *  how it is set, and the line between title and body. Once, not tied. */
   pasteFaceStyle: (groupIds: string[], style: import('../utils/faceStyle').FaceStyle) => void
@@ -1119,6 +1125,16 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
 
   setFactionShape(factionId, shape) {
     set(s => ({ groups: s.groups.map(g => g.id === factionId ? { ...g, ...shape } : g) }))
+  },
+
+  setMembersFolded(factionId, memberIds, folded) {
+    set(s => ({ groups: s.groups.map(g => {
+      if (g.id !== factionId) return g
+      const now = new Set(g.foldedMembers ?? [])
+      for (const id of memberIds) if (folded) now.add(id); else now.delete(id)
+      const { foldedMembers: _f, ...rest } = g
+      return now.size ? { ...rest, foldedMembers: [...now] } : rest
+    }) }))
   },
 
   setReportsTo(factionId, memberId, bossId, also) {
