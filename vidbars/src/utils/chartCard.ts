@@ -35,7 +35,7 @@ import { useCanvasStore } from '../store/canvasStore'
  *  own elements (moving them in the store every frame redrew every card and
  *  dropped frames). Their positions are written once. While one plays,
  *  another fold or show waits it out. */
-const MOTION_MS = 560
+const MOTION_MS = 452
 let moving = false
 const clamp01 = (t: number) => Math.max(0, Math.min(1, t))
 const easeOut = (t: number) => 1 - Math.pow(1 - t, 3)
@@ -43,17 +43,17 @@ const easeInOut = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t 
 type Phase = { drop: number; slide: number; tether: number }
 /** Folding at time t (0..1): the cards go (cardsGone), their tethers
  *  pull back into the dots, then the line drops and slides in. */
-const foldAt = (t: number): Phase => ({ tether: 1 - easeInOut(clamp01((t - 0.385) / 0.095)), drop: easeOut(clamp01((t - 0.48) / 0.21)), slide: easeInOut(clamp01((t - 0.54) / 0.46)) })
+const foldAt = (t: number): Phase => ({ tether: 1 - easeInOut(clamp01((t - 0.239) / 0.117)), drop: easeOut(clamp01((t - 0.356) / 0.261)), slide: easeInOut(clamp01((t - 0.429) / 0.571)) })
 /** The cards don't travel (Brian 2026-11-05): each just appears where it
  *  sits, quickly, one after another from the bottom up, and goes the same
  *  way top down. Card `i` of `n` in that order: shown 0..1 at time t. */
-const POP = 0.07
-const cardsGone = (i: number, n: number, t: number) => 1 - clamp01((t - (0.385 - POP) * (n > 1 ? i / (n - 1) : 0)) / POP)
+const POP = 0.044
+const cardsGone = (i: number, n: number, t: number) => 1 - clamp01((t - (0.239 - POP) * (n > 1 ? i / (n - 1) : 0)) / POP)
 /** Showing: the line slides out and rises, the tethers grow out of the
  *  dots to where the cards will be (Brian 2026-11-05), then the cards
  *  appear (cardsShown). */
-const showAt = (t: number): Phase => ({ slide: 1 - easeInOut(clamp01(t / 0.33)), drop: 1 - easeOut(clamp01((t - 0.26) / 0.21)), tether: easeOut(clamp01((t - 0.47) / 0.15)) })
-const cardsShown = (i: number, n: number, t: number) => clamp01((t - 0.62 - (0.38 - POP) * (n > 1 ? i / (n - 1) : 0)) / POP)
+const showAt = (t: number): Phase => ({ slide: 1 - easeInOut(clamp01(t / 0.409)), drop: 1 - easeOut(clamp01((t - 0.323) / 0.259)), tether: easeOut(clamp01((t - 0.582) / 0.186)) })
+const cardsShown = (i: number, n: number, t: number) => clamp01((t - 0.768 - (0.232 - POP) * (n > 1 ? i / (n - 1) : 0)) / POP)
 /** Ride order for popping: lowest card first (`up`), else highest. */
 const popOrder = (ride: Ride[], up: boolean) => {
   const by = [...ride].sort((a, b) => (up ? b.y - a.y : a.y - b.y))
