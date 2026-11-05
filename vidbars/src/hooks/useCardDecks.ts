@@ -7,7 +7,8 @@ import type { ProjectGroup, BoardData } from '../store/boardsStore'
 import { type GroupSlot } from '../utils/nlePush'
 import { computeGroupLayout, getRowY, getRowHeight } from '../utils/nleRows'
 import { DEFAULT_H } from '../utils/barConstants'
-import { lyingLeft, storyCardsKey } from '../utils/deckAway'
+import { nearer } from '../utils/deckAway'
+import { primaryFirst } from '../utils/primaryCard'
 import { NLE_HEADER_CANVAS_H } from '../components/NLE/NLETimelineHeader'
 
 /** Returns true if this group is a non-anchor member of a stacked/fanned deck (visually hidden). */
@@ -89,8 +90,8 @@ export function cardVisualRect(
 
 export interface Deck {
   id: string              // sorted member group IDs joined with "|"
-  memberIds: string[]     // group IDs sorted left-to-right by card rect
-  anchorGroupId: string   // leftmost = primary card
+  memberIds: string[]     // group IDs, the front card first, then nearest it first (utils/deckAway nearer)
+  anchorGroupId: string   // the front card (the row's primary card, utils/primaryCard)
   state: 'fanned' | 'stacked'
   rects: Map<string, GroupSlot> // per-member rects for rendering
 }
@@ -138,11 +139,7 @@ export function useCardDecks(
   // hints with their column neighbours.
   const dockedKey = useFreeNodeStore(s => Object.values(s.nodes)
     .filter(n => n.cardRef && n.railDock && !n.railDock.lifted).map(n => n.cardRef).sort().join('|'))
-  // The cards linked to a storyline: a deck holding one reads from its
-  // front card leftward when its cards lie left of it (utils/deckAway).
-  const storyCards = useFreeNodeStore(s => storyCardsKey(s.nodes))
   return useMemo(() => {
-    const onLine = new Set(storyCards ? storyCards.split('|') : [])
     if (groups.length < 2) {
       return { decks: [], touchingClusters: [], getDeckForGroup: () => null }
     }
@@ -278,7 +275,9 @@ export function useCardDecks(
     const docked = new Set(dockedKey ? dockedKey.split('|') : [])
     const clusters = docked.size === 0 ? allClusters
       : allClusters.map(c => c.filter(id => !docked.has(id))).filter(c => c.length >= 2)
-    const touchingClusters = clusters
+    // Each row leads with its primary card (utils/primaryCard): the leftmost,
+    // or a card made primary. The row's controls sit on it.
+    const touchingClusters = clusters.map(c => c.some(id => groupMap.get(id)?.deckLastFront) ? primaryFirst(groups, c) : c)
 
     // 5. Filter to decks: clusters where ALL members have deckState !== 'open'
     // (groupMap declared above for ghost-bridge construction).
@@ -332,15 +331,17 @@ export function useCardDecks(
       if (!anchorGroup) continue
       if (fullMembers.length < 2) continue
 
-      // Sort by left edge (anchor first by convention). A deck on a
-      // storyline whose cards all lie left of its front card (opened away
-      // from the line, utils/deckAway) reads from it leftward instead: front
-      // first, then nearest, as a deck laid out to the right does.
+      // The front card first, then the rest nearest it first (utils/deckAway
+      // nearer): left to right for a deck laid out to the right, as before;
+      // right to left, or out from it, when its primary card is on the right
+      // or in the middle, or it opened away from a storyline.
       const sorted = fullMembers.sort((a, b) => (rects.get(a)?.left ?? 0) - (rects.get(b)?.left ?? 0))
-      const aL = rects.get(anchorId)?.left ?? 0
-      const rest = sorted.filter(id => id !== anchorId)
-      if (rest.length && sorted.some(id => onLine.has(id)) && lyingLeft(rest.map(id => ({ deckOffsetX: (rects.get(id)?.left ?? aL) - aL }))))
-        sorted.splice(0, sorted.length, anchorId, ...rest.reverse())
+      const aL = rects.get(anchorId)?.left ?? 0, aT = rects.get(anchorId)?.top ?? 0
+      const dx = (id: string) => (rects.get(id)?.left ?? aL) - aL, dy = (id: string) => (rects.get(id)?.top ?? aT) - aT
+      const others = sorted.filter(id => id !== anchorId)
+      const up = others.length > 0 && others.every(id => dy(id) < -1)
+      const rest = others.sort((a, b) => nearer(dx(a), dy(a), dx(b), dy(b), up))
+      sorted.splice(0, sorted.length, anchorId, ...rest)
 
       // Derive deck state: anchor's deckState is authoritative when non-open.
       // Fall back to member analysis only when anchor is 'open' (sub-deck anchor case,
@@ -381,7 +382,7 @@ export function useCardDecks(
       touchingClusters,
       getDeckForGroup: (gid: string) => groupToDeck.get(gid) ?? null,
     }
-  }, [groups, boards, zoom, dockedKey, storyCards])
+  }, [groups, boards, zoom, dockedKey])
 }
 
 /** The groups a canvas drag has to steer around.

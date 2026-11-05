@@ -23,7 +23,7 @@ import { loadImage } from './fx/chain'
 import { getMediaItems, type MediaItem } from '../types/bar'
 import { layoutCutCard, readClipLengths } from './cutCard'
 import { ensureModelPoster, getModelPoster, usePosterMapStore } from '../three/posterService'
-import { byLay, deckOnStoryline } from './deckAway'
+import { byLay } from './deckAway'
 
 // A new poster for a model (the Viewer's SNAP, or one just rendered)
 // goes onto every block holding that model at once, so card faces, block
@@ -312,7 +312,7 @@ export function stackedDeckMembers(anchorId: string, groups: ProjectGroup[]): st
   const anchor = groups.find(g => g.id === anchorId)
   if (anchor?.deckState !== 'stacked') return []
   const kids = groups.filter(g => g.id !== anchorId && g.deckAnchorId === anchorId && g.deckState === 'stacked')
-  const rest = byLay(kids, deckOnStoryline([anchorId, ...kids.map(g => g.id)]))
+  const rest = byLay(kids)
   return [anchorId, ...rest.map(g => g.id)]
 }
 
@@ -504,7 +504,7 @@ function remembered(b: BoardData, source: ProjectGroup | undefined): BoardData {
   if (b.fromCard || !source) return b
   const card: Partial<ProjectGroup> = { ...source }
   // Where it was, not what it is: it comes back wherever it is dropped.
-  for (const k of ['boardIds', 'originX', 'originY', 'deckState', 'deckAnchorId', 'nestedDeck', 'deckOffsetX', 'deckOffsetY', 'deckFaceCard', 'ghostSlots', 'pin', 'home', 'pinnedLayer', 'railBase'] as const) delete card[k]
+  for (const k of ['boardIds', 'originX', 'originY', 'deckState', 'deckAnchorId', 'nestedDeck', 'deckOffsetX', 'deckOffsetY', 'deckFaceCard', 'ghostSlots', 'pin', 'home', 'pinnedLayer', 'railBase', 'deckLastFront'] as const) delete card[k]
   const root = isSimpleBlock(b) ? b.bars[b.rootIds[0]] : undefined
   return {
     ...b,

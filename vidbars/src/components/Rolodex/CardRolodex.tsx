@@ -60,7 +60,7 @@ import {
 import { ensureFontLoaded, hexToRgba } from '../UI/TextFormatToolbar'
 import { FileContextMenu } from '../UI/FileMenu'
 import { mayHaveDiskFile } from '../../hooks/useFileMenu'
-import { deckOnStoryline, lyingLeft } from '../../utils/deckAway'
+import { lyingUp, nearer } from '../../utils/deckAway'
 
 // Card width — uniform across active and tucked cards. The active card
 // "rises" only via vertical growth (expansion); it's never wider than
@@ -274,17 +274,16 @@ type RolodexRow =
 // pinned-list evaluator shares them (tile results must equal rolodex
 // results by construction).
 
-/** Sort by deck-fan order: deckOffsetX ascending. The canvas's
- *  useCardDecks hook orders members by their visual rect.left, which —
- *  since every member of a deck shares the same anchor's originX —
- *  comes out the same as ordering by each member's deckOffsetX. So
+/** Sort by deck-fan order: nearest the front card first by offset. The
+ *  canvas's useCardDecks hook orders members the same way by their visual
+ *  rects, which — since every member of a deck shares the same anchor's
+ *  origin — comes out the same as ordering by each member's offset. So
  *  this matches what you see when the deck is fanned on canvas, and
  *  it stays stable regardless of the user's flat-mode sort choice. */
 function sortByFanOrder(arr: ProjectGroup[]): ProjectGroup[] {
-  // Right to left for a deck on a storyline lying left of its front card
-  // (utils/deckAway).
-  const k = lyingLeft(arr) && deckOnStoryline(arr.flatMap(g => g.deckAnchorId ? [g.id, g.deckAnchorId] : [g.id])) ? -1 : 1
-  return [...arr].sort((a, b) => k * ((a.deckOffsetX ?? 0) - (b.deckOffsetX ?? 0)))
+  // Nearest its front card first, whichever way the deck lies (utils/deckAway nearer).
+  const up = lyingUp(arr)
+  return [...arr].sort((a, b) => nearer(a.deckOffsetX ?? 0, a.deckOffsetY ?? 0, b.deckOffsetX ?? 0, b.deckOffsetY ?? 0, up))
 }
 
 /** Flat list — every group as a level-0 row, sorted by sortMode. The

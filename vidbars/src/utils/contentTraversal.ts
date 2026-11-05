@@ -25,7 +25,7 @@ import type { MediaType } from '../types/bar'
 import { getMediaItems } from '../types/bar'
 import type { ActiveItem } from '../store/viewport3dStore'
 import { getModelPoster } from '../three/posterService'
-import { deckOnStoryline, lyingLeft } from './deckAway'
+import { lyingUp, nearer } from './deckAway'
 
 /** Browse items ARE storable actives — no separate shape. */
 export type BrowseItem = ActiveItem
@@ -41,11 +41,11 @@ function expandDeckTree(rootGroupId: string, groups: ProjectGroup[]): ProjectGro
   let frontier = [rootGroupId]
   while (frontier.length > 0) {
     const kids = groups.filter(g => g.deckAnchorId && frontier.includes(g.deckAnchorId) && !seen.has(g.id))
-    // Nearest the front card first, either way a deck on a storyline lies
-    // (utils/deckAway byLay).
-    const k = lyingLeft(kids) && deckOnStoryline([...frontier, ...kids.map(c => c.id)]) ? -1 : 1
+    // Nearest the front card first, whichever way the deck lies (utils/deckAway nearer).
+    const up = lyingUp(kids)
     const children = kids.sort((a, b) =>
-        k * ((a.deckOffsetX ?? a.originX ?? 0) - (b.deckOffsetX ?? b.originX ?? 0)) ||
+        (a.deckOffsetX != null && b.deckOffsetX != null ? nearer(a.deckOffsetX, a.deckOffsetY ?? 0, b.deckOffsetX, b.deckOffsetY ?? 0, up)
+          : (a.deckOffsetX ?? a.originX ?? 0) - (b.deckOffsetX ?? b.originX ?? 0)) ||
         a.id.localeCompare(b.id))
     for (const c of children) { seen.add(c.id); result.push(c) }
     frontier = children.map(c => c.id)

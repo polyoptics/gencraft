@@ -10,7 +10,8 @@ import { CARD_TYPES, cardTypeOf, isAbove, newDetailId, typeColor, withTypeDetail
 import { fillCard, nameKindOf } from '../utils/fillDetails'
 import { makeName, nameKey } from '../utils/nameGen'
 import { removeFromKin, type Kin } from '../utils/family'
-import { deckLay, frontFirst, frontOf, linkedLines } from '../utils/deckAway'
+import { deckLay, linkedLines } from '../utils/deckAway'
+import { deckFront, primaryFirst } from '../utils/primaryCard'
 import { useFreeNodeStore } from './freeNodeStore'
 import { newSceneLayout, putCards, type SceneDiv } from '../utils/sceneCard'
 import { getBoardAbsolutePos, computeGroupLayout, yToRow } from '../utils/nleRows'
@@ -91,11 +92,14 @@ export interface ProjectGroup {
   cardHeightOverride?: number  // user-set card height (screen px)
   deckState?: 'open' | 'fanned' | 'stacked'  // deck visual state (default: 'open')
   snipOf?: string         // cut from this source in a Viewer; its pieces share a deck (utils/snipCards)
-  deckAnchorId?: string   // group ID of the deck anchor (leftmost card); set when deckState !== 'open'
+  deckAnchorId?: string   // group ID of the deck anchor (its front card, the row's primary card); set when deckState !== 'open'
   nestedDeck?: boolean    // true if this group is a sub-deck anchor (persists through fan/stack cycles)
   deckOffsetX?: number    // offset from OWN anchor at stacking time (for position restore on open)
   deckOffsetY?: number
-  deckLastFront?: string  // the card that fronted this card's deck when it last opened (utils/deckAway frontFirst)
+  /** Its row's primary card, as every card of the row remembers it: the
+   *  front its deck last opened from, or the card made primary. It counts
+   *  only while another card of the row remembers it too (utils/primaryCard). */
+  deckLastFront?: string
   /**
    * When THIS group is a deck anchor, ghostSlots holds "checked-out" entries
    * for cards that were extracted from this deck. Each entry remembers where
@@ -345,6 +349,9 @@ interface BoardsState {
   /** Make it that type: it takes the type's starting details it lacks,
    *  and its colour, unless coloured by hand. */
   setGroupCardType: (groupId: string, type: CardType) => void
+  /** Make every card of `groupIds` a `type` card (its starting details are
+   *  added, details already there kept; its type colour unless it has its own). */
+  setCardsType: (groupIds: string[], type: CardType) => void
   /** Coloured by hand, or (false) back to its type's colour. */
   setGroupOwnColor: (groupId: string, own: boolean) => void
   /** A type's colour, worn by every card of it not coloured by hand. */
@@ -406,6 +413,8 @@ interface BoardsState {
   /** `asGiven`: groupIds[0] fronts it and the cards close as laid (a new
    *  card's deck, a check-in), with no front card picked or storyline flip. */
   setDeckState: (groupIds: string[], state: 'open' | 'fanned' | 'stacked', opts?: { asGiven?: boolean }) => void
+  /** Make card `groupId` the primary card of its row `rowIds` (utils/primaryCard). */
+  setRowPrimary: (groupId: string, rowIds: string[]) => void
   /** Pull a card out of its deck onto the canvas. The parent gets a ghostSlots
    *  entry remembering the slot's offset so the card can return. The card
    *  itself becomes independent (deckAnchorId/deckOffset cleared). If the
@@ -1042,8 +1051,13 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
   },
 
   setGroupCardType(groupId, type) {
+    get().setCardsType([groupId], type)
+  },
+
+  setCardsType(groupIds, type) {
     const chosen = get().typeColors
-    set(s => ({ groups: s.groups.map(g => g.id !== groupId ? g : {
+    const ids = new Set(groupIds)
+    set(s => ({ groups: s.groups.map(g => !ids.has(g.id) ? g : {
       ...g,
       cardType: type === 'element' ? undefined : type,
       details: withTypeDetails(g.details, type),
@@ -1365,18 +1379,18 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
   },
 
   setDeckState(ids, state, opts) {
-    // For stacking/fanning: the new deck anchor is groupIds[0] — the first
-    // (leftmost in the cluster), or on a storyline the deck's own front card
-    // if it is one already, else a card linked to the line. utils/deckAway
-    // frontFirst.
+    // For stacking/fanning: the new deck anchor is groupIds[0] — the deck's
+    // own front card if it is one already, else the row's primary card (the
+    // leftmost unless one was made primary). utils/primaryCard.
     const nodes = useFreeNodeStore.getState().nodes
-    const groupIds = state === 'open' || opts?.asGiven ? ids : frontFirst(get().groups, ids, nodes, get().boards)
+    const groupIds = state === 'open' || opts?.asGiven ? ids : primaryFirst(get().groups, ids)
     const idSet = new Set(groupIds)
     // For opening: anchorId is undefined (no deck after open).
     const anchorId = state === 'open' ? undefined : groupIds[0]
-    // Opening: the deck's front card. Its cards remember it (deckLastFront)
-    // so they close onto it again on a storyline.
-    const openFront = state === 'open' ? frontOf(get().groups, groupIds) : null
+    // Opening: the deck's front card. It stays the open row's primary card,
+    // so the row's controls stay on it and the row closes onto it again,
+    // whichever way its cards lie.
+    const openFront = state === 'open' ? deckFront(get().groups, groupIds) : null
     // Linked to a storyline, its cards open away from the line: flipped to
     // the front card's far side (utils/deckAway). Opening, that is their
     // offsets; closing, their open places (hidden under the front card).
@@ -1448,13 +1462,24 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
       // For stacking/fanning, the new anchor is groupIds[0].
       const anchorGroup = anchorId ? s.groups.find(g => g.id === anchorId) : null
       const groupById = new Map(s.groups.map(g => [g.id, g]))
+      // Closing onto a card other than the one holding checked-out cards'
+      // slots (another primary card): the slots go to the new front card,
+      // where they lie on the canvas, so a card pulled out of the deck keeps
+      // its place in it and checks back in there (returnToDeck looks for the
+      // card holding its slot). A sub-deck keeps its own.
+      const holders = new Set<string>()
+      const handed = state === 'open' || !anchorGroup ? [] : s.groups.flatMap(g => {
+        if (!idSet.has(g.id) || g.id === anchorId || subDeckAnchors.has(g.id) || !g.ghostSlots?.length) return []
+        holders.add(g.id)
+        return g.ghostSlots.map(sl => ({ ...sl, deckOffsetX: sl.deckOffsetX + g.originX - anchorGroup.originX, deckOffsetY: sl.deckOffsetY + g.originY - anchorGroup.originY }))
+      })
 
       // For opening: each member is repositioned relative to its OWN
       // deckAnchorId (which is the deck's actual anchor — the group with
       // self-anchored deckAnchorId === id). Using groupIds[0] would be wrong
       // when groupIds[0] !== actual anchor, e.g. when a sub-member's content
       // extends further leftward than the anchor's so that the sub-member
-      // lands as memberIds[0] in deck.memberIds (sorted by rect.left).
+      // lands ahead of the anchor in deck.memberIds.
       const refAnchor = (g: ProjectGroup) =>
         g.deckAnchorId && g.id !== g.deckAnchorId ? groupById.get(g.deckAnchorId) ?? null : null
 
@@ -1500,8 +1525,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
         }
       }
 
-      return {
-        groups: s.groups.map(g => {
+      const out = s.groups.map(g => {
           if (!idSet.has(g.id)) {
             const shift = positionShifts.get(g.id)
             if (shift) return { ...g, originX: g.originX + shift.dx, originY: g.originY + shift.dy }
@@ -1518,12 +1542,12 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
                 ox = anchor.originX + g.deckOffsetX
                 oy = anchor.originY + g.deckOffsetY
               }
-              return { ...g, deckAnchorId: undefined, nestedDeck: true, originX: ox, originY: oy, deckOffsetX: undefined, deckOffsetY: undefined }
+              return { ...g, deckAnchorId: undefined, nestedDeck: true, originX: ox, originY: oy, deckOffsetX: undefined, deckOffsetY: undefined, deckLastFront: openFront ? openFront.id : g.deckLastFront }
             }
             // Stacking/fanning: store offset from new parent anchor for later restore.
             const offX = anchorGroup ? g.originX - anchorGroup.originX : g.deckOffsetX
             const offY = anchorGroup ? g.originY - anchorGroup.originY : g.deckOffsetY
-            return { ...g, deckAnchorId: anchorId, nestedDeck: true, deckOffsetX: offX, deckOffsetY: offY }
+            return { ...g, deckAnchorId: anchorId, nestedDeck: true, deckOffsetX: offX, deckOffsetY: offY, deckLastFront: undefined }
           }
           if (state === 'open') {
             // Regular member opening: restore position relative to its own anchor.
@@ -1533,15 +1557,24 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
               ox = anchor.originX + g.deckOffsetX
               oy = anchor.originY + g.deckOffsetY
             }
-            return { ...g, deckState: state, deckAnchorId: anchorId, nestedDeck: undefined, originX: ox, originY: oy, deckOffsetX: undefined, deckOffsetY: undefined, deckLastFront: openFront?.id }
+            return { ...g, deckState: state, deckAnchorId: anchorId, nestedDeck: undefined, originX: ox, originY: oy, deckOffsetX: undefined, deckOffsetY: undefined, deckLastFront: openFront ? openFront.id : g.deckLastFront }
           }
           // Stacking/fanning: store offset from anchor
           const offX = anchorGroup ? g.originX - anchorGroup.originX : g.deckOffsetX
           const offY = anchorGroup ? g.originY - anchorGroup.originY : g.deckOffsetY
+          // A closed deck keeps its own front (utils/primaryCard); the row
+          // it came from is gone.
           return { ...g, deckState: state, deckAnchorId: anchorId, nestedDeck: g.nestedDeck, deckOffsetX: offX, deckOffsetY: offY, deckLastFront: undefined }
         })
-      }
+      if (!handed.length) return { groups: out }
+      return { groups: out.map(g => g.id === anchorId ? { ...g, ghostSlots: [...(g.ghostSlots ?? []), ...handed] }
+        : holders.has(g.id) ? { ...g, ghostSlots: undefined } : g) }
     })
+  },
+
+  setRowPrimary(groupId, rowIds) {
+    const row = new Set([groupId, ...rowIds])
+    set(s => ({ groups: s.groups.map(g => row.has(g.id) && g.deckLastFront !== groupId ? { ...g, deckLastFront: groupId } : g) }))
   },
 
   extractFromDeck(cardId, newOriginX, newOriginY) {
@@ -1599,6 +1632,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
               deckOffsetY: undefined,
               deckState: 'open',
               nestedDeck: undefined,
+              deckLastFront: undefined,
             }
           }
           if (subTreeIds.has(g.id)) {
@@ -1707,6 +1741,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
                 deckOffsetY: undefined,
                 deckState: 'open',
                 nestedDeck: undefined,
+                deckLastFront: undefined,
               }
             }
             return {
@@ -1718,6 +1753,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
               deckOffsetY: slot.deckOffsetY,
               deckState: parent.deckState,
               nestedDeck: undefined,
+              deckLastFront: undefined,
             }
           }
           if (subTreeIdSet.has(g.id)) {
@@ -1842,7 +1878,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
       // Everything the card IS — its grid layout, face block, effect, size —
       // but not where it belongs: no deck, pin, strip result or links.
       const own: ProjectGroup = { ...group }
-      for (const k of ['deckState', 'deckAnchorId', 'deckOffsetX', 'deckOffsetY', 'deckFaceCard', 'pin', 'railSource', 'railBase'] as const) delete own[k]
+      for (const k of ['deckState', 'deckAnchorId', 'deckOffsetX', 'deckOffsetY', 'deckFaceCard', 'pin', 'railSource', 'railBase', 'deckLastFront'] as const) delete own[k]
       const faceAt = group.faceBoardId ? group.boardIds.indexOf(group.faceBoardId) : -1
       const newGroup: ProjectGroup = {
         ...own,

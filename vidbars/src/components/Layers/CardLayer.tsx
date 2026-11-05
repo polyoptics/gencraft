@@ -29,8 +29,8 @@ import { useMagnetPreviewStore } from '../../store/magnetPreviewStore'
 import { updateDeckMagnetPreview, finishDeckMagnetDock } from '../../utils/deckDockDrag'
 import { groupHasBrowsableContent } from '../../utils/contentTraversal'
 import { FreeCanvas } from '../Canvas/FreeCanvas'
-import { storyLinkOf, unlinkCardFromStorylines } from '../Canvas/StorylineLayer'
-import { deckLay, linkedLines, storyLinksKey, type DeckLay, type DeckSide } from '../../utils/deckAway'
+import { storyCarried, storyLinkOf, unlinkCardFromStorylines } from '../Canvas/StorylineLayer'
+import { deckLay, linkedLines, nearer, storyLinksKey, type DeckLay, type DeckSide } from '../../utils/deckAway'
 import { Viewport3DLayer } from '../Viewport3D/Viewport3DLayer'
 import { NLETimelineHeader, NLE_HEADER_CANVAS_H, headerExtend as computeHeaderExtend, headerScreenH, overviewScale } from '../NLE/NLETimelineHeader'
 import { HeroImageLayer } from './HeroImageLayer'
@@ -64,10 +64,11 @@ import { PenButton } from '../Annotation/PenButton'
 import { useSeedHoverFromCursor } from '../../utils/pointerTracker'
 import { deckAreas } from '../../utils/peek'
 import { useContextSheetStore } from '../../store/contextSheetStore'
-import { cardTypeOf } from '../../utils/cardTypes'
+import { CARD_TYPES, CARD_TYPE_ORDER, cardTypeOf, typeColor, type CardType } from '../../utils/cardTypes'
 import { nameKindOf } from '../../utils/fillDetails'
 import { copiedFaceStyle, copyFaceStyle, fillFields } from '../../utils/faceStyle'
 import { showFactionTree } from '../../utils/factionTree'
+import { rowOf, setRows } from '../../utils/primaryCard'
 
 const BOARD_PADDING_X = 20
 
@@ -112,9 +113,11 @@ const CardContextMenu: React.FC<{
 }> = ({ pos, group, heroImage, mediaSource, deckMemberIds, deckState, onClose, onEditHeroImage }) => {
   const groups = useBoardsStore(s => s.groups)
   const [colorPicker, setColorPicker] = useState<{ x: number; y: number } | null>(null)
+  // Card type: the list of types beside the menu, for these cards.
+  const [typeList, setTypeList] = useState<{ x: number; y: number; ids: string[] } | null>(null)
   const fileItems = useFileMenuItems(mediaSource, onClose)
 
-  const menuItems: { label: string; icon: string; action: () => void; danger?: boolean; separator?: boolean }[] = []
+  const menuItems: { label: string; icon: string; action: (e: React.MouseEvent<HTMLButtonElement>) => void; danger?: boolean; separator?: boolean }[] = []
 
   // (Deck-tether actions — "Go to deck" and "Check back in" — live on the
   // tether tint stripe in the header, not on the card-body context menu.
@@ -162,6 +165,11 @@ const CardContextMenu: React.FC<{
     const ids = bs.selectedGroupIds.includes(group.id) && bs.selectedGroupIds.length > 1 ? bs.selectedGroupIds : [group.id]
     const typed = ids.filter(id => bs.groups.find(g => g.id === id)?.cardType)
     const nameable = ids.filter(id => { const g = bs.groups.find(x => x.id === id); return g && nameKindOf(cardTypeOf(g)) })
+    // Card type: this card, or every card of the selection it is in.
+    menuItems.push({ label: `Card type${ids.length > 1 ? ` (${ids.length})` : ''}`, icon: '🎴', action: e => {
+      const r = e.currentTarget.getBoundingClientRect()
+      setTypeList(typeList ? null : { x: r.right + 4, y: r.top, ids })
+    }})
     if (typed.length) menuItems.push({ label: `Fill in details${typed.length > 1 ? ` (${typed.length})` : ''}`, icon: '🎲', action: () => {
       useUndoCoordinator.getState().checkpoint()
       useBoardsStore.getState().fillInDetails(typed)
@@ -199,6 +207,17 @@ const CardContextMenu: React.FC<{
 
   // Color — opens full color picker
   menuItems.push({ label: 'Card Color', icon: '🎨', action: () => setColorPicker(colorPicker ? null : { x: pos.x + 200, y: pos.y }) })
+
+  // A row of touching cards: this card becomes the one the row's controls
+  // sit on and the row closes onto (utils/primaryCard).
+  {
+    const row = rowOf(group.id)
+    if (row && row[0] !== group.id && (!group.deckState || group.deckState === 'open')) menuItems.push({ label: 'Make primary', icon: '⭐', separator: true, action: () => {
+      useUndoCoordinator.getState().checkpoint()
+      useBoardsStore.getState().setRowPrimary(group.id, row)
+      onClose()
+    }})
+  }
 
   // Separator before deck actions
   if (deckMemberIds && deckMemberIds.length >= 2) {
@@ -387,6 +406,52 @@ const CardContextMenu: React.FC<{
           </React.Fragment>
         ))}
       </div>
+      {typeList && (() => {
+        const bs = useBoardsStore.getState()
+        const types = new Set(typeList.ids.map(id => { const g = bs.groups.find(x => x.id === id); return g ? cardTypeOf(g) : 'element' }))
+        const h = CARD_TYPE_ORDER.length * 31 + 10
+        return (
+          <div
+            onPointerDown={e => e.stopPropagation()}
+            style={{
+              position: 'fixed', zIndex: 10000, width: 150,
+              left: Math.min(typeList.x, window.innerWidth - 154),
+              top: Math.max(4, Math.min(typeList.y - 5, window.innerHeight - h - 4)),
+              background: '#1e1f30', border: '1px solid rgba(255,255,255,0.1)',
+              borderRadius: 10, boxShadow: '0 12px 40px rgba(0,0,0,0.6)',
+              padding: '5px 0', fontFamily: 'system-ui, sans-serif',
+            }}
+          >
+            {CARD_TYPE_ORDER.map((t: CardType) => {
+              // Lit: every one of these cards is already this type.
+              const lit = types.size === 1 && types.has(t)
+              return (
+                <button
+                  key={t}
+                  data-card-type-choice={t}
+                  onClick={() => {
+                    useUndoCoordinator.getState().checkpoint()
+                    useBoardsStore.getState().setCardsType(typeList.ids, t)
+                    setTypeList(null)
+                    onClose()
+                  }}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 9,
+                    width: '100%', padding: '7px 14px',
+                    background: lit ? 'rgba(255,255,255,0.1)' : 'none', border: 'none', cursor: 'pointer',
+                    color: '#e2e8f0', fontSize: 13, textAlign: 'left', borderRadius: 4,
+                  }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.07)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = lit ? 'rgba(255,255,255,0.1)' : 'none')}
+                >
+                  <span style={{ width: 12, height: 12, borderRadius: 3, flexShrink: 0, background: typeColor(t, bs.typeColors) }} />
+                  {CARD_TYPES[t].label}
+                </button>
+              )
+            })}
+          </div>
+        )
+      })()}
       {colorPicker && (
         <ColorPickerPopup
           color={group.color}
@@ -630,7 +695,8 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
     // One unified work area — collide with every other visible (non-dragging)
     // group, wherever it sits on the canvas.
     const draggingSet = new Set(draggingIds)
-    const obstacles = canvasObstacleGroups(bs0.groups, draggingSet)
+    // …except the cards a selected storyline brings along (storyCarried).
+    const obstacles = canvasObstacleGroups(bs0.groups, new Set([...draggingSet, ...storyCarried()]))
       .map(g => groupSlot(g.id, g.boardIds, bs0.boards, g.originX, g.originY, computeGroupLayout(g.boardIds, bs0.boards)))
       .filter(Boolean) as import('../../utils/nlePush').GroupSlot[]
 
@@ -752,7 +818,8 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
           return !(c && own.has(c.dataset.layerCard ?? ''))
         }))
         const back = hit && 'groupId' in hit && !own.has(hit.groupId) ? bs.groups.find(g => g.id === hit.groupId) : undefined
-        if (back?.flipped && (back.cardType === 'faction' || back.cardType === 'family')) {
+        // Drawn turned over: open, not in a closed deck (which shows faces).
+        if (back?.flipped && (!back.deckState || back.deckState === 'open') && (back.cardType === 'faction' || back.cardType === 'family')) {
           bs.setGroupPosBatch(Array.from(initialOrigins, ([gid, o]) => ({ groupId: gid, originY: o.y, originX: o.x })))
           endDockedDrag(draggingIds, false)
           for (const id of picked) if (!bs.groups.find(g => g.id === id)?.effect) bs.linkGroups(back.id, id)
@@ -2131,7 +2198,8 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[]; lay
   // ghostSlots (extracted cards).
   //
   // Order MUST match StackedDeckCard's secondaryCards (which uses
-  // deck.memberIds — sorted by visual rect.left in useCardDecks). Re-sorting
+  // deck.memberIds — nearest the front card first by visual rect in
+  // useCardDecks). Re-sorting
   // by deckOffsetX would diverge from rect.left whenever cards have
   // different board.nleX or differing leftmost-bar offsets, so we sort by
   // each item's effective rect.left instead.
@@ -2190,11 +2258,11 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[]; lay
         sortKey,
       }
     })
-    // Nearest the front card first: left to right, or right to left when
-    // the cards lie left of it.
-    const k = lay?.side === 'left' ? -1 : 1
-    return [...real, ...ghosts].sort((a, b) => k * (a.sortKey - b.sortKey))
-  }, [deck.memberIds, deck.rects, anchorGroup.id, anchorGroup.originX, anchorGroup.ghostSlots, groups, allGroups, boards, lay])
+    // Nearest the front card first: left to right, right to left when the
+    // cards lie left of it, out from it when they lie both ways (deckAway nearer).
+    const f = deck.rects.get(anchorGroup.id)?.left ?? anchorGroup.originX + contentLeftOffset(anchorGroup)
+    return [...real, ...ghosts].sort((a, b) => nearer(a.sortKey - f, 0, b.sortKey - f, 0))
+  }, [deck.memberIds, deck.rects, anchorGroup, groups, allGroups, boards, lay])
 
   // Fan-strip geometry is in SCREEN px (this overlay is screen-space), so
   // it normally stays a fixed size while the primary card scales by zoom.
@@ -2686,7 +2754,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[]; lay
         useCanvasStore.getState().zoomAtPoint(f, mx, my)
       }}
     >
-      {/* Secondary strips — real members and ghost slots, sorted by visual rect.left */}
+      {/* Secondary strips — real members and ghost slots, nearest the front card first */}
       {secondaryItems.map((item, i) => {
         // On the left each strip reaches STRIP_OVERLAP right, under the
         // piece in front of it, as on the right it reaches left.
@@ -3925,7 +3993,7 @@ const DeckAffordance: React.FC<{ cluster: string[]; front: Deck | 'card' | null;
 
 // Alias to avoid name conflict with component-level import
 import { groupSlot as __groupSlot } from '../../utils/nlePush'
-import { CARD_TEXT_REF_ZOOM } from '../../store/zoomZonesStore'
+import { CARD_TEXT_REF_ZOOM, useZoomZonesStore } from '../../store/zoomZonesStore'
 import { askText } from '../UI/RenameInput'
 
 /** True if some other group is holding a ghostSlot for this card — i.e., the
@@ -4446,30 +4514,7 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
 
   // Affordance clusters: touching clusters where at least 2 eligible members exist
   // (open cards or visible sub-deck anchors count as eligible)
-  const affordanceClusters = useMemo(() => {
-    return touchingClusters.filter(cluster => {
-      // Skip if this cluster is fully handled by a deck
-      const allInDeck = cluster.every(gid => renderedByDeck.has(gid))
-      if (allInDeck) return false
-      // Show affordance if at least 2 eligible cards are touching
-      const eligibleCount = cluster.filter(gid => {
-        const g = groups.find(gr => gr.id === gid)
-        if (!g) return false
-        const isOpen = !g.deckState || g.deckState === 'open'
-        // Visible sub-deck anchors are eligible for parent deck formation
-        const isVisibleSubAnchor = !isHiddenDeckMember(g) && isSubDeckAnchor(g.id, groups)
-        // Orphan deck state: group has deckState set but no other groups
-        // actually reference it as their anchor — treat it as open so the
-        // affordance can re-form it into a real deck with a neighbor.
-        const hasRealMembers = groups.some(other =>
-          other.id !== g.id && other.deckAnchorId === g.id
-        )
-        const isOrphanDeck = !isOpen && !isVisibleSubAnchor && !hasRealMembers
-        return isOpen || isVisibleSubAnchor || isOrphanDeck
-      }).length
-      return eligibleCount >= 2
-    })
-  }, [touchingClusters, renderedByDeck, groups])
+  const affordanceClusters = useMemo(() => rowsOf(touchingClusters, renderedByDeck, groups), [touchingClusters, renderedByDeck, groups])
 
   const extractingCardId = useCanvasStore(s => s.extractingCardId)
   const fanTransition = useCanvasStore(s => s.fanTransition)
@@ -5259,4 +5304,69 @@ const UngroupedCardText: React.FC<{ boardId: string }> = ({ boardId }) => {
   )
 }
 
-export const CardLayer = { Canvas, Overlay }
+/** Rows of touching cards with controls: touching clusters where at least
+ *  2 eligible members exist (open cards or visible sub-deck anchors count
+ *  as eligible), not all drawn by a deck. */
+function rowsOf(touchingClusters: string[][], renderedByDeck: Set<string>, groups: ProjectGroup[]): string[][] {
+  return touchingClusters.filter(cluster => {
+    // Skip if this cluster is fully handled by a deck
+    const allInDeck = cluster.every(gid => renderedByDeck.has(gid))
+    if (allInDeck) return false
+    // Show affordance if at least 2 eligible cards are touching
+    const eligibleCount = cluster.filter(gid => {
+      const g = groups.find(gr => gr.id === gid)
+      if (!g) return false
+      const isOpen = !g.deckState || g.deckState === 'open'
+      // Visible sub-deck anchors are eligible for parent deck formation
+      const isVisibleSubAnchor = !isHiddenDeckMember(g) && isSubDeckAnchor(g.id, groups)
+      // Orphan deck state: group has deckState set but no other groups
+      // actually reference it as their anchor — treat it as open so the
+      // affordance can re-form it into a real deck with a neighbor.
+      const hasRealMembers = groups.some(other =>
+        other.id !== g.id && other.deckAnchorId === g.id
+      )
+      const isOrphanDeck = !isOpen && !isVisibleSubAnchor && !hasRealMembers
+      return isOpen || isVisibleSubAnchor || isOrphanDeck
+    }).length
+    return eligibleCount >= 2
+  })
+}
+
+/** Cards that joined a row after its primary card was set remember it too,
+ *  so it holds until it is itself pulled out (utils/primaryCard). Only
+ *  cards that remember no card of the row: a second open deck touching it
+ *  keeps its own primary card. */
+function adoptPrimary(rows: string[][]) {
+  const byId = new Map(useBoardsStore.getState().groups.map(g => [g.id, g]))
+  const add = new Map<string, string>()
+  for (const r of rows) {
+    const p = r[0]
+    if (byId.get(p)?.deckLastFront !== p || !r.some(id => id !== p && byId.get(id)?.deckLastFront === p)) continue
+    for (const id of r) {
+      const f = byId.get(id)?.deckLastFront
+      if (id !== p && (!f || !r.includes(f))) add.set(id, p)
+    }
+  }
+  if (add.size) useBoardsStore.setState(s => ({ groups: s.groups.map(g => add.has(g.id) ? { ...g, deckLastFront: add.get(g.id) } : g) }))
+}
+
+/** The rows of touching cards with controls, at every zoom, as the cards
+ *  draw them at their closest (the card zone's top zoom), for the card
+ *  menu's Make primary and for what goes and stands with a primary card's
+ *  storyline (utils/primaryCard). One zoom for all, so what a dot carries
+ *  never changes with zooming. Read on a press, so it may lag a drag. */
+const Rows: React.FC = () => {
+  const groups = useDeferredValue(useBoardsStore(s => s.groups))
+  const boards = useDeferredValue(useBoardsStore(s => s.boards))
+  const cardMax = useZoomZonesStore(s => s.cardMax)
+  const { decks, touchingClusters } = useCardDecks(groups, boards, cardMax)
+  const rows = useMemo(() => {
+    const byDeck = new Set<string>()
+    for (const d of decks) for (const gid of d.memberIds) byDeck.add(gid)
+    return rowsOf(touchingClusters, byDeck, groups)
+  }, [decks, touchingClusters, groups])
+  useEffect(() => { setRows(rows); adoptPrimary(rows) }, [rows])
+  return null
+}
+
+export const CardLayer = { Canvas, Overlay, Rows }

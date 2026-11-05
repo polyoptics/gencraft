@@ -62,6 +62,8 @@ import { useTiltStore, isTilted, standRise, unprojectTilt, TILT_FAR } from '../.
 import { useWorldZoom } from './worldZoom'
 import { clientToCanvas } from '../../utils/fx/createEffect'
 import { snapToDots } from '../../utils/dotGrid'
+import { openDeckOf, rowOf, rowsSeen } from '../../utils/primaryCard'
+import { isHiddenDeckMember } from '../../hooks/useCardDecks'
 import { PRESET_COLORS } from '../UI/TextFormatToolbar'
 import {
   deleteBranchFrom, deleteDot, downstream, growDot, insertDot, isBaseEdge, mergeDots, migrateStoryline,
@@ -130,13 +132,15 @@ interface Tether { point: string; card: string; x1: number; y1: number; x2: numb
 
 /** Every linked card's tether. Not for a card pinned off the canvas, or one
  *  its dot sits on. The face: the card's block extent (groupBounds, less its
- *  16-unit docking margin) at least its set size. */
+ *  16-unit docking margin) at least its set size. A card hidden in a closed
+ *  deck hangs by its deck's front card, as the deck goes with its dot. */
 function storyTethers(d: StorylineData, ox: number, oy: number, groups: ProjectGroup[]): Tether[] {
   const out: Tether[] = []
+  const byId = new Map(groups.map(g => [g.id, g]))
   for (const p of d.dots) {
     for (const card of p.cards ?? []) {
-      const grp = groups.find(x => x.id === card)
-      const b = grp && !grp.pin ? groupBounds(card) : null
+      const grp = byId.get(shownAs(card, byId))
+      const b = grp && !grp.pin ? groupBounds(grp.id) : null
       if (!grp || !b) continue
       const x0 = b.x + 16, w = Math.max(b.w - 32, grp.cardWidthOverride ?? 0), h = Math.max(b.h, grp.cardHeightOverride ?? 0)
       const px0 = ox + p.x, py0 = oy + p.y
@@ -230,17 +234,56 @@ export function standingStoryDrop(): string | null { return wallDrop }
 const frozenFeet = new Map<string, number>()
 let feetVersion = 0
 
+/** The card `c` is shown as: itself, or, hidden in a closed deck, that
+ *  deck's front card. */
+function shownAs(c: string, byId: Map<string, ProjectGroup>): string {
+  let id = c
+  for (let k = 0; k < 32; k++) {
+    const g = byId.get(id)
+    if (!g || !isHiddenDeckMember(g) || !byId.has(g.deckAnchorId!)) break
+    id = g.deckAnchorId!
+  }
+  return id
+}
+
+/** The cards linked to a storyline dot (`linked`: each goes with its own
+ *  dot), and each card on the canvas that is one or holds some hidden in
+ *  its closed deck, with how many (`held`). */
+interface Links { linked: Set<string>; held: Map<string, number> }
+function linksOf(byId: Map<string, ProjectGroup>, nodes: Record<string, FreeNodeData> = useFreeNodeStore.getState().nodes): Links {
+  const linked = new Set<string>()
+  for (const n of Object.values(nodes)) for (const p of n.storyline?.dots ?? []) for (const c of p.cards ?? []) linked.add(c)
+  const held = new Map<string, number>()
+  for (const c of linked) { const f = shownAs(c, byId); held.set(f, (held.get(f) ?? 0) + 1) }
+  return { linked, held }
+}
+
+/** The cards linked card `c` goes with its dot as: itself, or, hidden in a
+ *  closed deck, that deck's front card (the deck goes with the dot, unless
+ *  its front card is linked to a dot of its own or it holds another linked
+ *  card); then the open deck that card is the primary card of
+ *  (utils/primaryCard openDeckOf), less any card that is or holds a card
+ *  linked to a dot of its own, which goes with that dot. */
+function withDeck(c: string, byId: Map<string, ProjectGroup>, k: Links): string[] {
+  const id = shownAs(c, byId)
+  if (id !== c && (k.linked.has(id) || (k.held.get(id) ?? 0) > 1)) return [c]
+  return [id, ...openDeckOf(id).filter(m => !k.held.has(m))]
+}
+
 /** The lowest point (canvas y) of storyline `n`'s dots — `only` those —
- *  and the bottoms of the cards linked to them. */
+ *  and the bottoms of the cards linked to them, as they go with their dots
+ *  (withDeck: their decks, open or closed). */
 function lowestOf(n: FreeNodeData, only?: Set<string>): number {
   let y = -Infinity
   const groups = useBoardsStore.getState().groups
+  const byId = new Map(groups.map(g => [g.id, g]))
+  const links = linksOf(byId)
   for (const p of n.storyline?.dots ?? []) {
     if (only && !only.has(p.id)) continue
     y = Math.max(y, n.y + p.y)
-    for (const c of p.cards ?? []) {
-      const g = groups.find(x => x.id === c)
-      const b = g && !g.pin ? groupBounds(c) : null
+    for (const c of p.cards ?? []) for (const id of withDeck(c, byId, links)) {
+      const g = byId.get(id)
+      const b = g && !g.pin ? groupBounds(id) : null
       if (g && b) y = Math.max(y, b.y + Math.max(b.h, g.cardHeightOverride ?? 0))
     }
   }
@@ -292,18 +335,26 @@ export function standingStories(): { footY: number; rise: number; segs: [number,
 /** For TiltLayer: the canvas y of the wall a linked card stands up on with
  *  its storyline (flipped up, its foot lying across the view, as standing
  *  cards stand), or null. */
-let wallCards: { nodes: unknown; feet: number; map: Map<string, number> } | null = null
+let wallCards: { nodes: unknown; groups: unknown; feet: number; rows: number; map: Map<string, number> } | null = null
 export function storyWallOf(groupId: string): number | null {
   const nodes = useFreeNodeStore.getState().nodes
-  if (wallCards?.nodes !== nodes || wallCards.feet !== feetVersion) {
+  const groups = useBoardsStore.getState().groups
+  if (wallCards?.nodes !== nodes || wallCards.groups !== groups || wallCards.feet !== feetVersion || wallCards.rows !== rowsSeen()) {
     const map = new Map<string, number>()
+    // A linked card's deck stands with it, open or closed (withDeck).
+    const decks: [string, number][] = []
     for (const n of Object.values(nodes)) {
       if (!n.storyline?.standUp || n.pin || !n.storyline.dots) continue
       const w = wallFootOf(n)
       if (!w || Math.abs(w.uy) > 1e-6) continue
-      for (const p of n.storyline.dots) for (const c of p.cards ?? []) map.set(c, w.y0)
+      for (const p of n.storyline.dots) for (const c of p.cards ?? []) { map.set(c, w.y0); decks.push([c, w.y0]) }
     }
-    wallCards = { nodes, feet: feetVersion, map }
+    if (decks.length) {
+      const byId = new Map(groups.map(g => [g.id, g]))
+      const links = linksOf(byId, nodes)
+      for (const [c, y0] of decks) for (const id of withDeck(c, byId, links)) if (!map.has(id)) map.set(id, y0)
+    }
+    wallCards = { nodes, groups, feet: feetVersion, rows: rowsSeen(), map }
   }
   // At every zoom: a card, or zoomed in its outline with its blocks or
   // boards, all of it as one piece.
@@ -417,6 +468,9 @@ interface GroupBase {
   nodes: Map<string, { x: number; y: number; d: StorylineData; dots: Set<string>; cards: Map<string, { x: number; y: number }> }>
   stories: { node: string; x: number; y: number; rx: number; ry: number; cards: Map<string, { x: number; y: number }> }[]
   groups: Map<string, { x: number; y: number }>
+  /** Cards a dot carries that share a row with a selected card: they go
+   *  as the selected cards go, so the row stays together. */
+  decks: Map<string, { x: number; y: number }>
   tiles: string[]
 }
 
@@ -431,7 +485,18 @@ function captureGroupBase(): GroupBase {
   }
   const groups = new Map<string, { x: number; y: number }>()
   for (const g of bs.groups) if (groupIds.has(g.id) && !g.pin) groups.set(g.id, { x: g.originX, y: g.originY })
-  const notCarried = (m: Map<string, { x: number; y: number }>) => { for (const k of groups.keys()) m.delete(k); return m }
+  // A dot's cards in a row with a selected card (its open deck) go by the
+  // selection's own amount, not snapped with the dot, so the row stays
+  // together. Cards linked to a dot of their own go with their dots.
+  const links = linksOf(new Map(bs.groups.map(g => [g.id, g])), fs.nodes)
+  const sameRow = new Set<string>()
+  for (const id of groups.keys()) for (const m of rowOf(id) ?? []) if (!links.held.has(m) && !groups.has(m)) sameRow.add(m)
+  const decks: GroupBase['decks'] = new Map()
+  const notCarried = (m: Map<string, { x: number; y: number }>) => {
+    for (const k of groups.keys()) m.delete(k)
+    for (const [k, o] of m) if (sameRow.has(k)) { decks.set(k, o); m.delete(k) }
+    return m
+  }
   const nodes: GroupBase['nodes'] = new Map()
   for (const { node, point } of storyPartsList()) {
     const n = fs.nodes[node]
@@ -452,7 +517,7 @@ function captureGroupBase(): GroupBase {
         cards: notCarried(cardOrigins(n.storyline, new Set((n.storyline.dots ?? []).map(q => q.id)))) })
     } else tiles.push(sid)
   }
-  return { nodes, stories, groups, tiles }
+  return { nodes, stories, groups, decks, tiles }
 }
 
 /** The selection moved by the drag (dx, dy): its dots, their cards with
@@ -486,6 +551,7 @@ function applyGroupDelta(b: GroupBase, dx: number, dy: number, sn: (v: number) =
       }
       for (const [groupId, o] of st.cards) moves.push({ groupId, originX: o.x + mx, originY: o.y + my })
     }
+    for (const [groupId, o] of b.decks) moves.push({ groupId, originX: o.x + dx, originY: o.y + dy })
     if (own) {
       for (const [groupId, o] of b.groups) moves.push({ groupId, originX: o.x + dx, originY: o.y + dy })
       if (b.tiles.length) fs.moveManyFreeNodes(b.tiles, dx - last.dx, dy - last.dy)
@@ -495,6 +561,11 @@ function applyGroupDelta(b: GroupBase, dx: number, dy: number, sn: (v: number) =
   } finally { ownMove = false }
 }
 
+/** The cards the story follower moves with a drag begun by this press (it
+ *  captures them first): a card drag does not bump into them. */
+let followCarried = new Set<string>()
+export const storyCarried = (): Set<string> => followCarried
+
 /** Selected dots (and whole storylines) come along when the selected cards
  *  or tiles round them are dragged, by the same amount: read off the first
  *  of those that moved since the press. */
@@ -503,7 +574,7 @@ function useStoryFollow() {
     let base: GroupBase | null = null
     let ref: { kind: 'group' | 'tile'; id: string; x: number; y: number } | null = null
     const onDown = (e: PointerEvent) => {
-      base = null; ref = null
+      base = null; ref = null; followCarried = new Set()
       if (e.button !== 0 || (e.target as Element | null)?.closest?.('[data-storyline]')) return
       const ui = useStoryUi.getState()
       const fs = useFreeNodeStore.getState()
@@ -514,8 +585,9 @@ function useStoryFollow() {
       const tile = base.tiles.map(x => fs.nodes[x]).find(Boolean)
       ref = g ? { kind: 'group', id: g[0], x: g[1].x, y: g[1].y } : tile ? { kind: 'tile', id: tile.id, x: tile.x, y: tile.y } : null
       if (!ref) base = null
+      if (base) followCarried = new Set([...base.decks.keys(), ...[...base.nodes.values()].flatMap(n => [...n.cards.keys()]), ...base.stories.flatMap(st => [...st.cards.keys()])])
     }
-    const onUp = () => { base = null; ref = null }
+    const onUp = () => { base = null; ref = null; followCarried = new Set() }
     const follow = () => {
       if (!base || !ref || ownMove) return
       const now = ref.kind === 'group'
@@ -551,12 +623,15 @@ function deleteStorySelected(list: { node: string; point: string }[], checkpoint
   }
 }
 
-/** The cards linked to these dots, with the cards stacked in their decks,
- *  where each one is now. Pinned cards have left the canvas: they stay. */
+/** The cards linked to these dots, with their decks' cards (closed, or
+ *  open with the linked card as primary: withDeck), where each one is now.
+ *  Pinned cards have left the canvas: they stay. */
 function cardOrigins(d: StorylineData, dotIds: Set<string>): Map<string, { x: number; y: number }> {
   const groups = useBoardsStore.getState().groups
+  const byId = new Map(groups.map(g => [g.id, g]))
+  const links = linksOf(byId)
   const ids = new Set<string>()
-  for (const p of d.dots ?? []) if (dotIds.has(p.id)) for (const c of p.cards ?? []) ids.add(c)
+  for (const p of d.dots ?? []) if (dotIds.has(p.id)) for (const c of p.cards ?? []) for (const m of withDeck(c, byId, links)) ids.add(m)
   let grew = true
   while (grew) {
     grew = false

@@ -24,7 +24,6 @@ export const LayerContent: React.FC = () => {
 export const LayerOverlay: React.FC = () => {
   const zone = useZoomZone()
 
-  if (zone === 'card') return <CardLayer.Overlay />
-  if (zone === 'block') return <BlockLayer.Overlay />
-  return <BoardLayer.Overlay />
+  // The rows of touching cards, known at every zoom (utils/primaryCard).
+  return <>{zone === 'card' ? <CardLayer.Overlay /> : zone === 'block' ? <BlockLayer.Overlay /> : <BoardLayer.Overlay />}<CardLayer.Rows /></>
 }

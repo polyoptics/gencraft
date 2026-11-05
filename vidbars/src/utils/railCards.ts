@@ -33,7 +33,7 @@ import { drawnRect } from './effectCards'
 import { clientToCanvas } from './fx/createEffect'
 import { knownKind } from './fx/effects'
 import { RAIL_TRAY, inputGiven, isRail, railDropTarget, railLayout, railMembers, type RailDropTarget } from './rail'
-import { byLay, deckOnStoryline } from './deckAway'
+import { byLay } from './deckAway'
 
 /** One picture: the card and block it is in, and what it shows. */
 export interface Entry { groupId: string; boardId: string; media: MediaItem; label: string }
@@ -71,7 +71,7 @@ export function deckCards(anchorId: string, groups: ProjectGroup[]): string[] {
   if (!anchor) return []
   if (!anchor.deckState || anchor.deckState === 'open') return [anchorId]
   const kids = groups.filter(g => g.id !== anchorId && g.deckAnchorId === anchorId && g.deckState && g.deckState !== 'open')
-  const rest = byLay(kids, deckOnStoryline([anchorId, ...kids.map(g => g.id)]))
+  const rest = byLay(kids)
   return [anchorId, ...rest.map(g => g.id)]
 }
 

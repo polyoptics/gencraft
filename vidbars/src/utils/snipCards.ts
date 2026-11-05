@@ -9,7 +9,7 @@ import { useFreeNodeStore, type FreeNodeData } from '../store/freeNodeStore'
 import { createMediaCard, gridOrder, layoutCardGrid } from './cardGrid'
 import { drawnRect } from './effectCards'
 import { deckCards, placeCard } from './railCards'
-import { deckOnStoryline, lyingLeft } from './deckAway'
+import { lyingLeft } from './deckAway'
 import { expandTileIds } from './tileDecks'
 
 export interface SnipPiece {
@@ -70,12 +70,14 @@ export function landSnip(piece: SnipPiece, firstSlot: () => { x: number; y: numb
   placeCard(gid, at.x, at.y)
   // The older cards open to the right of the new one (setDeckState keeps the
   // layout they closed from), so the deck reads newest first when opened.
-  // A deck on a storyline lying left of its front (opened away from the
-  // line, utils/deckAway) goes on to the left instead.
+  // A deck lying left of its front (utils/deckAway) goes on to the left
+  // instead. One with cards on both sides of its front (a primary card in
+  // the middle) goes far enough right that those on its left clear the new card.
   const kids = useBoardsStore.getState().groups.filter(g => g.id !== front.id && g.deckAnchorId === front.id && g.deckState && g.deckState !== 'open')
   const w = rectOf(gid)?.width ?? at.width
-  const leftward = kids.length > 0 && lyingLeft(kids) && deckOnStoryline([front.id, ...kids.map(g => g.id)])
-  placeCard(front.id, leftward ? at.x - at.width : at.x + w, at.y)
+  const leftward = kids.length > 0 && lyingLeft(kids)
+  const reach = leftward ? 0 : Math.max(0, ...kids.map(k => -(k.deckOffsetX ?? 0)))
+  placeCard(front.id, leftward ? at.x - at.width : at.x + w + reach, at.y)
   const older = deckCards(front.id, useBoardsStore.getState().groups)
   useBoardsStore.getState().setDeckState([gid, ...older], 'stacked', { asGiven: true })
   return gid
