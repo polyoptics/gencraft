@@ -8,8 +8,8 @@
 //  - Drag a dot's centre: it goes anywhere (snapped as cards are) with
 //    everything downstream of it — the dots further from the base reached
 //    through it, and their cards (lit as the mouse is over it); a base dot
-//    slides with its branches. Shift+drag: that dot alone. Let go on another
-//    dot (lit first), the two become one.
+//    slides with its branches. Shift+drag: that dot alone, its cards left where
+//    they are. Let go on another dot (lit first), the two become one.
 //  - Click a line: a dot goes in there, splitting it. Press on a line and
 //    drag: the dot goes in and is dragged at once, bending the line.
 //  - Drag out from a dot's outer ring: a new dot, joined to it, is dragged
@@ -1011,9 +1011,10 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
         if (mine && storyPartsList().length + bs.selectedGroupIds.length + fs.selectedIds.length > 1) {
           return { kind: 'group', base: captureGroupBase(), last: { dx: 0, dy: 0 } }
         }
+        // Shift: that dot alone, its cards staying where they are.
         const moves = one ? new Set([pointId]) : downstream(d0, pointId)
-        return { kind: 'dot', dot: pointId, d: d0, moves, slide: !!d0.base?.includes(pointId), cards: cardOrigins(d0, moves),
-                 low: wall ? lowestOf(node, moves) : undefined }
+        return { kind: 'dot', dot: pointId, d: d0, moves, slide: !!d0.base?.includes(pointId), cards: one ? new Map() : cardOrigins(d0, moves),
+                 low: wall && !one ? lowestOf(node, moves) : undefined }
       }
       if (role === 'ring' && pointId) {
         const p = byId.get(pointId)!
