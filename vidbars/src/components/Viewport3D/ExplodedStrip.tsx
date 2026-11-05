@@ -249,18 +249,18 @@ const StripLayers: React.FC<{ railId: string; rect: { x: number; y: number; widt
   const sides = useStripLayers(s => s.popped[railId])
   // How far each popped layer has been slid since, px in its own plane.
   const [slid, setSlid] = useState<Record<string, { x: number; y: number }>>({})
-  const k = 1.05
-  const base = (side: PopSide) => side === 'l' ? { x: -boxW * k, y: 0 } : side === 'r' ? { x: boxW * k, y: 0 } : side === 't' ? { x: 0, y: -boxH * k } : { x: 0, y: boxH * k }
-  const popped: Record<string, { x: number; y: number }> = Object.fromEntries(Object.entries(sides ?? {}).map(([id, side]) => {
-    const b = base(side), s = slid[id]
-    return [id, { x: b.x + (s?.x ?? 0), y: b.y + (s?.y ?? 0) }]
-  }))
   const [sliding, setSliding] = useState<string | null>(null)
   const order = effects.map(e => e.id)
   const aspect = baked ? baked.plate.width / baked.plate.height : 1
   const boxH = Math.min(rect.height, rect.width / aspect), boxW = boxH * aspect
   const layerGap = useStripLayers(s => s.gap)
   const spread = boxH * layerGap
+  const k = 1.05
+  const base = (side: PopSide) => side === 'l' ? { x: -boxW * k, y: 0 } : side === 'r' ? { x: boxW * k, y: 0 } : side === 't' ? { x: 0, y: -boxH * k } : { x: 0, y: boxH * k }
+  const popped: Record<string, { x: number; y: number }> = Object.fromEntries(Object.entries(sides ?? {}).map(([id, side]) => {
+    const b = base(side), s = slid[id]
+    return [id, { x: b.x + (s?.x ?? 0), y: b.y + (s?.y ?? 0) }]
+  }))
   // The layers leave the Viewer's face together and travel back, each left
   // behind at its own place: the last card first, the picture last. (The
   // result itself is not in the stack: the Viewer is an open frame onto it.)
