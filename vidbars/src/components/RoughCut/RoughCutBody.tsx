@@ -12,6 +12,7 @@ import { useResolvedMedia } from '../../utils/useResolvedMedia'
 import { useCutPlay } from '../../utils/cutMedia'
 import { openRoughCutViewer, playRoughCut, RoughCutScreen } from './RoughCutScreen'
 import { findCuts } from '../../utils/shotDetect'
+import { deckOfPicks } from '../../utils/roughCutPicks'
 import {
   appendCards, splitClipAt, FILM_FPS, clipAt, clipLength, clipMedia, clipRow, clipStart, clipEnd, cutLength, MIN_CLIP, placed, setRoughCut, type RoughClip,
 } from '../../utils/roughCut'
@@ -164,6 +165,27 @@ export function RoughCutBody({ id, node, bodyW, bodyH }: { id: string; node: Fre
     window.setTimeout(() => { if (!gone.current) setShotNote(null) }, 4000)
   }
 
+  /** Pick / drop: the clip being watched (at the playhead), else the clicked one. */
+  const pickTarget = (): RoughClip | undefined => {
+    const tt = useCutPlay.getState().t[id] ?? 0
+    return clipAt(clips, tt)?.clip ?? clips.find(c => c.id === selected)
+  }
+  const pickRef = useRef<() => void>(() => {})
+  pickRef.current = () => {
+    const c = pickTarget()
+    if (c) setRoughCut(id, { clips: clips.map(x => (x.id === c.id ? { ...x, pick: !x.pick } : x)) })
+  }
+  const dropRef = useRef<() => void>(() => {})
+  dropRef.current = () => {
+    const c = pickTarget()
+    if (c) setRoughCut(id, { clips: clips.filter(x => x.id !== c.id) })
+  }
+  const outputPicks = () => {
+    const n = deckOfPicks(id)
+    setShotNote(n ? `${n} picked ${n === 1 ? 'shot' : 'shots'} out as a deck, below.` : 'Nothing picked yet: press P on the shots you like.')
+    window.setTimeout(() => { if (!gone.current) setShotNote(null) }, 4000)
+  }
+
   // ← / → step one frame, S splits, on the Rough Cut under the pointer or last clicked.
   const root = useRef<HTMLDivElement>(null)
   const totalRef = useRef(total)
@@ -177,13 +199,17 @@ export function RoughCutBody({ id, node, bodyW, bodyH }: { id: string; node: Fre
     const down = (e: PointerEvent) => { last = el.contains(e.target as Node) }
     const key = (e: KeyboardEvent) => {
       const split = (e.key === 's' || e.key === 'S') && !e.shiftKey
-      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight' && !split) return
+      const pick = (e.key === 'p' || e.key === 'P') && !e.shiftKey
+      const drop = e.key === 'Delete' || e.key === 'Backspace'
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight' && !split && !pick && !drop) return
       if (!(over || last) || e.ctrlKey || e.metaKey || e.altKey) return
       const a = document.activeElement as HTMLElement | null
       if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.tagName === 'SELECT' || a.isContentEditable)) return
       e.preventDefault()
       e.stopPropagation()
       if (split) { splitRef.current(); return }
+      if (pick) { pickRef.current(); return }
+      if (drop) { dropRef.current(); return }
       const st = useCutPlay.getState()
       if (st.playing === id) st.setPlaying(null)
       const f = Math.round((st.t[id] ?? 0) * FILM_FPS) + (e.key === 'ArrowLeft' ? -1 : 1)
@@ -395,6 +421,15 @@ export function RoughCutBody({ id, node, bodyW, bodyH }: { id: string; node: Fre
               <button style={btn} onClick={fitAll} title="Fit the whole cut">Fit</button>
               <button style={btn} onClick={() => zoomBy(1.4)} title="Zoom the timeline in">+</button>
             </div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <button data-rough-pick="" style={{ ...btn, ...(at?.clip.pick ? { background: 'rgba(255,200,80,0.35)', border: '1px solid rgba(255,200,80,0.9)' } : null) }}
+                onClick={() => pickRef.current()} title="Pick the shot at the playhead, or unpick it (P). Delete drops it.">Pick</button>
+              <button data-rough-deck-picks="" style={btn} onClick={outputPicks}
+                title="Lay the picked shots out below as a deck of cards, in the order they play">Deck of picks</button>
+              <span style={{ color: 'rgba(255,255,255,0.55)', fontVariantNumeric: 'tabular-nums' }}>
+                {clips.filter(c => c.pick).length} picked
+              </span>
+            </div>
             {(scan || shotNote) && (
               <div data-rough-shot-note="" style={{ color: '#9fcbff', fontWeight: 600 }}>
                 {scan ? `Finding shots… ${Math.round(scan.f * 100)}%` : shotNote}
@@ -532,6 +567,9 @@ const ClipBlock: React.FC<{
           onClick={e => { e.stopPropagation(); onRemove() }}
           style={{ position: 'absolute', right: 16, top: 4, width: 22, height: 22, borderRadius: 11, border: 'none', cursor: 'pointer', background: 'rgba(0,0,0,0.6)', color: '#fff', fontSize: 14, lineHeight: '22px', padding: 0 }}
         >×</button>
+      )}
+      {clip.pick && (
+        <div data-rough-picked="" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 8, background: '#ffc850', pointerEvents: 'none' }} />
       )}
       {scanning != null && (
         <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${scanning * 100}%`, background: 'rgba(111,179,255,0.35)', borderRight: '2px solid #9fcbff', pointerEvents: 'none' }} />

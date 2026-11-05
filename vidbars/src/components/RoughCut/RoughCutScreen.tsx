@@ -15,6 +15,7 @@ import { viewerAdjacentTo } from '../../utils/componentLinks'
 import { useCutPlay } from '../../utils/cutMedia'
 import { clipAt, clipEnd, clipStart, cutLength, placed, type RoughClip } from '../../utils/roughCut'
 import { useResolvedMedia } from '../../utils/useResolvedMedia'
+import { togglePickAt } from '../../utils/roughCutPicks'
 import { VIEWPORT_HEADER_SCREEN_H, viewportVisualRect } from '../../utils/viewportDocking'
 
 export const RoughCutScreen: React.FC<{ cutId: string; clips: RoughClip[]; muted: boolean }> = ({ cutId, clips, muted }) => {
@@ -99,8 +100,14 @@ export const RoughCutViewerOverlay: React.FC<{ windowId: string; fontSize: numbe
   const win = windows[windowId]
   const cut = win ? roughCutOnViewer(win, nodes, windows, zoom) : null
   const playing = useCutPlay(s => !!cut && s.playing === cut.id)
+  const t = useCutPlay(s => (cut ? s.t[cut.id] ?? 0 : 0))
   if (!cut) return null
   const clips = placed(cut.roughCut?.clips ?? [])
+  const picked = !!clipAt(clips, t)?.clip.pick
+  const barBtn = (lit: boolean, color: string): React.CSSProperties => ({
+    fontSize, padding: `0 ${fontSize * 0.6}px`, height: fontSize * 1.7, borderRadius: 4, cursor: 'pointer', fontFamily: 'inherit',
+    color: '#fff', background: lit ? color : 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)',
+  })
   const stop = (e: React.SyntheticEvent) => e.stopPropagation()
   return (
     <div data-rough-viewer={cut.id} onPointerDown={stop} onWheel={stop} onDoubleClick={stop}
@@ -109,8 +116,13 @@ export const RoughCutViewerOverlay: React.FC<{ windowId: string; fontSize: numbe
         <span style={{ color: '#ffb35c' }}>✂</span>
         <span>{cut.label || 'Rough Cut'}</span>
         <button data-rough-viewer-play="" onClick={() => playRoughCut(cut.id, !playing)}
-          style={{ marginLeft: 'auto', fontSize, padding: `0 ${fontSize * 0.6}px`, height: fontSize * 1.7, borderRadius: 4, cursor: 'pointer', fontFamily: 'inherit', color: '#fff', background: playing ? 'rgba(255,179,92,0.45)' : 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)' }}>
+          style={{ ...barBtn(playing, 'rgba(255,179,92,0.45)'), marginLeft: 'auto' }}>
           Play
+        </button>
+        <button data-rough-viewer-pick="" onClick={() => togglePickAt(cut.id, useCutPlay.getState().t[cut.id] ?? 0)}
+          title="Pick the shot playing now, or unpick it"
+          style={barBtn(picked, 'rgba(255,200,80,0.45)')}>
+          Pick
         </button>
       </div>
       <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>

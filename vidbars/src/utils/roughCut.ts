@@ -31,6 +31,8 @@ export interface RoughClip {
   /** Where it sits: seconds from the start of the timeline, and its row (0 = top). */
   start?: number
   row?: number
+  /** Picked while playing through (P): goes out with Deck of picks. */
+  pick?: boolean
 }
 
 export interface RoughCutData {
