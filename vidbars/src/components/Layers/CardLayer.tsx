@@ -1089,10 +1089,11 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
           el?.dispatchEvent(new CustomEvent('start-edit', { bubbles: false }))
         }}
       >
-        {/* A linked card (utils/linkedCards): its header hatched with stripes. */}
+        {/* A linked card (utils/linkedCards): its header hatched with stripes,
+            over the face picture (which fills the whole card). */}
         {group.linkOf && headerPad > 0 && (
           <div data-linked-mark style={{
-            position: 'absolute', left: 0, right: 0, top: 0, height: headerPad, pointerEvents: 'none',
+            position: 'absolute', left: 0, right: 0, top: 0, height: headerPad, pointerEvents: 'none', zIndex: 2,
             background: `repeating-linear-gradient(135deg, rgba(0,0,0,0.38) 0 ${Math.max(1.5, headerPad * 0.18)}px, rgba(255,255,255,0.10) ${Math.max(1.5, headerPad * 0.18)}px ${Math.max(3, headerPad * 0.36)}px)`,
           }} />
         )}
