@@ -62,16 +62,47 @@ export const HeroImageEditOverlay: React.FC<Props> = ({ cardRect, heroImage, ini
     dragging.current = false
   }, [])
 
-  // Scroll to zoom
+  // The picture's own shape, so zooming can start from what the card shows.
+  // An untouched face draws the picture to fill the card ('cover'), while a
+  // zoomed one is sized by width (scale 1 = card width). For a picture wider
+  // than the card, filling it is scale imgAspect / cardAspect — the first
+  // wheel step starts from there instead of dropping to width-fit.
+  const [imgAspect, setImgAspect] = useState<number | null>(null)
+  useEffect(() => {
+    if (!resolvedHero) return
+    let live = true
+    const img = new Image()
+    img.onload = () => { if (live && img.naturalWidth && img.naturalHeight) setImgAspect(img.naturalWidth / img.naturalHeight) }
+    img.src = resolvedHero
+    return () => { live = false }
+  }, [resolvedHero])
+  const coverScale = imgAspect && cardRect.width > 0 && cardRect.height > 0
+    ? Math.max(1, imgAspect / (cardRect.width / cardRect.height))
+    : 1
+
+  // Scroll to zoom. Each wheel notch is a small step, sized by how far the
+  // wheel turned (smooth wheels and trackpads glide); Shift is finer still.
   const onWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault()
     e.stopPropagation()
-    const factor = e.deltaY < 0 ? 1.08 : 1 / 1.08
+    // Shift+wheel arrives as a sideways scroll in Chromium on Windows.
+    let d = e.deltaY !== 0 ? e.deltaY : e.deltaX
+    if (e.deltaMode === 1) d *= 33
+    else if (e.deltaMode === 2) d *= 400
+    d = Math.max(-200, Math.min(200, d))
+    if (d === 0) return
+    const perNotch = e.shiftKey ? 0.01 : 0.04   // 4% a notch, 1% with Shift
+    const factor = Math.exp(-d / 100 * Math.log(1 + perNotch))
     setT(prev => {
-      const newScale = Math.max(1, Math.min(5, prev.scale * factor))
+      const untouched = prev.scale === 1 && prev.offsetX === 0 && prev.offsetY === 0
+      const from = untouched ? coverScale : prev.scale
+      let newScale = Math.max(1, Math.min(5 * coverScale, from * factor))
+      // Scale 1 with no offset means "fill the card" to the face renderer;
+      // keep a wide picture zoomed all the way out at width-fit instead.
+      if (newScale === 1 && coverScale > 1 && prev.offsetX === 0 && prev.offsetY === 0) newScale = 1.0001
       return { ...prev, scale: newScale }
     })
-  }, [])
+  }, [coverScale])
 
   const flipH = () => setT(prev => ({ ...prev, flipH: !prev.flipH }))
   const flipV = () => setT(prev => ({ ...prev, flipV: !prev.flipV }))
