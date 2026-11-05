@@ -12,7 +12,8 @@ import { useBoardsStore } from '../../store/boardsStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { useLinkDragStore } from '../../store/linkDragStore'
 import { edgeColorFromHex, hexToHsl, hslToHex } from '../../utils/colorUtils'
-import { CARD_TYPES, CARD_TYPE_ORDER, cardTypeOf, detailShown, factionMembers, factionsOf, isAbove, newDetailId, typeColor, type CardDetail, type CardType } from '../../utils/cardTypes'
+import { CARD_TYPES, CARD_TYPE_ORDER, cardTypeOf, detailShown, factionMembers, factionsOf, isAbove, newDetailId, typeColor, type CardDetail, type CardType, type FactionMember } from '../../utils/cardTypes'
+import { factionGroupsOf, withGroupMoved, withMemberMoved } from '../../utils/factionGroups'
 import { ColorPickerPopup } from '../Bar/ColorPickerPopup'
 import { areSiblings, arePartners, familiesOf, familyTree, isAncestor as isKinAbove, relationsOf, setChildOf, setPartners, setSiblings, type Kin } from '../../utils/family'
 
@@ -329,6 +330,8 @@ export const CardBack: React.FC<{
   const groups = useBoardsStore(s => s.groups)
   const me = groups.find(g => g.id === groupId)
   const members = type === 'faction' && me ? factionMembers(groups, me) : []
+  // In groups (utils/factionGroups): top to bottom, each with its own hierarchy.
+  const fgroups = type === 'faction' && me ? factionGroupsOf(me) : null
   // A linked card is its master shown again: its factions and kin are the master's.
   const meId = me?.linkOf ?? groupId
   const memberOf = factionsOf(groups, meId)
@@ -346,6 +349,8 @@ export const CardBack: React.FC<{
   // to ('top': onto MEMBERS, it reports to no one). `ok`: it can go there
   // (never under someone below it).
   const [mdrag, setMdrag] = useState<{ id: string; over: string | null; ok: boolean } | null>(null)
+  // A group being dragged by its heading: onto another group, to go there.
+  const [gdrag, setGdrag] = useState<{ id: string; over: string | null } | null>(null)
   // A family member let go on another: how are they related? (a, b: ids)
   const [kinMenu, setKinMenu] = useState<{ a: string; b: string; x: number; y: number } | null>(null)
 
@@ -429,6 +434,8 @@ export const CardBack: React.FC<{
         if (back.getAttribute('data-card-back') !== groupId) return null
         const row = el.closest<HTMLElement>('[data-member-row]')
         if (row) return row.dataset.memberRow ?? null
+        const head = el.closest<HTMLElement>('[data-group-head]')
+        if (head) return 'group:' + head.dataset.groupHead
         return el.closest('[data-faction-top]') ? 'top' : null
       }
       return null
@@ -436,8 +443,8 @@ export const CardBack: React.FC<{
     const okAt = (over: string | null) => {
       const f = useBoardsStore.getState().groups.find(g => g.id === groupId)
       if (!f || !over || over === id) return false
-      if (f.cardType === 'family') return over !== 'top'
-      return over === 'top' || !isAbove(f, id, over)
+      if (f.cardType === 'family') return over !== 'top' && !over.startsWith('group:')
+      return over === 'top' || over.startsWith('group:') || !isAbove(f, id, over)
     }
     const end = () => {
       window.removeEventListener('pointermove', onMove)
@@ -466,12 +473,119 @@ export const CardBack: React.FC<{
         return
       }
       useUndoCoordinator.getState().checkpoint()
+      const bs = useBoardsStore.getState()
+      const f = bs.groups.find(g => g.id === groupId)
+      const shown = f ? factionGroupsOf(f) : null
+      if (f && shown) {
+        // Into a group (onto its heading, or onto one of its members): out
+        // of the group it was in, at the top of that one unless onto a member.
+        const to = over.startsWith('group:') ? over.slice(6) : shown.find(g => g.cards.includes(over))?.id
+        if (to && !shown.find(g => g.id === to)?.cards.includes(id)) bs.setFactionShape(groupId, withMemberMoved(f, id, to))
+        if (over.startsWith('group:')) { bs.setReportsTo(groupId, id, null); return }
+      }
       useBoardsStore.getState().setReportsTo(groupId, id, over === 'top' ? null : over, over !== 'top' && ev.shiftKey)
     }
     const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') { ev.stopPropagation(); end() } }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
     window.addEventListener('keydown', onKey, true)
+  }
+
+  /** Press on a group's heading: drag it onto another group's to take its
+   *  place there (the rest move along). */
+  const onGroupDown = (e: React.PointerEvent, id: string) => {
+    if (e.button !== 0) return
+    e.stopPropagation()
+    e.preventDefault()
+    const x0 = e.clientX, y0 = e.clientY
+    let live = false
+    const at = (ev: PointerEvent): string | null => {
+      for (const el of document.elementsFromPoint(ev.clientX, ev.clientY)) {
+        const back = el.closest('[data-card-back]')
+        if (!back) continue
+        if (back.getAttribute('data-card-back') !== groupId) return null
+        return el.closest<HTMLElement>('[data-faction-group]')?.dataset.factionGroup ?? null
+      }
+      return null
+    }
+    const end = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('keydown', onKey, true)
+      setGdrag(null)
+    }
+    const onMove = (ev: PointerEvent) => {
+      if (!live && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 3) return
+      live = true
+      setGdrag({ id, over: at(ev) })
+    }
+    const onUp = (ev: PointerEvent) => {
+      const over = live ? at(ev) : null
+      end()
+      const f = useBoardsStore.getState().groups.find(g => g.id === groupId)
+      const shown = f ? factionGroupsOf(f) : null
+      if (!f || !shown || !over || over === id) return
+      const from = shown.findIndex(g => g.id === id), to = shown.findIndex(g => g.id === over)
+      // Down: below the one let go on; up: above it.
+      const before = to > from ? (shown[to + 1]?.id ?? null) : over
+      useUndoCoordinator.getState().checkpoint()
+      useBoardsStore.getState().setFactionShape(groupId, withGroupMoved(f, id, before))
+    }
+    const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') { ev.stopPropagation(); end() } }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('keydown', onKey, true)
+  }
+
+  /** One member's row in a faction's list (by rank, or inside its group). */
+  const memberRow = ({ card, rank, depth, bosses }: FactionMember, showRank: boolean) => {
+                const target = mdrag?.over === card.id && mdrag.ok
+                return (
+                <div
+                  key={card.id}
+                  data-faction-member={card.id}
+                  data-member-row={card.id}
+                  data-member-depth={depth}
+                  title="Drag onto the member it reports to (Shift: as well as its boss now). Onto MEMBERS: the top."
+                  onPointerDown={e => onMemberDown(e, card.id)}
+                  onPointerEnter={() => setRowHover('m:' + card.id)}
+                  onPointerLeave={() => setRowHover(r => r === 'm:' + card.id ? null : r)}
+                  style={{
+                    position: 'relative', display: 'flex', alignItems: 'center', gap: 3, marginLeft: depth * 7,
+                    borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: 1, minHeight: 13, borderRadius: 2,
+                    cursor: mdrag ? (mdrag.ok ? 'grabbing' : 'no-drop') : 'grab',
+                    opacity: mdrag?.id === card.id ? 0.45 : 1,
+                    outline: target ? '1px dashed rgba(255,255,255,0.8)' : undefined,
+                    background: target ? 'rgba(255,255,255,0.1)' : undefined,
+                  }}
+                >
+                  {/* Under the member above it that it reports to. */}
+                  {depth > 0 && <span style={{ width: 4, height: 6, marginTop: -5, flexShrink: 0, borderLeft: '1px solid rgba(255,255,255,0.35)', borderBottom: '1px solid rgba(255,255,255,0.35)' }} />}
+                  {showRank && <RankBadge rank={rank} color={color} />}
+                  <span style={{ width: 6, height: 6, borderRadius: 2, background: card.color, flexShrink: 0, border: '1px solid rgba(255,255,255,0.5)' }} />
+                  <span style={{ fontSize: 9.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: '0 1 auto' }}>{card.name || 'Untitled'}</span>
+                  {/* Its other bosses: it reports to them too. */}
+                  {bosses.length > 1 && (
+                    <span data-member-also title={'Also reports to ' + bosses.slice(1).map(b => b.name || 'Untitled').join(', ')} style={{ fontSize: 7.5, opacity: 0.6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: '0 1000 auto' }}>
+                      &amp; {bosses.slice(1).map(b => b.name || 'Untitled').join(', ')}
+                    </span>
+                  )}
+                  {rowHover === 'm:' + card.id && !linking && !mdrag && (
+                    <button
+                      type="button"
+                      data-faction-member-remove
+                      title="Take out of this faction"
+                      onPointerDown={stopPress}
+                      onClick={e => { e.stopPropagation(); useUndoCoordinator.getState().checkpoint(); useBoardsStore.getState().removeMember(groupId, card.id) }}
+                      style={{
+                        position: 'absolute', right: 0, top: 1, width: 11, height: 11, padding: 0, lineHeight: '9px',
+                        fontSize: 9, borderRadius: 3, border: 'none', cursor: 'pointer',
+                        background: 'rgba(0,0,0,0.6)', color: 'rgba(255,255,255,0.85)',
+                      }}
+                    >×</button>
+                  )}
+                </div>
+                )
   }
 
   const ink = edgeColorFromHex(color, 0.9)
@@ -605,30 +719,41 @@ export const CardBack: React.FC<{
             ...(more ? { maskImage: 'linear-gradient(to bottom, #000 calc(100% - 14px), transparent)', WebkitMaskImage: 'linear-gradient(to bottom, #000 calc(100% - 14px), transparent)' } : null),
           }}
         >
-          {/* A chart baked into it (utils/chartCard): its groups top to
-              bottom, each led by the card linked to its dot. */}
-          {me?.chart && (
+          {/* A faction in groups: each group top to bottom (its number is
+              its members' rank), and inside it who reports to whom. */}
+          {fgroups && me && (
             <>
-              <div data-chart-groups style={{ fontSize: 7, fontWeight: 800, letterSpacing: 1, color: ink, opacity: 0.6, padding: '1px 2px 0' }}>GROUPS</div>
-              {me.chart.tiers.map((t, i) => {
-                const cards = t.cards.flatMap(id => groups.find(g => g.id === id) ?? [])
-                if (!cards.length) return null
+              <div
+                data-faction-top
+                title="Drag a group's heading onto another group to move it there"
+                style={{ fontSize: 7, fontWeight: 800, letterSpacing: 1, color: ink, opacity: 0.6, padding: '1px 2px 0' }}
+              >GROUPS</div>
+              {fgroups.map((fg, i) => {
+                const sub = factionMembers(groups, { ...me, linkedGroupIds: fg.cards })
+                const lead = sub[0]?.card
+                const into = (mdrag?.over === 'group:' + fg.id && mdrag.ok) || (!!gdrag && gdrag.over === fg.id && gdrag.id !== fg.id)
                 return (
-                  <div key={t.dot} data-chart-tier={i + 1} style={{ display: 'flex', flexDirection: 'column', gap: 1, borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: 2 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 3, minHeight: 13 }}>
+                  <div key={fg.id} data-faction-group={fg.id} style={{
+                    display: 'flex', flexDirection: 'column', gap: 1, paddingBottom: 2, borderRadius: 2,
+                    borderBottom: '1px solid rgba(255,255,255,0.12)',
+                    opacity: gdrag?.id === fg.id ? 0.45 : 1,
+                    outline: into ? '1px dashed rgba(255,255,255,0.8)' : undefined,
+                    background: into ? 'rgba(255,255,255,0.1)' : undefined,
+                  }}>
+                    <div
+                      data-group-head={fg.id}
+                      title="Drag onto another group to move it there. Drag a member here to put it in this group."
+                      onPointerDown={e => onGroupDown(e, fg.id)}
+                      style={{ display: 'flex', alignItems: 'center', gap: 3, minHeight: 13, cursor: gdrag ? 'grabbing' : 'grab' }}
+                    >
                       <RankBadge rank={i + 1} color={color} />
-                      <span style={{ width: 6, height: 6, borderRadius: 2, background: cards[0].color, flexShrink: 0, border: '1px solid rgba(255,255,255,0.5)' }} />
                       <span style={{ fontSize: 9.5, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
-                        {t.title.trim() || cards[0].name || 'Untitled'}
+                        {fg.title?.trim() || lead?.name || 'Untitled'}
                       </span>
-                      <span style={{ fontSize: 7.5, opacity: 0.55, flexShrink: 0 }}>{cards.length}</span>
+                      <span style={{ fontSize: 7.5, opacity: 0.55, flexShrink: 0 }}>{fg.cards.length}</span>
                     </div>
-                    <div style={{ fontSize: 8.5, lineHeight: 1.3, marginLeft: 7, opacity: 0.85, overflowWrap: 'anywhere' }}>
-                      {cards.map((c, j) => (
-                        <span key={c.id} data-chart-member={c.id} style={{ fontWeight: j === 0 ? 700 : 400 }}>
-                          {j > 0 ? ', ' : ''}{c.name || 'Untitled'}
-                        </span>
-                      ))}
+                    <div style={{ marginLeft: 5, display: 'flex', flexDirection: 'column', gap: 1 }}>
+                      {sub.map(m => memberRow(m, false))}
                     </div>
                   </div>
                 )
@@ -637,7 +762,7 @@ export const CardBack: React.FC<{
             </>
           )}
           {/* A faction: its members, by rank. */}
-          {type === 'faction' && me && !me.chart && (
+          {type === 'faction' && me && !fgroups && (
             <>
               <div
                 data-faction-top
@@ -652,55 +777,7 @@ export const CardBack: React.FC<{
               {members.length === 0 && (
                 <div style={{ fontSize: 8, opacity: 0.45, padding: '0 2px 2px' }}>Drag a card’s + here to add it.</div>
               )}
-              {members.map(({ card, rank, depth, bosses }) => {
-                const target = mdrag?.over === card.id && mdrag.ok
-                return (
-                <div
-                  key={card.id}
-                  data-faction-member={card.id}
-                  data-member-row={card.id}
-                  data-member-depth={depth}
-                  title="Drag onto the member it reports to (Shift: as well as its boss now). Onto MEMBERS: the top."
-                  onPointerDown={e => onMemberDown(e, card.id)}
-                  onPointerEnter={() => setRowHover('m:' + card.id)}
-                  onPointerLeave={() => setRowHover(r => r === 'm:' + card.id ? null : r)}
-                  style={{
-                    position: 'relative', display: 'flex', alignItems: 'center', gap: 3, marginLeft: depth * 7,
-                    borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: 1, minHeight: 13, borderRadius: 2,
-                    cursor: mdrag ? (mdrag.ok ? 'grabbing' : 'no-drop') : 'grab',
-                    opacity: mdrag?.id === card.id ? 0.45 : 1,
-                    outline: target ? '1px dashed rgba(255,255,255,0.8)' : undefined,
-                    background: target ? 'rgba(255,255,255,0.1)' : undefined,
-                  }}
-                >
-                  {/* Under the member above it that it reports to. */}
-                  {depth > 0 && <span style={{ width: 4, height: 6, marginTop: -5, flexShrink: 0, borderLeft: '1px solid rgba(255,255,255,0.35)', borderBottom: '1px solid rgba(255,255,255,0.35)' }} />}
-                  <RankBadge rank={rank} color={color} />
-                  <span style={{ width: 6, height: 6, borderRadius: 2, background: card.color, flexShrink: 0, border: '1px solid rgba(255,255,255,0.5)' }} />
-                  <span style={{ fontSize: 9.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: '0 1 auto' }}>{card.name || 'Untitled'}</span>
-                  {/* Its other bosses: it reports to them too. */}
-                  {bosses.length > 1 && (
-                    <span data-member-also title={'Also reports to ' + bosses.slice(1).map(b => b.name || 'Untitled').join(', ')} style={{ fontSize: 7.5, opacity: 0.6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: '0 1000 auto' }}>
-                      &amp; {bosses.slice(1).map(b => b.name || 'Untitled').join(', ')}
-                    </span>
-                  )}
-                  {rowHover === 'm:' + card.id && !linking && !mdrag && (
-                    <button
-                      type="button"
-                      data-faction-member-remove
-                      title="Take out of this faction"
-                      onPointerDown={stopPress}
-                      onClick={e => { e.stopPropagation(); useUndoCoordinator.getState().checkpoint(); useBoardsStore.getState().removeMember(groupId, card.id) }}
-                      style={{
-                        position: 'absolute', right: 0, top: 1, width: 11, height: 11, padding: 0, lineHeight: '9px',
-                        fontSize: 9, borderRadius: 3, border: 'none', cursor: 'pointer',
-                        background: 'rgba(0,0,0,0.6)', color: 'rgba(255,255,255,0.85)',
-                      }}
-                    >×</button>
-                  )}
-                </div>
-                )
-              })}
+              {members.map(m => memberRow(m, true))}
               <div style={{ fontSize: 7, fontWeight: 800, letterSpacing: 1, color: ink, opacity: 0.6, padding: '4px 2px 0' }}>DETAILS</div>
             </>
           )}
@@ -842,7 +919,7 @@ export const CardBack: React.FC<{
               </div>
             )
           })}
-          {details.length === 0 && type !== 'faction' && type !== 'family' && !me?.chart && readRows.length === 0 && (
+          {details.length === 0 && type !== 'faction' && type !== 'family' && readRows.length === 0 && (
             <div style={{ fontSize: 8.5, opacity: 0.45, padding: '2px 2px 0' }}>No details yet.</div>
           )}
           {/* The factions it is in, read from them: name, rank and boss;

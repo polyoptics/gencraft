@@ -15,8 +15,10 @@ import { useBoardsStore, type ProjectGroup } from '../store/boardsStore'
 import { useFreeNodeStore, type FreeNodeData } from '../store/freeNodeStore'
 import { useUndoCoordinator } from '../store/undoCoordinator'
 import { cardFaceSize, createTextCard } from './cardGrid'
+import { isAbove } from './cardTypes'
 import type { ChartData, ChartPlace, ChartTier } from './chartData'
 import { makeLinkedCard, masterOf } from './linkedCards'
+import { newGroupId, type FactionGroup } from './factionGroups'
 import type { StorylineData } from './storyline'
 
 /** The cards that go with these dots, as the storyline moves them
@@ -97,10 +99,20 @@ export function bakeStoryline(nodeId: string, cardsOf: CardsOfDots): string | nu
   }
   const old = new Set(byId.get(cardId)?.chart?.places.map(p => p.card) ?? [])
   const members = [...onMasters]
+  // Its groups (utils/factionGroups): one per dot, top to bottom. Who
+  // reports to whom is kept; in a group, the rest report to the card on its
+  // dot unless they report to someone in the group already.
+  const fgs: FactionGroup[] = tiers.map(t => ({ id: newGroupId(), title: t.title, cards: t.cards }))
   useBoardsStore.setState(s => ({
-    groups: s.groups.map(g => g.id !== cardId ? g : {
-      ...g, chart,
-      linkedGroupIds: [...new Set([...(g.linkedGroupIds ?? []).filter(x => !old.has(x)), ...members])],
+    groups: s.groups.map(g => {
+      if (g.id !== cardId) return g
+      const tree: Record<string, string[]> = { ...(g.reportsTo ?? {}) }
+      for (const t of tiers) for (const c of t.cards.slice(1)) if (!(tree[c] ?? []).some(b => t.cards.includes(b)) && !isAbove({ ...g, reportsTo: tree }, c, t.cards[0])) tree[c] = [t.cards[0]]
+      const kept = (g.factionGroups ?? []).map(x => ({ ...x, cards: x.cards.filter(c => !onMasters.has(c) && !old.has(c)) })).filter(x => x.cards.length)
+      return {
+        ...g, chart, reportsTo: tree, factionGroups: [...fgs, ...kept],
+        linkedGroupIds: [...new Set([...(g.linkedGroupIds ?? []).filter(x => !old.has(x)), ...members])],
+      }
     }),
   }))
 

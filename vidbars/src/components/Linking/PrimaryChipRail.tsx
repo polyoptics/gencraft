@@ -17,6 +17,7 @@ import type { ProjectGroup } from '../../store/boardsStore'
 import { RefChip } from './LinkChipRail'
 import { refKey } from '../../utils/linkTargets'
 import { cardTitle } from '../../utils/faceStyle'
+import { CARD_TYPES, CARD_TYPE_ORDER, cardTypeOf, type CardType } from '../../utils/cardTypes'
 
 interface Props {
   /** Group whose outbound link chips we're rendering. */
@@ -73,14 +74,21 @@ export const PrimaryChipRail: React.FC<Props> = ({ groupId, hostRect, path, scal
           alignItems: 'center',
         }}
       >
-        {linkedGroups.map(g => (
-          <PrimaryChip
-            key={g.id}
-            host={host}
-            linked={g}
-            path={[...path, g.id]}
-          />
-        ))}
+        {/* A faction's or a family's members: one chip per kind of card
+            (Brian 2026-11-05), each opening a list to pick one from; the
+            ones opened show beside it as usual. Other cards: a chip each. */}
+        {grouped(host)
+          ? byType(linkedGroups).map(([type, list]) => (
+              <TypeChip key={type} host={host} type={type} list={list} path={path} />
+            ))
+          : linkedGroups.map(g => (
+              <PrimaryChip
+                key={g.id}
+                host={host}
+                linked={g}
+                path={[...path, g.id]}
+              />
+            ))}
         {/* References to BLOCKS and ELEMENTS. Card-to-card chips above are
             expandable into clones and so have their own component; these
             share the chip the block and element rails use, so a reference
@@ -92,6 +100,89 @@ export const PrimaryChipRail: React.FC<Props> = ({ groupId, hostRect, path, scal
         <AddChip hostGroup={host} />
       </div>
     </div>
+  )
+}
+
+// ── Members by kind (faction, family) ───────────────────────────────
+
+const grouped = (host: ProjectGroup) => host.cardType === 'faction' || host.cardType === 'family'
+
+/** The linked cards by type, in the usual type order. */
+function byType(list: ProjectGroup[]): [CardType, ProjectGroup[]][] {
+  const m = new Map<CardType, ProjectGroup[]>()
+  for (const g of list) { const t = cardTypeOf(g); m.set(t, [...(m.get(t) ?? []), g]) }
+  return CARD_TYPE_ORDER.filter(t => m.has(t)).map(t => [t, m.get(t)!])
+}
+
+const plural = (label: string) => label.endsWith('y') ? label.slice(0, -1) + 'ies' : label.endsWith('o') ? label : label + 's'
+
+/** One kind of member: "Characters 12". Click: a list of them; pick one to
+ *  open it as its chip does. The open ones show beside it, to close. */
+const TypeChip: React.FC<{ host: ProjectGroup; type: CardType; list: ProjectGroup[]; path: string[] }> = ({ host, type, list, path }) => {
+  const [open, setOpen] = useState(false)
+  const toggle = useLinkingStore(s => s.toggleExpanded)
+  const jumpToGroup = useCanvasStore(s => s.jumpToGroup)
+  const groups = useBoardsStore(s => s.groups)
+  const expanded = useLinkingStore(useShallow(s => list.filter(g => s.isExpanded([...path, g.id])).map(g => g.id)))
+  const color = CARD_TYPES[type].color
+  return (
+    <>
+      <div
+        data-link-type-chip={type}
+        data-link-drop={`chip:${host.id}`}
+        onClick={e => { e.stopPropagation(); setOpen(o => !o) }}
+        onPointerDown={e => e.stopPropagation()}
+        title={`${plural(CARD_TYPES[type].label)}: click to pick one`}
+        style={{
+          position: 'relative', height: CHIP_H, display: 'flex', alignItems: 'center', gap: 5, padding: '0 9px 0 4px',
+          borderRadius: 12, background: open ? color : `${color}d0`, color: '#fff', fontSize: 11, fontWeight: 600,
+          letterSpacing: '0.2px', cursor: 'pointer', userSelect: 'none',
+          boxShadow: open ? `0 2px 8px ${color}aa` : '0 1px 4px rgba(0,0,0,0.4)',
+          border: open ? '1.5px solid rgba(255,255,255,0.55)' : '1.5px solid rgba(0,0,0,0.25)',
+        }}
+      >
+        <div style={{ width: 16, height: 16, borderRadius: '50%', background: color, border: '1.5px solid rgba(255,255,255,0.55)', flexShrink: 0 }} />
+        <span style={{ whiteSpace: 'nowrap', textShadow: '0 1px 2px rgba(0,0,0,0.55)' }}>{plural(CARD_TYPES[type].label)}</span>
+        <span style={{ opacity: 0.75, fontWeight: 500 }}>{list.length}</span>
+        <span style={{ opacity: 0.7, fontSize: 8 }}>▾</span>
+        {open && (
+          <div
+            data-link-type-list={type}
+            onClick={e => e.stopPropagation()}
+            onWheel={e => e.stopPropagation()}
+            style={{
+              position: 'absolute', top: CHIP_H + 4, left: 0, zIndex: 5, minWidth: 150, maxHeight: 260, overflowY: 'auto',
+              background: 'rgba(22,24,38,0.97)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: 8,
+              boxShadow: '0 6px 20px rgba(0,0,0,0.5)', padding: 4, display: 'flex', flexDirection: 'column', gap: 1,
+            }}
+          >
+            {list.map(g => {
+              const lit = expanded.includes(g.id)
+              return (
+                <div
+                  key={g.id}
+                  data-link-type-item={g.id}
+                  onClick={e => { if (e.detail === 2) return; e.stopPropagation(); toggle([...path, g.id]); setOpen(false) }}
+                  onDoubleClick={e => { e.stopPropagation(); jumpToGroup(g.id); setOpen(false) }}
+                  title="Click to show it, double-click to jump"
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 6, padding: '3px 6px', borderRadius: 5, cursor: 'pointer',
+                    fontSize: 11, fontWeight: lit ? 700 : 500, whiteSpace: 'nowrap',
+                    background: lit ? `${g.color || color}66` : undefined,
+                  }}
+                >
+                  <span style={{ width: 8, height: 8, borderRadius: 2, background: g.color || color, flexShrink: 0 }} />
+                  {cardTitle(groups, g) || 'card'}
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+      {list.filter(g => expanded.includes(g.id)).map(g => (
+        <PrimaryChip key={g.id} host={host} linked={g} path={[...path, g.id]} />
+      ))}
+    </>
   )
 }
 

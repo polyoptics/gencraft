@@ -100,6 +100,9 @@ export interface ProjectGroup {
    *  front its deck last opened from, or the card made primary. It counts
    *  only while another card of the row remembers it too (utils/primaryCard). */
   deckLastFront?: string
+  /** It was linked to a storyline: its deck turns back to open right once
+   *  it is closed off every line (utils/deckRight). */
+  wasOnStoryline?: boolean
   /**
    * When THIS group is a deck anchor, ghostSlots holds "checked-out" entries
    * for cards that were extracted from this deck. Each entry remembers where
@@ -174,6 +177,8 @@ export interface ProjectGroup {
   /** A chart baked into this card: a storyline and its cards, folded in
    *  (utils/chartCard). Its back lists the chart's groups. */
   chart?: import('../utils/chartData').ChartData
+  /** A FACTION's groups, top to bottom (utils/factionGroups). Absent: it has none. */
+  factionGroups?: import('../utils/factionGroups').FactionGroup[]
 }
 
 /** Find which group a board belongs to */
@@ -373,6 +378,8 @@ interface BoardsState {
    *  top), or with `also`, that one added to its bosses (taken off if it
    *  is one already). Never someone below it. */
   setReportsTo: (factionId: string, memberId: string, bossId: string | null, also?: boolean) => void
+  /** A faction's groups, who reports to whom and its members, at once (utils/factionGroups). */
+  setFactionShape: (factionId: string, shape: Pick<ProjectGroup, 'factionGroups' | 'reportsTo' | 'linkedGroupIds'>) => void
   /** A face copied from one card put on these (utils/faceStyle): its text,
    *  how it is set, and the line between title and body. Once, not tied. */
   pasteFaceStyle: (groupIds: string[], style: import('../utils/faceStyle').FaceStyle) => void
@@ -1108,6 +1115,10 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
     const ids = cardIds.filter(id => id !== sceneId)
     if (!ids.length) return
     set(s => ({ groups: s.groups.map(g => g.id === sceneId && g.scene ? { ...g, scene: putCards(g.scene, divId, ids) } : g) }))
+  },
+
+  setFactionShape(factionId, shape) {
+    set(s => ({ groups: s.groups.map(g => g.id === factionId ? { ...g, ...shape } : g) }))
   },
 
   setReportsTo(factionId, memberId, bossId, also) {

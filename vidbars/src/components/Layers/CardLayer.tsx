@@ -39,6 +39,7 @@ import { SceneFace } from './SceneFace'
 import { useFxStore } from '../../store/fxStore'
 import { cardStripId } from '../../utils/fx/cardStrips'
 import { cardHitAt } from '../../utils/cardContent'
+import { withGroupAdded } from '../../utils/factionGroups'
 import { FaceCut } from '../RoughCut/FaceCut'
 import { CUT_ASPECT } from '../../utils/cutCard'
 import { cardFaceAudio, cardFaceMedia, deckFaceSteps, faceSteps, layoutCardGrid, mergeCardsInto, setFaceThumbnail, stepDeckFace, stepFace } from '../../utils/cardGrid'
@@ -64,7 +65,7 @@ import { PenButton } from '../Annotation/PenButton'
 import { useSeedHoverFromCursor } from '../../utils/pointerTracker'
 import { deckAreas } from '../../utils/peek'
 import { useContextSheetStore } from '../../store/contextSheetStore'
-import { CARD_TYPES, CARD_TYPE_ORDER, cardTypeOf, typeColor, type CardType } from '../../utils/cardTypes'
+import { CARD_TYPES, CARD_TYPE_ORDER, cardTypeOf, factionMembers, typeColor, type CardType } from '../../utils/cardTypes'
 import { nameKindOf } from '../../utils/fillDetails'
 import { copiedFaceStyle, copyFaceStyle, fillFields } from '../../utils/faceStyle'
 import { showFactionTree } from '../../utils/factionTree'
@@ -183,7 +184,8 @@ const CardContextMenu: React.FC<{
       onClose()
     }})
     // A faction: its members as a tree on a new storyline beside it.
-    if (group.cardType === 'faction' && group.linkedGroupIds?.length) menuItems.push({ label: 'Show as a tree on a storyline', icon: '🌳', action: () => {
+    // Out already (it bakes back in from here): not twice.
+    if (group.cardType === 'faction' && group.linkedGroupIds?.length && !group.chart && !chartOutOf(group.id)) menuItems.push({ label: 'Show as a tree on a storyline', icon: '🌳', action: () => {
       showFactionTree(group.id)
       onClose()
     }})
@@ -624,6 +626,28 @@ function groupCardBounds(group: ProjectGroup, boards: Record<string, BoardData>)
 
 // ── Per-group card (screen-space) ──
 
+/** A deck (or row) let go over a faction's back (turned over): it joins as
+ *  a group, `front` leading (utils/factionGroups), and goes back to where it
+ *  was picked up. True when it did. The press took the undo checkpoint. */
+function dropDeckOnFaction(ev: PointerEvent, ids: string[], front: string, origins: Map<string, { x: number; y: number }>): boolean {
+  const own = new Set(ids)
+  // The first card under the pointer that is not one being dragged (a
+  // closed deck is drawn as one piece, over whatever it is let go on).
+  let backId: string | undefined
+  for (const el of document.elementsFromPoint(ev.clientX, ev.clientY)) {
+    const h = cardHitAt([el])
+    if (h && 'groupId' in h && !own.has(h.groupId)) { backId = h.groupId; break }
+  }
+  const bs = useBoardsStore.getState()
+  const back = backId ? bs.groups.find(g => g.id === backId) : undefined
+  if (!back?.flipped || (back.deckState && back.deckState !== 'open') || back.cardType !== 'faction') return false
+  bs.setGroupPosBatch(Array.from(origins, ([gid, o]) => ({ groupId: gid, originY: o.y, originX: o.x })))
+  const list = [front, ...ids.filter(id => id !== front)].filter(id => !bs.groups.find(g => g.id === id)?.effect)
+  bs.setFactionShape(back.id, withGroupAdded(back, list, factionMembers(bs.groups, back).map(m => m.card.id)))
+  useMagnetPreviewStore.getState().setPreview(null)
+  return true
+}
+
 const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
   // The live canvas camera, or a frozen one when this card is pinned. All
   // the geometry below is `pan + world * zoom`, so swapping the camera is
@@ -832,7 +856,11 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
         if (back?.flipped && (!back.deckState || back.deckState === 'open') && (back.cardType === 'faction' || back.cardType === 'family')) {
           bs.setGroupPosBatch(Array.from(initialOrigins, ([gid, o]) => ({ groupId: gid, originY: o.y, originX: o.x })))
           endDockedDrag(draggingIds, false)
-          for (const id of picked) if (!bs.groups.find(g => g.id === id)?.effect) bs.linkGroups(back.id, id)
+          // A deck (or several cards) onto a faction: a group of its own,
+          // the card held leading it (utils/factionGroups).
+          const ids = [group.id, ...draggingIds.filter(x => x !== group.id)].filter(id => !bs.groups.find(g => g.id === id)?.effect)
+          if (back.cardType === 'faction' && ids.length > 1) bs.setFactionShape(back.id, withGroupAdded(back, ids, factionMembers(bs.groups, back).map(m => m.card.id)))
+          else for (const id of picked) if (!bs.groups.find(g => g.id === id)?.effect) bs.linkGroups(back.id, id)
           useMagnetPreviewStore.getState().setPreview(null)
           return
         }
@@ -1094,7 +1122,7 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
         {group.linkOf && headerPad > 0 && (
           <div data-linked-mark style={{
             position: 'absolute', left: 0, right: 0, top: 0, height: headerPad, pointerEvents: 'none', zIndex: 2,
-            background: `repeating-linear-gradient(135deg, rgba(0,0,0,0.38) 0 ${Math.max(1.5, headerPad * 0.18)}px, rgba(255,255,255,0.10) ${Math.max(1.5, headerPad * 0.18)}px ${Math.max(3, headerPad * 0.36)}px)`,
+            background: `repeating-linear-gradient(135deg, rgba(0,0,0,0.16) 0 ${Math.max(1.5, headerPad * 0.18)}px, rgba(255,255,255,0.05) ${Math.max(1.5, headerPad * 0.18)}px ${Math.max(3, headerPad * 0.36)}px)`,
           }} />
         )}
         {showBack ? (
@@ -1800,6 +1828,7 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
         useMagnetPreviewStore.getState().setPreview(null)
         return
       }
+      if (!anchorGroup.pin && (dxAccum !== 0 || dyAccum !== 0) && dropDeckOnFaction(ev, allDragIds, deck.anchorGroupId, initialOrigins)) { previewCardRail(null, deck.anchorGroupId); return }
       // A deck let go over a loop strip goes into the column as ONE deck,
       // by its front card (utils/railCards). One undo puts it back.
       {
@@ -2475,6 +2504,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[]; lay
         stowCards(allDragIds, drawer)
         return
       }
+      if (!anchorGroup.pin && dropDeckOnFaction(ev, allDragIds, deck.anchorGroupId, initialOrigins)) { previewCardRail(null, deck.anchorGroupId); return }
       // Let go over a loop strip: the fan goes into the column as one deck,
       // as a closed deck does; anywhere else it stays where it was let go.
       {
@@ -3877,9 +3907,12 @@ const DeckAffordance: React.FC<{ cluster: string[]; front: Deck | 'card' | null;
         }))
       )
     }
-    const onUp = () => {
+    const onUp = (ev: PointerEvent) => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
+      // Let go over a faction's back (turned over): the row joins it as a
+      // group, its primary card leading, and goes back where it was.
+      if (dxAccum !== 0 || dyAccum !== 0) dropDeckOnFaction(ev, allDragIds, cluster[0], initialOrigins)
     }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)

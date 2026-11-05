@@ -72,7 +72,8 @@ export function showFactionTree(factionId: string): string | null {
     const up = m.depth > 0 ? m.bosses[0]?.id : undefined
     if (up && dotOf.has(up)) edges.push({ a: dotOf.get(up)!.id, b: dotOf.get(m.card.id)!.id })
   }
-  const data: StorylineData = { dots: [...dotOf.values()], edges, base }
+  // Baked back in (utils/chartCard), it folds into this faction card.
+  const data: StorylineData = { dots: [...dotOf.values()], edges, base, chartCard: factionId }
 
   useUndoCoordinator.getState().checkpoint()
   const fs = useFreeNodeStore.getState()
