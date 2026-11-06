@@ -142,13 +142,16 @@ export function chartOutOf(cardId: string): string | null {
   return null
 }
 
-/** Folds storyline `nodeId` into its card. Returns the card's id, or null
- *  when no card is on it. */
-export function bakeStoryline(nodeId: string, cardsOf: CardsOfDots): string | null {
-  const fs = useFreeNodeStore.getState()
-  const n = fs.nodes[nodeId]
+/** Storyline `nodeId` as a chart (utils/chartData), as it stands now: its
+ *  cards kept by their masters' ids. Null when no card is on it. */
+export function chartOfStoryline(nodeId: string, cardsOf: CardsOfDots): ChartData | null {
+  return chartFrom(nodeId, cardsOf)?.chart ?? null
+}
+
+function chartFrom(nodeId: string, cardsOf: CardsOfDots) {
+  const n = useFreeNodeStore.getState().nodes[nodeId]
   const d = n?.storyline
-  if (!n || !d || moving) return null
+  if (!n || !d) return null
   const groups = useBoardsStore.getState().groups
   const byId = new Map(groups.map(g => [g.id, g]))
   const on = cardsOf(d, new Set(d.dots.map(p => p.id)))
@@ -192,6 +195,17 @@ export function bakeStoryline(nodeId: string, cardsOf: CardsOfDots): string | nu
   // A chart that was shown keeps its locks as they were left; one baked
   // from a plain storyline comes out locked the first time.
   const chart: ChartData = { title: chartTitle(n), node: { ...rest, storyline }, places, tiers, ...(d.chartCard ? { lockSet: true } : {}) }
+  return { chart, n, d, on, onMasters, byId }
+}
+
+/** Folds storyline `nodeId` into its card. Returns the card's id, or null
+ *  when no card is on it. */
+export function bakeStoryline(nodeId: string, cardsOf: CardsOfDots): string | null {
+  if (moving) return null
+  const got = chartFrom(nodeId, cardsOf)
+  if (!got) return null
+  const { chart, n, d, on, onMasters, byId } = got
+  const tiers = chart.tiers
 
   useUndoCoordinator.getState().checkpoint()
   let cardId = d.chartCard && byId.has(d.chartCard) ? d.chartCard : null
@@ -251,24 +265,20 @@ export function bakeStoryline(nodeId: string, cardsOf: CardsOfDots): string | nu
   return cardId
 }
 
-/** Brings card `cardId`'s chart back out where it was, with linked cards.
- *  Returns the storyline's id. */
-export function recallChart(cardId: string): string | null {
-  const card = useBoardsStore.getState().groups.find(g => g.id === cardId)
-  const chart = card?.chart
-  if (!chart || chartOutOf(cardId) || moving) return null
-  useUndoCoordinator.getState().checkpoint()
-  // All of it drawn at once (flushSync), already started on its way out,
-  // so the cards are there to animate and nothing shows where it lands
-  // first.
-  const { id, at, node } = flushSync(() => {
+/** Chart `chart` laid out on the canvas, its storyline's node at `pos`:
+ *  a new storyline, filled with new LINKED cards showing its masters, each
+ *  where it sat, in its deck as it was. `chartCard`: the card it comes out
+ *  of (absent: a storyline of its own, a pasted copy). Returns the
+ *  storyline's id and the linked cards' places. */
+function layChart(chart: ChartData, pos: { x: number; y: number }, chartCard?: string) {
+    const card = chartCard ? useBoardsStore.getState().groups.find(g => g.id === chartCard) : undefined
     const link = new Map<string, string>()
     for (const p of chart.places) {
       const id = makeLinkedCard(p.card)
       if (id) link.set(p.card, id)
     }
     const at = new Map(chart.places.map(p => [link.get(p.card), p]))
-    const node = chart.node
+    const node = { ...chart.node, x: pos.x, y: pos.y }
     useBoardsStore.setState(s => ({
       groups: s.groups.map((g): ProjectGroup => {
         const p = at.get(g.id)
@@ -291,11 +301,32 @@ export function recallChart(cardId: string): string | null {
     const fs = useFreeNodeStore.getState()
     const id = fs.addFreeNode(node.x, node.y, 'storyline')
     const d = node.storyline!
-    const live: StorylineData = { ...d, chartCard: cardId, dots: d.dots.map(p => ({ ...p, cards: p.cards?.flatMap(c => link.get(c) ?? []) })) }
+    const live: StorylineData = { ...d, chartCard, dots: d.dots.map(p => ({ ...p, cards: p.cards?.flatMap(c => link.get(c) ?? []) })) }
     fs.updateFreeNode(id, { ...node, storyline: live })
-    setChartMotion(id, { ...showAt(0), to: sideOf(card, node) })
+    if (chartCard && card) setChartMotion(id, { ...showAt(0), to: sideOf(card, node) })
     return { id, at, node }
-  })
+}
+
+/** Pastes a copy of chart `chart` (copied with chartOfStoryline), its
+ *  storyline's node at `pos`: the same storyline, with LINKED cards showing
+ *  the same masters (Brian 2026-11-06: "an exact duplicate"), in their
+ *  decks and locks as they were. A storyline of its own, from no card.
+ *  The caller takes the undo checkpoint. Returns the new storyline's id. */
+export function pasteChart(chart: ChartData, pos: { x: number; y: number }): string {
+  return layChart(chart, pos).id
+}
+
+/** Brings card `cardId`'s chart back out where it was, with linked cards.
+ *  Returns the storyline's id. */
+export function recallChart(cardId: string): string | null {
+  const card = useBoardsStore.getState().groups.find(g => g.id === cardId)
+  const chart = card?.chart
+  if (!chart || chartOutOf(cardId) || moving) return null
+  useUndoCoordinator.getState().checkpoint()
+  // All of it drawn at once (flushSync), already started on its way out,
+  // so the cards are there to animate and nothing shows where it lands
+  // first.
+  const { id, at, node } = flushSync(() => layChart(chart, chart.node, cardId))
   // The line slides out of the card's side and its points rise to their
   // places; then the cards jump out to theirs.
   const ride: Ride[] = useBoardsStore.getState().groups.filter(g => at.has(g.id))

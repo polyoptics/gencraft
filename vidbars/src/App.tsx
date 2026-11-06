@@ -30,8 +30,11 @@ import type { Bar } from './types/bar'
 import type { FreeNodeData } from './store/freeNodeStore'
 import { collectSubtree } from './utils/barOps'
 import { expandTileIds } from './utils/tileDecks'
+import { chartArea, chartOfStoryline, pasteChart } from './utils/chartCard'
+import type { ChartData } from './utils/chartData'
+import { cardOrigins } from './components/Canvas/StorylineLayer'
 import { isRail } from './utils/rail'
-import { stackedDeckMembers, stepDeckFace, stepFace } from './utils/cardGrid'
+import { cardFaceSize, stackedDeckMembers, stepDeckFace, stepFace } from './utils/cardGrid'
 import { followFaceInViewer } from './hooks/useDockedContent'
 import { expandWithNestedMembers } from './hooks/useCardDecks'
 import { copyEffect, pasteEffect, selectedEffect } from './utils/fx/effectClipboard'
@@ -79,6 +82,10 @@ interface Clipboard {
 let clipboard: Clipboard | null = null
 let clipboardGroupId: string | null = null
 let freeNodeClipboard: FreeNodeData[] = []
+/** The charts on the storylines copied (utils/chartCard chartOfStoryline),
+ *  by storyline id, as they stood when copied: a pasted storyline comes
+ *  with linked cards showing the same masters. */
+let chartClipboard = new Map<string, ChartData>()
 /** The last copy was ONE effect (utils/fx/effectClipboard): paste puts a
  *  copy of it into the row or stack the selection names. */
 let clipIsEffect = false
@@ -134,7 +141,19 @@ function pasteCardOrDeck(groupId: string) {
   const src = bs.groups.find(g => g.id === groupId)
   const closed = src && (src.deckState === 'stacked' || src.deckState === 'fanned')
   const members = closed ? expandWithNestedMembers([groupId], bs.groups) : [groupId]
-  if (members.length < 2) { bs.duplicateGroup(groupId); return }
+  if (members.length < 2) {
+    const copy = bs.duplicateGroup(groupId)
+    // A chart card's copy brings its chart out beside it, moved as far as
+    // the card (duplicateGroup's +100), not on top of the original's.
+    const c = copy ? useBoardsStore.getState().groups.find(g => g.id === copy) : undefined
+    if (c?.chart && src) {
+      const dx = c.originX - src.originX, dy = c.originY - src.originY
+      useBoardsStore.setState(st => ({
+        groups: st.groups.map(g => g.id === copy && g.chart ? { ...g, chart: { ...g.chart, node: { ...g.chart.node, x: g.chart.node.x + dx, y: g.chart.node.y + dy } } } : g),
+      }))
+    }
+    return
+  }
   const idMap = new Map<string, string>()
   for (const id of members) {
     const copy = useBoardsStore.getState().duplicateGroup(id)
@@ -185,6 +204,11 @@ function useKeyboardCopyPaste() {
             .map(id => freeNodes[id])
             .filter(Boolean)
             .map(n => structuredClone(n))
+          chartClipboard = new Map()
+          for (const n of freeNodeClipboard) {
+            const chart = n.type === 'storyline' ? chartOfStoryline(n.id, cardOrigins) : null
+            if (chart) chartClipboard.set(n.id, structuredClone(chart))
+          }
           clipboard = null
           clipboardGroupId = null
           return
@@ -253,6 +277,32 @@ function useKeyboardCopyPaste() {
             dy = Math.max(...freeNodeClipboard.filter(c => railSrc.has(c.id)).map(bottom))
               - Math.min(...freeNodeClipboard.map(top)) + 40
           }
+          // A chart is big: 40 px off, the copy lands on its cards. It goes
+          // just right of what was copied instead, level with it.
+          else if (chartClipboard.size > 0) {
+            const faceW = cardFaceSize().w
+            const charts = [...chartClipboard.values()]
+            const x0 = Math.min(...charts.map(c => chartArea(c).x), ...freeNodeClipboard.map(c => c.x))
+            const x1 = Math.max(...charts.flatMap(c => c.places.map(q => c.node.x + q.dx + (q.w ?? faceW))),
+              ...freeNodeClipboard.map(c => c.x + c.width),
+              // Its title under the base line, as drawn (it can run wider).
+              ...[...chartClipboard.keys()].flatMap(id => {
+                const el = document.querySelector(`[data-story-label="${id}"]`)
+                if (!el) return []
+                // Its words, not its box (that runs the base line's width).
+                const rights: number[] = []
+                const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+                for (let t = walk.nextNode(); t; t = walk.nextNode()) {
+                  if (!t.textContent?.trim()) continue
+                  const r = document.createRange()
+                  r.selectNodeContents(t)
+                  rights.push((r.getBoundingClientRect().right - cs.pan.x) / cs.zoom)
+                }
+                return rights
+              }))
+            dx = (x1 - x0) * cs.zoom + 40
+            dy = 0
+          }
           let offRail = 0   // docked cards pasted without their rail, so far
           for (const src of freeNodeClipboard) {
             // Off its rail, a docked card is its own size again (undockFromRail's
@@ -271,6 +321,24 @@ function useKeyboardCopyPaste() {
             const at = srcRail && !srcRail.pin
               ? { x: src.x + offRail * 20 / cs.zoom, y: srcRail.y + srcRail.height + (40 + offRail++ * 20) / cs.zoom }
               : { x: (sx + dx - cs.pan.x) / cs.zoom, y: (sy + dy - cs.pan.y) / cs.zoom }
+            // A storyline comes whole: its dots and lines, and a chart on
+            // it with linked cards showing the same masters (Brian
+            // 2026-11-06), everything by the same amount it moved.
+            const chart = chartClipboard.get(src.id)
+            if (src.type === 'storyline' && src.storyline) {
+              const pos = { x: src.x + (at.x - (sx - cs.pan.x) / cs.zoom), y: src.y + (at.y - (sy - cs.pan.y) / cs.zoom) }
+              const id = chart
+                ? pasteChart(chart, pos)
+                : useFreeNodeStore.getState().addFreeNode(pos.x, pos.y, 'storyline')
+              if (!chart) {
+                const { id: _i, pin: _p, ...rest } = structuredClone(src)
+                void _i; void _p
+                useFreeNodeStore.getState().updateFreeNode(id, { ...rest, x: pos.x, y: pos.y, storyline: { ...rest.storyline!, chartCard: undefined, dots: rest.storyline!.dots.map(p => ({ ...p, cards: undefined })) } })
+              }
+              idMap.set(src.id, id)
+              newIds.push(id)
+              continue
+            }
             const id = useFreeNodeStore.getState().addFreeNode(at.x, at.y, src.type)
             // The copy is always canvas-placed: `pin` is deliberately never
             // carried, or two pinned panels would stack on the same pixels.
