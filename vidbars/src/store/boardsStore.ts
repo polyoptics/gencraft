@@ -6,7 +6,7 @@ import { usePinTravelStore } from './pinTravelStore'
 import { sameRef, type LinkRef } from '../utils/linkTargets'
 import type { Bar } from '../types/bar'
 import { TEMPLATES } from '../data/templates'
-import { CARD_TYPES, cardTypeOf, isAbove, newDetailId, typeColor, withTypeDetails, type CardType } from '../utils/cardTypes'
+import { CARD_TYPES, cardTypeOf, isAbove, newDetailId, typeColor, withMemberCount, withTypeDetails, type CardType } from '../utils/cardTypes'
 import { fillCard, nameKindOf } from '../utils/fillDetails'
 import { makeName, nameKey } from '../utils/nameGen'
 import { removeFromKin, type Kin } from '../utils/family'
@@ -2459,6 +2459,21 @@ useBoardsStore.subscribe((s, prev) => {
   if (s.groups === prev.groups) return
   const healed = healOrphanDeckMembers(s.groups)
   if (healed !== s.groups) useBoardsStore.setState({ groups: healed })
+})
+
+// Every faction and family card has a MEMBERS detail that counts its
+// members (Brian 2026-11-06): given one when it becomes one, or when an
+// older one loads. Not an edit of its own (no undo step).
+useBoardsStore.subscribe((s, prev) => {
+  if (s.groups === prev.groups) return
+  let changed = false
+  const groups = s.groups.map(g => {
+    const next = withMemberCount(g)
+    if (!next) return g
+    changed = true
+    return { ...g, details: next }
+  })
+  if (changed) useBoardsStore.setState({ groups })
 })
 
 // Dev-only: expose the running store on `window` so debugging tooling

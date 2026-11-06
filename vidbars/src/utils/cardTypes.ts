@@ -13,6 +13,9 @@ import { groupRankOf } from './factionGroups'
 export interface DetailLink {
   card: string
   detail?: string
+  /** Not the card's name or a detail: how many members it has (a faction
+   *  or family), counted live (Brian 2026-11-06). */
+  count?: 'members'
 }
 
 /** One row on a card's details side. */
@@ -87,12 +90,40 @@ export function detailShown(groups: ProjectGroup[], d: CardDetail, seen = new Se
   if (!d.link) return { text: d.value }
   const card = groups.find(g => g.id === d.link!.card)
   if (!card) return { text: d.value, missing: true }
+  if (d.link.count === 'members') return { text: String(memberCount(groups, card)), card }
   if (!d.link.detail) return { text: card.name, card }
   const key = `${card.id}:${d.link.detail}`
   const target = card.details?.find(x => x.id === d.link!.detail)
   if (!target || seen.has(key)) return { text: card.name, card, missing: !target }
   seen.add(key)
   return { ...detailShown(groups, target, seen), card }
+}
+
+// ── Members, counted (Brian 2026-11-06) ──
+// A faction's or family's back has a MEMBERS detail that counts the cards
+// in it, live: a detail like any other (the Attributes window, Card
+// Prompts, {Members} on a face, a link from another card all read it),
+// whose value is never typed.
+
+/** Card types whose back counts its members. */
+export const hasMembers = (g: Pick<ProjectGroup, 'cardType'>) => g.cardType === 'faction' || g.cardType === 'family'
+
+/** How many cards are in `card` (a faction or family): the ones still there. */
+export function memberCount(groups: ProjectGroup[], card: ProjectGroup): number {
+  const ids = new Set(groups.map(g => g.id))
+  return new Set((card.linkedGroupIds ?? []).filter(id => id !== card.id && ids.has(id))).size
+}
+
+/** Whether `d` is card `cardId`'s own member count. */
+export const isOwnCount = (d: CardDetail, cardId: string) => d.link?.count === 'members' && d.link.card === cardId
+
+/** `card`'s details with its member count put first, when it is a faction
+ *  or family without one (null: nothing to add). A linked copy gets its
+ *  master's, which counts the master. */
+export function withMemberCount(card: ProjectGroup): CardDetail[] | null {
+  if (!hasMembers(card) || card.linkOf) return null
+  if ((card.details ?? []).some(d => isOwnCount(d, card.id))) return null
+  return [{ id: newDetailId(), name: 'Members', value: '', link: { card: card.id, count: 'members' } }, ...(card.details ?? [])]
 }
 
 /** A card's detail, read by name (any case): what it shows, links

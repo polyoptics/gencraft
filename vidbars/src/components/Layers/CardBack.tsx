@@ -12,7 +12,7 @@ import { useBoardsStore } from '../../store/boardsStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { useLinkDragStore } from '../../store/linkDragStore'
 import { edgeColorFromHex, hexToHsl, hslToHex } from '../../utils/colorUtils'
-import { CARD_TYPES, CARD_TYPE_ORDER, cardTypeOf, detailShown, factionMembers, factionsOf, isAbove, newDetailId, typeColor, type CardDetail, type CardType, type FactionMember } from '../../utils/cardTypes'
+import { CARD_TYPES, CARD_TYPE_ORDER, cardTypeOf, detailShown, factionMembers, factionsOf, hasMembers, isAbove, isOwnCount, newDetailId, typeColor, type CardDetail, type CardType, type FactionMember } from '../../utils/cardTypes'
 import { factionGroupsOf, withGroupMoved, withMemberMoved } from '../../utils/factionGroups'
 import { ColorPickerPopup } from '../Bar/ColorPickerPopup'
 import { areSiblings, arePartners, familiesOf, familyTree, isAncestor as isKinAbove, relationsOf, setChildOf, setPartners, setSiblings, type Kin } from '../../utils/family'
@@ -729,8 +729,10 @@ export const CardBack: React.FC<{
     if (!d?.link) return []
     if (!card) return [{ label: 'Unlink (the card is gone)', onClick: () => { setLink(id, null); setMenu(null) } }]
     return [
-      { label: card.name || 'Untitled', hint: '  the card', checked: !d.link.detail, swatch: card.color, onClick: () => { setLink(id, { card: card.id }); setMenu(null) } },
-      ...(card.details ?? []).filter(x => x.name.trim()).map(x => ({
+      { label: card.name || 'Untitled', hint: '  the card', checked: !d.link.detail && !d.link.count, swatch: card.color, onClick: () => { setLink(id, { card: card.id }); setMenu(null) } },
+      // A faction or family: how many are in it (counted live).
+      ...(hasMembers(card) ? [{ label: 'Number of members', hint: `  ${detailShown(all, { id: '', name: '', value: '', link: { card: card.id, count: 'members' } }).text}`, checked: d.link.count === 'members', onClick: () => { setLink(id, { card: card.id, count: 'members' }); setMenu(null) } }] : []),
+      ...(card.details ?? []).filter(x => x.name.trim() && !isOwnCount(x, card.id)).map(x => ({
         label: x.name, hint: `  ${detailShown(all, x).text}`, checked: d.link!.detail === x.id,
         onClick: () => { setLink(id, { card: card.id, detail: x.id }); setMenu(null) },
       })),
@@ -927,6 +929,8 @@ export const CardBack: React.FC<{
           )}
           {details.map(d => {
             const linked = d.link ? detailShown(groups, d) : null
+            // Its own member count: shown, never typed, linked or removed.
+            const own = isOwnCount(d, meId) || isOwnCount(d, groupId)
             return (
               <div
                 key={d.id}
@@ -955,9 +959,10 @@ export const CardBack: React.FC<{
                   onStart={() => setEditing({ id: d.id, part: 'value' })}
                   onCommit={(v, n) => commit(d.id, 'value', v, n)}
                   onCancel={() => cancel(d.id)}
-                  shown={linked ? <LinkShown text={linked.text} color={linked.card?.color} missing={linked.missing} whole={!d.link!.detail} /> : undefined}
-                  onPick={e => setMenu({ x: e.clientX, y: e.clientY, kind: 'link', id: d.id })}
-                  drop={`detail:${groupId}:${d.id}`}
+                  shown={own ? <span data-member-count title="How many members it has: counted, not typed">{linked?.text}</span>
+                    : linked ? <LinkShown text={linked.text} color={linked.card?.color} missing={linked.missing} whole={!d.link!.detail && !d.link!.count} /> : undefined}
+                  onPick={own ? undefined : e => setMenu({ x: e.clientX, y: e.clientY, kind: 'link', id: d.id })}
+                  drop={own ? undefined : `detail:${groupId}:${d.id}`}
                   lit={linking}
                   wrap
                   folded={d.collapsed}
@@ -979,7 +984,7 @@ export const CardBack: React.FC<{
                     }}
                   >FOLD</button>
                 )}
-                {rowHover === d.id && !editing && !linking && (
+                {rowHover === d.id && !editing && !linking && !own && (
                   <button
                     type="button"
                     data-card-detail-remove
