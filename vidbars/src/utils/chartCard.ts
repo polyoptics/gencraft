@@ -18,7 +18,7 @@ import { isUndoRestoring, useUndoCoordinator } from '../store/undoCoordinator'
 import { cardFaceSize, createTextCard } from './cardGrid'
 import { isAbove } from './cardTypes'
 import type { ChartData, ChartPlace, ChartTier } from './chartData'
-import { makeLinkedCard, masterOf } from './linkedCards'
+import { linkedHeight, makeLinkedCard, masterOf } from './linkedCards'
 import { newGroupId, type FactionGroup } from './factionGroups'
 import type { StorylineData } from './storyline'
 import { play, setChartMotion } from './chartMotion'
@@ -287,7 +287,8 @@ function layChart(chart: ChartData, pos: { x: number; y: number }, chartCard?: s
         return {
           ...g,
           originX: node.x + p.dx, originY: node.y + p.dy,
-          cardWidthOverride: p.w, cardHeightOverride: p.h, flipped: p.flipped,
+          // Its master's shape now, at the size it was shown (linkedCards).
+          cardWidthOverride: p.w, cardHeightOverride: linkedHeight(p.card, p.w, p.h), flipped: p.flipped,
           deckState: anchor ? p.deckState : undefined,
           deckAnchorId: anchor,
           deckOffsetX: anchor ? p.deckOffsetX : undefined,
