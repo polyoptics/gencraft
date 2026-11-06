@@ -13,6 +13,8 @@ export interface SceneDiv {
   name?: string
   color?: string
   cards?: string[]
+  /** The scene card this division opens into (its own scene: the scene tree). */
+  opens?: string
   /** A split (container): its parts side by side ('row') or stacked
    *  ('col'), each its share of the space (sizes sum to 1). */
   dir?: 'row' | 'col'
@@ -27,8 +29,16 @@ let colorTurn = 1
 const leaf = (name: string, color: string): SceneDiv => ({ id: newDetailId(), name, color, cards: [] })
 
 /** A new scene's face: a title strip over one big section. */
-export function newSceneLayout(): SceneDiv {
-  return { id: newDetailId(), dir: 'col', sizes: [0.13, 0.87], kids: [leaf('Title', '#87a7e0'), leaf('Section', PALETTE[0])] }
+export function newSceneLayout(title = 'Title', section?: { color?: string; cards?: string[] }): SceneDiv {
+  const body = leaf('Section', section?.color ?? PALETTE[0])
+  if (section?.cards) body.cards = [...section.cards]
+  return { id: newDetailId(), dir: 'col', sizes: [0.13, 0.87], kids: [leaf(title, '#87a7e0'), body] }
+}
+
+export function findDiv(root: SceneDiv, id: string): SceneDiv | null {
+  if (root.id === id) return root
+  for (const k of root.kids ?? []) { const f = findDiv(k, id); if (f) return f }
+  return null
 }
 
 export const isLeaf = (d: SceneDiv) => !d.kids || d.kids.length === 0

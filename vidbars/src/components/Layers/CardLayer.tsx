@@ -974,6 +974,22 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
           useMagnetPreviewStore.getState().setPreview(null)
           return
         }
+        // Let go over a division of a scene card's face: the cards go in it,
+        // as their link "+" does, and back to where they were picked up.
+        // The card under the pointer (as for the faction above) is a scene
+        // face up: the division under the pointer on it.
+        const sceneCard = back && !back.flipped && back.scene && (!back.deckState || back.deckState === 'open') ? back : undefined
+        const divEl = sceneCard ? document.elementsFromPoint(ev.clientX, ev.clientY)
+          .map(el => (el as HTMLElement).closest?.('[data-scene-div]') as HTMLElement | null)
+          .find(el => el && (el.closest('[data-scene-face]') as HTMLElement | null)?.dataset.sceneFace === sceneCard.id) : null
+        const sceneId = sceneCard?.id
+        if (divEl && sceneId && !own.has(sceneId) && bs.groups.find(g => g.id === sceneId)?.scene) {
+          bs.setGroupPosBatch(Array.from(initialOrigins, ([gid, o]) => ({ groupId: gid, originY: o.y, originX: o.x })))
+          endDockedDrag(draggingIds, false)
+          bs.putCardsInDivision(sceneId, divEl.dataset.sceneDiv!, picked.filter(id => !bs.groups.find(g => g.id === id)?.effect))
+          useMagnetPreviewStore.getState().setPreview(null)
+          return
+        }
       }
       // Off a strip: a docked card stays where it was let go.
       endDockedDrag(draggingIds, dxAccum !== 0 || dyAccum !== 0)

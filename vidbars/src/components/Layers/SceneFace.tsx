@@ -12,6 +12,7 @@ import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { useLinkDragStore } from '../../store/linkDragStore'
 import { cardFaceMedia } from '../../utils/cardGrid'
 import { isLeaf, patchDiv, removeDiv, resizeSplit, splitDiv, takeCard, leaves, type SceneDiv } from '../../utils/sceneCard'
+import { openDivision } from '../../utils/sceneOpen'
 import { HeroImageLayer } from './HeroImageLayer'
 import { ColorPickerPopup } from '../Bar/ColorPickerPopup'
 
@@ -71,7 +72,7 @@ const SceneThumb: React.FC<{ card: ProjectGroup; onRemove: () => void }> = ({ ca
   )
 }
 
-const ToolBtn: React.FC<{ title: string; onClick: (e: React.MouseEvent) => void; children: React.ReactNode; tool: string }> = ({ title, onClick, children, tool }) => (
+const ToolBtn: React.FC<{ title: string; onClick: (e: React.MouseEvent) => void; children: React.ReactNode; tool: string; lit?: boolean }> = ({ title, onClick, children, tool, lit }) => (
   <button
     type="button"
     data-scene-tool={tool}
@@ -82,7 +83,7 @@ const ToolBtn: React.FC<{ title: string; onClick: (e: React.MouseEvent) => void;
     style={{
       width: 10, height: 10, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
       fontSize: 7, lineHeight: 1, fontWeight: 800, borderRadius: 2, cursor: 'pointer', color: '#fff',
-      background: 'rgba(0,0,0,0.55)', border: '1px solid rgba(255,255,255,0.35)',
+      background: lit ? 'rgba(255,214,102,0.9)' : 'rgba(0,0,0,0.55)', border: lit ? '1px solid #fff' : '1px solid rgba(255,255,255,0.35)',
     }}
   >{children}</button>
 )
@@ -145,8 +146,18 @@ const DivName: React.FC<{ d: SceneDiv; ctx: Ctx }> = ({ d, ctx }) => {
   )
 }
 
+/** Open the division as its own scene card (lit once it has one; a click
+ *  then goes to it). The icon never changes. */
+const OpenBtn: React.FC<{ d: SceneDiv; ctx: Ctx; opened: boolean }> = ({ d, ctx, opened }) => (
+  // Making the card takes the undo checkpoint (createCardOrBoardAt): one undo.
+  <ToolBtn tool="open" lit={opened} title={opened ? 'Go to its scene card' : 'Open as its own scene card'} onClick={() => openDivision(ctx.sceneId, d.id)}>
+    <svg width="7" height="7" viewBox="0 0 8 8"><rect x="0.5" y="2.5" width="5" height="5" fill="none" stroke={opened ? '#000' : '#fff'} strokeWidth="1" /><path d="M4 0.5h3.5V4M7.5 0.5L3.5 4.5" fill="none" stroke={opened ? '#000' : '#fff'} strokeWidth="1" /></svg>
+  </ToolBtn>
+)
+
 const Division: React.FC<{ d: SceneDiv; ctx: Ctx }> = ({ d, ctx }) => {
   const cards = (d.cards ?? []).flatMap(id => ctx.groups.find(g => g.id === id) ?? [])
+  const opened = !!d.opens && ctx.groups.some(g => g.id === d.opens)
   const hover = ctx.hovered === d.id
   return (
     <div
@@ -160,7 +171,12 @@ const Division: React.FC<{ d: SceneDiv; ctx: Ctx }> = ({ d, ctx }) => {
         outline: ctx.linking ? '1px dashed rgba(255,255,255,0.85)' : undefined, outlineOffset: -2,
       }}
     >
-      <DivName d={d} ctx={ctx} />
+      {/* The name, and right after it the open button (shown on hover, and
+          always once the division has its own scene card). */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 2, minWidth: 0, maxWidth: '100%', alignSelf: 'flex-start' }}>
+        <DivName d={d} ctx={ctx} />
+        {ctx.renaming !== d.id && !ctx.linking && (hover || opened) && <OpenBtn d={d} ctx={ctx} opened={opened} />}
+      </div>
       {cards.length > 0 && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 2, overflow: 'hidden', minHeight: 0 }}>
           {cards.map(c => (
