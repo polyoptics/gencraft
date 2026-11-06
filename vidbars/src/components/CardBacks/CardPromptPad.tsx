@@ -28,8 +28,8 @@ import { recordHistory } from '../../store/historyStore'
 import { ContentScaled, panelContentScale } from '../UI/PanelSurface'
 import { RenameInput } from '../UI/RenameInput'
 import { cardTitle } from '../../utils/faceStyle'
-import { detailShown, newDetailId } from '../../utils/cardTypes'
-import { createCardOrBoardAt } from '../../utils/canvasCreate'
+import { chartCards, chartName, chartRank, detailShown, newDetailId, type CardDetail } from '../../utils/cardTypes'
+import { makePromptCard, cardRect } from '../../utils/promptCards'
 import { clientToCanvas } from '../../utils/fx/createEffect'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { createPortal } from 'react-dom'
@@ -45,35 +45,10 @@ const CARD_COL = 320
 /** The prompt's words, as the pad compares them with a card's. */
 const promptWords = (text: string) => new Set(text.split(/[,\n]+/).map(s => s.trim().toLowerCase()).filter(Boolean))
 
-/** Ready-made Prompt cards (Brian 2026-11-06, his words), each row a group
- *  of phrases, comma separated. "Old Prompt Pad words" carries over the
- *  first Prompt Pad's starting words. */
-const PRESETS: { name: string; rows: [string, string][] }[] = [
-  { name: 'Audio', rows: [
-    ['Era', '70s'], ['Genre', 'sci-fi'], ['Sound', 'synthesizer, chords, arpeggiated'],
-    ['Mood', 'melancholy'], ['Texture', 'VHS'],
-  ] },
-  { name: '3D generation', rows: [
-    ['Pose', 'pose the character, T-pose, arms to the side, arms straight out, legs spread, feet flat, looking forward, relaxed, neutral pose'],
-    ['For 3D', 'even lighting, texture atlas, seamless'],
-  ] },
-  { name: 'My style', rows: [
-    ['Finish', 'rough hand-inked retro-futurist illustration finish, bold dark contours, scratchy linework, crosshatched shadows, painterly/cel-shaded color blocks, textured print-like surface'],
-    ['Palette', 'muted pale blues, ivories and charcoals, restrained rust accents'],
-    ['Avoid', 'no photoreal skin pores, no added products, no gear, no spacecraft, no weapons, no typography, no extra subjects'],
-  ] },
-  { name: 'Old Prompt Pad words', rows: [
-    ['Framing', 'isometric view, orthographic view, front, back, left, right, arms out to the side, 3/4 view'],
-    ['Grids', '2x2 grid, 3x3 grid, where each cell contains, sprite sheet'],
-    ['Isolation', 'clean black background, clean white background, transparent background, no shadow'],
-    ['Style matching', 'in the same style as the reference images, flat vector, painterly, photoreal, blueprint'],
-  ] },
-]
-
 /** A new Prompt card on the pad's left, touching it (so docked), or, with
  *  cards docked there already, left of the row they start, so it joins
  *  them; turned over to its back, ready to fill. */
-function newPromptCard(nodeId: string, preset?: (typeof PRESETS)[number]): void {
+function newPromptCard(nodeId: string): void {
   const node = useFreeNodeStore.getState().nodes[nodeId]
   if (!node || node.pin) return
   const zoom = useCanvasStore.getState().zoom
@@ -87,18 +62,13 @@ function newPromptCard(nodeId: string, preset?: (typeof PRESETS)[number]): void 
     right = v.left; top = v.top
   }
   const gap = (right === node.x ? 4 : 12) / zoom
-  const boardId = createCardOrBoardAt({ cx: right - 4000 / zoom, cy: top })
+  const id = makePromptCard(undefined, undefined, false)
+  const r = id && cardRect(id)
+  if (!id || !r) return
   const bs = useBoardsStore.getState()
-  const g = bs.groups.find(x => x.boardIds.includes(boardId))
-  if (!g) return
-  bs.renameGroup(g.id, preset?.name ?? 'Prompt')
-  bs.setGroupCardType(g.id, 'prompt')
-  if (preset) bs.setGroupDetails(g.id, preset.rows.map(([name, value]) => ({ id: newDetailId(), name, value })))
-  bs.setGroupFlipped(g.id, true)
-  const now = useBoardsStore.getState()
-  const v = cardVisualRect(now.groups.find(x => x.id === g.id)!, now.boards, zoom)
-  if (v) now.setGroupPos(g.id, g.originY + (top - v.rect.top), g.originX + (right - gap - v.rect.right))
-  now.setSelectedGroup(g.id)
+  const g = bs.groups.find(x => x.id === id)!
+  bs.setGroupPos(id, g.originY + (top - r.top), g.originX + (right - gap - r.right))
+  bs.setSelectedGroup(id)
 }
 
 type Page = { words: string[] }
@@ -274,7 +244,8 @@ export const CardPromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
   const shown = cards.find(g => g.id === picked) ?? cards[0]
   const [adding, setAdding] = useState<string | null>(null)   // detail id
   const [sent, setSent] = useState(0)
-  const [menu, setMenu] = useState(false)
+  const [naming, setNaming] = useState<string | null>(null)   // card id: a new detail being named
+  const [chartMenu, setChartMenu] = useState<string | null>(null)   // card id
   const taRef = useRef<HTMLTextAreaElement>(null)
 
   const text = node?.text ?? ''
@@ -409,11 +380,36 @@ export const CardPromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
     setDetailValue(g.id, d.id, [...tagsOf(d.value), ...words].join(', '))
   }
 
+  /** A new detail on card g's back, called `name`; then its words are asked for. */
+  const addDetail = (g: ProjectGroup, name: string) => {
+    setNaming(null)
+    const nm = name.trim()
+    if (!nm) return
+    const row: CardDetail = { id: newDetailId(), name: nm, value: '' }
+    useUndoCoordinator.getState().checkpoint()
+    useBoardsStore.getState().setGroupDetails(g.id, [...(g.details ?? []), row])
+    setAdding(row.id)
+  }
+  /** A detail reading card g's rank on chart card `chartId` (as + chart on the card's back). */
+  const addRank = (g: ProjectGroup, chartId: string) => {
+    setChartMenu(null)
+    const chart = groups.find(c => c.id === chartId)
+    if (!chart || (g.details ?? []).some(d => d.link?.rankOf && d.link.card === chartId)) return
+    useUndoCoordinator.getState().checkpoint()
+    useBoardsStore.getState().setGroupDetails(g.id, [...(g.details ?? []), { id: newDetailId(), name: chartName(chart), value: '', link: { card: chartId, rankOf: g.id } }])
+  }
+  const charts = chartCards(groups)
+
   const btn = (tone: 'plain' | 'go' = 'plain'): React.CSSProperties => ({
     height: 26, padding: '0 10px', borderRadius: 7, cursor: 'pointer', fontFamily: 'inherit', fontSize: 12, fontWeight: 600,
     background: tone === 'go' ? 'rgba(95,208,230,0.16)' : 'rgba(255,255,255,0.05)',
     border: `1px solid ${tone === 'go' ? 'rgba(95,208,230,0.5)' : LINE}`, color: INK, whiteSpace: 'nowrap',
   })
+
+  const smallBtn: React.CSSProperties = {
+    height: 24, padding: '0 9px', borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit', fontSize: 11.5, fontWeight: 700,
+    background: 'rgba(255,255,255,0.04)', border: `1px dashed rgba(255,255,255,0.22)`, color: DIM,
+  }
 
   const chip = (g: ProjectGroup, detailId: string, w: string, canEdit: boolean, lit: Set<string>) => {
     const on = lit.has(lc(w))
@@ -474,7 +470,7 @@ export const CardPromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
         <PageDots g={g} padEl={() => padRef.current} {...pa} />
         {(
           <div style={{ padding: '12px 10px 10px', flex: 1, minHeight: 0, overflowY: 'auto' }} data-wheel-own="">
-            {rows.length === 0 && <div style={{ fontSize: 12, color: FAINT, padding: '4px 0' }}>Nothing on its back yet. Turn the card over and add rows.</div>}
+            {rows.length === 0 && <div style={{ fontSize: 12, color: FAINT, padding: '4px 0' }}>Nothing on its back yet: + detail adds a row.</div>}
             {rows.map(({ d, words }) => (
               <div key={d.id} style={{ marginTop: 6 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
@@ -507,6 +503,46 @@ export const CardPromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
                 </div>
               </div>
             ))}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 10, position: 'relative' }}>
+              {naming === g.id ? (
+                <RenameInput
+                  autoFocus
+                  placeholder="detail name, e.g. Lighting"
+                  onPointerDown={e => e.stopPropagation()}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') addDetail(g, (e.target as HTMLInputElement).value)
+                    if (e.key === 'Escape') setNaming(null)
+                  }}
+                  onBlur={e => addDetail(g, e.target.value)}
+                  style={{ height: 24, width: 160, fontSize: 12 }}
+                />
+              ) : (
+                <button className="cpp-add" onClick={() => setNaming(g.id)} title="Add a detail to this card's back" style={smallBtn}>+ detail</button>
+              )}
+              {charts.length > 0 && (
+                <button className="cpp-add" onClick={() => setChartMenu(m => m === g.id ? null : g.id)} title="Add its rank on a chart" style={smallBtn}>+ chart</button>
+              )}
+              {chartMenu === g.id && (
+                <div style={{
+                  position: 'absolute', left: 0, top: 30, zIndex: 20, minWidth: 200, padding: 4, borderRadius: 9,
+                  background: '#1b1e2c', border: `1px solid ${LINE}`, boxShadow: '0 10px 30px rgba(0,0,0,0.55)',
+                }}>
+                  <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: 0.8, textTransform: 'uppercase', color: DIM, padding: '4px 10px' }}>Rank on chart</div>
+                  {charts.map(c => {
+                    const r = chartRank(c, g.id)
+                    const have = (g.details ?? []).some(d => d.link?.rankOf && d.link.card === c.id)
+                    return (
+                      <div key={c.id} className="cpp-item" onClick={() => addRank(g, c.id)}
+                        style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '6px 10px', borderRadius: 6, cursor: 'pointer', fontSize: 12.5, color: have ? DIM : INK }}>
+                        <span style={{ width: 9, height: 9, borderRadius: 2, background: c.color, flexShrink: 0 }} />
+                        <span style={{ flex: 1 }}>{chartName(c)}</span>
+                        <span style={{ fontSize: 11, color: FAINT }}>{have ? 'on it' : r ? `rank ${r.rank}` : 'not on it'}</span>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -522,7 +558,7 @@ export const CardPromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
       data-wheel-own=""
       style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: PANEL_BG }}
     >
-      <style>{`.cpp-chip .cpp-x { opacity: 0; transition: opacity 0.1s } .cpp-chip:hover .cpp-x { opacity: 1 } .cpp-item:hover { background: rgba(95,208,230,0.14) } .cpp-tab .cpp-x { opacity: 0.55 } .cpp-tab:hover .cpp-x { opacity: 1 } .cpp-tab .cpp-x:hover { background: rgba(255,255,255,0.12) }`}</style>
+      <style>{`.cpp-chip .cpp-x { opacity: 0; transition: opacity 0.1s } .cpp-chip:hover .cpp-x { opacity: 1 } .cpp-item:hover { background: rgba(95,208,230,0.14) } .cpp-add:hover { color: #fff; border-color: rgba(95,208,230,0.6) } .cpp-tab .cpp-x { opacity: 0.55 } .cpp-tab:hover .cpp-x { opacity: 1 } .cpp-tab .cpp-x:hover { background: rgba(255,255,255,0.12) }`}</style>
       <ContentScaled factor={panelContentScale(node)}>
         <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', fontFamily: 'system-ui, sans-serif', color: INK }}>
           <FeedBar
@@ -530,32 +566,12 @@ export const CardPromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
             cards={cards}
             right={<>
               {sent > 0 && <span style={{ fontSize: 11, color: DIM, marginRight: 6 }}>sent {sent}× · see History</span>}
-              <div style={{ position: 'relative' }}>
-                <button
-                  style={{ ...btn('go'), background: menu ? 'rgba(95,208,230,0.3)' : btn('go').background }}
-                  onClick={() => setMenu(m => !m)}
-                  disabled={!!node.pin}
-                  title="A new Prompt card, docked on this pad's left: blank, or one of the ready-made ones"
-                >＋ Prompt card ▾</button>
-                {menu && (
-                  <div style={{
-                    position: 'absolute', right: 0, top: 30, zIndex: 20, minWidth: 210, padding: 4, borderRadius: 9,
-                    background: '#1b1e2c', border: `1px solid ${LINE}`, boxShadow: '0 10px 30px rgba(0,0,0,0.55)',
-                  }}>
-                    {[{ name: 'Blank', rows: [] as [string, string][] }, ...PRESETS].map(pr => (
-                      <div
-                        key={pr.name}
-                        onClick={() => { setMenu(false); newPromptCard(nodeId, pr.name === 'Blank' ? undefined : pr) }}
-                        className="cpp-item"
-                        style={{ padding: '6px 10px', borderRadius: 6, cursor: 'pointer', fontSize: 12.5, color: INK }}
-                      >
-                        {pr.name}
-                        {pr.rows.length > 0 && <div style={{ fontSize: 10.5, color: FAINT, marginTop: 1 }}>{pr.rows.map(r => r[0]).join(' · ')}</div>}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
+              <button
+                style={btn('go')}
+                onClick={() => newPromptCard(nodeId)}
+                disabled={!!node.pin}
+                title="A blank Prompt card, docked on this pad's left. The ready-made ones are under the top bar's Prompt card button."
+              >＋ Prompt card</button>
             </>}
           />
           <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>

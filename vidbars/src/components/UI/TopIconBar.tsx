@@ -23,6 +23,7 @@
 import React from 'react'
 import { usePlacing, togglePlacing, type PlaceKind } from '../../utils/placeTool'
 import { EffectPalette } from './EffectPalette'
+import { PromptCardMenu } from './PromptCardMenu'
 import { useZoomZone } from '../../store/zoomZonesStore'
 import { useCabinetUi } from '../../utils/cabinet'
 import { openFilmMixer, existingFilmMixer } from '../FilmMixer/FilmMixerBody'
@@ -182,6 +183,18 @@ const IcCardPrompt: React.FC<SvgProps> = ({ size }) => (
   </svg>
 )
 
+/** Prompt card — a card whose back is rows of words. Opens a menu
+ *  (PromptCardMenu): blank, a ready-made one, or all of them as a deck. */
+const IcPromptCard: React.FC<SvgProps> = ({ size }) => (
+  <svg {...svgBase(size)}>
+    <rect x="5.6" y="3" width="12.8" height="18" rx="2.4" stroke={S} />
+    <path d="M8.6 7.2h6.8" stroke={A.cyan} strokeWidth="2.2" />
+    <rect x="8.2" y="10.6" width="3.6" height="2.6" rx="1.3" stroke={A.cyan} strokeWidth="1.3" />
+    <rect x="12.6" y="10.6" width="3.2" height="2.6" rx="1.3" stroke={S} strokeWidth="1.3" />
+    <rect x="8.2" y="15" width="4.6" height="2.6" rx="1.3" stroke={S} strokeWidth="1.3" />
+  </svg>
+)
+
 /** Effects — an effect card as it sits on the canvas: a 5:7 playing card,
  *  its effect up top and its values below. Accent: the spark, which is
  *  the effect. Opens the palette (EffectPalette) rather than adding one
@@ -252,10 +265,10 @@ const IcNewNode: React.FC<SvgProps> = ({ size }) => (
 // follows here.
 type BarId =
   | 'viewer' | 'pool' | 'prompt' | 'promptCards' | 'history' | 'browser' | 'attributes' | 'filmMixer'
-  | 'roughCut' | 'storyline' | 'cabinet' | 'loopStrip' | 'effects' | 'new'
+  | 'roughCut' | 'storyline' | 'cabinet' | 'loopStrip' | 'effects' | 'promptCard' | 'new'
 const DEFAULT_ORDER: BarId[] = [
   'viewer', 'pool', 'prompt', 'promptCards', 'history', 'browser', 'attributes', 'filmMixer',
-  'roughCut', 'storyline', 'cabinet', 'loopStrip', 'effects', 'new',
+  'roughCut', 'storyline', 'cabinet', 'loopStrip', 'effects', 'promptCard', 'new',
 ]
 const ORDER_KEY = 'vidbars.topIconBar.order'
 
@@ -343,6 +356,10 @@ export const TopIconBar: React.FC = () => {
   const cabinetsOn = useCabinetUi(s => s.enabled)
   const fxBtnRef = React.useRef<HTMLDivElement>(null)
   const closeFx = React.useCallback(() => setFxOpen(false), [])
+  // The Prompt card menu, the same way.
+  const [pcOpen, setPcOpen] = React.useState(false)
+  const pcBtnRef = React.useRef<HTMLDivElement>(null)
+  const closePc = React.useCallback(() => setPcOpen(false), [])
 
   // Every button, by id. The ORDER they sit in is Brian's: drag one along
   // the bar to move it, and the order is saved (localStorage) so it is the
@@ -377,6 +394,14 @@ export const TopIconBar: React.FC = () => {
         title="Effects — pick one to add to the selected picture's strip"
         active={fxOpen}
         onClick={() => setFxOpen(o => !o)}
+      />
+    ),
+    promptCard: (
+      <IconButton
+        Icon={IcPromptCard}
+        title="Prompt card — a card of words for Card Prompts: blank, ready-made, or all the ready-made ones as a deck"
+        active={pcOpen}
+        onClick={() => setPcOpen(o => !o)}
       />
     ),
     new: <IconButton Icon={IcNew} title={newLabel} {...place('new')} />,
@@ -488,7 +513,7 @@ export const TopIconBar: React.FC = () => {
           <div style={{ width: 1, height: TILE * 0.55, background: 'rgba(255,255,255,0.12)', margin: '0 2px' }} />
         )}
         <div
-          ref={id === 'effects' ? fxBtnRef : undefined}
+          ref={id === 'effects' ? fxBtnRef : id === 'promptCard' ? pcBtnRef : undefined}
           data-top-icon={id}
           onPointerDown={e => onGrab(e, id)}
           onClickCapture={swallowClickAfterDrag}
@@ -506,6 +531,7 @@ export const TopIconBar: React.FC = () => {
         </React.Fragment>
       ))}
       <EffectPalette open={fxOpen} anchorRef={fxBtnRef} onClose={closeFx} />
+      <PromptCardMenu open={pcOpen} anchorRef={pcBtnRef} onClose={closePc} />
     </div>
   )
 }

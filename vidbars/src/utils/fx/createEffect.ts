@@ -83,7 +83,7 @@ export function clientToCanvas(clientX: number, clientY: number): { cx: number; 
 }
 
 /** The middle of the canvas you can see, in canvas units. */
-function visibleCanvasCenter(): { cx: number; cy: number } {
+export function visibleCanvasCenter(): { cx: number; cy: number } {
   const r = canvasRect()
   return r ? clientToCanvas(r.left + r.width / 2, r.top + r.height / 2) : viewportCenterInCanvas()
 }
