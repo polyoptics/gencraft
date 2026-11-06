@@ -303,12 +303,19 @@ export function growDot(d: StorylineData, from: string, x: number, y: number): {
   } }
 }
 
-/** The base kept in order left to right (a two-dot base may swap ends). */
+/** The base kept in order left to right: a base dot dragged past another
+ *  takes its new place, the base's lines joining its dots in the new order
+ *  (each dot keeps its branches). */
 export function sortBase(d: StorylineData): StorylineData {
   if (!d.base || d.base.length < 2) return d
+  const old = d.base
   const x = new Map(d.dots.map(p => [p.id, p.x]))
-  const base = [...d.base].sort((a, b) => (x.get(a) ?? 0) - (x.get(b) ?? 0))
-  return base.every((id, i) => id === d.base![i]) ? d : { ...d, base }
+  const base = [...old].sort((a, b) => (x.get(a) ?? 0) - (x.get(b) ?? 0))
+  if (base.every((id, i) => id === old[i])) return d
+  const key = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`)
+  const was = new Set(old.slice(1).map((b, i) => key(old[i], b)))
+  const edges = d.edges.filter(e => !was.has(key(e.a, e.b)))
+  return { ...d, base, edges: dedupe([...edges, ...base.slice(1).map((b, i) => ({ a: base[i], b }))]) }
 }
 
 /** Delete a dot, its lines closing up: between two lines they join

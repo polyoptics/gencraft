@@ -1059,22 +1059,14 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
         return
       }
       // A dot, to the cursor's spot (snapped), with what it brings, its
-      // lines following; a base dot along the base, no further than the
-      // base dots either side (a two-dot base may swap ends). Over another
-      // dot: that one is lit, and letting go merges them.
+      // lines following; a base dot along the base, passing the base dots
+      // either side to reorder it (sortBase). Over another dot: that one is
+      // lit, and letting go merges them.
       const g = gesture
       const p = g.d.dots.find(q => q.id === g.dot)
       if (!p) return
       let nx = sn(c.x) - x0, ny = sn(c.y) - y0
-      if (g.slide) {
-        ny = p.y
-        const base = g.d.base ?? []
-        const i = base.indexOf(g.dot)
-        const at = (k: number) => g.d.dots.find(q => q.id === base[k])?.x
-        const lo = base.length > 2 ? at(i - 1) : undefined, hi = base.length > 2 ? at(i + 1) : undefined
-        if (lo !== undefined) nx = Math.max(lo, nx)
-        if (hi !== undefined) nx = Math.min(hi, nx)
-      }
+      if (g.slide) ny = p.y
       // Standing: the floor is as low as it goes.
       const low = g.low ?? (wall ? y0 + p.y : undefined)
       if (wall && low !== undefined) ny = Math.min(ny, p.y + wall.y0 - low)
