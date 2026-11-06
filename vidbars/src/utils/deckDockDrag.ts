@@ -13,6 +13,7 @@
 import { useBoardsStore } from '../store/boardsStore'
 import { useCanvasStore } from '../store/canvasStore'
 import { useViewport3DStore } from '../store/viewport3dStore'
+import { useFreeNodeStore } from '../store/freeNodeStore'
 import { useMagnetPreviewStore } from '../store/magnetPreviewStore'
 import { findMagnetCandidate, magnetRadiusForZoom, viewportVisualRect, type WindowRect } from './viewportDocking'
 import { collectDeckContent, defaultBrowseItem, groupHasBrowsableContent } from './contentTraversal'
@@ -25,6 +26,22 @@ export function viewportWindowRects(): WindowRect[] {
   return Object.values(useViewport3DStore.getState().windows)
     .filter(w => !w.pin)
     .map(w => viewportVisualRect(w, zoom))
+}
+
+/** The windows that read the backs of the cards docked on them (Attributes,
+ *  Card Prompts: utils/cardBacks). Any card magnets to them, a card with no
+ *  picture or model too (Brian 2026-11-06). Canvas-placed only. */
+export const CARD_READER_TYPES = new Set(['attributes', 'promptCards'])
+export function cardReaderRects(): WindowRect[] {
+  return Object.values(useFreeNodeStore.getState().nodes)
+    .filter(n => CARD_READER_TYPES.has(n.type) && !n.pin)
+    .map(n => ({ id: n.id, x: n.x, y: n.y, width: n.width, height: n.height }))
+}
+
+/** What a card drag can magnet to: the card readers always, Viewers when
+ *  the card holds something a Viewer can show. */
+function dockTargets(canDock: boolean): WindowRect[] {
+  return [...(canDock ? viewportWindowRects() : []), ...cardReaderRects()]
 }
 
 /** The group's live visual card rect as an x/y/w/h rect, or null. */
@@ -40,17 +57,18 @@ function liveCardRect(groupId: string): { x: number; y: number; width: number; h
 /** During a drag (after the move's setState): show/clear the "will snap
  *  here" ghost for the group's live card rect. */
 export function updateDeckMagnetPreview(canDock: boolean, groupId: string): void {
-  if (!canDock) return
   const rect = liveCardRect(groupId)
   if (!rect) return
-  const wins = viewportWindowRects()
+  const wins = dockTargets(canDock)
+  if (!canDock && !wins.length) return
   const radius = magnetRadiusForZoom(useCanvasStore.getState().zoom)
   const cand = wins.length > 0 ? findMagnetCandidate(rect, wins, radius) : null
   const mp = useMagnetPreviewStore.getState()
   if (cand) {
     const t = wins.find(w => w.id === cand.windowId)!
+    const viewer = !!useViewport3DStore.getState().windows[cand.windowId]
     mp.setPreview({
-      edge: cand.edge, space: 'canvas', windowId: cand.windowId,
+      edge: cand.edge, space: 'canvas', windowId: viewer ? cand.windowId : undefined,
       x: cand.snapped.x, y: cand.snapped.y, width: rect.width, height: rect.height,
       target: { x: t.x, y: t.y, width: t.width, height: t.height },
     })
@@ -71,7 +89,8 @@ export function finishDeckMagnetDock(
   const mp = useMagnetPreviewStore.getState()
   const preview = mp.preview
   if (preview) mp.setPreview(null)
-  if (!canDock || !preview) return false
+  // A Viewer only takes what it can show; a card reader takes any card.
+  if (!preview || (!canDock && preview.windowId)) return false
   const rect = liveCardRect(rectGroupId)
   if (!rect) return false
   const ddx = preview.x - rect.x

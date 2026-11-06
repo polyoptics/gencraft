@@ -23,7 +23,7 @@ import { isTileDeckFace, tileDeckMembers, touchingTileCluster } from '../../util
 import { edgeColorFromHex } from '../../utils/colorUtils'
 import { findMagnetCandidate, magnetRadiusForZoom, viewportVisualRect, type WindowRect } from '../../utils/viewportDocking'
 import { tileBrowseItem, isDockableTile } from '../../utils/contentTraversal'
-import { snapPanelToPanel, isPanelType } from '../../utils/componentLinks'
+import { snapPanelToPanel, isPanelType, adjacentPanels } from '../../utils/componentLinks'
 import { panelContentScale, clampUiScale } from '../UI/PanelSurface'
 import { CardRolodex } from '../Rolodex/CardRolodex'
 import { RoughCutBody } from '../RoughCut/RoughCutBody'
@@ -31,6 +31,8 @@ import { FILM_MIXER_ASPECT, FilmLayersSpacing, FilmLayersToggle, FilmMixerBody }
 import { MediaPool } from '../Pool/MediaPool'
 import { PromptPad } from '../Prompt/PromptPad'
 import { AttributesWindow } from '../CardBacks/AttributesWindow'
+import { CARD_READER_TYPES } from '../../utils/deckDockDrag'
+import { dockedCards } from '../../utils/filmShots'
 import { CardPromptPad } from '../CardBacks/CardPromptPad'
 import { HistoryPanel } from '../History/HistoryPanel'
 import { PinControl } from '../UI/PinControl'
@@ -413,6 +415,17 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
     if (at && isRail(at) && !at.pin && clientToCanvas(e.clientX, e.clientY).cy < at.y + railHeaderBottom(at)) {
       railCarry.current = railHeaderCarry(id, useCanvasStore.getState().zoom)
     }
+    // A card reader (Attributes, Card Prompts) brings what is magneted to
+    // it: its docked cards (decks whole) and the panels touching it.
+    if (at && !at.pin && CARD_READER_TYPES.has(at.type)) {
+      const { groups, boards } = useBoardsStore.getState()
+      const all = useFreeNodeStore.getState().nodes
+      railCarry.current = {
+        windowIds: [],
+        groupIds: dockedCards(at, groups, boards).map(g => g.id),
+        tileIds: adjacentPanels(at, all).map(n => n.id),
+      }
+    }
     wrapperRef.current?.setPointerCapture(e.pointerId)
   }, [id])
 
@@ -764,6 +777,17 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
                            useViewport3DStore.getState().windows)
         : null
       if (snap) updateFreeNode(id, { x: snap.x, y: snap.y })
+      // A card reader's carried cards and panels take the same last step.
+      const carry = railCarry.current
+      if (snap && cur && carry && CARD_READER_TYPES.has(cur.type) && (snap.x !== cur.x || snap.y !== cur.y)) {
+        const ddx = snap.x - cur.x, ddy = snap.y - cur.y
+        const bs = useBoardsStore.getState()
+        bs.setGroupPosBatch(carry.groupIds.flatMap(gid => {
+          const g = bs.groups.find(x => x.id === gid)
+          return g ? [{ groupId: gid, originX: g.originX + ddx, originY: g.originY + ddy }] : []
+        }))
+        moveManyFreeNodes(carry.tileIds, ddx, ddy)
+      }
     }
     // Effect strip: an effect card let go near a card's or a Viewer's left
     // or right edge lines up flush with it — how a strip gets built.

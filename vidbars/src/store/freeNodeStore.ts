@@ -205,7 +205,7 @@ const DEFAULT_HEIGHTS: Record<FreeNodeType, number> = {
   storyline: 0,   // its box is its lines' (utils/storyline)
   roughCut: 562,
   attributes: 760,
-  promptCards: 720,
+  promptCards: 600,
 }
 const DEFAULT_WIDTHS: Partial<Record<FreeNodeType, number>> = {
   audio: 260,
@@ -224,7 +224,7 @@ const DEFAULT_WIDTHS: Partial<Record<FreeNodeType, number>> = {
   filmMixer: 1240,  // the button sizes it to the screen (openFilmMixer)
   roughCut: 1400,   // and so does this one's (openRoughCut)
   attributes: 1180,
-  promptCards: 980,
+  promptCards: 1080,
 }
 
 /** A new free node's size before any zoom compensation. addFreeNode makes

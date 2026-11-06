@@ -13,7 +13,7 @@
 // or drag it into the text where it should go. ＋ on a row adds a word to
 // that card's back; × on a word takes it off the card.
 
-import React, { useMemo, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useBoardsStore, type ProjectGroup } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
@@ -21,7 +21,7 @@ import { recordHistory } from '../../store/historyStore'
 import { ContentScaled, panelContentScale } from '../UI/PanelSurface'
 import { RenameInput } from '../UI/RenameInput'
 import { cardTitle } from '../../utils/faceStyle'
-import { detailShown } from '../../utils/cardTypes'
+import { detailShown, newDetailId } from '../../utils/cardTypes'
 import { createCardOrBoardAt } from '../../utils/canvasCreate'
 import { cardVisualRect } from '../../hooks/useCardDecks'
 import { useCardFeed, tagsOf, setDetailValue } from '../../utils/cardBacks'
@@ -29,13 +29,41 @@ import { dockedCards } from '../../utils/filmShots'
 import { DIM, EmptyFeed, FAINT, FeedBar, INK, LINE, MiniCard, PANEL_BG, typeLabel } from './cardBackUi'
 
 
+/** The card column's width: the same however the window is stretched. */
+const CARD_COL = 320
+
 /** The prompt's words, as the pad compares them with a card's. */
 const promptWords = (text: string) => new Set(text.split(/[,\n]+/).map(s => s.trim().toLowerCase()).filter(Boolean))
+
+/** Ready-made Prompt cards (Brian 2026-11-06, his words), each row a group
+ *  of phrases, comma separated. "Old Prompt Pad words" carries over the
+ *  first Prompt Pad's starting words. */
+const PRESETS: { name: string; rows: [string, string][] }[] = [
+  { name: 'Audio', rows: [
+    ['Era', '70s'], ['Genre', 'sci-fi'], ['Sound', 'synthesizer, chords, arpeggiated'],
+    ['Mood', 'melancholy'], ['Texture', 'VHS'],
+  ] },
+  { name: '3D generation', rows: [
+    ['Pose', 'pose the character, T-pose, arms to the side, arms straight out, legs spread, feet flat, looking forward, relaxed, neutral pose'],
+    ['For 3D', 'even lighting, texture atlas, seamless'],
+  ] },
+  { name: 'My style', rows: [
+    ['Finish', 'rough hand-inked retro-futurist illustration finish, bold dark contours, scratchy linework, crosshatched shadows, painterly/cel-shaded color blocks, textured print-like surface'],
+    ['Palette', 'muted pale blues, ivories and charcoals, restrained rust accents'],
+    ['Avoid', 'no photoreal skin pores, no added products, no gear, no spacecraft, no weapons, no typography, no extra subjects'],
+  ] },
+  { name: 'Old Prompt Pad words', rows: [
+    ['Framing', 'isometric view, orthographic view, front, back, left, right, arms out to the side, 3/4 view'],
+    ['Grids', '2x2 grid, 3x3 grid, where each cell contains, sprite sheet'],
+    ['Isolation', 'clean black background, clean white background, transparent background, no shadow'],
+    ['Style matching', 'in the same style as the reference images, flat vector, painterly, photoreal, blueprint'],
+  ] },
+]
 
 /** A new Prompt card on the pad's left, touching it (so docked), or, with
  *  cards docked there already, left of the row they start, so it joins
  *  them; turned over to its back, ready to fill. */
-function newPromptCard(nodeId: string): void {
+function newPromptCard(nodeId: string, preset?: (typeof PRESETS)[number]): void {
   const node = useFreeNodeStore.getState().nodes[nodeId]
   if (!node || node.pin) return
   const zoom = useCanvasStore.getState().zoom
@@ -53,8 +81,9 @@ function newPromptCard(nodeId: string): void {
   const bs = useBoardsStore.getState()
   const g = bs.groups.find(x => x.boardIds.includes(boardId))
   if (!g) return
-  bs.renameGroup(g.id, 'Prompt')
+  bs.renameGroup(g.id, preset?.name ?? 'Prompt')
   bs.setGroupCardType(g.id, 'prompt')
+  if (preset) bs.setGroupDetails(g.id, preset.rows.map(([name, value]) => ({ id: newDetailId(), name, value })))
   bs.setGroupFlipped(g.id, true)
   const now = useBoardsStore.getState()
   const v = cardVisualRect(now.groups.find(x => x.id === g.id)!, now.boards, zoom)
@@ -69,9 +98,18 @@ export const CardPromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
   const groups = useBoardsStore(s => s.groups)
   const byId = useMemo(() => new Map(groups.map(g => [g.id, g])), [groups])
   const cards = useMemo(() => feed.ids.map(id => byId.get(id)).filter((g): g is ProjectGroup => !!g), [feed.ids, byId])
-  const [folded, setFolded] = useState<Set<string>>(() => new Set())
+  // The one card the pad shows: the one picked in its strip, or the one
+  // last clicked on the canvas (if it is fed to the pad), else the first.
+  const [picked, setPicked] = useState<string | null>(null)
+  useEffect(() => useBoardsStore.subscribe((st, was) => {
+    if (st.selectedGroupIds === was.selectedGroupIds || st.selectedGroupIds.length !== 1) return
+    const g = st.groups.find(x => x.id === st.selectedGroupIds[0])
+    setPicked((g?.linkOf && st.groups.some(x => x.id === g.linkOf) ? g.linkOf : g?.id) ?? null)
+  }), [])
+  const shown = cards.find(g => g.id === picked) ?? cards[0]
   const [adding, setAdding] = useState<string | null>(null)   // detail id
   const [sent, setSent] = useState(0)
+  const [menu, setMenu] = useState(false)
   const taRef = useRef<HTMLTextAreaElement>(null)
 
   const text = node?.text ?? ''
@@ -129,7 +167,7 @@ export const CardPromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
         className="cpp-chip"
         style={{
           display: 'inline-flex', alignItems: 'center', gap: 4, maxWidth: '100%', boxSizing: 'border-box',
-          height: 24, padding: '0 9px', borderRadius: 12, cursor: 'pointer', userSelect: 'none',
+          minHeight: 24, padding: '3px 9px', borderRadius: 12, cursor: 'pointer', userSelect: 'none', lineHeight: 1.3,
           background: on ? `${g.color}55` : 'rgba(255,255,255,0.055)',
           border: `1px solid ${on ? g.color : 'rgba(255,255,255,0.1)'}`,
           boxShadow: on ? `0 0 8px ${g.color}66` : 'none',
@@ -137,7 +175,7 @@ export const CardPromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
           transition: 'background 0.12s, border-color 0.12s, box-shadow 0.12s',
         }}
       >
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{w}</span>
+        <span style={{ overflowWrap: 'anywhere' }}>{w}</span>
         {canEdit && (
           <span
             className="cpp-x"
@@ -151,33 +189,28 @@ export const CardPromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
   }
 
   const cardPanel = (g: ProjectGroup) => {
-    const isFolded = folded.has(g.id)
     const rows = (g.details ?? []).map(d => ({ d, words: tagsOf(detailShown(groups, d).text) }))
     const lit = rows.reduce((n, r) => n + r.words.filter(w => inPrompt.has(w.toLowerCase())).length, 0)
     return (
       <div key={g.id} style={{
-        breakInside: 'avoid', marginBottom: 10, borderRadius: 10, overflow: 'hidden',
+        flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', borderRadius: 10, overflow: 'hidden',
         background: 'rgba(255,255,255,0.025)', border: `1px solid ${g.color}66`,
         boxShadow: '0 4px 14px rgba(0,0,0,0.25)',
       }}>
         <div
-          onClick={() => setFolded(s => { const n = new Set(s); if (n.has(g.id)) n.delete(g.id); else n.add(g.id); return n })}
-          title={isFolded ? 'Open this card' : 'Fold this card away'}
           style={{
-            display: 'flex', alignItems: 'center', gap: 8, padding: '6px 9px', cursor: 'pointer', userSelect: 'none',
+            display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px', userSelect: 'none', flexShrink: 0,
             background: `linear-gradient(90deg, ${g.color}cc, ${g.color}55)`,
           }}
         >
-          <MiniCard g={g} w={18} />
-          <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 700, color: '#fff', textShadow: '0 1px 2px rgba(0,0,0,0.4)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <span style={{ flex: 1, minWidth: 0, fontSize: 14, fontWeight: 700, color: '#fff', textShadow: '0 1px 2px rgba(0,0,0,0.4)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {cardTitle(groups, g) || 'Untitled'}
           </span>
           {lit > 0 && <span style={{ fontSize: 10.5, color: '#fff', background: 'rgba(0,0,0,0.3)', borderRadius: 8, padding: '0 6px' }} title="Words from this card in the prompt">{lit} in</span>}
           <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: 0.7, textTransform: 'uppercase', color: 'rgba(255,255,255,0.8)' }}>{typeLabel(g)}</span>
-          <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.75)', transform: isFolded ? 'rotate(-90deg)' : 'none', transition: 'transform 0.15s' }}>▾</span>
         </div>
-        {!isFolded && (
-          <div style={{ padding: '6px 9px 9px' }}>
+        {(
+          <div style={{ padding: '4px 10px 10px', flex: 1, minHeight: 0, overflowY: 'auto' }} data-wheel-own="">
             {rows.length === 0 && <div style={{ fontSize: 12, color: FAINT, padding: '4px 0' }}>Nothing on its back yet. Turn the card over and add rows.</div>}
             {rows.map(({ d, words }) => (
               <div key={d.id} style={{ marginTop: 6 }}>
@@ -225,56 +258,89 @@ export const CardPromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
       data-wheel-own=""
       style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: PANEL_BG }}
     >
-      <style>{`.cpp-chip .cpp-x { opacity: 0; transition: opacity 0.1s } .cpp-chip:hover .cpp-x { opacity: 1 }`}</style>
+      <style>{`.cpp-chip .cpp-x { opacity: 0; transition: opacity 0.1s } .cpp-chip:hover .cpp-x { opacity: 1 } .cpp-item:hover { background: rgba(95,208,230,0.14) }`}</style>
       <ContentScaled factor={panelContentScale(node)}>
         <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', fontFamily: 'system-ui, sans-serif', color: INK }}>
-          {/* ── The prompt ── */}
-          <div style={{ display: 'flex', gap: 8, padding: 10, flexShrink: 0, background: 'rgba(95,208,230,0.04)', borderBottom: `1px solid ${LINE}` }}>
-            <textarea
-              ref={taRef}
-              value={text}
-              onChange={e => setText(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send() }
-                e.stopPropagation()
-              }}
-              placeholder="Click the words on the cards below, or drag them in here."
-              style={{
-                flex: 1, minHeight: 74, resize: 'none', boxSizing: 'border-box',
-                background: 'rgba(0,0,0,0.3)', color: INK, border: `1px solid rgba(95,208,230,0.3)`, borderRadius: 8,
-                padding: '8px 10px', fontSize: 13.5, lineHeight: 1.5, fontFamily: 'inherit', outline: 'none',
-              }}
-            />
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 5, width: 64, flexShrink: 0 }}>
-              <button
-                onClick={send}
-                disabled={!text.trim()}
-                title="Send (Ctrl+Enter): recorded in History"
-                style={{ ...btn('go'), flex: 1, fontSize: 15, opacity: text.trim() ? 1 : 0.45, cursor: text.trim() ? 'pointer' : 'default' }}
-              >⏎</button>
-              <button onClick={() => setText('')} title="Clear the prompt" style={btn()}>Clear</button>
-            </div>
-          </div>
           <FeedBar
             feed={feed}
             cards={cards}
             right={<>
               {sent > 0 && <span style={{ fontSize: 11, color: DIM, marginRight: 6 }}>sent {sent}× · see History</span>}
-              <button
-                style={btn('go')}
-                onClick={() => newPromptCard(nodeId)}
-                disabled={!!node.pin}
-                title="A new Prompt card, docked on this pad's left, turned over to its back: each row a group of words, comma separated"
-              >＋ Prompt card</button>
+              <div style={{ position: 'relative' }}>
+                <button
+                  style={{ ...btn('go'), background: menu ? 'rgba(95,208,230,0.3)' : btn('go').background }}
+                  onClick={() => setMenu(m => !m)}
+                  disabled={!!node.pin}
+                  title="A new Prompt card, docked on this pad's left: blank, or one of the ready-made ones"
+                >＋ Prompt card ▾</button>
+                {menu && (
+                  <div style={{
+                    position: 'absolute', right: 0, top: 30, zIndex: 20, minWidth: 210, padding: 4, borderRadius: 9,
+                    background: '#1b1e2c', border: `1px solid ${LINE}`, boxShadow: '0 10px 30px rgba(0,0,0,0.55)',
+                  }}>
+                    {[{ name: 'Blank', rows: [] as [string, string][] }, ...PRESETS].map(pr => (
+                      <div
+                        key={pr.name}
+                        onClick={() => { setMenu(false); newPromptCard(nodeId, pr.name === 'Blank' ? undefined : pr) }}
+                        className="cpp-item"
+                        style={{ padding: '6px 10px', borderRadius: 6, cursor: 'pointer', fontSize: 12.5, color: INK }}
+                      >
+                        {pr.name}
+                        {pr.rows.length > 0 && <div style={{ fontSize: 10.5, color: FAINT, marginTop: 1 }}>{pr.rows.map(r => r[0]).join(' · ')}</div>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </>}
           />
-          {cards.length === 0 ? <EmptyFeed what="Their backs become words for the prompt. ＋ Prompt card makes one to fill." /> : (
-            <div style={{ flex: 1, overflowY: 'auto', padding: 10 }} data-wheel-own="">
-              <div style={{ columnWidth: 250, columnGap: 10 }}>
-                {cards.map(cardPanel)}
+          <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
+            {/* ── One card at a time, at a steady width: the window's extra
+                room all goes to the prompt (Brian 2026-11-06). ── */}
+            <div style={{ width: CARD_COL, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 8, padding: 10, borderRight: `1px solid ${LINE}`, minHeight: 0 }}>
+              {cards.length === 0 ? <EmptyFeed what="Their backs become words for the prompt. ＋ Prompt card makes one to fill." /> : <>
+                {cards.length > 1 && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, flexShrink: 0 }}>
+                    {cards.map(g => (
+                      <div key={g.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, width: 46 }}>
+                        <MiniCard g={g} w={30} lit={g.id === shown?.id} onClick={() => setPicked(g.id)} />
+                        <span style={{ fontSize: 9, color: g.id === shown?.id ? INK : FAINT, width: '100%', textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cardTitle(groups, g) || 'Untitled'}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {shown && cardPanel(shown)}
+              </>}
+            </div>
+            {/* ── The prompt: as big as the window lets it be ── */}
+            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8, padding: 10, background: 'rgba(95,208,230,0.03)' }}>
+              <textarea
+                ref={taRef}
+                value={text}
+                onChange={e => setText(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send() }
+                  e.stopPropagation()
+                }}
+                placeholder="Click the words on the card, or drag them in here. Stretch the window to write longer."
+                style={{
+                  flex: 1, minHeight: 0, resize: 'none', boxSizing: 'border-box',
+                  background: 'rgba(0,0,0,0.3)', color: INK, border: `1px solid rgba(95,208,230,0.3)`, borderRadius: 8,
+                  padding: '10px 12px', fontSize: 14, lineHeight: 1.55, fontFamily: 'inherit', outline: 'none',
+                }}
+              />
+              <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                <span style={{ flex: 1, alignSelf: 'center', fontSize: 11, color: FAINT }}>Ctrl+Enter sends · recorded in History</span>
+                <button onClick={() => setText('')} title="Clear the prompt" style={btn()}>Clear</button>
+                <button
+                  onClick={send}
+                  disabled={!text.trim()}
+                  title="Send (Ctrl+Enter): recorded in History"
+                  style={{ ...btn('go'), padding: '0 18px', opacity: text.trim() ? 1 : 0.45, cursor: text.trim() ? 'pointer' : 'default' }}
+                >Send ⏎</button>
               </div>
             </div>
-          )}
+          </div>
         </div>
       </ContentScaled>
     </div>

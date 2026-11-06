@@ -227,7 +227,7 @@ export function removeField(cardIds: string[], key: string): void {
 
 // ── Tags: a value read as a list ──
 
-/** A value read as tags: split on commas, semicolons and new lines. */
+/** A value read as tags: each comma-separated phrase is one (Brian 2026-11-06), new lines too. */
 export function tagsOf(value: string): string[] {
-  return value.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean)
+  return value.split(/[,\n]+/).map(s => s.trim()).filter(Boolean)
 }

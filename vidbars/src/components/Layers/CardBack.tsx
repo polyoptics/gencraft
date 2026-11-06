@@ -171,7 +171,8 @@ const BackField: React.FC<{
     const line = parseFloat(String(style.lineHeight ?? 12)) || 12
     onLong(folded ? el.scrollWidth > el.clientWidth + 1 : el.clientHeight > line * 1.5 + 2)
   })
-  const inputRef = useRef<HTMLInputElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
+  const twinRef = useRef<HTMLDivElement>(null)
   const done = useRef(false)
   const click = useClick(where, e => (shown !== undefined && onPick ? onPick(e) : onStart()))
   useEffect(() => {
@@ -181,31 +182,68 @@ const BackField: React.FC<{
     requestAnimationFrame(() => { inputRef.current?.focus(); inputRef.current?.select() })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editing])
+  // The field being typed in lies over the canvas at a steady SCREEN size,
+  // over the text it edits (as RenameInput does for names). Typed in the
+  // card's own scaled space it came out many times too big in the app, a
+  // few letters showing (Brian 2026-11-06), and far too small zoomed out.
+  useEffect(() => {
+    if (!editing) return
+    let raf = 0
+    const place = () => {
+      const el = inputRef.current, r = twinRef.current?.getBoundingClientRect()
+      if (el && r) {
+        const w = Math.max(220, r.width)
+        el.style.width = `${w}px`
+        el.style.left = `${Math.max(4, Math.min(window.innerWidth - w - 4, r.left))}px`
+        el.style.top = `${Math.max(4, Math.min(window.innerHeight - el.offsetHeight - 4, r.top - 3))}px`
+        el.style.height = 'auto'
+        el.style.height = `${Math.min(220, el.scrollHeight + 2)}px`
+      }
+      raf = requestAnimationFrame(place)
+    }
+    place()
+    // Plenty on the canvas cancels its presses, which would leave focus here.
+    const away = (e: PointerEvent) => { if (e.target !== inputRef.current) inputRef.current?.blur() }
+    window.addEventListener('pointerdown', away, true)
+    return () => { cancelAnimationFrame(raf); window.removeEventListener('pointerdown', away, true) }
+  }, [editing])
   if (editing) {
     const commit = (next?: 'next' | 'prev') => { if (done.current) return; done.current = true; onCommit(draft, next) }
     return (
-      <input
-        ref={inputRef}
-        data-card-detail-input={field}
-        value={draft}
-        placeholder={placeholder}
-        onChange={e => setDraft(e.target.value)}
-        onPointerDown={stopPress}
-        onDoubleClick={e => e.stopPropagation()}
-        onKeyDown={e => {
-          e.stopPropagation()
-          if (e.key === 'Enter') { e.preventDefault(); commit() }
-          else if (e.key === 'Escape') { e.preventDefault(); done.current = true; onCancel() }
-          else if (e.key === 'Tab') { e.preventDefault(); commit(e.shiftKey ? 'prev' : 'next') }
-        }}
-        onBlur={() => commit()}
-        style={{
-          ...style, minWidth: 0, width: '100%', boxSizing: 'border-box',
-          background: 'rgba(0,0,0,0.35)', border: '1px solid rgba(255,255,255,0.35)', borderRadius: 2,
-          outline: 'none', padding: '0 2px', margin: 0, font: 'inherit', fontSize: style.fontSize,
-          fontWeight: style.fontWeight, color: '#fff', userSelect: 'text',
-        }}
-      />
+      <>
+        {/* Keeps the text's place on the card while it is edited above it. */}
+        <div ref={twinRef} style={{ ...style, minWidth: 0, width: '100%', visibility: 'hidden', whiteSpace: 'nowrap', overflow: 'hidden' }}>{value || placeholder}</div>
+        {ReactDOM.createPortal(
+          <textarea
+            ref={inputRef}
+            data-card-detail-input={field}
+            value={draft}
+            placeholder={placeholder}
+            rows={1}
+            onChange={e => setDraft(e.target.value)}
+            onPointerDown={e => e.stopPropagation()}
+            onMouseDown={e => e.stopPropagation()}
+            onClick={e => e.stopPropagation()}
+            onDoubleClick={e => e.stopPropagation()}
+            onContextMenu={e => e.stopPropagation()}
+            onKeyUp={e => e.stopPropagation()}
+            onKeyDown={e => {
+              e.stopPropagation()
+              if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commit() }
+              else if (e.key === 'Escape') { e.preventDefault(); done.current = true; onCancel() }
+              else if (e.key === 'Tab') { e.preventDefault(); commit(e.shiftKey ? 'prev' : 'next') }
+            }}
+            onBlur={() => commit()}
+            style={{
+              position: 'fixed', zIndex: 10000, boxSizing: 'border-box', resize: 'none', overflow: 'auto',
+              padding: '3px 6px', font: '500 13px/1.4 system-ui, sans-serif', color: '#fff', caretColor: '#fff',
+              background: '#14161f', border: '1px solid rgba(120,180,255,0.9)', borderRadius: 4, outline: 'none',
+              boxShadow: '0 4px 14px rgba(0,0,0,0.6)', userSelect: 'text',
+            }}
+          />,
+          document.body,
+        )}
+      </>
     )
   }
   return (
