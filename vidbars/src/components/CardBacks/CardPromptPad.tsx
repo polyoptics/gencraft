@@ -347,6 +347,36 @@ export const CardPromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
     }
   }
 
+  // ── Prompt tabs: named prompts kept side by side (Brian 2026-11-06) ──
+  const tabs = node?.promptTabs?.length ? node.promptTabs : [{ name: 'Prompt 1', text }]
+  const tabAt = Math.min(Math.max(0, node?.promptTab ?? 0), tabs.length - 1)
+  const [renaming, setRenaming] = useState<number | null>(null)
+  /** The tabs with the one in use holding what is written now. */
+  const tabsNow = () => tabs.map((t, i) => i === tabAt ? { ...t, text } : t)
+  const saveTabs = (list: { name: string; text: string }[], at: number) => {
+    useUndoCoordinator.getState().checkpoint()
+    updateFreeNode(nodeId, { promptTabs: list, promptTab: at, text: list[at].text })
+  }
+  const switchTab = (i: number) => { if (i !== tabAt) saveTabs(tabsNow(), i) }
+  const addTab = () => {
+    const names = new Set(tabs.map(t => t.name))
+    let n = tabs.length + 1
+    while (names.has(`Prompt ${n}`)) n++
+    const list = [...tabsNow(), { name: `Prompt ${n}`, text: '' }]
+    saveTabs(list, list.length - 1)
+  }
+  const closeTab = (i: number) => {
+    const list = tabsNow().filter((_, j) => j !== i)
+    if (!list.length) { saveTabs([{ name: 'Prompt 1', text: '' }], 0); return }
+    saveTabs(list, i < tabAt ? tabAt - 1 : Math.min(tabAt, list.length - 1))
+  }
+  const renameTab = (i: number, name: string) => {
+    const nm = name.trim()
+    setRenaming(null)
+    if (!nm || nm === tabs[i].name) return
+    saveTabs(tabsNow().map((t, j) => j === i ? { ...t, name: nm } : t), tabAt)
+  }
+
   /** Typing in the prompt: a word of the shown card's page taken out of the
    *  text is put out on its page too. */
   const typed = (v: string) => {
@@ -492,7 +522,7 @@ export const CardPromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
       data-wheel-own=""
       style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: PANEL_BG }}
     >
-      <style>{`.cpp-chip .cpp-x { opacity: 0; transition: opacity 0.1s } .cpp-chip:hover .cpp-x { opacity: 1 } .cpp-item:hover { background: rgba(95,208,230,0.14) }`}</style>
+      <style>{`.cpp-chip .cpp-x { opacity: 0; transition: opacity 0.1s } .cpp-chip:hover .cpp-x { opacity: 1 } .cpp-item:hover { background: rgba(95,208,230,0.14) } .cpp-tab .cpp-x { opacity: 0.55 } .cpp-tab:hover .cpp-x { opacity: 1 } .cpp-tab .cpp-x:hover { background: rgba(255,255,255,0.12) }`}</style>
       <ContentScaled factor={panelContentScale(node)}>
         <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', fontFamily: 'system-ui, sans-serif', color: INK }}>
           <FeedBar
@@ -548,6 +578,58 @@ export const CardPromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
             </div>
             {/* ── The prompt: as big as the window lets it be ── */}
             <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8, padding: 10, background: 'rgba(95,208,230,0.03)' }}>
+              {/* Tabs along the top of the writing: named prompts. Double-click to rename. */}
+              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 3, marginBottom: -9, flexShrink: 0, minWidth: 0, position: 'relative', zIndex: 1 }}>
+                {tabs.map((t, i) => {
+                  const on = i === tabAt
+                  return (
+                    <div
+                      key={i}
+                      onClick={() => switchTab(i)}
+                      onDoubleClick={() => setRenaming(i)}
+                      title={`${t.name} · double-click to rename`}
+                      className="cpp-tab"
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, maxWidth: 180, flexShrink: 1,
+                        height: 28, padding: '0 6px 0 11px', boxSizing: 'border-box', cursor: 'pointer', userSelect: 'none',
+                        borderRadius: '8px 8px 0 0', fontSize: 12.5, fontWeight: on ? 600 : 500,
+                        color: on ? INK : DIM,
+                        background: on ? '#11131b' : 'rgba(255,255,255,0.04)',
+                        border: `1px solid ${on ? 'rgba(95,208,230,0.3)' : LINE}`,
+                        borderBottomColor: on ? '#11131b' : 'rgba(95,208,230,0.3)',
+                      }}
+                    >
+                      {renaming === i ? (
+                        <RenameInput
+                          autoFocus
+                          defaultValue={t.name}
+                          onPointerDown={e => e.stopPropagation()}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') renameTab(i, (e.target as HTMLInputElement).value)
+                            if (e.key === 'Escape') setRenaming(null)
+                          }}
+                          onBlur={e => renameTab(i, e.target.value)}
+                          style={{ height: 22, width: 110, fontSize: 12 }}
+                        />
+                      ) : (
+                        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.name}</span>
+                      )}
+                      <span
+                        className="cpp-x"
+                        onClick={e => { e.stopPropagation(); closeTab(i) }}
+                        title="Close this prompt (Ctrl+Z brings it back)"
+                        style={{ fontSize: 13, lineHeight: 1, color: DIM, padding: '0 3px', borderRadius: 4 }}
+                      >×</span>
+                    </div>
+                  )
+                })}
+                <div
+                  onClick={addTab}
+                  title="A new prompt"
+                  className="cpp-item"
+                  style={{ height: 26, width: 26, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 7, cursor: 'pointer', fontSize: 15, color: DIM, marginBottom: 2 }}
+                >＋</div>
+              </div>
               <textarea
                 ref={taRef}
                 value={text}
@@ -559,7 +641,7 @@ export const CardPromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
                 placeholder="Click the words on the card, or drag them in here. Stretch the window to write longer."
                 style={{
                   flex: 1, minHeight: 0, resize: 'none', boxSizing: 'border-box',
-                  background: 'rgba(0,0,0,0.3)', color: INK, border: `1px solid rgba(95,208,230,0.3)`, borderRadius: 8,
+                  background: '#11131b', color: INK, border: `1px solid rgba(95,208,230,0.3)`, borderRadius: 8,
                   padding: '10px 12px', fontSize: 14, lineHeight: 1.55, fontFamily: 'inherit', outline: 'none',
                 }}
               />

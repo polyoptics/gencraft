@@ -96,6 +96,11 @@ export interface FreeNodeData {
   /** Prompt Pad: the tag workshop and saved prompts. Persisted per pad, so
    *  two pads can carry different vocabularies. */
   promptKit?: import('../utils/promptKit').PromptKit
+  /** Card Prompts: its prompt tabs (Brian 2026-11-06), each a named prompt.
+   *  The tab in use keeps its text in `text`; the others keep theirs here. */
+  promptTabs?: { name: string; text: string }[]
+  /** Card Prompts: the tab in use (index into promptTabs). */
+  promptTab?: number
   /** Effect cards: which operator, and its slider values (missing keys
    *  take their defaults — utils/fx/effects). */
   effect?: { kind: import('../utils/fx/effects').EffectKind; params?: Record<string, number>; text?: string
