@@ -187,6 +187,11 @@ export interface ProjectGroup {
    *  (Brian 2026-11-05: fold a section down to its leaders, or to the
    *  leader and the seconds-in-command). */
   foldedMembers?: string[]
+  /** Its PAGES in a Card Prompts pad (Brian 2026-11-06): each page is the
+   *  words lit on it, in the order they were picked. Absent: no page saved. */
+  promptPages?: { words: string[] }[]
+  /** The page in use (index into promptPages). */
+  promptPage?: number
 }
 
 /** Find which group a board belongs to */
@@ -404,6 +409,7 @@ interface BoardsState {
    *  it report to its bosses instead (a family: utils/family removeFromKin). */
   removeMember: (factionId: string, memberId: string) => void
   setGroupDetails: (groupId: string, details: import('../utils/cardTypes').CardDetail[]) => void
+  setGroupPromptPages: (groupId: string, pages: { words: string[] }[], at: number) => void
   setGroupCardHeroImage: (groupId: string, url: string | null) => void
   /** Flip cards between screen-pinned and canvas-placed. Takes an ARRAY so a
    *  multi-selection converts in one set — same shape as setNodePlacement. */
@@ -1229,6 +1235,10 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
 
   setGroupDetails(groupId, details) {
     set(s => ({ groups: s.groups.map(g => g.id === groupId ? { ...g, details } : g) }))
+  },
+
+  setGroupPromptPages(groupId, pages, at) {
+    set(s => ({ groups: s.groups.map(g => g.id === groupId ? { ...g, promptPages: pages, promptPage: at } : g) }))
   },
 
   setGroupCardHeroImage(groupId, url) {

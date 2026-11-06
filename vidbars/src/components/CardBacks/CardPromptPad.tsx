@@ -12,6 +12,13 @@
 // Click a word to put it in the prompt, click it again (lit) to take it out,
 // or drag it into the text where it should go. ＋ on a row adds a word to
 // that card's back; × on a word takes it off the card.
+//
+// PAGES (Brian 2026-11-06): the words lit on a card are kept on the card,
+// on its page in use. The dots on the seam under the card's header are its
+// pages: the lit one is in use, and whatever is lit is saved there as you
+// go. ＋ adds an empty page; click a dot to switch (the prompt follows);
+// drag a dot along the row to reorder, Shift-drag to copy; right-click to
+// delete; drag one off the pad for a copy of the card with that page.
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
@@ -23,6 +30,9 @@ import { RenameInput } from '../UI/RenameInput'
 import { cardTitle } from '../../utils/faceStyle'
 import { detailShown, newDetailId } from '../../utils/cardTypes'
 import { createCardOrBoardAt } from '../../utils/canvasCreate'
+import { clientToCanvas } from '../../utils/fx/createEffect'
+import { useUndoCoordinator } from '../../store/undoCoordinator'
+import { createPortal } from 'react-dom'
 import { cardVisualRect } from '../../hooks/useCardDecks'
 import { useCardFeed, tagsOf, setDetailValue } from '../../utils/cardBacks'
 import { dockedCards } from '../../utils/filmShots'
@@ -91,6 +101,161 @@ function newPromptCard(nodeId: string, preset?: (typeof PRESETS)[number]): void 
   now.setSelectedGroup(g.id)
 }
 
+type Page = { words: string[] }
+const lc = (w: string) => w.trim().toLowerCase()
+
+/** The prompt with `out` taken away and `add` put on the end (each once). */
+function swapWords(text: string, out: string[], add: string[]): string {
+  const gone = new Set(out.map(lc))
+  const parts = text.split(',').map(s => s.trim()).filter(s => s && !gone.has(lc(s)))
+  const have = new Set(parts.map(lc))
+  for (const w of add) if (!have.has(lc(w))) { parts.push(w); have.add(lc(w)) }
+  return parts.join(', ')
+}
+
+/** A card's words, every row's, as its chips show them. */
+const cardWords = (g: ProjectGroup, groups: ProjectGroup[]) =>
+  (g.details ?? []).flatMap(d => tagsOf(detailShown(groups, d).text))
+
+/** A card's pages, and the one in use. A card with none saved yet has one,
+ *  holding its words that are in the prompt now. */
+function pagesOf(g: ProjectGroup, groups: ProjectGroup[], inPrompt: Set<string>): { pages: Page[]; at: number; saved: boolean } {
+  if (g.promptPages?.length) {
+    return { pages: g.promptPages, at: Math.min(Math.max(0, g.promptPage ?? 0), g.promptPages.length - 1), saved: true }
+  }
+  const seen = new Set<string>()
+  const words = cardWords(g, groups).filter(w => inPrompt.has(lc(w)) && !seen.has(lc(w)) && seen.add(lc(w)))
+  return { pages: [{ words }], at: 0, saved: false }
+}
+
+/** A card's pages saved, one undo. */
+function savePages(gid: string, pages: Page[], at: number): void {
+  useUndoCoordinator.getState().checkpoint()
+  useBoardsStore.getState().setGroupPromptPages(gid, pages, at)
+}
+
+/** The dots on the seam of the card's header: its pages. */
+const PageDots: React.FC<{
+  g: ProjectGroup
+  pages: Page[]
+  at: number
+  padEl: () => HTMLElement | null
+  onSwitch: (i: number) => void
+  onAdd: () => void
+  onMove: (from: number, to: number, copy: boolean) => void
+  onDelete: (i: number) => void
+  onOff: (i: number, clientX: number, clientY: number) => void
+}> = ({ g, pages, at, padEl, onSwitch, onAdd, onMove, onDelete, onOff }) => {
+  const rowRef = useRef<HTMLDivElement>(null)
+  const [drag, setDrag] = useState<{ i: number; x: number; y: number; to: number; off: boolean; copy: boolean } | null>(null)
+  const [menu, setMenu] = useState<{ i: number; x: number; y: number } | null>(null)
+  useEffect(() => {
+    if (!menu) return
+    const close = (e: PointerEvent) => { if (!(e.target as HTMLElement)?.closest?.('[data-page-menu]')) setMenu(null) }
+    window.addEventListener('pointerdown', close)
+    return () => window.removeEventListener('pointerdown', close)
+  }, [menu])
+
+  /** Where along the row a pointer at clientX would put a dot. */
+  const slotAt = (clientX: number) => {
+    const dots = [...(rowRef.current?.querySelectorAll('[data-page-dot]') ?? [])] as HTMLElement[]
+    let i = 0
+    for (const d of dots) { const r = d.getBoundingClientRect(); if (clientX > r.left + r.width / 2) i++ }
+    return i
+  }
+
+  const down = (e: React.PointerEvent, i: number) => {
+    if (e.button !== 0) return
+    e.stopPropagation()
+    const sx = e.clientX, sy = e.clientY
+    let moved = false
+    const move = (ev: PointerEvent) => {
+      if (!moved && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 5) return
+      moved = true
+      const pr = padEl()?.getBoundingClientRect()
+      const off = !!pr && (ev.clientX < pr.left || ev.clientX > pr.right || ev.clientY < pr.top || ev.clientY > pr.bottom)
+      setDrag({ i, x: ev.clientX, y: ev.clientY, to: slotAt(ev.clientX), off, copy: ev.shiftKey })
+    }
+    const up = (ev: PointerEvent) => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      setDrag(null)
+      if (!moved) { onSwitch(i); return }
+      const pr = padEl()?.getBoundingClientRect()
+      const off = !!pr && (ev.clientX < pr.left || ev.clientX > pr.right || ev.clientY < pr.top || ev.clientY > pr.bottom)
+      if (off) { onOff(i, ev.clientX, ev.clientY); return }
+      const to = slotAt(ev.clientX)
+      if (ev.shiftKey) onMove(i, to, true)
+      else if (to !== i && to !== i + 1) onMove(i, to > i ? to - 1 : to, false)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
+
+  const dot = (p: Page, i: number) => {
+    const on = i === at
+    const full = p.words.length > 0
+    const gap = drag && !drag.off && (drag.copy || (drag.to !== drag.i && drag.to !== drag.i + 1)) && drag.to === i
+    return (
+      <React.Fragment key={i}>
+        {gap && <span style={{ width: 2, height: 14, borderRadius: 1, background: '#fff' }} />}
+        <span
+          data-page-dot=""
+          onPointerDown={e => down(e, i)}
+          onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setMenu({ i, x: e.clientX, y: e.clientY }) }}
+          title={`Page ${i + 1}${full ? `: ${p.words.join(', ')}` : ': nothing lit'}\nClick to use · drag to reorder · Shift-drag to copy · drag off for a new card · right-click to delete`}
+          style={{
+            width: 13, height: 13, borderRadius: '50%', boxSizing: 'border-box', cursor: 'pointer', flexShrink: 0,
+            background: on ? '#fff' : full ? `${g.color}` : '#14161f',
+            border: `2px solid ${on ? '#fff' : g.color}`,
+            boxShadow: on ? `0 0 0 2px ${g.color}, 0 0 8px ${g.color}` : '0 1px 2px rgba(0,0,0,0.5)',
+            opacity: drag?.i === i && !drag.copy ? 0.35 : 1,
+          }}
+        />
+      </React.Fragment>
+    )
+  }
+
+  return (
+    <div style={{ position: 'relative', height: 0, flexShrink: 0, zIndex: 2 }}>
+      <div ref={rowRef} style={{ position: 'absolute', left: 10, top: -7, display: 'flex', alignItems: 'center', gap: 5 }}>
+        {pages.map(dot)}
+        {drag && !drag.off && (drag.copy || (drag.to !== drag.i && drag.to !== drag.i + 1)) && drag.to === pages.length &&
+          <span style={{ width: 2, height: 14, borderRadius: 1, background: '#fff' }} />}
+        <span
+          onPointerDown={e => e.stopPropagation()}
+          onClick={onAdd}
+          title="A new empty page"
+          style={{
+            width: 13, height: 13, borderRadius: '50%', boxSizing: 'border-box', cursor: 'pointer', flexShrink: 0,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, lineHeight: 1, fontWeight: 700,
+            background: '#14161f', border: `1px dashed ${g.color}`, color: '#fff',
+          }}
+        >+</span>
+      </div>
+      {drag && createPortal(
+        <div style={{ position: 'fixed', left: drag.x + 10, top: drag.y + 10, zIndex: 100000, pointerEvents: 'none', display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ width: 14, height: 14, borderRadius: '50%', background: g.color, border: '2px solid #fff' }} />
+          <span style={{ fontSize: 12, color: '#fff', background: 'rgba(20,22,31,0.92)', borderRadius: 6, padding: '2px 7px' }}>
+            {drag.off ? 'Let go for a new card with this page' : drag.copy ? 'Copy' : 'Move'}
+          </span>
+        </div>, document.body)}
+      {menu && createPortal(
+        <div
+          data-page-menu=""
+          onPointerDown={e => e.stopPropagation()}
+          style={{ position: 'fixed', left: menu.x, top: menu.y, zIndex: 100000, minWidth: 120, padding: 4, borderRadius: 8, background: '#1b1e2c', border: `1px solid ${LINE}`, boxShadow: '0 10px 30px rgba(0,0,0,0.55)', fontFamily: 'system-ui, sans-serif' }}
+        >
+          <div
+            className="cpp-item"
+            onClick={() => { onDelete(menu.i); setMenu(null) }}
+            style={{ padding: '6px 10px', borderRadius: 6, cursor: 'pointer', fontSize: 13, color: INK }}
+          >Delete page {menu.i + 1}</div>
+        </div>, document.body)}
+    </div>
+  )
+}
+
 export const CardPromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
   const node = useFreeNodeStore(s => s.nodes[nodeId])
   const updateFreeNode = useFreeNodeStore(s => s.updateFreeNode)
@@ -116,16 +281,81 @@ export const CardPromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
   const setText = (v: string) => updateFreeNode(nodeId, { text: v })
   const inPrompt = useMemo(() => promptWords(text), [text])
 
-  const toggleWord = (w: string) => {
-    const key = w.trim().toLowerCase()
-    if (inPrompt.has(key)) {
-      // Out again: the word and the comma that joined it.
-      const parts = text.split(',').map(s => s.trim()).filter(s => s && s.toLowerCase() !== key)
-      setText(parts.join(', '))
-    } else {
-      const t = text.trim().replace(/,$/, '')
-      setText(t ? `${t}, ${w}` : w)
+  const padRef = useRef<HTMLDivElement>(null)
+
+  /** A word lit or put out on card g: on its page in use, and in the prompt. */
+  const toggleWord = (g: ProjectGroup, w: string) => {
+    const { pages, at } = pagesOf(g, groups, inPrompt)
+    const words = pages[at].words
+    const on = words.some(x => lc(x) === lc(w))
+    const next = on ? words.filter(x => lc(x) !== lc(w)) : [...words, w]
+    savePages(g.id, pages.map((p, i) => i === at ? { words: next } : p), at)
+    setText(on ? swapWords(text, [w], []) : swapWords(text, [], [w]))
+  }
+
+  /** Card g turned to page `to`: its old page's words leave the prompt, the new page's come in. */
+  const switchPage = (g: ProjectGroup, pages: Page[], from: number, to: number) => {
+    savePages(g.id, pages, to)
+    setText(swapWords(text, pages[from]?.words ?? [], pages[to]?.words ?? []))
+  }
+  const pageActions = (g: ProjectGroup) => {
+    const { pages, at } = pagesOf(g, groups, inPrompt)
+    return {
+      pages, at,
+      onSwitch: (i: number) => { if (i !== at || !g.promptPages?.length) switchPage(g, pages, at, i) },
+      onAdd: () => switchPage(g, [...pages, { words: [] }], at, pages.length),
+      onMove: (from: number, to: number, copy: boolean) => {
+        const list = [...pages]
+        if (copy) {
+          list.splice(to, 0, { words: [...pages[from].words] })
+          savePages(g.id, list, to <= at ? at + 1 : at)
+          return
+        }
+        const [p] = list.splice(from, 1)
+        list.splice(to, 0, p)
+        // The page in use stays in use wherever it went.
+        const now = list.indexOf(pages[at])
+        savePages(g.id, list, now)
+      },
+      onDelete: (i: number) => {
+        if (pages.length === 1) { switchPage(g, [{ words: [] }], 0, 0); return }
+        const list = pages.filter((_, j) => j !== i)
+        if (i === at) {
+          const to = Math.min(i, list.length - 1)
+          savePages(g.id, list, to)
+          setText(swapWords(text, pages[i].words, list[to].words))
+        } else {
+          savePages(g.id, list, i < at ? at - 1 : at)
+        }
+      },
+      onOff: (i: number, cx: number, cy: number) => {
+        // A copy of the card, carrying only this page, where it was let go.
+        useUndoCoordinator.getState().checkpoint()
+        const bs = useBoardsStore.getState()
+        const id = bs.duplicateGroup(g.id)
+        if (!id) return
+        bs.setGroupPromptPages(id, [{ words: [...pages[i].words] }], 0)
+        const now = useBoardsStore.getState()
+        const c = now.groups.find(x => x.id === id)
+        const v = c && cardVisualRect(c, now.boards, useCanvasStore.getState().zoom)
+        if (c && v) {
+          const at = clientToCanvas(cx, cy)
+          now.setGroupPos(id, c.originY + (at.cy - (v.rect.top + v.rect.bottom) / 2), c.originX + (at.cx - (v.rect.left + v.rect.right) / 2))
+        }
+        now.setSelectedGroup(id)
+      },
     }
+  }
+
+  /** Typing in the prompt: a word of the shown card's page taken out of the
+   *  text is put out on its page too. */
+  const typed = (v: string) => {
+    setText(v)
+    if (!shown?.promptPages?.length) return
+    const { pages, at } = pagesOf(shown, groups, inPrompt)
+    const has = promptWords(v)
+    const keep = pages[at].words.filter(w => has.has(lc(w)))
+    if (keep.length !== pages[at].words.length) useBoardsStore.getState().setGroupPromptPages(shown.id, pages.map((p, i) => i === at ? { words: keep } : p), at)
   }
 
   const send = () => {
@@ -155,14 +385,14 @@ export const CardPromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
     border: `1px solid ${tone === 'go' ? 'rgba(95,208,230,0.5)' : LINE}`, color: INK, whiteSpace: 'nowrap',
   })
 
-  const chip = (g: ProjectGroup, detailId: string, w: string, canEdit: boolean) => {
-    const on = inPrompt.has(w.toLowerCase())
+  const chip = (g: ProjectGroup, detailId: string, w: string, canEdit: boolean, lit: Set<string>) => {
+    const on = lit.has(lc(w))
     return (
       <span
         key={w}
         draggable
         onDragStart={e => { e.stopPropagation(); e.dataTransfer.setData('text/plain', w); e.dataTransfer.effectAllowed = 'copy' }}
-        onClick={() => toggleWord(w)}
+        onClick={() => toggleWord(g, w)}
         title={on ? 'In the prompt: click to take it out' : 'Click to add to the prompt, or drag it into the text'}
         className="cpp-chip"
         style={{
@@ -190,7 +420,9 @@ export const CardPromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
 
   const cardPanel = (g: ProjectGroup) => {
     const rows = (g.details ?? []).map(d => ({ d, words: tagsOf(detailShown(groups, d).text) }))
-    const lit = rows.reduce((n, r) => n + r.words.filter(w => inPrompt.has(w.toLowerCase())).length, 0)
+    const pa = pageActions(g)
+    const litSet = new Set(pa.pages[pa.at].words.map(lc))
+    const lit = rows.reduce((n, r) => n + r.words.filter(w => litSet.has(lc(w))).length, 0)
     return (
       <div key={g.id} style={{
         flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', borderRadius: 10, overflow: 'hidden',
@@ -209,8 +441,9 @@ export const CardPromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
           {lit > 0 && <span style={{ fontSize: 10.5, color: '#fff', background: 'rgba(0,0,0,0.3)', borderRadius: 8, padding: '0 6px' }} title="Words from this card in the prompt">{lit} in</span>}
           <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: 0.7, textTransform: 'uppercase', color: 'rgba(255,255,255,0.8)' }}>{typeLabel(g)}</span>
         </div>
+        <PageDots g={g} padEl={() => padRef.current} {...pa} />
         {(
-          <div style={{ padding: '4px 10px 10px', flex: 1, minHeight: 0, overflowY: 'auto' }} data-wheel-own="">
+          <div style={{ padding: '12px 10px 10px', flex: 1, minHeight: 0, overflowY: 'auto' }} data-wheel-own="">
             {rows.length === 0 && <div style={{ fontSize: 12, color: FAINT, padding: '4px 0' }}>Nothing on its back yet. Turn the card over and add rows.</div>}
             {rows.map(({ d, words }) => (
               <div key={d.id} style={{ marginTop: 6 }}>
@@ -226,7 +459,7 @@ export const CardPromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
                   )}
                 </div>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                  {words.map(w => chip(g, d.id, w, !d.link))}
+                  {words.map(w => chip(g, d.id, w, !d.link, litSet))}
                   {words.length === 0 && adding !== d.id && <span style={{ fontSize: 11.5, color: FAINT }}>empty</span>}
                   {adding === d.id && (
                     <RenameInput
@@ -253,6 +486,7 @@ export const CardPromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
   if (!node) return null
   return (
     <div
+      ref={padRef}
       onPointerDown={e => e.stopPropagation()}
       onWheel={e => e.stopPropagation()}
       data-wheel-own=""
@@ -317,7 +551,7 @@ export const CardPromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
               <textarea
                 ref={taRef}
                 value={text}
-                onChange={e => setText(e.target.value)}
+                onChange={e => typed(e.target.value)}
                 onKeyDown={e => {
                   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send() }
                   e.stopPropagation()
