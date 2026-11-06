@@ -73,7 +73,8 @@ import { useTiltStore, isTilted, standRise, unprojectTilt, TILT_FAR } from '../.
 import { useWorldZoom } from './worldZoom'
 import { clientToCanvas } from '../../utils/fx/createEffect'
 import { snapToDots } from '../../utils/dotGrid'
-import { bakeStoryline } from '../../utils/chartCard'
+import { bakeStoryline, chartOfStoryline, chartOutOf } from '../../utils/chartCard'
+import { setLiveChartReader } from '../../utils/cardTypes'
 import { morphStoryline, useChartMotion } from '../../utils/chartMotion'
 import { onRows, openDeckOf, rowOf, rowsSeen } from '../../utils/primaryCard'
 import { liveLocks, lockOf } from '../../utils/deckLock'
@@ -648,6 +649,9 @@ export function cardOrigins(d: StorylineData, dotIds: Set<string>): Map<string, 
   for (const g of groups as ProjectGroup[]) if (ids.has(g.id) && !g.pin) out.set(g.id, { x: g.originX, y: g.originY })
   return out
 }
+
+// A chart out on the canvas: ranks on it (card backs) read it as it stands.
+setLiveChartReader(cardId => { const n = chartOutOf(cardId); return n ? chartOfStoryline(n, cardOrigins) : null })
 
 function moveCards(from: Map<string, { x: number; y: number }>, dx: number, dy: number) {
   if (from.size === 0) return

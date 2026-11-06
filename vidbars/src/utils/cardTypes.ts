@@ -7,6 +7,7 @@
 
 import type { ProjectGroup } from '../store/boardsStore'
 import { groupRankOf } from './factionGroups'
+import { chartRankOf, type ChartData } from './chartData'
 
 /** Where a detail's value comes from when it is linked: another card (its
  *  name), or one detail on it (that detail's value, live). */
@@ -16,6 +17,10 @@ export interface DetailLink {
   /** Not the card's name or a detail: how many members it has (a faction
    *  or family), counted live (Brian 2026-11-06). */
   count?: 'members'
+  /** Not the card's name or a detail: where card `rankOf` (the card whose
+   *  back this is, its master) ranks on the chart baked into `card`, read
+   *  live (Brian 2026-11-06: "add a chart attribute... pick lethality"). */
+  rankOf?: string
 }
 
 /** One row on a card's details side. */
@@ -91,6 +96,7 @@ export function detailShown(groups: ProjectGroup[], d: CardDetail, seen = new Se
   const card = groups.find(g => g.id === d.link!.card)
   if (!card) return { text: d.value, missing: true }
   if (d.link.count === 'members') return { text: String(memberCount(groups, card)), card }
+  if (d.link.rankOf) { const r = chartRank(card, d.link.rankOf); return { text: r ? String(r.rank) : '—', card } }
   if (!d.link.detail) return { text: card.name, card }
   const key = `${card.id}:${d.link.detail}`
   const target = card.details?.find(x => x.id === d.link!.detail)
@@ -98,6 +104,37 @@ export function detailShown(groups: ProjectGroup[], d: CardDetail, seen = new Se
   seen.add(key)
   return { ...detailShown(groups, target, seen), card }
 }
+
+// ── Ranks on charts (Brian 2026-11-06) ──
+// A card's back can have a detail that reads where it ranks on a chart
+// (a storyline baked into a card, utils/chartData), e.g. LETHALITY 2.
+// Its group on the chart counted from the top (1), as chartRankOf reads it
+// and as the faction's own RANK row shows it; cards in one dot's group
+// share a rank. Never typed. While the chart is out on the canvas it is
+// read from the storyline as it stands (StorylineLayer hands the reader in,
+// so this file needn't know about storylines).
+
+let liveChart: (cardId: string) => ChartData | null = () => null
+/** Set once by StorylineLayer: the chart of card `cardId` as it stands
+ *  out on the canvas, or null when it is folded. */
+export function setLiveChartReader(f: (cardId: string) => ChartData | null) { liveChart = f }
+
+/** Where card `cardId` ranks on chart card `chartCard`: live while the
+ *  chart is out, else as it was baked. */
+export function chartRank(chartCard: ProjectGroup, cardId: string): { rank: number } | null {
+  const chart = liveChart(chartCard.id) ?? chartCard.chart
+  return chart ? chartRankOf(chart, cardId) : null
+}
+
+/** The cards that hold a chart, to rank on (masters only; a linked copy
+ *  shows the same chart). */
+export const chartCards = (groups: ProjectGroup[]) => groups.filter(g => g.chart && !g.linkOf)
+
+/** The chart's name, for a detail's name. */
+export const chartName = (g: ProjectGroup) => g.name?.trim() || g.chart?.title?.trim() || 'Chart'
+
+/** Whether `d` reads a rank on a chart. */
+export const isChartRank = (d: CardDetail) => !!d.link?.rankOf
 
 // ── Members, counted (Brian 2026-11-06) ──
 // A faction's or family's back has a MEMBERS detail that counts the cards

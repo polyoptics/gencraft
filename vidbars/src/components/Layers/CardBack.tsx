@@ -11,8 +11,9 @@ import ReactDOM, { flushSync } from 'react-dom'
 import { useBoardsStore } from '../../store/boardsStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { useLinkDragStore } from '../../store/linkDragStore'
+import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { edgeColorFromHex, hexToHsl, hslToHex } from '../../utils/colorUtils'
-import { CARD_TYPES, CARD_TYPE_ORDER, cardTypeOf, detailShown, factionMembers, factionsOf, hasMembers, isAbove, isOwnCount, newDetailId, typeColor, type CardDetail, type CardType, type FactionMember } from '../../utils/cardTypes'
+import { CARD_TYPES, CARD_TYPE_ORDER, cardTypeOf, chartCards, chartName, chartRank, detailShown, isChartRank, factionMembers, factionsOf, hasMembers, isAbove, isOwnCount, newDetailId, typeColor, type CardDetail, type CardType, type FactionMember } from '../../utils/cardTypes'
 import { factionGroupsOf, withGroupMoved, withMemberMoved } from '../../utils/factionGroups'
 import { ColorPickerPopup } from '../Bar/ColorPickerPopup'
 import { areSiblings, arePartners, familiesOf, familyTree, isAncestor as isKinAbove, relationsOf, setChildOf, setPartners, setSiblings, type Kin } from '../../utils/family'
@@ -366,6 +367,19 @@ export const CardBack: React.FC<{
   const fgroups = type === 'faction' && me ? factionGroupsOf(me) : null
   // A linked card is its master shown again: its factions and kin are the master's.
   const meId = me?.linkOf ?? groupId
+  // Charts to rank on; while one this back ranks on is out on the canvas,
+  // its storyline as it stands (redrawn when its dots or their cards change).
+  const charts = chartCards(groups)
+  useFreeNodeStore(s => {
+    const on = new Set(details.filter(isChartRank).map(d => d.link!.card))
+    if (!on.size) return ''
+    let k = ''
+    for (const n of Object.values(s.nodes)) {
+      const c = n.storyline?.chartCard
+      if (c && on.has(c)) k += n.id + ':' + n.storyline!.dots.map(p => `${p.id},${p.y},${(p.cards ?? []).join('+')}`).join(';') + '|'
+    }
+    return k
+  })
   const memberOf = factionsOf(groups, meId)
   // A family: its tree; any card: the families it is in, and its kin there.
   const tree = type === 'family' && me ? familyTree(groups, me) : []
@@ -375,7 +389,7 @@ export const CardBack: React.FC<{
   const linking = useLinkDragStore(s => s.active && s.source?.kind === 'group' && s.source.id !== groupId)
   const [editing, setEditing] = useState<{ id: string; part: 'name' | 'value' } | null>(null)
   const [rowHover, setRowHover] = useState<string | null>(null)
-  const [menu, setMenu] = useState<{ x: number; y: number; kind: 'type' } | { x: number; y: number; kind: 'link'; id: string } | null>(null)
+  const [menu, setMenu] = useState<{ x: number; y: number; kind: 'type' | 'chart' } | { x: number; y: number; kind: 'link'; id: string } | null>(null)
   const [picker, setPicker] = useState<{ x: number; y: number; type: CardType } | null>(null)
   // A member being dragged in a faction's list: onto the member it reports
   // to ('top': onto MEMBERS, it reports to no one). `ok`: it can go there
@@ -441,6 +455,20 @@ export const CardBack: React.FC<{
     write([...cur(), row])
     setEditing({ id: row.id, part: 'name' })
   }
+  /** A detail reading this card's rank on chart card `chartId`. */
+  const addRank = (chartId: string) => {
+    const chart = useBoardsStore.getState().groups.find(g => g.id === chartId)
+    if (!chart) return
+    write([...cur(), { id: newDetailId(), name: chartName(chart), value: '', link: { card: chartId, rankOf: meId } }])
+  }
+  const chartMenu = (): MenuItem[] => charts.map(c => {
+    const r = chartRank(c, meId)
+    const have = cur().some(d => d.link?.rankOf && d.link.card === c.id)
+    return {
+      label: chartName(c), hint: r ? `  rank ${r.rank}` : '  not on it', swatch: c.color, checked: have,
+      onClick: () => { if (!have) addRank(c.id); setMenu(null) },
+    }
+  })
   const remove = (id: string) => {
     write(cur().filter(d => d.id !== id))
     if (editing?.id === id) setEditing(null)
@@ -728,6 +756,22 @@ export const CardBack: React.FC<{
     const card = d?.link && all.find(g => g.id === d.link!.card)
     if (!d?.link) return []
     if (!card) return [{ label: 'Unlink (the card is gone)', onClick: () => { setLink(id, null); setMenu(null) } }]
+    // A rank on a chart: the charts to rank on instead.
+    if (d.link.rankOf) return [
+      ...charts.map(c => {
+        const r = chartRank(c, d.link!.rankOf!)
+        return {
+          label: chartName(c), hint: r ? `  rank ${r.rank}` : '  not on it', swatch: c.color, checked: c.id === card.id,
+          onClick: () => {
+            // Its name follows the chart, unless it was renamed.
+            const named = d.name.trim() === chartName(card)
+            write(cur().map(x => x.id === id ? { ...x, ...(named ? { name: chartName(c) } : {}), link: { card: c.id, rankOf: d.link!.rankOf } } : x))
+            setMenu(null)
+          },
+        }
+      }),
+      { label: 'Unlink, keep the text', separator: true, onClick: () => { setLink(id, null); setMenu(null) } },
+    ]
     return [
       { label: card.name || 'Untitled', hint: '  the card', checked: !d.link.detail && !d.link.count, swatch: card.color, onClick: () => { setLink(id, { card: card.id }); setMenu(null) } },
       // A faction or family: how many are in it (counted live).
@@ -931,6 +975,7 @@ export const CardBack: React.FC<{
             const linked = d.link ? detailShown(groups, d) : null
             // Its own member count: shown, never typed, linked or removed.
             const own = isOwnCount(d, meId) || isOwnCount(d, groupId)
+            const rank = isChartRank(d)
             return (
               <div
                 key={d.id}
@@ -960,9 +1005,10 @@ export const CardBack: React.FC<{
                   onCommit={(v, n) => commit(d.id, 'value', v, n)}
                   onCancel={() => cancel(d.id)}
                   shown={own ? <span data-member-count title="How many members it has: counted, not typed">{linked?.text}</span>
+                    : rank && linked ? <span data-chart-rank={d.link!.card} title={`Rank on ${linked.card ? chartName(linked.card) : 'a chart'}: its group on the chart, counted from the top (read from the chart, not typed)`}><LinkShown text={linked.text} color={linked.card?.color} missing={linked.missing} whole={false} /></span>
                     : linked ? <LinkShown text={linked.text} color={linked.card?.color} missing={linked.missing} whole={!d.link!.detail && !d.link!.count} /> : undefined}
                   onPick={own ? undefined : e => setMenu({ x: e.clientX, y: e.clientY, kind: 'link', id: d.id })}
-                  drop={own ? undefined : `detail:${groupId}:${d.id}`}
+                  drop={own || rank ? undefined : `detail:${groupId}:${d.id}`}
                   lit={linking}
                   wrap
                   folded={d.collapsed}
@@ -1014,6 +1060,7 @@ export const CardBack: React.FC<{
               </div>
             </div>
           ))}
+          <div style={{ display: 'flex', gap: 3, alignSelf: 'flex-start', flexShrink: 0 }}>
           <button
             type="button"
             data-card-detail-add
@@ -1031,9 +1078,28 @@ export const CardBack: React.FC<{
               pointerEvents: hovered || linking || details.length === 0 ? 'auto' : 'none',
             }}
           >+ detail</button>
+          {/* A rank on one of the charts (cards a storyline was baked into). */}
+          {charts.length > 0 && (
+            <button
+              type="button"
+              data-card-chart-add
+              title="Add its rank on a chart"
+              onPointerDown={stopPress}
+              onDoubleClick={e => e.stopPropagation()}
+              onClick={e => { e.stopPropagation(); setMenu({ x: e.clientX, y: e.clientY, kind: 'chart' }) }}
+              style={{
+                alignSelf: 'flex-start', flexShrink: 0, marginTop: 2, fontSize: 8.5, fontWeight: 700, fontFamily: 'inherit',
+                padding: '1px 6px', borderRadius: 8, cursor: 'pointer', background: 'rgba(0,0,0,0.3)', color: ink,
+                border: `1px solid ${edgeColorFromHex(color, 0.35)}`,
+                opacity: hovered ? 1 : 0, transition: 'opacity 0.12s', pointerEvents: hovered ? 'auto' : 'none',
+              }}
+            >+ chart</button>
+          )}
+          </div>
         </div>
       </div>
       {menu?.kind === 'type' && <BackMenu at={menu} title="Card type" items={typeMenu()} onClose={() => setMenu(null)} />}
+      {menu?.kind === 'chart' && <BackMenu at={menu} title="Rank on chart" items={chartMenu()} onClose={() => setMenu(null)} />}
       {menu?.kind === 'link' && <BackMenu at={menu} title="This detail shows" items={linkMenu(menu.id)} onClose={() => setMenu(null)} />}
       {kinMenu && <BackMenu at={kinMenu} title={`${groups.find(g => g.id === kinMenu.a)?.name || 'Untitled'} is…`} items={kinItems(kinMenu.a, kinMenu.b)} onClose={() => setKinMenu(null)} />}
       {picker && ReactDOM.createPortal(
