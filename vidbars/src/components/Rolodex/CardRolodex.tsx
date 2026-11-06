@@ -40,7 +40,7 @@ import { useTiltOverlayHost } from '../../store/tiltStore'
 import type { FreeNodeData } from '../../store/freeNodeStore'
 import {
   type ContentKind, type ListQuery, KIND_LABELS, groupHasContentOfKind, freeNodeInResults,
-  hasRenderableContent, sortGroups, sortFreeNodes, formatListQuerySummary, effectKindsForQuery,
+  hasRenderableContent, sortGroups, sortFreeNodes, formatListQuerySummary, effectKindsForQuery, groupMatchesQuery,
 } from '../../utils/contentKinds'
 import { EFFECTS, effectKindOf, type EffectKind } from '../../utils/fx/effects'
 import { createEffectCard, EFFECT_DRAG_MIME } from '../../utils/fx/createEffect'
@@ -595,7 +595,7 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
   const visibleGroups = useMemo(() => {
     const q = searchQuery.trim().toLowerCase()
     if (!q && kindFilter === 'all') return renderableGroups
-    const nameMatch = (g: ProjectGroup) => !q || (g.name || '').toLowerCase().includes(q)
+    const nameMatch = (g: ProjectGroup) => groupMatchesQuery(g, q)
     const kindMatch = (g: ProjectGroup) =>
       kindFilter === 'all' || groupHasContentOfKind(g, boards, kindFilter)
     // Set of group ids that match BOTH predicates on their own.
@@ -2262,7 +2262,7 @@ const RolodexCardPreview: React.FC<{
 /** Glyph per free-node type — matches the tile headers on canvas. */
 const FREENODE_GLYPHS: Record<FreeNodeData['type'], string> = {
   model: '◆', image: '🖼', video: '▶', audio: '♪', text: 'T', note: '📝', list: '≔',
-  pool: '▦', prompt: '✎', history: '⟲', effect: '✦', rail: '⟳', cabinet: '🗄', filmMixer: '🎞', storyline: '⑂', roughCut: '✂',
+  pool: '▦', prompt: '✎', history: '⟲', effect: '✦', rail: '⟳', cabinet: '🗄', filmMixer: '🎞', storyline: '⑂', roughCut: '✂', attributes: '☷', promptCards: '✎',
 }
 
 /** A file from a magneted Media Pool. Same geometry as the other slots so

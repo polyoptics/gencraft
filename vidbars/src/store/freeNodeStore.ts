@@ -24,6 +24,8 @@ export type FreeNodeType =
   | 'filmMixer' // the film's look mixer (components/FilmMixer)
   | 'storyline' // points on lines that branch (utils/storyline)
   | 'roughCut' // clips in a row, trimmed and ordered (utils/roughCut)
+  | 'attributes'  // the details on the backs of the cards fed to it, side by side (utils/cardBacks)
+  | 'promptCards' // a prompt pad whose words come from card backs (utils/cardBacks)
 
 export interface TextStyle {
   fontSize: number       // in px (base, before zoom scaling)
@@ -202,6 +204,8 @@ const DEFAULT_HEIGHTS: Record<FreeNodeType, number> = {
   filmMixer: 860,
   storyline: 0,   // its box is its lines' (utils/storyline)
   roughCut: 562,
+  attributes: 760,
+  promptCards: 720,
 }
 const DEFAULT_WIDTHS: Partial<Record<FreeNodeType, number>> = {
   audio: 260,
@@ -219,6 +223,8 @@ const DEFAULT_WIDTHS: Partial<Record<FreeNodeType, number>> = {
   cabinet: 320,
   filmMixer: 1240,  // the button sizes it to the screen (openFilmMixer)
   roughCut: 1400,   // and so does this one's (openRoughCut)
+  attributes: 1180,
+  promptCards: 980,
 }
 
 /** A new free node's size before any zoom compensation. addFreeNode makes
@@ -331,6 +337,7 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
       list: 'List', pool: 'Media Pool', prompt: 'Prompt Pad', history: 'History',
       effect: 'Effect', rail: 'Loop strip', cabinet: 'Project cabinet', filmMixer: 'Film Look',
       storyline: 'Storyline', roughCut: 'Rough Cut',
+      attributes: 'Attributes', promptCards: 'Card Prompts',
     }
     const node: FreeNodeData = {
       id, x, y,

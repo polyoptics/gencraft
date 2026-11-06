@@ -33,7 +33,7 @@ const ALL_KINDS: HistoryKind[] = ['prompt', 'view', 'folder', 'place']
 
 /** Which kinds a neighbouring panel implies. */
 function kindsForNeighbour(type: string): HistoryKind[] {
-  if (type === 'prompt') return ['prompt']
+  if (type === 'prompt' || type === 'promptCards') return ['prompt']
   if (type === 'pool') return ['folder']
   if (type === 'list') return ['view', 'place']
   return []
@@ -85,7 +85,7 @@ export const HistoryPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
   /** Replay: hand the entry back to the attached app, or to the canvas. */
   const replay = (e: HistoryEntry) => {
     const hostNode = host as { id: string; type: string } | null
-    if (e.kind === 'prompt' && hostNode?.type === 'prompt') {
+    if (e.kind === 'prompt' && (hostNode?.type === 'prompt' || hostNode?.type === 'promptCards')) {
       updateFreeNode(hostNode.id, { text: e.prompt ?? e.label })
       return
     }

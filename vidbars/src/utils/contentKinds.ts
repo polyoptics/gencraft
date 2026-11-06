@@ -19,6 +19,7 @@ import type { ProjectGroup, BoardData } from '../store/boardsStore'
 import type { FreeNodeData } from '../store/freeNodeStore'
 import { getMediaItems } from '../types/bar'
 import { EFFECTS, EFFECT_ORDER, effectKindOf, type EffectKind } from './fx/effects'
+import { CARD_TYPES, cardTypeOf } from './cardTypes'
 
 export type ContentKind = 'model' | 'image' | 'video' | 'audio' | 'text'
 
@@ -46,6 +47,20 @@ export function formatListQuerySummary(q: ListQuery): string {
   const kind = q.kind === 'all' ? 'All' : KIND_LABELS[q.kind]
   const query = q.query.trim()
   return query ? `${kind} · “${query}”` : kind
+}
+
+/** Does a card answer a search? Its name holds the words, or the words
+ *  name its card type: "character" or "characters" finds every character
+ *  card, so the Card Browser can be filtered to one type (and feed that
+ *  type to a window magneted to it, utils/cardBacks). An empty search
+ *  matches every card. */
+export function groupMatchesQuery(g: ProjectGroup, query: string): boolean {
+  const q = query.trim().toLowerCase()
+  if (!q) return true
+  if ((g.name || '').toLowerCase().includes(q)) return true
+  if (q.length < 3) return false
+  const type = CARD_TYPES[cardTypeOf(g)].label.toLowerCase()
+  return type.startsWith(q) || q.startsWith(type)
 }
 
 /** True iff the group's OWN boards hold content of `kind`. */

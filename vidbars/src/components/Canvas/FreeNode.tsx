@@ -30,6 +30,8 @@ import { RoughCutBody } from '../RoughCut/RoughCutBody'
 import { FILM_MIXER_ASPECT, FilmLayersSpacing, FilmLayersToggle, FilmMixerBody } from '../FilmMixer/FilmMixerBody'
 import { MediaPool } from '../Pool/MediaPool'
 import { PromptPad } from '../Prompt/PromptPad'
+import { AttributesWindow } from '../CardBacks/AttributesWindow'
+import { CardPromptPad } from '../CardBacks/CardPromptPad'
 import { HistoryPanel } from '../History/HistoryPanel'
 import { PinControl } from '../UI/PinControl'
 import { DragOutGrip } from '../UI/DragOutGrip'
@@ -1916,6 +1918,13 @@ const FreeNodeBody: React.FC<{
     return (
       <CanvasUnits w={bodyW} h={bodyH} r={bodyR}><div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
         <PromptPad nodeId={id} />
+      </div></CanvasUnits>
+    )
+  }
+  if (node.type === 'attributes' || node.type === 'promptCards') {
+    return (
+      <CanvasUnits w={bodyW} h={bodyH} r={bodyR}><div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
+        {node.type === 'attributes' ? <AttributesWindow nodeId={id} /> : <CardPromptPad nodeId={id} />}
       </div></CanvasUnits>
     )
   }

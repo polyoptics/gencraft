@@ -30,7 +30,7 @@ import { openFilmMixer, filmMixerSize } from '../components/FilmMixer/FilmMixerB
 import { openRoughCut, roughCutSize } from '../components/RoughCut/RoughCutBody'
 import { createLoopStrip, loopStripSize } from './fx/createEffect'
 
-export type PlaceKind = 'viewer' | 'pool' | 'prompt' | 'history' | 'browser' | 'filmMixer' | 'storyline' | 'cabinet' | 'roughCut' | 'loopStrip' | 'new'
+export type PlaceKind = 'viewer' | 'pool' | 'prompt' | 'history' | 'browser' | 'filmMixer' | 'storyline' | 'cabinet' | 'roughCut' | 'loopStrip' | 'attributes' | 'promptCards' | 'new'
 
 interface PlaceState {
   /** What is being placed, or null. */

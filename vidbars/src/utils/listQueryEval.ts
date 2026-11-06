@@ -12,7 +12,7 @@ import type { ProjectGroup, BoardData } from '../store/boardsStore'
 import type { FreeNodeData } from '../store/freeNodeStore'
 import {
   type ListQuery, groupHasContentOfKind, freeNodeInResults,
-  hasRenderableContent, sortGroups, sortFreeNodes,
+  hasRenderableContent, sortGroups, sortFreeNodes, groupMatchesQuery,
 } from './contentKinds'
 
 export interface ListQueryResult {
@@ -30,7 +30,7 @@ export function evaluateListQuery(
 
   const matchedGroups = groups.filter(g =>
     hasRenderableContent(g, boards) &&
-    (!query || (g.name || '').toLowerCase().includes(query)) &&
+    groupMatchesQuery(g, query) &&
     (q.kind === 'all' || groupHasContentOfKind(g, boards, q.kind)))
 
   // freeNodeInResults is the Rolodex's own tile rule (Tiles on: any match;

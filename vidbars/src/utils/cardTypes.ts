@@ -25,7 +25,7 @@ export interface CardDetail {
   collapsed?: boolean
 }
 
-export type CardType = 'element' | 'character' | 'faction' | 'family' | 'location' | 'prop' | 'audio' | 'scene'
+export type CardType = 'element' | 'character' | 'faction' | 'family' | 'location' | 'prop' | 'audio' | 'scene' | 'prompt'
 
 export interface CardTypeInfo {
   label: string
@@ -49,6 +49,10 @@ export const CARD_TYPES: Record<CardType, CardTypeInfo> = {
   prop:      { label: 'Prop',      color: '#2f64c9', details: ['Kind', 'Ammo', 'Capacity', 'Owner'] },
   audio:     { label: 'Audio',     color: '#b0478a', details: ['Artist', 'Length', 'Tempo', 'Key', 'Mood'] },
   scene:     { label: 'Scene',     color: '#c9962a', details: ['Act', 'Location', 'Time of day', 'Mood'] },
+  // A card of prompt words (2026-11-06): each detail a group of them, its
+  // value the words, comma separated. The card Prompt Pad deals them out
+  // as tags.
+  prompt:    { label: 'Prompt',    color: '#1f9bb4', details: ['Subject', 'Framing', 'Lighting', 'Lens', 'Mood', 'Style'] },
 }
 export const CARD_TYPE_ORDER = Object.keys(CARD_TYPES) as CardType[]
 

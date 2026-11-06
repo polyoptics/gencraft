@@ -58,6 +58,9 @@ export function addFreeNodeCentered(
   useFreeNodeStore.getState().updateFreeNode(id, {
     width: w, height: h, x: cx - w / 2, y: cy - h / 2,
     ...(type === 'pool' ? { uiScale: poolUiScale(zoom) } : {}),
+    // Its contents scale with it, like a photograph (PanelSurface ContentScaled),
+    // so they open at the size the window opens at.
+    ...(type === 'attributes' || type === 'promptCards' ? { uiScale: clampUiScale(createScaleFor(zoom)) } : {}),
   })
   return id
 }

@@ -162,6 +162,26 @@ const IcBrowser: React.FC<SvgProps> = ({ size }) => (
   </svg>
 )
 
+/** Attributes — a card's back: its rows side by side with how many cards
+ *  share each. Accent: the share bars. */
+const IcAttributes: React.FC<SvgProps> = ({ size }) => (
+  <svg {...svgBase(size)}>
+    <rect x="3" y="3.5" width="18" height="17" rx="2.4" stroke={S} />
+    <path d="M6.5 8h3.5M6.5 12h3.5M6.5 16h3.5" stroke={S} strokeWidth="1.6" />
+    <path d="M12.5 8h5M12.5 12h3.4M12.5 16h1.8" stroke={A.violet} strokeWidth="2.4" />
+  </svg>
+)
+
+/** Card Prompts — a prompt pad fed by a card. Accent: the card's words. */
+const IcCardPrompt: React.FC<SvgProps> = ({ size }) => (
+  <svg {...svgBase(size)}>
+    <rect x="9" y="3" width="12.5" height="15" rx="2.2" stroke={S} />
+    <path d="M12 7.5h6.5M12 11h4.5" stroke={S} strokeWidth="1.6" />
+    <rect x="2.5" y="9.5" width="7.5" height="11" rx="1.4" fill="#000" stroke={A.cyan} strokeWidth="1.6" />
+    <path d="M4.6 13.2h3.3M4.6 16.2h2.4" stroke={A.cyan} strokeWidth="1.5" />
+  </svg>
+)
+
 /** Effects — an effect card as it sits on the canvas: a 5:7 playing card,
  *  its effect up top and its values below. Accent: the spark, which is
  *  the effect. Opens the palette (EffectPalette) rather than adding one
@@ -231,10 +251,10 @@ const IcNewNode: React.FC<SvgProps> = ({ size }) => (
 // any button added later that isn't in it yet goes in after the one it
 // follows here.
 type BarId =
-  | 'viewer' | 'pool' | 'prompt' | 'history' | 'browser' | 'filmMixer'
+  | 'viewer' | 'pool' | 'prompt' | 'promptCards' | 'history' | 'browser' | 'attributes' | 'filmMixer'
   | 'roughCut' | 'storyline' | 'cabinet' | 'loopStrip' | 'effects' | 'new'
 const DEFAULT_ORDER: BarId[] = [
-  'viewer', 'pool', 'prompt', 'history', 'browser', 'filmMixer',
+  'viewer', 'pool', 'prompt', 'promptCards', 'history', 'browser', 'attributes', 'filmMixer',
   'roughCut', 'storyline', 'cabinet', 'loopStrip', 'effects', 'new',
 ]
 const ORDER_KEY = 'vidbars.topIconBar.order'
@@ -331,8 +351,10 @@ export const TopIconBar: React.FC = () => {
     viewer: <IconButton Icon={IcViewer} title="Viewer — a window for models, video and images" {...place('viewer')} />,
     pool: <IconButton Icon={IcPool} title="Media Pool — a folder on disk" {...place('pool')} />,
     prompt: <IconButton Icon={IcPrompt} title="Prompt Pad" {...place('prompt')} />,
+    promptCards: <IconButton Icon={IcCardPrompt} title="Card Prompts — a Prompt Pad whose words come from the backs of the cards docked on it" {...place('promptCards')} />,
     history: <IconButton Icon={IcHistory} title="History" {...place('history')} />,
     browser: <IconButton Icon={IcBrowser} title="Card Browser — leaf through every card in the project" {...place('browser')} />,
+    attributes: <IconButton Icon={IcAttributes} title="Attributes — the backs of the cards docked on it, side by side: which details they share, the outliers, every value" {...place('attributes')} />,
     filmMixer: (
       <IconButton
         Icon={IcFilm}
