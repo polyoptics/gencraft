@@ -230,6 +230,9 @@ export function bakeStoryline(nodeId: string, cardsOf: CardsOfDots): string | nu
   useBoardsStore.setState(s => ({
     groups: s.groups.map(g => {
       if (g.id !== cardId) return g
+      // A family's tree (utils/familySpine) folds back in as its chart
+      // only: kin, not command, so no reporting lines or sections.
+      if (g.cardType === 'family') return { ...g, chart, linkedGroupIds: [...new Set([...(g.linkedGroupIds ?? []).filter(x => !old.has(x)), ...members])] }
       const tree: Record<string, string[]> = { ...(g.reportsTo ?? {}) }
       for (const t of tiers) for (const c of t.cards.slice(1)) if (!(tree[c] ?? []).some(b => t.cards.includes(b)) && !isAbove({ ...g, reportsTo: tree }, c, t.cards[0])) tree[c] = [t.cards[0]]
       const kept = (g.factionGroups ?? []).map(x => ({ ...x, cards: x.cards.filter(c => !onMasters.has(c) && !old.has(c)) })).filter(x => x.cards.length)

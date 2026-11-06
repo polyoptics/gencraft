@@ -70,6 +70,7 @@ import { CARD_TYPES, CARD_TYPE_ORDER, cardTypeOf, factionMembers, typeColor, typ
 import { nameKindOf } from '../../utils/fillDetails'
 import { copiedFaceStyle, copyFaceStyle, fillFields } from '../../utils/faceStyle'
 import { showFactionTree } from '../../utils/factionTree'
+import { showFamilyTree } from '../../utils/familySpine'
 import { bakeStoryline, chartArea, chartOutOf, chartSpotBeside, recallChart, setChartSpot } from '../../utils/chartCard'
 import { cardOrigins } from '../Canvas/StorylineLayer'
 import { rowOf, setRows } from '../../utils/primaryCard'
@@ -215,6 +216,12 @@ const CardContextMenu: React.FC<{
     // Out already (it bakes back in from here): not twice.
     if (group.cardType === 'faction' && group.linkedGroupIds?.length && !group.chart && !chartOutOf(group.id)) menuItems.push({ label: 'Show as a tree on a storyline', icon: '🌳', action: () => {
       showFactionTree(group.id)
+      onClose()
+    }})
+    // A family: its own layout, one trunk down with the children either
+    // side of it (utils/familySpine).
+    if (group.cardType === 'family' && group.linkedGroupIds?.length && !group.chart && !chartOutOf(group.id)) menuItems.push({ label: 'Show as a tree on a storyline', icon: '🌳', action: () => {
+      showFamilyTree(group.id)
       onClose()
     }})
     // A chart baked into it: out where it was, with linked cards; or,
