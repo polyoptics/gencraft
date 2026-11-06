@@ -4180,6 +4180,22 @@ const DeckAffordance: React.FC<{ cluster: string[]; front: Deck | 'card' | null;
         onPointerEnter={() => setIsHovered(true)}
         onPointerLeave={() => setIsHovered(false)}
         onPointerDown={onClusterDragDown}
+        // Right-click: the menu of the card (or closed deck) under this
+        // zone, as if the zone were not there (Brian 2026-11-06: an open
+        // deck's primary card had no menu, so no Paste style).
+        onContextMenu={e => {
+          const under = front && front !== 'card'
+            ? document.querySelector(`[data-group-card][data-id="${front.anchorGroupId}"]`)
+            : document.querySelector(`[data-layer-card="${primary.gid}"]`)
+          if (!under) return
+          e.preventDefault()
+          e.stopPropagation()
+          under.dispatchEvent(new MouseEvent('contextmenu', {
+            bubbles: true, cancelable: true, composed: true, view: window, button: 2,
+            clientX: e.clientX, clientY: e.clientY, screenX: e.screenX, screenY: e.screenY,
+            altKey: e.altKey, ctrlKey: e.ctrlKey, shiftKey: e.shiftKey, metaKey: e.metaKey,
+          }))
+        }}
         onDoubleClick={e => {
           e.stopPropagation()
           useUndoCoordinator.getState().checkpoint()
