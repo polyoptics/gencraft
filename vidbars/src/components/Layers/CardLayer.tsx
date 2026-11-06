@@ -39,6 +39,7 @@ import { SceneFace } from './SceneFace'
 import { useFxStore } from '../../store/fxStore'
 import { cardStripId } from '../../utils/fx/cardStrips'
 import { cardHitAt } from '../../utils/cardContent'
+import { canReplace, replaceCard, showReplaceHint } from '../../utils/replaceCard'
 import { withGroupAdded } from '../../utils/factionGroups'
 import { FaceCut } from '../RoughCut/FaceCut'
 import { CUT_ASPECT } from '../../utils/cutCard'
@@ -806,8 +807,30 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
     // A card on a loop strip is lifted off its column as the drag starts
     // (utils/railCards), so the strip stops holding it in place.
     let railLifted = false
+    // Over a card charts show, a hint: let go with Shift held and this card
+    // replaces it in all of them (utils/replaceCard). Only a single card.
+    const swapping = draggingIds.length === 1 && !group.pin
+    let swapAt: { x: number; y: number; oldId: string } | null = null
+    const swapTargetAt = (x: number, y: number): string | null => {
+      if (!swapping) return null
+      const hit = cardHitAt(document.elementsFromPoint(x, y).filter(el => {
+        const c = (el as HTMLElement).closest?.('[data-layer-card]') as HTMLElement | null
+        return !(c && draggingSet.has(c.dataset.layerCard ?? ''))
+      }))
+      const id = hit && 'groupId' in hit ? hit.groupId : null
+      return id && canReplace(useBoardsStore.getState().groups, group.id, id) ? id : null
+    }
+    const onSwapKey = (ev: KeyboardEvent) => {
+      if (ev.key === 'Shift' && swapAt) showReplaceHint({ ...swapAt, shift: ev.type === 'keydown' })
+    }
+    if (swapping) { window.addEventListener('keydown', onSwapKey); window.addEventListener('keyup', onSwapKey) }
     const onMove = (ev: PointerEvent) => {
       if (!railLifted) { railLifted = true; liftDockedCards(draggingIds) }
+      if (swapping) {
+        const oldId = swapTargetAt(ev.clientX, ev.clientY)
+        swapAt = oldId ? { x: ev.clientX, y: ev.clientY, oldId } : null
+        showReplaceHint(swapAt && { ...swapAt, shift: ev.shiftKey })
+      }
       // A PINNED card lives in screen space: its position IS the pin anchor,
       // while originX/originY are the home it returns to. Moving the origin
       // would slide it away from its own anchor — and since the frozen camera
@@ -867,6 +890,21 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
       // began. The press took the checkpoint: one undo puts it all back.
       useCabinetUi.getState().setAim(null)
       const moved = dxAccum !== 0 || dyAccum !== 0
+      // Let go with Shift held over a card charts show: this card replaces
+      // it, in its place and in every chart (utils/replaceCard). A plain
+      // drop never does. The press took the checkpoint: one undo.
+      if (swapping) {
+        window.removeEventListener('keydown', onSwapKey)
+        window.removeEventListener('keyup', onSwapKey)
+        showReplaceHint(null)
+        const oldId = moved && ev.shiftKey ? swapTargetAt(ev.clientX, ev.clientY) : null
+        if (oldId && replaceCard(oldId, group.id, { x: initialOriginX, y: initialOriginY })) {
+          previewCardRail(null, group.id)
+          endDockedDrag(draggingIds, false)
+          useMagnetPreviewStore.getState().setPreview(null)
+          return
+        }
+      }
       const drawer = !group.pin && moved ? cabinetDrawerAt(ev.clientX, ev.clientY, draggingIds) : null
       if (drawer) {
         previewCardRail(null, group.id)
