@@ -17,7 +17,7 @@ import { useViewport3DStore } from '../../store/viewport3dStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { usePlacing, togglePlacing } from '../../utils/placeTool'
 import { areaAt } from '../../utils/areaFollow'
-import { curveBounds } from '../../utils/curveGeom'
+import { curveBounds, curvePoints } from '../../utils/curveGeom'
 import { useCurveDraft } from '../../utils/notesTool'
 
 const S = 'rgba(228,234,255,0.92)'
@@ -27,6 +27,12 @@ type Ic = React.FC<{ size?: number; color?: string }>
 const svg = (size: number) => ({ width: size, height: size, viewBox: '0 0 24 24', fill: 'none', strokeWidth: 2, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const })
 const IcCurve: Ic = ({ size = 20 }) => (
   <svg {...svg(size)}><path d="M4 18C6 8 12 5 20 6" stroke={S} /><circle cx="4" cy="18" r="1.8" fill="#4fc3ff" stroke="none" /><circle cx="20" cy="6" r="1.8" fill="#4fc3ff" stroke="none" /><path d="M10 10.5l3.6-3.4" stroke="#4fc3ff" strokeWidth="1.4" /></svg>
+)
+const IcSelect: Ic = ({ size = 20 }) => (
+  <svg {...svg(size)}><path d="M6 3.5l11.5 9-5.2.9 3 5.6-2.4 1.3-3-5.6-3.9 3.6z" stroke={S} strokeWidth="1.6" /></svg>
+)
+const IcSmooth: Ic = ({ size = 20 }) => (
+  <svg {...svg(size)}><path d="M3 16c3-9 6-9 9-4s6 5 9-4" stroke={S} /><circle cx="3" cy="16" r="1.8" fill="#4fc3ff" stroke="none" /><circle cx="12" cy="12" r="1.8" fill="#4fc3ff" stroke="none" /><circle cx="21" cy="8" r="1.8" fill="#4fc3ff" stroke="none" /></svg>
 )
 const IcPen: Ic = ({ size = 20 }) => (
   <svg {...svg(size)}><path d="M4 20c3-1 4-4 6-4s2 3 5 2 4-5 5-7" stroke="#ff8fd1" /><path d="M14.5 4.5l3 3L10 15l-3.6.6.6-3.6z" stroke={S} strokeWidth="1.6" /></svg>
@@ -60,6 +66,8 @@ const TOOLS: { id: NotesTool; Icon: Ic; name: string; tip: string }[] = [
   { id: 'pen', Icon: IcPen, name: 'Pen', tip: 'Pen: freehand. Over a model in 3D it draws on the model’s surface; anywhere else on the canvas.' },
   { id: 'pin', Icon: IcPin, name: 'Pin', tip: 'Pin: click a model in 3D to pin a note on it. Each pin gets a Note card, and the model gets an Annotation card.' },
 ]
+
+const SMOOTH_TIP = 'Smooth: on or off. On, a curve runs smoothly through its points by itself, no handles to set; drag the points to reshape it. Also sets the selected curves.'
 
 const Section: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
   <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -240,6 +248,7 @@ export const NotesPanel: React.FC = () => {
   const width = useNotesUi(s => s.width)
   const arrowStart = useNotesUi(s => s.arrowStart)
   const arrowEnd = useNotesUi(s => s.arrowEnd)
+  const smooth = useNotesUi(s => s.smooth)
   const selected = useNotesUi(s => s.selected)
   const placing = usePlacing(s => s.kind)
   const drawing = useCurveDraft(s => !!s.curve)
@@ -255,12 +264,32 @@ export const NotesPanel: React.FC = () => {
     for (const id of ids) ns.updateCurve(id, patch)
   }
 
-  const toolBtns = TOOLS.map(t => (
+  /** Smooth on or off, and the same on the selected curves (turned off, a
+   *  curve keeps its shape: the handles it ran on become its own). */
+  const setSmooth = (on: boolean) => {
+    useNotesUi.setState({ smooth: on })
+    const ns = useNotesStore.getState()
+    const ids = selected.filter(id => ns.curves[id]?.kind === 'bezier' && !!ns.curves[id].smooth !== on)
+    if (!ids.length) return
+    useUndoCoordinator.getState().checkpoint()
+    for (const id of ids) {
+      const c = ns.curves[id]
+      ns.updateCurve(id, on ? { smooth: true } : { smooth: false, pts: curvePoints(c) })
+    }
+  }
+  const selectBtn = (
+    <button key="select" style={btnStyle(!tool, !folded)} aria-pressed={!tool}
+      title="Select: click a curve to select it (Shift adds), drag it to move it, drag its points and handles to reshape it. Delete removes. Esc also puts any tool down."
+      onClick={() => useNotesUi.setState({ tool: null, linking: null })}>
+      <IcSelect />{!folded && <span>Select</span>}
+    </button>
+  )
+  const toolBtns = [selectBtn, ...TOOLS.map(t => (
     <button key={t.id} style={btnStyle(tool === t.id, !folded)} title={t.tip} aria-pressed={tool === t.id}
       onClick={() => toggleTool(t.id)}>
       <t.Icon />{!folded && <span>{t.name}{t.id === 'curve' && drawing ? ' · drawing' : ''}</span>}
     </button>
-  ))
+  ))]
   const areaBtn = (
     <button style={btnStyle(placing === 'area', !folded)} aria-pressed={placing === 'area'}
       title="Area card: a mat on the canvas that becomes a 3D workspace. Click, then click the canvas to set it down."
@@ -296,6 +325,7 @@ export const NotesPanel: React.FC = () => {
             <div style={{ width: 24, height: 1, background: 'rgba(255,255,255,0.1)' }} />
             <button style={btnStyle(arrowStart)} aria-pressed={arrowStart} title="Arrowhead at the start" onClick={() => apply({ arrowStart: !arrowStart })}><IcArrowStart /></button>
             <button style={btnStyle(arrowEnd)} aria-pressed={arrowEnd} title="Arrowhead at the end" onClick={() => apply({ arrowEnd: !arrowEnd })}><IcArrowEnd /></button>
+            <button style={btnStyle(smooth)} aria-pressed={smooth} title={SMOOTH_TIP} onClick={() => setSmooth(!smooth)}><IcSmooth /></button>
             <div style={{ width: 20, height: 20, borderRadius: 10, background: color, border: '2px solid rgba(255,255,255,0.25)' }} title="Colour (open the panel to change)" />
             <div style={{ width: 24, height: 1, background: 'rgba(255,255,255,0.1)' }} />
             {areaBtn}
@@ -308,6 +338,9 @@ export const NotesPanel: React.FC = () => {
                 <button style={{ ...btnStyle(arrowStart, true), flex: 1 }} aria-pressed={arrowStart} onClick={() => apply({ arrowStart: !arrowStart })} title="Arrowhead at the start: on or off"><IcArrowStart /><span>Start</span></button>
                 <button style={{ ...btnStyle(arrowEnd, true), flex: 1 }} aria-pressed={arrowEnd} onClick={() => apply({ arrowEnd: !arrowEnd })} title="Arrowhead at the end: on or off"><IcArrowEnd /><span>End</span></button>
               </div>
+            </Section>
+            <Section title="CURVE">
+              <button style={btnStyle(smooth, true)} aria-pressed={smooth} onClick={() => setSmooth(!smooth)} title={SMOOTH_TIP}><IcSmooth /><span>Smooth</span></button>
             </Section>
             <Section title="COLOUR">
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(9, 1fr)', gap: 4 }}>

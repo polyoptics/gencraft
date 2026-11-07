@@ -13,8 +13,10 @@
 //  - Pen: freehand. Over a standing model in 3D it draws on the model's
 //    surface; anywhere else it draws on the canvas.
 //  - Pin: click a standing model in 3D to pin a note there (with its card).
-//  - No tool: a curve is clicked to select it (Shift adds), dragged to move
-//    it; a selected curve's points and handles drag. Delete removes.
+//  - Select (no tool): a curve is clicked to select it (Shift adds), dragged to move
+//    it; a selected curve's points and handles drag (with any tool in the
+//    hand too). Delete removes.
+//  - Smooth (panel toggle): a curve runs through its points by itself.
 
 import { create } from 'zustand'
 import { useNotesStore, useNotesUi, newNoteId, type Curve, type CurvePoint } from '../store/notesStore'
@@ -93,7 +95,8 @@ function onDown(e: PointerEvent) {
     return
   }
 
-  if (!ui.tool) { selectPress(e, target); return }
+  // A selected curve's points and handles drag whatever tool is in the hand.
+  if (!ui.tool || (!useCurveDraft.getState().curve && target.closest('[data-curve-anchor],[data-curve-handle]'))) { selectPress(e, target); return }
   if (!overCanvas(target)) return
 
   if (ui.tool === 'curve') {
@@ -114,20 +117,25 @@ function onDown(e: PointerEvent) {
       checkpoint()
       curve = {
         id: newNoteId('cv'), kind: 'bezier', pts: [], color: ui.color, width: ui.width / z,
-        arrowStart: ui.arrowStart, arrowEnd: ui.arrowEnd,
+        arrowStart: ui.arrowStart, arrowEnd: ui.arrowEnd, smooth: ui.smooth,
       }
     }
     const anchor: CurvePoint = { x: p.cx, y: p.cy }
     curve = { ...curve, pts: [...curve.pts, anchor] }
     useCurveDraft.setState({ curve, hover: null })
     const x0 = e.clientX, y0 = e.clientY
-    // Dragging out from a new point pulls its handles: a smooth point.
+    // Dragging out from a new point pulls its handles: a smooth point. On a
+    // smooth curve (no handles) the point itself goes where it is dragged.
     startDrag(ev => {
       if (Math.hypot(ev.clientX - x0, ev.clientY - y0) < 4) return
       const q = canvasPointUnder(ev.clientX, ev.clientY)
       const c = useCurveDraft.getState().curve
       if (!q || !c) return
       const last = c.pts[c.pts.length - 1]
+      if (c.smooth) {
+        useCurveDraft.setState({ curve: { ...c, pts: c.pts.slice(0, -1).concat({ x: q.cx, y: q.cy }) } })
+        return
+      }
       const hout = { x: q.cx - last.x, y: q.cy - last.y }
       const pts = c.pts.slice(0, -1).concat({ ...last, hout, hin: { x: -hout.x, y: -hout.y } })
       useCurveDraft.setState({ curve: { ...c, pts } })

@@ -32,6 +32,9 @@ export interface Curve {
   width: number
   arrowStart?: boolean
   arrowEnd?: boolean
+  /** Smooth: the line runs through its points on its own, no handles to
+   *  set (a bezier's stored handles are kept but not used). */
+  smooth?: boolean
 }
 
 /** A stroke drawn on a model's surface, in the model's own space. */
@@ -159,6 +162,8 @@ interface NotesUi {
   width: number
   arrowStart: boolean
   arrowEnd: boolean
+  /** New curves run smoothly through their points. */
+  smooth: boolean
   /** Selected curves. */
   selected: string[]
   /** A pin waiting for a card to be clicked, to link to it. */
@@ -181,6 +186,7 @@ export const useNotesUi = create<NotesUi>(() => ({
   width: saved.width ?? 3,
   arrowStart: saved.arrowStart ?? false,
   arrowEnd: saved.arrowEnd ?? true,
+  smooth: saved.smooth ?? false,
   selected: [],
   linking: null,
   focus: null,
@@ -188,7 +194,7 @@ export const useNotesUi = create<NotesUi>(() => ({
 useNotesUi.subscribe(s => {
   try {
     localStorage.setItem(UI_KEY, JSON.stringify({
-      open: s.open, collapsed: s.collapsed, color: s.color, width: s.width, arrowStart: s.arrowStart, arrowEnd: s.arrowEnd,
+      open: s.open, collapsed: s.collapsed, color: s.color, width: s.width, arrowStart: s.arrowStart, arrowEnd: s.arrowEnd, smooth: s.smooth,
     }))
   } catch { /* private window */ }
 })

@@ -31,7 +31,8 @@ const CurveShape: React.FC<{ c: Curve; zoom: number; hit: boolean; selected: boo
   )
 })
 
-/** A selected bezier's points and handles, to drag. */
+/** A selected bezier's points and handles, to drag (a smooth one has
+ *  points only: the line finds its own way through them). */
 const Handles: React.FC<{ c: Curve; zoom: number }> = ({ c, zoom }) => {
   if (c.kind !== 'bezier') return null
   const r = 5 / zoom, hr = 3.8 / zoom, sw = 1.4 / zoom
@@ -41,7 +42,7 @@ const Handles: React.FC<{ c: Curve; zoom: number }> = ({ c, zoom }) => {
         <g key={i}>
           {(['in', 'out'] as const).map(side => {
             const h = side === 'in' ? p.hin : p.hout
-            if (!h || (!h.x && !h.y)) return null
+            if (c.smooth || !h || (!h.x && !h.y)) return null
             return (
               <g key={side}>
                 <line x1={p.x} y1={p.y} x2={p.x + h.x} y2={p.y + h.y} stroke={SEL} strokeWidth={sw} />
@@ -71,7 +72,9 @@ export const CurveLayer: React.FC = () => {
   const hit = !tool
   // The next segment, to the cursor, while drawing.
   let preview: string | null = null
-  if (draft && draft.kind === 'bezier' && hover && draft.pts.length) {
+  if (draft && draft.kind === 'bezier' && hover && draft.pts.length && draft.smooth) {
+    preview = curvePath({ ...draft, closed: false, pts: [...draft.pts, hover] })
+  } else if (draft && draft.kind === 'bezier' && hover && draft.pts.length) {
     const l = draft.pts[draft.pts.length - 1]
     const c1 = { x: l.x + (l.hout?.x ?? 0), y: l.y + (l.hout?.y ?? 0) }
     preview = `M${l.x} ${l.y} C${c1.x} ${c1.y} ${hover.x} ${hover.y} ${hover.x} ${hover.y}`
@@ -84,7 +87,8 @@ export const CurveLayer: React.FC = () => {
     >
       <g transform={`translate(${pan.x} ${pan.y}) scale(${zoom})`}>
         {list.map(c => <CurveShape key={c.id} c={c} zoom={zoom} hit={hit} selected={selected.includes(c.id)} />)}
-        {!tool && list.filter(c => selected.includes(c.id)).map(c => <Handles key={`h${c.id}`} c={c} zoom={zoom} />)}
+        {/* Points drag with any tool in the hand, except mid-drawing. */}
+        {!draft && list.filter(c => selected.includes(c.id)).map(c => <Handles key={`h${c.id}`} c={c} zoom={zoom} />)}
         {draft && (
           <g opacity={0.95}>
             <CurveShape c={draft} zoom={zoom} hit={false} selected={false} />
