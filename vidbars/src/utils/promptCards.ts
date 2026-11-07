@@ -14,27 +14,28 @@ import { useUndoCoordinator } from '../store/undoCoordinator'
 
 export interface PromptPreset { name: string; rows: [string, string][] }
 
-/** Ready-made Prompt cards (Brian 2026-11-06, his words). "Old Prompt Pad
- *  words" carries over the first Prompt Pad's starting words. */
+/** Ready-made Prompt cards: Brian's own (2026-11-07), as he filled them in. */
 export const PROMPT_PRESETS: PromptPreset[] = [
-  { name: 'Audio', rows: [
-    ['Era', '70s'], ['Genre', 'sci-fi'], ['Sound', 'synthesizer, chords, arpeggiated'],
-    ['Mood', 'melancholy'], ['Texture', 'VHS'],
-  ] },
   { name: '3D generation', rows: [
-    ['Pose', 'pose the character, T-pose, arms to the side, arms straight out, legs spread, feet flat, looking forward, relaxed, neutral pose'],
+    ['Pose', 'pose the character, T-pose, arms to the side, arms straight out, A-pose, arms at 45 degrees, legs spread, feet flat, looking forward, relaxed, neutral pose, Neutral expressivity'],
     ['For 3D', 'even lighting, texture atlas, seamless'],
   ] },
-  { name: 'My style', rows: [
+  { name: 'Grids', rows: [
+    ['Number', '2x2 grid, 3x3 grid'],
+    ['Subject', 'where each cell contains, sprite, character, model, sheet'],
+    ['Framing', 'an, Isometric, Orthographic, front, back, left, right, perspective, 3/4, view, with a'],
+    ['Isolation', 'clean, black, white, transparent, no shadow, background'],
+    ['Style', 'in the same style as the reference images, blueprint, VHS, artifacts'],
+  ] },
+  { name: 'Style', rows: [
     ['Finish', 'rough hand-inked retro-futurist illustration finish, bold dark contours, scratchy linework, crosshatched shadows, painterly/cel-shaded color blocks, textured print-like surface'],
     ['Palette', 'muted pale blues, ivories and charcoals, restrained rust accents'],
     ['Avoid', 'no photoreal skin pores, no added products, no gear, no spacecraft, no weapons, no typography, no extra subjects'],
   ] },
-  { name: 'Old Prompt Pad words', rows: [
-    ['Framing', 'isometric view, orthographic view, front, back, left, right, arms out to the side, 3/4 view'],
-    ['Grids', '2x2 grid, 3x3 grid, where each cell contains, sprite sheet'],
-    ['Isolation', 'clean black background, clean white background, transparent background, no shadow'],
-    ['Style matching', 'in the same style as the reference images, flat vector, painterly, photoreal, blueprint'],
+  { name: 'Audio', rows: [
+    ['Era', '70s'], ['Genre', 'sci-fi'], ['Sound', 'synthesizer, chords, arpeggiated'],
+    ['Mood', 'melancholy, Intense, Excitement, Minimalist, Victorious, Rising, Falling'],
+    ['Texture', 'VHS, Tape delay, Analog, Artifacts, Static, hiss'],
   ] },
 ]
 

@@ -11,6 +11,7 @@ import { nearer } from '../utils/deckAway'
 import { primaryFirst } from '../utils/primaryCard'
 import { liveLocks, lockOf } from '../utils/deckLock'
 import { NLE_HEADER_CANVAS_H } from '../components/NLE/NLETimelineHeader'
+import { MIN_ZOOM } from '../store/canvasStore'
 
 /** Returns true if this group is a non-anchor member of a stacked/fanned deck (visually hidden). */
 export function isHiddenDeckMember(g: ProjectGroup): boolean {
@@ -49,6 +50,12 @@ const TOUCH_TOLERANCE = 16 // canvas units — slightly > DEFAULT_GAP (12)
 // decks a little apart merged into one).
 const TOUCH_HEADER = NLE_HEADER_CANVAS_H + 2
 const headerExtendCanvasAt = (zoom: number) => (Math.max(NLE_HEADER_CANVAS_H * zoom, 20) + 2 * zoom) / zoom
+
+/** How much taller the drawn header band is at the farthest zoom than its
+ *  own canvas size: a card docked UNDER a card-back window sits with its
+ *  drawn header below the window's foot (Brian 2026-11-07), so the window
+ *  reaches this much further down for it, the same at every zoom. */
+export const HEADER_BAND_SLACK = headerExtendCanvasAt(MIN_ZOOM) - TOUCH_HEADER
 
 /** A card's rect as touching judges it: its visual rect with the header
  *  band at its own canvas size, so the same at every zoom. Used by the

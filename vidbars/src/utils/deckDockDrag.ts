@@ -17,7 +17,7 @@ import { useFreeNodeStore } from '../store/freeNodeStore'
 import { useMagnetPreviewStore } from '../store/magnetPreviewStore'
 import { findMagnetCandidate, magnetRadiusForZoom, viewportVisualRect, type WindowRect } from './viewportDocking'
 import { collectDeckContent, defaultBrowseItem, groupHasBrowsableContent } from './contentTraversal'
-import { cardVisualRect, cardTouchRect } from '../hooks/useCardDecks'
+import { cardVisualRect } from '../hooks/useCardDecks'
 
 export function viewportWindowRects(): WindowRect[] {
   const zoom = useCanvasStore.getState().zoom
@@ -39,15 +39,6 @@ export function cardReaderRects(): WindowRect[] {
   return Object.values(useFreeNodeStore.getState().nodes)
     .filter(n => CARD_MAGNET_TYPES.has(n.type) && !n.pin)
     .map(n => ({ id: n.id, x: n.x, y: n.y, width: n.width, height: n.height }))
-}
-
-/** The group's rect as the card readers judge touching (header band at
- *  its own canvas size: the same at every zoom), or null. */
-function touchCardRect(groupId: string): { x: number; y: number; width: number; height: number } | null {
-  const bs = useBoardsStore.getState()
-  const g = bs.groups.find(x => x.id === groupId)
-  const t = g && cardTouchRect(g, bs.boards, useCanvasStore.getState().zoom)
-  return t ? { x: t.left, y: t.top, width: t.right - t.left, height: t.bottom - t.top } : null
 }
 
 /** The group's live visual card rect as an x/y/w/h rect, or null. */
@@ -75,16 +66,7 @@ export function updateDeckMagnetPreview(canDock: boolean, groupId: string): void
   if (cand) {
     const t = wins.find(w => w.id === cand.windowId)!
     const viewer = !!useViewport3DStore.getState().windows[cand.windowId]
-    const x = cand.snapped.x
-    let y = cand.snapped.y
-    // Under a card reader: its docking reads the card with the header band
-    // at its own canvas size (cardTouchRect, the same at every zoom), so the
-    // card goes where THAT rect meets the window's foot. Zoomed far out the
-    // drawn header tab overlaps the foot a little, as with decks.
-    if (!viewer && cand.edge === 'bottom') {
-      const touch = touchCardRect(groupId)
-      if (touch) y = t.y + t.height - (touch.y - rect.y)
-    }
+    const { x, y } = cand.snapped
     mp.setPreview({
       edge: cand.edge, space: 'canvas', windowId: viewer ? cand.windowId : undefined,
       x, y, width: rect.width, height: rect.height,

@@ -15,7 +15,7 @@ import { mediaShots } from './filmPlan'
 import { getMediaItems } from '../types/bar'
 import { cardFaceSize, createMediaCard, gridOrder } from './cardGrid'
 import { DOCK_TOLERANCE, rectsTouch, type Rect } from './viewportDocking'
-import { cardTouchRect } from '../hooks/useCardDecks'
+import { cardTouchRect, HEADER_BAND_SLACK } from '../hooks/useCardDecks'
 import { expandWithNestedMembers } from '../hooks/useCardDecks'
 
 /** A card's shots, in its blocks' reading order. */
@@ -48,7 +48,12 @@ export function dockedCards(node: FreeNodeData, groups: ProjectGroup[], boards: 
   const nodeRect = { x: node.x, y: node.y, width: node.width, height: node.height }
   const found = new Set<string>()
   const queue: string[] = []
-  for (const [id, r] of rects) if (rectsTouch(r, nodeRect, tol)) { found.add(id); queue.push(id) }
+  // A card under the window sits with its drawn header below the foot, so
+  // against the window itself a card reaches up by the header's slack.
+  for (const [id, r] of rects) {
+    const up = { ...r, y: r.y - HEADER_BAND_SLACK, height: r.height + HEADER_BAND_SLACK }
+    if (rectsTouch(up, nodeRect, tol)) { found.add(id); queue.push(id) }
+  }
   while (queue.length) {
     const a = rects.get(queue.shift()!)!
     for (const [id, r] of rects) {
