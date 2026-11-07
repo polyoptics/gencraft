@@ -198,7 +198,8 @@ export function useAltTiltGesture() {
       const onUp = () => {
         window.removeEventListener('pointermove', onMove, true)
         window.removeEventListener('pointerup', onUp, true)
-        if (offFlat(useTiltStore.getState()) < TILT_SNAP) useTiltStore.getState().flatten()
+        // Locked into 3D it stays where it was let go (tiltStore lock3d).
+        if (offFlat(useTiltStore.getState()) < TILT_SNAP && !useTiltStore.getState().lock3d) useTiltStore.getState().flatten()
       }
       window.addEventListener('pointermove', onMove, true)
       window.addEventListener('pointerup', onUp, true)
@@ -209,7 +210,7 @@ export function useAltTiltGesture() {
     }
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Alt') altUsed = false
-      if (e.key !== 'Escape' || !isTilted(useTiltStore.getState())) return
+      if (e.key !== 'Escape' || !isTilted(useTiltStore.getState()) || useTiltStore.getState().lock3d) return
       const t = document.activeElement as HTMLElement | null
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
       useTiltStore.getState().flatten()

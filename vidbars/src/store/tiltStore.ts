@@ -113,7 +113,17 @@ interface TiltStore {
   setFigure: (on: boolean) => void
   /** Ease back to the flat view. */
   flatten: () => void
+  /** Locked into 3D (Brian 2026-11-07): a free camera that never settles
+   *  back to the flat view. It can look straight down, turn any way and
+   *  fly up (dolly out), and the models stay standing. Off, the camera
+   *  rules are exactly as they were. Its own on/off toggle in the 3D view. */
+  lock3d: boolean
+  setLock3d: (on: boolean) => void
 }
+
+/** Locked into 3D, the camera tips no closer to flat than this (degrees):
+ *  looking straight down still counts as the 3D view. */
+export const LOCK_MIN_TILT = 0.05
 
 let flattenRaf: number | null = null
 const CONSOLE_KEY = 'vidbars.tiltConsole'
@@ -145,12 +155,13 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
     // Orbit about what is in the middle of the screen (or the pivot): the
     // ground point there stays there as the view turns or tips.
     const keep = keeping(get())
-    tilt = Math.max(-TILT_UP, Math.min(TILT_MAX, tilt))
+    const locked = get().lock3d
+    tilt = Math.max(locked ? LOCK_MIN_TILT : -TILT_UP, Math.min(TILT_MAX, tilt))
     // Tipped back any swing eases out: with the ground standing under models,
     // a swing would lean it, which reads as the camera rolling.
     const room = TILT_MAX * (1 - turntableShare(tilt))
     yaw = Math.max(-room, Math.min(room, yaw))
-    const turn = ((spin % 360) + 540) % 360 - 180, turnRoom = spinRoom(tilt)
+    const turn = ((spin % 360) + 540) % 360 - 180, turnRoom = locked ? 180 : spinRoom(tilt)
     spin = Math.max(-turnRoom, Math.min(turnRoom, turn))
     set({ tilt, spin, yaw, ...(keep ? shiftKeeping(keep.g, tilt, spin, yaw, keep.at) : {}) })
   },
@@ -162,6 +173,8 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
   setTurn: turn => set({ turn }),
   setWalls: walls => set({ walls }),
   setFigure: figure => set({ figure }),
+  lock3d: false,
+  setLock3d: lock3d => set({ lock3d }),
   flatten: () => {
     if (flattenRaf !== null) cancelAnimationFrame(flattenRaf)
     const { tilt: t0, spin: s0raw, yaw: y0 } = get()

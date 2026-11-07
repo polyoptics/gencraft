@@ -1,0 +1,59 @@
+// areaFollow.ts — what is on an Area card moves with it (Brian 2026-11-07,
+// components/Notes/AreaBody). When an Area moves (not resized), whatever lay
+// on it and did not move itself goes the same way: tiles and models (other
+// Areas too, with what is on them), cards, Viewers and the curves drawn
+// wholly on it. "On it" is where it lies: its middle inside the Area.
+
+import { useFreeNodeStore, type FreeNodeData } from '../store/freeNodeStore'
+import { useBoardsStore } from '../store/boardsStore'
+import { useViewport3DStore } from '../store/viewport3dStore'
+import { useNotesStore } from '../store/notesStore'
+
+type R = { x: number; y: number; width: number; height: number }
+const inside = (a: R, px: number, py: number) => px >= a.x && px <= a.x + a.width && py >= a.y && py <= a.y + a.height
+
+/** The Area each thing lies on (the smallest, for nested ones), or null. */
+export function areaAt(nodes: Record<string, FreeNodeData>, px: number, py: number, not?: string): FreeNodeData | null {
+  let best: FreeNodeData | null = null
+  for (const n of Object.values(nodes)) {
+    if (n.type !== 'area' || n.id === not || n.pin || !inside(n, px, py)) continue
+    if (!best || n.width * n.height < best.width * best.height) best = n
+  }
+  return best
+}
+
+let busy = false
+if (typeof window !== 'undefined' && !(window as unknown as { __areaFollow?: boolean }).__areaFollow) {
+  (window as unknown as { __areaFollow?: boolean }).__areaFollow = true
+  useFreeNodeStore.subscribe((s, prev) => {
+    if (busy || s.nodes === prev.nodes) return
+    for (const a of Object.values(s.nodes)) {
+      if (a.type !== 'area' || a.pin) continue
+      const was = prev.nodes[a.id]
+      if (!was || (was.x === a.x && was.y === a.y) || was.width !== a.width || was.height !== a.height) continue
+      const dx = a.x - was.x, dy = a.y - was.y
+      // What lay on it and stayed put (a selection dragged along with it
+      // has already moved).
+      const tiles = Object.values(prev.nodes).filter(n => {
+        if (n.id === a.id || n.pin || n.railDock || n.tileDeck && n.tileDeck.anchor !== n.id) return false
+        const now = s.nodes[n.id]
+        if (!now || now.x !== n.x || now.y !== n.y) return false
+        return inside(was, n.x + n.width / 2, n.y + n.height / 2)
+      }).map(n => n.id)
+      busy = true
+      try {
+        if (tiles.length) useFreeNodeStore.getState().moveManyFreeNodes(tiles, dx, dy)
+        const bs = useBoardsStore.getState()
+        const cards = bs.groups.filter(g => !g.pin && inside(was, g.originX + 20, g.originY + 20))
+        if (cards.length) bs.setGroupPosBatch(cards.map(g => ({ groupId: g.id, originY: g.originY + dy, originX: g.originX + dx })))
+        const v3 = useViewport3DStore.getState()
+        for (const w of Object.values(v3.windows)) {
+          if (inside(was, w.x + w.width / 2, w.y + w.height / 2)) v3.updateWindow(w.id, { x: w.x + dx, y: w.y + dy })
+        }
+        const ns = useNotesStore.getState()
+        const curves = Object.values(ns.curves).filter(c => c.pts.length && c.pts.every(p => inside(was, p.x, p.y))).map(c => c.id)
+        if (curves.length) ns.moveCurves(curves, dx, dy)
+      } finally { busy = false }
+    }
+  })
+}

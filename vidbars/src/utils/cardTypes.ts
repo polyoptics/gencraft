@@ -33,7 +33,7 @@ export interface CardDetail {
   collapsed?: boolean
 }
 
-export type CardType = 'element' | 'character' | 'faction' | 'family' | 'location' | 'prop' | 'audio' | 'scene' | 'prompt'
+export type CardType = 'element' | 'character' | 'faction' | 'family' | 'location' | 'prop' | 'audio' | 'scene' | 'prompt' | 'note'
 
 export interface CardTypeInfo {
   label: string
@@ -61,6 +61,9 @@ export const CARD_TYPES: Record<CardType, CardTypeInfo> = {
   // value the words, comma separated. The card Prompt Pad deals them out
   // as tags.
   prompt:    { label: 'Prompt',    color: '#1f9bb4', details: ['Subject', 'Framing', 'Lighting', 'Lens', 'Mood', 'Style'] },
+  // A note (2026-11-07): what a pin on a model says, and where it stands.
+  // Every pin on a model is backed by one (store/notesStore).
+  note:      { label: 'Note',      color: '#e0a23a', details: ['Note', 'Status', 'Model'] },
 }
 export const CARD_TYPE_ORDER = Object.keys(CARD_TYPES) as CardType[]
 

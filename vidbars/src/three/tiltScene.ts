@@ -14,6 +14,8 @@ import { acquireModel, releaseModel, disposeInstance } from './modelCache'
 import { computePosedBounds } from './orbitState'
 import { createLook, applyLook, disposeLook, type LookInstance, type ModelShade } from './modelLook'
 import { TILT_PERSPECTIVE, DEFAULT_LIGHT, type TiltLight } from '../store/tiltStore'
+import { createNotesOverlay, type NotesHost } from './notesOverlay'
+import type { ModelNotes } from '../store/notesStore'
 
 const DEFAULT_SHADOWS = DEFAULT_LIGHT.shadows, DEFAULT_SHEEN = DEFAULT_LIGHT.sheen
 /** How long a model's pop onto a Viewer takes. */
@@ -169,6 +171,11 @@ export interface TiltFrameState {
    *  1 → 0 as it lies flat again), eased: the sheen and models follow it.
    *  The raised parts come already scaled by it. */
   fade: number
+  /** The 3D notes on a model file (store/notesStore): strokes and pins. */
+  notesOf?: (url: string) => ModelNotes | undefined
+  /** Locked into 3D (tiltStore lock3d): models stay standing however far
+   *  the camera looks down. */
+  lock?: boolean
 }
 
 /** How long a model turned by hand takes to roll back (ms). */
@@ -418,6 +425,9 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
 
   const standing = new Map<string, Standing>()
   let frameNo = 0
+  // The 3D notes on the models (three/notesOverlay).
+  const notes = createNotesOverlay()
+  const notesHost = (s: Standing): NotesHost => ({ url: s.url, inst: s.inst, visible: s.stand.visible, body: s.turn })
 
   const spawn = (key: string, url: string): Standing => {
     const stand = new THREE.Group()
@@ -486,6 +496,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     s.wall.geometry.dispose()
     if (s.inst) { disposeInstance(s.inst); releaseModel(s.url) }
     if (s.look) disposeLook(s.look)
+    notes.forget(key)
     standing.delete(key)
   }
 
@@ -935,7 +946,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     // hanging behind them. The swing lowers them again smoothly.
     const off = Math.max(Math.abs(st.tilt), Math.abs(st.yaw))
     const swingK = Math.min(1, Math.abs(st.yaw) / 35)
-    const rise = Math.min(1, Math.max(0, (st.tilt - 4) / 26)) * (1 - swingK * swingK * (3 - 2 * swingK))
+    const rise = st.lock ? 1 : Math.min(1, Math.max(0, (st.tilt - 4) / 26)) * (1 - swingK * swingK * (3 - 2 * swingK))
     const ease = rise * rise * (3 - 2 * rise)
     const keep = new Set<string>()
     for (const tg of targets) {
@@ -1117,6 +1128,11 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     liftCatch.visible = decoKey.castShadow
     renderer.render(deco, camera)
     if (into) { renderer.setRenderTarget(null); return }
+    {
+      const hosts = new Map<string, NotesHost>()
+      for (const [key, s] of standing) hosts.set(key, notesHost(s))
+      notes.render(renderer, camera, hosts, st.notesOf, st.fade, W, H)
+    }
 
     // Outlines: paint the silhouettes into a mask, then ring them.
     const outlined = [...standing.entries()].filter(([key, s]) =>
@@ -1256,6 +1272,16 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     frame(performance.now(), W, H, targets, { ...st, tilt: 30, shiftX: 0, shiftY: 0 }, warmRT)
   }
 
+  /** Where the cursor at (x, y) (px on the canvas) meets model `key`'s
+   *  surface, in the model's own space, and how big the model is there
+   *  (its diagonal, model units). */
+  function surfaceAt(key: string, x: number, y: number) {
+    const s = standing.get(key)
+    if (!s || !s.inst || !lastW) return null
+    const hit = notes.surfaceAt(camera, lastW, lastH, notesHost(s), x, y)
+    return hit && { url: s.url, p: hit.p, n: hit.n, size: s.size.length() }
+  }
+
   /** The url and model units per metre of a model on screen. */
   function info(key: string): { url: string; unit: number } | null {
     const s = standing.get(key)
@@ -1268,9 +1294,10 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     warmRT.dispose()
     outlineMat.dispose()
     envRT.dispose()
+    notes.dispose()
     renderer.dispose()
     renderer.forceContextLoss()
   }
 
-  return { frame, warm, pick, pickZ: () => pickedZ, info, spinBy, letGo, dispose }
+  return { frame, warm, pick, pickZ: () => pickedZ, info, spinBy, letGo, dispose, surfaceAt, pinSpots: notes.spots }
 }

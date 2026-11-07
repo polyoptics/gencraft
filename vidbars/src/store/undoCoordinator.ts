@@ -20,6 +20,7 @@ import { useViewport3DStore } from './viewport3dStore'
 import type { ViewportWindow3D } from './viewport3dStore'
 import { tileDeckIndex } from '../utils/tileDecks'
 import { create } from 'zustand'
+import { useNotesStore } from './notesStore'
 
 const LIMIT = 30
 
@@ -42,6 +43,8 @@ interface Snapshot {
   canvas: Record<string, unknown>
   freeNodes: Record<string, unknown>
   viewports3d: Record<string, ViewportWindow3D>
+  /** The 3D notes: curves, and strokes and pins on models (store/notesStore). */
+  notes?: { curves: unknown; models: unknown }
 }
 
 function snapStore(
@@ -96,6 +99,7 @@ function captureSnapshot(): Snapshot {
     // View prefs (camera, text zoom) ride IN the snapshot; restoreSnapshot
     // is what keeps them out of history — see the liveness test there.
     viewports3d: useViewport3DStore.getState().windows,
+    notes: { curves: useNotesStore.getState().curves, models: useNotesStore.getState().models },
   }
 }
 
@@ -153,6 +157,10 @@ function restoreSnapshot(snap: Snapshot) {
       : snapWin
   }
   useViewport3DStore.setState({ windows: mergedWins })
+  if (snap.notes) {
+    const ns = useNotesStore.getState()
+    useNotesStore.setState({ curves: snap.notes.curves as typeof ns.curves, models: snap.notes.models as typeof ns.models, rev: ns.rev + 1 })
+  }
 }
 
 interface UndoCoordinatorState {

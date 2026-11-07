@@ -23,6 +23,8 @@ import { useRailUiStore } from './store/railUiStore'
 import { useTiltStore } from './store/tiltStore'
 import { useCabinetUi } from './utils/cabinet'
 import { usePickMode } from './utils/cabinetPick'
+import { useNotesStore, useNotesUi } from './store/notesStore'
+import { models } from './components/Canvas/tilt/TiltModels'
 
 // Expose stores for debugging. Anything you want to OBSERVE has to be here:
 // reaching a store through a dynamic import gets a second copy of the module
@@ -36,6 +38,8 @@ import { usePickMode } from './utils/cabinetPick'
   useRailRunStore, useRailUiStore,
   // Project cabinets, and the tilted view they rise in.
   useCabinetUi, useTiltStore, usePickMode,
+  // The 3D notes tools, and the 3D view's hit test they draw through.
+  useNotesStore, useNotesUi, tiltModels: models,
 }
 
 // One card shown in several places: an edit on one is on all (utils/linkedCards).

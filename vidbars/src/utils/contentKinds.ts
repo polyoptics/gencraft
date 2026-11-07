@@ -49,7 +49,7 @@ export interface ListQuery {
  *  (they share one row, like the 3D / Img / Vid chips above them). */
 export const CARD_TYPE_SHORT: Record<CardType, string> = {
   element: 'Elm', character: 'Chr', faction: 'Fac', family: 'Fam', location: 'Loc',
-  prop: 'Prp', audio: 'Aud', scene: 'Scn', prompt: 'Pmt',
+  prop: 'Prp', audio: 'Aud', scene: 'Scn', prompt: 'Pmt', note: 'Nte',
 }
 
 /** Is the card one of the lit card types? None lit = yes. */

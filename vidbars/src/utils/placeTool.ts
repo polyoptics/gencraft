@@ -30,7 +30,7 @@ import { openFilmMixer, filmMixerSize } from '../components/FilmMixer/FilmMixerB
 import { openRoughCut, roughCutSize } from '../components/RoughCut/RoughCutBody'
 import { createLoopStrip, loopStripSize } from './fx/createEffect'
 
-export type PlaceKind = 'viewer' | 'pool' | 'prompt' | 'history' | 'browser' | 'filmMixer' | 'storyline' | 'cabinet' | 'roughCut' | 'loopStrip' | 'attributes' | 'promptCards' | 'new'
+export type PlaceKind = 'viewer' | 'pool' | 'prompt' | 'history' | 'browser' | 'filmMixer' | 'storyline' | 'cabinet' | 'roughCut' | 'loopStrip' | 'attributes' | 'promptCards' | 'area' | 'new'
 
 interface PlaceState {
   /** What is being placed, or null. */
@@ -144,7 +144,7 @@ function canvasHost(): Element | null {
 
 /** Over the canvas itself (a card, a tile, bare ground), not a pinned panel,
  *  menu, HUD or the toolbar drawn over it. */
-function overCanvas(target: EventTarget | null): boolean {
+export function overCanvas(target: EventTarget | null): boolean {
   const el = target as Element | null
   const host = canvasHost()
   if (!el?.closest || !host || !host.contains(el)) return false

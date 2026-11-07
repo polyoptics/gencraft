@@ -1,4 +1,6 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react'
+import { AnnotationCardBody } from '../Notes/AnnotationCardBody'
+import { AreaBody } from '../Notes/AreaBody'
 import ReactDOM from 'react-dom'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import type { FreeNodeData, TextStyle } from '../../store/freeNodeStore'
@@ -1272,7 +1274,10 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
   // card in flight — lifted off a column, or aimed at one — floats over the
   // cards it passes but stays UNDER the rail's drop mark (z 70): the mark is
   // always under the pointer, so beneath the card it would never show.
-  const canvasZ: number = isRailTile ? (isHovered ? 4 : 3)
+  // An Area card is the ground things are set down on: under every tile,
+  // fresh or hovered (components/Notes/AreaBody).
+  const canvasZ: number = node.type === 'area' ? 1
+    : isRailTile ? (isHovered ? 4 : 3)
     : lifted || aimingAtRail ? 65
     : docked ? (peeking ? 60 : 10 + Math.min(dockOrder, 39))
     // The newest thing on the canvas is over its neighbours until moved.
@@ -1950,6 +1955,16 @@ const FreeNodeBody: React.FC<{
       <CanvasUnits w={bodyW} h={bodyH} r={bodyR}><div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
         {node.type === 'attributes' ? <AttributesWindow nodeId={id} /> : <CardPromptPad nodeId={id} />}
       </div></CanvasUnits>
+    )
+  }
+  if (node.type === 'annotations') {
+    return (
+      <CanvasUnits w={bodyW} h={bodyH} r={bodyR}><AnnotationCardBody node={node} bodyW={bodyW} bodyH={bodyH} /></CanvasUnits>
+    )
+  }
+  if (node.type === 'area') {
+    return (
+      <CanvasUnits w={bodyW} h={bodyH} r={bodyR}><AreaBody node={node} bodyW={bodyW} bodyH={bodyH} /></CanvasUnits>
     )
   }
   if (node.type === 'roughCut') {

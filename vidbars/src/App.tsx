@@ -19,6 +19,12 @@ import { MakeCardsButton } from './components/UI/MakeCardsButton'
 import { DeckBrowserTray } from './components/DeckBrowser/DeckBrowserTray'
 import { LinkDragOverlay } from './components/Linking/LinkDragOverlay'
 import { DrawToolbar } from './components/Annotation/DrawToolbar'
+// The 3D notes and drawing tools (Brian 2026-11-07): their mouse is
+// installed when these load, ahead of the canvas's own listeners.
+import './utils/notesTool'
+import './utils/areaFollow'
+import { CurveLayer } from './components/Notes/CurveLayer'
+import { NotesPanel } from './components/Notes/NotesPanel'
 import { ensureRolodexHome, useRolodexHomeBootstrap } from './utils/rolodexHome'
 import { StoragePersistenceBanner } from './components/UI/StoragePersistenceBanner'
 import { useBoardsStore } from './store/boardsStore'
@@ -874,7 +880,7 @@ export default function App() {
         </InfiniteCanvas>
         {/* Layer overlay renders outside the canvas transform (screen-space headers/cards) */}
         {/* Tilts with the world layers when the canvas is tilted */}
-        <TiltStage><LayerOverlay /></TiltStage>
+        <TiltStage><LayerOverlay /><CurveLayer /></TiltStage>
         {/* Tilted view: pan/zoom on the plane + model cards standing up */}
         <TiltLayer />
         {/* Where Cards / Blocks / Boards begin and end — drag to retune */}
@@ -887,6 +893,7 @@ export default function App() {
 
       {/* Annotation / draw-mode floating toolbar (only visible while in draw mode) */}
       <DrawToolbar />
+      <NotesPanel />
 
       {/* The Rolodex is no longer mounted here: the home instance is an
           ordinary pinned `list` node, rendered by PinLayer → FreeNode →

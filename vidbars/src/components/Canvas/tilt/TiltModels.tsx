@@ -17,6 +17,12 @@ import { getMediaItems } from '../../../types/bar'
 import { faceBlocks } from '../../../utils/cardGrid'
 import { selectStorylinesInBox, standingStories, storyWallOf } from '../StorylineLayer'
 import { createTiltScene, ART_MAX, type TiltTarget, type TiltFrameState, type TiltSlab, type TiltArt } from '../../../three/tiltScene'
+import type { PinSpot } from '../../../three/notesOverlay'
+import { useNotesStore } from '../../../store/notesStore'
+import { PinLabels } from '../../Notes/PinLabels'
+/** The notes store as it stands (read each frame without a hook). */
+let notesNow = useNotesStore.getState()
+useNotesStore.subscribe(s => { notesNow = s })
 
 /** Most models stood up at once — they are heavy. */
 const MAX_MODELS = 12
@@ -37,7 +43,14 @@ export const models: {
   hovered: string | null
   /** Where the cursor rests over the plane with no button down, or null. */
   at: { x: number; y: number } | null
-} = { pick: null, pickZ: null, info: null, spin: null, letGo: null, hovered: null, at: null }
+  /** Where a client point meets model `key`'s surface, in its own space
+   *  (the 3D notes tools, utils/notesTool). */
+  surface: ((key: string, clientX: number, clientY: number) => { url: string; p: { x: number; y: number; z: number }; n: { x: number; y: number; z: number }; size: number } | null) | null
+  /** The pins on screen this frame (three/notesOverlay), px from the 3D
+   *  layer's top-left, and that layer. */
+  pinSpots: (() => PinSpot[]) | null
+  root: HTMLElement | null
+} = { pick: null, pickZ: null, info: null, spin: null, letGo: null, hovered: null, at: null, surface: null, pinSpots: null, root: null }
 /** A pick that lights up under the cursor: a model or a person, not
  *  furniture. */
 export const modelKey = (k: string | null | undefined) => (k && !k.startsWith('deco|') ? k : null)
@@ -49,6 +62,7 @@ export const modelKey = (k: string | null | undefined) => (k && !k.startsWith('d
 const FADE_TILT = 15
 /** How far the 3D look is in at this angle, 0..1, eased at both ends. */
 const fadeShown = () => {
+  if (useTiltStore.getState().lock3d) return 1
   const x = Math.min(1, offFlat(useTiltStore.getState()) / FADE_TILT)
   return x * x * (3 - 2 * x)
 }
@@ -70,6 +84,8 @@ const frameState = (): TiltFrameState => {
     slabs: live3d() ? collectSlabs(fadeShown()) : (dropLifts(), []),
     art: live3d() ? lastArt : [],
     fade: fadeShown(),
+    notesOf: url => notesNow.models[url],
+    lock: ts.lock3d,
   }
 }
 
@@ -219,6 +235,12 @@ export const TiltModels: React.FC = () => {
       models.info = key => v.info(key)
       models.spin = v.spinBy
       models.letGo = v.letGo
+      models.surface = (key, clientX, clientY) => {
+        const r = root.getBoundingClientRect()
+        return v.surfaceAt(key, clientX - r.left, clientY - r.top)
+      }
+      models.pinSpots = v.pinSpots
+      models.root = root
       warm()
       raf = requestAnimationFrame(frame)
     }
@@ -231,7 +253,7 @@ export const TiltModels: React.FC = () => {
       useCanvasStore.subscribe(warmSoon),
       useFreeNodeStore.subscribe(warmSoon),
       useBoardsStore.subscribe(warmSoon),
-      ...[useTiltStore, useCanvasStore, useFreeNodeStore, useBoardsStore, useViewport3DStore, useRailUiStore, useModelScaleStore].map(s => s.subscribe(poke)),
+      ...[useTiltStore, useCanvasStore, useFreeNodeStore, useBoardsStore, useViewport3DStore, useRailUiStore, useModelScaleStore, useNotesStore].map(s => s.subscribe(poke)),
     ]
     const pokes = ['pointermove', 'pointerdown', 'pointerup', 'wheel', 'keydown', 'keyup', 'resize'] as const
     for (const t of pokes) window.addEventListener(t, poke, { capture: true, passive: true })
@@ -248,11 +270,12 @@ export const TiltModels: React.FC = () => {
       cancelAnimationFrame(raf)
       post.disconnect(); marker.remove()
       models.pick = null; models.pickZ = null; models.info = null; models.spin = null; models.letGo = null
+      models.surface = null; models.pinSpots = null; models.root = null
       view?.dispose()
       canvas?.remove()
     }
   }, [])
-  return <div ref={rootRef} style={{ position: 'absolute', inset: 0, zIndex: 850, pointerEvents: 'none' }} />
+  return <div ref={rootRef} style={{ position: 'absolute', inset: 0, zIndex: 850, pointerEvents: 'none' }}><PinLabels /></div>
 }
 
 // ── Model cards ──
@@ -485,6 +508,12 @@ function collectSlabs(K = 1): TiltSlab[] {
         slab.hinge = hinge
         stand(node, hinge, zoom)
         screens.push({ id: node.dataset.viewport3d!, slab, hinge })
+      } else if (fs.nodes[node.dataset.id ?? '']?.type === 'area') {
+        // An Area card (components/Notes/AreaBody) is a tray in 3D: a low rim
+        // round its mat, a workspace the models stand in.
+        const k = detail(w)
+        if (k > 0) slab.rim = { w: Math.max(2, 10 * zoom) * k, h: Math.max(2, 14 * zoom) * k }
+        slab.color = SIDE.tray
       } else if (node.hasAttribute('data-rail')) {
         // A loop strip is a tray: a rim round its edge, its floor the face.
         // Far off (small on screen) it settles back to a plain slab.

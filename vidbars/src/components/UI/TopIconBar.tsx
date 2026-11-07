@@ -27,6 +27,7 @@ import { PromptCardMenu } from './PromptCardMenu'
 import { useZoomZone } from '../../store/zoomZonesStore'
 import { useCabinetUi } from '../../utils/cabinet'
 import { openFilmMixer, existingFilmMixer } from '../FilmMixer/FilmMixerBody'
+import { useNotesUi } from '../../store/notesStore'
 
 /** Tile edge in px. A shade over 1cm on a typical desktop monitor. */
 const TILE = 44
@@ -259,16 +260,27 @@ const IcNewNode: React.FC<SvgProps> = ({ size }) => (
   </svg>
 )
 
+/** Notes & 3D tools — a curve with an arrowhead over a pinned label.
+ *  Accent: the arrow and the pin. */
+const IcNotes: React.FC<SvgProps> = ({ size }) => (
+  <svg {...svgBase(size)}>
+    <path d="M3.5 19.5C6 11 11 9 17.5 9.5" stroke={S} />
+    <path d="M15 6.5l3 3-3.2 2.8" stroke={A.cyan} />
+    <circle cx="7" cy="7" r="2.3" fill={A.yellow} stroke="none" />
+    <path d="M13 16.5h7.5M13 19.5h5" stroke={S} strokeWidth="1.6" />
+  </svg>
+)
+
 // ── Button order ──
 // The bar's buttons by id, in the order they ship in. The saved order wins;
 // any button added later that isn't in it yet goes in after the one it
 // follows here.
 type BarId =
   | 'viewer' | 'pool' | 'prompt' | 'promptCards' | 'history' | 'browser' | 'attributes' | 'filmMixer'
-  | 'roughCut' | 'storyline' | 'cabinet' | 'loopStrip' | 'effects' | 'promptCard' | 'new'
+  | 'roughCut' | 'storyline' | 'cabinet' | 'loopStrip' | 'effects' | 'promptCard' | 'notes' | 'new'
 const DEFAULT_ORDER: BarId[] = [
   'viewer', 'pool', 'prompt', 'promptCards', 'history', 'browser', 'attributes', 'filmMixer',
-  'roughCut', 'storyline', 'cabinet', 'loopStrip', 'effects', 'promptCard', 'new',
+  'roughCut', 'storyline', 'cabinet', 'loopStrip', 'effects', 'promptCard', 'notes', 'new',
 ]
 const ORDER_KEY = 'vidbars.topIconBar.order'
 
@@ -348,6 +360,7 @@ export const TopIconBar: React.FC = () => {
 
   // What the mouse is carrying, so its button stays lit while you aim.
   const placing = usePlacing(s => s.kind)
+  const notesOpen = useNotesUi(s => s.open)
   const place = (kind: PlaceKind) => ({ onClick: () => togglePlacing(kind), active: placing === kind })
 
   // The Effects palette. Its own memoised component: this bar re-renders on
@@ -404,6 +417,8 @@ export const TopIconBar: React.FC = () => {
         onClick={() => setPcOpen(o => !o)}
       />
     ),
+    // The Notes & 3D tools panel (components/Notes/NotesPanel): lit while out.
+    notes: <IconButton Icon={IcNotes} title="Notes & 3D tools — curves, arrows, drawing on models, pins, Area cards" active={notesOpen} onClick={() => useNotesUi.setState(s => ({ open: !s.open, tool: s.open ? null : s.tool }))} />,
     new: <IconButton Icon={IcNew} title={newLabel} {...place('new')} />,
   }
 

@@ -24,6 +24,7 @@ export const TiltedView: React.FC = () => {
   const walls = useTiltStore(s => s.walls)
   const figure = useTiltStore(s => s.figure)
   const tilt = useTiltStore(offFlat)
+  const lock3d = useTiltStore(s => s.lock3d)
 
   // ── Working on the tilted plane ──
   // The browser hit-tests the tilted DOM correctly, so a press lands on the
@@ -933,7 +934,23 @@ export const TiltedView: React.FC = () => {
         <button style={btn(walls)} onClick={() => set.setWalls(!walls)} title="File name and size on a wall behind each model">Labels</button>
         <button style={btn(figure)} onClick={() => set.setFigure(!figure)} title="A 1.75 m person beside each model. Drag them up or down to set how big the model really is.">Person</button>
         <span style={{ width: 1, height: 14, background: 'rgba(255,255,255,0.12)' }} />
-        <button style={btn(true)} onClick={() => set.flatten()}>Exit 3D (Esc)</button>
+        {/* Lock into 3D (Brian 2026-11-07): its own on/off. Lit, the camera
+            is free (straight down, any turn, fly up) and never drops back
+            to the flat view; Exit 3D still takes you home. */}
+        <button
+          style={{ ...btn(lock3d), padding: '2px 6px', display: 'flex', alignItems: 'center' }}
+          onClick={() => set.setLock3d(!lock3d)}
+          aria-pressed={lock3d}
+          title="Lock into 3D: a free camera. Look straight down, turn any way, fly up, and never drop back to the flat canvas. Click again to unlock."
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" stroke={lock3d ? '#cfe0ff' : 'rgba(255,255,255,0.6)'}>
+            <path d="M12 2.8l7.5 4.2v8.4L12 19.6 4.5 15.4V7z" />
+            <path d="M4.5 7L12 11.2 19.5 7M12 11.2v8.4" opacity="0.7" />
+            <rect x="14.5" y="14" width="7" height="6" rx="1.2" fill={lock3d ? '#5fe39b' : 'rgba(19,20,31,1)'} stroke={lock3d ? '#5fe39b' : 'rgba(255,255,255,0.6)'} />
+            <path d="M16 14v-1.6a2 2 0 0 1 4 0V14" stroke={lock3d ? '#5fe39b' : 'rgba(255,255,255,0.6)'} />
+          </svg>
+        </button>
+        <button style={btn(true)} onClick={() => { if (lock3d) set.setLock3d(false); set.flatten() }}>Exit 3D (Esc)</button>
       </div>
     </div>
   )

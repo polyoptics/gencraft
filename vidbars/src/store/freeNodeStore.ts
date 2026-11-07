@@ -26,6 +26,8 @@ export type FreeNodeType =
   | 'roughCut' // clips in a row, trimmed and ordered (utils/roughCut)
   | 'attributes'  // the details on the backs of the cards fed to it, side by side (utils/cardBacks)
   | 'promptCards' // a prompt pad whose words come from card backs (utils/cardBacks)
+  | 'annotations' // a model's notes: its pins and strokes (store/notesStore)
+  | 'area'        // a mat on the canvas that is a workspace in 3D (components/Notes/AreaBody)
 
 export interface TextStyle {
   fontSize: number       // in px (base, before zoom scaling)
@@ -191,6 +193,8 @@ export interface FreeNodeData {
   textStyle?: TextStyle
   /** Annotation layer — vector strokes drawn on this node. */
   strokes?: import('../types/stroke').Stroke[]
+  /** Annotation cards: the model file whose notes it shows (store/notesStore). */
+  annotUrl?: string
 }
 
 const COLORS = ['#1e2235', '#1e3028', '#2e1e35', '#35281e', '#1e2e35', '#2e351e']
@@ -211,6 +215,8 @@ const DEFAULT_HEIGHTS: Record<FreeNodeType, number> = {
   roughCut: 562,
   attributes: 760,
   promptCards: 600,
+  annotations: 520,
+  area: 900,
 }
 const DEFAULT_WIDTHS: Partial<Record<FreeNodeType, number>> = {
   audio: 260,
@@ -230,6 +236,8 @@ const DEFAULT_WIDTHS: Partial<Record<FreeNodeType, number>> = {
   roughCut: 1400,   // and so does this one's (openRoughCut)
   attributes: 1180,
   promptCards: 1080,
+  annotations: 760,
+  area: 1400,
 }
 
 /** A new free node's size before any zoom compensation. addFreeNode makes
@@ -343,6 +351,7 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
       effect: 'Effect', rail: 'Loop strip', cabinet: 'Project cabinet', filmMixer: 'Film Look',
       storyline: 'Storyline', roughCut: 'Rough Cut',
       attributes: 'Attributes', promptCards: 'Card Prompts',
+      annotations: 'Annotations', area: 'Area',
     }
     const node: FreeNodeData = {
       id, x, y,
@@ -356,6 +365,7 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
       ...(type === 'cabinet' ? { cabinet: newCabinet() } : {}),
       ...(type === 'storyline' ? { width: 0, storyline: newStoryline() } : {}),
       ...(type === 'roughCut' ? { roughCut: { clips: [], pps: 60 } } : {}),
+      ...(type === 'area' || type === 'annotations' ? { color: '#141a28' } : {}),
     }
     set(s => ({ nodes: { ...s.nodes, [id]: node } }))
     return id
