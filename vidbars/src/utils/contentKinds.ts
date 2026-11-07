@@ -19,7 +19,7 @@ import type { ProjectGroup, BoardData } from '../store/boardsStore'
 import type { FreeNodeData } from '../store/freeNodeStore'
 import { getMediaItems } from '../types/bar'
 import { EFFECTS, EFFECT_ORDER, effectKindOf, type EffectKind } from './fx/effects'
-import { CARD_TYPES, cardTypeOf } from './cardTypes'
+import { CARD_TYPES, cardTypeOf, type CardType } from './cardTypes'
 
 export type ContentKind = 'model' | 'image' | 'video' | 'audio' | 'text'
 
@@ -40,13 +40,29 @@ export interface ListQuery {
   /** Per-instance display mode. Optional, so every list tile that exists
    *  today keeps working on the 'auto' default with no migration. */
   displayMode?: 'auto' | 'compact' | 'full'
+  /** Card types to show, each its own on/off chip. None lit = every type.
+   *  Optional, so list tiles from before it keep working unchanged. */
+  cardTypes?: CardType[]
+}
+
+/** Short names for the card-type chips in the Card Browser's filter strip
+ *  (they share one row, like the 3D / Img / Vid chips above them). */
+export const CARD_TYPE_SHORT: Record<CardType, string> = {
+  element: 'Elm', character: 'Chr', faction: 'Fac', family: 'Fam', location: 'Loc',
+  prop: 'Prp', audio: 'Aud', scene: 'Scn', prompt: 'Pmt',
+}
+
+/** Is the card one of the lit card types? None lit = yes. */
+export function groupMatchesTypes(g: ProjectGroup, types: CardType[] | undefined): boolean {
+  return !types?.length || types.includes(cardTypeOf(g))
 }
 
 /** Human summary for list-tile headers, e.g. `3D · “mech”` or `All`. */
 export function formatListQuerySummary(q: ListQuery): string {
   const kind = q.kind === 'all' ? 'All' : KIND_LABELS[q.kind]
+  const types = q.cardTypes?.length ? ` · ${q.cardTypes.map(t => CARD_TYPES[t].label).join(', ')}` : ''
   const query = q.query.trim()
-  return query ? `${kind} · “${query}”` : kind
+  return query ? `${kind}${types} · “${query}”` : `${kind}${types}`
 }
 
 /** Does a card answer a search? Its name holds the words, or the words

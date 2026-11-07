@@ -41,6 +41,7 @@ import type { FreeNodeData } from '../../store/freeNodeStore'
 import {
   type ContentKind, type ListQuery, KIND_LABELS, groupHasContentOfKind, freeNodeInResults,
   hasRenderableContent, sortGroups, sortFreeNodes, formatListQuerySummary, effectKindsForQuery, groupMatchesQuery,
+  CARD_TYPE_SHORT, groupMatchesTypes,
 } from '../../utils/contentKinds'
 import { EFFECTS, effectKindOf, type EffectKind } from '../../utils/fx/effects'
 import { createEffectCard, EFFECT_DRAG_MIME } from '../../utils/fx/createEffect'
@@ -62,6 +63,7 @@ import { ensureFontLoaded, hexToRgba } from '../UI/TextFormatToolbar'
 import { FileContextMenu } from '../UI/FileMenu'
 import { mayHaveDiskFile } from '../../hooks/useFileMenu'
 import { lyingUp, nearer } from '../../utils/deckAway'
+import { CARD_TYPES, CARD_TYPE_ORDER, typeColor, type CardType } from '../../utils/cardTypes'
 
 // Card width — uniform across active and tucked cards. The active card
 // "rises" only via vertical growth (expansion); it's never wider than
@@ -223,13 +225,14 @@ const OVERHANG_ALLOWANCE = 500
 // user drags the bottom).
 export const LIST_AREA_H_COMPACT = SLOT_PEEK_H * (VISIBLE_RADIUS * 2 + 1)
 /** Chrome above/below the list area inside an embedded panel: header
- *  (~26) + filter strip (~21) + cabinet base. Hoisted and exported so
+ *  (~26) + filter strip (~21) + card-type strip (~21) + cabinet base. Hoisted and exported so
  *  rolodexHome seeds the home panel's height from ONE definition. */
-export const EMBED_CHROME = 26 + 21 + CABINET_BAR_H
+export const EMBED_CHROME = 26 + 21 + 21 + CABINET_BAR_H
 // Stable empty array for embedded-mode collapsed ids (referential
 // stability keeps the collapsedDeckIdSet memo quiet).
 const EMPTY_IDS: string[] = []
 const EMPTY_FILES: PoolFile[] = []
+const EMPTY_TYPES: CardType[] = []
 // Small permanent height bonus on the active card even at the
 // "super-collapsed" end of the expansion range, so the user can
 // always tell which row is selected without an image / size jump.
@@ -463,6 +466,9 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
   // them into the spawned list object instead).
   const [flKindFilter, setFlKindFilter] = useState<ContentKind | 'all'>('all')
   const [flIncludeCanvasItems, setFlIncludeCanvasItems] = useState(false)
+  // Card-type chips: each type its own on/off toggle; none lit = all types.
+  const [flTypeFilter, setFlTypeFilter] = useState<CardType[]>(EMPTY_TYPES)
+  const typeColors = useBoardsStore(s => s.typeColors)
   const freeNodes = useFreeNodeStore(s => s.nodes)
   const jumpToFreeNode = useCanvasStore(s => s.jumpToFreeNode)
 
@@ -538,6 +544,10 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
   const setSearchQuery = embedded ? (v: string) => patchQuery({ query: v }) : setFlSearchQuery
   const kindFilter = embedded ? (eq?.kind ?? 'all') : flKindFilter
   const setKindFilter = embedded ? (v: ContentKind | 'all') => patchQuery({ kind: v }) : setFlKindFilter
+  const typeFilter = embedded ? (eq?.cardTypes ?? EMPTY_TYPES) : flTypeFilter
+  const setTypeFilter = embedded ? (v: CardType[]) => patchQuery({ cardTypes: v }) : setFlTypeFilter
+  const toggleType = (t: CardType) => setTypeFilter(
+    typeFilter.includes(t) ? typeFilter.filter(x => x !== t) : CARD_TYPE_ORDER.filter(x => x === t || typeFilter.includes(x)))
   const includeCanvasItems = embedded ? (eq?.includeCanvasItems ?? false) : flIncludeCanvasItems
   const setIncludeCanvasItems: React.Dispatch<React.SetStateAction<boolean>> = embedded
     ? (v => patchQuery({ includeCanvasItems: typeof v === 'function' ? v(includeCanvasItems) : v }))
@@ -594,8 +604,8 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
   // so a filtered child still surfaces its parent deck as context.
   const visibleGroups = useMemo(() => {
     const q = searchQuery.trim().toLowerCase()
-    if (!q && kindFilter === 'all') return renderableGroups
-    const nameMatch = (g: ProjectGroup) => groupMatchesQuery(g, q)
+    if (!q && kindFilter === 'all' && !typeFilter.length) return renderableGroups
+    const nameMatch = (g: ProjectGroup) => groupMatchesQuery(g, q) && groupMatchesTypes(g, typeFilter)
     const kindMatch = (g: ProjectGroup) =>
       kindFilter === 'all' || groupHasContentOfKind(g, boards, kindFilter)
     // Set of group ids that match BOTH predicates on their own.
@@ -618,7 +628,7 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
       }
     }
     return renderableGroups.filter(g => keep.has(g.id))
-  }, [renderableGroups, searchQuery, kindFilter, boards])
+  }, [renderableGroups, searchQuery, kindFilter, typeFilter, boards])
 
   // Pre-resolve hero images for every renderable group so slots can
   // show a thumbnail-sized version of the actual card image in the
@@ -946,7 +956,7 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
     // search, which used to be a harmless zero-row no-match. Clearing the
     // filter re-runs this with the full list; the drag handle still
     // clamps live via contentMaxExpansionRef.
-    if (embedded && (searchQuery.trim() || kindFilter !== 'all')) return
+    if (embedded && (searchQuery.trim() || kindFilter !== 'all' || typeFilter.length)) return
     if (rolodexExpansion > contentMaxExpansion) {
       setRolodexExpansion(contentMaxExpansion)
     }
@@ -1494,7 +1504,7 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
           The 'pseudo-cabinet' colors in the dock's styles make it read
           as a small detachable piece of the same frame. */}
       {(() => {
-        const APPROX_HEADER_H = 46   // header (26) + filter strip (~20)
+        const APPROX_HEADER_H = 67   // header (26) + filter strip (~20) + card-type strip (~21)
         const DOCK_H = 82
         const DOCK_W = 30
         const FINAL_OFFSET = 26 + 3 * SLOT_PEEK_H // 116 — beside active row
@@ -1725,7 +1735,7 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
                   useUndoCoordinator.getState().checkpoint()
                   const fns = useFreeNodeStore.getState()
                   const nid = fns.addFreeNode(cx, cy, 'list')
-                  const listQuery = { query: searchQuery.trim(), kind: kindFilter, includeCanvasItems, sortMode, view, displayMode, collapsedDeckIds: [...collapsedDeckIds] }
+                  const listQuery = { query: searchQuery.trim(), kind: kindFilter, cardTypes: [...typeFilter], includeCanvasItems, sortMode, view, displayMode, collapsedDeckIds: [...collapsedDeckIds] }
                   fns.updateFreeNode(nid, {
                     listQuery,
                     label: formatListQuerySummary(listQuery),
@@ -1778,9 +1788,8 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
                 tail section of rows. */}
           <div style={{
             display: 'flex', alignItems: 'center', gap: 2,
-            padding: '3px 6px 4px',
+            padding: '3px 6px 3px',
             background: FRAME_COLOR,
-            borderBottom: '1px solid rgba(0,0,0,0.35)',
           }}>
             {(['all', 'model', 'image', 'video', 'audio', 'text'] as const).map(k => (
               <button
@@ -1812,6 +1821,39 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
                 cursor: 'pointer', fontFamily: 'inherit',
               }}
             >Tiles</button>
+          </div>
+
+          {/* ── Card-type strip: one on/off chip per card type ──
+                Independent toggles (several can be lit); none lit shows
+                every type. Labels never change; a lit chip shows its
+                type colour along the bottom. */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 2,
+            padding: '0 6px 4px',
+            background: FRAME_COLOR,
+            borderBottom: '1px solid rgba(0,0,0,0.35)',
+          }}>
+            {CARD_TYPE_ORDER.map(t => {
+              const on = typeFilter.includes(t)
+              const col = typeColor(t, typeColors)
+              return (
+                <button
+                  key={t}
+                  onClick={() => toggleType(t)}
+                  title={`${CARD_TYPES[t].label} cards`}
+                  style={{
+                    flex: 1, minWidth: 0, overflow: 'hidden',
+                    background: on ? 'rgba(120,170,255,0.28)' : 'rgba(255,255,255,0.05)',
+                    border: `1px solid ${on ? 'rgba(140,190,255,0.55)' : 'rgba(255,255,255,0.08)'}`,
+                    boxShadow: `inset 0 -2px 0 ${on ? col : hexToRgba(col, 0.35)}`,
+                    borderRadius: 4, padding: '2px 0',
+                    color: on ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.5)',
+                    fontSize: 8, fontWeight: 700, letterSpacing: 0,
+                    cursor: 'pointer', fontFamily: 'inherit',
+                  }}
+                >{CARD_TYPE_SHORT[t]}</button>
+              )
+            })}
           </div>
 
           {/* Slot list. Cards live inside; cabinet-floor wings + bar are
@@ -1901,7 +1943,7 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
                 ? <PoolEmptyState dir={feedingPool.poolDir ?? 'public/uploads'} />
                 // A filter that matched nothing is not an empty project —
                 // "No cards yet / Place your first card" said it was.
-                : (searchQuery.trim() || kindFilter !== 'all')
+                : (searchQuery.trim() || kindFilter !== 'all' || typeFilter.length)
                   ? <NoMatchState />
                   : <EmptyState onAdd={startPlacement} />
             ) : (

@@ -17,7 +17,7 @@ import { useFreeNodeStore, type FreeNodeData } from '../store/freeNodeStore'
 import { useUndoCoordinator } from '../store/undoCoordinator'
 import { adjacentPanels } from './componentLinks'
 import { dockedCards } from './filmShots'
-import { groupMatchesQuery, groupHasContentOfKind, hasRenderableContent, sortGroups, formatListQuerySummary } from './contentKinds'
+import { groupMatchesQuery, groupMatchesTypes, groupHasContentOfKind, hasRenderableContent, sortGroups, formatListQuerySummary } from './contentKinds'
 import { detailShown, newDetailId, type CardDetail } from './cardTypes'
 
 /** What feeds a window. */
@@ -45,7 +45,7 @@ export function browserCards(list: FreeNodeData, groups: ProjectGroup[], boards:
   const kind = q.kind
   const hits = groups.filter(g =>
     hasRenderableContent(g, boards) && !g.linkOf &&
-    groupMatchesQuery(g, q.query) &&
+    groupMatchesQuery(g, q.query) && groupMatchesTypes(g, q.cardTypes) &&
     (kind === 'all' || groupHasContentOfKind(g, boards, kind)))
   return sortGroups(hits, q.sortMode)
 }
