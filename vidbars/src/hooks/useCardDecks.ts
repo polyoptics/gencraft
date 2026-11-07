@@ -50,6 +50,15 @@ const TOUCH_TOLERANCE = 16 // canvas units — slightly > DEFAULT_GAP (12)
 const TOUCH_HEADER = NLE_HEADER_CANVAS_H + 2
 const headerExtendCanvasAt = (zoom: number) => (Math.max(NLE_HEADER_CANVAS_H * zoom, 20) + 2 * zoom) / zoom
 
+/** A card's rect as touching judges it: its visual rect with the header
+ *  band at its own canvas size, so the same at every zoom. Used by the
+ *  card-back windows' docking (utils/deckDockDrag, utils/filmShots). */
+export function cardTouchRect(g: ProjectGroup, boards: Record<string, BoardData>, zoom: number): { left: number; top: number; right: number; bottom: number } | null {
+  const v = cardVisualRect(g, boards, zoom)
+  if (!v) return null
+  return { left: v.rect.left, right: v.rect.right, bottom: v.rect.bottom, top: v.rect.top + headerExtendCanvasAt(zoom) - TOUCH_HEADER }
+}
+
 /** THE card-geometry authority: a group's VISUAL card rect in canvas
  *  units — mirrors CardLayer's GroupCard exactly (per-board visual
  *  heights, card size overrides, and the zoom-dependent header extend

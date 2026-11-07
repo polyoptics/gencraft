@@ -56,7 +56,7 @@ function newPromptCard(nodeId: string): void {
   // Where it goes: left of the leftmost docked card level with the pad's
   // top, else against the pad itself.
   let right = node.x, top = node.y
-  for (const g of dockedCards(node, before.groups, before.boards)) {
+  for (const g of dockedCards(node, before.groups, before.boards, true)) {
     const v = cardVisualRect(g, before.boards, zoom)?.rect
     if (!v || v.bottom < node.y || v.top > node.y + node.height * 0.25 || v.left >= right) continue
     right = v.left; top = v.top
@@ -601,8 +601,10 @@ export const CardPromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
                   title="Drag the title line to move this section up or down"
                   style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, cursor: 'grab', position: 'relative' }}
                 >
-                  <span className="cpp-grip" style={{ position: 'absolute', left: -9, top: '50%', transform: 'translateY(-50%)', fontSize: 9, lineHeight: 1, color: DIM, letterSpacing: -1 }}>⋮⋮</span>
-                  <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: 0.8, textTransform: 'uppercase', color: DIM }}>{d.name || '—'}</span>
+                  <svg className="cpp-grip" width="8" height="13" viewBox="0 0 8 13" style={{ position: 'absolute', left: -10, top: '50%', transform: 'translateY(-50%)' }}>
+                    {[1.8, 6.2].flatMap(cx => [2, 6.5, 11].map(cy => <circle key={`${cx}-${cy}`} cx={cx} cy={cy} r={1.5} fill="rgba(232,238,255,0.9)" />))}
+                  </svg>
+                  <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: 0.8, textTransform: 'uppercase', color: DIM, paddingLeft: 3 }}>{d.name || '—'}</span>
                   <div style={{ flex: 1, height: 1, background: LINE }} />
                   {!d.link && (
                     <span
@@ -689,7 +691,7 @@ export const CardPromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
       data-wheel-own=""
       style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: PANEL_BG }}
     >
-      <style>{`.cpp-chip .cpp-x { opacity: 0; transition: opacity 0.1s } .cpp-chip:hover .cpp-x { opacity: 1 } .cpp-item:hover { background: rgba(95,208,230,0.14) } .cpp-add:hover { color: #fff; border-color: rgba(95,208,230,0.6) } .cpp-sec .cpp-grip { opacity: 0; transition: opacity 0.1s } .cpp-sec:hover .cpp-grip { opacity: 1 } .cpp-tab .cpp-x { opacity: 0.55 } .cpp-tab:hover .cpp-x { opacity: 1 } .cpp-tab .cpp-x:hover { background: rgba(255,255,255,0.12) }`}</style>
+      <style>{`.cpp-chip .cpp-x { opacity: 0; transition: opacity 0.1s } .cpp-chip:hover .cpp-x { opacity: 1 } .cpp-item:hover { background: rgba(95,208,230,0.14) } .cpp-add:hover { color: #fff; border-color: rgba(95,208,230,0.6) } .cpp-sec .cpp-grip { opacity: 0.35; transition: opacity 0.1s } .cpp-sec:hover .cpp-grip { opacity: 1 } .cpp-tab .cpp-x { opacity: 0.55 } .cpp-tab:hover .cpp-x { opacity: 1 } .cpp-tab .cpp-x:hover { background: rgba(255,255,255,0.12) }`}</style>
       <ContentScaled factor={panelContentScale(node)}>
         <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', fontFamily: 'system-ui, sans-serif', color: INK }}>
           <FeedBar

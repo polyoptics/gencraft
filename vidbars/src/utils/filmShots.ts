@@ -16,6 +16,7 @@ import { getMediaItems } from '../types/bar'
 import { cardFaceSize, createMediaCard, gridOrder } from './cardGrid'
 import { DOCK_TOLERANCE, rectsTouch, type Rect } from './viewportDocking'
 import { cardScreenRect } from '../components/Layers/CardLayer'
+import { cardTouchRect } from '../hooks/useCardDecks'
 import { expandWithNestedMembers } from '../hooks/useCardDecks'
 
 /** A card's shots, in its blocks' reading order. */
@@ -38,14 +39,22 @@ function canvasRect(g: ProjectGroup, boards: Record<string, BoardData>): Rect | 
 /** The cards touching the mixer, and the cards touching those (a deck),
  *  with any stacked deck's hidden members, in reading order: top row first,
  *  left to right. */
-export function dockedCards(node: FreeNodeData, groups: ProjectGroup[], boards: Record<string, BoardData>): ProjectGroup[] {
+export function dockedCards(node: FreeNodeData, groups: ProjectGroup[], boards: Record<string, BoardData>, fixedReach = false): ProjectGroup[] {
   const rects = new Map<string, Rect>()
+  const zoom = useCanvasStore.getState().zoom
   for (const g of groups) {
     if (g.pin) continue
-    const r = canvasRect(g, boards)
+    let r: Rect | null
+    if (fixedReach) {
+      const t = cardTouchRect(g, boards, zoom)
+      r = t && { x: t.left, y: t.top, width: t.right - t.left, height: t.bottom - t.top }
+    } else r = canvasRect(g, boards)
     if (r) rects.set(g.id, r)
   }
-  const tol = DOCK_TOLERANCE / Math.max(0.05, useCanvasStore.getState().zoom)
+  // The card-back windows (utils/cardBacks) ask for the reach every other
+  // dock uses, the same at every zoom (Brian 2026-11-07); Film Look keeps
+  // its own, which grows as you zoom out.
+  const tol = fixedReach ? DOCK_TOLERANCE : DOCK_TOLERANCE / Math.max(0.05, useCanvasStore.getState().zoom)
   const nodeRect = { x: node.x, y: node.y, width: node.width, height: node.height }
   const found = new Set<string>()
   const queue: string[] = []

@@ -424,7 +424,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
       const all = useFreeNodeStore.getState().nodes
       railCarry.current = {
         windowIds: [],
-        groupIds: dockedCards(at, groups, boards).map(g => g.id),
+        groupIds: dockedCards(at, groups, boards, true).map(g => g.id),
         tileIds: adjacentPanels(at, all).map(n => n.id),
       }
     }

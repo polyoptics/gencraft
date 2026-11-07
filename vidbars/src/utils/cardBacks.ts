@@ -62,7 +62,7 @@ export function cardFeed(node: FreeNodeData, nodes: Record<string, FreeNodeData>
     ids.push(m.id)
   }
   // Docked: only on the canvas (a pinned window has left the cards' canvas).
-  if (!node.pin) dockedCards(node, groups, boards).forEach(add)
+  if (!node.pin) dockedCards(node, groups, boards, true).forEach(add)
   const docked = ids.length
   let browser: CardFeed['browser'] = null
   const list = adjacentPanels(node, nodes).find(n => n.type === 'list')
