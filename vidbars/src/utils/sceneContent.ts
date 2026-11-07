@@ -24,10 +24,21 @@ export function contentOf(card: ProjectGroup): { name: string; notes: string; im
 
 const sig = (c: ReturnType<typeof contentOf>) => JSON.stringify([c.name, c.notes, c.image ?? ''])
 
-/** The division's face from this card, and the note of what came. */
-export function copyFrom(card: ProjectGroup): Partial<SceneDiv> {
+/** The division's face from this card, and the note of what came. With
+ *  look (a card let go on it): the card's text styles, split and picture
+ *  settings too; a refresh takes the content only. */
+export function copyFrom(card: ProjectGroup, look = true): Partial<SceneDiv> {
   const c = contentOf(card)
-  return { name: c.name, notes: c.notes, image: c.image, copied: sig(c) }
+  const content: Partial<SceneDiv> = { face: true, name: c.name, notes: c.notes, image: c.image, copied: sig(c) }
+  if (!look) return content
+  const t = card.cardHeroTransform
+  return {
+    ...content,
+    hstyle: card.cardHeaderTextStyle ? { ...card.cardHeaderTextStyle } : undefined,
+    bstyle: card.cardTextStyle ? { ...card.cardTextStyle } : undefined,
+    split: card.textSplitRatio,
+    hero: t ? { flipH: t.flipH, flipV: t.flipV, opacity: t.opacity } : undefined,
+  }
 }
 
 /** The card a division came from changed its content since. */
@@ -51,7 +62,7 @@ export function refreshDivision(sceneId: string, divId: string): void {
   const d = scene ? findDiv(scene, divId) : null
   const card = d ? bs.groups.find(g => g.id === heldCard(d)) : undefined
   if (!scene || !d || !card) return
-  bs.setGroupScene(sceneId, patchDiv(scene, divId, copyFrom(card)))
+  bs.setGroupScene(sceneId, patchDiv(scene, divId, copyFrom(card, false)))
 }
 
 /** Divisions holding a card from before faces were copied (2026-11-07):
@@ -62,13 +73,15 @@ export function migrateScene(root: SceneDiv): SceneDiv | null {
   const walk = (d: SceneDiv): SceneDiv => {
     if (!isLeaf(d)) return { ...d, kids: d.kids!.map(walk) }
     const id = heldCard(d)
-    if (!id || d.copied) return d
+    if (!id || d.face) return d
+    // Copied already (06700bd): it keeps what is on it, as a face now.
+    if (d.copied) { changed = true; return { ...d, face: true } }
     const card = groups.find(g => g.id === id)
     if (!card) return d
     changed = true
     const c = copyFrom(card)
     // The card's own text boxes are its titles now (Brian 2026-11-07).
-    return { ...d, card: id, cards: undefined, ...c, mid: true, tab: false }
+    return { ...d, card: id, cards: undefined, ...c, mid: true, tab: false, hs: undefined, ts: undefined }
   }
   const next = walk(root)
   return changed ? next : null

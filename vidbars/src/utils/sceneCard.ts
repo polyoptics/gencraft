@@ -13,6 +13,7 @@
 // More cards let go at once split it side by side, one each.
 
 import { newDetailId } from './cardTypes'
+import type { TextStyle } from '../store/freeNodeStore'
 
 export interface SceneDiv {
   id: string
@@ -32,6 +33,15 @@ export interface SceneDiv {
   /** Its look: header and text size (x the size it would have). */
   hs?: number
   ts?: number
+  /** It has a card face of its own (a card was let go on it, or its text
+   *  was written): drawn and edited as a card's face is (GroupCardText),
+   *  with these styles, split and picture settings. Without one it shows
+   *  just its name, in the middle. */
+  face?: boolean
+  hstyle?: Partial<TextStyle>
+  bstyle?: Partial<TextStyle>
+  split?: number
+  hero?: { flipH?: boolean; flipV?: boolean; opacity?: number }
   /** The card's content when it was copied in (its header, text, picture):
    *  differs from the card's now = the card changed since. */
   copied?: string

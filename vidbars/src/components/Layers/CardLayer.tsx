@@ -6,7 +6,7 @@ import { aimCabinet, cabinetDrawerAt, cabinetTargets, stowCards, stowSelection, 
 import React, { useMemo, useState, useCallback, useRef, useLayoutEffect, useEffect, useDeferredValue, Fragment } from 'react'
 import ReactDOM from 'react-dom'
 import { useBoardsStore, getUngroupedBoardIds } from '../../store/boardsStore'
-import type { ProjectGroup, BoardData } from '../../store/boardsStore'
+import type { ProjectGroup, BoardData, HeroImageTransform } from '../../store/boardsStore'
 import { useCanvasStore, groupBounds } from '../../store/canvasStore'
 import { isTilted, useTiltStore } from '../../store/tiltStore'
 import { useCardView } from './cardView'
@@ -5219,28 +5219,47 @@ const TextSplitDivider: React.FC<{
   )
 }
 
-export const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void; heroImage?: string | null }> = ({ groupId, onCropImage, heroImage: heroImageProp }) => {
+/** A face that is not the card's own (a scene division's, SceneFace):
+ *  where its text, styles, split and picture settings come from and go. */
+export interface FaceBind {
+  header: string
+  body: string
+  headerStyle?: Partial<TextStyle>
+  bodyStyle?: Partial<TextStyle>
+  split?: number
+  hero?: { flipH?: boolean; flipV?: boolean; opacity?: number }
+  /** Text scale inside the face's own box. */
+  scale: number
+  setHeader: (v: string) => void
+  setBody: (v: string) => void
+  setHeaderStyle: (s: TextStyle) => void
+  setBodyStyle: (s: TextStyle) => void
+  setSplit: (r: number) => void
+  setHero: (h: { flipH?: boolean; flipV?: boolean; opacity?: number }) => void
+}
+
+export const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void; heroImage?: string | null; bind?: FaceBind }> = ({ groupId, onCropImage, heroImage: heroImageProp, bind }) => {
   // Frozen camera inside a pinned card, so its text scales with the CARD
   // rather than with a canvas it is no longer attached to.
   const { zoom } = useCardView()
   const group = useBoardsStore(s => s.groups.find(g => g.id === groupId))
-  const heroImage = heroImageProp ?? group?.cardHeroImage ?? null
-  const heroTransform = group?.cardHeroTransform
-  const bodyText = group?.cardText ?? ''
-  const rawBodyStyle = group?.cardTextStyle
+  const heroImage = heroImageProp ?? (bind ? null : group?.cardHeroImage ?? null)
+  const heroTransform = bind ? bind.hero : group?.cardHeroTransform
+  const bodyText = bind ? bind.body : group?.cardText ?? ''
+  const rawBodyStyle = bind ? bind.bodyStyle : group?.cardTextStyle
   const bodyTs: TextStyle = useMemo(() => ({ ...DEFAULT_BODY_STYLE, ...rawBodyStyle }), [rawBodyStyle])
 
-  const headerText = group?.cardHeaderText ?? ''
-  const rawHeaderStyle = group?.cardHeaderTextStyle
+  const headerText = bind ? bind.header : group?.cardHeaderText ?? ''
+  const rawHeaderStyle = bind ? bind.headerStyle : group?.cardHeaderTextStyle
   const headerTs: TextStyle = useMemo(() => ({ ...DEFAULT_HEADER_STYLE, ...rawHeaderStyle }), [rawHeaderStyle])
-  const splitRatio = group?.textSplitRatio ?? 0.5
+  const splitRatio = (bind ? bind.split : group?.textSplitRatio) ?? 0.5
   // Shown with its {fields} filled in from the card ({Name}, {Age}…);
   // edited as typed (utils/faceStyle).
-  const headerShown = useBoardsStore(s => fillFields(headerText, s.groups, groupId))
-  const bodyShown = useBoardsStore(s => fillFields(bodyText, s.groups, groupId))
+  const headerShown = useBoardsStore(s => bind ? headerText : fillFields(headerText, s.groups, groupId))
+  const bodyShown = useBoardsStore(s => bind ? bodyText : fillFields(bodyText, s.groups, groupId))
   ensureFontLoaded(headerTs.fontFamily); ensureFontLoaded(bodyTs.fontFamily)
   // Text locked to card — scales proportionally with the card (no screen-size compensation)
-  const textScale = zoom / CARD_TEXT_REF_ZOOM
+  const textScale = bind ? bind.scale : zoom / CARD_TEXT_REF_ZOOM
 
   const [editingField, setEditingField] = useState<'header' | 'body' | null>(null)
   const [activeField, setActiveField] = useState<TextFieldMode>('header')
@@ -5248,18 +5267,24 @@ export const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void
   const [headerVal, setHeaderVal] = useState('')
   const [bodyVal, setBodyVal] = useState('')
   const wrapperRef = useRef<HTMLDivElement>(null)
+  // The card's own fields, or the bound face's (FaceBind).
+  const bindRef = useRef(bind)
+  bindRef.current = bind
+  const setHeaderText = (v: string) => { const b = bindRef.current; if (b) b.setHeader(v); else useBoardsStore.getState().setGroupCardHeaderText(groupId, v) }
+  const setBodyText = (v: string) => { const b = bindRef.current; if (b) b.setBody(v); else useBoardsStore.getState().setGroupCardText(groupId, v) }
+  const setHero = (h: HeroImageTransform) => { const b = bindRef.current; if (b) b.setHero({ flipH: h.flipH, flipV: h.flipV, opacity: h.opacity }); else useBoardsStore.getState().setGroupCardHeroTransform(groupId, h) }
 
   const headerBg = hexToRgba(headerTs.bgColor, headerTs.bgOpacity)
   const bodyBg = hexToRgba(bodyTs.bgColor, bodyTs.bgOpacity)
   const rect = selected && wrapperRef.current ? wrapperRef.current.getBoundingClientRect() : null
 
   const commitHeader = useCallback(() => {
-    useBoardsStore.getState().setGroupCardHeaderText(groupId, headerVal)
+    setHeaderText(headerVal)
     setEditingField(null)
   }, [groupId, headerVal])
 
   const commitBody = useCallback(() => {
-    useBoardsStore.getState().setGroupCardText(groupId, bodyVal)
+    setBodyText(bodyVal)
     setEditingField(null)
   }, [groupId, bodyVal])
 
@@ -5277,9 +5302,9 @@ export const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void
   const handleToolbarFieldChange = useCallback((newField: TextFieldMode) => {
     if (newField === activeField) return
     if (editingField === 'header' && newField !== 'header') {
-      useBoardsStore.getState().setGroupCardHeaderText(groupId, headerVal)
+      setHeaderText(headerVal)
     } else if (editingField === 'body' && newField !== 'body') {
-      useBoardsStore.getState().setGroupCardText(groupId, bodyVal)
+      setBodyText(bodyVal)
     }
     setActiveField(newField)
   }, [activeField, editingField, headerVal, bodyVal, groupId])
@@ -5289,9 +5314,9 @@ export const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void
   // drop the toolbar, exit edit mode, deselect.
   const exitEditing = useCallback(() => {
     if (editingField === 'header') {
-      useBoardsStore.getState().setGroupCardHeaderText(groupId, headerVal)
+      setHeaderText(headerVal)
     } else if (editingField === 'body') {
-      useBoardsStore.getState().setGroupCardText(groupId, bodyVal)
+      setBodyText(bodyVal)
     }
     setEditingField(null)
     setSelected(false)
@@ -5309,10 +5334,10 @@ export const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void
     if (!selected) return
     if (activeField === 'header' && editingField !== 'header') {
       // Commit the outgoing field before switching so typed text isn't lost
-      if (editingField === 'body') useBoardsStore.getState().setGroupCardText(groupId, bodyVal)
+      if (editingField === 'body') setBodyText(bodyVal)
       startEditHeader()
     } else if (activeField === 'body' && editingField !== 'body') {
-      if (editingField === 'header') useBoardsStore.getState().setGroupCardHeaderText(groupId, headerVal)
+      if (editingField === 'header') setHeaderText(headerVal)
       startEditBody()
     }
   }, [activeField]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -5321,9 +5346,9 @@ export const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void
   React.useEffect(() => {
     return () => {
       if (editingFieldRef.current === 'header') {
-        useBoardsStore.getState().setGroupCardHeaderText(groupId, headerValRef.current)
+        setHeaderText(headerValRef.current)
       } else if (editingFieldRef.current === 'body') {
-        useBoardsStore.getState().setGroupCardText(groupId, bodyValRef.current)
+        setBodyText(bodyValRef.current)
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -5343,8 +5368,8 @@ export const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void
         <TextFormatToolbar
           headerStyle={headerTs}
           bodyStyle={bodyTs}
-          onHeaderStyleChange={style => useBoardsStore.getState().setGroupCardHeaderTextStyle(groupId, style)}
-          onBodyStyleChange={style => useBoardsStore.getState().setGroupCardTextStyle(groupId, style)}
+          onHeaderStyleChange={style => (bind ? bind.setHeaderStyle(style) : useBoardsStore.getState().setGroupCardHeaderTextStyle(groupId, style))}
+          onBodyStyleChange={style => (bind ? bind.setBodyStyle(style) : useBoardsStore.getState().setGroupCardTextStyle(groupId, style))}
           activeField={activeField}
           onActiveFieldChange={handleToolbarFieldChange}
           onClose={exitEditing}
@@ -5356,17 +5381,17 @@ export const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void
           heroOpacity={heroTransform?.opacity}
           onFlipH={() => {
             useUndoCoordinator.getState().checkpoint()
-            const cur = useBoardsStore.getState().groups.find(g => g.id === groupId)?.cardHeroTransform ?? { scale: 1, offsetX: 0, offsetY: 0, flipH: false, flipV: false }
-            useBoardsStore.getState().setGroupCardHeroTransform(groupId, { ...cur, flipH: !cur.flipH })
+            const cur = (bind ? { scale: 1, offsetX: 0, offsetY: 0, flipH: false, flipV: false, ...bind.hero } : useBoardsStore.getState().groups.find(g => g.id === groupId)?.cardHeroTransform) ?? { scale: 1, offsetX: 0, offsetY: 0, flipH: false, flipV: false }
+            setHero({ ...cur, flipH: !cur.flipH })
           }}
           onFlipV={() => {
             useUndoCoordinator.getState().checkpoint()
-            const cur = useBoardsStore.getState().groups.find(g => g.id === groupId)?.cardHeroTransform ?? { scale: 1, offsetX: 0, offsetY: 0, flipH: false, flipV: false }
-            useBoardsStore.getState().setGroupCardHeroTransform(groupId, { ...cur, flipV: !cur.flipV })
+            const cur = (bind ? { scale: 1, offsetX: 0, offsetY: 0, flipH: false, flipV: false, ...bind.hero } : useBoardsStore.getState().groups.find(g => g.id === groupId)?.cardHeroTransform) ?? { scale: 1, offsetX: 0, offsetY: 0, flipH: false, flipV: false }
+            setHero({ ...cur, flipV: !cur.flipV })
           }}
           onHeroOpacityChange={opacity => {
-            const cur = useBoardsStore.getState().groups.find(g => g.id === groupId)?.cardHeroTransform ?? { scale: 1, offsetX: 0, offsetY: 0, flipH: false, flipV: false }
-            useBoardsStore.getState().setGroupCardHeroTransform(groupId, { ...cur, opacity })
+            const cur = (bind ? { scale: 1, offsetX: 0, offsetY: 0, flipH: false, flipV: false, ...bind.hero } : useBoardsStore.getState().groups.find(g => g.id === groupId)?.cardHeroTransform) ?? { scale: 1, offsetX: 0, offsetY: 0, flipH: false, flipV: false }
+            setHero({ ...cur, opacity })
           }}
           onCropImage={onCropImage}
         />
@@ -5411,7 +5436,7 @@ export const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void
           )}
         </div>
         {/* Draggable divider */}
-        <TextSplitDivider ratio={splitRatio} onRatioChange={r => useBoardsStore.getState().setGroupTextSplitRatio(groupId, r)} visible={selected} />
+        <TextSplitDivider ratio={splitRatio} onRatioChange={r => (bind ? bind.setSplit(r) : useBoardsStore.getState().setGroupTextSplitRatio(groupId, r))} visible={selected} />
         {/* Body area */}
         <div style={{ flex: 1 - splitRatio, display: 'flex', flexDirection: 'column', justifyContent: vAlignToJustify(bodyTs.vAlign), minHeight: 0, overflow: 'hidden' }}>
           {editingField === 'body' ? (

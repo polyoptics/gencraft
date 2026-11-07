@@ -1,22 +1,21 @@
-// A SCENE card's face (Brian's storyMap): its divisions, named and
-// coloured, filling the face. Laid out as a media sheet (Brian 2026-11-07):
-// tight gaps, each division holding one card (its picture filling the box,
-// cropped like a card face, its name and type on top) or notes text, its
-// label in the middle and/or on a small tab at its top-right edge. A
-// division made short drops to one row: a round picture, the name, the
-// card's main text.
+// A SCENE card's face (Brian's storyMap): its divisions, coloured, filling
+// the face as a media sheet (Brian 2026-11-07): tight gaps. A division
+// without a face shows its name in the middle. A card let go on it copies
+// that card's face in (header, text, picture and their look, utils/
+// sceneContent), and from then on the division's face is drawn and edited
+// exactly as a card's is (GroupCardText, its toolbar: fonts, spacing,
+// split...), never touching the card, which it only links back to (a small
+// icon while pointed at). Double-click a division to write in it the same
+// way. A division made short drops to one row: round picture, header, text.
 //
-// Click a division to pick it: the bar along the face's bottom then holds
-// its tools (divide, colour, label switches, bump out, open as its own
-// scene card, take the card out, remove). Click its name again to rename
-// it; double-click an empty one to write in it. Drag the line between two
-// to resize them. The same bar holds the scene's view modes: Focus (click
+// Click a division to pick it: the bar along the face's bottom holds its
+// tools (divide, colour, bump out, open as its own scene card, move or take
+// off the picture, unlink, remove) and the scene's view modes: Focus (click
 // divisions to light them, a section's heading lights the section),
 // Bump-outs (marked divisions stand taller), Trace (only divisions whose
 // card or text matches stay lit, with the headings on the path to them).
-// A card's link "+" or the card itself let go on a division puts it there
-// (CardLayer, LinkDragOverlay). Data: ProjectGroup.scene / sceneView
-// (utils/sceneCard).
+// Drag the line between two to resize them. Data: ProjectGroup.scene /
+// sceneView (utils/sceneCard).
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import ReactDOM from 'react-dom'
@@ -29,6 +28,7 @@ import {
   divBoxes, findDiv, heldCard, isLeaf, leaves, litDivisions, patchDiv, removeDiv, resizeSplit, splitDiv, takeCard,
   type SceneDiv, type SceneView,
 } from '../../utils/sceneCard'
+import { GroupCardText } from './CardLayer'
 import { openDivision } from '../../utils/sceneOpen'
 import { cardChanged, migrateScene, refreshDivision } from '../../utils/sceneContent'
 import { useCanvasStore } from '../../store/canvasStore'
@@ -81,6 +81,9 @@ type Ctx = {
   hovered: string | null
   setHovered: (id: string | null) => void
   moving: string | null
+  setMoving: (id: string | null) => void
+  /** Change a division (with an undo step unless step is false). */
+  patch: (id: string, p: Partial<SceneDiv>, step?: boolean) => void
 }
 
 /** A click (the card did not move between press and release). */
@@ -132,42 +135,6 @@ const NameInput: React.FC<{ d: SceneDiv; ctx: Ctx; font: number }> = ({ d, ctx, 
   )
 }
 
-const NotesInput: React.FC<{ d: SceneDiv; ctx: Ctx; font: number }> = ({ d, ctx, font }) => {
-  const [draft, setDraft] = useState(d.notes ?? '')
-  const ref = useRef<HTMLTextAreaElement>(null)
-  const done = useRef(false)
-  useEffect(() => { requestAnimationFrame(() => { const t = ref.current; if (t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length) } }) }, [])
-  const commit = () => {
-    if (done.current) return
-    done.current = true
-    const r = ctx.root()
-    if (r && draft !== (d.notes ?? '')) ctx.write(patchDiv(r, d.id, { notes: draft }))
-    ctx.setWriting(null)
-  }
-  return (
-    <textarea
-      ref={ref}
-      data-scene-notes-input
-      value={draft}
-      placeholder="Notes"
-      onChange={e => setDraft(e.target.value)}
-      onPointerDown={stopPress}
-      onDoubleClick={e => e.stopPropagation()}
-      onWheel={e => e.stopPropagation()}
-      onKeyDown={e => {
-        e.stopPropagation()
-        if (e.key === 'Escape') { e.preventDefault(); commit() }
-      }}
-      onBlur={commit}
-      style={{
-        position: 'absolute', inset: 1, resize: 'none', boxSizing: 'border-box', padding: 1.5, margin: 0, zIndex: 4,
-        fontSize: font, lineHeight: 1.25, color: '#fff', textAlign: 'center', fontFamily: 'inherit',
-        background: 'rgba(0,0,0,0.45)', border: '0.5px solid rgba(255,255,255,0.6)', borderRadius: 1.5, outline: 'none', userSelect: 'text',
-      }}
-    />
-  )
-}
-
 const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx }> = ({ d, box, ctx }) => {
   const srcId = heldCard(d)
   const src = srcId ? ctx.groups.find(g => g.id === srcId) : undefined
@@ -181,7 +148,6 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx }> = ({ d, box, ctx }
   const hs = d.hs ?? 1, ts = d.ts ?? 1
   const nameFont = (row ? clamp(box.h * 0.46, 3, 6.5) : clamp(Math.min(box.h < ROW_H ? box.h * 0.55 : box.h * 0.26, box.w * 0.11), 3, 11)) * hs
   const textFont = clamp(nameFont / hs * 0.68, 3, 9) * ts
-  const mid = d.mid !== false
   const bump = ctx.bumps && !!d.bump
   const lift = bump ? Math.min(box.h * 0.22, 7) : 0
   const faded = ctx.lit && !ctx.lit.has(d.id)
@@ -190,8 +156,6 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx }> = ({ d, box, ctx }
   const moving = ctx.moving === d.id && !!pic
   const opened = !!d.opens && ctx.groups.some(g => g.id === d.opens)
   const changed = cardChanged(d, src)
-  const tabColor = d.color ?? '#5b8dd9'
-  const tabH = clamp(nameFont * 1.25, 4, 9)
   const click = useClick(ctx, () => {
     if (ctx.focus) ctx.toggleFocus(d.id)
     ctx.pick(d.id)
@@ -243,7 +207,12 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx }> = ({ d, box, ctx }
       onPointerLeave={() => ctx.setHovered(null)}
       onDoubleClick={e => {
         e.stopPropagation()
-        if (!ctx.focus && !moving) ctx.setWriting(d.id)
+        if (ctx.focus || moving) return
+        // Write in it as on a card: it gets a face of its own (its name the
+        // header) and its header opens for typing, with the toolbar.
+        if (!d.face) ctx.patch(d.id, { face: true }, true)
+        const el = e.currentTarget as HTMLElement
+        requestAnimationFrame(() => el.querySelector('[data-card-text]')?.dispatchEvent(new CustomEvent('start-edit', { bubbles: false })))
       }}
       style={{
         position: 'absolute', left: box.x, top: box.y - lift, width: box.w, height: box.h + lift, zIndex: bump ? 3 : picked ? 2 : 1,
@@ -261,12 +230,9 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx }> = ({ d, box, ctx }
         {pic && !row && (
           <img src={pic} alt="" draggable={false} data-scene-pic style={{
             position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', pointerEvents: 'none',
-            objectPosition: `${crop.x}% ${crop.y}%`, transform: crop.z !== 1 ? `scale(${crop.z})` : undefined, transformOrigin: `${crop.x}% ${crop.y}%`,
+            objectPosition: `${crop.x}% ${crop.y}%`, transformOrigin: `${crop.x}% ${crop.y}%`, opacity: d.hero?.opacity ?? 1,
+            transform: `scale(${crop.z * (d.hero?.flipH ? -1 : 1)}, ${crop.z * (d.hero?.flipV ? -1 : 1)})`,
           }} />
-        )}
-        {pic && !row && ((mid && header) || text) && (
-          // Lets the text read over a picture.
-          <div style={{ position: 'absolute', inset: 0, background: 'radial-gradient(ellipse at center, rgba(0,0,0,0.32), rgba(0,0,0,0) 70%)', pointerEvents: 'none' }} />
         )}
         {row ? (
           // One row: round picture, the header, the text.
@@ -279,22 +245,32 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx }> = ({ d, box, ctx }
                 <img src={pic} alt="" draggable={false} style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: `${crop.x}% ${crop.y}%` }} />
               </div>
             )}
-            {mid && nameEl && <span style={{ flex: '0 1 auto', fontSize: nameFont, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>{nameEl}</span>}
+            {nameEl && <span style={{ flex: '0 1 auto', fontSize: nameFont, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>{nameEl}</span>}
             {text && <span style={{ flex: '1 1 0', fontSize: textFont * 0.85, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0, opacity: 0.9 }}>{text}</span>}
           </div>
-        ) : (<>
-          {/* Its header in the middle, its text under it. */}
+        ) : d.face ? (
+          // Its own card face: drawn and edited as a card's is, with the
+          // same toolbar (fonts, spacing, split...). Never the card's.
+          <GroupCardText groupId={ctx.sceneId} heroImage={pic} onCropImage={() => { ctx.pick(d.id); ctx.setMoving(d.id) }} bind={{
+            header, body: d.notes ?? '', headerStyle: d.hstyle, bodyStyle: d.bstyle, split: d.split, hero: d.hero,
+            scale: clamp(Math.min(box.w / NAT_W, box.h / (NAT_H * 0.5)), 0.12, 2.5),
+            setHeader: v => ctx.patch(d.id, { name: v }),
+            setBody: v => ctx.patch(d.id, { notes: v }),
+            setHeaderStyle: st => ctx.patch(d.id, { hstyle: st }, true),
+            setBodyStyle: st => ctx.patch(d.id, { bstyle: st }, true),
+            setSplit: r => ctx.patch(d.id, { split: r }, false),
+            setHero: h => ctx.patch(d.id, { hero: h }, false),
+          }} />
+        ) : (
+          // No face yet: its name, in the middle.
           <div style={{
             position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
             padding: 2, boxSizing: 'border-box', color: '#fff', textAlign: 'center', overflow: 'hidden', pointerEvents: 'none', gap: 1,
           }}>
-            {mid && nameEl && <div style={{ fontSize: nameFont, fontWeight: 700, lineHeight: 1.1, textShadow: shadow, maxWidth: '100%', overflowWrap: 'anywhere' }}>{nameEl}</div>}
-            {text && ctx.writing !== d.id && (
-              <div data-scene-notes style={{ fontSize: textFont, lineHeight: 1.25, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', textShadow: shadow, maxWidth: '100%', opacity: 0.95 }}>{d.notes}</div>
-            )}
+            {nameEl && <div style={{ fontSize: nameFont, fontWeight: 700, lineHeight: 1.1, textShadow: shadow, maxWidth: '100%', overflowWrap: 'anywhere' }}>{nameEl}</div>}
+            {text && <div data-scene-notes style={{ fontSize: textFont, lineHeight: 1.25, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', textShadow: shadow, maxWidth: '100%', opacity: 0.95 }}>{d.notes}</div>}
           </div>
-          {ctx.writing === d.id && <NotesInput d={d} ctx={ctx} font={textFont} />}
-        </>)}
+        )}
         {changed && (
           // The card it came from changed since: a small mark; a click
           // takes the new content (its look and crop stay).
@@ -332,16 +308,6 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx }> = ({ d, box, ctx }
           )}
         </div>
       </div>
-      {/* The tab: a small label stuck to the top-right edge, in its colour. */}
-      {d.tab && header && (
-        <div data-scene-tab style={{
-          position: 'absolute', right: 2.5, top: -tabH * 0.55, height: tabH, maxWidth: '70%', padding: `0 ${tabH * 0.35}px`,
-          display: 'flex', alignItems: 'center', borderRadius: `${tabH * 0.3}px ${tabH * 0.3}px ${tabH * 0.2}px ${tabH * 0.2}px`,
-          background: tabColor, color: '#fff', fontSize: tabH * 0.62, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden',
-          textOverflow: 'ellipsis', boxShadow: '0 0.5px 1.5px rgba(0,0,0,0.5)', border: '0.4px solid rgba(255,255,255,0.6)', boxSizing: 'border-box',
-          zIndex: 4, pointerEvents: 'none',
-        }}>{header}</div>
-      )}
     </div>
   )
 }
@@ -489,7 +455,13 @@ export const SceneFace: React.FC<{
   }
   const ctx: Ctx = {
     sceneId: group.id, s, groups, boards, linking, renaming, setRenaming, writing, setWriting,
-    picked, pick: id => { setPicked(id); if (id !== moving) setMoving(null) }, lit, hovered: hoveredDiv, setHovered: setHoveredDiv, moving, bumps: view.bumps !== false, focus: !!view.focus,
+    picked, pick: id => { setPicked(id); if (id !== moving) setMoving(null) }, lit, hovered: hoveredDiv, setHovered: setHoveredDiv, moving, setMoving,
+    patch: (id, p, step = true) => {
+      const r = root()
+      if (!r) return
+      if (step) useUndoCoordinator.getState().checkpoint()
+      useBoardsStore.getState().setGroupScene(group.id, patchDiv(r, id, p))
+    }, bumps: view.bumps !== false, focus: !!view.focus,
     toggleFocus: id => {
       const cur = view.picked ?? []
       setView({ picked: cur.includes(id) ? cur.filter(x => x !== id) : [...cur, id] })
@@ -584,18 +556,12 @@ export const SceneFace: React.FC<{
             <button type="button" data-scene-tool="color" title="Colour" onPointerDown={stopPress}
               onClick={e => { e.stopPropagation(); setPicker({ id: selLeaf.id, x: e.clientX, y: e.clientY }) }}
               style={{ width: 16, height: 16, padding: 0, borderRadius: 3, cursor: 'pointer', background: selLeaf.color ?? '#5b8dd9', border: '1px solid rgba(255,255,255,0.5)' }} />
-            <Toggle tool="label-mid" on={selLeaf.mid !== false} title="Name in the middle" onClick={() => edit(r => patchDiv(r, selLeaf.id, { mid: selLeaf.mid === false }))}>Middle</Toggle>
-            <Toggle tool="label-tab" on={!!selLeaf.tab} title="Name on a tab at the top-right edge" onClick={() => edit(r => patchDiv(r, selLeaf.id, { tab: !selLeaf.tab }))}>Tab</Toggle>
             <Toggle tool="bump" on={!!selLeaf.bump} title="Bump out: stands taller than its slot" onClick={() => edit(r => patchDiv(r, selLeaf.id, { bump: !selLeaf.bump }))}>Bump</Toggle>
             {/* Making the card takes the undo checkpoint (createCardOrBoardAt). */}
             <Toggle tool="open" on={!!selLeaf.opens && groups.some(g => g.id === selLeaf.opens)} title="Open as its own scene card (lit: it has one; click goes there)" onClick={() => openDivision(group.id, selLeaf.id)}>
               <OpenIcon size={9} color="currentColor" /> Open
             </Toggle>
             <Sep />
-            <Toggle tool="header-smaller" on={false} title="Header smaller" onClick={() => edit(r => patchDiv(r, selLeaf.id, { hs: clamp((selLeaf.hs ?? 1) / 1.15, 0.4, 3) }))}>H−</Toggle>
-            <Toggle tool="header-bigger" on={false} title="Header bigger" onClick={() => edit(r => patchDiv(r, selLeaf.id, { hs: clamp((selLeaf.hs ?? 1) * 1.15, 0.4, 3) }))}>H+</Toggle>
-            <Toggle tool="text-smaller" on={false} title="Text smaller" onClick={() => edit(r => patchDiv(r, selLeaf.id, { ts: clamp((selLeaf.ts ?? 1) / 1.15, 0.4, 3) }))}>T−</Toggle>
-            <Toggle tool="text-bigger" on={false} title="Text bigger" onClick={() => edit(r => patchDiv(r, selLeaf.id, { ts: clamp((selLeaf.ts ?? 1) * 1.15, 0.4, 3) }))}>T+</Toggle>
             {selLeaf.image && (<>
               <Toggle tool="move-picture" on={moving === selLeaf.id} title="Move picture: drag it about in the division, wheel to zoom" onClick={() => setMoving(moving === selLeaf.id ? null : selLeaf.id)}>Move picture</Toggle>
               <Toggle tool="remove-picture" on={false} title="Take the picture off this division" onClick={() => { setMoving(null); edit(r => patchDiv(r, selLeaf.id, { image: undefined, crop: undefined })) }}>No picture</Toggle>
