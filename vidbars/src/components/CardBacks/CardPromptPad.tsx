@@ -406,18 +406,96 @@ export const CardPromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
     border: `1px solid ${tone === 'go' ? 'rgba(95,208,230,0.5)' : LINE}`, color: INK, whiteSpace: 'nowrap',
   })
 
+  // ── Dragging words and sections about on the card (Brian 2026-11-07) ──
+  // A word dragged onto another word goes before or after it, in its row
+  // or another; onto a row's empty space, at its end. A section dragged by
+  // its title line goes above or below another. Words still drag into the
+  // prompt text as before.
+  const moving = useRef<{ kind: 'word'; gid: string; detailId: string; w: string } | { kind: 'row'; gid: string; detailId: string } | null>(null)
+  const [over, setOver] = useState<{ detailId: string; at: number } | { row: number } | null>(null)
+  const moveWord = (g: ProjectGroup, fromId: string, w: string, toId: string, at: number) => {
+    const ds = g.details ?? []
+    const from = ds.find(d => d.id === fromId), to = ds.find(d => d.id === toId)
+    if (!from || !to || from.link || to.link) return
+    const src = tagsOf(from.value)
+    const i = src.indexOf(w)
+    if (i < 0) return
+    let dst = fromId === toId ? src : tagsOf(to.value)
+    if (fromId === toId) {
+      if (at === i || at === i + 1) return
+      dst = [...src]; dst.splice(i, 1)
+      dst.splice(at > i ? at - 1 : at, 0, w)
+    } else {
+      if (dst.some(x => lc(x) === lc(w))) at = -1   // already there: just leaves its old row
+      dst = [...dst]
+      if (at >= 0) dst.splice(at, 0, w)
+    }
+    const next = ds.map(d => d.id === fromId && fromId !== toId ? { ...d, value: src.filter((_, j) => j !== i).join(', ') }
+      : d.id === toId ? { ...d, value: dst.join(', ') } : d)
+    useUndoCoordinator.getState().checkpoint()
+    useBoardsStore.getState().setGroupDetails(g.id, next)
+  }
+  const moveRow = (g: ProjectGroup, id: string, at: number) => {
+    const ds = [...(g.details ?? [])]
+    const i = ds.findIndex(d => d.id === id)
+    if (i < 0 || at === i || at === i + 1) return
+    const [d] = ds.splice(i, 1)
+    ds.splice(at > i ? at - 1 : at, 0, d)
+    useUndoCoordinator.getState().checkpoint()
+    useBoardsStore.getState().setGroupDetails(g.id, ds)
+  }
+  const [renamingCard, setRenamingCard] = useState<string | null>(null)
+  const renameCard = (g: ProjectGroup, name: string) => {
+    setRenamingCard(null)
+    const nm = name.trim()
+    if (!nm || nm === g.name) return
+    useUndoCoordinator.getState().checkpoint()
+    useBoardsStore.getState().renameGroup(g.id, nm)
+  }
+  const endMove = () => { moving.current = null; setOver(null) }
+  /** Drop handlers for a word target: the row `detailId`, slot `at` (or the slot by the pointer, on a chip). */
+  const wordTarget = (g: ProjectGroup, detailId: string, slot: (e: React.DragEvent) => number) => ({
+    onDragOver: (e: React.DragEvent) => {
+      const m = moving.current
+      if (m?.kind !== 'word' || m.gid !== g.id) return
+      e.preventDefault(); e.stopPropagation()
+      e.dataTransfer.dropEffect = 'move'
+      const at = slot(e)
+      setOver(o => (o && 'detailId' in o && o.detailId === detailId && o.at === at) ? o : { detailId, at })
+    },
+    onDrop: (e: React.DragEvent) => {
+      const m = moving.current
+      if (m?.kind !== 'word' || m.gid !== g.id) return
+      e.preventDefault(); e.stopPropagation()
+      moveWord(g, m.detailId, m.w, detailId, slot(e))
+      endMove()
+    },
+  })
+
   const smallBtn: React.CSSProperties = {
     height: 24, padding: '0 9px', borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit', fontSize: 11.5, fontWeight: 700,
     background: 'rgba(255,255,255,0.04)', border: `1px dashed rgba(255,255,255,0.22)`, color: DIM,
   }
 
-  const chip = (g: ProjectGroup, detailId: string, w: string, canEdit: boolean, lit: Set<string>) => {
+  const chip = (g: ProjectGroup, detailId: string, w: string, canEdit: boolean, lit: Set<string>, i: number) => {
     const on = lit.has(lc(w))
+    const mark = over && 'detailId' in over && over.detailId === detailId && canEdit ? (over.at === i ? 'before' : over.at === i + 1 ? 'after' : null) : null
+    const drop = canEdit ? wordTarget(g, detailId, e => {
+      const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+      return e.clientX < r.left + r.width / 2 ? i : i + 1
+    }) : {}
     return (
       <span
         key={w}
         draggable
-        onDragStart={e => { e.stopPropagation(); e.dataTransfer.setData('text/plain', w); e.dataTransfer.effectAllowed = 'copy' }}
+        onDragStart={e => {
+          e.stopPropagation()
+          e.dataTransfer.setData('text/plain', w)
+          e.dataTransfer.effectAllowed = 'copyMove'
+          moving.current = canEdit ? { kind: 'word', gid: g.id, detailId, w } : null
+        }}
+        onDragEnd={endMove}
+        {...drop}
         onClick={() => toggleWord(g, w)}
         title={on ? 'In the prompt: click to take it out' : 'Click to add to the prompt, or drag it into the text'}
         className="cpp-chip"
@@ -426,7 +504,7 @@ export const CardPromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
           minHeight: 24, padding: '3px 9px', borderRadius: 12, cursor: 'pointer', userSelect: 'none', lineHeight: 1.3,
           background: on ? `${g.color}55` : 'rgba(255,255,255,0.055)',
           border: `1px solid ${on ? g.color : 'rgba(255,255,255,0.1)'}`,
-          boxShadow: on ? `0 0 8px ${g.color}66` : 'none',
+          boxShadow: [on ? `0 0 8px ${g.color}66` : '', mark === 'before' ? '-3px 0 0 0 #fff' : mark === 'after' ? '3px 0 0 0 #fff' : ''].filter(Boolean).join(', ') || 'none',
           color: on ? '#fff' : 'rgba(232,238,255,0.8)', fontSize: 12.5,
           transition: 'background 0.12s, border-color 0.12s, box-shadow 0.12s',
         }}
@@ -461,9 +539,27 @@ export const CardPromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
             background: `linear-gradient(90deg, ${g.color}cc, ${g.color}55)`,
           }}
         >
-          <span style={{ flex: 1, minWidth: 0, fontSize: 14, fontWeight: 700, color: '#fff', textShadow: '0 1px 2px rgba(0,0,0,0.4)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {cardTitle(groups, g) || 'Untitled'}
-          </span>
+          {renamingCard === g.id ? (
+            <RenameInput
+              autoFocus
+              defaultValue={g.name}
+              onPointerDown={e => e.stopPropagation()}
+              onKeyDown={e => {
+                if (e.key === 'Enter') renameCard(g, (e.target as HTMLInputElement).value)
+                if (e.key === 'Escape') setRenamingCard(null)
+              }}
+              onBlur={e => renameCard(g, e.target.value)}
+              style={{ flex: 1, minWidth: 0, height: 24, fontSize: 13 }}
+            />
+          ) : (
+            <span
+              onDoubleClick={() => setRenamingCard(g.id)}
+              title="Double-click to rename the card"
+              style={{ flex: 1, minWidth: 0, fontSize: 14, fontWeight: 700, color: '#fff', textShadow: '0 1px 2px rgba(0,0,0,0.4)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'text' }}
+            >
+              {cardTitle(groups, g) || 'Untitled'}
+            </span>
+          )}
           {lit > 0 && <span style={{ fontSize: 10.5, color: '#fff', background: 'rgba(0,0,0,0.3)', borderRadius: 8, padding: '0 6px' }} title="Words from this card in the prompt">{lit} in</span>}
           <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: 0.7, textTransform: 'uppercase', color: 'rgba(255,255,255,0.8)' }}>{typeLabel(g)}</span>
         </div>
@@ -471,9 +567,41 @@ export const CardPromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
         {(
           <div style={{ padding: '12px 10px 10px', flex: 1, minHeight: 0, overflowY: 'auto' }} data-wheel-own="">
             {rows.length === 0 && <div style={{ fontSize: 12, color: FAINT, padding: '4px 0' }}>Nothing on its back yet: + detail adds a row.</div>}
-            {rows.map(({ d, words }) => (
-              <div key={d.id} style={{ marginTop: 6 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+            {rows.map(({ d, words }, ri) => (
+              <div key={d.id} style={{
+                marginTop: 6, position: 'relative',
+                boxShadow: over && 'row' in over ? (over.row === ri ? '0 -3px 0 -1px #fff' : over.row === ri + 1 && ri === rows.length - 1 ? '0 3px 0 -1px #fff' : 'none') : 'none',
+              }}>
+                <div
+                  className="cpp-sec"
+                  draggable
+                  onDragStart={e => {
+                    e.stopPropagation()
+                    e.dataTransfer.setData('application/x-cpp-row', d.id)
+                    e.dataTransfer.effectAllowed = 'move'
+                    moving.current = { kind: 'row', gid: g.id, detailId: d.id }
+                  }}
+                  onDragEnd={endMove}
+                  onDragOver={e => {
+                    const m = moving.current
+                    if (m?.kind !== 'row' || m.gid !== g.id) return
+                    e.preventDefault(); e.stopPropagation()
+                    const r = e.currentTarget.getBoundingClientRect()
+                    const at = e.clientY < r.top + r.height / 2 ? ri : ri + 1
+                    setOver(o => (o && 'row' in o && o.row === at) ? o : { row: at })
+                  }}
+                  onDrop={e => {
+                    const m = moving.current
+                    if (m?.kind !== 'row' || m.gid !== g.id) return
+                    e.preventDefault(); e.stopPropagation()
+                    const r = e.currentTarget.getBoundingClientRect()
+                    moveRow(g, m.detailId, e.clientY < r.top + r.height / 2 ? ri : ri + 1)
+                    endMove()
+                  }}
+                  title="Drag the title line to move this section up or down"
+                  style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, cursor: 'grab', position: 'relative' }}
+                >
+                  <span className="cpp-grip" style={{ position: 'absolute', left: -9, top: '50%', transform: 'translateY(-50%)', fontSize: 9, lineHeight: 1, color: DIM, letterSpacing: -1 }}>⋮⋮</span>
                   <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: 0.8, textTransform: 'uppercase', color: DIM }}>{d.name || '—'}</span>
                   <div style={{ flex: 1, height: 1, background: LINE }} />
                   {!d.link && (
@@ -484,8 +612,11 @@ export const CardPromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
                     >＋</span>
                   )}
                 </div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                  {words.map(w => chip(g, d.id, w, !d.link, litSet))}
+                <div
+                  style={{ display: 'flex', flexWrap: 'wrap', gap: 4, minHeight: 24 }}
+                  {...(!d.link ? wordTarget(g, d.id, () => words.length) : {})}
+                >
+                  {words.map((w, i) => chip(g, d.id, w, !d.link, litSet, i))}
                   {words.length === 0 && adding !== d.id && <span style={{ fontSize: 11.5, color: FAINT }}>empty</span>}
                   {adding === d.id && (
                     <RenameInput
@@ -558,7 +689,7 @@ export const CardPromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
       data-wheel-own=""
       style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: PANEL_BG }}
     >
-      <style>{`.cpp-chip .cpp-x { opacity: 0; transition: opacity 0.1s } .cpp-chip:hover .cpp-x { opacity: 1 } .cpp-item:hover { background: rgba(95,208,230,0.14) } .cpp-add:hover { color: #fff; border-color: rgba(95,208,230,0.6) } .cpp-tab .cpp-x { opacity: 0.55 } .cpp-tab:hover .cpp-x { opacity: 1 } .cpp-tab .cpp-x:hover { background: rgba(255,255,255,0.12) }`}</style>
+      <style>{`.cpp-chip .cpp-x { opacity: 0; transition: opacity 0.1s } .cpp-chip:hover .cpp-x { opacity: 1 } .cpp-item:hover { background: rgba(95,208,230,0.14) } .cpp-add:hover { color: #fff; border-color: rgba(95,208,230,0.6) } .cpp-sec .cpp-grip { opacity: 0; transition: opacity 0.1s } .cpp-sec:hover .cpp-grip { opacity: 1 } .cpp-tab .cpp-x { opacity: 0.55 } .cpp-tab:hover .cpp-x { opacity: 1 } .cpp-tab .cpp-x:hover { background: rgba(255,255,255,0.12) }`}</style>
       <ContentScaled factor={panelContentScale(node)}>
         <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', fontFamily: 'system-ui, sans-serif', color: INK }}>
           <FeedBar
