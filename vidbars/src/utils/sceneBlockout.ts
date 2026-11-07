@@ -12,6 +12,7 @@ import { createCardOrBoardAt } from './canvasCreate'
 import type { CardType } from './cardTypes'
 import { newDetailId } from './cardTypes'
 import { leaf, type SceneDiv } from './sceneCard'
+import { copyFrom } from './sceneContent'
 
 const ACTS: { name: string; color: string; scenes: { name: string; shots: string[] }[] }[] = [
   { name: 'ACT 1', color: '#5b8dd9', scenes: [
@@ -72,6 +73,7 @@ export function fillBlockout(sceneId: string): void {
     if (!g) return
     b.renameGroup(g.id, c.name)
     b.setCardsType([g.id], c.type)
+    b.setGroupCardHeaderText(g.id, c.name)
     b.setGroupCardText(g.id, c.text)
     const det = (useBoardsStore.getState().groups.find(gr => gr.id === g.id)?.details ?? []).map(d => ({ ...d }))
     for (const [name, value] of c.details) {
@@ -100,7 +102,7 @@ export function fillBlockout(sceneId: string): void {
         const k = n++
         const card = hold ? cast[hold[3]] : undefined
         return leaf(shot, shade(act.color, 0.12 + (hi % 2) * 0.1), {
-          ...(card ? { card, tab: true, mid: false } : { notes: `${SHOT_KIND[k % SHOT_KIND.length]}\nBudget: ${BUDGET[(k * 7 + ai) % 3]}` }),
+          ...(card ? copyFrom(useBoardsStore.getState().groups.find(g => g.id === card)!) : { notes: `${SHOT_KIND[k % SHOT_KIND.length]}\nBudget: ${BUDGET[(k * 7 + ai) % 3]}` }),
           ...(k % 5 === 3 ? { bump: true } : {}),
         })
       })

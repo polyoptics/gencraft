@@ -37,6 +37,7 @@ import { CardBack, FlipButton, backColor, useCardFlip } from './CardBack'
 import { liveLocks, lockOf, withLockMates } from '../../utils/deckLock'
 import { SceneFace } from './SceneFace'
 import { fillBlockout } from '../../utils/sceneBlockout'
+import { dropCardsInDivision } from '../../utils/sceneContent'
 import { useFxStore } from '../../store/fxStore'
 import { cardStripId } from '../../utils/fx/cardStrips'
 import { cardHitAt } from '../../utils/cardContent'
@@ -1000,7 +1001,7 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
         if (divEl && sceneId && !own.has(sceneId) && bs.groups.find(g => g.id === sceneId)?.scene) {
           bs.setGroupPosBatch(Array.from(initialOrigins, ([gid, o]) => ({ groupId: gid, originY: o.y, originX: o.x })))
           endDockedDrag(draggingIds, false)
-          bs.putCardsInDivision(sceneId, divEl.dataset.sceneDiv!, picked.filter(id => !bs.groups.find(g => g.id === id)?.effect))
+          dropCardsInDivision(sceneId, divEl.dataset.sceneDiv!, picked.filter(id => !bs.groups.find(g => g.id === id)?.effect))
           useMagnetPreviewStore.getState().setPreview(null)
           return
         }

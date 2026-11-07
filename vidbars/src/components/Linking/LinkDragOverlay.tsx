@@ -3,6 +3,7 @@
 // pointermove/pointerup listeners that drive the drag. Mounted once at the
 // App root. Motion matches the NLEBlock color drag-out pattern.
 
+import { dropCardsInDivision } from '../../utils/sceneContent'
 import React, { useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { useLinkDragStore } from '../../store/linkDragStore'
@@ -82,7 +83,7 @@ export const LinkDragOverlay: React.FC = () => {
         useUndoCoordinator.getState().checkpoint()
         const bs = useBoardsStore.getState()
         const ids = bs.selectedGroupIds.includes(source.id) ? [source.id, ...bs.selectedGroupIds.filter(id => id !== source.id)] : [source.id]
-        bs.putCardsInDivision(division[1], division[2], ids)
+        dropCardsInDivision(division[1], division[2], ids)
       }
       if (story && source.kind === 'group') {
         useUndoCoordinator.getState().checkpoint()

@@ -389,7 +389,7 @@ interface BoardsState {
   setGroupScene: (groupId: string, scene: SceneDiv) => void
   setGroupSceneView: (groupId: string, view: SceneView) => void
   /** Cards let go on one of a scene's divisions: in it (out of the others). */
-  putCardsInDivision: (sceneId: string, divId: string, cardIds: string[]) => void
+  putCardsInDivision: (sceneId: string, divId: string, cardIds: string[], content?: (cardId: string) => Partial<SceneDiv>) => void
   /** Who a faction member reports to: `bossId` alone (null: no one, the
    *  top), or with `also`, that one added to its bosses (taken off if it
    *  is one already). Never someone below it. */
@@ -1137,10 +1137,10 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
     set(s => ({ groups: s.groups.map(g => g.id === groupId ? { ...g, sceneView: view } : g) }))
   },
 
-  putCardsInDivision(sceneId, divId, cardIds) {
+  putCardsInDivision(sceneId, divId, cardIds, content) {
     const ids = cardIds.filter(id => id !== sceneId)
     if (!ids.length) return
-    set(s => ({ groups: s.groups.map(g => g.id === sceneId && g.scene ? { ...g, scene: putCards(g.scene, divId, ids) } : g) }))
+    set(s => ({ groups: s.groups.map(g => g.id === sceneId && g.scene ? { ...g, scene: putCards(g.scene, divId, ids, content) } : g) }))
   },
 
   setFactionShape(factionId, shape) {

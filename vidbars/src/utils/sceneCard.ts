@@ -3,23 +3,38 @@
 // dragging the lines between them. A division is a leaf of a tree of rows
 // and columns, so dividing one never moves another's edges.
 //
-// The media sheet (Brian 2026-11-07): a division HOLDS ONE CARD (the card
-// itself, shown there: edit it anywhere and it shows here), its picture
-// filling the box; more cards dropped at once split it side by side, one
-// each. An empty division holds notes text instead.
+// The media sheet (Brian 2026-11-07): each division has a card's face of
+// its own: a header (its name), text (its notes) and a picture. A card let
+// go on it COPIES its header, text and picture in; from then on the
+// division's face is free to edit (text, its size, the picture's crop) and
+// never touches that card, which it only links back to (`card`). Content
+// vs look: if the card's content changes later, the division shows a small
+// mark; refreshing takes the new content and keeps its own look and crop.
+// More cards let go at once split it side by side, one each.
 
 import { newDetailId } from './cardTypes'
 
 export interface SceneDiv {
   id: string
-  /** A division (leaf): its name, colour and the card it holds. */
+  /** A division (leaf): its header, colour, and the card its face came
+   *  from (a link back, nothing more). */
   name?: string
   color?: string
   card?: string
   /** Before 2026-11-07 a division held a list; the first is its card. */
   cards?: string[]
-  /** Text written in an empty division. */
+  /** Its text (the card's paragraph text, when one was let go on it). */
   notes?: string
+  /** Its picture, and where it sits: x/y the point shown in the middle
+   *  (0..100 %), z the zoom past filling the box. */
+  image?: string
+  crop?: { x: number; y: number; z: number }
+  /** Its look: header and text size (x the size it would have). */
+  hs?: number
+  ts?: number
+  /** The card's content when it was copied in (its header, text, picture):
+   *  differs from the card's now = the card changed since. */
+  copied?: string
   /** Its label: in the middle (on unless false) and/or a small tab on its
    *  top-right edge. Separate on/off switches. */
   mid?: boolean
@@ -140,25 +155,26 @@ export function resizeSplit(root: SceneDiv, id: string, i: number, a: number, b:
 /** Cards into a division: the first is the card it holds (the one it held
  *  goes); each other one gets a division of its own beside it. Out of any
  *  other division of this scene first. */
-export function putCards(root: SceneDiv, id: string, cardIds: string[]): SceneDiv {
+export function putCards(root: SceneDiv, id: string, cardIds: string[], content?: (cardId: string) => Partial<SceneDiv>): SceneDiv {
   if (!cardIds.length) return root
   const clear = (d: SceneDiv): SceneDiv => isLeaf(d)
     ? (heldCard(d) && cardIds.includes(heldCard(d)!) && d.id !== id ? { ...d, card: undefined, cards: undefined } : d)
     : { ...d, kids: d.kids!.map(clear) }
-  let next = patchDiv(clear(root), id, { card: cardIds[0], cards: undefined })
+  const fill = (c: string): Partial<SceneDiv> => ({ card: c, cards: undefined, crop: undefined, ...(content?.(c) ?? {}) })
+  let next = patchDiv(clear(root), id, fill(cardIds[0]))
   let at = id
   for (const c of cardIds.slice(1)) {
     next = splitDiv(next, at, 'row')
     const parent = findParent(next, at)!
     const i = parent.kids!.findIndex(k => k.id === at)
     at = parent.kids![i + 1].id
-    next = patchDiv(next, at, { card: c, name: '' })
+    next = patchDiv(next, at, { name: '', ...fill(c) })
   }
   return next
 }
 
 export function takeCard(root: SceneDiv, id: string): SceneDiv {
-  return edit(root, id, d => ({ ...d, card: undefined, cards: undefined }))
+  return edit(root, id, d => ({ ...d, card: undefined, cards: undefined, copied: undefined }))
 }
 
 export function findParent(root: SceneDiv, id: string): SceneDiv | null {
