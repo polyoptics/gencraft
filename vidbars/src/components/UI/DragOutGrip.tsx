@@ -14,7 +14,7 @@
 
 import React, { useState } from 'react'
 import { mayHaveDiskFile, useResolvedFile } from '../../hooks/useFileMenu'
-import { noteDragOutCard, noteDragOutShape, type DragOutShape } from '../../utils/dragOutSource'
+import { noteDragOutCard, noteDragOutFrom, noteDragOutShape, type DragOutShape } from '../../utils/dragOutSource'
 
 const stop = (e: React.SyntheticEvent) => { e.stopPropagation() }
 /** Only the primary button belongs to the grip: a middle-drag over it must
@@ -113,6 +113,7 @@ export const DragOutGrip: React.FC<{
         // land as plain imports — whose shape would they take?
         noteDragOutShape(inside.length ? null : shape?.() ?? null)
         noteDragOutCard(inside.length ? null : card ?? null)
+        noteDragOutFrom(card ?? null)
         d.startMediaDrag!(inside.length
           ? inside
           : [url, ...(getUrls?.({ all: false }) ?? []).filter(u => u !== url)])

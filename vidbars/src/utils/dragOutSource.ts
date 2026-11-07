@@ -32,6 +32,19 @@ export function noteDragOutCard(id: string | null): void {
   card = id ? { id, at: performance.now() } : null
 }
 
+let from: { id: string; at: number } | null = null
+
+/** Note the card a drag-out starts on, Shift or not (null: none): never
+ *  given a copy of its own pictures when the drag comes back onto it. */
+export function noteDragOutFrom(id: string | null): void {
+  from = id ? { id, at: performance.now() } : null
+}
+
+/** The card a drag-out started on (see noteDragOutFrom). */
+export function dragOutFrom(): string | null {
+  return from && performance.now() - from.at < 60_000 ? from.id : null
+}
+
 /** The noted card, once, as takeDragOutShape. */
 export function takeDragOutCard(): string | null {
   const c = card

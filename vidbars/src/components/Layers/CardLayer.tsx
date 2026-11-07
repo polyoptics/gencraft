@@ -4246,6 +4246,7 @@ const DeckAffordance: React.FC<{ cluster: string[]; front: Deck | 'card' | null;
         )}
         {primaryGroup && front === 'card' && (
           <CardFaceDragOut
+            card={primaryGroup.id}
             url={isHovered ? cardGripUrl(primaryGroup, boards) : null}
             getUrls={({ all }) => {
               if (!all) return []

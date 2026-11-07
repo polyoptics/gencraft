@@ -23,7 +23,7 @@ import { GLCanvasHost } from '../Viewport3D/GLCanvasHost'
 import { WorldZoom } from './worldZoom'
 import { addMediaBlockToCard, cardHitOf, groupForCardHit, type CardHit } from '../../utils/cardContent'
 import { EFFECT_DRAG_MIME, clientToCanvas, createEffectCard, createLoopStrip, effectKindFromDrag } from '../../utils/fx/createEffect'
-import { takeDragOutCard, takeDragOutShape } from '../../utils/dragOutSource'
+import { dragOutFrom, takeDragOutCard, takeDragOutShape } from '../../utils/dragOutSource'
 import { placeCard } from '../../utils/railCards'
 import { drawnRect } from '../../utils/effectCards'
 import { cardFaceSize, createMediaCard, createTextCard } from '../../utils/cardGrid'
@@ -450,6 +450,15 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
     // must not replace or append anything.
     if (window.vidbarsDesktop?.isDraggingOut?.()) {
       const aim = aimDrop(e.clientX, e.clientY)
+      // Over ANOTHER card it is taken too: that card gets a copy of the
+      // picture (handleDrop). Over the card it came from, refused.
+      if (aim.target?.kind === 'card') {
+        const into = groupForCardHit(aim.target.hit)
+        if (!into || into === dragOutFrom()) return
+        e.preventDefault()
+        e.dataTransfer.dropEffect = 'copy'
+        return
+      }
       if (floating || aim.target || !aim.onCanvas) return
       e.preventDefault()
       e.dataTransfer.dropEffect = 'copy'
@@ -790,6 +799,16 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
       e.preventDefault()
       const aim = aimDrop(e.clientX, e.clientY)
       const own = Array.from(e.dataTransfer.files).filter(isAcceptedMediaFile)
+      // Let go on ANOTHER card: it takes a copy of the picture, as a file
+      // dropped from outside would (a block of its own; a card with none
+      // gets its face). The card it came from keeps its own.
+      if (aim.target?.kind === 'card' && own.length) {
+        takeDragOutShape()
+        takeDragOutCard()
+        const into = groupForCardHit(aim.target.hit)
+        if (into && into !== dragOutFrom()) dropFilesOnTarget(aim.target, own)
+        return
+      }
       if (floating || aim.target || !aim.onCanvas || own.length === 0) return
       // Taken even when unused, so a later drag can never inherit it.
       const shape = takeDragOutShape()
