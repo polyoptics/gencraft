@@ -13,7 +13,7 @@ import { removeFromKin, type Kin } from '../utils/family'
 import { deckLay, linkedLines } from '../utils/deckAway'
 import { deckFront, primaryFirst } from '../utils/primaryCard'
 import { useFreeNodeStore } from './freeNodeStore'
-import { newSceneLayout, putCards, type SceneDiv } from '../utils/sceneCard'
+import { newSceneLayout, putCards, type SceneDiv, type SceneView } from '../utils/sceneCard'
 import { getBoardAbsolutePos, computeGroupLayout, yToRow } from '../utils/nleRows'
 import {
   makeBar,
@@ -172,6 +172,8 @@ export interface ProjectGroup {
   reportsTo?: Record<string, string[]>
   /** A SCENE card's face: its divisions (utils/sceneCard). */
   scene?: SceneDiv
+  /** How a scene card's face is looked at (SceneFace view modes). */
+  sceneView?: SceneView
   /** A FAMILY's ties: who is whose parent and partner (utils/family). Its
    *  members are the cards it links to (linkedGroupIds). */
   kin?: Kin
@@ -385,6 +387,7 @@ interface BoardsState {
    *  after its type). */
   linkGroupDetail: (groupId: string, detailId: string | 'new', cardId: string) => void
   setGroupScene: (groupId: string, scene: SceneDiv) => void
+  setGroupSceneView: (groupId: string, view: SceneView) => void
   /** Cards let go on one of a scene's divisions: in it (out of the others). */
   putCardsInDivision: (sceneId: string, divId: string, cardIds: string[]) => void
   /** Who a faction member reports to: `bossId` alone (null: no one, the
@@ -1128,6 +1131,10 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
 
   setGroupScene(groupId, scene) {
     set(s => ({ groups: s.groups.map(g => g.id === groupId ? { ...g, scene } : g) }))
+  },
+
+  setGroupSceneView(groupId, view) {
+    set(s => ({ groups: s.groups.map(g => g.id === groupId ? { ...g, sceneView: view } : g) }))
   },
 
   putCardsInDivision(sceneId, divId, cardIds) {

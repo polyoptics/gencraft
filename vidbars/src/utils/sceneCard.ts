@@ -1,18 +1,31 @@
 // A SCENE card's face (Brian's storyMap, 2026-11-04): divisions, named and
 // coloured rectangles that split the face into sections, resized by
-// dragging the lines between them. Cards go into a division by letting
-// their link "+" go on it; the division shows them. A division is a leaf
-// of a tree of rows and columns, so dividing one never moves another's
-// edges.
+// dragging the lines between them. A division is a leaf of a tree of rows
+// and columns, so dividing one never moves another's edges.
+//
+// The media sheet (Brian 2026-11-07): a division HOLDS ONE CARD (the card
+// itself, shown there: edit it anywhere and it shows here), its picture
+// filling the box; more cards dropped at once split it side by side, one
+// each. An empty division holds notes text instead.
 
 import { newDetailId } from './cardTypes'
 
 export interface SceneDiv {
   id: string
-  /** A division (leaf): its name, colour and the cards in it. */
+  /** A division (leaf): its name, colour and the card it holds. */
   name?: string
   color?: string
+  card?: string
+  /** Before 2026-11-07 a division held a list; the first is its card. */
   cards?: string[]
+  /** Text written in an empty division. */
+  notes?: string
+  /** Its label: in the middle (on unless false) and/or a small tab on its
+   *  top-right edge. Separate on/off switches. */
+  mid?: boolean
+  tab?: boolean
+  /** Stands taller than its slot, over the row above (a bump-out). */
+  bump?: boolean
   /** The scene card this division opens into (its own scene: the scene tree). */
   opens?: string
   /** A split (container): its parts side by side ('row') or stacked
@@ -22,16 +35,30 @@ export interface SceneDiv {
   kids?: SceneDiv[]
 }
 
+/** A scene card's view modes (Brian 2026-11-07), each its own switch.
+ *  Focus: picked divisions (and their sections) lit, the rest faded.
+ *  Bump-outs: divisions marked bump stand taller (on unless false).
+ *  Trace: only divisions whose card or text matches stay lit. */
+export interface SceneView {
+  focus?: boolean
+  picked?: string[]
+  bumps?: boolean
+  trace?: boolean
+  traceText?: string
+}
+
 /** The colours new divisions take in turn (from Brian's storyMap). */
 const PALETTE = ['#5b8dd9', '#1f9ea6', '#6fa6a8', '#f2994a', '#8b6fd6', '#4fae6b']
 let colorTurn = 1
 
-const leaf = (name: string, color: string): SceneDiv => ({ id: newDetailId(), name, color, cards: [] })
+export const leaf = (name: string, color: string, more?: Partial<SceneDiv>): SceneDiv => ({ id: newDetailId(), name, color, ...more })
+
+/** The card a division holds. */
+export const heldCard = (d: SceneDiv): string | undefined => d.card ?? d.cards?.[0]
 
 /** A new scene's face: a title strip over one big section. */
-export function newSceneLayout(title = 'Title', section?: { color?: string; cards?: string[] }): SceneDiv {
-  const body = leaf('Section', section?.color ?? PALETTE[0])
-  if (section?.cards) body.cards = [...section.cards]
+export function newSceneLayout(title = 'Title', section?: { color?: string; card?: string }): SceneDiv {
+  const body = leaf('Section', section?.color ?? PALETTE[0], section?.card ? { card: section.card } : undefined)
   return { id: newDetailId(), dir: 'col', sizes: [0.13, 0.87], kids: [leaf(title, '#87a7e0'), body] }
 }
 
@@ -110,18 +137,28 @@ export function resizeSplit(root: SceneDiv, id: string, i: number, a: number, b:
   })
 }
 
-/** Cards into a division: out of any other division of this scene first. */
+/** Cards into a division: the first is the card it holds (the one it held
+ *  goes); each other one gets a division of its own beside it. Out of any
+ *  other division of this scene first. */
 export function putCards(root: SceneDiv, id: string, cardIds: string[]): SceneDiv {
-  const walk = (d: SceneDiv): SceneDiv => isLeaf(d)
-    ? { ...d, cards: d.id === id
-        ? [...(d.cards ?? []).filter(c => !cardIds.includes(c)), ...cardIds]
-        : (d.cards ?? []).filter(c => !cardIds.includes(c)) }
-    : { ...d, kids: d.kids!.map(walk) }
-  return walk(root)
+  if (!cardIds.length) return root
+  const clear = (d: SceneDiv): SceneDiv => isLeaf(d)
+    ? (heldCard(d) && cardIds.includes(heldCard(d)!) && d.id !== id ? { ...d, card: undefined, cards: undefined } : d)
+    : { ...d, kids: d.kids!.map(clear) }
+  let next = patchDiv(clear(root), id, { card: cardIds[0], cards: undefined })
+  let at = id
+  for (const c of cardIds.slice(1)) {
+    next = splitDiv(next, at, 'row')
+    const parent = findParent(next, at)!
+    const i = parent.kids!.findIndex(k => k.id === at)
+    at = parent.kids![i + 1].id
+    next = patchDiv(next, at, { card: c, name: '' })
+  }
+  return next
 }
 
-export function takeCard(root: SceneDiv, id: string, cardId: string): SceneDiv {
-  return edit(root, id, d => ({ ...d, cards: (d.cards ?? []).filter(c => c !== cardId) }))
+export function takeCard(root: SceneDiv, id: string): SceneDiv {
+  return edit(root, id, d => ({ ...d, card: undefined, cards: undefined }))
 }
 
 export function findParent(root: SceneDiv, id: string): SceneDiv | null {
@@ -132,4 +169,46 @@ export function findParent(root: SceneDiv, id: string): SceneDiv | null {
     if (p) return p
   }
   return null
+}
+
+/** The divisions lit by a pick (Focus / Trace): a division picked; a
+ *  section's first division (its heading) picked lights the whole section;
+ *  every division lit lights the headings of the sections it is in (the
+ *  path to it). Null: nothing picked, all lit. */
+export function litDivisions(root: SceneDiv, picked: string[]): Set<string> | null {
+  if (!picked.length) return null
+  const lit = new Set<string>()
+  const walk = (d: SceneDiv, heads: string[]) => {
+    if (isLeaf(d)) {
+      if (picked.includes(d.id)) { lit.add(d.id); heads.forEach(h => lit.add(h)) }
+      return
+    }
+    const head = d.dir === 'col' && isLeaf(d.kids![0]) ? d.kids![0].id : null
+    if (head && picked.includes(head)) leaves(d).forEach(l => lit.add(l.id))
+    d.kids!.forEach(k => walk(k, head && k.id !== head ? [...heads, head] : heads))
+  }
+  walk(root, [])
+  return lit
+}
+
+/** Each division's box, in the face's layout units, for a face of w x h. */
+export function divBoxes(root: SceneDiv, w: number, h: number, gap: number): Map<string, { x: number; y: number; w: number; h: number }> {
+  const out = new Map<string, { x: number; y: number; w: number; h: number }>()
+  const walk = (d: SceneDiv, x: number, y: number, bw: number, bh: number) => {
+    out.set(d.id, { x, y, w: bw, h: bh })
+    if (isLeaf(d)) return
+    const n = d.kids!.length
+    const sizes = d.sizes ?? d.kids!.map(() => 1 / n)
+    const row = d.dir === 'row'
+    const room = (row ? bw : bh) - gap * (n - 1)
+    let at = 0
+    d.kids!.forEach((k, i) => {
+      const len = Math.max(0, room * sizes[i])
+      if (row) walk(k, x + at, y, len, bh)
+      else walk(k, x, y + at, bw, len)
+      at += len + gap
+    })
+  }
+  walk(root, 0, 0, w, h)
+  return out
 }

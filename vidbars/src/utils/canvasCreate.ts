@@ -132,10 +132,11 @@ export function addBrowserNode(at?: { cx: number; cy: number }): string {
 /** New card (at card zoom) or new board (further in) — the same object either
  *  way; the zoom only decides what you are looking at when it appears.
  *  Centred on the given canvas point. Returns the new board's id. */
-export function createCardOrBoardAt(at?: { cx: number; cy: number }): string {
+export function createCardOrBoardAt(at?: { cx: number; cy: number }, opts?: { noCheckpoint?: boolean }): string {
   const { cx, cy } = at ?? viewportCenterInCanvas()
   const zoom = useCanvasStore.getState().zoom
-  useUndoCoordinator.getState().checkpoint()
+  // noCheckpoint: part of a bigger step that took its own (one undo).
+  if (!opts?.noCheckpoint) useUndoCoordinator.getState().checkpoint()
   const k = createScaleFor(zoom)
   const boardId = useBoardsStore.getState().createBoard(0, 0)
   useBoardsStore.getState().moveToNewGroup(boardId)

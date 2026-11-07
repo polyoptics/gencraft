@@ -36,6 +36,7 @@ import { HeroImageLayer } from './HeroImageLayer'
 import { CardBack, FlipButton, backColor, useCardFlip } from './CardBack'
 import { liveLocks, lockOf, withLockMates } from '../../utils/deckLock'
 import { SceneFace } from './SceneFace'
+import { fillBlockout } from '../../utils/sceneBlockout'
 import { useFxStore } from '../../store/fxStore'
 import { cardStripId } from '../../utils/fx/cardStrips'
 import { cardHitAt } from '../../utils/cardContent'
@@ -210,6 +211,12 @@ const CardContextMenu: React.FC<{
     if (nameable.length) menuItems.push({ label: `New name${nameable.length > 1 ? ` (${nameable.length})` : ''}`, icon: '🏷', action: () => {
       useUndoCoordinator.getState().checkpoint()
       useBoardsStore.getState().giveNewNames(nameable)
+      onClose()
+    }})
+    // A scene: filled with a test blockout (three acts of three scenes, a
+    // small cast held in some shots) to try its view modes on.
+    if (group.cardType === 'scene' && !group.flipped) menuItems.push({ label: 'Fill with a test blockout', icon: '🎬', action: () => {
+      fillBlockout(group.id)
       onClose()
     }})
     // A faction: its members as a tree on a new storyline beside it.

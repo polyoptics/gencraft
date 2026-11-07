@@ -1,14 +1,14 @@
 // A scene card's division opened into a scene card of its own (Brian's
 // scene tree, 2026-11-06): the first open makes a new Scene card right of
 // the scene, named after the division, its section in the division's
-// colour holding the division's cards. The division remembers it
+// colour holding the division's card. The division remembers it
 // (SceneDiv.opens); opening again goes to that card.
 
 import { useBoardsStore } from '../store/boardsStore'
 import { useCanvasStore } from '../store/canvasStore'
 import { cardVisualRect } from '../hooks/useCardDecks'
 import { createCardOrBoardAt } from './canvasCreate'
-import { findDiv, newSceneLayout, patchDiv } from './sceneCard'
+import { findDiv, heldCard, newSceneLayout, patchDiv } from './sceneCard'
 
 /** The scene card a division opens into, if it is still there. */
 export function divisionScene(divOpens: string | undefined): string | null {
@@ -37,7 +37,7 @@ export function openDivision(sceneId: string, divId: string): string | null {
   const name = div.name?.trim() || 'Scene'
   bs.renameGroup(child.id, name)
   bs.setCardsType([child.id], 'scene')
-  bs.setGroupScene(child.id, newSceneLayout(name, { color: div.color, cards: div.cards }))
+  bs.setGroupScene(child.id, newSceneLayout(name, { color: div.color, card: heldCard(div) }))
   if (scene.cardWidthOverride || scene.cardHeightOverride) bs.setGroupCardSize(child.id, scene.cardWidthOverride, scene.cardHeightOverride)
   // Lined up with the scene: tops level, a gap of a fifth of its width.
   bs = useBoardsStore.getState()
