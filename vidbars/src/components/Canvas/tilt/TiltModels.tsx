@@ -49,8 +49,11 @@ export const models: {
   /** The pins on screen this frame (three/notesOverlay), px from the 3D
    *  layer's top-left, and that layer. */
   pinSpots: (() => PinSpot[]) | null
+  /** Where model `key` stands on screen, client px: the box round it and
+   *  the point it stands on. null when it is not standing. */
+  screenBox: ((key: string) => { x0: number; y0: number; x1: number; y1: number; foot: { x: number; y: number } } | null) | null
   root: HTMLElement | null
-} = { pick: null, pickZ: null, info: null, spin: null, letGo: null, hovered: null, at: null, surface: null, pinSpots: null, root: null }
+} = { pick: null, pickZ: null, info: null, spin: null, letGo: null, hovered: null, at: null, surface: null, pinSpots: null, screenBox: null, root: null }
 /** A pick that lights up under the cursor: a model or a person, not
  *  furniture. */
 export const modelKey = (k: string | null | undefined) => (k && !k.startsWith('deco|') ? k : null)
@@ -234,7 +237,13 @@ export const TiltModels: React.FC = () => {
       models.pickZ = v.pickZ
       models.info = key => v.info(key)
       models.spin = v.spinBy
-      models.letGo = v.letGo
+      models.letGo = key => v.letGo(key, useTiltStore.getState().settle)
+      models.screenBox = key => {
+        const b = v.screenBox(key)
+        if (!b) return null
+        const r = root.getBoundingClientRect()
+        return { x0: b.x0 + r.left, y0: b.y0 + r.top, x1: b.x1 + r.left, y1: b.y1 + r.top, foot: { x: b.foot.x + r.left, y: b.foot.y + r.top } }
+      }
       models.surface = (key, clientX, clientY) => {
         const r = root.getBoundingClientRect()
         return v.surfaceAt(key, clientX - r.left, clientY - r.top)
@@ -253,6 +262,8 @@ export const TiltModels: React.FC = () => {
       useCanvasStore.subscribe(warmSoon),
       useFreeNodeStore.subscribe(warmSoon),
       useBoardsStore.subscribe(warmSoon),
+      // Settle turned back on: what was left turned rolls home.
+      useTiltStore.subscribe((s, p) => { if (s.settle && !p.settle) view?.settleAll() }),
       ...[useTiltStore, useCanvasStore, useFreeNodeStore, useBoardsStore, useViewport3DStore, useRailUiStore, useModelScaleStore, useNotesStore].map(s => s.subscribe(poke)),
     ]
     const pokes = ['pointermove', 'pointerdown', 'pointerup', 'wheel', 'keydown', 'keyup', 'resize'] as const
@@ -270,7 +281,7 @@ export const TiltModels: React.FC = () => {
       cancelAnimationFrame(raf)
       post.disconnect(); marker.remove()
       models.pick = null; models.pickZ = null; models.info = null; models.spin = null; models.letGo = null
-      models.surface = null; models.pinSpots = null; models.root = null
+      models.surface = null; models.pinSpots = null; models.screenBox = null; models.root = null
       view?.dispose()
       canvas?.remove()
     }

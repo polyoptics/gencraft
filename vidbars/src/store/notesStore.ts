@@ -64,6 +64,9 @@ export interface ModelPin {
   status: PinStatus
   /** Creation order, for numbering. */
   n0: number
+  /** Where its label was dragged to: screen px from where it sits by
+   *  default, up and right of the pin. */
+  off?: [number, number]
 }
 
 export interface ModelNotes {

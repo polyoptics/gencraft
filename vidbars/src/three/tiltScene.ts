@@ -1218,10 +1218,12 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     }
     return true
   }
-  /** Let go of a model being turned: it starts drifting back. */
-  function letGo(key: string) {
+  /** Let go of a model being turned: it starts drifting back, or with
+   *  `settle` off stays just as it is. */
+  function letGo(key: string, settle = true) {
     const s = standing.get(key)
     if (!s) return
+    if (!settle) { s.spun = []; s.back = null; return }
     const now = performance.now()
     // How fast it was turning as it was let go (rad/s), over the last 120 ms.
     // And which way: the turn it carries on with (rad/s about its axis).
@@ -1282,6 +1284,34 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     return hit && { url: s.url, p: hit.p, n: hit.n, size: s.size.length() }
   }
 
+  /** Settle turned back on: every model left turned rolls home. */
+  function settleAll() {
+    for (const [key, s] of standing) {
+      const q = s.orient.quaternion
+      if (!s.back && Math.abs(q.w) < 0.99999) letGo(key)
+    }
+  }
+
+  /** Where model `key` is on screen (px from the 3D layer's top-left): the
+   *  box round it, and the point it stands on (its middle, on the card). */
+  const boxW = new THREE.Box3(), cornerV = new THREE.Vector3()
+  function screenBox(key: string): { x0: number; y0: number; x1: number; y1: number; foot: { x: number; y: number } } | null {
+    const s = standing.get(key)
+    if (!s || !s.inst || !s.stand.visible || !lastW || !lastH) return null
+    s.stand.updateWorldMatrix(true, true)
+    boxW.setFromObject(s.turn, true)
+    if (boxW.isEmpty()) return null
+    const toPx = (v: THREE.Vector3) => { v.project(camera); return { x: (v.x + 1) / 2 * lastW, y: (1 - v.y) / 2 * lastH } }
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity
+    for (let i = 0; i < 8; i++) {
+      cornerV.set(i & 1 ? boxW.max.x : boxW.min.x, i & 2 ? boxW.max.y : boxW.min.y, i & 4 ? boxW.max.z : boxW.min.z)
+      const p = toPx(cornerV)
+      x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y)
+    }
+    const foot = toPx(s.stand.getWorldPosition(cornerV))
+    return { x0, y0, x1, y1, foot }
+  }
+
   /** The url and model units per metre of a model on screen. */
   function info(key: string): { url: string; unit: number } | null {
     const s = standing.get(key)
@@ -1299,5 +1329,5 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     renderer.forceContextLoss()
   }
 
-  return { frame, warm, pick, pickZ: () => pickedZ, info, spinBy, letGo, dispose, surfaceAt, pinSpots: notes.spots }
+  return { frame, warm, pick, pickZ: () => pickedZ, info, spinBy, letGo, settleAll, screenBox, dispose, surfaceAt, pinSpots: notes.spots }
 }

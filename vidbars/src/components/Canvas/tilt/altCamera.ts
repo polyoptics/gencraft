@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { flushSync } from 'react-dom'
-import { useTiltStore, isTilted, offFlat, unprojectTilt, standRise, TILT_SNAP, TILT_PERSPECTIVE } from '../../../store/tiltStore'
+import { useTiltStore, isTilted, offFlat, unprojectTilt, standRise, shiftKeeping, screenOf, TILT_SNAP, TILT_PERSPECTIVE, type Pivot } from '../../../store/tiltStore'
 import { storyWallOf } from '../StorylineLayer'
 import { peekAt, usePeek } from '../../../utils/peek'
 import { useCanvasStore, groupBounds, MIN_ZOOM, MAX_ZOOM } from '../../../store/canvasStore'
@@ -335,6 +335,113 @@ function frameBox(onlySelection = false, zoom?: number): { x0: number; y0: numbe
   }
 }
 
+/** A framed model's orbit pivot (Brian 2026-11-07): F on a selected model
+ *  card in 3D makes the model's middle the pivot (a point up off the
+ *  ground, over where it stands), and it stays
+ *  on that canvas point while the canvas pans or zooms under it. Let go
+ *  when the view goes flat, on the next F, or when something else sets
+ *  another pivot. */
+let framed: { pivot: Pivot; unsub: () => void } | null = null
+function dropFramed() {
+  if (!framed) return
+  framed.unsub()
+  if (useTiltStore.getState().pivot === framed.pivot) useTiltStore.getState().setPivot(null)
+  framed = null
+}
+/** `cz`: how far up, canvas units (it grows with the zoom, as the model does). */
+function holdPivot(cx: number, cy: number, cz: number, W: number, H: number) {
+  dropFramed()
+  const place = (): Pivot => {
+    const { pan, zoom } = useCanvasStore.getState()
+    return { x: cx * zoom + pan.x - W / 2, y: cy * zoom + pan.y - H / 2, z: cz * zoom }
+  }
+  const pivot = place()
+  useTiltStore.getState().setPivot(pivot)
+  const f = { pivot, unsub: () => {} }
+  const u1 = useCanvasStore.subscribe(() => {
+    if (framed !== f) return
+    const p = place()
+    f.pivot = p
+    useTiltStore.getState().setPivot(p)
+  })
+  const u2 = useTiltStore.subscribe(s => {
+    if (framed !== f) return
+    if (!isTilted(s) || s.pivot !== f.pivot) { framed.unsub(); framed = null }
+  })
+  f.unsub = () => { u1(); u2() }
+  framed = f
+}
+
+/** The standing models of the selected cards and tiles, on screen (client
+ *  px): the box round them all and the middle of the points they stand on. */
+function selectedModelsBox() {
+  if (!isTilted(useTiltStore.getState()) || !models.screenBox) return null
+  const fs = useFreeNodeStore.getState(), bs = useBoardsStore.getState()
+  const keys = [...fs.selectedIds.map(id => `node:${id}`), ...bs.selectedGroupIds.map(id => `card:${id}`)]
+  const boxes = keys.map(k => models.screenBox!(k)).filter((b): b is NonNullable<typeof b> => !!b)
+  if (!boxes.length) return null
+  return {
+    x0: Math.min(...boxes.map(b => b.x0)), y0: Math.min(...boxes.map(b => b.y0)),
+    x1: Math.max(...boxes.map(b => b.x1)), y1: Math.max(...boxes.map(b => b.y1)),
+    foot: { x: boxes.reduce((a, b) => a + b.foot.x, 0) / boxes.length, y: boxes.reduce((a, b) => a + b.foot.y, 0) / boxes.length },
+  }
+}
+
+/** F on a selected model card in 3D: frame the MODEL, not its card: at
+ *  the model's size, its middle in the middle of the view, and the orbit
+ *  about its middle (so turning or tipping the view turns about it). In
+ *  two moves: the canvas glides the model's foot to the middle at the
+ *  model's size, then the camera slides up onto its middle. */
+function frameModel(host: HTMLElement, glide: (step: (k: number) => void, done?: () => void) => void): boolean {
+  const mb = selectedModelsBox()
+  if (!mb) return false
+  const hr = host.getBoundingClientRect()
+  const W = host.clientWidth, H = host.clientHeight
+  const ts = useTiltStore.getState()
+  const fx = mb.foot.x - hr.left - W / 2, fy = mb.foot.y - hr.top - H / 2
+  const g = unprojectTilt(fx, fy, ts.tilt, ts.spin, ts.shiftX, ts.shiftY, 0, Infinity, ts.yaw)
+  if (!g) return false
+  const { pan, zoom: zFrom } = useCanvasStore.getState()
+  // The canvas point the models stand on.
+  const cx = (g.x + W / 2 - pan.x) / zFrom, cy = (g.y + H / 2 - pan.y) / zFrom
+  const size = Math.max((mb.x1 - mb.x0) / W, (mb.y1 - mb.y0) / H, 1e-3)
+  // (Brought nearer, perspective makes it show a little bigger than the
+  // plain ratio: 0.5 here lands at about 0.6 of the view.)
+  const zTo = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zFrom * 0.5 / size))
+  const cFrom = { x: (W / 2 - pan.x) / zFrom, y: (H / 2 - pan.y) / zFrom }
+  const { shiftX: sx0, shiftY: sy0 } = ts
+  dropFramed()
+  glide(k => {
+    const z = Math.exp(Math.log(zFrom) + (Math.log(zTo) - Math.log(zFrom)) * k)
+    const x = cFrom.x + (cx - cFrom.x) * k, y = cFrom.y + (cy - cFrom.y) * k
+    useCanvasStore.setState({ zoom: z, pan: { x: W / 2 - x * z, y: H / 2 - y * z } })
+    if (sx0 || sy0) useTiltStore.getState().setShift(sx0 * (1 - k), sy0 * (1 - k))
+  }, () => {
+    // The foot is in the middle now. How far up over it is the model's
+    // middle? Found from where it is drawn (a few secant steps along the
+    // line straight up from the foot).
+    const b = selectedModelsBox()
+    if (!b) return
+    const s = useTiltStore.getState()
+    const m = { x: (b.x0 + b.x1) / 2 - hr.left - W / 2, y: (b.y0 + b.y1) / 2 - hr.top - H / 2 }
+    const at = (h: number) => screenOf({ x: 0, y: 0, z: h }, s) ?? { x: 0, y: 0 }
+    let h = 0
+    for (let i = 0; i < 4; i++) {
+      const p0 = at(h), p1 = at(h + 10)
+      const dx = (p1.x - p0.x) / 10, dy = (p1.y - p0.y) / 10, dd = dx * dx + dy * dy
+      if (dd < 1e-9) break
+      h += ((m.x - p0.x) * dx + (m.y - p0.y) * dy) / dd
+    }
+    const z = useCanvasStore.getState().zoom
+    holdPivot(cx, cy, h / z, W, H)
+    // Slide the camera so that middle is in the middle of the view.
+    const to = shiftKeeping({ x: 0, y: 0, z: h }, s.tilt, s.spin, s.yaw)
+    const a = { x: s.shiftX, y: s.shiftY }
+    glide(k => useTiltStore.getState().setShift(a.x + (to.shiftX - a.x) * k, a.y + (to.shiftY - a.y) * k))
+  })
+  return true
+}
+
 /** F frames the selection — the cards and tiles selected — in the middle
  *  of the view, which is also the pivot the tilted view orbits about. With
  *  nothing selected, F frames everything on the canvas. Flat or tilted. */
@@ -348,6 +455,20 @@ export function useFrameKey() {
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return
       const host = document.querySelector<HTMLElement>('[data-zoom-bar-host]')
       if (!host) return
+      const glide = (step: (k: number) => void, done?: () => void, ms = GLIDE_MS) => {
+        if (raf !== null) cancelAnimationFrame(raf)
+        const start = performance.now()
+        const tick = () => {
+          const u = Math.min(1, (performance.now() - start) / ms)
+          step(u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2)
+          raf = u < 1 ? requestAnimationFrame(tick) : null
+          // The next move measures what this one drew: a frame later.
+          if (u >= 1 && done) raf = requestAnimationFrame(() => requestAnimationFrame(() => { raf = null; done() }))
+        }
+        raf = requestAnimationFrame(tick)
+      }
+      if (frameModel(host, (step, done) => glide(step, done, done ? GLIDE_MS : GLIDE_MS * 0.5))) { e.preventDefault(); return }
+      dropFramed()
       const box = frameBox()
       if (!box) return
       e.preventDefault()

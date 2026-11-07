@@ -81,8 +81,8 @@ interface TiltStore {
   /** The flat point (px from the host centre) the view turns about, held
    *  where it is on screen: what an Alt-twist peek started over
    *  (utils/peek). Null: the middle of the screen. */
-  pivot: { x: number; y: number } | null
-  setPivot: (pivot: { x: number; y: number } | null) => void
+  pivot: Pivot | null
+  setPivot: (pivot: Pivot | null) => void
   /** How models are drawn: see three/modelLook.ts. */
   texture: boolean
   shade: ModelShade
@@ -90,6 +90,10 @@ interface TiltStore {
   light: TiltLight
   /** Models turn slowly on their card. */
   turn: boolean
+  /** A model turned by hand (Alt-drag) rolls back to how it stood. Off,
+   *  it stays where it is left (Brian 2026-11-07: turn it, then draw on it). */
+  settle: boolean
+  setSettle: (on: boolean) => void
   /** A back wall on each model card with its file name and size. */
   walls: boolean
   /** A person beside each model, for scale. */
@@ -125,6 +129,11 @@ interface TiltStore {
  *  looking straight down still counts as the 3D view. */
 export const LOCK_MIN_TILT = 0.05
 
+/** What the view turns about: a ground point (flat px from the host
+ *  centre), or with `z` a point that far up off the ground (px toward the
+ *  eye: a framed model's middle). */
+export type Pivot = { x: number; y: number; z?: number }
+
 let flattenRaf: number | null = null
 const CONSOLE_KEY = 'vidbars.tiltConsole'
 function readConsole(): boolean {
@@ -144,6 +153,8 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
   wire: false,
   light: DEFAULT_LIGHT,
   turn: true,
+  settle: true,
+  setSettle: settle => set({ settle }),
   walls: true,
   figure: false,
   glide: null,
@@ -183,7 +194,10 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
     // What is in the middle of the screen stays there all the way down, so
     // the flat view lands exactly where you were looking (Brian 2026-10-30).
     // With a pivot, it stays put instead, so a peek lands back exactly.
-    const keep = keeping(get())
+    // (A raised pivot is kept by the ground point under it: the model it
+    // was the middle of lies down on the way.)
+    const g0 = get()
+    const keep = keeping({ ...g0, pivot: g0.pivot && { x: g0.pivot.x, y: g0.pivot.y } })
     const start = performance.now()
     const tick = () => {
       const t = Math.min(1, (performance.now() - start) / 320)
@@ -225,32 +239,35 @@ export const isTilted = (s: { tilt: number; yaw: number }) => offFlat(s) > 0.01
 function centreGround(s: { tilt: number; spin: number; yaw: number; shiftX: number; shiftY: number }) {
   return unprojectTilt(0, 0, s.tilt, s.spin, s.shiftX, s.shiftY, 0, Infinity, s.yaw)
 }
-/** Ground point `g` turned into view space: q = Rx(tilt)·Ry(yaw)·Rz(spin)·g. */
-function viewPoint(g: { x: number; y: number }, tiltDeg: number, spinDeg: number, yawDeg: number) {
+/** Point `g` (on the ground, or `g.z` up off it) turned into view space:
+ *  q = Rx(tilt)·Ry(yaw)·Rz(spin)·g. */
+function viewPoint(g: Pivot, tiltDeg: number, spinDeg: number, yawDeg: number) {
   const t = tiltDeg * Math.PI / 180, s = spinDeg * Math.PI / 180, b = yawDeg * Math.PI / 180
+  const h = g.z ?? 0
   const x1 = g.x * Math.cos(s) - g.y * Math.sin(s)
   const y1 = g.x * Math.sin(s) + g.y * Math.cos(s)
-  return { x: x1 * Math.cos(b), y: y1 * Math.cos(t) + x1 * Math.sin(b) * Math.sin(t), z: y1 * Math.sin(t) - x1 * Math.sin(b) * Math.cos(t) }
+  const z1 = -x1 * Math.sin(b) + h * Math.cos(b)
+  return { x: x1 * Math.cos(b) + h * Math.sin(b), y: y1 * Math.cos(t) - z1 * Math.sin(t), z: y1 * Math.sin(t) + z1 * Math.cos(t) }
 }
 /** The camera shift that puts ground point `g` at screen point `at` (px from
  *  the middle; default the middle) for this tilt and spin — unprojectTilt
  *  run backwards: the point at q is drawn at (q + shift)·P/(P - q.z). Flat,
  *  it is just at - g. */
-function shiftKeeping(g: { x: number; y: number }, tiltDeg: number, spinDeg: number, yawDeg: number, at = { x: 0, y: 0 }) {
+export function shiftKeeping(g: Pivot, tiltDeg: number, spinDeg: number, yawDeg: number, at = { x: 0, y: 0 }) {
   const q = viewPoint(g, tiltDeg, spinDeg, yawDeg)
   const k = (TILT_PERSPECTIVE - q.z) / TILT_PERSPECTIVE
   return { shiftX: at.x * k - q.x, shiftY: at.y * k - q.y }
 }
 /** Where ground point `g` is drawn now, px from the screen's middle; null
  *  when it is behind the eye. */
-function screenOf(g: { x: number; y: number }, s: { tilt: number; spin: number; yaw: number; shiftX: number; shiftY: number }) {
+export function screenOf(g: Pivot, s: { tilt: number; spin: number; yaw: number; shiftX: number; shiftY: number }) {
   const q = viewPoint(g, s.tilt, s.spin, s.yaw)
   const k = (TILT_PERSPECTIVE - q.z) / TILT_PERSPECTIVE
   return k > 0.05 ? { x: (q.x + s.shiftX) / k, y: (q.y + s.shiftY) / k } : null
 }
 /** What a turn of the view keeps still: the pivot where it is drawn, else
  *  the ground point at the middle of the screen. */
-function keeping(s: { tilt: number; spin: number; yaw: number; shiftX: number; shiftY: number; pivot: { x: number; y: number } | null }) {
+function keeping(s: { tilt: number; spin: number; yaw: number; shiftX: number; shiftY: number; pivot: Pivot | null }) {
   const at = s.pivot && screenOf(s.pivot, s)
   if (s.pivot && at) return { g: s.pivot, at }
   const g = centreGround(s)

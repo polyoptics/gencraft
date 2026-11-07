@@ -5,6 +5,7 @@
 // pin is on screen every frame and they follow it. Round the back of the
 // model they dim.
 //  - Click: selects the card it links to.
+//  - Drag: move the label to a better spot (its leader follows).
 //  - Double-click: edit its title and second line here.
 
 import React, { useEffect, useRef, useState } from 'react'
@@ -33,28 +34,58 @@ const Label: React.FC<{ spot: PinSpot; pin: ModelPin; title: string; focused: bo
   const ink = resolved ? '#5fe39b' : '#7fd4ff'
   const glow = focused ? `drop-shadow(0 0 4px ${ink})` : 'none'
   const ruleW = Math.min(200, Math.max(70, title.length * 7.4 + 22))
+  // Dragged somewhere else: the label moves, the leader still runs from the pin.
+  const [live, setLive] = useState<[number, number] | null>(null)
+  const [ox, oy] = live ?? pin.off ?? [0, 0]
+  const dragged = useRef(false)
+  const onDown = (e: React.PointerEvent) => {
+    e.stopPropagation()
+    if (e.button !== 0 || editing) return
+    const x0 = e.clientX, y0 = e.clientY
+    const [bx, by] = pin.off ?? [0, 0]
+    dragged.current = false
+    let last: [number, number] | null = null
+    const move = (ev: PointerEvent) => {
+      if (!dragged.current && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 4) return
+      dragged.current = true
+      last = [bx + ev.clientX - x0, by + ev.clientY - y0]
+      setLive(last)
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move, true)
+      window.removeEventListener('pointerup', up, true)
+      if (last) {
+        useUndoCoordinator.getState().checkpoint()
+        useNotesStore.getState().updatePin(spot.url, pin.id, { off: [Math.round(last[0]), Math.round(last[1])] })
+      }
+      setLive(null)
+    }
+    window.addEventListener('pointermove', move, true)
+    window.addEventListener('pointerup', up, true)
+  }
   const text: React.CSSProperties = {
     fontFamily: '"JetBrains Mono", "Consolas", ui-monospace, monospace', letterSpacing: 0.3,
     textShadow: '0 1px 2px rgba(0,0,0,0.95), 0 0 6px rgba(0,0,0,0.7)', whiteSpace: 'nowrap',
   }
   return (
     <div ref={setRef} data-pin-label="" style={{ position: 'absolute', left: 0, top: 0, pointerEvents: 'none', willChange: 'transform' }}>
-      <svg width={RUN + ruleW + 2} height={RISE + 4} style={{ position: 'absolute', left: 0, top: -RISE - 2, overflow: 'visible', filter: glow }}>
+      <svg width={1} height={1} style={{ position: 'absolute', left: 0, top: 0, overflow: 'visible', filter: glow }}>
         {/* A thin leader up from the pin, then the rule the title sits on,
             ending in a short tick; the status is the small square at its start. */}
-        <path d={`M0 ${RISE + 2} L${RUN} 2 H${RUN + ruleW}`} fill="none" stroke={ink} strokeWidth={focused ? 1.6 : 1.1} opacity={0.95} />
-        <path d={`M${RUN + ruleW} 2 v5`} stroke={ink} strokeWidth={1.1} />
-        <rect x={RUN - 2.5} y={-0.5} width={5} height={5} fill={resolved ? ink : '#0b1220'} stroke={ink} strokeWidth={1} />
+        <path d={`M0 0 L${RUN + ox} ${oy - RISE} H${RUN + ox + ruleW}`} fill="none" stroke={ink} strokeWidth={focused ? 1.6 : 1.1} opacity={0.95} />
+        <path d={`M${RUN + ox + ruleW} ${oy - RISE} v5`} stroke={ink} strokeWidth={1.1} />
+        <rect x={RUN + ox - 2.5} y={oy - RISE - 2.5} width={5} height={5} fill={resolved ? ink : '#0b1220'} stroke={ink} strokeWidth={1} />
       </svg>
       <div
-        onPointerDown={e => e.stopPropagation()}
+        onPointerDown={onDown}
         onClick={() => {
+          if (dragged.current) { dragged.current = false; return }
           useNotesUi.setState({ focus: { url: spot.url, pinId: pin.id } })
           if (pin.cardId) useBoardsStore.getState().setSelectedGroups([pin.cardId])
         }}
         onDoubleClick={() => { setT(title); setD(pin.desc); setEditing(true) }}
-        title={'Click: show it on its Annotation card' + (pin.cardId ? ' and select its card' : '') + ' · Double-click: edit'}
-        style={{ position: 'absolute', left: RUN + 6, top: -RISE - 17, pointerEvents: 'auto', cursor: 'pointer', color: '#eef6ff', padding: '0 4px 2px 0' }}
+        title={'Click: show it on its Annotation card' + (pin.cardId ? ' and select its card' : '') + ' · Drag: move the label · Double-click: edit'}
+        style={{ position: 'absolute', left: RUN + 6 + ox, top: oy - RISE - 17, pointerEvents: 'auto', cursor: live ? 'grabbing' : 'pointer', color: '#eef6ff', padding: '0 4px 2px 0' }}
       >
         {editing ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 3, ...text }} onKeyDown={e => { if (e.key === 'Enter') done(); if (e.key === 'Escape') setEditing(false) }}>

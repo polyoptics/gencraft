@@ -21,6 +21,7 @@ export const TiltedView: React.FC = () => {
   const wire = useTiltStore(s => s.wire)
   const [lightOpen, setLightOpen] = useState(false)
   const turn = useTiltStore(s => s.turn)
+  const settle = useTiltStore(s => s.settle)
   const walls = useTiltStore(s => s.walls)
   const figure = useTiltStore(s => s.figure)
   const tilt = useTiltStore(offFlat)
@@ -931,6 +932,7 @@ export const TiltedView: React.FC = () => {
         <button style={btn(wire)} onClick={() => set.setWire(!wire)} title="The wireframe, over whatever else shows">Wireframe</button>
         <button style={btn(lightOpen)} onClick={() => setLightOpen(o => !o)} title="Move the light, brightness and reflections">Light</button>
         <button style={btn(turn)} onClick={() => set.setTurn(!turn)}>Turn</button>
+        <button style={btn(settle)} onClick={() => set.setSettle(!settle)} aria-pressed={settle} title="Settle: a model you turn with Alt-drag rolls back to how it stood. Off, it stays where you leave it, so you can turn it and draw on it.">Settle</button>
         <button style={btn(walls)} onClick={() => set.setWalls(!walls)} title="File name and size on a wall behind each model">Labels</button>
         <button style={btn(figure)} onClick={() => set.setFigure(!figure)} title="A 1.75 m person beside each model. Drag them up or down to set how big the model really is.">Person</button>
         <span style={{ width: 1, height: 14, background: 'rgba(255,255,255,0.12)' }} />
