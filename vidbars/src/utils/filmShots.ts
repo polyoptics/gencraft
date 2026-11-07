@@ -15,7 +15,6 @@ import { mediaShots } from './filmPlan'
 import { getMediaItems } from '../types/bar'
 import { cardFaceSize, createMediaCard, gridOrder } from './cardGrid'
 import { DOCK_TOLERANCE, rectsTouch, type Rect } from './viewportDocking'
-import { cardScreenRect } from '../components/Layers/CardLayer'
 import { cardTouchRect } from '../hooks/useCardDecks'
 import { expandWithNestedMembers } from '../hooks/useCardDecks'
 
@@ -31,30 +30,21 @@ export function cardShots(g: ProjectGroup, boards: Record<string, BoardData>): s
   return out
 }
 
-function canvasRect(g: ProjectGroup, boards: Record<string, BoardData>): Rect | null {
-  const r = cardScreenRect(g, boards, { x: 0, y: 0 }, 1)
-  return r ? { x: r.screenLeft, y: r.screenTop, width: r.screenWidth, height: r.screenHeight } : null
-}
-
 /** The cards touching the mixer, and the cards touching those (a deck),
  *  with any stacked deck's hidden members, in reading order: top row first,
  *  left to right. */
-export function dockedCards(node: FreeNodeData, groups: ProjectGroup[], boards: Record<string, BoardData>, fixedReach = false): ProjectGroup[] {
+export function dockedCards(node: FreeNodeData, groups: ProjectGroup[], boards: Record<string, BoardData>): ProjectGroup[] {
   const rects = new Map<string, Rect>()
   const zoom = useCanvasStore.getState().zoom
   for (const g of groups) {
     if (g.pin) continue
-    let r: Rect | null
-    if (fixedReach) {
-      const t = cardTouchRect(g, boards, zoom)
-      r = t && { x: t.left, y: t.top, width: t.right - t.left, height: t.bottom - t.top }
-    } else r = canvasRect(g, boards)
-    if (r) rects.set(g.id, r)
+    const t = cardTouchRect(g, boards, zoom)
+    if (t) rects.set(g.id, { x: t.left, y: t.top, width: t.right - t.left, height: t.bottom - t.top })
   }
-  // The card-back windows (utils/cardBacks) ask for the reach every other
-  // dock uses, the same at every zoom (Brian 2026-11-07); Film Look keeps
-  // its own, which grows as you zoom out.
-  const tol = fixedReach ? DOCK_TOLERANCE : DOCK_TOLERANCE / Math.max(0.05, useCanvasStore.getState().zoom)
+  // Touching is judged the same at every zoom (Brian 2026-11-07), as decks
+  // judge it: the header band at its own canvas size, a fixed tolerance.
+  // Cards get flush by the magnet (utils/deckDockDrag cardReaderRects).
+  const tol = DOCK_TOLERANCE
   const nodeRect = { x: node.x, y: node.y, width: node.width, height: node.height }
   const found = new Set<string>()
   const queue: string[] = []
@@ -125,8 +115,9 @@ export function docked(node: FreeNodeData, groups: ProjectGroup[], boards: Recor
   for (const g of cards) {
     for (const s of cardShots(g, boards)) if (!seen.has(s)) { seen.add(s); out.push(s) }
   }
-  // A Rough Cut touching the mixer feeds it its shots, in cut order.
-  const tol = DOCK_TOLERANCE / Math.max(0.05, useCanvasStore.getState().zoom)
+  // A Rough Cut touching the mixer feeds it its shots, in cut order. Panels
+  // snap flush, so the fixed tolerance is enough at every zoom.
+  const tol = DOCK_TOLERANCE
   const nodeRect = { x: node.x, y: node.y, width: node.width, height: node.height }
   for (const n of Object.values(useFreeNodeStore.getState().nodes)) {
     if (n.type !== 'roughCut' || n.pin || !rectsTouch(nodeRect, { x: n.x, y: n.y, width: n.width, height: n.height }, tol)) continue

@@ -56,7 +56,7 @@ function newPromptCard(nodeId: string): void {
   // Where it goes: left of the leftmost docked card level with the pad's
   // top, else against the pad itself.
   let right = node.x, top = node.y
-  for (const g of dockedCards(node, before.groups, before.boards, true)) {
+  for (const g of dockedCards(node, before.groups, before.boards)) {
     const v = cardVisualRect(g, before.boards, zoom)?.rect
     if (!v || v.bottom < node.y || v.top > node.y + node.height * 0.25 || v.left >= right) continue
     right = v.left; top = v.top

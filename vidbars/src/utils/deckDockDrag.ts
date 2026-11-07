@@ -32,9 +32,12 @@ export function viewportWindowRects(): WindowRect[] {
  *  Card Prompts: utils/cardBacks). Any card magnets to them, a card with no
  *  picture or model too (Brian 2026-11-06). Canvas-placed only. */
 export const CARD_READER_TYPES = new Set(['attributes', 'promptCards'])
+/** What cards magnet onto besides Viewers: the card readers, and Film Look,
+ *  which reads its docked cards the same way (utils/filmShots dockedCards). */
+const CARD_MAGNET_TYPES = new Set([...CARD_READER_TYPES, 'filmMixer'])
 export function cardReaderRects(): WindowRect[] {
   return Object.values(useFreeNodeStore.getState().nodes)
-    .filter(n => CARD_READER_TYPES.has(n.type) && !n.pin)
+    .filter(n => CARD_MAGNET_TYPES.has(n.type) && !n.pin)
     .map(n => ({ id: n.id, x: n.x, y: n.y, width: n.width, height: n.height }))
 }
 
