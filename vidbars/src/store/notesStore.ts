@@ -64,9 +64,9 @@ export interface ModelPin {
   status: PinStatus
   /** Creation order, for numbering. */
   n0: number
-  /** Where its label was dragged to: screen px from where it sits by
-   *  default, up and right of the pin. */
-  off?: [number, number]
+  /** Where its label sits, model space: it stays there in 3D as the view
+   *  turns. Absent: a little way out from the pin, along its normal and up. */
+  at?: [number, number, number]
 }
 
 export interface ModelNotes {
@@ -150,7 +150,7 @@ export const useNotesStore = create<NotesStore>()(persist((set, get) => ({
 // ── The tools (UI state) ──
 
 /** What the mouse does on the canvas. null: what it always does. */
-export type NotesTool = 'curve' | 'pen' | 'pin'
+export type NotesTool = 'curve' | 'pen' | 'pin' | 'erase'
 
 export const NOTE_COLORS = ['#ffffff', '#ff5a5a', '#ffb23f', '#ffe14a', '#5fe39b', '#4fc3ff', '#a98bff', '#ff8fd1', '#111318']
 

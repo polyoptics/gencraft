@@ -17,6 +17,8 @@ import { useViewport3DStore } from '../../store/viewport3dStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { usePlacing, togglePlacing } from '../../utils/placeTool'
 import { areaAt } from '../../utils/areaFollow'
+import { ensureAnnotated, modelName } from '../../utils/annotations'
+import { models } from '../Canvas/tilt/TiltModels'
 import { curveBounds, curvePoints } from '../../utils/curveGeom'
 import { useCurveDraft } from '../../utils/notesTool'
 
@@ -39,6 +41,9 @@ const IcPen: Ic = ({ size = 20 }) => (
 )
 const IcPin: Ic = ({ size = 20 }) => (
   <svg {...svg(size)}><circle cx="8" cy="16" r="2.4" fill="#ffb23f" stroke="none" /><path d="M9.6 14.4L14 10" stroke={S} strokeWidth="1.4" /><rect x="13" y="4" width="8" height="6" rx="1" stroke={S} strokeWidth="1.6" /></svg>
+)
+const IcErase: Ic = ({ size = 20 }) => (
+  <svg {...svg(size)}><path d="M14.5 4.5l5 5-8.5 8.5H6l-2.5-2.5z" stroke={S} strokeWidth="1.6" /><path d="M9.5 9.5l5 5" stroke="#ff8fd1" strokeWidth="1.6" /><path d="M11 18h9" stroke={S} strokeWidth="1.4" /></svg>
 )
 const IcArea: Ic = ({ size = 20 }) => (
   <svg {...svg(size)}><rect x="3" y="5" width="18" height="14" rx="2" stroke={S} /><path d="M9 5v14M15 5v14M3 12h18" stroke="#5fe39b" strokeWidth="1.2" /></svg>
@@ -65,6 +70,7 @@ const TOOLS: { id: NotesTool; Icon: Ic; name: string; tip: string }[] = [
   { id: 'curve', Icon: IcCurve, name: 'Curve', tip: 'Curve: click for corners, click-drag for smooth points. Double-click, Enter or Esc finishes; click the first point to close it. Works flat and in 3D.' },
   { id: 'pen', Icon: IcPen, name: 'Pen', tip: 'Pen: freehand. Over a model in 3D it draws on the model’s surface; anywhere else on the canvas.' },
   { id: 'pin', Icon: IcPin, name: 'Pin', tip: 'Pin: click a model in 3D to pin a note on it. Each pin gets a Note card, and the model gets an Annotation card.' },
+  { id: 'erase', Icon: IcErase, name: 'Erase', tip: 'Erase: click or drag over a stroke on a model, a pin’s dot or a curve to remove just that. Models and cards are never touched.' },
 ]
 
 const SMOOTH_TIP = 'Smooth: on or off. On, a curve runs smoothly through its points by itself, no handles to set; drag the points to reshape it. Also sets the selected curves.'
@@ -75,6 +81,62 @@ const Section: React.FC<{ title: string; children: React.ReactNode }> = ({ title
     {children}
   </div>
 )
+
+// ── The selected model's notes ──
+
+/** The models of the selected tiles and cards that have notes: their key
+ *  (as the 3D view knows them) and file. */
+function useSelectedModels(): { key: string; url: string }[] {
+  const selNodes = useFreeNodeStore(s => s.selectedIds)
+  const selCards = useBoardsStore(s => s.selectedGroupIds)
+  const nodes = useFreeNodeStore(s => s.nodes)
+  const notes = useNotesStore(s => s.models)
+  return useMemo(() => {
+    const out: { key: string; url: string }[] = []
+    const keys = [...selNodes.map(id => `node:${id}`), ...selCards.map(id => `card:${id}`)]
+    for (const key of keys) {
+      const n = key.startsWith('node:') ? nodes[key.slice(5)] : undefined
+      const url = models.info?.(key)?.url ?? (n?.type === 'model' ? n.imageUrl : undefined)
+      if (url && notes[url] && !out.some(o => o.url === url)) out.push({ key, url })
+    }
+    return out
+  }, [selNodes, selCards, nodes, notes])
+}
+
+/** Clear its strokes, or bring its Annotation card back (made again if it
+ *  was deleted): without going near the model itself. */
+const ModelNotesRow: React.FC<{ k: string; url: string }> = ({ k, url }) => {
+  const m = useNotesStore(s => s.models[url])
+  const nodes = useFreeNodeStore(s => s.nodes)
+  if (!m) return null
+  const has = !!(m.cardNodeId && nodes[m.cardNodeId])
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ fontSize: 12, display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name || modelName(k, url)}</span>
+        <span style={{ color: 'rgba(255,255,255,0.45)', fontFamily: 'ui-monospace, monospace', fontSize: 11, flexShrink: 0 }}>{m.strokes.length} strokes · {m.pins.length} pins</span>
+      </div>
+      <div style={{ display: 'flex', gap: 6 }}>
+        <button style={{ ...btnStyle(false, true), flex: 1, justifyContent: 'center', opacity: m.strokes.length ? 1 : 0.45 }} disabled={!m.strokes.length}
+          title="Remove every stroke drawn on this model (Ctrl+Z brings them back). The Erase tool removes one at a time."
+          onClick={() => { useUndoCoordinator.getState().checkpoint(); useNotesStore.getState().clearStrokes(url) }}>Clear strokes</button>
+        <button style={{ ...btnStyle(false, true), flex: 1, justifyContent: 'center' }}
+          title={has ? 'Select its Annotation card' : 'Its Annotation card was deleted: make it again, with all its pins'}
+          onClick={() => {
+            const id = ensureAnnotated(url, k)
+            useFreeNodeStore.getState().setFreeSelection([id])
+            useBoardsStore.getState().clearGroupSelection()
+          }}>{'Annotation card'}</button>
+      </div>
+    </div>
+  )
+}
+
+const SelectedModels: React.FC = () => {
+  const list = useSelectedModels()
+  if (!list.length) return null
+  return <Section title="SELECTED MODEL">{list.map(m => <ModelNotesRow key={m.url} k={m.key} url={m.url} />)}</Section>
+}
 
 // ── Outliner ──
 type Item = { kind: 'node' | 'card' | 'viewer' | 'curve'; id: string; name: string; icon: string; cx: number; cy: number }
@@ -366,6 +428,7 @@ export const NotesPanel: React.FC = () => {
                 style={{ width: '100%' }} />
             </Section>
             <Section title="PLACE">{areaBtn}</Section>
+            <SelectedModels />
             <Section title="OUTLINER"><Outliner /></Section>
           </>
         )}

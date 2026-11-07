@@ -13,6 +13,8 @@
 //  - Pen: freehand. Over a standing model in 3D it draws on the model's
 //    surface; anywhere else it draws on the canvas.
 //  - Pin: click a standing model in 3D to pin a note there (with its card).
+//  - Erase: press or drag over a stroke on a model, a pin's dot or a curve
+//    to remove just that (never the model or a card).
 //  - Select (no tool): a curve is clicked to select it (Shift adds), dragged to move
 //    it; a selected curve's points and handles drag (with any tool in the
 //    hand too). Delete removes.
@@ -169,6 +171,35 @@ function onDown(e: PointerEvent) {
       useCurveDraft.setState({ curve: null, hover: null })
       if (c && c.pts.length >= 2) useNotesStore.getState().addCurve(c)
     })
+    return
+  }
+
+  if (ui.tool === 'erase') {
+    if (!overCanvas(target) && !target.closest('[data-curve-id]')) return
+    // Every press on the canvas is the eraser's: nothing under it is moved,
+    // selected or deleted but what it rubs out.
+    claim(e); eatClick = true
+    let marked = false
+    const rub = (ev: PointerEvent) => {
+      const once = () => { if (!marked) { marked = true; checkpoint() } }
+      const ns = useNotesStore.getState()
+      // A pin's dot.
+      const r = models.root?.getBoundingClientRect()
+      const spot = r && models.pinSpots?.().find(s => Math.hypot(r.left + s.x - ev.clientX, r.top + s.y - ev.clientY) < 9)
+      if (spot) { once(); ns.removePin(spot.url, spot.pinId); return }
+      // A stroke on a model.
+      const st = models.strokeAt?.(ev.clientX, ev.clientY)
+      if (st) { once(); ns.removeStroke(st.url, st.id); return }
+      // A curve on the canvas.
+      const under = document.elementFromPoint(ev.clientX, ev.clientY)?.closest?.('[data-curve-id]')
+      const id = under?.getAttribute('data-curve-id')
+      if (id && ns.curves[id]) {
+        once(); ns.deleteCurves([id])
+        useNotesUi.setState(u => ({ selected: u.selected.filter(x => x !== id) }))
+      }
+    }
+    rub(e)
+    startDrag(rub, () => {})
     return
   }
 

@@ -427,7 +427,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   let frameNo = 0
   // The 3D notes on the models (three/notesOverlay).
   const notes = createNotesOverlay()
-  const notesHost = (s: Standing): NotesHost => ({ url: s.url, inst: s.inst, visible: s.stand.visible, body: s.turn })
+  const notesHost = (s: Standing): NotesHost => ({ url: s.url, inst: s.inst, visible: s.stand.visible, body: s.turn, size: s.size.length() })
 
   const spawn = (key: string, url: string): Standing => {
     const stand = new THREE.Group()
@@ -1284,6 +1284,23 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     return hit && { url: s.url, p: hit.p, n: hit.n, size: s.size.length() }
   }
 
+  /** Where a pin's label dragged to (x, y) (px on the 3D canvas) sits, in
+   *  model `key`'s space: at the depth of `through`, facing the eye. */
+  function labelAt(key: string, through: [number, number, number], x: number, y: number): [number, number, number] | null {
+    const s = standing.get(key)
+    if (!s || !s.inst || !lastW) return null
+    const p = notes.planeAt(camera, lastW, lastH, notesHost(s), new THREE.Vector3(...through), x, y)
+    return p && [p.x, p.y, p.z]
+  }
+  function strokeAt(x: number, y: number) {
+    return lastW ? notes.strokeAt(camera, lastW, lastH, x, y) : null
+  }
+  /** A model's size (its box's diagonal, its own units). */
+  function modelSize(key: string): number | null {
+    const s = standing.get(key)
+    return s && s.inst ? s.size.length() : null
+  }
+
   /** Settle turned back on: every model left turned rolls home. */
   function settleAll() {
     for (const [key, s] of standing) {
@@ -1329,5 +1346,5 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     renderer.forceContextLoss()
   }
 
-  return { frame, warm, pick, pickZ: () => pickedZ, info, spinBy, letGo, settleAll, screenBox, dispose, surfaceAt, pinSpots: notes.spots }
+  return { frame, warm, pick, pickZ: () => pickedZ, info, spinBy, letGo, settleAll, screenBox, labelAt, strokeAt, modelSize, dispose, surfaceAt, pinSpots: notes.spots }
 }

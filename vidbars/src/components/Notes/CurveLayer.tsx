@@ -69,7 +69,7 @@ export const CurveLayer: React.FC = () => {
   const hover = useCurveDraft(s => s.hover)
   const list = Object.values(curves)
   // With a tool in the hand, presses go to the tool, not to the curves.
-  const hit = !tool
+  const hit = !tool || tool === 'erase'
   // The next segment, to the cursor, while drawing.
   let preview: string | null = null
   if (draft && draft.kind === 'bezier' && hover && draft.pts.length && draft.smooth) {

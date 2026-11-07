@@ -22,6 +22,8 @@ export interface NotesHost {
   visible: boolean
   /** What to raycast for whether a pin is hidden behind the model. */
   body: THREE.Object3D
+  /** The model's size (the diagonal of its box, its own units). */
+  size: number
 }
 
 /** A pin on screen: px from the 3D canvas's top-left. */
@@ -33,8 +35,19 @@ export interface PinSpot {
   pinId: string
   x: number
   y: number
+  /** Where its label sits on screen (its 3D spot, ModelPin.at). */
+  lx: number
+  ly: number
   /** Behind the model, seen from here. */
   hidden: boolean
+}
+
+/** A pin's label spot, model space: its own, or a little way out from the
+ *  pin along its normal, leaning up. */
+export function labelSpot(p: { p: [number, number, number]; n: [number, number, number]; at?: [number, number, number] }, size: number): THREE.Vector3 {
+  if (p.at) return new THREE.Vector3(...p.at)
+  const d = new THREE.Vector3(...p.n).normalize().add(new THREE.Vector3(0, 0.7, 0)).normalize()
+  return new THREE.Vector3(...p.p).addScaledVector(d, size * 0.12)
 }
 
 export const PIN_COLORS = { open: 0x7fd4ff, resolved: 0x5fe39b } as const
@@ -55,7 +68,8 @@ interface Built {
   group: THREE.Group
   notes: ModelNotes | undefined
   lines: Line2[]
-  dots: { sprite: THREE.Sprite; pinId: string; local: THREE.Vector3 }[]
+  dots: { sprite: THREE.Sprite; pinId: string; local: THREE.Vector3; label: THREE.Vector3 }[]
+  size: number
   /** Which pins were last seen hidden, and when that was checked (frame). */
   hidden: Map<string, boolean>
   checkedAt: number
@@ -77,9 +91,10 @@ export function createNotesOverlay() {
     b.lines = []
     b.dots = []
   }
-  const build = (b: Built, notes: ModelNotes | undefined) => {
+  const build = (b: Built, notes: ModelNotes | undefined, size: number) => {
     clear(b)
     b.notes = notes
+    b.size = size
     if (!notes) return
     for (const s of notes.strokes) {
       if (s.pts.length < 6) continue
@@ -104,7 +119,7 @@ export function createNotesOverlay() {
       sprite.renderOrder = 30
       sprite.frustumCulled = false
       b.group.add(sprite)
-      b.dots.push({ sprite, pinId: p.id, local })
+      b.dots.push({ sprite, pinId: p.id, local, label: labelSpot(p, size) })
     }
   }
 
@@ -123,10 +138,10 @@ export function createNotesOverlay() {
         const group = new THREE.Group()
         group.matrixAutoUpdate = false
         scene.add(group)
-        b = { group, notes: undefined, lines: [], dots: [], hidden: new Map(), checkedAt: -999 }
+        b = { group, notes: undefined, lines: [], dots: [], hidden: new Map(), checkedAt: -999, size: 0 }
         built.set(key, b)
       }
-      if (b.notes !== notes) build(b, notes)
+      if (b.notes !== notes || b.size !== s.size) build(b, notes, s.size)
       b.group.visible = !!s.inst && s.visible && !!notes && (notes.strokes.length + notes.pins.length > 0)
       if (!b.group.visible || !s.inst) continue
       any = true
@@ -162,9 +177,11 @@ export function createNotesOverlay() {
         mat.opacity = fade * (hidden ? 0.35 : 1)
         v.project(camera)
         if (v.z > 1) continue
+        const l = d.label.clone().applyMatrix4(s.inst.matrixWorld).project(camera)
         spots.push({
           id: `${key}|${d.pinId}`, key, url: s.url, pinId: d.pinId,
-          x: (v.x + 1) / 2 * W, y: (1 - v.y) / 2 * H, hidden,
+          x: (v.x + 1) / 2 * W, y: (1 - v.y) / 2 * H,
+          lx: (l.x + 1) / 2 * W, ly: (1 - l.y) / 2 * H, hidden,
         })
       }
     }
@@ -203,6 +220,48 @@ export function createNotesOverlay() {
     return { p, n }
   }
 
+  /** Where the ray through (x, y) meets the plane facing the eye through
+   *  `through` (model space): in model space. Where a label dragged there
+   *  sits, at the depth it was. */
+  function planeAt(camera: THREE.PerspectiveCamera, W: number, H: number, s: NotesHost, through: THREE.Vector3, x: number, y: number): THREE.Vector3 | null {
+    if (!s.inst) return null
+    s.inst.updateWorldMatrix(true, false)
+    const w = through.clone().applyMatrix4(s.inst.matrixWorld)
+    const n = new THREE.Vector3(); camera.getWorldDirection(n)
+    const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(n, w)
+    ray.setFromCamera(new THREE.Vector2((x / W) * 2 - 1, -(y / H) * 2 + 1), camera)
+    const hit = ray.ray.intersectPlane(plane, new THREE.Vector3())
+    if (!hit) return null
+    return hit.applyMatrix4(new THREE.Matrix4().copy(s.inst.matrixWorld).invert())
+  }
+
+  /** The stroke drawn on a model nearest (x, y) on screen, within `tol` px
+   *  of its line (plus half its width): its model and id. */
+  function strokeAt(camera: THREE.PerspectiveCamera, W: number, H: number, x: number, y: number, tol = 8): { url: string; id: string } | null {
+    let best: { url: string; id: string; d: number } | null = null
+    const a = new THREE.Vector3(), c = new THREE.Vector3()
+    for (const b of built.values()) {
+      if (!b.group.visible || !b.notes) continue
+      for (const st of b.notes.strokes) {
+        let prev: { x: number; y: number } | null = null
+        for (let i = 0; i + 2 < st.pts.length; i += 3) {
+          a.set(st.pts[i], st.pts[i + 1], st.pts[i + 2]).applyMatrix4(b.group.matrix).project(camera)
+          if (a.z > 1) { prev = null; continue }
+          const q = { x: (a.x + 1) / 2 * W, y: (1 - a.y) / 2 * H }
+          const p0 = prev ?? q
+          // Distance from (x, y) to the segment p0 → q.
+          c.set(q.x - p0.x, q.y - p0.y, 0)
+          const len2 = c.x * c.x + c.y * c.y
+          const t = len2 > 0 ? Math.max(0, Math.min(1, ((x - p0.x) * c.x + (y - p0.y) * c.y) / len2)) : 0
+          const d = Math.hypot(x - (p0.x + c.x * t), y - (p0.y + c.y * t)) - st.width / 2
+          if (d < tol && (!best || d < best.d)) best = { url: b.notes.url, id: st.id, d }
+          prev = q
+        }
+      }
+    }
+    return best && { url: best.url, id: best.id }
+  }
+
   function forget(key: string) {
     const b = built.get(key)
     if (!b) return
@@ -214,5 +273,5 @@ export function createNotesOverlay() {
     dotTex.dispose()
   }
 
-  return { render, surfaceAt, forget, dispose, spots: () => spots }
+  return { render, surfaceAt, planeAt, strokeAt, forget, dispose, spots: () => spots }
 }

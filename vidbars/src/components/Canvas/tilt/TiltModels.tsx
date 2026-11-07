@@ -52,8 +52,13 @@ export const models: {
   /** Where model `key` stands on screen, client px: the box round it and
    *  the point it stands on. null when it is not standing. */
   screenBox: ((key: string) => { x0: number; y0: number; x1: number; y1: number; foot: { x: number; y: number } } | null) | null
+  /** Where a pin's label dragged to a client point sits, model space. */
+  labelAt: ((key: string, through: [number, number, number], clientX: number, clientY: number) => [number, number, number] | null) | null
+  /** The surface stroke under a client point (the Erase tool). */
+  strokeAt: ((clientX: number, clientY: number) => { url: string; id: string } | null) | null
+  modelSize: ((key: string) => number | null) | null
   root: HTMLElement | null
-} = { pick: null, pickZ: null, info: null, spin: null, letGo: null, hovered: null, at: null, surface: null, pinSpots: null, screenBox: null, root: null }
+} = { labelAt: null, strokeAt: null, modelSize: null, pick: null, pickZ: null, info: null, spin: null, letGo: null, hovered: null, at: null, surface: null, pinSpots: null, screenBox: null, root: null }
 /** A pick that lights up under the cursor: a model or a person, not
  *  furniture. */
 export const modelKey = (k: string | null | undefined) => (k && !k.startsWith('deco|') ? k : null)
@@ -249,6 +254,15 @@ export const TiltModels: React.FC = () => {
         return v.surfaceAt(key, clientX - r.left, clientY - r.top)
       }
       models.pinSpots = v.pinSpots
+      models.labelAt = (key, through, clientX, clientY) => {
+        const r = root.getBoundingClientRect()
+        return v.labelAt(key, through, clientX - r.left, clientY - r.top)
+      }
+      models.strokeAt = (clientX, clientY) => {
+        const r = root.getBoundingClientRect()
+        return v.strokeAt(clientX - r.left, clientY - r.top)
+      }
+      models.modelSize = v.modelSize
       models.root = root
       warm()
       raf = requestAnimationFrame(frame)
@@ -281,7 +295,7 @@ export const TiltModels: React.FC = () => {
       cancelAnimationFrame(raf)
       post.disconnect(); marker.remove()
       models.pick = null; models.pickZ = null; models.info = null; models.spin = null; models.letGo = null
-      models.surface = null; models.pinSpots = null; models.screenBox = null; models.root = null
+      models.surface = null; models.pinSpots = null; models.screenBox = null; models.labelAt = null; models.strokeAt = null; models.modelSize = null; models.root = null
       view?.dispose()
       canvas?.remove()
     }
