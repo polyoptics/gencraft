@@ -1257,7 +1257,9 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
             else recallChart(group.id)
             return
           }
-          if (showBack) return
+          // Turned over, the front card of a row closes the row onto it, as
+          // face up (its back's fields stop their own double-click).
+          if (showBack) { clusterFront.get(group.id)?.close(); return }
           const el = e.currentTarget.querySelector('[data-card-text]') as HTMLElement | null
           el?.dispatchEvent(new CustomEvent('start-edit', { bubbles: false }))
         }}
@@ -4039,7 +4041,7 @@ export function cardScreenRect(g: ProjectGroup, boards: Record<string, import('.
  *  zone lets presses through to its back (so its details can be edited),
  *  and the card hands a press on its back to the line here instead, so it
  *  still moves the whole line, and its hover still lights the line up. */
-const clusterFront = new Map<string, { drag: (e: React.PointerEvent) => void; hover: (on: boolean) => void }>()
+const clusterFront = new Map<string, { drag: (e: React.PointerEvent) => void; hover: (on: boolean) => void; close: () => void }>()
 
 /** Each locked deck's whole-deck move, by its primary card (utils/deckLock):
  *  a press on any of its cards moves the deck as one, as its primary does. */
@@ -4164,9 +4166,12 @@ const DeckAffordance: React.FC<{ cluster: string[]; front: Deck | 'card' | null;
   }, [frontId, lock, onClusterDragDown])
   useEffect(() => {
     if (!frontId || !frontFlipped) return
-    clusterFront.set(frontId, { drag: onClusterDragDown, hover: setIsHovered })
+    clusterFront.set(frontId, {
+      drag: onClusterDragDown, hover: setIsHovered,
+      close: () => { useUndoCoordinator.getState().checkpoint(); useBoardsStore.getState().setDeckState(cluster, 'stacked') },
+    })
     return () => { if (clusterFront.get(frontId)?.drag === onClusterDragDown) clusterFront.delete(frontId) }
-  }, [frontId, frontFlipped, onClusterDragDown])
+  }, [frontId, frontFlipped, onClusterDragDown, cluster])
   if (!primary) return null
 
   return (
