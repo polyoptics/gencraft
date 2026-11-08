@@ -79,7 +79,26 @@ export interface ModelNotes {
   cardNodeId?: string
 }
 
+/** A lasting mark on a picture (the Viewer's Annotate mode, Brian
+ *  2026-11-08): kept by the picture's url, in its natural pixels, so it
+ *  is there whenever and wherever the picture is shown. */
+export interface PictureMark {
+  id: string
+  color: string
+  /** Line width, natural px. */
+  size: number
+  /** The brush's path, or a shape's two corners (a line's two ends). */
+  pts: { x: number; y: number }[]
+  shape?: 'rect' | 'ellipse' | 'line' | 'arrow'
+  fill?: boolean
+}
+
 interface NotesStore {
+  pictures: Record<string, PictureMark[]>
+  addMark: (url: string, m: PictureMark) => void
+  updateMark: (url: string, id: string, patch: Partial<PictureMark>) => void
+  removeMarks: (url: string, ids: string[]) => void
+  clearMarks: (url: string) => void
   curves: Record<string, Curve>
   models: Record<string, ModelNotes>
   /** Bumped on every change to `models`, so the 3D view rebuilds what it
@@ -108,7 +127,22 @@ const touchModel = (s: NotesStore, url: string, f: (m: ModelNotes) => ModelNotes
 export const useNotesStore = create<NotesStore>()(persist((set, get) => ({
   curves: {},
   models: {},
+  pictures: {},
   rev: 0,
+  addMark: (url, m) => set(s => ({ pictures: { ...s.pictures, [url]: [...(s.pictures[url] ?? []), m] } })),
+  updateMark: (url, id, patch) => set(s => s.pictures[url] ? { pictures: { ...s.pictures, [url]: s.pictures[url].map(m => m.id === id ? { ...m, ...patch } : m) } } : s),
+  removeMarks: (url, ids) => set(s => {
+    const list = s.pictures[url]
+    if (!list) return s
+    const next = list.filter(m => !ids.includes(m.id))
+    return next.length === list.length ? s : { pictures: { ...s.pictures, [url]: next } }
+  }),
+  clearMarks: url => set(s => {
+    if (!s.pictures[url]) return s
+    const pictures = { ...s.pictures }
+    delete pictures[url]
+    return { pictures }
+  }),
   addCurve: c => set(s => ({ curves: { ...s.curves, [c.id]: c } })),
   updateCurve: (id, patch) => set(s => s.curves[id] ? { curves: { ...s.curves, [id]: { ...s.curves[id], ...patch } } } : s),
   deleteCurves: ids => set(s => {
@@ -141,10 +175,10 @@ export const useNotesStore = create<NotesStore>()(persist((set, get) => ({
   removePin: (url, id) => set(s => touchModel(s, url, m => ({ ...m, pins: m.pins.filter(p => p.id !== id) }))),
 }), {
   name: 'vidbars-notes',
-  storage: createDebouncedIDBStorage<Pick<NotesStore, 'curves' | 'models'>>(400, {
-    isEmpty: s => Object.keys(s.curves ?? {}).length === 0 && Object.keys(s.models ?? {}).length === 0,
+  storage: createDebouncedIDBStorage<Pick<NotesStore, 'curves' | 'models' | 'pictures'>>(400, {
+    isEmpty: s => Object.keys(s.curves ?? {}).length === 0 && Object.keys(s.models ?? {}).length === 0 && Object.keys(s.pictures ?? {}).length === 0,
   }),
-  partialize: s => ({ curves: s.curves, models: s.models }),
+  partialize: s => ({ curves: s.curves, models: s.models, pictures: s.pictures }),
 }))
 
 // ── The tools (UI state) ──

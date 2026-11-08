@@ -45,7 +45,7 @@ interface Snapshot {
   freeNodes: Record<string, unknown>
   viewports3d: Record<string, ViewportWindow3D>
   /** The 3D notes: curves, and strokes and pins on models (store/notesStore). */
-  notes?: { curves: unknown; models: unknown }
+  notes?: { curves: unknown; models: unknown; pictures?: unknown }
   /** Models' size and turn on their cards (tiltStore useModelScaleStore). */
   models3d?: { sizeOf: unknown; poseOf: unknown; tintOf?: unknown }
 }
@@ -102,7 +102,7 @@ function captureSnapshot(): Snapshot {
     // View prefs (camera, text zoom) ride IN the snapshot; restoreSnapshot
     // is what keeps them out of history — see the liveness test there.
     viewports3d: useViewport3DStore.getState().windows,
-    notes: { curves: useNotesStore.getState().curves, models: useNotesStore.getState().models },
+    notes: { curves: useNotesStore.getState().curves, models: useNotesStore.getState().models, pictures: useNotesStore.getState().pictures },
     models3d: { sizeOf: useModelScaleStore.getState().sizeOf, poseOf: useModelScaleStore.getState().poseOf, tintOf: useModelScaleStore.getState().tintOf },
   }
 }
@@ -163,7 +163,7 @@ function restoreSnapshot(snap: Snapshot) {
   useViewport3DStore.setState({ windows: mergedWins })
   if (snap.notes) {
     const ns = useNotesStore.getState()
-    useNotesStore.setState({ curves: snap.notes.curves as typeof ns.curves, models: snap.notes.models as typeof ns.models, rev: ns.rev + 1 })
+    useNotesStore.setState({ curves: snap.notes.curves as typeof ns.curves, models: snap.notes.models as typeof ns.models, pictures: (snap.notes.pictures ?? {}) as typeof ns.pictures, rev: ns.rev + 1 })
   }
   if (snap.models3d) {
     type MS = ReturnType<typeof useModelScaleStore.getState>

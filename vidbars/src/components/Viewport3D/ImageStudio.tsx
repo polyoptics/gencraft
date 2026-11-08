@@ -12,6 +12,10 @@
 //   paint — freehand brush, or a basic shape (rectangle, ellipse, line,
 //           arrow; Fill on or off); Stamp mints image+strokes (source
 //           untouched).
+//   annotate — the same brush and shapes, and an eraser, as LASTING marks
+//           on the picture (store/notesStore pictures, by its url, in its
+//           own pixels): shown whenever the picture is, in any Viewer,
+//           moving with zoom and pan. Never burned into a stamp.
 //
 // Escape leaves any mode. Everything runs inside the CounterScaled plane
 // (see ContentViews) so pointer math is screen-true at any canvas zoom.
@@ -26,6 +30,7 @@ import { landSnip } from '../../utils/snipCards'
 import { useViewport3DStore } from '../../store/viewport3dStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
+import { useNotesStore, newNoteId, type PictureMark } from '../../store/notesStore'
 import { useResolvedMedia } from '../../utils/useResolvedMedia'
 import { CanvasMirror } from '../UI/CanvasMirror'
 import type { FullFrame } from '../../utils/fx/railFullFrame'
@@ -33,7 +38,7 @@ import type { FullFrame } from '../../utils/fx/railFullFrame'
 interface ImgViewState { scale: number; tx: number; ty: number }
 const imgViews = new Map<string, ImgViewState>()
 
-export type ImgMode = 'view' | 'snip' | 'crop' | 'paint'
+export type ImgMode = 'view' | 'snip' | 'crop' | 'paint' | 'annotate'
 /** What Paint draws with: the brush, or a shape dragged corner to corner
  *  (a line or arrow start to end). Brian 2026-11-08. */
 type PaintTool = 'brush' | 'rect' | 'ellipse' | 'line' | 'arrow'
@@ -47,6 +52,34 @@ const PAINT_TOOLS: { id: PaintTool; icon: React.ReactNode; tip: string }[] = [
   { id: 'line', icon: <path d="M3 13L13 3" />, tip: 'Line: drag start to end' },
   { id: 'arrow', icon: <><path d="M3 13L13 3" /><path d="M7.5 3H13v5.5" /></>, tip: 'Arrow: drag start to end' },
 ]
+
+/** Annotate's tools: Paint's, and an eraser. */
+type AnnoTool = PaintTool | 'erase'
+const ERASE_ICON = <><path d="M9.5 3.5l3 3-6 6H4l-1.5-1.5z" /><path d="M7 13h6.5" /></>
+const NO_MARKS: PictureMark[] = []
+
+/** Is natural point n on mark m (within tol natural px)? */
+function hitMark(m: PictureMark, n: { x: number; y: number }, tol: number): boolean {
+  const t = tol + m.size / 2
+  const seg = (a: { x: number; y: number }, b: { x: number; y: number }) => {
+    const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy
+    const u = l2 ? Math.max(0, Math.min(1, ((n.x - a.x) * dx + (n.y - a.y) * dy) / l2)) : 0
+    return Math.hypot(n.x - a.x - dx * u, n.y - a.y - dy * u) <= t
+  }
+  const a = m.pts[0], b = m.pts[m.pts.length - 1]
+  if (!m.shape) return m.pts.length === 1 ? seg(a, a) : m.pts.some((p, i) => i > 0 && seg(m.pts[i - 1], p))
+  if (m.shape === 'line' || m.shape === 'arrow') return seg(a, b)
+  const x0 = Math.min(a.x, b.x), x1 = Math.max(a.x, b.x), y0 = Math.min(a.y, b.y), y1 = Math.max(a.y, b.y)
+  if (m.shape === 'rect') {
+    if (m.fill && n.x >= x0 && n.x <= x1 && n.y >= y0 && n.y <= y1) return true
+    const c = [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }]
+    return c.some((p, i) => seg(p, c[(i + 1) % 4]))
+  }
+  const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, rx = Math.max((x1 - x0) / 2, 1e-6), ry = Math.max((y1 - y0) / 2, 1e-6)
+  const q = Math.hypot((n.x - cx) / rx, (n.y - cy) / ry)
+  if (m.fill && q <= 1) return true
+  return Math.abs(q - 1) * Math.min(rx, ry) <= t
+}
 
 /** A shape's arrowhead: its two barbs' ends, for a line from a to b. */
 function arrowBarbs(a: { x: number; y: number }, b: { x: number; y: number }, size: number) {
@@ -209,6 +242,11 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
   const [brushSize, setBrushSize] = useState(6)
   const [paintTool, setPaintTool] = useState<PaintTool>('brush')
   const [fill, setFill] = useState(false)
+  const [annoTool, setAnnoTool] = useState<AnnoTool>('brush')
+  const marks = useNotesStore(s => s.pictures[url]) ?? NO_MARKS
+  // The mark being drawn, or erasing, in Annotate.
+  const annoId = useRef<string | null>(null)
+  const erasing = useRef(false)
   const [busy, setBusy] = useState(false)
   // Full-size px per shown px of a live canvas, once a cut has measured it.
   const [liveK, setLiveK] = useState<number | null>(null)
@@ -385,6 +423,25 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
       // Starting a fresh frame (handles/interior have their own handlers).
       boxStart.current = p
       setCropBox({ x: p.x, y: p.y, w: 0, h: 0 })
+    } else if (mode === 'annotate') {
+      const area = areaRef.current
+      if (!natural || live || !area) return
+      useUndoCoordinator.getState().checkpoint()
+      const aw = area.offsetWidth, ah = area.offsetHeight
+      const v = imgViews.get(key) ?? { scale: 1, tx: 0, ty: 0 }
+      const n = areaToNatural(p, aw, ah, v, natural)
+      const k = areaToNaturalScale(aw, ah, v, natural)
+      if (annoTool === 'erase') {
+        erasing.current = true
+        const hit = marks.filter(m => hitMark(m, n, 6 * k)).map(m => m.id)
+        if (hit.length) useNotesStore.getState().removeMarks(url, hit)
+        return
+      }
+      const id = newNoteId('mk')
+      annoId.current = id
+      useNotesStore.getState().addMark(url, annoTool === 'brush'
+        ? { id, color: brushColor, size: brushSize * k, pts: [n] }
+        : { id, color: brushColor, size: brushSize * k, pts: [n, n], shape: annoTool, fill })
     } else if (mode === 'paint') {
       painting.current = true
       setStrokes(s => [...s, paintTool === 'brush'
@@ -393,7 +450,7 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
     } else {
       dragLast.current = { x: e.clientX, y: e.clientY }
     }
-  }, [mode, brushColor, brushSize, paintTool, fill])
+  }, [mode, brushColor, brushSize, paintTool, fill, annoTool, natural, live, url, marks, key])
 
   const onMove = useCallback((e: React.PointerEvent) => {
     if (!(e.currentTarget as HTMLElement).hasPointerCapture(e.pointerId)) return
@@ -412,6 +469,18 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
       setSnipBox(snipBoxRef.current)
     } else if (mode === 'crop' && boxStart.current) {
       setCropBox(marquee(boxStart.current))
+    } else if (mode === 'annotate' && (annoId.current || erasing.current) && natural && areaRef.current) {
+      const aw = areaRef.current.offsetWidth, ah = areaRef.current.offsetHeight
+      const n = areaToNatural(p, aw, ah, view, natural)
+      const ns = useNotesStore.getState()
+      if (erasing.current) {
+        const k = areaToNaturalScale(aw, ah, view, natural)
+        const hit = (ns.pictures[url] ?? []).filter(m => hitMark(m, n, 6 * k)).map(m => m.id)
+        if (hit.length) ns.removeMarks(url, hit)
+        return
+      }
+      const m = ns.pictures[url]?.find(x => x.id === annoId.current)
+      if (m) ns.updateMark(url, m.id, { pts: m.shape ? [m.pts[0], n] : [...m.pts, n] })
     } else if (mode === 'paint' && painting.current) {
       setStrokes(prev => {
         const next = [...prev]
@@ -424,7 +493,7 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
       dragLast.current = { x: e.clientX, y: e.clientY }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, view])
+  }, [mode, view, natural, url])
 
   const onUp = useCallback(() => {
     if (panning.current) { panning.current = false; dragLast.current = null; return }
@@ -440,6 +509,8 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
     dragLast.current = null
     boxStart.current = null
     painting.current = false
+    annoId.current = null
+    erasing.current = false
   }, [mode, stamp])
 
   // Wheel zooms in EVERY mode, anchored on the cursor so the pixel under
@@ -543,6 +614,7 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
         {modeBtn('snip', '✂', 'Snip — drag a box; releasing saves it out. Keep snipping. (Esc to exit)')}
         {modeBtn('crop', '⛶', 'Crop — place a frame, resize/move it, Stamp as many as you like. (Esc to exit)')}
         {modeBtn('paint', '✎', 'Paint — brush or shapes (rectangle, ellipse, line, arrow), then Stamp a painted copy. (Esc to exit)')}
+        {!live && modeBtn('annotate', '✐', 'Annotate — brush, shapes and eraser as lasting marks on this picture: they stay on it wherever it is shown. Never stamped in. (Esc to exit)')}
 
         {mode === 'snip' && (
           <span style={{ fontSize: 9.5, color: 'rgba(255,255,255,0.45)', marginLeft: 4 }}>
@@ -563,6 +635,40 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
             >{busy ? '…' : '⎘ Stamp'}</button>
             <button style={tbBtn(false)} onClick={() => setCropBox(null)} title="Clear the frame">Clear</button>
           </div>
+        )}
+
+        {mode === 'annotate' && (
+          <>
+            <div style={{ display: 'flex', gap: 2, alignItems: 'center', marginLeft: 4 }}>
+              {[...PAINT_TOOLS, { id: 'erase' as const, icon: ERASE_ICON, tip: 'Erase: click or drag over a mark to remove it' }].map(t => (
+                <button key={t.id} style={{ ...tbBtn(annoTool === t.id), padding: '3px 4px' }} aria-pressed={annoTool === t.id} title={t.tip} onClick={() => setAnnoTool(t.id)}>
+                  <svg width={14} height={14} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>{t.icon}</svg>
+                </button>
+              ))}
+              <button style={{ ...tbBtn(fill), padding: '3px 4px' }} aria-pressed={fill} onClick={() => setFill(f => !f)}
+                title="Fill: on or off. On, rectangles and ellipses are solid colour.">
+                <svg width={14} height={14} viewBox="0 0 16 16" style={{ display: 'block' }}><rect x="3" y="3" width="10" height="10" rx="2" fill={fill ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth={1.6} /></svg>
+              </button>
+            </div>
+            <div style={{ display: 'flex', gap: 3, alignItems: 'center', marginLeft: 4 }}>
+              {PAINT_COLORS.map(c => (
+                <div key={c} onClick={() => setBrushColor(c)} title={c} style={{
+                  width: 13, height: 13, borderRadius: '50%', background: c, cursor: 'pointer',
+                  border: brushColor === c ? '2px solid rgba(140,190,255,0.9)' : '1px solid rgba(0,0,0,0.4)',
+                }} />
+              ))}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+              <button style={tbBtn(false)} onClick={() => setBrushSize(s => Math.max(2, s - 2))}>−</button>
+              <span style={{ fontSize: 10.5, color: 'rgba(255,255,255,0.75)', minWidth: 16, textAlign: 'center' }}>{brushSize}</span>
+              <button style={tbBtn(false)} onClick={() => setBrushSize(s => Math.min(40, s + 2))}>+</button>
+            </div>
+            <div style={{ display: 'flex', gap: 4, marginLeft: 'auto' }}>
+              <button style={{ ...tbBtn(false), opacity: marks.length ? 1 : 0.4 }} disabled={!marks.length}
+                onClick={() => { useUndoCoordinator.getState().checkpoint(); useNotesStore.getState().clearMarks(url) }}
+                title="Remove every mark on this picture (Ctrl+Z brings them back)">Clear</button>
+            </div>
+          </>
         )}
 
         {mode === 'paint' && (
@@ -614,7 +720,7 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
         onDoubleClick={() => { if (mode === 'view') setView({ scale: 1, tx: 0, ty: 0 }) }}
         style={{
           flex: 1, position: 'relative', overflow: 'hidden',
-          cursor: mode === 'snip' || mode === 'crop' || mode === 'paint'
+          cursor: mode === 'snip' || mode === 'crop' || mode === 'paint' || mode === 'annotate'
             ? 'crosshair'
             : view.scale > 1 ? 'grab' : 'default',
           touchAction: 'none',
@@ -642,6 +748,18 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
             }}
           />
         )}
+
+        {/* Lasting marks: on the picture, so they zoom and pan with it. */}
+        {!live && marks.length > 0 && natural && areaRef.current && (() => {
+          const fit = fitBox(areaRef.current.offsetWidth, areaRef.current.offsetHeight, natural.w, natural.h)
+          return (
+            <div data-picture-marks="" style={{ position: 'absolute', inset: 0, pointerEvents: 'none', transform: `translate(${view.tx}px, ${view.ty}px) scale(${view.scale})` }}>
+              <svg viewBox={`0 0 ${natural.w} ${natural.h}`} style={{ position: 'absolute', left: fit.ox, top: fit.oy, width: fit.dw, height: fit.dh, overflow: 'visible' }}>
+                {marks.map(m => <StrokeSvg key={m.id} st={m} />)}
+              </svg>
+            </div>
+          )
+        })()}
 
         {/* Paint overlay */}
         {mode === 'paint' && strokes.length > 0 && (
