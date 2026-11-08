@@ -197,6 +197,9 @@ export interface ProjectGroup {
   /** A STATE card's states, the changes between them, the current one and
    *  its output deck (utils/stateCard). */
   stateCard?: import('../utils/stateCard').StateMachine
+  /** A 3D AREA folded into this card (utils/area3dCard): the mat and the
+   *  models laid out on it, each where it stood, turned and sized. */
+  area3d?: import('../utils/area3dCard').Area3dData
   /** A card of a State card's output deck: that State card's id. It shows
    *  the current state's master cards and reforms when the state changes. */
   stateOut?: string

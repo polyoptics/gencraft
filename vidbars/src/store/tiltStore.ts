@@ -378,6 +378,11 @@ interface ModelScaleStore {
    *  by dragging the model up or down. Absent: 1. */
   sizeOf: Record<string, number>
   setSize: (key: string, k: number) => void
+  /** How a model stands turned on its card (a quaternion), kept: set by
+   *  turning it with Alt-drag while it stands on a 3D area (Brian
+   *  2026-11-08: lay out a scene). Same keys as sizeOf. Absent: upright. */
+  poseOf: Record<string, [number, number, number, number]>
+  setPose: (key: string, q: [number, number, number, number] | null) => void
 }
 
 export const useModelScaleStore = create<ModelScaleStore>()(persist(set => ({
@@ -385,8 +390,14 @@ export const useModelScaleStore = create<ModelScaleStore>()(persist(set => ({
   setUnitsPerMetre: (url, u) => set(s => ({ unitsPerMetre: { ...s.unitsPerMetre, [url]: u } })),
   sizeOf: {},
   setSize: (key, k) => set(s => ({ sizeOf: { ...s.sizeOf, [key]: k } })),
+  poseOf: {},
+  setPose: (key, q) => set(s => {
+    const poseOf = { ...s.poseOf }
+    if (q) poseOf[key] = q; else delete poseOf[key]
+    return { poseOf }
+  }),
 }), {
   name: 'vidbars-model-scale',
-  partialize: s => ({ unitsPerMetre: s.unitsPerMetre, sizeOf: s.sizeOf}),
+  partialize: s => ({ unitsPerMetre: s.unitsPerMetre, sizeOf: s.sizeOf, poseOf: s.poseOf }),
   storage: createDebouncedIDBStorage(400),
 }))

@@ -195,6 +195,8 @@ export interface FreeNodeData {
   strokes?: import('../types/stroke').Stroke[]
   /** Annotation cards: the model file whose notes it shows (store/notesStore). */
   annotUrl?: string
+  /** A 3D area out of a card: that card (utils/area3dCard). */
+  areaCard?: string
 }
 
 const COLORS = ['#1e2235', '#1e3028', '#2e1e35', '#35281e', '#1e2e35', '#2e351e']
@@ -351,7 +353,7 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
       effect: 'Effect', rail: 'Loop strip', cabinet: 'Project cabinet', filmMixer: 'Film Look',
       storyline: 'Storyline', roughCut: 'Rough Cut',
       attributes: 'Attributes', promptCards: 'Card Prompts',
-      annotations: 'Annotations', area: 'Area',
+      annotations: 'Annotations', area: '3D area',
     }
     const node: FreeNodeData = {
       id, x, y,

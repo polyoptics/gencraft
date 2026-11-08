@@ -33,7 +33,7 @@ export interface CardDetail {
   collapsed?: boolean
 }
 
-export type CardType = 'element' | 'character' | 'faction' | 'family' | 'location' | 'prop' | 'audio' | 'scene' | 'prompt' | 'note' | 'state'
+export type CardType = 'element' | 'character' | 'faction' | 'family' | 'location' | 'prop' | 'audio' | 'scene' | 'prompt' | 'note' | 'state' | 'area3d'
 
 export interface CardTypeInfo {
   label: string
@@ -67,6 +67,7 @@ export const CARD_TYPES: Record<CardType, CardTypeInfo> = {
   // A STATE card (2026-11-08): the states a thing can be in, each a master
   // deck, and one output deck showing the current one (utils/stateCard).
   state:     { label: 'State',     color: '#4f8f5a', details: [] },
+  area3d:    { label: '3D area',   color: '#3d7fd9', details: [] },
 }
 export const CARD_TYPE_ORDER = Object.keys(CARD_TYPES) as CardType[]
 

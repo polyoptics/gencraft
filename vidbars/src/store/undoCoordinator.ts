@@ -21,6 +21,7 @@ import type { ViewportWindow3D } from './viewport3dStore'
 import { tileDeckIndex } from '../utils/tileDecks'
 import { create } from 'zustand'
 import { useNotesStore } from './notesStore'
+import { useModelScaleStore } from './tiltStore'
 
 const LIMIT = 30
 
@@ -45,6 +46,8 @@ interface Snapshot {
   viewports3d: Record<string, ViewportWindow3D>
   /** The 3D notes: curves, and strokes and pins on models (store/notesStore). */
   notes?: { curves: unknown; models: unknown }
+  /** Models' size and turn on their cards (tiltStore useModelScaleStore). */
+  models3d?: { sizeOf: unknown; poseOf: unknown }
 }
 
 function snapStore(
@@ -100,6 +103,7 @@ function captureSnapshot(): Snapshot {
     // is what keeps them out of history — see the liveness test there.
     viewports3d: useViewport3DStore.getState().windows,
     notes: { curves: useNotesStore.getState().curves, models: useNotesStore.getState().models },
+    models3d: { sizeOf: useModelScaleStore.getState().sizeOf, poseOf: useModelScaleStore.getState().poseOf },
   }
 }
 
@@ -160,6 +164,10 @@ function restoreSnapshot(snap: Snapshot) {
   if (snap.notes) {
     const ns = useNotesStore.getState()
     useNotesStore.setState({ curves: snap.notes.curves as typeof ns.curves, models: snap.notes.models as typeof ns.models, rev: ns.rev + 1 })
+  }
+  if (snap.models3d) {
+    type MS = ReturnType<typeof useModelScaleStore.getState>
+    useModelScaleStore.setState({ sizeOf: snap.models3d.sizeOf as MS['sizeOf'], poseOf: snap.models3d.poseOf as MS['poseOf'] })
   }
 }
 

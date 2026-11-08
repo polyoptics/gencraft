@@ -164,6 +164,11 @@ export interface TiltFrameState {
   unitsFor: (url: string) => number | undefined
   /** Display size multiplier for a card's model (dragging the model). */
   sizeFor: (key: string) => number
+  /** How a card's model stands turned, kept (useModelScaleStore poseOf). */
+  poseFor?: (key: string) => [number, number, number, number] | undefined
+  /** Stands on a 3D area (a scene layout): it keeps the turn it is
+   *  given and never turns on the turntable. */
+  placed?: (key: string) => boolean
   /** Cards, decks, tiles and Viewers, for their thickness. */
   slabs: TiltSlab[]
   art: TiltArt[]
@@ -205,6 +210,8 @@ interface Standing {
   turn: THREE.Group        // turntable about that normal
   /** The user's own turn of the model (Alt-drag on it), about its middle. */
   orient: THREE.Group
+  /** How it stands turned, kept (a 3D area's layout), under that. */
+  pose: THREE.Group
   /** Let go after a turn: it drifts back about `axis` from `angle` to
    *  none over DRIFT_MS, rocking past by up to `rock` (radians). */
   back: {
@@ -436,6 +443,8 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     stand.add(turn)
     const orient = new THREE.Group()
     turn.add(orient)
+    const pose = new THREE.Group()
+    orient.add(pose)
     const figure = makeFigure()
     figure.visible = false
     stand.add(figure)
@@ -453,7 +462,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     wall.visible = false
     groundDeco.add(wall)
     const s: Standing = {
-      url, stand, turn, orient, back: null, spun: [], inst: null, size: new THREE.Vector3(), unit: 1, unitSet: false, triangles: 0,
+      url, stand, turn, orient, pose, back: null, spun: [], inst: null, size: new THREE.Vector3(), unit: 1, unitSet: false, triangles: 0,
       figure, wall, wallText: '', look: null, phase: Math.random() * 6.28, dead: false, seen: frameNo, shownAt: 0,
       mats: [], alpha: -1,
     }
@@ -481,7 +490,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       // the model's middle, half its height up.
       orient.position.set(0, m.size.y / 2, 0)
       inst.position.set(-m.centre.x, -m.minY - m.size.y / 2, -m.centre.z)
-      orient.add(inst)
+      pose.add(inst)
       s.inst = inst
     }).catch(() => { /* unreadable model: the card just stays flat */ })
     standing.set(key, s)
@@ -982,7 +991,10 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       }
       if (s.look) applyLook(s.look, st.texture, st.shade)
       s.stand.visible = !!s.inst && ease > 0
-      s.turn.rotation.y = st.turn ? now / 1000 * 0.6 + s.phase : 0
+      const placed = !!st.placed?.(tg.key)
+      s.turn.rotation.y = st.turn && !placed ? now / 1000 * 0.6 + s.phase : 0
+      const pq = st.poseFor?.(tg.key)
+      if (pq) s.pose.quaternion.set(pq[0], pq[1], pq[2], pq[3]); else s.pose.quaternion.identity()
       if (s.back) {
         // Let go after an Alt-drag: it rolls back to how it stood (Brian
         // 2026-11-04), easing in and out, and rocks a little past and back
@@ -1301,6 +1313,18 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     return s && s.inst ? s.size.length() : null
   }
 
+  /** Keep model `key`'s turn (a 3D area's layout): what the hand turned it
+   *  by goes into how it stands. Returns that, or null. */
+  function keepTurn(key: string): [number, number, number, number] | null {
+    const s = standing.get(key)
+    if (!s) return null
+    s.spun = []; s.back = null
+    const q = s.orient.quaternion.clone().multiply(s.pose.quaternion).normalize()
+    s.orient.quaternion.identity()
+    s.pose.quaternion.copy(q)
+    return [q.x, q.y, q.z, q.w]
+  }
+
   /** Settle turned back on: every model left turned rolls home. */
   function settleAll() {
     for (const [key, s] of standing) {
@@ -1346,5 +1370,5 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     renderer.forceContextLoss()
   }
 
-  return { frame, warm, pick, pickZ: () => pickedZ, info, spinBy, letGo, settleAll, screenBox, labelAt, strokeAt, modelSize, dispose, surfaceAt, pinSpots: notes.spots }
+  return { frame, warm, pick, pickZ: () => pickedZ, info, spinBy, letGo, settleAll, keepTurn, screenBox, labelAt, strokeAt, modelSize, dispose, surfaceAt, pinSpots: notes.spots }
 }

@@ -6,6 +6,8 @@ import { useBoardsStore } from './store/boardsStore'
 import { startLinkedCardSync } from './utils/linkedCards'
 import { startStateOutputs } from './utils/stateCard'
 import { startChartFollow } from './utils/chartCard'
+import { startArea3dFollow, showArea3d, foldArea3d, toggleArea3d, area3dOutOf } from './utils/area3dCard'
+import { createMediaCard } from './utils/cardGrid'
 import { cardOrigins } from './components/Canvas/StorylineLayer'
 import { startDecksOpenRight } from './utils/deckRight'
 import { useCanvasStore } from './store/canvasStore'
@@ -21,7 +23,7 @@ import { useContextSheetStore } from './store/contextSheetStore'
 import { useFxStore } from './store/fxStore'
 import { useRailRunStore } from './store/railRunStore'
 import { useRailUiStore } from './store/railUiStore'
-import { useTiltStore } from './store/tiltStore'
+import { useTiltStore, useModelScaleStore } from './store/tiltStore'
 import { useCabinetUi } from './utils/cabinet'
 import { usePickMode } from './utils/cabinetPick'
 import { useNotesStore, useNotesUi } from './store/notesStore'
@@ -41,12 +43,15 @@ import { models } from './components/Canvas/tilt/TiltModels'
   useCabinetUi, useTiltStore, usePickMode,
   // The 3D notes tools, and the 3D view's hit test they draw through.
   useNotesStore, useNotesUi, tiltModels: models,
+  // 3D area cards (utils/area3dCard), and the model sizes and turns they keep.
+  area3d: { showArea3d, foldArea3d, toggleArea3d, area3dOutOf, createMediaCard }, useModelScaleStore,
 }
 
 // One card shown in several places: an edit on one is on all (utils/linkedCards).
 startLinkedCardSync()
 startStateOutputs()
 startChartFollow(cardOrigins)
+startArea3dFollow()
 // Decks off every storyline open to the right (utils/deckRight).
 startDecksOpenRight()
 

@@ -20,6 +20,8 @@ import { createTiltScene, ART_MAX, type TiltTarget, type TiltFrameState, type Ti
 import type { PinSpot } from '../../../three/notesOverlay'
 import { useNotesStore } from '../../../store/notesStore'
 import { PinLabels } from '../../Notes/PinLabels'
+import { areaAt } from '../../../utils/areaFollow'
+import { useUndoCoordinator } from '../../../store/undoCoordinator'
 /** The notes store as it stands (read each frame without a hook). */
 let notesNow = useNotesStore.getState()
 useNotesStore.subscribe(s => { notesNow = s })
@@ -77,9 +79,25 @@ const fadeShown = () => {
 /** Whether anything 3D is on screen. */
 const live3d = () => isTilted(useTiltStore.getState())
 
+/** Whether model `key` ('card:<id>' / 'node:<id>') stands on a 3D area:
+ *  a scene layout, where its turn is kept (Brian 2026-11-08). */
+function onArea3d(key: string): boolean {
+  const nodes = useFreeNodeStore.getState().nodes
+  if (key.startsWith('node:')) {
+    const n = nodes[key.slice(5)]
+    return !!n && n.type !== 'area' && !!areaAt(nodes, n.x + n.width / 2, n.y + n.height / 2, n.id)
+  }
+  if (key.startsWith('card:')) {
+    const g = useBoardsStore.getState().groups.find(x => x.id === key.slice(5))
+    return !!g && !!areaAt(nodes, g.originX + 20, g.originY + 20)
+  }
+  return false
+}
+
 const frameState = (): TiltFrameState => {
   const ts = useTiltStore.getState()
-  const { unitsPerMetre: scales, sizeOf } = useModelScaleStore.getState()
+  const { unitsPerMetre: scales, sizeOf, poseOf } = useModelScaleStore.getState()
+  const placedMemo = new Map<string, boolean>()
   return {
     tilt: ts.tilt, spin: ts.spin, yaw: ts.yaw, shiftX: ts.shiftX, shiftY: ts.shiftY, glide: ts.glide, texture: ts.texture, shade: ts.shade, wire: ts.wire, light: ts.light, turn: ts.turn,
     walls: ts.walls, figure: ts.figure, hovered: models.hovered,
@@ -89,6 +107,8 @@ const frameState = (): TiltFrameState => {
     ]),
     unitsFor: url => scales[url],
     sizeFor: key => sizeOf[key] ?? 1,
+    poseFor: key => poseOf[key],
+    placed: key => { let v = placedMemo.get(key); if (v === undefined) { v = onArea3d(key); placedMemo.set(key, v) } return v },
     slabs: live3d() ? collectSlabs(fadeShown()) : (dropLifts(), []),
     art: live3d() ? lastArt : [],
     fade: fadeShown(),
@@ -242,7 +262,15 @@ export const TiltModels: React.FC = () => {
       models.pickZ = v.pickZ
       models.info = key => v.info(key)
       models.spin = v.spinBy
-      models.letGo = key => v.letGo(key, useTiltStore.getState().settle)
+      models.letGo = key => {
+        // On a 3D area the turn is kept, as part of the layout (undoable).
+        if (onArea3d(key)) {
+          const q = v.keepTurn(key)
+          if (q) { useUndoCoordinator.getState().checkpoint(); useModelScaleStore.getState().setPose(key, q) }
+          return
+        }
+        v.letGo(key, useTiltStore.getState().settle)
+      }
       models.screenBox = key => {
         const b = v.screenBox(key)
         if (!b) return null

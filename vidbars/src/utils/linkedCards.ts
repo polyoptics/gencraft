@@ -17,7 +17,7 @@ const SHARED = [
   'name', 'color', 'ownColor', 'cardType', 'details',
   'cardHeroImage', 'cardHeroTransform', 'cardSummary',
   'cardText', 'cardTextStyle', 'cardHeaderText', 'cardHeaderTextStyle',
-  'textSplitRatio', 'cardStrokes',
+  'textSplitRatio', 'cardStrokes', 'area3d',
 ] as const satisfies readonly (keyof ProjectGroup)[]
 
 type Shared = Pick<ProjectGroup, typeof SHARED[number]>

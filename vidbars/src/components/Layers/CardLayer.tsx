@@ -80,6 +80,7 @@ import { bakeStoryline, chartArea, chartOutOf, chartSpotBeside, recallChart, set
 import { cardOrigins } from '../Canvas/StorylineLayer'
 import { rowOf, setRows } from '../../utils/primaryCard'
 import { wallRoom } from '../../utils/wallRoom'
+import { area3dOutOf, toggleArea3d } from '../../utils/area3dCard'
 
 const BOARD_PADDING_X = 20
 
@@ -275,6 +276,12 @@ const CardContextMenu: React.FC<{
           action: () => { setChartSpot(group.id, beside); onClose() },
         })
       }
+    }
+    // A 3D area folded into it (utils/area3dCard): one on/off item, as
+    // Show chart. Lit while it is out.
+    if (group.cardType === 'area3d' || group.area3d) {
+      const out = area3dOutOf(group.id)
+      menuItems.push({ label: 'Show 3D area', icon: '▦', lit: !!out, action: () => { toggleArea3d(group.id); onClose() } })
     }
     // Style: this face's text and how it is set, onto other cards, once
     // (utils/faceStyle). Each shows its own {Name} and details.
@@ -1284,6 +1291,9 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
             else recallChart(group.id)
             return
           }
+          // A 3D area card: the same, its 3D area out or folded in (its
+          // text still edits on its own double-click).
+          if (group.cardType === 'area3d' && !showBack && !(e.target as Element).closest?.('[data-card-text]')) { toggleArea3d(group.id); return }
           // Turned over, the front card of a row closes the row onto it, as
           // face up (its back's fields stop their own double-click).
           if (showBack) { clusterFront.get(group.id)?.close(); return }

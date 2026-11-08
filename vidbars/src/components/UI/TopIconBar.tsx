@@ -418,7 +418,7 @@ export const TopIconBar: React.FC = () => {
       />
     ),
     // The Notes & 3D tools panel (components/Notes/NotesPanel): lit while out.
-    notes: <IconButton Icon={IcNotes} title="Notes & 3D tools — curves, arrows, drawing on models, pins, Area cards" active={notesOpen} onClick={() => useNotesUi.setState(s => ({ open: !s.open, tool: s.open ? null : s.tool }))} />,
+    notes: <IconButton Icon={IcNotes} title="Notes & 3D tools — curves, arrows, drawing on models, pins, 3D areas" active={notesOpen} onClick={() => useNotesUi.setState(s => ({ open: !s.open, tool: s.open ? null : s.tool }))} />,
     new: <IconButton Icon={IcNew} title={newLabel} {...place('new')} />,
   }
 

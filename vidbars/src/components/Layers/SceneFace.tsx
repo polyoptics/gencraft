@@ -41,6 +41,7 @@ import { openDivision } from '../../utils/sceneOpen'
 import { cardChanged, copyFrom, migrateScene, refreshDivision, shownContent } from '../../utils/sceneContent'
 import { useCanvasStore } from '../../store/canvasStore'
 import { ColorPickerPopup } from '../Bar/ColorPickerPopup'
+import { area3dOutOf, toggleArea3d } from '../../utils/area3dCard'
 
 /** Laid out at a new card's size and scaled with the card, like its back. */
 const NAT_W = 125
@@ -781,6 +782,11 @@ export const SceneFace: React.FC<{
       label: 'Follow its card live', tool: 'live', lit: !!d.live,
       // Off again: it keeps what it shows now, as its own copy.
       act: () => edit(r => patchDiv(r, d.id, d.live ? { ...copyFrom(card, false), live: false } : { live: true })),
+    })
+    // Its card a 3D area card (utils/area3dCard): its scene laid out, or
+    // folded back in, from here.
+    if (card && (card.cardType === 'area3d' || card.area3d)) items.push({
+      label: 'Show its 3D area', tool: 'area3d', lit: !!area3dOutOf(card.id), act: () => toggleArea3d(card.id),
     })
     if (heldCard(d)) items.push({ label: 'Unlink from its card', tool: 'unlink', act: () => edit(r => takeCard(d.live && card ? patchDiv(r, d.id, { ...copyFrom(card, false), live: false }) : r, d.id)) })
     if (canRemove) items.push({ label: 'Remove this division', tool: 'remove', danger: true, act: () => { edit(r => removeDiv(r, d.id)); setPicked(null) } })

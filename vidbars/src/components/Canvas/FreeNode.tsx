@@ -62,6 +62,7 @@ import { railHeaderBottom, railHeaderCarry, snapRailToViewer } from '../../utils
 import { RenameInput } from '../UI/RenameInput'
 import { CanvasUnits } from './CanvasUnits'
 import { useFreshOnTop, FRESH_Z } from '../../utils/freshOnTop'
+import { foldArea3d } from '../../utils/area3dCard'
 
 
 /** Node types whose corner resize keeps the current proportions. A
@@ -1728,6 +1729,11 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
               ...(node.imageUrl && node.mediaType !== 'model' ? [
                 { label: 'Edit Image', icon: '✂️', action: () => { setNodeMenu(null); setIsEditingImage(true) } },
                 { label: 'Remove Image', icon: '🖼', action: () => { useUndoCoordinator.getState().checkpoint(); updateFreeNode(id, { imageUrl: null, imageTransform: undefined }); setNodeMenu(null) } },
+              ] : []),
+              // A 3D area folds into a card (utils/area3dCard), as a chart
+              // does: its own card when it came out of one.
+              ...(node.type === 'area' ? [
+                { label: node.areaCard ? 'Fold into its card' : 'Fold into a 3D area card', icon: '▦', action: () => { setNodeMenu(null); foldArea3d(id) } },
               ] : []),
               ...(node.imageUrl && node.mediaType === 'model' ? [
                 { label: 'Remove Model', icon: '◆', action: () => { useUndoCoordinator.getState().checkpoint(); updateFreeNode(id, { imageUrl: null, posterUrl: undefined }); setNodeMenu(null) } },
