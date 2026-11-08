@@ -80,6 +80,8 @@ import { onRows, openDeckOf, rowOf, rowsSeen } from '../../utils/primaryCard'
 import { liveLocks, lockOf } from '../../utils/deckLock'
 import { chainDecks, chainLocks, shownAs } from '../../utils/chainLock'
 import { setStoryWallOf } from '../../utils/wallRoom'
+import { ChangeMenu, MarkTags } from '../Layers/StateFace'
+import { playMarks, toggleMark, type StateMark } from '../../utils/stateCard'
 import { PRESET_COLORS, TextFormatToolbar, ensureFontLoaded, hexToRgba, type TextFieldMode } from '../UI/TextFormatToolbar'
 import {
   deleteBranchFrom, deleteDot, downstream, growDot, insertDot, isBaseEdge, mergeDots, migrateStoryline,
@@ -856,6 +858,8 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
   // Folding into its card or coming out of it (utils/chartMotion).
   const motion = useChartMotion(s => s.m[id])
   const [menu, setMenu] = useState<{ x: number; y: number; point?: string; line?: [string, string]; grab?: boolean; tether?: string } | null>(null)
+  // State changes put on a dot (utils/stateCard): their list, beside it.
+  const [changeMenu, setChangeMenu] = useState<{ x: number; y: number; point: string } | null>(null)
   // Saved before dots: made dots once, as it loads.
   const raw = node?.storyline
   useEffect(() => {
@@ -1237,6 +1241,14 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
             </React.Fragment>
           )
         })}
+        {d.dots.map(p => p.changes?.length ? (
+          // What changes happen at this dot ("Cup → Broken").
+          // Above it, over its title when it has one.
+          <AtScreen key={`chg:${p.id}`} x={p.x} y={p.y - (RING_HIT + 4 + (p.title ? 20 : 0)) * px} px={px} side="above">
+            <MarkTags marks={p.changes} font={10} />
+          </AtScreen>
+        ) : null)}
+        {start && hasStoryMarks(d, groups) && <StoryMarker id={id} d={d} start={start} px={px} />}
         {sel && byId.get(sel) && (() => {
           const p = byId.get(sel)!
           // Under a base dot's decks button, when that sits below it.
@@ -1265,7 +1277,12 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
         const up = (t.x1 - fx) * wall.nx + (t.y1 - fy) * wall.ny
         return <Tether3D key={`${t.point}:${t.card}`} t={t} sx={fx + wall.ux * along} sy={fy + wall.uy * along} sz={up} px={px} tone={d.color ?? C_DEFAULT} />
       })}
-      {menu && <StoryMenu id={id} d={d} at={menu} onClose={() => setMenu(null)} />}
+      {menu && <StoryMenu id={id} d={d} at={menu} onClose={() => setMenu(null)} onChanges={(x, y, point) => setChangeMenu({ x, y, point })} />}
+      {changeMenu && (
+        <ChangeMenu x={changeMenu.x} y={changeMenu.y} marks={d.dots.find(p => p.id === changeMenu.point)?.changes}
+          onToggle={k => editStoryline(id, x => ({ ...x, dots: x.dots.map(p => p.id === changeMenu.point ? { ...p, changes: toggleMark(p.changes, k) } : p) }))}
+          onClose={() => setChangeMenu(null)} />
+      )}
     </div>
   )
 }
@@ -1556,11 +1573,74 @@ const StoryGrab: React.FC<{ x: number; y: number; px: number; picked: boolean }>
 
 /** The right-click menu: on a dot, a line, a tether or the grab handle.
  *  Laid out as a tile's menu (FreeNode). Each action is one undo step. */
+/** The changes in a storyline's story, where they happen: on its dots, and
+ *  on the cards hung on them (scene cards), at their dot's place along it. */
+function storyMarks(d: StorylineData, groups: ProjectGroup[]): { x: number; marks: StateMark[] }[] {
+  const byId = new Map(groups.map(g => [g.id, g]))
+  return d.dots.flatMap(p => {
+    const marks = [...(p.changes ?? []), ...(p.cards ?? []).flatMap(c => byId.get(c)?.stateChanges ?? [])]
+    return marks.length ? [{ x: p.x, marks }] : []
+  })
+}
+const hasStoryMarks = (d: StorylineData, groups: ProjectGroup[]) => storyMarks(d, groups).length > 0
+
+/** How far before the base's start the time marker can go: there, no change
+ *  is made yet. */
+const markerLead = (len: number) => Math.max(200, len * 0.04)
+
+/** The time marker (Brian 2026-11-08): a line across the storyline at a
+ *  point along its base, with a knob on the base. Dragged along, every
+ *  change up to it is made, so the State cards' output decks reform as it
+ *  passes the scenes and dots. One undo step for the whole drag. */
+const StoryMarker: React.FC<{ id: string; d: StorylineData; start: StoryDot; px: number }> = ({ id, d, start, px }) => {
+  const xs = (d.base ?? []).map(b => d.dots.find(p => p.id === b)?.x).filter((x): x is number => x !== undefined)
+  const len = xs.length ? Math.max(...xs) - start.x : 0
+  const lead = markerLead(len)
+  const at = Math.max(-lead, Math.min(len + lead, d.marker ?? -lead))
+  const ys = d.dots.map(p => p.y)
+  const top = Math.min(...ys) - 60 * px, bottom = Math.max(...ys) + 60 * px
+  const x = start.x + at
+  const tone = '#9fe0ff'
+  const onDown = (e: React.PointerEvent) => {
+    if (e.button !== 0) return
+    e.stopPropagation(); e.preventDefault()
+    useUndoCoordinator.getState().checkpoint()
+    const x0 = e.clientX, m0 = at
+    const move = (ev: PointerEvent) => {
+      const n = useFreeNodeStore.getState().nodes[id]
+      if (!n?.storyline) return
+      const z = useCanvasStore.getState().zoom
+      const next = Math.max(-lead, Math.min(len + lead, m0 + (ev.clientX - x0) / z))
+      useFreeNodeStore.getState().updateFreeNode(id, { storyline: { ...n.storyline, marker: next } })
+      playMarks(storyMarks(n.storyline, useBoardsStore.getState().groups), start.x + next)
+    }
+    const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
+  return (
+    <>
+      <div data-role="ui" data-story-marker style={{ position: 'absolute', left: x - px, top, width: 2 * px, height: bottom - top,
+        background: tone, opacity: 0.8, boxShadow: `0 0 ${6 * px}px ${tone}`, pointerEvents: 'none' }} />
+      {/* Its knob at the top of the line, like a playhead's, clear of the
+          grab handle and the dots' buttons. */}
+      <AtScreen x={x} y={top} px={px} side="above">
+        <div data-role="ui" data-story-marker-knob title="Time marker: drag it through the story; the changes up to it are made"
+          onPointerDown={onDown} onDoubleClick={e => e.stopPropagation()}
+          style={{ width: 14, height: 18, borderRadius: '4px 4px 7px 7px', background: tone, border: '2px solid #12131f', cursor: 'ew-resize',
+            boxShadow: '0 1px 6px rgba(0,0,0,0.6)', pointerEvents: 'auto' }} />
+      </AtScreen>
+    </>
+  )
+}
+
 const StoryMenu: React.FC<{
   id: string; d: StorylineData
   at: { x: number; y: number; point?: string; line?: [string, string]; grab?: boolean; tether?: string }
   onClose: () => void
-}> = ({ id, d, at, onClose }) => {
+  /** Open the list of State changes for a dot, at (x, y) on screen. */
+  onChanges?: (x: number, y: number, point: string) => void
+}> = ({ id, d, at, onClose, onChanges }) => {
   const [custom, setCustom] = useState(false)
   const groups = useBoardsStore(s => s.groups)
   const point = at.point ? d.dots.find(p => p.id === at.point) : undefined
@@ -1573,6 +1653,8 @@ const StoryMenu: React.FC<{
     for (const gid of point.cards ?? []) {
       items.push({ label: `Unlink ${name(gid)}`, icon: '⛓️', action: () => editStoryline(id, x => unlinkStoryCard(x, point.id, gid)) })
     }
+    // Where in the story a State card's change happens (utils/stateCard).
+    if (onChanges && groups.some(g => g.cardType === 'state' && g.stateCard?.changes.length)) items.push({ label: 'State changes', icon: '🔀', action: () => onChanges(at.x, at.y, point.id) })
     items.push({ label: 'Delete', icon: '🗑️', danger: true, action: () => editStoryline(id, x => deleteDot(x, point.id)) })
     items.push({ label: 'Delete branch', icon: '🗑️', danger: true, action: () => editStoryline(id, x => deleteBranchFrom(x, point.id)) })
   } else if (at.line) {

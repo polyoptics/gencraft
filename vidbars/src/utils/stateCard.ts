@@ -384,3 +384,73 @@ export function startStateOutputs(): void {
     if (s.groups.some(g => g.stateCard?.output)) schedule()
   })
 }
+
+// ── Changes in the story (Brian 2026-11-08) ──
+// A change can be put on a scene card (any card) or on a storyline dot:
+// that is where in the story it happens. A storyline's time marker, dragged
+// along its base, makes every change up to it in order (left to right), so
+// the output decks reform as it passes scenes and dots; dragged back, they
+// go back. Nothing is written into the cards: only which state is current.
+
+/** A change put somewhere in the story: State card `state`, its change `change`. */
+export interface StateMark { state: string; change: string }
+
+/** Pick a state with no undo step of its own (the time marker's drag took one). */
+export function applyState(id: string, stateId: string): void {
+  const m = machineOf(id)
+  if (!m || m.current === stateId || !m.states.some(s => s.id === stateId)) return
+  setStates(id, { ...m, current: stateId })
+  reformOutput(id)
+}
+
+/** The change a mark points at, with its State card. */
+export function markChange(groups: ProjectGroup[], k: StateMark): { sc: ProjectGroup; change: StateChange } | null {
+  const sc = groups.find(g => g.id === k.state)
+  const change = sc?.stateCard?.changes.find(c => c.id === k.change)
+  return sc && change ? { sc, change } : null
+}
+
+/** "Cup → Broken": what a mark's tag says. */
+export function markLabel(groups: ProjectGroup[], k: StateMark): string | null {
+  const hit = markChange(groups, k)
+  if (!hit) return null
+  const to = hit.sc.stateCard!.states.find(s => s.id === hit.change.to)?.name ?? '?'
+  return `${hit.sc.name || 'State'} → ${to}`
+}
+
+/** Every change on every State card, for the list they are put on from. */
+export function allChanges(groups: ProjectGroup[]): { sc: ProjectGroup; change: StateChange }[] {
+  return groups.flatMap(sc => sc.cardType === 'state' && sc.stateCard ? sc.stateCard.changes.map(change => ({ sc, change })) : [])
+}
+
+export const hasMark = (list: StateMark[] | undefined, k: StateMark) => !!list?.some(x => x.state === k.state && x.change === k.change)
+export function toggleMark(list: StateMark[] | undefined, k: StateMark): StateMark[] | undefined {
+  const next = hasMark(list, k) ? list!.filter(x => !(x.state === k.state && x.change === k.change)) : [...(list ?? []), k]
+  return next.length ? next : undefined
+}
+
+/** Put a change on card `cardId` or take it off. One undo. */
+export function toggleCardMark(cardId: string, k: StateMark): void {
+  useUndoCoordinator.getState().checkpoint()
+  useBoardsStore.setState(s => ({ groups: s.groups.map(g => g.id === cardId ? { ...g, stateChanges: toggleMark(g.stateChanges, k) } : g) }))
+}
+
+/** Make the changes at or before `at` (story order: x, then as listed);
+ *  before the first, each thing is in the state its first change starts
+ *  from. Each State card involved picks its state. */
+export function playMarks(events: { x: number; marks: StateMark[] }[], at: number): void {
+  const groups = useBoardsStore.getState().groups
+  const per = new Map<string, { x: number; change: StateChange }[]>()
+  events.forEach(ev => ev.marks.forEach(k => {
+    const hit = markChange(groups, k)
+    if (!hit) return
+    per.set(k.state, [...(per.get(k.state) ?? []), { x: ev.x, change: hit.change }])
+  }))
+  for (const [id, list] of per) {
+    const sorted = list.map((e, i) => ({ ...e, i })).sort((a, b) => a.x - b.x || a.i - b.i)
+    const done = sorted.filter(e => e.x <= at)
+    const m = groups.find(g => g.id === id)?.stateCard
+    const target = done.length ? done[done.length - 1].change.to : sorted[0].change.from ?? m?.states[0]?.id
+    if (target) applyState(id, target)
+  }
+}

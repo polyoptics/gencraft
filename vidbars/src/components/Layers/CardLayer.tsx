@@ -36,7 +36,8 @@ import { HeroImageLayer } from './HeroImageLayer'
 import { CardBack, FlipButton, backColor, useCardFlip } from './CardBack'
 import { liveLocks, lockOf, withLockMates } from '../../utils/deckLock'
 import { SceneFace } from './SceneFace'
-import { StateFace } from './StateFace'
+import { ChangeMenu, MarkTags, StateFace } from './StateFace'
+import { allChanges, toggleCardMark } from '../../utils/stateCard'
 import { fillTestCup } from '../../utils/stateTest'
 import { fillBlockout } from '../../utils/sceneBlockout'
 import { dropCardsInDivision } from '../../utils/sceneContent'
@@ -144,6 +145,9 @@ const CardContextMenu: React.FC<{
   const [colorPicker, setColorPicker] = useState<{ x: number; y: number } | null>(null)
   // Card type: the list of types beside the menu, for these cards.
   const [typeList, setTypeList] = useState<{ x: number; y: number; ids: string[] } | null>(null)
+  // State changes that happen on this card (a scene's), from every State card.
+  const [changeList, setChangeList] = useState<{ x: number; y: number } | null>(null)
+  const liveMarks = useBoardsStore(s => s.groups.find(g => g.id === group.id)?.stateChanges)
   const fileItems = useFileMenuItems(mediaSource, onClose)
 
   const menuItems: { label: string; icon: string; action: (e: React.MouseEvent<HTMLButtonElement>) => void; danger?: boolean; separator?: boolean
@@ -226,6 +230,12 @@ const CardContextMenu: React.FC<{
     if (group.cardType === 'state' && group.stateCard && !group.stateCard.states.length) menuItems.push({ label: 'Fill with a test cup', icon: '☕', action: () => {
       fillTestCup(group.id)
       onClose()
+    }})
+    // Where in the story a State card's change happens: on this card (a
+    // scene). A storyline's time marker makes it as it passes.
+    if (group.cardType !== 'state' && !group.stateOut && allChanges(bs.groups).length) menuItems.push({ label: 'State changes', icon: '🔀', action: e => {
+      const r = e.currentTarget.getBoundingClientRect()
+      setChangeList(changeList ? null : { x: r.right + 4, y: r.top })
     }})
     // A faction: its members as a tree on a new storyline beside it.
     // Out already (it bakes back in from here): not twice.
@@ -507,6 +517,8 @@ const CardContextMenu: React.FC<{
         ))}
       </div>
       {chartGhost && <ChartGhost area={chartGhost} />}
+      {changeList && <ChangeMenu x={changeList.x} y={changeList.y} marks={liveMarks}
+        onToggle={k => toggleCardMark(group.id, k)} onClose={() => { setChangeList(null); onClose() }} />}
       {typeList && (() => {
         const bs = useBoardsStore.getState()
         const types = new Set(typeList.ids.map(id => { const g = bs.groups.find(x => x.id === id); return g ? cardTypeOf(g) : 'element' }))
@@ -1470,6 +1482,15 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
           visible={isHovered}
         />}
       </div>
+
+      {/* What changes happen on this card in the story ("Cup → Broken"),
+          under it, right of its link +. */}
+      {!!group.stateChanges?.length && (
+        <div style={{ position: 'absolute', left: screenLeft + Math.max(20, 30 * overviewScale(zoom)), top: screenTop + cardHeight + 3,
+          width: Math.max(40, screenWidth - 30 * overviewScale(zoom)), zIndex: 41, pointerEvents: 'none' }}>
+          <MarkTags marks={group.stateChanges} font={Math.max(7, 9 * overviewScale(zoom))} />
+        </div>
+      )}
 
       {cardMenu && (
         <CardContextMenu pos={cardMenu} group={group} heroImage={heroImage} mediaSource={groupFaceSource(group, boards)} onClose={() => setCardMenu(null)} onEditHeroImage={() => setIsEditingHero(true)} />

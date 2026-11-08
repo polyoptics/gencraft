@@ -19,6 +19,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import ReactDOM from 'react-dom'
 import { useBoardsStore, type ProjectGroup } from '../../store/boardsStore'
 import {
+  allChanges, hasMark, markLabel, type StateMark,
   addState, deckCards, editStates, goToCard, makeOutput, outputCards, pickState, removeState, stateTree,
   type StateMachine,
 } from '../../utils/stateCard'
@@ -74,6 +75,72 @@ export const StateMenu: React.FC<{
       </div>
     </>,
     document.body,
+  )
+}
+
+/** The changes that can be put on a scene card or a storyline dot: every
+ *  State card's, under its name. On/off items, lit while on; the list stays
+ *  open for more. */
+export const ChangeMenu: React.FC<{ x: number; y: number; marks: StateMark[] | undefined; onToggle: (k: StateMark) => void; onClose: () => void }> = ({ x, y, marks, onToggle, onClose }) => {
+  const groups = useBoardsStore(s => s.groups)
+  const list = allChanges(groups)
+  const ref = useRef<HTMLDivElement>(null)
+  const [top, setTop] = useState(y)
+  const [left, setLeft] = useState(x)
+  useEffect(() => {
+    const h = ref.current?.offsetHeight ?? 0, w = ref.current?.offsetWidth ?? 0
+    if (y + h > window.innerHeight - 8) setTop(Math.max(8, window.innerHeight - 8 - h))
+    if (x + w > window.innerWidth - 8) setLeft(Math.max(8, window.innerWidth - 8 - w))
+  }, [x, y])
+  const nameOf = (sc: ProjectGroup, sid?: string) => sc.stateCard?.states.find(s => s.id === sid)?.name ?? 'any'
+  let last = ''
+  return ReactDOM.createPortal(
+    <>
+      <div style={{ position: 'fixed', inset: 0, zIndex: 9998 }} onPointerDown={e => { e.stopPropagation(); onClose() }} onContextMenu={e => { e.preventDefault(); onClose() }} />
+      <div ref={ref} data-change-menu onPointerDown={e => e.stopPropagation()} style={{
+        position: 'fixed', left, top, zIndex: 9999, minWidth: 220, maxHeight: '70vh', overflowY: 'auto',
+        background: 'rgba(22,24,34,0.97)', border: '1px solid rgba(255,255,255,0.14)', borderRadius: 8,
+        boxShadow: '0 8px 28px rgba(0,0,0,0.5)', padding: '4px 0', fontSize: 12.5,
+        fontFamily: 'system-ui, -apple-system, sans-serif', color: 'rgba(255,255,255,0.88)',
+      }}>
+        {list.length === 0 && <div style={{ padding: '6px 12px', color: 'rgba(255,255,255,0.45)' }}>No changes yet: add them on a State card</div>}
+        {list.map(({ sc, change }) => {
+          const k = { state: sc.id, change: change.id }
+          const on = hasMark(marks, k)
+          const head = sc.id !== last ? (last = sc.id, sc.name || 'State') : null
+          return (
+            <React.Fragment key={`${sc.id}:${change.id}`}>
+              {head && <div style={{ padding: '6px 12px 2px', fontSize: 10.5, fontWeight: 800, letterSpacing: '0.06em', color: 'rgba(255,255,255,0.45)' }}>{head.toUpperCase()}</div>}
+              <div data-change-pick={change.name} onClick={() => onToggle(k)}
+                style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '4px 14px 4px 16px', cursor: 'pointer', whiteSpace: 'nowrap',
+                  background: on ? 'rgba(127,209,255,0.18)' : undefined, color: on ? 'rgba(160,220,255,1)' : undefined, fontWeight: on ? 700 : 500 }}
+                onPointerEnter={e => { if (!on) e.currentTarget.style.background = 'rgba(255,255,255,0.07)' }}
+                onPointerLeave={e => { if (!on) e.currentTarget.style.background = '' }}>
+                <span style={{ flex: '1 1 auto' }}>{change.name}</span>
+                <span style={{ fontSize: 11, opacity: 0.6 }}>{nameOf(sc, change.from)} → {nameOf(sc, change.to)}</span>
+              </div>
+            </React.Fragment>
+          )
+        })}
+      </div>
+    </>,
+    document.body,
+  )
+}
+
+/** Small tags saying what changes happen here ("Cup → Broken"). */
+export const MarkTags: React.FC<{ marks: StateMark[] | undefined; font: number }> = ({ marks, font }) => {
+  const groups = useBoardsStore(s => s.groups)
+  const labels = (marks ?? []).map(k => markLabel(groups, k)).filter((x): x is string => !!x)
+  if (!labels.length) return null
+  return (
+    <div data-mark-tags style={{ display: 'flex', flexWrap: 'wrap', gap: font * 0.35, pointerEvents: 'none' }}>
+      {labels.map((l, i) => (
+        <span key={i} style={{ fontSize: font, fontWeight: 700, lineHeight: 1.3, padding: `0 ${font * 0.5}px`, borderRadius: font,
+          background: 'rgba(79,143,90,0.92)', color: '#fff', border: '1px solid rgba(255,255,255,0.35)', whiteSpace: 'nowrap',
+          boxShadow: '0 1px 4px rgba(0,0,0,0.4)', fontFamily: 'system-ui, -apple-system, sans-serif' }}>{l}</span>
+      ))}
+    </div>
   )
 }
 

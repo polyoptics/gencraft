@@ -202,6 +202,9 @@ export interface ProjectGroup {
   stateOut?: string
   /** An output card standing in for a state with no cards: that state. */
   stateBlank?: string
+  /** Changes that happen here in the story (a scene card, Brian
+   *  2026-11-08): a storyline's time marker makes them as it passes. */
+  stateChanges?: import('../utils/stateCard').StateMark[]
 }
 
 /** Find which group a board belongs to */

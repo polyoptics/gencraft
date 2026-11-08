@@ -30,6 +30,8 @@ export interface StoryDot {
   title: string
   /** Linked cards (group ids): they move with the dot. */
   cards?: string[]
+  /** Changes that happen here in the story (utils/stateCard). */
+  changes?: import('./stateCard').StateMark[]
 }
 
 /** A straight line between two dots. */
@@ -51,6 +53,10 @@ export interface StorylineData {
   wallFoot?: { x: number; y: number; ux: number; uy: number }
   /** The base line: its dots, left to right, at one height. */
   base?: string[]
+  /** Its time marker (Brian 2026-11-08): how far along the base from its
+   *  start (canvas units). Changes up to it are made (utils/stateCard).
+   *  Absent: before the start. */
+  marker?: number
   /** A chart recalled from this card (utils/chartCard): baking it again
    *  folds it back into the same card. */
   chartCard?: string
