@@ -41,9 +41,17 @@ export function copyFrom(card: ProjectGroup, look = true): Partial<SceneDiv> {
   }
 }
 
+/** What a division shows: its own copy, or, following its card live, the
+ *  card's content as it is now. (A State card can later answer here with
+ *  the card as it stands at this point of the story.) */
+export function shownContent(d: SceneDiv, card: ProjectGroup | undefined): { name: string; notes: string; image?: string } {
+  if (d.live && card) return contentOf(card)
+  return { name: d.name ?? '', notes: d.notes ?? '', ...(d.image ? { image: d.image } : {}) }
+}
+
 /** The card a division came from changed its content since. */
 export function cardChanged(d: SceneDiv, card: ProjectGroup | undefined): boolean {
-  return !!card && !!d.copied && d.copied !== sig(contentOf(card))
+  return !!card && !d.live && !!d.copied && d.copied !== sig(contentOf(card))
 }
 
 /** Cards let go on a division: their faces copied in (utils/sceneCard putCards). */

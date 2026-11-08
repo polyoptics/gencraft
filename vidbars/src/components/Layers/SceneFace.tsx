@@ -38,7 +38,7 @@ import {
 } from '../../utils/sceneCard'
 import { GroupCardText } from './CardLayer'
 import { openDivision } from '../../utils/sceneOpen'
-import { cardChanged, migrateScene, refreshDivision } from '../../utils/sceneContent'
+import { cardChanged, copyFrom, migrateScene, refreshDivision, shownContent } from '../../utils/sceneContent'
 import { useCanvasStore } from '../../store/canvasStore'
 import { ColorPickerPopup } from '../Bar/ColorPickerPopup'
 
@@ -89,6 +89,9 @@ type Ctx = {
   linking: boolean
   renaming: string | null
   setRenaming: (id: string | null) => void
+  /** The division whose notes are being typed into, in place. */
+  noting: string | null
+  setNoting: (id: string | null) => void
   lit: Set<string> | null
   bumps: boolean
   focus: boolean
@@ -143,6 +146,7 @@ const NameInput: React.FC<{ d: SceneDiv; ctx: Ctx; font: number }> = ({ d, ctx, 
       onKeyDown={e => {
         e.stopPropagation()
         if (e.key === 'Enter') { e.preventDefault(); commit() }
+        else if (e.key === 'Tab' && !d.face) { e.preventDefault(); commit(); ctx.setNoting(d.id) }
         else if (e.key === 'Escape') { e.preventDefault(); done.current = true; ctx.setRenaming(null) }
       }}
       onBlur={commit}
@@ -150,6 +154,44 @@ const NameInput: React.FC<{ d: SceneDiv; ctx: Ctx; font: number }> = ({ d, ctx, 
         fontSize: font, fontWeight: 700, color: '#fff', textAlign: 'center', width: '86%', minWidth: 0, boxSizing: 'border-box',
         padding: '0 1px', margin: 0, fontFamily: 'inherit', background: 'rgba(0,0,0,0.45)', border: '0.5px solid rgba(255,255,255,0.6)',
         borderRadius: 1.5, outline: 'none', userSelect: 'text', pointerEvents: 'auto',
+      }}
+    />
+  )
+}
+
+/** Typing a division's notes straight on the card: Enter makes a new
+ *  line, Esc or a click away keeps them. */
+const NotesInput: React.FC<{ d: SceneDiv; ctx: Ctx; font: number }> = ({ d, ctx, font }) => {
+  const [draft, setDraft] = useState(d.notes ?? '')
+  const ref = useRef<HTMLTextAreaElement>(null)
+  const done = useRef(false)
+  useEffect(() => { requestAnimationFrame(() => { const el = ref.current; if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length) } }) }, [])
+  const commit = () => {
+    if (done.current) return
+    done.current = true
+    const r = ctx.root()
+    if (r && draft !== (d.notes ?? '')) ctx.write(patchDiv(r, d.id, { notes: draft }))
+    ctx.setNoting(null)
+  }
+  return (
+    <textarea
+      ref={ref}
+      data-scene-notes-input
+      value={draft}
+      rows={Math.max(1, draft.split('\n').length)}
+      onChange={e => setDraft(e.target.value)}
+      onPointerDown={stopPress}
+      onDoubleClick={e => e.stopPropagation()}
+      onKeyDown={e => {
+        e.stopPropagation()
+        if (e.key === 'Escape') { e.preventDefault(); commit() }
+        else if (e.key === 'Tab') { e.preventDefault(); commit(); if (e.shiftKey) ctx.setRenaming(d.id) }
+      }}
+      onBlur={commit}
+      style={{
+        fontSize: font, lineHeight: 1.25, color: '#fff', textAlign: 'center', width: '92%', minWidth: 0, boxSizing: 'border-box', resize: 'none',
+        padding: '0 1px', margin: 0, fontFamily: 'inherit', background: 'rgba(0,0,0,0.35)', border: '0.5px solid rgba(255,255,255,0.6)',
+        borderRadius: 1.5, outline: 'none', userSelect: 'text', pointerEvents: 'auto', overflow: 'hidden',
       }}
     />
   )
@@ -194,10 +236,14 @@ const wordFit = (t: string, w: number) => {
 const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; folded: boolean; inside?: SceneDiv[] }> = ({ d, box, ctx, heads, folded, inside }) => {
   const srcId = heldCard(d)
   const src = srcId ? ctx.groups.find(g => g.id === srcId) : undefined
-  const pic = d.image ?? null
+  // Its own copy, or its card as it is now (following live).
+  const shown = shownContent(d, src)
+  const pic = shown.image ?? null
   const crop = d.crop ?? { x: 50, y: 50, z: 1 }
-  const header = d.name ?? ''
-  const text = (d.notes ?? '').trim()
+  const header = shown.name
+  const text = shown.notes.trim()
+  // Typing in a live division: it stops following, keeping what showed.
+  const freeze = () => { if (d.live && src) ctx.patch(d.id, { ...copyFrom(src, false), live: false }, true) }
   // How it shows, by the room it has.
   const state: 'row' | 'stand' | 'icon' | 'full' =
     box.h < ROW_H ? 'row'
@@ -222,16 +268,26 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
     if (ctx.focus) ctx.toggleFocus(d.id)
     ctx.pick(d.id)
   })
+  // Click a name or notes and type: no panel, no second click.
   const nameClick = useClick(ctx, e => {
-    if (!picked || ctx.focus) return
+    if (ctx.focus) return
     e.stopPropagation()
+    freeze()
+    ctx.pick(d.id)
     ctx.setRenaming(d.id)
+  })
+  const notesClick = useClick(ctx, e => {
+    if (ctx.focus) return
+    e.stopPropagation()
+    freeze()
+    ctx.pick(d.id)
+    ctx.setNoting(d.id)
   })
   const shadow = '0 0.5px 1.5px rgba(0,0,0,0.75)'
   const nameEl = ctx.renaming === d.id
     ? <NameInput d={d} ctx={ctx} font={nameFont} />
     : header
-      ? <span data-scene-name={d.id} {...nameClick} style={{ cursor: picked ? 'text' : undefined, pointerEvents: 'auto' }}>{header}</span>
+      ? <span data-scene-name={d.id} {...nameClick} style={{ cursor: 'text', pointerEvents: 'auto' }}>{header}</span>
       : null
   const round = (size: number) => pic && (
     <div style={{
@@ -246,12 +302,12 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
   // dot in its colour.
   const dots = (size: number, wrap: boolean) => inside && inside.length > 0 && (
     <div data-scene-inside style={{ display: 'flex', flexWrap: wrap ? 'wrap' : 'nowrap', justifyContent: 'center', gap: size * 0.3, maxWidth: '100%', overflow: 'hidden', flex: '0 1 auto', minWidth: 0 }}>
-      {inside.slice(0, 24).map(l => (
+      {inside.slice(0, 24).map(l => ({ l, img: shownContent(l, ctx.groups.find(g => g.id === heldCard(l))).image })).map(({ l, img }) => (
         <div key={l.id} title={l.name} style={{
           flex: '0 0 auto', width: size, height: size, borderRadius: '50%', background: l.color ?? '#5b8dd9', overflow: 'hidden',
           border: `${Math.max(0.3, size * 0.1)}px solid rgba(255,255,255,0.8)`, boxSizing: 'border-box',
         }}>
-          {l.image && <img src={l.image} alt="" draggable={false} style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: `${l.crop?.x ?? 50}% ${l.crop?.y ?? 50}%`, pointerEvents: 'none' }} />}
+          {img && <img src={img} alt="" draggable={false} style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: `${l.crop?.x ?? 50}% ${l.crop?.y ?? 50}%`, pointerEvents: 'none' }} />}
         </div>
       ))}
     </div>
@@ -360,10 +416,10 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
           // Its own card face: drawn and edited as a card's is, with the
           // same toolbar (fonts, spacing, split...). Never the card's.
           <GroupCardText groupId={ctx.sceneId} heroImage={pic} onCropImage={() => { ctx.pick(d.id); ctx.setMoving(d.id) }} bind={{
-            header, body: d.notes ?? '', headerStyle: d.hstyle, bodyStyle: d.bstyle, split: d.split, hero: d.hero,
+            header, body: shown.notes, headerStyle: d.hstyle, bodyStyle: d.bstyle, split: d.split, hero: d.hero,
             scale: clamp(Math.min(box.w / NAT_W, box.h / (NAT_H * 0.5)), 0.12, 2.5),
-            setHeader: v => ctx.patch(d.id, { name: v }),
-            setBody: v => ctx.patch(d.id, { notes: v }),
+            setHeader: v => ctx.patch(d.id, d.live && src ? { ...copyFrom(src, false), live: false, name: v } : { name: v }),
+            setBody: v => ctx.patch(d.id, d.live && src ? { ...copyFrom(src, false), live: false, notes: v } : { notes: v }),
             setHeaderStyle: st => ctx.patch(d.id, { hstyle: st }, true),
             setBodyStyle: st => ctx.patch(d.id, { bstyle: st }, true),
             setSplit: r => ctx.patch(d.id, { split: r }, false),
@@ -377,7 +433,9 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
           }}>
             {nameEl && <div style={{ fontSize: nameFont, fontWeight: 700, lineHeight: 1.1, textShadow: shadow, maxWidth: '100%', overflowWrap: 'anywhere' }}>{nameEl}</div>}
             {dots(clamp(Math.min(box.w, box.h) * 0.1, 2.5, 6), true)}
-            {text && <div data-scene-notes style={{ fontSize: textFont, lineHeight: 1.25, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', textShadow: shadow, maxWidth: '100%', opacity: 0.95 }}>{d.notes}</div>}
+            {ctx.noting === d.id ? <NotesInput d={d} ctx={ctx} font={textFont} />
+              : text ? <div data-scene-notes {...notesClick} style={{ fontSize: textFont, lineHeight: 1.25, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', textShadow: shadow, maxWidth: '100%', opacity: 0.95, cursor: 'text', pointerEvents: 'auto' }}>{shown.notes}</div>
+              : picked && !inside?.length && <div data-scene-notes-add {...notesClick} style={{ fontSize: textFont, opacity: 0.55, fontStyle: 'italic', cursor: 'text', pointerEvents: 'auto', textShadow: shadow }}>notes</div>}
           </div>
         )}
         {changed && (
@@ -579,6 +637,7 @@ export const SceneFace: React.FC<{
   const [hover, setHover] = useState(false)
   const [picked, setPicked] = useState<string | null>(null)
   const [renaming, setRenaming] = useState<string | null>(null)
+  const [noting, setNoting] = useState<string | null>(null)
   const [hoveredDiv, setHoveredDiv] = useState<string | null>(null)
   const [moving, setMoving] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
@@ -646,7 +705,7 @@ export const SceneFace: React.FC<{
     useBoardsStore.getState().setGroupSceneView(group.id, { ...(g?.sceneView ?? {}), ...patch })
   }
   const ctx: Ctx = {
-    sceneId: group.id, s, u: TOOL_PX / s, groups, linking, renaming, setRenaming,
+    sceneId: group.id, s, u: TOOL_PX / s, groups, linking, renaming, setRenaming, noting, setNoting,
     picked, pick: id => { setPicked(id); if (id !== moving) setMoving(null) }, lit, hovered: hoveredDiv, setHovered: setHoveredDiv,
     moving, setMoving, dragging, setDragging,
     openMenu: (id, x, y) => setMenu({ id, x, y }),
@@ -717,7 +776,13 @@ export const SceneFace: React.FC<{
       items.push({ label: 'Move picture', tool: 'move-picture', lit: moving === d.id, act: () => { setPicked(d.id); setMoving(moving === d.id ? null : d.id) } })
       items.push({ label: 'Take the picture off', tool: 'remove-picture', act: () => { setMoving(null); edit(r => patchDiv(r, d.id, { image: undefined, crop: undefined })) } })
     }
-    if (heldCard(d)) items.push({ label: 'Unlink from its card', tool: 'unlink', act: () => edit(r => takeCard(r, d.id)) })
+    const card = heldCard(d) ? groups.find(g => g.id === heldCard(d)) : undefined
+    if (card) items.push({
+      label: 'Follow its card live', tool: 'live', lit: !!d.live,
+      // Off again: it keeps what it shows now, as its own copy.
+      act: () => edit(r => patchDiv(r, d.id, d.live ? { ...copyFrom(card, false), live: false } : { live: true })),
+    })
+    if (heldCard(d)) items.push({ label: 'Unlink from its card', tool: 'unlink', act: () => edit(r => takeCard(d.live && card ? patchDiv(r, d.id, { ...copyFrom(card, false), live: false }) : r, d.id)) })
     if (canRemove) items.push({ label: 'Remove this division', tool: 'remove', danger: true, act: () => { edit(r => removeDiv(r, d.id)); setPicked(null) } })
     return items
   })() : null

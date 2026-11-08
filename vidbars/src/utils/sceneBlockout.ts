@@ -102,7 +102,7 @@ export function fillBlockout(sceneId: string): void {
         const k = n++
         const card = hold ? cast[hold[3]] : undefined
         return leaf(shot, shade(act.color, 0.12 + (hi % 2) * 0.1), {
-          ...(card ? copyFrom(useBoardsStore.getState().groups.find(g => g.id === card)!) : { notes: `${SHOT_KIND[k % SHOT_KIND.length]}\nBudget: ${BUDGET[(k * 7 + ai) % 3]}` }),
+          ...(card ? { ...copyFrom(useBoardsStore.getState().groups.find(g => g.id === card)!), card } : { notes: `${SHOT_KIND[k % SHOT_KIND.length]}\nBudget: ${BUDGET[(k * 7 + ai) % 3]}` }),
           ...(k % 5 === 3 ? { bump: true } : {}),
         })
       })

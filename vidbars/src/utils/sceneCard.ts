@@ -45,6 +45,10 @@ export interface SceneDiv {
   /** The card's content when it was copied in (its header, text, picture):
    *  differs from the card's now = the card changed since. */
   copied?: string
+  /** Follows its card live: its header, text and picture are read from
+   *  the card as it is now (never written to it); its look stays its own.
+   *  Typing in it stops the following and keeps what showed. */
+  live?: boolean
   /** Its label: in the middle (on unless false) and/or a small tab on its
    *  top-right edge. Separate on/off switches. */
   mid?: boolean
