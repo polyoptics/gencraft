@@ -194,6 +194,14 @@ export interface ProjectGroup {
   promptPages?: { words: string[] }[]
   /** The page in use (index into promptPages). */
   promptPage?: number
+  /** A STATE card's states, the changes between them, the current one and
+   *  its output deck (utils/stateCard). */
+  stateCard?: import('../utils/stateCard').StateMachine
+  /** A card of a State card's output deck: that State card's id. It shows
+   *  the current state's master cards and reforms when the state changes. */
+  stateOut?: string
+  /** An output card standing in for a state with no cards: that state. */
+  stateBlank?: string
 }
 
 /** Find which group a board belongs to */
@@ -1097,6 +1105,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
       cardType: type === 'element' ? undefined : type,
       details: withTypeDetails(g.details, type),
       ...(type === 'scene' && !g.scene ? { scene: newSceneLayout() } : {}),
+      ...(type === 'state' && !g.stateCard ? { stateCard: { states: [], changes: [] } } : {}),
       ...(g.ownColor ? {} : { color: typeColor(type, chosen) }),
     }) }))
   },
@@ -1947,7 +1956,9 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
       // Everything the card IS — its grid layout, face block, effect, size —
       // but not where it belongs: no deck, pin, strip result or links.
       const own: ProjectGroup = { ...group }
-      for (const k of ['deckState', 'deckAnchorId', 'deckOffsetX', 'deckOffsetY', 'deckFaceCard', 'pin', 'railSource', 'railBase', 'deckLastFront', 'deckLock', 'linkOf'] as const) delete own[k]
+      for (const k of ['deckState', 'deckAnchorId', 'deckOffsetX', 'deckOffsetY', 'deckFaceCard', 'pin', 'railSource', 'railBase', 'deckLastFront', 'deckLock', 'linkOf', 'stateOut', 'stateBlank'] as const) delete own[k]
+      // A State card's copy has the same states, but no output deck yet.
+      if (own.stateCard) own.stateCard = { ...own.stateCard, output: undefined }
       const faceAt = group.faceBoardId ? group.boardIds.indexOf(group.faceBoardId) : -1
       const newGroup: ProjectGroup = {
         ...own,

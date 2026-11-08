@@ -1,6 +1,7 @@
 import React, { useMemo, useState, useRef, useCallback, useSyncExternalStore } from 'react'
 import { withLockMates } from '../../utils/deckLock'
 import { BackRefDot } from '../Linking/BackRefDot'
+import { StatePicker } from '../Layers/StateFace'
 import { getBackRefs } from '../../utils/linkRefs'
 import { onRows, rowOf, rowsSeen } from '../../utils/primaryCard'
 import { useBoardsStore } from '../../store/boardsStore'
@@ -127,6 +128,14 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
   })
   const openRow = groupId ? rowOf(groupId) : undefined
   const isFace = !!groupId && (mode.kind === 'deckPreview' || (!!openRow && openRow.length > 1 && openRow[0] === groupId))
+  // A State card, or its output deck's front card: the current state,
+  // picked by name (utils/stateCard). Always there, at a fixed width.
+  const stateOf = useBoardsStore(s => {
+    if (!group) return undefined
+    if (group.cardType === 'state' && group.stateCard) return group.id
+    if (group.stateOut && s.groups.find(g => g.id === group.stateOut)?.stateCard?.output === group.id) return group.stateOut
+    return undefined
+  })
   const hasRefs = useBoardsStore(s => !!groupId && getBackRefs(groupId, s.groups).length > 0)
   // A linked card's master (utils/linkedCards), while it is still there.
   const linkMasterId = useBoardsStore(s => {
@@ -461,6 +470,9 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
   // mode.kind === 'hidden' → headerIcon stays null; the trailing flex slot is omitted.
 
   const lockH = screenHeight * 0.7
+  const stateEl = stateOf && !isTiny ? (
+    <StatePicker stateCardId={stateOf} height={lockH} width={Math.max(30, effectiveWidth * 0.42)} font={9 * ov} />
+  ) : null
   // Go to master (Brian 2026-11-05): on a linked card, an arrow that takes
   // the canvas to its master card, centred and selected. Always shown on a
   // linked card, so the bar never shifts. A master hidden in a closed deck
@@ -621,6 +633,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
         overflow: 'hidden',
       }}>
         {!isTiny && nameEl}
+        {stateEl}
         {hasRefs && groupId && !isTiny && (
           <div style={{ flex: '0 0 auto', marginLeft: 'auto', display: 'flex' }}><BackRefDot groupId={groupId} size={lockH} /></div>
         )}

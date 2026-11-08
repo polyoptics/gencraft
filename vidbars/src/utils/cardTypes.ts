@@ -33,7 +33,7 @@ export interface CardDetail {
   collapsed?: boolean
 }
 
-export type CardType = 'element' | 'character' | 'faction' | 'family' | 'location' | 'prop' | 'audio' | 'scene' | 'prompt' | 'note'
+export type CardType = 'element' | 'character' | 'faction' | 'family' | 'location' | 'prop' | 'audio' | 'scene' | 'prompt' | 'note' | 'state'
 
 export interface CardTypeInfo {
   label: string
@@ -64,6 +64,9 @@ export const CARD_TYPES: Record<CardType, CardTypeInfo> = {
   // A note (2026-11-07): what a pin on a model says, and where it stands.
   // Every pin on a model is backed by one (store/notesStore).
   note:      { label: 'Note',      color: '#e0a23a', details: ['Note', 'Status', 'Model'] },
+  // A STATE card (2026-11-08): the states a thing can be in, each a master
+  // deck, and one output deck showing the current one (utils/stateCard).
+  state:     { label: 'State',     color: '#4f8f5a', details: [] },
 }
 export const CARD_TYPE_ORDER = Object.keys(CARD_TYPES) as CardType[]
 

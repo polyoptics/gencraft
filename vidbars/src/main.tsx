@@ -4,6 +4,7 @@ import './index.css'
 import App from './App.tsx'
 import { useBoardsStore } from './store/boardsStore'
 import { startLinkedCardSync } from './utils/linkedCards'
+import { startStateOutputs } from './utils/stateCard'
 import { startChartFollow } from './utils/chartCard'
 import { cardOrigins } from './components/Canvas/StorylineLayer'
 import { startDecksOpenRight } from './utils/deckRight'
@@ -44,6 +45,7 @@ import { models } from './components/Canvas/tilt/TiltModels'
 
 // One card shown in several places: an edit on one is on all (utils/linkedCards).
 startLinkedCardSync()
+startStateOutputs()
 startChartFollow(cardOrigins)
 // Decks off every storyline open to the right (utils/deckRight).
 startDecksOpenRight()

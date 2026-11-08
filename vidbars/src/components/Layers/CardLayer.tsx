@@ -36,6 +36,8 @@ import { HeroImageLayer } from './HeroImageLayer'
 import { CardBack, FlipButton, backColor, useCardFlip } from './CardBack'
 import { liveLocks, lockOf, withLockMates } from '../../utils/deckLock'
 import { SceneFace } from './SceneFace'
+import { StateFace } from './StateFace'
+import { fillTestCup } from '../../utils/stateTest'
 import { fillBlockout } from '../../utils/sceneBlockout'
 import { dropCardsInDivision } from '../../utils/sceneContent'
 import { useFxStore } from '../../store/fxStore'
@@ -218,6 +220,11 @@ const CardContextMenu: React.FC<{
     // small cast held in some shots) to try its view modes on.
     if (group.cardType === 'scene' && !group.flipped) menuItems.push({ label: 'Fill with a test blockout', icon: '🎬', action: () => {
       fillBlockout(group.id)
+      onClose()
+    }})
+    // A state card with no states yet: a cup with a few states to try it on.
+    if (group.cardType === 'state' && group.stateCard && !group.stateCard.states.length) menuItems.push({ label: 'Fill with a test cup', icon: '☕', action: () => {
+      fillTestCup(group.id)
       onClose()
     }})
     // A faction: its members as a tree on a new storyline beside it.
@@ -1291,6 +1298,12 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
         ) : group.effect ? (
           <div style={{ position: 'absolute', top: headerPad, left: 0, right: 0, bottom: 0, overflow: 'hidden', borderRadius: '0 0 12px 12px', display: 'flex', flexDirection: 'column' }}>
             <EffectCardFace group={group} width={screenWidth} height={Math.max(1, cardHeight - headerPad)} />
+          </div>
+        ) : group.cardType === 'state' && group.stateCard ? (
+          // A state card's face is its workshop: states, changes, output.
+          <div style={{ position: 'absolute', top: headerPad, left: 0, right: 0, bottom: 0 }}>
+            <StateFace group={group} width={screenWidth} height={Math.max(1, cardHeight - headerPad)}
+              reserve={6 + Math.min(32, Math.max(8, 16 * overviewScale(zoom), headerScreenH(zoom) * 0.85)) + 3} />
           </div>
         ) : group.cardType === 'scene' && group.scene ? (
           // A scene card's face is its divisions (Brian's storyMap).

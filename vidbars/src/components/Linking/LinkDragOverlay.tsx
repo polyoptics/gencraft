@@ -4,6 +4,7 @@
 // App root. Motion matches the NLEBlock color drag-out pattern.
 
 import { dropCardsInDivision } from '../../utils/sceneContent'
+import { addState, setStateDeck } from '../../utils/stateCard'
 import React, { useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { useLinkDragStore } from '../../store/linkDragStore'
@@ -40,12 +41,16 @@ export const LinkDragOverlay: React.FC = () => {
       // A division of a scene card ("division:<scene>:<division>"): the
       // card let go goes in it, with the others selected with it (SceneFace).
       let division: string[] | null = null
+      // A state on a State card ("statedeck:<card>:<state>|new"): the deck
+      // the card let go is in becomes that state's deck (StateFace).
+      let stateDeck: string[] | null = null
       for (const el of els) {
         const attr = (el as HTMLElement).closest?.('[data-link-drop]')?.getAttribute('data-link-drop')
         if (!attr) continue
         if (attr.startsWith('story:')) { story = attr.split(':'); break }
         if (attr.startsWith('detail:')) { detail = attr.split(':'); break }
         if (attr.startsWith('division:')) { division = attr.split(':'); break }
+        if (attr.startsWith('statedeck:')) { stateDeck = attr.split(':'); break }
         // "group:<id>" / "board:<id>" / "bar:<boardId>:<barId>", plus the
         // legacy "card:"/"chip:" spellings the card layer still emits.
         const hit = parseRef(attr)
@@ -84,6 +89,10 @@ export const LinkDragOverlay: React.FC = () => {
         const bs = useBoardsStore.getState()
         const ids = bs.selectedGroupIds.includes(source.id) ? [source.id, ...bs.selectedGroupIds.filter(id => id !== source.id)] : [source.id]
         dropCardsInDivision(division[1], division[2], ids)
+      }
+      if (stateDeck && source.kind === 'group' && source.id !== stateDeck[1]) {
+        if (stateDeck[2] === 'new') addState(stateDeck[1], { deck: source.id })
+        else setStateDeck(stateDeck[1], stateDeck[2], source.id)
       }
       if (story && source.kind === 'group') {
         useUndoCoordinator.getState().checkpoint()
