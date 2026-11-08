@@ -9,7 +9,9 @@
 //   crop  — drag once to place a persistent frame with 8 resize handles
 //           and a draggable interior; Stamp saves the current frame and
 //           the frame STAYS, so you can nudge/resize and stamp again.
-//   paint — freehand brush; Stamp mints image+strokes (source untouched).
+//   paint — freehand brush, or a basic shape (rectangle, ellipse, line,
+//           arrow; Fill on or off); Stamp mints image+strokes (source
+//           untouched).
 //
 // Escape leaves any mode. Everything runs inside the CounterScaled plane
 // (see ContentViews) so pointer math is screen-true at any canvas zoom.
@@ -32,7 +34,64 @@ interface ImgViewState { scale: number; tx: number; ty: number }
 const imgViews = new Map<string, ImgViewState>()
 
 export type ImgMode = 'view' | 'snip' | 'crop' | 'paint'
-interface PaintStroke { color: string; size: number; pts: { x: number; y: number }[] }
+/** What Paint draws with: the brush, or a shape dragged corner to corner
+ *  (a line or arrow start to end). Brian 2026-11-08. */
+type PaintTool = 'brush' | 'rect' | 'ellipse' | 'line' | 'arrow'
+type Shape = Exclude<PaintTool, 'brush'>
+interface PaintStroke { color: string; size: number; pts: { x: number; y: number }[]; shape?: Shape; fill?: boolean }
+
+const PAINT_TOOLS: { id: PaintTool; icon: React.ReactNode; tip: string }[] = [
+  { id: 'brush', icon: <path d="M3 13c2-1 3-4 5-4s1 3 3 3 2-5 2-5" />, tip: 'Brush: paint freehand' },
+  { id: 'rect', icon: <rect x="2.5" y="4" width="11" height="8" />, tip: 'Rectangle: drag corner to corner' },
+  { id: 'ellipse', icon: <ellipse cx="8" cy="8" rx="5.5" ry="4" />, tip: 'Ellipse: drag corner to corner' },
+  { id: 'line', icon: <path d="M3 13L13 3" />, tip: 'Line: drag start to end' },
+  { id: 'arrow', icon: <><path d="M3 13L13 3" /><path d="M7.5 3H13v5.5" /></>, tip: 'Arrow: drag start to end' },
+]
+
+/** A shape's arrowhead: its two barbs' ends, for a line from a to b. */
+function arrowBarbs(a: { x: number; y: number }, b: { x: number; y: number }, size: number) {
+  const ang = Math.atan2(b.y - a.y, b.x - a.x)
+  const len = Math.min(Math.max(10, size * 3.2), Math.hypot(b.x - a.x, b.y - a.y) * 0.6)
+  return [ang + Math.PI * 0.82, ang - Math.PI * 0.82].map(t => ({ x: b.x + Math.cos(t) * len, y: b.y + Math.sin(t) * len }))
+}
+
+/** Draw a Paint stroke on a 2D canvas, `at` taking a point to its pixel
+ *  there and `k` a width (the Stamp). */
+function drawStroke(ctx: CanvasRenderingContext2D, st: PaintStroke, at: (p: { x: number; y: number }) => { x: number; y: number }, k: number) {
+  ctx.strokeStyle = st.color
+  ctx.fillStyle = st.color
+  ctx.lineWidth = st.size * k
+  ctx.beginPath()
+  if (!st.shape) {
+    st.pts.forEach((p, i) => { const n = at(p); if (i === 0) ctx.moveTo(n.x, n.y); else ctx.lineTo(n.x, n.y) })
+    ctx.stroke()
+    return
+  }
+  const a = at(st.pts[0]), b = at(st.pts[st.pts.length - 1])
+  if (st.shape === 'rect') ctx.rect(Math.min(a.x, b.x), Math.min(a.y, b.y), Math.abs(b.x - a.x), Math.abs(b.y - a.y))
+  else if (st.shape === 'ellipse') ctx.ellipse((a.x + b.x) / 2, (a.y + b.y) / 2, Math.abs(b.x - a.x) / 2, Math.abs(b.y - a.y) / 2, 0, 0, Math.PI * 2)
+  else {
+    ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y)
+    if (st.shape === 'arrow') {
+      const [l, rr] = arrowBarbs(a, b, st.size * k)
+      ctx.moveTo(l.x, l.y); ctx.lineTo(b.x, b.y); ctx.lineTo(rr.x, rr.y)
+    }
+  }
+  if (st.fill && (st.shape === 'rect' || st.shape === 'ellipse')) ctx.fill()
+  else ctx.stroke()
+}
+
+/** The same stroke as SVG, in the image area's px. */
+const StrokeSvg: React.FC<{ st: PaintStroke }> = ({ st }) => {
+  const line = { stroke: st.color, strokeWidth: st.size, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const }
+  if (!st.shape) return <polyline points={st.pts.map(p => `${p.x},${p.y}`).join(' ')} fill="none" {...line} />
+  const a = st.pts[0], b = st.pts[st.pts.length - 1]
+  const filled = st.fill ? { fill: st.color, stroke: 'none' } : { fill: 'none', ...line }
+  if (st.shape === 'rect') return <rect x={Math.min(a.x, b.x)} y={Math.min(a.y, b.y)} width={Math.abs(b.x - a.x)} height={Math.abs(b.y - a.y)} {...filled} />
+  if (st.shape === 'ellipse') return <ellipse cx={(a.x + b.x) / 2} cy={(a.y + b.y) / 2} rx={Math.abs(b.x - a.x) / 2} ry={Math.abs(b.y - a.y) / 2} {...filled} />
+  const barbs = st.shape === 'arrow' ? arrowBarbs(a, b, st.size) : null
+  return <path d={`M${a.x},${a.y}L${b.x},${b.y}${barbs ? `M${barbs[0].x},${barbs[0].y}L${b.x},${b.y}L${barbs[1].x},${barbs[1].y}` : ''}`} fill="none" {...line} />
+}
 interface Box { x: number; y: number; w: number; h: number }
 type Handle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'move'
 
@@ -148,6 +207,8 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
   const [strokes, setStrokes] = useState<PaintStroke[]>([])
   const [brushColor, setBrushColor] = useState(PAINT_COLORS[1])
   const [brushSize, setBrushSize] = useState(6)
+  const [paintTool, setPaintTool] = useState<PaintTool>('brush')
+  const [fill, setFill] = useState(false)
   const [busy, setBusy] = useState(false)
   // Full-size px per shown px of a live canvas, once a cut has measured it.
   const [liveK, setLiveK] = useState<number | null>(null)
@@ -252,17 +313,11 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
       if (withStrokes && strokes.length > 0) {
         const k = areaToNaturalScale(aw, ah, v, natural)
         ctx.lineCap = 'round'; ctx.lineJoin = 'round'
-        for (const st of strokes) {
-          ctx.strokeStyle = st.color
-          ctx.lineWidth = st.size * k
-          ctx.beginPath()
-          st.pts.forEach((p, i) => {
-            const n = areaToNatural(p, aw, ah, v, natural)
-            const nx = n.x - sx, ny = n.y - sy
-            if (i === 0) ctx.moveTo(nx, ny); else ctx.lineTo(nx, ny)
-          })
-          ctx.stroke()
+        const at = (p: { x: number; y: number }) => {
+          const n = areaToNatural(p, aw, ah, v, natural)
+          return { x: n.x - sx, y: n.y - sy }
         }
+        for (const st of strokes) drawStroke(ctx, st, at, k)
       }
       // A DATA URL, not a blob. Measured in this runtime: canvas.toBlob
       // produces a blob whose arrayBuffer() throws NotReadableError and
@@ -332,11 +387,13 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
       setCropBox({ x: p.x, y: p.y, w: 0, h: 0 })
     } else if (mode === 'paint') {
       painting.current = true
-      setStrokes(s => [...s, { color: brushColor, size: brushSize, pts: [p] }])
+      setStrokes(s => [...s, paintTool === 'brush'
+        ? { color: brushColor, size: brushSize, pts: [p] }
+        : { color: brushColor, size: brushSize, pts: [p, p], shape: paintTool, fill }])
     } else {
       dragLast.current = { x: e.clientX, y: e.clientY }
     }
-  }, [mode, brushColor, brushSize])
+  }, [mode, brushColor, brushSize, paintTool, fill])
 
   const onMove = useCallback((e: React.PointerEvent) => {
     if (!(e.currentTarget as HTMLElement).hasPointerCapture(e.pointerId)) return
@@ -359,7 +416,7 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
       setStrokes(prev => {
         const next = [...prev]
         const last = next[next.length - 1]
-        next[next.length - 1] = { ...last, pts: [...last.pts, p] }
+        next[next.length - 1] = { ...last, pts: last.shape ? [last.pts[0], p] : [...last.pts, p] }
         return next
       })
     } else if (mode === 'view' && dragLast.current) {
@@ -485,7 +542,7 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
         )}
         {modeBtn('snip', '✂', 'Snip — drag a box; releasing saves it out. Keep snipping. (Esc to exit)')}
         {modeBtn('crop', '⛶', 'Crop — place a frame, resize/move it, Stamp as many as you like. (Esc to exit)')}
-        {modeBtn('paint', '✎', 'Paint — brush, then Stamp a painted copy. (Esc to exit)')}
+        {modeBtn('paint', '✎', 'Paint — brush or shapes (rectangle, ellipse, line, arrow), then Stamp a painted copy. (Esc to exit)')}
 
         {mode === 'snip' && (
           <span style={{ fontSize: 9.5, color: 'rgba(255,255,255,0.45)', marginLeft: 4 }}>
@@ -510,6 +567,17 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
 
         {mode === 'paint' && (
           <>
+            <div style={{ display: 'flex', gap: 2, alignItems: 'center', marginLeft: 4 }}>
+              {PAINT_TOOLS.map(t => (
+                <button key={t.id} style={{ ...tbBtn(paintTool === t.id), padding: '3px 4px' }} aria-pressed={paintTool === t.id} title={t.tip} onClick={() => setPaintTool(t.id)}>
+                  <svg width={14} height={14} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>{t.icon}</svg>
+                </button>
+              ))}
+              <button style={{ ...tbBtn(fill), padding: '3px 4px' }} aria-pressed={fill} onClick={() => setFill(f => !f)}
+                title="Fill: on or off. On, rectangles and ellipses are solid colour.">
+                <svg width={14} height={14} viewBox="0 0 16 16" style={{ display: 'block' }}><rect x="3" y="3" width="10" height="10" rx="2" fill={fill ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth={1.6} /></svg>
+              </button>
+            </div>
             <div style={{ display: 'flex', gap: 3, alignItems: 'center', marginLeft: 4 }}>
               {PAINT_COLORS.map(c => (
                 <div key={c} onClick={() => setBrushColor(c)} title={c} style={{
@@ -578,14 +646,7 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
         {/* Paint overlay */}
         {mode === 'paint' && strokes.length > 0 && (
           <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
-            {strokes.map((st, i) => (
-              <polyline
-                key={i}
-                points={st.pts.map(p => `${p.x},${p.y}`).join(' ')}
-                fill="none" stroke={st.color} strokeWidth={st.size}
-                strokeLinecap="round" strokeLinejoin="round"
-              />
-            ))}
+            {strokes.map((st, i) => <StrokeSvg key={i} st={st} />)}
           </svg>
         )}
 
