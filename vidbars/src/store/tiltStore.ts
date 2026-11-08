@@ -383,6 +383,10 @@ interface ModelScaleStore {
    *  2026-11-08: lay out a scene). Same keys as sizeOf. Absent: upright. */
   poseOf: Record<string, [number, number, number, number]>
   setPose: (key: string, q: [number, number, number, number] | null) => void
+  /** A model's colour (Brian 2026-11-08), over its own: '#rrggbb'. Same
+   *  keys. Absent: as it came. */
+  tintOf: Record<string, string>
+  setTint: (key: string, color: string | null) => void
 }
 
 export const useModelScaleStore = create<ModelScaleStore>()(persist(set => ({
@@ -396,8 +400,14 @@ export const useModelScaleStore = create<ModelScaleStore>()(persist(set => ({
     if (q) poseOf[key] = q; else delete poseOf[key]
     return { poseOf }
   }),
+  tintOf: {},
+  setTint: (key, color) => set(s => {
+    const tintOf = { ...s.tintOf }
+    if (color) tintOf[key] = color; else delete tintOf[key]
+    return { tintOf }
+  }),
 }), {
   name: 'vidbars-model-scale',
-  partialize: s => ({ unitsPerMetre: s.unitsPerMetre, sizeOf: s.sizeOf, poseOf: s.poseOf }),
+  partialize: s => ({ unitsPerMetre: s.unitsPerMetre, sizeOf: s.sizeOf, poseOf: s.poseOf, tintOf: s.tintOf }),
   storage: createDebouncedIDBStorage(400),
 }))

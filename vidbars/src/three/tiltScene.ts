@@ -169,6 +169,8 @@ export interface TiltFrameState {
   /** Stands on a 3D area (a scene layout): it keeps the turn it is
    *  given and never turns on the turntable. */
   placed?: (key: string) => boolean
+  /** A model's own colour (useModelScaleStore tintOf), '#rrggbb'. */
+  tintFor?: (key: string) => string | undefined
   /** Cards, decks, tiles and Viewers, for their thickness. */
   slabs: TiltSlab[]
   art: TiltArt[]
@@ -212,6 +214,12 @@ interface Standing {
   orient: THREE.Group
   /** How it stands turned, kept (a 3D area's layout), under that. */
   pose: THREE.Group
+  /** Its handles on a 3D area, selected: a ring to turn it, a knob to
+   *  size it (made when first shown). */
+  gizmo: { group: THREE.Group; ring: THREE.Mesh; knob: THREE.Mesh; r: number } | null
+  /** The colour it is shown in now, and its materials' own colours. */
+  tint: string | null
+  baseColors: Map<THREE.Material, THREE.Color> | null
   /** Let go after a turn: it drifts back about `axis` from `angle` to
    *  none over DRIFT_MS, rocking past by up to `rock` (radians). */
   back: {
@@ -462,7 +470,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     wall.visible = false
     groundDeco.add(wall)
     const s: Standing = {
-      url, stand, turn, orient, pose, back: null, spun: [], inst: null, size: new THREE.Vector3(), unit: 1, unitSet: false, triangles: 0,
+      url, stand, turn, orient, pose, gizmo: null, tint: null, baseColors: null, back: null, spun: [], inst: null, size: new THREE.Vector3(), unit: 1, unitSet: false, triangles: 0,
       figure, wall, wallText: '', look: null, phase: Math.random() * 6.28, dead: false, seen: frameNo, shownAt: 0,
       mats: [], alpha: -1,
     }
@@ -995,6 +1003,28 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       s.turn.rotation.y = st.turn && !placed ? now / 1000 * 0.6 + s.phase : 0
       const pq = st.poseFor?.(tg.key)
       if (pq) s.pose.quaternion.set(pq[0], pq[1], pq[2], pq[3]); else s.pose.quaternion.identity()
+      // Its colour (Brian 2026-11-08): over its materials' own.
+      const tint = (s.look && st.tintFor?.(tg.key)) || null
+      if (s.look && tint !== s.tint) {
+        s.tint = tint
+        if (!s.baseColors) {
+          s.baseColors = new Map()
+          for (const m of s.look.all) { const c = (m as THREE.MeshStandardMaterial).color; if (c) s.baseColors.set(m, c.clone()) }
+        }
+        const t = tint ? new THREE.Color(tint) : null
+        for (const [m, c] of s.baseColors) {
+          const mc = (m as THREE.MeshStandardMaterial).color
+          if (!t) mc.copy(c)
+          // A textured model takes the colour over its picture; a plain
+          // one (a primitive) shows it as it is.
+          else if ((m as THREE.MeshStandardMaterial).map) mc.copy(c).multiply(t)
+          else mc.copy(t)
+        }
+      }
+      // Its handles: on a 3D area, selected, standing.
+      const handles = placed && st.selected.has(tg.key) && !!s.inst
+      if (handles && !s.gizmo) s.gizmo = makeGizmo(s)
+      if (s.gizmo) s.gizmo.group.visible = handles
       if (s.back) {
         // Let go after an Alt-drag: it rolls back to how it stood (Brian
         // 2026-11-04), easing in and out, and rocks a little past and back
@@ -1313,6 +1343,62 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     return s && s.inst ? s.size.length() : null
   }
 
+  /** The handles round a model on a 3D area: a thin ring on the ground
+   *  just outside its footprint, and a knob on it. In the stand's space
+   *  (model units), so they size with the model. */
+  function makeGizmo(s: Standing) {
+    const r = Math.max(s.size.x, s.size.z, 1e-6) * 0.8
+    const mat = new THREE.MeshBasicMaterial({ color: 0x7fd4ff, transparent: true, opacity: 0.9, depthTest: false, depthWrite: false, toneMapped: false, side: THREE.DoubleSide })
+    const ring = new THREE.Mesh(new THREE.RingGeometry(r * 0.95, r, 96), mat)
+    ring.rotation.x = -Math.PI / 2
+    ring.renderOrder = 999
+    const knobMat = new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false, depthWrite: false, toneMapped: false })
+    const knob = new THREE.Mesh(new THREE.SphereGeometry(r * 0.075, 16, 12), knobMat)
+    knob.position.set(r, 0, 0)
+    knob.renderOrder = 1000
+    const group = new THREE.Group()
+    group.add(ring, knob)
+    group.visible = false
+    s.stand.add(group)
+    return { group, ring, knob, r }
+  }
+
+  /** The handle under (x, y) (px on the 3D canvas), if any: the model's
+   *  key, which handle, where it stands on screen, and which way a turn
+   *  clockwise on screen turns it (+1: about its up axis, positively). */
+  function gizmoAt(x: number, y: number): { key: string; part: 'turn' | 'size'; foot: { x: number; y: number }; sign: number } | null {
+    if (!lastW || !lastH) return null
+    const v = new THREE.Vector3()
+    const toPx = (p: THREE.Vector3) => { p.project(camera); return { x: (p.x + 1) / 2 * lastW, y: (1 - p.y) / 2 * lastH, z: p.z } }
+    let best: { key: string; part: 'turn' | 'size'; d: number; foot: { x: number; y: number }; sign: number } | null = null
+    for (const [key, s] of standing) {
+      const g = s.gizmo
+      if (!g || !g.group.visible || !s.stand.visible) continue
+      s.stand.updateWorldMatrix(true, true)
+      const at = (lx: number, lz: number) => toPx(s.stand.localToWorld(v.set(lx, 0, lz)))
+      const foot = at(0, 0)
+      if (foot.z > 1) continue
+      // Clockwise on screen from +x towards -z (a positive turn about +y)?
+      const px = at(g.r, 0), pz = at(0, -g.r)
+      const sign = ((px.x - foot.x) * (pz.y - foot.y) - (px.y - foot.y) * (pz.x - foot.x)) > 0 ? 1 : -1
+      const kd = Math.hypot(px.x - x, px.y - y)
+      if (kd < 11 && (!best || kd < best.d)) best = { key, part: 'size', d: kd, foot, sign }
+      let prev: { x: number; y: number } | null = null
+      for (let i = 0; i <= 64; i++) {
+        const a = i / 64 * Math.PI * 2
+        const q = at(Math.cos(a) * g.r, Math.sin(a) * g.r)
+        if (prev) {
+          const dx = q.x - prev.x, dy = q.y - prev.y, l2 = dx * dx + dy * dy
+          const t = l2 > 0 ? Math.max(0, Math.min(1, ((x - prev.x) * dx + (y - prev.y) * dy) / l2)) : 0
+          const d = Math.hypot(x - (prev.x + dx * t), y - (prev.y + dy * t)) + 2
+          if (d < 9 && (!best || d < best.d)) best = { key, part: 'turn', d, foot, sign }
+        }
+        prev = q
+      }
+    }
+    return best && { key: best.key, part: best.part, foot: { x: best.foot.x, y: best.foot.y }, sign: best.sign }
+  }
+
   /** Keep model `key`'s turn (a 3D area's layout): what the hand turned it
    *  by goes into how it stands. Returns that, or null. */
   function keepTurn(key: string): [number, number, number, number] | null {
@@ -1370,5 +1456,5 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     renderer.forceContextLoss()
   }
 
-  return { frame, warm, pick, pickZ: () => pickedZ, info, spinBy, letGo, settleAll, keepTurn, screenBox, labelAt, strokeAt, modelSize, dispose, surfaceAt, pinSpots: notes.spots }
+  return { frame, warm, pick, pickZ: () => pickedZ, info, spinBy, letGo, settleAll, keepTurn, gizmoAt, screenBox, labelAt, strokeAt, modelSize, dispose, surfaceAt, pinSpots: notes.spots }
 }

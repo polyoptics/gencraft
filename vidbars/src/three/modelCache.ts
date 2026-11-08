@@ -54,6 +54,7 @@ const manager = new THREE.LoadingManager()
 manager.addHandler(/^data:/, new THREE.TextureLoader(manager))
 
 import { withDataUrlTextures } from './fbxDataTextures'
+import { isPrimitiveUrl, makePrimitive } from './primitives'
 
 const loader = new GLTFLoader(manager)
 const fbxLoader = new FBXLoader(manager)
@@ -70,6 +71,8 @@ function isFbx(url: string, buf: ArrayBuffer): boolean {
 }
 
 async function loadEntry(url: string): Promise<CacheEntry> {
+  // A primitive (three/primitives) is made, not loaded.
+  if (isPrimitiveUrl(url)) return { source: makePrimitive(url), refCount: 0 }
   // Both paths go through parseAsync on bytes we hold, so the texture
   // inlining below applies either way. (The url path used to call
   // loadAsync, which fetches and parses internally and gave us no chance

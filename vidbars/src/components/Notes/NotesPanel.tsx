@@ -18,9 +18,13 @@ import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { usePlacing, togglePlacing } from '../../utils/placeTool'
 import { areaAt } from '../../utils/areaFollow'
 import { ensureAnnotated, modelName } from '../../utils/annotations'
-import { models } from '../Canvas/tilt/TiltModels'
+import { models, cardModel } from '../Canvas/tilt/TiltModels'
 import { curveBounds, curvePoints } from '../../utils/curveGeom'
 import { useCurveDraft } from '../../utils/notesTool'
+import { useModelScaleStore } from '../../store/tiltStore'
+import { createMediaCard } from '../../utils/cardGrid'
+import { visibleCanvasCenter } from '../../utils/fx/createEffect'
+import { PRIMITIVES, PRIM_NAMES, primitiveUrl, type Primitive } from '../../three/primitives'
 
 const S = 'rgba(228,234,255,0.92)'
 const W_OPEN = 252, W_FOLDED = 52
@@ -136,6 +140,88 @@ const SelectedModels: React.FC = () => {
   const list = useSelectedModels()
   if (!list.length) return null
   return <Section title="SELECTED MODEL">{list.map(m => <ModelNotesRow key={m.url} k={m.key} url={m.url} />)}</Section>
+}
+
+// ── 3D area: primitives and model colour (Brian 2026-11-08) ──
+
+const PRIM_ICON: Record<Primitive, React.ReactNode> = {
+  cube: <><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z" stroke={S} /><path d="M4 7.5l8 4.5 8-4.5M12 12v9" stroke={S} /></>,
+  sphere: <><circle cx="12" cy="12" r="8.5" stroke={S} /><ellipse cx="12" cy="12" rx="8.5" ry="3.2" stroke={S} /></>,
+  cylinder: <><ellipse cx="12" cy="5.5" rx="7" ry="2.5" stroke={S} /><path d="M5 5.5v13c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5v-13" stroke={S} /></>,
+  cone: <><path d="M12 3L5 18.5M12 3l7 15.5" stroke={S} /><ellipse cx="12" cy="18.5" rx="7" ry="2.5" stroke={S} /></>,
+  plane: <path d="M7 8h14l-4 8H3z" stroke={S} />,
+}
+
+/** Model colours: plain, readable over the dark ground. */
+const MODEL_COLORS = ['#e8e8e8', '#7a7f8a', '#2b2d33', '#d9534f', '#f0a742', '#f2d64b', '#6fbf73', '#4aa3df', '#8a6fd1', '#c98a5a']
+
+/** The selected models (cards and tiles), as the 3D view keys them. */
+function useSelectedModelKeys(): string[] {
+  const selNodes = useFreeNodeStore(s => s.selectedIds)
+  const selCards = useBoardsStore(s => s.selectedGroupIds)
+  const nodes = useFreeNodeStore(s => s.nodes)
+  const groups = useBoardsStore(s => s.groups)
+  return useMemo(() => [
+    ...selNodes.filter(id => nodes[id]?.type === 'model').map(id => `node:${id}`),
+    // (groups: a card's face can change to or from a model.)
+    ...selCards.filter(id => !!cardModel(id)).map(id => `card:${id}`),
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], [selNodes, selCards, nodes, groups])
+}
+
+let made = 0
+/** A primitive, as a model card: on the selected 3D area, else the one in
+ *  the middle of the view, else in the middle of the view. */
+function makePrimitive(p: Primitive) {
+  const fn = useFreeNodeStore.getState()
+  const sel = fn.selectedIds.map(id => fn.nodes[id]).find(n => n?.type === 'area')
+  const mid = visibleCanvasCenter()
+  const area = sel ?? areaAt(fn.nodes, mid.cx, mid.cy)
+  // Each new one a step along, so they don't stack up.
+  const i = made++ % 5
+  const at = area
+    ? { cx: area.x + area.width * (0.3 + 0.1 * i), cy: area.y + area.height * 0.5 }
+    : { cx: mid.cx + i * 40, cy: mid.cy }
+  useUndoCoordinator.getState().checkpoint()
+  const id = createMediaCard(at, [{ media: { url: primitiveUrl(p), type: 'model', originalName: PRIM_NAMES[p] }, label: PRIM_NAMES[p] }])
+  if (id) useBoardsStore.getState().setSelectedGroup(id)
+}
+
+const Area3dTools: React.FC = () => {
+  const keys = useSelectedModelKeys()
+  const tintOf = useModelScaleStore(s => s.tintOf)
+  const cur = keys.length ? tintOf[keys[0]] ?? null : null
+  const paint = (c: string | null) => {
+    if (!keys.length) return
+    useUndoCoordinator.getState().checkpoint()
+    const ms = useModelScaleStore.getState()
+    for (const k of keys) ms.setTint(k, c)
+  }
+  const sw = (c: string | null, on: boolean): React.CSSProperties => ({
+    height: 20, borderRadius: 10, padding: 0, cursor: keys.length ? 'pointer' : 'default',
+    background: c ?? 'repeating-linear-gradient(45deg, rgba(255,255,255,0.18) 0 3px, transparent 3px 6px)',
+    border: on ? '2px solid #fff' : '2px solid rgba(255,255,255,0.15)', boxShadow: on ? '0 0 0 1px rgba(0,0,0,0.6)' : 'none',
+  })
+  return (
+    <>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 6 }}>
+        {PRIMITIVES.map(p => (
+          <button key={p} style={{ ...btnStyle(false), width: '100%' }} onClick={() => makePrimitive(p)}
+            title={`${PRIM_NAMES[p]}: a new model card, set on the selected 3D area (or the one in view)`}>
+            <svg {...svg(20)}>{PRIM_ICON[p]}</svg>
+          </button>
+        ))}
+      </div>
+      <div style={{ fontSize: 10, letterSpacing: 1.3, color: 'rgba(255,255,255,0.4)', fontFamily: 'ui-monospace, monospace', marginTop: 4 }}>MODEL COLOUR</div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(11, 1fr)', gap: 4, opacity: keys.length ? 1 : 0.4 }}
+        title={keys.length ? undefined : 'Select a model to colour it'}>
+        <button style={sw(null, !!keys.length && !cur)} disabled={!keys.length} onClick={() => paint(null)} title="Its own colours" aria-pressed={!!keys.length && !cur} />
+        {MODEL_COLORS.map(c => (
+          <button key={c} style={sw(c, cur === c)} disabled={!keys.length} onClick={() => paint(c)} title={c} aria-pressed={cur === c} />
+        ))}
+      </div>
+    </>
+  )
 }
 
 // ── Outliner ──
@@ -427,7 +513,7 @@ export const NotesPanel: React.FC = () => {
                 }}
                 style={{ width: '100%' }} />
             </Section>
-            <Section title="PLACE">{areaBtn}</Section>
+            <Section title="3D AREA">{areaBtn}<Area3dTools /></Section>
             <SelectedModels />
             <Section title="OUTLINER"><Outliner /></Section>
           </>

@@ -1,6 +1,8 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
+// The 3D area's model handles: before the app's own listeners.
+import './utils/area3dHandles'
 import App from './App.tsx'
 import { useBoardsStore } from './store/boardsStore'
 import { startLinkedCardSync } from './utils/linkedCards'

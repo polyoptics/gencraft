@@ -59,8 +59,11 @@ export const models: {
   /** The surface stroke under a client point (the Erase tool). */
   strokeAt: ((clientX: number, clientY: number) => { url: string; id: string } | null) | null
   modelSize: ((key: string) => number | null) | null
+  /** The turn ring / size knob of a selected model on a 3D area under a
+   *  client point (utils/area3dHandles). foot is client px. */
+  gizmoAt: ((clientX: number, clientY: number) => { key: string; part: 'turn' | 'size'; foot: { x: number; y: number }; sign: number } | null) | null
   root: HTMLElement | null
-} = { labelAt: null, strokeAt: null, modelSize: null, pick: null, pickZ: null, info: null, spin: null, letGo: null, hovered: null, at: null, surface: null, pinSpots: null, screenBox: null, root: null }
+} = { gizmoAt: null, labelAt: null, strokeAt: null, modelSize: null, pick: null, pickZ: null, info: null, spin: null, letGo: null, hovered: null, at: null, surface: null, pinSpots: null, screenBox: null, root: null }
 /** A pick that lights up under the cursor: a model or a person, not
  *  furniture. */
 export const modelKey = (k: string | null | undefined) => (k && !k.startsWith('deco|') ? k : null)
@@ -96,7 +99,7 @@ function onArea3d(key: string): boolean {
 
 const frameState = (): TiltFrameState => {
   const ts = useTiltStore.getState()
-  const { unitsPerMetre: scales, sizeOf, poseOf } = useModelScaleStore.getState()
+  const { unitsPerMetre: scales, sizeOf, poseOf, tintOf } = useModelScaleStore.getState()
   const placedMemo = new Map<string, boolean>()
   return {
     tilt: ts.tilt, spin: ts.spin, yaw: ts.yaw, shiftX: ts.shiftX, shiftY: ts.shiftY, glide: ts.glide, texture: ts.texture, shade: ts.shade, wire: ts.wire, light: ts.light, turn: ts.turn,
@@ -108,6 +111,7 @@ const frameState = (): TiltFrameState => {
     unitsFor: url => scales[url],
     sizeFor: key => sizeOf[key] ?? 1,
     poseFor: key => poseOf[key],
+    tintFor: key => tintOf[key],
     placed: key => { let v = placedMemo.get(key); if (v === undefined) { v = onArea3d(key); placedMemo.set(key, v) } return v },
     slabs: live3d() ? collectSlabs(fadeShown()) : (dropLifts(), []),
     art: live3d() ? lastArt : [],
@@ -291,6 +295,11 @@ export const TiltModels: React.FC = () => {
         return v.strokeAt(clientX - r.left, clientY - r.top)
       }
       models.modelSize = v.modelSize
+      models.gizmoAt = (clientX, clientY) => {
+        const r = root.getBoundingClientRect()
+        const g = v.gizmoAt(clientX - r.left, clientY - r.top)
+        return g && { ...g, foot: { x: g.foot.x + r.left, y: g.foot.y + r.top } }
+      }
       models.root = root
       warm()
       raf = requestAnimationFrame(frame)
@@ -323,7 +332,7 @@ export const TiltModels: React.FC = () => {
       cancelAnimationFrame(raf)
       post.disconnect(); marker.remove()
       models.pick = null; models.pickZ = null; models.info = null; models.spin = null; models.letGo = null
-      models.surface = null; models.pinSpots = null; models.screenBox = null; models.labelAt = null; models.strokeAt = null; models.modelSize = null; models.root = null
+      models.surface = null; models.pinSpots = null; models.screenBox = null; models.labelAt = null; models.strokeAt = null; models.modelSize = null; models.gizmoAt = null; models.root = null
       view?.dispose()
       canvas?.remove()
     }
@@ -370,7 +379,7 @@ const fileName = (url: string) => /^mediaref:/.test(url) ? '' : decodeURICompone
  *  face card, and a card the block its face is stepped to (else its first
  *  picture block) — so flipping a deck or a card swaps the standing model.
  *  A bare block element (data-id is a board) uses that block. */
-function cardModel(id: string): { url: string; name: string } | null {
+export function cardModel(id: string): { url: string; name: string } | null {
   const bs = useBoardsStore.getState()
   const g = bs.groups.find(gr => gr.id === id)
   let bid: string | null = id
