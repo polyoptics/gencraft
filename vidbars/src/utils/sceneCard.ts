@@ -56,6 +56,8 @@ export interface SceneDiv {
   /** A split (container): its parts side by side ('row') or stacked
    *  ('col'), each its share of the space (sizes sum to 1). */
   dir?: 'row' | 'col'
+  /** A section folded to its heading: one strip (Brian 2026-11-08). */
+  fold?: boolean
   sizes?: number[]
   kids?: SceneDiv[]
 }
@@ -217,24 +219,85 @@ export function litDivisions(root: SceneDiv, picked: string[]): Set<string> | nu
   return lit
 }
 
-/** Each division's box, in the face's layout units, for a face of w x h. */
-export function divBoxes(root: SceneDiv, w: number, h: number, gap: number): Map<string, { x: number; y: number; w: number; h: number }> {
-  const out = new Map<string, { x: number; y: number; w: number; h: number }>()
-  const walk = (d: SceneDiv, x: number, y: number, bw: number, bh: number) => {
-    out.set(d.id, { x, y, w: bw, h: bh })
+/** How thick a folded section's strip is (layout units). */
+export const FOLD_STRIP = 9
+
+/** A section that can fold: a column of parts whose first is a division
+ *  (its heading). */
+export const canFold = (d: SceneDiv): boolean => !isLeaf(d) && d.dir === 'col' && d.kids!.length > 1 && isLeaf(d.kids![0])
+
+/** The section a division heads, if it is one's heading. */
+export function sectionOf(root: SceneDiv, leafId: string): SceneDiv | null {
+  const p = findParent(root, leafId)
+  return p && canFold(p) && p.kids![0].id === leafId ? p : null
+}
+
+/** A split's room for its parts that are not folded, and their shares:
+ *  what one share is worth in layout units (for dragging a seam). */
+export function shareUnits(d: SceneDiv, box: { w: number; h: number }, gap: number): number {
+  const n = d.kids!.length
+  const sizes = d.sizes ?? d.kids!.map(() => 1 / n)
+  const room = (d.dir === 'row' ? box.w : box.h) - gap * (n - 1)
+  let fixed = 0, share = 0
+  d.kids!.forEach((k, i) => { if (k.fold && canFold(k)) fixed += FOLD_STRIP; else share += sizes[i] })
+  return Math.max(0, room - fixed) / (share || 1)
+}
+
+/** Below this room (layout units) a part is too small to read: the
+ *  section holding it tucks in to its heading. */
+export const TUCK_W = 14, TUCK_H = 8
+
+/** Each division's box, in the face's layout units, for a face of w x h.
+ *  A folded section takes a strip (its heading only; its other parts get
+ *  no box); the parts beside it share the rest. A section with no room for
+ *  its parts tucks in: its heading fills it (added to `tucked`). Inner
+ *  sections tuck first, so a shrinking face steps down a level at a time. */
+export function divBoxes(root: SceneDiv, w: number, h: number, gap: number, tucked?: Set<string>): Map<string, { x: number; y: number; w: number; h: number }> {
+  type B = { x: number; y: number; w: number; h: number }
+  const out = new Map<string, B>()
+  const walk = (d: SceneDiv, x: number, y: number, bw: number, bh: number, into: Map<string, B>) => {
+    into.set(d.id, { x, y, w: bw, h: bh })
     if (isLeaf(d)) return
+    if (d.fold && canFold(d)) {
+      // Folded: the heading fills it (the whole face folded: a strip on top).
+      walk(d.kids![0], x, y, bw, d === root ? Math.min(bh, FOLD_STRIP * 1.6) : bh, into)
+      return
+    }
     const n = d.kids!.length
     const sizes = d.sizes ?? d.kids!.map(() => 1 / n)
     const row = d.dir === 'row'
-    const room = (row ? bw : bh) - gap * (n - 1)
-    let at = 0
-    d.kids!.forEach((k, i) => {
-      const len = Math.max(0, room * sizes[i])
-      if (row) walk(k, x + at, y, len, bh)
-      else walk(k, x, y + at, bw, len)
-      at += len + gap
+    const unit = shareUnits(d, { w: bw, h: bh }, gap)
+    const lay = (to: Map<string, B>) => {
+      let at = 0
+      d.kids!.forEach((k, i) => {
+        const len = k.fold && canFold(k) ? FOLD_STRIP : Math.max(0, unit * sizes[i])
+        if (row) walk(k, x + at, y, len, bh, to)
+        else walk(k, x, y + at, bw, len, to)
+        at += len + gap
+      })
+    }
+    if (!canFold(d)) { lay(into); return }
+    const tmp = new Map<string, B>()
+    lay(tmp)
+    const head = d.kids![0].id
+    let tight = false
+    tmp.forEach((b, id) => {
+      if (id === head) return
+      const k = findDiv(d, id)
+      if (!k || !isLeaf(k)) return
+      // A heading is a thin strip by nature: only its width counts.
+      const sec = sectionOf(d, id)
+      if (sec?.fold) return  // folded on purpose: a strip is what it asked for
+      const isHead = !!sec
+      if (b.w < TUCK_W || b.h < (isHead ? 3 : TUCK_H)) tight = true
     })
+    if (tight) {
+      tucked?.add(d.id)
+      walk(d.kids![0], x, y, bw, bh, into)
+      return
+    }
+    tmp.forEach((b, id) => into.set(id, b))
   }
-  walk(root, 0, 0, w, h)
+  walk(root, 0, 0, w, h, out)
   return out
 }
