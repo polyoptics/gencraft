@@ -154,7 +154,11 @@ function chartFrom(nodeId: string, cardsOf: CardsOfDots) {
   if (!n || !d) return null
   const groups = useBoardsStore.getState().groups
   const byId = new Map(groups.map(g => [g.id, g]))
-  const on = cardsOf(d, new Set(d.dots.map(p => p.id)))
+  // A shown chart is its linked cards only (Brian 2026-11-09: "anything
+  // that's on there needs a link"), its linked decks' cards included; a card
+  // that is not a link never joins because it sits touching or under one.
+  const keep = (id: string) => !d.chartCard || !!byId.get(id)?.linkOf
+  const on = new Map([...cardsOf(d, new Set(d.dots.map(p => p.id)))].filter(([id]) => keep(id)))
   if (on.size === 0) return null
   const master = (id: string) => masterOf(groups, id)
   const onMasters = new Set([...on.keys()].map(master))
@@ -183,7 +187,7 @@ function chartFrom(nodeId: string, cardsOf: CardsOfDots) {
   for (const p of [...d.dots].sort((a, b) => a.y - b.y || a.x - b.x)) {
     if (!p.cards?.length) continue
     const lead = p.cards.map(master)
-    const rest = [...cardsOf(d, new Set([p.id])).keys()].map(master)
+    const rest = [...cardsOf(d, new Set([p.id])).keys()].filter(keep).map(master)
     const cards = [...new Set([...lead, ...rest])].filter(c => !tiered.has(c))
     cards.forEach(c => tiered.add(c))
     if (cards.length) tiers.push({ dot: p.id, title: p.title ?? '', cards })
