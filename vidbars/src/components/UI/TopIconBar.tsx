@@ -410,7 +410,7 @@ export const TopIconBar: React.FC = () => {
     storyline: <IconButton Icon={IcStoryline} title="Storyline — points on lines that branch; drag out from the point" {...place('storyline')} />,
     cabinet: <IconButton Icon={IcCabinet} title="Project cabinet — drawers to put cards away in" {...place('cabinet')} />,
     loopStrip: <IconButton Icon={IcLoopStrip} title="Loop strip — drop cards in and run effects over them" {...place('loopStrip')} />,
-    scene3d: <IconButton Icon={IcScene3d} title="3D scene — a mat that becomes a 3D workspace: dock model cards along it and lay their models out inside. Right-click it to fold it into a card" {...place('area')} />,
+    scene3d: <IconButton Icon={IcScene3d} title="3D set — a mat that becomes a 3D workspace: dock model cards along it and lay their models out inside. Right-click it to fold it into a card" {...place('area')} />,
     // The Effects wrapper carries fxBtnRef: the palette hangs under it, and
     // a press on it must not count as "outside" (IconButton forwards no ref).
     effects: (
@@ -430,7 +430,7 @@ export const TopIconBar: React.FC = () => {
       />
     ),
     // The Notes & 3D tools panel (components/Notes/NotesPanel): lit while out.
-    notes: <IconButton Icon={IcNotes} title="Notes & 3D tools — curves, arrows, drawing on models, pins, 3D scenes" active={notesOpen} onClick={() => useNotesUi.setState(s => ({ open: !s.open, tool: s.open ? null : s.tool }))} />,
+    notes: <IconButton Icon={IcNotes} title="Notes & 3D tools — curves, arrows, drawing on models, pins, 3D sets" active={notesOpen} onClick={() => useNotesUi.setState(s => ({ open: !s.open, tool: s.open ? null : s.tool }))} />,
     new: <IconButton Icon={IcNew} title={newLabel} {...place('new')} />,
   }
 

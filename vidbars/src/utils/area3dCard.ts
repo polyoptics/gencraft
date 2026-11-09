@@ -100,7 +100,7 @@ export function foldArea3d(nodeId: string): string | null {
   let cardId = a.areaCard && bs.groups.some(g => g.id === a.areaCard) ? a.areaCard : null
   if (!cardId) {
     const size = cardFaceSize()
-    cardId = createTextCard({ cx: a.x + size.w / 2, cy: a.y + a.height + size.h * 0.75 }, { title: a.label && a.label !== 'Area' && a.label !== '3D area' ? a.label : '3D scene' })
+    cardId = createTextCard({ cx: a.x + size.w / 2, cy: a.y + a.height + size.h * 0.75 }, { title: a.label && a.label !== 'Area' && a.label !== '3D area' && a.label !== '3D scene' ? a.label : '3D set' })
     useBoardsStore.getState().setCardsType([cardId], 'area3d')
   }
   const { cards, tiles } = onMat(a)
@@ -197,7 +197,7 @@ export function showArea3d(cardId: string, quiet = false, spot?: { x: number; y:
   const fs = useFreeNodeStore.getState()
   const m = data.mat
   const id = fs.addFreeNode(m.x, m.y, 'area')
-  fs.updateFreeNode(id, { x: m.x, y: m.y, width: m.width, height: m.height, areaCard: cardId, label: m.label ?? card.name ?? '3D scene', ...(m.color ? { color: m.color } : {}) })
+  fs.updateFreeNode(id, { x: m.x, y: m.y, width: m.width, height: m.height, areaCard: cardId, label: m.label ?? card.name ?? '3D set', ...(m.color ? { color: m.color } : {}) })
   const ms = useModelScaleStore.getState()
   // Its cards: linked showings of the masters (a master gone is skipped).
   const link = new Map<string, string>()
@@ -244,15 +244,16 @@ export function showArea3d(cardId: string, quiet = false, spot?: { x: number; y:
   return id
 }
 
-// ── The motion (Brian 2026-11-08: fold and show like charts) ──
-// Folding, the mat and what goes with it (its linked cards and tiles; the
-// master cards stay on the canvas) shrink into the card and fade, then
-// fold. Showing, they come out of the card the same way, backwards.
+// ── The motion (Brian 2026-11-09: the set's frame minimizes onto the card) ──
+// Folding, the mat and what is on it (its linked cards and tiles; the
+// master cards stay on the canvas) shrink as ONE picture into the card,
+// keeping their places on the mat, and fade at the very end, then fold.
+// Showing, the set grows out of the card the same way, backwards.
 
-const MOTION_MS = 380
+const MOTION_MS = 460
 const sel = (kind: 'card' | 'node', id: string) => kind === 'node'
   ? [`[data-freenode][data-id="${id}"]`]
-  : [`[data-layer-card="${id}"]`, `[data-group-card][data-id="${id}"]`, `[data-card-header="${id}"]`, `[data-primary-rail="${id}"]`]
+  : [`[data-layer-card="${id}"]`, `[data-group-card][data-id="${id}"]`, `[data-card-header="${id}"]`, `[data-primary-rail="${id}"]`, `[data-row-of="${id}"]`, `[data-row-band="${id}"]`]
 type Rider = { kind: 'card' | 'node'; id: string; cx: number; cy: number }
 let moving = false
 
@@ -260,6 +261,12 @@ let moving = false
 function middleOf(g: ProjectGroup) {
   const size = cardFaceSize()
   return { x: g.originX + (g.cardWidthOverride ?? size.w) / 2, y: g.originY + (g.cardHeightOverride ?? size.h) / 2 }
+}
+
+/** How small mat `a` gets to sit on card `g`'s face. */
+function fitInto(a: FreeNodeData, g: ProjectGroup) {
+  const size = cardFaceSize()
+  return Math.min((g.cardWidthOverride ?? size.w) / a.width, (g.cardHeightOverride ?? size.h) / a.height) * 0.9
 }
 
 /** What rides with mat `a`: the mat, its linked cards and its tiles. */
@@ -276,13 +283,28 @@ function riders(a: FreeNodeData): Rider[] {
 /** Plays riders `rs` between where they are and card middle `to` (in:
  *  out of the card; else into it), then `done`. Elements drawn part way
  *  pick the motion up where it has got to, hidden till then. */
-function ride(rs: Rider[], to: { x: number; y: number }, out: boolean, done: () => void) {
+function ride(rs: Rider[], to: { x: number; y: number }, out: boolean, done: () => void, k = 0.12) {
   const zoom = useCanvasStore.getState().zoom
-  const frames = (r: Rider) => {
-    const away = { transform: `translate(${(to.x - r.cx) * zoom}px, ${(to.y - r.cy) * zoom}px) scale(0.12)`, opacity: 0 }
-    const home = { transform: 'translate(0px, 0px) scale(1)', opacity: 1 }
+  // The mat (first rider) shrinks to `k` of its size onto the card's
+  // middle; everything else keeps its place on it, so it is one picture.
+  const from = rs[0] ? { x: rs[0].cx, y: rs[0].cy } : to
+  const frames = (r: Rider, el: HTMLElement) => {
+    // Scaled about its own transform origin (a mat's is its corner), so
+    // its middle is put right: d = middle less origin, px.
+    const o = getComputedStyle(el).transformOrigin.split(' ').map(parseFloat)
+    const dx = el.offsetWidth / 2 - (o[0] || 0), dy = el.offsetHeight / 2 - (o[1] || 0)
+    // Screen px per px of its own: tiles sit in the zoomed canvas, cards not.
+    const u = el.offsetWidth ? el.getBoundingClientRect().width / el.offsetWidth : 1
+    const z = zoom / (u || 1)
+    const x = (to.x + (r.cx - from.x) * k - r.cx) * z + dx * (1 - k), y = (to.y + (r.cy - from.y) * k - r.cy) * z + dy * (1 - k)
+    const away = { transform: `translate(${x}px, ${y}px) scale(${k})` }
+    const home = { transform: 'translate(0px, 0px) scale(1)' }
     return out ? [away, home] : [home, away]
   }
+  // Seen the whole way, gone only at the card.
+  const fade: Keyframe[] = out
+    ? [{ opacity: 0 }, { opacity: 1, offset: 0.25 }, { opacity: 1 }]
+    : [{ opacity: 1 }, { opacity: 1, offset: 0.75 }, { opacity: 0 }]
   const all = rs.flatMap(r => sel(r.kind, r.id).map(q => ({ r, q })))
   const hide = document.createElement('style')
   hide.textContent = `${all.map(x => `${x.q}:not([data-a3-riding])`).join(', ')} { opacity: 0 !important; }`
@@ -296,10 +318,10 @@ function ride(rs: Rider[], to: { x: number; y: number }, out: boolean, done: () 
       for (const el of document.querySelectorAll<HTMLElement>(q)) {
         if (el.hasAttribute('data-a3-riding')) continue
         el.setAttribute('data-a3-riding', '')
-        const f = frames(r)
-        const how = { duration: MOTION_MS, easing: out ? 'cubic-bezier(0.2, 0.8, 0.3, 1)' : 'cubic-bezier(0.6, 0, 0.8, 0.4)', fill: 'forwards' } as const
-        const a = el.animate(f.map(k => ({ transform: k.transform })), { ...how, composite: 'add' })
-        const b = el.animate(f.map(k => ({ opacity: k.opacity })), how)
+        const f = frames(r, el)
+        const how = { duration: MOTION_MS, easing: 'cubic-bezier(0.55, 0, 0.25, 1)', fill: 'forwards' } as const
+        const a = el.animate(f, { ...how, composite: 'add' })
+        const b = el.animate(fade, { ...how, easing: 'linear' })
         a.currentTime = t; b.currentTime = t
         anims.push(a, b)
       }
@@ -330,7 +352,8 @@ export function foldArea3dMoving(nodeId: string, then?: () => void): void {
   // No card yet: where the new one goes (foldArea3d).
   const to = card ? middleOf(card) : { x: a.x + size.w / 2, y: a.y + a.height + size.h * 0.75 }
   moving = true
-  ride(riders(a), to, false, () => { moving = false; foldArea3d(nodeId); then?.() })
+  const fit = card ? fitInto(a, card) : Math.min(size.w / a.width, size.h / a.height)
+  ride(riders(a), to, false, () => { moving = false; foldArea3d(nodeId); then?.() }, fit)
 }
 
 /** Show card `cardId`'s 3D area, with the motion. */
@@ -341,7 +364,7 @@ export function showArea3dMoving(cardId: string): void {
   const card = useBoardsStore.getState().groups.find(g => g.id === cardId)
   if (!a || !card) return
   moving = true
-  ride(riders(a), middleOf(card), true, () => { moving = false })
+  ride(riders(a), middleOf(card), true, () => { moving = false }, fitInto(a, card))
 }
 
 /** Show or fold card `cardId`'s 3D area. */

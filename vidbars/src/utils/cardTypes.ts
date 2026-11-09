@@ -67,7 +67,7 @@ export const CARD_TYPES: Record<CardType, CardTypeInfo> = {
   // A STATE card (2026-11-08): the states a thing can be in, each a master
   // deck, and one output deck showing the current one (utils/stateCard).
   state:     { label: 'State',     color: '#4f8f5a', details: [] },
-  area3d:    { label: '3D scene',  color: '#3d7fd9', details: [] },
+  area3d:    { label: '3D set',    color: '#3d7fd9', details: [] },
 }
 /** The types a card can be made (the picker, the Card Browser's chips). A
  *  3D scene is not one of them (Brian 2026-11-09): it is a tool, made with

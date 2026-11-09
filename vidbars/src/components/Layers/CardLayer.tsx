@@ -284,7 +284,7 @@ const CardContextMenu: React.FC<{
     // Show chart. Lit while it is out.
     if (group.cardType === 'area3d' || group.area3d) {
       const out = area3dOutOf(group.id)
-      menuItems.push({ label: 'Show 3D scene', icon: '▦', lit: !!out, action: () => { toggleArea3d(group.id); onClose() } })
+      menuItems.push({ label: 'Show 3D set', icon: '▦', lit: !!out, action: () => { toggleArea3d(group.id); onClose() } })
     }
     // A model card: its model stands up in 3D, or stays flat (Brian
     // 2026-11-09: backups and master decks). On/off, lit while it stands.
@@ -303,7 +303,7 @@ const CardContextMenu: React.FC<{
       const dk = dataKey(mk)
       const ms = useModelScaleStore.getState()
       if (sceneOf(mk) && (ms.placeOf[dk] || ms.poseOf[dk] || ms.sizeOf[dk] !== undefined || ms.stretchOf[dk])) {
-        menuItems.push({ label: 'Reset model in 3D scene', icon: '↺', action: () => { useUndoCoordinator.getState().checkpoint(); useModelScaleStore.getState().resetModel(dk); onClose() } })
+        menuItems.push({ label: 'Reset model in 3D set', icon: '↺', action: () => { useUndoCoordinator.getState().checkpoint(); useModelScaleStore.getState().resetModel(dk); onClose() } })
       }
     }
     // Style: this face's text and how it is set, onto other cards, once

@@ -353,7 +353,7 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
       effect: 'Effect', rail: 'Loop strip', cabinet: 'Project cabinet', filmMixer: 'Film Look',
       storyline: 'Storyline', roughCut: 'Rough Cut',
       attributes: 'Attributes', promptCards: 'Card Prompts',
-      annotations: 'Annotations', area: '3D scene',
+      annotations: 'Annotations', area: '3D set',
     }
     const node: FreeNodeData = {
       id, x, y,

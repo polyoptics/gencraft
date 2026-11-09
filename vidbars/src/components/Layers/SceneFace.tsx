@@ -1069,7 +1069,7 @@ export const SceneFace: React.FC<{
     // Its card a 3D area card (utils/area3dCard): its scene laid out, or
     // folded back in, from here.
     if (card && (card.cardType === 'area3d' || card.area3d)) items.push({
-      label: 'Show its 3D scene', tool: 'area3d', lit: !!area3dOutOf(card.id), act: () => toggleArea3d(card.id),
+      label: 'Show its 3D set', tool: 'area3d', lit: !!area3dOutOf(card.id), act: () => toggleArea3d(card.id),
     })
     if (heldCard(d)) items.push({ label: 'Unlink from its card', tool: 'unlink', act: () => edit(r => takeCard(d.live && card ? patchDiv(r, d.id, { ...copyFrom(card, false), live: false }) : r, d.id)) })
     if (canRemove) items.push({ label: 'Remove this division', tool: 'remove', danger: true, act: () => { edit(r => removeDiv(r, d.id)); setPicked(null) } })
