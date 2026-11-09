@@ -15,7 +15,6 @@ import { useFreeNodeStore, type FreeNodeData } from '../../store/freeNodeStore'
 import { useBoardsStore } from '../../store/boardsStore'
 import { useViewport3DStore } from '../../store/viewport3dStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
-import { usePlacing, togglePlacing } from '../../utils/placeTool'
 import { areaAt } from '../../utils/areaFollow'
 import { ensureAnnotated, modelName } from '../../utils/annotations'
 import { models, cardModel } from '../Canvas/tilt/TiltModels'
@@ -49,9 +48,6 @@ const IcPin: Ic = ({ size = 20 }) => (
 )
 const IcErase: Ic = ({ size = 20 }) => (
   <svg {...svg(size)}><path d="M14.5 4.5l5 5-8.5 8.5H6l-2.5-2.5z" stroke={S} strokeWidth="1.6" /><path d="M9.5 9.5l5 5" stroke="#ff8fd1" strokeWidth="1.6" /><path d="M11 18h9" stroke={S} strokeWidth="1.4" /></svg>
-)
-const IcArea: Ic = ({ size = 20 }) => (
-  <svg {...svg(size)}><rect x="3" y="5" width="18" height="14" rx="2" stroke={S} /><path d="M9 5v14M15 5v14M3 12h18" stroke="#5fe39b" strokeWidth="1.2" /></svg>
 )
 const IcArrowStart: Ic = ({ size = 20 }) => (
   <svg {...svg(size)}><path d="M5 12h15" stroke={S} /><path d="M10 7l-5 5 5 5" stroke="#4fc3ff" /></svg>
@@ -400,7 +396,6 @@ export const NotesPanel: React.FC = () => {
   const arrowEnd = useNotesUi(s => s.arrowEnd)
   const smooth = useNotesUi(s => s.smooth)
   const selected = useNotesUi(s => s.selected)
-  const placing = usePlacing(s => s.kind)
   const drawing = useCurveDraft(s => !!s.curve)
   if (!open) return null
 
@@ -440,13 +435,6 @@ export const NotesPanel: React.FC = () => {
       <t.Icon />{!folded && <span>{t.name}{t.id === 'curve' && drawing ? ' · drawing' : ''}</span>}
     </button>
   ))]
-  const areaBtn = (
-    <button style={btnStyle(placing === 'area', !folded)} aria-pressed={placing === 'area'}
-      title="3D scene: a mat on the canvas that becomes a 3D workspace. Click, then click the canvas to set it down. Right-click it to fold it into a card."
-      onClick={() => { useNotesUi.setState({ tool: null }); togglePlacing('area') }}>
-      <IcArea />{!folded && <span>3D scene</span>}
-    </button>
-  )
 
   return (
     <div
@@ -477,8 +465,6 @@ export const NotesPanel: React.FC = () => {
             <button style={btnStyle(arrowEnd)} aria-pressed={arrowEnd} title="Arrowhead at the end" onClick={() => apply({ arrowEnd: !arrowEnd })}><IcArrowEnd /></button>
             <button style={btnStyle(smooth)} aria-pressed={smooth} title={SMOOTH_TIP} onClick={() => setSmooth(!smooth)}><IcSmooth /></button>
             <div style={{ width: 20, height: 20, borderRadius: 10, background: color, border: '2px solid rgba(255,255,255,0.25)' }} title="Colour (open the panel to change)" />
-            <div style={{ width: 24, height: 1, background: 'rgba(255,255,255,0.1)' }} />
-            {areaBtn}
           </>
         ) : (
           <>
@@ -515,7 +501,7 @@ export const NotesPanel: React.FC = () => {
                 }}
                 style={{ width: '100%' }} />
             </Section>
-            <Section title="3D SCENE">{areaBtn}<Area3dTools /></Section>
+            <Section title="3D SCENE"><Area3dTools /></Section>
             <SelectedModels />
             <Section title="OUTLINER"><Outliner /></Section>
           </>

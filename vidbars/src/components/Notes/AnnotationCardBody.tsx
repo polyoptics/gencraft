@@ -6,6 +6,7 @@
 
 import React from 'react'
 import { useNotesStore, useNotesUi, type ModelPin } from '../../store/notesStore'
+import { rowOf } from '../../utils/primaryCard'
 import { useBoardsStore } from '../../store/boardsStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { makeNoteCard, renamePin, setPinDesc, setPinStatus, pinTitle } from '../../utils/annotations'
@@ -48,15 +49,19 @@ const PinItem: React.FC<{ pin: ModelPin; on: boolean; onPick: () => void }> = ({
 
 /** The card a pin links to, beside it: its picture, type, details, and the
  *  deck it is in — the context, without going to find it on the canvas. */
-const LinkedCard: React.FC<{ cardId: string }> = ({ cardId }) => {
+const LinkedCard: React.FC<{ cardId: string; whole?: boolean }> = ({ cardId, whole }) => {
   const groups = useBoardsStore(s => s.groups)
   const g = groups.find(x => x.id === cardId)
   const img = useResolvedMedia(g?.cardHeroImage ?? null)
   if (!g) return <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.4)' }}>Its card is gone.</div>
   const type = CARD_TYPES[cardTypeOf(g)]
   const details = (g.details ?? []).map(d => ({ d, v: detailShown(groups, d).text })).filter(x => x.v)
-  const anchor = g.deckAnchorId ?? (g.deckState && g.deckState !== 'open' ? g.id : undefined)
-  const deck = anchor ? groups.filter(x => x.id !== g.id && (x.id === anchor || x.deckAnchorId === anchor)) : []
+  const anchor = g.deckAnchorId ?? (whole || (g.deckState && g.deckState !== 'open') ? g.id : undefined)
+  // An open deck linked whole: its cards are the open row it fronts.
+  const row = whole ? rowOf(g.id) : undefined
+  const deck = row && row.length >= 2
+    ? row.filter(id => id !== g.id).map(id => groups.find(x => x.id === id)).filter((x): x is NonNullable<typeof x> => !!x)
+    : anchor ? groups.filter(x => x.id !== g.id && (x.id === anchor || x.deckAnchorId === anchor)) : []
   const members = (g.linkedGroupIds ?? []).map(id => groups.find(x => x.id === id)).filter((x): x is NonNullable<typeof x> => !!x)
   const chip = (c: typeof g) => (
     <span key={c.id} onPointerDown={stop} onClick={() => useBoardsStore.getState().setSelectedGroups([c.id])} title="Select this card"
@@ -68,7 +73,7 @@ const LinkedCard: React.FC<{ cardId: string }> = ({ cardId }) => {
         style={{ display: 'flex', gap: 10, padding: 8, borderRadius: 8, cursor: 'pointer', background: 'rgba(255,255,255,0.03)', borderLeft: `3px solid ${g.color}` }}>
         {img && <img src={img} alt="" style={{ width: 72, height: 72, objectFit: 'cover', borderRadius: 5, flexShrink: 0 }} />}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
-          <span style={{ fontFamily: MONO, fontSize: 9, letterSpacing: 1.2, color: type.color }}>{type.label.toUpperCase()} CARD</span>
+          <span style={{ fontFamily: MONO, fontSize: 9, letterSpacing: 1.2, color: type.color }}>{whole ? `DECK · ${deck.length + 1} CARDS` : `${type.label.toUpperCase()} CARD`}</span>
           <span style={{ fontWeight: 700, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.name || 'Untitled'}</span>
           {g.cardText && <span style={{ fontSize: 11, color: 'rgba(232,240,255,0.6)', lineHeight: 1.4, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{g.cardText}</span>}
         </div>
@@ -85,7 +90,7 @@ const LinkedCard: React.FC<{ cardId: string }> = ({ cardId }) => {
       )}
       {deck.length > 0 && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
-          <span style={{ fontFamily: MONO, fontSize: 9, letterSpacing: 1, color: 'rgba(255,255,255,0.42)', marginRight: 2 }}>DECK</span>
+          <span style={{ fontFamily: MONO, fontSize: 9, letterSpacing: 1, color: 'rgba(255,255,255,0.42)', marginRight: 2 }}>{whole ? 'CARDS' : 'DECK'}</span>
           {deck.map(chip)}
         </div>
       )}
@@ -116,7 +121,7 @@ const PinDetail: React.FC<{ url: string; pin: ModelPin }> = ({ url, pin }) => {
           onClick={() => { checkpoint(); setPinStatus(url, pin, resolved ? 'open' : 'resolved') }} title="Resolved: on or off">Resolved</button>
         <button style={toggle(isLinking)} onPointerDown={stop}
           onClick={() => useNotesUi.setState({ linking: isLinking ? null : { url, pinId: pin.id }, tool: null })}
-          title="Link any card: click this, then click the card on the canvas (Esc cancels)">{isLinking ? 'Click a card…' : 'Link card'}</button>
+          title="Link a card or a deck: click this, then click it on the canvas. A closed deck links the whole deck (Esc cancels)">{isLinking ? 'Click a card…' : 'Link card'}</button>
         {!pin.cardId && (
           <button style={toggle(false)} onPointerDown={stop}
             onClick={() => { checkpoint(); const id = makeNoteCard(url, pin.title, pin.desc); if (id) useNotesStore.getState().updatePin(url, pin.id, { cardId: id }) }}
@@ -128,7 +133,7 @@ const PinDetail: React.FC<{ url: string; pin: ModelPin }> = ({ url, pin }) => {
           title="Remove this pin (its card stays)">Remove pin</button>
       </div>
       <div style={{ height: 1, background: 'rgba(255,255,255,0.08)', margin: '2px 0' }} />
-      {pin.cardId ? <LinkedCard cardId={pin.cardId} /> : <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.4)' }}>No card linked.</div>}
+      {pin.cardId ? <LinkedCard cardId={pin.cardId} whole={pin.deck} /> : <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.4)' }}>No card linked.</div>}
     </div>
   )
 }

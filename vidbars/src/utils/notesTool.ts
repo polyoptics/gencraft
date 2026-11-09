@@ -24,6 +24,7 @@ import { create } from 'zustand'
 import { useNotesStore, useNotesUi, newNoteId, type Curve, type CurvePoint } from '../store/notesStore'
 import { canvasPointUnder, overCanvas } from './placeTool'
 import { useCanvasStore } from '../store/canvasStore'
+import { useBoardsStore } from '../store/boardsStore'
 import { useTiltStore, isTilted } from '../store/tiltStore'
 import { useUndoCoordinator } from '../store/undoCoordinator'
 import { models, modelKey } from '../components/Canvas/tilt/TiltModels'
@@ -86,10 +87,25 @@ function onDown(e: PointerEvent) {
   // Linking a pin: the next card clicked is the one.
   if (ui.linking) {
     const card = target.closest<HTMLElement>('[data-group-card][data-id]')
+    // An open deck's primary is covered by its hover zone (data-row-of):
+    // clicking it links the whole deck too.
+    const row = card ? undefined : target.closest<HTMLElement>('[data-row-of]')?.dataset.rowOf
+    if (row) {
+      claim(e); eatClick = true
+      checkpoint()
+      useNotesStore.getState().updatePin(ui.linking.url, ui.linking.pinId, { cardId: row, deck: true })
+      useNotesUi.setState({ linking: null })
+      return
+    }
     if (card) {
       claim(e); eatClick = true
       checkpoint()
-      useNotesStore.getState().updatePin(ui.linking.url, ui.linking.pinId, { cardId: card.dataset.id! })
+      // A closed deck clicked: the pin links the whole deck (its front).
+      const g = useBoardsStore.getState().groups.find(x => x.id === card.dataset.id)
+      const closed = !!g && (g.deckState === 'stacked' || g.deckState === 'fanned')
+      useNotesStore.getState().updatePin(ui.linking.url, ui.linking.pinId, closed
+        ? { cardId: g!.deckAnchorId ?? g!.id, deck: true }
+        : { cardId: card.dataset.id!, deck: undefined })
       useNotesUi.setState({ linking: null })
       return
     }

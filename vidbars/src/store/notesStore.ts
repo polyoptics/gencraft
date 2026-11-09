@@ -61,6 +61,9 @@ export interface ModelPin {
   desc: string
   /** The card it links to (a canvas card's group id). Any card can be linked. */
   cardId?: string
+  /** The link is to the whole deck `cardId` is the front of (a closed
+   *  deck clicked while linking, Brian 2026-11-09). */
+  deck?: boolean
   status: PinStatus
   /** Creation order, for numbering. */
   n0: number
