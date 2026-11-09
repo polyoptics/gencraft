@@ -238,10 +238,10 @@ const wordFit = (t: string, w: number) => {
 }
 
 /** A small framed picture: a rounded rectangle, framed by `crop`. */
-const Thumb: React.FC<{ src: string; crop: { x: number; y: number; z: number }; w: number; h: number; line?: boolean }> = ({ src, crop, w, h, line = true }) => (
+const Thumb: React.FC<{ src: string; crop: { x: number; y: number; z: number }; w: number; h: number; line?: boolean; at?: React.CSSProperties }> = ({ src, crop, w, h, line = true, at }) => (
   <div data-scene-thumb style={{
-    flex: '0 0 auto', width: w, height: h, borderRadius: Math.max(0.6, h * 0.12), overflow: 'hidden', position: 'relative',
-    border: line ? `${Math.max(0.3, h * 0.05)}px solid rgba(255,255,255,0.85)` : undefined, boxSizing: 'border-box', boxShadow: '0 0.5px 1.5px rgba(0,0,0,0.4)',
+    flex: '0 0 auto', width: w, height: h, borderRadius: at ? 0 : Math.max(0.6, h * 0.12), overflow: 'hidden', position: 'relative', ...at,
+    border: line ? `${Math.max(0.3, h * 0.05)}px solid rgba(255,255,255,0.85)` : undefined, boxSizing: 'border-box', boxShadow: at ? undefined : '0 0.5px 1.5px rgba(0,0,0,0.4)',
   }}>
     <img src={src} alt="" draggable={false} style={{
       position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', pointerEvents: 'none',
@@ -343,7 +343,14 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
       : null
   // Small: a rectangle of its icon (set, or its own picture).
   const ic = iconOf(d, pic)
-  const thumb = (h: number, w = h * THUMB) => ic && <Thumb src={ic.src} crop={ic.crop} w={w} h={h} />
+  // Small, its picture IS the bar (Brian 2026-11-09): flush to the box's
+  // edges on three sides, the text beside it (a row, an icon with room
+  // across) or under it (a standing strip, a tall icon).
+  const across = state === 'row' || (state === 'icon' && box.w > box.h * 1.1)
+  const bleed = !ic || (state !== 'row' && state !== 'stand' && state !== 'icon') ? null
+    : across ? { w: Math.min(box.h * THUMB, box.w * (state === 'row' ? 0.45 : 0.5)), h: box.h + lift }
+    : { w: box.w, h: Math.min(box.w / THUMB, (box.h + lift) * (state === 'stand' ? 0.45 : 0.6)) }
+  const bleedEl = bleed && ic && <Thumb src={ic.src} crop={ic.crop} w={bleed.w} h={bleed.h} line={false} at={{ position: 'absolute', left: 0, top: 0 }} />
 
   // The parts tucked inside this heading: a small round picture each, or a
   // dot in its colour.
@@ -427,14 +434,14 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
             transform: `scale(${crop.z * (d.hero?.flipH ? -1 : 1)}, ${crop.z * (d.hero?.flipV ? -1 : 1)})`,
           }} />
         )}
+        {bleedEl}
         {state === 'row' ? (
           // One row: round picture, the header, the text. A bare heading:
           // its name in the middle.
           <div style={{
             position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: pic || text ? 'flex-start' : 'center', gap: 1.5,
-            padding: `0 ${heads ? u * 1.1 : 2}px`, boxSizing: 'border-box', overflow: 'hidden', color: '#fff', textShadow: shadow, pointerEvents: 'none',
+            padding: `0 ${heads ? u * 1.1 : 2}px 0 ${bleed ? bleed.w + 2 : heads ? u * 1.1 : 2}px`, boxSizing: 'border-box', overflow: 'hidden', color: '#fff', textShadow: shadow, pointerEvents: 'none',
           }}>
-            {thumb(box.h * 0.74)}
             {nameEl && <span style={{ flex: '0 1 auto', fontSize: nameFont, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>{nameEl}</span>}
             {text && <span style={{ flex: '1 1 0', fontSize: textFont * 0.85, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0, opacity: 0.9 }}>{text}</span>}
             {dots(box.h * 0.42, false)}
@@ -443,9 +450,8 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
           // A standing strip: round picture on top, its header on end.
           <div style={{
             position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1.5,
-            padding: '2px 0', boxSizing: 'border-box', overflow: 'hidden', color: '#fff', textShadow: shadow, pointerEvents: 'none',
+            padding: `${bleed ? bleed.h + 1.5 : 2}px 0 2px`, boxSizing: 'border-box', overflow: 'hidden', color: '#fff', textShadow: shadow, pointerEvents: 'none',
           }}>
-            {thumb(box.w * 0.78 / THUMB, box.w * 0.78)}
             {header && <span style={{
               writingMode: 'vertical-rl', transform: 'rotate(180deg)', fontSize: nameFont, fontWeight: 700, whiteSpace: 'nowrap',
               overflow: 'hidden', textOverflow: 'ellipsis', minHeight: 0, flex: '1 1 0', textAlign: 'end',
@@ -455,14 +461,13 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
           // An icon: its picture as a rectangle, its text beside it (under
           // it when the box stands tall).
           (() => {
-            const side = box.w > box.h * 1.1
-            const th = side ? Math.min(box.h * 0.8, box.w * 0.42 / THUMB) : Math.min(box.h * 0.52, box.w * 0.8 / THUMB)
+            const side = across
             return (
               <div style={{
                 position: 'absolute', inset: 0, display: 'flex', flexDirection: side ? 'row' : 'column', alignItems: 'center', justifyContent: 'center', gap: 1.5,
-                padding: 1.5, boxSizing: 'border-box', overflow: 'hidden', color: '#fff', textShadow: shadow, pointerEvents: 'none', textAlign: side ? 'left' : 'center',
+                padding: side ? `1.5px 1.5px 1.5px ${(bleed ? bleed.w : 0) + 2}px` : `${(bleed ? bleed.h : 0) + 1.5}px 1.5px 1.5px`,
+                boxSizing: 'border-box', overflow: 'hidden', color: '#fff', textShadow: shadow, pointerEvents: 'none', textAlign: side ? 'left' : 'center',
               }}>
-                {thumb(th)}
                 <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, maxWidth: '100%', gap: 0.5, overflow: 'hidden', flex: side ? '1 1 0' : '0 0 auto' }}>
                   {nameEl && <div style={{ flex: '0 0 auto', fontSize: nameFont, fontWeight: 700, lineHeight: 1.15, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nameEl}</div>}
                   {text && (side
