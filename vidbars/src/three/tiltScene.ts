@@ -1652,6 +1652,15 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     return { x0, y0, x1, y1, foot }
   }
 
+  /** Model `key`'s middle, where it turns about (and where its
+   *  manipulator sits): flat px from the host centre (u, v) and px up off
+   *  the plane (z), and how high its foot is (base). */
+  function pivotOf(key: string): { u: number; v: number; z: number; base: number } | null {
+    const s = standing.get(key)
+    if (!s || !s.inst || !s.stand.visible) return null
+    return { u: s.stand.position.x, v: -s.stand.position.y, z: s.stand.position.z + s.stand.scale.y * s.orient.position.y, base: s.stand.position.z }
+  }
+
   /** The url and model units per metre of a model on screen. */
   function info(key: string): { url: string; unit: number } | null {
     const s = standing.get(key)
@@ -1669,5 +1678,5 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     renderer.forceContextLoss()
   }
 
-  return { frame, warm, pick, pickZ: () => pickedZ, info, spinBy, letGo, settleAll, keepTurn, gizmoAt, manipHot, screenBox, labelAt, strokeAt, modelSize, dispose, surfaceAt, pinSpots: notes.spots }
+  return { frame, warm, pick, pickZ: () => pickedZ, info, spinBy, letGo, settleAll, keepTurn, gizmoAt, manipHot, screenBox, pivotOf, labelAt, strokeAt, modelSize, dispose, surfaceAt, pinSpots: notes.spots }
 }

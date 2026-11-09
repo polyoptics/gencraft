@@ -1,12 +1,13 @@
 import { useEffect } from 'react'
 import { flushSync } from 'react-dom'
-import { useTiltStore, isTilted, offFlat, unprojectTilt, standRise, shiftKeeping, screenOf, TILT_SNAP, TILT_PERSPECTIVE, type Pivot } from '../../../store/tiltStore'
+import { useTiltStore, isTilted, offFlat, unprojectTilt, standRise, shiftKeeping, TILT_SNAP, TILT_PERSPECTIVE, type Pivot } from '../../../store/tiltStore'
 import { storyWallOf } from '../StorylineLayer'
 import { peekAt, usePeek } from '../../../utils/peek'
 import { useCanvasStore, groupBounds, MIN_ZOOM, MAX_ZOOM } from '../../../store/canvasStore'
 import { useFreeNodeStore } from '../../../store/freeNodeStore'
 import { useBoardsStore } from '../../../store/boardsStore'
 import { models, modelKey } from './TiltModels'
+import { sceneSpot } from '../../../utils/area3dScene'
 
 /** Degrees of tilt / turn per pixel of Alt+drag. */
 const DRAG_DEG = 0.25
@@ -388,66 +389,63 @@ function selectedModelsBox() {
 }
 
 /** F on a selected model card in 3D: frame the MODEL, not its card: at
- *  the model's size, its middle in the middle of the view, and the orbit
- *  about its middle (so turning or tipping the view turns about it). In
- *  two moves: the canvas glides the model's foot to the middle at the
- *  model's size, then the camera slides up onto its middle. */
-function frameModel(host: HTMLElement, glide: (step: (k: number) => void, done?: () => void) => void): boolean {
+ *  the model's size, its middle (where it turns about, where its handles
+ *  sit, lifted or not) in the middle of the view, and the orbit about that
+ *  middle. Straight there (Brian 2026-11-09: the glide felt sluggish). */
+function frameModel(host: HTMLElement): boolean {
+  if (!isTilted(useTiltStore.getState()) || !models.pivotOf) return false
+  const fs = useFreeNodeStore.getState(), bs = useBoardsStore.getState()
+  const keys = [...fs.selectedIds.map(id => `node:${id}`), ...bs.selectedGroupIds.map(id => `card:${id}`)]
+  const piv = keys.map(k => ({ k, p: models.pivotOf!(k) })).filter((x): x is { k: string; p: NonNullable<ReturnType<NonNullable<typeof models.pivotOf>>> } => !!x.p)
   const mb = selectedModelsBox()
-  if (!mb) return false
-  const hr = host.getBoundingClientRect()
+  if (!piv.length || !mb) return false
   const W = host.clientWidth, H = host.clientHeight
-  const ts = useTiltStore.getState()
-  const fx = mb.foot.x - hr.left - W / 2, fy = mb.foot.y - hr.top - H / 2
-  const g = unprojectTilt(fx, fy, ts.tilt, ts.spin, ts.shiftX, ts.shiftY, 0, Infinity, ts.yaw)
-  if (!g) return false
   const { pan, zoom: zFrom } = useCanvasStore.getState()
-  // The canvas point the models stand on.
-  const cx = (g.x + W / 2 - pan.x) / zFrom, cy = (g.y + H / 2 - pan.y) / zFrom
-  const size = Math.max((mb.x1 - mb.x0) / W, (mb.y1 - mb.y0) / H, 1e-3)
-  // (Brought nearer, perspective makes it show a little bigger than the
-  // plain ratio: 0.5 here lands at about 0.6 of the view.)
-  const zTo = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zFrom * 0.5 / size))
-  const cFrom = { x: (W / 2 - pan.x) / zFrom, y: (H / 2 - pan.y) / zFrom }
-  const { shiftX: sx0, shiftY: sy0 } = ts
-  dropFramed()
-  glide(k => {
-    const z = Math.exp(Math.log(zFrom) + (Math.log(zTo) - Math.log(zFrom)) * k)
-    const x = cFrom.x + (cx - cFrom.x) * k, y = cFrom.y + (cy - cFrom.y) * k
-    useCanvasStore.setState({ zoom: z, pan: { x: W / 2 - x * z, y: H / 2 - y * z } })
-    if (sx0 || sy0) useTiltStore.getState().setShift(sx0 * (1 - k), sy0 * (1 - k))
-  }, () => {
-    // The foot is in the middle now. How far up over it is the model's
-    // middle? Found from where it is drawn (a few secant steps along the
-    // line straight up from the foot).
-    const b = selectedModelsBox()
-    if (!b) return
-    const s = useTiltStore.getState()
-    const m = { x: (b.x0 + b.x1) / 2 - hr.left - W / 2, y: (b.y0 + b.y1) / 2 - hr.top - H / 2 }
-    const at = (h: number) => screenOf({ x: 0, y: 0, z: h }, s) ?? { x: 0, y: 0 }
-    let h = 0
-    for (let i = 0; i < 4; i++) {
-      const p0 = at(h), p1 = at(h + 10)
-      const dx = (p1.x - p0.x) / 10, dy = (p1.y - p0.y) / 10, dd = dx * dx + dy * dy
-      if (dd < 1e-9) break
-      h += ((m.x - p0.x) * dx + (m.y - p0.y) * dy) / dd
-    }
-    const z = useCanvasStore.getState().zoom
-    holdPivot(cx, cy, h / z, W, H)
-    // Slide the camera so that middle is in the middle of the view.
-    const to = shiftKeeping({ x: 0, y: 0, z: h }, s.tilt, s.spin, s.yaw)
-    const a = { x: s.shiftX, y: s.shiftY }
-    glide(k => useTiltStore.getState().setShift(a.x + (to.shiftX - a.x) * k, a.y + (to.shiftY - a.y) * k))
+  // Each model's middle: the canvas point under it and how high (canvas
+  // units: the model grows with the zoom). One in a 3D scene stands where
+  // the scene puts it, which can move with the zoom (a docked card's size
+  // on screen), so that is read again at the new zoom.
+  const mid = (zoom: number, p0: { x: number; y: number }) => piv.map(({ k, p }) => {
+    const sp = sceneSpot(k)
+    const up = (p.z - p.base) / zFrom
+    return sp ? { x: sp.x, y: sp.y, h: sp.h + up } : { x: (p.u + W / 2 - p0.x) / zoom, y: (p.v + H / 2 - p0.y) / zoom, h: p.z / zFrom }
   })
+  const avg = (l: { x: number; y: number; h: number }[]) => ({ x: l.reduce((a, q) => a + q.x, 0) / l.length, y: l.reduce((a, q) => a + q.y, 0) / l.length, h: l.reduce((a, q) => a + q.h, 0) / l.length })
+  const m0 = avg(mid(zFrom, pan))
+  // Its middle stands `A` toward the eye along the view's middle ray (per
+  // unit of zoom: it rises as the zoom grows), so it shows bigger the more
+  // it is zoomed, and too near it would reach the eye (a model lifted high
+  // up). Its size now, canvas units, without that.
+  const ts = useTiltStore.getState()
+  const along = Math.max(1e-3, Math.cos(ts.tilt * Math.PI / 180) * Math.cos((ts.yaw ?? 0) * Math.PI / 180))
+  const P = TILT_PERSPECTIVE, A = m0.h / along
+  const grow = Math.max(0.05, (P - A * zFrom) / P)
+  const sw = (mb.x1 - mb.x0) / zFrom * grow, sh = (mb.y1 - mb.y0) / zFrom * grow
+  // Shown at half the view (s·z·P/(P − A·z) = F), never past 0.6 of the
+  // way to the eye.
+  const fit = (F: number, sz: number) => F * P / (Math.max(sz, 1e-3) * P + F * A)
+  const zTo = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, A > 0 ? 0.6 * P / A : Infinity, fit(W * 0.5, sw), fit(H * 0.5, sh)))
+  dropFramed()
+  // Card models keep their canvas point; scene models are read again at
+  // the new zoom.
+  const before = mid(zFrom, pan)
+  useCanvasStore.setState({ zoom: zTo, pan: { x: W / 2 - m0.x * zTo, y: H / 2 - m0.y * zTo } })
+  const after = mid(zTo, useCanvasStore.getState().pan)
+  const m = avg(piv.map(({ k }, i) => (sceneSpot(k) ? after[i] : before[i])))
+  const cx = m.x, cy = m.y, cz = m.h
+  useCanvasStore.setState({ pan: { x: W / 2 - cx * zTo, y: H / 2 - cy * zTo } })
+  holdPivot(cx, cy, cz, W, H)
+  const to = shiftKeeping({ x: 0, y: 0, z: cz * zTo }, ts.tilt, ts.spin, ts.yaw)
+  useTiltStore.getState().setShift(to.shiftX, to.shiftY)
   return true
 }
 
 /** F frames the selection — the cards and tiles selected — in the middle
  *  of the view, which is also the pivot the tilted view orbits about. With
- *  nothing selected, F frames everything on the canvas. Flat or tilted. */
+ *  nothing selected, F frames everything on the canvas. Flat or tilted.
+ *  Straight there, no glide (Brian 2026-11-09). */
 export function useFrameKey() {
   useEffect(() => {
-    let raf: number | null = null
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'f' && e.key !== 'F') return
       if (e.ctrlKey || e.metaKey || e.altKey || e.repeat) return
@@ -455,19 +453,7 @@ export function useFrameKey() {
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return
       const host = document.querySelector<HTMLElement>('[data-zoom-bar-host]')
       if (!host) return
-      const glide = (step: (k: number) => void, done?: () => void, ms = GLIDE_MS) => {
-        if (raf !== null) cancelAnimationFrame(raf)
-        const start = performance.now()
-        const tick = () => {
-          const u = Math.min(1, (performance.now() - start) / ms)
-          step(u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2)
-          raf = u < 1 ? requestAnimationFrame(tick) : null
-          // The next move measures what this one drew: a frame later.
-          if (u >= 1 && done) raf = requestAnimationFrame(() => requestAnimationFrame(() => { raf = null; done() }))
-        }
-        raf = requestAnimationFrame(tick)
-      }
-      if (frameModel(host, (step, done) => glide(step, done, done ? GLIDE_MS : GLIDE_MS * 0.5))) { e.preventDefault(); return }
+      if (frameModel(host)) { e.preventDefault(); return }
       dropFramed()
       const box = frameBox()
       if (!box) return
@@ -484,27 +470,14 @@ export function useFrameKey() {
       const zTo = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, A > 0 ? 0.95 * P / A : Infinity, Math.min(fit(W * fill, x1 - x0), fit(H * fill, y1 - y0))))
       // Aimed where the framed cards are seen at that zoom (seenOnWall).
       const at = frameBox(false, zTo) ?? box
-      const cTo = { x: (at.x0 + at.x1) / 2, y: (at.y0 + at.y1) / 2 }
-      const { pan, zoom: zFrom } = useCanvasStore.getState()
-      const cFrom = { x: (W / 2 - pan.x) / zFrom, y: (H / 2 - pan.y) / zFrom }
+      const cx = (at.x0 + at.x1) / 2, cy = (at.y0 + at.y1) / 2
+      useCanvasStore.setState({ zoom: zTo, pan: { x: W / 2 - cx * zTo, y: H / 2 - cy * zTo } })
       // The camera comes back square on the framed thing too.
-      const { shiftX: sx0, shiftY: sy0 } = useTiltStore.getState()
-      // Glide: the centre moves straight, the zoom evenly in notches.
-      if (raf !== null) cancelAnimationFrame(raf)
-      const start = performance.now()
-      const tick = () => {
-        const u = Math.min(1, (performance.now() - start) / GLIDE_MS)
-        const k = u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2
-        const z = Math.exp(Math.log(zFrom) + (Math.log(zTo) - Math.log(zFrom)) * k)
-        const cx = cFrom.x + (cTo.x - cFrom.x) * k, cy = cFrom.y + (cTo.y - cFrom.y) * k
-        useCanvasStore.setState({ zoom: z, pan: { x: W / 2 - cx * z, y: H / 2 - cy * z } })
-        if (sx0 || sy0) useTiltStore.getState().setShift(sx0 * (1 - k), sy0 * (1 - k))
-        raf = u < 1 ? requestAnimationFrame(tick) : null
-      }
-      raf = requestAnimationFrame(tick)
+      const { shiftX, shiftY } = useTiltStore.getState()
+      if (shiftX || shiftY) useTiltStore.getState().setShift(0, 0)
     }
     window.addEventListener('keydown', onKeyDown)
-    return () => { window.removeEventListener('keydown', onKeyDown); if (raf !== null) cancelAnimationFrame(raf) }
+    return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
 }
 

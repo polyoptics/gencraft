@@ -8,7 +8,7 @@ import ReactDOM from 'react-dom'
 import { useBoardsStore, getUngroupedBoardIds } from '../../store/boardsStore'
 import type { ProjectGroup, BoardData, HeroImageTransform } from '../../store/boardsStore'
 import { useCanvasStore, groupBounds } from '../../store/canvasStore'
-import { isTilted, useTiltStore } from '../../store/tiltStore'
+import { isTilted, useTiltStore, useModelScaleStore } from '../../store/tiltStore'
 import { useCardView } from './cardView'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { DEFAULT_HEADER_STYLE, DEFAULT_BODY_STYLE, useFreeNodeStore } from '../../store/freeNodeStore'
@@ -81,6 +81,7 @@ import { cardOrigins } from '../Canvas/StorylineLayer'
 import { rowOf, setRows } from '../../utils/primaryCard'
 import { wallRoom } from '../../utils/wallRoom'
 import { area3dOutOf, toggleArea3d } from '../../utils/area3dCard'
+import { sceneOf, dataKey } from '../../utils/area3dScene'
 
 const BOARD_PADDING_X = 20
 
@@ -282,6 +283,16 @@ const CardContextMenu: React.FC<{
     if (group.cardType === 'area3d' || group.area3d) {
       const out = area3dOutOf(group.id)
       menuItems.push({ label: 'Show 3D scene', icon: '▦', lit: !!out, action: () => { toggleArea3d(group.id); onClose() } })
+    }
+    // A model card in a 3D scene: put its model back as it came, moved,
+    // turned and sized nowhere (Brian 2026-11-09). Undoable.
+    {
+      const mk = `card:${group.id}`
+      const dk = dataKey(mk)
+      const ms = useModelScaleStore.getState()
+      if (sceneOf(mk) && (ms.placeOf[dk] || ms.poseOf[dk] || ms.sizeOf[dk] !== undefined || ms.stretchOf[dk])) {
+        menuItems.push({ label: 'Reset model in 3D scene', icon: '↺', action: () => { useUndoCoordinator.getState().checkpoint(); useModelScaleStore.getState().resetModel(dk); onClose() } })
+      }
     }
     // Style: this face's text and how it is set, onto other cards, once
     // (utils/faceStyle). Each shows its own {Name} and details.

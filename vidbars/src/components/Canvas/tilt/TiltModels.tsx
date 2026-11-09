@@ -55,6 +55,8 @@ export const models: {
   /** Where model `key` stands on screen, client px: the box round it and
    *  the point it stands on. null when it is not standing. */
   screenBox: ((key: string) => { x0: number; y0: number; x1: number; y1: number; foot: { x: number; y: number } } | null) | null
+  /** A model's middle: flat px from the host centre, and px up (tiltScene pivotOf). */
+  pivotOf: ((key: string) => { u: number; v: number; z: number; base: number } | null) | null
   /** Where a pin's label dragged to a client point sits, model space. */
   labelAt: ((key: string, through: [number, number, number], clientX: number, clientY: number) => [number, number, number] | null) | null
   /** The surface stroke under a client point (the Erase tool). */
@@ -66,7 +68,7 @@ export const models: {
   /** Light up a manipulator part (hovered or held), or none. */
   manipHot: ((key: string | null, part: ManipPart | null) => void) | null
   root: HTMLElement | null
-} = { gizmoAt: null, manipHot: null, labelAt: null, strokeAt: null, modelSize: null, pick: null, pickZ: null, info: null, spin: null, letGo: null, hovered: null, at: null, surface: null, pinSpots: null, screenBox: null, root: null }
+} = { gizmoAt: null, manipHot: null, labelAt: null, strokeAt: null, modelSize: null, pick: null, pickZ: null, info: null, spin: null, letGo: null, hovered: null, at: null, surface: null, pinSpots: null, screenBox: null, pivotOf: null, root: null }
 /** A pick that lights up under the cursor: a model or a person, not
  *  furniture. */
 export const modelKey = (k: string | null | undefined) => (k && !k.startsWith('deco|') ? k : null)
@@ -278,6 +280,7 @@ export const TiltModels: React.FC = () => {
         const r = root.getBoundingClientRect()
         return { x0: b.x0 + r.left, y0: b.y0 + r.top, x1: b.x1 + r.left, y1: b.y1 + r.top, foot: { x: b.foot.x + r.left, y: b.foot.y + r.top } }
       }
+      models.pivotOf = key => v.pivotOf(key)
       models.surface = (key, clientX, clientY) => {
         const r = root.getBoundingClientRect()
         return v.surfaceAt(key, clientX - r.left, clientY - r.top)
@@ -330,7 +333,7 @@ export const TiltModels: React.FC = () => {
       cancelAnimationFrame(raf)
       post.disconnect(); marker.remove()
       models.pick = null; models.pickZ = null; models.info = null; models.spin = null; models.letGo = null
-      models.surface = null; models.pinSpots = null; models.screenBox = null; models.labelAt = null; models.strokeAt = null; models.modelSize = null; models.gizmoAt = null; models.manipHot = null; models.root = null
+      models.surface = null; models.pinSpots = null; models.screenBox = null; models.pivotOf = null; models.labelAt = null; models.strokeAt = null; models.modelSize = null; models.gizmoAt = null; models.manipHot = null; models.root = null
       view?.dispose()
       canvas?.remove()
     }
@@ -2464,6 +2467,26 @@ function collectTargets(W: number, H: number): TiltTarget[] {
         w: Math.min(el.offsetWidth, el.offsetHeight * 1.4),
         h: el.offsetHeight,
         z: liftOf(el),
+      }))
+    }
+  }
+  // A model in a 3D scene stands in the scene, not on its card: its card
+  // may be off screen (and not drawn) while the model is in view, as when
+  // F frames a model lifted or moved away from its card.
+  if (Object.values(useFreeNodeStore.getState().nodes).some(n => n.type === 'area' && !n.pin)) {
+    const have = new Set(out.map(t => t.key))
+    for (const g of useBoardsStore.getState().groups) {
+      const key = `card:${g.id}`
+      if (have.has(key) || g.pin) continue
+      const sp = sceneSpot(key)
+      const model = sp && cardModel(g.id)
+      if (!sp || !model) continue
+      const w = sp.card.width * zoom, h = sp.card.height * zoom
+      out.push(off(key, {
+        key, url: model.url, name: model.name,
+        u: pan.x + (sp.card.x + sp.card.width / 2) * zoom - W / 2,
+        v: pan.y + (sp.card.y + sp.card.height / 2) * zoom - H / 2,
+        w: Math.min(w, h * 1.4), h,
       }))
     }
   }

@@ -397,6 +397,9 @@ interface ModelScaleStore {
    *  Brian 2026-11-09): [x, y, z] × its size. Same keys. Absent: 1, 1, 1. */
   stretchOf: Record<string, [number, number, number]>
   setStretch: (key: string, v: [number, number, number] | null) => void
+  /** Back as it came (Brian 2026-11-09: Reset): no place, turn, size or
+   *  stretch of its own. */
+  resetModel: (key: string) => void
 }
 
 export interface ScenePlace { dx: number; dy: number; h: number }
@@ -419,6 +422,10 @@ export const useModelScaleStore = create<ModelScaleStore>()(persist(set => ({
     return { stretchOf }
   }),
   placeOf: {},
+  resetModel: key => set(s => {
+    const drop = <T,>(m: Record<string, T>) => { const o = { ...m }; delete o[key]; return o }
+    return { placeOf: drop(s.placeOf), poseOf: drop(s.poseOf), sizeOf: drop(s.sizeOf), stretchOf: drop(s.stretchOf) }
+  }),
   setPlace: (key, p) => set(s => {
     const placeOf = { ...s.placeOf }
     if (p) placeOf[key] = p; else delete placeOf[key]
