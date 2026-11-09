@@ -124,6 +124,17 @@ const IcLoopStrip: React.FC<SvgProps> = ({ size }) => (
   </svg>
 )
 
+/** 3D scene — a mat seen in perspective with a cube standing on it.
+ *  Accent: the cube. */
+const IcScene3d: React.FC<SvgProps> = ({ size }) => (
+  <svg {...svgBase(size)}>
+    <path d="M1.8 21l4.6-7.5h15.8L17.6 21z" stroke={S} />
+    <path d="M4.1 17.25h15.8M11.6 13.5L9 21M17 13.5L14.4 21" stroke={S} strokeWidth="1" opacity="0.55" />
+    <path d="M8 5.6v6.2l4.3 2.4 4.3-2.4V5.6l-4.3-2.4z" stroke={A.cyan} />
+    <path d="M8 5.6l4.3 2.4 4.3-2.4M12.3 8v6.2" stroke={A.cyan} strokeWidth="1.2" />
+  </svg>
+)
+
 /** Project cabinet — a chest of drawers. Accent: the pulls. */
 const IcCabinet: React.FC<SvgProps> = ({ size }) => (
   <svg {...svgBase(size)}>
@@ -277,10 +288,10 @@ const IcNotes: React.FC<SvgProps> = ({ size }) => (
 // follows here.
 type BarId =
   | 'viewer' | 'pool' | 'prompt' | 'promptCards' | 'history' | 'browser' | 'attributes' | 'filmMixer'
-  | 'roughCut' | 'storyline' | 'cabinet' | 'loopStrip' | 'effects' | 'promptCard' | 'notes' | 'new'
+  | 'roughCut' | 'storyline' | 'cabinet' | 'loopStrip' | 'scene3d' | 'effects' | 'promptCard' | 'notes' | 'new'
 const DEFAULT_ORDER: BarId[] = [
   'viewer', 'pool', 'prompt', 'promptCards', 'history', 'browser', 'attributes', 'filmMixer',
-  'roughCut', 'storyline', 'cabinet', 'loopStrip', 'effects', 'promptCard', 'notes', 'new',
+  'roughCut', 'storyline', 'cabinet', 'loopStrip', 'scene3d', 'effects', 'promptCard', 'notes', 'new',
 ]
 const ORDER_KEY = 'vidbars.topIconBar.order'
 
@@ -399,6 +410,7 @@ export const TopIconBar: React.FC = () => {
     storyline: <IconButton Icon={IcStoryline} title="Storyline — points on lines that branch; drag out from the point" {...place('storyline')} />,
     cabinet: <IconButton Icon={IcCabinet} title="Project cabinet — drawers to put cards away in" {...place('cabinet')} />,
     loopStrip: <IconButton Icon={IcLoopStrip} title="Loop strip — drop cards in and run effects over them" {...place('loopStrip')} />,
+    scene3d: <IconButton Icon={IcScene3d} title="3D scene — a mat that becomes a 3D workspace: dock model cards along it and lay their models out inside. Right-click it to fold it into a card" {...place('area')} />,
     // The Effects wrapper carries fxBtnRef: the palette hangs under it, and
     // a press on it must not count as "outside" (IconButton forwards no ref).
     effects: (
@@ -418,7 +430,7 @@ export const TopIconBar: React.FC = () => {
       />
     ),
     // The Notes & 3D tools panel (components/Notes/NotesPanel): lit while out.
-    notes: <IconButton Icon={IcNotes} title="Notes & 3D tools — curves, arrows, drawing on models, pins, 3D areas" active={notesOpen} onClick={() => useNotesUi.setState(s => ({ open: !s.open, tool: s.open ? null : s.tool }))} />,
+    notes: <IconButton Icon={IcNotes} title="Notes & 3D tools — curves, arrows, drawing on models, pins, 3D scenes" active={notesOpen} onClick={() => useNotesUi.setState(s => ({ open: !s.open, tool: s.open ? null : s.tool }))} />,
     new: <IconButton Icon={IcNew} title={newLabel} {...place('new')} />,
   }
 

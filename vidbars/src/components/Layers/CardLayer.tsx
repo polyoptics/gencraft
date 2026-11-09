@@ -281,7 +281,7 @@ const CardContextMenu: React.FC<{
     // Show chart. Lit while it is out.
     if (group.cardType === 'area3d' || group.area3d) {
       const out = area3dOutOf(group.id)
-      menuItems.push({ label: 'Show 3D area', icon: '▦', lit: !!out, action: () => { toggleArea3d(group.id); onClose() } })
+      menuItems.push({ label: 'Show 3D scene', icon: '▦', lit: !!out, action: () => { toggleArea3d(group.id); onClose() } })
     }
     // Style: this face's text and how it is set, onto other cards, once
     // (utils/faceStyle). Each shows its own {Name} and details.

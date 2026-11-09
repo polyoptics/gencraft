@@ -97,7 +97,7 @@ export function foldArea3d(nodeId: string): string | null {
   let cardId = a.areaCard && bs.groups.some(g => g.id === a.areaCard) ? a.areaCard : null
   if (!cardId) {
     const size = cardFaceSize()
-    cardId = createTextCard({ cx: a.x + size.w / 2, cy: a.y + a.height + size.h * 0.75 }, { title: a.label && a.label !== 'Area' ? a.label : '3D area' })
+    cardId = createTextCard({ cx: a.x + size.w / 2, cy: a.y + a.height + size.h * 0.75 }, { title: a.label && a.label !== 'Area' && a.label !== '3D area' ? a.label : '3D scene' })
     useBoardsStore.getState().setCardsType([cardId], 'area3d')
   }
   const { cards, tiles } = onMat(a)
@@ -192,7 +192,7 @@ export function showArea3d(cardId: string, quiet = false, spot?: { x: number; y:
   const fs = useFreeNodeStore.getState()
   const m = data.mat
   const id = fs.addFreeNode(m.x, m.y, 'area')
-  fs.updateFreeNode(id, { x: m.x, y: m.y, width: m.width, height: m.height, areaCard: cardId, label: m.label ?? card.name ?? '3D area', ...(m.color ? { color: m.color } : {}) })
+  fs.updateFreeNode(id, { x: m.x, y: m.y, width: m.width, height: m.height, areaCard: cardId, label: m.label ?? card.name ?? '3D scene', ...(m.color ? { color: m.color } : {}) })
   const ms = useModelScaleStore.getState()
   // Its cards: linked showings of the masters (a master gone is skipped).
   const link = new Map<string, string>()

@@ -353,7 +353,7 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
       effect: 'Effect', rail: 'Loop strip', cabinet: 'Project cabinet', filmMixer: 'Film Look',
       storyline: 'Storyline', roughCut: 'Rough Cut',
       attributes: 'Attributes', promptCards: 'Card Prompts',
-      annotations: 'Annotations', area: '3D area',
+      annotations: 'Annotations', area: '3D scene',
     }
     const node: FreeNodeData = {
       id, x, y,
@@ -852,4 +852,13 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
   // in this session (utils/debouncedIDBStorage).
   storage: createDebouncedIDBStorage<Pick<FreeNodeStore, 'nodes'>>(400, { isEmpty: (s) => Object.keys(s.nodes ?? {}).length === 0 }),
   partialize: (s) => ({ nodes: s.nodes }),  // selectedIds is transient
+  // A 3D area is now a "3D scene" (Brian 2026-11-09): the old default
+  // names take the new one. A name of its own stays.
+  merge: (persisted, current) => {
+    const nodes = { ...((persisted as Partial<FreeNodeStore> | undefined)?.nodes ?? current.nodes) }
+    for (const [id, n] of Object.entries(nodes)) {
+      if (n.type === 'area' && (n.label === '3D area' || n.label === 'Area')) nodes[id] = { ...n, label: '3D scene' }
+    }
+    return { ...current, ...(persisted as object), nodes }
+  },
 }))

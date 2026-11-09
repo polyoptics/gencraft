@@ -17,7 +17,7 @@ import type { ProjectGroup } from '../../store/boardsStore'
 import { RefChip } from './LinkChipRail'
 import { refKey } from '../../utils/linkTargets'
 import { cardTitle } from '../../utils/faceStyle'
-import { CARD_TYPES, CARD_TYPE_ORDER, cardTypeOf, type CardType } from '../../utils/cardTypes'
+import { CARD_TYPES, cardTypeOf, type CardType } from '../../utils/cardTypes'
 
 interface Props {
   /** Group whose outbound link chips we're rendering. */
@@ -111,7 +111,7 @@ const grouped = (host: ProjectGroup) => host.cardType === 'faction' || host.card
 function byType(list: ProjectGroup[]): [CardType, ProjectGroup[]][] {
   const m = new Map<CardType, ProjectGroup[]>()
   for (const g of list) { const t = cardTypeOf(g); m.set(t, [...(m.get(t) ?? []), g]) }
-  return CARD_TYPE_ORDER.filter(t => m.has(t)).map(t => [t, m.get(t)!])
+  return (Object.keys(CARD_TYPES) as CardType[]).filter(t => m.has(t)).map(t => [t, m.get(t)!])
 }
 
 const plural = (label: string) => label.endsWith('y') ? label.slice(0, -1) + 'ies' : label.endsWith('o') ? label : label + 's'

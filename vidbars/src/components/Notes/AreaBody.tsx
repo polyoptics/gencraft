@@ -34,7 +34,7 @@ export const AreaBody: React.FC<{ node: FreeNodeData; bodyW: number; bodyH: numb
         textAlign: 'center', pointerEvents: 'none',
         fontSize: Math.max(10, Math.min(bodyW, bodyH) * 0.025), letterSpacing: 2,
         color: 'rgba(160,200,255,0.22)', fontFamily: 'ui-monospace, monospace',
-      }}>3D AREA</div>
+      }}>3D SCENE</div>
     </div>
   )
 }

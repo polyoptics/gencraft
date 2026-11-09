@@ -209,7 +209,7 @@ const Area3dTools: React.FC = () => {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 6 }}>
         {PRIMITIVES.map(p => (
           <button key={p} style={{ ...btnStyle(false), width: '100%' }} onClick={() => makePrimitive(p)}
-            title={`${PRIM_NAMES[p]}: a new model card, set on the selected 3D area (or the one in view)`}>
+            title={`${PRIM_NAMES[p]}: a new model card, set on the selected 3D scene (or the one in view)`}>
             <svg {...svg(20)}>{PRIM_ICON[p]}</svg>
           </button>
         ))}
@@ -345,7 +345,7 @@ const Outliner: React.FC = () => {
     <div
       data-outline-drop={drop ? it.id : undefined}
       onPointerDown={e => down(e, it)}
-      title={drop ? 'Drag rows onto a 3D area to put them on it' : 'Click to select · drag onto a 3D area'}
+      title={drop ? 'Drag rows onto a 3D scene to put them on it' : 'Click to select · drag onto a 3D scene'}
       style={{
         display: 'flex', alignItems: 'center', gap: 6, height: 24, paddingLeft: 6 + depth * 14, paddingRight: 6,
         borderRadius: 5, cursor: 'pointer', fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden',
@@ -361,7 +361,7 @@ const Outliner: React.FC = () => {
   )
 
   const tree = (a: FreeNodeData, depth: number): React.ReactNode => {
-    const it: Item = { kind: 'node', id: a.id, name: !a.label || a.label === 'Area' ? '3D area' : a.label, icon: '▦', cx: a.x + a.width / 2, cy: a.y + a.height / 2 }
+    const it: Item = { kind: 'node', id: a.id, name: !a.label || a.label === 'Area' ? '3D scene' : a.label, icon: '▦', cx: a.x + a.width / 2, cy: a.y + a.height / 2 }
     const list = kids.get(a.id) ?? []
     return (
       <React.Fragment key={a.id}>
@@ -384,7 +384,7 @@ const Outliner: React.FC = () => {
       {topAreas.map(a => tree(a, 0))}
       {rootItems.map(it => <Row key={`${it.kind}${it.id}`} it={it} depth={0} />)}
       {!topAreas.length && !rootItems.length && (
-        <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', padding: '2px 6px', lineHeight: 1.5 }}>3D areas, models and curves show here.</div>
+        <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', padding: '2px 6px', lineHeight: 1.5 }}>3D scenes, models and curves show here.</div>
       )}
     </div>
   )
@@ -442,9 +442,9 @@ export const NotesPanel: React.FC = () => {
   ))]
   const areaBtn = (
     <button style={btnStyle(placing === 'area', !folded)} aria-pressed={placing === 'area'}
-      title="3D area: a mat on the canvas that becomes a 3D workspace. Click, then click the canvas to set it down. Right-click it to fold it into a card."
+      title="3D scene: a mat on the canvas that becomes a 3D workspace. Click, then click the canvas to set it down. Right-click it to fold it into a card."
       onClick={() => { useNotesUi.setState({ tool: null }); togglePlacing('area') }}>
-      <IcArea />{!folded && <span>3D area</span>}
+      <IcArea />{!folded && <span>3D scene</span>}
     </button>
   )
 
@@ -515,7 +515,7 @@ export const NotesPanel: React.FC = () => {
                 }}
                 style={{ width: '100%' }} />
             </Section>
-            <Section title="3D AREA">{areaBtn}<Area3dTools /></Section>
+            <Section title="3D SCENE">{areaBtn}<Area3dTools /></Section>
             <SelectedModels />
             <Section title="OUTLINER"><Outliner /></Section>
           </>
