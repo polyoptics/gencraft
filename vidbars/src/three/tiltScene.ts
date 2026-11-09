@@ -13,7 +13,8 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import { acquireModel, releaseModel, disposeInstance } from './modelCache'
 import { computePosedBounds } from './orbitState'
 import { createLook, applyLook, disposeLook, type LookInstance, type ModelShade } from './modelLook'
-import { TILT_PERSPECTIVE, DEFAULT_LIGHT, type TiltLight } from '../store/tiltStore'
+import { TILT_PERSPECTIVE, DEFAULT_LIGHT, CAMERA_LENS, type TiltLight, type CameraLens } from '../store/tiltStore'
+import { CAMERA_URL, CAMERA_LENS_AT } from './primitives'
 import { createNotesOverlay, type NotesHost } from './notesOverlay'
 import type { ModelNotes } from '../store/notesStore'
 
@@ -190,6 +191,11 @@ export interface TiltFrameState {
   /** Locked into 3D (tiltStore lock3d): models stay standing however far
    *  the camera looks down. */
   lock?: boolean
+  /** A camera's lens (tiltStore lensOf), by model key. */
+  lensFor?: (key: string) => CameraLens | undefined
+  /** Looking through this camera (store/manipStore through, Brian
+   *  2026-11-09): the full 3D world seen from it, nothing of the canvas. */
+  through?: string | null
 }
 
 /** How long a model turned by hand takes to roll back (ms). */
@@ -227,6 +233,8 @@ interface Standing {
    *  size it (made when first shown). */
   /** Its manipulator (a selected model in a 3D area's scene). */
   gizmo: Manip | null
+  /** A camera's view lines and focal point (made when first shown). */
+  rig: CamRig | null
   /** The colour it is shown in now, and its materials' own colours. */
   tint: string | null
   baseColors: Map<THREE.Material, THREE.Color> | null
@@ -363,7 +371,7 @@ export const ART_MAX = 1000
 // axis (stretch along it) and one in the middle (size). A constant size
 // on screen, drawn over everything.
 
-export type ManipPart = 'mx' | 'my' | 'mz' | 'mc' | 'rx' | 'ry' | 'rz' | 'rc' | 'sx' | 'sy' | 'sz' | 's'
+export type ManipPart = 'mx' | 'my' | 'mz' | 'mc' | 'rx' | 'ry' | 'rz' | 'rc' | 'sx' | 'sy' | 'sz' | 's' | 'f'
 export type ManipV3 = [number, number, number]
 export interface ManipSettings { mode: 'move' | 'rotate' | 'scale'; local: boolean; plane: 'cam' | 'x' | 'y' | 'z' }
 /** What a press on the manipulator holds: its part, the model's middle on
@@ -418,6 +426,88 @@ const PARTS_OF: Record<ManipSettings['mode'], ManipPart[]> = {
 }
 /** The stand's turn: its y off the plane. */
 const STAND_Q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2)
+
+// ── A camera's view (Brian 2026-11-09) ──
+// A camera primitive in a 3D scene shows where it looks: lines from its
+// lens out to its frame at the focal point, a little roof on the frame's
+// top edge (which way is up, so a roll reads), and the focal point, a
+// yellow ball you drag to aim it. In the camera's own units (it grows
+// with the camera), on its turn but not its stretch.
+interface CamRig { group: THREE.Group; lines: THREE.LineSegments; focal: THREE.Mesh; sig: string; /** Its lens, in its own space. */ lens: THREE.Vector3 }
+const RIG_SEGS = 15
+const RIG_LINE = new THREE.LineBasicMaterial({ color: 0xffe14a, transparent: true, opacity: 0.9, toneMapped: false })
+const RIG_FOCAL = new THREE.MeshBasicMaterial({ color: 0xffe14a, depthTest: false, depthWrite: false, transparent: true, toneMapped: false })
+const RIG_BALL = new THREE.SphereGeometry(1, 20, 12)
+const RIG_FOCAL_R = 0.06
+function makeRig(): CamRig {
+  const group = new THREE.Group()
+  const geo = new THREE.BufferGeometry()
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(RIG_SEGS * 2 * 3), 3))
+  const lines = new THREE.LineSegments(geo, RIG_LINE)
+  lines.frustumCulled = false
+  const focal = new THREE.Mesh(RIG_BALL, RIG_FOCAL)
+  focal.renderOrder = 999
+  focal.scale.setScalar(RIG_FOCAL_R)
+  group.add(lines, focal)
+  return { group, lines, focal, sig: '', lens: new THREE.Vector3() }
+}
+/** A lens's frame, half width and half height, `f` ahead. */
+const halfFrame = (l: CameraLens, f: number) => { const hw = f * 18 / l.mm; return { hw, hh: hw / l.aspect } }
+/** Lay a camera's lines out for lens `l`, its lens at `a` (orient space). */
+function layRig(r: CamRig, l: CameraLens, a: THREE.Vector3) {
+  const sig = `${l.mm}|${l.aspect}|${l.focus}|${a.x}|${a.y}|${a.z}`
+  if (sig === r.sig) return
+  r.sig = sig
+  r.lens.copy(a)
+  const f = l.focus, { hw, hh } = halfFrame(l, f)
+  const P = (r.lines.geometry.attributes.position as THREE.BufferAttribute)
+  let i = 0
+  const seg = (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number) => {
+    P.setXYZ(i++, a.x + x0, a.y + y0, a.z + z0); P.setXYZ(i++, a.x + x1, a.y + y1, a.z + z1)
+  }
+  const c = [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]]
+  for (const [x, y] of c) seg(0, 0, 0, x, y, f)
+  for (let k = 0; k < 4; k++) seg(c[k][0], c[k][1], f, c[(k + 1) % 4][0], c[(k + 1) % 4][1], f)
+  // Its roof: which way is up.
+  seg(-hw * 0.35, hh * 1.06, f, 0, hh * 1.45, f); seg(0, hh * 1.45, f, hw * 0.35, hh * 1.06, f); seg(-hw * 0.35, hh * 1.06, f, hw * 0.35, hh * 1.06, f)
+  // The line it looks along, and a cross on the focal point.
+  seg(0, 0, 0, 0, 0, f)
+  const x = Math.min(hw, hh) * 0.25
+  seg(-x, 0, f, x, 0, f); seg(0, -x, f, 0, x, f)
+  // (spare segments collapse onto the lens)
+  while (i < RIG_SEGS * 2) P.setXYZ(i++, a.x, a.y, a.z)
+  P.needsUpdate = true
+  r.focal.position.set(a.x, a.y, a.z + f)
+}
+
+/** A floor grid in the plane (xy), 2n cells a side, one unit each, made of
+ *  one segment per cell side (long lines crossing behind the camera were
+ *  dropped whole on some GPUs), fading out with distance. */
+function makeGrid(n: number): THREE.LineSegments {
+  const pos: number[] = [], col: number[] = []
+  const c = new THREE.Color()
+  const put = (x0: number, y0: number, x1: number, y1: number, major: boolean) => {
+    for (const [x, y] of [[x0, y0], [x1, y1]]) {
+      const f = Math.max(0, 1 - Math.hypot(x, y) / n)
+      c.set(major ? 0x737d9f : 0x3c4359).multiplyScalar(f * f * f)
+      pos.push(x, y, 0); col.push(c.r, c.g, c.b)
+    }
+  }
+  for (let i = -n; i <= n; i++) {
+    const major = i % 5 === 0
+    for (let j = -n; j < n; j++) { put(i, j, i, j + 1, major); put(j, i, j + 1, i, major) }
+  }
+  const geo = new THREE.BufferGeometry()
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3))
+  const g = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ vertexColors: true, toneMapped: false, transparent: true, depthWrite: false }))
+  g.frustumCulled = false
+  return g
+}
+const rigLens = new THREE.Vector3()
+const ZERO3 = new THREE.Vector3(), UP3 = new THREE.Vector3(0, 1, 0)
+/** A camera looks down its +z; three's cameras look down -z. */
+const TURN_Y = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI)
 
 function makeManip(): Manip {
   const group = new THREE.Group()
@@ -527,6 +617,13 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     return m
   }
   const modelShadow = catcher(); ground.add(modelShadow)
+  // Looking through a camera: the floor, a grid (one unit a square, scaled
+  // to the camera's length).
+  const grid = makeGrid(120)
+  grid.visible = false
+  // ...lost in a haze far off, so the lines don't pile up at the horizon.
+  const lookFog = new THREE.Fog(0x1b1e26, 1, 2)
+  groundDeco.add(grid)
   const slabShadow = catcher(); groundDeco.add(slabShadow)
   // It lies in the same plane as the faces' depth-only tops: pulled a hair
   // towards the camera so it is not lost behind them.
@@ -582,7 +679,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     wall.visible = false
     groundDeco.add(wall)
     const s: Standing = {
-      url, stand, turn, orient, pose, gizmo: null, tint: null, baseColors: null, back: null, spun: [], inst: null, size: new THREE.Vector3(), unit: 1, unitSet: false, triangles: 0,
+      url, stand, turn, orient, pose, gizmo: null, rig: null, tint: null, baseColors: null, back: null, spun: [], inst: null, size: new THREE.Vector3(), unit: 1, unitSet: false, triangles: 0,
       figure, wall, wallText: '', look: null, phase: Math.random() * 6.28, dead: false, seen: frameNo, shownAt: 0,
       mats: [], alpha: -1,
     }
@@ -1049,6 +1146,10 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
 
     camera.aspect = W / H
     camera.fov = 2 * Math.atan(H / 2 / TILT_PERSPECTIVE) * 180 / Math.PI
+    // (Looking through a camera moves it: back where the canvas's is.)
+    camera.position.set(0, 0, TILT_PERSPECTIVE)
+    camera.quaternion.identity()
+    camera.near = 10; camera.far = TILT_PERSPECTIVE * 20
     camera.updateProjectionMatrix()
     // The plane: CSS rotateX(t) rotateZ(s), carried from CSS's y-down
     // space into three's y-up space (F·R·F, F = flip y).
@@ -1163,6 +1264,19 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
           if (m.plane !== 'cam') g.square.quaternion.copy(SQUARE_Q[m.plane])
         }
       }
+      // A camera's view lines and focal point, in its scene.
+      const cam = s.url === CAMERA_URL && placed && !!s.inst
+      if (cam && !s.rig) { s.rig = makeRig(); s.orient.add(s.rig.group) }
+      if (s.rig) {
+        s.rig.group.visible = cam && ease > 0
+        if (cam) {
+          const m = measured.get(s.url)
+          if (m) layRig(s.rig, st.lensFor?.(tg.key) ?? CAMERA_LENS, rigLens.set(CAMERA_LENS_AT[0] - m.centre.x, CAMERA_LENS_AT[1] - m.minY - m.size.y / 2, CAMERA_LENS_AT[2] - m.centre.z))
+          s.rig.group.quaternion.copy(s.pose.quaternion)
+          // Its focal point stays a size you can grab.
+          s.rig.focal.scale.setScalar(RIG_FOCAL_R * Math.max(1, Math.min(4, (st.lensFor?.(tg.key) ?? CAMERA_LENS).focus / 4)))
+        }
+      }
       if (s.back) {
         // Let go after an Alt-drag: it rolls back to how it stood (Brian
         // 2026-11-04), easing in and out, and rocks a little past and back
@@ -1225,14 +1339,45 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       if (frameNo - s.seen > 120) drop(key, s)
     }
 
+    // Looking through a camera: the camera goes where it is, sees what it
+    // sees, and nothing of the canvas shows.
+    const thru = st.through ? standing.get(st.through) : undefined
+    const looking = !!(thru?.rig && thru.inst && !into)
+    grid.visible = false
+    if (looking) {
+      const r = thru!.rig!
+      thru!.stand.updateWorldMatrix(true, true)
+      r.group.localToWorld(camera.position.copy(r.lens))
+      r.group.getWorldQuaternion(camera.quaternion).multiply(TURN_Y)
+      const l = st.lensFor?.(st.through!) ?? CAMERA_LENS
+      const th = 18 / l.mm, sa = W / H
+      camera.fov = 2 * Math.atan(sa >= l.aspect ? th / l.aspect : th / sa) * 180 / Math.PI
+      const k = thru!.stand.scale.x * (new THREE.Vector3().setFromMatrixScale(ground.matrixWorld).x || 1)
+      camera.near = Math.max(0.05, k * 0.05); camera.far = k * 4000
+      camera.updateProjectionMatrix()
+      camera.updateMatrixWorld()
+      // Its own body is not in its view; the walls and handles are not either.
+      thru!.stand.visible = false
+      for (const s of standing.values()) { s.wall.visible = false; if (s.gizmo) s.gizmo.group.visible = false }
+      // A floor to stand things on: a grid one camera length a square,
+      // under the camera.
+      const cell = thru!.stand.scale.x
+      grid.scale.setScalar(cell)
+      grid.position.set(Math.round(thru!.stand.position.x / cell) * cell, Math.round(thru!.stand.position.y / cell) * cell, 0)
+      grid.visible = true
+      lookFog.near = cell * 4; lookFog.far = cell * 70
+    }
+
     renderer.setRenderTarget(into)
+    if (looking) renderer.setClearColor(0x1b1e26, 1)
     // The artwork mask goes in first, on a cleared buffer (stencil too);
     // every pass after draws over it without clearing.
-    buildArt(off > 0.5 || st.fade > 0 ? st.art : [])
+    buildArt(!looking && (off > 0.5 || st.fade > 0) ? st.art : [])
     renderer.autoClear = true
     renderer.render(artScene, camera)
+    renderer.setClearColor(0x000000, 0)
     renderer.autoClear = false
-    buildSlabs(off > 0.5 || st.fade > 0 ? st.slabs : [])
+    buildSlabs(!looking && (off > 0.5 || st.fade > 0) ? st.slabs : [])
     renderer.render(topFirstScene, camera)
     const surface = st.texture || st.shade !== null
     {
@@ -1308,7 +1453,9 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     // The slabs' shadow map, fitted round what stands up off the plane.
     decoKey.castShadow = shadowsOn && fitShadow(decoKey, slabBox)
     liftCatch.visible = decoKey.castShadow
+    deco.fog = looking ? lookFog : null
     renderer.render(deco, camera)
+    deco.fog = null
     if (into) { renderer.setRenderTarget(null); return }
     {
       const hosts = new Map<string, NotesHost>()
@@ -1317,11 +1464,15 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     }
 
     // Outlines: paint the silhouettes into a mask, then ring them.
-    const outlined = [...standing.entries()].filter(([key, s]) =>
+    const outlined = looking ? [] : [...standing.entries()].filter(([key, s]) =>
       s.stand.visible && (st.selected.has(key) || key === st.hovered))
     if (outlined.length) {
       const vis = new Map<THREE.Object3D, boolean>()
-      for (const s of standing.values()) { vis.set(s.stand, s.stand.visible); vis.set(s.figure, s.figure.visible); s.figure.visible = false }
+      for (const s of standing.values()) {
+        vis.set(s.stand, s.stand.visible); vis.set(s.figure, s.figure.visible); s.figure.visible = false
+        // A camera's view lines are not part of its outline.
+        if (s.rig) { vis.set(s.rig.group, s.rig.group.visible); s.rig.group.visible = false }
+      }
       // The shadow catcher is a plane as big as the view: in the mask it
       // would ring the whole ground and swamp the models on it.
       vis.set(modelShadow, modelShadow.visible); modelShadow.visible = false
@@ -1344,7 +1495,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       scene.overrideMaterial = null
       renderer.render(quadScene, quadCam)
     }
-    renderManips()
+    if (!looking) renderManips()
   }
 
   /** The manipulators, sized to MANIP_PX on screen, over everything. */
@@ -1561,6 +1712,14 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       const sceneV = (a: THREE.Vector3): ManipV3 => { const w = a.clone().applyQuaternion(lq); return [w.x, w.y, w.z] }
       const toLocal = (wd: THREE.Vector3) => wd.applyQuaternion(g.group.getWorldQuaternion(new THREE.Quaternion()).invert())
       const dc = Math.hypot(x - c.x, y - c.y)
+      // A camera's focal point: drag it to aim the camera (any mode).
+      if (s.rig?.group.visible) {
+        const f = px(0, 0, 0)
+        s.rig.focal.getWorldPosition(v).project(camera)
+        f.x = (v.x + 1) / 2 * lastW; f.y = (1 - v.y) / 2 * lastH
+        const fd = Math.hypot(x - f.x, y - f.y)
+        if (v.z < 1 && fd < 11) take({ key, part: 'f', c: { x: f.x, y: f.y } }, fd, 9)
+      }
       const along = (A: THREE.Vector3, from: number, to: number) => segD(px(A.x * from, A.y * from, A.z * from), px(A.x * to, A.y * to, A.z * to))
       if (g.mode === 'move') {
         for (const a of ['x', 'y', 'z'] as const) {
@@ -1612,6 +1771,57 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     const { d: _d, ...hit } = best as ManipHit & { d: number }
     void _d
     return hit
+  }
+
+  /** Aim camera `key` at the point under (x, y) (px on the 3D canvas):
+   *  across the floor at its focal point's height, or (`rise`) up and down
+   *  on the plane facing the view. How it then stands turned, and how far
+   *  ahead its focal point is (camera lengths). */
+  function aimAt(key: string, x: number, y: number, rise = false): { q: [number, number, number, number]; focus: number } | null {
+    const s = standing.get(key), r = s?.rig
+    if (!s || !r || !s.inst || !lastW || !lastH) return null
+    s.stand.updateWorldMatrix(true, true)
+    camera.updateMatrixWorld()
+    const F = r.focal.getWorldPosition(new THREE.Vector3())
+    const n = camera.getWorldDirection(new THREE.Vector3())
+    if (!rise) {
+      // The floor's normal, unless the view is nearly along the floor.
+      const up = new THREE.Vector3().setFromMatrixColumn(ground.matrixWorld, 2).normalize()
+      if (Math.abs(up.dot(n)) > 0.12) n.copy(up)
+    }
+    raycaster.setFromCamera(new THREE.Vector2(x / lastW * 2 - 1, 1 - y / lastH * 2), camera)
+    const W = raycaster.ray.intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(n, F), new THREE.Vector3())
+    if (!W || W.distanceTo(camera.position) > camera.far * 0.5) return null
+    // In the camera's own space (its middle, its units, before its turn).
+    const w = s.orient.worldToLocal(W)
+    const q = s.pose.quaternion.clone(), d = new THREE.Vector3(), m = new THREE.Matrix4()
+    // Its lens is off its middle: aim from where the lens ends up.
+    for (let i = 0; i < 4; i++) {
+      d.copy(w).sub(r.lens.clone().applyQuaternion(q))
+      if (d.lengthSq() < 1e-8) return null
+      q.setFromRotationMatrix(m.lookAt(d, ZERO3, UP3))
+    }
+    d.copy(w).sub(r.lens.clone().applyQuaternion(q))
+    return { q: [q.x, q.y, q.z, q.w], focus: Math.max(0.3, d.length()) }
+  }
+
+  /** Where camera `key` is and how it looks, for moving it while looking
+   *  through it: its lens and its axes (right, up, ahead), in scene axes
+   *  (x across the canvas, y up, z down it) and ground px, and its focal
+   *  point there. null when it is not standing. */
+  function cameraFrame(key: string): { pivot: THREE.Vector3; lens: THREE.Vector3; right: THREE.Vector3; up: THREE.Vector3; ahead: THREE.Vector3; focal: THREE.Vector3; k: number } | null {
+    const s = standing.get(key), r = s?.rig
+    if (!s || !r || !s.inst) return null
+    s.stand.updateWorldMatrix(true, true)
+    // The stand's parent space (ground px), turned into scene axes.
+    const inv = new THREE.Matrix4().copy(ground.matrixWorld).invert()
+    const toScene = (p: THREE.Vector3) => { p.applyMatrix4(inv); return p.set(p.x, p.z, -p.y) }
+    const lens = toScene(r.group.localToWorld(r.lens.clone()))
+    const focal = toScene(r.group.localToWorld(r.focal.position.clone()))
+    const at = (x: number, y: number, z: number) => toScene(r.group.localToWorld(r.lens.clone().add(new THREE.Vector3(x, y, z)))).sub(lens)
+    const k = at(0, 0, 1).length()
+    const pivot = toScene(s.orient.localToWorld(new THREE.Vector3()))
+    return { pivot, lens, focal, right: at(1, 0, 0).divideScalar(k), up: at(0, 1, 0).divideScalar(k), ahead: at(0, 0, 1).divideScalar(k), k }
   }
 
   /** Keep model `key`'s turn (a 3D area's layout): what the hand turned it
@@ -1680,5 +1890,5 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     renderer.forceContextLoss()
   }
 
-  return { frame, warm, pick, pickZ: () => pickedZ, info, spinBy, letGo, settleAll, keepTurn, gizmoAt, manipHot, screenBox, pivotOf, labelAt, strokeAt, modelSize, dispose, surfaceAt, pinSpots: notes.spots }
+  return { frame, warm, pick, pickZ: () => pickedZ, info, spinBy, letGo, settleAll, keepTurn, gizmoAt, aimAt, cameraFrame, manipHot, screenBox, pivotOf, labelAt, strokeAt, modelSize, dispose, surfaceAt, pinSpots: notes.spots }
 }

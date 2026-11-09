@@ -2003,6 +2003,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
       if (ms.poseOf[from]) ms.setPose(to, [...ms.poseOf[from]] as [number, number, number, number])
       if (ms.tintOf[from]) ms.setTint(to, ms.tintOf[from])
       if (ms.stretchOf[from]) ms.setStretch(to, [...ms.stretchOf[from]] as [number, number, number])
+      if (ms.lensOf[from]) ms.setLens(to, { ...ms.lensOf[from] })
       if (p) ms.setPlace(to, { dx: p.dx + 100, dy: p.dy + 100, h: p.h })
     }
     return newGroupId

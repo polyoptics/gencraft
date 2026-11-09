@@ -18,7 +18,10 @@ interface ManipStore {
   /** Models stand up off cards out on the canvas in 3D (the 3D bar's
    *  Models toggle, Brian 2026-11-09). A 3D scene's models always do. */
   models: boolean
-  set: (p: Partial<Pick<ManipStore, 'mode' | 'local' | 'plane' | 'models'>>) => void
+  /** Looking through this camera (a model key, Brian 2026-11-09): the
+   *  full 3D world from it. Not kept: a reload is back on the canvas. */
+  through: string | null
+  set: (p: Partial<Pick<ManipStore, 'mode' | 'local' | 'plane' | 'models' | 'through'>>) => void
 }
 
 export const useManip = create<ManipStore>()(persist(set => ({
@@ -26,6 +29,7 @@ export const useManip = create<ManipStore>()(persist(set => ({
   local: false,
   plane: 'cam',
   models: true,
+  through: null,
   set: p => set(p),
 }), {
   name: 'vidbars.manip',

@@ -75,10 +75,14 @@ export const models: {
   /** The manipulator part of a selected model in a 3D area's scene under
    *  a client point (utils/area3dHandles). c is client px. */
   gizmoAt: ((clientX: number, clientY: number) => ManipHit | null) | null
+  /** Aim a camera at a client point (tiltScene aimAt). */
+  aimAt: ((key: string, clientX: number, clientY: number, rise?: boolean) => { q: [number, number, number, number]; focus: number } | null) | null
+  /** A camera's lens, axes and focal point (tiltScene cameraFrame). */
+  cameraFrame: ((key: string) => ReturnType<ReturnType<typeof createTiltScene>['cameraFrame']>) | null
   /** Light up a manipulator part (hovered or held), or none. */
   manipHot: ((key: string | null, part: ManipPart | null) => void) | null
   root: HTMLElement | null
-} = { gizmoAt: null, manipHot: null, labelAt: null, strokeAt: null, modelSize: null, pick: null, pickZ: null, info: null, spin: null, letGo: null, hovered: null, at: null, surface: null, pinSpots: null, screenBox: null, pivotOf: null, root: null }
+} = { gizmoAt: null, manipHot: null, labelAt: null, strokeAt: null, modelSize: null, pick: null, pickZ: null, info: null, spin: null, letGo: null, hovered: null, at: null, surface: null, pinSpots: null, screenBox: null, pivotOf: null, aimAt: null, cameraFrame: null, root: null }
 /** A pick that lights up under the cursor: a model or a person, not
  *  furniture. */
 export const modelKey = (k: string | null | undefined) => (k && !k.startsWith('deco|') ? k : null)
@@ -90,12 +94,12 @@ export const modelKey = (k: string | null | undefined) => (k && !k.startsWith('d
 const FADE_TILT = 15
 /** How far the 3D look is in at this angle, 0..1, eased at both ends. */
 const fadeShown = () => {
-  if (useTiltStore.getState().lock3d) return 1
+  if (useTiltStore.getState().lock3d || useManip.getState().through) return 1
   const x = Math.min(1, offFlat(useTiltStore.getState()) / FADE_TILT)
   return x * x * (3 - 2 * x)
 }
 /** Whether anything 3D is on screen. */
-const live3d = () => isTilted(useTiltStore.getState())
+const live3d = () => isTilted(useTiltStore.getState()) || !!useManip.getState().through
 
 /** Whether model `key` ('card:<id>' / 'node:<id>') stands on a 3D area:
  *  a scene layout, where its turn is kept (Brian 2026-11-08). */
@@ -106,7 +110,8 @@ function onArea3d(key: string): boolean {
 
 const frameState = (): TiltFrameState => {
   const ts = useTiltStore.getState()
-  const { unitsPerMetre: scales, sizeOf, poseOf, tintOf, stretchOf } = useModelScaleStore.getState()
+  const { unitsPerMetre: scales, sizeOf, poseOf, tintOf, stretchOf, lensOf } = useModelScaleStore.getState()
+  const through = useManip.getState().through
   const placedMemo = new Map<string, boolean>()
   return {
     tilt: ts.tilt, spin: ts.spin, yaw: ts.yaw, shiftX: ts.shiftX, shiftY: ts.shiftY, glide: ts.glide, texture: ts.texture, shade: ts.shade, wire: ts.wire, light: ts.light, turn: ts.turn,
@@ -126,7 +131,9 @@ const frameState = (): TiltFrameState => {
     art: live3d() ? lastArt : [],
     fade: fadeShown(),
     notesOf: url => notesNow.models[url],
-    lock: ts.lock3d,
+    lock: ts.lock3d || !!through,
+    lensFor: key => lensOf[dataKey(key)],
+    through,
   }
 }
 
@@ -311,6 +318,11 @@ export const TiltModels: React.FC = () => {
         return g && { ...g, c: { x: g.c.x + r.left, y: g.c.y + r.top } }
       }
       models.manipHot = v.manipHot
+      models.aimAt = (key, clientX, clientY, rise) => {
+        const r = root.getBoundingClientRect()
+        return v.aimAt(key, clientX - r.left, clientY - r.top, rise)
+      }
+      models.cameraFrame = v.cameraFrame
       models.root = root
       warm()
       raf = requestAnimationFrame(frame)
@@ -343,7 +355,7 @@ export const TiltModels: React.FC = () => {
       cancelAnimationFrame(raf)
       post.disconnect(); marker.remove()
       models.pick = null; models.pickZ = null; models.info = null; models.spin = null; models.letGo = null
-      models.surface = null; models.pinSpots = null; models.screenBox = null; models.pivotOf = null; models.labelAt = null; models.strokeAt = null; models.modelSize = null; models.gizmoAt = null; models.manipHot = null; models.root = null
+      models.surface = null; models.pinSpots = null; models.screenBox = null; models.pivotOf = null; models.labelAt = null; models.strokeAt = null; models.modelSize = null; models.gizmoAt = null; models.manipHot = null; models.aimAt = null; models.cameraFrame = null; models.root = null
       view?.dispose()
       canvas?.remove()
     }

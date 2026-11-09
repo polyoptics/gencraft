@@ -400,9 +400,18 @@ interface ModelScaleStore {
   /** Back as it came (Brian 2026-11-09: Reset): no place, turn, size or
    *  stretch of its own. */
   resetModel: (key: string) => void
+  /** A camera's lens (Brian 2026-11-09): focal length, frame shape and how
+   *  far ahead its focal point is. Same keys. Absent: CAMERA_LENS. */
+  lensOf: Record<string, CameraLens>
+  setLens: (key: string, l: Partial<CameraLens> | null) => void
 }
 
 export interface ScenePlace { dx: number; dy: number; h: number }
+/** A camera primitive's lens: `mm` focal length (on a 36 mm wide frame),
+ *  `aspect` the frame's width over height, `focus` how far ahead its focal
+ *  point is, in camera lengths (it grows with the camera). */
+export interface CameraLens { mm: number; aspect: number; focus: number }
+export const CAMERA_LENS: CameraLens = { mm: 35, aspect: 16 / 9, focus: 4 }
 
 export const useModelScaleStore = create<ModelScaleStore>()(persist(set => ({
   unitsPerMetre: {},
@@ -431,6 +440,12 @@ export const useModelScaleStore = create<ModelScaleStore>()(persist(set => ({
     if (p) placeOf[key] = p; else delete placeOf[key]
     return { placeOf }
   }),
+  lensOf: {},
+  setLens: (key, l) => set(s => {
+    const lensOf = { ...s.lensOf }
+    if (l) lensOf[key] = { ...CAMERA_LENS, ...s.lensOf[key], ...l }; else delete lensOf[key]
+    return { lensOf }
+  }),
   tintOf: {},
   setTint: (key, color) => set(s => {
     const tintOf = { ...s.tintOf }
@@ -439,6 +454,6 @@ export const useModelScaleStore = create<ModelScaleStore>()(persist(set => ({
   }),
 }), {
   name: 'vidbars-model-scale',
-  partialize: s => ({ unitsPerMetre: s.unitsPerMetre, sizeOf: s.sizeOf, poseOf: s.poseOf, tintOf: s.tintOf, placeOf: s.placeOf, stretchOf: s.stretchOf }),
+  partialize: s => ({ unitsPerMetre: s.unitsPerMetre, sizeOf: s.sizeOf, poseOf: s.poseOf, tintOf: s.tintOf, placeOf: s.placeOf, stretchOf: s.stretchOf, lensOf: s.lensOf }),
   storage: createDebouncedIDBStorage(400),
 }))

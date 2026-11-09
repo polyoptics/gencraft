@@ -18,7 +18,7 @@ import { useBoardsStore, type ProjectGroup } from '../store/boardsStore'
 import { useFreeNodeStore, type FreeNodeData } from '../store/freeNodeStore'
 import { useCanvasStore } from '../store/canvasStore'
 import { isUndoRestoring, useUndoCoordinator } from '../store/undoCoordinator'
-import { useModelScaleStore, type ScenePlace } from '../store/tiltStore'
+import { useModelScaleStore, type ScenePlace, type CameraLens } from '../store/tiltStore'
 import { cardBox, dockedCards } from './area3dScene'
 import { cardFaceSize, createTextCard } from './cardGrid'
 import { makeLinkedCard, masterOf } from './linkedCards'
@@ -45,6 +45,8 @@ export interface Area3dCardItem {
   place?: ScenePlace
   /** Stretched along its own axes (tiltStore stretchOf). */
   stretch?: [number, number, number]
+  /** A camera's lens (tiltStore lensOf). */
+  lens?: CameraLens
 }
 /** A tile on a folded 3D area, whole, where it lay. */
 export interface Area3dTileItem {
@@ -58,6 +60,8 @@ export interface Area3dTileItem {
   place?: ScenePlace
   /** Stretched along its own axes (tiltStore stretchOf). */
   stretch?: [number, number, number]
+  /** A camera's lens (tiltStore lensOf). */
+  lens?: CameraLens
 }
 export interface Area3dData {
   /** The mat: where it comes out (top-left), its size and look. */
@@ -123,6 +127,7 @@ export function foldArea3d(nodeId: string): string | null {
       ...(ms.tintOf[`card:${g.id}`] ? { tint: ms.tintOf[`card:${g.id}`] } : {}),
       ...(ms.placeOf[`card:${g.id}`] ? { place: ms.placeOf[`card:${g.id}`] } : {}),
       ...(ms.stretchOf[`card:${g.id}`] ? { stretch: ms.stretchOf[`card:${g.id}`] } : {}),
+      ...(ms.lensOf[`card:${g.id}`] ? { lens: ms.lensOf[`card:${g.id}`] } : {}),
     })
   }
   const tileItems: Area3dTileItem[] = tiles.map(n => {
@@ -135,6 +140,7 @@ export function foldArea3d(nodeId: string): string | null {
       ...(ms.tintOf[`node:${n.id}`] ? { tint: ms.tintOf[`node:${n.id}`] } : {}),
       ...(ms.placeOf[`node:${n.id}`] ? { place: ms.placeOf[`node:${n.id}`] } : {}),
       ...(ms.stretchOf[`node:${n.id}`] ? { stretch: ms.stretchOf[`node:${n.id}`] } : {}),
+      ...(ms.lensOf[`node:${n.id}`] ? { lens: ms.lensOf[`node:${n.id}`] } : {}),
     }
   })
   const data: Area3dData = {
@@ -223,6 +229,7 @@ export function showArea3d(cardId: string, quiet = false, spot?: { x: number; y:
     if (p.tint) ms.setTint(`card:${lid}`, p.tint)
     if (p.place) ms.setPlace(`card:${lid}`, p.place)
     if (p.stretch) ms.setStretch(`card:${lid}`, p.stretch)
+    if (p.lens) ms.setLens(`card:${lid}`, p.lens)
   }
   // Its tiles, whole.
   for (const t of data.tiles) {
@@ -232,6 +239,7 @@ export function showArea3d(cardId: string, quiet = false, spot?: { x: number; y:
     if (t.pose) ms.setPose(`node:${nid}`, t.pose)
     if (t.tint) ms.setTint(`node:${nid}`, t.tint)
     if (t.place) ms.setPlace(`node:${nid}`, t.place)
+    if (t.lens) ms.setLens(`node:${nid}`, t.lens)
     if (t.stretch) ms.setStretch(`node:${nid}`, t.stretch)
   }
   return id

@@ -35,7 +35,7 @@ let eatUp = false
 function setCursor(c: string | null) {
   document.documentElement.style.cursor = c ?? ''
 }
-const cursorOf = (h: ManipHit) => h.part === 's' || h.part[0] === 's' ? 'nwse-resize' : h.part[0] === 'r' ? 'grab' : 'move'
+const cursorOf = (h: ManipHit) => h.part === 'f' ? 'crosshair' : h.part === 's' || h.part[0] === 's' ? 'nwse-resize' : h.part[0] === 'r' ? 'grab' : 'move'
 
 function hit(e: PointerEvent) {
   if (!models.gizmoAt || !isTilted(useTiltStore.getState())) return null
@@ -89,6 +89,14 @@ function onMove(e: PointerEvent) {
   // Ground px → canvas units.
   const k = 1 / (d.zoom || 1)
   const p = d.part
+  if (p === 'f') {
+    // A camera's focal point (Brian 2026-11-09): where it goes, the camera
+    // looks, and its focus is how far that is. Across the floor; Shift
+    // lifts or lowers it.
+    const a = models.aimAt?.(d.key, e.clientX, e.clientY, e.shiftKey)
+    if (a) { ms.setPose(d.dk, a.q); ms.setLens(d.dk, { focus: a.focus }) }
+    return
+  }
   if (p[0] === 'm') {
     // Along one axis, or on a plane: (mx, my) = a·dir1 + b·dir2.
     const ax = d.axes ?? []

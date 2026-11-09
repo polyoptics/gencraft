@@ -25,6 +25,7 @@ import { createMediaCard } from '../../utils/cardGrid'
 import { visibleCanvasCenter } from '../../utils/fx/createEffect'
 import { PRIMITIVES, PRIM_NAMES, primitiveUrl, type Primitive } from '../../three/primitives'
 import { dataKey } from '../../utils/area3dScene'
+import { CameraTools } from '../Canvas/tilt/LookThrough'
 
 const S = 'rgba(228,234,255,0.92)'
 const W_OPEN = 252, W_FOLDED = 52
@@ -147,6 +148,7 @@ const PRIM_ICON: Record<Primitive, React.ReactNode> = {
   cylinder: <><ellipse cx="12" cy="5.5" rx="7" ry="2.5" stroke={S} /><path d="M5 5.5v13c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5v-13" stroke={S} /></>,
   cone: <><path d="M12 3L5 18.5M12 3l7 15.5" stroke={S} /><ellipse cx="12" cy="18.5" rx="7" ry="2.5" stroke={S} /></>,
   plane: <path d="M7 8h14l-4 8H3z" stroke={S} />,
+  camera: <><rect x="2.5" y="9" width="12" height="9" rx="1.5" stroke={S} /><path d="M14.5 12l6-3v9l-6-3" stroke={S} /><circle cx="6" cy="6" r="2.4" stroke={S} /><circle cx="11.5" cy="6" r="2.4" stroke={S} /></>,
 }
 
 /** Model colours: plain, readable over the dark ground. */
@@ -202,7 +204,7 @@ const Area3dTools: React.FC = () => {
   })
   return (
     <>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 6 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 6 }}>
         {PRIMITIVES.map(p => (
           <button key={p} style={{ ...btnStyle(false), width: '100%' }} onClick={() => makePrimitive(p)}
             title={`${PRIM_NAMES[p]}: a new model card, set on the selected 3D scene (or the one in view)`}>
@@ -218,6 +220,7 @@ const Area3dTools: React.FC = () => {
           <button key={c} style={sw(c, cur === c)} disabled={!keys.length} onClick={() => paint(c)} title={c} aria-pressed={cur === c} />
         ))}
       </div>
+      <CameraTools />
     </>
   )
 }
