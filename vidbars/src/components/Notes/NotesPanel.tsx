@@ -25,6 +25,7 @@ import { useModelScaleStore } from '../../store/tiltStore'
 import { createMediaCard } from '../../utils/cardGrid'
 import { visibleCanvasCenter } from '../../utils/fx/createEffect'
 import { PRIMITIVES, PRIM_NAMES, primitiveUrl, type Primitive } from '../../three/primitives'
+import { dataKey } from '../../utils/area3dScene'
 
 const S = 'rgba(228,234,255,0.92)'
 const W_OPEN = 252, W_FOLDED = 52
@@ -164,7 +165,8 @@ function useSelectedModelKeys(): string[] {
   return useMemo(() => [
     ...selNodes.filter(id => nodes[id]?.type === 'model').map(id => `node:${id}`),
     // (groups: a card's face can change to or from a model.)
-    ...selCards.filter(id => !!cardModel(id)).map(id => `card:${id}`),
+    // A closed deck's colour goes with the member on its face (dataKey).
+    ...selCards.filter(id => !!cardModel(id)).map(id => dataKey(`card:${id}`)),
   // eslint-disable-next-line react-hooks/exhaustive-deps
   ], [selNodes, selCards, nodes, groups])
 }

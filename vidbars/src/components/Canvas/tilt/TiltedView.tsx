@@ -1,4 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
+import { dataKey } from '../../../utils/area3dScene'
+import { useManip } from '../../../store/manipStore'
 import { flushSync } from 'react-dom'
 import { useTiltStore, useModelScaleStore, offFlat, unprojectTilt, TILT_FAR } from '../../../store/tiltStore'
 import { useCanvasStore, MIN_ZOOM, MAX_ZOOM } from '../../../store/canvasStore'
@@ -518,7 +520,7 @@ export const TiltedView: React.FC = () => {
           // the same way the person is sized.
           e.preventDefault(); swallow(e)
           selectModel(key, e.shiftKey)
-          g = { kind: 'model', key, k0: useModelScaleStore.getState().sizeOf[key] ?? 1, y0: e.clientY, moved: false }
+          g = { kind: 'model', key: dataKey(key), k0: useModelScaleStore.getState().sizeOf[dataKey(key)] ?? 1, y0: e.clientY, moved: false }
           return
         }
       }
@@ -900,6 +902,7 @@ export const TiltedView: React.FC = () => {
     fontSize: 11, padding: '3px 8px', cursor: 'pointer',
   })
   const set = useTiltStore.getState()
+  const manip = useManip()
 
   return (
     <div
@@ -925,6 +928,11 @@ export const TiltedView: React.FC = () => {
         }}
       >
         <span>Tilted {Math.round(tilt)}° · click to select · drag a box to select many · Alt+drag orbits · Alt+middle pans · F frames</span>
+        <span style={{ width: 1, height: 14, background: 'rgba(255,255,255,0.12)' }} />
+        <button style={btn(manip.mode === 'move')} onClick={() => manip.set({ mode: 'move' })} title="Move handles on a selected model in a 3D scene (W). Ctrl-click an arrow to move on the plane across it; Ctrl-click the middle square for the camera's plane again">Move W</button>
+        <button style={btn(manip.mode === 'rotate')} onClick={() => manip.set({ mode: 'rotate' })} title="Rotate handles (E). The dashed outer ring turns it on the camera's plane">Rotate E</button>
+        <button style={btn(manip.mode === 'scale')} onClick={() => manip.set({ mode: 'scale' })} title="Scale handles (R): an axis box stretches along the model's own axis, the middle sizes it">Scale R</button>
+        <button style={btn(manip.local)} onClick={() => manip.set({ local: !manip.local })} aria-pressed={manip.local} title="Handles on the model's own axes. Off, on the world's">Local</button>
         <span style={{ width: 1, height: 14, background: 'rgba(255,255,255,0.12)' }} />
         <button style={btn(texture)} onClick={() => set.setTexture(!texture)} title="The model's own textures; off is plain grey">Texture</button>
         <button style={btn(shade === 'flat')} onClick={() => set.setShade(shade === 'flat' ? null : 'flat')} title="Flat shading: every face shows">Flat</button>

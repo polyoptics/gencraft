@@ -174,6 +174,10 @@ export interface TiltFrameState {
   placed?: (key: string) => boolean
   /** A model's own colour (useModelScaleStore tintOf), '#rrggbb'. */
   tintFor?: (key: string) => string | undefined
+  /** A model stretched along its own axes, [x, y, z]. */
+  stretchFor?: (key: string) => [number, number, number] | undefined
+  /** The manipulator's settings (store/manipStore). */
+  manip?: ManipSettings
   /** Cards, decks, tiles and Viewers, for their thickness. */
   slabs: TiltSlab[]
   art: TiltArt[]
@@ -348,55 +352,102 @@ void main() {
 export const ART_MAX = 1000
 
 // ── The manipulator (Brian 2026-11-09: a handle on the model, like
-// Maya's): arrows to move along an axis, a square to move on the ground,
-// rings to turn about an axis, a box to size. World axes: x across the
-// canvas (red), y up (green), z down the canvas (blue). A constant size on
-// screen, drawn over everything.
+// Maya's). One set of handles at a time (W move, E rotate, R scale,
+// store/manipStore), on the world's axes or the model's own: x across the
+// canvas (red), y up (green), z down the canvas (blue). Move: arrows, and a
+// yellow square in the middle that moves on the camera's plane, or on the
+// plane across an axis Ctrl-clicked. Rotate: a ring per axis and a dashed
+// yellow outer ring that turns it on the camera's plane. Scale: a box per
+// axis (stretch along it) and one in the middle (size). A constant size
+// on screen, drawn over everything.
 
-export type ManipPart = 'mx' | 'my' | 'mz' | 'mxz' | 'rx' | 'ry' | 'rz' | 's'
+export type ManipPart = 'mx' | 'my' | 'mz' | 'mc' | 'rx' | 'ry' | 'rz' | 'rc' | 'sx' | 'sy' | 'sz' | 's'
+export type ManipV3 = [number, number, number]
+export interface ManipSettings { mode: 'move' | 'rotate' | 'scale'; local: boolean; plane: 'cam' | 'x' | 'y' | 'z' }
 /** What a press on the manipulator holds: its part, the model's middle on
- *  screen (px), and per part: an axis's screen px per ground px moved
- *  along it (`dir`, and `dir2` for the ground square's second axis), or
- *  which way a ring turns for a clockwise drag on screen (`sign`). */
-export interface ManipHit { key: string; part: ManipPart; c: { x: number; y: number }; dir?: { x: number; y: number }; dir2?: { x: number; y: number }; sign?: number }
-interface Manip { group: THREE.Group; meshes: Map<ManipPart, THREE.Mesh[]>; hot: ManipPart | null }
+ *  screen (px), and per part, in scene axes (x across the canvas, y up,
+ *  z down the canvas):
+ *   - move: the directions it moves along, each with its screen px per
+ *     ground px (`axes`);
+ *   - rotate: the axis it turns about, and which way it turns for a
+ *     clockwise drag on screen (`axis`, `sign`);
+ *   - scale: which of the model's own axes it stretches (`k`) and that
+ *     axis's direction on screen, unit length (`dir`). */
+export interface ManipHit {
+  key: string; part: ManipPart; c: { x: number; y: number }
+  axes?: { v: ManipV3; dir: { x: number; y: number } }[]
+  axis?: ManipV3; sign?: number
+  k?: 0 | 1 | 2; dir?: { x: number; y: number }
+}
+interface Manip {
+  group: THREE.Group; meshes: Map<ManipPart, THREE.Mesh[]>; hot: ManipPart | null; square: THREE.Mesh; outer: THREE.Group
+  /** Its axes in scene axes: the model's turn (own axes) or none (world). */
+  lq: THREE.Quaternion
+  mode: ManipSettings['mode'] | null; plane: ManipSettings['plane']
+}
+const DEF_MANIP: ManipSettings = { mode: 'move', local: false, plane: 'cam' }
+const ONE3: [number, number, number] = [1, 1, 1]
+/** The middle square's turn for each plane across an axis (made in xy). */
+const SQUARE_Q = {
+  x: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2),
+  y: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2),
+  z: new THREE.Quaternion(),
+} as const
 
 const MANIP_PX = 78
 const AXES = { x: new THREE.Vector3(1, 0, 0), y: new THREE.Vector3(0, 1, 0), z: new THREE.Vector3(0, 0, 1) } as const
 const manipMat = (color: number, opacity = 1) => new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthTest: false, depthWrite: false, toneMapped: false, side: THREE.DoubleSide })
-const MANIP_MATS = { x: manipMat(0xff4d5e), y: manipMat(0x6fe36f), z: manipMat(0x4f9dff), xz: manipMat(0xffe14a, 0.45), s: manipMat(0xe8ecf4), hot: manipMat(0xffe14a) }
+const MANIP_MATS = { x: manipMat(0xff4d5e), y: manipMat(0x6fe36f), z: manipMat(0x4f9dff), c: manipMat(0xffe14a, 0.55), s: manipMat(0xe8ecf4), hot: manipMat(0xffe14a), outer: manipMat(0xffe14a, 0.85) }
 const M_SHAFT = new THREE.CylinderGeometry(0.014, 0.014, 0.7, 8).translate(0, 0.5, 0)
 const M_HEAD = new THREE.ConeGeometry(0.055, 0.17, 16).translate(0, 0.93, 0)
+const M_SLINE = new THREE.CylinderGeometry(0.012, 0.012, 0.72, 8).translate(0, 0.51, 0)
+const M_SBOX = new THREE.BoxGeometry(0.1, 0.1, 0.1).translate(0, 0.92, 0)
 const M_RING = new THREE.TorusGeometry(0.62, 0.011, 6, 96)
-const M_BOX = new THREE.BoxGeometry(0.12, 0.12, 0.12)
-const M_SQUARE = new THREE.PlaneGeometry(0.2, 0.2).rotateX(-Math.PI / 2).translate(0.24, 0, 0.24)
-/** The ring's turn about axis a: two axes across it, b then c, so a
+const M_BOX = new THREE.BoxGeometry(0.13, 0.13, 0.13)
+const M_SQUARE = new THREE.PlaneGeometry(0.17, 0.17)
+const OUTER_R = 0.84
+/** A dashed ring: four arcs. */
+const M_ARC = new THREE.TorusGeometry(OUTER_R, 0.01, 6, 24, Math.PI / 3.2)
+/** A ring's turn about axis a: two axes across it, b then c, so a
  *  positive turn takes b towards c. */
 const RING_BASIS = { x: ['y', 'z'], y: ['z', 'x'], z: ['x', 'y'] } as const
+const PARTS_OF: Record<ManipSettings['mode'], ManipPart[]> = {
+  move: ['mx', 'my', 'mz', 'mc'], rotate: ['rx', 'ry', 'rz', 'rc'], scale: ['sx', 'sy', 'sz', 's'],
+}
+/** The stand's turn: its y off the plane. */
+const STAND_Q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2)
 
 function makeManip(): Manip {
   const group = new THREE.Group()
-  group.rotation.x = Math.PI / 2   // as a stand: y up off the plane
   const meshes = new Map<ManipPart, THREE.Mesh[]>()
-  const add = (part: ManipPart, m: THREE.Mesh, order: number) => {
+  const add = (part: ManipPart, m: THREE.Mesh, order: number, parent: THREE.Object3D = group) => {
     m.renderOrder = order
     m.userData.mat = m.material
-    group.add(m)
+    parent.add(m)
     meshes.set(part, [...(meshes.get(part) ?? []), m])
+    return m
   }
   for (const a of ['x', 'y', 'z'] as const) {
     const turnTo = (m: THREE.Mesh) => { if (a === 'x') m.rotation.z = -Math.PI / 2; else if (a === 'z') m.rotation.x = Math.PI / 2; return m }
     add(`m${a}`, turnTo(new THREE.Mesh(M_SHAFT, MANIP_MATS[a])), 1002)
     add(`m${a}`, turnTo(new THREE.Mesh(M_HEAD, MANIP_MATS[a])), 1002)
+    add(`s${a}`, turnTo(new THREE.Mesh(M_SLINE, MANIP_MATS[a])), 1002)
+    add(`s${a}`, turnTo(new THREE.Mesh(M_SBOX, MANIP_MATS[a])), 1002)
     const ring = new THREE.Mesh(M_RING, MANIP_MATS[a])   // round z as made
     if (a === 'x') ring.rotation.y = Math.PI / 2
     else if (a === 'y') ring.rotation.x = Math.PI / 2
     add(`r${a}`, ring, 1001)
   }
-  add('mxz', new THREE.Mesh(M_SQUARE, MANIP_MATS.xz), 1003)
+  const square = add('mc', new THREE.Mesh(M_SQUARE, MANIP_MATS.c), 1003)
+  const outer = new THREE.Group()
+  group.add(outer)
+  for (let i = 0; i < 4; i++) {
+    const arc = add('rc', new THREE.Mesh(M_ARC, MANIP_MATS.outer), 1001, outer)
+    arc.rotation.z = i * Math.PI / 2 + Math.PI / 4 - Math.PI / 6.4
+  }
   add('s', new THREE.Mesh(M_BOX, MANIP_MATS.s), 1004)
   group.visible = false
-  return { group, meshes, hot: null }
+  return { group, meshes, hot: null, square, outer, lq: new THREE.Quaternion(), mode: null, plane: 'cam' }
 }
 
 export function createTiltScene(canvas: HTMLCanvasElement) {
@@ -1084,10 +1135,31 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       // Its manipulator: in a 3D area's scene, selected, standing.
       const handles = placed && st.selected.has(tg.key) && !!s.inst && ease > 0.5
       if (handles && !s.gizmo) { s.gizmo = makeManip(); manipRoot.add(s.gizmo.group) }
+      // Stretched along its own axes (scale handles), feet kept down.
+      const sv = st.stretchFor?.(tg.key) ?? ONE3
+      if (s.inst) {
+        s.pose.scale.set(sv[0], sv[1], sv[2])
+        s.orient.position.y = s.size.y / 2 * sv[1]
+      }
       if (s.gizmo) {
-        s.gizmo.group.visible = handles
-        // At the model's middle (where it turns about).
-        if (handles) s.gizmo.group.position.set(s.stand.position.x, s.stand.position.y, s.stand.position.z + s.stand.scale.y * s.size.y / 2)
+        const g = s.gizmo
+        g.group.visible = handles
+        if (handles) {
+          const m = st.manip ?? DEF_MANIP
+          // At the model's middle (where it turns about).
+          g.group.position.set(s.stand.position.x, s.stand.position.y, s.stand.position.z + s.stand.scale.y * s.size.y / 2 * sv[1])
+          // On the model's own axes, or the world's. Scale always stretches
+          // along its own.
+          if (m.local || m.mode === 'scale') g.lq.copy(s.pose.quaternion); else g.lq.identity()
+          g.group.quaternion.copy(STAND_Q).multiply(g.lq)
+          if (g.mode !== m.mode) {
+            g.mode = m.mode
+            const show = PARTS_OF[m.mode]
+            for (const [p, list] of g.meshes) for (const x of list) x.visible = show.includes(p)
+          }
+          g.plane = m.plane
+          if (m.plane !== 'cam') g.square.quaternion.copy(SQUARE_Q[m.plane])
+        }
       }
       if (s.back) {
         // Let go after an Alt-drag: it rolls back to how it stood (Brian
@@ -1296,6 +1368,13 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       const pxPerWorld = Math.hypot((b.x - a.x) / 2 * lastW, (b.y - a.y) / 2 * lastH) || 1
       g.group.scale.setScalar(MANIP_PX / (pxPerWorld * gk))
       g.group.updateMatrixWorld(true)
+      // The middle square on the camera's plane, and the outer ring: face
+      // the camera.
+      const inv = g.group.getWorldQuaternion(new THREE.Quaternion()).invert()
+      const face = inv.multiply(camera.quaternion)
+      g.outer.quaternion.copy(face)
+      if (g.plane === 'cam') g.square.quaternion.copy(face)
+      g.group.updateMatrixWorld(true)
     }
     renderer.render(manipScene, camera)
   }
@@ -1476,36 +1555,55 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
         const t = l2 ? Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / l2)) : 0
         return Math.hypot(x - a.x - dx * t, y - a.y - dy * t)
       }
-      // The box (size): the middle.
+      const lq = g.lq
+      const sceneV = (a: THREE.Vector3): ManipV3 => { const w = a.clone().applyQuaternion(lq); return [w.x, w.y, w.z] }
+      const toLocal = (wd: THREE.Vector3) => wd.applyQuaternion(g.group.getWorldQuaternion(new THREE.Quaternion()).invert())
       const dc = Math.hypot(x - c.x, y - c.y)
-      if (dc < 10) take({ key, part: 's', c }, dc, 6)
-      // The ground square (move on the ground).
-      const sq = [px(0.14, 0, 0.14), px(0.34, 0, 0.14), px(0.34, 0, 0.34), px(0.14, 0, 0.34)]
-      let inSq = false
-      for (let i = 0, j = 3; i < 4; j = i++) {
-        if ((sq[i].y > y) !== (sq[j].y > y) && x < (sq[j].x - sq[i].x) * (y - sq[i].y) / (sq[j].y - sq[i].y) + sq[i].x) inSq = !inSq
-      }
-      if (inSq) take({ key, part: 'mxz', c, dir: axisPx(AXES.x), dir2: axisPx(AXES.z) }, 0, 4)
-      for (const a of ['x', 'y', 'z'] as const) {
-        const A = AXES[a]
-        // The arrow (move along it).
-        const d = segD(px(A.x * 0.15, A.y * 0.15, A.z * 0.15), px(A.x * 1.02, A.y * 1.02, A.z * 1.02))
-        if (d < 8) take({ key, part: `m${a}`, c, dir: axisPx(A) }, d, 2)
-        // The ring (turn about it).
-        const [bn, cn] = RING_BASIS[a]
-        const B = AXES[bn], C = AXES[cn]
-        let prev: { x: number; y: number } | null = null
-        let rd = Infinity
-        for (let i = 0; i <= 64; i++) {
-          const t = i / 64 * Math.PI * 2, cs = Math.cos(t) * 0.62, sn = Math.sin(t) * 0.62
-          const q = px(B.x * cs + C.x * sn, B.y * cs + C.y * sn, B.z * cs + C.z * sn)
-          if (prev) rd = Math.min(rd, segD(prev, q))
-          prev = q
+      const along = (A: THREE.Vector3, from: number, to: number) => segD(px(A.x * from, A.y * from, A.z * from), px(A.x * to, A.y * to, A.z * to))
+      if (g.mode === 'move') {
+        for (const a of ['x', 'y', 'z'] as const) {
+          const A = AXES[a]
+          const d = along(A, 0.15, 1.02)
+          if (d < 8) take({ key, part: `m${a}`, c, axes: [{ v: sceneV(A), dir: axisPx(A) }] }, d, 2)
         }
-        if (rd < 7) {
-          const b = axisPx(B), cc = axisPx(C)
-          take({ key, part: `r${a}`, c, sign: b.x * cc.y - b.y * cc.x > 0 ? 1 : -1 }, rd, 0)
+        // The middle square: on the camera's plane, or across an axis.
+        if (dc < 13) {
+          const pair = g.plane === 'cam'
+            ? [toLocal(new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0)), toLocal(new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1))]
+            : RING_BASIS[g.plane].map(n => AXES[n])
+          take({ key, part: 'mc', c, axes: pair.map(A => ({ v: sceneV(A), dir: axisPx(A) })) }, dc, 6)
         }
+      } else if (g.mode === 'rotate') {
+        for (const a of ['x', 'y', 'z'] as const) {
+          const [bn, cn] = RING_BASIS[a]
+          const B = AXES[bn], C = AXES[cn]
+          let prev: { x: number; y: number } | null = null
+          let rd = Infinity
+          for (let i = 0; i <= 64; i++) {
+            const t = i / 64 * Math.PI * 2, cs = Math.cos(t) * 0.62, sn = Math.sin(t) * 0.62
+            const q = px(B.x * cs + C.x * sn, B.y * cs + C.y * sn, B.z * cs + C.z * sn)
+            if (prev) rd = Math.min(rd, segD(prev, q))
+            prev = q
+          }
+          if (rd < 7) {
+            const b = axisPx(B), cc = axisPx(C)
+            take({ key, part: `r${a}`, c, axis: sceneV(AXES[a]), sign: b.x * cc.y - b.y * cc.x > 0 ? 1 : -1 }, rd, 0)
+          }
+        }
+        // The outer ring: about the line to the camera. A clockwise drag
+        // on screen turns it clockwise as seen.
+        const od = Math.abs(dc - OUTER_R * MANIP_PX)
+        if (od < 8) take({ key, part: 'rc', c, axis: sceneV(toLocal(new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 2)).normalize()), sign: -1 }, od, 0)
+      } else {
+        ;(['x', 'y', 'z'] as const).forEach((a, i) => {
+          const A = AXES[a]
+          const d = along(A, 0.15, 0.98)
+          if (d < 8) {
+            const q = axisPx(A), l = Math.hypot(q.x, q.y) || 1
+            take({ key, part: `s${a}`, c, k: i as 0 | 1 | 2, dir: { x: q.x / l, y: q.y / l } }, d, 2)
+          }
+        })
+        if (dc < 10) take({ key, part: 's', c }, dc, 6)
       }
     }
     if (!best) return null

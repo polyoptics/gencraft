@@ -43,6 +43,8 @@ export interface Area3dCardItem {
   tint?: string
   /** Where its model stands in the scene (tiltStore placeOf). */
   place?: ScenePlace
+  /** Stretched along its own axes (tiltStore stretchOf). */
+  stretch?: [number, number, number]
 }
 /** A tile on a folded 3D area, whole, where it lay. */
 export interface Area3dTileItem {
@@ -54,6 +56,8 @@ export interface Area3dTileItem {
   tint?: string
   /** Where its model stands in the scene (tiltStore placeOf). */
   place?: ScenePlace
+  /** Stretched along its own axes (tiltStore stretchOf). */
+  stretch?: [number, number, number]
 }
 export interface Area3dData {
   /** The mat: where it comes out (top-left), its size and look. */
@@ -118,6 +122,7 @@ export function foldArea3d(nodeId: string): string | null {
       ...(ms.poseOf[`card:${g.id}`] ? { pose: ms.poseOf[`card:${g.id}`] } : {}),
       ...(ms.tintOf[`card:${g.id}`] ? { tint: ms.tintOf[`card:${g.id}`] } : {}),
       ...(ms.placeOf[`card:${g.id}`] ? { place: ms.placeOf[`card:${g.id}`] } : {}),
+      ...(ms.stretchOf[`card:${g.id}`] ? { stretch: ms.stretchOf[`card:${g.id}`] } : {}),
     })
   }
   const tileItems: Area3dTileItem[] = tiles.map(n => {
@@ -129,6 +134,7 @@ export function foldArea3d(nodeId: string): string | null {
       ...(ms.poseOf[`node:${n.id}`] ? { pose: ms.poseOf[`node:${n.id}`] } : {}),
       ...(ms.tintOf[`node:${n.id}`] ? { tint: ms.tintOf[`node:${n.id}`] } : {}),
       ...(ms.placeOf[`node:${n.id}`] ? { place: ms.placeOf[`node:${n.id}`] } : {}),
+      ...(ms.stretchOf[`node:${n.id}`] ? { stretch: ms.stretchOf[`node:${n.id}`] } : {}),
     }
   })
   const data: Area3dData = {
@@ -216,6 +222,7 @@ export function showArea3d(cardId: string, quiet = false, spot?: { x: number; y:
     if (p.pose) ms.setPose(`card:${lid}`, p.pose)
     if (p.tint) ms.setTint(`card:${lid}`, p.tint)
     if (p.place) ms.setPlace(`card:${lid}`, p.place)
+    if (p.stretch) ms.setStretch(`card:${lid}`, p.stretch)
   }
   // Its tiles, whole.
   for (const t of data.tiles) {
@@ -225,6 +232,7 @@ export function showArea3d(cardId: string, quiet = false, spot?: { x: number; y:
     if (t.pose) ms.setPose(`node:${nid}`, t.pose)
     if (t.tint) ms.setTint(`node:${nid}`, t.tint)
     if (t.place) ms.setPlace(`node:${nid}`, t.place)
+    if (t.stretch) ms.setStretch(`node:${nid}`, t.stretch)
   }
   return id
 }

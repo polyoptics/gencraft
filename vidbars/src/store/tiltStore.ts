@@ -393,6 +393,10 @@ interface ModelScaleStore {
    *  its card (or, docked at the side, just inside the area). */
   placeOf: Record<string, ScenePlace>
   setPlace: (key: string, p: ScenePlace | null) => void
+  /** A model stretched along its own axes (the scale handles' axis boxes,
+   *  Brian 2026-11-09): [x, y, z] × its size. Same keys. Absent: 1, 1, 1. */
+  stretchOf: Record<string, [number, number, number]>
+  setStretch: (key: string, v: [number, number, number] | null) => void
 }
 
 export interface ScenePlace { dx: number; dy: number; h: number }
@@ -408,6 +412,12 @@ export const useModelScaleStore = create<ModelScaleStore>()(persist(set => ({
     if (q) poseOf[key] = q; else delete poseOf[key]
     return { poseOf }
   }),
+  stretchOf: {},
+  setStretch: (key, v) => set(s => {
+    const stretchOf = { ...s.stretchOf }
+    if (v) stretchOf[key] = v; else delete stretchOf[key]
+    return { stretchOf }
+  }),
   placeOf: {},
   setPlace: (key, p) => set(s => {
     const placeOf = { ...s.placeOf }
@@ -422,6 +432,6 @@ export const useModelScaleStore = create<ModelScaleStore>()(persist(set => ({
   }),
 }), {
   name: 'vidbars-model-scale',
-  partialize: s => ({ unitsPerMetre: s.unitsPerMetre, sizeOf: s.sizeOf, poseOf: s.poseOf, tintOf: s.tintOf, placeOf: s.placeOf }),
+  partialize: s => ({ unitsPerMetre: s.unitsPerMetre, sizeOf: s.sizeOf, poseOf: s.poseOf, tintOf: s.tintOf, placeOf: s.placeOf, stretchOf: s.stretchOf }),
   storage: createDebouncedIDBStorage(400),
 }))

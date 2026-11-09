@@ -53,6 +53,20 @@ export function areaOfBox(r: R, nodes = useFreeNodeStore.getState().nodes, not?:
   return at ? { area: at, docked: true } : null
 }
 
+/** Where model `key`'s scene settings (place, turn, size, colour, stretch:
+ *  tiltStore) are kept. A closed deck shows one member's model on its face
+ *  (stepped with the arrows), so they go with that member card, not the
+ *  deck's front card (Brian 2026-11-09). */
+export function dataKey(key: string): string {
+  if (!key.startsWith('card:')) return key
+  const bs = useBoardsStore.getState()
+  const g = bs.groups.find(x => x.id === key.slice(5))
+  if (!g) return key
+  const portal = g.deckState === 'fanned' ? useCanvasStore.getState().deckPortalSelections[g.id] : undefined
+  const face = g.deckState === 'stacked' ? g.deckFaceCard : portal
+  return face && face !== g.id && bs.groups.some(x => x.id === face && x.deckAnchorId === g.id) ? `card:${face}` : key
+}
+
 /** A model card or tile's box, from its key ('card:<id>' / 'node:<id>'). */
 export function boxOfKey(key: string): R | null {
   if (key.startsWith('node:')) {
@@ -90,7 +104,7 @@ export function defaultPlace(a: FreeNodeData, box: R): ScenePlace {
 export function sceneSpot(key: string): { x: number; y: number; h: number; card: R } | null {
   const sc = sceneOf(key)
   if (!sc) return null
-  const p = useModelScaleStore.getState().placeOf[key]
+  const p = useModelScaleStore.getState().placeOf[dataKey(key)]
   if (!p && !sc.docked) return null
   const q = p ?? defaultPlace(sc.area, sc.box)
   return { x: sc.area.x + q.dx, y: sc.area.y + q.dy, h: q.h, card: sc.box }
@@ -101,7 +115,7 @@ export function sceneSpot(key: string): { x: number; y: number; h: number; card:
 export function placeNow(key: string): ScenePlace | null {
   const sc = sceneOf(key)
   if (!sc) return null
-  return useModelScaleStore.getState().placeOf[key] ?? defaultPlace(sc.area, sc.box)
+  return useModelScaleStore.getState().placeOf[dataKey(key)] ?? defaultPlace(sc.area, sc.box)
 }
 
 /** Model cards docked along area `was`'s sides (not on it). */

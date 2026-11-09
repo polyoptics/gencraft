@@ -20,8 +20,9 @@ import { createTiltScene, ART_MAX, type TiltTarget, type TiltFrameState, type Ma
 import type { PinSpot } from '../../../three/notesOverlay'
 import { useNotesStore } from '../../../store/notesStore'
 import { PinLabels } from '../../Notes/PinLabels'
-import { sceneOf, sceneSpot } from '../../../utils/area3dScene'
+import { sceneOf, sceneSpot, dataKey } from '../../../utils/area3dScene'
 import { useUndoCoordinator } from '../../../store/undoCoordinator'
+import { useManip } from '../../../store/manipStore'
 /** The notes store as it stands (read each frame without a hook). */
 let notesNow = useNotesStore.getState()
 useNotesStore.subscribe(s => { notesNow = s })
@@ -93,7 +94,7 @@ function onArea3d(key: string): boolean {
 
 const frameState = (): TiltFrameState => {
   const ts = useTiltStore.getState()
-  const { unitsPerMetre: scales, sizeOf, poseOf, tintOf } = useModelScaleStore.getState()
+  const { unitsPerMetre: scales, sizeOf, poseOf, tintOf, stretchOf } = useModelScaleStore.getState()
   const placedMemo = new Map<string, boolean>()
   return {
     tilt: ts.tilt, spin: ts.spin, yaw: ts.yaw, shiftX: ts.shiftX, shiftY: ts.shiftY, glide: ts.glide, texture: ts.texture, shade: ts.shade, wire: ts.wire, light: ts.light, turn: ts.turn,
@@ -103,9 +104,11 @@ const frameState = (): TiltFrameState => {
       ...useBoardsStore.getState().selectedGroupIds.map(id => `card:${id}`),
     ]),
     unitsFor: url => scales[url],
-    sizeFor: key => sizeOf[key] ?? 1,
-    poseFor: key => poseOf[key],
-    tintFor: key => tintOf[key],
+    sizeFor: key => sizeOf[dataKey(key)] ?? 1,
+    poseFor: key => poseOf[dataKey(key)],
+    tintFor: key => tintOf[dataKey(key)],
+    stretchFor: key => stretchOf[dataKey(key)],
+    manip: useManip.getState(),
     placed: key => { let v = placedMemo.get(key); if (v === undefined) { v = onArea3d(key); placedMemo.set(key, v) } return v },
     slabs: live3d() ? collectSlabs(fadeShown()) : (dropLifts(), []),
     art: live3d() ? lastArt : [],
@@ -264,7 +267,7 @@ export const TiltModels: React.FC = () => {
         // On a 3D area the turn is kept, as part of the layout (undoable).
         if (onArea3d(key)) {
           const q = v.keepTurn(key)
-          if (q) { useUndoCoordinator.getState().checkpoint(); useModelScaleStore.getState().setPose(key, q) }
+          if (q) { useUndoCoordinator.getState().checkpoint(); useModelScaleStore.getState().setPose(dataKey(key), q) }
           return
         }
         v.letGo(key, useTiltStore.getState().settle)
@@ -310,7 +313,7 @@ export const TiltModels: React.FC = () => {
       useBoardsStore.subscribe(warmSoon),
       // Settle turned back on: what was left turned rolls home.
       useTiltStore.subscribe((s, p) => { if (s.settle && !p.settle) view?.settleAll() }),
-      ...[useTiltStore, useCanvasStore, useFreeNodeStore, useBoardsStore, useViewport3DStore, useRailUiStore, useModelScaleStore, useNotesStore].map(s => s.subscribe(poke)),
+      ...[useTiltStore, useCanvasStore, useFreeNodeStore, useBoardsStore, useViewport3DStore, useRailUiStore, useModelScaleStore, useNotesStore, useManip].map(s => s.subscribe(poke)),
     ]
     const pokes = ['pointermove', 'pointerdown', 'pointerup', 'wheel', 'keydown', 'keyup', 'resize'] as const
     for (const t of pokes) window.addEventListener(t, poke, { capture: true, passive: true })
