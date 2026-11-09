@@ -78,9 +78,9 @@ import { showFactionTree } from '../../utils/factionTree'
 import { showFamilyTree } from '../../utils/familySpine'
 import { bakeStoryline, chartArea, chartOutOf, chartSpotBeside, eraseChart, recallChart, setChartSpot } from '../../utils/chartCard'
 import { cardOrigins } from '../Canvas/StorylineLayer'
-import { rowOf, setRows } from '../../utils/primaryCard'
+import { rowOf, setRows, openDeckOf } from '../../utils/primaryCard'
 import { wallRoom } from '../../utils/wallRoom'
-import { area3dOutOf, toggleArea3d } from '../../utils/area3dCard'
+import { area3dOutOf, toggleArea3d, foldArea3dAndDeck, showArea3dMoving } from '../../utils/area3dCard'
 import { sceneOf, dataKey, cardHoldsModel } from '../../utils/area3dScene'
 
 const BOARD_PADDING_X = 20
@@ -1341,7 +1341,12 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
           // still edits on its own double-click (that stops here); anywhere
           // else on the face opens it (the text layer covers the whole face,
           // so this never fired, Brian 2026-11-09).
-          if (group.cardType === 'area3d' && !showBack) { toggleArea3d(group.id); return }
+          // As an open deck's primary, folding its scene closes the deck too.
+          if (group.cardType === 'area3d' && !showBack) {
+            const rest = openDeckOf(group.id)
+            if (rest.length && foldArea3dAndDeck(group.id, [group.id, ...rest])) return
+            toggleArea3d(group.id); return
+          }
           // Turned over, the front card of a row closes the row onto it, as
           // face up (its back's fields stop their own double-click).
           if (showBack) { clusterFront.get(group.id)?.close(); return }
@@ -2284,12 +2289,16 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
             e.stopPropagation()
             // A 3D scene card on the face: its scene comes out or folds in,
             // as on the card alone (the deck opens from its header).
-            if (faceCard.cardType === 'area3d') { toggleArea3d(faceCard.id); return }
+            // Its scene already out: it folds in, the deck stays closed.
+            if (faceCard.cardType === 'area3d' && area3dOutOf(faceCard.id)) { toggleArea3d(faceCard.id); return }
             useUndoCoordinator.getState().checkpoint()
             // Sub-decks that are currently nested inside a parent cluster → fan.
             // Standalone decks (or sub-decks dragged out) → open.
             const isSubDeck = !!anchorGroup.nestedDeck && !!isNested
             useBoardsStore.getState().setDeckState(deck.memberIds, isSubDeck ? 'fanned' : 'open')
+            // A 3D scene card on the face: opening its deck brings its scene
+            // out too (Brian 2026-11-09).
+            if (faceCard.cardType === 'area3d') showArea3dMoving(faceCard.id)
           }}
         >
           {faceCard.cut
@@ -4313,6 +4322,9 @@ const DeckAffordance: React.FC<{ cluster: string[]; front: Deck | 'card' | null;
         }}
         onDoubleClick={e => {
           e.stopPropagation()
+          // A 3D scene card as primary: its scene folds in and the deck
+          // closes, one double-click (Brian 2026-11-09).
+          if (primaryGroup?.cardType === 'area3d' && foldArea3dAndDeck(primaryGroup.id, cluster)) return
           useUndoCoordinator.getState().checkpoint()
           useBoardsStore.getState().setDeckState(cluster, 'stacked')
         }}

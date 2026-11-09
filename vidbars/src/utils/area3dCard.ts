@@ -320,8 +320,9 @@ function ride(rs: Rider[], to: { x: number; y: number }, out: boolean, done: () 
   clock.finished.then(end, end)
 }
 
-/** Fold 3D area `nodeId` into its card, with the motion. */
-export function foldArea3dMoving(nodeId: string): void {
+/** Fold 3D area `nodeId` into its card, with the motion; `then` runs
+ *  once it is folded in. */
+export function foldArea3dMoving(nodeId: string, then?: () => void): void {
   const a = useFreeNodeStore.getState().nodes[nodeId]
   if (!a || a.type !== 'area' || moving) return
   const card = a.areaCard ? useBoardsStore.getState().groups.find(g => g.id === a.areaCard) : undefined
@@ -329,7 +330,7 @@ export function foldArea3dMoving(nodeId: string): void {
   // No card yet: where the new one goes (foldArea3d).
   const to = card ? middleOf(card) : { x: a.x + size.w / 2, y: a.y + a.height + size.h * 0.75 }
   moving = true
-  ride(riders(a), to, false, () => { moving = false; foldArea3d(nodeId) })
+  ride(riders(a), to, false, () => { moving = false; foldArea3d(nodeId); then?.() })
 }
 
 /** Show card `cardId`'s 3D area, with the motion. */
@@ -347,6 +348,21 @@ export function showArea3dMoving(cardId: string): void {
 export function toggleArea3d(cardId: string): void {
   const out = area3dOutOf(cardId)
   if (out) foldArea3dMoving(out); else showArea3dMoving(cardId)
+}
+
+/** A 3D scene card that is an open deck's primary: folding its scene
+ *  closes the deck too, in one (Brian 2026-11-09). `row` = the deck's
+ *  cards, the scene card first. The deck closes once the scene is in, so
+ *  the scene's own cards are gone from it by then. No scene out: false. */
+export function foldArea3dAndDeck(cardId: string, row: string[]): boolean {
+  const out = area3dOutOf(cardId)
+  if (!out) return false
+  foldArea3dMoving(out, () => {
+    const gs = useBoardsStore.getState().groups
+    const left = row.filter(id => gs.some(g => g.id === id))
+    if (left.length > 1) useBoardsStore.getState().setDeckState(left, 'stacked')
+  })
+  return true
 }
 
 /** A 3D area card moving takes its 3D area along: out, the mat (and what
