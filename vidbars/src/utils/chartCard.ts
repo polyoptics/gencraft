@@ -16,7 +16,7 @@ import { useBoardsStore, type ProjectGroup } from '../store/boardsStore'
 import { useFreeNodeStore, type FreeNodeData } from '../store/freeNodeStore'
 import { isUndoRestoring, useUndoCoordinator } from '../store/undoCoordinator'
 import { cardFaceSize, createTextCard } from './cardGrid'
-import { isAbove } from './cardTypes'
+import { chartRank, isAbove } from './cardTypes'
 import type { ChartData, ChartPlace, ChartTier } from './chartData'
 import { linkedHeight, makeLinkedCard, masterOf } from './linkedCards'
 import { newGroupId, type FactionGroup } from './factionGroups'
@@ -416,4 +416,30 @@ export function startChartFollow(cardsOf: CardsOfDots): () => void {
       }
     }
   })
+}
+
+/** Erases the chart baked into card `cardId` (Brian 2026-11-09, "Erase
+ *  chart layout"): its layout only, the dots, lines and where each card
+ *  sat. The card, its members, who reports to whom and its sections stay,
+ *  and so do the cards themselves. A "+ chart" rank detail that read this
+ *  chart keeps the number it showed, as plain text. Not while the chart is
+ *  out. One undo. */
+export function eraseChart(cardId: string): boolean {
+  const bs = useBoardsStore.getState()
+  const card = bs.groups.find(g => g.id === cardId)
+  if (!card?.chart || chartOutOf(cardId)) return false
+  useUndoCoordinator.getState().checkpoint()
+  useBoardsStore.setState(s => ({
+    groups: s.groups.map(g => {
+      if (g.id === cardId) { const { chart: _c, ...rest } = g; void _c; return rest as ProjectGroup }
+      if (!g.details?.some(d => d.link?.card === cardId && d.link.rankOf)) return g
+      return { ...g, details: g.details.map(d => {
+        if (d.link?.card !== cardId || !d.link.rankOf) return d
+        const r = chartRank(card, d.link.rankOf)
+        const { link: _l, ...plain } = d; void _l
+        return { ...plain, value: r ? String(r.rank) : d.value }
+      }) }
+    }),
+  }))
+  return true
 }

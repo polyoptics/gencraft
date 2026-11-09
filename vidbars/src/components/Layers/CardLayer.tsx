@@ -71,12 +71,12 @@ import { PenButton } from '../Annotation/PenButton'
 import { useSeedHoverFromCursor } from '../../utils/pointerTracker'
 import { deckAreas } from '../../utils/peek'
 import { useContextSheetStore } from '../../store/contextSheetStore'
-import { CARD_TYPES, CARD_TYPE_ORDER, cardTypeOf, factionMembers, typeColor, type CardType } from '../../utils/cardTypes'
+import { CARD_TYPES, CARD_TYPE_ORDER, cardTypeOf, chartName, factionMembers, typeColor, type CardType } from '../../utils/cardTypes'
 import { nameKindOf } from '../../utils/fillDetails'
 import { copiedFaceStyle, copyFaceStyle, fillFields } from '../../utils/faceStyle'
 import { showFactionTree } from '../../utils/factionTree'
 import { showFamilyTree } from '../../utils/familySpine'
-import { bakeStoryline, chartArea, chartOutOf, chartSpotBeside, recallChart, setChartSpot } from '../../utils/chartCard'
+import { bakeStoryline, chartArea, chartOutOf, chartSpotBeside, eraseChart, recallChart, setChartSpot } from '../../utils/chartCard'
 import { cardOrigins } from '../Canvas/StorylineLayer'
 import { rowOf, setRows } from '../../utils/primaryCard'
 import { wallRoom } from '../../utils/wallRoom'
@@ -151,6 +151,8 @@ const CardContextMenu: React.FC<{
   const [changeList, setChangeList] = useState<{ x: number; y: number } | null>(null)
   const liveMarks = useBoardsStore(s => s.groups.find(g => g.id === group.id)?.stateChanges)
   const fileItems = useFileMenuItems(mediaSource, onClose)
+  // Erase chart layout asks first, in the menu itself (Cancel is the default).
+  const [eraseAsk, setEraseAsk] = useState(false)
 
   const menuItems: { label: string; icon: string; action: (e: React.MouseEvent<HTMLButtonElement>) => void; danger?: boolean; separator?: boolean
     /** Pointer over the item (true) or off it (false): e.g. show where it will act. */
@@ -483,7 +485,11 @@ const CardContextMenu: React.FC<{
 
   // File on disk behind the hero — desktop app only, empty in a browser
   menuItems.push(...fileItems)
-  const { ref: menuRef, top: menuTop } = useMenuClamp(pos.y, menuItems.length)
+  // Last, apart and red (Brian 2026-11-09): erase the chart baked into it.
+  // Only while it is folded in; the menu asks before anything goes.
+  const erasable = !!group.chart && !chartOutOf(group.id)
+  if (erasable) menuItems.push({ label: 'Erase chart layout', icon: '🧹', danger: true, separator: true, action: () => setEraseAsk(true) })
+  const { ref: menuRef, top: menuTop } = useMenuClamp(pos.y, menuItems.length + (eraseAsk ? 2 : 0))
 
   return ReactDOM.createPortal(
     <>
@@ -504,7 +510,26 @@ const CardContextMenu: React.FC<{
         <div style={{ padding: '4px 12px 6px', borderBottom: '1px solid rgba(255,255,255,0.07)', marginBottom: 4 }}>
           <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: 11 }}>{group.name}</span>
         </div>
-        {menuItems.map((item, i) => (
+        {eraseAsk && erasable ? (
+          <div data-erase-ask style={{ padding: '6px 12px 8px' }}>
+            <div style={{ color: '#e2e8f0', fontSize: 13, lineHeight: 1.35, marginBottom: 4 }}>
+              Erase the <b>{chartName(group)}</b> chart layout?
+            </div>
+            <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: 11.5, lineHeight: 1.35, marginBottom: 10 }}>
+              Its layout goes. The cards and the members stay. Ctrl+Z brings it back.
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button autoFocus onClick={() => setEraseAsk(false)} style={{
+                flex: 1, padding: '6px 0', borderRadius: 6, cursor: 'pointer', fontSize: 13,
+                background: 'rgba(255,255,255,0.12)', color: '#e2e8f0', border: '1px solid rgba(255,255,255,0.25)',
+              }}>Cancel</button>
+              <button onClick={() => { eraseChart(group.id); onClose() }} style={{
+                flex: 1, padding: '6px 0', borderRadius: 6, cursor: 'pointer', fontSize: 13,
+                background: 'none', color: '#f87171', border: '1px solid rgba(248,113,113,0.5)',
+              }}>Erase</button>
+            </div>
+          </div>
+        ) : menuItems.map((item, i) => (
           <React.Fragment key={item.label}>
             {item.separator && i > 0 && (
               <div style={{ height: 1, background: 'rgba(255,255,255,0.07)', margin: '4px 0' }} />
