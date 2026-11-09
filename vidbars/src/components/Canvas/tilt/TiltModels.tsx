@@ -2470,17 +2470,20 @@ function collectTargets(W: number, H: number): TiltTarget[] {
       }))
     }
   }
-  // A model in a 3D scene stands in the scene, not on its card: its card
-  // may be off screen (and not drawn) while the model is in view, as when
-  // F frames a model lifted or moved away from its card.
+  // A model in a 3D scene: its card may not be drawn (off screen while the
+  // model, lifted or moved, is in view; or zoomed far out) and the model
+  // still stands. off() puts it where the scene says.
   if (Object.values(useFreeNodeStore.getState().nodes).some(n => n.type === 'area' && !n.pin)) {
     const have = new Set(out.map(t => t.key))
     for (const g of useBoardsStore.getState().groups) {
       const key = `card:${g.id}`
       if (have.has(key) || g.pin) continue
-      const sp = sceneSpot(key)
-      const model = sp && cardModel(g.id)
-      if (!sp || !model) continue
+      // On a scene or docked to one: its card may not be drawn (off
+      // screen, or zoomed far out), so its box comes from the card.
+      const sc = sceneOf(key)
+      const model = sc && cardModel(g.id)
+      if (!sc || !model) continue
+      const sp = { card: sc.box }
       const w = sp.card.width * zoom, h = sp.card.height * zoom
       out.push(off(key, {
         key, url: model.url, name: model.name,

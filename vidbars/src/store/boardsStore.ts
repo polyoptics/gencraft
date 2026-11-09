@@ -13,6 +13,7 @@ import { removeFromKin, type Kin } from '../utils/family'
 import { deckLay, linkedLines } from '../utils/deckAway'
 import { deckFront, primaryFirst } from '../utils/primaryCard'
 import { useFreeNodeStore } from './freeNodeStore'
+import { useModelScaleStore } from './tiltStore'
 import { newSceneLayout, putCards, type SceneDiv, type SceneView } from '../utils/sceneCard'
 import { getBoardAbsolutePos, computeGroupLayout, yToRow } from '../utils/nleRows'
 import {
@@ -1988,6 +1989,19 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
       }
       return { groups: [...remaining, newGroup] }
     })
+    // Its model comes as it was set (Brian 2026-11-09): size, turn,
+    // colour, stretch, and its place in a 3D scene, moved as far as the
+    // card (+100, +100).
+    {
+      const ms = useModelScaleStore.getState()
+      const from = `card:${groupId}`, to = `card:${newGroupId}`
+      const p = ms.placeOf[from]
+      if (ms.sizeOf[from] !== undefined) ms.setSize(to, ms.sizeOf[from])
+      if (ms.poseOf[from]) ms.setPose(to, [...ms.poseOf[from]] as [number, number, number, number])
+      if (ms.tintOf[from]) ms.setTint(to, ms.tintOf[from])
+      if (ms.stretchOf[from]) ms.setStretch(to, [...ms.stretchOf[from]] as [number, number, number])
+      if (p) ms.setPlace(to, { dx: p.dx + 100, dy: p.dy + 100, h: p.h })
+    }
     return newGroupId
   },
 

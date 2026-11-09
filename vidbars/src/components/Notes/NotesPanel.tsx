@@ -140,7 +140,7 @@ const ModelNotesRow: React.FC<{ k: string; url: string }> = ({ k, url }) => {
 const SelectedModels: React.FC = () => {
   const list = useSelectedModels()
   if (!list.length) return null
-  return <Section title="SELECTED MODEL">{list.map(m => <ModelNotesRow key={m.url} k={m.key} url={m.url} />)}</Section>
+  return <Section title="SELECTED MODEL">{list.map(m => <ModelNotesRow key={m.key} k={m.key} url={m.url} />)}</Section>
 }
 
 // ── 3D area: primitives and model colour (Brian 2026-11-08) ──
