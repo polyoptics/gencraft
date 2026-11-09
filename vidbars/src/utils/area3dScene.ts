@@ -136,6 +136,20 @@ export function placeNow(key: string): ScenePlace | null {
   return useModelScaleStore.getState().placeOf[dataKey(key)] ?? defaultPlace(sc.area, sc.box)
 }
 
+/** The cards of 3D area `a` (box `was`, its id `id`): those lying on it
+ *  (their middle, as drawn, inside it) and the model cards docked along
+ *  its sides. ONE rule for the scene, its fold and its moving (a card bigger
+ *  than its corner told apart, Brian 2026-11-09: cards made on a scene
+ *  zoomed out were missed by the fold). */
+export function setCards(was: R, groups: ProjectGroup[], boards: Record<string, BoardData>, not?: string): ProjectGroup[] {
+  const on = groups.filter(g => {
+    if (g.id === not || g.pin) return false
+    const r = cardBox(g, boards)
+    return !!r && inside(was, r.x + r.width / 2, r.y + r.height / 2)
+  })
+  return [...on, ...dockedCards(was, groups.filter(g => g.id !== not && !on.includes(g)), boards)]
+}
+
 /** Model cards docked along area `was`'s sides (not on it). */
 export function dockedCards(was: R, groups: ProjectGroup[], boards: Record<string, BoardData>): ProjectGroup[] {
   const gap = dockGap()

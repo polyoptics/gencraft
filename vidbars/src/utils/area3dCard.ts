@@ -19,7 +19,7 @@ import { useFreeNodeStore, type FreeNodeData } from '../store/freeNodeStore'
 import { useCanvasStore } from '../store/canvasStore'
 import { isUndoRestoring, useUndoCoordinator } from '../store/undoCoordinator'
 import { useModelScaleStore, type ScenePlace, type CameraLens } from '../store/tiltStore'
-import { cardBox, dockedCards } from './area3dScene'
+import { cardBox, setCards } from './area3dScene'
 import { cardFaceSize, createTextCard } from './cardGrid'
 import { makeLinkedCard, masterOf } from './linkedCards'
 
@@ -84,8 +84,7 @@ function onMat(a: FreeNodeData) {
   const fs = useFreeNodeStore.getState()
   const { groups, boards } = useBoardsStore.getState()
   // On it, and the model cards docked along its sides.
-  const on = groups.filter(g => g.id !== a.areaCard && !g.pin && inside(a, g.originX + 20, g.originY + 20))
-  const cards = [...on, ...dockedCards(a, groups.filter(g => g.id !== a.areaCard && !on.includes(g)), boards)]
+  const cards = setCards(a, groups, boards, a.areaCard)
   const tiles = Object.values(fs.nodes).filter(n => n.id !== a.id && n.type !== 'area' && n.type !== 'storyline' && !n.pin && n.areaCard === undefined && inside(a, n.x + n.width / 2, n.y + n.height / 2))
   return { cards, tiles }
 }
@@ -395,7 +394,8 @@ export function startArea3dFollow(): () => void {
         // The card lying on its own mat moves with it already.
         if (!n || fs.selectedIds.includes(out)) continue
         const g = useBoardsStore.getState().groups.find(x => x.id === mv.id)
-        if (g && inside(n, g.originX + 20 - mv.dx, g.originY + 20 - mv.dy)) continue
+        const r = g && cardBox(g)
+        if (r && inside(n, r.x + r.width / 2 - mv.dx, r.y + r.height / 2 - mv.dy)) continue
         fs.moveFreeNode(out, mv.dx, mv.dy)
       } else {
         useBoardsStore.setState(st => ({

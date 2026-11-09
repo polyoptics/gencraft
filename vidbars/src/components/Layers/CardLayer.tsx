@@ -1337,9 +1337,11 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
             else recallChart(group.id)
             return
           }
-          // A 3D area card: the same, its 3D area out or folded in (its
-          // text still edits on its own double-click).
-          if (group.cardType === 'area3d' && !showBack && !(e.target as Element).closest?.('[data-card-text]')) { toggleArea3d(group.id); return }
+          // A 3D scene card: the same, its scene out or folded in. Its name
+          // still edits on its own double-click (that stops here); anywhere
+          // else on the face opens it (the text layer covers the whole face,
+          // so this never fired, Brian 2026-11-09).
+          if (group.cardType === 'area3d' && !showBack) { toggleArea3d(group.id); return }
           // Turned over, the front card of a row closes the row onto it, as
           // face up (its back's fields stop their own double-click).
           if (showBack) { clusterFront.get(group.id)?.close(); return }
@@ -2280,6 +2282,9 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
           onPointerDown={onDeckDown}
           onDoubleClick={e => {
             e.stopPropagation()
+            // A 3D scene card on the face: its scene comes out or folds in,
+            // as on the card alone (the deck opens from its header).
+            if (faceCard.cardType === 'area3d') { toggleArea3d(faceCard.id); return }
             useUndoCoordinator.getState().checkpoint()
             // Sub-decks that are currently nested inside a parent cluster → fan.
             // Standalone decks (or sub-decks dragged out) → open.
@@ -5545,7 +5550,15 @@ export const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void
             />
           ) : (
             <div
-              onDoubleClick={e => { e.stopPropagation(); startEditBody() }}
+              onDoubleClick={e => {
+                e.stopPropagation()
+                // A 3D scene card's body opens or folds its scene (its body
+                // covers the whole face below the name, so a double-click
+                // there never reached the card, Brian 2026-11-09). The name
+                // still edits on its own double-click.
+                if (!bind && useBoardsStore.getState().groups.find(g => g.id === groupId)?.cardType === 'area3d') { toggleArea3d(groupId); return }
+                startEditBody()
+              }}
               style={{ ...cardDisplayStyle(bodyTs, bodyBg, !!bodyText), pointerEvents: 'auto' }}
             >{bodyShown || null}</div>
           )}

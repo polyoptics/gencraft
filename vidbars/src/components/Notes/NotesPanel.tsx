@@ -184,6 +184,18 @@ function makePrimitive(p: Primitive) {
     : { cx: mid.cx + i * 40, cy: mid.cy }
   useUndoCoordinator.getState().checkpoint()
   const id = createMediaCard(at, [{ media: { url: primitiveUrl(p), type: 'model', originalName: PRIM_NAMES[p] }, label: PRIM_NAMES[p] }])
+  // Sized to the scene, not the zoom: made zoomed out, a card came out
+  // bigger than the whole scene and lay half off it (Brian 2026-11-09).
+  if (id && area) {
+    const g = useBoardsStore.getState().groups.find(x => x.id === id)
+    const w = g?.cardWidthOverride, h = g?.cardHeightOverride
+    const k = w && h ? Math.min(1, area.width * 0.14 / w) : 1
+    if (g && w && h && k < 1) {
+      useBoardsStore.setState(st => ({
+        groups: st.groups.map(x => x.id === id ? { ...x, cardWidthOverride: w * k, cardHeightOverride: h * k, originX: at.cx - w * k / 2 - 20, originY: at.cy - h * k / 2 } : x),
+      }))
+    }
+  }
   if (id) useBoardsStore.getState().setSelectedGroup(id)
 }
 
