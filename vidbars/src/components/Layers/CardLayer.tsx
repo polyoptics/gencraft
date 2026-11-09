@@ -162,6 +162,12 @@ const CardContextMenu: React.FC<{
   // A dashed outline on the canvas while a chart item is pointed at: where
   // the chart comes out (canvas units).
   const [chartGhost, setChartGhost] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
+  // Right-clicked on a card of a selection of several: the items that can,
+  // act on every selected card (Brian 2026-11-09), as Flip does.
+  const selNow = useBoardsStore.getState().selectedGroupIds
+  const selIds = selNow.length > 1 && selNow.includes(group.id) ? selNow : [group.id]
+  const selGroups = selIds.flatMap(id => { const g = groups.find(x => x.id === id); return g ? [g] : [] })
+  const count = (n: number) => n > 1 ? ` (${n})` : ''
 
   // (Deck-tether actions — "Go to deck" and "Check back in" — live on the
   // tether tint stripe in the header, not on the card-body context menu.
@@ -290,20 +296,25 @@ const CardContextMenu: React.FC<{
     // 2026-11-09: backups and master decks). On/off, lit while it stands.
     if (cardHoldsModel(group, bs.boards)) {
       const on = !group.hideModel3d
-      menuItems.push({ label: 'Show model in 3D', icon: '◆', lit: on, action: () => {
+      const models = new Set(selGroups.filter(g => cardHoldsModel(g, bs.boards)).map(g => g.id))
+      menuItems.push({ label: `Show model in 3D${count(models.size)}`, icon: '◆', lit: on, action: () => {
         useUndoCoordinator.getState().checkpoint()
-        useBoardsStore.setState(s => ({ groups: s.groups.map(g => g.id === group.id ? { ...g, hideModel3d: on ? true : undefined } : g) }))
+        useBoardsStore.setState(s => ({ groups: s.groups.map(g => models.has(g.id) ? { ...g, hideModel3d: on ? true : undefined } : g) }))
         onClose()
       } })
     }
     // A model card in a 3D scene: put its model back as it came, moved,
     // turned and sized nowhere (Brian 2026-11-09). Undoable.
     {
-      const mk = `card:${group.id}`
-      const dk = dataKey(mk)
       const ms = useModelScaleStore.getState()
-      if (sceneOf(mk) && (ms.placeOf[dk] || ms.poseOf[dk] || ms.sizeOf[dk] !== undefined || ms.stretchOf[dk])) {
-        menuItems.push({ label: 'Reset model in 3D set', icon: '↺', action: () => { useUndoCoordinator.getState().checkpoint(); useModelScaleStore.getState().resetModel(dk); onClose() } })
+      const moved = (id: string) => {
+        const mk = `card:${id}`
+        const dk = dataKey(mk)
+        return sceneOf(mk) && (ms.placeOf[dk] || ms.poseOf[dk] || ms.sizeOf[dk] !== undefined || ms.stretchOf[dk]) ? dk : null
+      }
+      const resets = selIds.flatMap(id => { const dk = moved(id); return dk ? [dk] : [] })
+      if (moved(group.id)) {
+        menuItems.push({ label: `Reset model in 3D set${count(resets.length)}`, icon: '↺', action: () => { useUndoCoordinator.getState().checkpoint(); resets.forEach(dk => useModelScaleStore.getState().resetModel(dk)); onClose() } })
       }
     }
     // Style: this face's text and how it is set, onto other cards, once
@@ -338,7 +349,7 @@ const CardContextMenu: React.FC<{
   }})
 
   // Color — opens full color picker
-  menuItems.push({ label: 'Card Color', icon: '🎨', action: () => setColorPicker(colorPicker ? null : { x: pos.x + 200, y: pos.y }) })
+  menuItems.push({ label: `Card Color${count(selIds.length)}`, icon: '🎨', action: () => setColorPicker(colorPicker ? null : { x: pos.x + 200, y: pos.y }) })
 
   // A row of touching cards: this card becomes the one the row's controls
   // sit on and the row closes onto (utils/primaryCard).
@@ -371,17 +382,17 @@ const CardContextMenu: React.FC<{
   }
 
   // Duplicate
-  menuItems.push({ label: 'Duplicate', icon: '📋', action: () => {
+  menuItems.push({ label: `Duplicate${count(selIds.length)}`, icon: '📋', action: () => {
     useUndoCoordinator.getState().checkpoint()
-    useBoardsStore.getState().duplicateGroup(group.id)
+    selIds.forEach(id => useBoardsStore.getState().duplicateGroup(id))
     onClose()
   }})
 
   // Context sheet — one image of the card (or the whole deck) for an AI:
   // pictures, name, summary and notes, sized in the dialog before it is made.
-  menuItems.push({ label: 'Context sheet…', icon: '🗂', action: () => {
+  menuItems.push({ label: `Context sheet${count(selIds.length)}…`, icon: '🗂', action: () => {
     onClose()
-    useContextSheetStore.getState().openSheet([group.id])
+    useContextSheetStore.getState().openSheet([group.id, ...selIds.filter(id => id !== group.id)])
   }})
   if (deckMemberIds && deckMemberIds.length >= 2) menuItems.push({ label: 'Context sheet: whole deck…', icon: '🗂', action: () => {
     onClose()
@@ -398,9 +409,10 @@ const CardContextMenu: React.FC<{
     onClose()
     onEditHeroImage()
   }})
-  if (heroImage) menuItems.push({ label: 'Remove Hero Image', icon: '🖼', action: () => {
+  const heroIds = [group.id, ...selGroups.filter(g => g.id !== group.id && g.cardHeroImage).map(g => g.id)]
+  if (heroImage) menuItems.push({ label: `Remove Hero Image${count(heroIds.length)}`, icon: '🖼', action: () => {
     useUndoCoordinator.getState().checkpoint()
-    useBoardsStore.getState().setGroupCardHeroImage(group.id, null)
+    heroIds.forEach(id => useBoardsStore.getState().setGroupCardHeroImage(id, null))
     onClose()
   }})
 
@@ -451,12 +463,13 @@ const CardContextMenu: React.FC<{
       })
     }
     if (group.pin) {
+      const pinned = selGroups.filter(g => g.pin).map(g => g.id)
       menuItems.push({
-        label: 'Set return spot here', icon: '⌖',
+        label: `Set return spot here${count(pinned.length)}`, icon: '⌖',
         action: () => {
           const cs = useCanvasStore.getState()
           useUndoCoordinator.getState().checkpoint()
-          useBoardsStore.getState().rehomePinnedGroup(group.id, { pan: cs.pan, zoom: cs.zoom })
+          pinned.forEach(id => useBoardsStore.getState().rehomePinnedGroup(id, { pan: cs.pan, zoom: cs.zoom }))
           onClose()
         },
       })
@@ -474,9 +487,10 @@ const CardContextMenu: React.FC<{
   }
 
   // Hanging on a storyline point: let it go from there (it stays put).
-  if (storyLinkOf(group.id)) menuItems.push({ label: 'Unlink from storyline', icon: '⛓️', action: () => {
+  const linkedIds = selIds.filter(id => storyLinkOf(id))
+  if (storyLinkOf(group.id)) menuItems.push({ label: `Unlink from storyline${count(linkedIds.length)}`, icon: '⛓️', action: () => {
     useUndoCoordinator.getState().checkpoint()
-    unlinkCardFromStorylines(group.id)
+    linkedIds.forEach(id => unlinkCardFromStorylines(id))
     onClose()
   }})
 
@@ -625,9 +639,11 @@ const CardContextMenu: React.FC<{
           anchorY={colorPicker.y}
           onChange={c => {
             useUndoCoordinator.getState().checkpoint()
-            useBoardsStore.getState().setGroupColor(group.id, c)
             // Coloured by hand: it keeps this colour whatever its type.
-            useBoardsStore.getState().setGroupOwnColor(group.id, true)
+            for (const id of selIds) {
+              useBoardsStore.getState().setGroupColor(id, c)
+              useBoardsStore.getState().setGroupOwnColor(id, true)
+            }
           }}
           onClose={() => { setColorPicker(null); onClose() }}
         />
