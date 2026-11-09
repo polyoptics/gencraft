@@ -58,7 +58,7 @@ const STAND_W = 14
 /** Smaller than this, a division with a picture or face: an icon. */
 const ICON_W = 36, ICON_H = 32
 /** A division's controls, in screen px (the same size at every zoom). */
-const TOOL_PX = 13
+const TOOL_PX = 15
 
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v))
 const stopPress = (e: React.PointerEvent) => { if (e.button === 0) e.stopPropagation() }
@@ -113,7 +113,17 @@ type Ctx = {
   boxes: Map<string, Box>
   /** Change a division (with an undo step unless step is false). */
   patch: (id: string, p: Partial<SceneDiv>, step?: boolean) => void
+  /** Where a part's knobs are drawn: above every seam and edge bar, so a
+   *  bumped part's knobs are never under a seam. In face layout units. */
+  layer: HTMLDivElement | null
+  W: number
+  H: number
 }
+
+/** The outer edge bars (EdgeStrip): how deep each is, and how far the
+ *  bottom and right ones sit inside the card's own resize bars. */
+const edgeBand = (s: number) => Math.max(PAD, 7 / s)
+const edgeOff = (s: number) => 7 / s
 
 /** A click (the card did not move between press and release). */
 function useClick(ctx: Ctx, onClick: (e: React.MouseEvent) => void) {
@@ -216,7 +226,7 @@ const Knob: React.FC<{
     onDoubleClick={e => e.stopPropagation()}
     onClick={e => { e.stopPropagation(); onClick(e) }}
     style={{
-      position: 'absolute', ...at, width: ctx.u, height: ctx.u, padding: 0, borderRadius: '50%', cursor: 'pointer', zIndex: 6,
+      position: 'absolute', ...at, width: ctx.u, height: ctx.u, padding: 0, borderRadius: '50%', cursor: 'pointer', zIndex: 6, pointerEvents: 'auto',
       display: 'flex', alignItems: 'center', justifyContent: 'center', boxSizing: 'border-box',
       background: bg ?? (lit ? '#ffd666' : 'rgba(14,16,24,0.82)'), color: lit ? '#111' : '#fff',
       border: `${ctx.u * 0.08}px solid rgba(255,255,255,${lit ? 1 : 0.75})`, boxShadow: `0 ${ctx.u * 0.08}px ${ctx.u * 0.25}px rgba(0,0,0,0.45)`,
@@ -394,6 +404,19 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
   }
   const u = ctx.u
   const roomy = box.w > u * 3.2 + ctx.seamIn * 2 && box.h > u * 2.4 + ctx.seamIn * 2
+  // A knob's place on the face (from a spot in this part), kept clear of
+  // the outer edge bars and inside the card, so every knob can be reached:
+  // a part against the card's edge, or bumped up out of its row, too.
+  const band = edgeBand(ctx.s), off = edgeOff(ctx.s)
+  // The card's own buttons in the face's top corners (picture, annotate
+  // pen) are kept clear too.
+  const corner = 22 / ctx.s
+  const place = (l: number, t: number): React.CSSProperties => {
+    const left = clamp(PAD + box.x + l, band, ctx.W - band - off - u)
+    let top = clamp(PAD + box.y - lift + t, band, ctx.H - band - off - u)
+    if (top < corner && (left < corner || left + u > ctx.W - corner)) top = corner
+    return { left, top }
+  }
 
   return (
     <div
@@ -405,7 +428,9 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
       onPointerDownCapture={onMoveDown}
       onWheel={onWheel}
       onPointerEnter={() => ctx.setHovered(d.id)}
-      onPointerLeave={() => ctx.setHovered(null)}
+      // Onto a seam or an edge bar (on the way to one of its knobs): it
+      // stays pointed at, so its knobs stay put.
+      onPointerLeave={e => { if (!overBar(e.relatedTarget)) ctx.setHovered(null) }}
       onDoubleClick={e => {
         e.stopPropagation()
         if (ctx.focus || moving) return
@@ -547,11 +572,31 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
           )}
         </div>
       </div>
+      {ctx.layer && (() => {
+      // Where each knob goes. "More" first, top right; its colour just left
+      // of it; the rest never on top of one already placed (a short or
+      // narrow part, or one against the card's edge): moved down past it.
+      const at: Record<string, { left: number; top: number }> = {}
+      const put = (k: string, p: React.CSSProperties) => {
+        let l = p.left as number, t = p.top as number
+        for (let n = 0; n < 4; n++) {
+          const hit = Object.values(at).find(o => Math.abs(o.left - l) < u * 1.05 && Math.abs(o.top - t) < u * 1.05)
+          if (!hit) break
+          t = hit.top + u * 1.15
+        }
+        at[k] = { left: l, top: t }
+      }
+      put('more', place(Math.max(0, box.w - u * 1.1), ctx.seamIn))
+      if (box.w > u * 2.4) at.color = { left: at.more.left - u * 1.15, top: at.more.top }
+      if (heads) put('fold', box.w < STAND_W ? place((box.w - u) / 2, Math.min(1, box.h - u)) : place(Math.min(1, box.w - u), (box.h + lift - u) / 2))
+      put('split-row', place(box.w - u - ctx.seamIn - u * 0.2, (box.h + lift - u) / 2))
+      put('split-col', place((box.w - u) / 2, box.h + lift - u - ctx.seamIn - u * 0.2))
+      return ReactDOM.createPortal(<>
       {/* A section's heading: fold the section to this strip, and back.
           Shown while pointed at, and always while folded (lit). */}
       {heads && (hovered || folded) && (
         <Knob ctx={ctx} tool="fold" lit={folded} title={folded ? 'Open this section' : 'Fold this section to one strip'}
-          at={box.w < STAND_W ? { left: (box.w - u) / 2, top: Math.min(1, box.h - u) } : { left: Math.min(1, box.w - u) , top: (box.h + lift - u) / 2 }}
+          at={at.fold}
           onClick={() => ctx.patch(sectionId(ctx, d.id)!, { fold: !folded })}>
           <Glyph ctx={ctx} d={FOLD} />
         </Knob>
@@ -560,26 +605,36 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
           edge), its colour, and more. */}
       {hovered && !moving && (<>
         {roomy && (<>
-          <Knob ctx={ctx} tool="split-row" title="Divide it side by side" at={{ left: box.w - u - ctx.seamIn - u * 0.2, top: (box.h + lift - u) / 2 }}
+          <Knob ctx={ctx} tool="split-row" title="Divide it side by side" at={at['split-row']}
             onClick={() => { const r = ctx.root(); if (r) ctx.write(splitDiv(r, d.id, 'row')) }}>
             <Glyph ctx={ctx} d={PLUS} />
           </Knob>
-          <Knob ctx={ctx} tool="split-col" title="Divide it top and bottom" at={{ left: (box.w - u) / 2, top: box.h + lift - u - ctx.seamIn - u * 0.2 }}
+          <Knob ctx={ctx} tool="split-col" title="Divide it top and bottom" at={at['split-col']}
             onClick={() => { const r = ctx.root(); if (r) ctx.write(splitDiv(r, d.id, 'col')) }}>
             <Glyph ctx={ctx} d={PLUS} />
           </Knob>
         </>)}
-        {box.w > u * 2.4 && (
-          <Knob ctx={ctx} tool="color" title="Colour" bg={d.color ?? '#5b8dd9'} at={{ left: box.w - u * 2.25, top: u * 0.15 }}
+        {at.color && (
+          <Knob ctx={ctx} tool="color" title="Colour" bg={d.color ?? '#5b8dd9'} at={at.color}
             onClick={e => ctx.openPicker(d.id, e.clientX, e.clientY)} />
         )}
-        <Knob ctx={ctx} tool="more" title="More" at={{ left: Math.max(0, box.w - u * 1.1), top: u * 0.15 }}
+        <Knob ctx={ctx} tool="more" title="More" at={at.more}
           onClick={e => ctx.openMenu(d.id, e.clientX, e.clientY)}>
           <Glyph ctx={ctx} d={MORE} />
         </Knob>
       </>)}
+      </>, ctx.layer)
+      })()}
     </div>
   )
+}
+
+/** A seam or an outer edge bar: passing over one keeps the part last
+ *  pointed at (and its knobs) as it is. */
+const overBar = (t: EventTarget | null) => t instanceof Element && !!t.closest('[data-scene-seam],[data-scene-edge],[data-scene-knobs]')
+/** Off a seam or edge bar onto neither a part nor a knob: nothing pointed at. */
+const offBar = (ctx: Ctx, t: EventTarget | null) => {
+  if (!(t instanceof Element) || !t.closest('[data-scene-div],[data-scene-knobs],[data-scene-seam],[data-scene-edge]')) ctx.setHovered(null)
 }
 
 const sectionId = (ctx: Ctx, leafId: string) => { const r = ctx.root(); return r ? sectionOf(r, leafId)?.id : undefined }
@@ -634,12 +689,16 @@ const Seam: React.FC<{ split: SceneDiv; i: number; box: Box; unit: number; ctx: 
   }
   const reach = seamReach(ctx.s)
   const [over, setOver] = useState(false)
+  // Its knobs are drawn on the face's knob layer (above every part, seam
+  // and edge bar): from a spot on the seam to a spot on the face.
+  const sx = PAD + (row ? box.x + box.w - (reach - GAP) / 2 : box.x), sy = PAD + (row ? box.y : box.y + box.h - (reach - GAP) / 2)
+  const on = (a: { left: number; top: number }) => ({ left: sx + a.left, top: sy + a.top })
   return (
     <div
       data-scene-seam={`${split.id}:${i}`}
       onPointerDown={onDown}
       onPointerEnter={() => setOver(true)}
-      onPointerLeave={() => setOver(false)}
+      onPointerLeave={e => { setOver(false); offBar(ctx, e.relatedTarget) }}
       onDoubleClick={e => e.stopPropagation()}
       style={{
         // Over every part, bumped ones too: an edge is always grabbable.
@@ -653,9 +712,10 @@ const Seam: React.FC<{ split: SceneDiv; i: number; box: Box; unit: number; ctx: 
       {(over || ctx.dragging) && <div style={{ flex: '0 0 auto', background: 'rgba(255,255,255,0.7)', borderRadius: 1, pointerEvents: 'none', ...(row ? { width: 2 / ctx.s, height: '100%' } : { height: 2 / ctx.s, width: '100%' }) }} />}
       {/* Pointed at: make the two parts one (in its middle), or break the
           line where another meets it (a T), so each half moves alone. */}
+      {ctx.layer && ReactDOM.createPortal(<>
       {over && !ctx.dragging && canMerge(split, i) && (
         <Knob ctx={ctx} tool="merge" title="Make these two one"
-          at={row ? { left: (reach - ctx.u) / 2, top: (box.h - ctx.u) / 2 } : { left: (box.w - ctx.u) / 2, top: (reach - ctx.u) / 2 }}
+          at={on(row ? { left: (reach - ctx.u) / 2, top: (box.h - ctx.u) / 2 } : { left: (box.w - ctx.u) / 2, top: (reach - ctx.u) / 2 })}
           onClick={() => { const r = ctx.root(); if (r) ctx.write(mergeParts(r, split.id, i)) }}>
           <Glyph ctx={ctx} d={row ? 'M1 5h3M2.6 3.4L4 5 2.6 6.6M9 5H6M7.4 3.4L6 5l1.4 1.6' : 'M5 1v3M3.4 2.6L5 4l1.6-1.4M5 9V6M3.4 7.4L5 6l1.6 1.4'} />
         </Knob>
@@ -668,12 +728,13 @@ const Seam: React.FC<{ split: SceneDiv; i: number; box: Box; unit: number; ctx: 
           ? { left: (reach - ctx.u) / 2, top: kb.y + kb.h + GAP / 2 - box.y - ctx.u / 2 }
           : { left: kb.x + kb.w + GAP / 2 - box.x - ctx.u / 2, top: (reach - ctx.u) / 2 }
         return (
-          <Knob key={`${cut}${j}`} ctx={ctx} tool="break-edge" title="Break this line here: each half moves on its own" at={at}
+          <Knob key={`${cut}${j}`} ctx={ctx} tool="break-edge" title="Break this line here: each half moves on its own" at={on(at)}
             onClick={() => { const r = ctx.root(); if (r) ctx.write(breakEdge(r, split.id, i, cut, j)) }}>
             <Glyph ctx={ctx} d={row ? 'M5 1v2.6M5 6.4V9M2.6 5h4.8' : 'M1 5h2.6M6.4 5H9M5 2.6v4.8'} />
           </Knob>
         )
       })}
+      </>, ctx.layer)}
     </div>
   )
 }
@@ -682,11 +743,11 @@ const Seam: React.FC<{ split: SceneDiv; i: number; box: Box; unit: number; ctx: 
  *  strip there as wide (or tall) as the whole face (Brian 2026-11-09). */
 const EdgeStrip: React.FC<{ side: 'top' | 'bottom' | 'left' | 'right'; W: number; H: number; ctx: Ctx; onAdd: () => void }> = ({ side, W, H, ctx, onAdd }) => {
   const [over, setOver] = useState(false)
-  const band = Math.max(PAD, 7 / ctx.s)
+  const band = edgeBand(ctx.s)
   const across = side === 'top' || side === 'bottom'
   // The card's own resize bars own the outer few pixels of the bottom and
   // right edges, so those strips sit just inside them.
-  const off = side === 'bottom' || side === 'right' ? 7 / ctx.s : 0
+  const off = side === 'bottom' || side === 'right' ? edgeOff(ctx.s) : 0
   const at: React.CSSProperties = across
     ? { left: band, width: W - band * 2, height: band, ...(side === 'top' ? { top: 0 } : { top: H - band - off }) }
     : { top: band, height: H - band * 2, width: band, ...(side === 'left' ? { left: 0 } : { left: W - band - off }) }
@@ -695,7 +756,7 @@ const EdgeStrip: React.FC<{ side: 'top' | 'bottom' | 'left' | 'right'; W: number
       data-scene-edge={side}
       title={across ? 'Add a row across the whole card here' : 'Add a column down the whole card here'}
       onPointerEnter={() => setOver(true)}
-      onPointerLeave={() => setOver(false)}
+      onPointerLeave={e => { setOver(false); offBar(ctx, e.relatedTarget) }}
       onPointerDown={stopPress}
       onDoubleClick={e => e.stopPropagation()}
       onClick={e => { e.stopPropagation(); if (!ctx.dragging) onAdd() }}
@@ -923,6 +984,7 @@ export const SceneFace: React.FC<{
   const [renaming, setRenaming] = useState<string | null>(null)
   const [noting, setNoting] = useState<string | null>(null)
   const [hoveredDiv, setHoveredDiv] = useState<string | null>(null)
+  const [layer, setLayer] = useState<HTMLDivElement | null>(null)
   const [moving, setMoving] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
   const [picker, setPicker] = useState<{ id: string; x: number; y: number } | null>(null)
@@ -990,6 +1052,7 @@ export const SceneFace: React.FC<{
     useBoardsStore.getState().setGroupSceneView(group.id, { ...(g?.sceneView ?? {}), ...patch })
   }
   const ctx: Ctx = {
+    layer, W, H,
     sceneId: group.id, s, u: TOOL_PX / s, seamIn: (seamReach(s) - GAP) / 2, boxes, groups, linking, renaming, setRenaming, noting, setNoting,
     picked, pick: id => { setPicked(id); if (id !== moving) setMoving(null) }, lit, hovered: hoveredDiv, setHovered: setHoveredDiv,
     moving, setMoving, dragging, setDragging,
@@ -1080,6 +1143,7 @@ export const SceneFace: React.FC<{
     <div
       ref={rootRef}
       data-scene-face={group.id}
+      onPointerLeave={() => setHoveredDiv(null)}
       style={{ position: 'absolute', inset: 0, overflow: 'hidden', borderRadius: '0 0 12px 12px' }}
     >
       <div style={{
@@ -1092,6 +1156,7 @@ export const SceneFace: React.FC<{
         {!linking && (['top', 'bottom', 'left', 'right'] as const).map(side => (
           <EdgeStrip key={side} side={side} W={W} H={H} ctx={ctx} onAdd={() => { const r = root(); if (r) ctx.write(addStrip(r, side)) }} />
         ))}
+        <div ref={setLayer} data-scene-knobs style={{ position: 'absolute', left: 0, top: 0, width: W, height: H, zIndex: 25, pointerEvents: 'none' }} />
       </div>
       {menu && menuItems && ReactDOM.createPortal(
         <MoreMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />,
