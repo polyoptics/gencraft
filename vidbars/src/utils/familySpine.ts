@@ -19,7 +19,7 @@ import { familyTree } from './family'
 import { normalizeStoryline, type StoryDot, type StoryEdge, type StorylineData } from './storyline'
 
 /** A card's face on the canvas (groupBounds less its docking margin). */
-function face(id: string) {
+export function face(id: string) {
   const b = groupBounds(id)
   const g = useBoardsStore.getState().groups.find(x => x.id === id)
   // As the card is drawn: its content, or its own size when bigger.
@@ -28,7 +28,7 @@ function face(id: string) {
 
 /** One place in the tree: a member (or an unknown parent: no card), the
  *  partners beside them, and the children of them all. */
-interface Unit { card?: string; partners: string[]; kids: Unit[] }
+export interface Unit { card?: string; partners: string[]; kids: Unit[] }
 
 /** A unit laid out, its own dot at 0,0: everything it holds, and the box
  *  it all takes (left, right, bottom). */
@@ -44,11 +44,6 @@ export function showFamilyTree(familyId: string): string | null {
   const faces = new Map<string, { x: number; y: number; w: number; h: number }>()
   for (const r of rows) if (usable(r.id, r.card)) faces.set(r.id, face(r.id)!)
   if (!faces.size) return null
-  const cw = Math.max(...[...faces.values()].map(f => f.w))
-  const ch = Math.max(...[...faces.values()].map(f => f.h))
-  // Gaps wide enough that cards never touch (touching cards make a deck).
-  const gapX = Math.max(cw * 0.3, 90), gapY = Math.max(ch * 0.4, 120), hang = Math.max(ch * 0.12, 50)
-
   // The rows (top down, each under its parents) as units.
   const tops: Unit[] = []
   const last: Unit[] = []
@@ -64,6 +59,21 @@ export function showFamilyTree(familyId: string): string | null {
     last[r.depth] = u
     last.length = r.depth + 1
   }
+
+  return showSpine(familyId, tops, faces)
+}
+
+/** `tops` laid out as a spine on a new storyline beside card `cardId`,
+ *  their cards (`faces`: as drawn) hung from its dots; bakes back into
+ *  `cardId`. Returns the storyline's node id. Used for families and
+ *  factions (utils/factionTree) alike. */
+export function showSpine(cardId: string, tops: Unit[], faces: Map<string, { x: number; y: number; w: number; h: number }>): string | null {
+  if (!faces.size) return null
+  const cw = Math.max(...[...faces.values()].map(f => f.w))
+  const ch = Math.max(...[...faces.values()].map(f => f.h))
+  // Gaps wide enough that cards never touch (touching cards make a deck).
+  const gapX = Math.max(cw * 0.3, 90), gapY = Math.max(ch * 0.4, 120), hang = Math.max(ch * 0.12, 50)
+
 
   // `dir`: the side its partners stand on (away from the trunk it hangs from).
   const lay = (u: Unit, dir: 1 | -1): Laid => {
@@ -136,11 +146,11 @@ export function showFamilyTree(familyId: string): string | null {
     base.push(...sub.level)
     right = x + sub.r
   }
-  // Baked back in (utils/chartCard), it folds into this family card.
-  const data: StorylineData = { dots, edges, base, chartCard: familyId }
+  // Baked back in (utils/chartCard), it folds into this card.
+  const data: StorylineData = { dots, edges, base, chartCard: cardId }
 
-  // Beside the family card, its top level with the card's top.
-  const fb = face(familyId)
+  // Beside the card, its top level with the card's top.
+  const fb = face(cardId)
   const left = Math.min(...dots.map(d => d.x)) - cw / 2
   const ox = (fb ? fb.x + fb.w + cw * 0.75 : faces.values().next().value!.x) - left
   const oy = fb ? fb.y : faces.values().next().value!.y
@@ -151,7 +161,7 @@ export function showFamilyTree(familyId: string): string | null {
   fs.updateFreeNode(id, normalizeStoryline(ox, oy, data))
   // Each card hangs from its dot: centred under it, just below.
   const groups = useBoardsStore.getState().groups
-  bs.setGroupPosBatch(dots.flatMap(d => {
+  useBoardsStore.getState().setGroupPosBatch(dots.flatMap(d => {
     const cid = d.cards?.[0]
     const f = cid ? faces.get(cid) : undefined
     const g = cid ? groups.find(x => x.id === cid) : undefined
