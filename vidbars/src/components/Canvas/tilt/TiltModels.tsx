@@ -27,7 +27,8 @@ import { useManip } from '../../../store/manipStore'
 let notesNow = useNotesStore.getState()
 useNotesStore.subscribe(s => { notesNow = s })
 
-/** Most models stood up at once — they are heavy. */
+/** Most models stood up at once — they are heavy (a 3D scene's own all
+ *  stand, over this if need be). */
 const MAX_MODELS = 12
 
 /** The 3D side, shared between the always-on TiltModels and the input in
@@ -2493,9 +2494,13 @@ function collectTargets(W: number, H: number): TiltTarget[] {
       }))
     }
   }
-  return out
-    .filter(t => Math.abs(t.u) < W && Math.abs(t.v) < H && t.w > 4)
-    .slice(0, MAX_MODELS)
+  const shown = out.filter(t => Math.abs(t.u) < W && Math.abs(t.v) < H && t.w > 4)
+  // A 3D scene's models all stand, however many models are in view (Brian
+  // 2026-11-09: zoomed out, the cap left them out); the cap holds for the
+  // rest.
+  const inScene = (t: TiltTarget) => (t.key.startsWith('card:') || t.key.startsWith('node:')) && !!sceneOf(t.key)
+  const scene = shown.filter(inScene)
+  return [...scene, ...shown.filter(t => !inScene(t)).slice(0, Math.max(0, MAX_MODELS - scene.length))]
 }
 
 
