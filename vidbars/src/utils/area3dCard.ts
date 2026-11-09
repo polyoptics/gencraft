@@ -19,7 +19,7 @@ import { useFreeNodeStore, type FreeNodeData } from '../store/freeNodeStore'
 import { useCanvasStore } from '../store/canvasStore'
 import { isUndoRestoring, useUndoCoordinator } from '../store/undoCoordinator'
 import { useModelScaleStore, type ScenePlace } from '../store/tiltStore'
-import { dockedCards } from './area3dScene'
+import { cardBox, dockedCards } from './area3dScene'
 import { cardFaceSize, createTextCard } from './cardGrid'
 import { makeLinkedCard, masterOf } from './linkedCards'
 
@@ -164,10 +164,14 @@ let writing = false
 /** Where a 3D area comes out of a card that has none yet: an empty mat
  *  just right of the card's top-right corner. */
 function freshMat(card: ProjectGroup): Area3dData {
-  const size = cardFaceSize()
-  const w = card.cardWidthOverride ?? size.w
-  const width = size.w * 6.4, height = width * 9 / 14
-  return { mat: { x: card.originX + w * 1.1, y: card.originY, width, height }, cards: [], tiles: [] }
+  const w = card.cardWidthOverride ?? cardFaceSize().w
+  // Clear of the card as it is drawn now (zoomed in, a card opens up wider
+  // than its face: the area came out under it, Brian 2026-11-09), and
+  // sized to the card, not to the zoom it is shown at.
+  const box = cardBox(card)
+  const right = Math.max(card.originX + w, box ? box.x + box.width : -Infinity)
+  const width = w * 6.4, height = width * 9 / 14
+  return { mat: { x: right + w * 0.15, y: card.originY, width, height }, cards: [], tiles: [] }
 }
 
 /** Brings card `cardId`'s 3D area out (an empty one the first time).
