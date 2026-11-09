@@ -51,10 +51,12 @@ export const HeroImageEditOverlay: React.FC<Props> = ({ cardRect, heroImage, ini
     // Dragging right should move the image right (i.e. the crop window moves left over the image).
     // background-position 50+X% shifts the image right, so drag direction matches naturally
     // BUT the visible crop shifts the opposite way — negate to make it feel like dragging the image.
+    // A flipped picture is drawn mirrored, so its shift is turned back round
+    // to keep it following the mouse on screen.
     setT(prev => ({
       ...prev,
-      offsetX: prev.offsetX - (dx / cardRect.width) * (100 / prev.scale),
-      offsetY: prev.offsetY - (dy / cardRect.height) * (100 / prev.scale),
+      offsetX: prev.offsetX - (prev.flipH ? -1 : 1) * (dx / cardRect.width) * (100 / prev.scale),
+      offsetY: prev.offsetY - (prev.flipV ? -1 : 1) * (dy / cardRect.height) * (100 / prev.scale),
     }))
   }, [cardRect.width, cardRect.height])
 

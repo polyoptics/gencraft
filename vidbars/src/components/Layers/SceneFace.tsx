@@ -386,9 +386,23 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
     e.preventDefault()
     const start = { x: e.clientX, y: e.clientY }, c0 = { ...crop }
     useUndoCoordinator.getState().checkpoint()
+    // A flipped picture is drawn mirrored about its crop spot, so a shift of
+    // the spot moves it the other way on screen, and faster: turn it back
+    // round and slow it to the speed an unflipped picture moves at, so it
+    // follows the mouse the same either way.
+    const img = divRef.current?.querySelector<HTMLImageElement>('img[data-scene-pic]')
+    const mirrored = (flip: boolean | undefined, side: 'w' | 'h') => {
+      if (!flip) return 1
+      if (!img || !img.naturalWidth || !img.naturalHeight || !img.clientWidth || !img.clientHeight) return -1
+      const fit = Math.max(img.clientWidth / img.naturalWidth, img.clientHeight / img.naturalHeight)
+      const room = side === 'w' ? img.clientWidth : img.clientHeight
+      const pic = c0.z * fit * (side === 'w' ? img.naturalWidth : img.naturalHeight)
+      return -Math.max(0, pic - room) / (pic + room)
+    }
+    const kx = mirrored(d.hero?.flipH, 'w'), ky = mirrored(d.hero?.flipV, 'h')
     const onMove = (ev: PointerEvent) => {
-      const dx = (ev.clientX - start.x) / ctx.s / Math.max(1, box.w) * 100 / c0.z
-      const dy = (ev.clientY - start.y) / ctx.s / Math.max(1, box.h) * 100 / c0.z
+      const dx = (ev.clientX - start.x) / ctx.s / Math.max(1, box.w) * 100 / c0.z * kx
+      const dy = (ev.clientY - start.y) / ctx.s / Math.max(1, box.h) * 100 / c0.z * ky
       const r = ctx.root()
       if (r) useBoardsStore.getState().setGroupScene(ctx.sceneId, patchDiv(r, d.id, { crop: { ...c0, x: clamp(c0.x - dx, 0, 100), y: clamp(c0.y - dy, 0, 100) } }))
     }
