@@ -113,6 +113,7 @@ const frameState = (): TiltFrameState => {
   const { unitsPerMetre: scales, sizeOf, poseOf, tintOf, stretchOf, lensOf } = useModelScaleStore.getState()
   const through = useManip.getState().through
   const placedMemo = new Map<string, boolean>()
+  const placed = (key: string) => { let v = placedMemo.get(key); if (v === undefined) { v = onArea3d(key); placedMemo.set(key, v) } return v }
   return {
     tilt: ts.tilt, spin: ts.spin, yaw: ts.yaw, shiftX: ts.shiftX, shiftY: ts.shiftY, glide: ts.glide, texture: ts.texture, shade: ts.shade, wire: ts.wire, light: ts.light, turn: ts.turn,
     walls: ts.walls, figure: ts.figure, hovered: models.hovered,
@@ -122,11 +123,14 @@ const frameState = (): TiltFrameState => {
     ]),
     unitsFor: url => scales[url],
     sizeFor: key => sizeOf[dataKey(key)] ?? 1,
-    poseFor: key => poseOf[dataKey(key)],
+    // Turn and stretch belong to a 3D set: off one (a master card left on
+    // the canvas when its set folds) a model stands as it came, never
+    // taking a set's rotation (Brian 2026-11-09).
+    poseFor: key => placed(key) ? poseOf[dataKey(key)] : undefined,
     tintFor: key => tintOf[dataKey(key)],
-    stretchFor: key => stretchOf[dataKey(key)],
+    stretchFor: key => placed(key) ? stretchOf[dataKey(key)] : undefined,
     manip: useManip.getState(),
-    placed: key => { let v = placedMemo.get(key); if (v === undefined) { v = onArea3d(key); placedMemo.set(key, v) } return v },
+    placed,
     slabs: live3d() ? collectSlabs(fadeShown()) : (dropLifts(), []),
     art: live3d() ? lastArt : [],
     fade: fadeShown(),
