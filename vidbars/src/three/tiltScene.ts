@@ -212,6 +212,8 @@ export const PERSON_H = 1.75
  *  every vertex, which is far too slow to redo each time a card comes
  *  back into view. */
 const measured = new Map<string, { size: THREE.Vector3; centre: THREE.Vector3; minY: number; triangles: number }>()
+/** A model file's triangles, once it has been loaded (the triangle budget). */
+export const trianglesOf = (url: string): number | undefined => measured.get(url)?.triangles
 
 interface Standing {
   url: string

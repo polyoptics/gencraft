@@ -15,15 +15,19 @@ interface ManipStore {
   mode: ManipMode
   local: boolean
   plane: ManipPlane
-  set: (p: Partial<Pick<ManipStore, 'mode' | 'local' | 'plane'>>) => void
+  /** Models stand up off cards out on the canvas in 3D (the 3D bar's
+   *  Models toggle, Brian 2026-11-09). A 3D scene's models always do. */
+  models: boolean
+  set: (p: Partial<Pick<ManipStore, 'mode' | 'local' | 'plane' | 'models'>>) => void
 }
 
 export const useManip = create<ManipStore>()(persist(set => ({
   mode: 'move',
   local: false,
   plane: 'cam',
+  models: true,
   set: p => set(p),
 }), {
   name: 'vidbars.manip',
-  partialize: s => ({ mode: s.mode, local: s.local, plane: s.plane }),
+  partialize: s => ({ mode: s.mode, local: s.local, plane: s.plane, models: s.models }),
 }))

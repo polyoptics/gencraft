@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { dataKey } from '../../../utils/area3dScene'
 import { useManip } from '../../../store/manipStore'
+import { useTiltStats } from './TiltModels'
 import { flushSync } from 'react-dom'
 import { useTiltStore, useModelScaleStore, offFlat, unprojectTilt, TILT_FAR } from '../../../store/tiltStore'
 import { useCanvasStore, MIN_ZOOM, MAX_ZOOM } from '../../../store/canvasStore'
@@ -903,6 +904,7 @@ export const TiltedView: React.FC = () => {
   })
   const set = useTiltStore.getState()
   const manip = useManip()
+  const stats = useTiltStats()
 
   return (
     <div
@@ -928,6 +930,13 @@ export const TiltedView: React.FC = () => {
         }}
       >
         <span>Tilted {Math.round(tilt)}° · click to select · drag a box to select many · Alt+drag orbits · Alt+middle pans · F frames</span>
+        <span style={{ width: 1, height: 14, background: 'rgba(255,255,255,0.12)' }} />
+        <button style={btn(manip.models)} onClick={() => manip.set({ models: !manip.models })} aria-pressed={manip.models} title="Models stand up off the cards on the canvas. Off, they stay flat; a 3D scene's models and a Viewer's still stand">Models</button>
+        {stats.held > 0 && (
+          <span style={{ color: '#ffcf5a' }} title={`The triangle budget (3 million) is full: ${stats.held} model${stats.held === 1 ? '' : 's'} in view, furthest from the middle, stay flat. Standing now: ${(stats.tris / 1e6).toFixed(1)} M triangles`}>
+            ⚠ {stats.held} flat
+          </span>
+        )}
         <span style={{ width: 1, height: 14, background: 'rgba(255,255,255,0.12)' }} />
         <button style={btn(manip.mode === 'move')} onClick={() => manip.set({ mode: 'move' })} title="Move handles on a selected model in a 3D scene (W). Ctrl-click an arrow to move on the plane across it; Ctrl-click the middle square for the camera's plane again">Move W</button>
         <button style={btn(manip.mode === 'rotate')} onClick={() => manip.set({ mode: 'rotate' })} title="Rotate handles (E). The dashed outer ring turns it on the camera's plane">Rotate E</button>

@@ -181,6 +181,9 @@ export interface ProjectGroup {
   /** A LINKED card: another showing of this master card (utils/linkedCards).
    *  An edit on either is an edit on both, and on every other showing. */
   linkOf?: string
+  /** Its model stays flat on it in 3D (right-click "Show model in 3D"
+   *  off, Brian 2026-11-09). */
+  hideModel3d?: boolean
   /** A chart baked into this card: a storyline and its cards, folded in
    *  (utils/chartCard). Its back lists the chart's groups. */
   chart?: import('../utils/chartData').ChartData

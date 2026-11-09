@@ -14,9 +14,11 @@ import { drawnRect } from './effectCards'
 
 type R = { x: number; y: number; width: number; height: number }
 
-/** How near a card's edge must come to the area's to dock (canvas units
- *  at 100%; more when zoomed out, as magnets). */
-const dockGap = () => Math.max(24, 12 / Math.max(useCanvasStore.getState().zoom, 0.01))
+/** How near a card's edge must come to the area's to dock (canvas units).
+ *  The same at every zoom: zoomed out, a wider gap let cards nearby join
+ *  the scene, and leave it again zooming in (magnets still snap a card
+ *  flush, from further off when zoomed out). */
+const dockGap = () => 24
 
 const touches = (a: R, b: R, gap: number) =>
   a.x <= b.x + b.width + gap && a.x + a.width >= b.x - gap && a.y <= b.y + b.height + gap && a.y + a.height >= b.y - gap

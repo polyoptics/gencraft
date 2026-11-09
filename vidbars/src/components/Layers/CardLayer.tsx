@@ -81,7 +81,7 @@ import { cardOrigins } from '../Canvas/StorylineLayer'
 import { rowOf, setRows } from '../../utils/primaryCard'
 import { wallRoom } from '../../utils/wallRoom'
 import { area3dOutOf, toggleArea3d } from '../../utils/area3dCard'
-import { sceneOf, dataKey } from '../../utils/area3dScene'
+import { sceneOf, dataKey, cardHoldsModel } from '../../utils/area3dScene'
 
 const BOARD_PADDING_X = 20
 
@@ -285,6 +285,16 @@ const CardContextMenu: React.FC<{
     if (group.cardType === 'area3d' || group.area3d) {
       const out = area3dOutOf(group.id)
       menuItems.push({ label: 'Show 3D scene', icon: '▦', lit: !!out, action: () => { toggleArea3d(group.id); onClose() } })
+    }
+    // A model card: its model stands up in 3D, or stays flat (Brian
+    // 2026-11-09: backups and master decks). On/off, lit while it stands.
+    if (cardHoldsModel(group, bs.boards)) {
+      const on = !group.hideModel3d
+      menuItems.push({ label: 'Show model in 3D', icon: '◆', lit: on, action: () => {
+        useUndoCoordinator.getState().checkpoint()
+        useBoardsStore.setState(s => ({ groups: s.groups.map(g => g.id === group.id ? { ...g, hideModel3d: on ? true : undefined } : g) }))
+        onClose()
+      } })
     }
     // A model card in a 3D scene: put its model back as it came, moved,
     // turned and sized nowhere (Brian 2026-11-09). Undoable.

@@ -16,7 +16,8 @@ import { setGlHidden } from '../../../three/viewportRenderer'
 import { getMediaItems } from '../../../types/bar'
 import { faceBlocks } from '../../../utils/cardGrid'
 import { selectStorylinesInBox, standingStories, storyWallOf } from '../StorylineLayer'
-import { createTiltScene, ART_MAX, type TiltTarget, type TiltFrameState, type ManipHit, type ManipPart, type TiltSlab, type TiltArt } from '../../../three/tiltScene'
+import { create } from 'zustand'
+import { createTiltScene, trianglesOf, ART_MAX, type TiltTarget, type TiltFrameState, type ManipHit, type ManipPart, type TiltSlab, type TiltArt } from '../../../three/tiltScene'
 import type { PinSpot } from '../../../three/notesOverlay'
 import { useNotesStore } from '../../../store/notesStore'
 import { PinLabels } from '../../Notes/PinLabels'
@@ -27,9 +28,17 @@ import { useManip } from '../../../store/manipStore'
 let notesNow = useNotesStore.getState()
 useNotesStore.subscribe(s => { notesNow = s })
 
-/** Most models stood up at once — they are heavy (a 3D scene's own all
- *  stand, over this if need be). */
-const MAX_MODELS = 12
+/** Models stand up while their triangles fit this budget (Brian
+ *  2026-11-09: a count of 12 left cubes out), nearest the middle first; a
+ *  3D scene's own always stand. MAX_MODELS: a ceiling on the count all the
+ *  same. A file not loaded yet counts as UNKNOWN_TRIS. */
+const TRI_BUDGET = 3_000_000
+const MAX_MODELS = 400
+const UNKNOWN_TRIS = 100_000
+
+/** What the triangle budget held back in the last frame, for the 3D bar's
+ *  warning: models not stood up, and the triangles standing. */
+export const useTiltStats = create<{ held: number; tris: number }>(() => ({ held: 0, tris: 0 }))
 
 /** The 3D side, shared between the always-on TiltModels and the input in
  *  TiltedView. */
@@ -163,7 +172,7 @@ function frameSig(st: TiltFrameState, W: number, H: number): string {
  *  is idle, and the models on screen are loaded and uploaded while still
  *  flat (when the view settles, and the moment Alt goes down). The first
  *  frames of a tilt then only draw. Only the cards in view are kept — at
- *  most MAX_MODELS — so memory follows what is on screen. */
+ *  within the triangle budget — so memory follows what is on screen. */
 export const TiltModels: React.FC = () => {
   const rootRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -2495,12 +2504,30 @@ function collectTargets(W: number, H: number): TiltTarget[] {
     }
   }
   const shown = out.filter(t => Math.abs(t.u) < W && Math.abs(t.v) < H && t.w > 4)
-  // A 3D scene's models all stand, however many models are in view (Brian
-  // 2026-11-09: zoomed out, the cap left them out); the cap holds for the
-  // rest.
+  // A card set to keep its model flat ("Show model in 3D" off).
+  const groups = useBoardsStore.getState().groups
+  const flatCard = (key: string) => key.startsWith('card:') && [key, dataKey(key)].some(k => groups.find(g => g.id === k.slice(5))?.hideModel3d)
   const inScene = (t: TiltTarget) => (t.key.startsWith('card:') || t.key.startsWith('node:')) && !!sceneOf(t.key)
-  const scene = shown.filter(inScene)
-  return [...scene, ...shown.filter(t => !inScene(t)).slice(0, Math.max(0, MAX_MODELS - scene.length))]
+  // A 3D scene's models all stand (Brian 2026-11-09: zoomed out, a cap
+  // left them out). The rest, if the 3D bar's Models is on (a Viewer's
+  // always), nearest the middle first, while they fit the triangle budget.
+  const scene = shown.filter(t => inScene(t) && !flatCard(t.key))
+  const canvasOn = useManip.getState().models
+  const rest = shown
+    .filter(t => !inScene(t) && !flatCard(t.key) && (canvasOn || t.key.startsWith('viewer:')))
+    .sort((a, b) => (a.u * a.u + a.v * a.v) - (b.u * b.u + b.v * b.v))
+  const keep = [...scene]
+  let tris = scene.reduce((n, t) => n + (trianglesOf(t.url) ?? UNKNOWN_TRIS), 0)
+  let held = 0
+  for (const t of rest) {
+    const n = trianglesOf(t.url) ?? UNKNOWN_TRIS
+    if (keep.length >= MAX_MODELS || tris + n > TRI_BUDGET) { held++; continue }
+    keep.push(t)
+    tris += n
+  }
+  const st = useTiltStats.getState()
+  if (st.held !== held || st.tris !== tris) useTiltStats.setState({ held, tris })
+  return keep
 }
 
 
