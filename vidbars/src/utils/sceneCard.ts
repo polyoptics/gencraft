@@ -152,6 +152,81 @@ export function splitDiv(root: SceneDiv, id: string, dir: 'row' | 'col'): SceneD
   return edit(root, id, d => ({ id: newDetailId(), dir, sizes: [0.5, 0.5], kids: [d, fresh] }))
 }
 
+/** A strip along an edge of the whole face, as wide (or tall) as the face
+ *  (Brian 2026-11-09): a row across the bottom, a column down a side. */
+export function addStrip(root: SceneDiv, side: 'top' | 'bottom' | 'left' | 'right', share = 0.14): SceneDiv {
+  const fresh = leaf('Section', PALETTE[colorTurn++ % PALETTE.length])
+  const dir = side === 'top' || side === 'bottom' ? 'col' : 'row'
+  const first = side === 'top' || side === 'left'
+  // Already laid that way: one more part along it (never above a heading).
+  if (!isLeaf(root) && root.dir === dir && !(first && canFold(root))) {
+    const sizes = (root.sizes ?? root.kids!.map(() => 1 / root.kids!.length)).map(x => x * (1 - share))
+    return first
+      ? { ...root, kids: [fresh, ...root.kids!], sizes: [share, ...sizes] }
+      : { ...root, kids: [...root.kids!, fresh], sizes: [...sizes, share] }
+  }
+  return { id: newDetailId(), dir, sizes: first ? [share, 1 - share] : [1 - share, share], kids: first ? [fresh, root] : [root, fresh] }
+}
+
+/** Parts i and i+1 of a split can become one (both single parts). */
+export const canMerge = (split: SceneDiv, i: number): boolean =>
+  !!split.kids && !!split.kids[i] && !!split.kids[i + 1] && isLeaf(split.kids[i]) && isLeaf(split.kids[i + 1])
+
+/** Parts i and i+1 of a split made one: the first keeps its face and card;
+ *  the second's notes go under its own. */
+export function mergeParts(root: SceneDiv, splitId: string, i: number): SceneDiv {
+  return edit(root, splitId, d => {
+    if (!canMerge(d, i)) return d
+    const a = d.kids![i], b = d.kids![i + 1]
+    const sizes = [...(d.sizes ?? d.kids!.map(() => 1 / d.kids!.length))]
+    const notes = [a.notes, b.notes].map(x => (x ?? '').trim()).filter(Boolean).join('\n')
+    const one: SceneDiv = { ...a, notes: notes || undefined, image: a.image ?? b.image }
+    const kids = [...d.kids!]
+    kids.splice(i, 2, one)
+    sizes.splice(i, 2, sizes[i] + sizes[i + 1])
+    return kids.length === 1 ? kids[0] : { ...d, kids, sizes: normal(sizes) }
+  })
+}
+
+/** Where the line between parts i and i+1 of a split can be broken: the
+ *  other side is one part and this side is cut across it (a T). Each break
+ *  is (which side is cut, the cut's index in it). */
+export function edgeBreaks(split: SceneDiv, i: number): { cut: 'a' | 'b'; j: number }[] {
+  const a = split.kids?.[i], b = split.kids?.[i + 1]
+  if (!a || !b) return []
+  const across = (d: SceneDiv) => !isLeaf(d) && d.dir !== split.dir && !d.fold
+  const out: { cut: 'a' | 'b'; j: number }[] = []
+  if (isLeaf(a) && across(b)) b.kids!.slice(1).forEach((_, j) => out.push({ cut: 'b', j }))
+  if (isLeaf(b) && across(a)) a.kids!.slice(1).forEach((_, j) => out.push({ cut: 'a', j }))
+  return out
+}
+
+/** Break the line between parts i and i+1 at a T (Brian 2026-11-09): the
+ *  single part opposite the cut is cut there too (a new part under it), so
+ *  each half of the line moves on its own. */
+export function breakEdge(root: SceneDiv, splitId: string, i: number, cut: 'a' | 'b', j: number): SceneDiv {
+  return edit(root, splitId, s => {
+    const sizes = s.sizes ?? s.kids!.map(() => 1 / s.kids!.length)
+    const a = s.kids![i], b = s.kids![i + 1]
+    const cutSide = cut === 'a' ? a : b, whole = cut === 'a' ? b : a
+    if (isLeaf(cutSide) || !isLeaf(whole)) return s
+    const cs = cutSide.sizes ?? cutSide.kids!.map(() => 1 / cutSide.kids!.length)
+    const part = (from: number, to: number): SceneDiv => {
+      const ks = cutSide.kids!.slice(from, to)
+      return ks.length === 1 ? ks[0] : { id: newDetailId(), dir: cutSide.dir, kids: ks, sizes: normal(cs.slice(from, to)) }
+    }
+    const top = cs.slice(0, j + 1).reduce((x, y) => x + y, 0)
+    const twin = leaf('Section', whole.color ?? PALETTE[0])
+    const inner = normal([sizes[i], sizes[i + 1]])
+    const pair = (w: SceneDiv, c: SceneDiv): SceneDiv => ({ id: newDetailId(), dir: s.dir, sizes: inner, kids: cut === 'a' ? [c, w] : [w, c] })
+    const z: SceneDiv = { id: newDetailId(), dir: cutSide.dir, sizes: normal([top, 1 - top]), kids: [pair(whole, part(0, j + 1)), pair(twin, part(j + 1, cutSide.kids!.length))] }
+    const kids = [...s.kids!], ss = [...sizes]
+    kids.splice(i, 2, z)
+    ss.splice(i, 2, sizes[i] + sizes[i + 1])
+    return kids.length === 1 ? z : { ...s, kids, sizes: normal(ss) }
+  })
+}
+
 /** Take a division away; its neighbour takes its space. The last one stays. */
 export function removeDiv(root: SceneDiv, id: string): SceneDiv {
   if (leaves(root).length <= 1) return root

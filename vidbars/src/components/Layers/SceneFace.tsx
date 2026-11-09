@@ -33,7 +33,7 @@ import { useLinkDragStore } from '../../store/linkDragStore'
 import { cardTitle } from '../../utils/faceStyle'
 import { CARD_TYPES } from '../../utils/cardTypes'
 import {
-  canFold, divBoxes, findDiv, heldCard, isLeaf, leaves, litDivisions, needOf, patchDiv, removeDiv, resizeSplit, sectionOf, shareUnits, splitDiv, takeCard,
+  addStrip, breakEdge, canFold, canMerge, divBoxes, edgeBreaks, findDiv, mergeParts, heldCard, isLeaf, leaves, litDivisions, needOf, patchDiv, removeDiv, resizeSplit, sectionOf, shareUnits, splitDiv, takeCard,
   type SceneDiv, type SceneView,
 } from '../../utils/sceneCard'
 import { GroupCardText } from './CardLayer'
@@ -109,6 +109,8 @@ type Ctx = {
   openPicker: (id: string, x: number, y: number) => void
   /** How far a seam's grab reaches into the parts beside it (layout units). */
   seamIn: number
+  /** Every part's box (layout units). */
+  boxes: Map<string, Box>
   /** Change a division (with an undo step unless step is false). */
   patch: (id: string, p: Partial<SceneDiv>, step?: boolean) => void
 }
@@ -649,6 +651,63 @@ const Seam: React.FC<{ split: SceneDiv; i: number; box: Box; unit: number; ctx: 
       }}
     >
       {(over || ctx.dragging) && <div style={{ flex: '0 0 auto', background: 'rgba(255,255,255,0.7)', borderRadius: 1, pointerEvents: 'none', ...(row ? { width: 2 / ctx.s, height: '100%' } : { height: 2 / ctx.s, width: '100%' }) }} />}
+      {/* Pointed at: make the two parts one (in its middle), or break the
+          line where another meets it (a T), so each half moves alone. */}
+      {over && !ctx.dragging && canMerge(split, i) && (
+        <Knob ctx={ctx} tool="merge" title="Make these two one"
+          at={row ? { left: (reach - ctx.u) / 2, top: (box.h - ctx.u) / 2 } : { left: (box.w - ctx.u) / 2, top: (reach - ctx.u) / 2 }}
+          onClick={() => { const r = ctx.root(); if (r) ctx.write(mergeParts(r, split.id, i)) }}>
+          <Glyph ctx={ctx} d={row ? 'M1 5h3M2.6 3.4L4 5 2.6 6.6M9 5H6M7.4 3.4L6 5l1.4 1.6' : 'M5 1v3M3.4 2.6L5 4l1.6-1.4M5 9V6M3.4 7.4L5 6l1.6 1.4'} />
+        </Knob>
+      )}
+      {over && !ctx.dragging && edgeBreaks(split, i).map(({ cut, j }) => {
+        const side = split.kids![cut === 'a' ? i : i + 1]
+        const kb = ctx.boxes.get(side.kids![j].id)
+        if (!kb) return null
+        const at = row
+          ? { left: (reach - ctx.u) / 2, top: kb.y + kb.h + GAP / 2 - box.y - ctx.u / 2 }
+          : { left: kb.x + kb.w + GAP / 2 - box.x - ctx.u / 2, top: (reach - ctx.u) / 2 }
+        return (
+          <Knob key={`${cut}${j}`} ctx={ctx} tool="break-edge" title="Break this line here: each half moves on its own" at={at}
+            onClick={() => { const r = ctx.root(); if (r) ctx.write(breakEdge(r, split.id, i, cut, j)) }}>
+            <Glyph ctx={ctx} d={row ? 'M5 1v2.6M5 6.4V9M2.6 5h4.8' : 'M1 5h2.6M6.4 5H9M5 2.6v4.8'} />
+          </Knob>
+        )
+      })}
+    </div>
+  )
+}
+
+/** Along an outer edge of the face: pointed at, a "+" bar; a click adds a
+ *  strip there as wide (or tall) as the whole face (Brian 2026-11-09). */
+const EdgeStrip: React.FC<{ side: 'top' | 'bottom' | 'left' | 'right'; W: number; H: number; ctx: Ctx; onAdd: () => void }> = ({ side, W, H, ctx, onAdd }) => {
+  const [over, setOver] = useState(false)
+  const band = Math.max(PAD, 7 / ctx.s)
+  const across = side === 'top' || side === 'bottom'
+  // The card's own resize bars own the outer few pixels of the bottom and
+  // right edges, so those strips sit just inside them.
+  const off = side === 'bottom' || side === 'right' ? 7 / ctx.s : 0
+  const at: React.CSSProperties = across
+    ? { left: band, width: W - band * 2, height: band, ...(side === 'top' ? { top: 0 } : { top: H - band - off }) }
+    : { top: band, height: H - band * 2, width: band, ...(side === 'left' ? { left: 0 } : { left: W - band - off }) }
+  return (
+    <div
+      data-scene-edge={side}
+      title={across ? 'Add a row across the whole card here' : 'Add a column down the whole card here'}
+      onPointerEnter={() => setOver(true)}
+      onPointerLeave={() => setOver(false)}
+      onPointerDown={stopPress}
+      onDoubleClick={e => e.stopPropagation()}
+      onClick={e => { e.stopPropagation(); if (!ctx.dragging) onAdd() }}
+      style={{ position: 'absolute', zIndex: 21, cursor: 'copy', display: 'flex', alignItems: 'center', justifyContent: 'center', ...at }}
+    >
+      {over && !ctx.dragging && (<>
+        <div style={{ position: 'absolute', inset: across ? `${band * 0.3}px 0` : `0 ${band * 0.3}px`, borderRadius: band, background: 'rgba(255,214,102,0.35)', border: `${0.6 / ctx.s * 1.5}px dashed rgba(255,214,102,0.95)`, pointerEvents: 'none' }} />
+        <div style={{
+          position: 'relative', width: ctx.u, height: ctx.u, borderRadius: '50%', background: '#ffd666', color: '#111', display: 'flex',
+          alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', boxShadow: `0 ${ctx.u * 0.08}px ${ctx.u * 0.25}px rgba(0,0,0,0.45)`,
+        }}><Glyph ctx={ctx} d={PLUS} /></div>
+      </>)}
     </div>
   )
 }
@@ -931,7 +990,7 @@ export const SceneFace: React.FC<{
     useBoardsStore.getState().setGroupSceneView(group.id, { ...(g?.sceneView ?? {}), ...patch })
   }
   const ctx: Ctx = {
-    sceneId: group.id, s, u: TOOL_PX / s, seamIn: (seamReach(s) - GAP) / 2, groups, linking, renaming, setRenaming, noting, setNoting,
+    sceneId: group.id, s, u: TOOL_PX / s, seamIn: (seamReach(s) - GAP) / 2, boxes, groups, linking, renaming, setRenaming, noting, setNoting,
     picked, pick: id => { setPicked(id); if (id !== moving) setMoving(null) }, lit, hovered: hoveredDiv, setHovered: setHoveredDiv,
     moving, setMoving, dragging, setDragging,
     openMenu: (id, x, y) => setMenu({ id, x, y }),
@@ -1030,6 +1089,9 @@ export const SceneFace: React.FC<{
         <div style={{ position: 'absolute', left: PAD, top: PAD, width: iw, height: ih }}>
           {parts}
         </div>
+        {!linking && (['top', 'bottom', 'left', 'right'] as const).map(side => (
+          <EdgeStrip key={side} side={side} W={W} H={H} ctx={ctx} onAdd={() => { const r = root(); if (r) ctx.write(addStrip(r, side)) }} />
+        ))}
       </div>
       {menu && menuItems && ReactDOM.createPortal(
         <MoreMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />,
