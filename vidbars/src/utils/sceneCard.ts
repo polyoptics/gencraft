@@ -49,6 +49,9 @@ export interface SceneDiv {
    *  the card as it is now (never written to it); its look stays its own.
    *  Typing in it stops the following and keeps what showed. */
   live?: boolean
+  /** Its icon, used when it is shown small: a picture (absent: its own
+   *  picture) and how it is framed (x/y in %, z zoom). */
+  icon?: { image?: string; x: number; y: number; z: number }
   /** Its label: in the middle (on unless false) and/or a small tab on its
    *  top-right edge. Separate on/off switches. */
   mid?: boolean
@@ -245,6 +248,18 @@ export function shareUnits(d: SceneDiv, box: { w: number; h: number }, gap: numb
   let fixed = 0, share = 0
   d.kids!.forEach((k, i) => { if (k.fold && canFold(k)) fixed += FOLD_STRIP; else share += sizes[i] })
   return Math.max(0, room - fixed) / (share || 1)
+}
+
+/** The least room a part needs (layout units) to show all it holds
+ *  without tucking in. */
+export function needOf(d: SceneDiv, gap: number): { w: number; h: number } {
+  if (isLeaf(d)) return { w: TUCK_W, h: TUCK_H }
+  if (d.fold && canFold(d)) return { w: FOLD_STRIP, h: FOLD_STRIP }
+  const ks = d.kids!.map(k => (k.fold && canFold(k) ? { w: FOLD_STRIP, h: FOLD_STRIP } : needOf(k, gap)))
+  const gaps = gap * (ks.length - 1)
+  return d.dir === 'row'
+    ? { w: ks.reduce((a, k) => a + k.w, 0) + gaps, h: Math.max(...ks.map(k => k.h)) }
+    : { w: Math.max(...ks.map(k => k.w)), h: ks.reduce((a, k) => a + k.h, 0) + gaps }
 }
 
 /** Below this room (layout units) a part is too small to read: the

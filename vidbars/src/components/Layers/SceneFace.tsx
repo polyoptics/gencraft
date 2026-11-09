@@ -33,7 +33,7 @@ import { useLinkDragStore } from '../../store/linkDragStore'
 import { cardTitle } from '../../utils/faceStyle'
 import { CARD_TYPES } from '../../utils/cardTypes'
 import {
-  canFold, divBoxes, findDiv, heldCard, isLeaf, leaves, litDivisions, patchDiv, removeDiv, resizeSplit, sectionOf, shareUnits, splitDiv, takeCard,
+  canFold, divBoxes, findDiv, heldCard, isLeaf, leaves, litDivisions, needOf, patchDiv, removeDiv, resizeSplit, sectionOf, shareUnits, splitDiv, takeCard,
   type SceneDiv, type SceneView,
 } from '../../utils/sceneCard'
 import { GroupCardText } from './CardLayer'
@@ -41,6 +41,7 @@ import { openDivision } from '../../utils/sceneOpen'
 import { cardChanged, copyFrom, migrateScene, refreshDivision, shownContent } from '../../utils/sceneContent'
 import { useCanvasStore } from '../../store/canvasStore'
 import { ColorPickerPopup } from '../Bar/ColorPickerPopup'
+import { DEFAULT_BODY_STYLE, DEFAULT_HEADER_STYLE } from '../../store/freeNodeStore'
 import { area3dOutOf, toggleArea3d } from '../../utils/area3dCard'
 
 /** Laid out at a new card's size and scaled with the card, like its back. */
@@ -106,6 +107,8 @@ type Ctx = {
   setDragging: (on: boolean) => void
   openMenu: (id: string, x: number, y: number) => void
   openPicker: (id: string, x: number, y: number) => void
+  /** How far a seam's grab reaches into the parts beside it (layout units). */
+  seamIn: number
   /** Change a division (with an undo step unless step is false). */
   patch: (id: string, p: Partial<SceneDiv>, step?: boolean) => void
 }
@@ -234,6 +237,26 @@ const wordFit = (t: string, w: number) => {
   return Math.max(0, w) / (longest * 0.62)
 }
 
+/** A small framed picture: a rounded rectangle, framed by `crop`. */
+const Thumb: React.FC<{ src: string; crop: { x: number; y: number; z: number }; w: number; h: number; line?: boolean }> = ({ src, crop, w, h, line = true }) => (
+  <div data-scene-thumb style={{
+    flex: '0 0 auto', width: w, height: h, borderRadius: Math.max(0.6, h * 0.12), overflow: 'hidden', position: 'relative',
+    border: line ? `${Math.max(0.3, h * 0.05)}px solid rgba(255,255,255,0.85)` : undefined, boxSizing: 'border-box', boxShadow: '0 0.5px 1.5px rgba(0,0,0,0.4)',
+  }}>
+    <img src={src} alt="" draggable={false} style={{
+      position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', pointerEvents: 'none',
+      objectPosition: `${crop.x}% ${crop.y}%`, transformOrigin: `${crop.x}% ${crop.y}%`, transform: `scale(${crop.z})`,
+    }} />
+  </div>
+)
+const THUMB = 4 / 3
+
+/** A division's icon, shown when it is small: its set icon, or its picture. */
+const iconOf = (d: SceneDiv, pic: string | null) => {
+  const src = d.icon?.image ?? pic
+  return src ? { src, crop: d.icon ?? d.crop ?? { x: 50, y: 50, z: 1 } } : null
+}
+
 const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; folded: boolean; inside?: SceneDiv[] }> = ({ d, box, ctx, heads, folded, inside }) => {
   const srcId = heldCard(d)
   const src = srcId ? ctx.groups.find(g => g.id === srcId) : undefined
@@ -270,19 +293,47 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
     ctx.pick(d.id)
   })
   // Click a name or notes and type: no panel, no second click.
+  // Its own face, sized as its text shows now, so nothing jumps when it
+  // opens for typing.
+  const faceScale = clamp(Math.min(box.w / NAT_W, box.h / (NAT_H * 0.5)), 0.12, 2.5)
+  const giveFace = () => {
+    if (d.face) return
+    ctx.patch(d.id, {
+      face: true,
+      hstyle: d.hstyle ?? { ...DEFAULT_HEADER_STYLE, fontSize: Math.round(nameFont / faceScale * 10) / 10 },
+      bstyle: d.bstyle ?? { ...DEFAULT_BODY_STYLE, fontSize: Math.round(textFont / faceScale * 10) / 10, align: 'center' },
+    }, true)
+  }
+  // Full size: the card's own editor, toolbar and all (it gets a face of
+  // its own first). Small: a plain line to type in.
+  const divRef = useRef<HTMLDivElement>(null)
+  const faceEdit = (field: 'header' | 'body') => {
+    giveFace()
+    const go = () => {
+      divRef.current?.querySelector('[data-card-text]')?.dispatchEvent(new CustomEvent('start-edit', { bubbles: false, detail: { field } }))
+      // The caret at the end of what is there, ready to add to it.
+      requestAnimationFrame(() => {
+        const a = document.activeElement as HTMLTextAreaElement | HTMLInputElement | null
+        if (a && typeof a.setSelectionRange === 'function' && divRef.current?.contains(a)) a.setSelectionRange(a.value.length, a.value.length)
+      })
+    }
+    requestAnimationFrame(() => requestAnimationFrame(go))
+  }
   const nameClick = useClick(ctx, e => {
     if (ctx.focus) return
     e.stopPropagation()
     freeze()
     ctx.pick(d.id)
-    ctx.setRenaming(d.id)
+    if (state === 'full') faceEdit('header')
+    else ctx.setRenaming(d.id)
   })
   const notesClick = useClick(ctx, e => {
     if (ctx.focus) return
     e.stopPropagation()
     freeze()
     ctx.pick(d.id)
-    ctx.setNoting(d.id)
+    if (state === 'full') faceEdit('body')
+    else ctx.setNoting(d.id)
   })
   const shadow = '0 0.5px 1.5px rgba(0,0,0,0.75)'
   const nameEl = ctx.renaming === d.id
@@ -290,25 +341,20 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
     : header
       ? <span data-scene-name={d.id} {...nameClick} style={{ cursor: 'text', pointerEvents: 'auto' }}>{header}</span>
       : null
-  const round = (size: number) => pic && (
-    <div style={{
-      flex: '0 0 auto', width: size, height: size, borderRadius: '50%', overflow: 'hidden',
-      border: `${Math.max(0.4, size * 0.04)}px solid rgba(255,255,255,0.85)`, boxSizing: 'border-box', boxShadow: '0 0.5px 1.5px rgba(0,0,0,0.4)',
-    }}>
-      <img src={pic} alt="" draggable={false} style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: `${crop.x}% ${crop.y}%`, pointerEvents: 'none' }} />
-    </div>
-  )
+  // Small: a rectangle of its icon (set, or its own picture).
+  const ic = iconOf(d, pic)
+  const thumb = (h: number, w = h * THUMB) => ic && <Thumb src={ic.src} crop={ic.crop} w={w} h={h} />
 
   // The parts tucked inside this heading: a small round picture each, or a
   // dot in its colour.
   const dots = (size: number, wrap: boolean) => inside && inside.length > 0 && (
     <div data-scene-inside style={{ display: 'flex', flexWrap: wrap ? 'wrap' : 'nowrap', justifyContent: 'center', gap: size * 0.3, maxWidth: '100%', overflow: 'hidden', flex: '0 1 auto', minWidth: 0 }}>
-      {inside.slice(0, 24).map(l => ({ l, img: shownContent(l, ctx.groups.find(g => g.id === heldCard(l))).image })).map(({ l, img }) => (
+      {inside.slice(0, 24).map(l => ({ l, ic: iconOf(l, shownContent(l, ctx.groups.find(g => g.id === heldCard(l))).image ?? null) })).map(({ l, ic }) => (
         <div key={l.id} title={l.name} style={{
-          flex: '0 0 auto', width: size, height: size, borderRadius: '50%', background: l.color ?? '#5b8dd9', overflow: 'hidden',
+          flex: '0 0 auto', width: size * THUMB, height: size, borderRadius: Math.max(0.4, size * 0.2), background: l.color ?? '#5b8dd9', overflow: 'hidden', position: 'relative',
           border: `${Math.max(0.3, size * 0.1)}px solid rgba(255,255,255,0.8)`, boxSizing: 'border-box',
         }}>
-          {img && <img src={img} alt="" draggable={false} style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: `${l.crop?.x ?? 50}% ${l.crop?.y ?? 50}%`, pointerEvents: 'none' }} />}
+          {ic && <img src={ic.src} alt="" draggable={false} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', objectPosition: `${ic.crop.x}% ${ic.crop.y}%`, transformOrigin: `${ic.crop.x}% ${ic.crop.y}%`, transform: `scale(${ic.crop.z})`, pointerEvents: 'none' }} />}
         </div>
       ))}
     </div>
@@ -338,10 +384,11 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
     if (r) useBoardsStore.getState().setGroupScene(ctx.sceneId, patchDiv(r, d.id, { crop: { ...crop, z: clamp(crop.z * (e.deltaY < 0 ? 1.08 : 1 / 1.08), 1, 6) } }))
   }
   const u = ctx.u
-  const roomy = box.w > u * 3.2 && box.h > u * 2.4
+  const roomy = box.w > u * 3.2 + ctx.seamIn * 2 && box.h > u * 2.4 + ctx.seamIn * 2
 
   return (
     <div
+      ref={divRef}
       data-scene-div={d.id}
       data-scene-state={state}
       data-link-drop={`division:${ctx.sceneId}:${d.id}`}
@@ -355,12 +402,12 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
         if (ctx.focus || moving) return
         // Write in it as on a card: it gets a face of its own (its name the
         // header) and its header opens for typing, with the toolbar.
-        if (!d.face) ctx.patch(d.id, { face: true }, true)
+        giveFace()
         const el = e.currentTarget as HTMLElement
         requestAnimationFrame(() => el.querySelector('[data-card-text]')?.dispatchEvent(new CustomEvent('start-edit', { bubbles: false })))
       }}
       style={{
-        position: 'absolute', left: box.x, top: box.y - lift, width: box.w, height: box.h + lift, zIndex: hovered ? 6 : bump ? 3 : picked ? 2 : 1,
+        position: 'absolute', left: box.x, top: box.y - lift, width: box.w, height: box.h + lift, zIndex: bump ? (hovered ? 16 : 13) : hovered ? 6 : picked ? 2 : 1,
         filter: faded ? 'grayscale(0.85) brightness(0.5)' : undefined, opacity: faded ? 0.75 : 1,
         transition: ctx.dragging ? 'filter 0.18s, opacity 0.18s' : 'left 0.24s ease, top 0.24s ease, width 0.24s ease, height 0.24s ease, filter 0.18s, opacity 0.18s',
         cursor: moving ? 'move' : undefined,
@@ -387,7 +434,7 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
             position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: pic || text ? 'flex-start' : 'center', gap: 1.5,
             padding: `0 ${heads ? u * 1.1 : 2}px`, boxSizing: 'border-box', overflow: 'hidden', color: '#fff', textShadow: shadow, pointerEvents: 'none',
           }}>
-            {round(box.h * 0.78)}
+            {thumb(box.h * 0.74)}
             {nameEl && <span style={{ flex: '0 1 auto', fontSize: nameFont, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>{nameEl}</span>}
             {text && <span style={{ flex: '1 1 0', fontSize: textFont * 0.85, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0, opacity: 0.9 }}>{text}</span>}
             {dots(box.h * 0.42, false)}
@@ -398,27 +445,39 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
             position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1.5,
             padding: '2px 0', boxSizing: 'border-box', overflow: 'hidden', color: '#fff', textShadow: shadow, pointerEvents: 'none',
           }}>
-            {round(box.w * 0.78)}
+            {thumb(box.w * 0.78 / THUMB, box.w * 0.78)}
             {header && <span style={{
               writingMode: 'vertical-rl', transform: 'rotate(180deg)', fontSize: nameFont, fontWeight: 700, whiteSpace: 'nowrap',
               overflow: 'hidden', textOverflow: 'ellipsis', minHeight: 0, flex: '1 1 0', textAlign: 'end',
             }}>{header}</span>}
           </div>
         ) : state === 'icon' ? (
-          // An icon: round picture, its header under it.
-          <div style={{
-            position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 1,
-            padding: 1.5, boxSizing: 'border-box', overflow: 'hidden', color: '#fff', textShadow: shadow, pointerEvents: 'none', textAlign: 'center',
-          }}>
-            {round(Math.min(box.w * 0.62, box.h * 0.58))}
-            {nameEl && <div style={{ fontSize: nameFont, fontWeight: 700, lineHeight: 1.1, maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nameEl}</div>}
-          </div>
+          // An icon: its picture as a rectangle, its text beside it (under
+          // it when the box stands tall).
+          (() => {
+            const side = box.w > box.h * 1.1
+            const th = side ? Math.min(box.h * 0.8, box.w * 0.42 / THUMB) : Math.min(box.h * 0.52, box.w * 0.8 / THUMB)
+            return (
+              <div style={{
+                position: 'absolute', inset: 0, display: 'flex', flexDirection: side ? 'row' : 'column', alignItems: 'center', justifyContent: 'center', gap: 1.5,
+                padding: 1.5, boxSizing: 'border-box', overflow: 'hidden', color: '#fff', textShadow: shadow, pointerEvents: 'none', textAlign: side ? 'left' : 'center',
+              }}>
+                {thumb(th)}
+                <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, maxWidth: '100%', gap: 0.5, overflow: 'hidden', flex: side ? '1 1 0' : '0 0 auto' }}>
+                  {nameEl && <div style={{ flex: '0 0 auto', fontSize: nameFont, fontWeight: 700, lineHeight: 1.15, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nameEl}</div>}
+                  {text && (side
+                    ? <div style={{ flex: '0 0 auto', fontSize: textFont * 0.9, lineHeight: 1.2, opacity: 0.9, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical' }}>{text}</div>
+                    : <div style={{ flex: '0 0 auto', fontSize: textFont * 0.9, lineHeight: 1.2, opacity: 0.9, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{text.replace(/\s*\n\s*/g, ' · ')}</div>)}
+                </div>
+              </div>
+            )
+          })()
         ) : d.face ? (
           // Its own card face: drawn and edited as a card's is, with the
           // same toolbar (fonts, spacing, split...). Never the card's.
           <GroupCardText groupId={ctx.sceneId} heroImage={pic} onCropImage={() => { ctx.pick(d.id); ctx.setMoving(d.id) }} bind={{
             header, body: shown.notes, headerStyle: d.hstyle, bodyStyle: d.bstyle, split: d.split, hero: d.hero,
-            scale: clamp(Math.min(box.w / NAT_W, box.h / (NAT_H * 0.5)), 0.12, 2.5),
+            scale: faceScale,
             setHeader: v => ctx.patch(d.id, d.live && src ? { ...copyFrom(src, false), live: false, name: v } : { name: v }),
             setBody: v => ctx.patch(d.id, d.live && src ? { ...copyFrom(src, false), live: false, notes: v } : { notes: v }),
             setHeaderStyle: st => ctx.patch(d.id, { hstyle: st }, true),
@@ -439,6 +498,11 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
               : picked && !inside?.length && <div data-scene-notes-add {...notesClick} style={{ fontSize: textFont, opacity: 0.55, fontStyle: 'italic', cursor: 'text', pointerEvents: 'auto', textShadow: shadow }}>notes</div>}
           </div>
         )}
+        {state === 'full' && d.face && inside && inside.length > 0 ? (
+          <div style={{ position: 'absolute', left: 0, right: 0, bottom: Math.max(1, box.h * 0.08), display: 'flex', justifyContent: 'center', pointerEvents: 'none', zIndex: 2 }}>
+            {dots(clamp(Math.min(box.w, box.h) * 0.1, 2.5, 6), true)}
+          </div>
+        ) : null}
         {changed && (
           // The card it came from changed since: a small mark; a click
           // takes the new content (its look and crop stay).
@@ -489,11 +553,11 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
           edge), its colour, and more. */}
       {hovered && !moving && (<>
         {roomy && (<>
-          <Knob ctx={ctx} tool="split-row" title="Divide it side by side" at={{ left: box.w - u * 0.5, top: (box.h + lift - u) / 2 }}
+          <Knob ctx={ctx} tool="split-row" title="Divide it side by side" at={{ left: box.w - u - ctx.seamIn - u * 0.2, top: (box.h + lift - u) / 2 }}
             onClick={() => { const r = ctx.root(); if (r) ctx.write(splitDiv(r, d.id, 'row')) }}>
             <Glyph ctx={ctx} d={PLUS} />
           </Knob>
-          <Knob ctx={ctx} tool="split-col" title="Divide it top and bottom" at={{ left: (box.w - u) / 2, top: box.h + lift - u * 0.5 }}
+          <Knob ctx={ctx} tool="split-col" title="Divide it top and bottom" at={{ left: (box.w - u) / 2, top: box.h + lift - u - ctx.seamIn - u * 0.2 }}
             onClick={() => { const r = ctx.root(); if (r) ctx.write(splitDiv(r, d.id, 'col')) }}>
             <Glyph ctx={ctx} d={PLUS} />
           </Knob>
@@ -525,6 +589,10 @@ const OpenIcon: React.FC<{ size: number; color: string }> = ({ size, color }) =>
 
 /** The line between two parts of a split: drag it to share the space
  *  between them differently. */
+/** A seam's grab width (layout units): at least 9 screen px, so the edge
+ *  is easy to find. */
+const seamReach = (s: number) => Math.max(GAP + 1.6, 9 / s)
+
 const Seam: React.FC<{ split: SceneDiv; i: number; box: Box; unit: number; ctx: Ctx }> = ({ split, i, box, unit, ctx }) => {
   const row = split.dir === 'row'
   const onDown = (e: React.PointerEvent) => {
@@ -538,10 +606,18 @@ const Seam: React.FC<{ split: SceneDiv; i: number; box: Box; unit: number; ctx: 
     const start = row ? e.clientX : e.clientY
     useUndoCoordinator.getState().checkpoint()
     ctx.setDragging(true)
+    // Neither side is squeezed past what it holds: it stops where the
+    // part would have to tuck its contents in (or where it is now, if it
+    // is already smaller than that).
     const MIN = 0.02
+    const need = (k: SceneDiv, now: number) => {
+      const n = needOf(k, GAP)
+      return Math.max(MIN, Math.min(now, (row ? n.w : n.h) / Math.max(1, unit)))
+    }
+    const minA = need(split.kids![i], a0), minB = need(split.kids![i + 1], b0)
     const onMove = (ev: PointerEvent) => {
       const d = ((row ? ev.clientX : ev.clientY) - start) / ctx.s / Math.max(1, unit)
-      const a = Math.max(MIN, Math.min(a0 + b0 - MIN, a0 + d))
+      const a = Math.max(minA, Math.min(a0 + b0 - minB, a0 + d))
       const r = ctx.root()
       if (r) useBoardsStore.getState().setGroupScene(ctx.sceneId, resizeSplit(r, split.id, i, a, a0 + b0 - a))
     }
@@ -549,19 +625,26 @@ const Seam: React.FC<{ split: SceneDiv; i: number; box: Box; unit: number; ctx: 
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
   }
-  const reach = GAP + 1.6
+  const reach = seamReach(ctx.s)
+  const [over, setOver] = useState(false)
   return (
     <div
       data-scene-seam={`${split.id}:${i}`}
       onPointerDown={onDown}
+      onPointerEnter={() => setOver(true)}
+      onPointerLeave={() => setOver(false)}
       onDoubleClick={e => e.stopPropagation()}
       style={{
-        position: 'absolute', zIndex: 5, cursor: row ? 'col-resize' : 'row-resize',
+        // Over every part, bumped ones too: an edge is always grabbable.
+        position: 'absolute', zIndex: 20, cursor: row ? 'col-resize' : 'row-resize', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        flexDirection: row ? 'row' : 'column',
         ...(row
           ? { left: box.x + box.w - (reach - GAP) / 2, top: box.y, width: reach, height: box.h }
           : { left: box.x, top: box.y + box.h - (reach - GAP) / 2, width: box.w, height: reach }),
       }}
-    />
+    >
+      {(over || ctx.dragging) && <div style={{ flex: '0 0 auto', background: 'rgba(255,255,255,0.7)', borderRadius: 1, pointerEvents: 'none', ...(row ? { width: 2 / ctx.s, height: '100%' } : { height: 2 / ctx.s, width: '100%' }) }} />}
+    </div>
   )
 }
 
@@ -585,6 +668,72 @@ const Toggle: React.FC<{ on: boolean; title: string; tool: string; onClick: () =
 
 /** A division's "more": a small list by it, each line a switch (lit while
  *  on) or an action. Closes on a pick, a press elsewhere or Esc. */
+/** Set a division's icon (Brian 2026-11-09): the picture it shows when
+ *  small, framed by dragging (pan) and the wheel (zoom); any picture can be
+ *  chosen for it. Every change shows at once on the card. */
+const IconEditor: React.FC<{
+  x: number; y: number; src: string | null; icon: SceneDiv['icon']; own: boolean
+  onChange: (icon: SceneDiv['icon']) => void; onClose: () => void
+}> = ({ x, y, src, icon, own, onChange, onClose }) => {
+  const ref = useRef<HTMLDivElement>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
+  const c = icon ?? { x: 50, y: 50, z: 1 }
+  useEffect(() => {
+    const onDown = (e: PointerEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) onClose() }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' || e.key === 'Enter') onClose() }
+    window.addEventListener('pointerdown', onDown, true)
+    window.addEventListener('keydown', onKey)
+    return () => { window.removeEventListener('pointerdown', onDown, true); window.removeEventListener('keydown', onKey) }
+  }, [onClose])
+  const FW = 168, FH = FW / THUMB
+  const onPan = (e: React.PointerEvent) => {
+    if (e.button !== 0 || !src) return
+    e.preventDefault()
+    const start = { x: e.clientX, y: e.clientY }, c0 = { ...c }
+    const move = (ev: PointerEvent) => onChange({
+      ...icon, x: clamp(c0.x - (ev.clientX - start.x) / FW * 100 / c0.z, 0, 100), y: clamp(c0.y - (ev.clientY - start.y) / FH * 100 / c0.z, 0, 100), z: c0.z,
+    })
+    const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
+  const btn = (label: string, tool: string, act: () => void) => (
+    <button type="button" data-scene-icon-tool={tool} onClick={act} style={{
+      height: 22, padding: '0 8px', border: '1px solid rgba(255,255,255,0.18)', borderRadius: 5, cursor: 'pointer',
+      background: 'rgba(255,255,255,0.06)', color: '#e6e9ef', fontSize: 11, fontFamily: 'inherit', whiteSpace: 'nowrap',
+    }}>{label}</button>
+  )
+  return (
+    <div ref={ref} data-scene-icon-editor onPointerDown={e => e.stopPropagation()} style={{
+      position: 'fixed', left: Math.min(x + 6, window.innerWidth - FW - 30), top: Math.min(y + 6, window.innerHeight - FH - 110), zIndex: 10000,
+      padding: 8, borderRadius: 8, background: 'rgba(18,20,28,0.97)', border: '1px solid rgba(255,255,255,0.14)', boxShadow: '0 6px 20px rgba(0,0,0,0.55)',
+      display: 'flex', flexDirection: 'column', gap: 6, fontFamily: 'inherit', color: '#e6e9ef', fontSize: 11,
+    }}>
+      <div>Icon <span style={{ opacity: 0.55 }}>drag to frame, wheel to zoom</span></div>
+      <div data-scene-icon-frame onPointerDown={onPan}
+        onWheel={e => { if (!src) return; e.stopPropagation(); onChange({ ...icon, x: c.x, y: c.y, z: clamp(c.z * (e.deltaY < 0 ? 1.08 : 1 / 1.08), 1, 6) }) }}
+        style={{ width: FW, height: FH, borderRadius: 8, overflow: 'hidden', position: 'relative', background: '#2a2d38', cursor: src ? 'move' : 'default' }}>
+        {src
+          ? <img src={src} alt="" draggable={false} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', objectPosition: `${c.x}% ${c.y}%`, transformOrigin: `${c.x}% ${c.y}%`, transform: `scale(${c.z})`, pointerEvents: 'none' }} />
+          : <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0.5 }}>No picture yet</div>}
+      </div>
+      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+        {btn('Choose picture…', 'choose', () => fileRef.current?.click())}
+        {icon?.image && own && btn('Use its own picture', 'own', () => onChange({ x: 50, y: 50, z: 1 }))}
+        {icon && btn('Clear', 'clear', () => onChange(undefined))}
+      </div>
+      <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={e => {
+        const f = e.target.files?.[0]
+        if (!f) return
+        const rd = new FileReader()
+        rd.onload = () => onChange({ image: String(rd.result), x: 50, y: 50, z: 1 })
+        rd.readAsDataURL(f)
+        e.target.value = ''
+      }} />
+    </div>
+  )
+}
+
 const MoreMenu: React.FC<{
   x: number; y: number; onClose: () => void
   items: { label: string; tool: string; lit?: boolean; danger?: boolean; act: () => void }[]
@@ -644,6 +793,7 @@ export const SceneFace: React.FC<{
   const [dragging, setDragging] = useState(false)
   const [picker, setPicker] = useState<{ id: string; x: number; y: number } | null>(null)
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null)
+  const [iconEdit, setIconEdit] = useState<{ id: string; x: number; y: number } | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const scene = group.scene
   const view: SceneView = group.sceneView ?? {}
@@ -662,7 +812,7 @@ export const SceneFace: React.FC<{
     const onDown = (e: PointerEvent) => {
       const t = e.target as Node | null
       if (rootRef.current && t && rootRef.current.contains(t)) return
-      if ((t as HTMLElement | null)?.closest?.('[data-color-picker], [data-scene-more], [data-text-format-toolbar]')) return
+      if ((t as HTMLElement | null)?.closest?.('[data-color-picker], [data-scene-more], [data-scene-icon-editor], [data-text-format-toolbar]')) return
       setPicked(null)
     }
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setPicked(null) }
@@ -706,7 +856,7 @@ export const SceneFace: React.FC<{
     useBoardsStore.getState().setGroupSceneView(group.id, { ...(g?.sceneView ?? {}), ...patch })
   }
   const ctx: Ctx = {
-    sceneId: group.id, s, u: TOOL_PX / s, groups, linking, renaming, setRenaming, noting, setNoting,
+    sceneId: group.id, s, u: TOOL_PX / s, seamIn: (seamReach(s) - GAP) / 2, groups, linking, renaming, setRenaming, noting, setNoting,
     picked, pick: id => { setPicked(id); if (id !== moving) setMoving(null) }, lit, hovered: hoveredDiv, setHovered: setHoveredDiv,
     moving, setMoving, dragging, setDragging,
     openMenu: (id, x, y) => setMenu({ id, x, y }),
@@ -761,7 +911,8 @@ export const SceneFace: React.FC<{
   const edit = (fn: (r: SceneDiv) => SceneDiv) => { const r = root(); if (r) ctx.write(fn(r)) }
   const pickedColor = picker ? leaves(scene).find(l => l.id === picker.id)?.color ?? '#5b8dd9' : '#5b8dd9'
   const anyMode = !!view.focus || !!view.trace
-  const showModes = (hover || anyMode) && !linking
+  // On a small card the pill would cover it: shown there only while a mode is on.
+  const showModes = ((hover && width >= 240) || anyMode) && !linking
 
   // The "more" list for a division.
   const menuDiv = menu ? findDiv(scene, menu.id) : null
@@ -772,6 +923,7 @@ export const SceneFace: React.FC<{
       { label: 'Bump out (stand taller)', tool: 'bump', lit: !!d.bump, act: () => edit(r => patchDiv(r, d.id, { bump: !d.bump })) },
       { label: 'Open as its own scene card', tool: 'open', lit: !!d.opens && groups.some(g => g.id === d.opens), act: () => openDivision(group.id, d.id) },
     ]
+    items.push({ label: 'Set icon…', tool: 'icon', lit: !!d.icon, act: () => { useUndoCoordinator.getState().checkpoint(); setIconEdit({ id: d.id, x: menu!.x, y: menu!.y }) } })
     if (sec) items.push({ label: 'Fold this section', tool: 'fold-section', lit: !!sec.fold, act: () => edit(r => patchDiv(r, sec.id, { fold: !sec.fold })) })
     if (d.image) {
       items.push({ label: 'Move picture', tool: 'move-picture', lit: moving === d.id, act: () => { setPicked(d.id); setMoving(moving === d.id ? null : d.id) } })
@@ -849,6 +1001,17 @@ export const SceneFace: React.FC<{
         <MoreMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />,
         document.body,
       )}
+      {iconEdit && (() => {
+        const d = findDiv(scene, iconEdit.id)
+        if (!d || !isLeaf(d)) return null
+        const own = shownContent(d, groups.find(g => g.id === heldCard(d))).image ?? null
+        return ReactDOM.createPortal(
+          <IconEditor x={iconEdit.x} y={iconEdit.y} src={d.icon?.image ?? own} icon={d.icon} own={!!own}
+            onChange={icon => { const r = root(); if (r) useBoardsStore.getState().setGroupScene(group.id, patchDiv(r, d.id, { icon })) }}
+            onClose={() => setIconEdit(null)} />,
+          document.body,
+        )
+      })()}
       {picker && ReactDOM.createPortal(
         <div data-color-picker>
           <ColorPickerPopup

@@ -5369,10 +5369,12 @@ export const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void
   React.useEffect(() => {
     const el = wrapperRef.current
     if (!el) return
-    const handler = () => startEditHeader()
+    // detail.field 'body' opens the paragraph text instead (a scene
+    // division's notes clicked).
+    const handler = (e: Event) => { if ((e as CustomEvent).detail?.field === 'body') startEditBody(); else startEditHeader() }
     el.addEventListener('start-edit', handler)
     return () => el.removeEventListener('start-edit', handler)
-  }, [startEditHeader])
+  }, [startEditHeader, startEditBody])
 
   React.useEffect(() => {
     if (!selected) return
