@@ -16,6 +16,7 @@ import { groupBounds } from '../store/canvasStore'
 import { useFreeNodeStore } from '../store/freeNodeStore'
 import { useUndoCoordinator } from '../store/undoCoordinator'
 import { familyTree } from './family'
+import { linkedHeight, makeLinkedCard } from './linkedCards'
 import { normalizeStoryline, type StoryDot, type StoryEdge, type StorylineData } from './storyline'
 
 /** A card's face on the canvas (groupBounds less its docking margin). */
@@ -69,11 +70,16 @@ export function showFamilyTree(familyId: string): string | null {
  *  factions (utils/factionTree) alike. */
 export function showSpine(cardId: string, tops: Unit[], faces: Map<string, { x: number; y: number; w: number; h: number }>): string | null {
   if (!faces.size) return null
-  const cw = Math.max(...[...faces.values()].map(f => f.w))
-  const ch = Math.max(...[...faces.values()].map(f => f.h))
-  // Gaps wide enough that cards never touch (touching cards make a deck).
-  const gapX = Math.max(cw * 0.3, 90), gapY = Math.max(ch * 0.4, 120), hang = Math.max(ch * 0.12, 50)
-
+  // Never the masters (Brian 2026-11-09): the tree is LINKED cards
+  // (utils/linkedCards), all at one even width, the masters' middle width
+  // (not the zoom's new-card size, which is huge zoomed out), each in its
+  // master's shape; the masters stay exactly where they are.
+  const ws = [...faces.values()].map(f => f.w).sort((a, b) => a - b)
+  const cw = ws[Math.floor((ws.length - 1) / 2)]
+  const sizes = new Map([...faces.keys()].map(m => [m, Math.min(cw * 2, linkedHeight(m, cw, faces.get(m)!.h) ?? cw * 1.4)]))
+  const ch = Math.max(...sizes.values())
+  // Gaps just wide enough that cards never touch (touching cards make a deck).
+  const gapX = Math.max(cw * 0.3, 24), gapY = Math.max(ch * 0.45, 60), hang = Math.max(ch * 0.15, 44)
 
   // `dir`: the side its partners stand on (away from the trunk it hangs from).
   const lay = (u: Unit, dir: 1 | -1): Laid => {
@@ -156,14 +162,30 @@ export function showSpine(cardId: string, tops: Unit[], faces: Map<string, { x: 
   const oy = fb ? fb.y : faces.values().next().value!.y
 
   useUndoCoordinator.getState().checkpoint()
+  // A linked card for each master on a dot, hung centred under it.
+  const linkOf = new Map<string, string>()
+  for (const d of dots) {
+    const m = d.cards?.[0]
+    if (!m) continue
+    const l = makeLinkedCard(m)
+    if (!l) { d.cards = undefined; continue }
+    linkOf.set(m, l)
+    d.cards = [l]
+  }
+  useBoardsStore.setState(s => ({
+    groups: s.groups.map(g => {
+      const m = g.linkOf && linkOf.get(g.linkOf) === g.id ? g.linkOf : null
+      return m ? { ...g, cardWidthOverride: cw, cardHeightOverride: sizes.get(m), flipped: false,
+        deckState: undefined, deckAnchorId: undefined, deckOffsetX: undefined, deckOffsetY: undefined, nestedDeck: undefined, deckLastFront: undefined, deckLock: undefined } : g
+    }),
+  }))
   const fs = useFreeNodeStore.getState()
   const id = fs.addFreeNode(0, 0, 'storyline')
   fs.updateFreeNode(id, normalizeStoryline(ox, oy, data))
-  // Each card hangs from its dot: centred under it, just below.
   const groups = useBoardsStore.getState().groups
   useBoardsStore.getState().setGroupPosBatch(dots.flatMap(d => {
     const cid = d.cards?.[0]
-    const f = cid ? faces.get(cid) : undefined
+    const f = cid ? face(cid) : null
     const g = cid ? groups.find(x => x.id === cid) : undefined
     if (!cid || !f || !g) return []
     const tx = ox + d.x - f.w / 2, ty = oy + d.y + hang
