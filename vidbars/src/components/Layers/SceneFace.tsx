@@ -508,13 +508,14 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
           // Its own card face: drawn and edited as a card's is, with the
           // same toolbar (fonts, spacing, split...). Never the card's.
           <GroupCardText groupId={ctx.sceneId} heroImage={pic} onCropImage={() => { ctx.pick(d.id); ctx.setMoving(d.id) }} bind={{
-            header, body: shown.notes, headerStyle: d.hstyle, bodyStyle: d.bstyle, split: d.split, hero: d.hero,
+            header, body: shown.notes, headerStyle: d.hstyle, bodyStyle: d.bstyle, split: d.split, hero: d.hero, pad: d.pad,
             scale: faceScale,
-            setHeader: v => ctx.patch(d.id, d.live && src ? { ...copyFrom(src, false), live: false, name: v } : { name: v }),
-            setBody: v => ctx.patch(d.id, d.live && src ? { ...copyFrom(src, false), live: false, notes: v } : { notes: v }),
+            setHeader: v => v !== header && ctx.patch(d.id, d.live && src ? { ...copyFrom(src, false), live: false, name: v } : { name: v }),
+            setBody: v => v !== shown.notes && ctx.patch(d.id, d.live && src ? { ...copyFrom(src, false), live: false, notes: v } : { notes: v }),
             setHeaderStyle: st => ctx.patch(d.id, { hstyle: st }, true),
             setBodyStyle: st => ctx.patch(d.id, { bstyle: st }, true),
             setSplit: r => ctx.patch(d.id, { split: r }, false),
+            setPad: pad => ctx.patch(d.id, { pad }, false),
             setHero: h => ctx.patch(d.id, { hero: h }, false),
           }} />
         ) : (

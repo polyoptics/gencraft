@@ -36,6 +36,7 @@ import { HeroImageLayer } from './HeroImageLayer'
 import { CardBack, FlipButton, backColor, useCardFlip } from './CardBack'
 import { liveLocks, lockOf, withLockMates } from '../../utils/deckLock'
 import { SceneFace } from './SceneFace'
+import type { TextPad } from '../../utils/sceneCard'
 import { ChangeMenu, MarkTags, StateFace } from './StateFace'
 import { allChanges, toggleCardMark } from '../../utils/stateCard'
 import { fillTestCup } from '../../utils/stateTest'
@@ -5280,6 +5281,84 @@ const cardDisplayStyle = (ts: TextStyle, bg: string, hasText: boolean): React.CS
   cursor: 'text',
 })
 
+const DEFAULT_PAD: TextPad = { t: 4, r: 4, b: 10, l: 4 }
+
+/** A face's four text margins (a scene division's, FaceBind.pad): a line
+ *  on each side, dragged like the split line, and a link switch (lit while
+ *  on) that moves all four together. Shown while editing and pointed at. */
+const TextMargins: React.FC<{ pad: TextPad; visible: boolean; onChange: (p: TextPad) => void }> = ({ pad, visible, onChange }) => {
+  const [dragging, setDragging] = useState<'t' | 'r' | 'b' | 'l' | null>(null)
+  const [over, setOver] = useState<'t' | 'r' | 'b' | 'l' | null>(null)
+  const ref = useRef<HTMLDivElement>(null)
+  if (!visible && !dragging) return null
+  const onDown = (side: 't' | 'r' | 'b' | 'l') => (e: React.PointerEvent) => {
+    if (e.button !== 0) return
+    e.stopPropagation()
+    e.preventDefault()
+    // The box the margins sit in: its size in text px, and on screen.
+    const box = ref.current?.parentElement
+    if (!box) return
+    const r = box.getBoundingClientRect()
+    const w = box.offsetWidth, h = box.offsetHeight
+    const kx = w / Math.max(1, r.width), ky = h / Math.max(1, r.height)
+    useUndoCoordinator.getState().checkpoint()
+    setDragging(side)
+    const p0 = { ...pad }
+    const onMove = (ev: PointerEvent) => {
+      const x = (ev.clientX - r.left) * kx, y = (ev.clientY - r.top) * ky
+      const want = side === 't' ? y : side === 'b' ? h - y : side === 'l' ? x : w - x
+      // Never so deep that no room is left for the text.
+      const twin = side === 't' ? p0.b : side === 'b' ? p0.t : side === 'l' ? p0.r : p0.l
+      const room = (side === 't' || side === 'b' ? h : w) - 12
+      const v = Math.round(Math.max(0, Math.min(want, p0.link ? room / 2 : room - twin)))
+      onChange(p0.link ? { t: v, r: v, b: v, l: v, link: true } : { ...p0, [side]: v })
+    }
+    const onUp = () => { setDragging(null); window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp) }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }
+  const GRAB = 8
+  const line = (side: 't' | 'r' | 'b' | 'l') => {
+    const across = side === 't' || side === 'b'
+    const hot = dragging === side || (!!pad.link && !!dragging) || over === side
+    const at: React.CSSProperties = side === 't' ? { left: 0, right: 0, top: pad.t - GRAB / 2, height: GRAB }
+      : side === 'b' ? { left: 0, right: 0, bottom: pad.b - GRAB / 2, height: GRAB }
+      : side === 'l' ? { top: 0, bottom: 0, left: pad.l - GRAB / 2, width: GRAB }
+      : { top: 0, bottom: 0, right: pad.r - GRAB / 2, width: GRAB }
+    const ink = hot ? 'rgba(255,214,102,0.95)' : 'rgba(255,214,102,0.6)'
+    return (
+      <div key={side} data-text-margin={side} title="Drag: how close the text comes to this border"
+        onPointerDown={onDown(side)} onPointerEnter={() => setOver(side)} onPointerLeave={() => setOver(null)}
+        style={{ position: 'absolute', ...at, cursor: across ? 'row-resize' : 'col-resize', pointerEvents: 'auto', zIndex: 3, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={across
+          ? { width: '100%', height: 0, borderTop: `${hot ? 2 : 1}px ${hot ? 'solid' : 'dashed'} ${ink}` }
+          : { height: '100%', width: 0, borderLeft: `${hot ? 2 : 1}px ${hot ? 'solid' : 'dashed'} ${ink}` }} />
+      </div>
+    )
+  }
+  return (
+    <div ref={ref} data-text-margins style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 3 }}>
+      {(['t', 'r', 'b', 'l'] as const).map(line)}
+      <button type="button" data-text-margin-link title="Link all four margins: drag one, all move"
+        onPointerDown={e => { e.stopPropagation(); e.preventDefault() }}
+        onClick={e => {
+          e.stopPropagation()
+          useUndoCoordinator.getState().checkpoint()
+          const v = Math.round((pad.t + pad.r + pad.b + pad.l) / 4)
+          onChange(pad.link ? { ...pad, link: false } : { t: v, r: v, b: v, l: v, link: true })
+        }}
+        style={{
+          position: 'absolute', left: Math.max(0, pad.l + 2), bottom: Math.max(0, pad.b + 2), width: 18, height: 18, padding: 0, borderRadius: '50%',
+          pointerEvents: 'auto', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 4,
+          background: pad.link ? '#ffd666' : 'rgba(14,16,24,0.82)', color: pad.link ? '#111' : '#fff',
+          border: `1px solid rgba(255,255,255,${pad.link ? 1 : 0.75})`,
+        }}>
+        <svg width="12" height="12" viewBox="0 0 12 12"><path d="M5 7l2-2M4.2 5.6L3 6.8a1.7 1.7 0 0 0 2.4 2.4l1.2-1.2M7.8 6.4L9 5.2A1.7 1.7 0 0 0 6.6 2.8L5.4 4" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" /></svg>
+      </button>
+    </div>
+  )
+}
+
 /** Draggable divider between header and body text areas */
 const TextSplitDivider: React.FC<{
   ratio: number
@@ -5358,6 +5437,10 @@ export interface FaceBind {
   setHeaderStyle: (s: TextStyle) => void
   setBodyStyle: (s: TextStyle) => void
   setSplit: (r: number) => void
+  /** Text margins (a scene division's face): how close its text comes to
+   *  each border. Given, the four margin lines show while editing. */
+  pad?: TextPad
+  setPad?: (p: TextPad) => void
   setHero: (h: { flipH?: boolean; flipV?: boolean; opacity?: number }) => void
 }
 
@@ -5387,6 +5470,7 @@ export const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void
   const [editingField, setEditingField] = useState<'header' | 'body' | null>(null)
   const [activeField, setActiveField] = useState<TextFieldMode>('header')
   const [selected, setSelected] = useState(false)
+  const [pointed, setPointed] = useState(false)
   const [headerVal, setHeaderVal] = useState('')
   const [bodyVal, setBodyVal] = useState('')
   const wrapperRef = useRef<HTMLDivElement>(null)
@@ -5487,8 +5571,11 @@ export const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void
   React.useEffect(() => { headerValRef.current = headerVal }, [headerVal])
   React.useEffect(() => { bodyValRef.current = bodyVal }, [bodyVal])
 
+  const pad = bind?.setPad ? { ...DEFAULT_PAD, ...bind.pad } : null
   return (
-    <div ref={wrapperRef} data-card-text style={{ position: 'absolute', inset: 0, zIndex: 1, transform: `scale(${textScale})`, transformOrigin: 'top left', width: `${100 / textScale}%`, height: `${100 / textScale}%` }}>
+    <div ref={wrapperRef} data-card-text
+      onPointerEnter={() => setPointed(true)} onPointerLeave={() => setPointed(false)}
+      style={{ position: 'absolute', inset: 0, zIndex: 1, transform: `scale(${textScale})`, transformOrigin: 'top left', width: `${100 / textScale}%`, height: `${100 / textScale}%` }}>
       {selected && (
         <TextFormatToolbar
           headerStyle={headerTs}
@@ -5523,7 +5610,7 @@ export const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void
       )}
       <div
         style={{
-          position: 'absolute', inset: 0, padding: '4px 4px 10px 4px',
+          position: 'absolute', inset: 0, padding: pad ? `${pad.t}px ${pad.r}px ${pad.b}px ${pad.l}px` : '4px 4px 10px 4px',
           display: 'flex', flexDirection: 'column',
           overflow: 'hidden',
           pointerEvents: editingField ? 'auto' : 'none',
@@ -5560,6 +5647,9 @@ export const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void
             >{headerShown || null}</div>
           )}
         </div>
+        {pad && bind?.setPad && (
+          <TextMargins pad={pad} visible={selected && pointed} onChange={bind.setPad} />
+        )}
         {/* Draggable divider */}
         <TextSplitDivider ratio={splitRatio} onRatioChange={r => (bind ? bind.setSplit(r) : useBoardsStore.getState().setGroupTextSplitRatio(groupId, r))} visible={selected} />
         {/* Body area */}

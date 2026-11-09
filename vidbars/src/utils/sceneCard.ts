@@ -41,6 +41,9 @@ export interface SceneDiv {
   hstyle?: Partial<TextStyle>
   bstyle?: Partial<TextStyle>
   split?: number
+  /** Its face's text margins (text px, before scaling): how close its
+   *  text comes to each border. link: all four move together. */
+  pad?: TextPad
   hero?: { flipH?: boolean; flipV?: boolean; opacity?: number }
   /** The card's content when it was copied in (its header, text, picture):
    *  differs from the card's now = the card changed since. */
@@ -395,3 +398,5 @@ export function divBoxes(root: SceneDiv, w: number, h: number, gap: number, tuck
   walk(root, 0, 0, w, h, out)
   return out
 }
+
+export type TextPad = { t: number; r: number; b: number; l: number; link?: boolean }
