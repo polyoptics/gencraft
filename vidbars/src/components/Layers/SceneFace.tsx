@@ -648,24 +648,6 @@ const Seam: React.FC<{ split: SceneDiv; i: number; box: Box; unit: number; ctx: 
   )
 }
 
-/** A switch in the view widget: lit while on; its label never changes. */
-const Toggle: React.FC<{ on: boolean; title: string; tool: string; onClick: () => void; children: React.ReactNode }> = ({ on, title, tool, onClick, children }) => (
-  <button
-    type="button"
-    data-scene-tool={tool}
-    title={title}
-    onPointerDown={stopPress}
-    onDoubleClick={e => e.stopPropagation()}
-    onClick={e => { e.stopPropagation(); onClick() }}
-    style={{
-      height: 16, minWidth: 16, padding: '0 5px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3,
-      fontSize: 9.5, lineHeight: 1, fontWeight: 600, borderRadius: 8, cursor: 'pointer', whiteSpace: 'nowrap',
-      color: on ? '#111' : '#e6e9ef', background: on ? '#ffd666' : 'rgba(255,255,255,0.08)',
-      border: on ? '1px solid #ffd666' : '1px solid rgba(255,255,255,0.22)', fontFamily: 'inherit',
-    }}
-  >{children}</button>
-)
-
 /** A division's "more": a small list by it, each line a switch (lit while
  *  on) or an action. Closes on a pick, a press elsewhere or Esc. */
 /** Set a division's icon (Brian 2026-11-09): the picture it shows when
@@ -734,6 +716,95 @@ const IconEditor: React.FC<{
   )
 }
 
+/** The scene's view modes, from a "⋯" in its card's header bar (Brian
+ *  2026-11-09: not floating over the face). Lit while a mode is on; the
+ *  list opens under it. */
+export const SceneViewButton: React.FC<{ groupId: string; size: number }> = ({ groupId, size }) => {
+  const view = useBoardsStore(st => st.groups.find(g => g.id === groupId)?.sceneView) ?? {}
+  const [open, setOpen] = useState<{ x: number; y: number } | null>(null)
+  const ref = useRef<HTMLDivElement>(null)
+  const setView = (patch: Partial<SceneView>, step = true) => {
+    if (step) useUndoCoordinator.getState().checkpoint()
+    const g = useBoardsStore.getState().groups.find(gr => gr.id === groupId)
+    useBoardsStore.getState().setGroupSceneView(groupId, { ...(g?.sceneView ?? {}), ...patch })
+  }
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as Node
+      if (ref.current?.contains(t) || (t as HTMLElement).closest?.('[data-scene-view-button]')) return
+      setOpen(null)
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(null) }
+    window.addEventListener('pointerdown', onDown, true)
+    window.addEventListener('keydown', onKey)
+    return () => { window.removeEventListener('pointerdown', onDown, true); window.removeEventListener('keydown', onKey) }
+  }, [open])
+  const anyMode = !!view.focus || !!view.trace
+  const row = (tool: string, on: boolean, label: string, title: string, act: () => void) => (
+    <button type="button" data-scene-tool={tool} title={title} onClick={act} style={{
+      display: 'flex', alignItems: 'center', gap: 7, height: 22, padding: '0 8px', border: 'none', borderRadius: 5, cursor: 'pointer',
+      background: 'transparent', color: '#e6e9ef', fontSize: 11.5, textAlign: 'left', fontFamily: 'inherit',
+    }}
+      onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.08)' }}
+      onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}>
+      <span style={{ width: 8, height: 8, borderRadius: '50%', flex: '0 0 auto', background: on ? '#ffd666' : 'transparent', border: '1px solid rgba(255,255,255,0.4)' }} />
+      {label}
+    </button>
+  )
+  return (
+    <>
+      <div
+        data-scene-view-button
+        title="View: Focus, Bump-outs, Trace"
+        onPointerDown={e => e.stopPropagation()}
+        onDoubleClick={e => e.stopPropagation()}
+        onClick={e => {
+          e.stopPropagation()
+          const r = e.currentTarget.getBoundingClientRect()
+          setOpen(open ? null : { x: r.right, y: r.bottom })
+        }}
+        style={{
+          flex: '0 0 auto', width: size, height: size, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          borderRadius: Math.max(1, size * 0.18), cursor: 'pointer',
+          background: anyMode ? 'rgba(255,214,102,0.3)' : 'transparent', color: anyMode ? '#ffd666' : 'rgba(255,255,255,0.55)',
+        }}
+      >
+        <svg width={size * 0.8} height={size * 0.8} viewBox="0 0 16 16" fill="currentColor">
+          <circle cx="3.5" cy="8" r="1.5" /><circle cx="8" cy="8" r="1.5" /><circle cx="12.5" cy="8" r="1.5" />
+        </svg>
+      </div>
+      {open && ReactDOM.createPortal(
+        <div ref={ref} data-scene-modes onPointerDown={e => e.stopPropagation()} onWheel={e => e.stopPropagation()} style={{
+          position: 'fixed', left: Math.max(4, Math.min(open.x - 190, window.innerWidth - 200)), top: Math.min(open.y + 4, window.innerHeight - 150), zIndex: 10000,
+          width: 190, padding: 4, borderRadius: 8, background: 'rgba(18,20,28,0.96)', border: '1px solid rgba(255,255,255,0.14)',
+          boxShadow: '0 6px 20px rgba(0,0,0,0.55)', display: 'flex', flexDirection: 'column', gap: 1, fontFamily: 'inherit',
+        }}>
+          {row('view-focus', !!view.focus, 'Focus', 'Click divisions to light them (a section\'s heading lights the section); the rest fade', () => setView({ focus: !view.focus }))}
+          {view.focus && (view.picked?.length ?? 0) > 0 && row('view-focus-clear', false, 'Light every division again', 'Clear the lit divisions', () => setView({ picked: [] }))}
+          {row('view-bumps', view.bumps !== false, 'Bump-outs', 'Divisions marked to bump out stand taller', () => setView({ bumps: view.bumps === false }))}
+          {row('view-trace', !!view.trace, 'Trace', 'Only divisions whose card or text matches stay lit', () => setView({ trace: !view.trace }))}
+          {view.trace && (
+            <input
+              data-scene-trace
+              autoFocus
+              value={view.traceText ?? ''}
+              placeholder="prop, Budget: high…"
+              onChange={e => setView({ traceText: e.target.value }, false)}
+              onKeyDown={e => e.stopPropagation()}
+              style={{
+                margin: '2px 6px 4px', height: 22, boxSizing: 'border-box', padding: '0 8px', fontSize: 11, color: '#fff', fontFamily: 'inherit',
+                background: 'rgba(0,0,0,0.4)', border: '1px solid rgba(255,255,255,0.3)', borderRadius: 6, outline: 'none', userSelect: 'text',
+              }}
+            />
+          )}
+        </div>,
+        document.body,
+      )}
+    </>
+  )
+}
+
 const MoreMenu: React.FC<{
   x: number; y: number; onClose: () => void
   items: { label: string; tool: string; lit?: boolean; danger?: boolean; act: () => void }[]
@@ -784,7 +855,6 @@ export const SceneFace: React.FC<{
   const groups = useBoardsStore(s => s.groups)
   const linking = useLinkDragStore(s => s.active && s.source?.kind === 'group' && s.source.id !== group.id)
   const zoom = useCanvasStore(st => st.zoom) || 1
-  const [hover, setHover] = useState(false)
   const [picked, setPicked] = useState<string | null>(null)
   const [renaming, setRenaming] = useState<string | null>(null)
   const [noting, setNoting] = useState<string | null>(null)
@@ -910,9 +980,6 @@ export const SceneFace: React.FC<{
   const canRemove = leaves(scene).length > 1
   const edit = (fn: (r: SceneDiv) => SceneDiv) => { const r = root(); if (r) ctx.write(fn(r)) }
   const pickedColor = picker ? leaves(scene).find(l => l.id === picker.id)?.color ?? '#5b8dd9' : '#5b8dd9'
-  const anyMode = !!view.focus || !!view.trace
-  // On a small card the pill would cover it: shown there only while a mode is on.
-  const showModes = ((hover && width >= 240) || anyMode) && !linking
 
   // The "more" list for a division.
   const menuDiv = menu ? findDiv(scene, menu.id) : null
@@ -949,8 +1016,6 @@ export const SceneFace: React.FC<{
     <div
       ref={rootRef}
       data-scene-face={group.id}
-      onPointerEnter={() => setHover(true)}
-      onPointerLeave={() => setHover(false)}
       style={{ position: 'absolute', inset: 0, overflow: 'hidden', borderRadius: '0 0 12px 12px' }}
     >
       <div style={{
@@ -961,42 +1026,6 @@ export const SceneFace: React.FC<{
           {parts}
         </div>
       </div>
-      {showModes && (
-        // The scene's view modes: a small widget in its bottom-right corner,
-        // shown while pointed at, and while a mode is on.
-        <div
-          data-scene-modes
-          onPointerDown={stopPress}
-          onDoubleClick={e => e.stopPropagation()}
-          onWheel={e => e.stopPropagation()}
-          style={{
-            position: 'absolute', right: 5, bottom: 5, zIndex: 20, display: 'flex', alignItems: 'center', gap: 3, padding: 3,
-            borderRadius: 11, background: 'rgba(16,18,26,0.82)', border: '1px solid rgba(255,255,255,0.14)',
-            boxShadow: '0 2px 8px rgba(0,0,0,0.45)', cursor: 'default', maxWidth: 'calc(100% - 10px)', flexWrap: 'wrap', justifyContent: 'flex-end',
-          }}
-        >
-          <Toggle tool="view-focus" on={!!view.focus} title="Focus: click divisions to light them (a section's heading lights the section); the rest fade" onClick={() => setView({ focus: !view.focus })}>Focus</Toggle>
-          <Toggle tool="view-bumps" on={view.bumps !== false} title="Bump-outs: divisions marked to bump out stand taller" onClick={() => setView({ bumps: view.bumps === false })}>Bump-outs</Toggle>
-          <Toggle tool="view-trace" on={!!view.trace} title="Trace: only divisions whose card or text matches stay lit" onClick={() => setView({ trace: !view.trace })}>Trace</Toggle>
-          {view.trace && (
-            <input
-              data-scene-trace
-              value={view.traceText ?? ''}
-              placeholder="prop, Budget: high…"
-              onChange={e => useBoardsStore.getState().setGroupSceneView(group.id, { ...view, traceText: e.target.value })}
-              onKeyDown={e => e.stopPropagation()}
-              onPointerDown={stopPress}
-              style={{
-                height: 16, width: 96, boxSizing: 'border-box', padding: '0 6px', fontSize: 9.5, color: '#fff', fontFamily: 'inherit',
-                background: 'rgba(0,0,0,0.4)', border: '1px solid rgba(255,255,255,0.3)', borderRadius: 8, outline: 'none', userSelect: 'text',
-              }}
-            />
-          )}
-          {view.focus && (view.picked?.length ?? 0) > 0 && (
-            <Toggle tool="view-focus-clear" on={false} title="Light every division again" onClick={() => setView({ picked: [] })}>Clear</Toggle>
-          )}
-        </div>
-      )}
       {menu && menuItems && ReactDOM.createPortal(
         <MoreMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />,
         document.body,

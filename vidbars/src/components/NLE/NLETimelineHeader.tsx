@@ -21,6 +21,7 @@ import { hexToHsl, hslToHex } from '../../utils/colorUtils'
 import { updateDeckMagnetPreview, finishDeckMagnetDock } from '../../utils/deckDockDrag'
 import { groupHasBrowsableContent } from '../../utils/contentTraversal'
 import { RenameInput } from '../UI/RenameInput'
+import { SceneViewButton } from '../Layers/SceneFace'
 
 const BOARD_PADDING_X = 20
 export const NLE_HEADER_CANVAS_H = 36
@@ -126,6 +127,8 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
     const l = groupId ? s.groups.find(g => g.id === groupId)?.deckLock : undefined
     return !!l && s.groups.some(o => o.id !== groupId && o.deckLock === l)
   })
+  // A scene card: its view modes (Focus, Bump-outs, Trace) from a "⋯" here.
+  const isScene = useBoardsStore(s => !!groupId && s.groups.find(g => g.id === groupId)?.cardType === 'scene')
   const openRow = groupId ? rowOf(groupId) : undefined
   const isFace = !!groupId && (mode.kind === 'deckPreview' || (!!openRow && openRow.length > 1 && openRow[0] === groupId))
   // A State card, or its output deck's front card: the current state,
@@ -470,6 +473,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
   // mode.kind === 'hidden' → headerIcon stays null; the trailing flex slot is omitted.
 
   const lockH = screenHeight * 0.7
+  const sceneOn = isScene && !!groupId && !isTiny
   const stateEl = stateOf && !isTiny ? (
     <StatePicker stateCardId={stateOf} height={lockH} width={Math.max(30, effectiveWidth * 0.42)} font={9 * ov} />
   ) : null
@@ -497,7 +501,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
         useBoardsStore.getState().setSelectedGroup(to.id)
       }}
       style={{
-        flex: '0 0 auto', marginLeft: hasRefs || isTiny ? 0 : 'auto',
+        flex: '0 0 auto', marginLeft: hasRefs || sceneOn || isTiny ? 0 : 'auto',
         width: lockH, height: lockH,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         borderRadius: Math.max(1 * ov, screenHeight * 0.12),
@@ -532,7 +536,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
         bs.setDeckLock(groupId, ids)
       }}
       style={{
-        flex: '0 0 auto', marginLeft: goEl || hasRefs || isTiny ? 0 : 'auto',
+        flex: '0 0 auto', marginLeft: goEl || hasRefs || sceneOn || isTiny ? 0 : 'auto',
         width: lockH, height: lockH,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         borderRadius: Math.max(1 * ov, screenHeight * 0.12),
@@ -637,9 +641,12 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
         {hasRefs && groupId && !isTiny && (
           <div style={{ flex: '0 0 auto', marginLeft: 'auto', display: 'flex' }}><BackRefDot groupId={groupId} size={lockH} /></div>
         )}
+        {sceneOn && (
+          <div style={{ flex: '0 0 auto', marginLeft: hasRefs ? 0 : 'auto', display: 'flex' }}><SceneViewButton groupId={groupId!} size={lockH} /></div>
+        )}
         {goEl}
         {lockEl}
-        {headerIcon && <div style={{ flex: '0 0 auto', marginLeft: lockEl || goEl || hasRefs || isTiny ? 0 : 'auto' }}>{headerIcon}</div>}
+        {headerIcon && <div style={{ flex: '0 0 auto', marginLeft: lockEl || goEl || hasRefs || sceneOn || isTiny ? 0 : 'auto' }}>{headerIcon}</div>}
       </div>
     </div>
   )
