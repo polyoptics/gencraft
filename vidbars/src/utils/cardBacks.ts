@@ -17,6 +17,7 @@ import { useFreeNodeStore, type FreeNodeData } from '../store/freeNodeStore'
 import { useUndoCoordinator } from '../store/undoCoordinator'
 import { adjacentPanels } from './componentLinks'
 import { dockedCards } from './filmShots'
+import { browserScope } from './browserScope'
 import { groupMatchesQuery, groupMatchesTypes, groupHasContentOfKind, hasRenderableContent, sortGroups, formatListQuerySummary } from './contentKinds'
 import { detailShown, newDetailId, type CardDetail } from './cardTypes'
 
@@ -43,8 +44,10 @@ export function browserCards(list: FreeNodeData, groups: ProjectGroup[], boards:
   const q = list.listQuery
   if (!q) return []
   const kind = q.kind
+  // Cards docked on the browser scope what it shows (utils/browserScope).
+  const scope = browserScope(list, groups, boards)
   const hits = groups.filter(g =>
-    hasRenderableContent(g, boards) && !g.linkOf &&
+    hasRenderableContent(g, boards) && !g.linkOf && (!scope || scope.ids.has(g.id)) &&
     groupMatchesQuery(g, q.query) && groupMatchesTypes(g, q.cardTypes) &&
     (kind === 'all' || groupHasContentOfKind(g, boards, kind)))
   return sortGroups(hits, q.sortMode)

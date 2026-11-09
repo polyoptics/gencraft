@@ -54,6 +54,7 @@ import { usePoolStore, loadPoolDir, type PoolFile } from '../../store/poolStore'
 import { poolFeedingList, viewerAdjacentTo } from '../../utils/componentLinks'
 import { useViewport3DStore } from '../../store/viewport3dStore'
 import { collectDeckContent, defaultBrowseItem, tileBrowseItem, type BrowseItem } from '../../utils/contentTraversal'
+import { browserScope } from '../../utils/browserScope'
 import {
   DEFAULT_HEADER_STYLE,
   DEFAULT_BODY_STYLE,
@@ -592,9 +593,16 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
   // double-clicked. The boardsStore v12 migration prunes these on
   // load, but this filter stays as a runtime safety net for any
   // phantom produced after load.
+  // Cards docked on this browser scope it (utils/browserScope): a docked
+  // deck is browsed, a docked faction (chart, scene...) shows the cards it
+  // holds. Geometry only, so the zoom and the node's place are dependencies.
+  const dockScope = useMemo(
+    () => (embedded && embeddedNode ? browserScope(embeddedNode, groups, boards) : null),
+    [embedded, embeddedNode, groups, boards, cvZoom],
+  )
   const renderableGroups = useMemo(
-    () => groups.filter(g => hasRenderableContent(g, boards)),
-    [groups, boards],
+    () => groups.filter(g => hasRenderableContent(g, boards) && (!dockScope || dockScope.ids.has(g.id))),
+    [groups, boards, dockScope],
   )
 
   // Apply the search + kind filters on top of renderableGroups. A group
@@ -1696,7 +1704,8 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
                 // Stop arrow keys from triggering canvas pan / nav.
                 e.stopPropagation()
               }}
-              placeholder="SEARCH"
+              placeholder={dockScope ? `IN ${dockScope.label.toUpperCase()}` : 'SEARCH'}
+              title={dockScope ? `Browsing what is docked: ${dockScope.label}` : undefined}
               spellCheck={false}
               autoComplete="off"
               style={{
