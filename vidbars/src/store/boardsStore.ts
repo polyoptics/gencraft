@@ -390,6 +390,9 @@ interface BoardsState {
   renameGroup: (groupId: string, name: string) => void
   setGroupColor: (groupId: string, color: string) => void
   setGroupFlipped: (groupId: string, flipped: boolean) => void
+  /** Flip pressed on a card: it turns to `flipped`, and so does every card
+   *  of the selection it is in (effect cards have no back, so stay). */
+  flipCards: (groupId: string, flipped: boolean) => void
   /** Make it that type: it takes the type's starting details it lacks,
    *  and its colour, unless coloured by hand. */
   setGroupCardType: (groupId: string, type: CardType) => void
@@ -1101,6 +1104,12 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
 
   setGroupFlipped(groupId, flipped) {
     set(s => ({ groups: s.groups.map(g => g.id === groupId ? { ...g, flipped: flipped || undefined } : g) }))
+  },
+
+  flipCards(groupId, flipped) {
+    const sel = get().selectedGroupIds
+    const ids = new Set(sel.length > 1 && sel.includes(groupId) ? sel : [groupId])
+    set(s => ({ groups: s.groups.map(g => ids.has(g.id) && !g.effect ? { ...g, flipped: flipped || undefined } : g) }))
   },
 
   setGroupCardType(groupId, type) {

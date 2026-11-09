@@ -1504,7 +1504,7 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
             {canFlip && (
               <FlipButton
                 flipped={!!group.flipped}
-                onFlip={() => useBoardsStore.getState().setGroupFlipped(group.id, !group.flipped)}
+                onFlip={() => useBoardsStore.getState().flipCards(group.id, !group.flipped)}
                 baseColor={color}
                 size={penSize}
                 visible={isHovered}
@@ -2385,7 +2385,7 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
           {!anchorGroup.effect && (
             <FlipButton
               flipped={!!anchorGroup.flipped}
-              onFlip={() => { useUndoCoordinator.getState().checkpoint(); useBoardsStore.getState().setGroupFlipped(anchorGroup.id, !anchorGroup.flipped) }}
+              onFlip={() => { useUndoCoordinator.getState().checkpoint(); useBoardsStore.getState().flipCards(anchorGroup.id, !anchorGroup.flipped) }}
               baseColor={anchorGroup.color}
               size={Math.min(32, Math.max(8, 16 * overviewScale(zoom), headerScreenH(zoom) * 0.85))}
               visible={isHovered}
@@ -3582,7 +3582,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[]; lay
           {shown && !shown.effect && (
             <FlipButton
               flipped={!!shown.flipped}
-              onFlip={() => { useUndoCoordinator.getState().checkpoint(); useBoardsStore.getState().setGroupFlipped(shown.id, !shown.flipped) }}
+              onFlip={() => { useUndoCoordinator.getState().checkpoint(); useBoardsStore.getState().flipCards(shown.id, !shown.flipped) }}
               baseColor={shown.color}
               size={Math.min(32, Math.max(8, 16 * overviewScale(zoom), headerScreenH(zoom) * 0.85))}
               visible={isHovered}
@@ -4352,7 +4352,7 @@ const DeckAffordance: React.FC<{ cluster: string[]; front: Deck | 'card' | null;
         {primaryGroup && front === 'card' && !primaryGroup.effect && !frontFlipped && (
           <FlipButton
             flipped={false}
-            onFlip={() => useBoardsStore.getState().setGroupFlipped(primaryGroup.id, true)}
+            onFlip={() => useBoardsStore.getState().flipCards(primaryGroup.id, true)}
             baseColor={primaryGroup.color}
             size={Math.min(32, Math.max(8, 16 * overviewScale(zoom), headerScreenH(zoom) * 0.85))}
             visible={isHovered}
