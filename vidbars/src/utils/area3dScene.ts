@@ -81,11 +81,27 @@ export function boxOfKey(key: string): R | null {
   return null
 }
 
+/** Is master card `id` shown in area `area`'s scene by a linked card of
+ *  it? A scene shown from its card brings out linked cards of the masters
+ *  folded into it, which stand where the masters stood. The scene's models
+ *  are those linked cards' own, as a chart's are (Brian 2026-11-09): the
+ *  master itself, opened or closed, is never part of that scene. */
+function linkedHere(id: string, area: FreeNodeData): boolean {
+  const bs = useBoardsStore.getState()
+  for (const g of bs.groups) {
+    if (g.linkOf !== id || g.pin) continue
+    const r = cardBox(g, bs.boards)
+    if (r && areaOfBox(r, undefined)?.area.id === area.id) return true
+  }
+  return false
+}
+
 /** The 3D area model `key` is in the scene of, if any. */
 export function sceneOf(key: string): { area: FreeNodeData; docked: boolean; box: R } | null {
   const box = boxOfKey(key)
   if (!box) return null
   const a = areaOfBox(box, undefined, key.startsWith('node:') ? key.slice(5) : undefined)
+  if (a && key.startsWith('card:') && linkedHere(key.slice(5), a.area)) return null
   return a && { ...a, box }
 }
 
@@ -124,6 +140,12 @@ export function dockedCards(was: R, groups: ProjectGroup[], boards: Record<strin
   return groups.filter(g => {
     if (g.pin) return false
     const r = cardBox(g, boards)
-    return !!r && !inside(was, r.x + r.width / 2, r.y + r.height / 2) && touches(r, was, gap) && cardHoldsModel(g, boards)
+    if (!r || inside(was, r.x + r.width / 2, r.y + r.height / 2) || !touches(r, was, gap) || !cardHoldsModel(g, boards)) return false
+    // A master with a linked card of it in this scene stays where it is.
+    return !groups.some(l => {
+      if (l.linkOf !== g.id || l.pin) return false
+      const lr = cardBox(l, boards)
+      return !!lr && (inside(was, lr.x + lr.width / 2, lr.y + lr.height / 2) || touches(lr, was, gap))
+    })
   })
 }
