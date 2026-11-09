@@ -18,7 +18,8 @@ import { useBoardsStore, type ProjectGroup } from '../store/boardsStore'
 import { useFreeNodeStore, type FreeNodeData } from '../store/freeNodeStore'
 import { useCanvasStore } from '../store/canvasStore'
 import { isUndoRestoring, useUndoCoordinator } from '../store/undoCoordinator'
-import { useModelScaleStore } from '../store/tiltStore'
+import { useModelScaleStore, type ScenePlace } from '../store/tiltStore'
+import { dockedCards } from './area3dScene'
 import { cardFaceSize, createTextCard } from './cardGrid'
 import { makeLinkedCard, masterOf } from './linkedCards'
 
@@ -40,6 +41,8 @@ export interface Area3dCardItem {
   pose?: Quat
   /** Its model colour (tiltStore tintOf). */
   tint?: string
+  /** Where its model stands in the scene (tiltStore placeOf). */
+  place?: ScenePlace
 }
 /** A tile on a folded 3D area, whole, where it lay. */
 export interface Area3dTileItem {
@@ -49,6 +52,8 @@ export interface Area3dTileItem {
   pose?: Quat
   /** Its model colour (tiltStore tintOf). */
   tint?: string
+  /** Where its model stands in the scene (tiltStore placeOf). */
+  place?: ScenePlace
 }
 export interface Area3dData {
   /** The mat: where it comes out (top-left), its size and look. */
@@ -69,7 +74,10 @@ const inside = (a: FreeNodeData, x: number, y: number) => x >= a.x && x <= a.x +
  *  and tiles (their middle), not the card it came out of. */
 function onMat(a: FreeNodeData) {
   const fs = useFreeNodeStore.getState()
-  const cards = useBoardsStore.getState().groups.filter(g => g.id !== a.areaCard && !g.pin && inside(a, g.originX + 20, g.originY + 20))
+  const { groups, boards } = useBoardsStore.getState()
+  // On it, and the model cards docked along its sides.
+  const on = groups.filter(g => g.id !== a.areaCard && !g.pin && inside(a, g.originX + 20, g.originY + 20))
+  const cards = [...on, ...dockedCards(a, groups.filter(g => g.id !== a.areaCard && !on.includes(g)), boards)]
   const tiles = Object.values(fs.nodes).filter(n => n.id !== a.id && n.type !== 'area' && n.type !== 'storyline' && !n.pin && n.areaCard === undefined && inside(a, n.x + n.width / 2, n.y + n.height / 2))
   return { cards, tiles }
 }
@@ -109,6 +117,7 @@ export function foldArea3d(nodeId: string): string | null {
       ...(ms.sizeOf[`card:${g.id}`] !== undefined ? { size: ms.sizeOf[`card:${g.id}`] } : {}),
       ...(ms.poseOf[`card:${g.id}`] ? { pose: ms.poseOf[`card:${g.id}`] } : {}),
       ...(ms.tintOf[`card:${g.id}`] ? { tint: ms.tintOf[`card:${g.id}`] } : {}),
+      ...(ms.placeOf[`card:${g.id}`] ? { place: ms.placeOf[`card:${g.id}`] } : {}),
     })
   }
   const tileItems: Area3dTileItem[] = tiles.map(n => {
@@ -119,6 +128,7 @@ export function foldArea3d(nodeId: string): string | null {
       ...(ms.sizeOf[`node:${n.id}`] !== undefined ? { size: ms.sizeOf[`node:${n.id}`] } : {}),
       ...(ms.poseOf[`node:${n.id}`] ? { pose: ms.poseOf[`node:${n.id}`] } : {}),
       ...(ms.tintOf[`node:${n.id}`] ? { tint: ms.tintOf[`node:${n.id}`] } : {}),
+      ...(ms.placeOf[`node:${n.id}`] ? { place: ms.placeOf[`node:${n.id}`] } : {}),
     }
   })
   const data: Area3dData = {
@@ -201,6 +211,7 @@ export function showArea3d(cardId: string, quiet = false, spot?: { x: number; y:
     if (p.size !== undefined) ms.setSize(`card:${lid}`, p.size)
     if (p.pose) ms.setPose(`card:${lid}`, p.pose)
     if (p.tint) ms.setTint(`card:${lid}`, p.tint)
+    if (p.place) ms.setPlace(`card:${lid}`, p.place)
   }
   // Its tiles, whole.
   for (const t of data.tiles) {
@@ -209,6 +220,7 @@ export function showArea3d(cardId: string, quiet = false, spot?: { x: number; y:
     if (t.size !== undefined) ms.setSize(`node:${nid}`, t.size)
     if (t.pose) ms.setPose(`node:${nid}`, t.pose)
     if (t.tint) ms.setTint(`node:${nid}`, t.tint)
+    if (t.place) ms.setPlace(`node:${nid}`, t.place)
   }
   return id
 }

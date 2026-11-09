@@ -8,6 +8,7 @@ import { useFreeNodeStore, type FreeNodeData } from '../store/freeNodeStore'
 import { useBoardsStore } from '../store/boardsStore'
 import { useViewport3DStore } from '../store/viewport3dStore'
 import { useNotesStore } from '../store/notesStore'
+import { dockedCards } from './area3dScene'
 
 type R = { x: number; y: number; width: number; height: number }
 const inside = (a: R, px: number, py: number) => px >= a.x && px <= a.x + a.width && py >= a.y && py <= a.y + a.height
@@ -44,7 +45,9 @@ if (typeof window !== 'undefined' && !(window as unknown as { __areaFollow?: boo
       try {
         if (tiles.length) useFreeNodeStore.getState().moveManyFreeNodes(tiles, dx, dy)
         const bs = useBoardsStore.getState()
-        const cards = bs.groups.filter(g => !g.pin && inside(was, g.originX + 20, g.originY + 20))
+        const on = bs.groups.filter(g => !g.pin && inside(was, g.originX + 20, g.originY + 20))
+        // And the model cards docked along its sides (utils/area3dScene).
+        const cards = [...on, ...dockedCards(was, bs.groups.filter(g => !on.includes(g)), bs.boards)]
         if (cards.length) bs.setGroupPosBatch(cards.map(g => ({ groupId: g.id, originY: g.originY + dy, originX: g.originX + dx })))
         const v3 = useViewport3DStore.getState()
         for (const w of Object.values(v3.windows)) {

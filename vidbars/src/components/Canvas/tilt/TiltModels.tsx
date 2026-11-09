@@ -16,11 +16,11 @@ import { setGlHidden } from '../../../three/viewportRenderer'
 import { getMediaItems } from '../../../types/bar'
 import { faceBlocks } from '../../../utils/cardGrid'
 import { selectStorylinesInBox, standingStories, storyWallOf } from '../StorylineLayer'
-import { createTiltScene, ART_MAX, type TiltTarget, type TiltFrameState, type TiltSlab, type TiltArt } from '../../../three/tiltScene'
+import { createTiltScene, ART_MAX, type TiltTarget, type TiltFrameState, type ManipHit, type ManipPart, type TiltSlab, type TiltArt } from '../../../three/tiltScene'
 import type { PinSpot } from '../../../three/notesOverlay'
 import { useNotesStore } from '../../../store/notesStore'
 import { PinLabels } from '../../Notes/PinLabels'
-import { areaAt } from '../../../utils/areaFollow'
+import { sceneOf, sceneSpot } from '../../../utils/area3dScene'
 import { useUndoCoordinator } from '../../../store/undoCoordinator'
 /** The notes store as it stands (read each frame without a hook). */
 let notesNow = useNotesStore.getState()
@@ -59,11 +59,13 @@ export const models: {
   /** The surface stroke under a client point (the Erase tool). */
   strokeAt: ((clientX: number, clientY: number) => { url: string; id: string } | null) | null
   modelSize: ((key: string) => number | null) | null
-  /** The turn ring / size knob of a selected model on a 3D area under a
-   *  client point (utils/area3dHandles). foot is client px. */
-  gizmoAt: ((clientX: number, clientY: number) => { key: string; part: 'turn' | 'size'; foot: { x: number; y: number }; sign: number } | null) | null
+  /** The manipulator part of a selected model in a 3D area's scene under
+   *  a client point (utils/area3dHandles). c is client px. */
+  gizmoAt: ((clientX: number, clientY: number) => ManipHit | null) | null
+  /** Light up a manipulator part (hovered or held), or none. */
+  manipHot: ((key: string | null, part: ManipPart | null) => void) | null
   root: HTMLElement | null
-} = { gizmoAt: null, labelAt: null, strokeAt: null, modelSize: null, pick: null, pickZ: null, info: null, spin: null, letGo: null, hovered: null, at: null, surface: null, pinSpots: null, screenBox: null, root: null }
+} = { gizmoAt: null, manipHot: null, labelAt: null, strokeAt: null, modelSize: null, pick: null, pickZ: null, info: null, spin: null, letGo: null, hovered: null, at: null, surface: null, pinSpots: null, screenBox: null, root: null }
 /** A pick that lights up under the cursor: a model or a person, not
  *  furniture. */
 export const modelKey = (k: string | null | undefined) => (k && !k.startsWith('deco|') ? k : null)
@@ -85,16 +87,8 @@ const live3d = () => isTilted(useTiltStore.getState())
 /** Whether model `key` ('card:<id>' / 'node:<id>') stands on a 3D area:
  *  a scene layout, where its turn is kept (Brian 2026-11-08). */
 function onArea3d(key: string): boolean {
-  const nodes = useFreeNodeStore.getState().nodes
-  if (key.startsWith('node:')) {
-    const n = nodes[key.slice(5)]
-    return !!n && n.type !== 'area' && !!areaAt(nodes, n.x + n.width / 2, n.y + n.height / 2, n.id)
-  }
-  if (key.startsWith('card:')) {
-    const g = useBoardsStore.getState().groups.find(x => x.id === key.slice(5))
-    return !!g && !!areaAt(nodes, g.originX + 20, g.originY + 20)
-  }
-  return false
+  // On a 3D area, or docked along its side (utils/area3dScene).
+  return !!sceneOf(key)
 }
 
 const frameState = (): TiltFrameState => {
@@ -298,8 +292,9 @@ export const TiltModels: React.FC = () => {
       models.gizmoAt = (clientX, clientY) => {
         const r = root.getBoundingClientRect()
         const g = v.gizmoAt(clientX - r.left, clientY - r.top)
-        return g && { ...g, foot: { x: g.foot.x + r.left, y: g.foot.y + r.top } }
+        return g && { ...g, c: { x: g.c.x + r.left, y: g.c.y + r.top } }
       }
+      models.manipHot = v.manipHot
       models.root = root
       warm()
       raf = requestAnimationFrame(frame)
@@ -332,7 +327,7 @@ export const TiltModels: React.FC = () => {
       cancelAnimationFrame(raf)
       post.disconnect(); marker.remove()
       models.pick = null; models.pickZ = null; models.info = null; models.spin = null; models.letGo = null
-      models.surface = null; models.pinSpots = null; models.screenBox = null; models.labelAt = null; models.strokeAt = null; models.modelSize = null; models.gizmoAt = null; models.root = null
+      models.surface = null; models.pinSpots = null; models.screenBox = null; models.labelAt = null; models.strokeAt = null; models.modelSize = null; models.gizmoAt = null; models.manipHot = null; models.root = null
       view?.dispose()
       canvas?.remove()
     }
@@ -2411,16 +2406,23 @@ function collectTargets(W: number, H: number): TiltTarget[] {
   if (usePeek.getState().target) return []
   const out: TiltTarget[] = []
   const { pan, zoom } = useCanvasStore.getState()
+  // In a 3D area's scene, a model stands where it was put there (up in
+  // the air if lifted); its wall stays on its card.
+  const off = (key: string, t: TiltTarget): TiltTarget => {
+    const sp = sceneSpot(key)
+    if (!sp) return t
+    return { ...t, u: pan.x + sp.x * zoom - W / 2, v: pan.y + sp.y * zoom - H / 2, z: sp.h * zoom, wall: { u: t.u, v: t.v, h: t.h } }
+  }
   for (const n of Object.values(useFreeNodeStore.getState().nodes)) {
     if (n.type !== 'model' || n.pin || !n.imageUrl) continue
-    out.push({
+    out.push(off(`node:${n.id}`, {
       key: `node:${n.id}`, url: n.imageUrl,
       u: pan.x + (n.x + n.width / 2) * zoom - W / 2,
       v: pan.y + (n.y + n.height / 2) * zoom - H / 2,
       w: Math.min(n.width, n.height * 1.4) * zoom,
       h: n.height * zoom,
       name: fileName(n.imageUrl) || n.label || 'Model',
-    })
+    }))
   }
   // A Viewer showing a model: the model stands up on the Viewer, popping
   // in, and leaves the card it came from (Brian 2026-10-30). Once the
@@ -2452,14 +2454,14 @@ function collectTargets(W: number, H: number): TiltTarget[] {
       // Beside a Viewer showing it, it is on the Viewer, unless that one
       // stands as a strip's screen.
       if (v?.url === model.url && !stoodScreens.includes(v.id)) continue
-      out.push({
+      out.push(off(`card:${el.dataset.id}`, {
         key: `card:${el.dataset.id}`, url: model.url, name: model.name,
         u: at.x + el.offsetWidth / 2 - W / 2,
         v: at.y + el.offsetHeight / 2 - H / 2,
         w: Math.min(el.offsetWidth, el.offsetHeight * 1.4),
         h: el.offsetHeight,
         z: liftOf(el),
-      })
+      }))
     }
   }
   return out

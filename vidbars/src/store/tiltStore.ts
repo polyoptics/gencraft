@@ -387,7 +387,15 @@ interface ModelScaleStore {
    *  keys. Absent: as it came. */
   tintOf: Record<string, string>
   setTint: (key: string, color: string | null) => void
+  /** Where a model stands in its 3D area's scene (Brian 2026-11-09: off
+   *  its card, up in the air): its middle-foot from the area's top-left,
+   *  and its height off the ground, canvas units. Same keys. Absent: on
+   *  its card (or, docked at the side, just inside the area). */
+  placeOf: Record<string, ScenePlace>
+  setPlace: (key: string, p: ScenePlace | null) => void
 }
+
+export interface ScenePlace { dx: number; dy: number; h: number }
 
 export const useModelScaleStore = create<ModelScaleStore>()(persist(set => ({
   unitsPerMetre: {},
@@ -400,6 +408,12 @@ export const useModelScaleStore = create<ModelScaleStore>()(persist(set => ({
     if (q) poseOf[key] = q; else delete poseOf[key]
     return { poseOf }
   }),
+  placeOf: {},
+  setPlace: (key, p) => set(s => {
+    const placeOf = { ...s.placeOf }
+    if (p) placeOf[key] = p; else delete placeOf[key]
+    return { placeOf }
+  }),
   tintOf: {},
   setTint: (key, color) => set(s => {
     const tintOf = { ...s.tintOf }
@@ -408,6 +422,6 @@ export const useModelScaleStore = create<ModelScaleStore>()(persist(set => ({
   }),
 }), {
   name: 'vidbars-model-scale',
-  partialize: s => ({ unitsPerMetre: s.unitsPerMetre, sizeOf: s.sizeOf, poseOf: s.poseOf, tintOf: s.tintOf }),
+  partialize: s => ({ unitsPerMetre: s.unitsPerMetre, sizeOf: s.sizeOf, poseOf: s.poseOf, tintOf: s.tintOf, placeOf: s.placeOf }),
   storage: createDebouncedIDBStorage(400),
 }))

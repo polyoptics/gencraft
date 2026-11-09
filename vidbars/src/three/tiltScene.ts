@@ -45,6 +45,9 @@ export interface TiltTarget {
   z?: number
   /** Arrives with a quick scale-up pop (a model moving onto a Viewer). */
   pop?: boolean
+  /** Standing off its card (in a 3D area's scene): where the card is, for
+   *  its back wall. */
+  wall?: { u: number; v: number; h: number }
 }
 
 /** A flat element given thickness on the tilted plane: a rounded slab
@@ -216,7 +219,8 @@ interface Standing {
   pose: THREE.Group
   /** Its handles on a 3D area, selected: a ring to turn it, a knob to
    *  size it (made when first shown). */
-  gizmo: { group: THREE.Group; ring: THREE.Mesh; knob: THREE.Mesh; r: number } | null
+  /** Its manipulator (a selected model in a 3D area's scene). */
+  gizmo: Manip | null
   /** The colour it is shown in now, and its materials' own colours. */
   tint: string | null
   baseColors: Map<THREE.Material, THREE.Color> | null
@@ -343,6 +347,58 @@ void main() {
 /** Pictures masked from the shadow and sheen at most (the ones in view). */
 export const ART_MAX = 1000
 
+// ── The manipulator (Brian 2026-11-09: a handle on the model, like
+// Maya's): arrows to move along an axis, a square to move on the ground,
+// rings to turn about an axis, a box to size. World axes: x across the
+// canvas (red), y up (green), z down the canvas (blue). A constant size on
+// screen, drawn over everything.
+
+export type ManipPart = 'mx' | 'my' | 'mz' | 'mxz' | 'rx' | 'ry' | 'rz' | 's'
+/** What a press on the manipulator holds: its part, the model's middle on
+ *  screen (px), and per part: an axis's screen px per ground px moved
+ *  along it (`dir`, and `dir2` for the ground square's second axis), or
+ *  which way a ring turns for a clockwise drag on screen (`sign`). */
+export interface ManipHit { key: string; part: ManipPart; c: { x: number; y: number }; dir?: { x: number; y: number }; dir2?: { x: number; y: number }; sign?: number }
+interface Manip { group: THREE.Group; meshes: Map<ManipPart, THREE.Mesh[]>; hot: ManipPart | null }
+
+const MANIP_PX = 78
+const AXES = { x: new THREE.Vector3(1, 0, 0), y: new THREE.Vector3(0, 1, 0), z: new THREE.Vector3(0, 0, 1) } as const
+const manipMat = (color: number, opacity = 1) => new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthTest: false, depthWrite: false, toneMapped: false, side: THREE.DoubleSide })
+const MANIP_MATS = { x: manipMat(0xff4d5e), y: manipMat(0x6fe36f), z: manipMat(0x4f9dff), xz: manipMat(0xffe14a, 0.45), s: manipMat(0xe8ecf4), hot: manipMat(0xffe14a) }
+const M_SHAFT = new THREE.CylinderGeometry(0.014, 0.014, 0.7, 8).translate(0, 0.5, 0)
+const M_HEAD = new THREE.ConeGeometry(0.055, 0.17, 16).translate(0, 0.93, 0)
+const M_RING = new THREE.TorusGeometry(0.62, 0.011, 6, 96)
+const M_BOX = new THREE.BoxGeometry(0.12, 0.12, 0.12)
+const M_SQUARE = new THREE.PlaneGeometry(0.2, 0.2).rotateX(-Math.PI / 2).translate(0.24, 0, 0.24)
+/** The ring's turn about axis a: two axes across it, b then c, so a
+ *  positive turn takes b towards c. */
+const RING_BASIS = { x: ['y', 'z'], y: ['z', 'x'], z: ['x', 'y'] } as const
+
+function makeManip(): Manip {
+  const group = new THREE.Group()
+  group.rotation.x = Math.PI / 2   // as a stand: y up off the plane
+  const meshes = new Map<ManipPart, THREE.Mesh[]>()
+  const add = (part: ManipPart, m: THREE.Mesh, order: number) => {
+    m.renderOrder = order
+    m.userData.mat = m.material
+    group.add(m)
+    meshes.set(part, [...(meshes.get(part) ?? []), m])
+  }
+  for (const a of ['x', 'y', 'z'] as const) {
+    const turnTo = (m: THREE.Mesh) => { if (a === 'x') m.rotation.z = -Math.PI / 2; else if (a === 'z') m.rotation.x = Math.PI / 2; return m }
+    add(`m${a}`, turnTo(new THREE.Mesh(M_SHAFT, MANIP_MATS[a])), 1002)
+    add(`m${a}`, turnTo(new THREE.Mesh(M_HEAD, MANIP_MATS[a])), 1002)
+    const ring = new THREE.Mesh(M_RING, MANIP_MATS[a])   // round z as made
+    if (a === 'x') ring.rotation.y = Math.PI / 2
+    else if (a === 'y') ring.rotation.x = Math.PI / 2
+    add(`r${a}`, ring, 1001)
+  }
+  add('mxz', new THREE.Mesh(M_SQUARE, MANIP_MATS.xz), 1003)
+  add('s', new THREE.Mesh(M_BOX, MANIP_MATS.s), 1004)
+  group.visible = false
+  return { group, meshes, hot: null }
+}
+
 export function createTiltScene(canvas: HTMLCanvasElement) {
   const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, stencil: true })
   renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1))
@@ -435,6 +491,9 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     transparent: true, depthTest: false, depthWrite: false,
   })
   const quadScene = new THREE.Scene()
+  // The manipulators: their own scene, drawn last, over everything.
+  const manipScene = new THREE.Scene()
+  const manipRoot = new THREE.Group(); manipRoot.matrixAutoUpdate = false; manipScene.add(manipRoot)
   quadScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), outlineMat))
   const quadCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1)
 
@@ -507,6 +566,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   const drop = (key: string, s: Standing) => {
     s.dead = true
     s.stand.removeFromParent()
+    s.gizmo?.group.removeFromParent()
     s.wall.removeFromParent()
     s.wall.material.map?.dispose()
     s.wall.material.dispose()
@@ -1021,10 +1081,14 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
           else mc.copy(t)
         }
       }
-      // Its handles: on a 3D area, selected, standing.
-      const handles = placed && st.selected.has(tg.key) && !!s.inst
-      if (handles && !s.gizmo) s.gizmo = makeGizmo(s)
-      if (s.gizmo) s.gizmo.group.visible = handles
+      // Its manipulator: in a 3D area's scene, selected, standing.
+      const handles = placed && st.selected.has(tg.key) && !!s.inst && ease > 0.5
+      if (handles && !s.gizmo) { s.gizmo = makeManip(); manipRoot.add(s.gizmo.group) }
+      if (s.gizmo) {
+        s.gizmo.group.visible = handles
+        // At the model's middle (where it turns about).
+        if (handles) s.gizmo.group.position.set(s.stand.position.x, s.stand.position.y, s.stand.position.z + s.stand.scale.y * s.size.y / 2)
+      }
       if (s.back) {
         // Let go after an Alt-drag: it rolls back to how it stood (Brian
         // 2026-11-04), easing in and out, and rocks a little past and back
@@ -1069,7 +1133,8 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       }
       const wallW = tg.w, wallH = tg.w / 4
       s.wall.scale.set(wallW, wallH * Math.max(ease, 0.001), 1)
-      s.wall.position.set(tg.u, -(tg.v - tg.h / 2), (wallH * ease) / 2)
+      const wt = tg.wall ?? tg
+      s.wall.position.set(wt.u, -(wt.v - wt.h / 2), (wallH * ease) / 2)
       const d = Math.max(1.5, wallH * 0.07)
       const back = s.wall.getObjectByName('placard')!
       back.scale.z = d
@@ -1082,6 +1147,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       if (keep.has(key)) continue
       s.stand.visible = false
       s.wall.visible = false
+      if (s.gizmo) s.gizmo.group.visible = false
       if (frameNo - s.seen > 120) drop(key, s)
     }
 
@@ -1203,6 +1269,47 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       for (const [o, v] of vis) o.visible = v
       scene.overrideMaterial = null
       renderer.render(quadScene, quadCam)
+    }
+    renderManips()
+  }
+
+  /** The manipulators, sized to MANIP_PX on screen, over everything. */
+  function renderManips() {
+    let any = false
+    for (const s of standing.values()) if (s.gizmo?.group.visible) any = true
+    if (!any || !lastW) return
+    manipRoot.matrix.copy(ground.matrix)
+    manipRoot.matrixWorldNeedsUpdate = true
+    manipRoot.updateMatrixWorld(true)
+    camera.updateMatrixWorld()
+    const gk = new THREE.Vector3().setFromMatrixScale(ground.matrix).x || 1
+    const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0)
+    const p0 = new THREE.Vector3(), p1 = new THREE.Vector3()
+    for (const s of standing.values()) {
+      const g = s.gizmo
+      if (!g?.group.visible) continue
+      g.group.scale.setScalar(1)
+      g.group.updateMatrixWorld(true)
+      g.group.getWorldPosition(p0)
+      p1.copy(p0).add(right)
+      const a = p0.clone().project(camera), b = p1.project(camera)
+      const pxPerWorld = Math.hypot((b.x - a.x) / 2 * lastW, (b.y - a.y) / 2 * lastH) || 1
+      g.group.scale.setScalar(MANIP_PX / (pxPerWorld * gk))
+      g.group.updateMatrixWorld(true)
+    }
+    renderer.render(manipScene, camera)
+  }
+
+  /** Light up part `part` of model `key`'s manipulator (the cursor is over
+   *  it, or it is held), or none. */
+  function manipHot(key: string | null, part: ManipPart | null) {
+    for (const [k, s] of standing) {
+      const g = s.gizmo
+      if (!g) continue
+      const want = k === key ? part : null
+      if (g.hot === want) continue
+      g.hot = want
+      for (const [p, list] of g.meshes) for (const m of list) m.material = p === want ? MANIP_MATS.hot : m.userData.mat
     }
   }
 
@@ -1343,60 +1450,68 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     return s && s.inst ? s.size.length() : null
   }
 
-  /** The handles round a model on a 3D area: a thin ring on the ground
-   *  just outside its footprint, and a knob on it. In the stand's space
-   *  (model units), so they size with the model. */
-  function makeGizmo(s: Standing) {
-    const r = Math.max(s.size.x, s.size.z, 1e-6) * 0.8
-    const mat = new THREE.MeshBasicMaterial({ color: 0x7fd4ff, transparent: true, opacity: 0.9, depthTest: false, depthWrite: false, toneMapped: false, side: THREE.DoubleSide })
-    const ring = new THREE.Mesh(new THREE.RingGeometry(r * 0.95, r, 96), mat)
-    ring.rotation.x = -Math.PI / 2
-    ring.renderOrder = 999
-    const knobMat = new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false, depthWrite: false, toneMapped: false })
-    const knob = new THREE.Mesh(new THREE.SphereGeometry(r * 0.075, 16, 12), knobMat)
-    knob.position.set(r, 0, 0)
-    knob.renderOrder = 1000
-    const group = new THREE.Group()
-    group.add(ring, knob)
-    group.visible = false
-    s.stand.add(group)
-    return { group, ring, knob, r }
-  }
-
-  /** The handle under (x, y) (px on the 3D canvas), if any: the model's
-   *  key, which handle, where it stands on screen, and which way a turn
-   *  clockwise on screen turns it (+1: about its up axis, positively). */
-  function gizmoAt(x: number, y: number): { key: string; part: 'turn' | 'size'; foot: { x: number; y: number }; sign: number } | null {
+  /** The manipulator part under (x, y) (px on the 3D canvas), if any,
+   *  with what a drag of it needs (ManipHit). */
+  function gizmoAt(x: number, y: number): ManipHit | null {
     if (!lastW || !lastH) return null
+    manipRoot.updateMatrixWorld(true)
     const v = new THREE.Vector3()
-    const toPx = (p: THREE.Vector3) => { p.project(camera); return { x: (p.x + 1) / 2 * lastW, y: (1 - p.y) / 2 * lastH, z: p.z } }
-    let best: { key: string; part: 'turn' | 'size'; d: number; foot: { x: number; y: number }; sign: number } | null = null
+    let best: (ManipHit & { d: number }) | null = null
     for (const [key, s] of standing) {
       const g = s.gizmo
-      if (!g || !g.group.visible || !s.stand.visible) continue
-      s.stand.updateWorldMatrix(true, true)
-      const at = (lx: number, lz: number) => toPx(s.stand.localToWorld(v.set(lx, 0, lz)))
-      const foot = at(0, 0)
-      if (foot.z > 1) continue
-      // Clockwise on screen from +x towards -z (a positive turn about +y)?
-      const px = at(g.r, 0), pz = at(0, -g.r)
-      const sign = ((px.x - foot.x) * (pz.y - foot.y) - (px.y - foot.y) * (pz.x - foot.x)) > 0 ? 1 : -1
-      const kd = Math.hypot(px.x - x, px.y - y)
-      if (kd < 11 && (!best || kd < best.d)) best = { key, part: 'size', d: kd, foot, sign }
-      let prev: { x: number; y: number } | null = null
-      for (let i = 0; i <= 64; i++) {
-        const a = i / 64 * Math.PI * 2
-        const q = at(Math.cos(a) * g.r, Math.sin(a) * g.r)
-        if (prev) {
-          const dx = q.x - prev.x, dy = q.y - prev.y, l2 = dx * dx + dy * dy
-          const t = l2 > 0 ? Math.max(0, Math.min(1, ((x - prev.x) * dx + (y - prev.y) * dy) / l2)) : 0
-          const d = Math.hypot(x - (prev.x + dx * t), y - (prev.y + dy * t)) + 2
-          if (d < 9 && (!best || d < best.d)) best = { key, part: 'turn', d, foot, sign }
+      if (!g?.group.visible) continue
+      g.group.updateMatrixWorld(true)
+      const px = (lx: number, ly: number, lz: number) => {
+        g.group.localToWorld(v.set(lx, ly, lz)).project(camera)
+        return { x: (v.x + 1) / 2 * lastW, y: (1 - v.y) / 2 * lastH, z: v.z }
+      }
+      const c = px(0, 0, 0)
+      if (c.z > 1) continue
+      // One local unit is this many ground px.
+      const unit = g.group.scale.x
+      const axisPx = (a: THREE.Vector3) => { const q = px(a.x, a.y, a.z); return { x: (q.x - c.x) / unit, y: (q.y - c.y) / unit } }
+      const take = (h: ManipHit, d: number, bias: number) => { if (!best || d - bias < best.d) best = { ...h, d: d - bias } }
+      const segD = (a: { x: number; y: number }, b: { x: number; y: number }) => {
+        const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy
+        const t = l2 ? Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / l2)) : 0
+        return Math.hypot(x - a.x - dx * t, y - a.y - dy * t)
+      }
+      // The box (size): the middle.
+      const dc = Math.hypot(x - c.x, y - c.y)
+      if (dc < 10) take({ key, part: 's', c }, dc, 6)
+      // The ground square (move on the ground).
+      const sq = [px(0.14, 0, 0.14), px(0.34, 0, 0.14), px(0.34, 0, 0.34), px(0.14, 0, 0.34)]
+      let inSq = false
+      for (let i = 0, j = 3; i < 4; j = i++) {
+        if ((sq[i].y > y) !== (sq[j].y > y) && x < (sq[j].x - sq[i].x) * (y - sq[i].y) / (sq[j].y - sq[i].y) + sq[i].x) inSq = !inSq
+      }
+      if (inSq) take({ key, part: 'mxz', c, dir: axisPx(AXES.x), dir2: axisPx(AXES.z) }, 0, 4)
+      for (const a of ['x', 'y', 'z'] as const) {
+        const A = AXES[a]
+        // The arrow (move along it).
+        const d = segD(px(A.x * 0.15, A.y * 0.15, A.z * 0.15), px(A.x * 1.02, A.y * 1.02, A.z * 1.02))
+        if (d < 8) take({ key, part: `m${a}`, c, dir: axisPx(A) }, d, 2)
+        // The ring (turn about it).
+        const [bn, cn] = RING_BASIS[a]
+        const B = AXES[bn], C = AXES[cn]
+        let prev: { x: number; y: number } | null = null
+        let rd = Infinity
+        for (let i = 0; i <= 64; i++) {
+          const t = i / 64 * Math.PI * 2, cs = Math.cos(t) * 0.62, sn = Math.sin(t) * 0.62
+          const q = px(B.x * cs + C.x * sn, B.y * cs + C.y * sn, B.z * cs + C.z * sn)
+          if (prev) rd = Math.min(rd, segD(prev, q))
+          prev = q
         }
-        prev = q
+        if (rd < 7) {
+          const b = axisPx(B), cc = axisPx(C)
+          take({ key, part: `r${a}`, c, sign: b.x * cc.y - b.y * cc.x > 0 ? 1 : -1 }, rd, 0)
+        }
       }
     }
-    return best && { key: best.key, part: best.part, foot: { x: best.foot.x, y: best.foot.y }, sign: best.sign }
+    if (!best) return null
+    const { d: _d, ...hit } = best as ManipHit & { d: number }
+    void _d
+    return hit
   }
 
   /** Keep model `key`'s turn (a 3D area's layout): what the hand turned it
@@ -1456,5 +1571,5 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     renderer.forceContextLoss()
   }
 
-  return { frame, warm, pick, pickZ: () => pickedZ, info, spinBy, letGo, settleAll, keepTurn, gizmoAt, screenBox, labelAt, strokeAt, modelSize, dispose, surfaceAt, pinSpots: notes.spots }
+  return { frame, warm, pick, pickZ: () => pickedZ, info, spinBy, letGo, settleAll, keepTurn, gizmoAt, manipHot, screenBox, labelAt, strokeAt, modelSize, dispose, surfaceAt, pinSpots: notes.spots }
 }
