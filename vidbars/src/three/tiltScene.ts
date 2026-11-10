@@ -422,6 +422,30 @@ const MANIP_PX = 78
 const AXES = { x: new THREE.Vector3(1, 0, 0), y: new THREE.Vector3(0, 1, 0), z: new THREE.Vector3(0, 0, 1) } as const
 const manipMat = (color: number, opacity = 1) => new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthTest: false, depthWrite: false, toneMapped: false, side: THREE.DoubleSide })
 const MANIP_MATS = { x: manipMat(0xff4d5e), y: manipMat(0x6fe36f), z: manipMat(0x4f9dff), c: manipMat(0xffe14a, 0.55), s: manipMat(0xe8ecf4), hot: manipMat(0xffe14a), outer: manipMat(0xffe14a, 0.85) }
+// A rotate ring reads front from back (Brian 2026-11-10): the half
+// facing you is the solid colour, the half round the back is dimmed and
+// fades as it goes away, so you can tell which part of the circle you
+// are on. Each ring is two meshes, back under front, each drawing only
+// its own half.
+const ringMat = (color: number, front: boolean) => {
+  const m = manipMat(color)
+  m.onBeforeCompile = sh => {
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying float vFace;')
+      .replace('#include <project_vertex>', '#include <project_vertex>\nvec3 ringC = (modelViewMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;\nvFace = dot(normalize(mvPosition.xyz - ringC), normalize(-ringC));')
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying float vFace;')
+      .replace('#include <color_fragment>', front
+        ? '#include <color_fragment>\nif (vFace < 0.0) discard;'
+        : '#include <color_fragment>\nif (vFace >= 0.0) discard;\ndiffuseColor.a *= mix(0.6, 0.3, smoothstep(0.0, 0.8, -vFace));')
+  }
+  m.customProgramCacheKey = () => front ? 'ringFront' : 'ringBack'
+  return m
+}
+const RING_MATS = {
+  x: [ringMat(0xff4d5e, false), ringMat(0xff4d5e, true)], y: [ringMat(0x6fe36f, false), ringMat(0x6fe36f, true)],
+  z: [ringMat(0x4f9dff, false), ringMat(0x4f9dff, true)], hot: [ringMat(0xffe14a, false), ringMat(0xffe14a, true)],
+}
 const M_SHAFT = new THREE.CylinderGeometry(0.014, 0.014, 0.7, 8).translate(0, 0.5, 0)
 const M_HEAD = new THREE.ConeGeometry(0.055, 0.17, 16).translate(0, 0.93, 0)
 const M_SLINE = new THREE.CylinderGeometry(0.012, 0.012, 0.72, 8).translate(0, 0.51, 0)
@@ -539,10 +563,12 @@ function makeManip(): Manip {
     add(`m${a}`, turnTo(new THREE.Mesh(M_HEAD, MANIP_MATS[a])), 1002)
     add(`s${a}`, turnTo(new THREE.Mesh(M_SLINE, MANIP_MATS[a])), 1002)
     add(`s${a}`, turnTo(new THREE.Mesh(M_SBOX, MANIP_MATS[a])), 1002)
-    const ring = new THREE.Mesh(M_RING, MANIP_MATS[a])   // round z as made
-    if (a === 'x') ring.rotation.y = Math.PI / 2
-    else if (a === 'y') ring.rotation.x = Math.PI / 2
-    add(`r${a}`, ring, 1001)
+    for (const front of [0, 1]) {
+      const ring = new THREE.Mesh(M_RING, RING_MATS[a][front])   // round z as made
+      if (a === 'x') ring.rotation.y = Math.PI / 2
+      else if (a === 'y') ring.rotation.x = Math.PI / 2
+      add(`r${a}`, ring, 1000 + front).userData.hot = RING_MATS.hot[front]
+    }
   }
   const square = add('mc', new THREE.Mesh(M_SQUARE, MANIP_MATS.c), 1003)
   const outer = new THREE.Group()
@@ -1564,7 +1590,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       const want = k === key ? part : null
       if (g.hot === want) continue
       g.hot = want
-      for (const [p, list] of g.meshes) for (const m of list) m.material = p === want ? MANIP_MATS.hot : m.userData.mat
+      for (const [p, list] of g.meshes) for (const m of list) m.material = p === want ? (m.userData.hot ?? MANIP_MATS.hot) : m.userData.mat
     }
   }
 
