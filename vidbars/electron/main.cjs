@@ -401,7 +401,7 @@ function registerBridge() {
   // the file actually written, or { error }.
   // Kind 'drag' is the exception to Pictures: a drag-out copy, written to
   // the app's own Drag Cache (dragCacheDir), held to a budget (pruneDragCache).
-  const SAVE_FOLDERS = { 'context-sheet': 'VidBars Context Sheets', 'effect': 'VidBars Effects' }
+  const SAVE_FOLDERS = { 'context-sheet': 'VidBars Context Sheets', 'effect': 'VidBars Effects', 'gif': 'VidBars GIFs' }
   // Win32 treats these stems as DEVICES — the part before the first dot,
   // trailing spaces ignored — so 'Con.Air poster <stamp>.jpg' would go to
   // the console and report success for a file that does not exist.
@@ -421,21 +421,22 @@ function registerBridge() {
   }
   ipcMain.handle('vb:save-image', async (e, kind, name, dataUrl) => {
     if (!fromApp(e) || typeof dataUrl !== 'string' || !(Object.hasOwn(SAVE_FOLDERS, kind) || kind === 'drag')) return { error: 'Not allowed' }
-    const m = /^data:image\/(png|jpeg);base64,/.exec(dataUrl)
-    if (!m) return { error: 'Not a PNG or JPEG image' }
+    // A GIF only as kind 'gif' (a looping GIF the app made, utils/makeGif).
+    const m = /^data:image\/(png|jpeg|gif);base64,/.exec(dataUrl)
+    if (!m || (m[1] === 'gif') !== (kind === 'gif')) return { error: 'Not a PNG or JPEG image' }
     const dir = saveDir(kind)
     if (!dir) return { error: `${kind === 'drag' ? 'The app data folder' : 'Pictures'} is on a network share, which VidBars cannot read files back from` }
     // Cut by CODE POINTS, on a well-formed string: half an emoji is written
     // to disk as U+FFFD while the path handed back keeps the half — a name
     // that matches no file, and that encodeURIComponent throws on.
     let safe = Array.from(String(name || '').toWellFormed().replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_'))
-      .slice(0, 80).join('').replace(/^[.\s]+|[.\s]+$/g, '') || (kind === 'context-sheet' ? 'context sheet' : 'image')
+      .slice(0, 80).join('').replace(/^[.\s]+|[.\s]+$/g, '') || (kind === 'context-sheet' ? 'context sheet' : kind === 'gif' ? 'movie' : 'image')
     // (Without a dot the stem is '<safe> <stamp>', which is never reserved.)
     if (safe.includes('.') && RESERVED_STEM.test(safe.split('.')[0].trimEnd())) safe = '_' + safe
     const d = new Date()
     const pad = n => String(n).padStart(2, '0')
     const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
-    const ext = m[1] === 'png' ? 'png' : 'jpg'
+    const ext = m[1] === 'png' ? 'png' : m[1] === 'gif' ? 'gif' : 'jpg'
     const buf = Buffer.from(dataUrl.slice(m[0].length), 'base64')
     try {
       await fs.promises.mkdir(dir, { recursive: true })

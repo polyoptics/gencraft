@@ -1,0 +1,220 @@
+// makeGif.ts — a card's movie, or every shot of a deck, as one looping
+// animated GIF on a NEW card beside it. What it was made from is not touched.
+//
+// Made here in the page: each movie is stepped through frame by frame on a
+// canvas and written by utils/gifEncode. Kept small so it is quick — at most
+// 480 px on its long side, 10 frames a second, 200 frames; a longer run
+// plays at fewer frames a second rather than being cut short. A still
+// picture among a deck's shots is held for a moment.
+//
+// Desktop: the GIF is a real file in Pictures\VidBars GIFs, so it can be
+// dragged out and revealed like any other. Plain browser (or a desktop
+// window older than this): it is kept in the app's own media store.
+
+import { create } from 'zustand'
+import type { MediaItem } from '../types/bar'
+import { useBoardsStore, type ProjectGroup } from '../store/boardsStore'
+import { useCanvasStore } from '../store/canvasStore'
+import { useUndoCoordinator } from '../store/undoCoordinator'
+import { cardFaceMedia, cardFaceSize, createMediaCard, gridOrder, layoutCardGrid } from './cardGrid'
+import { cardEntries, placeCard } from './railCards'
+import { drawnRect } from './effectCards'
+import { resolveMediaUrl } from './useResolvedMedia'
+import { putMedia } from './mediaStore'
+import { makeMediaRef } from './mediaRef'
+import { diskFileUrl } from './diskUrl'
+import { GifWriter } from './gifEncode'
+import { findFreeSlotRightOf } from '../components/Viewport3D/ImageStudio'
+
+const MAX_SIDE = 480
+const FPS = 10
+const MAX_FRAMES = 200
+const STILL_SECONDS = 1.5
+
+/** What the maker is doing, for the notice on screen (GifNotice). */
+export const useGifJob = create<{ text: string | null; busy: boolean }>(() => ({ text: null, busy: false }))
+
+let clearTimer = 0
+function say(text: string | null, busy: boolean, clearAfterMs = 0) {
+  window.clearTimeout(clearTimer)
+  useGifJob.setState({ text, busy })
+  if (clearAfterMs) clearTimer = window.setTimeout(() => useGifJob.setState({ text: null }), clearAfterMs)
+}
+
+/** The movie on a card's face, if that is what its face shows. */
+export function cardGifShots(g: ProjectGroup): MediaItem[] {
+  const m = cardFaceMedia(g, useBoardsStore.getState().boards)
+  return m?.type === 'video' ? [m] : []
+}
+
+/** Every shot of the cards `ids`, in order: each card's movies and pictures.
+ *  Empty when there is no movie among them (nothing would move). */
+export function deckGifShots(ids: string[]): MediaItem[] {
+  const { groups, boards } = useBoardsStore.getState()
+  const shots = ids.flatMap(id => {
+    const g = groups.find(x => x.id === id)
+    return g ? cardEntries(g, boards).map(e => e.media) : []
+  })
+  return shots.some(m => m.type === 'video') ? shots : []
+}
+
+interface Source {
+  draw: CanvasImageSource
+  w: number
+  h: number
+  /** A movie: the part it plays, seconds. */
+  video?: { el: HTMLVideoElement; lo: number; hi: number }
+}
+
+function waitFor(el: HTMLElement, ok: string, ms: number): Promise<boolean> {
+  return new Promise(resolve => {
+    const done = (v: boolean) => { window.clearTimeout(t); el.removeEventListener(ok, yes); el.removeEventListener('error', no); resolve(v) }
+    const yes = () => done(true), no = () => done(false)
+    const t = window.setTimeout(no, ms)
+    el.addEventListener(ok, yes)
+    el.addEventListener('error', no)
+  })
+}
+
+async function open(m: MediaItem): Promise<Source | null> {
+  const url = await resolveMediaUrl(m.url)
+  if (!url) return null
+  if (m.type === 'video') {
+    const el = document.createElement('video')
+    el.muted = true
+    el.playsInline = true
+    el.preload = 'auto'
+    const ready = waitFor(el, 'loadeddata', 20_000)
+    el.src = url
+    if (!(await ready) || !el.videoWidth) return null
+    const length = Number.isFinite(el.duration) ? el.duration : 0
+    const lo = Math.max(0, Math.min(m.clipIn ?? 0, length))
+    const hi = Math.max(lo, Math.min(m.clipOut ?? length, length))
+    return { draw: el, w: el.videoWidth, h: el.videoHeight, video: { el, lo, hi } }
+  }
+  const img = new Image()
+  const ready = waitFor(img, 'load', 20_000)
+  img.src = url
+  if (!(await ready) || !img.naturalWidth) return null
+  return { draw: img, w: img.naturalWidth, h: img.naturalHeight }
+}
+
+async function seek(el: HTMLVideoElement, t: number): Promise<void> {
+  if (Math.abs(el.currentTime - t) < 1e-4 && el.readyState >= 2) return
+  const done = waitFor(el, 'seeked', 5_000)
+  el.currentTime = t
+  await done
+}
+
+function toDataUrl(bytes: Uint8Array): string {
+  let s = ''
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+  return 'data:image/gif;base64,' + btoa(s)
+}
+
+/** Keep the GIF and name where it is: a file on disk (desktop), else the
+ *  app's media store, else the bytes themselves. */
+async function keep(bytes: Uint8Array, name: string): Promise<string> {
+  const dataUrl = toDataUrl(bytes)
+  const d = window.vidbarsDesktop
+  if (d && typeof d.saveImage === 'function') {
+    try {
+      const r = await d.saveImage('gif', name, dataUrl)
+      const path = typeof r === 'string' ? r : r && 'path' in r ? r.path : null
+      if (path) return diskFileUrl(path)
+    } catch { /* fall through to the app's own store */ }
+  }
+  try {
+    return makeMediaRef(await putMedia(new Blob([bytes as BlobPart], { type: 'image/gif' })))
+  } catch {
+    return dataUrl
+  }
+}
+
+/** The box cards `ids` take up together, canvas units. */
+function boxOf(ids: string[]): { x: number; y: number; width: number; height: number } | null {
+  const { groups, boards } = useBoardsStore.getState()
+  const zoom = useCanvasStore.getState().zoom
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity
+  for (const id of ids) {
+    const g = groups.find(x => x.id === id)
+    const r = g ? drawnRect(g, boards, zoom) : null
+    if (!r) continue
+    x0 = Math.min(x0, r.x); y0 = Math.min(y0, r.y)
+    x1 = Math.max(x1, r.x + r.width); y1 = Math.max(y1, r.y + r.height)
+  }
+  return x1 > x0 ? { x: x0, y: y0, width: x1 - x0, height: y1 - y0 } : null
+}
+
+/** Make `shots` into one looping GIF, on a new card named `name` in the
+ *  first free spot right of cards `besideIds`. One at a time. */
+export async function makeGif(shots: MediaItem[], name: string, besideIds: string[]): Promise<void> {
+  if (useGifJob.getState().busy || shots.length === 0) return
+  say('Making GIF…', true)
+  const opened: Source[] = []
+  try {
+    for (const m of shots) {
+      const s = await open(m)
+      if (s) opened.push(s)
+    }
+    if (!opened.some(s => s.video && s.video.hi > s.video.lo)) throw new Error('the movie could not be read')
+
+    // The first shot sets the shape; the others are fitted inside it.
+    const first = opened[0]
+    const k = Math.min(1, MAX_SIDE / Math.max(first.w, first.h))
+    const w = Math.max(2, Math.round(first.w * k)), h = Math.max(2, Math.round(first.h * k))
+    const canvas = document.createElement('canvas')
+    canvas.width = w
+    canvas.height = h
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })
+    if (!ctx) throw new Error('no canvas to draw on')
+
+    const stills = opened.filter(s => !s.video).length
+    const seconds = opened.reduce((n, s) => n + (s.video ? s.video.hi - s.video.lo : 0), 0)
+    const fps = Math.min(FPS, Math.max(1, MAX_FRAMES - stills) / Math.max(0.1, seconds))
+    const step = 1 / fps
+    const total = Math.max(1, Math.round(seconds * fps) + stills)
+
+    const gif = new GifWriter(w, h)
+    let made = 0
+    const put = (s: Source, delayCs: number) => {
+      ctx.fillStyle = '#000'
+      ctx.fillRect(0, 0, w, h)
+      const f = Math.min(w / s.w, h / s.h)
+      const dw = s.w * f, dh = s.h * f
+      ctx.drawImage(s.draw, (w - dw) / 2, (h - dh) / 2, dw, dh)
+      gif.frame(ctx.getImageData(0, 0, w, h).data, delayCs)
+      made++
+      say(`Making GIF… ${Math.min(99, Math.round(made / total * 100))}%`, true)
+    }
+    for (const s of opened) {
+      if (!s.video) { put(s, STILL_SECONDS * 100); await new Promise(r => setTimeout(r)); continue }
+      const { el, lo, hi } = s.video
+      for (let t = lo; t < hi - 1e-3; t += step) {
+        await seek(el, t)
+        put(s, Math.min(step, hi - t) * 100)
+      }
+    }
+    if (made === 0) throw new Error('no frames came out')
+
+    const url = await keep(gif.finish(), name)
+    useUndoCoordinator.getState().checkpoint()
+    const gid = createMediaCard({ cx: 0, cy: 0 }, [{ media: { url, type: 'image', originalName: `${name}.gif` }, label: name }])
+    if (!gid) throw new Error('the card could not be made')
+    const card = useBoardsStore.getState().groups.find(g => g.id === gid)
+    const [board] = card ? gridOrder(card, useBoardsStore.getState().boards) : []
+    if (board) layoutCardGrid(gid, { [board]: h / w })
+    const face = cardFaceSize()
+    const beside = boxOf(besideIds)
+    if (beside) {
+      const slot = findFreeSlotRightOf(beside, face.w, face.h)
+      placeCard(gid, slot.x, slot.y)
+    }
+    say(null, false)
+  } catch (err) {
+    console.warn('[gif] not made', err)
+    say(`GIF not made: ${String((err as Error)?.message ?? err)}`, false, 5000)
+  } finally {
+    for (const s of opened) if (s.video) { s.video.el.removeAttribute('src'); s.video.el.load() }
+  }
+}

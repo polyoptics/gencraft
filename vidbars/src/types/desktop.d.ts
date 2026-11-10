@@ -102,9 +102,10 @@ export interface VidbarsDesktop {
  *  drag-out copy prepared ahead of a drag (an effect result on its
  *  picture), in the app's own Drag Cache, held to a budget (files older
  *  than 2 days go at startup; past 100 files or 400 MB the oldest go) —
- *  never a place to keep anything. A main older than 'drag' answers
+ *  never a place to keep anything. 'gif' is a looping GIF made from a movie
+ *  or a deck of shots (Pictures\VidBars GIFs). A main older than 'drag' answers
  *  { error: 'Not allowed' } until the window restarts. */
-export type SaveImageKind = 'context-sheet' | 'effect' | 'drag'
+export type SaveImageKind = 'context-sheet' | 'effect' | 'drag' | 'gif'
 
 declare global {
   interface Window {

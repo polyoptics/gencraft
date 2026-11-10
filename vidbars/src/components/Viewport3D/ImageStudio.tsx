@@ -187,7 +187,7 @@ function cardRects(): { x: number; y: number; width: number; height: number }[] 
 /** First free spot to the RIGHT of the window that fits w×h, scanning
  *  down then wrapping to the next column. Avoids existing tiles AND
  *  windows so stamps never land on top of anything. */
-function findFreeSlotRightOf(
+export function findFreeSlotRightOf(
   win: { x: number; y: number; width: number; height: number },
   w: number, h: number,
 ): { x: number; y: number } {

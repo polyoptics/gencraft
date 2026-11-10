@@ -27,6 +27,7 @@ import { CurveLayer } from './components/Notes/CurveLayer'
 import { NotesPanel } from './components/Notes/NotesPanel'
 import { ensureRolodexHome, useRolodexHomeBootstrap } from './utils/rolodexHome'
 import { StoragePersistenceBanner } from './components/UI/StoragePersistenceBanner'
+import { GifNotice } from './components/UI/GifNotice'
 import { useBoardsStore } from './store/boardsStore'
 import { useCanvasStore } from './store/canvasStore'
 import { useFreeNodeStore } from './store/freeNodeStore'
@@ -913,6 +914,9 @@ export default function App() {
       <RailSyncHost />
       <RailRunHost />
       <MakeCardsButton />
+
+      {/* Looping GIF being made from a card or a deck (utils/makeGif) */}
+      <GifNotice />
 
       {/* Viewers render outside the canvas so they are fixed to the viewport */}
       <AllViewers />

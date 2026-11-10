@@ -80,6 +80,7 @@ import { showFamilyTree } from '../../utils/familySpine'
 import { bakeStoryline, chartArea, chartOutOf, chartSpotBeside, eraseChart, matchChart, recallChart, setChartSpot } from '../../utils/chartCard'
 import { cardOrigins } from '../Canvas/StorylineLayer'
 import { rowOf, setRows, openDeckOf } from '../../utils/primaryCard'
+import { makeGif, cardGifShots, deckGifShots } from '../../utils/makeGif'
 import { wallRoom } from '../../utils/wallRoom'
 import { area3dOutOf, area3dSpot, toggleArea3d, foldArea3dAndDeck, showArea3dMoving } from '../../utils/area3dCard'
 import { sceneOf, dataKey, cardHoldsModel } from '../../utils/area3dScene'
@@ -405,6 +406,27 @@ const CardContextMenu: React.FC<{
     selIds.forEach(id => useBoardsStore.getState().duplicateGroup(id))
     onClose()
   }})
+
+  // Looping GIF: the movie on this card's face, or every shot of its deck
+  // (closed, fanned, or a row of touching cards), on a new card beside it
+  // (utils/makeGif). What it is made from is not touched.
+  {
+    const bs = useBoardsStore.getState()
+    const row = deckMemberIds && deckMemberIds.length >= 2 ? [group.id, ...deckMemberIds.filter(id => id !== group.id)] : rowOf(group.id) ?? []
+    const deckIds = row.length >= 2 ? expandWithNestedMembers(row, bs.groups) : []
+    // The card whose face was right-clicked: in a deck, the one showing.
+    const faceCard = deckIds.map(id => bs.groups.find(g => g.id === id)).find(g => g && mediaSource && groupFaceSource(g, bs.boards) === mediaSource) ?? group
+    const own = cardGifShots(faceCard)
+    if (own.length) menuItems.push({ label: 'Make looping GIF', icon: '🎞', action: () => {
+      onClose()
+      void makeGif(own, faceCard.name || 'Movie', deckIds.length ? deckIds : [group.id])
+    }})
+    const all = deckIds.length ? deckGifShots(deckIds) : []
+    if (all.length > 1) menuItems.push({ label: 'Make looping GIF: whole deck', icon: '🎞', action: () => {
+      onClose()
+      void makeGif(all, group.name || 'Deck', deckIds)
+    }})
+  }
 
   // Context sheet — one image of the card (or the whole deck) for an AI:
   // pictures, name, summary and notes, sized in the dialog before it is made.
