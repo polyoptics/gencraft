@@ -17,7 +17,8 @@ import { useFreeNodeStore, type FreeNodeData } from '../store/freeNodeStore'
 import { isUndoRestoring, useUndoCoordinator } from '../store/undoCoordinator'
 import { cardFaceSize, createTextCard } from './cardGrid'
 import { chartRank, isAbove } from './cardTypes'
-import type { ChartData, ChartPlace, ChartTier } from './chartData'
+import { rankText, type ChartData, type ChartPlace, type ChartTier } from './chartData'
+import { matchedPlaces } from './chartMatch'
 import { linkedHeight, makeLinkedCard, masterOf } from './linkedCards'
 import { newGroupId, type FactionGroup } from './factionGroups'
 import type { StorylineData } from './storyline'
@@ -422,6 +423,49 @@ export function startChartFollow(cardsOf: CardsOfDots): () => void {
   })
 }
 
+/** Match master decks (Brian 2026-11-10, utils/chartMatch): card `cardId`'s
+ *  chart, out or folded, takes the layout its master decks have now: each
+ *  dot's deck as its masters sit and are sized, from the dot's own card,
+ *  which stays as it is. Linked cards only; the masters are read, never
+ *  moved. Returns how many cards it changes (`dry`: would change, nothing
+ *  written). One undo. */
+export function matchChart(cardId: string, cardsOf: CardsOfDots, dry = false): number {
+  const bs = useBoardsStore.getState()
+  const card = bs.groups.find(g => g.id === cardId)
+  if (!card?.chart || moving) return 0
+  const out = chartOutOf(cardId)
+  const got = out ? chartFrom(out, cardsOf) : null
+  if (out && !got) return 0
+  const chart = got?.chart ?? card.chart
+  const next = matchedPlaces(chart, bs.groups, bs.boards, useCanvasStore.getState().zoom)
+  if (dry || next.size === 0) return next.size
+  useUndoCoordinator.getState().checkpoint()
+  if (!got) {
+    useBoardsStore.setState(s => ({
+      groups: s.groups.map(g => g.id === cardId && g.chart ? { ...g, chart: { ...g.chart, places: g.chart.places.map(p => next.get(p.card) ?? p) } } : g),
+    }))
+    return next.size
+  }
+  // Out: its linked cards, the first showing of each master (as chartFrom
+  // reads them).
+  const patch = new Map<string, Partial<ProjectGroup>>()
+  const done = new Set<string>()
+  for (const id of got.on.keys()) {
+    const g = got.byId.get(id)
+    const m = masterOf(bs.groups, id)
+    const p = next.get(m)
+    if (!g || !p || done.has(m)) continue
+    done.add(m)
+    patch.set(id, {
+      originX: got.n.x + p.dx, originY: got.n.y + p.dy,
+      cardWidthOverride: p.w, cardHeightOverride: linkedHeight(m, p.w, p.h),
+      ...(g.deckAnchorId && p.deckOffsetX != null && p.deckOffsetY != null ? { deckOffsetX: p.deckOffsetX, deckOffsetY: p.deckOffsetY } : {}),
+    })
+  }
+  useBoardsStore.setState(s => ({ groups: s.groups.map(g => patch.has(g.id) ? { ...g, ...patch.get(g.id)! } : g) }))
+  return next.size
+}
+
 /** Erases the chart baked into card `cardId` (Brian 2026-11-09, "Erase
  *  chart layout"): its layout only, the dots, lines and where each card
  *  sat. The card, its members, who reports to whom and its sections stay,
@@ -441,7 +485,7 @@ export function eraseChart(cardId: string): boolean {
         if (d.link?.card !== cardId || !d.link.rankOf) return d
         const r = chartRank(card, d.link.rankOf)
         const { link: _l, ...plain } = d; void _l
-        return { ...plain, value: r ? String(r.rank) : d.value }
+        return { ...plain, value: r ? rankText(r) : d.value }
       }) }
     }),
   }))

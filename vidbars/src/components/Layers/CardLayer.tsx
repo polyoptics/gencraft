@@ -77,7 +77,7 @@ import { nameKindOf } from '../../utils/fillDetails'
 import { copiedFaceStyle, copyFaceStyle, fillFields } from '../../utils/faceStyle'
 import { showFactionTree } from '../../utils/factionTree'
 import { showFamilyTree } from '../../utils/familySpine'
-import { bakeStoryline, chartArea, chartOutOf, chartSpotBeside, eraseChart, recallChart, setChartSpot } from '../../utils/chartCard'
+import { bakeStoryline, chartArea, chartOutOf, chartSpotBeside, eraseChart, matchChart, recallChart, setChartSpot } from '../../utils/chartCard'
 import { cardOrigins } from '../Canvas/StorylineLayer'
 import { rowOf, setRows, openDeckOf } from '../../utils/primaryCard'
 import { wallRoom } from '../../utils/wallRoom'
@@ -283,6 +283,12 @@ const CardContextMenu: React.FC<{
         label: 'Show chart', icon: '📊', lit: !!out,
         hover: on => setChartGhost(on && !out ? area : null),
         action: () => { if (out) bakeStoryline(out, cardOrigins); else recallChart(group.id); onClose() },
+      })
+      // Its decks as their master decks are laid out now (utils/chartMatch),
+      // out or folded; there only while they differ.
+      if (matchChart(group.id, cardOrigins, true) > 0) menuItems.push({
+        label: 'Match master decks', icon: '🪞',
+        action: () => { matchChart(group.id, cardOrigins); onClose() },
       })
       if (!out) {
         if (beside) menuItems.push({

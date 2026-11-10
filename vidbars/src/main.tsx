@@ -11,11 +11,11 @@ import App from './App.tsx'
 import { useBoardsStore } from './store/boardsStore'
 import { startLinkedCardSync } from './utils/linkedCards'
 import { startStateOutputs } from './utils/stateCard'
-import { startChartFollow } from './utils/chartCard'
+import { bakeStoryline, chartOutOf, matchChart, recallChart, startChartFollow } from './utils/chartCard'
 import { startArea3dFollow, startArea3dBundle, showArea3d, foldArea3d, toggleArea3d, area3dOutOf, bundleArea3dCard } from './utils/area3dCard'
 import { startAreaUnder } from './utils/area3dScene'
 import { startDeckUnder } from './utils/deckUnder'
-import { createMediaCard } from './utils/cardGrid'
+import { createMediaCard, createTextCard } from './utils/cardGrid'
 
 installLookThrough()
 import { cardOrigins } from './components/Canvas/StorylineLayer'
@@ -57,6 +57,8 @@ import { useManip } from './store/manipStore'
   useNotesStore, useNotesUi, tiltModels: models,
   // 3D area cards (utils/area3dCard), and the model sizes and turns they keep.
   area3d: { showArea3d, foldArea3d, toggleArea3d, area3dOutOf, bundleArea3dCard, createMediaCard }, useModelScaleStore,
+  // Charts baked into cards (utils/chartCard), and a plain card to try them on.
+  chart: { matchChart, recallChart, bakeStoryline, chartOutOf, cardOrigins, createTextCard },
   // The manipulator's settings, and the camera looked through.
   useManip,
 }

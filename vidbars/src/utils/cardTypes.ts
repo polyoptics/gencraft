@@ -7,7 +7,7 @@
 
 import type { ProjectGroup } from '../store/boardsStore'
 import { groupRankOf } from './factionGroups'
-import { chartRankOf, type ChartData } from './chartData'
+import { chartRankOf, rankText, type ChartData } from './chartData'
 
 /** Where a detail's value comes from when it is linked: another card (its
  *  name), or one detail on it (that detail's value, live). */
@@ -106,7 +106,7 @@ export function detailShown(groups: ProjectGroup[], d: CardDetail, seen = new Se
   const card = groups.find(g => g.id === d.link!.card)
   if (!card) return { text: d.value, missing: true }
   if (d.link.count === 'members') return { text: String(memberCount(groups, card)), card }
-  if (d.link.rankOf) { const r = chartRank(card, d.link.rankOf); return { text: r ? String(r.rank) : '—', card } }
+  if (d.link.rankOf) { const r = chartRank(card, d.link.rankOf); return { text: r ? rankText(r) : '—', card } }
   if (!d.link.detail) return { text: card.name, card }
   const key = `${card.id}:${d.link.detail}`
   const target = card.details?.find(x => x.id === d.link!.detail)
@@ -131,7 +131,7 @@ export function setLiveChartReader(f: (cardId: string) => ChartData | null) { li
 
 /** Where card `cardId` ranks on chart card `chartCard`: live while the
  *  chart is out, else as it was baked. */
-export function chartRank(chartCard: ProjectGroup, cardId: string): { rank: number } | null {
+export function chartRank(chartCard: ProjectGroup, cardId: string): { rank: number; step?: number } | null {
   const chart = liveChart(chartCard.id) ?? chartCard.chart
   return chart ? chartRankOf(chart, cardId) : null
 }
@@ -261,13 +261,18 @@ export function isAbove(faction: ProjectGroup, memberId: string, otherId: string
 }
 
 /** The factions a card is a member of: its rank and bosses in each. */
-export function factionsOf(groups: ProjectGroup[], cardId: string): { faction: ProjectGroup; rank: number; bosses: ProjectGroup[] }[] {
+export function factionsOf(groups: ProjectGroup[], cardId: string): { faction: ProjectGroup; rank: number; step?: number; bosses: ProjectGroup[] }[] {
   return groups
     .filter(g => g.cardType === 'faction' && (g.linkedGroupIds ?? []).includes(cardId))
     .flatMap(faction => {
       const m = factionMembers(groups, faction).find(x => x.card.id === cardId)
       // In groups (utils/factionGroups): its rank is its group's, from the top.
       const g = groupRankOf(faction, cardId)
-      return m ? [{ faction, rank: g ?? m.rank, bosses: m.bosses }] : []
+      if (!m) return []
+      const rank = g ?? m.rank
+      // Its size step in its deck on the faction's chart (chartData
+      // sizeSteps), while the chart ranks it the same.
+      const c = chartRank(faction, cardId)
+      return [{ faction, rank, ...(c?.step && c.rank === rank ? { step: c.step } : {}), bosses: m.bosses }]
     })
 }

@@ -25,6 +25,7 @@ import { ContentScaled, panelContentScale } from '../UI/PanelSurface'
 import { RenameInput } from '../UI/RenameInput'
 import { cardTitle } from '../../utils/faceStyle'
 import { chartCards, chartName, chartRank, detailShown, newDetailId, type CardDetail } from '../../utils/cardTypes'
+import { rankText } from '../../utils/chartData'
 import { makePromptCard, cardRect } from '../../utils/promptCards'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { cardVisualRect } from '../../hooks/useCardDecks'
@@ -435,7 +436,7 @@ export const CardPromptPad: React.FC<{ nodeId: string }> = ({ nodeId }) => {
                         style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '6px 10px', borderRadius: 6, cursor: 'pointer', fontSize: 12.5, color: have ? DIM : INK }}>
                         <span style={{ width: 9, height: 9, borderRadius: 2, background: c.color, flexShrink: 0 }} />
                         <span style={{ flex: 1 }}>{chartName(c)}</span>
-                        <span style={{ fontSize: 11, color: FAINT }}>{have ? 'on it' : r ? `rank ${r.rank}` : 'not on it'}</span>
+                        <span style={{ fontSize: 11, color: FAINT }}>{have ? 'on it' : r ? `rank ${rankText(r)}` : 'not on it'}</span>
                       </div>
                     )
                   })}

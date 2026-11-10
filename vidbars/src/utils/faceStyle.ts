@@ -12,6 +12,7 @@
 import type { ProjectGroup } from '../store/boardsStore'
 import type { TextStyle } from '../store/freeNodeStore'
 import { CARD_TYPES, CARD_TYPE_ORDER, cardTypeOf, detailShown, detailText, factionsOf } from './cardTypes'
+import { rankText } from './chartData'
 import { familiesOf } from './family'
 
 /** What a field shows on a card ('' if it has none). */
@@ -37,7 +38,7 @@ function field(groups: ProjectGroup[], card: ProjectGroup, key: string): string 
   }
   const f = factionsOf(groups, card.id)[0]
   if (k === 'faction') return f?.faction.name ?? ''
-  if (k === 'rank') return f ? String(f.rank) : ''
+  if (k === 'rank') return f ? rankText(f) : ''
   if (k === 'reports to') return f?.bosses.map(b => b.name).join(', ') ?? ''
   if (k === 'family') return familiesOf(groups, card.id)[0]?.name ?? ''
   return ''

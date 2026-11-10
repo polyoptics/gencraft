@@ -14,6 +14,7 @@ import { useLinkDragStore } from '../../store/linkDragStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { edgeColorFromHex, hexToHsl, hslToHex } from '../../utils/colorUtils'
 import { CARD_TYPES, CARD_TYPE_ORDER, cardTypeOf, chartCards, chartName, chartRank, detailShown, isChartRank, factionMembers, factionsOf, hasMembers, isAbove, isOwnCount, newDetailId, typeColor, type CardDetail, type CardType, type FactionMember } from '../../utils/cardTypes'
+import { rankText } from '../../utils/chartData'
 import { factionGroupsOf, withGroupMoved, withMemberMoved } from '../../utils/factionGroups'
 import { ColorPickerPopup } from '../Bar/ColorPickerPopup'
 import { areSiblings, arePartners, familiesOf, familyTree, isAncestor as isKinAbove, relationsOf, setChildOf, setPartners, setSiblings, type Kin } from '../../utils/family'
@@ -503,7 +504,7 @@ export const CardBack: React.FC<{
     const r = chartRank(c, meId)
     const have = cur().some(d => d.link?.rankOf && d.link.card === c.id)
     return {
-      label: chartName(c), hint: r ? `  rank ${r.rank}` : '  not on it', swatch: c.color, checked: have,
+      label: chartName(c), hint: r ? `  rank ${rankText(r)}` : '  not on it', swatch: c.color, checked: have,
       onClick: () => { if (!have) addRank(c.id); setMenu(null) },
     }
   })
@@ -722,9 +723,9 @@ export const CardBack: React.FC<{
   // every row, so the values line up.
   type ReadRow = { key: string; k: string; v: string; dot?: string; attr?: Record<string, string> }
   const readRows: ReadRow[] = [
-    ...memberOf.flatMap(({ faction, rank, bosses }): ReadRow[] => [
+    ...memberOf.flatMap(({ faction, rank, step, bosses }): ReadRow[] => [
       { key: faction.id + ':f', k: 'FACTION', v: faction.name || 'Untitled', dot: faction.color, attr: { 'data-member-of': faction.id } },
-      { key: faction.id + ':r', k: 'RANK', v: String(rank) },
+      { key: faction.id + ':r', k: 'RANK', v: rankText({ rank, step }) },
       ...(bosses.length ? [{ key: faction.id + ':b', k: 'REPORTS TO', v: bosses.map(b => b.name || 'Untitled').join(', '), dot: bosses[0].color, attr: { 'data-member-boss': faction.id } }] : []),
     ]),
     ...kinOf.flatMap(({ family, rel }): ReadRow[] => [
@@ -799,7 +800,7 @@ export const CardBack: React.FC<{
       ...charts.map(c => {
         const r = chartRank(c, d.link!.rankOf!)
         return {
-          label: chartName(c), hint: r ? `  rank ${r.rank}` : '  not on it', swatch: c.color, checked: c.id === card.id,
+          label: chartName(c), hint: r ? `  rank ${rankText(r)}` : '  not on it', swatch: c.color, checked: c.id === card.id,
           onClick: () => {
             // Its name follows the chart, unless it was renamed.
             const named = d.name.trim() === chartName(card)
