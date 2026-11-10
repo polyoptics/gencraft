@@ -14,7 +14,7 @@ import { useUndoCoordinator } from '../store/undoCoordinator'
 import { useCanvasStore } from '../store/canvasStore'
 import { models } from '../components/Canvas/tilt/TiltModels'
 import type { ManipHit } from '../three/tiltScene'
-import { placeNow, dataKey } from './area3dScene'
+import { placeNow, dataKey, sceneOf } from './area3dScene'
 import { useManip } from '../store/manipStore'
 
 type Q = [number, number, number, number]
@@ -57,12 +57,14 @@ function onDown(e: PointerEvent) {
     eatUp = true
     return
   }
-  useUndoCoordinator.getState().checkpoint()
   const ms = useModelScaleStore.getState()
   const dk = dataKey(g.key)
+  // Waiting on its card, not yet in the set: it can only be moved (onto it).
+  if (!ms.placeOf[dk] && sceneOf(g.key)?.docked && g.part[0] !== 'm') { eatUp = true; return }
+  useUndoCoordinator.getState().checkpoint()
   drag = {
     ...g, dk, x0: e.clientX, y0: e.clientY, a0: Math.atan2(e.clientY - g.c.y, e.clientX - g.c.x),
-    q0: (ms.poseOf[dk] as Q | undefined) ?? [0, 0, 0, 1], k0: ms.sizeOf[dk] ?? 1,
+    q0: (ms.poseOf[dk] as Q | undefined) ?? [0, 0, 0, 1], k0: ms.setSizeOf[dk] ?? ms.sizeOf[dk] ?? 1,
     s0: ms.stretchOf[dk] ?? [1, 1, 1],
     p0: placeNow(g.key) ?? { dx: 0, dy: 0, h: 0 }, zoom: useCanvasStore.getState().zoom,
   }
@@ -115,7 +117,7 @@ function onMove(e: PointerEvent) {
     ms.setPlace(d.dk, { dx: d.p0.dx + v[0], dy: d.p0.dy + v[2], h: Math.max(0, d.p0.h + v[1]) })
   } else if (p === 's') {
     // Right or up grows it, left or down shrinks it: twice as big per 120 px.
-    ms.setSize(d.dk, Math.min(50, Math.max(0.02, d.k0 * 2 ** ((mx - my) / 120))))
+    ms.setSetSize(d.dk, Math.min(50, Math.max(0.02, d.k0 * 2 ** ((mx - my) / 120))))
   } else if (p[0] === 's') {
     // Stretch along one of its own axes: out along it grows, twice per 100 px.
     const t = mx * d.dir!.x + my * d.dir!.y
@@ -148,6 +150,15 @@ function onUp(e: PointerEvent) {
   if (eatUp) { eatUp = false; eatClick = true; e.preventDefault(); e.stopImmediatePropagation(); return }
   if (!drag) return
   e.preventDefault(); e.stopImmediatePropagation()
+  // Moved back onto its own card (Brian 2026-11-10): out of the set, on
+  // its card again, turning, as before it was put there.
+  // (Let go with the pointer over that card, as it is seen.)
+  if (drag.part[0] === 'm' && useModelScaleStore.getState().placeOf[drag.dk]) {
+    const id = drag.key.slice(drag.key.indexOf(':') + 1)
+    const el = document.querySelector(drag.key.startsWith('node:') ? `[data-freenode][data-id="${id}"]` : `[data-group-card][data-id="${id}"]`)
+    const r = el?.getBoundingClientRect()
+    if (r && e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) useModelScaleStore.getState().setPlace(drag.dk, null)
+  }
   drag = null
   hover = null
   models.manipHot?.(null, null)

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { dataKey } from '../../../utils/area3dScene'
+import { dataKey, standsIn } from '../../../utils/area3dScene'
 import { useManip } from '../../../store/manipStore'
 import { useTiltStats } from './TiltModels'
 import { flushSync } from 'react-dom'
@@ -334,7 +334,7 @@ export const TiltedView: React.FC = () => {
       | { kind: 'pan'; last: { x: number; y: number } }
       | { kind: 'marquee'; x0: number; y0: number; x1: number; y1: number; add: boolean }
       | { kind: 'person'; url: string; unit0: number; y0: number }
-      | { kind: 'model'; key: string; k0: number; y0: number; moved: boolean }
+      | { kind: 'model'; key: string; k0: number; y0: number; moved: boolean; inSet: boolean }
       | { kind: 'remap'; target: Element; pointerId: number; height: number; stood?: boolean; x0?: number; y0?: number; free?: boolean; tab?: { at: { x: number; y: number }; went?: boolean }; lay?: Map<string, string>; last?: { x: number; y: number }; wall?: Hinge }
     let g: Gesture | null = null
     /** A right press on furniture: its menu is its owner's (see onMenu). */
@@ -521,7 +521,10 @@ export const TiltedView: React.FC = () => {
           // the same way the person is sized.
           e.preventDefault(); swallow(e)
           selectModel(key, e.shiftKey)
-          g = { kind: 'model', key: dataKey(key), k0: useModelScaleStore.getState().sizeOf[dataKey(key)] ?? 1, y0: e.clientY, moved: false }
+          // In a 3D set that is its size there; on its card, its card's
+          // (Brian 2026-11-10: sizing in a set left the card that size).
+          const ms0 = useModelScaleStore.getState(), dk0 = dataKey(key), inSet = standsIn(key)
+          g = { kind: 'model', key: dk0, k0: (inSet ? ms0.setSizeOf[dk0] ?? ms0.sizeOf[dk0] : ms0.sizeOf[dk0]) ?? 1, y0: e.clientY, moved: false, inSet }
           return
         }
       }
@@ -670,7 +673,13 @@ export const TiltedView: React.FC = () => {
         if (!g.moved && Math.abs(dy) < 4) return
         g.moved = true
         const k = Math.min(8, Math.max(0.1, g.k0 * Math.exp(-dy / 160)))
-        useModelScaleStore.getState().setSize(g.key, k)
+        const ms1 = useModelScaleStore.getState()
+        if (g.inSet) ms1.setSetSize(g.key, k)
+        else {
+          // Placed in a set that still goes by this size: the set keeps it.
+          if (ms1.setSizeOf[g.key] === undefined && ms1.placeOf[g.key] && ms1.sizeOf[g.key] !== undefined) ms1.setSetSize(g.key, ms1.sizeOf[g.key])
+          ms1.setSize(g.key, k)
+        }
         return
       }
       if (g.kind === 'marquee') {

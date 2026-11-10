@@ -2043,6 +2043,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
       const from = `card:${groupId}`, to = `card:${newGroupId}`
       const p = ms.placeOf[from]
       if (ms.sizeOf[from] !== undefined) ms.setSize(to, ms.sizeOf[from])
+      if (ms.setSizeOf[from] !== undefined) ms.setSetSize(to, ms.setSizeOf[from])
       if (ms.poseOf[from]) ms.setPose(to, [...ms.poseOf[from]] as [number, number, number, number])
       if (ms.tintOf[from]) ms.setTint(to, ms.tintOf[from])
       if (ms.stretchOf[from]) ms.setStretch(to, [...ms.stretchOf[from]] as [number, number, number])

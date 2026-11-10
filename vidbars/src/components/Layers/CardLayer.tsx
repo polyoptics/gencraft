@@ -328,7 +328,7 @@ const CardContextMenu: React.FC<{
       const moved = (id: string) => {
         const mk = `card:${id}`
         const dk = dataKey(mk)
-        return sceneOf(mk) && (ms.placeOf[dk] || ms.poseOf[dk] || ms.sizeOf[dk] !== undefined || ms.stretchOf[dk]) ? dk : null
+        return sceneOf(mk) && (ms.placeOf[dk] || ms.poseOf[dk] || ms.setSizeOf[dk] !== undefined || ms.sizeOf[dk] !== undefined || ms.stretchOf[dk]) ? dk : null
       }
       const resets = selIds.flatMap(id => { const dk = moved(id); return dk ? [dk] : [] })
       if (moved(group.id)) {

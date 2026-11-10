@@ -122,7 +122,7 @@ export function foldArea3d(nodeId: string): string | null {
       w: g.cardWidthOverride, h: g.cardHeightOverride, flipped: g.flipped,
       ...(inDeck ? { deckState: g.deckState, deckAnchorId: anchor, deckOffsetX: g.deckOffsetX, deckOffsetY: g.deckOffsetY, nestedDeck: g.nestedDeck } : {}),
       ...(g.deckLastFront && onMasters.has(master(g.deckLastFront)) ? { deckLastFront: master(g.deckLastFront) } : {}),
-      ...(ms.sizeOf[`card:${g.id}`] !== undefined ? { size: ms.sizeOf[`card:${g.id}`] } : {}),
+      ...((ms.setSizeOf[`card:${g.id}`] ?? ms.sizeOf[`card:${g.id}`]) !== undefined ? { size: ms.setSizeOf[`card:${g.id}`] ?? ms.sizeOf[`card:${g.id}`] } : {}),
       ...(ms.poseOf[`card:${g.id}`] ? { pose: ms.poseOf[`card:${g.id}`] } : {}),
       ...(ms.tintOf[`card:${g.id}`] ? { tint: ms.tintOf[`card:${g.id}`] } : {}),
       ...(ms.placeOf[`card:${g.id}`] ? { place: ms.placeOf[`card:${g.id}`] } : {}),
@@ -135,7 +135,7 @@ export function foldArea3d(nodeId: string): string | null {
     void _id
     return {
       tile, dx: n.x - a.x, dy: n.y - a.y,
-      ...(ms.sizeOf[`node:${n.id}`] !== undefined ? { size: ms.sizeOf[`node:${n.id}`] } : {}),
+      ...((ms.setSizeOf[`node:${n.id}`] ?? ms.sizeOf[`node:${n.id}`]) !== undefined ? { size: ms.setSizeOf[`node:${n.id}`] ?? ms.sizeOf[`node:${n.id}`] } : {}),
       ...(ms.poseOf[`node:${n.id}`] ? { pose: ms.poseOf[`node:${n.id}`] } : {}),
       ...(ms.tintOf[`node:${n.id}`] ? { tint: ms.tintOf[`node:${n.id}`] } : {}),
       ...(ms.placeOf[`node:${n.id}`] ? { place: ms.placeOf[`node:${n.id}`] } : {}),
@@ -299,7 +299,7 @@ export function showArea3d(cardId: string, quiet = false, spot?: { x: number; y:
   }))
   for (const [lid, p] of at) {
     if (!lid) continue
-    if (p.size !== undefined) ms.setSize(`card:${lid}`, p.size)
+    if (p.size !== undefined) ms.setSetSize(`card:${lid}`, p.size)
     if (p.pose) ms.setPose(`card:${lid}`, p.pose)
     if (p.tint) ms.setTint(`card:${lid}`, p.tint)
     if (p.place) ms.setPlace(`card:${lid}`, p.place)
@@ -310,7 +310,7 @@ export function showArea3d(cardId: string, quiet = false, spot?: { x: number; y:
   for (const t of data.tiles) {
     const nid = fs.addFreeNode(m.x + t.dx, m.y + t.dy, t.tile.type)
     useFreeNodeStore.getState().updateFreeNode(nid, { ...t.tile, x: m.x + t.dx, y: m.y + t.dy })
-    if (t.size !== undefined) ms.setSize(`node:${nid}`, t.size)
+    if (t.size !== undefined) ms.setSetSize(`node:${nid}`, t.size)
     if (t.pose) ms.setPose(`node:${nid}`, t.pose)
     if (t.tint) ms.setTint(`node:${nid}`, t.tint)
     if (t.place) ms.setPlace(`node:${nid}`, t.place)

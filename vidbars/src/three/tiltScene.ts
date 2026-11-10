@@ -180,6 +180,9 @@ export interface TiltFrameState {
   /** Stands on a 3D area (a scene layout): it keeps the turn it is
    *  given and never turns on the turntable. */
   placed?: (key: string) => boolean
+  /** Attached to a 3D set, on its own card or placed: selected, it has
+   *  the manipulator, to be moved onto the set. */
+  canPlace?: (key: string) => boolean
   /** A model's own colour (useModelScaleStore tintOf), '#rrggbb'. */
   tintFor?: (key: string) => string | undefined
   /** A model stretched along its own axes, [x, y, z]. */
@@ -1256,7 +1259,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
         }
       }
       // Its manipulator: in a 3D area's scene, selected, standing.
-      const handles = placed && st.selected.has(tg.key) && !!s.inst && ease > 0.5
+      const handles = (placed || !!st.canPlace?.(tg.key)) && st.selected.has(tg.key) && !!s.inst && ease > 0.5
       if (handles && !s.gizmo) { s.gizmo = makeManip(); manipRoot.add(s.gizmo.group) }
       // Stretched along its own axes (scale handles), feet kept down.
       const sv = st.stretchFor?.(tg.key) ?? ONE3

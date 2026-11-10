@@ -22,7 +22,7 @@ import { createTiltScene, trianglesOf, ART_MAX, type TiltTarget, type TiltFrameS
 import type { PinSpot } from '../../../three/notesOverlay'
 import { useNotesStore } from '../../../store/notesStore'
 import { PinLabels } from '../../Notes/PinLabels'
-import { sceneOf, sceneSpot, dataKey } from '../../../utils/area3dScene'
+import { sceneOf, sceneSpot, standsIn, dataKey } from '../../../utils/area3dScene'
 import { useUndoCoordinator } from '../../../store/undoCoordinator'
 import { useManip } from '../../../store/manipStore'
 /** The notes store as it stands (read each frame without a hook). */
@@ -109,7 +109,7 @@ const live3d = () => isTilted(useTiltStore.getState()) || !!useManip.getState().
 function onArea3d(key: string): boolean {
   // On a 3D area, or docked along its side (utils/area3dScene); a folded
   // scene's small showing in a scene card's section stands as placed too.
-  return key.startsWith('mini:') || !!sceneOf(key)
+  return key.startsWith('mini:') || standsIn(key)
 }
 
 /** How each small showing of a folded scene's model stands (miniTargets):
@@ -118,7 +118,7 @@ const miniLook = new Map<string, { size?: number; pose?: [number, number, number
 
 const frameState = (): TiltFrameState => {
   const ts = useTiltStore.getState()
-  const { unitsPerMetre: scales, sizeOf, poseOf, tintOf, stretchOf, lensOf } = useModelScaleStore.getState()
+  const { unitsPerMetre: scales, sizeOf, setSizeOf, poseOf, tintOf, stretchOf, lensOf } = useModelScaleStore.getState()
   const through = useManip.getState().through
   const placedMemo = new Map<string, boolean>()
   const placed = (key: string) => { let v = placedMemo.get(key); if (v === undefined) { v = onArea3d(key); placedMemo.set(key, v) } return v }
@@ -130,7 +130,8 @@ const frameState = (): TiltFrameState => {
       ...useBoardsStore.getState().selectedGroupIds.map(id => `card:${id}`),
     ]),
     unitsFor: url => scales[url],
-    sizeFor: key => (key.startsWith('mini:') ? miniLook.get(key)?.size : sizeOf[dataKey(key)]) ?? 1,
+    // In a 3D set a model has a size of its own; on its card, its card's.
+    sizeFor: key => (key.startsWith('mini:') ? miniLook.get(key)?.size : placed(key) ? setSizeOf[dataKey(key)] ?? sizeOf[dataKey(key)] : sizeOf[dataKey(key)]) ?? 1,
     // Turn and stretch belong to a 3D set: off one (a master card left on
     // the canvas when its set folds) a model stands as it came, never
     // taking a set's rotation (Brian 2026-11-09).
@@ -139,6 +140,7 @@ const frameState = (): TiltFrameState => {
     stretchFor: key => key.startsWith('mini:') ? miniLook.get(key)?.stretch : placed(key) ? stretchOf[dataKey(key)] : undefined,
     manip: useManip.getState(),
     placed,
+    canPlace: key => !key.startsWith('mini:') && !!sceneOf(key),
     slabs: live3d() ? collectSlabs(fadeShown()) : (dropLifts(), []),
     art: live3d() ? lastArt : [],
     fade: fadeShown(),
@@ -2517,17 +2519,17 @@ function miniTargets(stage: HTMLElement, W: number, H: number): TiltTarget[] {
         add(`t${i}`, t.tile.imageUrl, fileName(t.tile.imageUrl) || t.tile.label || 'Model', t.tile.width, t.tile.height,
           t.place ?? mid(t.dx + t.tile.width / 2, t.dy + t.tile.height / 2), t)
       })
-      // The set's deck: the model cards attached to its card, each where it
-      // was put in the set (never put: in a line along its front).
-      const members = (deck ?? []).slice(1).filter(id => !data.cards.some(p => p.card === id))
+      // The set's deck: the model cards attached to its card that were put
+      // in the set, each where it was put.
+      const members = (deck ?? []).slice(1).filter(id => !data.cards.some(p => p.card === id) && !!ms.placeOf[`card:${id}`])
       members.forEach((id, i) => {
         const g = bs.groups.find(x => x.id === id)
         const model = g && !g.hideModel3d ? cardModel(g.id) : null
         if (!model) return
         const k = `card:${id}`
         add(`d${i}`, model.url, model.name, g!.cardWidthOverride ?? face.w, g!.cardHeightOverride ?? face.h,
-          ms.placeOf[k] ?? { dx: data.mat.width * (i + 1) / (members.length + 1), dy: data.mat.height * 0.85, h: 0 },
-          { size: ms.sizeOf[k], pose: ms.poseOf[k], tint: ms.tintOf[k], stretch: ms.stretchOf[k], lens: ms.lensOf[k] })
+          ms.placeOf[k],
+          { size: ms.setSizeOf[k] ?? ms.sizeOf[k], pose: ms.poseOf[k], tint: ms.tintOf[k], stretch: ms.stretchOf[k], lens: ms.lensOf[k] })
       })
     }
   }

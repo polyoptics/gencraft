@@ -378,6 +378,12 @@ interface ModelScaleStore {
    *  by dragging the model up or down. Absent: 1. */
   sizeOf: Record<string, number>
   setSize: (key: string, k: number) => void
+  /** How big a model stands in a 3D set (Brian 2026-11-10): its own, so
+   *  sizing it there leaves its size on its card alone. Same keys. Absent:
+   *  as on its card (sizeOf), which is how sets laid out before this
+   *  kept theirs. */
+  setSizeOf: Record<string, number>
+  setSetSize: (key: string, k: number) => void
   /** How a model stands turned on its card (a quaternion), kept: set by
    *  turning it with Alt-drag while it stands on a 3D area (Brian
    *  2026-11-08: lay out a scene). Same keys as sizeOf. Absent: upright. */
@@ -423,6 +429,8 @@ export const useModelScaleStore = create<ModelScaleStore>()(persist(set => ({
   setUnitsPerMetre: (url, u) => set(s => ({ unitsPerMetre: { ...s.unitsPerMetre, [url]: u } })),
   sizeOf: {},
   setSize: (key, k) => set(s => ({ sizeOf: { ...s.sizeOf, [key]: k } })),
+  setSizeOf: {},
+  setSetSize: (key, k) => set(s => ({ setSizeOf: { ...s.setSizeOf, [key]: k } })),
   poseOf: {},
   setPose: (key, q) => set(s => {
     const poseOf = { ...s.poseOf }
@@ -444,7 +452,9 @@ export const useModelScaleStore = create<ModelScaleStore>()(persist(set => ({
   placeOf: {},
   resetModel: key => set(s => {
     const drop = <T,>(m: Record<string, T>) => { const o = { ...m }; delete o[key]; return o }
-    return { placeOf: drop(s.placeOf), poseOf: drop(s.poseOf), sizeOf: drop(s.sizeOf), stretchOf: drop(s.stretchOf), floatOf: drop(s.floatOf) }
+    // Its size in the set goes; its size on its card stays (one sized in
+    // a set before the two were kept apart has only the one: that goes).
+    return { placeOf: drop(s.placeOf), poseOf: drop(s.poseOf), setSizeOf: drop(s.setSizeOf), sizeOf: s.setSizeOf[key] === undefined ? drop(s.sizeOf) : s.sizeOf, stretchOf: drop(s.stretchOf), floatOf: drop(s.floatOf) }
   }),
   setPlace: (key, p) => set(s => {
     const placeOf = { ...s.placeOf }
@@ -465,6 +475,6 @@ export const useModelScaleStore = create<ModelScaleStore>()(persist(set => ({
   }),
 }), {
   name: 'vidbars-model-scale',
-  partialize: s => ({ unitsPerMetre: s.unitsPerMetre, sizeOf: s.sizeOf, poseOf: s.poseOf, tintOf: s.tintOf, placeOf: s.placeOf, stretchOf: s.stretchOf, lensOf: s.lensOf, floatOf: s.floatOf }),
+  partialize: s => ({ unitsPerMetre: s.unitsPerMetre, sizeOf: s.sizeOf, setSizeOf: s.setSizeOf, poseOf: s.poseOf, tintOf: s.tintOf, placeOf: s.placeOf, stretchOf: s.stretchOf, lensOf: s.lensOf, floatOf: s.floatOf }),
   storage: createDebouncedIDBStorage(400),
 }))

@@ -137,9 +137,10 @@ function rowSets(): Map<string, RowSpot> {
       // Each its turn along the set's front, for a model never placed.
       const mine: string[] = []
       for (const g of row.slice(1)) mine.push(g.id)
-      // A closed deck in the row (Brian 2026-11-10): all its cards are in
-      // the set, so their models stand there without opening it. Not the
-      // one a deck shows on its face: that is its front card's model.
+      // A closed deck in the row (Brian 2026-11-10): its cards are in the
+      // set too, so the models placed there stand there without opening
+      // it (one never placed waits in the deck). Not the one a deck shows
+      // on its face: that is its front card's model.
       const inside: ProjectGroup[] = []
       const fronts = row.slice(1).filter(g => !!g.deckState && g.deckState !== 'open')
       for (let i = 0; i < fronts.length; i++) {
@@ -150,7 +151,8 @@ function rowSets(): Map<string, RowSpot> {
         }
       }
       const faces = new Set(fronts.map(f => dataKey(`card:${f.id}`)).filter((k, i) => k !== `card:${fronts[i].id}`))
-      for (const m of inside) if (!faces.has(`card:${m.id}`) && !of.has(m.id)) mine.push(m.id)
+      const placeOf = useModelScaleStore.getState().placeOf
+      for (const m of inside) if (!faces.has(`card:${m.id}`) && !of.has(m.id) && placeOf[`card:${m.id}`]) mine.push(m.id)
       mine.forEach((id, i) => of.set(id, { area: a, i, n: mine.length }))
     }
   }
@@ -174,7 +176,7 @@ function linkedHere(id: string, area: FreeNodeData): boolean {
 }
 
 /** The 3D area model `key` is in the scene of, if any. */
-export function sceneOf(key: string): { area: FreeNodeData; docked: boolean; box: R; spot?: ScenePlace } | null {
+export function sceneOf(key: string): { area: FreeNodeData; docked: boolean; box: R } | null {
   const box = boxOfKey(key)
   if (!box) return null
   const a = areaOfBox(box, undefined, key.startsWith('node:') ? key.slice(5) : undefined)
@@ -184,9 +186,16 @@ export function sceneOf(key: string): { area: FreeNodeData; docked: boolean; box
   if (a) return { ...a, box }
   // In a row with a 3D set's card: in that set, as one docked along it.
   const row = key.startsWith('card:') ? rowSets().get(key.slice(5)) : undefined
-  // Never placed: its turn in a line along the set's front, not all on
-  // the one spot nearest their cards.
-  return row ? { area: row.area, docked: true, box, spot: { dx: row.area.width * (row.i + 1) / (row.n + 1), dy: row.area.height * 0.82, h: 0 } } : null
+  return row ? { area: row.area, docked: true, box } : null
+}
+
+/** Does model `key` stand in a 3D set: on its ground, or, attached to it
+ *  (docked along it, in its card's deck), once it has been placed there
+ *  (Brian 2026-11-10)? Attached and never placed, it waits on its own
+ *  card, turning, as on any card, till it is dragged onto the set. */
+export function standsIn(key: string): boolean {
+  const sc = sceneOf(key)
+  return !!sc && (!sc.docked || !!useModelScaleStore.getState().placeOf[dataKey(key)])
 }
 
 /** Where model `key` stands in area `a`'s scene when it was never placed:
@@ -199,14 +208,13 @@ export function defaultPlace(a: FreeNodeData, box: R): ScenePlace {
 }
 
 /** Where model `key` stands, canvas units (its foot's middle and height),
- *  when it stands off its card: placed, or docked outside. null: on its
- *  card, as any model. */
+ *  when it stands off its card: placed in a set. null: on its card, as
+ *  any model. */
 export function sceneSpot(key: string): { x: number; y: number; h: number; card: R } | null {
   const sc = sceneOf(key)
   if (!sc) return null
-  const p = useModelScaleStore.getState().placeOf[dataKey(key)]
-  if (!p && !sc.docked) return null
-  const q = p ?? sc.spot ?? defaultPlace(sc.area, sc.box)
+  const q = useModelScaleStore.getState().placeOf[dataKey(key)]
+  if (!q) return null
   return { x: sc.area.x + q.dx, y: sc.area.y + q.dy, h: q.h, card: sc.box }
 }
 
@@ -215,7 +223,9 @@ export function sceneSpot(key: string): { x: number; y: number; h: number; card:
 export function placeNow(key: string): ScenePlace | null {
   const sc = sceneOf(key)
   if (!sc) return null
-  return useModelScaleStore.getState().placeOf[dataKey(key)] ?? sc.spot ?? defaultPlace(sc.area, sc.box)
+  // Never placed: where it is, on its card (on the set's ground or off it).
+  return useModelScaleStore.getState().placeOf[dataKey(key)]
+    ?? { dx: sc.box.x + sc.box.width / 2 - sc.area.x, dy: sc.box.y + sc.box.height / 2 - sc.area.y, h: 0 }
 }
 
 /** The cards of 3D area `a` (box `was`, its id `id`): those lying on it
