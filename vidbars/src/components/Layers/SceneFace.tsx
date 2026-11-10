@@ -1000,7 +1000,7 @@ export const SceneViewButton: React.FC<{ groupId: string; size: number }> = ({ g
 
 const MoreMenu: React.FC<{
   x: number; y: number; onClose: () => void
-  items: { label: string; tool: string; lit?: boolean; danger?: boolean; act: () => void }[]
+  items: { label: string; tool: string; lit?: boolean; danger?: boolean; hover?: (on: boolean) => void; act: () => void }[]
 }> = ({ x, y, onClose, items }) => {
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -1020,13 +1020,13 @@ const MoreMenu: React.FC<{
     }}>
       {items.map(it => (
         <button key={it.tool} type="button" data-scene-tool={it.tool}
-          onClick={() => { it.act(); onClose() }}
+          onClick={() => { it.hover?.(false); it.act(); onClose() }}
           style={{
             display: 'flex', alignItems: 'center', gap: 7, height: 22, padding: '0 8px', border: 'none', borderRadius: 5, cursor: 'pointer',
             background: 'transparent', color: it.danger ? '#ff8a80' : '#e6e9ef', fontSize: 11.5, textAlign: 'left', fontFamily: 'inherit',
           }}
-          onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.08)' }}
-          onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
+          onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.08)'; it.hover?.(true) }}
+          onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; it.hover?.(false) }}
         >
           <span style={{
             width: 8, height: 8, borderRadius: '50%', flex: '0 0 auto',
@@ -1181,7 +1181,7 @@ export const SceneFace: React.FC<{
   const menuItems = menuDiv && isLeaf(menuDiv) ? (() => {
     const d = menuDiv
     const sec = sectionOf(scene, d.id)
-    const items: { label: string; tool: string; lit?: boolean; danger?: boolean; act: () => void }[] = [
+    const items: { label: string; tool: string; lit?: boolean; danger?: boolean; hover?: (on: boolean) => void; act: () => void }[] = [
       { label: 'Bump out (stand taller)', tool: 'bump', lit: !!d.bump, act: () => edit(r => patchDiv(r, d.id, { bump: !d.bump })) },
       { label: 'Open as its own scene card', tool: 'open', lit: !!d.opens && groups.some(g => g.id === d.opens), act: () => openDivision(group.id, d.id) },
     ]
@@ -1201,6 +1201,8 @@ export const SceneFace: React.FC<{
     // folded back in, from here.
     if (card && (card.cardType === 'area3d' || card.area3d)) items.push({
       label: 'Show its 3D set', tool: 'area3d', lit: !!area3dOutOf(card.id), act: () => toggleArea3d(card.id),
+      // Pointed at: where it comes out, and the room it takes.
+      hover: on => useCanvasStore.getState().setPreviewHoveredDeckId(on && !area3dOutOf(card.id) ? 'set3d:' + card.id : null),
     })
     // Bake it back out to the canvas (utils/sceneBake): a new card as it
     // shows; with its cast, a closed deck; a heading, its whole section.
@@ -1232,7 +1234,12 @@ export const SceneFace: React.FC<{
         <div ref={setLayer} data-scene-knobs style={{ position: 'absolute', left: 0, top: 0, width: W, height: H, zIndex: 25, pointerEvents: 'none' }} />
       </div>
       {menu && menuItems && ReactDOM.createPortal(
-        <MoreMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />,
+        <MoreMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => {
+          // Closed while Show its 3D set is pointed at: that outline goes too.
+          const cs = useCanvasStore.getState()
+          if (cs.previewHoveredDeckId?.startsWith('set3d:')) cs.setPreviewHoveredDeckId(null)
+          setMenu(null)
+        }} />,
         document.body,
       )}
       {iconEdit && (() => {

@@ -185,6 +185,14 @@ function freshMat(card: ProjectGroup): Area3dData {
   return { mat: { x: right + w * 0.15, y: card.originY, width, height }, cards: [], tiles: [] }
 }
 
+/** Where card `card`'s 3D area comes out, and the room it takes (canvas
+ *  units): where it was folded, or, never out yet, beside the card. The
+ *  dashed outline shown before it opens (Brian 2026-11-10). */
+export function area3dSpot(card: ProjectGroup): { x: number; y: number; w: number; h: number } {
+  const m = (card.area3d ?? freshMat(card)).mat
+  return { x: m.x, y: m.y, w: m.width, h: m.height }
+}
+
 /** Brings card `cardId`'s 3D area out (an empty one the first time).
  *  Returns the mat's id. */
 export function showArea3d(cardId: string, quiet = false, spot?: { x: number; y: number }): string | null {

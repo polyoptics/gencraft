@@ -81,7 +81,7 @@ import { bakeStoryline, chartArea, chartOutOf, chartSpotBeside, eraseChart, reca
 import { cardOrigins } from '../Canvas/StorylineLayer'
 import { rowOf, setRows, openDeckOf } from '../../utils/primaryCard'
 import { wallRoom } from '../../utils/wallRoom'
-import { area3dOutOf, toggleArea3d, foldArea3dAndDeck, showArea3dMoving } from '../../utils/area3dCard'
+import { area3dOutOf, area3dSpot, toggleArea3d, foldArea3dAndDeck, showArea3dMoving } from '../../utils/area3dCard'
 import { sceneOf, dataKey, cardHoldsModel } from '../../utils/area3dScene'
 
 const BOARD_PADDING_X = 20
@@ -163,6 +163,11 @@ const CardContextMenu: React.FC<{
   // A dashed outline on the canvas while a chart item is pointed at: where
   // the chart comes out (canvas units).
   const [chartGhost, setChartGhost] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
+  // Closed while its Show 3D set line is pointed at: that outline goes too.
+  useEffect(() => () => {
+    const cs = useCanvasStore.getState()
+    if (cs.previewHoveredDeckId === 'set3d:' + group.id) cs.setPreviewHoveredDeckId(null)
+  }, [group.id])
   // Right-clicked on a card of a selection of several: the items that can,
   // act on every selected card (Brian 2026-11-09), as Flip does.
   const selNow = useBoardsStore.getState().selectedGroupIds
@@ -291,7 +296,13 @@ const CardContextMenu: React.FC<{
     // Show chart. Lit while it is out.
     if (group.cardType === 'area3d' || group.area3d) {
       const out = area3dOutOf(group.id)
-      menuItems.push({ label: 'Show 3D set', icon: '▦', lit: !!out, action: () => { toggleArea3d(group.id); onClose() } })
+      // Pointed at, it shows where the scene comes out and the room it
+      // takes, as Show chart does (Brian 2026-11-10).
+      menuItems.push({
+        label: 'Show 3D set', icon: '▦', lit: !!out,
+        hover: on => useCanvasStore.getState().setPreviewHoveredDeckId(on && !out ? 'set3d:' + group.id : null),
+        action: () => { toggleArea3d(group.id); onClose() },
+      })
     }
     // A model card: its model stands up in 3D, or stays flat (Brian
     // 2026-11-09: backups and master decks). On/off, lit while it stands.
@@ -4624,6 +4635,25 @@ const GhostCardSlot: React.FC<{ anchor: ProjectGroup; slot: { cardId: string; de
  *  pointer-events: none, zIndex 25 — purely visual, sits above the canvas
  *  backdrop but below ghost slots (30) and far below all card surfaces (40+),
  *  so the deck always draws on top of any overlapping preview rect. */
+/** A folded 3D scene card's icon (or its Show 3D set line) pointed at: a
+ *  dashed outline where its scene comes out and the room it takes (Brian
+ *  2026-11-10), as a deck's open places are shown. Drawn on the canvas
+ *  with the cards, so it lies on the ground tilted as flat. */
+const SetOpenPreview: React.FC<{ group: ProjectGroup }> = ({ group }) => {
+  const { pan, zoom } = useCardView()
+  const active = useCanvasStore(s => s.previewHoveredDeckId === 'set3d:' + group.id)
+  const out = useFreeNodeStore(s => active && Object.values(s.nodes).some(n => n.type === 'area' && n.areaCard === group.id))
+  if (!active || out) return null
+  const a = area3dSpot(group)
+  return (
+    <div data-set-preview={group.id} style={{
+      position: 'absolute', left: pan.x + a.x * zoom, top: pan.y + a.y * zoom, width: a.w * zoom, height: a.h * zoom,
+      border: '2px dashed rgba(170,200,255,0.85)', borderRadius: 10, background: 'rgba(120,160,255,0.08)',
+      boxSizing: 'border-box', pointerEvents: 'none', zIndex: 60,
+    }} />
+  )
+}
+
 const DeckOpenPreview: React.FC<{ deck: Deck; lay?: DeckLay }> = ({ deck, lay }) => {
   const boards = useBoardsStore(s => s.boards)
   const allGroups = useBoardsStore(s => s.groups)
@@ -4950,6 +4980,7 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
   const storyKey = useFreeNodeStore(s => storyLinksKey(s.nodes))
   // Cards whose chart is out (their deck icon is lit).
   const chartsOut = useFreeNodeStore(s => Object.values(s.nodes).flatMap(n => (n.storyline?.chartCard ? [n.storyline.chartCard] : [])).join(' '))
+  const setsOut = useFreeNodeStore(s => Object.values(s.nodes).flatMap(n => (n.type === 'area' && n.areaCard ? [n.areaCard] : [])).join(' '))
   const lays = useMemo(() => {
     const byId = new Map(groups.map(g => [g.id, g]))
     // No storyline holds a card: nothing to look up (storyKey is '').
@@ -5101,6 +5132,13 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
                 if (out) bakeStoryline(out, cardOrigins)
                 else recallChart(g.id)
               },
+            } : g.cardType === 'area3d' || g.area3d ? {
+              // A 3D scene card: the same icon (Brian 2026-11-10), pointed
+              // at to see where its scene comes out and the room it takes,
+              // double-clicked to show it or fold it in; lit while out.
+              kind: 'deckPreview', deckId: 'set3d:' + g.id, count: (g.area3d?.cards.length ?? 0) + (g.area3d?.tiles.length ?? 0),
+              lit: setsOut.split(' ').includes(g.id),
+              onDoubleClick: () => toggleArea3d(g.id),
             } : { kind: 'hidden' }} />
             <GroupCard group={g} />
           </Fragment>
@@ -5119,6 +5157,9 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
           canvas it is floating above? */}
       {decks.filter(d => !onlySet || d.memberIds.some(id => onlySet.has(id))).map(d => (
         <DeckOpenPreview key={`preview-${d.id}`} deck={d} lay={lays.get(d.id)} />
+      ))}
+      {!scoped && groups.filter(g => (g.cardType === 'area3d' || g.area3d) && !g.pin).map(g => (
+        <SetOpenPreview key={`set-preview-${g.id}`} group={g} />
       ))}
       {affordanceClusters.filter(c => !onlySet || c.some(id => onlySet.has(id))).map(cluster => (
         <DeckAffordance key={cluster.join('|')} cluster={cluster} front={affordanceFront(cluster[0])} frontSide={(() => { const f = affordanceFront(cluster[0]); return f && f !== 'card' ? lays.get(f.id)?.side : undefined })()} />
