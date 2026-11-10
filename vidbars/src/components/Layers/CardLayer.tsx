@@ -36,6 +36,7 @@ import { HeroImageLayer } from './HeroImageLayer'
 import { CardBack, FlipButton, backColor, useCardFlip } from './CardBack'
 import { liveLocks, lockOf, withLockMates } from '../../utils/deckLock'
 import { SceneFace } from './SceneFace'
+import { stretchStart } from '../../utils/sceneGrow'
 import type { TextPad } from '../../utils/sceneCard'
 import { ChangeMenu, MarkTags, StateFace } from './StateFace'
 import { allChanges, toggleCardMark } from '../../utils/stateCard'
@@ -1302,6 +1303,21 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
 
     const startX = e.clientX
     const startY = e.clientY
+    // A scene card, with Shift (Brian 2026-11-10): the edge adds or takes
+    // space. Only the sections touching it change; the rest keep their
+    // size and place (utils/sceneGrow). Plain: everything scales, below.
+    const stretch = e.shiftKey && group.scene && !showBack
+      ? stretchStart(group.id, edge, { width: screenWidth, height: Math.max(1, cardHeight - headerPad) }) : null
+    if (stretch) {
+      const onMove = (ev: PointerEvent) => {
+        const z = useCanvasStore.getState().zoom
+        stretch((ev.clientX - startX) / z, (ev.clientY - startY) / z)
+      }
+      const onUp = () => { window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp) }
+      window.addEventListener('pointermove', onMove)
+      window.addEventListener('pointerup', onUp)
+      return
+    }
     // This card, plus — when it is part of a multi-selection — every other
     // selected card that stands on its own (a card inside a stacked or
     // fanned deck has no handles of its own, so it stays as it is). Each
@@ -1362,7 +1378,7 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
     }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
-  }, [group.id, group.cut, screenWidth, cardHeight, headerPad, contentCanvasW, contentCanvasH, zoom])
+  }, [group.id, group.cut, screenWidth, cardHeight, headerPad, contentCanvasW, contentCanvasH, zoom, !!group.scene, showBack])
 
   if (screenWidth === 0) return null
   // Off the flat screen is not off the tilted one: there a card dragged up

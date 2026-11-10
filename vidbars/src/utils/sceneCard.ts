@@ -95,6 +95,9 @@ export interface SceneView {
   bumps?: boolean
   trace?: boolean
   traceText?: string
+  /** Holds the face's layout scale where it was when the card was last
+   *  grown by adding space (utils/sceneGrow): x the organic fit. */
+  fitK?: number
 }
 
 /** The colours new divisions take in turn (from Brian's storyMap). */
@@ -182,6 +185,65 @@ export function addStrip(root: SceneDiv, side: 'top' | 'bottom' | 'left' | 'righ
       : { ...root, kids: [...root.kids!, fresh], sizes: [...sizes, share] }
   }
   return { id: newDetailId(), dir, sizes: first ? [share, 1 - share] : [1 - share, share], kids: first ? [fresh, root] : [root, fresh] }
+}
+
+/** addStrip, but nothing already there changes size (Brian 2026-11-10):
+ *  the new strip is `t` layout units thick and the face grows by it (and
+ *  a gap). `w`, `h`: the room the divisions have now. */
+export function addStripKeeping(root: SceneDiv, side: 'top' | 'bottom' | 'left' | 'right', w: number, h: number, gap: number, t: number): SceneDiv {
+  const fresh = leaf('Section', PALETTE[colorTurn++ % PALETTE.length])
+  const dir = side === 'top' || side === 'bottom' ? 'col' : 'row'
+  const first = side === 'top' || side === 'left'
+  if (!isLeaf(root) && root.dir === dir && !root.fold && !(first && canFold(root))) {
+    // Each part's share becomes its length as it is now; the strip's, t.
+    const unit = shareUnits(root, { w, h }, gap)
+    const lens = (root.sizes ?? root.kids!.map(() => 1 / root.kids!.length)).map(x => x * unit)
+    return first
+      ? { ...root, kids: [fresh, ...root.kids!], sizes: normal([t, ...lens]) }
+      : { ...root, kids: [...root.kids!, fresh], sizes: normal([...lens, t]) }
+  }
+  const len = dir === 'col' ? h : w
+  return { id: newDetailId(), dir, sizes: normal(first ? [t, len] : [len, t]), kids: first ? [fresh, root] : [root, fresh] }
+}
+
+type Boxes = Map<string, { x: number; y: number; w: number; h: number }>
+const foldedNow = (d: SceneDiv) => !!d.fold && canFold(d)
+const lastOpen = (d: SceneDiv) => { let j = -1; d.kids!.forEach((k, i) => { if (!foldedNow(k)) j = i }); return j }
+
+/** The face's far edge along `axis` ('row': its right, 'col': its bottom)
+ *  moved by `by` layout units, the face growing or shrinking with it: only
+ *  the parts touching that edge change size; every other keeps its own.
+ *  `boxes`: every part's box as laid out now (divBoxes). */
+export function stretchEdge(root: SceneDiv, axis: 'row' | 'col', boxes: Boxes, gap: number, by: number): SceneDiv {
+  const walk = (d: SceneDiv): SceneDiv => {
+    const b = boxes.get(d.id)
+    if (isLeaf(d) || foldedNow(d) || !b) return d
+    if (d.dir !== axis) return { ...d, kids: d.kids!.map(walk) }
+    const j = lastOpen(d)
+    if (j < 0) return d
+    const unit = shareUnits(d, b, gap)
+    const lens = (d.sizes ?? d.kids!.map(() => 1 / d.kids!.length)).map(x => x * unit)
+    lens[j] = Math.max(1, lens[j] + by)
+    return { ...d, kids: d.kids!.map((k, i) => i === j ? walk(k) : k), sizes: normal(lens) }
+  }
+  return walk(root)
+}
+
+/** How far that edge can come in (layout units) before a part touching it
+ *  would have to tuck its contents in. */
+export function edgeRoom(root: SceneDiv, axis: 'row' | 'col', boxes: Boxes, gap: number): number {
+  const ext = (id: string) => { const b = boxes.get(id); return b ? (axis === 'row' ? b.w : b.h) : 0 }
+  const need = (d: SceneDiv) => { const n = needOf(d, gap); return axis === 'row' ? n.w : n.h }
+  const walk = (d: SceneDiv): number => {
+    if (!boxes.get(d.id)) return 0
+    if (isLeaf(d) || foldedNow(d)) return Math.max(0, ext(d.id) - need(d))
+    if (d.dir !== axis) return Math.min(...d.kids!.map(walk))
+    const j = lastOpen(d)
+    if (j < 0) return 0
+    const k = d.kids![j]
+    return Math.max(0, Math.min(walk(k), ext(k.id) - need(k)))
+  }
+  return walk(root)
 }
 
 /** Parts i and i+1 of a split can become one (both single parts). */

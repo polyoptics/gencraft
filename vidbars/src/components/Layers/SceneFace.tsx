@@ -33,7 +33,7 @@ import { useLinkDragStore } from '../../store/linkDragStore'
 import { cardTitle } from '../../utils/faceStyle'
 import { CARD_TYPES } from '../../utils/cardTypes'
 import {
-  addStrip, breakEdge, canFold, canMerge, divBoxes, edgeBreaks, findDiv, mergeParts, heldCard, isLeaf, leaves, litDivisions, needOf, patchDiv, removeDiv, resizeSplit, sectionOf, shareUnits, splitDiv, takeCard,
+  breakEdge, canFold, canMerge, divBoxes, edgeBreaks, findDiv, mergeParts, heldCard, isLeaf, leaves, litDivisions, needOf, patchDiv, removeDiv, resizeSplit, sectionOf, shareUnits, splitDiv, takeCard,
   gathered, clearDiv, moveDiv, movedBy,
   type SceneDiv, type SceneView,
 } from '../../utils/sceneCard'
@@ -41,18 +41,14 @@ import { GroupCardText } from './CardLayer'
 import { openDivision } from '../../utils/sceneOpen'
 import { cardChanged, contentOf, copyFrom, migrateScene, refreshDivision, shownContent } from '../../utils/sceneContent'
 import { bakeDivision } from '../../utils/sceneBake'
+import { faceLayout, growStrip, GAP, NAT_H, NAT_W, PAD } from '../../utils/sceneGrow'
 import { useCanvasStore } from '../../store/canvasStore'
 import { ColorPickerPopup } from '../Bar/ColorPickerPopup'
 import { DEFAULT_BODY_STYLE, DEFAULT_HEADER_STYLE } from '../../store/freeNodeStore'
 import { area3dOutOf, toggleArea3d } from '../../utils/area3dCard'
 
 /** Laid out at a new card's size and scaled with the card, like its back. */
-const NAT_W = 125
-const NAT_H = 184
 // Card scale at which the layout reads at its natural size.
-const SIZE_REF = 12
-const GAP = 1.2
-const PAD = 1.6
 /** Shorter than this (layout units): one row. */
 const ROW_H = 15
 /** Narrower than this: a standing strip. */
@@ -1160,10 +1156,8 @@ export const SceneFace: React.FC<{
   // through face -> icon -> row -> strip instead of just shrinking.
   // By the card's own size on the canvas, never the view's zoom: zooming
   // never changes the layout.
-  const fit = Math.max(0.01, Math.min(width / NAT_W, height / NAT_H) / zoom)
-  const s = Math.sqrt(fit * SIZE_REF) * zoom
-  const W = width / s, H = height / s
-  const iw = W - PAD * 2, ih = H - PAD * 2
+  // (Held where it was when the card was grown by adding space: fitK.)
+  const { s, W, H, iw, ih } = faceLayout(width, height, zoom, view.fitK)
   const tucked = new Set<string>()
   const boxes = divBoxes(scene, iw, ih, GAP, tucked)
   const root = () => useBoardsStore.getState().groups.find(g => g.id === group.id)?.scene
@@ -1324,7 +1318,13 @@ export const SceneFace: React.FC<{
           {parts}
         </div>
         {!linking && (['top', 'bottom', 'left', 'right'] as const).map(side => (
-          <EdgeStrip key={side} side={side} W={W} H={H} ctx={ctx} onAdd={() => { const r = root(); if (r) ctx.write(addStrip(r, side)) }} />
+          <EdgeStrip key={side} side={side} W={W} H={H} ctx={ctx} onAdd={() => {
+            // The card grows by the new strip; what is there keeps its size
+            // and place (no easing: nothing is seen to move).
+            setDragging(true)
+            growStrip(group.id, side, { width, height })
+            requestAnimationFrame(() => requestAnimationFrame(() => setDragging(false)))
+          }} />
         ))}
         {drag?.target && drag.where && (() => {
           // Where the part being dragged would land: that side of the
