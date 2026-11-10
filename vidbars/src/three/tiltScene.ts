@@ -52,6 +52,10 @@ export interface TiltTarget {
   /** Standing off its card (in a 3D area's scene): where the card is, for
    *  its back wall. */
   wall?: { u: number; v: number; h: number }
+  /** A small showing of a folded 3D scene's model, in a scene card's
+   *  section (Brian 2026-11-10): no back wall, and pick() sees through it
+   *  (it is looked at there, never changed). */
+  mini?: boolean
 }
 
 /** A flat element given thickness on the tilted plane: a rounded slab
@@ -1338,7 +1342,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       const back = s.wall.getObjectByName('placard')!
       back.scale.z = d
       back.position.z = -d / 2 - 0.3
-      s.wall.visible = st.walls && !!text && ease > 0
+      s.wall.visible = st.walls && !!text && ease > 0 && !tg.mini
     }
     // A card missing for a frame or two (a re-render, a deck shuffling) is
     // only hidden: dropping it would reload the model and blink.
@@ -1577,7 +1581,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       if (f) pickedZ = groundDeco.worldToLocal(hit.point.clone()).z
     }
     for (const [key, s] of standing) {
-      if (!s.stand.visible || !s.inst) continue
+      if (!s.stand.visible || !s.inst || key.startsWith('mini:')) continue
       const hit = raycaster.intersectObject(s.turn, true)[0]
       if (hit && (!best || hit.distance < best.d)) best = { key, d: hit.distance }
       const man = s.figure.visible ? raycaster.intersectObject(s.figure, true)[0] : undefined

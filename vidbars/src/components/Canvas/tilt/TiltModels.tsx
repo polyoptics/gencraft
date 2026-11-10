@@ -14,7 +14,8 @@ import { RAIL_COLORS } from '../rail/railStyle'
 import { RAIL_TRAY } from '../../../utils/rail'
 import { setGlHidden } from '../../../three/viewportRenderer'
 import { getMediaItems } from '../../../types/bar'
-import { faceBlocks } from '../../../utils/cardGrid'
+import { cardFaceSize, faceBlocks } from '../../../utils/cardGrid'
+import { findDiv, heldCard } from '../../../utils/sceneCard'
 import { selectStorylinesInBox, standingStories, storyWallOf } from '../StorylineLayer'
 import { create } from 'zustand'
 import { createTiltScene, trianglesOf, ART_MAX, type TiltTarget, type TiltFrameState, type ManipHit, type ManipPart, type TiltSlab, type TiltArt } from '../../../three/tiltScene'
@@ -106,9 +107,14 @@ const live3d = () => isTilted(useTiltStore.getState()) || !!useManip.getState().
 /** Whether model `key` ('card:<id>' / 'node:<id>') stands on a 3D area:
  *  a scene layout, where its turn is kept (Brian 2026-11-08). */
 function onArea3d(key: string): boolean {
-  // On a 3D area, or docked along its side (utils/area3dScene).
-  return !!sceneOf(key)
+  // On a 3D area, or docked along its side (utils/area3dScene); a folded
+  // scene's small showing in a scene card's section stands as placed too.
+  return key.startsWith('mini:') || !!sceneOf(key)
 }
+
+/** How each small showing of a folded scene's model stands (miniTargets):
+ *  its size, turn, colour and stretch as its scene card keeps them. */
+const miniLook = new Map<string, { size?: number; pose?: [number, number, number, number]; tint?: string; stretch?: [number, number, number]; lens?: import('../../../store/tiltStore').CameraLens }>()
 
 const frameState = (): TiltFrameState => {
   const ts = useTiltStore.getState()
@@ -124,13 +130,13 @@ const frameState = (): TiltFrameState => {
       ...useBoardsStore.getState().selectedGroupIds.map(id => `card:${id}`),
     ]),
     unitsFor: url => scales[url],
-    sizeFor: key => sizeOf[dataKey(key)] ?? 1,
+    sizeFor: key => (key.startsWith('mini:') ? miniLook.get(key)?.size : sizeOf[dataKey(key)]) ?? 1,
     // Turn and stretch belong to a 3D set: off one (a master card left on
     // the canvas when its set folds) a model stands as it came, never
     // taking a set's rotation (Brian 2026-11-09).
-    poseFor: key => placed(key) ? poseOf[dataKey(key)] : undefined,
-    tintFor: key => tintOf[dataKey(key)],
-    stretchFor: key => placed(key) ? stretchOf[dataKey(key)] : undefined,
+    poseFor: key => key.startsWith('mini:') ? miniLook.get(key)?.pose : placed(key) ? poseOf[dataKey(key)] : undefined,
+    tintFor: key => key.startsWith('mini:') ? miniLook.get(key)?.tint : tintOf[dataKey(key)],
+    stretchFor: key => key.startsWith('mini:') ? miniLook.get(key)?.stretch : placed(key) ? stretchOf[dataKey(key)] : undefined,
     manip: useManip.getState(),
     placed,
     slabs: live3d() ? collectSlabs(fadeShown()) : (dropLifts(), []),
@@ -138,7 +144,7 @@ const frameState = (): TiltFrameState => {
     fade: fadeShown(),
     notesOf: url => notesNow.models[url],
     lock: ts.lock3d || !!through,
-    lensFor: key => lensOf[dataKey(key)],
+    lensFor: key => key.startsWith('mini:') ? miniLook.get(key)?.lens : lensOf[dataKey(key)],
     through,
   }
 }
@@ -2440,6 +2446,65 @@ function dropLifts() {
 useTiltStore.subscribe(s => { if (!isTilted(s)) dropLifts() })
 
 /** Every model card in view, as flat px from the host centre. */
+/** A folded 3D scene in a scene card's section (Brian 2026-11-10): tilted,
+ *  the section shows the scene, its models standing in it, small, each
+ *  where it stood on the scene's ground, sized and turned as it was. Read
+ *  from what the scene's card keeps (utils/area3dCard); nothing is made
+ *  on the canvas, and they are only looked at there. */
+function miniTargets(stage: HTMLElement, W: number, H: number): TiltTarget[] {
+  miniLook.clear()
+  const out: TiltTarget[] = []
+  const bs = useBoardsStore.getState()
+  const face = cardFaceSize()
+  for (const sf of stage.querySelectorAll<HTMLElement>('[data-scene-face]')) {
+    const sceneId = sf.dataset.sceneFace!
+    const scene = bs.groups.find(g => g.id === sceneId)?.scene
+    if (!scene) continue
+    for (const el of sf.querySelectorAll<HTMLElement>('[data-scene-div]')) {
+      const d = findDiv(scene, el.dataset.sceneDiv!)
+      const held = d ? heldCard(d) : undefined
+      const data = held ? bs.groups.find(g => g.id === held)?.area3d : undefined
+      if (!data || !(data.cards.length || data.tiles.length) || !(data.mat.width > 0) || !(data.mat.height > 0)) continue
+      const at = offsetScaled(el, stage)
+      if (!at) continue
+      const bw = el.offsetWidth * at.k, bh = el.offsetHeight * at.k
+      // The scene's ground, fitted into the section, in its middle.
+      const f = Math.min(bw / data.mat.width, bh / data.mat.height) * 0.92
+      const ox = at.x + (bw - data.mat.width * f) / 2, oy = at.y + (bh - data.mat.height * f) / 2
+      const base = liftOf(el)
+      // Never placed: on its card's middle, pulled just inside the ground
+      // (a card docked along its side), as in the scene (defaultPlace).
+      const m = Math.min(data.mat.width, data.mat.height) * 0.12
+      const mid = (x: number, y: number) => ({
+        dx: x < 0 || x > data.mat.width ? Math.min(data.mat.width - m, Math.max(m, x)) : x,
+        dy: y < 0 || y > data.mat.height ? Math.min(data.mat.height - m, Math.max(m, y)) : y, h: 0,
+      })
+      const add = (i: string, url: string, name: string, w: number, h: number, p: { dx: number; dy: number; h: number }, look: { size?: number; pose?: [number, number, number, number]; tint?: string; stretch?: [number, number, number]; lens?: import('../../../store/tiltStore').CameraLens }) => {
+        const key = `mini:${sceneId}:${d!.id}:${i}`
+        miniLook.set(key, look)
+        out.push({
+          key, url, name, mini: true,
+          u: ox + p.dx * f - W / 2, v: oy + p.dy * f - H / 2,
+          w: Math.min(w, h * 1.4) * f, h: h * f, z: base + p.h * f,
+        })
+      }
+      data.cards.forEach((p, i) => {
+        const g = bs.groups.find(x => x.id === p.card)
+        const model = g && !g.hideModel3d ? cardModel(g.id) : null
+        if (!model) return
+        const w = p.w ?? face.w, h = p.h ?? face.h
+        add(`c${i}`, model.url, model.name, w, h, p.place ?? mid(p.dx + w / 2, p.dy + h / 2), p)
+      })
+      data.tiles.forEach((t, i) => {
+        if (t.tile.type !== 'model' || !t.tile.imageUrl) return
+        add(`t${i}`, t.tile.imageUrl, fileName(t.tile.imageUrl) || t.tile.label || 'Model', t.tile.width, t.tile.height,
+          t.place ?? mid(t.dx + t.tile.width / 2, t.dy + t.tile.height / 2), t)
+      })
+    }
+  }
+  return out
+}
+
 function collectTargets(W: number, H: number): TiltTarget[] {
   // Models stand up out of their cards in the 3D mode only; peeking, they
   // stay flat in their cards (Brian 2026-11-04).
@@ -2529,11 +2594,13 @@ function collectTargets(W: number, H: number): TiltTarget[] {
       }))
     }
   }
-  const shown = out.filter(t => Math.abs(t.u) < W && Math.abs(t.v) < H && t.w > 4)
+  // A folded scene held in a scene card's section: shown there, small.
+  if (stage) out.push(...miniTargets(stage, W, H))
+  const shown = out.filter(t => Math.abs(t.u) < W && Math.abs(t.v) < H && t.w > (t.mini ? 1 : 4))
   // A card set to keep its model flat ("Show model in 3D" off).
   const groups = useBoardsStore.getState().groups
   const flatCard = (key: string) => key.startsWith('card:') && [key, dataKey(key)].some(k => groups.find(g => g.id === k.slice(5))?.hideModel3d)
-  const inScene = (t: TiltTarget) => (t.key.startsWith('card:') || t.key.startsWith('node:')) && !!sceneOf(t.key)
+  const inScene = (t: TiltTarget) => !!t.mini || ((t.key.startsWith('card:') || t.key.startsWith('node:')) && !!sceneOf(t.key))
   // A 3D scene's models all stand (Brian 2026-11-09: zoomed out, a cap
   // left them out). The rest, if the 3D bar's Models is on (a Viewer's
   // always), nearest the middle first, while they fit the triangle budget.
