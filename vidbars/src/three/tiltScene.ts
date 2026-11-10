@@ -1615,7 +1615,9 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       if (f) pickedZ = groundDeco.worldToLocal(hit.point.clone()).z
     }
     for (const [key, s] of standing) {
-      if (!s.stand.visible || !s.inst || key.startsWith('mini:')) continue
+      // A folded set shown small in a section is only looked at; a model
+      // card's model alone in a section is sized and turned there.
+      if (!s.stand.visible || !s.inst || (key.startsWith('mini:') && !/:m\d+$/.test(key))) continue
       const hit = raycaster.intersectObject(s.turn, true)[0]
       if (hit && (!best || hit.distance < best.d)) best = { key, d: hit.distance }
       const man = s.figure.visible ? raycaster.intersectObject(s.figure, true)[0] : undefined

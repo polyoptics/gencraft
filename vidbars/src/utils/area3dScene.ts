@@ -36,7 +36,8 @@ const inside = (a: R, px: number, py: number) => px >= a.x && px <= a.x + a.widt
 /** Does card `g` show a 3D model on its face? */
 export function cardHoldsModel(g: ProjectGroup, boards: Record<string, BoardData>): boolean {
   const blocks = faceBlocks(g, boards)
-  const bid = g.faceBoardId && blocks.includes(g.faceBoardId) ? g.faceBoardId : g.cardHeroImage ? null : blocks[0]
+  // (A face picture of its own shows flat; the model is still its model.)
+  const bid = g.faceBoardId && blocks.includes(g.faceBoardId) ? g.faceBoardId : blocks[0]
   const b = bid ? boards[bid] : undefined
   for (const rid of b?.rootIds ?? []) {
     const m = getMediaItems(b!.bars[rid]?.content).find(it => it.type === 'image' || it.type === 'video' || it.type === 'model')

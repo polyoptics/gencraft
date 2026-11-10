@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { dataKey, standsIn } from '../../../utils/area3dScene'
 import { useManip } from '../../../store/manipStore'
-import { useTiltStats } from './TiltModels'
+import { useTiltStats, soloSize, setSoloSize } from './TiltModels'
 import { flushSync } from 'react-dom'
 import { useTiltStore, useModelScaleStore, offFlat, unprojectTilt, TILT_FAR } from '../../../store/tiltStore'
 import { useCanvasStore, MIN_ZOOM, MAX_ZOOM } from '../../../store/canvasStore'
@@ -334,7 +334,7 @@ export const TiltedView: React.FC = () => {
       | { kind: 'pan'; last: { x: number; y: number } }
       | { kind: 'marquee'; x0: number; y0: number; x1: number; y1: number; add: boolean }
       | { kind: 'person'; url: string; unit0: number; y0: number }
-      | { kind: 'model'; key: string; k0: number; y0: number; moved: boolean; inSet: boolean }
+      | { kind: 'model'; key: string; k0: number; y0: number; moved: boolean; inSet: boolean; solo?: boolean }
       | { kind: 'remap'; target: Element; pointerId: number; height: number; stood?: boolean; x0?: number; y0?: number; free?: boolean; tab?: { at: { x: number; y: number }; went?: boolean }; lay?: Map<string, string>; last?: { x: number; y: number }; wall?: Hinge }
     let g: Gesture | null = null
     /** A right press on furniture: its menu is its owner's (see onMenu). */
@@ -524,7 +524,9 @@ export const TiltedView: React.FC = () => {
           // In a 3D set that is its size there; on its card, its card's
           // (Brian 2026-11-10: sizing in a set left the card that size).
           const ms0 = useModelScaleStore.getState(), dk0 = dataKey(key), inSet = standsIn(key)
-          g = { kind: 'model', key: dk0, k0: (inSet ? ms0.setSizeOf[dk0] ?? ms0.sizeOf[dk0] : ms0.sizeOf[dk0]) ?? 1, y0: e.clientY, moved: false, inSet }
+          // In a scene card's section, that section's own size for it.
+          const solo = soloSize(key)
+          g = { kind: 'model', key: dk0, k0: solo ?? (inSet ? ms0.setSizeOf[dk0] ?? ms0.sizeOf[dk0] : ms0.sizeOf[dk0]) ?? 1, y0: e.clientY, moved: false, inSet, solo: solo !== null }
           return
         }
       }
@@ -674,7 +676,8 @@ export const TiltedView: React.FC = () => {
         g.moved = true
         const k = Math.min(8, Math.max(0.1, g.k0 * Math.exp(-dy / 160)))
         const ms1 = useModelScaleStore.getState()
-        if (g.inSet) ms1.setSetSize(g.key, k)
+        if (g.solo) setSoloSize(g.key, k)
+        else if (g.inSet) ms1.setSetSize(g.key, k)
         else {
           // Placed in a set that still goes by this size: the set keeps it.
           if (ms1.setSizeOf[g.key] === undefined && ms1.placeOf[g.key] && ms1.sizeOf[g.key] !== undefined) ms1.setSetSize(g.key, ms1.sizeOf[g.key])

@@ -57,6 +57,10 @@ export interface SceneDiv {
   /** The card's content when it was copied in (its header, text, picture):
    *  differs from the card's now = the card changed since. */
   copied?: string
+  /** How the model of the card it shows stands in it, tilted (Brian
+   *  2026-11-10): the section's own size and turn for it, apart from the
+   *  model's on its card and in a 3D set. Absent: as on its card. */
+  model?: { size?: number; pose?: [number, number, number, number] }
   /** Follows its card live: its header, text and picture are read from
    *  the card as it is now (never written to it); its look stays its own.
    *  Typing in it stops the following and keeps what showed. */

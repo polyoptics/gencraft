@@ -15,7 +15,7 @@ import { RAIL_TRAY } from '../../../utils/rail'
 import { setGlHidden } from '../../../three/viewportRenderer'
 import { getMediaItems } from '../../../types/bar'
 import { cardFaceSize, faceBlocks } from '../../../utils/cardGrid'
-import { findDiv, heldCard } from '../../../utils/sceneCard'
+import { findDiv, heldCard, patchDiv, type SceneDiv } from '../../../utils/sceneCard'
 import { selectStorylinesInBox, standingStories, storyWallOf } from '../StorylineLayer'
 import { create } from 'zustand'
 import { createTiltScene, trianglesOf, ART_MAX, type TiltTarget, type TiltFrameState, type ManipHit, type ManipPart, type TiltSlab, type TiltArt } from '../../../three/tiltScene'
@@ -109,8 +109,31 @@ const live3d = () => isTilted(useTiltStore.getState()) || !!useManip.getState().
 function onArea3d(key: string): boolean {
   // On a 3D area, or docked along its side (utils/area3dScene); a folded
   // scene's small showing in a scene card's section stands as placed too.
-  return key.startsWith('mini:') || standsIn(key)
+  // A model card's model alone in a section stands as on a card: it turns
+  // on the turntable, and is turned by hand.
+  return key.startsWith('mini:') ? !soloMini(key) : standsIn(key)
 }
+
+/** A model card's model alone in a scene card's section (miniTargets): its
+ *  scene card and section. null: any other model. */
+function soloMini(key: string): { sceneId: string; divId: string } | null {
+  const m = /^mini:([^:]+):([^:]+):m\d+$/.exec(key)
+  return m && { sceneId: m[1], divId: m[2] }
+}
+/** Sets that section's own size or turn for the model (SceneDiv.model). */
+function setSoloLook(key: string, p: NonNullable<SceneDiv['model']>) {
+  const at = soloMini(key)
+  const bs = useBoardsStore.getState()
+  const scene = at && bs.groups.find(g => g.id === at.sceneId)?.scene
+  const d = scene ? findDiv(scene, at!.divId) : null
+  if (scene && d) bs.setGroupScene(at!.sceneId, patchDiv(scene, d.id, { model: { ...d.model, ...p } }))
+}
+/** How big a section's model stands (its own size there, else as on its
+ *  card), and setting it. null: not a section's model. */
+export function soloSize(key: string): number | null {
+  return soloMini(key) ? miniLook.get(key)?.size ?? 1 : null
+}
+export function setSoloSize(key: string, k: number) { setSoloLook(key, { size: k }) }
 
 /** How each small showing of a folded scene's model stands (miniTargets):
  *  its size, turn, colour and stretch as its scene card keeps them. */
@@ -303,6 +326,14 @@ export const TiltModels: React.FC = () => {
           if (q) { useUndoCoordinator.getState().checkpoint(); useModelScaleStore.getState().setPose(dataKey(key), q) }
           return
         }
+        // A section's model (Brian 2026-11-10): Settle off, it stays as it
+        // was turned, kept as that section's view of it; Settle on, it
+        // rolls back to that view, as a model on its card does.
+        if (soloMini(key) && !useTiltStore.getState().settle) {
+          const q = v.keepTurn(key)
+          if (q) { useUndoCoordinator.getState().checkpoint(); setSoloLook(key, { pose: q }) }
+          return
+        }
         v.letGo(key, useTiltStore.getState().settle)
       }
       models.screenBox = key => {
@@ -434,8 +465,9 @@ export function cardModel(id: string): { url: string; name: string } | null {
     const face = (g.deckState === 'stacked' && g.deckFaceCard && bs.groups.find(gr => gr.id === g.deckFaceCard))
       || (portal && bs.groups.find(gr => gr.id === portal)) || g
     const blocks = faceBlocks(face, bs.boards)
-    bid = face.faceBoardId && blocks.includes(face.faceBoardId) ? face.faceBoardId
-      : face.cardHeroImage ? null : blocks[0] ?? null
+    // A face picture of its own (Brian 2026-11-10) is what the card shows
+    // flat; tilted, its model still stands.
+    bid = face.faceBoardId && blocks.includes(face.faceBoardId) ? face.faceBoardId : blocks[0] ?? null
     name = face.name
   }
   const board = bid ? bs.boards[bid] : undefined
@@ -2482,7 +2514,7 @@ function miniTargets(stage: HTMLElement, W: number, H: number): TiltTarget[] {
         const model = g && !g.hideModel3d ? cardModel(g.id) : null
         if (model) {
           const key = `mini:${sceneId}:${d.id}:m${step}`
-          miniLook.set(key, { size: ms.sizeOf[`card:${g.id}`], tint: ms.tintOf[`card:${g.id}`] })
+          miniLook.set(key, { size: d.model?.size ?? ms.sizeOf[`card:${g.id}`], pose: d.model?.pose, tint: ms.tintOf[`card:${g.id}`] })
           const side = Math.min(bw, bh) * 0.45
           out.push({ key, url: model.url, name: model.name, mini: true, u: at.x + bw / 2 - W / 2, v: at.y + bh / 2 - H / 2, w: side, h: side, z: liftOf(el) })
         }
@@ -2689,7 +2721,11 @@ export function marqueeSelect(m: { x0: number; y0: number; x1: number; y1: numbe
 export function selectModel(key: string, add: boolean) {
   const [kind, id] = [key.slice(0, key.indexOf(':')), key.slice(key.indexOf(':') + 1)]
   const fs = useFreeNodeStore.getState(), bs = useBoardsStore.getState()
-  if (kind === 'node') {
+  if (kind === 'mini') {
+    // A section's model: its scene card.
+    const scene = soloMini(key)?.sceneId
+    if (scene) { bs.setSelectedGroups(add ? [...new Set([...bs.selectedGroupIds, scene])] : [scene]); if (!add) fs.setFreeSelection([]) }
+  } else if (kind === 'node') {
     fs.setFreeSelection(add ? [...new Set([...fs.selectedIds, id])] : [id])
     if (!add) bs.clearGroupSelection()
   } else {
