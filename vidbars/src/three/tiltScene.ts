@@ -862,6 +862,11 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   const liftMesh = new THREE.Mesh(liftGeo, new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false, side: THREE.DoubleSide }))
   liftMesh.frustumCulled = false
   liftMesh.castShadow = true
+  // A lifted face casts and, in the same plane, catches (liftCatch): in
+  // the shadow map it is pushed away from the light, more the more it
+  // slants to it, or it shades itself in fine stripes across the whole
+  // face (Brian 2026-11-10, banding on a scene card's sections).
+  liftMesh.customDepthMaterial = new THREE.MeshDepthMaterial({ polygonOffset: true, polygonOffsetFactor: 6, polygonOffsetUnits: 8 })
   // Lifted faces catch shadows too (a raised button's, on its card).
   liftGeo.setAttribute('normal', topGeo.getAttribute('normal'))
   const liftCatch = new THREE.Mesh(liftGeo, new THREE.ShadowMaterial({
