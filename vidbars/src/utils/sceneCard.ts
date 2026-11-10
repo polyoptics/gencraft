@@ -249,6 +249,47 @@ export function removeDiv(root: SceneDiv, id: string): SceneDiv {
   return edit(root, id, () => null)
 }
 
+/** What a drag of division `id` moves: itself, or, a section's heading,
+ *  the whole section. */
+export function movedBy(root: SceneDiv, id: string): string {
+  return sectionOf(root, id)?.id ?? id
+}
+
+/** Move part `id` (a division, or a whole section) beside division
+ *  `targetId` (Brian 2026-11-10: "drag and push them around"): on its
+ *  left, right, top or bottom, taking half its room; or 'swap', the two
+ *  change places. Where it came from closes up. Beside a section's heading
+ *  (left, right, top) means beside the whole section, so the heading
+ *  stays its heading. Unchanged when the move makes no sense (onto itself
+ *  or into itself). */
+export function moveDiv(root: SceneDiv, id: string, targetId: string, where: 'left' | 'right' | 'top' | 'bottom' | 'swap'): SceneDiv {
+  const node = findDiv(root, id), target = findDiv(root, targetId)
+  if (!node || !target || id === targetId || findDiv(node, targetId) || findDiv(target, id)) return root
+  if (where === 'swap') {
+    const walk = (d: SceneDiv): SceneDiv => d.id === id ? target : d.id === targetId ? node
+      : isLeaf(d) ? d : { ...d, kids: d.kids!.map(walk) }
+    return walk(root)
+  }
+  const sec = where !== 'bottom' ? sectionOf(root, targetId) : null
+  const besideId = sec && !findDiv(node, sec.id) && !findDiv(sec, id) ? sec.id : targetId
+  const dir = where === 'left' || where === 'right' ? 'row' : 'col'
+  const after = where === 'right' || where === 'bottom'
+  const out = edit(root, id, () => null)
+  if (!findDiv(out, besideId)) return root
+  const parent = findParent(out, besideId)
+  if (parent && parent.dir === dir) {
+    return edit(out, parent.id, p => {
+      const i = p.kids!.findIndex(k => k.id === besideId)
+      const kids = [...p.kids!], sizes = [...(p.sizes ?? p.kids!.map(() => 1 / p.kids!.length))]
+      const half = sizes[i] / 2
+      sizes.splice(i, 1, half, half)
+      kids.splice(after ? i + 1 : i, 0, node)
+      return { ...p, kids, sizes }
+    })
+  }
+  return edit(out, besideId, t => ({ id: newDetailId(), dir, sizes: [0.5, 0.5], kids: after ? [t, node] : [node, t] }))
+}
+
 export function patchDiv(root: SceneDiv, id: string, patch: Partial<SceneDiv>): SceneDiv {
   return edit(root, id, d => ({ ...d, ...patch }))
 }

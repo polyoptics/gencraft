@@ -34,7 +34,7 @@ import { cardTitle } from '../../utils/faceStyle'
 import { CARD_TYPES } from '../../utils/cardTypes'
 import {
   addStrip, breakEdge, canFold, canMerge, divBoxes, edgeBreaks, findDiv, mergeParts, heldCard, isLeaf, leaves, litDivisions, needOf, patchDiv, removeDiv, resizeSplit, sectionOf, shareUnits, splitDiv, takeCard,
-  gathered, clearDiv,
+  gathered, clearDiv, moveDiv, movedBy,
   type SceneDiv, type SceneView,
 } from '../../utils/sceneCard'
 import { GroupCardText } from './CardLayer'
@@ -122,6 +122,10 @@ type Ctx = {
   H: number
   /** The whole face, to read what a division gathers from its headings. */
   scene: SceneDiv
+  /** A part being dragged to a new place (its divisions), and the press
+   *  on a division's grip that starts it. */
+  lifted: Set<string> | null
+  startMove: (leafId: string, e: React.PointerEvent) => void
 }
 
 /** The outer edge bars (EdgeStrip): how deep each is, and how far the
@@ -221,16 +225,18 @@ const NotesInput: React.FC<{ d: SceneDiv; ctx: Ctx; font: number }> = ({ d, ctx,
 const Knob: React.FC<{
   ctx: Ctx; tool: string; title: string; at: React.CSSProperties; lit?: boolean; bg?: string
   onClick: (e: React.MouseEvent) => void; children?: React.ReactNode
-}> = ({ ctx, tool, title, at, lit, bg, onClick, children }) => (
+  /** A knob that is dragged (the move grip): its press. */
+  onDown?: (e: React.PointerEvent) => void
+}> = ({ ctx, tool, title, at, lit, bg, onClick, children, onDown }) => (
   <button
     type="button"
     data-scene-tool={tool}
     title={title}
-    onPointerDown={stopPress}
+    onPointerDown={onDown ?? stopPress}
     onDoubleClick={e => e.stopPropagation()}
     onClick={e => { e.stopPropagation(); onClick(e) }}
     style={{
-      position: 'absolute', ...at, width: ctx.u, height: ctx.u, padding: 0, borderRadius: '50%', cursor: 'pointer', zIndex: 6, pointerEvents: 'auto',
+      position: 'absolute', ...at, width: ctx.u, height: ctx.u, padding: 0, borderRadius: '50%', cursor: onDown ? 'grab' : 'pointer', zIndex: 6, pointerEvents: 'auto',
       display: 'flex', alignItems: 'center', justifyContent: 'center', boxSizing: 'border-box',
       background: bg ?? (lit ? '#ffd666' : 'rgba(14,16,24,0.82)'), color: lit ? '#111' : '#fff',
       border: `${ctx.u * 0.08}px solid rgba(255,255,255,${lit ? 1 : 0.75})`, boxShadow: `0 ${ctx.u * 0.08}px ${ctx.u * 0.25}px rgba(0,0,0,0.45)`,
@@ -244,6 +250,7 @@ const Glyph: React.FC<{ ctx: Ctx; d: string }> = ({ ctx, d }) => (
 )
 const PLUS = 'M5 1.5v7M1.5 5h7'
 const MORE = 'M2 5h0.01M5 5h0.01M8 5h0.01'
+const GRIP = 'M3.5 2.5h0.01M6.5 2.5h0.01M3.5 5h0.01M6.5 5h0.01M3.5 7.5h0.01M6.5 7.5h0.01'
 const CLEAR = 'M1.5 1.5h7v7h-7zM3.6 3.6l2.8 2.8M6.4 3.6L3.6 6.4'
 const FOLD = 'M2 3.5h6M2 6.5h6'
 
@@ -470,7 +477,7 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
       }}
       style={{
         position: 'absolute', left: box.x, top: box.y - lift, width: box.w, height: box.h + lift, zIndex: bump ? (hovered ? 16 : 13) : hovered ? 6 : picked ? 2 : 1,
-        filter: faded ? 'grayscale(0.85) brightness(0.5)' : undefined, opacity: faded ? 0.75 : 1,
+        filter: faded ? 'grayscale(0.85) brightness(0.5)' : undefined, opacity: ctx.lifted?.has(d.id) ? 0.4 : faded ? 0.75 : 1,
         transition: ctx.dragging ? 'filter 0.18s, opacity 0.18s' : 'left 0.24s ease, top 0.24s ease, width 0.24s ease, height 0.24s ease, filter 0.18s, opacity 0.18s',
         cursor: moving ? 'move' : undefined,
       }}
@@ -619,12 +626,12 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
         const th = Math.min(u * 1.15, box.h * 0.3)
         if (box.h < u * 2.2 || box.w < th * THUMB * 2) return null
         // Along its top, left of its colour and more knobs.
-        const room = box.w - u * 3.8 - ctx.seamIn * 2
+        const room = box.w - u * 5 - ctx.seamIn * 2
         const all = [...g.own.map(c => ({ c, from: null as SceneDiv | null })), ...g.handed.flatMap(h => h.cards.map(c => ({ c, from: h.from })))]
         const fit = Math.max(1, Math.floor(room / (th * THUMB + th * 0.2)))
         const shown = all.length > fit ? all.slice(0, Math.max(1, fit - 1)) : all
         return (
-          <div data-scene-cast style={{ position: 'absolute', left: ctx.seamIn + 0.6, top: ctx.seamIn + 0.6, display: 'flex', gap: th * 0.2, alignItems: 'center', zIndex: 5 }}>
+          <div data-scene-cast style={{ position: 'absolute', left: ctx.seamIn + 0.6 + u * 1.2, top: ctx.seamIn + 0.6, display: 'flex', gap: th * 0.2, alignItems: 'center', zIndex: 5 }}>
             {shown.map(({ c, from }) => {
               const card = ctx.groups.find(x => x.id === c)
               if (!card) return null
@@ -688,6 +695,7 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
       put('more', place(Math.max(0, box.w - u * 1.1), ctx.seamIn))
       if (box.w > u * 2.4) at.color = { left: at.more.left - u * 1.15, top: at.more.top }
       if (box.w > u * 3.6) at.clear = { left: at.more.left - u * 2.3, top: at.more.top }
+      put('move', place(ctx.seamIn, ctx.seamIn))
       if (heads) put('fold', box.w < STAND_W ? place((box.w - u) / 2, Math.min(1, box.h - u)) : place(Math.min(1, box.w - u), (box.h + lift - u) / 2))
       put('split-row', place(box.w - u - ctx.seamIn - u * 0.2, (box.h + lift - u) / 2))
       put('split-col', place((box.w - u) / 2, box.h + lift - u - ctx.seamIn - u * 0.2))
@@ -718,6 +726,10 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
           <Knob ctx={ctx} tool="color" title="Colour" bg={d.color ?? '#5b8dd9'} at={at.color}
             onClick={e => ctx.openPicker(d.id, e.clientX, e.clientY)} />
         )}
+        <Knob ctx={ctx} tool="move" title={heads ? 'Drag: move this whole section somewhere else on the card' : 'Drag: move this section somewhere else on the card'}
+          at={at.move} onDown={e => ctx.startMove(d.id, e)} onClick={() => {}}>
+          <Glyph ctx={ctx} d={GRIP} />
+        </Knob>
         {at.clear && (
           <Knob ctx={ctx} tool="clear" title="Clear this section: what was put in it goes (undo brings it back)" at={at.clear}
             onClick={() => { const r = ctx.root(); if (r) ctx.write(clearDiv(r, d.id)) }}>
@@ -1093,6 +1105,9 @@ export const SceneFace: React.FC<{
   const [layer, setLayer] = useState<HTMLDivElement | null>(null)
   const [moving, setMoving] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
+  // A part being dragged to a new place: what moves, and where it would
+  // land (beside which division, on which side, or swapped with it).
+  const [drag, setDrag] = useState<{ id: string; own: Set<string>; target?: string; where?: 'left' | 'right' | 'top' | 'bottom' | 'swap' } | null>(null)
   const [picker, setPicker] = useState<{ id: string; x: number; y: number } | null>(null)
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null)
   const [iconEdit, setIconEdit] = useState<{ id: string; x: number; y: number } | null>(null)
@@ -1158,7 +1173,48 @@ export const SceneFace: React.FC<{
     useBoardsStore.getState().setGroupSceneView(group.id, { ...(g?.sceneView ?? {}), ...patch })
   }
   const ctx: Ctx = {
-    layer, W, H, scene,
+    layer, W, H, scene, lifted: drag?.own ?? null,
+    startMove: (leafId, e) => {
+      if (e.button !== 0) return
+      e.stopPropagation()
+      e.preventDefault()
+      const r0 = root()
+      const id = r0 ? movedBy(r0, leafId) : null
+      const node = r0 && id ? findDiv(r0, id) : null
+      if (!r0 || !id || !node) return
+      const own = new Set(leaves(node).map(l => l.id))
+      let cur: { target: string; where: 'left' | 'right' | 'top' | 'bottom' | 'swap' } | null = null
+      setDragging(true)
+      setDrag({ id, own })
+      document.body.style.cursor = 'grabbing'
+      const onMove = (ev: PointerEvent) => {
+        // The division under the pointer on this face, not one being moved.
+        const el = document.elementsFromPoint(ev.clientX, ev.clientY)
+          .map(x => (x as HTMLElement).closest?.('[data-scene-div]') as HTMLElement | null)
+          .find(x => x && (x.closest('[data-scene-face]') as HTMLElement | null)?.dataset.sceneFace === group.id)
+        const tid = el?.dataset.sceneDiv
+        if (!el || !tid || own.has(tid)) { if (cur) { cur = null; setDrag({ id, own }) } return }
+        // Its middle: the two change places. Else the side nearest.
+        const r = el.getBoundingClientRect()
+        const fx = (ev.clientX - r.left) / Math.max(1, r.width), fy = (ev.clientY - r.top) / Math.max(1, r.height)
+        const sides = [['left', fx], ['right', 1 - fx], ['top', fy], ['bottom', 1 - fy]] as const
+        const where = Math.abs(fx - 0.5) < 0.2 && Math.abs(fy - 0.5) < 0.2 ? 'swap' : [...sides].sort((a, b) => a[1] - b[1])[0][0]
+        if (cur?.target === tid && cur.where === where) return
+        cur = { target: tid, where }
+        setDrag({ id, own, ...cur })
+      }
+      const onUp = () => {
+        window.removeEventListener('pointermove', onMove)
+        window.removeEventListener('pointerup', onUp)
+        document.body.style.cursor = ''
+        setDragging(false)
+        setDrag(null)
+        const r = root()
+        if (r && cur) { useUndoCoordinator.getState().checkpoint(); useBoardsStore.getState().setGroupScene(group.id, moveDiv(r, id, cur.target, cur.where)) }
+      }
+      window.addEventListener('pointermove', onMove)
+      window.addEventListener('pointerup', onUp)
+    },
     sceneId: group.id, s, u: TOOL_PX / s, seamIn: (seamReach(s) - GAP) / 2, boxes, groups, linking, renaming, setRenaming, noting, setNoting,
     picked, pick: id => { setPicked(id); if (id !== moving) setMoving(null) }, lit, hovered: hoveredDiv, setHovered: setHoveredDiv,
     moving, setMoving, dragging, setDragging,
@@ -1270,6 +1326,21 @@ export const SceneFace: React.FC<{
         {!linking && (['top', 'bottom', 'left', 'right'] as const).map(side => (
           <EdgeStrip key={side} side={side} W={W} H={H} ctx={ctx} onAdd={() => { const r = root(); if (r) ctx.write(addStrip(r, side)) }} />
         ))}
+        {drag?.target && drag.where && (() => {
+          // Where the part being dragged would land: that side of the
+          // division under the pointer (all of it: the two change places).
+          // Beside a heading is beside its whole section (moveDiv).
+          const w = drag.where
+          const sec = w !== 'bottom' && w !== 'swap' ? sectionOf(scene, drag.target) : null
+          const b = boxes.get(sec && !drag.own.has(drag.target) ? sec.id : drag.target)
+          if (!b) return null
+          const at = w === 'left' ? { x: b.x, y: b.y, w: b.w / 2, h: b.h } : w === 'right' ? { x: b.x + b.w / 2, y: b.y, w: b.w / 2, h: b.h }
+            : w === 'top' ? { x: b.x, y: b.y, w: b.w, h: b.h / 2 } : w === 'bottom' ? { x: b.x, y: b.y + b.h / 2, w: b.w, h: b.h / 2 } : b
+          return <div data-scene-drop={w} style={{
+            position: 'absolute', left: PAD + at.x, top: PAD + at.y, width: at.w, height: at.h, zIndex: 24, pointerEvents: 'none', boxSizing: 'border-box',
+            borderRadius: 2.2, background: 'rgba(255,214,102,0.4)', border: `${1.5 / s}px ${w === 'swap' ? 'solid' : 'dashed'} rgba(255,214,102,0.95)`,
+          }} />
+        })()}
         <div ref={setLayer} data-scene-knobs style={{ position: 'absolute', left: 0, top: 0, width: W, height: H, zIndex: 25, pointerEvents: 'none' }} />
       </div>
       {menu && menuItems && ReactDOM.createPortal(
