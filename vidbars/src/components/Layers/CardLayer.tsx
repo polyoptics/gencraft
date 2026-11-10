@@ -5742,7 +5742,11 @@ export const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void
           ) : (
             <div
               onDoubleClick={e => { e.stopPropagation(); startEditHeader() }}
-              style={{ ...cardDisplayStyle(headerTs, headerBg, !!headerText), pointerEvents: 'auto' }}
+              // A chart card's face shows or folds its chart on a
+              // double-click, so with no title there was nothing to click
+              // into and no way to write one (Brian 2026-11-10): its empty
+              // title fills the title's part of the face, and takes it.
+              style={{ ...cardDisplayStyle(headerTs, headerBg, !!headerText), pointerEvents: 'auto', ...(!bind && group?.chart && !headerText ? { flex: 1 } : {}) }}
             >{headerShown || null}</div>
           )}
         </div>
