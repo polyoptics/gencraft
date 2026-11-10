@@ -12,7 +12,7 @@ import { useBoardsStore } from './store/boardsStore'
 import { startLinkedCardSync } from './utils/linkedCards'
 import { startStateOutputs } from './utils/stateCard'
 import { startChartFollow } from './utils/chartCard'
-import { startArea3dFollow, showArea3d, foldArea3d, toggleArea3d, area3dOutOf } from './utils/area3dCard'
+import { startArea3dFollow, startArea3dBundle, showArea3d, foldArea3d, toggleArea3d, area3dOutOf, bundleArea3dCard } from './utils/area3dCard'
 import { startAreaUnder } from './utils/area3dScene'
 import { startDeckUnder } from './utils/deckUnder'
 import { createMediaCard } from './utils/cardGrid'
@@ -56,7 +56,7 @@ import { useManip } from './store/manipStore'
   // The 3D notes tools, and the 3D view's hit test they draw through.
   useNotesStore, useNotesUi, tiltModels: models,
   // 3D area cards (utils/area3dCard), and the model sizes and turns they keep.
-  area3d: { showArea3d, foldArea3d, toggleArea3d, area3dOutOf, createMediaCard }, useModelScaleStore,
+  area3d: { showArea3d, foldArea3d, toggleArea3d, area3dOutOf, bundleArea3dCard, createMediaCard }, useModelScaleStore,
   // The manipulator's settings, and the camera looked through.
   useManip,
 }
@@ -66,6 +66,8 @@ startLinkedCardSync()
 startStateOutputs()
 startChartFollow(cardOrigins)
 startArea3dFollow()
+// A 3D set and its card are one: deleting either deletes the other.
+startArea3dBundle()
 // What a 3D scene opened over stays out of it until moved by hand.
 startAreaUnder()
 // The same for a deck: what its cards opened over stays out of its row.

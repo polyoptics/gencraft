@@ -8,7 +8,8 @@ import { useFreeNodeStore, type FreeNodeData } from '../store/freeNodeStore'
 import { useBoardsStore } from '../store/boardsStore'
 import { useViewport3DStore } from '../store/viewport3dStore'
 import { useNotesStore } from '../store/notesStore'
-import { isUnder, setCards } from './area3dScene'
+import { isUnder, laying, lyingIn, setCards } from './area3dScene'
+import { isUndoRestoring } from '../store/undoCoordinator'
 
 type R = { x: number; y: number; width: number; height: number }
 const inside = (a: R, px: number, py: number) => px >= a.x && px <= a.x + a.width && py >= a.y && py <= a.y + a.height
@@ -28,9 +29,24 @@ if (typeof window !== 'undefined' && !(window as unknown as { __areaFollow?: boo
   (window as unknown as { __areaFollow?: boolean }).__areaFollow = true
   useFreeNodeStore.subscribe((s, prev) => {
     if (busy || s.nodes === prev.nodes) return
-    for (const a of Object.values(s.nodes)) {
-      if (a.type !== 'area' || a.pin) continue
-      const was = prev.nodes[a.id]
+    for (const a0 of Object.values(s.nodes)) {
+      if (a0.type !== 'area' || a0.pin) continue
+      const was = prev.nodes[a0.id]
+      let a = a0
+      // An area never collects what it comes to cover (Brian 2026-11-10:
+      // "like a black hole"): made, moved or resized over things, they
+      // are under it, not on it (area3dScene isUnder), until one is moved
+      // by hand. Before anything on it is moved along, so what rides with
+      // it is still where it lay.
+      if (!laying.on && !isUndoRestoring() && (!was || was.x !== a.x || was.y !== a.y || was.width !== a.width || was.height !== a.height)) {
+        const before = new Set(was ? lyingIn(was, a.areaCard, a.id) : [])
+        const fresh = lyingIn(a, a.areaCard, a.id).filter(k => !before.has(k) && !isUnder(a, k))
+        if (fresh.length) {
+          a = { ...a, under: [...(a.under ?? []), ...fresh] }
+          busy = true
+          try { useFreeNodeStore.getState().updateFreeNode(a.id, { under: a.under }) } finally { busy = false }
+        }
+      }
       if (!was || (was.x === a.x && was.y === a.y) || was.width !== a.width || was.height !== a.height) continue
       const dx = a.x - was.x, dy = a.y - was.y
       // What lay on it and stayed put (a selection dragged along with it

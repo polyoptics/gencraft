@@ -14,6 +14,7 @@
 // At card zoom the cards are drawn over every tile and Viewer, so a box
 // aimed onto a card rises clear of it: it shows, and lands, above.
 
+import { bundleArea3dCard } from './area3dCard'
 import { create } from 'zustand'
 import { useCanvasStore } from '../store/canvasStore'
 import { useBoardsStore } from '../store/boardsStore'
@@ -131,6 +132,8 @@ function placeAt(kind: PlaceKind, box: PlaceBox) {
     case 'loopStrip': createLoopStrip({ x: box.left, y: box.top }); break
     case 'storyline': createStorylineAt(at); break
     case 'new': if (newIsNote()) addFreeNodeCentered('note', at); else createCardOrBoardAt(at); break
+    // A 3D set comes with its card (utils/area3dCard).
+    case 'area': bundleArea3dCard(addFreeNodeCentered('area', at)); break
     default: addFreeNodeCentered(kind, at)
   }
 }

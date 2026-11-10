@@ -11,6 +11,9 @@ import { useModelScaleStore, type ScenePlace } from '../store/tiltStore'
 import { getMediaItems } from '../types/bar'
 import { faceBlocks } from './cardGrid'
 import { drawnRect } from './effectCards'
+import { useViewport3DStore } from '../store/viewport3dStore'
+import { useNotesStore } from '../store/notesStore'
+import { cardsTouch, isHiddenDeckMember } from '../hooks/useCardDecks'
 
 type R = { x: number; y: number; width: number; height: number }
 
@@ -89,6 +92,54 @@ export function boxOfKey(key: string): R | null {
   return null
 }
 
+/** What lies in box `m` (canvas units), as keys: cards (and the model cards
+ *  along its sides), tiles and other areas, Viewers, and curves drawn
+ *  wholly there. Not card `notCard`, nor tile `notNode`. */
+export function lyingIn(m: R, notCard?: string, notNode?: string): string[] {
+  const { groups, boards } = useBoardsStore.getState()
+  const on = (x: number, y: number) => x >= m.x && x <= m.x + m.width && y >= m.y && y <= m.y + m.height
+  return [
+    ...setCards({ x: m.x, y: m.y, width: m.width, height: m.height }, groups, boards, notCard).map(g => `card:${g.id}`),
+    ...Object.values(useFreeNodeStore.getState().nodes).filter(n => n.id !== notNode && !n.pin && n.type !== 'storyline' && on(n.x + n.width / 2, n.y + n.height / 2)).map(n => `node:${n.id}`),
+    ...Object.values(useViewport3DStore.getState().windows).filter(w => on(w.x + w.width / 2, w.y + w.height / 2)).map(w => `viewer:${w.id}`),
+    ...Object.values(useNotesStore.getState().curves).filter(c => c.pts.length && c.pts.every(p => on(p.x, p.y))).map(c => `curve:${c.id}`),
+  ]
+}
+
+/** While a 3D set is being laid out from its card (utils/area3dCard), what
+ *  its ground covers is worked out there, not by the sweep (areaFollow). */
+export const laying = { on: false }
+
+/** The cards in a row with a 3D set's card, while its set is out (Brian
+ *  2026-11-10: the set is a deck; a model card or deck attached to its
+ *  card is in the set, and its model stands in the set's view). By card
+ *  id, the set's ground. Worked out once for each state of the canvas. */
+let rowMemo: { groups: unknown; boards: unknown; nodes: unknown; zoom: number; of: Map<string, FreeNodeData> } | null = null
+function rowSets(): Map<string, FreeNodeData> {
+  const bs = useBoardsStore.getState(), nodes = useFreeNodeStore.getState().nodes, zoom = useCanvasStore.getState().zoom
+  if (rowMemo && rowMemo.groups === bs.groups && rowMemo.boards === bs.boards && rowMemo.nodes === nodes && rowMemo.zoom === zoom) return rowMemo.of
+  const of = new Map<string, FreeNodeData>()
+  const outs = areas(nodes).filter(a => a.areaCard)
+  if (outs.length) {
+    const seen = bs.groups.filter(g => !g.pin && !isHiddenDeckMember(g))
+    const apart = (a: ProjectGroup, b: ProjectGroup) => !!a.rowUnder?.includes(b.id) || !!b.rowUnder?.includes(a.id)
+    for (const a of outs) {
+      const card = seen.find(g => g.id === a.areaCard)
+      if (!card) continue
+      const row = [card]
+      for (let i = 0; i < row.length; i++) {
+        for (const g of seen) {
+          if (row.includes(g) || of.has(g.id) || apart(g, row[i]) || !cardsTouch(g, row[i], bs.boards, zoom)) continue
+          row.push(g)
+        }
+      }
+      for (const g of row.slice(1)) of.set(g.id, a)
+    }
+  }
+  rowMemo = { groups: bs.groups, boards: bs.boards, nodes, zoom, of }
+  return of
+}
+
 /** Is master card `id` shown in area `area`'s scene by a linked card of
  *  it? A scene shown from its card brings out linked cards of the masters
  *  folded into it, which stand where the masters stood. The scene's models
@@ -112,7 +163,10 @@ export function sceneOf(key: string): { area: FreeNodeData; docked: boolean; box
   // It lay there before the scene opened over it: not in that scene.
   if (a && isUnder(a.area, key)) return null
   if (a && key.startsWith('card:') && linkedHere(key.slice(5), a.area)) return null
-  return a && { ...a, box }
+  if (a) return { ...a, box }
+  // In a row with a 3D set's card: in that set, as one docked along it.
+  const row = key.startsWith('card:') ? rowSets().get(key.slice(5)) : undefined
+  return row ? { area: row, docked: true, box } : null
 }
 
 /** Where model `key` stands in area `a`'s scene when it was never placed:

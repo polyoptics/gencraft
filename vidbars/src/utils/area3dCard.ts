@@ -19,9 +19,7 @@ import { useFreeNodeStore, type FreeNodeData } from '../store/freeNodeStore'
 import { useCanvasStore } from '../store/canvasStore'
 import { isUndoRestoring, useUndoCoordinator } from '../store/undoCoordinator'
 import { useModelScaleStore, type ScenePlace, type CameraLens } from '../store/tiltStore'
-import { cardBox, isUnder, setCards } from './area3dScene'
-import { useViewport3DStore } from '../store/viewport3dStore'
-import { useNotesStore } from '../store/notesStore'
+import { cardBox, isUnder, laying, lyingIn, setCards } from './area3dScene'
 import { cardFaceSize, createTextCard } from './cardGrid'
 import { makeLinkedCard, masterOf } from './linkedCards'
 
@@ -91,21 +89,6 @@ function onMat(a: FreeNodeData) {
   return { cards, tiles }
 }
 
-/** What lies where a 3D area is about to open (its ground `m`, out of card
- *  `cardId`): under it, not on it (utils/area3dScene isUnder). Cards and
- *  the model cards along its sides, tiles and other areas, Viewers, and
- *  curves drawn wholly there. */
-function lyingAt(m: { x: number; y: number; width: number; height: number }, cardId: string): string[] {
-  const { groups, boards } = useBoardsStore.getState()
-  const on = (x: number, y: number) => x >= m.x && x <= m.x + m.width && y >= m.y && y <= m.y + m.height
-  return [
-    ...setCards(m, groups, boards, cardId).map(g => `card:${g.id}`),
-    ...Object.values(useFreeNodeStore.getState().nodes).filter(n => !n.pin && n.type !== 'storyline' && on(n.x + n.width / 2, n.y + n.height / 2)).map(n => `node:${n.id}`),
-    ...Object.values(useViewport3DStore.getState().windows).filter(w => on(w.x + w.width / 2, w.y + w.height / 2)).map(w => `viewer:${w.id}`),
-    ...Object.values(useNotesStore.getState().curves).filter(c => c.pts.length && c.pts.every(p => on(p.x, p.y))).map(c => `curve:${c.id}`),
-  ]
-}
-
 /** Folds 3D area `nodeId` into its card (a new 3D area card under it when
  *  it came out of none). Returns the card's id. */
 export function foldArea3d(nodeId: string): string | null {
@@ -118,6 +101,7 @@ export function foldArea3d(nodeId: string): string | null {
   if (!cardId) {
     const size = cardFaceSize()
     cardId = createTextCard({ cx: a.x + size.w / 2, cy: a.y + a.height + size.h * 0.75 }, { title: a.label && a.label !== 'Area' && a.label !== '3D area' && a.label !== '3D scene' ? a.label : '3D set' })
+    useFreeNodeStore.getState().updateFreeNode(nodeId, { areaCard: cardId })
     useBoardsStore.getState().setCardsType([cardId], 'area3d')
   }
   const { cards, tiles } = onMat(a)
@@ -171,17 +155,74 @@ export function foldArea3d(nodeId: string): string | null {
 
 /** Takes 3D area `nodeId` off the canvas: its linked cards and tiles go
  *  with it; master cards stay. */
-function clearMat(nodeId: string) {
+function clearMat(nodeId: string, withTiles = true) {
   const a = useFreeNodeStore.getState().nodes[nodeId]
   if (!a) return
   const { cards, tiles } = onMat(a)
-  for (const g of cards) {
-    if (!g.linkOf) continue
-    g.boardIds.forEach(bid => useBoardsStore.getState().deleteBoard(bid))
-    useBoardsStore.getState().deleteGroup(g.id)
-  }
-  for (const n of tiles) useFreeNodeStore.getState().deleteFreeNode(n.id)
-  useFreeNodeStore.getState().deleteFreeNode(nodeId)
+  clearing = true
+  try {
+    for (const g of cards) {
+      if (!g.linkOf) continue
+      g.boardIds.forEach(bid => useBoardsStore.getState().deleteBoard(bid))
+      useBoardsStore.getState().deleteGroup(g.id)
+    }
+    if (withTiles) for (const n of tiles) useFreeNodeStore.getState().deleteFreeNode(n.id)
+    useFreeNodeStore.getState().deleteFreeNode(nodeId)
+  } finally { clearing = false }
+}
+
+// ── A 3D set and its card are one (Brian 2026-11-10) ──
+// Made together: a new 3D set comes with its card. Deleted together: the
+// card deleted, its set goes from the canvas (with the linked cards it
+// brought out; master cards and the tiles on it stay); the set deleted,
+// its card goes. Folding the set into its card deletes nothing.
+
+/** clearMat is at work (a fold, a card deleted): the deletes are its own. */
+let clearing = false
+
+/** Gives new 3D set `nodeId` its card, just under its bottom-left corner
+ *  (where folding one without a card put it). Returns the card's id. */
+export function bundleArea3dCard(nodeId: string): string | null {
+  const a = useFreeNodeStore.getState().nodes[nodeId]
+  if (!a || a.type !== 'area' || a.areaCard) return null
+  const size = cardFaceSize()
+  const cardId = createTextCard({ cx: a.x + size.w / 2, cy: a.y + a.height + size.h * 0.75 }, { title: '3D set' })
+  useBoardsStore.getState().setCardsType([cardId], 'area3d')
+  useFreeNodeStore.getState().updateFreeNode(nodeId, { areaCard: cardId })
+  return cardId
+}
+
+/** Deleting a 3D set's card or its ground deletes the other. The stores'
+ *  own delete actions, wrapped once: only a delete someone asked for, never
+ *  a load or an undo. */
+export function startArea3dBundle(): void {
+  const w = window as unknown as { __a3dBundle?: boolean }
+  if (w.__a3dBundle) return
+  w.__a3dBundle = true
+  const delGroup = useBoardsStore.getState().deleteGroup
+  const delNode = useFreeNodeStore.getState().deleteFreeNode
+  useBoardsStore.setState({
+    deleteGroup: (groupId: string) => {
+      const out = clearing ? null : area3dOutOf(groupId)
+      delGroup(groupId)
+      // The tiles on it are kept nowhere else: they stay on the canvas.
+      if (out && !useBoardsStore.getState().groups.some(g => g.id === groupId)) clearMat(out, false)
+    },
+  })
+  useFreeNodeStore.setState({
+    deleteFreeNode: (id: string) => {
+      const n = useFreeNodeStore.getState().nodes[id]
+      delNode(id)
+      if (clearing || n?.type !== 'area' || !n.areaCard || useFreeNodeStore.getState().nodes[id]) return
+      const card = useBoardsStore.getState().groups.find(g => g.id === n.areaCard)
+      if (!card) return
+      clearing = true
+      try {
+        card.boardIds.forEach(bid => useBoardsStore.getState().deleteBoard(bid))
+        delGroup(card.id)
+      } finally { clearing = false }
+    },
+  })
 }
 
 /** Folding writes the card's layout; any other change to it (a State
@@ -223,9 +264,15 @@ export function showArea3d(cardId: string, quiet = false, spot?: { x: number; y:
   const m = data.mat
   // What already lies there stays out of the scene (Brian 2026-11-10); laid
   // out anew, what was under it before still is.
-  const below = under ?? lyingAt(m, cardId)
-  const id = fs.addFreeNode(m.x, m.y, 'area')
-  fs.updateFreeNode(id, { x: m.x, y: m.y, width: m.width, height: m.height, areaCard: cardId, label: m.label ?? card.name ?? '3D set', ...(m.color ? { color: m.color } : {}), ...(below.length ? { under: below } : {}) })
+  const below = under ?? lyingIn(m, cardId)
+  let id = ''
+  laying.on = true
+  try {
+    id = fs.addFreeNode(m.x, m.y, 'area')
+    fs.updateFreeNode(id, { x: m.x, y: m.y, width: m.width, height: m.height, areaCard: cardId, label: m.label ?? card.name ?? '3D set', ...(m.color ? { color: m.color } : {}), ...(below.length ? { under: below } : {}) })
+  } finally { laying.on = false }
+  // The cards it brings out never join a row with the cards under it.
+  const belowCards = below.filter(k => k.startsWith('card:')).map(k => k.slice(5))
   const ms = useModelScaleStore.getState()
   // Its cards: linked showings of the masters (a master gone is skipped).
   const link = new Map<string, string>()
@@ -246,6 +293,7 @@ export function showArea3d(cardId: string, quiet = false, spot?: { x: number; y:
         deckOffsetX: anchor ? p.deckOffsetX : undefined, deckOffsetY: anchor ? p.deckOffsetY : undefined,
         nestedDeck: anchor ? p.nestedDeck : undefined,
         deckLastFront: p.deckLastFront ? link.get(p.deckLastFront) : undefined,
+        ...(belowCards.length ? { rowUnder: belowCards } : {}),
       }
     }),
   }))

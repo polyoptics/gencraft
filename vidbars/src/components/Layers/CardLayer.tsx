@@ -4641,7 +4641,10 @@ const GhostCardSlot: React.FC<{ anchor: ProjectGroup; slot: { cardId: string; de
  *  with the cards, so it lies on the ground tilted as flat. */
 const SetOpenPreview: React.FC<{ group: ProjectGroup }> = ({ group }) => {
   const { pan, zoom } = useCardView()
-  const active = useCanvasStore(s => s.previewHoveredDeckId === 'set3d:' + group.id)
+  // Its own icon, or, the front of a closed deck, that deck's icon (the
+  // deck's id is its cards' ids joined).
+  const active = useCanvasStore(s => s.previewHoveredDeckId === 'set3d:' + group.id
+    || (!!group.deckState && group.deckState !== 'open' && group.deckAnchorId === group.id && !!s.previewHoveredDeckId?.split('|').includes(group.id)))
   const out = useFreeNodeStore(s => active && Object.values(s.nodes).some(n => n.type === 'area' && n.areaCard === group.id))
   if (!active || out) return null
   const a = area3dSpot(group)
@@ -5074,6 +5077,8 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
           const stackedDoubleClick = () => {
             useUndoCoordinator.getState().checkpoint()
             useBoardsStore.getState().setDeckState(deck.memberIds, 'open')
+            // A 3D set's deck: its set comes out with it, as from its face.
+            if (g.cardType === 'area3d') showArea3dMoving(g.id)
           }
           return (
             <Fragment key={g.id}>
@@ -5104,6 +5109,8 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
             const fannedDoubleClick = () => {
               useUndoCoordinator.getState().checkpoint()
               useBoardsStore.getState().setDeckState(deck.memberIds, 'open')
+              // A 3D set's deck: its set comes out with it, as from its face.
+              if (g.cardType === 'area3d') showArea3dMoving(g.id)
             }
             return (
               <div key={g.id} style={{ position: 'relative', zIndex: 55 }}>

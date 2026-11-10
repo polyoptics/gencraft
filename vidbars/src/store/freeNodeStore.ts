@@ -857,12 +857,12 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
   // in this session (utils/debouncedIDBStorage).
   storage: createDebouncedIDBStorage<Pick<FreeNodeStore, 'nodes'>>(400, { isEmpty: (s) => Object.keys(s.nodes ?? {}).length === 0 }),
   partialize: (s) => ({ nodes: s.nodes }),  // selectedIds is transient
-  // A 3D area is now a "3D scene" (Brian 2026-11-09): the old default
-  // names take the new one. A name of its own stays.
+  // A 3D area, then a "3D scene", is a "3D set" (Brian 2026-11-10): the
+  // old default names take the new one. A name of its own stays.
   merge: (persisted, current) => {
     const nodes = { ...((persisted as Partial<FreeNodeStore> | undefined)?.nodes ?? current.nodes) }
     for (const [id, n] of Object.entries(nodes)) {
-      if (n.type === 'area' && (n.label === '3D area' || n.label === 'Area')) nodes[id] = { ...n, label: '3D scene' }
+      if (n.type === 'area' && (n.label === '3D area' || n.label === 'Area' || n.label === '3D scene')) nodes[id] = { ...n, label: '3D set' }
     }
     return { ...current, ...(persisted as object), nodes }
   },
