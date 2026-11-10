@@ -201,6 +201,10 @@ export interface ProjectGroup {
   /** A STATE card's states, the changes between them, the current one and
    *  its output deck (utils/stateCard). */
   stateCard?: import('../utils/stateCard').StateMachine
+  /** A deck's card, opened out: the cards that already lay where the deck
+   *  opened (utils/deckUnder). Under the row, not in it: they do not join
+   *  it, so closing it leaves them, until one is moved by hand. */
+  rowUnder?: string[]
   /** A 3D AREA folded into this card (utils/area3dCard): the mat and the
    *  models laid out on it, each where it stood, turned and sized. */
   area3d?: import('../utils/area3dCard').Area3dData

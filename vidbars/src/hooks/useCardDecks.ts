@@ -66,6 +66,12 @@ export function cardTouchRect(g: ProjectGroup, boards: Record<string, BoardData>
   return { left: v.rect.left, right: v.rect.right, bottom: v.rect.bottom, top: v.rect.top + headerExtendCanvasAt(zoom) - TOUCH_HEADER }
 }
 
+/** Do cards `a` and `b` touch, as clustering judges it? */
+export function cardsTouch(a: ProjectGroup, b: ProjectGroup, boards: Record<string, BoardData>, zoom: number): boolean {
+  const ra = cardTouchRect(a, boards, zoom), rb = cardTouchRect(b, boards, zoom)
+  return !!ra && !!rb && rectsTouch({ id: a.id, ...ra }, { id: b.id, ...rb }, TOUCH_TOLERANCE)
+}
+
 /** THE card-geometry authority: a group's VISUAL card rect in canvas
  *  units — mirrors CardLayer's GroupCard exactly (per-board visual
  *  heights, card size overrides, and the zoom-dependent header extend
@@ -287,6 +293,9 @@ export function useCardDecks(
       for (let i = 0; i < totalNodes; i++) {
         for (let j = i + 1; j < totalNodes; j++) {
           if (locks[i] !== locks[j]) continue
+          // A card that lay where a deck opened is under its row, not in
+          // it (utils/deckUnder).
+          if (i < groupCount && j < groupCount && (zoneGroups[i].rowUnder?.includes(zoneGroups[j].id) || zoneGroups[j].rowUnder?.includes(zoneGroups[i].id))) continue
           const ri = nodeRect(i)
           const rj = nodeRect(j)
           if (ri && rj && rectsTouch(touchRect(ri), touchRect(rj), TOUCH_TOLERANCE)) {
@@ -304,6 +313,12 @@ export function useCardDecks(
         clusterMap.get(root)!.push(i)
       }
       return Array.from(clusterMap.values())
+        // Joined to the row round the back (through a card touching both):
+        // still under it, so out of it.
+        .map(c => {
+          const under = new Set(c.flatMap(i => zoneGroups[i].rowUnder ?? []))
+          return under.size ? c.filter(i => !under.has(zoneGroups[i].id)) : c
+        })
         .filter(c => c.length >= 2)
         .map(indices => {
           // Sort by left edge
