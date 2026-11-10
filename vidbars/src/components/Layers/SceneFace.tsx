@@ -46,6 +46,15 @@ import { useCanvasStore } from '../../store/canvasStore'
 import { ColorPickerPopup } from '../Bar/ColorPickerPopup'
 import { DEFAULT_BODY_STYLE, DEFAULT_HEADER_STYLE } from '../../store/freeNodeStore'
 import { area3dOutOf, toggleArea3d } from '../../utils/area3dCard'
+import { useResolvedMedia } from '../../utils/useResolvedMedia'
+
+/** A picture by its STORED url: one kept in the app's own media store
+ *  (mediaref:, as a GIF made in the app can be) is looked up first, as a
+ *  card's face does. Drawn as a plain <img>, so an animated GIF plays. */
+const Pic: React.FC<React.ImgHTMLAttributes<HTMLImageElement> & { src: string }> = ({ src, ...rest }) => {
+  const url = useResolvedMedia(src)
+  return url ? <img src={url} {...rest} /> : null
+}
 
 /** Laid out at a new card's size and scaled with the card, like its back. */
 // Card scale at which the layout reads at its natural size.
@@ -263,7 +272,7 @@ const Thumb: React.FC<{ src: string; crop: { x: number; y: number; z: number }; 
     flex: '0 0 auto', width: w, height: h, borderRadius: at ? 0 : Math.max(0.6, h * 0.12), overflow: 'hidden', position: 'relative', ...at,
     border: line ? `${Math.max(0.3, h * 0.05)}px solid rgba(255,255,255,0.85)` : undefined, boxSizing: 'border-box', boxShadow: at ? undefined : '0 0.5px 1.5px rgba(0,0,0,0.4)',
   }}>
-    <img src={src} alt="" draggable={false} style={{
+    <Pic src={src} alt="" draggable={false} style={{
       position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', pointerEvents: 'none',
       objectPosition: `${crop.x}% ${crop.y}%`, transformOrigin: `${crop.x}% ${crop.y}%`, transform: `scale(${crop.z})`,
     }} />
@@ -388,7 +397,7 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
           flex: '0 0 auto', width: size * THUMB, height: size, borderRadius: Math.max(0.4, size * 0.2), background: l.color ?? '#5b8dd9', overflow: 'hidden', position: 'relative',
           border: `${Math.max(0.3, size * 0.1)}px solid rgba(255,255,255,0.8)`, boxSizing: 'border-box',
         }}>
-          {ic && <img src={ic.src} alt="" draggable={false} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', objectPosition: `${ic.crop.x}% ${ic.crop.y}%`, transformOrigin: `${ic.crop.x}% ${ic.crop.y}%`, transform: `scale(${ic.crop.z})`, pointerEvents: 'none' }} />}
+          {ic && <Pic src={ic.src} alt="" draggable={false} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', objectPosition: `${ic.crop.x}% ${ic.crop.y}%`, transformOrigin: `${ic.crop.x}% ${ic.crop.y}%`, transform: `scale(${ic.crop.z})`, pointerEvents: 'none' }} />}
         </div>
       ))}
     </div>
@@ -486,7 +495,7 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
         outlineOffset: picked || ctx.linking || moving ? -0.8 : -0.5,
       }}>
         {pic && state === 'full' && (
-          <img src={pic} alt="" draggable={false} data-scene-pic style={{
+          <Pic src={pic} alt="" draggable={false} data-scene-pic style={{
             position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', pointerEvents: 'none',
             objectPosition: `${crop.x}% ${crop.y}%`, transformOrigin: `${crop.x}% ${crop.y}%`, opacity: hero?.opacity ?? 1,
             transform: `scale(${crop.z * (hero?.flipH ? -1 : 1)}, ${crop.z * (hero?.flipV ? -1 : 1)})`,
@@ -644,7 +653,7 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
                     border: `${Math.max(0.35, th * 0.07)}px ${from ? 'dashed' : 'solid'} rgba(255,255,255,0.95)`,
                     color: '#fff', fontSize: th * 0.5, fontWeight: 700, lineHeight: 1, fontFamily: 'inherit',
                   }}>
-                  {img ? <img src={img} alt="" draggable={false} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', pointerEvents: 'none' }} />
+                  {img ? <Pic src={img} alt="" draggable={false} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', pointerEvents: 'none' }} />
                     : name.trim().slice(0, 1).toUpperCase()}
                 </button>
               )
@@ -935,7 +944,7 @@ const IconEditor: React.FC<{
         onWheel={e => { if (!src) return; e.stopPropagation(); onChange({ ...icon, x: c.x, y: c.y, z: clamp(c.z * (e.deltaY < 0 ? 1.08 : 1 / 1.08), 1, 6) }) }}
         style={{ width: FW, height: FH, borderRadius: 8, overflow: 'hidden', position: 'relative', background: '#2a2d38', cursor: src ? 'move' : 'default' }}>
         {src
-          ? <img src={src} alt="" draggable={false} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', objectPosition: `${c.x}% ${c.y}%`, transformOrigin: `${c.x}% ${c.y}%`, transform: `scale(${c.z})`, pointerEvents: 'none' }} />
+          ? <Pic src={src} alt="" draggable={false} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', objectPosition: `${c.x}% ${c.y}%`, transformOrigin: `${c.x}% ${c.y}%`, transform: `scale(${c.z})`, pointerEvents: 'none' }} />
           : <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0.5 }}>No picture yet</div>}
       </div>
       <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
