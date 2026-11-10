@@ -13,8 +13,8 @@ import { isTilted, useTiltStore, useModelScaleStore } from '../store/tiltStore'
 import { useUndoCoordinator } from '../store/undoCoordinator'
 import { useCanvasStore } from '../store/canvasStore'
 import { useManip } from '../store/manipStore'
-import { models, modelKey } from '../components/Canvas/tilt/TiltModels'
-import { sceneOf, dataKey } from './area3dScene'
+import { models, modelKey, soloFloat, setSoloFloat } from '../components/Canvas/tilt/TiltModels'
+import { standsIn, dataKey } from './area3dScene'
 
 /** The dot's radius, and how near a press counts as on it (px). */
 const DOT_R = 6
@@ -40,8 +40,18 @@ let raf = 0
 /** A model on its own card or tile, in the 3D view: not a person, a
  *  Viewer's model, or one in a 3D scene. */
 function eligible(key: string | null | undefined): key is string {
-  if (!key || !(key.startsWith('card:') || key.startsWith('node:'))) return false
-  return !sceneOf(key)
+  if (!key) return false
+  // A model card's model alone in a scene card's section (Brian 2026-11-10).
+  if (soloFloat(key) !== null) return true
+  if (!(key.startsWith('card:') || key.startsWith('node:'))) return false
+  // One attached to a 3D set but waiting on its own card has it too.
+  return !standsIn(key)
+}
+/** How high model `key` floats, and setting it: a section's model keeps
+ *  its own with the section; any other, with its card or tile. */
+const floatOfKey = (key: string, dk: string) => soloFloat(key) ?? useModelScaleStore.getState().floatOf[dk] ?? 0
+const setFloatOf = (key: string, dk: string, h: number | null) => {
+  if (soloFloat(key) !== null) setSoloFloat(key, h); else useModelScaleStore.getState().setFloat(dk, h)
 }
 const live = () => isTilted(useTiltStore.getState()) && !useManip.getState().through && !!models.floatSpot
 
@@ -146,13 +156,12 @@ function onDown(e: PointerEvent) {
   if (!s || !near({ x: e.clientX, y: e.clientY }, s.foot)) return
   e.preventDefault(); e.stopImmediatePropagation()
   eatClick = true
-  const ms = useModelScaleStore.getState()
   const dk = dataKey(shown)
   const now = performance.now()
   // Double-click: back sitting on its card.
   if (lastPress && lastPress.key === shown && now - lastPress.t < DOUBLE_MS) {
     lastPress = null
-    if (ms.floatOf[dk]) { useUndoCoordinator.getState().checkpoint(); ms.setFloat(dk, null) }
+    if (floatOfKey(shown, dk)) { useUndoCoordinator.getState().checkpoint(); setFloatOf(shown, dk, null) }
     return
   }
   lastPress = { key: shown, t: now }
@@ -161,7 +170,7 @@ function onDown(e: PointerEvent) {
   const z = useCanvasStore.getState().zoom || 1
   let up = { x: s.up.x * z, y: s.up.y * z }
   if (Math.hypot(up.x, up.y) < 0.05) up = { x: 0, y: -0.5 * z }
-  drag = { key: shown, dk, x0: e.clientX, y0: e.clientY, h0: ms.floatOf[dk] ?? 0, up, moved: false }
+  drag = { key: shown, dk, x0: e.clientX, y0: e.clientY, h0: floatOfKey(shown, dk), up, moved: false }
   wake()
 }
 
@@ -180,7 +189,7 @@ function onMove(e: PointerEvent) {
   // Along the stem: the model follows the cursor up or down.
   const u = drag.up
   const h = Math.max(0, drag.h0 + (mx * u.x + my * u.y) / (u.x * u.x + u.y * u.y))
-  useModelScaleStore.getState().setFloat(drag.dk, h > 0.01 ? Math.round(h * 100) / 100 : null)
+  setFloatOf(drag.key, drag.dk, h > 0.01 ? Math.round(h * 100) / 100 : null)
 }
 
 function onUp(e: PointerEvent) {

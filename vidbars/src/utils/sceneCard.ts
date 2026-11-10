@@ -60,7 +60,7 @@ export interface SceneDiv {
   /** How the model of the card it shows stands in it, tilted (Brian
    *  2026-11-10): the section's own size and turn for it, apart from the
    *  model's on its card and in a 3D set. Absent: as on its card. */
-  model?: { size?: number; pose?: [number, number, number, number] }
+  model?: { size?: number; pose?: [number, number, number, number]; float?: number }
   /** Follows its card live: its header, text and picture are read from
    *  the card as it is now (never written to it); its look stays its own.
    *  Typing in it stops the following and keeps what showed. */

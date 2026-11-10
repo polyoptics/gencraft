@@ -134,6 +134,15 @@ export function soloSize(key: string): number | null {
   return soloMini(key) ? miniLook.get(key)?.size ?? 1 : null
 }
 export function setSoloSize(key: string, k: number) { setSoloLook(key, { size: k }) }
+/** How high a section's model floats over the section (canvas units, its
+ *  lift handle: utils/floatHandle), and setting it. null: not one. */
+export function soloFloat(key: string): number | null {
+  const at = soloMini(key)
+  const scene = at && useBoardsStore.getState().groups.find(g => g.id === at.sceneId)?.scene
+  const d = scene ? findDiv(scene, at!.divId) : null
+  return at ? d?.model?.float ?? 0 : null
+}
+export function setSoloFloat(key: string, h: number | null) { setSoloLook(key, { float: h ?? undefined }) }
 
 /** How each small showing of a folded scene's model stands (miniTargets):
  *  its size, turn, colour and stretch as its scene card keeps them. */
@@ -2516,7 +2525,7 @@ function miniTargets(stage: HTMLElement, W: number, H: number): TiltTarget[] {
           const key = `mini:${sceneId}:${d.id}:m${step}`
           miniLook.set(key, { size: d.model?.size ?? ms.sizeOf[`card:${g.id}`], pose: d.model?.pose, tint: ms.tintOf[`card:${g.id}`] })
           const side = Math.min(bw, bh) * 0.45
-          out.push({ key, url: model.url, name: model.name, mini: true, u: at.x + bw / 2 - W / 2, v: at.y + bh / 2 - H / 2, w: side, h: side, z: liftOf(el) })
+          out.push({ key, url: model.url, name: model.name, mini: true, u: at.x + bw / 2 - W / 2, v: at.y + bh / 2 - H / 2, w: side, h: side, z: liftOf(el), ...(d.model?.float ? { float: d.model.float * useCanvasStore.getState().zoom } : {}) })
         }
         continue
       }
