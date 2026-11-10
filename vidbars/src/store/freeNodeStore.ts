@@ -197,6 +197,11 @@ export interface FreeNodeData {
   annotUrl?: string
   /** A 3D area out of a card: that card (utils/area3dCard). */
   areaCard?: string
+  /** A 3D area out of a card: what already lay where it opened ('card:<id>',
+   *  'node:<id>', 'viewer:<id>', 'curve:<id>'). Under it, not on it: never
+   *  moved, folded in or stood in its scene, until moved by hand
+   *  (utils/area3dScene isUnder). */
+  under?: string[]
 }
 
 const COLORS = ['#1e2235', '#1e3028', '#2e1e35', '#35281e', '#1e2e35', '#2e351e']

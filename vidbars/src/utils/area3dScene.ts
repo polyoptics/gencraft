@@ -14,6 +14,12 @@ import { drawnRect } from './effectCards'
 
 type R = { x: number; y: number; width: number; height: number }
 
+/** What already lay where 3D area `a` opened out of its card (Brian
+ *  2026-11-10): under it, not on it. A scene owns what it brought out and
+ *  what is set down on it afterwards; these never move with it, fold into
+ *  it or stand in its scene, until moved by hand (startAreaUnder). */
+export const isUnder = (a: { under?: string[] }, key: string): boolean => !!a.under && a.under.includes(key)
+
 /** How near a card's edge must come to the area's to dock (canvas units).
  *  The same at every zoom: zoomed out, a wider gap let cards nearby join
  *  the scene, and leave it again zooming in (magnets still snap a card
@@ -103,6 +109,8 @@ export function sceneOf(key: string): { area: FreeNodeData; docked: boolean; box
   const box = boxOfKey(key)
   if (!box) return null
   const a = areaOfBox(box, undefined, key.startsWith('node:') ? key.slice(5) : undefined)
+  // It lay there before the scene opened over it: not in that scene.
+  if (a && isUnder(a.area, key)) return null
   if (a && key.startsWith('card:') && linkedHere(key.slice(5), a.area)) return null
   return a && { ...a, box }
 }
@@ -141,7 +149,9 @@ export function placeNow(key: string): ScenePlace | null {
  *  its sides. ONE rule for the scene, its fold and its moving (a card bigger
  *  than its corner told apart, Brian 2026-11-09: cards made on a scene
  *  zoomed out were missed by the fold). */
-export function setCards(was: R, groups: ProjectGroup[], boards: Record<string, BoardData>, not?: string): ProjectGroup[] {
+export function setCards(was: R & { under?: string[] }, groups: ProjectGroup[], boards: Record<string, BoardData>, not?: string): ProjectGroup[] {
+  // What lay there before it opened is under it, not on it (isUnder).
+  if (was.under?.length) groups = groups.filter(g => !isUnder(was, `card:${g.id}`))
   const on = groups.filter(g => {
     if (g.id === not || g.pin) return false
     const r = cardBox(g, boards)
@@ -164,4 +174,45 @@ export function dockedCards(was: R, groups: ProjectGroup[], boards: Record<strin
       return !!lr && (inside(was, lr.x + lr.width / 2, lr.y + lr.height / 2) || touches(lr, was, gap))
     })
   })
+}
+
+/** Something under a 3D area (isUnder) moved by hand is under it no more:
+ *  set down on the area, it is on it, as anything put there. The area
+ *  itself never moves what is under it, so any move of one is by hand. */
+export function startAreaUnder(): () => void {
+  type P = { x: number; y: number }
+  const spots = (): Map<string, P> => {
+    const m = new Map<string, P>()
+    const nodes = useFreeNodeStore.getState().nodes
+    const keys = new Set(Object.values(nodes).flatMap(n => (n.type === 'area' && n.under?.length ? n.under : [])))
+    if (!keys.size) return m
+    const groups = useBoardsStore.getState().groups
+    for (const k of keys) {
+      if (k.startsWith('card:')) { const g = groups.find(x => x.id === k.slice(5)); if (g) m.set(k, { x: g.originX, y: g.originY }) }
+      else if (k.startsWith('node:')) { const n = nodes[k.slice(5)]; if (n) m.set(k, { x: n.x, y: n.y }) }
+    }
+    return m
+  }
+  let last = spots()
+  let busy = false
+  const check = () => {
+    if (busy) return
+    const now = spots()
+    const moved = new Set<string>()
+    for (const [k, p] of now) { const q = last.get(k); if (q && (q.x !== p.x || q.y !== p.y)) moved.add(k) }
+    last = now
+    if (!moved.size) return
+    busy = true
+    try {
+      const fs = useFreeNodeStore.getState()
+      for (const a of Object.values(fs.nodes)) {
+        if (a.type !== 'area' || !a.under?.some(k => moved.has(k))) continue
+        fs.updateFreeNode(a.id, { under: a.under.filter(k => !moved.has(k)) })
+      }
+    } finally { busy = false }
+    last = spots()
+  }
+  const offA = useBoardsStore.subscribe(check)
+  const offB = useFreeNodeStore.subscribe(check)
+  return () => { offA(); offB() }
 }

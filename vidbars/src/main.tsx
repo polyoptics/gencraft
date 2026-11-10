@@ -13,6 +13,7 @@ import { startLinkedCardSync } from './utils/linkedCards'
 import { startStateOutputs } from './utils/stateCard'
 import { startChartFollow } from './utils/chartCard'
 import { startArea3dFollow, showArea3d, foldArea3d, toggleArea3d, area3dOutOf } from './utils/area3dCard'
+import { startAreaUnder } from './utils/area3dScene'
 import { createMediaCard } from './utils/cardGrid'
 
 installLookThrough()
@@ -64,6 +65,8 @@ startLinkedCardSync()
 startStateOutputs()
 startChartFollow(cardOrigins)
 startArea3dFollow()
+// What a 3D scene opened over stays out of it until moved by hand.
+startAreaUnder()
 // Decks off every storyline open to the right (utils/deckRight).
 startDecksOpenRight()
 // The doorway an agent reads cards and deals new ones through (utils/agentDoor).

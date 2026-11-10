@@ -19,7 +19,9 @@ import { useFreeNodeStore, type FreeNodeData } from '../store/freeNodeStore'
 import { useCanvasStore } from '../store/canvasStore'
 import { isUndoRestoring, useUndoCoordinator } from '../store/undoCoordinator'
 import { useModelScaleStore, type ScenePlace, type CameraLens } from '../store/tiltStore'
-import { cardBox, setCards } from './area3dScene'
+import { cardBox, isUnder, setCards } from './area3dScene'
+import { useViewport3DStore } from '../store/viewport3dStore'
+import { useNotesStore } from '../store/notesStore'
 import { cardFaceSize, createTextCard } from './cardGrid'
 import { makeLinkedCard, masterOf } from './linkedCards'
 
@@ -85,8 +87,23 @@ function onMat(a: FreeNodeData) {
   const { groups, boards } = useBoardsStore.getState()
   // On it, and the model cards docked along its sides.
   const cards = setCards(a, groups, boards, a.areaCard)
-  const tiles = Object.values(fs.nodes).filter(n => n.id !== a.id && n.type !== 'area' && n.type !== 'storyline' && !n.pin && n.areaCard === undefined && inside(a, n.x + n.width / 2, n.y + n.height / 2))
+  const tiles = Object.values(fs.nodes).filter(n => n.id !== a.id && n.type !== 'area' && n.type !== 'storyline' && !n.pin && n.areaCard === undefined && !isUnder(a, `node:${n.id}`) && inside(a, n.x + n.width / 2, n.y + n.height / 2))
   return { cards, tiles }
+}
+
+/** What lies where a 3D area is about to open (its ground `m`, out of card
+ *  `cardId`): under it, not on it (utils/area3dScene isUnder). Cards and
+ *  the model cards along its sides, tiles and other areas, Viewers, and
+ *  curves drawn wholly there. */
+function lyingAt(m: { x: number; y: number; width: number; height: number }, cardId: string): string[] {
+  const { groups, boards } = useBoardsStore.getState()
+  const on = (x: number, y: number) => x >= m.x && x <= m.x + m.width && y >= m.y && y <= m.y + m.height
+  return [
+    ...setCards(m, groups, boards, cardId).map(g => `card:${g.id}`),
+    ...Object.values(useFreeNodeStore.getState().nodes).filter(n => !n.pin && n.type !== 'storyline' && on(n.x + n.width / 2, n.y + n.height / 2)).map(n => `node:${n.id}`),
+    ...Object.values(useViewport3DStore.getState().windows).filter(w => on(w.x + w.width / 2, w.y + w.height / 2)).map(w => `viewer:${w.id}`),
+    ...Object.values(useNotesStore.getState().curves).filter(c => c.pts.length && c.pts.every(p => on(p.x, p.y))).map(c => `curve:${c.id}`),
+  ]
 }
 
 /** Folds 3D area `nodeId` into its card (a new 3D area card under it when
@@ -195,7 +212,7 @@ export function area3dSpot(card: ProjectGroup): { x: number; y: number; w: numbe
 
 /** Brings card `cardId`'s 3D area out (an empty one the first time).
  *  Returns the mat's id. */
-export function showArea3d(cardId: string, quiet = false, spot?: { x: number; y: number }): string | null {
+export function showArea3d(cardId: string, quiet = false, spot?: { x: number; y: number }, under?: string[]): string | null {
   const card = useBoardsStore.getState().groups.find(g => g.id === cardId)
   if (!card || area3dOutOf(cardId)) return null
   if (!quiet) useUndoCoordinator.getState().checkpoint()
@@ -204,8 +221,11 @@ export function showArea3d(cardId: string, quiet = false, spot?: { x: number; y:
   const data = spot ? { ...d0, mat: { ...d0.mat, x: spot.x, y: spot.y } } : d0
   const fs = useFreeNodeStore.getState()
   const m = data.mat
+  // What already lies there stays out of the scene (Brian 2026-11-10); laid
+  // out anew, what was under it before still is.
+  const below = under ?? lyingAt(m, cardId)
   const id = fs.addFreeNode(m.x, m.y, 'area')
-  fs.updateFreeNode(id, { x: m.x, y: m.y, width: m.width, height: m.height, areaCard: cardId, label: m.label ?? card.name ?? '3D set', ...(m.color ? { color: m.color } : {}) })
+  fs.updateFreeNode(id, { x: m.x, y: m.y, width: m.width, height: m.height, areaCard: cardId, label: m.label ?? card.name ?? '3D set', ...(m.color ? { color: m.color } : {}), ...(below.length ? { under: below } : {}) })
   const ms = useModelScaleStore.getState()
   // Its cards: linked showings of the masters (a master gone is skipped).
   const link = new Map<string, string>()
@@ -428,7 +448,7 @@ export function startArea3dFollow(): () => void {
           const out = area3dOutOf(id)
           const n = out ? useFreeNodeStore.getState().nodes[out] : undefined
           if (out) clearMat(out)
-          showArea3d(id, true, n && { x: n.x, y: n.y })
+          showArea3d(id, true, n && { x: n.x, y: n.y }, n?.under ?? [])
         }
       } finally { busy = false }
       last = seen(useBoardsStore.getState().groups)

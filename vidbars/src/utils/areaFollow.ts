@@ -8,7 +8,7 @@ import { useFreeNodeStore, type FreeNodeData } from '../store/freeNodeStore'
 import { useBoardsStore } from '../store/boardsStore'
 import { useViewport3DStore } from '../store/viewport3dStore'
 import { useNotesStore } from '../store/notesStore'
-import { setCards } from './area3dScene'
+import { isUnder, setCards } from './area3dScene'
 
 type R = { x: number; y: number; width: number; height: number }
 const inside = (a: R, px: number, py: number) => px >= a.x && px <= a.x + a.width && py >= a.y && py <= a.y + a.height
@@ -39,6 +39,8 @@ if (typeof window !== 'undefined' && !(window as unknown as { __areaFollow?: boo
         if (n.id === a.id || n.pin || n.railDock || n.tileDeck && n.tileDeck.anchor !== n.id) return false
         const now = s.nodes[n.id]
         if (!now || now.x !== n.x || now.y !== n.y) return false
+        // It lay there before the area opened over it: it stays (isUnder).
+        if (isUnder(a, `node:${n.id}`)) return false
         return inside(was, n.x + n.width / 2, n.y + n.height / 2)
       }).map(n => n.id)
       busy = true
@@ -46,14 +48,14 @@ if (typeof window !== 'undefined' && !(window as unknown as { __areaFollow?: boo
         if (tiles.length) useFreeNodeStore.getState().moveManyFreeNodes(tiles, dx, dy)
         const bs = useBoardsStore.getState()
         // On it, and the model cards docked along its sides (utils/area3dScene).
-        const cards = setCards(was, bs.groups, bs.boards)
+        const cards = setCards({ x: was.x, y: was.y, width: was.width, height: was.height, under: a.under }, bs.groups, bs.boards)
         if (cards.length) bs.setGroupPosBatch(cards.map(g => ({ groupId: g.id, originY: g.originY + dy, originX: g.originX + dx })))
         const v3 = useViewport3DStore.getState()
         for (const w of Object.values(v3.windows)) {
-          if (inside(was, w.x + w.width / 2, w.y + w.height / 2)) v3.updateWindow(w.id, { x: w.x + dx, y: w.y + dy })
+          if (!isUnder(a, `viewer:${w.id}`) && inside(was, w.x + w.width / 2, w.y + w.height / 2)) v3.updateWindow(w.id, { x: w.x + dx, y: w.y + dy })
         }
         const ns = useNotesStore.getState()
-        const curves = Object.values(ns.curves).filter(c => c.pts.length && c.pts.every(p => inside(was, p.x, p.y))).map(c => c.id)
+        const curves = Object.values(ns.curves).filter(c => !isUnder(a, `curve:${c.id}`) && c.pts.length && c.pts.every(p => inside(was, p.x, p.y))).map(c => c.id)
         if (curves.length) ns.moveCurves(curves, dx, dy)
       } finally { busy = false }
     }
