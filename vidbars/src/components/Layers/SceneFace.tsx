@@ -34,11 +34,13 @@ import { cardTitle } from '../../utils/faceStyle'
 import { CARD_TYPES } from '../../utils/cardTypes'
 import {
   addStrip, breakEdge, canFold, canMerge, divBoxes, edgeBreaks, findDiv, mergeParts, heldCard, isLeaf, leaves, litDivisions, needOf, patchDiv, removeDiv, resizeSplit, sectionOf, shareUnits, splitDiv, takeCard,
+  gathered,
   type SceneDiv, type SceneView,
 } from '../../utils/sceneCard'
 import { GroupCardText } from './CardLayer'
 import { openDivision } from '../../utils/sceneOpen'
-import { cardChanged, copyFrom, migrateScene, refreshDivision, shownContent } from '../../utils/sceneContent'
+import { cardChanged, contentOf, copyFrom, migrateScene, refreshDivision, shownContent } from '../../utils/sceneContent'
+import { bakeDivision } from '../../utils/sceneBake'
 import { useCanvasStore } from '../../store/canvasStore'
 import { ColorPickerPopup } from '../Bar/ColorPickerPopup'
 import { DEFAULT_BODY_STYLE, DEFAULT_HEADER_STYLE } from '../../store/freeNodeStore'
@@ -118,6 +120,8 @@ type Ctx = {
   layer: HTMLDivElement | null
   W: number
   H: number
+  /** The whole face, to read what a division gathers from its headings. */
+  scene: SceneDiv
 }
 
 /** The outer edge bars (EdgeStrip): how deep each is, and how far the
@@ -562,6 +566,14 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
             <svg width="3.8" height="3.8" viewBox="0 0 8 8"><path d="M6.6 3.2A2.8 2.8 0 1 0 6.2 5.6" fill="none" stroke="#000" strokeWidth="1.2" /><path d="M7.4 0.8v2.8H4.6" fill="none" stroke="#000" strokeWidth="1.2" /></svg>
           </button>
         )}
+        {d.deck && d.deck.length > 1 && (
+          // A deck is in it: the edges of the cards behind its front, down
+          // its right side, as a closed deck shows them.
+          <div data-scene-deck-edges style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 2.2, pointerEvents: 'none', zIndex: 2, display: 'flex', gap: 0.5, justifyContent: 'flex-end' }}>
+            <div style={{ width: 0.7, background: 'rgba(255,255,255,0.75)', margin: '6% 0', borderRadius: 0.4 }} />
+            <div style={{ width: 0.7, background: 'rgba(255,255,255,0.9)', margin: '3% 0', borderRadius: 0.4 }} />
+          </div>
+        )}
         <div style={{ position: 'absolute', right: 1, bottom: 1, display: 'flex', gap: 1, zIndex: 3 }}>
           {src && hovered && (
             // Back to the card it came from: only while pointed at.
@@ -587,6 +599,47 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
           )}
         </div>
       </div>
+      {/* Pointed at: what it gathers (Brian 2026-11-10). Its cast (a deck
+          let go on it), then what its headings hand down (dashed), each a
+          small picture; a click goes to that card. */}
+      {hovered && !moving && !ctx.focus && (() => {
+        const g = gathered(ctx.scene, d.id)
+        // A heading: what it hands down. A division: more than its one card.
+        if (g.own.length < (heads ? 1 : 2) && !g.handed.length) return null
+        const th = Math.min(u * 1.15, box.h * 0.3)
+        if (box.h < u * 2.2 || box.w < th * THUMB * 2) return null
+        // Along its top, left of its colour and more knobs.
+        const room = box.w - u * 2.6 - ctx.seamIn * 2
+        const all = [...g.own.map(c => ({ c, from: null as SceneDiv | null })), ...g.handed.flatMap(h => h.cards.map(c => ({ c, from: h.from })))]
+        const fit = Math.max(1, Math.floor(room / (th * THUMB + th * 0.2)))
+        const shown = all.length > fit ? all.slice(0, Math.max(1, fit - 1)) : all
+        return (
+          <div data-scene-cast style={{ position: 'absolute', left: ctx.seamIn + 0.6, top: ctx.seamIn + 0.6, display: 'flex', gap: th * 0.2, alignItems: 'center', zIndex: 5 }}>
+            {shown.map(({ c, from }) => {
+              const card = ctx.groups.find(x => x.id === c)
+              if (!card) return null
+              const img = contentOf(card).image
+              const name = cardTitle(ctx.groups, card)
+              return (
+                <button key={c} type="button" data-scene-cast-card={c} data-handed={from ? '' : undefined}
+                  title={from ? `${name}: handed down from ${from.name || 'its heading'}` : name}
+                  onPointerDown={stopPress} onDoubleClick={e => e.stopPropagation()}
+                  onClick={e => { e.stopPropagation(); goToCard(c) }}
+                  style={{
+                    flex: '0 0 auto', width: th * THUMB, height: th, padding: 0, borderRadius: th * 0.14, overflow: 'hidden', position: 'relative', cursor: 'pointer',
+                    background: card.color ?? '#5b8dd9', boxSizing: 'border-box', boxShadow: '0 0.5px 1.5px rgba(0,0,0,0.5)',
+                    border: `${Math.max(0.35, th * 0.07)}px ${from ? 'dashed' : 'solid'} rgba(255,255,255,0.95)`,
+                    color: '#fff', fontSize: th * 0.5, fontWeight: 700, lineHeight: 1, fontFamily: 'inherit',
+                  }}>
+                  {img ? <img src={img} alt="" draggable={false} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', pointerEvents: 'none' }} />
+                    : name.trim().slice(0, 1).toUpperCase()}
+                </button>
+              )
+            })}
+            {shown.length < all.length && <span style={{ fontSize: th * 0.55, fontWeight: 700, color: '#fff', textShadow: '0 0.5px 1.5px rgba(0,0,0,0.8)' }}>+{all.length - shown.length}</span>}
+          </div>
+        )
+      })()}
       {ctx.layer && (() => {
       // Where each knob goes. "More" first, top right; its colour just left
       // of it; the rest never on top of one already placed (a short or
@@ -1067,7 +1120,7 @@ export const SceneFace: React.FC<{
     useBoardsStore.getState().setGroupSceneView(group.id, { ...(g?.sceneView ?? {}), ...patch })
   }
   const ctx: Ctx = {
-    layer, W, H,
+    layer, W, H, scene,
     sceneId: group.id, s, u: TOOL_PX / s, seamIn: (seamReach(s) - GAP) / 2, boxes, groups, linking, renaming, setRenaming, noting, setNoting,
     picked, pick: id => { setPicked(id); if (id !== moving) setMoving(null) }, lit, hovered: hoveredDiv, setHovered: setHoveredDiv,
     moving, setMoving, dragging, setDragging,
@@ -1149,6 +1202,11 @@ export const SceneFace: React.FC<{
     if (card && (card.cardType === 'area3d' || card.area3d)) items.push({
       label: 'Show its 3D set', tool: 'area3d', lit: !!area3dOutOf(card.id), act: () => toggleArea3d(card.id),
     })
+    // Bake it back out to the canvas (utils/sceneBake): a new card as it
+    // shows; with its cast, a closed deck; a heading, its whole section.
+    items.push({ label: 'Bake out to a card', tool: 'bake-card', act: () => { bakeDivision(group.id, d.id, 'card') } })
+    { const g = gathered(scene, d.id); if (g.own.length || g.handed.length) items.push({ label: 'Bake out to a deck, with its cast', tool: 'bake-deck', act: () => { bakeDivision(group.id, d.id, 'deck') } }) }
+    if (sec) items.push({ label: 'Bake this section out to a deck', tool: 'bake-section', act: () => { bakeDivision(group.id, d.id, 'section') } })
     if (heldCard(d)) items.push({ label: 'Unlink from its card', tool: 'unlink', act: () => edit(r => takeCard(d.live && card ? patchDiv(r, d.id, { ...copyFrom(card, false), live: false }) : r, d.id)) })
     if (canRemove) items.push({ label: 'Remove this division', tool: 'remove', danger: true, act: () => { edit(r => removeDiv(r, d.id)); setPicked(null) } })
     return items

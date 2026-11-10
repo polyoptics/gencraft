@@ -41,7 +41,7 @@ import { ChangeMenu, MarkTags, StateFace } from './StateFace'
 import { allChanges, toggleCardMark } from '../../utils/stateCard'
 import { fillTestCup } from '../../utils/stateTest'
 import { fillBlockout } from '../../utils/sceneBlockout'
-import { dropCardsInDivision } from '../../utils/sceneContent'
+import { dropCardsInDivision, dropDeckInDivision } from '../../utils/sceneContent'
 import { useFxStore } from '../../store/fxStore'
 import { cardStripId } from '../../utils/fx/cardStrips'
 import { cardHitAt } from '../../utils/cardContent'
@@ -815,6 +815,30 @@ function dropDeckOnFaction(ev: PointerEvent, ids: string[], front: string, origi
   bs.setGroupPosBatch(Array.from(origins, ([gid, o]) => ({ groupId: gid, originY: o.y, originX: o.x })))
   const list = [front, ...ids.filter(id => id !== front)].filter(id => !bs.groups.find(g => g.id === id)?.effect)
   bs.setFactionShape(back.id, withGroupAdded(back, list, factionMembers(bs.groups, back).map(m => m.card.id)))
+  useMagnetPreviewStore.getState().setPreview(null)
+  return true
+}
+
+/** A closed deck let go over a division of a scene card's face (Brian
+ *  2026-11-10): the deck goes in it whole, as that shot's cast, its front
+ *  card's face on the division, and back to where it was picked up. */
+function dropDeckOnScene(ev: PointerEvent, ids: string[], members: string[], front: string, origins: Map<string, { x: number; y: number }>): boolean {
+  const own = new Set(ids)
+  const els = document.elementsFromPoint(ev.clientX, ev.clientY)
+  let backId: string | undefined
+  for (const el of els) {
+    const h = cardHitAt([el])
+    if (h && 'groupId' in h && !own.has(h.groupId)) { backId = h.groupId; break }
+  }
+  const bs = useBoardsStore.getState()
+  const back = backId ? bs.groups.find(g => g.id === backId) : undefined
+  if (!back || back.flipped || !back.scene || (back.deckState && back.deckState !== 'open')) return false
+  const divEl = els
+    .map(el => (el as HTMLElement).closest?.('[data-scene-div]') as HTMLElement | null)
+    .find(el => el && (el.closest('[data-scene-face]') as HTMLElement | null)?.dataset.sceneFace === back.id)
+  if (!divEl) return false
+  bs.setGroupPosBatch(Array.from(origins, ([gid, o]) => ({ groupId: gid, originY: o.y, originX: o.x })))
+  dropDeckInDivision(back.id, divEl.dataset.sceneDiv!, [front, ...members.filter(id => id !== front)])
   useMagnetPreviewStore.getState().setPreview(null)
   return true
 }
@@ -2104,6 +2128,7 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
         return
       }
       if (!anchorGroup.pin && (dxAccum !== 0 || dyAccum !== 0) && dropDeckOnFaction(ev, allDragIds, deck.anchorGroupId, initialOrigins)) { previewCardRail(null, deck.anchorGroupId); return }
+      if (!anchorGroup.pin && (dxAccum !== 0 || dyAccum !== 0) && dropDeckOnScene(ev, allDragIds, deck.memberIds, deck.anchorGroupId, initialOrigins)) { previewCardRail(null, deck.anchorGroupId); endDockedDrag([deck.anchorGroupId], false); return }
       // A deck let go over a loop strip goes into the column as ONE deck,
       // by its front card (utils/railCards). One undo puts it back.
       {

@@ -24,6 +24,12 @@ export interface SceneDiv {
   card?: string
   /** Before 2026-11-07 a division held a list; the first is its card. */
   cards?: string[]
+  /** A deck let go on it (Brian 2026-11-10): the shot's cast, every card
+   *  of the deck, its front (`card`) first. Links back, nothing more. */
+  deck?: string[]
+  /** A heading holding its cards only to hand them down to its section:
+   *  its own name and face are not the card's. */
+  hand?: boolean
   /** Its text (the card's paragraph text, when one was let go on it). */
   notes?: string
   /** Its picture, and where it sits: x/y the point shown in the middle
@@ -257,7 +263,7 @@ export function putCards(root: SceneDiv, id: string, cardIds: string[], content?
   const clear = (d: SceneDiv): SceneDiv => isLeaf(d)
     ? (heldCard(d) && cardIds.includes(heldCard(d)!) && d.id !== id ? { ...d, card: undefined, cards: undefined } : d)
     : { ...d, kids: d.kids!.map(clear) }
-  const fill = (c: string): Partial<SceneDiv> => ({ card: c, cards: undefined, crop: undefined, ...(content?.(c) ?? {}) })
+  const fill = (c: string): Partial<SceneDiv> => ({ card: c, cards: undefined, deck: undefined, crop: undefined, ...(content?.(c) ?? {}) })
   let next = patchDiv(clear(root), id, fill(cardIds[0]))
   let at = id
   for (const c of cardIds.slice(1)) {
@@ -271,7 +277,53 @@ export function putCards(root: SceneDiv, id: string, cardIds: string[], content?
 }
 
 export function takeCard(root: SceneDiv, id: string): SceneDiv {
-  return edit(root, id, d => ({ ...d, card: undefined, cards: undefined, copied: undefined }))
+  return edit(root, id, d => ({ ...d, card: undefined, cards: undefined, deck: undefined, hand: undefined, copied: undefined }))
+}
+
+/** A deck into a division: its front is the card the division holds, the
+ *  whole deck its cast. Out of any other division of this scene first. */
+export function putDeck(root: SceneDiv, id: string, deck: string[], content?: Partial<SceneDiv>): SceneDiv {
+  if (!deck.length) return root
+  const clear = (d: SceneDiv): SceneDiv => isLeaf(d)
+    ? (heldCard(d) === deck[0] && d.id !== id ? { ...d, card: undefined, cards: undefined, deck: undefined } : d)
+    : { ...d, kids: d.kids!.map(clear) }
+  return patchDiv(clear(root), id, { card: deck[0], cards: undefined, deck: deck.length > 1 ? deck : undefined, crop: undefined, ...(content ?? {}) })
+}
+
+/** A division's cast: the deck let go on it, or the one card it holds. */
+export const castOf = (d: SceneDiv): string[] => d.deck?.length ? d.deck : heldCard(d) ? [heldCard(d)!] : []
+
+/** The headings over a division, outermost first: the heading of every
+ *  section it lies in (not itself). */
+export function headsAbove(root: SceneDiv, leafId: string): SceneDiv[] {
+  const out: SceneDiv[] = []
+  const walk = (d: SceneDiv): boolean => {
+    if (isLeaf(d)) return d.id === leafId
+    for (const k of d.kids!) {
+      if (!walk(k)) continue
+      if (canFold(d) && d.kids![0].id !== leafId) out.unshift(d.kids![0])
+      return true
+    }
+    return false
+  }
+  walk(root)
+  return out
+}
+
+/** What a division gathers (Brian 2026-11-10): its own cast, and the cast
+ *  handed down from each heading over it (an act's, a scene's), outermost
+ *  first. A card is counted once, where it is nearest. */
+export function gathered(root: SceneDiv, leafId: string): { own: string[]; handed: { from: SceneDiv; cards: string[] }[] } {
+  const d = findDiv(root, leafId)
+  const own = d && isLeaf(d) ? castOf(d) : []
+  const seen = new Set(own)
+  const handed: { from: SceneDiv; cards: string[] }[] = []
+  for (const h of headsAbove(root, leafId).reverse()) {
+    const cards = castOf(h).filter(c => !seen.has(c))
+    cards.forEach(c => seen.add(c))
+    if (cards.length) handed.unshift({ from: h, cards })
+  }
+  return { own, handed }
 }
 
 export function findParent(root: SceneDiv, id: string): SceneDiv | null {

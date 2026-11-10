@@ -5,9 +5,9 @@
 // content on a click, keeping its own look and crop.
 
 import { useBoardsStore, type ProjectGroup } from '../store/boardsStore'
-import { cardFaceMedia } from './cardGrid'
+import { cardFaceMedia, stackedDeckMembers } from './cardGrid'
 import { fillFields } from './faceStyle'
-import { findDiv, heldCard, isLeaf, patchDiv, type SceneDiv } from './sceneCard'
+import { castOf, findDiv, heldCard, isLeaf, patchDiv, putDeck, sectionOf, type SceneDiv } from './sceneCard'
 
 /** A card's face content: its header text, paragraph text, picture. Not
  *  its name (a file name, often): only what is on its face. */
@@ -57,10 +57,41 @@ export function cardChanged(d: SceneDiv, card: ProjectGroup | undefined): boolea
 /** Cards let go on a division: their faces copied in (utils/sceneCard putCards). */
 export function dropCardsInDivision(sceneId: string, divId: string, cardIds: string[]): void {
   const bs = useBoardsStore.getState()
+  if (handDown(sceneId, divId, cardIds.flatMap(id => { const dk = stackedDeckMembers(id, bs.groups); return dk.length ? dk : [id] }))) return
+  // One closed deck (by its front): it goes in whole, as the shot's cast.
+  const deck = cardIds.length === 1 ? stackedDeckMembers(cardIds[0], bs.groups) : []
+  if (deck.length > 1) { dropDeckInDivision(sceneId, divId, deck); return }
   bs.putCardsInDivision(sceneId, divId, cardIds, id => {
     const g = useBoardsStore.getState().groups.find(x => x.id === id)
     return g ? copyFrom(g) : {}
   })
+}
+
+/** Cards let go on a section's HEADING (an act's, a scene's) are handed
+ *  down to every division under it (Brian 2026-11-10): the heading keeps
+ *  its own name and face, and holds them (added to those it holds) as the
+ *  cast its section shares. False: not a heading. */
+function handDown(sceneId: string, divId: string, cardIds: string[]): boolean {
+  const bs = useBoardsStore.getState()
+  const scene = bs.groups.find(g => g.id === sceneId)?.scene
+  const head = scene && sectionOf(scene, divId) ? findDiv(scene, divId) : null
+  if (!scene || !head) return false
+  const ids = cardIds.filter(id => id !== sceneId && !bs.groups.find(g => g.id === id)?.effect)
+  const cast = [...castOf(head), ...ids.filter(id => !castOf(head).includes(id))]
+  if (cast.length) bs.setGroupScene(sceneId, patchDiv(scene, divId, { card: cast[0], cards: undefined, deck: cast.length > 1 ? cast : undefined, hand: true }))
+  return true
+}
+
+/** A closed deck let go on a division (Brian 2026-11-10): its front
+ *  card's face copied in, as a card's is, and the whole deck its cast. */
+export function dropDeckInDivision(sceneId: string, divId: string, deck: string[]): void {
+  const bs = useBoardsStore.getState()
+  if (handDown(sceneId, divId, deck)) return
+  const ids = deck.filter(id => id !== sceneId && !bs.groups.find(g => g.id === id)?.effect)
+  const scene = bs.groups.find(g => g.id === sceneId)?.scene
+  const front = bs.groups.find(g => g.id === ids[0])
+  if (!scene || !front) return
+  bs.setGroupScene(sceneId, putDeck(scene, divId, ids, copyFrom(front)))
 }
 
 /** The card's new content into the division; its look and crop stay. */
@@ -81,7 +112,7 @@ export function migrateScene(root: SceneDiv): SceneDiv | null {
   const walk = (d: SceneDiv): SceneDiv => {
     if (!isLeaf(d)) return { ...d, kids: d.kids!.map(walk) }
     const id = heldCard(d)
-    if (!id || d.face) return d
+    if (!id || d.face || d.hand) return d
     // Copied already (06700bd): it keeps what is on it, as a face now.
     if (d.copied) { changed = true; return { ...d, face: true } }
     const card = groups.find(g => g.id === id)
