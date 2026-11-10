@@ -783,6 +783,70 @@ function pingApi(): Plugin {
   }
 }
 
+/** Vite plugin: POST /api/agent {op, args} — the doorway an agent (Claude,
+ *  through agent/vidbars-mcp.mjs) works through. The request is passed to
+ *  the open VidBars window over the dev server's own socket and that
+ *  window's answer is sent back (src/utils/agentDoor.ts does the work, and
+ *  decides what may be asked: read cards, deal new ones, nothing else).
+ *  Local only: a web page cannot use it, because it needs a header a page
+ *  may not send across sites, and any Origin but our own is refused. */
+function agentApi(): Plugin {
+  type Client = { send: (event: string, data?: unknown) => void }
+  return {
+    name: 'agent-api',
+    configureServer(server) {
+      // The windows that have said hello, newest last.
+      const windows: { client: Client; desktop: boolean }[] = []
+      const waiting = new Map<string, (reply: { ok: boolean; result?: unknown; error?: string }) => void>()
+      const live = () => {
+        const open = server.ws.clients as unknown as Set<Client>
+        for (let i = windows.length - 1; i >= 0; i--) if (!open.has(windows[i].client)) windows.splice(i, 1)
+        // The desktop window is the one Brian works in; a browser tab is second best.
+        return [...windows].reverse().find(w => w.desktop) ?? windows[windows.length - 1] ?? null
+      }
+      server.ws.on('vidbars:agent-hello', (data: { desktop?: boolean }, client: Client) => {
+        const at = windows.findIndex(w => w.client === client)
+        if (at >= 0) windows.splice(at, 1)
+        windows.push({ client, desktop: !!data?.desktop })
+      })
+      server.ws.on('vidbars:agent-done', (data: { id: string; ok: boolean; result?: unknown; error?: string }) => {
+        const done = waiting.get(data?.id)
+        if (done) { waiting.delete(data.id); done(data) }
+      })
+      server.middlewares.use('/api/agent', (req, res) => {
+        const send = (code: number, body: unknown) => {
+          res.statusCode = code
+          res.setHeader('Content-Type', 'application/json')
+          res.end(JSON.stringify(body))
+        }
+        const origin = req.headers.origin
+        if (req.method !== 'POST' || req.headers['x-vidbars-agent'] !== '1'
+          || (origin && origin !== `http://${req.headers.host}`)) return send(403, { ok: false, error: 'Not allowed.' })
+        let raw = ''
+        req.on('data', c => { raw += c; if (raw.length > 2_000_000) req.destroy() })
+        req.on('end', async () => {
+          let body: { op?: string; args?: unknown }
+          try { body = JSON.parse(raw) } catch { return send(400, { ok: false, error: 'Bad request.' }) }
+          let target = live()
+          if (!target) {
+            // The server may have restarted under an open window: ask who is there.
+            server.ws.send('vidbars:agent-who', {})
+            await new Promise(r => setTimeout(r, 700))
+            target = live()
+          }
+          if (!target) return send(503, { ok: false, error: 'VidBars is not open. Start VidBars, then try again.' })
+          const id = crypto.randomUUID()
+          const timer = setTimeout(() => {
+            if (waiting.delete(id)) send(504, { ok: false, error: 'VidBars did not answer in time.' })
+          }, 20_000)
+          waiting.set(id, reply => { clearTimeout(timer); send(200, reply) })
+          target.client.send('vidbars:agent-do', { id, op: body.op, args: body.args ?? {} })
+        })
+      })
+    },
+  }
+}
+
 export default defineConfig({
-  plugins: [react(), tailwindcss(), pingApi(), fileUploadApi(), userTemplatesApi(), snapshotsApi(), browseApi()],
+  plugins: [react(), tailwindcss(), pingApi(), agentApi(), fileUploadApi(), userTemplatesApi(), snapshotsApi(), browseApi()],
 })

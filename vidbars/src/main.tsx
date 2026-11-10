@@ -18,6 +18,7 @@ import { createMediaCard } from './utils/cardGrid'
 installLookThrough()
 import { cardOrigins } from './components/Canvas/StorylineLayer'
 import { startDecksOpenRight } from './utils/deckRight'
+import { startAgentDoor } from './utils/agentDoor'
 import { useCanvasStore } from './store/canvasStore'
 import { useFreeNodeStore } from './store/freeNodeStore'
 import { useUserTemplateStore } from './store/userTemplateStore'
@@ -65,6 +66,8 @@ startChartFollow(cardOrigins)
 startArea3dFollow()
 // Decks off every storyline open to the right (utils/deckRight).
 startDecksOpenRight()
+// The doorway an agent reads cards and deals new ones through (utils/agentDoor).
+startAgentDoor()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
