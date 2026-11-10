@@ -2470,16 +2470,19 @@ function miniTargets(stage: HTMLElement, W: number, H: number): TiltTarget[] {
       if (!at) continue
       const bw = el.offsetWidth * at.k, bh = el.offsetHeight * at.k
       const ms = useModelScaleStore.getState()
-      // Its deck stepped off the front (the section's arrows): that card's
-      // model alone, standing in the section's middle.
+      // The card it shows (its own, or its deck stepped to with the
+      // section's arrows), when that is not a 3D set: a model card's model
+      // alone, standing in the section's middle (Brian 2026-11-10: a model
+      // card dragged into a section, its model pops up there).
       const deck = d.deck && d.deck.length > 1 ? d.deck : null
       const step = deck ? Math.min(deck.length - 1, Math.max(0, d.at ?? 0)) : 0
-      if (deck && step > 0) {
-        const g = bs.groups.find(x => x.id === deck[step])
+      const showing = bs.groups.find(x => x.id === (deck ? deck[step] : held))
+      if (showing && showing.cardType !== 'area3d' && !showing.area3d) {
+        const g = showing
         const model = g && !g.hideModel3d ? cardModel(g.id) : null
         if (model) {
           const key = `mini:${sceneId}:${d.id}:m${step}`
-          miniLook.set(key, { size: ms.sizeOf[`card:${g!.id}`], tint: ms.tintOf[`card:${g!.id}`] })
+          miniLook.set(key, { size: ms.sizeOf[`card:${g.id}`], tint: ms.tintOf[`card:${g.id}`] })
           const side = Math.min(bw, bh) * 0.45
           out.push({ key, url: model.url, name: model.name, mini: true, u: at.x + bw / 2 - W / 2, v: at.y + bh / 2 - H / 2, w: side, h: side, z: liftOf(el) })
         }
