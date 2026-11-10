@@ -65,6 +65,8 @@ export const models: {
   /** Where model `key` stands on screen, client px: the box round it and
    *  the point it stands on. null when it is not standing. */
   screenBox: ((key: string) => { x0: number; y0: number; x1: number; y1: number; foot: { x: number; y: number } } | null) | null
+  /** The lift handle's spots for a model, client px (tiltScene floatSpot). */
+  floatSpot: ((key: string) => { foot: { x: number; y: number }; ground: { x: number; y: number }; up: { x: number; y: number }; ax: { x: number; y: number }; ay: { x: number; y: number }; r: number } | null) | null
   /** A model's middle: flat px from the host centre, and px up (tiltScene pivotOf). */
   pivotOf: ((key: string) => { u: number; v: number; z: number; base: number } | null) | null
   /** Where a pin's label dragged to a client point sits, model space. */
@@ -82,7 +84,7 @@ export const models: {
   /** Light up a manipulator part (hovered or held), or none. */
   manipHot: ((key: string | null, part: ManipPart | null) => void) | null
   root: HTMLElement | null
-} = { gizmoAt: null, manipHot: null, labelAt: null, strokeAt: null, modelSize: null, pick: null, pickZ: null, info: null, spin: null, letGo: null, hovered: null, at: null, surface: null, pinSpots: null, screenBox: null, pivotOf: null, aimAt: null, cameraFrame: null, root: null }
+} = { gizmoAt: null, manipHot: null, labelAt: null, strokeAt: null, modelSize: null, pick: null, pickZ: null, info: null, spin: null, letGo: null, hovered: null, at: null, surface: null, pinSpots: null, screenBox: null, floatSpot: null, pivotOf: null, aimAt: null, cameraFrame: null, root: null }
 /** A pick that lights up under the cursor: a model or a person, not
  *  furniture. */
 export const modelKey = (k: string | null | undefined) => (k && !k.startsWith('deco|') ? k : null)
@@ -301,6 +303,12 @@ export const TiltModels: React.FC = () => {
         const r = root.getBoundingClientRect()
         return { x0: b.x0 + r.left, y0: b.y0 + r.top, x1: b.x1 + r.left, y1: b.y1 + r.top, foot: { x: b.foot.x + r.left, y: b.foot.y + r.top } }
       }
+      models.floatSpot = key => {
+        const b = v.floatSpot(key)
+        if (!b) return null
+        const r = root.getBoundingClientRect()
+        return { ...b, foot: { x: b.foot.x + r.left, y: b.foot.y + r.top }, ground: { x: b.ground.x + r.left, y: b.ground.y + r.top } }
+      }
       models.pivotOf = key => v.pivotOf(key)
       models.surface = (key, clientX, clientY) => {
         const r = root.getBoundingClientRect()
@@ -359,7 +367,7 @@ export const TiltModels: React.FC = () => {
       cancelAnimationFrame(raf)
       post.disconnect(); marker.remove()
       models.pick = null; models.pickZ = null; models.info = null; models.spin = null; models.letGo = null
-      models.surface = null; models.pinSpots = null; models.screenBox = null; models.pivotOf = null; models.labelAt = null; models.strokeAt = null; models.modelSize = null; models.gizmoAt = null; models.manipHot = null; models.aimAt = null; models.cameraFrame = null; models.root = null
+      models.surface = null; models.pinSpots = null; models.screenBox = null; models.floatSpot = null; models.pivotOf = null; models.labelAt = null; models.strokeAt = null; models.modelSize = null; models.gizmoAt = null; models.manipHot = null; models.aimAt = null; models.cameraFrame = null; models.root = null
       view?.dispose()
       canvas?.remove()
     }
@@ -2440,9 +2448,11 @@ function collectTargets(W: number, H: number): TiltTarget[] {
   const { pan, zoom } = useCanvasStore.getState()
   // In a 3D area's scene, a model stands where it was put there (up in
   // the air if lifted); its wall stays on its card.
+  const floats = useModelScaleStore.getState().floatOf
   const off = (key: string, t: TiltTarget): TiltTarget => {
     const sp = sceneSpot(key)
-    if (!sp) return t
+    // On its own card, it floats as high as its lift handle says.
+    if (!sp) { const f = floats[dataKey(key)]; return f ? { ...t, float: f * zoom } : t }
     return { ...t, u: pan.x + sp.x * zoom - W / 2, v: pan.y + sp.y * zoom - H / 2, z: sp.h * zoom, wall: { u: t.u, v: t.v, h: t.h } }
   }
   for (const n of Object.values(useFreeNodeStore.getState().nodes)) {

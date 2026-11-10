@@ -397,6 +397,11 @@ interface ModelScaleStore {
    *  Brian 2026-11-09): [x, y, z] × its size. Same keys. Absent: 1, 1, 1. */
   stretchOf: Record<string, [number, number, number]>
   setStretch: (key: string, v: [number, number, number] | null) => void
+  /** How high a model floats over its card (Brian 2026-11-10: the lift
+   *  handle on a regular model card, not in a 3D scene), canvas units off
+   *  the card's face. Same keys. Absent: sitting on its card. */
+  floatOf: Record<string, number>
+  setFloat: (key: string, h: number | null) => void
   /** Back as it came (Brian 2026-11-09: Reset): no place, turn, size or
    *  stretch of its own. */
   resetModel: (key: string) => void
@@ -430,10 +435,16 @@ export const useModelScaleStore = create<ModelScaleStore>()(persist(set => ({
     if (v) stretchOf[key] = v; else delete stretchOf[key]
     return { stretchOf }
   }),
+  floatOf: {},
+  setFloat: (key, h) => set(s => {
+    const floatOf = { ...s.floatOf }
+    if (h) floatOf[key] = h; else delete floatOf[key]
+    return { floatOf }
+  }),
   placeOf: {},
   resetModel: key => set(s => {
     const drop = <T,>(m: Record<string, T>) => { const o = { ...m }; delete o[key]; return o }
-    return { placeOf: drop(s.placeOf), poseOf: drop(s.poseOf), sizeOf: drop(s.sizeOf), stretchOf: drop(s.stretchOf) }
+    return { placeOf: drop(s.placeOf), poseOf: drop(s.poseOf), sizeOf: drop(s.sizeOf), stretchOf: drop(s.stretchOf), floatOf: drop(s.floatOf) }
   }),
   setPlace: (key, p) => set(s => {
     const placeOf = { ...s.placeOf }
@@ -454,6 +465,6 @@ export const useModelScaleStore = create<ModelScaleStore>()(persist(set => ({
   }),
 }), {
   name: 'vidbars-model-scale',
-  partialize: s => ({ unitsPerMetre: s.unitsPerMetre, sizeOf: s.sizeOf, poseOf: s.poseOf, tintOf: s.tintOf, placeOf: s.placeOf, stretchOf: s.stretchOf, lensOf: s.lensOf }),
+  partialize: s => ({ unitsPerMetre: s.unitsPerMetre, sizeOf: s.sizeOf, poseOf: s.poseOf, tintOf: s.tintOf, placeOf: s.placeOf, stretchOf: s.stretchOf, lensOf: s.lensOf, floatOf: s.floatOf }),
   storage: createDebouncedIDBStorage(400),
 }))

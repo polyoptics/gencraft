@@ -46,6 +46,9 @@ export interface TiltTarget {
   z?: number
   /** Arrives with a quick scale-up pop (a model moving onto a Viewer). */
   pop?: boolean
+  /** Floating over its card (the lift handle, Brian 2026-11-10): px up
+   *  off the card's face (z). */
+  float?: number
   /** Standing off its card (in a 3D area's scene): where the card is, for
    *  its back wall. */
   wall?: { u: number; v: number; h: number }
@@ -270,6 +273,10 @@ interface Standing {
    *  with, and the fade they were last set to. */
   mats: { m: THREE.Material; o: number; t: boolean }[]
   alpha: number
+  /** The face it stands over (px up off the plane), and how wide its
+   *  footprint is (flat px, radius): the lift handle's ground mark. */
+  base: number
+  footR: number
 }
 
 const WIRE_MAT = new THREE.MeshBasicMaterial({ color: 0x9fd0ff, wireframe: true, transparent: true, opacity: 0.85 })
@@ -681,7 +688,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     const s: Standing = {
       url, stand, turn, orient, pose, gizmo: null, rig: null, tint: null, baseColors: null, back: null, spun: [], inst: null, size: new THREE.Vector3(), unit: 1, unitSet: false, triangles: 0,
       figure, wall, wallText: '', look: null, phase: Math.random() * 6.28, dead: false, seen: frameNo, shownAt: 0,
-      mats: [], alpha: -1,
+      mats: [], alpha: -1, base: 0, footR: 0,
     }
     acquireModel(url).then(inst => {
       if (s.dead) { releaseModel(url); disposeInstance(inst); return }
@@ -1186,11 +1193,15 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       if (s && s.url !== tg.url) { drop(tg.key, s); s = undefined }
       if (!s) s = spawn(tg.key, tg.url)
       s.seen = frameNo
-      s.stand.position.set(tg.u, -tg.v, tg.z ?? 0)
+      // Floating (the lift handle): up off its card, rising in with the
+      // rest of the 3D look.
+      s.base = tg.z ?? 0
+      s.stand.position.set(tg.u, -tg.v, s.base + (tg.float ?? 0) * ease)
       const foot = Math.max(s.size.x, s.size.z, 1e-6)
       let k = (tg.w * 0.6) / foot
       if (s.size.y * k > tg.w * 1.1) k = (tg.w * 1.1) / Math.max(s.size.y, 1e-6)
       k *= st.sizeFor(tg.key)
+      s.footR = Math.max(s.size.x, s.size.z) * k / 2
       // ...and grow up out of them when the tilt starts, or when one
       // turns up while tilted, rather than popping on.
       if (s.inst && !s.shownAt) s.shownAt = now
@@ -1864,6 +1875,26 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     return { x0, y0, x1, y1, foot }
   }
 
+  /** The lift handle's spots for model `key` (px from the 3D layer's
+   *  top-left): where its foot is, the point under it on its card, the
+   *  screen step of one flat px up there, and of one flat px across the
+   *  plane each way (to lay its ground mark), and its footprint's radius. */
+  function floatSpot(key: string): { foot: { x: number; y: number }; ground: { x: number; y: number }; up: { x: number; y: number }; ax: { x: number; y: number }; ay: { x: number; y: number }; r: number } | null {
+    const s = standing.get(key)
+    if (!s || !s.inst || !s.stand.visible || !lastW || !lastH) return null
+    ground.updateWorldMatrix(true, false)
+    const toPx = (x: number, y: number, z: number) => {
+      cornerV.set(x, y, z).applyMatrix4(ground.matrixWorld).project(camera)
+      return { x: (cornerV.x + 1) / 2 * lastW, y: (1 - cornerV.y) / 2 * lastH }
+    }
+    const p = s.stand.position, D = 20
+    const g = toPx(p.x, p.y, s.base)
+    const f = toPx(p.x, p.y, p.z)
+    const u = toPx(p.x, p.y, s.base + D), a = toPx(p.x + D, p.y, s.base), b = toPx(p.x, p.y - D, s.base)
+    const per = (q: { x: number; y: number }) => ({ x: (q.x - g.x) / D, y: (q.y - g.y) / D })
+    return { foot: f, ground: g, up: per(u), ax: per(a), ay: per(b), r: s.footR }
+  }
+
   /** Model `key`'s middle, where it turns about (and where its
    *  manipulator sits): flat px from the host centre (u, v) and px up off
    *  the plane (z), and how high its foot is (base). */
@@ -1890,5 +1921,5 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     renderer.forceContextLoss()
   }
 
-  return { frame, warm, pick, pickZ: () => pickedZ, info, spinBy, letGo, settleAll, keepTurn, gizmoAt, aimAt, cameraFrame, manipHot, screenBox, pivotOf, labelAt, strokeAt, modelSize, dispose, surfaceAt, pinSpots: notes.spots }
+  return { frame, warm, pick, pickZ: () => pickedZ, info, spinBy, letGo, settleAll, keepTurn, gizmoAt, aimAt, cameraFrame, manipHot, screenBox, floatSpot, pivotOf, labelAt, strokeAt, modelSize, dispose, surfaceAt, pinSpots: notes.spots }
 }

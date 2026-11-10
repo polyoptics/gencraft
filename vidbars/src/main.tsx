@@ -3,6 +3,8 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 // The 3D area's model handles: before the app's own listeners.
 import './utils/area3dHandles'
+// The lift handle on a model card's model (float height): ahead of them too.
+import './utils/floatHandle'
 // Looking through a camera: ahead of the canvas's own listeners too.
 import { installLookThrough } from './components/Canvas/tilt/LookThrough'
 import App from './App.tsx'
