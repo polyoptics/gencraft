@@ -33,6 +33,8 @@ const LIMIT = 30
 const CANVAS_EXCLUDE = new Set([
   'focusedBoardId', 'pan', 'zoom',
   'rolodexOpen', 'rolodexPos', 'rolodexExpansion',
+  // The world clock's bar being out is a look too (utils/worldClock).
+  'worldClockOpen',
 ])
 const FREE_EXCLUDE = new Set(['selectedIds'])
 

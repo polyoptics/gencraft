@@ -161,6 +161,11 @@ interface CanvasStore {
   drawTool: 'pen' | 'eraser'
   drawColor: string
   drawSize: number
+  /** The world clock (utils/worldClock): whether its bar is out along the
+   *  bottom of the canvas, and the storyline (free node id) that is the
+   *  world's timeline. Both persisted. */
+  worldClockOpen: boolean
+  worldClockLine: string | null
   /** Card Rolodex panel visibility — toggleable, persisted. */
   rolodexOpen: boolean
   /** Sort mode for the rolodex list. Persisted across sessions. */
@@ -242,6 +247,8 @@ interface CanvasStore {
   setRolodexSortMode: (mode: 'creation' | 'alphabetical') => void
   setRolodexView: (mode: 'flat' | 'tree') => void
   setRolodexDisplayMode: (mode: 'auto' | 'compact' | 'full') => void
+  setWorldClockOpen: (open: boolean) => void
+  setWorldClockLine: (id: string | null) => void
   setRolodexPos: (pos: { x: number; y: number }) => void
   setRolodexExpansion: (px: number) => void
   toggleRolodexDeckCollapsed: (groupId: string) => void
@@ -268,6 +275,8 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
   drawTool: 'pen',
   drawColor: DEFAULT_PEN_COLOR,
   drawSize: DEFAULT_PEN_SIZE,
+  worldClockOpen: false,
+  worldClockLine: null,
   rolodexOpen: false,
   rolodexSortMode: 'creation',
   rolodexView: 'flat',
@@ -337,6 +346,8 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
 
   toggleRolodex: () => set(s => ({ rolodexOpen: !s.rolodexOpen })),
   setRolodexOpen: (rolodexOpen) => set({ rolodexOpen }),
+  setWorldClockOpen: (worldClockOpen) => set({ worldClockOpen }),
+  setWorldClockLine: (worldClockLine) => set({ worldClockLine }),
   setRolodexSortMode: (rolodexSortMode) => set({ rolodexSortMode }),
   setRolodexView: (rolodexView) => set({ rolodexView }),
   setRolodexDisplayMode: (rolodexDisplayMode) => set({ rolodexDisplayMode }),
@@ -438,6 +449,8 @@ export const useCanvasStore = create<CanvasStore>()(persist((set, get) => ({
     // Tool preferences persist across reloads; the active drawSurface does not.
     drawColor: s.drawColor,
     drawSize: s.drawSize,
+    worldClockOpen: s.worldClockOpen,
+    worldClockLine: s.worldClockLine,
     rolodexOpen: s.rolodexOpen,
     rolodexSortMode: s.rolodexSortMode,
     rolodexView: s.rolodexView,

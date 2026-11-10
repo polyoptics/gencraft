@@ -49,6 +49,7 @@ import { ZoomZoneBar, ZoomZoneHeaderButton } from './components/UI/ZoomZoneBar'
 import { ConsoleToggleButton } from './components/UI/ConsoleToggleButton'
 import { CabinetToggleButton, PickModeButton } from './components/UI/CabinetToggleButton'
 import { emptyCabinet } from './utils/cabinet'
+import { WorldClock } from './components/UI/WorldClock'
 
 /** Hosts useFxStrips, which subscribes to every tile, Viewer and zoom
  *  change. Called in App's body, each drag frame and wheel tick would
@@ -885,6 +886,8 @@ export default function App() {
         <TiltLayer />
         {/* Where Cards / Blocks / Boards begin and end — drag to retune */}
         <ZoomZoneBar />
+        {/* The world clock: its control bottom left, its bar along the bottom */}
+        <WorldClock />
       </div>
 
       {/* Deck browser tray + link-drag overlay */}

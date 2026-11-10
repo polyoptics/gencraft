@@ -82,6 +82,7 @@ import { chainDecks, chainLocks, shownAs } from '../../utils/chainLock'
 import { setStoryWallOf } from '../../utils/wallRoom'
 import { ChangeMenu, MarkTags } from '../Layers/StateFace'
 import { playMarks, toggleMark, type StateMark } from '../../utils/stateCard'
+import { overWorldClock, useWorldClockUi } from '../../utils/worldClock'
 import { PRESET_COLORS, TextFormatToolbar, ensureFontLoaded, hexToRgba, type TextFieldMode } from '../UI/TextFormatToolbar'
 import {
   deleteBranchFrom, deleteDot, downstream, growDot, insertDot, isBaseEdge, mergeDots, migrateStoryline,
@@ -1064,6 +1065,9 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
         const dx = sn(rx + c.x - c0.x) - rx, dy = sn(ry + c.y - c0.y) - ry
         useFreeNodeStore.getState().updateFreeNode(id, { x: x0 + dx, y: y0 + dy })
         moveCards(gesture.cards, dx, dy)
+        // Over the World clock: it lights, to take the storyline.
+        const hot = overWorldClock(client.x, client.y)
+        if (useWorldClockUi.getState().hot !== hot) useWorldClockUi.getState().set({ hot })
         return
       }
       // A dot, to the cursor's spot (snapped), with what it brings, its
@@ -1123,6 +1127,18 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
         }
         lastClick.current = null
         return
+      }
+      // Let go on the World clock (bottom left): it goes back where it was
+      // and becomes the world's timeline (components/UI/WorldClock).
+      if (gesture?.kind === 'move') {
+        const onClock = !cancelled && overWorldClock(ev.clientX, ev.clientY)
+        useWorldClockUi.getState().set({ hot: false })
+        if (onClock) {
+          useFreeNodeStore.getState().updateFreeNode(id, { x: x0, y: y0 })
+          moveCards(gesture.cards, 0, 0)
+          useCanvasStore.getState().setWorldClockLine(id)
+          useCanvasStore.getState().setWorldClockOpen(true)
+        }
       }
       if (gesture) { lastClick.current = null; return }
       if (cancelled || moved) { lastClick.current = null; return }
@@ -1588,6 +1604,32 @@ const hasStoryMarks = (d: StorylineData, groups: ProjectGroup[]) => storyMarks(d
  *  is made yet. */
 const markerLead = (len: number) => Math.max(200, len * 0.04)
 
+/** A storyline's clock: where its time marker is and can go (canvas units
+ *  along the base from its start), and the places changes happen along it.
+ *  The world clock (components/UI/WorldClock) reads the same. */
+export function storyClock(d: StorylineData, groups: ProjectGroup[]): { startX: number; len: number; lead: number; at: number; stops: { at: number; marks: StateMark[] }[] } | null {
+  const start = d.dots.find(p => p.id === rootOf(d))
+  if (!start) return null
+  const xs = (d.base ?? []).map(b => d.dots.find(p => p.id === b)?.x).filter((x): x is number => x !== undefined)
+  const len = xs.length ? Math.max(...xs) - start.x : 0
+  const lead = markerLead(len)
+  const at = Math.max(-lead, Math.min(len + lead, d.marker ?? -lead))
+  const stops = storyMarks(d, groups).map(e => ({ at: e.x - start.x, marks: e.marks })).sort((a, b) => a.at - b.at)
+  return { startX: start.x, len, lead, at, stops }
+}
+
+/** Put storyline `id`'s time marker at `next` along its base: every change
+ *  up to it is made. No undo step of its own (the drag took one). */
+export function scrubStoryline(id: string, next: number): void {
+  const n = useFreeNodeStore.getState().nodes[id]
+  if (!n?.storyline) return
+  const c = storyClock(n.storyline, useBoardsStore.getState().groups)
+  if (!c) return
+  const at = Math.max(-c.lead, Math.min(c.len + c.lead, next))
+  useFreeNodeStore.getState().updateFreeNode(id, { storyline: { ...n.storyline, marker: at } })
+  playMarks(storyMarks(n.storyline, useBoardsStore.getState().groups), c.startX + at)
+}
+
 /** The time marker (Brian 2026-11-08): a line across the storyline at a
  *  point along its base, with a knob on the base. Dragged along, every
  *  change up to it is made, so the State cards' output decks reform as it
@@ -1606,14 +1648,7 @@ const StoryMarker: React.FC<{ id: string; d: StorylineData; start: StoryDot; px:
     e.stopPropagation(); e.preventDefault()
     useUndoCoordinator.getState().checkpoint()
     const x0 = e.clientX, m0 = at
-    const move = (ev: PointerEvent) => {
-      const n = useFreeNodeStore.getState().nodes[id]
-      if (!n?.storyline) return
-      const z = useCanvasStore.getState().zoom
-      const next = Math.max(-lead, Math.min(len + lead, m0 + (ev.clientX - x0) / z))
-      useFreeNodeStore.getState().updateFreeNode(id, { storyline: { ...n.storyline, marker: next } })
-      playMarks(storyMarks(n.storyline, useBoardsStore.getState().groups), start.x + next)
-    }
+    const move = (ev: PointerEvent) => scrubStoryline(id, m0 + (ev.clientX - x0) / useCanvasStore.getState().zoom)
     const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
