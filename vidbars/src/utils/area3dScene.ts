@@ -114,11 +114,12 @@ export const laying = { on: false }
  *  2026-11-10: the set is a deck; a model card or deck attached to its
  *  card is in the set, and its model stands in the set's view). By card
  *  id, the set's ground. Worked out once for each state of the canvas. */
-let rowMemo: { groups: unknown; boards: unknown; nodes: unknown; zoom: number; of: Map<string, FreeNodeData> } | null = null
-function rowSets(): Map<string, FreeNodeData> {
+type RowSpot = { area: FreeNodeData; i: number; n: number }
+let rowMemo: { groups: unknown; boards: unknown; nodes: unknown; zoom: number; of: Map<string, RowSpot> } | null = null
+function rowSets(): Map<string, RowSpot> {
   const bs = useBoardsStore.getState(), nodes = useFreeNodeStore.getState().nodes, zoom = useCanvasStore.getState().zoom
   if (rowMemo && rowMemo.groups === bs.groups && rowMemo.boards === bs.boards && rowMemo.nodes === nodes && rowMemo.zoom === zoom) return rowMemo.of
-  const of = new Map<string, FreeNodeData>()
+  const of = new Map<string, RowSpot>()
   const outs = areas(nodes).filter(a => a.areaCard)
   if (outs.length) {
     const seen = bs.groups.filter(g => !g.pin && !isHiddenDeckMember(g))
@@ -133,7 +134,24 @@ function rowSets(): Map<string, FreeNodeData> {
           row.push(g)
         }
       }
-      for (const g of row.slice(1)) of.set(g.id, a)
+      // Each its turn along the set's front, for a model never placed.
+      const mine: string[] = []
+      for (const g of row.slice(1)) mine.push(g.id)
+      // A closed deck in the row (Brian 2026-11-10): all its cards are in
+      // the set, so their models stand there without opening it. Not the
+      // one a deck shows on its face: that is its front card's model.
+      const inside: ProjectGroup[] = []
+      const fronts = row.slice(1).filter(g => !!g.deckState && g.deckState !== 'open')
+      for (let i = 0; i < fronts.length; i++) {
+        for (const m of bs.groups) {
+          if (m.pin || m.id === fronts[i].id || m.deckAnchorId !== fronts[i].id || !isHiddenDeckMember(m) || inside.includes(m)) continue
+          inside.push(m)
+          fronts.push(m)
+        }
+      }
+      const faces = new Set(fronts.map(f => dataKey(`card:${f.id}`)).filter((k, i) => k !== `card:${fronts[i].id}`))
+      for (const m of inside) if (!faces.has(`card:${m.id}`) && !of.has(m.id)) mine.push(m.id)
+      mine.forEach((id, i) => of.set(id, { area: a, i, n: mine.length }))
     }
   }
   rowMemo = { groups: bs.groups, boards: bs.boards, nodes, zoom, of }
@@ -156,7 +174,7 @@ function linkedHere(id: string, area: FreeNodeData): boolean {
 }
 
 /** The 3D area model `key` is in the scene of, if any. */
-export function sceneOf(key: string): { area: FreeNodeData; docked: boolean; box: R } | null {
+export function sceneOf(key: string): { area: FreeNodeData; docked: boolean; box: R; spot?: ScenePlace } | null {
   const box = boxOfKey(key)
   if (!box) return null
   const a = areaOfBox(box, undefined, key.startsWith('node:') ? key.slice(5) : undefined)
@@ -166,7 +184,9 @@ export function sceneOf(key: string): { area: FreeNodeData; docked: boolean; box
   if (a) return { ...a, box }
   // In a row with a 3D set's card: in that set, as one docked along it.
   const row = key.startsWith('card:') ? rowSets().get(key.slice(5)) : undefined
-  return row ? { area: row, docked: true, box } : null
+  // Never placed: its turn in a line along the set's front, not all on
+  // the one spot nearest their cards.
+  return row ? { area: row.area, docked: true, box, spot: { dx: row.area.width * (row.i + 1) / (row.n + 1), dy: row.area.height * 0.82, h: 0 } } : null
 }
 
 /** Where model `key` stands in area `a`'s scene when it was never placed:
@@ -186,7 +206,7 @@ export function sceneSpot(key: string): { x: number; y: number; h: number; card:
   if (!sc) return null
   const p = useModelScaleStore.getState().placeOf[dataKey(key)]
   if (!p && !sc.docked) return null
-  const q = p ?? defaultPlace(sc.area, sc.box)
+  const q = p ?? sc.spot ?? defaultPlace(sc.area, sc.box)
   return { x: sc.area.x + q.dx, y: sc.area.y + q.dy, h: q.h, card: sc.box }
 }
 
@@ -195,7 +215,7 @@ export function sceneSpot(key: string): { x: number; y: number; h: number; card:
 export function placeNow(key: string): ScenePlace | null {
   const sc = sceneOf(key)
   if (!sc) return null
-  return useModelScaleStore.getState().placeOf[dataKey(key)] ?? defaultPlace(sc.area, sc.box)
+  return useModelScaleStore.getState().placeOf[dataKey(key)] ?? sc.spot ?? defaultPlace(sc.area, sc.box)
 }
 
 /** The cards of 3D area `a` (box `was`, its id `id`): those lying on it

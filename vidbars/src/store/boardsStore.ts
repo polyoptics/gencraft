@@ -12,6 +12,7 @@ import { makeName, nameKey } from '../utils/nameGen'
 import { removeFromKin, type Kin } from '../utils/family'
 import { deckLay, linkedLines } from '../utils/deckAway'
 import { deckFront, primaryFirst } from '../utils/primaryCard'
+import { splitOpenDecks } from '../utils/deckSplit'
 import { useFreeNodeStore } from './freeNodeStore'
 import { useModelScaleStore } from './tiltStore'
 import { newSceneLayout, putCards, type SceneDiv, type SceneView } from '../utils/sceneCard'
@@ -201,6 +202,14 @@ export interface ProjectGroup {
   /** A STATE card's states, the changes between them, the current one and
    *  its output deck (utils/stateCard). */
   stateCard?: import('../utils/stateCard').StateMachine
+  /** An open deck's card: the deck it is in now (its front card's id),
+   *  kept while the deck is open (utils/deckUnder startDeckHome). One tag,
+   *  never a history. A row closing takes the deck in as a deck
+   *  (utils/deckSplit). */
+  deckHome?: string
+  /** A closed deck's front card: it was open when the row it is in closed,
+   *  and opens again when that row does. */
+  deckReopen?: boolean
   /** A deck's card, opened out: the cards that already lay where the deck
    *  opened (utils/deckUnder). Under the row, not in it: they do not join
    *  it, so closing it leaves them, until one is moved by hand. */
@@ -1471,6 +1480,19 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
     // For stacking/fanning: the new deck anchor is groupIds[0] — the deck's
     // own front card if it is one already, else the row's primary card (the
     // leftmost unless one was made primary). utils/primaryCard.
+    // A row closing: the other open decks in it go in as decks of their
+    // own (utils/deckSplit), each closed first onto its own front, and
+    // marked to open again when this row does (it is put away as it is).
+    if (state !== 'open' && !opts?.asGiven) {
+      const { subs, rest } = splitOpenDecks(get().groups, ids)
+      if (subs.length) {
+        for (const sub of subs) get().setDeckState(sub, 'stacked', { asGiven: true })
+        const fronts = new Set(subs.map(sub => sub[0]))
+        set(s => ({ groups: s.groups.map(g => (fronts.has(g.id) ? { ...g, deckReopen: true } : g)) }))
+        ids = rest
+        if (ids.length < 2) return
+      }
+    }
     const nodes = useFreeNodeStore.getState().nodes
     const groupIds = state === 'open' || opts?.asGiven ? ids : primaryFirst(get().groups, ids)
     const idSet = new Set(groupIds)
@@ -1659,6 +1681,14 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
       return { groups: out.map(g => g.id === anchorId ? { ...g, ghostSlots: [...(g.ghostSlots ?? []), ...handed] }
         : holders.has(g.id) ? { ...g, ghostSlots: undefined } : g) }
     })
+    // Opened: a deck inside it that was open when it closed opens again.
+    if (state === 'open') {
+      for (const a of get().groups.filter(g => idSet.has(g.id) && g.deckReopen)) {
+        const kids = get().groups.filter(m => m.id !== a.id && m.deckAnchorId === a.id && !!m.deckState && m.deckState !== 'open').map(m => m.id)
+        set(s => ({ groups: s.groups.map(g => (g.id === a.id ? { ...g, deckReopen: undefined } : g)) }))
+        if (kids.length) get().setDeckState([a.id, ...kids], 'open')
+      }
+    }
   },
 
   setRowPrimary(groupId, rowIds) {

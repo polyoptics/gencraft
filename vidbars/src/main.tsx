@@ -14,7 +14,7 @@ import { startStateOutputs } from './utils/stateCard'
 import { bakeStoryline, chartOutOf, matchChart, recallChart, startChartFollow } from './utils/chartCard'
 import { startArea3dFollow, startArea3dBundle, showArea3d, foldArea3d, toggleArea3d, area3dOutOf, bundleArea3dCard } from './utils/area3dCard'
 import { startAreaUnder } from './utils/area3dScene'
-import { startDeckUnder } from './utils/deckUnder'
+import { startDeckUnder, startDeckHome } from './utils/deckUnder'
 import { createMediaCard, createTextCard } from './utils/cardGrid'
 
 installLookThrough()
@@ -74,6 +74,8 @@ startArea3dBundle()
 startAreaUnder()
 // The same for a deck: what its cards opened over stays out of its row.
 startDeckUnder()
+// An open deck's cards stay that deck's (their tag), whatever row they are in.
+startDeckHome()
 // Decks off every storyline open to the right (utils/deckRight).
 startDecksOpenRight()
 // The doorway an agent reads cards and deals new ones through (utils/agentDoor).

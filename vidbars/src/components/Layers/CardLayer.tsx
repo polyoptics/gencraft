@@ -5015,6 +5015,15 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
 
   // Affordance clusters: touching clusters where at least 2 eligible members exist
   // (open cards or visible sub-deck anchors count as eligible)
+  // An open deck's front card in a row with cards that are not its own:
+  // that deck's cards in the row (utils/deckUnder startDeckHome).
+  const openDeckFront = (g: ProjectGroup): string[] | null => {
+    if (g.deckHome !== g.id) return null
+    const row = touchingClusters.find(c => c.includes(g.id))
+    if (!row) return null
+    const mine = row.filter(id => groups.find(x => x.id === id)?.deckHome === g.id)
+    return mine.length >= 2 && mine.length < row.length ? mine : null
+  }
   const affordanceClusters = useMemo(() => rowsOf(touchingClusters, renderedByDeck, groups), [touchingClusters, renderedByDeck, groups])
 
   const extractingCardId = useCanvasStore(s => s.extractingCardId)
@@ -5144,6 +5153,17 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
                 const out = chartOutOf(g.id)
                 if (out) bakeStoryline(out, cardOrigins)
                 else recallChart(g.id)
+              },
+            } : openDeckFront(g) ? {
+              // The front card of an open deck that shares its row with
+              // other cards (Brian 2026-11-10): the same icon, to close
+              // just that deck onto it; the rest of the row stays open.
+              kind: 'deckPreview', deckId: 'home:' + g.id, count: openDeckFront(g)!.length, lit: true,
+              onDoubleClick: () => {
+                const mine = openDeckFront(g)
+                if (!mine) return
+                useUndoCoordinator.getState().checkpoint()
+                useBoardsStore.getState().setDeckState([g.id, ...mine.filter(id => id !== g.id)], 'stacked', { asGiven: true })
               },
             } : g.cardType === 'area3d' || g.area3d ? {
               // A 3D scene card: the same icon (Brian 2026-11-10), pointed
