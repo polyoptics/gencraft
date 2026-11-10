@@ -34,7 +34,7 @@ import { cardTitle } from '../../utils/faceStyle'
 import { CARD_TYPES } from '../../utils/cardTypes'
 import {
   addStrip, breakEdge, canFold, canMerge, divBoxes, edgeBreaks, findDiv, mergeParts, heldCard, isLeaf, leaves, litDivisions, needOf, patchDiv, removeDiv, resizeSplit, sectionOf, shareUnits, splitDiv, takeCard,
-  gathered,
+  gathered, clearDiv,
   type SceneDiv, type SceneView,
 } from '../../utils/sceneCard'
 import { GroupCardText } from './CardLayer'
@@ -244,6 +244,7 @@ const Glyph: React.FC<{ ctx: Ctx; d: string }> = ({ ctx, d }) => (
 )
 const PLUS = 'M5 1.5v7M1.5 5h7'
 const MORE = 'M2 5h0.01M5 5h0.01M8 5h0.01'
+const CLEAR = 'M1.5 1.5h7v7h-7zM3.6 3.6l2.8 2.8M6.4 3.6L3.6 6.4'
 const FOLD = 'M2 3.5h6M2 6.5h6'
 
 /** The largest font (layout units) at which the longest word of `t` fits
@@ -445,6 +446,8 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
       {...click}
       onPointerDownCapture={onMoveDown}
       onWheel={onWheel}
+      // Right-click: this division's own list (not the card's).
+      onContextMenu={e => { e.preventDefault(); e.stopPropagation(); ctx.pick(d.id); ctx.openMenu(d.id, e.clientX, e.clientY) }}
       onPointerEnter={() => ctx.setHovered(d.id)}
       // Onto a seam or an edge bar (on the way to one of its knobs): it
       // stays pointed at, so its knobs stay put.
@@ -609,7 +612,7 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
         const th = Math.min(u * 1.15, box.h * 0.3)
         if (box.h < u * 2.2 || box.w < th * THUMB * 2) return null
         // Along its top, left of its colour and more knobs.
-        const room = box.w - u * 2.6 - ctx.seamIn * 2
+        const room = box.w - u * 3.8 - ctx.seamIn * 2
         const all = [...g.own.map(c => ({ c, from: null as SceneDiv | null })), ...g.handed.flatMap(h => h.cards.map(c => ({ c, from: h.from })))]
         const fit = Math.max(1, Math.floor(room / (th * THUMB + th * 0.2)))
         const shown = all.length > fit ? all.slice(0, Math.max(1, fit - 1)) : all
@@ -656,6 +659,7 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
       }
       put('more', place(Math.max(0, box.w - u * 1.1), ctx.seamIn))
       if (box.w > u * 2.4) at.color = { left: at.more.left - u * 1.15, top: at.more.top }
+      if (box.w > u * 3.6) at.clear = { left: at.more.left - u * 2.3, top: at.more.top }
       if (heads) put('fold', box.w < STAND_W ? place((box.w - u) / 2, Math.min(1, box.h - u)) : place(Math.min(1, box.w - u), (box.h + lift - u) / 2))
       put('split-row', place(box.w - u - ctx.seamIn - u * 0.2, (box.h + lift - u) / 2))
       put('split-col', place((box.w - u) / 2, box.h + lift - u - ctx.seamIn - u * 0.2))
@@ -685,6 +689,12 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
         {at.color && (
           <Knob ctx={ctx} tool="color" title="Colour" bg={d.color ?? '#5b8dd9'} at={at.color}
             onClick={e => ctx.openPicker(d.id, e.clientX, e.clientY)} />
+        )}
+        {at.clear && (
+          <Knob ctx={ctx} tool="clear" title="Clear this section: what was put in it goes (undo brings it back)" at={at.clear}
+            onClick={() => { const r = ctx.root(); if (r) ctx.write(clearDiv(r, d.id)) }}>
+            <Glyph ctx={ctx} d={CLEAR} />
+          </Knob>
         )}
         <Knob ctx={ctx} tool="more" title="More" at={at.more}
           onClick={e => ctx.openMenu(d.id, e.clientX, e.clientY)}>
@@ -1209,6 +1219,7 @@ export const SceneFace: React.FC<{
     items.push({ label: 'Bake out to a card', tool: 'bake-card', act: () => { bakeDivision(group.id, d.id, 'card') } })
     { const g = gathered(scene, d.id); if (g.own.length || g.handed.length) items.push({ label: 'Bake out to a deck, with its cast', tool: 'bake-deck', act: () => { bakeDivision(group.id, d.id, 'deck') } }) }
     if (sec) items.push({ label: 'Bake this section out to a deck', tool: 'bake-section', act: () => { bakeDivision(group.id, d.id, 'section') } })
+    items.push({ label: 'Clear this section', tool: 'clear', act: () => { setMoving(null); edit(r => clearDiv(r, d.id)) } })
     if (heldCard(d)) items.push({ label: 'Unlink from its card', tool: 'unlink', act: () => edit(r => takeCard(d.live && card ? patchDiv(r, d.id, { ...copyFrom(card, false), live: false }) : r, d.id)) })
     if (canRemove) items.push({ label: 'Remove this division', tool: 'remove', danger: true, act: () => { edit(r => removeDiv(r, d.id)); setPicked(null) } })
     return items

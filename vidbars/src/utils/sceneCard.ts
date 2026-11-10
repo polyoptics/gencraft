@@ -280,6 +280,17 @@ export function takeCard(root: SceneDiv, id: string): SceneDiv {
   return edit(root, id, d => ({ ...d, card: undefined, cards: undefined, deck: undefined, hand: undefined, copied: undefined }))
 }
 
+/** Clear a division (Brian 2026-11-10): what was let go on it or put in
+ *  it goes (its card or deck, text, picture, icon, text look), leaving an
+ *  empty section in its colour. Its name goes only if it came from a card;
+ *  a heading's own name stays. */
+export function clearDiv(root: SceneDiv, id: string): SceneDiv {
+  return edit(root, id, d => isLeaf(d) ? {
+    id: d.id, color: d.color, bump: d.bump, opens: d.opens, mid: d.mid, tab: d.tab,
+    name: heldCard(d) && !d.hand ? 'Section' : d.name,
+  } : d)
+}
+
 /** A deck into a division: its front is the card the division holds, the
  *  whole deck its cast. Out of any other division of this scene first. */
 export function putDeck(root: SceneDiv, id: string, deck: string[], content?: Partial<SceneDiv>): SceneDiv {
