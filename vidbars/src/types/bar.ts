@@ -20,6 +20,9 @@ export interface MediaItem {
   clipOut?: number
   /** The source's own length, seconds, once read (videos and audio). */
   duration?: number
+  /** How an AI-made picture was made, read from its own file when it came
+   *  in (utils/madeWith): prompt, settings, reference links, job id. */
+  made?: import('../utils/madeWith').MadeWith
 }
 
 export interface BarTextStyle {

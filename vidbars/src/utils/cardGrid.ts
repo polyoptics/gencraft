@@ -24,6 +24,7 @@ import { getMediaItems, type MediaItem } from '../types/bar'
 import { layoutCutCard, readClipLengths } from './cutCard'
 import { ensureModelPoster, getModelPoster, usePosterMapStore } from '../three/posterService'
 import { byLay } from './deckAway'
+import { hasNoPicture, stampMadeWith } from './madeWith'
 
 // A new poster for a model (the Viewer's SNAP, or one just rendered)
 // goes onto every block holding that model at once, so card faces, block
@@ -379,11 +380,15 @@ export function addMediaToGridCard(groupId: string, media: MediaItem, label?: st
   const rootBar = store.boards[boardId]?.rootIds[0]
   if (!rootBar) return null
   if (label) { store.renameBar(boardId, rootBar, label); store.setBlockLabel(boardId, label) }
+  const firstPicture = hasNoPicture(groupId)
   store.setContent(boardId, rootBar, { media: [media] })
   layoutCardGrid(groupId)
   // Its own shape once the picture has been read. Not an undo step of its
   // own: it only finishes what this one began.
   void measure(media).then(aspect => { if (aspect) layoutCardGrid(groupId, { [boardId]: aspect }) })
+  // A picture that says how it was made (a Midjourney download carries its
+  // prompt) keeps that; a card's first picture also writes it on the back.
+  void stampMadeWith(groupId, boardId, media, firstPicture)
   // A 3D model shows on the card face by its poster (getFirstImageUrl):
   // render one now if it has none, and give it to the block once made.
   if (media.type === 'model' && !media.posterUrl) {
