@@ -19,7 +19,7 @@ import { createScaleFor } from './canvasCreate'
 import type { GroupSlot } from './nlePush'
 import type { MediaItem } from '../types/bar'
 import { addMediaToGridCard, isGridCard } from './cardGrid'
-import { hasNoPicture, stampMadeWith } from './madeWith'
+import { hasNoPicture, stampMadeWith, withAdded } from './madeWith'
 
 const BOARD_PADDING_X = 20   // a block's content inset from its anchor
 const BLOCK_GAP = 40         // the card's face to the new block
@@ -61,8 +61,9 @@ export function addMediaBlockToCard(groupId: string, media: MediaItem, label?: s
     if (label) { store.renameBar(boardId, rootBar, label); store.setBlockLabel(boardId, label) }
     // What the picture's file says about how it was made (utils/madeWith).
     const firstPicture = hasNoPicture(groupId)
-    store.setContent(boardId, rootBar, { media: [media] })
-    void stampMadeWith(groupId, boardId, media, firstPicture)
+    const item = withAdded(media)
+    store.setContent(boardId, rootBar, { media: [item] })
+    void stampMadeWith(groupId, boardId, item, firstPicture)
     return boardId
   }
 

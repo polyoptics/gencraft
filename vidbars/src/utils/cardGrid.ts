@@ -24,7 +24,7 @@ import { getMediaItems, type MediaItem } from '../types/bar'
 import { layoutCutCard, readClipLengths } from './cutCard'
 import { ensureModelPoster, getModelPoster, usePosterMapStore } from '../three/posterService'
 import { byLay } from './deckAway'
-import { hasNoPicture, stampMadeWith } from './madeWith'
+import { hasNoPicture, stampMadeWith, withAdded } from './madeWith'
 
 // A new poster for a model (the Viewer's SNAP, or one just rendered)
 // goes onto every block holding that model at once, so card faces, block
@@ -381,6 +381,7 @@ export function addMediaToGridCard(groupId: string, media: MediaItem, label?: st
   if (!rootBar) return null
   if (label) { store.renameBar(boardId, rootBar, label); store.setBlockLabel(boardId, label) }
   const firstPicture = hasNoPicture(groupId)
+  media = withAdded(media)
   store.setContent(boardId, rootBar, { media: [media] })
   layoutCardGrid(groupId)
   // Its own shape once the picture has been read. Not an undo step of its

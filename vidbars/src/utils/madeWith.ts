@@ -169,6 +169,12 @@ export function madeRows(made: MadeWith): { name: string; value: string }[] {
   ].filter(r => r.value)
 }
 
+/** `media` with the moment it came into the project noted, unless it
+ *  already carries one (a copy, a trimmed clip of something older). */
+export function withAdded(media: MediaItem): MediaItem {
+  return media.added ? media : { ...media, added: Date.now() }
+}
+
 /** True while no block of the card holds a picture: ask BEFORE filling
  *  one, and the picture about to go in is the card's first. */
 export function hasNoPicture(groupId: string): boolean {

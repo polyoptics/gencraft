@@ -23,6 +23,10 @@ export interface MediaItem {
   /** How an AI-made picture was made, read from its own file when it came
    *  in (utils/madeWith): prompt, settings, reference links, job id. */
   made?: import('../utils/madeWith').MadeWith
+  /** When it came into the project (ms since 1970), noted once as it first
+   *  goes into a card and kept through copies. Nothing shows it yet: it is
+   *  there for the record of how a piece was made. */
+  added?: number
 }
 
 export interface BarTextStyle {
