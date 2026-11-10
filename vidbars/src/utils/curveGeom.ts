@@ -9,25 +9,51 @@ const inn = (p: CurvePoint): P => ({ x: p.x + (p.hin?.x ?? 0), y: p.y + (p.hin?.
 const f = (n: number) => Math.round(n * 100) / 100
 
 /** A smooth curve's points with the handles that carry the line through
- *  them (each point's tangent runs from the point before to the point
- *  after, each handle a third of its own segment long). Other curves'
- *  points as they are. */
+ *  them. Inside the line each point's tangent is a centripetal
+ *  Catmull-Rom's: the nearer neighbour counts for more, so a short segment
+ *  beside a long one neither overshoots nor kinks. An open line's two ends
+ *  have no neighbour to lean on, so each bends in one even arc towards the
+ *  handle of the point next to it (the end segment is a quadratic) instead
+ *  of setting off straight and turning late. Other curves' points as they
+ *  are. */
 export function curvePoints(c: Pick<Curve, 'kind' | 'pts' | 'closed' | 'smooth'>): CurvePoint[] {
   const pts = c.pts
   if (c.kind !== 'bezier' || !c.smooth || pts.length < 2) return pts
   const n = pts.length
   const closed = !!c.closed && n > 2
-  return pts.map((p, i) => {
+  const EPS = 1e-6
+  // A segment's share of the parameter: the square root of its length.
+  const span = (a: CurvePoint, b: CurvePoint) => Math.sqrt(Math.hypot(b.x - a.x, b.y - a.y))
+  const res: CurvePoint[] = pts.map((p, i) => {
     const a = i > 0 ? pts[i - 1] : closed ? pts[n - 1] : null
     const b = i < n - 1 ? pts[i + 1] : closed ? pts[0] : null
-    const tx = (b ?? p).x - (a ?? p).x, ty = (b ?? p).y - (a ?? p).y
-    const tl = Math.hypot(tx, ty)
-    if (tl < 1e-9) return { x: p.x, y: p.y }
-    const ux = tx / tl, uy = ty / tl
-    const li = a ? Math.hypot(p.x - a.x, p.y - a.y) / 3 : 0
-    const lo = b ? Math.hypot(b.x - p.x, b.y - p.y) / 3 : 0
-    return { x: p.x, y: p.y, hin: { x: -ux * li, y: -uy * li }, hout: { x: ux * lo, y: uy * lo } }
+    if (!a || !b) return { x: p.x, y: p.y }
+    const t0 = span(a, p), t1 = span(p, b)
+    if (t0 < EPS && t1 < EPS) return { x: p.x, y: p.y }
+    let mx: number, my: number
+    if (t0 < EPS) { mx = (b.x - p.x) / t1; my = (b.y - p.y) / t1 }
+    else if (t1 < EPS) { mx = (p.x - a.x) / t0; my = (p.y - a.y) / t0 }
+    else {
+      mx = (p.x - a.x) / t0 - (b.x - a.x) / (t0 + t1) + (b.x - p.x) / t1
+      my = (p.y - a.y) / t0 - (b.y - a.y) / (t0 + t1) + (b.y - p.y) / t1
+    }
+    return { x: p.x, y: p.y, hin: { x: -mx * t0 / 3, y: -my * t0 / 3 }, hout: { x: mx * t1 / 3, y: my * t1 / 3 } }
   })
+  if (!closed) {
+    // The quadratic through the end and its neighbour whose control point
+    // lies along the neighbour's handle, written as this cubic's handles.
+    const end = (i: number, j: number, side: 'hin' | 'hout', near: 'hin' | 'hout') => {
+      const p = res[i], q = res[j], h = q[near]
+      if (!h || (Math.abs(h.x) < EPS && Math.abs(h.y) < EPS)) {
+        p[side] = { x: (q.x - p.x) / 3, y: (q.y - p.y) / 3 }
+        return
+      }
+      p[side] = { x: (q.x + 1.5 * h.x - p.x) * 2 / 3, y: (q.y + 1.5 * h.y - p.y) * 2 / 3 }
+    }
+    end(0, 1, 'hout', 'hin')
+    end(n - 1, n - 2, 'hin', 'hout')
+  }
+  return res
 }
 
 /** The SVG path of a curve, in canvas units. */
