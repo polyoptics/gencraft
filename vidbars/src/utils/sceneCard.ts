@@ -27,6 +27,9 @@ export interface SceneDiv {
   /** A deck let go on it (Brian 2026-11-10): the shot's cast, every card
    *  of the deck, its front (`card`) first. Links back, nothing more. */
   deck?: string[]
+  /** Which card of that deck shows, stepped to with the section's arrows
+   *  (Brian 2026-11-10). Absent or 0: its front. */
+  at?: number
   /** A heading holding its cards only to hand them down to its section:
    *  its own name and face are not the card's. */
   hand?: boolean
@@ -263,7 +266,7 @@ export function putCards(root: SceneDiv, id: string, cardIds: string[], content?
   const clear = (d: SceneDiv): SceneDiv => isLeaf(d)
     ? (heldCard(d) && cardIds.includes(heldCard(d)!) && d.id !== id ? { ...d, card: undefined, cards: undefined } : d)
     : { ...d, kids: d.kids!.map(clear) }
-  const fill = (c: string): Partial<SceneDiv> => ({ card: c, cards: undefined, deck: undefined, crop: undefined, ...(content?.(c) ?? {}) })
+  const fill = (c: string): Partial<SceneDiv> => ({ card: c, cards: undefined, deck: undefined, at: undefined, crop: undefined, ...(content?.(c) ?? {}) })
   let next = patchDiv(clear(root), id, fill(cardIds[0]))
   let at = id
   for (const c of cardIds.slice(1)) {
@@ -277,7 +280,7 @@ export function putCards(root: SceneDiv, id: string, cardIds: string[], content?
 }
 
 export function takeCard(root: SceneDiv, id: string): SceneDiv {
-  return edit(root, id, d => ({ ...d, card: undefined, cards: undefined, deck: undefined, hand: undefined, copied: undefined }))
+  return edit(root, id, d => ({ ...d, card: undefined, cards: undefined, deck: undefined, at: undefined, hand: undefined, copied: undefined }))
 }
 
 /** Clear a division (Brian 2026-11-10): what was let go on it or put in
@@ -298,7 +301,7 @@ export function putDeck(root: SceneDiv, id: string, deck: string[], content?: Pa
   const clear = (d: SceneDiv): SceneDiv => isLeaf(d)
     ? (heldCard(d) === deck[0] && d.id !== id ? { ...d, card: undefined, cards: undefined, deck: undefined } : d)
     : { ...d, kids: d.kids!.map(clear) }
-  return patchDiv(clear(root), id, { card: deck[0], cards: undefined, deck: deck.length > 1 ? deck : undefined, crop: undefined, ...(content ?? {}) })
+  return patchDiv(clear(root), id, { card: deck[0], cards: undefined, deck: deck.length > 1 ? deck : undefined, at: undefined, crop: undefined, ...(content ?? {}) })
 }
 
 /** A division's cast: the deck let go on it, or the one card it holds. */

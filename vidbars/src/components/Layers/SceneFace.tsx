@@ -277,14 +277,21 @@ const iconOf = (d: SceneDiv, pic: string | null) => {
 const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; folded: boolean; inside?: SceneDiv[] }> = ({ d, box, ctx, heads, folded, inside }) => {
   const srcId = heldCard(d)
   const src = srcId ? ctx.groups.find(g => g.id === srcId) : undefined
+  // A deck in it, stepped off its front with the arrows (Brian 2026-11-10):
+  // that card shows, as it is now, to look at (the section's own face is
+  // its front's, and comes back at the front).
+  const deckN = d.deck?.length ?? 0
+  const at = deckN > 1 ? Math.min(deckN - 1, Math.max(0, d.at ?? 0)) : 0
+  const stepCard = at > 0 ? ctx.groups.find(g => g.id === d.deck![at]) : undefined
   // Its own copy, or its card as it is now (following live).
-  const shown = shownContent(d, src)
+  const shown = stepCard ? contentOf(stepCard) : shownContent(d, src)
   const pic = shown.image ?? null
-  const crop = d.crop ?? { x: 50, y: 50, z: 1 }
+  const crop = stepCard ? { x: 50, y: 50, z: 1 } : d.crop ?? { x: 50, y: 50, z: 1 }
+  const hero = stepCard ? undefined : d.hero
   const header = shown.name
   const text = shown.notes.trim()
   // Typing in a live division: it stops following, keeping what showed.
-  const freeze = () => { if (d.live && src) ctx.patch(d.id, { ...copyFrom(src, false), live: false }, true) }
+  const freeze = () => { if (d.live && src && !stepCard) ctx.patch(d.id, { ...copyFrom(src, false), live: false }, true) }
   // How it shows, by the room it has.
   const state: 'row' | 'stand' | 'icon' | 'full' =
     box.h < ROW_H ? 'row'
@@ -302,7 +309,7 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
   const faded = ctx.lit && !ctx.lit.has(d.id)
   const picked = ctx.picked === d.id
   const hovered = ctx.hovered === d.id && !ctx.linking && !ctx.dragging
-  const moving = ctx.moving === d.id && !!pic
+  const moving = ctx.moving === d.id && !!pic && !stepCard
   const opened = !!d.opens && ctx.groups.some(g => g.id === d.opens)
   const changed = cardChanged(d, src)
   const click = useClick(ctx, () => {
@@ -337,7 +344,7 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
     requestAnimationFrame(() => requestAnimationFrame(go))
   }
   const nameClick = useClick(ctx, e => {
-    if (ctx.focus) return
+    if (ctx.focus || stepCard) return
     e.stopPropagation()
     freeze()
     ctx.pick(d.id)
@@ -345,7 +352,7 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
     else ctx.setRenaming(d.id)
   })
   const notesClick = useClick(ctx, e => {
-    if (ctx.focus) return
+    if (ctx.focus || stepCard) return
     e.stopPropagation()
     freeze()
     ctx.pick(d.id)
@@ -454,7 +461,7 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
       onPointerLeave={e => { if (!overBar(e.relatedTarget)) ctx.setHovered(null) }}
       onDoubleClick={e => {
         e.stopPropagation()
-        if (ctx.focus || moving) return
+        if (ctx.focus || moving || stepCard) return
         // Write in it as on a card: it gets a face of its own (its name the
         // header) and its header opens for typing, with the toolbar.
         giveFace()
@@ -478,8 +485,8 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
         {pic && state === 'full' && (
           <img src={pic} alt="" draggable={false} data-scene-pic style={{
             position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', pointerEvents: 'none',
-            objectPosition: `${crop.x}% ${crop.y}%`, transformOrigin: `${crop.x}% ${crop.y}%`, opacity: d.hero?.opacity ?? 1,
-            transform: `scale(${crop.z * (d.hero?.flipH ? -1 : 1)}, ${crop.z * (d.hero?.flipV ? -1 : 1)})`,
+            objectPosition: `${crop.x}% ${crop.y}%`, transformOrigin: `${crop.x}% ${crop.y}%`, opacity: hero?.opacity ?? 1,
+            transform: `scale(${crop.z * (hero?.flipH ? -1 : 1)}, ${crop.z * (hero?.flipV ? -1 : 1)})`,
           }} />
         )}
         {bleedEl}
@@ -525,7 +532,7 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
               </div>
             )
           })()
-        ) : d.face ? (
+        ) : d.face && !stepCard ? (
           // Its own card face: drawn and edited as a card's is, with the
           // same toolbar (fonts, spacing, split...). Never the card's.
           <GroupCardText groupId={ctx.sceneId} heroImage={pic} onCropImage={() => { ctx.pick(d.id); ctx.setMoving(d.id) }} bind={{
@@ -549,7 +556,7 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
             {dots(clamp(Math.min(box.w, box.h) * 0.1, 2.5, 6), true)}
             {ctx.noting === d.id ? <NotesInput d={d} ctx={ctx} font={textFont} />
               : text ? <div data-scene-notes {...notesClick} style={{ fontSize: textFont, lineHeight: 1.25, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', textShadow: shadow, maxWidth: '100%', opacity: 0.95, cursor: 'text', pointerEvents: 'auto' }}>{shown.notes}</div>
-              : picked && !inside?.length && <div data-scene-notes-add {...notesClick} style={{ fontSize: textFont, opacity: 0.55, fontStyle: 'italic', cursor: 'text', pointerEvents: 'auto', textShadow: shadow }}>notes</div>}
+              : picked && !inside?.length && !stepCard && <div data-scene-notes-add {...notesClick} style={{ fontSize: textFont, opacity: 0.55, fontStyle: 'italic', cursor: 'text', pointerEvents: 'auto', textShadow: shadow }}>notes</div>}
           </div>
         )}
         {state === 'full' && d.face && inside && inside.length > 0 ? (
@@ -643,6 +650,27 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
           </div>
         )
       })()}
+      {/* A deck in it, pointed at: step through its cards, left and right
+          (Brian 2026-11-10), with which one shows. Tilted, a 3D set's front
+          shows the set; a model card stepped to, its model. */}
+      {hovered && !moving && !ctx.focus && deckN > 1 && box.h >= u * 2.2 && box.w >= u * 4.2 && (
+        <div data-scene-deck-step style={{ position: 'absolute', left: ctx.seamIn + 0.6, bottom: ctx.seamIn + 0.6, display: 'flex', alignItems: 'center', gap: u * 0.25, zIndex: 5 }}>
+          {([-1, 1] as const).map(dir => (
+            <button key={dir} type="button" data-scene-deck-arrow={dir < 0 ? 'left' : 'right'}
+              title={dir < 0 ? 'The card before, in its deck' : 'The next card in its deck'}
+              onPointerDown={stopPress} onDoubleClick={e => e.stopPropagation()}
+              onClick={e => { e.stopPropagation(); ctx.patch(d.id, { at: (at + dir + deckN) % deckN || undefined }, false) }}
+              style={{
+                order: dir < 0 ? 0 : 2, flex: '0 0 auto', width: u, height: u, padding: 0, borderRadius: '50%', cursor: 'pointer', boxSizing: 'border-box',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(14,16,24,0.82)', color: '#fff',
+                border: `${u * 0.08}px solid rgba(255,255,255,0.75)`, boxShadow: `0 ${u * 0.08}px ${u * 0.25}px rgba(0,0,0,0.45)`,
+              }}>
+              <Glyph ctx={ctx} d={dir < 0 ? 'M6.2 2L3.2 5l3 3' : 'M3.8 2l3 3-3 3'} />
+            </button>
+          ))}
+          <span data-scene-deck-count style={{ order: 1, fontSize: u * 0.6, fontWeight: 700, color: '#fff', textShadow: '0 0.5px 1.5px rgba(0,0,0,0.85)', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{at + 1} / {deckN}</span>
+        </div>
+      )}
       {ctx.layer && (() => {
       // Where each knob goes. "More" first, top right; its colour just left
       // of it; the rest never on top of one already placed (a short or

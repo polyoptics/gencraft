@@ -2463,11 +2463,28 @@ function miniTargets(stage: HTMLElement, W: number, H: number): TiltTarget[] {
     for (const el of sf.querySelectorAll<HTMLElement>('[data-scene-div]')) {
       const d = findDiv(scene, el.dataset.sceneDiv!)
       const held = d ? heldCard(d) : undefined
-      const data = held ? bs.groups.find(g => g.id === held)?.area3d : undefined
-      if (!data || !(data.cards.length || data.tiles.length) || !(data.mat.width > 0) || !(data.mat.height > 0)) continue
+      if (!d || !held) continue
       const at = offsetScaled(el, stage)
       if (!at) continue
       const bw = el.offsetWidth * at.k, bh = el.offsetHeight * at.k
+      const ms = useModelScaleStore.getState()
+      // Its deck stepped off the front (the section's arrows): that card's
+      // model alone, standing in the section's middle.
+      const deck = d.deck && d.deck.length > 1 ? d.deck : null
+      const step = deck ? Math.min(deck.length - 1, Math.max(0, d.at ?? 0)) : 0
+      if (deck && step > 0) {
+        const g = bs.groups.find(x => x.id === deck[step])
+        const model = g && !g.hideModel3d ? cardModel(g.id) : null
+        if (model) {
+          const key = `mini:${sceneId}:${d.id}:m${step}`
+          miniLook.set(key, { size: ms.sizeOf[`card:${g!.id}`], tint: ms.tintOf[`card:${g!.id}`] })
+          const side = Math.min(bw, bh) * 0.45
+          out.push({ key, url: model.url, name: model.name, mini: true, u: at.x + bw / 2 - W / 2, v: at.y + bh / 2 - H / 2, w: side, h: side, z: liftOf(el) })
+        }
+        continue
+      }
+      const data = bs.groups.find(g => g.id === held)?.area3d
+      if (!data || !(data.mat.width > 0) || !(data.mat.height > 0)) continue
       // The scene's ground, fitted into the section, in its middle.
       const f = Math.min(bw / data.mat.width, bh / data.mat.height) * 0.92
       const ox = at.x + (bw - data.mat.width * f) / 2, oy = at.y + (bh - data.mat.height * f) / 2
@@ -2499,6 +2516,18 @@ function miniTargets(stage: HTMLElement, W: number, H: number): TiltTarget[] {
         if (t.tile.type !== 'model' || !t.tile.imageUrl) return
         add(`t${i}`, t.tile.imageUrl, fileName(t.tile.imageUrl) || t.tile.label || 'Model', t.tile.width, t.tile.height,
           t.place ?? mid(t.dx + t.tile.width / 2, t.dy + t.tile.height / 2), t)
+      })
+      // The set's deck: the model cards attached to its card, each where it
+      // was put in the set (never put: in a line along its front).
+      const members = (deck ?? []).slice(1).filter(id => !data.cards.some(p => p.card === id))
+      members.forEach((id, i) => {
+        const g = bs.groups.find(x => x.id === id)
+        const model = g && !g.hideModel3d ? cardModel(g.id) : null
+        if (!model) return
+        const k = `card:${id}`
+        add(`d${i}`, model.url, model.name, g!.cardWidthOverride ?? face.w, g!.cardHeightOverride ?? face.h,
+          ms.placeOf[k] ?? { dx: data.mat.width * (i + 1) / (members.length + 1), dy: data.mat.height * 0.85, h: 0 },
+          { size: ms.sizeOf[k], pose: ms.poseOf[k], tint: ms.tintOf[k], stretch: ms.stretchOf[k], lens: ms.lensOf[k] })
       })
     }
   }
