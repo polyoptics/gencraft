@@ -450,6 +450,20 @@ export function gathered(root: SceneDiv, leafId: string): { own: string[]; hande
   return { own, handed }
 }
 
+/** The card a division's {fields} are filled from (Brian 2026-11-11:
+ *  {Name} and the rest work in a scene card's text as on a card's face,
+ *  utils/faceStyle): the card it holds, else the first card handed down
+ *  by the nearest heading over it. */
+export function fieldCard(root: SceneDiv, id: string): string | undefined {
+  const d = findDiv(root, id)
+  if (!d || !isLeaf(d)) return undefined
+  const own = heldCard(d)
+  if (own) return own
+  const heads = headsAbove(root, id)
+  for (let i = heads.length - 1; i >= 0; i--) { const c = castOf(heads[i])[0]; if (c) return c }
+  return undefined
+}
+
 export function findParent(root: SceneDiv, id: string): SceneDiv | null {
   if (isLeaf(root)) return null
   for (const k of root.kids!) {

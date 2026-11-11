@@ -5608,6 +5608,9 @@ export interface FaceBind {
   hero?: { flipH?: boolean; flipV?: boolean; opacity?: number }
   /** Text scale inside the face's own box. */
   scale: number
+  /** Its text as shown: its {fields} filled in (a scene division's, from
+   *  its card). Edited as typed. */
+  fill?: (text: string) => string
   setHeader: (v: string) => void
   setBody: (v: string) => void
   setHeaderStyle: (s: TextStyle) => void
@@ -5637,8 +5640,8 @@ export const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void
   const splitRatio = (bind ? bind.split : group?.textSplitRatio) ?? 0.5
   // Shown with its {fields} filled in from the card ({Name}, {Age}…);
   // edited as typed (utils/faceStyle).
-  const headerShown = useBoardsStore(s => bind ? headerText : fillFields(headerText, s.groups, groupId))
-  const bodyShown = useBoardsStore(s => bind ? bodyText : fillFields(bodyText, s.groups, groupId))
+  const headerShown = useBoardsStore(s => bind ? bind.fill?.(headerText) ?? headerText : fillFields(headerText, s.groups, groupId))
+  const bodyShown = useBoardsStore(s => bind ? bind.fill?.(bodyText) ?? bodyText : fillFields(bodyText, s.groups, groupId))
   ensureFontLoaded(headerTs.fontFamily); ensureFontLoaded(bodyTs.fontFamily)
   // Text locked to card — scales proportionally with the card (no screen-size compensation)
   const textScale = bind ? bind.scale : zoom / CARD_TEXT_REF_ZOOM

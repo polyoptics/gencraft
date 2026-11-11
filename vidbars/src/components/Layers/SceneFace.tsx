@@ -30,11 +30,11 @@ import ReactDOM from 'react-dom'
 import { useBoardsStore, type ProjectGroup } from '../../store/boardsStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { useLinkDragStore } from '../../store/linkDragStore'
-import { cardTitle } from '../../utils/faceStyle'
+import { cardTitle, fillFields } from '../../utils/faceStyle'
 import { CARD_TYPES } from '../../utils/cardTypes'
 import {
   breakEdge, canFold, canMerge, divBoxes, edgeBreaks, findDiv, mergeParts, heldCard, isLeaf, leaves, litDivisions, needOf, patchDiv, removeDiv, resizeSplit, sectionOf, shareUnits, splitDiv, takeCard,
-  gathered, clearDiv, moveDiv, movedBy,
+  gathered, clearDiv, moveDiv, movedBy, fieldCard,
   type SceneDiv, type SceneView,
 } from '../../utils/sceneCard'
 import { GroupCardText } from './CardLayer'
@@ -302,8 +302,14 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
   const pic = shown.image ?? null
   const crop = stepCard ? { x: 50, y: 50, z: 1 } : d.crop ?? { x: 50, y: 50, z: 1 }
   const hero = stepCard ? undefined : d.hero
-  const header = shown.name
-  const text = shown.notes.trim()
+  // Its text shows its {fields} filled in from its card ({Name}, {Age},
+  // any detail), as a card's face does; it is edited as typed.
+  const fillId = stepCard ? undefined : fieldCard(ctx.scene, d.id)
+  const fill = (t: string) => fillId ? fillFields(t, ctx.groups, fillId) : t
+  const rawName = shown.name
+  const header = fill(rawName)
+  const notesShown = fill(shown.notes)
+  const text = notesShown.trim()
   // Typing in a live division: it stops following, keeping what showed.
   const freeze = () => { if (d.live && src && !stepCard) ctx.patch(d.id, { ...copyFrom(src, false), live: false }, true) }
   // How it shows, by the room it has.
@@ -561,9 +567,9 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
           // Its own card face: drawn and edited as a card's is, with the
           // same toolbar (fonts, spacing, split...). Never the card's.
           <GroupCardText groupId={ctx.sceneId} heroImage={pic} onCropImage={() => { ctx.pick(d.id); ctx.setMoving(d.id) }} bind={{
-            header, body: shown.notes, headerStyle: d.hstyle, bodyStyle: d.bstyle, split: d.split, hero: d.hero, pad: d.pad,
+            header: rawName, body: shown.notes, fill, headerStyle: d.hstyle, bodyStyle: d.bstyle, split: d.split, hero: d.hero, pad: d.pad,
             scale: faceScale,
-            setHeader: v => v !== header && ctx.patch(d.id, d.live && src ? { ...copyFrom(src, false), live: false, name: v } : { name: v }),
+            setHeader: v => v !== rawName && ctx.patch(d.id, d.live && src ? { ...copyFrom(src, false), live: false, name: v } : { name: v }),
             setBody: v => v !== shown.notes && ctx.patch(d.id, d.live && src ? { ...copyFrom(src, false), live: false, notes: v } : { notes: v }),
             setHeaderStyle: st => ctx.patch(d.id, { hstyle: st }, true),
             setBodyStyle: st => ctx.patch(d.id, { bstyle: st }, true),
@@ -580,7 +586,7 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
             {nameEl && <div style={{ fontSize: nameFont, fontWeight: 700, lineHeight: 1.1, textShadow: shadow, maxWidth: '100%', overflowWrap: 'anywhere' }}>{nameEl}</div>}
             {dots(clamp(Math.min(box.w, box.h) * 0.1, 2.5, 6), true)}
             {ctx.noting === d.id ? <NotesInput d={d} ctx={ctx} font={textFont} />
-              : text ? <div data-scene-notes {...notesClick} style={{ fontSize: textFont, lineHeight: 1.25, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', textShadow: shadow, maxWidth: '100%', opacity: 0.95, cursor: 'text', pointerEvents: 'auto' }}>{shown.notes}</div>
+              : text ? <div data-scene-notes {...notesClick} style={{ fontSize: textFont, lineHeight: 1.25, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', textShadow: shadow, maxWidth: '100%', opacity: 0.95, cursor: 'text', pointerEvents: 'auto' }}>{notesShown}</div>
               : picked && !inside?.length && !stepCard && <div data-scene-notes-add {...notesClick} style={{ fontSize: textFont, opacity: 0.55, fontStyle: 'italic', cursor: 'text', pointerEvents: 'auto', textShadow: shadow }}>notes</div>}
           </div>
         )}

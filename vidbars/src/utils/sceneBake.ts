@@ -19,8 +19,9 @@ import { cardVisualRect } from '../hooks/useCardDecks'
 import { viewportCenterInCanvas } from './canvasCreate'
 import { cardFaceSize, createTextCard } from './cardGrid'
 import { makeLinkedCard, masterOf } from './linkedCards'
-import { findDiv, gathered, heldCard, isLeaf, leaves, sectionOf, type SceneDiv } from './sceneCard'
+import { fieldCard, findDiv, gathered, heldCard, isLeaf, leaves, sectionOf, type SceneDiv } from './sceneCard'
 import { shownContent } from './sceneContent'
+import { fillFields } from './faceStyle'
 
 const TOUCH_GAP = 8
 
@@ -51,10 +52,13 @@ function spotBeside(sceneId: string): { cx: number; cy: number } {
 }
 
 /** A new card from a division, as it shows: header, text, picture, look. */
-function cardOf(d: SceneDiv, at: { cx: number; cy: number }): string {
+function cardOf(root: SceneDiv, d: SceneDiv, at: { cx: number; cy: number }): string {
   const bs0 = useBoardsStore.getState()
   const c = shownContent(d, bs0.groups.find(g => g.id === heldCard(d)))
-  const id = createTextCard(at, { title: c.name, body: c.notes })
+  // As it shows: its {fields} filled in from its card (utils/sceneCard fieldCard).
+  const from = fieldCard(root, d.id)
+  const fill = (t: string) => from ? fillFields(t, bs0.groups, from) : t
+  const id = createTextCard(at, { title: fill(c.name), body: fill(c.notes) })
   const bs = useBoardsStore.getState()
   if (c.image) bs.setGroupCardHeroImage(id, c.image)
   if (d.hstyle) bs.setGroupCardHeaderTextStyle(id, { ...DEFAULT_HEADER_STYLE, ...d.hstyle })
@@ -92,7 +96,7 @@ export function bakeDivision(sceneId: string, divId: string, how: 'card' | 'deck
   if (!root || !d || !isLeaf(d)) return null
   useUndoCoordinator.getState().checkpoint()
   const at = spotBeside(sceneId)
-  const front = cardOf(d, at)
+  const front = cardOf(root, d, at)
   const ids = [front]
   if (how === 'deck') {
     const g = gathered(root, divId)
@@ -108,7 +112,7 @@ export function bakeDivision(sceneId: string, divId: string, how: 'card' | 'deck
     }
   } else if (how === 'section') {
     const sec = sectionOf(root, divId)
-    for (const l of sec ? leaves(sec).filter(x => x.id !== divId) : []) ids.push(cardOf(l, at))
+    for (const l of sec ? leaves(sec).filter(x => x.id !== divId) : []) ids.push(cardOf(root, l, at))
   }
   closeAsDeck(ids)
   useBoardsStore.getState().setSelectedGroups(ids.length > 1 ? ids : [front])
