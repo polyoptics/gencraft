@@ -42,8 +42,10 @@ function say(text: string | null, busy: boolean, clearAfterMs = 0) {
   if (clearAfterMs) clearTimer = window.setTimeout(() => useGifJob.setState({ text: null }), clearAfterMs)
 }
 
-/** The movie on a card's face, if that is what its face shows. */
+/** The movie on a card's face, if that is what its face shows. A Rough Cut
+ *  card's face plays its whole cut, so it gives every clip, in cut order. */
 export function cardGifShots(g: ProjectGroup): MediaItem[] {
+  if (g.cut) return deckGifShots([g.id])
   const m = cardFaceMedia(g, useBoardsStore.getState().boards)
   return m?.type === 'video' ? [m] : []
 }
@@ -65,6 +67,8 @@ interface Source {
   h: number
   /** A movie: the part it plays, seconds. */
   video?: { el: HTMLVideoElement; lo: number; hi: number }
+  /** A still: how long it is held, seconds (a Rough Cut's own hold, if set). */
+  hold: number
 }
 
 function waitFor(el: HTMLElement, ok: string, ms: number): Promise<boolean> {
@@ -91,13 +95,14 @@ async function open(m: MediaItem): Promise<Source | null> {
     const length = Number.isFinite(el.duration) ? el.duration : 0
     const lo = Math.max(0, Math.min(m.clipIn ?? 0, length))
     const hi = Math.max(lo, Math.min(m.clipOut ?? length, length))
-    return { draw: el, w: el.videoWidth, h: el.videoHeight, video: { el, lo, hi } }
+    return { draw: el, w: el.videoWidth, h: el.videoHeight, video: { el, lo, hi }, hold: 0 }
   }
   const img = new Image()
   const ready = waitFor(img, 'load', 20_000)
   img.src = url
   if (!(await ready) || !img.naturalWidth) return null
-  return { draw: img, w: img.naturalWidth, h: img.naturalHeight }
+  const held = m.clipOut != null ? m.clipOut - (m.clipIn ?? 0) : STILL_SECONDS
+  return { draw: img, w: img.naturalWidth, h: img.naturalHeight, hold: Math.max(0.2, Math.min(10, held)) }
 }
 
 async function seek(el: HTMLVideoElement, t: number): Promise<void> {
@@ -190,11 +195,17 @@ export async function makeGif(shots: MediaItem[], name: string, besideIds: strin
       say(`Making GIF… ${Math.min(99, Math.round(made / total * 100))}%`, true)
     }
     for (const s of opened) {
-      if (!s.video) { put(s, STILL_SECONDS * 100); await new Promise(r => setTimeout(r)); continue }
+      if (!s.video) { put(s, s.hold * 100); await new Promise(r => setTimeout(r)); continue }
       const { el, lo, hi } = s.video
-      for (let t = lo; t < hi - 1e-3; t += step) {
-        await seek(el, t)
-        put(s, Math.min(step, hi - t) * 100)
+      // Each frame is taken from the MIDDLE of the time it stands for, never
+      // at the in point itself: a cut set a hair before a shot change has
+      // one frame of the shot before it there. Played, that frame is gone
+      // in a blink; in a GIF it would be held (Brian 2026-11-11: a face he
+      // had cut out came back).
+      for (let from = lo; from < hi - 1e-3; from += step) {
+        const len = Math.min(step, hi - from)
+        await seek(el, from + len / 2)
+        put(s, len * 100)
       }
     }
     if (made === 0) throw new Error('no frames came out')
