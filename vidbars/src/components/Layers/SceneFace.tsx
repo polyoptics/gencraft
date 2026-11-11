@@ -69,6 +69,8 @@ const STAND_W = 14
 const ICON_W = 36, ICON_H = 32
 /** A division's controls, in screen px (the same size at every zoom). */
 const TOOL_PX = 15
+/** A deck in a section, played as a slide show: how long each card shows. */
+const SLIDE_MS = 3000
 
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v))
 const stopPress = (e: React.PointerEvent) => { if (e.button === 0) e.stopPropagation() }
@@ -301,7 +303,18 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
   // that card shows, as it is now, to look at (the section's own face is
   // its front's, and comes back at the front).
   const deckN = d.deck?.length ?? 0
-  const at = deckN > 1 ? Math.min(deckN - 1, Math.max(0, d.at ?? 0)) : 0
+  // It plays through them by itself, a slide show (Brian 2026-11-11), from
+  // the card it was left at; held while it is pointed at, picked or turned
+  // over, so it can be worked on. `still`: the slide show is off.
+  const playing = deckN > 1 && !d.still
+  const held = ctx.hovered === d.id || ctx.picked === d.id || !!d.flip || ctx.focus || ctx.dragging
+  const [tick, setTick] = useState(0)
+  useEffect(() => {
+    if (!playing || held) return
+    const t = window.setInterval(() => setTick(n => n + 1), SLIDE_MS)
+    return () => window.clearInterval(t)
+  }, [playing, held])
+  const at = deckN > 1 ? (Math.min(deckN - 1, Math.max(0, d.at ?? 0)) + (playing ? tick : 0)) % deckN : 0
   const stepCard = at > 0 ? ctx.groups.find(g => g.id === d.deck![at]) : undefined
   // Its own copy, or its card as it is now (following live).
   const shown = stepCard ? contentOf(stepCard) : shownContent(d, src)
@@ -703,7 +716,7 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
             <button key={dir} type="button" data-scene-deck-arrow={dir < 0 ? 'left' : 'right'}
               title={dir < 0 ? 'The card before, in its deck' : 'The next card in its deck'}
               onPointerDown={stopPress} onDoubleClick={e => e.stopPropagation()}
-              onClick={e => { e.stopPropagation(); ctx.patch(d.id, { at: (at + dir + deckN) % deckN || undefined }, false) }}
+              onClick={e => { e.stopPropagation(); setTick(0); ctx.patch(d.id, { at: (at + dir + deckN) % deckN || undefined }, false) }}
               style={{
                 order: dir < 0 ? 0 : 2, flex: '0 0 auto', width: u, height: u, padding: 0, borderRadius: '50%', cursor: 'pointer', boxSizing: 'border-box',
                 display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(14,16,24,0.82)', color: '#fff',
@@ -713,6 +726,18 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
             </button>
           ))}
           <span data-scene-deck-count style={{ order: 1, fontSize: u * 0.6, fontWeight: 700, color: '#fff', textShadow: '0 0.5px 1.5px rgba(0,0,0,0.85)', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{at + 1} / {deckN}</span>
+          {/* The slide show, on or off: lit while it plays. Over the left
+              arrow, clear of the divide knob in the middle of the edge. */}
+          <button type="button" data-scene-deck-play title="Slide show: play through the cards of its deck"
+            onPointerDown={stopPress} onDoubleClick={e => e.stopPropagation()}
+            onClick={e => { e.stopPropagation(); setTick(0); ctx.patch(d.id, { still: playing ? true : undefined, at: at || undefined }, true) }}
+            style={{
+              position: 'absolute', left: 0, bottom: u * 1.15, display: box.h >= u * 3.6 ? 'flex' : 'none', width: u, height: u, padding: 0, borderRadius: '50%', cursor: 'pointer', boxSizing: 'border-box',
+              alignItems: 'center', justifyContent: 'center', background: playing ? '#ffd666' : 'rgba(14,16,24,0.82)', color: playing ? '#111' : '#fff',
+              border: `${u * 0.08}px solid rgba(255,255,255,${playing ? 1 : 0.75})`, boxShadow: `0 ${u * 0.08}px ${u * 0.25}px rgba(0,0,0,0.45)`,
+            }}>
+            <svg width={u * 0.6} height={u * 0.6} viewBox="0 0 10 10"><path d="M3.2 2v6l5-3z" fill="currentColor" /></svg>
+          </button>
         </div>
       )}
       {ctx.layer && (() => {
