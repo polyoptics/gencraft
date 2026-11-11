@@ -81,6 +81,7 @@ import { showFamilyTree } from '../../utils/familySpine'
 import { bakeStoryline, chartArea, chartOutOf, chartSpotBeside, eraseChart, matchChart, recallChart, setChartSpot } from '../../utils/chartCard'
 import { cardOrigins } from '../Canvas/StorylineLayer'
 import { rowOf, setRows, openDeckOf } from '../../utils/primaryCard'
+import { gatherCount, gatherIntoScene } from '../../utils/sceneGather'
 import { makeGif, cardGifShots, deckGifShots } from '../../utils/makeGif'
 import { wallRoom } from '../../utils/wallRoom'
 import { area3dOutOf, area3dSpot, toggleArea3d, foldArea3dAndDeck, showArea3dMoving } from '../../utils/area3dCard'
@@ -400,6 +401,14 @@ const CardContextMenu: React.FC<{
       onClose()
     }})
   }
+
+  // Several cards selected, laid out (or one closed deck): one scene card
+  // in their shape, a section for each, right of them (utils/sceneGather).
+  // They stay as they are.
+  if (gatherCount(selIds) > 1) menuItems.push({ label: `Gather into a scene card (${gatherCount(selIds)})`, icon: '🎬', action: () => {
+    gatherIntoScene(selIds)
+    onClose()
+  }})
 
   // Duplicate
   menuItems.push({ label: `Duplicate${count(selIds.length)}`, icon: '📋', action: () => {
