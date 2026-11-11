@@ -94,3 +94,23 @@ body {
 /* A strip exploded: its result has gone back into the stack behind the Viewer. */
 [data-viewport3d][data-layers-out] [data-viewer-body] { background: transparent !important; }
 [data-viewport3d][data-layers-out] [data-viewer-content] { visibility: hidden; }
+
+/* A new item (utils/newCards): a card a process has just made wears this
+   border until it is grabbed. Drawn inside the face, over its picture, so
+   the card keeps its size and nothing around it shifts; a slow, slight
+   pulse, never a fade-out. */
+[data-new-card]::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border: 3px solid rgb(255, 184, 48);
+  box-sizing: border-box;
+  z-index: 80;
+  pointer-events: none;
+  animation: new-card-pulse 2.6s ease-in-out infinite;
+}
+@keyframes new-card-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}

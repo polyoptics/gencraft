@@ -18,6 +18,7 @@ import { useBoardsStore, type ProjectGroup } from '../store/boardsStore'
 import { useCanvasStore } from '../store/canvasStore'
 import { useUndoCoordinator } from '../store/undoCoordinator'
 import { cardFaceMedia, cardFaceSize, createMediaCard, gridOrder, layoutCardGrid } from './cardGrid'
+import { markNew } from './newCards'
 import { cardEntries, placeCard } from './railCards'
 import { drawnRect } from './effectCards'
 import { resolveMediaUrl } from './useResolvedMedia'
@@ -214,6 +215,7 @@ export async function makeGif(shots: MediaItem[], name: string, besideIds: strin
     useUndoCoordinator.getState().checkpoint()
     const gid = createMediaCard({ cx: 0, cy: 0 }, [{ media: { url, type: 'image', originalName: `${name}.gif` }, label: name }])
     if (!gid) throw new Error('the card could not be made')
+    markNew([gid])
     const card = useBoardsStore.getState().groups.find(g => g.id === gid)
     const [board] = card ? gridOrder(card, useBoardsStore.getState().boards) : []
     if (board) layoutCardGrid(gid, { [board]: h / w })

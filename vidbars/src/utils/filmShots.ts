@@ -14,6 +14,7 @@ import { roughCutShots } from './roughCut'
 import { mediaShots } from './filmPlan'
 import { getMediaItems } from '../types/bar'
 import { cardFaceSize, createMediaCard, gridOrder } from './cardGrid'
+import { markNew } from './newCards'
 import { DOCK_TOLERANCE, rectsTouch, type Rect } from './viewportDocking'
 import { cardTouchRect, HEADER_BAND_SLACK } from '../hooks/useCardDecks'
 import { expandWithNestedMembers } from '../hooks/useCardDecks'
@@ -156,7 +157,8 @@ export async function makeShotCards(node: FreeNodeData): Promise<{ made: number 
     const url = thumbs[n]
     if (!url) return
     const cx = x0 + (n % perRow) * size.w, cy = y0 + Math.floor(n / perRow) * size.h
-    if (createMediaCard({ cx, cy }, [{ media: { url, type: 'image', originalName: s.clip, filmShot: s.clip }, label: s.clip }])) made++
+    const id = createMediaCard({ cx, cy }, [{ media: { url, type: 'image', originalName: s.clip, filmShot: s.clip }, label: s.clip }])
+    if (id) { made++; markNew([id]) }
   })
   useBoardsStore.getState().setSelectedGroups([])
   return { made }

@@ -161,6 +161,10 @@ export interface ProjectGroup {
     solo?: boolean }
   /** Turned over: the card shows its back, the DETAILS side (CardBack). */
   flipped?: boolean
+  /** Made by a process (a loop strip run, a GIF, a deck out of a Rough Cut)
+   *  and not touched since: it wears the new-item border until it is
+   *  grabbed (utils/newCards). */
+  isNew?: boolean
   /** The rows on its details side (utils/cardTypes). */
   details?: import('../utils/cardTypes').CardDetail[]
   /** What kind of card it is (utils/cardTypes). Absent: an element card. */
@@ -2009,7 +2013,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
       // Everything the card IS — its grid layout, face block, effect, size —
       // but not where it belongs: no deck, pin, strip result or links.
       const own: ProjectGroup = { ...group }
-      for (const k of ['deckState', 'deckAnchorId', 'deckOffsetX', 'deckOffsetY', 'deckFaceCard', 'pin', 'railSource', 'railBase', 'deckLastFront', 'deckLock', 'linkOf', 'stateOut', 'stateBlank'] as const) delete own[k]
+      for (const k of ['deckState', 'deckAnchorId', 'deckOffsetX', 'deckOffsetY', 'deckFaceCard', 'pin', 'railSource', 'railBase', 'deckLastFront', 'deckLock', 'linkOf', 'stateOut', 'stateBlank', 'isNew'] as const) delete own[k]
       // A State card's copy has the same states, but no output deck yet.
       if (own.stateCard) own.stateCard = { ...own.stateCard, output: undefined }
       const faceAt = group.faceBoardId ? group.boardIds.indexOf(group.faceBoardId) : -1

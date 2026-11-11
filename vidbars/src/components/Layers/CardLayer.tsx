@@ -65,6 +65,7 @@ import { getFirstImageUrl, getMediaItems } from '../../types/bar'
 import { groupFaceSource, groupImageSources, deckImageSources, cardGripUrl as cardGripUrlOf } from '../../utils/mediaSources'
 import { DragOutGrip } from '../UI/DragOutGrip'
 import { hexToHsl, hslToHex, selectionHighlight } from '../../utils/colorUtils'
+import { newIdsOf } from '../../utils/newCards'
 import { cssUrl } from '../../utils/diskUrl'
 import { useFileMenuItems, mayHaveDiskFile } from '../../hooks/useFileMenu'
 import { useMenuClamp } from '../../hooks/useMenuClamp'
@@ -1416,6 +1417,7 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
         data-group-card="true"
         data-link-drop={`card:${group.id}`}
         data-id={group.id}
+        data-new-card={group.isNew ? group.id : undefined}
         style={{
           position: 'absolute',
           left: screenLeft,
@@ -2391,6 +2393,7 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
         )}
         {/* Primary card — front, slightly narrower to fit edges within bounding box */}
         <div
+          data-new-card={newIdsOf([anchorGroup.id, ...deck.memberIds], groups)}
           style={{
             position: 'absolute',
             left: faceX,
@@ -3637,6 +3640,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[]; lay
         data-card-drop={(surfacedGroup ?? anchorGroup).id}
         // The front card, wherever the strips put it (TiltModels fanSlabs).
         data-fan-front="true"
+        data-new-card={newIdsOf([anchorGroup.id, ...deck.memberIds], groups)}
         style={{
           position: 'absolute',
           left: faceX,

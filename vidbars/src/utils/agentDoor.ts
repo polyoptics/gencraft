@@ -20,6 +20,7 @@ import { useViewport3DStore } from '../store/viewport3dStore'
 import { useUndoCoordinator } from '../store/undoCoordinator'
 import { canvasObstacleGroups, cardVisualRect, isHiddenDeckMember } from '../hooks/useCardDecks'
 import { cardFaceSize, createTextCard } from './cardGrid'
+import { markNew } from './newCards'
 import { viewportCenterInCanvas } from './canvasCreate'
 import { CARD_TYPES, cardTypeOf, detailShown, newDetailId, type CardDetail, type CardType } from './cardTypes'
 import { factionGroupsOf } from './factionGroups'
@@ -227,6 +228,7 @@ function dealDeck(args: Json): Json {
     }
     made.push(id)
   })
+  markNew(made)
   if (made.length > 1) {
     useBoardsStore.getState().setDeckState(made, 'stacked', { asGiven: true })
     useBoardsStore.getState().setRowPrimary(made[0], made)

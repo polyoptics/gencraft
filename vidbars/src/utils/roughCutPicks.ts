@@ -8,6 +8,7 @@ import { useFreeNodeStore } from '../store/freeNodeStore'
 import { useBoardsStore } from '../store/boardsStore'
 import { useUndoCoordinator } from '../store/undoCoordinator'
 import { cardFaceSize, createMediaCard } from './cardGrid'
+import { markNew } from './newCards'
 import { clipAt, clipMedia, clipRow, clipStart, placed, setRoughCut, type RoughClip } from './roughCut'
 import { getClipFrame } from './clipFrames'
 import type { MediaItem } from '../types/bar'
@@ -35,6 +36,7 @@ export function deckOfPicks(nodeId: string): number {
     useBoardsStore.getState().setRowPrimary(made[0], made)
     useBoardsStore.getState().setDeckLock(made[0], made)
   }
+  markNew(made)
   useBoardsStore.getState().setSelectedGroups(made)
   return made.length
 }

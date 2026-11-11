@@ -29,6 +29,7 @@ import { useRailUiStore } from '../store/railUiStore'
 import { expandWithNestedMembers } from '../hooks/useCardDecks'
 import { getMediaItems, type MediaItem } from '../types/bar'
 import { createMediaCard, deckFaceSteps, gridOrder, layoutCardGrid } from './cardGrid'
+import { markNew } from './newCards'
 import { drawnRect } from './effectCards'
 import { clientToCanvas } from './fx/createEffect'
 import { knownKind } from './fx/effects'
@@ -323,6 +324,7 @@ export function landResultCard(railId: string, name: string, source: string, res
   if (!isRail(rail) || results.length === 0) return null
   const gid = createMediaCard({ cx: rail.x, cy: rail.y }, results.map(r => ({ media: { url: r.url, type: 'image' as const }, label: r.label })))
   if (!gid) return null
+  markNew([gid])
   const bs = useBoardsStore.getState()
   bs.renameGroup(gid, name)
   // Their shapes are known: lay the grid out now.

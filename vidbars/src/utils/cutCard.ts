@@ -19,6 +19,7 @@ import { useZoomZonesStore } from '../store/zoomZonesStore'
 import { getMediaItems, type Bar, type MediaItem } from '../types/bar'
 import { makeBar } from './barOps'
 import { cardFaceSize, createMediaCard, gridOrder } from './cardGrid'
+import { markNew } from './newCards'
 import { resolveMediaUrl } from './useResolvedMedia'
 
 export interface CutAudio {
@@ -449,6 +450,7 @@ export function pullOutDeck(groupId: string): string[] {
       }
     }
   })
+  markNew(made)
   useBoardsStore.getState().setSelectedGroups(made)
   return made
 }
