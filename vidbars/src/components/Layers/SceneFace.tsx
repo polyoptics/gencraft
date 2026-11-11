@@ -38,6 +38,7 @@ import {
   type SceneDiv, type SceneView,
 } from '../../utils/sceneCard'
 import { GroupCardText } from './CardLayer'
+import { CardBack, backColor } from './CardBack'
 import { openDivision } from '../../utils/sceneOpen'
 import { cardChanged, contentOf, copyFrom, migrateScene, refreshDivision, shownContent } from '../../utils/sceneContent'
 import { bakeDivision } from '../../utils/sceneBake'
@@ -324,6 +325,12 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
   const moving = ctx.moving === d.id && !!pic && !stepCard
   const opened = !!d.opens && ctx.groups.some(g => g.id === d.opens)
   const changed = cardChanged(d, src)
+  // The card it shows can be turned over (Brian 2026-11-11): its back,
+  // the card's details as they are now. A heading's hand-down cards are
+  // not its face, so there is none to turn.
+  const backCard = d.hand ? undefined : stepCard ?? src
+  const canFlip = !!backCard && state === 'full'
+  const flipped = canFlip && !!d.flip
   const click = useClick(ctx, () => {
     if (ctx.focus) ctx.toggleFocus(d.id)
     ctx.pick(d.id)
@@ -473,7 +480,7 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
       onPointerLeave={e => { if (!overBar(e.relatedTarget)) ctx.setHovered(null) }}
       onDoubleClick={e => {
         e.stopPropagation()
-        if (ctx.focus || moving || stepCard) return
+        if (ctx.focus || moving || stepCard || flipped) return
         // Write in it as on a card: it gets a face of its own (its name the
         // header) and its header opens for typing, with the toolbar.
         giveFace()
@@ -576,6 +583,13 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
             {dots(clamp(Math.min(box.w, box.h) * 0.1, 2.5, 6), true)}
           </div>
         ) : null}
+        {flipped && backCard && (
+          // Turned over: the back of the card it shows, over its face.
+          <div data-scene-back={backCard.id} style={{ position: 'absolute', inset: 0, zIndex: 2, background: backColor(d.color ?? '#5b8dd9') }}>
+            <CardBack groupId={backCard.id} color={d.color ?? '#5b8dd9'} width={box.w} height={box.h} hovered={hovered}
+              reserve={ctx.seamIn + u * 2.45} scale={faceScale} radius={2.2} />
+          </div>
+        )}
         {changed && (
           // The card it came from changed since: a small mark; a click
           // takes the new content (its look and crop stay).
@@ -631,12 +645,12 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
         const th = Math.min(u * 1.15, box.h * 0.3)
         if (box.h < u * 2.2 || box.w < th * THUMB * 2) return null
         // Along its top, left of its colour and more knobs.
-        const room = box.w - u * 5 - ctx.seamIn * 2
+        const room = box.w - u * (canFlip ? 6.15 : 5) - ctx.seamIn * 2
         const all = [...g.own.map(c => ({ c, from: null as SceneDiv | null })), ...g.handed.flatMap(h => h.cards.map(c => ({ c, from: h.from })))]
         const fit = Math.max(1, Math.floor(room / (th * THUMB + th * 0.2)))
         const shown = all.length > fit ? all.slice(0, Math.max(1, fit - 1)) : all
         return (
-          <div data-scene-cast style={{ position: 'absolute', left: ctx.seamIn + 0.6 + u * 1.2, top: ctx.seamIn + 0.6, display: 'flex', gap: th * 0.2, alignItems: 'center', zIndex: 5 }}>
+          <div data-scene-cast style={{ position: 'absolute', left: ctx.seamIn + 0.6 + u * (canFlip ? 2.35 : 1.2), top: ctx.seamIn + 0.6, display: 'flex', gap: th * 0.2, alignItems: 'center', zIndex: 5 }}>
             {shown.map(({ c, from }) => {
               const card = ctx.groups.find(x => x.id === c)
               if (!card) return null
@@ -701,6 +715,8 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
       if (box.w > u * 2.4) at.color = { left: at.more.left - u * 1.15, top: at.more.top }
       if (box.w > u * 3.6) at.clear = { left: at.more.left - u * 2.3, top: at.more.top }
       put('move', place(ctx.seamIn, ctx.seamIn))
+      // Flip: beside the grip, where a card's own Flip is (its top left).
+      if (canFlip) put('flip', place(ctx.seamIn + u * 1.15, ctx.seamIn))
       if (heads) put('fold', box.w < STAND_W ? place((box.w - u) / 2, Math.min(1, box.h - u)) : place(Math.min(1, box.w - u), (box.h + lift - u) / 2))
       put('split-row', place(box.w - u - ctx.seamIn - u * 0.2, (box.h + lift - u) / 2))
       put('split-col', place((box.w - u) / 2, box.h + lift - u - ctx.seamIn - u * 0.2))
@@ -735,6 +751,17 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
           at={at.move} onDown={e => ctx.startMove(d.id, e)} onClick={() => {}}>
           <Glyph ctx={ctx} d={GRIP} />
         </Knob>
+        {at.flip && (
+          <Knob ctx={ctx} tool="flip" lit={flipped} title="Flip this section's card over" at={at.flip}
+            onClick={() => ctx.patch(d.id, { flip: !d.flip || undefined })}>
+            <svg width={u * 0.62} height={u * 0.62} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="2" y="5.5" width="6.5" height="8.5" rx="1" />
+              <path d="M10.5 13.5 h2 a1 1 0 0 0 1 -1 v-6" strokeDasharray="1.6 1.6" />
+              <path d="M4.5 3.2 C6.5 0.8 11 1.2 12.6 4.3" />
+              <path d="M12.9 1.9 L12.7 4.5 L10.2 4.1" />
+            </svg>
+          </Knob>
+        )}
         {at.clear && (
           <Knob ctx={ctx} tool="clear" title="Clear this section: what was put in it goes (undo brings it back)" at={at.clear}
             onClick={() => { const r = ctx.root(); if (r) ctx.write(clearDiv(r, d.id)) }}>

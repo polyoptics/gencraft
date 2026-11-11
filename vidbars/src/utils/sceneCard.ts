@@ -30,6 +30,9 @@ export interface SceneDiv {
   /** Which card of that deck shows, stepped to with the section's arrows
    *  (Brian 2026-11-10). Absent or 0: its front. */
   at?: number
+  /** Turned over (Brian 2026-11-11): it shows the back, the details, of
+   *  the card it shows, as that card has them now. */
+  flip?: boolean
   /** A heading holding its cards only to hand them down to its section:
    *  its own name and face are not the card's. */
   hand?: boolean
@@ -387,7 +390,7 @@ export function putCards(root: SceneDiv, id: string, cardIds: string[], content?
 }
 
 export function takeCard(root: SceneDiv, id: string): SceneDiv {
-  return edit(root, id, d => ({ ...d, card: undefined, cards: undefined, deck: undefined, at: undefined, hand: undefined, copied: undefined }))
+  return edit(root, id, d => ({ ...d, card: undefined, cards: undefined, deck: undefined, at: undefined, hand: undefined, copied: undefined, flip: undefined }))
 }
 
 /** Clear a division (Brian 2026-11-10): what was let go on it or put in

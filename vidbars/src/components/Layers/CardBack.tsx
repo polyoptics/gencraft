@@ -396,7 +396,11 @@ export const CardBack: React.FC<{
   groupId: string; color: string; width: number; height: number; hovered: boolean
   /** Screen px kept clear at the top-left for the Flip button. */
   reserve: number
-}> = ({ groupId, color, width, height, hovered, reserve }) => {
+  /** In a scene card's section (SceneFace): the scale it is laid out at
+   *  (as the section's text is), and its corners. A card: its own. */
+  scale?: number
+  radius?: number | string
+}> = ({ groupId, color, width, height, hovered, reserve, scale, radius }) => {
   const details = useBoardsStore(s => s.groups.find(g => g.id === groupId)?.details) ?? NONE
   const type = useBoardsStore(s => cardTypeOf(s.groups.find(g => g.id === groupId)))
   const groups = useBoardsStore(s => s.groups)
@@ -440,7 +444,7 @@ export const CardBack: React.FC<{
   const [kinMenu, setKinMenu] = useState<{ a: string; b: string; x: number; y: number } | null>(null)
 
   // Laid out at a new card's size, then scaled to this card.
-  const s = Math.max(0.01, Math.min(width / BACK_W, height / BACK_H))
+  const s = scale ?? Math.max(0.01, Math.min(width / BACK_W, height / BACK_H))
   const w = width / s, h = height / s
   // More details below than the back shows (it fades out at the bottom).
   const listRef = useRef<HTMLDivElement>(null)
@@ -826,7 +830,7 @@ export const CardBack: React.FC<{
   return (
     <div
       data-card-back={groupId}
-      style={{ position: 'absolute', inset: 0, overflow: 'hidden', borderRadius: '0 0 12px 12px' }}
+      style={{ position: 'absolute', inset: 0, overflow: 'hidden', borderRadius: radius ?? '0 0 12px 12px' }}
     >
       <div style={{
         position: 'absolute', left: 0, top: 0, width: w, height: h,
