@@ -5,7 +5,8 @@
 // canvas and written by utils/gifEncode. Kept small so it is quick — at most
 // 480 px on its long side, 10 frames a second, 200 frames; a longer run
 // plays at fewer frames a second rather than being cut short. A still
-// picture among a deck's shots is held for a moment.
+// picture among a deck's shots is held for a moment. Ping-pong plays the
+// whole run forward then backward, within the same 200 frames.
 //
 // Desktop: the GIF is a real file in Pictures\VidBars GIFs, so it can be
 // dragged out and revealed like any other. Plain browser (or a desktop
@@ -147,8 +148,9 @@ function boxOf(ids: string[]): { x: number; y: number; width: number; height: nu
 }
 
 /** Make `shots` into one looping GIF, on a new card named `name` in the
- *  first free spot right of cards `besideIds`. One at a time. */
-export async function makeGif(shots: MediaItem[], name: string, besideIds: string[]): Promise<void> {
+ *  first free spot right of cards `besideIds`. One at a time. Ping-pong:
+ *  it plays forward, then backward. */
+export async function makeGif(shots: MediaItem[], name: string, besideIds: string[], pingPong = false): Promise<void> {
   if (useGifJob.getState().busy || shots.length === 0) return
   say('Making GIF…', true)
   const opened: Source[] = []
@@ -171,7 +173,7 @@ export async function makeGif(shots: MediaItem[], name: string, besideIds: strin
 
     const stills = opened.filter(s => !s.video).length
     const seconds = opened.reduce((n, s) => n + (s.video ? s.video.hi - s.video.lo : 0), 0)
-    const fps = Math.min(FPS, Math.max(1, MAX_FRAMES - stills) / Math.max(0.1, seconds))
+    const fps = Math.min(FPS, Math.max(1, (pingPong ? MAX_FRAMES / 2 : MAX_FRAMES) - stills) / Math.max(0.1, seconds))
     const step = 1 / fps
     const total = Math.max(1, Math.round(seconds * fps) + stills)
 
@@ -197,7 +199,7 @@ export async function makeGif(shots: MediaItem[], name: string, besideIds: strin
     }
     if (made === 0) throw new Error('no frames came out')
 
-    const url = await keep(gif.finish(), name)
+    const url = await keep(gif.finish(pingPong), name)
     useUndoCoordinator.getState().checkpoint()
     const gid = createMediaCard({ cx: 0, cy: 0 }, [{ media: { url, type: 'image', originalName: `${name}.gif` }, label: name }])
     if (!gid) throw new Error('the card could not be made')

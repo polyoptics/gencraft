@@ -422,10 +422,19 @@ const CardContextMenu: React.FC<{
       onClose()
       void makeGif(own, faceCard.name || 'Movie', deckIds.length ? deckIds : [group.id])
     }})
+    // Ping-pong: forward, then backward (Brian 2026-11-11).
+    if (own.length) menuItems.push({ label: 'Make ping-pong GIF', icon: '🎞', action: () => {
+      onClose()
+      void makeGif(own, faceCard.name || 'Movie', deckIds.length ? deckIds : [group.id], true)
+    }})
     const all = deckIds.length ? deckGifShots(deckIds) : []
     if (all.length > 1) menuItems.push({ label: 'Make looping GIF: whole deck', icon: '🎞', action: () => {
       onClose()
       void makeGif(all, group.name || 'Deck', deckIds)
+    }})
+    if (all.length > 1) menuItems.push({ label: 'Make ping-pong GIF: whole deck', icon: '🎞', action: () => {
+      onClose()
+      void makeGif(all, group.name || 'Deck', deckIds, true)
     }})
   }
 

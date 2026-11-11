@@ -133,6 +133,8 @@ function lzw(index: Uint8Array, out: Bytes) {
 /** A looping GIF being written, frame by frame. */
 export class GifWriter {
   private out = new Bytes()
+  /** Each frame as written, to play again backward (finish). */
+  private frames: Uint8Array[] = []
   readonly width: number
   readonly height: number
   constructor(width: number, height: number) {
@@ -147,16 +149,21 @@ export class GifWriter {
   }
   /** One frame (width × height RGBA), shown for `delayCs` hundredths of a second. */
   frame(rgba: Uint8ClampedArray, delayCs: number) {
-    const o = this.out
+    const o = new Bytes()
     const { palette, index } = quantize(rgba, this.width * this.height)
     o.bytes([0x21, 0xf9, 4, 0x04]); o.u16(Math.max(2, Math.round(delayCs))); o.bytes([0, 0])
     o.byte(0x2c); o.u16(0); o.u16(0); o.u16(this.width); o.u16(this.height)
     o.byte(0x87)                                 // its own 256 colours
     o.bytes(palette)
     lzw(index, o)
+    this.frames.push(o.buf.slice(0, o.len))
   }
-  /** The finished file's bytes. */
-  finish(): Uint8Array {
+  /** The finished file's bytes. Ping-pong: forward, then back again (the
+   *  two end frames once each, so the turn does not stick). */
+  finish(pingPong = false): Uint8Array {
+    for (const f of this.frames) this.out.bytes(f)
+    if (pingPong) for (let i = this.frames.length - 2; i >= 1; i--) this.out.bytes(this.frames[i])
+    this.frames = []
     this.out.byte(0x3b)
     return this.out.buf.slice(0, this.out.len)
   }
