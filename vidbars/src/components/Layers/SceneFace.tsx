@@ -25,6 +25,7 @@
 // card or text matches stay lit, with the headings on the path to them).
 // Data: ProjectGroup.scene / sceneView (utils/sceneCard).
 
+import { create } from 'zustand'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import ReactDOM from 'react-dom'
 import { useBoardsStore, type ProjectGroup } from '../../store/boardsStore'
@@ -34,7 +35,7 @@ import { cardTitle, fillFields } from '../../utils/faceStyle'
 import { CARD_TYPES } from '../../utils/cardTypes'
 import {
   breakEdge, canFold, canMerge, divBoxes, edgeBreaks, findDiv, mergeParts, heldCard, isLeaf, leaves, litDivisions, needOf, patchDiv, removeDiv, resizeSplit, sectionOf, shareUnits, splitDiv, takeCard,
-  gathered, clearDiv, moveDiv, movedBy, fieldCard,
+  gathered, clearDiv, moveDiv, moveAcross, movedBy, fieldCard,
   type SceneDiv, type SceneView,
 } from '../../utils/sceneCard'
 import { GroupCardText } from './CardLayer'
@@ -85,6 +86,11 @@ function traceMatch(d: SceneDiv, card: ProjectGroup | undefined, groups: Project
   }
   return hay.some(h => (h ?? '').toLowerCase().includes(n))
 }
+
+type Where = 'left' | 'right' | 'top' | 'bottom' | 'swap'
+/** A part dragged from one scene card over ANOTHER (Brian 2026-11-11):
+ *  where it would land there, for that card's face to show. */
+const useSceneDrop = create<{ card: string | null; target?: string; where?: Where }>(() => ({ card: null }))
 
 type Ctx = {
   sceneId: string
@@ -1151,7 +1157,10 @@ export const SceneFace: React.FC<{
   const [dragging, setDragging] = useState(false)
   // A part being dragged to a new place: what moves, and where it would
   // land (beside which division, on which side, or swapped with it).
-  const [drag, setDrag] = useState<{ id: string; own: Set<string>; target?: string; where?: 'left' | 'right' | 'top' | 'bottom' | 'swap' } | null>(null)
+  const [drag, setDrag] = useState<{ id: string; own: Set<string>; target?: string; where?: Where } | null>(null)
+  const dropTarget = useSceneDrop(st => st.card === group.id ? st.target : undefined)
+  const dropWhere = useSceneDrop(st => st.card === group.id ? st.where : undefined)
+  const dropHere = dropTarget && dropWhere ? { target: dropTarget, where: dropWhere } : null
   const [picker, setPicker] = useState<{ id: string; x: number; y: number } | null>(null)
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null)
   const [iconEdit, setIconEdit] = useState<{ id: string; x: number; y: number } | null>(null)
@@ -1214,6 +1223,11 @@ export const SceneFace: React.FC<{
     const g = useBoardsStore.getState().groups.find(gr => gr.id === group.id)
     useBoardsStore.getState().setGroupSceneView(group.id, { ...(g?.sceneView ?? {}), ...patch })
   }
+  // Where a dragged part would land: one of this card's own, or one
+  // dragged here from another scene card.
+  const drop: { target: string; where: Where; own?: Set<string> } | null =
+    drag?.target && drag.where ? { target: drag.target, where: drag.where, own: drag.own }
+    : dropHere ? { target: dropHere.target, where: dropHere.where } : null
   const ctx: Ctx = {
     layer, W, H, scene, lifted: drag?.own ?? null,
     startMove: (leafId, e) => {
@@ -1225,25 +1239,33 @@ export const SceneFace: React.FC<{
       const node = r0 && id ? findDiv(r0, id) : null
       if (!r0 || !id || !node) return
       const own = new Set(leaves(node).map(l => l.id))
-      let cur: { target: string; where: 'left' | 'right' | 'top' | 'bottom' | 'swap' } | null = null
+      // card: the scene card it is over, when not this one.
+      let cur: { target: string; where: Where; card?: string } | null = null
       setDragging(true)
       setDrag({ id, own })
       document.body.style.cursor = 'grabbing'
       const onMove = (ev: PointerEvent) => {
-        // The division under the pointer on this face, not one being moved.
+        // The division under the pointer, on this face or another scene
+        // card's, not one being moved.
         const el = document.elementsFromPoint(ev.clientX, ev.clientY)
           .map(x => (x as HTMLElement).closest?.('[data-scene-div]') as HTMLElement | null)
-          .find(x => x && (x.closest('[data-scene-face]') as HTMLElement | null)?.dataset.sceneFace === group.id)
+          .find(x => x && !!x.closest('[data-scene-face]'))
         const tid = el?.dataset.sceneDiv
-        if (!el || !tid || own.has(tid)) { if (cur) { cur = null; setDrag({ id, own }) } return }
+        const face = (el?.closest('[data-scene-face]') as HTMLElement | null)?.dataset.sceneFace
+        const card = face && face !== group.id ? face : undefined
+        if (!el || !tid || !face || (!card && own.has(tid))) {
+          if (cur) { cur = null; setDrag({ id, own }); useSceneDrop.setState({ card: null, target: undefined, where: undefined }) }
+          return
+        }
         // Its middle: the two change places. Else the side nearest.
         const r = el.getBoundingClientRect()
         const fx = (ev.clientX - r.left) / Math.max(1, r.width), fy = (ev.clientY - r.top) / Math.max(1, r.height)
         const sides = [['left', fx], ['right', 1 - fx], ['top', fy], ['bottom', 1 - fy]] as const
         const where = Math.abs(fx - 0.5) < 0.2 && Math.abs(fy - 0.5) < 0.2 ? 'swap' : [...sides].sort((a, b) => a[1] - b[1])[0][0]
         if (cur?.target === tid && cur.where === where) return
-        cur = { target: tid, where }
-        setDrag({ id, own, ...cur })
+        cur = { target: tid, where, card }
+        if (card) { setDrag({ id, own }); useSceneDrop.setState({ card, target: tid, where }) }
+        else { setDrag({ id, own, target: tid, where }); useSceneDrop.setState({ card: null, target: undefined, where: undefined }) }
       }
       const onUp = () => {
         window.removeEventListener('pointermove', onMove)
@@ -1251,15 +1273,25 @@ export const SceneFace: React.FC<{
         document.body.style.cursor = ''
         setDragging(false)
         setDrag(null)
+        useSceneDrop.setState({ card: null, target: undefined, where: undefined })
         const r = root()
-        if (r && cur) { useUndoCoordinator.getState().checkpoint(); useBoardsStore.getState().setGroupScene(group.id, moveDiv(r, id, cur.target, cur.where)) }
+        if (!r || !cur) return
+        if (!cur.card) { useUndoCoordinator.getState().checkpoint(); useBoardsStore.getState().setGroupScene(group.id, moveDiv(r, id, cur.target, cur.where)); return }
+        // Onto another scene card: out of this one, into that one. One undo.
+        const bs = useBoardsStore.getState()
+        const there = bs.groups.find(g => g.id === cur!.card)?.scene
+        const moved = there ? moveAcross(r, id, there, cur.target, cur.where) : null
+        if (!moved) return
+        useUndoCoordinator.getState().checkpoint()
+        bs.setGroupScene(group.id, moved.from)
+        bs.setGroupScene(cur.card, moved.to)
       }
       window.addEventListener('pointermove', onMove)
       window.addEventListener('pointerup', onUp)
     },
     sceneId: group.id, s, u: TOOL_PX / s, seamIn: (seamReach(s) - GAP) / 2, boxes, groups, linking, renaming, setRenaming, noting, setNoting,
     picked, pick: id => { setPicked(id); if (id !== moving) setMoving(null) }, lit, hovered: hoveredDiv, setHovered: setHoveredDiv,
-    moving, setMoving, dragging, setDragging,
+    moving, setMoving, dragging: dragging || !!dropHere, setDragging,
     openMenu: (id, x, y) => setMenu({ id, x, y }),
     openPicker: (id, x, y) => setPicker({ id, x, y }),
     patch: (id, p, step = true) => {
@@ -1374,13 +1406,13 @@ export const SceneFace: React.FC<{
             requestAnimationFrame(() => requestAnimationFrame(() => setDragging(false)))
           }} />
         ))}
-        {drag?.target && drag.where && (() => {
+        {drop && (() => {
           // Where the part being dragged would land: that side of the
           // division under the pointer (all of it: the two change places).
           // Beside a heading is beside its whole section (moveDiv).
-          const w = drag.where
-          const sec = w !== 'bottom' && w !== 'swap' ? sectionOf(scene, drag.target) : null
-          const b = boxes.get(sec && !drag.own.has(drag.target) ? sec.id : drag.target)
+          const w = drop.where
+          const sec = w !== 'bottom' && w !== 'swap' ? sectionOf(scene, drop.target) : null
+          const b = boxes.get(sec && !drop.own?.has(drop.target) ? sec.id : drop.target)
           if (!b) return null
           const at = w === 'left' ? { x: b.x, y: b.y, w: b.w / 2, h: b.h } : w === 'right' ? { x: b.x + b.w / 2, y: b.y, w: b.w / 2, h: b.h }
             : w === 'top' ? { x: b.x, y: b.y, w: b.w, h: b.h / 2 } : w === 'bottom' ? { x: b.x, y: b.y + b.h / 2, w: b.w, h: b.h / 2 } : b

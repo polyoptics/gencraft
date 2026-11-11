@@ -355,6 +355,40 @@ export function moveDiv(root: SceneDiv, id: string, targetId: string, where: 'le
   return edit(out, besideId, t => ({ id: newDetailId(), dir, sizes: [0.5, 0.5], kids: after ? [t, node] : [node, t] }))
 }
 
+/** Move part `id` of one scene card's face beside division `targetId` of
+ *  ANOTHER scene card's (Brian 2026-11-11: "drag a section out of one
+ *  scene card and into another"), as moveDiv does on one face: on a side
+ *  of it, taking half its room, or 'swap', the two change cards. Where it
+ *  came from closes up; a face left with nothing gets one empty section.
+ *  Null when either is not there. */
+export function moveAcross(from: SceneDiv, id: string, to: SceneDiv, targetId: string, where: 'left' | 'right' | 'top' | 'bottom' | 'swap'): { from: SceneDiv; to: SceneDiv } | null {
+  const node = findDiv(from, id), target = findDiv(to, targetId)
+  if (!node || !target) return null
+  const put = (root: SceneDiv, at: string, n: SceneDiv): SceneDiv => {
+    const walk = (d: SceneDiv): SceneDiv => d.id === at ? n : isLeaf(d) ? d : { ...d, kids: d.kids!.map(walk) }
+    return walk(root)
+  }
+  if (where === 'swap') return { from: put(from, id, target), to: put(to, targetId, node) }
+  const left = from.id === id ? leaf('Section', PALETTE[0]) : edit(from, id, () => null)
+  // Beside a section's heading (left, right, top): beside its whole section.
+  const sec = where !== 'bottom' ? sectionOf(to, targetId) : null
+  const besideId = sec ? sec.id : targetId
+  const dir = where === 'left' || where === 'right' ? 'row' : 'col'
+  const after = where === 'right' || where === 'bottom'
+  const parent = findParent(to, besideId)
+  if (parent && parent.dir === dir) {
+    return { from: left, to: edit(to, parent.id, p => {
+      const i = p.kids!.findIndex(k => k.id === besideId)
+      const kids = [...p.kids!], sizes = [...(p.sizes ?? p.kids!.map(() => 1 / p.kids!.length))]
+      const half = sizes[i] / 2
+      sizes.splice(i, 1, half, half)
+      kids.splice(after ? i + 1 : i, 0, node)
+      return { ...p, kids, sizes }
+    }) }
+  }
+  return { from: left, to: edit(to, besideId, t => ({ id: newDetailId(), dir, sizes: [0.5, 0.5], kids: after ? [t, node] : [node, t] })) }
+}
+
 export function patchDiv(root: SceneDiv, id: string, patch: Partial<SceneDiv>): SceneDiv {
   return edit(root, id, d => ({ ...d, ...patch }))
 }
