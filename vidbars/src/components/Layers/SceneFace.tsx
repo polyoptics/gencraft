@@ -38,7 +38,8 @@ import {
   type SceneDiv, type SceneView,
 } from '../../utils/sceneCard'
 import { GroupCardText } from './CardLayer'
-import { CardBack, backColor } from './CardBack'
+import { CardBack, backColor, useCardFlip } from './CardBack'
+import { isTilted, useTiltStore } from '../../store/tiltStore'
 import { openDivision } from '../../utils/sceneOpen'
 import { cardChanged, contentOf, copyFrom, migrateScene, refreshDivision, shownContent } from '../../utils/sceneContent'
 import { bakeDivision } from '../../utils/sceneBake'
@@ -331,6 +332,11 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
   const backCard = d.hand ? undefined : stepCard ?? src
   const canFlip = !!backCard && state === 'full'
   const flipped = canFlip && !!d.flip
+  // It turns over as a card does (Brian 2026-11-11): a quarter turn away,
+  // the side swaps edge-on, a quarter turn back (CardBack useCardFlip).
+  const boxRef = useRef<HTMLDivElement>(null)
+  const tilted = useTiltStore(st => isTilted(st))
+  const showBack = useCardFlip(flipped, boxRef, !tilted)
   const click = useClick(ctx, () => {
     if (ctx.focus) ctx.toggleFocus(d.id)
     ctx.pick(d.id)
@@ -480,7 +486,7 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
       onPointerLeave={e => { if (!overBar(e.relatedTarget)) ctx.setHovered(null) }}
       onDoubleClick={e => {
         e.stopPropagation()
-        if (ctx.focus || moving || stepCard || flipped) return
+        if (ctx.focus || moving || stepCard || flipped || showBack) return
         // Write in it as on a card: it gets a face of its own (its name the
         // header) and its header opens for typing, with the toolbar.
         giveFace()
@@ -495,7 +501,7 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
       }}
     >
       {/* The box: its colour, its picture filling it. */}
-      <div style={{
+      <div ref={boxRef} style={{
         position: 'absolute', inset: 0, borderRadius: 2.2, overflow: 'hidden', background: d.color ?? '#5b8dd9',
         boxShadow: bump ? '0 1px 3px rgba(0,0,0,0.55)' : undefined,
         outline: moving ? '0.8px dashed #ffd666' : picked ? '0.8px solid #fff' : ctx.linking ? '0.6px dashed rgba(255,255,255,0.85)' : bump ? '0.5px solid rgba(255,255,255,0.55)' : undefined,
@@ -583,7 +589,7 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
             {dots(clamp(Math.min(box.w, box.h) * 0.1, 2.5, 6), true)}
           </div>
         ) : null}
-        {flipped && backCard && (
+        {showBack && backCard && (
           // Turned over: the back of the card it shows, over its face.
           <div data-scene-back={backCard.id} style={{ position: 'absolute', inset: 0, zIndex: 2, background: backColor(d.color ?? '#5b8dd9') }}>
             <CardBack groupId={backCard.id} color={d.color ?? '#5b8dd9'} width={box.w} height={box.h} hovered={hovered}
