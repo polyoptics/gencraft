@@ -68,7 +68,9 @@ type IconMode =
   | { kind: 'viewer' }
   | { kind: 'deckPreview'; deckId: string; count: number; onDoubleClick?: () => void
       /** On (e.g. a card's chart is out): drawn lit. */
-      lit?: boolean }
+      lit?: boolean
+      /** A press on the icon: it moves what it stands for (a row). */
+      onDragDown?: (e: React.PointerEvent) => void }
   | { kind: 'hidden' }
 
 interface Props {
@@ -402,7 +404,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
           }
         }}
         // Don't trigger header drag on click.
-        onPointerDown={e => e.stopPropagation()}
+        onPointerDown={e => { e.stopPropagation(); if (mode.kind === 'deckPreview') mode.onDragDown?.(e) }}
         // Double-click triggers the call-site-supplied transition (typically
         // "open the deck"). Clear both hover signals first — they're keyed
         // by deck.id (joined member ids), and re-stacking later produces the
@@ -420,7 +422,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
           // No chrome on the wrapper — the dashed-rect glyph stands free in
           // the header. Padding is hit-zone only, invisible.
           padding: `${hitPadY}px ${hitPadX}px`,
-          cursor: mode.kind === 'deckPreview' && mode.onDoubleClick ? 'pointer' : 'default',
+          cursor: mode.kind === 'deckPreview' && mode.onDragDown ? 'grab' : mode.kind === 'deckPreview' && mode.onDoubleClick ? 'pointer' : 'default',
           display: 'flex',
           alignItems: 'center',
         }}

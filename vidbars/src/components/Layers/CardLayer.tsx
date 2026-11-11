@@ -903,7 +903,9 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
     if (e.button !== 0) return
     if ((e.target as HTMLElement).tagName === 'INPUT') return
     // The front card of a touching line, turned over: it moves the line.
-    const line = useBoardsStore.getState().groups.find(g => g.id === group.id)?.flipped ? clusterFront.get(group.id) : undefined
+    // (A scene card too: its face takes presses itself, see clusterFront.)
+    const self = useBoardsStore.getState().groups.find(g => g.id === group.id)
+    const line = self?.flipped || self?.scene ? clusterFront.get(group.id) : undefined
     if (line && !e.shiftKey) { line.drag(e); return }
     // A card of a locked deck: the whole deck moves, as one (utils/deckLock).
     const locked = e.shiftKey ? undefined : lockedDragFor(group.id)
@@ -1446,6 +1448,10 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
           // Turned over, the front card of a row closes the row onto it, as
           // face up (its back's fields stop their own double-click).
           if (showBack) { clusterFront.get(group.id)?.close(); return }
+          // A scene card in front of a row: the same, anywhere on its face
+          // that is not a section (those edit on their own double-click).
+          // Its header's deck icon closes the row too (see sceneRowFront).
+          if (group.scene) { clusterFront.get(group.id)?.close(); return }
           const el = e.currentTarget.querySelector('[data-card-text]') as HTMLElement | null
           el?.dispatchEvent(new CustomEvent('start-edit', { bubbles: false }))
         }}
@@ -4361,6 +4367,11 @@ const DeckAffordance: React.FC<{ cluster: string[]; front: Deck | 'card' | null;
   const primaryGroup = primary ? groups.find(gr => gr.id === primary.gid) : undefined
   // The front card turned over: its back takes presses itself (see clusterFront).
   const frontFlipped = front === 'card' && !!primaryGroup?.flipped && !primaryGroup.effect
+  // A scene card in front, face up: its sections take presses themselves
+  // (their knobs, seams and text), so the zone lets them through as it
+  // does for a back; the card hands the row's drag and close back here.
+  const frontScene = front === 'card' && !!primaryGroup?.scene && primaryGroup.cardType === 'scene' && !primaryGroup.flipped
+  const frontThrough = frontFlipped || frontScene
   const frontId = primaryGroup?.id
   // Locked: every card of the row carries one lock (utils/deckLock).
   const lock = (() => {
@@ -4374,13 +4385,13 @@ const DeckAffordance: React.FC<{ cluster: string[]; front: Deck | 'card' | null;
     return () => { if (lockedRowDrag.get(frontId) === onClusterDragDown) lockedRowDrag.delete(frontId) }
   }, [frontId, lock, onClusterDragDown])
   useEffect(() => {
-    if (!frontId || !frontFlipped) return
+    if (!frontId || !frontThrough) return
     clusterFront.set(frontId, {
       drag: onClusterDragDown, hover: setIsHovered,
       close: () => { useUndoCoordinator.getState().checkpoint(); useBoardsStore.getState().setDeckState(cluster, 'stacked') },
     })
     return () => { if (clusterFront.get(frontId)?.drag === onClusterDragDown) clusterFront.delete(frontId) }
-  }, [frontId, frontFlipped, onClusterDragDown, cluster])
+  }, [frontId, frontThrough, onClusterDragDown, cluster])
   if (!primary) return null
 
   return (
@@ -4395,7 +4406,7 @@ const DeckAffordance: React.FC<{ cluster: string[]; front: Deck | 'card' | null;
           width: primary.screenWidth,
           height: primary.screenHeight,
           zIndex: 41,
-          pointerEvents: frontFlipped ? 'none' : 'all',
+          pointerEvents: frontThrough ? 'none' : 'all',
           cursor: 'grab',
         }}
         onPointerEnter={() => setIsHovered(true)}
@@ -4446,7 +4457,7 @@ const DeckAffordance: React.FC<{ cluster: string[]; front: Deck | 'card' | null;
         {/* The front card's Flip, for the same reason as its drag-out: the
             zone covers the card's own. Turned over, the zone lets presses
             through and the card's own Flip takes them. */}
-        {primaryGroup && front === 'card' && !primaryGroup.effect && !frontFlipped && (
+        {primaryGroup && front === 'card' && !primaryGroup.effect && !frontThrough && (
           <FlipButton
             flipped={false}
             onFlip={() => useBoardsStore.getState().flipCards(primaryGroup.id, true)}
@@ -5063,6 +5074,13 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
     return mine.length >= 2 && mine.length < row.length ? mine : null
   }
   const affordanceClusters = useMemo(() => rowsOf(touchingClusters, renderedByDeck, groups), [touchingClusters, renderedByDeck, groups])
+  // A scene card in front of a row of touching cards (Brian 2026-11-11):
+  // its sections take the double-click that closes a row onto any other
+  // card, so its header gets the deck icon to close the row with.
+  const sceneRowFront = (g: ProjectGroup): string[] | null => {
+    if (g.cardType !== 'scene' || !g.scene || g.flipped) return null
+    return affordanceClusters.find(c => c[0] === g.id) ?? null
+  }
 
   const extractingCardId = useCanvasStore(s => s.extractingCardId)
   const fanTransition = useCanvasStore(s => s.fanTransition)
@@ -5202,6 +5220,18 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
                 if (!mine) return
                 useUndoCoordinator.getState().checkpoint()
                 useBoardsStore.getState().setDeckState([g.id, ...mine.filter(id => id !== g.id)], 'stacked', { asGiven: true })
+              },
+            } : sceneRowFront(g) ? {
+              // A scene card in front of a row: the same icon, to close
+              // the row onto it and to move the row by (its face is its
+              // sections' to press and double-click).
+              kind: 'deckPreview', deckId: 'row:' + g.id, count: sceneRowFront(g)!.length, lit: true,
+              onDragDown: e => clusterFront.get(g.id)?.drag(e),
+              onDoubleClick: () => {
+                const row = sceneRowFront(g)
+                if (!row) return
+                useUndoCoordinator.getState().checkpoint()
+                useBoardsStore.getState().setDeckState(row, 'stacked')
               },
             } : g.cardType === 'area3d' || g.area3d ? {
               // A 3D scene card: the same icon (Brian 2026-11-10), pointed
