@@ -20,6 +20,7 @@ import { chartRank, isAbove } from './cardTypes'
 import { rankText, type ChartData, type ChartPlace, type ChartTier } from './chartData'
 import { matchedPlaces } from './chartMatch'
 import { linkedHeight, makeLinkedCard, masterOf } from './linkedCards'
+import { markNew } from './newCards'
 import { newGroupId, type FactionGroup } from './factionGroups'
 import type { StorylineData } from './storyline'
 import { play, setChartMotion } from './chartMotion'
@@ -218,6 +219,7 @@ export function bakeStoryline(nodeId: string, cardsOf: CardsOfDots): string | nu
     const size = cardFaceSize()
     cardId = createTextCard({ cx: n.x + size.w / 2, cy: n.y + n.height + size.h * 0.75 }, { title: chart.title })
     useBoardsStore.getState().setCardsType([cardId], 'faction')
+    markNew([cardId])
     // A new card's chart comes out right off its top-right corner (Brian
     // 2026-11-05), and moves with it (startChartFollow).
     const c = useBoardsStore.getState().groups.find(g => g.id === cardId)

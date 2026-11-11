@@ -5,6 +5,7 @@
 // never fades by itself: only a press on the card takes it off. A press on
 // one of several selected cards takes it off them all, as they move as one.
 import { useBoardsStore, type ProjectGroup } from '../store/boardsStore'
+import { rowOf } from './primaryCard'
 
 /** Mark cards a process has just made. Part of the caller's undo step. */
 export function markNew(ids: (string | null | undefined)[]): void {
@@ -32,9 +33,15 @@ export function newIdsOf(ids: string[], groups: ProjectGroup[]): string | undefi
 if (typeof window !== 'undefined') {
   window.addEventListener('pointerdown', e => {
     if (e.button !== 0) return
-    const el = (e.target as Element | null)?.closest?.('[data-new-card]')
-    const ids = el?.getAttribute('data-new-card')?.split(',').filter(Boolean)
-    if (!ids?.length) return
+    const t = e.target as Element | null
+    if (!t?.closest) return
+    // The card itself, its header tab (a layer of its own), or the zone an
+    // open deck is dragged by: that one takes the whole deck.
+    const row = t.closest<HTMLElement>('[data-row-of]')?.dataset.rowOf
+    const ids = t.closest('[data-new-card]')?.getAttribute('data-new-card')?.split(',').filter(Boolean)
+      ?? (row ? rowOf(row) ?? [row] : undefined)
+      ?? [t.closest<HTMLElement>('[data-card-header]')?.dataset.cardHeader ?? ''].filter(Boolean)
+    if (!ids.length) return
     const sel = useBoardsStore.getState().selectedGroupIds
     clearNew(ids.some(id => sel.includes(id)) ? [...ids, ...sel] : ids)
   }, true)

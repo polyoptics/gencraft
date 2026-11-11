@@ -19,6 +19,7 @@ import { cardVisualRect } from '../hooks/useCardDecks'
 import { viewportCenterInCanvas } from './canvasCreate'
 import { cardFaceSize, createTextCard } from './cardGrid'
 import { makeLinkedCard, masterOf } from './linkedCards'
+import { markNew } from './newCards'
 import { fieldCard, findDiv, gathered, heldCard, isLeaf, leaves, sectionOf, type SceneDiv } from './sceneCard'
 import { shownContent } from './sceneContent'
 import { fillFields } from './faceStyle'
@@ -114,6 +115,7 @@ export function bakeDivision(sceneId: string, divId: string, how: 'card' | 'deck
     const sec = sectionOf(root, divId)
     for (const l of sec ? leaves(sec).filter(x => x.id !== divId) : []) ids.push(cardOf(root, l, at))
   }
+  markNew(ids)
   closeAsDeck(ids)
   useBoardsStore.getState().setSelectedGroups(ids.length > 1 ? ids : [front])
   return front

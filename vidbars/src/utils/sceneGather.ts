@@ -16,6 +16,7 @@ import { createCardOrBoardAt } from './canvasCreate'
 import { stackedDeckMembers } from './cardGrid'
 import { newDetailId } from './cardTypes'
 import { copyFrom } from './sceneContent'
+import { markNew } from './newCards'
 import type { SceneDiv } from './sceneCard'
 
 type Rect = { left: number; right: number; top: number; bottom: number }
@@ -142,6 +143,7 @@ export function gatherIntoScene(ids: string[]): string | null {
     }
     bs.setGroupPos(g.id, g.originY + (all.top - r.top), g.originX + (left - r.left))
   }
+  markNew([made.id])
   useBoardsStore.getState().setSelectedGroup(made.id)
   return made.id
 }

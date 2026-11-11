@@ -27,6 +27,7 @@ import { tileDeckIndex } from '../../utils/tileDecks'
 import { cardFaceSize } from '../../utils/cardGrid'
 import { drawnRect } from '../../utils/effectCards'
 import { landSnip } from '../../utils/snipCards'
+import { markNew } from '../../utils/newCards'
 import { useViewport3DStore } from '../../store/viewport3dStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
@@ -378,10 +379,10 @@ export const ImageStudio: React.FC<{ windowId: string; url: string; name?: strin
       if (!win) return
       useUndoCoordinator.getState().checkpoint()
       const face = cardFaceSize()
-      landSnip(
+      markNew([landSnip(
         { url: ref, aspect: outH / outW, label: `${name ?? 'Image'} ✂`, source: url },
         () => findFreeSlotRightOf(win, face.w, face.h),
-      )
+      )])
       setFlash(f => f + 1)
     } catch (err) {
       // e.g. a cross-origin image tainting the canvas — nothing written.
