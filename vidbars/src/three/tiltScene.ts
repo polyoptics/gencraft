@@ -524,11 +524,13 @@ function makeRig(): CamRig {
 const halfFrame = (l: CameraLens, f: number) => { const hw = f * 18 / l.mm; return { hw, hh: hw / l.aspect } }
 /** Lay a camera's lines out for lens `l`, its lens at `a` (orient space). */
 function layRig(r: CamRig, l: CameraLens, a: THREE.Vector3) {
-  const sig = `${l.mm}|${l.aspect}|${l.focus}|${a.x}|${a.y}|${a.z}`
+  const sig = `${l.mm}|${l.aspect}|${l.focus}|${l.view ?? 1}|${a.x}|${a.y}|${a.z}`
   if (sig === r.sig) return
   r.sig = sig
   r.lens.copy(a)
-  const f = l.focus, { hw, hh } = halfFrame(l, f)
+  // Its view shape reaches `v` of the way to the focal point (the lens's
+  // `view`); the line it looks along and the focal point stay where they are.
+  const focus = l.focus, f = focus * Math.max(0.02, Math.min(1, l.view ?? 1)), { hw, hh } = halfFrame(l, f)
   const P = (r.lines.geometry.attributes.position as THREE.BufferAttribute)
   let i = 0
   const seg = (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number) => {
@@ -540,13 +542,13 @@ function layRig(r: CamRig, l: CameraLens, a: THREE.Vector3) {
   // Its roof: which way is up.
   seg(-hw * 0.35, hh * 1.06, f, 0, hh * 1.45, f); seg(0, hh * 1.45, f, hw * 0.35, hh * 1.06, f); seg(-hw * 0.35, hh * 1.06, f, hw * 0.35, hh * 1.06, f)
   // The line it looks along, and a cross on the focal point.
-  seg(0, 0, 0, 0, 0, f)
+  seg(0, 0, 0, 0, 0, focus)
   const x = Math.min(hw, hh) * 0.25
-  seg(-x, 0, f, x, 0, f); seg(0, -x, f, 0, x, f)
+  seg(-x, 0, focus, x, 0, focus); seg(0, -x, focus, 0, x, focus)
   // (spare segments collapse onto the lens)
   while (i < RIG_SEGS * 2) P.setXYZ(i++, a.x, a.y, a.z)
   P.needsUpdate = true
-  r.focal.position.set(a.x, a.y, a.z + f)
+  r.focal.position.set(a.x, a.y, a.z + focus)
 }
 
 /** A floor grid in the plane (xy), 2n cells a side, one unit each, made of

@@ -421,7 +421,14 @@ export interface ScenePlace { dx: number; dy: number; h: number }
 /** A camera primitive's lens: `mm` focal length (on a 36 mm wide frame),
  *  `aspect` the frame's width over height, `focus` how far ahead its focal
  *  point is, in camera lengths (it grows with the camera). */
-export interface CameraLens { mm: number; aspect: number; focus: number }
+export interface CameraLens {
+  mm: number; aspect: number; focus: number
+  /** How big its view shape (the yellow lines out to its frame) is drawn,
+   *  as a part of the way to its focal point, 0–1 (Brian 2026-11-12: far
+   *  focused, it got massive). Drawing only: what it sees is the same.
+   *  Absent: all the way. */
+  view?: number
+}
 export const CAMERA_LENS: CameraLens = { mm: 35, aspect: 16 / 9, focus: 4 }
 
 export const useModelScaleStore = create<ModelScaleStore>()(persist(set => ({

@@ -75,6 +75,7 @@ export const LensField: React.FC<{ k: string; width?: number | string }> = ({ k,
 /** A camera's lens: its focal length typed in, and its frame shape, one lit. */
 export const LensChips: React.FC<{ k: string }> = ({ k }) => {
   const lens = useModelScaleStore(s => s.lensOf[dataKey(k)]) ?? CAMERA_LENS
+  const view = Math.round((lens.view ?? 1) * 100)
   const label = (t: string) => <div style={{ fontSize: 10, letterSpacing: 1.3, color: 'rgba(255,255,255,0.4)', fontFamily: 'ui-monospace, monospace' }}>{t}</div>
   return (
     <>
@@ -87,6 +88,13 @@ export const LensChips: React.FC<{ k: string }> = ({ k }) => {
           return <button key={t} style={chip(on)} aria-pressed={on} onClick={() => setLens(k, { aspect: a })} title={`A ${t} frame`}>{t}</button>
         })}
       </div>
+      {label(`VIEW SHAPE · ${view}%`)}
+      <input type="range" min={5} max={100} step={5} value={view}
+        title="How big the camera's yellow view shape is drawn. Only the drawing: the lens and what it sees stay the same"
+        onPointerDown={() => useUndoCoordinator.getState().checkpoint()}
+        onKeyDown={e => { if (!e.repeat) useUndoCoordinator.getState().checkpoint() }}
+        onChange={e => useModelScaleStore.getState().setLens(dataKey(k), { view: +e.target.value / 100 })}
+        style={{ width: '100%' }} />
     </>
   )
 }
