@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { flushSync } from 'react-dom'
-import { useTiltStore, isTilted, offFlat, unprojectTilt, standRise, shiftKeeping, TILT_SNAP, TILT_PERSPECTIVE, type Pivot } from '../../../store/tiltStore'
+import { useTiltStore, isTilted, offFlat, unprojectTilt, standRise, shiftKeeping, centrePoint, TILT_SNAP, TILT_PERSPECTIVE, type Pivot } from '../../../store/tiltStore'
 import { storyWallOf } from '../StorylineLayer'
 import { peekAt, usePeek } from '../../../utils/peek'
 import { useCanvasStore, groupBounds, MIN_ZOOM, MAX_ZOOM } from '../../../store/canvasStore'
@@ -271,15 +271,20 @@ function dolly(e: PointerEvent, host: HTMLElement) {
   window.addEventListener('pointerup', onUp, true)
 }
 
-/** Where the camera is looking: the flat-view point (px in the host) at the
- *  middle of the screen. Zooming goes straight in and out along that line
- *  (Brian 2026-10-30), not toward the cursor. */
+/** Where the camera is looking: the flat-view point (px in the host) a
+ *  zoom goes in and out about, straight along the middle of the view
+ *  (Brian 2026-10-30), not toward the cursor. Tilted, it is the ground
+ *  under the point the view turns about (tiltStore centrePoint: the middle
+ *  of the screen, at the screen's own distance). It used to be the ground
+ *  seen in the middle of the screen: from low down, after a small slide
+ *  of the view, that is far off along the ground (or sky), and a click of
+ *  the wheel about it threw the whole view (Brian 2026-11-12). */
 export function viewCentre(host: HTMLElement): { x: number; y: number } | null {
   const W = host.clientWidth, H = host.clientHeight
-  const { tilt, yaw, spin, shiftX, shiftY } = useTiltStore.getState()
-  if (!isTilted({ tilt, yaw })) return { x: W / 2, y: H / 2 }
-  const p = unprojectTilt(0, 0, tilt, spin, shiftX, shiftY)
-  return p && { x: p.x + W / 2, y: p.y + H / 2 }
+  const ts = useTiltStore.getState()
+  if (!isTilted(ts)) return { x: W / 2, y: H / 2 }
+  const p = centrePoint(ts)
+  return { x: p.x + W / 2, y: p.y + H / 2 }
 }
 
 type Rect = { x: number; y: number; w: number; h: number }

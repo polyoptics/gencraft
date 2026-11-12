@@ -283,7 +283,7 @@ function keeping(s: { tilt: number; spin: number; yaw: number; shiftX: number; s
  *  ground, and the next turn swung the whole view about it (Brian
  *  2026-11-12). Now a slide carries the point with it across the view, up
  *  off the ground or under it, as Maya's does. */
-function centrePoint(s: { tilt: number; spin: number; yaw: number; shiftX: number; shiftY: number }): Pivot {
+export function centrePoint(s: { tilt: number; spin: number; yaw: number; shiftX: number; shiftY: number }): Pivot {
   const t = s.tilt * Math.PI / 180, b = s.yaw * Math.PI / 180, sp = s.spin * Math.PI / 180
   const ct = Math.cos(t), st = Math.sin(t), cb = Math.cos(b), sb = Math.sin(b)
   // View point (-shift, 0), back in plane coordinates with its height:
