@@ -197,7 +197,10 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
     // (A raised pivot is kept by the ground point under it: the model it
     // was the middle of lies down on the way.)
     const g0 = get()
-    const keep = keeping({ ...g0, pivot: g0.pivot && { x: g0.pivot.x, y: g0.pivot.y } })
+    // (No pivot: the ground in the middle of the screen, or, with none
+    // there, the ground under what the view turns about.)
+    const kept = keeping({ ...g0, pivot: g0.pivot && { x: g0.pivot.x, y: g0.pivot.y } })
+    const keep = { g: (!g0.pivot && centreGround(g0)) || { x: kept.g.x, y: kept.g.y }, at: kept.at }
     const start = performance.now()
     const tick = () => {
       const t = Math.min(1, (performance.now() - start) / 320)
@@ -270,8 +273,26 @@ export function screenOf(g: Pivot, s: { tilt: number; spin: number; yaw: number;
 function keeping(s: { tilt: number; spin: number; yaw: number; shiftX: number; shiftY: number; pivot: Pivot | null }) {
   const at = s.pivot && screenOf(s.pivot, s)
   if (s.pivot && at) return { g: s.pivot, at }
-  const g = centreGround(s)
-  return g && { g, at: { x: 0, y: 0 } }
+  return { g: centrePoint(s), at: { x: 0, y: 0 } }
+}
+/** What the view turns about with no pivot set: the point in the middle
+ *  of the screen, as far off as the screen itself (where a framed thing
+ *  sits, and where the ground is until the view is slid). It used to be
+ *  the ground point under the middle of the screen: seen from low down, a
+ *  small slide of the view up or down sent that point far off along the
+ *  ground, and the next turn swung the whole view about it (Brian
+ *  2026-11-12). Now a slide carries the point with it across the view, up
+ *  off the ground or under it, as Maya's does. */
+function centrePoint(s: { tilt: number; spin: number; yaw: number; shiftX: number; shiftY: number }): Pivot {
+  const t = s.tilt * Math.PI / 180, b = s.yaw * Math.PI / 180, sp = s.spin * Math.PI / 180
+  const ct = Math.cos(t), st = Math.sin(t), cb = Math.cos(b), sb = Math.sin(b)
+  // View point (-shift, 0), back in plane coordinates with its height:
+  // Rz(-s)·Ry(-b)·Rx(-t)·q.
+  const qx = -s.shiftX, qy = -s.shiftY
+  const y1 = qy * ct, z1 = -qy * st
+  const x0 = qx * cb - z1 * sb, z0 = qx * sb + z1 * cb
+  const cs = Math.cos(sp), ss = Math.sin(sp)
+  return { x: x0 * cs + y1 * ss, y: -x0 * ss + y1 * cs, z: z0 }
 }
 
 /** The CSS transform for a tilted layer whose box is the canvas host and

@@ -7,7 +7,8 @@ import { useCanvasStore, groupBounds, MIN_ZOOM, MAX_ZOOM } from '../../../store/
 import { useFreeNodeStore } from '../../../store/freeNodeStore'
 import { useBoardsStore } from '../../../store/boardsStore'
 import { models, modelKey } from './TiltModels'
-import { sceneSpot, standsIn } from '../../../utils/area3dScene'
+import { sceneSpot, standsIn, sceneOf } from '../../../utils/area3dScene'
+import { area3dOutOf } from '../../../utils/area3dCard'
 
 /** Degrees of tilt / turn per pixel of Alt+drag. */
 const DRAG_DEG = 0.25
@@ -446,6 +447,31 @@ function frameModel(host: HTMLElement): boolean {
   return true
 }
 
+/** The 3D sets among the selection: a set's ground selected, or its card
+ *  while the set is out. With how high the tallest model standing in them
+ *  reaches (canvas units), to frame a set with its models, not its ground
+ *  alone (Brian 2026-11-12). */
+function selectedSets(): { rects: Rect[]; top: number } | null {
+  const fs = useFreeNodeStore.getState(), bs = useBoardsStore.getState()
+  const ids = new Set<string>()
+  for (const id of fs.selectedIds) if (fs.nodes[id]?.type === 'area' && !fs.nodes[id].pin) ids.add(id)
+  for (const id of bs.selectedGroupIds) { const a = area3dOutOf(id); if (a && fs.nodes[a] && !fs.nodes[a].pin) ids.add(a) }
+  if (!ids.size) return null
+  const zoom = useCanvasStore.getState().zoom || 1
+  let top = 0
+  const keys = [...bs.groups.map(g => `card:${g.id}`), ...Object.values(fs.nodes).filter(n => n.type === 'model').map(n => `node:${n.id}`)]
+  for (const k of keys) {
+    const p = models.pivotOf?.(k)
+    if (!p) continue
+    const sc = sceneOf(k)
+    if (!sc || !ids.has(sc.area.id)) continue
+    // Its middle is (z - base) over its foot: its top as far again.
+    const up = (p.z - p.base) / zoom
+    top = Math.max(top, (sceneSpot(k)?.h ?? p.base / zoom) + 2 * up)
+  }
+  return { rects: [...ids].map(id => fs.nodes[id]).map(n => ({ x: n.x, y: n.y, w: n.width, h: n.height })), top }
+}
+
 /** F frames the selection — the cards and tiles selected — in the middle
  *  of the view, which is also the pivot the tilted view orbits about. With
  *  nothing selected, F frames everything on the canvas. Flat or tilted.
@@ -464,8 +490,27 @@ export function useFrameKey() {
       const box = frameBox()
       if (!box) return
       e.preventDefault()
-      const { x0, y0, x1, y1, selected } = box
       const W = host.clientWidth, H = host.clientHeight
+      // A 3D set in 3D: the set with its models, aimed at the middle of
+      // the box round them (half as high as the tallest), which the view
+      // then turns about.
+      const sets = isTilted(useTiltStore.getState()) && box.selected ? selectedSets() : null
+      if (sets) {
+        for (const r of sets.rects) { box.x0 = Math.min(box.x0, r.x); box.y0 = Math.min(box.y0, r.y); box.x1 = Math.max(box.x1, r.x + r.w); box.y1 = Math.max(box.y1, r.y + r.h) }
+        const ts = useTiltStore.getState()
+        const cz = sets.top / 2
+        const along = Math.max(1e-3, Math.cos(ts.tilt * Math.PI / 180) * Math.cos((ts.yaw ?? 0) * Math.PI / 180))
+        const P = TILT_PERSPECTIVE, A = cz / along
+        const fit = (F: number, sz: number) => F * P / (Math.max(sz, 1) * P + F * A)
+        const zTo = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, A > 0 ? 0.6 * P / A : Infinity, fit(W * 0.38, box.x1 - box.x0), fit(H * 0.38, box.y1 - box.y0)))
+        const cx = (box.x0 + box.x1) / 2, cy = (box.y0 + box.y1) / 2
+        useCanvasStore.setState({ zoom: zTo, pan: { x: W / 2 - cx * zTo, y: H / 2 - cy * zTo } })
+        holdPivot(cx, cy, cz, W, H)
+        const to = shiftKeeping({ x: 0, y: 0, z: cz * zTo }, ts.tilt, ts.spin, ts.yaw)
+        useTiltStore.getState().setShift(to.shiftX, to.shiftY)
+        return
+      }
+      const { x0, y0, x1, y1, selected } = box
       // Tilted, a model stands up out of its card: leave room above it.
       const fill = selected ? (isTilted(useTiltStore.getState()) ? 0.38 : 0.6) : 0.9
       // Seen `near` toward the eye, a size s shows s·z·P/(P − near·z): the
