@@ -13,7 +13,7 @@ import { useCurveDraft } from '../../store/pathLive'
 import { useTiltStore, isTilted } from '../../store/tiltStore'
 import { useManip } from '../../store/manipStore'
 import { ptKey } from '../../utils/pathEdit'
-import { curvePath, ownsHandles, shownLine, patternOf, ringTube, markSize, alongEvery, flowShift, pointFrames, unitBars, markBars, barOf, type P3, type Bar, type PathFrame3 } from '../../utils/curveGeom'
+import { curvePath, ownsHandles, shownLine, patternOf, ringTube, markSize, bulgeR, markBar, alongEvery, flowShift, pointFrames, unitBars, markBars, barOf, type P3, type Bar, type PathFrame3 } from '../../utils/curveGeom'
 
 const SEL = 'rgba(120,180,255,0.95)'
 /** A selected point (as its cube in 3D). */
@@ -27,8 +27,8 @@ const barsPath = (bars: Bar[]) => bars.map(b => `M${f2(b[0].x)} ${f2(b[0].y)}L${
 /** The graphic at a point (Curve.mark), seen from above, set to the path
  *  there: the corners of a cube, a crosshair, the line swelling. */
 const MarkAt: React.FC<{ c: Curve; p: P3; f: PathFrame3 }> = ({ c, p, f }) => {
-  if (c.mark === 'bulge') return <circle cx={p.x} cy={p.y} r={Math.max(c.width * 1.5, 2.5)} fill={c.color} />
-  return <path d={barsPath(markBars(c.mark as 'corners' | 'cross', p, f, markSize(c)))} fill="none" stroke={c.color} strokeWidth={barOf(c)} strokeLinecap="round" />
+  if (c.mark === 'bulge') return <circle cx={p.x} cy={p.y} r={bulgeR(c)} fill={c.markColor ?? c.color} />
+  return <path d={barsPath(markBars(c.mark as 'corners' | 'cross', p, f, markSize(c)))} fill="none" stroke={c.markColor ?? c.color} strokeWidth={markBar(c)} strokeLinecap="round" />
 }
 
 /** The pieces of a pattern that are things along the line (rings, wire
@@ -87,13 +87,13 @@ const CurveShape: React.FC<{ c: Curve; zoom: number; hit: boolean; selected: boo
         )}
         {ends.map((e, i) => {
           const s = e.size
-          if (e.kind === 'ball') return <circle key={i} cx={e.tip.x} cy={e.tip.y} r={s / 2} fill={c.color} />
+          if (e.kind === 'ball') return <circle key={i} cx={e.tip.x} cy={e.tip.y} r={s / 2} fill={c.endColor ?? c.color} />
           // Seen from above the shape points where the line runs on the canvas.
           const l = Math.hypot(e.dir.x, e.dir.y)
           const dx = l > 1e-6 ? e.dir.x / l : 1, dy = l > 1e-6 ? e.dir.y / l : 0
           const at = (u: number, v: number) => `${f2(e.tip.x + dx * u - dy * v)},${f2(e.tip.y + dy * u + dx * v)}`
           const pts = e.kind === 'arrow' ? `${at(0, 0)} ${at(-s, s * 0.46)} ${at(-s, -s * 0.46)}` : `${at(s / 2, s / 2)} ${at(-s / 2, s / 2)} ${at(-s / 2, -s / 2)} ${at(s / 2, -s / 2)}`
-          return <polygon key={i} points={pts} fill={c.color} />
+          return <polygon key={i} points={pts} fill={c.endColor ?? c.color} />
         })}
         {c.mark && c.kind === 'bezier' && c.pts.map((p, i) => p.mark === false || shaped.has(i) ? null : <MarkAt key={`m${i}`} c={c} p={{ x: p.x, y: p.y, z: p.z ?? 0 }} f={frames[i]} />)}
       </g>

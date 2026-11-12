@@ -79,6 +79,14 @@ export interface Curve {
   flow?: number
   /** A graphic at each of its points (CurvePoint.mark false: not there). */
   mark?: CurveMark
+  /** The point graphics' own colour and how far across they are (canvas
+   *  units). Absent: the line's colour, a size that goes with its
+   *  thickness. */
+  markColor?: string
+  markSize?: number
+  /** The same for what stands on its ends. */
+  endColor?: string
+  endSize?: number
   /** What stands on its ends. Absent: an arrowhead where arrowStart /
    *  arrowEnd say so (as before there was a choice), else nothing. */
   endStart?: CurveEnd
@@ -258,6 +266,12 @@ interface NotesUi {
   opacity: number
   flow: number
   mark: CurveMark | null
+  /** The point graphics' and the ends' own colour (null: the line's) and
+   *  size (screen px; 0: goes with the line's thickness). */
+  markColor: string | null
+  markSize: number
+  endColor: string | null
+  endSize: number
   /** New curves run smoothly through their points. */
   smooth: boolean
   /** New curves' line pattern: the length of each solid section and of
@@ -293,6 +307,10 @@ export const useNotesUi = create<NotesUi>(() => ({
   opacity: saved.opacity ?? 100,
   flow: saved.flow ?? 0,
   mark: saved.mark ?? null,
+  markColor: saved.markColor ?? null,
+  markSize: saved.markSize ?? 0,
+  endColor: saved.endColor ?? null,
+  endSize: saved.endSize ?? 0,
   smooth: saved.smooth ?? false,
   dashOn: saved.dashOn ?? 16,
   dashGap: saved.dashGap ?? 0,
@@ -305,7 +323,7 @@ useNotesUi.subscribe(s => {
   try {
     localStorage.setItem(UI_KEY, JSON.stringify({
       open: s.open, collapsed: s.collapsed, color: s.color, width: s.width, endStart: s.endStart, endEnd: s.endEnd, smooth: s.smooth, dashOn: s.dashOn, dashGap: s.dashGap,
-      unit: s.unit, opacity: s.opacity, flow: s.flow, mark: s.mark,
+      unit: s.unit, opacity: s.opacity, flow: s.flow, mark: s.mark, markColor: s.markColor, markSize: s.markSize, endColor: s.endColor, endSize: s.endSize,
     }))
   } catch { /* private window */ }
 })

@@ -595,7 +595,11 @@ export const NotesPanel: React.FC = () => {
   const dashOn = useNotesUi(s => s.dashOn)
   const dashGap = useNotesUi(s => s.dashGap)
   const selected = useNotesUi(s => s.selected)
-  const [picker, setPicker] = useState<{ x: number; y: number } | null>(null)
+  const [picker, setPicker] = useState<{ x: number; y: number; key: 'color' | 'markColor' | 'endColor' } | null>(null)
+  const markColor = useNotesUi(s => s.markColor)
+  const markSize = useNotesUi(s => s.markSize)
+  const endColor = useNotesUi(s => s.endColor)
+  const endSize = useNotesUi(s => s.endSize)
   const drawing = useCurveDraft(s => !!s.curve)
   const picked = useNotesUi(s => s.points.length > 0)
   // What the options at the top are for: a curve (one selected, or the
@@ -622,16 +626,38 @@ export const NotesPanel: React.FC = () => {
   /** One undo step for a whole drag of a slider. */
   const stepOnce = () => { if (selected.some(id => useNotesStore.getState().curves[id])) useUndoCoordinator.getState().checkpoint() }
   /** A colour of your own (the picker): one undo step for the whole pick. */
-  const openPicker = (e: React.MouseEvent) => {
+  const openPicker = (e: React.MouseEvent, key: 'color' | 'markColor' | 'endColor' = 'color') => {
     // Beside the panel, not over it.
     const r = e.currentTarget.getBoundingClientRect()
     const panel = e.currentTarget.closest('[data-notes-panel]')?.getBoundingClientRect()
     if (selected.some(id => useNotesStore.getState().curves[id])) useUndoCoordinator.getState().checkpoint()
-    setPicker({ x: (panel?.left ?? r.left) - 232, y: r.top - 60 })
+    setPicker({ x: (panel?.left ?? r.left) - 232, y: Math.min(r.top - 60, window.innerHeight - 420), key })
   }
-  const pickColor = (c: string) => slide({ color: c })
+  const pickColor = (c: string) => { if (picker) slide({ [picker.key]: c }) }
+  const pickerColor = picker ? (picker.key === 'color' ? color : (picker.key === 'markColor' ? markColor : endColor) ?? color) : color
   const unitOpts = UNITS.find(u => u.unit === unit) ?? UNITS[0]
   const custom = !NOTE_COLORS.includes(color)
+  /** A part's own colour and size (the points' graphics, the ends):
+   *  apart from the line's. */
+  const partLook = (what: string, colorKey: 'markColor' | 'endColor', sizeKey: 'markSize' | 'endSize', col: string | null, size: number) => {
+    const own = !!col && !NOTE_COLORS.includes(col)
+    const ring = (on: boolean): React.CSSProperties => ({ height: 18, borderRadius: 9, cursor: 'pointer', padding: 0, border: on ? '2px solid #fff' : '2px solid rgba(255,255,255,0.15)', boxShadow: on ? '0 0 0 1px rgba(0,0,0,0.6)' : 'none' })
+    return (
+      <>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(11, 1fr)', gap: 3 }}>
+          <button onClick={() => apply({ [colorKey]: null })} title={`${what}: the line's colour`} aria-pressed={!col}
+            style={{ ...ring(!col), background: 'repeating-linear-gradient(45deg, rgba(255,255,255,0.18) 0 3px, transparent 3px 6px)' }} />
+          {NOTE_COLORS.map(c => (
+            <button key={c} onClick={() => apply({ [colorKey]: c })} title={`${what}: ${c}`} aria-pressed={c === col} style={{ ...ring(c === col), background: c }} />
+          ))}
+          <button onClick={e => openPicker(e, colorKey)} title={`${what}: any colour, pick your own`} aria-pressed={own}
+            style={{ ...ring(own), background: own ? col! : 'conic-gradient(#ff5a5a, #ffe14a, #5fe39b, #4fc3ff, #a98bff, #ff8fd1, #ff5a5a)' }} />
+        </div>
+        <NumSlide name="Size" val={size} min={0} max={120} top={600} tip={`${what}: how far across. 0: it goes with the line's thickness.`}
+          begin={stepOnce} set={v => slide({ [sizeKey]: v })} />
+      </>
+    )
+  }
 
   /** Smooth on or off, and the same on the selected curves (turned off, a
    *  curve keeps its shape: the handles it ran on become its own). */
@@ -721,14 +747,14 @@ export const NotesPanel: React.FC = () => {
                         border: c === color ? '2px solid #fff' : '2px solid rgba(255,255,255,0.15)', boxShadow: c === color ? '0 0 0 1px rgba(0,0,0,0.6)' : 'none' }} />
                   ))}
                   {/* Any colour: the picker. Lit, showing it, while the colour in use is one of your own. */}
-                  <button onClick={openPicker} title="Any colour: pick your own" aria-pressed={custom}
+                  <button onClick={e => openPicker(e)} title="Any colour: pick your own" aria-pressed={custom}
                     style={{ height: 20, borderRadius: 10, cursor: 'pointer', padding: 0,
                       background: custom ? color : 'conic-gradient(#ff5a5a, #ffe14a, #5fe39b, #4fc3ff, #a98bff, #ff8fd1, #ff5a5a)',
                       border: custom ? '2px solid #fff' : '2px solid rgba(255,255,255,0.15)', boxShadow: custom ? '0 0 0 1px rgba(0,0,0,0.6)' : 'none' }} />
                 </div>
                 {forCurve && <NumSlide name="Opacity" val={opacity} min={5} max={100} tip="How solid the line is, in percent: lower lets what is behind it show through."
                   begin={stepOnce} set={v => slide({ opacity: v })} />}
-                {picker && <ColorPickerPopup color={color} anchorX={picker.x} anchorY={picker.y} onChange={pickColor} onClose={() => setPicker(null)} />}
+                {picker && <ColorPickerPopup color={pickerColor} anchorX={picker.x} anchorY={picker.y} onChange={pickColor} onClose={() => setPicker(null)} />}
               </Section>
             )}
             {forLine && (
@@ -766,6 +792,7 @@ export const NotesPanel: React.FC = () => {
                     ))}
                   </div>
                 ))}
+                {partLook('The ends', 'endColor', 'endSize', endColor, endSize)}
               </Section>
             )}
             {forCurve && (
@@ -779,6 +806,7 @@ export const NotesPanel: React.FC = () => {
                       title={`${m.tip}: on or off. It sits as the path runs there, twist and all.`} onClick={() => apply({ mark: mark === m.mark ? null : m.mark })}>{m.name}</button>
                   ))}
                 </div>
+                {partLook("The points' graphics", 'markColor', 'markSize', markColor, markSize)}
               </Section>
             )}
             {picked && (

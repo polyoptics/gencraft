@@ -15,7 +15,7 @@
 import * as THREE from 'three'
 import type { Curve } from '../store/notesStore'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
-import { curvePoints, nearestOnCurve, dashPieces, ownsHandles, shownLine, patternOf, flowShift, alongEvery, lineLength, markSize, ringTube, pointFrames, frameOf, unitBars, markBars, barOf, type P3, type Bar, type PathFrame3 } from '../utils/curveGeom'
+import { curvePoints, nearestOnCurve, dashPieces, ownsHandles, shownLine, patternOf, flowShift, alongEvery, lineLength, markSize, bulgeR, markBar, ringTube, pointFrames, frameOf, unitBars, markBars, barOf, type P3, type Bar, type PathFrame3 } from '../utils/curveGeom'
 
 /** What the 3D view draws of the curves this frame. */
 export interface PathFrame {
@@ -185,9 +185,18 @@ export function createPathOverlay() {
     const op = Math.max(0.05, Math.min(1, c.opacity ?? 1))
     const solid = keep(new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.38, roughness: 0.45, metalness: 0, toneMapped: false, transparent: op < 1, opacity: op }))
     const ghost = keep(new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.22 * op, depthTest: false, depthWrite: false, toneMapped: false }))
-    const body = (geo: THREE.BufferGeometry, place?: (m: THREE.Mesh) => void) => {
+    // The points' graphics and the ends can have a colour of their own.
+    const matsOf = (hex: string | undefined): readonly [THREE.Material, THREE.Material] => {
+      if (!hex || hex === c.color) return [ghost, solid]
+      const col = new THREE.Color(hex)
+      return [
+        keep(new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.22 * op, depthTest: false, depthWrite: false, toneMapped: false })),
+        keep(new THREE.MeshStandardMaterial({ color: col, emissive: col, emissiveIntensity: 0.38, roughness: 0.45, metalness: 0, toneMapped: false, transparent: op < 1, opacity: op })),
+      ]
+    }
+    const body = (geo: THREE.BufferGeometry, place?: (m: THREE.Mesh) => void, mats: readonly [THREE.Material, THREE.Material] = [ghost, solid]) => {
       const pair: THREE.Mesh[] = []
-      for (const [mat, order] of [[ghost, 40], [solid, 41]] as const) {
+      for (const [mat, order] of [[mats[0], 40], [mats[1], 41]] as const) {
         const m = new THREE.Mesh(geo, mat)
         m.renderOrder = order
         m.frustumCulled = false
@@ -278,6 +287,7 @@ export function createPathOverlay() {
     // What stands on the ends: a cone with its point on the end, a cube
     // or a ball on it.
     const shaped = new Set<number>()
+    const endMats = matsOf(c.endColor)
     for (const e of ends) {
       shaped.add(e.end ? c.pts.length - 1 : 0)
       const dv = new THREE.Vector3(e.dir.x, e.dir.y, e.dir.z)
@@ -286,35 +296,36 @@ export function createPathOverlay() {
         body(keep(new THREE.ConeGeometry(size * 0.46, size, 24)), m => {
           m.position.set(e.tip.x, e.tip.y, e.tip.z).addScaledVector(dv, -size / 2)
           m.quaternion.setFromUnitVectors(Y_UP, dv)
-        })
+        }, endMats)
       } else if (e.kind === 'cube') {
         body(keep(new THREE.BoxGeometry(size, size, size)), m => {
           m.position.set(e.tip.x, e.tip.y, e.tip.z)
           // Square on to the line, turned with the path's twist there.
           m.quaternion.copy(frameQuat(frameOf(e.dir, e.tip.tw)))
-        })
+        }, endMats)
       } else {
-        body(keep(new THREE.SphereGeometry(size / 2, 22, 14)), m => m.position.set(e.tip.x, e.tip.y, e.tip.z))
+        body(keep(new THREE.SphereGeometry(size / 2, 22, 14)), m => m.position.set(e.tip.x, e.tip.y, e.tip.z), endMats)
       }
     }
     // The graphic at its points, where it is on and no end's shape
     // stands: set to the path there, twist and all.
     const frames = c.mark || selected ? pointFrames(c) : []
+    const markMats = matsOf(c.markColor)
     if (c.mark === 'bulge') {
-      const one = keep(new THREE.SphereGeometry(Math.max(w * 1.5, 2.5), 18, 12))
+      const one = keep(new THREE.SphereGeometry(bulgeR(c), 18, 12))
       const parts: THREE.BufferGeometry[] = []
       c.pts.forEach((p, i) => { if (p.mark !== false && !shaped.has(i)) parts.push(one.clone().translate(p.x, p.y, p.z ?? 0)) })
       if (parts.length) {
-        body(keep(mergeGeometries(parts)))
+        body(keep(mergeGeometries(parts)), undefined, markMats)
         for (const p of parts) p.dispose()
       }
     } else if (c.mark) {
       const bars: Bar[] = []
       c.pts.forEach((p, i) => { if (p.mark !== false && !shaped.has(i)) bars.push(...markBars(c.mark as 'corners' | 'cross', { x: p.x, y: p.y, z: p.z ?? 0 }, frames[i], markSize(c))) })
-      const t = barOf(c)
+      const t = markBar(c)
       const parts = bars.map(b => BAR.clone().applyMatrix4(barMatrix(b, t)))
       if (parts.length) {
-        body(keep(mergeGeometries(parts)))
+        body(keep(mergeGeometries(parts)), undefined, markMats)
         for (const p of parts) p.dispose()
       }
     }

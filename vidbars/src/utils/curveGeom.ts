@@ -182,14 +182,18 @@ export function endOf(c: Pick<Curve, 'endStart' | 'endEnd' | 'arrowStart' | 'arr
   return (end ? c.endEnd : c.endStart) ?? ((end ? c.arrowEnd : c.arrowStart) ? 'arrow' : null)
 }
 /** How long an arrowhead is, how far across a cube or a ball on an end. */
-export const endSize = (c: Pick<Curve, 'width'>, kind: CurveEnd) => kind === 'arrow' ? Math.max(c.width * 4.5, 6) : Math.max(c.width * 3.2, 5)
+export const endSize = (c: Pick<Curve, 'width' | 'endSize'>, kind: CurveEnd) => c.endSize && c.endSize > 0 ? c.endSize : kind === 'arrow' ? Math.max(c.width * 4.5, 6) : Math.max(c.width * 3.2, 5)
 /** How much of the line an end's shape stands in for (the line stops
  *  inside it, so none of it shows past the shape). */
-export const endTrim = (c: Pick<Curve, 'width'>, kind: CurveEnd) => endSize(c, kind) * (kind === 'arrow' ? 0.8 : 0.25)
+export const endTrim = (c: Pick<Curve, 'width' | 'endSize'>, kind: CurveEnd) => endSize(c, kind) * (kind === 'arrow' ? 0.8 : 0.25)
 /** How thick a ring `on` across is drawn (its tube's radius). */
 export const ringTube = (c: Pick<Curve, 'width'>, on: number) => Math.min(c.width * 0.35, on * 0.2)
 /** How far across the graphic at a curve's points is. */
-export const markSize = (c: Pick<Curve, 'width'>) => Math.max(c.width * 6, 8)
+export const markSize = (c: Pick<Curve, 'width' | 'markSize'>) => c.markSize && c.markSize > 0 ? c.markSize : Math.max(c.width * 6, 8)
+/** The radius of the swelling at a point (the 'bulge' graphic). */
+export const bulgeR = (c: Pick<Curve, 'width' | 'markSize'>) => c.markSize && c.markSize > 0 ? c.markSize / 2 : Math.max(c.width * 1.5, 2.5)
+/** How thick the bars of a point's graphic are. */
+export const markBar = (c: Pick<Curve, 'width' | 'markSize'>) => Math.max(c.width * 0.35, 0.4, markSize(c) * 0.03)
 
 /** The pattern a curve's line repeats: the piece, how long (or across)
  *  it is and the gap after it. Null: one solid line. */

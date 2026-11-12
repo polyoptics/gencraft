@@ -333,7 +333,7 @@ export function sizeHeld(h: PointsHeld, sx: number, sy: number, sz: number) {
 type Ui = ReturnType<typeof useNotesUi.getState>
 /** The settings of how a curve looks, as the panel holds them (screen px
  *  at the zoom it is seen at). */
-export type LookKey = 'color' | 'width' | 'endStart' | 'endEnd' | 'dashOn' | 'dashGap' | 'unit' | 'opacity' | 'flow' | 'mark'
+export type LookKey = 'color' | 'width' | 'endStart' | 'endEnd' | 'dashOn' | 'dashGap' | 'unit' | 'opacity' | 'flow' | 'mark' | 'markColor' | 'markSize' | 'endColor' | 'endSize'
 
 /** The panel's settings as a curve's own (canvas units), at zoom `z`:
  *  what a new curve is given. */
@@ -347,12 +347,15 @@ export function lookOf(ui: Ui, z: number): Partial<Curve> {
     opacity: ui.opacity < 100 ? ui.opacity / 100 : undefined,
     flow: ui.flow ? ui.flow / z : undefined,
     mark: ui.mark ?? undefined,
+    markColor: ui.markColor ?? undefined, markSize: ui.markSize > 0 ? ui.markSize / z : undefined,
+    endColor: ui.endColor ?? undefined, endSize: ui.endSize > 0 ? ui.endSize / z : undefined,
   }
 }
 
 const LOOK_FIELDS: Record<LookKey, (keyof Curve)[]> = {
   color: ['color'], width: ['width'], endStart: ['endStart', 'arrowStart'], endEnd: ['endEnd', 'arrowEnd'],
   dashOn: ['dash', 'unit'], dashGap: ['dash', 'unit'], unit: ['dash', 'unit'], opacity: ['opacity'], flow: ['flow'], mark: ['mark'],
+  markColor: ['markColor'], markSize: ['markSize'], endColor: ['endColor'], endSize: ['endSize'],
 }
 
 /** Change settings in the panel, and the same on the selected curves
@@ -385,6 +388,8 @@ export function lookFrom(c: Curve, z: number): Partial<Pick<Ui, LookKey | 'smoot
     opacity: Math.round((c.opacity ?? 1) * 100),
     flow: Math.round((c.flow ?? 0) * z),
     mark: c.mark ?? null,
+    markColor: c.markColor ?? null, markSize: c.markSize ? Math.max(1, Math.round(c.markSize * z)) : 0,
+    endColor: c.endColor ?? null, endSize: c.endSize ? Math.max(1, Math.round(c.endSize * z)) : 0,
   }
 }
 
