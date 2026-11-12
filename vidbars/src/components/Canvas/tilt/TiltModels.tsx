@@ -22,9 +22,9 @@ import { createTiltScene, trianglesOf, ART_MAX, type TiltTarget, type TiltFrameS
 import type { PinSpot } from '../../../three/notesOverlay'
 import { useNotesStore, useNotesUi } from '../../../store/notesStore'
 import { useCurveDraft, usePathHot } from '../../../store/pathLive'
-import { targetMiddle } from '../../../utils/pathEdit'
+import { targetMiddle, pickedPoints } from '../../../utils/pathEdit'
 import type { PathFrame, PathHit } from '../../../three/pathOverlay'
-import { curveRuns } from '../../../utils/curveGeom'
+import { curveRuns, pointFrames } from '../../../utils/curveGeom'
 import { PinLabels } from '../../Notes/PinLabels'
 import { sceneOf, sceneSpot, standsIn, dataKey } from '../../../utils/area3dScene'
 import { useUndoCoordinator } from '../../../store/undoCoordinator'
@@ -206,6 +206,15 @@ for (const st of [useNotesStore, useNotesUi, useCurveDraft, usePathHot]) st.subs
 /** A curve's pattern is running along it: the 3D view keeps drawing. */
 const pathFlows = () => live3d() && Object.values(notesNow.curves).some(c => c.kind === 'bezier' && curveRuns(c))
 
+/** One point alone selected: the path's directions there (the manipulator
+ *  in Local lines up with them). */
+function soloFrame() {
+  const picked = [...pickedPoints()]
+  if (picked.length !== 1 || picked[0][1].length !== 1) return null
+  const c = notesNow.curves[picked[0][0]]
+  return c?.kind === 'bezier' ? pointFrames(c)[picked[0][1][0]] ?? null : null
+}
+
 /** The canvas's curves for the 3D view (three/pathOverlay): the bezier
  *  ones, with the one being drawn (run on to the cursor). */
 function pathFrame(): PathFrame {
@@ -224,6 +233,7 @@ function pathFrame(): PathFrame {
     ox: pan.x - W / 2, oy: pan.y - H / 2,
     hot: usePathHot.getState().hot,
     gizmo: draft ? null : targetMiddle(),
+    gizmoFrame: draft ? null : soloFrame(),
     // A running pattern steps thirty times a second.
     time: curves.some(curveRuns) ? Math.round(performance.now() * 0.03) / 30 : 0,
     sig: pathSig,

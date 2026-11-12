@@ -1,7 +1,7 @@
 // curveGeom.ts — the shape of a curve (store/notesStore): its SVG path and
 // its arrowheads, in canvas units.
 
-import type { Curve, CurvePoint, CurveHandle, CurveEnd, CurveUnit } from '../store/notesStore'
+import type { Curve, CurvePoint, CurveHandle, CurveEnd, CurveUnit, CurveEase } from '../store/notesStore'
 
 type P = { x: number; y: number }
 const out = (p: CurvePoint): P => ({ x: p.x + (p.hout?.x ?? 0), y: p.y + (p.hout?.y ?? 0) })
@@ -9,7 +9,7 @@ const inn = (p: CurvePoint): P => ({ x: p.x + (p.hin?.x ?? 0), y: p.y + (p.hin?.
 const f = (n: number) => Math.round(n * 100) / 100
 
 /** A point in the canvas's space: x, y on it, z up off it. */
-export interface P3 { x: number; y: number; z: number; /** The path's twist there, degrees (shownLine's points). */ tw?: number }
+export interface P3 { x: number; y: number; z: number; /** The path's twist there, degrees (shownLine's points). */ tw?: number; /** How far along the shown line it is (shownLine's points). */ s?: number }
 const zOf = (p: { z?: number } | undefined) => p?.z ?? 0
 const h3 = (x: number, y: number, z: number): CurveHandle => z ? { x, y, z } : { x, y }
 /** An anchor without its handles. */
@@ -225,6 +225,7 @@ const dist3 = (a: P3, b: P3) => Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z)
 const mix3 = (a: P3, b: P3, t: number): P3 => {
   const p: P3 = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, z: a.z + (b.z - a.z) * t }
   if (a.tw !== undefined || b.tw !== undefined) p.tw = (a.tw ?? 0) + ((b.tw ?? 0) - (a.tw ?? 0)) * t
+  if (a.s !== undefined && b.s !== undefined) p.s = a.s + (b.s - a.s) * t
   return p
 }
 
@@ -310,14 +311,15 @@ export function dashPieces(s: P3[], on: number, off: number, shift = 0, max = 15
 /** A curve's line as it shows: without what its ends' shapes stand in
  *  for. And each end's shape: what, where its tip is, which way it points
  *  (out of the curve, along the last of the line) and its size. */
-export function shownLine(c: Curve, per = 24): { line: P3[]; ends: { kind: CurveEnd; tip: P3; dir: P3; size: number; end: boolean }[] } {
+export function shownLine(c: Curve, per = 24): { line: P3[]; ends: { kind: CurveEnd; tip: P3; dir: P3; size: number; end: boolean }[]; at: number[]; len: number } {
   const n = c.pts.length
+  const raw = curveSamples(c, per)
   // Twisted, each place along the line carries how far.
   const s: P3[] = c.kind === 'bezier' && c.pts.some(p => p.twist)
     ? curveSamples(c, per).map(q => ({ ...q, tw: (c.pts[q.seg]?.twist ?? 0) * (1 - q.t) + (c.pts[(q.seg + 1) % n]?.twist ?? 0) * q.t }))
     : curveSamples(c, per)
   const ends: { kind: CurveEnd; tip: P3; dir: P3; size: number; end: boolean }[] = []
-  if (s.length < 2) return { line: s, ends }
+  if (s.length < 2) return { line: s, ends, at: [], len: 0 }
   const total = lineLength(s)
   let a = 0, b = 0
   for (const end of [false, true]) {
@@ -335,7 +337,89 @@ export function shownLine(c: Curve, per = 24): { line: P3[]; ends: { kind: Curve
     ends.push({ kind, tip: { x: tip.x, y: tip.y, z: tip.z, tw: tip.tw }, dir: { x: (tip.x - from.x) / l, y: (tip.y - from.y) / l, z: (tip.z - from.z) / l }, size, end })
     if (end) b = endTrim(c, kind); else a = endTrim(c, kind)
   }
-  return { line: trimLine(s, a, b), ends }
+  // Each place of the shown line knows how far along it is; and each of
+  // the curve's points where it is along that line.
+  let run = 0
+  const line = trimLine(s, a, b).map((p, i, all) => { if (i) run += dist3(all[i - 1], p); return { ...p, s: run } })
+  const at: number[] = new Array(n).fill(0)
+  let far = 0
+  raw.forEach((q, k) => { if (k) far += dist3(raw[k - 1], q); if (q.t === 1 && q.seg + 1 < n) at[q.seg + 1] = far - a })
+  return { line, ends, at, len: run }
+}
+
+// ── The size along a line ──
+
+const EASES: Record<CurveEase, (u: number) => number> = {
+  linear: u => u,
+  in: u => u * u,
+  out: u => 1 - (1 - u) * (1 - u),
+  inout: u => u * u * (3 - 2 * u),
+  log: u => Math.log(1 + 99 * u) / Math.log(100),
+  exp: u => (Math.pow(2, 10 * u) - 1) / 1023,
+  spike: u => Math.pow(u, 8),
+  step: u => u > 0.5 ? 1 : 0,
+  bounce: u => Math.abs(Math.sin(u * Math.PI * 2.5)) * u,
+}
+
+/** How big the line and its pattern's pieces are along it, and how far
+ *  their colour is pulsed towards white: near a bulging point, and
+ *  towards an end that sizes them. */
+export interface LineField { k: (s: number, time: number) => number; tint: (s: number, time: number) => number; moves: boolean }
+
+/** A curve's size field over its shown line (`at`, `len`: shownLine's),
+ *  or null when nothing along it changes size. */
+export function fieldOf(c: Curve, at: number[], len: number): LineField | null {
+  type Spot = { s: number; before: number; after: number; k: number; bulge: boolean }
+  const spots: Spot[] = []
+  if (c.kind === 'bezier' && c.mark === 'bulge') {
+    const eff = curvePoints(c)
+    const n = c.pts.length
+    const closed = !!c.closed && n > 2
+    const k = c.bulge ?? 2
+    const hl = (h?: CurveHandle) => h ? Math.hypot(h.x, h.y, h.z ?? 0) : 0
+    c.pts.forEach((p, i) => {
+      if (p.mark === false) return
+      let before = c.bulgeReach ?? 0, after = c.bulgeReach ?? 0
+      if (!(before > 0)) {
+        // As far as the tangents reach (a point without, a third of the way to its neighbour).
+        const prev = i > 0 ? at[i - 1] : closed ? at[i] - len / n : at[i], next = i < n - 1 ? at[i + 1] : closed ? at[i] + len / n : at[i]
+        before = Math.max(hl(eff[i].hin) * 1.5, (at[i] - prev) / 3, c.width * 3)
+        after = Math.max(hl(eff[i].hout) * 1.5, (next - at[i]) / 3, c.width * 3)
+      }
+      spots.push({ s: at[i], before, after, k, bulge: true })
+    })
+  }
+  const closedLine = !!c.closed && c.pts.length > 2
+  const reach = c.endReach && c.endReach > 0 ? c.endReach : Math.max(c.width * 12, 40)
+  if (!closedLine && c.startScale !== undefined && c.startScale !== 1) spots.push({ s: 0, before: reach, after: reach, k: c.startScale, bulge: false })
+  if (!closedLine && c.endScale !== undefined && c.endScale !== 1) spots.push({ s: len, before: reach, after: reach, k: c.endScale, bulge: false })
+  if (!spots.length) return null
+  const ease = EASES[c.bulgeEase ?? 'inout'] ?? EASES.inout
+  const pulseSize = !!c.pulseSize, pulseColor = !!c.pulseColor
+  const near = (sp: Spot, s: number) => {
+    const d = s - sp.s
+    const r = d < 0 ? sp.before : sp.after
+    const u = 1 - Math.abs(d) / r
+    return u <= 0 ? 0 : sp.bulge ? ease(Math.min(1, u)) : Math.min(1, u) * Math.min(1, u) * (3 - 2 * Math.min(1, u))
+  }
+  const beat = (time: number) => 0.5 + 0.5 * Math.sin(time * Math.PI * 2 * 0.9)
+  return {
+    moves: spots.some(sp => sp.bulge) && (pulseSize || pulseColor),
+    k: (s, time) => {
+      let k = 1
+      for (const sp of spots) {
+        const w = near(sp, s)
+        if (w) k *= Math.max(0, 1 + (sp.k - 1) * w * (sp.bulge && pulseSize ? beat(time) : 1))
+      }
+      return k
+    },
+    tint: (s, time) => {
+      if (!pulseColor) return 0
+      let t = 0
+      for (const sp of spots) if (sp.bulge) t = Math.max(t, near(sp, s))
+      return t * beat(time) * 0.85
+    },
+  }
 }
 
 /** The SVG path of a curve, in canvas units. */
@@ -449,7 +533,7 @@ function cubeBars(p: P3, f: PathFrame3, m: number, out: Bar[]) {
 
 /** Something about the curve moves by itself: a pattern running along
  *  it, a pulse down a road's chevrons, its points pinging. */
-export const curveRuns = (c: Curve) => (!!c.flow && !!patternOf(c)) || !!c.ping || (!!c.pulse && c.unit === 'hatch')
+export const curveRuns = (c: Curve) => (!!c.flow && !!patternOf(c)) || !!c.ping || (!!c.pulse && c.unit === 'hatch') || (c.mark === 'bulge' && (!!c.pulseSize || !!c.pulseColor))
 
 /** A wire pattern's bars along a line (shownLine's), the pattern run
  *  `shift` along it: wire cubes or plus signs (a bar each way: along the

@@ -1587,8 +1587,15 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       if (at && st.paths) {
         const f = st.paths, m = st.manip ?? DEF_MANIP
         g.group.position.set(f.ox + at.x * f.zoom, -(f.oy + at.y * f.zoom), at.z * f.zoom)
-        g.lq.identity()
-        g.group.quaternion.copy(STAND_Q)
+        // Local, on one point: its arrows run as the path does there (along
+        // it, up from it and across it), twist and all.
+        const pf = m.local ? f.gizmoFrame : null
+        if (pf) {
+          // (The canvas's y and its up are the scene's z and y.)
+          g.lq.setFromRotationMatrix(new THREE.Matrix4().makeBasis(
+            new THREE.Vector3(pf.d.x, pf.d.z, pf.d.y), new THREE.Vector3(pf.up.x, pf.up.z, pf.up.y), new THREE.Vector3(pf.side.x, pf.side.z, pf.side.y)))
+        } else g.lq.identity()
+        g.group.quaternion.copy(STAND_Q).multiply(g.lq)
         if (g.mode !== m.mode) {
           g.mode = m.mode
           const show = PARTS_OF[m.mode]

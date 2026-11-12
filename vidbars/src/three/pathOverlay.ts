@@ -33,6 +33,9 @@ export interface PathFrame {
   /** Where the manipulator sits (canvas units, z up), if anything of a
    *  curve is selected. */
   gizmo: P3 | null
+  /** One point alone is selected: the path's directions there, for the
+   *  manipulator in Local. */
+  gizmoFrame?: PathFrame3 | null
   /** Seconds, for the patterns that run along their lines (0: none does). */
   time: number
   /** Changes whenever any of the above does. */

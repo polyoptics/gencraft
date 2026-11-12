@@ -22,6 +22,7 @@ import { useUndoCoordinator } from '../store/undoCoordinator'
 import { useCanvasStore } from '../store/canvasStore'
 import { models } from '../components/Canvas/tilt/TiltModels'
 import { PATH_KEY, type ManipHit } from '../three/tiltScene'
+import { useNotesUi } from '../store/notesStore'
 import { holdPoints, moveHeld, turnHeld, sizeHeld, type PointsHeld } from './pathEdit'
 import { placeNow, dataKey, sceneOf } from './area3dScene'
 import { useManip, MANIP_SIZE_STEP, MANIP_SIZE_MIN, MANIP_SIZE_MAX } from '../store/manipStore'
@@ -48,6 +49,10 @@ const cursorOf = (h: ManipHit) => h.part === 'f' ? 'crosshair' : h.part === 's' 
 
 function hit(e: PointerEvent) {
   if (!models.gizmoAt || !isTilted(useTiltStore.getState())) return null
+  // With the Pen, the Pin or the Eraser in the hand a press is that tool's:
+  // a selected model is drawn on where its handles are too.
+  const tool = useNotesUi.getState().tool
+  if (tool === 'pen' || tool === 'pin' || tool === 'erase') return null
   return models.gizmoAt(e.clientX, e.clientY)
 }
 

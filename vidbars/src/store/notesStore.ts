@@ -50,6 +50,8 @@ export type CurveUnit = 'line' | 'ball' | 'ring' | 'hatch' | 'cube' | 'plus'
 /** A graphic at each point of a curve: a cube of which only the corners
  *  show, a crosshair in all three directions, the line swelling. */
 export type CurveMark = 'corners' | 'cross' | 'bulge'
+/** How a bulge falls away from its point. */
+export type CurveEase = 'linear' | 'in' | 'out' | 'inout' | 'log' | 'exp' | 'spike' | 'step' | 'bounce'
 
 export interface Curve {
   id: string
@@ -81,6 +83,23 @@ export interface Curve {
   pulse?: boolean
   /** Its points ping one after another along it. */
   ping?: boolean
+  /** The 'bulge' graphic: near each point the line and the pieces of its
+   *  pattern are this many times their size (absent: 2; under 1 they
+   *  shrink), over `bulgeReach` either side (canvas units; absent: as far
+   *  as the point's tangent handles reach), falling away as `bulgeEase`
+   *  (absent: 'inout'). The size, or the colour, can pulse. */
+  bulge?: number
+  bulgeReach?: number
+  bulgeEase?: CurveEase
+  pulseSize?: boolean
+  pulseColor?: boolean
+  /** The line and its pattern's pieces are this many times their size at
+   *  its start / its end (absent: 1, no change; 0: down to nothing),
+   *  over `endReach` (canvas units; absent: a length that goes with the
+   *  thickness). */
+  startScale?: number
+  endScale?: number
+  endReach?: number
   /** How solid it is, 0..1 (absent: 1). */
   opacity?: number
   /** The pattern runs along the line: canvas units a second, towards its
@@ -284,6 +303,17 @@ interface NotesUi {
   chev: number
   pulse: boolean
   ping: boolean
+  /** The bulge: its size (percent), reach (screen px; 0: the tangents'),
+   *  falloff and pulses; the size at each end (percent) and how far in
+   *  from the end that reaches (screen px). */
+  bulge: number
+  bulgeReach: number
+  bulgeEase: CurveEase
+  pulseSize: boolean
+  pulseColor: boolean
+  startScale: number
+  endScale: number
+  endReach: number
   endColor: string | null
   endSize: number
   /** New curves run smoothly through their points. */
@@ -326,6 +356,14 @@ export const useNotesUi = create<NotesUi>(() => ({
   chev: saved.chev ?? 50,
   pulse: saved.pulse ?? false,
   ping: saved.ping ?? false,
+  bulge: saved.bulge ?? 200,
+  bulgeReach: saved.bulgeReach ?? 0,
+  bulgeEase: saved.bulgeEase ?? 'inout',
+  pulseSize: saved.pulseSize ?? false,
+  pulseColor: saved.pulseColor ?? false,
+  startScale: saved.startScale ?? 100,
+  endScale: saved.endScale ?? 100,
+  endReach: saved.endReach ?? 80,
   endColor: saved.endColor ?? null,
   endSize: saved.endSize ?? 0,
   smooth: saved.smooth ?? false,
@@ -340,7 +378,7 @@ useNotesUi.subscribe(s => {
   try {
     localStorage.setItem(UI_KEY, JSON.stringify({
       open: s.open, collapsed: s.collapsed, color: s.color, width: s.width, endStart: s.endStart, endEnd: s.endEnd, smooth: s.smooth, dashOn: s.dashOn, dashGap: s.dashGap,
-      unit: s.unit, opacity: s.opacity, flow: s.flow, mark: s.mark, chev: s.chev, pulse: s.pulse, ping: s.ping, markColor: s.markColor, markSize: s.markSize, endColor: s.endColor, endSize: s.endSize,
+      unit: s.unit, opacity: s.opacity, flow: s.flow, mark: s.mark, chev: s.chev, pulse: s.pulse, ping: s.ping, bulge: s.bulge, bulgeReach: s.bulgeReach, bulgeEase: s.bulgeEase, pulseSize: s.pulseSize, pulseColor: s.pulseColor, startScale: s.startScale, endScale: s.endScale, endReach: s.endReach, markColor: s.markColor, markSize: s.markSize, endColor: s.endColor, endSize: s.endSize,
     }))
   } catch { /* private window */ }
 })
