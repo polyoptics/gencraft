@@ -625,7 +625,25 @@ export const NotesPanel: React.FC = () => {
           </>
         ) : (
           <>
-            {/* On top: the options of what is selected (or of the tool in the hand), and nothing else. */}
+            {/* The top stays put, an anchor: the tools, then the Outliner in a box of one height (it scrolls inside). What changes with the selection is underneath. */}
+            <Section title="TOOLS">
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 5 }}>
+                {[{ id: null, Icon: IcSelect, name: 'Select', tip: SELECT_TIP }, ...TOOLS].map(t => {
+                  const on = t.id ? tool === t.id : !tool
+                  return (
+                    <button key={t.name} title={t.tip} aria-pressed={on}
+                      style={{ ...btnStyle(on), width: '100%', height: 46, flexDirection: 'column', gap: 2, fontSize: 9.5 }}
+                      onClick={() => t.id ? toggleTool(t.id) : useNotesUi.setState({ tool: null, linking: null })}>
+                      <t.Icon size={18} /><span>{t.name}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            </Section>
+            <Section title="3D SET"><Area3dTools part="make" /></Section>
+            <Section title="OUTLINER"><div style={{ height: 132, overflowY: 'auto', flexShrink: 0 }}><Outliner /></div></Section>
+            <div style={{ height: 1, background: 'rgba(255,255,255,0.08)' }} />
+            {/* Underneath: the options of what is selected (or of the tool in the hand), and nothing else. */}
             {forLine && (
               <Section title="COLOUR">
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(10, 1fr)', gap: 3 }}>
@@ -710,23 +728,6 @@ export const NotesPanel: React.FC = () => {
             {!forLine && !picked && !modelKeys.length && !modelNotes.length && (
               <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', lineHeight: 1.5 }}>Select something to see its options here.</div>
             )}
-            <div style={{ height: 1, background: 'rgba(255,255,255,0.08)' }} />
-            <Section title="TOOLS">
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 5 }}>
-                {[{ id: null, Icon: IcSelect, name: 'Select', tip: SELECT_TIP }, ...TOOLS].map(t => {
-                  const on = t.id ? tool === t.id : !tool
-                  return (
-                    <button key={t.name} title={t.tip} aria-pressed={on}
-                      style={{ ...btnStyle(on), width: '100%', height: 46, flexDirection: 'column', gap: 2, fontSize: 9.5 }}
-                      onClick={() => t.id ? toggleTool(t.id) : useNotesUi.setState({ tool: null, linking: null })}>
-                      <t.Icon size={18} /><span>{t.name}</span>
-                    </button>
-                  )
-                })}
-              </div>
-            </Section>
-            <Section title="3D SET"><Area3dTools part="make" /></Section>
-            <Section title="OUTLINER"><Outliner /></Section>
           </>
         )}
       </div>
