@@ -85,6 +85,8 @@ export const models: {
   aimAt: ((key: string, clientX: number, clientY: number, rise?: boolean) => { q: [number, number, number, number]; focus: number } | null) | null
   /** A camera's lens, axes and focal point (tiltScene cameraFrame). */
   cameraFrame: ((key: string) => ReturnType<ReturnType<typeof createTiltScene>['cameraFrame']>) | null
+  /** The ball round some models, or all of them (tiltScene lookBounds). */
+  lookBounds: ((keys: string[] | null, not?: string) => ReturnType<ReturnType<typeof createTiltScene>['lookBounds']>) | null
   /** Light up a manipulator part (hovered or held), or none. */
   manipHot: ((key: string | null, part: ManipPart | null) => void) | null
   /** What of a curve is under a point in 3D: a point's cube, a tangent
@@ -93,7 +95,7 @@ export const models: {
   /** Where a point of the canvas (canvas units, z up) is drawn in 3D. */
   pathPx: ((p: { x: number; y: number; z: number }) => { x: number; y: number } | null) | null
   root: HTMLElement | null
-} = { pathAt: null, pathPx: null, gizmoAt: null, manipHot: null, labelAt: null, strokeAt: null, modelSize: null, pick: null, pickZ: null, info: null, spin: null, letGo: null, hovered: null, at: null, surface: null, pinSpots: null, screenBox: null, floatSpot: null, pivotOf: null, aimAt: null, cameraFrame: null, root: null }
+} = { pathAt: null, pathPx: null, gizmoAt: null, manipHot: null, labelAt: null, strokeAt: null, modelSize: null, pick: null, pickZ: null, info: null, spin: null, letGo: null, hovered: null, at: null, surface: null, pinSpots: null, screenBox: null, floatSpot: null, pivotOf: null, aimAt: null, cameraFrame: null, lookBounds: null, root: null }
 /** A pick that lights up under the cursor: a model or a person, not
  *  furniture. */
 export const modelKey = (k: string | null | undefined) => (k && !k.startsWith('deco|') ? k : null)
@@ -430,6 +432,7 @@ export const TiltModels: React.FC = () => {
         return v.aimAt(key, clientX - r.left, clientY - r.top, rise)
       }
       models.cameraFrame = v.cameraFrame
+      models.lookBounds = v.lookBounds
       models.root = root
       warm()
       raf = requestAnimationFrame(frame)
@@ -462,7 +465,7 @@ export const TiltModels: React.FC = () => {
       cancelAnimationFrame(raf)
       post.disconnect(); marker.remove()
       models.pick = null; models.pickZ = null; models.info = null; models.spin = null; models.letGo = null
-      models.surface = null; models.pinSpots = null; models.screenBox = null; models.floatSpot = null; models.pivotOf = null; models.labelAt = null; models.strokeAt = null; models.modelSize = null; models.gizmoAt = null; models.manipHot = null; models.pathAt = null; models.pathPx = null; models.aimAt = null; models.cameraFrame = null; models.root = null
+      models.surface = null; models.pinSpots = null; models.screenBox = null; models.floatSpot = null; models.pivotOf = null; models.labelAt = null; models.strokeAt = null; models.modelSize = null; models.gizmoAt = null; models.manipHot = null; models.pathAt = null; models.pathPx = null; models.aimAt = null; models.cameraFrame = null; models.lookBounds = null; models.root = null
       view?.dispose()
       canvas?.remove()
     }

@@ -1552,8 +1552,10 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     }
 
     // Outlines: paint the silhouettes into a mask, then ring them.
-    const outlined = looking ? [] : [...standing.entries()].filter(([key, s]) =>
-      s.stand.visible && (st.selected.has(key) || key === st.hovered))
+    // (Looking through a camera, the selected ones only: a model clicked
+    // there shows it was taken.)
+    const outlined = [...standing.entries()].filter(([key, s]) =>
+      s.stand.visible && (st.selected.has(key) || (!looking && key === st.hovered)))
     if (outlined.length) {
       const vis = new Map<THREE.Object3D, boolean>()
       for (const s of standing.values()) {
@@ -1895,7 +1897,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
    *  through it: its lens and its axes (right, up, ahead), in scene axes
    *  (x across the canvas, y up, z down it) and ground px, and its focal
    *  point there. null when it is not standing. */
-  function cameraFrame(key: string): { pivot: THREE.Vector3; lens: THREE.Vector3; right: THREE.Vector3; up: THREE.Vector3; ahead: THREE.Vector3; focal: THREE.Vector3; k: number } | null {
+  function cameraFrame(key: string): { pivot: THREE.Vector3; lens: THREE.Vector3; right: THREE.Vector3; up: THREE.Vector3; ahead: THREE.Vector3; focal: THREE.Vector3; k: number; base: number } | null {
     const s = standing.get(key), r = s?.rig
     if (!s || !r || !s.inst) return null
     s.stand.updateWorldMatrix(true, true)
@@ -1907,7 +1909,28 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     const at = (x: number, y: number, z: number) => toScene(r.group.localToWorld(r.lens.clone().add(new THREE.Vector3(x, y, z)))).sub(lens)
     const k = at(0, 0, 1).length()
     const pivot = toScene(s.orient.localToWorld(new THREE.Vector3()))
-    return { pivot, lens, focal, right: at(1, 0, 0).divideScalar(k), up: at(0, 1, 0).divideScalar(k), ahead: at(0, 0, 1).divideScalar(k), k }
+    // (And how high its foot is: off the floor by how high it was placed.)
+    return { pivot, lens, focal, right: at(1, 0, 0).divideScalar(k), up: at(0, 1, 0).divideScalar(k), ahead: at(0, 0, 1).divideScalar(k), k, base: s.base }
+  }
+
+  /** The ball round models `keys` (or, null, round every model standing
+   *  but `not`), for framing them looking through a camera: its middle and
+   *  radius, in cameraFrame's axes and ground px. null when none stand. */
+  function lookBounds(keys: string[] | null, not?: string): { centre: THREE.Vector3; r: number } | null {
+    const inv = new THREE.Matrix4().copy(ground.matrixWorld).invert()
+    const balls: { c: THREE.Vector3; r: number }[] = []
+    for (const [key, s] of standing) {
+      if (key === not || !s.inst || key.startsWith('mini:') || (keys && !keys.includes(key))) continue
+      s.stand.updateWorldMatrix(true, true)
+      const c = s.orient.localToWorld(new THREE.Vector3()).applyMatrix4(inv)
+      const sv = s.pose.scale
+      balls.push({ c: c.set(c.x, c.z, -c.y), r: s.size.length() / 2 * s.stand.scale.x * Math.max(sv.x, sv.y, sv.z) })
+    }
+    if (!balls.length) return null
+    const lo = new THREE.Vector3(Infinity, Infinity, Infinity), hi = new THREE.Vector3(-Infinity, -Infinity, -Infinity)
+    for (const b of balls) { lo.min(b.c.clone().subScalar(b.r)); hi.max(b.c.clone().addScalar(b.r)) }
+    const centre = lo.clone().add(hi).multiplyScalar(0.5)
+    return { centre, r: Math.max(...balls.map(b => b.c.distanceTo(centre) + b.r)) }
   }
 
   /** Keep model `key`'s turn (a 3D area's layout): what the hand turned it
@@ -2002,5 +2025,5 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   const pathAt = (x: number, y: number, only?: Set<string>) => paths.at(x, y, only)
   const pathPx = (p: { x: number; y: number; z: number }) => paths.project(p)
 
-  return { pathAt, pathPx, frame, warm, pick, pickZ: () => pickedZ, info, spinBy, letGo, settleAll, keepTurn, gizmoAt, aimAt, cameraFrame, manipHot, screenBox, floatSpot, pivotOf, labelAt, strokeAt, modelSize, dispose, surfaceAt, pinSpots: notes.spots }
+  return { pathAt, pathPx, frame, warm, pick, pickZ: () => pickedZ, info, spinBy, letGo, settleAll, keepTurn, gizmoAt, aimAt, cameraFrame, lookBounds, manipHot, screenBox, floatSpot, pivotOf, labelAt, strokeAt, modelSize, dispose, surfaceAt, pinSpots: notes.spots }
 }

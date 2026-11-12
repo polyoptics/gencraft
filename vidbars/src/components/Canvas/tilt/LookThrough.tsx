@@ -14,7 +14,8 @@ import { useUndoCoordinator } from '../../../store/undoCoordinator'
 import { useCanvasStore } from '../../../store/canvasStore'
 import { CAMERA_URL } from '../../../three/primitives'
 import { dataKey, placeNow } from '../../../utils/area3dScene'
-import { models, cardModel } from './TiltModels'
+import { useFreeNodeStore } from '../../../store/freeNodeStore'
+import { models, cardModel, modelKey, selectModel } from './TiltModels'
 
 export const LENS_MM = [18, 24, 35, 50, 85, 135] as const
 export const LENS_ASPECTS: [string, number][] = [['16:9', 16 / 9], ['2.39', 2.39], ['1.85', 1.85], ['4:3', 4 / 3], ['1:1', 1], ['9:16', 9 / 16]]
@@ -99,12 +100,29 @@ const qrot = (q: Q, v: V): V => {
   return { x: ix * w + iw * -x + iy * -z - iz * -y, y: iy * w + iw * -y + iz * -x - ix * -z, z: iz * w + iw * -z + ix * -y - iy * -x }
 }
 
-type Start = {
+const add = (a: V, b: V): V => ({ x: a.x + b.x, y: a.y + b.y, z: a.z + b.z })
+const sub = (a: V, b: V): V => ({ x: a.x - b.x, y: a.y - b.y, z: a.z - b.z })
+const mul = (a: V, t: number): V => ({ x: a.x * t, y: a.y * t, z: a.z * t })
+const dot = (a: V, b: V) => a.x * b.x + a.y * b.y + a.z * b.z
+const cross = (a: V, b: V): V => ({ x: a.y * b.z - a.z * b.y, y: a.z * b.x - a.x * b.z, z: a.x * b.y - a.y * b.x })
+const UP: V = { x: 0, y: 1, z: 0 }
+
+/** Radians of turn per px of drag: the 3D view's own rate (altCamera). */
+const TURN_RAD = 0.25 * Math.PI / 180
+/** How near straight up or down it tips: never over the top. */
+const TIP_MAX = 85 * Math.PI / 180
+/** The nearest its focal point comes (camera lengths). */
+const FOCUS_MIN = 0.3
+
+/** The camera as it stands: its middle P (what its place moves), its lens
+ *  L, how it stands turned q, and its axes. Scene axes, ground px. */
+type Cam = { P: V; L: V; q: Q; right: V; up: V; ahead: V }
+type Start = Cam & {
   key: string; dk: string
-  q0: Q; p0: { dx: number; dy: number; h: number }; focus0: number; zoom: number
-  P: V; F: V; right: V; up: V; ahead: V; k: number
+  q0: Q; P0: V; p0: { dx: number; dy: number; h: number }; focus0: number; zoom: number
+  F: V; k: number; floor: number
 }
-let held: (Start & { how: 'turn' | 'slide' | 'move'; x0: number; y0: number }) | null = null
+let held: (Start & { how: 'turn' | 'slide' | 'move'; x0: number; y0: number; button: number; moved: boolean }) | null = null
 let wheelAt = 0
 
 function start(key: string): Start | null {
@@ -113,18 +131,67 @@ function start(key: string): Start | null {
   if (!cf || !p0) return null
   const dk = dataKey(key)
   const ms = useModelScaleStore.getState()
+  const q0 = (ms.poseOf[dk] as Q | undefined) ?? [0, 0, 0, 1]
   return {
-    key, dk, q0: (ms.poseOf[dk] as Q | undefined) ?? [0, 0, 0, 1], p0, focus0: (ms.lensOf[dk] ?? CAMERA_LENS).focus,
+    key, dk, q0, q: q0, p0, focus0: (ms.lensOf[dk] ?? CAMERA_LENS).focus,
     zoom: useCanvasStore.getState().zoom || 1,
-    P: cf.pivot, F: cf.focal, right: cf.right, up: cf.up, ahead: cf.ahead, k: cf.k,
+    P: cf.pivot, P0: cf.pivot, L: cf.lens, F: cf.focal, right: cf.right, up: cf.up, ahead: cf.ahead, k: cf.k,
+    // The floor: under its foot by how high it stands.
+    floor: cf.base - p0.h * (useCanvasStore.getState().zoom || 1),
   }
 }
-/** Put the camera at pivot P (scene axes, ground px), turned q. */
-function put(h: Start, P: V, q: Q, focus?: number) {
+/** The camera turned by D about point F, all of a piece. */
+const about = (c: Cam, F: V, D: Q): Cam => ({
+  P: add(F, qrot(D, sub(c.P, F))), L: add(F, qrot(D, sub(c.L, F))), q: qmul(D, c.q),
+  right: qrot(D, c.right), up: qrot(D, c.up), ahead: qrot(D, c.ahead),
+})
+/** Across its view, level with the floor. */
+function levelRight(c: Cam): V {
+  let r = cross(UP, c.ahead)
+  if (dot(r, r) < 1e-6) r = { x: c.right.x, y: 0, z: c.right.z }
+  const l = Math.hypot(r.x, r.y, r.z) || 1
+  return mul(r, 1 / l)
+}
+/** Upside down (left that way by an earlier turn over the top): rolled
+ *  back upright about the line it looks along. A lean it was given by
+ *  hand, the right way up, is kept. */
+function upright(c: Cam, F: V): Cam {
+  const r = levelRight(c), u = cross(c.ahead, r)
+  if (dot(c.up, u) >= 0) return c
+  return about(c, F, qaxis(c.ahead, -Math.atan2(-dot(c.up, r), dot(c.up, u))))
+}
+/** Tipped by `tip` about F (+ looks further up, the camera coming down). */
+const tipped = (c: Cam, F: V, tip: number) => about(c, F, qaxis(levelRight(c), -tip))
+/** How high its foot stands (canvas units) with its middle at P. */
+const footAt = (h: Start, P: V) => h.p0.h + (P.y - h.P0.y) / h.zoom
+/** How far clear of the floor it is (ground px): its foot on or over it,
+ *  its lens a little over it. Under 0 is into the floor. */
+const clear = (h: Start, c: Cam) => Math.min(footAt(h, c.P) * h.zoom, c.L.y - h.floor - 0.08 * h.k)
+/** Over the floor, or (one already into it) no further in than it was. */
+const over = (h: Start, c: Cam) => clear(h, c) >= Math.min(0, clear(h, h)) - 1e-6
+/** How far along a move (`at` 0 → 1) it can go and stay over the floor. */
+function reach(h: Start, at: (t: number) => Cam) {
+  if (over(h, at(1))) return 1
+  let good = 0, bad = 1
+  for (let i = 0; i < 18; i++) {
+    const mid = (good + bad) / 2
+    if (over(h, at(mid))) good = mid; else bad = mid
+  }
+  return good
+}
+/** The camera moved by `by` as it stands: down as far as the floor, and
+ *  along it from there. */
+function moved(h: Start, by: V): Cam {
+  const c: Cam = { ...h, P: add(h.P, by), L: add(h.L, by) }
+  const lift = Math.max(0, Math.min(0, clear(h, h)) - clear(h, c))
+  return { ...c, P: { ...c.P, y: c.P.y + lift }, L: { ...c.L, y: c.L.y + lift } }
+}
+/** Put the camera where `c` has it. */
+function put(h: Start, c: Cam, focus?: number) {
   const ms = useModelScaleStore.getState()
   const k = 1 / h.zoom
-  ms.setPlace(h.dk, { dx: h.p0.dx + (P.x - h.P.x) * k, dy: h.p0.dy + (P.z - h.P.z) * k, h: Math.max(0, h.p0.h + (P.y - h.P.y) * k) })
-  ms.setPose(h.dk, q)
+  ms.setPlace(h.dk, { dx: h.p0.dx + (c.P.x - h.P0.x) * k, dy: h.p0.dy + (c.P.z - h.P0.z) * k, h: Math.max(0, footAt(h, c.P)) })
+  ms.setPose(h.dk, c.q)
   if (focus !== undefined) ms.setLens(h.dk, { focus })
 }
 /** Ground px per screen px at the focal point. */
@@ -148,43 +215,84 @@ function onDown(e: PointerEvent) {
   e.preventDefault(); e.stopImmediatePropagation()
   const s = start(key)
   if (!s) return
-  useUndoCoordinator.getState().checkpoint()
-  held = { ...s, how: e.button === 1 || (e.button === 0 && e.shiftKey) ? 'slide' : e.button === 2 ? 'move' : 'turn', x0: e.clientX, y0: e.clientY }
+  held = { ...s, how: e.button === 1 || (e.button === 0 && e.shiftKey) ? 'slide' : e.button === 2 ? 'move' : 'turn', x0: e.clientX, y0: e.clientY, button: e.button, moved: false }
 }
 function onMove(e: PointerEvent) {
   if (!held) return
   e.preventDefault(); e.stopImmediatePropagation()
   const h = held
   const dx = e.clientX - h.x0, dy = e.clientY - h.y0
+  if (!h.moved) {
+    // A press let go where it was is a click, not a move.
+    if (Math.hypot(dx, dy) < 4) return
+    h.moved = true
+    useUndoCoordinator.getState().checkpoint()
+  }
   if (h.how === 'turn') {
-    // Round its focal point: across turns it about the up, up and down
-    // tips it (never over the top).
-    const yaw = qaxis({ x: 0, y: 1, z: 0 }, -dx * 0.006)
-    let pitch: Q = qaxis(h.right, -dy * 0.006)
-    const a = qrot(qmul(yaw, pitch), h.ahead)
-    if (Math.abs(a.y) > 0.985) pitch = [0, 0, 0, 1]
-    const D = qmul(yaw, pitch)
-    const r = qrot(D, { x: h.P.x - h.F.x, y: h.P.y - h.F.y, z: h.P.z - h.F.z })
-    put(h, { x: h.F.x + r.x, y: h.F.y + r.y, z: h.F.z + r.z }, qmul(D, h.q0))
+    // Round its focal point, as the 3D view turns (the near side of the
+    // floor is what the drag holds): across swings it round the upright
+    // through that point, up and down tips it. It stays the right way up,
+    // stops short of straight up or down, and stops at the floor, so the
+    // focal point never leaves where it is.
+    const c = upright(h, h.F)
+    const el0 = Math.asin(Math.max(-1, Math.min(1, c.ahead.y)))
+    const el = Math.max(Math.min(-TIP_MAX, el0), Math.min(Math.max(TIP_MAX, el0), el0 - dy * TURN_RAD))
+    const tip = (el - el0) * reach(h, t => tipped(c, h.F, (el - el0) * t))
+    put(h, about(tipped(c, h.F, tip), h.F, qaxis(UP, -dx * TURN_RAD)))
   } else if (h.how === 'slide') {
     const s = pxScale(h)
-    const m = (v: V, t: number) => ({ x: v.x * t, y: v.y * t, z: v.z * t })
-    const a = m(h.right, -dx * s), b = m(h.up, dy * s)
-    put(h, { x: h.P.x + a.x + b.x, y: h.P.y + a.y + b.y, z: h.P.z + a.z + b.z }, h.q0)
+    // What is under the cursor comes with it, across as well as up and
+    // down (`right` is the camera's own right: the view's left).
+    put(h, moved(h, add(mul(h.right, dx * s), mul(h.up, dy * s))))
   } else {
     dolly(h, 2 ** ((dy - dx) / 250))
   }
 }
-/** In or out along its view: the focal point stays, its distance × f. */
+/** In or out along its view, its distance to the focal point × f. Up
+ *  close the focal point goes on ahead of it, so it never sticks there;
+ *  at the floor it goes on along it. */
 function dolly(h: Start, f: number) {
-  const focus = Math.max(0.3, h.focus0 * f)
-  const go = (h.focus0 - focus) * h.k
-  put(h, { x: h.P.x + h.ahead.x * go, y: h.P.y + h.ahead.y * go, z: h.P.z + h.ahead.z * go }, h.q0, focus)
+  const go = Math.max(h.focus0, 1.5) * (1 - f)
+  put(h, moved(h, mul(h.ahead, go * h.k)), Math.max(FOCUS_MIN, h.focus0 - go))
 }
 function onUp(e: PointerEvent) {
   if (!held) return
   e.preventDefault(); e.stopImmediatePropagation()
+  const h = held
   held = null
+  // A click on a model takes it (Shift adds), as in the 3D view: F then
+  // frames it.
+  if (h.moved || h.button !== 0 || e.altKey || e.type !== 'pointerup') return
+  const key = modelKey(models.pick?.(e.clientX, e.clientY))
+  if (key && key !== h.key && !key.startsWith('person|') && !key.startsWith('mini:')) selectModel(key, e.shiftKey)
+}
+/** F: the selected models (all of them when none is) in the middle of the
+ *  frame, whole, the focal point at their middle, so turning is round
+ *  them. It looks the way it was looking, lifted only if that would put
+ *  it under the floor. */
+function frame(key: string): boolean {
+  const h = start(key)
+  if (!h) return false
+  const fs = useFreeNodeStore.getState(), bs = useBoardsStore.getState()
+  const sel = [...fs.selectedIds.map(id => `node:${id}`), ...bs.selectedGroupIds.map(id => `card:${id}`)].filter(k => k !== key)
+  const b = (sel.length ? models.lookBounds?.(sel, key) : null) ?? models.lookBounds?.(null, key)
+  if (!b) return false
+  const lens = useModelScaleStore.getState().lensOf[h.dk] ?? CAMERA_LENS
+  // Far enough back for the ball round them to sit inside the frame.
+  const half = Math.atan(18 / lens.mm / Math.max(1, lens.aspect))
+  const d = Math.max(FOCUS_MIN * h.k, b.r / Math.sin(half) * 1.1)
+  const c0 = upright(h, h.F)
+  const C: V = { x: b.centre.x, y: b.centre.y, z: b.centre.z }
+  const shift = sub(sub(C, mul(c0.ahead, d)), c0.L)
+  const c: Cam = { ...c0, P: add(c0.P, shift), L: add(c0.L, shift) }
+  const el = Math.asin(Math.max(-1, Math.min(1, c.ahead.y)))
+  // (Tipped from looking straight down, which is over the floor, back
+  // toward the way it was looking.)
+  const top = -TIP_MAX - el
+  const tip = clear(h, c) >= 0 ? 0 : top * (1 - reach({ ...h, ...tipped(c, C, top) }, t => tipped(c, C, top * (1 - t))))
+  useUndoCoordinator.getState().checkpoint()
+  put(h, tip ? tipped(c, C, tip) : c, d / h.k)
+  return true
 }
 function onWheel(e: WheelEvent) {
   const key = useManip.getState().through
@@ -202,9 +310,18 @@ function onEat(e: Event) {
   e.preventDefault(); e.stopImmediatePropagation()
 }
 function onKey(e: KeyboardEvent) {
-  if (e.key !== 'Escape' || !useManip.getState().through) return
+  const key = useManip.getState().through
+  if (!key) return
+  if (e.key === 'Escape') {
+    e.preventDefault(); e.stopImmediatePropagation()
+    useManip.getState().set({ through: null })
+    return
+  }
+  // F frames, as in the 3D view (not while typing).
+  if ((e.key !== 'f' && e.key !== 'F') || e.ctrlKey || e.metaKey || e.altKey) return
+  if ((e.target as Element | null)?.closest?.('input,textarea,select,[contenteditable="true"]')) return
   e.preventDefault(); e.stopImmediatePropagation()
-  useManip.getState().set({ through: null })
+  frame(key)
 }
 
 type Handlers = { onDown: typeof onDown; onMove: typeof onMove; onUp: typeof onUp; onWheel: typeof onWheel; onEat: typeof onEat; onKey: typeof onKey }
@@ -281,7 +398,7 @@ export const LookThrough: React.FC = () => {
           title="Back to the canvas">Exit (Esc)</button>
       </div>
       <div style={{ position: 'absolute', bottom: 10, left: '50%', transform: 'translateX(-50%)', fontSize: 11, color: 'rgba(232,240,255,0.55)', whiteSpace: 'nowrap' }}>
-        Drag: turn round the focal point · Middle or Shift-drag: slide · Right-drag or wheel: in and out
+        Drag: turn round the focal point · Middle or Shift-drag: slide · Right-drag or wheel: in and out · Click a model, F frames it
       </div>
     </div>
   )
