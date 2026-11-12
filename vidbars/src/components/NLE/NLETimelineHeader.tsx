@@ -165,10 +165,16 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
 
   // ── Group drag: move group.originY / group.originX, and carry any
   // nested sub-deck members along so hidden members stay in sync ──
+  // A scene card in front of a row of touching cards (Brian 2026-11-12):
+  // its face is its sections', so its header is where the row is moved
+  // from, all together. Shift: this card alone, out of the row.
+  const rowDrag = useRef<((e: React.PointerEvent) => void) | undefined>(undefined)
+  rowDrag.current = mode.kind === 'deckPreview' ? mode.onDragDown : undefined
   const onTimelineDown = useCallback((e: React.PointerEvent) => {
     if (e.button !== 0) return
     if ((e.target as HTMLElement).tagName === 'INPUT') return
     if ((e.target as Element).closest('[data-viewer-toggle], [data-deck-preview-affordance]')) return
+    if (rowDrag.current && !e.shiftKey) { rowDrag.current(e); return }
     e.stopPropagation()
     e.preventDefault()
     useUndoCoordinator.getState().checkpoint()
