@@ -1667,6 +1667,14 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
           visible={isHovered}
         />}
       </div>
+      {/* A scene card: where a bumped-out section of its top row shows
+          OVER the card's header (Brian 2026-11-12: it went underneath).
+          The card clips its face and the header lies above the card, so
+          the part of the section past the face's top is drawn here, on top
+          of both (SceneFace). At the face's top left corner. */}
+      {group.cardType === 'scene' && group.scene && !showBack && !tilted && (
+        <div data-scene-caps={group.id} style={{ position: 'absolute', left: screenLeft + 1.5, top: screenTop + 1.5 + headerPad, width: 0, height: 0, zIndex: 52, pointerEvents: 'none' }} />
+      )}
 
       {/* What changes happen on this card in the story ("Cup → Broken"),
           under it, right of its link +. */}

@@ -133,6 +133,10 @@ type Ctx = {
   /** Where a part's knobs are drawn: above every seam and edge bar, so a
    *  bumped part's knobs are never under a seam. In face layout units. */
   layer: HTMLDivElement | null
+  /** Over the card's header (CardLayer data-scene-caps): where a bumped
+   *  part's top shows past the top of the face. Screen px. */
+  caps: HTMLElement | null
+  capsOff: { x: number; y: number }
   W: number
   H: number
   /** The whole face, to read what a division gathers from its headings. */
@@ -740,6 +744,30 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
           </button>
         </div>
       )}
+      {/* Bumped out in the top row: what stands past the top of the face
+          shows over the card's header, not under it (Brian 2026-11-12):
+          that much of its box, its colour and picture, drawn again above
+          the header. Presses pass through to the header. */}
+      {ctx.caps && bump && PAD + box.y - lift < 0 && ReactDOM.createPortal(
+        <div data-scene-cap={d.id} style={{
+          position: 'absolute', left: ctx.capsOff.x + (PAD + box.x) * ctx.s, top: ctx.capsOff.y + (PAD + box.y - lift) * ctx.s, width: box.w * ctx.s, height: (lift - PAD - box.y) * ctx.s,
+          overflow: 'hidden', pointerEvents: 'none',
+          filter: faded ? 'grayscale(0.85) brightness(0.5)' : undefined, opacity: ctx.lifted?.has(d.id) ? 0.4 : faded ? 0.75 : 1,
+        }}>
+          <div style={{
+            position: 'absolute', left: 0, top: 0, width: box.w, height: box.h + lift, transform: `scale(${ctx.s})`, transformOrigin: '0 0',
+            borderRadius: 2.2, overflow: 'hidden', background: showBack ? backColor(d.color ?? '#5b8dd9') : d.color ?? '#5b8dd9',
+            outline: picked ? '0.8px solid #fff' : '0.5px solid rgba(255,255,255,0.55)', outlineOffset: picked ? -0.8 : -0.5,
+          }}>
+            {pic && state === 'full' && !showBack && (
+              <Pic src={pic} alt="" draggable={false} style={{
+                position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', pointerEvents: 'none',
+                objectPosition: `${crop.x}% ${crop.y}%`, transformOrigin: `${crop.x}% ${crop.y}%`, opacity: hero?.opacity ?? 1,
+                transform: `scale(${crop.z * (hero?.flipH ? -1 : 1)}, ${crop.z * (hero?.flipV ? -1 : 1)})`,
+              }} />
+            )}
+          </div>
+        </div>, ctx.caps)}
       {ctx.layer && (() => {
       // Where each knob goes. "More" first, top right; its colour just left
       // of it; the rest never on top of one already placed (a short or
@@ -1178,6 +1206,18 @@ export const SceneFace: React.FC<{
   const [noting, setNoting] = useState<string | null>(null)
   const [hoveredDiv, setHoveredDiv] = useState<string | null>(null)
   const [layer, setLayer] = useState<HTMLDivElement | null>(null)
+  const [caps, setCaps] = useState<HTMLElement | null>(null)
+  // Where the face's corner lies from it (the card's border, whatever it
+  // is): the caps are put exactly over the parts they continue.
+  const [capsOff, setCapsOff] = useState({ x: 0, y: 0 })
+  useEffect(() => {
+    const el = document.querySelector<HTMLElement>(`[data-scene-caps="${group.id}"]`)
+    if (el !== caps) setCaps(el)
+    const a = rootRef.current?.getBoundingClientRect(), b = el?.getBoundingClientRect()
+    if (!a || !b) return
+    const x = a.left - b.left, y = a.top - b.top
+    if (Math.abs(x - capsOff.x) > 0.01 || Math.abs(y - capsOff.y) > 0.01) setCapsOff({ x, y })
+  })
   const [moving, setMoving] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
   // A part being dragged to a new place: what moves, and where it would
@@ -1254,7 +1294,7 @@ export const SceneFace: React.FC<{
     drag?.target && drag.where ? { target: drag.target, where: drag.where, own: drag.own }
     : dropHere ? { target: dropHere.target, where: dropHere.where } : null
   const ctx: Ctx = {
-    layer, W, H, scene, lifted: drag?.own ?? null,
+    layer, caps, capsOff, W, H, scene, lifted: drag?.own ?? null,
     startMove: (leafId, e) => {
       if (e.button !== 0) return
       e.stopPropagation()
