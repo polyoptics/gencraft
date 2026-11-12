@@ -24,6 +24,7 @@ import { useNotesStore, useNotesUi } from '../../../store/notesStore'
 import { useCurveDraft, usePathHot } from '../../../store/pathLive'
 import { targetMiddle } from '../../../utils/pathEdit'
 import type { PathFrame, PathHit } from '../../../three/pathOverlay'
+import { patternOf } from '../../../utils/curveGeom'
 import { PinLabels } from '../../Notes/PinLabels'
 import { sceneOf, sceneSpot, standsIn, dataKey } from '../../../utils/area3dScene'
 import { useUndoCoordinator } from '../../../store/undoCoordinator'
@@ -202,6 +203,9 @@ const frameState = (): TiltFrameState => {
 let pathSig = 0
 for (const st of [useNotesStore, useNotesUi, useCurveDraft, usePathHot]) st.subscribe(() => { pathSig++ })
 
+/** A curve's pattern is running along it: the 3D view keeps drawing. */
+const pathFlows = () => live3d() && Object.values(notesNow.curves).some(c => c.kind === 'bezier' && !!c.flow && !!patternOf(c))
+
 /** The canvas's curves for the 3D view (three/pathOverlay): the bezier
  *  ones, with the one being drawn (run on to the cursor). */
 function pathFrame(): PathFrame {
@@ -220,6 +224,8 @@ function pathFrame(): PathFrame {
     ox: pan.x - W / 2, oy: pan.y - H / 2,
     hot: usePathHot.getState().hot,
     gizmo: draft ? null : targetMiddle(),
+    // A running pattern steps thirty times a second.
+    time: curves.some(c => !!c.flow && !!patternOf(c)) ? Math.round(performance.now() * 0.03) / 30 : 0,
     sig: pathSig,
   }
 }
@@ -257,7 +263,7 @@ function frameSig(st: TiltFrameState, W: number, H: number): string {
     str(sl.finish); n(sl.bevel); n(sl.seam)
   }
   str(st.manip?.mode); str(st.manip?.plane); b(st.manip?.local); r(st.manip?.size)
-  n(st.paths?.sig); n(st.paths?.zoom); n(st.paths?.ox); n(st.paths?.oy); n(st.paths?.gizmo?.x); n(st.paths?.gizmo?.y); n(st.paths?.gizmo?.z)
+  n(st.paths?.sig); n(st.paths?.time); n(st.paths?.zoom); n(st.paths?.ox); n(st.paths?.oy); n(st.paths?.gizmo?.x); n(st.paths?.gizmo?.y); n(st.paths?.gizmo?.z)
   n(st.art.length)
   for (const a of st.art) { n(a.u); n(a.v); n(a.w); n(a.h); n(a.z); n(a.hinge?.v); n(a.hinge?.z); n(a.hinge?.a) }
   return `${h1}:${h2}`
@@ -329,7 +335,7 @@ export const TiltModels: React.FC = () => {
       }
       if (!live) return
       tick++
-      if (!poked && calm > 30 && tick % 4 && !animating()) return
+      if (!poked && calm > 30 && tick % 4 && !animating() && !pathFlows()) return
       poked = false
       const W = root.clientWidth, H = root.clientHeight
       if (models.at) models.hovered = modelKey(models.pick?.(models.at.x, models.at.y))

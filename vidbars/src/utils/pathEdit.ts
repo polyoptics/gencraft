@@ -7,7 +7,7 @@
 // utils/area3dHandles; both go through here, flat and in 3D alike.
 
 import { useNotesStore, useNotesUi, type Curve, type CurvePoint, type CurveHandle } from '../store/notesStore'
-import { curvePoints, splitCurveAt } from './curveGeom'
+import { curvePoints, splitCurveAt, endOf, patternOf } from './curveGeom'
 
 export const ptKey = (id: string, i: number) => `${id}:${i}`
 export function parsePt(k: string): { id: string; i: number } {
@@ -313,4 +313,89 @@ export function turnHeld(h: PointsHeld, axis: [number, number, number], angle: n
  *  line leans on it. */
 export function sizeHeld(h: PointsHeld, sx: number, sy: number, sz: number) {
   mapHeld(h, [[sx, 0, 0], [0, sy, 0], [0, 0, sz]], { x: h.mid.x, y: h.mid.y, z: h.low })
+}
+
+// ── How a curve looks ──
+
+type Ui = ReturnType<typeof useNotesUi.getState>
+/** The settings of how a curve looks, as the panel holds them (screen px
+ *  at the zoom it is seen at). */
+export type LookKey = 'color' | 'width' | 'endStart' | 'endEnd' | 'dashOn' | 'dashGap' | 'unit' | 'opacity' | 'flow' | 'mark'
+
+/** The panel's settings as a curve's own (canvas units), at zoom `z`:
+ *  what a new curve is given. */
+export function lookOf(ui: Ui, z: number): Partial<Curve> {
+  return {
+    color: ui.color, width: ui.width / z,
+    endStart: ui.endStart ?? undefined, arrowStart: ui.endStart === 'arrow',
+    endEnd: ui.endEnd ?? undefined, arrowEnd: ui.endEnd === 'arrow',
+    dash: ui.dashGap > 0 || ui.unit !== 'line' ? [ui.dashOn / z, ui.dashGap / z] : undefined,
+    unit: ui.unit === 'line' ? undefined : ui.unit,
+    opacity: ui.opacity < 100 ? ui.opacity / 100 : undefined,
+    flow: ui.flow ? ui.flow / z : undefined,
+    mark: ui.mark ?? undefined,
+  }
+}
+
+const LOOK_FIELDS: Record<LookKey, (keyof Curve)[]> = {
+  color: ['color'], width: ['width'], endStart: ['endStart', 'arrowStart'], endEnd: ['endEnd', 'arrowEnd'],
+  dashOn: ['dash', 'unit'], dashGap: ['dash', 'unit'], unit: ['dash', 'unit'], opacity: ['opacity'], flow: ['flow'], mark: ['mark'],
+}
+
+/** Change settings in the panel, and the same on the selected curves
+ *  (only what was changed: the rest of each curve stays its own). */
+export function setLook(patch: Partial<Pick<Ui, LookKey>>, z: number) {
+  useNotesUi.setState(patch)
+  const ns = useNotesStore.getState()
+  const look = lookOf(useNotesUi.getState(), z) as Record<string, unknown>
+  for (const id of useNotesUi.getState().selected) {
+    if (!ns.curves[id]) continue
+    const out: Record<string, unknown> = {}
+    for (const k of Object.keys(patch) as LookKey[]) for (const f of LOOK_FIELDS[k]) out[f] = look[f]
+    ns.updateCurve(id, out as Partial<Curve>)
+  }
+}
+
+/** A curve's look as the panel's settings, seen at zoom `z`: what the
+ *  panel shows while the curve is selected. */
+export function lookFrom(c: Curve, z: number): Partial<Pick<Ui, LookKey | 'smooth'>> {
+  const base = { color: c.color, width: Math.max(1, Math.round(c.width * z)) }
+  // A pen line has a colour and a thickness; the rest is a curve's.
+  if (c.kind !== 'bezier') return base
+  const pat = patternOf(c)
+  return {
+    ...base,
+    endStart: endOf(c, false), endEnd: endOf(c, true),
+    smooth: !!c.smooth,
+    ...(pat ? { dashOn: Math.max(1, Math.round(pat.on * z)), dashGap: Math.round(pat.gap * z) } : { dashGap: 0 }),
+    unit: c.unit ?? 'line',
+    opacity: Math.round((c.opacity ?? 1) * 100),
+    flow: Math.round((c.flow ?? 0) * z),
+    mark: c.mark ?? null,
+  }
+}
+
+/** Whether the selected points show their curve's point graphic. */
+export function markState(): { any: boolean; on: boolean } {
+  const { curves } = useNotesStore.getState()
+  let any = false, on = true
+  for (const [id, idx] of pickedPoints()) for (const i of idx) {
+    any = true
+    if (curves[id].pts[i].mark === false) on = false
+  }
+  return { any, on: any && on }
+}
+
+/** The curve's point graphic on or off at the selected points. */
+export function setPointMarks(on: boolean) {
+  const ns = useNotesStore.getState()
+  for (const [id, idx] of pickedPoints()) {
+    const c = ns.curves[id]
+    ns.updateCurve(id, { pts: c.pts.map((p, i) => {
+      if (!idx.includes(i)) return p
+      const q = { ...p }
+      if (on) delete q.mark; else q.mark = false
+      return q
+    }) })
+  }
 }

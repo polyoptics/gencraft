@@ -1,7 +1,7 @@
 // curveGeom.ts — the shape of a curve (store/notesStore): its SVG path and
 // its arrowheads, in canvas units.
 
-import type { Curve, CurvePoint, CurveHandle } from '../store/notesStore'
+import type { Curve, CurvePoint, CurveHandle, CurveEnd } from '../store/notesStore'
 
 type P = { x: number; y: number }
 const out = (p: CurvePoint): P => ({ x: p.x + (p.hout?.x ?? 0), y: p.y + (p.hout?.y ?? 0) })
@@ -172,25 +172,114 @@ export function dashOf(c: Pick<Curve, 'dash' | 'width'>): [number, number] | nul
   return d[0] > 0 && d[1] > 0 ? d : null
 }
 
-/** A curve's line cut into the pieces a dashed or dotted line shows:
- *  each `on` long with `off` between (canvas units along the line). A
- *  piece is the points along it; a dot (`on` 0) is one point. */
-export function dashPieces(s: P3[], on: number, off: number, max = 1500): P3[][] {
+/** What stands on a curve's end (`end`) or its start: nothing on a closed
+ *  one. */
+export function endOf(c: Pick<Curve, 'endStart' | 'endEnd' | 'arrowStart' | 'arrowEnd' | 'closed' | 'pts'>, end: boolean): CurveEnd | null {
+  if (c.closed && c.pts.length > 2) return null
+  return (end ? c.endEnd : c.endStart) ?? ((end ? c.arrowEnd : c.arrowStart) ? 'arrow' : null)
+}
+/** How long an arrowhead is, how far across a cube or a ball on an end. */
+export const endSize = (c: Pick<Curve, 'width'>, kind: CurveEnd) => kind === 'arrow' ? Math.max(c.width * 4.5, 6) : Math.max(c.width * 3.2, 5)
+/** How much of the line an end's shape stands in for (the line stops
+ *  inside it, so none of it shows past the shape). */
+export const endTrim = (c: Pick<Curve, 'width'>, kind: CurveEnd) => endSize(c, kind) * (kind === 'arrow' ? 0.8 : 0.25)
+/** How thick a ring `on` across is drawn (its tube's radius). */
+export const ringTube = (c: Pick<Curve, 'width'>, on: number) => Math.min(c.width * 0.35, on * 0.2)
+/** How far across the graphic at a curve's points is. */
+export const markSize = (c: Pick<Curve, 'width'>) => Math.max(c.width * 6, 8)
+
+/** The pattern a curve's line repeats: the piece, how long (or across)
+ *  it is and the gap after it. Null: one solid line. */
+export function patternOf(c: Pick<Curve, 'dash' | 'width' | 'unit'>): { unit: 'line' | 'ball' | 'ring'; on: number; gap: number } | null {
+  const unit = c.unit ?? 'line'
+  if (unit === 'line') {
+    const d = dashOf(c)
+    return d ? { unit, on: d[0], gap: d[1] } : null
+  }
+  const d = c.dash
+  if (Array.isArray(d) && d[0] > 0) return { unit, on: d[0], gap: Math.max(0, d[1]) }
+  const legacy = dashOf(c)
+  return legacy ? { unit, on: legacy[0], gap: legacy[1] } : { unit, on: c.width * 2.5, gap: c.width * 2.5 }
+}
+
+/** How far a curve's pattern has run along the line by `time` (seconds):
+ *  0 up to one `period`. */
+export function flowShift(c: Pick<Curve, 'flow'>, period: number, time: number): number {
+  if (!c.flow || !(period > 0)) return 0
+  return (((c.flow * time) % period) + period) % period
+}
+
+const dist3 = (a: P3, b: P3) => Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z)
+const mix3 = (a: P3, b: P3, t: number): P3 => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, z: a.z + (b.z - a.z) * t })
+
+/** How long a line is. */
+export function lineLength(s: P3[]): number {
   let total = 0
-  for (let i = 1; i < s.length; i++) total += Math.hypot(s[i].x - s[i - 1].x, s[i].y - s[i - 1].y, s[i].z - s[i - 1].z)
+  for (let i = 1; i < s.length; i++) total += dist3(s[i - 1], s[i])
+  return total
+}
+
+/** A line without its first `a` and its last `b` (lengths along it).
+ *  Nothing when that is all of it. */
+export function trimLine<T extends P3>(s: T[], a: number, b: number): P3[] {
+  if (a <= 0 && b <= 0) return s
+  const total = lineLength(s)
+  const to = total - b
+  if (to - a < 1e-6) return []
+  const out: P3[] = []
+  let run = 0
+  for (let i = 1; i < s.length; i++) {
+    const p = s[i - 1], q = s[i], d = dist3(p, q)
+    const r0 = run, r1 = run + d
+    run = r1
+    if (r1 < a || d < 1e-12) continue
+    if (r0 > to) break
+    if (!out.length) out.push(r0 >= a ? p : mix3(p, q, (a - r0) / d))
+    out.push(r1 <= to ? q : mix3(p, q, (to - r0) / d))
+  }
+  return out
+}
+
+/** Places along a line every `period`, the first `first` along it: where
+ *  each is and which way the line runs there. */
+export function alongEvery(s: P3[], period: number, first: number, max = 600): { p: P3; d: P3 }[] {
+  const out: { p: P3; d: P3 }[] = []
+  if (!(period > 0) || s.length < 2) return out
+  const total = lineLength(s)
+  period *= Math.max(1, total / period / max)
+  let next = first, run = 0
+  for (let i = 1; i < s.length; i++) {
+    const a = s[i - 1], b = s[i], d = dist3(a, b)
+    if (d < 1e-12) continue
+    const dir = { x: (b.x - a.x) / d, y: (b.y - a.y) / d, z: (b.z - a.z) / d }
+    while (next <= run + d + 1e-9) {
+      out.push({ p: mix3(a, b, Math.max(0, (next - run) / d)), d: dir })
+      next += period
+    }
+    run += d
+  }
+  return out
+}
+
+/** A curve's line cut into the pieces a patterned line shows: each `on`
+ *  long with `off` between (canvas units along the line), the pattern
+ *  run `shift` along it. A piece is the points along it. */
+export function dashPieces(s: P3[], on: number, off: number, shift = 0, max = 1500): P3[][] {
+  if (s.length < 2) return []
   // Never more pieces than is sane to draw: a very long line's are longer.
-  const k = Math.max(1, total / (on + off) / max)
-  on *= k; off *= k
+  const k = Math.max(1, lineLength(s) / (on + off) / max)
+  on *= k; off *= k; shift *= k
   const out: P3[][] = []
-  let cur: P3[] | null = [s[0]]
-  let left = on   // how much of this dash (or gap) is still to run
+  // Where in the pattern the line starts.
+  const phase = (on + off - shift % (on + off)) % (on + off)
+  let cur: P3[] | null = phase < on ? [s[0]] : null
+  let left = phase < on ? on - phase : on + off - phase   // how much of this piece (or gap) is still to run
   for (let i = 1; i < s.length; i++) {
     let a = s[i - 1]
     const b = s[i]
-    let d = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z)
+    let d = dist3(a, b)
     while (d > left) {
-      const t = left / d
-      a = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, z: a.z + (b.z - a.z) * t }
+      a = mix3(a, b, left / d)
       d -= left
       if (cur) { cur.push(a); out.push(cur); cur = null; left = off }
       else { cur = [a]; left = on }
@@ -198,22 +287,35 @@ export function dashPieces(s: P3[], on: number, off: number, max = 1500): P3[][]
     left -= d
     if (cur) cur.push(b)
   }
-  if (cur && (cur.length > 1 || on === 0)) out.push(cur)
+  if (cur && cur.length > 1) out.push(cur)
   return out
 }
 
-/** Which way a curve runs into its end (`end`) or out of its start, in
- *  all three directions, as a unit vector pointing out of the curve. */
-export function endDir3(c: Curve, end: boolean): P3 | null {
-  const s = curveSamples(c, 12)
-  if (s.length < 2) return null
-  const tip = end ? s[s.length - 1] : s[0]
-  const order = end ? [...s].reverse() : s
-  for (const q of order.slice(1)) {
-    const dx = tip.x - q.x, dy = tip.y - q.y, dz = tip.z - q.z, l = Math.hypot(dx, dy, dz)
-    if (l > 1e-6) return { x: dx / l, y: dy / l, z: dz / l }
+/** A curve's line as it shows: without what its ends' shapes stand in
+ *  for. And each end's shape: what, where its tip is, which way it points
+ *  (out of the curve, along the last of the line) and its size. */
+export function shownLine(c: Curve, per = 24): { line: P3[]; ends: { kind: CurveEnd; tip: P3; dir: P3; size: number; end: boolean }[] } {
+  const s = curveSamples(c, per)
+  const ends: { kind: CurveEnd; tip: P3; dir: P3; size: number; end: boolean }[] = []
+  if (s.length < 2) return { line: s, ends }
+  const total = lineLength(s)
+  let a = 0, b = 0
+  for (const end of [false, true]) {
+    const kind = endOf(c, end)
+    if (!kind) continue
+    const size = endSize(c, kind)
+    const tip = end ? s[s.length - 1] : s[0]
+    // It points along the chord of the line it covers, so it sits square
+    // on where the line stops.
+    const back = Math.min(size, total * 0.999)
+    const cut = end ? trimLine(s, 0, back) : trimLine(s, back, 0)
+    const from = cut.length ? (end ? cut[cut.length - 1] : cut[0]) : (end ? s[0] : s[s.length - 1])
+    const l = dist3(from, tip)
+    if (l < 1e-9) continue
+    ends.push({ kind, tip: { x: tip.x, y: tip.y, z: tip.z }, dir: { x: (tip.x - from.x) / l, y: (tip.y - from.y) / l, z: (tip.z - from.z) / l }, size, end })
+    if (end) b = endTrim(c, kind); else a = endTrim(c, kind)
   }
-  return null
+  return { line: trimLine(s, a, b), ends }
 }
 
 /** The SVG path of a curve, in canvas units. */
@@ -239,45 +341,6 @@ export function curvePath(c: Pick<Curve, 'kind' | 'pts' | 'closed' | 'smooth'>):
   for (let i = 1; i < pts.length; i++) seg(pts[i - 1], pts[i])
   if (c.closed && pts.length > 2) { seg(pts[pts.length - 1], pts[0]); d += ' Z' }
   return d
-}
-
-/** Which way the line runs into its end (`end`) or out of its start, as a
- *  unit vector pointing out of the curve. */
-function endDir(c: Curve, end: boolean): P | null {
-  const pts = curvePoints(c)
-  if (pts.length < 2) return null
-  const tip = end ? pts[pts.length - 1] : pts[0]
-  const cands: P[] = []
-  if (c.kind === 'bezier') cands.push(end ? inn(tip) : out(tip))
-  // Fall back along the anchors until one is somewhere else.
-  const order = end ? [...pts].reverse() : pts
-  for (const p of order.slice(1)) {
-    if (c.kind === 'bezier') cands.push(end ? out(p) : inn(p))
-    cands.push(p)
-  }
-  for (const q of cands) {
-    const dx = tip.x - q.x, dy = tip.y - q.y, l = Math.hypot(dx, dy)
-    if (l > 1e-6) return { x: dx / l, y: dy / l }
-  }
-  return null
-}
-
-/** The arrowheads' triangles (SVG points strings), canvas units. The line
- *  itself is cut back to the arrow's base by curveTrim. */
-export function arrowHeads(c: Curve): string[] {
-  const heads: string[] = []
-  const size = Math.max(c.width * 4.5, 6)
-  const one = (end: boolean) => {
-    const d = endDir(c, end)
-    if (!d) return
-    const tip = end ? c.pts[c.pts.length - 1] : c.pts[0]
-    const bx = tip.x - d.x * size, by = tip.y - d.y * size
-    const nx = -d.y * size * 0.5, ny = d.x * size * 0.5
-    heads.push(`${f(tip.x)},${f(tip.y)} ${f(bx + nx)},${f(by + ny)} ${f(bx - nx)},${f(by - ny)}`)
-  }
-  if (c.arrowEnd && !c.closed) one(true)
-  if (c.arrowStart && !c.closed) one(false)
-  return heads
 }
 
 /** The box round a curve's anchors and handles, canvas units. */

@@ -9,8 +9,8 @@
 // independent toggles. The outliner lists the Areas and what lies on each:
 // drag a row onto an Area to put it there, onto "Canvas" to take it off.
 
-import React, { useMemo, useRef, useState } from 'react'
-import { useNotesStore, useNotesUi, toggleTool, NOTE_COLORS, type NotesTool } from '../../store/notesStore'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { useNotesStore, useNotesUi, toggleTool, NOTE_COLORS, type NotesTool, type CurveEnd, type CurveUnit, type CurveMark } from '../../store/notesStore'
 import { useFreeNodeStore, type FreeNodeData } from '../../store/freeNodeStore'
 import { useBoardsStore } from '../../store/boardsStore'
 import { useViewport3DStore } from '../../store/viewport3dStore'
@@ -19,7 +19,7 @@ import { areaAt } from '../../utils/areaFollow'
 import { ensureAnnotated, modelName } from '../../utils/annotations'
 import { models, cardModel } from '../Canvas/tilt/TiltModels'
 import { curveBounds, curvePoints } from '../../utils/curveGeom'
-import { tangentState, setBroken, setCorner } from '../../utils/pathEdit'
+import { tangentState, setBroken, setCorner, setLook, lookFrom, markState, setPointMarks } from '../../utils/pathEdit'
 import { useCanvasStore } from '../../store/canvasStore'
 import { ColorPickerPopup } from '../Bar/ColorPickerPopup'
 import { useCurveDraft } from '../../utils/notesTool'
@@ -65,6 +65,26 @@ const IcArrowStart: Ic = ({ size = 20 }) => (
 const IcArrowEnd: Ic = ({ size = 20 }) => (
   <svg {...svg(size)}><path d="M4 12h15" stroke={S} /><path d="M14 7l5 5-5 5" stroke="#4fc3ff" /></svg>
 )
+/** What stands on a curve's end: drawn on the right of a short line. */
+const IcEnd: React.FC<{ kind: CurveEnd | null; flip?: boolean; size?: number }> = ({ kind, flip, size = 18 }) => (
+  <svg {...svg(size)} style={flip ? { transform: 'scaleX(-1)' } : undefined}>
+    <path d={kind ? 'M3 12h10' : 'M3 12h17'} stroke={S} />
+    {kind === 'arrow' && <path d="M13 6.5l8 5.5-8 5.5z" fill="#4fc3ff" stroke="none" />}
+    {kind === 'cube' && <rect x="13" y="7.5" width="9" height="9" fill="#4fc3ff" stroke="none" />}
+    {kind === 'ball' && <circle cx="17.5" cy="12" r="4.8" fill="#4fc3ff" stroke="none" />}
+  </svg>
+)
+const ENDS: { kind: CurveEnd | null; name: string }[] = [{ kind: null, name: 'Nothing' }, { kind: 'arrow', name: 'Arrowhead' }, { kind: 'cube', name: 'Cube' }, { kind: 'ball', name: 'Ball' }]
+const UNITS: { unit: CurveUnit; name: string; tip: string }[] = [
+  { unit: 'line', name: 'Line', tip: 'The pattern repeats a length of the line' },
+  { unit: 'ball', name: 'Balls', tip: 'The pattern repeats a ball (a sphere in 3D), Solid across' },
+  { unit: 'ring', name: 'Rings', tip: 'The pattern repeats a ring round the line, Solid across' },
+]
+const MARKS: { mark: CurveMark; name: string; tip: string }[] = [
+  { mark: 'corners', name: 'Corners', tip: 'A cube at each point of which only the corners show' },
+  { mark: 'cross', name: 'Cross', tip: 'A crosshair at each point, in all three directions' },
+  { mark: 'bulge', name: 'Bulge', tip: 'The line swells at each point' },
+]
 const IcFold: React.FC<{ folded: boolean }> = ({ folded }) => (
   <svg {...svg(16)}><path d={folded ? 'M15 6l-6 6 6 6' : 'M9 6l6 6-6 6'} stroke={S} /></svg>
 )
@@ -114,6 +134,36 @@ const PointTools: React.FC<{ folded: boolean }> = ({ folded }) => {
       title={CORNER_TIP} onClick={() => set(setCorner, !st.corner)}><IcCorner size={folded ? 20 : 16} />{!folded && <span>Corner</span>}</button>
   )
   return <>{brk}{cnr}</>
+}
+
+/** A number: typed, or slid. `max` is the slider's; typed it can go to `top`. */
+const NumSlide: React.FC<{ name: string; val: number; min: number; max: number; top?: number; tip: string; begin: () => void; set: (v: number) => void }> = ({ name, val, min, max, top = max, tip, begin, set }) => (
+  <label title={tip} style={{ flex: '1 1 0', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3 }}>
+    <span style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 11, color: 'rgba(255,255,255,0.6)' }}>
+      {name}
+      <input type="number" min={min} max={top} step={1} value={val}
+        onPointerDown={begin} onKeyDown={e => { e.stopPropagation(); if (e.key !== 'Tab') begin() }}
+        onChange={e => set(Math.max(min, Math.min(top, Math.round(+e.target.value || 0))))}
+        style={{ width: 46, height: 20, boxSizing: 'border-box', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 5, color: '#e8f0ff', fontSize: 11, textAlign: 'right', padding: '0 3px' }} />
+    </span>
+    <input type="range" min={min} max={max} step={1} value={Math.max(min, Math.min(max, val))} onPointerDown={begin} onKeyDown={begin}
+      onChange={e => set(+e.target.value)} style={{ width: '100%' }} />
+  </label>
+)
+
+/** The curve's point graphic on or off at the selected points: always
+ *  here, dim until a point is selected. */
+const PointMarkSwitch: React.FC = () => {
+  useNotesUi(s => s.points)
+  useNotesStore(s => s.curves)
+  const st = markState()
+  return (
+    <button style={{ ...btnStyle(st.on, true), height: 30, justifyContent: 'center', fontSize: 11.5, opacity: st.any ? 1 : 0.4 }} aria-pressed={st.on} aria-disabled={!st.any}
+      title="On or off, for the selected points: whether each shows its curve's point graphic. Off leaves that point bare."
+      onClick={() => { if (!st.any) return; useUndoCoordinator.getState().checkpoint(); setPointMarks(!st.on) }}>
+      Show at the selected points
+    </button>
+  )
 }
 
 const Section: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
@@ -448,35 +498,32 @@ export const NotesPanel: React.FC = () => {
   const tool = useNotesUi(s => s.tool)
   const color = useNotesUi(s => s.color)
   const width = useNotesUi(s => s.width)
-  const arrowStart = useNotesUi(s => s.arrowStart)
-  const arrowEnd = useNotesUi(s => s.arrowEnd)
+  const endStart = useNotesUi(s => s.endStart)
+  const endEnd = useNotesUi(s => s.endEnd)
+  const unit = useNotesUi(s => s.unit)
+  const opacity = useNotesUi(s => s.opacity)
+  const flow = useNotesUi(s => s.flow)
+  const mark = useNotesUi(s => s.mark)
   const smooth = useNotesUi(s => s.smooth)
   const dashOn = useNotesUi(s => s.dashOn)
   const dashGap = useNotesUi(s => s.dashGap)
   const selected = useNotesUi(s => s.selected)
   const [picker, setPicker] = useState<{ x: number; y: number } | null>(null)
   const drawing = useCurveDraft(s => !!s.curve)
+  // The settings show the selected curve's own (the first, of several),
+  // and follow it as the selection or the curve changes.
+  const shownCurve = useNotesStore(s => selected.length ? s.curves[selected[0]] : undefined)
+  const zoomNow = useCanvasStore(s => s.zoom)
+  useEffect(() => { if (shownCurve) useNotesUi.setState(lookFrom(shownCurve, zoomNow)) }, [shownCurve, zoomNow])
   if (!open) return null
 
   /** A setting, and the same on the selected curves. */
-  const apply = (patch: { color?: string; arrowStart?: boolean; arrowEnd?: boolean }) => {
-    useNotesUi.setState(patch)
-    const ns = useNotesStore.getState()
-    const ids = selected.filter(id => ns.curves[id])
-    if (!ids.length) return
-    useUndoCoordinator.getState().checkpoint()
-    for (const id of ids) ns.updateCurve(id, patch)
+  const apply = (patch: Parameters<typeof setLook>[0]) => {
+    if (selected.some(id => useNotesStore.getState().curves[id])) useUndoCoordinator.getState().checkpoint()
+    setLook(patch, useCanvasStore.getState().zoom)
   }
-
-  /** The line's pattern (the length of a solid section, and of the empty
-   *  one after it; none empty = one solid line), and the same on the
-   *  selected curves, at the zoom they are seen at. */
-  const setPattern = (on: number, gap: number) => {
-    useNotesUi.setState({ dashOn: on, dashGap: gap })
-    const ns = useNotesStore.getState()
-    const z = useCanvasStore.getState().zoom
-    for (const id of selected) if (ns.curves[id]) ns.updateCurve(id, { dash: gap > 0 ? [on / z, gap / z] : undefined })
-  }
+  /** The same without an undo step of its own (a slider's drag is one). */
+  const slide = (patch: Parameters<typeof setLook>[0]) => setLook(patch, useCanvasStore.getState().zoom)
   /** One undo step for a whole drag of a slider. */
   const stepOnce = () => { if (selected.some(id => useNotesStore.getState().curves[id])) useUndoCoordinator.getState().checkpoint() }
   /** A colour of your own (the picker): one undo step for the whole pick. */
@@ -487,11 +534,7 @@ export const NotesPanel: React.FC = () => {
     if (selected.some(id => useNotesStore.getState().curves[id])) useUndoCoordinator.getState().checkpoint()
     setPicker({ x: (panel?.left ?? r.left) - 232, y: r.top - 60 })
   }
-  const pickColor = (c: string) => {
-    useNotesUi.setState({ color: c })
-    const ns = useNotesStore.getState()
-    for (const id of selected) if (ns.curves[id]) ns.updateCurve(id, { color: c })
-  }
+  const pickColor = (c: string) => slide({ color: c })
   const custom = !NOTE_COLORS.includes(color)
 
   /** Smooth on or off, and the same on the selected curves (turned off, a
@@ -546,8 +589,8 @@ export const NotesPanel: React.FC = () => {
           <>
             {toolBtns}
             <div style={{ width: 24, height: 1, background: 'rgba(255,255,255,0.1)' }} />
-            <button style={btnStyle(arrowStart)} aria-pressed={arrowStart} title="Arrowhead at the start" onClick={() => apply({ arrowStart: !arrowStart })}><IcArrowStart /></button>
-            <button style={btnStyle(arrowEnd)} aria-pressed={arrowEnd} title="Arrowhead at the end" onClick={() => apply({ arrowEnd: !arrowEnd })}><IcArrowEnd /></button>
+            <button style={btnStyle(!!endStart)} aria-pressed={!!endStart} title="Something on the start: on or off (open the panel to choose what)" onClick={() => apply({ endStart: endStart ? null : 'arrow' })}><IcArrowStart /></button>
+            <button style={btnStyle(!!endEnd)} aria-pressed={!!endEnd} title="Something on the end: on or off (open the panel to choose what)" onClick={() => apply({ endEnd: endEnd ? null : 'arrow' })}><IcArrowEnd /></button>
             <button style={btnStyle(smooth)} aria-pressed={smooth} title={SMOOTH_TIP} onClick={() => setSmooth(!smooth)}><IcSmooth /></button>
             <PointTools folded />
             <div style={{ width: 20, height: 20, borderRadius: 10, background: color, border: '2px solid rgba(255,255,255,0.25)' }} title="Colour (open the panel to change)" />
@@ -555,11 +598,18 @@ export const NotesPanel: React.FC = () => {
         ) : (
           <>
             <Section title="TOOLS">{toolBtns}</Section>
-            <Section title="ARROWHEADS">
-              <div style={{ display: 'flex', gap: 6 }}>
-                <button style={{ ...btnStyle(arrowStart, true), flex: 1 }} aria-pressed={arrowStart} onClick={() => apply({ arrowStart: !arrowStart })} title="Arrowhead at the start: on or off"><IcArrowStart /><span>Start</span></button>
-                <button style={{ ...btnStyle(arrowEnd, true), flex: 1 }} aria-pressed={arrowEnd} onClick={() => apply({ arrowEnd: !arrowEnd })} title="Arrowhead at the end: on or off"><IcArrowEnd /><span>End</span></button>
-              </div>
+            <Section title="ENDS">
+              {([['Start', 'endStart', endStart], ['End', 'endEnd', endEnd]] as const).map(([name, key, now]) => (
+                <div key={key} style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
+                  <span style={{ width: 30, fontSize: 11, color: 'rgba(255,255,255,0.6)', flexShrink: 0 }}>{name}</span>
+                  {ENDS.map(e => (
+                    <button key={e.name} style={{ ...btnStyle(now === e.kind), flex: '1 1 0', width: 'auto', height: 30 }} aria-pressed={now === e.kind}
+                      title={`${e.name} on the ${name.toLowerCase()}. Also sets the selected curves.`} onClick={() => apply({ [key]: e.kind })}>
+                      <IcEnd kind={e.kind} flip={key === 'endStart'} />
+                    </button>
+                  ))}
+                </div>
+              ))}
             </Section>
             <Section title="CURVE">
               {/* Three switches in the one row the section always had. */}
@@ -581,38 +631,39 @@ export const NotesPanel: React.FC = () => {
                     background: custom ? color : 'conic-gradient(#ff5a5a, #ffe14a, #5fe39b, #4fc3ff, #a98bff, #ff8fd1, #ff5a5a)',
                     border: custom ? '2px solid #fff' : '2px solid rgba(255,255,255,0.15)', boxShadow: custom ? '0 0 0 1px rgba(0,0,0,0.6)' : 'none' }} />
               </div>
+              <NumSlide name="Opacity" val={opacity} min={5} max={100} tip="How solid the line is, in percent: lower lets what is behind it show through. Also sets the selected curves."
+                begin={stepOnce} set={v => slide({ opacity: v })} />
               {picker && <ColorPickerPopup color={color} anchorX={picker.x} anchorY={picker.y} onChange={pickColor} onClose={() => setPicker(null)} />}
             </Section>
             <Section title="LINE">
-              <div style={{ display: 'flex', gap: 10 }}>
-                {([['Solid', dashOn, 1, (v: number) => setPattern(v, dashGap), 'The length of each solid section of the line'],
-                  ['Gap', dashGap, 0, (v: number) => setPattern(dashOn, v), 'The length of the empty section after each solid one. 0: one solid line']] as const).map(([name, val, min, set, tip]) => (
-                  <label key={name} title={`${tip}. Also sets the selected curves.`} style={{ flex: '1 1 0', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3 }}>
-                    <span style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 11, color: 'rgba(255,255,255,0.6)' }}>
-                      {name}
-                      <input type="number" min={min} max={400} step={1} value={val}
-                        onPointerDown={stepOnce} onKeyDown={e => { e.stopPropagation(); if (e.key !== 'Tab') stepOnce() }}
-                        onChange={e => set(Math.max(min, Math.min(400, Math.round(+e.target.value || 0))))}
-                        style={{ width: 46, height: 20, boxSizing: 'border-box', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 5, color: '#e8f0ff', fontSize: 11, textAlign: 'right', padding: '0 3px' }} />
-                    </span>
-                    <input type="range" min={min} max={120} step={1} value={Math.min(120, val)} onPointerDown={stepOnce} onKeyDown={stepOnce}
-                      onChange={e => set(+e.target.value)} style={{ width: '100%' }} />
-                  </label>
+              <div style={{ display: 'flex', gap: 5 }}>
+                {UNITS.map(u => (
+                  <button key={u.unit} style={{ ...btnStyle(unit === u.unit, true), ...THIRD, height: 30 }} aria-pressed={unit === u.unit}
+                    title={`${u.tip}. Also sets the selected curves.`} onClick={() => apply({ unit: u.unit })}>{u.name}</button>
                 ))}
               </div>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <NumSlide name="Solid" val={dashOn} min={1} max={120} top={400} tip="The length of each solid section of the line (how far across each ball or ring is). Also sets the selected curves."
+                  begin={stepOnce} set={v => slide({ dashOn: v })} />
+                <NumSlide name="Gap" val={dashGap} min={0} max={120} top={400} tip="The length of the empty section after each solid one. 0: one solid line. Also sets the selected curves."
+                  begin={stepOnce} set={v => slide({ dashGap: v })} />
+              </div>
+              <NumSlide name="Motion" val={flow} min={-200} max={200} top={1000} tip="How fast the pattern runs along the line, towards its end. 0: still. Below 0: towards its start. Also sets the selected curves."
+                begin={stepOnce} set={v => slide({ flow: v })} />
+            </Section>
+            <Section title="POINTS">
+              <div style={{ display: 'flex', gap: 5 }}>
+                {MARKS.map(m => (
+                  <button key={m.mark} style={{ ...btnStyle(mark === m.mark, true), ...THIRD, height: 30 }} aria-pressed={mark === m.mark}
+                    title={`${m.tip}: on or off. Also sets the selected curves.`} onClick={() => apply({ mark: mark === m.mark ? null : m.mark })}>{m.name}</button>
+                ))}
+              </div>
+              <PointMarkSwitch />
             </Section>
             <Section title={`THICKNESS · ${width}px`}>
               <input type="range" min={1} max={24} step={1} value={width}
-                onChange={e => {
-                  const w = +e.target.value
-                  const ns = useNotesStore.getState()
-                  const ids = selected.filter(id => ns.curves[id])
-                  if (ids.length) {
-                    useUndoCoordinator.getState().checkpoint()
-                    for (const id of ids) ns.updateCurve(id, { width: ns.curves[id].width * w / width })
-                  }
-                  useNotesUi.setState({ width: w })
-                }}
+                onPointerDown={stepOnce} onKeyDown={stepOnce}
+                onChange={e => slide({ width: +e.target.value })}
                 style={{ width: '100%' }} />
             </Section>
             <Section title="3D SET"><Area3dTools /></Section>

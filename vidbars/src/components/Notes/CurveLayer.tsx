@@ -6,37 +6,101 @@
 // its points at their heights (three/pathOverlay): here it is that curve
 // seen from straight above. The mouse is utils/notesTool.
 
-import React from 'react'
+import React, { useEffect, useState } from 'react'
 import { useNotesStore, useNotesUi, type Curve } from '../../store/notesStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useCurveDraft } from '../../store/pathLive'
 import { useTiltStore, isTilted } from '../../store/tiltStore'
 import { useManip } from '../../store/manipStore'
 import { ptKey } from '../../utils/pathEdit'
-import { curvePath, arrowHeads, ownsHandles, dashOf } from '../../utils/curveGeom'
+import { curvePath, ownsHandles, shownLine, patternOf, ringTube, markSize, alongEvery, flowShift, type P3 } from '../../utils/curveGeom'
 
 const SEL = 'rgba(120,180,255,0.95)'
 /** A selected point (as its cube in 3D). */
 const PICKED = '#ffe14a'
 
+const f2 = (n: number) => Math.round(n * 100) / 100
+
+/** The graphic at a point (Curve.mark), seen from above: the corners of
+ *  a square, a crosshair, the line swelling. */
+const MarkAt: React.FC<{ c: Curve; x: number; y: number }> = ({ c, x, y }) => {
+  const m = markSize(c), t = Math.max(c.width * 0.3, m * 0.035)
+  if (c.mark === 'bulge') return <circle cx={x} cy={y} r={Math.max(c.width * 1.5, 2.5)} fill={c.color} />
+  if (c.mark === 'cross') return <path d={`M${f2(x - m / 2)} ${f2(y)}h${f2(m)}M${f2(x)} ${f2(y - m / 2)}v${f2(m)}`} fill="none" stroke={c.color} strokeWidth={t} />
+  const h = m / 2, l = m * 0.26
+  let d = ''
+  for (const sx of [-1, 1]) for (const sy of [-1, 1]) d += `M${f2(x + sx * (h - l))} ${f2(y + sy * h)}H${f2(x + sx * h)}V${f2(y + sy * (h - l))}`
+  return <path d={d} fill="none" stroke={c.color} strokeWidth={t} strokeLinecap="square" strokeLinejoin="miter" />
+}
+
+/** Rings along a line, seen from above: each is edge on, a bar across the
+ *  line. Each its own stroke, so one at a sharp turn stays a bar. */
+const FlatRings: React.FC<{ c: Curve; line: P3[]; on: number; period: number }> = ({ c, line, on, period }) => {
+  // Running, they step along thirty times a second (as in 3D).
+  const [time, setTime] = useState(0)
+  const runs = !!c.flow
+  useEffect(() => {
+    if (!runs) return
+    const id = window.setInterval(() => setTime(performance.now() / 1000), 33)
+    return () => window.clearInterval(id)
+  }, [runs])
+  let d = ''
+  for (const s of alongEvery(line, period, (flowShift(c, period, time) + on / 2) % period)) {
+    const l = Math.hypot(s.d.x, s.d.y)
+    const nx = l > 1e-6 ? -s.d.y / l : 1, ny = l > 1e-6 ? s.d.x / l : 0
+    d += `M${f2(s.p.x - nx * on / 2)} ${f2(s.p.y - ny * on / 2)}L${f2(s.p.x + nx * on / 2)} ${f2(s.p.y + ny * on / 2)}`
+  }
+  return <path d={d} fill="none" stroke={c.color} strokeWidth={ringTube(c, on) * 2} strokeLinecap="butt" />
+}
+
 const CurveShape: React.FC<{ c: Curve; zoom: number; hit: boolean; selected: boolean }> = React.memo(({ c, zoom, hit, selected }) => {
   const d = curvePath(c)
-  const heads = arrowHeads(c)
-  const dash = dashOf(c)
+  // The line stops inside what stands on its ends; with nothing on them
+  // it is the curve itself.
+  const { line, ends } = shownLine(c, 24)
+  const shown = ends.length ? (line.length > 1 ? 'M' + line.map(p => `${f2(p.x)} ${f2(p.y)}`).join('L') : '') : d
+  const pat = patternOf(c)
+  const period = pat ? pat.on + pat.gap : 0
+  // The pattern, as lengths of the stroke: a ball is a round dot `on`
+  // across. (Rings are FlatRings'.)
+  const look = !pat ? { w: c.width, cap: 'round' as const, arr: undefined, off: 0 }
+    : pat.unit === 'line' ? { w: c.width, cap: 'butt' as const, arr: `${pat.on} ${pat.gap}`, off: 0 }
+    : { w: pat.on, cap: 'round' as const, arr: `0 ${period}`, off: -pat.on / 2 }
+  const rings = pat?.unit === 'ring'
+  const shaped = new Set(ends.map(e => e.end ? c.pts.length - 1 : 0))
   return (
     <g>
       {selected && <path d={d} fill="none" stroke={SEL} strokeWidth={c.width + 4 / zoom} strokeLinecap="round" strokeLinejoin="round" opacity={0.45} />}
-      {/* A pattern's sections are cut square, so each is the length it was given. */}
-      <path d={d} fill="none" stroke={c.color} strokeWidth={c.width} strokeLinecap={dash ? 'butt' : 'round'} strokeLinejoin="round"
-        strokeDasharray={dash ? `${dash[0]} ${dash[1]}` : undefined} />
-      {heads.map((h, i) => <polygon key={i} points={h} fill={c.color} stroke={c.color} strokeWidth={c.width * 0.5} strokeLinejoin="round" />)}
+      <g opacity={c.opacity ?? 1}>
+        {rings && line.length > 1 && <FlatRings c={c} line={line} on={pat.on} period={period} />}
+        {shown && !rings && (
+          <path d={shown} fill="none" stroke={c.color} strokeWidth={look.w} strokeLinecap={look.cap} strokeLinejoin="round"
+            strokeDasharray={look.arr} strokeDashoffset={look.off || undefined}>
+            {/* The pattern runs along the line. */}
+            {pat && !!c.flow && (
+              <animate attributeName="stroke-dashoffset" from={c.flow > 0 ? look.off : look.off - period} to={c.flow > 0 ? look.off - period : look.off}
+                dur={`${f2(Math.max(0.02, period / Math.abs(c.flow)))}s`} repeatCount="indefinite" />
+            )}
+          </path>
+        )}
+        {ends.map((e, i) => {
+          const s = e.size
+          if (e.kind === 'ball') return <circle key={i} cx={e.tip.x} cy={e.tip.y} r={s / 2} fill={c.color} />
+          // Seen from above the shape points where the line runs on the canvas.
+          const l = Math.hypot(e.dir.x, e.dir.y)
+          const dx = l > 1e-6 ? e.dir.x / l : 1, dy = l > 1e-6 ? e.dir.y / l : 0
+          const at = (u: number, v: number) => `${f2(e.tip.x + dx * u - dy * v)},${f2(e.tip.y + dy * u + dx * v)}`
+          const pts = e.kind === 'arrow' ? `${at(0, 0)} ${at(-s, s * 0.46)} ${at(-s, -s * 0.46)}` : `${at(s / 2, s / 2)} ${at(-s / 2, s / 2)} ${at(-s / 2, -s / 2)} ${at(s / 2, -s / 2)}`
+          return <polygon key={i} points={pts} fill={c.color} />
+        })}
+        {c.mark && c.kind === 'bezier' && c.pts.map((p, i) => p.mark === false || shaped.has(i) ? null : <MarkAt key={`m${i}`} c={c} x={p.x} y={p.y} />)}
+      </g>
       {/* What the mouse grabs: wider than the line, so a thin one is easy to hit. */}
       <path
         d={d} fill="none" stroke="transparent" strokeWidth={Math.max(c.width, 12 / zoom)}
         data-curve-id={c.id}
         style={{ pointerEvents: hit ? 'stroke' : 'none', cursor: 'pointer' }}
       />
-      {hit && heads.map((h, i) => <polygon key={`h${i}`} points={h} fill="transparent" data-curve-id={c.id} style={{ pointerEvents: 'all', cursor: 'pointer' }} />)}
     </g>
   )
 })

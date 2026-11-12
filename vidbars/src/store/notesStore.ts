@@ -28,7 +28,19 @@ export interface CurveHandle { x: number; y: number; z?: number }
  *  set by hand and stay in one line (what a point on a smooth curve
  *  becomes when its tangent is turned by hand); 'broken', each handle is
  *  its own, set by hand; 'corner', no handles: the line turns sharply. */
-export interface CurvePoint { x: number; y: number; z?: number; hin?: CurveHandle; hout?: CurveHandle; t?: 'unified' | 'broken' | 'corner' }
+export interface CurvePoint {
+  x: number; y: number; z?: number; hin?: CurveHandle; hout?: CurveHandle; t?: 'unified' | 'broken' | 'corner'
+  /** false: its curve's point graphic (Curve.mark) is off at this point. */
+  mark?: false
+}
+
+/** What stands on an end of a curve. */
+export type CurveEnd = 'arrow' | 'cube' | 'ball'
+/** The piece a curve's pattern repeats: a length of line, a ball, a ring. */
+export type CurveUnit = 'line' | 'ball' | 'ring'
+/** A graphic at each point of a curve: a cube of which only the corners
+ *  show, a crosshair in all three directions, the line swelling. */
+export type CurveMark = 'corners' | 'cross' | 'bulge'
 
 export interface Curve {
   id: string
@@ -51,6 +63,20 @@ export interface Curve {
    *  solid line. ('dash' and 'dot' are the first hours' fixed styles,
    *  still drawn: utils/curveGeom dashOf.) */
   dash?: [number, number] | 'dash' | 'dot'
+  /** The piece the pattern repeats (absent: lengths of the line). A
+   *  ball or a ring is `dash[0]` across, `dash[1]` apart. */
+  unit?: 'ball' | 'ring'
+  /** How solid it is, 0..1 (absent: 1). */
+  opacity?: number
+  /** The pattern runs along the line: canvas units a second, towards its
+   *  end (negative: towards its start). */
+  flow?: number
+  /** A graphic at each of its points (CurvePoint.mark false: not there). */
+  mark?: CurveMark
+  /** What stands on its ends. Absent: an arrowhead where arrowStart /
+   *  arrowEnd say so (as before there was a choice), else nothing. */
+  endStart?: CurveEnd
+  endEnd?: CurveEnd
 }
 
 /** A stroke drawn on a model's surface, in the model's own space. */
@@ -216,8 +242,16 @@ interface NotesUi {
   color: string
   /** Screen px at the zoom it is drawn at. */
   width: number
-  arrowStart: boolean
-  arrowEnd: boolean
+  /** New curves' ends. */
+  endStart: CurveEnd | null
+  endEnd: CurveEnd | null
+  /** New curves' pattern piece, how solid they are (percent), how fast
+   *  the pattern runs (screen px a second; 0 still) and the graphic at
+   *  their points. */
+  unit: CurveUnit
+  opacity: number
+  flow: number
+  mark: CurveMark | null
   /** New curves run smoothly through their points. */
   smooth: boolean
   /** New curves' line pattern: the length of each solid section and of
@@ -247,8 +281,12 @@ export const useNotesUi = create<NotesUi>(() => ({
   tool: null,
   color: saved.color ?? '#4fc3ff',
   width: saved.width ?? 3,
-  arrowStart: saved.arrowStart ?? false,
-  arrowEnd: saved.arrowEnd ?? true,
+  endStart: saved.endStart !== undefined ? saved.endStart : (saved as { arrowStart?: boolean }).arrowStart ? 'arrow' : null,
+  endEnd: saved.endEnd !== undefined ? saved.endEnd : (saved as { arrowEnd?: boolean }).arrowEnd === false ? null : 'arrow',
+  unit: saved.unit ?? 'line',
+  opacity: saved.opacity ?? 100,
+  flow: saved.flow ?? 0,
+  mark: saved.mark ?? null,
   smooth: saved.smooth ?? false,
   dashOn: saved.dashOn ?? 16,
   dashGap: saved.dashGap ?? 0,
@@ -260,7 +298,8 @@ export const useNotesUi = create<NotesUi>(() => ({
 useNotesUi.subscribe(s => {
   try {
     localStorage.setItem(UI_KEY, JSON.stringify({
-      open: s.open, collapsed: s.collapsed, color: s.color, width: s.width, arrowStart: s.arrowStart, arrowEnd: s.arrowEnd, smooth: s.smooth, dashOn: s.dashOn, dashGap: s.dashGap,
+      open: s.open, collapsed: s.collapsed, color: s.color, width: s.width, endStart: s.endStart, endEnd: s.endEnd, smooth: s.smooth, dashOn: s.dashOn, dashGap: s.dashGap,
+      unit: s.unit, opacity: s.opacity, flow: s.flow, mark: s.mark,
     }))
   } catch { /* private window */ }
 })

@@ -15,7 +15,7 @@
 import * as THREE from 'three'
 import type { Curve } from '../store/notesStore'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
-import { curvePoints, curveSamples, endDir3, nearestOnCurve, dashPieces, dashOf, ownsHandles, type P3 } from '../utils/curveGeom'
+import { curvePoints, nearestOnCurve, dashPieces, ownsHandles, shownLine, patternOf, flowShift, alongEvery, lineLength, markSize, ringTube, type P3 } from '../utils/curveGeom'
 
 /** What the 3D view draws of the curves this frame. */
 export interface PathFrame {
@@ -33,6 +33,8 @@ export interface PathFrame {
   /** Where the manipulator sits (canvas units, z up), if anything of a
    *  curve is selected. */
   gizmo: P3 | null
+  /** Seconds, for the patterns that run along their lines (0: none does). */
+  time: number
   /** Changes whenever any of the above does. */
   sig: number
 }
@@ -121,7 +123,32 @@ const BALL = new THREE.SphereGeometry(0.5, 14, 10)
 const EDGE_MAT = new THREE.LineBasicMaterial({ color: 0x0d1020, transparent: true, opacity: 0.8, depthTest: false, depthWrite: false, toneMapped: false })
 const STEM_MAT = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.38, depthTest: false, depthWrite: false, toneMapped: false })
 const ARM_MAT = new THREE.LineBasicMaterial({ color: COL.handle, transparent: true, opacity: 0.95, depthTest: false, depthWrite: false, toneMapped: false })
-const Y_UP = new THREE.Vector3(0, 1, 0)
+const Y_UP = new THREE.Vector3(0, 1, 0), Z_UP = new THREE.Vector3(0, 0, 1)
+
+/** The graphic at a curve's points (Curve.mark), `m` across, bars `t`
+ *  thick, at the origin. */
+function markGeo(kind: 'corners' | 'cross' | 'bulge', m: number, t: number, w: number): THREE.BufferGeometry {
+  if (kind === 'bulge') return new THREE.SphereGeometry(Math.max(w * 1.5, 2.5), 18, 12)
+  const parts: THREE.BufferGeometry[] = []
+  const bar = (axis: number, len: number, x: number, y: number, z: number) => {
+    const g = new THREE.BoxGeometry(axis === 0 ? len : t, axis === 1 ? len : t, axis === 2 ? len : t)
+    g.translate(x, y, z)
+    parts.push(g)
+  }
+  if (kind === 'cross') for (let a = 0; a < 3; a++) bar(a, m, 0, 0, 0)
+  else {
+    // A cube of which only the corners show: three short bars at each.
+    const h = m / 2, l = m * 0.26, o = h - l / 2
+    for (const sx of [-1, 1]) for (const sy of [-1, 1]) for (const sz of [-1, 1]) {
+      bar(0, l, sx * o, sy * h, sz * h)
+      bar(1, l, sx * h, sy * o, sz * h)
+      bar(2, l, sx * h, sy * h, sz * o)
+    }
+  }
+  const g = mergeGeometries(parts)
+  for (const p of parts) p.dispose()
+  return g
+}
 
 interface Knob { mesh: THREE.Mesh; at: THREE.Vector3; px: number; key: string; base: number }
 interface Built {
@@ -132,6 +159,8 @@ interface Built {
   own: (THREE.BufferGeometry | THREE.Material)[]
   cubes: Knob[]
   handles: (Knob & { i: number; side: 'in' | 'out' })[]
+  /** Its pattern, run on to `time`: only when it runs. */
+  flow?: (time: number) => void
 }
 
 export function createPathOverlay() {
@@ -155,48 +184,121 @@ export function createPathOverlay() {
     b.group.removeFromParent()
   }
 
-  function build(c: Curve, selected: boolean): Built {
+  function build(c: Curve, selected: boolean, time: number): Built {
     const group = new THREE.Group()
     const own: (THREE.BufferGeometry | THREE.Material)[] = []
     const keep = <T extends THREE.BufferGeometry | THREE.Material>(o: T) => { own.push(o); return o }
     const color = new THREE.Color(c.color)
-    const solid = keep(new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.38, roughness: 0.45, metalness: 0, toneMapped: false }))
-    const ghost = keep(new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.22, depthTest: false, depthWrite: false, toneMapped: false }))
+    const op = Math.max(0.05, Math.min(1, c.opacity ?? 1))
+    const solid = keep(new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.38, roughness: 0.45, metalness: 0, toneMapped: false, transparent: op < 1, opacity: op }))
+    const ghost = keep(new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.22 * op, depthTest: false, depthWrite: false, toneMapped: false }))
     const body = (geo: THREE.BufferGeometry, place?: (m: THREE.Mesh) => void) => {
+      const pair: THREE.Mesh[] = []
       for (const [mat, order] of [[ghost, 40], [solid, 41]] as const) {
         const m = new THREE.Mesh(geo, mat)
         m.renderOrder = order
         m.frustumCulled = false
         place?.(m)
         group.add(m)
+        pair.push(m)
+      }
+      return pair
+    }
+    // The line stops inside whatever stands on its ends, so none of it
+    // shows past an arrowhead's point.
+    const { line, ends } = shownLine(c, 24)
+    const closed = !!c.closed && c.pts.length > 2
+    const w = c.width
+    const pat = patternOf(c)
+    let flow: Built['flow']
+    if (line.length > 1 && !pat) body(keep(tube(line, w / 2, closed)))
+    else if (line.length > 1 && pat) {
+      const period = pat.on + pat.gap
+      if (pat.unit === 'line') {
+        // Lengths of the round line with gaps between (as the flat
+        // drawing's). Running, they are cut again each step.
+        let geo: THREE.BufferGeometry | null = null
+        let pair: THREE.Mesh[] | null = null
+        const cut = (shift: number) => {
+          const parts = dashPieces(line, pat.on, pat.gap, shift, c.flow ? 500 : 1500).filter(p => p.length > 1).map(p => tube(p, w / 2, false, 8))
+          const g = parts.length ? mergeGeometries(parts) : new THREE.BufferGeometry()
+          for (const p of parts) p.dispose()
+          geo?.dispose()
+          geo = g
+          if (pair) for (const m of pair) m.geometry = g
+          else pair = body(g)
+        }
+        cut(flowShift(c, period, time))
+        own.push({ dispose: () => geo?.dispose() } as unknown as THREE.BufferGeometry)
+        if (c.flow) flow = t => cut(flowShift(c, period, t))
+      } else {
+        // Balls or rings along the line, each `on` across.
+        const tr = ringTube(c, pat.on)
+        const geo = keep(pat.unit === 'ball' ? new THREE.SphereGeometry(pat.on / 2, 16, 12) : new THREE.TorusGeometry(pat.on / 2 - tr, tr, 8, 28))
+        const cap = Math.min(600, Math.floor(lineLength(line) / period) + 2)
+        const inst = ([[ghost, 40], [solid, 41]] as const).map(([mat, order]) => {
+          const m = new THREE.InstancedMesh(geo, mat, cap)
+          m.renderOrder = order
+          m.frustumCulled = false
+          group.add(m)
+          own.push({ dispose: () => m.dispose() } as unknown as THREE.BufferGeometry)
+          return m
+        })
+        const mat = new THREE.Matrix4(), q = new THREE.Quaternion(), at = new THREE.Vector3(), dv = new THREE.Vector3(), one = new THREE.Vector3(1, 1, 1)
+        const place = (shift: number) => {
+          // The first stands half of itself in from the line's start.
+          const spots = alongEvery(line, period, (shift + pat.on / 2) % period, cap)
+          const n = Math.min(cap, spots.length)
+          for (let i = 0; i < n; i++) {
+            const s = spots[i]
+            q.setFromUnitVectors(Z_UP, dv.set(s.d.x, s.d.y, s.d.z))
+            mat.compose(at.set(s.p.x, s.p.y, s.p.z), q, one)
+            for (const m of inst) m.setMatrixAt(i, mat)
+          }
+          for (const m of inst) { m.count = n; m.instanceMatrix.needsUpdate = true }
+        }
+        place(flowShift(c, period, time))
+        if (c.flow) flow = t => place(flowShift(c, period, t))
       }
     }
-    const samples = curveSamples(c, 24)
-    const closed = !!c.closed && c.pts.length > 2
-    if (samples.length > 1) {
-      const w = c.width
-      const dash = dashOf(c)
-      if (dash) {
-        // A pattern: lengths of the round line with gaps between (as the
-        // flat drawing's).
-        const parts = dashPieces(samples, dash[0], dash[1]).filter(p => p.length > 1).map(p => tube(p, w / 2, false, 8))
-        const g = parts.length ? mergeGeometries(parts) : null
-        for (const p of parts) p.dispose()
-        if (g) body(keep(g))
-      } else body(keep(tube(samples, w / 2, closed)))
+    // What stands on the ends: a cone with its point on the end, a cube
+    // or a ball on it.
+    const shaped = new Set<number>()
+    for (const e of ends) {
+      shaped.add(e.end ? c.pts.length - 1 : 0)
+      const dv = new THREE.Vector3(e.dir.x, e.dir.y, e.dir.z)
+      const size = e.size
+      if (e.kind === 'arrow') {
+        body(keep(new THREE.ConeGeometry(size * 0.46, size, 24)), m => {
+          m.position.set(e.tip.x, e.tip.y, e.tip.z).addScaledVector(dv, -size / 2)
+          m.quaternion.setFromUnitVectors(Y_UP, dv)
+        })
+      } else if (e.kind === 'cube') {
+        body(keep(new THREE.BoxGeometry(size, size, size)), m => {
+          m.position.set(e.tip.x, e.tip.y, e.tip.z)
+          // Square on to the line, its top as level as that allows.
+          const up = Math.abs(dv.z) > 0.95 ? new THREE.Vector3(1, 0, 0) : Z_UP.clone()
+          const side = new THREE.Vector3().crossVectors(up, dv).normalize()
+          up.crossVectors(dv, side)
+          m.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(dv, side, up))
+        })
+      } else {
+        body(keep(new THREE.SphereGeometry(size / 2, 22, 14)), m => m.position.set(e.tip.x, e.tip.y, e.tip.z))
+      }
     }
-    // Arrowheads: cones, their points on the curve's ends.
-    const size = Math.max(c.width * 4.5, 6)
-    for (const end of [true, false]) {
-      if (closed || !(end ? c.arrowEnd : c.arrowStart)) continue
-      const d = endDir3(c, end)
-      if (!d) continue
-      const tip = end ? c.pts[c.pts.length - 1] : c.pts[0]
-      const dv = new THREE.Vector3(d.x, d.y, d.z)
-      body(keep(new THREE.ConeGeometry(size * 0.46, size, 20)), m => {
-        m.position.set(tip.x, tip.y, tip.z ?? 0).addScaledVector(dv, -size / 2)
-        m.quaternion.setFromUnitVectors(Y_UP, dv)
+    // The graphic at its points, where it is on and no end's shape stands.
+    if (c.mark) {
+      const m = markSize(c)
+      const one = keep(markGeo(c.mark, m, Math.max(w * 0.3, m * 0.035), w))
+      const parts: THREE.BufferGeometry[] = []
+      c.pts.forEach((p, i) => {
+        if (p.mark === false || shaped.has(i)) return
+        parts.push(one.clone().translate(p.x, p.y, p.z ?? 0))
       })
+      if (parts.length) {
+        body(keep(mergeGeometries(parts)))
+        for (const p of parts) p.dispose()
+      }
     }
     // Selected: a cube on every point. A stem under each point off the
     // ground, always: how high the line runs there.
@@ -254,7 +356,7 @@ export function createPathOverlay() {
       }
     }
     root.add(group)
-    return { curve: c, selected, group, own, cubes, handles }
+    return { curve: c, selected, group, own, cubes, handles, flow }
   }
 
   /** Draw the curves over what the frame drew. `ground` is the canvas's
@@ -270,9 +372,9 @@ export function createPathOverlay() {
         seen.add(c.id)
         const sel = f.selected.has(c.id)
         const b = built.get(c.id)
-        if (b && b.curve === c && b.selected === sel) continue
+        if (b && b.curve === c && b.selected === sel) { b.flow?.(f.time); continue }
         if (b) drop(b)
-        built.set(c.id, build(c, sel))
+        built.set(c.id, build(c, sel, f.time))
       }
     }
     for (const [id, b] of built) if (!seen.has(id)) { drop(b); built.delete(id) }

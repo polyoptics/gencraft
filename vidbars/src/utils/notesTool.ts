@@ -34,7 +34,7 @@
 import { useCurveDraft, usePathHot, usePathMenu } from '../store/pathLive'
 import { useNotesStore, useNotesUi, newNoteId, type Curve, type CurvePoint, type CurveHandle } from '../store/notesStore'
 import { curveSamples, nearestOnCurve } from './curveGeom'
-import { ptKey, parsePt, pickedPoints, selectPoint, selectAllPoints, deletePickedPoints, insertPoint, holdPoints, moveHeld } from './pathEdit'
+import { ptKey, parsePt, pickedPoints, selectPoint, selectAllPoints, deletePickedPoints, insertPoint, holdPoints, moveHeld, lookOf } from './pathEdit'
 import type { PathHit } from '../three/pathOverlay'
 import { clientToCanvas } from './fx/createEffect'
 import { canvasPointUnder, overCanvas } from './placeTool'
@@ -144,7 +144,7 @@ function resumeFrom(id: string, i: number): boolean {
     return q
   }
   const curve: Curve = i === 0 && c.pts.length > 1
-    ? { ...c, pts: c.pts.map(flip).reverse(), arrowStart: c.arrowEnd, arrowEnd: c.arrowStart }
+    ? { ...c, pts: c.pts.map(flip).reverse(), arrowStart: c.arrowEnd, arrowEnd: c.arrowStart, endStart: c.endEnd, endEnd: c.endStart, ...(c.flow ? { flow: -c.flow } : {}) }
     : c
   useNotesUi.setState({ selected: [], points: [] })
   useCurveDraft.setState({ curve, hover: null })
@@ -243,9 +243,10 @@ function onDown(e: PointerEvent) {
     if (!curve) {
       checkpoint()
       curve = {
-        id: newNoteId('cv'), kind: 'bezier', pts: [], color: ui.color, width: ui.width / z,
-        arrowStart: ui.arrowStart, arrowEnd: ui.arrowEnd, smooth: ui.smooth, ...(ui.dashGap > 0 ? { dash: [ui.dashOn / z, ui.dashGap / z] as [number, number] } : {}),
+        id: newNoteId('cv'), kind: 'bezier', pts: [], color: ui.color, width: ui.width / z, smooth: ui.smooth,
       }
+      // As the panel is set; nothing kept that is not in use.
+      for (const [k, v] of Object.entries(lookOf(ui, z))) if (v !== undefined && v !== false) (curve as unknown as Record<string, unknown>)[k] = v
     }
     const anchor: CurvePoint = { x: p.cx, y: p.cy }
     curve = { ...curve, pts: [...curve.pts, anchor] }

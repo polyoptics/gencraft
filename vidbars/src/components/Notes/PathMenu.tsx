@@ -11,7 +11,7 @@ import ReactDOM from 'react-dom'
 import { useNotesStore, useNotesUi } from '../../store/notesStore'
 import { usePathMenu } from '../../store/pathLive'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
-import { pickedPoints, modeOf, setTangentMode, deletePickedPoints, insertPoint, selectAllPoints, type TangentMode } from '../../utils/pathEdit'
+import { pickedPoints, modeOf, setTangentMode, deletePickedPoints, insertPoint, selectAllPoints, markState, setPointMarks, type TangentMode } from '../../utils/pathEdit'
 
 const MODES: { mode: TangentMode; label: string; tip: string }[] = [
   { mode: 'auto', label: 'Auto', tip: 'The line finds its own way through the point' },
@@ -42,8 +42,8 @@ export const PathMenu: React.FC = () => {
     onMouseEnter: (e: React.MouseEvent<HTMLButtonElement>) => { e.currentTarget.style.background = 'rgba(255,255,255,0.07)' },
     onMouseLeave: (e: React.MouseEvent<HTMLButtonElement>) => { e.currentTarget.style.background = 'none' },
   }
-  const rows = (onPoint ? (c.kind === 'bezier' ? MODES.length : 0) + 1 : 3)
-  const h = 34 + rows * 31 + (onPoint && c.kind === 'bezier' ? 9 : 0)
+  const rows = (onPoint ? (c.kind === 'bezier' ? MODES.length + 1 : 0) + 1 : 3)
+  const h = 34 + rows * 31 + (onPoint && c.kind === 'bezier' ? 18 : 0)
   return ReactDOM.createPortal(
     <>
       <div style={{ position: 'fixed', inset: 0, zIndex: 9998 }} onPointerDown={close} onContextMenu={e => { e.preventDefault(); close() }} />
@@ -65,6 +65,14 @@ export const PathMenu: React.FC = () => {
             {m.label}
           </button>
         ))}
+        {onPoint && c.kind === 'bezier' && <div style={{ height: 1, background: 'rgba(255,255,255,0.07)', margin: '4px 0' }} />}
+        {onPoint && c.kind === 'bezier' && (
+          <button style={row} {...hover} title="On or off: whether these points show the curve's point graphic (set in the panel, under POINTS)"
+            onClick={step(() => setPointMarks(!markState().on))}>
+            <span style={{ fontSize: 13, width: 18, textAlign: 'center', color: '#ffe14a' }}>{markState().on ? '✓' : ''}</span>
+            Point graphic
+          </button>
+        )}
         {onPoint && c.kind === 'bezier' && <div style={{ height: 1, background: 'rgba(255,255,255,0.07)', margin: '4px 0' }} />}
         {onPoint && (
           <button style={{ ...row, color: '#f87171' }} {...hover} onClick={step(() => { deletePickedPoints() })}>
