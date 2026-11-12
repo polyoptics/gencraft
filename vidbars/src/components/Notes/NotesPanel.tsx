@@ -28,7 +28,7 @@ import { createMediaCard } from '../../utils/cardGrid'
 import { visibleCanvasCenter } from '../../utils/fx/createEffect'
 import { PRIMITIVES, PRIM_NAMES, primitiveUrl, type Primitive } from '../../three/primitives'
 import { dataKey } from '../../utils/area3dScene'
-import { CameraTools } from '../Canvas/tilt/LookThrough'
+import { CameraTools, NEW_CAMERA_MM } from '../Canvas/tilt/LookThrough'
 
 const S = 'rgba(228,234,255,0.92)'
 const W_OPEN = 252, W_FOLDED = 52
@@ -223,6 +223,8 @@ function makePrimitive(p: Primitive) {
     : { cx: mid.cx + i * 40, cy: mid.cy }
   useUndoCoordinator.getState().checkpoint()
   const id = createMediaCard(at, [{ media: { url: primitiveUrl(p), type: 'model', originalName: PRIM_NAMES[p] }, label: PRIM_NAMES[p] }])
+  // A new camera's lens (one made before keeps the lens it had).
+  if (id && p === 'camera') useModelScaleStore.getState().setLens(dataKey(`card:${id}`), { mm: NEW_CAMERA_MM })
   // Sized to the scene, not the zoom: made zoomed out, a card came out
   // bigger than the whole scene and lay half off it (Brian 2026-11-09).
   if (id && area) {

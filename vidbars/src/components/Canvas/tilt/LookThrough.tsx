@@ -17,7 +17,11 @@ import { dataKey, placeNow } from '../../../utils/area3dScene'
 import { useFreeNodeStore } from '../../../store/freeNodeStore'
 import { models, cardModel, modelKey, selectModel } from './TiltModels'
 
-export const LENS_MM = [18, 24, 35, 50, 85, 135] as const
+/** The lens a new camera is made with (Brian 2026-11-12). One made before
+ *  that, its lens never set, keeps tiltStore's CAMERA_LENS. */
+export const NEW_CAMERA_MM = 80
+/** The shortest and longest lens that can be typed in (mm). */
+const MM_MIN = 4, MM_MAX = 2000
 export const LENS_ASPECTS: [string, number][] = [['16:9', 16 / 9], ['2.39', 2.39], ['1.85', 1.85], ['4:3', 4 / 3], ['1:1', 1], ['9:16', 9 / 16]]
 
 /** The selected camera's model key (as the 3D view keys it), if one is. */
@@ -39,16 +43,43 @@ const setLens = (key: string, l: Partial<CameraLens>) => {
   useModelScaleStore.getState().setLens(dataKey(key), l)
 }
 
-/** A camera's lens: focal length and frame shape, one lit of each. */
+/** A camera's focal length: a number typed in (Brian 2026-11-12: no
+ *  preset buttons). Enter or clicking away sets it, Esc puts back what it
+ *  was. */
+export const LensField: React.FC<{ k: string; width?: number | string }> = ({ k, width = '100%' }) => {
+  const mm = (useModelScaleStore(s => s.lensOf[dataKey(k)]) ?? CAMERA_LENS).mm
+  const shown = String(Math.round(mm * 10) / 10)
+  const [draft, setDraft] = useState<string | null>(null)
+  const commit = () => {
+    const v = draft === null ? NaN : parseFloat(draft.replace(',', '.'))
+    setDraft(null)
+    if (!Number.isFinite(v)) return
+    const to = Math.max(MM_MIN, Math.min(MM_MAX, v))
+    if (Math.abs(to - mm) > 1e-6) setLens(k, { mm: to })
+  }
+  return (
+    <input type="text" inputMode="decimal" value={draft ?? shown} title="Lens, in mm: type a number"
+      onChange={e => setDraft(e.target.value)} onFocus={e => e.target.select()} onBlur={commit}
+      onKeyDown={e => {
+        e.stopPropagation()
+        if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+        else if (e.key === 'Escape') { setDraft(null); requestAnimationFrame(() => (e.target as HTMLInputElement).blur()) }
+      }}
+      style={{
+        width, boxSizing: 'border-box', padding: '3px 6px', borderRadius: 6, fontSize: 11, fontFamily: 'ui-monospace, monospace',
+        color: '#e8f0ff', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', outline: 'none',
+      }} />
+  )
+}
+
+/** A camera's lens: its focal length typed in, and its frame shape, one lit. */
 export const LensChips: React.FC<{ k: string }> = ({ k }) => {
   const lens = useModelScaleStore(s => s.lensOf[dataKey(k)]) ?? CAMERA_LENS
   const label = (t: string) => <div style={{ fontSize: 10, letterSpacing: 1.3, color: 'rgba(255,255,255,0.4)', fontFamily: 'ui-monospace, monospace' }}>{t}</div>
   return (
     <>
       {label('LENS (MM)')}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 4 }}>
-        {LENS_MM.map(mm => <button key={mm} style={chip(lens.mm === mm)} aria-pressed={lens.mm === mm} onClick={() => setLens(k, { mm })} title={`${mm} mm lens`}>{mm}</button>)}
-      </div>
+      <LensField k={k} />
       {label('FRAME')}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 4 }}>
         {LENS_ASPECTS.map(([t, a]) => {
@@ -312,6 +343,8 @@ function onEat(e: Event) {
 function onKey(e: KeyboardEvent) {
   const key = useManip.getState().through
   if (!key) return
+  // (A key typed into a field is the field's: Esc there puts its number back.)
+  if ((e.target as Element | null)?.closest?.('input,textarea,select,[contenteditable="true"]')) return
   if (e.key === 'Escape') {
     e.preventDefault(); e.stopImmediatePropagation()
     useManip.getState().set({ through: null })
@@ -319,7 +352,6 @@ function onKey(e: KeyboardEvent) {
   }
   // F frames, as in the 3D view (not while typing).
   if ((e.key !== 'f' && e.key !== 'F') || e.ctrlKey || e.metaKey || e.altKey) return
-  if ((e.target as Element | null)?.closest?.('input,textarea,select,[contenteditable="true"]')) return
   e.preventDefault(); e.stopImmediatePropagation()
   frame(key)
 }
@@ -385,8 +417,8 @@ export const LookThrough: React.FC = () => {
           <rect x="2" y="8" width="13" height="10" rx="2" /><path d="M15 11l6-3v10l-6-3" /><circle cx="6" cy="5" r="2.2" /><circle cx="12" cy="5" r="2.2" />
         </svg>
         <span style={{ fontWeight: 700, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
-        <span style={{ display: 'flex', gap: 3 }}>
-          {LENS_MM.map(mm => <button key={mm} style={{ ...chip(lens.mm === mm), padding: '2px 6px' }} aria-pressed={lens.mm === mm} onClick={() => setLens(key, { mm })} title={`${mm} mm lens`}>{mm}</button>)}
+        <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontFamily: 'ui-monospace, monospace', fontSize: 11, color: 'rgba(232,240,255,0.55)' }}>
+          <LensField k={key} width={56} />mm
         </span>
         <span style={{ display: 'flex', gap: 3 }}>
           {LENS_ASPECTS.map(([t, a]) => {

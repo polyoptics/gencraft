@@ -207,6 +207,9 @@ export interface TiltFrameState {
   /** Looking through this camera (store/manipStore through, Brian
    *  2026-11-09): the full 3D world seen from it, nothing of the canvas. */
   through?: string | null
+  /** Looking through it, the models seen: those of its own 3D set (Brian
+   *  2026-11-12). Absent: all of them. */
+  inLook?: (key: string) => boolean
   /** The canvas's curves, as things in the scene (three/pathOverlay). */
   paths?: PathFrame
 }
@@ -1426,7 +1429,11 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       camera.updateMatrixWorld()
       // Its own body is not in its view; the walls and handles are not either.
       thru!.stand.visible = false
-      for (const s of standing.values()) { s.wall.visible = false; if (s.gizmo) s.gizmo.group.visible = false }
+      for (const [key, s] of standing) {
+        s.wall.visible = false; if (s.gizmo) s.gizmo.group.visible = false
+        // Only its own set's models: nothing else of the canvas.
+        if (st.inLook && !st.inLook(key)) s.stand.visible = false
+      }
       // A floor to stand things on: a grid one camera length a square,
       // under the camera.
       const cell = thru!.stand.scale.x
@@ -1920,7 +1927,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     const inv = new THREE.Matrix4().copy(ground.matrixWorld).invert()
     const balls: { c: THREE.Vector3; r: number }[] = []
     for (const [key, s] of standing) {
-      if (key === not || !s.inst || key.startsWith('mini:') || (keys && !keys.includes(key))) continue
+      if (key === not || !s.inst || !s.stand.visible || key.startsWith('mini:') || (keys && !keys.includes(key))) continue
       s.stand.updateWorldMatrix(true, true)
       const c = s.orient.localToWorld(new THREE.Vector3()).applyMatrix4(inv)
       const sv = s.pose.scale

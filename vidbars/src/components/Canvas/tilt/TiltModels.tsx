@@ -162,6 +162,8 @@ const frameState = (): TiltFrameState => {
   const ts = useTiltStore.getState()
   const { unitsPerMetre: scales, sizeOf, setSizeOf, poseOf, tintOf, stretchOf, lensOf } = useModelScaleStore.getState()
   const through = useManip.getState().through
+  // Looking through a camera in a 3D set: that set's models only.
+  const lookSet = through ? sceneOf(through)?.area.id : undefined
   const placedMemo = new Map<string, boolean>()
   const placed = (key: string) => { let v = placedMemo.get(key); if (v === undefined) { v = onArea3d(key); placedMemo.set(key, v) } return v }
   return {
@@ -190,6 +192,7 @@ const frameState = (): TiltFrameState => {
     lock: ts.lock3d || !!through,
     lensFor: key => key.startsWith('mini:') ? miniLook.get(key)?.lens : lensOf[dataKey(key)],
     through,
+    inLook: lookSet ? key => sceneOf(key)?.area.id === lookSet : undefined,
     paths: live3d() ? pathFrame() : undefined,
   }
 }
