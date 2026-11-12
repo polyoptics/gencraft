@@ -8,12 +8,20 @@
 // (tiltStore placeOf, poseOf, sizeOf) and undoable. Installed once when
 // this module loads, so a press on a handle reaches nothing else (as
 // utils/notesTool).
+//
+// The same handles sit on a curve's selected points, or with none
+// selected on the whole selected curve (Brian 2026-11-12: "We can use the
+// manipulator controls from the models"), at their middle, on the world's
+// axes: Move carries them (the up arrow lifts), Rotate turns them about
+// their middle, Scale spreads them from it or draws them in. One point
+// alone turns and sizes its tangent handles (utils/pathEdit).
 
 import { isTilted, useTiltStore, useModelScaleStore, type ScenePlace } from '../store/tiltStore'
 import { useUndoCoordinator } from '../store/undoCoordinator'
 import { useCanvasStore } from '../store/canvasStore'
 import { models } from '../components/Canvas/tilt/TiltModels'
-import type { ManipHit } from '../three/tiltScene'
+import { PATH_KEY, type ManipHit } from '../three/tiltScene'
+import { holdPoints, moveHeld, turnHeld, sizeHeld, type PointsHeld } from './pathEdit'
 import { placeNow, dataKey, sceneOf } from './area3dScene'
 import { useManip } from '../store/manipStore'
 
@@ -25,7 +33,7 @@ const mul = (a: Q, b: Q): Q => [
   a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
 ]
 
-let drag: (ManipHit & { dk: string; x0: number; y0: number; a0: number; q0: Q; k0: number; s0: [number, number, number]; p0: ScenePlace; zoom: number }) | null = null
+let drag: (ManipHit & { dk: string; x0: number; y0: number; a0: number; q0: Q; k0: number; s0: [number, number, number]; p0: ScenePlace; zoom: number; path?: PointsHeld }) | null = null
 let hover: string | null = null
 /** The click that ends a handle drag selects nothing. */
 let eatClick = false
@@ -57,6 +65,19 @@ function onDown(e: PointerEvent) {
     eatUp = true
     return
   }
+  if (g.key === PATH_KEY) {
+    // A curve's points: held as they are now, changed from that as it drags.
+    const held = holdPoints()
+    if (!held) { eatUp = true; return }
+    useUndoCoordinator.getState().checkpoint()
+    drag = {
+      ...g, dk: '', x0: e.clientX, y0: e.clientY, a0: Math.atan2(e.clientY - g.c.y, e.clientX - g.c.x),
+      q0: [0, 0, 0, 1], k0: 1, s0: [1, 1, 1], p0: { dx: 0, dy: 0, h: 0 }, zoom: useCanvasStore.getState().zoom, path: held,
+    }
+    models.manipHot?.(g.key, g.part)
+    setCursor(g.part[0] === 'r' ? 'grabbing' : cursorOf(g))
+    return
+  }
   const ms = useModelScaleStore.getState()
   const dk = dataKey(g.key)
   // Waiting on its card, not yet in the set: it can only be moved (onto it).
@@ -70,6 +91,26 @@ function onDown(e: PointerEvent) {
   }
   models.manipHot?.(g.key, g.part)
   setCursor(g.part[0] === 'r' ? 'grabbing' : cursorOf(g))
+}
+
+/** How far a move handle dragged (mx, my) screen px carries what it
+ *  holds, in scene axes (canvas units): along one axis, or on a plane,
+ *  (mx, my) = a·dir1 + b·dir2. */
+function moveVec(d: ManipHit, mx: number, my: number, k: number): number[] | null {
+  const ax = d.axes ?? []
+  let co: number[] = []
+  if (ax.length === 1) {
+    const A = ax[0].dir, l2 = A.x * A.x + A.y * A.y
+    co = [l2 > 1e-9 ? (mx * A.x + my * A.y) / l2 : 0]
+  } else if (ax.length === 2) {
+    const A = ax[0].dir, B = ax[1].dir
+    const det = A.x * B.y - A.y * B.x
+    if (Math.abs(det) < 1e-6) return null
+    co = [(mx * B.y - my * B.x) / det, (A.x * my - A.y * mx) / det]
+  }
+  const v = [0, 0, 0]
+  ax.forEach((a, i) => { for (let j = 0; j < 3; j++) v[j] += a.v[j] * co[i] * k })
+  return v
 }
 
 function onMove(e: PointerEvent) {
@@ -91,6 +132,30 @@ function onMove(e: PointerEvent) {
   // Ground px → canvas units.
   const k = 1 / (d.zoom || 1)
   const p = d.part
+  if (d.path) {
+    // Scene axes (x across, y up, z down the canvas) → the canvas's own
+    // (x across, y down it, z up).
+    if (p[0] === 'm') {
+      const v = moveVec(d, mx, my, k)
+      if (v) moveHeld(d.path, v[0], v[2], v[1])
+    } else if (p === 's') {
+      const f = Math.min(50, Math.max(0.02, 2 ** ((mx - my) / 120)))
+      sizeHeld(d.path, f, f, f)
+    } else if (p[0] === 's') {
+      const f = Math.min(50, Math.max(0.02, 2 ** ((mx * d.dir!.x + my * d.dir!.y) / 100)))
+      const s = [1, 1, 1]
+      s[d.k!] = f
+      sizeHeld(d.path, s[0], s[2], s[1])
+    } else {
+      let th = Math.atan2(e.clientY - d.c.y, e.clientX - d.c.x) - d.a0
+      if (e.shiftKey) th = Math.round(th / (Math.PI / 12)) * (Math.PI / 12)
+      th *= d.sign ?? 1
+      // The canvas's axes are the scene's with two swapped: the turn runs
+      // the other way round in them.
+      turnHeld(d.path, [d.axis![0], d.axis![2], d.axis![1]], -th)
+    }
+    return
+  }
   if (p === 'f') {
     // A camera's focal point (Brian 2026-11-09): where it goes, the camera
     // looks, and its focus is how far that is. Across the floor; Shift
@@ -100,20 +165,8 @@ function onMove(e: PointerEvent) {
     return
   }
   if (p[0] === 'm') {
-    // Along one axis, or on a plane: (mx, my) = a·dir1 + b·dir2.
-    const ax = d.axes ?? []
-    let co: number[] = []
-    if (ax.length === 1) {
-      const A = ax[0].dir, l2 = A.x * A.x + A.y * A.y
-      co = [l2 > 1e-9 ? (mx * A.x + my * A.y) / l2 : 0]
-    } else if (ax.length === 2) {
-      const A = ax[0].dir, B = ax[1].dir
-      const det = A.x * B.y - A.y * B.x
-      if (Math.abs(det) < 1e-6) return
-      co = [(mx * B.y - my * B.x) / det, (A.x * my - A.y * mx) / det]
-    }
-    const v = [0, 0, 0]
-    ax.forEach((a, i) => { for (let j = 0; j < 3; j++) v[j] += a.v[j] * co[i] * k })
+    const v = moveVec(d, mx, my, k)
+    if (!v) return
     ms.setPlace(d.dk, { dx: d.p0.dx + v[0], dy: d.p0.dy + v[2], h: Math.max(0, d.p0.h + v[1]) })
   } else if (p === 's') {
     // Right or up grows it, left or down shrinks it: twice as big per 120 px.
@@ -153,7 +206,7 @@ function onUp(e: PointerEvent) {
   // Moved back onto its own card (Brian 2026-11-10): out of the set, on
   // its card again, turning, as before it was put there.
   // (Let go with the pointer over that card, as it is seen.)
-  if (drag.part[0] === 'm' && useModelScaleStore.getState().placeOf[drag.dk]) {
+  if (!drag.path && drag.part[0] === 'm' && useModelScaleStore.getState().placeOf[drag.dk]) {
     const id = drag.key.slice(drag.key.indexOf(':') + 1)
     const el = document.querySelector(drag.key.startsWith('node:') ? `[data-freenode][data-id="${id}"]` : `[data-group-card][data-id="${id}"]`)
     const r = el?.getBoundingClientRect()

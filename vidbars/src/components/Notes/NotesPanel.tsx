@@ -19,6 +19,7 @@ import { areaAt } from '../../utils/areaFollow'
 import { ensureAnnotated, modelName } from '../../utils/annotations'
 import { models, cardModel } from '../Canvas/tilt/TiltModels'
 import { curveBounds, curvePoints } from '../../utils/curveGeom'
+import { tangentState, setBroken, setCorner } from '../../utils/pathEdit'
 import { useCurveDraft } from '../../utils/notesTool'
 import { useModelScaleStore } from '../../store/tiltStore'
 import { createMediaCard } from '../../utils/cardGrid'
@@ -40,6 +41,12 @@ const IcSelect: Ic = ({ size = 20 }) => (
 )
 const IcSmooth: Ic = ({ size = 20 }) => (
   <svg {...svg(size)}><path d="M3 16c3-9 6-9 9-4s6 5 9-4" stroke={S} /><circle cx="3" cy="16" r="1.8" fill="#4fc3ff" stroke="none" /><circle cx="12" cy="12" r="1.8" fill="#4fc3ff" stroke="none" /><circle cx="21" cy="8" r="1.8" fill="#4fc3ff" stroke="none" /></svg>
+)
+const IcBreak: Ic = ({ size = 20 }) => (
+  <svg {...svg(size)}><path d="M3 18c2-6 5-9 9-9" stroke={S} /><path d="M12 9c2 5 5 8 9 9" stroke={S} /><path d="M12 9L6.5 4.5" stroke="#4fc3ff" strokeWidth="1.4" /><path d="M12 9l6.5-3" stroke="#4fc3ff" strokeWidth="1.4" /><rect x="10.2" y="7.2" width="3.6" height="3.6" fill="#ffe14a" stroke="none" /><circle cx="6.5" cy="4.5" r="1.6" fill="#4fc3ff" stroke="none" /><circle cx="18.5" cy="6" r="1.6" fill="#4fc3ff" stroke="none" /></svg>
+)
+const IcCorner: Ic = ({ size = 20 }) => (
+  <svg {...svg(size)}><path d="M3 18L12 7l9 11" stroke={S} strokeLinejoin="miter" /><rect x="10.2" y="5.2" width="3.6" height="3.6" fill="#ffe14a" stroke="none" /></svg>
 )
 const IcPen: Ic = ({ size = 20 }) => (
   <svg {...svg(size)}><path d="M4 20c3-1 4-4 6-4s2 3 5 2 4-5 5-7" stroke="#ff8fd1" /><path d="M14.5 4.5l3 3L10 15l-3.6.6.6-3.6z" stroke={S} strokeWidth="1.6" /></svg>
@@ -69,13 +76,43 @@ const btnStyle = (on: boolean, wide = false): React.CSSProperties => ({
 })
 
 const TOOLS: { id: NotesTool; Icon: Ic; name: string; tip: string }[] = [
-  { id: 'curve', Icon: IcCurve, name: 'Curve', tip: 'Curve: click for corners, click-drag for smooth points. Double-click, Enter or Esc finishes; click the first point to close it. Works flat and in 3D.' },
+  { id: 'curve', Icon: IcCurve, name: 'Curve', tip: 'Curve: click for corners, click-drag for smooth points. Double-click, Enter or Esc finishes; click the first point to close it. Click a selected curve’s end point to carry on from it. Works flat and in 3D.' },
   { id: 'pen', Icon: IcPen, name: 'Pen', tip: 'Pen: freehand. Over a model in 3D it draws on the model’s surface; anywhere else on the canvas.' },
   { id: 'pin', Icon: IcPin, name: 'Pin', tip: 'Pin: click a model in 3D to pin a note on it. Each pin gets a Note card, and the model gets an Annotation card.' },
   { id: 'erase', Icon: IcErase, name: 'Erase', tip: 'Erase: click or drag over a stroke on a model, a pin’s dot or a curve to remove just that. Models and cards are never touched.' },
 ]
 
 const SMOOTH_TIP = 'Smooth: on or off. On, a curve runs smoothly through its points by itself, no handles to set; drag the points to reshape it. Also sets the selected curves.'
+
+/** One of three switches sharing a row of the open panel. */
+const THIRD: React.CSSProperties = { flex: '1 1 0', minWidth: 0, width: 'auto', padding: '0 5px', gap: 4, fontSize: 11.5, justifyContent: 'center' }
+const BREAK_TIP = 'Break: on or off, for the selected points. On, a point’s two tangent handles are each their own, so the line can turn sharply through it with bent sides. Off, they stay in one line and the curve runs smoothly through. Ctrl-drag a handle breaks its point too.'
+const CORNER_TIP = 'Corner: on or off, for the selected points. On, a point has no handles: the line turns sharply there. Off, it gets its handles back.'
+
+/** The selected points' tangents: Break and Corner, each its own switch.
+ *  Always here, dim until a point is selected. */
+const PointTools: React.FC<{ folded: boolean }> = ({ folded }) => {
+  // Read again when the selection or the curves change.
+  useNotesUi(s => s.points)
+  useNotesStore(s => s.curves)
+  const st = tangentState()
+  const set = (f: (on: boolean) => void, on: boolean) => {
+    if (!st.any) return
+    useUndoCoordinator.getState().checkpoint()
+    f(on)
+  }
+  const dim = st.any ? 1 : 0.4
+  const third = folded ? {} : THIRD
+  const brk = (
+    <button style={{ ...btnStyle(st.broken, !folded), ...third, opacity: dim }} aria-pressed={st.broken} aria-disabled={!st.any}
+      title={BREAK_TIP} onClick={() => set(setBroken, !st.broken)}><IcBreak size={folded ? 20 : 16} />{!folded && <span>Break</span>}</button>
+  )
+  const cnr = (
+    <button style={{ ...btnStyle(st.corner, !folded), ...third, opacity: dim }} aria-pressed={st.corner} aria-disabled={!st.any}
+      title={CORNER_TIP} onClick={() => set(setCorner, !st.corner)}><IcCorner size={folded ? 20 : 16} />{!folded && <span>Corner</span>}</button>
+  )
+  return <>{brk}{cnr}</>
+}
 
 const Section: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
   <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -299,7 +336,7 @@ function selectItem(it: Item) {
   const fs = useFreeNodeStore.getState(), bs = useBoardsStore.getState()
   if (it.kind === 'node') { fs.setFreeSelection([it.id]); bs.clearGroupSelection() }
   else if (it.kind === 'card') { bs.setSelectedGroups([it.id]); fs.setFreeSelection([]) }
-  else if (it.kind === 'curve') useNotesUi.setState({ selected: [it.id] })
+  else if (it.kind === 'curve') useNotesUi.setState({ selected: [it.id], points: [] })
 }
 
 const Outliner: React.FC = () => {
@@ -439,7 +476,7 @@ export const NotesPanel: React.FC = () => {
   }
   const selectBtn = (
     <button key="select" style={btnStyle(!tool, !folded)} aria-pressed={!tool}
-      title="Select: click a curve to select it (Shift adds), drag it to move it, drag its points and handles to reshape it. Delete removes. Esc also puts any tool down."
+      title="Select: click a curve to select it (Shift adds), drag it to move it. Click one of its points to select it (Shift adds; double-click for all of them), drag points and handles to reshape it; in 3D, Shift-drag lifts and lowers. Double-click the line for a new point. Delete removes the selected points, or the curve. Esc also puts any tool down."
       onClick={() => useNotesUi.setState({ tool: null, linking: null })}>
       <IcSelect />{!folded && <span>Select</span>}
     </button>
@@ -479,6 +516,7 @@ export const NotesPanel: React.FC = () => {
             <button style={btnStyle(arrowStart)} aria-pressed={arrowStart} title="Arrowhead at the start" onClick={() => apply({ arrowStart: !arrowStart })}><IcArrowStart /></button>
             <button style={btnStyle(arrowEnd)} aria-pressed={arrowEnd} title="Arrowhead at the end" onClick={() => apply({ arrowEnd: !arrowEnd })}><IcArrowEnd /></button>
             <button style={btnStyle(smooth)} aria-pressed={smooth} title={SMOOTH_TIP} onClick={() => setSmooth(!smooth)}><IcSmooth /></button>
+            <PointTools folded />
             <div style={{ width: 20, height: 20, borderRadius: 10, background: color, border: '2px solid rgba(255,255,255,0.25)' }} title="Colour (open the panel to change)" />
           </>
         ) : (
@@ -491,7 +529,11 @@ export const NotesPanel: React.FC = () => {
               </div>
             </Section>
             <Section title="CURVE">
-              <button style={btnStyle(smooth, true)} aria-pressed={smooth} onClick={() => setSmooth(!smooth)} title={SMOOTH_TIP}><IcSmooth /><span>Smooth</span></button>
+              {/* Three switches in the one row the section always had. */}
+              <div style={{ display: 'flex', gap: 5 }}>
+                <button style={{ ...btnStyle(smooth, true), ...THIRD }} aria-pressed={smooth} onClick={() => setSmooth(!smooth)} title={SMOOTH_TIP}><IcSmooth size={16} /><span>Smooth</span></button>
+                <PointTools folded={false} />
+              </div>
             </Section>
             <Section title="COLOUR">
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(9, 1fr)', gap: 4 }}>

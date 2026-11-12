@@ -17,6 +17,7 @@ import { TILT_PERSPECTIVE, DEFAULT_LIGHT, CAMERA_LENS, type TiltLight, type Came
 import { CAMERA_URL, CAMERA_LENS_AT } from './primitives'
 import { createNotesOverlay, type NotesHost } from './notesOverlay'
 import type { ModelNotes } from '../store/notesStore'
+import { createPathOverlay, type PathFrame } from './pathOverlay'
 
 const DEFAULT_SHADOWS = DEFAULT_LIGHT.shadows, DEFAULT_SHEEN = DEFAULT_LIGHT.sheen
 /** How long a model's pop onto a Viewer takes. */
@@ -206,7 +207,13 @@ export interface TiltFrameState {
   /** Looking through this camera (store/manipStore through, Brian
    *  2026-11-09): the full 3D world seen from it, nothing of the canvas. */
   through?: string | null
+  /** The canvas's curves, as things in the scene (three/pathOverlay). */
+  paths?: PathFrame
 }
+
+/** The key of the manipulator on a curve's selected points (ManipHit.key):
+ *  the same handles a model has, moving points (utils/area3dHandles). */
+export const PATH_KEY = 'path'
 
 /** How long a model turned by hand takes to roll back (ms). */
 const DRIFT_MS = 3000
@@ -691,6 +698,18 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   let frameNo = 0
   // The 3D notes on the models (three/notesOverlay).
   const notes = createNotesOverlay()
+  // The canvas's curves, in 3D (three/pathOverlay), and the manipulator
+  // on their selected points.
+  const paths = createPathOverlay()
+  const pathGizmo = makeManip()
+  manipRoot.add(pathGizmo.group)
+  /** Every manipulator: the models', then the curves' points'. */
+  const gizmos = (): { key: string; g: Manip; rig: CamRig | null }[] => {
+    const list: { key: string; g: Manip; rig: CamRig | null }[] = []
+    for (const [key, s] of standing) if (s.gizmo) list.push({ key, g: s.gizmo, rig: s.rig })
+    list.push({ key: PATH_KEY, g: pathGizmo, rig: null })
+    return list
+  }
   const notesHost = (s: Standing): NotesHost => ({ url: s.url, inst: s.inst, visible: s.stand.visible, body: s.turn, size: s.size.length() })
 
   const spawn = (key: string, url: string): Standing => {
@@ -1511,6 +1530,26 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       for (const [key, s] of standing) hosts.set(key, notesHost(s))
       notes.render(renderer, camera, hosts, st.notesOf, st.fade, W, H)
     }
+    // The curves, and the manipulator on their selected points: at their
+    // middle, on the world's axes.
+    paths.render(renderer, camera, ground.matrix, st.paths, W, H, looking)
+    {
+      const at = st.paths?.gizmo, g = pathGizmo
+      g.group.visible = !!at && !looking
+      if (at && st.paths) {
+        const f = st.paths, m = st.manip ?? DEF_MANIP
+        g.group.position.set(f.ox + at.x * f.zoom, -(f.oy + at.y * f.zoom), at.z * f.zoom)
+        g.lq.identity()
+        g.group.quaternion.copy(STAND_Q)
+        if (g.mode !== m.mode) {
+          g.mode = m.mode
+          const show = PARTS_OF[m.mode]
+          for (const [p, list] of g.meshes) for (const x of list) x.visible = show.includes(p)
+        }
+        g.plane = m.plane
+        if (m.plane !== 'cam') g.square.quaternion.copy(SQUARE_Q[m.plane])
+      }
+    }
 
     // Outlines: paint the silhouettes into a mask, then ring them.
     const outlined = looking ? [] : [...standing.entries()].filter(([key, s]) =>
@@ -1550,7 +1589,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   /** The manipulators, sized to MANIP_PX on screen, over everything. */
   function renderManips() {
     let any = false
-    for (const s of standing.values()) if (s.gizmo?.group.visible) any = true
+    for (const { g } of gizmos()) if (g.group.visible) any = true
     if (!any || !lastW) return
     manipRoot.matrix.copy(ground.matrix)
     manipRoot.matrixWorldNeedsUpdate = true
@@ -1559,9 +1598,8 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     const gk = new THREE.Vector3().setFromMatrixScale(ground.matrix).x || 1
     const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0)
     const p0 = new THREE.Vector3(), p1 = new THREE.Vector3()
-    for (const s of standing.values()) {
-      const g = s.gizmo
-      if (!g?.group.visible) continue
+    for (const { g } of gizmos()) {
+      if (!g.group.visible) continue
       g.group.scale.setScalar(1)
       g.group.updateMatrixWorld(true)
       g.group.getWorldPosition(p0)
@@ -1584,9 +1622,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   /** Light up part `part` of model `key`'s manipulator (the cursor is over
    *  it, or it is held), or none. */
   function manipHot(key: string | null, part: ManipPart | null) {
-    for (const [k, s] of standing) {
-      const g = s.gizmo
-      if (!g) continue
+    for (const { key: k, g } of gizmos()) {
       const want = k === key ? part : null
       if (g.hot === want) continue
       g.hot = want
@@ -1740,9 +1776,8 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     manipRoot.updateMatrixWorld(true)
     const v = new THREE.Vector3()
     let best: (ManipHit & { d: number }) | null = null
-    for (const [key, s] of standing) {
-      const g = s.gizmo
-      if (!g?.group.visible) continue
+    for (const { key, g, rig } of gizmos()) {
+      if (!g.group.visible) continue
       g.group.updateMatrixWorld(true)
       const px = (lx: number, ly: number, lz: number) => {
         g.group.localToWorld(v.set(lx, ly, lz)).project(camera)
@@ -1764,9 +1799,9 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       const toLocal = (wd: THREE.Vector3) => wd.applyQuaternion(g.group.getWorldQuaternion(new THREE.Quaternion()).invert())
       const dc = Math.hypot(x - c.x, y - c.y)
       // A camera's focal point: drag it to aim the camera (any mode).
-      if (s.rig?.group.visible) {
+      if (rig?.group.visible) {
         const f = px(0, 0, 0)
-        s.rig.focal.getWorldPosition(v).project(camera)
+        rig.focal.getWorldPosition(v).project(camera)
         f.x = (v.x + 1) / 2 * lastW; f.y = (1 - v.y) / 2 * lastH
         const fd = Math.hypot(x - f.x, y - f.y)
         if (v.z < 1 && fd < 11) take({ key, part: 'f', c: { x: f.x, y: f.y } }, fd, 9)
@@ -1957,9 +1992,15 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     outlineMat.dispose()
     envRT.dispose()
     notes.dispose()
+    paths.dispose()
     renderer.dispose()
     renderer.forceContextLoss()
   }
 
-  return { frame, warm, pick, pickZ: () => pickedZ, info, spinBy, letGo, settleAll, keepTurn, gizmoAt, aimAt, cameraFrame, manipHot, screenBox, floatSpot, pivotOf, labelAt, strokeAt, modelSize, dispose, surfaceAt, pinSpots: notes.spots }
+  /** What of a curve is at (x, y) (px on the 3D canvas), and where a
+   *  point of the canvas (canvas units, z up) is drawn (three/pathOverlay). */
+  const pathAt = (x: number, y: number, only?: Set<string>) => paths.at(x, y, only)
+  const pathPx = (p: { x: number; y: number; z: number }) => paths.project(p)
+
+  return { pathAt, pathPx, frame, warm, pick, pickZ: () => pickedZ, info, spinBy, letGo, settleAll, keepTurn, gizmoAt, aimAt, cameraFrame, manipHot, screenBox, floatSpot, pivotOf, labelAt, strokeAt, modelSize, dispose, surfaceAt, pinSpots: notes.spots }
 }

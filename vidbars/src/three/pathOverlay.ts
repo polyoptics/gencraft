@@ -1,0 +1,345 @@
+// pathOverlay.ts — the canvas's curves in the 3D view (store/notesStore;
+// Brian 2026-11-12: "in 3D, it's still kind of flat graphics. The points
+// along the line should be cubes"). Tilted, a curve is a real thing in the
+// scene: a round line through its points at their heights, cones for its
+// arrowheads and, selected, a cube on every point and its tangent handles.
+// A point off the ground has a thin stem down to where it stands. Drawn
+// after the models, against their depth: where something stands in front
+// of the line it shows through faintly, so it is never lost. Cubes and
+// handles are a constant size on screen and always in front.
+//
+// Flat, the same curves are drawn by components/Notes/CurveLayer, seen
+// from straight above. This also answers what is under the cursor (at)
+// and where a point is on screen (project), for utils/notesTool.
+
+import * as THREE from 'three'
+import type { Curve } from '../store/notesStore'
+import { curvePoints, curveSamples, endDir3, nearestOnCurve, type P3 } from '../utils/curveGeom'
+
+/** What the 3D view draws of the curves this frame. */
+export interface PathFrame {
+  /** The bezier curves, the one being drawn among them. */
+  curves: Curve[]
+  selected: Set<string>
+  /** Selected points, `${curve id}:${index}`. */
+  points: Set<string>
+  zoom: number
+  /** The canvas's origin, flat px from the host centre. */
+  ox: number
+  oy: number
+  /** The part under the cursor: `p:${id}:${i}` or `h:${id}:${i}:${side}`. */
+  hot: string | null
+  /** Where the manipulator sits (canvas units, z up), if anything of a
+   *  curve is selected. */
+  gizmo: P3 | null
+  /** Changes whenever any of the above does. */
+  sig: number
+}
+
+export type PathHit =
+  | { kind: 'point'; id: string; i: number }
+  | { kind: 'handle'; id: string; i: number; side: 'in' | 'out' }
+  | { kind: 'line'; id: string; seg: number; t: number }
+
+const CUBE_PX = 11, HANDLE_PX = 8
+const COL = { picked: 0xffe14a, selected: 0xffffff, hot: 0x9fd0ff, handle: 0x78b4ff }
+
+/** A round line through `s` (canvas units), radius `r`. */
+function tube(s: P3[], r: number, closed: boolean, radial = 10): THREE.BufferGeometry {
+  const pts: THREE.Vector3[] = []
+  for (const p of s) {
+    const v = new THREE.Vector3(p.x, p.y, p.z)
+    if (!pts.length || pts[pts.length - 1].distanceToSquared(v) > 1e-10) pts.push(v)
+  }
+  if (closed && pts.length > 2 && pts[0].distanceToSquared(pts[pts.length - 1]) < 1e-10) pts.pop()
+  const n = pts.length
+  const geo = new THREE.BufferGeometry()
+  if (n < 2) return geo
+  const loop = closed && n > 2
+  const pos: number[] = [], nor: number[] = [], idx: number[] = []
+  const T = new THREE.Vector3(), N = new THREE.Vector3(), B = new THREE.Vector3(), a = new THREE.Vector3(), b = new THREE.Vector3(), v = new THREE.Vector3()
+  const dir = (i: number, j: number, into: THREE.Vector3) => into.subVectors(pts[(j + n) % n], pts[(i + n) % n]).normalize()
+  for (let i = 0; i < n; i++) {
+    const hasIn = loop || i > 0, hasOut = loop || i < n - 1
+    if (hasIn) dir(i - 1, i, a)
+    if (hasOut) dir(i, i + 1, b)
+    if (!hasIn) a.copy(b)
+    if (!hasOut) b.copy(a)
+    T.addVectors(a, b)
+    if (T.lengthSq() < 1e-8) T.copy(b)
+    T.normalize()
+    // Wider at a turn, so the line keeps its width round it.
+    const k = 1 / Math.max(0.5, T.dot(a))
+    if (i === 0) {
+      N.set(0, 0, 1)
+      if (Math.abs(T.z) > 0.9) N.set(1, 0, 0)
+    }
+    N.addScaledVector(T, -N.dot(T))
+    if (N.lengthSq() < 1e-8) N.set(1, 0, 0).addScaledVector(T, -T.x)
+    N.normalize()
+    B.crossVectors(T, N)
+    for (let j = 0; j < radial; j++) {
+      const th = j / radial * Math.PI * 2
+      v.copy(N).multiplyScalar(Math.cos(th)).addScaledVector(B, Math.sin(th))
+      nor.push(v.x, v.y, v.z)
+      pos.push(pts[i].x + v.x * r * k, pts[i].y + v.y * r * k, pts[i].z + v.z * r * k)
+    }
+  }
+  const rings = loop ? n : n - 1
+  for (let i = 0; i < rings; i++) {
+    const i1 = (i + 1) % n
+    for (let j = 0; j < radial; j++) {
+      const j1 = (j + 1) % radial
+      const p00 = i * radial + j, p01 = i * radial + j1, p10 = i1 * radial + j, p11 = i1 * radial + j1
+      idx.push(p00, p10, p01, p01, p10, p11)
+    }
+  }
+  if (!loop) {
+    // Round off the two open ends with a flat cap each.
+    for (const [i, sign] of [[0, -1], [n - 1, 1]] as const) {
+      const c = pos.length / 3
+      dir(i === 0 ? 0 : n - 2, i === 0 ? 1 : n - 1, a)
+      pos.push(pts[i].x, pts[i].y, pts[i].z)
+      nor.push(a.x * sign, a.y * sign, a.z * sign)
+      for (let j = 0; j < radial; j++) {
+        const j1 = (j + 1) % radial
+        if (sign < 0) idx.push(c, i * radial + j, i * radial + j1)
+        else idx.push(c, i * radial + j1, i * radial + j)
+      }
+    }
+  }
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3))
+  geo.setIndex(idx)
+  return geo
+}
+
+const CUBE = new THREE.BoxGeometry(1, 1, 1)
+const CUBE_EDGES = new THREE.EdgesGeometry(CUBE)
+const BALL = new THREE.SphereGeometry(0.5, 14, 10)
+const EDGE_MAT = new THREE.LineBasicMaterial({ color: 0x0d1020, transparent: true, opacity: 0.8, depthTest: false, depthWrite: false, toneMapped: false })
+const STEM_MAT = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.38, depthTest: false, depthWrite: false, toneMapped: false })
+const ARM_MAT = new THREE.LineBasicMaterial({ color: COL.handle, transparent: true, opacity: 0.95, depthTest: false, depthWrite: false, toneMapped: false })
+const Y_UP = new THREE.Vector3(0, 1, 0)
+
+interface Knob { mesh: THREE.Mesh; at: THREE.Vector3; px: number; key: string; base: number }
+interface Built {
+  curve: Curve
+  selected: boolean
+  group: THREE.Group
+  /** What is thrown away with it. */
+  own: (THREE.BufferGeometry | THREE.Material)[]
+  cubes: Knob[]
+  handles: (Knob & { i: number; side: 'in' | 'out' })[]
+}
+
+export function createPathOverlay() {
+  const scene = new THREE.Scene()
+  // Lit from over the viewer's shoulder, whichever way the canvas lies:
+  // the cubes' faces read apart and the line reads round.
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x59607a, 1.5))
+  const sun = new THREE.DirectionalLight(0xffffff, 1.6)
+  sun.position.set(-0.5, 0.9, 1)
+  scene.add(sun)
+  const root = new THREE.Group()
+  root.matrixAutoUpdate = false
+  scene.add(root)
+  const built = new Map<string, Built>()
+  const m4 = new THREE.Matrix4(), v = new THREE.Vector3(), eye = new THREE.Vector3()
+  let cam: THREE.PerspectiveCamera | null = null, lastW = 0, lastH = 0
+  let last: PathFrame | null = null
+
+  const drop = (b: Built) => {
+    for (const o of b.own) o.dispose()
+    b.group.removeFromParent()
+  }
+
+  function build(c: Curve, selected: boolean): Built {
+    const group = new THREE.Group()
+    const own: (THREE.BufferGeometry | THREE.Material)[] = []
+    const keep = <T extends THREE.BufferGeometry | THREE.Material>(o: T) => { own.push(o); return o }
+    const color = new THREE.Color(c.color)
+    const solid = keep(new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.38, roughness: 0.45, metalness: 0, toneMapped: false }))
+    const ghost = keep(new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.22, depthTest: false, depthWrite: false, toneMapped: false }))
+    const body = (geo: THREE.BufferGeometry, place?: (m: THREE.Mesh) => void) => {
+      for (const [mat, order] of [[ghost, 40], [solid, 41]] as const) {
+        const m = new THREE.Mesh(geo, mat)
+        m.renderOrder = order
+        m.frustumCulled = false
+        place?.(m)
+        group.add(m)
+      }
+    }
+    const samples = curveSamples(c, 24)
+    const closed = !!c.closed && c.pts.length > 2
+    if (samples.length > 1) body(keep(tube(samples, c.width / 2, closed)))
+    // Arrowheads: cones, their points on the curve's ends.
+    const size = Math.max(c.width * 4.5, 6)
+    for (const end of [true, false]) {
+      if (closed || !(end ? c.arrowEnd : c.arrowStart)) continue
+      const d = endDir3(c, end)
+      if (!d) continue
+      const tip = end ? c.pts[c.pts.length - 1] : c.pts[0]
+      const dv = new THREE.Vector3(d.x, d.y, d.z)
+      body(keep(new THREE.ConeGeometry(size * 0.46, size, 20)), m => {
+        m.position.set(tip.x, tip.y, tip.z ?? 0).addScaledVector(dv, -size / 2)
+        m.quaternion.setFromUnitVectors(Y_UP, dv)
+      })
+    }
+    // Selected: a cube on every point. A stem under each point off the
+    // ground, always: how high the line runs there.
+    const cubes: Knob[] = []
+    const stems: number[] = []
+    c.pts.forEach((p, i) => {
+      if (Math.abs(p.z ?? 0) > 1e-6) stems.push(p.x, p.y, 0, p.x, p.y, p.z!)
+      if (!selected) return
+      const mat = keep(new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.55, metalness: 0, depthTest: false, depthWrite: false, toneMapped: false, transparent: true }))
+      const mesh = new THREE.Mesh(CUBE, mat)
+      mesh.position.set(p.x, p.y, p.z ?? 0)
+      mesh.renderOrder = 60
+      const edges = new THREE.LineSegments(CUBE_EDGES, EDGE_MAT)
+      edges.renderOrder = 61
+      mesh.add(edges)
+      group.add(mesh)
+      cubes.push({ mesh, at: mesh.position, px: CUBE_PX, key: `p:${c.id}:${i}`, base: color.getHex() })
+    })
+    if (stems.length) {
+      const g = keep(new THREE.BufferGeometry())
+      g.setAttribute('position', new THREE.Float32BufferAttribute(stems, 3))
+      const l = new THREE.LineSegments(g, STEM_MAT)
+      l.renderOrder = 50
+      l.frustumCulled = false
+      group.add(l)
+    }
+    // Selected: the tangent handles of the points that have their own (a
+    // smooth curve finds the others' itself).
+    const handles: Built['handles'] = []
+    if (selected) {
+      const arms: number[] = []
+      const eff = curvePoints(c)
+      eff.forEach((p, i) => {
+        if (p.t === 'corner' || (c.smooth && p.t !== 'broken')) return
+        for (const side of ['in', 'out'] as const) {
+          const h = side === 'in' ? p.hin : p.hout
+          if (!h || (Math.abs(h.x) < 1e-6 && Math.abs(h.y) < 1e-6 && Math.abs(h.z ?? 0) < 1e-6)) continue
+          const z = p.z ?? 0
+          const mat = keep(new THREE.MeshStandardMaterial({ color: COL.handle, roughness: 0.5, depthTest: false, depthWrite: false, toneMapped: false, transparent: true }))
+          const mesh = new THREE.Mesh(BALL, mat)
+          mesh.position.set(p.x + h.x, p.y + h.y, z + (h.z ?? 0))
+          mesh.renderOrder = 58
+          group.add(mesh)
+          arms.push(p.x, p.y, z, mesh.position.x, mesh.position.y, mesh.position.z)
+          handles.push({ mesh, at: mesh.position, px: HANDLE_PX, key: `h:${c.id}:${i}:${side}`, base: COL.handle, i, side })
+        }
+      })
+      if (arms.length) {
+        const g = keep(new THREE.BufferGeometry())
+        g.setAttribute('position', new THREE.Float32BufferAttribute(arms, 3))
+        const l = new THREE.LineSegments(g, ARM_MAT)
+        l.renderOrder = 55
+        l.frustumCulled = false
+        group.add(l)
+      }
+    }
+    root.add(group)
+    return { curve: c, selected, group, own, cubes, handles }
+  }
+
+  /** Draw the curves over what the frame drew. `ground` is the canvas's
+   *  plane in the scene (flat px from the host centre, z up off it).
+   *  `plain`: the line alone, no cubes or handles (looking through a
+   *  camera). */
+  function render(renderer: THREE.WebGLRenderer, camera: THREE.PerspectiveCamera, ground: THREE.Matrix4, f: PathFrame | undefined, W: number, H: number, plain: boolean) {
+    cam = camera; lastW = W; lastH = H
+    last = f ?? null
+    const seen = new Set<string>()
+    if (f) {
+      for (const c of f.curves) {
+        seen.add(c.id)
+        const sel = f.selected.has(c.id)
+        const b = built.get(c.id)
+        if (b && b.curve === c && b.selected === sel) continue
+        if (b) drop(b)
+        built.set(c.id, build(c, sel))
+      }
+    }
+    for (const [id, b] of built) if (!seen.has(id)) { drop(b); built.delete(id) }
+    if (!f || !built.size) return
+    // Canvas units → the plane: scaled by the zoom, y down the canvas.
+    root.matrix.copy(ground).multiply(m4.makeTranslation(f.ox, -f.oy, 0)).multiply(m4.makeScale(f.zoom, -f.zoom, f.zoom))
+    root.matrixWorldNeedsUpdate = true
+    root.updateMatrixWorld(true)
+    camera.updateMatrixWorld()
+    camera.getWorldPosition(eye)
+    const fwd = camera.getWorldDirection(new THREE.Vector3())
+    // Screen px per scene unit, one unit ahead of the eye.
+    const pxPer = H / 2 / Math.tan(camera.fov * Math.PI / 360)
+    const unit = new THREE.Vector3().setFromMatrixScale(root.matrixWorld).x || 1
+    const size = (k: Knob) => {
+      v.copy(k.at).applyMatrix4(root.matrixWorld)
+      const depth = v.sub(eye).dot(fwd)
+      k.mesh.visible = !plain && depth > camera.near
+      k.mesh.scale.setScalar(k.px * Math.max(depth, 1e-3) / pxPer / unit)
+    }
+    for (const b of built.values()) {
+      for (const k of b.cubes) {
+        size(k)
+        const mat = k.mesh.material as THREE.MeshStandardMaterial
+        const key = k.key.slice(2)
+        mat.color.setHex(f.points.has(key) ? COL.picked : b.selected ? COL.selected : k.base)
+        if (f.hot === k.key) mat.color.lerp(new THREE.Color(COL.hot), f.points.has(key) ? 0.35 : 0.7)
+      }
+      for (const k of b.handles) {
+        size(k)
+        ;(k.mesh.material as THREE.MeshStandardMaterial).color.setHex(f.hot === k.key ? COL.selected : k.base)
+      }
+    }
+    renderer.render(scene, camera)
+  }
+
+  /** Where a point (canvas units, z up) is drawn: px on the 3D canvas.
+   *  Null behind the eye. */
+  function project(p: P3): { x: number; y: number } | null {
+    if (!cam || !last) return null
+    v.set(p.x, p.y, p.z).applyMatrix4(root.matrixWorld)
+    const fwd = cam.getWorldDirection(new THREE.Vector3())
+    if (v.clone().sub(eye).dot(fwd) <= cam.near) return null
+    v.project(cam)
+    return { x: (v.x + 1) / 2 * lastW, y: (1 - v.y) / 2 * lastH }
+  }
+
+  /** What of a curve is at (x, y) (px on the 3D canvas): a point's cube,
+   *  a handle, or the line. `only`: just these curves. */
+  function at(x: number, y: number, only?: Set<string>): PathHit | null {
+    const f = last
+    if (!f || !cam) return null
+    let best: { hit: PathHit; d: number } | null = null
+    const take = (hit: PathHit, d: number, bias: number) => { if (!best || d - bias < best.d) best = { hit, d: d - bias } }
+    for (const b of built.values()) {
+      const c = b.curve
+      if (only && !only.has(c.id)) continue
+      b.cubes.forEach((k, i) => {
+        const q = project({ x: k.at.x, y: k.at.y, z: k.at.z })
+        if (!q) return
+        const d = Math.hypot(x - q.x, y - q.y)
+        if (d < CUBE_PX * 0.5 + 4) take({ kind: 'point', id: c.id, i }, d, 40)
+      })
+      for (const h of b.handles) {
+        const q = project({ x: h.at.x, y: h.at.y, z: h.at.z })
+        if (!q) continue
+        const d = Math.hypot(x - q.x, y - q.y)
+        if (d < HANDLE_PX * 0.5 + 5) take({ kind: 'handle', id: c.id, i: h.i, side: h.side }, d, 20)
+      }
+      const near = nearestOnCurve(c, project, x, y)
+      if (near && near.d < Math.max(7, c.width * f.zoom / 2 + 4)) take({ kind: 'line', id: c.id, seg: near.seg, t: near.t }, near.d, 0)
+    }
+    return best ? (best as { hit: PathHit }).hit : null
+  }
+
+  function dispose() {
+    for (const b of built.values()) drop(b)
+    built.clear()
+  }
+
+  return { render, at, project, dispose }
+}

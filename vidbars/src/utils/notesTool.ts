@@ -19,19 +19,33 @@
 //    it; a selected curve's points and handles drag (with any tool in the
 //    hand too). Delete removes.
 //  - Smooth (panel toggle): a curve runs through its points by itself.
+//  - Points (Brian 2026-11-12): a selected curve's points are clicked to
+//    select them (Shift adds or takes away; double-click a point for all
+//    of its curve's), dragged to move them, all the selected ones
+//    together; Shift-drag in 3D lifts and lowers. Delete removes the
+//    selected points. Double-click the line for a new point there. A
+//    handle turns its other handle with it unless the point is broken
+//    (the panel's Break, or Ctrl-drag a handle); Shift-drag a handle in 3D
+//    lifts it. With the Curve tool, a click on an open curve's end point
+//    carries on drawing from it.
+//    In 3D the curves are things in the scene (three/pathOverlay), so what
+//    is under the cursor is asked of the 3D view; flat, of the page.
 
-import { create } from 'zustand'
-import { useNotesStore, useNotesUi, newNoteId, type Curve, type CurvePoint } from '../store/notesStore'
+import { useCurveDraft, usePathHot } from '../store/pathLive'
+import { useNotesStore, useNotesUi, newNoteId, type Curve, type CurvePoint, type CurveHandle } from '../store/notesStore'
+import { curveSamples, nearestOnCurve } from './curveGeom'
+import { ptKey, parsePt, pickedPoints, selectPoint, selectAllPoints, deletePickedPoints, insertPoint, holdPoints, moveHeld } from './pathEdit'
+import type { PathHit } from '../three/pathOverlay'
+import { clientToCanvas } from './fx/createEffect'
 import { canvasPointUnder, overCanvas } from './placeTool'
 import { useCanvasStore } from '../store/canvasStore'
 import { useBoardsStore } from '../store/boardsStore'
-import { useTiltStore, isTilted } from '../store/tiltStore'
+import { useTiltStore, isTilted, unprojectTilt, TILT_FAR } from '../store/tiltStore'
 import { useUndoCoordinator } from '../store/undoCoordinator'
 import { models, modelKey } from '../components/Canvas/tilt/TiltModels'
 import { ensureAnnotated, addPin } from './annotations'
 
-/** The curve being drawn, and where the cursor is (for the next segment). */
-export const useCurveDraft = create<{ curve: Curve | null; hover: { x: number; y: number } | null }>(() => ({ curve: null, hover: null }))
+export { useCurveDraft }
 
 const zoomNow = () => useCanvasStore.getState().zoom
 const checkpoint = () => useUndoCoordinator.getState().checkpoint()
@@ -51,7 +65,90 @@ export function commitDraft() {
   }
   if (pts.length < 2) return
   useNotesStore.getState().addCurve({ ...curve, pts })
-  useNotesUi.setState({ selected: [curve.id] })
+  useNotesUi.setState({ selected: [curve.id], points: [] })
+}
+
+// A point is selected only on a selected curve: whatever lets a curve go
+// lets its points go.
+useNotesUi.subscribe(s => {
+  if (!s.points.length) return
+  const points = s.points.filter(k => s.selected.includes(parsePt(k).id))
+  if (points.length !== s.points.length) useNotesUi.setState({ points })
+})
+
+const in3d = () => isTilted(useTiltStore.getState())
+
+/** The canvas point under the cursor on the level `h` (canvas units) above
+ *  the canvas, through the tilt when tilted: where a point at that height
+ *  goes when dragged across. Null above the horizon. */
+function canvasPointAt(clientX: number, clientY: number, h: number): { cx: number; cy: number } | null {
+  const t = useTiltStore.getState()
+  if (!isTilted(t) || !h) return canvasPointUnder(clientX, clientY)
+  const host = document.querySelector('[data-tilt-stage="world"]')?.parentElement
+  if (!host) return null
+  const r = host.getBoundingClientRect()
+  const mx = r.left + r.width / 2, my = r.top + r.height / 2
+  const g = unprojectTilt(clientX - mx, clientY - my, t.tilt, t.spin, t.shiftX, t.shiftY, h * zoomNow(), TILT_FAR)
+  return g ? clientToCanvas(mx + g.x, my + g.y) : null
+}
+
+/** How far up (canvas units) a drag of (dx, dy) screen px lifts a point
+ *  at `p` in 3D: along the way up is drawn there. */
+function liftBy(p: { x: number; y: number; z: number }, dx: number, dy: number): number {
+  const a = models.pathPx?.(p), b = models.pathPx?.({ ...p, z: p.z + 100 })
+  if (!a || !b) return 0
+  const ux = (b.x - a.x) / 100, uy = (b.y - a.y) / 100, l2 = ux * ux + uy * uy
+  return l2 > 1e-9 ? (dx * ux + dy * uy) / l2 : 0
+}
+
+/** What of a curve is under a press: in 3D as the 3D view draws it, flat
+ *  (and a pen line, always) as the page does. `only`: just these curves. */
+function hitAt(e: { clientX: number; clientY: number }, target: Element, only?: Set<string>): PathHit | null {
+  if (in3d() && models.pathAt && overCanvas(target)) {
+    const h = models.pathAt(e.clientX, e.clientY, only)
+    if (h) return h
+  }
+  const handle = target.closest<SVGElement>('[data-curve-handle]')
+  const anchor = target.closest<SVGElement>('[data-curve-anchor]')
+  const line = target.closest<SVGElement>('[data-curve-id]')
+  if (handle || anchor) {
+    const [id, i, side] = (handle ?? anchor)!.getAttribute(handle ? 'data-curve-handle' : 'data-curve-anchor')!.split(':')
+    if (only && !only.has(id)) return null
+    return handle ? { kind: 'handle', id, i: +i, side: side as 'in' | 'out' } : { kind: 'point', id, i: +i }
+  }
+  if (line) {
+    const id = line.getAttribute('data-curve-id')!
+    const c = useNotesStore.getState().curves[id]
+    if (!c || (only && !only.has(id))) return null
+    const q = clientToCanvas(e.clientX, e.clientY)
+    const near = nearestOnCurve(c, p => p, q.cx, q.cy)
+    return { kind: 'line', id, seg: near?.seg ?? 0, t: near?.t ?? 0 }
+  }
+  return null
+}
+
+/** With the Curve tool, a click on an open curve's end point: carry on
+ *  drawing from it. */
+function resumeFrom(id: string, i: number): boolean {
+  const ns = useNotesStore.getState()
+  const c = ns.curves[id]
+  if (!c || c.kind !== 'bezier' || c.closed || (i !== 0 && i !== c.pts.length - 1)) return false
+  checkpoint()
+  ns.deleteCurves([id])
+  // From its first point: the points turn round, so the new ones follow
+  // on; its arrowheads stay on the ends they were on.
+  const flip = (p: CurvePoint): CurvePoint => {
+    const q: CurvePoint = { ...p, hin: p.hout, hout: p.hin }
+    if (!q.hin) delete q.hin
+    if (!q.hout) delete q.hout
+    return q
+  }
+  const curve: Curve = i === 0 && c.pts.length > 1
+    ? { ...c, pts: c.pts.map(flip).reverse(), arrowStart: c.arrowEnd, arrowEnd: c.arrowStart }
+    : c
+  useNotesUi.setState({ selected: [], points: [] })
+  useCurveDraft.setState({ curve, hover: null })
+  return true
 }
 
 // Putting the curve tool down finishes what it was drawing.
@@ -114,7 +211,11 @@ function onDown(e: PointerEvent) {
   }
 
   // A selected curve's points and handles drag whatever tool is in the hand.
-  if (!ui.tool || (!useCurveDraft.getState().curve && target.closest('[data-curve-anchor],[data-curve-handle]'))) { selectPress(e, target); return }
+  if (!ui.tool) { selectPress(e, target, hitAt(e, target)); return }
+  if (!useCurveDraft.getState().curve && ui.selected.length) {
+    const h = hitAt(e, target, new Set(ui.selected))
+    if (h && h.kind !== 'line') { selectPress(e, target, h); return }
+  }
   if (!overCanvas(target)) return
 
   if (ui.tool === 'curve') {
@@ -206,9 +307,9 @@ function onDown(e: PointerEvent) {
       // A stroke on a model.
       const st = models.strokeAt?.(ev.clientX, ev.clientY)
       if (st) { once(); ns.removeStroke(st.url, st.id); return }
-      // A curve on the canvas.
+      // A curve on the canvas (in 3D, as the 3D view draws it).
       const under = document.elementFromPoint(ev.clientX, ev.clientY)?.closest?.('[data-curve-id]')
-      const id = under?.getAttribute('data-curve-id')
+      const id = (in3d() ? models.pathAt?.(ev.clientX, ev.clientY)?.id : null) ?? under?.getAttribute('data-curve-id')
       if (id && ns.curves[id]) {
         once(); ns.deleteCurves([id])
         useNotesUi.setState(u => ({ selected: u.selected.filter(x => x !== id) }))
@@ -262,58 +363,112 @@ function surfaceStroke(e: PointerEvent, key: string, hit: NonNullable<ReturnType
   })
 }
 
-/** No tool: presses on curves select, move and reshape them. */
-function selectPress(e: PointerEvent, target: Element) {
+const hz = (h: CurveHandle | undefined) => h?.z ?? 0
+const mkH = (x: number, y: number, z: number): CurveHandle => Math.abs(z) > 1e-6 ? { x, y, z } : { x, y }
+
+/** Presses on curves select, move and reshape them. `hit`: what of a
+ *  curve is under the press. */
+function selectPress(e: PointerEvent, target: Element, hit: PathHit | null) {
   const ui = useNotesUi.getState()
-  const handle = target.closest<SVGElement>('[data-curve-handle]')
-  const anchor = target.closest<SVGElement>('[data-curve-anchor]')
-  const line = target.closest<SVGElement>('[data-curve-id]')
-  if (handle || anchor) {
+  const x0 = e.clientX, y0 = e.clientY
+  const moved = (ev: PointerEvent) => Math.hypot(ev.clientX - x0, ev.clientY - y0) >= 4
+  if (hit?.kind === 'handle') {
     claim(e); eatClick = true
-    const [id, i, side] = (handle ?? anchor)!.getAttribute(handle ? 'data-curve-handle' : 'data-curve-anchor')!.split(':')
-    const idx = +i
+    const { id, i, side } = hit
+    const c0 = useNotesStore.getState().curves[id]
+    const p0 = c0?.pts[i]
+    const h0 = p0 && (side === 'in' ? p0.hin : p0.hout)
+    if (!p0 || !h0) return
+    // Dragged across the level it is on; Shift lifts and lowers it.
+    const level = (p0.z ?? 0) + hz(h0)
+    const g0 = canvasPointAt(x0, y0, level)
     let started = false
     const ctrl = e.ctrlKey
     startDrag(ev => {
-      const q = canvasPointUnder(ev.clientX, ev.clientY)
       const c = useNotesStore.getState().curves[id]
-      if (!q || !c) return
-      if (!started) { started = true; checkpoint() }
+      if (!c || !c.pts[i]) return
+      if (!started) { if (!moved(ev)) return; started = true; checkpoint() }
       const pts = c.pts.slice()
-      const p = { ...pts[idx] }
-      if (handle) {
-        const h = { x: q.cx - p.x, y: q.cy - p.y }
-        const other = side === 'in' ? 'hout' : 'hin'
-        if (side === 'in') p.hin = h; else p.hout = h
-        // Kept smooth: the other handle turns with it (Ctrl breaks the point).
-        if (!ctrl && !ev.ctrlKey) {
-          const o = p[other]
-          const len = o ? Math.hypot(o.x, o.y) : Math.hypot(h.x, h.y)
-          const l = Math.hypot(h.x, h.y) || 1
-          p[other] = { x: -h.x / l * len, y: -h.y / l * len }
-        }
+      const p = { ...pts[i] }
+      let h: CurveHandle
+      if (ev.shiftKey && in3d()) {
+        h = mkH(h0.x, h0.y, hz(h0) + liftBy({ x: p0.x + h0.x, y: p0.y + h0.y, z: level }, ev.clientX - x0, ev.clientY - y0))
       } else {
-        p.x = q.cx; p.y = q.cy
+        const q = canvasPointAt(ev.clientX, ev.clientY, level)
+        if (!q || !g0) return
+        h = mkH(h0.x + q.cx - g0.cx, h0.y + q.cy - g0.cy, hz(h0))
       }
-      pts[idx] = p
+      const other = side === 'in' ? 'hout' : 'hin'
+      if (side === 'in') p.hin = h; else p.hout = h
+      // Ctrl breaks the point: from then on each handle is its own.
+      if (ctrl || ev.ctrlKey) p.t = 'broken'
+      // Kept in one line: the other handle turns with it, keeping its length.
+      if (p.t !== 'broken') {
+        const o = p[other]
+        const l = Math.hypot(h.x, h.y, hz(h)) || 1
+        const len = o ? Math.hypot(o.x, o.y, hz(o)) : l
+        p[other] = mkH(-h.x / l * len, -h.y / l * len, -hz(h) / l * len)
+      }
+      pts[i] = p
       useNotesStore.getState().updateCurve(id, { pts })
     }, () => {})
     return
   }
-  if (line) {
+  if (hit?.kind === 'point') {
     claim(e); eatClick = true
-    const id = line.getAttribute('data-curve-id')!
+    const { id, i } = hit
+    const key = ptKey(id, i)
+    const was = ui.points.includes(key)
+    // Shift adds it (and, already in, takes it out when let go unmoved);
+    // without, it is the one selected, unless it is one of several, which
+    // then all move with it.
+    if (e.shiftKey) { if (!was) selectPoint(id, i, true) }
+    else if (!was) selectPoint(id, i, false)
+    const grabbed = useNotesStore.getState().curves[id]?.pts[i]
+    if (!grabbed) return
+    const level = grabbed.z ?? 0
+    const g0 = canvasPointAt(x0, y0, level)
+    const held = holdPoints(pickedPoints())
+    let started = false
+    startDrag(ev => {
+      if (!held) return
+      if (!started) { if (!moved(ev)) return; started = true; checkpoint() }
+      if (ev.shiftKey && in3d()) {
+        moveHeld(held, 0, 0, liftBy({ x: grabbed.x, y: grabbed.y, z: level }, ev.clientX - x0, ev.clientY - y0))
+        return
+      }
+      const q = canvasPointAt(ev.clientX, ev.clientY, level)
+      if (q && g0) moveHeld(held, q.cx - g0.cx, q.cy - g0.cy, 0)
+    }, () => {
+      if (started) return
+      // The Curve tool on an end point: carry on drawing from it.
+      if (useNotesUi.getState().tool === 'curve' && resumeFrom(id, i)) return
+      if (e.shiftKey) { if (was) selectPoint(id, i, true) }
+      else if (was) selectPoint(id, i, false)
+    })
+    return
+  }
+  if (hit?.kind === 'line') {
+    claim(e); eatClick = true
+    const id = hit.id
     const sel = e.shiftKey
       ? (ui.selected.includes(id) ? ui.selected.filter(x => x !== id) : [...ui.selected, id])
       : (ui.selected.includes(id) ? ui.selected : [id])
-    useNotesUi.setState({ selected: sel })
-    const p0 = canvasPointUnder(e.clientX, e.clientY)
+    useNotesUi.setState({ selected: sel, points: e.shiftKey ? ui.points : [] })
+    // Dragged across the level the line is at where it was grabbed.
+    const c0 = useNotesStore.getState().curves[id]
+    const s = c0 ? curveSamples(c0) : []
+    let level = 0, best = Infinity
+    for (const q of s) {
+      const d = Math.abs(q.seg + q.t - hit.seg - hit.t)
+      if (d < best) { best = d; level = q.z }
+    }
+    const p0 = canvasPointAt(x0, y0, level)
     if (!p0) return
     let last = p0, started = false
-    const x0 = e.clientX, y0 = e.clientY
     startDrag(ev => {
-      if (!started && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 4) return
-      const q = canvasPointUnder(ev.clientX, ev.clientY)
+      if (!started && !moved(ev)) return
+      const q = canvasPointAt(ev.clientX, ev.clientY, level)
       if (!q) return
       if (!started) { started = true; checkpoint() }
       useNotesStore.getState().moveCurves(useNotesUi.getState().selected, q.cx - last.cx, q.cy - last.cy)
@@ -322,12 +477,32 @@ function selectPress(e: PointerEvent, target: Element) {
     return
   }
   // Elsewhere on the canvas: the curves let go (the press goes on as usual).
-  if (ui.selected.length && overCanvas(target)) useNotesUi.setState({ selected: [] })
+  if (ui.selected.length && overCanvas(target)) useNotesUi.setState({ selected: [], points: [] })
+}
+
+/** The part of a curve the cursor is over in 3D lights up. */
+let hotCursor = false
+function hover3d(e: PointerEvent) {
+  const ui = useNotesUi.getState()
+  let hot: string | null = null, line = false
+  const target = e.target as Element | null
+  if (!e.buttons && in3d() && models.pathAt && target?.closest && overCanvas(target) && !useCurveDraft.getState().curve
+    && (!ui.tool || ui.selected.length) && !models.gizmoAt?.(e.clientX, e.clientY)) {
+    const h = models.pathAt(e.clientX, e.clientY, ui.tool ? new Set(ui.selected) : undefined)
+    if (h?.kind === 'point') hot = `p:${h.id}:${h.i}`
+    else if (h?.kind === 'handle') hot = `h:${h.id}:${h.i}:${h.side}`
+    else if (h && !ui.tool) line = true
+  }
+  if (usePathHot.getState().hot !== hot) usePathHot.setState({ hot })
+  const want = !!hot || line
+  if (want || hotCursor) document.documentElement.style.cursor = hot ? 'move' : line ? 'pointer' : ''
+  hotCursor = want
 }
 
 function onMove(e: PointerEvent) {
   if (!e.isTrusted) return
   if (drag) { claim(e); drag.move(e); return }
+  hover3d(e)
   if (useNotesUi.getState().tool === 'curve' && useCurveDraft.getState().curve) {
     const p = overCanvas(e.target) ? canvasPointUnder(e.clientX, e.clientY) : null
     useCurveDraft.setState({ hover: p && { x: p.cx, y: p.cy } })
@@ -349,6 +524,19 @@ function onClick(e: MouseEvent) {
     commitDraft()
     return
   }
+  // Select: double-click a point for every point of its curve, the line
+  // for a new point there.
+  if (e.type === 'dblclick' && !useNotesUi.getState().tool && e.isTrusted) {
+    const target = e.target as Element | null
+    const hit = target?.closest ? hitAt(e, target) : null
+    if (hit?.kind === 'point') { claim(e); selectAllPoints(hit.id); return }
+    if (hit?.kind === 'line' && useNotesStore.getState().curves[hit.id]?.kind === 'bezier') {
+      claim(e)
+      checkpoint()
+      insertPoint(hit.id, hit.seg, hit.t)
+      return
+    }
+  }
   if (eatClick) claim(e)
 }
 
@@ -365,6 +553,7 @@ function onKey(e: KeyboardEvent) {
     if (draft) { claim(e); commitDraft(); return }
     if (ui.linking) { claim(e); useNotesUi.setState({ linking: null }); return }
     if (ui.tool) { claim(e); useNotesUi.setState({ tool: null }); return }
+    if (ui.points.length) { useNotesUi.setState({ points: [] }); return }
     if (ui.selected.length) { useNotesUi.setState({ selected: [] }); return }
     return
   }
@@ -372,8 +561,10 @@ function onKey(e: KeyboardEvent) {
   if ((e.key === 'Delete' || e.key === 'Backspace') && ui.selected.length) {
     claim(e)
     checkpoint()
+    // The selected points; with none selected, the curves themselves.
+    if (deletePickedPoints()) return
     useNotesStore.getState().deleteCurves(ui.selected)
-    useNotesUi.setState({ selected: [] })
+    useNotesUi.setState({ selected: [], points: [] })
   }
 }
 

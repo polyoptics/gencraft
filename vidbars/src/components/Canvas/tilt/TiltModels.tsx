@@ -20,7 +20,10 @@ import { selectStorylinesInBox, standingStories, storyWallOf } from '../Storylin
 import { create } from 'zustand'
 import { createTiltScene, trianglesOf, ART_MAX, type TiltTarget, type TiltFrameState, type ManipHit, type ManipPart, type TiltSlab, type TiltArt } from '../../../three/tiltScene'
 import type { PinSpot } from '../../../three/notesOverlay'
-import { useNotesStore } from '../../../store/notesStore'
+import { useNotesStore, useNotesUi } from '../../../store/notesStore'
+import { useCurveDraft, usePathHot } from '../../../store/pathLive'
+import { targetMiddle } from '../../../utils/pathEdit'
+import type { PathFrame, PathHit } from '../../../three/pathOverlay'
 import { PinLabels } from '../../Notes/PinLabels'
 import { sceneOf, sceneSpot, standsIn, dataKey } from '../../../utils/area3dScene'
 import { useUndoCoordinator } from '../../../store/undoCoordinator'
@@ -84,8 +87,13 @@ export const models: {
   cameraFrame: ((key: string) => ReturnType<ReturnType<typeof createTiltScene>['cameraFrame']>) | null
   /** Light up a manipulator part (hovered or held), or none. */
   manipHot: ((key: string | null, part: ManipPart | null) => void) | null
+  /** What of a curve is under a point in 3D: a point's cube, a tangent
+   *  handle or the line (three/pathOverlay). `only`: just these curves. */
+  pathAt: ((clientX: number, clientY: number, only?: Set<string>) => PathHit | null) | null
+  /** Where a point of the canvas (canvas units, z up) is drawn in 3D. */
+  pathPx: ((p: { x: number; y: number; z: number }) => { x: number; y: number } | null) | null
   root: HTMLElement | null
-} = { gizmoAt: null, manipHot: null, labelAt: null, strokeAt: null, modelSize: null, pick: null, pickZ: null, info: null, spin: null, letGo: null, hovered: null, at: null, surface: null, pinSpots: null, screenBox: null, floatSpot: null, pivotOf: null, aimAt: null, cameraFrame: null, root: null }
+} = { pathAt: null, pathPx: null, gizmoAt: null, manipHot: null, labelAt: null, strokeAt: null, modelSize: null, pick: null, pickZ: null, info: null, spin: null, letGo: null, hovered: null, at: null, surface: null, pinSpots: null, screenBox: null, floatSpot: null, pivotOf: null, aimAt: null, cameraFrame: null, root: null }
 /** A pick that lights up under the cursor: a model or a person, not
  *  furniture. */
 export const modelKey = (k: string | null | undefined) => (k && !k.startsWith('deco|') ? k : null)
@@ -180,6 +188,34 @@ const frameState = (): TiltFrameState => {
     lock: ts.lock3d || !!through,
     lensFor: key => key.startsWith('mini:') ? miniLook.get(key)?.lens : lensOf[dataKey(key)],
     through,
+    paths: live3d() ? pathFrame() : undefined,
+  }
+}
+
+/** Bumped whenever the curves, what is selected of them, the one being
+ *  drawn or the part under the cursor changes: the 3D view draws again. */
+let pathSig = 0
+for (const st of [useNotesStore, useNotesUi, useCurveDraft, usePathHot]) st.subscribe(() => { pathSig++ })
+
+/** The canvas's curves for the 3D view (three/pathOverlay): the bezier
+ *  ones, with the one being drawn (run on to the cursor). */
+function pathFrame(): PathFrame {
+  const ui = useNotesUi.getState()
+  const { pan, zoom } = useCanvasStore.getState()
+  const curves = Object.values(notesNow.curves).filter(c => c.kind === 'bezier')
+  const { curve: draft, hover } = useCurveDraft.getState()
+  const selected = new Set(ui.selected)
+  if (draft && draft.kind === 'bezier') {
+    curves.push(hover && draft.pts.length ? { ...draft, closed: false, pts: [...draft.pts, hover] } : draft)
+    selected.add(draft.id)
+  }
+  const W = models.root?.clientWidth ?? 0, H = models.root?.clientHeight ?? 0
+  return {
+    curves, selected, points: new Set(ui.points), zoom,
+    ox: pan.x - W / 2, oy: pan.y - H / 2,
+    hot: usePathHot.getState().hot,
+    gizmo: draft ? null : targetMiddle(),
+    sig: pathSig,
   }
 }
 
@@ -215,6 +251,8 @@ function frameSig(st: TiltFrameState, W: number, H: number): string {
     b(sl.cap); n(sl.ring); n(sl.rim?.w); n(sl.rim?.h); b(sl.pop); b(sl.loft); str(sl.deco); b(sl.nopick)
     str(sl.finish); n(sl.bevel); n(sl.seam)
   }
+  str(st.manip?.mode); str(st.manip?.plane); b(st.manip?.local)
+  n(st.paths?.sig); n(st.paths?.zoom); n(st.paths?.ox); n(st.paths?.oy); n(st.paths?.gizmo?.x); n(st.paths?.gizmo?.y); n(st.paths?.gizmo?.z)
   n(st.art.length)
   for (const a of st.art) { n(a.u); n(a.v); n(a.w); n(a.h); n(a.z); n(a.hinge?.v); n(a.hinge?.z); n(a.hinge?.a) }
   return `${h1}:${h2}`
@@ -378,6 +416,15 @@ export const TiltModels: React.FC = () => {
         return g && { ...g, c: { x: g.c.x + r.left, y: g.c.y + r.top } }
       }
       models.manipHot = v.manipHot
+      models.pathAt = (clientX, clientY, only) => {
+        const r = root.getBoundingClientRect()
+        return v.pathAt(clientX - r.left, clientY - r.top, only)
+      }
+      models.pathPx = p => {
+        const r = root.getBoundingClientRect()
+        const q = v.pathPx(p)
+        return q && { x: q.x + r.left, y: q.y + r.top }
+      }
       models.aimAt = (key, clientX, clientY, rise) => {
         const r = root.getBoundingClientRect()
         return v.aimAt(key, clientX - r.left, clientY - r.top, rise)
@@ -415,7 +462,7 @@ export const TiltModels: React.FC = () => {
       cancelAnimationFrame(raf)
       post.disconnect(); marker.remove()
       models.pick = null; models.pickZ = null; models.info = null; models.spin = null; models.letGo = null
-      models.surface = null; models.pinSpots = null; models.screenBox = null; models.floatSpot = null; models.pivotOf = null; models.labelAt = null; models.strokeAt = null; models.modelSize = null; models.gizmoAt = null; models.manipHot = null; models.aimAt = null; models.cameraFrame = null; models.root = null
+      models.surface = null; models.pinSpots = null; models.screenBox = null; models.floatSpot = null; models.pivotOf = null; models.labelAt = null; models.strokeAt = null; models.modelSize = null; models.gizmoAt = null; models.manipHot = null; models.pathAt = null; models.pathPx = null; models.aimAt = null; models.cameraFrame = null; models.root = null
       view?.dispose()
       canvas?.remove()
     }

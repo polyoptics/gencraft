@@ -1,16 +1,23 @@
 // CurveLayer — the canvas's curves and arrows (store/notesStore), drawn in
 // the canvas's tilt stage over the cards, in flat screen px (canvas x zoom
 // + pan, as the cards' overlay is): flat they are on the canvas, tilted
-// they lie on the ground with everything else. The same drawing in 2D and
-// 3D. The mouse is utils/notesTool.
+// a pen line lies on the ground with everything else, and a curve (the
+// Curve tool's) is drawn by the 3D view itself as a thing in the scene,
+// its points at their heights (three/pathOverlay): here it is that curve
+// seen from straight above. The mouse is utils/notesTool.
 
 import React from 'react'
 import { useNotesStore, useNotesUi, type Curve } from '../../store/notesStore'
 import { useCanvasStore } from '../../store/canvasStore'
-import { useCurveDraft } from '../../utils/notesTool'
+import { useCurveDraft } from '../../store/pathLive'
+import { useTiltStore, isTilted } from '../../store/tiltStore'
+import { useManip } from '../../store/manipStore'
+import { ptKey } from '../../utils/pathEdit'
 import { curvePath, arrowHeads } from '../../utils/curveGeom'
 
 const SEL = 'rgba(120,180,255,0.95)'
+/** A selected point (as its cube in 3D). */
+const PICKED = '#ffe14a'
 
 const CurveShape: React.FC<{ c: Curve; zoom: number; hit: boolean; selected: boolean }> = React.memo(({ c, zoom, hit, selected }) => {
   const d = curvePath(c)
@@ -31,9 +38,10 @@ const CurveShape: React.FC<{ c: Curve; zoom: number; hit: boolean; selected: boo
   )
 })
 
-/** A selected bezier's points and handles, to drag (a smooth one has
- *  points only: the line finds its own way through them). */
-const Handles: React.FC<{ c: Curve; zoom: number }> = ({ c, zoom }) => {
+/** A selected bezier's points and handles, to drag. A point has handles
+ *  to show when they are its own: on a curve set by hand, or broken off
+ *  on a smooth one (the line finds the others itself); a corner has none. */
+const Handles: React.FC<{ c: Curve; zoom: number; points: string[] }> = ({ c, zoom, points }) => {
   if (c.kind !== 'bezier') return null
   const r = 5 / zoom, hr = 3.8 / zoom, sw = 1.4 / zoom
   return (
@@ -42,7 +50,7 @@ const Handles: React.FC<{ c: Curve; zoom: number }> = ({ c, zoom }) => {
         <g key={i}>
           {(['in', 'out'] as const).map(side => {
             const h = side === 'in' ? p.hin : p.hout
-            if (c.smooth || !h || (!h.x && !h.y)) return null
+            if (p.t === 'corner' || (c.smooth && p.t !== 'broken') || !h || (!h.x && !h.y)) return null
             return (
               <g key={side}>
                 <line x1={p.x} y1={p.y} x2={p.x + h.x} y2={p.y + h.y} stroke={SEL} strokeWidth={sw} />
@@ -51,7 +59,7 @@ const Handles: React.FC<{ c: Curve; zoom: number }> = ({ c, zoom }) => {
               </g>
             )
           })}
-          <rect x={p.x - r} y={p.y - r} width={r * 2} height={r * 2} fill={SEL} stroke="#0d1020" strokeWidth={sw}
+          <rect x={p.x - r} y={p.y - r} width={r * 2} height={r * 2} fill={points.includes(ptKey(c.id, i)) ? PICKED : SEL} stroke="#0d1020" strokeWidth={sw}
             data-curve-anchor={`${c.id}:${i}`} style={{ pointerEvents: 'all', cursor: 'move' }} />
         </g>
       ))}
@@ -65,9 +73,15 @@ export const CurveLayer: React.FC = () => {
   const zoom = useCanvasStore(s => s.zoom)
   const tool = useNotesUi(s => s.tool)
   const selected = useNotesUi(s => s.selected)
-  const draft = useCurveDraft(s => s.curve)
+  const points = useNotesUi(s => s.points)
+  // In 3D the curves are the 3D view's to draw; the pen lines stay here.
+  const tilted = useTiltStore(s => isTilted(s))
+  const through = useManip(s => s.through)
+  const in3d = tilted || !!through
+  const draftNow = useCurveDraft(s => s.curve)
+  const draft = in3d && draftNow?.kind === 'bezier' ? null : draftNow
   const hover = useCurveDraft(s => s.hover)
-  const list = Object.values(curves)
+  const list = Object.values(curves).filter(c => !in3d || c.kind !== 'bezier')
   // With a tool in the hand, presses go to the tool, not to the curves.
   const hit = !tool || tool === 'erase'
   // The next segment, to the cursor, while drawing.
@@ -88,7 +102,7 @@ export const CurveLayer: React.FC = () => {
       <g transform={`translate(${pan.x} ${pan.y}) scale(${zoom})`}>
         {list.map(c => <CurveShape key={c.id} c={c} zoom={zoom} hit={hit} selected={selected.includes(c.id)} />)}
         {/* Points drag with any tool in the hand, except mid-drawing. */}
-        {!draft && list.filter(c => selected.includes(c.id)).map(c => <Handles key={`h${c.id}`} c={c} zoom={zoom} />)}
+        {!draft && list.filter(c => selected.includes(c.id)).map(c => <Handles key={`h${c.id}`} c={c} zoom={zoom} points={points} />)}
         {draft && (
           <g opacity={0.95}>
             <CurveShape c={draft} zoom={zoom} hit={false} selected={false} />

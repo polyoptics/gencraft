@@ -16,9 +16,17 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { createDebouncedIDBStorage } from '../utils/debouncedIDBStorage'
 
-/** One anchor of a curve, canvas units. `hin`/`hout` are its bezier
- *  handles, relative to the anchor; absent = a sharp corner. */
-export interface CurvePoint { x: number; y: number; hin?: { x: number; y: number }; hout?: { x: number; y: number } }
+/** A bezier handle, relative to its anchor (canvas units; `z` up). */
+export interface CurveHandle { x: number; y: number; z?: number }
+
+/** One anchor of a curve, canvas units. `z` is its height off the canvas
+ *  (Brian 2026-11-12: a path's points move up and down in 3D; flat, a
+ *  curve is seen from straight above). `hin`/`hout` are its bezier
+ *  handles, relative to the anchor; absent = a sharp corner. `t` is how
+ *  its tangents behave: absent, the two handles stay in one line (on a
+ *  smooth curve, the line finds them itself); 'broken', each handle is
+ *  its own, set by hand; 'corner', no handles: the line turns sharply. */
+export interface CurvePoint { x: number; y: number; z?: number; hin?: CurveHandle; hout?: CurveHandle; t?: 'broken' | 'corner' }
 
 export interface Curve {
   id: string
@@ -206,6 +214,8 @@ interface NotesUi {
   smooth: boolean
   /** Selected curves. */
   selected: string[]
+  /** Selected points of curves: `${curve id}:${index}` (utils/pathEdit). */
+  points: string[]
   /** A pin waiting for a card to be clicked, to link to it. */
   linking: { url: string; pinId: string } | null
   /** The pin being looked at: its label lit, its card shown beside it on
@@ -228,6 +238,7 @@ export const useNotesUi = create<NotesUi>(() => ({
   arrowEnd: saved.arrowEnd ?? true,
   smooth: saved.smooth ?? false,
   selected: [],
+  points: [],
   linking: null,
   focus: null,
 }))
