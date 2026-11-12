@@ -428,6 +428,11 @@ export interface CameraLens {
    *  focused, it got massive). Drawing only: what it sees is the same.
    *  Absent: all the way. */
   view?: number
+  /** Its target shown in the 3D view: the yellow ball on its focal point
+   *  (dragged to aim it) and the line out to it (Brian 2026-11-12: an
+   *  on/off for the selected camera). Off hides them only; it still looks
+   *  and focuses there. Absent: shown. */
+  target?: boolean
 }
 export const CAMERA_LENS: CameraLens = { mm: 35, aspect: 16 / 9, focus: 4 }
 

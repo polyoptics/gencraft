@@ -524,7 +524,7 @@ function makeRig(): CamRig {
 const halfFrame = (l: CameraLens, f: number) => { const hw = f * 18 / l.mm; return { hw, hh: hw / l.aspect } }
 /** Lay a camera's lines out for lens `l`, its lens at `a` (orient space). */
 function layRig(r: CamRig, l: CameraLens, a: THREE.Vector3) {
-  const sig = `${l.mm}|${l.aspect}|${l.focus}|${l.view ?? 1}|${a.x}|${a.y}|${a.z}`
+  const sig = `${l.mm}|${l.aspect}|${l.focus}|${l.view ?? 1}|${l.target === false ? 0 : 1}|${a.x}|${a.y}|${a.z}`
   if (sig === r.sig) return
   r.sig = sig
   r.lens.copy(a)
@@ -542,9 +542,14 @@ function layRig(r: CamRig, l: CameraLens, a: THREE.Vector3) {
   // Its roof: which way is up.
   seg(-hw * 0.35, hh * 1.06, f, 0, hh * 1.45, f); seg(0, hh * 1.45, f, hw * 0.35, hh * 1.06, f); seg(-hw * 0.35, hh * 1.06, f, hw * 0.35, hh * 1.06, f)
   // The line it looks along, and a cross on the focal point.
-  seg(0, 0, 0, 0, 0, focus)
-  const x = Math.min(hw, hh) * 0.25
-  seg(-x, 0, focus, x, 0, focus); seg(0, -x, focus, 0, x, focus)
+  // (Its target switched off: none of that, nor the ball.)
+  const target = l.target !== false
+  if (target) {
+    seg(0, 0, 0, 0, 0, focus)
+    const x = Math.min(hw, hh) * 0.25
+    seg(-x, 0, focus, x, 0, focus); seg(0, -x, focus, 0, x, focus)
+  }
+  r.focal.visible = target
   // (spare segments collapse onto the lens)
   while (i < RIG_SEGS * 2) P.setXYZ(i++, a.x, a.y, a.z)
   P.needsUpdate = true
@@ -1853,7 +1858,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
         rig.focal.getWorldPosition(v).project(camera)
         f.x = (v.x + 1) / 2 * lastW; f.y = (1 - v.y) / 2 * lastH
         const fd = Math.hypot(x - f.x, y - f.y)
-        if (v.z < 1 && fd < 11) take({ key, part: 'f', c: { x: f.x, y: f.y } }, fd, 9)
+        if (rig.focal.visible && v.z < 1 && fd < 11) take({ key, part: 'f', c: { x: f.x, y: f.y } }, fd, 9)
       }
       const along = (A: THREE.Vector3, from: number, to: number) => segD(px(A.x * from, A.y * from, A.z * from), px(A.x * to, A.y * to, A.z * to))
       if (g.mode === 'move') {

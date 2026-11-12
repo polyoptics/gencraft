@@ -103,10 +103,14 @@ export const LensChips: React.FC<{ k: string }> = ({ k }) => {
 export const CameraTools: React.FC = () => {
   const k = useSelectedCamera()
   const through = useManip(s => s.through)
+  const target = useModelScaleStore(s => (k ? s.lensOf[dataKey(k)]?.target : undefined)) !== false
   if (!k) return null
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
       <LensChips k={k} />
+      <button style={{ ...chip(target), padding: '5px 0', fontFamily: 'inherit', fontSize: 12 }} aria-pressed={target}
+        onClick={() => setLens(k, { target: !target })}
+        title="Target: on or off. The yellow ball the camera looks at, and the line out to it, in the 3D view. Off only hides them: the camera looks where it did">Target</button>
       <button style={{ ...chip(through === k), padding: '5px 0', fontFamily: 'inherit', fontSize: 12 }} aria-pressed={through === k}
         onClick={() => useManip.getState().set({ through: through === k ? null : k })}
         title="See the 3D world through this camera (Esc comes back)">Look through</button>
