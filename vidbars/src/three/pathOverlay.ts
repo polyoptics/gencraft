@@ -330,7 +330,9 @@ export function createPathOverlay() {
         body(keep(new THREE.BoxGeometry(size, size, size)), m => {
           m.position.set(e.tip.x, e.tip.y, e.tip.z)
           // Square on to the line, turned with the path's twist there.
-          m.quaternion.copy(frameQuat(frameOf(e.dir, e.tip.tw)))
+          // (Set to the way the path runs, not the way its start points
+          // out: or the start's cube would roll backwards with the twist.)
+          m.quaternion.copy(frameQuat(frameOf(e.end ? e.dir : { x: -e.dir.x, y: -e.dir.y, z: -e.dir.z }, e.tip.tw)))
         }, endMats)
       } else {
         body(keep(new THREE.SphereGeometry(size / 2, 22, 14)), m => m.position.set(e.tip.x, e.tip.y, e.tip.z), endMats)
