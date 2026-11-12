@@ -7,7 +7,7 @@ import { useCanvasStore, groupBounds, MIN_ZOOM, MAX_ZOOM } from '../../../store/
 import { useFreeNodeStore } from '../../../store/freeNodeStore'
 import { useBoardsStore } from '../../../store/boardsStore'
 import { models, modelKey } from './TiltModels'
-import { sceneSpot } from '../../../utils/area3dScene'
+import { sceneSpot, standsIn } from '../../../utils/area3dScene'
 
 /** Degrees of tilt / turn per pixel of Alt+drag. */
 const DRAG_DEG = 0.25
@@ -17,7 +17,7 @@ const TURN_SLOP = 14
  *  for that visit (see pickCamera). */
 const LOCK_PX = 8
 /** How far a model turns per px of Alt-drag on it (radians). */
-const SPIN_RAD = 0.6 * Math.PI / 180
+export const SPIN_RAD = 0.6 * Math.PI / 180
 
 export const hostOf = (el: Element | null) => el?.closest('[data-zoom-bar-host]') as HTMLElement | null
 
@@ -125,7 +125,9 @@ export function useAltTiltGesture() {
       // freely, as a trackball (Brian 2026-11-04); the camera stays put.
       const onView = !!target?.closest('[data-tilt-stage]') || target === document.querySelector('[data-tilt-stage="world"]')?.parentElement
       const spun = isTilted(useTiltStore.getState()) && onView ? modelKey(models.pick?.(e.clientX, e.clientY)) : null
-      if (spun && !spun.startsWith('person|') && models.spin) {
+      // Not one standing in a 3D set (Brian 2026-11-12): there Alt is the
+      // camera's alone, and a model is turned by its rotate handles.
+      if (spun && !spun.startsWith('person|') && !standsIn(spun) && models.spin) {
         const spin = models.spin
         let last = { x: e.clientX, y: e.clientY }
         const onMove = (ev: PointerEvent) => {
@@ -196,7 +198,11 @@ export function useAltTiltGesture() {
           glideTo(cFrom, cTo, W, H)
         }
       }
-      const onUp = () => {
+      const onUp = (ev: PointerEvent) => {
+        // The release is the camera's too: reaching the canvas, it took
+        // the selection off (and the handles with it) when the press was
+        // over bare ground, as it is under a model standing in a set.
+        ev.stopImmediatePropagation()
         window.removeEventListener('pointermove', onMove, true)
         window.removeEventListener('pointerup', onUp, true)
         // Locked into 3D it stays where it was let go (tiltStore lock3d).

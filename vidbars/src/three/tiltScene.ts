@@ -397,20 +397,23 @@ export const ART_MAX = 1000
 
 export type ManipPart = 'mx' | 'my' | 'mz' | 'mc' | 'rx' | 'ry' | 'rz' | 'rc' | 'sx' | 'sy' | 'sz' | 's' | 'f'
 export type ManipV3 = [number, number, number]
-export interface ManipSettings { mode: 'move' | 'rotate' | 'scale'; local: boolean; plane: 'cam' | 'x' | 'y' | 'z' }
+export interface ManipSettings { mode: 'move' | 'rotate' | 'scale'; local: boolean; plane: 'cam' | 'x' | 'y' | 'z'; /** Times its usual size on screen. */ size?: number }
 /** What a press on the manipulator holds: its part, the model's middle on
  *  screen (px), and per part, in scene axes (x across the canvas, y up,
  *  z down the canvas):
  *   - move: the directions it moves along, each with its screen px per
  *     ground px (`axes`);
  *   - rotate: the axis it turns about, and which way it turns for a
- *     clockwise drag on screen (`axis`, `sign`);
+ *     clockwise drag on screen (`axis`, `sign`); a ring held by a grab
+ *     zone also gives the way along the ring there on screen for a
+ *     positive turn, unit length (`tan`), and its radius in px (`rpx`):
+ *     a drag along `tan` by `rpx` turns it one radian;
  *   - scale: which of the model's own axes it stretches (`k`) and that
  *     axis's direction on screen, unit length (`dir`). */
 export interface ManipHit {
   key: string; part: ManipPart; c: { x: number; y: number }
   axes?: { v: ManipV3; dir: { x: number; y: number } }[]
-  axis?: ManipV3; sign?: number
+  axis?: ManipV3; sign?: number; tan?: { x: number; y: number }; rpx?: number
   k?: 0 | 1 | 2; dir?: { x: number; y: number }
 }
 interface Manip {
@@ -437,8 +440,8 @@ const MANIP_MATS = { x: manipMat(0xff4d5e), y: manipMat(0x6fe36f), z: manipMat(0
 // fades as it goes away, so you can tell which part of the circle you
 // are on. Each ring is two meshes, back under front, each drawing only
 // its own half.
-const ringMat = (color: number, front: boolean) => {
-  const m = manipMat(color)
+const ringMat = (color: number, front: boolean, opacity = 1) => {
+  const m = manipMat(color, opacity)
   m.onBeforeCompile = sh => {
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\nvarying float vFace;')
@@ -452,15 +455,28 @@ const ringMat = (color: number, front: boolean) => {
   m.customProgramCacheKey = () => front ? 'ringFront' : 'ringBack'
   return m
 }
+// Three whole rings crossing over the model were hard to tell apart, and
+// a press near a crossing took the wrong one (Brian 2026-11-12). So each
+// ring is a thin dim line, there to show the circle, and is held only by
+// its grab zones: short thick arcs half way between its crossings with
+// the other two rings, on the side facing you.
+const RING_DIM = 0.38
 const RING_MATS = {
-  x: [ringMat(0xff4d5e, false), ringMat(0xff4d5e, true)], y: [ringMat(0x6fe36f, false), ringMat(0x6fe36f, true)],
-  z: [ringMat(0x4f9dff, false), ringMat(0x4f9dff, true)], hot: [ringMat(0xffe14a, false), ringMat(0xffe14a, true)],
+  x: [ringMat(0xff4d5e, false, RING_DIM), ringMat(0xff4d5e, true, RING_DIM)], y: [ringMat(0x6fe36f, false, RING_DIM), ringMat(0x6fe36f, true, RING_DIM)],
+  z: [ringMat(0x4f9dff, false, RING_DIM), ringMat(0x4f9dff, true, RING_DIM)], hot: [ringMat(0xffe14a, false, 0.6), ringMat(0xffe14a, true, 0.6)],
 }
+const ZONE_MATS = { x: ringMat(0xff4d5e, true), y: ringMat(0x6fe36f, true), z: ringMat(0x4f9dff, true), hot: ringMat(0xffe14a, true) }
+/** A ring's radius, and half a grab zone's reach round it (radians). */
+const RING_R = 0.62, ZONE_HALF = 24 * Math.PI / 180
+/** Where a ring's four grab zones sit: half way between its crossings. */
+const ZONE_MIDS = [0, 1, 2, 3].map(i => Math.PI / 4 + i * Math.PI / 2)
 const M_SHAFT = new THREE.CylinderGeometry(0.014, 0.014, 0.7, 8).translate(0, 0.5, 0)
 const M_HEAD = new THREE.ConeGeometry(0.055, 0.17, 16).translate(0, 0.93, 0)
 const M_SLINE = new THREE.CylinderGeometry(0.012, 0.012, 0.72, 8).translate(0, 0.51, 0)
 const M_SBOX = new THREE.BoxGeometry(0.1, 0.1, 0.1).translate(0, 0.92, 0)
-const M_RING = new THREE.TorusGeometry(0.62, 0.011, 6, 96)
+const M_RING = new THREE.TorusGeometry(RING_R, 0.006, 6, 96)
+/** A grab zone: an arc of the ring, from angle 0. */
+const M_ZONE = new THREE.TorusGeometry(RING_R, 0.021, 8, 14, ZONE_HALF * 2)
 const M_BOX = new THREE.BoxGeometry(0.13, 0.13, 0.13)
 const M_SQUARE = new THREE.PlaneGeometry(0.17, 0.17)
 const OUTER_R = 0.84
@@ -578,6 +594,16 @@ function makeManip(): Manip {
       if (a === 'x') ring.rotation.y = Math.PI / 2
       else if (a === 'y') ring.rotation.x = Math.PI / 2
       add(`r${a}`, ring, 1000 + front).userData.hot = RING_MATS.hot[front]
+    }
+    for (const mid of ZONE_MIDS) {
+      // An arc inside a holder turned as its ring is.
+      const hold = new THREE.Group()
+      if (a === 'x') hold.rotation.y = Math.PI / 2
+      else if (a === 'y') hold.rotation.x = Math.PI / 2
+      group.add(hold)
+      const zone = add(`r${a}`, new THREE.Mesh(M_ZONE, ZONE_MATS[a]), 1002, hold)
+      zone.rotation.z = mid - ZONE_HALF
+      zone.userData.hot = ZONE_MATS.hot
     }
   }
   const square = add('mc', new THREE.Mesh(M_SQUARE, MANIP_MATS.c), 1003)
@@ -1592,11 +1618,13 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       scene.overrideMaterial = null
       renderer.render(quadScene, quadCam)
     }
-    if (!looking) renderManips()
+    if (!looking) renderManips(st.manip?.size ?? 1)
   }
 
   /** The manipulators, sized to MANIP_PX on screen, over everything. */
-  function renderManips() {
+  let manipPx = MANIP_PX
+  function renderManips(size: number) {
+    manipPx = MANIP_PX * size
     let any = false
     for (const { g } of gizmos()) if (g.group.visible) any = true
     if (!any || !lastW) return
@@ -1615,7 +1643,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       p1.copy(p0).add(right)
       const a = p0.clone().project(camera), b = p1.project(camera)
       const pxPerWorld = Math.hypot((b.x - a.x) / 2 * lastW, (b.y - a.y) / 2 * lastH) || 1
-      g.group.scale.setScalar(MANIP_PX / (pxPerWorld * gk))
+      g.group.scale.setScalar(manipPx / (pxPerWorld * gk))
       g.group.updateMatrixWorld(true)
       // The middle square on the camera's plane, and the outer ring: face
       // the camera.
@@ -1807,6 +1835,8 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       const sceneV = (a: THREE.Vector3): ManipV3 => { const w = a.clone().applyQuaternion(lq); return [w.x, w.y, w.z] }
       const toLocal = (wd: THREE.Vector3) => wd.applyQuaternion(g.group.getWorldQuaternion(new THREE.Quaternion()).invert())
       const dc = Math.hypot(x - c.x, y - c.y)
+      const centreW = g.group.getWorldPosition(new THREE.Vector3())
+      const toEye = camera.getWorldPosition(new THREE.Vector3()).sub(centreW)
       // A camera's focal point: drag it to aim the camera (any mode).
       if (rig?.group.visible) {
         const f = px(0, 0, 0)
@@ -1833,22 +1863,39 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
         for (const a of ['x', 'y', 'z'] as const) {
           const [bn, cn] = RING_BASIS[a]
           const B = AXES[bn], C = AXES[cn]
-          let prev: { x: number; y: number } | null = null
-          let rd = Infinity
-          for (let i = 0; i <= 64; i++) {
-            const t = i / 64 * Math.PI * 2, cs = Math.cos(t) * 0.62, sn = Math.sin(t) * 0.62
-            const q = px(B.x * cs + C.x * sn, B.y * cs + C.y * sn, B.z * cs + C.z * sn)
-            if (prev) rd = Math.min(rd, segD(prev, q))
-            prev = q
+          // Held by its grab zones only, where they face the camera.
+          const at = (t: number, r = RING_R) => { const cs = Math.cos(t) * r, sn = Math.sin(t) * r; return px(B.x * cs + C.x * sn, B.y * cs + C.y * sn, B.z * cs + C.z * sn) }
+          const front = (t: number) => {
+            const cs = Math.cos(t), sn = Math.sin(t)
+            g.group.localToWorld(v.set(B.x * cs + C.x * sn, B.y * cs + C.y * sn, B.z * cs + C.z * sn)).sub(centreW)
+            return v.dot(toEye) >= 0
           }
-          if (rd < 7) {
+          let rd = Infinity, rt = 0
+          for (const mid of ZONE_MIDS) {
+            let prev: { x: number; y: number } | null = null
+            for (let i = 0; i <= 8; i++) {
+              const t = mid - ZONE_HALF + i / 8 * ZONE_HALF * 2
+              const q = front(t) ? at(t) : null
+              if (prev && q) { const sd = segD(prev, q); if (sd < rd) { rd = sd; rt = t - ZONE_HALF / 8 } }
+              prev = q
+            }
+          }
+          if (rd < 9) {
             const b = axisPx(B), cc = axisPx(C)
-            take({ key, part: `r${a}`, c, axis: sceneV(AXES[a]), sign: b.x * cc.y - b.y * cc.x > 0 ? 1 : -1 }, rd, 0)
+            const sign = b.x * cc.y - b.y * cc.x > 0 ? 1 : -1
+            // The way along the ring there, for a positive turn, as seen.
+            // Where the ring runs straight at the camera it has none:
+            // round the middle then, the way it turns.
+            const p0 = at(rt - 0.02), p1 = at(rt + 0.02), pm = at(rt)
+            const tl = Math.hypot(p1.x - p0.x, p1.y - p0.y), rpx = RING_R * manipPx
+            const rl = Math.hypot(pm.x - c.x, pm.y - c.y) || 1
+            const tan = tl > 0.04 * rpx * 0.05 ? { x: (p1.x - p0.x) / tl, y: (p1.y - p0.y) / tl } : { x: -(pm.y - c.y) / rl * sign, y: (pm.x - c.x) / rl * sign }
+            take({ key, part: `r${a}`, c, axis: sceneV(AXES[a]), sign, tan, rpx }, rd, 0)
           }
         }
         // The outer ring: about the line to the camera. A clockwise drag
         // on screen turns it clockwise as seen.
-        const od = Math.abs(dc - OUTER_R * MANIP_PX)
+        const od = Math.abs(dc - OUTER_R * manipPx)
         if (od < 8) take({ key, part: 'rc', c, axis: sceneV(toLocal(new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 2)).normalize()), sign: -1 }, od, 0)
       } else {
         ;(['x', 'y', 'z'] as const).forEach((a, i) => {

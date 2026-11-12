@@ -8,7 +8,7 @@ import { useCanvasStore, MIN_ZOOM, MAX_ZOOM } from '../../../store/canvasStore'
 import { useFreeNodeStore } from '../../../store/freeNodeStore'
 import { useBoardsStore } from '../../../store/boardsStore'
 import { clientToCanvas } from '../../../utils/fx/createEffect'
-import { hostOf, viewCentre } from './altCamera'
+import { hostOf, viewCentre, SPIN_RAD } from './altCamera'
 import {
   grip, models, modelKey, restKeyOf, veiled, chained, filled, widened, consoleEase, decoPlanes, type Hinge, stood, hingeOf, lifted, liftOf, marqueeSelect, selectModel,
 } from './TiltModels'
@@ -335,6 +335,8 @@ export const TiltedView: React.FC = () => {
       | { kind: 'marquee'; x0: number; y0: number; x1: number; y1: number; add: boolean }
       | { kind: 'person'; url: string; unit0: number; y0: number }
       | { kind: 'model'; key: string; k0: number; y0: number; moved: boolean; inSet: boolean; solo?: boolean }
+      | { kind: 'turn'; key: string; last: { x: number; y: number }; x0: number; y0: number; moved: boolean }
+      | { kind: 'held' }
       | { kind: 'remap'; target: Element; pointerId: number; height: number; stood?: boolean; x0?: number; y0?: number; free?: boolean; tab?: { at: { x: number; y: number }; went?: boolean }; lay?: Map<string, string>; last?: { x: number; y: number }; wall?: Hinge }
     let g: Gesture | null = null
     /** A right press on furniture: its menu is its owner's (see onMenu). */
@@ -526,6 +528,15 @@ export const TiltedView: React.FC = () => {
           const ms0 = useModelScaleStore.getState(), dk0 = dataKey(key), inSet = standsIn(key)
           // In a scene card's section, that section's own size for it.
           const solo = soloSize(key)
+          // Standing in a 3D set (Brian 2026-11-12) a drag does not size
+          // it: its scale handles do. With the rotate handles out, a drag
+          // on the model itself turns it freely, and the turn is kept.
+          if (inSet && solo === null) {
+            g = useManip.getState().mode === 'rotate' && models.spin
+              ? { kind: 'turn', key, last: { x: e.clientX, y: e.clientY }, x0: e.clientX, y0: e.clientY, moved: false }
+              : { kind: 'held' }
+            return
+          }
           g = { kind: 'model', key: dk0, k0: solo ?? (inSet ? ms0.setSizeOf[dk0] ?? ms0.sizeOf[dk0] : ms0.sizeOf[dk0]) ?? 1, y0: e.clientY, moved: false, inSet, solo: solo !== null }
           return
         }
@@ -651,6 +662,7 @@ export const TiltedView: React.FC = () => {
           grip.handAt = null
         }
         if (g.kind === 'marquee') setBand(null)
+        if (g.kind === 'turn' && g.moved) models.letGo?.(g.key)
         g = null
         grip.carried = null
       }
@@ -668,6 +680,14 @@ export const TiltedView: React.FC = () => {
         // the model's units, means a smaller model in metres).
         const u = g.unit0 * Math.exp(-(e.clientY - g.y0) / 160)
         useModelScaleStore.getState().setUnitsPerMetre(g.url, u)
+        return
+      }
+      if (g.kind === 'held') return
+      if (g.kind === 'turn') {
+        if (!g.moved && Math.hypot(e.clientX - g.x0, e.clientY - g.y0) < 4) return
+        g.moved = true
+        models.spin?.(g.key, e.clientX - g.last.x, e.clientY - g.last.y, SPIN_RAD)
+        g.last = { x: e.clientX, y: e.clientY }
         return
       }
       if (g.kind === 'model') {
@@ -747,6 +767,7 @@ export const TiltedView: React.FC = () => {
         dblTo = zone && g.x0 !== undefined && Math.hypot(e.clientX - g.x0, e.clientY - g.y0!) < 4 && !zone.contains(real) ? zone : null
       }
       if (g.kind === 'marquee') { marqueeSelect(g, g.add || e.shiftKey); setBand(null) }
+      if (g.kind === 'turn' && g.moved) models.letGo?.(g.key)
       g = null
       grip.carried = null
     }
@@ -951,7 +972,7 @@ export const TiltedView: React.FC = () => {
         )}
         <span style={{ width: 1, height: 14, background: 'rgba(255,255,255,0.12)' }} />
         <button style={btn(manip.mode === 'move')} onClick={() => manip.set({ mode: 'move' })} title="Move handles on a selected model in a 3D set, or on a curve’s selected points (W). Ctrl-click an arrow to move on the plane across it; Ctrl-click the middle square for the camera's plane again">Move W</button>
-        <button style={btn(manip.mode === 'rotate')} onClick={() => manip.set({ mode: 'rotate' })} title="Rotate handles (E): a model, or a curve’s selected points about their middle. The dashed outer ring turns it on the camera's plane">Rotate E</button>
+        <button style={btn(manip.mode === 'rotate')} onClick={() => manip.set({ mode: 'rotate' })} title="Rotate handles (E): a model, or a curve’s selected points about their middle. Hold a ring by its lit arcs; drag the model itself to turn it freely. The dashed outer ring turns it on the camera's plane. + and - size the handles">Rotate E</button>
         <button style={btn(manip.mode === 'scale')} onClick={() => manip.set({ mode: 'scale' })} title="Scale handles (R): an axis box stretches along the model's own axis, the middle sizes it. On a curve’s selected points, they spread from their middle or draw in">Scale R</button>
         <button style={btn(manip.local)} onClick={() => manip.set({ local: !manip.local })} aria-pressed={manip.local} title="Handles on the model's own axes. Off, on the world's">Local</button>
         <span style={{ width: 1, height: 14, background: 'rgba(255,255,255,0.12)' }} />

@@ -256,7 +256,7 @@ function frameSig(st: TiltFrameState, W: number, H: number): string {
     b(sl.cap); n(sl.ring); n(sl.rim?.w); n(sl.rim?.h); b(sl.pop); b(sl.loft); str(sl.deco); b(sl.nopick)
     str(sl.finish); n(sl.bevel); n(sl.seam)
   }
-  str(st.manip?.mode); str(st.manip?.plane); b(st.manip?.local)
+  str(st.manip?.mode); str(st.manip?.plane); b(st.manip?.local); r(st.manip?.size)
   n(st.paths?.sig); n(st.paths?.zoom); n(st.paths?.ox); n(st.paths?.oy); n(st.paths?.gizmo?.x); n(st.paths?.gizmo?.y); n(st.paths?.gizmo?.z)
   n(st.art.length)
   for (const a of st.art) { n(a.u); n(a.v); n(a.w); n(a.h); n(a.z); n(a.hinge?.v); n(a.hinge?.z); n(a.hinge?.a) }

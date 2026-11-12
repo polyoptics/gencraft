@@ -3,8 +3,9 @@
 // move, E rotate, R scale (store/manipStore), on the world's axes or the
 // model's own. Move: an arrow along its axis (up lifts it), the middle
 // square on the camera's plane or, after a Ctrl-click on an arrow, on the
-// plane across that axis. Rotate: a ring about its axis, the outer ring on
-// the camera's plane. Scale: an axis box stretches, the middle sizes. All kept with the scene
+// plane across that axis. Rotate: a ring about its axis, held by its grab
+// zones (the lit arcs), the outer ring on the camera's plane; + and - size
+// the handles. Scale: an axis box stretches, the middle sizes. All kept with the scene
 // (tiltStore placeOf, poseOf, sizeOf) and undoable. Installed once when
 // this module loads, so a press on a handle reaches nothing else (as
 // utils/notesTool).
@@ -23,7 +24,7 @@ import { models } from '../components/Canvas/tilt/TiltModels'
 import { PATH_KEY, type ManipHit } from '../three/tiltScene'
 import { holdPoints, moveHeld, turnHeld, sizeHeld, type PointsHeld } from './pathEdit'
 import { placeNow, dataKey, sceneOf } from './area3dScene'
-import { useManip } from '../store/manipStore'
+import { useManip, MANIP_SIZE_STEP, MANIP_SIZE_MIN, MANIP_SIZE_MAX } from '../store/manipStore'
 
 type Q = [number, number, number, number]
 const mul = (a: Q, b: Q): Q => [
@@ -113,6 +114,20 @@ function moveVec(d: ManipHit, mx: number, my: number, k: number): number[] | nul
   return v
 }
 
+/** How far a rotate handle has turned what it holds (radians, about its
+ *  axis). A ring held by a grab zone turns with the drag along the ring
+ *  where it was taken, one radian per ring radius, so it is as steady
+ *  seen edge on as face on (Brian 2026-11-12: "very sensitive at a
+ *  shallow angle"); the outer ring turns about the middle. Shift: in 15°
+ *  steps. */
+function turnOf(d: NonNullable<typeof drag>, e: PointerEvent): number {
+  let th: number
+  if (d.tan && d.rpx) th = ((e.clientX - d.x0) * d.tan.x + (e.clientY - d.y0) * d.tan.y) / d.rpx
+  else th = Math.atan2(e.clientY - d.c.y, e.clientX - d.c.x) - d.a0
+  if (e.shiftKey) th = Math.round(th / (Math.PI / 12)) * (Math.PI / 12)
+  return d.tan && d.rpx ? th : th * (d.sign ?? 1)
+}
+
 function onMove(e: PointerEvent) {
   if (!drag) {
     // Over a handle: light it, and say so with the cursor.
@@ -147,9 +162,7 @@ function onMove(e: PointerEvent) {
       s[d.k!] = f
       sizeHeld(d.path, s[0], s[2], s[1])
     } else {
-      let th = Math.atan2(e.clientY - d.c.y, e.clientX - d.c.x) - d.a0
-      if (e.shiftKey) th = Math.round(th / (Math.PI / 12)) * (Math.PI / 12)
-      th *= d.sign ?? 1
+      const th = turnOf(d, e)
       // The canvas's axes are the scene's with two swapped: the turn runs
       // the other way round in them.
       turnHeld(d.path, [d.axis![0], d.axis![2], d.axis![1]], -th)
@@ -179,10 +192,7 @@ function onMove(e: PointerEvent) {
     ms.setStretch(d.dk, s)
   } else {
     const ax = d.axis!
-    let th = Math.atan2(e.clientY - d.c.y, e.clientX - d.c.x) - d.a0
-    // Shift: in 15° steps.
-    if (e.shiftKey) th = Math.round(th / (Math.PI / 12)) * (Math.PI / 12)
-    th *= d.sign ?? 1
+    const th = turnOf(d, e)
     const sn = Math.sin(th / 2)
     ms.setPose(d.dk, mul([ax[0] * sn, ax[1] * sn, ax[2] * sn, Math.cos(th / 2)], d.q0))
   }
@@ -190,7 +200,19 @@ function onMove(e: PointerEvent) {
 
 /** W move, E rotate, R scale, in the 3D view (not while typing). */
 function onKey(e: KeyboardEvent) {
-  if (e.ctrlKey || e.metaKey || e.altKey || e.repeat) return
+  if (e.ctrlKey || e.metaKey || e.altKey) return
+  // + and - size the handles (Brian 2026-11-12), held down too.
+  const step = e.code === 'Equal' || e.code === 'NumpadAdd' || e.key === '+' ? 1 : e.code === 'Minus' || e.code === 'NumpadSubtract' || e.key === '-' ? -1 : 0
+  if (step) {
+    if (!isTilted(useTiltStore.getState()) || useManip.getState().through) return
+    const t = e.target as HTMLElement | null
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return
+    e.preventDefault(); e.stopImmediatePropagation()
+    const m = useManip.getState()
+    m.set({ size: Math.min(MANIP_SIZE_MAX, Math.max(MANIP_SIZE_MIN, (m.size || 1) * MANIP_SIZE_STEP ** step)) })
+    return
+  }
+  if (e.repeat) return
   const mode = e.code === 'KeyW' ? 'move' : e.code === 'KeyE' ? 'rotate' : e.code === 'KeyR' ? 'scale' : null
   if (!mode || !isTilted(useTiltStore.getState())) return
   const t = e.target as HTMLElement | null

@@ -15,23 +15,30 @@ interface ManipStore {
   mode: ManipMode
   local: boolean
   plane: ManipPlane
+  /** How big the handles are drawn, times their usual size (the + and -
+   *  keys in the 3D view, Brian 2026-11-12). */
+  size: number
   /** Models stand up off cards out on the canvas in 3D (the 3D bar's
    *  Models toggle, Brian 2026-11-09). A 3D scene's models always do. */
   models: boolean
   /** Looking through this camera (a model key, Brian 2026-11-09): the
    *  full 3D world from it. Not kept: a reload is back on the canvas. */
   through: string | null
-  set: (p: Partial<Pick<ManipStore, 'mode' | 'local' | 'plane' | 'models' | 'through'>>) => void
+  set: (p: Partial<Pick<ManipStore, 'mode' | 'local' | 'plane' | 'size' | 'models' | 'through'>>) => void
 }
+
+/** The handles' size steps and ends (+ and -). */
+export const MANIP_SIZE_STEP = 1.15, MANIP_SIZE_MIN = 0.5, MANIP_SIZE_MAX = 3
 
 export const useManip = create<ManipStore>()(persist(set => ({
   mode: 'move',
   local: false,
   plane: 'cam',
+  size: 1,
   models: true,
   through: null,
   set: p => set(p),
 }), {
   name: 'vidbars.manip',
-  partialize: s => ({ mode: s.mode, local: s.local, plane: s.plane, models: s.models }),
+  partialize: s => ({ mode: s.mode, local: s.local, plane: s.plane, size: s.size, models: s.models }),
 }))
