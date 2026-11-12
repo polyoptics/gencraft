@@ -428,7 +428,7 @@ export function pointFrames(c: Curve): PathFrame3[] {
 }
 
 /** A straight bar from one place to another. */
-export type Bar = [P3, P3]
+export type Bar = [P3, P3, number?]   // (how many times as thick as the rest)
 const along = (p: P3, f: PathFrame3, a: number, b: number, c: number): P3 => ({
   x: p.x + f.d.x * a + f.side.x * b + f.up.x * c,
   y: p.y + f.d.y * a + f.side.y * b + f.up.y * c,
@@ -447,18 +447,31 @@ function cubeBars(p: P3, f: PathFrame3, m: number, out: Bar[]) {
   }
 }
 
+/** Something about the curve moves by itself: a pattern running along
+ *  it, a pulse down a road's chevrons, its points pinging. */
+export const curveRuns = (c: Curve) => (!!c.flow && !!patternOf(c)) || !!c.ping || (!!c.pulse && c.unit === 'hatch')
+
 /** A wire pattern's bars along a line (shownLine's), the pattern run
- *  `shift` along it: wire cubes each `on` across; or a band `on` wide,
- *  two rails with crossed lines between, lying flat to the path, so its
- *  twist shows. */
-export function unitBars(line: P3[], unit: 'hatch' | 'cube', on: number, period: number, shift: number): Bar[] {
+ *  `shift` along it: wire cubes or plus signs (a bar each way: along the
+ *  path, across it and up) each `on` across; or a road `on` wide, two
+ *  edges with chevrons between pointing the way the path runs, lying flat
+ *  to the path. All set to the path, so its twist shows. A pulsing road's
+ *  chevrons swell in turn (`time`, seconds). */
+export function unitBars(c: Pick<Curve, 'chev' | 'pulse'>, line: P3[], unit: 'hatch' | 'cube' | 'plus', on: number, period: number, shift: number, time = 0): Bar[] {
   const out: Bar[] = []
   if (line.length < 2) return out
+  const h = on / 2
   if (unit === 'cube') {
-    for (const s of alongEvery(line, period, (shift + on / 2) % period, 250)) cubeBars(s.p, frameOf(s.d, s.p.tw), on, out)
+    for (const s of alongEvery(line, period, (shift + h) % period, 250)) cubeBars(s.p, frameOf(s.d, s.p.tw), on, out)
     return out
   }
-  const h = on / 2
+  if (unit === 'plus') {
+    for (const s of alongEvery(line, period, (shift + h) % period, 400)) {
+      const f = frameOf(s.d, s.p.tw)
+      out.push([along(s.p, f, -h, 0, 0), along(s.p, f, h, 0, 0)], [along(s.p, f, 0, -h, 0), along(s.p, f, 0, h, 0)], [along(s.p, f, 0, 0, -h), along(s.p, f, 0, 0, h)])
+    }
+    return out
+  }
   const dirs = lineDirs(line)
   let pl: P3 | null = null, pr: P3 | null = null
   line.forEach((p, i) => {
@@ -467,12 +480,29 @@ export function unitBars(line: P3[], unit: 'hatch' | 'cube', on: number, period:
     if (pl && pr) { out.push([pl, l]); out.push([pr, r]) }
     pl = l; pr = r
   })
-  const spots = alongEvery(line, period, shift, 400).map(s => { const f = frameOf(s.d, s.p.tw); return [along(s.p, f, 0, h, 0), along(s.p, f, 0, -h, 0)] as const })
-  for (let k = 1; k < spots.length; k++) {
-    out.push([spots[k - 1][0], spots[k][1]])
-    out.push([spots[k - 1][1], spots[k][0]])
-  }
+  const depth = (c.chev ?? 0.5) * on
+  // The pulse: a swell that runs down the road, eight chevrons long.
+  const wave = period * 8
+  alongEvery(line, period, shift, 400).forEach((s, i) => {
+    const f = frameOf(s.d, s.p.tw)
+    const tip = along(s.p, f, depth, 0, 0)
+    const dist = shift + i * period
+    const k = c.pulse ? 1 + 2.2 * Math.pow(Math.max(0, Math.cos(2 * Math.PI * (dist / wave - time * 0.7))), 6) : undefined
+    const a: Bar = [along(s.p, f, 0, h * 0.82, 0), tip], b: Bar = [along(s.p, f, 0, -h * 0.82, 0), tip]
+    if (k !== undefined) { a.push(k); b.push(k) }
+    out.push(a, b)
+  })
   return out
+}
+
+/** A curve's points pinging one after another: for point `i` of `n` at
+ *  `time` (seconds), how far its ring has spread (0..1), or null between
+ *  its pings. */
+export const PING = { slot: 0.45, dur: 1 }
+export function pingAt(i: number, n: number, time: number): number | null {
+  const cycle = Math.max(n * PING.slot, PING.dur) + 0.5
+  const t = (((time - i * PING.slot) % cycle) + cycle) % cycle
+  return t < PING.dur ? t / PING.dur : null
 }
 
 /** The bars of a point's graphic (Curve.mark), `m` across at `p`, set to

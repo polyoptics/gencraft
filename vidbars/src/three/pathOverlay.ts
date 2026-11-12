@@ -15,7 +15,7 @@
 import * as THREE from 'three'
 import type { Curve } from '../store/notesStore'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
-import { curvePoints, nearestOnCurve, dashPieces, ownsHandles, shownLine, patternOf, flowShift, alongEvery, lineLength, markSize, bulgeR, markBar, ringTube, pointFrames, frameOf, unitBars, markBars, barOf, type P3, type Bar, type PathFrame3 } from '../utils/curveGeom'
+import { curvePoints, nearestOnCurve, dashPieces, ownsHandles, shownLine, patternOf, flowShift, alongEvery, lineLength, markSize, bulgeR, markBar, ringTube, pointFrames, frameOf, unitBars, markBars, barOf, pingAt, type P3, type Bar, type PathFrame3 } from '../utils/curveGeom'
 
 /** What the 3D view draws of the curves this frame. */
 export interface PathFrame {
@@ -44,7 +44,29 @@ export type PathHit =
   | { kind: 'handle'; id: string; i: number; side: 'in' | 'out' }
   | { kind: 'line'; id: string; seg: number; t: number }
 
-const CUBE_PX = 11, HANDLE_PX = 8
+const CUBE_PX = 11, HANDLE_PX = 8, LABEL_PX = 15
+
+/** A few words as a picture: light on a dark edge, so they read over anything. */
+function labelTexture(text: string, color: string): { tex: THREE.CanvasTexture; aspect: number } | null {
+  const cv = document.createElement('canvas')
+  const g = cv.getContext('2d')
+  if (!g) return null
+  const font = '600 44px system-ui, sans-serif'
+  g.font = font
+  const w = Math.ceil(g.measureText(text).width) + 24, h = 60
+  cv.width = w; cv.height = h
+  g.font = font
+  g.textBaseline = 'middle'
+  g.lineJoin = 'round'
+  g.lineWidth = 9
+  g.strokeStyle = 'rgba(8,10,20,0.9)'
+  g.strokeText(text, 12, h / 2 + 2)
+  g.fillStyle = color
+  g.fillText(text, 12, h / 2 + 2)
+  const tex = new THREE.CanvasTexture(cv)
+  tex.colorSpace = THREE.SRGBColorSpace
+  return { tex, aspect: w / h }
+}
 const COL = { picked: 0xffe14a, selected: 0xffffff, hot: 0x9fd0ff, handle: 0x78b4ff }
 
 /** A round line through `s` (canvas units), radius `r`. */
@@ -135,6 +157,7 @@ function barMatrix(b: Bar, t: number): THREE.Matrix4 {
   barA.set(b[0].x, b[0].y, b[0].z)
   barD.set(b[1].x - b[0].x, b[1].y - b[0].y, b[1].z - b[0].z)
   const l = barD.length()
+  t *= b[2] ?? 1
   if (l > 1e-9) barD.divideScalar(l); else barD.set(0, 1, 0)
   barQ.setFromUnitVectors(Y_UP, barD)
   barA.addScaledVector(barD, -t * 0.3)
@@ -154,6 +177,8 @@ interface Built {
   handles: (Knob & { i: number; side: 'in' | 'out' })[]
   /** Its pattern, run on to `time`: only when it runs. */
   flow?: (time: number) => void
+  /** The words by its points: a constant size on screen. */
+  labels: { sprite: THREE.Sprite; at: THREE.Vector3; aspect: number }[]
 }
 
 export function createPathOverlay() {
@@ -212,7 +237,8 @@ export function createPathOverlay() {
     const closed = !!c.closed && c.pts.length > 2
     const w = c.width
     const pat = patternOf(c)
-    let flow: Built['flow']
+    // What of it moves by itself, stepped on to the frame's time.
+    const ticks: ((time: number) => void)[] = []
     if (line.length > 1 && !pat) body(keep(tube(line, w / 2, closed)))
     else if (line.length > 1 && pat) {
       const period = pat.period
@@ -232,12 +258,12 @@ export function createPathOverlay() {
         }
         cut(flowShift(c, period, time))
         own.push({ dispose: () => geo?.dispose() } as unknown as THREE.BufferGeometry)
-        if (c.flow) flow = t => cut(flowShift(c, period, t))
-      } else if (pat.unit === 'hatch' || pat.unit === 'cube') {
-        // Wire cubes, or a flat band of crossed lines: bars set to the
-        // path, twist and all.
+        if (c.flow) ticks.push(t => cut(flowShift(c, period, t)))
+      } else if (pat.unit === 'hatch' || pat.unit === 'cube' || pat.unit === 'plus') {
+        // Wire cubes, plus signs, or a road with chevrons: bars set to
+        // the path, twist and all.
         const unit = pat.unit, t = barOf(c)
-        const first = unitBars(line, unit, pat.on, period, flowShift(c, period, time))
+        const first = unitBars(c, line, unit, pat.on, period, flowShift(c, period, time), time)
         const cap = first.length + 80
         const inst = ([[ghost, 40], [solid, 41]] as const).map(([mat, order]) => {
           const m = new THREE.InstancedMesh(BAR, mat, cap)
@@ -253,7 +279,7 @@ export function createPathOverlay() {
           for (const m of inst) { m.count = n; m.instanceMatrix.needsUpdate = true }
         }
         place(first)
-        if (c.flow) flow = tm => place(unitBars(line, unit, pat.on, period, flowShift(c, period, tm)))
+        if (c.flow || (c.pulse && unit === 'hatch')) ticks.push(tm => place(unitBars(c, line, unit, pat.on, period, flowShift(c, period, tm), tm)))
       } else {
         // Balls or rings along the line, each `on` across.
         const tr = ringTube(c, pat.on)
@@ -281,7 +307,7 @@ export function createPathOverlay() {
           for (const m of inst) { m.count = n; m.instanceMatrix.needsUpdate = true }
         }
         place(flowShift(c, period, time))
-        if (c.flow) flow = t => place(flowShift(c, period, t))
+        if (c.flow) ticks.push(t => place(flowShift(c, period, t)))
       }
     }
     // What stands on the ends: a cone with its point on the end, a cube
@@ -329,6 +355,52 @@ export function createPathOverlay() {
         for (const p of parts) p.dispose()
       }
     }
+    // Its points ping one after another: a ring spreading from each,
+    // flat to the path there, fading as it goes.
+    if (c.ping) {
+      const far = markSize(c) * 1.3
+      const ringGeo = keep(new THREE.TorusGeometry(1, 0.035, 6, 40))
+      const fr = frames.length ? frames : pointFrames(c)
+      const rings = c.pts.map((p, i) => {
+        if (p.mark === false) return null
+        const mat = keep(new THREE.MeshBasicMaterial({ color: new THREE.Color(c.markColor ?? c.color), transparent: true, opacity: 0, depthWrite: false, toneMapped: false }))
+        const m = new THREE.Mesh(ringGeo, mat)
+        m.position.set(p.x, p.y, p.z ?? 0)
+        m.quaternion.copy(frameQuat(fr[i]))
+        m.renderOrder = 42
+        m.frustumCulled = false
+        m.visible = false
+        group.add(m)
+        return { m, mat }
+      })
+      const step = (tm: number) => rings.forEach((r, i) => {
+        if (!r) return
+        const k = pingAt(i, c.pts.length, tm)
+        r.m.visible = k !== null
+        if (k === null) return
+        r.m.scale.setScalar(Math.max(0.001, far * k))
+        r.mat.opacity = op * (1 - k) * (1 - k)
+      })
+      step(time)
+      ticks.push(step)
+    }
+    // The words by its points.
+    const labels: Built['labels'] = []
+    c.pts.forEach((p, i) => {
+      if (!p.label) return
+      const made = labelTexture(p.label, c.markColor ?? c.color)
+      if (!made) return
+      own.push(made.tex as unknown as THREE.BufferGeometry)
+      const mat = keep(new THREE.SpriteMaterial({ map: made.tex, transparent: true, depthTest: false, depthWrite: false, toneMapped: false }))
+      const sprite = new THREE.Sprite(mat)
+      // Above the point: clear of its cube and its graphic.
+      sprite.center.set(0.5, -0.9)
+      sprite.position.set(p.x, p.y, p.z ?? 0)
+      sprite.renderOrder = 62
+      group.add(sprite)
+      labels.push({ sprite, at: sprite.position, aspect: made.aspect })
+      void i
+    })
     // Selected: a cube on every point. A stem under each point off the
     // ground, always: how high the line runs there.
     const cubes: Knob[] = []
@@ -387,7 +459,7 @@ export function createPathOverlay() {
       }
     }
     root.add(group)
-    return { curve: c, selected, group, own, cubes, handles, flow }
+    return { curve: c, selected, group, own, cubes, handles, labels, flow: ticks.length ? t => { for (const f of ticks) f(t) } : undefined }
   }
 
   /** Draw the curves over what the frame drew. `ground` is the canvas's
@@ -437,6 +509,14 @@ export function createPathOverlay() {
       for (const k of b.handles) {
         size(k)
         ;(k.mesh.material as THREE.MeshStandardMaterial).color.setHex(f.hot === k.key ? COL.selected : k.base)
+      }
+      for (const l of b.labels) {
+        v.copy(l.at).applyMatrix4(root.matrixWorld)
+        const depth = v.sub(eye).dot(fwd)
+        l.sprite.visible = depth > camera.near
+        const hgt = LABEL_PX * Math.max(depth, 1e-3) / pxPer / unit
+        // (The plane's y runs down the canvas: turned back, so the words read.)
+        l.sprite.scale.set(hgt * l.aspect, -hgt, 1)
       }
     }
     renderer.render(scene, camera)

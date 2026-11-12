@@ -20,7 +20,7 @@ import { areaAt } from '../../utils/areaFollow'
 import { ensureAnnotated, modelName } from '../../utils/annotations'
 import { models, cardModel } from '../Canvas/tilt/TiltModels'
 import { curveBounds, curvePoints } from '../../utils/curveGeom'
-import { tangentState, setBroken, setCorner, setLook, lookFrom, markState, setPointMarks, twistState, setPointTwist } from '../../utils/pathEdit'
+import { tangentState, setBroken, setCorner, setLook, lookFrom, markState, setPointMarks, twistState, setPointTwist, labelState, setPointLabel } from '../../utils/pathEdit'
 import { useCanvasStore } from '../../store/canvasStore'
 import { ColorPickerPopup } from '../Bar/ColorPickerPopup'
 import { useCurveDraft } from '../../utils/notesTool'
@@ -81,7 +81,8 @@ const UNITS: { unit: CurveUnit; name: string; a: string; aTip: string; b: string
   { unit: 'line', name: 'Line', a: 'Solid', aTip: 'The length of each solid section of the line', b: 'Gap', bTip: 'The length of the empty section after each solid one. 0: one solid line' },
   { unit: 'ball', name: 'Balls', a: 'Size', aTip: 'How far across each ball is (a sphere in 3D)', b: 'Gap', bTip: 'The empty length between one ball and the next' },
   { unit: 'ring', name: 'Rings', a: 'Size', aTip: 'How far across each ring round the line is', b: 'Gap', bTip: 'The empty length between one ring and the next' },
-  { unit: 'hatch', name: 'Cross-hatch', a: 'Width', aTip: 'How wide the band of crossed lines is. It lies flat to the path, so it shows the twist', b: 'Spacing', bTip: 'How far apart the crossings are. 0: as far apart as the band is wide' },
+  { unit: 'plus', name: '3D plus signs', a: 'Size', aTip: 'How far across each plus sign is: a bar along the path, one across it and one up, crossing in the middle. They sit square to the path, so they show the twist', b: 'Gap', bTip: 'The empty length between one plus sign and the next' },
+  { unit: 'hatch', name: 'Road', a: 'Width', aTip: 'How wide the road is: two edges with chevrons between. It lies flat to the path, so it shows the twist', b: 'Spacing', bTip: 'How far apart the chevrons are. 0: as far apart as the road is wide' },
   { unit: 'cube', name: 'Wire cubes', a: 'Size', aTip: 'How far across each wire cube is. They sit square to the path, so they show the twist', b: 'Gap', bTip: 'The empty length between one cube and the next' },
 ]
 const MARKS: { mark: CurveMark; name: string; tip: string }[] = [
@@ -178,8 +179,25 @@ const PointTwist: React.FC = () => {
   useNotesStore(s => s.curves)
   const st = twistState()
   const begin = () => useUndoCoordinator.getState().checkpoint()
-  return <NumSlide name="Twist" val={st.twist} min={-180} max={180} top={3600} tip="Rolls the path about its own line at the selected points, in degrees. It blends along the line to the next point. Cross-hatch, wire cubes and the points' cubes show it. Typed, it can go past a full turn."
+  return <NumSlide name="Twist" val={st.twist} min={-180} max={180} top={3600} tip="Rolls the path about its own line at the selected points, in degrees. It blends along the line to the next point. The road, wire cubes, plus signs and the points' cubes show it. Typed, it can go past a full turn."
     begin={begin} set={v => setPointTwist(v)} />
+}
+
+/** A few words by the selected points. */
+const PointLabel: React.FC = () => {
+  useNotesUi(s => s.points)
+  useNotesStore(s => s.curves)
+  const st = labelState()
+  return (
+    <label title="A few words shown by the selected points, flat and in 3D. Empty: none." style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: 'rgba(255,255,255,0.6)' }}>
+      Label
+      <input type="text" value={st.label} maxLength={60} data-point-label=""
+        onFocus={() => useUndoCoordinator.getState().checkpoint()}
+        onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter' || e.key === 'Escape') e.currentTarget.blur() }}
+        onChange={e => setPointLabel(e.target.value)}
+        style={{ flex: 1, minWidth: 0, height: 24, boxSizing: 'border-box', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 5, color: '#e8f0ff', fontSize: 12, padding: '0 6px', userSelect: 'text' }} />
+    </label>
+  )
 }
 
 const Section: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
@@ -596,6 +614,9 @@ export const NotesPanel: React.FC = () => {
   const dashGap = useNotesUi(s => s.dashGap)
   const selected = useNotesUi(s => s.selected)
   const [picker, setPicker] = useState<{ x: number; y: number; key: 'color' | 'markColor' | 'endColor' } | null>(null)
+  const chev = useNotesUi(s => s.chev)
+  const pulse = useNotesUi(s => s.pulse)
+  const ping = useNotesUi(s => s.ping)
   const markColor = useNotesUi(s => s.markColor)
   const markSize = useNotesUi(s => s.markSize)
   const endColor = useNotesUi(s => s.endColor)
@@ -774,6 +795,15 @@ export const NotesPanel: React.FC = () => {
                     <NumSlide name={unitOpts.a} val={dashOn} min={1} max={120} top={400} tip={`${unitOpts.aTip}.`} begin={stepOnce} set={v => slide({ dashOn: v })} />
                     <NumSlide name={unitOpts.b} val={dashGap} min={0} max={120} top={400} tip={`${unitOpts.bTip}.`} begin={stepOnce} set={v => slide({ dashGap: v })} />
                   </div>
+                  {/* A road's own: its chevrons. */}
+                  {unit === 'hatch' && (
+                    <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end' }}>
+                      <NumSlide name="Point" val={chev} min={0} max={200} top={400} tip="How far each chevron points ahead, in percent of the road's width. 0: straight bars across."
+                        begin={stepOnce} set={v => slide({ chev: v })} />
+                      <button style={{ ...btnStyle(pulse, true), flex: '1 1 0', width: 'auto', height: 30, justifyContent: 'center', fontSize: 11.5 }} aria-pressed={pulse}
+                        title="Pulse: on or off. On, a swell runs down the chevrons one after another." onClick={() => apply({ pulse: !pulse })}>Pulse</button>
+                    </div>
+                  )}
                   <NumSlide name="Motion" val={flow} min={-200} max={200} top={1000} tip="How fast the pattern runs along the line, towards its end. 0: still. Below 0: towards its start."
                     begin={stepOnce} set={v => slide({ flow: v })} />
                 </div>
@@ -799,6 +829,8 @@ export const NotesPanel: React.FC = () => {
               <Section title="POINTS">
                 <div style={{ display: 'flex', gap: 5 }}>
                   <button style={{ ...btnStyle(smooth, true), ...THIRD, height: 30, flex: '0 0 auto', padding: '0 9px' }} aria-pressed={smooth} onClick={() => setSmooth(!smooth)} title={SMOOTH_TIP}><IcSmooth size={16} /><span>Smooth</span></button>
+                  <button style={{ ...btnStyle(ping, true), ...THIRD, height: 30, flex: '0 0 auto', padding: '0 12px' }} aria-pressed={ping}
+                    title="Ping: on or off. On, the points ping one after another along the path, a ring spreading from each. A point with its graphic switched off stays quiet." onClick={() => apply({ ping: !ping })}>Ping</button>
                 </div>
                 <div style={{ display: 'flex', gap: 5 }}>
                   {MARKS.map(m => (
@@ -814,6 +846,7 @@ export const NotesPanel: React.FC = () => {
                 <div style={{ display: 'flex', gap: 5 }}><PointTools folded={false} /></div>
                 <PointMarkSwitch />
                 <PointTwist />
+                <PointLabel />
               </Section>
             )}
             {modelKeys.length > 0 && <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><Area3dTools part="selected" /></div>}

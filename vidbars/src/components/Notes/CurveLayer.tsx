@@ -13,7 +13,7 @@ import { useCurveDraft } from '../../store/pathLive'
 import { useTiltStore, isTilted } from '../../store/tiltStore'
 import { useManip } from '../../store/manipStore'
 import { ptKey } from '../../utils/pathEdit'
-import { curvePath, ownsHandles, shownLine, patternOf, ringTube, markSize, bulgeR, markBar, alongEvery, flowShift, pointFrames, unitBars, markBars, barOf, type P3, type Bar, type PathFrame3 } from '../../utils/curveGeom'
+import { curvePath, ownsHandles, shownLine, patternOf, ringTube, markSize, bulgeR, markBar, alongEvery, flowShift, pointFrames, unitBars, markBars, barOf, PING, type P3, type Bar, type PathFrame3 } from '../../utils/curveGeom'
 
 const SEL = 'rgba(120,180,255,0.95)'
 /** A selected point (as its cube in 3D). */
@@ -34,17 +34,27 @@ const MarkAt: React.FC<{ c: Curve; p: P3; f: PathFrame3 }> = ({ c, p, f }) => {
 /** The pieces of a pattern that are things along the line (rings, wire
  *  cubes, a band of crossed lines), seen from above: a ring is edge on,
  *  a bar across the line. Each its own stroke. */
-const FlatUnits: React.FC<{ c: Curve; line: P3[]; unit: 'ring' | 'hatch' | 'cube'; on: number; period: number }> = ({ c, line, unit, on, period }) => {
+const FlatUnits: React.FC<{ c: Curve; line: P3[]; unit: 'ring' | 'hatch' | 'cube' | 'plus'; on: number; period: number }> = ({ c, line, unit, on, period }) => {
   // Running, they step along thirty times a second (as in 3D).
   const [time, setTime] = useState(0)
-  const runs = !!c.flow
+  const runs = !!c.flow || (!!c.pulse && unit === 'hatch')
   useEffect(() => {
     if (!runs) return
     const id = window.setInterval(() => setTime(performance.now() / 1000), 33)
     return () => window.clearInterval(id)
   }, [runs])
   const shift = flowShift(c, period, time)
-  if (unit !== 'ring') return <path d={barsPath(unitBars(line, unit, on, period, shift))} fill="none" stroke={c.color} strokeWidth={barOf(c)} strokeLinecap="round" />
+  if (unit !== 'ring') {
+    const bars = unitBars(c, line, unit, on, period, shift, time)
+    const t = barOf(c)
+    // A pulsing road's chevrons are each as thick as the pulse makes them.
+    return (
+      <>
+        <path d={barsPath(bars.filter(b => b[2] === undefined))} fill="none" stroke={c.color} strokeWidth={t} strokeLinecap="round" />
+        {bars.map((b, i) => b[2] === undefined ? null : <path key={i} d={barsPath([b])} fill="none" stroke={c.color} strokeWidth={t * b[2]} strokeLinecap="round" />)}
+      </>
+    )
+  }
   let d = ''
   for (const s of alongEvery(line, period, (shift + on / 2) % period)) {
     const l = Math.hypot(s.d.x, s.d.y)
@@ -95,6 +105,21 @@ const CurveShape: React.FC<{ c: Curve; zoom: number; hit: boolean; selected: boo
           const pts = e.kind === 'arrow' ? `${at(0, 0)} ${at(-s, s * 0.46)} ${at(-s, -s * 0.46)}` : `${at(s / 2, s / 2)} ${at(-s / 2, s / 2)} ${at(-s / 2, -s / 2)} ${at(s / 2, -s / 2)}`
           return <polygon key={i} points={pts} fill={c.endColor ?? c.color} />
         })}
+        {/* Its points ping one after another: a ring spreading from each, fading. */}
+        {c.ping && c.kind === 'bezier' && (() => {
+          const n = c.pts.length, cycle = Math.max(n * PING.slot, PING.dur) + 0.5, far = markSize(c) * 1.3, f = f2(PING.dur / cycle)
+          return c.pts.map((p, i) => p.mark === false ? null : (
+            <circle key={`g${i}`} cx={p.x} cy={p.y} r={0} fill="none" stroke={c.markColor ?? c.color} strokeWidth={far * 0.035 * 2} opacity={0}>
+              <animate attributeName="r" values={`0;${f2(far)};${f2(far)}`} keyTimes={`0;${f};1`} dur={`${f2(cycle)}s`} begin={`${f2(i * PING.slot)}s`} repeatCount="indefinite" />
+              <animate attributeName="opacity" values="1;0;0" keyTimes={`0;${f};1`} dur={`${f2(cycle)}s`} begin={`${f2(i * PING.slot)}s`} repeatCount="indefinite" />
+            </circle>
+          ))
+        })()}
+        {/* The words by its points. */}
+        {c.kind === 'bezier' && c.pts.map((p, i) => p.label ? (
+          <text key={`t${i}`} x={p.x} y={p.y - 14 / zoom} textAnchor="middle" fontSize={13 / zoom} fontWeight={600} fontFamily="system-ui, sans-serif"
+            fill={c.markColor ?? c.color} stroke="rgba(8,10,20,0.9)" strokeWidth={3 / zoom} strokeLinejoin="round" style={{ paintOrder: 'stroke', pointerEvents: 'none', userSelect: 'none' }}>{p.label}</text>
+        ) : null)}
         {c.mark && c.kind === 'bezier' && c.pts.map((p, i) => p.mark === false || shaped.has(i) ? null : <MarkAt key={`m${i}`} c={c} p={{ x: p.x, y: p.y, z: p.z ?? 0 }} f={frames[i]} />)}
       </g>
       {/* What the mouse grabs: wider than the line, so a thin one is easy to hit. */}

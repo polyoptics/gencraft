@@ -333,7 +333,7 @@ export function sizeHeld(h: PointsHeld, sx: number, sy: number, sz: number) {
 type Ui = ReturnType<typeof useNotesUi.getState>
 /** The settings of how a curve looks, as the panel holds them (screen px
  *  at the zoom it is seen at). */
-export type LookKey = 'color' | 'width' | 'endStart' | 'endEnd' | 'dashOn' | 'dashGap' | 'unit' | 'opacity' | 'flow' | 'mark' | 'markColor' | 'markSize' | 'endColor' | 'endSize'
+export type LookKey = 'color' | 'width' | 'endStart' | 'endEnd' | 'dashOn' | 'dashGap' | 'unit' | 'opacity' | 'flow' | 'mark' | 'markColor' | 'markSize' | 'endColor' | 'endSize' | 'chev' | 'pulse' | 'ping'
 
 /** The panel's settings as a curve's own (canvas units), at zoom `z`:
  *  what a new curve is given. */
@@ -347,6 +347,7 @@ export function lookOf(ui: Ui, z: number): Partial<Curve> {
     opacity: ui.opacity < 100 ? ui.opacity / 100 : undefined,
     flow: ui.flow ? ui.flow / z : undefined,
     mark: ui.mark ?? undefined,
+    chev: ui.unit === 'hatch' && ui.chev !== 50 ? ui.chev / 100 : undefined, pulse: ui.unit === 'hatch' && ui.pulse ? true : undefined, ping: ui.ping ? true : undefined,
     markColor: ui.markColor ?? undefined, markSize: ui.markSize > 0 ? ui.markSize / z : undefined,
     endColor: ui.endColor ?? undefined, endSize: ui.endSize > 0 ? ui.endSize / z : undefined,
   }
@@ -354,7 +355,8 @@ export function lookOf(ui: Ui, z: number): Partial<Curve> {
 
 const LOOK_FIELDS: Record<LookKey, (keyof Curve)[]> = {
   color: ['color'], width: ['width'], endStart: ['endStart', 'arrowStart'], endEnd: ['endEnd', 'arrowEnd'],
-  dashOn: ['dash', 'unit'], dashGap: ['dash', 'unit'], unit: ['dash', 'unit'], opacity: ['opacity'], flow: ['flow'], mark: ['mark'],
+  dashOn: ['dash', 'unit'], dashGap: ['dash', 'unit'], unit: ['dash', 'unit', 'chev', 'pulse'], opacity: ['opacity'], flow: ['flow'], mark: ['mark'],
+  chev: ['chev'], pulse: ['pulse'], ping: ['ping'],
   markColor: ['markColor'], markSize: ['markSize'], endColor: ['endColor'], endSize: ['endSize'],
 }
 
@@ -388,6 +390,7 @@ export function lookFrom(c: Curve, z: number): Partial<Pick<Ui, LookKey | 'smoot
     opacity: Math.round((c.opacity ?? 1) * 100),
     flow: Math.round((c.flow ?? 0) * z),
     mark: c.mark ?? null,
+    chev: Math.round((c.chev ?? 0.5) * 100), pulse: !!c.pulse, ping: !!c.ping,
     markColor: c.markColor ?? null, markSize: c.markSize ? Math.max(1, Math.round(c.markSize * z)) : 0,
     endColor: c.endColor ?? null, endSize: c.endSize ? Math.max(1, Math.round(c.endSize * z)) : 0,
   }
@@ -435,6 +438,28 @@ export function setPointTwist(deg: number) {
       if (!idx.includes(i)) return p
       const q = { ...p }
       if (deg) q.twist = deg; else delete q.twist
+      return q
+    }) })
+  }
+}
+
+/** The selected points' label (the first's). */
+export function labelState(): { any: boolean; label: string } {
+  const { curves } = useNotesStore.getState()
+  for (const [id, idx] of pickedPoints()) if (curves[id].kind === 'bezier' && idx.length) return { any: true, label: curves[id].pts[idx[0]].label ?? '' }
+  return { any: false, label: '' }
+}
+
+/** A few words by each of the selected points ('' takes them away). */
+export function setPointLabel(text: string) {
+  const ns = useNotesStore.getState()
+  for (const [id, idx] of pickedPoints()) {
+    const c = ns.curves[id]
+    if (c.kind !== 'bezier') continue
+    ns.updateCurve(id, { pts: c.pts.map((p, i) => {
+      if (!idx.includes(i)) return p
+      const q = { ...p }
+      if (text) q.label = text; else delete q.label
       return q
     }) })
   }

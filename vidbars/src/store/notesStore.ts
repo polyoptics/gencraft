@@ -34,6 +34,8 @@ export interface CurvePoint {
    *  (it blends along the line between points): which way is up for what
    *  rides or shows on the path. */
   twist?: number
+  /** A few words shown by the point. */
+  label?: string
   /** false: its curve's point graphic (Curve.mark) is off at this point. */
   mark?: false
 }
@@ -41,9 +43,10 @@ export interface CurvePoint {
 /** What stands on an end of a curve. */
 export type CurveEnd = 'arrow' | 'cube' | 'ball'
 /** The piece a curve's pattern repeats: a length of line, a ball, a ring,
- *  a wire cube; or 'hatch', a flat band of crossed lines. The last two
- *  show the path's twist. */
-export type CurveUnit = 'line' | 'ball' | 'ring' | 'hatch' | 'cube'
+ *  a wire cube, 'plus' (a plus sign in all three directions); or 'hatch',
+ *  a road: two edges with chevrons between, lying flat to the path. The
+ *  last three show the path's twist. */
+export type CurveUnit = 'line' | 'ball' | 'ring' | 'hatch' | 'cube' | 'plus'
 /** A graphic at each point of a curve: a cube of which only the corners
  *  show, a crosshair in all three directions, the line swelling. */
 export type CurveMark = 'corners' | 'cross' | 'bulge'
@@ -71,7 +74,13 @@ export interface Curve {
   dash?: [number, number] | 'dash' | 'dot'
   /** The piece the pattern repeats (absent: lengths of the line). A
    *  ball or a ring is `dash[0]` across, `dash[1]` apart. */
-  unit?: 'ball' | 'ring' | 'hatch' | 'cube'
+  unit?: 'ball' | 'ring' | 'hatch' | 'cube' | 'plus'
+  /** A road's chevrons: how far each points ahead, as a share of the
+   *  road's width (absent: 0.5), and whether a pulse runs down them. */
+  chev?: number
+  pulse?: boolean
+  /** Its points ping one after another along it. */
+  ping?: boolean
   /** How solid it is, 0..1 (absent: 1). */
   opacity?: number
   /** The pattern runs along the line: canvas units a second, towards its
@@ -270,6 +279,11 @@ interface NotesUi {
    *  size (screen px; 0: goes with the line's thickness). */
   markColor: string | null
   markSize: number
+  /** A road's chevrons: how far each points ahead (percent of its width)
+   *  and the pulse; the points' ping. */
+  chev: number
+  pulse: boolean
+  ping: boolean
   endColor: string | null
   endSize: number
   /** New curves run smoothly through their points. */
@@ -309,6 +323,9 @@ export const useNotesUi = create<NotesUi>(() => ({
   mark: saved.mark ?? null,
   markColor: saved.markColor ?? null,
   markSize: saved.markSize ?? 0,
+  chev: saved.chev ?? 50,
+  pulse: saved.pulse ?? false,
+  ping: saved.ping ?? false,
   endColor: saved.endColor ?? null,
   endSize: saved.endSize ?? 0,
   smooth: saved.smooth ?? false,
@@ -323,7 +340,7 @@ useNotesUi.subscribe(s => {
   try {
     localStorage.setItem(UI_KEY, JSON.stringify({
       open: s.open, collapsed: s.collapsed, color: s.color, width: s.width, endStart: s.endStart, endEnd: s.endEnd, smooth: s.smooth, dashOn: s.dashOn, dashGap: s.dashGap,
-      unit: s.unit, opacity: s.opacity, flow: s.flow, mark: s.mark, markColor: s.markColor, markSize: s.markSize, endColor: s.endColor, endSize: s.endSize,
+      unit: s.unit, opacity: s.opacity, flow: s.flow, mark: s.mark, chev: s.chev, pulse: s.pulse, ping: s.ping, markColor: s.markColor, markSize: s.markSize, endColor: s.endColor, endSize: s.endSize,
     }))
   } catch { /* private window */ }
 })

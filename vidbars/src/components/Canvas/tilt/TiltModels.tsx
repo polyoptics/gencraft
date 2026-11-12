@@ -24,7 +24,7 @@ import { useNotesStore, useNotesUi } from '../../../store/notesStore'
 import { useCurveDraft, usePathHot } from '../../../store/pathLive'
 import { targetMiddle } from '../../../utils/pathEdit'
 import type { PathFrame, PathHit } from '../../../three/pathOverlay'
-import { patternOf } from '../../../utils/curveGeom'
+import { curveRuns } from '../../../utils/curveGeom'
 import { PinLabels } from '../../Notes/PinLabels'
 import { sceneOf, sceneSpot, standsIn, dataKey } from '../../../utils/area3dScene'
 import { useUndoCoordinator } from '../../../store/undoCoordinator'
@@ -204,7 +204,7 @@ let pathSig = 0
 for (const st of [useNotesStore, useNotesUi, useCurveDraft, usePathHot]) st.subscribe(() => { pathSig++ })
 
 /** A curve's pattern is running along it: the 3D view keeps drawing. */
-const pathFlows = () => live3d() && Object.values(notesNow.curves).some(c => c.kind === 'bezier' && !!c.flow && !!patternOf(c))
+const pathFlows = () => live3d() && Object.values(notesNow.curves).some(c => c.kind === 'bezier' && curveRuns(c))
 
 /** The canvas's curves for the 3D view (three/pathOverlay): the bezier
  *  ones, with the one being drawn (run on to the cursor). */
@@ -225,7 +225,7 @@ function pathFrame(): PathFrame {
     hot: usePathHot.getState().hot,
     gizmo: draft ? null : targetMiddle(),
     // A running pattern steps thirty times a second.
-    time: curves.some(c => !!c.flow && !!patternOf(c)) ? Math.round(performance.now() * 0.03) / 30 : 0,
+    time: curves.some(curveRuns) ? Math.round(performance.now() * 0.03) / 30 : 0,
     sig: pathSig,
   }
 }
