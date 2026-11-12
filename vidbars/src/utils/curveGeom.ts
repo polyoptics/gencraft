@@ -162,6 +162,16 @@ export function splitCurveAt(c: Pick<Curve, 'kind' | 'pts' | 'closed' | 'smooth'
   return { pts, index: seg + 1 }
 }
 
+/** A curve's line pattern: the lengths of its solid and empty sections
+ *  (canvas units), or null for one solid line. */
+export function dashOf(c: Pick<Curve, 'dash' | 'width'>): [number, number] | null {
+  const d = c.dash
+  if (!d) return null
+  if (d === 'dash') return [c.width * 3.5, c.width * 1.5]
+  if (d === 'dot') return [c.width, c.width * 1.5]
+  return d[0] > 0 && d[1] > 0 ? d : null
+}
+
 /** A curve's line cut into the pieces a dashed or dotted line shows:
  *  each `on` long with `off` between (canvas units along the line). A
  *  piece is the points along it; a dot (`on` 0) is one point. */

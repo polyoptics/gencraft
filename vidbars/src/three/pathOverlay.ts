@@ -15,7 +15,7 @@
 import * as THREE from 'three'
 import type { Curve } from '../store/notesStore'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
-import { curvePoints, curveSamples, endDir3, nearestOnCurve, dashPieces, ownsHandles, type P3 } from '../utils/curveGeom'
+import { curvePoints, curveSamples, endDir3, nearestOnCurve, dashPieces, dashOf, ownsHandles, type P3 } from '../utils/curveGeom'
 
 /** What the 3D view draws of the curves this frame. */
 export interface PathFrame {
@@ -175,19 +175,13 @@ export function createPathOverlay() {
     const closed = !!c.closed && c.pts.length > 2
     if (samples.length > 1) {
       const w = c.width
-      if (c.dash === 'dash') {
-        // Dashes: short lengths of the round line (as the flat drawing's).
-        const parts = dashPieces(samples, w * 3.5, w * 1.5).filter(p => p.length > 1).map(p => tube(p, w / 2, false, 8))
+      const dash = dashOf(c)
+      if (dash) {
+        // A pattern: lengths of the round line with gaps between (as the
+        // flat drawing's).
+        const parts = dashPieces(samples, dash[0], dash[1]).filter(p => p.length > 1).map(p => tube(p, w / 2, false, 8))
         const g = parts.length ? mergeGeometries(parts) : null
         for (const p of parts) p.dispose()
-        if (g) body(keep(g))
-      } else if (c.dash === 'dot') {
-        // Dots: balls along the line.
-        const ball = new THREE.SphereGeometry(w / 2, 10, 8)
-        const parts = dashPieces(samples, 0, w * 2).map(p => ball.clone().translate(p[0].x, p[0].y, p[0].z))
-        const g = parts.length ? mergeGeometries(parts) : null
-        for (const p of parts) p.dispose()
-        ball.dispose()
         if (g) body(keep(g))
       } else body(keep(tube(samples, w / 2, closed)))
     }

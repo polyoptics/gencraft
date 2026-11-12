@@ -244,7 +244,7 @@ function onDown(e: PointerEvent) {
       checkpoint()
       curve = {
         id: newNoteId('cv'), kind: 'bezier', pts: [], color: ui.color, width: ui.width / z,
-        arrowStart: ui.arrowStart, arrowEnd: ui.arrowEnd, smooth: ui.smooth, ...(ui.dash ? { dash: ui.dash } : {}),
+        arrowStart: ui.arrowStart, arrowEnd: ui.arrowEnd, smooth: ui.smooth, ...(ui.dashGap > 0 ? { dash: [ui.dashOn / z, ui.dashGap / z] as [number, number] } : {}),
       }
     }
     const anchor: CurvePoint = { x: p.cx, y: p.cy }

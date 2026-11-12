@@ -45,8 +45,12 @@ export interface Curve {
   /** Smooth: the line runs through its points on its own, no handles to
    *  set (a bezier's stored handles are kept but not used). */
   smooth?: boolean
-  /** Drawn in dashes or dots (absent: one solid line). */
-  dash?: 'dash' | 'dot'
+  /** Its line as a repeating pattern (Brian 2026-11-12: "control of the
+   *  length of the solid section and the length of the empty section"):
+   *  [solid, empty] lengths along the line, canvas units. Absent: one
+   *  solid line. ('dash' and 'dot' are the first hours' fixed styles,
+   *  still drawn: utils/curveGeom dashOf.) */
+  dash?: [number, number] | 'dash' | 'dot'
 }
 
 /** A stroke drawn on a model's surface, in the model's own space. */
@@ -216,8 +220,11 @@ interface NotesUi {
   arrowEnd: boolean
   /** New curves run smoothly through their points. */
   smooth: boolean
-  /** New curves' line: solid (null), dashes or dots. */
-  dash: 'dash' | 'dot' | null
+  /** New curves' line pattern: the length of each solid section and of
+   *  the empty one after it, screen px at the zoom it is drawn at. An
+   *  empty length of 0 is one solid line. */
+  dashOn: number
+  dashGap: number
   /** Selected curves. */
   selected: string[]
   /** Selected points of curves: `${curve id}:${index}` (utils/pathEdit). */
@@ -243,7 +250,8 @@ export const useNotesUi = create<NotesUi>(() => ({
   arrowStart: saved.arrowStart ?? false,
   arrowEnd: saved.arrowEnd ?? true,
   smooth: saved.smooth ?? false,
-  dash: saved.dash ?? null,
+  dashOn: saved.dashOn ?? 16,
+  dashGap: saved.dashGap ?? 0,
   selected: [],
   points: [],
   linking: null,
@@ -252,7 +260,7 @@ export const useNotesUi = create<NotesUi>(() => ({
 useNotesUi.subscribe(s => {
   try {
     localStorage.setItem(UI_KEY, JSON.stringify({
-      open: s.open, collapsed: s.collapsed, color: s.color, width: s.width, arrowStart: s.arrowStart, arrowEnd: s.arrowEnd, smooth: s.smooth, dash: s.dash,
+      open: s.open, collapsed: s.collapsed, color: s.color, width: s.width, arrowStart: s.arrowStart, arrowEnd: s.arrowEnd, smooth: s.smooth, dashOn: s.dashOn, dashGap: s.dashGap,
     }))
   } catch { /* private window */ }
 })

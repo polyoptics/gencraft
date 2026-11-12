@@ -13,7 +13,7 @@ import { useCurveDraft } from '../../store/pathLive'
 import { useTiltStore, isTilted } from '../../store/tiltStore'
 import { useManip } from '../../store/manipStore'
 import { ptKey } from '../../utils/pathEdit'
-import { curvePath, arrowHeads, ownsHandles } from '../../utils/curveGeom'
+import { curvePath, arrowHeads, ownsHandles, dashOf } from '../../utils/curveGeom'
 
 const SEL = 'rgba(120,180,255,0.95)'
 /** A selected point (as its cube in 3D). */
@@ -22,11 +22,13 @@ const PICKED = '#ffe14a'
 const CurveShape: React.FC<{ c: Curve; zoom: number; hit: boolean; selected: boolean }> = React.memo(({ c, zoom, hit, selected }) => {
   const d = curvePath(c)
   const heads = arrowHeads(c)
+  const dash = dashOf(c)
   return (
     <g>
       {selected && <path d={d} fill="none" stroke={SEL} strokeWidth={c.width + 4 / zoom} strokeLinecap="round" strokeLinejoin="round" opacity={0.45} />}
-      <path d={d} fill="none" stroke={c.color} strokeWidth={c.width} strokeLinecap="round" strokeLinejoin="round"
-        strokeDasharray={c.dash === 'dash' ? `${c.width * 2.5} ${c.width * 2.5}` : c.dash === 'dot' ? `0.01 ${c.width * 2}` : undefined} />
+      {/* A pattern's sections are cut square, so each is the length it was given. */}
+      <path d={d} fill="none" stroke={c.color} strokeWidth={c.width} strokeLinecap={dash ? 'butt' : 'round'} strokeLinejoin="round"
+        strokeDasharray={dash ? `${dash[0]} ${dash[1]}` : undefined} />
       {heads.map((h, i) => <polygon key={i} points={h} fill={c.color} stroke={c.color} strokeWidth={c.width * 0.5} strokeLinejoin="round" />)}
       {/* What the mouse grabs: wider than the line, so a thin one is easy to hit. */}
       <path

@@ -20,6 +20,7 @@ import { ensureAnnotated, modelName } from '../../utils/annotations'
 import { models, cardModel } from '../Canvas/tilt/TiltModels'
 import { curveBounds, curvePoints } from '../../utils/curveGeom'
 import { tangentState, setBroken, setCorner } from '../../utils/pathEdit'
+import { useCanvasStore } from '../../store/canvasStore'
 import { ColorPickerPopup } from '../Bar/ColorPickerPopup'
 import { useCurveDraft } from '../../utils/notesTool'
 import { useModelScaleStore } from '../../store/tiltStore'
@@ -48,10 +49,6 @@ const IcBreak: Ic = ({ size = 20 }) => (
 )
 const IcCorner: Ic = ({ size = 20 }) => (
   <svg {...svg(size)}><path d="M3 18L12 7l9 11" stroke={S} strokeLinejoin="miter" /><rect x="10.2" y="5.2" width="3.6" height="3.6" fill="#ffe14a" stroke="none" /></svg>
-)
-/** A line style: a solid line, dashes, dots. */
-const IcLine: React.FC<{ dash: 'dash' | 'dot' | null }> = ({ dash }) => (
-  <svg width={34} height={16} viewBox="0 0 34 16" fill="none"><path d="M3 8h28" stroke={S} strokeWidth={dash === 'dot' ? 3 : 2.4} strokeLinecap="round" strokeDasharray={dash === 'dash' ? '6 5' : dash === 'dot' ? '0.01 6.2' : undefined} /></svg>
 )
 const IcPen: Ic = ({ size = 20 }) => (
   <svg {...svg(size)}><path d="M4 20c3-1 4-4 6-4s2 3 5 2 4-5 5-7" stroke="#ff8fd1" /><path d="M14.5 4.5l3 3L10 15l-3.6.6.6-3.6z" stroke={S} strokeWidth="1.6" /></svg>
@@ -452,7 +449,8 @@ export const NotesPanel: React.FC = () => {
   const arrowStart = useNotesUi(s => s.arrowStart)
   const arrowEnd = useNotesUi(s => s.arrowEnd)
   const smooth = useNotesUi(s => s.smooth)
-  const dash = useNotesUi(s => s.dash)
+  const dashOn = useNotesUi(s => s.dashOn)
+  const dashGap = useNotesUi(s => s.dashGap)
   const selected = useNotesUi(s => s.selected)
   const [picker, setPicker] = useState<{ x: number; y: number } | null>(null)
   const drawing = useCurveDraft(s => !!s.curve)
@@ -468,15 +466,17 @@ export const NotesPanel: React.FC = () => {
     for (const id of ids) ns.updateCurve(id, patch)
   }
 
-  /** The line style, and the same on the selected curves. */
-  const setDash = (d: 'dash' | 'dot' | null) => {
-    useNotesUi.setState({ dash: d })
+  /** The line's pattern (the length of a solid section, and of the empty
+   *  one after it; none empty = one solid line), and the same on the
+   *  selected curves, at the zoom they are seen at. */
+  const setPattern = (on: number, gap: number) => {
+    useNotesUi.setState({ dashOn: on, dashGap: gap })
     const ns = useNotesStore.getState()
-    const ids = selected.filter(id => ns.curves[id] && (ns.curves[id].dash ?? null) !== d)
-    if (!ids.length) return
-    useUndoCoordinator.getState().checkpoint()
-    for (const id of ids) ns.updateCurve(id, { dash: d ?? undefined })
+    const z = useCanvasStore.getState().zoom
+    for (const id of selected) if (ns.curves[id]) ns.updateCurve(id, { dash: gap > 0 ? [on / z, gap / z] : undefined })
   }
+  /** One undo step for a whole drag of a slider. */
+  const stepOnce = () => { if (selected.some(id => useNotesStore.getState().curves[id])) useUndoCoordinator.getState().checkpoint() }
   /** A colour of your own (the picker): one undo step for the whole pick. */
   const openPicker = (e: React.MouseEvent) => {
     // Beside the panel, not over it.
@@ -582,10 +582,20 @@ export const NotesPanel: React.FC = () => {
               {picker && <ColorPickerPopup color={color} anchorX={picker.x} anchorY={picker.y} onChange={pickColor} onClose={() => setPicker(null)} />}
             </Section>
             <Section title="LINE">
-              <div style={{ display: 'flex', gap: 5 }}>
-                {([[null, 'Solid'], ['dash', 'Dashed'], ['dot', 'Dotted']] as const).map(([d, name]) => (
-                  <button key={name} style={{ ...btnStyle(dash === d, true), ...THIRD }} aria-pressed={dash === d} onClick={() => setDash(d)}
-                    title={`${name} line. Also sets the selected curves.`}><IcLine dash={d} /></button>
+              <div style={{ display: 'flex', gap: 10 }}>
+                {([['Solid', dashOn, 1, (v: number) => setPattern(v, dashGap), 'The length of each solid section of the line'],
+                  ['Gap', dashGap, 0, (v: number) => setPattern(dashOn, v), 'The length of the empty section after each solid one. 0: one solid line']] as const).map(([name, val, min, set, tip]) => (
+                  <label key={name} title={`${tip}. Also sets the selected curves.`} style={{ flex: '1 1 0', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                    <span style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 11, color: 'rgba(255,255,255,0.6)' }}>
+                      {name}
+                      <input type="number" min={min} max={400} step={1} value={val}
+                        onPointerDown={stepOnce} onKeyDown={e => { e.stopPropagation(); if (e.key !== 'Tab') stepOnce() }}
+                        onChange={e => set(Math.max(min, Math.min(400, Math.round(+e.target.value || 0))))}
+                        style={{ width: 46, height: 20, boxSizing: 'border-box', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 5, color: '#e8f0ff', fontSize: 11, textAlign: 'right', padding: '0 3px' }} />
+                    </span>
+                    <input type="range" min={min} max={120} step={1} value={Math.min(120, val)} onPointerDown={stepOnce} onKeyDown={stepOnce}
+                      onChange={e => set(+e.target.value)} style={{ width: '100%' }} />
+                  </label>
                 ))}
               </div>
             </Section>
