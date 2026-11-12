@@ -24,9 +24,11 @@ export interface CurveHandle { x: number; y: number; z?: number }
  *  curve is seen from straight above). `hin`/`hout` are its bezier
  *  handles, relative to the anchor; absent = a sharp corner. `t` is how
  *  its tangents behave: absent, the two handles stay in one line (on a
- *  smooth curve, the line finds them itself); 'broken', each handle is
+ *  smooth curve, the line finds them itself); 'unified', its handles are
+ *  set by hand and stay in one line (what a point on a smooth curve
+ *  becomes when its tangent is turned by hand); 'broken', each handle is
  *  its own, set by hand; 'corner', no handles: the line turns sharply. */
-export interface CurvePoint { x: number; y: number; z?: number; hin?: CurveHandle; hout?: CurveHandle; t?: 'broken' | 'corner' }
+export interface CurvePoint { x: number; y: number; z?: number; hin?: CurveHandle; hout?: CurveHandle; t?: 'unified' | 'broken' | 'corner' }
 
 export interface Curve {
   id: string
@@ -43,6 +45,8 @@ export interface Curve {
   /** Smooth: the line runs through its points on its own, no handles to
    *  set (a bezier's stored handles are kept but not used). */
   smooth?: boolean
+  /** Drawn in dashes or dots (absent: one solid line). */
+  dash?: 'dash' | 'dot'
 }
 
 /** A stroke drawn on a model's surface, in the model's own space. */
@@ -212,6 +216,8 @@ interface NotesUi {
   arrowEnd: boolean
   /** New curves run smoothly through their points. */
   smooth: boolean
+  /** New curves' line: solid (null), dashes or dots. */
+  dash: 'dash' | 'dot' | null
   /** Selected curves. */
   selected: string[]
   /** Selected points of curves: `${curve id}:${index}` (utils/pathEdit). */
@@ -237,6 +243,7 @@ export const useNotesUi = create<NotesUi>(() => ({
   arrowStart: saved.arrowStart ?? false,
   arrowEnd: saved.arrowEnd ?? true,
   smooth: saved.smooth ?? false,
+  dash: saved.dash ?? null,
   selected: [],
   points: [],
   linking: null,
@@ -245,7 +252,7 @@ export const useNotesUi = create<NotesUi>(() => ({
 useNotesUi.subscribe(s => {
   try {
     localStorage.setItem(UI_KEY, JSON.stringify({
-      open: s.open, collapsed: s.collapsed, color: s.color, width: s.width, arrowStart: s.arrowStart, arrowEnd: s.arrowEnd, smooth: s.smooth,
+      open: s.open, collapsed: s.collapsed, color: s.color, width: s.width, arrowStart: s.arrowStart, arrowEnd: s.arrowEnd, smooth: s.smooth, dash: s.dash,
     }))
   } catch { /* private window */ }
 })

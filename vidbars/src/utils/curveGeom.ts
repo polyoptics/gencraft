@@ -21,9 +21,12 @@ const bare = (p: CurvePoint): CurvePoint => {
 }
 const hasHandle = (h: CurveHandle | undefined) => !!h && (Math.abs(h.x) > 1e-6 || Math.abs(h.y) > 1e-6 || Math.abs(h.z ?? 0) > 1e-6)
 
+/** A point whose handles are set by hand, even on a smooth curve. */
+export const ownsHandles = (p: CurvePoint) => p.t === 'broken' || p.t === 'unified'
+
 /** A curve's points with the handles that carry the line through them.
  *  A 'corner' point has none, whatever the curve. On a smooth curve a
- *  'broken' point keeps the handles set on it by hand, and every other
+ *  'broken' or 'unified' point keeps the handles set on it by hand, and every other
  *  point's are found here: inside the line each point's tangent is a
  *  centripetal Catmull-Rom's (the nearer neighbour counts for more, so a
  *  short segment beside a long one neither overshoots nor kinks); an open
@@ -41,9 +44,9 @@ export function curvePoints(c: Pick<Curve, 'kind' | 'pts' | 'closed' | 'smooth'>
   const EPS = 1e-6
   // A segment's share of the parameter: the square root of its length.
   const span = (a: CurvePoint, b: CurvePoint) => Math.sqrt(Math.hypot(b.x - a.x, b.y - a.y, zOf(b) - zOf(a)))
-  const auto = (p: CurvePoint) => p.t !== 'corner' && p.t !== 'broken'
+  const auto = (p: CurvePoint) => p.t !== 'corner' && !ownsHandles(p)
   const res: CurvePoint[] = pts.map((p, i) => {
-    if (p.t === 'broken') return p
+    if (ownsHandles(p)) return p
     const a = i > 0 ? pts[i - 1] : closed ? pts[n - 1] : null
     const b = i < n - 1 ? pts[i + 1] : closed ? pts[0] : null
     if (p.t === 'corner' || !a || !b) return bare(p)
@@ -149,7 +152,7 @@ export function splitCurveAt(c: Pick<Curve, 'kind' | 'pts' | 'closed' | 'smooth'
   if (s.z) np.z = s.z
   // A point whose handles are its own (not found by a smooth curve) has
   // them cut to suit; so has the new point on a curve set by hand.
-  const own = (p: CurvePoint) => p.t !== 'corner' && (!c.smooth || p.t === 'broken')
+  const own = (p: CurvePoint) => p.t !== 'corner' && (!c.smooth || ownsHandles(p))
   // On a straight stretch (no handle at either end) it is a plain point,
   // as a clicked one is.
   if (!c.smooth && (hasHandle(a.hout) || hasHandle(b.hin))) { np.hin = rel(r0, s); np.hout = rel(r1, s) }
@@ -157,6 +160,36 @@ export function splitCurveAt(c: Pick<Curve, 'kind' | 'pts' | 'closed' | 'smooth'
   if (own(pts[j]) && hasHandle(b.hin)) pts[j] = { ...pts[j], hin: rel(q2, p3) }
   pts.splice(seg + 1, 0, np)
   return { pts, index: seg + 1 }
+}
+
+/** A curve's line cut into the pieces a dashed or dotted line shows:
+ *  each `on` long with `off` between (canvas units along the line). A
+ *  piece is the points along it; a dot (`on` 0) is one point. */
+export function dashPieces(s: P3[], on: number, off: number, max = 1500): P3[][] {
+  let total = 0
+  for (let i = 1; i < s.length; i++) total += Math.hypot(s[i].x - s[i - 1].x, s[i].y - s[i - 1].y, s[i].z - s[i - 1].z)
+  // Never more pieces than is sane to draw: a very long line's are longer.
+  const k = Math.max(1, total / (on + off) / max)
+  on *= k; off *= k
+  const out: P3[][] = []
+  let cur: P3[] | null = [s[0]]
+  let left = on   // how much of this dash (or gap) is still to run
+  for (let i = 1; i < s.length; i++) {
+    let a = s[i - 1]
+    const b = s[i]
+    let d = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z)
+    while (d > left) {
+      const t = left / d
+      a = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, z: a.z + (b.z - a.z) * t }
+      d -= left
+      if (cur) { cur.push(a); out.push(cur); cur = null; left = off }
+      else { cur = [a]; left = on }
+    }
+    left -= d
+    if (cur) cur.push(b)
+  }
+  if (cur && (cur.length > 1 || on === 0)) out.push(cur)
+  return out
 }
 
 /** Which way a curve runs into its end (`end`) or out of its start, in

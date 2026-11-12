@@ -20,6 +20,7 @@ import { ensureAnnotated, modelName } from '../../utils/annotations'
 import { models, cardModel } from '../Canvas/tilt/TiltModels'
 import { curveBounds, curvePoints } from '../../utils/curveGeom'
 import { tangentState, setBroken, setCorner } from '../../utils/pathEdit'
+import { ColorPickerPopup } from '../Bar/ColorPickerPopup'
 import { useCurveDraft } from '../../utils/notesTool'
 import { useModelScaleStore } from '../../store/tiltStore'
 import { createMediaCard } from '../../utils/cardGrid'
@@ -47,6 +48,10 @@ const IcBreak: Ic = ({ size = 20 }) => (
 )
 const IcCorner: Ic = ({ size = 20 }) => (
   <svg {...svg(size)}><path d="M3 18L12 7l9 11" stroke={S} strokeLinejoin="miter" /><rect x="10.2" y="5.2" width="3.6" height="3.6" fill="#ffe14a" stroke="none" /></svg>
+)
+/** A line style: a solid line, dashes, dots. */
+const IcLine: React.FC<{ dash: 'dash' | 'dot' | null }> = ({ dash }) => (
+  <svg width={34} height={16} viewBox="0 0 34 16" fill="none"><path d="M3 8h28" stroke={S} strokeWidth={dash === 'dot' ? 3 : 2.4} strokeLinecap="round" strokeDasharray={dash === 'dash' ? '6 5' : dash === 'dot' ? '0.01 6.2' : undefined} /></svg>
 )
 const IcPen: Ic = ({ size = 20 }) => (
   <svg {...svg(size)}><path d="M4 20c3-1 4-4 6-4s2 3 5 2 4-5 5-7" stroke="#ff8fd1" /><path d="M14.5 4.5l3 3L10 15l-3.6.6.6-3.6z" stroke={S} strokeWidth="1.6" /></svg>
@@ -447,7 +452,9 @@ export const NotesPanel: React.FC = () => {
   const arrowStart = useNotesUi(s => s.arrowStart)
   const arrowEnd = useNotesUi(s => s.arrowEnd)
   const smooth = useNotesUi(s => s.smooth)
+  const dash = useNotesUi(s => s.dash)
   const selected = useNotesUi(s => s.selected)
+  const [picker, setPicker] = useState<{ x: number; y: number } | null>(null)
   const drawing = useCurveDraft(s => !!s.curve)
   if (!open) return null
 
@@ -460,6 +467,30 @@ export const NotesPanel: React.FC = () => {
     useUndoCoordinator.getState().checkpoint()
     for (const id of ids) ns.updateCurve(id, patch)
   }
+
+  /** The line style, and the same on the selected curves. */
+  const setDash = (d: 'dash' | 'dot' | null) => {
+    useNotesUi.setState({ dash: d })
+    const ns = useNotesStore.getState()
+    const ids = selected.filter(id => ns.curves[id] && (ns.curves[id].dash ?? null) !== d)
+    if (!ids.length) return
+    useUndoCoordinator.getState().checkpoint()
+    for (const id of ids) ns.updateCurve(id, { dash: d ?? undefined })
+  }
+  /** A colour of your own (the picker): one undo step for the whole pick. */
+  const openPicker = (e: React.MouseEvent) => {
+    // Beside the panel, not over it.
+    const r = e.currentTarget.getBoundingClientRect()
+    const panel = e.currentTarget.closest('[data-notes-panel]')?.getBoundingClientRect()
+    if (selected.some(id => useNotesStore.getState().curves[id])) useUndoCoordinator.getState().checkpoint()
+    setPicker({ x: (panel?.left ?? r.left) - 232, y: r.top - 60 })
+  }
+  const pickColor = (c: string) => {
+    useNotesUi.setState({ color: c })
+    const ns = useNotesStore.getState()
+    for (const id of selected) if (ns.curves[id]) ns.updateCurve(id, { color: c })
+  }
+  const custom = !NOTE_COLORS.includes(color)
 
   /** Smooth on or off, and the same on the selected curves (turned off, a
    *  curve keeps its shape: the handles it ran on become its own). */
@@ -536,11 +567,25 @@ export const NotesPanel: React.FC = () => {
               </div>
             </Section>
             <Section title="COLOUR">
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(9, 1fr)', gap: 4 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(10, 1fr)', gap: 3 }}>
                 {NOTE_COLORS.map(c => (
                   <button key={c} onClick={() => apply({ color: c })} title={c} aria-pressed={c === color}
                     style={{ height: 20, borderRadius: 10, background: c, cursor: 'pointer', padding: 0,
                       border: c === color ? '2px solid #fff' : '2px solid rgba(255,255,255,0.15)', boxShadow: c === color ? '0 0 0 1px rgba(0,0,0,0.6)' : 'none' }} />
+                ))}
+                {/* Any colour: the picker. Lit, showing it, while the colour in use is one of your own. */}
+                <button onClick={openPicker} title="Any colour: pick your own" aria-pressed={custom}
+                  style={{ height: 20, borderRadius: 10, cursor: 'pointer', padding: 0,
+                    background: custom ? color : 'conic-gradient(#ff5a5a, #ffe14a, #5fe39b, #4fc3ff, #a98bff, #ff8fd1, #ff5a5a)',
+                    border: custom ? '2px solid #fff' : '2px solid rgba(255,255,255,0.15)', boxShadow: custom ? '0 0 0 1px rgba(0,0,0,0.6)' : 'none' }} />
+              </div>
+              {picker && <ColorPickerPopup color={color} anchorX={picker.x} anchorY={picker.y} onChange={pickColor} onClose={() => setPicker(null)} />}
+            </Section>
+            <Section title="LINE">
+              <div style={{ display: 'flex', gap: 5 }}>
+                {([[null, 'Solid'], ['dash', 'Dashed'], ['dot', 'Dotted']] as const).map(([d, name]) => (
+                  <button key={name} style={{ ...btnStyle(dash === d, true), ...THIRD }} aria-pressed={dash === d} onClick={() => setDash(d)}
+                    title={`${name} line. Also sets the selected curves.`}><IcLine dash={d} /></button>
                 ))}
               </div>
             </Section>

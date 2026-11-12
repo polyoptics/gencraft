@@ -14,7 +14,8 @@
 
 import * as THREE from 'three'
 import type { Curve } from '../store/notesStore'
-import { curvePoints, curveSamples, endDir3, nearestOnCurve, type P3 } from '../utils/curveGeom'
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
+import { curvePoints, curveSamples, endDir3, nearestOnCurve, dashPieces, ownsHandles, type P3 } from '../utils/curveGeom'
 
 /** What the 3D view draws of the curves this frame. */
 export interface PathFrame {
@@ -172,7 +173,24 @@ export function createPathOverlay() {
     }
     const samples = curveSamples(c, 24)
     const closed = !!c.closed && c.pts.length > 2
-    if (samples.length > 1) body(keep(tube(samples, c.width / 2, closed)))
+    if (samples.length > 1) {
+      const w = c.width
+      if (c.dash === 'dash') {
+        // Dashes: short lengths of the round line (as the flat drawing's).
+        const parts = dashPieces(samples, w * 3.5, w * 1.5).filter(p => p.length > 1).map(p => tube(p, w / 2, false, 8))
+        const g = parts.length ? mergeGeometries(parts) : null
+        for (const p of parts) p.dispose()
+        if (g) body(keep(g))
+      } else if (c.dash === 'dot') {
+        // Dots: balls along the line.
+        const ball = new THREE.SphereGeometry(w / 2, 10, 8)
+        const parts = dashPieces(samples, 0, w * 2).map(p => ball.clone().translate(p[0].x, p[0].y, p[0].z))
+        const g = parts.length ? mergeGeometries(parts) : null
+        for (const p of parts) p.dispose()
+        ball.dispose()
+        if (g) body(keep(g))
+      } else body(keep(tube(samples, w / 2, closed)))
+    }
     // Arrowheads: cones, their points on the curve's ends.
     const size = Math.max(c.width * 4.5, 6)
     for (const end of [true, false]) {
@@ -218,7 +236,7 @@ export function createPathOverlay() {
       const arms: number[] = []
       const eff = curvePoints(c)
       eff.forEach((p, i) => {
-        if (p.t === 'corner' || (c.smooth && p.t !== 'broken')) return
+        if (p.t === 'corner' || (c.smooth && !ownsHandles(p))) return
         for (const side of ['in', 'out'] as const) {
           const h = side === 'in' ? p.hin : p.hout
           if (!h || (Math.abs(h.x) < 1e-6 && Math.abs(h.y) < 1e-6 && Math.abs(h.z ?? 0) < 1e-6)) continue

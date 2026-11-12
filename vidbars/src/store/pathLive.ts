@@ -10,6 +10,11 @@ import type { Curve } from './notesStore'
 /** The curve being drawn, and where the cursor is (for the next segment). */
 export const useCurveDraft = create<{ curve: Curve | null; hover: { x: number; y: number } | null }>(() => ({ curve: null, hover: null }))
 
+/** A curve's right-click menu (components/Notes/PathMenu): where on
+ *  screen, and what it was opened on: a point, or the line at share `t`
+ *  of the segment leaving point `seg`. */
+export const usePathMenu = create<{ at: { x: number; y: number; id: string; point?: number; seg?: number; t?: number } | null }>(() => ({ at: null }))
+
 /** The part of a curve under the cursor in 3D: `p:${id}:${i}` (a point)
  *  or `h:${id}:${i}:${side}` (a handle). */
 export const usePathHot = create<{ hot: string | null }>(() => ({ hot: null }))

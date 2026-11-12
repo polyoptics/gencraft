@@ -25,6 +25,7 @@ import './utils/notesTool'
 import './utils/areaFollow'
 import { CurveLayer } from './components/Notes/CurveLayer'
 import { NotesPanel } from './components/Notes/NotesPanel'
+import { PathMenu } from './components/Notes/PathMenu'
 import { ensureRolodexHome, useRolodexHomeBootstrap } from './utils/rolodexHome'
 import { StoragePersistenceBanner } from './components/UI/StoragePersistenceBanner'
 import { GifNotice } from './components/UI/GifNotice'
@@ -898,6 +899,7 @@ export default function App() {
       {/* Annotation / draw-mode floating toolbar (only visible while in draw mode) */}
       <DrawToolbar />
       <NotesPanel />
+      <PathMenu />
 
       {/* The Rolodex is no longer mounted here: the home instance is an
           ordinary pinned `list` node, rendered by PinLayer → FreeNode →

@@ -108,8 +108,22 @@ const hz = (h: CurveHandle | undefined) => h?.z ?? 0
 const len = (h: CurveHandle) => Math.hypot(h.x, h.y, hz(h))
 const mk = (x: number, y: number, z: number): CurveHandle => z ? { x, y, z } : { x, y }
 
-/** How the selected points' tangents stand: all broken, all corners (a
- *  point without handles on a curve set by hand is a corner too). */
+/** How a point's tangents behave:
+ *   - auto: on a Smooth curve, the line finds its handles itself;
+ *   - unified: its handles are set by hand and stay in one line;
+ *   - broken: each handle is its own;
+ *   - corner: no handles, the line turns sharply. */
+export type TangentMode = 'auto' | 'unified' | 'broken' | 'corner'
+
+export function modeOf(c: Pick<Curve, 'smooth'>, p: CurvePoint): TangentMode {
+  if (p.t === 'corner') return 'corner'
+  if (p.t === 'broken') return 'broken'
+  if (c.smooth) return p.t === 'unified' ? 'unified' : 'auto'
+  // Set by hand: a point without handles is a corner.
+  return hasH(p.hin) || hasH(p.hout) ? 'unified' : 'corner'
+}
+
+/** How the selected points' tangents stand: all broken, all corners. */
 export function tangentState(): { any: boolean; broken: boolean; corner: boolean } {
   const picked = pickedPoints()
   const { curves } = useNotesStore.getState()
@@ -118,10 +132,10 @@ export function tangentState(): { any: boolean; broken: boolean; corner: boolean
     const c = curves[id]
     if (c.kind !== 'bezier') continue
     for (const i of idx) {
-      const p = c.pts[i]
+      const m = modeOf(c, c.pts[i])
       any = true
-      if (p.t !== 'broken') broken = false
-      if (!(p.t === 'corner' || (!c.smooth && p.t !== 'broken' && !hasH(p.hin) && !hasH(p.hout)))) corner = false
+      if (m !== 'broken') broken = false
+      if (m !== 'corner') corner = false
     }
   }
   return { any, broken: any && broken, corner: any && corner }
@@ -129,70 +143,75 @@ export function tangentState(): { any: boolean; broken: boolean; corner: boolean
 
 /** The handles a point runs on now, found for it where it has none of
  *  its own (a smooth curve's, or a corner's on a curve set by hand). */
-function handlesNow(c: Curve, i: number): { hin: CurveHandle; hout: CurveHandle } {
-  const as = (smooth: boolean) => curvePoints({ ...c, smooth, pts: c.pts.map((p, k) => k === i ? { ...p, t: undefined, hin: undefined, hout: undefined } : p) })[i]
+function handlesNow(c: Curve, i: number): { hin?: CurveHandle; hout?: CurveHandle } {
   const p = c.pts[i]
-  // Its own, if it has them; else what a smooth line through it would use.
-  const own = p.t !== 'corner' && (!c.smooth || p.t === 'broken') && (hasH(p.hin) || hasH(p.hout))
-  const e = own ? p : c.smooth && p.t !== 'corner' && p.t !== 'broken' ? curvePoints(c)[i] : as(true)
-  return { hin: e.hin ?? { x: 0, y: 0 }, hout: e.hout ?? { x: 0, y: 0 } }
+  const m = modeOf(c, p)
+  const e = m === 'unified' || m === 'broken' ? p
+    : m === 'auto' ? curvePoints(c)[i]
+    // A corner: what a smooth line through it would use.
+    : curvePoints({ ...c, smooth: true, pts: c.pts.map((x, k) => k === i ? { x: x.x, y: x.y, z: x.z } : x) })[i]
+  const r: { hin?: CurveHandle; hout?: CurveHandle } = {}
+  if (hasH(e.hin)) r.hin = e.hin
+  if (hasH(e.hout)) r.hout = e.hout
+  return r
+}
+
+/** `p` with handles `h`, in one line: the incoming handle turned to face
+ *  the outgoing one, keeping its length. */
+function inLine(p: CurvePoint, h: { hin?: CurveHandle; hout?: CurveHandle }): CurvePoint {
+  const q: CurvePoint = { ...p }
+  delete q.hin; delete q.hout
+  const o = h.hout, n = h.hin
+  if (o && n) {
+    const k = len(n) / len(o)
+    q.hout = o
+    q.hin = mk(-o.x * k, -o.y * k, -hz(o) * k)
+  } else if (o) q.hout = o
+  else if (n) q.hin = n
+  return q
+}
+
+/** Set how the selected points' tangents behave (or just the points
+ *  given). The line keeps its shape where the new mode allows. */
+export function setTangentMode(mode: TangentMode, picked = pickedPoints()) {
+  const ns = useNotesStore.getState()
+  for (const [id, idx] of picked) {
+    const c = ns.curves[id]
+    if (!c || c.kind !== 'bezier') continue
+    const pts = c.pts.slice()
+    for (const i of idx) {
+      const p = pts[i]
+      if (!p || modeOf(c, p) === mode) continue
+      const h = handlesNow(c, i)
+      let q: CurvePoint
+      if (mode === 'corner') {
+        q = { ...p, t: 'corner' }
+        delete q.hin; delete q.hout
+      } else if (mode === 'broken') {
+        q = { ...p, t: 'broken' }
+        delete q.hin; delete q.hout
+        Object.assign(q, h)
+      } else if (mode === 'unified' || !c.smooth) {
+        // (Auto on a curve set by hand: smooth handles of its own.)
+        q = inLine(p, mode === 'auto' ? handlesNow({ ...c, pts: c.pts.map((x, k) => k === i ? { ...x, t: 'corner' as const } : x) }, i) : h)
+        if (c.smooth) q.t = 'unified'; else delete q.t
+      } else {
+        q = { ...p }
+        delete q.t; delete q.hin; delete q.hout
+      }
+      pts[i] = q
+    }
+    ns.updateCurve(id, { pts })
+  }
 }
 
 /** Break the selected points' tangents (each handle its own, for a sharp
- *  turn with bent sides) or join them again (one line through the point:
- *  the incoming handle turns to face the outgoing one, keeping its length). */
-export function setBroken(on: boolean) {
-  const ns = useNotesStore.getState()
-  for (const [id, idx] of pickedPoints()) {
-    const c = ns.curves[id]
-    if (c.kind !== 'bezier') continue
-    const pts = c.pts.slice()
-    for (const i of idx) {
-      const p = pts[i]
-      if (on) {
-        if (p.t === 'broken') continue
-        pts[i] = { ...p, ...handlesNow(c, i), t: 'broken' }
-      } else {
-        if (p.t !== 'broken') continue
-        const q: CurvePoint = { ...p, t: undefined }
-        delete q.t
-        const o = q.hout, n = q.hin
-        if (o && hasH(o)) {
-          const l = n && hasH(n) ? len(n) : len(o), k = l / len(o)
-          q.hin = mk(-o.x * k, -o.y * k, -hz(o) * k)
-        } else if (n && hasH(n)) q.hout = mk(-n.x, -n.y, -hz(n))
-        pts[i] = q
-      }
-    }
-    ns.updateCurve(id, { pts })
-  }
-}
+ *  turn with bent sides) or join them again (one line through the point). */
+export function setBroken(on: boolean) { setTangentMode(on ? 'broken' : 'unified') }
 
 /** Make the selected points sharp corners (no handles), or give them
  *  their handles back (found as a smooth line through them would). */
-export function setCorner(on: boolean) {
-  const ns = useNotesStore.getState()
-  for (const [id, idx] of pickedPoints()) {
-    const c = ns.curves[id]
-    if (c.kind !== 'bezier') continue
-    const pts = c.pts.slice()
-    for (const i of idx) {
-      const p = pts[i]
-      if (on) {
-        const q: CurvePoint = { ...p, t: 'corner' }
-        delete q.hin; delete q.hout
-        pts[i] = q
-      } else {
-        const q: CurvePoint = { ...p }
-        delete q.t
-        // On a curve set by hand it needs handles of its own again.
-        if (!c.smooth) Object.assign(q, handlesNow({ ...c, pts: pts.map((x, k) => k === i ? q : x) }, i))
-        pts[i] = q
-      }
-    }
-    ns.updateCurve(id, { pts })
-  }
-}
+export function setCorner(on: boolean) { setTangentMode(on ? 'corner' : 'auto') }
 
 // ── Moving, turning and sizing points (the 3D manipulator, a drag) ──
 
@@ -203,6 +222,11 @@ export interface PointsHeld {
   /** The lowest of them: what a size keeps where it is, so a curve
    *  standing on the canvas grows up off it, not down through it. */
   low: number
+  /** One point alone, held with handles of its own (Brian 2026-11-12: "if
+   *  I'm rotating a point that point has tangents, so it should change the
+   *  shape of the curve"): a turn or a size acts on these, so on a Smooth
+   *  curve the point takes its tangent into its own hands. */
+  solo?: CurvePoint
 }
 
 export function holdPoints(t = targetPoints()): PointsHeld | null {
@@ -215,7 +239,18 @@ export function holdPoints(t = targetPoints()): PointsHeld | null {
   const mid = targetMiddle(t)
   let low = Infinity
   for (const list of pts.values()) for (const { p } of list) low = Math.min(low, p.z ?? 0)
-  return mid ? { pts, mid, low } : null
+  if (!mid) return null
+  const held: PointsHeld = { pts, mid, low }
+  const all = [...pts.entries()]
+  if (all.length === 1 && all[0][1].length === 1) {
+    const c = curves[all[0][0]], { i, p } = all[0][1][0]
+    if (c.kind === 'bezier' && modeOf(c, p) === 'auto') {
+      const solo = inLine(p, handlesNow(c, i))
+      solo.t = 'unified'
+      held.solo = solo
+    }
+  }
+  return held
 }
 
 /** Write the held points back, each changed by `f`. */
@@ -247,7 +282,8 @@ function mapHeld(h: PointsHeld, m: number[][], c = h.mid) {
     y: m[1][0] * x + m[1][1] * y + m[1][2] * z,
     z: m[2][0] * x + m[2][1] * y + m[2][2] * z,
   })
-  writeHeld(h, p => {
+  writeHeld(h, p0 => {
+    const p = h.solo ?? p0
     const d = ap(p.x - c.x, p.y - c.y, (p.z ?? 0) - c.z)
     const q = withZ({ ...p, x: c.x + d.x, y: c.y + d.y }, c.z + d.z)
     for (const side of ['hin', 'hout'] as const) {

@@ -31,7 +31,7 @@
 //    In 3D the curves are things in the scene (three/pathOverlay), so what
 //    is under the cursor is asked of the 3D view; flat, of the page.
 
-import { useCurveDraft, usePathHot } from '../store/pathLive'
+import { useCurveDraft, usePathHot, usePathMenu } from '../store/pathLive'
 import { useNotesStore, useNotesUi, newNoteId, type Curve, type CurvePoint, type CurveHandle } from '../store/notesStore'
 import { curveSamples, nearestOnCurve } from './curveGeom'
 import { ptKey, parsePt, pickedPoints, selectPoint, selectAllPoints, deletePickedPoints, insertPoint, holdPoints, moveHeld } from './pathEdit'
@@ -215,6 +215,14 @@ function onDown(e: PointerEvent) {
   if (!useCurveDraft.getState().curve && ui.selected.length) {
     const h = hitAt(e, target, new Set(ui.selected))
     if (h && h.kind !== 'line') { selectPress(e, target, h); return }
+    // The Curve tool on a selected curve's line: a new point there.
+    if (h && ui.tool === 'curve' && useNotesStore.getState().curves[h.id]?.kind === 'bezier') {
+      claim(e); eatClick = true
+      checkpoint()
+      insertPoint(h.id, h.seg, h.t)
+      startDrag(() => {}, () => {})
+      return
+    }
   }
   if (!overCanvas(target)) return
 
@@ -236,7 +244,7 @@ function onDown(e: PointerEvent) {
       checkpoint()
       curve = {
         id: newNoteId('cv'), kind: 'bezier', pts: [], color: ui.color, width: ui.width / z,
-        arrowStart: ui.arrowStart, arrowEnd: ui.arrowEnd, smooth: ui.smooth,
+        arrowStart: ui.arrowStart, arrowEnd: ui.arrowEnd, smooth: ui.smooth, ...(ui.dash ? { dash: ui.dash } : {}),
       }
     }
     const anchor: CurvePoint = { x: p.cx, y: p.cy }
@@ -540,6 +548,28 @@ function onClick(e: MouseEvent) {
   if (eatClick) claim(e)
 }
 
+/** Right-click a curve's point or its line: its menu (components/Notes/
+ *  PathMenu), where a point's tangent mode is set right in the view, and
+ *  points are added and deleted. What it acts on is selected first. */
+function onMenu(e: MouseEvent) {
+  if (!e.isTrusted || useCurveDraft.getState().curve) return
+  const target = e.target as Element | null
+  if (!target?.closest || target.closest('[data-notes-panel],[data-top-icon-bar],[data-tilt-hud],[data-path-menu]')) return
+  const hit = hitAt(e, target)
+  if (!hit || hit.kind === 'handle') return
+  const c = useNotesStore.getState().curves[hit.id]
+  if (!c) return
+  claim(e)
+  const ui = useNotesUi.getState()
+  if (hit.kind === 'point') {
+    if (!ui.points.includes(ptKey(hit.id, hit.i))) selectPoint(hit.id, hit.i, false)
+    usePathMenu.setState({ at: { x: e.clientX, y: e.clientY, id: hit.id, point: hit.i } })
+  } else {
+    useNotesUi.setState({ selected: ui.selected.includes(hit.id) ? ui.selected : [hit.id], points: ui.selected.includes(hit.id) ? ui.points : [] })
+    usePathMenu.setState({ at: { x: e.clientX, y: e.clientY, id: hit.id, seg: hit.seg, t: hit.t } })
+  }
+}
+
 function typing(): boolean {
   const t = document.activeElement as HTMLElement | null
   return !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)
@@ -569,11 +599,11 @@ function onKey(e: KeyboardEvent) {
 }
 
 // Installed once; a reload of this module (dev) swaps the handlers in place.
-type Handlers = { onDown: typeof onDown; onMove: typeof onMove; onUp: typeof onUp; onClick: typeof onClick; onKey: typeof onKey }
+type Handlers = { onDown: typeof onDown; onMove: typeof onMove; onUp: typeof onUp; onClick: typeof onClick; onKey: typeof onKey; onMenu?: typeof onMenu }
 const w = (typeof window !== 'undefined' ? window : undefined) as (Window & { __notesTool?: Handlers }) | undefined
 if (w) {
   const first = !w.__notesTool
-  w.__notesTool = { onDown, onMove, onUp, onClick, onKey }
+  w.__notesTool = { onDown, onMove, onUp, onClick, onKey, onMenu }
   if (first) {
     const h = () => w.__notesTool!
     w.addEventListener('pointerdown', e => h().onDown(e), true)
@@ -583,5 +613,6 @@ if (w) {
     w.addEventListener('click', e => h().onClick(e), true)
     w.addEventListener('dblclick', e => h().onClick(e), true)
     w.addEventListener('keydown', e => h().onKey(e), true)
+    w.addEventListener('contextmenu', e => h().onMenu?.(e), true)
   }
 }

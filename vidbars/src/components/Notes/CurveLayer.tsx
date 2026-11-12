@@ -13,7 +13,7 @@ import { useCurveDraft } from '../../store/pathLive'
 import { useTiltStore, isTilted } from '../../store/tiltStore'
 import { useManip } from '../../store/manipStore'
 import { ptKey } from '../../utils/pathEdit'
-import { curvePath, arrowHeads } from '../../utils/curveGeom'
+import { curvePath, arrowHeads, ownsHandles } from '../../utils/curveGeom'
 
 const SEL = 'rgba(120,180,255,0.95)'
 /** A selected point (as its cube in 3D). */
@@ -25,7 +25,8 @@ const CurveShape: React.FC<{ c: Curve; zoom: number; hit: boolean; selected: boo
   return (
     <g>
       {selected && <path d={d} fill="none" stroke={SEL} strokeWidth={c.width + 4 / zoom} strokeLinecap="round" strokeLinejoin="round" opacity={0.45} />}
-      <path d={d} fill="none" stroke={c.color} strokeWidth={c.width} strokeLinecap="round" strokeLinejoin="round" />
+      <path d={d} fill="none" stroke={c.color} strokeWidth={c.width} strokeLinecap="round" strokeLinejoin="round"
+        strokeDasharray={c.dash === 'dash' ? `${c.width * 2.5} ${c.width * 2.5}` : c.dash === 'dot' ? `0.01 ${c.width * 2}` : undefined} />
       {heads.map((h, i) => <polygon key={i} points={h} fill={c.color} stroke={c.color} strokeWidth={c.width * 0.5} strokeLinejoin="round" />)}
       {/* What the mouse grabs: wider than the line, so a thin one is easy to hit. */}
       <path
@@ -50,7 +51,7 @@ const Handles: React.FC<{ c: Curve; zoom: number; points: string[] }> = ({ c, zo
         <g key={i}>
           {(['in', 'out'] as const).map(side => {
             const h = side === 'in' ? p.hin : p.hout
-            if (p.t === 'corner' || (c.smooth && p.t !== 'broken') || !h || (!h.x && !h.y)) return null
+            if (p.t === 'corner' || (c.smooth && !ownsHandles(p)) || !h || (!h.x && !h.y)) return null
             return (
               <g key={side}>
                 <line x1={p.x} y1={p.y} x2={p.x + h.x} y2={p.y + h.y} stroke={SEL} strokeWidth={sw} />
