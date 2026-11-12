@@ -10,6 +10,7 @@
 // drag a row onto an Area to put it there, onto "Canvas" to take it off.
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
+import ReactDOM from 'react-dom'
 import { useNotesStore, useNotesUi, toggleTool, NOTE_COLORS, type NotesTool, type CurveEnd, type CurveUnit, type CurveMark } from '../../store/notesStore'
 import { useFreeNodeStore, type FreeNodeData } from '../../store/freeNodeStore'
 import { useBoardsStore } from '../../store/boardsStore'
@@ -511,6 +512,73 @@ const Outliner: React.FC = () => {
   )
 }
 
+/** A choice from a list: a button showing the one in use; pressed, the
+ *  list opens under it, in the panel's own colours. */
+const PickList: React.FC<{ value: string; options: { value: string; name: string }[]; title: string; onPick: (v: string) => void }> = ({ value, options, title, onPick }) => {
+  const [at, setAt] = useState<{ x: number; y: number; w: number } | null>(null)
+  const now = options.find(o => o.value === value) ?? options[0]
+  return (
+    <>
+      <button data-pick-list="" title={title} aria-haspopup="listbox" aria-expanded={!!at}
+        onClick={e => { const r = e.currentTarget.getBoundingClientRect(); setAt(at ? null : { x: r.left, y: r.bottom + 4, w: r.width }) }}
+        style={{ ...btnStyle(false, true), height: 30, justifyContent: 'space-between', color: '#e8f0ff' }}>
+        <span>{now.name}</span>
+        <svg {...svg(14)}><path d="M6 9l6 6 6-6" stroke={S} /></svg>
+      </button>
+      {at && ReactDOM.createPortal(
+        <>
+          <div style={{ position: 'fixed', inset: 0, zIndex: 9998 }} onPointerDown={() => setAt(null)} />
+          <div role="listbox" data-pick-options="" onPointerDown={e => e.stopPropagation()}
+            style={{ position: 'fixed', left: at.x, top: Math.min(at.y, window.innerHeight - options.length * 30 - 18), width: at.w, boxSizing: 'border-box', zIndex: 9999,
+              background: '#1e1f30', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 9, boxShadow: '0 12px 40px rgba(0,0,0,0.6)', padding: '4px 0', fontFamily: 'system-ui, sans-serif' }}>
+            {options.map(o => (
+              <button key={o.value} role="option" aria-selected={o.value === value}
+                onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.08)' }}
+                onMouseLeave={e => { e.currentTarget.style.background = o.value === value ? 'rgba(120,170,255,0.22)' : 'none' }}
+                onClick={() => { setAt(null); if (o.value !== value) onPick(o.value) }}
+                style={{ display: 'flex', alignItems: 'center', width: '100%', height: 30, padding: '0 12px', boxSizing: 'border-box', border: 'none', cursor: 'pointer', textAlign: 'left',
+                  background: o.value === value ? 'rgba(120,170,255,0.22)' : 'none', color: '#e8f0ff', fontSize: 12 }}>
+                {o.name}
+              </button>
+            ))}
+          </div>
+        </>,
+        document.body,
+      )}
+    </>
+  )
+}
+
+const OUTLINE_H_KEY = 'vidbars.notesOutlineH'
+/** The Outliner in a box of a height you set: drag its bottom edge. The
+ *  list scrolls inside, so what is under it stays where it is. The height
+ *  is remembered. */
+const OutlinerBox: React.FC = () => {
+  const [h, setH] = useState(() => {
+    try { const v = +(localStorage.getItem(OUTLINE_H_KEY) ?? ''); return v >= 48 ? v : 132 } catch { return 132 }
+  })
+  const drag = useRef<{ y: number; h: number } | null>(null)
+  const clamp = (v: number) => Math.max(48, Math.min(900, Math.round(v)))
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
+      <div data-outline-box="" style={{ height: h, overflowY: 'auto' }}><Outliner /></div>
+      <div data-outline-size="" title="Drag to set the Outliner's height"
+        onPointerDown={e => { e.currentTarget.setPointerCapture(e.pointerId); drag.current = { y: e.clientY, h } }}
+        onPointerMove={e => { if (drag.current) setH(clamp(drag.current.h + e.clientY - drag.current.y)) }}
+        onPointerUp={e => {
+          if (!drag.current) return
+          const v = clamp(drag.current.h + e.clientY - drag.current.y)
+          drag.current = null
+          setH(v)
+          try { localStorage.setItem(OUTLINE_H_KEY, String(v)) } catch { /* private window */ }
+        }}
+        style={{ height: 10, cursor: 'ns-resize', display: 'flex', alignItems: 'center', justifyContent: 'center', touchAction: 'none' }}>
+        <div style={{ width: 34, height: 3, borderRadius: 2, background: 'rgba(255,255,255,0.22)' }} />
+      </div>
+    </div>
+  )
+}
+
 export const NotesPanel: React.FC = () => {
   const open = useNotesUi(s => s.open)
   const folded = useNotesUi(s => s.collapsed)
@@ -641,7 +709,7 @@ export const NotesPanel: React.FC = () => {
               </div>
             </Section>
             <Section title="3D SET"><Area3dTools part="make" /></Section>
-            <Section title="OUTLINER"><div style={{ height: 132, overflowY: 'auto', flexShrink: 0 }}><Outliner /></div></Section>
+            <Section title="OUTLINER"><OutlinerBox /></Section>
             <div style={{ height: 1, background: 'rgba(255,255,255,0.08)' }} />
             {/* Underneath: the options of what is selected (or of the tool in the hand), and nothing else. */}
             {forLine && (
@@ -673,10 +741,7 @@ export const NotesPanel: React.FC = () => {
             )}
             {forCurve && (
               <Section title="LINE">
-                <select value={unit} onChange={e => apply({ unit: e.target.value as CurveUnit })} title="What the line's pattern repeats"
-                  style={{ height: 30, width: '100%', boxSizing: 'border-box', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 8, color: '#e8f0ff', fontSize: 12, padding: '0 8px', colorScheme: 'dark', cursor: 'pointer' }}>
-                  {UNITS.map(u => <option key={u.unit} value={u.unit}>{u.name}</option>)}
-                </select>
+                <PickList value={unit} options={UNITS.map(u => ({ value: u.unit, name: u.name }))} title="What the line's pattern repeats" onPick={v => apply({ unit: v as CurveUnit })} />
                 {/* That piece's own options. */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '8px 9px', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 9, background: 'rgba(255,255,255,0.025)' }}>
                   <div style={{ display: 'flex', gap: 10 }}>
