@@ -15,7 +15,7 @@
 import * as THREE from 'three'
 import type { Curve } from '../store/notesStore'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
-import { curvePoints, nearestOnCurve, dashPieces, ownsHandles, shownLine, patternOf, flowShift, alongEvery, lineLength, markSize, ringTube, type P3 } from '../utils/curveGeom'
+import { curvePoints, nearestOnCurve, dashPieces, ownsHandles, shownLine, patternOf, flowShift, alongEvery, lineLength, markSize, ringTube, pointFrames, frameOf, unitBars, markBars, barOf, type P3, type Bar, type PathFrame3 } from '../utils/curveGeom'
 
 /** What the 3D view draws of the curves this frame. */
 export interface PathFrame {
@@ -125,30 +125,23 @@ const STEM_MAT = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: tru
 const ARM_MAT = new THREE.LineBasicMaterial({ color: COL.handle, transparent: true, opacity: 0.95, depthTest: false, depthWrite: false, toneMapped: false })
 const Y_UP = new THREE.Vector3(0, 1, 0), Z_UP = new THREE.Vector3(0, 0, 1)
 
-/** The graphic at a curve's points (Curve.mark), `m` across, bars `t`
- *  thick, at the origin. */
-function markGeo(kind: 'corners' | 'cross' | 'bulge', m: number, t: number, w: number): THREE.BufferGeometry {
-  if (kind === 'bulge') return new THREE.SphereGeometry(Math.max(w * 1.5, 2.5), 18, 12)
-  const parts: THREE.BufferGeometry[] = []
-  const bar = (axis: number, len: number, x: number, y: number, z: number) => {
-    const g = new THREE.BoxGeometry(axis === 0 ? len : t, axis === 1 ? len : t, axis === 2 ? len : t)
-    g.translate(x, y, z)
-    parts.push(g)
-  }
-  if (kind === 'cross') for (let a = 0; a < 3; a++) bar(a, m, 0, 0, 0)
-  else {
-    // A cube of which only the corners show: three short bars at each.
-    const h = m / 2, l = m * 0.26, o = h - l / 2
-    for (const sx of [-1, 1]) for (const sy of [-1, 1]) for (const sz of [-1, 1]) {
-      bar(0, l, sx * o, sy * h, sz * h)
-      bar(1, l, sx * h, sy * o, sz * h)
-      bar(2, l, sx * h, sy * h, sz * o)
-    }
-  }
-  const g = mergeGeometries(parts)
-  for (const p of parts) p.dispose()
-  return g
+/** A round bar from the origin up y, 1 long and 1 thick: scaled and
+ *  turned onto each bar of a wire pattern or a point's graphic. */
+const BAR = new THREE.CylinderGeometry(0.5, 0.5, 1, 6).translate(0, 0.5, 0)
+const barM = new THREE.Matrix4(), barQ = new THREE.Quaternion(), barA = new THREE.Vector3(), barD = new THREE.Vector3(), barS = new THREE.Vector3()
+/** Where BAR goes to be the bar `b`, `t` thick (a little long, so bars
+ *  that meet close the corner). */
+function barMatrix(b: Bar, t: number): THREE.Matrix4 {
+  barA.set(b[0].x, b[0].y, b[0].z)
+  barD.set(b[1].x - b[0].x, b[1].y - b[0].y, b[1].z - b[0].z)
+  const l = barD.length()
+  if (l > 1e-9) barD.divideScalar(l); else barD.set(0, 1, 0)
+  barQ.setFromUnitVectors(Y_UP, barD)
+  barA.addScaledVector(barD, -t * 0.3)
+  return barM.compose(barA, barQ, barS.set(t, l + t * 0.6, t))
 }
+const frameQuat = (f: PathFrame3) => new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(
+  new THREE.Vector3(f.d.x, f.d.y, f.d.z), new THREE.Vector3(f.side.x, f.side.y, f.side.z), new THREE.Vector3(f.up.x, f.up.y, f.up.z)))
 
 interface Knob { mesh: THREE.Mesh; at: THREE.Vector3; px: number; key: string; base: number }
 interface Built {
@@ -213,7 +206,7 @@ export function createPathOverlay() {
     let flow: Built['flow']
     if (line.length > 1 && !pat) body(keep(tube(line, w / 2, closed)))
     else if (line.length > 1 && pat) {
-      const period = pat.on + pat.gap
+      const period = pat.period
       if (pat.unit === 'line') {
         // Lengths of the round line with gaps between (as the flat
         // drawing's). Running, they are cut again each step.
@@ -231,6 +224,27 @@ export function createPathOverlay() {
         cut(flowShift(c, period, time))
         own.push({ dispose: () => geo?.dispose() } as unknown as THREE.BufferGeometry)
         if (c.flow) flow = t => cut(flowShift(c, period, t))
+      } else if (pat.unit === 'hatch' || pat.unit === 'cube') {
+        // Wire cubes, or a flat band of crossed lines: bars set to the
+        // path, twist and all.
+        const unit = pat.unit, t = barOf(c)
+        const first = unitBars(line, unit, pat.on, period, flowShift(c, period, time))
+        const cap = first.length + 80
+        const inst = ([[ghost, 40], [solid, 41]] as const).map(([mat, order]) => {
+          const m = new THREE.InstancedMesh(BAR, mat, cap)
+          m.renderOrder = order
+          m.frustumCulled = false
+          group.add(m)
+          own.push({ dispose: () => m.dispose() } as unknown as THREE.BufferGeometry)
+          return m
+        })
+        const place = (bars: Bar[]) => {
+          const n = Math.min(cap, bars.length)
+          for (let i = 0; i < n; i++) { const mat = barMatrix(bars[i], t); for (const m of inst) m.setMatrixAt(i, mat) }
+          for (const m of inst) { m.count = n; m.instanceMatrix.needsUpdate = true }
+        }
+        place(first)
+        if (c.flow) flow = tm => place(unitBars(line, unit, pat.on, period, flowShift(c, period, tm)))
       } else {
         // Balls or rings along the line, each `on` across.
         const tr = ringTube(c, pat.on)
@@ -276,25 +290,29 @@ export function createPathOverlay() {
       } else if (e.kind === 'cube') {
         body(keep(new THREE.BoxGeometry(size, size, size)), m => {
           m.position.set(e.tip.x, e.tip.y, e.tip.z)
-          // Square on to the line, its top as level as that allows.
-          const up = Math.abs(dv.z) > 0.95 ? new THREE.Vector3(1, 0, 0) : Z_UP.clone()
-          const side = new THREE.Vector3().crossVectors(up, dv).normalize()
-          up.crossVectors(dv, side)
-          m.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(dv, side, up))
+          // Square on to the line, turned with the path's twist there.
+          m.quaternion.copy(frameQuat(frameOf(e.dir, e.tip.tw)))
         })
       } else {
         body(keep(new THREE.SphereGeometry(size / 2, 22, 14)), m => m.position.set(e.tip.x, e.tip.y, e.tip.z))
       }
     }
-    // The graphic at its points, where it is on and no end's shape stands.
-    if (c.mark) {
-      const m = markSize(c)
-      const one = keep(markGeo(c.mark, m, Math.max(w * 0.3, m * 0.035), w))
+    // The graphic at its points, where it is on and no end's shape
+    // stands: set to the path there, twist and all.
+    const frames = c.mark || selected ? pointFrames(c) : []
+    if (c.mark === 'bulge') {
+      const one = keep(new THREE.SphereGeometry(Math.max(w * 1.5, 2.5), 18, 12))
       const parts: THREE.BufferGeometry[] = []
-      c.pts.forEach((p, i) => {
-        if (p.mark === false || shaped.has(i)) return
-        parts.push(one.clone().translate(p.x, p.y, p.z ?? 0))
-      })
+      c.pts.forEach((p, i) => { if (p.mark !== false && !shaped.has(i)) parts.push(one.clone().translate(p.x, p.y, p.z ?? 0)) })
+      if (parts.length) {
+        body(keep(mergeGeometries(parts)))
+        for (const p of parts) p.dispose()
+      }
+    } else if (c.mark) {
+      const bars: Bar[] = []
+      c.pts.forEach((p, i) => { if (p.mark !== false && !shaped.has(i)) bars.push(...markBars(c.mark as 'corners' | 'cross', { x: p.x, y: p.y, z: p.z ?? 0 }, frames[i], markSize(c))) })
+      const t = barOf(c)
+      const parts = bars.map(b => BAR.clone().applyMatrix4(barMatrix(b, t)))
       if (parts.length) {
         body(keep(mergeGeometries(parts)))
         for (const p of parts) p.dispose()
@@ -310,6 +328,8 @@ export function createPathOverlay() {
       const mat = keep(new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.55, metalness: 0, depthTest: false, depthWrite: false, toneMapped: false, transparent: true }))
       const mesh = new THREE.Mesh(CUBE, mat)
       mesh.position.set(p.x, p.y, p.z ?? 0)
+      // It sits as the path runs there, twist and all.
+      if (frames[i]) mesh.quaternion.copy(frameQuat(frames[i]))
       mesh.renderOrder = 60
       const edges = new THREE.LineSegments(CUBE_EDGES, EDGE_MAT)
       edges.renderOrder = 61

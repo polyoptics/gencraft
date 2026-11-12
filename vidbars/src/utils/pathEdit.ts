@@ -7,7 +7,7 @@
 // utils/area3dHandles; both go through here, flat and in 3D alike.
 
 import { useNotesStore, useNotesUi, type Curve, type CurvePoint, type CurveHandle } from '../store/notesStore'
-import { curvePoints, splitCurveAt, endOf, patternOf } from './curveGeom'
+import { curvePoints, splitCurveAt, endOf, patternOf, pointFrames, type P3 } from './curveGeom'
 
 export const ptKey = (id: string, i: number) => `${id}:${i}`
 export function parsePt(k: string): { id: string; i: number } {
@@ -227,20 +227,26 @@ export interface PointsHeld {
    *  shape of the curve"): a turn or a size acts on these, so on a Smooth
    *  curve the point takes its tangent into its own hands. */
   solo?: CurvePoint
+  /** Which way the path runs at each held point: a turn about that rolls
+   *  the path there (its twist). */
+  dirs: Map<CurvePoint, P3>
 }
 
 export function holdPoints(t = targetPoints()): PointsHeld | null {
   const { curves } = useNotesStore.getState()
   const pts = new Map<string, { i: number; p: CurvePoint }[]>()
+  const dirs = new Map<CurvePoint, P3>()
   for (const [id, idx] of t) {
     const c = curves[id]
-    if (c) pts.set(id, idx.filter(i => c.pts[i]).map(i => ({ i, p: c.pts[i] })))
+    if (!c) continue
+    pts.set(id, idx.filter(i => c.pts[i]).map(i => ({ i, p: c.pts[i] })))
+    if (c.kind === 'bezier') { const fr = pointFrames(c); for (const i of idx) if (c.pts[i]) dirs.set(c.pts[i], fr[i].d) }
   }
   const mid = targetMiddle(t)
   let low = Infinity
   for (const list of pts.values()) for (const { p } of list) low = Math.min(low, p.z ?? 0)
   if (!mid) return null
-  const held: PointsHeld = { pts, mid, low }
+  const held: PointsHeld = { pts, mid, low, dirs }
   const all = [...pts.entries()]
   if (all.length === 1 && all[0][1].length === 1) {
     const c = curves[all[0][0]], { i, p } = all[0][1][0]
@@ -276,7 +282,7 @@ export function moveHeld(h: PointsHeld, dx: number, dy: number, dz: number) {
 }
 
 /** Each place and handle carried by `m` (a 3×3, rows) about the middle. */
-function mapHeld(h: PointsHeld, m: number[][], c = h.mid) {
+function mapHeld(h: PointsHeld, m: number[][], c = h.mid, more?: (p0: CurvePoint, q: CurvePoint) => void) {
   const ap = (x: number, y: number, z: number) => ({
     x: m[0][0] * x + m[0][1] * y + m[0][2] * z,
     y: m[1][0] * x + m[1][1] * y + m[1][2] * z,
@@ -292,6 +298,7 @@ function mapHeld(h: PointsHeld, m: number[][], c = h.mid) {
       const v = ap(hd.x, hd.y, hz(hd))
       q[side] = mk(v.x, v.y, v.z)
     }
+    more?.(p0, q)
     return q
   })
 }
@@ -305,7 +312,13 @@ export function turnHeld(h: PointsHeld, axis: [number, number, number], angle: n
     [c + x * x * k, x * y * k - z * s, x * z * k + y * s],
     [y * x * k + z * s, c + y * y * k, y * z * k - x * s],
     [z * x * k - y * s, z * y * k + x * s, c + z * z * k],
-  ])
+  ], h.mid, (p0, q) => {
+    // As much of the turn as is about the path's own line rolls it there.
+    const d = h.dirs.get(p0)
+    const roll = d ? angle * (x * d.x + y * d.y + z * d.z) * 180 / Math.PI : 0
+    const tw = Math.round(((p0.twist ?? 0) + roll) * 10) / 10
+    if (tw) q.twist = tw; else delete q.twist
+  })
 }
 
 /** Sized by (sx, sy, sz) about their middle across the canvas and their
@@ -395,6 +408,28 @@ export function setPointMarks(on: boolean) {
       if (!idx.includes(i)) return p
       const q = { ...p }
       if (on) delete q.mark; else q.mark = false
+      return q
+    }) })
+  }
+}
+
+/** The selected points' twist (the first's), in degrees. */
+export function twistState(): { any: boolean; twist: number } {
+  const { curves } = useNotesStore.getState()
+  for (const [id, idx] of pickedPoints()) if (curves[id].kind === 'bezier' && idx.length) return { any: true, twist: Math.round(curves[id].pts[idx[0]].twist ?? 0) }
+  return { any: false, twist: 0 }
+}
+
+/** Roll the path about its own line at the selected points: degrees. */
+export function setPointTwist(deg: number) {
+  const ns = useNotesStore.getState()
+  for (const [id, idx] of pickedPoints()) {
+    const c = ns.curves[id]
+    if (c.kind !== 'bezier') continue
+    ns.updateCurve(id, { pts: c.pts.map((p, i) => {
+      if (!idx.includes(i)) return p
+      const q = { ...p }
+      if (deg) q.twist = deg; else delete q.twist
       return q
     }) })
   }

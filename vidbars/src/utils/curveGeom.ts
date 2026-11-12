@@ -1,7 +1,7 @@
 // curveGeom.ts — the shape of a curve (store/notesStore): its SVG path and
 // its arrowheads, in canvas units.
 
-import type { Curve, CurvePoint, CurveHandle, CurveEnd } from '../store/notesStore'
+import type { Curve, CurvePoint, CurveHandle, CurveEnd, CurveUnit } from '../store/notesStore'
 
 type P = { x: number; y: number }
 const out = (p: CurvePoint): P => ({ x: p.x + (p.hout?.x ?? 0), y: p.y + (p.hout?.y ?? 0) })
@@ -9,7 +9,7 @@ const inn = (p: CurvePoint): P => ({ x: p.x + (p.hin?.x ?? 0), y: p.y + (p.hin?.
 const f = (n: number) => Math.round(n * 100) / 100
 
 /** A point in the canvas's space: x, y on it, z up off it. */
-export interface P3 { x: number; y: number; z: number }
+export interface P3 { x: number; y: number; z: number; /** The path's twist there, degrees (shownLine's points). */ tw?: number }
 const zOf = (p: { z?: number } | undefined) => p?.z ?? 0
 const h3 = (x: number, y: number, z: number): CurveHandle => z ? { x, y, z } : { x, y }
 /** An anchor without its handles. */
@@ -150,6 +150,9 @@ export function splitCurveAt(c: Pick<Curve, 'kind' | 'pts' | 'closed' | 'smooth'
   const pts = c.pts.slice()
   const np: CurvePoint = { x: s.x, y: s.y }
   if (s.z) np.z = s.z
+  // Its twist is what the line's was there.
+  const tw = (c.pts[seg].twist ?? 0) * (1 - t) + (c.pts[j].twist ?? 0) * t
+  if (Math.abs(tw) > 0.05) np.twist = Math.round(tw * 10) / 10
   // A point whose handles are its own (not found by a smooth curve) has
   // them cut to suit; so has the new point on a curve set by hand.
   const own = (p: CurvePoint) => p.t !== 'corner' && (!c.smooth || ownsHandles(p))
@@ -190,7 +193,12 @@ export const markSize = (c: Pick<Curve, 'width'>) => Math.max(c.width * 6, 8)
 
 /** The pattern a curve's line repeats: the piece, how long (or across)
  *  it is and the gap after it. Null: one solid line. */
-export function patternOf(c: Pick<Curve, 'dash' | 'width' | 'unit'>): { unit: 'line' | 'ball' | 'ring'; on: number; gap: number } | null {
+export function patternOf(c: Pick<Curve, 'dash' | 'width' | 'unit'>): { unit: CurveUnit; on: number; gap: number; period: number } | null {
+  const p = patternParts(c)
+  // A band's crossings are `gap` apart (as far apart as it is wide, with none set).
+  return p && { ...p, period: p.unit === 'hatch' ? (p.gap > 0 ? p.gap : p.on) : p.on + p.gap }
+}
+function patternParts(c: Pick<Curve, 'dash' | 'width' | 'unit'>): { unit: CurveUnit; on: number; gap: number } | null {
   const unit = c.unit ?? 'line'
   if (unit === 'line') {
     const d = dashOf(c)
@@ -210,7 +218,11 @@ export function flowShift(c: Pick<Curve, 'flow'>, period: number, time: number):
 }
 
 const dist3 = (a: P3, b: P3) => Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z)
-const mix3 = (a: P3, b: P3, t: number): P3 => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, z: a.z + (b.z - a.z) * t })
+const mix3 = (a: P3, b: P3, t: number): P3 => {
+  const p: P3 = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, z: a.z + (b.z - a.z) * t }
+  if (a.tw !== undefined || b.tw !== undefined) p.tw = (a.tw ?? 0) + ((b.tw ?? 0) - (a.tw ?? 0)) * t
+  return p
+}
 
 /** How long a line is. */
 export function lineLength(s: P3[]): number {
@@ -295,7 +307,11 @@ export function dashPieces(s: P3[], on: number, off: number, shift = 0, max = 15
  *  for. And each end's shape: what, where its tip is, which way it points
  *  (out of the curve, along the last of the line) and its size. */
 export function shownLine(c: Curve, per = 24): { line: P3[]; ends: { kind: CurveEnd; tip: P3; dir: P3; size: number; end: boolean }[] } {
-  const s = curveSamples(c, per)
+  const n = c.pts.length
+  // Twisted, each place along the line carries how far.
+  const s: P3[] = c.kind === 'bezier' && c.pts.some(p => p.twist)
+    ? curveSamples(c, per).map(q => ({ ...q, tw: (c.pts[q.seg]?.twist ?? 0) * (1 - q.t) + (c.pts[(q.seg + 1) % n]?.twist ?? 0) * q.t }))
+    : curveSamples(c, per)
   const ends: { kind: CurveEnd; tip: P3; dir: P3; size: number; end: boolean }[] = []
   if (s.length < 2) return { line: s, ends }
   const total = lineLength(s)
@@ -312,7 +328,7 @@ export function shownLine(c: Curve, per = 24): { line: P3[]; ends: { kind: Curve
     const from = cut.length ? (end ? cut[cut.length - 1] : cut[0]) : (end ? s[0] : s[s.length - 1])
     const l = dist3(from, tip)
     if (l < 1e-9) continue
-    ends.push({ kind, tip: { x: tip.x, y: tip.y, z: tip.z }, dir: { x: (tip.x - from.x) / l, y: (tip.y - from.y) / l, z: (tip.z - from.z) / l }, size, end })
+    ends.push({ kind, tip: { x: tip.x, y: tip.y, z: tip.z, tw: tip.tw }, dir: { x: (tip.x - from.x) / l, y: (tip.y - from.y) / l, z: (tip.z - from.z) / l }, size, end })
     if (end) b = endTrim(c, kind); else a = endTrim(c, kind)
   }
   return { line: trimLine(s, a, b), ends }
@@ -349,4 +365,124 @@ export function curveBounds(c: Curve): { x0: number; y0: number; x1: number; y1:
   const add = (p: P) => { x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y) }
   for (const p of curvePoints(c)) { add(p); if (c.kind === 'bezier') { add(inn(p)); add(out(p)) } }
   return { x0, y0, x1, y1 }
+}
+
+
+// ── Which way is up along a path ──
+
+/** The path's own directions at a place: `d` along it, `side` across it
+ *  and `up`, square to each other. Up is the canvas's up as far as the
+ *  line's lean allows, rolled about the line by the twist there. */
+export interface PathFrame3 { d: P3; side: P3; up: P3 }
+export function frameOf(d: P3, tw = 0): PathFrame3 {
+  let ux = 0, uy = 0, uz = 1
+  if (Math.abs(d.z) > 0.97) { ux = 1; uz = 0 }
+  let sx = uy * d.z - uz * d.y, sy = uz * d.x - ux * d.z, sz = ux * d.y - uy * d.x
+  const l = Math.hypot(sx, sy, sz) || 1
+  sx /= l; sy /= l; sz /= l
+  ux = d.y * sz - d.z * sy; uy = d.z * sx - d.x * sz; uz = d.x * sy - d.y * sx
+  if (tw) {
+    const a = tw * Math.PI / 180, c = Math.cos(a), s = Math.sin(a)
+    const tx = sx * c + ux * s, ty = sy * c + uy * s, tz = sz * c + uz * s
+    ux = ux * c - sx * s; uy = uy * c - sy * s; uz = uz * c - sz * s
+    sx = tx; sy = ty; sz = tz
+  }
+  return { d, side: { x: sx, y: sy, z: sz }, up: { x: ux, y: uy, z: uz } }
+}
+
+const dirBetween = (a: P3, b: P3): P3 | null => {
+  const l = dist3(a, b)
+  return l > 1e-9 ? { x: (b.x - a.x) / l, y: (b.y - a.y) / l, z: (b.z - a.z) / l } : null
+}
+/** Which way a line runs at each of its points. */
+function lineDirs(s: P3[]): P3[] {
+  const out: P3[] = []
+  let last: P3 = { x: 1, y: 0, z: 0 }
+  for (let i = 0; i < s.length; i++) {
+    const d = dirBetween(s[Math.max(0, i - 1)], s[Math.min(s.length - 1, i + 1)]) ?? dirBetween(s[Math.max(0, i - 1)], s[i]) ?? last
+    out.push(d)
+    last = d
+  }
+  return out
+}
+
+/** The path's directions at each of a curve's points, twist and all. */
+export function pointFrames(c: Curve): PathFrame3[] {
+  const s = curveSamples(c, 12)
+  const n = c.pts.length
+  const at: number[] = new Array(n).fill(0)
+  s.forEach((q, k) => { if (q.t === 1 && q.seg + 1 < n) at[q.seg + 1] = k })
+  const closed = !!c.closed && n > 2
+  return c.pts.map((p, i) => {
+    const k = at[i]
+    // A closed curve's first point looks back along its last stretch.
+    const before = k > 0 ? s[k - 1] : closed ? s[s.length - 2] : s[k]
+    const after = k < s.length - 1 ? s[k + 1] : s[k]
+    const d = (before && after && dirBetween(before, after)) ?? { x: 1, y: 0, z: 0 }
+    return frameOf(d, p.twist ?? 0)
+  })
+}
+
+/** A straight bar from one place to another. */
+export type Bar = [P3, P3]
+const along = (p: P3, f: PathFrame3, a: number, b: number, c: number): P3 => ({
+  x: p.x + f.d.x * a + f.side.x * b + f.up.x * c,
+  y: p.y + f.d.y * a + f.side.y * b + f.up.y * c,
+  z: p.z + f.d.z * a + f.side.z * b + f.up.z * c,
+})
+/** How thick the bars of a wire pattern or a point's graphic are. */
+export const barOf = (c: Pick<Curve, 'width'>) => Math.max(c.width * 0.35, 0.4)
+
+/** The twelve edges of a cube `m` across at `p`, set to the path there. */
+function cubeBars(p: P3, f: PathFrame3, m: number, out: Bar[]) {
+  const h = m / 2
+  for (const a of [-h, h]) for (const b of [-h, h]) {
+    out.push([along(p, f, -h, a, b), along(p, f, h, a, b)])
+    out.push([along(p, f, a, -h, b), along(p, f, a, h, b)])
+    out.push([along(p, f, a, b, -h), along(p, f, a, b, h)])
+  }
+}
+
+/** A wire pattern's bars along a line (shownLine's), the pattern run
+ *  `shift` along it: wire cubes each `on` across; or a band `on` wide,
+ *  two rails with crossed lines between, lying flat to the path, so its
+ *  twist shows. */
+export function unitBars(line: P3[], unit: 'hatch' | 'cube', on: number, period: number, shift: number): Bar[] {
+  const out: Bar[] = []
+  if (line.length < 2) return out
+  if (unit === 'cube') {
+    for (const s of alongEvery(line, period, (shift + on / 2) % period, 250)) cubeBars(s.p, frameOf(s.d, s.p.tw), on, out)
+    return out
+  }
+  const h = on / 2
+  const dirs = lineDirs(line)
+  let pl: P3 | null = null, pr: P3 | null = null
+  line.forEach((p, i) => {
+    const f = frameOf(dirs[i], p.tw)
+    const l = along(p, f, 0, h, 0), r = along(p, f, 0, -h, 0)
+    if (pl && pr) { out.push([pl, l]); out.push([pr, r]) }
+    pl = l; pr = r
+  })
+  const spots = alongEvery(line, period, shift, 400).map(s => { const f = frameOf(s.d, s.p.tw); return [along(s.p, f, 0, h, 0), along(s.p, f, 0, -h, 0)] as const })
+  for (let k = 1; k < spots.length; k++) {
+    out.push([spots[k - 1][0], spots[k][1]])
+    out.push([spots[k - 1][1], spots[k][0]])
+  }
+  return out
+}
+
+/** The bars of a point's graphic (Curve.mark), `m` across at `p`, set to
+ *  the path there: a crosshair, or a cube of which only the corners show. */
+export function markBars(kind: 'corners' | 'cross', p: P3, f: PathFrame3, m: number): Bar[] {
+  const h = m / 2
+  if (kind === 'cross') return [[along(p, f, -h, 0, 0), along(p, f, h, 0, 0)], [along(p, f, 0, -h, 0), along(p, f, 0, h, 0)], [along(p, f, 0, 0, -h), along(p, f, 0, 0, h)]]
+  const out: Bar[] = []
+  const l = m * 0.26
+  for (const a of [-1, 1]) for (const b of [-1, 1]) for (const c of [-1, 1]) {
+    const corner = along(p, f, a * h, b * h, c * h)
+    out.push([corner, along(p, f, a * (h - l), b * h, c * h)])
+    out.push([corner, along(p, f, a * h, b * (h - l), c * h)])
+    out.push([corner, along(p, f, a * h, b * h, c * (h - l))])
+  }
+  return out
 }

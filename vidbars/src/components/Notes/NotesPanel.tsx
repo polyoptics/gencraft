@@ -19,7 +19,7 @@ import { areaAt } from '../../utils/areaFollow'
 import { ensureAnnotated, modelName } from '../../utils/annotations'
 import { models, cardModel } from '../Canvas/tilt/TiltModels'
 import { curveBounds, curvePoints } from '../../utils/curveGeom'
-import { tangentState, setBroken, setCorner, setLook, lookFrom, markState, setPointMarks } from '../../utils/pathEdit'
+import { tangentState, setBroken, setCorner, setLook, lookFrom, markState, setPointMarks, twistState, setPointTwist } from '../../utils/pathEdit'
 import { useCanvasStore } from '../../store/canvasStore'
 import { ColorPickerPopup } from '../Bar/ColorPickerPopup'
 import { useCurveDraft } from '../../utils/notesTool'
@@ -75,10 +75,13 @@ const IcEnd: React.FC<{ kind: CurveEnd | null; flip?: boolean; size?: number }> 
   </svg>
 )
 const ENDS: { kind: CurveEnd | null; name: string }[] = [{ kind: null, name: 'Nothing' }, { kind: 'arrow', name: 'Arrowhead' }, { kind: 'cube', name: 'Cube' }, { kind: 'ball', name: 'Ball' }]
-const UNITS: { unit: CurveUnit; name: string; tip: string }[] = [
-  { unit: 'line', name: 'Line', tip: 'The pattern repeats a length of the line' },
-  { unit: 'ball', name: 'Balls', tip: 'The pattern repeats a ball (a sphere in 3D), Solid across' },
-  { unit: 'ring', name: 'Rings', tip: 'The pattern repeats a ring round the line, Solid across' },
+/** The pieces a pattern can repeat, and what its two numbers are for each. */
+const UNITS: { unit: CurveUnit; name: string; a: string; aTip: string; b: string; bTip: string }[] = [
+  { unit: 'line', name: 'Line', a: 'Solid', aTip: 'The length of each solid section of the line', b: 'Gap', bTip: 'The length of the empty section after each solid one. 0: one solid line' },
+  { unit: 'ball', name: 'Balls', a: 'Size', aTip: 'How far across each ball is (a sphere in 3D)', b: 'Gap', bTip: 'The empty length between one ball and the next' },
+  { unit: 'ring', name: 'Rings', a: 'Size', aTip: 'How far across each ring round the line is', b: 'Gap', bTip: 'The empty length between one ring and the next' },
+  { unit: 'hatch', name: 'Cross-hatch', a: 'Width', aTip: 'How wide the band of crossed lines is. It lies flat to the path, so it shows the twist', b: 'Spacing', bTip: 'How far apart the crossings are. 0: as far apart as the band is wide' },
+  { unit: 'cube', name: 'Wire cubes', a: 'Size', aTip: 'How far across each wire cube is. They sit square to the path, so they show the twist', b: 'Gap', bTip: 'The empty length between one cube and the next' },
 ]
 const MARKS: { mark: CurveMark; name: string; tip: string }[] = [
   { mark: 'corners', name: 'Corners', tip: 'A cube at each point of which only the corners show' },
@@ -104,6 +107,7 @@ const TOOLS: { id: NotesTool; Icon: Ic; name: string; tip: string }[] = [
   { id: 'erase', Icon: IcErase, name: 'Erase', tip: 'Erase: click or drag over a stroke on a model, a pin’s dot or a curve to remove just that. Models and cards are never touched.' },
 ]
 
+const SELECT_TIP = "Select: click a curve to select it (Shift adds), drag it to move it. Click one of its points to select it (Shift adds; double-click for all of them), drag points and handles to reshape it; in 3D, Shift-drag lifts and lowers. Double-click the line for a new point. Delete removes the selected points, or the curve. Esc also puts any tool down."
 const SMOOTH_TIP = 'Smooth: on or off. On, a curve runs smoothly through its points by itself, no handles to set; drag the points to reshape it. Also sets the selected curves.'
 
 /** One of three switches sharing a row of the open panel. */
@@ -164,6 +168,17 @@ const PointMarkSwitch: React.FC = () => {
       Show at the selected points
     </button>
   )
+}
+
+/** The selected points' twist: how far the path is rolled about its own
+ *  line there. */
+const PointTwist: React.FC = () => {
+  useNotesUi(s => s.points)
+  useNotesStore(s => s.curves)
+  const st = twistState()
+  const begin = () => useUndoCoordinator.getState().checkpoint()
+  return <NumSlide name="Twist" val={st.twist} min={-180} max={180} top={3600} tip="Rolls the path about its own line at the selected points, in degrees. It blends along the line to the next point. Cross-hatch, wire cubes and the points' cubes show it. Typed, it can go past a full turn."
+    begin={begin} set={v => setPointTwist(v)} />
 }
 
 const Section: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
@@ -290,7 +305,7 @@ function makePrimitive(p: Primitive) {
   if (id) useBoardsStore.getState().setSelectedGroup(id)
 }
 
-const Area3dTools: React.FC = () => {
+const Area3dTools: React.FC<{ part: 'make' | 'selected' }> = ({ part }) => {
   const keys = useSelectedModelKeys()
   const tintOf = useModelScaleStore(s => s.tintOf)
   const cur = keys.length ? tintOf[keys[0]] ?? null : null
@@ -305,17 +320,21 @@ const Area3dTools: React.FC = () => {
     background: c ?? 'repeating-linear-gradient(45deg, rgba(255,255,255,0.18) 0 3px, transparent 3px 6px)',
     border: on ? '2px solid #fff' : '2px solid rgba(255,255,255,0.15)', boxShadow: on ? '0 0 0 1px rgba(0,0,0,0.6)' : 'none',
   })
+  // Making things for the set is one part of the panel; what is for the
+  // selected model (its colour, a camera's options) is with the selection's.
+  if (part === 'make') return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 6 }}>
+      {PRIMITIVES.map(p => (
+        <button key={p} style={{ ...btnStyle(false), width: '100%' }} onClick={() => makePrimitive(p)}
+          title={`${PRIM_NAMES[p]}: a new model card, set on the selected 3D set (or the one in view)`}>
+          <svg {...svg(20)}>{PRIM_ICON[p]}</svg>
+        </button>
+      ))}
+    </div>
+  )
   return (
     <>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 6 }}>
-        {PRIMITIVES.map(p => (
-          <button key={p} style={{ ...btnStyle(false), width: '100%' }} onClick={() => makePrimitive(p)}
-            title={`${PRIM_NAMES[p]}: a new model card, set on the selected 3D set (or the one in view)`}>
-            <svg {...svg(20)}>{PRIM_ICON[p]}</svg>
-          </button>
-        ))}
-      </div>
-      <div style={{ fontSize: 10, letterSpacing: 1.3, color: 'rgba(255,255,255,0.4)', fontFamily: 'ui-monospace, monospace', marginTop: 4 }}>MODEL COLOUR</div>
+      <div style={{ fontSize: 10, letterSpacing: 1.3, color: 'rgba(255,255,255,0.4)', fontFamily: 'ui-monospace, monospace' }}>MODEL COLOUR</div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(11, 1fr)', gap: 4, opacity: keys.length ? 1 : 0.4 }}
         title={keys.length ? undefined : 'Select a model to colour it'}>
         <button style={sw(null, !!keys.length && !cur)} disabled={!keys.length} onClick={() => paint(null)} title="Its own colours" aria-pressed={!!keys.length && !cur} />
@@ -510,6 +529,14 @@ export const NotesPanel: React.FC = () => {
   const selected = useNotesUi(s => s.selected)
   const [picker, setPicker] = useState<{ x: number; y: number } | null>(null)
   const drawing = useCurveDraft(s => !!s.curve)
+  const picked = useNotesUi(s => s.points.length > 0)
+  // What the options at the top are for: a curve (one selected, or the
+  // Curve tool in the hand), a pen line, the selected points.
+  const kinds = useNotesStore(s => selected.map(id => s.curves[id]?.kind).filter(Boolean).join(','))
+  const forCurve = tool === 'curve' || drawing || kinds.includes('bezier')
+  const forLine = forCurve || tool === 'pen' || kinds.includes('free')
+  const modelKeys = useSelectedModelKeys()
+  const modelNotes = useSelectedModels()
   // The settings show the selected curve's own (the first, of several),
   // and follow it as the selection or the curve changes.
   const shownCurve = useNotesStore(s => selected.length ? s.curves[selected[0]] : undefined)
@@ -535,6 +562,7 @@ export const NotesPanel: React.FC = () => {
     setPicker({ x: (panel?.left ?? r.left) - 232, y: r.top - 60 })
   }
   const pickColor = (c: string) => slide({ color: c })
+  const unitOpts = UNITS.find(u => u.unit === unit) ?? UNITS[0]
   const custom = !NOTE_COLORS.includes(color)
 
   /** Smooth on or off, and the same on the selected curves (turned off, a
@@ -552,7 +580,7 @@ export const NotesPanel: React.FC = () => {
   }
   const selectBtn = (
     <button key="select" style={btnStyle(!tool, !folded)} aria-pressed={!tool}
-      title="Select: click a curve to select it (Shift adds), drag it to move it. Click one of its points to select it (Shift adds; double-click for all of them), drag points and handles to reshape it; in 3D, Shift-drag lifts and lowers. Double-click the line for a new point. Delete removes the selected points, or the curve. Esc also puts any tool down."
+      title={SELECT_TIP}
       onClick={() => useNotesUi.setState({ tool: null, linking: null })}>
       <IcSelect />{!folded && <span>Select</span>}
     </button>
@@ -597,77 +625,107 @@ export const NotesPanel: React.FC = () => {
           </>
         ) : (
           <>
-            <Section title="TOOLS">{toolBtns}</Section>
-            <Section title="ENDS">
-              {([['Start', 'endStart', endStart], ['End', 'endEnd', endEnd]] as const).map(([name, key, now]) => (
-                <div key={key} style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
-                  <span style={{ width: 30, fontSize: 11, color: 'rgba(255,255,255,0.6)', flexShrink: 0 }}>{name}</span>
-                  {ENDS.map(e => (
-                    <button key={e.name} style={{ ...btnStyle(now === e.kind), flex: '1 1 0', width: 'auto', height: 30 }} aria-pressed={now === e.kind}
-                      title={`${e.name} on the ${name.toLowerCase()}. Also sets the selected curves.`} onClick={() => apply({ [key]: e.kind })}>
-                      <IcEnd kind={e.kind} flip={key === 'endStart'} />
-                    </button>
+            {/* On top: the options of what is selected (or of the tool in the hand), and nothing else. */}
+            {forLine && (
+              <Section title="COLOUR">
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(10, 1fr)', gap: 3 }}>
+                  {NOTE_COLORS.map(c => (
+                    <button key={c} onClick={() => apply({ color: c })} title={c} aria-pressed={c === color}
+                      style={{ height: 20, borderRadius: 10, background: c, cursor: 'pointer', padding: 0,
+                        border: c === color ? '2px solid #fff' : '2px solid rgba(255,255,255,0.15)', boxShadow: c === color ? '0 0 0 1px rgba(0,0,0,0.6)' : 'none' }} />
+                  ))}
+                  {/* Any colour: the picker. Lit, showing it, while the colour in use is one of your own. */}
+                  <button onClick={openPicker} title="Any colour: pick your own" aria-pressed={custom}
+                    style={{ height: 20, borderRadius: 10, cursor: 'pointer', padding: 0,
+                      background: custom ? color : 'conic-gradient(#ff5a5a, #ffe14a, #5fe39b, #4fc3ff, #a98bff, #ff8fd1, #ff5a5a)',
+                      border: custom ? '2px solid #fff' : '2px solid rgba(255,255,255,0.15)', boxShadow: custom ? '0 0 0 1px rgba(0,0,0,0.6)' : 'none' }} />
+                </div>
+                {forCurve && <NumSlide name="Opacity" val={opacity} min={5} max={100} tip="How solid the line is, in percent: lower lets what is behind it show through."
+                  begin={stepOnce} set={v => slide({ opacity: v })} />}
+                {picker && <ColorPickerPopup color={color} anchorX={picker.x} anchorY={picker.y} onChange={pickColor} onClose={() => setPicker(null)} />}
+              </Section>
+            )}
+            {forLine && (
+              <Section title={`THICKNESS · ${width}px`}>
+                <input type="range" min={1} max={24} step={1} value={width}
+                  onPointerDown={stepOnce} onKeyDown={stepOnce}
+                  onChange={e => slide({ width: +e.target.value })}
+                  style={{ width: '100%' }} />
+              </Section>
+            )}
+            {forCurve && (
+              <Section title="LINE">
+                <select value={unit} onChange={e => apply({ unit: e.target.value as CurveUnit })} title="What the line's pattern repeats"
+                  style={{ height: 30, width: '100%', boxSizing: 'border-box', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 8, color: '#e8f0ff', fontSize: 12, padding: '0 8px', colorScheme: 'dark', cursor: 'pointer' }}>
+                  {UNITS.map(u => <option key={u.unit} value={u.unit}>{u.name}</option>)}
+                </select>
+                {/* That piece's own options. */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '8px 9px', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 9, background: 'rgba(255,255,255,0.025)' }}>
+                  <div style={{ display: 'flex', gap: 10 }}>
+                    <NumSlide name={unitOpts.a} val={dashOn} min={1} max={120} top={400} tip={`${unitOpts.aTip}.`} begin={stepOnce} set={v => slide({ dashOn: v })} />
+                    <NumSlide name={unitOpts.b} val={dashGap} min={0} max={120} top={400} tip={`${unitOpts.bTip}.`} begin={stepOnce} set={v => slide({ dashGap: v })} />
+                  </div>
+                  <NumSlide name="Motion" val={flow} min={-200} max={200} top={1000} tip="How fast the pattern runs along the line, towards its end. 0: still. Below 0: towards its start."
+                    begin={stepOnce} set={v => slide({ flow: v })} />
+                </div>
+              </Section>
+            )}
+            {forCurve && (
+              <Section title="ENDS">
+                {([['Start', 'endStart', endStart], ['End', 'endEnd', endEnd]] as const).map(([name, key, now]) => (
+                  <div key={key} style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
+                    <span style={{ width: 30, fontSize: 11, color: 'rgba(255,255,255,0.6)', flexShrink: 0 }}>{name}</span>
+                    {ENDS.map(e => (
+                      <button key={e.name} style={{ ...btnStyle(now === e.kind), flex: '1 1 0', width: 'auto', height: 30 }} aria-pressed={now === e.kind}
+                        title={`${e.name} on the ${name.toLowerCase()}`} onClick={() => apply({ [key]: e.kind })}>
+                        <IcEnd kind={e.kind} flip={key === 'endStart'} />
+                      </button>
+                    ))}
+                  </div>
+                ))}
+              </Section>
+            )}
+            {forCurve && (
+              <Section title="POINTS">
+                <div style={{ display: 'flex', gap: 5 }}>
+                  <button style={{ ...btnStyle(smooth, true), ...THIRD, height: 30, flex: '0 0 auto', padding: '0 9px' }} aria-pressed={smooth} onClick={() => setSmooth(!smooth)} title={SMOOTH_TIP}><IcSmooth size={16} /><span>Smooth</span></button>
+                </div>
+                <div style={{ display: 'flex', gap: 5 }}>
+                  {MARKS.map(m => (
+                    <button key={m.mark} style={{ ...btnStyle(mark === m.mark, true), ...THIRD, height: 30 }} aria-pressed={mark === m.mark}
+                      title={`${m.tip}: on or off. It sits as the path runs there, twist and all.`} onClick={() => apply({ mark: mark === m.mark ? null : m.mark })}>{m.name}</button>
                   ))}
                 </div>
-              ))}
-            </Section>
-            <Section title="CURVE">
-              {/* Three switches in the one row the section always had. */}
-              <div style={{ display: 'flex', gap: 5 }}>
-                <button style={{ ...btnStyle(smooth, true), ...THIRD }} aria-pressed={smooth} onClick={() => setSmooth(!smooth)} title={SMOOTH_TIP}><IcSmooth size={16} /><span>Smooth</span></button>
-                <PointTools folded={false} />
-              </div>
-            </Section>
-            <Section title="COLOUR">
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(10, 1fr)', gap: 3 }}>
-                {NOTE_COLORS.map(c => (
-                  <button key={c} onClick={() => apply({ color: c })} title={c} aria-pressed={c === color}
-                    style={{ height: 20, borderRadius: 10, background: c, cursor: 'pointer', padding: 0,
-                      border: c === color ? '2px solid #fff' : '2px solid rgba(255,255,255,0.15)', boxShadow: c === color ? '0 0 0 1px rgba(0,0,0,0.6)' : 'none' }} />
-                ))}
-                {/* Any colour: the picker. Lit, showing it, while the colour in use is one of your own. */}
-                <button onClick={openPicker} title="Any colour: pick your own" aria-pressed={custom}
-                  style={{ height: 20, borderRadius: 10, cursor: 'pointer', padding: 0,
-                    background: custom ? color : 'conic-gradient(#ff5a5a, #ffe14a, #5fe39b, #4fc3ff, #a98bff, #ff8fd1, #ff5a5a)',
-                    border: custom ? '2px solid #fff' : '2px solid rgba(255,255,255,0.15)', boxShadow: custom ? '0 0 0 1px rgba(0,0,0,0.6)' : 'none' }} />
-              </div>
-              <NumSlide name="Opacity" val={opacity} min={5} max={100} tip="How solid the line is, in percent: lower lets what is behind it show through. Also sets the selected curves."
-                begin={stepOnce} set={v => slide({ opacity: v })} />
-              {picker && <ColorPickerPopup color={color} anchorX={picker.x} anchorY={picker.y} onChange={pickColor} onClose={() => setPicker(null)} />}
-            </Section>
-            <Section title="LINE">
-              <div style={{ display: 'flex', gap: 5 }}>
-                {UNITS.map(u => (
-                  <button key={u.unit} style={{ ...btnStyle(unit === u.unit, true), ...THIRD, height: 30 }} aria-pressed={unit === u.unit}
-                    title={`${u.tip}. Also sets the selected curves.`} onClick={() => apply({ unit: u.unit })}>{u.name}</button>
-                ))}
-              </div>
-              <div style={{ display: 'flex', gap: 10 }}>
-                <NumSlide name="Solid" val={dashOn} min={1} max={120} top={400} tip="The length of each solid section of the line (how far across each ball or ring is). Also sets the selected curves."
-                  begin={stepOnce} set={v => slide({ dashOn: v })} />
-                <NumSlide name="Gap" val={dashGap} min={0} max={120} top={400} tip="The length of the empty section after each solid one. 0: one solid line. Also sets the selected curves."
-                  begin={stepOnce} set={v => slide({ dashGap: v })} />
-              </div>
-              <NumSlide name="Motion" val={flow} min={-200} max={200} top={1000} tip="How fast the pattern runs along the line, towards its end. 0: still. Below 0: towards its start. Also sets the selected curves."
-                begin={stepOnce} set={v => slide({ flow: v })} />
-            </Section>
-            <Section title="POINTS">
-              <div style={{ display: 'flex', gap: 5 }}>
-                {MARKS.map(m => (
-                  <button key={m.mark} style={{ ...btnStyle(mark === m.mark, true), ...THIRD, height: 30 }} aria-pressed={mark === m.mark}
-                    title={`${m.tip}: on or off. Also sets the selected curves.`} onClick={() => apply({ mark: mark === m.mark ? null : m.mark })}>{m.name}</button>
-                ))}
-              </div>
-              <PointMarkSwitch />
-            </Section>
-            <Section title={`THICKNESS · ${width}px`}>
-              <input type="range" min={1} max={24} step={1} value={width}
-                onPointerDown={stepOnce} onKeyDown={stepOnce}
-                onChange={e => slide({ width: +e.target.value })}
-                style={{ width: '100%' }} />
-            </Section>
-            <Section title="3D SET"><Area3dTools /></Section>
+              </Section>
+            )}
+            {picked && (
+              <Section title="SELECTED POINTS">
+                <div style={{ display: 'flex', gap: 5 }}><PointTools folded={false} /></div>
+                <PointMarkSwitch />
+                <PointTwist />
+              </Section>
+            )}
+            {modelKeys.length > 0 && <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><Area3dTools part="selected" /></div>}
             <SelectedModels />
+            {!forLine && !picked && !modelKeys.length && !modelNotes.length && (
+              <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', lineHeight: 1.5 }}>Select something to see its options here.</div>
+            )}
+            <div style={{ height: 1, background: 'rgba(255,255,255,0.08)' }} />
+            <Section title="TOOLS">
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 5 }}>
+                {[{ id: null, Icon: IcSelect, name: 'Select', tip: SELECT_TIP }, ...TOOLS].map(t => {
+                  const on = t.id ? tool === t.id : !tool
+                  return (
+                    <button key={t.name} title={t.tip} aria-pressed={on}
+                      style={{ ...btnStyle(on), width: '100%', height: 46, flexDirection: 'column', gap: 2, fontSize: 9.5 }}
+                      onClick={() => t.id ? toggleTool(t.id) : useNotesUi.setState({ tool: null, linking: null })}>
+                      <t.Icon size={18} /><span>{t.name}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            </Section>
+            <Section title="3D SET"><Area3dTools part="make" /></Section>
             <Section title="OUTLINER"><Outliner /></Section>
           </>
         )}

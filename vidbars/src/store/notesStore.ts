@@ -30,14 +30,20 @@ export interface CurveHandle { x: number; y: number; z?: number }
  *  its own, set by hand; 'corner', no handles: the line turns sharply. */
 export interface CurvePoint {
   x: number; y: number; z?: number; hin?: CurveHandle; hout?: CurveHandle; t?: 'unified' | 'broken' | 'corner'
+  /** How far the path is rolled about its own line here, in degrees
+   *  (it blends along the line between points): which way is up for what
+   *  rides or shows on the path. */
+  twist?: number
   /** false: its curve's point graphic (Curve.mark) is off at this point. */
   mark?: false
 }
 
 /** What stands on an end of a curve. */
 export type CurveEnd = 'arrow' | 'cube' | 'ball'
-/** The piece a curve's pattern repeats: a length of line, a ball, a ring. */
-export type CurveUnit = 'line' | 'ball' | 'ring'
+/** The piece a curve's pattern repeats: a length of line, a ball, a ring,
+ *  a wire cube; or 'hatch', a flat band of crossed lines. The last two
+ *  show the path's twist. */
+export type CurveUnit = 'line' | 'ball' | 'ring' | 'hatch' | 'cube'
 /** A graphic at each point of a curve: a cube of which only the corners
  *  show, a crosshair in all three directions, the line swelling. */
 export type CurveMark = 'corners' | 'cross' | 'bulge'
@@ -65,7 +71,7 @@ export interface Curve {
   dash?: [number, number] | 'dash' | 'dot'
   /** The piece the pattern repeats (absent: lengths of the line). A
    *  ball or a ring is `dash[0]` across, `dash[1]` apart. */
-  unit?: 'ball' | 'ring'
+  unit?: 'ball' | 'ring' | 'hatch' | 'cube'
   /** How solid it is, 0..1 (absent: 1). */
   opacity?: number
   /** The pattern runs along the line: canvas units a second, towards its
