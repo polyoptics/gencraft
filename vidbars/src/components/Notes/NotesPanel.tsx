@@ -11,7 +11,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import ReactDOM from 'react-dom'
-import { useNotesStore, useNotesUi, toggleTool, NOTE_COLORS, type NotesTool, type CurveEnd, type CurveUnit, type CurveMark, type CurveEase } from '../../store/notesStore'
+import { useNotesStore, useNotesUi, toggleTool, NOTE_COLORS, type NotesTool, type CurveEnd, type CurveUnit, type CurveMark, type CurveEase, type Curve, type PathRider, type RideAfter } from '../../store/notesStore'
 import { useFreeNodeStore, type FreeNodeData } from '../../store/freeNodeStore'
 import { useBoardsStore } from '../../store/boardsStore'
 import { useViewport3DStore } from '../../store/viewport3dStore'
@@ -30,6 +30,7 @@ import { visibleCanvasCenter } from '../../utils/fx/createEffect'
 import { PRIMITIVES, PRIM_NAMES, primitiveUrl, type Primitive } from '../../three/primitives'
 import { dataKey } from '../../utils/area3dScene'
 import { CameraTools, NEW_CAMERA_MM } from '../Canvas/tilt/LookThrough'
+import { useRideClock, rideTime, rideSpan, rideTotal, parentToPath, unparentFromPath, setRider } from '../../utils/pathRide'
 
 const S = 'rgba(228,234,255,0.92)'
 const W_OPEN = 252, W_FOLDED = 52
@@ -371,8 +372,134 @@ const Area3dTools: React.FC<{ part: 'make' | 'selected' }> = ({ part }) => {
   )
 }
 
+// ── Models riding the selected path ──
+
+const AFTERS: { value: RideAfter; name: string }[] = [
+  { value: 'loop', name: 'Go round again' }, { value: 'stop', name: 'Stop at the end' }, { value: 'pingpong', name: 'Come back the way it went' },
+]
+
+/** Seconds, typed: to a tenth. */
+const Secs: React.FC<{ name: string; val: number; tip: string; set: (v: number) => void }> = ({ name, val, tip, set }) => (
+  <label title={tip} style={{ flex: '1 1 0', minWidth: 0, display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 11, color: 'rgba(255,255,255,0.6)' }}>
+    {name}
+    <input type="number" min={0} max={36000} step={0.1} value={val}
+      onKeyDown={e => e.stopPropagation()}
+      onChange={e => set(Math.max(0, Math.round((+e.target.value || 0) * 10) / 10))}
+      style={{ width: 58, height: 22, boxSizing: 'border-box', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 5, color: '#e8f0ff', fontSize: 11, textAlign: 'right', padding: '0 3px' }} />
+  </label>
+)
+
+/** The ride clock: one for every path, so models on several stay in step. */
+const RideClockRow: React.FC = () => {
+  const playing = useRideClock(s => s.playing)
+  const base = useRideClock(s => s.base)
+  const [, tick] = useState(0)
+  useEffect(() => {
+    if (!playing) return
+    const id = window.setInterval(() => tick(n => n + 1), 100)
+    return () => window.clearInterval(id)
+  }, [playing])
+  void base
+  const now = rideTime()
+  const top = Math.max(10, Math.ceil(rideTotal()), Math.ceil(now))
+  const wide: React.CSSProperties = { flex: '1 1 0', width: 'auto', height: 30, justifyContent: 'center', fontSize: 11.5 }
+  return (
+    <>
+      <div style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
+        <button style={{ ...btnStyle(playing, true), ...wide }} aria-pressed={playing}
+          title="Play: on or off. On, the clock runs and every model on a path rides it. One clock for all the paths, so they stay in step."
+          onClick={() => playing ? useRideClock.getState().pause() : useRideClock.getState().play()}>Play</button>
+        <button style={{ ...btnStyle(false, true), ...wide }} title="Back to the start: the clock goes to 0, every model to where its path begins"
+          onClick={() => useRideClock.getState().seek(0)}>To start</button>
+        <span style={{ width: 54, textAlign: 'right', fontSize: 11.5, fontFamily: 'ui-monospace, monospace', color: 'rgba(235,240,255,0.85)', flexShrink: 0 }}>{now.toFixed(1)}s</span>
+      </div>
+      <input type="range" min={0} max={top} step={0.05} value={Math.min(top, now)} title="The clock: drag to any moment"
+        onChange={e => useRideClock.getState().seek(+e.target.value)} style={{ width: '100%' }} />
+    </>
+  )
+}
+
+/** The selected path as a ride (Brian 2026-11-12): when its models set
+ *  off and arrive on the shared clock, and each model's own way of
+ *  sitting on it. */
+const PathRiders: React.FC<{ c: Curve }> = ({ c }) => {
+  const zoom = useCanvasStore(s => s.zoom)
+  const nodes = useFreeNodeStore(s => s.nodes)
+  const groups = useBoardsStore(s => s.groups)
+  const step = () => useUndoCoordinator.getState().checkpoint()
+  const patch = (p: Partial<Curve>) => { step(); useNotesStore.getState().updateCurve(c.id, p) }
+  const span = rideSpan(c)
+  const list = (c.riders ?? []).map(r => {
+    const id = r.key.slice(5)
+    const name = r.key.startsWith('node:') ? nodes[id]?.label || (nodes[id] ? 'Model' : null) : groups.find(g => g.id === id)?.name || (groups.some(g => g.id === id) ? 'Card' : null)
+    return { r, name }
+  }).filter(x => x.name !== null)
+  const tog = (r: PathRider, k: 'aim' | 'slope' | 'twist', name: string, tip: string) => {
+    const on = r[k] !== false
+    return <button style={{ ...btnStyle(on, true), flex: '1 1 0', width: 'auto', height: 30, justifyContent: 'center', fontSize: 11.5 }} aria-pressed={on}
+      title={`${name}: on or off. ${tip}`} onClick={() => { step(); setRider(c.id, r.key, { [k]: !on }) }}>{name}</button>
+  }
+  return (
+    <Section title="RIDING THIS PATH">
+      {!list.length && <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)', lineHeight: 1.5 }}>Drag a model onto this path in the Outliner and it rides the path in the 3D view.</div>}
+      {!!list.length && (
+        <>
+          <RideClockRow />
+          <div style={{ display: 'flex', gap: 10 }}>
+            <Secs name="Sets off" val={c.rideStart ?? 0} tip="When on the clock this path's models set off, in seconds. Until then they wait at its start." set={v => patch({ rideStart: v || undefined })} />
+            <Secs name="Arrives" val={c.rideEnd ?? 0} tip="When on the clock they reach the end, in seconds. 0: they go at the speed of the line's own Motion." set={v => patch({ rideEnd: v || undefined })} />
+          </div>
+          <div style={{ fontSize: 10.5, color: 'rgba(255,255,255,0.4)' }}>{span.timed ? `${span.dur.toFixed(1)}s from start to end` : c.flow ? `At the line's Motion speed: ${span.dur.toFixed(1)}s from start to end` : 'No Motion on the line and no arrival time: 4s from start to end'}</div>
+          <div style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
+            <div style={{ flex: '1 1 0', minWidth: 0 }}>
+              <PickList value={c.rideAfter ?? 'loop'} options={AFTERS} title="What its models do when they reach the end" onPick={v => patch({ rideAfter: v === 'loop' ? undefined : v as RideAfter })} />
+            </div>
+            <button style={{ ...btnStyle(!!c.rideEase, true), flex: '0 0 auto', width: 'auto', height: 30, padding: '0 10px', justifyContent: 'center', fontSize: 11.5 }} aria-pressed={!!c.rideEase}
+              title="Ease: on or off. On, they gather speed leaving the start and slow into the end." onClick={() => patch({ rideEase: c.rideEase ? undefined : true })}>Ease</button>
+          </div>
+          {list.map(({ r, name }) => (
+            <div key={r.key} style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: 7, borderRadius: 7, border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.03)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+                <span style={{ color: 'rgba(160,200,255,0.8)' }}>◆</span>
+                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
+                <button style={{ ...btnStyle(false, true), width: 'auto', height: 22, padding: '0 8px', fontSize: 11 }} title="Take this model off the path: it stands where it stood before"
+                  onClick={() => { step(); unparentFromPath(r.key) }}>Take off</button>
+              </div>
+              <div style={{ display: 'flex', gap: 5 }}>
+                {tog(r, 'aim', 'Aim', 'On, it faces the way the path runs.')}
+                {tog(r, 'slope', 'Slope', 'On, it tips up and down with the path as it climbs and falls. Off, it stays level.')}
+                {tog(r, 'twist', 'Twist', "On, it rolls with the path's twist.")}
+              </div>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <NumSlide name="Bank" val={r.bank ?? 0} min={-300} max={300} top={1000} tip="How much it leans into the path's turns, in percent. 0: none. Below 0: it leans out of them."
+                  begin={step} set={v => setRider(c.id, r.key, { bank: v || undefined })} />
+                <NumSlide name="Heading" val={r.heading ?? 0} min={-180} max={180} tip="Turned from the way the path runs, in degrees: for a model whose front is not where the path expects it, or one that travels sideways."
+                  begin={step} set={v => setRider(c.id, r.key, { heading: v || undefined })} />
+              </div>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <NumSlide name="Lift" val={Math.round((r.lift ?? 0) * zoom)} min={-200} max={400} top={5000} tip="Carried this far above the path (below 0: under it)."
+                  begin={step} set={v => setRider(c.id, r.key, { lift: v ? v / zoom : undefined })} />
+                <NumSlide name="Side" val={Math.round((r.side ?? 0) * zoom)} min={-300} max={300} top={5000} tip="Carried this far to the side of the path: two models side by side on one path."
+                  begin={step} set={v => setRider(c.id, r.key, { side: v ? v / zoom : undefined })} />
+              </div>
+              <NumSlide name="Ahead" val={Math.round((r.lead ?? 0) * 100)} min={0} max={100} tip="How far along the path it is ahead of the clock, in percent of the path: several models on one path follow each other."
+                begin={step} set={v => setRider(c.id, r.key, { lead: v ? v / 100 : undefined })} />
+            </div>
+          ))}
+        </>
+      )}
+    </Section>
+  )
+}
+
 // ── Outliner ──
-type Item = { kind: 'node' | 'card' | 'viewer' | 'curve'; id: string; name: string; icon: string; cx: number; cy: number }
+type Item = { kind: 'node' | 'card' | 'viewer' | 'curve'; id: string; name: string; icon: string; cx: number; cy: number; /** A curve a model can ride. */ path?: boolean }
+
+/** A row's model, as the 3D view knows it, if it is one: what can ride a path. */
+function modelKeyOf(it: Item): string | null {
+  if (it.kind === 'node') return useFreeNodeStore.getState().nodes[it.id]?.type === 'model' ? `node:${it.id}` : null
+  return it.kind === 'card' && cardModel(it.id) ? `card:${it.id}` : null
+}
 
 function useOutline() {
   const nodes = useFreeNodeStore(s => s.nodes)
@@ -408,11 +535,28 @@ function useOutline() {
       const b = curveBounds(c)
       const inA = areaAt(nodes, (b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2)
       const all = inA && c.pts.every(p => p.x >= inA.x && p.x <= inA.x + inA.width && p.y >= inA.y && p.y <= inA.y + inA.height)
-      const it: Item = { kind: 'curve', id: c.id, name: c.arrowEnd || c.arrowStart ? 'Arrow' : c.kind === 'free' ? 'Pen line' : 'Curve', icon: '∿', cx: (b.x0 + b.x1) / 2, cy: (b.y0 + b.y1) / 2 }
+      const it: Item = { kind: 'curve', id: c.id, name: c.arrowEnd || c.arrowStart ? 'Arrow' : c.kind === 'free' ? 'Pen line' : 'Curve', icon: '∿', cx: (b.x0 + b.x1) / 2, cy: (b.y0 + b.y1) / 2, path: c.kind === 'bezier' }
       if (all) { if (!kids.has(inA!.id)) kids.set(inA!.id, []); kids.get(inA!.id)!.push(it) }
       else root.push(it)
     }
-    return { areas, kids, root }
+    // The models riding each path (utils/pathRide) are listed under it,
+    // and nowhere else.
+    const riders = new Map<string, Item[]>()
+    const riding = new Set<string>()
+    for (const c of Object.values(curves)) for (const r of c.riders ?? []) {
+      const id = r.key.slice(5)
+      const n = r.key.startsWith('node:') ? nodes[id] : undefined
+      const g = r.key.startsWith('card:') ? groups.find(x => x.id === id) : undefined
+      const it: Item | null = n ? { kind: 'node', id, name: n.label || n.type, icon: '◆', cx: n.x + n.width / 2, cy: n.y + n.height / 2 }
+        : g ? { kind: 'card', id, name: g.name || 'Card', icon: '◆', cx: g.originX + 20, cy: g.originY + 20 } : null
+      if (!it) continue
+      riding.add(`${it.kind}${it.id}`)
+      if (!riders.has(c.id)) riders.set(c.id, [])
+      riders.get(c.id)!.push(it)
+    }
+    const off = (list: Item[]) => list.filter(it => !riding.has(`${it.kind}${it.id}`))
+    for (const [k, list] of kids) kids.set(k, off(list))
+    return { areas, kids, root: off(root), riders, riding }
   }, [nodes, groups, windows, curves])
 }
 
@@ -437,7 +581,7 @@ function selectItem(it: Item) {
 }
 
 const Outliner: React.FC = () => {
-  const { areas, kids, root } = useOutline()
+  const { areas, kids, root, riders, riding } = useOutline()
   const selNodes = useFreeNodeStore(s => s.selectedIds)
   const selCards = useBoardsStore(s => s.selectedGroupIds)
   const selCurves = useNotesUi(s => s.selected)
@@ -468,7 +612,18 @@ const Outliner: React.FC = () => {
       const target = document.elementFromPoint(ev.clientX, ev.clientY)?.closest<HTMLElement>('[data-outline-drop]')?.dataset.outlineDrop
       if (!target || target === d.it.id) return
       const nodes = useFreeNodeStore.getState().nodes
+      const key = modelKeyOf(d.it)
+      // Onto a path: the model rides it (Brian 2026-11-12: "parent the
+      // models to the paths"). Nothing but a model does.
+      if (target.startsWith('curve:')) {
+        if (!key) return
+        useUndoCoordinator.getState().checkpoint()
+        parentToPath(key, target.slice(6))
+        return
+      }
       useUndoCoordinator.getState().checkpoint()
+      // Off its path: dropped anywhere else it is back where it stood.
+      if (key && riding.has(`${d.it.kind}${d.it.id}`)) { unparentFromPath(key); return }
       if (target === 'root') {
         const a = areaAt(nodes, d.it.cx, d.it.cy, d.it.kind === 'node' && nodes[d.it.id]?.type === 'area' ? d.it.id : undefined)
         if (a) moveItemTo(d.it, a.x + a.width + a.width * 0.15, d.it.cy)
@@ -486,16 +641,20 @@ const Outliner: React.FC = () => {
     window.addEventListener('pointerup', up)
   }
 
-  const Row: React.FC<{ it: Item; depth: number; drop?: boolean }> = ({ it, depth, drop }) => (
+  const Row = ({ it, depth, drop: onSet }: { it: Item; depth: number; drop?: boolean }): React.ReactElement => {
+    // A path takes models: lit only while a model is dragged over it.
+    const dropId = onSet ? it.id : it.path ? `curve:${it.id}` : undefined
+    const drop = !!dropId && over === dropId && (onSet || (!!dragging && !!modelKeyOf(dragging)))
+    return (
     <div
-      data-outline-drop={drop ? it.id : undefined}
+      data-outline-drop={dropId}
       onPointerDown={e => down(e, it)}
-      title={drop ? 'Drag rows onto a 3D set to put them on it' : 'Click to select · drag onto a 3D set'}
+      title={onSet ? 'Drag rows onto a 3D set to put them on it' : it.path ? 'Click to select · drag a model onto it and the model rides this path' : 'Click to select · drag onto a 3D set, or a model onto a path to ride it'}
       style={{
         display: 'flex', alignItems: 'center', gap: 6, height: 24, paddingLeft: 6 + depth * 14, paddingRight: 6,
         borderRadius: 5, cursor: 'pointer', fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden',
-        background: over === it.id && drop ? 'rgba(95,227,155,0.18)' : isSel(it) ? 'rgba(120,170,255,0.16)' : 'transparent',
-        outline: over === it.id && drop ? '1px solid rgba(95,227,155,0.6)' : 'none',
+        background: drop ? 'rgba(95,227,155,0.18)' : isSel(it) ? 'rgba(120,170,255,0.16)' : 'transparent',
+        outline: drop ? '1px solid rgba(95,227,155,0.6)' : 'none',
         color: dragging?.id === it.id ? 'rgba(255,255,255,0.35)' : 'rgba(235,240,255,0.85)',
         userSelect: 'none',
       }}
@@ -503,6 +662,14 @@ const Outliner: React.FC = () => {
       <span style={{ width: 12, textAlign: 'center', color: it.kind === 'node' && it.icon === '▦' ? '#5fe39b' : 'rgba(160,200,255,0.8)' }}>{it.icon}</span>
       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{it.name}</span>
     </div>
+    )
+  }
+  /** A row, and under a path the models riding it. */
+  const rowOf = (it: Item, depth: number): React.ReactNode => (
+    <React.Fragment key={`${it.kind}${it.id}`}>
+      {Row({ it, depth })}
+      {it.kind === 'curve' && (riders.get(it.id) ?? []).map(r => <React.Fragment key={`r${r.kind}${r.id}`}>{Row({ it: r, depth: depth + 1 })}</React.Fragment>)}
+    </React.Fragment>
   )
 
   const tree = (a: FreeNodeData, depth: number): React.ReactNode => {
@@ -510,10 +677,10 @@ const Outliner: React.FC = () => {
     const list = kids.get(a.id) ?? []
     return (
       <React.Fragment key={a.id}>
-        <Row it={it} depth={depth} drop />
+        {Row({ it, depth, drop: true })}
         {list.map(k => {
           const sub = k.kind === 'node' ? areas.find(x => x.id === k.id) : undefined
-          return sub ? tree(sub, depth + 1) : <Row key={`${k.kind}${k.id}`} it={k} depth={depth + 1} />
+          return sub ? tree(sub, depth + 1) : rowOf(k, depth + 1)
         })}
       </React.Fragment>
     )
@@ -527,7 +694,7 @@ const Outliner: React.FC = () => {
         background: over === 'root' ? 'rgba(95,227,155,0.18)' : 'transparent',
       }}>Canvas</div>
       {topAreas.map(a => tree(a, 0))}
-      {rootItems.map(it => <Row key={`${it.kind}${it.id}`} it={it} depth={0} />)}
+      {rootItems.map(it => rowOf(it, 0))}
       {!topAreas.length && !rootItems.length && (
         <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', padding: '2px 6px', lineHeight: 1.5 }}>3D sets, models and curves show here.</div>
       )}
@@ -897,6 +1064,7 @@ export const NotesPanel: React.FC = () => {
                 )}
               </Section>
             )}
+            {shownCurve?.kind === 'bezier' && <PathRiders c={shownCurve} />}
             {picked && (
               <Section title="SELECTED POINTS">
                 <div style={{ display: 'flex', gap: 5 }}><PointTools folded={false} /></div>

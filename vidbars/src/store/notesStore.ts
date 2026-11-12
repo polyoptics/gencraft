@@ -53,8 +53,44 @@ export type CurveMark = 'corners' | 'cross' | 'bulge'
 /** How a bulge falls away from its point. */
 export type CurveEase = 'linear' | 'in' | 'out' | 'inout' | 'log' | 'exp' | 'spike' | 'step' | 'bounce'
 
+/** A model riding a path (Brian 2026-11-12: "parent the models to the
+ *  paths"): which model, and how it sits on the path as it goes. */
+export interface PathRider {
+  /** The model, as the 3D view knows it: 'node:<id>' or 'card:<id>'. */
+  key: string
+  /** How far along the path it starts, 0..1 of its length: several on
+   *  one path follow each other. Absent: 0. */
+  lead?: number
+  /** Faces the way the path runs. Absent: on. */
+  aim?: boolean
+  /** Turned from the way the path runs, degrees. Absent: 0. */
+  heading?: number
+  /** How much it leans into the path's turns, percent. Absent: 0. */
+  bank?: number
+  /** Tips up and down with the path's climbs. Absent: on. */
+  slope?: boolean
+  /** Rolls with the path's twist. Absent: on. */
+  twist?: boolean
+  /** Carried above the path, and to its side (canvas units). Absent: 0. */
+  lift?: number
+  side?: number
+}
+/** What a path's riders do once they reach its end. */
+export type RideAfter = 'loop' | 'stop' | 'pingpong'
+
 export interface Curve {
   id: string
+  /** The models riding it, and when (seconds on the ride clock, which
+   *  every path shares, so several stay in step): they set off at
+   *  `rideStart` and arrive at `rideEnd` (absent or not after the start:
+   *  they go at the speed of the line's own motion, `flow`). Then they go
+   *  round again, stop, or come back (`rideAfter`; absent: loop).
+   *  `rideEase`: they gather speed and slow into the ends. */
+  riders?: PathRider[]
+  rideStart?: number
+  rideEnd?: number
+  rideAfter?: RideAfter
+  rideEase?: boolean
   /** 'bezier': anchors with handles (the Curve tool); 'free': a pen line,
    *  many points, no handles. */
   kind: 'bezier' | 'free'

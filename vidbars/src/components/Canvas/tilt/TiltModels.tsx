@@ -27,6 +27,7 @@ import type { PathFrame, PathHit } from '../../../three/pathOverlay'
 import { curveRuns, pointFrames } from '../../../utils/curveGeom'
 import { PinLabels } from '../../Notes/PinLabels'
 import { sceneOf, sceneSpot, standsIn, dataKey } from '../../../utils/area3dScene'
+import { rideSpots, rideRuns, useRideClock } from '../../../utils/pathRide'
 import { useUndoCoordinator } from '../../../store/undoCoordinator'
 import { useManip } from '../../../store/manipStore'
 /** The notes store as it stands (read each frame without a hook). */
@@ -166,7 +167,10 @@ const frameState = (): TiltFrameState => {
   // Looking through a camera in a 3D set: that set's models only.
   const lookSet = through ? sceneOf(through)?.area.id : undefined
   const placedMemo = new Map<string, boolean>()
-  const placed = (key: string) => { let v = placedMemo.get(key); if (v === undefined) { v = onArea3d(key); placedMemo.set(key, v) } return v }
+  // A model riding a path is where the path has it (utils/pathRide).
+  const rides = live3d() ? rideSpots() : null
+  const riding = (key: string) => rides?.size ? rides.get(key) ?? rides.get(dataKey(key)) : undefined
+  const placed = (key: string) => { let v = placedMemo.get(key); if (v === undefined) { v = onArea3d(key) || !!riding(key); placedMemo.set(key, v) } return v }
   return {
     tilt: ts.tilt, spin: ts.spin, yaw: ts.yaw, shiftX: ts.shiftX, shiftY: ts.shiftY, glide: ts.glide, texture: ts.texture, shade: ts.shade, wire: ts.wire, light: ts.light, turn: ts.turn,
     walls: ts.walls, figure: ts.figure, hovered: models.hovered,
@@ -183,6 +187,7 @@ const frameState = (): TiltFrameState => {
     poseFor: key => key.startsWith('mini:') ? miniLook.get(key)?.pose : placed(key) ? poseOf[dataKey(key)] : undefined,
     tintFor: key => key.startsWith('mini:') ? miniLook.get(key)?.tint : tintOf[dataKey(key)],
     stretchFor: key => key.startsWith('mini:') ? miniLook.get(key)?.stretch : placed(key) ? stretchOf[dataKey(key)] : undefined,
+    rideFor: key => riding(key)?.q,
     manip: useManip.getState(),
     placed,
     canPlace: key => !key.startsWith('mini:') && !!sceneOf(key),
@@ -345,7 +350,7 @@ export const TiltModels: React.FC = () => {
       }
       if (!live) return
       tick++
-      if (!poked && calm > 30 && tick % 4 && !animating() && !pathFlows()) return
+      if (!poked && calm > 30 && tick % 4 && !animating() && !pathFlows() && !rideRuns()) return
       poked = false
       const W = root.clientWidth, H = root.clientHeight
       if (models.at) models.hovered = modelKey(models.pick?.(models.at.x, models.at.y))
@@ -467,7 +472,7 @@ export const TiltModels: React.FC = () => {
       useBoardsStore.subscribe(warmSoon),
       // Settle turned back on: what was left turned rolls home.
       useTiltStore.subscribe((s, p) => { if (s.settle && !p.settle) view?.settleAll() }),
-      ...[useTiltStore, useCanvasStore, useFreeNodeStore, useBoardsStore, useViewport3DStore, useRailUiStore, useModelScaleStore, useNotesStore, useManip].map(s => s.subscribe(poke)),
+      ...[useTiltStore, useCanvasStore, useFreeNodeStore, useBoardsStore, useViewport3DStore, useRailUiStore, useModelScaleStore, useNotesStore, useManip, useRideClock].map(s => s.subscribe(poke)),
     ]
     const pokes = ['pointermove', 'pointerdown', 'pointerup', 'wheel', 'keydown', 'keyup', 'resize'] as const
     for (const t of pokes) window.addEventListener(t, poke, { capture: true, passive: true })
@@ -2658,7 +2663,11 @@ function collectTargets(W: number, H: number): TiltTarget[] {
   // In a 3D area's scene, a model stands where it was put there (up in
   // the air if lifted); its wall stays on its card.
   const floats = useModelScaleStore.getState().floatOf
+  const rides = rideSpots()
   const off = (key: string, t: TiltTarget): TiltTarget => {
+    // Riding a path: where the path has it now; its wall stays on its card.
+    const ride = rides.size ? rides.get(key) ?? rides.get(dataKey(key)) : undefined
+    if (ride) return { ...t, u: pan.x + ride.x * zoom - W / 2, v: pan.y + ride.y * zoom - H / 2, z: ride.z * zoom, wall: { u: t.u, v: t.v, h: t.h } }
     const sp = sceneSpot(key)
     // On its own card, it floats as high as its lift handle says.
     if (!sp) { const f = floats[dataKey(key)]; return f ? { ...t, float: f * zoom } : t }

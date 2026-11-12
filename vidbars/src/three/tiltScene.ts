@@ -178,6 +178,9 @@ export interface TiltFrameState {
   sizeFor: (key: string) => number
   /** How a card's model stands turned, kept (useModelScaleStore poseOf). */
   poseFor?: (key: string) => [number, number, number, number] | undefined
+  /** A model riding a path (utils/pathRide): how the path turns it there,
+   *  about its feet. Absent: it stands as it is. */
+  rideFor?: (key: string) => [number, number, number, number] | null | undefined
   /** Stands on a 3D area (a scene layout): it keeps the turn it is
    *  given and never turns on the turntable. */
   placed?: (key: string) => boolean
@@ -1326,7 +1329,9 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       if (s.look) applyLook(s.look, st.texture, st.shade)
       s.stand.visible = !!s.inst && ease > 0
       const placed = !!st.placed?.(tg.key)
-      s.turn.rotation.y = st.turn && !placed ? now / 1000 * 0.6 + s.phase : 0
+      const rq = st.rideFor?.(tg.key)
+      if (rq) s.turn.quaternion.set(rq[0], rq[1], rq[2], rq[3])
+      else s.turn.rotation.set(0, st.turn && !placed ? now / 1000 * 0.6 + s.phase : 0, 0)
       const pq = st.poseFor?.(tg.key)
       if (pq) s.pose.quaternion.set(pq[0], pq[1], pq[2], pq[3]); else s.pose.quaternion.identity()
       // Its colour (Brian 2026-11-08): over its materials' own.

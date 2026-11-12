@@ -40,6 +40,7 @@ import { usePickMode } from './utils/cabinetPick'
 import { useNotesStore, useNotesUi } from './store/notesStore'
 import { models } from './components/Canvas/tilt/TiltModels'
 import { useManip } from './store/manipStore'
+import { useRideClock } from './utils/pathRide'
 
 // Expose stores for debugging. Anything you want to OBSERVE has to be here:
 // reaching a store through a dynamic import gets a second copy of the module
@@ -61,6 +62,8 @@ import { useManip } from './store/manipStore'
   chart: { matchChart, recallChart, bakeStoryline, chartOutOf, cardOrigins, createTextCard },
   // The manipulator's settings, and the camera looked through.
   useManip,
+  // The clock the models riding paths go by (utils/pathRide).
+  useRideClock,
 }
 
 // One card shown in several places: an edit on one is on all (utils/linkedCards).
