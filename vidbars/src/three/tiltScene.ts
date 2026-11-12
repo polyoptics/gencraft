@@ -480,8 +480,13 @@ const M_ZONE = new THREE.TorusGeometry(RING_R, 0.021, 8, 14, ZONE_HALF * 2)
 const M_BOX = new THREE.BoxGeometry(0.13, 0.13, 0.13)
 const M_SQUARE = new THREE.PlaneGeometry(0.17, 0.17)
 const OUTER_R = 0.84
-/** A dashed ring: four arcs. */
-const M_ARC = new THREE.TorusGeometry(OUTER_R, 0.01, 6, 24, Math.PI / 3.2)
+/** A dashed ring: four arcs, each a very faint thin line with a short
+ *  lit part at its middle, which alone is held (Brian 2026-11-12: as the
+ *  axis rings' grab zones). */
+const OUTER_ARC = Math.PI / 3.2, OUTER_HALF = 8 * Math.PI / 180
+const M_ARC = new THREE.TorusGeometry(OUTER_R, 0.006, 6, 24, OUTER_ARC)
+const M_ARC_ZONE = new THREE.TorusGeometry(OUTER_R, 0.021, 8, 8, OUTER_HALF * 2)
+const OUTER_FAINT = manipMat(0xffe14a, 0.16), OUTER_FAINT_HOT = manipMat(0xffe14a, 0.4)
 /** A ring's turn about axis a: two axes across it, b then c, so a
  *  positive turn takes b towards c. */
 const RING_BASIS = { x: ['y', 'z'], y: ['z', 'x'], z: ['x', 'y'] } as const
@@ -610,8 +615,11 @@ function makeManip(): Manip {
   const outer = new THREE.Group()
   group.add(outer)
   for (let i = 0; i < 4; i++) {
-    const arc = add('rc', new THREE.Mesh(M_ARC, MANIP_MATS.outer), 1001, outer)
-    arc.rotation.z = i * Math.PI / 2 + Math.PI / 4 - Math.PI / 6.4
+    const mid = i * Math.PI / 2 + Math.PI / 4
+    const arc = add('rc', new THREE.Mesh(M_ARC, OUTER_FAINT), 1001, outer)
+    arc.rotation.z = mid - OUTER_ARC / 2
+    arc.userData.hot = OUTER_FAINT_HOT
+    add('rc', new THREE.Mesh(M_ARC_ZONE, MANIP_MATS.outer), 1002, outer).rotation.z = mid - OUTER_HALF
   }
   add('s', new THREE.Mesh(M_BOX, MANIP_MATS.s), 1004)
   group.visible = false
@@ -1895,8 +1903,10 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
         }
         // The outer ring: about the line to the camera. A clockwise drag
         // on screen turns it clockwise as seen.
+        // Held by the lit middles of its four arcs, on the screen's diagonals.
         const od = Math.abs(dc - OUTER_R * manipPx)
-        if (od < 8) take({ key, part: 'rc', c, axis: sceneV(toLocal(new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 2)).normalize()), sign: -1 }, od, 0)
+        const oa = Math.abs(Math.atan2(Math.abs(y - c.y), Math.abs(x - c.x)) - Math.PI / 4)
+        if (od < 9 && oa <= OUTER_HALF + 0.03) take({ key, part: 'rc', c, axis: sceneV(toLocal(new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 2)).normalize()), sign: -1 }, od, 0)
       } else {
         ;(['x', 'y', 'z'] as const).forEach((a, i) => {
           const A = AXES[a]
