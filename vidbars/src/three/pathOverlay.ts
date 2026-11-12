@@ -15,7 +15,7 @@
 import * as THREE from 'three'
 import type { Curve } from '../store/notesStore'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
-import { curvePoints, nearestOnCurve, dashPieces, ownsHandles, shownLine, patternOf, flowShift, alongEvery, lineLength, markSize, bulgeR, markBar, ringTube, pointFrames, frameOf, unitBars, markBars, barOf, pingAt, type P3, type Bar, type PathFrame3 } from '../utils/curveGeom'
+import { curvePoints, nearestOnCurve, dashPieces, ownsHandles, shownLine, patternOf, flowShift, alongEvery, lineLength, markSize, markBar, ringTube, pointFrames, frameOf, unitBars, markBars, barOf, pingAt, pingSize, pingRings, PING_ECHO, fieldOf, fineLine, tintRgb, type P3, type Bar, type PathFrame3 } from '../utils/curveGeom'
 
 /** What the 3D view draws of the curves this frame. */
 export interface PathFrame {
@@ -72,14 +72,17 @@ function labelTexture(text: string, color: string): { tex: THREE.CanvasTexture; 
 }
 const COL = { picked: 0xffe14a, selected: 0xffffff, hot: 0x9fd0ff, handle: 0x78b4ff }
 
-/** A round line through `s` (canvas units), radius `r`. */
-function tube(s: P3[], r: number, closed: boolean, radial = 10): THREE.BufferGeometry {
-  const pts: THREE.Vector3[] = []
+/** A round line through `s` (canvas units), radius `r`. With `at`, each
+ *  place along it is `k` times as thick and (if it gives one) its own
+ *  colour. */
+function tube(s: P3[], r: number, closed: boolean, radial = 10, at?: (p: P3) => { k: number; rgb?: [number, number, number] }): THREE.BufferGeometry {
+  const pts: THREE.Vector3[] = [], src: P3[] = []
   for (const p of s) {
     const v = new THREE.Vector3(p.x, p.y, p.z)
-    if (!pts.length || pts[pts.length - 1].distanceToSquared(v) > 1e-10) pts.push(v)
+    if (!pts.length || pts[pts.length - 1].distanceToSquared(v) > 1e-10) { pts.push(v); src.push(p) }
   }
-  if (closed && pts.length > 2 && pts[0].distanceToSquared(pts[pts.length - 1]) < 1e-10) pts.pop()
+  if (closed && pts.length > 2 && pts[0].distanceToSquared(pts[pts.length - 1]) < 1e-10) { pts.pop(); src.pop() }
+  const col: number[] = []
   const n = pts.length
   const geo = new THREE.BufferGeometry()
   if (n < 2) return geo
@@ -106,11 +109,14 @@ function tube(s: P3[], r: number, closed: boolean, radial = 10): THREE.BufferGeo
     if (N.lengthSq() < 1e-8) N.set(1, 0, 0).addScaledVector(T, -T.x)
     N.normalize()
     B.crossVectors(T, N)
+    const here = at?.(src[i])
+    const rr = r * k * (here ? here.k : 1)
     for (let j = 0; j < radial; j++) {
       const th = j / radial * Math.PI * 2
       v.copy(N).multiplyScalar(Math.cos(th)).addScaledVector(B, Math.sin(th))
       nor.push(v.x, v.y, v.z)
-      pos.push(pts[i].x + v.x * r * k, pts[i].y + v.y * r * k, pts[i].z + v.z * r * k)
+      pos.push(pts[i].x + v.x * rr, pts[i].y + v.y * rr, pts[i].z + v.z * rr)
+      if (here?.rgb) col.push(here.rgb[0], here.rgb[1], here.rgb[2])
     }
   }
   const rings = loop ? n : n - 1
@@ -129,6 +135,7 @@ function tube(s: P3[], r: number, closed: boolean, radial = 10): THREE.BufferGeo
       dir(i === 0 ? 0 : n - 2, i === 0 ? 1 : n - 1, a)
       pos.push(pts[i].x, pts[i].y, pts[i].z)
       nor.push(a.x * sign, a.y * sign, a.z * sign)
+      if (col.length) col.push(col[i * radial * 3], col[i * radial * 3 + 1], col[i * radial * 3 + 2])
       for (let j = 0; j < radial; j++) {
         const j1 = (j + 1) % radial
         if (sign < 0) idx.push(c, i * radial + j, i * radial + j1)
@@ -138,8 +145,23 @@ function tube(s: P3[], r: number, closed: boolean, radial = 10): THREE.BufferGeo
   }
   geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
   geo.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3))
+  if (col.length) geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3))
   geo.setIndex(idx)
   return geo
+}
+
+/** A soft ring as a picture, for the pings: it always faces the viewer. */
+let ringTex: THREE.CanvasTexture | null = null
+function ringTexture(): THREE.CanvasTexture {
+  if (ringTex) return ringTex
+  const cv = document.createElement('canvas')
+  cv.width = cv.height = 256
+  const g = cv.getContext('2d')!
+  g.strokeStyle = '#fff'
+  g.lineWidth = 9
+  g.beginPath(); g.arc(128, 128, 120, 0, Math.PI * 2); g.stroke()
+  ringTex = new THREE.CanvasTexture(cv)
+  return ringTex
 }
 
 const CUBE = new THREE.BoxGeometry(1, 1, 1)
@@ -236,39 +258,75 @@ export function createPathOverlay() {
     }
     // The line stops inside whatever stands on its ends, so none of it
     // shows past an arrowhead's point.
-    const { line, ends } = shownLine(c, 24)
+    const shown = shownLine(c, 24)
+    const ends = shown.ends
     const closed = !!c.closed && c.pts.length > 2
     const w = c.width
     const pat = patternOf(c)
+    // Its size along it (a bulge at its points, its ends growing or
+    // shrinking): the line is cut finer, so the change reads smooth.
+    const field = fieldOf(c, shown.at, shown.len)
+    const line = field ? fineLine(shown.line, Math.max(w * 0.75, shown.len / 500)) : shown.line
+    // Pulsing in colour, each place has its own: white stuff, coloured
+    // place by place.
+    const tinted = !!field && !!c.pulseColor && c.mark === 'bulge'
+    const dyed = (m: THREE.Material, vertex: boolean) => {
+      const d = keep(m.clone()) as THREE.MeshStandardMaterial
+      d.color.set(0xffffff)
+      d.vertexColors = vertex
+      return d
+    }
+    const lineMats = tinted ? [dyed(ghost, true), dyed(solid, true)] as const : [ghost, solid] as const
+    const instMats = tinted ? [dyed(ghost, false), dyed(solid, false)] as const : [ghost, solid] as const
+    const rgbAt = (s: number, tm: number) => tintRgb(c.color, field ? field.tint(s, tm) : 0)
+    const tmpCol = new THREE.Color()
+    // (A place's colour on the line itself is given as the light it is, not as it is written.)
+    const linAt = (s: number, tm: number): [number, number, number] => { const v = rgbAt(s, tm); tmpCol.setRGB(v[0], v[1], v[2], THREE.SRGBColorSpace); return [tmpCol.r, tmpCol.g, tmpCol.b] }
+    const sized = (tm: number) => field ? (p: P3) => ({ k: field.k(p.s ?? 0, tm), rgb: tinted ? linAt(p.s ?? 0, tm) : undefined }) : undefined
     // What of it moves by itself, stepped on to the frame's time.
     const ticks: ((time: number) => void)[] = []
-    if (line.length > 1 && !pat) body(keep(tube(line, w / 2, closed)))
-    else if (line.length > 1 && pat) {
+    if (line.length > 1 && !pat) {
+      if (!field) body(keep(tube(line, w / 2, closed)))
+      else {
+        let geo: THREE.BufferGeometry | null = null
+        let pair: THREE.Mesh[] | null = null
+        const cut = (tm: number) => {
+          const g = tube(line, w / 2, closed, 10, sized(tm))
+          geo?.dispose()
+          geo = g
+          if (pair) for (const m of pair) m.geometry = g
+          else pair = body(g, undefined, lineMats)
+        }
+        cut(time)
+        own.push({ dispose: () => geo?.dispose() } as unknown as THREE.BufferGeometry)
+        if (field.moves) ticks.push(cut)
+      }
+    } else if (line.length > 1 && pat) {
       const period = pat.period
       if (pat.unit === 'line') {
         // Lengths of the round line with gaps between (as the flat
         // drawing's). Running, they are cut again each step.
         let geo: THREE.BufferGeometry | null = null
         let pair: THREE.Mesh[] | null = null
-        const cut = (shift: number) => {
-          const parts = dashPieces(line, pat.on, pat.gap, shift, c.flow ? 500 : 1500).filter(p => p.length > 1).map(p => tube(p, w / 2, false, 8))
+        const cut = (shift: number, tm: number) => {
+          const parts = dashPieces(line, pat.on, pat.gap, shift, c.flow ? 500 : 1500).filter(p => p.length > 1).map(p => tube(p, w / 2, false, 8, sized(tm)))
           const g = parts.length ? mergeGeometries(parts) : new THREE.BufferGeometry()
           for (const p of parts) p.dispose()
           geo?.dispose()
           geo = g
           if (pair) for (const m of pair) m.geometry = g
-          else pair = body(g)
+          else pair = body(g, undefined, lineMats)
         }
-        cut(flowShift(c, period, time))
+        cut(flowShift(c, period, time), time)
         own.push({ dispose: () => geo?.dispose() } as unknown as THREE.BufferGeometry)
-        if (c.flow) ticks.push(t => cut(flowShift(c, period, t)))
+        if (c.flow || field?.moves) ticks.push(t => cut(flowShift(c, period, t), t))
       } else if (pat.unit === 'hatch' || pat.unit === 'cube' || pat.unit === 'plus') {
         // Wire cubes, plus signs, or a road with chevrons: bars set to
         // the path, twist and all.
         const unit = pat.unit, t = barOf(c)
-        const first = unitBars(c, line, unit, pat.on, period, flowShift(c, period, time), time)
+        const first = unitBars(c, line, unit, pat.on, period, flowShift(c, period, time), time, field)
         const cap = first.length + 80
-        const inst = ([[ghost, 40], [solid, 41]] as const).map(([mat, order]) => {
+        const inst = ([[instMats[0], 40], [instMats[1], 41]] as const).map(([mat, order]) => {
           const m = new THREE.InstancedMesh(BAR, mat, cap)
           m.renderOrder = order
           m.frustumCulled = false
@@ -278,17 +336,21 @@ export function createPathOverlay() {
         })
         const place = (bars: Bar[]) => {
           const n = Math.min(cap, bars.length)
-          for (let i = 0; i < n; i++) { const mat = barMatrix(bars[i], t); for (const m of inst) m.setMatrixAt(i, mat) }
-          for (const m of inst) { m.count = n; m.instanceMatrix.needsUpdate = true }
+          for (let i = 0; i < n; i++) {
+            const mat = barMatrix(bars[i], t)
+            for (const m of inst) m.setMatrixAt(i, mat)
+            if (tinted) { const rgb = tintRgb(c.color, bars[i][3] ?? 0); tmpCol.setRGB(rgb[0], rgb[1], rgb[2], THREE.SRGBColorSpace); for (const m of inst) m.setColorAt(i, tmpCol) }
+          }
+          for (const m of inst) { m.count = n; m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true }
         }
         place(first)
-        if (c.flow || (c.pulse && unit === 'hatch')) ticks.push(tm => place(unitBars(c, line, unit, pat.on, period, flowShift(c, period, tm), tm)))
+        if (c.flow || (c.pulse && unit === 'hatch') || field?.moves) ticks.push(tm => place(unitBars(c, line, unit, pat.on, period, flowShift(c, period, tm), tm, field)))
       } else {
         // Balls or rings along the line, each `on` across.
         const tr = ringTube(c, pat.on)
         const geo = keep(pat.unit === 'ball' ? new THREE.SphereGeometry(pat.on / 2, 16, 12) : new THREE.TorusGeometry(pat.on / 2 - tr, tr, 8, 28))
         const cap = Math.min(600, Math.floor(lineLength(line) / period) + 2)
-        const inst = ([[ghost, 40], [solid, 41]] as const).map(([mat, order]) => {
+        const inst = ([[instMats[0], 40], [instMats[1], 41]] as const).map(([mat, order]) => {
           const m = new THREE.InstancedMesh(geo, mat, cap)
           m.renderOrder = order
           m.frustumCulled = false
@@ -297,20 +359,22 @@ export function createPathOverlay() {
           return m
         })
         const mat = new THREE.Matrix4(), q = new THREE.Quaternion(), at = new THREE.Vector3(), dv = new THREE.Vector3(), one = new THREE.Vector3(1, 1, 1)
-        const place = (shift: number) => {
+        const place = (shift: number, tm: number) => {
           // The first stands half of itself in from the line's start.
           const spots = alongEvery(line, period, (shift + pat.on / 2) % period, cap)
           const n = Math.min(cap, spots.length)
           for (let i = 0; i < n; i++) {
             const s = spots[i]
             q.setFromUnitVectors(Z_UP, dv.set(s.d.x, s.d.y, s.d.z))
+            if (field) one.setScalar(Math.max(0.0001, field.k(s.p.s ?? 0, tm)))
             mat.compose(at.set(s.p.x, s.p.y, s.p.z), q, one)
             for (const m of inst) m.setMatrixAt(i, mat)
+            if (tinted) { const rgb = rgbAt(s.p.s ?? 0, tm); tmpCol.setRGB(rgb[0], rgb[1], rgb[2], THREE.SRGBColorSpace); for (const m of inst) m.setColorAt(i, tmpCol) }
           }
-          for (const m of inst) { m.count = n; m.instanceMatrix.needsUpdate = true }
+          for (const m of inst) { m.count = n; m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true }
         }
-        place(flowShift(c, period, time))
-        if (c.flow) ticks.push(t => place(flowShift(c, period, t)))
+        place(flowShift(c, period, time), time)
+        if (c.flow || field?.moves) ticks.push(t => place(flowShift(c, period, t), t))
       }
     }
     // What stands on the ends: a cone with its point on the end, a cube
@@ -342,15 +406,8 @@ export function createPathOverlay() {
     // stands: set to the path there, twist and all.
     const frames = c.mark || selected ? pointFrames(c) : []
     const markMats = matsOf(c.markColor)
-    if (c.mark === 'bulge') {
-      const one = keep(new THREE.SphereGeometry(bulgeR(c), 18, 12))
-      const parts: THREE.BufferGeometry[] = []
-      c.pts.forEach((p, i) => { if (p.mark !== false && !shaped.has(i)) parts.push(one.clone().translate(p.x, p.y, p.z ?? 0)) })
-      if (parts.length) {
-        body(keep(mergeGeometries(parts)), undefined, markMats)
-        for (const p of parts) p.dispose()
-      }
-    } else if (c.mark) {
+    // (A bulge is no shape of its own: it is the line's size there.)
+    if (c.mark && c.mark !== 'bulge') {
       const bars: Bar[] = []
       c.pts.forEach((p, i) => { if (p.mark !== false && !shaped.has(i)) bars.push(...markBars(c.mark as 'corners' | 'cross', { x: p.x, y: p.y, z: p.z ?? 0 }, frames[i], markSize(c))) })
       const t = markBar(c)
@@ -360,30 +417,30 @@ export function createPathOverlay() {
         for (const p of parts) p.dispose()
       }
     }
-    // Its points ping one after another: a ring spreading from each,
-    // flat to the path there, fading as it goes.
+    // Its points ping one after another: rings spreading from each,
+    // fading as they go, always face on to the viewer.
     if (c.ping) {
-      const far = markSize(c) * 1.3
-      const ringGeo = keep(new THREE.TorusGeometry(1, 0.035, 6, 40))
-      const fr = frames.length ? frames : pointFrames(c)
-      const rings = c.pts.map((p, i) => {
-        if (p.mark === false) return null
-        const mat = keep(new THREE.MeshBasicMaterial({ color: new THREE.Color(c.markColor ?? c.color), transparent: true, opacity: 0, depthWrite: false, toneMapped: false }))
-        const m = new THREE.Mesh(ringGeo, mat)
-        m.position.set(p.x, p.y, p.z ?? 0)
-        m.quaternion.copy(frameQuat(fr[i]))
-        m.renderOrder = 42
-        m.frustumCulled = false
-        m.visible = false
-        group.add(m)
-        return { m, mat }
+      const far = pingSize(c), count = pingRings(c)
+      const tex = ringTexture()
+      const rings: { m: THREE.Sprite; mat: THREE.SpriteMaterial; i: number; j: number }[] = []
+      c.pts.forEach((p, i) => {
+        if (p.mark === false) return
+        for (let j = 0; j < count; j++) {
+          const mat = keep(new THREE.SpriteMaterial({ map: tex, color: new THREE.Color(c.markColor ?? c.color), transparent: true, opacity: 0, depthWrite: false, toneMapped: false }))
+          const m = new THREE.Sprite(mat)
+          m.position.set(p.x, p.y, p.z ?? 0)
+          m.renderOrder = 42
+          m.frustumCulled = false
+          m.visible = false
+          group.add(m)
+          rings.push({ m, mat, i, j })
+        }
       })
-      const step = (tm: number) => rings.forEach((r, i) => {
-        if (!r) return
-        const k = pingAt(i, c.pts.length, tm)
+      const step = (tm: number) => rings.forEach(r => {
+        const k = pingAt(r.i, c.pts.length, tm, c.pingSpeed ?? 1, r.j * PING_ECHO)
         r.m.visible = k !== null
         if (k === null) return
-        r.m.scale.setScalar(Math.max(0.001, far * k))
+        r.m.scale.setScalar(Math.max(0.001, far * 2 * k))
         r.mat.opacity = op * (1 - k) * (1 - k)
       })
       step(time)

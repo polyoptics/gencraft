@@ -11,7 +11,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import ReactDOM from 'react-dom'
-import { useNotesStore, useNotesUi, toggleTool, NOTE_COLORS, type NotesTool, type CurveEnd, type CurveUnit, type CurveMark } from '../../store/notesStore'
+import { useNotesStore, useNotesUi, toggleTool, NOTE_COLORS, type NotesTool, type CurveEnd, type CurveUnit, type CurveMark, type CurveEase } from '../../store/notesStore'
 import { useFreeNodeStore, type FreeNodeData } from '../../store/freeNodeStore'
 import { useBoardsStore } from '../../store/boardsStore'
 import { useViewport3DStore } from '../../store/viewport3dStore'
@@ -88,7 +88,12 @@ const UNITS: { unit: CurveUnit; name: string; a: string; aTip: string; b: string
 const MARKS: { mark: CurveMark; name: string; tip: string }[] = [
   { mark: 'corners', name: 'Corners', tip: 'A cube at each point of which only the corners show' },
   { mark: 'cross', name: 'Cross', tip: 'A crosshair at each point, in all three directions' },
-  { mark: 'bulge', name: 'Bulge', tip: 'The line swells at each point' },
+  { mark: 'bulge', name: 'Bulge', tip: 'The line and the pieces of its pattern grow or shrink as they pass each point' },
+]
+/** How a bulge falls away from its point, gentle to extreme. */
+const EASES: { value: CurveEase; name: string }[] = [
+  { value: 'linear', name: 'Linear' }, { value: 'in', name: 'Ease in' }, { value: 'out', name: 'Ease out' }, { value: 'inout', name: 'Ease in and out' },
+  { value: 'log', name: 'Log' }, { value: 'exp', name: 'Exponential' }, { value: 'spike', name: 'Spike' }, { value: 'step', name: 'Step' }, { value: 'bounce', name: 'Bounce' },
 ]
 const IcFold: React.FC<{ folded: boolean }> = ({ folded }) => (
   <svg {...svg(16)}><path d={folded ? 'M15 6l-6 6 6 6' : 'M9 6l6 6-6 6'} stroke={S} /></svg>
@@ -621,6 +626,17 @@ export const NotesPanel: React.FC = () => {
   const markSize = useNotesUi(s => s.markSize)
   const endColor = useNotesUi(s => s.endColor)
   const endSize = useNotesUi(s => s.endSize)
+  const pingSpeed = useNotesUi(s => s.pingSpeed)
+  const pingSize = useNotesUi(s => s.pingSize)
+  const pingRings = useNotesUi(s => s.pingRings)
+  const bulge = useNotesUi(s => s.bulge)
+  const bulgeReach = useNotesUi(s => s.bulgeReach)
+  const bulgeEase = useNotesUi(s => s.bulgeEase)
+  const pulseSize = useNotesUi(s => s.pulseSize)
+  const pulseColor = useNotesUi(s => s.pulseColor)
+  const startScale = useNotesUi(s => s.startScale)
+  const endScale = useNotesUi(s => s.endScale)
+  const endReach = useNotesUi(s => s.endReach)
   const drawing = useCurveDraft(s => !!s.curve)
   const picked = useNotesUi(s => s.points.length > 0)
   // What the options at the top are for: a curve (one selected, or the
@@ -823,6 +839,15 @@ export const NotesPanel: React.FC = () => {
                   </div>
                 ))}
                 {partLook('The ends', 'endColor', 'endSize', endColor, endSize)}
+                {/* The line and its pattern towards each end: growing or shrinking into it. */}
+                <div style={{ display: 'flex', gap: 10 }}>
+                  <NumSlide name="Line at start" val={startScale} min={0} max={400} top={2000} tip="How big the line and the pieces of its pattern are at the start of the line, in percent. 100: as everywhere else. Below: they shrink into the start (0: to nothing). Above: they grow."
+                    begin={stepOnce} set={v => slide({ startScale: v })} />
+                  <NumSlide name="Line at end" val={endScale} min={0} max={400} top={2000} tip="How big the line and the pieces of its pattern are at the end of the line, in percent. 100: as everywhere else. Below: they shrink into the end (0: to nothing). Above: they grow."
+                    begin={stepOnce} set={v => slide({ endScale: v })} />
+                </div>
+                <NumSlide name="Over" val={endReach} min={0} max={600} top={5000} tip="How much of the line, from each end, changes size. 0: a length that goes with the line's thickness."
+                  begin={stepOnce} set={v => slide({ endReach: v })} />
               </Section>
             )}
             {forCurve && (
@@ -839,6 +864,37 @@ export const NotesPanel: React.FC = () => {
                   ))}
                 </div>
                 {partLook("The points' graphics", 'markColor', 'markSize', markColor, markSize)}
+                {ping && (
+                  <>
+                    <span style={{ fontSize: 10.5, letterSpacing: 1, color: 'rgba(255,255,255,0.45)' }}>PING</span>
+                    <div style={{ display: 'flex', gap: 10 }}>
+                      <NumSlide name="Speed" val={pingSpeed} min={10} max={400} top={1000} tip="How fast the points ping, in percent."
+                        begin={stepOnce} set={v => slide({ pingSpeed: v })} />
+                      <NumSlide name="Rings" val={pingRings} min={1} max={4} tip="How many rings each ping sends out, one after another."
+                        begin={stepOnce} set={v => slide({ pingRings: v })} />
+                    </div>
+                    <NumSlide name="Size" val={pingSize} min={0} max={400} top={3000} tip="How far across a ping's rings spread. 0: it goes with the points' size."
+                      begin={stepOnce} set={v => slide({ pingSize: v })} />
+                  </>
+                )}
+                {mark === 'bulge' && (
+                  <>
+                    <span style={{ fontSize: 10.5, letterSpacing: 1, color: 'rgba(255,255,255,0.45)' }}>BULGE</span>
+                    <div style={{ display: 'flex', gap: 10 }}>
+                      <NumSlide name="Size" val={bulge} min={0} max={500} top={3000} tip="How big the line and the pieces of its pattern are at each point, in percent. 100: no change. Above: they grow as they near the point. Below: they shrink (0: to nothing)."
+                        begin={stepOnce} set={v => slide({ bulge: v })} />
+                      <NumSlide name="Reach" val={bulgeReach} min={0} max={400} top={5000} tip="How far along the line, either side of each point, the size changes. 0: as far as the point's tangent handles reach, so longer handles give a longer bulge."
+                        begin={stepOnce} set={v => slide({ bulgeReach: v })} />
+                    </div>
+                    <PickList value={bulgeEase} options={EASES} title="How the size falls away from the point" onPick={v => apply({ bulgeEase: v as CurveEase })} />
+                    <div style={{ display: 'flex', gap: 5 }}>
+                      <button style={{ ...btnStyle(pulseSize, true), flex: '1 1 0', width: 'auto', height: 30, justifyContent: 'center', fontSize: 11.5 }} aria-pressed={pulseSize}
+                        title="Pulse size: on or off. On, the bulge beats: the size at the points swells and settles." onClick={() => apply({ pulseSize: !pulseSize })}>Pulse size</button>
+                      <button style={{ ...btnStyle(pulseColor, true), flex: '1 1 0', width: 'auto', height: 30, justifyContent: 'center', fontSize: 11.5 }} aria-pressed={pulseColor}
+                        title="Pulse colour: on or off. On, the line's colour beats towards white at the points." onClick={() => apply({ pulseColor: !pulseColor })}>Pulse colour</button>
+                    </div>
+                  </>
+                )}
               </Section>
             )}
             {picked && (

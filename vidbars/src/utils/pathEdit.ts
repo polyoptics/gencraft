@@ -333,7 +333,7 @@ export function sizeHeld(h: PointsHeld, sx: number, sy: number, sz: number) {
 type Ui = ReturnType<typeof useNotesUi.getState>
 /** The settings of how a curve looks, as the panel holds them (screen px
  *  at the zoom it is seen at). */
-export type LookKey = 'color' | 'width' | 'endStart' | 'endEnd' | 'dashOn' | 'dashGap' | 'unit' | 'opacity' | 'flow' | 'mark' | 'markColor' | 'markSize' | 'endColor' | 'endSize' | 'chev' | 'pulse' | 'ping'
+export type LookKey = 'color' | 'width' | 'endStart' | 'endEnd' | 'dashOn' | 'dashGap' | 'unit' | 'opacity' | 'flow' | 'mark' | 'markColor' | 'markSize' | 'endColor' | 'endSize' | 'chev' | 'pulse' | 'ping' | 'pingSpeed' | 'pingSize' | 'pingRings' | 'bulge' | 'bulgeReach' | 'bulgeEase' | 'pulseSize' | 'pulseColor' | 'startScale' | 'endScale' | 'endReach'
 
 /** The panel's settings as a curve's own (canvas units), at zoom `z`:
  *  what a new curve is given. */
@@ -350,6 +350,12 @@ export function lookOf(ui: Ui, z: number): Partial<Curve> {
     chev: ui.unit === 'hatch' && ui.chev !== 50 ? ui.chev / 100 : undefined, pulse: ui.unit === 'hatch' && ui.pulse ? true : undefined, ping: ui.ping ? true : undefined,
     markColor: ui.markColor ?? undefined, markSize: ui.markSize > 0 ? ui.markSize / z : undefined,
     endColor: ui.endColor ?? undefined, endSize: ui.endSize > 0 ? ui.endSize / z : undefined,
+    pingSpeed: ui.pingSpeed !== 100 ? ui.pingSpeed / 100 : undefined, pingSize: ui.pingSize > 0 ? ui.pingSize / z : undefined, pingRings: ui.pingRings > 1 ? ui.pingRings : undefined,
+    bulge: ui.bulge !== 200 ? ui.bulge / 100 : undefined, bulgeReach: ui.bulgeReach > 0 ? ui.bulgeReach / z : undefined,
+    bulgeEase: ui.bulgeEase !== 'inout' ? ui.bulgeEase : undefined,
+    pulseSize: ui.pulseSize ? true : undefined, pulseColor: ui.pulseColor ? true : undefined,
+    startScale: ui.startScale !== 100 ? ui.startScale / 100 : undefined, endScale: ui.endScale !== 100 ? ui.endScale / 100 : undefined,
+    endReach: ui.endReach > 0 ? ui.endReach / z : undefined,
   }
 }
 
@@ -358,6 +364,9 @@ const LOOK_FIELDS: Record<LookKey, (keyof Curve)[]> = {
   dashOn: ['dash', 'unit'], dashGap: ['dash', 'unit'], unit: ['dash', 'unit', 'chev', 'pulse'], opacity: ['opacity'], flow: ['flow'], mark: ['mark'],
   chev: ['chev'], pulse: ['pulse'], ping: ['ping'],
   markColor: ['markColor'], markSize: ['markSize'], endColor: ['endColor'], endSize: ['endSize'],
+  pingSpeed: ['pingSpeed'], pingSize: ['pingSize'], pingRings: ['pingRings'],
+  bulge: ['bulge'], bulgeReach: ['bulgeReach'], bulgeEase: ['bulgeEase'], pulseSize: ['pulseSize'], pulseColor: ['pulseColor'],
+  startScale: ['startScale'], endScale: ['endScale'], endReach: ['endReach'],
 }
 
 /** Change settings in the panel, and the same on the selected curves
@@ -393,6 +402,11 @@ export function lookFrom(c: Curve, z: number): Partial<Pick<Ui, LookKey | 'smoot
     chev: Math.round((c.chev ?? 0.5) * 100), pulse: !!c.pulse, ping: !!c.ping,
     markColor: c.markColor ?? null, markSize: c.markSize ? Math.max(1, Math.round(c.markSize * z)) : 0,
     endColor: c.endColor ?? null, endSize: c.endSize ? Math.max(1, Math.round(c.endSize * z)) : 0,
+    pingSpeed: Math.round((c.pingSpeed ?? 1) * 100), pingSize: c.pingSize ? Math.max(1, Math.round(c.pingSize * z)) : 0, pingRings: c.pingRings ?? 1,
+    bulge: Math.round((c.bulge ?? 2) * 100), bulgeReach: c.bulgeReach ? Math.max(1, Math.round(c.bulgeReach * z)) : 0,
+    bulgeEase: c.bulgeEase ?? 'inout', pulseSize: !!c.pulseSize, pulseColor: !!c.pulseColor,
+    startScale: Math.round((c.startScale ?? 1) * 100), endScale: Math.round((c.endScale ?? 1) * 100),
+    endReach: c.endReach ? Math.max(1, Math.round(c.endReach * z)) : 0,
   }
 }
 

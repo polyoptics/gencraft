@@ -83,6 +83,12 @@ export interface Curve {
   pulse?: boolean
   /** Its points ping one after another along it. */
   ping?: boolean
+  /** The ping: how fast (times; absent 1), how wide its rings spread
+   *  (canvas units across; absent: goes with the point graphic's size)
+   *  and how many rings follow each other (absent 1). */
+  pingSpeed?: number
+  pingSize?: number
+  pingRings?: number
   /** The 'bulge' graphic: near each point the line and the pieces of its
    *  pattern are this many times their size (absent: 2; under 1 they
    *  shrink), over `bulgeReach` either side (canvas units; absent: as far
@@ -303,6 +309,10 @@ interface NotesUi {
   chev: number
   pulse: boolean
   ping: boolean
+  /** The ping's speed (percent), size (screen px across; 0: follows the points' size) and rings. */
+  pingSpeed: number
+  pingSize: number
+  pingRings: number
   /** The bulge: its size (percent), reach (screen px; 0: the tangents'),
    *  falloff and pulses; the size at each end (percent) and how far in
    *  from the end that reaches (screen px). */
@@ -356,6 +366,9 @@ export const useNotesUi = create<NotesUi>(() => ({
   chev: saved.chev ?? 50,
   pulse: saved.pulse ?? false,
   ping: saved.ping ?? false,
+  pingSpeed: saved.pingSpeed ?? 100,
+  pingSize: saved.pingSize ?? 0,
+  pingRings: saved.pingRings ?? 1,
   bulge: saved.bulge ?? 200,
   bulgeReach: saved.bulgeReach ?? 0,
   bulgeEase: saved.bulgeEase ?? 'inout',
@@ -378,7 +391,7 @@ useNotesUi.subscribe(s => {
   try {
     localStorage.setItem(UI_KEY, JSON.stringify({
       open: s.open, collapsed: s.collapsed, color: s.color, width: s.width, endStart: s.endStart, endEnd: s.endEnd, smooth: s.smooth, dashOn: s.dashOn, dashGap: s.dashGap,
-      unit: s.unit, opacity: s.opacity, flow: s.flow, mark: s.mark, chev: s.chev, pulse: s.pulse, ping: s.ping, bulge: s.bulge, bulgeReach: s.bulgeReach, bulgeEase: s.bulgeEase, pulseSize: s.pulseSize, pulseColor: s.pulseColor, startScale: s.startScale, endScale: s.endScale, endReach: s.endReach, markColor: s.markColor, markSize: s.markSize, endColor: s.endColor, endSize: s.endSize,
+      unit: s.unit, opacity: s.opacity, flow: s.flow, mark: s.mark, chev: s.chev, pulse: s.pulse, ping: s.ping, pingSpeed: s.pingSpeed, pingSize: s.pingSize, pingRings: s.pingRings, bulge: s.bulge, bulgeReach: s.bulgeReach, bulgeEase: s.bulgeEase, pulseSize: s.pulseSize, pulseColor: s.pulseColor, startScale: s.startScale, endScale: s.endScale, endReach: s.endReach, markColor: s.markColor, markSize: s.markSize, endColor: s.endColor, endSize: s.endSize,
     }))
   } catch { /* private window */ }
 })

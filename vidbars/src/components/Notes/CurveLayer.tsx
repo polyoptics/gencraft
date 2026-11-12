@@ -13,7 +13,7 @@ import { useCurveDraft } from '../../store/pathLive'
 import { useTiltStore, isTilted } from '../../store/tiltStore'
 import { useManip } from '../../store/manipStore'
 import { ptKey } from '../../utils/pathEdit'
-import { curvePath, ownsHandles, shownLine, patternOf, ringTube, markSize, bulgeR, markBar, alongEvery, flowShift, pointFrames, unitBars, markBars, barOf, PING, type P3, type Bar, type PathFrame3 } from '../../utils/curveGeom'
+import { curvePath, ownsHandles, shownLine, patternOf, ringTube, markSize, markBar, alongEvery, flowShift, pointFrames, unitBars, markBars, barOf, dashPieces, fieldOf, fineLine, tintCss, pingSize, pingRings, PING, PING_ECHO, type P3, type Bar, type PathFrame3, type LineField } from '../../utils/curveGeom'
 
 const SEL = 'rgba(120,180,255,0.95)'
 /** A selected point (as its cube in 3D). */
@@ -27,48 +27,112 @@ const barsPath = (bars: Bar[]) => bars.map(b => `M${f2(b[0].x)} ${f2(b[0].y)}L${
 /** The graphic at a point (Curve.mark), seen from above, set to the path
  *  there: the corners of a cube, a crosshair, the line swelling. */
 const MarkAt: React.FC<{ c: Curve; p: P3; f: PathFrame3 }> = ({ c, p, f }) => {
-  if (c.mark === 'bulge') return <circle cx={p.x} cy={p.y} r={bulgeR(c)} fill={c.markColor ?? c.color} />
+  // (A bulge is no shape of its own: it is the line's size there.)
+  if (c.mark === 'bulge') return null
   return <path d={barsPath(markBars(c.mark as 'corners' | 'cross', p, f, markSize(c)))} fill="none" stroke={c.markColor ?? c.color} strokeWidth={markBar(c)} strokeLinecap="round" />
 }
 
 /** The pieces of a pattern that are things along the line (rings, wire
  *  cubes, a band of crossed lines), seen from above: a ring is edge on,
  *  a bar across the line. Each its own stroke. */
-const FlatUnits: React.FC<{ c: Curve; line: P3[]; unit: 'ring' | 'hatch' | 'cube' | 'plus'; on: number; period: number }> = ({ c, line, unit, on, period }) => {
-  // Running, they step along thirty times a second (as in 3D).
+/** The time, thirty times a second while `runs` (as the 3D view steps). */
+function useRunTime(runs: boolean): number {
   const [time, setTime] = useState(0)
-  const runs = !!c.flow || (!!c.pulse && unit === 'hatch')
   useEffect(() => {
     if (!runs) return
     const id = window.setInterval(() => setTime(performance.now() / 1000), 33)
     return () => window.clearInterval(id)
   }, [runs])
+  return runs ? time : 0
+}
+
+const FlatUnits: React.FC<{ c: Curve; line: P3[]; unit: 'ring' | 'hatch' | 'cube' | 'plus'; on: number; period: number; field: LineField | null }> = ({ c, line, unit, on, period, field }) => {
+  // Running, they step along thirty times a second (as in 3D).
+  const time = useRunTime(!!c.flow || (!!c.pulse && unit === 'hatch') || !!field?.moves)
   const shift = flowShift(c, period, time)
-  if (unit !== 'ring') {
-    const bars = unitBars(c, line, unit, on, period, shift, time)
-    const t = barOf(c)
-    // A pulsing road's chevrons are each as thick as the pulse makes them.
-    return (
-      <>
-        <path d={barsPath(bars.filter(b => b[2] === undefined))} fill="none" stroke={c.color} strokeWidth={t} strokeLinecap="round" />
-        {bars.map((b, i) => b[2] === undefined ? null : <path key={i} d={barsPath([b])} fill="none" stroke={c.color} strokeWidth={t * b[2]} strokeLinecap="round" />)}
-      </>
-    )
+  // Bars of one thickness and colour are one stroke.
+  const groups = new Map<string, { w: number; col: string; d: string }>()
+  const add = (w: number, tint: number, d: string) => {
+    const key = `${Math.round(w * 16)}|${Math.round(tint * 16)}`
+    const g = groups.get(key)
+    if (g) g.d += d; else groups.set(key, { w, col: tintCss(c.color, tint), d })
   }
-  let d = ''
+  if (unit !== 'ring') {
+    const t = barOf(c)
+    // (A pulsing road's chevrons are each as thick as the pulse makes them.)
+    for (const b of unitBars(c, line, unit, on, period, shift, time, field)) add(t * (b[2] ?? 1), b[3] ?? 0, barsPath([b]))
+    return <>{[...groups].map(([k, g]) => <path key={k} d={g.d} fill="none" stroke={g.col} strokeWidth={g.w} strokeLinecap="round" />)}</>
+  }
+  const tw = ringTube(c, on) * 2
   for (const s of alongEvery(line, period, (shift + on / 2) % period)) {
     const l = Math.hypot(s.d.x, s.d.y)
     const nx = l > 1e-6 ? -s.d.y / l : 1, ny = l > 1e-6 ? s.d.x / l : 0
-    d += `M${f2(s.p.x - nx * on / 2)} ${f2(s.p.y - ny * on / 2)}L${f2(s.p.x + nx * on / 2)} ${f2(s.p.y + ny * on / 2)}`
+    const k = field ? field.k(s.p.s ?? 0, time) : 1
+    const h = on / 2 * k
+    add(tw * Math.min(1, Math.max(0.3, k)), field ? field.tint(s.p.s ?? 0, time) : 0, `M${f2(s.p.x - nx * h)} ${f2(s.p.y - ny * h)}L${f2(s.p.x + nx * h)} ${f2(s.p.y + ny * h)}`)
   }
-  return <path d={d} fill="none" stroke={c.color} strokeWidth={ringTube(c, on) * 2} strokeLinecap="butt" />
+  return <>{[...groups].map(([k, g]) => <path key={k} d={g.d} fill="none" stroke={g.col} strokeWidth={g.w} strokeLinecap="butt" />)}</>
+}
+
+/** A line whose size changes along it (a bulge at its points, its ends
+ *  growing or shrinking), seen from above: the line itself or its
+ *  dashes as a band as wide as each place makes it, or its balls each
+ *  as big as where it is. */
+const FieldLine: React.FC<{ c: Curve; line: P3[]; field: LineField; pat: ReturnType<typeof patternOf>; closed: boolean }> = ({ c, line, field, pat, closed }) => {
+  const time = useRunTime((!!c.flow && !!pat) || field.moves)
+  const shift = pat ? flowShift(c, pat.period, time) : 0
+  const tinted = !!c.pulseColor && c.mark === 'bulge'
+  if (pat && pat.unit === 'ball') {
+    return <>{alongEvery(line, pat.period, (shift + pat.on / 2) % pat.period).map((s, i) => (
+      <circle key={i} cx={f2(s.p.x)} cy={f2(s.p.y)} r={f2(pat.on / 2 * field.k(s.p.s ?? 0, time))} fill={tinted ? tintCss(c.color, field.tint(s.p.s ?? 0, time)) : c.color} />
+    ))}</>
+  }
+  const pieces = pat ? dashPieces(line, pat.on, pat.gap, shift, 600).filter(p => p.length > 1) : [line]
+  const h = c.width / 2
+  let whole = ''
+  const quads: { d: string; col: string }[] = []
+  const caps: { x: number; y: number; r: number; col: string }[] = []
+  for (const piece of pieces) {
+    const L: string[] = [], R: string[] = []
+    const n = piece.length
+    piece.forEach((p, i) => {
+      const a = piece[Math.max(0, i - 1)], b = piece[Math.min(n - 1, i + 1)]
+      const dx = b.x - a.x, dy = b.y - a.y, l = Math.hypot(dx, dy) || 1
+      const g = h * field.k(p.s ?? 0, time)
+      L.push(`${f2(p.x - dy / l * g)} ${f2(p.y + dx / l * g)}`)
+      R.push(`${f2(p.x + dy / l * g)} ${f2(p.y - dx / l * g)}`)
+    })
+    if (tinted) {
+      // Each stretch its own colour, a few places long.
+      const span = 3
+      for (let i = 0; i < n - 1; i += span) {
+        const j = Math.min(n - 1, i + span)
+        const mid = piece[Math.min(n - 1, i + 1)]
+        const col = tintCss(c.color, field.tint(mid.s ?? 0, time))
+        quads.push({ d: 'M' + L.slice(i, j + 1).join('L') + 'L' + R.slice(i, j + 1).reverse().join('L') + 'Z', col })
+      }
+    } else whole += 'M' + L.join('L') + 'L' + R.reverse().join('L') + 'Z'
+    // The whole line's ends are round, as it is without a size along it.
+    if (!pat && !closed) for (const p of [piece[0], piece[n - 1]]) caps.push({ x: p.x, y: p.y, r: h * field.k(p.s ?? 0, time), col: tinted ? tintCss(c.color, field.tint(p.s ?? 0, time)) : c.color })
+  }
+  return (
+    <>
+      {whole && <path d={whole} fill={c.color} stroke={c.color} strokeWidth={0.01} />}
+      {quads.map((q, i) => <path key={i} d={q.d} fill={q.col} stroke={q.col} strokeWidth={Math.max(0.2, c.width * 0.04)} strokeLinejoin="round" />)}
+      {caps.map((q, i) => <circle key={`c${i}`} cx={f2(q.x)} cy={f2(q.y)} r={f2(q.r)} fill={q.col} />)}
+    </>
+  )
 }
 
 const CurveShape: React.FC<{ c: Curve; zoom: number; hit: boolean; selected: boolean }> = React.memo(({ c, zoom, hit, selected }) => {
   const d = curvePath(c)
   // The line stops inside what stands on its ends; with nothing on them
   // it is the curve itself.
-  const { line, ends } = shownLine(c, 24)
+  const whole = shownLine(c, 24)
+  const { ends } = whole
+  // Its size along it (a bulge at its points, its ends growing or shrinking).
+  const field = c.kind === 'bezier' ? fieldOf(c, whole.at, whole.len) : null
+  const line = field ? fineLine(whole.line, Math.max(c.width * 0.75, whole.len / 400)) : whole.line
   const shown = ends.length ? (line.length > 1 ? 'M' + line.map(p => `${f2(p.x)} ${f2(p.y)}`).join('L') : '') : d
   const pat = patternOf(c)
   const period = pat ? pat.period : 0
@@ -84,8 +148,9 @@ const CurveShape: React.FC<{ c: Curve; zoom: number; hit: boolean; selected: boo
     <g>
       {selected && <path d={d} fill="none" stroke={SEL} strokeWidth={c.width + 4 / zoom} strokeLinecap="round" strokeLinejoin="round" opacity={0.45} />}
       <g opacity={c.opacity ?? 1}>
-        {things && pat && line.length > 1 && <FlatUnits c={c} line={line} unit={things} on={pat.on} period={period} />}
-        {shown && !things && (
+        {things && pat && line.length > 1 && <FlatUnits c={c} line={line} unit={things} on={pat.on} period={period} field={field} />}
+        {field && !things && line.length > 1 && <FieldLine c={c} line={line} field={field} pat={pat} closed={!!c.closed && c.pts.length > 2} />}
+        {shown && !things && !field && (
           <path d={shown} fill="none" stroke={c.color} strokeWidth={look.w} strokeLinecap={look.cap} strokeLinejoin="round"
             strokeDasharray={look.arr} strokeDashoffset={look.off || undefined}>
             {/* The pattern runs along the line. */}
@@ -107,13 +172,17 @@ const CurveShape: React.FC<{ c: Curve; zoom: number; hit: boolean; selected: boo
         })}
         {/* Its points ping one after another: a ring spreading from each, fading. */}
         {c.ping && c.kind === 'bezier' && (() => {
-          const n = c.pts.length, cycle = Math.max(n * PING.slot, PING.dur) + 0.5, far = markSize(c) * 1.3, f = f2(PING.dur / cycle)
-          return c.pts.map((p, i) => p.mark === false ? null : (
-            <circle key={`g${i}`} cx={p.x} cy={p.y} r={0} fill="none" stroke={c.markColor ?? c.color} strokeWidth={far * 0.035 * 2} opacity={0}>
-              <animate attributeName="r" values={`0;${f2(far)};${f2(far)}`} keyTimes={`0;${f};1`} dur={`${f2(cycle)}s`} begin={`${f2(i * PING.slot)}s`} repeatCount="indefinite" />
-              <animate attributeName="opacity" values="1;0;0" keyTimes={`0;${f};1`} dur={`${f2(cycle)}s`} begin={`${f2(i * PING.slot)}s`} repeatCount="indefinite" />
-            </circle>
-          ))
+          const n = c.pts.length, sp = c.pingSpeed && c.pingSpeed > 0 ? c.pingSpeed : 1
+          const cycle = (Math.max(n * PING.slot, PING.dur) + 0.5) / sp, far = pingSize(c), f = f2(PING.dur / sp / cycle), count = pingRings(c)
+          return c.pts.map((p, i) => p.mark === false ? null : Array.from({ length: count }, (_, j) => {
+            const begin = `${f2((i * PING.slot + j * PING_ECHO) / sp)}s`
+            return (
+              <circle key={`g${i}.${j}.${sp}.${count}`} cx={p.x} cy={p.y} r={0} fill="none" stroke={c.markColor ?? c.color} strokeWidth={far * 0.07} opacity={0}>
+                <animate attributeName="r" values={`0;${f2(far)};${f2(far)}`} keyTimes={`0;${f};1`} dur={`${f2(cycle)}s`} begin={begin} repeatCount="indefinite" />
+                <animate attributeName="opacity" values="1;0;0" keyTimes={`0;${f};1`} dur={`${f2(cycle)}s`} begin={begin} repeatCount="indefinite" />
+              </circle>
+            )
+          }))
         })()}
         {/* The words by its points. */}
         {c.kind === 'bezier' && c.pts.map((p, i) => p.label ? (

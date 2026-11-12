@@ -422,6 +422,32 @@ export function fieldOf(c: Curve, at: number[], len: number): LineField | null {
   }
 }
 
+/** A line (shownLine's) with places added so none are further than
+ *  `step` apart: fine enough for a size that changes along it. */
+export function fineLine(s: P3[], step: number, max = 900): P3[] {
+  if (s.length < 2 || !(step > 0)) return s
+  const total = (s[s.length - 1].s ?? 0) - (s[0].s ?? 0) || lineLength(s)
+  step = Math.max(step, total / max)
+  const out: P3[] = [s[0]]
+  for (let i = 1; i < s.length; i++) {
+    const a = s[i - 1], b = s[i]
+    const n = Math.ceil(dist3(a, b) / step)
+    for (let j = 1; j < n; j++) out.push(mix3(a, b, j / n))
+    out.push(b)
+  }
+  return out
+}
+
+/** A colour ('#rrggbb') pulsed `t` (0..1) of the way to white, as r, g, b (0..1). */
+export function tintRgb(hex: string, t: number): [number, number, number] {
+  let h = hex.replace('#', '')
+  if (h.length === 3) h = h.split('').map(x => x + x).join('')
+  const n = parseInt(h.slice(0, 6), 16)
+  const v = Number.isFinite(n) ? [(n >> 16) & 255, (n >> 8) & 255, n & 255] : [255, 255, 255]
+  return v.map(x => (x + (255 - x) * Math.max(0, Math.min(1, t))) / 255) as [number, number, number]
+}
+export const tintCss = (hex: string, t: number) => t > 0.004 ? `rgb(${tintRgb(hex, t).map(x => Math.round(x * 255)).join(',')})` : hex
+
 /** The SVG path of a curve, in canvas units. */
 export function curvePath(c: Pick<Curve, 'kind' | 'pts' | 'closed' | 'smooth'>): string {
   const pts = curvePoints(c)
@@ -512,7 +538,7 @@ export function pointFrames(c: Curve): PathFrame3[] {
 }
 
 /** A straight bar from one place to another. */
-export type Bar = [P3, P3, number?]   // (how many times as thick as the rest)
+export type Bar = [P3, P3, number?, number?]   // (how many times as thick as the rest; how far its colour is pulsed towards white, 0..1)
 const along = (p: P3, f: PathFrame3, a: number, b: number, c: number): P3 => ({
   x: p.x + f.d.x * a + f.side.x * b + f.up.x * c,
   y: p.y + f.d.y * a + f.side.y * b + f.up.y * c,
@@ -541,18 +567,33 @@ export const curveRuns = (c: Curve) => (!!c.flow && !!patternOf(c)) || !!c.ping 
  *  edges with chevrons between pointing the way the path runs, lying flat
  *  to the path. All set to the path, so its twist shows. A pulsing road's
  *  chevrons swell in turn (`time`, seconds). */
-export function unitBars(c: Pick<Curve, 'chev' | 'pulse'>, line: P3[], unit: 'hatch' | 'cube' | 'plus', on: number, period: number, shift: number, time = 0): Bar[] {
+export function unitBars(c: Pick<Curve, 'chev' | 'pulse'>, line: P3[], unit: 'hatch' | 'cube' | 'plus', on: number, period: number, shift: number, time = 0, field: LineField | null = null): Bar[] {
   const out: Bar[] = []
   if (line.length < 2) return out
   const h = on / 2
+  // (The line's size field: each piece as big, and as pulsed, as where it stands.)
+  const kOf = (p: P3) => field ? field.k(p.s ?? 0, time) : 1
+  const dress = (from: number, p: P3, k: number) => {
+    if (!field) return
+    const tint = field.tint(p.s ?? 0, time), wt = Math.max(0.35, Math.sqrt(k))
+    for (let i = from; i < out.length; i++) { out[i][2] = (out[i][2] ?? 1) * wt; out[i][3] = tint }
+  }
   if (unit === 'cube') {
-    for (const s of alongEvery(line, period, (shift + h) % period, 250)) cubeBars(s.p, frameOf(s.d, s.p.tw), on, out)
+    for (const s of alongEvery(line, period, (shift + h) % period, 250)) {
+      const k = kOf(s.p), from = out.length
+      if (k <= 0.01) continue
+      cubeBars(s.p, frameOf(s.d, s.p.tw), on * k, out)
+      dress(from, s.p, k)
+    }
     return out
   }
   if (unit === 'plus') {
     for (const s of alongEvery(line, period, (shift + h) % period, 400)) {
       const f = frameOf(s.d, s.p.tw)
-      out.push([along(s.p, f, -h, 0, 0), along(s.p, f, h, 0, 0)], [along(s.p, f, 0, -h, 0), along(s.p, f, 0, h, 0)], [along(s.p, f, 0, 0, -h), along(s.p, f, 0, 0, h)])
+      const k = kOf(s.p), from = out.length, g = h * k
+      if (k <= 0.01) continue
+      out.push([along(s.p, f, -g, 0, 0), along(s.p, f, g, 0, 0)], [along(s.p, f, 0, -g, 0), along(s.p, f, 0, g, 0)], [along(s.p, f, 0, 0, -g), along(s.p, f, 0, 0, g)])
+      dress(from, s.p, k)
     }
     return out
   }
@@ -560,8 +601,13 @@ export function unitBars(c: Pick<Curve, 'chev' | 'pulse'>, line: P3[], unit: 'ha
   let pl: P3 | null = null, pr: P3 | null = null
   line.forEach((p, i) => {
     const f = frameOf(dirs[i], p.tw)
-    const l = along(p, f, 0, h, 0), r = along(p, f, 0, -h, 0)
-    if (pl && pr) { out.push([pl, l]); out.push([pr, r]) }
+    const g = h * kOf(p)
+    const l = along(p, f, 0, g, 0), r = along(p, f, 0, -g, 0)
+    if (pl && pr) {
+      const from = out.length
+      out.push([pl, l]); out.push([pr, r])
+      if (field) { const tint = field.tint(p.s ?? 0, time); for (let j = from; j < out.length; j++) out[j][3] = tint }
+    }
     pl = l; pr = r
   })
   const depth = (c.chev ?? 0.5) * on
@@ -569,11 +615,14 @@ export function unitBars(c: Pick<Curve, 'chev' | 'pulse'>, line: P3[], unit: 'ha
   const wave = period * 8
   alongEvery(line, period, shift, 400).forEach((s, i) => {
     const f = frameOf(s.d, s.p.tw)
-    const tip = along(s.p, f, depth, 0, 0)
+    const g = kOf(s.p)
+    if (g <= 0.01) return
+    const tip = along(s.p, f, depth * g, 0, 0)
     const dist = shift + i * period
     const k = c.pulse ? 1 + 2.2 * Math.pow(Math.max(0, Math.cos(2 * Math.PI * (dist / wave - time * 0.7))), 6) : undefined
-    const a: Bar = [along(s.p, f, 0, h * 0.82, 0), tip], b: Bar = [along(s.p, f, 0, -h * 0.82, 0), tip]
-    if (k !== undefined) { a.push(k); b.push(k) }
+    const a: Bar = [along(s.p, f, 0, h * 0.82 * g, 0), tip], b: Bar = [along(s.p, f, 0, -h * 0.82 * g, 0), tip]
+    if (k !== undefined) { a[2] = k; b[2] = k }
+    if (field) { const tint = field.tint(s.p.s ?? 0, time); a[3] = tint; b[3] = tint }
     out.push(a, b)
   })
   return out
@@ -583,11 +632,16 @@ export function unitBars(c: Pick<Curve, 'chev' | 'pulse'>, line: P3[], unit: 'ha
  *  `time` (seconds), how far its ring has spread (0..1), or null between
  *  its pings. */
 export const PING = { slot: 0.45, dur: 1 }
-export function pingAt(i: number, n: number, time: number): number | null {
+export function pingAt(i: number, n: number, time: number, speed = 1, late = 0): number | null {
   const cycle = Math.max(n * PING.slot, PING.dur) + 0.5
-  const t = (((time - i * PING.slot) % cycle) + cycle) % cycle
+  const t = (((time * (speed > 0 ? speed : 1) - i * PING.slot - late) % cycle) + cycle) % cycle
   return t < PING.dur ? t / PING.dur : null
 }
+/** How far apart a ping's rings follow each other (of PING.dur). */
+export const PING_ECHO = 0.22
+/** How far a ping's rings spread. */
+export const pingSize = (c: Pick<Curve, 'width' | 'markSize' | 'pingSize'>) => c.pingSize && c.pingSize > 0 ? c.pingSize / 2 : markSize(c) * 1.3
+export const pingRings = (c: Pick<Curve, 'pingRings'>) => Math.max(1, Math.min(4, Math.round(c.pingRings ?? 1)))
 
 /** The bars of a point's graphic (Curve.mark), `m` across at `p`, set to
  *  the path there: a crosshair, or a cube of which only the corners show. */
