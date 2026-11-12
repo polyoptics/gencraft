@@ -33,7 +33,7 @@ export interface CardDetail {
   collapsed?: boolean
 }
 
-export type CardType = 'element' | 'character' | 'faction' | 'family' | 'location' | 'prop' | 'audio' | 'scene' | 'prompt' | 'note' | 'state' | 'area3d'
+export type CardType = 'element' | 'character' | 'faction' | 'family' | 'location' | 'prop' | 'audio' | 'scene' | 'event' | 'prompt' | 'note' | 'state' | 'area3d'
 
 export interface CardTypeInfo {
   label: string
@@ -57,6 +57,10 @@ export const CARD_TYPES: Record<CardType, CardTypeInfo> = {
   prop:      { label: 'Prop',      color: '#2f64c9', details: ['Kind', 'Ammo', 'Capacity', 'Owner'] },
   audio:     { label: 'Audio',     color: '#b0478a', details: ['Artist', 'Length', 'Tempo', 'Key', 'Mood'] },
   scene:     { label: 'Scene',     color: '#c9962a', details: ['Act', 'Location', 'Time of day', 'Mood'] },
+  // An EVENT (Brian 2026-11-12): something that happens. Like any card it
+  // can carry State changes and hang on a storyline dot, so the marker
+  // plays it.
+  event:     { label: 'Event',     color: '#d9682b', details: ['When', 'Where', 'Who', 'Cause', 'Outcome'] },
   // A card of prompt words (2026-11-06): each detail a group of them, its
   // value the words, comma separated. The card Prompt Pad deals them out
   // as tags.

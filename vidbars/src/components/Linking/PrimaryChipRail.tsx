@@ -18,6 +18,7 @@ import { RefChip } from './LinkChipRail'
 import { refKey } from '../../utils/linkTargets'
 import { cardTitle } from '../../utils/faceStyle'
 import { CARD_TYPES, cardTypeOf, type CardType } from '../../utils/cardTypes'
+import { TuckedCards } from './TuckedCards'
 
 interface Props {
   /** Group whose outbound link chips we're rendering. */
@@ -65,6 +66,15 @@ export const PrimaryChipRail: React.FC<Props> = ({ groupId, hostRect, path, scal
         pointerEvents: 'auto',
       }}
     >
+      {/* Cards linked ONTO this one, tucked under its bottom edge (card on
+          card). Placed from this rail's corner; the chips ride over it. */}
+      <TuckedCards
+        groupId={groupId}
+        left={-RAIL_INSET_X * scale}
+        top={-RAIL_Y_OFFSET * scale}
+        scale={scale}
+        width={hostRect.width / scale}
+      />
       <div
         style={{
           transform: `scale(${scale})`,
