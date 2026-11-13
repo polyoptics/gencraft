@@ -25,6 +25,7 @@
 // on a card.
 
 import React, { useEffect, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useBoardsStore } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
@@ -146,9 +147,11 @@ interface PieceProps {
    *  spot on the plane under its model's foot on the screen, and how much
    *  bigger the model is seen there for being nearer the eye. */
   at: { x: number; y: number; k: number } | null
+  /** It is going along a path now (the ride clock runs). */
+  moving: boolean
 }
 
-const Piece: React.FC<PieceProps> = React.memo(({ p, pic, size, zoom, selected, live, at }) => {
+const Piece: React.FC<PieceProps> = React.memo(({ p, pic, size, zoom, selected, live, at, moving }) => {
   const [hover, setHover] = useState(false)
   const shot = pieceShot(p)
   // No picture yet, or a model not measured yet: a plain disc its
@@ -180,7 +183,15 @@ const Piece: React.FC<PieceProps> = React.memo(({ p, pic, size, zoom, selected, 
   const src = pic ? { ['--piece-pic' as string]: `url("${pic.src}")` } : null
   const edge = selected ? ring(SEL) : hover ? ring(HOVER) : 'drop-shadow(0 1px 1.5px rgba(0,0,0,0.55))'
   return (
-    <div data-scene-piece={p.key} data-piece-set={p.areaId} style={{ position: 'absolute', left, top, width: w, height: h, pointerEvents: 'none' }}>
+    <div data-scene-piece={p.key} data-piece-set={p.areaId} style={{ position: 'absolute', left: moving ? Math.floor(left) : left, top: moving ? Math.floor(top) : top, width: w, height: h, pointerEvents: 'none' }}>
+      {/* Going along a path: the part of a pixel it is on is given it by
+          a transform, on a layer of its own. Laid out by its left and top
+          alone it is drawn on whole pixels, and one going slowly steps
+          along a pixel at a time, across then down, not along its line
+          (Brian 2026-11-13: "really jittery and weird"). (Its box keeps
+          its left and top: a set folding into its card rides its pieces
+          by them, utils/area3dCard.) */}
+      <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', ...(moving ? { transform: `translate(${left - Math.floor(left)}px, ${top - Math.floor(top)}px)`, willChange: 'transform' } : null) }}>
       {lifted && src && (
         <div data-piece-shadow="" style={{ position: 'absolute', left: ax + down.x - sax, top: ay + down.y - say, width: sw, height: sh, opacity: 0.5, filter: `blur(${Math.min(6, 1.5 + Math.hypot(down.x, down.y) * 0.03).toFixed(1)}px)`, pointerEvents: 'none' }}>
           <div className="scene-piece-shadow" style={{ position: 'absolute', left: 0, top: 0, width: sw, height: sh, transformOrigin: `${sax}px ${say}px`, transform: turn, ...src }} />
@@ -217,6 +228,7 @@ const Piece: React.FC<PieceProps> = React.memo(({ p, pic, size, zoom, selected, 
           textShadow: '0 1px 2px rgba(0,0,0,0.9), 0 0 3px rgba(0,0,0,0.7)', whiteSpace: 'nowrap', pointerEvents: 'none', userSelect: 'none',
         }}>{p.name}</div>
       )}
+      </div>
     </div>
   )
 })
@@ -255,7 +267,10 @@ export const PieceLayer: React.FC = () => {
   const [, setBeat] = useState(0)
   useEffect(() => {
     if (!riding) return
-    let raf = requestAnimationFrame(function beat() { setBeat(n => (n + 1) % 1e6); raf = requestAnimationFrame(beat) })
+    // (Drawn within the frame that asks for it: left to be drawn when
+    // there is time, a step comes a frame late now and then, and the next
+    // is twice as long.)
+    let raf = requestAnimationFrame(function beat() { flushSync(() => setBeat(n => (n + 1) % 1e6)); raf = requestAnimationFrame(beat) })
     return () => cancelAnimationFrame(raf)
   }, [riding])
   // Tipping into 3D with a lifted piece showing: where each is drawn
@@ -345,7 +360,12 @@ export const PieceLayer: React.FC = () => {
     <div ref={root} data-piece-layer="" style={{ position: 'absolute', left: panAt.x, top: panAt.y, width: 0, height: 0, zIndex: 55, pointerEvents: 'none', opacity: shown }}>
       {order.map(i => {
         const p = list[i]
-        const pic = pics[keys[i]]
+        // (One going along a path keeps the picture it has till it comes
+        // to rest: tipped by a climb or a lean it passes the sides it was
+        // once pictured from, and would change to each for a moment, each
+        // cut to its own size.)
+        const moving = playing && !!p.riding
+        const pic = moving && lastPic.has(p.key) ? undefined : pics[keys[i]]
         if (pic) lastPic.set(p.key, pic)
         // A lifted piece, as the camera tips: from where its lift puts it
         // looking down, to the spot on the plane its model's foot is seen
@@ -369,7 +389,7 @@ export const PieceLayer: React.FC = () => {
           }
         }
         return <Piece key={p.key} p={p} pic={pic ?? lastPic.get(p.key) ?? null} size={sizes[p.url]} zoom={zoom}
-          selected={pieceSelected(p.key, selNodes, selCards)} live={flat} at={at} />
+          selected={pieceSelected(p.key, selNodes, selCards)} live={flat} at={at} moving={moving} />
       })}
     </div>
   )

@@ -53,6 +53,7 @@ import { ConsoleToggleButton } from './components/UI/ConsoleToggleButton'
 import { CabinetToggleButton, PickModeButton } from './components/UI/CabinetToggleButton'
 import { emptyCabinet } from './utils/cabinet'
 import { WorldClock } from './components/UI/WorldClock'
+import { RidePlayBar } from './components/UI/RidePlayBar'
 
 /** Hosts useFxStrips, which subscribes to every tile, Viewer and zoom
  *  change. Called in App's body, each drag frame and wheel tick would
@@ -891,6 +892,8 @@ export default function App() {
         <ZoomZoneBar />
         {/* The world clock: its control bottom left, its bar along the bottom */}
         <WorldClock />
+        {/* Play and pause for what rides the paths, with the line of the whole play */}
+        <RidePlayBar />
       </div>
 
       {/* Deck browser tray + link-drag overlay */}

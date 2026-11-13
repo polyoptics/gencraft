@@ -27,16 +27,26 @@ interface RideClock {
   pause: () => void
   seek: (t: number) => void
 }
+/** Now, as the frame being drawn has it (ms): one time for everything
+ *  drawn in a frame, a frame apart from the last (Brian 2026-11-13: "the
+ *  motion's really jittery"). The time a piece of code happens to run at
+ *  within its frame comes early or late by a few milliseconds from one
+ *  frame to the next, and what goes by it steps unevenly along its path:
+ *  the faster it goes, the more it shows. */
+const frameNow = (): number => {
+  const t = typeof document !== 'undefined' ? document.timeline?.currentTime : null
+  return typeof t === 'number' ? t : performance.now()
+}
 export const useRideClock = create<RideClock>(set => ({
   playing: false, base: 0, stamp: 0,
-  play: () => set(s => s.playing ? s : { playing: true, stamp: performance.now() }),
+  play: () => set(s => s.playing ? s : { playing: true, stamp: frameNow() }),
   pause: () => set(s => s.playing ? { playing: false, base: rideTime() } : s),
-  seek: t => set({ base: Math.max(0, t), stamp: performance.now() }),
+  seek: t => set({ base: Math.max(0, t), stamp: frameNow() }),
 }))
 /** The ride clock now, seconds. */
 export function rideTime(): number {
   const c = useRideClock.getState()
-  return c.playing ? c.base + (performance.now() - c.stamp) / 1000 : c.base
+  return c.playing ? Math.max(0, c.base + (frameNow() - c.stamp) / 1000) : c.base
 }
 
 // ── A path as a ride ──
@@ -50,7 +60,14 @@ function lineOf(c: Curve): RideLine {
   if (l) return l
   const n = c.pts.length
   let run = 0
-  const raw = curveSamples(c, 32)
+  // In pieces short enough that what rides it does not show them: a long
+  // stretch between two points in as many more.
+  let far = 0
+  for (let i = 0; i + 1 < n || (i < n && !!c.closed && n > 2); i++) {
+    const a = c.pts[i], b = c.pts[(i + 1) % n]
+    far = Math.max(far, Math.hypot(b.x - a.x, b.y - a.y, (b.z ?? 0) - (a.z ?? 0)))
+  }
+  const raw = curveSamples(c, Math.max(32, Math.min(400, Math.ceil(far * 1.5 / PIECE))))
   const at: number[] = new Array(n).fill(0)
   const pts: P3[] = raw.map((q, i) => {
     if (i) run += Math.hypot(q.x - raw[i - 1].x, q.y - raw[i - 1].y, q.z - raw[i - 1].z)
@@ -62,6 +79,15 @@ function lineOf(c: Curve): RideLine {
   return l
 }
 export const rideLength = (c: Curve) => lineOf(c).len
+
+/** How long the pieces a ride's line is read in are, about (canvas
+ *  units), and how far either side of a rider the line's way is read
+ *  across, at most (`AIM`), and its swing for a lean (`LEAN`). A share of
+ *  the path's length on a short one, as it was; a long path's riders were
+ *  read across a longer stretch the longer the path, so they pointed
+ *  across its bends, not along them, and leant the more for the same bend
+ *  (Brian 2026-11-13: "some follow better than others"). */
+const PIECE = 5, AIM = 40, LEAN = 60
 
 /** The place `dist` along the line. */
 function pointAt(l: RideLine, dist: number): P3 {
@@ -85,7 +111,7 @@ function placeAt(l: RideLine, dist: number): { p: P3; d: P3 } {
   const wrap = (x: number) => l.closed ? ((x % l.len) + l.len) % l.len : x
   dist = l.closed ? wrap(dist) : Math.max(0, Math.min(l.len, dist))
   const p = pointAt(l, dist)
-  const w = l.len * 0.05
+  const w = Math.min(l.len * 0.05, AIM)
   let dx = 0, dy = 0, dz = 0
   // Several reaches together: no one piece's end tells.
   for (let k = 1; k <= 4; k++) {
@@ -204,7 +230,7 @@ function pathSpot(l: RideLine, r: PathRider, dist: number, back: boolean, q: THR
   let roll = r.twist === false ? 0 : at.p.tw ?? 0
   if (r.bank) {
     // Leaning into the turn: by how far the path swings round just here.
-    const w = Math.max(l.len * 0.04, 1e-6)
+    const w = Math.max(Math.min(l.len * 0.04, LEAN), 1e-6)
     const a = placeAt(l, dist - w).d, b = placeAt(l, dist + w).d
     const turn = Math.atan2(a.x * b.y - a.y * b.x, a.x * b.x + a.y * b.y) * 180 / Math.PI
     roll += Math.max(-80, Math.min(80, -turn * r.bank / 100))
