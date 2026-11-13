@@ -13,19 +13,41 @@
 import * as THREE from 'three'
 import { create } from 'zustand'
 import { useNotesStore, type Curve, type PathRider } from '../store/notesStore'
+import { useFreeNodeStore } from '../store/freeNodeStore'
+import { parentOf } from './curveParent'
 import { curveSamples, frameOf, type P3 } from './curveGeom'
 
-// ── The clock ──
+// ── The clocks ──
+//
+// Each 3D set has a clock of its own for what rides the paths in it (Brian
+// 2026-11-13: a Play bar "along the bottom of each 3D set and I want it to
+// play the stuff that's in its 3D set"); the paths of no set share one
+// (''). A path goes by the clock of the set it belongs to (utils/
+// curveParent), so models on several paths of one set stay in step. Asked
+// for no set in particular, play, pause and seek are for every clock
+// together, and `playing` is whether any runs: the Notes panel's Play is
+// for everything.
 
-interface RideClock {
+interface Clock {
   playing: boolean
   /** The clock's time (seconds) when it was last set or started. */
   base: number
-  /** performance.now() then. */
+  /** The frame's time then (frameNow). */
   stamp: number
-  play: () => void
-  pause: () => void
-  seek: (t: number) => void
+}
+const STILL: Clock = { playing: false, base: 0, stamp: 0 }
+interface RideClock {
+  /** By set (its ground's node id); '': the paths of no set. */
+  clocks: Record<string, Clock>
+  /** Any clock runs. */
+  playing: boolean
+  /** The furthest clock's, as when one of them was last set or started
+   *  (they change when any clock is set by hand). */
+  base: number
+  stamp: number
+  play: (set?: string) => void
+  pause: (set?: string) => void
+  seek: (t: number, set?: string) => void
 }
 /** Now, as the frame being drawn has it (ms): one time for everything
  *  drawn in a frame, a frame apart from the last (Brian 2026-11-13: "the
@@ -37,17 +59,63 @@ const frameNow = (): number => {
   const t = typeof document !== 'undefined' ? document.timeline?.currentTime : null
   return typeof t === 'number' ? t : performance.now()
 }
-export const useRideClock = create<RideClock>(set => ({
-  playing: false, base: 0, stamp: 0,
-  play: () => set(s => s.playing ? s : { playing: true, stamp: frameNow() }),
-  pause: () => set(s => s.playing ? { playing: false, base: rideTime() } : s),
-  seek: t => set({ base: Math.max(0, t), stamp: frameNow() }),
-}))
-/** The ride clock now, seconds. */
-export function rideTime(): number {
-  const c = useRideClock.getState()
-  return c.playing ? Math.max(0, c.base + (frameNow() - c.stamp) / 1000) : c.base
+const timeOf = (c: Clock, now = frameNow()) => c.playing ? Math.max(0, c.base + (now - c.stamp) / 1000) : c.base
+
+/** The set whose clock a path goes by ('' for a path of no set). */
+let setsMemo: { curves: unknown; nodes: unknown; of: Map<string, string>; all: string[] } | null = null
+function rideSets() {
+  const curves = useNotesStore.getState().curves, nodes = useFreeNodeStore.getState().nodes
+  if (setsMemo && setsMemo.curves === curves && setsMemo.nodes === nodes) return setsMemo
+  const of = new Map<string, string>()
+  const all = new Set<string>()
+  for (const c of Object.values(curves)) {
+    if (!c.riders?.length || c.pts.length < 2) continue
+    const id = parentOf(c, nodes) ?? ''
+    of.set(c.id, id)
+    all.add(id)
+  }
+  setsMemo = { curves, nodes, of, all: [...all].sort() }
+  return setsMemo
 }
+/** The set whose clock path `c` goes by: '' for a path of no set. */
+export const rideSetOf = (c: Curve): string => rideSets().of.get(c.id) ?? parentOf(c) ?? ''
+/** The sets with something riding a path in them ('' among them when a
+ *  path of no set has riders): the same list while they are the same. */
+export const rideSetIds = (): string[] => rideSets().all
+
+export const useRideClock = create<RideClock>((set, get) => {
+  /** Every clock with something to play, and any other that was set. */
+  const ids = (one?: string) => one !== undefined ? [one] : [...new Set([...rideSets().all, ...Object.keys(get().clocks)])]
+  const put = (change: (c: Clock, now: number) => Clock, one?: string) => set(s => {
+    const now = frameNow()
+    const clocks = { ...s.clocks }
+    let changed = false
+    for (const id of ids(one)) {
+      const was = clocks[id] ?? STILL, next = change(was, now)
+      if (next !== was) { clocks[id] = next; changed = true }
+    }
+    if (!changed) return s
+    const list = Object.values(clocks)
+    return { clocks, playing: list.some(c => c.playing), base: Math.max(0, ...list.map(c => timeOf(c, now))), stamp: now }
+  })
+  return {
+    clocks: {}, playing: false, base: 0, stamp: 0,
+    play: one => put((c, now) => c.playing ? c : { playing: true, base: c.base, stamp: now }, one),
+    pause: one => put((c, now) => c.playing ? { playing: false, base: timeOf(c, now), stamp: now } : c, one),
+    seek: (t, one) => put((c, now) => ({ playing: c.playing, base: Math.max(0, t), stamp: now }), one),
+  }
+})
+/** A set's ride clock now, seconds ('' the clock of the paths of no set);
+ *  for no set in particular, the furthest of them. */
+export function rideTime(set?: string): number {
+  const { clocks } = useRideClock.getState()
+  if (set !== undefined) return timeOf(clocks[set] ?? STILL)
+  let t = 0
+  for (const c of Object.values(clocks)) t = Math.max(t, timeOf(c))
+  return t
+}
+/** Does that set's clock run? */
+export const ridePlaying = (set: string): boolean => !!useRideClock.getState().clocks[set]?.playing
 
 // ── A path as a ride ──
 
@@ -199,7 +267,7 @@ export function ridePointTime(c: Curve, r: PathRider, i: number): number {
 }
 /** The point of its path a rider is nearest in time, and whether it is
  *  on it. */
-export function ridePointNow(c: Curve, r: PathRider, time = rideTime()): { i: number; on: boolean } {
+export function ridePointNow(c: Curve, r: PathRider, time = rideTime(rideSetOf(c))): { i: number; on: boolean } {
   let best = 0, d = Infinity
   c.pts.forEach((_, i) => { const x = Math.abs(ridePointTime(c, r, i) - time); if (x < d) { d = x; best = i } })
   return { i: best, on: d < 2e-3 }
@@ -301,26 +369,45 @@ export function riderOf(key: string, curves = useNotesStore.getState().curves): 
   return null
 }
 
-let memo: { curves: unknown; time: number; map: Map<string, RideSpot> } | null = null
-/** Every riding model's place now, by its key. */
+let memo: { curves: unknown; nodes: unknown; clocks: unknown; now: number; map: Map<string, RideSpot> } | null = null
+/** Every riding model's place now, by its key: each where its path has it
+ *  at its set's clock. (The same map, by identity, while the paths and
+ *  the clocks stand still, and within one frame.) */
 export function rideSpots(): Map<string, RideSpot> {
-  const curves = useNotesStore.getState().curves
-  const time = rideTime()
-  if (memo && memo.curves === curves && memo.time === time) return memo.map
+  const curves = useNotesStore.getState().curves, nodes = useFreeNodeStore.getState().nodes
+  const { clocks, playing } = useRideClock.getState()
+  const now = playing ? frameNow() : 0
+  if (memo && memo.curves === curves && memo.nodes === nodes && memo.clocks === clocks && memo.now === now) return memo.map
   const map = new Map<string, RideSpot>()
-  for (const c of Object.values(curves)) for (const r of c.riders ?? []) if (c.pts.length > 1) map.set(r.key, rideSpot(c, r, time))
-  memo = { curves, time, map }
+  for (const c of Object.values(curves)) {
+    if (!c.riders?.length || c.pts.length < 2) continue
+    const time = rideTime(rideSetOf(c))
+    for (const r of c.riders) map.set(r.key, rideSpot(c, r, time))
+  }
+  memo = { curves, nodes, clocks, now, map }
   return map
 }
 
-/** Something is riding and the clock runs: the 3D view keeps drawing. */
-export const rideRuns = () => useRideClock.getState().playing && Object.values(useNotesStore.getState().curves).some(c => c.riders?.length)
+/** Is model `key` (or, its settings kept under `dk`) riding a path whose
+ *  clock runs now? */
+export function riderRuns(key: string, dk = key): boolean {
+  if (!useRideClock.getState().playing) return false
+  const r = riderOf(key) ?? (dk !== key ? riderOf(dk) : null)
+  return !!r && ridePlaying(rideSetOf(r.curve))
+}
 
-/** How long the longest timed ride takes to its end, seconds (for the
- *  clock's slider). */
-export function rideTotal(): number {
+/** Something is riding and a clock runs: the 3D view keeps drawing. */
+export const rideRuns = () => useRideClock.getState().playing && rideSetIds().some(ridePlaying)
+
+/** How long the longest ride takes to its end, seconds: in one set (''
+ *  the paths of no set), or of them all. */
+export function rideTotal(set?: string): number {
   let t = 0
-  for (const c of Object.values(useNotesStore.getState().curves)) if (c.riders?.length) { const s = rideSpan(c); t = Math.max(t, s.start + s.dur) }
+  for (const c of Object.values(useNotesStore.getState().curves)) {
+    if (!c.riders?.length || c.pts.length < 2 || (set !== undefined && rideSetOf(c) !== set)) continue
+    const s = rideSpan(c)
+    t = Math.max(t, s.start + s.dur)
+  }
   return t
 }
 

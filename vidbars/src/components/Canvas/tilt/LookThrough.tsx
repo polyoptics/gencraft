@@ -17,7 +17,7 @@ import { dataKey, placeNow } from '../../../utils/area3dScene'
 import { useFreeNodeStore } from '../../../store/freeNodeStore'
 import { models, cardModel, modelKey, selectModel } from './TiltModels'
 import { useNotesStore, type Curve, type PathRider } from '../../../store/notesStore'
-import { riderOf, rideSpots, rideTime, ridePointNow, ridePointTime, setRiderKey, useRideClock } from '../../../utils/pathRide'
+import { riderOf, rideSpots, rideTime, ridePointNow, ridePointTime, setRiderKey, useRideClock, rideSetOf, ridePlaying } from '../../../utils/pathRide'
 
 /** The lens a new camera is made with (Brian 2026-11-12). One made before
  *  that, its lens never set, keeps tiltStore's CAMERA_LENS. */
@@ -199,7 +199,7 @@ function ridingAt(key: string): { curve: Curve; rider: PathRider; i: number; spo
   if (!r) return null
   const at = ridePointNow(r.curve, r.rider)
   const spot = rideSpots().get(r.rider.key)
-  return at.on && spot && !useRideClock.getState().playing ? { ...r, i: at.i, spot } : null
+  return at.on && spot && !ridePlaying(rideSetOf(r.curve)) ? { ...r, i: at.i, spot } : null
 }
 /** A camera on a path is reframed on its points: between two, or while it
  *  runs, the first touch stops it on the nearest one (true: it did, and
@@ -207,9 +207,10 @@ function ridingAt(key: string): { curve: Curve; rider: PathRider; i: number; spo
 function parkOnPoint(key: string): boolean {
   const r = riderOf(key) ?? riderOf(dataKey(key))
   if (!r || ridingAt(key)) return false
-  const clock = useRideClock.getState()
-  clock.pause()
-  clock.seek(ridePointTime(r.curve, r.rider, ridePointNow(r.curve, r.rider).i))
+  // (Its set's clock: what rides in other sets goes on as it was.)
+  const clock = useRideClock.getState(), set = rideSetOf(r.curve)
+  clock.pause(set)
+  clock.seek(ridePointTime(r.curve, r.rider, ridePointNow(r.curve, r.rider).i), set)
   return true
 }
 const qconj = (q: Q): Q => [-q[0], -q[1], -q[2], q[3]]
@@ -277,7 +278,7 @@ function put(h: Start, c: Cam, focus?: number) {
     // (The point moved, the path is another length: the clock goes to
     // where that point now is, so the camera stays stopped on it.)
     const now = riderOf(h.ride.rider)
-    if (now) useRideClock.getState().seek(ridePointTime(now.curve, now.rider, h.ride.i))
+    if (now) useRideClock.getState().seek(ridePointTime(now.curve, now.rider, h.ride.i), rideSetOf(now.curve))
     if (focus !== undefined) ms.setLens(h.dk, { focus })
     return
   }
@@ -451,8 +452,11 @@ export function installLookThrough() {
  *  and, stopped on one, set how the ride passes it. */
 const RideBar: React.FC<{ k: string }> = ({ k }) => {
   const curves = useNotesStore(s => s.curves)
-  const playing = useRideClock(s => s.playing)
-  const base = useRideClock(s => s.base)
+  const r = riderOf(k, curves) ?? riderOf(dataKey(k), curves)
+  // The clock of the set its path is in.
+  const set = r ? rideSetOf(r.curve) : ''
+  const playing = useRideClock(s => !!s.clocks[set]?.playing)
+  const base = useRideClock(s => s.clocks[set]?.base)
   const [, tick] = useState(0)
   useEffect(() => {
     if (!playing) return
@@ -460,14 +464,13 @@ const RideBar: React.FC<{ k: string }> = ({ k }) => {
     return () => window.clearInterval(id)
   }, [playing])
   void base
-  const r = riderOf(k, curves) ?? riderOf(dataKey(k), curves)
   if (!r) return null
   const { curve: c, rider } = r
-  const now = rideTime()
+  const now = rideTime(set)
   const at = ridePointNow(c, rider, now)
   const on = at.on && !playing
   const n = c.pts.length
-  const go = (i: number) => { const clock = useRideClock.getState(); clock.pause(); clock.seek(ridePointTime(c, rider, Math.max(0, Math.min(n - 1, i)))) }
+  const go = (i: number) => { const clock = useRideClock.getState(); clock.pause(set); clock.seek(ridePointTime(c, rider, Math.max(0, Math.min(n - 1, i))), set) }
   // Back: to the point it is on or has passed; on: to the next one.
   const tNear = ridePointTime(c, rider, at.i)
   const prev = on ? at.i - 1 : tNear < now ? at.i : at.i - 1
@@ -482,9 +485,9 @@ const RideBar: React.FC<{ k: string }> = ({ k }) => {
       display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', borderRadius: 10, whiteSpace: 'nowrap',
       background: 'rgba(19,20,31,0.92)', border: '1px solid rgba(255,255,255,0.12)', color: '#e8f0ff', fontSize: 12,
     }}>
-      <button style={b(playing)} aria-pressed={playing} title="Play: on or off. On, the camera rides its path (and everything else on a path rides too: one clock for all)."
-        onClick={() => playing ? useRideClock.getState().pause() : useRideClock.getState().play()}>Play</button>
-      <button style={b(false)} title="Back to the start of the ride" onClick={() => useRideClock.getState().seek(0)}>To start</button>
+      <button style={b(playing)} aria-pressed={playing} title="Play: on or off. On, the camera rides its path (and everything else on a path in its 3D set rides too: one clock for the set)."
+        onClick={() => playing ? useRideClock.getState().pause(set) : useRideClock.getState().play(set)}>Play</button>
+      <button style={b(false)} title="Back to the start of the ride" onClick={() => useRideClock.getState().seek(0, set)}>To start</button>
       <span style={{ width: 46, textAlign: 'right', fontFamily: 'ui-monospace, monospace', fontSize: 11, color: 'rgba(232,240,255,0.7)' }}>{now.toFixed(1)}s</span>
       <span style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.14)' }} />
       <button style={b(false, prev < 0)} disabled={prev < 0} title="Stop on the point before" onClick={() => go(prev)}>◀ Point</button>

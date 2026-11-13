@@ -34,7 +34,7 @@ import { useManip } from '../../store/manipStore'
 import { usePeek } from '../../utils/peek'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { useNotesStore } from '../../store/notesStore'
-import { useRideClock } from '../../utils/pathRide'
+import { useRideClock, riderRuns } from '../../utils/pathRide'
 import { clientToCanvas } from '../../utils/fx/createEffect'
 import { selectModel } from './tilt/TiltModels'
 import { usePieceStore, ensurePiece, pieceKey, trimPieces, type PiecePic, type Vec3 } from '../../three/pieceService'
@@ -285,7 +285,7 @@ export const PieceLayer: React.FC = () => {
   // a slope it would want another at every step): its next is drawn when
   // it comes to rest.
   const keys = list.map(p => pieceKey(p.url, pieceShot(p).q, p.stretch))
-  const still = (p: ScenePiece) => !(playing && p.riding)
+  const still = (p: ScenePiece) => !(playing && p.riding && riderRuns(p.key, p.dk))
   const want = keys.filter((_, i) => still(list[i])).join('\n')
   const now = useRef({ list, still })
   now.current = { list, still }
@@ -364,7 +364,7 @@ export const PieceLayer: React.FC = () => {
         // to rest: tipped by a climb or a lean it passes the sides it was
         // once pictured from, and would change to each for a moment, each
         // cut to its own size.)
-        const moving = playing && !!p.riding
+        const moving = playing && !!p.riding && riderRuns(p.key, p.dk)
         const pic = moving && lastPic.has(p.key) ? undefined : pics[keys[i]]
         if (pic) lastPic.set(p.key, pic)
         // A lifted piece, as the camera tips: from where its lift puts it

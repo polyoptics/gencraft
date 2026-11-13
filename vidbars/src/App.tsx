@@ -53,7 +53,7 @@ import { ConsoleToggleButton } from './components/UI/ConsoleToggleButton'
 import { CabinetToggleButton, PickModeButton } from './components/UI/CabinetToggleButton'
 import { emptyCabinet } from './utils/cabinet'
 import { WorldClock } from './components/UI/WorldClock'
-import { RidePlayBar } from './components/UI/RidePlayBar'
+import { SetPlayBars } from './components/UI/RidePlayBar'
 
 /** Hosts useFxStrips, which subscribes to every tile, Viewer and zoom
  *  change. Called in App's body, each drag frame and wheel tick would
@@ -885,15 +885,13 @@ export default function App() {
         </InfiniteCanvas>
         {/* Layer overlay renders outside the canvas transform (screen-space headers/cards) */}
         {/* Tilts with the world layers when the canvas is tilted */}
-        <TiltStage><LayerOverlay /><PieceLayer /><CurveLayer /></TiltStage>
+        <TiltStage><LayerOverlay /><PieceLayer /><CurveLayer /><SetPlayBars /></TiltStage>
         {/* Tilted view: pan/zoom on the plane + model cards standing up */}
         <TiltLayer />
         {/* Where Cards / Blocks / Boards begin and end — drag to retune */}
         <ZoomZoneBar />
         {/* The world clock: its control bottom left, its bar along the bottom */}
         <WorldClock />
-        {/* Play and pause for what rides the paths, with the line of the whole play */}
-        <RidePlayBar />
       </div>
 
       {/* Deck browser tray + link-drag overlay */}

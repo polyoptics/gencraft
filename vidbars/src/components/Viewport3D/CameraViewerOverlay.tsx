@@ -19,7 +19,7 @@ import { useModelScaleStore, CAMERA_LENS } from '../../store/tiltStore'
 import { areaOfBox, sceneOf, dataKey } from '../../utils/area3dScene'
 import { cardModel, cameraViews } from '../Canvas/tilt/TiltModels'
 import { CAMERA_URL } from '../../three/primitives'
-import { useRideClock, riderOf } from '../../utils/pathRide'
+import { useRideClock, riderOf, rideSetOf } from '../../utils/pathRide'
 import { useNotesStore } from '../../store/notesStore'
 
 /** Which camera each Viewer shows, by Viewer id (not kept: a pick for now). */
@@ -33,7 +33,6 @@ export const CameraViewerOverlay: React.FC<{ windowId: string; fontSize: number 
   const groups = useBoardsStore(s => s.groups)
   const boards = useBoardsStore(s => s.boards)
   const picked = useCameraPick(s => s.of[windowId])
-  const playing = useRideClock(s => s.playing)
   const curves = useNotesStore(s => s.curves)
   const ref = useRef<HTMLCanvasElement>(null)
   const [, bump] = useState(0)
@@ -45,6 +44,10 @@ export const CameraViewerOverlay: React.FC<{ windowId: string; fontSize: number 
     : []
   const key = cameras.some(c => c.key === picked) ? picked : null
   const lens = useModelScaleStore(s => (key ? s.lensOf[dataKey(key)] : undefined)) ?? CAMERA_LENS
+  // The path its camera rides, and the clock of the set that path is in.
+  const ride = key ? riderOf(key, curves) ?? riderOf(dataKey(key), curves) : null
+  const clock = ride ? rideSetOf(ride.curve) : ''
+  const playing = useRideClock(s => !!s.clocks[clock]?.playing)
   useEffect(() => {
     const canvas = ref.current
     if (!key || !canvas) return
@@ -58,7 +61,7 @@ export const CameraViewerOverlay: React.FC<{ windowId: string; fontSize: number 
     background: on ? '#ffe14a' : 'rgba(19,20,31,0.85)', color: on ? '#1a1a1a' : 'rgba(232,240,255,0.85)',
     border: on ? '1px solid #ffe14a' : '1px solid rgba(255,255,255,0.22)', fontWeight: on ? 700 : 500,
   })
-  const rides = !!key && !!(riderOf(key, curves) ?? riderOf(dataKey(key), curves))
+  const rides = !!ride
   return (
     <>
       {key && (
@@ -80,8 +83,8 @@ export const CameraViewerOverlay: React.FC<{ windowId: string; fontSize: number 
           </button>
         ))}
         {rides && (
-          <button style={chip(playing)} aria-pressed={playing} title="Play: on or off. On, the camera rides its path (one clock for everything on a path)."
-            onClick={() => playing ? useRideClock.getState().pause() : useRideClock.getState().play()}>Play</button>
+          <button style={chip(playing)} aria-pressed={playing} title="Play: on or off. On, the camera rides its path, and so does everything else on a path in its 3D set (one clock for the set)."
+            onClick={() => playing ? useRideClock.getState().pause(clock) : useRideClock.getState().play(clock)}>Play</button>
         )}
       </div>
     </>
