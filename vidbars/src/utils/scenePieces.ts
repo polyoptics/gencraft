@@ -175,6 +175,8 @@ function standing(): ScenePiece[] {
       const face = dk === key ? g : bs.groups.find(x => x.id === dk.slice(5)) ?? g
       // "Show model in 3D" off: its model stays flat on its card.
       if (g.hideModel3d || face.hideModel3d) continue
+      // "Show model in 2D" off: no piece; in 3D it stands as ever.
+      if (g.hidePiece || face.hidePiece) continue
       const model = cardModel(g.id)
       if (!model) continue
       add(key, dk, model.url, pieceName(face.name, model.name))

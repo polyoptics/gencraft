@@ -334,6 +334,14 @@ const CardContextMenu: React.FC<{
         useBoardsStore.setState(s => ({ groups: s.groups.map(g => models.has(g.id) ? { ...g, hideModel3d: on ? true : undefined } : g) }))
         onClose()
       } })
+      // Its piece on the flat canvas (utils/scenePieces), or none (Brian
+      // 2026-11-13). On/off, lit while it shows.
+      const piece = !group.hidePiece
+      menuItems.push({ label: `Show model in 2D${count(models.size)}`, icon: '◇', lit: piece, action: () => {
+        useUndoCoordinator.getState().checkpoint()
+        useBoardsStore.setState(s => ({ groups: s.groups.map(g => models.has(g.id) ? { ...g, hidePiece: piece ? true : undefined } : g) }))
+        onClose()
+      } })
     }
     // A model card in a 3D scene: put its model back as it came, moved,
     // turned and sized nowhere (Brian 2026-11-09). Undoable.

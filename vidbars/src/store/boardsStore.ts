@@ -191,6 +191,10 @@ export interface ProjectGroup {
   /** Its model stays flat on it in 3D (right-click "Show model in 3D"
    *  off, Brian 2026-11-09). */
   hideModel3d?: boolean
+  /** Its model has no piece on the flat canvas (right-click "Show model
+   *  in 2D" off, Brian 2026-11-13: big landscape models). In 3D it
+   *  stands as ever. */
+  hidePiece?: boolean
   /** A chart baked into this card: a storyline and its cards, folded in
    *  (utils/chartCard). Its back lists the chart's groups. */
   chart?: import('../utils/chartData').ChartData
