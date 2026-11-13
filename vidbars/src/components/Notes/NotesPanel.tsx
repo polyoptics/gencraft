@@ -230,9 +230,15 @@ const PointLabel: React.FC = () => {
   )
 }
 
+/** One part of the panel (Brian 2026-11-13: "a giant list of attributes.
+ *  I can't tell where one part stops and another begins"): a lit heading
+ *  bar across the panel starts it, and a wider gap ends it. */
 const Section: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
-  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-    <div style={{ fontSize: 10, letterSpacing: 1.3, color: 'rgba(255,255,255,0.4)', fontFamily: 'ui-monospace, monospace' }}>{title}</div>
+  <div style={{ display: 'flex', flexDirection: 'column', gap: 7, paddingBottom: 8 }}>
+    <div style={{
+      margin: '0 -4px', padding: '5px 8px', borderRadius: 5, fontSize: 10.5, fontWeight: 700, letterSpacing: 1.3, fontFamily: 'ui-monospace, monospace',
+      color: 'rgba(214,228,255,0.92)', background: 'rgba(120,150,255,0.13)', borderLeft: '3px solid rgba(140,170,255,0.75)',
+    }}>{title}</div>
     {children}
   </div>
 )
