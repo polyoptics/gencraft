@@ -11,7 +11,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import ReactDOM from 'react-dom'
-import { useNotesStore, useNotesUi, toggleTool, NOTE_COLORS, type NotesTool, type CurveEnd, type CurveUnit, type CurveMark, type CurveEase, type Curve, type PathRider, type RideAfter } from '../../store/notesStore'
+import { useNotesStore, useNotesUi, toggleTool, NOTE_COLORS, type NotesTool, type CurveEnd, type CurveUnit, type CurveMark, type CurveEase, type Curve, type PathRider, type RideAfter, type CurveLayerLook } from '../../store/notesStore'
 import { useFreeNodeStore, type FreeNodeData } from '../../store/freeNodeStore'
 import { useBoardsStore } from '../../store/boardsStore'
 import { useViewport3DStore } from '../../store/viewport3dStore'
@@ -521,6 +521,66 @@ const RideClockRow: React.FC = () => {
       <input type="range" min={0} max={top} step={0.05} value={Math.min(top, now)} title="The clock: drag to any moment"
         onChange={e => useRideClock.getState().seek(+e.target.value)} style={{ width: '100%' }} />
     </>
+  )
+}
+
+/** The line's layers (Brian 2026-11-13: "it would still be nice to be
+ *  able to layer them"): more designs drawn along the same line, over its
+ *  own. Each has its own on/off, design, sizes, thickness, colour and
+ *  motion. They are the selected curves' (all of them take the same). */
+const LineLayers: React.FC<{ c: Curve; ids: string[] }> = ({ c, ids }) => {
+  const zoom = useCanvasStore(s => s.zoom)
+  const layers = c.layers ?? []
+  const step = () => useUndoCoordinator.getState().checkpoint()
+  const put = (next: CurveLayerLook[]) => {
+    const ns = useNotesStore.getState()
+    for (const id of ids) if (ns.curves[id]?.kind === 'bezier') ns.updateCurve(id, { layers: next.length ? next : undefined })
+  }
+  const set = (i: number, patch: Partial<CurveLayerLook>) => put(layers.map((l, k) => {
+    if (k !== i) return l
+    const q: CurveLayerLook = { ...l, ...patch }
+    for (const key of ['width', 'color', 'flow', 'off'] as const) if (!q[key]) delete q[key]
+    return q
+  }))
+  const small: React.CSSProperties = { ...btnStyle(false, true), width: 'auto', height: 22, padding: '0 8px', fontSize: 11, flex: '0 0 auto' }
+  const dot = (on: boolean): React.CSSProperties => ({ height: 18, borderRadius: 9, cursor: 'pointer', padding: 0, border: on ? '2px solid #fff' : '2px solid rgba(255,255,255,0.15)', boxShadow: on ? '0 0 0 1px rgba(0,0,0,0.6)' : 'none' })
+  return (
+    <Inset title="LAYERS">
+      {layers.map((l, i) => {
+        const o = UNITS.find(u => u.unit === l.unit) ?? UNITS[0]
+        return (
+          <div key={i} data-line-layer={i} style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: 7, borderRadius: 7, border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.03)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+              <button style={{ ...small, ...btnStyle(!l.off, true), width: 'auto', height: 22, padding: '0 8px', fontSize: 11 }} aria-pressed={!l.off}
+                title={`Layer ${i + 1}: on or off. Off, it is kept but not drawn.`} onClick={() => { step(); set(i, { off: !l.off }) }}>Layer {i + 1}</button>
+              <span style={{ flex: 1 }} />
+              <button style={small} title="Take this layer off the line" onClick={() => { step(); put(layers.filter((_, k) => k !== i)) }}>Remove</button>
+            </div>
+            <PickList value={l.unit} options={UNITS.map(u => ({ value: u.unit, name: u.name }))} title="What this layer repeats along the line" onPick={v => { step(); set(i, { unit: v as CurveUnit }) }} />
+            <div style={{ display: 'flex', gap: 10 }}>
+              <NumSlide name={o.a} val={Math.round(l.on * zoom)} min={1} max={120} top={400} tip={`${o.aTip}.`} begin={step} set={v => set(i, { on: v / zoom })} />
+              <NumSlide name={o.b} val={Math.round(l.gap * zoom)} min={0} max={120} top={400} tip={`${o.bTip}.`} begin={step} set={v => set(i, { gap: v / zoom })} />
+            </div>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <NumSlide name="Thick" val={Math.round((l.width ?? 0) * zoom)} min={0} max={24} top={200} tip="How thick this layer's own strokes are. 0: as thick as the line."
+                begin={step} set={v => set(i, { width: v ? v / zoom : undefined })} />
+              <NumSlide name="Motion" val={motionOf((l.flow ?? 0) * zoom)} min={-100} max={100} top={300} tip="How fast this layer runs along the line. 0: still. Below 0: towards the line's start."
+                begin={step} set={v => set(i, { flow: v ? flowOf(v) / zoom : undefined })} />
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(10, 1fr)', gap: 3 }}>
+              <button onClick={() => { step(); set(i, { color: undefined }) }} title="This layer: the line's colour" aria-pressed={!l.color}
+                style={{ ...dot(!l.color), background: 'repeating-linear-gradient(45deg, rgba(255,255,255,0.18) 0 3px, transparent 3px 6px)' }} />
+              {NOTE_COLORS.map(col => (
+                <button key={col} onClick={() => { step(); set(i, { color: col }) }} title={`This layer: ${col}`} aria-pressed={col === l.color} style={{ ...dot(col === l.color), background: col }} />
+              ))}
+            </div>
+          </div>
+        )
+      })}
+      <button style={{ ...btnStyle(false, true), height: 30, justifyContent: 'center', fontSize: 11.5 }}
+        title="Add a layer: another design drawn along this same line, over its own"
+        onClick={() => { step(); put([...layers, { unit: 'ring', on: c.width * 3, gap: c.width * 3 }]) }}>+ Add layer</button>
+    </Inset>
   )
 }
 
@@ -1129,6 +1189,7 @@ export const NotesPanel: React.FC = () => {
                 </div>
               </Part>
                 )}
+                {shownCurve?.kind === 'bezier' && <LineLayers c={shownCurve} ids={selected} />}
                 {forCurve && (
               <Inset title="ENDS">
                 {([['Start', 'endStart', endStart], ['End', 'endEnd', endEnd]] as const).map(([name, key, now]) => (

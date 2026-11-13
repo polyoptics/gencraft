@@ -13,7 +13,7 @@ import { useCurveDraft } from '../../store/pathLive'
 import { useTiltStore, isTilted } from '../../store/tiltStore'
 import { useManip } from '../../store/manipStore'
 import { ptKey } from '../../utils/pathEdit'
-import { curvePath, ownsHandles, shownLine, patternOf, ringTube, markSize, markBar, alongEvery, flowShift, pointFrames, unitBars, markBars, barOf, dashPieces, fieldOf, fineLine, tintCss, pingSize, pingRings, PING, PING_ECHO, type P3, type Bar, type PathFrame3, type LineField } from '../../utils/curveGeom'
+import { layerCurves, curvePath, ownsHandles, shownLine, patternOf, ringTube, markSize, markBar, alongEvery, flowShift, pointFrames, unitBars, markBars, barOf, dashPieces, fieldOf, fineLine, tintCss, pingSize, pingRings, PING, PING_ECHO, type P3, type Bar, type PathFrame3, type LineField } from '../../utils/curveGeom'
 
 const SEL = 'rgba(120,180,255,0.95)'
 /** A selected point (as its cube in 3D). */
@@ -267,6 +267,8 @@ export const CurveLayer: React.FC = () => {
     >
       <g transform={`translate(${pan.x} ${pan.y}) scale(${zoom})`}>
         {list.map(c => <CurveShape key={c.id} c={c} zoom={zoom} hit={hit} selected={selected.includes(c.id)} />)}
+        {/* Their layers: more designs along the same lines, over them (pressed, it is the line under that takes it). */}
+        {list.flatMap(c => layerCurves(c)).map(c => <CurveShape key={c.id} c={c} zoom={zoom} hit={false} selected={false} />)}
         {/* Points drag with any tool in the hand, except mid-drawing. */}
         {!draft && list.filter(c => selected.includes(c.id)).map(c => <Handles key={`h${c.id}`} c={c} zoom={zoom} points={points} />)}
         {draft && (

@@ -195,6 +195,31 @@ export const bulgeR = (c: Pick<Curve, 'width' | 'markSize'>) => c.markSize && c.
 /** How thick the bars of a point's graphic are. */
 export const markBar = (c: Pick<Curve, 'width' | 'markSize'>) => Math.max(c.width * 0.35, 0.4, markSize(c) * 0.03)
 
+const layered = new WeakMap<Curve, Curve[]>()
+/** A curve's layers as curves of their own to draw: the same line, each
+ *  with its layer's design, and nothing else of the curve's (no ends, no
+ *  point graphics, no labels, nothing riding). The same ones each time
+ *  for the same curve. */
+export function layerCurves(c: Curve): Curve[] {
+  if (!c.layers?.length || c.kind !== 'bezier') return NO_LAYERS
+  let out = layered.get(c)
+  if (out) return out
+  const pts = c.pts.map(p => { if (p.label === undefined) return p; const q = { ...p }; delete q.label; return q })
+  out = c.layers.flatMap((l, i): Curve[] => l.off ? [] : [{
+    id: `${c.id}~${i}`, layerOf: c.id, kind: c.kind, pts, closed: c.closed, smooth: c.smooth,
+    color: l.color ?? c.color, width: l.width ?? c.width, opacity: c.opacity,
+    unit: l.unit === 'line' ? undefined : l.unit,
+    dash: l.unit !== 'line' || l.gap > 0 ? [l.on, l.gap] : undefined,
+    flow: l.flow || undefined,
+    startScale: c.startScale, endScale: c.endScale, endReach: c.endReach,
+  }])
+  layered.set(c, out)
+  return out
+}
+const NO_LAYERS: Curve[] = []
+/** Curves with their layers after each, as they are drawn. */
+export const withLayers = (list: Curve[]): Curve[] => list.some(c => c.layers?.length) ? list.flatMap(c => [c, ...layerCurves(c)]) : list
+
 /** The pattern a curve's line repeats: the piece, how long (or across)
  *  it is and the gap after it. Null: one solid line. */
 export function patternOf(c: Pick<Curve, 'dash' | 'width' | 'unit'>): { unit: CurveUnit; on: number; gap: number; period: number } | null {
@@ -559,7 +584,7 @@ function cubeBars(p: P3, f: PathFrame3, m: number, out: Bar[]) {
 
 /** Something about the curve moves by itself: a pattern running along
  *  it, a pulse down a road's chevrons, its points pinging. */
-export const curveRuns = (c: Curve) => (!!c.flow && !!patternOf(c)) || !!c.ping || (!!c.pulse && c.unit === 'hatch') || (c.mark === 'bulge' && (!!c.pulseSize || !!c.pulseColor))
+export const curveRuns = (c: Curve): boolean => (!!c.flow && !!patternOf(c)) || !!c.ping || (!!c.pulse && c.unit === 'hatch') || (c.mark === 'bulge' && (!!c.pulseSize || !!c.pulseColor)) || layerCurves(c).some(curveRuns)
 
 /** A wire pattern's bars along a line (shownLine's), the pattern run
  *  `shift` along it: wire cubes or plus signs (a bar each way: along the

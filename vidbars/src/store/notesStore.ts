@@ -173,6 +173,29 @@ export interface Curve {
    *  arrowEnd say so (as before there was a choice), else nothing. */
   endStart?: CurveEnd
   endEnd?: CurveEnd
+  /** More designs along the same line, drawn over its own in this order. */
+  layers?: CurveLayerLook[]
+  /** Only on the curve a layer is drawn as (utils/curveGeom layerCurves),
+   *  never kept: the curve it belongs to. */
+  layerOf?: string
+}
+
+/** Another design drawn along the same line, over the line's own (Brian
+ *  2026-11-13: "it would still be nice to be able to layer them. Because
+ *  they all look cool"). */
+export interface CurveLayerLook {
+  unit: CurveUnit
+  /** The piece's length (or how far across it is) and the gap after it,
+   *  canvas units. */
+  on: number
+  gap: number
+  /** Its own thickness (canvas units), colour and motion (canvas units a
+   *  second). Absent: the line's thickness and colour; still. */
+  width?: number
+  color?: string
+  flow?: number
+  /** Kept, not drawn. */
+  off?: boolean
 }
 
 /** A stroke drawn on a model's surface, in the model's own space. */

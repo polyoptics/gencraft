@@ -25,7 +25,7 @@ import { useNotesStore, useNotesUi } from '../../../store/notesStore'
 import { useCurveDraft, usePathHot } from '../../../store/pathLive'
 import { targetMiddle, pickedPoints } from '../../../utils/pathEdit'
 import type { PathFrame, PathHit } from '../../../three/pathOverlay'
-import { curveRuns, pointFrames } from '../../../utils/curveGeom'
+import { curveRuns, pointFrames, withLayers } from '../../../utils/curveGeom'
 import { PinLabels } from '../../Notes/PinLabels'
 import { sceneOf, sceneSpot, standsIn, dataKey, cardBox } from '../../../utils/area3dScene'
 import { rideSpots, rideRuns, useRideClock, riderOf } from '../../../utils/pathRide'
@@ -247,7 +247,7 @@ function pathFrame(seenBy?: string): PathFrame {
   }
   const W = models.root?.clientWidth ?? 0, H = models.root?.clientHeight ?? 0
   return {
-    curves, selected, points: new Set(ui.points), zoom,
+    curves: withLayers(curves), selected, points: new Set(ui.points), zoom,
     ox: pan.x - W / 2, oy: pan.y - H / 2,
     hot: usePathHot.getState().hot,
     gizmo: draft ? null : targetMiddle(),

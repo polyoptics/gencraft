@@ -468,6 +468,8 @@ export function createPathOverlay() {
     const cubes: Knob[] = []
     const stems: number[] = []
     c.pts.forEach((p, i) => {
+      // (A layer is the line's design alone: its curve has the stems and cubes.)
+      if (c.layerOf) return
       if (Math.abs(p.z ?? 0) > 1e-6) stems.push(p.x, p.y, 0, p.x, p.y, p.z!)
       if (!selected) return
       const mat = keep(new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.55, metalness: 0, depthTest: false, depthWrite: false, toneMapped: false, transparent: true }))
@@ -604,7 +606,9 @@ export function createPathOverlay() {
     const take = (hit: PathHit, d: number, bias: number) => { if (!best || d - bias < best.d) best = { hit, d: d - bias } }
     for (const b of built.values()) {
       const c = b.curve
-      if (only && !only.has(c.id)) continue
+      // (A layer is pressed as the line it is drawn along.)
+      const id = c.layerOf ?? c.id
+      if (only && !only.has(id)) continue
       b.cubes.forEach((k, i) => {
         const q = project({ x: k.at.x, y: k.at.y, z: k.at.z })
         if (!q) return
@@ -618,7 +622,7 @@ export function createPathOverlay() {
         if (d < HANDLE_PX * 0.5 + 5) take({ kind: 'handle', id: c.id, i: h.i, side: h.side }, d, 20)
       }
       const near = nearestOnCurve(c, project, x, y)
-      if (near && near.d < Math.max(7, c.width * f.zoom / 2 + 4)) take({ kind: 'line', id: c.id, seg: near.seg, t: near.t }, near.d, 0)
+      if (near && near.d < Math.max(7, c.width * f.zoom / 2 + 4)) take({ kind: 'line', id, seg: near.seg, t: near.t }, near.d, 0)
     }
     return best ? (best as { hit: PathHit }).hit : null
   }
