@@ -23,6 +23,7 @@ import { isUndoRestoring, useUndoCoordinator } from '../store/undoCoordinator'
 import { useModelScaleStore, type ScenePlace, type CameraLens, type PieceView } from '../store/tiltStore'
 import { cardBox, carrying, docksUnder, isUnder, laying, lyingIn, rowCards, selfMoved, setCards, setViewers, viewerTouches } from './area3dScene'
 import { useViewport3DStore, type ViewportWindow3D } from '../store/viewport3dStore'
+import { viewportVisualRect } from './viewportDocking'
 import { isHiddenDeckMember } from '../hooks/useCardDecks'
 import { primaryFirst } from './primaryCard'
 import { splitOpenDecks } from './deckSplit'
@@ -540,7 +541,7 @@ function riders(a: FreeNodeData): Rider[] {
 /** Plays riders `rs` between where they are and card middle `to` (in:
  *  out of the card; else into it), then `done`. Elements drawn part way
  *  pick the motion up where it has got to, hidden till then. */
-function ride(rs: Rider[], to: { x: number; y: number }, out: boolean, done: () => void, k = 0.12) {
+function ride(rs: Rider[], to: { x: number; y: number }, out: boolean, done: () => void, k = 0.12, tick?: (away: number) => void) {
   const zoom = useCanvasStore.getState().zoom
   // The mat (first rider) shrinks to `k` of its size onto the card's
   // middle; everything else keeps its place on it, so it is one picture.
@@ -611,6 +612,8 @@ function ride(rs: Rider[], to: { x: number; y: number }, out: boolean, done: () 
     if (over) return
     try {
       const t = Number(clock.currentTime ?? 0)
+      // How far into the card it is by now (1: there), as the riders are.
+      if (tick) { const e = RIDE_EASE(Math.min(1, Math.max(0, t / MOTION_MS))); tick(out ? 1 - e : e) }
       for (const { r, q } of all) {
         for (const el of document.querySelectorAll<HTMLElement>(q)) {
           if (el.hasAttribute('data-a3-riding')) continue
@@ -634,6 +637,78 @@ function ride(rs: Rider[], to: { x: number; y: number }, out: boolean, done: () 
   catchUp()
 }
 
+// ── The Viewers with a set zip into it, then go into the card with it ──
+// (Brian 2026-11-13: "can the viewers zip sideways into the 3D set just
+// before the 3D set zips into the card?") A Viewer's 3D picture is drawn
+// from its box in the store (three/viewportRenderer), not from its
+// element, so the motion moves the box itself, frame by frame, and puts
+// it back as it was at the end; nothing of it is kept.
+const ZIP_MS = 170
+/** cubic-bezier(x1, y1, x2, y2), as the riders' easing. */
+function bezier(x1: number, y1: number, x2: number, y2: number): (t: number) => number {
+  const f = (a: number, b: number, u: number) => 3 * a * u * (1 - u) * (1 - u) + 3 * b * u * u * (1 - u) + u * u * u
+  return t => {
+    let lo = 0, hi = 1
+    for (let i = 0; i < 24; i++) { const u = (lo + hi) / 2; if (f(x1, x2, u) < t) lo = u; else hi = u }
+    return f(y1, y2, (lo + hi) / 2)
+  }
+}
+const RIDE_EASE = bezier(0.55, 0, 0.25, 1)
+type Zip = { id: string; x: number; y: number; width: number; height: number; dx: number; dy: number }
+/** Set `a`'s Viewers, each as it is and how far it slides to lie on the
+ *  set (0, 0 for one on its ground already). */
+function zipsOf(a: FreeNodeData): Zip[] {
+  const zoom = useCanvasStore.getState().zoom
+  return setViewers(a, a).map(w => {
+    const v = viewportVisualRect(w, zoom)
+    const nx = Math.max(a.x, Math.min(v.x, a.x + a.width - v.width)), ny = Math.max(a.y, Math.min(v.y, a.y + a.height - v.height))
+    return { id: w.id, x: w.x, y: w.y, width: w.width, height: w.height, dx: nx - v.x, dy: ny - v.y }
+  })
+}
+const zipSet = (z: Zip, r: { x: number; y: number; width: number; height: number }) => {
+  if (useViewport3DStore.getState().windows[z.id]) useViewport3DStore.getState().updateWindow(z.id, r)
+}
+/** Each as it was. */
+function zipHome(zs: Zip[]) {
+  for (const z of zs) {
+    zipSet(z, { x: z.x, y: z.y, width: z.width, height: z.height })
+    const el = document.querySelector<HTMLElement>(`[data-viewport3d="${z.id}"]`)
+    if (el) el.style.opacity = ''
+  }
+}
+/** Each `e` (0..1) of its way onto the set. */
+function zipSlide(zs: Zip[], e: number) {
+  for (const z of zs) zipSet(z, { x: z.x + z.dx * e, y: z.y + z.dy * e, width: z.width, height: z.height })
+}
+/** Lying on the set, each `away` (0..1) of the set's way into the card:
+ *  the mat shrinks to `k` of its size, its middle `from` onto `to`. */
+function zipRide(zs: Zip[], away: number, from: { x: number; y: number }, to: { x: number; y: number }, k: number) {
+  const s = 1 + (k - 1) * away
+  for (const z of zs) {
+    const px = z.x + z.dx, py = z.y + z.dy
+    zipSet(z, { x: px + (to.x + (px - from.x) * k - px) * away, y: py + (to.y + (py - from.y) * k - py) * away, width: z.width * s, height: z.height * s })
+    const el = document.querySelector<HTMLElement>(`[data-viewport3d="${z.id}"]`)
+    if (el) el.style.opacity = away > 0.75 ? String(Math.max(0, (1 - away) / 0.25)) : ''
+  }
+}
+/** Plays the slide onto the set (`back`: off it again), then `done`. */
+function zipPlay(zs: Zip[], back: boolean, done: () => void) {
+  let over = false
+  let late: ReturnType<typeof setTimeout> | undefined
+  const end = () => { if (over) return; over = true; if (late !== undefined) clearTimeout(late); done() }
+  if (!zs.some(z => z.dx || z.dy)) { end(); return }
+  late = setTimeout(end, ZIP_MS + 400)
+  const t0 = performance.now()
+  const step = () => {
+    if (over) return
+    const t = Math.min(1, (performance.now() - t0) / ZIP_MS)
+    const e = RIDE_EASE(t)
+    try { zipSlide(zs, back ? 1 - e : e) } catch (err) { console.error('[area3dCard] the Viewers\' slide failed', err); end(); return }
+    if (t >= 1) end(); else requestAnimationFrame(step)
+  }
+  step()
+}
+
 /** Fold 3D area `nodeId` into its card, with the motion; `then` runs
  *  once it is folded in. */
 export function foldArea3dMoving(nodeId: string, then?: () => void): void {
@@ -649,15 +724,20 @@ export function foldArea3dMoving(nodeId: string, then?: () => void): void {
   const ui = useNotesUi.getState()
   if (ui.selected.some(id => mine.has(id))) useNotesUi.setState({ selected: ui.selected.filter(id => !mine.has(id)) })
   const fit = card ? fitInto(a, card) : Math.min(size.w / a.width, size.h / a.height)
-  try {
-    ride(riders(a), to, false, () => { moving = false; foldArea3d(nodeId); then?.() }, fit)
-  } catch (err) {
-    // No motion: folded all the same.
-    console.error('[area3dCard] the fold motion could not begin', err)
-    moving = false
-    foldArea3d(nodeId)
-    then?.()
-  }
+  // Its Viewers zip onto it first, then go into the card with it; folded
+  // as they were (foldArea3d keeps their places).
+  const zs = zipsOf(a)
+  const from = { x: a.x + a.width / 2, y: a.y + a.height / 2 }
+  const fold = () => { zipHome(zs); moving = false; foldArea3d(nodeId); then?.() }
+  zipPlay(zs, false, () => {
+    try {
+      ride(riders(a), to, false, fold, fit, zs.length ? away => zipRide(zs, away, from, to, fit) : undefined)
+    } catch (err) {
+      // No motion: folded all the same.
+      console.error('[area3dCard] the fold motion could not begin', err)
+      fold()
+    }
+  })
 }
 
 /** Show card `cardId`'s 3D area, with the motion. */
@@ -668,11 +748,17 @@ export function showArea3dMoving(cardId: string): void {
   const card = useBoardsStore.getState().groups.find(g => g.id === cardId)
   if (!a || !card) return
   moving = true
+  // Its Viewers come out of the card on it, then zip out to its sides.
+  const zs = zipsOf(a)
+  const from = { x: a.x + a.width / 2, y: a.y + a.height / 2 }, to = middleOf(card), fit = fitInto(a, card)
+  const out = () => { zipSlide(zs, 1); zipPlay(zs, true, () => { zipHome(zs); moving = false }) }
   try {
-    ride(riders(a), middleOf(card), true, () => { moving = false }, fitInto(a, card))
+    if (zs.length) zipRide(zs, 1, from, to, fit)
+    ride(riders(a), to, true, out, fit, zs.length ? away => zipRide(zs, away, from, to, fit) : undefined)
   } catch (err) {
     // No motion: it is out all the same.
     console.error('[area3dCard] the show motion could not begin', err)
+    zipHome(zs)
     moving = false
   }
 }
