@@ -21,7 +21,7 @@ import { cardCornerOffset, snapCardToDots } from '../../utils/dotGrid'
 import { cardEdgeSnapFor } from '../../utils/cardEdgeSnap'
 import { PrimaryChipRail } from '../Linking/PrimaryChipRail'
 import { CloneDeck } from '../Linking/CloneDeck'
-import { tuckedIds, tuckedReach } from '../Linking/TuckedCards'
+import { shownIds, tuckedIds, tuckedReach } from '../Linking/TuckedCards'
 import { useLinkingStore } from '../../store/linkingStore'
 import { DEFAULT_H } from '../../utils/barConstants'
 import { groupSlot, clampGroupMove } from '../../utils/nlePush'
@@ -5419,7 +5419,9 @@ const CardLinkingLayer: React.FC<{
   // Find any chips of THIS card whose clone is currently expanded (paths of
   // length 2 that start with this group id).
   const expandedChildIds: string[] = []
-  const linkedIds = group.linkedGroupIds ?? []
+  // The cards that can be shown under it: its chips' and its feet's.
+  const shownKey = useBoardsStore(s => shownIds(group, s.groups).join('|'))
+  const linkedIds = shownKey ? shownKey.split('|') : []
   for (const gid of linkedIds) {
     if (expandedPaths.has([group.id, gid].join('>'))) expandedChildIds.push(gid)
   }

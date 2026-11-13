@@ -26,7 +26,7 @@ import { getFirstImageUrl } from '../../types/bar'
 import { CARD_TEXT_REF_ZOOM } from '../../store/zoomZonesStore'
 import { CardBack, FlipButton } from '../Layers/CardBack'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
-import { dragPull, DrawerLip } from './TuckedCards'
+import { dragPull, DrawerLip, shownIds } from './TuckedCards'
 
 interface Props {
   /** Group this clone represents. */
@@ -92,6 +92,8 @@ export const CloneDeck: React.FC<Props> = ({
   // (z 39), so it comes from behind the host's bottom edge. Deck members
   // placed by hand are not drawers.
   const pull = useLinkingStore(s => s.pulls.get(path.join('>')))
+  // The cards that can be shown under this one (its chips, its feet).
+  const shownKey = useBoardsStore(s => shownIds(s.groups.find(g => g.id === targetGroupId), s.groups).join('|'))
   const box = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => {
     const el = box.current
@@ -161,7 +163,7 @@ export const CloneDeck: React.FC<Props> = ({
 
   // Nested expansions: clone's own outbound links whose path is active.
   const nestedExpanded: string[] = []
-  const linkedIds = target.linkedGroupIds ?? []
+  const linkedIds = shownKey ? shownKey.split('|') : []
   for (const gid of linkedIds) {
     const childPath = [...path, gid].join('>')
     if (expandedPaths.has(childPath)) nestedExpanded.push(gid)

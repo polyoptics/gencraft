@@ -43,6 +43,28 @@ export function tuckedIds(host: ProjectGroup | undefined, groups: ProjectGroup[]
   return (host.linkedGroupIds ?? []).filter(id => id !== host.id && groups.some(g => g.id === id))
 }
 
+/** Does this card tuck the cards it links to under it? All but the ones
+ *  whose links are their members. */
+export function tucks(host: ProjectGroup | undefined): boolean {
+  return !!host && !MEMBERSHIP.has(cardTypeOf(host))
+}
+
+/** The cards `card` is tucked under (Brian 2026-11-13: "the effect has the
+ *  list of its members under it"): its chips name them (PrimaryChipRail),
+ *  as a faction's name its members. */
+export function holderIds(card: ProjectGroup | undefined, groups: ProjectGroup[]): string[] {
+  if (!card) return []
+  return groups.filter(g => g.id !== card.id && tucks(g) && (g.linkedGroupIds ?? []).includes(card.id)).map(g => g.id)
+}
+
+/** Every card that can be shown under `card`: the ones it links to, and,
+ *  where it tucks, the ones it is tucked under. */
+export function shownIds(card: ProjectGroup | undefined, groups: ProjectGroup[]): string[] {
+  if (!card) return []
+  const own = (card.linkedGroupIds ?? []).filter(id => id !== card.id)
+  return tucks(card) ? [...new Set([...own, ...holderIds(card, groups)])] : own
+}
+
 /** How far `n` feet reach below their card's bottom edge, natural units. */
 export function tuckedReach(n: number): number {
   return n > 0 ? SEAM + FOOT * Math.min(n, MAX_SHOWN) : 0

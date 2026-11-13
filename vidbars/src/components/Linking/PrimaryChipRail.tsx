@@ -18,7 +18,7 @@ import { RefChip } from './LinkChipRail'
 import { refKey } from '../../utils/linkTargets'
 import { cardTitle } from '../../utils/faceStyle'
 import { CARD_TYPES, cardTypeOf, type CardType } from '../../utils/cardTypes'
-import { TuckedCards } from './TuckedCards'
+import { TuckedCards, holderIds, tucks } from './TuckedCards'
 
 interface Props {
   /** Group whose outbound link chips we're rendering. */
@@ -38,7 +38,13 @@ const RAIL_Y_OFFSET = -CHIP_H / 2   // half-in, half-out of the card bottom edge
 
 export const PrimaryChipRail: React.FC<Props> = ({ groupId, hostRect, path, scale }) => {
   const host = useBoardsStore(s => s.groups.find(g => g.id === groupId))
-  const linkedIdsStable = (host?.linkedGroupIds ?? []).join('|')
+  // What its chips name (Brian 2026-11-13). A card that tucks the cards it
+  // links to shows those as feet under it, not as chips too; its chips are
+  // the cards IT is tucked under: the mutation lists its characters, each
+  // character shows the mutation tucked. A faction's, a family's and a
+  // note's chips are the cards they link to, as ever.
+  const held = tucks(host)
+  const linkedIdsStable = useBoardsStore(s => held ? holderIds(host, s.groups).join('|') : (host?.linkedGroupIds ?? []).join('|'))
 
   const linkedGroups = useBoardsStore(
     useShallow(s => {
@@ -88,7 +94,7 @@ export const PrimaryChipRail: React.FC<Props> = ({ groupId, hostRect, path, scal
         {/* A faction's or a family's members: one chip per kind of card
             (Brian 2026-11-05), each opening a list to pick one from; the
             ones opened show beside it as usual. Other cards: a chip each. */}
-        {grouped(host)
+        {grouped(host) || (held && linkedGroups.length > MANY)
           ? byType(linkedGroups).map(([type, list]) => (
               <TypeChip key={type} host={host} type={type} list={list} path={path} />
             ))
@@ -98,6 +104,7 @@ export const PrimaryChipRail: React.FC<Props> = ({ groupId, hostRect, path, scal
                 host={host}
                 linked={g}
                 path={[...path, g.id]}
+                held={held}
               />
             ))}
         {/* References to BLOCKS and ELEMENTS. Card-to-card chips above are
@@ -117,6 +124,9 @@ export const PrimaryChipRail: React.FC<Props> = ({ groupId, hostRect, path, scal
 // ── Members by kind (faction, family) ───────────────────────────────
 
 const grouped = (host: ProjectGroup) => host.cardType === 'faction' || host.cardType === 'family'
+/** More cards than this that a card is tucked under: a chip per kind, as a
+ *  faction's members, not a chip each. */
+const MANY = 3
 
 /** The linked cards by type, in the usual type order. */
 function byType(list: ProjectGroup[]): [CardType, ProjectGroup[]][] {
@@ -199,8 +209,8 @@ const TypeChip: React.FC<{ host: ProjectGroup; type: CardType; list: ProjectGrou
 
 // ── Individual primary chip ──────────────────────────────────────────
 
-const PrimaryChip: React.FC<{ host: ProjectGroup; linked: ProjectGroup; path: string[] }> = ({
-  host, linked, path,
+const PrimaryChip: React.FC<{ host: ProjectGroup; linked: ProjectGroup; path: string[]; held?: boolean }> = ({
+  host, linked, path, held,
 }) => {
   const [hovered, setHovered] = useState(false)
   const isExpanded = useLinkingStore(s => s.isExpanded(path))
@@ -261,7 +271,9 @@ const PrimaryChip: React.FC<{ host: ProjectGroup; linked: ProjectGroup; path: st
         <div
           onClick={e => {
             e.stopPropagation()
-            unlink(host.id, linked.id)
+            // The link is kept by the card the other is tucked under.
+            if (held) unlink(linked.id, host.id)
+            else unlink(host.id, linked.id)
             closeContaining(linked.id)
           }}
           title="Unlink"
