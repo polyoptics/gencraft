@@ -43,6 +43,7 @@ import { mayHaveDiskFile } from '../../hooks/useFileMenu'
 import { DragOutGrip } from '../UI/DragOutGrip'
 import { FxViewerOverlay } from './FxViewerOverlay'
 import { RailViewerOverlay } from './RailViewerOverlay'
+import { CameraViewerOverlay } from './CameraViewerOverlay'
 import { PoppedLayerSheets } from './ExplodedStrip'
 import { RoughCutViewerOverlay } from '../RoughCut/RoughCutScreen'
 import { useFreshOnTop, FRESH_Z } from '../../utils/freshOnTop'
@@ -607,6 +608,8 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
         {/* Loop strips docked to its left edge: the active one's live
             result (utils/railViewer). */}
         <RailViewerOverlay windowId={id} fontSize={fontSize} />
+        {/* On or beside a 3D set: what one of that set's cameras sees. */}
+        <CameraViewerOverlay windowId={id} fontSize={fontSize} />
         {/* A Rough Cut touching it: the movie, at the cut's playhead. */}
         <RoughCutViewerOverlay windowId={id} fontSize={fontSize} corner={grabZone} edge={edgeZone} />
         {showBodyOverlay && (

@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from 'react'
 import {
   useTiltStore, useModelScaleStore, isTilted, offFlat, standTilt, standRise, unprojectTilt, TILT_FAR, TILT_PERSPECTIVE,
 } from '../../../store/tiltStore'
+import { CAMERA_LENS } from '../../../store/tiltStore'
 import { usePeek } from '../../../utils/peek'
 import { useCanvasStore } from '../../../store/canvasStore'
 import { useFreeNodeStore } from '../../../store/freeNodeStore'
@@ -98,6 +99,13 @@ export const models: {
   pathPx: ((p: { x: number; y: number; z: number }) => { x: number; y: number } | null) | null
   root: HTMLElement | null
 } = { pathAt: null, pathPx: null, gizmoAt: null, manipHot: null, labelAt: null, strokeAt: null, modelSize: null, pick: null, pickZ: null, info: null, spin: null, letGo: null, hovered: null, at: null, surface: null, pinSpots: null, screenBox: null, floatSpot: null, pivotOf: null, aimAt: null, cameraFrame: null, lookBounds: null, root: null }
+/** Viewers showing what a camera sees (components/Viewport3D/
+ *  CameraViewerOverlay, Brian 2026-11-12: "if I put a 2D viewer beside a
+ *  3D set, I should be able to look through any active cameras there"):
+ *  by Viewer id, the camera's model key and the canvas its view is drawn
+ *  into, a few times a second, flat or tilted. */
+export const cameraViews = new Map<string, { key: string; canvas: HTMLCanvasElement }>()
+
 /** A pick that lights up under the cursor: a model or a person, not
  *  furniture. */
 export const modelKey = (k: string | null | undefined) => (k && !k.startsWith('deco|') ? k : null)
@@ -168,7 +176,7 @@ const frameState = (): TiltFrameState => {
   const lookSet = through ? sceneOf(through)?.area.id : undefined
   const placedMemo = new Map<string, boolean>()
   // A model riding a path is where the path has it (utils/pathRide).
-  const rides = live3d() ? rideSpots() : null
+  const rides = rideSpots()
   const riding = (key: string) => rides?.size ? rides.get(key) ?? rides.get(dataKey(key)) : undefined
   const placed = (key: string) => { let v = placedMemo.get(key); if (v === undefined) { v = onArea3d(key) || !!riding(key); placedMemo.set(key, v) } return v }
   return {
@@ -222,12 +230,12 @@ function soloFrame() {
 
 /** The canvas's curves for the 3D view (three/pathOverlay): the bezier
  *  ones, with the one being drawn (run on to the cursor). */
-function pathFrame(): PathFrame {
+function pathFrame(seenBy?: string): PathFrame {
   const ui = useNotesUi.getState()
   const { pan, zoom } = useCanvasStore.getState()
   // (Looking through a camera that rides a path, that path is not drawn:
   // the camera sits on it, and it would fill the view.)
-  const thru = useManip.getState().through
+  const thru = seenBy ?? useManip.getState().through
   const mine = thru ? [thru, dataKey(thru)] : null
   const curves = Object.values(notesNow.curves).filter(c => c.kind === 'bezier' && !(mine && c.riders?.some(r => mine.includes(r.key))))
   const { curve: draft, hover } = useCurveDraft.getState()
@@ -339,9 +347,42 @@ export const TiltModels: React.FC = () => {
     post.observe(marker)
     const frame = () => {
       raf = requestAnimationFrame(frame)
-      if (!view || !canvas || !(shown || live3d())) return
+      if (!view || !canvas || !(shown || live3d() || cameraViews.size)) return
       markerW = 3 - markerW
       marker.style.width = markerW + 'px'
+    }
+    /** Each Viewer that shows a camera's view: the scene drawn from that
+     *  camera into the 3D canvas, and the frame of it copied to the
+     *  Viewer's own. True when any was drawn (the 3D canvas then holds a
+     *  camera's view, and is to be drawn again as itself). */
+    let lookTick = 0
+    const drawCameraViews = (now: number): boolean => {
+      if (!view || !canvas || !cameraViews.size || lookTick++ % 3) return false
+      const W = root.clientWidth, H = root.clientHeight
+      if (!W || !H) return false
+      const st = frameState()
+      const targets = collectTargets(W, H)
+      let drew = false
+      for (const v of cameraViews.values()) {
+        const set = sceneOf(v.key)?.area.id
+        view.frame(now, W, H, targets, {
+          ...st, through: v.key, lock: true, selected: new Set(), hovered: null, paths: pathFrame(v.key),
+          inLook: set ? key => sceneOf(key)?.area.id === set : undefined,
+        })
+        drew = true
+        const ctx = v.canvas.getContext('2d')
+        if (!ctx) continue
+        // (Not standing yet, or not a camera: nothing of its to show.)
+        if (!view.cameraFrame(v.key)) { ctx.clearRect(0, 0, v.canvas.width, v.canvas.height); continue }
+        const aspect = (useModelScaleStore.getState().lensOf[dataKey(v.key)] ?? CAMERA_LENS).aspect
+        // The gate: the whole frame, as big as it goes in the view.
+        const gw = W / H >= aspect ? H * aspect : W, gh = W / H >= aspect ? H : W / aspect
+        const k = canvas.width / W
+        const cw = Math.max(2, Math.round(Math.min(960, gw * k))), ch = Math.max(2, Math.round(cw / aspect))
+        if (v.canvas.width !== cw || v.canvas.height !== ch) { v.canvas.width = cw; v.canvas.height = ch }
+        ctx.drawImage(canvas, (W - gw) / 2 * k, (H - gh) / 2 * k, gw * k, gh * k, 0, 0, cw, ch)
+      }
+      return drew
     }
     const draw = (now: number) => {
       if (!view || !canvas) return
@@ -352,8 +393,10 @@ export const TiltModels: React.FC = () => {
         if (!live) dropLifts()
         lastSig = ''
       }
-      if (!live) return
+      if (!live) { drawCameraViews(now); return }
       tick++
+      // (A camera's view was drawn on the 3D canvas: the 3D view goes back on it.)
+      if (drawCameraViews(now)) { poked = true; lastSig = '' }
       if (!poked && calm > 30 && tick % 4 && !animating() && !pathFlows() && !rideRuns()) return
       poked = false
       const W = root.clientWidth, H = root.clientHeight

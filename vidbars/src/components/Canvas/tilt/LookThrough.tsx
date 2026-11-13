@@ -300,9 +300,16 @@ const overView = (t: EventTarget | null) => {
   return !!el?.closest?.('[data-zoom-bar-host]') && !el.closest('[data-look-hud],[data-notes-panel],[data-top-icon-bar]')
 }
 
+/** A Viewer showing a camera's view (Viewport3D/CameraViewerOverlay):
+ *  with Alt held, a drag or the wheel over it moves that camera, as when
+ *  looking through it. */
+const viewerCamera = (e: { target: EventTarget | null; altKey: boolean }): string | null =>
+  e.altKey ? (e.target as Element | null)?.closest?.<HTMLElement>('[data-camera-view]')?.dataset.cameraView ?? null : null
+
 function onDown(e: PointerEvent) {
-  const key = useManip.getState().through
-  if (!key || !overView(e.target)) return
+  const inViewer = useManip.getState().through ? null : viewerCamera(e)
+  const key = useManip.getState().through ?? inViewer
+  if (!key || !(inViewer || overView(e.target))) return
   e.preventDefault(); e.stopImmediatePropagation()
   if (parkOnPoint(key)) return
   const s = start(key)
@@ -388,8 +395,9 @@ function frame(key: string): boolean {
   return true
 }
 function onWheel(e: WheelEvent) {
-  const key = useManip.getState().through
-  if (!key || !overView(e.target)) return
+  const inViewer = useManip.getState().through ? null : viewerCamera(e)
+  const key = useManip.getState().through ?? inViewer
+  if (!key || !(inViewer || overView(e.target))) return
   e.preventDefault(); e.stopImmediatePropagation()
   if (parkOnPoint(key)) return
   const s = start(key)
