@@ -460,7 +460,7 @@ const PathRiders: React.FC<{ c: Curve }> = ({ c }) => {
   }).filter(x => x.name !== null)
   const tog = (r: PathRider, k: 'aim' | 'slope' | 'twist' | 'centre', name: string, tip: string) => {
     const on = k === 'centre' ? !!r.centre : r[k] !== false
-    return <button style={{ ...btnStyle(on, true), flex: '1 1 0', width: 'auto', height: 30, justifyContent: 'center', fontSize: 11.5 }} aria-pressed={on}
+    return <button style={{ ...btnStyle(on, true), flex: '1 1 0', width: 'auto', minWidth: 0, padding: '0 4px', height: 30, justifyContent: 'center', fontSize: 11.5 }} aria-pressed={on}
       title={`${name}: on or off. ${tip}`} onClick={() => { step(); setRider(c.id, r.key, { [k]: !on }) }}>{name}</button>
   }
   return (
@@ -486,6 +486,8 @@ const PathRiders: React.FC<{ c: Curve }> = ({ c }) => {
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
                 <span style={{ color: 'rgba(160,200,255,0.8)' }}>◆</span>
                 <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
+                <button style={{ ...btnStyle(false, true), width: 'auto', height: 22, padding: '0 8px', fontSize: 11 }} title="Reset rotation: undo any turn you gave this model yourself, so it stands on the path as the path has it"
+                  onClick={() => { step(); useModelScaleStore.getState().setPose(dataKey(r.key), null) }}>Reset rotation</button>
                 <button style={{ ...btnStyle(false, true), width: 'auto', height: 22, padding: '0 8px', fontSize: 11 }} title="Take this model off the path: it stands where it stood before"
                   onClick={() => { step(); unparentFromPath(r.key) }}>Take off</button>
               </div>

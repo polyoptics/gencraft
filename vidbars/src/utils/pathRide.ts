@@ -41,7 +41,7 @@ export function rideTime(): number {
 
 // ── A path as a ride ──
 
-interface RideLine { pts: P3[]; len: number; /** How far along each of the curve's points is. */ at: number[] }
+interface RideLine { pts: P3[]; len: number; closed: boolean; /** How far along each of the curve's points is. */ at: number[] }
 const lines = new WeakMap<Curve, RideLine>()
 /** The whole of a curve's line (not stopped short at its end shapes),
  *  each place with how far along it is and the twist there. */
@@ -57,26 +57,43 @@ function lineOf(c: Curve): RideLine {
     if (q.t === 1 && q.seg + 1 < n) at[q.seg + 1] = run
     return { x: q.x, y: q.y, z: q.z, s: run, tw: (c.pts[q.seg]?.twist ?? 0) * (1 - q.t) + (c.pts[(q.seg + 1) % n]?.twist ?? 0) * q.t }
   })
-  l = { pts, len: run, at }
+  l = { pts, len: run, at, closed: !!c.closed && n > 2 && run > 0 }
   lines.set(c, l)
   return l
 }
 export const rideLength = (c: Curve) => lineOf(c).len
 
-function placeAt(l: RideLine, dist: number): { p: P3; d: P3 } {
+/** The place `dist` along the line. */
+function pointAt(l: RideLine, dist: number): P3 {
   const { pts } = l
-  if (pts.length < 2) return { p: pts[0] ?? { x: 0, y: 0, z: 0 }, d: { x: 1, y: 0, z: 0 } }
   const s = Math.max(0, Math.min(l.len, dist))
   let lo = 0, hi = pts.length - 1
   while (hi - lo > 1) { const m = (lo + hi) >> 1; if ((pts[m].s ?? 0) <= s) lo = m; else hi = m }
   const a = pts[lo], b = pts[hi]
   const span = (b.s ?? 0) - (a.s ?? 0)
   const t = span > 1e-9 ? (s - (a.s ?? 0)) / span : 0
-  const dl = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z) || 1
-  return {
-    p: { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, z: a.z + (b.z - a.z) * t, tw: (a.tw ?? 0) + ((b.tw ?? 0) - (a.tw ?? 0)) * t },
-    d: { x: (b.x - a.x) / dl, y: (b.y - a.y) / dl, z: (b.z - a.z) / dl },
+  return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, z: a.z + (b.z - a.z) * t, tw: (a.tw ?? 0) + ((b.tw ?? 0) - (a.tw ?? 0)) * t }
+}
+/** The place `dist` along the line and which way the line runs there.
+ *  The way is taken across a short stretch either side (Brian
+ *  2026-11-13: "weird, jittery, tilty motion"): the line is drawn as
+ *  short straight pieces, and read piece by piece what rides it turns in
+ *  steps and snaps round a corner; read across a stretch it turns
+ *  evenly, and rounds a corner over that stretch. */
+function placeAt(l: RideLine, dist: number): { p: P3; d: P3 } {
+  if (l.pts.length < 2) return { p: l.pts[0] ?? { x: 0, y: 0, z: 0 }, d: { x: 1, y: 0, z: 0 } }
+  const wrap = (x: number) => l.closed ? ((x % l.len) + l.len) % l.len : x
+  dist = l.closed ? wrap(dist) : Math.max(0, Math.min(l.len, dist))
+  const p = pointAt(l, dist)
+  const w = l.len * 0.05
+  let dx = 0, dy = 0, dz = 0
+  // Several reaches together: no one piece's end tells.
+  for (let k = 1; k <= 4; k++) {
+    const a = pointAt(l, wrap(dist - w * k / 4)), b = pointAt(l, wrap(dist + w * k / 4))
+    dx += b.x - a.x; dy += b.y - a.y; dz += b.z - a.z
   }
+  const n = Math.hypot(dx, dy, dz)
+  return { p, d: n > 1e-9 ? { x: dx / n, y: dy / n, z: dz / n } : { x: 1, y: 0, z: 0 } }
 }
 
 /** How long a path's ride lasts, seconds, and when it sets off: from its
