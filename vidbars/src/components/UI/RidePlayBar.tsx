@@ -32,7 +32,6 @@ const SHY = 0.001
 
 const SetBar: React.FC<{ id: string }> = ({ id }) => {
   const a = useFreeNodeStore(s => s.nodes[id])
-  const pan = useCanvasStore(s => s.pan)
   const zoom = useCanvasStore(s => s.zoom)
   const playing = useRideClock(s => !!s.clocks[id]?.playing)
   // (The paths as they are edited, and the clock set by hand: the line is
@@ -94,10 +93,14 @@ const SetBar: React.FC<{ id: string }> = ({ id }) => {
   }
   return (
     // (data-piece-set: folding into its card, and coming out, the set
-    // takes the bar along as it does its pieces: utils/area3dCard.)
+    // takes the bar along as it does its pieces: utils/area3dCard, which
+    // reads where a piece is off its left and top, from the canvas's
+    // origin. So the bar is laid out from there too, as the pieces are:
+    // with the pan in its left and top it was taken to lie somewhere else
+    // on the set, and flew in from the side; Brian 2026-11-13.)
     <div data-ride-bar={id} data-piece-set={id} onPointerDown={e => e.stopPropagation()} style={{
-      position: 'absolute', left: pan.x + a.x * zoom + INSET, top: pan.y + (a.y + a.height) * zoom - H - INSET, width: w, height: H,
-      zIndex: 55, boxSizing: 'border-box', opacity: Math.min(1, (w - GONE) / (FULL - GONE)),
+      position: 'absolute', left: a.x * zoom + INSET, top: (a.y + a.height) * zoom - H - INSET, width: w, height: H,
+      boxSizing: 'border-box', opacity: Math.min(1, (w - GONE) / (FULL - GONE)),
       display: 'flex', alignItems: 'center', gap: 10, padding: '0 12px 0 4px', userSelect: 'none', pointerEvents: 'auto',
       background: 'rgba(19,20,31,0.92)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 7,
     }}>
@@ -129,7 +132,13 @@ export const SetPlayBars: React.FC = () => {
   // (rideSetIds reads the stores itself; these bring this round.)
   useNotesStore(s => s.curves)
   useFreeNodeStore(s => s.nodes)
+  const pan = useCanvasStore(s => s.pan)
   const ids = rideSetIds().filter(Boolean)
   if (!ids.length) return null
-  return <>{ids.map(id => <SetBar key={id} id={id} />)}</>
+  // (From the canvas's origin on the screen, as the pieces' layer is.)
+  return (
+    <div data-ride-bars="" style={{ position: 'absolute', left: pan.x, top: pan.y, width: 0, height: 0, zIndex: 55, pointerEvents: 'none' }}>
+      {ids.map(id => <SetBar key={id} id={id} />)}
+    </div>
+  )
 }
