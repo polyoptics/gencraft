@@ -372,9 +372,28 @@ export const TiltModels: React.FC = () => {
      *  camera into the 3D canvas, and the frame of it copied to the
      *  Viewer's own. True when any was drawn (the 3D canvas then holds a
      *  camera's view, and is to be drawn again as itself). */
-    let lookTick = 0
+    /** Is what a camera's view shows changing: a camera or a model moved,
+     *  turned, sized or coloured, a path edited or running, the look of
+     *  the models changed (and for a moment after, while things ease in)? */
+    let lookWas: unknown[] = [], lookHot = 0, lookDrawn = 0
+    const lookChanging = (now: number) => {
+      const bs = useBoardsStore.getState(), ts = useTiltStore.getState()
+      const sig: unknown[] = [useModelScaleStore.getState(), bs.groups, bs.boards, useFreeNodeStore.getState().nodes, useNotesStore.getState().curves,
+        useCanvasStore.getState().zoom, ts.texture, ts.shade, ts.wire, ts.light, [...cameraViews.values()].map(v => v.key).join('|')]
+      if (sig.length !== lookWas.length || sig.some((x, i) => x !== lookWas[i]) || pathFlows() || rideRuns()) lookHot = now
+      lookWas = sig
+      return now - lookHot < 700
+    }
     const drawCameraViews = (now: number): boolean => {
-      if (!view || !canvas || !cameraViews.size || lookTick++ % 3) return false
+      if (!view || !canvas || !cameraViews.size) return false
+      // Drawn as it changes, every frame, and left alone while it does not
+      // (a look once a second, for what loads late). It used to be drawn
+      // every third frame whatever happened: in 3D each of those frames
+      // drew the whole 3D view twice, so the Viewer's picture came slowly
+      // and the 3D view hitched with it (Brian 2026-11-13: "super stuttery
+      // and slow").
+      if (!lookChanging(now) && now - lookDrawn < 1000) return false
+      lookDrawn = now
       const W = root.clientWidth, H = root.clientHeight
       if (!W || !H) return false
       const st = frameState()
