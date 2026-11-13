@@ -723,22 +723,22 @@ function cardColorIds(groupId: string): string[] {
 }
 
 /** A deck's front card, drawn in its colour at its own strength
- *  (colorOpacity). Turned over and see-through, the back's deeper colour
- *  starts under the header in this one layer, so the two are not laid one
- *  over the other. */
+ *  (colorOpacity). Turned over and see-through, only its header band: under
+ *  it the back's colour is laid OVER the face's picture (backGround), so
+ *  the picture shows through the back (Brian 2026-11-13). */
 function faceGround(g: { color: string; colorOpacity?: number; flipped?: boolean }, headerPad: number): string {
-  const o = g.colorOpacity
-  if (!g.flipped || o === undefined || o >= 1) return cardFill(g.color, o)
-  const front = cardFill(g.color, o), back = cardFill(backColor(g.color), o)
-  return `linear-gradient(to bottom, ${front} 0 ${headerPad}px, ${back} ${headerPad}px 100%)`
+  const front = cardFill(g.color, g.colorOpacity)
+  if (!turnedClear(g)) return front
+  return `linear-gradient(to bottom, ${front} 0 ${headerPad}px, transparent ${headerPad}px 100%)`
 }
-/** The turned-over layer over that face: solid, the back's colour;
- *  see-through, nothing (faceGround has drawn it). */
+/** The turned-over layer over that face: the back's colour, as see-through
+ *  as the card's is. */
 function backGround(g: { color: string; colorOpacity?: number }): string {
-  return g.colorOpacity === undefined || g.colorOpacity >= 1 ? backColor(g.color) : 'transparent'
+  return cardFill(backColor(g.color), g.colorOpacity)
 }
-/** Turned over and see-through: its front is not drawn, or it would show
- *  through the back (solid, the back simply covers it). */
+/** Turned over and see-through: its front's words are not drawn, or they
+ *  would show through the back with its picture (solid, the back simply
+ *  covers them). */
 function turnedClear(g: { colorOpacity?: number; flipped?: boolean }): boolean {
   return !!g.flipped && g.colorOpacity !== undefined && g.colorOpacity < 1
 }
@@ -1437,6 +1437,9 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
   if (!tilted && (screenLeft + screenWidth < 0 || screenTop + cardHeight < 0)) return null
 
   const selFx = isSelected ? selectionHighlight(color) : null
+  // Showing its back, its colour see-through: the face's picture is drawn
+  // under the back's colour and shows through it (Brian 2026-11-13).
+  const backClear = showBack && group.colorOpacity !== undefined && group.colorOpacity < 1
 
   return (
     <>
@@ -1463,7 +1466,9 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
           // TOP at its own opacity — fading the hero reveals the card
           // color underneath rather than the canvas behind. The back is
           // the same colour, deeper.
-          background: cardFill(showBack ? backColor(color) : color, group.colorOpacity),
+          // See-through and turned over, the back's colour is a layer over
+          // the face's picture (below), which shows through it.
+          background: backClear ? 'transparent' : cardFill(showBack ? backColor(color) : color, group.colorOpacity),
           touchAction: 'none',
           border: selFx ? selFx.border : '1.5px solid rgba(255,255,255,0.25)',
           boxShadow: selFx ? selFx.boxShadow : '0 4px 24px rgba(0,0,0,0.4)',
@@ -1517,11 +1522,18 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
         {/* Its header's chart icon pointed at (NLETimelineHeader, as a
             deck's): where the folded chart comes out. */}
         {chartPreview && group.chart && !chartOut && <ChartGhost area={chartArea(group.chart)} />}
-        {showBack ? (
+        {showBack ? (<>
+          {backClear && (group.cut
+            ? <FaceCut group={group} scale={overviewScale(zoom)} />
+            : faceVideo && !(fxFace && !fxOff)
+            ? <FaceVideo key={`${faceVideo.url}|${faceVideo.clipIn ?? ""}|${faceVideo.clipOut ?? ""}`} media={faceVideo} cardId={group.id} scale={overviewScale(zoom)} />
+            : shownHero && <HeroImageLayer heroImage={shownHero} transform={group.cardHeroTransform} />)}
+          {backClear && <div data-back-tint style={{ position: 'absolute', inset: 0, background: cardFill(backColor(color), group.colorOpacity), pointerEvents: 'none' }} />}
           <div style={{ position: 'absolute', top: headerPad, left: 0, right: 0, bottom: 0 }}>
             <CardBack groupId={group.id} color={color} width={screenWidth} height={Math.max(1, cardHeight - headerPad)} hovered={isHovered}
               reserve={6 + Math.min(32, Math.max(8, 16 * overviewScale(zoom), headerScreenH(zoom) * 0.85)) + 4} />
           </div>
+        </>
         ) : group.effect ? (
           <div style={{ position: 'absolute', top: headerPad, left: 0, right: 0, bottom: 0, overflow: 'hidden', borderRadius: '0 0 12px 12px', display: 'flex', flexDirection: 'column' }}>
             <EffectCardFace group={group} width={screenWidth} height={Math.max(1, cardHeight - headerPad)} />
@@ -2463,7 +2475,7 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
             if (faceCard.cardType === 'area3d') showArea3dMoving(faceCard.id)
           }}
         >
-          {turnedClear(anchorGroup) ? null : faceCard.cut
+          {faceCard.cut
             ? <FaceCut group={faceCard} scale={overviewScale(zoom)} />
             : faceVideo
             ? <FaceVideo key={`${faceVideo.url}|${faceVideo.clipIn ?? ""}|${faceVideo.clipOut ?? ""}`} media={faceVideo} cardId={anchorGroup.id} faceOf={faceCard.id} scale={overviewScale(zoom)} />
@@ -3625,7 +3637,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[]; lay
             transition: 'opacity 0.12s ease-in',
           }}
         >
-          {surfacedHero && !turnedClear(surfacedGroup) && <HeroImageLayer heroImage={surfacedHero} transform={surfacedGroup.cardHeroTransform} />}
+          {surfacedHero && <HeroImageLayer heroImage={surfacedHero} transform={surfacedGroup.cardHeroTransform} />}
           {surfacedGroup.flipped && <div data-face-back style={{ position: 'absolute', top: headerPad, left: 0, right: 0, bottom: 0, zIndex: 6, overflow: 'hidden', borderRadius: '0 0 12px 12px', background: backGround(surfacedGroup) }}>
             <CardBack groupId={surfacedGroup.id} color={surfacedGroup.color} width={screenWidth} height={Math.max(1, screenHeight - headerPad)} hovered={isHovered} reserve={6 + Math.min(32, Math.max(8, 16 * overviewScale(zoom), headerScreenH(zoom) * 0.85)) + 4} />
           </div>}
@@ -3706,7 +3718,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[]; lay
         }}
         onPointerDown={onFanDragDown}
       >
-        {(deckFx.shown ?? heroImage) && !turnedClear(anchorGroup) && <HeroImageLayer heroImage={(deckFx.shown ?? heroImage)!} transform={anchorGroup.cardHeroTransform} />}
+        {(deckFx.shown ?? heroImage) && <HeroImageLayer heroImage={(deckFx.shown ?? heroImage)!} transform={anchorGroup.cardHeroTransform} />}
         {/* Content area — offset below header extension */}
         <div style={{ position: 'absolute', top: headerPad, left: 0, right: 0, bottom: 0, overflow: 'hidden', borderRadius: '0 0 12px 12px', visibility: turnedClear(anchorGroup) ? 'hidden' : undefined }}>
           <GroupCardText groupId={anchorGroup.id} onCropImage={() => setIsEditingHero(true)} />
