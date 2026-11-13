@@ -201,13 +201,25 @@ function start(key: string, at?: { x: number; y: number }, look = true): Start |
   const q0 = (ms.poseOf[dk] as Q | undefined) ?? [0, 0, 0, 1]
   const pt = on ? on.curve.pts[on.i] : undefined
   const focus = (ms.lensOf[dk] ?? CAMERA_LENS).focus
-  const hit = !look ? null : (at ? models.lookHit?.(key, at.x, at.y) : null) ?? models.lookHit?.(key) ?? null
+  // The press as a ray out of the lens: where it is in the frame, drawn
+  // in the 3D view (looking through it) or in a Viewer showing its view.
+  const lens = ms.lensOf[dk] ?? CAMERA_LENS
+  let ray: { tx: number; ty: number } | null = null
+  if (look && at) {
+    const shown = useManip.getState().through === key ? models.root?.getBoundingClientRect() : document.querySelector(`[data-camera-view="${CSS.escape(key)}"] canvas`)?.getBoundingClientRect()
+    const g = shown && shown.width && shown.height ? gateOf(shown.width, shown.height, lens.aspect) : null
+    if (shown && g) {
+      const nx = (at.x - shown.left - g.x - g.w / 2) / (g.w / 2), ny = -(at.y - shown.top - g.y - g.h / 2) / (g.h / 2)
+      ray = { tx: nx * 18 / lens.mm, ty: ny * 18 / lens.mm / lens.aspect }
+    }
+  }
+  const hit = !look ? null : (ray ? models.lookHit?.(key, ray.tx, ray.ty) : null) ?? models.lookHit?.(key) ?? null
   // A model whole in the view (or near enough) is turned round its
   // middle, so it stays where it is in the frame; one the camera is in
   // among (a room, a terrain), round the spot of it that was hit.
   const ball = hit ? models.lookBounds?.([hit.key], key) : null
   const mid = ball ? dot(sub(ball.centre, cf.lens), cf.ahead) / cf.k : 0
-  const whole = !!ball && mid > 0 && ball.r / cf.k <= mid * (18 / (ms.lensOf[dk] ?? CAMERA_LENS).mm) * 1.5
+  const whole = !!ball && mid > 0 && ball.r / cf.k <= mid * (18 / lens.mm) * 1.5
   const depth = !look ? focus : hit ? Math.max(FOCUS_MIN, whole ? mid : hit.depth) : sane(cf, focus, key)
   const about: V | null = hit ? (whole ? ball!.centre : hit.point) : null
   return {

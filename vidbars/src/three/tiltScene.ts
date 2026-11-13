@@ -1249,8 +1249,6 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   }
 
   let lastW = 0, lastH = 0
-  /** The camera the view was last drawn through, if it was one's. */
-  let lookedThrough: string | null = null
   const glideM = new THREE.Matrix4()
 
 
@@ -1483,7 +1481,6 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     // sees, and nothing of the canvas shows.
     const thru = st.through ? standing.get(st.through) : undefined
     const looking = !!(thru?.rig && thru.inst && !into)
-    if (!into) lookedThrough = looking ? st.through! : null
     grid.visible = false
     if (looking) {
       const r = thru!.rig!
@@ -2023,12 +2020,13 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     return { pivot, lens, focal, right: at(1, 0, 0).divideScalar(k), up: at(0, 1, 0).divideScalar(k), ahead: at(0, 0, 1).divideScalar(k), k, base: s.base }
   }
 
-  /** What camera `key` sees: the nearest model surface under screen point
-   *  (x, y) of its view while looking through it, or (no point given, or
-   *  not looking through it) straight along the middle of its view. Its
-   *  model, its point in cameraFrame's axes, and how far off it is along the view in
-   *  camera lengths (what a lens's focus is counted in). null: nothing. */
-  function lookHit(key: string, x?: number, y?: number): { key: string; point: THREE.Vector3; depth: number } | null {
+  /** What camera `key` sees: the nearest model surface along a ray out of
+   *  its lens, through (tx, ty) of its frame (how far right and up of the
+   *  middle, as tangents of the angle; none: straight along the middle).
+   *  Its model, its point in cameraFrame's axes, and how far off it is
+   *  along the view in camera lengths (what a lens's focus is counted in).
+   *  null: nothing there. */
+  function lookHit(key: string, tx = 0, ty = 0): { key: string; point: THREE.Vector3; depth: number } | null {
     const s = standing.get(key), r = s?.rig
     if (!s || !r || !s.inst) return null
     s.stand.updateWorldMatrix(true, true)
@@ -2036,8 +2034,9 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     const ahead = r.group.localToWorld(r.lens.clone().add(new THREE.Vector3(0, 0, 1))).sub(o)
     const unit = ahead.length() || 1
     ahead.divideScalar(unit)
-    if (x !== undefined && y !== undefined && lastW && lastH && lookedThrough === key) raycaster.setFromCamera(new THREE.Vector2((x / lastW) * 2 - 1, -(y / lastH) * 2 + 1), camera)
-    else raycaster.set(o, ahead)
+    // (The rig's +x is the view's left.)
+    const dir = r.group.localToWorld(r.lens.clone().add(new THREE.Vector3(-tx, ty, 1))).sub(o).normalize()
+    raycaster.set(o, dir)
     let best: THREE.Vector3 | null = null, d = Infinity, of = ''
     for (const [k2, m] of standing) {
       if (k2 === key || !m.inst || !m.stand.visible || k2.startsWith('mini:')) continue

@@ -93,7 +93,7 @@ export const models: {
   lookBounds: ((keys: string[] | null, not?: string) => ReturnType<ReturnType<typeof createTiltScene>['lookBounds']>) | null
   /** What a camera sees under a point of its view, or along its middle
    *  (tiltScene lookHit). */
-  lookHit: ((key: string, clientX?: number, clientY?: number) => ReturnType<ReturnType<typeof createTiltScene>['lookHit']>) | null
+  lookHit: ((key: string, tx?: number, ty?: number) => ReturnType<ReturnType<typeof createTiltScene>['lookHit']>) | null
   /** Light up a manipulator part (hovered or held), or none. */
   manipHot: ((key: string | null, part: ManipPart | null) => void) | null
   /** What of a curve is under a point in 3D: a point's cube, a tangent
@@ -384,6 +384,10 @@ export const TiltModels: React.FC = () => {
         const set = sceneOf(v.key)?.area.id
         view.frame(now, W, H, targets, {
           ...st, through: v.key, lock: true, selected: new Set(), hovered: null, paths: pathFrame(v.key),
+          // The models whole, whatever the canvas view: flat, they were
+          // faded right out with the rest of the 3D look, and the Viewer
+          // showed the camera's floor and nothing on it (Brian 2026-11-13).
+          fade: 1,
           inLook: set ? key => inSet(key, set) : undefined,
         })
         drew = true
@@ -523,11 +527,7 @@ export const TiltModels: React.FC = () => {
       }
       models.cameraFrame = v.cameraFrame
       models.lookBounds = v.lookBounds
-      models.lookHit = (key, clientX, clientY) => {
-        if (clientX === undefined || clientY === undefined) return v.lookHit(key)
-        const r = root.getBoundingClientRect()
-        return v.lookHit(key, clientX - r.left, clientY - r.top)
-      }
+      models.lookHit = v.lookHit
       models.pieceView = v.pieceView
       models.lend = v.lend
       models.root = root
