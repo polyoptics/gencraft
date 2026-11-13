@@ -2751,7 +2751,9 @@ function collectTargets(W: number, H: number): TiltTarget[] {
     const it = w.activeItem
     const x0 = pan.x + w.x * zoom, y0 = pan.y + w.y * zoom
     return { id: w.id, x0, y0, x1: x0 + w.width * zoom, y1: y0 + w.height * zoom,
-      url: it?.kind === 'media' && it.mediaType === 'model' ? it.url : null, name: it?.kind === 'media' ? it.name : undefined }
+      // Showing a camera's view (CameraViewerOverlay), it shows no model
+      // of its own: none stands up on it (Brian 2026-11-13).
+      url: it?.kind === 'media' && it.mediaType === 'model' && !cameraViews.has(w.id) ? it.url : null, name: it?.kind === 'media' ? it.name : undefined }
   })
   const onViewer = (v: typeof viewers[number], url: string, name?: string) => out.push({
     key: `viewer:${v.id}`, url, name: name || fileName(url) || 'Model', pop: true,

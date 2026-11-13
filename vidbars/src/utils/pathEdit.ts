@@ -397,7 +397,7 @@ export function lookFrom(c: Curve, z: number): Partial<Pick<Ui, LookKey | 'smoot
     ...(pat ? { dashOn: Math.max(1, Math.round(pat.on * z)), dashGap: Math.round(pat.gap * z) } : { dashGap: 0 }),
     unit: c.unit ?? 'line',
     opacity: Math.round((c.opacity ?? 1) * 100),
-    flow: Math.round((c.flow ?? 0) * z),
+    flow: Math.round((c.flow ?? 0) * z * 10) / 10,
     mark: c.mark ?? null,
     chev: Math.round((c.chev ?? 0.5) * 100), pulse: !!c.pulse, ping: !!c.ping,
     markColor: c.markColor ?? null, markSize: c.markSize ? Math.max(1, Math.round(c.markSize * z)) : 0,
@@ -454,6 +454,29 @@ export function setPointTwist(deg: number) {
       if (deg) q.twist = deg; else delete q.twist
       return q
     }) })
+  }
+}
+
+/** The selected points back to no rotation of their own: no twist, and
+ *  whatever rides the path turned there as the path has it (a camera's
+ *  reframing at that point forgotten). */
+export function resetPointTurn() {
+  const ns = useNotesStore.getState()
+  for (const [id, idx] of pickedPoints()) {
+    const c = ns.curves[id]
+    if (c.kind !== 'bezier') continue
+    const riders = c.riders?.map(r => {
+      if (!r.keys || !idx.some(i => r.keys![i])) return r
+      const keys = { ...r.keys }
+      for (const i of idx) delete keys[i]
+      const q = { ...r }
+      if (Object.keys(keys).length) q.keys = keys; else delete q.keys
+      return q
+    })
+    ns.updateCurve(id, {
+      pts: c.pts.map((p, i) => { if (!idx.includes(i) || p.twist === undefined) return p; const q = { ...p }; delete q.twist; return q }),
+      ...(riders ? { riders } : {}),
+    })
   }
 }
 

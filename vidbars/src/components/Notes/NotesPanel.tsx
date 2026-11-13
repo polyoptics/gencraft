@@ -20,7 +20,7 @@ import { areaAt } from '../../utils/areaFollow'
 import { ensureAnnotated, modelName } from '../../utils/annotations'
 import { models, cardModel } from '../Canvas/tilt/TiltModels'
 import { curveBounds, curvePoints } from '../../utils/curveGeom'
-import { tangentState, setBroken, setCorner, setLook, lookFrom, markState, setPointMarks, twistState, setPointTwist, labelState, setPointLabel } from '../../utils/pathEdit'
+import { tangentState, setBroken, setCorner, setLook, lookFrom, markState, setPointMarks, twistState, setPointTwist, resetPointTurn, labelState, setPointLabel } from '../../utils/pathEdit'
 import { useCanvasStore } from '../../store/canvasStore'
 import { ColorPickerPopup } from '../Bar/ColorPickerPopup'
 import { useCurveDraft } from '../../utils/notesTool'
@@ -149,19 +149,66 @@ const PointTools: React.FC<{ folded: boolean }> = ({ folded }) => {
   return <>{brk}{cnr}</>
 }
 
+/** Motion as the panel shows it (Brian 2026-11-13: the speed "needs to
+ *  be able to go at least 5 or 10 times higher... reset the scale a
+ *  little bit so it makes sense"): 0 to 100, where 100 is 2000 px a
+ *  second and the speed goes with the square of the number, so the slow
+ *  end stays fine and the fast end reaches far. The line keeps px a
+ *  second, as before. */
+const MOTION_K = 0.2
+const motionOf = (flow: number) => Math.sign(flow) * Math.round(Math.sqrt(Math.abs(flow) / MOTION_K))
+const flowOf = (v: number) => Math.round(Math.sign(v) * v * v * MOTION_K * 10) / 10
+
+/** A slider that is dragged, not jumped to (Brian 2026-11-13: "when I
+ *  drag them with the mouse, they jump by like fives and tens"): a short
+ *  slider over a wide range has several values under each pixel, so
+ *  pressing it never moves the value, and dragging changes it by the
+ *  distance dragged, at a rate that gives every value its own place
+ *  (the drag carries on past the slider's ends). Shift: ten times finer.
+ *  Arrow keys step by one. */
+const Slide: React.FC<{ val: number; min: number; max: number; begin: () => void; set: (v: number) => void }> = ({ val, min, max, begin, set }) => {
+  const drag = useRef<{ x: number; v: number; last: number } | null>(null)
+  const at = Math.max(min, Math.min(max, val))
+  const share = max > min ? (at - min) / (max - min) : 0
+  const put = (v: number) => { const n = Math.max(min, Math.min(max, Math.round(v))); if (n !== drag.current?.last) { if (drag.current) drag.current.last = n; set(n) } }
+  return (
+    <div role="slider" tabIndex={0} aria-valuemin={min} aria-valuemax={max} aria-valuenow={at}
+      onPointerDown={e => { if (e.button !== 0) return; e.preventDefault(); e.currentTarget.focus(); e.currentTarget.setPointerCapture(e.pointerId); begin(); drag.current = { x: e.clientX, v: at, last: at } }}
+      onPointerMove={e => {
+        const d = drag.current
+        if (!d) return
+        // Never more than one value to the pixel, nor so slow that the whole range is out of reach.
+        const rate = Math.max(0.08, Math.min(1, (max - min) / 320)) * (e.shiftKey ? 0.1 : 1)
+        d.v += (e.clientX - d.x) * rate
+        d.x = e.clientX
+        put(d.v)
+      }}
+      onPointerUp={() => { drag.current = null }} onPointerCancel={() => { drag.current = null }}
+      onKeyDown={e => {
+        const step = e.key === 'ArrowRight' || e.key === 'ArrowUp' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowDown' ? -1 : 0
+        if (!step) return
+        e.preventDefault(); e.stopPropagation(); begin(); set(Math.max(min, Math.min(max, at + step)))
+      }}
+      style={{ position: 'relative', width: '100%', height: 16, cursor: 'ew-resize', touchAction: 'none', outline: 'none' }}>
+      <div style={{ position: 'absolute', left: 0, right: 0, top: 6, height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.14)' }} />
+      <div style={{ position: 'absolute', left: 0, width: `${share * 100}%`, top: 6, height: 4, borderRadius: 2, background: '#3b82f6' }} />
+      <div style={{ position: 'absolute', left: `calc(${share} * (100% - 14px))`, top: 1, width: 14, height: 14, borderRadius: 7, background: '#3b82f6', boxShadow: '0 0 0 1px rgba(0,0,0,0.45)' }} />
+    </div>
+  )
+}
+
 /** A number: typed, or slid. `max` is the slider's; typed it can go to `top`. */
 const NumSlide: React.FC<{ name: string; val: number; min: number; max: number; top?: number; tip: string; begin: () => void; set: (v: number) => void }> = ({ name, val, min, max, top = max, tip, begin, set }) => (
-  <label title={tip} style={{ flex: '1 1 0', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3 }}>
-    <span style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 11, color: 'rgba(255,255,255,0.6)' }}>
-      {name}
+  <div title={tip} style={{ flex: '1 1 0', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3 }}>
+    <span style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 4, fontSize: 11, color: 'rgba(255,255,255,0.6)' }}>
+      <span style={{ minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</span>
       <input type="number" min={min} max={top} step={1} value={val}
         onPointerDown={begin} onKeyDown={e => { e.stopPropagation(); if (e.key !== 'Tab') begin() }}
         onChange={e => set(Math.max(min, Math.min(top, Math.round(+e.target.value || 0))))}
-        style={{ width: 46, height: 20, boxSizing: 'border-box', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 5, color: '#e8f0ff', fontSize: 11, textAlign: 'right', padding: '0 3px' }} />
+        style={{ flex: '0 0 auto', width: 42, height: 20, boxSizing: 'border-box', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 5, color: '#e8f0ff', fontSize: 11, textAlign: 'right', padding: '0 3px' }} />
     </span>
-    <input type="range" min={min} max={max} step={1} value={Math.max(min, Math.min(max, val))} onPointerDown={begin} onKeyDown={begin}
-      onChange={e => set(+e.target.value)} style={{ width: '100%' }} />
-  </label>
+    <Slide val={val} min={min} max={max} begin={begin} set={set} />
+  </div>
 )
 
 /** The curve's point graphic on or off at the selected points: always
@@ -239,6 +286,34 @@ const Section: React.FC<{ title: string; children: React.ReactNode }> = ({ title
       margin: '0 -4px', padding: '5px 8px', borderRadius: 5, fontSize: 10.5, fontWeight: 700, letterSpacing: 1.3, fontFamily: 'ui-monospace, monospace',
       color: 'rgba(214,228,255,0.92)', background: 'rgba(120,150,255,0.13)', borderLeft: '3px solid rgba(140,170,255,0.75)',
     }}>{title}</div>
+    {children}
+  </div>
+)
+
+/** One big block of the panel holding everything of one thing (Brian
+ *  2026-11-13: "everything for the lines is kind of in one bit, and
+ *  inside of it, there are all the options"): its heading bar, then its
+ *  options in a frame of their own. */
+const Block: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
+  <div style={{ display: 'flex', flexDirection: 'column', margin: '0 -4px 8px', borderRadius: 7, border: '1px solid rgba(140,170,255,0.28)', background: 'rgba(120,150,255,0.035)' }}>
+    <div style={{
+      padding: '5px 8px', borderRadius: '6px 6px 0 0', fontSize: 10.5, fontWeight: 700, letterSpacing: 1.3, fontFamily: 'ui-monospace, monospace',
+      color: 'rgba(214,228,255,0.92)', background: 'rgba(120,150,255,0.16)', borderLeft: '3px solid rgba(140,170,255,0.75)',
+    }}>{title}</div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '8px 5px 8px' }}>{children}</div>
+  </div>
+)
+/** A few options of a block that go together, under a small name. */
+const Part: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
+  <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+    <div style={{ fontSize: 9.5, letterSpacing: 1.2, color: 'rgba(255,255,255,0.42)', fontFamily: 'ui-monospace, monospace' }}>{title}</div>
+    {children}
+  </div>
+)
+/** A part of a block set in from it: a thing of its own inside the block. */
+const Inset: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
+  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginLeft: 1, marginTop: 2, padding: '6px 0 2px 7px', borderLeft: '2px solid rgba(140,170,255,0.4)' }}>
+    <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 1.3, color: 'rgba(200,216,255,0.8)', fontFamily: 'ui-monospace, monospace' }}>{title}</div>
     {children}
   </div>
 )
@@ -1010,7 +1085,8 @@ export const NotesPanel: React.FC = () => {
             <div style={{ height: 1, background: 'rgba(255,255,255,0.08)' }} />
             {/* Underneath: the options of what is selected (or of the tool in the hand), and nothing else. */}
             {forLine && (
-              <Section title="COLOUR">
+              <Block title="LINE">
+              <Part title="COLOUR">
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(10, 1fr)', gap: 3 }}>
                   {NOTE_COLORS.map(c => (
                     <button key={c} onClick={() => apply({ color: c })} title={c} aria-pressed={c === color}
@@ -1026,18 +1102,12 @@ export const NotesPanel: React.FC = () => {
                 {forCurve && <NumSlide name="Opacity" val={opacity} min={5} max={100} tip="How solid the line is, in percent: lower lets what is behind it show through."
                   begin={stepOnce} set={v => slide({ opacity: v })} />}
                 {picker && <ColorPickerPopup color={pickerColor} anchorX={picker.x} anchorY={picker.y} onChange={pickColor} onClose={() => setPicker(null)} />}
-              </Section>
-            )}
-            {forLine && (
-              <Section title={`THICKNESS · ${width}px`}>
-                <input type="range" min={1} max={24} step={1} value={width}
-                  onPointerDown={stepOnce} onKeyDown={stepOnce}
-                  onChange={e => slide({ width: +e.target.value })}
-                  style={{ width: '100%' }} />
-              </Section>
-            )}
-            {forCurve && (
-              <Section title="LINE">
+              </Part>
+              <Part title={`THICKNESS · ${width}px`}>
+                <Slide val={width} min={1} max={24} begin={stepOnce} set={v => slide({ width: v })} />
+              </Part>
+                {forCurve && (
+              <Part title="PATTERN">
                 <PickList value={unit} options={UNITS.map(u => ({ value: u.unit, name: u.name }))} title="What the line's pattern repeats" onPick={v => apply({ unit: v as CurveUnit })} />
                 {/* That piece's own options. */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '8px 9px', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 9, background: 'rgba(255,255,255,0.025)' }}>
@@ -1054,13 +1124,13 @@ export const NotesPanel: React.FC = () => {
                         title="Pulse: on or off. On, a swell runs down the chevrons one after another." onClick={() => apply({ pulse: !pulse })}>Pulse</button>
                     </div>
                   )}
-                  <NumSlide name="Motion" val={flow} min={-200} max={200} top={1000} tip="How fast the pattern runs along the line, towards its end. 0: still. Below 0: towards its start."
-                    begin={stepOnce} set={v => slide({ flow: v })} />
+                  <NumSlide name="Motion" val={motionOf(flow)} min={-100} max={100} top={300} tip="How fast the pattern runs along the line towards its end, and how fast what rides the path goes when it has no arrival time. 0: still. 100: very fast (ten times what it could do before). It gains speed faster the higher it goes, so low numbers stay fine. Below 0: towards its start."
+                    begin={stepOnce} set={v => slide({ flow: flowOf(v) })} />
                 </div>
-              </Section>
-            )}
-            {forCurve && (
-              <Section title="ENDS">
+              </Part>
+                )}
+                {forCurve && (
+              <Inset title="ENDS">
                 {([['Start', 'endStart', endStart], ['End', 'endEnd', endEnd]] as const).map(([name, key, now]) => (
                   <div key={key} style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
                     <span style={{ width: 30, fontSize: 11, color: 'rgba(255,255,255,0.6)', flexShrink: 0 }}>{name}</span>
@@ -1082,10 +1152,10 @@ export const NotesPanel: React.FC = () => {
                 </div>
                 <NumSlide name="Over" val={endReach} min={0} max={600} top={5000} tip="How much of the line, from each end, changes size. 0: a length that goes with the line's thickness."
                   begin={stepOnce} set={v => slide({ endReach: v })} />
-              </Section>
-            )}
-            {forCurve && (
-              <Section title="POINTS">
+              </Inset>
+                )}
+                {forCurve && (
+              <Inset title="POINTS">
                 <div style={{ display: 'flex', gap: 5 }}>
                   <button style={{ ...btnStyle(smooth, true), ...THIRD, height: 30, flex: '0 0 auto', padding: '0 9px' }} aria-pressed={smooth} onClick={() => setSmooth(!smooth)} title={SMOOTH_TIP}><IcSmooth size={16} /><span>Smooth</span></button>
                   <button style={{ ...btnStyle(ping, true), ...THIRD, height: 30, flex: '0 0 auto', padding: '0 12px' }} aria-pressed={ping}
@@ -1129,18 +1199,35 @@ export const NotesPanel: React.FC = () => {
                     </div>
                   </>
                 )}
-              </Section>
+              </Inset>
+                )}
+                {picked && (
+              <Inset title="SELECTED POINTS">
+                <div style={{ display: 'flex', gap: 5 }}><PointTools folded={false} /></div>
+                <PointMarkSwitch />
+                <PointTwist />
+                <button style={{ ...btnStyle(false, true), height: 30, justifyContent: 'center', fontSize: 11.5 }}
+                  title="Reset rotation, for the selected points: no twist, and anything riding the path is turned there as the path has it (a camera's reframing at the point is forgotten)"
+                  onClick={() => { useUndoCoordinator.getState().checkpoint(); resetPointTurn() }}>Reset rotation</button>
+                <PointLabel />
+                <PointSlow />
+              </Inset>
+                )}
+              </Block>
             )}
-            {shownCurve?.kind === 'bezier' && <PathRiders c={shownCurve} />}
-            {picked && (
+            {!forLine && picked && (
               <Section title="SELECTED POINTS">
                 <div style={{ display: 'flex', gap: 5 }}><PointTools folded={false} /></div>
                 <PointMarkSwitch />
                 <PointTwist />
+                <button style={{ ...btnStyle(false, true), height: 30, justifyContent: 'center', fontSize: 11.5 }}
+                  title="Reset rotation, for the selected points: no twist, and anything riding the path is turned there as the path has it (a camera's reframing at the point is forgotten)"
+                  onClick={() => { useUndoCoordinator.getState().checkpoint(); resetPointTurn() }}>Reset rotation</button>
                 <PointLabel />
                 <PointSlow />
               </Section>
             )}
+            {shownCurve?.kind === 'bezier' && <PathRiders c={shownCurve} />}
             {modelKeys.length > 0 && <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><Area3dTools part="selected" /></div>}
             <SelectedModels />
             {!forLine && !picked && !modelKeys.length && !modelNotes.length && (
