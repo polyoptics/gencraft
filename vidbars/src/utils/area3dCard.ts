@@ -86,7 +86,7 @@ export interface Area3dTileItem {
 }
 export interface Area3dData {
   /** The mat: where it comes out (top-left), its size and look. */
-  mat: { x: number; y: number; width: number; height: number; color?: string; label?: string; gridAt?: { x: number; y: number }; ground?: AreaGround; flatView?: AreaFlatView }
+  mat: { x: number; y: number; width: number; height: number; color?: string; label?: string; gridAt?: { x: number; y: number }; ground?: AreaGround; flatView?: AreaFlatView; rideLoop?: boolean }
   cards: Area3dCardItem[]
   tiles: Area3dTileItem[]
   /** The cards that were with the set when it was folded (docked under
@@ -214,7 +214,7 @@ export function foldArea3d(nodeId: string): string | null {
     }
   }
   const data: Area3dData = {
-    mat: { x: a.x, y: a.y, width: a.width, height: a.height, color: a.color, label: a.label, ...(a.gridAt ? { gridAt: a.gridAt } : {}), ...(a.ground ? { ground: a.ground } : {}), ...(a.flatView ? { flatView: a.flatView } : {}) },
+    mat: { x: a.x, y: a.y, width: a.width, height: a.height, color: a.color, label: a.label, ...(a.gridAt ? { gridAt: a.gridAt } : {}), ...(a.ground ? { ground: a.ground } : {}), ...(a.flatView ? { flatView: a.flatView } : {}), ...(a.rideLoop ? { rideLoop: true } : {}) },
     cards: cardItems, tiles: tileItems,
     ...(curveItems.length ? { curves: curveItems } : {}),
     row: rowCards(a).slice(1).map(g => g.id),
@@ -392,7 +392,7 @@ export function showArea3d(cardId: string, quiet = false, spot?: { x: number; y:
   laying.on = true
   try {
     id = fs.addFreeNode(m.x, m.y, 'area')
-    fs.updateFreeNode(id, { x: m.x, y: m.y, width: m.width, height: m.height, areaCard: cardId, label: m.label ?? card.name ?? '3D set', ...(m.color ? { color: m.color } : {}), ...(m.gridAt ? { gridAt: m.gridAt } : {}), ...(m.ground ? { ground: m.ground } : {}), ...(m.flatView ? { flatView: m.flatView } : {}), ...(below.length ? { under: below } : {}) })
+    fs.updateFreeNode(id, { x: m.x, y: m.y, width: m.width, height: m.height, areaCard: cardId, label: m.label ?? card.name ?? '3D set', ...(m.color ? { color: m.color } : {}), ...(m.gridAt ? { gridAt: m.gridAt } : {}), ...(m.ground ? { ground: m.ground } : {}), ...(m.flatView ? { flatView: m.flatView } : {}), ...(m.rideLoop ? { rideLoop: true } : {}), ...(below.length ? { under: below } : {}) })
   } finally { laying.on = false }
   // The cards it brings out never join a row with the cards under it.
   const belowCards = below.filter(k => k.startsWith('card:')).map(k => k.slice(5))

@@ -14,17 +14,19 @@
 // stage with the pieces, so tipped into 3D it lies on the set's ground.
 // The line is the whole of the play: from the start to where the set's
 // longest ride ends. Played to there it stops; Play again goes from the
-// start. A press or a drag on the line goes to that moment.
+// start; with Loop on (kept with the set) it goes round again from the
+// start instead. A press or a drag on the line goes to that moment.
 
 import React, { useEffect, useRef } from 'react'
 import { useNotesStore } from '../../store/notesStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useCanvasStore } from '../../store/canvasStore'
+import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { useRideClock, rideTime, rideTotal, rideSetIds } from '../../utils/pathRide'
 
 const H = 26, INSET = 6
 /** Too narrow to hold a bar under `GONE` px; all there from `FULL`. */
-const GONE = 90, FULL = 130
+const GONE = 140, FULL = 180
 const TONE = '#ffe14a'
 /** Short of the very end: a ride that goes round again is back at its
  *  start at the end itself. */
@@ -54,8 +56,13 @@ const SetBar: React.FC<{ id: string }> = ({ id }) => {
   useEffect(() => {
     if (!playing) return
     let raf = requestAnimationFrame(function beat() {
-      // The end of the set's longest ride: it stops there.
-      if (rideTime(id) >= total - SHY) { const c = useRideClock.getState(); c.pause(id); c.seek(total - SHY, id) }
+      // The end of the set's longest ride: it stops there, or with Loop
+      // on goes on from the start.
+      if (rideTime(id) >= total - SHY) {
+        const c = useRideClock.getState()
+        if (useFreeNodeStore.getState().nodes[id]?.rideLoop) c.seek(Math.max(0, rideTime(id) - total), id)
+        else { c.pause(id); c.seek(total - SHY, id) }
+      }
       show()
       raf = requestAnimationFrame(beat)
     })
@@ -115,6 +122,21 @@ const SetBar: React.FC<{ id: string }> = ({ id }) => {
         }}>
         <svg width="7" height="9" viewBox="0 0 8 10" aria-hidden="true"><path d="M0 0 L8 5 L0 10 Z" fill="currentColor" /></svg>
         Play
+      </button>
+      <button data-ride-loop="" aria-pressed={!!a.rideLoop}
+        onClick={() => { useUndoCoordinator.getState().checkpoint(); useFreeNodeStore.getState().updateFreeNode(id, { rideLoop: a.rideLoop ? undefined : true }) }}
+        title="Loop: on or off. On, the play of this 3D set goes round again from the start when it comes to the end. Off, it stops there."
+        style={{
+          flex: '0 0 auto', width: 52, height: 18, borderRadius: 5, cursor: 'pointer', font: '11px system-ui, sans-serif',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, padding: 0, marginLeft: -5,
+          color: a.rideLoop ? '#1a1608' : 'rgba(235,240,255,0.85)',
+          background: a.rideLoop ? TONE : 'rgba(255,255,255,0.06)',
+          border: a.rideLoop ? `1px solid ${TONE}` : '1px solid rgba(255,255,255,0.14)',
+        }}>
+        <svg width="11" height="10" viewBox="0 0 12 10" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M2 4.5V4a2 2 0 0 1 2-2h5.5M8 0.5 9.8 2 8 3.5M10 5.5V6a2 2 0 0 1-2 2H2.5M4 6.5 2.2 8 4 9.5" />
+        </svg>
+        Loop
       </button>
       <div ref={track} data-ride-track="" onPointerDown={scrub} title="The whole play of this 3D set, start to end: press or drag to go to a moment"
         style={{ position: 'relative', flex: '1 1 0', minWidth: 0, height: '100%', cursor: 'ew-resize' }}>

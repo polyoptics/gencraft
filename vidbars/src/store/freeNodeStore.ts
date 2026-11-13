@@ -217,6 +217,9 @@ export interface FreeNodeData {
   /** A 3D set: what its ground is drawn as (components/Notes/AreaBody).
    *  Absent: lines. 'none' is no ground at all, only its thin outline. */
   ground?: AreaGround
+  /** A 3D set: its Play bar goes round again from the start when it comes
+   *  to the end (components/UI/RidePlayBar). Absent: it stops there. */
+  rideLoop?: boolean
   /** A 3D set: how its models show in the flat view (utils/liveTop).
    *  Absent: as pieces, pictures from above (utils/scenePieces). 'live':
    *  the models themselves, drawn live in 3D from straight above. */
