@@ -2470,9 +2470,12 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
             // Standalone decks (or sub-decks dragged out) → open.
             const isSubDeck = !!anchorGroup.nestedDeck && !!isNested
             useBoardsStore.getState().setDeckState(deck.memberIds, isSubDeck ? 'fanned' : 'open')
-            // A 3D scene card on the face: opening its deck brings its scene
-            // out too (Brian 2026-11-09).
-            if (faceCard.cardType === 'area3d') showArea3dMoving(faceCard.id)
+            // A 3D set's deck: opening it brings its set out too (Brian
+            // 2026-11-09), whichever of its cards the arrows left on its
+            // face (with another card there the deck opened without its
+            // set: models and paths standing on no ground).
+            const setCard = anchorGroup.cardType === 'area3d' ? anchorGroup : faceCard
+            if (setCard.cardType === 'area3d') showArea3dMoving(setCard.id)
           }}
         >
           {faceCard.cut
