@@ -21,6 +21,7 @@ import { cardCornerOffset, snapCardToDots } from '../../utils/dotGrid'
 import { cardEdgeSnapFor } from '../../utils/cardEdgeSnap'
 import { PrimaryChipRail } from '../Linking/PrimaryChipRail'
 import { CloneDeck } from '../Linking/CloneDeck'
+import { tuckedIds, tuckedReach } from '../Linking/TuckedCards'
 import { useLinkingStore } from '../../store/linkingStore'
 import { DEFAULT_H } from '../../utils/barConstants'
 import { groupSlot, clampGroupMove } from '../../utils/nlePush'
@@ -5423,6 +5424,11 @@ const CardLinkingLayer: React.FC<{
     if (expandedPaths.has([group.id, gid].join('>'))) expandedChildIds.push(gid)
   }
 
+  // The cards still tucked under this one (TuckedCards) stick out below
+  // it: a card pulled out is shown clear of their feet.
+  const tucked = useBoardsStore(s => tuckedIds(group, s.groups).filter(id => !expandedPaths.has([group.id, id].join('>'))).length)
+  const below = { ...hostRect, height: hostRect.height + tuckedReach(tucked) * textScale }
+
   return (
     <>
       <PrimaryChipRail
@@ -5435,7 +5441,7 @@ const CardLinkingLayer: React.FC<{
         <CloneDeck
           key={cid}
           targetGroupId={cid}
-          hostRect={hostRect}
+          hostRect={below}
           path={[group.id, cid]}
           childIndex={i}
           hostGroupId={group.id}

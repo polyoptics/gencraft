@@ -66,10 +66,11 @@ export const PrimaryChipRail: React.FC<Props> = ({ groupId, hostRect, path, scal
         pointerEvents: 'auto',
       }}
     >
-      {/* Cards linked ONTO this one, tucked under its bottom edge (card on
+      {/* The cards this one links to, tucked under its bottom edge (card on
           card). Placed from this rail's corner; the chips ride over it. */}
       <TuckedCards
         groupId={groupId}
+        path={path}
         left={-RAIL_INSET_X * scale}
         top={-RAIL_Y_OFFSET * scale}
         scale={scale}

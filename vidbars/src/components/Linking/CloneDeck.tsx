@@ -13,7 +13,7 @@
 // v1 scope: read-only. v2: clones may gain their own local additions.
 // Recursion: clones carry their own PrimaryChipRail so users can drill deeper.
 
-import React, { useState } from 'react'
+import React, { useLayoutEffect, useRef, useState } from 'react'
 import { useBoardsStore } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useLinkingStore } from '../../store/linkingStore'
@@ -81,6 +81,18 @@ export const CloneDeck: React.FC<Props> = ({
   // and shrinks with every canvas zoom, and the text inside it (which reads
   // this same context) disagrees with the box it sits in.
   const { pan, zoom } = useCardView()
+
+  // It comes out from under its host like a drawer (Brian 2026-11-13): once,
+  // as it is shown. It draws below the cards (z 39), so it slides out from
+  // behind the host's bottom edge. Deck members placed by hand do not.
+  const box = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const el = box.current
+    if (!el || positionOverride) return
+    const rise = el.offsetTop - (hostRect.top + hostRect.height) + el.offsetHeight
+    el.animate([{ transform: `translateY(${-rise}px)` }, { transform: 'translateY(0)' }], { duration: 240, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   if (!target) return null
 
@@ -199,6 +211,7 @@ export const CloneDeck: React.FC<Props> = ({
     <>
       {/* The clone card — rendered to closely mirror GroupCard */}
       <div
+        ref={box}
         data-clone-deck={targetGroupId}
         data-link-drop={`card:${targetGroupId}`}
         onPointerDown={onCopyDown}
