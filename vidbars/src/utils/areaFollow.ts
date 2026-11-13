@@ -10,8 +10,9 @@ import { useFreeNodeStore, type FreeNodeData } from '../store/freeNodeStore'
 import { useBoardsStore } from '../store/boardsStore'
 import { useViewport3DStore } from '../store/viewport3dStore'
 import { useNotesStore } from '../store/notesStore'
-import { carrying, isUnder, laying, lyingIn, resizing, rowCards, selfMoved, setCards } from './area3dScene'
+import { cardBox, carrying, docksUnder, isUnder, laying, lyingIn, resizing, rowCards, selfMoved, setCards } from './area3dScene'
 import { isUndoRestoring } from '../store/undoCoordinator'
+import { isHiddenDeckMember } from '../hooks/useCardDecks'
 
 type R = { x: number; y: number; width: number; height: number }
 const inside = (a: R, px: number, py: number) => px >= a.x && px <= a.x + a.width && py >= a.y && py <= a.y + a.height
@@ -47,6 +48,15 @@ if (typeof window !== 'undefined' && !(window as unknown as { __areaFollow?: boo
         // still, area3dScene holdSets.)
         const own = resizing.get(a.id)
         const fresh = lyingIn(a, a.areaCard, a.id).filter(k => !before.has(k) && !isUnder(a, k) && !own?.has(k))
+        // The same for a card its bottom edge comes to: not docked under it
+        // (with it, rowCards) till that card is set down there by hand.
+        const withIt = new Set(rowCards(a, was ?? a).map(g => g.id))
+        for (const g of useBoardsStore.getState().groups) {
+          const k = `card:${g.id}`
+          if (g.pin || g.linkOf || withIt.has(g.id) || isHiddenDeckMember(g) || isUnder(a, k) || own?.has(k) || fresh.includes(k)) continue
+          const r = cardBox(g)
+          if (r && docksUnder(r, a) && !(was && docksUnder(r, was))) fresh.push(k)
+        }
         if (fresh.length) {
           a = { ...a, under: [...(a.under ?? []), ...fresh] }
           busy = true

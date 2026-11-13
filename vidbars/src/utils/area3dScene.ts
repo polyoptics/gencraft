@@ -159,7 +159,7 @@ export function rowCards(a: FreeNodeData, box: R = a, taken?: (id: string) => bo
   }
   for (let i = 0; i < row.length; i++) {
     for (const g of seen) {
-      if (row.includes(g) || taken?.(g.id) || apart(g, row[i]) || !cardsTouch(g, row[i], bs.boards, zoom)) continue
+      if (row.includes(g) || taken?.(g.id) || apart(g, row[i]) || isUnder(a, `card:${g.id}`) || !cardsTouch(g, row[i], bs.boards, zoom)) continue
       row.push(g)
     }
   }

@@ -21,7 +21,8 @@ import { useFreeNodeStore, type FreeNodeData, type AreaGround } from '../store/f
 import { useCanvasStore } from '../store/canvasStore'
 import { isUndoRestoring, useUndoCoordinator } from '../store/undoCoordinator'
 import { useModelScaleStore, type ScenePlace, type CameraLens, type PieceView } from '../store/tiltStore'
-import { cardBox, carrying, docksUnder, isUnder, laying, lyingIn, selfMoved, setCards } from './area3dScene'
+import { cardBox, carrying, docksUnder, isUnder, laying, lyingIn, rowCards, selfMoved, setCards } from './area3dScene'
+import { isHiddenDeckMember } from '../hooks/useCardDecks'
 import { cardFaceSize, createTextCard } from './cardGrid'
 import { makeLinkedCard, masterOf } from './linkedCards'
 import { useNotesStore, useNotesUi, newNoteId, type Curve, type PathRider } from '../store/notesStore'
@@ -86,6 +87,11 @@ export interface Area3dData {
   mat: { x: number; y: number; width: number; height: number; color?: string; label?: string; gridAt?: { x: number; y: number }; ground?: AreaGround }
   cards: Area3dCardItem[]
   tiles: Area3dTileItem[]
+  /** The cards that were with the set when it was folded (docked under
+   *  it, in a row with its card: area3dScene rowCards), by id. They stay on
+   *  the canvas as they are; coming out again, the set knows them as its
+   *  own, and any other card it opens next to as not (showArea3d). */
+  row?: string[]
   /** The curves parented to it (utils/curveParent), whole: their points
    *  from the mat's top-left, their parent left out (it is this set). */
   curves?: Curve[]
@@ -209,6 +215,7 @@ export function foldArea3d(nodeId: string): string | null {
     mat: { x: a.x, y: a.y, width: a.width, height: a.height, color: a.color, label: a.label, ...(a.gridAt ? { gridAt: a.gridAt } : {}), ...(a.ground ? { ground: a.ground } : {}) },
     cards: cardItems, tiles: tileItems,
     ...(curveItems.length ? { curves: curveItems } : {}),
+    row: rowCards(a).slice(1).map(g => g.id),
   }
   writing = true
   try { useBoardsStore.setState(s => ({ groups: s.groups.map(g => g.id === cardId ? { ...g, area3d: data } : g) })) } finally { writing = false }
@@ -365,7 +372,20 @@ export function showArea3d(cardId: string, quiet = false, spot?: { x: number; y:
     const r = g && !g.linkOf ? cardBox(g) : null
     return !!r && docksUnder(r, m)
   }
-  const below = under ?? lyingIn(m, cardId).filter(k => !docked(k))
+  // The cards that were with it when it was folded, and the ones in a row
+  // with its card now (its deck), are its own. Any other card it comes
+  // out next to is not: under it, as what it comes out over, till it is
+  // set down there by hand (Brian 2026-11-13: opened on top of other
+  // cards "they just start docking around to everything").
+  const own = new Set(d0.row ?? [])
+  for (const g of rowCards({ areaCard: cardId } as FreeNodeData, { x: Infinity, y: Infinity, width: 0, height: 0 })) own.add(g.id)
+  const mine = (k: string) => docked(k) && own.has(k.slice(5))
+  const strangers = groups0.filter(g => {
+    if (g.id === cardId || g.pin || g.linkOf || own.has(g.id) || isHiddenDeckMember(g)) return false
+    const r = cardBox(g)
+    return !!r && docksUnder(r, m)
+  }).map(g => `card:${g.id}`)
+  const below = under ?? [...new Set([...lyingIn(m, cardId).filter(k => !mine(k)), ...strangers])]
   let id = ''
   laying.on = true
   try {
