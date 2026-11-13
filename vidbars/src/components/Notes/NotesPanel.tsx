@@ -28,7 +28,8 @@ import { useModelScaleStore } from '../../store/tiltStore'
 import { createMediaCard } from '../../utils/cardGrid'
 import { visibleCanvasCenter } from '../../utils/fx/createEffect'
 import { PRIMITIVES, PRIM_NAMES, primitiveUrl, type Primitive } from '../../three/primitives'
-import { dataKey } from '../../utils/area3dScene'
+import { dataKey, sceneOf } from '../../utils/area3dScene'
+import { isHiddenDeckMember } from '../../hooks/useCardDecks'
 import { CameraTools, NEW_CAMERA_MM } from '../Canvas/tilt/LookThrough'
 import { useRideClock, rideTime, rideSpan, rideTotal, parentToPath, unparentFromPath, setRider } from '../../utils/pathRide'
 
@@ -528,7 +529,18 @@ function useOutline() {
     for (const g of groups) {
       if (g.pin) continue
       const a = areaAt(nodes, g.originX + 20, g.originY + 20)
-      if (a) put({ kind: 'card', id: g.id, name: g.name || 'Card', icon: '▭', cx: g.originX + 20, cy: g.originY + 20 })
+      // A card showing a model is listed wherever it is (Brian 2026-11-12:
+      // "I don't see models in the outliner"): under the 3D set it is on,
+      // docked to or in a row with, or else at the root. It is what is
+      // dragged onto a path to ride it.
+      const model = !isHiddenDeckMember(g) && !!cardModel(g.id)
+      const it: Item = { kind: 'card', id: g.id, name: g.name || 'Card', icon: model ? '◆' : '▭', cx: g.originX + 20, cy: g.originY + 20 }
+      if (a) put(it)
+      else if (model) {
+        const set = sceneOf(`card:${g.id}`)?.area
+        if (set) { if (!kids.has(set.id)) kids.set(set.id, []); kids.get(set.id)!.push(it) }
+        else root.push(it)
+      }
     }
     for (const w of Object.values(windows)) put({ kind: 'viewer', id: w.id, name: 'Viewer', icon: '◳', cx: w.x + w.width / 2, cy: w.y + w.height / 2 })
     for (const c of Object.values(curves)) {

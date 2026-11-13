@@ -26,7 +26,7 @@ import { targetMiddle, pickedPoints } from '../../../utils/pathEdit'
 import type { PathFrame, PathHit } from '../../../three/pathOverlay'
 import { curveRuns, pointFrames } from '../../../utils/curveGeom'
 import { PinLabels } from '../../Notes/PinLabels'
-import { sceneOf, sceneSpot, standsIn, dataKey } from '../../../utils/area3dScene'
+import { sceneOf, sceneSpot, standsIn, dataKey, cardBox } from '../../../utils/area3dScene'
 import { rideSpots, rideRuns, useRideClock } from '../../../utils/pathRide'
 import { useUndoCoordinator } from '../../../store/undoCoordinator'
 import { useManip } from '../../../store/manipStore'
@@ -2727,7 +2727,8 @@ function collectTargets(W: number, H: number): TiltTarget[] {
   // A model in a 3D scene: its card may not be drawn (off screen while the
   // model, lifted or moved, is in view; or zoomed far out) and the model
   // still stands. off() puts it where the scene says.
-  if (Object.values(useFreeNodeStore.getState().nodes).some(n => n.type === 'area' && !n.pin)) {
+  // (So does one riding a path, whatever the zoom: utils/pathRide.)
+  if (rides.size || Object.values(useFreeNodeStore.getState().nodes).some(n => n.type === 'area' && !n.pin)) {
     const have = new Set(out.map(t => t.key))
     for (const g of useBoardsStore.getState().groups) {
       const key = `card:${g.id}`
@@ -2735,9 +2736,10 @@ function collectTargets(W: number, H: number): TiltTarget[] {
       // On a scene or docked to one: its card may not be drawn (off
       // screen, or zoomed far out), so its box comes from the card.
       const sc = sceneOf(key)
-      const model = sc && cardModel(g.id)
-      if (!sc || !model) continue
-      const sp = { card: sc.box }
+      const box = sc?.box ?? (rides.has(key) ? cardBox(g) : null)
+      const model = box && cardModel(g.id)
+      if (!box || !model) continue
+      const sp = { card: box }
       const w = sp.card.width * zoom, h = sp.card.height * zoom
       out.push(off(key, {
         key, url: model.url, name: model.name,
@@ -2753,7 +2755,7 @@ function collectTargets(W: number, H: number): TiltTarget[] {
   // A card set to keep its model flat ("Show model in 3D" off).
   const groups = useBoardsStore.getState().groups
   const flatCard = (key: string) => key.startsWith('card:') && [key, dataKey(key)].some(k => groups.find(g => g.id === k.slice(5))?.hideModel3d)
-  const inScene = (t: TiltTarget) => !!t.mini || ((t.key.startsWith('card:') || t.key.startsWith('node:')) && !!sceneOf(t.key))
+  const inScene = (t: TiltTarget) => !!t.mini || ((t.key.startsWith('card:') || t.key.startsWith('node:')) && (!!sceneOf(t.key) || rides.has(t.key) || rides.has(dataKey(t.key))))
   // A 3D scene's models all stand (Brian 2026-11-09: zoomed out, a cap
   // left them out). The rest, if the 3D bar's Models is on (a Viewer's
   // always), nearest the middle first, while they fit the triangle budget.
