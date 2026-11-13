@@ -11,8 +11,10 @@ import type { FreeNodeData } from '../../store/freeNodeStore'
 export const AREA_CELL = 40
 const MAJOR = 5
 
-export const AreaBody: React.FC<{ node: FreeNodeData; bodyW: number; bodyH: number }> = ({ bodyW, bodyH }) => {
+export const AreaBody: React.FC<{ node: FreeNodeData; bodyW: number; bodyH: number }> = ({ node, bodyW, bodyH }) => {
   const c = AREA_CELL, M = c * MAJOR
+  // (Where the grid begins: at the corner, till the top or left edge is pulled.)
+  const gx = node.gridAt?.x ?? 0, gy = node.gridAt?.y ?? 0
   return (
     <div
       data-area-mat=""
@@ -26,7 +28,7 @@ export const AreaBody: React.FC<{ node: FreeNodeData; bodyW: number; bodyH: numb
           'radial-gradient(ellipse at 50% 40%, rgba(40,52,84,0.55), rgba(16,19,32,0.75))',
         ].join(','),
         backgroundSize: `${M}px ${M}px, ${M}px ${M}px, ${c}px ${c}px, ${c}px ${c}px, 100% 100%`,
-        backgroundPosition: '-1px -1px',
+        backgroundPosition: `${gx - 1}px ${gy - 1}px`,
       }}
     >
       <div style={{

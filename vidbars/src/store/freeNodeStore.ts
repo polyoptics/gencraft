@@ -202,6 +202,11 @@ export interface FreeNodeData {
    *  moved, folded in or stood in its scene, until moved by hand
    *  (utils/area3dScene isUnder). */
   under?: string[]
+  /** A 3D area: where its ground's grid begins, from its top-left corner
+   *  (canvas units). Its top or left edge pulled, the grid stays where it
+   *  lay under what is on it (utils/area3dScene holdSets). Absent: at the
+   *  corner. */
+  gridAt?: { x: number; y: number }
 }
 
 const COLORS = ['#1e2235', '#1e3028', '#2e1e35', '#35281e', '#1e2e35', '#2e351e']

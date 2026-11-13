@@ -63,6 +63,7 @@ import { RenameInput } from '../UI/RenameInput'
 import { CanvasUnits } from './CanvasUnits'
 import { useFreshOnTop, FRESH_Z } from '../../utils/freshOnTop'
 import { foldArea3dMoving } from '../../utils/area3dCard'
+import { holdSets } from '../../utils/area3dScene'
 
 
 /** Node types whose corner resize keeps the current proportions. A
@@ -188,7 +189,9 @@ function resizePatch(node: FreeNodeData, s: ResizeStart, dir: string, dx: number
   if (dir.includes('n')) { h = Math.max(MIN_H, s.h - dy); ny = s.ny + (s.h - h) * k }
 
   const patch: Partial<FreeNodeData> = { width: w, height: h }
-  if (nx !== s.nx || ny !== s.ny) {
+  // (Always, for a west or north handle: left out once the drag was back
+  // where it began, the corner stayed where the step before had put it.)
+  if (dir.includes('w') || dir.includes('n')) {
     if (node.pin) patch.pin = { ...node.pin, x: nx, y: ny }
     else { patch.x = nx; patch.y = ny }
   }
@@ -340,7 +343,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
   const resizeLastX = useRef(0)
   const resizeLastY = useRef(0)
   /** Where the resize press began, and every node it resizes as it stood then. */
-  const resizeStart = useRef<{ x: number; y: number; items: ResizeStart[] }>({ x: 0, y: 0, items: [] })
+  const resizeStart = useRef<{ x: number; y: number; items: ResizeStart[]; hold: (() => void) | null }>({ x: 0, y: 0, items: [], hold: null })
   /** Which handle is being dragged: any of n/s/e/w combined. */
   const resizeDir = useRef('se')
 
@@ -1003,9 +1006,25 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
     const others = selectedIds.includes(id)
       ? selectedIds.filter(sid => sid !== id).map(sid => nodes[sid]).filter(n => resizableAlongside(n, nodes))
       : []
+    // A 3D set by a side: its ground changes and nothing on it (its models
+    // stay where they stand as its top or left edge goes, the cards along
+    // that side go with it). By a corner: what is on it spreads with it
+    // (Brian 2026-11-13). What is its own stays its own (utils/area3dScene
+    // holdSets), till this pointer lets go.
+    const hold = holdSets([node, ...others].map(n => n.id), resizeDir.current.length === 2)
     resizeStart.current = {
       x: e.clientX, y: e.clientY,
       items: [resizeStartOf(node), ...others.map(resizeStartOf)],
+      hold: hold ? hold.step : null,
+    }
+    if (hold) {
+      const pointer = e.pointerId
+      const end = (ev: PointerEvent) => {
+        if (ev.pointerId !== pointer) return
+        window.removeEventListener('pointerup', end, true); window.removeEventListener('pointercancel', end, true)
+        hold.end()
+      }
+      window.addEventListener('pointerup', end, true); window.addEventListener('pointercancel', end, true)
     }
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
   }, [id, node])
@@ -1023,6 +1042,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
       const nz = n.pin ? n.pin.scale : zoom
       updateFreeNode(item.id, resizePatch(n, item, dir, (e.clientX - s.x) / nz, (e.clientY - s.y) / nz, e.shiftKey))
     }
+    s.hold?.()
   }, [updateFreeNode, zoom])
 
   const commitRename = useCallback(() => {

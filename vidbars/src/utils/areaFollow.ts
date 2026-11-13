@@ -10,7 +10,7 @@ import { useFreeNodeStore, type FreeNodeData } from '../store/freeNodeStore'
 import { useBoardsStore } from '../store/boardsStore'
 import { useViewport3DStore } from '../store/viewport3dStore'
 import { useNotesStore } from '../store/notesStore'
-import { isUnder, laying, lyingIn, setCards } from './area3dScene'
+import { isUnder, laying, lyingIn, resizing, setCards } from './area3dScene'
 import { isUndoRestoring } from '../store/undoCoordinator'
 
 type R = { x: number; y: number; width: number; height: number }
@@ -42,7 +42,11 @@ if (typeof window !== 'undefined' && !(window as unknown as { __areaFollow?: boo
       // it is still where it lay.
       if (!laying.on && !isUndoRestoring() && (!was || was.x !== a.x || was.y !== a.y || was.width !== a.width || was.height !== a.height)) {
         const before = new Set(was ? lyingIn(was, a.areaCard, a.id) : [])
-        const fresh = lyingIn(a, a.areaCard, a.id).filter(k => !before.has(k) && !isUnder(a, k))
+        // (Its own when a resize by hand began, and passed by an edge and
+        // come back to, or come to be covered, in that drag: its own
+        // still, area3dScene holdSets.)
+        const own = resizing.get(a.id)
+        const fresh = lyingIn(a, a.areaCard, a.id).filter(k => !before.has(k) && !isUnder(a, k) && !own?.has(k))
         if (fresh.length) {
           a = { ...a, under: [...(a.under ?? []), ...fresh] }
           busy = true

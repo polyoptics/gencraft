@@ -231,6 +231,239 @@ export function placeNow(key: string): ScenePlace | null {
     ?? { dx: sc.box.x + sc.box.width / 2 - sc.area.x, dy: sc.box.y + sc.box.height / 2 - sc.area.y, h: 0 }
 }
 
+/** What was each 3D set's own when the resize of it by hand that is going
+ *  on began (by the set's id; holdSets): its own all through that drag,
+ *  whatever its edge passes and comes back across, or comes to cover
+ *  (areaFollow's sweep). */
+export const resizing = new Map<string, Set<string>>()
+
+/** The set each place held in a resize by hand was measured from then
+ *  (holdSets), and where its card or tile and the place itself were left:
+ *  while neither has changed since, the place is that set's still, wherever
+ *  the card has come to lie by the set's edges alone (one set inside
+ *  another: an edge of the inner one passed it and it lies on the outer). */
+const measured = new Map<string, { set: string; x: number; y: number; dx: number; dy: number }>()
+
+/** The 3D set each kept place (tiltStore placeOf, by its key) is measured
+ *  from. The set its model stands in (sceneOf); for one that does not show
+ *  now, the set its card or tile is with all the same: lying under it,
+ *  shown there by a linked card, pinned off it, or a card of a closed deck
+ *  there that is not on the deck's face; and for one with no set (its card
+ *  was taken off, or the set's edge has passed it), the set nearest its
+ *  card: put back on, its model stands where it stood. Places of cards
+ *  and tiles that are gone are left out. */
+function placeSets(): Map<string, string> {
+  const placeOf = useModelScaleStore.getState().placeOf
+  const nodes = useFreeNodeStore.getState().nodes
+  const { groups, boards } = useBoardsStore.getState()
+  const byId = new Map(groups.map(g => [g.id, g]))
+  const sets = areas(nodes)
+  // Where it lies (as sceneOf): on a set's ground, docked along it, or in
+  // a row with its card.
+  const at = (box: R | null, key: string): string | null => {
+    const not = key.startsWith('node:') ? key.slice(5) : undefined
+    // On a set and under another that has grown over it: the first one's.
+    const free = Object.fromEntries(Object.entries(nodes).filter(([, n]) => !isUnder(n, key)))
+    const a = box && (areaOfBox(box, free, not) ?? areaOfBox(box, nodes, not))
+    return a ? a.area.id : key.startsWith('card:') ? rowSets().get(key.slice(5))?.area.id ?? null : null
+  }
+  const off = (a: R, b: R) => Math.hypot(Math.max(a.x - b.x - b.width, b.x - a.x - a.width, 0), Math.max(a.y - b.y - b.height, b.y - a.y - a.height, 0))
+  const nearest = (box: R | null): string | null => {
+    let best: FreeNodeData | null = null, d = Infinity
+    if (box) for (const a of sets) { const da = off(box, a); if (da < d) { best = a; d = da } }
+    return best ? best.id : null
+  }
+  const of = new Map<string, string>()
+  for (const [dk, m] of measured) {
+    const q = placeOf[dk], b = boxOfKey(dk), a = nodes[m.set]
+    if (q && b && a && a.type === 'area' && !a.pin && q.dx === m.dx && q.dy === m.dy && b.x === m.x && b.y === m.y) of.set(dk, m.set)
+    else measured.delete(dk)
+  }
+  // The member on a closed deck's face stands where the deck is (dataKey).
+  for (const g of groups) {
+    if (g.pin || isHiddenDeckMember(g) || (g.deckState !== 'stacked' && g.deckState !== 'fanned')) continue
+    const key = `card:${g.id}`, dk = dataKey(key)
+    const set = dk !== key && placeOf[dk] ? at(cardBox(g, boards), key) : null
+    if (set && !of.has(dk)) of.set(dk, set)
+  }
+  for (const dk of Object.keys(placeOf)) {
+    if (of.has(dk)) continue
+    let box: R | null = null, set: string | null = null
+    if (dk.startsWith('node:')) {
+      const n = nodes[dk.slice(5)]
+      if (!n) continue
+      box = n
+      set = at(box, dk)
+    } else if (dk.startsWith('card:')) {
+      let g = byId.get(dk.slice(5))
+      if (!g) continue
+      box = cardBox(g, boards)
+      set = at(box, dk)
+      // Inside a closed deck, lying nowhere itself: where its deck is.
+      for (let i = 0; !set && i < 8 && isHiddenDeckMember(g); i++) {
+        const up: ProjectGroup | undefined = byId.get(g.deckAnchorId!)
+        if (!up) break
+        g = up
+        box = cardBox(g, boards)
+        set = at(box, `card:${g.id}`)
+      }
+    } else continue
+    set ??= nearest(box)
+    if (set) of.set(dk, set)
+  }
+  return of
+}
+
+/** 3D sets resized by hand change their ground and nothing on it (Brian
+ *  2026-11-13: more ground on any side "when I don't want to adjust
+ *  anything else"). Called as a resize of the nodes `ids` begins; null
+ *  when none of them is a 3D set.
+ *   - Models stay where they stand. A place is measured from its set's
+ *     corner (tiltStore placeOf), which a pull on the set's top or left
+ *     edge moves, so it is taken from the corner as that goes: `step`,
+ *     after each change of the sets' boxes. Every place of the set
+ *     (placeSets), also one whose model does not show now: when it shows
+ *     again it stands where it stood.
+ *   - The ground's grid stays where it lies, under what is on it: where
+ *     it begins (the set's gridAt) is taken from the corner the same way.
+ *   - What is a set's own stays its own though an edge passes it, or comes
+ *     to cover it, in this drag (`resizing`), till `end`. */
+export function holdSets(ids: string[], spread = false): { step: () => void; end: () => void } | null {
+  const all = useFreeNodeStore.getState().nodes
+  const sets = ids.map(id => all[id]).filter(a => a && a.type === 'area' && !a.pin)
+  if (!sets.length) return null
+  // (A drag whose end was never heard of is over all the same.)
+  resizing.clear()
+  for (const a of sets) {
+    // What lies on it, and what is its own by another rule: the cards in
+    // a row with its card, and a model tile along its side whose model
+    // stands in it.
+    const own = new Set(lyingIn(a, a.areaCard, a.id))
+    for (const [id, row] of rowSets()) if (row.area.id === a.id) own.add(`card:${id}`)
+    for (const n of Object.values(all)) {
+      const key = `node:${n.id}`
+      if (n.type === 'model' && !n.pin && standsIn(key) && sceneOf(key)?.area.id === a.id) own.add(key)
+    }
+    resizing.set(a.id, own)
+  }
+  // What goes with each set's edges, from where it was at the press. Along
+  // a side of the set (docked, in a row with its card): with that side.
+  // On its ground: by a corner, spread with the ground (`spread`); by a
+  // side, it stays.
+  type Rider = { x: number; y: number; to: (dx: number, dy: number, fx: number, fy: number) => void }
+  const riders = new Map<string, Rider[]>()
+  const bs0 = useBoardsStore.getState()
+  for (const a of sets) {
+    const own = resizing.get(a.id)!
+    const list: Rider[] = []
+    // (What lies on a set inside this one goes as that set goes: areaFollow.)
+    const inner = Object.values(all).filter(n => n.type === 'area' && n.id !== a.id && !n.pin && own.has(`node:${n.id}`))
+    const carried = (x: number, y: number) => inner.some(n => inside(n, x, y))
+    const out = (x: number, y: number) => !inside(a, x, y)
+    for (const key of own) {
+      if (isUnder(a, key)) continue
+      const id = key.slice(key.indexOf(':') + 1)
+      if (key.startsWith('card:')) {
+        const g = bs0.groups.find(x => x.id === id), b = g && cardBox(g, bs0.boards)
+        if (!g || !b) continue
+        const x = b.x + b.width / 2, y = b.y + b.height / 2
+        if (carried(x, y) || !spread && !out(x, y)) continue
+        const ox = g.originX, oy = g.originY
+        list.push({ x, y, to: (dx, dy) => {
+          const now = useBoardsStore.getState().groups.find(q => q.id === id)
+          if (now && (now.originX !== ox + dx || now.originY !== oy + dy)) useBoardsStore.getState().setGroupPosBatch([{ groupId: id, originX: ox + dx, originY: oy + dy }])
+        } })
+      } else if (key.startsWith('node:')) {
+        const n = all[id]
+        if (!n) continue
+        const x = n.x + n.width / 2, y = n.y + n.height / 2
+        if (n.type !== 'area' && carried(x, y) || !spread && !out(x, y)) continue
+        const ox = n.x, oy = n.y
+        list.push({ x, y, to: (dx, dy) => {
+          const now = useFreeNodeStore.getState().nodes[id]
+          if (now && (now.x !== ox + dx || now.y !== oy + dy)) useFreeNodeStore.getState().updateFreeNode(id, { x: ox + dx, y: oy + dy })
+        } })
+      } else if (key.startsWith('viewer:') && spread) {
+        const w = useViewport3DStore.getState().windows[id]
+        if (!w) continue
+        const x = w.x + w.width / 2, y = w.y + w.height / 2
+        if (carried(x, y)) continue
+        const ox = w.x, oy = w.y
+        list.push({ x, y, to: (dx, dy) => {
+          const now = useViewport3DStore.getState().windows[id]
+          if (now && (now.x !== ox + dx || now.y !== oy + dy)) useViewport3DStore.getState().updateWindow(id, { x: ox + dx, y: oy + dy })
+        } })
+      }
+    }
+    // Its arrows and lines (parented to it; from before parents, lying on it): each point.
+    if (spread) for (const c of Object.values(useNotesStore.getState().curves)) {
+      if (c.parent !== a.id && !(c.parent === undefined && own.has(`curve:${c.id}`) && !isUnder(a, `curve:${c.id}`))) continue
+      const pts = c.pts, id = c.id
+      pts.forEach((p, i) => list.push({ x: p.x, y: p.y, to: (dx, dy, fx, fy) => {
+        const cur = useNotesStore.getState().curves[id], q = cur?.pts[i]
+        if (!cur || !q || cur.pts.length !== pts.length) return
+        const h = (v?: { x: number; y: number; z?: number }) => v && { ...v, x: v.x * fx, y: v.y * fy }
+        const hin = h(p.hin), hout = h(p.hout)
+        if (q.x === p.x + dx && q.y === p.y + dy && q.hin?.x === hin?.x && q.hin?.y === hin?.y && q.hout?.x === hout?.x && q.hout?.y === hout?.y) return
+        const next = cur.pts.slice()
+        next[i] = { ...q, x: p.x + dx, y: p.y + dy, ...(hin ? { hin } : {}), ...(hout ? { hout } : {}) }
+        useNotesStore.getState().updateCurve(id, { pts: next })
+      } }))
+    }
+    riders.set(a.id, list)
+  }
+  const placeOf = useModelScaleStore.getState().placeOf
+  const held: { dk: string; p: ScenePlace; set: string }[] = []
+  const mine = new Set(sets.map(a => a.id))
+  for (const [dk, set] of placeSets()) {
+    if (!mine.has(set)) continue
+    const p = placeOf[dk], b = boxOfKey(dk)
+    held.push({ dk, p, set })
+    if (b) measured.set(dk, { set, x: b.x, y: b.y, dx: p.dx, dy: p.dy })
+  }
+  return {
+    // All from where the drag began, not from the step before: right also
+    // after an undo in the middle of the drag has put everything back.
+    step: () => {
+      const fs = useFreeNodeStore.getState()
+      // How far each set's corner has gone.
+      const gone = new Map<string, { x: number; y: number }>()
+      for (const a0 of sets) {
+        const a = fs.nodes[a0.id]
+        if (!a) continue
+        const d = { x: a.x - a0.x, y: a.y - a0.y }
+        gone.set(a0.id, d)
+        const gx = (a0.gridAt?.x ?? 0) - d.x, gy = (a0.gridAt?.y ?? 0) - d.y
+        if ((a.gridAt?.x ?? 0) !== gx || (a.gridAt?.y ?? 0) !== gy) fs.updateFreeNode(a.id, { gridAt: gx || gy ? { x: gx, y: gy } : undefined })
+      }
+      const now = useModelScaleStore.getState().placeOf
+      let next: Record<string, ScenePlace> | null = null
+      for (const { dk, p, set } of held) {
+        const d = gone.get(set), q = now[dk]
+        // (One taken off its place meanwhile stays off it.)
+        if (!d || !q) continue
+        const a0 = all[set], a = fs.nodes[set]
+        // By a corner the ground spreads, and where each stands on it with it.
+        const dx = spread && a ? p.dx * a.width / a0.width : p.dx - d.x, dy = spread && a ? p.dy * a.height / a0.height : p.dy - d.y
+        if (q.dx !== dx || q.dy !== dy) (next ??= { ...now })[dk] = { ...q, dx, dy }
+        const m = measured.get(dk)
+        if (m && m.set === set) { m.dx = dx; m.dy = dy }
+      }
+      if (next) useModelScaleStore.setState({ placeOf: next })
+      for (const a0 of sets) {
+        const a = useFreeNodeStore.getState().nodes[a0.id]
+        if (!a) continue
+        const fx = spread ? a.width / a0.width : 1, fy = spread ? a.height / a0.height : 1
+        // Past an edge: as far past it as it was. Between the edges: spread, or where it was.
+        const go = (v: number, lo0: number, len0: number, lo: number, len: number, f: number) =>
+          v < lo0 ? lo - lo0 : v > lo0 + len0 ? lo + len - lo0 - len0 : spread ? lo + (v - lo0) * f - v : 0
+        for (const r of riders.get(a0.id) ?? []) r.to(go(r.x, a0.x, a0.width, a.x, a.width, fx), go(r.y, a0.y, a0.height, a.y, a.height, fy), fx, fy)
+      }
+    },
+    end: () => { for (const a of sets) resizing.delete(a.id) },
+  }
+}
+
 /** The cards of 3D area `a` (box `was`, its id `id`): those lying on it
  *  (their middle, as drawn, inside it) and the model cards docked along
  *  its sides. ONE rule for the scene, its fold and its moving (a card bigger

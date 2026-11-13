@@ -83,7 +83,7 @@ export interface Area3dTileItem {
 }
 export interface Area3dData {
   /** The mat: where it comes out (top-left), its size and look. */
-  mat: { x: number; y: number; width: number; height: number; color?: string; label?: string }
+  mat: { x: number; y: number; width: number; height: number; color?: string; label?: string; gridAt?: { x: number; y: number } }
   cards: Area3dCardItem[]
   tiles: Area3dTileItem[]
   /** The curves parented to it (utils/curveParent), whole: their points
@@ -206,7 +206,7 @@ export function foldArea3d(nodeId: string): string | null {
     }
   }
   const data: Area3dData = {
-    mat: { x: a.x, y: a.y, width: a.width, height: a.height, color: a.color, label: a.label },
+    mat: { x: a.x, y: a.y, width: a.width, height: a.height, color: a.color, label: a.label, ...(a.gridAt ? { gridAt: a.gridAt } : {}) },
     cards: cardItems, tiles: tileItems,
     ...(curveItems.length ? { curves: curveItems } : {}),
   }
@@ -347,7 +347,7 @@ export function showArea3d(cardId: string, quiet = false, spot?: { x: number; y:
   laying.on = true
   try {
     id = fs.addFreeNode(m.x, m.y, 'area')
-    fs.updateFreeNode(id, { x: m.x, y: m.y, width: m.width, height: m.height, areaCard: cardId, label: m.label ?? card.name ?? '3D set', ...(m.color ? { color: m.color } : {}), ...(below.length ? { under: below } : {}) })
+    fs.updateFreeNode(id, { x: m.x, y: m.y, width: m.width, height: m.height, areaCard: cardId, label: m.label ?? card.name ?? '3D set', ...(m.color ? { color: m.color } : {}), ...(m.gridAt ? { gridAt: m.gridAt } : {}), ...(below.length ? { under: below } : {}) })
   } finally { laying.on = false }
   // The cards it brings out never join a row with the cards under it.
   const belowCards = below.filter(k => k.startsWith('card:')).map(k => k.slice(5))
@@ -612,13 +612,24 @@ const sameLayout = (a: Area3dData | undefined, b: Area3dData) => !!a && a.cards 
  *  taken from the millionth: a point at an exact half hundredth, as one
  *  drawn at a round zoom is, reads the same after the set was moved and
  *  the sums left it a hair under.) */
-function heldAs(c: Curve, ox = 0, oy = 0): string {
+function heldAs(c: Curve, ox = 0, oy = 0, back?: Back): string {
   const { id: _id, parent: _parent, riders: _riders, pts, ...rest } = c
   void _id; void _parent; void _riders
   const tidy = (v: unknown): unknown => Array.isArray(v) ? v.map(tidy)
     : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).filter(([, x]) => x !== undefined).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([k, x]) => [k, tidy(x)]))
     : typeof v === 'number' ? Math.round(Math.round(v * 1e6) / 1e4) / 100 : v
-  return JSON.stringify(tidy({ ...rest, pts: pts.map(p => ({ ...p, x: p.x - ox, y: p.y - oy })) }))
+  return JSON.stringify(tidy({ ...rest, pts: pts.map(p => back ? back(p) : ({ ...p, x: p.x - ox, y: p.y - oy })) }))
+}
+type Back = (p: Curve['pts'][number]) => Curve['pts'][number]
+
+/** A point of a set's curve as it lay before the set (`n` now) was pulled
+ *  by a corner from the size `mat`, which spreads what is on it with its
+ *  ground (utils/area3dScene holdSets): from the mat's corner. */
+const unspread = (n: { x: number; y: number; width: number; height: number }, mat: { width: number; height: number }): Back => {
+  const fx = mat.width / n.width, fy = mat.height / n.height
+  const un = (v: number, lo: number, len: number, len0: number, f: number) => v < lo ? v - lo : v > lo + len ? len0 + v - lo - len : (v - lo) * f
+  const h = <T extends { x: number; y: number }>(v?: T) => v && { ...v, x: v.x * fx, y: v.y * fy }
+  return p => ({ ...p, x: un(p.x, n.x, n.width, mat.width, fx), y: un(p.y, n.y, n.height, mat.height, fy), ...(p.hin ? { hin: h(p.hin) } : {}), ...(p.hout ? { hout: h(p.hout) } : {}) })
 }
 
 /** Where the curves a set was laid out with are measured from now: the
@@ -632,14 +643,20 @@ function heldAs(c: Curve, ox = 0, oy = 0): string {
  *  with none from any, the corner as it is. Nothing is made of how the
  *  curves lie among themselves: one moved by hand is the owner's, however
  *  many were moved the same way. */
-function laidFrom(live: Curve[], was: Curve[], n: { x: number; y: number; width: number; height: number }, mat?: { width: number; height: number }): { x: number; y: number } {
+function laidFrom(live: Curve[], was: Curve[], n: { x: number; y: number; width: number; height: number }, mat?: { width: number; height: number }): { x: number; y: number; back?: Back } {
   const held = new Set(was.map(c => heldAs(c)))
   const xs = mat && mat.width !== n.width ? [n.x, n.x + n.width - mat.width] : [n.x]
   const ys = mat && mat.height !== n.height ? [n.y, n.y + n.height - mat.height] : [n.y]
-  let best = { x: n.x, y: n.y }, most = 0
+  let best: { x: number; y: number; back?: Back } = { x: n.x, y: n.y }, most = 0
   for (const x of xs) for (const y of ys) {
     const k = live.filter(c => held.has(heldAs(c, x, y))).length
     if (k > most) { most = k; best = { x, y } }
+  }
+  // Or the mat was pulled by a corner, and they spread with it.
+  if (mat && (mat.width !== n.width || mat.height !== n.height) && n.width > 0 && n.height > 0) {
+    const back = unspread(n, mat)
+    const k = live.filter(c => held.has(heldAs(c, 0, 0, back))).length
+    if (k > most) best = { x: n.x, y: n.y, back }
   }
   return best
 }
@@ -683,7 +700,7 @@ export function startArea3dFollow(): () => void {
           const held = new Set(was.map(c => heldAs(c)))
           const live = n ? curvesOf(n.id) : []
           const from = n ? laidFrom(live, was, n, before.get(id)?.data?.mat) : null
-          const stay = from ? live.filter(c => !held.has(heldAs(c, from.x, from.y))) : []
+          const stay = from ? live.filter(c => !held.has(heldAs(c, from.x, from.y, from.back))) : []
           if (out) clearMat(out, true, new Set(stay.map(c => c.id)))
           const again = showArea3d(id, true, n && { x: n.x, y: n.y }, n?.under ?? [])
           // (One from before curves had parents lies on it as it did.)
