@@ -17,6 +17,12 @@ interface LinkingStore {
   toggleExpanded: (path: string[]) => void
   setExpanded: (path: string[], open: boolean) => void
   closeAll: () => void
+  /** How far a showing has been pulled out from under its host, like a
+   *  drawer (Brian 2026-11-13), in canvas units; none = all the way.
+   *  Keyed as the paths are. A view matter, like the rest here. */
+  pulls: Map<string, number>
+  /** Pull the showing at `path` out to `units` (0 or less: back in, closed). */
+  setPull: (path: string[], units: number) => void
   /** Close any expansion whose path contains the given group id. Call after unlink. */
   closeContaining: (groupId: string) => void
 
@@ -42,7 +48,9 @@ export const useLinkingStore = create<LinkingStore>((set, get) => ({
       const next = new Set(s.expandedPaths)
       if (next.has(key)) next.delete(key)
       else next.add(key)
-      return { expandedPaths: next }
+      const pulls = new Map(s.pulls)
+      pulls.delete(key)
+      return { expandedPaths: next, pulls }
     })
   },
 
@@ -52,11 +60,26 @@ export const useLinkingStore = create<LinkingStore>((set, get) => ({
       const next = new Set(s.expandedPaths)
       if (open) next.add(key)
       else next.delete(key)
-      return { expandedPaths: next }
+      const pulls = new Map(s.pulls)
+      pulls.delete(key)
+      return { expandedPaths: next, pulls }
     })
   },
 
-  closeAll: () => set({ expandedPaths: new Set<string>() }),
+  closeAll: () => set({ expandedPaths: new Set<string>(), pulls: new Map<string, number>() }),
+
+  pulls: new Map<string, number>(),
+
+  setPull: (path, units) => {
+    const key = serialize(path)
+    set(s => {
+      const next = new Set(s.expandedPaths)
+      const pulls = new Map(s.pulls)
+      if (units > 0) { next.add(key); pulls.set(key, units) }
+      else { next.delete(key); pulls.delete(key) }
+      return { expandedPaths: next, pulls }
+    })
+  },
 
   closeContaining: (groupId) => {
     set(s => {

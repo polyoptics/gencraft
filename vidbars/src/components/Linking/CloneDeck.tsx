@@ -26,6 +26,7 @@ import { getFirstImageUrl } from '../../types/bar'
 import { CARD_TEXT_REF_ZOOM } from '../../store/zoomZonesStore'
 import { CardBack, FlipButton } from '../Layers/CardBack'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
+import { dragPull, DrawerLip } from './TuckedCards'
 
 interface Props {
   /** Group this clone represents. */
@@ -42,13 +43,16 @@ interface Props {
    *  they reproduce the canonical deck's spatial layout instead of tiling
    *  vertically under the anchor. */
   positionOverride?: { left: number; top: number }
+  /** How far the feet still tucked under the host reach below it (screen
+   *  px): all the way out, this showing sits clear of them. */
+  reach?: number
 }
 
 const GAP = 24                // space between host and first clone
 const CLEARANCE = 44          // room below for the clone's own primary rail
 
 export const CloneDeck: React.FC<Props> = ({
-  targetGroupId, hostRect, path, childIndex, hostGroupId, positionOverride,
+  targetGroupId, hostRect, path, childIndex, hostGroupId, positionOverride, reach = 0,
 }) => {
   const [jumpHovered, setJumpHovered] = useState(false)
   // Turned over here only: the master on the canvas stays as it is.
@@ -82,13 +86,16 @@ export const CloneDeck: React.FC<Props> = ({
   // this same context) disagrees with the box it sits in.
   const { pan, zoom } = useCardView()
 
-  // It comes out from under its host like a drawer (Brian 2026-11-13): once,
-  // as it is shown. It draws below the cards (z 39), so it slides out from
-  // behind the host's bottom edge. Deck members placed by hand do not.
+  // A drawer under its host (Brian 2026-11-13). Pulled by its foot it is
+  // out as far as it was pulled (linkingStore pulls) and stays there; shown
+  // by a click it slides all the way out, once. It draws below the cards
+  // (z 39), so it comes from behind the host's bottom edge. Deck members
+  // placed by hand are not drawers.
+  const pull = useLinkingStore(s => s.pulls.get(path.join('>')))
   const box = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => {
     const el = box.current
-    if (!el || positionOverride) return
+    if (!el || positionOverride || pull !== undefined) return
     const rise = el.offsetTop - (hostRect.top + hostRect.height) + el.offsetHeight
     el.animate([{ transform: `translateY(${-rise}px)` }, { transform: 'translateY(0)' }], { duration: 240, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' })
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -113,9 +120,15 @@ export const CloneDeck: React.FC<Props> = ({
   const left = positionOverride
     ? positionOverride.left
     : hostRect.left
+  // The host's bottom edge, and how far below it this card's own bottom
+  // edge is: all the way out (`travel`), or as far as it was pulled.
+  const edge = hostRect.top + hostRect.height
+  const travel = reach + GAP + childIndex * perChildH + height
+  const out = positionOverride || pull === undefined ? travel : Math.min(travel, pull * zoom)
+  const partial = out < travel
   const top = positionOverride
     ? positionOverride.top
-    : hostRect.top + hostRect.height + GAP + childIndex * perChildH
+    : edge + out - height
 
   const color = target.color || '#5b8dd9'
   // Match GroupCard's hero-resolution fallback: prefer the group's cardHeroImage,
@@ -228,6 +241,8 @@ export const CloneDeck: React.FC<Props> = ({
           boxShadow: `0 6px 22px rgba(0,0,0,0.45)`,
           overflow: 'hidden',
           pointerEvents: 'auto',
+          // Part way out: what is still under the host is not seen.
+          clipPath: partial ? `inset(${Math.max(0, edge - top)}px 0 0 0)` : undefined,
         }}
       >
         {heroImage && (
@@ -267,7 +282,11 @@ export const CloneDeck: React.FC<Props> = ({
 
         {/* Its header band, hatched as a linked card's is (CardLayer
             data-linked-mark): flip, its name, and its controls. */}
-        <div data-linked-mark style={{
+        <div data-linked-mark
+          // The band is the grip once it is all the way out: drag it up to
+          // slide the card back under, as far as wanted.
+          onPointerDown={e => { if (positionOverride || (e.target as Element).closest('button')) return; dragPull(e, path, zoom, out, () => {}) }}
+          style={{
           position: 'absolute',
           top: 0, left: 0, right: 0,
           height: headerPad,
@@ -305,17 +324,20 @@ export const CloneDeck: React.FC<Props> = ({
         </div>
       </div>
 
+      {/* Part way out: its lip is the grip, and nothing hangs off it yet. */}
+      {partial && <DrawerLip id={targetGroupId} path={path} left={left} top={top + height - 1} width={width} scale={textScale} out={out} />}
+
       {/* The clone's own primary rail so users can keep drilling in */}
-      <PrimaryChipRail
+      {!partial && <PrimaryChipRail
         groupId={targetGroupId}
         hostRect={myRect}
         path={path}
         scale={textScale}
-      />
+      />}
       {/* Back-refs not shown on clones in v1 — avoids visual clutter in the tree */}
 
       {/* Nested link-expansion clones (outbound chip expansion) */}
-      {nestedExpanded.map((cid, i) => (
+      {!partial && nestedExpanded.map((cid, i) => (
         <CloneDeck
           key={`link:${cid}`}
           targetGroupId={cid}
@@ -333,7 +355,7 @@ export const CloneDeck: React.FC<Props> = ({
           canonical screen offset from the anchor so the spatial arrangement
           exactly mirrors the master's layout — horizontal decks expand
           horizontally, etc. */}
-      {membersOpen && snapshotMemberIds.map((mid) => {
+      {!partial && membersOpen && snapshotMemberIds.map((mid) => {
         const offset = computeMemberScreenOffset(mid, target, useBoardsStore.getState().groups, boards, pan, zoom)
         if (!offset) return null
         return (

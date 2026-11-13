@@ -5425,9 +5425,9 @@ const CardLinkingLayer: React.FC<{
   }
 
   // The cards still tucked under this one (TuckedCards) stick out below
-  // it: a card pulled out is shown clear of their feet.
+  // it: a card pulled all the way out is shown clear of their feet.
   const tucked = useBoardsStore(s => tuckedIds(group, s.groups).filter(id => !expandedPaths.has([group.id, id].join('>'))).length)
-  const below = { ...hostRect, height: hostRect.height + tuckedReach(tucked) * textScale }
+  const reach = tuckedReach(tucked) * textScale
 
   return (
     <>
@@ -5441,7 +5441,8 @@ const CardLinkingLayer: React.FC<{
         <CloneDeck
           key={cid}
           targetGroupId={cid}
-          hostRect={below}
+          hostRect={hostRect}
+          reach={reach}
           path={[group.id, cid]}
           childIndex={i}
           hostGroupId={group.id}
