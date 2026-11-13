@@ -19,6 +19,7 @@ import { refKey } from '../../utils/linkTargets'
 import { cardTitle } from '../../utils/faceStyle'
 import { CARD_TYPES, cardTypeOf, type CardType } from '../../utils/cardTypes'
 import { TuckedCards, holderIds, tucks } from './TuckedCards'
+import { TrayGrip } from './CardTray'
 
 interface Props {
   /** Group whose outbound link chips we're rendering. */
@@ -116,6 +117,8 @@ export const PrimaryChipRail: React.FC<Props> = ({ groupId, hostRect, path, scal
           <RefChip key={refKey(r)} owner={{ kind: 'group', id: host.id }} target={r} zoom={1} />
         ))}
         <AddChip hostGroup={host} />
+        {/* The card itself, not a showing of it under another: its tray. */}
+        {path.length === 1 && <TrayGrip cardId={host.id} />}
       </div>
     </div>
   )

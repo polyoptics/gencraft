@@ -22,6 +22,7 @@ import { cardEdgeSnapFor } from '../../utils/cardEdgeSnap'
 import { PrimaryChipRail } from '../Linking/PrimaryChipRail'
 import { CloneDeck } from '../Linking/CloneDeck'
 import { shownIds, tuckedIds, tuckedReach } from '../Linking/TuckedCards'
+import { CardTray, useTrayReach } from '../Linking/CardTray'
 import { useLinkingStore } from '../../store/linkingStore'
 import { DEFAULT_H } from '../../utils/barConstants'
 import { groupSlot, clampGroupMove } from '../../utils/nlePush'
@@ -5429,7 +5430,11 @@ const CardLinkingLayer: React.FC<{
   // The cards still tucked under this one (TuckedCards) stick out below
   // it: a card pulled all the way out is shown clear of their feet.
   const tucked = useBoardsStore(s => tuckedIds(group, s.groups).filter(id => !expandedPaths.has([group.id, id].join('>'))).length)
-  const reach = tuckedReach(tucked) * textScale
+  const feet = tuckedReach(tucked) * textScale
+  // Its tray (CardTray) hangs below its feet and its chips; a card pulled
+  // all the way out is shown below the tray too.
+  const trayTop = hostRect.top + hostRect.height + Math.max(feet, 14 * textScale) + 2
+  const reach = feet + useTrayReach(group.id, zoom) + (feet ? 0 : 0)
 
   return (
     <>
@@ -5439,6 +5444,7 @@ const CardLinkingLayer: React.FC<{
         path={[group.id]}
         scale={textScale}
       />
+      <CardTray cardId={group.id} left={hostRect.left} top={trayTop} cardWidth={hostRect.width} />
       {expandedChildIds.map((cid, i) => (
         <CloneDeck
           key={cid}

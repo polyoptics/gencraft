@@ -17,6 +17,7 @@ import type { FreeNodeData } from '../store/freeNodeStore'
 import { dockedCards } from './filmShots'
 import { leaves } from './sceneCard'
 import { hasMembers } from './cardTypes'
+import { shownIds } from '../components/Linking/TuckedCards'
 
 /** The cards a card holds, by id, in its own order (none: []). */
 export function cardContents(card: ProjectGroup, groups: ProjectGroup[]): string[] {
@@ -53,4 +54,18 @@ export function browserScope(node: FreeNodeData, groups: ProjectGroup[], boards:
     return { ids: new Set(held.length ? held : [one.id]), label: one.name || 'Card' }
   }
   return { ids: new Set(docked.map(g => g.id)), label: `${docked[0].name || 'Deck'} (${docked.length})` }
+}
+
+/** What a card's tray lists (Brian 2026-11-13: "all the linked cards"):
+ *  the cards it holds, as a browser it is docked on would show, and the
+ *  cards linked with it either way (tucked under it, or it under them). */
+export function trayIds(card: ProjectGroup | undefined, groups: ProjectGroup[]): string[] {
+  if (!card) return []
+  return [...new Set([...cardContents(card, groups), ...shownIds(card, groups)])].filter(id => id !== card.id)
+}
+
+/** The scope of the browser in card `cardId`'s tray. */
+export function trayScope(cardId: string, groups: ProjectGroup[]): BrowserScope {
+  const card = groups.find(g => g.id === cardId)
+  return { ids: new Set(trayIds(card, groups)), label: card?.name || 'Card' }
 }

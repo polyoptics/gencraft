@@ -54,7 +54,8 @@ import { usePoolStore, loadPoolDir, type PoolFile } from '../../store/poolStore'
 import { poolFeedingList, viewerAdjacentTo } from '../../utils/componentLinks'
 import { useViewport3DStore } from '../../store/viewport3dStore'
 import { collectDeckContent, defaultBrowseItem, tileBrowseItem, type BrowseItem } from '../../utils/contentTraversal'
-import { browserScope } from '../../utils/browserScope'
+import { browserScope, trayScope } from '../../utils/browserScope'
+import { useTrayStore, TRAY_QUERY } from '../../store/trayStore'
 import {
   DEFAULT_HEADER_STYLE,
   DEFAULT_BODY_STYLE,
@@ -432,7 +433,12 @@ function buildTreeList(
 //    tile, the tile's resize handle replaces the expansion drag, and the
 //    tile header replaces panel drag/close.
 
-export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embedded }) => {
+/** A browser in a card's tray (components/Linking/CardTray): the card, and
+ *  the tray's box in canvas units. It is `embedded` too, with no list tile:
+ *  its settings live in trayStore and it lists what the card holds. */
+export interface TrayBind { cardId: string; x: number; y: number; width: number; height: number }
+
+export const CardRolodex: React.FC<{ embedded?: { nodeId: string }; tray?: TrayBind }> = ({ embedded, tray }) => {
   const flIsOpen = useCanvasStore(s => s.rolodexOpen)
   const flSortMode = useCanvasStore(s => s.rolodexSortMode)
   const setFlSortMode = useCanvasStore(s => s.setRolodexSortMode)
@@ -476,16 +482,26 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
   // ── Embedded-mode state adapter ─────────────────────────────────
   // All query/view state reads/writes go to the node's persisted
   // listQuery; panel height derives from the tile's measured body.
-  const embeddedNode = useFreeNodeStore(s => (embedded ? s.nodes[embedded.nodeId] : undefined))
+  const listNode = useFreeNodeStore(s => (embedded && !tray ? s.nodes[embedded.nodeId] : undefined))
+  // In a tray: a stand-in for the list tile, at the tray's box, with the
+  // tray's own settings, so everything below reads one shape.
+  const trayQuery = useTrayStore(s => (tray ? s.trays[tray.cardId]?.query : undefined))
+  const trayNode = useMemo(() => (tray ? {
+    id: `tray:${tray.cardId}`, type: 'list', label: '', text: '', imageUrl: null,
+    x: tray.x, y: tray.y, width: tray.width, height: tray.height,
+    listQuery: trayQuery ?? TRAY_QUERY,
+  } as unknown as FreeNodeData : undefined), [tray?.cardId, tray?.x, tray?.y, tray?.width, tray?.height, trayQuery]) // eslint-disable-line react-hooks/exhaustive-deps
+  const embeddedNode = tray ? trayNode : listNode
   const eq = embeddedNode?.listQuery
   const patchQuery = useCallback((patch: Partial<ListQuery>) => {
     if (!embedded) return
+    if (tray) { useTrayStore.getState().patchQuery(tray.cardId, patch); return }
     const fns = useFreeNodeStore.getState()
     const n = fns.nodes[embedded.nodeId]
     if (!n?.listQuery) return
     const q = { ...n.listQuery, ...patch }
     fns.updateFreeNode(embedded.nodeId, { listQuery: q, label: formatListQuerySummary(q) })
-  }, [embedded])
+  }, [embedded, tray?.cardId]) // eslint-disable-line react-hooks/exhaustive-deps
   // Measure BOTH axes. Height alone was measured before, which is why
   // dragging a pinned list wider only grew an empty box: the card slots
   // are a fixed SLOT_W × CARD_H, so extra width had nothing to spend
@@ -566,6 +582,14 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
     : flExpansion
   const setRolodexExpansion = embedded
     ? (v: number) => {
+        // In a tray the browser's own bottom bar pulls the tray longer or
+        // shorter, as the tray's edge does (CardTray).
+        if (tray) {
+          const ts = useTrayStore.getState()
+          const h = ts.trays[tray.cardId]?.h ?? 0
+          ts.setSize(tray.cardId, { h: Math.max(0, h + (v - rolodexExpansion) * embedScale / Math.max(0.0001, cvZoom)) })
+          return
+        }
         const fns = useFreeNodeStore.getState()
         const n = fns.nodes[embedded.nodeId]
         if (!n) return
@@ -597,8 +621,8 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
   // deck is browsed, a docked faction (chart, scene...) shows the cards it
   // holds. Geometry only, so the zoom and the node's place are dependencies.
   const dockScope = useMemo(
-    () => (embedded && embeddedNode ? browserScope(embeddedNode, groups, boards) : null),
-    [embedded, embeddedNode, groups, boards, cvZoom],
+    () => (tray ? trayScope(tray.cardId, groups) : embedded && embeddedNode ? browserScope(embeddedNode, groups, boards) : null),
+    [embedded, embeddedNode, groups, boards, cvZoom, tray?.cardId], // eslint-disable-line react-hooks/exhaustive-deps
   )
   const renderableGroups = useMemo(
     () => groups.filter(g => hasRenderableContent(g, boards) && (!dockScope || dockScope.ids.has(g.id))),
@@ -800,7 +824,7 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
   // the same two panels can be linked at one zoom and not at another.
   const linkZoom = useCanvasStore(s => s.zoom)
   const feedingPool = useMemo(
-    () => (embedded && embeddedNode ? poolFeedingList(embeddedNode, allNodes) : null),
+    () => (embedded && embeddedNode && !tray ? poolFeedingList(embeddedNode, allNodes) : null),
     [embedded, embeddedNode, allNodes, linkZoom],
   )
   const poolFiles = usePoolStore(s => (feedingPool ? s.pools[feedingPool.id]?.files : undefined)) ?? EMPTY_FILES
@@ -811,7 +835,7 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
   // Which Viewer, if any — drives whether the mode toggle is even shown.
   const allWindows = useViewport3DStore(s => s.windows)
   const linkedViewer = useMemo(
-    () => (embedded && embeddedNode ? viewerAdjacentTo(embeddedNode, allWindows, linkZoom) : null),
+    () => (embedded && embeddedNode && !tray ? viewerAdjacentTo(embeddedNode, allWindows, linkZoom) : null),
     [embedded, embeddedNode, allWindows, linkZoom],
   )
   // The pool's own component re-reads on mount, but a Rolodex can be
@@ -1133,7 +1157,7 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string } }> = ({ embed
   // rows reuse it rather than inventing a second notion of "the content of
   // this row".
   const sendRowToViewer = useCallback((idx: number) => {
-    if (!embedded || !embeddedNode) return
+    if (!embedded || !embeddedNode || tray) return
     const win = viewerAdjacentTo(
       embeddedNode, useViewport3DStore.getState().windows, useCanvasStore.getState().zoom)
     if (!win) return
