@@ -13,7 +13,7 @@ import { faceBlocks } from './cardGrid'
 import { drawnRect } from './effectCards'
 import { useViewport3DStore } from '../store/viewport3dStore'
 import { useNotesStore } from '../store/notesStore'
-import { cardsTouch, isHiddenDeckMember } from '../hooks/useCardDecks'
+import { cardsTouch, headerSlackAt, isHiddenDeckMember } from '../hooks/useCardDecks'
 
 type R = { x: number; y: number; width: number; height: number }
 
@@ -31,6 +31,15 @@ const dockGap = () => 24
 
 const touches = (a: R, b: R, gap: number) =>
   a.x <= b.x + b.width + gap && a.x + a.width >= b.x - gap && a.y <= b.y + b.height + gap && a.y + a.height >= b.y - gap
+/** Does a CARD's box `r` (as drawn now) dock against `b`? As any box, and
+ *  along `b`'s bottom from further off: a card's header band is drawn above
+ *  it and is taller, in canvas units, the further out the view is, so a
+ *  card set flush under a set zoomed out lay well below it zoomed in and
+ *  was docked no more (Brian 2026-11-13: "cards don't dock on the bottom
+ *  properly"). Under it as far as that band can have put it: docked, the
+ *  same at every zoom (as under a card-back window, HEADER_BAND_SLACK). */
+const cardTouches = (r: R, b: R, gap: number) => touches(r, b, gap) ||
+  (r.x <= b.x + b.width + gap && r.x + r.width >= b.x - gap && r.y > b.y + b.height && r.y <= b.y + b.height + gap + headerSlackAt(useCanvasStore.getState().zoom))
 const inside = (a: R, px: number, py: number) => px >= a.x && px <= a.x + a.width && py >= a.y && py <= a.y + a.height
 
 /** Does card `g` show a 3D model on its face? */
@@ -56,12 +65,12 @@ const smallest = (list: FreeNodeData[]) => list.sort((a, b) => a.width * a.heigh
 
 /** The 3D area box `r` lies on (its middle inside), or else docks against
  *  (touching it from outside) — the smallest, for nested ones. */
-export function areaOfBox(r: R, nodes = useFreeNodeStore.getState().nodes, not?: string): { area: FreeNodeData; docked: boolean } | null {
+export function areaOfBox(r: R, nodes = useFreeNodeStore.getState().nodes, not?: string, card = false): { area: FreeNodeData; docked: boolean } | null {
   const list = areas(nodes).filter(a => a.id !== not)
   const on = smallest(list.filter(a => inside(a, r.x + r.width / 2, r.y + r.height / 2)))
   if (on) return { area: on, docked: false }
   const gap = dockGap()
-  const at = smallest(list.filter(a => touches(r, a, gap)))
+  const at = smallest(list.filter(a => (card ? cardTouches : touches)(r, a, gap)))
   return at ? { area: at, docked: true } : null
 }
 
@@ -173,7 +182,7 @@ function linkedHere(id: string, area: FreeNodeData): boolean {
   for (const g of bs.groups) {
     if (g.linkOf !== id || g.pin) continue
     const r = cardBox(g, bs.boards)
-    if (r && areaOfBox(r, undefined)?.area.id === area.id) return true
+    if (r && areaOfBox(r, undefined, undefined, true)?.area.id === area.id) return true
   }
   return false
 }
@@ -182,7 +191,7 @@ function linkedHere(id: string, area: FreeNodeData): boolean {
 export function sceneOf(key: string): { area: FreeNodeData; docked: boolean; box: R } | null {
   const box = boxOfKey(key)
   if (!box) return null
-  const a = areaOfBox(box, undefined, key.startsWith('node:') ? key.slice(5) : undefined)
+  const a = areaOfBox(box, undefined, key.startsWith('node:') ? key.slice(5) : undefined, key.startsWith('card:'))
   // It lay there before the scene opened over it: not in that scene.
   if (a && isUnder(a.area, key)) return null
   if (a && key.startsWith('card:') && linkedHere(key.slice(5), a.area)) return null
@@ -264,7 +273,8 @@ function placeSets(): Map<string, string> {
     const not = key.startsWith('node:') ? key.slice(5) : undefined
     // On a set and under another that has grown over it: the first one's.
     const free = Object.fromEntries(Object.entries(nodes).filter(([, n]) => !isUnder(n, key)))
-    const a = box && (areaOfBox(box, free, not) ?? areaOfBox(box, nodes, not))
+    const card = key.startsWith('card:')
+    const a = box && (areaOfBox(box, free, not, card) ?? areaOfBox(box, nodes, not, card))
     return a ? a.area.id : key.startsWith('card:') ? rowSets().get(key.slice(5))?.area.id ?? null : null
   }
   const off = (a: R, b: R) => Math.hypot(Math.max(a.x - b.x - b.width, b.x - a.x - a.width, 0), Math.max(a.y - b.y - b.height, b.y - a.y - a.height, 0))
@@ -486,12 +496,12 @@ export function dockedCards(was: R, groups: ProjectGroup[], boards: Record<strin
   return groups.filter(g => {
     if (g.pin) return false
     const r = cardBox(g, boards)
-    if (!r || inside(was, r.x + r.width / 2, r.y + r.height / 2) || !touches(r, was, gap) || !cardHoldsModel(g, boards)) return false
+    if (!r || inside(was, r.x + r.width / 2, r.y + r.height / 2) || !cardTouches(r, was, gap) || !cardHoldsModel(g, boards)) return false
     // A master with a linked card of it in this scene stays where it is.
     return !groups.some(l => {
       if (l.linkOf !== g.id || l.pin) return false
       const lr = cardBox(l, boards)
-      return !!lr && (inside(was, lr.x + lr.width / 2, lr.y + lr.height / 2) || touches(lr, was, gap))
+      return !!lr && (inside(was, lr.x + lr.width / 2, lr.y + lr.height / 2) || cardTouches(lr, was, gap))
     })
   })
 }

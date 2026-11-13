@@ -61,6 +61,12 @@ const SLACK_ZOOM = 0.045
  *  reaches this much further down for it, the same at every zoom. */
 export const HEADER_BAND_SLACK = headerExtendCanvasAt(SLACK_ZOOM) - TOUCH_HEADER
 
+/** How much of that slack is left at `zoom`: how much taller the drawn
+ *  header band can still grow, zooming out from here. A card set flush
+ *  under something while zoomed out lies this far below it, at most, as
+ *  drawn at `zoom` (utils/area3dScene: cards docked under a 3D set). */
+export const headerSlackAt = (zoom: number): number => Math.max(0, HEADER_BAND_SLACK - (headerExtendCanvasAt(zoom) - TOUCH_HEADER))
+
 /** A card's rect as touching judges it: its visual rect with the header
  *  band at its own canvas size, so the same at every zoom. Used by the
  *  card-back windows' docking (utils/deckDockDrag, utils/filmShots). */
