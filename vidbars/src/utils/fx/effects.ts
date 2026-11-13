@@ -431,7 +431,10 @@ export const EFFECTS: Record<EffectKind, EffectDef> = {
       { ...P('show', 'Show', 0, 1, 1, 0), names: ['Over picture', 'Alone'] },
       P('spacing', 'Line spacing', 2, 20, 0.1, 6.5), P('weight', 'Stroke weight', 0.3, 4, 0.05, 1.5),
       P('angle', 'Angle', -90, 90, 1, 62), P('wrap', 'Wrap round form', 0, 2, 0.01, 0.65),
-      P('tone1', 'Shade from', 0, 1, 0.01, 0.3), P('default.cross', 'Cross-hatch', 0, 1, 0.01, 1),
+      P('tone1', 'Shade from', 0, 1, 0.01, 0.3),
+      // The tool leaves colours darker than this without dark strokes (on
+      // dark hair or clothes they hardly show); 0 hatches everything.
+      P('dark_lum', 'Skip darks', 0, 0.5, 0.01, 0.2), P('default.cross', 'Cross-hatch', 0, 1, 0.01, 1),
       P('default.light', 'Light strokes', 0, 1, 0.01, 0), P('light_az', 'Light from', 0, 360, 1, 110),
       P('stroke_px', 'Stroke length', 10, 200, 1, 80), P('seed', 'Variation', 0, 9999, 1, 3030),
       P('boil', 'Boil (frames held)', 1, 6, 1, 2),

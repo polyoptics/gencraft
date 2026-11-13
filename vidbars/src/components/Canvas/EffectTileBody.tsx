@@ -172,6 +172,8 @@ export const EffectTileBody: React.FC<{
   const strip = useFxStore(s => (stripKey ? s.strips[stripKey] : undefined))
   /** "Computing depth…", or why a model / tool result is missing. */
   const auxNote = useAuxStore(s => s.byStep[id] ?? '')
+  /** The worker is drawing for this card, or about to (a lit dot on the face). */
+  const drawing = useAuxStore(s => !!s.busy[id])
   /** A Segment card: what it found and how big each is on screen. */
   const found = useAuxStore(s => (kind === 'segment' ? s.subjects[id] : undefined))
   const rows: ParamDef[] = found ? [...def.params, ...subjectRows(found)] : def.params
@@ -347,10 +349,15 @@ export const EffectTileBody: React.FC<{
             it is being hovered. Just right of the on/off, solo and ↑ buttons.
             CONTROL_Z lifts the marks over the nw resize corner the way it
             lifts the rows. */}
-        {(strip?.running || error) && (
+        {(strip?.running || error || drawing) && (
           <div style={{ position: 'absolute', zIndex: CONTROL_Z, top: 1.5 * u, left: 36 * u, display: 'flex', gap: 1.5 * u, fontSize: 7 * u, lineHeight: 1 }}>
             {/* VS15 keeps the warning sign a text glyph, not an emoji. */}
             {error && <span title={error} style={{ color: '#ff9b9b', textShadow: shadow }}>{'⚠︎'}</span>}
+            {/* Lies over the art, so it coming and going moves nothing. */}
+            {drawing && <span data-fx-drawing title="Drawing…" style={{
+              width: 3.2 * u, height: 3.2 * u, borderRadius: '50%', background: 'rgb(255, 184, 48)', alignSelf: 'flex-start',
+              boxShadow: `0 0 ${2 * u}px rgba(255, 184, 48, 0.8)`, animation: 'new-card-pulse 1.1s ease-in-out infinite',
+            }} />}
             {strip?.running && <span title="Working…" style={{ opacity: 0.7 }}>…</span>}
           </div>
         )}
@@ -405,11 +412,13 @@ export const EffectTileBody: React.FC<{
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textShadow: shadow,
         }}>Mixes in the next picture</div>
       )}
-      {def.needs && auxNote && (
+      {/* Its line is always there on a card that can have one, so the
+          note coming and going ("Computing hatching…") shifts nothing. */}
+      {def.needs && (
         <div title={auxNote} style={{
           fontSize: 5.5 * u, opacity: 0.75, textAlign: 'center', marginTop: 0.5 * u, flex: '0 0 auto',
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textShadow: shadow,
-        }}>{auxNote}</div>
+        }}>{auxNote || '\u00a0'}</div>
       )}
 
       {/* ── Values: each row IS its slider. The fill shows the value; press

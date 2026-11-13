@@ -54,7 +54,7 @@ export const LINE_SIDE = 1400
 export const LINE_DIALS = ['contour_w', 'detail', 'interior_w', 'rough', 'rough_opacity', 'wobble', 'dry', 'breaks', 'restroke', 'seed', 'boil']
 /** The hatch cards' sliders that are their look's own dials. */
 export const HATCH_DIALS: Partial<Record<EffectKind, string[]>> = {
-  formhatch: ['spacing', 'weight', 'angle', 'wrap', 'tone1', 'default.cross', 'default.light', 'light_az', 'stroke_px', 'seed', 'boil'],
+  formhatch: ['spacing', 'weight', 'angle', 'wrap', 'tone1', 'dark_lum', 'default.cross', 'default.light', 'light_az', 'stroke_px', 'seed', 'boil'],
   bghatch: ['spacing', 'weight', 'opacity', 'far_opacity', 'far_cut', 'paint_hi', 'cross', 'pencil', 'stroke_px', 'seed', 'boil'],
 }
 /** The drawing-look cards: which sketchLook look each runs (electron
@@ -109,6 +109,10 @@ let drawSide = 1400
 
 interface Req {
   key: string; what: string
+  /** A live preview's ask: the card and picture it is for. A newer ask for
+   *  the same slot replaces one still waiting, and while it is being made
+   *  the slot's last result goes on showing. */
+  slot?: string
   /** A Combine card's mask for look row `row` (0 = the first look row). */
   row?: number
   /** The Segment card this mask is (its card shows what it found). */
@@ -125,7 +129,51 @@ const engineOf = (s: AuxStep | undefined): Engine => (s?.params?.engine ?? 0) >=
 // Results by what they are made from; a few dozen pictures' worth.
 const kept = new Map<string, Kept>()
 const asked = new Map<string, Promise<void>>()
-let queue: Promise<unknown> = Promise.resolve()
+/** Per slot, the key of the result it showed last (shown while a newer one is made). */
+const lastShown = new Map<string, string>()
+
+// The worker draws one thing at a time. What waits here is the page's own
+// line for it: a live preview's ask that a newer one has replaced (a slider
+// moved on) is taken out before it starts, so the worker never draws a
+// value nobody is looking at any more. `firm`: a Run, a save or a clip is
+// waiting on it; it is never taken out.
+interface Job { key: string; slot?: string; owner?: string; firm: boolean; run: () => Promise<void>; done: () => void }
+const waiting: Job[] = []
+let current: Job | null = null
+
+/** The cards with something waiting or being made (their faces show it). */
+function publishBusy() {
+  const busy: Record<string, true> = {}
+  for (const j of current ? [current, ...waiting] : waiting) if (j.owner) busy[j.owner] = true
+  const was = useAuxStore.getState().busy
+  const a = Object.keys(busy), b = Object.keys(was)
+  if (a.length !== b.length || a.some(k => !was[k])) useAuxStore.setState({ busy })
+}
+
+function pump() {
+  if (current) return
+  const j = waiting.shift()
+  if (!j) { publishBusy(); return }
+  current = j
+  publishBusy()
+  // (Started a tick later: an ask is still being set up when it is first in line.)
+  void Promise.resolve().then(() => j.run()).catch(() => {}).finally(() => { current = null; j.done(); pump() })
+}
+
+function enqueue(job: Omit<Job, 'done'>): Promise<void> {
+  return new Promise<void>(resolve => {
+    if (job.slot) for (let n = waiting.length - 1; n >= 0; n--) {
+      const w = waiting[n]
+      if (w.slot !== job.slot || w.firm || w.key === job.key) continue
+      waiting.splice(n, 1)
+      asked.delete(w.key)
+      w.done()
+    }
+    waiting.push({ ...job, done: resolve })
+    pump()
+    publishBusy()
+  })
+}
 
 /** A clip being baked (utils/fx/clipRun): one chunk of its frames, which
  *  the worker draws as ONE sequence (so boil, optical flow, temporal
@@ -156,7 +204,9 @@ export function setClipChunk(c: { id: string; start: number; count: number; tota
 
 /** Per step: what its card should say ('' = nothing), and a counter that
  *  ticks whenever a result lands (live strips re-run on it). */
-export const useAuxStore = create<{ version: number; byStep: Record<string, string>; subjects: Record<string, Record<string, number>> }>(() => ({ version: 0, byStep: {}, subjects: {} }))
+export const useAuxStore = create<{ version: number; byStep: Record<string, string>; subjects: Record<string, Record<string, number>>
+  /** The cards the worker is drawing for, or about to (by step id). */
+  busy: Record<string, true> }>(() => ({ version: 0, byStep: {}, subjects: {}, busy: {} }))
 
 /** What a Segment card found, and each thing's measured scale on screen. */
 function setSubjects(segId: string, scales: Record<string, number>) {
@@ -295,6 +345,10 @@ function requests(steps: AuxStep[], i: number, url: string): Req[] | null {
     const seg = segmentFor(steps, i), scale = objects ? scaleOf(seg) : undefined
     // The Segment card's "Spacing follows scale": look_formhatch's hatch_scale.
     if (s.effect === 'formhatch' && typeof seg?.params?.spacing_follow === 'number') dials.hatch_scale = seg.params.spacing_follow
+    // The film's tool gives a subject that is dark overall (dark hair, dark
+    // clothes) no hatching at all, as it would a black rifle. A card hatches
+    // what it is given: how dark a colour may be is its own slider (dark_lum).
+    if (s.effect === 'formhatch') dials.dark_elem = 0
     return [{ key: `${s.effect}|${src}|${JSON.stringify(objects ?? null)}|${whole ? 'whole' : engine}|${JSON.stringify(dials)}|${JSON.stringify(scale)}|${drawSide}`,
       what: s.effect === 'formhatch' ? 'hatching' : 'background hatching',
       job: { op: s.effect, objects, whole, dials, side: drawSide, engine, scale } }, ...inputMask(steps, i, src)]
@@ -354,13 +408,18 @@ function requests(steps: AuxStep[], i: number, url: string): Req[] | null {
   return []
 }
 
+const pictures = new WeakMap<HTMLImageElement, string>()
 function pictureOf(img: HTMLImageElement): string {
+  const hit = pictures.get(img)
+  if (hit) return hit
   const k = Math.min(1, 4096 / Math.max(img.naturalWidth, img.naturalHeight))
   const c = document.createElement('canvas')
   c.width = Math.round(img.naturalWidth * k)
   c.height = Math.round(img.naturalHeight * k)
   c.getContext('2d')!.drawImage(img, 0, 0, c.width, c.height)
-  return c.toDataURL('image/png')
+  const url = c.toDataURL('image/png')
+  pictures.set(img, url)
+  return url
 }
 
 function decode(url: string | undefined): Promise<HTMLImageElement | null> {
@@ -370,25 +429,34 @@ function decode(url: string | undefined): Promise<HTMLImageElement | null> {
   return img.decode().then(() => img, () => null)
 }
 
-function ask(r: Req, img: HTMLImageElement): Promise<void> {
+function ask(r: Req, img: HTMLImageElement, firm: boolean, owner: string): Promise<void> {
   const hit = asked.get(r.key)
-  if (hit) return hit
-  const p = (queue = queue.then(async () => {
-    const run = window.vidbarsDesktop?.sketchRun
-    if (!run) { keep(r.key, { error: 'Runs in the VidBars desktop app' }); return }
-    const res = await run({ ...r.job, frames: [pictureOf(img)] })
-    if (res.error) { console.warn(`[fx] ${r.what}:`, res.error, res.log); keep(r.key, { error: res.error }); return }
-    if (r.job.op === 'depth') keep(r.key, { imgs: { depth: await decode(res.frames?.[0] as string | undefined) } })
-    else if (r.job.op === 'segment') keep(r.key, { imgs: { mask: await decode(res.objects?.figure?.[0]) }, scales: (res as { scales?: Record<string, number> }).scales })
-    else {
-      // A drawing: its layers by name (lines: outline, inside, paper,
-      // pencil; formhatch: a k b h; bghatch: a k p).
-      const f = (res.frames?.[0] ?? {}) as Record<string, string>
-      const imgs = Object.fromEntries(await Promise.all(Object.entries(f).map(async ([n, u]) => [n, await decode(u)] as const)))
-      keep(r.key, { imgs, colors: res.colors as unknown as LineColors })
+  if (hit) {
+    if (firm) for (const w of waiting) if (w.key === r.key) w.firm = true
+    return hit
+  }
+  const p: Promise<void> = enqueue({ key: r.key, slot: r.slot, owner, firm, run: async () => {
+    try {
+      const run = window.vidbarsDesktop?.sketchRun
+      if (!run) { keep(r.key, { error: 'Runs in the VidBars desktop app' }); return }
+      const res = await run({ ...r.job, frames: [pictureOf(img)] })
+      if (res.error) { console.warn(`[fx] ${r.what}:`, res.error, res.log); keep(r.key, { error: res.error }); return }
+      if (r.job.op === 'depth') keep(r.key, { imgs: { depth: await decode(res.frames?.[0] as string | undefined) } })
+      else if (r.job.op === 'segment') keep(r.key, { imgs: { mask: await decode(res.objects?.figure?.[0]) }, scales: (res as { scales?: Record<string, number> }).scales })
+      else {
+        // A drawing: its layers by name (lines: outline, inside, paper,
+        // pencil; formhatch: a k b h; bghatch: a k p).
+        const f = (res.frames?.[0] ?? {}) as Record<string, string>
+        const imgs = Object.fromEntries(await Promise.all(Object.entries(f).map(async ([n, u]) => [n, await decode(u)] as const)))
+        keep(r.key, { imgs, colors: res.colors as unknown as LineColors })
+      }
+    } catch (err) {
+      keep(r.key, { error: String((err as Error)?.message ?? err) })
+    } finally {
+      if (asked.get(r.key) === p) asked.delete(r.key)
+      useAuxStore.setState(s => ({ version: s.version + 1 }))
     }
-  }).catch(err => keep(r.key, { error: String(err?.message ?? err) }))
-    .finally(() => { asked.delete(r.key); useAuxStore.setState(s => ({ version: s.version + 1 })) }))
+  } })
   asked.set(r.key, p)
   return p
 }
@@ -404,7 +472,7 @@ function askChunk(r: Req, stepId: string): Promise<void> {
   }
   let p = chunkFiles.has(r.key) ? Promise.resolve() : asked.get(whole)
   if (!p) {
-    p = (queue = queue.then(async () => {
+    p = enqueue({ key: whole, owner: stepId, firm: true, run: () => (async () => {
       const run = window.vidbarsDesktop?.sketchRun
       if (!run) { all({ error: 'Runs in the VidBars desktop app' }); return }
       say(stepId, `Drawing frames ${c.start + 1}–${c.start + c.count} of ${c.total}…`)
@@ -418,7 +486,7 @@ function askChunk(r: Req, stepId: string): Promise<void> {
           : (res.frames?.[j] ?? {}) as Record<string, string>
         chunkFiles.set(`${whole}#${j}`, { files, colors: res.colors as unknown as LineColors, scales })
       }
-    }).catch(err => all({ error: String(err?.message ?? err) })))
+    })().catch(err => all({ error: String(err?.message ?? err) })) })
     asked.set(whole, p)
     void p.finally(() => asked.delete(whole))
   }
@@ -464,8 +532,10 @@ export async function prepareAux(steps: AuxStep[], sources: { url: string; img: 
     for (let i = 0; i < steps.length; i++) {
       if (!isAuxKind(steps[i].effect) && !steps[i].inputs?.length) continue
       const rs = requests(steps, i, url)
+      // A live preview: each ask stands for its card's drawing of this picture.
+      if (!wait) for (const r of rs ?? []) r.slot = `${steps[i].id}|${r.what}|${r.row ?? ''}|${hash(url)}`
       plan.reqs.set(planKey(i, url), rs)
-      for (const r of rs ?? []) if (!kept.has(r.key)) plan.pending.push(ask(r, img))
+      for (const r of rs ?? []) if (!kept.has(r.key)) plan.pending.push(ask(r, img, wait, steps[i].id))
     }
   }
   if (wait) await Promise.all(plan.pending)
@@ -493,11 +563,26 @@ export function auxFor(e: FxEngine, plan: AuxPlan, steps: AuxStep[], i: number, 
   if (rs === undefined) return {}
   if (rs === null) return null
   const aux: Aux = {}
+  let pending = false
   for (const r of rs) {
-    const k = kept.get(r.key)
-    if (!k) { say(s.id, `Computing ${r.what}…`); releaseAux(e, aux); return null }
+    let k = kept.get(r.key)
+    if (k) {
+      // Used: it is not the one to go when the kept results are full.
+      kept.delete(r.key)
+      kept.set(r.key, k)
+      if (r.slot && !('error' in k)) lastShown.set(r.slot, r.key)
+    } else {
+      // Being made: the card's last drawing goes on showing until it lands
+      // (the picture never drops back to having none while a slider moves).
+      const old = r.slot ? kept.get(lastShown.get(r.slot) ?? '') : undefined
+      say(s.id, `Computing ${r.what}…`)
+      if (!old || 'error' in old) { releaseAux(e, aux); return null }
+      k = old
+      pending = true
+    }
     if ('error' in k) { say(s.id, `${r.what[0].toUpperCase()}${r.what.slice(1)}: ${k.error}`); releaseAux(e, aux); return null }
-    const tex = (n: string) => (k.imgs[n] ? fit(e, k.imgs[n]!, cur) : black(e, cur))
+    const imgs = k.imgs
+    const tex = (n: string) => (imgs[n] ? fit(e, imgs[n]!, cur) : black(e, cur))
     if (r.row !== undefined) { (aux.rowMasks ??= [])[r.row] = tex('mask'); continue }
     if (r.segId && k.scales) setSubjects(r.segId, k.scales)
     if (r.quiet) continue
@@ -528,7 +613,7 @@ export function auxFor(e: FxEngine, plan: AuxPlan, steps: AuxStep[], i: number, 
       colors: k.colors!, mix: lineSetup(steps, i).mix,
     }
   }
-  if (s.effect !== 'linemix' && s.effect !== 'shademix' && s.effect !== 'combine') say(s.id, '')
+  if (!pending && s.effect !== 'linemix' && s.effect !== 'shademix' && s.effect !== 'combine') say(s.id, '')
   return aux
 }
 

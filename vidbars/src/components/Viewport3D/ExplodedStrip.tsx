@@ -19,6 +19,7 @@ import { useFreeNodeStore, type FreeNodeData } from '../../store/freeNodeStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { isRail, railMembers, type RailSlot } from '../../utils/rail'
 import { loadImage, runChain, type ChainItem } from '../../utils/fx/chain'
+import { stripNeedsAux, useAuxStore } from '../../utils/fx/aiEffects'
 import { railComboAt, railFaceCombo } from '../../utils/fx/railChain'
 import { EFFECTS, knownKind } from '../../utils/fx/effects'
 import { LIVE_SIDE } from '../../hooks/useFxStrips'
@@ -230,8 +231,12 @@ const StripLayers: React.FC<{ railId: string; rect: { x: number; y: number; widt
   const soloed = effects.find(e => e.solo)?.id ?? null
   const fan = useTiltStore(layerFan)
 
-  // Re-baked when what the layers are made of changes; not for a solo.
+  // Re-baked when what the layers are made of changes; not for a solo. And
+  // when a drawing a card was waiting for lands (aiEffects): the bake made
+  // meanwhile shows that card's last drawing, or none.
+  const auxVersion = useAuxStore(s => s.version)
   const sig = JSON.stringify((items ?? []).map(it => (it.kind === 'effect' ? { ...it, solo: false } : it)))
+    + (items && stripNeedsAux(items) ? `#${auxVersion}` : '')
   const [baked, setBaked] = useState<Baked | null>(null)
   const latest = useRef(items)
   latest.current = items
@@ -519,7 +524,10 @@ export const PoppedLayerSheets: React.FC<{ windowId: string }> = ({ windowId }) 
   }, [nodes, rail, railId])
   const effects = (items ?? []).filter((it): it is EffectItem => it.kind === 'effect')
   const any = !!sides && effects.some(e => sides[e.id])
-  const sig = any ? JSON.stringify((items ?? []).map(it => (it.kind === 'effect' ? { ...it, solo: false } : it))) : ''
+  // (A drawing landing re-bakes too, as for the layers in depth.)
+  const auxVersion = useAuxStore(s => s.version)
+  const sig = any ? JSON.stringify((items ?? []).map(it => (it.kind === 'effect' ? { ...it, solo: false } : it)))
+    + (items && stripNeedsAux(items) ? `#${auxVersion}` : '') : ''
   const [baked, setBaked] = useState<Baked | null>(null)
   const latest = useRef(items)
   latest.current = items
