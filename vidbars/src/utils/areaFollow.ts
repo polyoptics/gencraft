@@ -10,7 +10,7 @@ import { useFreeNodeStore, type FreeNodeData } from '../store/freeNodeStore'
 import { useBoardsStore } from '../store/boardsStore'
 import { useViewport3DStore } from '../store/viewport3dStore'
 import { useNotesStore } from '../store/notesStore'
-import { isUnder, laying, lyingIn, resizing, setCards } from './area3dScene'
+import { carrying, isUnder, laying, lyingIn, resizing, rowCards, selfMoved, setCards } from './area3dScene'
 import { isUndoRestoring } from '../store/undoCoordinator'
 
 type R = { x: number; y: number; width: number; height: number }
@@ -73,7 +73,16 @@ if (typeof window !== 'undefined' && !(window as unknown as { __areaFollow?: boo
         const bs = useBoardsStore.getState()
         // On it, and the model cards docked along its sides (utils/area3dScene).
         const cards = setCards({ x: was.x, y: was.y, width: was.width, height: was.height, under: a.under }, bs.groups, bs.boards)
-        if (cards.length) bs.setGroupPosBatch(cards.map(g => ({ groupId: g.id, originY: g.originY + dy, originX: g.originX + dx })))
+        // Its own card and the cards with it, docked under it (Brian
+        // 2026-11-13: the set never leaves them). Not one that moved by
+        // itself (the set follows its card), nor one dragged with the set.
+        const both = s.selectedIds.includes(a.id) ? new Set(bs.selectedGroupIds) : null
+        for (const g of rowCards(a, was)) if (!cards.includes(g) && !selfMoved.has(g.id) && !both?.has(g.id)) cards.push(g)
+        const held = carrying.on
+        carrying.on = true
+        try {
+          if (cards.length) bs.setGroupPosBatch(cards.filter(g => !selfMoved.has(g.id)).map(g => ({ groupId: g.id, originY: g.originY + dy, originX: g.originX + dx })))
+        } finally { carrying.on = held }
         const v3 = useViewport3DStore.getState()
         for (const w of Object.values(v3.windows)) {
           if (!isUnder(a, `viewer:${w.id}`) && inside(was, w.x + w.width / 2, w.y + w.height / 2)) v3.updateWindow(w.id, { x: w.x + dx, y: w.y + dy })

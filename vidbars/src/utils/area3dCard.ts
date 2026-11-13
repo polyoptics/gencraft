@@ -21,7 +21,7 @@ import { useFreeNodeStore, type FreeNodeData } from '../store/freeNodeStore'
 import { useCanvasStore } from '../store/canvasStore'
 import { isUndoRestoring, useUndoCoordinator } from '../store/undoCoordinator'
 import { useModelScaleStore, type ScenePlace, type CameraLens, type PieceView } from '../store/tiltStore'
-import { cardBox, isUnder, laying, lyingIn, setCards } from './area3dScene'
+import { cardBox, carrying, docksUnder, isUnder, laying, lyingIn, selfMoved, setCards } from './area3dScene'
 import { cardFaceSize, createTextCard } from './cardGrid'
 import { makeLinkedCard, masterOf } from './linkedCards'
 import { useNotesStore, useNotesUi, newNoteId, type Curve, type PathRider } from '../store/notesStore'
@@ -259,6 +259,10 @@ export function bundleArea3dCard(nodeId: string): string | null {
   const size = cardFaceSize()
   const cardId = createTextCard({ cx: a.x + size.w / 2, cy: a.y + a.height + size.h * 0.75 }, { title: '3D set' })
   useBoardsStore.getState().setCardsType([cardId], 'area3d')
+  // Flush under the set, as it is drawn (its header band and all).
+  const made = useBoardsStore.getState().groups.find(g => g.id === cardId)
+  const box = made && cardBox(made)
+  if (made && box) useBoardsStore.getState().setGroupPosBatch([{ groupId: cardId, originX: made.originX + (a.x - box.x), originY: made.originY + (a.y + a.height - box.y) }])
   useFreeNodeStore.getState().updateFreeNode(nodeId, { areaCard: cardId })
   return cardId
 }
@@ -321,7 +325,18 @@ function freshMat(card: ProjectGroup): Area3dData {
  *  dashed outline shown before it opens (Brian 2026-11-10). */
 export function area3dSpot(card: ProjectGroup): { x: number; y: number; w: number; h: number } {
   const m = (card.area3d ?? freshMat(card)).mat
-  return { x: m.x, y: m.y, w: m.width, h: m.height }
+  return { ...matOver(card, m), w: m.width, h: m.height }
+}
+
+/** Where a 3D set comes out of its card: its card is always docked under
+ *  it (Brian 2026-11-13: "the card should always be docked on the bottom
+ *  of the 3D set area"). Where it was kept (`m`) when the card is docked
+ *  under that; else straight over the card, its bottom-left corner on the
+ *  card's top-left. The set goes to the card: the card is never moved. */
+function matOver(card: ProjectGroup, m: { x: number; y: number; width: number; height: number }): { x: number; y: number } {
+  const box = cardBox(card)
+  if (!box || docksUnder(box, m)) return { x: m.x, y: m.y }
+  return { x: box.x, y: box.y - m.height }
 }
 
 /** Is model `key` ('card:<id>' / 'node:<id>') still on the canvas? */
@@ -336,13 +351,21 @@ export function showArea3d(cardId: string, quiet = false, spot?: { x: number; y:
   if (!card || area3dOutOf(cardId)) return null
   if (!quiet) useUndoCoordinator.getState().checkpoint()
   const d0 = card.area3d ?? freshMat(card)
-  // Laid out anew where the one before stood (a state turned).
-  const data = spot ? { ...d0, mat: { ...d0.mat, x: spot.x, y: spot.y } } : d0
+  // Laid out anew where the one before stood (a state turned); else over
+  // its card (matOver).
+  const data = { ...d0, mat: { ...d0.mat, ...(spot ?? matOver(card, d0.mat)) } }
   const fs = useFreeNodeStore.getState()
   const m = data.mat
   // What already lies there stays out of the scene (Brian 2026-11-10); laid
   // out anew, what was under it before still is.
-  const below = under ?? lyingIn(m, cardId)
+  // (Not the cards docked under it: those are with the set, utils/area3dScene rowCards.)
+  const groups0 = useBoardsStore.getState().groups
+  const docked = (k: string) => {
+    const g = k.startsWith('card:') ? groups0.find(x => x.id === k.slice(5)) : undefined
+    const r = g && !g.linkOf ? cardBox(g) : null
+    return !!r && docksUnder(r, m)
+  }
+  const below = under ?? lyingIn(m, cardId).filter(k => !docked(k))
   let id = ''
   laying.on = true
   try {
@@ -519,36 +542,56 @@ function ride(rs: Rider[], to: { x: number; y: number }, out: boolean, done: () 
   hide.textContent = `${all.map(x => `${x.q}:not([data-a3-riding])`).join(', ')} { opacity: 0 !important; }`
   if (out && all.length) document.head.appendChild(hide)
   const anims: Animation[] = []
+  const rode: HTMLElement[] = []
   const clock = document.documentElement.animate([], { duration: MOTION_MS })
   let over = false
-  const catchUp = () => {
-    const t = Number(clock.currentTime ?? 0)
-    for (const { r, q } of all) {
-      for (const el of document.querySelectorAll<HTMLElement>(q)) {
-        if (el.hasAttribute('data-a3-riding')) continue
-        el.setAttribute('data-a3-riding', '')
-        const f = frames(r, el)
-        const how = { duration: MOTION_MS, easing: 'cubic-bezier(0.55, 0, 0.25, 1)', fill: 'forwards' } as const
-        const a = el.animate(f, { ...how, composite: 'add' })
-        const b = el.animate(fade, { ...how, easing: 'linear' })
-        a.currentTime = t; b.currentTime = t
-        anims.push(a, b)
-      }
-    }
-    if (!over) requestAnimationFrame(catchUp)
-  }
-  catchUp()
+  // Whatever goes wrong on the way, the motion ends and what it hid or
+  // faded is drawn as it is again (Brian 2026-11-13: after a set was
+  // opened and closed a few times its ground was not there: a motion that
+  // never ended left it faded out, and no other could begin).
   const end = () => {
+    if (over) return
     over = true
-    done()
+    clearTimeout(late)
+    try { done() } catch (err) { console.error('[area3dCard] the fold or show after the motion failed', err) }
     // A frame later (what folded is gone by then): back to as drawn.
-    requestAnimationFrame(() => {
+    const back = () => {
       hide.remove()
-      anims.forEach(x => x.cancel())
-      document.querySelectorAll('[data-a3-riding]').forEach(e => e.removeAttribute('data-a3-riding'))
-    })
+      anims.forEach(x => { try { x.cancel() } catch { /* gone */ } })
+      // Its own only: another motion may have begun by now.
+      rode.forEach(e => e.removeAttribute('data-a3-riding'))
+    }
+    requestAnimationFrame(back)
+    // (No frame comes while the window is hidden.)
+    setTimeout(back, 250)
   }
   clock.finished.then(end, end)
+  const late = setTimeout(end, MOTION_MS + 600)
+  const catchUp = () => {
+    if (over) return
+    try {
+      const t = Number(clock.currentTime ?? 0)
+      for (const { r, q } of all) {
+        for (const el of document.querySelectorAll<HTMLElement>(q)) {
+          if (el.hasAttribute('data-a3-riding')) continue
+          el.setAttribute('data-a3-riding', '')
+          rode.push(el)
+          const f = frames(r, el)
+          const how = { duration: MOTION_MS, easing: 'cubic-bezier(0.55, 0, 0.25, 1)', fill: 'forwards' } as const
+          const a = el.animate(f, { ...how, composite: 'add' })
+          const b = el.animate(fade, { ...how, easing: 'linear' })
+          anims.push(a, b)
+          a.currentTime = t; b.currentTime = t
+        }
+      }
+    } catch (err) {
+      console.error('[area3dCard] the fold or show motion failed', err)
+      end()
+      return
+    }
+    requestAnimationFrame(catchUp)
+  }
+  catchUp()
 }
 
 /** Fold 3D area `nodeId` into its card, with the motion; `then` runs
@@ -566,7 +609,15 @@ export function foldArea3dMoving(nodeId: string, then?: () => void): void {
   const ui = useNotesUi.getState()
   if (ui.selected.some(id => mine.has(id))) useNotesUi.setState({ selected: ui.selected.filter(id => !mine.has(id)) })
   const fit = card ? fitInto(a, card) : Math.min(size.w / a.width, size.h / a.height)
-  ride(riders(a), to, false, () => { moving = false; foldArea3d(nodeId); then?.() }, fit)
+  try {
+    ride(riders(a), to, false, () => { moving = false; foldArea3d(nodeId); then?.() }, fit)
+  } catch (err) {
+    // No motion: folded all the same.
+    console.error('[area3dCard] the fold motion could not begin', err)
+    moving = false
+    foldArea3d(nodeId)
+    then?.()
+  }
 }
 
 /** Show card `cardId`'s 3D area, with the motion. */
@@ -577,7 +628,13 @@ export function showArea3dMoving(cardId: string): void {
   const card = useBoardsStore.getState().groups.find(g => g.id === cardId)
   if (!a || !card) return
   moving = true
-  ride(riders(a), middleOf(card), true, () => { moving = false }, fitInto(a, card))
+  try {
+    ride(riders(a), middleOf(card), true, () => { moving = false }, fitInto(a, card))
+  } catch (err) {
+    // No motion: it is out all the same.
+    console.error('[area3dCard] the show motion could not begin', err)
+    moving = false
+  }
 }
 
 /** Show or fold card `cardId`'s 3D area. */
@@ -672,8 +729,10 @@ export function startArea3dFollow(): () => void {
   }
   let last = seen(useBoardsStore.getState().groups)
   let busy = false
-  return useBoardsStore.subscribe(s => {
+  return useBoardsStore.subscribe((s, prev) => {
     if (busy) return
+    // The set is taking its cards along: its card is not leading it.
+    if (carrying.on) { last = seen(s.groups); return }
     const now = seen(s.groups)
     const moves: { id: string; dx: number; dy: number }[] = []
     const relay: string[] = []
@@ -715,11 +774,32 @@ export function startArea3dFollow(): () => void {
         const fs = useFreeNodeStore.getState()
         const n = fs.nodes[out]
         // The card lying on its own mat moves with it already.
-        if (!n || fs.selectedIds.includes(out)) continue
+        if (!n) continue
+        if (fs.selectedIds.includes(out)) {
+          // Selected too: a drag of both moves both. If only the card went
+          // (the set selected, its card dragged alone), the set goes after
+          // it all the same: they are never apart (Brian 2026-11-13).
+          const x0 = n.x, y0 = n.y, dx = mv.dx, dy = mv.dy
+          queueMicrotask(() => {
+            const f2 = useFreeNodeStore.getState(), n2 = f2.nodes[out]
+            if (!n2 || n2.x !== x0 || n2.y !== y0 || isUndoRestoring()) return
+            selfMoved.clear()
+            selfMoved.add(mv.id)
+            try { f2.moveFreeNode(out, dx, dy) } finally { selfMoved.clear() }
+          })
+          continue
+        }
         const g = useBoardsStore.getState().groups.find(x => x.id === mv.id)
         const r = g && cardBox(g)
         if (r && inside(n, r.x + r.width / 2 - mv.dx, r.y + r.height / 2 - mv.dy)) continue
-        fs.moveFreeNode(out, mv.dx, mv.dy)
+        // The cards that moved in this same change (the set's card, and any
+        // dragged with it) have moved: the set takes the others along.
+        selfMoved.clear()
+        if (prev.groups !== s.groups) {
+          const was = new Map(prev.groups.map(q => [q.id, q]))
+          for (const q of s.groups) { const p = was.get(q.id); if (p && (p.originX !== q.originX || p.originY !== q.originY)) selfMoved.add(q.id) }
+        }
+        try { fs.moveFreeNode(out, mv.dx, mv.dy) } finally { selfMoved.clear() }
       } else {
         useBoardsStore.setState(st => ({
           groups: st.groups.map(g => (g.id === mv.id && g.area3d

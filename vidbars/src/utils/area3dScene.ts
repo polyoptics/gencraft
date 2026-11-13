@@ -40,6 +40,8 @@ const touches = (a: R, b: R, gap: number) =>
  *  same at every zoom (as under a card-back window, HEADER_BAND_SLACK). */
 const cardTouches = (r: R, b: R, gap: number) => touches(r, b, gap) ||
   (r.x <= b.x + b.width + gap && r.x + r.width >= b.x - gap && r.y > b.y + b.height && r.y <= b.y + b.height + gap + headerSlackAt(useCanvasStore.getState().zoom))
+/** Is a CARD's box `r` docked under `b`: along its bottom, from below? */
+export const docksUnder = (r: R, b: R): boolean => r.y + r.height / 2 > b.y + b.height && cardTouches(r, b, dockGap())
 const inside = (a: R, px: number, py: number) => px >= a.x && px <= a.x + a.width && py >= a.y && py <= a.y + a.height
 
 /** Does card `g` show a 3D model on its face? */
@@ -122,11 +124,47 @@ export function lyingIn(m: R, notCard?: string, notNode?: string): string[] {
  *  its ground covers is worked out there, not by the sweep (areaFollow). */
 export const laying = { on: false }
 
+/** While a 3D set is taking its cards along (moved: areaFollow; an edge
+ *  pulled: holdSets), they are not moving by themselves: its card moving
+ *  then does not move the set in turn (area3dCard startArea3dFollow). */
+export const carrying = { on: false }
+/** Cards that moved by themselves in the change being followed (a drag of
+ *  the set's card takes the set along): the set does not move those again. */
+export const selfMoved = new Set<string>()
+
 /** The cards in a row with a 3D set's card, while its set is out (Brian
  *  2026-11-10: the set is a deck; a model card or deck attached to its
  *  card is in the set, and its model stands in the set's view). By card
  *  id, the set's ground. Worked out once for each state of the canvas. */
 type RowSpot = { area: FreeNodeData; i: number; n: number }
+
+/** 3D set `a`'s card and the cards with it (Brian 2026-11-13: a set and
+ *  its card are never apart, and any card docked under the set is with
+ *  it till it is dragged off by hand): its card first, then every card
+ *  docked along the set's bottom (any kind; not a linked card, which is
+ *  the set's by its layout, nor what the set opened over), and the cards
+ *  in a row with those. `box`: the set's box to go by (where it was, as it
+ *  moves). `taken`: cards another set has. */
+export function rowCards(a: FreeNodeData, box: R = a, taken?: (id: string) => boolean): ProjectGroup[] {
+  const bs = useBoardsStore.getState(), zoom = useCanvasStore.getState().zoom
+  const seen = bs.groups.filter(g => !g.pin && !isHiddenDeckMember(g))
+  const card = seen.find(g => g.id === a.areaCard)
+  if (!card) return []
+  const apart = (p: ProjectGroup, q: ProjectGroup) => !!p.rowUnder?.includes(q.id) || !!q.rowUnder?.includes(p.id)
+  const row = [card]
+  for (const g of seen) {
+    if (row.includes(g) || g.linkOf || taken?.(g.id) || apart(g, card) || isUnder(a, `card:${g.id}`)) continue
+    const r = cardBox(g, bs.boards)
+    if (r && docksUnder(r, box)) row.push(g)
+  }
+  for (let i = 0; i < row.length; i++) {
+    for (const g of seen) {
+      if (row.includes(g) || taken?.(g.id) || apart(g, row[i]) || !cardsTouch(g, row[i], bs.boards, zoom)) continue
+      row.push(g)
+    }
+  }
+  return row
+}
 let rowMemo: { groups: unknown; boards: unknown; nodes: unknown; zoom: number; of: Map<string, RowSpot> } | null = null
 function rowSets(): Map<string, RowSpot> {
   const bs = useBoardsStore.getState(), nodes = useFreeNodeStore.getState().nodes, zoom = useCanvasStore.getState().zoom
@@ -134,18 +172,9 @@ function rowSets(): Map<string, RowSpot> {
   const of = new Map<string, RowSpot>()
   const outs = areas(nodes).filter(a => a.areaCard)
   if (outs.length) {
-    const seen = bs.groups.filter(g => !g.pin && !isHiddenDeckMember(g))
-    const apart = (a: ProjectGroup, b: ProjectGroup) => !!a.rowUnder?.includes(b.id) || !!b.rowUnder?.includes(a.id)
     for (const a of outs) {
-      const card = seen.find(g => g.id === a.areaCard)
-      if (!card) continue
-      const row = [card]
-      for (let i = 0; i < row.length; i++) {
-        for (const g of seen) {
-          if (row.includes(g) || of.has(g.id) || apart(g, row[i]) || !cardsTouch(g, row[i], bs.boards, zoom)) continue
-          row.push(g)
-        }
-      }
+      const row = rowCards(a, a, id => of.has(id))
+      if (!row.length) continue
       // Each its turn along the set's front, for a model never placed.
       const mine: string[] = []
       for (const g of row.slice(1)) mine.push(g.id)
@@ -350,6 +379,8 @@ export function holdSets(ids: string[], spread = false): { step: () => void; end
     // stands in it.
     const own = new Set(lyingIn(a, a.areaCard, a.id))
     for (const [id, row] of rowSets()) if (row.area.id === a.id) own.add(`card:${id}`)
+    // Its own card, docked under it: with the edge it lies along.
+    if (a.areaCard) own.add(`card:${a.areaCard}`)
     for (const n of Object.values(all)) {
       const key = `node:${n.id}`
       if (n.type === 'model' && !n.pin && standsIn(key) && sceneOf(key)?.area.id === a.id) own.add(key)
@@ -467,7 +498,11 @@ export function holdSets(ids: string[], spread = false): { step: () => void; end
         // Past an edge: as far past it as it was. Between the edges: spread, or where it was.
         const go = (v: number, lo0: number, len0: number, lo: number, len: number, f: number) =>
           v < lo0 ? lo - lo0 : v > lo0 + len0 ? lo + len - lo0 - len0 : spread ? lo + (v - lo0) * f - v : 0
-        for (const r of riders.get(a0.id) ?? []) r.to(go(r.x, a0.x, a0.width, a.x, a.width, fx), go(r.y, a0.y, a0.height, a.y, a.height, fy), fx, fy)
+        const was = carrying.on
+        carrying.on = true
+        try {
+          for (const r of riders.get(a0.id) ?? []) r.to(go(r.x, a0.x, a0.width, a.x, a.width, fx), go(r.y, a0.y, a0.height, a.y, a.height, fy), fx, fy)
+        } finally { carrying.on = was }
       }
     },
     end: () => { for (const a of sets) resizing.delete(a.id) },
@@ -493,8 +528,12 @@ export function setCards(was: R & { under?: string[] }, groups: ProjectGroup[], 
 /** Model cards docked along area `was`'s sides (not on it). */
 export function dockedCards(was: R, groups: ProjectGroup[], boards: Record<string, BoardData>): ProjectGroup[] {
   const gap = dockGap()
+  // A set's own card and the cards with it (rowCards) are with the set as
+  // they are: never folded into it as its layout's cards are.
+  const rows = rowSets()
+  const setCardIds = new Set(areas(useFreeNodeStore.getState().nodes).map(a => a.areaCard))
   return groups.filter(g => {
-    if (g.pin) return false
+    if (g.pin || rows.has(g.id) || setCardIds.has(g.id)) return false
     const r = cardBox(g, boards)
     if (!r || inside(was, r.x + r.width / 2, r.y + r.height / 2) || !cardTouches(r, was, gap) || !cardHoldsModel(g, boards)) return false
     // A master with a linked card of it in this scene stays where it is.
