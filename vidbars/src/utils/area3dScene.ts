@@ -551,8 +551,19 @@ export function dockedCards(was: R, groups: ProjectGroup[], boards: Record<strin
   // they are: never folded into it as its layout's cards are.
   const rows = rowSets()
   const setCardIds = new Set(areas(useFreeNodeStore.getState().nodes).map(a => a.areaCard))
+  // (Nor a card put away in a closed deck that is with a set: it is in
+  // that deck, wherever it lies under the deck's front card.)
+  const byId = new Map(groups.map(g => [g.id, g]))
+  const withSet = (g: ProjectGroup): boolean => {
+    let up: ProjectGroup | undefined = g
+    for (let i = 0; up && i < 8; i++) {
+      if (rows.has(up.id) || setCardIds.has(up.id)) return true
+      up = isHiddenDeckMember(up) ? byId.get(up.deckAnchorId!) : undefined
+    }
+    return false
+  }
   return groups.filter(g => {
-    if (g.pin || rows.has(g.id) || setCardIds.has(g.id)) return false
+    if (g.pin || withSet(g)) return false
     const r = cardBox(g, boards)
     if (!r || inside(was, r.x + r.width / 2, r.y + r.height / 2) || !cardTouches(r, was, gap) || !cardHoldsModel(g, boards)) return false
     // A master with a linked card of it in this scene stays where it is.

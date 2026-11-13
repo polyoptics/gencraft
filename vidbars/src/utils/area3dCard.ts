@@ -23,6 +23,8 @@ import { isUndoRestoring, useUndoCoordinator } from '../store/undoCoordinator'
 import { useModelScaleStore, type ScenePlace, type CameraLens, type PieceView } from '../store/tiltStore'
 import { cardBox, carrying, docksUnder, isUnder, laying, lyingIn, rowCards, selfMoved, setCards } from './area3dScene'
 import { isHiddenDeckMember } from '../hooks/useCardDecks'
+import { primaryFirst } from './primaryCard'
+import { splitOpenDecks } from './deckSplit'
 import { cardFaceSize, createTextCard } from './cardGrid'
 import { makeLinkedCard, masterOf } from './linkedCards'
 import { useNotesStore, useNotesUi, newNoteId, type Curve, type PathRider } from '../store/notesStore'
@@ -663,17 +665,35 @@ export function toggleArea3d(cardId: string): void {
   if (out) foldArea3dMoving(out); else showArea3dMoving(cardId)
 }
 
-/** A 3D scene card that is an open deck's primary: folding its scene
- *  closes the deck too, in one (Brian 2026-11-09). `row` = the deck's
- *  cards, the scene card first. The deck closes once the scene is in, so
- *  the scene's own cards are gone from it by then. No scene out: false. */
+/** A 3D set's card double-clicked with its set out: the set folds in and
+ *  everything with it closes onto the card as its deck, in one (Brian
+ *  2026-11-09). `row` = the card's open deck, the set's card first. With
+ *  it go all the cards docked under the set (area3dScene rowCards), however
+ *  they lie there: a row, a gap and another row, a deck of their own
+ *  (Brian 2026-11-13: "everything gets hidden", and it "reopens in the same
+ *  state it was in"; a closed deck keeps each card's place to open into,
+ *  boardsStore setDeckState). The deck closes once the set is in, so the
+ *  set's own cards are gone from it by then. No set out: false. */
 export function foldArea3dAndDeck(cardId: string, row: string[]): boolean {
   const out = area3dOutOf(cardId)
   if (!out) return false
+  const a = useFreeNodeStore.getState().nodes[out]
+  const all = [...new Set([...row, ...(a ? rowCards(a).map(g => g.id) : [])])]
   foldArea3dMoving(out, () => {
     const gs = useBoardsStore.getState().groups
-    const left = row.filter(id => gs.some(g => g.id === id))
-    if (left.length > 1) useBoardsStore.getState().setDeckState(left, 'stacked')
+    const left = all.filter(id => gs.some(g => g.id === id))
+    if (left.length < 2) return
+    const bs = useBoardsStore.getState()
+    if (primaryFirst(gs, left)[0] === cardId) { bs.setDeckState(left, 'stacked'); return }
+    // Another card of them is a row's primary card: onto the set's card
+    // all the same. The open decks among them go in as decks of their
+    // own, to open again with it (as setDeckState does for a row).
+    const { subs, rest } = splitOpenDecks(gs, left)
+    for (const sub of subs) bs.setDeckState(sub, 'stacked', { asGiven: true })
+    const fronts = new Set(subs.map(sub => sub[0]))
+    if (fronts.size) useBoardsStore.setState(st => ({ groups: st.groups.map(g => (fronts.has(g.id) ? { ...g, deckReopen: true } : g)) }))
+    const ids = [cardId, ...rest.filter(id => id !== cardId)]
+    if (ids.length > 1) useBoardsStore.getState().setDeckState(ids, 'stacked', { asGiven: true })
   })
   return true
 }

@@ -1497,7 +1497,7 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
           // As an open deck's primary, folding its scene closes the deck too.
           if (group.cardType === 'area3d' && !showBack) {
             const rest = openDeckOf(group.id)
-            if (rest.length && foldArea3dAndDeck(group.id, [group.id, ...rest])) return
+            if (foldArea3dAndDeck(group.id, [group.id, ...rest])) return
             toggleArea3d(group.id); return
           }
           // Turned over, the front card of a row closes the row onto it, as
