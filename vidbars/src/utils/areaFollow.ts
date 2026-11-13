@@ -10,7 +10,7 @@ import { useFreeNodeStore, type FreeNodeData } from '../store/freeNodeStore'
 import { useBoardsStore } from '../store/boardsStore'
 import { useViewport3DStore } from '../store/viewport3dStore'
 import { useNotesStore } from '../store/notesStore'
-import { cardBox, carrying, docksUnder, isUnder, laying, lyingIn, resizing, rowCards, selfMoved, setCards } from './area3dScene'
+import { cardBox, carrying, docksUnder, isUnder, laying, lyingIn, resizing, rowCards, selfMoved, setCards, setViewers, viewerTouches } from './area3dScene'
 import { isUndoRestoring } from '../store/undoCoordinator'
 import { isHiddenDeckMember } from '../hooks/useCardDecks'
 
@@ -47,15 +47,25 @@ if (typeof window !== 'undefined' && !(window as unknown as { __areaFollow?: boo
         // come back to, or come to be covered, in that drag: its own
         // still, area3dScene holdSets.)
         const own = resizing.get(a.id)
-        const fresh = lyingIn(a, a.areaCard, a.id).filter(k => !before.has(k) && !isUnder(a, k) && !own?.has(k))
+        // (Nor what is with it, along its sides, and goes where it goes:
+        // moved far in one step, its new box covers where that still lies.)
+        const withIt = new Set(rowCards(a, was ?? a).map(g => g.id))
+        const withV = new Set(was ? setViewers(a, was).map(w => w.id) : [])
+        const along = (k: string) => k.startsWith('card:') ? withIt.has(k.slice(5)) : k.startsWith('viewer:') && withV.has(k.slice(7))
+        const fresh = lyingIn(a, a.areaCard, a.id).filter(k => !before.has(k) && !isUnder(a, k) && !own?.has(k) && !along(k))
         // The same for a card its bottom edge comes to: not docked under it
         // (with it, rowCards) till that card is set down there by hand.
-        const withIt = new Set(rowCards(a, was ?? a).map(g => g.id))
         for (const g of useBoardsStore.getState().groups) {
           const k = `card:${g.id}`
           if (g.pin || g.linkOf || withIt.has(g.id) || isHiddenDeckMember(g) || isUnder(a, k) || own?.has(k) || fresh.includes(k)) continue
           const r = cardBox(g)
           if (r && docksUnder(r, a) && !(was && docksUnder(r, was))) fresh.push(k)
+        }
+        // And for a Viewer one of its sides comes to.
+        for (const w of Object.values(useViewport3DStore.getState().windows)) {
+          const k = `viewer:${w.id}`
+          if (w.pin || withV.has(w.id) || isUnder(a, k) || own?.has(k) || fresh.includes(k)) continue
+          if (viewerTouches(w, a)) fresh.push(k)
         }
         if (fresh.length) {
           a = { ...a, under: [...(a.under ?? []), ...fresh] }
@@ -94,9 +104,8 @@ if (typeof window !== 'undefined' && !(window as unknown as { __areaFollow?: boo
           if (cards.length) bs.setGroupPosBatch(cards.filter(g => !selfMoved.has(g.id)).map(g => ({ groupId: g.id, originY: g.originY + dy, originX: g.originX + dx })))
         } finally { carrying.on = held }
         const v3 = useViewport3DStore.getState()
-        for (const w of Object.values(v3.windows)) {
-          if (!isUnder(a, `viewer:${w.id}`) && inside(was, w.x + w.width / 2, w.y + w.height / 2)) v3.updateWindow(w.id, { x: w.x + dx, y: w.y + dy })
-        }
+        // The Viewers on it and set against its sides.
+        for (const w of setViewers(a, was)) v3.updateWindow(w.id, { x: w.x + dx, y: w.y + dy })
         const ns = useNotesStore.getState()
         // Its own curves, and those of the Areas it carried along.
         const carried = new Set([a.id, ...tiles.filter(id => prev.nodes[id].type === 'area')])

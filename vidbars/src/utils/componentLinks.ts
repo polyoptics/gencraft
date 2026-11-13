@@ -219,9 +219,14 @@ export function snapWindowToComponents(
 ): PanelSnap | null {
   const pinned = !!win.pin
   const v = viewportVisualRect(win, zoom)
+  const targets = magnetTargets(pinned, { windowId: win.id }, nodes, windows, zoom)
+  // A 3D set's sides too (Brian 2026-11-13: "The 2D viewer should magnet
+  // to the 3D set"): set against one, the Viewer is with that set, goes
+  // where it goes and folds away with it (area3dScene setViewers).
+  if (!pinned) for (const n of Object.values(nodes)) if (n.type === 'area' && !n.pin) targets.push(rectOf(n))
   return snapRectToTargets(
     { x: v.x, y: v.y, width: v.width, height: v.height },
-    magnetTargets(pinned, { windowId: win.id }, nodes, windows, zoom),
+    targets,
     magnetReach(pinned, zoom),
   )
 }

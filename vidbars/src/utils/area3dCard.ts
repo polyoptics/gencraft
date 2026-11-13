@@ -21,7 +21,8 @@ import { useFreeNodeStore, type FreeNodeData, type AreaGround, type AreaFlatView
 import { useCanvasStore } from '../store/canvasStore'
 import { isUndoRestoring, useUndoCoordinator } from '../store/undoCoordinator'
 import { useModelScaleStore, type ScenePlace, type CameraLens, type PieceView } from '../store/tiltStore'
-import { cardBox, carrying, docksUnder, isUnder, laying, lyingIn, rowCards, selfMoved, setCards } from './area3dScene'
+import { cardBox, carrying, docksUnder, isUnder, laying, lyingIn, rowCards, selfMoved, setCards, setViewers, viewerTouches } from './area3dScene'
+import { useViewport3DStore, type ViewportWindow3D } from '../store/viewport3dStore'
 import { isHiddenDeckMember } from '../hooks/useCardDecks'
 import { primaryFirst } from './primaryCard'
 import { splitOpenDecks } from './deckSplit'
@@ -97,6 +98,10 @@ export interface Area3dData {
   /** The curves parented to it (utils/curveParent), whole: their points
    *  from the mat's top-left, their parent left out (it is this set). */
   curves?: Curve[]
+  /** The Viewers that were with it (on it, set against its sides:
+   *  area3dScene setViewers), whole, their places from the mat's top-left.
+   *  They fold away with the set and come out with it, as they were. */
+  viewers?: ViewportWindow3D[]
 }
 
 /** The 3D area out of card `cardId`, if it is out. */
@@ -213,14 +218,17 @@ export function foldArea3d(nodeId: string): string | null {
       ns.updateCurve(c.id, { riders: left?.length ? left : undefined })
     }
   }
+  const withIt = setViewers(a, a)
   const data: Area3dData = {
     mat: { x: a.x, y: a.y, width: a.width, height: a.height, color: a.color, label: a.label, ...(a.gridAt ? { gridAt: a.gridAt } : {}), ...(a.ground ? { ground: a.ground } : {}), ...(a.flatView ? { flatView: a.flatView } : {}), ...(a.rideLoop ? { rideLoop: true } : {}) },
     cards: cardItems, tiles: tileItems,
     ...(curveItems.length ? { curves: curveItems } : {}),
     row: rowCards(a).slice(1).map(g => g.id),
+    ...(withIt.length ? { viewers: withIt.map(w => ({ ...w, x: w.x - a.x, y: w.y - a.y })) } : {}),
   }
   writing = true
   try { useBoardsStore.setState(s => ({ groups: s.groups.map(g => g.id === cardId ? { ...g, area3d: data } : g) })) } finally { writing = false }
+  for (const w of withIt) useViewport3DStore.getState().removeWindow(w.id)
   clearMat(nodeId)
   return cardId
 }
@@ -387,13 +395,23 @@ export function showArea3d(cardId: string, quiet = false, spot?: { x: number; y:
     const r = cardBox(g)
     return !!r && docksUnder(r, m)
   }).map(g => `card:${g.id}`)
-  const below = under ?? [...new Set([...lyingIn(m, cardId).filter(k => !mine(k)), ...strangers])]
+  // A Viewer it comes out against, the same (its own come out with it, below).
+  const besideV = Object.values(useViewport3DStore.getState().windows).filter(w => viewerTouches(w, m)).map(w => `viewer:${w.id}`)
+  const below = under ?? [...new Set([...lyingIn(m, cardId).filter(k => !mine(k)), ...strangers, ...besideV])]
   let id = ''
   laying.on = true
   try {
     id = fs.addFreeNode(m.x, m.y, 'area')
     fs.updateFreeNode(id, { x: m.x, y: m.y, width: m.width, height: m.height, areaCard: cardId, label: m.label ?? card.name ?? '3D set', ...(m.color ? { color: m.color } : {}), ...(m.gridAt ? { gridAt: m.gridAt } : {}), ...(m.ground ? { ground: m.ground } : {}), ...(m.flatView ? { flatView: m.flatView } : {}), ...(m.rideLoop ? { rideLoop: true } : {}), ...(below.length ? { under: below } : {}) })
   } finally { laying.on = false }
+  // Its Viewers, where they were by it (one still on the canvas stays as it is).
+  if (data.viewers?.length) {
+    useViewport3DStore.setState(st => {
+      const windows = { ...st.windows }
+      for (const w of data.viewers!) if (!windows[w.id]) windows[w.id] = { ...w, x: m.x + w.x, y: m.y + w.y }
+      return { windows }
+    })
+  }
   // The cards it brings out never join a row with the cards under it.
   const belowCards = below.filter(k => k.startsWith('card:')).map(k => k.slice(5))
   const ms = useModelScaleStore.getState()

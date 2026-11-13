@@ -11,7 +11,8 @@ import { useModelScaleStore, type ScenePlace } from '../store/tiltStore'
 import { getMediaItems } from '../types/bar'
 import { faceBlocks } from './cardGrid'
 import { drawnRect } from './effectCards'
-import { useViewport3DStore } from '../store/viewport3dStore'
+import { useViewport3DStore, type ViewportWindow3D } from '../store/viewport3dStore'
+import { viewportVisualRect } from './viewportDocking'
 import { useNotesStore } from '../store/notesStore'
 import { cardsTouch, headerSlackAt, isHiddenDeckMember } from '../hooks/useCardDecks'
 
@@ -137,6 +138,19 @@ export function lyingIn(m: R, notCard?: string, notNode?: string): string[] {
     ...Object.values(useViewport3DStore.getState().windows).filter(w => on(w.x + w.width / 2, w.y + w.height / 2)).map(w => `viewer:${w.id}`),
     ...Object.values(useNotesStore.getState().curves).filter(c => c.parent === undefined && c.pts.length && c.pts.every(p => on(p.x, p.y))).map(c => `curve:${c.id}`),
   ]
+}
+
+/** Does Viewer `w` (as drawn, its header with it) lie against box `b`? */
+export const viewerTouches = (w: ViewportWindow3D, b: R): boolean =>
+  !w.pin && touches(viewportVisualRect(w, useCanvasStore.getState().zoom), b, dockGap())
+/** The Viewers with 3D set `a` (its box `box`): on its ground, or set
+ *  against one of its sides (Brian 2026-11-13: "The 2D viewer should magnet
+ *  to the 3D set, and collapse with the 3D set card"). They go where it
+ *  goes and fold away with it (utils/areaFollow, utils/area3dCard). Not
+ *  one it came out over or next to (isUnder), till that one is moved. */
+export function setViewers(a: { under?: string[] }, box: R): ViewportWindow3D[] {
+  return Object.values(useViewport3DStore.getState().windows).filter(w =>
+    !w.pin && !isUnder(a, `viewer:${w.id}`) && (inside(box, w.x + w.width / 2, w.y + w.height / 2) || viewerTouches(w, box)))
 }
 
 /** While a 3D set is being laid out from its card (utils/area3dCard), what
@@ -398,6 +412,8 @@ export function holdSets(ids: string[], spread = false): { step: () => void; end
     // stands in it.
     const own = new Set(lyingIn(a, a.areaCard, a.id))
     for (const [id, row] of rowSets()) if (row.area.id === a.id) own.add(`card:${id}`)
+    // The Viewers set against it: each with the side it is on.
+    for (const w of setViewers(a, a)) own.add(`viewer:${w.id}`)
     // Its own card, docked under it: with the edge it lies along.
     if (a.areaCard) own.add(`card:${a.areaCard}`)
     for (const n of Object.values(all)) {
@@ -443,11 +459,11 @@ export function holdSets(ids: string[], spread = false): { step: () => void; end
           const now = useFreeNodeStore.getState().nodes[id]
           if (now && (now.x !== ox + dx || now.y !== oy + dy)) useFreeNodeStore.getState().updateFreeNode(id, { x: ox + dx, y: oy + dy })
         } })
-      } else if (key.startsWith('viewer:') && spread) {
+      } else if (key.startsWith('viewer:')) {
         const w = useViewport3DStore.getState().windows[id]
         if (!w) continue
         const x = w.x + w.width / 2, y = w.y + w.height / 2
-        if (carried(x, y)) continue
+        if (carried(x, y) || !spread && !out(x, y)) continue
         const ox = w.x, oy = w.y
         list.push({ x, y, to: (dx, dy) => {
           const now = useViewport3DStore.getState().windows[id]
@@ -589,6 +605,7 @@ export function startAreaUnder(): () => void {
     for (const k of keys) {
       if (k.startsWith('card:')) { const g = groups.find(x => x.id === k.slice(5)); if (g) m.set(k, { x: g.originX, y: g.originY }) }
       else if (k.startsWith('node:')) { const n = nodes[k.slice(5)]; if (n) m.set(k, { x: n.x, y: n.y }) }
+      else if (k.startsWith('viewer:')) { const w = useViewport3DStore.getState().windows[k.slice(7)]; if (w) m.set(k, { x: w.x, y: w.y }) }
     }
     return m
   }
@@ -613,5 +630,6 @@ export function startAreaUnder(): () => void {
   }
   const offA = useBoardsStore.subscribe(check)
   const offB = useFreeNodeStore.subscribe(check)
-  return () => { offA(); offB() }
+  const offC = useViewport3DStore.subscribe(check)
+  return () => { offA(); offB(); offC() }
 }
