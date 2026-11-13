@@ -340,7 +340,17 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
   const ov = overviewScale(zoom)
   const screenHeight = headerScreenH(zoom)
   const screenTop    = screenBottom - screenHeight
-  const effectiveWidth = Math.max(screenWidth, 40)
+  // Never wider than a small card by more than the chrome shrinks: a flat
+  // 40px floor stuck out past the card zoomed far out, further the further
+  // out (at 1% a strip three cards wide, each over its neighbours: Brian
+  // 2026-11-13, "really broken and extreme with the scaling").
+  const effectiveWidth = Math.max(screenWidth, 40 * ov)
+  // The name: as large as its strip holds, up to its size at the
+  // comfortable zoom, so it stays readable as the strip thins instead of
+  // shrinking twice (with the strip and by `ov`); too small to read, it
+  // fades out rather than lie there as specks.
+  const nameFont = Math.min(10, Math.max(10 * ov, screenHeight * 0.62))
+  const nameShown = Math.max(0, Math.min(1, (nameFont - 4.5) / 1.5))
   const isTiny = effectiveWidth < 50
 
   if (!tilted && (screenLeft + screenWidth < 0 || screenTop + screenHeight < 0)) return null
@@ -594,7 +604,8 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
       style={{
         color: headerName ? 'rgba(255,255,255,0.92)' : 'rgba(255,255,255,0.35)',
         fontStyle: headerName ? 'normal' : 'italic',
-        fontSize: 10 * ov,
+        fontSize: nameFont,
+        opacity: nameShown,
         fontWeight: 700,
         letterSpacing: '0.2px',
         textShadow: '0 1px 4px rgba(0,0,0,0.6)',
@@ -604,7 +615,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
         textOverflow: 'ellipsis',
         flex: '1 1 0',
         minWidth: 0,
-        lineHeight: `${14 * ov}px`,
+        lineHeight: `${Math.min(screenHeight, nameFont * 1.4)}px`,
       }}
     >{headerName || 'Card'}</span>
   )
@@ -629,7 +640,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
       <div style={{
         position: 'absolute', inset: 0,
         background: headerBg,
-        borderRadius: '12px 12px 0 0',
+        borderRadius: `${12 * ov}px ${12 * ov}px 0 0`,
         overflow: 'hidden',
       }} />
 
@@ -639,9 +650,9 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'flex-start',
-        padding: '0 6px',
+        padding: `0 ${6 * ov}px`,
         zIndex: 2,
-        gap: 4,
+        gap: 4 * ov,
         overflow: 'hidden',
       }}>
         {!isTiny && nameEl}
