@@ -8,6 +8,11 @@
 // puts the others down: the mouse holds one tool). The arrowheads are two
 // independent toggles. The outliner lists the Areas and what lies on each:
 // drag a row onto an Area to put it there, onto "Canvas" to take it off.
+// A curve is listed under the Area it is parented to (utils/curveParent):
+// its row dropped on an Area parents it to that one, on "Canvas" unparents
+// it, and it stays where it is drawn. A model card in an Area's scene is
+// listed under it as a model, wherever its card is: on the Area, docked
+// along it, or in a row with the Area's card (Brian 2026-11-12).
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import ReactDOM from 'react-dom'
@@ -24,12 +29,16 @@ import { tangentState, setBroken, setCorner, setLook, lookFrom, markState, setPo
 import { useCanvasStore } from '../../store/canvasStore'
 import { ColorPickerPopup } from '../Bar/ColorPickerPopup'
 import { useCurveDraft } from '../../utils/notesTool'
-import { useModelScaleStore } from '../../store/tiltStore'
+import { useModelScaleStore, useTiltStore } from '../../store/tiltStore'
+import { useManip } from '../../store/manipStore'
+import { usePeek } from '../../utils/peek'
 import { createMediaCard } from '../../utils/cardGrid'
 import { visibleCanvasCenter } from '../../utils/fx/createEffect'
 import { PRIMITIVES, PRIM_NAMES, primitiveUrl, type Primitive } from '../../three/primitives'
-import { dataKey, sceneOf } from '../../utils/area3dScene'
+import { dataKey, sceneOf, cardHoldsModel } from '../../utils/area3dScene'
+import { pieceName, pieceRiders, pieceRides } from '../../utils/scenePieces'
 import { isHiddenDeckMember } from '../../hooks/useCardDecks'
+import { parentOf, parentCurves } from '../../utils/curveParent'
 import { CameraTools, NEW_CAMERA_MM } from '../Canvas/tilt/LookThrough'
 import { useRideClock, rideTime, rideSpan, rideTotal, parentToPath, unparentFromPath, setRider } from '../../utils/pathRide'
 
@@ -435,6 +444,68 @@ function makePrimitive(p: Primitive) {
   if (id) useBoardsStore.getState().setSelectedGroup(id)
 }
 
+/** The selected models' pieces in the flat view (Brian 2026-11-12: "use
+ *  this view for its piece"; utils/scenePieces): from straight above,
+ *  turning with the model, or as the model is seen in 3D right now, kept
+ *  that way and standing upright. Two buttons, the one in use lit; "This
+ *  view" pressed again takes the view again. For models placed in a 3D
+ *  set, or riding a path: those are the ones with a piece. */
+const PieceTools: React.FC = () => {
+  const selNodes = useFreeNodeStore(s => s.selectedIds)
+  const selCards = useBoardsStore(s => s.selectedGroupIds)
+  const nodes = useFreeNodeStore(s => s.nodes)
+  const groups = useBoardsStore(s => s.groups)
+  const placeOf = useModelScaleStore(s => s.placeOf)
+  const pieceOf = useModelScaleStore(s => s.pieceOf)
+  const riders = useNotesStore(() => pieceRiders())
+  // The models standing in the 3D view (three/tiltScene frame): the 3D
+  // look locked on, or tipped back past 4° and not swung round to the side.
+  const standing = useTiltStore(s => s.lock3d || (s.tilt > 4 && Math.abs(s.yaw) < 35))
+  const through = useManip(s => s.through)
+  // (Peeking tips the view too, and no model stands.)
+  const peeking = usePeek(s => !!s.target)
+  // As the 3D view knows them, and where their settings are kept.
+  const list = useMemo(() => [
+    ...selNodes.filter(id => nodes[id]?.type === 'model').map(id => `node:${id}`),
+    ...selCards.filter(id => !!cardModel(id)).map(id => `card:${id}`),
+  ].map(key => ({ key, dk: dataKey(key) })).filter(k => pieceRides(k.key, k.dk) || (!!placeOf[k.dk] && !!sceneOf(k.key))),
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  [selNodes, selCards, nodes, groups, placeOf, riders])
+  const any = list.length > 0
+  const own = any && list.every(k => !!pieceOf[k.dk])
+  const top = any && list.every(k => !pieceOf[k.dk])
+  // A view to take: the models standing in the 3D view on screen.
+  const can = any && !peeking && (standing || !!through)
+  const fromTop = () => {
+    if (!any || top) return
+    useUndoCoordinator.getState().checkpoint()
+    const ms = useModelScaleStore.getState()
+    for (const k of list) ms.setPiece(k.dk, null)
+  }
+  const fromHere = () => {
+    if (!can) return
+    // (A closed deck's front card and the member on its face are one piece:
+    // whichever of the two stands in the 3D view.)
+    const views = list.map(k => ({ dk: k.dk, v: models.pieceView?.(k.key) ?? models.pieceView?.(k.dk) ?? null })).filter(x => !!x.v)
+    if (!views.length) return
+    useUndoCoordinator.getState().checkpoint()
+    const ms = useModelScaleStore.getState()
+    for (const x of views) ms.setPiece(x.dk, x.v)
+  }
+  const b = (on: boolean, live: boolean): React.CSSProperties => ({ ...btnStyle(on, true), flex: 1, height: 30, justifyContent: 'center', opacity: live ? 1 : 0.45, cursor: live ? 'pointer' : 'default' })
+  return (
+    <>
+      <div style={{ fontSize: 10, letterSpacing: 1.3, color: 'rgba(255,255,255,0.4)', fontFamily: 'ui-monospace, monospace' }}>PIECE</div>
+      <div style={{ display: 'flex', gap: 6 }} title={any ? undefined : 'A model placed in a 3D set, or riding a path, shows as a piece in the flat view'}>
+        <button data-piece-view="top" style={b(top, any)} disabled={!any} aria-pressed={top} onClick={fromTop}
+          title="Top view: in the flat view its piece is its shape from straight above, and turns as the model turns">Top view</button>
+        <button data-piece-view="this" style={b(own, can)} disabled={!can} aria-pressed={own} onClick={fromHere}
+          title="This view: in the flat view its piece is the model as you see it in 3D right now, upright, standing on its spot. Tip into 3D, turn to the side you want, then press; press again to take the view again">This view</button>
+      </div>
+    </>
+  )
+}
+
 const Area3dTools: React.FC<{ part: 'make' | 'selected' }> = ({ part }) => {
   const keys = useSelectedModelKeys()
   const tintOf = useModelScaleStore(s => s.tintOf)
@@ -472,6 +543,7 @@ const Area3dTools: React.FC<{ part: 'make' | 'selected' }> = ({ part }) => {
           <button key={c} style={sw(c, cur === c)} disabled={!keys.length} onClick={() => paint(c)} title={c} aria-pressed={cur === c} />
         ))}
       </div>
+      <PieceTools />
       <CameraTools />
     </>
   )
@@ -661,7 +733,7 @@ const PathRiders: React.FC<{ c: Curve }> = ({ c }) => {
 }
 
 // ── Outliner ──
-type Item = { kind: 'node' | 'card' | 'viewer' | 'curve'; id: string; name: string; icon: string; cx: number; cy: number; /** A curve a model can ride. */ path?: boolean }
+type Item = { kind: 'node' | 'card' | 'viewer' | 'curve'; id: string; name: string; icon: string; cx: number; cy: number; /** A curve a model can ride. */ path?: boolean; /** A model listed under its set by its scene (area3dScene sceneOf), not by where its corner is. */ scene?: boolean }
 
 /** A row's model, as the 3D view knows it, if it is one: what can ride a path. */
 function modelKeyOf(it: Item): string | null {
@@ -672,15 +744,23 @@ function modelKeyOf(it: Item): string | null {
 function useOutline() {
   const nodes = useFreeNodeStore(s => s.nodes)
   const groups = useBoardsStore(s => s.groups)
+  const boards = useBoardsStore(s => s.boards)
   const windows = useViewport3DStore(s => s.windows)
   const curves = useNotesStore(s => s.curves)
+  // What a model card is in the scene of goes by its box, which can change
+  // with the zoom (its header), and by which of a closed deck's models
+  // are placed: looked at again a few times an octave, not at every step.
+  const zoomStep = useCanvasStore(s => Math.round(Math.log2(s.zoom) * 4))
+  const placeOf = useModelScaleStore(s => s.placeOf)
+  const portals = useCanvasStore(s => s.deckPortalSelections)
   return useMemo(() => {
     const areas = Object.values(nodes).filter(n => n.type === 'area' && !n.pin)
     const kids = new Map<string, Item[]>()
     const root: Item[] = []
+    const under = (areaId: string, it: Item) => { if (!kids.has(areaId)) kids.set(areaId, []); kids.get(areaId)!.push(it) }
     const put = (it: Item, not?: string) => {
       const a = areaAt(nodes, it.cx, it.cy, not)
-      if (a) { if (!kids.has(a.id)) kids.set(a.id, []); kids.get(a.id)!.push(it) }
+      if (a) under(a.id, it)
       else if (it.kind === 'node' || it.kind === 'curve') root.push(it)
     }
     const icon = (n: FreeNodeData) => n.type === 'model' ? '◆' : n.type === 'area' ? '▦' : n.type === 'image' ? '▣' : n.type === 'video' ? '▶' : '▢'
@@ -691,10 +771,40 @@ function useOutline() {
         const a = areaAt(nodes, n.x + n.width / 2, n.y + n.height / 2)
         if (!a) continue
       }
-      put({ kind: 'node', id: n.id, name: n.label || n.type, icon: icon(n), cx: n.x + n.width / 2, cy: n.y + n.height / 2 }, n.type === 'area' ? n.id : undefined)
+      const it: Item = { kind: 'node', id: n.id, name: n.label || n.type, icon: icon(n), cx: n.x + n.width / 2, cy: n.y + n.height / 2 }
+      // A model tile docked along a 3D set is in its scene: under it.
+      const sc = n.type === 'model' && areas.length ? sceneOf(`node:${n.id}`) : null
+      if (sc) under(sc.area.id, { ...it, scene: true })
+      else put(it, n.type === 'area' ? n.id : undefined)
+    }
+    // A closed deck shows one member's model on its face: that member is
+    // listed by the deck's front card, not a second time by itself.
+    const faces = new Set<string>()
+    if (areas.length) {
+      for (const g of groups) {
+        if (g.pin || isHiddenDeckMember(g) || (g.deckState !== 'stacked' && g.deckState !== 'fanned')) continue
+        const dk = dataKey(`card:${g.id}`)
+        if (dk !== `card:${g.id}`) faces.add(dk)
+      }
     }
     for (const g of groups) {
       if (g.pin) continue
+      // A model in a 3D set's scene: under that set, as a model, wherever
+      // its card is (on the set, docked along it, in a row with its
+      // card). A card put away in a closed deck: once its model is placed
+      // in the set, where its piece is to be seen.
+      const key = `card:${g.id}`
+      const hidden = isHiddenDeckMember(g)
+      if (areas.length && !g.hideModel3d && (hidden ? !!placeOf[key] && !faces.has(key) : cardHoldsModel(g, boards) || !!g.deckState)) {
+        const model = cardModel(g.id)
+        const sc = model && sceneOf(key)
+        if (model && sc) {
+          const dk = dataKey(key)
+          const face = dk === key ? g : groups.find(x => x.id === dk.slice(5)) ?? g
+          under(sc.area.id, { kind: 'card', id: g.id, name: pieceName(face.name, model.name), icon: '◆', cx: g.originX + 20, cy: g.originY + 20, scene: true })
+          continue
+        }
+      }
       const a = areaAt(nodes, g.originX + 20, g.originY + 20)
       // A card showing a model is listed wherever it is (Brian 2026-11-12:
       // "I don't see models in the outliner"): under the 3D set it is on,
@@ -705,17 +815,18 @@ function useOutline() {
       if (a) put(it)
       else if (model) {
         const set = sceneOf(`card:${g.id}`)?.area
-        if (set) { if (!kids.has(set.id)) kids.set(set.id, []); kids.get(set.id)!.push(it) }
+        if (set) { if (!kids.has(set.id)) kids.set(set.id, []); kids.get(set.id)!.push({ ...it, scene: true }) }
         else root.push(it)
       }
     }
     for (const w of Object.values(windows)) put({ kind: 'viewer', id: w.id, name: 'Viewer', icon: '◳', cx: w.x + w.width / 2, cy: w.y + w.height / 2 })
     for (const c of Object.values(curves)) {
       const b = curveBounds(c)
-      const inA = areaAt(nodes, (b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2)
-      const all = inA && c.pts.every(p => p.x >= inA.x && p.x <= inA.x + inA.width && p.y >= inA.y && p.y <= inA.y + inA.height)
+      // Under the 3D set it is parented to, wherever it lies.
+      const p = parentOf(c, nodes)
+      const inA = p ? areas.find(a => a.id === p) : undefined
       const it: Item = { kind: 'curve', id: c.id, name: c.name || (c.arrowEnd || c.arrowStart ? 'Arrow' : c.kind === 'free' ? 'Pen line' : 'Curve'), icon: '∿', cx: (b.x0 + b.x1) / 2, cy: (b.y0 + b.y1) / 2, path: c.kind === 'bezier' }
-      if (all) { if (!kids.has(inA!.id)) kids.set(inA!.id, []); kids.get(inA!.id)!.push(it) }
+      if (inA) { if (!kids.has(inA.id)) kids.set(inA.id, []); kids.get(inA.id)!.push(it) }
       else root.push(it)
     }
     // The models riding each path (utils/pathRide) are listed under it,
@@ -736,7 +847,8 @@ function useOutline() {
     const off = (list: Item[]) => list.filter(it => !riding.has(`${it.kind}${it.id}`))
     for (const [k, list] of kids) kids.set(k, off(list))
     return { areas, kids, root: off(root), riders, riding }
-  }, [nodes, groups, windows, curves])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodes, groups, boards, windows, curves, zoomStep, placeOf, portals])
 }
 
 /** Move an outliner item so its middle is at (x, y). */
@@ -812,16 +924,32 @@ const Outliner: React.FC = () => {
         parentToPath(key, target.slice(6))
         return
       }
-      useUndoCoordinator.getState().checkpoint()
+      // A curve's row: parented to the set it is dropped on, to nothing on
+      // "Canvas". It stays where it is drawn.
+      if (d.it.kind === 'curve') {
+        if (target === 'root') parentCurves([d.it.id], null)
+        else if (nodes[target]?.type === 'area') parentCurves([d.it.id], target)
+        return
+      }
       // Off its path: dropped anywhere else it is back where it stood.
-      if (key && riding.has(`${d.it.kind}${d.it.id}`)) { unparentFromPath(key); return }
+      if (key && riding.has(`${d.it.kind}${d.it.id}`)) { useUndoCoordinator.getState().checkpoint(); unparentFromPath(key); return }
       if (target === 'root') {
-        const a = areaAt(nodes, d.it.cx, d.it.cy, d.it.kind === 'node' && nodes[d.it.id]?.type === 'area' ? d.it.id : undefined)
-        if (a) moveItemTo(d.it, a.x + a.width + a.width * 0.15, d.it.cy)
+        // Off the set it lies on: out past its right side. A model listed
+        // by its scene lies on the set its row is under by its card's
+        // middle (its scene's rule), anything else by where it is listed
+        // from. (A model listed under a set its card is only docked along,
+        // or in a row with the set's card, does not lie on the set to be
+        // taken off it: its card is moved on the canvas.)
+        const sc = key && d.it.scene ? sceneOf(key) : null
+        const a = sc && !sc.docked ? sc.area : areaAt(nodes, d.it.cx, d.it.cy, d.it.kind === 'node' && nodes[d.it.id]?.type === 'area' ? d.it.id : undefined)
+        if (!a) return
+        useUndoCoordinator.getState().checkpoint()
+        moveItemTo(d.it, a.x + a.width + a.width * 0.15, d.it.cy)
         return
       }
       const a = nodes[target]
       if (!a) return
+      useUndoCoordinator.getState().checkpoint()
       // Into the Area: set down in its middle, a little apart from what is
       // already there.
       const n = (kids.get(a.id)?.length ?? 0)

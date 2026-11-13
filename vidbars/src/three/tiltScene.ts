@@ -2103,6 +2103,60 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     return s ? { url: s.url, unit: s.unit } : null
   }
 
+  /** How model `key` is seen now, for its piece in the flat view (Brian
+   *  2026-11-12: "use this view for its piece"; utils/scenePieces): the
+   *  turn that takes the model as it stands, about its middle, into a
+   *  picture facing the eye (x right, y up, z to the eye), and where its
+   *  foot lies from its middle in that picture, for each half of its
+   *  height. As the eye sees that model, not the middle of the screen: off
+   *  to one side, it shows more of its side. */
+  const pvG = new THREE.Quaternion(), pvQ = new THREE.Quaternion(), pvP = new THREE.Vector3(), pvS = new THREE.Vector3()
+  const pvX = new THREE.Vector3(), pvY = new THREE.Vector3(), pvZ = new THREE.Vector3(), pvM = new THREE.Matrix4()
+  function pieceView(key: string): { q: [number, number, number, number]; foot: [number, number] } | null {
+    const s = standing.get(key)
+    if (!s || !s.inst || !s.stand.visible) return null
+    ground.updateWorldMatrix(true, false)
+    camera.updateWorldMatrix(true, false)
+    // The plane's own turn (it is scaled evenly at most: a wheel zoom on
+    // its way). Not read off the model: standing up, it is squashed along
+    // its height, which a turn cannot be taken out of.
+    ground.matrixWorld.decompose(pvP, pvG, pvS)
+    // The picture's axes: towards the eye, the view's up, and across.
+    s.pose.getWorldPosition(pvP)
+    pvZ.setFromMatrixPosition(camera.matrixWorld).sub(pvP)
+    if (pvZ.lengthSq() < 1e-9) return null
+    pvZ.normalize()
+    pvY.set(0, 1, 0).applyQuaternion(camera.getWorldQuaternion(pvQ))
+    pvY.addScaledVector(pvZ, -pvY.dot(pvZ))
+    if (pvY.lengthSq() < 1e-9) return null
+    pvY.normalize()
+    pvX.crossVectors(pvY, pvZ)
+    const view = pvQ.setFromRotationMatrix(pvM.makeBasis(pvX, pvY, pvZ)).invert()
+    // The stand, and its turn on it (the turntable's, or the path's it
+    // rides, which tips it about its foot): its down from its middle. Then
+    // the model as it is turned about its middle.
+    const stood = view.multiply(pvG).multiply(STAND_Q).multiply(s.turn.quaternion)
+    const foot = pvX.set(0, -1, 0).applyQuaternion(stood)
+    const q = stood.multiply(s.orient.quaternion).multiply(s.pose.quaternion).normalize()
+    return { q: [q.x, q.y, q.z, q.w], foot: [foot.x, foot.y] }
+  }
+
+  /** Lend the renderer for a picture taken off screen, between frames
+   *  (three/pieceService): a model standing here is already loaded into
+   *  it, so its picture costs no second copy of it. What frame() does not
+   *  set for itself each time comes back as it was. */
+  function lend<T>(fn: (r: THREE.WebGLRenderer) => T): T {
+    const target = renderer.getRenderTarget()
+    const color = renderer.getClearColor(new THREE.Color()), alpha = renderer.getClearAlpha()
+    const auto = renderer.autoClear, scissor = renderer.getScissorTest()
+    try { return fn(renderer) } finally {
+      renderer.setRenderTarget(target)
+      renderer.setClearColor(color, alpha)
+      renderer.autoClear = auto
+      renderer.setScissorTest(scissor)
+    }
+  }
+
   function dispose() {
     for (const [key, s] of [...standing]) drop(key, s)
     maskRT.dispose()
@@ -2120,5 +2174,5 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   const pathAt = (x: number, y: number, only?: Set<string>) => paths.at(x, y, only)
   const pathPx = (p: { x: number; y: number; z: number }) => paths.project(p)
 
-  return { pathAt, pathPx, frame, warm, pick, pickZ: () => pickedZ, info, spinBy, letGo, settleAll, keepTurn, gizmoAt, aimAt, cameraFrame, lookBounds, manipHot, screenBox, floatSpot, pivotOf, labelAt, strokeAt, modelSize, dispose, surfaceAt, pinSpots: notes.spots }
+  return { pathAt, pathPx, frame, warm, pick, pickZ: () => pickedZ, info, spinBy, letGo, settleAll, keepTurn, gizmoAt, aimAt, cameraFrame, lookBounds, manipHot, screenBox, floatSpot, pivotOf, labelAt, strokeAt, modelSize, dispose, surfaceAt, pinSpots: notes.spots, pieceView, lend }
 }

@@ -145,7 +145,7 @@ const CurveShape: React.FC<{ c: Curve; zoom: number; hit: boolean; selected: boo
   const frames = c.mark && c.kind === 'bezier' ? pointFrames(c) : []
   const shaped = new Set(ends.map(e => e.end ? c.pts.length - 1 : 0))
   return (
-    <g>
+    <g data-curve-shape={c.id}>
       {selected && <path d={d} fill="none" stroke={SEL} strokeWidth={c.width + 4 / zoom} strokeLinecap="round" strokeLinejoin="round" opacity={0.45} />}
       <g opacity={c.opacity ?? 1}>
         {things && pat && line.length > 1 && <FlatUnits c={c} line={line} unit={things} on={pat.on} period={period} field={field} />}
@@ -261,27 +261,44 @@ export const CurveLayer: React.FC = () => {
     preview = `M${l.x} ${l.y} C${c1.x} ${c1.y} ${hover.x} ${hover.y} ${hover.x} ${hover.y}`
   }
   if (!list.length && !draft) return null
+  // Points drag with any tool in the hand, except mid-drawing.
+  const picked = draft ? [] : list.filter(c => c.kind === 'bezier' && selected.includes(c.id))
   return (
-    <svg
-      data-curve-layer=""
-      style={{ position: 'absolute', left: 0, top: 0, width: 1, height: 1, overflow: 'visible', pointerEvents: 'none' }}
-    >
-      <g transform={`translate(${pan.x} ${pan.y}) scale(${zoom})`}>
-        {list.map(c => <CurveShape key={c.id} c={c} zoom={zoom} hit={hit} selected={selected.includes(c.id)} />)}
-        {/* Their layers: more designs along the same lines, over them (pressed, it is the line under that takes it). */}
-        {list.flatMap(c => layerCurves(c)).map(c => <CurveShape key={c.id} c={c} zoom={zoom} hit={false} selected={false} />)}
-        {/* Points drag with any tool in the hand, except mid-drawing. */}
-        {!draft && list.filter(c => selected.includes(c.id)).map(c => <Handles key={`h${c.id}`} c={c} zoom={zoom} points={points} />)}
-        {draft && (
-          <g opacity={0.95}>
-            <CurveShape c={draft} zoom={zoom} hit={false} selected={false} />
-            {preview && <path d={preview} fill="none" stroke={draft.color} strokeWidth={draft.width} strokeDasharray={`${6 / zoom} ${5 / zoom}`} opacity={0.7} />}
-            {draft.kind === 'bezier' && draft.pts.map((p, i) => (
-              <rect key={i} x={p.x - 4 / zoom} y={p.y - 4 / zoom} width={8 / zoom} height={8 / zoom} fill={i === 0 ? '#fff' : SEL} />
-            ))}
+    <>
+      <svg
+        data-curve-layer=""
+        style={{ position: 'absolute', left: 0, top: 0, width: 1, height: 1, overflow: 'visible', pointerEvents: 'none' }}
+      >
+        <g transform={`translate(${pan.x} ${pan.y}) scale(${zoom})`}>
+          {list.map(c => <CurveShape key={c.id} c={c} zoom={zoom} hit={hit} selected={selected.includes(c.id)} />)}
+          {/* Their layers: more designs along the same lines, over them (pressed, it is the line under that takes it). */}
+          {list.flatMap(c => layerCurves(c)).map(c => <CurveShape key={c.id} c={c} zoom={zoom} hit={false} selected={false} />)}
+          {draft && (
+            <g opacity={0.95}>
+              <CurveShape c={draft} zoom={zoom} hit={false} selected={false} />
+              {preview && <path d={preview} fill="none" stroke={draft.color} strokeWidth={draft.width} strokeDasharray={`${6 / zoom} ${5 / zoom}`} opacity={0.7} />}
+              {draft.kind === 'bezier' && draft.pts.map((p, i) => (
+                <rect key={i} x={p.x - 4 / zoom} y={p.y - 4 / zoom} width={8 / zoom} height={8 / zoom} fill={i === 0 ? '#fff' : SEL} />
+              ))}
+            </g>
+          )}
+        </g>
+      </svg>
+      {/* A selected curve's points and handles are over the models' pieces
+          (components/Canvas/PieceLayer, which is over the lines), as the 3D
+          view draws them over its models: an arrow that ends on a piece is
+          taken by its end there, flat as in 3D. (At the pieces' own level
+          and drawn after them: over them, and under a card's tray.) */}
+      {picked.length > 0 && (
+        <svg
+          data-curve-handles=""
+          style={{ position: 'absolute', left: 0, top: 0, width: 1, height: 1, overflow: 'visible', pointerEvents: 'none', zIndex: 55 }}
+        >
+          <g transform={`translate(${pan.x} ${pan.y}) scale(${zoom})`}>
+            {picked.map(c => <Handles key={`h${c.id}`} c={c} zoom={zoom} points={points} />)}
           </g>
-        )}
-      </g>
-    </svg>
+        </svg>
+      )}
+    </>
   )
 }

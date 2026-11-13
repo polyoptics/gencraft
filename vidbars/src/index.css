@@ -51,6 +51,27 @@ body {
    not through its children: they behave exactly as without the wrapper. */
 [data-tilt-stage="overlay"] > * { pointer-events: auto; }
 
+/* A model's piece in the flat view (components/Canvas/PieceLayer): its
+   picture comes in a custom property, not as an inline background-image
+   or an <img>, which the 3D view takes for artwork on a card. The picture
+   is plain clay on nothing: multiplied over the piece's colour, and cut
+   to the model's shape. */
+.scene-piece-pic, .scene-piece-shadow {
+  -webkit-mask-image: var(--piece-pic);
+  mask-image: var(--piece-pic);
+  -webkit-mask-size: 100% 100%;
+  mask-size: 100% 100%;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+}
+.scene-piece-pic {
+  background-image: var(--piece-pic);
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  background-blend-mode: multiply;
+}
+.scene-piece-shadow { background: #000; }
+
 /* While tilted, nothing inside the plane is promoted to its own compositor
    layer: layers nested under a perspective transform get re-rastered out of
    step (an animated GIF repainting, a pan) and flash. One flat layer per

@@ -95,7 +95,9 @@ export function boxOfKey(key: string): R | null {
 
 /** What lies in box `m` (canvas units), as keys: cards (and the model cards
  *  along its sides), tiles and other areas, Viewers, and curves drawn
- *  wholly there. Not card `notCard`, nor tile `notNode`. */
+ *  wholly there before curves had parents (a curve with a parent, or
+ *  unparented by hand, goes by that: utils/curveParent). Not card
+ *  `notCard`, nor tile `notNode`. */
 export function lyingIn(m: R, notCard?: string, notNode?: string): string[] {
   const { groups, boards } = useBoardsStore.getState()
   const on = (x: number, y: number) => x >= m.x && x <= m.x + m.width && y >= m.y && y <= m.y + m.height
@@ -103,7 +105,7 @@ export function lyingIn(m: R, notCard?: string, notNode?: string): string[] {
     ...setCards({ x: m.x, y: m.y, width: m.width, height: m.height }, groups, boards, notCard).map(g => `card:${g.id}`),
     ...Object.values(useFreeNodeStore.getState().nodes).filter(n => n.id !== notNode && !n.pin && n.type !== 'storyline' && on(n.x + n.width / 2, n.y + n.height / 2)).map(n => `node:${n.id}`),
     ...Object.values(useViewport3DStore.getState().windows).filter(w => on(w.x + w.width / 2, w.y + w.height / 2)).map(w => `viewer:${w.id}`),
-    ...Object.values(useNotesStore.getState().curves).filter(c => c.pts.length && c.pts.every(p => on(p.x, p.y))).map(c => `curve:${c.id}`),
+    ...Object.values(useNotesStore.getState().curves).filter(c => c.parent === undefined && c.pts.length && c.pts.every(p => on(p.x, p.y))).map(c => `curve:${c.id}`),
   ]
 }
 

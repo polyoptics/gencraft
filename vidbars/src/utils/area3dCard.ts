@@ -6,24 +6,34 @@
 // Fold: the card keeps the mat (where it comes out, its size) and what
 // lies on it: each card's master (utils/linkedCards) where it lay, its deck
 // as it was, and how its model stands (size and turn, tiltStore
-// useModelScaleStore); tiles on it (an old model tile, a picture) whole.
-// Linked cards and tiles on it go with it; master cards stay where they
-// are, free to move away (as a chart's do).
+// useModelScaleStore); tiles on it (an old model tile, a picture) whole;
+// and the curves parented to it (utils/curveParent), whole. Linked cards,
+// tiles and its curves go with it; master cards stay where they are, free
+// to move away (as a chart's do). A model of the set that rides a path
+// (utils/pathRide) keeps its ride: back out, it rides that path again.
 //
 // Show: the mat comes back where it was, with LINKED cards of those
-// masters, each where it lay, turned and sized as it was, and the tiles.
-// Moving the card takes its 3D area along (out or folded).
+// masters, each where it lay, turned and sized as it was, the tiles and
+// its curves. Moving the card takes its 3D area along (out or folded).
 
 import { useBoardsStore, type ProjectGroup } from '../store/boardsStore'
 import { useFreeNodeStore, type FreeNodeData } from '../store/freeNodeStore'
 import { useCanvasStore } from '../store/canvasStore'
 import { isUndoRestoring, useUndoCoordinator } from '../store/undoCoordinator'
-import { useModelScaleStore, type ScenePlace, type CameraLens } from '../store/tiltStore'
+import { useModelScaleStore, type ScenePlace, type CameraLens, type PieceView } from '../store/tiltStore'
 import { cardBox, isUnder, laying, lyingIn, setCards } from './area3dScene'
 import { cardFaceSize, createTextCard } from './cardGrid'
 import { makeLinkedCard, masterOf } from './linkedCards'
+import { useNotesStore, useNotesUi, newNoteId, type Curve, type PathRider } from '../store/notesStore'
+import { curvesOf } from './curveParent'
+import { riderOf, parentToPath, setRider } from './pathRide'
 
 type Quat = [number, number, number, number]
+
+/** The path a folded model rode (utils/pathRide), and how it sat on it:
+ *  one of the set's own curves (its place among `curves`), or one left on
+ *  the canvas (its id). */
+export interface Area3dRide { on: number | string; rider: Omit<PathRider, 'key'> }
 
 /** A card on a folded 3D area: its master, where it lay (from the mat's
  *  top-left), its size and deck as it was, and how its model stood. */
@@ -47,6 +57,10 @@ export interface Area3dCardItem {
   stretch?: [number, number, number]
   /** A camera's lens (tiltStore lensOf). */
   lens?: CameraLens
+  /** The view its piece is drawn from (tiltStore pieceOf). */
+  piece?: PieceView
+  /** The path its model rode. */
+  ride?: Area3dRide
 }
 /** A tile on a folded 3D area, whole, where it lay. */
 export interface Area3dTileItem {
@@ -62,12 +76,19 @@ export interface Area3dTileItem {
   stretch?: [number, number, number]
   /** A camera's lens (tiltStore lensOf). */
   lens?: CameraLens
+  /** The view its piece is drawn from (tiltStore pieceOf). */
+  piece?: PieceView
+  /** The path its model rode. */
+  ride?: Area3dRide
 }
 export interface Area3dData {
   /** The mat: where it comes out (top-left), its size and look. */
   mat: { x: number; y: number; width: number; height: number; color?: string; label?: string }
   cards: Area3dCardItem[]
   tiles: Area3dTileItem[]
+  /** The curves parented to it (utils/curveParent), whole: their points
+   *  from the mat's top-left, their parent left out (it is this set). */
+  curves?: Curve[]
 }
 
 /** The 3D area out of card `cardId`, if it is out. */
@@ -108,6 +129,22 @@ export function foldArea3d(nodeId: string): string | null {
   const ms = useModelScaleStore.getState()
   const groups = useBoardsStore.getState().groups
   const master = (id: string) => masterOf(groups, id)
+  // A path one of its models rides goes with the model, as where it
+  // stands does: kept with it here (by the curve's place among the set's
+  // own, or its id on the canvas), and taken up again by the card or tile
+  // that comes back out for it. The one it was on rides no longer (a
+  // master card stays on the canvas, a plain card again).
+  const own = curvesOf(a.id)
+  const gone = new Set<string>()
+  const rideOf = (key: string): { ride?: Area3dRide } => {
+    const r = riderOf(key)
+    if (!r) return {}
+    gone.add(key)
+    const i = own.findIndex(c => c.id === r.curve.id)
+    const { key: _key, ...rider } = r.rider
+    void _key
+    return { ride: { on: i >= 0 ? i : r.curve.id, rider } }
+  }
   const onMasters = new Set(cards.map(g => master(g.id)))
   const seen = new Set<string>()
   const cardItems: Area3dCardItem[] = []
@@ -128,8 +165,13 @@ export function foldArea3d(nodeId: string): string | null {
       ...(ms.placeOf[`card:${g.id}`] ? { place: ms.placeOf[`card:${g.id}`] } : {}),
       ...(ms.stretchOf[`card:${g.id}`] ? { stretch: ms.stretchOf[`card:${g.id}`] } : {}),
       ...(ms.lensOf[`card:${g.id}`] ? { lens: ms.lensOf[`card:${g.id}`] } : {}),
+      ...(ms.pieceOf[`card:${g.id}`] ? { piece: ms.pieceOf[`card:${g.id}`] } : {}),
+      ...rideOf(`card:${g.id}`),
     })
   }
+  // (A second showing of a master on the same set is kept once, above:
+  // the linked one goes with the fold all the same.)
+  for (const g of cards) if (g.linkOf && riderOf(`card:${g.id}`)) gone.add(`card:${g.id}`)
   const tileItems: Area3dTileItem[] = tiles.map(n => {
     const { id: _id, ...tile } = n
     void _id
@@ -141,11 +183,32 @@ export function foldArea3d(nodeId: string): string | null {
       ...(ms.placeOf[`node:${n.id}`] ? { place: ms.placeOf[`node:${n.id}`] } : {}),
       ...(ms.stretchOf[`node:${n.id}`] ? { stretch: ms.stretchOf[`node:${n.id}`] } : {}),
       ...(ms.lensOf[`node:${n.id}`] ? { lens: ms.lensOf[`node:${n.id}`] } : {}),
+      ...(ms.pieceOf[`node:${n.id}`] ? { piece: ms.pieceOf[`node:${n.id}`] } : {}),
+      ...rideOf(`node:${n.id}`),
     }
   })
+  // (Their rides are kept with them, above: not a second time on a curve.)
+  const staying = (c: Curve) => c.riders?.filter(r => !gone.has(r.key))
+  const curveItems = own.map(c => {
+    const { parent: _parent, riders: _riders, ...curve } = c
+    void _parent; void _riders
+    const riders = staying(c)
+    return { ...curve, ...(riders?.length ? { riders } : {}), pts: c.pts.map(p => ({ ...p, x: p.x - a.x, y: p.y - a.y })) }
+  })
+  // A path left on the canvas lets go of the ones that go.
+  if (gone.size) {
+    const ns = useNotesStore.getState()
+    const mine = new Set(own.map(c => c.id))
+    for (const c of Object.values(ns.curves)) {
+      if (mine.has(c.id) || !c.riders?.some(r => gone.has(r.key))) continue
+      const left = staying(c)
+      ns.updateCurve(c.id, { riders: left?.length ? left : undefined })
+    }
+  }
   const data: Area3dData = {
     mat: { x: a.x, y: a.y, width: a.width, height: a.height, color: a.color, label: a.label },
     cards: cardItems, tiles: tileItems,
+    ...(curveItems.length ? { curves: curveItems } : {}),
   }
   writing = true
   try { useBoardsStore.setState(s => ({ groups: s.groups.map(g => g.id === cardId ? { ...g, area3d: data } : g) })) } finally { writing = false }
@@ -153,12 +216,13 @@ export function foldArea3d(nodeId: string): string | null {
   return cardId
 }
 
-/** Takes 3D area `nodeId` off the canvas: its linked cards and tiles go
- *  with it; master cards stay. */
-function clearMat(nodeId: string, withTiles = true) {
+/** Takes 3D area `nodeId` off the canvas: its linked cards, tiles and
+ *  curves go with it (but curves `keep`); master cards stay. */
+function clearMat(nodeId: string, withTiles = true, keep?: Set<string>) {
   const a = useFreeNodeStore.getState().nodes[nodeId]
   if (!a) return
   const { cards, tiles } = onMat(a)
+  const curves = withTiles ? curvesOf(a.id).map(c => c.id).filter(id => !keep?.has(id)) : []
   clearing = true
   try {
     for (const g of cards) {
@@ -167,6 +231,13 @@ function clearMat(nodeId: string, withTiles = true) {
       useBoardsStore.getState().deleteGroup(g.id)
     }
     if (withTiles) for (const n of tiles) useFreeNodeStore.getState().deleteFreeNode(n.id)
+    // Its curves, as its tiles: kept in its card when folded; left on the
+    // canvas, no one's, when it goes because its card was deleted.
+    if (curves.length) {
+      useNotesStore.getState().deleteCurves(curves)
+      const ui = useNotesUi.getState()
+      if (ui.selected.some(id => curves.includes(id))) useNotesUi.setState({ selected: ui.selected.filter(id => !curves.includes(id)) })
+    }
     useFreeNodeStore.getState().deleteFreeNode(nodeId)
   } finally { clearing = false }
 }
@@ -227,7 +298,9 @@ export function startArea3dBundle(): void {
 
 /** Folding writes the card's layout; any other change to it (a State
  *  card's output turned to another state, another showing of the same card
- *  folded) lays the 3D area out again from what the card now holds. */
+ *  folded) lays the 3D area out again from what the card now holds. Its
+ *  curves the card held go, for the ones it holds now; the ones drawn on
+ *  it since, which no card holds, stay (startArea3dFollow). */
 let writing = false
 
 /** Where a 3D area comes out of a card that has none yet: an empty mat
@@ -250,6 +323,11 @@ export function area3dSpot(card: ProjectGroup): { x: number; y: number; w: numbe
   const m = (card.area3d ?? freshMat(card)).mat
   return { x: m.x, y: m.y, w: m.width, h: m.height }
 }
+
+/** Is model `key` ('card:<id>' / 'node:<id>') still on the canvas? */
+const modelThere = (key: string) => key.startsWith('node:')
+  ? !!useFreeNodeStore.getState().nodes[key.slice(5)]
+  : useBoardsStore.getState().groups.some(g => g.id === key.slice(5))
 
 /** Brings card `cardId`'s 3D area out (an empty one the first time).
  *  Returns the mat's id. */
@@ -297,14 +375,21 @@ export function showArea3d(cardId: string, quiet = false, spot?: { x: number; y:
       }
     }),
   }))
+  // The paths its models rode: taken up again once its curves are out.
+  const rides: { key: string; ride: Area3dRide }[] = []
   for (const [lid, p] of at) {
     if (!lid) continue
+    if (p.ride) rides.push({ key: `card:${lid}`, ride: p.ride })
     if (p.size !== undefined) ms.setSetSize(`card:${lid}`, p.size)
     if (p.pose) ms.setPose(`card:${lid}`, p.pose)
     if (p.tint) ms.setTint(`card:${lid}`, p.tint)
-    if (p.place) ms.setPlace(`card:${lid}`, p.place)
+    // Where it stood in the set and the view its piece was given, as they
+    // were folded or not at all: a linked card is made with its master's
+    // (boardsStore duplicateGroup), which are not this set's.
+    ms.setPlace(`card:${lid}`, p.place ?? null)
     if (p.stretch) ms.setStretch(`card:${lid}`, p.stretch)
     if (p.lens) ms.setLens(`card:${lid}`, p.lens)
+    ms.setPiece(`card:${lid}`, p.piece ?? null)
   }
   // Its tiles, whole.
   for (const t of data.tiles) {
@@ -316,21 +401,49 @@ export function showArea3d(cardId: string, quiet = false, spot?: { x: number; y:
     if (t.place) ms.setPlace(`node:${nid}`, t.place)
     if (t.lens) ms.setLens(`node:${nid}`, t.lens)
     if (t.stretch) ms.setStretch(`node:${nid}`, t.stretch)
+    if (t.piece) ms.setPiece(`node:${nid}`, t.piece)
+    if (t.ride) rides.push({ key: `node:${nid}`, ride: t.ride })
+  }
+  // Its curves, whole, parented to the mat that came out. New ids: the
+  // same layout can be out more than once (a linked card of this one).
+  const out: string[] = []
+  for (const c of data.curves ?? []) {
+    const cid = newNoteId('cv')
+    out.push(cid)
+    // A model that stayed on the canvas and rode it rides it again,
+    // unless it is gone, or rides another path by now.
+    const { riders: rode, ...curve } = c
+    const riders = rode?.filter(r => modelThere(r.key) && !riderOf(r.key))
+    useNotesStore.getState().addCurve({ ...curve, ...(riders?.length ? { riders } : {}), id: cid, parent: id, pts: c.pts.map(p => ({ ...p, x: p.x + m.x, y: p.y + m.y })) })
+  }
+  // Its models back on the paths they rode (a path gone since: they stand
+  // where they were put).
+  for (const { key, ride } of rides) {
+    const cid = typeof ride.on === 'number' ? out[ride.on] : ride.on
+    if (!cid || useNotesStore.getState().curves[cid]?.kind !== 'bezier') continue
+    parentToPath(key, cid)
+    setRider(cid, key, ride.rider)
   }
   return id
 }
 
 // ── The motion (Brian 2026-11-09: the set's frame minimizes onto the card) ──
-// Folding, the mat and what is on it (its linked cards and tiles; the
-// master cards stay on the canvas) shrink as ONE picture into the card,
-// keeping their places on the mat, and fade at the very end, then fold.
-// Showing, the set grows out of the card the same way, backwards.
+// Folding, the mat and what is on it (its linked cards, tiles and curves,
+// and its models' pieces in the flat view; the master cards stay on the
+// canvas) shrink as ONE picture into the card, keeping their places on the
+// mat, and fade at the very end, then fold. Showing, the set grows out of
+// the card the same way, backwards.
 
 const MOTION_MS = 460
-const sel = (kind: 'card' | 'node', id: string) => kind === 'node'
+type RiderKind = 'card' | 'node' | 'curve' | 'piece'
+const sel = (kind: RiderKind, id: string) => kind === 'node'
   ? [`[data-freenode][data-id="${id}"]`]
+  // A curve's line, and the layers drawn along it (curveGeom layerCurves).
+  : kind === 'curve' ? [`[data-curve-shape="${id}"]`, `[data-curve-shape^="${id}~"]`]
+  // Every piece of the set (components/Canvas/PieceLayer), by the set.
+  : kind === 'piece' ? [`[data-piece-set="${id}"]`]
   : [`[data-layer-card="${id}"]`, `[data-group-card][data-id="${id}"]`, `[data-card-header="${id}"]`, `[data-primary-rail="${id}"]`, `[data-row-of="${id}"]`, `[data-row-band="${id}"]`]
-type Rider = { kind: 'card' | 'node'; id: string; cx: number; cy: number }
+type Rider = { kind: RiderKind; id: string; cx: number; cy: number }
 let moving = false
 
 /** The card's middle, canvas units. */
@@ -345,7 +458,8 @@ function fitInto(a: FreeNodeData, g: ProjectGroup) {
   return Math.min((g.cardWidthOverride ?? size.w) / a.width, (g.cardHeightOverride ?? size.h) / a.height) * 0.9
 }
 
-/** What rides with mat `a`: the mat, its linked cards and its tiles. */
+/** What rides with mat `a`: the mat, its linked cards, its tiles, its
+ *  curves and its models' pieces. */
 function riders(a: FreeNodeData): Rider[] {
   const size = cardFaceSize()
   const { cards, tiles } = onMat(a)
@@ -353,6 +467,10 @@ function riders(a: FreeNodeData): Rider[] {
     { kind: 'node', id: a.id, cx: a.x + a.width / 2, cy: a.y + a.height / 2 },
     ...cards.filter(g => g.linkOf).map(g => ({ kind: 'card' as const, id: g.id, cx: g.originX + (g.cardWidthOverride ?? size.w) / 2, cy: g.originY + (g.cardHeightOverride ?? size.h) / 2 })),
     ...tiles.map(n => ({ kind: 'node' as const, id: n.id, cx: n.x + n.width / 2, cy: n.y + n.height / 2 })),
+    // (A curve is drawn from the canvas's own origin: no middle to find.)
+    ...curvesOf(a.id).map(c => ({ kind: 'curve' as const, id: c.id, cx: 0, cy: 0 })),
+    // (Each piece's middle is read off it as drawn, in ride().)
+    { kind: 'piece', id: a.id, cx: 0, cy: 0 },
   ]
 }
 
@@ -364,17 +482,32 @@ function ride(rs: Rider[], to: { x: number; y: number }, out: boolean, done: () 
   // The mat (first rider) shrinks to `k` of its size onto the card's
   // middle; everything else keeps its place on it, so it is one picture.
   const from = rs[0] ? { x: rs[0].cx, y: rs[0].cy } : to
-  const frames = (r: Rider, el: HTMLElement) => {
+  const frames = (r0: Rider, el: HTMLElement) => {
+    const home = { transform: 'translate(0px, 0px) scale(1)' }
+    // A piece is drawn in screen px from the canvas's origin, unturned
+    // (its picture turns inside it), its box set to a part of a px
+    // (components/Canvas/PieceLayer): read as it is set, not in whole px
+    // (offsetWidth), by which a small one rode wide of its place on the
+    // mat. Its middle, canvas units.
+    const piece = r0.kind === 'piece'
+    const set = (v: string, or: number) => { const n = parseFloat(v); return Number.isFinite(n) ? n : or }
+    const w = piece ? set(el.style.width, el.offsetWidth) : el.offsetWidth, h = piece ? set(el.style.height, el.offsetHeight) : el.offsetHeight
+    const r = piece ? { ...r0, cx: (set(el.style.left, el.offsetLeft) + w / 2) / zoom, cy: (set(el.style.top, el.offsetTop) + h / 2) / zoom } : r0
+    // A curve is drawn in the canvas's own units, about the canvas's
+    // origin (components/Notes/CurveLayer): the mat's shrink, as it is.
+    if (r.kind === 'curve') {
+      const away = { transform: `translate(${to.x - from.x * k}px, ${to.y - from.y * k}px) scale(${k})` }
+      return out ? [away, home] : [home, away]
+    }
     // Scaled about its own transform origin (a mat's is its corner), so
     // its middle is put right: d = middle less origin, px.
     const o = getComputedStyle(el).transformOrigin.split(' ').map(parseFloat)
-    const dx = el.offsetWidth / 2 - (o[0] || 0), dy = el.offsetHeight / 2 - (o[1] || 0)
+    const dx = w / 2 - (o[0] || 0), dy = h / 2 - (o[1] || 0)
     // Screen px per px of its own: tiles sit in the zoomed canvas, cards not.
-    const u = el.offsetWidth ? el.getBoundingClientRect().width / el.offsetWidth : 1
+    const u = w ? el.getBoundingClientRect().width / w : 1
     const z = zoom / (u || 1)
     const x = (to.x + (r.cx - from.x) * k - r.cx) * z + dx * (1 - k), y = (to.y + (r.cy - from.y) * k - r.cy) * z + dy * (1 - k)
     const away = { transform: `translate(${x}px, ${y}px) scale(${k})` }
-    const home = { transform: 'translate(0px, 0px) scale(1)' }
     return out ? [away, home] : [home, away]
   }
   // Seen the whole way, gone only at the card.
@@ -428,6 +561,10 @@ export function foldArea3dMoving(nodeId: string, then?: () => void): void {
   // No card yet: where the new one goes (foldArea3d).
   const to = card ? middleOf(card) : { x: a.x + size.w / 2, y: a.y + a.height + size.h * 0.75 }
   moving = true
+  // Its curves ride in as drawn: a selected one's points are put away.
+  const mine = new Set(curvesOf(a.id).map(c => c.id))
+  const ui = useNotesUi.getState()
+  if (ui.selected.some(id => mine.has(id))) useNotesUi.setState({ selected: ui.selected.filter(id => !mine.has(id)) })
   const fit = card ? fitInto(a, card) : Math.min(size.w / a.width, size.h / a.height)
   ride(riders(a), to, false, () => { moving = false; foldArea3d(nodeId); then?.() }, fit)
 }
@@ -464,6 +601,49 @@ export function foldArea3dAndDeck(cardId: string, row: string[]): boolean {
   return true
 }
 
+/** The same layout, but for where it comes out (a folded showing of the
+ *  card was moved: the card's own set, out, is where it is all the same)? */
+const sameLayout = (a: Area3dData | undefined, b: Area3dData) => !!a && a.cards === b.cards && a.tiles === b.tiles && a.curves === b.curves
+  && a.mat.width === b.mat.width && a.mat.height === b.mat.height && a.mat.color === b.mat.color && a.mat.label === b.mat.label
+
+/** A curve as a 3D set's card holds it (its points from the mat's corner
+ *  `ox`, `oy`; not its id, its parent or who rides it), as one string:
+ *  two that are the same but for rounding read the same. (To a hundredth,
+ *  taken from the millionth: a point at an exact half hundredth, as one
+ *  drawn at a round zoom is, reads the same after the set was moved and
+ *  the sums left it a hair under.) */
+function heldAs(c: Curve, ox = 0, oy = 0): string {
+  const { id: _id, parent: _parent, riders: _riders, pts, ...rest } = c
+  void _id; void _parent; void _riders
+  const tidy = (v: unknown): unknown => Array.isArray(v) ? v.map(tidy)
+    : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).filter(([, x]) => x !== undefined).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([k, x]) => [k, tidy(x)]))
+    : typeof v === 'number' ? Math.round(Math.round(v * 1e6) / 1e4) / 100 : v
+  return JSON.stringify(tidy({ ...rest, pts: pts.map(p => ({ ...p, x: p.x - ox, y: p.y - oy })) }))
+}
+
+/** Where the curves a set was laid out with are measured from now: the
+ *  mat's corner as it was when they were laid, moved as the set has moved
+ *  since. That is the corner `n` has now, unless the mat was resized by
+ *  its top or its left edge (which moves its corner and leaves what is on
+ *  it where it is): then it is as far from the mat's far corner as the
+ *  mat was big when it was laid (`mat`, the layout's). Across and down,
+ *  each way is tried, and the one taken from which the most of `live`
+ *  (the set's curves now) are still as `was` (the layout's) has them;
+ *  with none from any, the corner as it is. Nothing is made of how the
+ *  curves lie among themselves: one moved by hand is the owner's, however
+ *  many were moved the same way. */
+function laidFrom(live: Curve[], was: Curve[], n: { x: number; y: number; width: number; height: number }, mat?: { width: number; height: number }): { x: number; y: number } {
+  const held = new Set(was.map(c => heldAs(c)))
+  const xs = mat && mat.width !== n.width ? [n.x, n.x + n.width - mat.width] : [n.x]
+  const ys = mat && mat.height !== n.height ? [n.y, n.y + n.height - mat.height] : [n.y]
+  let best = { x: n.x, y: n.y }, most = 0
+  for (const x of xs) for (const y of ys) {
+    const k = live.filter(c => held.has(heldAs(c, x, y))).length
+    if (k > most) { most = k; best = { x, y } }
+  }
+  return best
+}
+
 /** A 3D area card moving takes its 3D area along: out, the mat (and what
  *  is on it, utils/areaFollow); folded, where it comes out. Not while the
  *  mat is selected too (a drag of both moves both), nor on undo. */
@@ -485,9 +665,10 @@ export function startArea3dFollow(): () => void {
         const q = last.get(id)
         if (q && (q.x !== p.x || q.y !== p.y)) moves.push({ id, dx: p.x - q.x, dy: p.y - q.y })
         // Its layout changed under a 3D area that is out: lay it out anew.
-        if (q && q.data !== p.data && p.data && !writing && area3dOutOf(id)) relay.push(id)
+        if (q && q.data !== p.data && p.data && !writing && !sameLayout(q.data, p.data) && area3dOutOf(id)) relay.push(id)
       }
     }
+    const before = last
     last = now
     if (relay.length) {
       busy = true
@@ -495,8 +676,18 @@ export function startArea3dFollow(): () => void {
         for (const id of relay) {
           const out = area3dOutOf(id)
           const n = out ? useFreeNodeStore.getState().nodes[out] : undefined
-          if (out) clearMat(out)
-          showArea3d(id, true, n && { x: n.x, y: n.y }, n?.under ?? [])
+          // Its curves the layout it was laid from does not hold (drawn on
+          // it since, or changed): no card keeps them, so they are not
+          // taken off the canvas. They stay, the set's that comes out anew.
+          const was = before.get(id)?.data?.curves ?? []
+          const held = new Set(was.map(c => heldAs(c)))
+          const live = n ? curvesOf(n.id) : []
+          const from = n ? laidFrom(live, was, n, before.get(id)?.data?.mat) : null
+          const stay = from ? live.filter(c => !held.has(heldAs(c, from.x, from.y))) : []
+          if (out) clearMat(out, true, new Set(stay.map(c => c.id)))
+          const again = showArea3d(id, true, n && { x: n.x, y: n.y }, n?.under ?? [])
+          // (One from before curves had parents lies on it as it did.)
+          if (again) for (const c of stay) if (c.parent !== undefined) useNotesStore.getState().updateCurve(c.id, { parent: again })
         }
       } finally { busy = false }
       last = seen(useBoardsStore.getState().groups)

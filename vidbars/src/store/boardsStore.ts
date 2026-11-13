@@ -2060,6 +2060,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
       if (ms.stretchOf[from]) ms.setStretch(to, [...ms.stretchOf[from]] as [number, number, number])
       if (ms.lensOf[from]) ms.setLens(to, { ...ms.lensOf[from] })
       if (ms.floatOf[from]) ms.setFloat(to, ms.floatOf[from])
+      if (ms.pieceOf[from]) ms.setPiece(to, { q: [...ms.pieceOf[from].q] as [number, number, number, number], foot: [...ms.pieceOf[from].foot] as [number, number] })
       if (p) ms.setPlace(to, { dx: p.dx + 100, dy: p.dy + 100, h: p.h })
     }
     return newGroupId

@@ -39,6 +39,8 @@ import { useCabinetUi } from './utils/cabinet'
 import { usePickMode } from './utils/cabinetPick'
 import { useNotesStore, useNotesUi } from './store/notesStore'
 import { models } from './components/Canvas/tilt/TiltModels'
+import { usePieceStore } from './three/pieceService'
+import { scenePieces } from './utils/scenePieces'
 import { useManip } from './store/manipStore'
 import { useRideClock } from './utils/pathRide'
 
@@ -64,6 +66,8 @@ import { useRideClock } from './utils/pathRide'
   useManip,
   // The clock the models riding paths go by (utils/pathRide).
   useRideClock,
+  // A 3D set's models as pieces in the flat view, and their pictures.
+  usePieceStore, scenePieces,
 }
 
 // One card shown in several places: an edit on one is on all (utils/linkedCards).

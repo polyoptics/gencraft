@@ -97,8 +97,14 @@ export const models: {
   pathAt: ((clientX: number, clientY: number, only?: Set<string>) => PathHit | null) | null
   /** Where a point of the canvas (canvas units, z up) is drawn in 3D. */
   pathPx: ((p: { x: number; y: number; z: number }) => { x: number; y: number } | null) | null
+  /** How model `key` is seen now, for its piece in the flat view
+   *  (tiltScene pieceView). Only while the 3D view is on screen. */
+  pieceView: ReturnType<typeof createTiltScene>['pieceView'] | null
+  /** The 3D view's renderer, lent for a picture taken off screen
+   *  (tiltScene lend; three/pieceService). */
+  lend: ReturnType<typeof createTiltScene>['lend'] | null
   root: HTMLElement | null
-} = { pathAt: null, pathPx: null, gizmoAt: null, manipHot: null, labelAt: null, strokeAt: null, modelSize: null, pick: null, pickZ: null, info: null, spin: null, letGo: null, hovered: null, at: null, surface: null, pinSpots: null, screenBox: null, floatSpot: null, pivotOf: null, aimAt: null, cameraFrame: null, lookBounds: null, root: null }
+} = { pieceView: null, lend: null, pathAt: null, pathPx: null, gizmoAt: null, manipHot: null, labelAt: null, strokeAt: null, modelSize: null, pick: null, pickZ: null, info: null, spin: null, letGo: null, hovered: null, at: null, surface: null, pinSpots: null, screenBox: null, floatSpot: null, pivotOf: null, aimAt: null, cameraFrame: null, lookBounds: null, root: null }
 /** Viewers showing what a camera sees (components/Viewport3D/
  *  CameraViewerOverlay, Brian 2026-11-12: "if I put a 2D viewer beside a
  *  3D set, I should be able to look through any active cameras there"):
@@ -505,6 +511,8 @@ export const TiltModels: React.FC = () => {
       }
       models.cameraFrame = v.cameraFrame
       models.lookBounds = v.lookBounds
+      models.pieceView = v.pieceView
+      models.lend = v.lend
       models.root = root
       warm()
       raf = requestAnimationFrame(frame)
@@ -537,7 +545,7 @@ export const TiltModels: React.FC = () => {
       cancelAnimationFrame(raf)
       post.disconnect(); marker.remove()
       models.pick = null; models.pickZ = null; models.info = null; models.spin = null; models.letGo = null
-      models.surface = null; models.pinSpots = null; models.screenBox = null; models.floatSpot = null; models.pivotOf = null; models.labelAt = null; models.strokeAt = null; models.modelSize = null; models.gizmoAt = null; models.manipHot = null; models.pathAt = null; models.pathPx = null; models.aimAt = null; models.cameraFrame = null; models.lookBounds = null; models.root = null
+      models.surface = null; models.pinSpots = null; models.screenBox = null; models.floatSpot = null; models.pivotOf = null; models.labelAt = null; models.strokeAt = null; models.modelSize = null; models.gizmoAt = null; models.manipHot = null; models.pathAt = null; models.pathPx = null; models.aimAt = null; models.cameraFrame = null; models.lookBounds = null; models.pieceView = null; models.lend = null; models.root = null
       view?.dispose()
       canvas?.remove()
     }
@@ -578,7 +586,7 @@ function offsetScaled(el: HTMLElement, stage: HTMLElement, scaled = true): { x: 
 }
 
 /** A file's name from its url — nothing for a `mediaref:` (it has none). */
-const fileName = (url: string) => /^mediaref:/.test(url) ? '' : decodeURIComponent(url.split(/[\\/]/).pop()!.split('?')[0])
+export const fileName = (url: string) => /^mediaref:/.test(url) ? '' : decodeURIComponent(url.split(/[\\/]/).pop()!.split('?')[0])
 
 /** The model a card's FRONT shows, if it is one: a closed deck shows its
  *  face card, and a card the block its face is stepped to (else its first

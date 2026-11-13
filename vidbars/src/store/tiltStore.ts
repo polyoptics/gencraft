@@ -436,7 +436,20 @@ interface ModelScaleStore {
    *  far ahead its focal point is. Same keys. Absent: CAMERA_LENS. */
   lensOf: Record<string, CameraLens>
   setLens: (key: string, l: Partial<CameraLens> | null) => void
+  /** The view a model's piece is drawn from (Brian 2026-11-12: "use this
+   *  view for its piece"): in the flat view a model placed in a 3D set
+   *  shows as a picture of its shape (utils/scenePieces). Same keys.
+   *  Absent: from straight above, turning with the model. */
+  pieceOf: Record<string, PieceView>
+  setPiece: (key: string, v: PieceView | null) => void
 }
+
+/** A view a model's piece is drawn from, kept as it was when it was set:
+ *  `q` turns the model (as it stood, about its middle) into the picture
+ *  (x right, y up, z to the eye); `foot` is where its foot lies from its
+ *  middle in that picture, for each half of its height. Such a piece
+ *  stays upright, as a token; one from above turns with its model. */
+export interface PieceView { q: [number, number, number, number]; foot: [number, number] }
 
 export interface ScenePlace { dx: number; dy: number; h: number }
 /** A camera primitive's lens: `mm` focal length (on a 36 mm wide frame),
@@ -506,8 +519,14 @@ export const useModelScaleStore = create<ModelScaleStore>()(persist(set => ({
     if (color) tintOf[key] = color; else delete tintOf[key]
     return { tintOf }
   }),
+  pieceOf: {},
+  setPiece: (key, v) => set(s => {
+    const pieceOf = { ...s.pieceOf }
+    if (v) pieceOf[key] = v; else delete pieceOf[key]
+    return { pieceOf }
+  }),
 }), {
   name: 'vidbars-model-scale',
-  partialize: s => ({ unitsPerMetre: s.unitsPerMetre, sizeOf: s.sizeOf, setSizeOf: s.setSizeOf, poseOf: s.poseOf, tintOf: s.tintOf, placeOf: s.placeOf, stretchOf: s.stretchOf, lensOf: s.lensOf, floatOf: s.floatOf }),
+  partialize: s => ({ unitsPerMetre: s.unitsPerMetre, sizeOf: s.sizeOf, setSizeOf: s.setSizeOf, poseOf: s.poseOf, tintOf: s.tintOf, placeOf: s.placeOf, stretchOf: s.stretchOf, lensOf: s.lensOf, floatOf: s.floatOf, pieceOf: s.pieceOf }),
   storage: createDebouncedIDBStorage(400),
 }))

@@ -181,6 +181,13 @@ export interface Curve {
   /** Only on the curve a layer is drawn as (utils/curveGeom layerCurves),
    *  never kept: the curve it belongs to. */
   layerOf?: string
+  /** What it belongs to (Brian 2026-11-12): the 3D set (its ground's node
+   *  id) it is parented to, which it moves with and folds into; null,
+   *  nothing. Set when it is drawn (any part of it on a set: that set) and
+   *  by hand after (P, Shift-P, the Outliner). Absent: drawn before there
+   *  were parents, when one lying wholly on a set went with it
+   *  (utils/curveParent parentOf). */
+  parent?: string | null
 }
 
 /** Another design drawn along the same line, over the line's own (Brian

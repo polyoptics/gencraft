@@ -1,8 +1,10 @@
 // areaFollow.ts — what is on an Area card moves with it (Brian 2026-11-07,
 // components/Notes/AreaBody). When an Area moves (not resized), whatever lay
 // on it and did not move itself goes the same way: tiles and models (other
-// Areas too, with what is on them), cards, Viewers and the curves drawn
-// wholly on it. "On it" is where it lies: its middle inside the Area.
+// Areas too, with what is on them), cards and Viewers. "On it" is where it
+// lies: its middle inside the Area. A curve goes with the Area it is
+// parented to, wherever it lies (Brian 2026-11-12, utils/curveParent); one
+// from before curves had parents, when it lies wholly on the Area.
 
 import { useFreeNodeStore, type FreeNodeData } from '../store/freeNodeStore'
 import { useBoardsStore } from '../store/boardsStore'
@@ -47,7 +49,9 @@ if (typeof window !== 'undefined' && !(window as unknown as { __areaFollow?: boo
           try { useFreeNodeStore.getState().updateFreeNode(a.id, { under: a.under }) } finally { busy = false }
         }
       }
-      if (!was || (was.x === a.x && was.y === a.y) || was.width !== a.width || was.height !== a.height) continue
+      // (An undo or redo puts each thing back itself: moved along as well,
+      // the cards on it landed a second move away.)
+      if (!was || isUndoRestoring() || (was.x === a.x && was.y === a.y) || was.width !== a.width || was.height !== a.height) continue
       const dx = a.x - was.x, dy = a.y - was.y
       // What lay on it and stayed put (a selection dragged along with it
       // has already moved).
@@ -71,7 +75,13 @@ if (typeof window !== 'undefined' && !(window as unknown as { __areaFollow?: boo
           if (!isUnder(a, `viewer:${w.id}`) && inside(was, w.x + w.width / 2, w.y + w.height / 2)) v3.updateWindow(w.id, { x: w.x + dx, y: w.y + dy })
         }
         const ns = useNotesStore.getState()
-        const curves = Object.values(ns.curves).filter(c => !isUnder(a, `curve:${c.id}`) && c.pts.length && c.pts.every(p => inside(was, p.x, p.y))).map(c => c.id)
+        // Its own curves, and those of the Areas it carried along.
+        const carried = new Set([a.id, ...tiles.filter(id => prev.nodes[id].type === 'area')])
+        const curves = Object.values(ns.curves).filter(c => {
+          if (c.parent === null) return false
+          if (c.parent !== undefined) return carried.has(c.parent)
+          return !isUnder(a, `curve:${c.id}`) && c.pts.length > 0 && c.pts.every(p => inside(was, p.x, p.y))
+        }).map(c => c.id)
         if (curves.length) ns.moveCurves(curves, dx, dy)
       } finally { busy = false }
     }

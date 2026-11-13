@@ -49,7 +49,7 @@ interface Snapshot {
   /** The 3D notes: curves, and strokes and pins on models (store/notesStore). */
   notes?: { curves: unknown; models: unknown; pictures?: unknown }
   /** Models' size and turn on their cards (tiltStore useModelScaleStore). */
-  models3d?: { sizeOf: unknown; setSizeOf?: unknown; poseOf: unknown; tintOf?: unknown; placeOf?: unknown; stretchOf?: unknown; lensOf?: unknown; floatOf?: unknown }
+  models3d?: { sizeOf: unknown; setSizeOf?: unknown; poseOf: unknown; tintOf?: unknown; placeOf?: unknown; stretchOf?: unknown; lensOf?: unknown; floatOf?: unknown; pieceOf?: unknown }
 }
 
 function snapStore(
@@ -105,7 +105,7 @@ function captureSnapshot(): Snapshot {
     // is what keeps them out of history — see the liveness test there.
     viewports3d: useViewport3DStore.getState().windows,
     notes: { curves: useNotesStore.getState().curves, models: useNotesStore.getState().models, pictures: useNotesStore.getState().pictures },
-    models3d: { sizeOf: useModelScaleStore.getState().sizeOf, setSizeOf: useModelScaleStore.getState().setSizeOf, poseOf: useModelScaleStore.getState().poseOf, tintOf: useModelScaleStore.getState().tintOf, placeOf: useModelScaleStore.getState().placeOf, stretchOf: useModelScaleStore.getState().stretchOf, lensOf: useModelScaleStore.getState().lensOf, floatOf: useModelScaleStore.getState().floatOf },
+    models3d: { sizeOf: useModelScaleStore.getState().sizeOf, setSizeOf: useModelScaleStore.getState().setSizeOf, poseOf: useModelScaleStore.getState().poseOf, tintOf: useModelScaleStore.getState().tintOf, placeOf: useModelScaleStore.getState().placeOf, stretchOf: useModelScaleStore.getState().stretchOf, lensOf: useModelScaleStore.getState().lensOf, floatOf: useModelScaleStore.getState().floatOf, pieceOf: useModelScaleStore.getState().pieceOf },
   }
 }
 
@@ -169,7 +169,7 @@ function restoreSnapshot(snap: Snapshot) {
   }
   if (snap.models3d) {
     type MS = ReturnType<typeof useModelScaleStore.getState>
-    useModelScaleStore.setState({ sizeOf: snap.models3d.sizeOf as MS['sizeOf'], setSizeOf: (snap.models3d.setSizeOf ?? {}) as MS['setSizeOf'], poseOf: snap.models3d.poseOf as MS['poseOf'], tintOf: (snap.models3d.tintOf ?? {}) as MS['tintOf'], placeOf: (snap.models3d.placeOf ?? {}) as MS['placeOf'], stretchOf: (snap.models3d.stretchOf ?? {}) as MS['stretchOf'], lensOf: (snap.models3d.lensOf ?? {}) as MS['lensOf'], floatOf: (snap.models3d.floatOf ?? {}) as MS['floatOf'] })
+    useModelScaleStore.setState({ sizeOf: snap.models3d.sizeOf as MS['sizeOf'], setSizeOf: (snap.models3d.setSizeOf ?? {}) as MS['setSizeOf'], poseOf: snap.models3d.poseOf as MS['poseOf'], tintOf: (snap.models3d.tintOf ?? {}) as MS['tintOf'], placeOf: (snap.models3d.placeOf ?? {}) as MS['placeOf'], stretchOf: (snap.models3d.stretchOf ?? {}) as MS['stretchOf'], lensOf: (snap.models3d.lensOf ?? {}) as MS['lensOf'], floatOf: (snap.models3d.floatOf ?? {}) as MS['floatOf'], pieceOf: (snap.models3d.pieceOf ?? {}) as MS['pieceOf'] })
   }
 }
 

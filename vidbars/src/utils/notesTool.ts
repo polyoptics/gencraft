@@ -30,6 +30,9 @@
 //    carries on drawing from it.
 //    In 3D the curves are things in the scene (three/pathOverlay), so what
 //    is under the cursor is asked of the 3D view; flat, of the page.
+//  - Parents (Brian 2026-11-12, utils/curveParent): a curve drawn with any
+//    part of it on a 3D set belongs to that set. Select a curve, then the
+//    set, and P parents it to the set; Shift-P unparents it.
 
 import { useCurveDraft, usePathHot, usePathMenu } from '../store/pathLive'
 import { useNotesStore, useNotesUi, newNoteId, type Curve, type CurvePoint, type CurveHandle } from '../store/notesStore'
@@ -40,10 +43,13 @@ import { clientToCanvas } from './fx/createEffect'
 import { canvasPointUnder, overCanvas } from './placeTool'
 import { useCanvasStore } from '../store/canvasStore'
 import { useBoardsStore } from '../store/boardsStore'
+import { useFreeNodeStore } from '../store/freeNodeStore'
 import { useTiltStore, isTilted, unprojectTilt, TILT_FAR } from '../store/tiltStore'
+import { useManip } from '../store/manipStore'
 import { useUndoCoordinator } from '../store/undoCoordinator'
 import { models, modelKey } from '../components/Canvas/tilt/TiltModels'
 import { ensureAnnotated, addPin } from './annotations'
+import { drawnParent, parentCurves } from './curveParent'
 
 export { useCurveDraft }
 
@@ -64,7 +70,10 @@ export function commitDraft() {
     pts.push(p)
   }
   if (pts.length < 2) return
-  useNotesStore.getState().addCurve({ ...curve, pts })
+  // Its parent is given once, when it is first drawn: one carried on from
+  // an end point (resumeFrom) keeps what it had.
+  const parent = curve.parent !== undefined ? curve.parent : drawnParent({ ...curve, pts })
+  useNotesStore.getState().addCurve({ ...curve, pts, parent })
   useNotesUi.setState({ selected: [curve.id], points: [] })
 }
 
@@ -157,6 +166,12 @@ useNotesUi.subscribe((s, prev) => { if (prev.tool === 'curve' && s.tool !== 'cur
 type Drag = (e: PointerEvent) => void
 let drag: { move: Drag; up: Drag } | null = null
 let eatClick = false
+/** Presses so far, and the last press that picked a 3D set with curves
+ *  selected: "select the arrow, then select the 3D set, and push P" (Brian
+ *  2026-11-12). A click on the set lets the curves go as a click anywhere
+ *  does, so P takes the ones that very click let go, for that set. */
+let presses = 0
+let letGo: { ids: string[]; set: string; press: number } | null = null
 
 function claim(e: Event) {
   e.preventDefault()
@@ -170,12 +185,23 @@ function modelUnder(e: PointerEvent): string | null {
   return k && !k.startsWith('person|') ? k : null
 }
 
+/** Is a press on something standing in the 3D view (a model, the person
+ *  beside one, a Viewer's or a strip's furniture), whatever lies behind
+ *  it on the plane? Only while the view is tilted: flat, the 3D view
+ *  still answers for what it drew last. */
+function standsUnder(e: PointerEvent): boolean {
+  if (!isTilted(useTiltStore.getState())) return false
+  return !!models.pick?.(e.clientX, e.clientY)
+}
+
 function startDrag(move: Drag, up: Drag) {
   drag = { move, up }
 }
 
 function onDown(e: PointerEvent) {
-  if (!e.isTrusted || e.button !== 0 || e.altKey) return
+  if (!e.isTrusted) return
+  presses++
+  if (e.button !== 0 || e.altKey) return
   const target = e.target as Element | null
   if (!target?.closest) return
   if (target.closest('[data-notes-panel],[data-top-icon-bar],[data-tilt-hud]')) return
@@ -295,7 +321,7 @@ function onDown(e: PointerEvent) {
     }, () => {
       const c = useCurveDraft.getState().curve
       useCurveDraft.setState({ curve: null, hover: null })
-      if (c && c.pts.length >= 2) useNotesStore.getState().addCurve(c)
+      if (c && c.pts.length >= 2) useNotesStore.getState().addCurve({ ...c, parent: drawnParent(c) })
     })
     return
   }
@@ -486,7 +512,57 @@ function selectPress(e: PointerEvent, target: Element, hit: PathHit | null) {
     return
   }
   // Elsewhere on the canvas: the curves let go (the press goes on as usual).
-  if (ui.selected.length && overCanvas(target)) useNotesUi.setState({ selected: [], points: [] })
+  if (ui.selected.length && overCanvas(target)) {
+    // (A press on a model standing in a set lands on the ground behind
+    // it: it is a press on the model, not on the set. Looking through a
+    // camera nothing of the page is seen: the press is the camera's,
+    // whatever set lies under it there.)
+    const set = useManip.getState().through || standsUnder(e) ? null : setUnder(target)
+    if (set) letGo = { ids: ui.selected, set, press: presses }
+    // Shift adds: a 3D set Shift-clicked joins the curves, which stay selected.
+    if (e.shiftKey && set) return
+    useNotesUi.setState({ selected: [], points: [] })
+  }
+}
+
+/** The 3D set a press on `target` selects, if any (its ground's node id):
+ *  its ground, or its card while it is out. */
+function setUnder(target: Element): string | null {
+  const nodes = useFreeNodeStore.getState().nodes
+  const id = target.closest<HTMLElement>('[data-freenode][data-id]')?.dataset.id
+  if (id) return nodes[id]?.type === 'area' ? id : null
+  const card = target.closest<HTMLElement>('[data-group-card][data-id]')?.dataset.id
+  return card ? Object.values(nodes).find(n => n.type === 'area' && n.areaCard === card)?.id ?? null : null
+}
+
+/** The one 3D set selected: its ground, or its card while it is out. */
+function selectedSet(): string | null {
+  const fs = useFreeNodeStore.getState()
+  const sets = new Set(fs.selectedIds.filter(id => fs.nodes[id]?.type === 'area'))
+  const cards = useBoardsStore.getState().selectedGroupIds
+  if (cards.length) for (const n of Object.values(fs.nodes)) if (n.type === 'area' && n.areaCard && cards.includes(n.areaCard)) sets.add(n.id)
+  return sets.size === 1 ? [...sets][0] : null
+}
+
+/** P: the selected curves (or the ones the last click let go, picking
+ *  the set) become the 3D set's that was just clicked, or else the one
+ *  selected. Shift-P: they become no one's. They are left selected, to
+ *  show which. False: not a press for this (with nothing to change, it
+ *  goes on to whatever else takes the key). */
+function parentKey(e: KeyboardEvent): boolean {
+  const ui = useNotesUi.getState()
+  const curves = useNotesStore.getState().curves
+  const last = letGo && letGo.press === presses ? letGo : null
+  const ids = (ui.selected.length ? ui.selected : last?.ids ?? []).filter(id => curves[id])
+  if (!ids.length) return false
+  const picked = last && useFreeNodeStore.getState().nodes[last.set]?.type === 'area' ? last.set : null
+  const to = e.shiftKey ? null : picked ?? selectedSet()
+  if (!e.shiftKey && !to) return false
+  const changed = parentCurves(ids, to)
+  if (!changed && ui.selected.length) return false
+  claim(e)
+  if (!ui.selected.length) useNotesUi.setState({ selected: ids, points: [] })
+  return true
 }
 
 /** The part of a curve the cursor is over in 3D lights up. */
@@ -589,6 +665,7 @@ function onKey(e: KeyboardEvent) {
     return
   }
   if (e.key === 'Enter' && draft) { claim(e); commitDraft(); return }
+  if ((e.key === 'p' || e.key === 'P') && !draft && !e.ctrlKey && !e.metaKey && !e.altKey && !e.repeat && parentKey(e)) return
   if ((e.key === 'Delete' || e.key === 'Backspace') && ui.selected.length) {
     claim(e)
     checkpoint()
