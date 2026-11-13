@@ -11,38 +11,26 @@ const PALETTE = [
   '#6366f1', '#64748b', '#475569', '#334155',
 ]
 
-interface Props {
+interface BodyProps {
   color: string
+  onChange: (color: string) => void
+  /** How solid the colour is drawn, 0 to 1. Given with onOpacityChange, a
+   *  slider for it sits under the colours. */
+  opacity?: number
+  onOpacityChange?: (opacity: number) => void
+}
+
+interface Props extends BodyProps {
   anchorX: number
   anchorY: number
-  onChange: (color: string) => void
   onClose: () => void
 }
 
-export const ColorPickerPopup: React.FC<Props> = ({ color, anchorX, anchorY, onChange, onClose }) => {
-  const ref = useRef<HTMLDivElement>(null)
+/** The picker itself: the colour field, eyedropper, the ready colours and,
+ *  when asked for, how solid the colour is. In ColorPickerPopup, or set
+ *  into another panel (the text toolbar's card colour). */
+export const ColorPickerBody: React.FC<BodyProps> = ({ color, onChange, opacity, onOpacityChange }) => {
   const [picking, setPicking] = useState(false)
-
-  // Close on outside click (pointerdown — robust to touch/pen) and on Escape.
-  // Capture phase ensures no descendant can stopPropagation before we see it.
-  useEffect(() => {
-    const outside = (e: Event) => {
-      const t = e.target as Node | null
-      if (ref.current && t && !ref.current.contains(t)) onClose()
-    }
-    const esc = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { e.stopPropagation(); onClose() }
-    }
-    const tid = setTimeout(() => {
-      document.addEventListener('pointerdown', outside, true)
-      document.addEventListener('keydown', esc, true)
-    }, 0)
-    return () => {
-      clearTimeout(tid)
-      document.removeEventListener('pointerdown', outside, true)
-      document.removeEventListener('keydown', esc, true)
-    }
-  }, [onClose])
 
   const openEyeDropper = async () => {
     if (!hasEyeDropper) return
@@ -55,26 +43,9 @@ export const ColorPickerPopup: React.FC<Props> = ({ color, anchorX, anchorY, onC
     setPicking(false)
   }
 
-  const x = Math.min(anchorX, window.innerWidth - 225)
-  const y = Math.min(anchorY, window.innerHeight - 360)
-
-  return createPortal(
-    <div
-      ref={ref}
-      onPointerDown={e => e.stopPropagation()}
-      style={{
-        position: 'fixed',
-        left: x,
-        top: y,
-        zIndex: 10000,
-        background: '#1e1f30',
-        border: '1px solid rgba(255,255,255,0.1)',
-        borderRadius: 12,
-        padding: 14,
-        boxShadow: '0 12px 40px rgba(0,0,0,0.7)',
-        width: 210,
-      }}
-    >
+  const solid = opacity ?? 1
+  return (
+    <>
       <HexColorPicker color={color} onChange={onChange} style={{ width: '100%' }} />
       {hasEyeDropper && (
         <button
@@ -119,6 +90,73 @@ export const ColorPickerPopup: React.FC<Props> = ({ color, anchorX, anchorY, onC
           />
         ))}
       </div>
+      {onOpacityChange && (
+        <div data-color-opacity style={{ marginTop: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, fontWeight: 600, color: 'rgba(255,255,255,0.55)', marginBottom: 5 }}>
+            <span>Transparency</span>
+            <span style={{ fontVariantNumeric: 'tabular-nums', minWidth: 34, textAlign: 'right' }}>{Math.round((1 - solid) * 100)}%</span>
+          </div>
+          <input
+            type="range"
+            min={0} max={1} step={0.01}
+            value={1 - solid}
+            onChange={e => onOpacityChange(1 - parseFloat(e.target.value))}
+            onPointerDown={e => e.stopPropagation()}
+            onMouseDown={e => e.stopPropagation()}
+            style={{ display: 'block', width: '100%', height: 4, margin: 0, accentColor: '#60a5fa', cursor: 'pointer' }}
+          />
+        </div>
+      )}
+    </>
+  )
+}
+
+export const ColorPickerPopup: React.FC<Props> = ({ color, anchorX, anchorY, onChange, onClose, opacity, onOpacityChange }) => {
+  const ref = useRef<HTMLDivElement>(null)
+
+  // Close on outside click (pointerdown — robust to touch/pen) and on Escape.
+  // Capture phase ensures no descendant can stopPropagation before we see it.
+  useEffect(() => {
+    const outside = (e: Event) => {
+      const t = e.target as Node | null
+      if (ref.current && t && !ref.current.contains(t)) onClose()
+    }
+    const esc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.stopPropagation(); onClose() }
+    }
+    const tid = setTimeout(() => {
+      document.addEventListener('pointerdown', outside, true)
+      document.addEventListener('keydown', esc, true)
+    }, 0)
+    return () => {
+      clearTimeout(tid)
+      document.removeEventListener('pointerdown', outside, true)
+      document.removeEventListener('keydown', esc, true)
+    }
+  }, [onClose])
+
+  const x = Math.min(anchorX, window.innerWidth - 225)
+  const y = Math.max(4, Math.min(anchorY, window.innerHeight - (onOpacityChange ? 460 : 360)))
+
+  return createPortal(
+    <div
+      ref={ref}
+      data-color-picker-popup
+      onPointerDown={e => e.stopPropagation()}
+      style={{
+        position: 'fixed',
+        left: x,
+        top: y,
+        zIndex: 10000,
+        background: '#1e1f30',
+        border: '1px solid rgba(255,255,255,0.1)',
+        borderRadius: 12,
+        padding: 14,
+        boxShadow: '0 12px 40px rgba(0,0,0,0.7)',
+        width: 210,
+      }}
+    >
+      <ColorPickerBody color={color} onChange={onChange} opacity={opacity} onOpacityChange={onOpacityChange} />
     </div>,
     document.body
   )

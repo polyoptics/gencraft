@@ -172,6 +172,8 @@ export interface ProjectGroup {
   /** Coloured by hand: keeps its colour when its type, or its type's
    *  colour, changes. Otherwise it wears its type's colour. */
   ownColor?: boolean
+  /** How solid its colour is drawn, 0 (clear) to 1. Absent: solid. */
+  colorOpacity?: number
   /** A FACTION's tree: member card id → the members it reports to. Its
    *  members are the cards it links to (linkedGroupIds); a member's rank
    *  is worked out from this (utils/cardTypes factionMembers). */
@@ -406,6 +408,7 @@ interface BoardsState {
   deleteGroup: (groupId: string) => void
   renameGroup: (groupId: string, name: string) => void
   setGroupColor: (groupId: string, color: string) => void
+  setGroupColorOpacity: (groupId: string, opacity: number) => void
   setGroupFlipped: (groupId: string, flipped: boolean) => void
   /** Flip pressed on a card: it turns to `flipped`, and so does every card
    *  of the selection it is in (effect cards have no back, so stay). */
@@ -1117,6 +1120,10 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
 
   setGroupColor(groupId, color) {
     set(s => ({ groups: s.groups.map(g => g.id === groupId ? { ...g, color } : g) }))
+  },
+  setGroupColorOpacity(groupId, opacity) {
+    const o = Math.max(0, Math.min(1, opacity))
+    set(s => ({ groups: s.groups.map(g => g.id === groupId ? { ...g, colorOpacity: o >= 1 ? undefined : o } : g) }))
   },
 
   setGroupFlipped(groupId, flipped) {

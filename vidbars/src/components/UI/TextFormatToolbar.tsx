@@ -1,9 +1,11 @@
 // Shared text formatting toolbar — used by FreeNode, CardLayer, BlockLayer
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useLayoutEffect, useRef } from 'react'
 import ReactDOM from 'react-dom'
 import { HexColorPicker } from 'react-colorful'
 import type { TextStyle } from '../../store/freeNodeStore'
 import { DEFAULT_HEADER_STYLE, DEFAULT_BODY_STYLE } from '../../store/freeNodeStore'
+import { ColorPickerBody } from '../Bar/ColorPickerPopup'
+import { cardFill } from '../../utils/colorUtils'
 
 export type TextFieldMode = 'header' | 'body'
 
@@ -356,17 +358,33 @@ interface TextFormatToolbarProps {
   onFlipV?: () => void
   onCropImage?: () => void
   onHeroOpacityChange?: (opacity: number) => void
+  // The colour of what the text sits on (a card's), and how solid it is
+  // drawn (optional: shown only when cardColor is given). onCardEdit is
+  // called at the start of each change, for the host to mark an undo step.
+  cardColor?: string
+  cardOpacity?: number
+  onCardEdit?: () => void
+  onCardColorChange?: (color: string) => void
+  onCardOpacityChange?: (opacity: number) => void
 }
 
 export const TextFormatToolbar: React.FC<TextFormatToolbarProps> = ({
   headerStyle, bodyStyle, onHeaderStyleChange, onBodyStyleChange,
   activeField, onActiveFieldChange, anchorRect, preferBelow, onClose,
   heroImage, heroFlipH, heroFlipV, heroOpacity, onFlipH, onFlipV, onCropImage, onHeroOpacityChange,
+  cardColor, cardOpacity, onCardEdit, onCardColorChange, onCardOpacityChange,
 }) => {
-  const [showPopup, setShowPopup] = useState<'text' | 'bg' | 'hAlign' | 'vAlign' | 'font' | 'weight' | 'lineHeight' | 'spacing' | 'transform' | null>(null)
+  const [showPopup, setShowPopup] = useState<'text' | 'bg' | 'card' | 'hAlign' | 'vAlign' | 'font' | 'weight' | 'lineHeight' | 'spacing' | 'transform' | null>(null)
   const [editingSize, setEditingSize] = useState(false)
   const [sizeBuffer, setSizeBuffer] = useState('')
   const sizeInputRef = useRef<HTMLInputElement>(null)
+  // The bar's own width, so all of it stays inside the window's right edge.
+  const barRef = useRef<HTMLDivElement>(null)
+  const [barW, setBarW] = useState(460)
+  useLayoutEffect(() => {
+    const w = barRef.current?.offsetWidth
+    if (w && Math.abs(w - barW) > 0.5) setBarW(w)
+  })
 
   const defaultForField = activeField === 'header' ? DEFAULT_HEADER_STYLE : DEFAULT_BODY_STYLE
   const activeStyle = activeField === 'header' ? headerStyle : bodyStyle
@@ -437,6 +455,18 @@ export const TextFormatToolbar: React.FC<TextFormatToolbarProps> = ({
     : (aboveY >= 42 ? aboveY : belowY)
   const toolbarLeft = anchorRect.left
 
+  // The card colour panel: under its button when there is room; else beside
+  // what is being edited (right of it, or left), so the card stays in view.
+  const CARD_POPUP_W = 212, CARD_POPUP_H = 456
+  const barTop = Math.max(4, toolbarTop)
+  const cardPopupAt: React.CSSProperties = barTop + TOOLBAR_H + CARD_POPUP_H + 8 <= window.innerHeight
+    ? { position: 'absolute', top: 32, left: -4 }
+    : {
+        position: 'fixed',
+        left: anchorRect.right + 12 + CARD_POPUP_W <= window.innerWidth ? anchorRect.right + 12 : Math.max(4, anchorRect.left - 12 - CARD_POPUP_W),
+        top: Math.max(4, Math.min(anchorRect.top, window.innerHeight - CARD_POPUP_H - 8)),
+      }
+
   const btnStyle = (active?: boolean): React.CSSProperties => ({
     background: active ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.05)',
     border: active ? '1px solid rgba(255,255,255,0.3)' : '1px solid rgba(255,255,255,0.08)',
@@ -457,6 +487,7 @@ export const TextFormatToolbar: React.FC<TextFormatToolbarProps> = ({
     <>
     {/* Close-on-outside-click handled by useEffect listener above */}
     <div
+      ref={barRef}
       data-text-format-toolbar
       onPointerDown={e => {
         // Don't preventDefault on range inputs — it kills native drag for sliders
@@ -476,7 +507,7 @@ export const TextFormatToolbar: React.FC<TextFormatToolbarProps> = ({
       onDoubleClick={e => e.stopPropagation()}
       style={{
         position: 'fixed',
-        left: Math.max(4, Math.min(toolbarLeft, window.innerWidth - 460)),
+        left: Math.max(4, Math.min(toolbarLeft, window.innerWidth - Math.max(460, barW + 4))),
         top: Math.max(4, toolbarTop),
         zIndex: 10000,
         display: 'flex', alignItems: 'center', gap: 3,
@@ -821,6 +852,52 @@ export const TextFormatToolbar: React.FC<TextFormatToolbarProps> = ({
           <BgPickerPopup bgColor={ts.bgColor} bgOpacity={ts.bgOpacity} onColorSelect={c => setStyle(ts.bgOpacity > 0 ? { bgColor: c } : { bgColor: c, bgOpacity: 1 })} onOpacityChange={o => setStyle({ bgOpacity: o })} onClose={() => setShowPopup(null)} />
         )}
       </div>
+
+      {/* The card's own colour, and how see-through it is. */}
+      {cardColor && onCardColorChange && (
+        <>
+          <div style={sepStyle} />
+          <div style={{ position: 'relative' }}>
+            <button data-card-color-button style={{ ...btnStyle(showPopup === 'card'), padding: '2px 6px' }} onClick={() => setShowPopup(showPopup === 'card' ? null : 'card')} title="Card color and transparency">
+              <div style={{
+                width: 12, height: 16, borderRadius: 3, boxSizing: 'border-box',
+                border: '1px solid rgba(255,255,255,0.55)',
+                background: `linear-gradient(${cardFill(cardColor, cardOpacity)}, ${cardFill(cardColor, cardOpacity)}), repeating-conic-gradient(#666 0% 25%, #333 0% 50%) 0 0 / 6px 6px`,
+              }} />
+            </button>
+            {showPopup === 'card' && (
+              <div
+                data-card-color-popup
+                // One undo step for each press: a drag on the colour field
+                // or the slider is one change.
+                onPointerDownCapture={() => onCardEdit?.()}
+                onPointerDown={e => {
+                  // Not on the slider (its own drag) nor the colour field
+                  // (cancelling here would take its mouse drag away).
+                  const t = e.target as HTMLElement
+                  if (!(t.tagName === 'INPUT' && (t as HTMLInputElement).type === 'range') && !t.closest('.react-colorful')) e.preventDefault()
+                  e.stopPropagation()
+                }}
+                onPointerUp={e => e.stopPropagation()}
+                onClick={e => e.stopPropagation()}
+                onMouseDown={e => {
+                  const t = e.target as HTMLElement
+                  if (!(t.tagName === 'INPUT' && (t as HTMLInputElement).type === 'range')) e.preventDefault()
+                  e.stopPropagation()
+                }}
+                style={{
+                  ...cardPopupAt, zIndex: 10001,
+                  background: '#1e1f30', border: '1px solid rgba(255,255,255,0.12)',
+                  borderRadius: 12, padding: 14, boxShadow: '0 12px 40px rgba(0,0,0,0.7)',
+                  width: 210,
+                }}
+              >
+                <ColorPickerBody color={cardColor} onChange={onCardColorChange} opacity={cardOpacity ?? 1} onOpacityChange={onCardOpacityChange} />
+              </div>
+            )}
+          </div>
+        </>
+      )}
 
       {/* Hero image editing buttons — only shown when a hero image exists */}
       {heroImage && (

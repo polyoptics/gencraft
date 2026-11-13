@@ -6,13 +6,13 @@
 // Data lives on the card itself (ProjectGroup.flipped / details /
 // cardType; utils/cardTypes).
 
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import ReactDOM, { flushSync } from 'react-dom'
 import { useBoardsStore } from '../../store/boardsStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { useLinkDragStore } from '../../store/linkDragStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
-import { edgeColorFromHex, hexToHsl, hslToHex } from '../../utils/colorUtils'
+import { cardFill, edgeColorFromHex, hexToHsl, hslToHex } from '../../utils/colorUtils'
 import { CARD_TYPES, CARD_TYPE_ORDER, cardTypeOf, chartCards, chartName, chartRank, detailShown, isChartRank, factionMembers, factionsOf, hasMembers, isAbove, isOwnCount, newDetailId, typeColor, type CardDetail, type CardType, type FactionMember } from '../../utils/cardTypes'
 import { rankText } from '../../utils/chartData'
 import { factionGroupsOf, withGroupMoved, withMemberMoved } from '../../utils/factionGroups'
@@ -23,6 +23,13 @@ import { areSiblings, arePartners, familiesOf, familyTree, isAncestor as isKinAb
  *  so it reads the same at every zoom: nothing reflows as you zoom. */
 const BACK_W = 125
 const BACK_H = 184
+
+/** The cards a colour change on this card is made on: every selected card
+ *  when it is one of several selected (as the card menu's Card Color). */
+function colorIds(groupId: string): string[] {
+  const sel = useBoardsStore.getState().selectedGroupIds
+  return sel.length > 1 && sel.includes(groupId) ? sel : [groupId]
+}
 
 /** The card's back colour: its own colour, deeper. */
 export function backColor(color: string): string {
@@ -434,6 +441,9 @@ export const CardBack: React.FC<{
   const [rowHover, setRowHover] = useState<string | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number; kind: 'type' | 'chart' } | { x: number; y: number; kind: 'link'; id: string } | null>(null)
   const [picker, setPicker] = useState<{ x: number; y: number; type: CardType } | null>(null)
+  // The card's own colour and how see-through it is (the swatch by its type).
+  const [cardPicker, setCardPicker] = useState<{ x: number; y: number } | null>(null)
+  const closeCardPicker = useCallback(() => setCardPicker(null), [])
   // A member being dragged in a faction's list: onto the member it reports
   // to ('top': onto MEMBERS, it reports to no one). `ok`: it can go there
   // (never under someone below it).
@@ -530,6 +540,7 @@ export const CardBack: React.FC<{
     return { x: g?.originX ?? 0, y: g?.originY ?? 0 }
   }
   const typeClick = useClick(where, e => setMenu({ x: e.clientX, y: e.clientY, kind: 'type' }))
+  const colorClick = useClick(where, e => setCardPicker({ x: e.clientX + 12, y: e.clientY + 12 }))
 
   /** Press on a member: drag it onto another. In a faction, onto the one
    *  it reports to (Shift on letting go: as well as its boss now, or no
@@ -842,7 +853,7 @@ export const CardBack: React.FC<{
         {/* The printed border of a card's back. */}
         <div style={{ position: 'absolute', inset: 3, borderRadius: 7, border: `1px solid ${edgeColorFromHex(color, 0.28)}`, pointerEvents: 'none' }} />
         <div style={{
-          paddingLeft: Math.max(0, reserve / s - 8), minHeight: Math.max(0, reserve / s - 11), display: 'flex', alignItems: 'center',
+          paddingLeft: Math.max(0, reserve / s - 8), minHeight: Math.max(0, reserve / s - 11), display: 'flex', alignItems: 'center', gap: 3,
         }}>
           {/* The card's type: click to choose another. */}
           <div
@@ -857,6 +868,21 @@ export const CardBack: React.FC<{
             <span style={{ width: 6, height: 6, borderRadius: 2, background: color, border: '1px solid rgba(255,255,255,0.45)' }} />
             {CARD_TYPES[type].label.toUpperCase()}
             <span style={{ opacity: 0.7, fontSize: 6.5, letterSpacing: 0 }}>▾</span>
+          </div>
+          {/* The card's colour and how see-through it is: click to set them. */}
+          <div
+            data-card-color
+            title="Card color and transparency"
+            {...colorClick}
+            style={{
+              display: 'inline-flex', alignItems: 'center', cursor: 'pointer', padding: '2.5px 4px', borderRadius: 3,
+              background: cardPicker ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.25)',
+            }}
+          >
+            <span style={{
+              width: 11, height: 7, borderRadius: 2, boxSizing: 'border-box', border: '1px solid rgba(255,255,255,0.55)',
+              background: `linear-gradient(${cardFill(color, me?.colorOpacity)}, ${cardFill(color, me?.colorOpacity)}), repeating-conic-gradient(#666 0% 25%, #333 0% 50%) 0 0 / 4px 4px`,
+            }} />
           </div>
         </div>
         <div
@@ -1145,6 +1171,28 @@ export const CardBack: React.FC<{
       {menu?.kind === 'chart' && <BackMenu at={menu} title="Rank on chart" items={chartMenu()} onClose={() => setMenu(null)} />}
       {menu?.kind === 'link' && <BackMenu at={menu} title="This detail shows" items={linkMenu(menu.id)} onClose={() => setMenu(null)} />}
       {kinMenu && <BackMenu at={kinMenu} title={`${groups.find(g => g.id === kinMenu.a)?.name || 'Untitled'} is…`} items={kinItems(kinMenu.a, kinMenu.b)} onClose={() => setKinMenu(null)} />}
+      {cardPicker && ReactDOM.createPortal(
+        // One undo step for each press: a drag on the colour field or the
+        // slider is one change. With several cards selected, all of them.
+        <div style={{ display: 'contents' }} onPointerDownCapture={() => useUndoCoordinator.getState().checkpoint()}>
+          <ColorPickerPopup
+            color={color}
+            anchorX={cardPicker.x}
+            anchorY={cardPicker.y}
+            opacity={me?.colorOpacity ?? 1}
+            onChange={c => {
+              const bs = useBoardsStore.getState()
+              for (const id of colorIds(groupId)) { bs.setGroupColor(id, c); bs.setGroupOwnColor(id, true) }
+            }}
+            onOpacityChange={o => {
+              const bs = useBoardsStore.getState()
+              for (const id of colorIds(groupId)) bs.setGroupColorOpacity(id, o)
+            }}
+            onClose={closeCardPicker}
+          />
+        </div>,
+        document.body,
+      )}
       {picker && ReactDOM.createPortal(
         <ColorPickerPopup
           color={typeColor(picker.type, useBoardsStore.getState().typeColors)}

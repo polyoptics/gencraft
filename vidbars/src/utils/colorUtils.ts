@@ -18,6 +18,16 @@ export function edgeColorFromHex(baseHex: string, alpha: number): string {
   return `rgba(${(n >> 16) & 0xff},${(n >> 8) & 0xff},${n & 0xff},${alpha})`
 }
 
+/** A card's colour as it is drawn: solid, or see-through by its
+ *  colorOpacity (0 clear to 1 solid; absent, solid). */
+export function cardFill(hex: string, opacity?: number): string {
+  if (opacity === undefined || opacity >= 1) return hex
+  const h = hex.replace('#', '')
+  const n = parseInt(h.length === 3 ? h.replace(/./g, c => c + c) : h, 16)
+  if (Number.isNaN(n)) return hex
+  return `rgba(${(n >> 16) & 0xff},${(n >> 8) & 0xff},${n & 0xff},${Math.max(0, opacity)})`
+}
+
 export function hexToHsl(hex: string): HSL {
   const n = parseInt(hex.replace('#', ''), 16)
   const r = (n >> 16) / 255, g = ((n >> 8) & 0xff) / 255, b = (n & 0xff) / 255

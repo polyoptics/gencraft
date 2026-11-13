@@ -14,7 +14,7 @@ import { useBoardsStore, type ProjectGroup } from '../store/boardsStore'
 
 /** What a linked card shares with its master. */
 const SHARED = [
-  'name', 'color', 'ownColor', 'cardType', 'details',
+  'name', 'color', 'ownColor', 'colorOpacity', 'cardType', 'details',
   'cardHeroImage', 'cardHeroTransform', 'cardSummary',
   'cardText', 'cardTextStyle', 'cardHeaderText', 'cardHeaderTextStyle',
   'textSplitRatio', 'cardStrokes', 'area3d',

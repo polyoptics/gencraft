@@ -52,7 +52,7 @@ const REFS = ['linkOf', 'linkedGroupIds', 'reportsTo', 'kin', 'factionGroups', '
 
 /** The fields a linked card shares with its master (as utils/linkedCards). */
 const SHARED = [
-  'name', 'color', 'ownColor', 'cardType', 'details',
+  'name', 'color', 'ownColor', 'colorOpacity', 'cardType', 'details',
   'cardHeroImage', 'cardHeroTransform', 'cardSummary',
   'cardText', 'cardTextStyle', 'cardHeaderText', 'cardHeaderTextStyle',
   'textSplitRatio', 'cardStrokes',
