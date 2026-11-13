@@ -251,21 +251,44 @@ export function useAltTiltGesture() {
   }, [])
 }
 
+/** How fast an Alt+right-drag zooms: the zoom's log per px. */
+const DOLLY_RATE = 0.01
 /** Alt+right-drag: zoom straight toward the middle of the view, flat or
- *  tilted (Maya's dolly) — right or up zooms in, left or down zooms out. */
+ *  tilted (Maya's dolly) — right or up zooms in, left or down zooms out.
+ *  Tilted, it scales the painted plane while the drag goes on, as the
+ *  wheel does (tiltStore TiltGlide), and the canvas takes the zoom when
+ *  the button is let go: changing the canvas zoom on every move painted
+ *  every card again each time, far slower than the wheel (Brian
+ *  2026-11-13). */
 function dolly(e: PointerEvent, host: HTMLElement) {
   const c = viewCentre(host)
   if (!c) return
   const px = c.x, py = c.y
   let last = { x: e.clientX, y: e.clientY }
+  // (A wheel zoom still easing owns the plane's scale: then as flat.)
+  const ts0 = useTiltStore.getState()
+  const glide = isTilted(ts0) && !ts0.glide
+  const z0 = useCanvasStore.getState().zoom
+  let k = 1, raf = 0
+  const show = () => useTiltStore.getState().setGlide({ k, x: px - host.clientWidth / 2, y: py - host.clientHeight / 2 })
   const onMove = (ev: PointerEvent) => {
     const d = (ev.clientX - last.x) - (ev.clientY - last.y)
     last = { x: ev.clientX, y: ev.clientY }
-    if (d) useCanvasStore.getState().zoomAtPoint(Math.exp(d * 0.006), px, py)
+    if (!d) return
+    if (!glide) { useCanvasStore.getState().zoomAtPoint(Math.exp(d * DOLLY_RATE), px, py); return }
+    k = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z0 * k * Math.exp(d * DOLLY_RATE))) / z0
+    // Once a frame, however many moves came in it.
+    if (!raf) raf = requestAnimationFrame(() => { raf = 0; show() })
   }
   const onUp = () => {
     window.removeEventListener('pointermove', onMove, true)
     window.removeEventListener('pointerup', onUp, true)
+    if (raf) { cancelAnimationFrame(raf); raf = 0 }
+    if (!glide || (k === 1 && !useTiltStore.getState().glide)) return
+    // The new zoom drawn now (flushSync), then the scale dropped, so the
+    // same frame shows both and nothing jumps.
+    flushSync(() => useCanvasStore.getState().zoomAtPoint(k, px, py))
+    useTiltStore.getState().setGlide(null)
   }
   window.addEventListener('pointermove', onMove, true)
   window.addEventListener('pointerup', onUp, true)
