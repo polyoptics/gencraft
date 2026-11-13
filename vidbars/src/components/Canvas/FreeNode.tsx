@@ -1775,6 +1775,33 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
                 })}
               </div>
             )}
+            {/* How a 3D set's models show in the flat view (utils/liveTop):
+                as pieces, or live in 3D from straight above. The one in
+                use lit; for every selected set when this one is among
+                them. The menu stays open, to try them. */}
+            {isArea && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4, padding: '3px 12px 8px', borderBottom: '1px solid rgba(255,255,255,0.07)', marginBottom: 4 }}>
+                <span style={{ gridColumn: '1 / 3', color: 'rgba(255,255,255,0.4)', fontSize: 11 }}>Flat view</span>
+                {([{ id: 'pieces', name: 'Pieces', tip: 'In the flat view its models show as pieces: pictures of them from above' }, { id: 'live', name: 'Live 3D', tip: 'In the flat view its models show live in 3D from straight above, with the move, rotate and scale handles (W, E, R)' }] as const).map(v => {
+                  const lit = (node.flatView ?? 'pieces') === v.id
+                  return (
+                    <button key={v.id} data-area-flat-view-pick={v.id} aria-pressed={lit} title={v.tip}
+                      onClick={() => {
+                        const fs = useFreeNodeStore.getState()
+                        const ids = (fs.selectedIds.includes(id) ? fs.selectedIds : [id]).filter(i => fs.nodes[i]?.type === 'area')
+                        useUndoCoordinator.getState().checkpoint()
+                        for (const i of ids) fs.updateFreeNode(i, { flatView: v.id === 'live' ? 'live' : undefined })
+                      }}
+                      style={{
+                        padding: '4px 0', fontSize: 12, borderRadius: 4, cursor: 'pointer',
+                        border: `1px solid ${lit ? 'rgba(120,180,255,0.9)' : 'rgba(255,255,255,0.12)'}`,
+                        background: lit ? 'rgba(120,180,255,0.25)' : 'transparent',
+                        color: lit ? '#fff' : '#cbd5e1',
+                      }}>{v.name}</button>
+                  )
+                })}
+              </div>
+            )}
             {[
               // Not for an effect card: its face shows the EFFECT's name, so a
               // rename would never be seen (and choosing an effect resets it).

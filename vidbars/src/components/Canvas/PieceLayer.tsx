@@ -24,7 +24,7 @@
 // background-image: the 3D view takes those, in the overlay, for artwork
 // on a card.
 
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useBoardsStore } from '../../store/boardsStore'
@@ -38,6 +38,7 @@ import { useRideClock, riderRuns } from '../../utils/pathRide'
 import { clientToCanvas } from '../../utils/fx/createEffect'
 import { selectModel } from './tilt/TiltModels'
 import { usePieceStore, ensurePiece, pieceKey, trimPieces, type PiecePic, type Vec3 } from '../../three/pieceService'
+import { liveKeys, piecePress, type PiecePress } from '../../utils/liveTop'
 import { scenePieces, pieceShot, layPiece, pieceScale, pieceSelected, piecesShown, pieceRiders, PIECE_LIFT, type ScenePiece } from '../../utils/scenePieces'
 
 /** A model with no colour of its own: plain clay, as a primitive comes. */
@@ -88,8 +89,7 @@ function overOwn(p: ScenePiece, x: number, y: number): boolean {
 
 /** A press on a piece: selects its model, and dragged, moves it in its
  *  set (with every other selected piece), as one undo step. */
-function press(e: React.PointerEvent, p: ScenePiece) {
-  if (e.button === 1) { pan(e); return }
+function press(e: PiecePress, p: ScenePiece) {
   if (e.button !== 0 || e.altKey) return
   e.preventDefault()
   e.stopPropagation()
@@ -134,6 +134,10 @@ function press(e: React.PointerEvent, p: ScenePiece) {
   window.addEventListener('pointerup', up)
   window.addEventListener('pointercancel', up)
 }
+
+// (A model of a set shown live in the flat view is pressed as its piece
+// is: utils/liveTop.)
+piecePress.fn = press
 
 interface PieceProps {
   p: ScenePiece
@@ -212,7 +216,7 @@ const Piece: React.FC<PieceProps> = React.memo(({ p, pic, size, zoom, selected, 
               edge where it is drawn small.) */}
           <div
             data-piece-hit=""
-            onPointerDown={e => press(e, p)}
+            onPointerDown={e => { if (e.button === 1) pan(e); else press(e, p) }}
             onPointerEnter={() => setHover(true)}
             onPointerLeave={() => setHover(false)}
             onWheel={wheel}
@@ -259,7 +263,10 @@ export const PieceLayer: React.FC = () => {
   useNotesStore(s => riders ? s.curves : null)
   useRideClock(s => riders ? `${s.base} ${s.stamp}` : '')
   const playing = useRideClock(s => s.playing)
-  const list = scenePieces()
+  // (A set shown live in the flat view, utils/liveTop: its models are
+  // drawn by the 3D view, and have no piece.)
+  const every = scenePieces(), live = liveKeys()
+  const list = useMemo(() => live.size ? every.filter(p => !live.has(p.key)) : every, [every, live])
   const anyLifted = list.some(p => p.h > 0)
   // The clock running: the riders' pieces go along their paths, a step
   // each frame.

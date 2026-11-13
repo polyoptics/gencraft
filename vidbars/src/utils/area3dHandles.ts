@@ -27,6 +27,7 @@ import { PATH_KEY, type ManipHit } from '../three/tiltScene'
 import { useNotesUi } from '../store/notesStore'
 import { holdPoints, moveHeld, turnHeld, sizeHeld, type PointsHeld } from './pathEdit'
 import { placeNow, dataKey, sceneOf } from './area3dScene'
+import { handlesLive, flatLiveSelected } from './liveTop'
 import { useManip, MANIP_SIZE_STEP, MANIP_SIZE_MIN, MANIP_SIZE_MAX } from '../store/manipStore'
 
 type Q = [number, number, number, number]
@@ -78,7 +79,7 @@ function setCursor(c: string | null) {
 const cursorOf = (h: ManipHit) => h.part === 'f' ? 'crosshair' : h.part === 's' || h.part[0] === 's' ? 'nwse-resize' : h.part[0] === 'r' ? 'grab' : 'move'
 
 function hit(e: PointerEvent) {
-  if (!models.gizmoAt || !isTilted(useTiltStore.getState())) return null
+  if (!models.gizmoAt || !handlesLive()) return null
   // With the Pen, the Pin or the Eraser in the hand a press is that tool's:
   // a selected model is drawn on where its handles are too.
   const tool = useNotesUi.getState().tool
@@ -239,13 +240,18 @@ function onMove(e: PointerEvent) {
   }
 }
 
+/** The handles' keys are for the 3D view: tipped into 3D, or looking
+ *  straight down with a model of a set shown live there selected
+ *  (utils/liveTop). */
+const keysLive = () => isTilted(useTiltStore.getState()) || flatLiveSelected()
+
 /** W move, E rotate, R scale, in the 3D view (not while typing). */
 function onKey(e: KeyboardEvent) {
   if (e.ctrlKey || e.metaKey || e.altKey) return
   // + and - size the handles (Brian 2026-11-12), held down too.
   const step = e.code === 'Equal' || e.code === 'NumpadAdd' || e.key === '+' ? 1 : e.code === 'Minus' || e.code === 'NumpadSubtract' || e.key === '-' ? -1 : 0
   if (step) {
-    if (!isTilted(useTiltStore.getState()) || useManip.getState().through) return
+    if (!keysLive() || useManip.getState().through) return
     const t = e.target as HTMLElement | null
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return
     e.preventDefault(); e.stopImmediatePropagation()
@@ -255,7 +261,7 @@ function onKey(e: KeyboardEvent) {
   }
   if (e.repeat) return
   const mode = e.code === 'KeyW' ? 'move' : e.code === 'KeyE' ? 'rotate' : e.code === 'KeyR' ? 'scale' : null
-  if (!mode || !isTilted(useTiltStore.getState())) return
+  if (!mode || !keysLive()) return
   const t = e.target as HTMLElement | null
   if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return
   e.preventDefault(); e.stopImmediatePropagation()

@@ -31,6 +31,7 @@ import { sceneOf, sceneSpot, standsIn, dataKey, cardBox } from '../../../utils/a
 import { rideSpots, rideRuns, useRideClock, riderOf } from '../../../utils/pathRide'
 import { useUndoCoordinator } from '../../../store/undoCoordinator'
 import { useManip } from '../../../store/manipStore'
+import { flatLive, liveKeys } from '../../../utils/liveTop'
 /** The notes store as it stands (read each frame without a hook). */
 let notesNow = useNotesStore.getState()
 useNotesStore.subscribe(s => { notesNow = s })
@@ -127,8 +128,11 @@ const fadeShown = () => {
   const x = Math.min(1, offFlat(useTiltStore.getState()) / FADE_TILT)
   return x * x * (3 - 2 * x)
 }
-/** Whether anything 3D is on screen. */
-const live3d = () => isTilted(useTiltStore.getState()) || !!useManip.getState().through
+/** Whether the view is in 3D: tipped, or looking through a camera. */
+const tilted3d = () => isTilted(useTiltStore.getState()) || !!useManip.getState().through
+/** Whether anything 3D is on screen: that, or looking straight down with
+ *  a set's models shown live there (utils/liveTop). */
+const live3d = () => tilted3d() || flatLive()
 
 /** Whether model `key` ('card:<id>' / 'node:<id>') stands on a 3D area:
  *  a scene layout, where its turn is kept (Brian 2026-11-08). */
@@ -178,6 +182,8 @@ const frameState = (): TiltFrameState => {
   const ts = useTiltStore.getState()
   const { unitsPerMetre: scales, sizeOf, setSizeOf, poseOf, tintOf, stretchOf, lensOf } = useModelScaleStore.getState()
   const through = useManip.getState().through
+  // The models of sets shown live in the flat view (utils/liveTop).
+  const live = liveKeys()
   // Looking through a camera in a 3D set: that set's models only.
   const lookSet = through ? sceneOf(through)?.area.id : undefined
   const placedMemo = new Map<string, boolean>()
@@ -206,15 +212,16 @@ const frameState = (): TiltFrameState => {
     manip: useManip.getState(),
     placed,
     canPlace: key => !key.startsWith('mini:') && !!sceneOf(key),
-    slabs: live3d() ? collectSlabs(fadeShown()) : (dropLifts(), []),
-    art: live3d() ? lastArt : [],
+    slabs: tilted3d() ? collectSlabs(fadeShown()) : (dropLifts(), []),
+    art: tilted3d() ? lastArt : [],
     fade: fadeShown(),
     notesOf: url => notesNow.models[url],
     lock: ts.lock3d || !!through,
     lensFor: key => key.startsWith('mini:') ? miniLook.get(key)?.lens : lensOf[dataKey(key)],
     through,
     inLook: lookSet ? key => inSet(key, lookSet) : undefined,
-    paths: live3d() ? pathFrame() : undefined,
+    paths: tilted3d() ? pathFrame() : undefined,
+    full: live.size ? key => live.has(key) || live.has(dataKey(key)) : undefined,
   }
 }
 
@@ -224,7 +231,7 @@ let pathSig = 0
 for (const st of [useNotesStore, useNotesUi, useCurveDraft, usePathHot]) st.subscribe(() => { pathSig++ })
 
 /** A curve's pattern is running along it: the 3D view keeps drawing. */
-const pathFlows = () => live3d() && Object.values(notesNow.curves).some(c => c.kind === 'bezier' && curveRuns(c))
+const pathFlows = () => tilted3d() && Object.values(notesNow.curves).some(c => c.kind === 'bezier' && curveRuns(c))
 
 /** One point alone selected: the path's directions there (the manipulator
  *  in Local lines up with them). */
@@ -417,7 +424,9 @@ export const TiltModels: React.FC = () => {
         // multisampled pass every frame while nothing moved was most of the
         // 3D view's cost. Standing models animate (turn, pop, fade), so
         // with any in view every frame is drawn as before.
-        const targets = collectTargets(W, H)
+        // Looking straight down, only the models of sets shown live
+        // there are drawn (utils/liveTop).
+        const targets = tilted3d() ? collectTargets(W, H) : collectTargets(W, H).filter(t => st.full?.(t.key))
         const sig = targets.length ? '' : frameSig(st, W, H)
         if (!sig || sig !== lastSig) view.frame(now, W, H, targets, st)
         calm = sig && sig === lastSig ? calm + 1 : 0
@@ -1537,6 +1546,10 @@ function collectSlabs(K = 1): TiltSlab[] {
   }
   for (const world of host.querySelectorAll<HTMLElement>(':scope > div[style*="scale("]')) {
     for (const el of world.querySelectorAll<HTMLElement>(ART)) {
+      // (A 3D set's ground is drawn with a picture of its marks, and is no
+      // artwork: its models' shadows fall on it, as looking straight down
+      // at a set shown live there, utils/liveTop.)
+      if (el.hasAttribute('data-area-mat')) continue
       // Not a picture hidden as under its strip: the shadows and the sheen
       // skipped where nothing of it shows.
       if (buried.some(b => b.contains(el)) && getComputedStyle(el).visibility === 'hidden') continue
@@ -2728,7 +2741,11 @@ function inSet(key: string, set: string): boolean {
 function collectTargets(W: number, H: number): TiltTarget[] {
   // Models stand up out of their cards in the 3D mode only; peeking, they
   // stay flat in their cards (Brian 2026-11-04).
-  if (usePeek.getState().target) return []
+  // (But for the models of a set shown live in the flat view, utils/
+  // liveTop: they have no piece to stay in their place.)
+  const peeking = !!usePeek.getState().target
+  const liveOnly = peeking ? liveKeys() : null
+  if (liveOnly && !liveOnly.size) return []
   const out: TiltTarget[] = []
   const { pan, zoom } = useCanvasStore.getState()
   // In a 3D area's scene, a model stands where it was put there (up in
@@ -2848,7 +2865,7 @@ function collectTargets(W: number, H: number): TiltTarget[] {
   }
   const st = useTiltStats.getState()
   if (st.held !== held || st.tris !== tris) useTiltStats.setState({ held, tris })
-  return keep
+  return liveOnly ? keep.filter(t => liveOnly.has(t.key) || liveOnly.has(dataKey(t.key))) : keep
 }
 
 

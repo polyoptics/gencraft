@@ -217,10 +217,16 @@ export interface FreeNodeData {
   /** A 3D set: what its ground is drawn as (components/Notes/AreaBody).
    *  Absent: lines. 'none' is no ground at all, only its thin outline. */
   ground?: AreaGround
+  /** A 3D set: how its models show in the flat view (utils/liveTop).
+   *  Absent: as pieces, pictures from above (utils/scenePieces). 'live':
+   *  the models themselves, drawn live in 3D from straight above. */
+  flatView?: AreaFlatView
 }
 
 /** A 3D set's ground: a line grid, dots, crosses, or nothing. */
 export type AreaGround = 'lines' | 'dots' | 'cross' | 'none'
+/** A 3D set's models in the flat view: pieces, or live 3D from above. */
+export type AreaFlatView = 'pieces' | 'live'
 
 const COLORS = ['#1e2235', '#1e3028', '#2e1e35', '#35281e', '#1e2e35', '#2e351e']
 let colorIdx = 0

@@ -216,6 +216,10 @@ export interface TiltFrameState {
   /** Looking through it, the models seen: those of its own 3D set (Brian
    *  2026-11-12). Absent: all of them. */
   inLook?: (key: string) => boolean
+  /** A model shown as live 3D in the flat view too (its 3D set's own
+   *  choice, utils/liveTop): it stands whole whatever the tilt, never
+   *  rising or fading with the rest of the 3D look. */
+  full?: (key: string) => boolean
   /** The canvas's curves, as things in the scene (three/pathOverlay). */
   paths?: PathFrame
 }
@@ -1293,7 +1297,8 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     const off = Math.max(Math.abs(st.tilt), Math.abs(st.yaw))
     const swingK = Math.min(1, Math.abs(st.yaw) / 35)
     const rise = st.lock ? 1 : Math.min(1, Math.max(0, (st.tilt - 4) / 26)) * (1 - swingK * swingK * (3 - 2 * swingK))
-    const ease = rise * rise * (3 - 2 * rise)
+    const easeAll = rise * rise * (3 - 2 * rise)
+    let anyFull = false
     const keep = new Set<string>()
     for (const tg of targets) {
       keep.add(tg.key)
@@ -1301,6 +1306,10 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       if (s && s.url !== tg.url) { drop(tg.key, s); s = undefined }
       if (!s) s = spawn(tg.key, tg.url)
       s.seen = frameNo
+      // (One a set shows live in the flat view stands whole at any tilt.)
+      const full = !!st.full?.(tg.key)
+      const ease = full ? 1 : easeAll, fade = full ? 1 : st.fade
+      if (full) anyFull = true
       // Floating (the lift handle): up off its card, rising in with the
       // rest of the 3D look.
       s.base = tg.z ?? 0
@@ -1326,9 +1335,9 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       // tilt (Brian 2026-10-30). A Viewer's still pops up from flat.
       const up = tg.pop ? ease : 0.4 + 0.6 * ease
       s.stand.scale.set(k, k * Math.max(up * (tg.pop ? 1 : since), 0.001), k)
-      if (s.alpha !== st.fade) {
-        s.alpha = st.fade
-        for (const x of s.mats) fadeMat(x.m, x.o, x.t, st.fade)
+      if (s.alpha !== fade) {
+        s.alpha = fade
+        for (const x of s.mats) fadeMat(x.m, x.o, x.t, fade)
       }
       if (s.look) applyLook(s.look, st.texture, st.shade)
       s.stand.visible = !!s.inst && ease > 0
@@ -1436,7 +1445,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       s.figure.position.set(Math.hypot(s.size.x, s.size.z) / 2 + 0.45 * s.unit, 0, 0)
       // A guessed person only where they would read: not a giant beside a
       // teacup. One the user sized always shows.
-      s.figure.visible = st.figure && !!s.inst && (s.unitSet || PERSON_H * s.unit < s.size.y * 5)
+      s.figure.visible = st.figure && easeAll > 0 && !!s.inst && (s.unitSet || PERSON_H * s.unit < s.size.y * 5)
 
       // Back wall: stands on the card's top edge.
       const text = s.inst
@@ -1449,14 +1458,14 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
         s.wallText = text
       }
       const wallW = tg.w, wallH = tg.w / 4
-      s.wall.scale.set(wallW, wallH * Math.max(ease, 0.001), 1)
+      s.wall.scale.set(wallW, wallH * Math.max(easeAll, 0.001), 1)
       const wt = tg.wall ?? tg
-      s.wall.position.set(wt.u, -(wt.v - wt.h / 2), (wallH * ease) / 2)
+      s.wall.position.set(wt.u, -(wt.v - wt.h / 2), (wallH * easeAll) / 2)
       const d = Math.max(1.5, wallH * 0.07)
       const back = s.wall.getObjectByName('placard')!
       back.scale.z = d
       back.position.z = -d / 2 - 0.3
-      s.wall.visible = st.walls && !!text && ease > 0 && !tg.mini
+      s.wall.visible = st.walls && !!text && easeAll > 0 && !tg.mini
     }
     // A card missing for a frame or two (a re-render, a deck shuffling) is
     // only hidden: dropping it would reload the model and blink.
@@ -1536,12 +1545,15 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       const shadows = L.shadows ?? DEFAULT_SHADOWS, sheen = L.sheen ?? DEFAULT_SHEEN
       for (const m of [modelShadow, slabShadow]) m.scale.set(span * 2, span * 2, 1)
       for (const m of [modelShadow, slabShadow, liftCatch]) (m.material as THREE.ShadowMaterial).opacity = shadows
-      ;(modelShadow.material as THREE.ShadowMaterial).opacity = shadows * st.fade
+      // (With a model shown live in the flat view they are whole: these
+      // are shared by every model.)
+      const mfade = anyFull ? 1 : st.fade
+      ;(modelShadow.material as THREE.ShadowMaterial).opacity = shadows * mfade
       // The grey, wire and person looks fade in and out with the models.
-      fadeMat(GRAY_MAT, 1, false, st.fade)
-      fadeMat(GRAY_FLAT_MAT, 1, false, st.fade)
-      fadeMat(WIRE_MAT, 0.85, true, st.fade)
-      fadeMat(WIRE_OVER_MAT, 0.2, true, st.fade)
+      fadeMat(GRAY_MAT, 1, false, mfade)
+      fadeMat(GRAY_FLAT_MAT, 1, false, mfade)
+      fadeMat(WIRE_MAT, 0.85, true, mfade)
+      fadeMat(WIRE_OVER_MAT, 0.2, true, mfade)
       fadeMat(FIGURE_MAT, 0.85, true, st.fade)
       shadowsOn = shadows > 0.01
       key.castShadow = shadowsOn && modelCast && surface
@@ -1593,7 +1605,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     {
       const hosts = new Map<string, NotesHost>()
       for (const [key, s] of standing) hosts.set(key, notesHost(s))
-      notes.render(renderer, camera, hosts, st.notesOf, st.fade, W, H)
+      notes.render(renderer, camera, hosts, st.notesOf, anyFull ? 1 : st.fade, W, H)
     }
     // The curves, and the manipulator on their selected points: at their
     // middle, on the world's axes.
