@@ -1221,6 +1221,11 @@ export const NotesPanel: React.FC = () => {
                   <button style={{ ...btnStyle(smooth, true), ...THIRD, height: 30, flex: '0 0 auto', padding: '0 9px' }} aria-pressed={smooth} onClick={() => setSmooth(!smooth)} title={SMOOTH_TIP}><IcSmooth size={16} /><span>Smooth</span></button>
                   <button style={{ ...btnStyle(ping, true), ...THIRD, height: 30, flex: '0 0 auto', padding: '0 12px' }} aria-pressed={ping}
                     title="Ping: on or off. On, the points ping one after another along the path, a ring spreading from each. A point with its graphic switched off stays quiet." onClick={() => apply({ ping: !ping })}>Ping</button>
+                  {shownCurve?.kind === 'bezier' && (
+                    <button style={{ ...btnStyle(shownCurve.stems !== false, true), ...THIRD, height: 30, flex: '0 0 auto', padding: '0 9px' }} aria-pressed={shownCurve.stems !== false}
+                      title="Heights: on or off, for this line. On, in 3D a thin line drops from each point off the ground down to the ground, showing how high the path runs there."
+                      onClick={() => { useUndoCoordinator.getState().checkpoint(); const on = shownCurve.stems !== false; const ns = useNotesStore.getState(); for (const id of selected) if (ns.curves[id]?.kind === 'bezier') ns.updateCurve(id, { stems: on ? false : undefined }) }}>Heights</button>
+                  )}
                 </div>
                 <div style={{ display: 'flex', gap: 5 }}>
                   {MARKS.map(m => (

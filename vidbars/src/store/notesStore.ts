@@ -173,6 +173,9 @@ export interface Curve {
    *  arrowEnd say so (as before there was a choice), else nothing. */
   endStart?: CurveEnd
   endEnd?: CurveEnd
+  /** The stem under each point off the ground (how high the line runs
+   *  there, in 3D). Absent: shown. */
+  stems?: boolean
   /** More designs along the same line, drawn over its own in this order. */
   layers?: CurveLayerLook[]
   /** Only on the curve a layer is drawn as (utils/curveGeom layerCurves),

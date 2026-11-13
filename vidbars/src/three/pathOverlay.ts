@@ -195,6 +195,8 @@ interface Knob { mesh: THREE.Mesh; at: THREE.Vector3; px: number; key: string; b
 interface Built {
   curve: Curve
   selected: boolean
+  /** Which of its points are selected (their tangent handles show). */
+  picked: string
   group: THREE.Group
   /** What is thrown away with it. */
   own: (THREE.BufferGeometry | THREE.Material)[]
@@ -227,7 +229,9 @@ export function createPathOverlay() {
     b.group.removeFromParent()
   }
 
-  function build(c: Curve, selected: boolean, time: number): Built {
+  function build(c: Curve, selected: boolean, time: number, picked = ''): Built {
+    // A point's tangent handles show only while that point is selected (Brian 2026-11-13).
+    const pickedSet = new Set(picked ? picked.split(',').map(Number) : [])
     const group = new THREE.Group()
     const own: (THREE.BufferGeometry | THREE.Material)[] = []
     const keep = <T extends THREE.BufferGeometry | THREE.Material>(o: T) => { own.push(o); return o }
@@ -470,7 +474,7 @@ export function createPathOverlay() {
     c.pts.forEach((p, i) => {
       // (A layer is the line's design alone: its curve has the stems and cubes.)
       if (c.layerOf) return
-      if (Math.abs(p.z ?? 0) > 1e-6) stems.push(p.x, p.y, 0, p.x, p.y, p.z!)
+      if (c.stems !== false && Math.abs(p.z ?? 0) > 1e-6) stems.push(p.x, p.y, 0, p.x, p.y, p.z!)
       if (!selected) return
       const mat = keep(new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.55, metalness: 0, depthTest: false, depthWrite: false, toneMapped: false, transparent: true }))
       const mesh = new THREE.Mesh(CUBE, mat)
@@ -499,7 +503,7 @@ export function createPathOverlay() {
       const arms: number[] = []
       const eff = curvePoints(c)
       eff.forEach((p, i) => {
-        if (p.t === 'corner' || (c.smooth && !ownsHandles(p))) return
+        if (!pickedSet.has(i) || p.t === 'corner' || (c.smooth && !ownsHandles(p))) return
         for (const side of ['in', 'out'] as const) {
           const h = side === 'in' ? p.hin : p.hout
           if (!h || (Math.abs(h.x) < 1e-6 && Math.abs(h.y) < 1e-6 && Math.abs(h.z ?? 0) < 1e-6)) continue
@@ -523,7 +527,7 @@ export function createPathOverlay() {
       }
     }
     root.add(group)
-    return { curve: c, selected, group, own, cubes, handles, labels, flow: ticks.length ? t => { for (const f of ticks) f(t) } : undefined }
+    return { curve: c, selected, picked, group, own, cubes, handles, labels, flow: ticks.length ? t => { for (const f of ticks) f(t) } : undefined }
   }
 
   /** Draw the curves over what the frame drew. `ground` is the canvas's
@@ -539,9 +543,10 @@ export function createPathOverlay() {
         seen.add(c.id)
         const sel = f.selected.has(c.id)
         const b = built.get(c.id)
-        if (b && b.curve === c && b.selected === sel) { b.flow?.(f.time); continue }
+        const picked = sel ? c.pts.map((_, i) => i).filter(i => f.points.has(`${c.id}:${i}`)).join(',') : ''
+        if (b && b.curve === c && b.selected === sel && b.picked === picked) { b.flow?.(f.time); continue }
         if (b) drop(b)
-        built.set(c.id, build(c, sel, f.time))
+        built.set(c.id, build(c, sel, f.time, picked))
       }
     }
     for (const [id, b] of built) if (!seen.has(id)) { drop(b); built.delete(id) }

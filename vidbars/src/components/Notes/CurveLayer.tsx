@@ -215,7 +215,8 @@ const Handles: React.FC<{ c: Curve; zoom: number; points: string[] }> = ({ c, zo
         <g key={i}>
           {(['in', 'out'] as const).map(side => {
             const h = side === 'in' ? p.hin : p.hout
-            if (p.t === 'corner' || (c.smooth && !ownsHandles(p)) || !h || (!h.x && !h.y)) return null
+            // A point's tangent handles show only while that point is selected (Brian 2026-11-13).
+            if (!points.includes(ptKey(c.id, i)) || p.t === 'corner' || (c.smooth && !ownsHandles(p)) || !h || (!h.x && !h.y)) return null
             return (
               <g key={side}>
                 <line x1={p.x} y1={p.y} x2={p.x + h.x} y2={p.y + h.y} stroke={SEL} strokeWidth={sw} />
