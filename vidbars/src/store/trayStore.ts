@@ -13,6 +13,8 @@ export interface Tray {
   h: number
   /** Its width, canvas units; none = as wide as its card. */
   w?: number
+  /** How many cards its browser lists just now (it says so while out). */
+  rows?: number
   query: ListQuery
 }
 
@@ -21,6 +23,7 @@ export const TRAY_QUERY: ListQuery = { query: '', kind: 'all', includeCanvasItem
 interface TrayStore {
   trays: Record<string, Tray>
   setSize: (cardId: string, size: { h?: number; w?: number }) => void
+  setRows: (cardId: string, rows: number) => void
   patchQuery: (cardId: string, patch: Partial<ListQuery>) => void
 }
 
@@ -29,6 +32,10 @@ export const useTrayStore = create<TrayStore>(set => ({
   setSize: (cardId, size) => set(s => {
     const t = s.trays[cardId] ?? { h: 0, query: TRAY_QUERY }
     return { trays: { ...s.trays, [cardId]: { ...t, ...size } } }
+  }),
+  setRows: (cardId, rows) => set(s => {
+    const t = s.trays[cardId]
+    return !t || t.rows === rows ? s : { trays: { ...s.trays, [cardId]: { ...t, rows } } }
   }),
   patchQuery: (cardId, patch) => set(s => {
     const t = s.trays[cardId] ?? { h: 0, query: TRAY_QUERY }

@@ -23,7 +23,9 @@
 //     card. Out, it carries a little handle, the search field and the three
 //     view modes (compact, full, auto: the browser's own, lit = the one in
 //     use). Click (not in the field or on a mode): open / shut. Its corner
-//     sizes the tray both ways.
+//     sizes the tray both ways. The pull STOPS where the cards end ("stop
+//     the pull open when we hit the bottom edge of the card. Flush with the
+//     bottom"): the lip against the last card's bottom edge, no empty tray.
 //   - CardTray, the cards: the browser's slots alone. Its own header, side
 //     rails and bottom bar are left out of view; the sides are 2px.
 // The lip is in the chip rail's wrapper, so in 3D it rides with the card.
@@ -35,7 +37,7 @@ import { useTrayStore } from '../../store/trayStore'
 import { trayIds } from '../../utils/browserScope'
 import { cardTitle } from '../../utils/faceStyle'
 import { useCardView } from '../Layers/cardView'
-import { CardRolodex } from '../Rolodex/CardRolodex'
+import { CardRolodex, listAreaMax } from '../Rolodex/CardRolodex'
 
 const INSET = 8          // natural sizes: the lip's wrapper scales them with the card
 const SEAM = 13          // under the chips, which ride the card's bottom edge
@@ -70,9 +72,17 @@ function trayWidthPx(w: number | undefined, zoom: number, lipWidthPx: number): n
   return Math.max(MIN_W_PX, w !== undefined ? w * zoom : lipWidthPx)
 }
 
+/** How long a tray `wPx` wide is with its lip flush against the bottom edge
+ *  of its last card, screen px. No cards listed (a search with no match):
+ *  no stop. */
+function trayMaxPx(rows: number, mode: 'auto' | 'compact' | 'full', wPx: number): number {
+  return rows > 0 ? listAreaMax(rows, mode) * (wPx - 2 * SIDE) / SLOT_W : Infinity
+}
+
 /** Drag: the tray's height (and width) follow the pointer; let go, it stays.
+ *  `maxAt`: how long the tray may be at a width (where its cards end).
  *  `soft`: the press began in the search field, which keeps its click. */
-function dragTray(e: React.PointerEvent, cardId: string, zoom: number, from: { hPx: number; wPx?: number }, onClick?: () => void, soft?: boolean) {
+function dragTray(e: React.PointerEvent, cardId: string, zoom: number, from: { hPx: number; wPx?: number }, maxAt: (wPx: number) => number, wNow: number, onClick?: () => void, soft?: boolean) {
   if (e.button !== 0) return
   e.stopPropagation()
   if (!soft) e.preventDefault()
@@ -89,9 +99,13 @@ function dragTray(e: React.PointerEvent, cardId: string, zoom: number, from: { h
     if (!moved && soft) (document.activeElement as HTMLElement | null)?.blur?.()
     moved = true
     // Every pixel of the pull is a pixel of tray: no threshold on the way out.
+    const w = from.wPx !== undefined ? Math.max(MIN_W_PX, from.wPx + dx) : wNow
+    // Out to where the cards end and no further. (Already longer than that,
+    // after a view change: it does not hop back as the pull starts.)
+    const stop = from.hPx > maxAt(wNow) + 0.5 ? Math.max(maxAt(w), from.hPx) : maxAt(w)
     useTrayStore.getState().setSize(cardId, {
-      h: Math.max(0, from.hPx + dy) / zoom,
-      ...(from.wPx !== undefined ? { w: Math.max(MIN_W_PX, from.wPx + dx) / zoom } : {}),
+      h: Math.max(0, Math.min(stop, from.hPx + dy)) / zoom,
+      ...(from.wPx !== undefined ? { w: w / zoom } : {}),
     })
   }
   const done = () => {
@@ -121,6 +135,7 @@ export const TrayLip: React.FC<{ cardId: string; left: number; top: number; scal
   const w = useTrayStore(s => s.trays[cardId]?.w)
   const query = useTrayStore(s => s.trays[cardId]?.query.query ?? '')
   const mode = useTrayStore(s => s.trays[cardId]?.query.displayMode ?? 'auto')
+  const listed = useTrayStore(s => s.trays[cardId]?.rows)
   const { zoom } = useCardView()
   if (!n) return null
   const open = h > 0
@@ -128,7 +143,10 @@ export const TrayLip: React.FC<{ cardId: string; left: number; top: number; scal
   const lipW = Math.max(30, width - 2 * INSET)
   // As wide as the tray it closes, shut or out (so opening widens nothing).
   const wPx = trayWidthPx(w, zoom, lipW * scale)
-  const toggle = () => useTrayStore.getState().setSize(cardId, { h: open ? 0 : OPEN_PX / zoom })
+  // Where the cards end, at a width (what the browser lists just now; shut,
+  // everything in the tray).
+  const maxAt = (px: number) => trayMaxPx(open && listed !== undefined ? listed : n, mode, px)
+  const toggle = () => useTrayStore.getState().setSize(cardId, { h: open ? 0 : Math.min(OPEN_PX, maxAt(wPx)) / zoom })
   return (
     <div style={{ position: 'absolute', left, top: top + hPx, width: 0, height: 0 }}>
       <div style={{ position: 'absolute', left: 0, top: 0, width, transform: `scale(${scale})`, transformOrigin: 'top left' }}>
@@ -138,7 +156,7 @@ export const TrayLip: React.FC<{ cardId: string; left: number; top: number; scal
           onPointerDown={e => {
             if ((e.target as Element).closest('[data-tray-mode]')) { e.stopPropagation(); return }
             const inField = (e.target as Element).tagName === 'INPUT'
-            dragTray(e, cardId, zoom, { hPx }, inField ? undefined : toggle, inField)
+            dragTray(e, cardId, zoom, { hPx }, maxAt, wPx, inField ? undefined : toggle, inField)
           }}
           onClick={e => e.stopPropagation()}
           onDoubleClick={e => e.stopPropagation()}
@@ -206,7 +224,7 @@ export const TrayLip: React.FC<{ cardId: string; left: number; top: number; scal
             <div
               data-tray-corner
               title="Drag to size the tray"
-              onPointerDown={e => dragTray(e, cardId, zoom, { hPx, wPx })}
+              onPointerDown={e => dragTray(e, cardId, zoom, { hPx, wPx }, maxAt, wPx)}
               style={{ position: 'absolute', right: 0, bottom: 0, width: 13, height: 13, cursor: 'nwse-resize', touchAction: 'none' }}
             >
               <svg width="13" height="13" viewBox="0 0 13 13"><path d="M10.5 4.5v6h-6" fill="none" stroke="rgba(255,255,255,0.55)" strokeWidth="1.5" strokeLinecap="round" /></svg>

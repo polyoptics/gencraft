@@ -254,6 +254,13 @@ const MAX_EXPANSION = CARD_H - SLOT_PEEK_H - COLLAPSED_BONUS
 // gets absurdly tall.
 const PANEL_GROWTH_MAX = LIST_AREA_H_COMPACT
 const MAX_EXPANSION_TOTAL = MAX_EXPANSION + PANEL_GROWTH_MAX
+/** How tall the list of `rows` cards is when opened all the way, native
+ *  units: every card's tab, and (full / auto) the picked card at full size.
+ *  A card's tray stops there (CardTray). */
+export function listAreaMax(rows: number, mode: 'auto' | 'compact' | 'full'): number {
+  const natural = rows * SLOT_PEEK_H + COLLAPSED_BONUS + (mode === 'compact' ? 0 : MAX_EXPANSION)
+  return Math.min(natural, LIST_AREA_H_COMPACT + MAX_EXPANSION_TOTAL)
+}
 // Negative expansion = drag-to-CLOSE: the panel shrinks toward zero
 // height, eventually leaving just the header above the cabinet base.
 // LIST_AREA_H clamps at 0 when rolodexExpansion reaches MIN_EXPANSION.
@@ -973,6 +980,11 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string }; tray?: TrayB
   const contentMaxExpansionRef = useRef(MAX_EXPANSION_TOTAL)
   compactThresholdRef.current = compactThreshold
   contentMaxExpansionRef.current = contentMaxExpansion
+  // A tray stops opening where its cards end: tell it how many there are.
+  const trayCardId = tray?.cardId
+  useEffect(() => {
+    if (trayCardId) useTrayStore.getState().setRows(trayCardId, rows.length)
+  }, [trayCardId, rows.length])
 
   // Auto-clamp rolodexExpansion when row count or display mode
   // changes so the panel never persists a size larger than the
