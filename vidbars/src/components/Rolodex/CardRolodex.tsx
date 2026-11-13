@@ -578,8 +578,9 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string }; tray?: TrayB
     ? (v: 'auto' | 'compact' | 'full') => patchQuery({ displayMode: v })
     : setFlDisplayMode
   const rolodexExpansion = embedded
-    // A tray's browser has the search field alone: no chip strips (2 × 21).
-    ? Math.max(MIN_EXPANSION, embedH - (tray ? EMBED_CHROME - 42 : EMBED_CHROME) - LIST_AREA_H_COMPACT)
+    // A tray's browser is its slots alone: no header (26), no chip strips
+    // (2 × 21); its search is on the tray's lip (CardTray).
+    ? Math.max(MIN_EXPANSION, embedH - (tray ? EMBED_CHROME - 68 : EMBED_CHROME) - LIST_AREA_H_COMPACT)
     : flExpansion
   const setRolodexExpansion = embedded
     ? (v: number) => {
@@ -1689,7 +1690,7 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string }; tray?: TrayB
           <div
             onDoubleClick={onHeaderDoubleClick}
             style={{
-              display: 'flex',
+              display: tray ? 'none' : 'flex',
               alignItems: 'center',
               justifyContent: 'space-between',
               // Horizontal padding = WING_W so the title's left edge and the

@@ -22,7 +22,7 @@ import { cardEdgeSnapFor } from '../../utils/cardEdgeSnap'
 import { PrimaryChipRail } from '../Linking/PrimaryChipRail'
 import { CloneDeck } from '../Linking/CloneDeck'
 import { shownIds } from '../../utils/tucked'
-import { CardTray, TRAY_INSET, TRAY_LIP, useTrayReach } from '../Linking/CardTray'
+import { CardTray, TRAY_INSET, useTrayReach } from '../Linking/CardTray'
 import { useLinkingStore } from '../../store/linkingStore'
 import { DEFAULT_H } from '../../utils/barConstants'
 import { groupSlot, clampGroupMove } from '../../utils/nlePush'
@@ -5467,9 +5467,9 @@ const CardLinkingLayer: React.FC<{
     if (expandedPaths.has([group.id, gid].join('>'))) expandedChildIds.push(gid)
   }
 
-  // Its tray (CardTray) hangs under its lip, which is tucked under the
-  // card's bottom edge; a card shown from a chip is shown below them.
-  const trayTop = hostRect.top + hostRect.height + TRAY_LIP * textScale - 1
+  // Its tray (CardTray) hangs right under the card's bottom edge, down to
+  // its lip; a card shown from a chip is shown below them.
+  const trayTop = hostRect.top + hostRect.height - 1
   const below = { ...hostRect, height: hostRect.height + useTrayReach(group.id, zoom, textScale) }
 
   return (
