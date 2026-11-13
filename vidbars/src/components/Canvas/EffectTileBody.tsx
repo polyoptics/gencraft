@@ -385,6 +385,10 @@ export const EffectTileBody: React.FC<{
           style={{
             position: 'absolute', inset: 0, width: '100%', height: '100%', opacity: 0,
             cursor: 'pointer', fontSize: 13, colorScheme: 'dark',
+            // The app's reset makes a select take the card's white text on
+            // a see-through ground, which the open list paints as white on
+            // white. Say both colours outright so the list is dark.
+            backgroundColor: '#1c1c20', color: '#e6e6ea',
           }}
         >
           {EFFECT_ORDER.map(k => <option key={k} value={k}>{EFFECTS[k].glyph}  {EFFECTS[k].label}{EFFECTS[k].blend ? ' (mixes next picture)' : ''}</option>)}
