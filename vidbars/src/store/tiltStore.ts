@@ -24,6 +24,18 @@ export const TILT_PERSPECTIVE = 1200
 /** Just short of edge-on: the plane can be seen from the side (Brian
  *  2026-10-30), never from below. Exactly 90 has no ground under the cursor. */
 export const TILT_MAX = 89
+/** How far it tips on past edge-on, looking up from low down, when what
+ *  it turns about is up off the ground (see setView). */
+export const TILT_LOOK_UP = 150
+/** How near the ground the eye comes (px): where it is at TILT_MAX with
+ *  the view turning about a point on the ground. */
+const EYE_MIN = TILT_PERSPECTIVE * Math.cos(TILT_MAX * Math.PI / 180)
+/** How high over the ground the eye is (px) for this view. */
+function eyeHeight(tiltDeg: number, yawDeg: number, shiftX: number, shiftY: number) {
+  const t = tiltDeg * Math.PI / 180, b = yawDeg * Math.PI / 180
+  // n·eye, n = (sin b, -sin t cos b, cos t cos b) (unprojectTilt), eye = (-shift, P).
+  return -Math.sin(b) * shiftX + Math.sin(t) * Math.cos(b) * shiftY + Math.cos(t) * Math.cos(b) * TILT_PERSPECTIVE
+}
 /** Let go below this and the view eases the rest of the way to flat — tilting back up to top-down is the way home. */
 export const TILT_SNAP = 10
 /** How far the view can tip upward past flat. */
@@ -167,7 +179,27 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
     // ground point there stays there as the view turns or tips.
     const keep = keeping(get())
     const locked = get().lock3d
-    tilt = Math.max(locked ? LOCK_MIN_TILT : -TILT_UP, Math.min(TILT_MAX, tilt))
+    // Turning about a point up off the ground (zoomed in on a model, the
+    // view slid up it), edge-on left the eye as high as that point: it
+    // could not come down to look at it from low (Brian 2026-11-13: "my
+    // camera can't move down anymore"). It tips on past edge-on, looking
+    // up, as far as keeps the eye over the ground.
+    if (tilt > TILT_MAX) {
+      const yawNow = yaw
+      const high = (t: number) => {
+        const sh = keep ? shiftKeeping(keep.g, t, spin, yawNow, keep.at) : get()
+        return eyeHeight(t, yawNow, sh.shiftX, sh.shiftY) >= EYE_MIN
+      }
+      const want = Math.min(TILT_LOOK_UP, tilt)
+      if (!high(TILT_MAX)) tilt = TILT_MAX
+      else if (high(want)) tilt = want
+      else {
+        let lo = TILT_MAX, hi = want
+        for (let i = 0; i < 20; i++) { const mid = (lo + hi) / 2; if (high(mid)) lo = mid; else hi = mid }
+        tilt = lo
+      }
+    }
+    tilt = Math.max(locked ? LOCK_MIN_TILT : -TILT_UP, Math.min(TILT_LOOK_UP, tilt))
     // Tipped back any swing eases out: with the ground standing under models,
     // a swing would lean it, which reads as the camera rolling.
     const room = TILT_MAX * (1 - turntableShare(tilt))

@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { flushSync } from 'react-dom'
-import { useTiltStore, isTilted, offFlat, unprojectTilt, standRise, shiftKeeping, centrePoint, TILT_SNAP, TILT_PERSPECTIVE, type Pivot } from '../../../store/tiltStore'
+import { useTiltStore, isTilted, offFlat, unprojectTilt, standRise, shiftKeeping, centrePoint, TILT_SNAP, TILT_MAX, TILT_PERSPECTIVE, type Pivot } from '../../../store/tiltStore'
 import { storyWallOf } from '../StorylineLayer'
 import { peekAt, usePeek } from '../../../utils/peek'
 import { useCanvasStore, groupBounds, MIN_ZOOM, MAX_ZOOM } from '../../../store/canvasStore'
@@ -513,6 +513,10 @@ export function useFrameKey() {
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return
       const host = document.querySelector<HTMLElement>('[data-zoom-bar-host]')
       if (!host) return
+      // (Tipped on past edge-on, looking up: framing is from over the
+      // ground again.)
+      const up = useTiltStore.getState()
+      if (up.tilt > TILT_MAX) up.setView(80, up.spin, up.yaw)
       if (frameModel(host)) { e.preventDefault(); return }
       dropFramed()
       const box = frameBox()
