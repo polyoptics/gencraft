@@ -196,6 +196,7 @@ const frameState = (): TiltFrameState => {
     tintFor: key => key.startsWith('mini:') ? miniLook.get(key)?.tint : tintOf[dataKey(key)],
     stretchFor: key => key.startsWith('mini:') ? miniLook.get(key)?.stretch : placed(key) ? stretchOf[dataKey(key)] : undefined,
     rideFor: key => riding(key)?.q,
+    rideMid: key => !!riding(key)?.mid,
     manip: useManip.getState(),
     placed,
     canPlace: key => !key.startsWith('mini:') && !!sceneOf(key),

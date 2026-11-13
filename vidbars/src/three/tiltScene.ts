@@ -181,6 +181,9 @@ export interface TiltFrameState {
   /** A model riding a path (utils/pathRide): how the path turns it there,
    *  about its feet. Absent: it stands as it is. */
   rideFor?: (key: string) => [number, number, number, number] | null | undefined
+  /** Riding, the middle of its box keeps to the path and it turns about
+   *  that middle (PathRider.centre). */
+  rideMid?: (key: string) => boolean
   /** Stands on a 3D area (a scene layout): it keeps the turn it is
    *  given and never turns on the turntable. */
   placed?: (key: string) => boolean
@@ -1335,11 +1338,12 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       // as it turns in the hand (looking through it, that is what its
       // reframing reckons with).
       const rq = st.rideFor?.(tg.key)
-      if (rq && !s.rig) s.turn.quaternion.set(rq[0], rq[1], rq[2], rq[3])
+      const mid = !!st.rideMid?.(tg.key)
+      if (rq && !s.rig && !mid) s.turn.quaternion.set(rq[0], rq[1], rq[2], rq[3])
       else s.turn.rotation.set(0, st.turn && !placed ? now / 1000 * 0.6 + s.phase : 0, 0)
       const pq = st.poseFor?.(tg.key)
       if (pq) s.pose.quaternion.set(pq[0], pq[1], pq[2], pq[3]); else s.pose.quaternion.identity()
-      if (rq && s.rig) s.pose.quaternion.premultiply(rideQ.set(rq[0], rq[1], rq[2], rq[3]))
+      if (rq && (s.rig || mid)) s.pose.quaternion.premultiply(rideQ.set(rq[0], rq[1], rq[2], rq[3]))
       // Its colour (Brian 2026-11-08): over its materials' own.
       const tint = (s.look && st.tintFor?.(tg.key)) || null
       if (s.look && tint !== s.tint) {
@@ -1366,6 +1370,8 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       if (s.inst) {
         s.pose.scale.set(sv[0], sv[1], sv[2])
         s.orient.position.y = s.size.y / 2 * sv[1]
+        // Its middle on the path, not its feet.
+        if (mid) s.stand.position.z -= s.stand.scale.y * s.orient.position.y
       }
       if (s.gizmo) {
         const g = s.gizmo

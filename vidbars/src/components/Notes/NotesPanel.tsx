@@ -458,8 +458,8 @@ const PathRiders: React.FC<{ c: Curve }> = ({ c }) => {
     const name = r.key.startsWith('node:') ? nodes[id]?.label || (nodes[id] ? 'Model' : null) : groups.find(g => g.id === id)?.name || (groups.some(g => g.id === id) ? 'Card' : null)
     return { r, name }
   }).filter(x => x.name !== null)
-  const tog = (r: PathRider, k: 'aim' | 'slope' | 'twist', name: string, tip: string) => {
-    const on = r[k] !== false
+  const tog = (r: PathRider, k: 'aim' | 'slope' | 'twist' | 'centre', name: string, tip: string) => {
+    const on = k === 'centre' ? !!r.centre : r[k] !== false
     return <button style={{ ...btnStyle(on, true), flex: '1 1 0', width: 'auto', height: 30, justifyContent: 'center', fontSize: 11.5 }} aria-pressed={on}
       title={`${name}: on or off. ${tip}`} onClick={() => { step(); setRider(c.id, r.key, { [k]: !on }) }}>{name}</button>
   }
@@ -493,6 +493,7 @@ const PathRiders: React.FC<{ c: Curve }> = ({ c }) => {
                 {tog(r, 'aim', 'Aim', 'On, it faces the way the path runs.')}
                 {tog(r, 'slope', 'Slope', 'On, it tips up and down with the path as it climbs and falls. Off, it stays level.')}
                 {tog(r, 'twist', 'Twist', "On, it rolls with the path's twist.")}
+                {tog(r, 'centre', 'Center', 'On, the center of its bounding box keeps to the path and it turns about that center. Off, its feet do.')}
               </div>
               <div style={{ display: 'flex', gap: 10 }}>
                 <NumSlide name="Bank" val={r.bank ?? 0} min={-300} max={300} top={1000} tip="How much it leans into the path's turns, in percent. 0: none. Below 0: it leans out of them."

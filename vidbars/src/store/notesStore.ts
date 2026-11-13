@@ -73,6 +73,9 @@ export interface PathRider {
   slope?: boolean
   /** Rolls with the path's twist. Absent: on. */
   twist?: boolean
+  /** The middle of its bounding box keeps to the path, and it turns
+   *  about that middle. Absent: off (its feet do). */
+  centre?: boolean
   /** Carried above the path, and to its side (canvas units). Absent: 0. */
   lift?: number
   side?: number

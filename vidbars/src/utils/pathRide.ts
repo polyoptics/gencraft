@@ -168,6 +168,8 @@ export interface RideSpot {
   /** How it is turned there, as the 3D view's models are (x across, y up,
    *  z down the canvas), or null: as it stands. */
   q: [number, number, number, number] | null
+  /** The middle of its box is what is there, not its feet (PathRider.centre). */
+  mid?: boolean
 }
 
 const mB = new THREE.Matrix4(), qB = new THREE.Quaternion(), qH = new THREE.Quaternion()
@@ -226,7 +228,7 @@ export function rideSpot(c: Curve, r: PathRider, time: number): RideSpot {
   const { u, back } = rideShare(c, r, time)
   const dist = u * l.len
   const s = pathSpot(l, r, dist, back, qB)
-  const spot: RideSpot = { x: s.x, y: s.y, z: s.z, q: null }
+  const spot: RideSpot = { x: s.x, y: s.y, z: s.z, q: null, mid: !!r.centre }
   const keyed = !!r.keys && Object.keys(r.keys).length > 0
   if (!s.aimed && !keyed) return spot
   if (keyed) {
