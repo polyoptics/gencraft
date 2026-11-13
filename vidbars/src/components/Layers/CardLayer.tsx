@@ -21,8 +21,8 @@ import { cardCornerOffset, snapCardToDots } from '../../utils/dotGrid'
 import { cardEdgeSnapFor } from '../../utils/cardEdgeSnap'
 import { PrimaryChipRail } from '../Linking/PrimaryChipRail'
 import { CloneDeck } from '../Linking/CloneDeck'
-import { shownIds, tuckedIds, tuckedReach } from '../Linking/TuckedCards'
-import { CardTray, useTrayReach } from '../Linking/CardTray'
+import { shownIds } from '../../utils/tucked'
+import { CardTray, TRAY_INSET, TRAY_LIP, useTrayReach } from '../Linking/CardTray'
 import { useLinkingStore } from '../../store/linkingStore'
 import { DEFAULT_H } from '../../utils/barConstants'
 import { groupSlot, clampGroupMove } from '../../utils/nlePush'
@@ -5455,14 +5455,10 @@ const CardLinkingLayer: React.FC<{
     if (expandedPaths.has([group.id, gid].join('>'))) expandedChildIds.push(gid)
   }
 
-  // The cards still tucked under this one (TuckedCards) stick out below
-  // it: a card pulled all the way out is shown clear of their feet.
-  const tucked = useBoardsStore(s => tuckedIds(group, s.groups).filter(id => !expandedPaths.has([group.id, id].join('>'))).length)
-  const feet = tuckedReach(tucked) * textScale
-  // Its tray (CardTray) hangs below its feet and its chips; a card pulled
-  // all the way out is shown below the tray too.
-  const trayTop = hostRect.top + hostRect.height + Math.max(feet, 14 * textScale) + 2
-  const reach = feet + useTrayReach(group.id, zoom) + (feet ? 0 : 0)
+  // Its tray (CardTray) hangs under its lip, which is tucked under the
+  // card's bottom edge; a card shown from a chip is shown below them.
+  const trayTop = hostRect.top + hostRect.height + TRAY_LIP * textScale - 1
+  const below = { ...hostRect, height: hostRect.height + useTrayReach(group.id, zoom, textScale) }
 
   return (
     <>
@@ -5472,13 +5468,12 @@ const CardLinkingLayer: React.FC<{
         path={[group.id]}
         scale={textScale}
       />
-      <CardTray cardId={group.id} left={hostRect.left} top={trayTop} cardWidth={hostRect.width} />
+      <CardTray cardId={group.id} left={hostRect.left + TRAY_INSET * textScale} top={trayTop} lipWidth={hostRect.width - 2 * TRAY_INSET * textScale} />
       {expandedChildIds.map((cid, i) => (
         <CloneDeck
           key={cid}
           targetGroupId={cid}
-          hostRect={hostRect}
-          reach={reach}
+          hostRect={below}
           path={[group.id, cid]}
           childIndex={i}
           hostGroupId={group.id}

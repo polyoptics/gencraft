@@ -1,34 +1,45 @@
 // A card's tray (Brian 2026-11-13): "that tray-like interface could be
 // pulled down from the bottom of a card, and inside of it ... all the linked
-// cards and you could scroll-wheel through them, use the different view
-// modes, and search through them", "sizeable along the bottom of the host
-// card ... if you just want to see small card tops to flip through".
+// cards and you could scroll-wheel through them ... and search through
+// them", "sizeable along the bottom of the host card ... if you just want
+// to see small card tops to flip through".
 //
 // It IS the Card Browser (CardRolodex), in a box under the card, listing
 // what the card holds and the cards linked with it (utils/browserScope
 // trayIds). The browser sizes its cards to the box's width, so a narrow
 // tray is small card tops and a wide one big cards.
 //
-// TrayGrip (in the chip rail, beside the "+"): pull it down and the tray
-// comes with the mouse and stays; click: open / shut. The tray's bottom
-// edge pulls it longer or shorter, its bottom-right corner sizes both ways.
-// How it is left is kept for the session (trayStore), not saved.
+// The tray is the one thing tucked under a card (Brian: "The tuck is what
+// we want to do with the card browser"): shut, its LIP sticks out below the
+// card's bottom edge, naming what is in it (TrayLip, in the chip rail's
+// wrapper so it rides with the card in 3D). Pull the lip down and the tray
+// comes out as far as it is pulled and stays; click: open / shut. The
+// tray's bottom edge pulls it longer or shorter, its bottom-right corner
+// sizes both ways. How it is left is kept for the session (trayStore).
 
 import React from 'react'
 import { useBoardsStore } from '../../store/boardsStore'
 import { useTrayStore } from '../../store/trayStore'
 import { trayIds } from '../../utils/browserScope'
+import { cardTitle } from '../../utils/faceStyle'
 import { useCardView } from '../Layers/cardView'
 import { CardRolodex } from '../Rolodex/CardRolodex'
 
-const CHIP_H = 24        // as the rail's chips
+const INSET = 8          // natural sizes: the lip's wrapper scales them with the card
+const SEAM = 13          // under the chips, which ride the card's bottom edge
+const FOOT = 21          // what the lip shows of itself
+/** How far the lip reaches below its card's bottom edge, natural units. */
+export const TRAY_LIP = SEAM + FOOT
+/** How far in from the card's sides the lip (and the tray) sits, natural units. */
+export const TRAY_INSET = INSET
 const OPEN_PX = 260      // how far a click opens it, screen px
 const SHUT_PX = 24       // pulled shorter than this, it shuts
 const MIN_W_PX = 70
 const EDGE = 9           // the bottom edge's grip, px
+const NAMED = 4          // names on the lip
 
-/** How many cards card `id`'s tray would list. */
-function useTrayCount(id: string): number {
+/** How many cards card `id`'s tray lists. */
+export function useTrayCount(id: string): number {
   return useBoardsStore(s => trayIds(s.groups.find(g => g.id === id), s.groups).length)
 }
 
@@ -60,57 +71,70 @@ function dragTray(e: React.PointerEvent, cardId: string, zoom: number, from: { h
   window.addEventListener('pointercancel', done)
 }
 
-/** The tray's grip, a chip in the card's rail: how many cards it lists.
- *  Only on a card that has any. Lit while the tray is out. */
-export const TrayGrip: React.FC<{ cardId: string }> = ({ cardId }) => {
+/** The tray's lip: the foot of the tray, sticking out under the card's
+ *  bottom edge, flat on top and shaded where it goes under. It names the
+ *  first cards in the tray and says how many. Only on a card that lists
+ *  any. `left`/`top`: the card's bottom-left corner from the rail's own
+ *  corner; `width`: the card's width in the lip's natural units. */
+export const TrayLip: React.FC<{ cardId: string; left: number; top: number; scale: number; width: number }> = ({ cardId, left, top, scale, width }) => {
   const n = useTrayCount(cardId)
+  const names = useBoardsStore(s => trayIds(s.groups.find(g => g.id === cardId), s.groups).slice(0, NAMED)
+    .map(id => { const g = s.groups.find(x => x.id === id); return g ? cardTitle(s.groups, g) || g.name || 'card' : '' }).filter(Boolean).join(', '))
   const h = useTrayStore(s => s.trays[cardId]?.h ?? 0)
   const { zoom } = useCardView()
   if (!n) return null
   const open = h > 0
   return (
-    <div
-      data-tray-grip={cardId}
-      title={`${n} card${n === 1 ? '' : 's'}: pull down for the tray, click to open or shut it`}
-      onPointerDown={e => dragTray(e, cardId, zoom, { hPx: h * zoom },
-        () => useTrayStore.getState().setSize(cardId, { h: open ? 0 : OPEN_PX / zoom }))}
-      onClick={e => e.stopPropagation()}
-      onDoubleClick={e => e.stopPropagation()}
-      style={{
-        height: CHIP_H, boxSizing: 'border-box', flex: '0 0 auto',
-        display: 'flex', alignItems: 'center', gap: 4, padding: '0 8px 0 7px',
-        borderRadius: 6,
-        background: open ? 'rgba(120,170,255,0.32)' : 'rgba(255,255,255,0.1)',
-        border: open ? '1.5px solid rgba(160,200,255,0.75)' : '1.5px solid rgba(255,255,255,0.35)',
-        color: 'rgba(255,255,255,0.9)', fontSize: 11, fontWeight: 600,
-        cursor: 'ns-resize', userSelect: 'none', touchAction: 'none',
-      }}
-    >
-      <svg width="11" height="10" viewBox="0 0 11 10" style={{ flexShrink: 0 }}>
-        <path d="M1 1h9v5.5a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2z M3.5 4h4" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-      </svg>
-      {n}
+    <div style={{ position: 'absolute', left, top, width: 0, height: 0 }}>
+      <div style={{ position: 'absolute', left: 0, top: 0, width, transform: `scale(${scale})`, transformOrigin: 'top left' }}>
+        <div
+          data-tray-lip={cardId}
+          title={`${n} card${n === 1 ? '' : 's'} in its tray: pull down to slide it out, click to open or shut it`}
+          onPointerDown={e => dragTray(e, cardId, zoom, { hPx: h * zoom },
+            () => useTrayStore.getState().setSize(cardId, { h: open ? 0 : OPEN_PX / zoom }))}
+          onClick={e => e.stopPropagation()}
+          onDoubleClick={e => e.stopPropagation()}
+          style={{
+            position: 'absolute', left: INSET, top: 0, width: Math.max(30, width - 2 * INSET), height: TRAY_LIP, boxSizing: 'border-box',
+            display: 'flex', alignItems: 'flex-end',
+            borderRadius: open ? 0 : '0 0 9px 9px',
+            background: 'linear-gradient(#11131c, #1d2030)',
+            border: `1px solid ${open ? 'rgba(160,200,255,0.6)' : 'rgba(255,255,255,0.28)'}`, borderTop: 'none',
+            boxShadow: 'inset 0 9px 8px -5px rgba(0,0,0,0.75), 0 2px 5px rgba(0,0,0,0.45)',
+            color: 'rgba(255,255,255,0.9)', cursor: 'grab', userSelect: 'none', touchAction: 'none',
+            fontFamily: 'system-ui, -apple-system, sans-serif',
+          }}
+        >
+          <div style={{ height: FOOT, width: '100%', boxSizing: 'border-box', display: 'flex', alignItems: 'center', gap: 5, padding: '0 8px 1px 7px', minWidth: 0 }}>
+            <svg width="11" height="10" viewBox="0 0 11 10" style={{ flexShrink: 0, opacity: 0.8 }}>
+              <path d="M1 1h9v5.5a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2z M3.5 4h4" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+            </svg>
+            <span style={{ flex: '1 1 auto', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>{names}</span>
+            <span style={{ flex: '0 0 auto', fontSize: 10, fontWeight: 600, opacity: 0.7 }}>{n}</span>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
 
-/** How far card `id`'s tray reaches below where it starts, screen px
- *  (0: shut, or nothing to list). */
-export function useTrayReach(id: string, zoom: number): number {
+/** How far card `id`'s tray and its lip reach below the card, screen px
+ *  (`scale`: the lip's). 0: nothing to list. */
+export function useTrayReach(id: string, zoom: number, scale: number): number {
   const h = useTrayStore(s => s.trays[id]?.h ?? 0)
   const n = useTrayCount(id)
-  return n && h > 0 ? h * zoom + 6 : 0
+  return n ? TRAY_LIP * scale + (h > 0 ? h * zoom + 6 : 0) : 0
 }
 
-/** The tray: the browser in its box, under the card (and under its feet).
- *  `left`/`top` are screen px, `cardWidth` the card's width there. */
-export const CardTray: React.FC<{ cardId: string; left: number; top: number; cardWidth: number }> = ({ cardId, left, top, cardWidth }) => {
+/** The tray: the browser in its box, under its lip. `left`/`top` are screen
+ *  px, `lipWidth` the lip's width there (the tray's, until it is sized). */
+export const CardTray: React.FC<{ cardId: string; left: number; top: number; lipWidth: number }> = ({ cardId, left, top, lipWidth }) => {
   const tray = useTrayStore(s => s.trays[cardId])
   const n = useTrayCount(cardId)
   const { pan, zoom } = useCardView()
   if (!tray || tray.h <= 0 || !n) return null
   const hPx = tray.h * zoom
-  const wPx = Math.max(MIN_W_PX, tray.w !== undefined ? tray.w * zoom : cardWidth)
+  const wPx = Math.max(MIN_W_PX, tray.w !== undefined ? tray.w * zoom : lipWidth)
   return (
     <div
       data-card-tray={cardId}
@@ -122,8 +146,8 @@ export const CardTray: React.FC<{ cardId: string; left: number; top: number; car
         pointerEvents: 'auto', boxSizing: 'border-box',
         borderRadius: '0 0 10px 10px', overflow: 'hidden',
         background: 'rgba(18,20,30,0.97)',
-        border: '1px solid rgba(255,255,255,0.22)', borderTop: 'none',
-        boxShadow: 'inset 0 9px 8px -6px rgba(0,0,0,0.7), 0 6px 18px rgba(0,0,0,0.5)',
+        border: '1px solid rgba(160,200,255,0.45)', borderTop: 'none',
+        boxShadow: '0 6px 18px rgba(0,0,0,0.5)',
       }}
     >
       <div style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: EDGE, overflow: 'hidden' }}>

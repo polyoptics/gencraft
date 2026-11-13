@@ -18,8 +18,8 @@ import { RefChip } from './LinkChipRail'
 import { refKey } from '../../utils/linkTargets'
 import { cardTitle } from '../../utils/faceStyle'
 import { CARD_TYPES, cardTypeOf, type CardType } from '../../utils/cardTypes'
-import { TuckedCards, holderIds, tucks } from './TuckedCards'
-import { TrayGrip } from './CardTray'
+import { holderIds, tucks } from '../../utils/tucked'
+import { TrayLip } from './CardTray'
 
 interface Props {
   /** Group whose outbound link chips we're rendering. */
@@ -40,7 +40,7 @@ const RAIL_Y_OFFSET = -CHIP_H / 2   // half-in, half-out of the card bottom edge
 export const PrimaryChipRail: React.FC<Props> = ({ groupId, hostRect, path, scale }) => {
   const host = useBoardsStore(s => s.groups.find(g => g.id === groupId))
   // What its chips name (Brian 2026-11-13). A card that tucks the cards it
-  // links to shows those as feet under it, not as chips too; its chips are
+  // links to lists those in its tray, not as chips too; its chips are
   // the cards IT is tucked under: the mutation lists its characters, each
   // character shows the mutation tucked. A faction's, a family's and a
   // note's chips are the cards they link to, as ever.
@@ -73,16 +73,16 @@ export const PrimaryChipRail: React.FC<Props> = ({ groupId, hostRect, path, scal
         pointerEvents: 'auto',
       }}
     >
-      {/* The cards this one links to, tucked under its bottom edge (card on
-          card). Placed from this rail's corner; the chips ride over it. */}
-      <TuckedCards
-        groupId={groupId}
-        path={path}
+      {/* Its tray's lip, tucked under its bottom edge: the cards it holds
+          and the cards linked with it. Placed from this rail's corner; the
+          chips ride over it. The card itself only, not a showing of it. */}
+      {path.length === 1 && <TrayLip
+        cardId={groupId}
         left={-RAIL_INSET_X * scale}
         top={-RAIL_Y_OFFSET * scale}
         scale={scale}
         width={hostRect.width / scale}
-      />
+      />}
       <div
         style={{
           transform: `scale(${scale})`,
@@ -117,8 +117,6 @@ export const PrimaryChipRail: React.FC<Props> = ({ groupId, hostRect, path, scal
           <RefChip key={refKey(r)} owner={{ kind: 'group', id: host.id }} target={r} zoom={1} />
         ))}
         <AddChip hostGroup={host} />
-        {/* The card itself, not a showing of it under another: its tray. */}
-        {path.length === 1 && <TrayGrip cardId={host.id} />}
       </div>
     </div>
   )

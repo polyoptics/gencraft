@@ -17,7 +17,7 @@ import type { FreeNodeData } from '../store/freeNodeStore'
 import { dockedCards } from './filmShots'
 import { leaves } from './sceneCard'
 import { hasMembers } from './cardTypes'
-import { shownIds } from '../components/Linking/TuckedCards'
+import { shownIds } from './tucked'
 
 /** The cards a card holds, by id, in its own order (none: []). */
 export function cardContents(card: ProjectGroup, groups: ProjectGroup[]): string[] {

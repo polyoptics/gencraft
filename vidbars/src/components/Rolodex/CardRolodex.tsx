@@ -41,7 +41,7 @@ import type { FreeNodeData } from '../../store/freeNodeStore'
 import {
   type ContentKind, type ListQuery, KIND_LABELS, groupHasContentOfKind, freeNodeInResults,
   hasRenderableContent, sortGroups, sortFreeNodes, formatListQuerySummary, effectKindsForQuery, groupMatchesQuery,
-  CARD_TYPE_SHORT, groupMatchesTypes,
+  CARD_TYPE_SHORT, groupMatchesTypes, parseQueryTags, groupMatchesTags,
 } from '../../utils/contentKinds'
 import { EFFECTS, effectKindOf, type EffectKind } from '../../utils/fx/effects'
 import { createEffectCard, EFFECT_DRAG_MIME } from '../../utils/fx/createEffect'
@@ -578,7 +578,8 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string }; tray?: TrayB
     ? (v: 'auto' | 'compact' | 'full') => patchQuery({ displayMode: v })
     : setFlDisplayMode
   const rolodexExpansion = embedded
-    ? Math.max(MIN_EXPANSION, embedH - EMBED_CHROME - LIST_AREA_H_COMPACT)
+    // A tray's browser has the search field alone: no chip strips (2 × 21).
+    ? Math.max(MIN_EXPANSION, embedH - (tray ? EMBED_CHROME - 42 : EMBED_CHROME) - LIST_AREA_H_COMPACT)
     : flExpansion
   const setRolodexExpansion = embedded
     ? (v: number) => {
@@ -637,7 +638,9 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string }; tray?: TrayB
   const visibleGroups = useMemo(() => {
     const q = searchQuery.trim().toLowerCase()
     if (!q && kindFilter === 'all' && !typeFilter.length) return renderableGroups
-    const nameMatch = (g: ProjectGroup) => groupMatchesQuery(g, q) && groupMatchesTypes(g, typeFilter)
+    // Typed tags ("characters img skrell") do what the chips do.
+    const tags = parseQueryTags(q)
+    const nameMatch = (g: ProjectGroup) => (groupMatchesQuery(g, q) || groupMatchesTags(g, boards, tags)) && groupMatchesTypes(g, typeFilter)
     const kindMatch = (g: ProjectGroup) =>
       kindFilter === 'all' || groupHasContentOfKind(g, boards, kindFilter)
     // Set of group ids that match BOTH predicates on their own.
@@ -864,7 +867,7 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string }; tray?: TrayB
     // "effects") LEADS with rows that make one — the search is the
     // shortest way to an effect you know the name of. Whatever kind chip
     // is lit: these are actions, not content the chip could filter.
-    const addRows: RolodexRow[] = effectKindsForQuery(searchQuery).map(k => ({
+    const addRows: RolodexRow[] = (tray ? [] : effectKindsForQuery(searchQuery)).map(k => ({
       kind: 'addfx' as const, effect: k, level: 0 as const, isDeck: false as const,
     }))
     const tileRows = buildFreeNodeRows(freeNodes, sortMode, kindFilter, searchQuery, includeCanvasItems)
@@ -1748,7 +1751,7 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string }; tray?: TrayB
                 cursor: 'text',
               }}
             />
-            <div style={{ display: 'flex', gap: 3 }}>
+            <div style={{ display: tray ? 'none' : 'flex', gap: 3 }}>
               <ViewToggle mode={view} setMode={setView} />
               <SortToggle mode={sortMode} setMode={setSortMode} />
               <button
@@ -1820,7 +1823,7 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string }; tray?: TrayB
                 the Tiles chip appends free-floating canvas items as a
                 tail section of rows. */}
           <div style={{
-            display: 'flex', alignItems: 'center', gap: 2,
+            display: tray ? 'none' : 'flex', alignItems: 'center', gap: 2,
             padding: '3px 6px 3px',
             background: FRAME_COLOR,
           }}>
@@ -1861,7 +1864,7 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string }; tray?: TrayB
                 every type. Labels never change; a lit chip shows its
                 type colour along the bottom. */}
           <div style={{
-            display: 'flex', alignItems: 'center', gap: 2,
+            display: tray ? 'none' : 'flex', alignItems: 'center', gap: 2,
             padding: '0 6px 4px',
             background: FRAME_COLOR,
             borderBottom: '1px solid rgba(0,0,0,0.35)',

@@ -52,6 +52,8 @@ export const CARD_TYPE_SHORT: Record<CardType, string> = {
   prop: 'Prp', audio: 'Aud', scene: 'Scn', event: 'Evt', prompt: 'Pmt', note: 'Nte', state: 'Sta', area3d: '3D',
 }
 
+const CARD_TYPE_SHORT_WORDS = Object.fromEntries(Object.entries(CARD_TYPE_SHORT).map(([t, w]) => [t, w.toLowerCase()])) as Record<CardType, string>
+
 /** Is the card one of the lit card types? None lit = yes. */
 export function groupMatchesTypes(g: ProjectGroup, types: CardType[] | undefined): boolean {
   return !types?.length || types.includes(cardTypeOf(g))
@@ -77,6 +79,58 @@ export function groupMatchesQuery(g: ProjectGroup, query: string): boolean {
   if (q.length < 3) return false
   const type = CARD_TYPES[cardTypeOf(g)].label.toLowerCase()
   return type.startsWith(q) || q.startsWith(type)
+}
+
+/** What a typed search asks for besides a name (Brian 2026-11-13: "text-
+ *  based stuff we can type in the search bar to get all those tags"): the
+ *  words that name a card type or a kind of content, as the filter chips
+ *  do, and the rest, which is the name looked for. A "#" in front of a
+ *  word is allowed and means the same. */
+export interface QueryTags { text: string; types: CardType[]; kinds: ContentKind[] }
+
+const KIND_WORDS: Record<string, ContentKind> = {
+  '3d': 'model', model: 'model', models: 'model',
+  img: 'image', image: 'image', images: 'image', picture: 'image', pictures: 'image',
+  vid: 'video', video: 'video', videos: 'video',
+  aud: 'audio', audio: 'audio', sound: 'audio',
+  txt: 'text', text: 'text',
+}
+
+/** The words a card type answers to: its name, its plural, its chip's
+ *  short name. (Audio is a kind of content first: KIND_WORDS wins.) */
+const TYPE_WORDS: Record<string, CardType> = (() => {
+  const out: Record<string, CardType> = {}
+  for (const t of Object.keys(CARD_TYPES) as CardType[]) {
+    const label = CARD_TYPES[t].label.toLowerCase()
+    out[label] = t
+    out[label.endsWith('y') ? label.slice(0, -1) + 'ies' : label + 's'] = t
+    out[CARD_TYPE_SHORT_WORDS[t]] = t
+  }
+  return out
+})()
+
+export function parseQueryTags(query: string): QueryTags {
+  const tags: QueryTags = { text: '', types: [], kinds: [] }
+  const rest: string[] = []
+  for (const raw of query.trim().toLowerCase().split(/\s+/).filter(Boolean)) {
+    const w = raw.startsWith('#') ? raw.slice(1) : raw
+    const kind = KIND_WORDS[w]
+    const type = TYPE_WORDS[w]
+    if (kind) { if (!tags.kinds.includes(kind)) tags.kinds.push(kind) }
+    else if (type) { if (!tags.types.includes(type)) tags.types.push(type) }
+    else rest.push(raw)
+  }
+  tags.text = rest.join(' ')
+  return tags
+}
+
+/** Does the card answer the tags of a typed search: one of the types named
+ *  (if any), one of the kinds named (if any), and the name in the rest? */
+export function groupMatchesTags(g: ProjectGroup, boards: Record<string, BoardData>, tags: QueryTags): boolean {
+  if (!tags.types.length && !tags.kinds.length) return false
+  if (tags.types.length && !tags.types.includes(cardTypeOf(g))) return false
+  if (tags.kinds.length && !tags.kinds.some(k => groupHasContentOfKind(g, boards, k))) return false
+  return !tags.text || (g.name || '').toLowerCase().includes(tags.text)
 }
 
 /** True iff the group's OWN boards hold content of `kind`. */
