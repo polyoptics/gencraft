@@ -1249,6 +1249,8 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   }
 
   let lastW = 0, lastH = 0
+  /** The camera the view was last drawn through, if it was one's. */
+  let lookedThrough: string | null = null
   const glideM = new THREE.Matrix4()
 
 
@@ -1481,6 +1483,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     // sees, and nothing of the canvas shows.
     const thru = st.through ? standing.get(st.through) : undefined
     const looking = !!(thru?.rig && thru.inst && !into)
+    if (!into) lookedThrough = looking ? st.through! : null
     grid.visible = false
     if (looking) {
       const r = thru!.rig!
@@ -2020,6 +2023,34 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     return { pivot, lens, focal, right: at(1, 0, 0).divideScalar(k), up: at(0, 1, 0).divideScalar(k), ahead: at(0, 0, 1).divideScalar(k), k, base: s.base }
   }
 
+  /** What camera `key` sees: the nearest model surface under screen point
+   *  (x, y) of its view while looking through it, or (no point given, or
+   *  not looking through it) straight along the middle of its view. Its
+   *  model, its point in cameraFrame's axes, and how far off it is along the view in
+   *  camera lengths (what a lens's focus is counted in). null: nothing. */
+  function lookHit(key: string, x?: number, y?: number): { key: string; point: THREE.Vector3; depth: number } | null {
+    const s = standing.get(key), r = s?.rig
+    if (!s || !r || !s.inst) return null
+    s.stand.updateWorldMatrix(true, true)
+    const o = r.group.localToWorld(r.lens.clone())
+    const ahead = r.group.localToWorld(r.lens.clone().add(new THREE.Vector3(0, 0, 1))).sub(o)
+    const unit = ahead.length() || 1
+    ahead.divideScalar(unit)
+    if (x !== undefined && y !== undefined && lastW && lastH && lookedThrough === key) raycaster.setFromCamera(new THREE.Vector2((x / lastW) * 2 - 1, -(y / lastH) * 2 + 1), camera)
+    else raycaster.set(o, ahead)
+    let best: THREE.Vector3 | null = null, d = Infinity, of = ''
+    for (const [k2, m] of standing) {
+      if (k2 === key || !m.inst || !m.stand.visible || k2.startsWith('mini:')) continue
+      const hit = raycaster.intersectObject(m.turn, true)[0]
+      if (hit && hit.distance < d) { d = hit.distance; best = hit.point; of = k2 }
+    }
+    if (!best) return null
+    const depth = best.clone().sub(o).dot(ahead) / unit
+    if (!(depth > 0)) return null
+    const p = best.clone().applyMatrix4(new THREE.Matrix4().copy(ground.matrixWorld).invert())
+    return { key: of, point: p.set(p.x, p.z, -p.y), depth }
+  }
+
   /** The ball round models `keys` (or, null, round every model standing
    *  but `not`), for framing them looking through a camera: its middle and
    *  radius, in cameraFrame's axes and ground px. null when none stand. */
@@ -2186,5 +2217,5 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   const pathAt = (x: number, y: number, only?: Set<string>) => paths.at(x, y, only)
   const pathPx = (p: { x: number; y: number; z: number }) => paths.project(p)
 
-  return { pathAt, pathPx, frame, warm, pick, pickZ: () => pickedZ, info, spinBy, letGo, settleAll, keepTurn, gizmoAt, aimAt, cameraFrame, lookBounds, manipHot, screenBox, floatSpot, pivotOf, labelAt, strokeAt, modelSize, dispose, surfaceAt, pinSpots: notes.spots, pieceView, lend }
+  return { pathAt, pathPx, frame, warm, pick, pickZ: () => pickedZ, info, spinBy, letGo, settleAll, keepTurn, gizmoAt, aimAt, cameraFrame, lookBounds, lookHit, manipHot, screenBox, floatSpot, pivotOf, labelAt, strokeAt, modelSize, dispose, surfaceAt, pinSpots: notes.spots, pieceView, lend }
 }

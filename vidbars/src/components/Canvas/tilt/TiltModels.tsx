@@ -91,6 +91,9 @@ export const models: {
   cameraFrame: ((key: string) => ReturnType<ReturnType<typeof createTiltScene>['cameraFrame']>) | null
   /** The ball round some models, or all of them (tiltScene lookBounds). */
   lookBounds: ((keys: string[] | null, not?: string) => ReturnType<ReturnType<typeof createTiltScene>['lookBounds']>) | null
+  /** What a camera sees under a point of its view, or along its middle
+   *  (tiltScene lookHit). */
+  lookHit: ((key: string, clientX?: number, clientY?: number) => ReturnType<ReturnType<typeof createTiltScene>['lookHit']>) | null
   /** Light up a manipulator part (hovered or held), or none. */
   manipHot: ((key: string | null, part: ManipPart | null) => void) | null
   /** What of a curve is under a point in 3D: a point's cube, a tangent
@@ -105,7 +108,7 @@ export const models: {
    *  (tiltScene lend; three/pieceService). */
   lend: ReturnType<typeof createTiltScene>['lend'] | null
   root: HTMLElement | null
-} = { pieceView: null, lend: null, pathAt: null, pathPx: null, gizmoAt: null, manipHot: null, labelAt: null, strokeAt: null, modelSize: null, pick: null, pickZ: null, info: null, spin: null, letGo: null, hovered: null, at: null, surface: null, pinSpots: null, screenBox: null, floatSpot: null, pivotOf: null, aimAt: null, cameraFrame: null, lookBounds: null, root: null }
+} = { pieceView: null, lend: null, pathAt: null, pathPx: null, gizmoAt: null, manipHot: null, labelAt: null, strokeAt: null, modelSize: null, pick: null, pickZ: null, info: null, spin: null, letGo: null, hovered: null, at: null, surface: null, pinSpots: null, screenBox: null, floatSpot: null, pivotOf: null, aimAt: null, cameraFrame: null, lookBounds: null, lookHit: null, root: null }
 /** Viewers showing what a camera sees (components/Viewport3D/
  *  CameraViewerOverlay, Brian 2026-11-12: "if I put a 2D viewer beside a
  *  3D set, I should be able to look through any active cameras there"):
@@ -520,6 +523,11 @@ export const TiltModels: React.FC = () => {
       }
       models.cameraFrame = v.cameraFrame
       models.lookBounds = v.lookBounds
+      models.lookHit = (key, clientX, clientY) => {
+        if (clientX === undefined || clientY === undefined) return v.lookHit(key)
+        const r = root.getBoundingClientRect()
+        return v.lookHit(key, clientX - r.left, clientY - r.top)
+      }
       models.pieceView = v.pieceView
       models.lend = v.lend
       models.root = root
@@ -554,7 +562,7 @@ export const TiltModels: React.FC = () => {
       cancelAnimationFrame(raf)
       post.disconnect(); marker.remove()
       models.pick = null; models.pickZ = null; models.info = null; models.spin = null; models.letGo = null
-      models.surface = null; models.pinSpots = null; models.screenBox = null; models.floatSpot = null; models.pivotOf = null; models.labelAt = null; models.strokeAt = null; models.modelSize = null; models.gizmoAt = null; models.manipHot = null; models.pathAt = null; models.pathPx = null; models.aimAt = null; models.cameraFrame = null; models.lookBounds = null; models.pieceView = null; models.lend = null; models.root = null
+      models.surface = null; models.pinSpots = null; models.screenBox = null; models.floatSpot = null; models.pivotOf = null; models.labelAt = null; models.strokeAt = null; models.modelSize = null; models.gizmoAt = null; models.manipHot = null; models.pathAt = null; models.pathPx = null; models.aimAt = null; models.cameraFrame = null; models.lookBounds = null; models.lookHit = null; models.pieceView = null; models.lend = null; models.root = null
       view?.dispose()
       canvas?.remove()
     }
@@ -2844,7 +2852,15 @@ function collectTargets(W: number, H: number): TiltTarget[] {
   }
   // A folded scene held in a scene card's section: shown there, small.
   if (stage) out.push(...miniTargets(stage, W, H))
-  const shown = out.filter(t => Math.abs(t.u) < W && Math.abs(t.v) < H && t.w > (t.mini ? 1 : 4))
+  // A camera being looked through (or shown in a Viewer) and the models of
+  // its set stand wherever the canvas view is: left out once the camera
+  // had gone a view away from the canvas's middle, it was gone and every
+  // press on its view did nothing (Brian 2026-11-13: "flies to nowhere,
+  // and then I can no longer move or pan or anything").
+  const lookKeys = [useManip.getState().through, ...[...cameraViews.values()].map(v => v.key)].filter((k): k is string => !!k)
+  const lookSets = new Set(lookKeys.map(k => sceneOf(k)?.area.id).filter((id): id is string => !!id))
+  const looked = (t: TiltTarget) => !t.mini && (lookKeys.includes(t.key) || (lookSets.size > 0 && lookSets.has(sceneOf(t.key)?.area.id ?? '')))
+  const shown = out.filter(t => looked(t) || (Math.abs(t.u) < W && Math.abs(t.v) < H && t.w > (t.mini ? 1 : 4)))
   // A card set to keep its model flat ("Show model in 3D" off).
   const groups = useBoardsStore.getState().groups
   const flatCard = (key: string) => key.startsWith('card:') && [key, dataKey(key)].some(k => groups.find(g => g.id === k.slice(5))?.hideModel3d)

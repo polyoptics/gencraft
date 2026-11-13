@@ -1,7 +1,7 @@
 // LookThrough.tsx — cameras in a 3D scene (Brian 2026-11-09): a camera
 // primitive's lens (focal length, frame shape), and looking through it.
 // Looking through, the canvas is gone: the full 3D world as the camera
-// sees it, framed by its gate. Drag to turn round its focal point, middle
+// sees it, framed by its gate. Drag to orbit what is under the cursor, middle
 // drag (or Shift-drag) to slide it, right drag or the wheel to move in and
 // out; every move is the camera's own (kept with the scene, undoable).
 // Esc or Exit goes back.
@@ -168,12 +168,29 @@ type Start = Cam & {
   ride?: { curve: string; rider: string; i: number; T0: Q; pt: { x: number; y: number; z: number } }
   key: string; dk: string
   q0: Q; P0: V; p0: { dx: number; dy: number; h: number }; focus0: number; zoom: number
-  F: V; k: number; floor: number
+  F: V; k: number
 }
 let held: (Start & { how: 'turn' | 'slide' | 'move'; x0: number; y0: number; button: number; moved: boolean }) | null = null
 let wheelAt = 0
 
-function start(key: string): Start | null {
+/** How far off (camera lengths) what the camera looks at is, when no
+ *  model is in the middle of its view: its own focal point, unless that
+ *  is out past the far side of everything standing, then their middle. */
+function sane(cf: { lens: V; ahead: V; k: number }, focus: number, key: string): number {
+  const b = models.lookBounds?.(null, key)
+  if (!b) return Math.max(FOCUS_MIN, focus)
+  const mid = dot(sub(b.centre, cf.lens), cf.ahead) / cf.k, r = b.r / cf.k
+  if (focus >= FOCUS_MIN && focus <= Math.max(mid + r, r)) return focus
+  return Math.max(FOCUS_MIN, mid > 0 ? mid : r)
+}
+/** The camera as a move starts. What the move is about (Brian 2026-11-13:
+ *  "look at anything I want so simply, and then to be able to orbit around
+ *  anything I want", never "orbits around things in the distance"): the
+ *  model under the cursor (`at`), else the one in the middle of the
+ *  view, else its focal point where that is among the models. It
+ *  turns round that point, and slides and moves in and out by how far off
+ *  that is. (`look` false: its focal point as it is.) */
+function start(key: string, at?: { x: number; y: number }, look = true): Start | null {
   const cf = models.cameraFrame?.(key)
   const on = ridingAt(key)
   // (On a path it stands where the path has it, as high as the path is there.)
@@ -183,13 +200,22 @@ function start(key: string): Start | null {
   const ms = useModelScaleStore.getState()
   const q0 = (ms.poseOf[dk] as Q | undefined) ?? [0, 0, 0, 1]
   const pt = on ? on.curve.pts[on.i] : undefined
+  const focus = (ms.lensOf[dk] ?? CAMERA_LENS).focus
+  const hit = !look ? null : (at ? models.lookHit?.(key, at.x, at.y) : null) ?? models.lookHit?.(key) ?? null
+  // A model whole in the view (or near enough) is turned round its
+  // middle, so it stays where it is in the frame; one the camera is in
+  // among (a room, a terrain), round the spot of it that was hit.
+  const ball = hit ? models.lookBounds?.([hit.key], key) : null
+  const mid = ball ? dot(sub(ball.centre, cf.lens), cf.ahead) / cf.k : 0
+  const whole = !!ball && mid > 0 && ball.r / cf.k <= mid * (18 / (ms.lensOf[dk] ?? CAMERA_LENS).mm) * 1.5
+  const depth = !look ? focus : hit ? Math.max(FOCUS_MIN, whole ? mid : hit.depth) : sane(cf, focus, key)
+  const about: V | null = hit ? (whole ? ball!.centre : hit.point) : null
   return {
     ride: on && pt ? { curve: on.curve.id, rider: on.rider.key, i: on.i, T0: on.spot.q ?? [0, 0, 0, 1], pt: { x: pt.x, y: pt.y, z: pt.z ?? 0 } } : undefined,
-    key, dk, q0, q: q0, p0, focus0: (ms.lensOf[dk] ?? CAMERA_LENS).focus,
+    key, dk, q0, q: q0, p0, focus0: depth,
     zoom: useCanvasStore.getState().zoom || 1,
-    P: cf.pivot, P0: cf.pivot, L: cf.lens, F: cf.focal, right: cf.right, up: cf.up, ahead: cf.ahead, k: cf.k,
-    // The floor: under its foot by how high it stands.
-    floor: cf.base - p0.h * (useCanvasStore.getState().zoom || 1),
+    P: cf.pivot, P0: cf.pivot, L: cf.lens, right: cf.right, up: cf.up, ahead: cf.ahead, k: cf.k,
+    F: about ? { x: about.x, y: about.y, z: about.z } : add(cf.lens, mul(cf.ahead, depth * cf.k)),
   }
 }
 /** The path camera `key` rides and the point of it it is stopped on, if
@@ -227,40 +253,20 @@ function levelRight(c: Cam): V {
   const l = Math.hypot(r.x, r.y, r.z) || 1
   return mul(r, 1 / l)
 }
-/** Upside down (left that way by an earlier turn over the top): rolled
- *  back upright about the line it looks along. A lean it was given by
- *  hand, the right way up, is kept. */
-function upright(c: Cam, F: V): Cam {
+/** Its horizon level: any roll taken out, about the line it looks along
+ *  (Brian 2026-11-13: "without it twisting"). */
+function level(c: Cam): Cam {
   const r = levelRight(c), u = cross(c.ahead, r)
-  if (dot(c.up, u) >= 0) return c
-  return about(c, F, qaxis(c.ahead, -Math.atan2(-dot(c.up, r), dot(c.up, u))))
+  const roll = Math.atan2(dot(c.up, r), dot(c.up, u))
+  return Math.abs(roll) < 1e-5 ? c : about(c, c.L, qaxis(c.ahead, roll))
 }
 /** Tipped by `tip` about F (+ looks further up, the camera coming down). */
 const tipped = (c: Cam, F: V, tip: number) => about(c, F, qaxis(levelRight(c), -tip))
 /** How high its foot stands (canvas units) with its middle at P. */
 const footAt = (h: Start, P: V) => h.p0.h + (P.y - h.P0.y) / h.zoom
-/** How far clear of the floor it is (ground px): its foot on or over it,
- *  its lens a little over it. Under 0 is into the floor. */
-const clear = (h: Start, c: Cam) => Math.min(footAt(h, c.P) * h.zoom, c.L.y - h.floor - 0.08 * h.k)
-/** Over the floor, or (one already into it) no further in than it was. */
-const over = (h: Start, c: Cam) => clear(h, c) >= Math.min(0, clear(h, h)) - 1e-6
-/** How far along a move (`at` 0 → 1) it can go and stay over the floor. */
-function reach(h: Start, at: (t: number) => Cam) {
-  if (over(h, at(1))) return 1
-  let good = 0, bad = 1
-  for (let i = 0; i < 18; i++) {
-    const mid = (good + bad) / 2
-    if (over(h, at(mid))) good = mid; else bad = mid
-  }
-  return good
-}
-/** The camera moved by `by` as it stands: down as far as the floor, and
- *  along it from there. */
-function moved(h: Start, by: V): Cam {
-  const c: Cam = { ...h, P: add(h.P, by), L: add(h.L, by) }
-  const lift = Math.max(0, Math.min(0, clear(h, h)) - clear(h, c))
-  return { ...c, P: { ...c.P, y: c.P.y + lift }, L: { ...c.L, y: c.L.y + lift } }
-}
+/** The camera moved by `by` as it stands. (No floor stops it: it goes
+ *  where it is sent, Brian 2026-11-13: "no weird rules on it".) */
+const moved = (h: Start, by: V): Cam => ({ ...h, P: add(h.P, by), L: add(h.L, by) })
 /** Put the camera where `c` has it. */
 function put(h: Start, c: Cam, focus?: number) {
   const ms = useModelScaleStore.getState()
@@ -282,7 +288,7 @@ function put(h: Start, c: Cam, focus?: number) {
     if (focus !== undefined) ms.setLens(h.dk, { focus })
     return
   }
-  ms.setPlace(h.dk, { dx: h.p0.dx + (c.P.x - h.P0.x) * k, dy: h.p0.dy + (c.P.z - h.P0.z) * k, h: Math.max(0, footAt(h, c.P)) })
+  ms.setPlace(h.dk, { dx: h.p0.dx + (c.P.x - h.P0.x) * k, dy: h.p0.dy + (c.P.z - h.P0.z) * k, h: footAt(h, c.P) })
   ms.setPose(h.dk, c.q)
   if (focus !== undefined) ms.setLens(h.dk, { focus })
 }
@@ -313,7 +319,7 @@ function onDown(e: PointerEvent) {
   if (!key || !(inViewer || overView(e.target))) return
   e.preventDefault(); e.stopImmediatePropagation()
   if (parkOnPoint(key)) return
-  const s = start(key)
+  const s = start(key, { x: e.clientX, y: e.clientY })
   if (!s) return
   held = { ...s, how: e.button === 1 || (e.button === 0 && e.shiftKey) ? 'slide' : e.button === 2 ? 'move' : 'turn', x0: e.clientX, y0: e.clientY, button: e.button, moved: false }
 }
@@ -329,16 +335,14 @@ function onMove(e: PointerEvent) {
     useUndoCoordinator.getState().checkpoint()
   }
   if (h.how === 'turn') {
-    // Round its focal point, as the 3D view turns (the near side of the
-    // floor is what the drag holds): across swings it round the upright
-    // through that point, up and down tips it. It stays the right way up,
-    // stops short of straight up or down, and stops at the floor, so the
-    // focal point never leaves where it is.
-    const c = upright(h, h.F)
+    // Round what the press was on (start): across swings it round the
+    // upright through that point, up and down tips it. Its horizon stays
+    // level and it stops short of straight up or down, so it never goes
+    // over the top.
+    const c = level(h)
     const el0 = Math.asin(Math.max(-1, Math.min(1, c.ahead.y)))
     const el = Math.max(Math.min(-TIP_MAX, el0), Math.min(Math.max(TIP_MAX, el0), el0 - dy * TURN_RAD))
-    const tip = (el - el0) * reach(h, t => tipped(c, h.F, (el - el0) * t))
-    put(h, about(tipped(c, h.F, tip), h.F, qaxis(UP, -dx * TURN_RAD)))
+    put(h, about(tipped(c, h.F, el - el0), h.F, qaxis(UP, -dx * TURN_RAD)), h.focus0)
   } else if (h.how === 'slide') {
     const s = pxScale(h)
     // What is under the cursor comes with it, across as well as up and
@@ -348,11 +352,10 @@ function onMove(e: PointerEvent) {
     dolly(h, 2 ** ((dy - dx) / 250))
   }
 }
-/** In or out along its view, its distance to the focal point × f. Up
- *  close the focal point goes on ahead of it, so it never sticks there;
- *  at the floor it goes on along it. */
+/** In or out along its view, its distance to what it looks at × f. Up
+ *  close that goes on ahead of it, so it never sticks there. */
 function dolly(h: Start, f: number) {
-  const go = Math.max(h.focus0, 1.5) * (1 - f)
+  const go = Math.max(h.focus0, 1) * (1 - f)
   put(h, moved(h, mul(h.ahead, go * h.k)), Math.max(FOCUS_MIN, h.focus0 - go))
 }
 function onUp(e: PointerEvent) {
@@ -368,11 +371,10 @@ function onUp(e: PointerEvent) {
 }
 /** F: the selected models (all of them when none is) in the middle of the
  *  frame, whole, the focal point at their middle, so turning is round
- *  them. It looks the way it was looking, lifted only if that would put
- *  it under the floor. */
+ *  them. It looks the way it was looking, its horizon level. */
 function frame(key: string): boolean {
   if (parkOnPoint(key)) return false
-  const h = start(key)
+  const h = start(key, undefined, false)
   if (!h) return false
   const fs = useFreeNodeStore.getState(), bs = useBoardsStore.getState()
   const sel = [...fs.selectedIds.map(id => `node:${id}`), ...bs.selectedGroupIds.map(id => `card:${id}`)].filter(k => k !== key)
@@ -382,17 +384,11 @@ function frame(key: string): boolean {
   // Far enough back for the ball round them to sit inside the frame.
   const half = Math.atan(18 / lens.mm / Math.max(1, lens.aspect))
   const d = Math.max(FOCUS_MIN * h.k, b.r / Math.sin(half) * 1.1)
-  const c0 = upright(h, h.F)
+  const c0 = level(h)
   const C: V = { x: b.centre.x, y: b.centre.y, z: b.centre.z }
   const shift = sub(sub(C, mul(c0.ahead, d)), c0.L)
-  const c: Cam = { ...c0, P: add(c0.P, shift), L: add(c0.L, shift) }
-  const el = Math.asin(Math.max(-1, Math.min(1, c.ahead.y)))
-  // (Tipped from looking straight down, which is over the floor, back
-  // toward the way it was looking.)
-  const top = -TIP_MAX - el
-  const tip = clear(h, c) >= 0 ? 0 : top * (1 - reach({ ...h, ...tipped(c, C, top) }, t => tipped(c, C, top * (1 - t))))
   useUndoCoordinator.getState().checkpoint()
-  put(h, tip ? tipped(c, C, tip) : c, d / h.k)
+  put(h, { ...c0, P: add(c0.P, shift), L: add(c0.L, shift) }, d / h.k)
   return true
 }
 function onWheel(e: WheelEvent) {
@@ -401,10 +397,13 @@ function onWheel(e: WheelEvent) {
   if (!key || !(inViewer || overView(e.target))) return
   e.preventDefault(); e.stopImmediatePropagation()
   if (parkOnPoint(key)) return
-  const s = start(key)
-  if (!s) return
   const now = performance.now()
-  if (now - wheelAt > 600) useUndoCoordinator.getState().checkpoint()
+  // (A run of clicks goes on from the first one's point: each leaves the
+  // focal point where the next takes it up.)
+  const first = now - wheelAt > 600
+  const s = start(key, { x: e.clientX, y: e.clientY }, first)
+  if (!s) return
+  if (first) useUndoCoordinator.getState().checkpoint()
   wheelAt = now
   dolly(s, 2 ** (Math.max(-120, Math.min(120, e.deltaY)) / 400))
 }
@@ -563,7 +562,7 @@ export const LookThrough: React.FC = () => {
       </div>
       <RideBar k={key} />
       <div style={{ position: 'absolute', bottom: 10, left: '50%', transform: 'translateX(-50%)', fontSize: 11, color: 'rgba(232,240,255,0.55)', whiteSpace: 'nowrap' }}>
-        Drag: turn round the focal point · Middle or Shift-drag: slide · Right-drag or wheel: in and out · Click a model, F frames it
+        Drag: orbit what is under the cursor · Middle or Shift-drag: slide · Right-drag or wheel: in and out · Click a model, F frames it · F alone frames everything
         {(riderOf(key) ?? riderOf(dataKey(key))) ? ' · On a path: step to a point, then move the camera to set it there' : ''}
       </div>
     </div>

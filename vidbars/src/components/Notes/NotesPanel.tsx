@@ -35,7 +35,7 @@ import { usePeek } from '../../utils/peek'
 import { createMediaCard } from '../../utils/cardGrid'
 import { visibleCanvasCenter } from '../../utils/fx/createEffect'
 import { PRIMITIVES, PRIM_NAMES, primitiveUrl, type Primitive } from '../../three/primitives'
-import { dataKey, sceneOf, cardHoldsModel } from '../../utils/area3dScene'
+import { dataKey, sceneOf, cardHoldsModel, cardBox, rowCards } from '../../utils/area3dScene'
 import { pieceName, pieceRiders, pieceRides } from '../../utils/scenePieces'
 import { isHiddenDeckMember } from '../../hooks/useCardDecks'
 import { parentOf, parentCurves } from '../../utils/curveParent'
@@ -441,7 +441,26 @@ function makePrimitive(p: Primitive) {
       }))
     }
   }
+  if (id && area && p === 'camera') dockUnder(id, area, at)
   if (id) useBoardsStore.getState().setSelectedGroup(id)
+}
+
+/** A new camera's card goes in the row docked under its set, after the
+ *  last card there, not out on the set (Brian 2026-11-13: "the card also
+ *  appears in the middle of the 3D set. Can the card be docked on the
+ *  bottom?"). The camera itself stands on the set where it was made. */
+function dockUnder(id: string, area: FreeNodeData, at: { cx: number; cy: number }) {
+  const g = useBoardsStore.getState().groups.find(x => x.id === id)
+  const box = g && cardBox(g)
+  const row = rowCards(area).filter(r => r.id !== id).map(r => cardBox(r)).filter((r): r is NonNullable<typeof r> => !!r)
+  // (No card of the set's out under it: nothing to dock along.)
+  if (!box || !row.length) return
+  const first = row[0]
+  const right = Math.max(...row.filter(r => r.y < first.y + first.height && r.y + r.height > first.y).map(r => r.x + r.width))
+  useModelScaleStore.getState().setPlace(dataKey(`card:${id}`), { dx: at.cx - area.x, dy: at.cy - area.y, h: 0 })
+  useBoardsStore.setState(st => ({
+    groups: st.groups.map(x => x.id === id ? { ...x, originX: x.originX + right - box.x, originY: x.originY + first.y - box.y } : x),
+  }))
 }
 
 /** The selected models' pieces in the flat view (Brian 2026-11-12: "use
