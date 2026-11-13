@@ -13,7 +13,7 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import { acquireModel, releaseModel, disposeInstance } from './modelCache'
 import { computePosedBounds } from './orbitState'
 import { createLook, applyLook, disposeLook, type LookInstance, type ModelShade } from './modelLook'
-import { TILT_PERSPECTIVE, DEFAULT_LIGHT, CAMERA_LENS, type TiltLight, type CameraLens } from '../store/tiltStore'
+import { TILT_PERSPECTIVE, TILT_DRAW_FAR, DEFAULT_LIGHT, CAMERA_LENS, type TiltLight, type CameraLens } from '../store/tiltStore'
 import { CAMERA_URL, CAMERA_LENS_AT } from './primitives'
 import { createNotesOverlay, type NotesHost } from './notesOverlay'
 import type { ModelNotes } from '../store/notesStore'
@@ -727,7 +727,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   // towards the camera so it is not lost behind them.
   Object.assign(slabShadow.material, { polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 })
 
-  const camera = new THREE.PerspectiveCamera(50, 1, 10, TILT_PERSPECTIVE * 20)
+  const camera = new THREE.PerspectiveCamera(50, 1, 10, TILT_PERSPECTIVE * TILT_DRAW_FAR)
   camera.position.set(0, 0, TILT_PERSPECTIVE)
   const F = new THREE.Matrix4().makeScale(1, -1, 1)
   const R = new THREE.Matrix4(), Rz = new THREE.Matrix4()
@@ -1264,7 +1264,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     // (Looking through a camera moves it: back where the canvas's is.)
     camera.position.set(0, 0, TILT_PERSPECTIVE)
     camera.quaternion.identity()
-    camera.near = 10; camera.far = TILT_PERSPECTIVE * 20
+    camera.near = 10; camera.far = TILT_PERSPECTIVE * TILT_DRAW_FAR
     camera.updateProjectionMatrix()
     // The plane: CSS rotateX(t) rotateZ(s), carried from CSS's y-down
     // space into three's y-up space (F·R·F, F = flip y).

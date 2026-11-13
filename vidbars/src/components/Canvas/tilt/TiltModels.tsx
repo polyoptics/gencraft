@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react'
 import {
-  useTiltStore, useModelScaleStore, isTilted, offFlat, standTilt, standRise, unprojectTilt, TILT_FAR, TILT_PERSPECTIVE,
+  useTiltStore, useModelScaleStore, isTilted, offFlat, standTilt, standRise, unprojectTilt, TILT_DRAW_FAR, TILT_PERSPECTIVE,
 } from '../../../store/tiltStore'
 import { CAMERA_LENS } from '../../../store/tiltStore'
 import { usePeek } from '../../../utils/peek'
@@ -1773,7 +1773,7 @@ function seenGround(W: number, H: number): { x0: number; x1: number; y0: number;
   if (offFlat({ tilt, yaw }) < 0.5) return null
   let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity
   for (let i = 0; i <= 8; i++) for (let j = 0; j <= 8; j++) {
-    const q = unprojectTilt((i / 8 - 0.5) * W, (j / 8 - 0.5) * H, tilt, spin, shiftX, shiftY, 0, TILT_FAR)
+    const q = unprojectTilt((i / 8 - 0.5) * W, (j / 8 - 0.5) * H, tilt, spin, shiftX, shiftY, 0, TILT_DRAW_FAR)
     if (!q) continue
     x0 = Math.min(x0, q.x); x1 = Math.max(x1, q.x); y0 = Math.min(y0, q.y); y1 = Math.max(y1, q.y)
   }

@@ -323,6 +323,9 @@ export interface TiltGlide { k: number; x: number; y: number }
  *  dragged up there was flung off out of sight and came back, and let go
  *  there it landed far away (Brian 2026-10-30). Past this it is sky. */
 export const TILT_FAR = 16
+/** How far off the plane is still DRAWN, the same measure: the board runs
+ *  on towards the horizon instead of being cut off part way there. */
+export const TILT_DRAW_FAR = 200
 
 /** Where a point on SCREEN (px from the host centre) lands on the tilted
  *  plane, in FLAT px from the centre — i.e. the flat-view point now drawn
