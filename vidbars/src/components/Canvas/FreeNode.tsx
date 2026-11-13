@@ -637,6 +637,7 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
           setTextEditing(true)
         }
         setFreeSelection([id])
+        if (node.type === 'area') useBoardsStore.getState().clearGroupSelection()
         // Connected content tile: a plain click also shows its item in
         // the browser window its cluster touches (alongside the strip).
         if (connectedWindowId) {
@@ -1397,7 +1398,12 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
             !(e.target as Element).closest('[data-freenode-header],[data-resize]')) return
         wasSelectedOnDown.current = isSelected
         if (e.shiftKey) { toggleFreeSelection(id) }
-        else if (!isSelected) { setFreeSelection([id]) }
+        else if (!isSelected) {
+          setFreeSelection([id])
+          // A 3D set picked alone is the whole selection: cards left
+          // selected from before would be framed with it (Brian 2026-11-13).
+          if (node.type === 'area') useBoardsStore.getState().clearGroupSelection()
+        }
       }}
       onPointerDown={onNodeDown}
       onPointerMove={onNodeMove}

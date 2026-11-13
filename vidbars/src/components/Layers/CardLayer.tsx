@@ -92,6 +92,14 @@ import { sceneOf, dataKey, cardHoldsModel } from '../../utils/area3dScene'
 
 const BOARD_PADDING_X = 20
 
+/** A card picked alone: a 3D set left selected from before goes, so it is
+ *  not framed or shown selected with the card (Brian 2026-11-13). */
+function dropSetSelection() {
+  const fs = useFreeNodeStore.getState()
+  const keep = fs.selectedIds.filter(id => fs.nodes[id]?.type !== 'area')
+  if (keep.length !== fs.selectedIds.length) fs.setFreeSelection(keep)
+}
+
 /** Derive a deck-edge border color from a card's base color at a given alpha */
 function edgeColor(baseHex: string, alpha: number): string {
   const { h, s, l } = hexToHsl(baseHex)
@@ -978,6 +986,7 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
     const alreadySelected = bs0.selectedGroupIds.includes(group.id)
     if (!alreadySelected) {
       bs0.setSelectedGroup(group.id)
+      dropSetSelection()
     }
     useUndoCoordinator.getState().checkpoint()
 
@@ -2152,6 +2161,7 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
     const alreadySelected = bs0.selectedGroupIds.includes(anchorGroup.id)
     if (!alreadySelected) {
       bs0.setSelectedGroup(anchorGroup.id)
+      dropSetSelection()
     }
     useUndoCoordinator.getState().checkpoint()
 
@@ -2862,6 +2872,7 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[]; lay
     const alreadySelected = bs0.selectedGroupIds.includes(anchorGroup.id)
     if (!alreadySelected) {
       bs0.setSelectedGroup(anchorGroup.id)
+      dropSetSelection()
     }
     useUndoCoordinator.getState().checkpoint()
 
