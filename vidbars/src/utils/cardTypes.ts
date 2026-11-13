@@ -33,7 +33,7 @@ export interface CardDetail {
   collapsed?: boolean
 }
 
-export type CardType = 'element' | 'character' | 'faction' | 'family' | 'location' | 'prop' | 'audio' | 'scene' | 'event' | 'prompt' | 'note' | 'state' | 'area3d'
+export type CardType = 'element' | 'character' | 'faction' | 'family' | 'location' | 'prop' | 'audio' | 'scene' | 'event' | 'prompt' | 'note' | 'state' | 'area3d' | 'style'
 
 export interface CardTypeInfo {
   label: string
@@ -72,6 +72,10 @@ export const CARD_TYPES: Record<CardType, CardTypeInfo> = {
   // deck, and one output deck showing the current one (utils/stateCard).
   state:     { label: 'State',     color: '#4f8f5a', details: [] },
   area3d:    { label: '3D set',    color: '#3d7fd9', details: [] },
+  // A STYLE (2026-11-13): a loop strip's look as a card (utils/styleCard).
+  // Its back lists the effects it holds; the look mixer puts any shot
+  // through it.
+  style:     { label: 'Style',     color: '#e0703a', details: ['Effects'] },
 }
 /** The types a card can be made (the picker, the Card Browser's chips). A
  *  3D scene is not one of them (Brian 2026-11-09): it is a tool, made with

@@ -85,7 +85,7 @@ contextBridge.exposeInMainWorld('vidbarsDesktop', {
   sketchClipFrames: (c) => ipcRenderer.invoke('vb:sketch-clip-frames', c),
   sketchBakeFrame: (bake, i, dataUrl) => ipcRenderer.invoke('vb:sketch-bake-frame', bake, i, dataUrl),
   sketchBakeDrop: (bake) => ipcRenderer.invoke('vb:sketch-bake-drop', bake),
-  sketchBakeEncode: (bake, c, name) => ipcRenderer.invoke('vb:sketch-bake-encode', bake, c, name),
+  sketchBakeEncode: (bake, c, name, opts) => ipcRenderer.invoke('vb:sketch-bake-encode', bake, c, name, opts),
 
   /** The Film Look panel: is the look mixer's server up, and its address. */
   mixerStatus: () => ipcRenderer.invoke('vb:mixer-status'),

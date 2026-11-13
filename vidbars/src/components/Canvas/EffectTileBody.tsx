@@ -21,13 +21,58 @@ import React, { useState } from 'react'
 import type { FreeNodeData } from '../../store/freeNodeStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useFxStore } from '../../store/fxStore'
-import { useAuxStore } from '../../utils/fx/aiEffects'
+import { isAuxKind, useAuxStore } from '../../utils/fx/aiEffects'
+import { motionDrawAll, useClipMotion } from '../../utils/fx/clipMotion'
+import { CARD_STRIP_PREFIX } from '../../utils/fx/cardStrips'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { EFFECTS, EFFECT_ORDER, effectKindOf, effectParams, type EffectKind, type ParamDef } from '../../utils/fx/effects'
 import { soloedElsewhere, toggleEffectOff, toggleEffectSolo } from '../../utils/fx/effectToggles'
 import { startEffectDragOut } from '../../utils/fx/effectDragOut'
 
 const stop = (e: React.SyntheticEvent) => e.stopPropagation()
+
+/** The loop strip a face's card is docked on: the tile's own, or (an effect
+ *  CARD, utils/effectCards) the stand-in that holds its place there. */
+function railOfFace(id: string, node: FreeNodeData, nodes: Record<string, FreeNodeData>): string | null {
+  if (node.railDock) return node.railDock.railId
+  if (!id.startsWith(CARD_STRIP_PREFIX)) return null
+  const gid = id.slice(CARD_STRIP_PREFIX.length)
+  for (const n of Object.values(nodes)) if (n.cardRef === gid && n.railDock) return n.railDock.railId
+  return null
+}
+
+/** A drawing card (Depth, Segment, an outline, a hatch, a look) on a loop
+ *  strip whose subject is a clip (a video or GIF): draw the whole clip once,
+ *  in the background, and keep it (utils/fx/clipMotion "Draw all" for that
+ *  strip). Lit once every frame is drawn with the strip as it is; a ring
+ *  fills while it draws. */
+const ClipDrawChip: React.FC<{ id: string; node: FreeNodeData; kind: EffectKind; u: number }> = ({ id, node, kind, u }) => {
+  const railId = useFreeNodeStore(s => (isAuxKind(kind) ? railOfFace(id, node, s.nodes) : null))
+  const key = railId ? `rail:${railId}` : ''
+  const m = useClipMotion(s => (key ? s.byKey[key] : undefined))
+  if (!railId || !m) return null
+  const len = Math.max(0, m.end - m.first)
+  const all = len > 0 && m.drawn >= len
+  const share = len ? m.drawn / len : 0
+  return (
+    <button
+      type="button" data-fx-clip-draw={all ? 'done' : m.drawAll ? 'drawing' : 'off'}
+      title={all ? 'The whole clip is drawn with this strip'
+        : m.drawAll ? `Drawing the clip: ${m.drawn} of ${len} frames. Click to stop`
+        : 'Draw this card over the whole clip, in the background, and keep it'}
+      onPointerDown={e => { if (e.button === 0) e.stopPropagation() }}
+      onDoubleClick={stop}
+      onClick={e => { e.stopPropagation(); motionDrawAll(key, !m.drawAll) }}
+      style={toggleStyle(u, all ? 'rgba(140,190,255,0.9)' : m.drawAll ? `conic-gradient(rgba(140,190,255,0.9) ${share * 360}deg, rgba(255,255,255,0.12) 0)` : 'rgba(255,255,255,0.12)',
+        all ? '#0b1424' : 'rgba(255,255,255,0.8)')}
+    >
+      <svg width={5 * u} height={5 * u} viewBox="0 0 10 10" aria-hidden style={{ pointerEvents: 'none' }}>
+        <rect x="0.8" y="1.5" width="8.4" height="7" rx="1" fill="none" stroke="currentColor" strokeWidth="1.4" />
+        <path d="M3.4 1.5 V8.5 M6.6 1.5 V8.5" stroke="currentColor" strokeWidth="1" />
+      </svg>
+    </button>
+  )
+}
 const checkpoint = () => useUndoCoordinator.getState().checkpoint()
 
 /** The ground every face is painted on. Each effect's colour is mixed into
@@ -271,6 +316,7 @@ export const EffectTileBody: React.FC<{
             <path d="M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6" />
           </svg>
         </button>
+        <ClipDrawChip id={id} node={node} kind={kind} u={u} />
       </div>
       {/* ── Art: the glyph on a flat tint. Static on purpose — the result
               is on the picture. Takes whatever height the rows leave. ── */}
@@ -302,7 +348,7 @@ export const EffectTileBody: React.FC<{
             CONTROL_Z lifts the marks over the nw resize corner the way it
             lifts the rows. */}
         {(strip?.running || error) && (
-          <div style={{ position: 'absolute', zIndex: CONTROL_Z, top: 1.5 * u, left: 26 * u, display: 'flex', gap: 1.5 * u, fontSize: 7 * u, lineHeight: 1 }}>
+          <div style={{ position: 'absolute', zIndex: CONTROL_Z, top: 1.5 * u, left: 36 * u, display: 'flex', gap: 1.5 * u, fontSize: 7 * u, lineHeight: 1 }}>
             {/* VS15 keeps the warning sign a text glyph, not an emoji. */}
             {error && <span title={error} style={{ color: '#ff9b9b', textShadow: shadow }}>{'⚠︎'}</span>}
             {strip?.running && <span title="Working…" style={{ opacity: 0.7 }}>…</span>}

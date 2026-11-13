@@ -22,6 +22,7 @@
 import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { useFreeNodeStore, type FreeNodeData } from '../../store/freeNodeStore'
+import { motionDrawAll, motionPlay, useClipMotion } from '../../utils/fx/clipMotion'
 import { useRailRunStore } from '../../store/railRunStore'
 import { useRailUiStore } from '../../store/railUiStore'
 import { RAIL_GEOM, RAIL_TRAY, isRail, railDropTarget, railLayout, railMembers, railRows, type RailColumn, type RailDropTarget, type RailSlot, type Rect } from '../../utils/rail'
@@ -420,6 +421,16 @@ export const RailBody: React.FC<{
         currentLabel={run?.note ? `${busy?.label ? `${busy.label} — ` : ''}${run.note}` : busy?.label ?? null}
       />
 
+      {/* A clip in the subject column plays: its controls ride the arrow
+          band, just past the strip's name (RailRunArrow's label width). */}
+      <div data-rail-motion style={{
+        position: 'absolute', display: 'flex', alignItems: 'center', gap: 4 * u,
+        left: L.arrow.x - rail.x + Math.min(150 * u, L.arrow.width * 0.3) + 14 * u,
+        top: L.arrow.y - rail.y + 6 * u, height: 18 * u,
+      }}>
+        <MotionControls railId={id} u={u} />
+      </div>
+
       <RailResizeGrip railId={id} width={L.box.width} height={L.box.height} u={u} hovered={hovered} />
       {/* The results tray scales on its own: judge the results big while
           the inputs stay as they are. */}
@@ -778,6 +789,65 @@ const ViewerButton: React.FC<{ railId: string; u: number }> = ({ railId, u }) =>
     </svg>
   </button>
 )
+
+/** A clip (a video or GIF) in the subject column: play it through the strip
+ *  (utils/fx/clipMotion). ▶ plays, drawing ahead of the playhead; the
+ *  count is the frame on show; Draw all draws the whole clip in the
+ *  background, lit once every frame is drawn with the strip as it is. Only
+ *  there while the subject is a clip; nothing in it moves as it plays. */
+const MotionControls: React.FC<{ railId: string; u: number }> = ({ railId, u }) => {
+  const key = `rail:${railId}`
+  const m = useClipMotion(s => s.byKey[key])
+  if (!m) return null
+  const len = Math.max(0, m.end - m.first)
+  const all = len > 0 && m.drawn >= len
+  const pct = len ? Math.floor((m.drawn / len) * 100) : 0
+  const btn = (lit: boolean): React.CSSProperties => ({
+    flex: '0 0 auto', height: 18 * u, padding: `0 ${4 * u}px`, margin: 0, borderRadius: 5 * u,
+    border: `${u}px solid ${lit ? 'rgba(140,190,255,0.7)' : 'rgba(255,255,255,0.25)'}`,
+    background: lit ? 'rgba(46,72,120,0.95)' : 'rgba(20,16,14,0.72)', color: lit ? '#cfe2ff' : 'rgba(255,255,255,0.88)',
+    fontFamily: 'inherit', fontSize: 10 * u, fontWeight: 700, lineHeight: 1, cursor: 'pointer', whiteSpace: 'nowrap',
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+  })
+  const title = m.error ? `Could not play: ${m.error}` : m.note ?? ''
+  return (
+    <>
+      <button
+        type="button"
+        data-rail-motion-play={m.playing ? 'on' : 'off'}
+        title={m.playing ? 'Pause' : 'Play the clip through the strip: it draws ahead of the playhead and keeps what it drew'}
+        onPointerDown={stopPrimary}
+        onMouseDown={pressButton}
+        onDoubleClick={stop}
+        onClick={e => { e.stopPropagation(); motionPlay(key, !m.playing) }}
+        style={{ ...btn(m.playing), width: 18 * u, padding: 0 }}
+      >
+        <svg width={9 * u} height={9 * u} viewBox="0 0 10 10" aria-hidden>
+          {m.playing
+            ? <><rect x="1.5" y="1" width="2.5" height="8" fill="currentColor" /><rect x="6" y="1" width="2.5" height="8" fill="currentColor" /></>
+            : <path d="M2 1 L9 5 L2 9 Z" fill="currentColor" />}
+        </svg>
+      </button>
+      <span data-rail-motion-frame title={title || 'The frame on show'} style={{
+        flex: '0 0 auto', width: 52 * u, height: 18 * u, lineHeight: `${18 * u}px`, borderRadius: 5 * u, background: 'rgba(20,16,14,0.72)',
+        fontSize: 10 * u, fontVariantNumeric: 'tabular-nums', textAlign: 'center',
+        color: m.error ? C.amber : 'rgba(255,255,255,0.85)', overflow: 'hidden', whiteSpace: 'nowrap',
+      }}>{m.error ? `${WARN} clip` : len ? `${m.frame - m.first + 1}/${len}` : '…'}</span>
+      <button
+        type="button"
+        data-rail-motion-draw={all ? 'done' : m.drawAll ? 'drawing' : 'off'}
+        title={all ? 'Every frame is drawn with the strip as it is'
+          : m.drawAll ? `Drawing the whole clip: ${m.drawn} of ${len} frames. Click to stop`
+          : 'Draw the whole clip in the background, so it all plays smoothly'}
+        onPointerDown={stopPrimary}
+        onMouseDown={pressButton}
+        onDoubleClick={stop}
+        onClick={e => { e.stopPropagation(); motionDrawAll(key, !m.drawAll) }}
+        style={{ ...btn(all || m.drawAll), width: 46 * u }}
+      >{all ? 'Drawn' : m.drawAll ? `${pct}%` : 'Draw all'}</button>
+    </>
+  )
+}
 
 /** The tray's header: "Results", how many, FX, the Viewer button, a drag-out
  *  grip for the face-up result (Shift: all of them), and Clear. */

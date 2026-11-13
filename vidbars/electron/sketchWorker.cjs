@@ -170,11 +170,18 @@ function bakeFrame(bake, i, dataUrl) {
 
 /** A bake's frames as an MP4 at the clip's rate, with the clip's sound over
  *  the same frames; the frames then go. Resolves the file written. */
-async function bakeEncode(bake, id, start, count, outFile) {
+async function bakeEncode(bake, id, start, count, outFile, gif = false) {
   const c = clips.get(id)
   if (!c) throw new Error('unknown clip')
   const dir = path.join(HOME, 'bakes', bake)
   const args = ['-v', 'error', '-y', '-framerate', String(c.fps), '-start_number', String(start), '-i', path.join(dir, '%06d.jpg')]
+  if (gif) {
+    // A looping GIF at the clip's rate, on a palette made from its own frames.
+    args.push('-frames:v', String(count), '-vf', 'split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=sierra2_4a', '-loop', '0', outFile)
+    fs.mkdirSync(path.dirname(outFile), { recursive: true })
+    try { await exec('ffmpeg', args) } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+    return outFile
+  }
   if (c.audio) args.push('-ss', (start / c.fps).toFixed(6), '-t', (count / c.fps).toFixed(6), '-i', c.file, '-map', '0:v', '-map', '1:a?', '-c:a', 'aac', '-b:a', '192k', '-shortest')
   args.push('-frames:v', String(count), '-vf', 'pad=ceil(iw/2)*2:ceil(ih/2)*2', '-c:v', 'libx264', '-preset', 'medium', '-crf', '16',
     '-pix_fmt', 'yuv420p', '-movflags', '+faststart', outFile)

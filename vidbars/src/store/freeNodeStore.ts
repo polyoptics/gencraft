@@ -122,6 +122,13 @@ export interface FreeNodeData {
    *  (ImageStudio), on tiles from before pieces became cards. Make cards
    *  (utils/snipCards) reads it to deck them by source. */
   snipOf?: string
+  /** A run's stand-in for a card's picture that is an animated GIF
+   *  (utils/railCards railUnits): it runs as a clip. Never stored. */
+  gifClip?: boolean
+  /** The look mixer (a Film Look node mixing a deck that is not the film's
+   *  own): each shot's look and its own changes to it, by the shot's key
+   *  (utils/filmShots DockedClip.key). components/FilmMixer/LookMixer. */
+  lookMix?: { shots: Record<string, { style?: string; tweaks?: import('../utils/styleCard').StyleTweaks }> }
   /** Loop strips: the RECIPE — slots left to right (utils/rail). */
   rail?: import('../utils/rail').RailData
   /** Docked on a loop strip: which rail, which slot, where in its column.

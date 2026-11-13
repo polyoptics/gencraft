@@ -49,7 +49,7 @@ export interface ListQuery {
  *  (they share one row, like the 3D / Img / Vid chips above them). */
 export const CARD_TYPE_SHORT: Record<CardType, string> = {
   element: 'Elm', character: 'Chr', faction: 'Fac', family: 'Fam', location: 'Loc',
-  prop: 'Prp', audio: 'Aud', scene: 'Scn', event: 'Evt', prompt: 'Pmt', note: 'Nte', state: 'Sta', area3d: '3D',
+  prop: 'Prp', audio: 'Aud', scene: 'Scn', event: 'Evt', prompt: 'Pmt', note: 'Nte', state: 'Sta', area3d: '3D', style: 'Sty',
 }
 
 const CARD_TYPE_SHORT_WORDS = Object.fromEntries(Object.entries(CARD_TYPE_SHORT).map(([t, w]) => [t, w.toLowerCase()])) as Record<CardType, string>

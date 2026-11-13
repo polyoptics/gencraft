@@ -7,7 +7,8 @@ import { addFreeNodeCentered } from '../../utils/canvasCreate'
 import { useBoardsStore } from '../../store/boardsStore'
 import { cardFaceMedia } from '../../utils/cardGrid'
 import { docked, makeShotCards, type DockedClip } from '../../utils/filmShots'
-import { DeckPlayer } from './DeckPlayer'
+import { LookMixer } from './LookMixer'
+import type { ProjectGroup } from '../../store/boardsStore'
 import { hasFilmPlan, loadFilmPlan } from '../../utils/filmPlan'
 
 /** The Film Look node: the look mixer, laid out on the canvas like any panel.
@@ -292,12 +293,13 @@ export function FilmMixerBody({ nodeId, pinned, bodyW, bodyH }: { nodeId: string
     return () => document.removeEventListener('pointerdown', onDown, true)
   }, [active])
 
-  const { shots, things, clips } = useDockedShots(nodeId, pinned, ready)
+  const { shots, things, clips, styles } = useDockedShots(nodeId, pinned, ready)
   usePageFollows(ready, shots)
   const [making, setMaking] = useState<string | null>(null)
   const empty = ready && shots.length === 0
+  const general = shots.length === 0 && clips.length > 0
 
-  const shielded = ready && !pinned && !active && !empty
+  const shielded = ready && !pinned && !active && !empty && !general
   const fit = Math.max(0.001, Math.min(bodyW / PAGE_W, bodyH / PAGE_H))
 
   return (
@@ -337,11 +339,13 @@ export function FilmMixerBody({ nodeId, pinned, bodyW, bodyH }: { nodeId: string
           )}
         </div>
       )}
-      {/* Opens empty: it mixes the shot cards docked to it. */}
-      {empty && clips.length > 0 && (
-        <DeckPlayer clips={clips} fit={fit} width={bodyW} height={bodyH} />
+      {/* Anything docked that is not the film's own shots: the look mixer,
+          which mixes any pictures, videos and GIFs with Style cards, and
+          needs nothing from the film's mixer. */}
+      {general && (
+        <LookMixer nodeId={nodeId} clips={clips} styles={styles} fit={fit} width={bodyW} />
       )}
-      {empty && !clips.length && (
+      {empty && !clips.length && !general && (
         <div data-film-mixer-empty="" style={{
           position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center',
           justifyContent: 'center', gap: 14, background: '#14151c', color: 'rgba(255,255,255,0.7)',
@@ -377,10 +381,11 @@ export function FilmMixerBody({ nodeId, pinned, bodyW, bodyH }: { nodeId: string
 /** The shots on the cards docked to the mixer, worked out again as cards move
  *  (a beat after, not on every frame of a drag). Pinned, it keeps the ones it
  *  had: a pinned mixer has left the canvas its cards are on. */
-function useDockedShots(nodeId: string, pinned: boolean, ready: boolean): { shots: string[]; things: number; clips: DockedClip[] } {
+function useDockedShots(nodeId: string, pinned: boolean, ready: boolean): { shots: string[]; things: number; clips: DockedClip[]; styles: ProjectGroup[] } {
   const [shots, setShots] = useState<string[]>([])
   const [things, setThings] = useState(0)
   const [clips, setClips] = useState<DockedClip[]>([])
+  const [styles, setStyles] = useState<ProjectGroup[]>([])
   useEffect(() => {
     if (pinned) return
     let t = 0
@@ -392,6 +397,8 @@ function useDockedShots(nodeId: string, pinned: boolean, ready: boolean): { shot
       setThings(d.things)
       const sig = (l: DockedClip[]) => l.map(c => `${c.key}|${c.url}|${c.in}|${c.out}`).join(',')
       setClips(prev => (sig(prev) === sig(d.clips) ? prev : d.clips))
+      // A Style card's look changes (the mixer saves into it): kept fresh.
+      setStyles(prev => (prev.length === d.styles.length && prev.every((g, k) => g === d.styles[k]) ? prev : d.styles))
       setShots(prev => (prev.length === d.shots.length && prev.every((s, i) => s === d.shots[i]) ? prev : d.shots))
     }
     const later = () => { window.clearTimeout(t); t = window.setTimeout(work, 150) }
@@ -406,7 +413,7 @@ function useDockedShots(nodeId: string, pinned: boolean, ready: boolean): { shot
     const b = useFreeNodeStore.subscribe(later)
     return () => { window.clearTimeout(t); window.clearInterval(again); a(); b() }
   }, [nodeId, pinned, ready])
-  return { shots, things, clips }
+  return { shots, things, clips, styles }
 }
 
 /** The page shows what the cards say: its own whole-film strip hidden, these

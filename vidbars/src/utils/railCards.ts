@@ -22,6 +22,7 @@
 // An effect card dragged onto the slot row puts a copy of its effect there,
 // settings and all, and stays where it was.
 
+import { isGifUrl } from './fx/clipSource'
 import { useBoardsStore, type BoardData, type ProjectGroup } from '../store/boardsStore'
 import { useCanvasStore } from '../store/canvasStore'
 import { useFreeNodeStore, type FreeNodeData, type FreeNodeType } from '../store/freeNodeStore'
@@ -109,6 +110,7 @@ export function railUnits(n: FreeNodeData, mode: 'each' | 'pick'): FreeNodeData[
     imageUrl: e.media.url, mediaType: e.media.type, posterUrl: e.media.posterUrl ?? null,
     label: e.label,
     ...(e.media.type === 'video' && (e.media.clipIn !== undefined || e.media.clipOut !== undefined) ? { clipIn: e.media.clipIn, clipOut: e.media.clipOut } : {}),
+    ...(e.media.type === 'image' && isGifUrl(e.media.url, e.media.originalName) ? { gifClip: true } : {}),
   }))
 }
 

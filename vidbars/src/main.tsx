@@ -43,6 +43,7 @@ import { usePieceStore } from './three/pieceService'
 import { scenePieces } from './utils/scenePieces'
 import { useManip } from './store/manipStore'
 import { useRideClock } from './utils/pathRide'
+import { useClipMotion } from './utils/fx/clipMotion'
 
 // Expose stores for debugging. Anything you want to OBSERVE has to be here:
 // reaching a store through a dynamic import gets a second copy of the module
@@ -68,6 +69,8 @@ import { useRideClock } from './utils/pathRide'
   useRideClock,
   // A 3D set's models as pieces in the flat view, and their pictures.
   usePieceStore, scenePieces,
+  // Clips played through a strip or the look mixer (utils/fx/clipMotion).
+  useClipMotion,
 }
 
 // One card shown in several places: an edit on one is on all (utils/linkedCards).

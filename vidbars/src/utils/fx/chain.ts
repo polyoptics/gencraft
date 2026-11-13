@@ -21,7 +21,9 @@ export type ChainItem =
        *  draws the whole clip (utils/fx/clipRun). */
       video?: string
       /** A trimmed clip: the part of the video a Run draws, seconds. */
-      clipIn?: number; clipOut?: number }
+      clipIn?: number; clipOut?: number
+      /** `video` is an animated GIF: a Run makes a GIF of it, not an MP4. */
+      gif?: boolean }
   | { id: string; kind: 'effect'; effect: EffectKind; params?: Record<string, number>
       /** Segment's phrases ("name: phrase, phrase" per line). */
       text?: string
@@ -198,7 +200,12 @@ export interface ChainResult {
  *  model or tool (aiEffects) — the step shows its picture unchanged until
  *  it lands, and the live strips run again then. Otherwise (a Run, a save,
  *  a drag-out) the run waits for it and draws once. */
-export async function runChain(items: ChainItem[], maxSide: number, previewSide: number | false = 220, opts: { live?: boolean } = {}): Promise<ChainResult> {
+export async function runChain(items: ChainItem[], maxSide: number, previewSide: number | false = 220, opts: {
+  live?: boolean
+  /** The size the drawing tools draw at, when not `maxSide`: the motion
+   *  preview composites small but asks for the drawings a Run asks for, so
+   *  the worker keeps one set for both. */
+  drawSide?: number } = {}): Promise<ChainResult> {
   const plan = planChain(effectiveItems(items))
   const unreadable: string[] = []
   const result: ChainResult = { outputs: [], stepPreviews: new Map(), ignored: plan.ignored, unreadable }
@@ -207,7 +214,7 @@ export async function runChain(items: ChainItem[], maxSide: number, previewSide:
   const urls = [...plan.sources.map(s => s.url), ...plan.steps.flatMap(s => s.other ? [s.other.url] : [])]
   const images = new Map(await Promise.all(urls.map(async u => [u, await loadImage(u)] as const)))
   const steps = plan.steps.map(s => s.item)
-  const aux = await prepareAux(steps, plan.sources.map(s => ({ url: s.url, img: images.get(s.url) ?? null })), !opts.live, opts.live ? undefined : maxSide)
+  const aux = await prepareAux(steps, plan.sources.map(s => ({ url: s.url, img: images.get(s.url) ?? null })), !opts.live, opts.live ? undefined : opts.drawSide ?? maxSide)
   // A Combine card's look rows: each run as a strip of its own on the same
   // picture, here, before this run draws anything (a run ends by reclaiming
   // the engine's targets). Combine lays them over its picture in the loop.

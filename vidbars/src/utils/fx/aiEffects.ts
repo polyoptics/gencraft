@@ -183,7 +183,7 @@ function hash(s: string): string {
 
 const AUX_KINDS = new Set<EffectKind>(['depth', 'segment', 'filmline', 'linemix', 'formhatch', 'bghatch', 'shademix', 'combine',
   ...(Object.keys(LOOK_OF) as EffectKind[])])
-const isAuxKind = (k: EffectKind) => AUX_KINDS.has(k)
+export const isAuxKind = (k: EffectKind) => AUX_KINDS.has(k)
 /** Cards that read a Segment card's phrases (the things to draw). */
 const READS_PHRASES = new Set<EffectKind>(['filmline', 'formhatch', 'bghatch', ...(Object.keys(LOOK_OF) as EffectKind[])])
 /** Whether any step on the strip needs a model or tool (so its live result

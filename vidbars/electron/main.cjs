@@ -348,7 +348,7 @@ function registerBridge() {
   ipcMain.handle('vb:sketch-clip', async (e, u) => {
     if (!fromApp(e)) return { error: 'Not allowed' }
     const p = realPath(mediaPath(u))
-    if (!p || !/\.(mp4|webm|mov|m4v|mkv|ogv)$/i.test(p)) return { error: 'not a video file on this computer' }
+    if (!p || !/\.(mp4|webm|mov|m4v|mkv|ogv|gif)$/i.test(p)) return { error: 'not a video or GIF file on this computer' }
     try { return await require('./sketchWorker.cjs').clipInfo(p) } catch (err) { return { error: String(err.message || err) } }
   })
   ipcMain.handle('vb:sketch-clip-frames', async (e, c) => {
@@ -363,7 +363,9 @@ function registerBridge() {
   ipcMain.handle('vb:sketch-bake-drop', (e, bake) => { if (fromApp(e) && bakeId(bake)) require('./sketchWorker.cjs').bakeDrop(bake) })
   // The bake's frames as Pictures\VidBars Effects\<name> <stamp>.mp4 (named as
   // vb:save-image names an effect picture). Resolves { path } or { error }.
-  ipcMain.handle('vb:sketch-bake-encode', async (e, bake, c, name) => {
+  ipcMain.handle('vb:sketch-bake-encode', async (e, bake, c, name, opts) => {
+    // A GIF in, a looping GIF out (opts.gif); otherwise an MP4.
+    const gif = !!(opts && opts.gif === true)
     // (A whole clip: any length.)
     const r = fromApp(e) && bakeId(bake) && c && clipRange({ ...c, count: Math.min(600, c.count) }) ? { id: c.id, start: c.start, count: c.count } : null
     if (!r) return { error: 'Not allowed' }
@@ -377,11 +379,11 @@ function registerBridge() {
     const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
     let file = null
     for (let n = 1; n <= 99 && !file; n++) {
-      const f = path.join(dir, `${safe} ${stamp}${n > 1 ? ` (${n})` : ''}.mp4`)
+      const f = path.join(dir, `${safe} ${stamp}${n > 1 ? ` (${n})` : ''}.${gif ? 'gif' : 'mp4'}`)
       if (!fs.existsSync(f)) file = f
     }
     if (!file) return { error: 'Too many files of this name saved this second' }
-    try { return { path: await require('./sketchWorker.cjs').bakeEncode(bake, r.id, r.start, r.count, file) } } catch (err) { return { error: String(err.message || err) } }
+    try { return { path: await require('./sketchWorker.cjs').bakeEncode(bake, r.id, r.start, r.count, file, gif) } } catch (err) { return { error: String(err.message || err) } }
   })
 
   // The Film Look panel: the look mixer's server. The page only ever asks
@@ -423,7 +425,9 @@ function registerBridge() {
     if (!fromApp(e) || typeof dataUrl !== 'string' || !(Object.hasOwn(SAVE_FOLDERS, kind) || kind === 'drag')) return { error: 'Not allowed' }
     // A GIF only as kind 'gif' (a looping GIF the app made, utils/makeGif).
     const m = /^data:image\/(png|jpeg|gif);base64,/.exec(dataUrl)
-    if (!m || (m[1] === 'gif') !== (kind === 'gif')) return { error: 'Not a PNG or JPEG image' }
+    // A GIF also as kind 'drag': a GIF kept inside the project, written out
+    // so the sketch worker can read its frames (utils/fx/clipSource).
+    if (!m || (m[1] === 'gif' ? !(kind === 'gif' || kind === 'drag') : kind === 'gif')) return { error: 'Not a PNG or JPEG image' }
     const dir = saveDir(kind)
     if (!dir) return { error: `${kind === 'drag' ? 'The app data folder' : 'Pictures'} is on a network share, which VidBars cannot read files back from` }
     // Cut by CODE POINTS, on a well-formed string: half an emoji is written

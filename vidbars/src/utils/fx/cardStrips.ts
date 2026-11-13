@@ -22,6 +22,8 @@ import type { ChainItem } from './chain'
 import { knownKind } from './effects'
 
 const PREFIX = 'card:'
+/** The start of a card's strip id (cardStripId). */
+export const CARD_STRIP_PREFIX = PREFIX
 
 /** The strip id a card goes by (its fx result and bypass are keyed by it). */
 export const cardStripId = (groupId: string): string => PREFIX + groupId

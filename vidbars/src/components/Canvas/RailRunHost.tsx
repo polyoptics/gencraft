@@ -25,6 +25,7 @@ import { railComboAt, railFaceCombo } from '../../utils/fx/railChain'
 import { useBoardsStore } from '../../store/boardsStore'
 import { isRailRunning, unreadable } from '../../utils/fx/railRun'
 import { stripNeedsAux, useAuxStore } from '../../utils/fx/aiEffects'
+import { motionAttach, motionDrop, motionEngaged, useClipMotion } from '../../utils/fx/clipMotion'
 
 /** Quiet time after the last change before the preview re-renders — a
  *  slider drag renders once it rests, not on every tick. */
@@ -56,7 +57,14 @@ export function RailRunHost(): null {
         seen.add(railId)
         // What the face-up card shows: step it and the preview follows.
         const combo = railComboAt(rail, members.get(railId), railFaceCombo(rail, members.get(railId)), posters)
-        const sig = combo ? JSON.stringify(combo.items) + (stripNeedsAux(combo.items) ? `#${useAuxStore.getState().version}` : '') : ''
+        // A clip (a video or GIF) in the subject column can play: the
+        // motion engine follows the strip, and once it is played it shows
+        // its own frames here instead of the still one (utils/fx/clipMotion).
+        const mkey = `rail:${railId}`
+        motionAttach(mkey, combo?.items ?? null, canvas => store().setPreview(railId, { canvas, error: undefined, running: false }))
+        const sig = (combo ? JSON.stringify(combo.items) + (stripNeedsAux(combo.items) ? `#${useAuxStore.getState().version}` : '') : '')
+          + (motionEngaged(mkey) ? '#motion' : '')
+        if (motionEngaged(mkey)) { sigs.set(railId, sig); continue }
         if (sigs.get(railId) === sig) continue
         sigs.set(railId, sig)
         window.clearTimeout(timers.get(railId))
@@ -106,6 +114,7 @@ export function RailRunHost(): null {
       for (const railId of [...sigs.keys()]) {
         if (seen.has(railId)) continue
         sigs.delete(railId)
+        motionDrop(`rail:${railId}`)
         window.clearTimeout(timers.get(railId))
         timers.delete(railId)
         // Bumped, not deleted: an undo brings a rail back under the SAME
@@ -126,12 +135,17 @@ export function RailRunHost(): null {
     // A docked card's face is the card's: stepped, the preview follows.
     const offCards = useBoardsStore.subscribe((s, prev) => { if (s.groups !== prev.groups) check() })
     const offAux = useAuxStore.subscribe((s, prev) => { if (s.version !== prev.version) check() })
+    // Played and then let go of (its clip taken away): the still comes back.
+    // (Only when one is engaged or let go: its frames tick many times a second.)
+    const engagedKeys = (b: Record<string, { engaged: boolean }>) => Object.keys(b).filter(k => b[k].engaged).join(',')
+    const offMotion = useClipMotion.subscribe((s, prev) => { if (s.byKey !== prev.byKey && engagedKeys(s.byKey) !== engagedKeys(prev.byKey)) check() })
     return () => {
       dead = true
       offNodes()
       offPosters()
       offCards()
       offAux()
+      offMotion()
       for (const t of timers.values()) window.clearTimeout(t)
     }
   }, [])

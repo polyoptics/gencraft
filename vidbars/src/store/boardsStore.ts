@@ -208,6 +208,8 @@ export interface ProjectGroup {
   /** A STATE card's states, the changes between them, the current one and
    *  its output deck (utils/stateCard). */
   stateCard?: import('../utils/stateCard').StateMachine
+  /** A STYLE card: a loop strip's look, without its pictures (utils/styleCard). */
+  style?: import('../utils/styleCard').StyleData
   /** An open deck's card: the deck it is in now (its front card's id),
    *  kept while the deck is open (utils/deckUnder startDeckHome). One tag,
    *  never a history. A row closing takes the deck in as a deck

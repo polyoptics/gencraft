@@ -1,3 +1,5 @@
+import { makeStyleCard } from '../../utils/styleCard'
+import { screenNote } from '../../utils/makeGif'
 import React, { useState, useRef, useCallback, useEffect } from 'react'
 import { AnnotationCardBody } from '../Notes/AnnotationCardBody'
 import { AreaBody } from '../Notes/AreaBody'
@@ -1784,6 +1786,15 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
                       useFreeNodeStore.getState().clearRailTray(id)
                     }
                     setNodeMenu(null)
+                  } },
+              ] : []),
+              // Loop strip: its look as a Style card (utils/styleCard), set
+              // down below it, to carry to the look mixer.
+              ...(isRailTile ? [
+                { label: 'Make a Style card', icon: '🎨',
+                  action: () => {
+                    setNodeMenu(null)
+                    void makeStyleCard(id).then(r => { if ('error' in r) screenNote(r.error, false, 4000) })
                   } },
               ] : []),
               // A docked card's twin of pulling it out of its column. It is

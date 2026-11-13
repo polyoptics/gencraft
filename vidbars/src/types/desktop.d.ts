@@ -93,8 +93,9 @@ export interface VidbarsDesktop {
   sketchBakeFrame?(bake: string, i: number, dataUrl: string): Promise<{ error?: string }>
   /** A stopped bake: its frames go. */
   sketchBakeDrop?(bake: string): Promise<void>
-  /** A bake's frames as an MP4 (with the clip's sound) in Pictures\VidBars Effects. */
-  sketchBakeEncode?(bake: string, c: { id: string; start: number; count: number }, name: string): Promise<{ path: string } | { error: string }>
+  /** A bake's frames as an MP4 (with the clip's sound) in Pictures\VidBars Effects;
+   *  with `gif`, a looping GIF instead (a main from before GIFs makes an MP4). */
+  sketchBakeEncode?(bake: string, c: { id: string; start: number; count: number }, name: string, opts?: { gif?: boolean }): Promise<{ path: string } | { error: string }>
 }
 
 /** Where a save lands: 'context-sheet' and 'effect' are the user's files

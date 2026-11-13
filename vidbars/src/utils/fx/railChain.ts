@@ -25,6 +25,7 @@
 //
 // Pure apart from the poster map default: reads the nodes it is given.
 
+import { isGifUrl } from './clipSource'
 import type { FreeNodeData } from '../../store/freeNodeStore'
 import { usePosterMapStore } from '../../three/posterService'
 import { isRail, isRailPicture, type RailSlot } from '../rail'
@@ -120,9 +121,13 @@ function sourceItem(n: FreeNodeData, posters: Record<string, string>): SourceIte
   const url = n.type === 'video'
     ? (n.posterUrl?.startsWith('data:') ? n.posterUrl : undefined) ?? (n.imageUrl ? posters[n.imageUrl] : undefined) ?? n.posterUrl ?? ''
     : n.imageUrl ?? ''
+  // An animated GIF moves like a video: its own url is both its first
+  // frame (the picture) and its clip.
+  const gif = n.type === 'image' && !!n.imageUrl && (n.gifClip || isGifUrl(n.imageUrl, n.label))
   return {
     id: n.id, kind: 'source', url, label: n.label,
     ...(n.type === 'video' && n.imageUrl ? { video: n.imageUrl, clipIn: n.clipIn, clipOut: n.clipOut } : {}),
+    ...(gif ? { video: n.imageUrl!, gif: true } : {}),
   }
 }
 

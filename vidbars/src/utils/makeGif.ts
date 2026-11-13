@@ -42,6 +42,9 @@ function say(text: string | null, busy: boolean, clearAfterMs = 0) {
   useGifJob.setState({ text, busy })
   if (clearAfterMs) clearTimer = window.setTimeout(() => useGifJob.setState({ text: null }), clearAfterMs)
 }
+/** A short line in the notice at the bottom of the screen (GifNotice), for
+ *  any process that has something to say: gone after `clearAfterMs`. */
+export const screenNote = say
 
 /** The movie on a card's face, if that is what its face shows. A Rough Cut
  *  card's face plays its whole cut, so it gives every clip, in cut order. */
