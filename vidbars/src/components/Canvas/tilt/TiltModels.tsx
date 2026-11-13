@@ -28,7 +28,7 @@ import type { PathFrame, PathHit } from '../../../three/pathOverlay'
 import { curveRuns, pointFrames } from '../../../utils/curveGeom'
 import { PinLabels } from '../../Notes/PinLabels'
 import { sceneOf, sceneSpot, standsIn, dataKey, cardBox } from '../../../utils/area3dScene'
-import { rideSpots, rideRuns, useRideClock } from '../../../utils/pathRide'
+import { rideSpots, rideRuns, useRideClock, riderOf } from '../../../utils/pathRide'
 import { useUndoCoordinator } from '../../../store/undoCoordinator'
 import { useManip } from '../../../store/manipStore'
 /** The notes store as it stands (read each frame without a hook). */
@@ -207,7 +207,7 @@ const frameState = (): TiltFrameState => {
     lock: ts.lock3d || !!through,
     lensFor: key => key.startsWith('mini:') ? miniLook.get(key)?.lens : lensOf[dataKey(key)],
     through,
-    inLook: lookSet ? key => sceneOf(key)?.area.id === lookSet : undefined,
+    inLook: lookSet ? key => inSet(key, lookSet) : undefined,
     paths: live3d() ? pathFrame() : undefined,
   }
 }
@@ -368,7 +368,7 @@ export const TiltModels: React.FC = () => {
         const set = sceneOf(v.key)?.area.id
         view.frame(now, W, H, targets, {
           ...st, through: v.key, lock: true, selected: new Set(), hovered: null, paths: pathFrame(v.key),
-          inLook: set ? key => sceneOf(key)?.area.id === set : undefined,
+          inLook: set ? key => inSet(key, set) : undefined,
         })
         drew = true
         const ctx = v.canvas.getContext('2d')
@@ -2700,6 +2700,17 @@ function miniTargets(stage: HTMLElement, W: number, H: number): TiltTarget[] {
     }
   }
   return out
+}
+
+/** Is model `key` one of 3D set `set`'s, as a camera of that set sees
+ *  them: it stands in the set, or it rides a path that runs over the
+ *  set (its card may lie anywhere: Brian 2026-11-13, a Viewer on a
+ *  camera, "I don't see any of the 3D models"). */
+function inSet(key: string, set: string): boolean {
+  if (sceneOf(key)?.area.id === set) return true
+  const ride = riderOf(key) ?? riderOf(dataKey(key))
+  const a = ride && useFreeNodeStore.getState().nodes[set]
+  return !!a && ride!.curve.pts.some(p => p.x >= a.x && p.x <= a.x + a.width && p.y >= a.y && p.y <= a.y + a.height)
 }
 
 function collectTargets(W: number, H: number): TiltTarget[] {
