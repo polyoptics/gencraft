@@ -218,7 +218,9 @@ function onMove(e: PointerEvent) {
   if (p[0] === 'm') {
     const v = moveVec(d, mx, my, k)
     if (!v) return
-    for (const h of [d, ...d.with]) ms.setPlace(h.dk, { dx: h.p0.dx + v[0], dy: h.p0.dy + v[2], h: Math.max(0, h.p0.h + v[1]) })
+    // (No floor under it: a model goes down to and through the ground, so
+    // a terrain can lie as the floor, Brian 2026-11-13.)
+    for (const h of [d, ...d.with]) ms.setPlace(h.dk, { dx: h.p0.dx + v[0], dy: h.p0.dy + v[2], h: h.p0.h + v[1] })
   } else if (p === 's') {
     // Right or up grows it, left or down shrinks it: twice as big per 120 px.
     const f = 2 ** ((mx - my) / 120)
