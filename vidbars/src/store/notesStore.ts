@@ -38,6 +38,8 @@ export interface CurvePoint {
   label?: string
   /** false: its curve's point graphic (Curve.mark) is off at this point. */
   mark?: false
+  /** What rides the path slows into this point and gathers speed out of it. */
+  slow?: boolean
 }
 
 /** What stands on an end of a curve. */
@@ -74,12 +76,19 @@ export interface PathRider {
   /** Carried above the path, and to its side (canvas units). Absent: 0. */
   lift?: number
   side?: number
+  /** How it is turned at points of the path (by the point's index), set
+   *  by reframing a camera there while looking through it: a turn of its
+   *  own in the 3D view's axes, blended from point to point. A point
+   *  without one: as the path has it. */
+  keys?: Record<number, [number, number, number, number]>
 }
 /** What a path's riders do once they reach its end. */
 export type RideAfter = 'loop' | 'stop' | 'pingpong'
 
 export interface Curve {
   id: string
+  /** What it is called in the Outliner. Absent: by what it is (Curve, Arrow, Pen line). */
+  name?: string
   /** The models riding it, and when (seconds on the ride clock, which
    *  every path shares, so several stay in step): they set off at
    *  `rideStart` and arrive at `rideEnd` (absent or not after the start:

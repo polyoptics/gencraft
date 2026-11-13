@@ -179,6 +179,29 @@ const PointMarkSwitch: React.FC = () => {
   )
 }
 
+/** What rides the path slows through the selected points: on or off. */
+const PointSlow: React.FC = () => {
+  const points = useNotesUi(s => s.points)
+  const curves = useNotesStore(s => s.curves)
+  const picked = points.map(k => { const j = k.lastIndexOf(':'); return { id: k.slice(0, j), i: +k.slice(j + 1) } }).filter(x => curves[x.id]?.pts[x.i])
+  const on = picked.length > 0 && picked.every(x => curves[x.id].pts[x.i].slow)
+  return (
+    <button style={{ ...btnStyle(on, true), height: 30, justifyContent: 'center', fontSize: 11.5, opacity: picked.length ? 1 : 0.4 }} aria-pressed={on} aria-disabled={!picked.length}
+      title="Slow here: on or off, for the selected points. On, a model or camera riding the path slows into the point and gathers speed out of it."
+      onClick={() => {
+        if (!picked.length) return
+        useUndoCoordinator.getState().checkpoint()
+        const ns = useNotesStore.getState()
+        for (const id of new Set(picked.map(x => x.id))) {
+          const idx = picked.filter(x => x.id === id).map(x => x.i)
+          ns.updateCurve(id, { pts: ns.curves[id].pts.map((p, i) => { if (!idx.includes(i)) return p; const q = { ...p }; if (on) delete q.slow; else q.slow = true; return q }) })
+        }
+      }}>
+      Slow here (what rides the path)
+    </button>
+  )
+}
+
 /** The selected points' twist: how far the path is rolled about its own
  *  line there. */
 const PointTwist: React.FC = () => {
@@ -547,7 +570,7 @@ function useOutline() {
       const b = curveBounds(c)
       const inA = areaAt(nodes, (b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2)
       const all = inA && c.pts.every(p => p.x >= inA.x && p.x <= inA.x + inA.width && p.y >= inA.y && p.y <= inA.y + inA.height)
-      const it: Item = { kind: 'curve', id: c.id, name: c.arrowEnd || c.arrowStart ? 'Arrow' : c.kind === 'free' ? 'Pen line' : 'Curve', icon: '∿', cx: (b.x0 + b.x1) / 2, cy: (b.y0 + b.y1) / 2, path: c.kind === 'bezier' }
+      const it: Item = { kind: 'curve', id: c.id, name: c.name || (c.arrowEnd || c.arrowStart ? 'Arrow' : c.kind === 'free' ? 'Pen line' : 'Curve'), icon: '∿', cx: (b.x0 + b.x1) / 2, cy: (b.y0 + b.y1) / 2, path: c.kind === 'bezier' }
       if (all) { if (!kids.has(inA!.id)) kids.set(inA!.id, []); kids.get(inA!.id)!.push(it) }
       else root.push(it)
     }
@@ -585,6 +608,17 @@ function moveItemTo(it: Item, x: number, y: number) {
   } else useNotesStore.getState().moveCurves([it.id], dx, dy)
 }
 
+/** Call an Outliner row something else (Brian 2026-11-12: "rename objects
+ *  in the Outliner, including the paths"). */
+function renameItem(it: Item, name: string) {
+  const to = name.trim()
+  if (to === it.name || it.kind === 'viewer') return
+  useUndoCoordinator.getState().checkpoint()
+  if (it.kind === 'node') useFreeNodeStore.getState().updateFreeNode(it.id, { label: to })
+  else if (it.kind === 'card') { if (to) useBoardsStore.getState().renameGroup(it.id, to) }
+  else useNotesStore.getState().updateCurve(it.id, { name: to || undefined })
+}
+
 function selectItem(it: Item) {
   const fs = useFreeNodeStore.getState(), bs = useBoardsStore.getState()
   if (it.kind === 'node') { fs.setFreeSelection([it.id]); bs.clearGroupSelection() }
@@ -599,6 +633,7 @@ const Outliner: React.FC = () => {
   const selCurves = useNotesUi(s => s.selected)
   const [dragging, setDragging] = useState<Item | null>(null)
   const [over, setOver] = useState<string | null>(null)
+  const [naming, setNaming] = useState<string | null>(null)
   const drag = useRef<{ it: Item; x0: number; y0: number; live: boolean } | null>(null)
   const isSel = (it: Item) => it.kind === 'node' ? selNodes.includes(it.id) : it.kind === 'card' ? selCards.includes(it.id) : it.kind === 'curve' ? selCurves.includes(it.id) : false
 
@@ -661,7 +696,8 @@ const Outliner: React.FC = () => {
     <div
       data-outline-drop={dropId}
       onPointerDown={e => down(e, it)}
-      title={onSet ? 'Drag rows onto a 3D set to put them on it' : it.path ? 'Click to select · drag a model onto it and the model rides this path' : 'Click to select · drag onto a 3D set, or a model onto a path to ride it'}
+      onDoubleClick={() => { if (it.kind !== 'viewer') setNaming(`${it.kind}${it.id}`) }}
+      title={onSet ? 'Drag rows onto a 3D set to put them on it · double-click to rename' : it.path ? 'Click to select · double-click to rename · drag a model onto it and the model rides this path' : 'Click to select · double-click to rename · drag onto a 3D set, or a model onto a path to ride it'}
       style={{
         display: 'flex', alignItems: 'center', gap: 6, height: 24, paddingLeft: 6 + depth * 14, paddingRight: 6,
         borderRadius: 5, cursor: 'pointer', fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden',
@@ -672,7 +708,17 @@ const Outliner: React.FC = () => {
       }}
     >
       <span style={{ width: 12, textAlign: 'center', color: it.kind === 'node' && it.icon === '▦' ? '#5fe39b' : 'rgba(160,200,255,0.8)' }}>{it.icon}</span>
-      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{it.name}</span>
+      {naming === `${it.kind}${it.id}` ? (
+        <input autoFocus defaultValue={it.name} onFocus={e => e.currentTarget.select()}
+          onPointerDown={e => e.stopPropagation()} onDoubleClick={e => e.stopPropagation()}
+          onKeyDown={e => {
+            e.stopPropagation()
+            if (e.key === 'Enter') e.currentTarget.blur()
+            else if (e.key === 'Escape') { e.currentTarget.value = it.name; e.currentTarget.blur() }
+          }}
+          onBlur={e => { renameItem(it, e.currentTarget.value); setNaming(null) }}
+          style={{ flex: 1, minWidth: 0, height: 20, boxSizing: 'border-box', background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(120,170,255,0.6)', borderRadius: 4, color: '#e8f0ff', fontSize: 12, padding: '0 4px', outline: 'none' }} />
+      ) : <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{it.name}</span>}
     </div>
     )
   }
@@ -1083,6 +1129,7 @@ export const NotesPanel: React.FC = () => {
                 <PointMarkSwitch />
                 <PointTwist />
                 <PointLabel />
+                <PointSlow />
               </Section>
             )}
             {modelKeys.length > 0 && <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><Area3dTools part="selected" /></div>}

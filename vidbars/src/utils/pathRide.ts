@@ -41,7 +41,7 @@ export function rideTime(): number {
 
 // ── A path as a ride ──
 
-interface RideLine { pts: P3[]; len: number }
+interface RideLine { pts: P3[]; len: number; /** How far along each of the curve's points is. */ at: number[] }
 const lines = new WeakMap<Curve, RideLine>()
 /** The whole of a curve's line (not stopped short at its end shapes),
  *  each place with how far along it is and the twist there. */
@@ -51,11 +51,13 @@ function lineOf(c: Curve): RideLine {
   const n = c.pts.length
   let run = 0
   const raw = curveSamples(c, 32)
+  const at: number[] = new Array(n).fill(0)
   const pts: P3[] = raw.map((q, i) => {
     if (i) run += Math.hypot(q.x - raw[i - 1].x, q.y - raw[i - 1].y, q.z - raw[i - 1].z)
+    if (q.t === 1 && q.seg + 1 < n) at[q.seg + 1] = run
     return { x: q.x, y: q.y, z: q.z, s: run, tw: (c.pts[q.seg]?.twist ?? 0) * (1 - q.t) + (c.pts[(q.seg + 1) % n]?.twist ?? 0) * q.t }
   })
-  l = { pts, len: run }
+  l = { pts, len: run, at }
   lines.set(c, l)
   return l
 }
@@ -87,6 +89,36 @@ export function rideSpan(c: Curve): { start: number; dur: number; timed: boolean
   return { start, dur: c.flow ? Math.max(0.05, len / Math.abs(c.flow)) : 4, timed: false }
 }
 
+const smooth = (t: number) => t * t * (3 - 2 * t)
+const unsmooth = (y: number) => 0.5 - Math.sin(Math.asin(1 - 2 * Math.max(0, Math.min(1, y))) / 3)
+
+/** The shares of the path (0..1) its points stand at, the two ends of an
+ *  open path among them, and whether what rides slows at each. */
+function knots(c: Curve, l: RideLine): { u: number; slow: boolean }[] {
+  const k = c.pts.map((p, i) => ({ u: l.len > 0 ? l.at[i] / l.len : 0, slow: !!p.slow }))
+  if (c.closed && c.pts.length > 2) k.push({ u: 1, slow: !!c.pts[0].slow })
+  return k
+}
+/** Between two points: slowing into or out of the ones that ask for it.
+ *  `back`: the other way, from how far to when. */
+function between(t: number, a: boolean, b: boolean, back = false): number {
+  if (a && b) return back ? unsmooth(t) : smooth(t)
+  if (a) return back ? Math.sqrt(t) : t * t
+  if (b) return back ? 1 - Math.sqrt(1 - t) : 1 - (1 - t) * (1 - t)
+  return t
+}
+/** The steady share `y` of the way (0..1) as the share of the path it has
+ *  reached, slowing at the points that ask for it; `back`, the reverse. */
+function paced(c: Curve, l: RideLine, y: number, back = false): number {
+  const k = knots(c, l)
+  if (!k.some(x => x.slow)) return y
+  for (let i = 0; i + 1 < k.length; i++) {
+    const a = k[i], b = k[i + 1], d = b.u - a.u
+    if (y <= b.u || i + 2 === k.length) return d > 1e-9 ? a.u + d * between(Math.max(0, Math.min(1, (y - a.u) / d)), a.slow, b.slow, back) : a.u
+  }
+  return y
+}
+
 /** How far along its path (0..1) a rider is at `time`, and whether it is
  *  then going back towards the start. */
 export function rideShare(c: Curve, r: PathRider, time: number): { u: number; back: boolean } {
@@ -100,12 +132,34 @@ export function rideShare(c: Curve, r: PathRider, time: number): { u: number; ba
   if (after === 'stop') x = Math.min(1, x)
   else if (after === 'pingpong') { const k = x % 2; back = k > 1; x = back ? 2 - k : k }
   else x = x % 1
-  if (c.rideEase) x = x * x * (3 - 2 * x)
+  if (c.rideEase) x = smooth(x)
+  x = paced(c, lineOf(c), x)
   let u = x + (r.lead ?? 0)
   // Ahead of the rest, it goes round a loop (or a closed path); on a path
   // with ends it stops at the end.
   u = after === 'loop' || closed ? ((u % 1) + 1) % 1 : Math.min(1, Math.max(0, u))
   return rev ? { u: 1 - u, back: !back } : { u, back }
+}
+
+/** When on the clock (its first time along) a rider is at point `i` of
+ *  its path. */
+export function ridePointTime(c: Curve, r: PathRider, i: number): number {
+  const l = lineOf(c)
+  const { start, dur } = rideSpan(c)
+  const rev = !!c.flow && c.flow < 0
+  const share = l.len > 0 ? l.at[Math.max(0, Math.min(c.pts.length - 1, i))] / l.len : 0
+  let u = (rev ? 1 - share : share) - (r.lead ?? 0)
+  if (u < 0) u = (c.rideAfter ?? 'loop') === 'loop' || (!!c.closed && c.pts.length > 2) ? u + 1 : 0
+  let x = paced(c, l, u, true)
+  if (c.rideEase) x = unsmooth(x)
+  return start + dur * x
+}
+/** The point of its path a rider is nearest in time, and whether it is
+ *  on it. */
+export function ridePointNow(c: Curve, r: PathRider, time = rideTime()): { i: number; on: boolean } {
+  let best = 0, d = Infinity
+  c.pts.forEach((_, i) => { const x = Math.abs(ridePointTime(c, r, i) - time); if (x < d) { d = x; best = i } })
+  return { i: best, on: d < 2e-3 }
 }
 
 export interface RideSpot {
@@ -119,11 +173,9 @@ export interface RideSpot {
 const mB = new THREE.Matrix4(), qB = new THREE.Quaternion(), qH = new THREE.Quaternion()
 const vX = new THREE.Vector3(), vU = new THREE.Vector3(), vD = new THREE.Vector3(), Y = new THREE.Vector3(0, 1, 0)
 
-/** Where a rider is on its path at `time`, and how it is turned. */
-export function rideSpot(c: Curve, r: PathRider, time: number): RideSpot {
-  const l = lineOf(c)
-  const { u, back } = rideShare(c, r, time)
-  const dist = u * l.len
+/** A rider `dist` along its path as the path alone has it: where, and
+ *  how turned (into `q`; false when it does not aim along the path). */
+function pathSpot(l: RideLine, r: PathRider, dist: number, back: boolean, q: THREE.Quaternion): { x: number; y: number; z: number; aimed: boolean } {
   const at = placeAt(l, dist)
   let d = at.d
   if (r.slope === false) {
@@ -140,21 +192,55 @@ export function rideSpot(c: Curve, r: PathRider, time: number): RideSpot {
   }
   const f = frameOf(d, roll)
   const lift = r.lift ?? 0, side = r.side ?? 0
-  const spot: RideSpot = {
+  const spot = {
     x: at.p.x + f.up.x * lift + f.side.x * side,
     y: at.p.y + f.up.y * lift + f.side.y * side,
     z: at.p.z + f.up.z * lift + f.side.z * side,
-    q: null,
+    aimed: r.aim !== false,
   }
-  if (r.aim === false) return spot
+  if (!spot.aimed) { q.identity(); return spot }
   // (The canvas's y and its up are the models' z and y.) Its front goes
   // the way it is going: back along the path on its way back.
   const sgn = back ? -1 : 1
   vD.set(f.d.x * sgn, f.d.z * sgn, f.d.y * sgn)
   vU.set(f.up.x, f.up.z, f.up.y)
   vX.crossVectors(vU, vD)
-  qB.setFromRotationMatrix(mB.makeBasis(vX, vU, vD))
-  if (r.heading) qB.multiply(qH.setFromAxisAngle(Y, r.heading * Math.PI / 180))
+  q.setFromRotationMatrix(mB.makeBasis(vX, vU, vD))
+  if (r.heading) q.multiply(qH.setFromAxisAngle(Y, r.heading * Math.PI / 180))
+  return spot
+}
+
+const qA = new THREE.Quaternion(), qK = new THREE.Quaternion(), oA = new THREE.Quaternion(), oB = new THREE.Quaternion()
+/** How far a rider's own turn at point `i` (its key there) is from the
+ *  path's, into `o`: nothing where it has none. */
+function keyOff(l: RideLine, r: PathRider, i: number, back: boolean, o: THREE.Quaternion) {
+  const k = r.keys?.[i]
+  if (!k) { o.identity(); return }
+  pathSpot(l, r, l.at[i] ?? 0, back, qA)
+  o.copy(qA).invert().multiply(qK.set(k[0], k[1], k[2], k[3]))
+}
+
+/** Where a rider is on its path at `time`, and how it is turned. */
+export function rideSpot(c: Curve, r: PathRider, time: number): RideSpot {
+  const l = lineOf(c)
+  const { u, back } = rideShare(c, r, time)
+  const dist = u * l.len
+  const s = pathSpot(l, r, dist, back, qB)
+  const spot: RideSpot = { x: s.x, y: s.y, z: s.z, q: null }
+  const keyed = !!r.keys && Object.keys(r.keys).length > 0
+  if (!s.aimed && !keyed) return spot
+  if (keyed) {
+    // Its own turn at the points either side of it, blended by how far
+    // between them it is.
+    const n = c.pts.length, closed = !!c.closed && n > 2
+    let i = 0
+    while (i + 1 < n && l.at[i + 1] <= dist) i++
+    const j = i + 1 < n ? i + 1 : closed ? 0 : i
+    const a = l.at[i], b = j === 0 && closed ? l.len : l.at[j]
+    keyOff(l, r, i, back, oA)
+    keyOff(l, r, j, back, oB)
+    qB.multiply(oA.slerp(oB, b - a > 1e-9 ? Math.max(0, Math.min(1, (dist - a) / (b - a))) : 0))
+  }
   spot.q = [qB.x, qB.y, qB.z, qB.w]
   return spot
 }
@@ -213,4 +299,15 @@ export function setRider(curveId: string, key: string, patch: Partial<PathRider>
   const c = ns.curves[curveId]
   if (!c?.riders) return
   ns.updateCurve(curveId, { riders: c.riders.map(r => r.key === key ? { ...r, ...patch } : r) })
+}
+
+/** A rider's own turn at point `i` of its path (null: as the path has it). */
+export function setRiderKey(curveId: string, key: string, i: number, q: [number, number, number, number] | null) {
+  const ns = useNotesStore.getState()
+  const c = ns.curves[curveId]
+  const r = c?.riders?.find(x => x.key === key)
+  if (!c || !r) return
+  const keys = { ...r.keys }
+  if (q) keys[i] = q; else delete keys[i]
+  setRider(curveId, key, { keys: Object.keys(keys).length ? keys : undefined })
 }

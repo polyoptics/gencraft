@@ -16,6 +16,8 @@ import { CAMERA_URL } from '../../../three/primitives'
 import { dataKey, placeNow } from '../../../utils/area3dScene'
 import { useFreeNodeStore } from '../../../store/freeNodeStore'
 import { models, cardModel, modelKey, selectModel } from './TiltModels'
+import { useNotesStore, type Curve, type PathRider } from '../../../store/notesStore'
+import { riderOf, rideSpots, rideTime, ridePointNow, ridePointTime, setRiderKey, useRideClock } from '../../../utils/pathRide'
 
 /** The lens a new camera is made with (Brian 2026-11-12). One made before
  *  that, its lens never set, keeps tiltStore's CAMERA_LENS. */
@@ -161,6 +163,9 @@ const FOCUS_MIN = 0.3
  *  L, how it stands turned q, and its axes. Scene axes, ground px. */
 type Cam = { P: V; L: V; q: Q; right: V; up: V; ahead: V }
 type Start = Cam & {
+  /** Riding a path, stopped on one of its points: moving the camera moves
+   *  that point, turning it is its own turn there (utils/pathRide). */
+  ride?: { curve: string; rider: string; i: number; T0: Q; pt: { x: number; y: number; z: number } }
   key: string; dk: string
   q0: Q; P0: V; p0: { dx: number; dy: number; h: number }; focus0: number; zoom: number
   F: V; k: number; floor: number
@@ -170,12 +175,16 @@ let wheelAt = 0
 
 function start(key: string): Start | null {
   const cf = models.cameraFrame?.(key)
-  const p0 = placeNow(key)
+  const on = ridingAt(key)
+  // (On a path it stands where the path has it, as high as the path is there.)
+  const p0 = on ? { dx: 0, dy: 0, h: on.spot.z } : placeNow(key)
   if (!cf || !p0) return null
   const dk = dataKey(key)
   const ms = useModelScaleStore.getState()
   const q0 = (ms.poseOf[dk] as Q | undefined) ?? [0, 0, 0, 1]
+  const pt = on ? on.curve.pts[on.i] : undefined
   return {
+    ride: on && pt ? { curve: on.curve.id, rider: on.rider.key, i: on.i, T0: on.spot.q ?? [0, 0, 0, 1], pt: { x: pt.x, y: pt.y, z: pt.z ?? 0 } } : undefined,
     key, dk, q0, q: q0, p0, focus0: (ms.lensOf[dk] ?? CAMERA_LENS).focus,
     zoom: useCanvasStore.getState().zoom || 1,
     P: cf.pivot, P0: cf.pivot, L: cf.lens, F: cf.focal, right: cf.right, up: cf.up, ahead: cf.ahead, k: cf.k,
@@ -183,6 +192,28 @@ function start(key: string): Start | null {
     floor: cf.base - p0.h * (useCanvasStore.getState().zoom || 1),
   }
 }
+/** The path camera `key` rides and the point of it it is stopped on, if
+ *  it is on one. */
+function ridingAt(key: string): { curve: Curve; rider: PathRider; i: number; spot: { x: number; y: number; z: number; q: Q | null } } | null {
+  const r = riderOf(key) ?? riderOf(dataKey(key))
+  if (!r) return null
+  const at = ridePointNow(r.curve, r.rider)
+  const spot = rideSpots().get(r.rider.key)
+  return at.on && spot && !useRideClock.getState().playing ? { ...r, i: at.i, spot } : null
+}
+/** A camera on a path is reframed on its points: between two, or while it
+ *  runs, the first touch stops it on the nearest one (true: it did, and
+ *  that touch is spent). */
+function parkOnPoint(key: string): boolean {
+  const r = riderOf(key) ?? riderOf(dataKey(key))
+  if (!r || ridingAt(key)) return false
+  const clock = useRideClock.getState()
+  clock.pause()
+  clock.seek(ridePointTime(r.curve, r.rider, ridePointNow(r.curve, r.rider).i))
+  return true
+}
+const qconj = (q: Q): Q => [-q[0], -q[1], -q[2], q[3]]
+
 /** The camera turned by D about point F, all of a piece. */
 const about = (c: Cam, F: V, D: Q): Cam => ({
   P: add(F, qrot(D, sub(c.P, F))), L: add(F, qrot(D, sub(c.L, F))), q: qmul(D, c.q),
@@ -233,6 +264,23 @@ function moved(h: Start, by: V): Cam {
 function put(h: Start, c: Cam, focus?: number) {
   const ms = useModelScaleStore.getState()
   const k = 1 / h.zoom
+  if (h.ride) {
+    // On a path: the point it stands on goes where it goes (scene axes:
+    // y is up, z down the canvas), and how it is turned there is kept as
+    // its own for that point.
+    const ns = useNotesStore.getState()
+    const cv = ns.curves[h.ride.curve]
+    if (!cv) return
+    const z = h.ride.pt.z + (c.P.y - h.P0.y) * k
+    ns.updateCurve(cv.id, { pts: cv.pts.map((p, i) => i === h.ride!.i ? { ...p, x: h.ride!.pt.x + (c.P.x - h.P0.x) * k, y: h.ride!.pt.y + (c.P.z - h.P0.z) * k, z: Math.abs(z) > 1e-6 ? z : undefined } : p) })
+    setRiderKey(cv.id, h.ride.rider, h.ride.i, qmul(qmul(c.q, qconj(h.q0)), h.ride.T0))
+    // (The point moved, the path is another length: the clock goes to
+    // where that point now is, so the camera stays stopped on it.)
+    const now = riderOf(h.ride.rider)
+    if (now) useRideClock.getState().seek(ridePointTime(now.curve, now.rider, h.ride.i))
+    if (focus !== undefined) ms.setLens(h.dk, { focus })
+    return
+  }
   ms.setPlace(h.dk, { dx: h.p0.dx + (c.P.x - h.P0.x) * k, dy: h.p0.dy + (c.P.z - h.P0.z) * k, h: Math.max(0, footAt(h, c.P)) })
   ms.setPose(h.dk, c.q)
   if (focus !== undefined) ms.setLens(h.dk, { focus })
@@ -256,6 +304,7 @@ function onDown(e: PointerEvent) {
   const key = useManip.getState().through
   if (!key || !overView(e.target)) return
   e.preventDefault(); e.stopImmediatePropagation()
+  if (parkOnPoint(key)) return
   const s = start(key)
   if (!s) return
   held = { ...s, how: e.button === 1 || (e.button === 0 && e.shiftKey) ? 'slide' : e.button === 2 ? 'move' : 'turn', x0: e.clientX, y0: e.clientY, button: e.button, moved: false }
@@ -314,6 +363,7 @@ function onUp(e: PointerEvent) {
  *  them. It looks the way it was looking, lifted only if that would put
  *  it under the floor. */
 function frame(key: string): boolean {
+  if (parkOnPoint(key)) return false
   const h = start(key)
   if (!h) return false
   const fs = useFreeNodeStore.getState(), bs = useBoardsStore.getState()
@@ -341,6 +391,7 @@ function onWheel(e: WheelEvent) {
   const key = useManip.getState().through
   if (!key || !overView(e.target)) return
   e.preventDefault(); e.stopImmediatePropagation()
+  if (parkOnPoint(key)) return
   const s = start(key)
   if (!s) return
   const now = performance.now()
@@ -384,6 +435,64 @@ export function installLookThrough() {
   w.addEventListener('wheel', e => h().onWheel(e), { capture: true, passive: false })
   for (const t of ['click', 'dblclick', 'contextmenu', 'mousedown']) w.addEventListener(t, e => h().onEat(e), true)
   w.addEventListener('keydown', e => h().onKey(e), true)
+}
+
+/** Looking through a camera that rides a path (Brian 2026-11-12: "play
+ *  through its animation, skip to the points, and then reposition the
+ *  camera"): a bar to run its ride, step from point to point of the path
+ *  and, stopped on one, set how the ride passes it. */
+const RideBar: React.FC<{ k: string }> = ({ k }) => {
+  const curves = useNotesStore(s => s.curves)
+  const playing = useRideClock(s => s.playing)
+  const base = useRideClock(s => s.base)
+  const [, tick] = useState(0)
+  useEffect(() => {
+    if (!playing) return
+    const id = window.setInterval(() => tick(n => n + 1), 100)
+    return () => window.clearInterval(id)
+  }, [playing])
+  void base
+  const r = riderOf(k, curves) ?? riderOf(dataKey(k), curves)
+  if (!r) return null
+  const { curve: c, rider } = r
+  const now = rideTime()
+  const at = ridePointNow(c, rider, now)
+  const on = at.on && !playing
+  const n = c.pts.length
+  const go = (i: number) => { const clock = useRideClock.getState(); clock.pause(); clock.seek(ridePointTime(c, rider, Math.max(0, Math.min(n - 1, i)))) }
+  // Back: to the point it is on or has passed; on: to the next one.
+  const tNear = ridePointTime(c, rider, at.i)
+  const prev = on ? at.i - 1 : tNear < now ? at.i : at.i - 1
+  const next = on ? at.i + 1 : tNear > now ? at.i : at.i + 1
+  const pt = c.pts[at.i]
+  const keyed = !!rider.keys?.[at.i]
+  const step = () => useUndoCoordinator.getState().checkpoint()
+  const b = (lit: boolean, dim = false): React.CSSProperties => ({ ...chip(lit), padding: '3px 9px', fontFamily: 'inherit', opacity: dim ? 0.4 : 1 })
+  return (
+    <div data-look-hud="" style={{
+      position: 'absolute', top: 50, left: '50%', transform: 'translateX(-50%)', pointerEvents: 'auto',
+      display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', borderRadius: 10, whiteSpace: 'nowrap',
+      background: 'rgba(19,20,31,0.92)', border: '1px solid rgba(255,255,255,0.12)', color: '#e8f0ff', fontSize: 12,
+    }}>
+      <button style={b(playing)} aria-pressed={playing} title="Play: on or off. On, the camera rides its path (and everything else on a path rides too: one clock for all)."
+        onClick={() => playing ? useRideClock.getState().pause() : useRideClock.getState().play()}>Play</button>
+      <button style={b(false)} title="Back to the start of the ride" onClick={() => useRideClock.getState().seek(0)}>To start</button>
+      <span style={{ width: 46, textAlign: 'right', fontFamily: 'ui-monospace, monospace', fontSize: 11, color: 'rgba(232,240,255,0.7)' }}>{now.toFixed(1)}s</span>
+      <span style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.14)' }} />
+      <button style={b(false, prev < 0)} disabled={prev < 0} title="Stop on the point before" onClick={() => go(prev)}>◀ Point</button>
+      <span style={{ width: 78, textAlign: 'center', fontFamily: 'ui-monospace, monospace', fontSize: 11, color: on ? '#ffe14a' : 'rgba(232,240,255,0.45)' }}
+        title={on ? 'Stopped on this point of the path: drag to reframe the camera here' : 'Between points: step to a point to reframe the camera there'}>{on ? `point ${at.i + 1} of ${n}` : 'between'}</span>
+      <button style={b(false, next > n - 1)} disabled={next > n - 1} title="Stop on the next point" onClick={() => go(next)}>Point ▶</button>
+      <span style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.14)' }} />
+      <button style={b(on && !!pt?.slow, !on)} disabled={!on} aria-pressed={on && !!pt?.slow}
+        title="Slow here: on or off, for the point it is stopped on. On, the ride slows into this point and gathers speed out of it."
+        onClick={() => { step(); useNotesStore.getState().updateCurve(c.id, { pts: c.pts.map((p, i) => { if (i !== at.i) return p; const q = { ...p }; if (p.slow) delete q.slow; else q.slow = true; return q }) }) }}>Slow here</button>
+      <button style={b(!!c.rideEase)} aria-pressed={!!c.rideEase} title="Ease: on or off, for the whole ride. On, it gathers speed leaving the start and slows into the end."
+        onClick={() => { step(); useNotesStore.getState().updateCurve(c.id, { rideEase: c.rideEase ? undefined : true }) }}>Ease</button>
+      <button style={b(false, !on || !keyed)} disabled={!on || !keyed} title="As the path has it: forget how the camera was turned by hand on this point, so it looks along the path here again"
+        onClick={() => { step(); setRiderKey(c.id, rider.key, at.i, null) }}>Along path</button>
+    </div>
+  )
 }
 
 /** Looking through: the gate, and a bar with the lens and the way back. */
@@ -441,8 +550,10 @@ export const LookThrough: React.FC = () => {
         <button style={{ ...chip(false), padding: '2px 10px', fontFamily: 'inherit' }} onClick={() => useManip.getState().set({ through: null })}
           title="Back to the canvas">Exit (Esc)</button>
       </div>
+      <RideBar k={key} />
       <div style={{ position: 'absolute', bottom: 10, left: '50%', transform: 'translateX(-50%)', fontSize: 11, color: 'rgba(232,240,255,0.55)', whiteSpace: 'nowrap' }}>
         Drag: turn round the focal point · Middle or Shift-drag: slide · Right-drag or wheel: in and out · Click a model, F frames it
+        {(riderOf(key) ?? riderOf(dataKey(key))) ? ' · On a path: step to a point, then move the camera to set it there' : ''}
       </div>
     </div>
   )

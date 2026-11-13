@@ -225,7 +225,11 @@ function soloFrame() {
 function pathFrame(): PathFrame {
   const ui = useNotesUi.getState()
   const { pan, zoom } = useCanvasStore.getState()
-  const curves = Object.values(notesNow.curves).filter(c => c.kind === 'bezier')
+  // (Looking through a camera that rides a path, that path is not drawn:
+  // the camera sits on it, and it would fill the view.)
+  const thru = useManip.getState().through
+  const mine = thru ? [thru, dataKey(thru)] : null
+  const curves = Object.values(notesNow.curves).filter(c => c.kind === 'bezier' && !(mine && c.riders?.some(r => mine.includes(r.key))))
   const { curve: draft, hover } = useCurveDraft.getState()
   const selected = new Set(ui.selected)
   if (draft && draft.kind === 'bezier') {

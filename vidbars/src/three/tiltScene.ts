@@ -497,6 +497,7 @@ const PARTS_OF: Record<ManipSettings['mode'], ManipPart[]> = {
   move: ['mx', 'my', 'mz', 'mc'], rotate: ['rx', 'ry', 'rz', 'rc'], scale: ['sx', 'sy', 'sz', 's'],
 }
 /** The stand's turn: its y off the plane. */
+const rideQ = new THREE.Quaternion()
 const STAND_Q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2)
 
 // ── A camera's view (Brian 2026-11-09) ──
@@ -1329,11 +1330,16 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       if (s.look) applyLook(s.look, st.texture, st.shade)
       s.stand.visible = !!s.inst && ease > 0
       const placed = !!st.placed?.(tg.key)
+      // Riding a path, it is turned as the path has it: about its feet,
+      // so it keeps to the path as it leans; a camera about its middle,
+      // as it turns in the hand (looking through it, that is what its
+      // reframing reckons with).
       const rq = st.rideFor?.(tg.key)
-      if (rq) s.turn.quaternion.set(rq[0], rq[1], rq[2], rq[3])
+      if (rq && !s.rig) s.turn.quaternion.set(rq[0], rq[1], rq[2], rq[3])
       else s.turn.rotation.set(0, st.turn && !placed ? now / 1000 * 0.6 + s.phase : 0, 0)
       const pq = st.poseFor?.(tg.key)
       if (pq) s.pose.quaternion.set(pq[0], pq[1], pq[2], pq[3]); else s.pose.quaternion.identity()
+      if (rq && s.rig) s.pose.quaternion.premultiply(rideQ.set(rq[0], rq[1], rq[2], rq[3]))
       // Its colour (Brian 2026-11-08): over its materials' own.
       const tint = (s.look && st.tintFor?.(tg.key)) || null
       if (s.look && tint !== s.tint) {
