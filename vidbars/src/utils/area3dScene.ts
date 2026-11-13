@@ -85,9 +85,28 @@ export function dataKey(key: string): string {
   const bs = useBoardsStore.getState()
   const g = bs.groups.find(x => x.id === key.slice(5))
   if (!g) return key
+  const face = deckFace(g, bs.groups)
+  if (face) return `card:${face}`
+  const front = frontShowing(g, bs.groups)
+  return front ? `card:${front.id}` : key
+}
+/** The member a closed or fanned deck's front card `g` shows on its face,
+ *  when that is not the front card itself. */
+function deckFace(g: ProjectGroup, groups: ProjectGroup[]): string | undefined {
   const portal = g.deckState === 'fanned' ? useCanvasStore.getState().deckPortalSelections[g.id] : undefined
   const face = g.deckState === 'stacked' ? g.deckFaceCard : portal
-  return face && face !== g.id && bs.groups.some(x => x.id === face && x.deckAnchorId === g.id) ? `card:${face}` : key
+  return face && face !== g.id && groups.some(x => x.id === face && x.deckAnchorId === g.id) ? face : undefined
+}
+/** Card `g` put away in a closed or fanned deck and shown on its face:
+ *  that deck's front card. The front card stands for `g` then (dataKey,
+ *  TiltModels cardModel), so `g` stands for the front card: its model and
+ *  its settings. Each model of the deck is still in the scene, whichever
+ *  card the face is on (Brian 2026-11-13: stepping a docked deck, "the
+ *  first card is getting mixed up"). */
+export function frontShowing(g: ProjectGroup, groups: ProjectGroup[]): ProjectGroup | undefined {
+  if (!g.deckAnchorId || g.deckAnchorId === g.id || !isHiddenDeckMember(g)) return undefined
+  const front = groups.find(x => x.id === g.deckAnchorId)
+  return front && deckFace(front, groups) === g.id ? front : undefined
 }
 
 /** A model card or tile's box, from its key ('card:<id>' / 'node:<id>'). */
@@ -180,8 +199,9 @@ function rowSets(): Map<string, RowSpot> {
       for (const g of row.slice(1)) mine.push(g.id)
       // A closed deck in the row (Brian 2026-11-10): its cards are in the
       // set too, so the models placed there stand there without opening
-      // it (one never placed waits in the deck). Not the one a deck shows
-      // on its face: that is its front card's model.
+      // it (one never placed waits in the deck). The one a deck shows on
+      // its face is its front card's model, and stands for the front
+      // card's own (dataKey).
       const inside: ProjectGroup[] = []
       const fronts = row.slice(1).filter(g => !!g.deckState && g.deckState !== 'open')
       for (let i = 0; i < fronts.length; i++) {
@@ -191,9 +211,8 @@ function rowSets(): Map<string, RowSpot> {
           fronts.push(m)
         }
       }
-      const faces = new Set(fronts.map(f => dataKey(`card:${f.id}`)).filter((k, i) => k !== `card:${fronts[i].id}`))
       const placeOf = useModelScaleStore.getState().placeOf
-      for (const m of inside) if (!faces.has(`card:${m.id}`) && !of.has(m.id) && placeOf[`card:${m.id}`]) mine.push(m.id)
+      for (const m of inside) if (!of.has(m.id) && placeOf[dataKey(`card:${m.id}`)]) mine.push(m.id)
       mine.forEach((id, i) => of.set(id, { area: a, i, n: mine.length }))
     }
   }

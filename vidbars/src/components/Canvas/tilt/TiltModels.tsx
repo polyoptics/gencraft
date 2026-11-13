@@ -27,7 +27,7 @@ import { targetMiddle, pickedPoints } from '../../../utils/pathEdit'
 import type { PathFrame, PathHit } from '../../../three/pathOverlay'
 import { curveRuns, pointFrames, withLayers } from '../../../utils/curveGeom'
 import { PinLabels } from '../../Notes/PinLabels'
-import { sceneOf, sceneSpot, standsIn, dataKey, cardBox } from '../../../utils/area3dScene'
+import { sceneOf, sceneSpot, standsIn, dataKey, cardBox, frontShowing } from '../../../utils/area3dScene'
 import { rideSpots, rideRuns, useRideClock, riderOf } from '../../../utils/pathRide'
 import { useUndoCoordinator } from '../../../store/undoCoordinator'
 import { useManip } from '../../../store/manipStore'
@@ -611,7 +611,10 @@ export function cardModel(id: string): { url: string; name: string } | null {
     // so the model above it follows that click.
     const portal = g.deckState === 'fanned' ? useCanvasStore.getState().deckPortalSelections[g.id] : undefined
     const face = (g.deckState === 'stacked' && g.deckFaceCard && bs.groups.find(gr => gr.id === g.deckFaceCard))
-      || (portal && bs.groups.find(gr => gr.id === portal)) || g
+      || (portal && bs.groups.find(gr => gr.id === portal))
+      // Put away in a deck and shown on its face: the front card shows
+      // this one's model, so this one shows the front card's.
+      || frontShowing(g, bs.groups) || g
     const blocks = faceBlocks(face, bs.boards)
     // A face picture of its own (Brian 2026-11-10) is what the card shows
     // flat; tilted, its model still stands.

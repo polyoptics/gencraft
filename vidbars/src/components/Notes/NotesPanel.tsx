@@ -777,16 +777,6 @@ function useOutline() {
       if (sc) under(sc.area.id, { ...it, scene: true })
       else put(it, n.type === 'area' ? n.id : undefined)
     }
-    // A closed deck shows one member's model on its face: that member is
-    // listed by the deck's front card, not a second time by itself.
-    const faces = new Set<string>()
-    if (areas.length) {
-      for (const g of groups) {
-        if (g.pin || isHiddenDeckMember(g) || (g.deckState !== 'stacked' && g.deckState !== 'fanned')) continue
-        const dk = dataKey(`card:${g.id}`)
-        if (dk !== `card:${g.id}`) faces.add(dk)
-      }
-    }
     for (const g of groups) {
       if (g.pin) continue
       // A model in a 3D set's scene: under that set, as a model, wherever
@@ -795,7 +785,7 @@ function useOutline() {
       // in the set, where its piece is to be seen.
       const key = `card:${g.id}`
       const hidden = isHiddenDeckMember(g)
-      if (areas.length && !g.hideModel3d && (hidden ? !!placeOf[key] && !faces.has(key) : cardHoldsModel(g, boards) || !!g.deckState)) {
+      if (areas.length && !g.hideModel3d && (hidden ? !!placeOf[dataKey(key)] : cardHoldsModel(g, boards) || !!g.deckState)) {
         const model = cardModel(g.id)
         const sc = model && sceneOf(key)
         if (model && sc) {
