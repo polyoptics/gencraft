@@ -20,7 +20,9 @@
 import { isTilted, useTiltStore, useModelScaleStore, type ScenePlace } from '../store/tiltStore'
 import { useUndoCoordinator } from '../store/undoCoordinator'
 import { useCanvasStore } from '../store/canvasStore'
-import { models } from '../components/Canvas/tilt/TiltModels'
+import { models, cardModel } from '../components/Canvas/tilt/TiltModels'
+import { useFreeNodeStore } from '../store/freeNodeStore'
+import { useBoardsStore } from '../store/boardsStore'
 import { PATH_KEY, type ManipHit } from '../three/tiltScene'
 import { useNotesUi } from '../store/notesStore'
 import { holdPoints, moveHeld, turnHeld, sizeHeld, type PointsHeld } from './pathEdit'
@@ -35,7 +37,35 @@ const mul = (a: Q, b: Q): Q => [
   a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
 ]
 
-let drag: (ManipHit & { dk: string; x0: number; y0: number; a0: number; q0: Q; k0: number; s0: [number, number, number]; p0: ScenePlace; zoom: number; path?: PointsHeld }) | null = null
+/** A model as a handle drag found it: where its settings are kept, and
+ *  what they were. */
+type Held = { dk: string; q0: Q; k0: number; s0: [number, number, number]; p0: ScenePlace }
+let drag: (ManipHit & Held & { x0: number; y0: number; a0: number; zoom: number; path?: PointsHeld; with: Held[] }) | null = null
+
+/** The other selected models standing in a 3D set, as they are now: what
+ *  is done to the one with the handles is done to each (Brian 2026-11-13:
+ *  "A bunch of objects selected in the 3D set should be moved together if
+ *  I'm performing any kind of operation on them"). Each is moved as far,
+ *  and turned and sized about its own middle, as in Maya. Not one still
+ *  waiting on its card (never placed in the set). */
+function heldWith(key: string): Held[] {
+  const fs = useFreeNodeStore.getState(), bs = useBoardsStore.getState(), ms = useModelScaleStore.getState()
+  const keys = [
+    ...fs.selectedIds.filter(id => fs.nodes[id]?.type === 'model' && !fs.nodes[id].pin).map(id => `node:${id}`),
+    ...bs.selectedGroupIds.filter(id => !!cardModel(id)).map(id => `card:${id}`),
+  ]
+  const mine = dataKey(key)
+  const out: Held[] = []
+  for (const k of keys) {
+    const dk = dataKey(k)
+    if (dk === mine || out.some(h => h.dk === dk) || !ms.placeOf[dk] || !sceneOf(k)) continue
+    out.push({
+      dk, q0: (ms.poseOf[dk] as Q | undefined) ?? [0, 0, 0, 1], k0: ms.setSizeOf[dk] ?? ms.sizeOf[dk] ?? 1,
+      s0: ms.stretchOf[dk] ?? [1, 1, 1], p0: ms.placeOf[dk],
+    })
+  }
+  return out
+}
 let hover: string | null = null
 /** The click that ends a handle drag selects nothing. */
 let eatClick = false
@@ -78,7 +108,7 @@ function onDown(e: PointerEvent) {
     useUndoCoordinator.getState().checkpoint()
     drag = {
       ...g, dk: '', x0: e.clientX, y0: e.clientY, a0: Math.atan2(e.clientY - g.c.y, e.clientX - g.c.x),
-      q0: [0, 0, 0, 1], k0: 1, s0: [1, 1, 1], p0: { dx: 0, dy: 0, h: 0 }, zoom: useCanvasStore.getState().zoom, path: held,
+      q0: [0, 0, 0, 1], k0: 1, s0: [1, 1, 1], p0: { dx: 0, dy: 0, h: 0 }, zoom: useCanvasStore.getState().zoom, path: held, with: [],
     }
     models.manipHot?.(g.key, g.part)
     setCursor(g.part[0] === 'r' ? 'grabbing' : cursorOf(g))
@@ -94,6 +124,8 @@ function onDown(e: PointerEvent) {
     q0: (ms.poseOf[dk] as Q | undefined) ?? [0, 0, 0, 1], k0: ms.setSizeOf[dk] ?? ms.sizeOf[dk] ?? 1,
     s0: ms.stretchOf[dk] ?? [1, 1, 1],
     p0: placeNow(g.key) ?? { dx: 0, dy: 0, h: 0 }, zoom: useCanvasStore.getState().zoom,
+    // (A camera's focal point is its own.)
+    with: g.part === 'f' ? [] : heldWith(g.key),
   }
   models.manipHot?.(g.key, g.part)
   setCursor(g.part[0] === 'r' ? 'grabbing' : cursorOf(g))
@@ -185,21 +217,25 @@ function onMove(e: PointerEvent) {
   if (p[0] === 'm') {
     const v = moveVec(d, mx, my, k)
     if (!v) return
-    ms.setPlace(d.dk, { dx: d.p0.dx + v[0], dy: d.p0.dy + v[2], h: Math.max(0, d.p0.h + v[1]) })
+    for (const h of [d, ...d.with]) ms.setPlace(h.dk, { dx: h.p0.dx + v[0], dy: h.p0.dy + v[2], h: Math.max(0, h.p0.h + v[1]) })
   } else if (p === 's') {
     // Right or up grows it, left or down shrinks it: twice as big per 120 px.
-    ms.setSetSize(d.dk, Math.min(50, Math.max(0.02, d.k0 * 2 ** ((mx - my) / 120))))
+    const f = 2 ** ((mx - my) / 120)
+    for (const h of [d, ...d.with]) ms.setSetSize(h.dk, Math.min(50, Math.max(0.02, h.k0 * f)))
   } else if (p[0] === 's') {
     // Stretch along one of its own axes: out along it grows, twice per 100 px.
     const t = mx * d.dir!.x + my * d.dir!.y
-    const s: [number, number, number] = [...d.s0]
-    s[d.k!] = Math.min(50, Math.max(0.02, d.s0[d.k!] * 2 ** (t / 100)))
-    ms.setStretch(d.dk, s)
+    for (const h of [d, ...d.with]) {
+      const s: [number, number, number] = [...h.s0]
+      s[d.k!] = Math.min(50, Math.max(0.02, h.s0[d.k!] * 2 ** (t / 100)))
+      ms.setStretch(h.dk, s)
+    }
   } else {
     const ax = d.axis!
     const th = turnOf(d, e)
     const sn = Math.sin(th / 2)
-    ms.setPose(d.dk, mul([ax[0] * sn, ax[1] * sn, ax[2] * sn, Math.cos(th / 2)], d.q0))
+    const turn: Q = [ax[0] * sn, ax[1] * sn, ax[2] * sn, Math.cos(th / 2)]
+    for (const h of [d, ...d.with]) ms.setPose(h.dk, mul(turn, h.q0))
   }
 }
 
