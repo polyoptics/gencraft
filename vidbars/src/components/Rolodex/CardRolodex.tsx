@@ -584,14 +584,9 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string }; tray?: TrayB
     : flExpansion
   const setRolodexExpansion = embedded
     ? (v: number) => {
-        // In a tray the browser's own bottom bar pulls the tray longer or
-        // shorter, as the tray's edge does (CardTray).
-        if (tray) {
-          const ts = useTrayStore.getState()
-          const h = ts.trays[tray.cardId]?.h ?? 0
-          ts.setSize(tray.cardId, { h: Math.max(0, h + (v - rolodexExpansion) * embedScale / Math.max(0.0001, cvZoom)) })
-          return
-        }
+        // A tray is sized by its lip alone (CardTray): the browser never
+        // resizes it, not when its rows or its view mode change either.
+        if (tray) return
         const fns = useFreeNodeStore.getState()
         const n = fns.nodes[embedded.nodeId]
         if (!n) return
@@ -1561,6 +1556,8 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string }; tray?: TrayB
         // moment the panel moves — a pan, a drag, a resize — and strands
         // the dock away from its panel.) It cannot live inside the panel:
         // it would either cover cards or be clipped by the tile.
+        // A tray has its view modes on its lip (CardTray).
+        if (tray) return null
         if (embedded && !embeddedNode) return null
         const en = embeddedNode
         const anchorX = !embedded ? rolodexPos.x

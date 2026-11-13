@@ -15,9 +15,15 @@
 // that says Mutation should be on the drawer part that I pull down"):
 //   - TrayLip, the one handle. Shut, it sticks out under the card's bottom
 //     edge, naming what is in the tray. Pulled, it goes down with the mouse
-//     and stays; the tray's cards show between the card and it, the first
-//     right up against the card. Out, it carries the search field. Click
-//     (not in the field): open / shut. Its corner sizes the tray both ways.
+//     FROM THE FIRST PIXEL ("it doesn't really move, and then it flips ...
+//     popped on ... definitely don't want that when I'm opening it. Maybe
+//     on the close"): the lip is the same size and shape shut or out, so
+//     nothing jumps; only letting go of it nearly shut shuts it. The tray's
+//     cards show between the card and it, the first right up against the
+//     card. Out, it carries a little handle, the search field and the three
+//     view modes (compact, full, auto: the browser's own, lit = the one in
+//     use). Click (not in the field or on a mode): open / shut. Its corner
+//     sizes the tray both ways.
 //   - CardTray, the cards: the browser's slots alone. Its own header, side
 //     rails and bottom bar are left out of view; the sides are 2px.
 // The lip is in the chip rail's wrapper, so in 3D it rides with the card.
@@ -34,18 +40,25 @@ import { CardRolodex } from '../Rolodex/CardRolodex'
 const INSET = 8          // natural sizes: the lip's wrapper scales them with the card
 const SEAM = 13          // under the chips, which ride the card's bottom edge
 const FOOT = 21          // what the lip shows of itself
-/** How far the shut lip reaches below its card's bottom edge, natural units. */
+/** How tall the lip is (shut: how far it reaches below its card), natural units. */
 export const TRAY_LIP = SEAM + FOOT
 /** How far in from the card's sides the lip (and the tray) sits, natural units. */
 export const TRAY_INSET = INSET
 const OPEN_PX = 260      // how far a click opens it, screen px
-const SHUT_PX = 24       // pulled shorter than this, it shuts
+const SHUT_PX = 24       // LET GO shorter than this, it shuts (never while pulling)
 const MIN_W_PX = 70
 const SIDE = 2           // the tray's sides, px
 const NAMED = 4          // names on the lip
 // The browser's own frame, in its native units (CardRolodex SLOT_W, WING_W,
 // CABINET_BAR_H): the slots are what a tray shows of it.
 const SLOT_W = 180, WING_W = 8, BAR_H = 32
+
+/** The browser's view modes, with its own marks (CardRolodex DisplayModeDock). */
+const MODES = [
+  { value: 'compact', label: '≡', title: 'Compact: every card as a tab' },
+  { value: 'full', label: '▣', title: 'Full: the picked card at full size' },
+  { value: 'auto', label: 'A', title: 'Auto: the picked card grows with the tray' },
+] as const
 
 /** How many cards card `id`'s tray lists. */
 export function useTrayCount(id: string): number {
@@ -65,14 +78,19 @@ function dragTray(e: React.PointerEvent, cardId: string, zoom: number, from: { h
   if (!soft) e.preventDefault()
   const x0 = e.clientX, y0 = e.clientY
   let moved = false
+  // Where the pull began to count (past the click's slop), so that the
+  // tray starts from exactly where it was: no hop as it starts to move.
+  let sx = 0, sy = 0
   const onMove = (ev: PointerEvent) => {
-    const dx = ev.clientX - x0, dy = ev.clientY - y0
+    let dx = ev.clientX - x0, dy = ev.clientY - y0
     if (!moved && Math.hypot(dx, dy) < 3) return
+    if (!moved) { sx = dx; sy = dy }
+    dx -= sx; dy -= sy
     if (!moved && soft) (document.activeElement as HTMLElement | null)?.blur?.()
     moved = true
-    const h = from.hPx + dy
+    // Every pixel of the pull is a pixel of tray: no threshold on the way out.
     useTrayStore.getState().setSize(cardId, {
-      h: h < SHUT_PX ? 0 : h / zoom,
+      h: Math.max(0, from.hPx + dy) / zoom,
       ...(from.wPx !== undefined ? { w: Math.max(MIN_W_PX, from.wPx + dx) / zoom } : {}),
     })
   }
@@ -81,7 +99,13 @@ function dragTray(e: React.PointerEvent, cardId: string, zoom: number, from: { h
     window.removeEventListener('pointerup', onUp)
     window.removeEventListener('pointercancel', done)
   }
-  const onUp = () => { done(); if (!moved) onClick?.() }
+  const onUp = () => {
+    done()
+    if (!moved) { onClick?.(); return }
+    // Let go nearly shut: shut.
+    const ts = useTrayStore.getState()
+    if ((ts.trays[cardId]?.h ?? 0) * zoom < SHUT_PX) ts.setSize(cardId, { h: 0 })
+  }
   window.addEventListener('pointermove', onMove)
   window.addEventListener('pointerup', onUp)
   window.addEventListener('pointercancel', done)
@@ -96,37 +120,43 @@ export const TrayLip: React.FC<{ cardId: string; left: number; top: number; scal
   const h = useTrayStore(s => s.trays[cardId]?.h ?? 0)
   const w = useTrayStore(s => s.trays[cardId]?.w)
   const query = useTrayStore(s => s.trays[cardId]?.query.query ?? '')
+  const mode = useTrayStore(s => s.trays[cardId]?.query.displayMode ?? 'auto')
   const { zoom } = useCardView()
   if (!n) return null
   const open = h > 0
   const hPx = h * zoom
   const lipW = Math.max(30, width - 2 * INSET)
-  // Out, it is as wide as the tray it closes.
+  // As wide as the tray it closes, shut or out (so opening widens nothing).
   const wPx = trayWidthPx(w, zoom, lipW * scale)
   const toggle = () => useTrayStore.getState().setSize(cardId, { h: open ? 0 : OPEN_PX / zoom })
   return (
-    <div style={{ position: 'absolute', left, top: top + (open ? hPx - 1 : 0), width: 0, height: 0 }}>
+    <div style={{ position: 'absolute', left, top: top + hPx, width: 0, height: 0 }}>
       <div style={{ position: 'absolute', left: 0, top: 0, width, transform: `scale(${scale})`, transformOrigin: 'top left' }}>
         <div
           data-tray-lip={cardId}
           title={open ? 'Drag to pull the tray longer or shorter; click to shut it' : `${n} card${n === 1 ? '' : 's'} in its tray: pull down to slide it out, click to open it`}
           onPointerDown={e => {
+            if ((e.target as Element).closest('[data-tray-mode]')) { e.stopPropagation(); return }
             const inField = (e.target as Element).tagName === 'INPUT'
             dragTray(e, cardId, zoom, { hPx }, inField ? undefined : toggle, inField)
           }}
           onClick={e => e.stopPropagation()}
           onDoubleClick={e => e.stopPropagation()}
           style={{
-            position: 'absolute', left: INSET, top: 0, width: open ? wPx / scale : lipW, height: open ? FOOT : TRAY_LIP, boxSizing: 'border-box',
-            display: 'flex', alignItems: 'flex-end',
+            position: 'absolute', left: INSET, top: 0, width: wPx / scale, height: TRAY_LIP, boxSizing: 'border-box',
+            display: 'flex', flexDirection: 'column', justifyContent: 'flex-end',
             borderRadius: '0 0 9px 9px',
             background: 'linear-gradient(#11131c, #1d2030)',
             border: `1px solid ${open ? 'rgba(160,200,255,0.5)' : 'rgba(255,255,255,0.28)'}`, borderTop: 'none',
-            boxShadow: open ? '0 3px 8px rgba(0,0,0,0.5)' : 'inset 0 9px 8px -5px rgba(0,0,0,0.75), 0 2px 5px rgba(0,0,0,0.45)',
+            boxShadow: 'inset 0 9px 8px -5px rgba(0,0,0,0.75), 0 2px 5px rgba(0,0,0,0.45)',
             color: 'rgba(255,255,255,0.9)', cursor: open ? 'ns-resize' : 'grab', userSelect: 'none', touchAction: 'none',
             fontFamily: 'system-ui, -apple-system, sans-serif',
           }}
         >
+          {/* The little handle, in the middle of the bar's top. */}
+          <div style={{ height: SEAM, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: 2, boxSizing: 'border-box' }}>
+            <div style={{ width: 26, height: 3, borderRadius: 2, background: `rgba(255,255,255,${open ? 0.45 : 0})` }} />
+          </div>
           <div style={{ height: FOOT, width: '100%', boxSizing: 'border-box', display: 'flex', alignItems: 'center', gap: 5, padding: `0 ${open ? 14 : 8}px 1px 7px`, minWidth: 0 }}>
             <svg width="11" height="10" viewBox="0 0 11 10" style={{ flexShrink: 0, opacity: 0.8 }}>
               <path d="M1 1h9v5.5a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2z M3.5 4h4" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
@@ -152,6 +182,23 @@ export const TrayLip: React.FC<{ cardId: string; left: number; top: number; scal
             ) : (
               <span style={{ flex: '1 1 auto', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>{names}</span>
             )}
+            {/* The view modes, left to right: the browser's own three. */}
+            {open && MODES.map(m => (
+              <div
+                key={m.value}
+                data-tray-mode={m.value}
+                title={m.title}
+                onClick={e => { e.stopPropagation(); useTrayStore.getState().patchQuery(cardId, { displayMode: m.value }) }}
+                style={{
+                  flex: '0 0 auto', width: 15, height: 15, boxSizing: 'border-box', borderRadius: 3,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 9, fontWeight: 700, lineHeight: 1, cursor: 'pointer',
+                  background: mode === m.value ? 'rgba(255,255,255,0.18)' : 'transparent',
+                  border: `1px solid rgba(255,255,255,${mode === m.value ? 0.5 : 0.16})`,
+                  color: `rgba(255,255,255,${mode === m.value ? 0.95 : 0.55})`,
+                }}
+              >{m.label}</div>
+            ))}
             <span style={{ flex: '0 0 auto', fontSize: 10, fontWeight: 600, opacity: 0.7 }}>{n}</span>
           </div>
           {/* Its corner: the tray wider or narrower too. */}
@@ -176,7 +223,7 @@ export const TrayLip: React.FC<{ cardId: string; left: number; top: number; scal
 export function useTrayReach(id: string, zoom: number, scale: number): number {
   const h = useTrayStore(s => s.trays[id]?.h ?? 0)
   const n = useTrayCount(id)
-  return n ? (h > 0 ? h * zoom + FOOT * scale + 4 : TRAY_LIP * scale) : 0
+  return n ? TRAY_LIP * scale + (h > 0 ? h * zoom + 4 : 0) : 0
 }
 
 /** The tray's cards: the browser's slots, from the card's bottom edge down
