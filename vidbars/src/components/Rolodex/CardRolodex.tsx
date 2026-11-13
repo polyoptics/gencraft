@@ -35,6 +35,7 @@ import { cardFaceMedia } from '../../utils/cardGrid'
 import { FaceVideo } from '../Layers/CardLayer'
 import { cardGripUrl } from '../../utils/mediaSources'
 import { DragOutGrip } from '../UI/DragOutGrip'
+import { CardBack, FlipButton, backColor } from '../Layers/CardBack'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useTiltOverlayHost } from '../../store/tiltStore'
 import type { FreeNodeData } from '../../store/freeNodeStore'
@@ -2769,6 +2770,10 @@ const RolodexSlot: React.FC<{
   onHoverLeave: () => void
 }> = ({ group, level, isDeck, offset, top, zIndex, heroImage, faceVideo, gripUrl, expansionFraction, isCollapsed, showCaret, isHovered: isHoverActive, onClick, onDoubleClick, onToggleCollapsed, onHoverEnter, onHoverLeave }) => {
   const [isHovered, setIsHovered] = useState(false)
+  // Turned over HERE to look at its back (Brian 2026-11-13: "flip the cards
+  // with the mouse-over button, just like on a regular card face"). The
+  // browser's own look at the card: the card on the canvas is not turned.
+  const [flipped, setFlipped] = useState(false)
 
   // Continuous "centerness" used to tween visual emphasis (rim, shadow,
   // glow) from "lit center" → "tucked tab". 1.0 at exact center, 0.0 at
@@ -2992,6 +2997,30 @@ const RolodexSlot: React.FC<{
           <FaceVideo key={faceVideo.url} media={faceVideo} cardId={group.id} scale={0.9} chrome="top" topInset={30} />
         </div>
       )}
+      {/* Flip, as on a canvas card's face: the top-left corner, the same
+          spot on either side. The back is the card's own (CardBack), so
+          what is changed on it is changed on the card. */}
+      {imageCenterness > 0.5 && (
+        <FlipButton
+          flipped={flipped}
+          onFlip={() => setFlipped(f => !f)}
+          baseColor={group.color}
+          size={16}
+          visible={isHovered || isHoverActive}
+          style={{ top: 6, left: 6, zIndex: 8 }}
+        />
+      )}
+      {flipped && imageCenterness > 0.5 && (
+        <div
+          data-rolodex-back
+          onPointerDown={e => e.stopPropagation()}
+          onClick={e => e.stopPropagation()}
+          onDoubleClick={e => e.stopPropagation()}
+          style={{ position: 'absolute', inset: 0, zIndex: 7, overflow: 'hidden', borderRadius: 6, background: backColor(group.color), cursor: 'default' }}
+        >
+          <CardBack groupId={group.id} color={group.color} width={SLOT_W} height={CARD_H} hovered={isHovered || isHoverActive} reserve={6 + 16 + 4} />
+        </div>
+      )}
       {/* Drag-out, as on a canvas card: another app gets the file; the
           canvas gets a duplicate of the card itself. */}
       {imageCenterness > 0.5 && (
@@ -3000,7 +3029,7 @@ const RolodexSlot: React.FC<{
           card={group.id}
           size={16}
           visible={isHovered || isHoverActive}
-          style={{ position: 'absolute', top: 6, right: 6, zIndex: 6, background: 'rgba(0,0,0,0.45)' }}
+          style={{ position: 'absolute', top: 6, right: 6, zIndex: 9, background: 'rgba(0,0,0,0.45)' }}
         />
       )}
       {heroImage && !(faceVideo && imageCenterness > 0.5) && imageCenterness > 0.01 && (() => {
