@@ -17,7 +17,7 @@
 // its curves. Moving the card takes its 3D area along (out or folded).
 
 import { useBoardsStore, type ProjectGroup } from '../store/boardsStore'
-import { useFreeNodeStore, type FreeNodeData } from '../store/freeNodeStore'
+import { useFreeNodeStore, type FreeNodeData, type AreaGround } from '../store/freeNodeStore'
 import { useCanvasStore } from '../store/canvasStore'
 import { isUndoRestoring, useUndoCoordinator } from '../store/undoCoordinator'
 import { useModelScaleStore, type ScenePlace, type CameraLens, type PieceView } from '../store/tiltStore'
@@ -83,7 +83,7 @@ export interface Area3dTileItem {
 }
 export interface Area3dData {
   /** The mat: where it comes out (top-left), its size and look. */
-  mat: { x: number; y: number; width: number; height: number; color?: string; label?: string; gridAt?: { x: number; y: number } }
+  mat: { x: number; y: number; width: number; height: number; color?: string; label?: string; gridAt?: { x: number; y: number }; ground?: AreaGround }
   cards: Area3dCardItem[]
   tiles: Area3dTileItem[]
   /** The curves parented to it (utils/curveParent), whole: their points
@@ -206,7 +206,7 @@ export function foldArea3d(nodeId: string): string | null {
     }
   }
   const data: Area3dData = {
-    mat: { x: a.x, y: a.y, width: a.width, height: a.height, color: a.color, label: a.label, ...(a.gridAt ? { gridAt: a.gridAt } : {}) },
+    mat: { x: a.x, y: a.y, width: a.width, height: a.height, color: a.color, label: a.label, ...(a.gridAt ? { gridAt: a.gridAt } : {}), ...(a.ground ? { ground: a.ground } : {}) },
     cards: cardItems, tiles: tileItems,
     ...(curveItems.length ? { curves: curveItems } : {}),
   }
@@ -370,7 +370,7 @@ export function showArea3d(cardId: string, quiet = false, spot?: { x: number; y:
   laying.on = true
   try {
     id = fs.addFreeNode(m.x, m.y, 'area')
-    fs.updateFreeNode(id, { x: m.x, y: m.y, width: m.width, height: m.height, areaCard: cardId, label: m.label ?? card.name ?? '3D set', ...(m.color ? { color: m.color } : {}), ...(m.gridAt ? { gridAt: m.gridAt } : {}), ...(below.length ? { under: below } : {}) })
+    fs.updateFreeNode(id, { x: m.x, y: m.y, width: m.width, height: m.height, areaCard: cardId, label: m.label ?? card.name ?? '3D set', ...(m.color ? { color: m.color } : {}), ...(m.gridAt ? { gridAt: m.gridAt } : {}), ...(m.ground ? { ground: m.ground } : {}), ...(below.length ? { under: below } : {}) })
   } finally { laying.on = false }
   // The cards it brings out never join a row with the cards under it.
   const belowCards = below.filter(k => k.startsWith('card:')).map(k => k.slice(5))

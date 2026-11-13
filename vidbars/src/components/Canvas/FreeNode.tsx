@@ -2,7 +2,7 @@ import { makeStyleCard } from '../../utils/styleCard'
 import { screenNote } from '../../utils/makeGif'
 import React, { useState, useRef, useCallback, useEffect } from 'react'
 import { AnnotationCardBody } from '../Notes/AnnotationCardBody'
-import { AreaBody } from '../Notes/AreaBody'
+import { AreaBody, AREA_GROUNDS } from '../Notes/AreaBody'
 import ReactDOM from 'react-dom'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import type { FreeNodeData, TextStyle } from '../../store/freeNodeStore'
@@ -1171,7 +1171,9 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
   /** The width the tile's own box is drawn at — narrower on a deck face. */
   const faceW = node.width - deckReserve
   /** The tile's border: none on a panel or a rail. */
-  const edgeW = isPanel || isRailTile ? 0 : borderW
+  // A 3D set's is a hairline (Brian 2026-11-13: "a really thin outline").
+  const isArea = node.type === 'area'
+  const edgeW = isPanel || isRailTile ? 0 : isArea ? Math.min(borderW, 1 / gz) : borderW
   /** As flat lays it out: a border is a whole number of screen pixels at
    *  the page's own zoom (at least one), so a 11.1 border takes 11. */
   const dpr = window.devicePixelRatio || 1
@@ -1349,17 +1351,22 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
         // An effect card paints its own face edge to edge; the tile's random
         // colour would only show through the translucent border as a ring.
         // A rail paints its own frame entirely.
-        background: isRailTile ? 'transparent' : node.type === 'effect' ? '#15161f' : node.color,
+        // A 3D set is its ground alone (components/Notes/AreaBody): no plate.
+        background: isRailTile || isArea ? 'transparent' : node.type === 'effect' ? '#15161f' : node.color,
         // Connected-to-viewport model tiles carry the accent tint — the
         // same "these things are linked" language as touching deck cards.
         border: !edgeW ? 'none' : `${edgeW}px solid ${connectedWindowId
           ? `rgba(120,170,255,${isHovered ? 0.65 : 0.45})`
+          : isArea ? `rgba(140,190,255,${isHovered ? 0.5 : 0.34})`
           : `rgba(255,255,255,${isHovered ? 0.18 : 0.08})`}`,
         // A rail's ring when selected is laid under it as plain colour
         // (index.css, data-sel-ring): as a box-shadow round a whole strip,
         // the tilted view painted every pixel of the strip again.
         boxShadow: isRailTile
           ? 'none'
+          // A 3D set casts nothing: selected, a thin ring.
+          : isArea
+          ? (isSelected ? `0 0 0 ${1.5 / gz}px rgba(120,180,255,0.9)` : 'none')
           : isPanel
           ? `${isSelected ? `0 0 0 ${2.5 / gz}px rgba(120,180,255,0.9), ` : ''}` +
             `0 ${10 / gz}px ${28 / gz}px rgba(0,0,0,0.6), 0 ${2 / gz}px ${6 / gz}px rgba(0,0,0,0.5)`
@@ -1470,8 +1477,9 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
         style={{
         display: 'flex', alignItems: 'center', gap: pad,
         padding: `${pad * 0.6}px ${pad}px`,
-        background: 'rgba(0,0,0,0.3)',
-        borderBottom: `${borderW}px solid rgba(255,255,255,0.06)`,
+        // A 3D set's is only its name over the ground: no band.
+        background: isArea ? 'transparent' : 'rgba(0,0,0,0.3)',
+        borderBottom: isArea ? 'none' : `${borderW}px solid rgba(255,255,255,0.06)`,
         // border-box so `height` is the whole story: with content-box the
         // padding above stacks on top of it and the cap stops holding.
         boxSizing: 'border-box',
@@ -1741,6 +1749,32 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
             <div style={{ padding: '4px 12px 6px', borderBottom: '1px solid rgba(255,255,255,0.07)', marginBottom: 4 }}>
               <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: 11 }}>{node.label}</span>
             </div>
+            {/* A 3D set's ground (components/Notes/AreaBody): one of four,
+                the one in use lit. For every selected set when this one is
+                among them. The menu stays open, to try them. */}
+            {isArea && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4, padding: '3px 12px 8px', borderBottom: '1px solid rgba(255,255,255,0.07)', marginBottom: 4 }}>
+                <span style={{ gridColumn: '1 / 3', color: 'rgba(255,255,255,0.4)', fontSize: 11 }}>Ground</span>
+                {AREA_GROUNDS.map(g => {
+                  const lit = (node.ground ?? 'lines') === g.id
+                  return (
+                    <button key={g.id} data-area-ground-pick={g.id}
+                      onClick={() => {
+                        const fs = useFreeNodeStore.getState()
+                        const ids = (fs.selectedIds.includes(id) ? fs.selectedIds : [id]).filter(i => fs.nodes[i]?.type === 'area')
+                        useUndoCoordinator.getState().checkpoint()
+                        for (const i of ids) fs.updateFreeNode(i, { ground: g.id })
+                      }}
+                      style={{
+                        padding: '4px 0', fontSize: 12, borderRadius: 4, cursor: 'pointer',
+                        border: `1px solid ${lit ? 'rgba(120,180,255,0.9)' : 'rgba(255,255,255,0.12)'}`,
+                        background: lit ? 'rgba(120,180,255,0.25)' : 'transparent',
+                        color: lit ? '#fff' : '#cbd5e1',
+                      }}>{g.name}</button>
+                  )
+                })}
+              </div>
+            )}
             {[
               // Not for an effect card: its face shows the EFFECT's name, so a
               // rename would never be seen (and choosing an effect resets it).

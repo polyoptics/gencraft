@@ -214,7 +214,13 @@ export interface FreeNodeData {
    *  lay under what is on it (utils/area3dScene holdSets). Absent: at the
    *  corner. */
   gridAt?: { x: number; y: number }
+  /** A 3D set: what its ground is drawn as (components/Notes/AreaBody).
+   *  Absent: lines. 'none' is no ground at all, only its thin outline. */
+  ground?: AreaGround
 }
+
+/** A 3D set's ground: a line grid, dots, crosses, or nothing. */
+export type AreaGround = 'lines' | 'dots' | 'cross' | 'none'
 
 const COLORS = ['#1e2235', '#1e3028', '#2e1e35', '#35281e', '#1e2e35', '#2e351e']
 let colorIdx = 0

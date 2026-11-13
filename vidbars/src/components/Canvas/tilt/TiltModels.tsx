@@ -742,7 +742,9 @@ function collectSlabs(K = 1): TiltSlab[] {
         if (base > 0) tileBase.set(el, base)
         // Its top: its face, or what popParts raises off it.
         const w = el.offsetWidth * zoom
-        below.push({ x0: at.x, y0: at.y, x1, y1, top: base + Math.min(w, el.offsetHeight * zoom) * POP * detail(w) })
+        // (A 3D set raises nothing: what lies on it lies on the ground.)
+        const pop = nodes[el.dataset.id ?? '']?.type === 'area' ? 0 : Math.min(w, el.offsetHeight * zoom) * POP * detail(w)
+        below.push({ x0: at.x, y0: at.y, x1, y1, top: base + pop })
       }
     }
     for (const node of tiles) {
@@ -785,11 +787,13 @@ function collectSlabs(K = 1): TiltSlab[] {
         stand(node, hinge, zoom)
         screens.push({ id: node.dataset.viewport3d!, slab, hinge })
       } else if (fs.nodes[node.dataset.id ?? '']?.type === 'area') {
-        // An Area card (components/Notes/AreaBody) is a tray in 3D: a low rim
-        // round its mat, a workspace the models stand in.
-        const k = detail(w)
-        if (k > 0) slab.rim = { w: Math.max(2, 10 * zoom) * k, h: Math.max(2, 14 * zoom) * k }
-        slab.color = SIDE.tray
+        // A 3D set (components/Notes/AreaBody) is only ground in 3D, as
+        // thin as the canvas it lies on: no rim, no walls, no shine, and
+        // its name left flat on it (Brian 2026-11-13: "stacked up too
+        // thick ... like a cheaply made toy").
+        slab.t = 0
+        slab.bare = true
+        continue
       } else if (node.hasAttribute('data-rail')) {
         // A loop strip is a tray: a rim round its edge, its floor the face.
         // Far off (small on screen) it settles back to a plain slab.
