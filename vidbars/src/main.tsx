@@ -11,6 +11,7 @@ import App from './App.tsx'
 import { useBoardsStore } from './store/boardsStore'
 import { startLinkedCardSync } from './utils/linkedCards'
 import { startStateOutputs } from './utils/stateCard'
+import { startStateSpaces } from './utils/stateSpace'
 import { bakeStoryline, chartOutOf, matchChart, recallChart, startChartFollow } from './utils/chartCard'
 import { startArea3dFollow, startArea3dBundle, showArea3d, foldArea3d, toggleArea3d, area3dOutOf, bundleArea3dCard } from './utils/area3dCard'
 import { startAreaUnder } from './utils/area3dScene'
@@ -76,6 +77,8 @@ import { useClipMotion } from './utils/fx/clipMotion'
 // One card shown in several places: an edit on one is on all (utils/linkedCards).
 startLinkedCardSync()
 startStateOutputs()
+// State workspaces follow the time markers of the timelines dragged into them.
+startStateSpaces()
 startChartFollow(cardOrigins)
 startArea3dFollow()
 // A 3D set and its card are one: deleting either deletes the other.

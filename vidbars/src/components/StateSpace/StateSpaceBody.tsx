@@ -16,16 +16,25 @@ import { cardFaceSourceUrl, stackedDeckMembers } from '../../utils/cardGrid'
 import { useResolvedMedia } from '../../utils/useResolvedMedia'
 import { cardTypeOf, typeColor } from '../../utils/cardTypes'
 import { goToCard } from '../../utils/stateCard'
+import { useShallow } from 'zustand/react/shallow'
+import { useFreeNodeStore } from '../../store/freeNodeStore'
+import { useCanvasStore } from '../../store/canvasStore'
+import { scrubStoryline } from '../Canvas/StorylineLayer'
 import {
-  ANY_R, ICON, RIM, addItem, addWire, editSpace, emptyStateSpace, makeChange, patchItem, patchWire,
-  removeItem, removeWire, setNow, type SpaceItem, type SpaceWire, type StateSpaceData,
+  ANY_R, ICON, RIM, STRIP_GAP, STRIP_H, STRIP_INSET, STRIP_PAD, addItem, addTie, addWire, editSpace, emptyStateSpace, lineClock,
+  makeChange, patchItem, patchWire, removeItem, removeLine, removeTie, removeWire, setNow,
+  type LineClock, type SpaceItem, type SpaceTie, type SpaceWire, type StateSpaceData,
 } from '../../utils/stateSpace'
 
 const BAR_W = 250
-const GREEN = '#5fa86c', BLUE = '#6fb7e0', LINE = 'rgba(160,180,190,0.75)', DIM = 'rgba(255,255,255,0.45)'
+const GREEN = '#5fa86c', BLUE = '#6fb7e0', AMBER = '#d9a441', LINE = 'rgba(160,180,190,0.75)', DIM = 'rgba(255,255,255,0.45)'
 const FONT = 'Inter, system-ui, sans-serif'
 
-type Pick = { kind: 'item' | 'wire'; id: string } | null
+type Pick = { kind: 'item' | 'wire' | 'tie'; id: string } | null
+
+/** A timeline as laid out in the workspace: its strip's box and where its
+ *  dots and marker are, in the workspace's own units. */
+interface Strip { line: string; clock: LineClock | null; left: number; top: number; width: number; y: number; knob: number; dots: { id: string; title: string; x: number; done: boolean }[] }
 
 const half = (i: SpaceItem) => i.kind === 'any' ? ANY_R : ICON / 2
 
@@ -137,7 +146,7 @@ const Text: React.FC<{ value: string; placeholder?: string; area?: boolean; onCh
   return area ? <textarea {...props} /> : <input {...props} />
 }
 
-const Bar: React.FC<{ id: string; d: StateSpaceData; pick: Pick; setPick: (p: Pick) => void }> = ({ id, d, pick, setPick }) => {
+const Bar: React.FC<{ id: string; d: StateSpaceData; pick: Pick; setPick: (p: Pick) => void; strips: Strip[] }> = ({ id, d, pick, setPick, strips }) => {
   const groups = useBoardsStore(s => s.groups)
   const nameOf = (itemId: string) => {
     const i = d.items.find(x => x.id === itemId)
@@ -145,6 +154,17 @@ const Bar: React.FC<{ id: string; d: StateSpaceData; pick: Pick; setPick: (p: Pi
   }
   const item = pick?.kind === 'item' ? d.items.find(i => i.id === pick.id) : undefined
   const wire = pick?.kind === 'wire' ? d.wires.find(w => w.id === pick.id) : undefined
+  const tie = pick?.kind === 'tie' ? d.ties?.find(t => t.id === pick.id) : undefined
+  const dotName = (t: SpaceTie) => {
+    const st = strips.find(x => x.line === t.line)
+    return `${st?.dots.find(p => p.id === t.dot)?.title ?? 'dot gone'}  ·  ${st?.clock?.title ?? 'timeline gone'}`
+  }
+  /** Where in a timeline this happens: the dots tied to it. */
+  const happens = (mine: SpaceTie[]) => <>
+    <div style={{ ...label, marginTop: 14 }}>HAPPENS AT</div>
+    {mine.length ? mine.map(t => <div key={t.id} style={row} onClick={() => setPick({ kind: 'tie', id: t.id })}><span style={{ color: AMBER }}>●</span> {dotName(t)}</div>)
+      : <div style={{ ...row, color: DIM, cursor: 'default' }}>no dot yet</div>}
+  </>
   const wireName = (w: SpaceWire) => `${w.name || (w.plain ? 'line' : 'change')}  ·  ${nameOf(w.a)} ${w.plain ? '—' : '→'} ${nameOf(w.b)}`
   let body: React.ReactNode
   if (item) {
@@ -164,6 +184,7 @@ const Bar: React.FC<{ id: string; d: StateSpaceData; pick: Pick; setPick: (p: Pi
         <div style={{ ...label, marginTop: 14 }}>STATE</div>
         <button style={btn(!!item.now)} onClick={() => setNow(id, item.id, !item.now)}>Now</button>
       </>}
+      {item.kind !== 'any' && happens((d.ties ?? []).filter(t => t.item === item.id))}
       <div style={{ ...label, marginTop: 14 }}>LINES OUT</div>
       {out.length ? out.map(w => <div key={w.id} style={row} onClick={() => setPick({ kind: 'wire', id: w.id })}>{wireName(w)}</div>) : <div style={{ ...row, color: DIM, cursor: 'default' }}>none</div>}
       <div style={{ ...label, marginTop: 14 }}>LINES IN</div>
@@ -194,10 +215,22 @@ const Bar: React.FC<{ id: string; d: StateSpaceData; pick: Pick; setPick: (p: Pi
         <div style={{ ...label, marginTop: 14 }}>RUN</div>
         <button style={btn()} title="Its far end becomes now" onClick={() => makeChange(id, wire.id)}>Make this change</button>
       </>}
+      {!wire.plain && happens((d.ties ?? []).filter(t => t.wire === wire.id))}
       <div style={{ ...label, marginTop: 14 }}>NOTE</div>
       <Text area value={wire.note ?? ''} onChange={(v, first) => patchWire(id, wire.id, { note: v || undefined }, first)} />
       <div style={{ flex: 1 }} />
       <button style={btn()} onClick={() => { removeWire(id, wire.id); setPick(null) }}>Remove line</button>
+    </>
+  } else if (tie) {
+    const w = tie.wire ? d.wires.find(x => x.id === tie.wire) : undefined
+    body = <>
+      <div style={label}>AT</div>
+      <div style={{ ...row, cursor: 'default' }}><span style={{ color: AMBER }}>●</span> {dotName(tie)}</div>
+      <div style={{ ...label, marginTop: 14 }}>{w ? 'THIS CHANGE IS MADE' : 'THIS IS LIT'}</div>
+      {w ? <div style={row} onClick={() => setPick({ kind: 'wire', id: w.id })}>{wireName(w)}</div>
+        : <div style={row} onClick={() => tie.item && setPick({ kind: 'item', id: tie.item })}>{tie.item ? nameOf(tie.item) : '?'}</div>}
+      <div style={{ flex: 1 }} />
+      <button style={btn()} onClick={() => { removeTie(id, tie.id); setPick(null) }}>Remove tie</button>
     </>
   } else {
     const hint: React.CSSProperties = { fontSize: 12, fontFamily: FONT, color: 'rgba(255,255,255,0.6)', lineHeight: 1.5, marginBottom: 8 }
@@ -205,6 +238,7 @@ const Bar: React.FC<{ id: string; d: StateSpaceData; pick: Pick; setPick: (p: Pi
       <div style={hint}>Drag a card or a deck in to make an icon.</div>
       <div style={hint}>Drag from an icon's rim to another icon to draw a line.</div>
       <div style={hint}>Double-click an icon to light it as now.</div>
+      <div style={hint}>Drag a storyline in by its handle for a timeline, then drag from one of its dots to a line or an icon.</div>
       <div style={{ ...label, marginTop: 10 }}>ADD</div>
       <div style={{ display: 'flex', gap: 6 }}>
         <button style={btn()} title="An icon with no card yet" onClick={() => setPick({ kind: 'item', id: addItem(id, { kind: 'blank', ...freeSpot(d) }) })}>Blank</button>
@@ -219,7 +253,7 @@ const Bar: React.FC<{ id: string; d: StateSpaceData; pick: Pick; setPick: (p: Pi
       width: BAR_W, flexShrink: 0, boxSizing: 'border-box', borderLeft: '1px solid rgba(255,255,255,0.1)', background: '#1c2125',
       padding: 14, display: 'flex', flexDirection: 'column', overflow: 'hidden',
     }}>
-      <div style={{ ...label, marginBottom: 12 }}>{item ? 'ICON' : wire ? (wire.plain ? 'LINE' : 'CHANGE') : 'STATES'}</div>
+      <div style={{ ...label, marginBottom: 12 }}>{item ? 'ICON' : wire ? (wire.plain ? 'LINE' : 'CHANGE') : tie ? 'TIE' : 'STATES'}</div>
       {body}
     </div>
   )
@@ -235,8 +269,30 @@ function freeSpot(d: StateSpaceData): { x: number; y: number } {
   return { x: 80, y: 80 }
 }
 
-export function StateSpaceBody({ id, node }: { id: string; node: FreeNodeData }) {
+/** How far (x, y) is from the segment a-b. */
+function segDist(x: number, y: number, x1: number, y1: number, x2: number, y2: number): number {
+  const dx = x2 - x1, dy = y2 - y1
+  const t = Math.max(0, Math.min(1, ((x - x1) * dx + (y - y1) * dy) / (dx * dx + dy * dy || 1)))
+  return Math.hypot(x - x1 - dx * t, y - y1 - dy * t)
+}
+
+export function StateSpaceBody({ id, node, bodyW, bodyH }: { id: string; node: FreeNodeData; bodyW: number; bodyH: number }) {
   const d = node.stateSpace ?? EMPTY
+  const ui = node.uiScale ?? 1
+  const planeW = Math.max(0, bodyW / ui - BAR_W), planeH = bodyH / ui
+  // The storylines dragged in, as they are now (their dots, their marker).
+  const lineNodes = useFreeNodeStore(useShallow(s => (d.lines ?? []).map(l => s.nodes[l]?.storyline)))
+  const strips = useMemo<Strip[]>(() => (d.lines ?? []).map((line, i) => {
+    const clock = lineClock(line)
+    const left = STRIP_PAD, width = Math.max(0, planeW - 2 * STRIP_PAD)
+    const top = planeH - STRIP_PAD - (i + 1) * STRIP_H - i * STRIP_GAP
+    const span = Math.max(0, width - 2 * STRIP_INSET)
+    const x = (f: number) => left + STRIP_INSET + f * span
+    return { line, clock, left, top, width, y: top + 44, knob: clock ? x(clock.toFrac(clock.at)) : 0,
+      dots: clock ? clock.dots.map(p => ({ id: p.id, title: p.title, x: x(p.frac), done: p.at <= clock.at })) : [] }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [d.lines, lineNodes, planeW, planeH])
+  const [tieDraw, setTieDraw] = useState<{ x1: number; y1: number; x: number; y: number } | null>(null)
   const [pick, setPick] = useState<Pick>(null)
   const [draw, setDraw] = useState<{ from: string; x: number; y: number; over: string | null } | null>(null)
   const plane = useRef<HTMLDivElement>(null)
@@ -267,7 +323,7 @@ export function StateSpaceBody({ id, node }: { id: string; node: FreeNodeData })
       if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.tagName === 'SELECT' || a.isContentEditable)) return
       e.preventDefault()
       e.stopPropagation()
-      if (p.kind === 'item') removeItem(id, p.id); else removeWire(id, p.id)
+      if (p.kind === 'item') removeItem(id, p.id); else if (p.kind === 'wire') removeWire(id, p.id); else removeTie(id, p.id)
       setPick(null)
     }
     window.addEventListener('pointerdown', down, true)
@@ -279,6 +335,45 @@ export function StateSpaceBody({ id, node }: { id: string; node: FreeNodeData })
     if (e.button !== 0) return
     e.stopPropagation()
     const t = e.target as HTMLElement
+    if (t.closest('[data-space-bar],[data-space-button]')) return
+    const tieEl = t.closest('[data-space-tie]') as HTMLElement | null
+    if (tieEl) { setPick({ kind: 'tie', id: tieEl.dataset.spaceTie! }); return }
+    const dotEl = t.closest('[data-space-dot]') as HTMLElement | null
+    if (dotEl) {
+      // From a timeline's dot: a tie, to the line or icon it is let go on.
+      const [line, dot] = dotEl.dataset.spaceDot!.split(' ')
+      const st = strips.find(x => x.line === line), sd = st?.dots.find(x => x.id === dot)
+      if (!st || !sd) return
+      const move = (ev: PointerEvent) => { const p = local(ev); setTieDraw({ x1: sd.x, y1: st.y, x: p.x, y: p.y }) }
+      const up = (ev: PointerEvent) => {
+        window.removeEventListener('pointermove', move)
+        window.removeEventListener('pointerup', up)
+        setTieDraw(null)
+        const p = local(ev)
+        const it = itemAt(p.x, p.y)
+        const w = it ? undefined : d.wires.find(x => { const g = wireGeom(d, x); return !x.plain && g && segDist(p.x, p.y, g.x1, g.y1, g.x2, g.y2) < 14 })
+        const made = it && it.kind !== 'any' ? addTie(id, line, dot, { item: it.id }) : w ? addTie(id, line, dot, { wire: w.id }) : null
+        if (made) setPick({ kind: 'tie', id: made })
+      }
+      window.addEventListener('pointermove', move)
+      window.addEventListener('pointerup', up)
+      return
+    }
+    const trackEl = t.closest('[data-space-track]') as HTMLElement | null
+    if (trackEl) {
+      // Along a timeline: its time marker, the storyline's own.
+      const st = strips.find(x => x.line === trackEl.dataset.spaceTrack)
+      if (!st?.clock) return
+      const c = st.clock, span = Math.max(1, st.width - 2 * STRIP_INSET)
+      useUndoCoordinator.getState().checkpoint()
+      const to = (ev: { clientX: number; clientY: number }) => scrubStoryline(st.line, c.toValue(Math.max(0, Math.min(1, (local(ev).x - st.left - STRIP_INSET) / span))))
+      to(e)
+      const move = (ev: PointerEvent) => to(ev)
+      const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
+      window.addEventListener('pointermove', move)
+      window.addEventListener('pointerup', up)
+      return
+    }
     const wireEl = t.closest('[data-space-wire]') as HTMLElement | null
     if (wireEl) { setPick({ kind: 'wire', id: wireEl.dataset.spaceWire! }); return }
     const itemEl = t.closest('[data-space-item]') as HTMLElement | null
@@ -364,11 +459,65 @@ export function StateSpaceBody({ id, node }: { id: string; node: FreeNodeData })
                   </g>
                 )
               })}
+              {(d.ties ?? []).map(t => {
+                const st = strips.find(x => x.line === t.line), sd = st?.dots.find(x => x.id === t.dot)
+                const w = t.wire ? d.wires.find(x => x.id === t.wire) : undefined
+                const g = w ? wireGeom(d, w) : null
+                const it = t.item ? d.items.find(x => x.id === t.item) : undefined
+                const end = g ? { x: g.mx, y: g.my } : it ? { x: it.x, y: it.y + half(it) + 3 } : null
+                if (!st || !sd || !end) return null
+                const on = pick?.kind === 'tie' && pick.id === t.id
+                const path = `M${sd.x} ${st.y - 7}C${sd.x} ${(st.y + end.y) / 2} ${end.x} ${(st.y + end.y) / 2} ${end.x} ${end.y}`
+                return (
+                  <g key={t.id} data-space-tie={t.id} style={{ cursor: 'pointer' }}>
+                    <path d={path} fill="none" stroke="transparent" strokeWidth={14} />
+                    <path d={path} fill="none" stroke={on ? BLUE : AMBER} strokeWidth={on ? 2.2 : 1.4} strokeDasharray="4 4" opacity={on ? 1 : 0.85} />
+                    <circle cx={end.x} cy={end.y} r={3.5} fill={on ? BLUE : AMBER} />
+                  </g>
+                )
+              })}
+              {tieDraw && <line x1={tieDraw.x1} y1={tieDraw.y1} x2={tieDraw.x} y2={tieDraw.y} stroke={AMBER} strokeWidth={2} strokeDasharray="4 4" style={{ pointerEvents: 'none' }} />}
               {fromPt && draw && <line x1={fromPt.x} y1={fromPt.y} x2={draw.x} y2={draw.y} stroke={BLUE} strokeWidth={2} strokeDasharray="6 4" markerEnd={`url(#sb-${id})`} style={{ pointerEvents: 'none' }} />}
             </svg>
+            {strips.map(st => (
+              <div key={st.line} data-space-strip={st.line} style={{
+                position: 'absolute', left: st.left, top: st.top, width: st.width, height: STRIP_H, boxSizing: 'border-box',
+                background: '#1c2125', border: '1px solid rgba(255,255,255,0.14)', borderRadius: 6, fontFamily: FONT, userSelect: 'none',
+              }}>
+                <div style={{ position: 'absolute', left: 10, top: 6, right: 70, fontSize: 9, letterSpacing: '0.1em', color: DIM, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  TIMELINE  ·  {(st.clock?.title ?? 'storyline gone').toUpperCase()}
+                </div>
+                <div style={{ position: 'absolute', right: 6, top: 3, display: 'flex', gap: 4 }}>
+                  {st.clock && <button data-space-button="" title="Go to this storyline on the canvas" style={{ ...btn(), padding: '1px 6px' }} onClick={() => {
+                    const n = useFreeNodeStore.getState().nodes[st.line]
+                    const dots = n?.storyline?.dots ?? []
+                    if (n && dots.length) useCanvasStore.getState().jumpToPoint(n.x + (Math.min(...dots.map(p => p.x)) + Math.max(...dots.map(p => p.x))) / 2, n.y + (Math.min(...dots.map(p => p.y)) + Math.max(...dots.map(p => p.y))) / 2)
+                  }}>◎</button>}
+                  <button data-space-button="" title="Take this timeline out of the workspace (the storyline itself stays)" style={{ ...btn(), padding: '1px 6px' }} onClick={() => removeLine(id, st.line)}>×</button>
+                </div>
+                {st.clock && <>
+                  <div data-space-track={st.line} style={{ position: 'absolute', left: STRIP_INSET - 20, right: STRIP_INSET - 20, top: 30, height: 30, cursor: 'ew-resize' }}>
+                    <div style={{ position: 'absolute', left: 20, right: 20, top: 13, height: 2, background: 'rgba(217,164,65,0.35)' }} />
+                    <div style={{ position: 'absolute', left: 20, width: Math.max(0, st.knob - st.left - STRIP_INSET), top: 13, height: 2, background: AMBER }} />
+                  </div>
+                  {st.dots.map(p => (
+                    <React.Fragment key={p.id}>
+                      <div data-space-dot={`${st.line} ${p.id}`} className="vb-space-rim" title="Drag from here to a line or an icon: it happens at this dot" style={{
+                        position: 'absolute', left: p.x - st.left - 7, top: 44 - 7 - 1, width: 14, height: 14, borderRadius: '50%', boxSizing: 'border-box',
+                        background: p.done ? AMBER : '#1c2125', border: `2px solid ${AMBER}`, cursor: 'crosshair',
+                      }} />
+                      <div style={{ position: 'absolute', left: p.x - st.left - 50, width: 100, top: 53, textAlign: 'center', fontSize: 10, color: p.done ? '#e4e9ea' : DIM,
+                        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', pointerEvents: 'none' }}>{p.title}</div>
+                    </React.Fragment>
+                  ))}
+                  <div style={{ position: 'absolute', left: st.knob - st.left - 6, top: 22, width: 12, height: 15, borderRadius: '3px 3px 6px 6px',
+                    background: '#9fe0ff', border: '2px solid #12131f', boxSizing: 'border-box', pointerEvents: 'none' }} />
+                </>}
+              </div>
+            ))}
             {d.items.map(i => <IconView key={i.id} item={i} picked={pick?.kind === 'item' && pick.id === i.id} aim={draw?.over === i.id} />)}
           </div>
-          <Bar id={id} d={d} pick={pick} setPick={setPick} />
+          <Bar id={id} d={d} pick={pick} setPick={setPick} strips={strips} />
         </div>
       </ContentScaled>
     </div>

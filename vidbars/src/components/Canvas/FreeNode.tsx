@@ -2074,7 +2074,7 @@ const FreeNodeBody: React.FC<{
   }
   if (node.type === 'stateSpace') {
     return (
-      <CanvasUnits w={bodyW} h={bodyH} r={bodyR}><StateSpaceBody id={id} node={node} /></CanvasUnits>
+      <CanvasUnits w={bodyW} h={bodyH} r={bodyR}><StateSpaceBody id={id} node={node} bodyW={bodyW} bodyH={bodyH} /></CanvasUnits>
     )
   }
   if (node.type === 'roughCut') {

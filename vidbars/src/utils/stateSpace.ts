@@ -20,7 +20,8 @@
 import { useFreeNodeStore } from '../store/freeNodeStore'
 import { useBoardsStore } from '../store/boardsStore'
 import { useUndoCoordinator } from '../store/undoCoordinator'
-import { deckCards, pickState } from './stateCard'
+import { deckCards, pickState, applyState } from './stateCard'
+import { rootOf } from './storyline'
 
 export interface SpaceItem {
   id: string
@@ -48,9 +49,23 @@ export interface SpaceWire {
   plain?: boolean
 }
 
+/** "This happens here": a dot of a timeline joined to a line (its change is
+ *  made there) or to an icon (it is lit there). */
+export interface SpaceTie {
+  id: string
+  /** The storyline (its node id) and its dot. */
+  line: string
+  dot: string
+  wire?: string
+  item?: string
+}
+
 export interface StateSpaceData {
   items: SpaceItem[]
   wires: SpaceWire[]
+  /** Timelines dragged in: storylines, by node id, bottom one first. */
+  lines?: string[]
+  ties?: SpaceTie[]
 }
 
 export const emptyStateSpace = (): StateSpaceData => ({ items: [], wires: [] })
@@ -96,7 +111,11 @@ export function addCardItems(nodeId: string, cards: string[], x: number, y: numb
 }
 
 export function removeItem(nodeId: string, itemId: string): void {
-  editSpace(nodeId, d => ({ items: d.items.filter(i => i.id !== itemId), wires: d.wires.filter(w => w.a !== itemId && w.b !== itemId) }))
+  editSpace(nodeId, d => {
+    const wires = d.wires.filter(w => w.a !== itemId && w.b !== itemId)
+    const kept = new Set(wires.map(w => w.id))
+    return { ...d, items: d.items.filter(i => i.id !== itemId), wires, ties: d.ties?.filter(t => t.item !== itemId && (!t.wire || kept.has(t.wire))) }
+  })
 }
 
 /** A line from `a` to `b`. Returns its id (the one already there, if any). */
@@ -111,7 +130,7 @@ export function addWire(nodeId: string, a: string, b: string): string | null {
 }
 
 export function removeWire(nodeId: string, wireId: string): void {
-  editSpace(nodeId, d => ({ ...d, wires: d.wires.filter(w => w.id !== wireId) }))
+  editSpace(nodeId, d => ({ ...d, wires: d.wires.filter(w => w.id !== wireId), ties: d.ties?.filter(t => t.wire !== wireId) }))
 }
 
 export function patchItem(nodeId: string, itemId: string, p: Partial<SpaceItem>, undo = true): void {
@@ -152,14 +171,15 @@ export function setNow(nodeId: string, itemId: string, on: boolean): void {
   if (on && it.card) followOnStateCards(it.card)
 }
 
-/** State cards whose state decks hold `card` pick that state. */
-function followOnStateCards(card: string): void {
+/** State cards whose state decks hold `card` pick that state. `quiet`: no
+ *  undo step of its own (a time marker's drag took one). */
+function followOnStateCards(card: string, quiet = false): void {
   const groups = useBoardsStore.getState().groups
   for (const sc of groups) {
     const m = sc.stateCard
     if (!m) continue
     const st = m.states.find(s => s.deck && deckCards(groups, s.deck).includes(card))
-    if (st && m.current !== st.id) pickState(sc.id, st.id)
+    if (st && m.current !== st.id) (quiet ? applyState : pickState)(sc.id, st.id)
   }
 }
 
@@ -189,4 +209,151 @@ export function dropOnStateSpace(clientX: number, clientY: number, cards: string
   // The press that began the drag took the undo checkpoint.
   addCardItems(nodeId, ok, (clientX - r.left) / k, (clientY - r.top) / k, false)
   return true
+}
+
+// ── Timelines ──
+// A storyline dragged in lies along the bottom as a strip: its dots in
+// story order, evenly spaced, and its time marker (the storyline's own, the
+// one the world clock moves). A dot is tied to a line or an icon by
+// dragging from it; as the marker passes the dot, that change is made (or
+// that icon lit). Before the first tied dot of a machine, the icon its
+// first change starts from is lit.
+
+export const STRIP_H = 70
+export const STRIP_GAP = 10
+export const STRIP_PAD = 16
+export const STRIP_INSET = 44
+
+/** The workspace under screen point (x, y), or null. */
+export function stateSpaceAt(clientX: number, clientY: number): string | null {
+  for (const el of document.elementsFromPoint(clientX, clientY)) {
+    const plane = (el as HTMLElement).closest?.('[data-state-plane]') as HTMLElement | null
+    if (plane) return plane.dataset.statePlane ?? null
+  }
+  return null
+}
+
+export function addLine(nodeId: string, lineId: string, undo = true): void {
+  editSpace(nodeId, d => d.lines?.includes(lineId) ? d : { ...d, lines: [...(d.lines ?? []), lineId] }, undo)
+}
+export function removeLine(nodeId: string, lineId: string): void {
+  editSpace(nodeId, d => ({ ...d, lines: d.lines?.filter(l => l !== lineId), ties: d.ties?.filter(t => t.line !== lineId) }))
+}
+
+/** Tie a timeline's dot to a line or an icon. Returns the tie's id. */
+export function addTie(nodeId: string, line: string, dot: string, to: { wire?: string; item?: string }): string | null {
+  const d = spaceOf(nodeId)
+  if (!d || (!to.wire && !to.item)) return null
+  const old = d.ties?.find(t => t.line === line && t.dot === dot && t.wire === to.wire && t.item === to.item)
+  if (old) return old.id
+  const id = uid()
+  editSpace(nodeId, s => ({ ...s, ties: [...(s.ties ?? []), { id, line, dot, ...to }] }))
+  playSpace(nodeId, line)
+  return id
+}
+export function removeTie(nodeId: string, tieId: string): void {
+  editSpace(nodeId, d => ({ ...d, ties: d.ties?.filter(t => t.id !== tieId) }))
+}
+
+export interface LineClock {
+  title: string
+  /** The marker's range and where it is, along the base from its start. */
+  lo: number
+  hi: number
+  at: number
+  /** Its dots in story order: where each is along the base, and along the
+   *  strip (0..1, evenly spaced). */
+  dots: { id: string; title: string; at: number; frac: number }[]
+  toFrac: (v: number) => number
+  toValue: (f: number) => number
+}
+
+/** A storyline as a strip reads it, or null when it is gone or empty. */
+export function lineClock(lineId: string): LineClock | null {
+  const n = useFreeNodeStore.getState().nodes[lineId]
+  const d = n?.type === 'storyline' ? n.storyline : undefined
+  const start = d?.dots.find(p => p.id === rootOf(d))
+  if (!d || !start) return null
+  const xs = (d.base ?? []).map(b => d.dots.find(p => p.id === b)?.x).filter((x): x is number => x !== undefined)
+  const len = xs.length ? Math.max(...xs) - start.x : 0
+  const lead = Math.max(200, len * 0.04)   // StorylineLayer markerLead
+  const lo = -lead, hi = len + lead
+  const at = Math.max(lo, Math.min(hi, d.marker ?? lo))
+  const sorted = d.dots.map((p, i) => ({ id: p.id, title: p.title?.trim() || `Dot ${i + 1}`, at: Math.max(lo, Math.min(hi, p.x - start.x)) })).sort((a, b) => a.at - b.at)
+  // Evenly spaced in story order, straight between (as the world clock's bar).
+  const pts: [number, number][] = [[lo, 0], ...sorted.map((p, i): [number, number] => [p.at, (i + 1) / (sorted.length + 1)]), [hi, 1]]
+  const toFrac = (v: number) => {
+    for (let i = 1; i < pts.length; i++) {
+      const [v0, f0] = pts[i - 1], [v1, f1] = pts[i]
+      if (v <= v1 || i === pts.length - 1) return v1 === v0 ? f1 : f0 + (f1 - f0) * Math.max(0, Math.min(1, (v - v0) / (v1 - v0)))
+    }
+    return 0
+  }
+  const toValue = (f: number) => {
+    for (let i = 1; i < pts.length; i++) {
+      const [v0, f0] = pts[i - 1], [v1, f1] = pts[i]
+      if (f <= f1 || i === pts.length - 1) return v0 + (v1 - v0) * Math.max(0, Math.min(1, (f - f0) / (f1 - f0)))
+    }
+    return lo
+  }
+  return { title: d.title?.trim() || n!.label || 'Storyline', lo, hi, at, toFrac, toValue, dots: sorted.map((p, i) => ({ ...p, frac: (i + 1) / (sorted.length + 1) })) }
+}
+
+/** Make what timeline `lineId` says is so at its marker, in workspace
+ *  `nodeId`. No undo step of its own. */
+export function playSpace(nodeId: string, lineId: string): void {
+  const d = spaceOf(nodeId)
+  const c = lineClock(lineId)
+  if (!d || !c || !d.ties?.length) return
+  const dotAt = new Map(c.dots.map(p => [p.id, p.at]))
+  const isAny = (id: string | undefined) => d.items.find(i => i.id === id)?.kind === 'any'
+  // Each tie: when, the icon lit then, and the icon lit before it.
+  const events = d.ties.flatMap((t, i) => {
+    if (t.line !== lineId || !dotAt.has(t.dot)) return []
+    const w = t.wire ? d.wires.find(x => x.id === t.wire) : undefined
+    const to = w ? w.b : t.item
+    if (!to || !d.items.some(x => x.id === to) || isAny(to)) return []
+    return [{ at: dotAt.get(t.dot)!, i, to, from: w && !isAny(w.a) ? w.a : undefined }]
+  }).sort((a, b) => a.at - b.at || a.i - b.i)
+  const lit = new Map<string, string>()   // machine (its first icon's id) -> the icon lit
+  const sets = new Map<string, Set<string>>()
+  const seen = new Set<string>()
+  for (const e of events) {
+    const set = machineOf(d, e.to)
+    const key = [...set].sort()[0]
+    sets.set(key, set)
+    if (e.at <= c.at) lit.set(key, e.to)
+    else if (!seen.has(key) && e.from) lit.set(key, e.from)
+    seen.add(key)
+  }
+  if (!lit.size) return
+  const on = new Set(lit.values())
+  const off = new Set([...lit.keys()].flatMap(k => [...sets.get(k)!]).filter(id => !on.has(id)))
+  const changed = d.items.filter(i => (on.has(i.id) && !i.now) || (off.has(i.id) && i.now))
+  if (!changed.length) return
+  editSpace(nodeId, s => ({ ...s, items: s.items.map(i => on.has(i.id) ? { ...i, now: true } : off.has(i.id) && i.now ? { ...i, now: undefined } : i) }), false)
+  for (const i of changed) if (on.has(i.id) && i.card) followOnStateCards(i.card, true)
+}
+
+/** Live: a workspace follows the time markers of its timelines, wherever
+ *  they are moved from (the storyline, the world clock, its own strip). */
+let started = false
+export function startStateSpaces(): void {
+  if (started) return
+  started = true
+  let busy = false
+  useFreeNodeStore.subscribe((s, prev) => {
+    if (busy || s.nodes === prev.nodes) return
+    const moved = new Set<string>()
+    for (const n of Object.values(s.nodes)) {
+      if (n.type !== 'stateSpace' || !n.stateSpace?.lines?.length) continue
+      for (const l of n.stateSpace.lines) {
+        const a = s.nodes[l]?.storyline, b = prev.nodes[l]?.storyline
+        if (a && b && a !== b && a.marker !== b.marker) moved.add(n.id + ' ' + l)
+      }
+    }
+    if (!moved.size) return
+    busy = true
+    try { for (const k of moved) { const [nodeId, l] = k.split(' '); playSpace(nodeId, l) } } finally { busy = false }
+  })
 }

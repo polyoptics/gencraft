@@ -83,6 +83,7 @@ import { setStoryWallOf } from '../../utils/wallRoom'
 import { ChangeMenu, MarkTags } from '../Layers/StateFace'
 import { playMarks, toggleMark, type StateMark } from '../../utils/stateCard'
 import { overWorldClock, useWorldClockUi } from '../../utils/worldClock'
+import { addLine, stateSpaceAt } from '../../utils/stateSpace'
 import { PRESET_COLORS, TextFormatToolbar, ensureFontLoaded, hexToRgba, type TextFieldMode } from '../UI/TextFormatToolbar'
 import {
   deleteBranchFrom, deleteDot, downstream, growDot, insertDot, isBaseEdge, mergeDots, migrateStoryline,
@@ -1138,6 +1139,14 @@ const Storyline: React.FC<{ id: string }> = ({ id }) => {
           moveCards(gesture.cards, 0, 0)
           useCanvasStore.getState().setWorldClockLine(id)
           useCanvasStore.getState().setWorldClockOpen(true)
+        }
+        // Let go over a state workspace: it goes back where it was and lies
+        // along the workspace's bottom as a timeline (utils/stateSpace).
+        const space = !cancelled && !onClock && moved ? stateSpaceAt(ev.clientX, ev.clientY) : null
+        if (space) {
+          useFreeNodeStore.getState().updateFreeNode(id, { x: x0, y: y0 })
+          moveCards(gesture.cards, 0, 0)
+          addLine(space, id, false)
         }
       }
       if (gesture) { lastClick.current = null; return }
