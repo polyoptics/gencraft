@@ -20,6 +20,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { useFreeNodeStore, type FreeNodeData } from '../../store/freeNodeStore'
 import { useBoardsStore } from '../../store/boardsStore'
+import { useNotesStore } from '../../store/notesStore'
+import { useRideClock } from '../../utils/pathRide'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { isTilted, useTiltStore } from '../../store/tiltStore'
@@ -31,7 +33,7 @@ import { goToCard } from '../../utils/stateCard'
 import { scrubStoryline } from '../Canvas/StorylineLayer'
 import {
   EVENT_H, EVENT_W, ICON, PORT_SNAP, SPACE_BAR_W, SPACE_GRID, TL_H,
-  SPACE_HEAD, SPACE_ROW, addItem, addWire, editSpace, emptyStateSpace, endOf, exposed, fireEvent, isLevel, itemPorts, itemSize, lineClock, lineOf, looseCurve, makeChange, replaySpace, setValue, spaceTruths, valOf,
+  CHOICE_HEAD, CHOICE_ROW, SPACE_HEAD, SPACE_ROW, addItem, choose, pathStep, scene, addWire, editSpace, emptyStateSpace, endOf, exposed, fireEvent, isLevel, itemPorts, itemSize, lineClock, lineOf, looseCurve, makeChange, replaySpace, setValue, spaceTruths, valOf,
   moveItems, normalizeSpace, outSpot, patchItem, patchWire, planeBox, portSpot, removeFromSpace, screenToCanvas, setNow, setStart,
   useSpaceLive, wireDist, wireGeom, wireKind, wireSources, wireTargets,
   type Compare, type PortRef, type PortSpot, type SpaceItem, type SpaceKind, type SpaceWire, type StateSpaceData, type WireGeom,
@@ -58,16 +60,17 @@ function itemLabel(i: SpaceItem, cardName?: string, lineTitle?: string): string 
   if (i.kind === 'any') return 'Any'
   if (i.kind === 'timeline') return lineTitle || 'Timeline'
   if (i.kind === 'space') return lineTitle || 'Workspace'
+  if (i.kind === 'path') return scene.path(i.curve)?.name || 'Path'
   if (i.card) return cardName || (i.kind === 'event' ? 'Event' : 'Card')
   return KIND_NAME[i.kind]
 }
-const KIND_NAME: Record<SpaceKind, string> = { card: 'State', blank: 'State', event: 'Event', any: 'Any', timeline: 'Timeline', value: 'Value', and: 'And', or: 'Or', fact: 'Is in', wait: 'Wait', pick: 'Pick one', space: 'Workspace' }
+const KIND_NAME: Record<SpaceKind, string> = { card: 'State', blank: 'State', event: 'Event', any: 'Any', timeline: 'Timeline', value: 'Value', and: 'And', or: 'Or', fact: 'Is in', wait: 'Wait', pick: 'Pick one', space: 'Workspace', path: 'Path', act: 'Show / hide', choice: 'Choose' }
 
 // One colour for each kind of thing, everywhere: steel for states and the
 // changes between them, amber for time, violet for what happens, green for
 // what is true.
 const kindTone = (k: SpaceKind | undefined): string =>
-  k === 'timeline' || k === 'wait' ? AMBER : k === 'event' || k === 'pick' ? VIOLET : k === 'value' || k === 'and' || k === 'or' || k === 'fact' ? GREEN : STEEL
+  k === 'timeline' || k === 'wait' || k === 'path' ? AMBER : k === 'event' || k === 'pick' || k === 'choice' ? VIOLET : k === 'value' || k === 'and' || k === 'or' || k === 'fact' || k === 'act' ? GREEN : STEEL
 
 /** What colour a wire is, by what sends along it. */
 function wireTone(d: StateSpaceData, w: SpaceWire): string {
@@ -82,6 +85,15 @@ function wireTone(d: StateSpaceData, w: SpaceWire): string {
 function along(g: WireGeom, t: number): { x: number; y: number } {
   const u = 1 - t
   return { x: u * u * u * g.x1 + 3 * u * u * t * g.c1x + 3 * u * t * t * g.c2x + t * t * t * g.x2, y: u * u * u * g.y1 + 3 * u * u * t * g.c1y + 3 * u * t * t * g.c2y + t * t * t * g.y2 }
+}
+
+const PORT_TITLE: Record<string, string> = {
+  time: 'Time: drag from a timeline\'s time to a path\'s time, and what rides the path follows that timeline',
+  play: 'Play: a wire onto here sets what rides this path going from the start',
+  take: 'Take: while what is wired here is true, the other models of this path\'s set ride this path',
+  hold: 'Hold: while what is wired here is true, what rides this path stands at this point',
+  pp: 'Out: when a rider reaches this point',
+  opt: 'Out: drag from here to what follows this option',
 }
 
 /** Bring a workspace into view. */
@@ -171,6 +183,46 @@ const NodeView: React.FC<{ item: SpaceItem; picked: boolean; stamp?: number; on?
           )
         })}
         {!rows.length && <div style={{ height: SPACE_ROW, lineHeight: `${SPACE_ROW}px`, padding: '0 14px', fontSize: 11, color: DIM }}>{inner ? 'nothing in it yet' : ''}</div>}
+      </div>
+    )
+  }
+  if (item.kind === 'act') {
+    const show = item.do === 'show'
+    return (
+      <div data-sp-node={item.id} data-sp-true={on ? '1' : '0'} className="vb-sp-node" title={show ? 'Show: its card is on the board only while what is wired into this is true. Drop a card on it to say which' : 'Hide: its card is off the board while what is wired into this is true. Drop a card on it to say which'} style={{
+        ...box, borderRadius: EVENT_H / 2, border: `2px ${item.card ? 'solid' : 'dashed'} ${on ? GREEN : 'rgba(95,168,108,0.45)'}`, background: on ? '#2c4a33' : '#1d2a22',
+        boxShadow: [ring, on ? '0 0 14px rgba(95,168,108,0.5)' : ''].filter(Boolean).join(', ') || 'none',
+        display: 'flex', alignItems: 'center', gap: 6, padding: '0 12px', color: INK, fontSize: 12, opacity: gone ? 0.5 : 1,
+      }}>
+        <svg width="16" height="12" viewBox="0 0 16 12" style={{ flexShrink: 0 }}>
+          <path d="M1 6C3 2.5 5.5 1 8 1s5 1.5 7 5c-2 3.5-4.500 5-7 5S3 9.500 1 6z" fill="none" stroke={GREEN} strokeWidth="1.4" />
+          <circle cx="8" cy="6" r="2" fill={GREEN} />
+          {!show && <path d="M2 11L14 1" stroke={GREEN} strokeWidth="1.6" strokeLinecap="round" />}
+        </svg>
+        <div style={{ flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {item.name || (gone ? 'card gone' : `${show ? 'show' : 'hide'} ${card ? card.name || 'card' : '(drop a card)'}`)}
+        </div>
+      </div>
+    )
+  }
+  if (item.kind === 'choice') {
+    return (
+      <div data-sp-node={item.id} data-sp-asking={item.asking ? '1' : '0'} className="vb-sp-node" title="Choose: it stops here and asks. Click an option and it goes on along that one" style={{
+        ...box, borderRadius: 10, border: `2px solid ${item.asking ? AMBER : VIOLET}`, background: '#2a2438', color: INK, overflow: 'hidden',
+        boxShadow: [ring, item.asking ? '0 0 16px rgba(217,164,65,0.6)' : ''].filter(Boolean).join(', ') || 'none',
+      }}>
+        <div style={{ height: CHOICE_HEAD - 2, lineHeight: `${CHOICE_HEAD - 2}px`, padding: '0 10px', fontSize: 10, letterSpacing: '0.1em', color: item.asking ? AMBER : DIM, fontWeight: item.asking ? 600 : 400, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {(item.name || 'Choose').toUpperCase()}
+        </div>
+        {(item.opts ?? []).map(o => {
+          const lit = item.chose === o.id && !item.asking
+          return <div key={o.id} data-sp-opt={o.id} data-sp-of={item.id} className="vb-sp-chip" title="Click to go on along this one" style={{
+            height: CHOICE_ROW - 4, lineHeight: `${CHOICE_ROW - 6}px`, margin: '0 8px 4px', padding: '0 8px', boxSizing: 'border-box', borderRadius: 5, fontSize: 11, cursor: 'pointer',
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            background: lit ? 'rgba(176,140,240,0.35)' : 'rgba(255,255,255,0.05)', border: `1px solid ${lit ? VIOLET : item.asking ? 'rgba(217,164,65,0.7)' : 'rgba(255,255,255,0.16)'}`, color: lit ? '#fff' : INK,
+          }}>{o.name || 'option'}</div>
+        })}
+        <Pulse stamp={stamp} radius={10} tone={VIOLET} />
       </div>
     )
   }
@@ -304,6 +356,56 @@ const TimelineView: React.FC<{ item: SpaceItem; picked: boolean; playing: boolea
   )
 }
 
+/** A path as a node: its points along it like a timeline's, and where its rider is. */
+const PathView: React.FC<{ item: SpaceItem; picked: boolean }> = ({ item, picked }) => {
+  useNotesStore(s => item.curve ? s.curves[item.curve] : undefined)
+  useRideClock(s => s.clocks)
+  const playing = useRideClock(s => s.playing)
+  const [, tick] = useState(0)
+  useEffect(() => {
+    if (!playing) return
+    const t = window.setInterval(() => tick(n => n + 1), 60)
+    return () => window.clearInterval(t)
+  }, [playing])
+  const sp = scene.path(item.curve)
+  const { w, h } = itemSize(item)
+  const n = sp?.n ?? 0
+  const at = (k: number) => (k + 1) / (n + 1) * w
+  // Where its rider is, between the points either side of it in time.
+  let mark: number | null = null
+  if (sp && sp.times.length) {
+    let k = 0
+    while (k + 1 < n && sp.times[k + 1] <= sp.now) k++
+    const a = sp.times[k], b = sp.times[Math.min(n - 1, k + 1)]
+    mark = sp.now <= sp.times[0] ? at(0) : at(k) + (b > a ? Math.max(0, Math.min(1, (sp.now - a) / (b - a))) : 0) * (at(Math.min(n - 1, k + 1)) - at(k))
+  }
+  const tag: React.CSSProperties = { position: 'absolute', left: 9, fontSize: 8, letterSpacing: '0.06em', color: DIM, pointerEvents: 'none', lineHeight: '10px' }
+  return (
+    <div data-sp-node={item.id} className="vb-sp-node" title="A path: what rides it follows a timeline wired to its time, or goes when it is told to play" style={{
+      position: 'absolute', left: item.x - w / 2, top: item.y - h / 2, width: w, height: h, boxSizing: 'border-box', cursor: 'grab', userSelect: 'none',
+      fontFamily: FONT, background: '#262218', border: `2px ${sp ? 'solid' : 'dashed'} ${sp ? 'rgba(217,164,65,0.6)' : 'rgba(255,255,255,0.25)'}`, borderRadius: 10,
+      boxShadow: picked ? `0 0 0 2px ${BLUE}` : 'none', overflow: 'hidden',
+    }}>
+      <div style={{ position: 'absolute', left: 38, right: 8, top: 5, fontSize: 9, letterSpacing: '0.1em', color: DIM, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        PATH  ·  {(item.name || (sp ? [sp.name, sp.setName].filter(Boolean).join(', ') : item.curve ? 'path gone' : 'pick a path in the bar')).toUpperCase()}
+      </div>
+      <div style={{ ...tag, top: h / 2 - 22 - 7 }}>time</div>
+      <div style={{ ...tag, top: h / 2 - 7 }}>play</div>
+      <div style={{ ...tag, top: h / 2 + 22 - 7 }}>take</div>
+      {sp && <>
+        <div style={{ position: 'absolute', left: at(0), width: Math.max(0, at(n - 1) - at(0)), top: h / 2 - 3, height: 2, borderRadius: 1, background: 'rgba(217,164,65,0.3)' }} />
+        {mark !== null && <div style={{ position: 'absolute', left: at(0), width: Math.max(0, mark - at(0)), top: h / 2 - 3, height: 2, borderRadius: 1, background: AMBER }} />}
+        {Array.from({ length: n }, (_, k) => <div key={k} style={{
+          position: 'absolute', left: at(k) - 5, top: h / 2 - 7, width: 10, height: 10, borderRadius: '50%', boxSizing: 'border-box',
+          background: mark !== null && mark >= at(k) - 0.5 ? AMBER : '#262218', border: `2px solid ${AMBER}`,
+        }} />)}
+        {Array.from({ length: n }, (_, k) => <div key={'n' + k} style={{ position: 'absolute', left: at(k) - pathStep(item) / 2 + 2, width: pathStep(item) - 4, top: h / 2 + 8, textAlign: 'center', fontSize: 9, color: DIM, pointerEvents: 'none', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{sp.labels[k] || k + 1}</div>)}
+        {mark !== null && <div data-sp-rider={item.id} style={{ position: 'absolute', left: mark - 5, top: h / 2 - 12, width: 10, height: 10, transform: 'rotate(45deg)', background: '#9fe0ff', border: '2px solid #12131f', boxSizing: 'border-box' }} />}
+      </>}
+    </div>
+  )
+}
+
 // ── The side bar ──
 
 const label: React.CSSProperties = { fontSize: 9, letterSpacing: '0.1em', color: DIM, fontFamily: FONT, marginBottom: 4 }
@@ -349,6 +451,8 @@ const chips: React.CSSProperties = { display: 'flex', gap: 4, flexWrap: 'wrap', 
 
 const Bar: React.FC<{ id: string; d: StateSpaceData; sel: string[]; setSel: (s: string[]) => void }> = ({ id, d, sel, setSel }) => {
   const groups = useBoardsStore(s => s.groups)
+  const curves = useNotesStore(s => s.curves)
+  const paths = useMemo(() => Object.values(curves).filter(c => c.kind === 'bezier' && c.pts.length >= 2), [curves])
   const nameOf = (itemId: string | undefined) => {
     const i = d.items.find(x => x.id === itemId)
     return i ? itemLabel(i, groups.find(g => g.id === i.card)?.name, i.kind === 'space' ? useFreeNodeStore.getState().nodes[i.space ?? '']?.label : lineClock(lineOf(i))?.title) : '?'
@@ -361,12 +465,15 @@ const Bar: React.FC<{ id: string; d: StateSpaceData; sel: string[]; setSel: (s: 
   const fromName = (w: SpaceWire) => {
     const a = d.items.find(i => i.id === w.a)
     if (a?.kind === 'space') return innerName(w.a, w.ap)
+    if (a?.kind === 'path' && w.ap?.startsWith('pp:')) return nameOf(w.a) + ', ' + (scene.path(a.curve)?.labels[Number(w.ap.slice(3))] || 'point ' + (Number(w.ap.slice(3)) + 1))
+    if (a?.kind === 'choice' && w.ap) return nameOf(w.a) + ': ' + (a.opts?.find(o => 'opt:' + o.id === w.ap)?.name || 'option')
+    if (a?.kind === 'timeline' && w.ap === 'time') return nameOf(w.a) + ' (its time)'
     if (a?.kind !== 'timeline' || !w.ap) return nameOf(w.a)
     return `${lineClock(lineOf(a))?.dots.find(p => 'pt:' + p.id === w.ap)?.title ?? 'point gone'}, ${nameOf(w.a)}`
   }
   const toName = (w: SpaceWire): string => {
     if (w.bp !== 'knob' && d.items.find(i => i.id === w.b)?.kind === 'space') return innerName(w.b, w.bp)
-    if (w.bp !== 'knob') return nameOf(w.b) + (w.bp === 'if' ? ' (only if)' : w.bp === 'a' ? ' (the card)' : w.bp === 'b' ? ' (what it is in)' : '')
+    if (w.bp !== 'knob') return nameOf(w.b) + (w.bp === 'if' ? ' (only if)' : w.bp === 'a' ? ' (the card)' : w.bp === 'b' ? ' (what it is in)' : w.bp === 'time' ? ' (follows it)' : w.bp === 'play' ? ' (play)' : w.bp === 'take' ? ' (takes the riders)' : w.bp?.startsWith('hold:') ? ' (riders stand at point ' + (Number(w.bp.slice(5)) + 1) + ')' : '')
     const c = d.wires.find(x => x.id === w.b)
     return c ? `${c.name || 'change'}: ${nameOf(c.a)} → ${nameOf(c.b)}` : '?'
   }
@@ -409,6 +516,42 @@ const Bar: React.FC<{ id: string; d: StateSpaceData; sel: string[]; setSel: (s: 
           const dots = n?.storyline?.dots ?? []
           if (n && dots.length) useCanvasStore.getState().jumpToPoint(n.x + (Math.min(...dots.map(p => p.x)) + Math.max(...dots.map(p => p.x))) / 2, n.y + (Math.min(...dots.map(p => p.y)) + Math.max(...dots.map(p => p.y))) / 2)
         }}>Go to</button>
+      </>}
+      {item.kind === 'path' && <>
+        <div style={gap}>WHICH PATH</div>
+        <div data-sp-paths="" style={{ flexShrink: 1, minHeight: 24, maxHeight: 150, overflowY: 'auto' }}>
+          {paths.length ? paths.map(c => {
+            const sp = scene.path(c.id)
+            return <div key={c.id} className="vb-sp-row" data-sp-pick-path={c.id} style={{ ...row, color: item.curve === c.id ? '#fff' : 'rgba(255,255,255,0.65)', fontWeight: item.curve === c.id ? 600 : 400 }}
+              onClick={() => { patchItem(id, item.id, { curve: c.id }); replaySpace(id) }}>
+              {item.curve === c.id ? '● ' : '○ '}{[sp?.name ?? 'Path', sp?.setName].filter(Boolean).join(', ')}{c.riders?.length ? `  (${c.riders.length} riding)` : ''}
+            </div>
+          }) : <div style={{ ...row, color: DIM, cursor: 'default', whiteSpace: 'normal', lineHeight: 1.4 }}>No paths yet. Draw one with the Curve tool.</div>}
+        </div>
+      </>}
+      {item.kind === 'act' && <>
+        <div style={gap}>WHILE TRUE, THE CARD IS</div>
+        <div style={chips}>
+          <button style={btn(item.do !== 'show')} title="Off the board while true, on it otherwise" onClick={() => { patchItem(id, item.id, { do: undefined }); replaySpace(id) }}>Hidden</button>
+          <button style={btn(item.do === 'show')} title="On the board while true, off it otherwise" onClick={() => { patchItem(id, item.id, { do: 'show' }); replaySpace(id) }}>Shown</button>
+        </div>
+        {!item.card && <div style={{ ...row, color: DIM, cursor: 'default', whiteSpace: 'normal', lineHeight: 1.4, marginTop: 6 }}>Drop a card on it to say which card.</div>}
+      </>}
+      {item.kind === 'choice' && <>
+        <div style={gap}>OPTIONS</div>
+        {(item.opts ?? []).map(o => (
+          <div key={o.id} style={{ display: 'flex', gap: 4, marginBottom: 4, flexShrink: 0 }}>
+<div style={{ flex: 1, minWidth: 0 }}><Text value={o.name} placeholder="option" onChange={(v, first) => patchItem(id, item.id, { opts: item.opts!.map(x => x.id === o.id ? { ...x, name: v } : x) }, first)} /></div>
+            <button style={{ ...btn(), alignSelf: 'stretch', padding: '0 8px' }} title="Take this option away" onClick={() => {
+              editSpace(id, s => ({ ...s, items: s.items.map(i => i.id === item.id ? { ...i, opts: i.opts!.filter(x => x.id !== o.id), chose: i.chose === o.id ? undefined : i.chose } : i), wires: s.wires.filter(w => !(w.a === item.id && w.ap === 'opt:' + o.id)) }))
+              replaySpace(id)
+            }}>×</button>
+          </div>
+        ))}
+        <div style={chips}>
+          <button style={btn()} onClick={() => patchItem(id, item.id, { opts: [...(item.opts ?? []), { id: Math.random().toString(36).slice(2, 8), name: '' }] })}>Add an option</button>
+          <button style={btn()} title="Forget the answer: it asks again when it is next reached" onClick={() => { patchItem(id, item.id, { chose: undefined }); replaySpace(id) }}>Ask again</button>
+        </div>
       </>}
       {item.kind === 'space' && <>
         <div style={gap}>WORKSPACE</div>
@@ -471,8 +614,8 @@ const Bar: React.FC<{ id: string; d: StateSpaceData; sel: string[]; setSel: (s: 
     const sig = k === 'signal' || k === 'cond'
     const a = endOf(d, wire.a, wire.ap), b = wire.bp === 'knob' ? undefined : endOf(d, wire.b, wire.bp)
     const lvl = sig && isLevel(a)
-    const then = k === 'cond' ? (b?.kind === 'event' ? 'THIS EVENT CAN GO THROUGH' : b?.kind === 'fact' ? (wire.bp === 'a' ? 'IS THE CARD LOOKED FOR' : 'IS WHAT IT IS LOOKED FOR IN') : 'COUNTS TOWARDS')
-      : wire.bp === 'knob' ? 'THIS CHANGE IS MADE' : b?.kind === 'event' ? 'THIS EVENT FIRES' : b?.kind === 'value' ? 'THIS VALUE CHANGES' : b?.kind === 'wait' ? 'THIS WAIT BEGINS' : b?.kind === 'pick' ? 'THIS PICKS ONE' : 'THIS IS LIT'
+    const then = k === 'cond' ? (b?.kind === 'event' ? 'THIS EVENT CAN GO THROUGH' : b?.kind === 'fact' ? (wire.bp === 'a' ? 'IS THE CARD LOOKED FOR' : 'IS WHAT IT IS LOOKED FOR IN') : b?.kind === 'path' ? (wire.bp === 'time' ? 'WHAT RIDES THIS FOLLOWS IT' : wire.bp === 'take' ? "THIS TAKES ITS SET'S RIDERS" : 'WHAT RIDES THIS STANDS THERE') : b?.kind === 'act' ? 'THIS ACTS' : 'COUNTS TOWARDS')
+      : wire.bp === 'knob' ? 'THIS CHANGE IS MADE' : b?.kind === 'event' ? 'THIS EVENT FIRES' : b?.kind === 'value' ? 'THIS VALUE CHANGES' : b?.kind === 'wait' ? 'THIS WAIT BEGINS' : b?.kind === 'pick' ? 'THIS PICKS ONE' : b?.kind === 'choice' ? 'THIS ASKS' : b?.kind === 'path' ? 'WHAT RIDES THIS SETS OFF' : 'THIS IS LIT'
     body = <>
       {!sig && <>
         <div style={label}>NAME</div>
@@ -480,7 +623,7 @@ const Bar: React.FC<{ id: string; d: StateSpaceData; sel: string[]; setSel: (s: 
       </>}
       <div style={sig ? label : gap}>{!sig ? 'FROM' : k === 'cond' ? (b?.kind === 'fact' ? 'THIS' : 'WHILE') : lvl ? 'WHEN THIS BECOMES TRUE' : 'WHEN'}</div>
       <div className="vb-sp-row" style={row} onClick={() => setSel([wire.a])}>{[fromName(wire), wireSays(d, wire)].filter(Boolean).join(' ')}</div>
-      {lvl && b?.kind !== 'fact' && <>
+      {lvl && b?.kind !== 'fact' && wire.ap !== 'time' && <>
         {a!.kind === 'value' && <>
           <div style={gap}>TRUE WHEN IT IS</div>
           <div style={chips}>
@@ -567,6 +710,9 @@ const SHELF: { key: string; kind: SpaceKind; name: string; title: string; more?:
   { key: 'or', kind: 'or', name: 'Or', title: 'Drag onto the ground: true while anything wired into it is true' },
   { key: 'fact', kind: 'fact', name: 'Is in', title: 'Drag onto the ground: true while one card is in another on the board, in its deck or linked to it' },
   { key: 'wait', kind: 'wait', name: 'Wait', title: 'Drag onto the ground: passes on what reaches it, some points later' },
+  { key: 'choice', kind: 'choice', name: 'Choose', title: 'Drag onto the ground: stops and asks; it goes on along the option that is clicked', more: { opts: [{ id: 'a', name: 'Yes' }, { id: 'b', name: 'No' }] } },
+  { key: 'act', kind: 'act', name: 'Show / hide', title: 'Drag onto the ground: hides a card on the board (or only then shows it) while what is wired into it is true. Drop a card on it to say which' },
+  { key: 'path', kind: 'path', name: 'Path', title: 'Drag onto the ground: a path drawn with the Curve tool, its points like a timeline\'s. What rides it can follow a timeline, and its points can send and hold' },
   { key: 'world', kind: 'timeline', name: 'World clock', title: 'Drag onto the ground: the world clock, as a timeline with an output for each of its points', more: { world: true } },
 ]
 
@@ -580,6 +726,8 @@ export function StateSpaceBody({ id, node, bodyW, bodyH }: { id: string; node: F
   // The storylines dragged in, as they are now (their points, their marker).
   const lines = useFreeNodeStore(useShallow(s => d.items.filter(i => i.kind === 'timeline').map(i => s.nodes[lineOf(i) ?? '']?.storyline)))
   const worldLine = useCanvasStore(s => s.worldClockLine)
+  // The paths drawn on the board, only where something in here is one.
+  const curves = useNotesStore(s => d.items.some(i => i.kind === 'path') ? s.curves : null)
   // The workspaces that are nodes in here, as they are now (what they show, what is lit in them).
   const inners = useFreeNodeStore(useShallow(s => d.items.filter(i => i.kind === 'space').map(i => s.nodes[i.space ?? '']?.stateSpace)))
   // The board, only where something in here reads it (a fact).
@@ -768,6 +916,15 @@ export function StateSpaceBody({ id, node, bodyW, bodyH }: { id: string; node: F
       })
       return
     }
+    const optEl = t.closest('[data-sp-opt]') as HTMLElement | null
+    if (optEl && optEl.dataset.spOf) {
+      // An option of a choice: a click answers it; a drag moves the node as anywhere else on it.
+      const p0 = local(e)
+      let far = false
+      const who = optEl.dataset.spOf, opt = optEl.dataset.spOpt!
+      window.addEventListener('pointermove', function seen(ev) { if (Math.hypot(local(ev).x - p0.x, local(ev).y - p0.y) > 3) { far = true; window.removeEventListener('pointermove', seen) } })
+      window.addEventListener('pointerup', () => { if (!far) choose(id, who, opt) }, { once: true })
+    }
     const stepEl = t.closest('[data-sp-step]') as HTMLElement | null
     const stepped = stepEl ? d.items.find(i => i.id === stepEl.dataset.spOf) : undefined
     if (stepped) {
@@ -843,7 +1000,7 @@ export function StateSpaceBody({ id, node, bodyW, bodyH }: { id: string; node: F
 
   const onDouble = (e: React.MouseEvent) => {
     const t = e.target as HTMLElement
-    if (t.closest('[data-sp-bar],[data-sp-shelf],[data-sp-track],[data-sp-port],[data-sp-play],[data-sp-step]')) return
+    if (t.closest('[data-sp-bar],[data-sp-shelf],[data-sp-track],[data-sp-port],[data-sp-play],[data-sp-step],[data-sp-opt]')) return
     e.stopPropagation()
     const nodeEl = t.closest('[data-sp-node]') as HTMLElement | null
     const it = nodeEl ? d.items.find(i => i.id === nodeEl.dataset.spNode) : undefined
@@ -856,9 +1013,9 @@ export function StateSpaceBody({ id, node, bodyW, bodyH }: { id: string; node: F
   }
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const wires = useMemo(() => d.wires.map(w => ({ w, g: wireGeom(d, w), kind: wireKind(d, w), tone: wireTone(d, w) })).filter((x): x is { w: SpaceWire; g: WireGeom; kind: ReturnType<typeof wireKind>; tone: string } => !!x.g), [d, lines, worldLine, inners])
+  const wires = useMemo(() => d.wires.map(w => ({ w, g: wireGeom(d, w), kind: wireKind(d, w), tone: wireTone(d, w) })).filter((x): x is { w: SpaceWire; g: WireGeom; kind: ReturnType<typeof wireKind>; tone: string } => !!x.g), [d, lines, worldLine, inners, curves])
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const ports = useMemo(() => d.items.flatMap(i => itemPorts(i).map(p => ({ item: i, ...p }))), [d, lines, worldLine, inners])
+  const ports = useMemo(() => d.items.flatMap(i => itemPorts(i).map(p => ({ item: i, ...p }))), [d, lines, worldLine, inners, curves])
   const marker = (tone: string) => `sp-${id}-${tone.replace(/[^a-z0-9]/gi, '')}`
   const tones = [STEEL, AMBER, VIOLET, GREEN, BLUE]
 
@@ -913,7 +1070,7 @@ export function StateSpaceBody({ id, node, bodyW, bodyH }: { id: string; node: F
                   style={{ animation: 'vbSpFlow .5s linear infinite' }} markerEnd={`url(#${marker(BLUE)})`} />
               })()}
             </svg>
-            {d.items.map(i => i.kind === 'timeline'
+            {d.items.map(i => i.kind === 'path' ? <PathView key={i.id} item={i} picked={sel.includes(i.id)} /> : i.kind === 'timeline'
               ? <TimelineView key={i.id} item={i} picked={sel.includes(i.id)} playing={playing === i.id} />
               : <NodeView key={i.id} item={i} picked={sel.includes(i.id)} stamp={pulse[i.id]} on={truths.has(i.id)} says={says[i.id]} />)}
             {/* A change's knob: where a wire that makes it lands. */}
@@ -931,17 +1088,17 @@ export function StateSpaceBody({ id, node, bodyW, bodyH }: { id: string; node: F
               const own = draw && sameRef(draw.from, ref)
               const can = !draw || own || draw.cands.some(c => sameRef(c.ref, ref))
               const hot = sameRef(draw?.snap, ref)
-              const tone = p.port === 'if' ? GREEN : kindTone(p.item.kind === 'space' ? endOf(d, p.item.id, p.port)?.kind : p.item.kind)
+              const tone = p.port === 'if' || p.port.startsWith('hold:') || p.port === 'take' ? GREEN : kindTone(p.item.kind === 'space' ? endOf(d, p.item.id, p.port)?.kind : p.item.kind)
               return <div key={p.item.id + p.port} data-sp-port={p.port} data-sp-of={p.item.id} data-sp-out={p.out ? '1' : '0'} className="vb-sp-port"
-                title={p.port === 'if' ? 'Only if: wire anything that is true or not here (a card, a value, And, Or, Is in) and this event only goes through while it is true' : p.port === 'a' ? 'The card looked for: wire a card node here' : p.port === 'b' ? 'What it is looked for in: wire a card node here' : p.out ? 'Out: drag from here to what follows' : 'In: drag a wire onto here'}
+                title={PORT_TITLE[p.port.split(':')[0]] ?? (p.port === 'if' ? 'Only if: wire anything that is true or not here (a card, a value, And, Or, Is in) and this event only goes through while it is true' : p.port === 'a' ? 'The card looked for: wire a card node here' : p.port === 'b' ? 'What it is looked for in: wire a card node here' : p.out ? 'Out: drag from here to what follows' : 'In: drag a wire onto here')}
                 style={{
-                  position: 'absolute', left: p.spot.x - 7, top: p.spot.y - 7, width: 14, height: 14, borderRadius: p.port === 'if' ? 3 : '50%', boxSizing: 'border-box',
+                  position: 'absolute', left: p.spot.x - 7, top: p.spot.y - 7, width: 14, height: 14, borderRadius: p.port === 'if' || p.port.startsWith('hold:') || p.port === 'take' ? 3 : '50%', boxSizing: 'border-box',
                   background: hot || own ? BLUE : p.out ? tone : GROUND, border: `2px solid ${hot || (draw && can && !own) ? BLUE : tone}`,
                   cursor: 'crosshair', opacity: draw && !can ? 0.2 : 1, transform: hot ? 'scale(1.5)' : undefined,
                 }} />
             })}
             {/* A timeline's points have an output on the top edge too. */}
-            {ports.filter(p => p.item.kind === 'timeline').map(p => {
+            {ports.filter(p => p.item.kind === 'timeline' && p.port.startsWith('pt:')).map(p => {
               const ref = { node: p.item.id, port: p.port }
               const own = draw && sameRef(draw.from, ref)
               return <div key={p.item.id + p.port + 'top'} data-sp-port={p.port} data-sp-of={p.item.id} data-sp-out="1" data-sp-top="" className="vb-sp-port" title="Out: drag from here to what happens at this point" style={{

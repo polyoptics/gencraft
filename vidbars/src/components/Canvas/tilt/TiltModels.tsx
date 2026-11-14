@@ -28,7 +28,7 @@ import type { PathFrame, PathHit } from '../../../three/pathOverlay'
 import { curveRuns, pointFrames, withLayers } from '../../../utils/curveGeom'
 import { PinLabels } from '../../Notes/PinLabels'
 import { sceneOf, sceneSpot, standsIn, dataKey, cardBox, frontShowing } from '../../../utils/area3dScene'
-import { rideSpots, rideRuns, useRideClock, riderOf } from '../../../utils/pathRide'
+import { rideSpots, rideRuns, useRideClock, useRideOverride, riderOf } from '../../../utils/pathRide'
 import { useUndoCoordinator } from '../../../store/undoCoordinator'
 import { useManip } from '../../../store/manipStore'
 import { flatLive, liveKeys } from '../../../utils/liveTop'
@@ -564,7 +564,7 @@ export const TiltModels: React.FC = () => {
       useBoardsStore.subscribe(warmSoon),
       // Settle turned back on: what was left turned rolls home.
       useTiltStore.subscribe((s, p) => { if (s.settle && !p.settle) view?.settleAll() }),
-      ...[useTiltStore, useCanvasStore, useFreeNodeStore, useBoardsStore, useViewport3DStore, useRailUiStore, useModelScaleStore, useNotesStore, useManip, useRideClock].map(s => s.subscribe(poke)),
+      ...[useTiltStore, useCanvasStore, useFreeNodeStore, useBoardsStore, useViewport3DStore, useRailUiStore, useModelScaleStore, useNotesStore, useManip, useRideClock, useRideOverride].map(s => s.subscribe(poke)),
     ]
     const pokes = ['pointermove', 'pointerdown', 'pointerup', 'wheel', 'keydown', 'keyup', 'resize'] as const
     for (const t of pokes) window.addEventListener(t, poke, { capture: true, passive: true })

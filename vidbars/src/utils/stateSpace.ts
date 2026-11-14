@@ -24,6 +24,16 @@
 //             its deck, or linked to it (a faction's members are its links).
 //   wait      passes what reaches it on, a number of points later.
 //   pick      passes what reaches it on along one of its wires, by chance.
+//   path      a path drawn with the Curve tool (in a 3D set or not): its
+//             points along it like a timeline's. A timeline's "time" wired to
+//             its "time" makes what rides it follow that timeline; "play"
+//             sets it going. Each point has an output (when a rider gets
+//             there) and an input (while true, its riders stand there); its
+//             "take" input, while true, has the other models of its set ride
+//             it. Nothing of the path is changed: only where riders are drawn.
+//   act       while what is wired into it is true, a card is hidden (or
+//             only then shown) on the board. Nothing of the card is changed.
+//   choice    stops and asks: it goes on along the option that is clicked.
 //   space     another workspace, dragged in by its header: a machine as one
 //             node. Its states, events and values each have an input (light
 //             it, fire it, change it) and an output (when it is lit, when
@@ -68,7 +78,7 @@ import { isTilted, unprojectTilt, useTiltStore } from '../store/tiltStore'
 import { applyState, deckCards, markChange } from './stateCard'
 import { rootOf } from './storyline'
 
-export type SpaceKind = 'card' | 'blank' | 'event' | 'any' | 'timeline' | 'value' | 'and' | 'or' | 'fact' | 'wait' | 'pick' | 'space'
+export type SpaceKind = 'card' | 'blank' | 'event' | 'any' | 'timeline' | 'value' | 'and' | 'or' | 'fact' | 'wait' | 'pick' | 'space' | 'path' | 'act' | 'choice'
 
 export interface SpaceItem {
   id: string
@@ -87,6 +97,14 @@ export interface SpaceItem {
   now?: boolean
   /** Lit before anything has happened (one per machine). */
   start?: boolean
+  /** path: the curve's id (store/notesStore). */
+  curve?: string
+  /** act: what it does to its card while true (without: hides it). */
+  do?: 'hide' | 'show'
+  /** choice: its options, the one last chosen, and whether it is waiting to be answered. */
+  opts?: { id: string; name: string }[]
+  chose?: string
+  asking?: boolean
   /** space: the other workspace's node id. */
   space?: string
   /** timeline: the world clock's storyline, whichever it is, not `line`. */
@@ -104,7 +122,7 @@ export interface SpaceItem {
 
 export type Compare = '<' | '<=' | '=' | '!=' | '>=' | '>'
 
-export type InPort = 'in' | 'if' | 'knob' | 'a' | 'b' | `in:${string}`
+export type InPort = 'in' | 'if' | 'knob' | 'a' | 'b' | 'time' | 'play' | 'take' | `in:${string}` | `hold:${string}`
 
 export interface SpaceWire {
   id: string
@@ -156,6 +174,10 @@ export const FACT_W = 124
 export const FACT_H = 62
 export const WAIT_W = 108
 export const SPACE_W = 190
+export const ACT_W = 138
+export const CHOICE_W = 150
+export const CHOICE_HEAD = 26
+export const CHOICE_ROW = 24
 export const SPACE_ROW = 22
 export const SPACE_HEAD = 28
 export const SMALL_W = 84
@@ -166,6 +188,33 @@ export const PORT_SNAP = 24
 export const SPACE_GRID = 10
 
 const uid = () => crypto.randomUUID().slice(0, 8)
+
+// ── The scene, as it is handed in ──
+// What a workspace needs to know of paths, and what it asks of the board,
+// comes through here (utils/stateScene fills it in at startup): importing
+// the path code into this file would close a ring of imports.
+
+export interface ScenePath {
+  name: string
+  /** Its 3D set's name, when it is in one. */
+  setName?: string
+  /** How many points it has. */
+  n: number
+  /** A few words for each point, where it has any (the point's own label). */
+  labels: string[]
+  /** When on its ride clock a rider is at each point (empty: nothing rides it). */
+  times: number[]
+  /** How long its set's rides take, and where the clock is now. */
+  total: number
+  now: number
+}
+export const scene: {
+  path: (curveId: string | undefined) => ScenePath | null
+  /** Called when what is lit or true may have changed: the board follows. */
+  sync: () => void
+  /** Set a path's riders going from the start. */
+  play: (curveId: string) => void
+} = { path: () => null, sync: () => {}, play: () => {} }
 
 // ── Reading ──
 
@@ -214,9 +263,9 @@ const itemOf = (d: StateSpaceData, id: string | undefined) => d.items.find(i => 
 const wireOf = (d: StateSpaceData, id: string | undefined) => d.wires.find(w => w.id === id)
 const isState = (i: SpaceItem | undefined) => i?.kind === 'card' || i?.kind === 'blank'
 /** True or not at any moment: can be a condition. */
-export const isLevel = (i: SpaceItem | undefined) => isState(i) || i?.kind === 'value' || i?.kind === 'and' || i?.kind === 'or' || i?.kind === 'fact'
+export const isLevel = (i: SpaceItem | undefined) => isState(i) || i?.kind === 'value' || i?.kind === 'and' || i?.kind === 'or' || i?.kind === 'fact' || i?.kind === 'act'
 /** Reads conditions through its inputs, never signals. */
-const readsLevels = (i: SpaceItem | undefined) => i?.kind === 'and' || i?.kind === 'or' || i?.kind === 'fact'
+const readsLevels = (i: SpaceItem | undefined) => i?.kind === 'and' || i?.kind === 'or' || i?.kind === 'fact' || i?.kind === 'act'
 /** What a workspace shows of itself as a node in another: its states, its
  *  events and its values. */
 export function exposed(spaceId: string | undefined): SpaceItem[] {
@@ -238,7 +287,9 @@ export const lineOf = (i: SpaceItem | undefined): string | undefined => i?.world
  *  signal: "when this, then that". */
 export function wireKind(d: StateSpaceData, w: SpaceWire): 'change' | 'link' | 'signal' | 'cond' {
   const a = itemOf(d, w.a)
-  if (w.bp === 'if' || (w.bp !== 'knob' && readsLevels(itemOf(d, w.b)))) return 'cond'
+  if (w.bp === 'if' || w.ap === 'time' || (w.bp !== 'knob' && readsLevels(itemOf(d, w.b)))) return 'cond'
+  // Into a path: only "play" is something that happens; the rest holds while true.
+  if (w.bp !== 'knob' && w.bp !== 'play' && itemOf(d, w.b)?.kind === 'path') return 'cond'
   if (w.x) return 'signal'
   if ((w.bp ?? 'in') === 'in' && !w.ap && (isState(a) || a?.kind === 'any') && isState(itemOf(d, w.b))) return w.plain ? 'link' : 'change'
   return 'signal'
@@ -305,11 +356,17 @@ export function itemSize(i: SpaceItem): { w: number; h: number } {
   if (i.kind === 'value') return { w: VALUE_W, h: VALUE_H }
   if (i.kind === 'and' || i.kind === 'or') return { w: GATE_W, h: GATE_H }
   if (i.kind === 'fact') return { w: FACT_W, h: FACT_H }
+  if (i.kind === 'path') return { w: (Math.max(1, scene.path(i.curve)?.n ?? 0) + 1) * pathStep(i), h: TL_H }
+  if (i.kind === 'act') return { w: ACT_W, h: EVENT_H }
+  if (i.kind === 'choice') return { w: CHOICE_W, h: CHOICE_HEAD + Math.max(1, i.opts?.length ?? 0) * CHOICE_ROW + 5 }
   if (i.kind === 'space') return { w: SPACE_W, h: SPACE_HEAD + Math.max(1, exposed(i.space).length) * SPACE_ROW + 6 }
   if (i.kind === 'wait') return { w: WAIT_W, h: SMALL_H }
   if (i.kind === 'pick') return { w: SMALL_W, h: SMALL_H }
   return { w: ICON, h: ICON }
 }
+
+/** A path node's step from point to point: a timeline's, less for a path of many points. */
+export const pathStep = (i: SpaceItem): number => Math.max(34, Math.min(TL_STEP, 880 / ((scene.path(i.curve)?.n ?? 0) + 1)))
 
 export interface PortRef { node?: string; wire?: string; port: string }
 export interface PortSpot { x: number; y: number; dx: number; dy: number }
@@ -322,7 +379,21 @@ export function itemPorts(i: SpaceItem): { port: string; out: boolean; spot: Por
   if (i.kind === 'event') return [{ port: 'in', out: false, spot: L }, { port: 'out', out: true, spot: R }, { port: 'if', out: false, spot: { x: i.x, y: i.y - h / 2, dx: 0, dy: -1 } }]
   if (i.kind === 'timeline') {
     const c = lineClock(lineOf(i))
-    return (c?.dots ?? []).map(p => ({ port: 'pt:' + p.id, out: true, spot: { x: i.x - w / 2 + p.frac * w, y: i.y + h / 2, dx: 0, dy: 1 } }))
+    return [...(c?.dots ?? []).map(p => ({ port: 'pt:' + p.id, out: true, spot: { x: i.x - w / 2 + p.frac * w, y: i.y + h / 2, dx: 0, dy: 1 } })), { port: 'time', out: true, spot: R }]
+  }
+  if (i.kind === 'path') {
+    const n = scene.path(i.curve)?.n ?? 0
+    const at = (k: number) => i.x - w / 2 + (k + 1) / (n + 1) * w
+    return [
+      { port: 'time', out: false, spot: { ...L, y: i.y - 22 } }, { port: 'play', out: false, spot: L }, { port: 'take', out: false, spot: { ...L, y: i.y + 22 } },
+      ...Array.from({ length: n }, (_, k) => ({ port: 'hold:' + k, out: false, spot: { x: at(k), y: i.y - h / 2, dx: 0, dy: -1 } })),
+      ...Array.from({ length: n }, (_, k) => ({ port: 'pp:' + k, out: true, spot: { x: at(k), y: i.y + h / 2, dx: 0, dy: 1 } })),
+    ]
+  }
+  if (i.kind === 'act') return [{ port: 'in', out: false, spot: L }]
+  if (i.kind === 'choice') {
+    return [{ port: 'in', out: false, spot: { ...L, y: i.y - h / 2 + CHOICE_HEAD / 2 } },
+      ...(i.opts ?? []).map((o, k) => ({ port: 'opt:' + o.id, out: true, spot: { ...R, y: i.y - h / 2 + CHOICE_HEAD + (k + 0.5) * CHOICE_ROW } }))]
   }
   if (i.kind === 'space') {
     return exposed(i.space).flatMap((x, k) => {
@@ -364,7 +435,7 @@ export function portSpot(d: StateSpaceData, ref: PortRef): PortSpot | null {
 export function outSpot(d: StateSpaceData, ref: PortRef, y: number): PortSpot | null {
   const p = portSpot(d, ref)
   const i = itemOf(d, ref.node)
-  if (!p || i?.kind !== 'timeline' || y >= i.y) return p
+  if (!p || i?.kind !== 'timeline' || !ref.port.startsWith('pt:') || y >= i.y) return p
   return { x: p.x, y: i.y - TL_H / 2, dx: 0, dy: -1 }
 }
 
@@ -410,12 +481,17 @@ export function canWire(d: StateSpaceData, from: PortRef, to: PortRef): boolean 
   if (!a) return false
   if (to.wire) {
     const w = wireOf(d, to.wire)
-    return !!w && wireKind(d, w) === 'change' && a.kind !== 'any'
+    return !!w && wireKind(d, w) === 'change' && a.kind !== 'any' && from.port !== 'time'
   }
   const b = itemOf(d, to.node)
   if (!b || b.id === A.id) return false
+  // A timeline's time goes only to a path's, and a path's time takes only that.
+  if (from.port === 'time' || to.port === 'time') return from.port === 'time' && to.port === 'time' && b.kind === 'path'
   if (isState(b)) return to.port === 'in'
   if (a.kind === 'any') return false
+  if (b.kind === 'path') return to.port === 'play' || ((to.port === 'take' || to.port.startsWith('hold:')) && isLevel(a))
+  if (b.kind === 'act') return to.port === 'in' && isLevel(a)
+  if (b.kind === 'choice') return to.port === 'in'
   if (b.kind === 'space') return to.port.startsWith('in:') && !!endOf(d, b.id, to.port)
   if (b.kind === 'fact') return (to.port === 'a' || to.port === 'b') && a.kind === 'card' && !!a.card
   if (b.kind === 'and' || b.kind === 'or') return to.port === 'in' && isLevel(a)
@@ -497,6 +573,10 @@ interface Run {
   used: string[]
   /** Waits reached with no timeline behind them: they go on in real time. */
   later: { id: string; n: number }[]
+  /** Paths told to play (by the wire that told them). */
+  plays: { wire: string; node: string }[]
+  /** Choices reached and not answered. */
+  asking: Set<string>
   steps: number
 }
 interface RunOpts {
@@ -507,7 +587,7 @@ interface RunOpts {
 }
 
 function runner(d: StateSpaceData, lit: Set<string>, vals: Map<string, number>, opts: RunOpts = {}) {
-  const r: Run = { lit, vals, touched: new Set(), fired: [], used: [], later: [], steps: 0 }
+  const r: Run = { lit, vals, touched: new Set(), fired: [], used: [], later: [], plays: [], asking: new Set(), steps: 0 }
   const machines = new Map<string, Set<string>>()
   const machine = (id: string) => { let m = machines.get(id); if (!m) { m = machineOf(d, id); for (const x of m) machines.set(x, m) } return m }
   const groups = d.items.some(i => i.kind === 'fact') ? useBoardsStore.getState().groups : []
@@ -529,7 +609,7 @@ function runner(d: StateSpaceData, lit: Set<string>, vals: Map<string, number>, 
       }
       return t
     }
-    if (i.kind !== 'and' && i.kind !== 'or') return false
+    if (i.kind !== 'and' && i.kind !== 'or' && i.kind !== 'act') return false
     seen.add(id)
     const ins = d.wires.filter(w => w.b === id && w.bp !== 'knob')
     const t = i.kind === 'and' ? ins.length > 0 && ins.every(w => wireTruth(w, seen)) : ins.some(w => wireTruth(w, seen))
@@ -569,6 +649,8 @@ function runner(d: StateSpaceData, lit: Set<string>, vals: Map<string, number>, 
     else if (t?.kind === 'value') set(t.id, w.op === 'set' ? w.on ?? 0 : (r.vals.get(t.id) ?? 0) + (w.on ?? 1))
     else if (t?.kind === 'wait') wait(t)
     else if (t?.kind === 'pick') pick(t)
+    else if (t?.kind === 'choice') choice(t)
+    else if (t?.kind === 'path') r.plays.push({ wire: w.id, node: t.id })
     else light(w.b)
   }
   /** Send along every wire out of a node (a timeline: out of one point). */
@@ -627,6 +709,19 @@ function runner(d: StateSpaceData, lit: Set<string>, vals: Map<string, number>, 
     r.fired.push(t.id)
     go(outs[opts.replay ? chance((t.seed ?? 1) + rolls++ * 7919, outs.length) : Math.floor(Math.random() * outs.length)])
   }
+  /** A choice: as a timeline plays, on along the option chosen (asking,
+   *  when none is yet); reached by hand, it asks every time. */
+  const choice = (t: SpaceItem) => {
+    if (opts.replay && t.chose && t.opts?.some(o => o.id === t.chose)) { r.fired.push(t.id); signals(t.id, 'opt:' + t.chose) }
+    else r.asking.add(t.id)
+  }
+  /** Something along a timeline that is not one of its points (a rider
+   *  reaching a point of a path that follows it), after its `idx`th point. */
+  const spot = (node: string, port: string, tl: string | null, idx: number) => {
+    ctx = tl ? { tl, idx } : null
+    signals(node, port)
+    ctx = null
+  }
   /** A timeline's marker passes its `idx`th point. */
   const point = (tl: string, dot: string, idx: number) => {
     ctx = { tl, idx }
@@ -640,7 +735,7 @@ function runner(d: StateSpaceData, lit: Set<string>, vals: Map<string, number>, 
   }
   /** A wait's time is up. */
   const resume = (id: string) => { const t = itemOf(d, id); if (t?.kind === 'pick') pick(t); else { r.fired.push(id); signals(id) } }
-  return { r, light, fire, change, set, point, resume, recheck, truth, wireTruth, machine }
+  return { r, light, fire, change, set, point, spot, resume, signals, recheck, truth, wireTruth, machine }
 }
 
 /** 0..n-1 from a seed, the same every time. */
@@ -747,13 +842,15 @@ function show(nodeId: string, wires: string[], fired: string[]): void {
 const lastRun = new Map<string, Set<string>>()
 
 /** Write what is lit and what the values are, and let the State cards follow. */
-function settle(nodeId: string, lit: Set<string>, vals: Map<string, number>, fired: string[]): void {
+function settle(nodeId: string, lit: Set<string>, vals: Map<string, number>, fired: string[], asking: Set<string>, replay: boolean): void {
   const d = spaceOf(nodeId)
   if (!d) return
   const newly = d.items.filter(i => lit.has(i.id) && !i.now)
-  const same = (i: SpaceItem) => lit.has(i.id) === !!i.now && (i.kind !== 'value' || (vals.get(i.id) ?? 0) === valOf(i))
+  // A choice asks from when it is reached until it is answered; a replay knows afresh which ask.
+  const asks = (i: SpaceItem) => i.kind === 'choice' && (asking.has(i.id) || (!replay && !!i.asking))
+  const same = (i: SpaceItem) => lit.has(i.id) === !!i.now && (i.kind !== 'value' || (vals.get(i.id) ?? 0) === valOf(i)) && (i.kind !== 'choice' || asks(i) === !!i.asking)
   if (!d.items.every(same)) {
-    editSpace(nodeId, s => ({ ...s, items: s.items.map(i => same(i) ? i : { ...i, now: lit.has(i.id) || undefined, ...(i.kind === 'value' ? { val: vals.get(i.id) ?? 0 } : {}) }) }), false)
+    editSpace(nodeId, s => ({ ...s, items: s.items.map(i => same(i) ? i : { ...i, now: lit.has(i.id) || undefined, ...(i.kind === 'value' ? { val: vals.get(i.id) ?? 0 } : {}), ...(i.kind === 'choice' ? { asking: asks(i) || undefined } : {}) }) }), false)
   }
   const groups = useBoardsStore.getState().groups
   // State cards whose state decks hold a newly lit node's card pick that state.
@@ -790,9 +887,17 @@ function finish(w: World, r: Run, pre: string[], onlyNew: boolean): void {
       const pfx = ws + SEP
       const vals = new Map<string, number>()
       for (const [k, v] of r.vals) if (k.startsWith(pfx)) vals.set(k.slice(pfx.length), v)
-      settle(ws, new Set(own(ws, r.lit)), vals, own(ws, r.fired))
+      settle(ws, new Set(own(ws, r.lit)), vals, own(ws, r.fired), new Set(own(ws, r.asking)), onlyNew)
+      // Paths told to play: only by what has newly happened.
+      const d = spaceOf(ws)
+      for (const pl of r.plays) {
+        const wire = own(ws, [pl.wire])[0]
+        const node = wire && used.includes(wire) ? itemOf(d ?? emptyStateSpace(), pl.node.slice(pl.node.indexOf(SEP) + 1)) : undefined
+        if (node?.curve) scene.play(node.curve)
+      }
     }
   } finally { following = false }
+  scene.sync()
 }
 /** Set while a workspace is making State cards follow it, so that their
  *  change is not read back as news (startStateSpaces). */
@@ -808,14 +913,27 @@ export function replaySpace(nodeId: string): string[] {
   if (!w) return []
   const d = w.d
   const reach = driven(d)
-  if (!reach.size) return w.ids
+  if (!reach.size) { scene.sync(); return w.ids }
   const lit = new Set(d.items.filter(i => reach.has(i.id) ? i.start : i.now).map(i => i.id))
   const vals = new Map(d.items.filter(i => i.kind === 'value').map(i => [i.id, reach.has(i.id) ? i.init ?? 0 : valOf(i)]))
   const run = runner(d, lit, vals, { replay: true })
   for (const tl of d.items) {
     if (tl.kind !== 'timeline') continue
     const c = lineClock(lineOf(tl))
-    c?.dots.forEach((p, idx) => { if (p.at <= c.at) run.point(tl.id, p.id, idx) })
+    if (!c) continue
+    // What happens along it, in order: its own points, and for each path
+    // that follows its time, a rider reaching each of that path's points.
+    const here = c.toFrac(c.at)
+    const plan: { frac: number; go: (idx: number) => void; dot: boolean }[] = c.dots.filter(p => p.at <= c.at).map(p => ({ frac: p.frac, dot: true, go: idx => run.point(tl.id, p.id, idx) }))
+    for (const t of d.wires) {
+      if (t.a !== tl.id || t.ap !== 'time' || t.bp !== 'time') continue
+      const path = itemOf(d, t.b), sp = scene.path(path?.curve)
+      if (!path || !sp || sp.total <= 0) continue
+      sp.times.forEach((when, k) => { const frac = when / sp.total; if (frac <= here) plan.push({ frac, dot: false, go: idx => run.spot(path.id, 'pp:' + k, tl.id, idx) }) })
+    }
+    plan.sort((m, n) => m.frac - n.frac || (m.dot === n.dot ? 0 : m.dot ? -1 : 1))
+    let idx = -1
+    for (const e of plan) { if (e.dot) idx++; e.go(idx) }
   }
   finish(w, run.r, [], true)
   return w.ids
@@ -862,6 +980,60 @@ export function fireEvent(nodeId: string, itemId: string): void {
 export function makeChange(nodeId: string, wireId: string): void {
   const w = wireOf(spaceOf(nodeId) ?? emptyStateSpace(), wireId)
   if (w) setNow(nodeId, w.b, true)
+}
+
+/** Answer a choice: it goes on along that option. Where a timeline drives
+ *  it the story is played again with that answer (so another can be tried);
+ *  otherwise it goes on from here. */
+export function choose(nodeId: string, itemId: string, optId: string): void {
+  const it = itemOf(spaceOf(nodeId) ?? emptyStateSpace(), itemId)
+  if (it?.kind !== 'choice' || !it.opts?.some(o => o.id === optId)) return
+  useUndoCoordinator.getState().checkpoint()
+  const w = worldOf(nodeId)
+  const timed = !!w && driven(w.d).has(keyOf(nodeId, itemId))
+  editSpace(nodeId, d => ({ ...d, items: d.items.map(i => i.id === itemId ? { ...i, chose: optId, asking: undefined } : i) }), false)
+  if (timed) replaySpace(nodeId)
+  else hand(nodeId, (run, k) => { run.r.fired.push(k(itemId)); run.signals(k(itemId), 'opt:' + optId) })
+}
+
+/** A rider has reached point `i` of a path as its clock runs by itself:
+ *  every path node of that path sends from that point (those that follow a
+ *  timeline's time do so as that timeline plays instead). */
+export function pathPoint(curveId: string, i: number): void {
+  for (const n of Object.values(useFreeNodeStore.getState().nodes)) {
+    const d = n.type === 'stateSpace' && n.stateSpace ? normalizeSpace(n.stateSpace) : null
+    for (const node of d?.items ?? []) {
+      if (node.kind !== 'path' || node.curve !== curveId || d!.wires.some(w => w.b === node.id && w.bp === 'time')) continue
+      if (d!.wires.some(w => w.a === node.id && w.ap === 'pp:' + i)) hand(n.id, (run, k) => run.spot(k(node.id), 'pp:' + i, null, 0))
+    }
+  }
+}
+
+/** What the workspaces ask of the board as things stand: paths whose riders
+ *  stand at a point, paths that take their set's other riders, paths that
+ *  follow a timeline (and how far along it is), cards hidden. */
+export function sceneState(): { hold: Record<string, number>; take: string[]; follow: Record<string, number>; hidden: string[] } {
+  const out = { hold: {} as Record<string, number>, take: [] as string[], follow: {} as Record<string, number>, hidden: [] as string[] }
+  const done = new Set<string>()
+  for (const n of Object.values(useFreeNodeStore.getState().nodes)) {
+    if (n.type !== 'stateSpace' || done.has(n.id)) continue
+    const w = worldOf(n.id)
+    if (!w) continue
+    for (const id of w.ids) done.add(id)
+    if (!w.d.items.some(i => i.kind === 'path' || i.kind === 'act')) continue
+    const run = runner(w.d, litOf(w.d), valsOf(w.d))
+    for (const i of w.d.items) {
+      if (i.kind === 'act' && i.card) { if (run.truth(i.id) === (i.do !== 'show')) out.hidden.push(i.card) }
+      if (i.kind !== 'path' || !i.curve) continue
+      for (const t of w.d.wires) {
+        if (t.b !== i.id || t.bp === 'knob') continue
+        if (t.bp === 'time') { const c = lineClock(lineOf(itemOf(w.d, t.a))); if (c) out.follow[i.curve] = c.toFrac(c.at) }
+        else if (t.bp === 'take') { if (run.wireTruth(t)) out.take.push(i.curve) }
+        else if (t.bp?.startsWith('hold:') && run.wireTruth(t)) out.hold[i.curve] = Number(t.bp.slice(5))
+      }
+    }
+  }
+  return out
 }
 
 /** Give a value a number by hand. */
@@ -1003,8 +1175,15 @@ export function dropOnStateSpace(clientX: number, clientY: number, cards: string
   const groups = useBoardsStore.getState().groups
   const ok = cards.map(c => groups.find(g => g.id === c)).filter((g): g is NonNullable<typeof g> => !!g && !g.effect)
   if (!ok.length) return false
+  // Onto a show / hide node: that is the card it shows or hides.
+  const onto = spaceOf(at.nodeId)?.items.find(i => i.kind === 'act' && Math.abs(i.x - at.x) <= ACT_W / 2 + 8 && Math.abs(i.y - at.y) <= EVENT_H / 2 + 8)
+  if (onto) {
+    editSpace(at.nodeId, d => ({ ...d, items: d.items.map(i => i.id === onto.id ? { ...i, card: ok[0].id } : i) }), false)
+    scene.sync()
+    return true
+  }
   editSpace(at.nodeId, d => {
-    const have = new Set(d.items.map(i => i.card))
+    const have = new Set(d.items.filter(i => i.kind !== 'act').map(i => i.card))
     const fresh = ok.filter(g => !have.has(g.id))
     if (!fresh.length) return d
     let x = snap(at.x)

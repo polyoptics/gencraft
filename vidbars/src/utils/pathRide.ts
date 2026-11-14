@@ -369,7 +369,14 @@ export function riderOf(key: string, curves = useNotesStore.getState().curves): 
   return null
 }
 
-let memo: { curves: unknown; nodes: unknown; clocks: unknown; now: number; map: Map<string, RideSpot> } | null = null
+/** Rides as a state workspace has them for now (utils/stateSpace, its path
+ *  nodes): nothing of the paths themselves is changed, only where their
+ *  riders are drawn. `hold`: a path's riders stand at one of its points
+ *  (by the path's id). `take`: a model rides another path than its own (by
+ *  the model's key). */
+export const useRideOverride = create<{ hold: Record<string, number>; take: Record<string, string> }>(() => ({ hold: {}, take: {} }))
+
+let memo: { curves: unknown; nodes: unknown; clocks: unknown; over: unknown; now: number; map: Map<string, RideSpot> } | null = null
 /** Every riding model's place now, by its key: each where its path has it
  *  at its set's clock. (The same map, by identity, while the paths and
  *  the clocks stand still, and within one frame.) */
@@ -377,14 +384,22 @@ export function rideSpots(): Map<string, RideSpot> {
   const curves = useNotesStore.getState().curves, nodes = useFreeNodeStore.getState().nodes
   const { clocks, playing } = useRideClock.getState()
   const now = playing ? frameNow() : 0
-  if (memo && memo.curves === curves && memo.nodes === nodes && memo.clocks === clocks && memo.now === now) return memo.map
+  const over = useRideOverride.getState()
+  if (memo && memo.curves === curves && memo.nodes === nodes && memo.clocks === clocks && memo.over === over && memo.now === now) return memo.map
   const map = new Map<string, RideSpot>()
+  const at = (c: Curve, r: PathRider) => {
+    const stop = over.hold[c.id]
+    return rideSpot(c, r, stop === undefined ? rideTime(rideSetOf(c)) : ridePointTime(c, r, stop))
+  }
   for (const c of Object.values(curves)) {
     if (!c.riders?.length || c.pts.length < 2) continue
-    const time = rideTime(rideSetOf(c))
-    for (const r of c.riders) map.set(r.key, rideSpot(c, r, time))
+    for (const r of c.riders) {
+      // Taken onto another path for now: it rides that one, as it rides its own.
+      const to = over.take[r.key] !== undefined && over.take[r.key] !== c.id ? curves[over.take[r.key]] : undefined
+      map.set(r.key, to && to.pts.length >= 2 ? at(to, r) : at(c, r))
+    }
   }
-  memo = { curves, nodes, clocks, now, map }
+  memo = { curves, nodes, clocks, over, now, map }
   return map
 }
 
