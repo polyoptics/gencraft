@@ -2351,7 +2351,7 @@ const RolodexCardPreview: React.FC<{
 /** Glyph per free-node type — matches the tile headers on canvas. */
 const FREENODE_GLYPHS: Record<FreeNodeData['type'], string> = {
   model: '◆', image: '🖼', video: '▶', audio: '♪', text: 'T', note: '📝', list: '≔',
-  pool: '▦', prompt: '✎', history: '⟲', effect: '✦', rail: '⟳', cabinet: '🗄', filmMixer: '🎞', storyline: '⑂', roughCut: '✂', attributes: '☷', promptCards: '✎', annotations: '⌖', area: '▦',
+  pool: '▦', prompt: '✎', history: '⟲', effect: '✦', rail: '⟳', cabinet: '🗄', filmMixer: '🎞', storyline: '⑂', roughCut: '✂', attributes: '☷', promptCards: '✎', annotations: '⌖', area: '▦', stateSpace: '⇄',
 }
 
 /** A file from a magneted Media Pool. Same geometry as the other slots so

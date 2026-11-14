@@ -35,7 +35,7 @@ import { useRailUiStore } from '../store/railUiStore'
 import type { RailDropTarget } from './rail'
 import type { EffectKind } from './fx/effects'
 
-export type PlaceKind = 'viewer' | 'pool' | 'prompt' | 'history' | 'browser' | 'filmMixer' | 'storyline' | 'cabinet' | 'roughCut' | 'loopStrip' | 'attributes' | 'promptCards' | 'area' | 'new'
+export type PlaceKind = 'viewer' | 'pool' | 'prompt' | 'history' | 'browser' | 'filmMixer' | 'storyline' | 'cabinet' | 'roughCut' | 'loopStrip' | 'attributes' | 'promptCards' | 'area' | 'stateSpace' | 'new'
   /** An effect card picked off the Effects palette (`effect` says which). */
   | 'effect'
 

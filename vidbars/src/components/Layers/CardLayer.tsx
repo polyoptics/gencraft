@@ -28,6 +28,7 @@ import { DEFAULT_H } from '../../utils/barConstants'
 import { groupSlot, clampGroupMove } from '../../utils/nlePush'
 import { useMagnetPreviewStore } from '../../store/magnetPreviewStore'
 import { updateDeckMagnetPreview, finishDeckMagnetDock } from '../../utils/deckDockDrag'
+import { dropOnStateSpace } from '../../utils/stateSpace'
 import { groupHasBrowsableContent } from '../../utils/contentTraversal'
 import { FreeCanvas } from '../Canvas/FreeCanvas'
 import { storyCarried, storyLinkOf, unlinkCardFromStorylines } from '../Canvas/StorylineLayer'
@@ -1190,6 +1191,14 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
       // join it as members, as their link "+" does, and go back to where
       // they were picked up. Never merged into it as blocks. The press took
       // the checkpoint: one undo puts it all back.
+      // Let go over a state workspace: the cards become icons there (links),
+      // and go back to where they were picked up (utils/stateSpace).
+      if (!group.pin && moved && dropOnStateSpace(ev.clientX, ev.clientY, picked)) {
+        useBoardsStore.getState().setGroupPosBatch(Array.from(initialOrigins, ([gid, o]) => ({ groupId: gid, originY: o.y, originX: o.x })))
+        endDockedDrag(draggingIds, false)
+        useMagnetPreviewStore.getState().setPreview(null)
+        return
+      }
       if (!group.pin && moved) {
         const bs = useBoardsStore.getState()
         const own = new Set(draggingIds)
@@ -2273,6 +2282,14 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
         previewCardRail(null, deck.anchorGroupId)
         useBoardsStore.getState().setGroupPosBatch(Array.from(initialOrigins, ([gid, o]) => ({ groupId: gid, originY: o.y, originX: o.x })))
         stowCards(allDragIds, drawer)
+        useMagnetPreviewStore.getState().setPreview(null)
+        return
+      }
+      // Over a state workspace: the deck becomes one icon there, and goes back.
+      if (!anchorGroup.pin && (dxAccum !== 0 || dyAccum !== 0) && dropOnStateSpace(ev.clientX, ev.clientY, [deck.anchorGroupId])) {
+        previewCardRail(null, deck.anchorGroupId)
+        useBoardsStore.getState().setGroupPosBatch(Array.from(initialOrigins, ([gid, o]) => ({ groupId: gid, originY: o.y, originX: o.x })))
+        endDockedDrag([deck.anchorGroupId], false)
         useMagnetPreviewStore.getState().setPreview(null)
         return
       }

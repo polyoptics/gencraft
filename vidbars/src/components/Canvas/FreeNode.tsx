@@ -28,6 +28,7 @@ import { edgeColorFromHex } from '../../utils/colorUtils'
 import { findMagnetCandidate, magnetRadiusForZoom, viewportVisualRect, type WindowRect } from '../../utils/viewportDocking'
 import { tileBrowseItem, isDockableTile } from '../../utils/contentTraversal'
 import { snapPanelToPanel, isPanelType, adjacentPanels } from '../../utils/componentLinks'
+import { StateSpaceBody } from '../StateSpace/StateSpaceBody'
 import { panelContentScale, clampUiScale } from '../UI/PanelSurface'
 import { CardRolodex } from '../Rolodex/CardRolodex'
 import { RoughCutBody } from '../RoughCut/RoughCutBody'
@@ -2069,6 +2070,11 @@ const FreeNodeBody: React.FC<{
   if (node.type === 'area') {
     return (
       <CanvasUnits w={bodyW} h={bodyH} r={bodyR}><AreaBody node={node} bodyW={bodyW} bodyH={bodyH} /></CanvasUnits>
+    )
+  }
+  if (node.type === 'stateSpace') {
+    return (
+      <CanvasUnits w={bodyW} h={bodyH} r={bodyR}><StateSpaceBody id={id} node={node} /></CanvasUnits>
     )
   }
   if (node.type === 'roughCut') {

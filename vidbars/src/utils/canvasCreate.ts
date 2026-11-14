@@ -60,7 +60,7 @@ export function addFreeNodeCentered(
     ...(type === 'pool' ? { uiScale: poolUiScale(zoom) } : {}),
     // Its contents scale with it, like a photograph (PanelSurface ContentScaled),
     // so they open at the size the window opens at.
-    ...(type === 'attributes' || type === 'promptCards' ? { uiScale: clampUiScale(createScaleFor(zoom)) } : {}),
+    ...(type === 'attributes' || type === 'promptCards' || type === 'stateSpace' ? { uiScale: clampUiScale(createScaleFor(zoom)) } : {}),
   })
   return id
 }

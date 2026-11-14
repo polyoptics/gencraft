@@ -135,6 +135,15 @@ const IcScene3d: React.FC<SvgProps> = ({ size }) => (
   </svg>
 )
 
+/** State workspace — two icons and the arrow between them. Accent: the lit one. */
+const IcStateSpace: React.FC<SvgProps> = ({ size }) => (
+  <svg {...svgBase(size)}>
+    <rect x="2.5" y="4" width="7" height="7" rx="1.6" stroke={A.cyan} />
+    <rect x="14.5" y="13" width="7" height="7" rx="1.6" stroke={S} />
+    <path d="M9.5 7.5h5.2a3.3 3.3 0 0 1 3.3 3.3V13M16 11l2 2 2-2" stroke={S} strokeWidth="1.2" />
+  </svg>
+)
+
 /** Project cabinet — a chest of drawers. Accent: the pulls. */
 const IcCabinet: React.FC<SvgProps> = ({ size }) => (
   <svg {...svgBase(size)}>
@@ -288,10 +297,10 @@ const IcNotes: React.FC<SvgProps> = ({ size }) => (
 // follows here.
 type BarId =
   | 'viewer' | 'pool' | 'prompt' | 'promptCards' | 'history' | 'browser' | 'attributes' | 'filmMixer'
-  | 'roughCut' | 'storyline' | 'cabinet' | 'loopStrip' | 'scene3d' | 'effects' | 'promptCard' | 'notes' | 'new'
+  | 'roughCut' | 'storyline' | 'cabinet' | 'loopStrip' | 'scene3d' | 'stateSpace' | 'effects' | 'promptCard' | 'notes' | 'new'
 const DEFAULT_ORDER: BarId[] = [
   'viewer', 'pool', 'prompt', 'promptCards', 'history', 'browser', 'attributes', 'filmMixer',
-  'roughCut', 'storyline', 'cabinet', 'loopStrip', 'scene3d', 'effects', 'promptCard', 'notes', 'new',
+  'roughCut', 'storyline', 'cabinet', 'loopStrip', 'scene3d', 'stateSpace', 'effects', 'promptCard', 'notes', 'new',
 ]
 const ORDER_KEY = 'vidbars.topIconBar.order'
 
@@ -411,6 +420,7 @@ export const TopIconBar: React.FC = () => {
     cabinet: <IconButton Icon={IcCabinet} title="Project cabinet — drawers to put cards away in" {...place('cabinet')} />,
     loopStrip: <IconButton Icon={IcLoopStrip} title="Loop strip — drop cards in and run effects over them" {...place('loopStrip')} />,
     scene3d: <IconButton Icon={IcScene3d} title="3D set — a mat that becomes a 3D workspace: dock model cards along it and lay their models out inside. Right-click it to fold it into a card" {...place('area')} />,
+    stateSpace: <IconButton Icon={IcStateSpace} title="States — a workspace for states: drag cards in to make icons, draw lines between them, light the one that is now" {...place('stateSpace')} />,
     // The Effects wrapper carries fxBtnRef: the palette hangs under it, and
     // a press on it must not count as "outside" (IconButton forwards no ref).
     effects: (

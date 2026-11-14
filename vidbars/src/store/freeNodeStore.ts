@@ -28,6 +28,7 @@ export type FreeNodeType =
   | 'promptCards' // a prompt pad whose words come from card backs (utils/cardBacks)
   | 'annotations' // a model's notes: its pins and strokes (store/notesStore)
   | 'area'        // a mat on the canvas that is a workspace in 3D (components/Notes/AreaBody)
+  | 'stateSpace'  // a state workspace: icons joined by lines (utils/stateSpace)
 
 export interface TextStyle {
   fontSize: number       // in px (base, before zoom scaling)
@@ -129,6 +130,8 @@ export interface FreeNodeData {
    *  own): each shot's look and its own changes to it, by the shot's key
    *  (utils/filmShots DockedClip.key). components/FilmMixer/LookMixer. */
   lookMix?: { shots: Record<string, { style?: string; tweaks?: import('../utils/styleCard').StyleTweaks }> }
+  /** State workspaces: the icons and the lines between them (utils/stateSpace). */
+  stateSpace?: import('../utils/stateSpace').StateSpaceData
   /** Loop strips: the RECIPE — slots left to right (utils/rail). */
   rail?: import('../utils/rail').RailData
   /** Docked on a loop strip: which rail, which slot, where in its column.
@@ -251,6 +254,7 @@ const DEFAULT_HEIGHTS: Record<FreeNodeType, number> = {
   promptCards: 600,
   annotations: 520,
   area: 900,
+  stateSpace: 720,
 }
 const DEFAULT_WIDTHS: Partial<Record<FreeNodeType, number>> = {
   audio: 260,
@@ -272,6 +276,7 @@ const DEFAULT_WIDTHS: Partial<Record<FreeNodeType, number>> = {
   promptCards: 1080,
   annotations: 760,
   area: 1400,
+  stateSpace: 1180,
 }
 
 /** A new free node's size before any zoom compensation. addFreeNode makes
@@ -385,7 +390,7 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
       effect: 'Effect', rail: 'Loop strip', cabinet: 'Project cabinet', filmMixer: 'Film Look',
       storyline: 'Storyline', roughCut: 'Rough Cut',
       attributes: 'Attributes', promptCards: 'Card Prompts',
-      annotations: 'Annotations', area: '3D set',
+      annotations: 'Annotations', area: '3D set', stateSpace: 'States',
     }
     const node: FreeNodeData = {
       id, x, y,
@@ -399,6 +404,7 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
       ...(type === 'cabinet' ? { cabinet: newCabinet() } : {}),
       ...(type === 'storyline' ? { width: 0, storyline: newStoryline() } : {}),
       ...(type === 'roughCut' ? { roughCut: { clips: [], pps: 60 } } : {}),
+      ...(type === 'stateSpace' ? { stateSpace: { items: [], wires: [] } } : {}),
       ...(type === 'area' || type === 'annotations' ? { color: '#141a28' } : {}),
     }
     set(s => ({ nodes: { ...s.nodes, [id]: node } }))
