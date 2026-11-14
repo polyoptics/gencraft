@@ -31,10 +31,10 @@ import { goToCard } from '../../utils/stateCard'
 import { scrubStoryline } from '../Canvas/StorylineLayer'
 import {
   EVENT_H, EVENT_W, ICON, PORT_SNAP, SPACE_BAR_W, SPACE_GRID, TL_H,
-  addItem, addWire, editSpace, emptyStateSpace, fireEvent, itemPorts, itemSize, lineClock, looseCurve, makeChange,
+  addItem, addWire, editSpace, emptyStateSpace, fireEvent, isLevel, itemPorts, itemSize, lineClock, lineOf, looseCurve, makeChange, replaySpace, setValue, spaceTruths, valOf,
   moveItems, normalizeSpace, outSpot, patchItem, patchWire, planeBox, portSpot, removeFromSpace, screenToCanvas, setNow, setStart,
   useSpaceLive, wireDist, wireGeom, wireKind, wireSources, wireTargets,
-  type PortRef, type PortSpot, type SpaceItem, type SpaceKind, type SpaceWire, type StateSpaceData, type WireGeom,
+  type Compare, type PortRef, type PortSpot, type SpaceItem, type SpaceKind, type SpaceWire, type StateSpaceData, type WireGeom,
 } from '../../utils/stateSpace'
 
 const GREEN = '#5fa86c', BLUE = '#6fb7e0', AMBER = '#d9a441', VIOLET = '#b08cf0', STEEL = 'rgb(160,180,190)'
@@ -58,15 +58,48 @@ function itemLabel(i: SpaceItem, cardName?: string, lineTitle?: string): string 
   if (i.kind === 'any') return 'Any'
   if (i.kind === 'timeline') return lineTitle || 'Timeline'
   if (i.card) return cardName || (i.kind === 'event' ? 'Event' : 'Card')
-  return i.kind === 'event' ? 'Event' : 'State'
+  return KIND_NAME[i.kind]
 }
+const KIND_NAME: Record<SpaceKind, string> = { card: 'State', blank: 'State', event: 'Event', any: 'Any', timeline: 'Timeline', value: 'Value', and: 'And', or: 'Or', fact: 'Is in', wait: 'Wait', pick: 'Pick one' }
+
+// One colour for each kind of thing, everywhere: steel for states and the
+// changes between them, amber for time, violet for what happens, green for
+// what is true.
+const kindTone = (k: SpaceKind | undefined): string =>
+  k === 'timeline' || k === 'wait' ? AMBER : k === 'event' || k === 'pick' ? VIOLET : k === 'value' || k === 'and' || k === 'or' || k === 'fact' ? GREEN : STEEL
 
 /** What colour a wire is, by what sends along it. */
 function wireTone(d: StateSpaceData, w: SpaceWire): string {
   const k = wireKind(d, w)
+  if (k === 'cond') return GREEN
   if (k !== 'signal') return STEEL
   const a = d.items.find(i => i.id === w.a)?.kind
-  return a === 'timeline' ? AMBER : a === 'event' ? VIOLET : GREEN
+  return a === 'card' || a === 'blank' ? GREEN : kindTone(a)
+}
+
+/** A place along a wire (0 its start, 1 its end). */
+function along(g: WireGeom, t: number): { x: number; y: number } {
+  const u = 1 - t
+  return { x: u * u * u * g.x1 + 3 * u * u * t * g.c1x + 3 * u * t * t * g.c2x + t * t * t * g.x2, y: u * u * u * g.y1 + 3 * u * u * t * g.c1y + 3 * u * t * t * g.c2y + t * t * t * g.y2 }
+}
+
+const CMP_WORD: Record<Compare, string> = { '<': 'below', '<=': 'at most', '=': 'is', '!=': 'is not', '>=': 'at least', '>': 'above' }
+const CMPS: Compare[] = ['<', '<=', '=', '!=', '>=', '>']
+const yesNo = (n: number) => n ? 'yes' : 'no'
+/** What a wire carries from its source, in a word or two (shown by its start). */
+function wireSays(d: StateSpaceData, w: SpaceWire): string {
+  const a = d.items.find(i => i.id === w.a)
+  if (!isLevel(a) || wireKind(d, w) === 'change' || wireKind(d, w) === 'link') return ''
+  const what = a!.kind !== 'value' ? '' : !w.cmp ? (a!.flag ? 'yes' : 'not 0') : a!.flag && (w.cmp === '=' || w.cmp === '!=') ? `${CMP_WORD[w.cmp]} ${yesNo(w.cn ?? 0)}` : `${CMP_WORD[w.cmp]} ${w.cn ?? 0}`
+  return [w.not ? 'not' : '', what].filter(Boolean).join(' ')
+}
+/** What a wire does to the value it goes into (shown by its end). */
+function wireDoes(d: StateSpaceData, w: SpaceWire): string {
+  const b = w.bp === 'knob' ? undefined : d.items.find(i => i.id === w.b)
+  if (b?.kind !== 'value') return ''
+  if (w.op === 'set') return '= ' + (b.flag ? yesNo(w.on ?? 0) : w.on ?? 0)
+  const n = w.on ?? 1
+  return n < 0 ? '− ' + -n : '+ ' + n
 }
 
 // ── Nodes ──
@@ -76,7 +109,7 @@ const Pulse: React.FC<{ stamp: number | undefined; radius: number | string; tone
     ? <div key={stamp} style={{ position: 'absolute', inset: -3, borderRadius: radius, border: `2px solid ${tone}`, pointerEvents: 'none', animation: 'vbSpPulse .55s ease-out forwards' }} />
     : null
 
-const NodeView: React.FC<{ item: SpaceItem; picked: boolean; stamp?: number }> = ({ item, picked, stamp }) => {
+const NodeView: React.FC<{ item: SpaceItem; picked: boolean; stamp?: number; on?: boolean; says?: [string, string] }> = ({ item, picked, stamp, on, says }) => {
   const card = useBoardsStore(s => item.card ? s.groups.find(g => g.id === item.card) : undefined)
   const boards = useBoardsStore(s => s.boards)
   const count = useBoardsStore(s => card && card.deckState && card.deckState !== 'open' ? stackedDeckMembers(card.id, s.groups).length : 0)
@@ -103,6 +136,73 @@ const NodeView: React.FC<{ item: SpaceItem; picked: boolean; stamp?: number }> =
         <div style={{ flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{gone ? 'card gone' : itemLabel(item, card?.name)}</div>
         {card && <div title="Hooked to an Event card" style={{ width: 8, height: 8, borderRadius: 2, flexShrink: 0, background: card.color || typeColor(cardTypeOf(card)) }} />}
         <Pulse stamp={stamp} radius={EVENT_H / 2} tone={VIOLET} />
+      </div>
+    )
+  }
+  const step = (by: number, title: string) => (
+    <div data-sp-step={by} data-sp-of={item.id} className="vb-sp-chip" title={title} style={{
+      width: 18, height: 18, borderRadius: 4, flexShrink: 0, cursor: 'pointer', boxSizing: 'border-box', textAlign: 'center', lineHeight: '15px', fontSize: 13,
+      color: 'rgba(255,255,255,0.8)', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.18)',
+    }}>{by < 0 ? '−' : '+'}</div>
+  )
+  if (item.kind === 'value') {
+    const v = valOf(item)
+    return (
+      <div data-sp-node={item.id} className="vb-sp-node" title="A value: wires into it change it; a wire out of it carries a compare" style={{
+        ...box, borderRadius: 10, border: `2px solid ${v ? GREEN : 'rgba(95,168,108,0.45)'}`, background: '#1d2a22', boxShadow: ring || 'none',
+        display: 'flex', flexDirection: 'column', padding: '4px 8px 6px', color: INK,
+      }}>
+        <div style={{ fontSize: 10, color: DIM, textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', height: 14, lineHeight: '14px', flexShrink: 0 }}>{itemLabel(item)}</div>
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 4 }}>
+          {step(-1, item.flag ? 'No' : 'One less')}
+          <div data-sp-val={item.id} style={{ flex: 1, minWidth: 0, textAlign: 'center', fontSize: item.flag ? 15 : 18, fontWeight: 600, letterSpacing: item.flag ? '0.06em' : 0, whiteSpace: 'nowrap', overflow: 'hidden', color: v ? '#dff5e3' : INK }}>
+            {item.flag ? (v ? 'YES' : 'NO') : Math.round(v * 100) / 100}
+          </div>
+          {step(1, item.flag ? 'Yes' : 'One more')}
+        </div>
+        <Pulse stamp={stamp} radius={10} tone={GREEN} />
+      </div>
+    )
+  }
+  if (item.kind === 'and' || item.kind === 'or') {
+    return (
+      <div data-sp-node={item.id} data-sp-true={on ? '1' : '0'} className="vb-sp-node" title={item.kind === 'and' ? 'And: true while everything wired into it is true' : 'Or: true while anything wired into it is true'} style={{
+        ...box, borderRadius: item.kind === 'and' ? '6px 20px 20px 6px' : 20, border: `2px solid ${on ? GREEN : 'rgba(95,168,108,0.45)'}`, background: on ? '#2c4a33' : '#1d2a22',
+        boxShadow: [ring, on ? '0 0 14px rgba(95,168,108,0.5)' : ''].filter(Boolean).join(', ') || 'none',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', color: on ? '#fff' : INK, fontSize: 11, letterSpacing: '0.1em', fontWeight: 600,
+      }}>{(item.name || KIND_NAME[item.kind]).toUpperCase()}</div>
+    )
+  }
+  if (item.kind === 'fact') {
+    const line: React.CSSProperties = { fontSize: 11, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', height: 16, lineHeight: '16px', paddingLeft: 6 }
+    return (
+      <div data-sp-node={item.id} data-sp-true={on ? '1' : '0'} className="vb-sp-node" title="Is in: true while the first card is in the second on the board, in its deck or linked to it (a faction's members are its links)" style={{
+        ...box, borderRadius: 10, border: `2px solid ${on ? GREEN : 'rgba(95,168,108,0.45)'}`, background: on ? '#2c4a33' : '#1d2a22',
+        boxShadow: [ring, on ? '0 0 14px rgba(95,168,108,0.5)' : ''].filter(Boolean).join(', ') || 'none',
+        display: 'flex', flexDirection: 'column', justifyContent: 'center', padding: '0 8px', color: INK,
+      }}>
+        <div style={{ ...line, color: says?.[0] ? INK : DIM }}>{says?.[0] || 'a card'}</div>
+        <div style={{ ...line, fontSize: 9, letterSpacing: '0.1em', color: on ? '#dff5e3' : GREEN, fontWeight: 600 }}>{(item.name || 'is in').toUpperCase()}</div>
+        <div style={{ ...line, color: says?.[1] ? INK : DIM }}>{says?.[1] || 'a card'}</div>
+      </div>
+    )
+  }
+  if (item.kind === 'wait' || item.kind === 'pick') {
+    const tone = kindTone(item.kind)
+    return (
+      <div data-sp-node={item.id} className="vb-sp-node" title={item.kind === 'wait' ? 'Wait: passes on what reaches it, this many points later. Double-click to send it on now' : 'Pick one: passes on what reaches it along one of its wires, by chance. Double-click to send it on now'} style={{
+        ...box, borderRadius: 8, border: `2px solid ${tone}`, background: item.kind === 'wait' ? '#262218' : '#2a2438', boxShadow: ring || 'none',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, padding: '0 6px', color: INK, fontSize: 12,
+      }}>
+        {item.kind === 'wait' ? <>
+          {step(-1, 'One point sooner')}
+          <div style={{ flex: 1, textAlign: 'center', whiteSpace: 'nowrap' }}>{item.name || 'wait'} <b data-sp-val={item.id}>{Math.max(0, Math.round(item.n ?? 1))}</b></div>
+          {step(1, 'One point later')}
+        </> : <>
+          <svg width="13" height="13" viewBox="0 0 13 13" style={{ flexShrink: 0 }}><rect x="1" y="1" width="11" height="11" rx="2.5" fill="none" stroke={VIOLET} strokeWidth="1.5" /><circle cx="4.3" cy="4.3" r="1.1" fill={VIOLET} /><circle cx="8.7" cy="8.7" r="1.1" fill={VIOLET} /></svg>
+          <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.name || 'pick one'}</div>
+        </>}
+        <Pulse stamp={stamp} radius={8} tone={tone} />
       </div>
     )
   }
@@ -134,7 +234,7 @@ const NodeView: React.FC<{ item: SpaceItem; picked: boolean; stamp?: number }> =
 }
 
 const TimelineView: React.FC<{ item: SpaceItem; picked: boolean; playing: boolean }> = ({ item, picked, playing }) => {
-  const c = lineClock(item.line)
+  const c = lineClock(lineOf(item))
   const { w, h } = itemSize(item)
   return (
     <div data-sp-node={item.id} className="vb-sp-node" style={{
@@ -143,7 +243,7 @@ const TimelineView: React.FC<{ item: SpaceItem; picked: boolean; playing: boolea
       boxShadow: picked ? `0 0 0 2px ${BLUE}` : 'none',
     }}>
       <div style={{ position: 'absolute', left: 30, right: 10, top: 5, fontSize: 9, letterSpacing: '0.1em', color: DIM, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-        TIMELINE  ·  {(item.name || c?.title || 'storyline gone').toUpperCase()}
+        {item.world ? 'WORLD CLOCK' : 'TIMELINE'}  ·  {(item.name || c?.title || (item.world ? 'no storyline on it yet' : 'storyline gone')).toUpperCase()}
       </div>
       {c && <div data-sp-play={item.id} className="vb-sp-chip" title="Play: the time marker runs through the story and everything wired to it happens as it passes. Lit while it plays; click again to stop" style={{
         position: 'absolute', left: 7, top: 3, width: 17, height: 15, borderRadius: 4, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -196,26 +296,42 @@ const Text: React.FC<{ value: string; placeholder?: string; area?: boolean; onCh
   return area ? <textarea {...props} /> : <input {...props} />
 }
 
+/** A number box: what is typed is kept as it is typed, and written when it is a number. */
+const Num: React.FC<{ value: number; onChange: (v: number, first: boolean) => void }> = ({ value, onChange }) => {
+  const [text, setText] = useState<string | null>(null)
+  const fresh = useRef(true)
+  return <input data-sp-num="" value={text ?? String(value)} style={{ ...field, width: 64 }}
+    onFocus={() => { fresh.current = true }}
+    onBlur={() => setText(null)}
+    onChange={e => {
+      setText(e.target.value)
+      const v = Number(e.target.value)
+      if (e.target.value.trim() !== '' && Number.isFinite(v)) { onChange(v, fresh.current); fresh.current = false }
+    }}
+    onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') (e.target as HTMLElement).blur() }} />
+}
+const chips: React.CSSProperties = { display: 'flex', gap: 4, flexWrap: 'wrap', flexShrink: 0, alignItems: 'center' }
+
 const Bar: React.FC<{ id: string; d: StateSpaceData; sel: string[]; setSel: (s: string[]) => void }> = ({ id, d, sel, setSel }) => {
   const groups = useBoardsStore(s => s.groups)
   const nameOf = (itemId: string | undefined) => {
     const i = d.items.find(x => x.id === itemId)
-    return i ? itemLabel(i, groups.find(g => g.id === i.card)?.name, lineClock(i.line)?.title) : '?'
+    return i ? itemLabel(i, groups.find(g => g.id === i.card)?.name, lineClock(lineOf(i))?.title) : '?'
   }
   /** One end of a wire, in words. */
   const fromName = (w: SpaceWire) => {
     const a = d.items.find(i => i.id === w.a)
     if (a?.kind !== 'timeline' || !w.ap) return nameOf(w.a)
-    return `${lineClock(a.line)?.dots.find(p => 'pt:' + p.id === w.ap)?.title ?? 'point gone'}, ${nameOf(w.a)}`
+    return `${lineClock(lineOf(a))?.dots.find(p => 'pt:' + p.id === w.ap)?.title ?? 'point gone'}, ${nameOf(w.a)}`
   }
   const toName = (w: SpaceWire): string => {
-    if (w.bp !== 'knob') return nameOf(w.b) + (w.bp === 'if' ? ' (only if)' : '')
+    if (w.bp !== 'knob') return nameOf(w.b) + (w.bp === 'if' ? ' (only if)' : w.bp === 'a' ? ' (the card)' : w.bp === 'b' ? ' (what it is in)' : '')
     const c = d.wires.find(x => x.id === w.b)
     return c ? `${c.name || 'change'}: ${nameOf(c.a)} → ${nameOf(c.b)}` : '?'
   }
   const wireLine = (w: SpaceWire) => {
     const k = wireKind(d, w)
-    return k === 'signal' ? `${fromName(w)} → ${toName(w)}` : `${w.name || (k === 'link' ? 'line' : 'change')}: ${nameOf(w.a)} ${k === 'link' ? '—' : '→'} ${nameOf(w.b)}`
+    return k === 'signal' || k === 'cond' ? `${[fromName(w), wireSays(d, w)].filter(Boolean).join(' ')} → ${[toName(w), wireDoes(d, w)].filter(Boolean).join(' ')}` : `${w.name || (k === 'link' ? 'line' : 'change')}: ${nameOf(w.a)} ${k === 'link' ? '—' : '→'} ${nameOf(w.b)}`
   }
   const wireRows = (title: string, list: SpaceWire[]) => <>
     <div style={gap}>{title}</div>
@@ -233,7 +349,7 @@ const Bar: React.FC<{ id: string; d: StateSpaceData; sel: string[]; setSel: (s: 
     const card = groups.find(g => g.id === item.card)
     const wiresIn = d.wires.filter(w => w.b === item.id), wiresOut = d.wires.filter(w => w.a === item.id)
     const state = item.kind === 'card' || item.kind === 'blank'
-    head = item.kind === 'timeline' ? 'TIMELINE' : item.kind === 'event' ? 'EVENT' : item.kind === 'any' ? 'ANY' : 'NODE'
+    head = item.kind === 'timeline' ? (item.world ? 'WORLD CLOCK' : 'TIMELINE') : item.kind === 'card' || item.kind === 'blank' ? 'NODE' : KIND_NAME[item.kind].toUpperCase()
     body = <>
       <div style={label}>NAME</div>
       <Text value={item.name ?? ''} placeholder={nameOf(item.id)} onChange={(v, first) => patchItem(id, item.id, { name: v || undefined }, first)} />
@@ -248,7 +364,7 @@ const Bar: React.FC<{ id: string; d: StateSpaceData; sel: string[]; setSel: (s: 
       {item.kind === 'timeline' && <>
         <div style={gap}>STORYLINE</div>
         <button style={btn()} onClick={() => {
-          const n = useFreeNodeStore.getState().nodes[item.line ?? '']
+          const n = useFreeNodeStore.getState().nodes[lineOf(item) ?? '']
           const dots = n?.storyline?.dots ?? []
           if (n && dots.length) useCanvasStore.getState().jumpToPoint(n.x + (Math.min(...dots.map(p => p.x)) + Math.max(...dots.map(p => p.x))) / 2, n.y + (Math.min(...dots.map(p => p.y)) + Math.max(...dots.map(p => p.y))) / 2)
         }}>Go to</button>
@@ -264,6 +380,40 @@ const Bar: React.FC<{ id: string; d: StateSpaceData; sel: string[]; setSel: (s: 
         <div style={gap}>RUN</div>
         <button style={btn()} title="Fire it now, as a double-click on it does" onClick={() => fireEvent(id, item.id)}>Fire</button>
       </>}
+      {item.kind === 'value' && <>
+        <div style={gap}>NOW</div>
+        <div style={chips}>
+          {item.flag ? <>
+            <button style={btn(valOf(item) !== 0)} onClick={() => setValue(id, item.id, 1)}>Yes</button>
+            <button style={btn(valOf(item) === 0)} onClick={() => setValue(id, item.id, 0)}>No</button>
+          </> : <Num value={valOf(item)} onChange={(v, first) => setValue(id, item.id, v, first)} />}
+        </div>
+        <div style={gap}>BEFORE ANYTHING HAS HAPPENED</div>
+        <div style={chips}>
+          {item.flag ? <>
+            <button style={btn(!!item.init)} onClick={() => { patchItem(id, item.id, { init: 1 }); replaySpace(id) }}>Yes</button>
+            <button style={btn(!item.init)} onClick={() => { patchItem(id, item.id, { init: 0 }); replaySpace(id) }}>No</button>
+          </> : <Num value={item.init ?? 0} onChange={(v, first) => { patchItem(id, item.id, { init: v }, first); replaySpace(id) }} />}
+        </div>
+        <div style={gap}>OPTIONS</div>
+        <button style={btn(!!item.flag)} title="Lit: it is a yes or a no. Unlit: a number" onClick={() => {
+          patchItem(id, item.id, { flag: item.flag ? undefined : true, ...(item.flag ? {} : { val: valOf(item) ? 1 : 0, init: item.init ? 1 : 0 }) })
+          replaySpace(id)
+        }}>Yes / no</button>
+      </>}
+      {item.kind === 'wait' && <>
+        <div style={gap}>HOW MANY POINTS LATER</div>
+        <Num value={Math.max(0, Math.round(item.n ?? 1))} onChange={(v, first) => { patchItem(id, item.id, { n: Math.max(0, Math.round(v)) }, first); replaySpace(id) }} />
+        <div style={{ ...row, color: DIM, cursor: 'default', whiteSpace: 'normal', lineHeight: 1.4, marginTop: 6 }}>Counted along the timeline it was reached from. Reached by hand, each point is a beat.</div>
+      </>}
+      {item.kind === 'pick' && <>
+        <div style={gap}>CHANCE</div>
+        <button style={btn()} title="As a timeline plays, a pick falls the same way every time, until it is rolled again" onClick={() => { patchItem(id, item.id, { seed: Math.floor(Math.random() * 1e9) }); replaySpace(id) }}>Roll again</button>
+      </>}
+      {(item.kind === 'wait' || item.kind === 'pick') && <>
+        <div style={gap}>RUN</div>
+        <button style={btn()} title="Send it on now, as a double-click on it does" onClick={() => fireEvent(id, item.id)}>Send on</button>
+      </>}
       {item.kind !== 'timeline' && item.kind !== 'any' && wireRows('WIRES IN', wiresIn)}
       {wireRows('WIRES OUT', wiresOut)}
       <div style={gap}>NOTE</div>
@@ -272,17 +422,50 @@ const Bar: React.FC<{ id: string; d: StateSpaceData; sel: string[]; setSel: (s: 
     </>
   } else if (wire) {
     const k = wireKind(d, wire)
-    head = k === 'change' ? 'CHANGE' : k === 'link' ? 'LINE' : 'WIRE'
+    head = k === 'change' ? 'CHANGE' : k === 'link' ? 'LINE' : k === 'cond' ? 'CONDITION' : 'WIRE'
+    const sig = k === 'signal' || k === 'cond'
+    const a = d.items.find(i => i.id === wire.a), b = wire.bp === 'knob' ? undefined : d.items.find(i => i.id === wire.b)
+    const lvl = sig && isLevel(a)
+    const then = k === 'cond' ? (b?.kind === 'event' ? 'THIS EVENT CAN GO THROUGH' : b?.kind === 'fact' ? (wire.bp === 'a' ? 'IS THE CARD LOOKED FOR' : 'IS WHAT IT IS LOOKED FOR IN') : 'COUNTS TOWARDS')
+      : wire.bp === 'knob' ? 'THIS CHANGE IS MADE' : b?.kind === 'event' ? 'THIS EVENT FIRES' : b?.kind === 'value' ? 'THIS VALUE CHANGES' : b?.kind === 'wait' ? 'THIS WAIT BEGINS' : b?.kind === 'pick' ? 'THIS PICKS ONE' : 'THIS IS LIT'
     body = <>
-      {k !== 'signal' && <>
+      {!sig && <>
         <div style={label}>NAME</div>
         <Text value={wire.name ?? ''} placeholder={k === 'link' ? 'line' : 'change'} onChange={(v, first) => patchWire(id, wire.id, { name: v || undefined }, first)} />
       </>}
-      <div style={k === 'signal' ? label : gap}>{k === 'signal' ? 'WHEN' : 'FROM'}</div>
-      <div className="vb-sp-row" style={row} onClick={() => setSel([wire.a])}>{fromName(wire)}</div>
-      <div style={gap}>{k !== 'signal' ? 'TO' : wire.bp === 'knob' ? 'THIS CHANGE IS MADE' : wire.bp === 'if' ? 'THIS EVENT CAN GO THROUGH' : d.items.find(i => i.id === wire.b)?.kind === 'event' ? 'THIS EVENT FIRES' : 'THIS IS LIT'}</div>
+      <div style={sig ? label : gap}>{!sig ? 'FROM' : k === 'cond' ? (b?.kind === 'fact' ? 'THIS' : 'WHILE') : lvl ? 'WHEN THIS BECOMES TRUE' : 'WHEN'}</div>
+      <div className="vb-sp-row" style={row} onClick={() => setSel([wire.a])}>{[fromName(wire), wireSays(d, wire)].filter(Boolean).join(' ')}</div>
+      {lvl && b?.kind !== 'fact' && <>
+        {a!.kind === 'value' && <>
+          <div style={gap}>TRUE WHEN IT IS</div>
+          <div style={chips}>
+            <button style={btn(!wire.cmp)} title={a!.flag ? 'Yes' : 'Anything but 0'} onClick={() => patchWire(id, wire.id, { cmp: undefined, cn: undefined })}>{a!.flag ? 'yes' : 'not 0'}</button>
+            {(a!.flag ? (['=', '!='] as Compare[]) : CMPS).map(c => <button key={c} style={btn(wire.cmp === c)} onClick={() => patchWire(id, wire.id, { cmp: c, cn: wire.cn ?? 0 })}>{CMP_WORD[c]}</button>)}
+          </div>
+          {<div style={{ ...chips, marginTop: 6, opacity: wire.cmp ? 1 : 0.3, pointerEvents: wire.cmp ? 'auto' : 'none' }}>
+            {a!.flag ? <>
+              <button style={btn(!!wire.cn)} onClick={() => patchWire(id, wire.id, { cn: 1 })}>Yes</button>
+              <button style={btn(!wire.cn)} onClick={() => patchWire(id, wire.id, { cn: 0 })}>No</button>
+            </> : <Num value={wire.cn ?? 0} onChange={(v, first) => patchWire(id, wire.id, { cn: v }, first)} />}
+          </div>}
+        </>}
+        <div style={gap}>OPTIONS</div>
+        <button style={btn(!!wire.not)} title="Lit: it is true when that is not" onClick={() => patchWire(id, wire.id, { not: wire.not ? undefined : true })}>Not</button>
+      </>}
+      <div style={gap}>{sig ? then : 'TO'}</div>
       <div className="vb-sp-row" style={row} onClick={() => setSel([wire.b])}>{toName(wire)}</div>
-      {k !== 'signal' && <>
+      {sig && b?.kind === 'value' && <>
+        <div style={gap}>WHAT IT DOES TO IT</div>
+        <div style={chips}>
+          <button style={btn(wire.op !== 'set')} onClick={() => patchWire(id, wire.id, { op: undefined, on: wire.op === 'set' ? undefined : wire.on })}>Add</button>
+          <button style={btn(wire.op === 'set')} onClick={() => patchWire(id, wire.id, { op: 'set', on: wire.op === 'set' ? wire.on : b.flag ? 1 : 0 })}>Set to</button>
+          {b.flag && wire.op === 'set' ? <>
+            <button style={btn(!!wire.on)} onClick={() => patchWire(id, wire.id, { on: 1 })}>Yes</button>
+            <button style={btn(!wire.on)} onClick={() => patchWire(id, wire.id, { on: 0 })}>No</button>
+          </> : <Num value={wire.on ?? (wire.op === 'set' ? 0 : 1)} onChange={(v, first) => patchWire(id, wire.id, { on: v }, first)} />}
+        </div>
+      </>}
+      {!sig && <>
         <div style={gap}>OPTIONS</div>
         <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
           <button style={btn(!wire.plain)} title="Lit: an arrow, a change from one to the other. Unlit: a plain line, any other relationship" onClick={() => patchWire(id, wire.id, { plain: wire.plain ? undefined : true })}>Arrow</button>
@@ -311,6 +494,7 @@ const Bar: React.FC<{ id: string; d: StateSpaceData; sel: string[]; setSel: (s: 
       <div style={hint}>Drag from a port to a port to wire two things. Let go on bare ground to make an event there.</div>
       <div style={hint}>Card to card is a change. A wire onto a change's knob makes that change.</div>
       <div style={hint}>Double-click a card to light it, an event to fire it, a change to make it.</div>
+      <div style={hint}>Cards, values, And, Or and Is in are true or not: wire them into an event's "only if" to make a condition.</div>
       <div style={gap}>IN HERE</div>
       <div style={{ ...row, cursor: 'default', color: DIM }}>{d.items.length} nodes, {d.wires.length} wires</div>
     </>
@@ -328,10 +512,17 @@ const Bar: React.FC<{ id: string; d: StateSpaceData; sel: string[]; setSel: (s: 
 
 // ── The workspace ──
 
-const SHELF: { kind: SpaceKind; name: string; title: string }[] = [
-  { kind: 'event', name: 'Event', title: 'Drag onto the ground: something that happens, between other nodes' },
-  { kind: 'blank', name: 'Blank', title: 'Drag onto the ground: a node with no card yet' },
-  { kind: 'any', name: 'Any', title: 'Drag onto the ground: stands for every node; an arrow out of it is a change from anywhere' },
+const SHELF: { key: string; kind: SpaceKind; name: string; title: string; more?: Partial<SpaceItem> }[] = [
+  { key: 'blank', kind: 'blank', name: 'Blank', title: 'Drag onto the ground: a node with no card yet' },
+  { key: 'any', kind: 'any', name: 'Any', title: 'Drag onto the ground: stands for every node; an arrow out of it is a change from anywhere' },
+  { key: 'event', kind: 'event', name: 'Event', title: 'Drag onto the ground: something that happens, between other nodes' },
+  { key: 'pick', kind: 'pick', name: 'Pick one', title: 'Drag onto the ground: passes on what reaches it along one of its wires, by chance' },
+  { key: 'value', kind: 'value', name: 'Value', title: 'Drag onto the ground: a number, or a yes / no, that wires change and conditions read' },
+  { key: 'and', kind: 'and', name: 'And', title: 'Drag onto the ground: true while everything wired into it is true' },
+  { key: 'or', kind: 'or', name: 'Or', title: 'Drag onto the ground: true while anything wired into it is true' },
+  { key: 'fact', kind: 'fact', name: 'Is in', title: 'Drag onto the ground: true while one card is in another on the board, in its deck or linked to it' },
+  { key: 'wait', kind: 'wait', name: 'Wait', title: 'Drag onto the ground: passes on what reaches it, some points later' },
+  { key: 'world', kind: 'timeline', name: 'World clock', title: 'Drag onto the ground: the world clock, as a timeline with an output for each of its points', more: { world: true } },
 ]
 
 type Draw = { from: PortRef; fromInput: boolean; spot: PortSpot; x: number; y: number; snap: PortRef | null; cands: { ref: PortRef; spot: PortSpot }[] }
@@ -342,11 +533,25 @@ export function StateSpaceBody({ id, node, bodyW, bodyH }: { id: string; node: F
   const ui = node.uiScale ?? 1
   const planeW = Math.max(0, bodyW / ui - SPACE_BAR_W), planeH = bodyH / ui
   // The storylines dragged in, as they are now (their points, their marker).
-  const lines = useFreeNodeStore(useShallow(s => d.items.filter(i => i.kind === 'timeline').map(i => s.nodes[i.line ?? '']?.storyline)))
+  const lines = useFreeNodeStore(useShallow(s => d.items.filter(i => i.kind === 'timeline').map(i => s.nodes[lineOf(i) ?? '']?.storyline)))
+  const worldLine = useCanvasStore(s => s.worldClockLine)
+  // The board, only where something in here reads it (a fact).
+  const board = useBoardsStore(s => d.items.some(i => i.kind === 'fact') ? s.groups : null)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const truths = useMemo(() => spaceTruths(d), [d, board])
+  const says = useMemo(() => {
+    const out: Record<string, [string, string]> = {}
+    for (const f of d.items) {
+      if (f.kind !== 'fact') continue
+      const end = (p: string) => { const i = d.items.find(x => x.id === d.wires.find(w => w.b === f.id && w.bp === p)?.a); return i ? itemLabel(i, board?.find(g => g.id === i.card)?.name) : '' }
+      out[f.id] = [end('a'), end('b')]
+    }
+    return out
+  }, [d, board])
   const [sel, setSel] = useState<string[]>([])
   const [draw, setDraw] = useState<Draw | null>(null)
   const [band, setBand] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
-  const [ghost, setGhost] = useState<{ kind: SpaceKind; name: string; x: number; y: number } | null>(null)
+  const [ghost, setGhost] = useState<{ kind: SpaceKind; more?: Partial<SpaceItem>; name: string; x: number; y: number } | null>(null)
   const [pulse, setPulse] = useState<Record<string, number>>({})
   const [playing, setPlaying] = useState<string | null>(null)
   // What has just happened here (utils/stateSpace useSpaceLive): shown for a
@@ -364,7 +569,7 @@ export function StateSpaceBody({ id, node, bodyW, bodyH }: { id: string; node: F
   // every 1.4 seconds, however far apart the points are on the storyline.
   useEffect(() => {
     const tl = playing ? dRef.current.items.find(i => i.id === playing) : undefined
-    const c0 = tl ? lineClock(tl.line) : null
+    const c0 = tl ? lineClock(lineOf(tl)) : null
     if (!tl || !c0) { if (playing) setPlaying(null); return }
     useUndoCoordinator.getState().checkpoint()
     // From where it is; from the beginning once it is past the last point.
@@ -372,11 +577,11 @@ export function StateSpaceBody({ id, node, bodyW, bodyH }: { id: string; node: F
     let last = performance.now(), raf = 0
     const per = 1400 * (c0.dots.length + 1)
     const tick = (t: number) => {
-      const c = lineClock(tl.line)
+      const c = lineClock(lineOf(tl))
       if (!c) { setPlaying(null); return }
       f = Math.min(1, f + (t - last) / per)
       last = t
-      scrubStoryline(tl.line!, c.toValue(f))
+      scrubStoryline(lineOf(tl)!, c.toValue(f))
       if (f >= 1) { setPlaying(null); return }
       raf = requestAnimationFrame(tick)
     }
@@ -463,7 +668,8 @@ export function StateSpaceBody({ id, node, bodyW, bodyH }: { id: string; node: F
       // Anywhere on a node counts as its input, when it has just the one.
       const over = [...dRef.current.items].reverse().find(i => { const s = itemSize(i); return Math.abs(i.x - p.x) <= s.w / 2 && Math.abs(i.y - p.y) <= s.h / 2 })
       const mine = over ? cands.filter(c => c.ref.node === over.id) : []
-      return mine.length === 1 ? mine[0].ref : mine.find(c => c.ref.port === (fromInput ? 'out' : 'in'))?.ref ?? null
+      return mine.length === 1 ? mine[0].ref : mine.find(c => c.ref.port === (fromInput ? 'out' : 'in'))?.ref
+        ?? [...mine].sort((m, n) => Math.hypot(m.spot.x - p.x, m.spot.y - p.y) - Math.hypot(n.spot.x - p.x, n.spot.y - p.y))[0]?.ref ?? null
     }
     drag(ev => {
       const p = local(ev)
@@ -498,21 +704,31 @@ export function StateSpaceBody({ id, node, bodyW, bodyH }: { id: string; node: F
     const shelf = t.closest('[data-sp-shelf]') as HTMLElement | null
     if (shelf) {
       // Off the shelf: it follows the hand and is set down where it is let go.
-      const it = SHELF.find(s => s.kind === shelf.dataset.spShelf)!
+      const it = SHELF.find(s => s.key === shelf.dataset.spShelf)!
       const p0 = local(e)
       let moved = false
       drag(ev => {
         const p = local(ev)
         if (!moved && Math.hypot(p.x - p0.x, p.y - p0.y) < 4) return
         moved = true
-        setGhost({ kind: it.kind, name: it.name, x: p.x, y: p.y })
+        setGhost({ kind: it.kind, more: it.more, name: it.name, x: p.x, y: p.y })
       }, ev => {
         setGhost(null)
         const p = moved ? local(ev) : freeSpot(dRef.current, planeW)
         if (!inPlane(p)) return
-        const at = clampTo({ id: '', kind: it.kind, x: 0, y: 0 }, snap(p.x, ev.ctrlKey), snap(p.y, ev.ctrlKey))
-        setSel([addItem(id, { kind: it.kind, ...at })])
+        const at = clampTo({ id: '', kind: it.kind, ...it.more, x: 0, y: 0 }, snap(p.x, ev.ctrlKey), snap(p.y, ev.ctrlKey))
+        setSel([addItem(id, { kind: it.kind, ...it.more, ...at })])
       })
+      return
+    }
+    const stepEl = t.closest('[data-sp-step]') as HTMLElement | null
+    const stepped = stepEl ? d.items.find(i => i.id === stepEl.dataset.spOf) : undefined
+    if (stepped) {
+      // The little − and + on a value or a wait.
+      const by = Number(stepEl!.dataset.spStep)
+      setSel([stepped.id])
+      if (stepped.kind === 'value') setValue(id, stepped.id, stepped.flag ? (by > 0 ? 1 : 0) : valOf(stepped) + by)
+      else { patchItem(id, stepped.id, { n: Math.max(0, Math.round(stepped.n ?? 1) + by) }); replaySpace(id) }
       return
     }
     const playEl = t.closest('[data-sp-play]') as HTMLElement | null
@@ -525,7 +741,7 @@ export function StateSpaceBody({ id, node, bodyW, bodyH }: { id: string; node: F
     }
     const trackEl = t.closest('[data-sp-track]') as HTMLElement | null
     const tl = trackEl ? d.items.find(i => i.id === trackEl.dataset.spTrack) : undefined
-    const clock = tl ? lineClock(tl.line) : null
+    const clock = tl ? lineClock(lineOf(tl)) : null
     if (tl && clock) {
       // Along a timeline: its time marker, the storyline's own.
       const w = itemSize(tl).w
@@ -533,7 +749,7 @@ export function StateSpaceBody({ id, node, bodyW, bodyH }: { id: string; node: F
       setPlaying(null)
       useUndoCoordinator.getState().checkpoint()
       const to = (ev: { clientX: number; clientY: number; isTrusted?: boolean }) =>
-        scrubStoryline(tl.line!, clock.toValue(Math.max(0, Math.min(1, (local(ev).x - (dRef.current.items.find(i => i.id === tl.id)?.x ?? tl.x) + w / 2) / w))))
+        scrubStoryline(lineOf(tl)!, clock.toValue(Math.max(0, Math.min(1, (local(ev).x - (dRef.current.items.find(i => i.id === tl.id)?.x ?? tl.x) + w / 2) / w))))
       to(e)
       drag(to, () => {})
       return
@@ -580,11 +796,11 @@ export function StateSpaceBody({ id, node, bodyW, bodyH }: { id: string; node: F
 
   const onDouble = (e: React.MouseEvent) => {
     const t = e.target as HTMLElement
-    if (t.closest('[data-sp-bar],[data-sp-shelf],[data-sp-track],[data-sp-port],[data-sp-play]')) return
+    if (t.closest('[data-sp-bar],[data-sp-shelf],[data-sp-track],[data-sp-port],[data-sp-play],[data-sp-step]')) return
     e.stopPropagation()
     const nodeEl = t.closest('[data-sp-node]') as HTMLElement | null
     const it = nodeEl ? d.items.find(i => i.id === nodeEl.dataset.spNode) : undefined
-    if (it?.kind === 'event') { fireEvent(id, it.id); setPulse(p => ({ ...p, [it.id]: Date.now() })); return }
+    if (it?.kind === 'event' || it?.kind === 'wait' || it?.kind === 'pick') { fireEvent(id, it.id); setPulse(p => ({ ...p, [it.id]: Date.now() })); return }
     if (it) { setNow(id, it.id, !it.now); return }
     const p = local(e)
     const w = d.wires.find(x => { const g = wireKind(d, x) === 'change' ? wireGeom(d, x) : null; return g && wireDist(g, p.x, p.y) < 9 })
@@ -592,9 +808,9 @@ export function StateSpaceBody({ id, node, bodyW, bodyH }: { id: string; node: F
   }
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const wires = useMemo(() => d.wires.map(w => ({ w, g: wireGeom(d, w), kind: wireKind(d, w), tone: wireTone(d, w) })).filter((x): x is { w: SpaceWire; g: WireGeom; kind: ReturnType<typeof wireKind>; tone: string } => !!x.g), [d, lines])
+  const wires = useMemo(() => d.wires.map(w => ({ w, g: wireGeom(d, w), kind: wireKind(d, w), tone: wireTone(d, w) })).filter((x): x is { w: SpaceWire; g: WireGeom; kind: ReturnType<typeof wireKind>; tone: string } => !!x.g), [d, lines, worldLine])
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const ports = useMemo(() => d.items.flatMap(i => itemPorts(i).map(p => ({ item: i, ...p }))), [d, lines])
+  const ports = useMemo(() => d.items.flatMap(i => itemPorts(i).map(p => ({ item: i, ...p }))), [d, lines, worldLine])
   const marker = (tone: string) => `sp-${id}-${tone.replace(/[^a-z0-9]/gi, '')}`
   const tones = [STEEL, AMBER, VIOLET, GREEN, BLUE]
 
@@ -615,16 +831,20 @@ export function StateSpaceBody({ id, node, bodyW, bodyH }: { id: string; node: F
               </defs>
               {wires.map(({ w, g, kind, tone }) => {
                 const on = sel.includes(w.id)
+                const says = wireSays(d, w), does = wireDoes(d, w)
                 const c = on ? BLUE : tone
                 return (
                   <g key={w.id} data-sp-wire={w.id}>
                     <path d={g.path} fill="none" stroke={c} strokeWidth={on ? 2.6 : kind === 'signal' ? 1.5 : 1.9} strokeLinecap="round"
-                      strokeDasharray={kind === 'link' ? '2 6' : w.bp === 'if' ? '2 5' : kind === 'signal' ? '6 3' : undefined}
+                      strokeDasharray={kind === 'link' ? '2 6' : kind === 'cond' ? '2 5' : kind === 'signal' ? '6 3' : undefined}
                       opacity={kind === 'signal' && !on ? 0.9 : 1}
                       markerEnd={kind === 'link' ? undefined : `url(#${marker(c)})`} />
                     {w.name && kind !== 'signal' && <text x={g.mx} y={g.my - 12} textAnchor="middle" fontSize={11} fontFamily={FONT}
                       fill={on ? BLUE : 'rgba(255,255,255,0.75)'} stroke={GROUND} strokeWidth={4} paintOrder="stroke" style={{ userSelect: 'none' }}>{w.name}</text>}
                     {w.bp === 'if' && <text x={g.x2 + 8} y={g.y2 - 8} fontSize={9} fontFamily={FONT} fill={on ? BLUE : GREEN} style={{ userSelect: 'none' }}>only if</text>}
+                    {/* What it carries, by its start; what it does, by its end. */}
+                    {says && <text data-sp-says={w.id} x={along(g, 0.24).x} y={along(g, 0.24).y - 6} textAnchor="middle" fontSize={10} fontFamily={FONT} fill={on ? BLUE : '#bfe6c6'} stroke={GROUND} strokeWidth={3} paintOrder="stroke" style={{ userSelect: 'none' }}>{says}</text>}
+                    {does && <text data-sp-does={w.id} x={along(g, 0.8).x} y={along(g, 0.8).y - 6} textAnchor="middle" fontSize={10} fontFamily={FONT} fill={on ? BLUE : '#bfe6c6'} stroke={GROUND} strokeWidth={3} paintOrder="stroke" style={{ userSelect: 'none' }}>{does}</text>}
                   </g>
                 )
               })}
@@ -647,7 +867,7 @@ export function StateSpaceBody({ id, node, bodyW, bodyH }: { id: string; node: F
             </svg>
             {d.items.map(i => i.kind === 'timeline'
               ? <TimelineView key={i.id} item={i} picked={sel.includes(i.id)} playing={playing === i.id} />
-              : <NodeView key={i.id} item={i} picked={sel.includes(i.id)} stamp={pulse[i.id]} />)}
+              : <NodeView key={i.id} item={i} picked={sel.includes(i.id)} stamp={pulse[i.id]} on={truths.has(i.id)} says={says[i.id]} />)}
             {/* A change's knob: where a wire that makes it lands. */}
             {wires.filter(x => x.kind === 'change').map(({ w, g }) => {
               const ref = { wire: w.id, port: 'knob' }
@@ -663,9 +883,9 @@ export function StateSpaceBody({ id, node, bodyW, bodyH }: { id: string; node: F
               const own = draw && sameRef(draw.from, ref)
               const can = !draw || own || draw.cands.some(c => sameRef(c.ref, ref))
               const hot = sameRef(draw?.snap, ref)
-              const tone = p.item.kind === 'timeline' ? AMBER : p.item.kind === 'event' ? VIOLET : p.port === 'if' ? GREEN : STEEL
+              const tone = p.port === 'if' ? GREEN : kindTone(p.item.kind)
               return <div key={p.item.id + p.port} data-sp-port={p.port} data-sp-of={p.item.id} data-sp-out={p.out ? '1' : '0'} className="vb-sp-port"
-                title={p.port === 'if' ? 'Only if: wire a card here and this event only goes through while that card is lit' : p.out ? 'Out: drag from here to what follows' : 'In: drag a wire onto here'}
+                title={p.port === 'if' ? 'Only if: wire anything that is true or not here (a card, a value, And, Or, Is in) and this event only goes through while it is true' : p.port === 'a' ? 'The card looked for: wire a card node here' : p.port === 'b' ? 'What it is looked for in: wire a card node here' : p.out ? 'Out: drag from here to what follows' : 'In: drag a wire onto here'}
                 style={{
                   position: 'absolute', left: p.spot.x - 7, top: p.spot.y - 7, width: 14, height: 14, borderRadius: p.port === 'if' ? 3 : '50%', boxSizing: 'border-box',
                   background: hot || own ? BLUE : p.out ? tone : GROUND, border: `2px solid ${hot || (draw && can && !own) ? BLUE : tone}`,
@@ -685,17 +905,17 @@ export function StateSpaceBody({ id, node, bodyW, bodyH }: { id: string; node: F
             {/* The shelf: what there is to drag in besides cards and storylines. */}
             <div style={{ position: 'absolute', left: 10, top: 10, display: 'flex', gap: 6, fontFamily: FONT }}>
               {SHELF.map(s => (
-                <div key={s.kind} data-sp-shelf={s.kind} className="vb-sp-chip" title={s.title} style={{
-                  height: 24, lineHeight: '22px', padding: '0 10px', boxSizing: 'border-box', borderRadius: s.kind === 'blank' ? 5 : 12, fontSize: 11, color: INK, cursor: 'grab', userSelect: 'none',
-                  background: 'rgba(255,255,255,0.05)', border: `1px ${s.kind === 'blank' ? 'dashed' : 'solid'} ${s.kind === 'event' ? VIOLET : 'rgba(255,255,255,0.3)'}`,
+                <div key={s.key} data-sp-shelf={s.key} className="vb-sp-chip" title={s.title} style={{
+                  height: 24, lineHeight: '22px', padding: '0 10px', boxSizing: 'border-box', borderRadius: s.kind === 'blank' ? 5 : 12, fontSize: 11, color: INK, cursor: 'grab', userSelect: 'none', whiteSpace: 'nowrap',
+                  background: 'rgba(255,255,255,0.05)', border: `1px ${s.kind === 'blank' ? 'dashed' : 'solid'} ${kindTone(s.kind) === STEEL ? 'rgba(255,255,255,0.3)' : kindTone(s.kind)}`,
                 }}>{s.name}</div>
               ))}
             </div>
             {ghost && (() => {
-              const s = itemSize({ id: '', kind: ghost.kind, x: 0, y: 0 })
+              const s = itemSize({ id: '', kind: ghost.kind, ...ghost.more, x: 0, y: 0 })
               return <div style={{
                 position: 'absolute', left: ghost.x - s.w / 2, top: ghost.y - s.h / 2, width: s.w, height: s.h, boxSizing: 'border-box', pointerEvents: 'none',
-                borderRadius: ghost.kind === 'blank' ? 12 : s.h / 2, border: `2px dashed ${ghost.kind === 'event' ? VIOLET : STEEL}`, background: 'rgba(255,255,255,0.06)',
+                borderRadius: ghost.kind === 'blank' ? 12 : Math.min(20, s.h / 2), border: `2px dashed ${kindTone(ghost.kind)}`, background: 'rgba(255,255,255,0.06)',
                 display: 'flex', alignItems: 'center', justifyContent: 'center', color: INK, fontSize: 12, fontFamily: FONT,
               }}>{ghost.name}</div>
             })()}

@@ -16,7 +16,19 @@
 //   any       stands for every node: an arrow out of it is a change that
 //             can be made from anywhere.
 //   timeline  a storyline dragged in by its handle: its points in story
-//             order, each with an output, and its own time marker.
+//             order, each with an output, and its own time marker. With
+//             `world` it is the world clock: whichever storyline that is.
+//   value     a number (or, as a flag, yes / no) that wires change.
+//   and, or   true while all (any) of what is wired into it is true.
+//   fact      true while its first card is in its second on the board: in
+//             its deck, or linked to it (a faction's members are its links).
+//   wait      passes what reaches it on, a number of points later.
+//   pick      passes what reaches it on along one of its wires, by chance.
+//
+// Some nodes are true or not at any moment (a card: lit; a value: by the
+// compare its wire carries; and, or, fact): these can be CONDITIONS, wired
+// into an event's "only if" or into an and / or. Wired into anything else
+// they send when they BECOME true. A wire from one can carry "not".
 //
 // Wires, by what they join:
 //   card out -> card in      a CHANGE: the second can follow the first.
@@ -45,14 +57,14 @@
 
 import { create } from 'zustand'
 import { useFreeNodeStore } from '../store/freeNodeStore'
-import { useBoardsStore } from '../store/boardsStore'
+import { useBoardsStore, type ProjectGroup } from '../store/boardsStore'
 import { useCanvasStore } from '../store/canvasStore'
 import { useUndoCoordinator } from '../store/undoCoordinator'
 import { isTilted, unprojectTilt, useTiltStore } from '../store/tiltStore'
 import { applyState, deckCards, markChange } from './stateCard'
 import { rootOf } from './storyline'
 
-export type SpaceKind = 'card' | 'blank' | 'event' | 'any' | 'timeline'
+export type SpaceKind = 'card' | 'blank' | 'event' | 'any' | 'timeline' | 'value' | 'and' | 'or' | 'fact' | 'wait' | 'pick'
 
 export interface SpaceItem {
   id: string
@@ -71,9 +83,22 @@ export interface SpaceItem {
   now?: boolean
   /** Lit before anything has happened (one per machine). */
   start?: boolean
+  /** timeline: the world clock's storyline, whichever it is, not `line`. */
+  world?: boolean
+  /** value: what it is now, and what it is before anything has happened. */
+  val?: number
+  init?: number
+  /** value: shown and kept as yes / no. */
+  flag?: boolean
+  /** wait: how many points later. */
+  n?: number
+  /** pick: what its chances hang on; a new one is a new roll. */
+  seed?: number
 }
 
-export type InPort = 'in' | 'if' | 'knob'
+export type Compare = '<' | '<=' | '=' | '!=' | '>=' | '>'
+
+export type InPort = 'in' | 'if' | 'knob' | 'a' | 'b'
 
 export interface SpaceWire {
   id: string
@@ -87,6 +112,14 @@ export interface SpaceWire {
   note?: string
   /** card -> card only: a plain line (a relationship), not a change. */
   plain?: boolean
+  /** From a value: what makes it true (without: it is not zero). */
+  cmp?: Compare
+  cn?: number
+  /** From anything true-or-not: true when that is not. */
+  not?: boolean
+  /** Into a value: what it does to it (without: adds 1). */
+  op?: 'add' | 'set'
+  on?: number
 }
 
 export interface StateSpaceData {
@@ -106,6 +139,15 @@ export const EVENT_W = 128
 export const EVENT_H = 44
 export const TL_STEP = 88
 export const TL_H = 78
+export const VALUE_W = 112
+export const VALUE_H = 60
+export const GATE_W = 64
+export const GATE_H = 40
+export const FACT_W = 124
+export const FACT_H = 62
+export const WAIT_W = 108
+export const SMALL_W = 84
+export const SMALL_H = 40
 /** How near a port a wire's end snaps to it. */
 export const PORT_SNAP = 24
 /** Nodes keep to this grid as they are moved (Ctrl: freely). */
@@ -159,11 +201,18 @@ export function editSpace(nodeId: string, f: (d: StateSpaceData) => StateSpaceDa
 const itemOf = (d: StateSpaceData, id: string | undefined) => d.items.find(i => i.id === id)
 const wireOf = (d: StateSpaceData, id: string | undefined) => d.wires.find(w => w.id === id)
 const isState = (i: SpaceItem | undefined) => i?.kind === 'card' || i?.kind === 'blank'
+/** True or not at any moment: can be a condition. */
+export const isLevel = (i: SpaceItem | undefined) => isState(i) || i?.kind === 'value' || i?.kind === 'and' || i?.kind === 'or' || i?.kind === 'fact'
+/** Reads conditions through its inputs, never signals. */
+const readsLevels = (i: SpaceItem | undefined) => i?.kind === 'and' || i?.kind === 'or' || i?.kind === 'fact'
+/** A timeline node's storyline. */
+export const lineOf = (i: SpaceItem | undefined): string | undefined => i?.world ? useCanvasStore.getState().worldClockLine ?? undefined : i?.line
 
 /** What a wire is: a change (or, plain, a link) between two cards, else a
  *  signal: "when this, then that". */
-export function wireKind(d: StateSpaceData, w: SpaceWire): 'change' | 'link' | 'signal' {
+export function wireKind(d: StateSpaceData, w: SpaceWire): 'change' | 'link' | 'signal' | 'cond' {
   const a = itemOf(d, w.a)
+  if (w.bp === 'if' || (w.bp !== 'knob' && readsLevels(itemOf(d, w.b)))) return 'cond'
   if ((w.bp ?? 'in') === 'in' && !w.ap && (isState(a) || a?.kind === 'any') && isState(itemOf(d, w.b))) return w.plain ? 'link' : 'change'
   return 'signal'
 }
@@ -225,7 +274,12 @@ function lineSize(lineId: string | undefined): { w: number; h: number } {
 export function itemSize(i: SpaceItem): { w: number; h: number } {
   if (i.kind === 'any') return { w: ANY_R * 2, h: ANY_R * 2 }
   if (i.kind === 'event') return { w: EVENT_W, h: EVENT_H }
-  if (i.kind === 'timeline') return lineSize(i.line)
+  if (i.kind === 'timeline') return lineSize(lineOf(i))
+  if (i.kind === 'value') return { w: VALUE_W, h: VALUE_H }
+  if (i.kind === 'and' || i.kind === 'or') return { w: GATE_W, h: GATE_H }
+  if (i.kind === 'fact') return { w: FACT_W, h: FACT_H }
+  if (i.kind === 'wait') return { w: WAIT_W, h: SMALL_H }
+  if (i.kind === 'pick') return { w: SMALL_W, h: SMALL_H }
   return { w: ICON, h: ICON }
 }
 
@@ -239,9 +293,10 @@ export function itemPorts(i: SpaceItem): { port: string; out: boolean; spot: Por
   if (i.kind === 'any') return [{ port: 'out', out: true, spot: R }]
   if (i.kind === 'event') return [{ port: 'in', out: false, spot: L }, { port: 'out', out: true, spot: R }, { port: 'if', out: false, spot: { x: i.x, y: i.y - h / 2, dx: 0, dy: -1 } }]
   if (i.kind === 'timeline') {
-    const c = lineClock(i.line)
+    const c = lineClock(lineOf(i))
     return (c?.dots ?? []).map(p => ({ port: 'pt:' + p.id, out: true, spot: { x: i.x - w / 2 + p.frac * w, y: i.y + h / 2, dx: 0, dy: 1 } }))
   }
+  if (i.kind === 'fact') return [{ port: 'a', out: false, spot: { ...L, y: i.y - 19 } }, { port: 'b', out: false, spot: { ...L, y: i.y + 19 } }, { port: 'out', out: true, spot: R }]
   return [{ port: 'in', out: false, spot: L }, { port: 'out', out: true, spot: R }]
 }
 
@@ -323,9 +378,11 @@ export function canWire(d: StateSpaceData, from: PortRef, to: PortRef): boolean 
   const b = itemOf(d, to.node)
   if (!b || b.id === a.id) return false
   if (isState(b)) return to.port === 'in'
-  if (b.kind !== 'event' || a.kind === 'any') return false
-  if (to.port === 'if') return isState(a)
-  return to.port === 'in'
+  if (a.kind === 'any') return false
+  if (b.kind === 'fact') return (to.port === 'a' || to.port === 'b') && a.kind === 'card' && !!a.card
+  if (b.kind === 'and' || b.kind === 'or') return to.port === 'in' && isLevel(a)
+  if (b.kind === 'event' && to.port === 'if') return isLevel(a)
+  return to.port === 'in' && (b.kind === 'event' || b.kind === 'value' || b.kind === 'wait' || b.kind === 'pick')
 }
 
 /** Every input a wire from `from` could go to, with where it is. */
@@ -374,21 +431,112 @@ export function machineOf(d: StateSpaceData, itemId: string): Set<string> {
 
 // ── The engine ──
 
-interface Run { lit: Set<string>; touched: Set<string>; fired: string[]; used: string[]; steps: number }
+/** A value node's number as it stands. */
+export const valOf = (i: SpaceItem | undefined): number => i?.val ?? i?.init ?? 0
 
-function runner(d: StateSpaceData, lit: Set<string>) {
-  const r: Run = { lit, touched: new Set(), fired: [], used: [], steps: 0 }
+const compare = (v: number, c: Compare, n: number): boolean =>
+  c === '<' ? v < n : c === '<=' ? v <= n : c === '=' ? v === n : c === '!=' ? v !== n : c === '>=' ? v >= n : v > n
+
+/** Is card `a` in card `b` on the board: in its deck, or linked with it (a
+ *  faction's members are its links). A linked card stands for its master. */
+function cardIsIn(groups: ProjectGroup[], a: string, b: string): boolean {
+  const byId = new Map(groups.map(g => [g.id, g]))
+  const A = byId.get(a), B = byId.get(b)
+  if (!A || !B) return false
+  const master = (id: string) => byId.get(id)?.linkOf ?? id
+  const am = master(a), bm = master(b)
+  if (am === bm) return false
+  if (deckCards(groups, b).some(c => c !== b && master(c) === am)) return true
+  const linked = (x: string, y: string) => (byId.get(x)?.linkedGroupIds ?? []).some(l => master(l) === y)
+  return linked(bm, am) || linked(am, bm) || linked(b, am) || linked(a, bm)
+}
+
+interface Run {
+  lit: Set<string>
+  vals: Map<string, number>
+  touched: Set<string>
+  fired: string[]
+  used: string[]
+  /** Waits reached with no timeline behind them: they go on in real time. */
+  later: { id: string; n: number }[]
+  steps: number
+}
+interface RunOpts {
+  /** A replay: chances fall the same way every time (by each pick's seed). */
+  replay?: boolean
+  /** What the facts were before the board changed: one that has become true sends. */
+  factWas?: Map<string, boolean>
+}
+
+function runner(d: StateSpaceData, lit: Set<string>, vals: Map<string, number>, opts: RunOpts = {}) {
+  const r: Run = { lit, vals, touched: new Set(), fired: [], used: [], later: [], steps: 0 }
   const machines = new Map<string, Set<string>>()
   const machine = (id: string) => { let m = machines.get(id); if (!m) { m = machineOf(d, id); for (const x of m) machines.set(x, m) } return m }
+  const groups = d.items.some(i => i.kind === 'fact') ? useBoardsStore.getState().groups : []
+  const facts = new Map<string, boolean>(opts.factWas ?? [])
+
+  /** Is a node true now? */
+  const truth = (id: string, seen = new Set<string>()): boolean => {
+    const i = itemOf(d, id)
+    if (!i || seen.has(id)) return false
+    if (isState(i)) return r.lit.has(id)
+    if (i.kind === 'value') return (r.vals.get(id) ?? 0) !== 0
+    if (i.kind === 'fact') {
+      let t = facts.get(id)
+      if (t === undefined) {
+        const end = (p: InPort) => itemOf(d, d.wires.find(w => w.b === id && w.bp === p)?.a)?.card
+        const a = end('a'), b = end('b')
+        t = !!a && !!b && cardIsIn(groups, a, b)
+        facts.set(id, t)
+      }
+      return t
+    }
+    if (i.kind !== 'and' && i.kind !== 'or') return false
+    seen.add(id)
+    const ins = d.wires.filter(w => w.b === id && w.bp !== 'knob')
+    const t = i.kind === 'and' ? ins.length > 0 && ins.every(w => wireTruth(w, seen)) : ins.some(w => wireTruth(w, seen))
+    seen.delete(id)
+    return t
+  }
+  /** Is what a wire carries true now: its source, by its compare, or not. */
+  const wireTruth = (w: SpaceWire, seen?: Set<string>): boolean => {
+    const a = itemOf(d, w.a)
+    const base = a?.kind === 'value' && w.cmp ? compare(r.vals.get(a.id) ?? 0, w.cmp, w.cn ?? 0) : truth(w.a, seen)
+    return w.not ? !base : base
+  }
+  // Wires that send when what they carry BECOMES true (a lit card's plain
+  // wires are sent by light itself).
+  const watch = d.wires.filter(w => { const a = itemOf(d, w.a); return wireKind(d, w) === 'signal' && isLevel(a) && (!isState(a) || !!w.not) })
+  const was = new Map(watch.map(w => [w.id, wireTruth(w)]))
+  facts.clear()
+  const recheck = () => {
+    for (const w of watch) {
+      const t = wireTruth(w)
+      const before = was.get(w.id)
+      was.set(w.id, t)
+      if (t && !before) go(w)
+    }
+  }
+
+  let ctx: { tl: string; idx: number } | null = null
+  const pending: { tl: string; due: number; id: string }[] = []
+  let rolls = 0
+
   const go = (w: SpaceWire) => {
-    if (w.bp === 'if') return
+    if (++r.steps > 600 || wireKind(d, w) !== 'signal') return
     r.used.push(w.id)
-    if (w.bp === 'knob') change(w.b)
-    else if (itemOf(d, w.b)?.kind === 'event') fire(w.b)
+    if (w.bp === 'knob') { change(w.b); return }
+    const t = itemOf(d, w.b)
+    if (t?.kind === 'event') fire(t.id)
+    else if (t?.kind === 'value') set(t.id, w.op === 'set' ? w.on ?? 0 : (r.vals.get(t.id) ?? 0) + (w.on ?? 1))
+    else if (t?.kind === 'wait') wait(t)
+    else if (t?.kind === 'pick') pick(t)
     else light(w.b)
   }
+  /** Send along every wire out of a node (a timeline: out of one point). */
   const signals = (from: string, port?: string) => {
-    for (const w of d.wires) if (w.a === from && (port === undefined || w.ap === port) && wireKind(d, w) === 'signal') go(w)
+    const a = itemOf(d, from)
+    for (const w of d.wires) if (w.a === from && (port === undefined || w.ap === port) && wireKind(d, w) === 'signal' && !(w.not && isLevel(a))) go(w)
   }
   /** Light a node: its machine's others go out, and what it is wired to follows. */
   const light = (id: string) => {
@@ -399,11 +547,12 @@ function runner(d: StateSpaceData, lit: Set<string>) {
     for (const x of m) r.lit.delete(x)
     r.lit.add(id)
     signals(id)
+    recheck()
   }
-  /** Fire an event, if every card wired to its "only if" is lit. */
+  /** Fire an event, if everything wired to its "only if" is true. */
   const fire = (id: string) => {
     if (++r.steps > 600) return
-    if (d.wires.some(w => w.b === id && w.bp === 'if' && !r.lit.has(w.a))) return
+    if (d.wires.some(w => w.b === id && w.bp === 'if' && !wireTruth(w))) return
     r.fired.push(id)
     signals(id)
   }
@@ -416,32 +565,85 @@ function runner(d: StateSpaceData, lit: Set<string>) {
     if (r.lit.has(w.b)) return
     if (from?.kind === 'any' || r.lit.has(w.a) || ![...machine(w.b)].some(x => r.lit.has(x))) { r.used.push(w.id); light(w.b) }
   }
-  return { r, light, fire, change, point: (tl: string, dot: string) => signals(tl, 'pt:' + dot), machine }
+  /** Give a value a number. */
+  const set = (id: string, v: number) => {
+    const i = itemOf(d, id)
+    if (i?.kind !== 'value') return
+    const next = i.flag ? (v > 0 ? 1 : 0) : v
+    if ((r.vals.get(id) ?? 0) === next) return
+    r.vals.set(id, next)
+    recheck()
+  }
+  /** A wait: on again so many points later along the timeline this came
+   *  from; with no timeline behind it, after as many beats of real time. */
+  const wait = (t: SpaceItem) => {
+    const n = Math.max(0, Math.round(t.n ?? 1))
+    if (!n) { r.fired.push(t.id); signals(t.id) }
+    else if (ctx) pending.push({ tl: ctx.tl, due: ctx.idx + n, id: t.id })
+    else r.later.push({ id: t.id, n })
+  }
+  /** A pick: on along one of its wires. */
+  const pick = (t: SpaceItem) => {
+    const outs = d.wires.filter(w => w.a === t.id && wireKind(d, w) === 'signal')
+    if (!outs.length) return
+    r.fired.push(t.id)
+    go(outs[opts.replay ? chance((t.seed ?? 1) + rolls++ * 7919, outs.length) : Math.floor(Math.random() * outs.length)])
+  }
+  /** A timeline's marker passes its `idx`th point. */
+  const point = (tl: string, dot: string, idx: number) => {
+    ctx = { tl, idx }
+    signals(tl, 'pt:' + dot)
+    for (let k = pending.findIndex(p => p.tl === tl && p.due === idx); k >= 0; k = pending.findIndex(p => p.tl === tl && p.due === idx)) {
+      const [p] = pending.splice(k, 1)
+      r.fired.push(p.id)
+      signals(p.id)
+    }
+    ctx = null
+  }
+  /** A wait's time is up. */
+  const resume = (id: string) => { const t = itemOf(d, id); if (t?.kind === 'pick') pick(t); else { r.fired.push(id); signals(id) } }
+  return { r, light, fire, change, set, point, resume, recheck, truth, wireTruth, machine }
 }
 
-/** The nodes a timeline can reach, through wires, events and changes. */
+/** 0..n-1 from a seed, the same every time. */
+function chance(seed: number, n: number): number {
+  let t = (seed + 0x6d2b79f5) | 0
+  t = Math.imul(t ^ (t >>> 15), t | 1)
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+  return Math.floor((((t ^ (t >>> 14)) >>> 0) / 4294967296) * n)
+}
+
+/** The nodes a timeline can reach, through wires, events, changes and the rest. */
 function driven(d: StateSpaceData): Set<string> {
   const out = new Set<string>()
-  const seen = new Set<string>()
-  const visit = (w: SpaceWire) => {
-    if (seen.has(w.id)) return
-    seen.add(w.id)
-    const target = w.bp === 'knob' ? wireOf(d, w.b)?.b : w.bp === 'if' ? undefined : w.b
-    const t = itemOf(d, target)
-    if (!t) return
-    if (t.kind === 'event') { for (const x of d.wires) if (x.a === t.id && wireKind(d, x) === 'signal') visit(x); return }
-    for (const m of machineOf(d, t.id)) {
-      if (out.has(m)) continue
-      out.add(m)
-      for (const x of d.wires) if (x.a === m && wireKind(d, x) === 'signal') visit(x)
+  const queue = d.items.filter(i => i.kind === 'timeline').map(i => i.id)
+  const seen = new Set(queue)
+  const add = (id: string | undefined) => { if (id && !seen.has(id)) { seen.add(id); out.add(id); queue.push(id) } }
+  while (queue.length) {
+    const x = queue.pop()!
+    for (const w of d.wires) {
+      if (w.a !== x || w.bp === 'if') continue
+      const k = wireKind(d, w)
+      if (k === 'change' || k === 'link') continue
+      const t = itemOf(d, w.bp === 'knob' ? wireOf(d, w.b)?.b : w.b)
+      if (isState(t)) for (const m of machineOf(d, t!.id)) add(m)
+      else add(t?.id)
     }
   }
-  for (const w of d.wires) if (itemOf(d, w.a)?.kind === 'timeline') visit(w)
   return out
 }
 
+const litOf = (d: StateSpaceData) => new Set(d.items.filter(i => i.now).map(i => i.id))
+const valsOf = (d: StateSpaceData) => new Map(d.items.filter(i => i.kind === 'value').map(i => [i.id, valOf(i)]))
+
+/** The and, or and fact nodes that are true as things stand. */
+export function spaceTruths(d: StateSpaceData): Set<string> {
+  const run = runner(d, litOf(d), valsOf(d))
+  return new Set(d.items.filter(i => readsLevels(i) && run.truth(i.id)).map(i => i.id))
+}
+
 /** What has just happened in a workspace, for its picture to show: the wires
- *  something went along and the events that fired, stamped with when. */
+ *  something went along and the nodes that fired, stamped with when. */
 export const useSpaceLive = create<Record<string, { stamp: number; wires: string[]; fired: string[] }>>(() => ({}))
 function show(nodeId: string, wires: string[], fired: string[]): void {
   if (wires.length || fired.length) useSpaceLive.setState({ [nodeId]: { stamp: Date.now(), wires, fired } })
@@ -450,11 +652,13 @@ function show(nodeId: string, wires: string[], fired: string[]): void {
  *  only what is new (the marker passing one more point). */
 const lastRun = new Map<string, Set<string>>()
 
-/** Write what is lit, and let the State cards follow. */
-function settle(nodeId: string, d: StateSpaceData, lit: Set<string>, fired: string[], undo: boolean): void {
+/** Write what is lit and what the values are, and let the State cards follow. */
+function settle(nodeId: string, d: StateSpaceData, run: Run, undo: boolean): void {
+  const { lit, vals, fired } = run
   const newly = d.items.filter(i => lit.has(i.id) && !i.now)
-  if (newly.length || d.items.some(i => i.now && !lit.has(i.id))) {
-    editSpace(nodeId, s => ({ ...s, items: s.items.map(i => lit.has(i.id) === !!i.now ? i : { ...i, now: lit.has(i.id) || undefined }) }), undo)
+  const same = (i: SpaceItem) => lit.has(i.id) === !!i.now && (i.kind !== 'value' || (vals.get(i.id) ?? 0) === valOf(i))
+  if (!d.items.every(same)) {
+    editSpace(nodeId, s => ({ ...s, items: s.items.map(i => same(i) ? i : { ...i, now: lit.has(i.id) || undefined, ...(i.kind === 'value' ? { val: vals.get(i.id) ?? 0 } : {}) }) }), undo)
   }
   const groups = useBoardsStore.getState().groups
   // State cards whose state decks hold a newly lit node's card pick that state.
@@ -476,64 +680,81 @@ function settle(nodeId: string, d: StateSpaceData, lit: Set<string>, fired: stri
 }
 
 /** Play the workspace's timelines from the beginning up to their markers:
- *  the machines they reach start from their start node and take every
- *  change up to now. The others stay as they are. No undo step of its own. */
+ *  what they reach starts over (machines from their start node, values from
+ *  what they start at) and takes everything up to now. The rest stays as it
+ *  is. No undo step of its own. */
 export function replaySpace(nodeId: string): void {
   const d = spaceOf(nodeId)
   if (!d) return
   const reach = driven(d)
   if (!reach.size) return
   const lit = new Set(d.items.filter(i => reach.has(i.id) ? i.start : i.now).map(i => i.id))
-  const run = runner(d, lit)
+  const vals = new Map(d.items.filter(i => i.kind === 'value').map(i => [i.id, reach.has(i.id) ? i.init ?? 0 : valOf(i)]))
+  const run = runner(d, lit, vals, { replay: true })
   for (const tl of d.items) {
     if (tl.kind !== 'timeline') continue
-    const c = lineClock(tl.line)
-    for (const p of c?.dots ?? []) if (p.at <= c!.at) run.point(tl.id, p.id)
+    const c = lineClock(lineOf(tl))
+    c?.dots.forEach((p, idx) => { if (p.at <= c.at) run.point(tl.id, p.id, idx) })
   }
   const all = new Set([...run.r.used, ...run.r.fired])
   const was = lastRun.get(nodeId)
   lastRun.set(nodeId, all)
   if (was) show(nodeId, run.r.used.filter(x => !was.has(x)), run.r.fired.filter(x => !was.has(x)))
   following = true
-  try { settle(nodeId, d, run.r.lit, run.r.fired, false) } finally { following = false }
+  try { settle(nodeId, d, run.r, false) } finally { following = false }
 }
 /** Set while a workspace is making State cards follow it, so that their
  *  change is not read back as news (startStateSpaces). */
 let following = false
+
+/** Something done by hand (or by the board): run it from how things stand,
+ *  show it, write it. `f` may return wires to show ahead of what it used. */
+function hand(nodeId: string, f: (run: ReturnType<typeof runner>, d: StateSpaceData) => string[] | void, opts?: RunOpts): void {
+  const d = spaceOf(nodeId)
+  if (!d) return
+  const run = runner(d, litOf(d), valsOf(d), opts)
+  const pre = f(run, d) ?? []
+  show(nodeId, [...pre, ...run.r.used], run.r.fired)
+  following = true
+  try { settle(nodeId, d, run.r, false) } finally { following = false }
+  // Waits with no timeline behind them: a beat of real time for each point.
+  for (const l of run.r.later) window.setTimeout(() => hand(nodeId, again => again.resume(l.id)), l.n * 700)
+}
 
 /** Light a node by hand (or put it out). */
 export function setNow(nodeId: string, itemId: string, on: boolean): void {
   const d = spaceOf(nodeId)
   const it = itemOf(d ?? emptyStateSpace(), itemId)
   if (!d || !isState(it) || !!it!.now === on) return
-  const lit = new Set(d.items.filter(i => i.now).map(i => i.id))
   useUndoCoordinator.getState().checkpoint()
-  if (!on) { lit.delete(itemId); settle(nodeId, d, lit, [], false); return }
-  const run = runner(d, lit)
-  // Shown coming along the change that leads to it from what was lit.
-  const by = d.wires.find(w => w.b === itemId && wireKind(d, w) === 'change' && lit.has(w.a))
-  run.light(itemId)
-  show(nodeId, [...(by ? [by.id] : []), ...run.r.used], run.r.fired)
-  following = true
-  try { settle(nodeId, d, run.r.lit, run.r.fired, false) } finally { following = false }
+  hand(nodeId, run => {
+    if (!on) { run.r.lit.delete(itemId); run.recheck(); return }
+    // Shown coming along the change that leads to it from what was lit.
+    const by = d.wires.find(w => w.b === itemId && wireKind(d, w) === 'change' && run.r.lit.has(w.a))
+    run.light(itemId)
+    return by ? [by.id] : []
+  })
 }
 
-/** Fire an event by hand. */
+/** Fire an event by hand (a wait or a pick: send it on). */
 export function fireEvent(nodeId: string, itemId: string): void {
-  const d = spaceOf(nodeId)
-  if (!d || itemOf(d, itemId)?.kind !== 'event') return
+  const k = itemOf(spaceOf(nodeId) ?? emptyStateSpace(), itemId)?.kind
+  if (k !== 'event' && k !== 'wait' && k !== 'pick') return
   useUndoCoordinator.getState().checkpoint()
-  const run = runner(d, new Set(d.items.filter(i => i.now).map(i => i.id)))
-  run.fire(itemId)
-  show(nodeId, run.r.used, run.r.fired)
-  following = true
-  try { settle(nodeId, d, run.r.lit, run.r.fired, false) } finally { following = false }
+  hand(nodeId, run => { if (k === 'event') run.fire(itemId); else run.resume(itemId) })
 }
 
 /** Make a change by hand: its far end becomes "now". */
 export function makeChange(nodeId: string, wireId: string): void {
   const w = wireOf(spaceOf(nodeId) ?? emptyStateSpace(), wireId)
   if (w) setNow(nodeId, w.b, true)
+}
+
+/** Give a value a number by hand. */
+export function setValue(nodeId: string, itemId: string, v: number, undo = true): void {
+  if (!Number.isFinite(v)) return
+  if (undo) useUndoCoordinator.getState().checkpoint()
+  hand(nodeId, run => run.set(itemId, v))
 }
 
 // ── Editing ──
@@ -556,7 +777,7 @@ export function removeFromSpace(nodeId: string, ids: string[]): void {
       for (const w of wires) if (!gone.has(w.id) && (gone.has(w.a) || gone.has(w.b))) { gone.add(w.id); grew = true }
       wires = wires.filter(w => !gone.has(w.id))
     }
-    return { items: d.items.filter(i => !gone.has(i.id)), wires }
+    return { ...d, items: d.items.filter(i => !gone.has(i.id)), wires }
   })
   replaySpace(nodeId)
 }
@@ -571,7 +792,9 @@ export function addWire(nodeId: string, from: PortRef, to: PortRef, undo = true)
   const old = d.wires.find(x => x.a === w.a && x.ap === w.ap && x.b === w.b && (x.bp ?? 'in') === w.bp)
   if (old) return old.id
   editSpace(nodeId, s => {
-    const next = { ...s, wires: [...s.wires, w] }
+    // A fact's two inputs hold one card each: a new wire takes the old one's place.
+    const kept = w.bp === 'a' || w.bp === 'b' ? s.wires.filter(x => !(x.b === w.b && x.bp === w.bp)) : s.wires
+    const next = { ...s, wires: [...kept, w] }
     // The first change of a machine: where it starts is where it began.
     if (wireKind(next, w) !== 'change' || !isState(itemOf(next, w.a))) return next
     const m = machineOf(next, w.a)
@@ -686,7 +909,7 @@ export function dropOnStateSpace(clientX: number, clientY: number, cards: string
 export function dropLineOnStateSpace(clientX: number, clientY: number, lineId: string, flat = false): boolean {
   const at = spaceAt(clientX, clientY, flat)
   if (!at) return false
-  editSpace(at.nodeId, d => d.items.some(i => i.line === lineId) ? d : { ...d, items: [...d.items, { id: uid(), kind: 'timeline', line: lineId, x: snap(at.x), y: snap(at.y) }] }, false)
+  editSpace(at.nodeId, d => d.items.some(i => !i.world && i.line === lineId) ? d : { ...d, items: [...d.items, { id: uid(), kind: 'timeline', line: lineId, x: snap(at.x), y: snap(at.y) }] }, false)
   return true
 }
 
@@ -704,8 +927,9 @@ export function startStateSpaces(): void {
     for (const n of Object.values(s.nodes)) {
       if (n.type !== 'stateSpace' || !n.stateSpace) continue
       for (const i of normalizeSpace(n.stateSpace).items) {
-        if (i.kind !== 'timeline' || !i.line) continue
-        const a = s.nodes[i.line]?.storyline, b = prev.nodes[i.line]?.storyline
+        const line = i.kind === 'timeline' ? lineOf(i) : undefined
+        if (!line) continue
+        const a = s.nodes[line]?.storyline, b = prev.nodes[line]?.storyline
         if (a !== b && (a?.marker !== b?.marker || a?.dots !== b?.dots)) { moved.push(n.id); break }
       }
     }
@@ -732,17 +956,37 @@ export function startStateSpaces(): void {
         const d = n.type === 'stateSpace' && n.stateSpace ? normalizeSpace(n.stateSpace) : null
         const hit = d?.items.filter(i => i.card && cards.has(i.card) && !i.now && isState(i))
         if (!d || !hit?.length) continue
-        const lit = new Set(d.items.filter(i => i.now).map(i => i.id))
-        const run = runner(d, lit)
-        for (const i of hit) {
-          const by = d.wires.find(w => w.b === i.id && wireKind(d, w) === 'change' && lit.has(w.a))
-          if (by) run.r.used.push(by.id)
+        hand(n.id, run => hit.flatMap(i => {
+          const by = d.wires.find(w => w.b === i.id && wireKind(d, w) === 'change' && run.r.lit.has(w.a))
           run.light(i.id)
-        }
-        show(n.id, run.r.used, run.r.fired)
-        following = true
-        try { settle(n.id, d, run.r.lit, run.r.fired, false) } finally { following = false }
+          return by ? [by.id] : []
+        }))
       }
     } finally { busy = false }
   })
+  // The world clock given another storyline: its nodes are that one now.
+  useCanvasStore.subscribe((s, prev) => {
+    if (s.worldClockLine === prev.worldClockLine) return
+    for (const n of Object.values(useFreeNodeStore.getState().nodes)) {
+      if (n.type === 'stateSpace' && n.stateSpace && normalizeSpace(n.stateSpace).items.some(i => i.world)) { lastRun.delete(n.id); replaySpace(n.id) }
+    }
+  })
+  // Facts read the board: when it changes, a fact that has become true sends.
+  const factWas = new Map<string, Map<string, boolean>>()
+  let due = 0
+  const readFacts = () => {
+    due = 0
+    for (const n of Object.values(useFreeNodeStore.getState().nodes)) {
+      const d = n.type === 'stateSpace' && n.stateSpace ? normalizeSpace(n.stateSpace) : null
+      if (!d?.items.some(i => i.kind === 'fact')) { factWas.delete(n.id); continue }
+      const run = runner(d, litOf(d), valsOf(d))
+      const now = new Map(d.items.filter(i => i.kind === 'fact').map(i => [i.id, run.truth(i.id)]))
+      const was = factWas.get(n.id)
+      factWas.set(n.id, now)
+      if (!was || ![...now].some(([k, v]) => was.has(k) && was.get(k) !== v)) continue
+      hand(n.id, again => again.recheck(), { factWas: was })
+    }
+  }
+  useBoardsStore.subscribe((s, prev) => { if (s.groups !== prev.groups && !due) due = window.setTimeout(readFacts, 200) })
+  readFacts()
 }

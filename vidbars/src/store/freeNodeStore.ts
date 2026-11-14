@@ -404,7 +404,8 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
       ...(type === 'cabinet' ? { cabinet: newCabinet() } : {}),
       ...(type === 'storyline' ? { width: 0, storyline: newStoryline() } : {}),
       ...(type === 'roughCut' ? { roughCut: { clips: [], pps: 60 } } : {}),
-      ...(type === 'stateSpace' ? { stateSpace: { items: [], wires: [] } } : {}),
+      // A new workspace has the world clock in it, so what is built there runs on the world's time by default (it can be taken out).
+      ...(type === 'stateSpace' ? { stateSpace: { items: [{ id: 'world', kind: 'timeline' as const, world: true, x: 290, y: 610 }], wires: [] } } : {}),
       ...(type === 'area' || type === 'annotations' ? { color: '#141a28' } : {}),
     }
     set(s => ({ nodes: { ...s.nodes, [id]: node } }))
