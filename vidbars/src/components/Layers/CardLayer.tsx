@@ -1191,9 +1191,9 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
       // join it as members, as their link "+" does, and go back to where
       // they were picked up. Never merged into it as blocks. The press took
       // the checkpoint: one undo puts it all back.
-      // Let go over a state workspace: the cards become icons there (links),
+      // Let go over a state workspace: the cards become nodes there (links),
       // and go back to where they were picked up (utils/stateSpace).
-      if (!group.pin && moved && dropOnStateSpace(ev.clientX, ev.clientY, picked)) {
+      if (!group.pin && moved && dropOnStateSpace(ev.clientX, ev.clientY, [group.id, ...picked.filter(x => x !== group.id)], !ev.isTrusted)) {
         useBoardsStore.getState().setGroupPosBatch(Array.from(initialOrigins, ([gid, o]) => ({ groupId: gid, originY: o.y, originX: o.x })))
         endDockedDrag(draggingIds, false)
         useMagnetPreviewStore.getState().setPreview(null)
@@ -2285,8 +2285,8 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
         useMagnetPreviewStore.getState().setPreview(null)
         return
       }
-      // Over a state workspace: the deck becomes one icon there, and goes back.
-      if (!anchorGroup.pin && (dxAccum !== 0 || dyAccum !== 0) && dropOnStateSpace(ev.clientX, ev.clientY, [deck.anchorGroupId])) {
+      // Over a state workspace: the deck becomes one node there, and goes back.
+      if (!anchorGroup.pin && (dxAccum !== 0 || dyAccum !== 0) && dropOnStateSpace(ev.clientX, ev.clientY, [deck.anchorGroupId], !ev.isTrusted)) {
         previewCardRail(null, deck.anchorGroupId)
         useBoardsStore.getState().setGroupPosBatch(Array.from(initialOrigins, ([gid, o]) => ({ groupId: gid, originY: o.y, originX: o.x })))
         endDockedDrag([deck.anchorGroupId], false)
@@ -2999,6 +2999,12 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[]; lay
         previewCardRail(null, deck.anchorGroupId)
         useBoardsStore.getState().setGroupPosBatch(Array.from(initialOrigins, ([gid, o]) => ({ groupId: gid, originY: o.y, originX: o.x })))
         stowCards(allDragIds, drawer)
+        return
+      }
+      // Over a state workspace: the fan becomes one node there, and goes back.
+      if (!anchorGroup.pin && dropOnStateSpace(ev.clientX, ev.clientY, [deck.anchorGroupId], !ev.isTrusted)) {
+        previewCardRail(null, deck.anchorGroupId)
+        useBoardsStore.getState().setGroupPosBatch(Array.from(initialOrigins, ([gid, o]) => ({ groupId: gid, originY: o.y, originX: o.x })))
         return
       }
       if (!anchorGroup.pin && dropDeckOnFaction(ev, allDragIds, deck.anchorGroupId, initialOrigins)) { previewCardRail(null, deck.anchorGroupId); return }

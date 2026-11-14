@@ -19,6 +19,8 @@ import type { GroupSlot } from '../../utils/nlePush'
 import { expandWithNestedMembers, canvasObstacleGroups } from '../../hooks/useCardDecks'
 import { hexToHsl, hslToHex } from '../../utils/colorUtils'
 import { updateDeckMagnetPreview, finishDeckMagnetDock } from '../../utils/deckDockDrag'
+import { dropOnStateSpace } from '../../utils/stateSpace'
+import { useMagnetPreviewStore } from '../../store/magnetPreviewStore'
 import { groupHasBrowsableContent } from '../../utils/contentTraversal'
 import { RenameInput } from '../UI/RenameInput'
 import { SceneViewButton } from '../Layers/SceneFace'
@@ -255,10 +257,19 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
       updateDeckMagnetPreview(canDock, groupId!)
     }
 
-    const onUp = () => {
+    const onUp = (ev: PointerEvent) => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
       setIsDragging(false)
+      // Let go over a state workspace: the card becomes a node there (a link),
+      // and goes back to where it was picked up (utils/stateSpace).
+      const was = groupId ? initialOrigins.get(groupId) : undefined
+      const is = useBoardsStore.getState().groups.find(x => x.id === groupId)
+      if (groupId && g && was && is && (is.originX !== was.x || is.originY !== was.y) && dropOnStateSpace(ev.clientX, ev.clientY, [groupId], !ev.isTrusted)) {
+        useBoardsStore.getState().setGroupPosBatch(Array.from(initialOrigins, ([gid, origin]) => ({ groupId: gid, originY: origin.y, originX: origin.x })))
+        useMagnetPreviewStore.getState().setPreview(null)
+        return
+      }
       if (groupId && g) {
         finishDeckMagnetDock(canDock, groupId, groupId, dragIds)
       }
