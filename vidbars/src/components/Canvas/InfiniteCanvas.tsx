@@ -18,7 +18,7 @@ import { isPanelType } from '../../utils/componentLinks'
 import { addFreeNodeCentered, addViewerCentered, createCardOrBoardAt, createStorylineAt } from '../../utils/canvasCreate'
 import { selectStorylinesInBox } from './StorylineLayer'
 import { PlaceGhost } from './PlaceGhost'
-import { canvasPointUnder } from '../../utils/placeTool'
+import { canvasPointUnder, setEffectPlacer } from '../../utils/placeTool'
 import { GLCanvasHost } from '../Viewport3D/GLCanvasHost'
 import { WorldZoom } from './worldZoom'
 import { addMediaBlockToCard, cardHitOf, groupForCardHit, type CardHit } from '../../utils/cardContent'
@@ -276,6 +276,19 @@ function effectDropRail(x: number, y: number, onto: string | undefined): RailDro
   if (top && top.type !== 'rail' && !top.railDock) return null
   return railDropAt(x, y, 'effect')
 }
+
+// An effect card picked up off the palette (utils/placeTool) is set down
+// exactly as one dragged off it is let go (handleDrop).
+setEffectPlacer({
+  rail: (x, y) => effectDropRail(x, y, effectDropTile(x, y)),
+  allowed: effectDropAllowed,
+  make: (kind, x, y, at) => {
+    const onto = effectDropTile(x, y)
+    const rail = effectDropRail(x, y, onto) ?? undefined
+    // Into a strip, the strip places it; else where the outline was.
+    createEffectCard(kind, { at: rail || onto ? clientToCanvas(x, y) : at, onto, rail })
+  },
+})
 
 interface Props {
   children: React.ReactNode

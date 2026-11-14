@@ -416,8 +416,8 @@ export const TopIconBar: React.FC = () => {
     effects: (
       <IconButton
         Icon={IcEffects}
-        title="Effects — pick one to add to the selected picture's strip"
-        active={fxOpen}
+        title="Effects — pick a card up, then click where it goes: the canvas, or between two cards on a loop strip"
+        active={fxOpen || placing === 'effect'}
         onClick={() => setFxOpen(o => !o)}
       />
     ),

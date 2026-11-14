@@ -25,7 +25,7 @@ import { isAuxKind, useAuxStore } from '../../utils/fx/aiEffects'
 import { motionDrawAll, useClipMotion } from '../../utils/fx/clipMotion'
 import { CARD_STRIP_PREFIX } from '../../utils/fx/cardStrips'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
-import { EFFECTS, EFFECT_ORDER, effectKindOf, effectParams, type EffectKind, type ParamDef } from '../../utils/fx/effects'
+import { EFFECTS, EFFECT_GROUPS, effectKindOf, effectParams, type EffectKind, type ParamDef } from '../../utils/fx/effects'
 import { soloedElsewhere, toggleEffectOff, toggleEffectSolo } from '../../utils/fx/effectToggles'
 import { startEffectDragOut } from '../../utils/fx/effectDragOut'
 
@@ -398,7 +398,12 @@ export const EffectTileBody: React.FC<{
             backgroundColor: '#1c1c20', color: '#e6e6ea',
           }}
         >
-          {EFFECT_ORDER.map(k => <option key={k} value={k}>{EFFECTS[k].glyph}  {EFFECTS[k].label}{EFFECTS[k].blend ? ' (mixes next picture)' : ''}</option>)}
+          {/* By what they are, as the Effects palette lists them. */}
+          {EFFECT_GROUPS.map(g => (
+            <optgroup key={g.id} label={g.title}>
+              {g.kinds.map(k => <option key={k} value={k}>{EFFECTS[k].glyph}  {EFFECTS[k].label}{EFFECTS[k].blend ? ' (mixes next picture)' : ''}</option>)}
+            </optgroup>
+          ))}
           {/* An action, not an effect: picking it resets every value and
               leaves the effect as it was. Here rather than on the face, so
               the face never grows or shrinks a row. */}

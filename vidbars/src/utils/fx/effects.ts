@@ -593,3 +593,15 @@ export function effectParams(kind: EffectKind, params: Record<string, number> | 
 /** In the order the add menu lists them. */
 export const EFFECT_ORDER: EffectKind[] = ['bloom', 'glare', 'glow', 'ink', 'cel', 'sketch', 'halftone', 'chroma', 'grade', 'multiply', 'screen', 'overlay', 'depth', 'segment', 'filmline', 'linemix', 'formhatch', 'bghatch', 'shademix',
   'painthatch', 'filmcel', 'boilink', 'misreg', 'construction', 'relight', 'formlight', 'bglayout', 'bgwash', 'stipple', 'halftoneshade', 'combine']
+
+/** The effects by what they are, for the palette: each group's name, a line
+ *  on what its cards have in common, and its cards. Every kind is in one. */
+export const EFFECT_GROUPS: { id: string; title: string; note: string; kinds: EffectKind[] }[] = [
+  { id: 'light', title: 'Light and colour', note: 'Instant. Glow, glare and colour over the picture', kinds: ['bloom', 'glare', 'glow', 'chroma', 'grade'] },
+  { id: 'stylize', title: 'Stylize', note: 'Instant. Turns the whole picture into a look', kinds: ['ink', 'cel', 'sketch', 'halftone'] },
+  { id: 'blend', title: 'Blend', note: 'Instant. Mixes in the next picture, or the look rows', kinds: ['multiply', 'screen', 'overlay', 'combine'] },
+  { id: 'find', title: 'Find', note: 'Maps the drawing cards read', kinds: ['depth', 'segment'] },
+  { id: 'drawlines', title: 'Draw: lines and shading', note: 'Drawn by the pen tool: a second or two for each change', kinds: ['filmline', 'construction', 'boilink', 'misreg', 'formhatch', 'bghatch', 'painthatch', 'stipple', 'halftoneshade'] },
+  { id: 'drawlight', title: 'Draw: light and paint', note: 'Drawn by the tool: a second or two for each change', kinds: ['filmcel', 'relight', 'formlight', 'bglayout', 'bgwash'] },
+  { id: 'mix', title: 'Mix a drawing', note: 'Instant. Re-mixes a drawing', kinds: ['linemix', 'shademix'] },
+]

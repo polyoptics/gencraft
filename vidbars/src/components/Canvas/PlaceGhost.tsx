@@ -14,9 +14,11 @@ export const PlaceGhost: React.FC = () => {
   const kind = usePlacing(s => s.kind)
   const at = usePlacing(s => s.at)
   const free = usePlacing(s => s.free)
+  // An effect over a loop strip: the strip marks where it goes in.
+  const onRail = usePlacing(s => !!s.rail)
   const pan = useCanvasStore(s => s.pan)
   const zoom = useCanvasStore(s => s.zoom)
-  if (!kind || !at) return null
+  if (!kind || !at || onRail) return null
   const b = placeBox(kind, at, zoom, free)
   const left = b.left * zoom + pan.x, top = b.top * zoom + pan.y
   if (placesPoint(kind)) {

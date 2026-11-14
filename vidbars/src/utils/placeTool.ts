@@ -30,8 +30,14 @@ import {
 import { openFilmMixer, filmMixerSize } from '../components/FilmMixer/FilmMixerBody'
 import { openRoughCut, roughCutSize } from '../components/RoughCut/RoughCutBody'
 import { createLoopStrip, loopStripSize } from './fx/createEffect'
+import { cardFaceSize } from './cardGrid'
+import { useRailUiStore } from '../store/railUiStore'
+import type { RailDropTarget } from './rail'
+import type { EffectKind } from './fx/effects'
 
 export type PlaceKind = 'viewer' | 'pool' | 'prompt' | 'history' | 'browser' | 'filmMixer' | 'storyline' | 'cabinet' | 'roughCut' | 'loopStrip' | 'attributes' | 'promptCards' | 'area' | 'new'
+  /** An effect card picked off the Effects palette (`effect` says which). */
+  | 'effect'
 
 interface PlaceState {
   /** What is being placed, or null. */
@@ -40,16 +46,52 @@ interface PlaceState {
   at: { cx: number; cy: number } | null
   /** Ctrl held: no snapping. */
   free: boolean
+  /** kind 'effect': which effect. */
+  effect: EffectKind | null
+  /** kind 'effect': the place on a loop strip it would go into if set down
+   *  now (the strip marks it; the outline steps aside), or null. */
+  rail: RailDropTarget | null
 }
 
-export const usePlacing = create<PlaceState>(() => ({ kind: null, at: null, free: false }))
+const IDLE: PlaceState = { kind: null, at: null, free: false, effect: null, rail: null }
+export const usePlacing = create<PlaceState>(() => ({ ...IDLE }))
+
+/** The id the strip's drop mark is held under while an effect is placed. */
+const RAIL_MARK = 'place-effect'
+function markRail(target: RailDropTarget | null) {
+  const ui = useRailUiStore.getState()
+  if (target) ui.setDrop({ target, draggedId: RAIL_MARK })
+  else if (ui.drop?.draggedId === RAIL_MARK) ui.setDrop(null)
+}
 
 export function startPlacing(kind: PlaceKind) {
-  usePlacing.setState({ kind, at: null, free: false })
+  markRail(null)
+  usePlacing.setState({ ...IDLE, kind })
+}
+/** Pick an effect card up off the palette: its outline follows the mouse,
+ *  and the next click sets it down — on the canvas, or into a loop strip
+ *  where the strip marks (between two of its cards, at either end, in a
+ *  look row, or under a card as its input). */
+export function startPlacingEffect(effect: EffectKind) {
+  markRail(null)
+  usePlacing.setState({ ...IDLE, kind: 'effect', effect })
 }
 export function cancelPlacing() {
-  if (usePlacing.getState().kind) usePlacing.setState({ kind: null, at: null, free: false })
+  markRail(null)
+  if (usePlacing.getState().kind) usePlacing.setState({ ...IDLE })
 }
+
+/** How an effect card is set down, given by the canvas (InfiniteCanvas),
+ *  which already does it for one dragged off the palette: `rail` is where
+ *  on a loop strip a card let go at client (x, y) would dock, `allowed`
+ *  whether it can be let go there at all, `make` makes it. */
+interface EffectPlacer {
+  rail: (x: number, y: number) => RailDropTarget | null
+  allowed: (x: number, y: number) => boolean
+  make: (kind: EffectKind, x: number, y: number, at: { cx: number; cy: number }) => void
+}
+let effectPlacer: EffectPlacer | null = null
+export function setEffectPlacer(p: EffectPlacer) { effectPlacer = p }
 /** The toolbar button: pick it up, or (lit) put it back. */
 export function togglePlacing(kind: PlaceKind) {
   if (usePlacing.getState().kind === kind) cancelPlacing()
@@ -70,6 +112,8 @@ function footprint(kind: PlaceKind, zoom: number): Footprint {
     case 'filmMixer': { const s = filmMixerSize(); return { w: s.width, h: s.height, dy: 0 } }
     case 'roughCut': { const s = roughCutSize(); return { w: s.width, h: s.height, dy: 0 } }
     case 'loopStrip': { const s = loopStripSize(zoom); return { w: s.width, h: s.height, dy: 0 } }
+    // An effect is a card, made at a card's face size (utils/effectCards).
+    case 'effect': { const s = cardFaceSize(zoom); return { w: s.w, h: s.h, dy: 0 } }
     case 'storyline': return { w: 0, h: 0, dy: 0 }
     case 'new': return newIsNote() ? freeNodeFootprint('note', zoom) : cardFootprint(zoom)
     default: return freeNodeFootprint(kind, zoom)
@@ -100,7 +144,7 @@ export function placeBox(kind: PlaceKind, at: { cx: number; cy: number }, zoom: 
     }
     left = pull(left); top = pull(top)
   }
-  const isCard = kind === 'new' && !newIsNote()
+  const isCard = (kind === 'new' && !newIsNote()) || kind === 'effect'
   if (!isCard && currentZone() === 'card') top = riseClearOfCards(left, top, fp.w, fp.h, zoom)
   return { left, top, w: fp.w, h: fp.h, dy: fp.dy }
 }
@@ -134,6 +178,7 @@ function placeAt(kind: PlaceKind, box: PlaceBox) {
     case 'new': if (newIsNote()) addFreeNodeCentered('note', at); else createCardOrBoardAt(at); break
     // A 3D set comes with its card (utils/area3dCard).
     case 'area': bundleArea3dCard(addFreeNodeCentered('area', at)); break
+    case 'effect': break   // set down by the pointer handler, which knows what is under it
     default: addFreeNodeCentered(kind, at)
   }
 }
@@ -175,8 +220,12 @@ let eatUntilUp = false
 if (typeof window !== 'undefined') {
   window.addEventListener('pointermove', e => {
     if (!usePlacing.getState().kind || !e.isTrusted) return
+    const { kind } = usePlacing.getState()
     const at = overCanvas(e.target) ? canvasPointUnder(e.clientX, e.clientY) : null
-    usePlacing.setState({ at, free: e.ctrlKey })
+    // An effect over a loop strip: the strip marks where it would go in.
+    const rail = kind === 'effect' && at && effectPlacer ? effectPlacer.rail(e.clientX, e.clientY) : null
+    if (kind === 'effect') markRail(rail)
+    usePlacing.setState({ at, free: e.ctrlKey, rail })
   }, true)
   window.addEventListener('pointerdown', e => {
     const { kind } = usePlacing.getState()
@@ -189,7 +238,13 @@ if (typeof window !== 'undefined') {
     const at = canvasPointUnder(e.clientX, e.clientY)
     if (!at) return   // past the horizon: nothing to stand it on
     const zoom = useCanvasStore.getState().zoom
-    placeAt(kind, placeBox(kind, at, zoom, e.ctrlKey))
+    const box = placeBox(kind, at, zoom, e.ctrlKey)
+    if (kind === 'effect') {
+      const { effect } = usePlacing.getState()
+      // Somewhere it cannot go (over a Viewer): still held, try elsewhere.
+      if (!effect || !effectPlacer || !effectPlacer.allowed(e.clientX, e.clientY)) return
+      effectPlacer.make(effect, e.clientX, e.clientY, { cx: box.left + box.w / 2, cy: box.top + box.h / 2 })
+    } else placeAt(kind, box)
     cancelPlacing()
   }, true)
   const eat = (e: Event) => {
