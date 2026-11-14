@@ -10,7 +10,7 @@ import { useFreeNodeStore, type FreeNodeData } from '../store/freeNodeStore'
 import { useBoardsStore } from '../store/boardsStore'
 import { useViewport3DStore } from '../store/viewport3dStore'
 import { useNotesStore } from '../store/notesStore'
-import { cardBox, carrying, docksUnder, isUnder, laying, lyingIn, resizing, rowCards, selfMoved, setCards, setViewers, viewerTouches } from './area3dScene'
+import { cardBox, carrying, docksUnder, isUnder, laying, lyingIn, resizing, rowCards, selfMoved, setCards, setViewers } from './area3dScene'
 import { isUndoRestoring } from '../store/undoCoordinator'
 import { isHiddenDeckMember } from '../hooks/useCardDecks'
 
@@ -50,7 +50,7 @@ if (typeof window !== 'undefined' && !(window as unknown as { __areaFollow?: boo
         // (Nor what is with it, along its sides, and goes where it goes:
         // moved far in one step, its new box covers where that still lies.)
         const withIt = new Set(rowCards(a, was ?? a).map(g => g.id))
-        const withV = new Set(was ? setViewers(a, was).map(w => w.id) : [])
+        const withV = new Set(setViewers(a, was ?? a).map(w => w.id))
         const along = (k: string) => k.startsWith('card:') ? withIt.has(k.slice(5)) : k.startsWith('viewer:') && withV.has(k.slice(7))
         const fresh = lyingIn(a, a.areaCard, a.id).filter(k => !before.has(k) && !isUnder(a, k) && !own?.has(k) && !along(k))
         // The same for a card its bottom edge comes to: not docked under it
@@ -60,12 +60,6 @@ if (typeof window !== 'undefined' && !(window as unknown as { __areaFollow?: boo
           if (g.pin || g.linkOf || withIt.has(g.id) || isHiddenDeckMember(g) || isUnder(a, k) || own?.has(k) || fresh.includes(k)) continue
           const r = cardBox(g)
           if (r && docksUnder(r, a) && !(was && docksUnder(r, was))) fresh.push(k)
-        }
-        // And for a Viewer one of its sides comes to.
-        for (const w of Object.values(useViewport3DStore.getState().windows)) {
-          const k = `viewer:${w.id}`
-          if (w.pin || withV.has(w.id) || isUnder(a, k) || own?.has(k) || fresh.includes(k)) continue
-          if (viewerTouches(w, a)) fresh.push(k)
         }
         if (fresh.length) {
           a = { ...a, under: [...(a.under ?? []), ...fresh] }

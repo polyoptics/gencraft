@@ -12,7 +12,7 @@ import { getMediaItems } from '../types/bar'
 import { faceBlocks } from './cardGrid'
 import { drawnRect } from './effectCards'
 import { useViewport3DStore, type ViewportWindow3D } from '../store/viewport3dStore'
-import { viewportVisualRect } from './viewportDocking'
+import { magnetRadiusForZoom, viewportVisualRect } from './viewportDocking'
 import { useNotesStore } from '../store/notesStore'
 import { cardsTouch, headerSlackAt, isHiddenDeckMember } from '../hooks/useCardDecks'
 
@@ -140,17 +140,30 @@ export function lyingIn(m: R, notCard?: string, notNode?: string): string[] {
   ]
 }
 
-/** Does Viewer `w` (as drawn, its header with it) lie against box `b`? */
-export const viewerTouches = (w: ViewportWindow3D, b: R): boolean =>
-  !w.pin && touches(viewportVisualRect(w, useCanvasStore.getState().zoom), b, dockGap())
-/** The Viewers with 3D set `a` (its box `box`): on its ground, or set
- *  against one of its sides (Brian 2026-11-13: "The 2D viewer should magnet
- *  to the 3D set, and collapse with the 3D set card"). They go where it
- *  goes and fold away with it (utils/areaFollow, utils/area3dCard). Not
- *  one it came out over or next to (isUnder), till that one is moved. */
-export function setViewers(a: { under?: string[] }, box: R): ViewportWindow3D[] {
-  return Object.values(useViewport3DStore.getState().windows).filter(w =>
-    !w.pin && !isUnder(a, `viewer:${w.id}`) && (inside(box, w.x + w.width / 2, w.y + w.height / 2) || viewerTouches(w, box)))
+/** The Viewers with 3D set `a` (its box `box`): on its ground, or
+ *  attached to it (Brian 2026-11-13: "The 2D viewer should magnet to the
+ *  3D set, and collapse with the 3D set card"). They go where it goes and
+ *  fold away with it (utils/areaFollow, utils/area3dCard).
+ *  Attached: against one of its sides, against one of the cards with it
+ *  (its own card, the row under it), or against another Viewer that is
+ *  with it (a row of Viewers along a side), each as near as the magnet
+ *  reaches (so one set there by eye counts as one snapped there). One on
+ *  its ground that it came out over (isUnder) is not, till it is moved. */
+export function setViewers(a: { under?: string[]; areaCard?: string }, box: R): ViewportWindow3D[] {
+  const zoom = useCanvasStore.getState().zoom
+  const reach = Math.max(dockGap(), magnetRadiusForZoom(zoom))
+  const all = Object.values(useViewport3DStore.getState().windows).filter(w => !w.pin)
+  if (!all.length) return []
+  const rect = new Map(all.map(w => [w.id, viewportVisualRect(w, zoom) as R]))
+  const hosts: R[] = [box]
+  if (a.areaCard) for (const g of rowCards(a as FreeNodeData, box)) { const r = cardBox(g); if (r) hosts.push(r) }
+  const out = all.filter(w => inside(box, w.x + w.width / 2, w.y + w.height / 2)
+    ? !isUnder(a, `viewer:${w.id}`)
+    : hosts.some(h => touches(rect.get(w.id)!, h, reach)))
+  for (let i = 0; i < out.length; i++) {
+    for (const w of all) if (!out.includes(w) && !inside(box, w.x + w.width / 2, w.y + w.height / 2) && touches(rect.get(w.id)!, rect.get(out[i].id)!, reach)) out.push(w)
+  }
+  return out
 }
 
 /** While a 3D set is being laid out from its card (utils/area3dCard), what

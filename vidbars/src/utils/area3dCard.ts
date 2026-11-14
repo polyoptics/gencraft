@@ -21,7 +21,7 @@ import { useFreeNodeStore, type FreeNodeData, type AreaGround, type AreaFlatView
 import { useCanvasStore } from '../store/canvasStore'
 import { isUndoRestoring, useUndoCoordinator } from '../store/undoCoordinator'
 import { useModelScaleStore, type ScenePlace, type CameraLens, type PieceView } from '../store/tiltStore'
-import { cardBox, carrying, docksUnder, isUnder, laying, lyingIn, rowCards, selfMoved, setCards, setViewers, viewerTouches } from './area3dScene'
+import { cardBox, carrying, docksUnder, isUnder, laying, lyingIn, rowCards, selfMoved, setCards, setViewers } from './area3dScene'
 import { useViewport3DStore, type ViewportWindow3D } from '../store/viewport3dStore'
 import { viewportVisualRect } from './viewportDocking'
 import { isHiddenDeckMember } from '../hooks/useCardDecks'
@@ -396,9 +396,7 @@ export function showArea3d(cardId: string, quiet = false, spot?: { x: number; y:
     const r = cardBox(g)
     return !!r && docksUnder(r, m)
   }).map(g => `card:${g.id}`)
-  // A Viewer it comes out against, the same (its own come out with it, below).
-  const besideV = Object.values(useViewport3DStore.getState().windows).filter(w => viewerTouches(w, m)).map(w => `viewer:${w.id}`)
-  const below = under ?? [...new Set([...lyingIn(m, cardId).filter(k => !mine(k)), ...strangers, ...besideV])]
+  const below = under ?? [...new Set([...lyingIn(m, cardId).filter(k => !mine(k)), ...strangers])]
   let id = ''
   laying.on = true
   try {
