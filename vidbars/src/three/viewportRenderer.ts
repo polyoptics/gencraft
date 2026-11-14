@@ -284,6 +284,7 @@ function renderFrame(): void {
     const sw = win.width * (win.pin ? win.pin.scale : zoom)
     const sh = win.height * (win.pin ? win.pin.scale : zoom) - (footerInsets.get(win.id) ?? 0)
     if (sh <= 0) continue
+    if (win.tuck) continue                                          // collapsed: draws nothing (utils/viewerTuck)
     if (sx + sw < 0 || sy + sh < 0 || sx > W || sy > H) continue   // offscreen
     if (sw < MIN_GL_PX) continue                                    // poster takes over
     if (glHidden.has(win.id)) continue                              // stood up (TiltLayer)

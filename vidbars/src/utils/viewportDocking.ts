@@ -55,9 +55,16 @@ export const VIEWPORT_HEADER_SCREEN_H = 22
  *  geometry helpers must include the header extension. */
 export function viewportVisualRect(
   w: { id: string; x: number; y: number; width: number; height: number;
-       pin?: { x: number; y: number; scale: number } },
+       pin?: { x: number; y: number; scale: number };
+       tuck?: { side: DockEdge } },
   zoom: number,
 ): WindowRect {
+  // Collapsed sideways (utils/viewerTuck): the upright bar it is drawn as,
+  // as thick as a header, against the edge it is attached by.
+  if (!w.pin && w.tuck && (w.tuck.side === 'left' || w.tuck.side === 'right')) {
+    const t = VIEWPORT_HEADER_SCREEN_H / Math.max(0.01, zoom)
+    return { id: w.id, x: w.tuck.side === 'left' ? w.x : w.x - t, y: w.y - t, width: t, height: w.height + t }
+  }
   if (w.pin) {
     // Pinned: already screen pixels, so the header is a flat 22.
     return {

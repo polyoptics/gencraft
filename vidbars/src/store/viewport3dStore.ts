@@ -106,6 +106,12 @@ export interface ViewportWindow3D {
   /** Canvas spot to return to on unpin — same meaning as a free node's
    *  `home`. See freeNodeStore for why a pin does not move a thing. */
   home?: { x: number; y: number; width: number; height: number }
+  /** Collapsed against what it is attached to (utils/viewerTuck; Brian
+   *  2026-11-14: "pop in and out of things that it's magneted to"). `side`
+   *  is ITS edge that lies against that thing: collapsed, it is a bar along
+   *  that edge and shows (and plays) nothing. `width`/`height` are the
+   *  size it pops back out to; meanwhile the one it gave up is stored 1. */
+  tuck?: { side: 'top' | 'right' | 'bottom' | 'left'; width: number; height: number }
   /** How the model is drawn; undefined means DEFAULT_LOOK. */
   look?: ModelLook
   /** false ⇒ hide the skinned meshes and show the skeleton instead. */

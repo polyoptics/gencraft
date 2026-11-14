@@ -38,6 +38,7 @@ import { ContentView } from './ContentViews'
 import { snapWindowToComponents } from '../../utils/componentLinks'
 import { useMagnetPreviewStore } from '../../store/magnetPreviewStore'
 import { viewportVisualRect, VIEWPORT_HEADER_SCREEN_H } from '../../utils/viewportDocking'
+import { toggleTuck } from '../../utils/viewerTuck'
 import { FileContextMenu } from '../UI/FileMenu'
 import { mayHaveDiskFile } from '../../hooks/useFileMenu'
 import { DragOutGrip } from '../UI/DragOutGrip'
@@ -184,7 +185,8 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
     if (w.pin) {
       st.updateWindow(id, { pin: { ...w.pin, x: snap.x, y: snap.y + headerOffset } })
     } else {
-      st.updateWindow(id, { x: snap.x, y: snap.y + headerOffset })
+      // (Collapsed sideways, its bar is not drawn from its own x: viewerTuck.)
+      st.updateWindow(id, { x: snap.x + (w.x - viewportVisualRect(w, z).x), y: snap.y + headerOffset })
     }
   }, [id])
 
@@ -380,6 +382,67 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
 
   if (!win) return null
 
+  // ── Collapsed against what it is attached to (utils/viewerTuck): a bar
+  //    along that edge, and nothing else. Its content is not drawn, so
+  //    nothing in it plays; it moves by the bar as by its header. ──
+  if (win.tuck && !win.pin) {
+    const t = 22 / gz, fs = 11 / gz
+    const v = viewportVisualRect(win, gz)
+    const upright = win.tuck.side === 'left' || win.tuck.side === 'right'
+    const line = Math.max(1 / gz, Math.min(2 / gz, t * 0.1))
+    return (
+      <div
+        data-viewport3d={id}
+        data-viewer-tucked={win.tuck.side}
+        style={{
+          position: 'absolute', left: v.x, top: v.y, zIndex: 1,
+          width: upright ? t : win.width, height: upright ? v.height : t,
+          boxSizing: 'border-box',
+          display: 'flex', flexDirection: upright ? 'column' : 'row', alignItems: 'center', gap: 6 / gz,
+          padding: upright ? `${8 / gz}px 0` : `0 ${8 / gz}px`,
+          background: isHovered ? 'rgba(30,34,58,0.95)' : 'rgba(24,27,46,0.9)',
+          border: `${line}px solid rgba(140,170,255,${isSelected ? 0.7 : isHovered ? 0.35 : 0.18})`,
+          borderRadius: 6 / gz,
+          boxShadow: isSelected ? `0 0 0 ${2.5 / gz}px rgba(120,180,255,0.9)` : undefined,
+          cursor: 'grab', overflow: 'hidden',
+        }}
+        onPointerDownCapture={onSelectDownCapture}
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
+        onDoubleClick={e => { e.stopPropagation(); toggleTuck(id) }}
+      >
+        <div
+          data-viewer-chrome=""
+          onPointerDown={onHeaderDown}
+          onPointerMove={onHeaderMove}
+          onPointerUp={onHeaderUp}
+          style={{
+            flex: 1, minWidth: 0, minHeight: 0, alignSelf: 'stretch',
+            display: 'flex', flexDirection: upright ? 'column' : 'row', alignItems: 'center', gap: 6 / gz,
+          }}
+        >
+          <span style={{ fontSize: fs * 0.8, color: 'rgba(140,190,255,0.7)', lineHeight: 1, flexShrink: 0 }}>◆</span>
+          <span style={{
+            flex: 1, minWidth: 0, minHeight: 0, color: 'rgba(255,255,255,0.7)', fontSize: fs, fontWeight: 600, lineHeight: 1,
+            userSelect: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            ...(upright ? { writingMode: 'vertical-rl' as const } : {}),
+          }}>{win.title}</span>
+        </div>
+        <button
+          onClick={() => toggleTuck(id)}
+          onPointerDown={e => e.stopPropagation()}
+          onDoubleClick={e => e.stopPropagation()}
+          title="Collapse against what it is attached to (on: click to pop it back out)"
+          style={{
+            background: 'rgba(120,170,255,0.28)', border: 'none', borderRadius: 3 / gz, cursor: 'pointer',
+            color: '#fff', fontSize: fs * 1.1, width: fs * 1.5, height: fs * 1.5,
+            padding: 0, lineHeight: 1, flexShrink: 0,
+          }}
+        >◧</button>
+      </div>
+    )
+  }
+
   const active = win.activeItem
   const modelActive = active?.kind === 'media' && active.mediaType === 'model'
   modelActiveRef.current = modelActive
@@ -530,6 +593,23 @@ export const Viewport3DFrame: React.FC<{ id: string }> = React.memo(({ id }) => 
           visible={isHovered}
           style={{ position: 'relative', zIndex: 21 }}
         />
+        {/* Collapse against what it is attached to, and back (utils/viewerTuck).
+            Not while pinned to the screen. Lifted over the reshape handles,
+            as the grip is. */}
+        {!win.pin && (
+          <button
+            onClick={() => toggleTuck(id)}
+            onPointerDown={e => e.stopPropagation()}
+            title="Collapse against what it is attached to"
+            style={{
+              position: 'relative', zIndex: 21,
+              background: 'none', border: 'none', borderRadius: 3 * iz, cursor: 'pointer',
+              color: 'rgba(255,255,255,0.6)', fontSize: fontSize * 1.1, width: fontSize * 1.5, height: fontSize * 1.5,
+              padding: 0, lineHeight: 1, flexShrink: 0,
+              opacity: isHovered ? 1 : 0.3, transition: 'opacity 0.12s',
+            }}
+          >◧</button>
+        )}
         <PinControl
           pinned={!!win.pin}
           size={Math.max(11, fontSize * 1.15)}
