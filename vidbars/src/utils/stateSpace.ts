@@ -1057,7 +1057,11 @@ export function sceneState(): { hold: Record<string, number>; take: string[]; fo
     if (!w.d.items.some(i => i.kind === 'path' || i.kind === 'act')) continue
     const run = runner(w.d, litOf(w.d), valsOf(w.d))
     for (const i of w.d.items) {
-      if (i.kind === 'act' && i.card) { if (run.truth(i.id) === (i.do !== 'show')) out.hidden.push(i.card) }
+      if (i.kind === 'act' && i.card && run.truth(i.id) === (i.do !== 'show')) {
+        // A closed deck goes with all its cards; a card of an open deck goes alone.
+        const groups = useBoardsStore.getState().groups, g = groups.find(x => x.id === i.card)
+        out.hidden.push(i.card, ...(g?.deckState && g.deckState !== 'open' ? deckCards(groups, i.card) : []))
+      }
       if (i.kind !== 'path' || !i.curve) continue
       for (const t of w.d.wires) {
         if (t.b !== i.id || t.bp === 'knob') continue
