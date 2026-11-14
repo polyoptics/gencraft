@@ -31,7 +31,7 @@ import { goToCard } from '../../utils/stateCard'
 import { scrubStoryline } from '../Canvas/StorylineLayer'
 import {
   EVENT_H, EVENT_W, ICON, PORT_SNAP, SPACE_BAR_W, SPACE_GRID, TL_H,
-  addItem, addWire, editSpace, emptyStateSpace, fireEvent, isLevel, itemPorts, itemSize, lineClock, lineOf, looseCurve, makeChange, replaySpace, setValue, spaceTruths, valOf,
+  SPACE_HEAD, SPACE_ROW, addItem, addWire, editSpace, emptyStateSpace, endOf, exposed, fireEvent, isLevel, itemPorts, itemSize, lineClock, lineOf, looseCurve, makeChange, replaySpace, setValue, spaceTruths, valOf,
   moveItems, normalizeSpace, outSpot, patchItem, patchWire, planeBox, portSpot, removeFromSpace, screenToCanvas, setNow, setStart,
   useSpaceLive, wireDist, wireGeom, wireKind, wireSources, wireTargets,
   type Compare, type PortRef, type PortSpot, type SpaceItem, type SpaceKind, type SpaceWire, type StateSpaceData, type WireGeom,
@@ -57,10 +57,11 @@ function itemLabel(i: SpaceItem, cardName?: string, lineTitle?: string): string 
   if (i.name) return i.name
   if (i.kind === 'any') return 'Any'
   if (i.kind === 'timeline') return lineTitle || 'Timeline'
+  if (i.kind === 'space') return lineTitle || 'Workspace'
   if (i.card) return cardName || (i.kind === 'event' ? 'Event' : 'Card')
   return KIND_NAME[i.kind]
 }
-const KIND_NAME: Record<SpaceKind, string> = { card: 'State', blank: 'State', event: 'Event', any: 'Any', timeline: 'Timeline', value: 'Value', and: 'And', or: 'Or', fact: 'Is in', wait: 'Wait', pick: 'Pick one' }
+const KIND_NAME: Record<SpaceKind, string> = { card: 'State', blank: 'State', event: 'Event', any: 'Any', timeline: 'Timeline', value: 'Value', and: 'And', or: 'Or', fact: 'Is in', wait: 'Wait', pick: 'Pick one', space: 'Workspace' }
 
 // One colour for each kind of thing, everywhere: steel for states and the
 // changes between them, amber for time, violet for what happens, green for
@@ -73,7 +74,7 @@ function wireTone(d: StateSpaceData, w: SpaceWire): string {
   const k = wireKind(d, w)
   if (k === 'cond') return GREEN
   if (k !== 'signal') return STEEL
-  const a = d.items.find(i => i.id === w.a)?.kind
+  const a = endOf(d, w.a, w.ap)?.kind
   return a === 'card' || a === 'blank' ? GREEN : kindTone(a)
 }
 
@@ -83,19 +84,25 @@ function along(g: WireGeom, t: number): { x: number; y: number } {
   return { x: u * u * u * g.x1 + 3 * u * u * t * g.c1x + 3 * u * t * t * g.c2x + t * t * t * g.x2, y: u * u * u * g.y1 + 3 * u * u * t * g.c1y + 3 * u * t * t * g.c2y + t * t * t * g.y2 }
 }
 
+/** Bring a workspace into view. */
+function goToSpace(spaceId: string | undefined): void {
+  const n = useFreeNodeStore.getState().nodes[spaceId ?? '']
+  if (n) useCanvasStore.getState().jumpToPoint(n.x + n.width / 2, n.y + n.height / 2)
+}
+
 const CMP_WORD: Record<Compare, string> = { '<': 'below', '<=': 'at most', '=': 'is', '!=': 'is not', '>=': 'at least', '>': 'above' }
 const CMPS: Compare[] = ['<', '<=', '=', '!=', '>=', '>']
 const yesNo = (n: number) => n ? 'yes' : 'no'
 /** What a wire carries from its source, in a word or two (shown by its start). */
 function wireSays(d: StateSpaceData, w: SpaceWire): string {
-  const a = d.items.find(i => i.id === w.a)
+  const a = endOf(d, w.a, w.ap)
   if (!isLevel(a) || wireKind(d, w) === 'change' || wireKind(d, w) === 'link') return ''
   const what = a!.kind !== 'value' ? '' : !w.cmp ? (a!.flag ? 'yes' : 'not 0') : a!.flag && (w.cmp === '=' || w.cmp === '!=') ? `${CMP_WORD[w.cmp]} ${yesNo(w.cn ?? 0)}` : `${CMP_WORD[w.cmp]} ${w.cn ?? 0}`
   return [w.not ? 'not' : '', what].filter(Boolean).join(' ')
 }
 /** What a wire does to the value it goes into (shown by its end). */
 function wireDoes(d: StateSpaceData, w: SpaceWire): string {
-  const b = w.bp === 'knob' ? undefined : d.items.find(i => i.id === w.b)
+  const b = w.bp === 'knob' ? undefined : endOf(d, w.b, w.bp)
   if (b?.kind !== 'value') return ''
   if (w.op === 'set') return '= ' + (b.flag ? yesNo(w.on ?? 0) : w.on ?? 0)
   const n = w.on ?? 1
@@ -115,6 +122,11 @@ const NodeView: React.FC<{ item: SpaceItem; picked: boolean; stamp?: number; on?
   const count = useBoardsStore(s => card && card.deckState && card.deckState !== 'open' ? stackedDeckMembers(card.id, s.groups).length : 0)
   const src = useResolvedMedia(card ? cardFaceSourceUrl(card, boards) : null)
   const gone = !!item.card && !card
+  // A workspace node: the other workspace, and what it shows of itself.
+  const inner = useFreeNodeStore(s => item.kind === 'space' ? s.nodes[item.space ?? ''] : undefined)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const rows = useMemo(() => item.kind === 'space' ? exposed(item.space) : [], [item.kind, item.space, inner?.stateSpace])
+  const rowNames = useBoardsStore(useShallow(s => rows.map(r => r.card ? s.groups.find(g => g.id === r.card)?.name ?? '' : '')))
   const { w, h } = itemSize(item)
   const box: React.CSSProperties = { position: 'absolute', left: item.x - w / 2, top: item.y - h / 2, width: w, height: h, boxSizing: 'border-box', cursor: 'grab', userSelect: 'none', fontFamily: FONT }
   const ring = picked ? `0 0 0 2px ${BLUE}` : ''
@@ -136,6 +148,29 @@ const NodeView: React.FC<{ item: SpaceItem; picked: boolean; stamp?: number; on?
         <div style={{ flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{gone ? 'card gone' : itemLabel(item, card?.name)}</div>
         {card && <div title="Hooked to an Event card" style={{ width: 8, height: 8, borderRadius: 2, flexShrink: 0, background: card.color || typeColor(cardTypeOf(card)) }} />}
         <Pulse stamp={stamp} radius={EVENT_H / 2} tone={VIOLET} />
+      </div>
+    )
+  }
+  if (item.kind === 'space') {
+    return (
+      <div data-sp-node={item.id} className="vb-sp-node" title="Another workspace, as one node: each of its states, events and values has an input and an output. Double-click to go to it" style={{
+        ...box, borderRadius: 10, border: `2px solid ${inner ? STEEL : 'rgba(255,255,255,0.2)'}`, background: '#20272c', boxShadow: ring || 'none', color: INK, overflow: 'hidden',
+      }}>
+        <div style={{ height: SPACE_HEAD - 2, lineHeight: `${SPACE_HEAD - 2}px`, padding: '0 10px', fontSize: 10, letterSpacing: '0.1em', color: DIM, background: 'rgba(255,255,255,0.04)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {(item.name || inner?.label || (inner ? 'Workspace' : 'workspace gone')).toUpperCase()}
+        </div>
+        {rows.map((r, k) => {
+          const lit = r.kind === 'value' ? valOf(r) !== 0 : !!r.now
+          const tone = kindTone(r.kind)
+          return (
+            <div key={r.id} data-sp-row={r.id} data-sp-lit={lit ? '1' : '0'} style={{ height: SPACE_ROW, display: 'flex', alignItems: 'center', gap: 6, padding: '0 14px', fontSize: 11 }}>
+              <div style={{ width: 8, height: 8, flexShrink: 0, boxSizing: 'border-box', borderRadius: r.kind === 'event' ? 1 : '50%', transform: r.kind === 'event' ? 'rotate(45deg)' : undefined, border: `1.5px solid ${r.kind === 'event' ? VIOLET : lit ? GREEN : tone === STEEL ? 'rgba(255,255,255,0.4)' : tone}`, background: lit ? GREEN : 'transparent', transition: 'background-color .18s' }} />
+              <div style={{ flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: lit ? '#fff' : INK, fontWeight: lit ? 600 : 400 }}>{itemLabel(r, rowNames[k])}</div>
+              {r.kind === 'value' && <div style={{ color: lit ? '#dff5e3' : DIM, flexShrink: 0 }}>{r.flag ? (valOf(r) ? 'yes' : 'no') : Math.round(valOf(r) * 100) / 100}</div>}
+            </div>
+          )
+        })}
+        {!rows.length && <div style={{ height: SPACE_ROW, lineHeight: `${SPACE_ROW}px`, padding: '0 14px', fontSize: 11, color: DIM }}>{inner ? 'nothing in it yet' : ''}</div>}
       </div>
     )
   }
@@ -316,15 +351,21 @@ const Bar: React.FC<{ id: string; d: StateSpaceData; sel: string[]; setSel: (s: 
   const groups = useBoardsStore(s => s.groups)
   const nameOf = (itemId: string | undefined) => {
     const i = d.items.find(x => x.id === itemId)
-    return i ? itemLabel(i, groups.find(g => g.id === i.card)?.name, lineClock(lineOf(i))?.title) : '?'
+    return i ? itemLabel(i, groups.find(g => g.id === i.card)?.name, i.kind === 'space' ? useFreeNodeStore.getState().nodes[i.space ?? '']?.label : lineClock(lineOf(i))?.title) : '?'
   }
   /** One end of a wire, in words. */
+  const innerName = (node: string, port: string | undefined) => {
+    const i = endOf(d, node, port)
+    return i ? nameOf(node) + ': ' + itemLabel(i, groups.find(g => g.id === i.card)?.name) : nameOf(node) + ': gone'
+  }
   const fromName = (w: SpaceWire) => {
     const a = d.items.find(i => i.id === w.a)
+    if (a?.kind === 'space') return innerName(w.a, w.ap)
     if (a?.kind !== 'timeline' || !w.ap) return nameOf(w.a)
     return `${lineClock(lineOf(a))?.dots.find(p => 'pt:' + p.id === w.ap)?.title ?? 'point gone'}, ${nameOf(w.a)}`
   }
   const toName = (w: SpaceWire): string => {
+    if (w.bp !== 'knob' && d.items.find(i => i.id === w.b)?.kind === 'space') return innerName(w.b, w.bp)
     if (w.bp !== 'knob') return nameOf(w.b) + (w.bp === 'if' ? ' (only if)' : w.bp === 'a' ? ' (the card)' : w.bp === 'b' ? ' (what it is in)' : '')
     const c = d.wires.find(x => x.id === w.b)
     return c ? `${c.name || 'change'}: ${nameOf(c.a)} → ${nameOf(c.b)}` : '?'
@@ -368,6 +409,10 @@ const Bar: React.FC<{ id: string; d: StateSpaceData; sel: string[]; setSel: (s: 
           const dots = n?.storyline?.dots ?? []
           if (n && dots.length) useCanvasStore.getState().jumpToPoint(n.x + (Math.min(...dots.map(p => p.x)) + Math.max(...dots.map(p => p.x))) / 2, n.y + (Math.min(...dots.map(p => p.y)) + Math.max(...dots.map(p => p.y))) / 2)
         }}>Go to</button>
+      </>}
+      {item.kind === 'space' && <>
+        <div style={gap}>WORKSPACE</div>
+        <button style={btn()} title="Go to that workspace, as a double-click on this does" onClick={() => goToSpace(item.space)}>Go to</button>
       </>}
       {state && <>
         <div style={gap}>STATE</div>
@@ -424,7 +469,7 @@ const Bar: React.FC<{ id: string; d: StateSpaceData; sel: string[]; setSel: (s: 
     const k = wireKind(d, wire)
     head = k === 'change' ? 'CHANGE' : k === 'link' ? 'LINE' : k === 'cond' ? 'CONDITION' : 'WIRE'
     const sig = k === 'signal' || k === 'cond'
-    const a = d.items.find(i => i.id === wire.a), b = wire.bp === 'knob' ? undefined : d.items.find(i => i.id === wire.b)
+    const a = endOf(d, wire.a, wire.ap), b = wire.bp === 'knob' ? undefined : endOf(d, wire.b, wire.bp)
     const lvl = sig && isLevel(a)
     const then = k === 'cond' ? (b?.kind === 'event' ? 'THIS EVENT CAN GO THROUGH' : b?.kind === 'fact' ? (wire.bp === 'a' ? 'IS THE CARD LOOKED FOR' : 'IS WHAT IT IS LOOKED FOR IN') : 'COUNTS TOWARDS')
       : wire.bp === 'knob' ? 'THIS CHANGE IS MADE' : b?.kind === 'event' ? 'THIS EVENT FIRES' : b?.kind === 'value' ? 'THIS VALUE CHANGES' : b?.kind === 'wait' ? 'THIS WAIT BEGINS' : b?.kind === 'pick' ? 'THIS PICKS ONE' : 'THIS IS LIT'
@@ -535,10 +580,12 @@ export function StateSpaceBody({ id, node, bodyW, bodyH }: { id: string; node: F
   // The storylines dragged in, as they are now (their points, their marker).
   const lines = useFreeNodeStore(useShallow(s => d.items.filter(i => i.kind === 'timeline').map(i => s.nodes[lineOf(i) ?? '']?.storyline)))
   const worldLine = useCanvasStore(s => s.worldClockLine)
+  // The workspaces that are nodes in here, as they are now (what they show, what is lit in them).
+  const inners = useFreeNodeStore(useShallow(s => d.items.filter(i => i.kind === 'space').map(i => s.nodes[i.space ?? '']?.stateSpace)))
   // The board, only where something in here reads it (a fact).
   const board = useBoardsStore(s => d.items.some(i => i.kind === 'fact') ? s.groups : null)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const truths = useMemo(() => spaceTruths(d), [d, board])
+  const truths = useMemo(() => spaceTruths(id), [d, board, inners])
   const says = useMemo(() => {
     const out: Record<string, [string, string]> = {}
     for (const f of d.items) {
@@ -800,6 +847,7 @@ export function StateSpaceBody({ id, node, bodyW, bodyH }: { id: string; node: F
     e.stopPropagation()
     const nodeEl = t.closest('[data-sp-node]') as HTMLElement | null
     const it = nodeEl ? d.items.find(i => i.id === nodeEl.dataset.spNode) : undefined
+    if (it?.kind === 'space') { goToSpace(it.space); return }
     if (it?.kind === 'event' || it?.kind === 'wait' || it?.kind === 'pick') { fireEvent(id, it.id); setPulse(p => ({ ...p, [it.id]: Date.now() })); return }
     if (it) { setNow(id, it.id, !it.now); return }
     const p = local(e)
@@ -808,9 +856,9 @@ export function StateSpaceBody({ id, node, bodyW, bodyH }: { id: string; node: F
   }
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const wires = useMemo(() => d.wires.map(w => ({ w, g: wireGeom(d, w), kind: wireKind(d, w), tone: wireTone(d, w) })).filter((x): x is { w: SpaceWire; g: WireGeom; kind: ReturnType<typeof wireKind>; tone: string } => !!x.g), [d, lines, worldLine])
+  const wires = useMemo(() => d.wires.map(w => ({ w, g: wireGeom(d, w), kind: wireKind(d, w), tone: wireTone(d, w) })).filter((x): x is { w: SpaceWire; g: WireGeom; kind: ReturnType<typeof wireKind>; tone: string } => !!x.g), [d, lines, worldLine, inners])
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const ports = useMemo(() => d.items.flatMap(i => itemPorts(i).map(p => ({ item: i, ...p }))), [d, lines, worldLine])
+  const ports = useMemo(() => d.items.flatMap(i => itemPorts(i).map(p => ({ item: i, ...p }))), [d, lines, worldLine, inners])
   const marker = (tone: string) => `sp-${id}-${tone.replace(/[^a-z0-9]/gi, '')}`
   const tones = [STEEL, AMBER, VIOLET, GREEN, BLUE]
 
@@ -883,7 +931,7 @@ export function StateSpaceBody({ id, node, bodyW, bodyH }: { id: string; node: F
               const own = draw && sameRef(draw.from, ref)
               const can = !draw || own || draw.cands.some(c => sameRef(c.ref, ref))
               const hot = sameRef(draw?.snap, ref)
-              const tone = p.port === 'if' ? GREEN : kindTone(p.item.kind)
+              const tone = p.port === 'if' ? GREEN : kindTone(p.item.kind === 'space' ? endOf(d, p.item.id, p.port)?.kind : p.item.kind)
               return <div key={p.item.id + p.port} data-sp-port={p.port} data-sp-of={p.item.id} data-sp-out={p.out ? '1' : '0'} className="vb-sp-port"
                 title={p.port === 'if' ? 'Only if: wire anything that is true or not here (a card, a value, And, Or, Is in) and this event only goes through while it is true' : p.port === 'a' ? 'The card looked for: wire a card node here' : p.port === 'b' ? 'What it is looked for in: wire a card node here' : p.out ? 'Out: drag from here to what follows' : 'In: drag a wire onto here'}
                 style={{

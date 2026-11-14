@@ -29,6 +29,7 @@ import { findMagnetCandidate, magnetRadiusForZoom, viewportVisualRect, type Wind
 import { tileBrowseItem, isDockableTile } from '../../utils/contentTraversal'
 import { snapPanelToPanel, isPanelType, adjacentPanels } from '../../utils/componentLinks'
 import { StateSpaceBody } from '../StateSpace/StateSpaceBody'
+import { dropSpaceOnStateSpace } from '../../utils/stateSpace'
 import { panelContentScale, clampUiScale } from '../UI/PanelSurface'
 import { CardRolodex } from '../Rolodex/CardRolodex'
 import { RoughCutBody } from '../RoughCut/RoughCutBody'
@@ -775,6 +776,12 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
         if (dockItem) useViewport3DStore.getState().setActiveItem(preview.windowId, dockItem)
         return
       }
+    }
+    // A state workspace let go over another's ground becomes a node there (a
+    // machine inside a machine), and goes back to where it was picked up.
+    if (dragHasMoved.current && node.type === 'stateSpace' && !node.pin && dropSpaceOnStateSpace(e.clientX, e.clientY, id, !e.isTrusted)) {
+      updateFreeNode(id, { x: dragStart.current.x, y: dragStart.current.y })
+      return
     }
     // Panel magnet: the modular apps snap flush to each other. This is what
     // actually forms the derived links (pool → rolodex → viewer) — the link

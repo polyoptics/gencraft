@@ -24,6 +24,10 @@
 //             its deck, or linked to it (a faction's members are its links).
 //   wait      passes what reaches it on, a number of points later.
 //   pick      passes what reaches it on along one of its wires, by chance.
+//   space     another workspace, dragged in by its header: a machine as one
+//             node. Its states, events and values each have an input (light
+//             it, fire it, change it) and an output (when it is lit, when
+//             it fires, what it is), so machines drive and read each other.
 //
 // Some nodes are true or not at any moment (a card: lit; a value: by the
 // compare its wire carries; and, or, fact): these can be CONDITIONS, wired
@@ -64,7 +68,7 @@ import { isTilted, unprojectTilt, useTiltStore } from '../store/tiltStore'
 import { applyState, deckCards, markChange } from './stateCard'
 import { rootOf } from './storyline'
 
-export type SpaceKind = 'card' | 'blank' | 'event' | 'any' | 'timeline' | 'value' | 'and' | 'or' | 'fact' | 'wait' | 'pick'
+export type SpaceKind = 'card' | 'blank' | 'event' | 'any' | 'timeline' | 'value' | 'and' | 'or' | 'fact' | 'wait' | 'pick' | 'space'
 
 export interface SpaceItem {
   id: string
@@ -83,6 +87,8 @@ export interface SpaceItem {
   now?: boolean
   /** Lit before anything has happened (one per machine). */
   start?: boolean
+  /** space: the other workspace's node id. */
+  space?: string
   /** timeline: the world clock's storyline, whichever it is, not `line`. */
   world?: boolean
   /** value: what it is now, and what it is before anything has happened. */
@@ -98,7 +104,7 @@ export interface SpaceItem {
 
 export type Compare = '<' | '<=' | '=' | '!=' | '>=' | '>'
 
-export type InPort = 'in' | 'if' | 'knob' | 'a' | 'b'
+export type InPort = 'in' | 'if' | 'knob' | 'a' | 'b' | `in:${string}`
 
 export interface SpaceWire {
   id: string
@@ -120,6 +126,9 @@ export interface SpaceWire {
   /** Into a value: what it does to it (without: adds 1). */
   op?: 'add' | 'set'
   on?: number
+  /** Never saved: set where workspaces are read joined together (worldOf),
+   *  on a wire that crosses from one into another. It is never a change. */
+  x?: boolean
 }
 
 export interface StateSpaceData {
@@ -146,6 +155,9 @@ export const GATE_H = 40
 export const FACT_W = 124
 export const FACT_H = 62
 export const WAIT_W = 108
+export const SPACE_W = 190
+export const SPACE_ROW = 22
+export const SPACE_HEAD = 28
 export const SMALL_W = 84
 export const SMALL_H = 40
 /** How near a port a wire's end snaps to it. */
@@ -205,6 +217,20 @@ const isState = (i: SpaceItem | undefined) => i?.kind === 'card' || i?.kind === 
 export const isLevel = (i: SpaceItem | undefined) => isState(i) || i?.kind === 'value' || i?.kind === 'and' || i?.kind === 'or' || i?.kind === 'fact'
 /** Reads conditions through its inputs, never signals. */
 const readsLevels = (i: SpaceItem | undefined) => i?.kind === 'and' || i?.kind === 'or' || i?.kind === 'fact'
+/** What a workspace shows of itself as a node in another: its states, its
+ *  events and its values. */
+export function exposed(spaceId: string | undefined): SpaceItem[] {
+  const d = spaceId ? spaceOf(spaceId) : null
+  return d ? d.items.filter(i => isState(i) || i.kind === 'event' || i.kind === 'value') : []
+}
+/** The node at an end of a wire: for a workspace node's port, the node
+ *  inside that workspace it stands for. */
+export function endOf(d: StateSpaceData, node: string | undefined, port: string | undefined): SpaceItem | undefined {
+  const i = itemOf(d, node)
+  if (i?.kind !== 'space') return i
+  const inner = port?.startsWith('in:') ? port.slice(3) : port?.startsWith('out:') ? port.slice(4) : undefined
+  return inner ? exposed(i.space).find(x => x.id === inner) : undefined
+}
 /** A timeline node's storyline. */
 export const lineOf = (i: SpaceItem | undefined): string | undefined => i?.world ? useCanvasStore.getState().worldClockLine ?? undefined : i?.line
 
@@ -213,6 +239,7 @@ export const lineOf = (i: SpaceItem | undefined): string | undefined => i?.world
 export function wireKind(d: StateSpaceData, w: SpaceWire): 'change' | 'link' | 'signal' | 'cond' {
   const a = itemOf(d, w.a)
   if (w.bp === 'if' || (w.bp !== 'knob' && readsLevels(itemOf(d, w.b)))) return 'cond'
+  if (w.x) return 'signal'
   if ((w.bp ?? 'in') === 'in' && !w.ap && (isState(a) || a?.kind === 'any') && isState(itemOf(d, w.b))) return w.plain ? 'link' : 'change'
   return 'signal'
 }
@@ -278,6 +305,7 @@ export function itemSize(i: SpaceItem): { w: number; h: number } {
   if (i.kind === 'value') return { w: VALUE_W, h: VALUE_H }
   if (i.kind === 'and' || i.kind === 'or') return { w: GATE_W, h: GATE_H }
   if (i.kind === 'fact') return { w: FACT_W, h: FACT_H }
+  if (i.kind === 'space') return { w: SPACE_W, h: SPACE_HEAD + Math.max(1, exposed(i.space).length) * SPACE_ROW + 6 }
   if (i.kind === 'wait') return { w: WAIT_W, h: SMALL_H }
   if (i.kind === 'pick') return { w: SMALL_W, h: SMALL_H }
   return { w: ICON, h: ICON }
@@ -295,6 +323,12 @@ export function itemPorts(i: SpaceItem): { port: string; out: boolean; spot: Por
   if (i.kind === 'timeline') {
     const c = lineClock(lineOf(i))
     return (c?.dots ?? []).map(p => ({ port: 'pt:' + p.id, out: true, spot: { x: i.x - w / 2 + p.frac * w, y: i.y + h / 2, dx: 0, dy: 1 } }))
+  }
+  if (i.kind === 'space') {
+    return exposed(i.space).flatMap((x, k) => {
+      const y = i.y - h / 2 + SPACE_HEAD + (k + 0.5) * SPACE_ROW
+      return [{ port: 'in:' + x.id, out: false, spot: { ...L, y } }, { port: 'out:' + x.id, out: true, spot: { ...R, y } }]
+    })
   }
   if (i.kind === 'fact') return [{ port: 'a', out: false, spot: { ...L, y: i.y - 19 } }, { port: 'b', out: false, spot: { ...L, y: i.y + 19 } }, { port: 'out', out: true, spot: R }]
   return [{ port: 'in', out: false, spot: L }, { port: 'out', out: true, spot: R }]
@@ -369,16 +403,20 @@ export function wireDist(g: WireGeom, x: number, y: number): number {
 
 /** Can a wire go from output `from` to input `to`? */
 export function canWire(d: StateSpaceData, from: PortRef, to: PortRef): boolean {
-  const a = itemOf(d, from.node)
-  if (!a || !itemPorts(a).some(p => p.out && p.port === from.port)) return false
+  const A = itemOf(d, from.node)
+  if (!A || !itemPorts(A).some(p => p.out && p.port === from.port)) return false
+  // What sends: for a workspace node, the node inside it that the port stands for.
+  const a = endOf(d, from.node, from.port)
+  if (!a) return false
   if (to.wire) {
     const w = wireOf(d, to.wire)
     return !!w && wireKind(d, w) === 'change' && a.kind !== 'any'
   }
   const b = itemOf(d, to.node)
-  if (!b || b.id === a.id) return false
+  if (!b || b.id === A.id) return false
   if (isState(b)) return to.port === 'in'
   if (a.kind === 'any') return false
+  if (b.kind === 'space') return to.port.startsWith('in:') && !!endOf(d, b.id, to.port)
   if (b.kind === 'fact') return (to.port === 'a' || to.port === 'b') && a.kind === 'card' && !!a.card
   if (b.kind === 'and' || b.kind === 'or') return to.port === 'in' && isLevel(a)
   if (b.kind === 'event' && to.port === 'if') return isLevel(a)
@@ -636,10 +674,66 @@ function driven(d: StateSpaceData): Set<string> {
 const litOf = (d: StateSpaceData) => new Set(d.items.filter(i => i.now).map(i => i.id))
 const valsOf = (d: StateSpaceData) => new Map(d.items.filter(i => i.kind === 'value').map(i => [i.id, valOf(i)]))
 
-/** The and, or and fact nodes that are true as things stand. */
-export function spaceTruths(d: StateSpaceData): Set<string> {
-  const run = runner(d, litOf(d), valsOf(d))
-  return new Set(d.items.filter(i => readsLevels(i) && run.truth(i.id)).map(i => i.id))
+// ── Workspaces joined together ──
+// A workspace that is a node in another runs with it as one: the engine
+// reads every workspace joined that way as a single one, each node and wire
+// named by its workspace, and a wire through a workspace node's port going
+// straight to the node inside that the port stands for.
+
+const SEP = '|'
+const keyOf = (ws: string, id: string) => ws + SEP + id
+
+interface World { d: StateSpaceData; ids: string[] }
+
+function worldOf(nodeId: string): World | null {
+  const data = new Map<string, StateSpaceData>()
+  for (const n of Object.values(useFreeNodeStore.getState().nodes)) if (n.type === 'stateSpace') data.set(n.id, normalizeSpace(n.stateSpace ?? emptyStateSpace()))
+  if (!data.has(nodeId)) return null
+  const group = new Set([nodeId])
+  for (let grew = true; grew;) {
+    grew = false
+    for (const [ws, d] of data) for (const i of d.items) {
+      if (i.kind !== 'space' || !i.space || !data.has(i.space) || group.has(ws) === group.has(i.space)) continue
+      group.add(ws); group.add(i.space); grew = true
+    }
+  }
+  const items: SpaceItem[] = [], wires: SpaceWire[] = []
+  for (const ws of group) {
+    const d = data.get(ws)!
+    for (const i of d.items) if (i.kind !== 'space') items.push({ ...i, id: keyOf(ws, i.id) })
+    for (const w of d.wires) {
+      let a = keyOf(ws, w.a), ap = w.ap, b = keyOf(ws, w.b), bp = w.bp, x = false
+      const A = itemOf(d, w.a)
+      if (A?.kind === 'space') {
+        const inner = ap?.startsWith('out:') && A.space && group.has(A.space) ? itemOf(data.get(A.space)!, ap.slice(4)) : undefined
+        if (!inner) continue
+        a = keyOf(A.space!, inner.id); ap = undefined; x = true
+      }
+      const B = bp === 'knob' ? undefined : itemOf(d, w.b)
+      if (B?.kind === 'space') {
+        const inner = bp?.startsWith('in:') && B.space && group.has(B.space) ? itemOf(data.get(B.space)!, bp.slice(3)) : undefined
+        if (!inner) continue
+        b = keyOf(B.space!, inner.id); bp = 'in'; x = true
+      }
+      wires.push({ ...w, id: keyOf(ws, w.id), a, ap, b, bp, ...(x ? { x: true } : {}) })
+    }
+  }
+  return { d: { items, wires }, ids: [...group] }
+}
+
+/** One workspace's share of ids named by workspace, by their own names. */
+const own = (ws: string, ids: Iterable<string>): string[] => {
+  const pre = ws + SEP, out: string[] = []
+  for (const id of ids) if (id.startsWith(pre)) out.push(id.slice(pre.length))
+  return out
+}
+
+/** The and, or and fact nodes of a workspace that are true as things stand. */
+export function spaceTruths(nodeId: string): Set<string> {
+  const w = worldOf(nodeId)
+  if (!w) return new Set()
+  const run = runner(w.d, litOf(w.d), valsOf(w.d))
+  return new Set(own(nodeId, w.d.items.filter(i => readsLevels(i) && run.truth(i.id)).map(i => i.id)))
 }
 
 /** What has just happened in a workspace, for its picture to show: the wires
@@ -653,12 +747,13 @@ function show(nodeId: string, wires: string[], fired: string[]): void {
 const lastRun = new Map<string, Set<string>>()
 
 /** Write what is lit and what the values are, and let the State cards follow. */
-function settle(nodeId: string, d: StateSpaceData, run: Run, undo: boolean): void {
-  const { lit, vals, fired } = run
+function settle(nodeId: string, lit: Set<string>, vals: Map<string, number>, fired: string[]): void {
+  const d = spaceOf(nodeId)
+  if (!d) return
   const newly = d.items.filter(i => lit.has(i.id) && !i.now)
   const same = (i: SpaceItem) => lit.has(i.id) === !!i.now && (i.kind !== 'value' || (vals.get(i.id) ?? 0) === valOf(i))
   if (!d.items.every(same)) {
-    editSpace(nodeId, s => ({ ...s, items: s.items.map(i => same(i) ? i : { ...i, now: lit.has(i.id) || undefined, ...(i.kind === 'value' ? { val: vals.get(i.id) ?? 0 } : {}) }) }), undo)
+    editSpace(nodeId, s => ({ ...s, items: s.items.map(i => same(i) ? i : { ...i, now: lit.has(i.id) || undefined, ...(i.kind === 'value' ? { val: vals.get(i.id) ?? 0 } : {}) }) }), false)
   }
   const groups = useBoardsStore.getState().groups
   // State cards whose state decks hold a newly lit node's card pick that state.
@@ -679,15 +774,41 @@ function settle(nodeId: string, d: StateSpaceData, run: Run, undo: boolean): voi
   }
 }
 
-/** Play the workspace's timelines from the beginning up to their markers:
- *  what they reach starts over (machines from their start node, values from
- *  what they start at) and takes everything up to now. The rest stays as it
- *  is. No undo step of its own. */
-export function replaySpace(nodeId: string): void {
-  const d = spaceOf(nodeId)
-  if (!d) return
+/** Write a run back to every workspace it ran through, and show it.
+ *  `onlyNew`: show only what the last replay did not already go along. */
+function finish(w: World, r: Run, pre: string[], onlyNew: boolean): void {
+  following = true
+  try {
+    for (const ws of w.ids) {
+      let used = own(ws, [...pre, ...r.used]), fired = own(ws, r.fired)
+      if (onlyNew) {
+        const was = lastRun.get(ws)
+        lastRun.set(ws, new Set([...used, ...fired]))
+        if (was) { used = used.filter(x => !was.has(x)); fired = fired.filter(x => !was.has(x)) } else { used = []; fired = [] }
+      }
+      show(ws, used, fired)
+      const pfx = ws + SEP
+      const vals = new Map<string, number>()
+      for (const [k, v] of r.vals) if (k.startsWith(pfx)) vals.set(k.slice(pfx.length), v)
+      settle(ws, new Set(own(ws, r.lit)), vals, own(ws, r.fired))
+    }
+  } finally { following = false }
+}
+/** Set while a workspace is making State cards follow it, so that their
+ *  change is not read back as news (startStateSpaces). */
+let following = false
+
+/** Play the timelines of a workspace (and of those joined to it) from the
+ *  beginning up to their markers: what they reach starts over (machines from
+ *  their start node, values from what they start at) and takes everything up
+ *  to now. The rest stays as it is. No undo step of its own. Returns the
+ *  workspaces it played. */
+export function replaySpace(nodeId: string): string[] {
+  const w = worldOf(nodeId)
+  if (!w) return []
+  const d = w.d
   const reach = driven(d)
-  if (!reach.size) return
+  if (!reach.size) return w.ids
   const lit = new Set(d.items.filter(i => reach.has(i.id) ? i.start : i.now).map(i => i.id))
   const vals = new Map(d.items.filter(i => i.kind === 'value').map(i => [i.id, reach.has(i.id) ? i.init ?? 0 : valOf(i)]))
   const run = runner(d, lit, vals, { replay: true })
@@ -696,52 +817,45 @@ export function replaySpace(nodeId: string): void {
     const c = lineClock(lineOf(tl))
     c?.dots.forEach((p, idx) => { if (p.at <= c.at) run.point(tl.id, p.id, idx) })
   }
-  const all = new Set([...run.r.used, ...run.r.fired])
-  const was = lastRun.get(nodeId)
-  lastRun.set(nodeId, all)
-  if (was) show(nodeId, run.r.used.filter(x => !was.has(x)), run.r.fired.filter(x => !was.has(x)))
-  following = true
-  try { settle(nodeId, d, run.r, false) } finally { following = false }
+  finish(w, run.r, [], true)
+  return w.ids
 }
-/** Set while a workspace is making State cards follow it, so that their
- *  change is not read back as news (startStateSpaces). */
-let following = false
 
 /** Something done by hand (or by the board): run it from how things stand,
- *  show it, write it. `f` may return wires to show ahead of what it used. */
-function hand(nodeId: string, f: (run: ReturnType<typeof runner>, d: StateSpaceData) => string[] | void, opts?: RunOpts): void {
-  const d = spaceOf(nodeId)
-  if (!d) return
-  const run = runner(d, litOf(d), valsOf(d), opts)
-  const pre = f(run, d) ?? []
-  show(nodeId, [...pre, ...run.r.used], run.r.fired)
-  following = true
-  try { settle(nodeId, d, run.r, false) } finally { following = false }
+ *  show it, write it. `f` is given the run, how this workspace's ids are
+ *  named in it, and the joined-up workspace; it may return wires to show
+ *  ahead of what the run used. */
+function hand(nodeId: string, f: (run: ReturnType<typeof runner>, k: (id: string) => string, d: StateSpaceData) => string[] | void, opts?: RunOpts): void {
+  const w = worldOf(nodeId)
+  if (!w) return
+  const run = runner(w.d, litOf(w.d), valsOf(w.d), opts)
+  const pre = f(run, id => keyOf(nodeId, id), w.d) ?? []
+  finish(w, run.r, pre, false)
   // Waits with no timeline behind them: a beat of real time for each point.
   for (const l of run.r.later) window.setTimeout(() => hand(nodeId, again => again.resume(l.id)), l.n * 700)
 }
 
 /** Light a node by hand (or put it out). */
 export function setNow(nodeId: string, itemId: string, on: boolean): void {
-  const d = spaceOf(nodeId)
-  const it = itemOf(d ?? emptyStateSpace(), itemId)
-  if (!d || !isState(it) || !!it!.now === on) return
+  const it = itemOf(spaceOf(nodeId) ?? emptyStateSpace(), itemId)
+  if (!isState(it) || !!it!.now === on) return
   useUndoCoordinator.getState().checkpoint()
-  hand(nodeId, run => {
-    if (!on) { run.r.lit.delete(itemId); run.recheck(); return }
+  hand(nodeId, (run, k, d) => {
+    const id = k(itemId)
+    if (!on) { run.r.lit.delete(id); run.recheck(); return }
     // Shown coming along the change that leads to it from what was lit.
-    const by = d.wires.find(w => w.b === itemId && wireKind(d, w) === 'change' && run.r.lit.has(w.a))
-    run.light(itemId)
+    const by = d.wires.find(w => w.b === id && wireKind(d, w) === 'change' && run.r.lit.has(w.a))
+    run.light(id)
     return by ? [by.id] : []
   })
 }
 
 /** Fire an event by hand (a wait or a pick: send it on). */
 export function fireEvent(nodeId: string, itemId: string): void {
-  const k = itemOf(spaceOf(nodeId) ?? emptyStateSpace(), itemId)?.kind
-  if (k !== 'event' && k !== 'wait' && k !== 'pick') return
+  const kind = itemOf(spaceOf(nodeId) ?? emptyStateSpace(), itemId)?.kind
+  if (kind !== 'event' && kind !== 'wait' && kind !== 'pick') return
   useUndoCoordinator.getState().checkpoint()
-  hand(nodeId, run => { if (k === 'event') run.fire(itemId); else run.resume(itemId) })
+  hand(nodeId, (run, k) => { if (kind === 'event') run.fire(k(itemId)); else run.resume(k(itemId)) })
 }
 
 /** Make a change by hand: its far end becomes "now". */
@@ -754,7 +868,7 @@ export function makeChange(nodeId: string, wireId: string): void {
 export function setValue(nodeId: string, itemId: string, v: number, undo = true): void {
   if (!Number.isFinite(v)) return
   if (undo) useUndoCoordinator.getState().checkpoint()
-  hand(nodeId, run => run.set(itemId, v))
+  hand(nodeId, (run, k) => run.set(k(itemId), v))
 }
 
 // ── Editing ──
@@ -864,12 +978,12 @@ export function planeBox(nodeId: string): { x: number; y: number; k: number; w: 
 }
 
 /** The workspace whose ground is under a screen point, and the point on it. */
-export function spaceAt(clientX: number, clientY: number, flat = false): { nodeId: string; x: number; y: number } | null {
+export function spaceAt(clientX: number, clientY: number, flat = false, skip?: string): { nodeId: string; x: number; y: number } | null {
   const c = screenToCanvas(clientX, clientY, flat)
   if (!c) return null
   let best: { nodeId: string; x: number; y: number } | null = null
   for (const n of Object.values(useFreeNodeStore.getState().nodes)) {
-    const b = n.type === 'stateSpace' ? planeBox(n.id) : null
+    const b = n.type === 'stateSpace' && n.id !== skip ? planeBox(n.id) : null
     if (!b) continue
     const x = (c.cx - b.x) / b.k, y = (c.cy - b.y) / b.k
     if (x >= 0 && y >= 0 && x <= b.w && y <= b.h) best = { nodeId: n.id, x, y }
@@ -913,6 +1027,17 @@ export function dropLineOnStateSpace(clientX: number, clientY: number, lineId: s
   return true
 }
 
+/** A workspace let go (held by its header) at a screen point: over another
+ *  workspace's ground it becomes a node there, standing for the whole of it.
+ *  True when it took it: the caller puts the workspace back where it was. */
+export function dropSpaceOnStateSpace(clientX: number, clientY: number, spaceId: string, flat = false): boolean {
+  const at = spaceAt(clientX, clientY, flat, spaceId)
+  if (!at) return false
+  editSpace(at.nodeId, d => d.items.some(i => i.space === spaceId) ? d : { ...d, items: [...d.items, { id: uid(), kind: 'space', space: spaceId, x: snap(at.x), y: snap(at.y) }] }, false)
+  replaySpace(at.nodeId)
+  return true
+}
+
 /** Live: a workspace follows the time markers of its timelines, wherever
  *  they are moved from (the storyline, the world clock, its own node), and
  *  the points of a storyline as they are added, moved or taken away. */
@@ -935,7 +1060,9 @@ export function startStateSpaces(): void {
     }
     if (!moved.length) return
     busy = true
-    try { for (const id of moved) replaySpace(id) } finally { busy = false }
+    // Once for each set of workspaces joined together.
+    const played = new Set<string>()
+    try { for (const id of moved) if (!played.has(id)) for (const x of replaySpace(id)) played.add(x) } finally { busy = false }
   })
   // The other way round: a State card that picks a state anywhere (its own
   // face, its picker, a time marker) lights the node of a card in that
@@ -956,9 +1083,9 @@ export function startStateSpaces(): void {
         const d = n.type === 'stateSpace' && n.stateSpace ? normalizeSpace(n.stateSpace) : null
         const hit = d?.items.filter(i => i.card && cards.has(i.card) && !i.now && isState(i))
         if (!d || !hit?.length) continue
-        hand(n.id, run => hit.flatMap(i => {
-          const by = d.wires.find(w => w.b === i.id && wireKind(d, w) === 'change' && run.r.lit.has(w.a))
-          run.light(i.id)
+        hand(n.id, (run, k, all) => hit.flatMap(i => {
+          const by = all.wires.find(w => w.b === k(i.id) && wireKind(all, w) === 'change' && run.r.lit.has(w.a))
+          run.light(k(i.id))
           return by ? [by.id] : []
         }))
       }
@@ -979,8 +1106,9 @@ export function startStateSpaces(): void {
     for (const n of Object.values(useFreeNodeStore.getState().nodes)) {
       const d = n.type === 'stateSpace' && n.stateSpace ? normalizeSpace(n.stateSpace) : null
       if (!d?.items.some(i => i.kind === 'fact')) { factWas.delete(n.id); continue }
-      const run = runner(d, litOf(d), valsOf(d))
-      const now = new Map(d.items.filter(i => i.kind === 'fact').map(i => [i.id, run.truth(i.id)]))
+      const all = worldOf(n.id)!.d
+      const run = runner(all, litOf(all), valsOf(all))
+      const now = new Map(d.items.filter(i => i.kind === 'fact').map(i => [keyOf(n.id, i.id), run.truth(keyOf(n.id, i.id))]))
       const was = factWas.get(n.id)
       factWas.set(n.id, now)
       if (!was || ![...now].some(([k, v]) => was.has(k) && was.get(k) !== v)) continue
