@@ -174,6 +174,18 @@ export const EffectTileBody: React.FC<{
   const auxNote = useAuxStore(s => s.byStep[id] ?? '')
   /** The worker is drawing for this card, or about to (a lit dot on the face). */
   const drawing = useAuxStore(s => !!s.busy[id])
+  /** A drawing card on a strip whose clip (a video or GIF) has been played,
+   *  stepped or drawn: a change to it is drawn again on every frame, not
+   *  on one picture. Its note line says so while it has nothing else to
+   *  say. (The mix cards and Combine only re-lay what is drawn.) */
+  const redraws = isAuxKind(kind) && kind !== 'linemix' && kind !== 'shademix' && kind !== 'combine'
+  const clipRail = useFreeNodeStore(s => (redraws ? railOfFace(id, node, s.nodes) : null))
+  const clipFrames = useClipMotion(s => {
+    const m = clipRail ? s.byKey[`rail:${clipRail}`] : undefined
+    return m?.engaged ? Math.max(0, m.end - m.first) : 0
+  })
+  const clipNote = clipFrames > 1 ? `Each change redraws the clip: ${clipFrames} frames` : ''
+  const note = auxNote || clipNote
   /** A Segment card: what it found and how big each is on screen. */
   const found = useAuxStore(s => (kind === 'segment' ? s.subjects[id] : undefined))
   const rows: ParamDef[] = found ? [...def.params, ...subjectRows(found)] : def.params
@@ -420,10 +432,12 @@ export const EffectTileBody: React.FC<{
       {/* Its line is always there on a card that can have one, so the
           note coming and going ("Computing hatching…") shifts nothing. */}
       {def.needs && (
-        <div title={auxNote} style={{
+        <div data-fx-note title={note === clipNote && note ? `${note}. Colour, glow and the mix cards stay quick` : note} style={{
           fontSize: 5.5 * u, opacity: 0.75, textAlign: 'center', marginTop: 0.5 * u, flex: '0 0 auto',
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textShadow: shadow,
-        }}>{auxNote || '\u00a0'}</div>
+          // The clip warning in the drawing dot's amber, so it reads as one.
+          color: !auxNote && clipNote ? 'rgb(255, 200, 96)' : undefined,
+        }}>{note || '\u00a0'}</div>
       )}
 
       {/* ── Values: each row IS its slider. The fill shows the value; press
