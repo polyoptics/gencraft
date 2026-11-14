@@ -31,6 +31,7 @@ import { useResolvedMedia } from '../../utils/useResolvedMedia'
 import { cardTypeOf, typeColor } from '../../utils/cardTypes'
 import { goToCard } from '../../utils/stateCard'
 import { scrubStoryline } from '../Canvas/StorylineLayer'
+import { snapshotSpace } from '../../utils/stateScene'
 import {
   EVENT_H, EVENT_W, ICON, PORT_SNAP, SPACE_BAR_W, SPACE_GRID, TL_H,
   CHOICE_HEAD, CHOICE_ROW, SPACE_HEAD, SPACE_ROW, addItem, choose, pathStep, scene, addWire, editSpace, emptyStateSpace, endOf, exposed, fireEvent, isLevel, itemPorts, itemSize, lineClock, lineOf, looseCurve, makeChange, replaySpace, setValue, spaceTruths, valOf,
@@ -330,7 +331,7 @@ const TimelineView: React.FC<{ item: SpaceItem; picked: boolean; playing: boolea
       boxShadow: picked ? `0 0 0 2px ${BLUE}` : 'none',
     }}>
       <div style={{ position: 'absolute', left: 30, right: 10, top: 5, fontSize: 9, letterSpacing: '0.1em', color: DIM, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-        {item.world ? 'WORLD CLOCK' : 'TIMELINE'}  ·  {(item.name || c?.title || (item.world ? 'no storyline on it yet' : 'storyline gone')).toUpperCase()}
+        {item.world ? 'WORLD CLOCK' : 'TIMELINE'}  ·  {(item.name || c?.title || (item.world ? 'empty' : 'storyline gone')).toUpperCase()}
       </div>
       {c && <div data-sp-play={item.id} className="vb-sp-chip" title="Play: the time marker runs through the story and everything wired to it happens as it passes. Lit while it plays; click again to stop" style={{
         position: 'absolute', left: 7, top: 3, width: 17, height: 15, borderRadius: 4, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -352,6 +353,9 @@ const TimelineView: React.FC<{ item: SpaceItem; picked: boolean; playing: boolea
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', pointerEvents: 'none',
         }}>{p.title}</div>)}
       </>}
+      {!c && <div style={{ position: 'absolute', left: 12, right: 12, top: 25, fontSize: 10, lineHeight: 1.3, color: DIM, textAlign: 'center', pointerEvents: 'none' }}>
+        {item.world ? 'Drag a storyline onto the World clock (bottom left). Its points show here.' : 'Its storyline is gone.'}
+      </div>}
     </div>
   )
 }
@@ -685,12 +689,14 @@ const Bar: React.FC<{ id: string; d: StateSpaceData; sel: string[]; setSel: (s: 
       <div style={hint}>Cards, values, And, Or and Is in are true or not: wire them into an event's "only if" to make a condition.</div>
       <div style={gap}>IN HERE</div>
       <div style={{ ...row, cursor: 'default', color: DIM }}>{d.items.length} nodes, {d.wires.length} wires</div>
+      <div style={gap}>SNAPSHOT</div>
+      <button data-sp-snapshot="" style={btn()} title="A closed deck beside this workspace: a card that says what is lit and what the values are, then a linked card for each lit card. Nothing that is there is moved" onClick={() => snapshotSpace(id)}>Make a deck of how things stand</button>
     </>
   }
   return (
     <div data-sp-bar="" style={{
       width: SPACE_BAR_W, flexShrink: 0, boxSizing: 'border-box', borderLeft: '1px solid rgba(255,255,255,0.1)', background: '#1c2125',
-      padding: 14, display: 'flex', flexDirection: 'column', overflow: 'hidden',
+      padding: 14, display: 'flex', flexDirection: 'column', overflowX: 'hidden', overflowY: 'auto',
     }}>
       <div style={{ ...label, marginBottom: 12 }}>{head}</div>
       {body}
@@ -1108,10 +1114,10 @@ export function StateSpaceBody({ id, node, bodyW, bodyH }: { id: string; node: F
             })}
             {band && <div style={{ position: 'absolute', left: band.x, top: band.y, width: band.w, height: band.h, border: `1px solid ${BLUE}`, background: 'rgba(111,183,224,0.1)', pointerEvents: 'none' }} />}
             {/* The shelf: what there is to drag in besides cards and storylines. */}
-            <div style={{ position: 'absolute', left: 10, top: 10, display: 'flex', gap: 6, fontFamily: FONT }}>
+            <div style={{ position: 'absolute', left: 10, right: 10, top: 10, display: 'flex', flexWrap: 'wrap', gap: 6, fontFamily: FONT, pointerEvents: 'none' }}>
               {SHELF.map(s => (
                 <div key={s.key} data-sp-shelf={s.key} className="vb-sp-chip" title={s.title} style={{
-                  height: 24, lineHeight: '22px', padding: '0 10px', boxSizing: 'border-box', borderRadius: s.kind === 'blank' ? 5 : 12, fontSize: 11, color: INK, cursor: 'grab', userSelect: 'none', whiteSpace: 'nowrap',
+                  height: 24, lineHeight: '22px', padding: '0 10px', boxSizing: 'border-box', borderRadius: s.kind === 'blank' ? 5 : 12, fontSize: 11, color: INK, cursor: 'grab', userSelect: 'none', whiteSpace: 'nowrap', pointerEvents: 'auto',
                   background: 'rgba(255,255,255,0.05)', border: `1px ${s.kind === 'blank' ? 'dashed' : 'solid'} ${kindTone(s.kind) === STEEL ? 'rgba(255,255,255,0.3)' : kindTone(s.kind)}`,
                 }}>{s.name}</div>
               ))}

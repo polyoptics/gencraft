@@ -373,8 +373,9 @@ export function riderOf(key: string, curves = useNotesStore.getState().curves): 
  *  nodes): nothing of the paths themselves is changed, only where their
  *  riders are drawn. `hold`: a path's riders stand at one of its points
  *  (by the path's id). `take`: a model rides another path than its own (by
- *  the model's key). */
-export const useRideOverride = create<{ hold: Record<string, number>; take: Record<string, string> }>(() => ({ hold: {}, take: {} }))
+ *  the model's key). `hidden`: the cards a workspace has off the board for
+ *  now (by id), for the 3D view to leave out as the flat view does. */
+export const useRideOverride = create<{ hold: Record<string, number>; take: Record<string, string>; hidden: string[] }>(() => ({ hold: {}, take: {}, hidden: [] }))
 
 let memo: { curves: unknown; nodes: unknown; clocks: unknown; over: unknown; now: number; map: Map<string, RideSpot> } | null = null
 /** Every riding model's place now, by its key: each where its path has it

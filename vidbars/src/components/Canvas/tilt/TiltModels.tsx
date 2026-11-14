@@ -1227,7 +1227,10 @@ function collectSlabs(K = 1): TiltSlab[] {
     for (const head of stage.querySelectorAll<HTMLElement>('[data-card-header]')) heads.set(head.dataset.cardHeader!, head)
     // In the flat view's paint order (see paintZ), so that each card can
     // stand over the cards painted under it that it overlaps.
+    // Not a card a state workspace has off the board for now (utils/stateScene).
+    const off = useRideOverride.getState().hidden
     const cards = [...stage.querySelectorAll<HTMLElement>('[data-group-card][data-id]')]
+      .filter(el => !off.includes(el.dataset.id!))
       .map((el, i) => ({ el, i, z: paintZ(el, stage) }))
       .sort((a, b) => a.z - b.z || a.i - b.i)
     /** The raised cards placed so far that lie flat: their boxes and tops. */
@@ -2828,7 +2831,7 @@ function collectTargets(W: number, H: number): TiltTarget[] {
     for (const el of stage.querySelectorAll<HTMLElement>('[data-group-card][data-id]')) {
       const model = cardModel(el.dataset.id!)
       const at = model && offsetIn(el, stage)
-      if (!model || !at) continue
+      if (!model || !at || useRideOverride.getState().hidden.includes(el.dataset.id!)) continue
       const x = at.x, y = at.y, w = el.offsetWidth, h = el.offsetHeight
       const v = viewers.find(r => x <= r.x1 + GAP && x + w >= r.x0 - GAP && y <= r.y1 + GAP && y + h >= r.y0 - GAP)
       // Beside a Viewer showing it, it is on the Viewer, unless that one
