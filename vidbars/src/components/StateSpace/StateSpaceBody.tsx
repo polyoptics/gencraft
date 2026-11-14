@@ -321,6 +321,37 @@ const NodeView: React.FC<{ item: SpaceItem; picked: boolean; stamp?: number; on?
   )
 }
 
+/** The id of a workspace's arrowhead in one colour. */
+const markerId = (space: string, tone: string) => `sp-${space}-${tone.replace(/[^a-z0-9]/gi, '')}`
+
+/** One node, drawn again only when something of it has changed (a big
+ *  workspace has a hundred of them, and one is moved at a time). */
+const NodeViewMemo = React.memo(NodeView, (a, b) => a.item === b.item && a.picked === b.picked && a.stamp === b.stamp && a.on === b.on
+  && a.says?.[0] === b.says?.[0] && a.says?.[1] === b.says?.[1])
+
+/** One wire, drawn again only when it has changed. */
+const WireG = React.memo<{ w: SpaceWire; g: WireGeom; kind: ReturnType<typeof wireKind>; tone: string; on: boolean; says: string; does: string; space: string }>(
+  ({ w, g, kind, tone, on, says, does, space }) => {
+    const c = on ? BLUE : tone
+    const marker = (t: string) => markerId(space, t)
+    return (
+      <g data-sp-wire={w.id}>
+        <path d={g.path} fill="none" stroke={c} strokeWidth={on ? 2.6 : kind === 'signal' ? 1.5 : 1.9} strokeLinecap="round"
+          strokeDasharray={kind === 'link' ? '2 6' : kind === 'cond' ? '2 5' : kind === 'signal' ? '6 3' : undefined}
+          opacity={kind === 'signal' && !on ? 0.9 : 1}
+          markerEnd={kind === 'link' ? undefined : `url(#${marker(c)})`} />
+        {w.name && kind !== 'signal' && <text x={g.mx} y={g.my - 12} textAnchor="middle" fontSize={11} fontFamily={FONT}
+          fill={on ? BLUE : 'rgba(255,255,255,0.75)'} stroke={GROUND} strokeWidth={4} paintOrder="stroke" style={{ userSelect: 'none' }}>{w.name}</text>}
+        {w.bp === 'if' && <text x={g.x2 + 8} y={g.y2 - 8} fontSize={9} fontFamily={FONT} fill={on ? BLUE : GREEN} style={{ userSelect: 'none' }}>only if</text>}
+        {/* What it carries, by its start; what it does, by its end. */}
+        {says && <text data-sp-says={w.id} x={along(g, 0.24).x} y={along(g, 0.24).y - 6} textAnchor="middle" fontSize={10} fontFamily={FONT} fill={on ? BLUE : '#bfe6c6'} stroke={GROUND} strokeWidth={3} paintOrder="stroke" style={{ userSelect: 'none' }}>{says}</text>}
+        {does && <text data-sp-does={w.id} x={along(g, 0.8).x} y={along(g, 0.8).y - 6} textAnchor="middle" fontSize={10} fontFamily={FONT} fill={on ? BLUE : '#bfe6c6'} stroke={GROUND} strokeWidth={3} paintOrder="stroke" style={{ userSelect: 'none' }}>{does}</text>}
+      </g>
+    )
+  },
+  (a, b) => a.w === b.w && a.g.path === b.g.path && a.kind === b.kind && a.tone === b.tone && a.on === b.on && a.says === b.says && a.does === b.does && a.space === b.space,
+)
+
 const TimelineView: React.FC<{ item: SpaceItem; picked: boolean; playing: boolean }> = ({ item, picked, playing }) => {
   const c = lineClock(lineOf(item))
   const { w, h } = itemSize(item)
@@ -331,7 +362,7 @@ const TimelineView: React.FC<{ item: SpaceItem; picked: boolean; playing: boolea
       boxShadow: picked ? `0 0 0 2px ${BLUE}` : 'none',
     }}>
       <div style={{ position: 'absolute', left: 30, right: 10, top: 5, fontSize: 9, letterSpacing: '0.1em', color: DIM, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-        {item.world ? 'WORLD CLOCK' : 'TIMELINE'}  ·  {(item.name || c?.title || (item.world ? 'empty' : 'storyline gone')).toUpperCase()}
+        {item.world ? 'WORLD CLOCK' : 'TIMELINE'}  ·  {(item.name || c?.title || (item.world ? 'empty' : 'gone')).toUpperCase()}
       </div>
       {c && <div data-sp-play={item.id} className="vb-sp-chip" title="Play: the time marker runs through the story and everything wired to it happens as it passes. Lit while it plays; click again to stop" style={{
         position: 'absolute', left: 7, top: 3, width: 17, height: 15, borderRadius: 4, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -1022,7 +1053,7 @@ export function StateSpaceBody({ id, node, bodyW, bodyH }: { id: string; node: F
   const wires = useMemo(() => d.wires.map(w => ({ w, g: wireGeom(d, w), kind: wireKind(d, w), tone: wireTone(d, w) })).filter((x): x is { w: SpaceWire; g: WireGeom; kind: ReturnType<typeof wireKind>; tone: string } => !!x.g), [d, lines, worldLine, inners, curves])
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const ports = useMemo(() => d.items.flatMap(i => itemPorts(i).map(p => ({ item: i, ...p }))), [d, lines, worldLine, inners, curves])
-  const marker = (tone: string) => `sp-${id}-${tone.replace(/[^a-z0-9]/gi, '')}`
+  const marker = (tone: string) => markerId(id, tone)
   const tones = [STEEL, AMBER, VIOLET, GREEN, BLUE]
 
   return (
@@ -1040,25 +1071,7 @@ export function StateSpaceBody({ id, node, bodyW, bodyH }: { id: string; node: F
                   <marker key={tone} id={marker(tone)} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10z" fill={tone} /></marker>
                 ))}
               </defs>
-              {wires.map(({ w, g, kind, tone }) => {
-                const on = sel.includes(w.id)
-                const says = wireSays(d, w), does = wireDoes(d, w)
-                const c = on ? BLUE : tone
-                return (
-                  <g key={w.id} data-sp-wire={w.id}>
-                    <path d={g.path} fill="none" stroke={c} strokeWidth={on ? 2.6 : kind === 'signal' ? 1.5 : 1.9} strokeLinecap="round"
-                      strokeDasharray={kind === 'link' ? '2 6' : kind === 'cond' ? '2 5' : kind === 'signal' ? '6 3' : undefined}
-                      opacity={kind === 'signal' && !on ? 0.9 : 1}
-                      markerEnd={kind === 'link' ? undefined : `url(#${marker(c)})`} />
-                    {w.name && kind !== 'signal' && <text x={g.mx} y={g.my - 12} textAnchor="middle" fontSize={11} fontFamily={FONT}
-                      fill={on ? BLUE : 'rgba(255,255,255,0.75)'} stroke={GROUND} strokeWidth={4} paintOrder="stroke" style={{ userSelect: 'none' }}>{w.name}</text>}
-                    {w.bp === 'if' && <text x={g.x2 + 8} y={g.y2 - 8} fontSize={9} fontFamily={FONT} fill={on ? BLUE : GREEN} style={{ userSelect: 'none' }}>only if</text>}
-                    {/* What it carries, by its start; what it does, by its end. */}
-                    {says && <text data-sp-says={w.id} x={along(g, 0.24).x} y={along(g, 0.24).y - 6} textAnchor="middle" fontSize={10} fontFamily={FONT} fill={on ? BLUE : '#bfe6c6'} stroke={GROUND} strokeWidth={3} paintOrder="stroke" style={{ userSelect: 'none' }}>{says}</text>}
-                    {does && <text data-sp-does={w.id} x={along(g, 0.8).x} y={along(g, 0.8).y - 6} textAnchor="middle" fontSize={10} fontFamily={FONT} fill={on ? BLUE : '#bfe6c6'} stroke={GROUND} strokeWidth={3} paintOrder="stroke" style={{ userSelect: 'none' }}>{does}</text>}
-                  </g>
-                )
-              })}
+              {wires.map(({ w, g, kind, tone }) => <WireG key={w.id} w={w} g={g} kind={kind} tone={tone} on={sel.includes(w.id)} says={wireSays(d, w)} does={wireDoes(d, w)} space={id} />)}
               {flow && wires.filter(x => flow.wires.includes(x.w.id)).map(({ w, g, tone }) => (
                 <g key={flow.stamp + w.id}>
                   <path d={g.path} fill="none" stroke={tone} strokeWidth={4} strokeLinecap="round" opacity={0.5}>
@@ -1078,7 +1091,7 @@ export function StateSpaceBody({ id, node, bodyW, bodyH }: { id: string; node: F
             </svg>
             {d.items.map(i => i.kind === 'path' ? <PathView key={i.id} item={i} picked={sel.includes(i.id)} /> : i.kind === 'timeline'
               ? <TimelineView key={i.id} item={i} picked={sel.includes(i.id)} playing={playing === i.id} />
-              : <NodeView key={i.id} item={i} picked={sel.includes(i.id)} stamp={pulse[i.id]} on={truths.has(i.id)} says={says[i.id]} />)}
+              : <NodeViewMemo key={i.id} item={i} picked={sel.includes(i.id)} stamp={pulse[i.id]} on={truths.has(i.id)} says={says[i.id]} />)}
             {/* A change's knob: where a wire that makes it lands. */}
             {wires.filter(x => x.kind === 'change').map(({ w, g }) => {
               const ref = { wire: w.id, port: 'knob' }

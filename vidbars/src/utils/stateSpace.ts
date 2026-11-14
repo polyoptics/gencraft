@@ -259,8 +259,26 @@ export function editSpace(nodeId: string, f: (d: StateSpaceData) => StateSpaceDa
   useFreeNodeStore.getState().updateFreeNode(nodeId, { stateSpace: next })
 }
 
-const itemOf = (d: StateSpaceData, id: string | undefined) => d.items.find(i => i.id === id)
-const wireOf = (d: StateSpaceData, id: string | undefined) => d.wires.find(w => w.id === id)
+/** What is looked up over and over in a workspace's data, kept for as long
+ *  as that data stands (it is never changed in place: a change is new data). */
+interface Index {
+  items: SpaceItem[]; wires: SpaceWire[]
+  item: Map<string, SpaceItem>; wire: Map<string, SpaceWire>
+  kind: Map<SpaceWire, 'change' | 'link' | 'signal' | 'cond'>
+  machine: Map<string, Set<string>> | null
+}
+const indexes = new WeakMap<StateSpaceData, Index>()
+function indexOf(d: StateSpaceData): Index {
+  let x = indexes.get(d)
+  if (x && x.items === d.items && x.wires === d.wires) return x
+  x = { items: d.items, wires: d.wires, item: new Map(), wire: new Map(), kind: new Map(), machine: null }
+  for (const i of d.items) if (!x.item.has(i.id)) x.item.set(i.id, i)
+  for (const w of d.wires) if (!x.wire.has(w.id)) x.wire.set(w.id, w)
+  indexes.set(d, x)
+  return x
+}
+const itemOf = (d: StateSpaceData, id: string | undefined) => id === undefined ? undefined : indexOf(d).item.get(id)
+const wireOf = (d: StateSpaceData, id: string | undefined) => id === undefined ? undefined : indexOf(d).wire.get(id)
 const isState = (i: SpaceItem | undefined) => i?.kind === 'card' || i?.kind === 'blank'
 /** True or not at any moment: can be a condition. */
 export const isLevel = (i: SpaceItem | undefined) => isState(i) || i?.kind === 'value' || i?.kind === 'and' || i?.kind === 'or' || i?.kind === 'fact' || i?.kind === 'act'
@@ -286,6 +304,12 @@ export const lineOf = (i: SpaceItem | undefined): string | undefined => i?.world
 /** What a wire is: a change (or, plain, a link) between two cards, else a
  *  signal: "when this, then that". */
 export function wireKind(d: StateSpaceData, w: SpaceWire): 'change' | 'link' | 'signal' | 'cond' {
+  const x = indexOf(d)
+  let k = x.kind.get(w)
+  if (!k) { k = kindOfWire(d, w); x.kind.set(w, k) }
+  return k
+}
+function kindOfWire(d: StateSpaceData, w: SpaceWire): 'change' | 'link' | 'signal' | 'cond' {
   const a = itemOf(d, w.a)
   if (w.bp === 'if' || w.ap === 'time' || (w.bp !== 'knob' && readsLevels(itemOf(d, w.b)))) return 'cond'
   // Into a path: only "play" is something that happens; the rest holds while true.
@@ -530,17 +554,22 @@ export function wireSources(d: StateSpaceData, to: PortRef): { ref: PortRef; spo
 /** The nodes joined to `itemId` by changes, itself included: one machine.
  *  An "any" node joins nothing together: it only points. */
 export function machineOf(d: StateSpaceData, itemId: string): Set<string> {
-  const out = new Set([itemId])
-  if (!isState(itemOf(d, itemId))) return out
-  let grew = true
-  while (grew) {
-    grew = false
+  if (!isState(itemOf(d, itemId))) return new Set([itemId])
+  const x = indexOf(d)
+  if (!x.machine) {
+    // Every machine at once: the states joined by changes.
+    const m = new Map<string, Set<string>>()
     for (const w of d.wires) {
       if (wireKind(d, w) !== 'change' || !isState(itemOf(d, w.a))) continue
-      if (out.has(w.a) !== out.has(w.b)) { out.add(w.a); out.add(w.b); grew = true }
+      const a = m.get(w.a) ?? new Set([w.a]), b = m.get(w.b) ?? new Set([w.b])
+      if (a === b) continue
+      const [big, small] = a.size >= b.size ? [a, b] : [b, a]
+      for (const id of small) { big.add(id); m.set(id, big) }
+      m.set(w.a, big); m.set(w.b, big)
     }
+    x.machine = m
   }
-  return out
+  return new Set(x.machine.get(itemId) ?? [itemId])
 }
 
 // ── The engine ──
@@ -584,6 +613,9 @@ interface RunOpts {
   replay?: boolean
   /** What the facts were before the board changed: one that has become true sends. */
   factWas?: Map<string, boolean>
+  /** Wires to take as not having been true yet, so that one that is true
+   *  sends: all that a replay starts over, a wire just drawn or just changed. */
+  fresh?: (w: SpaceWire) => boolean
 }
 
 function runner(d: StateSpaceData, lit: Set<string>, vals: Map<string, number>, opts: RunOpts = {}) {
@@ -625,7 +657,7 @@ function runner(d: StateSpaceData, lit: Set<string>, vals: Map<string, number>, 
   // Wires that send when what they carry BECOMES true (a lit card's plain
   // wires are sent by light itself).
   const watch = d.wires.filter(w => { const a = itemOf(d, w.a); return wireKind(d, w) === 'signal' && isLevel(a) && (!isState(a) || !!w.not) })
-  const was = new Map(watch.map(w => [w.id, wireTruth(w)]))
+  const was = new Map(watch.map(w => [w.id, !opts.fresh?.(w) && wireTruth(w)]))
   facts.clear()
   const recheck = () => {
     for (const w of watch) {
@@ -916,7 +948,9 @@ export function replaySpace(nodeId: string): string[] {
   if (!reach.size) { scene.sync(); return w.ids }
   const lit = new Set(d.items.filter(i => reach.has(i.id) ? i.start : i.now).map(i => i.id))
   const vals = new Map(d.items.filter(i => i.kind === 'value').map(i => [i.id, reach.has(i.id) ? i.init ?? 0 : valOf(i)]))
-  const run = runner(d, lit, vals, { replay: true })
+  // What is true from the very start sends from the start (to what starts over).
+  const run = runner(d, lit, vals, { replay: true, fresh: x => reach.has((x.bp === 'knob' ? wireOf(d, x.b)?.b : x.b) ?? '') })
+  run.recheck()
   for (const tl of d.items) {
     if (tl.kind !== 'timeline') continue
     const c = lineClock(lineOf(tl))
@@ -1087,7 +1121,18 @@ export function addWire(nodeId: string, from: PortRef, to: PortRef, undo = true)
     return next.items.some(i => m.has(i.id) && i.start) ? next : { ...next, items: next.items.map(i => i.id === w.a ? { ...i, start: true } : i) }
   }, undo)
   replaySpace(nodeId)
+  sendIfTrue(nodeId, w.id)
   return w.id
+}
+
+/** A wire just drawn or just changed, carrying something already true, sends
+ *  (one a replay starts over has been sent by the replay). */
+function sendIfTrue(nodeId: string, wireId: string): void {
+  const w = worldOf(nodeId)
+  if (!w) return
+  const id = keyOf(nodeId, wireId), x = wireOf(w.d, id)
+  if (!x || driven(w.d).has((x.bp === 'knob' ? wireOf(w.d, x.b)?.b : x.b) ?? '')) return
+  hand(nodeId, run => run.recheck(), { fresh: y => y.id === id })
 }
 
 export function patchItem(nodeId: string, itemId: string, p: Partial<SpaceItem>, undo = true): void {
@@ -1096,6 +1141,7 @@ export function patchItem(nodeId: string, itemId: string, p: Partial<SpaceItem>,
 export function patchWire(nodeId: string, wireId: string, p: Partial<SpaceWire>, undo = true): void {
   editSpace(nodeId, d => ({ ...d, wires: d.wires.map(w => w.id === wireId ? { ...w, ...p } : w) }), undo)
   replaySpace(nodeId)
+  if ('cmp' in p || 'cn' in p || 'not' in p) sendIfTrue(nodeId, wireId)
 }
 
 /** Make a node its machine's start (or not). */
@@ -1149,8 +1195,19 @@ export function planeBox(nodeId: string): { x: number; y: number; k: number; w: 
   return { x: n.x, y: n.y + head, k, w: n.width / k - SPACE_BAR_W, h: (n.height - head) / k }
 }
 
+/** Where the pointer really is on the screen (startStateSpaces keeps it). */
+let realAt: { x: number; y: number } | null = null
+
 /** The workspace whose ground is under a screen point, and the point on it. */
 export function spaceAt(clientX: number, clientY: number, flat = false, skip?: string): { nodeId: string; x: number; y: number } | null {
+  // One pinned to the screen lies flat over everything, as it is drawn: by
+  // where the pointer really is (the tilted view re-sends its events flat).
+  const px = flat && realAt ? realAt.x : clientX, py = flat && realAt ? realAt.y : clientY
+  for (const el of document.querySelectorAll<HTMLElement>('[data-pinned] [data-state-plane]')) {
+    const id = el.dataset.statePlane!, r = el.getBoundingClientRect()
+    if (id === skip || !r.width || !r.height || px < r.left || py < r.top || px > r.right || py > r.bottom) continue
+    return { nodeId: id, x: (px - r.left) / r.width * el.offsetWidth, y: (py - r.top) / r.height * el.offsetHeight }
+  }
   const c = screenToCanvas(clientX, clientY, flat)
   if (!c) return null
   let best: { nodeId: string; x: number; y: number } | null = null
@@ -1224,6 +1281,8 @@ let started = false
 export function startStateSpaces(): void {
   if (started) return
   started = true
+  const real = (e: PointerEvent) => { if (e.isTrusted) realAt = { x: e.clientX, y: e.clientY } }
+  for (const type of ['pointerdown', 'pointermove', 'pointerup'] as const) window.addEventListener(type, real, true)
   let busy = false
   useFreeNodeStore.subscribe((s, prev) => {
     if (busy || s.nodes === prev.nodes) return
