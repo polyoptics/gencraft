@@ -215,7 +215,11 @@ export function rowCards(a: FreeNodeData, box: R = a, taken?: (id: string) => bo
       row.push(g)
     }
   }
-  return row
+  // A master with a linked card of it there is not with the set: the set
+  // has its link (Brian 2026-11-15: the masters are left behind, and the
+  // set comes out again with links where they stood).
+  const linked = new Set(row.map(g => g.linkOf).filter(Boolean))
+  return linked.size ? row.filter(g => g === card || !linked.has(g.id)) : row
 }
 let rowMemo: { groups: unknown; boards: unknown; nodes: unknown; zoom: number; of: Map<string, RowSpot> } | null = null
 function rowSets(): Map<string, RowSpot> {

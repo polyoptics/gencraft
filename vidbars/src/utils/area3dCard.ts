@@ -24,8 +24,7 @@ import { useModelScaleStore, type ScenePlace, type CameraLens, type PieceView } 
 import { cardBox, carrying, docksUnder, isUnder, laying, lyingIn, rowCards, selfMoved, setCards, setViewers } from './area3dScene'
 import { useViewport3DStore, type ViewportWindow3D } from '../store/viewport3dStore'
 import { viewportVisualRect } from './viewportDocking'
-import { primaryFirst } from './primaryCard'
-import { splitOpenDecks } from './deckSplit'
+import { isHiddenDeckMember } from '../hooks/useCardDecks'
 import { cardFaceSize, createTextCard } from './cardGrid'
 import { makeLinkedCard, masterOf } from './linkedCards'
 import { useNotesStore, useNotesUi, newNoteId, type Curve, type PathRider } from '../store/notesStore'
@@ -119,6 +118,21 @@ function onMat(a: FreeNodeData) {
   const { groups, boards } = useBoardsStore.getState()
   // On it, and the model cards docked along its sides.
   const cards = setCards(a, groups, boards, a.areaCard)
+  // And the cards docked under it (Brian 2026-11-15: the set works as a
+  // chart does; the masters put against it stay out when it folds, and
+  // what is kept in its card are links to them), with the cards put away
+  // in a closed deck among those.
+  const add = (g: ProjectGroup) => { if (!cards.includes(g)) cards.push(g) }
+  const row = rowCards(a).slice(1)
+  row.forEach(add)
+  const fronts = row.filter(g => !!g.deckState && g.deckState !== 'open')
+  for (let i = 0; i < fronts.length; i++) {
+    for (const m of groups) {
+      if (m.pin || m.id === fronts[i].id || m.deckAnchorId !== fronts[i].id || !isHiddenDeckMember(m) || fronts.includes(m)) continue
+      add(m)
+      fronts.push(m)
+    }
+  }
   const tiles = Object.values(fs.nodes).filter(n => n.id !== a.id && n.type !== 'area' && n.type !== 'storyline' && !n.pin && n.areaCard === undefined && !isUnder(a, `node:${n.id}`) && inside(a, n.x + n.width / 2, n.y + n.height / 2))
   return { cards, tiles }
 }
@@ -753,36 +767,19 @@ export function toggleArea3d(cardId: string): void {
   if (out) foldArea3dMoving(out); else showArea3dMoving(cardId)
 }
 
-/** A 3D set's card double-clicked with its set out: the set folds in and
- *  everything with it closes onto the card as its deck, in one (Brian
- *  2026-11-09). `row` = the card's open deck, the set's card first. With
- *  it go all the cards docked under the set (area3dScene rowCards), however
- *  they lie there: a row, a gap and another row, a deck of their own
- *  (Brian 2026-11-13: "everything gets hidden", and it "reopens in the same
- *  state it was in"; a closed deck keeps each card's place to open into,
- *  boardsStore setDeckState). The deck closes once the set is in, so the
- *  set's own cards are gone from it by then. No set out: false. */
-export function foldArea3dAndDeck(cardId: string, row: string[]): boolean {
+/** A 3D set's card double-clicked with its set out: the set folds in,
+ *  with the cards docked under it (area3dScene rowCards) kept in its card
+ *  as links, however they lie there: a row, a gap and another row, a deck
+ *  of their own (Brian 2026-11-13: it "reopens in the same state it was
+ *  in"). `_row`: the card's open deck, not closed onto it any more. No
+ *  set out: false. */
+export function foldArea3dAndDeck(cardId: string, _row: string[]): boolean {
   const out = area3dOutOf(cardId)
   if (!out) return false
-  const a = useFreeNodeStore.getState().nodes[out]
-  const all = [...new Set([...row, ...(a ? rowCards(a).map(g => g.id) : [])])]
-  foldArea3dMoving(out, () => {
-    const gs = useBoardsStore.getState().groups
-    const left = all.filter(id => gs.some(g => g.id === id))
-    if (left.length < 2) return
-    const bs = useBoardsStore.getState()
-    if (primaryFirst(gs, left)[0] === cardId) { bs.setDeckState(left, 'stacked'); return }
-    // Another card of them is a row's primary card: onto the set's card
-    // all the same. The open decks among them go in as decks of their
-    // own, to open again with it (as setDeckState does for a row).
-    const { subs, rest } = splitOpenDecks(gs, left)
-    for (const sub of subs) bs.setDeckState(sub, 'stacked', { asGiven: true })
-    const fronts = new Set(subs.map(sub => sub[0]))
-    if (fronts.size) useBoardsStore.setState(st => ({ groups: st.groups.map(g => (fronts.has(g.id) ? { ...g, deckReopen: true } : g)) }))
-    const ids = [cardId, ...rest.filter(id => id !== cardId)]
-    if (ids.length > 1) useBoardsStore.getState().setDeckState(ids, 'stacked', { asGiven: true })
-  })
+  // (The cards docked under it are kept in its card as links, foldArea3d;
+  // the masters among them stay where they lie, Brian 2026-11-15: no
+  // deck is closed onto the set's card any more.)
+  foldArea3dMoving(out)
   return true
 }
 
