@@ -42,11 +42,11 @@ const imgViews = new Map<string, ImgViewState>()
 export type ImgMode = 'view' | 'snip' | 'crop' | 'paint' | 'annotate'
 /** What Paint draws with: the brush, or a shape dragged corner to corner
  *  (a line or arrow start to end). Brian 2026-11-08. */
-type PaintTool = 'brush' | 'rect' | 'ellipse' | 'line' | 'arrow'
+export type PaintTool = 'brush' | 'rect' | 'ellipse' | 'line' | 'arrow'
 type Shape = Exclude<PaintTool, 'brush'>
-interface PaintStroke { color: string; size: number; pts: { x: number; y: number }[]; shape?: Shape; fill?: boolean }
+export interface PaintStroke { color: string; size: number; pts: { x: number; y: number }[]; shape?: Shape; fill?: boolean }
 
-const PAINT_TOOLS: { id: PaintTool; icon: React.ReactNode; tip: string }[] = [
+export const PAINT_TOOLS: { id: PaintTool; icon: React.ReactNode; tip: string }[] = [
   { id: 'brush', icon: <path d="M3 13c2-1 3-4 5-4s1 3 3 3 2-5 2-5" />, tip: 'Brush: paint freehand' },
   { id: 'rect', icon: <rect x="2.5" y="4" width="11" height="8" />, tip: 'Rectangle: drag corner to corner' },
   { id: 'ellipse', icon: <ellipse cx="8" cy="8" rx="5.5" ry="4" />, tip: 'Ellipse: drag corner to corner' },
@@ -56,11 +56,11 @@ const PAINT_TOOLS: { id: PaintTool; icon: React.ReactNode; tip: string }[] = [
 
 /** Annotate's tools: Paint's, and an eraser. */
 type AnnoTool = PaintTool | 'erase'
-const ERASE_ICON = <><path d="M9.5 3.5l3 3-6 6H4l-1.5-1.5z" /><path d="M7 13h6.5" /></>
+export const ERASE_ICON = <><path d="M9.5 3.5l3 3-6 6H4l-1.5-1.5z" /><path d="M7 13h6.5" /></>
 const NO_MARKS: PictureMark[] = []
 
 /** Is natural point n on mark m (within tol natural px)? */
-function hitMark(m: PictureMark, n: { x: number; y: number }, tol: number): boolean {
+export function hitMark(m: PictureMark, n: { x: number; y: number }, tol: number): boolean {
   const t = tol + m.size / 2
   const seg = (a: { x: number; y: number }, b: { x: number; y: number }) => {
     const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy
@@ -83,7 +83,7 @@ function hitMark(m: PictureMark, n: { x: number; y: number }, tol: number): bool
 }
 
 /** A shape's arrowhead: its two barbs' ends, for a line from a to b. */
-function arrowBarbs(a: { x: number; y: number }, b: { x: number; y: number }, size: number) {
+export function arrowBarbs(a: { x: number; y: number }, b: { x: number; y: number }, size: number) {
   const ang = Math.atan2(b.y - a.y, b.x - a.x)
   const len = Math.min(Math.max(10, size * 3.2), Math.hypot(b.x - a.x, b.y - a.y) * 0.6)
   return [ang + Math.PI * 0.82, ang - Math.PI * 0.82].map(t => ({ x: b.x + Math.cos(t) * len, y: b.y + Math.sin(t) * len }))
@@ -91,7 +91,7 @@ function arrowBarbs(a: { x: number; y: number }, b: { x: number; y: number }, si
 
 /** Draw a Paint stroke on a 2D canvas, `at` taking a point to its pixel
  *  there and `k` a width (the Stamp). */
-function drawStroke(ctx: CanvasRenderingContext2D, st: PaintStroke, at: (p: { x: number; y: number }) => { x: number; y: number }, k: number) {
+export function drawStroke(ctx: CanvasRenderingContext2D, st: PaintStroke, at: (p: { x: number; y: number }) => { x: number; y: number }, k: number) {
   ctx.strokeStyle = st.color
   ctx.fillStyle = st.color
   ctx.lineWidth = st.size * k
@@ -116,7 +116,7 @@ function drawStroke(ctx: CanvasRenderingContext2D, st: PaintStroke, at: (p: { x:
 }
 
 /** The same stroke as SVG, in the image area's px. */
-const StrokeSvg: React.FC<{ st: PaintStroke }> = ({ st }) => {
+export const StrokeSvg: React.FC<{ st: PaintStroke }> = ({ st }) => {
   const line = { stroke: st.color, strokeWidth: st.size, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const }
   if (!st.shape) return <polyline points={st.pts.map(p => `${p.x},${p.y}`).join(' ')} fill="none" {...line} />
   const a = st.pts[0], b = st.pts[st.pts.length - 1]
@@ -129,7 +129,7 @@ const StrokeSvg: React.FC<{ st: PaintStroke }> = ({ st }) => {
 interface Box { x: number; y: number; w: number; h: number }
 type Handle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'move'
 
-const PAINT_COLORS = ['#ffffff', '#f87171', '#fbbf24', '#34d399', '#60a5fa', '#a78bfa', '#111318']
+export const PAINT_COLORS = ['#ffffff', '#f87171', '#fbbf24', '#34d399', '#60a5fa', '#a78bfa', '#111318']
 const MIN_BOX = 10
 
 /** The tool row's fixed height. It never changes, so the image area under

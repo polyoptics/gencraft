@@ -534,6 +534,24 @@ export function holdSets(ids: string[], spread = false): { step: () => void; end
         gone.set(a0.id, d)
         const gx = (a0.gridAt?.x ?? 0) - d.x, gy = (a0.gridAt?.y ?? 0) - d.y
         if ((a.gridAt?.x ?? 0) !== gx || (a.gridAt?.y ?? 0) !== gy) fs.updateFreeNode(a.id, { gridAt: gx || gy ? { x: gx, y: gy } : undefined })
+        // The notes on its map (components/Notes/MapNotesLayer), kept from
+        // its corner: by a side they stay where they lie, by a corner
+        // they spread with the ground.
+        const n0 = a0.mapNotes
+        if (n0 && (n0.marks.length || n0.pins.length)) {
+          const fx = spread ? a.width / a0.width : 1, fy = spread ? a.height / a0.height : 1
+          const ox = spread ? 0 : d.x, oy = spread ? 0 : d.y
+          const f = Math.sqrt(fx * fy)
+          const cur = a.mapNotes
+          const first = n0.marks[0]?.pts[0] ?? n0.pins[0], now1 = cur?.marks[0]?.pts[0] ?? cur?.pins[0]
+          if (first && cur && cur.marks.length === n0.marks.length && cur.pins.length === n0.pins.length && !(now1 && now1.x === first.x * fx - ox && now1.y === first.y * fy - oy)) {
+            fs.updateFreeNode(a.id, { mapNotes: {
+              ...cur,
+              marks: n0.marks.map(m => ({ ...m, size: m.size * f, pts: m.pts.map(p => ({ x: p.x * fx - ox, y: p.y * fy - oy })) })),
+              pins: n0.pins.map(p => ({ ...p, x: p.x * fx - ox, y: p.y * fy - oy })),
+            } })
+          }
+        }
       }
       const now = useModelScaleStore.getState().placeOf
       let next: Record<string, ScenePlace> | null = null

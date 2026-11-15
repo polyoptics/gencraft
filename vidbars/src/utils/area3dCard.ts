@@ -17,7 +17,7 @@
 // its curves. Moving the card takes its 3D area along (out or folded).
 
 import { useBoardsStore, type ProjectGroup } from '../store/boardsStore'
-import { useFreeNodeStore, type FreeNodeData, type AreaGround, type AreaFlatView } from '../store/freeNodeStore'
+import { useFreeNodeStore, type FreeNodeData, type AreaGround, type AreaFlatView, type MapNotes } from '../store/freeNodeStore'
 import { useCanvasStore } from '../store/canvasStore'
 import { isUndoRestoring, useUndoCoordinator } from '../store/undoCoordinator'
 import { useModelScaleStore, type ScenePlace, type CameraLens, type PieceView } from '../store/tiltStore'
@@ -86,7 +86,7 @@ export interface Area3dTileItem {
 }
 export interface Area3dData {
   /** The mat: where it comes out (top-left), its size and look. */
-  mat: { x: number; y: number; width: number; height: number; color?: string; label?: string; gridAt?: { x: number; y: number }; ground?: AreaGround; flatView?: AreaFlatView; rideLoop?: boolean }
+  mat: { x: number; y: number; width: number; height: number; color?: string; label?: string; gridAt?: { x: number; y: number }; ground?: AreaGround; flatView?: AreaFlatView; rideLoop?: boolean; mapNotes?: MapNotes }
   cards: Area3dCardItem[]
   tiles: Area3dTileItem[]
   /** The cards that were with the set when it was folded (docked under
@@ -234,7 +234,7 @@ export function foldArea3d(nodeId: string): string | null {
   }
   const withIt = setViewers(a, a)
   const data: Area3dData = {
-    mat: { x: a.x, y: a.y, width: a.width, height: a.height, color: a.color, label: a.label, ...(a.gridAt ? { gridAt: a.gridAt } : {}), ...(a.ground ? { ground: a.ground } : {}), ...(a.flatView ? { flatView: a.flatView } : {}), ...(a.rideLoop ? { rideLoop: true } : {}) },
+    mat: { x: a.x, y: a.y, width: a.width, height: a.height, color: a.color, label: a.label, ...(a.gridAt ? { gridAt: a.gridAt } : {}), ...(a.ground ? { ground: a.ground } : {}), ...(a.flatView ? { flatView: a.flatView } : {}), ...(a.rideLoop ? { rideLoop: true } : {}), ...(a.mapNotes ? { mapNotes: a.mapNotes } : {}) },
     cards: cardItems, tiles: tileItems,
     ...(curveItems.length ? { curves: curveItems } : {}),
     row: rowCards(a).slice(1).map(g => g.id),
@@ -401,7 +401,7 @@ export function showArea3d(cardId: string, quiet = false, spot?: { x: number; y:
   laying.on = true
   try {
     id = fs.addFreeNode(m.x, m.y, 'area')
-    fs.updateFreeNode(id, { x: m.x, y: m.y, width: m.width, height: m.height, areaCard: cardId, label: m.label ?? card.name ?? '3D set', ...(m.color ? { color: m.color } : {}), ...(m.gridAt ? { gridAt: m.gridAt } : {}), ...(m.ground ? { ground: m.ground } : {}), ...(m.flatView ? { flatView: m.flatView } : {}), ...(m.rideLoop ? { rideLoop: true } : {}), ...(below.length ? { under: below } : {}) })
+    fs.updateFreeNode(id, { x: m.x, y: m.y, width: m.width, height: m.height, areaCard: cardId, label: m.label ?? card.name ?? '3D set', ...(m.color ? { color: m.color } : {}), ...(m.gridAt ? { gridAt: m.gridAt } : {}), ...(m.ground ? { ground: m.ground } : {}), ...(m.flatView ? { flatView: m.flatView } : {}), ...(m.rideLoop ? { rideLoop: true } : {}), ...(m.mapNotes ? { mapNotes: m.mapNotes } : {}), ...(below.length ? { under: below } : {}) })
   } finally { laying.on = false }
   // Its Viewers, where they were by it (one still on the canvas stays as it is).
   if (data.viewers?.length) {

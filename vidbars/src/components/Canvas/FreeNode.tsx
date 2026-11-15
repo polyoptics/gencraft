@@ -67,6 +67,8 @@ import { RenameInput } from '../UI/RenameInput'
 import { CanvasUnits } from './CanvasUnits'
 import { useFreshOnTop, FRESH_Z } from '../../utils/freshOnTop'
 import { foldArea3dMoving } from '../../utils/area3dCard'
+import { useMapNotesUi, annotateSet, showSetNotes } from '../../utils/mapNotes'
+import { snapshotSetMap } from '../../utils/mapSnapshot'
 import { holdSets } from '../../utils/area3dScene'
 
 
@@ -262,6 +264,8 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
   // resizeFreeNode is no longer used here: it only ever grew from the SE
   // corner, and the eight-way handles need to move the anchor as well.
   const updateFreeNode = useFreeNodeStore(s => s.updateFreeNode)
+  // (A 3D set: its notes tools are out, utils/mapNotes.)
+  const mapAnnotating = useMapNotesUi(u => u.area === id)
   const deleteFreeNode = useFreeNodeStore(s => s.deleteFreeNode)
   const isSelected = useFreeNodeStore(s => s.selectedIds.includes(id))
   // How many tiles the collapsed deck this node is the FACE of holds, the
@@ -1814,6 +1818,32 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
                       }}>{v.name}</button>
                   )
                 })}
+              </div>
+            )}
+            {/* The notes on a 3D set's map (utils/mapNotes): Annotate takes
+                the notes tools out for this set; Show is its notes layer,
+                on or off (kept either way); Snapshot makes a picture card
+                of the map as it is marked up. Each lit while on. */}
+            {isArea && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4, padding: '3px 12px 8px', borderBottom: '1px solid rgba(255,255,255,0.07)', marginBottom: 4 }}>
+                <span style={{ gridColumn: '1 / 3', color: 'rgba(255,255,255,0.4)', fontSize: 11 }}>Notes</span>
+                {([
+                  { key: 'annotate', name: 'Annotate', lit: mapAnnotating, tip: 'Annotate: on or off. On, the notes tools are out for this set: draw marks and pin notes on its map. They are the set\'s: they go where it goes and fold away with it.',
+                    go: () => { annotateSet(mapAnnotating ? null : id); setNodeMenu(null) } },
+                  { key: 'show', name: 'Show', lit: !node.mapNotes?.off, tip: 'Show: this set\'s notes layer, on or off. Off, its notes are kept, not shown.',
+                    go: () => showSetNotes(id, !!node.mapNotes?.off) },
+                ]).map(b => (
+                  <button key={b.key} data-area-notes={b.key} aria-pressed={b.lit} title={b.tip} onClick={b.go}
+                    style={{
+                      padding: '4px 0', fontSize: 12, borderRadius: 4, cursor: 'pointer',
+                      border: `1px solid ${b.lit ? 'rgba(120,180,255,0.9)' : 'rgba(255,255,255,0.12)'}`,
+                      background: b.lit ? 'rgba(120,180,255,0.25)' : 'transparent',
+                      color: b.lit ? '#fff' : '#cbd5e1',
+                    }}>{b.name}</button>
+                ))}
+                <button data-area-notes="snapshot" title="Snapshot: the set's map with its notes, as a new picture card beside the set"
+                  onClick={() => { setNodeMenu(null); void snapshotSetMap(id) }}
+                  style={{ gridColumn: '1 / 3', padding: '4px 0', fontSize: 12, borderRadius: 4, cursor: 'pointer', border: '1px solid rgba(255,255,255,0.12)', background: 'transparent', color: '#cbd5e1' }}>Snapshot as a card</button>
               </div>
             )}
             {[

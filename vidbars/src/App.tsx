@@ -25,6 +25,7 @@ import './utils/notesTool'
 import './utils/areaFollow'
 import { CurveLayer } from './components/Notes/CurveLayer'
 import { PieceLayer } from './components/Canvas/PieceLayer'
+import { MapNotesLayer } from './components/Notes/MapNotesLayer'
 import { NotesPanel } from './components/Notes/NotesPanel'
 import { PathMenu } from './components/Notes/PathMenu'
 import { ensureRolodexHome, useRolodexHomeBootstrap } from './utils/rolodexHome'
@@ -885,7 +886,7 @@ export default function App() {
         </InfiniteCanvas>
         {/* Layer overlay renders outside the canvas transform (screen-space headers/cards) */}
         {/* Tilts with the world layers when the canvas is tilted */}
-        <TiltStage><LayerOverlay /><PieceLayer /><CurveLayer /><SetPlayBars /></TiltStage>
+        <TiltStage><LayerOverlay /><PieceLayer /><CurveLayer /><MapNotesLayer /><SetPlayBars /></TiltStage>
         {/* Tilted view: pan/zoom on the plane + model cards standing up */}
         <TiltLayer />
         {/* Where Cards / Blocks / Boards begin and end — drag to retune */}

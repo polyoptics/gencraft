@@ -48,6 +48,8 @@ import { scenePieces } from './utils/scenePieces'
 import { useManip } from './store/manipStore'
 import { useRideClock } from './utils/pathRide'
 import { useClipMotion } from './utils/fx/clipMotion'
+import { useMapNotesUi, annotateSet, showSetNotes } from './utils/mapNotes'
+import { snapshotSetMap } from './utils/mapSnapshot'
 
 // Expose stores for debugging. Anything you want to OBSERVE has to be here:
 // reaching a store through a dynamic import gets a second copy of the module
@@ -73,6 +75,8 @@ import { useClipMotion } from './utils/fx/clipMotion'
   useRideClock,
   // A 3D set's models as pieces in the flat view, and their pictures.
   usePieceStore, scenePieces,
+  // Notes on a 3D set's map (utils/mapNotes).
+  useMapNotesUi, mapNotes: { annotateSet, showSetNotes, snapshotSetMap },
   // Clips played through a strip or the look mixer (utils/fx/clipMotion).
   useClipMotion,
   // A model's colour maps as pictures (three/modelMaps).

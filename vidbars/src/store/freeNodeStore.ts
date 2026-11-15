@@ -227,7 +227,38 @@ export interface FreeNodeData {
    *  Absent: as pieces, pictures from above (utils/scenePieces). 'live':
    *  the models themselves, drawn live in 3D from straight above. */
   flatView?: AreaFlatView
+  /** A 3D set: the notes drawn on its map in the flat view
+   *  (components/Notes/MapNotesLayer). They are the set's: they go where
+   *  it goes and fold into its card with it. */
+  mapNotes?: MapNotes
 }
+
+/** A mark drawn on a 3D set's map, as the Viewer's Annotate draws on a
+ *  picture (store/notesStore PictureMark): the brush's path, or a shape's
+ *  two corners (a line's two ends). Canvas units, from the set's top-left
+ *  corner. */
+export interface MapMark {
+  id: string
+  color: string
+  /** Line width, canvas units. */
+  size: number
+  pts: { x: number; y: number }[]
+  shape?: 'rect' | 'ellipse' | 'line' | 'arrow'
+  fill?: boolean
+}
+/** A pin on a 3D set's map: a numbered dot on the ground with its words
+ *  beside it. Canvas units, from the set's top-left corner. */
+export interface MapPin {
+  id: string
+  x: number; y: number
+  color: string
+  title: string
+  desc: string
+  /** Creation order, for numbering. */
+  n0: number
+}
+/** A 3D set's notes layer. `off`: kept, not shown. */
+export interface MapNotes { marks: MapMark[]; pins: MapPin[]; off?: boolean }
 
 /** A 3D set's ground: a line grid, dots, crosses, or nothing. */
 export type AreaGround = 'lines' | 'dots' | 'cross' | 'none'

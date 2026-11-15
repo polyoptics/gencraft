@@ -53,6 +53,10 @@ function tile(ground: AreaGround): string {
   return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`
 }
 const TILES: Partial<Record<AreaGround, string>> = {}
+/** A ground's tile as a picture's address, and how far across it is
+ *  (canvas units): for drawing the ground somewhere else (utils/mapSnapshot). */
+export const groundTile = (ground: AreaGround) => ({ src: (TILES[ground] ??= tile(ground)).slice(5, -2), size: AREA_CELL * MAJOR })
+export const GROUND_TINT = `rgba(${INK},0.025)`
 
 export const AreaBody: React.FC<{ node: FreeNodeData; bodyW: number; bodyH: number }> = ({ node }) => {
   const c = AREA_CELL, M = c * MAJOR

@@ -34,6 +34,9 @@
 //    part of it on a 3D set belongs to that set. Select a curve, then the
 //    set, and P parents it to the set; Shift-P unparents it.
 
+// (First: its listeners go on before this file's, so a press on a set being
+// annotated is its own. utils/mapNotes.)
+import './mapNotes'
 import { useCurveDraft, usePathHot, usePathMenu } from '../store/pathLive'
 import { useNotesStore, useNotesUi, newNoteId, type Curve, type CurvePoint, type CurveHandle } from '../store/notesStore'
 import { curveSamples, nearestOnCurve } from './curveGeom'
