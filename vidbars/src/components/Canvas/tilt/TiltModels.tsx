@@ -27,6 +27,8 @@ import { targetMiddle, pickedPoints } from '../../../utils/pathEdit'
 import type { PathFrame, PathHit } from '../../../three/pathOverlay'
 import { curveRuns, pointFrames, withLayers } from '../../../utils/curveGeom'
 import { PinLabels } from '../../Notes/PinLabels'
+import { gradeFor } from '../../../utils/modelGrade'
+import { lookFor, runLook } from '../../../utils/cameraLook'
 import { sceneOf, sceneSpot, standsIn, dataKey, cardBox, frontShowing } from '../../../utils/area3dScene'
 import { rideSpots, rideRuns, useRideClock, useRideOverride, riderOf } from '../../../utils/pathRide'
 import { useUndoCoordinator } from '../../../store/undoCoordinator'
@@ -209,6 +211,7 @@ const frameState = (): TiltFrameState => {
     // taking a set's rotation (Brian 2026-11-09).
     poseFor: key => key.startsWith('mini:') ? miniLook.get(key)?.pose : placed(key) ? poseOf[dataKey(key)] : undefined,
     tintFor: key => key.startsWith('mini:') ? miniLook.get(key)?.tint : tintOf[dataKey(key)],
+    mapsFor: gradeFor,
     stretchFor: key => key.startsWith('mini:') ? miniLook.get(key)?.stretch : placed(key) ? stretchOf[dataKey(key)] : undefined,
     rideFor: key => riding(key)?.q,
     rideMid: key => !!riding(key)?.mid,
@@ -328,6 +331,7 @@ export const TiltModels: React.FC = () => {
     let raf = 0
     let warmTimer: ReturnType<typeof setTimeout> | null = null
     let shown = false
+    let lookCanvas: HTMLCanvasElement | null = null, lookShown = false, lookSig = ''
     /** What the last frame drawn showed (frameSig); '' = draw the next. */
     let lastSig = ''
     /** Frames the picture has stayed the same. Quiet, the page is read for
@@ -421,6 +425,10 @@ export const TiltModels: React.FC = () => {
         const cw = Math.max(2, Math.round(Math.min(960, gw * k))), ch = Math.max(2, Math.round(cw / aspect))
         if (v.canvas.width !== cw || v.canvas.height !== ch) { v.canvas.width = cw; v.canvas.height = ch }
         ctx.drawImage(canvas, (W - gw) / 2 * k, (H - gh) / 2 * k, gw * k, gh * k, 0, 0, cw, ch)
+        // Through the camera's look (effect cards on it or on its set).
+        const lk = lookFor(v.key)
+        const out = lk ? runLook(v.canvas, lk, 960) : null
+        if (out) { ctx.drawImage(out, 0, 0, cw, ch); out.width = out.height = 0 }
       }
       return drew
     }
@@ -433,7 +441,10 @@ export const TiltModels: React.FC = () => {
         if (!live) dropLifts()
         lastSig = ''
       }
-      if (!live) { drawCameraViews(now); return }
+      if (!live) {
+        if (lookCanvas && lookShown) { lookShown = false; lookCanvas.style.display = 'none' }
+        drawCameraViews(now); return
+      }
       tick++
       // (A camera's view was drawn on the 3D canvas: the 3D view goes back on it.)
       if (drawCameraViews(now)) { poked = true; lastSig = '' }
@@ -455,6 +466,21 @@ export const TiltModels: React.FC = () => {
         const targets = tilted3d() ? collectTargets(W, H) : collectTargets(W, H).filter(t => st.full?.(t.key))
         const sig = targets.length ? '' : frameSig(st, W, H)
         if (!sig || sig !== lastSig) view.frame(now, W, H, targets, st)
+        // Looking through a camera that has a look (effect cards on it or
+        // on its set, utils/cameraLook): its picture goes through it, drawn
+        // over the 3D view's own.
+        const lk = lookFor(st.through)
+        const lkSig = lk ? lk.sig : ''
+        if (lk && lookCanvas && (!sig || sig !== lastSig || lkSig !== lookSig)) {
+          const out = runLook(canvas, lk, 2048)
+          if (out) {
+            if (lookCanvas.width !== out.width || lookCanvas.height !== out.height) { lookCanvas.width = out.width; lookCanvas.height = out.height }
+            lookCanvas.getContext('2d')?.drawImage(out, 0, 0)
+            out.width = out.height = 0
+          }
+        }
+        if (lookCanvas && !!lk !== lookShown) { lookShown = !!lk; lookCanvas.style.display = lk ? 'block' : 'none' }
+        lookSig = lkSig
         calm = sig && sig === lastSig ? calm + 1 : 0
         lastSig = sig
       }
@@ -467,10 +493,16 @@ export const TiltModels: React.FC = () => {
       canvas = document.createElement('canvas')
       Object.assign(canvas.style, { position: 'absolute', inset: '0', width: '100%', height: '100%', pointerEvents: 'none', display: 'none' })
       root.prepend(canvas)
+      // Over it, the same picture through a camera's look, when the camera
+      // looked through has one.
+      lookCanvas = document.createElement('canvas')
+      Object.assign(lookCanvas.style, { position: 'absolute', inset: '0', width: '100%', height: '100%', pointerEvents: 'none', display: 'none' })
+      canvas.after(lookCanvas)
+      lookShown = false
       try {
         view = createTiltScene(canvas)
       } catch {
-        canvas.remove(); canvas = null   // no WebGL: the plane still tilts, models stay flat
+        canvas.remove(); canvas = null; lookCanvas?.remove(); lookCanvas = null   // no WebGL: the plane still tilts, models stay flat
         return
       }
       const v = view
@@ -583,7 +615,7 @@ export const TiltModels: React.FC = () => {
       models.pick = null; models.pickZ = null; models.info = null; models.spin = null; models.letGo = null
       models.surface = null; models.pinSpots = null; models.screenBox = null; models.floatSpot = null; models.pivotOf = null; models.labelAt = null; models.strokeAt = null; models.modelSize = null; models.gizmoAt = null; models.manipHot = null; models.pathAt = null; models.pathPx = null; models.aimAt = null; models.cameraFrame = null; models.lookBounds = null; models.lookHit = null; models.pieceView = null; models.lend = null; models.root = null
       view?.dispose()
-      canvas?.remove()
+      canvas?.remove(); lookCanvas?.remove()
     }
   }, [])
   return <div ref={rootRef} style={{ position: 'absolute', inset: 0, zIndex: 850, pointerEvents: 'none' }}><PinLabels /></div>

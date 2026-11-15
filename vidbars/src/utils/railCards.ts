@@ -36,9 +36,12 @@ import { clientToCanvas } from './fx/createEffect'
 import { knownKind } from './fx/effects'
 import { RAIL_TRAY, inputGiven, isRail, railDropTarget, railLayout, railMembers, type RailDropTarget } from './rail'
 import { byLay } from './deckAway'
+import { colorMapsOf } from '../three/modelMaps'
 
 /** One picture: the card and block it is in, and what it shows. */
-export interface Entry { groupId: string; boardId: string; media: MediaItem; label: string }
+export interface Entry { groupId: string; boardId: string; media: MediaItem; label: string
+  /** A model's colour map read as a picture: the model and which map. */
+  map?: { model: string; slot: number } }
 
 const isPicture = (m: MediaItem) => m.type === 'image' || m.type === 'video'
 
@@ -66,6 +69,43 @@ export function cardEntries(g: ProjectGroup, boards: Record<string, BoardData>):
   return out
 }
 
+/** A block's model, when it holds one and no picture. */
+function blockModel(b: BoardData | undefined): MediaItem | null {
+  for (const rid of b?.rootIds ?? []) {
+    const items = getMediaItems(b!.bars[rid]?.content)
+    if (items.some(isPicture)) return null
+    const m = items.find(x => x.type === 'model')
+    if (m) return m
+  }
+  return null
+}
+
+/** What a loop strip reads from a card: its pictures (cardEntries), and for
+ *  a block that holds a MODEL, the model's colour maps, each as a picture
+ *  (three/modelMaps; none until they have been read, and the strip reads
+ *  again when they land). */
+export function railEntries(g: ProjectGroup, boards: Record<string, BoardData>): Entry[] {
+  const out: Entry[] = []
+  if (g.effect) return out
+  const pictures = new Map(cardEntries(g, boards).map(e => [e.boardId, e]))
+  for (const bid of gridOrder(g, boards)) {
+    const pic = pictures.get(bid)
+    if (pic) { out.push(pic); continue }
+    const model = blockModel(boards[bid])
+    if (!model) continue
+    const maps = colorMapsOf(model.url) ?? []
+    const name = g.name || model.originalName || 'Model'
+    for (const m of maps) {
+      out.push({
+        groupId: g.id, boardId: bid, media: { url: m.url, type: 'image' },
+        label: maps.length > 1 ? `${name} — ${m.name || `map ${m.slot + 1}`}` : name,
+        map: { model: model.url, slot: m.slot },
+      })
+    }
+  }
+  return out
+}
+
 /** The cards of the deck `anchorId` fronts — closed or fanned — front first,
  *  then as they lay before it closed. Just the card when it fronts none. */
 export function deckCards(anchorId: string, groups: ProjectGroup[]): string[] {
@@ -83,7 +123,7 @@ export function dockedSteps(cardId: string): { entries: Entry[]; index: number }
   const { groups, boards } = useBoardsStore.getState()
   const ids = deckCards(cardId, groups)
   const cards = ids.map(id => groups.find(g => g.id === id)).filter((g): g is ProjectGroup => !!g)
-  const entries = cards.flatMap(g => cardEntries(g, boards))
+  const entries = cards.flatMap(g => railEntries(g, boards))
   if (cards.length === 0) return { entries, index: 0 }
   let groupId = cards[0].id, boardId = cards[0].faceBoardId
   if (ids.length > 1) {
@@ -105,7 +145,7 @@ export function railUnits(n: FreeNodeData, mode: 'each' | 'pick'): FreeNodeData[
   const { entries, index } = dockedSteps(n.cardRef)
   const used = mode === 'pick' ? entries.slice(index, index + 1) : entries
   return used.map(e => ({
-    ...n, id: `${n.id}#${e.groupId}#${e.boardId}`,
+    ...n, id: `${n.id}#${e.groupId}#${e.boardId}${e.map ? `#${e.map.slot}` : ''}`,
     type: e.media.type === 'video' ? 'video' as const : 'image' as const,
     imageUrl: e.media.url, mediaType: e.media.type, posterUrl: e.media.posterUrl ?? null,
     label: e.label,
@@ -121,6 +161,16 @@ export const unitOwner = (id: string): string => id.split('#')[0]
 export const unitCard = (id: string): string | null => {
   const [tile, card] = id.split('#')
   return card ? `${tile}#${card}` : null
+}
+/** The model and colour map a run unit is (`<tile>#<card>#<block>#<slot>`),
+ *  or null for a picture. */
+export function unitMap(id: string): { model: string; slot: number } | null {
+  const [, card, block, slot] = id.split('#')
+  if (!card || !block || slot === undefined) return null
+  const { groups, boards } = useBoardsStore.getState()
+  const g = groups.find(x => x.id === card)
+  const e = g ? railEntries(g, boards).find(x => x.boardId === block && x.map?.slot === Number(slot)) : undefined
+  return e?.map ?? null
 }
 /** The card id in a unitCard key. */
 export const unitCardId = (key: string): string => key.split('#')[1] ?? ''
@@ -321,7 +371,7 @@ export function dockCardsOnRail(ids: string[], t: RailDropTarget): number {
  *  their own, one block per picture in the order given, docked like any
  *  card, and stepped in step with its input (`source`). False when the
  *  rail is gone. */
-export function landResultCard(railId: string, name: string, source: string, results: { url: string; w: number; h: number; label: string }[]): string | null {
+export function landResultCard(railId: string, name: string, source: string, results: { url: string; w: number; h: number; label: string; map?: { model: string; slot: number } | null }[]): string | null {
   const rail = useFreeNodeStore.getState().nodes[railId]
   if (!isRail(rail) || results.length === 0) return null
   const gid = createMediaCard({ cx: rail.x, cy: rail.y }, results.map(r => ({ media: { url: r.url, type: 'image' as const }, label: r.label })))
@@ -341,9 +391,41 @@ export function landResultCard(railId: string, name: string, source: string, res
   const made = st.groups.find(x => x.id === gid)
   const at = input ? Math.max(0, cardEntries(input, st.boards).findIndex(e => e.boardId === input.faceBoardId)) : 0
   const face = made ? cardEntries(made, st.boards)[at]?.boardId : undefined
-  useBoardsStore.setState(s => ({ groups: s.groups.map(x => x.id === gid ? { ...x, railSource: source, faceBoardId: face } : x) }))
+  // Made from a model's colour maps: the model wears them (utils/modelGrade).
+  const mapOf = results.some(r => r.map) ? results.map(r => r.map ?? null) : undefined
+  useBoardsStore.setState(s => ({ groups: s.groups.map(x => x.id === gid ? { ...x, railSource: source, faceBoardId: face, ...(mapOf ? { mapOf } : {}) } : x) }))
   bs.setSelectedGroup(null)
   return dockCards([gid], { railId, kind: 'column', slotId: RAIL_TRAY, index: Infinity }) > 0 ? gid : null
+}
+
+/** A model's maps run again: the result card it already has (the newest
+ *  made from the same maps of `source`) takes the new pictures in place, so
+ *  a model keeps ONE result card however often its strip is run (Brian
+ *  2026-11-15). The card stays where it is. False when it has none yet. */
+export function refreshMapResult(source: string, results: { url: string; map?: { model: string; slot: number } | null }[]): boolean {
+  if (!results.length || !results.every(r => r.map)) return false
+  const { groups, boards } = useBoardsStore.getState()
+  const same = (g: ProjectGroup) => g.railSource === source && !g.linkOf && g.mapOf?.length === results.length
+    && g.mapOf.every((m, i) => m && m.model === results[i].map!.model && m.slot === results[i].map!.slot)
+  const card = [...groups].reverse().find(same)
+  if (!card) return false
+  const order = gridOrder(card, boards)
+  if (order.length < results.length) return false
+  const next = { ...boards }
+  results.forEach((r, i) => {
+    const b = boards[order[i]]
+    for (const rid of b?.rootIds ?? []) {
+      const bar = b.bars[rid]
+      const media = bar?.content.media
+      if (!media?.some(m => m.type === 'image')) continue
+      let done = false
+      next[order[i]] = { ...b, bars: { ...b.bars, [rid]: { ...bar, content: { ...bar.content, media: media.map(m => !done && m.type === 'image' ? (done = true, { ...m, url: r.url }) : m) } } } }
+      break
+    }
+  })
+  useBoardsStore.setState({ boards: next })
+  markNew([card.id])
+  return true
 }
 
 /** A run's result cards (`gids`, in input order) gathered into ONE closed

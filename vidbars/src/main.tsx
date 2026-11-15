@@ -13,6 +13,8 @@ import { startLinkedCardSync } from './utils/linkedCards'
 import { startStateOutputs } from './utils/stateCard'
 import { startStateSpaces } from './utils/stateSpace'
 import { startStateScene } from './utils/stateScene'
+import { startModelGrade } from './utils/modelGrade'
+import { useModelMaps } from './three/modelMaps'
 import { bakeStoryline, chartOutOf, matchChart, recallChart, startChartFollow } from './utils/chartCard'
 import { startArea3dFollow, startArea3dBundle, showArea3d, foldArea3d, toggleArea3d, area3dOutOf, bundleArea3dCard } from './utils/area3dCard'
 import { startAreaUnder } from './utils/area3dScene'
@@ -73,6 +75,8 @@ import { useClipMotion } from './utils/fx/clipMotion'
   usePieceStore, scenePieces,
   // Clips played through a strip or the look mixer (utils/fx/clipMotion).
   useClipMotion,
+  // A model's colour maps as pictures (three/modelMaps).
+  useModelMaps,
 }
 
 // One card shown in several places: an edit on one is on all (utils/linkedCards).
@@ -81,6 +85,7 @@ startStateOutputs()
 // State workspaces follow the time markers of the timelines dragged into them.
 startStateSpaces()
 startStateScene()
+startModelGrade()
 startChartFollow(cardOrigins)
 startArea3dFollow()
 // A 3D set and its card are one: deleting either deletes the other.

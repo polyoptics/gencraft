@@ -199,7 +199,7 @@ export function railComboAt(
   members: Members,
   index: number,
   posters: Record<string, string> = usePosterMapStore.getState().map,
-): { items: ChainItem[]; label: string; sourceIds: string[]; subjectCard: string | null } | null {
+): { items: ChainItem[]; label: string; sourceIds: string[]; subjectCard: string | null; subjectUnit: string } | null {
   const r = read(rail, members)
   const cols = radixColumns(r)
   if (cols.length === 0 || !Number.isInteger(index) || index < 0) return null
@@ -245,7 +245,7 @@ export function railComboAt(
       label += ` ${EFFECTS[effectKindOf(card)].glyph} ${partner.label || 'picture'}`
     }
   }
-  return { items, label, sourceIds, subjectCard: unitCard(subject.id) }
+  return { items, label, sourceIds, subjectCard: unitCard(subject.id), subjectUnit: subject.id }
 }
 
 /** Why part of the recipe does nothing, by slot id: role columns the run

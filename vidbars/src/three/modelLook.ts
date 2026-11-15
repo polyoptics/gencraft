@@ -69,12 +69,26 @@ export interface LookInstance {
   swaps: Swap[] | null
   smoothOn: boolean
   flatOn: boolean
+  /** Each of its materials that came with a colour map, and that map; the
+   *  maps numbered as three/modelMaps counts them; and which pictures it
+   *  wears in their place now (modelMaps gradeLook). */
+  maps: Map<THREE.Material, THREE.Texture>
+  slotOf: Map<THREE.Texture, number>
+  gradeSig: string
 }
 
 /** Give an instance its own materials; `made` hears each one created. */
 export function createLook(root: THREE.Object3D, made?: (m: THREE.Material) => void): LookInstance {
-  const look: LookInstance = { root, meshes: [], lit: [], all: [], swaps: null, smoothOn: false, flatOn: false }
-  const add = <M extends THREE.Material>(m: M): M => { look.all.push(m); made?.(m); return m }
+  const look: LookInstance = { root, meshes: [], lit: [], all: [], swaps: null, smoothOn: false, flatOn: false, maps: new Map(), slotOf: new Map(), gradeSig: '' }
+  const add = <M extends THREE.Material>(m: M): M => {
+    look.all.push(m); made?.(m)
+    const map = (m as unknown as THREE.MeshStandardMaterial).map
+    if (map) {
+      look.maps.set(m, map)
+      if (!look.slotOf.has(map)) look.slotOf.set(map, look.slotOf.size)
+    }
+    return m
+  }
   const litOf = (m: THREE.Material) => { const c = add(m.clone()); look.lit.push(c); return c }
   root.traverse(o => {
     const mesh = o as THREE.Mesh

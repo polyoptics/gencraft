@@ -148,6 +148,12 @@ export interface ProjectGroup {
   /** A loop strip's result card: the card it was made from. They step
    *  through their pictures together (utils/railCards followFaces). */
   railSource?: string
+  /** A result card made from a MODEL's colour maps (utils/modelGrade): per
+   *  block in reading order, which model and which of its maps that
+   *  picture was made from (null: not from a map). While `railSource` (the
+   *  model's card) is there, the model wears these pictures wherever it is
+   *  drawn. */
+  mapOf?: ({ model: string; slot: number } | null)[]
   /** A result card shown bigger on a strip's tray (RailData.trayScale): its
    *  own frame size, which it goes back to when it leaves the tray. */
   railBase?: { w?: number; h?: number }

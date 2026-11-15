@@ -13,6 +13,7 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import { acquireModel, releaseModel, disposeInstance } from './modelCache'
 import { computePosedBounds } from './orbitState'
 import { createLook, applyLook, disposeLook, type LookInstance, type ModelShade } from './modelLook'
+import { gradeLook, type Grade } from './modelMaps'
 import { TILT_PERSPECTIVE, TILT_DRAW_FAR, DEFAULT_LIGHT, CAMERA_LENS, type TiltLight, type CameraLens } from '../store/tiltStore'
 import { CAMERA_URL, CAMERA_LENS_AT } from './primitives'
 import { createNotesOverlay, type NotesHost } from './notesOverlay'
@@ -192,6 +193,8 @@ export interface TiltFrameState {
   canPlace?: (key: string) => boolean
   /** A model's own colour (useModelScaleStore tintOf), '#rrggbb'. */
   tintFor?: (key: string) => string | undefined
+  /** Pictures a model wears in place of its colour maps (utils/modelGrade). */
+  mapsFor?: (key: string, url: string) => Grade | null
   /** A model stretched along its own axes, [x, y, z]. */
   stretchFor?: (key: string) => [number, number, number] | undefined
   /** The manipulator's settings (store/manipStore). */
@@ -1356,6 +1359,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
         for (const x of s.mats) fadeMat(x.m, x.o, x.t, fade)
       }
       if (s.look) applyLook(s.look, st.texture, st.shade)
+      if (s.look && st.mapsFor) gradeLook(s.look, st.mapsFor(tg.key, s.url))
       s.stand.visible = !!s.inst && ease > 0
       const placed = !!st.placed?.(tg.key)
       // Riding a path, it is turned as the path has it: about its feet,

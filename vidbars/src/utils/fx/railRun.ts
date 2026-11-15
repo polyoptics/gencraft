@@ -28,7 +28,7 @@ import { useRailRunStore } from '../../store/railRunStore'
 import { onUndoRestore, useUndoCoordinator } from '../../store/undoCoordinator'
 import { usePosterMapStore } from '../../three/posterService'
 import { RAIL_GEOM, RAIL_TRAY, isRail, railMembers } from '../rail'
-import { deckRunResults, landResultCard, unitCardId } from '../railCards'
+import { deckRunResults, landResultCard, refreshMapResult, unitCardId, unitMap } from '../railCards'
 import { useBoardsStore } from '../../store/boardsStore'
 import { diskFileUrl } from '../diskUrl'
 import { saveCanvasImage } from '../saveImage'
@@ -195,13 +195,15 @@ export async function runRail(railId: string): Promise<void> {
   let gone = false
   let checkpointed = false
   // A card's results so far: they land together once its pictures are done.
-  let pending: { card: string; name: string; results: { url: string; w: number; h: number; label: string }[] } | null = null
+  let pending: { card: string; name: string; results: { url: string; w: number; h: number; label: string; map?: { model: string; slot: number } | null }[] } | null = null
   /** This run's result cards, in input order: one deck at the end. */
   const runCards: string[] = []
   const flush = (): boolean => {
     const p = pending
     pending = null
     if (!p) return true
+    // A model's maps run again: its one result card takes the new pictures.
+    if (refreshMapResult(unitCardId(p.card), p.results)) return true
     const gid = landResultCard(railId, p.name, unitCardId(p.card), p.results)
     if (gid) runCards.push(gid)
     return !!gid
@@ -235,7 +237,7 @@ export async function runRail(railId: string): Promise<void> {
             const input = useBoardsStore.getState().groups.find(g => g.id === unitCardId(combo.subjectCard!))
             pending = { card: combo.subjectCard, name: `${input?.name || 'Card'} — ${railLabel}`, results: [] }
           }
-          pending.results.push({ ...out, label: name })
+          pending.results.push({ ...out, label: name, map: unitMap(combo.subjectUnit) })
           made++
         } else {
           if (!flush()) { gone = true; break }

@@ -39,6 +39,7 @@ import { RailOverlay } from './rail/RailOverlay'
 import { RailRunArrow } from './rail/RailRunArrow'
 import { RailResizeGrip } from './rail/RailResizeGrip'
 import { buildRailView, railNodesOf } from './rail/railView'
+import { useModelMaps } from '../../three/modelMaps'
 import { openRailViewer, railOnViewer, touchRail } from '../../utils/railViewer'
 import { useViewport3DStore } from '../../store/viewport3dStore'
 import { RAIL_COLORS as C, checkpoint, mixHex, pressButton, railShadow, stop, stopPrimary } from './rail/railStyle'
@@ -85,8 +86,10 @@ export const RailBody: React.FC<{
   // An empty results tray takes the preview's shape (utils/rail
   // setTrayAspect): a new shape lays the rail out again.
   const previewShape = preview?.canvas && preview.canvas.width > 0 ? preview.canvas.height / preview.canvas.width : 0
+  // (A docked model's colour maps land once read: the count follows.)
+  const mapsRead = useModelMaps(s => s.version)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const view = useMemo(() => buildRailView(id, list), [id, list, previewShape])
+  const view = useMemo(() => buildRailView(id, list), [id, list, previewShape, mapsRead])
   // Only drags aimed at THIS rail re-render it.
   const drop = useRailUiStore(s => (s.drop && s.drop.target.railId === id ? s.drop : null))
 

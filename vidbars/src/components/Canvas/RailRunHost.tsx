@@ -18,6 +18,7 @@ import { useEffect } from 'react'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useRailRunStore } from '../../store/railRunStore'
 import { usePosterMapStore } from '../../three/posterService'
+import { useModelMaps } from '../../three/modelMaps'
 import { isRail, railMembers } from '../../utils/rail'
 import { runChain, type ChainResult } from '../../utils/fx/chain'
 import { FX_REF_SIDE } from '../../utils/fx/effects'
@@ -134,6 +135,8 @@ export function RailRunHost(): null {
     const offPosters = usePosterMapStore.subscribe((s, prev) => { if (s.map !== prev.map) check() })
     // A docked card's face is the card's: stepped, the preview follows.
     const offCards = useBoardsStore.subscribe((s, prev) => { if (s.groups !== prev.groups) check() })
+    // A docked model's colour maps land once they have been read.
+    const offMaps = useModelMaps.subscribe((s, prev) => { if (s.version !== prev.version) check() })
     const offAux = useAuxStore.subscribe((s, prev) => { if (s.version !== prev.version) check() })
     // Played and then let go of (its clip taken away): the still comes back.
     // (Only when one is engaged or let go: its frames tick many times a second.)
@@ -145,6 +148,7 @@ export function RailRunHost(): null {
       offPosters()
       offCards()
       offAux()
+      offMaps()
       offMotion()
       for (const t of timers.values()) window.clearTimeout(t)
     }

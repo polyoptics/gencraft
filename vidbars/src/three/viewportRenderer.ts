@@ -22,6 +22,7 @@ import { useViewport3DStore, type ViewportWindow3D } from '../store/viewport3dSt
 import { acquireModel, releaseModel, disposeInstance } from './modelCache'
 import { applyOrbit, frameModel, dollyBounds, type OrbitState } from './orbitState'
 import { DEFAULT_LOOK, createLook, applyLook, disposeLook, type LookInstance } from './modelLook'
+import { gradeLook, grades } from './modelMaps'
 
 /** Below this on-screen width (px) a window skips GL (frame shows poster). */
 export const MIN_GL_PX = 80
@@ -154,6 +155,8 @@ const skeletons = new Map<string, THREE.SkeletonHelper>()
 function applyDisplayMode(id: string, view: ViewRuntime, win: ViewportWindow3D): void {
   const { texture, shade } = win.look ?? DEFAULT_LOOK
   if (view.look) applyLook(view.look, texture, shade)
+  // A model whose colour maps a loop strip has processed wears the result.
+  if (view.look && view.modelUrl) gradeLook(view.look, grades.for(null, view.modelUrl), requestRender)
 
   const skinVisible = win.showSkin !== false
   let hasSkinned = false
@@ -229,6 +232,8 @@ export function getViewRuntime(id: string): ViewRuntime | undefined {
 }
 
 // ── Render scheduling ──
+grades.changed.add(() => requestRender())
+
 export function requestRender(): void {
   if (rafHandle !== null || !renderer) return
   if (document.visibilityState === 'hidden') return
