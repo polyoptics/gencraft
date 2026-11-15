@@ -505,6 +505,10 @@ const PARTS_OF: Record<ManipSettings['mode'], ManipPart[]> = {
 }
 /** The stand's turn: its y off the plane. */
 const rideQ = new THREE.Quaternion()
+/** Looking straight down, how many times further off than the canvas's
+ *  own eye the 3D view's is (a plan, near enough), and by how many
+ *  degrees of tilt it has come in to the canvas's. */
+const PLAN_FAR = 60, PLAN_UNTIL = 14
 const STAND_Q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2)
 
 // ── A camera's view (Brian 2026-11-09) ──
@@ -1264,11 +1268,23 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     outlineMat.uniforms.px.value = 2.5 * renderer.getPixelRatio()
 
     camera.aspect = W / H
-    camera.fov = 2 * Math.atan(H / 2 / TILT_PERSPECTIVE) * 180 / Math.PI
+    // Looking straight down it is a plan: the eye far off, through a long
+    // lens, so every model is seen from right above itself. From the
+    // canvas's own eye, near and wide, one out towards an edge was seen
+    // from its side, the more the further out and the higher it stood: a
+    // ship going along a path across a set turned and rolled to the eye
+    // as it went, though it kept straight on its path (Brian 2026-11-15:
+    // "they twist and rotate in a really strange way"). What lies on the
+    // plane is where it was either way. Tipping into 3D the eye comes in
+    // to the canvas's own over the first degrees.
+    const offFlat = Math.min(1, Math.max(Math.abs(st.tilt), Math.abs(st.yaw)) / PLAN_UNTIL)
+    const eye = TILT_PERSPECTIVE * (1 + (PLAN_FAR - 1) * (1 - offFlat * offFlat * (3 - 2 * offFlat)) ** 3)
+    camera.fov = 2 * Math.atan(H / 2 / eye) * 180 / Math.PI
     // (Looking through a camera moves it: back where the canvas's is.)
-    camera.position.set(0, 0, TILT_PERSPECTIVE)
+    camera.position.set(0, 0, eye)
     camera.quaternion.identity()
-    camera.near = 10; camera.far = TILT_PERSPECTIVE * TILT_DRAW_FAR
+    // (As deep either side of the plane as from the canvas's own eye.)
+    camera.near = eye - TILT_PERSPECTIVE + 10; camera.far = eye + TILT_PERSPECTIVE * (TILT_DRAW_FAR - 1)
     camera.updateProjectionMatrix()
     // The plane: CSS rotateX(t) rotateZ(s), carried from CSS's y-down
     // space into three's y-up space (F·R·F, F = flip y).
