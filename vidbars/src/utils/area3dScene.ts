@@ -187,8 +187,7 @@ type RowSpot = { area: FreeNodeData; i: number; n: number }
 /** 3D set `a`'s card and the cards with it (Brian 2026-11-13: a set and
  *  its card are never apart, and any card docked under the set is with
  *  it till it is dragged off by hand): its card first, then every card
- *  docked along the set's bottom (any kind; not a linked card, which is
- *  the set's by its layout, nor what the set opened over), and the cards
+ *  docked along the set's bottom (any kind, linked or not), and the cards
  *  in a row with those. `box`: the set's box to go by (where it was, as it
  *  moves). `taken`: cards another set has. */
 export function rowCards(a: FreeNodeData, box: R = a, taken?: (id: string) => boolean): ProjectGroup[] {
@@ -199,7 +198,14 @@ export function rowCards(a: FreeNodeData, box: R = a, taken?: (id: string) => bo
   const apart = (p: ProjectGroup, q: ProjectGroup) => !!p.rowUnder?.includes(q.id) || !!q.rowUnder?.includes(p.id)
   const row = [card]
   for (const g of seen) {
-    if (row.includes(g) || g.linkOf || taken?.(g.id) || apart(g, card) || isUnder(a, `card:${g.id}`)) continue
+    // (Docked under it, it is with it, whatever it lay by when the set
+    // came out: where a card lies is the whole rule. Brian 2026-11-15,
+    // cards left behind by a set that moved: a card the set had come out
+    // next to was kept as not its own, with nothing to show for it.)
+    // (A linked card too, Brian 2026-11-15: a set closed and opened again
+    // took the linked cards under it as come out over, the others not,
+    // so only the linked ones stayed behind when it moved.)
+    if (row.includes(g) || taken?.(g.id) || apart(g, card)) continue
     const r = cardBox(g, bs.boards)
     if (r && docksUnder(r, box)) row.push(g)
   }
@@ -268,7 +274,7 @@ export function sceneOf(key: string): { area: FreeNodeData; docked: boolean; box
   if (!box) return null
   const a = areaOfBox(box, undefined, key.startsWith('node:') ? key.slice(5) : undefined, key.startsWith('card:'))
   // It lay there before the scene opened over it: not in that scene.
-  if (a && isUnder(a.area, key)) return null
+  if (a && isUnder(a.area, key) && !(key.startsWith('card:') && docksUnder(box, a.area))) return null
   if (a && key.startsWith('card:') && linkedHere(key.slice(5), a.area)) return null
   if (a) return { ...a, box }
   // In a row with a 3D set's card: in that set, as one docked along it.
@@ -450,8 +456,8 @@ export function holdSets(ids: string[], spread = false): { step: () => void; end
     const carried = (x: number, y: number) => inner.some(n => inside(n, x, y))
     const out = (x: number, y: number) => !inside(a, x, y)
     for (const key of own) {
-      if (isUnder(a, key)) continue
       const id = key.slice(key.indexOf(':') + 1)
+      if (isUnder(a, key) && !(key.startsWith('card:') && rowSets().get(id)?.area.id === a.id)) continue
       if (key.startsWith('card:')) {
         const g = bs0.groups.find(x => x.id === id), b = g && cardBox(g, bs0.boards)
         if (!g || !b) continue

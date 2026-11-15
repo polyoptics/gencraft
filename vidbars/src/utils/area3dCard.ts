@@ -24,7 +24,6 @@ import { useModelScaleStore, type ScenePlace, type CameraLens, type PieceView } 
 import { cardBox, carrying, docksUnder, isUnder, laying, lyingIn, rowCards, selfMoved, setCards, setViewers } from './area3dScene'
 import { useViewport3DStore, type ViewportWindow3D } from '../store/viewport3dStore'
 import { viewportVisualRect } from './viewportDocking'
-import { isHiddenDeckMember } from '../hooks/useCardDecks'
 import { primaryFirst } from './primaryCard'
 import { splitOpenDecks } from './deckSplit'
 import { cardFaceSize, createTextCard } from './cardGrid'
@@ -92,9 +91,9 @@ export interface Area3dData {
   cards: Area3dCardItem[]
   tiles: Area3dTileItem[]
   /** The cards that were with the set when it was folded (docked under
-   *  it, in a row with its card: area3dScene rowCards), by id. They stay on
-   *  the canvas as they are; coming out again, the set knows them as its
-   *  own, and any other card it opens next to as not (showArea3d). */
+   *  it, in a row with its card: area3dScene rowCards), by id. Kept for
+   *  the record only: which cards are with a set is read from where they
+   *  lie (a card docked under it is with it), nothing else. */
   row?: string[]
   /** The curves parented to it (utils/curveParent), whole: their points
    *  from the mat's top-left, their parent left out (it is this set). */
@@ -383,20 +382,7 @@ export function showArea3d(cardId: string, quiet = false, spot?: { x: number; y:
     const r = g && !g.linkOf ? cardBox(g) : null
     return !!r && docksUnder(r, m)
   }
-  // The cards that were with it when it was folded, and the ones in a row
-  // with its card now (its deck), are its own. Any other card it comes
-  // out next to is not: under it, as what it comes out over, till it is
-  // set down there by hand (Brian 2026-11-13: opened on top of other
-  // cards "they just start docking around to everything").
-  const own = new Set(d0.row ?? [])
-  for (const g of rowCards({ areaCard: cardId } as FreeNodeData, { x: Infinity, y: Infinity, width: 0, height: 0 })) own.add(g.id)
-  const mine = (k: string) => docked(k) && own.has(k.slice(5))
-  const strangers = groups0.filter(g => {
-    if (g.id === cardId || g.pin || g.linkOf || own.has(g.id) || isHiddenDeckMember(g)) return false
-    const r = cardBox(g)
-    return !!r && docksUnder(r, m)
-  }).map(g => `card:${g.id}`)
-  const below = under ?? [...new Set([...lyingIn(m, cardId).filter(k => !mine(k)), ...strangers])]
+  const below = under ?? lyingIn(m, cardId).filter(k => !docked(k))
   let id = ''
   laying.on = true
   try {
