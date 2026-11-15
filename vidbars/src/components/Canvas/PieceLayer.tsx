@@ -37,7 +37,7 @@ import { useNotesStore } from '../../store/notesStore'
 import { useRideClock, riderRuns } from '../../utils/pathRide'
 import { clientToCanvas } from '../../utils/fx/createEffect'
 import { selectModel } from './tilt/TiltModels'
-import { usePieceStore, ensurePiece, pieceKey, trimPieces, type PiecePic, type Vec3 } from '../../three/pieceService'
+import { usePieceStore, ensurePiece, pieceKey, trimPieces, type PiecePic, type Quat, type Vec3 } from '../../three/pieceService'
 import { liveKeys, piecePress, type PiecePress } from '../../utils/liveTop'
 import { scenePieces, pieceShot, layPiece, pieceScale, pieceSelected, piecesShown, pieceRiders, PIECE_LIFT, type ScenePiece } from '../../utils/scenePieces'
 
@@ -49,6 +49,8 @@ const SEL = '#78b3ff', HOVER = 'rgba(255,255,255,0.7)'
 /** The picture a piece last showed, by its model (as the 3D view knows
  *  it): shown while its next one (tipped over, stretched) is being drawn. */
 const lastPic = new Map<string, PiecePic>()
+/** The side each of those was taken from (utils/scenePieces pieceShot). */
+const lastQ = new Map<string, Quat>()
 
 const ring = (c: string) => `drop-shadow(1.5px 0 0 ${c}) drop-shadow(-1.5px 0 0 ${c}) drop-shadow(0 1.5px 0 ${c}) drop-shadow(0 -1.5px 0 ${c})`
 
@@ -153,11 +155,14 @@ interface PieceProps {
   at: { x: number; y: number; k: number } | null
   /** It is going along a path now (the ride clock runs). */
   moving: boolean
+  /** Going along a path with the picture it had: the side that picture
+   *  was taken from. */
+  held?: Quat
 }
 
-const Piece: React.FC<PieceProps> = React.memo(({ p, pic, size, zoom, selected, live, at, moving }) => {
+const Piece: React.FC<PieceProps> = React.memo(({ p, pic, size, zoom, selected, live, at, moving, held }) => {
   const [hover, setHover] = useState(false)
-  const shot = pieceShot(p)
+  const shot = pieceShot(p, held)
   // No picture yet, or a model not measured yet: a plain disc its
   // footprint's size (a model fitted by its footprint stands 0.6 of the
   // fit wide).
@@ -330,9 +335,10 @@ export const PieceLayer: React.FC = () => {
     const ids = new Set(bare.split(' '))
     for (const p of now.current.list) {
       if (!ids.has(p.key)) continue
-      void ensurePiece(p.url, pieceShot(p).q, p.stretch).then(pic => {
+      const q = pieceShot(p).q
+      void ensurePiece(p.url, q, p.stretch).then(pic => {
         if (off || !pic || lastPic.has(p.key)) return
-        lastPic.set(p.key, pic)
+        lastPic.set(p.key, pic); lastQ.set(p.key, q)
         setAgain(n => n + 1)
       })
     }
@@ -373,7 +379,7 @@ export const PieceLayer: React.FC = () => {
         // cut to its own size.)
         const moving = playing && !!p.riding && riderRuns(p.key, p.dk)
         const pic = moving && lastPic.has(p.key) ? undefined : pics[keys[i]]
-        if (pic) lastPic.set(p.key, pic)
+        if (pic && lastPic.get(p.key) !== pic) { lastPic.set(p.key, pic); lastQ.set(p.key, pieceShot(p).q) }
         // A lifted piece, as the camera tips: from where its lift puts it
         // looking down, to the spot on the plane its model's foot is seen
         // over, as big as the model is seen there.
@@ -396,7 +402,7 @@ export const PieceLayer: React.FC = () => {
           }
         }
         return <Piece key={p.key} p={p} pic={pic ?? lastPic.get(p.key) ?? null} size={sizes[p.url]} zoom={zoom}
-          selected={pieceSelected(p.key, selNodes, selCards)} live={flat} at={at} moving={moving} />
+          selected={pieceSelected(p.key, selNodes, selCards)} live={flat} at={at} moving={moving} held={moving && !pic ? lastQ.get(p.key) : undefined} />
       })}
     </div>
   )

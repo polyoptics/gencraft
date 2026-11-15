@@ -217,7 +217,11 @@ const qrot = (q: Quat, v: Vec3): Vec3 => {
  *  middle in the picture, for each half of its height. */
 export interface PieceShot { q: Quat; turn: number; foot: [number, number] }
 
-export function pieceShot(p: ScenePiece): PieceShot {
+/** `held`: the side the picture it is showing was taken from, when that is
+ *  not the side it would be taken from now (one going along a path keeps
+ *  its picture, components/Canvas/PieceLayer): the turn is then the one
+ *  that brings that picture nearest to how the model lies now. */
+export function pieceShot(p: ScenePiece, held?: Quat): PieceShot {
   // A view of its own: as it was taken, upright.
   if (p.view) return { q: p.view.q, turn: 0, foot: p.view.foot }
   // From straight above: the model stood up on the plane (tiltScene: its
@@ -227,8 +231,14 @@ export function pieceShot(p: ScenePiece): PieceShot {
   const q = own ? qmul(STAND_Q, own) : STAND_Q
   // Its turn about the eye's own axis comes out of the picture: q = that
   // turn, after the rest. Upright, the rest is the same for every turn.
-  const n = Math.hypot(q[2], q[3])
-  const tz = n < 1e-6 ? 0 : q[2] / n, tw = n < 1e-6 ? 1 : q[3] / n
+  // (A picture kept from before: its turn from where that picture was
+  // taken. Taken out of the whole turn it swings about as the model tips,
+  // by a climb or a lean, the more the further its own turn has it from
+  // upright, while the picture stays as it was: Brian 2026-11-15, "they
+  // twist and rotate in a really strange way".)
+  const from = held ? qmul(q, [-held[0], -held[1], -held[2], held[3]]) : q
+  const n = Math.hypot(from[2], from[3])
+  const tz = n < 1e-6 ? 0 : from[2] / n, tw = n < 1e-6 ? 1 : from[3] / n
   const back: Quat = [0, 0, -tz, tw]
   // A path turns its rider about its foot, and its middle is half its
   // height up from there (tiltScene: turn, over orient): tipped by a climb
@@ -238,9 +248,9 @@ export function pieceShot(p: ScenePiece): PieceShot {
   // about its middle, as in the hand): its middle stays over its spot.
   const f = p.ride && !p.rideMid && p.url !== CAMERA_URL ? qrot(qmul(back, qmul(STAND_Q, p.ride)), [0, -1, 0]) : null
   const foot: [number, number] = f ? [f[0], f[1]] : [0, 0]
-  if (n < 1e-6) return { q, turn: 0, foot }
+  if (n < 1e-6) return { q: held ?? q, turn: 0, foot }
   // (The picture's y is up, the canvas's down: it turns the other way.)
-  return { q: qmul(back, q), turn: -2 * Math.atan2(tz, tw), foot }
+  return { q: held ?? qmul(back, q), turn: -2 * Math.atan2(tz, tw), foot }
 }
 
 /** How many canvas units one of the model's own units is drawn at: its fit
