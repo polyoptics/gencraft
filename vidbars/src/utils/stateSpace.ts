@@ -78,7 +78,7 @@ import { isTilted, unprojectTilt, useTiltStore } from '../store/tiltStore'
 import { applyState, deckCards, markChange } from './stateCard'
 import { rootOf } from './storyline'
 
-export type SpaceKind = 'card' | 'blank' | 'event' | 'any' | 'timeline' | 'value' | 'and' | 'or' | 'fact' | 'wait' | 'pick' | 'space' | 'path' | 'act' | 'choice'
+export type SpaceKind = 'card' | 'blank' | 'event' | 'any' | 'timeline' | 'value' | 'and' | 'or' | 'fact' | 'wait' | 'pick' | 'space' | 'path' | 'act' | 'choice' | 'calc' | 'gen' | 'send' | 'recv'
 
 export interface SpaceItem {
   id: string
@@ -118,8 +118,15 @@ export interface SpaceItem {
   init?: number
   /** value: shown and kept as yes / no. */
   flag?: boolean
-  /** wait: how many points later. */
+  /** wait: how many points later. calc: its second number, when nothing is
+   *  wired there. gen: how many seconds one round takes. */
   n?: number
+  /** calc: what it works out from its two numbers (without: adds them). */
+  calc?: CalcOp
+  /** gen: what it gives out (without: a pulse each round). */
+  shape?: GenShape
+  /** gen: stopped by hand. */
+  off?: boolean
   /** pick: what its chances hang on; a new one is a new roll. */
   seed?: number
 }
@@ -175,6 +182,11 @@ export const VALUE_H = 60
 export const GATE_W = 64
 export const GATE_H = 40
 export const FACT_W = 124
+export const CALC_W = 132
+export const GEN_W = 116
+export const RADIO_W = 104
+export type CalcOp = 'add' | 'sub' | 'mul' | 'div' | 'min' | 'max'
+export type GenShape = 'pulse' | 'wave' | 'ramp'
 export const FACT_H = 62
 export const WAIT_W = 108
 export const SPACE_W = 190
@@ -285,9 +297,22 @@ const itemOf = (d: StateSpaceData, id: string | undefined) => id === undefined ?
 const wireOf = (d: StateSpaceData, id: string | undefined) => id === undefined ? undefined : indexOf(d).wire.get(id)
 const isState = (i: SpaceItem | undefined) => i?.kind === 'card' || i?.kind === 'blank'
 /** True or not at any moment: can be a condition. */
-export const isLevel = (i: SpaceItem | undefined) => isState(i) || i?.kind === 'value' || i?.kind === 'and' || i?.kind === 'or' || i?.kind === 'fact' || i?.kind === 'act'
+export const isLevel = (i: SpaceItem | undefined) => isState(i) || i?.kind === 'value' || i?.kind === 'and' || i?.kind === 'or' || i?.kind === 'fact' || i?.kind === 'act' || i?.kind === 'calc' || (i?.kind === 'gen' && isWave(i))
 /** Reads conditions through its inputs, never signals. */
-const readsLevels = (i: SpaceItem | undefined) => i?.kind === 'and' || i?.kind === 'or' || i?.kind === 'fact' || i?.kind === 'act'
+const readsLevels = (i: SpaceItem | undefined) => i?.kind === 'and' || i?.kind === 'or' || i?.kind === 'fact' || i?.kind === 'act' || i?.kind === 'calc' || i?.kind === 'gen'
+/** Is a number, not only true or not: a wire out of it can carry a compare. */
+export const isNumber = (i: SpaceItem | undefined) => i?.kind === 'value' || i?.kind === 'calc' || (i?.kind === 'gen' && isWave(i))
+/** A signal node giving a level that rises and falls (not pulses). */
+const isWave = (i: SpaceItem | undefined) => i?.shape === 'wave' || i?.shape === 'ramp'
+/** The name a send and a receive share. */
+const channel = (i: SpaceItem | undefined) => (i?.name ?? '').trim().toLowerCase()
+/** True or not, as things are wired: a receive is, when something true or
+ *  not is wired into a send of its name. */
+function levelOf(d: StateSpaceData, i: SpaceItem | undefined): boolean {
+  if (i?.kind !== 'recv') return isLevel(i)
+  const name = channel(i)
+  return d.wires.some(w => { const b = itemOf(d, w.b); return w.bp !== 'knob' && b?.kind === 'send' && channel(b) === name && isLevel(itemOf(d, w.a)) })
+}
 /** What a workspace shows of itself as a node in another: its states, its
  *  events and its values. */
 export function exposed(spaceId: string | undefined): SpaceItem[] {
@@ -321,11 +346,13 @@ export function wireKind(d: StateSpaceData, w: SpaceWire): WireKind {
 function kindOfWire(d: StateSpaceData, w: SpaceWire): WireKind {
   const a = itemOf(d, w.a)
   if (w.bp === 'if' || w.ap === 'time' || (w.bp !== 'knob' && readsLevels(itemOf(d, w.b)))) return 'cond'
+  // Into a send: what is true or not is read by it; the rest passes through.
+  if (w.bp !== 'knob' && itemOf(d, w.b)?.kind === 'send' && isLevel(a)) return 'cond'
   // Into a path: only "play" is something that happens; the rest holds while true.
   if (w.bp !== 'knob' && w.bp !== 'play' && itemOf(d, w.b)?.kind === 'path') return 'cond'
   // Something true or not (a value's compare, an And, a card that is NOT
   // lit) into a state: the state is lit while it is true.
-  if ((w.bp ?? 'in') === 'in' && !w.ap && isLevel(a) && (!isState(a) || !!w.not) && isState(itemOf(d, w.b))) return 'hold'
+  if ((w.bp ?? 'in') === 'in' && !w.ap && levelOf(d, a) && (!isState(a) || !!w.not) && isState(itemOf(d, w.b))) return 'hold'
   if (w.x) return 'signal'
   if ((w.bp ?? 'in') === 'in' && !w.ap && (isState(a) || a?.kind === 'any') && isState(itemOf(d, w.b))) return w.plain ? 'link' : 'change'
   return 'signal'
@@ -396,6 +423,9 @@ export function itemSize(i: SpaceItem): { w: number; h: number } {
   if (i.kind === 'act') return { w: ACT_W, h: EVENT_H }
   if (i.kind === 'choice') return { w: CHOICE_W, h: CHOICE_HEAD + Math.max(1, i.opts?.length ?? 0) * CHOICE_ROW + 5 }
   if (i.kind === 'space') return { w: SPACE_W, h: SPACE_HEAD + Math.max(1, exposed(i.space).length) * SPACE_ROW + 6 }
+  if (i.kind === 'calc') return { w: CALC_W, h: FACT_H }
+  if (i.kind === 'gen') return { w: GEN_W, h: SMALL_H }
+  if (i.kind === 'send' || i.kind === 'recv') return { w: RADIO_W, h: SMALL_H }
   if (i.kind === 'wait') return { w: WAIT_W, h: SMALL_H }
   if (i.kind === 'pick') return { w: SMALL_W, h: SMALL_H }
   return { w: ICON, h: ICON }
@@ -437,7 +467,9 @@ export function itemPorts(i: SpaceItem): { port: string; out: boolean; spot: Por
       return [{ port: 'in:' + x.id, out: false, spot: { ...L, y } }, { port: 'out:' + x.id, out: true, spot: { ...R, y } }]
     })
   }
-  if (i.kind === 'fact') return [{ port: 'a', out: false, spot: { ...L, y: i.y - 19 } }, { port: 'b', out: false, spot: { ...L, y: i.y + 19 } }, { port: 'out', out: true, spot: R }]
+  if (i.kind === 'fact' || i.kind === 'calc') return [{ port: 'a', out: false, spot: { ...L, y: i.y - 19 } }, { port: 'b', out: false, spot: { ...L, y: i.y + 19 } }, { port: 'out', out: true, spot: R }]
+  if (i.kind === 'send') return [{ port: 'in', out: false, spot: L }]
+  if (i.kind === 'recv') return [{ port: 'out', out: true, spot: R }]
   return [{ port: 'in', out: false, spot: L }, { port: 'out', out: true, spot: R }]
 }
 
@@ -525,13 +557,17 @@ export function canWire(d: StateSpaceData, from: PortRef, to: PortRef): boolean 
   if (from.port === 'time' || to.port === 'time') return from.port === 'time' && to.port === 'time' && b.kind === 'path'
   if (isState(b)) return to.port === 'in'
   if (a.kind === 'any') return false
-  if (b.kind === 'path') return to.port === 'play' || ((to.port === 'take' || to.port.startsWith('hold:')) && isLevel(a))
-  if (b.kind === 'act') return to.port === 'in' && isLevel(a)
+  const lvl = isLevel(a) || a.kind === 'recv'
+  if (b.kind === 'path') return to.port === 'play' || ((to.port === 'take' || to.port.startsWith('hold:')) && lvl)
+  if (b.kind === 'act') return to.port === 'in' && lvl
+  if (b.kind === 'calc') return (to.port === 'a' || to.port === 'b') && lvl
+  if (b.kind === 'gen') return to.port === 'in' && lvl
+  if (b.kind === 'send') return to.port === 'in'
   if (b.kind === 'choice') return to.port === 'in'
   if (b.kind === 'space') return to.port.startsWith('in:') && !!endOf(d, b.id, to.port)
   if (b.kind === 'fact') return (to.port === 'a' || to.port === 'b') && a.kind === 'card' && !!a.card
-  if (b.kind === 'and' || b.kind === 'or') return to.port === 'in' && isLevel(a)
-  if (b.kind === 'event' && to.port === 'if') return isLevel(a)
+  if (b.kind === 'and' || b.kind === 'or') return to.port === 'in' && lvl
+  if (b.kind === 'event' && to.port === 'if') return lvl
   return to.port === 'in' && (b.kind === 'event' || b.kind === 'value' || b.kind === 'wait' || b.kind === 'pick')
 }
 
@@ -655,6 +691,8 @@ interface RunOpts {
   fresh?: (w: SpaceWire) => boolean
   /** States whose held / under marks are not to be taken up (a replay starts them over). */
   over?: Set<string>
+  /** The time it is, in seconds (for signal nodes; without: now). */
+  at?: number
 }
 
 function runner(d: StateSpaceData, lit: Set<string>, vals: Map<string, number>, opts: RunOpts = {}) {
@@ -686,6 +724,15 @@ function runner(d: StateSpaceData, lit: Set<string>, vals: Map<string, number>, 
       }
       return t
     }
+    if (i.kind === 'calc' || i.kind === 'gen') return num(id, seen) !== 0
+    if (i.kind === 'recv') {
+      // What is true or not wired into a send of its name.
+      const name = channel(i)
+      seen.add(id)
+      const t = d.wires.some(w => { const b = itemOf(d, w.b); return w.bp !== 'knob' && b?.kind === 'send' && channel(b) === name && wireKind(d, w) === 'cond' && wireTruth(w, seen) })
+      seen.delete(id)
+      return t
+    }
     if (i.kind !== 'and' && i.kind !== 'or' && i.kind !== 'act') return false
     seen.add(id)
     const ins = d.wires.filter(w => w.b === id && w.bp !== 'knob')
@@ -693,16 +740,54 @@ function runner(d: StateSpaceData, lit: Set<string>, vals: Map<string, number>, 
     seen.delete(id)
     return t
   }
+  const clock = opts.at ?? Date.now() / 1000
+  /** Is a signal node running: not stopped by hand, and (when something is wired in) while that is true. */
+  const running = (i: SpaceItem, seen = new Set<string>()): boolean => {
+    if (i.off || seen.has(i.id)) return false
+    const ins = d.wires.filter(w => w.b === i.id && w.bp !== 'knob')
+    if (!ins.length) return true
+    seen.add(i.id)
+    const t = ins.some(w => wireTruth(w, seen))
+    seen.delete(i.id)
+    return t
+  }
+  /** The number a node is now: a value's, a calculation's, a signal's level; anything else 1 while true. */
+  const num = (id: string, seen = new Set<string>()): number => {
+    const i = itemOf(d, id)
+    if (!i || seen.has(id)) return 0
+    if (i.kind === 'value') return r.vals.get(id) ?? 0
+    if (i.kind === 'gen') {
+      if (!isWave(i) || !running(i, seen)) return 0
+      const turn = clock / Math.max(0.05, i.n ?? 1)
+      return i.shape === 'ramp' ? turn - Math.floor(turn) : 0.5 - 0.5 * Math.cos(turn * 2 * Math.PI)
+    }
+    if (i.kind === 'calc') {
+      seen.add(id)
+      const side = (port: InPort, bare: number) => { const w = d.wires.find(x => x.b === id && x.bp === port); return w ? carried(w, seen) : bare }
+      const a = side('a', 0), b = side('b', i.n ?? 0)
+      seen.delete(id)
+      const v = i.calc === 'sub' ? a - b : i.calc === 'mul' ? a * b : i.calc === 'div' ? (b ? a / b : 0) : i.calc === 'min' ? Math.min(a, b) : i.calc === 'max' ? Math.max(a, b) : a + b
+      return Number.isFinite(v) ? v : 0
+    }
+    return truth(id, seen) ? 1 : 0
+  }
+  /** The number a wire carries: its source's own (with no compare on it), else 1 while it is true. */
+  const carried = (w: SpaceWire, seen?: Set<string>): number =>
+    isNumber(itemOf(d, w.a)) && !w.cmp && !w.not ? num(w.a, seen) : wireTruth(w, seen) ? 1 : 0
   /** Is what a wire carries true now: its source, by its compare, or not. */
   const wireTruth = (w: SpaceWire, seen?: Set<string>): boolean => {
     const a = itemOf(d, w.a)
-    const base = a?.kind === 'value' && w.cmp ? compare(r.vals.get(a.id) ?? 0, w.cmp, w.cn ?? 0) : truth(w.a, seen)
+    const base = isNumber(a) && w.cmp ? compare(num(a!.id, seen), w.cmp, w.cn ?? 0) : truth(w.a, seen)
     return w.not ? !base : base
   }
   // Wires that send when what they carry BECOMES true (a lit card's plain
   // wires are sent by light itself).
-  const watch = d.wires.filter(w => { const a = itemOf(d, w.a); return wireKind(d, w) === 'signal' && isLevel(a) && (!isState(a) || !!w.not) })
-  const was = new Map(watch.map(w => [w.id, !opts.fresh?.(w) && wireTruth(w)]))
+  const watch = d.wires.filter(w => { const a = itemOf(d, w.a); return wireKind(d, w) === 'signal' && levelOf(d, a) && (!isState(a) || !!w.not) })
+  // What moves with time by itself (a signal's level, and what is worked out
+  // from one) is remembered from run to run: between two runs it can have
+  // become true with nothing having happened.
+  const timed = timedOf(d)
+  const was = new Map(watch.map(w => [w.id, !opts.fresh?.(w) && (timed.has(w.a) ? timedWas.get(w.id) ?? wireTruth(w) : wireTruth(w))]))
   // Conditions into states: each machine shows the state whose condition is
   // true (of several, the one wired last), over whatever it was showing.
   const holds = d.wires.filter(w => wireKind(d, w) === 'hold')
@@ -749,6 +834,7 @@ function runner(d: StateSpaceData, lit: Set<string>, vals: Map<string, number>, 
       const t = wireTruth(w)
       const before = was.get(w.id)
       was.set(w.id, t)
+      if (timed.has(w.a)) timedWas.set(w.id, t)
       if (t && !before) go(w)
     }
     for (const e of gated) {
@@ -770,6 +856,12 @@ function runner(d: StateSpaceData, lit: Set<string>, vals: Map<string, number>, 
     const t = itemOf(d, w.b)
     if (t?.kind === 'event') fire(t.id)
     else if (t?.kind === 'value') set(t.id, w.op === 'set' ? w.on ?? 0 : (r.vals.get(t.id) ?? 0) + (w.on ?? 1))
+    else if (t?.kind === 'send') {
+      // Out of every receive of its name.
+      r.fired.push(t.id)
+      const name = channel(t)
+      for (const o of d.items) if (o.kind === 'recv' && channel(o) === name) { r.fired.push(o.id); signals(o.id) }
+    }
     else if (t?.kind === 'wait') wait(t)
     else if (t?.kind === 'pick') pick(t)
     else if (t?.kind === 'choice') choice(t)
@@ -779,7 +871,7 @@ function runner(d: StateSpaceData, lit: Set<string>, vals: Map<string, number>, 
   /** Send along every wire out of a node (a timeline: out of one point). */
   const signals = (from: string, port?: string) => {
     const a = itemOf(d, from)
-    const out = d.wires.filter(w => w.a === from && (port === undefined || w.ap === port) && wireKind(d, w) === 'signal' && !(w.not && isLevel(a)))
+    const out = d.wires.filter(w => w.a === from && (port === undefined || w.ap === port) && wireKind(d, w) === 'signal' && !(w.not && levelOf(d, a)))
     // Numbers first, so that nothing set off alongside reads a stale one.
     const num = (w: SpaceWire) => w.bp !== 'knob' && itemOf(d, w.b)?.kind === 'value'
     for (const w of out) if (num(w)) go(w)
@@ -864,7 +956,20 @@ function runner(d: StateSpaceData, lit: Set<string>, vals: Map<string, number>, 
   }
   /** A wait's time is up. */
   const resume = (id: string) => { const t = itemOf(d, id); if (t?.kind === 'pick') pick(t); else { r.fired.push(id); signals(id) } }
-  return { r, light, fire, change, set, point, spot, resume, signals, recheck, truth, wireTruth, machine }
+  return { r, light, fire, change, set, point, spot, resume, signals, recheck, truth, wireTruth, machine, num, running }
+}
+
+/** What a watched wire out of something that moves with time last carried (by the wire's id). */
+const timedWas = new Map<string, boolean>()
+/** The nodes that move with time by themselves: signal nodes, and what reads them. */
+function timedOf(d: StateSpaceData): Set<string> {
+  const out = new Set(d.items.filter(i => i.kind === 'gen').map(i => i.id))
+  if (!out.size) return out
+  for (let grew = true; grew;) {
+    grew = false
+    for (const w of d.wires) if (w.bp !== 'knob' && out.has(w.a) && !out.has(w.b) && readsLevels(itemOf(d, w.b))) { out.add(w.b); grew = true }
+  }
+  return out
 }
 
 /** 0..n-1 from a seed, the same every time. */
@@ -890,6 +995,8 @@ function driven(d: StateSpaceData): Set<string> {
       const t = itemOf(d, w.bp === 'knob' ? wireOf(d, w.b)?.b : w.b)
       if (isState(t)) for (const m of machineOf(d, t!.id)) add(m)
       else add(t?.id)
+      // Through a send, out of the receives of its name.
+      if (t?.kind === 'send') for (const o of d.items) if (o.kind === 'recv' && channel(o) === channel(t)) add(o.id)
     }
   }
   return out
@@ -919,6 +1026,14 @@ function worldOf(nodeId: string): World | null {
     for (const [ws, d] of data) for (const i of d.items) {
       if (i.kind !== 'space' || !i.space || !data.has(i.space) || group.has(ws) === group.has(i.space)) continue
       group.add(ws); group.add(i.space); grew = true
+    }
+    // A send in one and a receive of its name in another join them too.
+    for (const [ws, d] of data) {
+      if (group.has(ws)) continue
+      const air = (x: StateSpaceData, kind: 'send' | 'recv') => x.items.filter(i => i.kind === kind).map(channel)
+      const tx = air(d, 'send'), rx = air(d, 'recv')
+      if (!tx.length && !rx.length) continue
+      if ([...group].some(g => { const o = data.get(g)!; return air(o, 'recv').some(n => tx.includes(n)) || air(o, 'send').some(n => rx.includes(n)) })) { group.add(ws); grew = true }
     }
   }
   const items: SpaceItem[] = [], wires: SpaceWire[] = []
@@ -958,6 +1073,42 @@ export function spaceTruths(nodeId: string): Set<string> {
   if (!w) return new Set()
   const run = runner(w.d, litOf(w.d), valsOf(w.d))
   return new Set(own(nodeId, w.d.items.filter(i => readsLevels(i) && run.truth(i.id)).map(i => i.id)))
+}
+
+/** The numbers of a workspace's calculations and signals as things stand. */
+export function spaceNumbers(nodeId: string): Map<string, number> {
+  const w = worldOf(nodeId)
+  const out = new Map<string, number>()
+  if (!w || !w.d.items.some(i => i.kind === 'calc' || i.kind === 'gen')) return out
+  const run = runner(w.d, litOf(w.d), valsOf(w.d))
+  const pre = nodeId + SEP
+  for (const i of w.d.items) if ((i.kind === 'calc' || i.kind === 'gen') && i.id.startsWith(pre)) out.set(i.id.slice(pre.length), i.kind === 'gen' && !run.running(i) ? -1 : run.num(i.id))
+  return out
+}
+
+/** Signal nodes run in real time: ten times a second each workspace that has
+ *  one is read again (a pulse sends once each round; a level may have crossed
+ *  what a wire compares it with). */
+const turns = new Map<string, number>()
+function tickSignals(): void {
+  if (document.hidden) return
+  const now = Date.now() / 1000
+  const done = new Set<string>()
+  for (const n of Object.values(useFreeNodeStore.getState().nodes)) {
+    if (n.type !== 'stateSpace' || done.has(n.id)) continue
+    done.add(n.id)
+    if (!n.stateSpace?.items.some(i => i.kind === 'gen')) continue
+    hand(n.id, (run, _k, d) => {
+      for (const i of d.items) {
+        done.add(i.id.slice(0, i.id.indexOf(SEP)))
+        if (i.kind !== 'gen' || isWave(i)) continue
+        const turn = Math.floor(now / Math.max(0.05, i.n ?? 1)), last = turns.get(i.id)
+        turns.set(i.id, turn)
+        if (last !== undefined && turn !== last && run.running(i)) { run.r.fired.push(i.id); run.signals(i.id) }
+      }
+      run.recheck()
+    })
+  }
 }
 
 /** What has just happened in a workspace, for its picture to show: the wires
@@ -1134,7 +1285,7 @@ export function setNow(nodeId: string, itemId: string, on: boolean): void {
 /** Fire an event by hand (a wait or a pick: send it on). */
 export function fireEvent(nodeId: string, itemId: string): void {
   const kind = itemOf(spaceOf(nodeId) ?? emptyStateSpace(), itemId)?.kind
-  if (kind !== 'event' && kind !== 'wait' && kind !== 'pick') return
+  if (kind !== 'event' && kind !== 'wait' && kind !== 'pick' && kind !== 'gen') return
   useUndoCoordinator.getState().checkpoint()
   hand(nodeId, (run, k) => { if (kind === 'event') run.fire(k(itemId)); else run.resume(k(itemId)) })
 }
@@ -1414,6 +1565,7 @@ let started = false
 export function startStateSpaces(): void {
   if (started) return
   started = true
+  window.setInterval(tickSignals, 100)
   const real = (e: PointerEvent) => { if (e.isTrusted) realAt = { x: e.clientX, y: e.clientY } }
   for (const type of ['pointerdown', 'pointermove', 'pointerup'] as const) window.addEventListener(type, real, true)
   let busy = false
