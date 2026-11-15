@@ -35,7 +35,7 @@ import { snapshotSpace } from '../../utils/stateScene'
 import {
   EVENT_H, EVENT_W, ICON, PORT_SNAP, SPACE_BAR_W, SPACE_GRID, TL_H,
   CHOICE_HEAD, CHOICE_ROW, SPACE_HEAD, SPACE_ROW, addItem, choose, pathStep, scene, addWire, editSpace, emptyStateSpace, endOf, exposed, fireEvent, isLevel, itemPorts, itemSize, lineClock, lineOf, looseCurve, makeChange, replaySpace, setValue, spaceTruths, valOf,
-  moveItems, normalizeSpace, outSpot, patchItem, patchWire, planeBox, portSpot, removeFromSpace, screenToCanvas, setNow, setStart,
+  moveItems, holdsOf, normalizeSpace, orderHold, outSpot, patchItem, patchWire, planeBox, portSpot, removeFromSpace, screenToCanvas, setNow, setStart,
   useSpaceLive, wireDist, wireGeom, wireKind, wireSources, wireTargets,
   type Compare, type PortRef, type PortSpot, type SpaceItem, type SpaceKind, type SpaceWire, type StateSpaceData, type WireGeom,
 } from '../../utils/stateSpace'
@@ -116,6 +116,7 @@ function wireSays(d: StateSpaceData, w: SpaceWire): string {
 /** What a wire does to the value it goes into (shown by its end). */
 function wireDoes(d: StateSpaceData, w: SpaceWire): string {
   const b = w.bp === 'knob' ? undefined : endOf(d, w.b, w.bp)
+  if (wireKind(d, w) === 'hold') return 'while'
   if (b?.kind !== 'value') return ''
   if (w.op === 'set') return '= ' + (b.flag ? yesNo(w.on ?? 0) : w.on ?? 0)
   const n = w.on ?? 1
@@ -314,7 +315,8 @@ const NodeView: React.FC<{ item: SpaceItem; picked: boolean; stamp?: number; on?
         whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: item.now ? 600 : 400,
       }}>{gone ? 'card gone' : itemLabel(item, card?.name)}</div>
       {/* Its tags sit outside the box: always the same place, lit or not. */}
-      <div style={{ position: 'absolute', left: 0, right: 0, top: -17, textAlign: 'center', fontSize: 9, letterSpacing: '0.1em', color: GREEN, fontWeight: 600, pointerEvents: 'none', opacity: item.now ? 1 : 0, transition: 'opacity .18s' }}>NOW</div>
+      <div style={{ position: 'absolute', left: 0, right: 0, top: -17, textAlign: 'center', fontSize: 9, letterSpacing: '0.1em', color: GREEN, fontWeight: 600, pointerEvents: 'none', opacity: item.now || item.under ? 1 : 0, transition: 'opacity .18s' }}
+        title={item.under && !item.now ? 'A condition is holding another of its states lit. This one comes back when the condition lets go' : undefined}>{item.under && !item.now ? <span style={{ color: DIM }}>UNDER</span> : 'NOW'}</div>
       {item.start && <div title="Where this machine starts" style={{ position: 'absolute', left: 0, right: 0, bottom: -16, textAlign: 'center', fontSize: 9, letterSpacing: '0.1em', color: DIM, pointerEvents: 'none' }}>START</div>}
       <Pulse stamp={stamp} radius={12} tone={GREEN} />
     </div>
@@ -337,7 +339,7 @@ const WireG = React.memo<{ w: SpaceWire; g: WireGeom; kind: ReturnType<typeof wi
     return (
       <g data-sp-wire={w.id}>
         <path d={g.path} fill="none" stroke={c} strokeWidth={on ? 2.6 : kind === 'signal' ? 1.5 : 1.9} strokeLinecap="round"
-          strokeDasharray={kind === 'link' ? '2 6' : kind === 'cond' ? '2 5' : kind === 'signal' ? '6 3' : undefined}
+          strokeDasharray={kind === 'link' ? '2 6' : kind === 'cond' || kind === 'hold' ? '2 5' : kind === 'signal' ? '6 3' : undefined}
           opacity={kind === 'signal' && !on ? 0.9 : 1}
           markerEnd={kind === 'link' ? undefined : `url(#${marker(c)})`} />
         {w.name && kind !== 'signal' && <text x={g.mx} y={g.my - 12} textAnchor="middle" fontSize={11} fontFamily={FONT}
@@ -514,6 +516,7 @@ const Bar: React.FC<{ id: string; d: StateSpaceData; sel: string[]; setSel: (s: 
   }
   const wireLine = (w: SpaceWire) => {
     const k = wireKind(d, w)
+    if (k === 'hold') return `${toName(w)}, while ${[fromName(w), wireSays(d, w)].filter(Boolean).join(' ')}`
     return k === 'signal' || k === 'cond' ? `${[fromName(w), wireSays(d, w)].filter(Boolean).join(' ')} → ${[toName(w), wireDoes(d, w)].filter(Boolean).join(' ')}` : `${w.name || (k === 'link' ? 'line' : 'change')}: ${nameOf(w.a)} ${k === 'link' ? '—' : '→'} ${nameOf(w.b)}`
   }
   const wireRows = (title: string, list: SpaceWire[]) => <>
@@ -598,6 +601,27 @@ const Bar: React.FC<{ id: string; d: StateSpaceData; sel: string[]; setSel: (s: 
           <button style={btn(!!item.now)} title="Lit: this is how things are now" onClick={() => setNow(id, item.id, !item.now)}>Now</button>
           <button style={btn(!!item.start)} title="Lit: this is lit before anything on a timeline has happened" onClick={() => setStart(id, item.id, !item.start)}>Start</button>
         </div>
+        {(() => {
+          // The conditions that hold this thing's states lit: the top one that is true wins.
+          const list = holdsOf(d, item.id)
+          if (!list.length) return null
+          return <>
+            <div style={gap} title="Conditions wired into this thing's states. Each holds its state lit while it is true. When several are true the top one wins: drag to change the order">LIT WHILE (TOP WINS)</div>
+            {list.map(w => <div key={w.id} data-sp-hold={w.id} className="vb-sp-row" style={{ ...row, cursor: 'grab', touchAction: 'none' }}
+              onPointerDown={e => {
+                const from = w.id, x0 = e.clientX, y0 = e.clientY
+                let moved = false
+                const move = (ev: PointerEvent) => { if (Math.hypot(ev.clientX - x0, ev.clientY - y0) > 4) moved = true }
+                const up = (ev: PointerEvent) => {
+                  window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up)
+                  const over = (document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null)?.closest('[data-sp-hold]') as HTMLElement | null
+                  if (moved && over && over.dataset.spHold !== from) orderHold(id, from, over.dataset.spHold!)
+                  else if (!moved) setSel([from])
+                }
+                window.addEventListener('pointermove', move); window.addEventListener('pointerup', up)
+              }}>{wireLine(w)}</div>)}
+          </>
+        })()}
       </>}
       {item.kind === 'event' && <>
         <div style={gap}>RUN</div>
@@ -645,11 +669,11 @@ const Bar: React.FC<{ id: string; d: StateSpaceData; sel: string[]; setSel: (s: 
     </>
   } else if (wire) {
     const k = wireKind(d, wire)
-    head = k === 'change' ? 'CHANGE' : k === 'link' ? 'LINE' : k === 'cond' ? 'CONDITION' : 'WIRE'
-    const sig = k === 'signal' || k === 'cond'
+    head = k === 'change' ? 'CHANGE' : k === 'link' ? 'LINE' : k === 'cond' || k === 'hold' ? 'CONDITION' : 'WIRE'
+    const sig = k === 'signal' || k === 'cond' || k === 'hold'
     const a = endOf(d, wire.a, wire.ap), b = wire.bp === 'knob' ? undefined : endOf(d, wire.b, wire.bp)
     const lvl = sig && isLevel(a)
-    const then = k === 'cond' ? (b?.kind === 'event' ? 'THIS EVENT CAN GO THROUGH' : b?.kind === 'fact' ? (wire.bp === 'a' ? 'IS THE CARD LOOKED FOR' : 'IS WHAT IT IS LOOKED FOR IN') : b?.kind === 'path' ? (wire.bp === 'time' ? 'WHAT RIDES THIS FOLLOWS IT' : wire.bp === 'take' ? "THIS TAKES ITS SET'S RIDERS" : 'WHAT RIDES THIS STANDS THERE') : b?.kind === 'act' ? 'THIS ACTS' : 'COUNTS TOWARDS')
+    const then = k === 'hold' ? 'THIS IS LIT, FOR AS LONG AS IT IS' : k === 'cond' ? (b?.kind === 'event' ? 'THIS EVENT CAN GO THROUGH' : b?.kind === 'fact' ? (wire.bp === 'a' ? 'IS THE CARD LOOKED FOR' : 'IS WHAT IT IS LOOKED FOR IN') : b?.kind === 'path' ? (wire.bp === 'time' ? 'WHAT RIDES THIS FOLLOWS IT' : wire.bp === 'take' ? "THIS TAKES ITS SET'S RIDERS" : 'WHAT RIDES THIS STANDS THERE') : b?.kind === 'act' ? 'THIS ACTS' : 'COUNTS TOWARDS')
       : wire.bp === 'knob' ? 'THIS CHANGE IS MADE' : b?.kind === 'event' ? 'THIS EVENT FIRES' : b?.kind === 'value' ? 'THIS VALUE CHANGES' : b?.kind === 'wait' ? 'THIS WAIT BEGINS' : b?.kind === 'pick' ? 'THIS PICKS ONE' : b?.kind === 'choice' ? 'THIS ASKS' : b?.kind === 'path' ? 'WHAT RIDES THIS SETS OFF' : 'THIS IS LIT'
     body = <>
       {!sig && <>
