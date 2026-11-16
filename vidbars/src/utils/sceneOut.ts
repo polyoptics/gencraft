@@ -112,7 +112,9 @@ async function writeCopy(held: string, name: string, fileName: string | undefine
   }
 }
 
-function copyOf(held: string, name: string, fileName: string | undefined): Promise<string | null> {
+/** The url of a copy on disk (in the Drag Cache) of media kept inside the
+ *  project; null when it cannot be written. */
+export function copyOf(held: string, name: string, fileName: string | undefined): Promise<string | null> {
   const known = copies.get(held)
   if (known && Date.now() - known.at < COPY_TTL_MS) return known.url
   const url = writeCopy(held, name, fileName)

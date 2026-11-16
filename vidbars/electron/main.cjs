@@ -386,6 +386,51 @@ function registerBridge() {
     try { return { path: await require('./sketchWorker.cjs').bakeEncode(bake, r.id, r.start, r.count, file, gif) } } catch (err) { return { error: String(err.message || err) } }
   })
 
+  // A Rough Cut's shots as one movie (utils/roughCutMovie): the page names
+  // each part by its STORED url (main finds the file), where it starts and
+  // how long it runs, then the movie only by the id handed back. The file is
+  // Videos\VidBars Movies\<name> <stamp>.mp4, never a path the page chose.
+  const MOVING_FILE = /\.(mp4|webm|mov|m4v|mkv|ogv)$/i
+  const STILL_FILE = /\.(png|jpe?g|jfif|webp|gif|avif|bmp|tiff?)$/i
+  const movieId = m => typeof m === 'string' && /^[0-9a-f]{16}$/.test(m)
+  ipcMain.handle('vb:cut-movie-open', async (e, parts) => {
+    if (!fromApp(e) || !Array.isArray(parts) || !parts.length || parts.length > 2000) return { error: 'Not allowed' }
+    const found = []
+    for (let i = 0; i < parts.length; i++) {
+      const p = parts[i]
+      const still = !!(p && p.still === true)
+      const file = p && realPath(mediaPath(p.url))
+      if (!file || !isFile(file) || !(still ? STILL_FILE : MOVING_FILE).test(file)) return { error: `shot ${i + 1} is not a ${still ? 'picture' : 'video'} file on this computer` }
+      if (!Number.isFinite(p.in) || p.in < 0 || !Number.isFinite(p.len) || p.len < 0.03 || p.len > 6 * 3600) return { error: 'Not allowed' }
+      found.push({ file, still, in: still ? 0 : p.in, len: p.len })
+    }
+    try { return await require('./cutMovie.cjs').open(found) } catch (err) { return { error: String(err.message || err) } }
+  })
+  ipcMain.handle('vb:cut-movie-part', async (e, id, i) => {
+    if (!fromApp(e) || !movieId(id) || !Number.isInteger(i) || i < 0) return { error: 'Not allowed' }
+    try { await require('./cutMovie.cjs').part(id, i); return {} } catch (err) { return { error: String(err.message || err) } }
+  })
+  ipcMain.handle('vb:cut-movie-drop', (e, id) => { if (fromApp(e) && movieId(id)) require('./cutMovie.cjs').drop(id) })
+  ipcMain.handle('vb:cut-movie-close', async (e, id, name) => {
+    if (!fromApp(e) || !movieId(id)) return { error: 'Not allowed' }
+    const base = [app.getPath('videos'), path.join(app.getPath('userData'), 'Saved Movies')].find(b => !isUnc(b))
+    if (!base) { require('./cutMovie.cjs').drop(id); return { error: 'Videos is on a network share, which VidBars cannot read files back from' } }
+    const dir = path.join(base, 'VidBars Movies')
+    let safe = Array.from(String(name || '').toWellFormed().replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_'))
+      .slice(0, 80).join('').replace(/^[.\s]+|[.\s]+$/g, '') || 'movie'
+    if (safe.includes('.') && RESERVED_STEM.test(safe.split('.')[0].trimEnd())) safe = '_' + safe
+    const d = new Date()
+    const pad = n => String(n).padStart(2, '0')
+    const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
+    let file = null
+    for (let n = 1; n <= 99 && !file; n++) {
+      const f = path.join(dir, `${safe} ${stamp}${n > 1 ? ` (${n})` : ''}.mp4`)
+      if (!fs.existsSync(f)) file = f
+    }
+    if (!file) { require('./cutMovie.cjs').drop(id); return { error: 'Too many files of this name saved this second' } }
+    try { return { path: await require('./cutMovie.cjs').close(id, file) } } catch (err) { return { error: String(err.message || err) } }
+  })
+
   // The Film Look panel: the look mixer's server. The page only ever asks
   // for it to be up; the program and its folder are fixed in filmMixer.cjs.
   ipcMain.handle('vb:mixer-status', (e) => (fromApp(e) ? require('./filmMixer.cjs').status() : null))

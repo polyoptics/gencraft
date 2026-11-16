@@ -92,6 +92,14 @@ contextBridge.exposeInMainWorld('vidbarsDesktop', {
   sketchBakeDrop: (bake) => ipcRenderer.invoke('vb:sketch-bake-drop', bake),
   sketchBakeEncode: (bake, c, name, opts) => ipcRenderer.invoke('vb:sketch-bake-encode', bake, c, name, opts),
 
+  /** A run of shots as one MP4 in Videos\\VidBars Movies: open it with its
+   *  parts ([{ url, still, in, len }], stored urls), make each part, then
+   *  close it under a name. Resolves { id, w, h, fps }, {}, { path }; or { error }. */
+  cutMovieOpen: (parts) => ipcRenderer.invoke('vb:cut-movie-open', parts),
+  cutMoviePart: (id, i) => ipcRenderer.invoke('vb:cut-movie-part', id, i),
+  cutMovieClose: (id, name) => ipcRenderer.invoke('vb:cut-movie-close', id, name),
+  cutMovieDrop: (id) => ipcRenderer.invoke('vb:cut-movie-drop', id),
+
   /** The Film Look panel: is the look mixer's server up, and its address. */
   mixerStatus: () => ipcRenderer.invoke('vb:mixer-status'),
 

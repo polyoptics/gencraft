@@ -14,6 +14,7 @@ import { openRoughCutViewer, playRoughCut, RoughCutScreen } from './RoughCutScre
 import { findCuts } from '../../utils/shotDetect'
 import { clipOutMedia, deckOfPicks, shotFrameTime, togglePickAt } from '../../utils/roughCutPicks'
 import { useClipFrame } from '../../utils/clipFrames'
+import { movieOfPicks } from '../../utils/roughCutMovie'
 import {
   appendCards, splitClipAt, FILM_FPS, clipAt, clipLength, clipRow, clipStart, clipEnd, cutLength, MIN_CLIP, placed, setRoughCut, type RoughClip,
 } from '../../utils/roughCut'
@@ -185,6 +186,24 @@ export function RoughCutBody({ id, node, bodyW, bodyH }: { id: string; node: Fre
     const n = deckOfPicks(id)
     setShotNote(n ? `${n} picked ${n === 1 ? 'shot' : 'shots'} out as a deck, below.` : 'Nothing picked yet: press P on the shots you like.')
     window.setTimeout(() => { if (!gone.current) setShotNote(null) }, 4000)
+  }
+
+  /** The picked shots being made into one movie: how it is going, and whether it was told to stop. */
+  const [movie, setMovie] = useState<string | null>(null)
+  const movieStop = useRef(false)
+  const outputMovie = async () => {
+    // Pressed while one is being made: stop it.
+    if (movie != null) { movieStop.current = true; return }
+    movieStop.current = false
+    setMovie('')
+    const r = await movieOfPicks(id, () => movieStop.current || gone.current, s => { if (!gone.current) setMovie(s) })
+    if (gone.current) return
+    setMovie(null)
+    setShotNote('none' in r ? 'Nothing picked yet: press P on the shots you like.'
+      : 'stopped' in r ? 'Movie stopped.'
+      : 'error' in r ? `The movie was not made: ${r.error}`
+      : `${r.shots} picked ${r.shots === 1 ? 'shot' : 'shots'} out as one movie, on a new card beside this (the file is in Videos, VidBars Movies).`)
+    window.setTimeout(() => { if (!gone.current) setShotNote(null) }, 'error' in r ? 12000 : 6000)
   }
 
   // ← / → step one frame, S splits, on the Rough Cut under the pointer or last clicked.
@@ -435,15 +454,18 @@ export function RoughCutBody({ id, node, bodyW, bodyH }: { id: string; node: Fre
                   onClick={() => pickRef.current()} title="Pick the shot at the playhead, or unpick it (P). Delete drops it.">Pick</button>
                 <button data-rough-deck-picks="" style={btn} onClick={outputPicks}
                   title="Lay the picked shots out below as a deck of cards, in the order they play">Deck of picks</button>
+                <button data-rough-movie-picks="" style={{ ...btn, ...(movie != null ? { background: 'rgba(111,179,255,0.35)', border: '1px solid rgba(111,179,255,0.8)' } : null) }}
+                  onClick={() => void outputMovie()}
+                  title="Join the picked shots, in the order they play, into one MP4 movie on a new card beside this. Press again to stop.">Movie of picks</button>
                 <span style={{ color: 'rgba(255,255,255,0.55)', fontVariantNumeric: 'tabular-nums', marginLeft: 4, whiteSpace: 'nowrap' }}>
                   {clips.filter(c => c.pick).length} picked
                 </span>
               </Group>
             </div>
             {/* The shot at the playhead */}
-            {(scan || shotNote) && (
-              <div data-rough-shot-note="" style={{ color: '#9fcbff', fontWeight: 600 }}>
-                {scan ? `Finding shots… ${Math.round(scan.f * 100)}%` : shotNote}
+            {(scan || movie != null || shotNote) && (
+              <div data-rough-shot-note="" style={{ color: '#9fcbff', fontWeight: 600, overflowWrap: 'anywhere' }}>
+                {scan ? `Finding shots… ${Math.round(scan.f * 100)}%` : movie != null ? movie || 'Making the movie…' : shotNote}
               </div>
             )}
             {at && (

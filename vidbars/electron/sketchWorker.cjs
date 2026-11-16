@@ -315,7 +315,7 @@ function stop() {
   sam3.stop()
 }
 
-module.exports = { run, available, sam3Available, stop, clipInfo, clipChunk, bakeFrame, bakeEncode, bakeDrop, CHUNK }
+module.exports = { run, available, sam3Available, stop, clipInfo, clipChunk, bakeFrame, bakeEncode, bakeDrop, CHUNK, bin }
 
 if (require.main === module) {
   // node electron/sketchWorker.cjs look:cel pic.png ...  runs one of the drawing looks
