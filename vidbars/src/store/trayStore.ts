@@ -13,6 +13,9 @@ export interface Tray {
   h: number
   /** Its width, canvas units; none = as wide as its card. */
   w?: number
+  /** A scene card's tray is tucked away behind its "..." until this is on
+   *  (Brian 2026-11-16); its size is kept meanwhile. Other cards: unused. */
+  out?: boolean
   /** How many cards its browser lists just now (it says so while out). */
   rows?: number
   query: ListQuery
@@ -24,6 +27,7 @@ interface TrayStore {
   trays: Record<string, Tray>
   setSize: (cardId: string, size: { h?: number; w?: number }) => void
   setRows: (cardId: string, rows: number) => void
+  setOut: (cardId: string, out: boolean, h?: number) => void
   patchQuery: (cardId: string, patch: Partial<ListQuery>) => void
 }
 
@@ -32,6 +36,10 @@ export const useTrayStore = create<TrayStore>(set => ({
   setSize: (cardId, size) => set(s => {
     const t = s.trays[cardId] ?? { h: 0, query: TRAY_QUERY }
     return { trays: { ...s.trays, [cardId]: { ...t, ...size } } }
+  }),
+  setOut: (cardId, out, h) => set(s => {
+    const t = s.trays[cardId] ?? { h: 0, query: TRAY_QUERY }
+    return { trays: { ...s.trays, [cardId]: { ...t, out, ...(h !== undefined ? { h } : {}) } } }
   }),
   setRows: (cardId, rows) => set(s => {
     const t = s.trays[cardId]

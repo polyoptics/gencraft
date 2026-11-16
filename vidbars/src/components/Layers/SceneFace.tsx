@@ -46,6 +46,8 @@ import { cardChanged, contentOf, copyFrom, migrateScene, refreshDivision, shownC
 import { bakeDivision } from '../../utils/sceneBake'
 import { faceLayout, growStrip, GAP, NAT_H, NAT_W, PAD } from '../../utils/sceneGrow'
 import { cutScene, joinNeighbour, joinSceneCards, seamLine, splitSceneCard } from '../../utils/sceneSplit'
+import { toggleSceneTray, useTrayCount } from '../Linking/CardTray'
+import { useTrayStore } from '../../store/trayStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { ColorPickerPopup } from '../Bar/ColorPickerPopup'
 import { DEFAULT_BODY_STYLE, DEFAULT_HEADER_STYLE } from '../../store/freeNodeStore'
@@ -1037,15 +1039,6 @@ const EdgeStrip: React.FC<{ side: 'top' | 'bottom' | 'left' | 'right'; W: number
           alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', boxShadow: `0 ${ctx.u * 0.08}px ${ctx.u * 0.25}px rgba(0,0,0,0.45)`,
         }}><Glyph ctx={ctx} d={PLUS} /></div>
       </>)}
-      {/* Another scene card lies against this edge: make the two one. */}
-      {over && !ctx.dragging && ctx.layer && ctx.neighbour(side) && ReactDOM.createPortal(
-        <Knob ctx={ctx} tool="join-cards" title="Join cards: the two scene cards become one"
-          at={across
-            ? { left: W / 2 + ctx.u * 1.1, top: (side === 'top' ? 0 : H - band - off) + (band - ctx.u) / 2 }
-            : { left: (side === 'left' ? 0 : W - band - off) + (band - ctx.u) / 2, top: H / 2 + ctx.u * 1.1 }}
-          onClick={() => ctx.join(side)}>
-          <Glyph ctx={ctx} d={JOIN(!across)} />
-        </Knob>, ctx.layer)}
     </div>
   )
 }
@@ -1258,9 +1251,15 @@ export const SceneFace: React.FC<{
   const linking = useLinkDragStore(s => s.active && s.source?.kind === 'group' && s.source.id !== group.id)
   const zoom = useCanvasStore(st => st.zoom) || 1
   const [picked, setPicked] = useState<string | null>(null)
+  // Its tray (the cards linked with it, components/Linking/CardTray): how
+  // many it lists, and whether its "..." has brought it out.
+  const trayN = useTrayCount(group.id)
+  const trayOut = useTrayStore(st => !!st.trays[group.id]?.out)
   const [renaming, setRenaming] = useState<string | null>(null)
   const [noting, setNoting] = useState<string | null>(null)
   const [hoveredDiv, setHoveredDiv] = useState<string | null>(null)
+  // The pointer is somewhere on the face: its Join cards knobs show.
+  const [faceOver, setFaceOver] = useState(false)
   const [layer, setLayer] = useState<HTMLDivElement | null>(null)
   const [caps, setCaps] = useState<HTMLElement | null>(null)
   // Where the face's corner lies from it (the card's border, whatever it
@@ -1534,7 +1533,8 @@ export const SceneFace: React.FC<{
     <div
       ref={rootRef}
       data-scene-face={group.id}
-      onPointerLeave={() => setHoveredDiv(null)}
+      onPointerEnter={() => setFaceOver(true)}
+      onPointerLeave={() => { setHoveredDiv(null); setFaceOver(false) }}
       style={{ position: 'absolute', inset: 0, overflow: 'hidden', borderRadius: '0 0 12px 12px' }}
     >
       <div style={{
@@ -1569,6 +1569,46 @@ export const SceneFace: React.FC<{
           }} />
         })()}
         <div ref={setLayer} data-scene-knobs style={{ position: 'absolute', left: 0, top: 0, width: W, height: H, zIndex: 25, pointerEvents: 'none' }} />
+        {/* Another scene card lies against an edge: a Join cards knob in the
+            middle of that edge (beside the edge's "+"), while the pointer is
+            anywhere on this card. */}
+        {faceOver && !linking && !dragging && !drag && (['top', 'bottom', 'left', 'right'] as const).map(side => {
+          if (!joinNeighbour(group.id, side)) return null
+          const across = side === 'top' || side === 'bottom'
+          const band = edgeBand(s), off = side === 'bottom' || side === 'right' ? edgeOff(s) : 0
+          return (
+            <div key={side} style={{ position: 'absolute', left: 0, top: 0, zIndex: 29 }}>
+              <Knob ctx={ctx} tool="join-cards" title="Join cards: this scene card and the one against this edge become one"
+                at={across
+                  ? { left: W / 2 + ctx.u * 1.1, top: (side === 'top' ? 0 : H - band - off) + (band - ctx.u) / 2 }
+                  : { left: (side === 'left' ? 0 : W - band - off) + (band - ctx.u) / 2, top: H / 2 + ctx.u * 1.1 }}
+                onClick={() => ctx.join(side)}>
+                <Glyph ctx={ctx} d={JOIN(!across)} />
+              </Knob>
+            </div>
+          )
+        })}
+        {/* Its tray's "...", at the bottom centre, inside the card so nothing
+            sticks out under it (cards stack close), just over the card's
+            own resize bar. Over everything else along the bottom edge. Lit
+            while the tray is out. */}
+        {trayN > 0 && !linking && (() => {
+          const u = TOOL_PX / s, bw = u * 1.7, bh = u * 0.62
+          return (
+            <button type="button" data-scene-tray={trayOut ? 'out' : 'tucked'}
+              title={`${trayN} card${trayN === 1 ? '' : 's'} linked with this scene card: show their tray, or tuck it away`}
+              onPointerDown={stopPress} onDoubleClick={e => e.stopPropagation()}
+              onClick={e => { e.stopPropagation(); toggleSceneTray(group.id, zoom, width - 16) }}
+              style={{
+                position: 'absolute', left: (W - bw) / 2, top: H - bh - edgeOff(s), width: bw, height: bh, padding: 0, zIndex: 30, pointerEvents: 'auto', cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', boxSizing: 'border-box', borderRadius: `${bh * 0.5}px ${bh * 0.5}px 0 0`,
+                background: trayOut ? '#ffd666' : 'rgba(14,16,24,0.82)', color: trayOut ? '#111' : '#fff',
+                border: `${u * 0.06}px solid rgba(255,255,255,${trayOut ? 1 : 0.7})`, borderBottom: 'none',
+              }}>
+              <svg width={bw * 0.62} height={bh * 0.5} viewBox="0 0 14 4"><circle cx="2" cy="2" r="1.5" fill="currentColor" /><circle cx="7" cy="2" r="1.5" fill="currentColor" /><circle cx="12" cy="2" r="1.5" fill="currentColor" /></svg>
+            </button>
+          )
+        })()}
       </div>
       {menu && menuItems && ReactDOM.createPortal(
         <MoreMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => {

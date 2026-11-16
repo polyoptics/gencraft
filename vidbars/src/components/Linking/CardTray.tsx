@@ -29,6 +29,11 @@
 //   - CardTray, the cards: the browser's slots alone. Its own header, side
 //     rails and bottom bar are left out of view; the sides are 2px.
 // The lip is in the chip rail's wrapper, so in 3D it rides with the card.
+// A SCENE card's tray is tucked away (Brian 2026-11-16: "there's no way to
+// make it disappear. And then, because it sticks out, the cards can't touch
+// each other as closely ... tucked away under a '...' at the bottom of the
+// scene card"): nothing of it shows until the "..." at the bottom centre of
+// its face (SceneFace) brings it out, at the size it was left.
 // How a tray is left is kept for the session (trayStore), not saved.
 
 import React from 'react'
@@ -65,6 +70,26 @@ const MODES = [
 /** How many cards card `id`'s tray lists. */
 export function useTrayCount(id: string): number {
   return useBoardsStore(s => trayIds(s.groups.find(g => g.id === id), s.groups).length)
+}
+
+/** A scene card's tray, not brought out by its "...": nothing of it shows. */
+export function useTrayTucked(id: string): boolean {
+  const scene = useBoardsStore(s => { const g = s.groups.find(x => x.id === id); return !!g?.scene && g.cardType === 'scene' })
+  const out = useTrayStore(s => !!s.trays[id]?.out)
+  return scene && !out
+}
+
+/** A scene card's "...": its tray out, or tucked away again. First out, it
+ *  opens as a click on its lip would. `lipWidthPx`: about its lip's width. */
+export function toggleSceneTray(cardId: string, zoom: number, lipWidthPx: number): void {
+  const ts = useTrayStore.getState()
+  const t = ts.trays[cardId]
+  if (t?.out) { ts.setOut(cardId, false); return }
+  if (t && t.h > 0) { ts.setOut(cardId, true); return }
+  const bs = useBoardsStore.getState()
+  const n = trayIds(bs.groups.find(g => g.id === cardId), bs.groups).length
+  const wPx = trayWidthPx(t?.w, zoom, lipWidthPx)
+  ts.setOut(cardId, true, Math.min(OPEN_PX, trayMaxPx(n, t?.query.displayMode ?? 'auto', wPx)) / zoom)
 }
 
 /** The tray's width on screen: as it was sized, else its lip's. */
@@ -137,7 +162,8 @@ export const TrayLip: React.FC<{ cardId: string; left: number; top: number; scal
   const mode = useTrayStore(s => s.trays[cardId]?.query.displayMode ?? 'auto')
   const listed = useTrayStore(s => s.trays[cardId]?.rows)
   const { zoom } = useCardView()
-  if (!n) return null
+  const tucked = useTrayTucked(cardId)
+  if (!n || tucked) return null
   const open = h > 0
   const hPx = h * zoom
   const lipW = Math.max(30, width - 2 * INSET)
@@ -241,7 +267,8 @@ export const TrayLip: React.FC<{ cardId: string; left: number; top: number; scal
 export function useTrayReach(id: string, zoom: number, scale: number): number {
   const h = useTrayStore(s => s.trays[id]?.h ?? 0)
   const n = useTrayCount(id)
-  return n ? TRAY_LIP * scale + (h > 0 ? h * zoom + 4 : 0) : 0
+  const tucked = useTrayTucked(id)
+  return n && !tucked ? TRAY_LIP * scale + (h > 0 ? h * zoom + 4 : 0) : 0
 }
 
 /** The tray's cards: the browser's slots, from the card's bottom edge down
@@ -251,7 +278,8 @@ export const CardTray: React.FC<{ cardId: string; left: number; top: number; lip
   const tray = useTrayStore(s => s.trays[cardId])
   const n = useTrayCount(cardId)
   const { pan, zoom } = useCardView()
-  if (!tray || tray.h <= 0 || !n) return null
+  const tucked = useTrayTucked(cardId)
+  if (!tray || tray.h <= 0 || !n || tucked) return null
   const hPx = tray.h * zoom
   const wPx = trayWidthPx(tray.w, zoom, lipWidth)
   // The browser is laid out wider and longer than the tray, by its side

@@ -5577,7 +5577,11 @@ const DEFAULT_PAD: TextPad = { t: 4, r: 4, b: 10, l: 4 }
 
 /** A face's four text margins (a scene division's, FaceBind.pad): a line
  *  on each side, dragged like the split line, and a link switch (lit while
- *  on) that moves all four together. Shown while editing and pointed at. */
+ *  on) that moves all four together. Shown while editing and pointed at.
+ *  Each line is a thin catch (Brian 2026-11-16: it "catches my mouse a lot
+ *  ... maybe I'm trying to resize the cell, or ... click a plus ... the
+ *  margin should be pretty low on the mouse-catching priority"): half what
+ *  it was, so a seam, a "+" or the tray's "..." beside it is what is hit. */
 const TextMargins: React.FC<{ pad: TextPad; visible: boolean; onChange: (p: TextPad) => void }> = ({ pad, visible, onChange }) => {
   const [dragging, setDragging] = useState<'t' | 'r' | 'b' | 'l' | null>(null)
   const [over, setOver] = useState<'t' | 'r' | 'b' | 'l' | null>(null)
@@ -5609,7 +5613,7 @@ const TextMargins: React.FC<{ pad: TextPad; visible: boolean; onChange: (p: Text
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
   }
-  const GRAB = 8
+  const GRAB = 4
   const line = (side: 't' | 'r' | 'b' | 'l') => {
     const across = side === 't' || side === 'b'
     const hot = dragging === side || (!!pad.link && !!dragging) || over === side

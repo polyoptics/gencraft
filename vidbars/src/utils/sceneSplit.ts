@@ -125,7 +125,10 @@ function sizeCard(id: string, face: Face, fit: number, zoom: number): void {
 const CARD_GAP = 12
 /** How near two scene cards lie to be joined (canvas units), and how much
  *  of the shorter one's side must face the other. */
-const JOIN_REACH = 22, JOIN_FACING = 0.5
+const JOIN_FACING = 0.5
+/** ...at least this far, and as far as this many screen px (a tray's lip or
+ *  a little air between them is still "against"). */
+const JOIN_REACH = 40, JOIN_REACH_PX = 45
 
 /** Scene card `sceneId` cut along a line of its face (seamLine): what is
  *  past the line becomes a new scene card set against it, on its right
@@ -183,7 +186,7 @@ export function joinNeighbour(sceneId: string, side: 'top' | 'bottom' | 'left' |
     const o = cardVisualRect(g, bs.boards, zoom)?.rect
     if (!o) continue
     const gap = side === 'right' ? o.left - r.right : side === 'left' ? r.left - o.right : side === 'bottom' ? o.top - r.bottom : r.top - o.bottom
-    if (gap < -2 || gap > JOIN_REACH) continue
+    if (gap < -2 || gap > Math.max(JOIN_REACH, JOIN_REACH_PX / zoom)) continue
     const facing = across
       ? Math.min(r.bottom, o.bottom) - Math.max(r.top, o.top)
       : Math.min(r.right, o.right) - Math.max(r.left, o.left)

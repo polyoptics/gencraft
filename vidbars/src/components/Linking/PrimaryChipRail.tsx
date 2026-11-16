@@ -20,7 +20,7 @@ import { cardTitle } from '../../utils/faceStyle'
 import { CARD_TYPES, cardTypeOf, type CardType } from '../../utils/cardTypes'
 import { holderIds, tucks } from '../../utils/tucked'
 import { unlinkFromHolder } from '../../utils/sceneContent'
-import { TrayLip } from './CardTray'
+import { TrayLip, useTrayTucked } from './CardTray'
 import { useTrayStore } from '../../store/trayStore'
 
 interface Props {
@@ -63,7 +63,8 @@ export const PrimaryChipRail: React.FC<Props> = ({ groupId, hostRect, path, scal
   const top = hostRect.top + hostRect.height + RAIL_Y_OFFSET * scale
 
   // Its tray out: the chips ride over the tray's top, as over the card's edge.
-  const trayOut = useTrayStore(s => path.length === 1 && (s.trays[groupId]?.h ?? 0) > 0)
+  const trayTucked = useTrayTucked(groupId)
+  const trayOut = useTrayStore(s => path.length === 1 && (s.trays[groupId]?.h ?? 0) > 0) && !trayTucked
 
   if (!host) return null
 
