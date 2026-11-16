@@ -88,7 +88,7 @@ import { bakeStoryline, chartArea, chartOutOf, chartSpotBeside, eraseChart, matc
 import { cardOrigins } from '../Canvas/StorylineLayer'
 import { rowOf, setRows, openDeckOf } from '../../utils/primaryCard'
 import { gatherCount, gatherIntoScene } from '../../utils/sceneGather'
-import { makeGif, cardGifShots, deckGifShots } from '../../utils/makeGif'
+import { makeGif, makeDeckMovie, cardGifShots, deckGifShots } from '../../utils/makeGif'
 import { wallRoom } from '../../utils/wallRoom'
 import { area3dOutOf, area3dSpot, toggleArea3d, foldArea3dAndDeck, showArea3dMoving } from '../../utils/area3dCard'
 import { sceneOf, dataKey, cardHoldsModel } from '../../utils/area3dScene'
@@ -466,6 +466,11 @@ const CardContextMenu: React.FC<{
     if (all.length > 1) menuItems.push({ label: 'Make ping-pong GIF: whole deck', icon: '🎞', action: () => {
       onClose()
       void makeGif(all, group.name || 'Deck', deckIds, true)
+    }})
+    // One movie of every shot in the deck, in order (Brian 2026-11-16).
+    if (all.length > 1) menuItems.push({ label: 'Make movie (MP4): whole deck', icon: '🎞', action: () => {
+      onClose()
+      void makeDeckMovie(all, group.name || 'Deck', deckIds)
     }})
   }
 

@@ -26,6 +26,7 @@ import { putMedia } from './mediaStore'
 import { makeMediaRef } from './mediaRef'
 import { diskFileUrl } from './diskUrl'
 import { GifWriter } from './gifEncode'
+import { makeMovie } from './makeMovie'
 import { findFreeSlotRightOf } from '../components/Viewport3D/ImageStudio'
 
 const MAX_SIDE = 480
@@ -235,4 +236,16 @@ export async function makeGif(shots: MediaItem[], name: string, besideIds: strin
   } finally {
     for (const s of opened) if (s.video) { s.video.el.removeAttribute('src'); s.video.el.load() }
   }
+}
+
+/** Every shot of a deck, in order, as one MP4 movie on a new card in the
+ *  first free spot right of cards `besideIds` (utils/makeMovie). One at a
+ *  time, with the GIFs: they share the notice on screen. */
+export async function makeDeckMovie(shots: MediaItem[], name: string, besideIds: string[]): Promise<void> {
+  if (useGifJob.getState().busy || shots.length === 0) return
+  say('Making the movie…', true)
+  const r = await makeMovie(shots, name, () => boxOf(besideIds), () => false, s => say(s, true))
+  if ('error' in r) say(`Movie not made: ${r.error}`, false, 8000)
+  else if ('shots' in r) say(`Movie made: ${r.shots} shots, on a new card beside the deck.`, false, 5000)
+  else say(null, false)
 }

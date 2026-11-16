@@ -4,8 +4,7 @@
 // where it starts in that file and how long it runs; a still picture is
 // held for its length), asks for each part to be made, then closes it into
 // one file. Every part is drawn to the same size and frame rate — those of
-// the first moving part — fitted inside with black around it, as the Rough
-// Cut's own screen shows it. Sound is kept where a part has it and silent
+// the first moving part — fitted inside with black around it. Sound is kept where a part has it and silent
 // where it has none; a movie with no sound anywhere has no sound track.
 //
 // Parts are made one at a time into a folder of their own (so the page can
@@ -42,7 +41,7 @@ async function probe(file) {
   const known = probed.get(key)
   if (known) return known
   const j = JSON.parse(await exec('ffprobe', ['-v', 'error', '-show_entries',
-    'stream=codec_type,width,height,r_frame_rate,avg_frame_rate:stream_side_data=rotation', '-of', 'json', file]))
+    'stream=codec_type,width,height,r_frame_rate,avg_frame_rate:stream_side_data=rotation:format=duration', '-of', 'json', file]))
   const v = (j.streams || []).find(s => s.codec_type === 'video' && s.width && s.height)
   if (!v) throw new Error('no picture in the file')
   const rate = r => { const [a, b] = String(r || '0/1').split('/').map(Number); return b ? a / b : 0 }
@@ -52,6 +51,7 @@ async function probe(file) {
     w: turned ? v.height : v.width, h: turned ? v.width : v.height,
     fps: rate(v.avg_frame_rate) || rate(v.r_frame_rate) || 0,
     audio: (j.streams || []).some(s => s.codec_type === 'audio'),
+    length: Number(j.format?.duration) || 0,
   }
   probed.set(key, info)
   return info
@@ -68,7 +68,7 @@ function prune() {
 }
 
 /** Open a movie of `parts` ([{ file, still, in, len }], in order): its id,
- *  size and frame rate. */
+ *  size and frame rate, and how long it will run. */
 async function open(parts) {
   prune()
   const infos = []
@@ -81,16 +81,20 @@ async function open(parts) {
   const k = Math.min(1, MAX_SIDE / Math.max(shape.w, shape.h))
   const even = n => Math.max(2, 2 * Math.round(n * k / 2))
   const fps = lead < 0 ? 30 : Math.max(1, Math.min(60, shape.fps || 30))
+  // A part with no length of its own runs to the end of its file.
+  const lens = parts.map((p, i) => p.len || Math.max(0, infos[i].length - p.in))
+  const short = lens.findIndex(l => !(l >= 0.03))
+  if (short >= 0) throw new Error(`shot ${short + 1}: nothing of it is left to play`)
   const id = crypto.randomBytes(8).toString('hex')
   const dir = path.join(HOME, id)
   fs.mkdirSync(dir, { recursive: true })
   jobs.set(id, {
     dir, w: even(shape.w), h: even(shape.h), fps, made: new Set(), child: null,
-    parts: parts.map((p, i) => ({ ...p, audio: !p.still && infos[i].audio })),
+    parts: parts.map((p, i) => ({ ...p, len: lens[i], audio: !p.still && infos[i].audio })),
     sound: parts.some((p, i) => !p.still && infos[i].audio),
   })
   const job = jobs.get(id)
-  return { id, w: job.w, h: job.h, fps }
+  return { id, w: job.w, h: job.h, fps, length: lens.reduce((a, l) => a + l, 0) }
 }
 
 const partFile = (job, i) => path.join(job.dir, String(i).padStart(5, '0') + '.mkv')

@@ -386,7 +386,7 @@ function registerBridge() {
     try { return { path: await require('./sketchWorker.cjs').bakeEncode(bake, r.id, r.start, r.count, file, gif) } } catch (err) { return { error: String(err.message || err) } }
   })
 
-  // A Rough Cut's shots as one movie (utils/roughCutMovie): the page names
+  // A deck's shots as one movie (utils/makeMovie): the page names
   // each part by its STORED url (main finds the file), where it starts and
   // how long it runs, then the movie only by the id handed back. The file is
   // Videos\VidBars Movies\<name> <stamp>.mp4, never a path the page chose.
@@ -401,7 +401,9 @@ function registerBridge() {
       const still = !!(p && p.still === true)
       const file = p && realPath(mediaPath(p.url))
       if (!file || !isFile(file) || !(still ? STILL_FILE : MOVING_FILE).test(file)) return { error: `shot ${i + 1} is not a ${still ? 'picture' : 'video'} file on this computer` }
-      if (!Number.isFinite(p.in) || p.in < 0 || !Number.isFinite(p.len) || p.len < 0.03 || p.len > 6 * 3600) return { error: 'Not allowed' }
+      if (!Number.isFinite(p.in) || p.in < 0 || !Number.isFinite(p.len) || p.len > 6 * 3600) return { error: 'Not allowed' }
+      // (A movie's length 0: the rest of the file.)
+      if (p.len < 0.03 && (still || p.len !== 0)) return { error: 'Not allowed' }
       found.push({ file, still, in: still ? 0 : p.in, len: p.len })
     }
     try { return await require('./cutMovie.cjs').open(found) } catch (err) { return { error: String(err.message || err) } }

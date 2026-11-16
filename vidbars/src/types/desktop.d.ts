@@ -102,10 +102,11 @@ export interface VidbarsDesktop {
    *  with `gif`, a looping GIF instead (a main from before GIFs makes an MP4). */
   sketchBakeEncode?(bake: string, c: { id: string; start: number; count: number }, name: string, opts?: { gif?: boolean }): Promise<{ path: string } | { error: string }>
   /** A run of shots, end to end, as one MP4 in Videos\\VidBars Movies
-   *  (utils/roughCutMovie). Open it with its parts in order: each a stored
+   *  (utils/makeMovie). Open it with its parts in order: each a stored
    *  url of a file on disk, where it starts in that file and how long it
-   *  runs (seconds); `still`: a picture held for its length. */
-  cutMovieOpen?(parts: { url: string; still: boolean; in: number; len: number }[]): Promise<{ id: string; w: number; h: number; fps: number } | { error: string }>
+   *  runs (seconds; 0 for a movie: the rest of the file); `still`: a picture
+   *  held for its length. `length`: the whole movie's, seconds. */
+  cutMovieOpen?(parts: { url: string; still: boolean; in: number; len: number }[]): Promise<{ id: string; w: number; h: number; fps: number; length?: number } | { error: string }>
   /** Make part i of an open movie. */
   cutMoviePart?(id: string, i: number): Promise<{ error?: string }>
   /** Join the parts into the file, named `name` and stamped; never over another. */
