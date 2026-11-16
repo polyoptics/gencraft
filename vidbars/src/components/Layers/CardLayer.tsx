@@ -46,6 +46,7 @@ import { allChanges, toggleCardMark } from '../../utils/stateCard'
 import { fillTestCup } from '../../utils/stateTest'
 import { fillBlockout } from '../../utils/sceneBlockout'
 import { dropCardsInDivision, dropDeckInDivision } from '../../utils/sceneContent'
+import { SceneJoinSeams } from './SceneJoinSeams'
 import { useFxStore } from '../../store/fxStore'
 import { cardStripId } from '../../utils/fx/cardStrips'
 import { cardHitAt } from '../../utils/cardContent'
@@ -5475,6 +5476,9 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
         if (!rect) return null
         return <CardLinkingLayer key={g.id} group={g} rect={rect} />
       })}
+      {/* "Join", on the seam between scene cards lying against one another
+          (the canvas's own cards only, not a pinned card's showing). */}
+      {!onlySet && <SceneJoinSeams />}
     </div>
   )
 }

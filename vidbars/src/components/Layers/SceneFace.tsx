@@ -282,9 +282,8 @@ const PLUS = 'M5 1.5v7M1.5 5h7'
 const MORE = 'M2 5h0.01M5 5h0.01M8 5h0.01'
 const GRIP = 'M3.5 2.5h0.01M6.5 2.5h0.01M3.5 5h0.01M6.5 5h0.01M3.5 7.5h0.01M6.5 7.5h0.01'
 const CLEAR = 'M1.5 1.5h7v7h-7zM3.6 3.6l2.8 2.8M6.4 3.6L3.6 6.4'
-// Two cards drawn apart (split) and drawn as one (join); `row`: side by side.
+// Two cards drawn apart (split); `row`: side by side.
 const SPLIT = (row: boolean) => row ? 'M1 2h2.6v6H1zM6.4 2H9v6H6.4zM5 1v8' : 'M2 1h6v2.6H2zM2 6.4h6V9H2zM1 5h8'
-const JOIN = (row: boolean) => row ? 'M1 2h8v6H1zM3.2 5h3.6M4.4 3.8L3.2 5l1.2 1.2M5.6 3.8L6.8 5 5.6 6.2' : 'M2 1h6v8H2zM5 3.2v3.6M3.8 4.4L5 3.2l1.2 1.2M3.8 5.6L5 6.8l1.2-1.2'
 const FOLD = 'M2 3.5h6M2 6.5h6'
 
 /** The largest font (layout units) at which the longest word of `t` fits
@@ -1258,8 +1257,6 @@ export const SceneFace: React.FC<{
   const [renaming, setRenaming] = useState<string | null>(null)
   const [noting, setNoting] = useState<string | null>(null)
   const [hoveredDiv, setHoveredDiv] = useState<string | null>(null)
-  // The pointer is somewhere on the face: its Join cards knobs show.
-  const [faceOver, setFaceOver] = useState(false)
   const [layer, setLayer] = useState<HTMLDivElement | null>(null)
   const [caps, setCaps] = useState<HTMLElement | null>(null)
   // Where the face's corner lies from it (the card's border, whatever it
@@ -1533,8 +1530,7 @@ export const SceneFace: React.FC<{
     <div
       ref={rootRef}
       data-scene-face={group.id}
-      onPointerEnter={() => setFaceOver(true)}
-      onPointerLeave={() => { setHoveredDiv(null); setFaceOver(false) }}
+      onPointerLeave={() => setHoveredDiv(null)}
       style={{ position: 'absolute', inset: 0, overflow: 'hidden', borderRadius: '0 0 12px 12px' }}
     >
       <div style={{
@@ -1569,25 +1565,6 @@ export const SceneFace: React.FC<{
           }} />
         })()}
         <div ref={setLayer} data-scene-knobs style={{ position: 'absolute', left: 0, top: 0, width: W, height: H, zIndex: 25, pointerEvents: 'none' }} />
-        {/* Another scene card lies against an edge: a Join cards knob in the
-            middle of that edge (beside the edge's "+"), while the pointer is
-            anywhere on this card. */}
-        {faceOver && !linking && !dragging && !drag && (['top', 'bottom', 'left', 'right'] as const).map(side => {
-          if (!joinNeighbour(group.id, side)) return null
-          const across = side === 'top' || side === 'bottom'
-          const band = edgeBand(s), off = side === 'bottom' || side === 'right' ? edgeOff(s) : 0
-          return (
-            <div key={side} style={{ position: 'absolute', left: 0, top: 0, zIndex: 29 }}>
-              <Knob ctx={ctx} tool="join-cards" title="Join cards: this scene card and the one against this edge become one"
-                at={across
-                  ? { left: W / 2 + ctx.u * 1.1, top: (side === 'top' ? 0 : H - band - off) + (band - ctx.u) / 2 }
-                  : { left: (side === 'left' ? 0 : W - band - off) + (band - ctx.u) / 2, top: H / 2 + ctx.u * 1.1 }}
-                onClick={() => ctx.join(side)}>
-                <Glyph ctx={ctx} d={JOIN(!across)} />
-              </Knob>
-            </div>
-          )
-        })}
         {/* Its tray's "...", at the bottom centre, inside the card so nothing
             sticks out under it (cards stack close), just over the card's
             own resize bar. Over everything else along the bottom edge. Lit
