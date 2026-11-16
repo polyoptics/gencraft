@@ -37,7 +37,7 @@ export function faceLayout(width: number, height: number, zoom: number, fitK = 1
 }
 
 /** The fitK that keeps the scale `fit` on a face of this size. */
-const holdFit = (fit: number, width: number, height: number, zoom: number) => fit / organic(width, height, zoom)
+export const holdFit = (fit: number, width: number, height: number, zoom: number) => fit / organic(width, height, zoom)
 
 type Face = { width: number; height: number }
 

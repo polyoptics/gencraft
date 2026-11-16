@@ -45,6 +45,7 @@ import { openDivision } from '../../utils/sceneOpen'
 import { cardChanged, contentOf, copyFrom, migrateScene, refreshDivision, shownContent } from '../../utils/sceneContent'
 import { bakeDivision } from '../../utils/sceneBake'
 import { faceLayout, growStrip, GAP, NAT_H, NAT_W, PAD } from '../../utils/sceneGrow'
+import { cutScene, joinNeighbour, joinSceneCards, seamLine, splitSceneCard } from '../../utils/sceneSplit'
 import { useCanvasStore } from '../../store/canvasStore'
 import { ColorPickerPopup } from '../Bar/ColorPickerPopup'
 import { DEFAULT_BODY_STYLE, DEFAULT_HEADER_STYLE } from '../../store/freeNodeStore'
@@ -145,6 +146,14 @@ type Ctx = {
    *  on a division's grip that starts it. */
   lifted: Set<string> | null
   startMove: (leafId: string, e: React.PointerEvent) => void
+  /** The line between parts i and i+1 of a split runs straight through the
+   *  whole face: the card can be cut in two there (utils/sceneSplit). */
+  canSplit: (split: SceneDiv, i: number) => boolean
+  splitCard: (split: SceneDiv, i: number) => void
+  /** The scene card lying against this one on a side (to join with), and
+   *  the joining. */
+  neighbour: (side: 'top' | 'bottom' | 'left' | 'right') => string | null
+  join: (side: 'top' | 'bottom' | 'left' | 'right') => void
 }
 
 /** The outer edge bars (EdgeStrip): how deep each is, and how far the
@@ -271,6 +280,9 @@ const PLUS = 'M5 1.5v7M1.5 5h7'
 const MORE = 'M2 5h0.01M5 5h0.01M8 5h0.01'
 const GRIP = 'M3.5 2.5h0.01M6.5 2.5h0.01M3.5 5h0.01M6.5 5h0.01M3.5 7.5h0.01M6.5 7.5h0.01'
 const CLEAR = 'M1.5 1.5h7v7h-7zM3.6 3.6l2.8 2.8M6.4 3.6L3.6 6.4'
+// Two cards drawn apart (split) and drawn as one (join); `row`: side by side.
+const SPLIT = (row: boolean) => row ? 'M1 2h2.6v6H1zM6.4 2H9v6H6.4zM5 1v8' : 'M2 1h6v2.6H2zM2 6.4h6V9H2zM1 5h8'
+const JOIN = (row: boolean) => row ? 'M1 2h8v6H1zM3.2 5h3.6M4.4 3.8L3.2 5l1.2 1.2M5.6 3.8L6.8 5 5.6 6.2' : 'M2 1h6v8H2zM5 3.2v3.6M3.8 4.4L5 3.2l1.2 1.2M3.8 5.6L5 6.8l1.2-1.2'
 const FOLD = 'M2 3.5h6M2 6.5h6'
 
 /** The largest font (layout units) at which the longest word of `t` fits
@@ -941,6 +953,15 @@ const Seam: React.FC<{ split: SceneDiv; i: number; box: Box; unit: number; ctx: 
           <Glyph ctx={ctx} d={row ? 'M1 5h3M2.6 3.4L4 5 2.6 6.6M9 5H6M7.4 3.4L6 5l1.4 1.6' : 'M5 1v3M3.4 2.6L5 4l1.6-1.4M5 9V6M3.4 7.4L5 6l1.6 1.4'} />
         </Knob>
       )}
+      {/* Where the line runs through the whole card: cut the card in two
+          there (near the line's start, clear of the knob in its middle). */}
+      {over && !ctx.dragging && ctx.canSplit(split, i) && (
+        <Knob ctx={ctx} tool="split-card" title={row ? 'Split into a new card here: what is right of this line breaks off' : 'Split into a new card here: what is under this line breaks off'}
+          at={on(row ? { left: (reach - ctx.u) / 2, top: Math.min(ctx.u * 0.4, Math.max(0, (box.h - ctx.u) / 2 - ctx.u * 1.2)) } : { left: Math.min(ctx.u * 0.4, Math.max(0, (box.w - ctx.u) / 2 - ctx.u * 1.2)), top: (reach - ctx.u) / 2 })}
+          onClick={() => ctx.splitCard(split, i)}>
+          <Glyph ctx={ctx} d={SPLIT(row)} />
+        </Knob>
+      )}
       {over && !ctx.dragging && edgeBreaks(split, i).map(({ cut, j }) => {
         const side = split.kids![cut === 'a' ? i : i + 1]
         const kb = ctx.boxes.get(side.kids![j].id)
@@ -990,6 +1011,15 @@ const EdgeStrip: React.FC<{ side: 'top' | 'bottom' | 'left' | 'right'; W: number
           alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', boxShadow: `0 ${ctx.u * 0.08}px ${ctx.u * 0.25}px rgba(0,0,0,0.45)`,
         }}><Glyph ctx={ctx} d={PLUS} /></div>
       </>)}
+      {/* Another scene card lies against this edge: make the two one. */}
+      {over && !ctx.dragging && ctx.layer && ctx.neighbour(side) && ReactDOM.createPortal(
+        <Knob ctx={ctx} tool="join-cards" title="Join cards: the two scene cards become one"
+          at={across
+            ? { left: W / 2 + ctx.u * 1.1, top: (side === 'top' ? 0 : H - band - off) + (band - ctx.u) / 2 }
+            : { left: (side === 'left' ? 0 : W - band - off) + (band - ctx.u) / 2, top: H / 2 + ctx.u * 1.1 }}
+          onClick={() => ctx.join(side)}>
+          <Glyph ctx={ctx} d={JOIN(!across)} />
+        </Knob>, ctx.layer)}
     </div>
   )
 }
@@ -1295,6 +1325,27 @@ export const SceneFace: React.FC<{
     : dropHere ? { target: dropHere.target, where: dropHere.where } : null
   const ctx: Ctx = {
     layer, caps, capsOff, W, H, scene, lifted: drag?.own ?? null,
+    canSplit: (split, i) => { const l = seamLine(split, i, boxes); return !!l && !!cutScene(scene, l.vertical, l.pos, boxes) },
+    splitCard: (split, i) => {
+      const l = seamLine(split, i, boxes)
+      if (!l) return
+      // No easing: the sections stay where they are, the card is cut round them.
+      setDragging(true)
+      setPicked(null)
+      splitSceneCard(group.id, l.vertical, l.pos, { width, height })
+      requestAnimationFrame(() => requestAnimationFrame(() => setDragging(false)))
+    },
+    neighbour: side => joinNeighbour(group.id, side),
+    join: side => {
+      const other = joinNeighbour(group.id, side)
+      if (!other) return
+      setDragging(true)
+      setPicked(null)
+      // The left (or top) card keeps its name, colour and links.
+      if (side === 'right' || side === 'bottom') joinSceneCards(group.id, other, side === 'right' ? 'row' : 'col')
+      else joinSceneCards(other, group.id, side === 'left' ? 'row' : 'col')
+      requestAnimationFrame(() => requestAnimationFrame(() => setDragging(false)))
+    },
     startMove: (leafId, e) => {
       if (e.button !== 0) return
       e.stopPropagation()
