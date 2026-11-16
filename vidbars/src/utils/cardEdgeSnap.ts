@@ -26,6 +26,10 @@ export interface CardEdgeSnap {
   rel: Rect
   /** Visual rects of the cards it can snap to. */
   others: Rect[]
+  /** A scene card dragged: the scene cards among them. It magnets to
+   *  those on every side, over and under too (Brian 2026-11-16: "The scene
+   *  cards should be magnetable to each other on all sides"). */
+  stack?: Rect[]
 }
 
 /** Gather the edges for a drag, at drag start. `anchorId` is the card whose
@@ -51,14 +55,17 @@ export function cardEdgeSnapFor(
   if (!rel) return null
   rel = { left: rel.left - anchor.originX, right: rel.right - anchor.originX, top: rel.top - anchor.originY, bottom: rel.bottom - anchor.originY }
   const others: Rect[] = []
+  const sceneCard = (g: ProjectGroup) => !!g.scene && g.cardType === 'scene'
+  const stack: Rect[] = []
   // A locked card or deck (utils/deckLock) pulls nothing onto it.
   const live = liveLocks(groups)
   for (const g of canvasObstacleGroups(groups, dragging)) {
     if (lockOf(g, live)) continue
     const v = cardVisualRect(g, boards, zoom)
     if (v) others.push(v.rect)
+    if (v && sceneCard(anchor) && sceneCard(g)) stack.push(v.rect)
   }
-  return others.length ? { rel, others } : null
+  return others.length ? { rel, others, ...(stack.length ? { stack } : {}) } : null
 }
 
 /** Pull from a card edge onto a neighbour, per axis; null on an axis means
@@ -90,6 +97,25 @@ export function snapCardEdges(
     if (!beside) continue
     for (const d of [o.top - m.top, o.bottom - m.bottom]) {
       if (Math.abs(d) <= reach && (dy === null || Math.abs(d) < Math.abs(dy))) dy = d
+    }
+  }
+  // Scene cards, one over the other: its top onto the bottom of the one
+  // above (or its bottom onto the top of the one below), when the two
+  // overlap sideways; then left with left, or right with right.
+  for (const o of edges.stack ?? []) {
+    if (m.right + reach < o.left || m.left - reach > o.right) continue
+    for (const d of [o.bottom + CARD_GAP - m.top, o.top - CARD_GAP - m.bottom]) {
+      if (Math.abs(d) <= reach && (dy === null || Math.abs(d) < Math.abs(dy))) dy = d
+    }
+  }
+  if (dx === null) {
+    const sy = dy ?? 0
+    for (const o of edges.stack ?? []) {
+      const gapUnder = o.top - (m.bottom + sy), gapOver = (m.top + sy) - o.bottom
+      if (Math.abs(gapUnder - CARD_GAP) > reach && Math.abs(gapOver - CARD_GAP) > reach) continue
+      for (const d of [o.left - m.left, o.right - m.right]) {
+        if (Math.abs(d) <= reach && (dx === null || Math.abs(d) < Math.abs(dx))) dx = d
+      }
     }
   }
   return { dx, dy }

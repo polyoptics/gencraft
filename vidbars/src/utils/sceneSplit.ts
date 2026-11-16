@@ -151,8 +151,9 @@ export function splitSceneCard(sceneId: string, vertical: boolean, pos: number, 
   const made = bs.groups.find(x => x.boardIds.includes(boardId))
   if (!made) return null
   bs.renameGroup(made.id, g.name)
-  bs.setGroupColor(made.id, g.color)
   bs.setCardsType([made.id], 'scene')
+  // Its colour is the first card's: one given by hand too, and how see-through.
+  useBoardsStore.setState(s => ({ groups: s.groups.map(x => x.id === made.id ? { ...x, color: g.color, ownColor: g.ownColor, colorOpacity: g.colorOpacity } : x) }))
   bs.setGroupScene(made.id, c.b)
   bs.setGroupScene(sceneId, c.a)
   sizeCard(sceneId, part(aPx), L.fit, zoom)
