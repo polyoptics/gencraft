@@ -121,11 +121,12 @@ function onMat(a: FreeNodeData) {
   // And the cards docked under it (Brian 2026-11-15: the set works as a
   // chart does; the masters put against it stay out when it folds, and
   // what is kept in its card are links to them), with the cards put away
-  // in a closed deck among those.
+  // in a closed deck among those (whichever card they are put away on:
+  // a deck in an open row has a front that is no deck's card itself).
   const add = (g: ProjectGroup) => { if (!cards.includes(g)) cards.push(g) }
   const row = rowCards(a).slice(1)
   row.forEach(add)
-  const fronts = row.filter(g => !!g.deckState && g.deckState !== 'open')
+  const fronts = [...cards]
   for (let i = 0; i < fronts.length; i++) {
     for (const m of groups) {
       if (m.pin || m.id === fronts[i].id || m.deckAnchorId !== fronts[i].id || !isHiddenDeckMember(m) || fronts.includes(m)) continue
@@ -181,10 +182,16 @@ export function foldArea3d(nodeId: string): string | null {
     seen.add(m)
     const anchor = g.deckAnchorId ? master(g.deckAnchorId) : undefined
     const inDeck = !!anchor && onMasters.has(anchor)
+    // The front of a deck lying in an open row is in no deck itself, and
+    // is a closed deck all the same (Brian 2026-11-16: decks made of a
+    // set's linked cards came back with the front card plain, and its
+    // cards were left out, opened, the next time the set folded).
+    const ownFront = !g.deckAnchorId && !!g.deckState
     cardItems.push({
       card: m, dx: g.originX - a.x, dy: g.originY - a.y,
       w: g.cardWidthOverride, h: g.cardHeightOverride, flipped: g.flipped,
-      ...(inDeck ? { deckState: g.deckState, deckAnchorId: anchor, deckOffsetX: g.deckOffsetX, deckOffsetY: g.deckOffsetY, nestedDeck: g.nestedDeck } : {}),
+      ...(inDeck ? { deckState: g.deckState, deckAnchorId: anchor, deckOffsetX: g.deckOffsetX, deckOffsetY: g.deckOffsetY, nestedDeck: g.nestedDeck }
+        : ownFront ? { deckState: g.deckState, nestedDeck: g.nestedDeck } : {}),
       ...(g.deckLastFront && onMasters.has(master(g.deckLastFront)) ? { deckLastFront: master(g.deckLastFront) } : {}),
       ...((ms.setSizeOf[`card:${g.id}`] ?? ms.sizeOf[`card:${g.id}`]) !== undefined ? { size: ms.setSizeOf[`card:${g.id}`] ?? ms.sizeOf[`card:${g.id}`] } : {}),
       ...(ms.poseOf[`card:${g.id}`] ? { pose: ms.poseOf[`card:${g.id}`] } : {}),
@@ -426,12 +433,14 @@ export function showArea3d(cardId: string, quiet = false, spot?: { x: number; y:
       const p = at.get(g.id)
       if (!p) return g
       const anchor = p.deckAnchorId ? link.get(p.deckAnchorId) : undefined
+      // (A deck's front lying in an open row: a deck still, in none itself.)
+      const decked = !!anchor || (!p.deckAnchorId && !!p.deckState)
       return {
         ...g, originX: m.x + p.dx, originY: m.y + p.dy,
         cardWidthOverride: p.w, cardHeightOverride: p.h, flipped: p.flipped,
-        deckState: anchor ? p.deckState : undefined, deckAnchorId: anchor,
+        deckState: decked ? p.deckState : undefined, deckAnchorId: anchor,
         deckOffsetX: anchor ? p.deckOffsetX : undefined, deckOffsetY: anchor ? p.deckOffsetY : undefined,
-        nestedDeck: anchor ? p.nestedDeck : undefined,
+        nestedDeck: decked ? p.nestedDeck : undefined,
         deckLastFront: p.deckLastFront ? link.get(p.deckLastFront) : undefined,
         ...(belowCards.length ? { rowUnder: belowCards } : {}),
       }
