@@ -68,7 +68,7 @@ export function snapCardToDots(
   zoom: number, headerPx: number, free = false, edges?: CardEdgeSnap | null,
 ): { x: number; y: number } {
   if (free) return { x: rawX, y: rawY }
-  const edge = edges ? snapCardEdges(rawX, rawY, edges, zoom) : { dx: null, dy: null }
+  const edge: ReturnType<typeof snapCardEdges> = edges ? snapCardEdges(rawX, rawY, edges, zoom) : { dx: null, dy: null }
   if (!corner) return { x: rawX + (edge.dx ?? 0), y: rawY + (edge.dy ?? 0) }
   const step = dotStep(zoom)
   // Never more than a sixth of the way to the next dot: zoomed out the dots
@@ -79,7 +79,7 @@ export function snapCardToDots(
     return Math.abs(n - v) <= reach ? n - v : 0
   }
   return {
-    x: rawX + (edge.dx ?? pull(rawX + corner.x)),
-    y: rawY + (edge.dy ?? pull(rawY + corner.y - headerPx / zoom)),
+    x: rawX + (edge.dx ?? (edge.nearX ? 0 : pull(rawX + corner.x))),
+    y: rawY + (edge.dy ?? (edge.nearY ? 0 : pull(rawY + corner.y - headerPx / zoom))),
   }
 }

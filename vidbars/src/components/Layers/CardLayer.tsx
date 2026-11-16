@@ -1574,8 +1574,15 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
         ) : group.cardType === 'scene' && group.scene ? (
           // A scene card's face is its divisions (Brian's storyMap).
           <div style={{ position: 'absolute', top: headerPad, left: 0, right: 0, bottom: 0 }}>
-            <SceneFace group={group} width={screenWidth} height={Math.max(1, cardHeight - headerPad)}
+            <SceneFace group={group} width={screenWidth} height={Math.max(1, cardHeight - headerPad)} head={headerPad}
               reserve={6 + Math.min(32, Math.max(8, 16 * overviewScale(zoom), headerScreenH(zoom) * 0.85)) + 3} />
+            {/* Its header band: the top sections run up under it (SceneFace),
+                and it lies over them see-through, tinted the card's colour
+                (Brian 2026-11-16), as a card's header lies over its picture. */}
+            <div data-scene-head-tint style={{
+              position: 'absolute', left: 0, right: 0, top: -headerPad, height: headerPad, zIndex: 1, pointerEvents: 'none',
+              background: cardFill(color, (group.colorOpacity ?? 1) * 0.45),
+            }} />
           </div>
         ) : (<>
         {group.cut

@@ -11,6 +11,7 @@
 import { liveLocks, lockOf } from './deckLock'
 import type { ProjectGroup, BoardData } from '../store/boardsStore'
 import { cardVisualRect, canvasObstacleGroups, isHiddenDeckMember } from '../hooks/useCardDecks'
+import { NLE_HEADER_CANVAS_H, overviewScale } from '../components/NLE/NLETimelineHeader'
 
 /** Same gap clampGroupMove keeps between cards (nlePush DEFAULT_GAP). */
 const CARD_GAP = 12
@@ -18,6 +19,19 @@ const CARD_GAP = 12
 const EDGE_SNAP_PX = 10
 /** ...but never more than this share of the dragged card's smaller side. */
 const EDGE_SNAP_MAX_SHARE = 1 / 6
+/** A scene card coming up to another, this close (screen px): nothing else
+ *  catches it on the way (see snapCardEdges). */
+const APPROACH_PX = 48
+
+/** How much lower a card's top is DRAWN than cardVisualRect puts it, in
+ *  canvas units: zoomed far out its header band shrinks with the card
+ *  (overviewScale), which that rect does not follow. 0 at card zoom. */
+export const drawnTopFix = (zoom: number) =>
+  (Math.max(NLE_HEADER_CANVAS_H * zoom, 20) - Math.max(NLE_HEADER_CANVAS_H * zoom, 20 * overviewScale(zoom))) / zoom
+/** How much a header band's height, in canvas units, changes across the
+ *  zooms cards are worked at: two cards magneted over and under at one zoom
+ *  overlap by up to this at another. */
+export const HEADER_ZOOM_VAR = 90
 
 type Rect = { left: number; right: number; top: number; bottom: number }
 
@@ -72,7 +86,7 @@ export function cardEdgeSnapFor(
  *  nothing is close enough there. */
 export function snapCardEdges(
   x: number, y: number, edges: CardEdgeSnap, zoom: number,
-): { dx: number | null; dy: number | null } {
+): { dx: number | null; dy: number | null; nearX?: boolean; nearY?: boolean } {
   const { rel } = edges
   const w = rel.right - rel.left, h = rel.bottom - rel.top
   const reach = Math.min(EDGE_SNAP_PX / zoom, Math.min(w, h) * EDGE_SNAP_MAX_SHARE)
@@ -102,21 +116,34 @@ export function snapCardEdges(
   // Scene cards, one over the other: its top onto the bottom of the one
   // above (or its bottom onto the top of the one below), when the two
   // overlap sideways; then left with left, or right with right.
+  const fix = drawnTopFix(zoom)
   for (const o of edges.stack ?? []) {
     if (m.right + reach < o.left || m.left - reach > o.right) continue
-    for (const d of [o.bottom + CARD_GAP - m.top, o.top - CARD_GAP - m.bottom]) {
+    for (const d of [o.bottom + CARD_GAP - (m.top + fix), o.top + fix - CARD_GAP - m.bottom]) {
       if (Math.abs(d) <= reach && (dy === null || Math.abs(d) < Math.abs(dy))) dy = d
     }
   }
   if (dx === null) {
     const sy = dy ?? 0
     for (const o of edges.stack ?? []) {
-      const gapUnder = o.top - (m.bottom + sy), gapOver = (m.top + sy) - o.bottom
+      const gapUnder = o.top + fix - (m.bottom + sy), gapOver = (m.top + fix + sy) - o.bottom
       if (Math.abs(gapUnder - CARD_GAP) > reach && Math.abs(gapOver - CARD_GAP) > reach) continue
       for (const d of [o.left - m.left, o.right - m.right]) {
         if (Math.abs(d) <= reach && (dx === null || Math.abs(d) < Math.abs(dx))) dx = d
       }
     }
   }
-  return { dx, dy }
+  // Coming up to a scene card, not yet close enough to magnet: the dots let
+  // go of it that way. A dot caught it a little short of the other card,
+  // which looked magneted but was not, and pulling on to close the gap
+  // tore it off the dot (Brian 2026-11-16: "it's still detached... you keep
+  // dragging to make it touch, and you're actually unsnapping it").
+  let nearX = false, nearY = false
+  const zone = APPROACH_PX / zoom
+  for (const o of edges.stack ?? []) {
+    const gy = Math.max(o.top + fix - m.bottom, m.top + fix - o.bottom), gx = Math.max(o.left - m.right, m.left - o.right)
+    if (m.right > o.left && m.left < o.right && gy > -reach && gy < zone) nearY = true
+    if (m.bottom > o.top && m.top < o.bottom && gx > -reach && gx < zone) nearX = true
+  }
+  return { dx, dy, nearX, nearY }
 }

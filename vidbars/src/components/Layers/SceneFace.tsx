@@ -140,6 +140,9 @@ type Ctx = {
    *  part's top shows past the top of the face. Screen px. */
   caps: HTMLElement | null
   capsOff: { x: number; y: number }
+  /** How far the top sections run up past the face's top, under the
+   *  card's header (their colour and picture only). Layout units. */
+  rise: number
   W: number
   H: number
   /** The whole face, to read what a division gathers from its headings. */
@@ -362,6 +365,9 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
   const textFont = clamp(Math.min(nameFont * 0.68, wordFit(text, box.w - 4)), 2.2, 9)
   const bump = ctx.bumps && !!d.bump
   const lift = bump ? Math.min(box.h * 0.22, 7) : 0
+  // Along the top of the face: its colour and picture run on up under the
+  // card's header; what is written in it stays below.
+  const rise = !bump && box.y < 0.01 ? ctx.rise : 0
   const faded = ctx.lit && !ctx.lit.has(d.id)
   const picked = ctx.picked === d.id
   const hovered = ctx.hovered === d.id && !ctx.linking && !ctx.dragging
@@ -542,14 +548,28 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
         cursor: moving ? 'move' : undefined,
       }}
     >
+      {rise > 0 && (
+        <div data-scene-rise style={{
+          position: 'absolute', left: 0, right: 0, bottom: 0, top: -rise, borderRadius: 2.2, overflow: 'hidden', pointerEvents: 'none',
+          background: showBack && backCard ? backColor(d.color ?? '#5b8dd9') : d.color ?? '#5b8dd9',
+        }}>
+          {pic && state === 'full' && !(showBack && backCard) && (
+            <Pic src={pic} alt="" draggable={false} data-scene-pic style={{
+              position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', pointerEvents: 'none',
+              objectPosition: `${crop.x}% ${crop.y}%`, transformOrigin: `${crop.x}% ${crop.y}%`, opacity: hero?.opacity ?? 1,
+              transform: `scale(${crop.z * (hero?.flipH ? -1 : 1)}, ${crop.z * (hero?.flipV ? -1 : 1)})`,
+            }} />
+          )}
+        </div>
+      )}
       {/* The box: its colour, its picture filling it. */}
       <div ref={boxRef} style={{
-        position: 'absolute', inset: 0, borderRadius: 2.2, overflow: 'hidden', background: d.color ?? '#5b8dd9',
+        position: 'absolute', inset: 0, borderRadius: 2.2, overflow: 'hidden', background: rise > 0 ? 'transparent' : d.color ?? '#5b8dd9',
         boxShadow: bump ? '0 1px 3px rgba(0,0,0,0.55)' : undefined,
         outline: moving ? '0.8px dashed #ffd666' : picked ? '0.8px solid #fff' : ctx.linking ? '0.6px dashed rgba(255,255,255,0.85)' : bump ? '0.5px solid rgba(255,255,255,0.55)' : undefined,
         outlineOffset: picked || ctx.linking || moving ? -0.8 : -0.5,
       }}>
-        {pic && state === 'full' && (
+        {pic && state === 'full' && !rise && (
           <Pic src={pic} alt="" draggable={false} data-scene-pic style={{
             position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', pointerEvents: 'none',
             objectPosition: `${crop.x}% ${crop.y}%`, transformOrigin: `${crop.x}% ${crop.y}%`, opacity: hero?.opacity ?? 1,
@@ -1245,7 +1265,10 @@ export const SceneFace: React.FC<{
   /** Kept for the card's call; the face runs to the top (its buttons show
    *  over the first division on hover). */
   reserve?: number
-}> = ({ group, width, height }) => {
+  /** The card's header band above the face, screen px: the top sections
+   *  run up under it. */
+  head?: number
+}> = ({ group, width, height, head = 0 }) => {
   const groups = useBoardsStore(s => s.groups)
   const linking = useLinkDragStore(s => s.active && s.source?.kind === 'group' && s.source.id !== group.id)
   const zoom = useCanvasStore(st => st.zoom) || 1
@@ -1347,6 +1370,7 @@ export const SceneFace: React.FC<{
     : dropHere ? { target: dropHere.target, where: dropHere.where } : null
   const ctx: Ctx = {
     layer, caps, capsOff, W, H, scene, lifted: drag?.own ?? null,
+    rise: head > 0 ? head / s + PAD : 0,
     canSplit: (split, i) => { const l = seamLine(split, i, boxes); return !!l && !!cutScene(scene, l.vertical, l.pos, boxes) },
     splitCard: (split, i) => {
       const l = seamLine(split, i, boxes)
@@ -1531,7 +1555,9 @@ export const SceneFace: React.FC<{
       ref={rootRef}
       data-scene-face={group.id}
       onPointerLeave={() => setHoveredDiv(null)}
-      style={{ position: 'absolute', inset: 0, overflow: 'hidden', borderRadius: '0 0 12px 12px' }}
+      // Open at the top: the top sections show under the header (the card
+      // itself clips the rest).
+      style={{ position: 'absolute', inset: 0, ...(head > 0 ? { clipPath: `inset(${-head - 2}px 0 0 0)` } : { overflow: 'hidden' }), borderRadius: '0 0 12px 12px' }}
     >
       <div style={{
         position: 'absolute', left: 0, top: 0, width: W, height: H,

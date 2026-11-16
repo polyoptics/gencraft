@@ -22,6 +22,7 @@ import { useBoardsStore, type ProjectGroup } from '../store/boardsStore'
 import { useCanvasStore } from '../store/canvasStore'
 import { useUndoCoordinator } from '../store/undoCoordinator'
 import { cardVisualRect } from '../hooks/useCardDecks'
+import { drawnTopFix, HEADER_ZOOM_VAR } from './cardEdgeSnap'
 import { createCardOrBoardAt } from './canvasCreate'
 import { newDetailId } from './cardTypes'
 import { markNew } from './newCards'
@@ -186,8 +187,11 @@ export function joinNeighbour(sceneId: string, side: 'top' | 'bottom' | 'left' |
     if (g.deckState === 'stacked' && g.deckAnchorId && g.deckAnchorId !== g.id) continue
     const o = cardVisualRect(g, bs.boards, zoom)?.rect
     if (!o) continue
-    const gap = side === 'right' ? o.left - r.right : side === 'left' ? r.left - o.right : side === 'bottom' ? o.top - r.bottom : r.top - o.bottom
-    if (gap < -2 || gap > Math.max(JOIN_REACH, JOIN_REACH_PX / zoom)) continue
+    // Over and under: to the lower card's header band as drawn; the two
+    // may overlap by what that band grows zoomed out (cardEdgeSnap).
+    const fix = drawnTopFix(zoom)
+    const gap = side === 'right' ? o.left - r.right : side === 'left' ? r.left - o.right : side === 'bottom' ? o.top + fix - r.bottom : r.top + fix - o.bottom
+    if (gap < (across ? -2 : -2 - HEADER_ZOOM_VAR) || gap > Math.max(JOIN_REACH, JOIN_REACH_PX / zoom)) continue
     const facing = across
       ? Math.min(r.bottom, o.bottom) - Math.max(r.top, o.top)
       : Math.min(r.right, o.right) - Math.max(r.left, o.left)

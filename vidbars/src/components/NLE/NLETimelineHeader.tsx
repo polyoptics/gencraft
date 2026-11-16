@@ -24,6 +24,8 @@ import { useMagnetPreviewStore } from '../../store/magnetPreviewStore'
 import { groupHasBrowsableContent } from '../../utils/contentTraversal'
 import { RenameInput } from '../UI/RenameInput'
 import { SceneViewButton } from '../Layers/SceneFace'
+import { HeaderColorDot, colorTargets } from '../Layers/HeaderColorDot'
+import { ColorPickerPopup } from '../Bar/ColorPickerPopup'
 
 const BOARD_PADDING_X = 20
 export const NLE_HEADER_CANVAS_H = 36
@@ -133,6 +135,9 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
   })
   // A scene card: its view modes (Focus, Bump-outs, Trace) from a "⋯" here.
   const isScene = useBoardsStore(s => !!groupId && s.groups.find(g => g.id === groupId)?.cardType === 'scene')
+  // Its colour panel, opened from the header (a scene card): its circle or
+  // a double-click, with the transparency; a right-click, the colour alone.
+  const [colorAt, setColorAt] = useState<{ x: number; y: number; clear: boolean } | null>(null)
   const openRow = groupId ? rowOf(groupId) : undefined
   const isFace = !!groupId && (mode.kind === 'deckPreview' || (!!openRow && openRow.length > 1 && openRow[0] === groupId))
   // A State card, or its output deck's front card: the current state,
@@ -360,7 +365,9 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
   // comfortable zoom, so it stays readable as the strip thins instead of
   // shrinking twice (with the strip and by `ov`); too small to read, it
   // fades out rather than lie there as specks.
-  const nameFont = Math.min(10, Math.max(10 * ov, screenHeight * 0.62))
+  // A scene card's: larger, most of the band (Brian 2026-11-16: "The
+  // header text is pretty small").
+  const nameFont = isScene ? Math.min(14, Math.max(14 * ov, screenHeight * 0.7)) : Math.min(10, Math.max(10 * ov, screenHeight * 0.62))
   const nameShown = Math.max(0, Math.min(1, (nameFont - 4.5) / 1.5))
   const isTiny = effectiveWidth < 50
 
@@ -503,6 +510,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
 
   const lockH = screenHeight * 0.7
   const sceneOn = isScene && !!groupId && !isTiny
+  const openColor = (x: number, y: number, clear: boolean) => setColorAt({ x, y, clear })
   const stateEl = stateOf && !isTiny ? (
     <StatePicker stateCardId={stateOf} height={lockH} width={Math.max(30, effectiveWidth * 0.42)} font={9 * ov} />
   ) : null
@@ -647,7 +655,21 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
       }}
       onPointerDown={onTimelineDown}
       onWheel={onWheel}
+      onContextMenu={sceneOn ? e => { e.preventDefault(); e.stopPropagation(); openColor(e.clientX, e.clientY, false) } : undefined}
+      onDoubleClick={sceneOn ? e => { e.stopPropagation(); openColor(e.clientX, e.clientY + 8, true) } : undefined}
     >
+      {colorAt && group && groupId && (
+        <div data-color-picker onPointerDownCapture={() => useUndoCoordinator.getState().checkpoint()} onPointerDown={e => e.stopPropagation()} onDoubleClick={e => e.stopPropagation()} onContextMenu={e => e.stopPropagation()}>
+          <ColorPickerPopup
+            color={group.color}
+            anchorX={colorAt.x}
+            anchorY={colorAt.y}
+            onChange={c => { const bs = useBoardsStore.getState(); for (const id of colorTargets(groupId)) { bs.setGroupColor(id, c); bs.setGroupOwnColor(id, true) } }}
+            {...(colorAt.clear ? { opacity: group.colorOpacity ?? 1, onOpacityChange: (o: number) => { const bs = useBoardsStore.getState(); for (const id of colorTargets(groupId)) bs.setGroupColorOpacity(id, o) } } : {})}
+            onClose={() => setColorAt(null)}
+          />
+        </div>
+      )}
       <div style={{
         position: 'absolute', inset: 0,
         background: headerBg,
@@ -666,6 +688,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
         gap: 4 * ov,
         overflow: 'hidden',
       }}>
+        {sceneOn && <HeaderColorDot groupId={groupId!} size={lockH} lit={!!colorAt} onOpen={(x, y) => colorAt ? setColorAt(null) : openColor(x, y, true)} />}
         {!isTiny && nameEl}
         {stateEl}
         {hasRefs && groupId && !isTiny && (

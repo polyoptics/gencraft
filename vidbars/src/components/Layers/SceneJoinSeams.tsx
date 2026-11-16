@@ -6,8 +6,15 @@
 // magnetized then, if I hold my mouse over the line between them, the
 // magnetized line then I can do the joining").
 //
+// Then (Brian 2026-11-16): the lines in plain white, never a colour ("it
+// could clash with the colors of the cards"), and not left hanging between
+// every scene on the canvas: they show while scene cards are being moved
+// and for a few seconds after, then fade ("once you drop a scene card...
+// after 5 seconds they fade away", a wiggle brings them back). Only where
+// the two really are magneted, never where they are merely near.
+//
 // So: the seam of two magneted scene cards is DRAWN, a thin line between
-// them, always. The mouse held over that line lights it and brings up a
+// them, while awake. The mouse held over that line lights it and brings up a
 // button that SAYS Join, on the line just beside the pointer (never under
 // it, so a press there still reaches the card's own edge). It stays while
 // the pointer is on the line or on it. The left or top card keeps its name
@@ -18,11 +25,14 @@ import { useBoardsStore } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { cardVisualRect } from '../../hooks/useCardDecks'
 import { joinNeighbour, joinSceneCards } from '../../utils/sceneSplit'
+import { drawnTopFix } from '../../utils/cardEdgeSnap'
 
 interface Seam { key: string; a: string; b: string; row: boolean; x1: number; y1: number; x2: number; y2: number; reach: number }
 
 const BTN_W = 62      // about the button's width, px
 const BESIDE = 44     // how far along the line from the pointer it comes up
+const AWAKE_MS = 5000 // how long the lines stay after scene cards last moved
+const MAGNETED = 3    // px over the magnet's own gap that still counts as magneted
 
 export const SceneJoinSeams: React.FC = () => {
   const groups = useBoardsStore(s => s.groups)
@@ -47,15 +57,31 @@ export const SceneJoinSeams: React.FC = () => {
       const row = side === 'right'
       const sx = (v: number) => v * zoom + pan.x, sy = (v: number) => v * zoom + pan.y
       // The line: midway between the two, along the stretch they share.
-      const gapPx = (row ? b.left - a.right : b.top - a.bottom) * zoom
+      // Over and under: to the lower card's header band as it is drawn. The
+      // band may lie a little over the upper card (magneted at a closer
+      // zoom): the line is then along the band's top.
+      const bTop = b.top + drawnTopFix(zoom)
+      const gapPx = (row ? b.left - a.right : bTop - a.bottom) * zoom
+      if (gapPx > 12 * zoom + MAGNETED) continue
+      const midY = gapPx > 0 ? (a.bottom + bTop) / 2 : bTop
       const s: Seam = row
         ? { key: `${g.id}:right`, a: g.id, b: other, row, x1: sx((a.right + b.left) / 2), x2: sx((a.right + b.left) / 2), y1: sy(Math.max(a.top, b.top)), y2: sy(Math.min(a.bottom, b.bottom)), reach: 0 }
-        : { key: `${g.id}:bottom`, a: g.id, b: other, row, y1: sy((a.bottom + b.top) / 2), y2: sy((a.bottom + b.top) / 2), x1: sx(Math.max(a.left, b.left)), x2: sx(Math.min(a.right, b.right)), reach: 0 }
+        : { key: `${g.id}:bottom`, a: g.id, b: other, row, y1: sy(midY), y2: sy(midY), x1: sx(Math.max(a.left, b.left)), x2: sx(Math.min(a.right, b.right)), reach: 0 }
       // Held over it: on the gap, and a few px either side of it.
-      s.reach = Math.max(6, gapPx / 2 + 4)
+      s.reach = Math.max(6, Math.max(0, gapPx) / 2 + 4)
       seams.push(s)
     }
   }
+  // Awake: scene cards were moved (or made, split, joined, sized) just now.
+  const sig = groups.filter(g => g.scene && g.cardType === 'scene').map(g => `${g.id}:${g.originX}:${g.originY}:${g.cardWidthOverride}:${g.cardHeightOverride}`).join('|')
+  const [awake, setAwake] = useState(false)
+  const first = useRef(true)
+  useEffect(() => {
+    if (first.current) { first.current = false; return }
+    setAwake(true)
+    const t = setTimeout(() => setAwake(false), AWAKE_MS)
+    return () => clearTimeout(t)
+  }, [sig])
   const seamsRef = useRef(seams)
   seamsRef.current = seams
   const hotRef = useRef(hot)
@@ -92,9 +118,10 @@ export const SceneJoinSeams: React.FC = () => {
         const thick = lit ? 3 : 1.5
         return (
           <React.Fragment key={s.key}>
-            <div data-scene-seam-line={lit ? 'lit' : ''} style={{
+            <div data-scene-seam-line={lit ? 'lit' : awake ? 'shown' : 'faded'} style={{
               position: 'absolute', zIndex: 58, pointerEvents: 'none', borderRadius: thick,
-              background: lit ? '#ffd666' : 'rgba(255,214,102,0.5)',
+              background: lit ? '#fff' : 'rgba(255,255,255,0.6)',
+              opacity: lit || awake ? 1 : 0, transition: lit || awake ? 'opacity 0.12s' : 'opacity 0.9s',
               ...(s.row
                 ? { left: s.x1 - thick / 2, top: s.y1 + 6, width: thick, height: Math.max(0, s.y2 - s.y1 - 12) }
                 : { left: s.x1 + 6, top: s.y1 - thick / 2, height: thick, width: Math.max(0, s.x2 - s.x1 - 12) }),
