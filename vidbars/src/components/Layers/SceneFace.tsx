@@ -29,6 +29,9 @@ import { create } from 'zustand'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import ReactDOM from 'react-dom'
 import { useBoardsStore, type ProjectGroup } from '../../store/boardsStore'
+import { DragOutGrip } from '../UI/DragOutGrip'
+import { mayHaveDiskFile } from '../../hooks/useFileMenu'
+import { cardGripUrl, deckImageSources, groupImageSources } from '../../utils/mediaSources'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { useLinkDragStore } from '../../store/linkDragStore'
 import { cardTitle, fillFields } from '../../utils/faceStyle'
@@ -844,13 +847,43 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
       put('more', place(Math.max(0, box.w - u * 1.1), ctx.seamIn))
       if (box.w > u * 2.4) at.color = { left: at.more.left - u * 1.15, top: at.more.top }
       if (box.w > u * 3.6) at.clear = { left: at.more.left - u * 2.3, top: at.more.top }
+      if (box.w > u * 4.8) at.out = { left: at.more.left - u * 3.45, top: at.more.top }
       put('move', place(ctx.seamIn, ctx.seamIn))
       // Flip: beside the grip, where a card's own Flip is (its top left).
       if (canFlip) put('flip', place(ctx.seamIn + u * 1.15, ctx.seamIn))
       if (heads) put('fold', box.w < STAND_W ? place((box.w - u) / 2, Math.min(1, box.h - u)) : place(Math.min(1, box.w - u), (box.h + lift - u) / 2))
       put('split-row', place(box.w - u - ctx.seamIn - u * 0.2, (box.h + lift - u) / 2))
       put('split-col', place((box.w - u) / 2, box.h + lift - u - ctx.seamIn - u * 0.2))
+      // Drag-out (Brian 2026-11-16: "the little drag-out icon for the
+      // sections... that's on all the cards"): the file of the picture it
+      // shows, out to a website's upload box or another program; Shift,
+      // every image in its card (its deck's cards). Desktop app only, and
+      // only where there is a file, as on a card (DragOutGrip). Kept
+      // mounted, shown while pointed at: a press on it outlasts the hover.
+      const outCard = stepCard ?? src
+      const outUrl = mayHaveDiskFile(pic) ? pic
+        : outCard && hovered ? cardGripUrl(outCard, useBoardsStore.getState().boards, mayHaveDiskFile) : null
       return ReactDOM.createPortal(<>
+      {at.out && (
+        <DragOutGrip
+          url={outUrl}
+          getUrls={({ all }) => {
+            if (!all) return []
+            const bs = useBoardsStore.getState()
+            const cards = (d.deck?.length ? d.deck : outCard ? [outCard.id] : [])
+              .map(id => bs.groups.find(g => g.id === id)).filter(Boolean) as ProjectGroup[]
+            return cards.length > 1 ? deckImageSources(cards, bs.boards) : cards[0] ? groupImageSources(cards[0], bs.boards) : []
+          }}
+          allLabel={outCard ? (d.deck && d.deck.length > 1 ? 'every image in its deck' : 'every image in its card') : undefined}
+          size={u}
+          visible={hovered && !moving}
+          card={outCard?.id}
+          style={{
+            position: 'absolute', left: at.out.left, top: at.out.top, zIndex: 6, borderRadius: '50%', boxSizing: 'border-box',
+            background: 'rgba(14,16,24,0.82)', color: '#fff', border: `${u * 0.08}px solid rgba(255,255,255,0.75)`, boxShadow: `0 ${u * 0.08}px ${u * 0.25}px rgba(0,0,0,0.45)`,
+          }}
+        />
+      )}
       {/* A section's heading: fold the section to this strip, and back.
           Shown while pointed at, and always while folded (lit). */}
       {heads && (hovered || folded) && (
