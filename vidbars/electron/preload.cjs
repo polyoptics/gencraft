@@ -77,6 +77,11 @@ contextBridge.exposeInMainWorld('vidbarsDesktop', {
    *  Never overwrites. Resolves { path } of the file written, or { error }. */
   saveImage: (kind, name, dataUrl) => ipcRenderer.invoke('vb:save-image', kind, name, dataUrl),
 
+  /** A movie, sound or 3D model kept inside the project, written to the
+   *  Drag Cache so it can be dragged out. `ext` from a fixed list; `bytes`
+   *  the file as it is. Resolves { path } or { error }. */
+  saveDragMedia: (name, ext, bytes) => ipcRenderer.invoke('vb:save-drag-media', name, ext, bytes),
+
   /** Depth / Segment: run sketchLook's depth or matte tool on pictures
    *  (data urls; several = a short sequence). Resolves { frames } for depth,
    *  { objects: { name: [...] } } for segment, or { error }; with `log`. */

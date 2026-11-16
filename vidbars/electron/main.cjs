@@ -466,6 +466,45 @@ function registerBridge() {
     }
   })
 
+  // A movie, sound or 3D model kept INSIDE the project (dropped in from a
+  // web page, pasted: no file on disk), written to the Drag Cache so it can
+  // be dragged out like one that has a file (utils/sceneOut). Its bytes as
+  // they are; the kind is one of a fixed list of single-file media, the
+  // name sanitised to one segment, the folder never the page's choice.
+  const DRAG_MEDIA_EXT = /^(mp4|webm|mov|m4v|mkv|ogv|mp3|wav|ogg|oga|opus|m4a|aac|flac|glb|fbx|obj)$/
+  const DRAG_MEDIA_MAX_BYTES = 300 * 1024 * 1024
+  ipcMain.handle('vb:save-drag-media', async (e, name, ext, bytes) => {
+    if (!fromApp(e) || typeof ext !== 'string' || !DRAG_MEDIA_EXT.test(ext)) return { error: 'Not allowed' }
+    const buf = bytes instanceof ArrayBuffer ? Buffer.from(bytes) : ArrayBuffer.isView(bytes) ? Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength) : null
+    if (!buf || !buf.length) return { error: 'Not allowed' }
+    if (buf.length > DRAG_MEDIA_MAX_BYTES) return { error: 'Too large to copy out for a drag' }
+    const dir = saveDir('drag')
+    if (!dir) return { error: 'The app data folder is on a network share, which VidBars cannot read files back from' }
+    let safe = Array.from(String(name || '').toWellFormed().replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_'))
+      .slice(0, 80).join('').replace(/^[.\s]+|[.\s]+$/g, '') || 'media'
+    if (safe.includes('.') && RESERVED_STEM.test(safe.split('.')[0].trimEnd())) safe = '_' + safe
+    const d = new Date()
+    const pad = n => String(n).padStart(2, '0')
+    const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
+    try {
+      await fs.promises.mkdir(dir, { recursive: true })
+      for (let n = 1; n <= 99; n++) {
+        const file = path.join(dir, `${safe} ${stamp}${n > 1 ? ` (${n})` : ''}.${ext}`)
+        try {
+          await fs.promises.writeFile(file, buf, { flag: 'wx' })
+          void pruneDragCache()
+          return { path: file }
+        } catch (err) {
+          if (err.code !== 'EEXIST') throw err
+        }
+      }
+      return { error: 'Too many files of this name saved this second' }
+    } catch (err) {
+      console.error('[vidbars] drag copy not saved:', err.message)
+      return { error: err.message }
+    }
+  })
+
   ipcMain.handle('vb:prepare-drag', (e, u) => {
     if (!fromApp(e)) return false
     const [p] = dragFilesFor([u])

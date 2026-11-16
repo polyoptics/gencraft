@@ -41,6 +41,11 @@ export interface VidbarsDesktop {
    *  A bare string | null comes from a main older than this page — it only
    *  restarts with the window. Go through utils/saveImage.ts. */
   saveImage?(kind: SaveImageKind, name: string, dataUrl: string): Promise<{ path: string } | { error: string } | string | null>
+  /** A movie, sound or 3D model kept inside the project (no file on disk),
+   *  written to the Drag Cache so it can be dragged out. `ext`: one of a
+   *  fixed list of single-file media kinds; `bytes`: the file as it is.
+   *  Go through utils/sceneOut.ts. */
+  saveDragMedia?(name: string, ext: string, bytes: Uint8Array): Promise<{ path: string } | { error: string }>
   /** Depth / Segment / Film outline / hatch cards: sketchLook's depth.py,
    *  matte_auto.py or look_hybrid_colerase.py on this machine's GPU
    *  (electron/sketchWorker.cjs). `frames` are data urls; more than one is a
