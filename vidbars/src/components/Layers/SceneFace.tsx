@@ -30,8 +30,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import ReactDOM from 'react-dom'
 import { useBoardsStore, type ProjectGroup } from '../../store/boardsStore'
 import { DragOutGrip } from '../UI/DragOutGrip'
-import { mayHaveDiskFile } from '../../hooks/useFileMenu'
-import { cardGripUrl, deckImageSources, groupImageSources } from '../../utils/mediaSources'
+import { deckImageSources, groupImageSources } from '../../utils/mediaSources'
+import { useSectionOut } from '../../utils/sceneOut'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { useLinkDragStore } from '../../store/linkDragStore'
 import { cardTitle, fillFields } from '../../utils/faceStyle'
@@ -342,6 +342,9 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
   // Its own copy, or its card as it is now (following live).
   const shown = stepCard ? contentOf(stepCard) : shownContent(d, src)
   const pic = shown.image ?? null
+  // What it hands over, dragged out of the app: its card's media, whatever
+  // its kind (utils/sceneOut).
+  const outUrl = useSectionOut(pic, stepCard ?? src, shown.name, ctx.hovered === d.id)
   const crop = stepCard ? { x: 50, y: 50, z: 1 } : d.crop ?? { x: 50, y: 50, z: 1 }
   const hero = stepCard ? undefined : d.hero
   // Its text shows its {fields} filled in from its card ({Name}, {Age},
@@ -855,14 +858,13 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
       put('split-row', place(box.w - u - ctx.seamIn - u * 0.2, (box.h + lift - u) / 2))
       put('split-col', place((box.w - u) / 2, box.h + lift - u - ctx.seamIn - u * 0.2))
       // Drag-out (Brian 2026-11-16: "the little drag-out icon for the
-      // sections... that's on all the cards"): the file of the picture it
-      // shows, out to a website's upload box or another program; Shift,
-      // every image in its card (its deck's cards). Desktop app only, and
-      // only where there is a file, as on a card (DragOutGrip). Kept
+      // sections... that's on all the cards"; "a lift out on any media type
+      // there"): the file of what it shows, a movie, sound or model as much
+      // as a picture (outUrl), out to a website's upload box or another
+      // program; Shift, every image in its card (its deck's cards). Desktop
+      // app only, and only where there is a file (DragOutGrip). Kept
       // mounted, shown while pointed at: a press on it outlasts the hover.
       const outCard = stepCard ?? src
-      const outUrl = mayHaveDiskFile(pic) ? pic
-        : outCard && hovered ? cardGripUrl(outCard, useBoardsStore.getState().boards, mayHaveDiskFile) : null
       return ReactDOM.createPortal(<>
       {at.out && (
         <DragOutGrip
