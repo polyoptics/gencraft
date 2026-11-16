@@ -13,12 +13,17 @@
 // after 5 seconds they fade away", a wiggle brings them back). Only where
 // the two really are magneted, never where they are merely near.
 //
-// So: the seam of two magneted scene cards is DRAWN, a thin line between
-// them, while awake. The mouse held over that line lights it and brings up a
-// button that SAYS Join, on the line just beside the pointer (never under
-// it, so a press there still reaches the card's own edge). It stays while
-// the pointer is on the line or on it. The left or top card keeps its name
-// (utils/sceneSplit).
+// Then: the button came up beside the pointer, so in a new spot each time,
+// and a press whose hand slipped a pixel lost it (Brian 2026-11-16: "the
+// first time I click on it, nothing happens... I feel like I'm chasing the
+// button"). It has ONE place on each seam now and is never taken away
+// under a press.
+//
+// So: the seam of two magneted scene cards is DRAWN, a line between them,
+// while awake. The mouse held over that line lights it and brings up a
+// button that SAYS Join, always at the same place on that seam. It stays
+// while the pointer is on the line, on it, or on the way between the two.
+// The left or top card keeps its name (utils/sceneSplit).
 
 import React, { useEffect, useRef, useState } from 'react'
 import { useBoardsStore } from '../../store/boardsStore'
@@ -27,10 +32,20 @@ import { cardVisualRect } from '../../hooks/useCardDecks'
 import { joinNeighbour, joinSceneCards } from '../../utils/sceneSplit'
 import { drawnTopFix } from '../../utils/cardEdgeSnap'
 
+/** Where a seam's Join button is: one place, whatever brought it up. */
+const joinAt = (s: { row: boolean; x1: number; y1: number; x2: number; y2: number }) => s.row
+  ? { x: s.x1, y: s.y1 + (s.y2 - s.y1) * AT_ROW }
+  : { x: Math.max(s.x1 + Math.min(BTN_W / 2 + 8, (s.x2 - s.x1) / 2), Math.min(s.x2 - BTN_W / 2 - 8, s.x1 + (s.x2 - s.x1) * AT_COL)), y: s.y1 }
+
 interface Seam { key: string; a: string; b: string; row: boolean; x1: number; y1: number; x2: number; y2: number; reach: number }
 
 const BTN_W = 62      // about the button's width, px
-const BESIDE = 44     // how far along the line from the pointer it comes up
+const BTN_H = 20
+const STAY_MS = 450   // how long it stays once the pointer is off the line and off it
+// Where along its seam the button is, always: the middle of a seam between
+// cards side by side; right of the middle between cards over and under
+// (the upper card's tray "..." is at its bottom middle).
+const AT_ROW = 0.5, AT_COL = 0.72
 const AWAKE_MS = 5000 // how long the lines stay after scene cards last moved
 const MAGNETED = 3    // px over the magnet's own gap that still counts as magneted
 
@@ -39,8 +54,9 @@ export const SceneJoinSeams: React.FC = () => {
   const boards = useBoardsStore(s => s.boards)
   const zoom = useCanvasStore(s => s.zoom) || 1
   const pan = useCanvasStore(s => s.pan)
-  // The seam the pointer is held over, and where along it (0..1) its button is.
-  const [hot, setHot] = useState<{ key: string; t: number } | null>(null)
+  // The seam the pointer is held over.
+  const [hot, setHot] = useState<{ key: string } | null>(null)
+  const leave = useRef<ReturnType<typeof setTimeout> | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
 
   const seams: Seam[] = []
@@ -88,39 +104,46 @@ export const SceneJoinSeams: React.FC = () => {
   hotRef.current = hot
 
   useEffect(() => {
+    const stay = () => { if (leave.current) { clearTimeout(leave.current); leave.current = null } }
+    const go = () => { if (!leave.current) leave.current = setTimeout(() => { leave.current = null; setHot(null) }, STAY_MS) }
     const onMove = (e: PointerEvent) => {
       const cur = hotRef.current
+      const onBtn = !!(e.target as Element | null)?.closest?.('[data-scene-join]')
+      // On its button, pressed or not: it stays.
+      if (cur && onBtn) { stay(); return }
       // Something is being dragged: nothing comes up under it.
-      if (e.buttons) { if (cur) setHot(null); return }
-      // On its button: it stays.
-      if (cur && (e.target as Element | null)?.closest?.('[data-scene-join]')) return
+      if (e.buttons) { stay(); if (cur) setHot(null); return }
       const o = rootRef.current?.getBoundingClientRect()
       const px = e.clientX - (o?.left ?? 0), py = e.clientY - (o?.top ?? 0)
-      const over = seamsRef.current.find(s => s.row
+      const all = seamsRef.current
+      const over = all.find(s => s.row
         ? Math.abs(px - s.x1) <= s.reach && py >= s.y1 && py <= s.y2
         : Math.abs(py - s.y1) <= s.reach && px >= s.x1 && px <= s.x2)
-      if (!over) { if (cur) setHot(null); return }
-      if (cur?.key === over.key) return
-      // Beside the pointer, along the line (the other way near its end).
-      const len = Math.max(1, over.row ? over.y2 - over.y1 : over.x2 - over.x1)
-      const at = over.row ? py - over.y1 : px - over.x1
-      const want = at + BESIDE + BTN_W / 2 <= len ? at + BESIDE : at - BESIDE
-      setHot({ key: over.key, t: Math.max(0, Math.min(1, want / len)) })
+      if (over) { stay(); if (cur?.key !== over.key) setHot({ key: over.key }); return }
+      if (!cur) return
+      // Off the line. Near the button (on the way to it): it stays; else
+      // it goes after a moment, so a hand that wanders is not punished.
+      const s = all.find(x => x.key === cur.key)
+      if (!s) { stay(); setHot(null); return }
+      const b = joinAt(s)
+      if (Math.abs(px - b.x) <= BTN_W / 2 + 14 && Math.abs(py - b.y) <= BTN_H / 2 + 14) stay()
+      else go()
     }
     window.addEventListener('pointermove', onMove)
-    return () => window.removeEventListener('pointermove', onMove)
+    return () => { window.removeEventListener('pointermove', onMove); stay() }
   }, [])
 
   return (
     <div ref={rootRef} data-scene-seams style={{ position: 'absolute', left: 0, top: 0, width: 0, height: 0, pointerEvents: 'none' }}>
       {seams.map(s => {
         const lit = hot?.key === s.key
-        const thick = lit ? 3 : 1.5
+        const thick = 3
         return (
           <React.Fragment key={s.key}>
             <div data-scene-seam-line={lit ? 'lit' : awake ? 'shown' : 'faded'} style={{
               position: 'absolute', zIndex: 58, pointerEvents: 'none', borderRadius: thick,
-              background: lit ? '#fff' : 'rgba(255,255,255,0.6)',
+              background: lit ? '#fff' : 'rgba(255,255,255,0.9)',
+              boxShadow: lit ? '0 0 0 1px rgba(0,0,0,0.6), 0 0 6px rgba(255,255,255,0.9)' : '0 0 0 1px rgba(0,0,0,0.5)',
               opacity: lit || awake ? 1 : 0, transition: lit || awake ? 'opacity 0.12s' : 'opacity 0.9s',
               ...(s.row
                 ? { left: s.x1 - thick / 2, top: s.y1 + 6, width: thick, height: Math.max(0, s.y2 - s.y1 - 12) }
@@ -133,12 +156,11 @@ export const SceneJoinSeams: React.FC = () => {
                 title={s.row ? 'Join cards: these two scene cards become one. The left one keeps its name' : 'Join cards: these two scene cards become one. The top one keeps its name'}
                 onPointerDown={e => e.stopPropagation()}
                 onDoubleClick={e => e.stopPropagation()}
-                onPointerLeave={() => setHot(null)}
                 onClick={e => { e.stopPropagation(); setHot(null); joinSceneCards(s.a, s.b, s.row ? 'row' : 'col') }}
                 style={{
                   position: 'absolute', zIndex: 59, transform: 'translate(-50%, -50%)',
-                  left: s.row ? s.x1 : s.x1 + (s.x2 - s.x1) * hot!.t, top: s.row ? s.y1 + (s.y2 - s.y1) * hot!.t : s.y1,
-                  height: 20, padding: '0 9px 0 7px', display: 'flex', alignItems: 'center', gap: 5, boxSizing: 'border-box', borderRadius: 10,
+                  left: joinAt(s).x, top: joinAt(s).y,
+                  height: BTN_H, padding: '0 9px 0 7px', display: 'flex', alignItems: 'center', gap: 5, boxSizing: 'border-box', borderRadius: 10,
                   background: '#ffd666', color: '#111', border: '1.5px solid #fff', boxShadow: '0 2px 7px rgba(0,0,0,0.55)',
                   fontSize: 11, fontWeight: 800, lineHeight: 1, fontFamily: 'system-ui, -apple-system, sans-serif', whiteSpace: 'nowrap',
                   cursor: 'pointer', pointerEvents: 'auto',
