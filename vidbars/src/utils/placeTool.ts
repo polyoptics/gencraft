@@ -34,6 +34,7 @@ import { cardFaceSize } from './cardGrid'
 import { useRailUiStore } from '../store/railUiStore'
 import type { RailDropTarget } from './rail'
 import type { EffectKind } from './fx/effects'
+import type { CardType } from './cardTypes'
 
 export type PlaceKind = 'viewer' | 'pool' | 'prompt' | 'history' | 'browser' | 'filmMixer' | 'storyline' | 'cabinet' | 'roughCut' | 'loopStrip' | 'attributes' | 'promptCards' | 'area' | 'stateSpace' | 'new'
   /** An effect card picked off the Effects palette (`effect` says which). */
@@ -51,9 +52,12 @@ interface PlaceState {
   /** kind 'effect': the place on a loop strip it would go into if set down
    *  now (the strip marks it; the outline steps aside), or null. */
   rail: RailDropTarget | null
+  /** kind 'new': the type of card picked off the New card palette, or null
+   *  for the plain button (a card, or a note at board zoom). */
+  cardType: CardType | null
 }
 
-const IDLE: PlaceState = { kind: null, at: null, free: false, effect: null, rail: null }
+const IDLE: PlaceState = { kind: null, at: null, free: false, effect: null, rail: null, cardType: null }
 export const usePlacing = create<PlaceState>(() => ({ ...IDLE }))
 
 /** The id the strip's drop mark is held under while an effect is placed. */
@@ -75,6 +79,12 @@ export function startPlacing(kind: PlaceKind) {
 export function startPlacingEffect(effect: EffectKind) {
   markRail(null)
   usePlacing.setState({ ...IDLE, kind: 'effect', effect })
+}
+/** Pick a card of a type up off the New card palette: its outline follows
+ *  the mouse, and the next click sets it down. */
+export function startPlacingCard(cardType: CardType) {
+  markRail(null)
+  usePlacing.setState({ ...IDLE, kind: 'new', cardType })
 }
 export function cancelPlacing() {
   markRail(null)
@@ -100,7 +110,18 @@ export function togglePlacing(kind: PlaceKind) {
 
 /** The "new" button makes a card at card and block zoom, a note at board
  *  zoom (TopIconBar's onNew). */
-const newIsNote = () => currentZone() === 'board'
+const newIsNote = () => currentZone() === 'board' && !usePlacing.getState().cardType
+
+/** A card just made by createCardOrBoardAt, given the type picked for it.
+ *  Part of the same step (its checkpoint is already taken). A Prompt card
+ *  starts as the Prompt card button's blank one does: named, rows up. */
+function typeNewCard(boardId: string, type: CardType) {
+  const bs = useBoardsStore.getState()
+  const g = bs.groups.find(x => x.boardIds.includes(boardId))
+  if (!g || type === 'element') return
+  bs.setCardsType([g.id], type)
+  if (type === 'prompt') { bs.renameGroup(g.id, 'Prompt'); bs.setGroupFlipped(g.id, true) }
+}
 
 /** A storyline starts as one point, not a box. */
 export const placesPoint = (kind: PlaceKind) => kind === 'storyline'
@@ -175,7 +196,13 @@ function placeAt(kind: PlaceKind, box: PlaceBox) {
     case 'roughCut': openRoughCut(at); break
     case 'loopStrip': createLoopStrip({ x: box.left, y: box.top }); break
     case 'storyline': createStorylineAt(at); break
-    case 'new': if (newIsNote()) addFreeNodeCentered('note', at); else createCardOrBoardAt(at); break
+    case 'new': {
+      if (newIsNote()) { addFreeNodeCentered('note', at); break }
+      const boardId = createCardOrBoardAt(at)
+      const type = usePlacing.getState().cardType
+      if (type) typeNewCard(boardId, type)
+      break
+    }
     // A 3D set comes with its card (utils/area3dCard).
     case 'area': bundleArea3dCard(addFreeNodeCentered('area', at)); break
     case 'effect': break   // set down by the pointer handler, which knows what is under it

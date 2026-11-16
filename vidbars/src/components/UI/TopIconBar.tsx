@@ -24,6 +24,7 @@ import React from 'react'
 import { usePlacing, togglePlacing, type PlaceKind } from '../../utils/placeTool'
 import { EffectPalette } from './EffectPalette'
 import { PromptCardMenu } from './PromptCardMenu'
+import { NewCardPalette } from './NewCardPalette'
 import { useZoomZone } from '../../store/zoomZonesStore'
 import { useCabinetUi } from '../../utils/cabinet'
 import { openFilmMixer, existingFilmMixer } from '../FilmMixer/FilmMixerBody'
@@ -393,6 +394,11 @@ export const TopIconBar: React.FC = () => {
   const [pcOpen, setPcOpen] = React.useState(false)
   const pcBtnRef = React.useRef<HTMLDivElement>(null)
   const closePc = React.useCallback(() => setPcOpen(false), [])
+  // The New card palette, the same way: which kind of card is the choice.
+  // At board zoom New places a note, as it did.
+  const [ncOpen, setNcOpen] = React.useState(false)
+  const ncBtnRef = React.useRef<HTMLDivElement>(null)
+  const closeNc = React.useCallback(() => setNcOpen(false), [])
 
   // Every button, by id. The ORDER they sit in is Brian's: drag one along
   // the bar to move it, and the order is saved (localStorage) so it is the
@@ -441,7 +447,15 @@ export const TopIconBar: React.FC = () => {
     ),
     // The Notes & 3D tools panel (components/Notes/NotesPanel): lit while out.
     notes: <IconButton Icon={IcNotes} title="Notes & 3D tools — curves, arrows, drawing on models, pins, 3D sets" active={notesOpen} onClick={() => useNotesUi.setState(s => ({ open: !s.open, tool: s.open ? null : s.tool }))} />,
-    new: <IconButton Icon={IcNew} title={newLabel} {...place('new')} />,
+    new: (
+      <IconButton
+        Icon={IcNew}
+        title={newLabel}
+        active={ncOpen || placing === 'new'}
+        // Lit and carrying one: the button puts it back, as every button does.
+        onClick={() => { if (zone === 'board' || placing === 'new') { setNcOpen(false); togglePlacing('new') } else setNcOpen(o => !o) }}
+      />
+    ),
   }
 
   const [order, setOrder] = React.useState<BarId[]>(loadOrder)
@@ -550,7 +564,7 @@ export const TopIconBar: React.FC = () => {
           <div style={{ width: 1, height: TILE * 0.55, background: 'rgba(255,255,255,0.12)', margin: '0 2px' }} />
         )}
         <div
-          ref={id === 'effects' ? fxBtnRef : id === 'promptCard' ? pcBtnRef : undefined}
+          ref={id === 'effects' ? fxBtnRef : id === 'promptCard' ? pcBtnRef : id === 'new' ? ncBtnRef : undefined}
           data-top-icon={id}
           onPointerDown={e => onGrab(e, id)}
           onClickCapture={swallowClickAfterDrag}
@@ -569,6 +583,7 @@ export const TopIconBar: React.FC = () => {
       ))}
       <EffectPalette open={fxOpen} anchorRef={fxBtnRef} onClose={closeFx} />
       <PromptCardMenu open={pcOpen} anchorRef={pcBtnRef} onClose={closePc} />
+      <NewCardPalette open={ncOpen} anchorRef={ncBtnRef} onClose={closeNc} />
     </div>
   )
 }
