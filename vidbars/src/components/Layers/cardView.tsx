@@ -15,8 +15,9 @@
 // The same trick extends to the block and board layers when those become
 // pinnable: they use the identical idiom.
 
-import React, { createContext, useContext, useMemo } from 'react'
+import React, { createContext, useContext, useMemo, useSyncExternalStore } from 'react'
 import { useCanvasStore } from '../../store/canvasStore'
+import { subscribeView, livePan, carriedPan } from '../../utils/viewCarry'
 
 export interface CardView {
   pan: { x: number; y: number }
@@ -25,10 +26,18 @@ export interface CardView {
 
 const CardViewContext = createContext<CardView | null>(null)
 
+/** Inside the box that is slid along while the view is dragged
+ *  (utils/viewCarry): what is drawn here keeps the view position it was
+ *  last drawn with until the drag is let go. */
+export const CarriedView = createContext(false)
+
 /** The camera this card should draw with: the frozen one if an ancestor
  *  supplied it, otherwise the live canvas. */
-export function useCardView(): CardView {
-  const pan = useCanvasStore(s => s.pan)
+export function useCardView(box?: boolean): CardView {
+  // `box`: asked by the one that lays the carried box out itself.
+  const within = useContext(CarriedView)
+  const carried = box ?? within
+  const pan = useSyncExternalStore(subscribeView, carried ? carriedPan : livePan)
   const zoom = useCanvasStore(s => s.zoom)
   const frozen = useContext(CardViewContext)
   return frozen ?? { pan, zoom }

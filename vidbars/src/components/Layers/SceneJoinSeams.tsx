@@ -27,7 +27,7 @@
 
 import React, { useEffect, useRef, useState } from 'react'
 import { useBoardsStore } from '../../store/boardsStore'
-import { useCanvasStore } from '../../store/canvasStore'
+import { useCardView } from './cardView'
 import { cardVisualRect } from '../../hooks/useCardDecks'
 import { joinNeighbour, joinSceneCards } from '../../utils/sceneSplit'
 import { drawnTopFix } from '../../utils/cardEdgeSnap'
@@ -52,8 +52,9 @@ const MAGNETED = 3    // px over the magnet's own gap that still counts as magne
 export const SceneJoinSeams: React.FC = () => {
   const groups = useBoardsStore(s => s.groups)
   const boards = useBoardsStore(s => s.boards)
-  const zoom = useCanvasStore(s => s.zoom) || 1
-  const pan = useCanvasStore(s => s.pan)
+  const view = useCardView()
+  const zoom = view.zoom || 1
+  const pan = view.pan
   // The seam the pointer is held over.
   const [hot, setHot] = useState<{ key: string } | null>(null)
   const leave = useRef<ReturnType<typeof setTimeout> | null>(null)

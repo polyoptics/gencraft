@@ -17,11 +17,11 @@ import type { FreeNodeData } from '../store/freeNodeStore'
 import { dockedCards } from './filmShots'
 import { leaves } from './sceneCard'
 import { hasMembers } from './cardTypes'
-import { shownIds } from './tucked'
+import { shownIds, linkIndex } from './tucked'
 
 /** The cards a card holds, by id, in its own order (none: []). */
 export function cardContents(card: ProjectGroup, groups: ProjectGroup[]): string[] {
-  const byId = new Map(groups.map(g => [g.id, g]))
+  const byId = linkIndex(groups).byId
   const g = (card.linkOf && byId.get(card.linkOf)) || card
   const out: string[] = []
   const add = (id: string | undefined) => {
@@ -66,6 +66,6 @@ export function trayIds(card: ProjectGroup | undefined, groups: ProjectGroup[]):
 
 /** The scope of the browser in card `cardId`'s tray. */
 export function trayScope(cardId: string, groups: ProjectGroup[]): BrowserScope {
-  const card = groups.find(g => g.id === cardId)
+  const card = linkIndex(groups).byId.get(cardId)
   return { ids: new Set(trayIds(card, groups)), label: card?.name || 'Card' }
 }

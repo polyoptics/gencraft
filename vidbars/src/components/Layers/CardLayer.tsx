@@ -9,7 +9,8 @@ import { useBoardsStore, getUngroupedBoardIds } from '../../store/boardsStore'
 import type { ProjectGroup, BoardData, HeroImageTransform } from '../../store/boardsStore'
 import { useCanvasStore, groupBounds } from '../../store/canvasStore'
 import { isTilted, useTiltStore, useModelScaleStore } from '../../store/tiltStore'
-import { useCardView } from './cardView'
+import { useCardView, CarriedView } from './cardView'
+import { carryBox } from '../../utils/viewCarry'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { DEFAULT_HEADER_STYLE, DEFAULT_BODY_STYLE, useFreeNodeStore } from '../../store/freeNodeStore'
 import type { TextStyle } from '../../store/freeNodeStore'
@@ -1793,8 +1794,7 @@ export const GroupCard = React.memo(GroupCardInner)
 // ── Ungrouped board card (free canvas) ──
 
 const UngroupedBoardCardInner: React.FC<{ boardId: string }> = ({ boardId }) => {
-  const pan    = useCanvasStore(s => s.pan)
-  const zoom   = useCanvasStore(s => s.zoom)
+  const { pan, zoom } = useCardView()
   const board  = useBoardsStore(s => s.boards[boardId])
   const [isDragging, setIsDragging] = useState(false)
   const [isHovered, setIsHovered] = useState(false)
@@ -5141,8 +5141,8 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
   const groups = useBoardsStore(s => s.groups)
   const boards = useBoardsStore(s => s.boards)
   // Frozen when pinned, live otherwise — the same swap every card piece makes.
-  const { pan, zoom } = useCardView()
   const scoped = !!only
+  const { pan, zoom } = useCardView(scoped ? undefined : true)
   const onlySet = useMemo(() => (only ? new Set(only) : null), [only])
   // Defer boards (only) so the heavy derived work runs on idle time during
   // drags. We can't defer `groups` here: the render gate below uses live
@@ -5222,7 +5222,10 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
     return deck.state === 'stacked' && deck.anchorGroupId === gid && !stacking ? deck : null
   }
   return (
-    <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }} onPointerDown={startOverlayPan}>
+    <CarriedView.Provider value={!scoped}>
+    {/* The canvas's own cards are carried while the view is dragged
+        (utils/viewCarry), in this box. */}
+    <div ref={scoped ? undefined : carryBox} style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0, pointerEvents: 'none' }} onPointerDown={startOverlayPan}>
       {groups.map(g => {
         // Hard gate: if this group is a non-anchor member of any deck, hide it completely.
         // This uses the persisted deckAnchorId — no spatial clustering needed.
@@ -5487,6 +5490,7 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
           (the canvas's own cards only, not a pinned card's showing). */}
       {!onlySet && <SceneJoinSeams />}
     </div>
+    </CarriedView.Provider>
   )
 }
 
