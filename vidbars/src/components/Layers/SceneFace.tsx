@@ -34,7 +34,7 @@ import { useLinkDragStore } from '../../store/linkDragStore'
 import { cardTitle, fillFields } from '../../utils/faceStyle'
 import { CARD_TYPES } from '../../utils/cardTypes'
 import {
-  breakEdge, canFold, canMerge, divBoxes, edgeBreaks, findDiv, mergeParts, heldCard, isLeaf, leaves, litDivisions, needOf, patchDiv, removeDiv, resizeSplit, sectionOf, shareUnits, splitDiv, takeCard,
+  breakEdge, canFold, canMerge, linkedTo, removeLink, divBoxes, edgeBreaks, findDiv, mergeParts, heldCard, isLeaf, leaves, litDivisions, needOf, patchDiv, removeDiv, resizeSplit, sectionOf, shareUnits, splitDiv, takeCard,
   gathered, clearDiv, moveDiv, moveAcross, movedBy, fieldCard,
   type SceneDiv, type SceneView,
 } from '../../utils/sceneCard'
@@ -658,6 +658,32 @@ const Division: React.FC<{ d: SceneDiv; box: Box; ctx: Ctx; heads: boolean; fold
           </div>
         )}
         <div style={{ position: 'absolute', right: 1, bottom: 1, display: 'flex', gap: 1, zIndex: 3 }}>
+          {(() => {
+            // Cards linked to it (a link "+" let go on it): one small mark
+            // with how many (its headings' are named in its tip). A click
+            // opens its list, where each can be unlinked.
+            const l = linkedTo(ctx.scene, d.id)
+            const there = (c: string) => ctx.groups.find(x => x.id === c)
+            const own = l.own.map(there).filter(Boolean) as ProjectGroup[]
+            const handed = l.handed.flatMap(h => h.cards).map(there).filter(Boolean) as ProjectGroup[]
+            // Only where something is linked to it itself: what a heading
+            // hands down is marked on the heading, not on every section.
+            if (!own.length) return null
+            const names = (gs: ProjectGroup[]) => gs.map(g => cardTitle(ctx.groups, g) || g.name || 'card').join(', ')
+            return (
+              <button type="button" data-scene-links={d.id}
+                title={[own.length ? `Linked: ${names(own)}` : '', handed.length ? `Handed down: ${names(handed)}` : ''].filter(Boolean).join('\n')}
+                onPointerDown={stopPress} onDoubleClick={e => e.stopPropagation()}
+                onClick={e => { e.stopPropagation(); ctx.pick(d.id); ctx.openMenu(d.id, e.clientX, e.clientY) }}
+                style={{
+                  height: 6, minWidth: 6, padding: '0 1.2px', border: '0.4px solid rgba(255,255,255,0.85)', borderRadius: 3, background: 'rgba(0,0,0,0.6)',
+                  cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.6, color: '#fff', fontSize: 3.6, fontWeight: 700, lineHeight: 1, fontFamily: 'inherit',
+                }}>
+                <svg width="3.6" height="3.6" viewBox="0 0 8 8"><path d="M3.4 4.6a1.7 1.7 0 0 0 2.4 0l1.3-1.3a1.7 1.7 0 0 0-2.4-2.4l-.6.6M4.6 3.4a1.7 1.7 0 0 0-2.4 0L.9 4.7a1.7 1.7 0 0 0 2.4 2.4l.6-.6" fill="none" stroke="#fff" strokeWidth="1" strokeLinecap="round" /></svg>
+                {own.length}
+              </button>
+            )
+          })()}
           {src && hovered && (
             // Back to the card it came from: only while pointed at.
             <button type="button" data-scene-source title="Go to the card this came from" onPointerDown={stopPress}
@@ -1494,6 +1520,11 @@ export const SceneFace: React.FC<{
     { const g = gathered(scene, d.id); if (g.own.length || g.handed.length) items.push({ label: 'Bake out to a deck, with its cast', tool: 'bake-deck', act: () => { bakeDivision(group.id, d.id, 'deck') } }) }
     if (sec) items.push({ label: 'Bake this section out to a deck', tool: 'bake-section', act: () => { bakeDivision(group.id, d.id, 'section') } })
     items.push({ label: 'Clear this section', tool: 'clear', act: () => { setMoving(null); edit(r => clearDiv(r, d.id)) } })
+    // The cards linked to it: each can be let go.
+    for (const c of d.links ?? []) {
+      const g = groups.find(x => x.id === c)
+      if (g) items.push({ label: `Unlink ${cardTitle(groups, g) || g.name || 'card'}`, tool: 'unlink-link', act: () => edit(r => removeLink(r, c, d.id)) })
+    }
     if (heldCard(d)) items.push({ label: 'Unlink from its card', tool: 'unlink', act: () => edit(r => takeCard(d.live && card ? patchDiv(r, d.id, { ...copyFrom(card, false), live: false }) : r, d.id)) })
     if (canRemove) items.push({ label: 'Remove this division', tool: 'remove', danger: true, act: () => { edit(r => removeDiv(r, d.id)); setPicked(null) } })
     return items

@@ -3,7 +3,7 @@
 // pointermove/pointerup listeners that drive the drag. Mounted once at the
 // App root. Motion matches the NLEBlock color drag-out pattern.
 
-import { dropCardsInDivision } from '../../utils/sceneContent'
+import { linkCardsToDivision } from '../../utils/sceneContent'
 import { addState, setStateDeck } from '../../utils/stateCard'
 import React, { useEffect } from 'react'
 import { createPortal } from 'react-dom'
@@ -39,7 +39,9 @@ export const LinkDragOverlay: React.FC = () => {
       // card let go there is what that detail shows (CardBack).
       let detail: string[] | null = null
       // A division of a scene card ("division:<scene>:<division>"): the
-      // card let go goes in it, with the others selected with it (SceneFace).
+      // card let go is LINKED to it, with the others selected with it, as a
+      // card on a card (Brian 2026-11-16). Dragging the card itself in is
+      // what fills a division (CardLayer).
       let division: string[] | null = null
       // A state on a State card ("statedeck:<card>:<state>|new"): the deck
       // the card let go is in becomes that state's deck (StateFace).
@@ -88,7 +90,7 @@ export const LinkDragOverlay: React.FC = () => {
         useUndoCoordinator.getState().checkpoint()
         const bs = useBoardsStore.getState()
         const ids = bs.selectedGroupIds.includes(source.id) ? [source.id, ...bs.selectedGroupIds.filter(id => id !== source.id)] : [source.id]
-        dropCardsInDivision(division[1], division[2], ids)
+        linkCardsToDivision(division[1], division[2], ids)
       }
       if (stateDeck && source.kind === 'group' && source.id !== stateDeck[1]) {
         if (stateDeck[2] === 'new') addState(stateDeck[1], { deck: source.id })

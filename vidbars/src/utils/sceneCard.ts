@@ -24,6 +24,11 @@ export interface SceneDiv {
   card?: string
   /** Before 2026-11-07 a division held a list; the first is its card. */
   cards?: string[]
+  /** Cards LINKED to it (Brian 2026-11-16): a card's link "+" let go on
+   *  it, as a card on a card ("this person's in this scene"). Nothing of
+   *  the card is copied in and nothing in the division changes. A
+   *  heading's are handed down to its whole section. */
+  links?: string[]
   /** A deck let go on it (Brian 2026-11-10): the shot's cast, every card
    *  of the deck, its front (`card`) first. Links back, nothing more. */
   deck?: string[]
@@ -264,7 +269,8 @@ export function mergeParts(root: SceneDiv, splitId: string, i: number): SceneDiv
     const a = d.kids![i], b = d.kids![i + 1]
     const sizes = [...(d.sizes ?? d.kids!.map(() => 1 / d.kids!.length))]
     const notes = [a.notes, b.notes].map(x => (x ?? '').trim()).filter(Boolean).join('\n')
-    const one: SceneDiv = { ...a, notes: notes || undefined, image: a.image ?? b.image }
+    const links = [...new Set([...(a.links ?? []), ...(b.links ?? [])])]
+    const one: SceneDiv = { ...a, notes: notes || undefined, image: a.image ?? b.image, links: links.length ? links : undefined }
     const kids = [...d.kids!]
     kids.splice(i, 2, one)
     sizes.splice(i, 2, sizes[i] + sizes[i + 1])
@@ -436,7 +442,7 @@ export function takeCard(root: SceneDiv, id: string): SceneDiv {
  *  a heading's own name stays. */
 export function clearDiv(root: SceneDiv, id: string): SceneDiv {
   return edit(root, id, d => isLeaf(d) ? {
-    id: d.id, color: d.color, bump: d.bump, opens: d.opens, mid: d.mid, tab: d.tab,
+    id: d.id, color: d.color, bump: d.bump, opens: d.opens, mid: d.mid, tab: d.tab, links: d.links,
     name: heldCard(d) && !d.hand ? 'Section' : d.name,
   } : d)
 }
@@ -485,6 +491,47 @@ export function gathered(root: SceneDiv, leafId: string): { own: string[]; hande
     if (cards.length) handed.unshift({ from: h, cards })
   }
   return { own, handed }
+}
+
+/** The cards linked to a division: its own, and those handed down from
+ *  each heading over it, outermost first. A card is counted once, where it
+ *  is nearest. */
+export function linkedTo(root: SceneDiv, leafId: string): { own: string[]; handed: { from: SceneDiv; cards: string[] }[] } {
+  const d = findDiv(root, leafId)
+  const own = d && isLeaf(d) ? d.links ?? [] : []
+  const seen = new Set(own)
+  const handed: { from: SceneDiv; cards: string[] }[] = []
+  for (const h of headsAbove(root, leafId).reverse()) {
+    const cards = (h.links ?? []).filter(c => !seen.has(c))
+    cards.forEach(c => seen.add(c))
+    if (cards.length) handed.unshift({ from: h, cards })
+  }
+  return { own, handed }
+}
+
+/** Cards linked to a division (those already linked to it stay as they are). */
+export function addLinks(root: SceneDiv, id: string, cardIds: string[]): SceneDiv {
+  return edit(root, id, d => {
+    const cur = d.links ?? []
+    const more = cardIds.filter((c, i) => !cur.includes(c) && cardIds.indexOf(c) === i)
+    return more.length ? { ...d, links: [...cur, ...more] } : d
+  })
+}
+
+/** A card's link taken off a division (`id`), or off every division (no id). */
+export function removeLink(root: SceneDiv, cardId: string, id?: string): SceneDiv {
+  const walk = (d: SceneDiv): SceneDiv => {
+    if (!isLeaf(d)) return { ...d, kids: d.kids!.map(walk) }
+    if ((id && d.id !== id) || !d.links?.includes(cardId)) return d
+    const links = d.links.filter(c => c !== cardId)
+    return { ...d, links: links.length ? links : undefined }
+  }
+  return walk(root)
+}
+
+/** Every card linked to any division of the face, each once. */
+export function sceneLinks(root: SceneDiv): string[] {
+  return [...new Set(leaves(root).flatMap(d => d.links ?? []))]
 }
 
 /** The card a division's {fields} are filled from (Brian 2026-11-11:

@@ -7,7 +7,7 @@
 import { useBoardsStore, type ProjectGroup } from '../store/boardsStore'
 import { cardFaceMedia, stackedDeckMembers } from './cardGrid'
 import { fillFields } from './faceStyle'
-import { castOf, findDiv, heldCard, isLeaf, patchDiv, putDeck, sectionOf, type SceneDiv } from './sceneCard'
+import { castOf, findDiv, heldCard, isLeaf, patchDiv, putDeck, sectionOf, type SceneDiv, addLinks, removeLink, sceneLinks } from './sceneCard'
 
 /** A card's face content: its header text, paragraph text, picture. Not
  *  its name (a file name, often): only what is on its face. */
@@ -65,6 +65,25 @@ export function dropCardsInDivision(sceneId: string, divId: string, cardIds: str
     const g = useBoardsStore.getState().groups.find(x => x.id === id)
     return g ? copyFrom(g) : {}
   })
+}
+
+/** A card's link "+" let go on a division (Brian 2026-11-16): the cards
+ *  are LINKED to it, as a card on a card; nothing in it is replaced. */
+export function linkCardsToDivision(sceneId: string, divId: string, cardIds: string[]): void {
+  const bs = useBoardsStore.getState()
+  const scene = bs.groups.find(g => g.id === sceneId)?.scene
+  if (!scene) return
+  const ids = cardIds.filter(id => id !== sceneId && bs.groups.some(g => g.id === id))
+  if (ids.length) bs.setGroupScene(sceneId, addLinks(scene, divId, ids))
+}
+
+/** Card `cardId` unlinked from the card it is tucked under: that card's
+ *  own link to it, and, a scene card, its divisions' links to it. */
+export function unlinkFromHolder(holderId: string, cardId: string): void {
+  const bs = useBoardsStore.getState()
+  bs.unlinkGroups(holderId, cardId)
+  const scene = bs.groups.find(g => g.id === holderId)?.scene
+  if (scene && sceneLinks(scene).includes(cardId)) bs.setGroupScene(holderId, removeLink(scene, cardId))
 }
 
 /** Cards let go on a section's HEADING (an act's, a scene's) are handed

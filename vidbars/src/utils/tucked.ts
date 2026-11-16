@@ -6,10 +6,13 @@
 // tucked names the cards it is under on its chips (PrimaryChipRail).
 //
 // Factions, families and notes tuck nothing: their links are members.
+// A scene card also holds the cards linked to its sections (a link "+" let
+// go on a section: utils/sceneCard links).
 // Nothing here is stored.
 
 import type { ProjectGroup } from '../store/boardsStore'
 import { cardTypeOf } from './cardTypes'
+import { sceneLinks } from './sceneCard'
 
 const MEMBERSHIP = new Set(['faction', 'family', 'note'])
 
@@ -23,13 +26,14 @@ export function tucks(host: ProjectGroup | undefined): boolean {
  *  list of its members under it"): its chips name them. */
 export function holderIds(card: ProjectGroup | undefined, groups: ProjectGroup[]): string[] {
   if (!card) return []
-  return groups.filter(g => g.id !== card.id && tucks(g) && (g.linkedGroupIds ?? []).includes(card.id)).map(g => g.id)
+  return groups.filter(g => g.id !== card.id && tucks(g) && ((g.linkedGroupIds ?? []).includes(card.id) || (!!g.scene && sceneLinks(g.scene).includes(card.id)))).map(g => g.id)
 }
 
 /** Every card linked with `card`: the ones it links to, and, where it
  *  tucks, the ones it is tucked under. */
 export function shownIds(card: ProjectGroup | undefined, groups: ProjectGroup[]): string[] {
   if (!card) return []
-  const own = (card.linkedGroupIds ?? []).filter(id => id !== card.id)
+  const inScene = card.scene ? sceneLinks(card.scene).filter(id => groups.some(g => g.id === id)) : []
+  const own = [...new Set([...(card.linkedGroupIds ?? []), ...inScene])].filter(id => id !== card.id)
   return tucks(card) ? [...new Set([...own, ...holderIds(card, groups)])] : own
 }

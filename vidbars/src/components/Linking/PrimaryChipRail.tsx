@@ -19,6 +19,7 @@ import { refKey } from '../../utils/linkTargets'
 import { cardTitle } from '../../utils/faceStyle'
 import { CARD_TYPES, cardTypeOf, type CardType } from '../../utils/cardTypes'
 import { holderIds, tucks } from '../../utils/tucked'
+import { unlinkFromHolder } from '../../utils/sceneContent'
 import { TrayLip } from './CardTray'
 import { useTrayStore } from '../../store/trayStore'
 
@@ -277,7 +278,7 @@ const PrimaryChip: React.FC<{ host: ProjectGroup; linked: ProjectGroup; path: st
           onClick={e => {
             e.stopPropagation()
             // The link is kept by the card the other is tucked under.
-            if (held) unlink(linked.id, host.id)
+            if (held) unlinkFromHolder(linked.id, host.id)
             else unlink(host.id, linked.id)
             closeContaining(linked.id)
           }}
