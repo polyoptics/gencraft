@@ -43,7 +43,20 @@ export interface RoughCutData {
   /** Its controls' size: canvas units per design unit, fixed when it is made,
    *  so resizing it gives it more timeline and rows, not bigger buttons. */
   ui?: number
+  /** One frame for every shot, whatever its own shape: the frame's shape
+   *  (width ÷ height), and whether a shot fills it (its overhang cut off) or
+   *  is fitted inside it. Goes out with the shots (MediaItem.frame). Absent:
+   *  each shot keeps its own shape. */
+  frame?: { aspect: number; fill?: boolean }
+  /** false: the screens show whole shots, not the frame (a look only). */
+  frameShown?: boolean
 }
+
+/** The frame shapes a Rough Cut offers. */
+export const FRAME_SHAPES: { label: string; aspect: number }[] = [
+  { label: '16:9', aspect: 16 / 9 }, { label: '4:3', aspect: 4 / 3 }, { label: '1:1', aspect: 1 },
+  { label: '9:16', aspect: 9 / 16 }, { label: '2.39:1', aspect: 2.39 },
+]
 
 /** The shortest a clip can be trimmed to, seconds. */
 export const MIN_CLIP = 0.2
@@ -206,11 +219,13 @@ export function roughCutShots(node: FreeNodeData): string[] {
   return clips.flatMap(c => (c.shot ? [c.shot] : c.kind === 'video' ? shotsInFilmRange(c.full, c.in, c.out) : []))
 }
 
-/** A clip as a card's media, its trim kept: what a clip dragged out becomes. */
-export function clipMedia(c: RoughClip): MediaItem {
-  if (c.kind === 'video') return { url: c.url, type: 'video', posterUrl: c.poster, clipIn: c.in, clipOut: c.out, duration: c.full }
-  if (c.kind === 'shot') return { url: c.url, type: 'image', filmShot: c.shot }
-  return { url: c.url, type: 'image', clipIn: 0, clipOut: clipLength(c) }
+/** A clip as a card's media, its trim kept: what a clip dragged out becomes.
+ *  `frame`: its Rough Cut's frame, which goes with it. */
+export function clipMedia(c: RoughClip, frame?: RoughCutData['frame']): MediaItem {
+  const f = frame ? { frame: { aspect: frame.aspect, ...(frame.fill ? { fill: true } : null) } } : null
+  if (c.kind === 'video') return { url: c.url, type: 'video', posterUrl: c.poster, clipIn: c.in, clipOut: c.out, duration: c.full, ...f }
+  if (c.kind === 'shot') return { url: c.url, type: 'image', filmShot: c.shot, ...f }
+  return { url: c.url, type: 'image', clipIn: 0, clipOut: clipLength(c), ...f }
 }
 
 /** Split one clip at timeline time t into two, end to end, each with its own

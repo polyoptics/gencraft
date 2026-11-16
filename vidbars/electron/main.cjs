@@ -393,7 +393,7 @@ function registerBridge() {
   const MOVING_FILE = /\.(mp4|webm|mov|m4v|mkv|ogv)$/i
   const STILL_FILE = /\.(png|jpe?g|jfif|webp|gif|avif|bmp|tiff?)$/i
   const movieId = m => typeof m === 'string' && /^[0-9a-f]{16}$/.test(m)
-  ipcMain.handle('vb:cut-movie-open', async (e, parts) => {
+  ipcMain.handle('vb:cut-movie-open', async (e, parts, aspect) => {
     if (!fromApp(e) || !Array.isArray(parts) || !parts.length || parts.length > 2000) return { error: 'Not allowed' }
     const found = []
     for (let i = 0; i < parts.length; i++) {
@@ -404,9 +404,11 @@ function registerBridge() {
       if (!Number.isFinite(p.in) || p.in < 0 || !Number.isFinite(p.len) || p.len > 6 * 3600) return { error: 'Not allowed' }
       // (A movie's length 0: the rest of the file.)
       if (p.len < 0.03 && (still || p.len !== 0)) return { error: 'Not allowed' }
-      found.push({ file, still, in: still ? 0 : p.in, len: p.len })
+      found.push({ file, still, in: still ? 0 : p.in, len: p.len, fill: p.fill === true })
     }
-    try { return await require('./cutMovie.cjs').open(found) } catch (err) { return { error: String(err.message || err) } }
+    // The movie's shape, width ÷ height, when it is not the first movie's own.
+    const shape = Number.isFinite(aspect) && aspect >= 0.1 && aspect <= 10 ? aspect : undefined
+    try { return await require('./cutMovie.cjs').open(found, shape) } catch (err) { return { error: String(err.message || err) } }
   })
   ipcMain.handle('vb:cut-movie-part', async (e, id, i) => {
     if (!fromApp(e) || !movieId(id) || !Number.isInteger(i) || i < 0) return { error: 'Not allowed' }

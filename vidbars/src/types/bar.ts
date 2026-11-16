@@ -20,6 +20,11 @@ export interface MediaItem {
   clipOut?: number
   /** The source's own length, seconds, once read (videos and audio). */
   duration?: number
+  /** The frame it is shown in when made into a movie or a GIF (set on the
+   *  cards a Rough Cut with a frame hands out): the frame's shape, width ÷
+   *  height, and whether it fills it (its overhang cut off) or is fitted
+   *  inside (black around it). Absent: its own shape. */
+  frame?: { aspect: number; fill?: boolean }
   /** How an AI-made picture was made, read from its own file when it came
    *  in (utils/madeWith): prompt, settings, reference links, job id. */
   made?: import('../utils/madeWith').MadeWith

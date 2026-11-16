@@ -95,7 +95,7 @@ contextBridge.exposeInMainWorld('vidbarsDesktop', {
   /** A run of shots as one MP4 in Videos\\VidBars Movies: open it with its
    *  parts ([{ url, still, in, len }], stored urls), make each part, then
    *  close it under a name. Resolves { id, w, h, fps }, {}, { path }; or { error }. */
-  cutMovieOpen: (parts) => ipcRenderer.invoke('vb:cut-movie-open', parts),
+  cutMovieOpen: (parts, aspect) => ipcRenderer.invoke('vb:cut-movie-open', parts, aspect),
   cutMoviePart: (id, i) => ipcRenderer.invoke('vb:cut-movie-part', id, i),
   cutMovieClose: (id, name) => ipcRenderer.invoke('vb:cut-movie-close', id, name),
   cutMovieDrop: (id) => ipcRenderer.invoke('vb:cut-movie-drop', id),

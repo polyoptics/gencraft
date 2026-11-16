@@ -74,6 +74,8 @@ interface Source {
   video?: { el: HTMLVideoElement; lo: number; hi: number }
   /** A still: how long it is held, seconds (a Rough Cut's own hold, if set). */
   hold: number
+  /** The frame it goes out in (MediaItem.frame). */
+  frame?: MediaItem['frame']
 }
 
 function waitFor(el: HTMLElement, ok: string, ms: number): Promise<boolean> {
@@ -100,14 +102,14 @@ async function open(m: MediaItem): Promise<Source | null> {
     const length = Number.isFinite(el.duration) ? el.duration : 0
     const lo = Math.max(0, Math.min(m.clipIn ?? 0, length))
     const hi = Math.max(lo, Math.min(m.clipOut ?? length, length))
-    return { draw: el, w: el.videoWidth, h: el.videoHeight, video: { el, lo, hi }, hold: 0 }
+    return { draw: el, w: el.videoWidth, h: el.videoHeight, video: { el, lo, hi }, hold: 0, frame: m.frame }
   }
   const img = new Image()
   const ready = waitFor(img, 'load', 20_000)
   img.src = url
   if (!(await ready) || !img.naturalWidth) return null
   const held = m.clipOut != null ? m.clipOut - (m.clipIn ?? 0) : STILL_SECONDS
-  return { draw: img, w: img.naturalWidth, h: img.naturalHeight, hold: Math.max(0.2, Math.min(10, held)) }
+  return { draw: img, w: img.naturalWidth, h: img.naturalHeight, hold: Math.max(0.2, Math.min(10, held)), frame: m.frame }
 }
 
 async function seek(el: HTMLVideoElement, t: number): Promise<void> {
@@ -171,10 +173,16 @@ export async function makeGif(shots: MediaItem[], name: string, besideIds: strin
     }
     if (!opened.some(s => s.video && s.video.hi > s.video.lo)) throw new Error('the movie could not be read')
 
-    // The first shot sets the shape; the others are fitted inside it.
+    // The first shot sets the shape; the others are fitted inside it. Shots
+    // with a frame (a Rough Cut's): the first one's frame is the shape, the
+    // largest of it the first shot holds, and each shot fills it or is
+    // fitted inside it as its own frame says.
     const first = opened[0]
-    const k = Math.min(1, MAX_SIDE / Math.max(first.w, first.h))
-    const w = Math.max(2, Math.round(first.w * k)), h = Math.max(2, Math.round(first.h * k))
+    const aspect = opened.find(s => s.frame)?.frame?.aspect
+    const fw = aspect ? Math.min(first.w, first.h * aspect) : first.w
+    const fh = aspect ? fw / aspect : first.h
+    const k = Math.min(1, MAX_SIDE / Math.max(fw, fh))
+    const w = Math.max(2, Math.round(fw * k)), h = Math.max(2, Math.round(fh * k))
     const canvas = document.createElement('canvas')
     canvas.width = w
     canvas.height = h
@@ -192,7 +200,7 @@ export async function makeGif(shots: MediaItem[], name: string, besideIds: strin
     const put = (s: Source, delayCs: number) => {
       ctx.fillStyle = '#000'
       ctx.fillRect(0, 0, w, h)
-      const f = Math.min(w / s.w, h / s.h)
+      const f = s.frame?.fill ? Math.max(w / s.w, h / s.h) : Math.min(w / s.w, h / s.h)
       const dw = s.w * f, dh = s.h * f
       ctx.drawImage(s.draw, (w - dw) / 2, (h - dh) / 2, dw, dh)
       gif.frame(ctx.getImageData(0, 0, w, h).data, delayCs)

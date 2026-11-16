@@ -105,8 +105,11 @@ export interface VidbarsDesktop {
    *  (utils/makeMovie). Open it with its parts in order: each a stored
    *  url of a file on disk, where it starts in that file and how long it
    *  runs (seconds; 0 for a movie: the rest of the file); `still`: a picture
-   *  held for its length. `length`: the whole movie's, seconds. */
-  cutMovieOpen?(parts: { url: string; still: boolean; in: number; len: number }[]): Promise<{ id: string; w: number; h: number; fps: number; length?: number } | { error: string }>
+   *  held for its length; `fill`: it fills the movie's shape, its overhang
+   *  cut off, where otherwise it is fitted inside. `aspect`: the movie's
+   *  shape, width ÷ height (absent: the first movie's own).
+   *  `length`: the whole movie's, seconds. */
+  cutMovieOpen?(parts: { url: string; still: boolean; in: number; len: number; fill?: boolean }[], aspect?: number): Promise<{ id: string; w: number; h: number; fps: number; length?: number } | { error: string }>
   /** Make part i of an open movie. */
   cutMoviePart?(id: string, i: number): Promise<{ error?: string }>
   /** Join the parts into the file, named `name` and stamped; never over another. */

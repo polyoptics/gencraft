@@ -43,7 +43,7 @@ export async function makeMovie(shots: MediaItem[], name: string, beside: () => 
   if (!d?.cutMovieOpen || !d.cutMoviePart || !d.cutMovieClose) return { error: 'Movies are made in the VidBars desktop app (restart it if it is open)' }
 
   note('Opening the shots…')
-  const parts: { url: string; still: boolean; in: number; len: number }[] = []
+  const parts: { url: string; still: boolean; in: number; len: number; fill?: boolean }[] = []
   for (let i = 0; i < use.length; i++) {
     const m = use[i]
     const url = await onDisk(m, name)
@@ -52,14 +52,15 @@ export async function makeMovie(shots: MediaItem[], name: string, beside: () => 
       const from = Math.max(0, m.clipIn ?? 0)
       const to = m.clipOut ?? m.duration
       // (No length known: 0, the rest of the file.)
-      parts.push({ url, still: false, in: from, len: to != null ? Math.max(0.04, to - from) : 0 })
+      parts.push({ url, still: false, in: from, len: to != null ? Math.max(0.04, to - from) : 0, fill: !!m.frame?.fill })
     } else {
       const held = m.clipOut != null ? m.clipOut - (m.clipIn ?? 0) : STILL_SECONDS
-      parts.push({ url, still: true, in: 0, len: Math.max(0.2, Math.min(60, held)) })
+      parts.push({ url, still: true, in: 0, len: Math.max(0.2, Math.min(60, held)), fill: !!m.frame?.fill })
     }
   }
   if (stopped()) return { stopped: true }
-  const opened = await d.cutMovieOpen(parts)
+  // Shots with a frame (a Rough Cut's): the first one's is the movie's shape.
+  const opened = await d.cutMovieOpen(parts, use.find(m => m.frame)?.frame?.aspect)
   if ('error' in opened) return { error: opened.error }
   let closed = false
   try {

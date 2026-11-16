@@ -10,12 +10,12 @@ import { addFreeNodeCentered } from '../../utils/canvasCreate'
 import { cardScreenRect } from '../Layers/CardLayer'
 import { useResolvedMedia } from '../../utils/useResolvedMedia'
 import { useCutPlay } from '../../utils/cutMedia'
-import { openRoughCutViewer, playRoughCut, RoughCutScreen } from './RoughCutScreen'
+import { openRoughCutViewer, playRoughCut, RoughCutScreen, shownFrame } from './RoughCutScreen'
 import { findCuts } from '../../utils/shotDetect'
 import { clipOutMedia, deckOfPicks, shotFrameTime, togglePickAt } from '../../utils/roughCutPicks'
 import { useClipFrame } from '../../utils/clipFrames'
 import {
-  appendCards, splitClipAt, FILM_FPS, clipAt, clipLength, clipRow, clipStart, clipEnd, cutLength, MIN_CLIP, placed, setRoughCut, type RoughClip,
+  appendCards, splitClipAt, FILM_FPS, FRAME_SHAPES, clipAt, clipLength, clipRow, clipStart, clipEnd, cutLength, MIN_CLIP, placed, setRoughCut, type RoughClip,
 } from '../../utils/roughCut'
 
 /** The Rough Cut node: a preview on top, the timeline below: rows of clips,
@@ -342,7 +342,7 @@ export function RoughCutBody({ id, node, bodyW, bodyH }: { id: string; node: Fre
       setCarry(null)
       if (moved && outside) {
         useUndoCoordinator.getState().checkpoint()
-        createMediaCard(clientToCanvas(u.clientX, u.clientY), [{ media: clipOutMedia(c0), label: c0.label }])
+        createMediaCard(clientToCanvas(u.clientX, u.clientY), [{ media: clipOutMedia(c0, useFreeNodeStore.getState().nodes[id]?.roughCut?.frame), label: c0.label }])
         if (u.altKey) setRoughCut(id, { clips: clips.filter(c => c.id !== c0.id) }, false)
         return
       }
@@ -387,6 +387,7 @@ export function RoughCutBody({ id, node, bodyW, bodyH }: { id: string; node: Fre
     fontWeight: 600, color: 'rgba(255,255,255,0.85)', background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.16)',
     flexShrink: 0,
   }
+  const lit: React.CSSProperties = { background: 'rgba(111,179,255,0.35)', border: '1px solid rgba(111,179,255,0.8)' }
   const stop = (e: React.PointerEvent) => e.stopPropagation()
   const rowW = Math.max(W, total * pps + 240)
 
@@ -399,7 +400,7 @@ export function RoughCutBody({ id, node, bodyW, bodyH }: { id: string; node: Fre
       }}>
         {/* ── Preview and transport ── */}
         <div style={{ height: PREVIEW_H, flexShrink: 0, display: 'flex', gap: 20, padding: 16, boxSizing: 'border-box' }}>
-          <Preview id={id} clips={shown} shot={at?.clip.shot ?? null} empty={!clips.length} />
+          <Preview id={id} clips={shown} shot={at?.clip.shot ?? null} empty={!clips.length} frame={shownFrame(cut)} />
           <div onPointerDown={stop} style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 14, minWidth: 0, maxWidth: 860 }}>
             {/* Name, size, and the timeline's zoom */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -438,6 +439,19 @@ export function RoughCutBody({ id, node, bodyW, bodyH }: { id: string; node: Fre
                 <span style={{ color: 'rgba(255,255,255,0.55)', fontVariantNumeric: 'tabular-nums', marginLeft: 4, whiteSpace: 'nowrap' }}>
                   {clips.filter(c => c.pick).length} picked
                 </span>
+              </Group>
+              <Group name="Frame">
+                {FRAME_SHAPES.map(f => {
+                  const on = !!cut.frame && Math.abs(cut.frame.aspect - f.aspect) < 1e-6
+                  return (
+                    <button key={f.label} data-rough-frame-shape={f.label} style={{ ...btn, ...(on ? lit : null) }}
+                      onClick={() => setRoughCut(id, { frame: on ? undefined : { aspect: f.aspect, ...(cut.frame?.fill ? { fill: true } : null) } })}
+                      title={`One ${f.label} frame for every shot, whatever its own shape: here, and in the cards, movies and GIFs made from its shots. Press again for each shot's own shape.`}>{f.label}</button>
+                  )
+                })}
+                <button data-rough-frame-fill="" style={{ ...btn, ...(cut.frame?.fill ? lit : null), opacity: cut.frame ? 1 : 0.45 }}
+                  onClick={() => { if (cut.frame) setRoughCut(id, { frame: { aspect: cut.frame.aspect, ...(cut.frame.fill ? null : { fill: true }) } }) }}
+                  title="Lit: each shot fills the frame, what hangs over cut off. Unlit: each shot is fitted inside it, black around it.">Fill</button>
               </Group>
             </div>
             {/* The shot at the playhead */}
@@ -601,7 +615,7 @@ const ClipBlock: React.FC<{
 
 /** What is under the playhead (RoughCutScreen: black where nothing is).
  *  A film shot also sends the Film Look mixer, if one is up, to that shot. */
-const Preview: React.FC<{ id: string; clips: RoughClip[]; shot: string | null; empty: boolean }> = ({ id, clips, shot, empty }) => {
+const Preview: React.FC<{ id: string; clips: RoughClip[]; shot: string | null; empty: boolean; frame?: { aspect: number; fill?: boolean } }> = ({ id, clips, shot, empty, frame }) => {
   useEffect(() => {
     if (shot && Object.values(useFreeNodeStore.getState().nodes).some(n => n.type === 'filmMixer')) {
       void window.vidbarsDesktop?.mixerCall?.('go', [shot])
@@ -609,7 +623,7 @@ const Preview: React.FC<{ id: string; clips: RoughClip[]; shot: string | null; e
   }, [shot])
   return (
     <div style={{ width: 476, height: PREVIEW_H - 32, flexShrink: 0, background: '#000', borderRadius: 8, overflow: 'hidden', position: 'relative' }}>
-      <RoughCutScreen cutId={id} clips={clips} muted />
+      <RoughCutScreen cutId={id} clips={clips} muted frame={frame} />
       {empty && <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', color: 'rgba(255,255,255,0.35)' }}>No clips yet</div>}
       {!empty && <PreviewBar id={id} clips={clips} />}
     </div>

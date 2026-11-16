@@ -13,12 +13,17 @@ import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { useViewport3DStore, VIEWPORT3D_MIN_H, VIEWPORT3D_MIN_W, type ViewportWindow3D } from '../../store/viewport3dStore'
 import { viewerAdjacentTo } from '../../utils/componentLinks'
 import { useCutPlay } from '../../utils/cutMedia'
-import { clipAt, clipEnd, clipStart, cutLength, placed, type RoughClip } from '../../utils/roughCut'
+import { clipAt, clipEnd, clipStart, cutLength, placed, setRoughCut, type RoughClip, type RoughCutData } from '../../utils/roughCut'
 import { useResolvedMedia } from '../../utils/useResolvedMedia'
 import { togglePickAt } from '../../utils/roughCutPicks'
 import { VIEWPORT_HEADER_SCREEN_H, viewportVisualRect } from '../../utils/viewportDocking'
 
-export const RoughCutScreen: React.FC<{ cutId: string; clips: RoughClip[]; muted: boolean; volume?: number }> = ({ cutId, clips, muted, volume = 1 }) => {
+/** The frame a Rough Cut's screens show: its frame, unless they are showing whole shots. */
+export const shownFrame = (cut: RoughCutData | undefined) => (cut?.frame && cut.frameShown !== false ? cut.frame : undefined)
+
+/** `frame`: every shot is shown in this one frame (the largest of its shape
+ *  the screen holds, outlined), filling it or fitted inside it. */
+export const RoughCutScreen: React.FC<{ cutId: string; clips: RoughClip[]; muted: boolean; volume?: number; frame?: RoughCutData['frame'] }> = ({ cutId, clips, muted, volume = 1, frame }) => {
   const t = useCutPlay(s => s.t[cutId] ?? 0)
   const playing = useCutPlay(s => s.playing === cutId)
   const at = clipAt(clips, t)
@@ -47,18 +52,31 @@ export const RoughCutScreen: React.FC<{ cutId: string; clips: RoughClip[]; muted
   // Videos near the playhead: on screen now, or starting within ten seconds.
   const near = clips.filter(c => c.kind === 'video' && clipEnd(c) > t - 1 && clipStart(c) < t + 10)
   if (at && at.clip.kind === 'video' && !near.includes(at.clip)) near.push(at.clip)
-  return (
-    <div style={{ position: 'absolute', inset: 0, background: '#000', overflow: 'hidden' }}>
+  const fit = frame?.fill ? 'cover' : 'contain'
+  const shots = (
+    <>
       {near.map(c => (
-        <ScreenVideo key={c.id} clip={c} visible={at?.clip.id === c.id} muted={muted} volume={volume}
+        <ScreenVideo key={c.id} clip={c} visible={at?.clip.id === c.id} muted={muted} volume={volume} fit={fit}
           bind={el => { if (el) videos.current.set(c.id, el); else videos.current.delete(c.id) }} />
       ))}
-      {at && at.clip.kind !== 'video' && <ScreenStill clip={at.clip} />}
+      {at && at.clip.kind !== 'video' && <ScreenStill clip={at.clip} fit={fit} />}
+    </>
+  )
+  return (
+    <div style={{ position: 'absolute', inset: 0, background: '#000', overflow: 'hidden', containerType: 'size' }}>
+      {frame ? (
+        // The largest box of the frame's shape the screen holds, in its middle.
+        <div data-rough-frame="" style={{
+          position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%, -50%)', overflow: 'hidden',
+          width: `min(100cqw, calc(100cqh * ${frame.aspect}))`, height: `min(100cqh, calc(100cqw / ${frame.aspect}))`,
+          outline: '1px solid rgba(255,255,255,0.35)', outlineOffset: -1,
+        }}>{shots}</div>
+      ) : shots}
     </div>
   )
 }
 
-const ScreenVideo: React.FC<{ clip: RoughClip; visible: boolean; muted: boolean; volume: number; bind: (el: HTMLVideoElement | null) => void }> = ({ clip, visible, muted, volume, bind }) => {
+const ScreenVideo: React.FC<{ clip: RoughClip; visible: boolean; muted: boolean; volume: number; fit: 'contain' | 'cover'; bind: (el: HTMLVideoElement | null) => void }> = ({ clip, visible, muted, volume, fit, bind }) => {
   const src = useResolvedMedia(clip.url)
   const el = useRef<HTMLVideoElement | null>(null)
   useEffect(() => { if (el.current) el.current.volume = Math.max(0, Math.min(1, volume)) }, [volume, src])
@@ -66,14 +84,14 @@ const ScreenVideo: React.FC<{ clip: RoughClip; visible: boolean; muted: boolean;
     <video
       ref={v => { el.current = v; bind(v) }} src={src ?? undefined} muted={muted} playsInline preload="auto"
       onLoadedMetadata={e => { e.currentTarget.currentTime = clip.in }}
-      style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', visibility: visible ? 'visible' : 'hidden' }}
+      style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: fit, visibility: visible ? 'visible' : 'hidden' }}
     />
   )
 }
 
-const ScreenStill: React.FC<{ clip: RoughClip }> = ({ clip }) => {
+const ScreenStill: React.FC<{ clip: RoughClip; fit: 'contain' | 'cover' }> = ({ clip, fit }) => {
   const src = useResolvedMedia(clip.poster ?? clip.url)
-  return src ? <img src={src} alt="" draggable={false} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain' }} /> : null
+  return src ? <img src={src} alt="" draggable={false} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: fit }} /> : null
 }
 
 /** The Rough Cut a Viewer touches (magneted to any of its edges), if any. */
@@ -146,7 +164,7 @@ export const RoughCutViewerOverlay: React.FC<{ windowId: string; fontSize: numbe
         <span>{cut.label || 'Rough Cut'}</span>
       </div>
       <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
-        <RoughCutScreen cutId={cut.id} clips={clips} muted={muted} volume={volume} />
+        <RoughCutScreen cutId={cut.id} clips={clips} muted={muted} volume={volume} frame={shownFrame(cut.roughCut)} />
       </div>
       {/* The player's bar: play, where it is, how loud, and Pick. */}
       <div data-rough-viewer-bar="" style={{ display: 'flex', alignItems: 'center', gap: fontSize * 0.6, padding: `0 ${Math.max(fontSize * 0.5, corner)}px ${edge}px ${Math.max(fontSize * 0.5, edge)}px`, height: barH + edge, boxSizing: 'border-box', flexShrink: 0, fontSize, color: 'rgba(255,255,255,0.85)', background: 'rgba(255,255,255,0.06)', whiteSpace: 'nowrap' }}>
@@ -172,6 +190,9 @@ export const RoughCutViewerOverlay: React.FC<{ windowId: string; fontSize: numbe
             <div style={{ position: 'absolute', top: 0, bottom: 0, left: 0, width: `${(muted ? 0 : volume) * 100}%`, background: '#ffb35c', borderRadius: 3 }} />
           </div>
         </div>
+        <button data-rough-viewer-frame="" onClick={() => { if (cut.roughCut?.frame) setRoughCut(cut.id, { frameShown: cut.roughCut.frameShown === false }, false) }}
+          title="Show the shots in the Rough Cut's frame, or whole (set the frame on the Rough Cut)"
+          style={{ ...barBtn(!!shownFrame(cut.roughCut), 'rgba(111,179,255,0.45)'), opacity: cut.roughCut?.frame ? 1 : 0.45 }}>Frame</button>
         <button data-rough-viewer-pick="" onClick={() => togglePickAt(cut.id, useCutPlay.getState().t[cut.id] ?? 0)}
           title="Pick the shot playing now, or unpick it"
           style={barBtn(picked, 'rgba(255,200,80,0.45)')}>Pick</button>

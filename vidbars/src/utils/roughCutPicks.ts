@@ -9,7 +9,7 @@ import { useBoardsStore } from '../store/boardsStore'
 import { useUndoCoordinator } from '../store/undoCoordinator'
 import { cardFaceSize, createMediaCard } from './cardGrid'
 import { markNew } from './newCards'
-import { clipAt, clipMedia, clipRow, clipStart, placed, setRoughCut, type RoughClip } from './roughCut'
+import { clipAt, clipMedia, clipRow, clipStart, placed, setRoughCut, type RoughClip, type RoughCutData } from './roughCut'
 import { getClipFrame } from './clipFrames'
 import type { MediaItem } from '../types/bar'
 
@@ -27,7 +27,7 @@ export function deckOfPicks(nodeId: string): number {
   const y0 = node.y + node.height + face.h + face.h / 2
   const made: string[] = []
   picks.forEach((c, n) => {
-    const id = createMediaCard({ cx: x0 + n * face.w, cy: y0 }, [{ media: clipOutMedia(c), label: c.label }])
+    const id = createMediaCard({ cx: x0 + n * face.w, cy: y0 }, [{ media: clipOutMedia(c, node.roughCut?.frame), label: c.label }])
     if (id) made.push(id)
   })
   // Closed and locked, so it is its own deck: nothing snaps onto it or joins it where it lands.
@@ -56,8 +56,8 @@ export const shotFrameTime = (c: RoughClip) => Math.min(c.in + 0.02, Math.max(c.
 
 /** A clip as a card's media (its trim kept), with its own first frame as the
  *  card's poster when that has been made. */
-export function clipOutMedia(c: RoughClip): MediaItem {
-  const m = clipMedia(c)
+export function clipOutMedia(c: RoughClip, cutFrame?: RoughCutData['frame']): MediaItem {
+  const m = clipMedia(c, cutFrame)
   if (c.kind !== 'video') return m
   const frame = getClipFrame(c.url, shotFrameTime(c))
   return frame ? { ...m, posterUrl: frame } : m

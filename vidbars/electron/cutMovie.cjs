@@ -67,9 +67,10 @@ function prune() {
   }
 }
 
-/** Open a movie of `parts` ([{ file, still, in, len }], in order): its id,
- *  size and frame rate, and how long it will run. */
-async function open(parts) {
+/** Open a movie of `parts` ([{ file, still, in, len, fill }], in order): its
+ *  id, size and frame rate, and how long it will run. `aspect`: its shape,
+ *  width ÷ height (the largest of it the first moving part holds). */
+async function open(parts, aspect) {
   prune()
   const infos = []
   for (let i = 0; i < parts.length; i++) {
@@ -77,7 +78,9 @@ async function open(parts) {
   }
   // The first moving part sets the shape and the rate; all stills: the first, at 30.
   const lead = parts.findIndex(p => !p.still)
-  const shape = infos[lead < 0 ? 0 : lead]
+  const own = infos[lead < 0 ? 0 : lead]
+  const sw = aspect ? Math.min(own.w, own.h * aspect) : own.w
+  const shape = { w: sw, h: aspect ? sw / aspect : own.h, fps: own.fps }
   const k = Math.min(1, MAX_SIDE / Math.max(shape.w, shape.h))
   const even = n => Math.max(2, 2 * Math.round(n * k / 2))
   const fps = lead < 0 ? 30 : Math.max(1, Math.min(60, shape.fps || 30))
@@ -115,9 +118,13 @@ async function part(id, i) {
     args.push('-ss', p.in.toFixed(6), '-t', len, '-i', p.file)
   }
   if (job.sound && !p.audio) args.push('-f', 'lavfi', '-t', len, '-i', 'anullsrc=r=48000:cl=stereo')
-  // Fitted inside the movie's shape, black around it; a part whose file ends
-  // early holds its last frame, so every part runs exactly its length.
-  args.push('-vf', `scale=${job.w}:${job.h}:force_original_aspect_ratio=decrease:flags=lanczos,pad=${job.w}:${job.h}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,`
+  // Fitted inside the movie's shape, black around it, or filling it, what
+  // hangs over cut off; a part whose file ends early holds its last frame,
+  // so every part runs exactly its length.
+  const shaped = p.fill
+    ? `scale=${job.w}:${job.h}:force_original_aspect_ratio=increase:flags=lanczos,crop=${job.w}:${job.h}`
+    : `scale=${job.w}:${job.h}:force_original_aspect_ratio=decrease:flags=lanczos,pad=${job.w}:${job.h}:(ow-iw)/2:(oh-ih)/2:black`
+  args.push('-vf', `${shaped},setsar=1,`
     + `fps=${fps},tpad=stop_mode=clone:stop_duration=${len},format=yuv420p`, '-map', '0:v:0')
   if (job.sound) args.push('-map', p.audio ? '0:a:0' : '1:a:0', '-af', 'aresample=48000:async=1,apad', '-c:a', 'pcm_s16le', '-ac', '2', '-ar', '48000')
   else args.push('-an')
