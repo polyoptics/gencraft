@@ -28,6 +28,7 @@ import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { EFFECTS, EFFECT_GROUPS, effectKindOf, effectParams, type EffectKind, type ParamDef } from '../../utils/fx/effects'
 import { soloedElsewhere, toggleEffectOff, toggleEffectSolo } from '../../utils/fx/effectToggles'
 import { startEffectDragOut } from '../../utils/fx/effectDragOut'
+import { paramHelp } from '../../utils/fx/paramHelp'
 
 const stop = (e: React.SyntheticEvent) => e.stopPropagation()
 
@@ -84,6 +85,17 @@ const FACE_GROUND = '#15161f'
  *  squashed by an old free resize — before cards were locked to 5:7 —
  *  takes u from its height instead, so its rows still fit. */
 const FACE_HEIGHT_U = 128
+
+/** A Segment card's rows (one size, in a box that scrolls) and its art
+ *  panel (fixed, so the phrases get the rest of the face), in u. */
+const SEG_ROW_U = 9
+const SEG_ART_U = 14
+
+/** The wheel over a box that has more than it shows scrolls the box; over
+ *  one that shows everything it zooms the canvas, as anywhere on a card. */
+const wheelScroll = (e: React.WheelEvent<HTMLElement>) => {
+  if (e.currentTarget.scrollHeight > e.currentTarget.clientHeight + 1) e.stopPropagation()
+}
 
 /** The name picker's extra entry: not an effect, an action. */
 const RESET_ALL = '__reset_all'
@@ -261,9 +273,15 @@ export const EffectTileBody: React.FC<{
   // looks' dials) and the rows close up and the art gives way, so every
   // one fits the card as it comes, with nothing to scroll or resize.
   const n = rows.length
-  const rowH = n > 5 ? Math.max(7, (96 - (n - 1)) / n) : 14
-  const rowGap = n > 5 ? 1 : 2
-  const rowFont = n > 5 ? Math.min(8.5, rowH * 0.74) : 8.5
+  // A Segment card is the one face that grows: two rows for every thing it
+  // finds, and a box of phrases as long as is typed. Its rows keep one
+  // size in a box five rows tall that scrolls, and the phrases take what
+  // is left under it and scroll too, so nothing is pushed off the card
+  // and nothing on the face moves as rows are added.
+  const seg = kind === 'segment'
+  const rowH = seg ? SEG_ROW_U : n > 5 ? Math.max(7, (96 - (n - 1)) / n) : 14
+  const rowGap = seg || n > 5 ? 1 : 2
+  const rowFont = n > 5 || seg ? Math.min(8.5, rowH * 0.74) : 8.5
 
   // A strip with no picture processes nothing, which reads the same as no
   // strip at all — so it gets the same hint, and its "no picture" error
@@ -335,7 +353,7 @@ export const EffectTileBody: React.FC<{
       {/* ── Art: the glyph on a flat tint. Static on purpose — the result
               is on the picture. Takes whatever height the rows leave. ── */}
       <div style={{
-        flex: '1 1 0', minHeight: (n > 5 ? 6 : 16) * u, position: 'relative', overflow: 'hidden',
+        flex: seg ? `0 0 ${SEG_ART_U * u}px` : '1 1 0', minHeight: seg ? 0 : (n > 5 ? 6 : 16) * u, position: 'relative', overflow: 'hidden',
         borderRadius: 5 * u, background: mixIntoGround(def.color, 0.3),
         border: `${0.4 * u}px solid rgba(255,255,255,0.07)`,
         display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: u,
@@ -443,7 +461,20 @@ export const EffectTileBody: React.FC<{
       {/* ── Values: each row IS its slider. The fill shows the value; press
               anywhere to jump there and drag to follow; double-click for the
               default (the faint tick); arrow keys step it. ── */}
-      <div style={{ marginTop: (n > 5 ? 2 : 3) * u, flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: rowGap * u }}>
+      <div
+        className={seg ? 'fx-scroll' : undefined}
+        data-fx-rows
+        onWheel={seg ? wheelScroll : undefined}
+        // The scroll bar is the box's own: a press on it is not a card drag.
+        onPointerDown={seg ? e => { if (e.button === 0 && e.target === e.currentTarget) e.stopPropagation() } : undefined}
+        style={{
+          marginTop: (n > 5 || seg ? 2 : 3) * u, flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: rowGap * u,
+          ...(seg ? {
+            position: 'relative', zIndex: CONTROL_Z, height: (5 * SEG_ROW_U + 4) * u,
+            overflowY: 'auto', overflowX: 'hidden', scrollbarGutter: 'stable', ['--fx-sb' as string]: `${2.2 * u}px`,
+          } : null),
+        }}
+      >
         {rows.map(p => {
           const v = valueOf(p)
           const span = p.max - p.min
@@ -459,7 +490,8 @@ export const EffectTileBody: React.FC<{
               aria-valuemax={p.max}
               aria-valuenow={v}
               aria-valuetext={formatValue(p, v)}
-              title={`${p.label}: drag to set · Alt+click or ↺ to reset to ${formatValue(p, p.default)} (the tick)`}
+              // What the value means and what moving it does (paramHelp).
+              title={(() => { const h = paramHelp(kind, p.key); return h ? `${p.label}: ${h}` : p.label })()}
               onPointerEnter={() => setHoverKey(p.key)}
               onPointerLeave={() => setHoverKey(k => (k === p.key ? null : k))}
               onPointerDown={e => {
@@ -566,11 +598,16 @@ export const EffectTileBody: React.FC<{
           }}
           onPointerDown={e => e.stopPropagation()}
           onDoubleClick={stop}
+          onWheel={wheelScroll}
+          className="fx-scroll"
           style={{
-            position: 'relative', zIndex: CONTROL_Z, marginTop: 3 * u, flex: '1 1 auto', minHeight: 24 * u,
-            resize: 'none', boxSizing: 'border-box', width: '100%',
+            // What is left of the face, never more: long text scrolls in
+            // the box instead of pushing it off the bottom of the card.
+            position: 'relative', zIndex: CONTROL_Z, marginTop: 3 * u, flex: '1 1 0', minHeight: 0,
+            resize: 'none', boxSizing: 'border-box', width: '100%', overflowY: 'auto',
             background: 'rgba(0,0,0,0.32)', color: 'inherit', border: 'none', borderRadius: 3.5 * u,
-            padding: `${2.5 * u}px ${3.5 * u}px`, fontSize: 8 * u, fontFamily: 'inherit', lineHeight: 1.3, outline: 'none',
+            padding: `${2.5 * u}px ${3.5 * u}px`, fontSize: 7.5 * u, fontFamily: 'inherit', lineHeight: 1.3, outline: 'none',
+            ['--fx-sb' as string]: `${2.2 * u}px`,
           }}
         />
       )}

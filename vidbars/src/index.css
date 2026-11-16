@@ -135,3 +135,10 @@ body {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.55; }
 }
+
+/* A box on an effect card's face that scrolls (EffectTileBody): its bar is
+   sized by the card (--fx-sb), since the face is drawn at the card's scale. */
+.fx-scroll::-webkit-scrollbar { width: var(--fx-sb, 8px); height: var(--fx-sb, 8px); }
+.fx-scroll::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.22); border-radius: var(--fx-sb, 8px); }
+.fx-scroll::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.45); border-radius: var(--fx-sb, 8px); }
+.fx-scroll::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.7); }

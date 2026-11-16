@@ -973,7 +973,8 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
     // The front card of a touching line, turned over: it moves the line.
     // (A scene card too: its face takes presses itself, see clusterFront.)
     const self = useBoardsStore.getState().groups.find(g => g.id === group.id)
-    const line = self?.flipped || self?.scene ? clusterFront.get(group.id) : undefined
+    // (An effect card too: its switches, sliders and text are its own.)
+    const line = self?.flipped || self?.scene || self?.effect ? clusterFront.get(group.id) : undefined
     if (line && !e.shiftKey) { line.drag(e); return }
     // A card of a locked deck: the whole deck moves, as one (utils/deckLock).
     const locked = e.shiftKey ? undefined : lockedDragFor(group.id)
@@ -1535,6 +1536,9 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
           // that is not a section (those edit on their own double-click).
           // Its header's deck icon closes the row too (see sceneRowFront).
           if (group.scene) { clusterFront.get(group.id)?.close(); return }
+          // An effect card in front of a row: the same (its controls stop
+          // their own double-click).
+          if (group.effect && clusterFront.get(group.id)) { clusterFront.get(group.id)!.close(); return }
           const el = e.currentTarget.querySelector('[data-card-text]') as HTMLElement | null
           el?.dispatchEvent(new CustomEvent('start-edit', { bubbles: false }))
         }}
@@ -4496,7 +4500,11 @@ const DeckAffordance: React.FC<{ cluster: string[]; front: Deck | 'card' | null;
   // (their knobs, seams and text), so the zone lets them through as it
   // does for a back; the card hands the row's drag and close back here.
   const frontScene = front === 'card' && !!primaryGroup?.scene && primaryGroup.cardType === 'scene' && !primaryGroup.flipped
-  const frontThrough = frontFlipped || frontScene
+  // An effect card in front: its face is all controls (on/off, solo, the
+  // sliders, Segment's phrases), and under the zone none of them could be
+  // pressed. They take presses themselves, the same way.
+  const frontEffect = front === 'card' && !!primaryGroup?.effect
+  const frontThrough = frontFlipped || frontScene || frontEffect
   const frontId = primaryGroup?.id
   // Locked: every card of the row carries one lock (utils/deckLock).
   const lock = (() => {
