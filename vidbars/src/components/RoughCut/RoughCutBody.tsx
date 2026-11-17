@@ -183,7 +183,7 @@ export function RoughCutBody({ id, node, bodyW, bodyH }: { id: string; node: Fre
   }
   const outputPicks = () => {
     const n = deckOfPicks(id)
-    setShotNote(n ? `${n} picked ${n === 1 ? 'shot' : 'shots'} out as a deck, below.` : 'Nothing picked yet: press P on the shots you like.')
+    setShotNote(n ? `${n} picked ${n === 1 ? 'shot' : 'shots'} out as a deck, docked below.` : 'Nothing picked yet: press P on the shots you like.')
     window.setTimeout(() => { if (!gone.current) setShotNote(null) }, 4000)
   }
 
@@ -435,7 +435,7 @@ export function RoughCutBody({ id, node, bodyW, bodyH }: { id: string; node: Fre
                 <button data-rough-pick="" style={{ ...btn, ...(at?.clip.pick ? { background: 'rgba(255,200,80,0.35)', border: '1px solid rgba(255,200,80,0.9)' } : null) }}
                   onClick={() => pickRef.current()} title="Pick the shot at the playhead, or unpick it (P). Delete drops it.">Pick</button>
                 <button data-rough-deck-picks="" style={btn} onClick={outputPicks}
-                  title="Lay the picked shots out below as a deck of cards, in the order they play">Deck of picks</button>
+                  title="Lay the picked shots out as a deck of cards docked under the Rough Cut, in the order they play. It goes where the Rough Cut goes.">Deck of picks</button>
                 <span style={{ color: 'rgba(255,255,255,0.55)', fontVariantNumeric: 'tabular-nums', marginLeft: 4, whiteSpace: 'nowrap' }}>
                   {clips.filter(c => c.pick).length} picked
                 </span>

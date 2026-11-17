@@ -27,7 +27,7 @@ import { isTileDeckFace, tileDeckMembers, touchingTileCluster } from '../../util
 import { edgeColorFromHex } from '../../utils/colorUtils'
 import { findMagnetCandidate, magnetRadiusForZoom, viewportVisualRect, type WindowRect } from '../../utils/viewportDocking'
 import { tileBrowseItem, isDockableTile } from '../../utils/contentTraversal'
-import { snapPanelToPanel, isPanelType, adjacentPanels } from '../../utils/componentLinks'
+import { snapPanelToPanel, isPanelType, adjacentPanels, viewerAdjacentTo } from '../../utils/componentLinks'
 import { StateSpaceBody } from '../StateSpace/StateSpaceBody'
 import { dropSpaceOnStateSpace } from '../../utils/stateSpace'
 import { panelContentScale, clampUiScale } from '../UI/PanelSurface'
@@ -39,6 +39,7 @@ import { PromptPad } from '../Prompt/PromptPad'
 import { AttributesWindow } from '../CardBacks/AttributesWindow'
 import { CARD_READER_TYPES } from '../../utils/deckDockDrag'
 import { dockedCards } from '../../utils/filmShots'
+import { computeCarriedEntities } from '../../hooks/useDockedContent'
 import { CardPromptPad } from '../CardBacks/CardPromptPad'
 import { HistoryPanel } from '../History/HistoryPanel'
 import { PinControl } from '../UI/PinControl'
@@ -440,6 +441,21 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
         tileIds: adjacentPanels(at, all).map(n => n.id),
       }
     }
+    // A Rough Cut brings what is magneted to it: the Viewer touching it
+    // (with all that hangs on that Viewer, as the Viewer's own header drag
+    // carries it) and the cards docked to it, such as the deck of picks it
+    // laid out along its foot (Brian 2026-11-17).
+    if (at && !at.pin && at.type === 'roughCut') {
+      const { groups, boards } = useBoardsStore.getState()
+      const win = viewerAdjacentTo(at, useViewport3DStore.getState().windows, useCanvasStore.getState().zoom)
+      const hung = win ? computeCarriedEntities(win.id) : { tileIds: [], groupIds: [] }
+      const all = useFreeNodeStore.getState().nodes
+      railCarry.current = {
+        windowIds: win ? [win.id] : [],
+        groupIds: [...new Set([...dockedCards(at, groups, boards).map(g => g.id), ...hung.groupIds])],
+        tileIds: hung.tileIds.filter(t => t !== id && !!all[t] && !all[t].pin && !all[t].railDock),
+      }
+    }
     wrapperRef.current?.setPointerCapture(e.pointerId)
   }, [id])
 
@@ -800,8 +816,9 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
       if (snap) updateFreeNode(id, { x: snap.x, y: snap.y })
       // A card reader's carried cards and panels take the same last step.
       const carry = railCarry.current
-      if (snap && cur && carry && CARD_READER_TYPES.has(cur.type) && (snap.x !== cur.x || snap.y !== cur.y)) {
+      if (snap && cur && carry && (CARD_READER_TYPES.has(cur.type) || cur.type === 'roughCut') && (snap.x !== cur.x || snap.y !== cur.y)) {
         const ddx = snap.x - cur.x, ddy = snap.y - cur.y
+        for (const wid of carry.windowIds) useViewport3DStore.getState().moveWindow(wid, ddx, ddy)
         const bs = useBoardsStore.getState()
         bs.setGroupPosBatch(carry.groupIds.flatMap(gid => {
           const g = bs.groups.find(x => x.id === gid)
