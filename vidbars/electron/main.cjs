@@ -404,7 +404,8 @@ function registerBridge() {
       if (!Number.isFinite(p.in) || p.in < 0 || !Number.isFinite(p.len) || p.len > 6 * 3600) return { error: 'Not allowed' }
       // (A movie's length 0: the rest of the file.)
       if (p.len < 0.03 && (still || p.len !== 0)) return { error: 'Not allowed' }
-      found.push({ file, still, in: still ? 0 : p.in, len: p.len, fill: p.fill === true })
+      const num = (v, lo, hi, d) => (Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : d)
+      found.push({ file, still, in: still ? 0 : p.in, len: p.len, fill: p.fill === true, zoom: num(p.zoom, 1, 8, 1), x: num(p.x, -8, 8, 0), y: num(p.y, -8, 8, 0) })
     }
     // The movie's shape, width ÷ height, when it is not the first movie's own.
     const shape = Number.isFinite(aspect) && aspect >= 0.1 && aspect <= 10 ? aspect : undefined

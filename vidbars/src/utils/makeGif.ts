@@ -27,6 +27,7 @@ import { makeMediaRef } from './mediaRef'
 import { diskFileUrl } from './diskUrl'
 import { GifWriter } from './gifEncode'
 import { makeMovie } from './makeMovie'
+import { placeInFrame } from './shotFrame'
 import { findFreeSlotRightOf } from '../components/Viewport3D/ImageStudio'
 
 const MAX_SIDE = 480
@@ -200,9 +201,8 @@ export async function makeGif(shots: MediaItem[], name: string, besideIds: strin
     const put = (s: Source, delayCs: number) => {
       ctx.fillStyle = '#000'
       ctx.fillRect(0, 0, w, h)
-      const f = s.frame?.fill ? Math.max(w / s.w, h / s.h) : Math.min(w / s.w, h / s.h)
-      const dw = s.w * f, dh = s.h * f
-      ctx.drawImage(s.draw, (w - dw) / 2, (h - dh) / 2, dw, dh)
+      const at = placeInFrame(s.w, s.h, w, h, s.frame?.fill, s.frame)
+      ctx.drawImage(s.draw, at.x, at.y, at.w, at.h)
       gif.frame(ctx.getImageData(0, 0, w, h).data, delayCs)
       made++
       say(`Making GIF… ${Math.min(99, Math.round(made / total * 100))}%`, true)

@@ -93,7 +93,7 @@ async function open(parts, aspect) {
   fs.mkdirSync(dir, { recursive: true })
   jobs.set(id, {
     dir, w: even(shape.w), h: even(shape.h), fps, made: new Set(), child: null,
-    parts: parts.map((p, i) => ({ ...p, len: lens[i], audio: !p.still && infos[i].audio })),
+    parts: parts.map((p, i) => ({ ...p, len: lens[i], audio: !p.still && infos[i].audio, sw: infos[i].w, sh: infos[i].h })),
     sound: parts.some((p, i) => !p.still && infos[i].audio),
   })
   const job = jobs.get(id)
@@ -121,9 +121,18 @@ async function part(id, i) {
   // Fitted inside the movie's shape, black around it, or filling it, what
   // hangs over cut off; a part whose file ends early holds its last frame,
   // so every part runs exactly its length.
-  const shaped = p.fill
-    ? `scale=${job.w}:${job.h}:force_original_aspect_ratio=increase:flags=lanczos,crop=${job.w}:${job.h}`
-    : `scale=${job.w}:${job.h}:force_original_aspect_ratio=decrease:flags=lanczos,pad=${job.w}:${job.h}:(ow-iw)/2:(oh-ih)/2:black`
+  // Then its own zoom and place in the shape (placeInFrame in
+  // src/utils/shotFrame.ts: the same sums): scaled to its size there, given
+  // black where it falls short, and cut to the shape where it hangs over.
+  const W = job.w, H = job.h
+  const zoom = Math.max(1, Math.min(8, p.zoom || 1))
+  const s = (p.fill ? Math.max(W / p.sw, H / p.sh) : Math.min(W / p.sw, H / p.sh)) * zoom
+  const even = n => Math.max(2, 2 * Math.round(n / 2))
+  const dw = even(p.sw * s), dh = even(p.sh * s)
+  const slide = (d, D, f) => { const m = Math.abs(d - D) / 2; return 2 * Math.round(((D - d) / 2 + Math.max(-m, Math.min(m, (f || 0) * D))) / 2) }
+  const tx = slide(dw, W, p.x), ty = slide(dh, H, p.y)
+  const shaped = `scale=${dw}:${dh}:flags=lanczos,pad=${Math.max(dw, W)}:${Math.max(dh, H)}:${Math.max(0, tx)}:${Math.max(0, ty)}:black,`
+    + `crop=${W}:${H}:${Math.max(0, -tx)}:${Math.max(0, -ty)}`
   args.push('-vf', `${shaped},setsar=1,`
     + `fps=${fps},tpad=stop_mode=clone:stop_duration=${len},format=yuv420p`, '-map', '0:v:0')
   if (job.sound) args.push('-map', p.audio ? '0:a:0' : '1:a:0', '-af', 'aresample=48000:async=1,apad', '-c:a', 'pcm_s16le', '-ac', '2', '-ar', '48000')

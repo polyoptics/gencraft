@@ -15,6 +15,7 @@ import { viewerAdjacentTo } from '../../utils/componentLinks'
 import { useCutPlay } from '../../utils/cutMedia'
 import { clipAt, clipEnd, clipStart, cutLength, placed, setRoughCut, type RoughClip, type RoughCutData } from '../../utils/roughCut'
 import { useResolvedMedia } from '../../utils/useResolvedMedia'
+import { placeInFrame, tidyView, VIEW_ZOOM_MAX, type ShotView } from '../../utils/shotFrame'
 import { togglePickAt } from '../../utils/roughCutPicks'
 import { VIEWPORT_HEADER_SCREEN_H, viewportVisualRect } from '../../utils/viewportDocking'
 
@@ -22,7 +23,9 @@ import { VIEWPORT_HEADER_SCREEN_H, viewportVisualRect } from '../../utils/viewpo
 export const shownFrame = (cut: RoughCutData | undefined) => (cut?.frame && cut.frameShown !== false ? cut.frame : undefined)
 
 /** `frame`: every shot is shown in this one frame (the largest of its shape
- *  the screen holds, outlined), filling it or fitted inside it. */
+ *  the screen holds, outlined), filling it or fitted inside it. There the
+ *  shot on screen can be slid about (drag) and zoomed (wheel) inside the
+ *  frame; a double-click puts it back. */
 export const RoughCutScreen: React.FC<{ cutId: string; clips: RoughClip[]; muted: boolean; volume?: number; frame?: RoughCutData['frame'] }> = ({ cutId, clips, muted, volume = 1, frame }) => {
   const t = useCutPlay(s => s.t[cutId] ?? 0)
   const playing = useCutPlay(s => s.playing === cutId)
@@ -52,22 +55,74 @@ export const RoughCutScreen: React.FC<{ cutId: string; clips: RoughClip[]; muted
   // Videos near the playhead: on screen now, or starting within ten seconds.
   const near = clips.filter(c => c.kind === 'video' && clipEnd(c) > t - 1 && clipStart(c) < t + 10)
   if (at && at.clip.kind === 'video' && !near.includes(at.clip)) near.push(at.clip)
-  const fit = frame?.fill ? 'cover' : 'contain'
+  // Each shot's own size, as its picture reports it: what sliding and zooming are worked out from.
+  const sizes = useRef(new Map<string, { w: number; h: number }>())
+  const onSize = (id: string, w: number, h: number) => { if (w > 0 && h > 0) sizes.current.set(id, { w, h }) }
   const shots = (
     <>
       {near.map(c => (
-        <ScreenVideo key={c.id} clip={c} visible={at?.clip.id === c.id} muted={muted} volume={volume} fit={fit}
+        <ScreenVideo key={c.id} clip={c} visible={at?.clip.id === c.id} muted={muted} volume={volume} frame={frame} onSize={onSize}
           bind={el => { if (el) videos.current.set(c.id, el); else videos.current.delete(c.id) }} />
       ))}
-      {at && at.clip.kind !== 'video' && <ScreenStill clip={at.clip} fit={fit} />}
+      {at && at.clip.kind !== 'video' && <ScreenStill key={at.clip.id} clip={at.clip} frame={frame} onSize={onSize} />}
     </>
   )
+
+  // Slide and zoom the shot on screen inside the frame.
+  const box = useRef<HTMLDivElement>(null)
+  const live = useRef({ clips, at, frame })
+  live.current = { clips, at, frame }
+  /** Give the shot on screen a new view (kept inside its slack). `checkpoint`: an undo step of its own. */
+  const setView = (change: (v: ShotView) => ShotView, checkpoint: boolean) => {
+    const { clips: cl, at: now, frame: f } = live.current
+    const size = now && sizes.current.get(now.clip.id)
+    if (!now || !f || !size) return
+    const view = tidyView(size.w, size.h, f.aspect, f.fill, change(now.clip.view ?? {}))
+    setRoughCut(cutId, { clips: cl.map(c => (c.id === now.clip.id ? { ...c, view } : c)) }, checkpoint)
+  }
+  const slide = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0 || !live.current.at) return
+    e.stopPropagation()
+    const r = e.currentTarget.getBoundingClientRect()
+    const from = { x: e.clientX, y: e.clientY, v: live.current.at.clip.view ?? {} }
+    let moved = false
+    const move = (m: PointerEvent) => {
+      const dx = (m.clientX - from.x) / Math.max(1, r.width), dy = (m.clientY - from.y) / Math.max(1, r.height)
+      if (!moved && Math.abs(m.clientX - from.x) + Math.abs(m.clientY - from.y) < 3) return
+      setView(() => ({ ...from.v, x: (from.v.x ?? 0) + dx, y: (from.v.y ?? 0) + dy }), !moved)
+      moved = true
+    }
+    const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
+  // The wheel over the frame zooms the shot, not the canvas. Native, so it
+  // can stop the page's own zoom; one undo step per run of the wheel.
+  const hasFrame = !!frame
+  useEffect(() => {
+    const el = box.current
+    if (!el) return
+    let last = 0
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      const fresh = e.timeStamp - last > 600
+      last = e.timeStamp
+      setView(v => ({ ...v, zoom: Math.max(1, Math.min(VIEW_ZOOM_MAX, (v.zoom ?? 1) * Math.exp(-e.deltaY * 0.0015))) }), fresh)
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasFrame, cutId])
   return (
     <div style={{ position: 'absolute', inset: 0, background: '#000', overflow: 'hidden', containerType: 'size' }}>
       {frame ? (
         // The largest box of the frame's shape the screen holds, in its middle.
-        <div data-rough-frame="" style={{
-          position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%, -50%)', overflow: 'hidden',
+        <div data-rough-frame="" ref={box} onPointerDown={slide}
+          onDoubleClick={e => { e.stopPropagation(); setView(() => ({}), true) }}
+          title="Drag to slide this shot in the frame, wheel to zoom it, double-click to put it back"
+          style={{
+          cursor: 'grab', position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%, -50%)', overflow: 'hidden',
           width: `min(100cqw, calc(100cqh * ${frame.aspect}))`, height: `min(100cqh, calc(100cqw / ${frame.aspect}))`,
           outline: '1px solid rgba(255,255,255,0.35)', outlineOffset: -1,
         }}>{shots}</div>
@@ -76,22 +131,42 @@ export const RoughCutScreen: React.FC<{ cutId: string; clips: RoughClip[]; muted
   )
 }
 
-const ScreenVideo: React.FC<{ clip: RoughClip; visible: boolean; muted: boolean; volume: number; fit: 'contain' | 'cover'; bind: (el: HTMLVideoElement | null) => void }> = ({ clip, visible, muted, volume, fit, bind }) => {
+/** Where a shot's picture goes: the whole screen (no frame), or its place
+ *  in the frame once its own size is known (until then, filled or fitted). */
+function shotStyle(clip: RoughClip, frame: RoughCutData['frame'], size: { w: number; h: number } | null): React.CSSProperties {
+  if (!frame || !size) return { position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: frame?.fill ? 'cover' : 'contain' }
+  const p = placeInFrame(size.w, size.h, frame.aspect, 1, frame.fill, clip.view)
+  return {
+    position: 'absolute', left: `${(p.x / frame.aspect) * 100}%`, top: `${p.y * 100}%`,
+    width: `${(p.w / frame.aspect) * 100}%`, height: `${p.h * 100}%`, objectFit: 'fill', maxWidth: 'none',
+  }
+}
+type ShotProps = { clip: RoughClip; frame: RoughCutData['frame']; onSize: (id: string, w: number, h: number) => void }
+
+const ScreenVideo: React.FC<ShotProps & { visible: boolean; muted: boolean; volume: number; bind: (el: HTMLVideoElement | null) => void }> = ({ clip, visible, muted, volume, frame, onSize, bind }) => {
+  const [size, setSize] = useState<{ w: number; h: number } | null>(null)
   const src = useResolvedMedia(clip.url)
   const el = useRef<HTMLVideoElement | null>(null)
   useEffect(() => { if (el.current) el.current.volume = Math.max(0, Math.min(1, volume)) }, [volume, src])
   return (
     <video
       ref={v => { el.current = v; bind(v) }} src={src ?? undefined} muted={muted} playsInline preload="auto"
-      onLoadedMetadata={e => { e.currentTarget.currentTime = clip.in }}
-      style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: fit, visibility: visible ? 'visible' : 'hidden' }}
+      onLoadedMetadata={e => {
+        const v = e.currentTarget
+        v.currentTime = clip.in
+        if (v.videoWidth && v.videoHeight) { setSize({ w: v.videoWidth, h: v.videoHeight }); onSize(clip.id, v.videoWidth, v.videoHeight) }
+      }}
+      style={{ ...shotStyle(clip, frame, size), visibility: visible ? 'visible' : 'hidden' }}
     />
   )
 }
 
-const ScreenStill: React.FC<{ clip: RoughClip; fit: 'contain' | 'cover' }> = ({ clip, fit }) => {
+const ScreenStill: React.FC<ShotProps> = ({ clip, frame, onSize }) => {
   const src = useResolvedMedia(clip.poster ?? clip.url)
-  return src ? <img src={src} alt="" draggable={false} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: fit }} /> : null
+  const [size, setSize] = useState<{ w: number; h: number } | null>(null)
+  return src ? <img src={src} alt="" draggable={false}
+    onLoad={e => { const i = e.currentTarget; if (i.naturalWidth && i.naturalHeight) { setSize({ w: i.naturalWidth, h: i.naturalHeight }); onSize(clip.id, i.naturalWidth, i.naturalHeight) } }}
+    style={shotStyle(clip, frame, size)} /> : null
 }
 
 /** The Rough Cut a Viewer touches (magneted to any of its edges), if any. */

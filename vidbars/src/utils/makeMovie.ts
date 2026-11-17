@@ -32,6 +32,9 @@ async function onDisk(m: MediaItem, label: string): Promise<string | null> {
   return copyOf(m.url, label, m.originalName)
 }
 
+/** How a shot sits in its frame: filling it or fitted, its own zoom and place. */
+const view = (m: MediaItem) => ({ fill: !!m.frame?.fill, zoom: m.frame?.zoom ?? 1, x: m.frame?.x ?? 0, y: m.frame?.y ?? 0 })
+
 /** Join `shots` (movies and pictures, in order) into one MP4 named `name`, on
  *  a new card in the first free spot right of `beside()` (asked when it is
  *  done). `note` says how it is going; `stopped` is asked between shots. */
@@ -43,7 +46,7 @@ export async function makeMovie(shots: MediaItem[], name: string, beside: () => 
   if (!d?.cutMovieOpen || !d.cutMoviePart || !d.cutMovieClose) return { error: 'Movies are made in the VidBars desktop app (restart it if it is open)' }
 
   note('Opening the shots…')
-  const parts: { url: string; still: boolean; in: number; len: number; fill?: boolean }[] = []
+  const parts: { url: string; still: boolean; in: number; len: number; fill?: boolean; zoom?: number; x?: number; y?: number }[] = []
   for (let i = 0; i < use.length; i++) {
     const m = use[i]
     const url = await onDisk(m, name)
@@ -52,10 +55,10 @@ export async function makeMovie(shots: MediaItem[], name: string, beside: () => 
       const from = Math.max(0, m.clipIn ?? 0)
       const to = m.clipOut ?? m.duration
       // (No length known: 0, the rest of the file.)
-      parts.push({ url, still: false, in: from, len: to != null ? Math.max(0.04, to - from) : 0, fill: !!m.frame?.fill })
+      parts.push({ url, still: false, in: from, len: to != null ? Math.max(0.04, to - from) : 0, ...view(m) })
     } else {
       const held = m.clipOut != null ? m.clipOut - (m.clipIn ?? 0) : STILL_SECONDS
-      parts.push({ url, still: true, in: 0, len: Math.max(0.2, Math.min(60, held)), fill: !!m.frame?.fill })
+      parts.push({ url, still: true, in: 0, len: Math.max(0.2, Math.min(60, held)), ...view(m) })
     }
   }
   if (stopped()) return { stopped: true }

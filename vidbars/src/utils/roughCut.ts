@@ -14,6 +14,7 @@ import { getMediaItems, type MediaItem } from '../types/bar'
 import { gridOrder } from './cardGrid'
 import { resolveMediaUrl } from './useResolvedMedia'
 import { shotsInFilmRange } from './filmPlan'
+import type { ShotView } from './shotFrame'
 
 export interface RoughClip {
   id: string
@@ -34,6 +35,8 @@ export interface RoughClip {
   row?: number
   /** Picked while playing through (P): goes out with Deck of picks. */
   pick?: boolean
+  /** Its own zoom and place inside the Rough Cut's frame (utils/shotFrame). */
+  view?: ShotView
 }
 
 export interface RoughCutData {
@@ -222,7 +225,7 @@ export function roughCutShots(node: FreeNodeData): string[] {
 /** A clip as a card's media, its trim kept: what a clip dragged out becomes.
  *  `frame`: its Rough Cut's frame, which goes with it. */
 export function clipMedia(c: RoughClip, frame?: RoughCutData['frame']): MediaItem {
-  const f = frame ? { frame: { aspect: frame.aspect, ...(frame.fill ? { fill: true } : null) } } : null
+  const f = frame ? { frame: { aspect: frame.aspect, ...(frame.fill ? { fill: true } : null), ...c.view } } : null
   if (c.kind === 'video') return { url: c.url, type: 'video', posterUrl: c.poster, clipIn: c.in, clipOut: c.out, duration: c.full, ...f }
   if (c.kind === 'shot') return { url: c.url, type: 'image', filmShot: c.shot, ...f }
   return { url: c.url, type: 'image', clipIn: 0, clipOut: clipLength(c), ...f }
