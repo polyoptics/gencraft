@@ -32,6 +32,7 @@ import { ensureRolodexHome, useRolodexHomeBootstrap } from './utils/rolodexHome'
 import { StoragePersistenceBanner } from './components/UI/StoragePersistenceBanner'
 import { GifNotice } from './components/UI/GifNotice'
 import { AgentCursor } from './components/UI/AgentCursor'
+import { AgentChat } from './components/UI/AgentChat'
 import { useBoardsStore } from './store/boardsStore'
 import { useCanvasStore } from './store/canvasStore'
 import { useFreeNodeStore } from './store/freeNodeStore'
@@ -923,6 +924,7 @@ export default function App() {
 
       {/* Looping GIF being made from a card or a deck (utils/makeGif) */}
       <GifNotice />
+      <AgentChat />
       <AgentCursor />
 
       {/* Viewers render outside the canvas so they are fixed to the viewport */}

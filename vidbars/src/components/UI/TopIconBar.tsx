@@ -29,6 +29,7 @@ import { useZoomZone } from '../../store/zoomZonesStore'
 import { useCabinetUi } from '../../utils/cabinet'
 import { openFilmMixer, existingFilmMixer } from '../FilmMixer/FilmMixerBody'
 import { useNotesUi } from '../../store/notesStore'
+import { useAgentChat } from '../../utils/agentChat'
 
 /** Tile edge in px. A shade over 1cm on a typical desktop monitor. */
 const TILE = 44
@@ -292,16 +293,24 @@ const IcNotes: React.FC<SvgProps> = ({ size }) => (
   </svg>
 )
 
+/** Claude — a speech bubble with a spark in it. Accent: the spark. */
+const IcClaude: React.FC<SvgProps> = ({ size }) => (
+  <svg {...svgBase(size)}>
+    <path d="M4 5.5h16v11H11l-4.5 3.5v-3.5H4z" stroke={S} />
+    <path d="M12 7.6v6.8M8.6 11h6.8M9.6 8.6l4.8 4.8M14.4 8.6l-4.8 4.8" stroke={A.coral} strokeWidth="1.5" />
+  </svg>
+)
+
 // ── Button order ──
 // The bar's buttons by id, in the order they ship in. The saved order wins;
 // any button added later that isn't in it yet goes in after the one it
 // follows here.
 type BarId =
   | 'viewer' | 'pool' | 'prompt' | 'promptCards' | 'history' | 'browser' | 'attributes' | 'filmMixer'
-  | 'roughCut' | 'storyline' | 'cabinet' | 'loopStrip' | 'scene3d' | 'stateSpace' | 'effects' | 'promptCard' | 'notes' | 'new'
+  | 'roughCut' | 'storyline' | 'cabinet' | 'loopStrip' | 'scene3d' | 'stateSpace' | 'effects' | 'promptCard' | 'notes' | 'claude' | 'new'
 const DEFAULT_ORDER: BarId[] = [
   'viewer', 'pool', 'prompt', 'promptCards', 'history', 'browser', 'attributes', 'filmMixer',
-  'roughCut', 'storyline', 'cabinet', 'loopStrip', 'scene3d', 'stateSpace', 'effects', 'promptCard', 'notes', 'new',
+  'roughCut', 'storyline', 'cabinet', 'loopStrip', 'scene3d', 'stateSpace', 'effects', 'promptCard', 'notes', 'claude', 'new',
 ]
 const ORDER_KEY = 'vidbars.topIconBar.order'
 
@@ -382,6 +391,7 @@ export const TopIconBar: React.FC = () => {
   // What the mouse is carrying, so its button stays lit while you aim.
   const placing = usePlacing(s => s.kind)
   const notesOpen = useNotesUi(s => s.open)
+  const chatOpen = useAgentChat(s => s.open)
   const place = (kind: PlaceKind) => ({ onClick: () => togglePlacing(kind), active: placing === kind })
 
   // The Effects palette. Its own memoised component: this bar re-renders on
@@ -447,6 +457,7 @@ export const TopIconBar: React.FC = () => {
     ),
     // The Notes & 3D tools panel (components/Notes/NotesPanel): lit while out.
     notes: <IconButton Icon={IcNotes} title="Notes & 3D tools — curves, arrows, drawing on models, pins, 3D sets" active={notesOpen} onClick={() => useNotesUi.setState(s => ({ open: !s.open, tool: s.open ? null : s.tool }))} />,
+    claude: <IconButton Icon={IcClaude} title="Claude — a chat box: ask Claude to work on the canvas with you" active={chatOpen} onClick={() => useAgentChat.setState(c => ({ open: !c.open }))} />,
     new: (
       <IconButton
         Icon={IcNew}

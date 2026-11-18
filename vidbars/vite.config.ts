@@ -2,11 +2,13 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import fs from 'fs'
+import os from 'os'
 import path from 'path'
 import type { Plugin } from 'vite'
 import Busboy from 'busboy'
 import crypto from 'crypto'
 import { pipeline } from 'stream'
+import { spawn, type ChildProcess } from 'child_process'
 import { encodeUrlParam, isServableDiskPath, isUncPath } from './src/utils/diskUrl'
 
 /** Vite plugin: POST /api/upload — saves files to public/uploads/, returns URL */
@@ -847,6 +849,99 @@ function agentApi(): Plugin {
   }
 }
 
+/** Vite plugin: POST /api/agent-chat {text, session?} — the chat box inside
+ *  VidBars (src/utils/agentChat.ts, Brian 2026-11-18). Each message runs
+ *  Claude Code on this PC (`claude -p`), signed in as the artist already is:
+ *  his plan, no key, no other billing (an API key in the environment is
+ *  withheld so it can never be charged). Claude is given the VidBars
+ *  connector (agent/vidbars-mcp.mjs) and only the tools agent/chat/
+ *  settings.json allows; its standing brief is agent/chat/CLAUDE.md. What
+ *  Claude prints (stream-json, one event a line) is passed straight back
+ *  as the answer's body. Closing the request stops it. A conversation is
+ *  continued by its session id (Claude Code keeps them on this PC).
+ *  Local only, as /api/agent is. */
+function agentChatApi(): Plugin {
+  const chatDir = path.resolve(__dirname, 'agent/chat')
+  const q = (s: string) => `"${s.replace(/"/g, '')}"`
+  return {
+    name: 'agent-chat-api',
+    configureServer(server) {
+      const running = new Set<ChildProcess>()
+      const kill = (child: ChildProcess) => {
+        if (child.exitCode != null || !child.pid) return
+        // Windows: the shell is the child; take what it started down too.
+        if (process.platform === 'win32') spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true })
+        else child.kill('SIGTERM')
+      }
+      server.httpServer?.once('close', () => running.forEach(kill))
+      server.middlewares.use('/api/agent-chat', (req, res) => {
+        const origin = req.headers.origin
+        if (req.method !== 'POST' || req.headers['x-vidbars-agent'] !== '1'
+          || (origin && origin !== `http://${req.headers.host}`)) {
+          res.statusCode = 403
+          res.end('Not allowed.')
+          return
+        }
+        let raw = ''
+        req.on('data', c => { raw += c; if (raw.length > 2_000_000) req.destroy() })
+        req.on('end', () => {
+          let body: { text?: string; session?: string }
+          try { body = JSON.parse(raw) } catch { res.statusCode = 400; res.end('Bad request.'); return }
+          const text = String(body.text ?? '').trim()
+          const session = typeof body.session === 'string' && /^[0-9a-f-]{8,64}$/i.test(body.session) ? body.session : ''
+          if (!text) { res.statusCode = 400; res.end('Nothing to send.'); return }
+
+          let allowed = ['mcp__vidbars']
+          try {
+            const st = JSON.parse(fs.readFileSync(path.join(chatDir, 'settings.json'), 'utf-8'))
+            if (Array.isArray(st.allowedTools)) allowed = st.allowedTools.map(String).filter((t: string) => /^[\w.:*() -]+$/.test(t))
+          } catch { /* the default */ }
+          // The connector, for this run: this Node, this copy of the file, this server's port.
+          const port = (server.httpServer?.address() as { port?: number } | null)?.port ?? 5173
+          const runDir = path.join(os.tmpdir(), 'vidbars-agent')
+          fs.mkdirSync(runDir, { recursive: true })
+          const mcpFile = path.join(runDir, `mcp-${port}.json`)
+          fs.writeFileSync(mcpFile, JSON.stringify({ mcpServers: { vidbars: {
+            command: process.execPath, args: [path.resolve(__dirname, 'agent/vidbars-mcp.mjs')], env: { VIDBARS_PORT: String(port) },
+          } } }))
+          const args = ['-p', '--output-format', 'stream-json', '--verbose',
+            '--mcp-config', q(mcpFile), '--allowedTools', q(allowed.join(',')),
+            ...(session ? ['--resume', session] : [])]
+          const env = { ...process.env }
+          delete env.ANTHROPIC_API_KEY
+          delete env.ANTHROPIC_AUTH_TOKEN
+          // One command line through the shell: on Windows `claude` is a .cmd.
+          const child = spawn(`${process.env.VIDBARS_CLAUDE || 'claude'} ${args.join(' ')}`, {
+            cwd: chatDir, env, shell: true, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
+          })
+          running.add(child)
+          res.statusCode = 200
+          res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8')
+          res.setHeader('Cache-Control', 'no-cache')
+          const line = (o: unknown) => { if (!res.writableEnded) res.write(JSON.stringify(o) + '\n') }
+          let errText = ''
+          child.stdout!.on('data', d => { if (!res.writableEnded) res.write(d) })
+          child.stderr!.on('data', d => { errText = (errText + String(d)).slice(-2000) })
+          child.on('error', () => { line({ type: 'vidbars_error', error: 'Claude Code could not be started on this PC.' }) })
+          child.on('close', code => {
+            running.delete(child)
+            if (code) {
+              const missing = /not recognized|not found|ENOENT/i.test(errText)
+              line({ type: 'vidbars_error', error: missing
+                ? 'Claude Code is not installed on this PC (the "claude" command was not found).'
+                : (errText.trim().split('\n').pop() || `Claude Code stopped (${code}).`) })
+            }
+            res.end()
+          })
+          res.on('close', () => kill(child))
+          child.stdin!.on('error', () => { /* it closed first */ })
+          child.stdin!.end(text)
+        })
+      })
+    },
+  }
+}
+
 export default defineConfig({
-  plugins: [react(), tailwindcss(), pingApi(), agentApi(), fileUploadApi(), userTemplatesApi(), snapshotsApi(), browseApi()],
+  plugins: [react(), tailwindcss(), pingApi(), agentApi(), agentChatApi(), fileUploadApi(), userTemplatesApi(), snapshotsApi(), browseApi()],
 })
