@@ -10,7 +10,8 @@
 // media on cards as files, deal a deck of cards (new ones, results brought
 // in from outside, and linked cards of ones that are there), and, when the
 // artist asks, change what is there (edit, arrange, decks, links, delete),
-// one undo each.
+// one undo each; and use the tools: set one down, build a 3D set from
+// cards, make a GIF or a movie, add cards to a Rough Cut.
 //
 // Brian 2026-11-18: widened so references and elements can go out of
 // VidBars to another tool (send_file posts a card's file to an upload
@@ -217,6 +218,74 @@ const TOOLS = [
     description: 'Take back the last change on the canvas, exactly as the artist\'s Ctrl+Z: use it right after a change of yours that was wrong or that the artist does not want.',
     inputSchema: { type: 'object', properties: {} },
   },
+  {
+    name: 'list_tools',
+    description: 'List the tools set down on the VidBars canvas (Viewers, Rough Cuts, 3D sets, loop strips, Media Pools, Prompt Pads and the rest): id, type and where each lies. Read-only.',
+    inputSchema: { type: 'object', properties: { type: { type: 'string', description: 'Only this type, as list_tools names it, e.g. "3D set", "roughCut", "viewer".' } } },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'place_tool',
+    description: 'Set one of VidBars\' tools down on the canvas, as its top-bar button does: in an empty spot of the view, or centred on at. One undo takes it away.',
+    inputSchema: {
+      type: 'object', required: ['tool'],
+      properties: {
+        tool: { type: 'string', enum: ['viewer', 'media_pool', 'prompt_pad', 'card_prompts', 'history', 'card_browser', 'attributes', 'film_look', 'rough_cut', 'storyline', 'cabinet', 'loop_strip', 'set_3d', 'states'] },
+        at: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } }, description: 'Its middle, canvas units.' },
+      },
+    },
+  },
+  {
+    name: 'make_3d_set',
+    description: 'Build a 3D set from cards: a new 3D set with its own card in an empty spot of the view, and docked under it a new linked card of each card named, with each one\'s 3D model standing in the set where you say (or spread across the middle). The cards named are not moved. Only cards holding a 3D model stand in the set. Returns the set\'s id and the linked cards\' ids, which stand_in_3d_set takes to move them afterwards. The artist tilts the view to see it in 3D. One undo takes it all back.',
+    inputSchema: {
+      type: 'object', required: ['cards'],
+      properties: {
+        name: { type: 'string', description: 'A name for the set\'s card.' },
+        cards: { type: 'array', maxItems: 40, items: { type: 'object', required: ['id'], properties: {
+            id: { type: 'string', description: 'A card id from list_cards.' },
+            x: { type: 'number', description: 'Across the ground, 0 (left) to 1 (right).' },
+            y: { type: 'number', description: 'Deep into the ground, 0 (back, top of the set as seen flat) to 1 (front).' },
+            height: { type: 'number', description: 'Lifted off the ground, as a part of the set\'s width. 0: standing on it.' },
+            size: { type: 'number', description: 'How big, times its natural fit. 1: as it comes.' },
+            turn: { type: 'number', description: 'Turned about upright, degrees.' },
+          } } },
+      },
+    },
+  },
+  {
+    name: 'stand_in_3d_set',
+    description: 'Move, lift, size or turn models that stand in a 3D set. Only what you give changes. One undo takes it back.',
+    inputSchema: {
+      type: 'object', required: ['setId', 'cards'],
+      properties: {
+        setId: { type: 'string', description: 'The 3D set\'s id, from make_3d_set or list_tools.' },
+        cards: { type: 'array', minItems: 1, maxItems: 40, items: { type: 'object', required: ['id'], properties: {
+            id: { type: 'string', description: 'The id of a linked card under the set (from make_3d_set).' },
+            x: { type: 'number', description: 'Across the ground, 0 (left) to 1 (right).' },
+            y: { type: 'number', description: 'Deep into the ground, 0 (back, top of the set as seen flat) to 1 (front).' },
+            height: { type: 'number', description: 'Lifted off the ground, as a part of the set\'s width. 0: standing on it.' },
+            size: { type: 'number', description: 'How big, times its natural fit. 1: as it comes.' },
+            turn: { type: 'number', description: 'Turned about upright, degrees.' },
+          } } },
+      },
+    },
+  },
+  {
+    name: 'make_gif',
+    description: 'Make the movies and pictures on cards into one looping GIF, on a new card beside them, as the deck\'s right-click item does. A closed deck named by its front card gives every card in it. At least one card must hold a movie.',
+    inputSchema: { type: 'object', required: ['ids'], properties: { ids: { type: 'array', items: { type: 'string' }, minItems: 1, description: 'Card ids from list_cards.' }, pingPong: { type: 'boolean', description: 'Play forward then backward.' } } },
+  },
+  {
+    name: 'make_movie',
+    description: 'Join the shots on cards, in order, into one MP4 movie on a new card beside them (the desktop app only), as the deck\'s right-click item does. A closed deck named by its front card gives every card in it.',
+    inputSchema: { type: 'object', required: ['ids'], properties: { ids: { type: 'array', items: { type: 'string' }, minItems: 1, description: 'Card ids from list_cards.' } } },
+  },
+  {
+    name: 'add_to_rough_cut',
+    description: 'Add the clips on cards to a Rough Cut, end to end after what it holds, in the order given. list_tools gives the Rough Cuts on the canvas; place_tool rough_cut makes one. One undo takes them out.',
+    inputSchema: { type: 'object', required: ['toolId', 'ids'], properties: { toolId: { type: 'string' }, ids: { type: 'array', items: { type: 'string' }, minItems: 1, description: 'Card ids from list_cards.' } } },
+  },
 ]
 
 for (const t of TOOLS) if (t.name !== 'send_file') t.inputSchema.properties.doing = DOING
@@ -224,6 +293,7 @@ for (const t of TOOLS) if (t.name !== 'send_file') t.inputSchema.properties.doin
 const OPS = {
   list_cards: 'list', read_cards: 'read', list_decks: 'decks',
   edit_cards: 'edit', arrange_cards: 'arrange', set_deck: 'deck', link_cards: 'link', delete_cards: 'delete', select_cards: 'select', undo: 'undo',
+  list_tools: 'tools', place_tool: 'place', make_3d_set: 'set3d', stand_in_3d_set: 'stand3d', make_gif: 'gif', make_movie: 'movie', add_to_rough_cut: 'cut',
 }
 
 async function ask(op, args) {
@@ -369,8 +439,8 @@ async function handle(msg) {
       return ok({
         protocolVersion: params?.protocolVersion || '2024-11-05',
         capabilities: { tools: {} },
-        serverInfo: { name: 'vidbars', version: '1.2.0' },
-        instructions: 'VidBars is the artist\'s card canvas. You may read cards and decks, hand out the media on cards as files, and deal a deck of cards: new cards, results brought in from another tool, and linked cards of cards that are there. You may also change what is there when the artist asks for it: edit, arrange, open and close decks, link, delete; each change is one undo, and undo takes your last one back. Do not change or delete anything the artist did not ask you to. Read before you deal or change, keep card text short, and tell the artist plainly what you did. The artist sees your pointer in VidBars with a bubble: give each request a few plain words in "doing". To use a card\'s picture or model with another tool, get_card_media then send_file to the upload address that tool gives; bring what comes back onto a card with deal_deck (media, and from: the cards it was made from).',
+        serverInfo: { name: 'vidbars', version: '1.3.0' },
+        instructions: 'VidBars is the artist\'s card canvas. You may read cards and decks, hand out the media on cards as files, and deal a deck of cards: new cards, results brought in from another tool, and linked cards of cards that are there. You can use the tools of VidBars: set one down (place_tool), build a 3D set from cards that hold models (make_3d_set, stand_in_3d_set), make a GIF or a movie of cards, add cards to a Rough Cut. You may also change what is there when the artist asks for it: edit, arrange, open and close decks, link, delete; each change is one undo, and undo takes your last one back. Do not change or delete anything the artist did not ask you to. Read before you deal or change, keep card text short, and tell the artist plainly what you did. The artist sees your pointer in VidBars with a bubble: give each request a few plain words in "doing". To use a card\'s picture or model with another tool, get_card_media then send_file to the upload address that tool gives; bring what comes back onto a card with deal_deck (media, and from: the cards it was made from).',
       })
     case 'ping': return ok({})
     case 'tools/list': return ok({ tools: TOOLS })

@@ -210,6 +210,15 @@ function placeAt(kind: PlaceKind, box: PlaceBox) {
   }
 }
 
+/** Set tool `kind` down centred on canvas point `at`, as a click of the
+ *  placing mouse there would (for a caller with no mouse: utils/agentDoor).
+ *  The caller takes the undo checkpoint. */
+export function placeToolAt(kind: Exclude<PlaceKind, 'new'>, at: { cx: number; cy: number }): PlaceBox {
+  const box = placeBox(kind, at, useCanvasStore.getState().zoom, true)
+  placeAt(kind, box)
+  return box
+}
+
 // ── The pointer ──
 
 /** The canvas container: the box the tilt stages live in. */

@@ -21,6 +21,11 @@
 //     deck (arrange); open or close a deck (deck); link cards (link);
 //     delete cards (delete); select cards (select); and take back the last
 //     change (undo). Each change is one undo step.
+//   • USE THE TOOLS (Brian 2026-11-18: "you would need access to do all
+//     the things that you can do in VidBars"): list the tools on the canvas
+//     (tools), set one down (place), build a 3D set from cards and stand
+//     their models in it (set3d, stand3d), make a looping GIF or a movie
+//     of cards (gif, movie), add cards to a Rough Cut (cut).
 // (Brian 2026-11-18: widened for passing references out and taking results
 // back as cards, then for working on the canvas as he does.)
 
@@ -36,6 +41,13 @@ import { getMedia } from './mediaStore'
 import { blobToDataUrl, isDataUrl, isMediaRef, mediaRefId } from './mediaRef'
 import { markNew } from './newCards'
 import { agentGlide, agentPoint, agentSpotOfCard } from './agentCursor'
+import { placeBox, placeToolAt, type PlaceKind } from './placeTool'
+import { bundleArea3dCard } from './area3dCard'
+import { cardHoldsModel, dataKey, rowCards } from './area3dScene'
+import { useModelScaleStore } from '../store/tiltStore'
+import { freeNodeFootprint } from './canvasCreate'
+import { deckGifShots, makeDeckMovie, makeGif, useGifJob } from './makeGif'
+import { appendCards } from './roughCut'
 import { viewportCenterInCanvas } from './canvasCreate'
 import { CARD_TYPES, cardTypeOf, detailShown, newDetailId, type CardDetail, type CardType } from './cardTypes'
 import { factionGroupsOf } from './factionGroups'
@@ -345,6 +357,25 @@ function mediaGiven(c: Json): MediaItem[] {
   })
 }
 
+/** The top-left of an empty box `w` by `h` (canvas units) nearest the
+ *  middle of the view, clear of everything by `margin`. */
+function freeBox(w: number, h: number, margin: number): { left: number; top: number } {
+  const mid = viewportCenterInCanvas()
+  const obs = obstacles(useCanvasStore.getState().zoom)
+  const clear = (l: number, t: number) => !obs.some(o => o.left < l + w + margin && o.right > l - margin && o.top < t + h + margin && o.bottom > t - margin)
+  const step = Math.max(40, Math.min(w, h) * 0.25)
+  const R = 60
+  const tries: { dx: number; dy: number; d: number }[] = []
+  for (let i = -R; i <= R; i++) for (let j = -R; j <= R; j++) tries.push({ dx: i * step, dy: j * step, d: Math.hypot(i, j) })
+  tries.sort((a, b) => a.d - b.d)
+  for (const t of tries) {
+    const l = mid.cx - w / 2 + t.dx, tp = mid.cy - h / 2 + t.dy
+    if (clear(l, tp)) return { left: l, top: tp }
+  }
+  const bottom = obs.length ? Math.max(...obs.map(o => o.bottom)) : mid.cy
+  return { left: mid.cx - w / 2, top: bottom + margin * 2 }
+}
+
 /** Deal cards as one closed deck: new cards, and new linked cards of cards
  *  that are there. One undo step. */
 async function dealDeck(args: Json): Promise<Json> {
@@ -649,10 +680,225 @@ function undoLast(args: Json): Json {
   return { undone: true }
 }
 
+// ── The tools on the canvas ─────────────────────────────────────────────
+
+const TOOL_KINDS: Record<string, { kind: Exclude<PlaceKind, 'new'>; label: string }> = {
+  viewer: { kind: 'viewer', label: 'Viewer' }, media_pool: { kind: 'pool', label: 'Media Pool' },
+  prompt_pad: { kind: 'prompt', label: 'Prompt Pad' }, card_prompts: { kind: 'promptCards', label: 'Card Prompts' },
+  history: { kind: 'history', label: 'History' }, card_browser: { kind: 'browser', label: 'Card Browser' },
+  attributes: { kind: 'attributes', label: 'Attributes' }, film_look: { kind: 'filmMixer', label: 'Film Look' },
+  rough_cut: { kind: 'roughCut', label: 'Rough Cut' }, storyline: { kind: 'storyline', label: 'Storyline' },
+  cabinet: { kind: 'cabinet', label: 'Cabinet' }, loop_strip: { kind: 'loopStrip', label: 'Loop strip' },
+  set_3d: { kind: 'area', label: '3D set' }, states: { kind: 'stateSpace', label: 'States' },
+}
+
+/** Every tool on the canvas (tiles and Viewers), briefly. */
+function toolsNow(): { id: string; type: string; place: Json; extra: Json }[] {
+  const round = (n: { x: number; y: number; width: number; height: number }) => ({ x: Math.round(n.x), y: Math.round(n.y), w: Math.round(n.width), h: Math.round(n.height) })
+  const groups = useBoardsStore.getState().groups
+  return [
+    ...Object.values(useFreeNodeStore.getState().nodes).filter(n => !n.pin).map(n => ({
+      id: n.id, type: n.type === 'area' ? '3D set' : n.type, place: round(n),
+      extra: {
+        ...(n.areaCard ? { card: groups.find(g => g.id === n.areaCard)?.name ?? '', cardId: n.areaCard } : {}),
+        ...(n.roughCut ? { clips: n.roughCut.clips.length } : {}),
+      },
+    })),
+    ...Object.values(useViewport3DStore.getState().windows).map(w => ({ id: w.id, type: 'viewer', place: round(w), extra: {} })),
+  ]
+}
+
+function listTools(args: Json): Json {
+  const type = typeof args.type === 'string' ? args.type.toLowerCase() : ''
+  const tools = toolsNow().filter(t => !type || t.type.toLowerCase() === type).map(t => ({ id: t.id, type: t.type, ...t.extra, place: t.place }))
+  agentPoint(say(args, 'Looking over the tools'))
+  return { count: tools.length, tools }
+}
+
+/** Set a tool down in an empty spot of the view (or at `at`, its middle). */
+async function placeTool(args: Json): Promise<Json> {
+  const k = TOOL_KINDS[String(args.tool ?? '')]
+  if (!k) throw new Error(`No tool "${String(args.tool)}". Tools: ${Object.keys(TOOL_KINDS).join(', ')}.`)
+  const zoom = useCanvasStore.getState().zoom
+  const at = args.at as { x?: unknown; y?: unknown } | undefined
+  let mid: { cx: number; cy: number }
+  if (at && Number.isFinite(Number(at.x)) && Number.isFinite(Number(at.y))) mid = { cx: Number(at.x), cy: Number(at.y) }
+  else {
+    // An empty spot the size it lands at (a storyline starts as a point: room for a card).
+    const fp = placeBox(k.kind, { cx: 0, cy: 0 }, zoom, true)
+    const face = cardFaceSize(zoom)
+    const w = fp.w || face.w * 2, h = fp.h || face.h
+    const b = freeBox(w, h, face.w * 0.4)
+    mid = { cx: b.left + w / 2, cy: b.top + h / 2 }
+  }
+  await agentGlide(say(args, `Setting down a ${k.label}`), { x: mid.cx, y: mid.cy })
+  const before = new Set(toolsNow().map(t => t.id))
+  useUndoCoordinator.getState().checkpoint()
+  placeToolAt(k.kind, mid)
+  const made = toolsNow().filter(t => !before.has(t.id))
+  if (!made.length) return { placed: k.label, note: 'It was set down (or the one already on the canvas was opened).' }
+  return { placed: k.label, tools: made.map(t => ({ id: t.id, type: t.type, ...t.extra, place: t.place })), note: 'One undo (Ctrl+Z) takes it away.' }
+}
+
+// ── 3D sets ─────────────────────────────────────────────────────────────
+
+type Stand = { id: string; x?: number; y?: number; height?: number; size?: number; turn?: number }
+
+const standsOf = (v: unknown): Stand[] => (Array.isArray(v) ? v as Json[] : []).map(c => ({
+  id: String(c.id ?? ''),
+  ...(Number.isFinite(Number(c.x)) && c.x != null ? { x: Math.min(1, Math.max(0, Number(c.x))) } : {}),
+  ...(Number.isFinite(Number(c.y)) && c.y != null ? { y: Math.min(1, Math.max(0, Number(c.y))) } : {}),
+  ...(Number.isFinite(Number(c.height)) && c.height != null ? { height: Math.max(0, Number(c.height)) } : {}),
+  ...(Number.isFinite(Number(c.size)) && c.size != null ? { size: Math.min(20, Math.max(0.05, Number(c.size))) } : {}),
+  ...(Number.isFinite(Number(c.turn)) && c.turn != null ? { turn: Number(c.turn) } : {}),
+}))
+
+/** Stand card `cardId`'s model in 3D set `area`: across (x) and deep (y) as
+ *  parts of its ground 0–1, how high off it (as a part of its width), how
+ *  big (× its fit) and turned how far (degrees, about upright). */
+function standModel(area: { width: number; height: number }, cardId: string, st: Stand, fallback: { x: number; y: number }): void {
+  const key = dataKey(`card:${cardId}`)
+  const ms = useModelScaleStore.getState()
+  const was = ms.placeOf[key]
+  const x = st.x ?? (was ? was.dx / area.width : fallback.x)
+  const y = st.y ?? (was ? was.dy / area.height : fallback.y)
+  ms.setPlace(key, { dx: x * area.width, dy: y * area.height, h: st.height != null ? st.height * area.width : was?.h ?? 0 })
+  if (st.size != null) ms.setSetSize(key, st.size)
+  if (st.turn != null) {
+    const a = st.turn * Math.PI / 360
+    ms.setPose(key, [0, Math.sin(a), 0, Math.cos(a)])
+  }
+}
+
+/** Build a 3D set: a new set with its card, and under it a row of new
+ *  LINKED cards of the cards named, their models standing in the set. The
+ *  cards named stay where they are. */
+async function make3dSet(args: Json): Promise<Json> {
+  const stands = standsOf(args.cards)
+  const cards = stands.length ? cardsNamed(stands.map(s => s.id)) : []
+  const zoom = useCanvasStore.getState().zoom
+  const face = cardFaceSize(zoom)
+  const fp = freeNodeFootprint('area', zoom)
+  const rowW = (face.w + TOUCH_GAP) * (cards.length + 1)
+  const w = Math.max(fp.w, rowW), h = fp.h + face.h * 1.6
+  const spot = freeBox(w, h, face.w * 0.4)
+  await agentGlide(say(args, 'Building a 3D set'), { x: spot.left + fp.w / 2, y: spot.top + fp.h / 2 })
+
+  useUndoCoordinator.getState().checkpoint()
+  const before = new Set(Object.keys(useFreeNodeStore.getState().nodes))
+  placeToolAt('area', { cx: spot.left + fp.w / 2, cy: spot.top + fp.h / 2 })
+  const area = Object.values(useFreeNodeStore.getState().nodes).find(n => !before.has(n.id) && n.type === 'area')
+  if (!area) throw new Error('The 3D set could not be made.')
+  const setCardId = area.areaCard ?? bundleArea3dCard(area.id)
+  if (!setCardId) throw new Error('The 3D set got no card.')
+  const name = typeof args.name === 'string' ? args.name.trim() : ''
+  if (name) { useBoardsStore.getState().renameGroup(setCardId, name); useBoardsStore.getState().setGroupCardHeaderText(setCardId, name) }
+
+  const rectOf = (id: string) => {
+    const bs = useBoardsStore.getState()
+    const g = bs.groups.find(x => x.id === id)
+    return (g && cardVisualRect(g, bs.boards, zoom)?.rect) || null
+  }
+  const first = rectOf(setCardId)
+  let x = (first?.right ?? area.x + face.w) + TOUCH_GAP
+  const made: { id: string; name: string; of: string; model: boolean }[] = []
+  cards.forEach((c, i) => {
+    const master = masterOf(useBoardsStore.getState().groups, c.id)
+    const id = makeLinkedCard(master)
+    if (!id) return
+    const lh = linkedHeight(master, face.w, face.h) ?? face.h
+    useBoardsStore.setState(st => ({ groups: st.groups.map(g => g.id !== id ? g : { ...g, cardWidthOverride: face.w, cardHeightOverride: lh, flipped: undefined }) }))
+    const g = useBoardsStore.getState().groups.find(o => o.id === id)
+    const r = rectOf(id)
+    if (g && r && first) {
+      useBoardsStore.getState().setGroupPosBatch([{ groupId: id, originX: g.originX + (x - r.left), originY: g.originY + (first.top - r.top) }])
+      x += (r.right - r.left) + TOUCH_GAP
+    }
+    const bs = useBoardsStore.getState()
+    const model = cardHoldsModel(bs.groups.find(o => o.id === id)!, bs.boards)
+    // Never told where: spread across the middle of the ground, left to right.
+    if (model) standModel(area, id, stands[i], { x: (i + 1) / (cards.length + 1), y: 0.5 })
+    made.push({ id, name: c.name, of: c.id, model })
+  })
+  markNew([setCardId, ...made.map(m => m.id)])
+  const flat = made.filter(m => !m.model).map(m => m.name)
+  return {
+    setId: area.id, setCardId, place: { x: Math.round(area.x), y: Math.round(area.y), w: Math.round(area.width), h: Math.round(area.height) },
+    cards: made,
+    ...(flat.length ? { noModel: flat, warning: 'These cards hold no 3D model: they lie with the set as cards, nothing stands in it for them.' } : {}),
+    note: 'A new 3D set with its card, and a linked card of each card under it. The cards named were not moved. The artist tilts the view (Alt+drag) to see it in 3D. One undo (Ctrl+Z) takes it all back.',
+  }
+}
+
+/** Move, lift, size or turn models that stand in a 3D set. */
+async function stand3d(args: Json): Promise<Json> {
+  const area = useFreeNodeStore.getState().nodes[String(args.setId ?? '')]
+  if (!area || area.type !== 'area') throw new Error('No 3D set with that id. list_tools gives them.')
+  const stands = standsOf(args.cards)
+  const cards = cardsNamed(stands.map(s => s.id))
+  const withIt = new Set(rowCards(area).map(g => g.id))
+  const out = cards.filter(c => !withIt.has(c.id)).map(c => c.name)
+  if (out.length) throw new Error(`Not with that 3D set: ${out.join(', ')}. Use the ids of the linked cards under the set.`)
+  await agentGlide(say(args, `Placing ${names(cards)} in the set`), { x: area.x + area.width / 2, y: area.y + area.height / 2 })
+  useUndoCoordinator.getState().checkpoint()
+  stands.forEach(st => standModel(area, st.id, st, { x: 0.5, y: 0.5 }))
+  return { placed: cards.length, note: 'One undo (Ctrl+Z) takes it back.' }
+}
+
+// ── GIF, movie, Rough Cut ───────────────────────────────────────────────
+
+/** The cards named with, for a closed deck's front card, every card in it. */
+function withHeld(ids: string[]): string[] {
+  const groups = useBoardsStore.getState().groups
+  return [...new Set(ids.flatMap(id => expandWithNestedMembers([id], groups)))]
+}
+
+/** Wait for the GIF or movie being made, a while: what the notice says. */
+async function madeOrGoing(job: Promise<void>): Promise<Json> {
+  const done = await Promise.race([job.then(() => true), new Promise<boolean>(r => setTimeout(() => r(false), 12_000))])
+  const said = useGifJob.getState().text ?? ''
+  return done
+    ? { done: true, ...(said ? { said } : {}) }
+    : { done: false, note: 'Still being made; VidBars shows its progress at the bottom of the screen, and the new card appears beside the cards when it is done.' }
+}
+
+async function makeGifOf(args: Json): Promise<Json> {
+  const cards = cardsNamed(idsOf(args.ids))
+  if (useGifJob.getState().busy) throw new Error('A GIF or movie is being made already. Wait for it.')
+  const ids = withHeld(cards.map(c => c.id))
+  const shots = deckGifShots(ids)
+  if (!shots.length) throw new Error('There is no movie on those cards: nothing would move in a GIF.')
+  agentPoint(say(args, 'Making a GIF'), agentSpotOfCard(cards[0].id))
+  return { shots: shots.length, ...await madeOrGoing(makeGif(shots, cards[0].name || 'Deck', ids, !!args.pingPong)) }
+}
+
+async function makeMovieOf(args: Json): Promise<Json> {
+  const cards = cardsNamed(idsOf(args.ids))
+  if (useGifJob.getState().busy) throw new Error('A GIF or movie is being made already. Wait for it.')
+  if (!('vidbarsDesktop' in window)) throw new Error('A movie (MP4) is made by the VidBars desktop app; this is a browser window.')
+  const ids = withHeld(cards.map(c => c.id))
+  const shots = deckGifShots(ids)
+  if (!shots.length) throw new Error('There is no movie on those cards.')
+  agentPoint(say(args, 'Making a movie'), agentSpotOfCard(cards[0].id))
+  return { shots: shots.length, ...await madeOrGoing(makeDeckMovie(shots, cards[0].name || 'Deck', ids)) }
+}
+
+/** Add cards' clips to a Rough Cut, end to end after what it has. */
+async function addToCut(args: Json): Promise<Json> {
+  const node = useFreeNodeStore.getState().nodes[String(args.toolId ?? '')]
+  if (!node?.roughCut) throw new Error('No Rough Cut with that id. list_tools gives them; place_tool rough_cut makes one.')
+  const cards = cardsNamed(idsOf(args.ids))
+  await agentGlide(say(args, `Adding ${names(cards)} to the Rough Cut`), { x: node.x + node.width / 2, y: node.y + node.height / 2 })
+  const added = await appendCards(node.id, withHeld(cards.map(c => c.id)))
+  if (!added) throw new Error('Those cards hold nothing a Rough Cut can play (a movie, a picture or a sound).')
+  return { added, clips: useFreeNodeStore.getState().nodes[node.id]?.roughCut?.clips.length ?? added, note: 'One undo (Ctrl+Z) takes them out again.' }
+}
+
 // ── The door ────────────────────────────────────────────────────────────
 
 const OPS: Record<string, (args: Json) => Json | Promise<Json>> = { list: listCards, read: readCards, decks: listDecks, media: cardMedia, deal: dealDeck,
   edit: editCards, arrange: arrangeCards, deck: setDeck, link: linkCards, delete: deleteCards, select: selectCards, undo: undoLast,
+  tools: listTools, place: placeTool, set3d: make3dSet, stand3d, gif: makeGifOf, movie: makeMovieOf, cut: addToCut,
 }
 
 /** Start answering the connector. Only where the dev server's socket is
