@@ -76,6 +76,7 @@ import { railComboCount } from './fx/railChain'
 import { useRailRunStore } from '../store/railRunStore'
 import { cardFeed, tagsOf } from './cardBacks'
 import { dockedCards } from './filmShots'
+import { getPoolContents, loadPoolDir } from '../store/poolStore'
 import { addDrawer, drawerName, moveItem, renameDrawer, stowCards, takeOutAt, toggleDrawer } from './cabinet'
 import { saveFailure, saveStripResult } from './fx/saveStrip'
 import { useNotesStore, useNotesUi, newNoteId, type Curve, type CurvePoint, type PathRider } from '../store/notesStore'
@@ -2549,6 +2550,44 @@ async function editCabinet(args: Json): Promise<Json> {
   return { ...cabinetOut(id), ...(stow.length ? { putAway: away } : {}), undo: 'One undo (Ctrl+Z) takes it back.' }
 }
 
+// ── Media Pools: a folder on disk ───────────────────────────────────────
+
+const POOL_MOST = 300
+
+/** A Media Pool's folder: its subfolders and files. With `folder`, the pool is pointed there first. */
+async function readPool(args: Json): Promise<Json> {
+  const node = useFreeNodeStore.getState().nodes[String(args.toolId ?? '')]
+  if (node?.type !== 'pool') throw new Error('No Media Pool with that id. list_tools gives them; place_tool media_pool makes one.')
+  const spot = { x: node.x + node.width / 2, y: node.y + node.height / 2 }
+  const go = typeof args.folder === 'string' && args.folder.trim() ? args.folder.trim() : null
+  if (go) {
+    if (node.pin) throw new Error('This Media Pool is pinned. The artist unpins it.')
+    // Looked at before the pool is pointed there: a folder that cannot be read leaves it be.
+    const probe = await fetch(`/api/browse?dir=${encodeURIComponent(go)}`).then(r => r.json()).catch(() => ({ error: 'no answer' }))
+    if (probe.error) throw new Error(`Could not read that folder: ${probe.error}`)
+    await agentGlide(say(args, 'Opening a folder'), spot)
+    useUndoCoordinator.getState().checkpoint()
+    useFreeNodeStore.getState().updateFreeNode(node.id, { poolDir: go })
+  } else agentPoint(say(args, 'Looking in the Media Pool'), spot)
+  // The window reads its folder itself; one not on screen yet is read here.
+  const want = go ?? node.poolDir ?? 'public/uploads'
+  await new Promise(r => setTimeout(r, 150))
+  if (getPoolContents(node.id).dir === '' || go) await loadPoolDir(node.id, want)
+  for (let i = 0; i < 40 && getPoolContents(node.id).loading; i++) await new Promise(r => setTimeout(r, 100))
+  const c = getPoolContents(node.id)
+  if (c.error) throw new Error(`Could not read that folder: ${c.error}`)
+  const sep = c.dir.includes('\\') ? '\\' : '/'
+  const kind = typeof args.kind === 'string' ? args.kind : ''
+  const files = c.files.filter(f => !kind || f.kind === kind)
+  return {
+    toolId: node.id, folder: c.dir, ...(c.parent && c.parent !== c.dir ? { parent: c.parent } : {}),
+    folders: c.dirs.slice(0, POOL_MOST).map(d => ({ name: d.name, folder: d.path })),
+    files: files.slice(0, POOL_MOST).map(f => ({ name: f.name, kind: f.kind, file: `${c.dir.replace(/[\\/]+$/, '')}${sep}${f.name}`, bytes: f.size })),
+    ...(files.length > POOL_MOST ? { more: files.length - POOL_MOST } : {}),
+    note: 'To bring a file in as a card: deal_deck with media { file }.',
+  }
+}
+
 // ── The door ────────────────────────────────────────────────────────────
 
 const OPS: Record<string, (args: Json) => Json | Promise<Json>> = { list: listCards, read: readCards, decks: listDecks, media: cardMedia, deal: dealDeck,
@@ -2559,6 +2598,7 @@ const OPS: Record<string, (args: Json) => Json | Promise<Json>> = { list: listCa
   scene: readScene, sceneEdit: editScene,
   viewRead: readView, viewMove: moveView,
   cabinetRead: readCabinet, cabinetEdit: editCabinet,
+  poolRead: readPool,
   promptsRead: readPrompts, promptsEdit: editPrompts,
   stripRead: readStrip, stripEdit: editStrip, stripRun: runStrip,
   viewerRead: readViewer, viewerShow: showInViewer,
