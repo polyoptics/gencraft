@@ -29,7 +29,7 @@ import { useZoomZone } from '../../store/zoomZonesStore'
 import { useCabinetUi } from '../../utils/cabinet'
 import { openFilmMixer, existingFilmMixer } from '../FilmMixer/FilmMixerBody'
 import { useNotesUi } from '../../store/notesStore'
-import { useAgentChat } from '../../utils/agentChat'
+import { toggleChat, useAgentChat } from '../../utils/agentChat'
 
 /** Tile edge in px. A shade over 1cm on a typical desktop monitor. */
 const TILE = 44
@@ -457,7 +457,7 @@ export const TopIconBar: React.FC = () => {
     ),
     // The Notes & 3D tools panel (components/Notes/NotesPanel): lit while out.
     notes: <IconButton Icon={IcNotes} title="Notes & 3D tools — curves, arrows, drawing on models, pins, 3D sets" active={notesOpen} onClick={() => useNotesUi.setState(s => ({ open: !s.open, tool: s.open ? null : s.tool }))} />,
-    claude: <IconButton Icon={IcClaude} title="Claude — a chat box: ask Claude to work on the canvas with you" active={chatOpen} onClick={() => useAgentChat.setState(c => ({ open: !c.open }))} />,
+    claude: <IconButton Icon={IcClaude} title="Claude — chat boxes: ask Claude to work on the canvas with you" active={chatOpen} onClick={toggleChat} />,
     new: (
       <IconButton
         Icon={IcNew}
