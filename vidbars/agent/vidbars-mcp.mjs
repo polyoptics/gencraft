@@ -637,6 +637,38 @@ const TOOLS = [
       },
     },
   },
+  {
+    name: 'read_loop_strip',
+    description: 'Read a loop strip: its row left to right (columns of picture cards, each with its mode, and effects with their settings and any Depth or Segment inputs tucked under them), its look rows, the results at its right end, how many results a run would make, and how a run is going. Read-only.',
+    inputSchema: { type: 'object', properties: { toolId: { type: 'string' } }, required: ['toolId'] },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'edit_loop_strip',
+    description: 'Set up a loop strip, all in one undo. A strip runs its effects, in order, over every picture docked in its first column; a column after a blend effect (multiply, screen, overlay) holds what that effect mixes in, and a run makes one result per combination. Docking moves the cards themselves onto the strip; undock sets them down just under it. list_effects gives the effect kinds and their settings.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        toolId: { type: 'string' },
+        columns: { type: 'array', description: 'Change columns.', items: { type: 'object', properties: { column: { type: 'string' }, name: { type: 'string' }, mode: { type: 'string', enum: ['each', 'pick'] } }, required: ['column'] } },
+        addColumns: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, mode: { type: 'string', enum: ['each', 'pick'] }, at: { description: 'start, end (default), or a place in the row as a number, 0 first.' } } } },
+        dock: { type: 'array', description: 'Picture cards into a column (the first when column is left out; "new:1" is the first of addColumns).', items: { type: 'object', properties: { column: { type: 'string' }, cards: { type: 'array', items: { type: 'string' } } }, required: ['cards'] } },
+        undock: { type: 'array', items: { type: 'string' }, description: 'Card ids to take off the strip.' },
+        addEffects: { type: 'array', items: { type: 'object', properties: { kind: { type: 'string' }, params: { type: 'object' }, text: { type: 'string' }, off: { type: 'boolean' }, at: { type: 'number', description: 'Place in its row, 0 first. Left out: the end.' }, row: { type: 'number', description: '0 the strip\'s own row (default), 1 the first look row.' }, under: { type: 'string', description: 'For a depth or segment effect: the id of the effect it feeds, tucked under it.' } }, required: ['kind'] } },
+        effects: { type: 'array', description: 'Change effects already on the strip.', items: { type: 'object', properties: { id: { type: 'string' }, params: { type: 'object' }, text: { type: 'string' }, off: { type: 'boolean' } }, required: ['id'] } },
+        move: { type: 'array', description: 'Move a column or an effect along its row (or to another row).', items: { type: 'object', properties: { id: { type: 'string' }, at: { type: 'number', description: 'Place in the row, 0 first.' }, row: { type: 'number' } }, required: ['id', 'at'] } },
+        remove: { type: 'array', items: { type: 'string' }, description: 'Effect ids, or the ids of empty columns.' },
+        addRow: { type: 'boolean', description: 'A new, empty look row under the strip.' },
+        emptyResults: { type: 'boolean', description: 'Set the results down under the strip, leaving its end clear.' },
+      },
+      required: ['toolId'],
+    },
+  },
+  {
+    name: 'run_loop_strip',
+    description: 'Run a loop strip (do: run, the default) or stop it (do: stop). Each result is a full-size picture saved as its own file and lands as a card at the strip\'s right end. A short run is finished when this answers; a long one goes on, and read_loop_strip says how far it is. Runs of more than 100 results are the artist\'s to start.',
+    inputSchema: { type: 'object', properties: { toolId: { type: 'string' }, do: { type: 'string', enum: ['run', 'stop'] } }, required: ['toolId'] },
+  },
 ]
 
 for (const t of TOOLS) if (t.name !== 'send_file') t.inputSchema.properties.doing = DOING
@@ -651,6 +683,7 @@ const OPS = {
   list_effects: 'fxList', read_effects: 'fxRead', add_effects: 'fxAdd', edit_effects: 'fxEdit', save_effects: 'fxSave',
   read_rough_cut: 'cutRead', edit_rough_cut: 'cutEdit', deck_of_picks: 'cutPicks',
   read_view: 'viewRead', move_view: 'viewMove',
+  read_loop_strip: 'stripRead', edit_loop_strip: 'stripEdit', run_loop_strip: 'stripRun',
   read_viewer: 'viewerRead', show_in_viewer: 'viewerShow',
   read_3d_set: 'set3dRead', add_to_3d_set: 'set3dAdd', draw_path: 'pathDraw', edit_path: 'pathEdit', play_paths: 'pathPlay',
 }
@@ -798,8 +831,8 @@ async function handle(msg) {
       return ok({
         protocolVersion: params?.protocolVersion || '2024-11-05',
         capabilities: { tools: {} },
-        serverInfo: { name: 'vidbars', version: '1.10.0' },
-        instructions: 'VidBars is the artist\'s card canvas. You may read cards and decks, hand out the media on cards as files, and deal a deck of cards: new cards, results brought in from another tool, and linked cards of cards that are there. You can use the tools of VidBars: set one down (place_tool), build a 3D set from cards that hold models (make_3d_set, stand_in_3d_set), add shapes and cameras to it and draw paths for them to ride (read_3d_set, add_to_3d_set, draw_path, edit_path, play_paths), put effects on picture cards (list_effects, add_effects, edit_effects, save_effects), show a card big in a Viewer (show_in_viewer), make a GIF or a movie of cards, add cards to a Rough Cut and cut there (read_rough_cut, edit_rough_cut, deck_of_picks), draw storylines and trees (build_storyline, edit_storyline), lay out the face of a scene card (read_scene, edit_scene), and set up state machines in a States workspace (read_states, build_states, edit_states, run_states). You may also change what is there when the artist asks for it: edit, arrange, open and close decks, link, delete; each change is one undo, and undo takes your last one back. Do not change or delete anything the artist did not ask you to. Read before you deal or change, keep card text short, and tell the artist plainly what you did. The artist sees your pointer in VidBars with a bubble: give each request a few plain words in "doing". To use a card\'s picture or model with another tool, get_card_media then send_file to the upload address that tool gives; bring what comes back onto a card with deal_deck (media, and from: the cards it was made from).',
+        serverInfo: { name: 'vidbars', version: '1.11.0' },
+        instructions: 'VidBars is the artist\'s card canvas. You may read cards and decks, hand out the media on cards as files, and deal a deck of cards: new cards, results brought in from another tool, and linked cards of cards that are there. You can use the tools of VidBars: set one down (place_tool), build a 3D set from cards that hold models (make_3d_set, stand_in_3d_set), add shapes and cameras to it and draw paths for them to ride (read_3d_set, add_to_3d_set, draw_path, edit_path, play_paths), put effects on picture cards (list_effects, add_effects, edit_effects, save_effects), run pictures through a loop strip (read_loop_strip, edit_loop_strip, run_loop_strip), show a card big in a Viewer (show_in_viewer), move the artist\'s view to show them something (read_view, move_view), make a GIF or a movie of cards, add cards to a Rough Cut and cut there (read_rough_cut, edit_rough_cut, deck_of_picks), draw storylines and trees (build_storyline, edit_storyline), lay out the face of a scene card (read_scene, edit_scene), and set up state machines in a States workspace (read_states, build_states, edit_states, run_states). You may also change what is there when the artist asks for it: edit, arrange, open and close decks, link, delete; each change is one undo, and undo takes your last one back. Do not change or delete anything the artist did not ask you to. Read before you deal or change, keep card text short, and tell the artist plainly what you did. The artist sees your pointer in VidBars with a bubble: give each request a few plain words in "doing". To use a card\'s picture or model with another tool, get_card_media then send_file to the upload address that tool gives; bring what comes back onto a card with deal_deck (media, and from: the cards it was made from).',
       })
     case 'ping': return ok({})
     case 'tools/list': return ok({ tools: TOOLS })

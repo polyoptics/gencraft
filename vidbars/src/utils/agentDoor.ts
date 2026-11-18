@@ -68,6 +68,12 @@ import { paramHelp } from './fx/paramHelp'
 import { createEffectCardGroup, effectChain } from './effectCards'
 import { cardStripId } from './fx/cardStrips'
 import { useFxStore } from '../store/fxStore'
+import type { FreeNodeData } from '../store/freeNodeStore'
+import { isRail, railMembers, railRows, RAIL_TRAY, RAIL_GEOM, type RailSlot } from './rail'
+import { dockCardsOnRail, placeCard } from './railCards'
+import { runRail, stopRail, isRailRunning } from './fx/railRun'
+import { railComboCount } from './fx/railChain'
+import { useRailRunStore } from '../store/railRunStore'
 import { saveFailure, saveStripResult } from './fx/saveStrip'
 import { useNotesStore, useNotesUi, newNoteId, type Curve, type CurvePoint, type PathRider } from '../store/notesStore'
 import { curvesOf, parentOf } from './curveParent'
@@ -2141,6 +2147,210 @@ async function moveView(args: Json): Promise<Json> {
   return viewNow()
 }
 
+// ── Loop strips: columns of cards, a row of effects, Run ────────────────
+
+/** More results than this and the strip asks first: that is the artist's to answer. */
+const STRIP_RUN_MOST = 100
+
+function stripNamed(v: unknown) {
+  const node = useFreeNodeStore.getState().nodes[String(v ?? '')]
+  if (!isRail(node)) throw new Error('No loop strip with that id. list_tools gives them; place_tool loop_strip makes one.')
+  return node
+}
+
+type Tile = ReturnType<typeof stripNamed>
+const stripMid = (rail: Tile) => ({ x: rail.x + rail.width / 2, y: rail.y + rail.height / 2 })
+
+function stripFx(n: FreeNodeData): Json {
+  const e = n.effect ?? { kind: 'grade' as EffectKind }
+  const def = EFFECTS[e.kind]
+  return {
+    id: n.id, kind: e.kind, name: def.label,
+    params: Object.fromEntries(def.params.map(q => [q.key, e.params?.[q.key] ?? q.default])),
+    ...(e.text ? { text: e.text } : {}), ...(e.off ? { off: true } : {}),
+  }
+}
+
+function stripOut(rail: Tile): Json {
+  const nodes = useFreeNodeStore.getState().nodes
+  const groups = useBoardsStore.getState().groups
+  const members = railMembers(nodes).get(rail.id)
+  const col = (slotId: string) => [...(members?.get(slotId) ?? [])].sort((a, b) => a.railDock!.order - b.railDock!.order)
+  const held = (n: FreeNodeData): Json => n.cardRef
+    ? { cardId: n.cardRef, name: groups.find(g => g.id === n.cardRef)?.name ?? n.label }
+    : { name: n.label, kind: n.type }
+  const slot = (sl: RailSlot): Json => {
+    if (sl.kind === 'role') return { column: sl.id, name: sl.name ?? '', mode: sl.mode ?? 'each', cards: col(sl.id).map(held) }
+    const [card, ...inputs] = col(sl.id)
+    return card ? { effect: stripFx(card), ...(inputs.length ? { inputs: inputs.map(stripFx) } : {}) } : { effect: null }
+  }
+  const [own, ...rows] = railRows(rail.rail)
+  const run = useRailRunStore.getState().run[rail.id]
+  const preview = useRailRunStore.getState().preview[rail.id]
+  return {
+    toolId: rail.id, name: rail.label || 'Loop strip',
+    row: own.map(slot),
+    ...(rows.length ? { lookRows: rows.map((r, i) => ({ row: i + 1, effects: r.map(slot) })) } : {}),
+    results: col(RAIL_TRAY).map(held),
+    runWouldMake: railComboCount(rail, members),
+    ...(preview?.error ? { cannotRun: preview.error } : {}),
+    ...(run ? { run: { running: run.running, done: run.done, of: run.total, made: run.made ?? 0, ...(run.note ? { note: run.note } : {}), ...(run.stopped ? { stopped: true } : {}), ...(run.error ? { error: run.error } : {}) } } : {}),
+    note: 'Left to right: a column holds picture cards (mode each runs every card, pick only the last, face-up one); effects run in order on the first column\'s pictures; a column after a blend effect is what that effect mixes in. Results land at the right end.',
+  }
+}
+
+function readStrip(args: Json): Json {
+  const rail = stripNamed(args.toolId)
+  agentPoint(say(args, 'Reading the loop strip'), stripMid(rail))
+  return stripOut(rail)
+}
+
+/** A loop strip changed: its columns, the cards in them, its effects. One undo. */
+async function editStrip(args: Json): Promise<Json> {
+  const rail0 = stripNamed(args.toolId)
+  const id = rail0.id
+  if (rail0.pin) throw new Error('This loop strip is pinned. The artist unpins it.')
+  const fs = () => useFreeNodeStore.getState()
+  const rail = () => stripNamed(id)
+  const list = (k: string) => Array.isArray(args[k]) ? (args[k] as Json[]) : []
+  const roleOf = (v: unknown) => {
+    const roles = rail().rail.slots.filter(sl => sl.kind === 'role')
+    const sl = v == null ? roles[0] : roles.find(x => x.id === String(v))
+    if (!sl) throw new Error(v == null ? 'This strip has no column: addColumns first.' : `No column "${String(v)}" on this strip. read_loop_strip gives them.`)
+    return sl
+  }
+  const fxTile = (v: unknown) => {
+    const n = fs().nodes[String(v ?? '')]
+    if (n?.type !== 'effect' || n.railDock?.railId !== id) throw new Error(`No effect "${String(v)}" on this strip. read_loop_strip gives their ids.`)
+    return n
+  }
+  const mode = (v: unknown): 'each' | 'pick' | undefined => {
+    if (v == null) return undefined
+    if (v !== 'each' && v !== 'pick') throw new Error('mode is each or pick.')
+    return v
+  }
+  // Checked before anything changes.
+  const columns = list('columns').map(c => ({ sl: roleOf(c.column), name: typeof c.name === 'string' ? c.name : undefined, mode: mode(c.mode) }))
+  const addColumns = list('addColumns').map(c => ({ name: typeof c.name === 'string' ? c.name : 'Pictures', mode: mode(c.mode), at: c.at === 'start' ? 'start' as const : 'end' as const, index: num(c.at) }))
+  const dock = list('dock').map(d => {
+    const cards = cardsNamed(idsOf(d.cards))
+    if (!cards.length) throw new Error('dock: give cards.')
+    const fxCard = cards.find(g => g.effect)
+    if (fxCard) throw new Error(`"${fxCard.name}" is an effect card: effects go in with addEffects.`)
+    if (d.column != null && !String(d.column).startsWith('new:')) roleOf(d.column)
+    return { cards: cards.map(g => g.id), column: d.column == null ? null : String(d.column) }
+  })
+  const undock = idsOf(args.undock)
+  const addEffects = list('addEffects').map(w => {
+    const kind = String(w.kind ?? '') as EffectKind
+    if (!(kind in EFFECTS)) throw new Error(`No effect "${kind}". list_effects gives them.`)
+    const row = num(w.row) ?? 0
+    if (row < 0 || row > (rail0.rail.rows?.length ?? 0) + (args.addRow ? 1 : 0)) throw new Error(`No look row ${row} on this strip.`)
+    return { kind, patch: effectPatch(kind, w), at: num(w.at), row, under: w.under == null ? null : String(w.under) }
+  })
+  const setEffects = list('effects').map(w => { const n = fxTile(w.id); return { id: n.id, patch: effectPatch(n.effect!.kind, w) } })
+  const move = list('move').map(m => {
+    if (num(m.at) == null) throw new Error('move: give at, the place in the row (0 first).')
+    return { id: String(m.id ?? ''), at: num(m.at)!, row: num(m.row) }
+  })
+  const remove = idsOf(args.remove)
+  for (const r of remove) if (!rail0.rail.slots.some(sl => sl.kind === 'role' && sl.id === r)) fxTile(r)
+  if (!columns.length && !addColumns.length && !dock.length && !undock.length && !addEffects.length && !setEffects.length && !move.length && !remove.length && !args.addRow && !args.emptyResults)
+    throw new Error('Nothing to change. Give columns, addColumns, dock, undock, addEffects, effects, move, remove, addRow or emptyResults.')
+
+  await agentGlide(say(args, 'Setting up the loop strip'), stripMid(rail0))
+  useUndoCoordinator.getState().checkpoint()
+  for (const c of columns) fs().setRailSlot(id, c.sl.id, { ...(c.name != null ? { name: c.name } : {}), ...(c.mode ? { mode: c.mode } : {}) })
+  const newCols: string[] = []
+  for (const c of addColumns) {
+    const sid = fs().addRailRole(id, c.at, c.name)
+    if (!sid) continue
+    newCols.push(sid)
+    if (c.mode) fs().setRailSlot(id, sid, { mode: c.mode })
+    if (c.index != null) fs().moveRailSlot(id, sid, Math.max(0, Math.min(rail().rail.slots.length, c.index)), 0)
+  }
+  if (args.addRow) fs().addRailRow(id)
+  let docked = 0
+  for (const d of dock) {
+    const slotId = d.column?.startsWith('new:') ? newCols[Number(d.column.slice(4)) - 1] : roleOf(d.column).id
+    if (!slotId) throw new Error(`dock: "${d.column}" names a new column that was not made (new:1 is the first of addColumns).`)
+    docked += dockCardsOnRail(d.cards, { railId: id, kind: 'column', slotId, index: Infinity })
+  }
+  const added: string[] = []
+  for (const w of addEffects) {
+    const tid = fs().addFreeNode(0, 0, 'effect')
+    fs().updateFreeNode(tid, { effect: { kind: w.kind, ...w.patch }, label: EFFECTS[w.kind].label })
+    if (w.under) fs().dockToRail([tid], { railId: id, kind: 'input', slotId: fxTile(w.under).railDock!.slotId })
+    else {
+      const rowSlots = railRows(rail().rail)[w.row] ?? []
+      fs().dockToRail([tid], { railId: id, kind: 'row', insertAt: Math.max(0, Math.min(rowSlots.length, w.at ?? rowSlots.length)), row: w.row })
+    }
+    if (fs().nodes[tid]?.railDock?.railId === id) added.push(tid)
+    else fs().deleteFreeNode(tid)
+  }
+  for (const q of setEffects) {
+    const n = fs().nodes[q.id]
+    if (n?.effect) fs().updateFreeNode(q.id, { effect: { ...n.effect, ...q.patch, params: { ...n.effect.params, ...q.patch.params } } })
+  }
+  for (const m of move) {
+    const n = fs().nodes[m.id]
+    const slotId = n?.type === 'effect' && n.railDock?.railId === id ? n.railDock.slotId : m.id
+    const rows = railRows(rail().rail)
+    const from = rows.findIndex(r => r.some(sl => sl.id === slotId))
+    if (from < 0) throw new Error(`move: nothing "${m.id}" on this strip.`)
+    const row = m.row ?? from
+    if (!rows[row]) throw new Error(`No look row ${row} on this strip.`)
+    fs().moveRailSlot(id, slotId, Math.max(0, Math.min(rows[row].length, m.at)), row)
+  }
+  for (const r of remove) {
+    const n = fs().nodes[r]
+    if (n?.type === 'effect') { fs().undockFromRail(r); fs().deleteFreeNode(r) }
+    else fs().removeRailSlot(id, r)
+  }
+  // Cards taken off are set down in a row just under the strip.
+  let off = 0
+  const gap = RAIL_GEOM.gap * (rail().rail.unit || 1)
+  let x = rail().x
+  // (Under the results, when those are set down too.)
+  const drop = args.emptyResults ? Math.max(0, ...Object.values(fs().nodes).filter(n => n.railDock?.railId === id && n.railDock.slotId === RAIL_TRAY).map(n => (n.railDock?.prevH ?? n.height) + gap)) : 0
+  for (const cid of undock) {
+    const t = Object.values(fs().nodes).find(n => n.cardRef === cid && n.railDock?.railId === id)
+    if (!t) continue
+    const w = t.railDock?.prevW ?? t.width
+    fs().undockFromRail(t.id)
+    placeCard(cid, x, rail().y + rail().height + gap * 2 + drop)
+    x += w + gap
+    off++
+  }
+  if (args.emptyResults) fs().clearRailTray(id)
+  // The strip lays itself out on the next frame.
+  await new Promise(r => setTimeout(r, 120))
+  return { ...stripOut(rail()), ...(newCols.length ? { newColumns: newCols } : {}), ...(added.length ? { addedEffects: added } : {}), ...(dock.length ? { docked } : {}), ...(undock.length ? { takenOff: off } : {}), undo: 'One undo (Ctrl+Z) takes it back.' }
+}
+
+/** Run a loop strip, or stop it. A run goes on after this answers. */
+async function runStrip(args: Json): Promise<Json> {
+  const rail = stripNamed(args.toolId)
+  const id = rail.id
+  if (args.do === 'stop') {
+    stopRail(id)
+    agentPoint(say(args, 'Stopping the run'), stripMid(rail))
+  } else {
+    if (isRailRunning(id)) throw new Error('This strip is already running. read_loop_strip says how far it is; do: stop stops it.')
+    const total = railComboCount(rail, railMembers(useFreeNodeStore.getState().nodes).get(id))
+    if (total === 0) throw new Error('Nothing to run: dock picture cards in the first column first.')
+    if (total > STRIP_RUN_MOST) throw new Error(`This run would make ${total} results. More than ${STRIP_RUN_MOST} is for the artist to start, from the strip's own Run arrow.`)
+    await agentGlide(say(args, `Running the loop strip (${total})`), stripMid(rail))
+    void runRail(id)
+  }
+  // A short run is over before this answers; a long one is read again later.
+  const t0 = Date.now()
+  await new Promise(r => setTimeout(r, 150))
+  while (isRailRunning(id) && Date.now() - t0 < 12_000) await new Promise(r => setTimeout(r, 200))
+  const out = stripOut(stripNamed(id))
+  return { ...out, ...(isRailRunning(id) ? { stillRunning: 'It goes on. read_loop_strip says how far it is and what has landed.' } : {}) }
+}
+
 // ── The door ────────────────────────────────────────────────────────────
 
 const OPS: Record<string, (args: Json) => Json | Promise<Json>> = { list: listCards, read: readCards, decks: listDecks, media: cardMedia, deal: dealDeck,
@@ -2150,6 +2360,7 @@ const OPS: Record<string, (args: Json) => Json | Promise<Json>> = { list: listCa
   story: readStoryline, storyBuild: buildStoryline, storyEdit: editStoryline,
   scene: readScene, sceneEdit: editScene,
   viewRead: readView, viewMove: moveView,
+  stripRead: readStrip, stripEdit: editStrip, stripRun: runStrip,
   viewerRead: readViewer, viewerShow: showInViewer,
   cutRead: readCut, cutEdit: editCut, cutPicks: picksDeck,
   fxList: listEffects, fxRead: readEffects, fxAdd: addEffects, fxEdit: editEffects, fxSave: saveEffects,
