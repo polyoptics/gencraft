@@ -1,6 +1,7 @@
 import React from 'react'
 import { useCanvasStore } from '../../store/canvasStore'
 import { AGENT_GLIDE_MS, useAgentCursor } from '../../utils/agentCursor'
+import { isTilted, screenOf, useTiltStore } from '../../store/tiltStore'
 
 const COLOR = '#d97757'
 
@@ -11,6 +12,9 @@ export const AgentCursor: React.FC = () => {
   const { shown, at, text, gliding } = useAgentCursor()
   const pan = useCanvasStore(s => s.pan)
   const zoom = useCanvasStore(s => s.zoom)
+  // The view tilted into 3D: the spot is on the ground, drawn where the tilt puts it.
+  const tilt = useTiltStore(s => s.tilt), spin = useTiltStore(s => s.spin), yaw = useTiltStore(s => s.yaw)
+  const shiftX = useTiltStore(s => s.shiftX), shiftY = useTiltStore(s => s.shiftY)
   // Kept mounted a moment after it leaves, so it fades instead of vanishing.
   const [mounted, setMounted] = React.useState(false)
   React.useEffect(() => {
@@ -21,7 +25,16 @@ export const AgentCursor: React.FC = () => {
   if (!shown && !mounted) return null
 
   const W = window.innerWidth, H = window.innerHeight
-  const raw = at ? { x: pan.x + at.x * zoom, y: pan.y + at.y * zoom } : { x: W / 2, y: H / 2 }
+  let raw = at ? { x: pan.x + at.x * zoom, y: pan.y + at.y * zoom } : { x: W / 2, y: H / 2 }
+  if (at && isTilted({ tilt, yaw })) {
+    const r = document.querySelector('[data-tilt-stage="world"]')?.parentElement?.getBoundingClientRect()
+    if (r) {
+      const mx = r.left + r.width / 2, my = r.top + r.height / 2
+      const p = screenOf({ x: raw.x - mx, y: raw.y - my }, { tilt, spin, yaw, shiftX, shiftY })
+      // Behind the eye: it waits at the bottom edge, nearest the ground.
+      raw = p ? { x: mx + p.x, y: my + p.y } : { x: raw.x, y: H }
+    }
+  }
   // What it points at may be out of view: it waits at the nearest edge.
   const x = Math.max(12, Math.min(W - 40, raw.x))
   const y = Math.max(12, Math.min(H - 60, raw.y))
