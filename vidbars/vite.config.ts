@@ -863,6 +863,27 @@ function agentApi(): Plugin {
 function agentChatApi(): Plugin {
   const chatDir = path.resolve(__dirname, 'agent/chat')
   const q = (s: string) => `"${s.replace(/"/g, '')}"`
+  /** The Claude Code command: VIDBARS_CLAUDE when set, else the usual install
+   *  spots (it is often installed but not on PATH), else plain `claude`. */
+  const claudeCmd = (): string => {
+    if (process.env.VIDBARS_CLAUDE) return process.env.VIDBARS_CLAUDE
+    const home = os.homedir()
+    const spots: string[] = process.platform === 'win32'
+      ? [
+        path.join(home, '.local', 'bin', 'claude.exe'),
+        path.join(home, '.claude', 'local', 'claude.exe'),
+        path.join(process.env.APPDATA || path.join(home, 'AppData', 'Roaming'), 'npm', 'claude.cmd'),
+        path.join(process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local'), 'Programs', 'claude', 'claude.exe'),
+        path.join(path.dirname(process.execPath), 'claude.cmd'),
+      ]
+      : [
+        path.join(home, '.local', 'bin', 'claude'),
+        path.join(home, '.claude', 'local', 'claude'),
+        '/usr/local/bin/claude', '/opt/homebrew/bin/claude',
+      ]
+    for (const f of spots) { try { if (fs.statSync(f).isFile()) return q(f) } catch { /* not there */ } }
+    return 'claude'
+  }
   return {
     name: 'agent-chat-api',
     configureServer(server) {
@@ -911,7 +932,7 @@ function agentChatApi(): Plugin {
           delete env.ANTHROPIC_API_KEY
           delete env.ANTHROPIC_AUTH_TOKEN
           // One command line through the shell: on Windows `claude` is a .cmd.
-          const child = spawn(`${process.env.VIDBARS_CLAUDE || 'claude'} ${args.join(' ')}`, {
+          const child = spawn(`${claudeCmd()} ${args.join(' ')}`, {
             cwd: chatDir, env, shell: true, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
           })
           running.add(child)
