@@ -26,6 +26,10 @@
 //     (tools), set one down (place), build a 3D set from cards and stand
 //     their models in it (set3d, stand3d), make a looping GIF or a movie
 //     of cards (gif, movie), add cards to a Rough Cut (cut).
+//   • WORK A STATES WORKSPACE (Brian 2026-11-18: "I want to be able to have
+//     Claude set up state machine relationships"): read one (states), add
+//     nodes and wires to it (statesBuild), change or take out what it has
+//     (statesEdit), and work it by hand as a click does (statesRun).
 // (Brian 2026-11-18: widened for passing references out and taking results
 // back as cards, then for working on the canvas as he does.)
 
@@ -48,6 +52,11 @@ import { useModelScaleStore } from '../store/tiltStore'
 import { freeNodeFootprint } from './canvasCreate'
 import { deckGifShots, makeDeckMovie, makeGif, useGifJob } from './makeGif'
 import { appendCards } from './roughCut'
+import {
+  addItem, addWire, canWire, fireEvent, itemPorts, itemSize, patchItem, patchWire, planeBox, poke, removeFromSpace,
+  setNow, setValue, spaceNumbers, spaceOf, spaceTruths, wireKind,
+  type CalcOp, type Compare, type GenShape, type SpaceItem, type SpaceKind, type SpaceWire, type StateSpaceData,
+} from './stateSpace'
 import { viewportCenterInCanvas } from './canvasCreate'
 import { CARD_TYPES, cardTypeOf, detailShown, newDetailId, type CardDetail, type CardType } from './cardTypes'
 import { factionGroupsOf } from './factionGroups'
@@ -894,11 +903,281 @@ async function addToCut(args: Json): Promise<Json> {
   return { added, clips: useFreeNodeStore.getState().nodes[node.id]?.roughCut?.clips.length ?? added, note: 'One undo (Ctrl+Z) takes them out again.' }
 }
 
+// ── States workspaces ───────────────────────────────────────────────────
+
+/** The node kinds by the names the shelf gives them. */
+const STATE_KINDS: Record<string, { kind: SpaceKind; more?: Partial<SpaceItem> }> = {
+  state: { kind: 'blank' }, any: { kind: 'any' }, event: { kind: 'event' }, pick_one: { kind: 'pick' },
+  value: { kind: 'value' }, and: { kind: 'and' }, or: { kind: 'or' }, is_in: { kind: 'fact' },
+  calculate: { kind: 'calc' }, signal: { kind: 'gen', more: { shape: 'wave' } }, switch: { kind: 'switch' },
+  selector: { kind: 'dial', more: { opts: [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }, { id: 'c', name: 'C' }] } },
+  counter: { kind: 'count' }, timer: { kind: 'timer' }, dice: { kind: 'dice' }, meter: { kind: 'meter' },
+  send: { kind: 'send', more: { name: 'A' } }, receive: { kind: 'recv', more: { name: 'A' } }, wait: { kind: 'wait' },
+  choose: { kind: 'choice', more: { opts: [{ id: 'a', name: 'Yes' }, { id: 'b', name: 'No' }] } },
+  show_hide: { kind: 'act' }, path: { kind: 'path' }, world_clock: { kind: 'timeline', more: { world: true } },
+  timeline: { kind: 'timeline' }, workspace: { kind: 'space' },
+}
+const kindName = (i: SpaceItem): string => i.kind === 'card' || i.kind === 'blank' ? 'state'
+  : i.kind === 'timeline' ? (i.world ? 'world_clock' : 'timeline')
+  : Object.entries(STATE_KINDS).find(([, v]) => v.kind === i.kind)?.[0] ?? i.kind
+
+const CALC_OPS: Record<string, CalcOp> = {
+  plus: 'add', minus: 'sub', times: 'mul', divided_by: 'div', smallest: 'min', largest: 'max', average: 'avg',
+  greater_than: 'gt', less_than: 'lt', at_least: 'ge', at_most: 'le', equal_to: 'eq', not_equal_to: 'ne',
+}
+const SHAPES: Record<string, GenShape> = { pulse: 'pulse', sine: 'wave', square: 'square', saw: 'ramp', triangle: 'tri', noise: 'noise' }
+const COMPARES: Compare[] = ['<', '<=', '=', '!=', '>=', '>']
+
+function spaceNamed(v: unknown): { nodeId: string; d: StateSpaceData } {
+  const nodeId = String(v ?? '')
+  const d = spaceOf(nodeId)
+  if (!d) throw new Error('No States workspace with that id. list_tools gives them; place_tool states makes one.')
+  return { nodeId, d }
+}
+
+const num = (v: unknown): number | undefined => v != null && Number.isFinite(Number(v)) ? Number(v) : undefined
+
+/** What an agent may set on a node, as the fields the workspace keeps. */
+function itemPatch(c: Json, kind: SpaceKind): Partial<SpaceItem> {
+  const p: Partial<SpaceItem> = {}
+  if (typeof c.name === 'string') p.name = c.name
+  if (typeof c.note === 'string') p.note = c.note
+  if (c.card != null) {
+    const g = cardsNamed([String(c.card)])[0]
+    p.card = g.id
+  }
+  const v = num(c.value)
+  if (v !== undefined) { p.val = v; p.init = v }
+  if (typeof c.value === 'boolean') { p.val = c.value ? 1 : 0; p.init = p.val; p.flag = true }
+  if (typeof c.yesNo === 'boolean') p.flag = c.yesNo || undefined
+  if (num(c.n) !== undefined) p.n = num(c.n)
+  if (num(c.low) !== undefined) p.lo = num(c.low)
+  if (num(c.high) !== undefined) p.hi = num(c.high)
+  if (typeof c.wrap === 'boolean') p.wrap = c.wrap || undefined
+  if (c.op != null) {
+    const op = CALC_OPS[String(c.op)]
+    if (!op) throw new Error(`No calculation "${String(c.op)}". One of: ${Object.keys(CALC_OPS).join(', ')}.`)
+    p.calc = op
+  }
+  if (c.shape != null) {
+    const sh = SHAPES[String(c.shape)]
+    if (!sh) throw new Error(`No signal shape "${String(c.shape)}". One of: ${Object.keys(SHAPES).join(', ')}.`)
+    p.shape = sh
+  }
+  if (Array.isArray(c.options) && (kind === 'choice' || kind === 'dial')) {
+    p.opts = c.options.map((o, i) => ({ id: String.fromCharCode(97 + (i % 26)) + (i >= 26 ? i : ''), name: String(o) }))
+  }
+  if (c.do === 'hide' || c.do === 'show') p.do = c.do
+  if (typeof c.line === 'string') p.line = c.line
+  if (typeof c.curve === 'string') p.curve = c.curve
+  if (typeof c.space === 'string') p.space = c.space
+  if (typeof c.start === 'boolean') p.start = c.start || undefined
+  return p
+}
+
+/** What an agent may set on a wire. */
+function wirePatch(c: Json): Partial<SpaceWire> {
+  const p: Partial<SpaceWire> = {}
+  if (typeof c.name === 'string') p.name = c.name
+  if (typeof c.note === 'string') p.note = c.note
+  if (c.compare != null) {
+    if (!COMPARES.includes(c.compare as Compare)) throw new Error(`compare is one of ${COMPARES.join(' ')}.`)
+    p.cmp = c.compare as Compare
+    p.cn = num(c.number) ?? 0
+  }
+  if (typeof c.not === 'boolean') p.not = c.not || undefined
+  if (typeof c.plain === 'boolean') p.plain = c.plain || undefined
+  if (c.does === 'add' || c.does === 'set') { p.op = c.does; p.on = num(c.by) ?? (c.does === 'add' ? 1 : 0) }
+  return p
+}
+
+/** A workspace, read: every node with its ports and how it stands, every wire. */
+function readStates(args: Json): Json {
+  const { nodeId, d } = spaceNamed(args.toolId)
+  const groups = useBoardsStore.getState().groups
+  const lit = spaceTruths(nodeId), nums = spaceNumbers(nodeId)
+  const plane = planeBox(nodeId)
+  const nodes = d.items.map(i => {
+    const ports = itemPorts(i)
+    return {
+      id: i.id, kind: kindName(i),
+      name: i.name ?? (i.card ? groups.find(g => g.id === i.card)?.name : undefined) ?? '',
+      ...(i.card ? { cardId: i.card } : {}),
+      ...(i.note ? { note: i.note } : {}),
+      x: Math.round(i.x), y: Math.round(i.y),
+      ...(i.start ? { start: true } : {}),
+      ...(i.now ? { lit: true } : {}),
+      ...(lit.has(i.id) ? { true: true } : {}),
+      ...(nums.has(i.id) ? { number: nums.get(i.id) } : i.kind === 'value' ? { number: i.val ?? i.init ?? 0 } : {}),
+      ...(i.opts ? { options: i.opts.map(o => ({ id: o.id, name: o.name })) } : {}),
+      in: ports.filter(q => !q.out).map(q => q.port), out: ports.filter(q => q.out).map(q => q.port),
+    }
+  })
+  const wires = d.wires.map(w => ({
+    id: w.id, kind: wireKind(d, w), from: w.a, ...(w.ap ? { fromPort: w.ap } : {}),
+    ...(w.bp === 'knob' ? { toWire: w.b } : { to: w.b, toPort: w.bp ?? 'in' }),
+    ...(w.name ? { name: w.name } : {}), ...(w.cmp ? { compare: w.cmp, number: w.cn ?? 0 } : {}), ...(w.not ? { not: true } : {}),
+    ...(w.op ? { does: w.op, by: w.on } : {}),
+  }))
+  agentPoint(say(args, 'Reading the states'), plane ? { x: plane.x + plane.w * plane.k * 0.3, y: plane.y + plane.h * plane.k * 0.3 } : undefined)
+  return {
+    ...(plane ? { ground: { w: Math.round(plane.w), h: Math.round(plane.h) } } : {}),
+    nodes, wires,
+    wireKinds: 'change: state to state, an arrow (made by hand, or by a wire onto it: toWire). hold: a condition into a state keeps it lit while true. cond: a condition read all the time. signal: something that happens, sent once. link: a plain line.',
+  }
+}
+
+/** A free middle for a new node: left to right in rows, clear of what is there. */
+function freeNodeSpot(d: StateSpaceData, taken: { x: number; y: number }[], ground: { w: number; h: number }): { x: number; y: number } {
+  const all = [...d.items.map(i => ({ x: i.x, y: i.y, ...itemSize(i) })), ...taken.map(t => ({ ...t, w: 130, h: 104 }))]
+  for (let y = 110; y < Math.max(ground.h, 400) + 2000; y += 150) {
+    for (let x = 120; x < Math.max(ground.w, 600) - 90; x += 190) {
+      if (!all.some(o => Math.abs(o.x - x) < o.w / 2 + 85 && Math.abs(o.y - y) < o.h / 2 + 70)) return { x, y }
+    }
+  }
+  return { x: 120, y: 110 }
+}
+
+/** A canvas spot on a workspace's ground, for the pointer. */
+function groundSpot(nodeId: string, x: number, y: number): { x: number; y: number } | undefined {
+  const pl = planeBox(nodeId)
+  return pl ? { x: pl.x + x * pl.k, y: pl.y + y * pl.k } : undefined
+}
+
+/** Add nodes and wires to a workspace. One undo. */
+async function buildStates(args: Json): Promise<Json> {
+  const { nodeId, d } = spaceNamed(args.toolId)
+  const nodeSpecs = Array.isArray(args.nodes) ? args.nodes as Json[] : []
+  const wireSpecs = Array.isArray(args.wires) ? args.wires as Json[] : []
+  if (!nodeSpecs.length && !wireSpecs.length) throw new Error('Nothing to add: give nodes, wires or both.')
+  // Everything is checked before anything is made.
+  const plan = nodeSpecs.map((c, i) => {
+    const k = STATE_KINDS[String(c.kind ?? 'state')]
+    if (!k) throw new Error(`No node kind "${String(c.kind)}". One of: ${Object.keys(STATE_KINDS).join(', ')}.`)
+    const p = itemPatch(c, k.kind)
+    let kind = k.kind
+    if (kind === 'blank' && p.card) kind = 'card'
+    if (kind === 'timeline' && !k.more?.world && !p.line) throw new Error('A timeline node needs line: a storyline\'s id (list_tools).')
+    return { ref: typeof c.ref === 'string' && c.ref ? c.ref : `n${i + 1}`, kind, more: k.more, p, x: num(c.x), y: num(c.y) }
+  })
+  const ground = planeBox(nodeId) ?? { w: 930, h: 698 }
+  await agentGlide(say(args, 'Wiring up the states'), groundSpot(nodeId, 200, 150) ?? null)
+  useUndoCoordinator.getState().checkpoint()
+
+  const ids: Record<string, string> = {}
+  const taken: { x: number; y: number }[] = []
+  for (const n of plan) {
+    const at = n.x !== undefined && n.y !== undefined ? { x: n.x, y: n.y } : freeNodeSpot(spaceOf(nodeId) ?? d, taken, ground)
+    taken.push(at)
+    ids[n.ref] = addItem(nodeId, { kind: n.kind, ...n.more, ...n.p, x: Math.round(at.x / 10) * 10, y: Math.round(at.y / 10) * 10 }, false)
+  }
+  const wireIds: Record<string, string> = {}
+  const failed: Json[] = []
+  wireSpecs.forEach((c, i) => {
+    const now = spaceOf(nodeId)!
+    const end = (v: unknown) => { const k = String(v ?? ''); return ids[k] ?? k }
+    const from = { node: end(c.from), port: typeof c.fromPort === 'string' ? c.fromPort : 'out' }
+    const to = c.toWire != null
+      ? { wire: wireIds[String(c.toWire)] ?? String(c.toWire), port: 'knob' }
+      : { node: end(c.to), port: typeof c.toPort === 'string' ? c.toPort : 'in' }
+    const label = `${String(c.from)} → ${c.toWire != null ? 'wire ' + String(c.toWire) : String(c.to)}`
+    if (!canWire(now, from, to)) {
+      const a = now.items.find(x => x.id === from.node), b = now.items.find(x => x.id === to.node)
+      failed.push({
+        wire: label,
+        why: !a ? 'No node to wire from.' : !('wire' in to) && !b ? 'No node to wire to.' : 'Those two ports cannot be wired.',
+        ...(a ? { fromHasOut: itemPorts(a).filter(q => q.out).map(q => q.port) } : {}),
+        ...(b ? { toHasIn: itemPorts(b).filter(q => !q.out).map(q => q.port) } : {}),
+      })
+      return
+    }
+    const id = addWire(nodeId, from, to, false)
+    if (!id) { failed.push({ wire: label, why: 'It could not be wired.' }); return }
+    const p = wirePatch(c)
+    if (Object.keys(p).length) patchWire(nodeId, id, p, false)
+    wireIds[typeof c.ref === 'string' && c.ref ? c.ref : `w${i + 1}`] = id
+  })
+  return {
+    nodes: ids, wires: wireIds,
+    ...(failed.length ? { notWired: failed } : {}),
+    note: 'One undo (Ctrl+Z) takes all of it back. read_states shows how it stands now.',
+  }
+}
+
+/** Change, move or take out nodes and wires of a workspace. One undo. */
+async function editStates(args: Json): Promise<Json> {
+  const { nodeId, d } = spaceNamed(args.toolId)
+  const nodeSpecs = Array.isArray(args.nodes) ? args.nodes as Json[] : []
+  const wireSpecs = Array.isArray(args.wires) ? args.wires as Json[] : []
+  const remove = idsOf(args.remove)
+  const known = new Set([...d.items.map(i => i.id), ...d.wires.map(w => w.id)])
+  const missing = [...nodeSpecs.map(c => String(c.id ?? '')), ...wireSpecs.map(c => String(c.id ?? '')), ...remove].filter(id => !known.has(id))
+  if (missing.length) throw new Error(`Not in that workspace: ${missing.join(', ')}.`)
+  if (!nodeSpecs.length && !wireSpecs.length && !remove.length) throw new Error('Nothing to change.')
+  const nodePatches = nodeSpecs.map(c => {
+    const it = d.items.find(i => i.id === String(c.id))
+    if (!it) throw new Error(`${String(c.id)} is a wire: give it under wires.`)
+    const p = itemPatch(c, it.kind)
+    if (p.card && it.kind === 'blank') p.kind = 'card'
+    const x = num(c.x), y = num(c.y)
+    if (x !== undefined) p.x = Math.round(x / 10) * 10
+    if (y !== undefined) p.y = Math.round(y / 10) * 10
+    return { id: it.id, p }
+  })
+  const wirePatches = wireSpecs.map(c => ({ id: String(c.id), p: wirePatch(c) }))
+  const first = d.items.find(i => i.id === (nodeSpecs[0]?.id ?? remove[0]))
+  await agentGlide(say(args, 'Changing the states'), (first && groundSpot(nodeId, first.x, first.y)) ?? null)
+  // (Taking out is its own step in the workspace: with other changes in the same request, a second undo.)
+  if (nodePatches.length || wirePatches.length) useUndoCoordinator.getState().checkpoint()
+  for (const n of nodePatches) patchItem(nodeId, n.id, n.p, false)
+  for (const w of wirePatches) if (Object.keys(w.p).length) patchWire(nodeId, w.id, w.p, false)
+  if (remove.length) removeFromSpace(nodeId, remove)
+  return { changed: nodePatches.length + wirePatches.length, removed: remove.length, note: remove.length && (nodePatches.length || wirePatches.length) ? 'Undo (Ctrl+Z) twice takes it all back: once for what was taken out, once for the rest.' : 'One undo (Ctrl+Z) takes it back.' }
+}
+
+/** Work a workspace by hand, as a click on it does. */
+async function runStates(args: Json): Promise<Json> {
+  const { nodeId, d } = spaceNamed(args.toolId)
+  const it = d.items.find(i => i.id === String(args.id ?? ''))
+  if (!it) throw new Error('No node with that id in that workspace.')
+  const act = String(args.do ?? '')
+  await agentGlide(say(args, 'Working the states'), groundSpot(nodeId, it.x, it.y) ?? null)
+  if (act === 'light' || act === 'unlight') {
+    if (it.kind !== 'card' && it.kind !== 'blank') throw new Error('Only a state can be lit.')
+    setNow(nodeId, it.id, act === 'light')
+  } else if (act === 'fire') {
+    if (it.kind !== 'event' && it.kind !== 'wait' && it.kind !== 'pick' && it.kind !== 'gen') throw new Error('Only an event, a wait, a pick one or a signal can be fired.')
+    fireEvent(nodeId, it.id)
+  } else if (act === 'set') {
+    const v = typeof args.value === 'boolean' ? (args.value ? 1 : 0) : num(args.value)
+    if (v === undefined) throw new Error('set needs value: a number, or true / false.')
+    setValue(nodeId, it.id, v)
+  } else if (act === 'poke') {
+    const port = typeof args.port === 'string' ? args.port : 'in'
+    if (!itemPorts(it).some(q => !q.out && q.port === port)) throw new Error(`That node has no input "${port}". It has: ${itemPorts(it).filter(q => !q.out).map(q => q.port).join(', ')}.`)
+    poke(nodeId, it.id, port)
+  } else throw new Error('do is one of: light, unlight, fire, set, poke.')
+  const lit = spaceTruths(nodeId), nums = spaceNumbers(nodeId)
+  const now = spaceOf(nodeId)!
+  const groups = useBoardsStore.getState().groups
+  return {
+    done: act,
+    litNow: now.items.filter(i => i.now).map(i => ({ id: i.id, name: i.name ?? groups.find(g => g.id === i.card)?.name ?? '' })),
+    trueNow: now.items.filter(i => lit.has(i.id)).map(i => ({ id: i.id, kind: kindName(i), name: i.name ?? '' })),
+    numbers: Object.fromEntries([
+      ...now.items.filter(i => i.kind === 'value').map(i => [i.id, i.val ?? i.init ?? 0] as [string, number]),
+      ...[...nums].filter(([id]) => now.items.some(i => i.id === id)),
+    ]),
+    note: 'One undo (Ctrl+Z) takes it back.',
+  }
+}
+
 // ── The door ────────────────────────────────────────────────────────────
 
 const OPS: Record<string, (args: Json) => Json | Promise<Json>> = { list: listCards, read: readCards, decks: listDecks, media: cardMedia, deal: dealDeck,
   edit: editCards, arrange: arrangeCards, deck: setDeck, link: linkCards, delete: deleteCards, select: selectCards, undo: undoLast,
   tools: listTools, place: placeTool, set3d: make3dSet, stand3d, gif: makeGifOf, movie: makeMovieOf, cut: addToCut,
+  states: readStates, statesBuild: buildStates, statesEdit: editStates, statesRun: runStates,
 }
 
 /** Start answering the connector. Only where the dev server's socket is

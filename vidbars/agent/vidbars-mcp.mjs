@@ -286,6 +286,89 @@ const TOOLS = [
     description: 'Add the clips on cards to a Rough Cut, end to end after what it holds, in the order given. list_tools gives the Rough Cuts on the canvas; place_tool rough_cut makes one. One undo takes them out.',
     inputSchema: { type: 'object', required: ['toolId', 'ids'], properties: { toolId: { type: 'string' }, ids: { type: 'array', items: { type: 'string' }, minItems: 1, description: 'Card ids from list_cards.' } } },
   },
+  {
+    name: 'read_states',
+    description: 'Read a States workspace (the visual state machine): every node with its kind, name, card, where it sits, whether it is lit or true, its number, and the names of its input and output ports; and every wire with what kind it is. list_tools gives the workspaces; place_tool states makes one. Read-only.',
+    inputSchema: { type: 'object', required: ['toolId'], properties: { toolId: { type: 'string', description: 'The workspace\'s id, from list_tools.' } } },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'build_states',
+    description: 'Add nodes and wires to a States workspace, all in one undo. How it works: a state is a card (or a blank with a name); several states joined by change wires are one machine with one lit at a time. state → state is a CHANGE (an arrow); to say what makes that change happen, wire an event (or anything that happens) onto the change itself with toWire. A condition (a value with compare, and / or, calculate, is_in, a switch, a state with not) wired INTO a state HOLDS it lit while true. Events fire once; conditions are read all the time. Values: a wire into a value adds (does add, by n) or sets (does set, by n) when something happens; a wire OUT of a value carries compare and number. Gadgets (signal, switch, selector, counter, timer, dice, meter, calculate, send / receive, wait, pick_one, choose, show_hide) have named ports: read_states lists them. Give each new node a ref and use refs (or existing ids) in wires. Leave x and y out and nodes are laid in rows clear of what is there. Wires that cannot be made come back in notWired with the ports each end has.',
+    inputSchema: {
+      type: 'object', required: ['toolId'],
+      properties: {
+        toolId: { type: 'string' },
+        nodes: { type: 'array', maxItems: 60, items: {
+          type: 'object', required: ['kind'],
+          properties: {
+            ref: { type: 'string', description: 'Your own short name for it, used in wires of this request.' },
+            kind: { type: 'string', enum: ['state', 'any', 'event', 'pick_one', 'value', 'and', 'or', 'is_in', 'calculate', 'signal', 'switch', 'selector', 'counter', 'timer', 'dice', 'meter', 'send', 'receive', 'wait', 'choose', 'show_hide', 'path', 'world_clock', 'timeline', 'workspace'] },
+            name: { type: 'string', description: 'Its name. A state with a card shows the card\'s name without one. Send and receive are joined by having the same name.' },
+            card: { type: 'string', description: 'state, event, show_hide: the id of the card it stands for (a deck by its front card).' },
+            note: { type: 'string' },
+            start: { type: 'boolean', description: 'state: lit before anything has happened (one per machine).' },
+            value: { description: 'value: what it starts at, a number or true / false.' },
+            n: { type: 'number', description: 'wait: points later. timer: seconds. counter: how many is full. dice: sides. signal: seconds a round. calculate: its second number when nothing is wired there.' },
+            op: { type: 'string', enum: ['plus', 'minus', 'times', 'divided_by', 'smallest', 'largest', 'average', 'greater_than', 'less_than', 'at_least', 'at_most', 'equal_to', 'not_equal_to'], description: 'calculate: what it works out.' },
+            shape: { type: 'string', enum: ['pulse', 'sine', 'square', 'saw', 'triangle', 'noise'], description: 'signal: its shape.' },
+            options: { type: 'array', items: { type: 'string' }, description: 'choose, selector: the names of its options (ports opt:a, opt:b… / to:a, pos:a…).' },
+            do: { type: 'string', enum: ['hide', 'show'], description: 'show_hide: what it does to its card while true.' },
+            low: { type: 'number' }, high: { type: 'number' },
+            wrap: { type: 'boolean', description: 'counter: start over when full.' },
+            line: { type: 'string', description: 'timeline: a storyline\'s id.' },
+            curve: { type: 'string', description: 'path: a curve\'s id.' },
+            space: { type: 'string', description: 'workspace: another States workspace\'s id.' },
+            x: { type: 'number' }, y: { type: 'number' },
+          },
+        } },
+        wires: { type: 'array', maxItems: 120, items: {
+          type: 'object', required: ['from'],
+          properties: {
+            ref: { type: 'string', description: 'Your own short name for this wire, so a later wire can go onto it (toWire).' },
+            from: { type: 'string', description: 'A node: a ref of this request, or an id.' },
+            fromPort: { type: 'string', description: 'Its output port. Default "out".' },
+            to: { type: 'string', description: 'A node: a ref or an id.' },
+            toPort: { type: 'string', description: 'Its input port. Default "in"; an event\'s condition is "if".' },
+            toWire: { type: 'string', description: 'Instead of to: a change wire (ref or id). What arrives makes that change happen.' },
+            compare: { type: 'string', enum: ['<', '<=', '=', '!=', '>=', '>'], description: 'Out of a value: true when the value compares this way with number.' },
+            number: { type: 'number' },
+            not: { type: 'boolean', description: 'True when its source is NOT.' },
+            plain: { type: 'boolean', description: 'state to state: a plain line (a relationship), not a change.' },
+            does: { type: 'string', enum: ['add', 'set'], description: 'Into a value: what it does to it.' },
+            by: { type: 'number', description: 'How much it adds, or what it sets it to.' },
+            name: { type: 'string' },
+          },
+        } },
+      },
+    },
+  },
+  {
+    name: 'edit_states',
+    description: 'Change, move or take out nodes and wires of a States workspace. nodes and wires take the same fields as build_states plus id; only what you give changes. remove takes node and wire ids (a node\'s wires go with it). Only when the artist asked.',
+    inputSchema: {
+      type: 'object', required: ['toolId'],
+      properties: {
+        toolId: { type: 'string' },
+        nodes: { type: 'array', items: { type: 'object', required: ['id'], properties: { id: { type: 'string' } }, additionalProperties: true } },
+        wires: { type: 'array', items: { type: 'object', required: ['id'], properties: { id: { type: 'string' } }, additionalProperties: true } },
+        remove: { type: 'array', items: { type: 'string' } },
+      },
+    },
+  },
+  {
+    name: 'run_states',
+    description: 'Work a States workspace by hand, as a click on it does: light or unlight a state, fire an event (or a wait, pick one, signal), set a value, or poke a gadget\'s input port (flip a switch, add to a counter, start a timer, roll a dice). Returns what is lit and true and every number afterwards. One undo takes it back.',
+    inputSchema: {
+      type: 'object', required: ['toolId', 'id', 'do'],
+      properties: {
+        toolId: { type: 'string' }, id: { type: 'string', description: 'The node\'s id.' },
+        do: { type: 'string', enum: ['light', 'unlight', 'fire', 'set', 'poke'] },
+        value: { description: 'set: a number, or true / false.' },
+        port: { type: 'string', description: 'poke: the input port. Default "in".' },
+      },
+    },
+  },
 ]
 
 for (const t of TOOLS) if (t.name !== 'send_file') t.inputSchema.properties.doing = DOING
@@ -294,6 +377,7 @@ const OPS = {
   list_cards: 'list', read_cards: 'read', list_decks: 'decks',
   edit_cards: 'edit', arrange_cards: 'arrange', set_deck: 'deck', link_cards: 'link', delete_cards: 'delete', select_cards: 'select', undo: 'undo',
   list_tools: 'tools', place_tool: 'place', make_3d_set: 'set3d', stand_in_3d_set: 'stand3d', make_gif: 'gif', make_movie: 'movie', add_to_rough_cut: 'cut',
+  read_states: 'states', build_states: 'statesBuild', edit_states: 'statesEdit', run_states: 'statesRun',
 }
 
 async function ask(op, args) {
@@ -439,8 +523,8 @@ async function handle(msg) {
       return ok({
         protocolVersion: params?.protocolVersion || '2024-11-05',
         capabilities: { tools: {} },
-        serverInfo: { name: 'vidbars', version: '1.3.0' },
-        instructions: 'VidBars is the artist\'s card canvas. You may read cards and decks, hand out the media on cards as files, and deal a deck of cards: new cards, results brought in from another tool, and linked cards of cards that are there. You can use the tools of VidBars: set one down (place_tool), build a 3D set from cards that hold models (make_3d_set, stand_in_3d_set), make a GIF or a movie of cards, add cards to a Rough Cut. You may also change what is there when the artist asks for it: edit, arrange, open and close decks, link, delete; each change is one undo, and undo takes your last one back. Do not change or delete anything the artist did not ask you to. Read before you deal or change, keep card text short, and tell the artist plainly what you did. The artist sees your pointer in VidBars with a bubble: give each request a few plain words in "doing". To use a card\'s picture or model with another tool, get_card_media then send_file to the upload address that tool gives; bring what comes back onto a card with deal_deck (media, and from: the cards it was made from).',
+        serverInfo: { name: 'vidbars', version: '1.4.0' },
+        instructions: 'VidBars is the artist\'s card canvas. You may read cards and decks, hand out the media on cards as files, and deal a deck of cards: new cards, results brought in from another tool, and linked cards of cards that are there. You can use the tools of VidBars: set one down (place_tool), build a 3D set from cards that hold models (make_3d_set, stand_in_3d_set), make a GIF or a movie of cards, add cards to a Rough Cut, and set up state machines in a States workspace (read_states, build_states, edit_states, run_states). You may also change what is there when the artist asks for it: edit, arrange, open and close decks, link, delete; each change is one undo, and undo takes your last one back. Do not change or delete anything the artist did not ask you to. Read before you deal or change, keep card text short, and tell the artist plainly what you did. The artist sees your pointer in VidBars with a bubble: give each request a few plain words in "doing". To use a card\'s picture or model with another tool, get_card_media then send_file to the upload address that tool gives; bring what comes back onto a card with deal_deck (media, and from: the cards it was made from).',
       })
     case 'ping': return ok({})
     case 'tools/list': return ok({ tools: TOOLS })
