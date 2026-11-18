@@ -17,8 +17,14 @@
 //     middle of the card's bottom edge (Brian 2026-11-18: "it goes down to
 //     just the handle. Then, when we pull it down, it first pops wide into
 //     the shape, and then, with a smooth go, it just continues to pull
-//     down"): the pull widens it into the bar, and it stays the bar until
-//     let go. Pulled, it goes down with the mouse
+//     down"; "I'd like it to already be small when I've dragged it up
+//     there. So it shrinks during that last part ... And that would expand
+//     in the same fashion. The animation plays as one motion with it moving
+//     downwards"): while held, its shape goes by how far it is pulled, the
+//     handle at the card's edge growing into the bar over the first stretch
+//     of the pull (SHUT_PX, the stretch that shuts it when let go) and
+//     shrinking back over the same stretch on the way up. Pulled, it goes
+//     down with the mouse
 //     FROM THE FIRST PIXEL ("it doesn't really move, and then it flips ...
 //     popped on ... definitely don't want that when I'm opening it. Maybe
 //     on the close"): the lip is the same size and shape shut or out, so
@@ -55,7 +61,7 @@ const FOOT = 21          // what the lip shows of itself
 export const TRAY_LIP = SEAM + FOOT
 const HANDLE_W = 46      // shut: the handle alone, natural units
 const HANDLE_H = 12
-const POP_MS = 110       // the handle widening into the bar (and back)
+const POP_MS = 110       // a click (or letting go): the handle into the bar, or back
 /** How far in from the card's sides the lip (and the tray) sits, natural units. */
 export const TRAY_INSET = INSET
 const OPEN_PX = 260      // how far a click opens it, screen px
@@ -172,29 +178,30 @@ export const TrayLip: React.FC<{ cardId: string; left: number; top: number; scal
   const listed = useTrayStore(s => s.trays[cardId]?.rows)
   const { zoom } = useCardView()
   const tucked = useTrayTucked(cardId)
-  // Being pulled: it is the bar from the pull's first pixel until let go.
+  // Being pulled: its shape goes by how far (below).
   const [held, setHeld] = React.useState(false)
-  const wide = h > 0 || held
-  // The handle widens into the bar (and back) over a moment; nothing else
-  // of the lip is eased, so a pull or a sizing follows the mouse exactly.
-  const was = React.useRef({ wide, at: -1e9 })
-  if (was.current.wide !== wide) was.current = { wide, at: performance.now() }
-  const popping = performance.now() - was.current.at < POP_MS + 40
+  // A click, or letting go: the change of shape is eased over a moment.
+  // Nothing is eased while it is held, so a pull follows the mouse exactly.
+  const popUntil = React.useRef(0)
   const [, settle] = React.useState(0)
-  React.useEffect(() => {
-    const t = window.setTimeout(() => settle(v => v + 1), POP_MS + 60)
-    return () => window.clearTimeout(t)
-  }, [wide])
+  const pop = () => { popUntil.current = performance.now() + POP_MS + 40; window.setTimeout(() => settle(v => v + 1), POP_MS + 60) }
+  const hold = (on: boolean) => { if (!on) pop(); setHeld(on) }
   if (!n || tucked) return null
   const open = h > 0
   const hPx = h * zoom
+  // 0 = the handle alone, 1 = the bar. Held: by the pull, over its first
+  // stretch. Let go: one or the other.
+  const f = held ? Math.max(0, Math.min(1, hPx / SHUT_PX)) : open ? 1 : 0
+  const wide = f > 0
+  const mix = (a: number, b: number) => a + (b - a) * f
+  const popping = !held && performance.now() < popUntil.current
   const lipW = Math.max(30, width - 2 * INSET)
   // As wide as the tray it closes, shut or out (so opening widens nothing).
   const wPx = trayWidthPx(w, zoom, lipW * scale)
   // Where the cards end, at a width (what the browser lists just now; shut,
   // everything in the tray).
   const maxAt = (px: number) => trayMaxPx(open && listed !== undefined ? listed : n, mode, px)
-  const toggle = () => useTrayStore.getState().setSize(cardId, { h: open ? 0 : Math.min(OPEN_PX, maxAt(wPx)) / zoom })
+  const toggle = () => { pop(); useTrayStore.getState().setSize(cardId, { h: open ? 0 : Math.min(OPEN_PX, maxAt(wPx)) / zoom }) }
   return (
     <div style={{ position: 'absolute', left, top: top + hPx, width: 0, height: 0 }}>
       <div style={{ position: 'absolute', left: 0, top: 0, width, transform: `scale(${scale})`, transformOrigin: 'top left' }}>
@@ -204,31 +211,31 @@ export const TrayLip: React.FC<{ cardId: string; left: number; top: number; scal
           onPointerDown={e => {
             if ((e.target as Element).closest('[data-tray-mode]')) { e.stopPropagation(); return }
             const inField = (e.target as Element).tagName === 'INPUT'
-            dragTray(e, cardId, zoom, { hPx }, maxAt, wPx, inField ? undefined : toggle, inField, setHeld)
+            dragTray(e, cardId, zoom, { hPx }, maxAt, wPx, inField ? undefined : toggle, inField, hold)
           }}
           onClick={e => e.stopPropagation()}
           onDoubleClick={e => e.stopPropagation()}
           style={{
             position: 'absolute', boxSizing: 'border-box', top: 0, overflow: 'hidden',
             // Shut: the handle alone, under the middle of the card's bottom edge.
-            left: wide ? INSET : (width - HANDLE_W) / 2,
-            width: wide ? wPx / scale : HANDLE_W,
-            height: wide ? TRAY_LIP : HANDLE_H,
+            left: mix((width - HANDLE_W) / 2, INSET),
+            width: mix(HANDLE_W, wPx / scale),
+            height: mix(HANDLE_H, TRAY_LIP),
             transition: popping ? `left ${POP_MS}ms ease-out, width ${POP_MS}ms ease-out, height ${POP_MS}ms ease-out` : 'none',
-            display: 'flex', flexDirection: 'column', justifyContent: 'flex-end',
-            borderRadius: wide ? '0 0 9px 9px' : '0 0 6px 6px',
+            display: 'flex', flexDirection: 'column', justifyContent: 'flex-start',
+            borderRadius: `0 0 ${mix(6, 9)}px ${mix(6, 9)}px`,
             background: 'linear-gradient(#11131c, #1d2030)',
             border: `1px solid ${open ? 'rgba(160,200,255,0.5)' : 'rgba(255,255,255,0.28)'}`, borderTop: 'none',
-            boxShadow: wide ? 'inset 0 9px 8px -5px rgba(0,0,0,0.75), 0 2px 5px rgba(0,0,0,0.45)' : '0 2px 5px rgba(0,0,0,0.45)',
+            boxShadow: `inset 0 9px 8px -5px rgba(0,0,0,${0.75 * f}), 0 2px 5px rgba(0,0,0,0.45)`,
             color: 'rgba(255,255,255,0.9)', cursor: open ? 'ns-resize' : 'grab', userSelect: 'none', touchAction: 'none',
             fontFamily: 'system-ui, -apple-system, sans-serif',
           }}
         >
           {/* The little handle, in the middle of the bar's top. */}
-          <div style={{ flex: '0 0 auto', height: wide ? SEAM : HANDLE_H, display: 'flex', alignItems: wide ? 'flex-end' : 'center', justifyContent: 'center', paddingBottom: wide ? 2 : 0, boxSizing: 'border-box' }}>
+          <div style={{ flex: '0 0 auto', height: mix(HANDLE_H, SEAM), display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: mix((HANDLE_H - 3) / 2, SEAM - 5), boxSizing: 'border-box' }}>
             <div style={{ width: 26, height: 3, borderRadius: 2, background: 'rgba(255,255,255,0.45)' }} />
           </div>
-          {wide && <div style={{ flex: '0 0 auto', height: FOOT, width: '100%', boxSizing: 'border-box', display: 'flex', alignItems: 'center', gap: 5, padding: '0 14px 1px 7px', minWidth: 0 }}>
+          {wide && <div style={{ flex: '0 0 auto', opacity: f, height: FOOT, width: '100%', boxSizing: 'border-box', display: 'flex', alignItems: 'center', gap: 5, padding: '0 14px 1px 7px', minWidth: 0 }}>
             <svg width="11" height="10" viewBox="0 0 11 10" style={{ flexShrink: 0, opacity: 0.8 }}>
               <path d="M1 1h9v5.5a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2z M3.5 4h4" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
             </svg>
@@ -275,7 +282,7 @@ export const TrayLip: React.FC<{ cardId: string; left: number; top: number; scal
             <div
               data-tray-corner
               title="Drag to size the tray"
-              onPointerDown={e => dragTray(e, cardId, zoom, { hPx, wPx }, maxAt, wPx)}
+              onPointerDown={e => dragTray(e, cardId, zoom, { hPx, wPx }, maxAt, wPx, undefined, false, hold)}
               style={{ position: 'absolute', right: 0, bottom: 0, width: 13, height: 13, cursor: 'nwse-resize', touchAction: 'none' }}
             >
               <svg width="13" height="13" viewBox="0 0 13 13"><path d="M10.5 4.5v6h-6" fill="none" stroke="rgba(255,255,255,0.55)" strokeWidth="1.5" strokeLinecap="round" /></svg>
