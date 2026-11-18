@@ -45,6 +45,7 @@ import { bakeStoryline, chartArea, chartOfStoryline, chartOutOf, eraseChart, mat
 import type { ChartData } from './chartData'
 import { cardOrigins } from '../components/Canvas/StorylineLayer'
 import { canReplace, chartsShowing, replaceCard } from './replaceCard'
+import { setChildOf, setPartners, isUnknown } from './family'
 import { getMedia } from './mediaStore'
 import { blobToDataUrl, isDataUrl, isMediaRef, mediaRefId } from './mediaRef'
 import { markNew } from './newCards'
@@ -3144,6 +3145,66 @@ async function replaceInCharts(args: Json): Promise<Json> {
   return { replaced: old.name, with: now.name, inCharts: charts, note: `"${now.name}" has taken the place, size and deck of "${old.name}", in every chart, faction, storyline dot and linked card that showed it. "${old.name}" lies where "${now.name}" was, linked to nothing. One undo takes it back.` }
 }
 
+/** The members of a faction or family card, and how they stand to each
+ *  other: who reports to whom (faction), parents and partners (family). */
+async function editMembers(args: Json): Promise<Json> {
+  const [card] = cardsNamed([String(args.cardId ?? '')])
+  const type = cardTypeOf(card)
+  if ((type !== 'faction' && type !== 'family') || card.linkOf) throw new Error(`"${card.name}" is a ${CARD_TYPES[type].label} card. Members belong to a faction or a family card (edit_cards type makes it one).`)
+  const groups = useBoardsStore.getState().groups
+  const list = (k: string) => Array.isArray(args[k]) ? (args[k] as Json[]) : []
+  const m = (v: unknown) => {
+    const id = masterOf(groups, cardsNamed([String(v ?? '')])[0].id)
+    if (id === card.id) throw new Error('A card is not a member of itself.')
+    return id
+  }
+  const add = idsOf(args.add).map(m)
+  const remove = idsOf(args.remove).map(m)
+  const reports = list('reportsTo').map(w => ({ member: m(w.member), to: idsOf(w.to).map(m) }))
+  const parents = list('parents').map(w => ({ child: m(w.child), of: idsOf(w.parents).map(m) }))
+  const partners = list('partners').map(w => ({ a: m(w.a), b: m(w.b), on: w.apart !== true }))
+  if (reports.length && type !== 'faction') throw new Error('reportsTo is for a faction card. A family card takes parents and partners.')
+  if ((parents.length || partners.length) && type !== 'family') throw new Error('parents and partners are for a family card. A faction card takes reportsTo.')
+  if (!add.length && !remove.length && !reports.length && !parents.length && !partners.length) throw new Error('Nothing to change. Give add, remove, reportsTo, parents or partners.')
+  const named = [...add, ...reports.flatMap(r => [r.member, ...r.to]), ...parents.flatMap(r => [r.child, ...r.of]), ...partners.flatMap(r => [r.a, r.b])]
+  const clash = named.find(id => remove.includes(id))
+  if (clash) throw new Error('A card is both removed and named as a member in the same request.')
+
+  await agentGlide(say(args, `Editing the members of ${card.name}`), agentSpotOfCard(card.id))
+  useUndoCoordinator.getState().checkpoint()
+  const now = () => useBoardsStore.getState()
+  const me = () => now().groups.find(g => g.id === card.id)!
+  const name = (id: string) => now().groups.find(g => g.id === id)?.name ?? id
+  try {
+    // Anyone named is a member.
+    for (const id of new Set(named)) if (!(me().linkedGroupIds ?? []).includes(id)) now().linkGroups(card.id, id)
+    for (const r of reports) {
+      now().setReportsTo(card.id, r.member, r.to[0] ?? null)
+      for (const b of r.to.slice(1)) now().setReportsTo(card.id, r.member, b, true)
+      const got = me().reportsTo?.[r.member] ?? []
+      if (r.to.some(b => !got.includes(b))) throw new Error(`${name(r.member)} cannot report to ${r.to.filter(b => !got.includes(b)).map(name).join(', ')}: that one is below it already.`)
+    }
+    let kin = me().kin ?? {}
+    for (const r of parents) {
+      for (const p of kin.parents?.[r.child] ?? []) if (!r.of.includes(p)) kin = setChildOf(kin, r.child, p, false)
+      for (const p of r.of) {
+        kin = setChildOf(kin, r.child, p, true)
+        if (!(kin.parents?.[r.child] ?? []).includes(p)) throw new Error(`${name(p)} cannot be a parent of ${name(r.child)}: ${name(r.child)} is above it in the tree already.`)
+      }
+    }
+    for (const r of partners) kin = setPartners(kin, r.a, r.b, r.on)
+    if (parents.length || partners.length) now().setFamilyKin(card.id, kin)
+    for (const id of remove) now().removeMember(card.id, id)
+  } catch (err) {
+    useUndoCoordinator.getState().undo()
+    throw err
+  }
+  const s2 = now()
+  const out = describe(me(), s2.groups, s2.boards) as Json
+  const unknown = Object.values(me().kin?.parents ?? {}).flat().filter(isUnknown).length
+  return { card: out, ...(unknown ? { note: 'Some members share a parent who is not a card (unknown).' } : {}), undo: 'One undo (Ctrl+Z) takes it back.' }
+}
+
 // ── The door ────────────────────────────────────────────────────────────
 
 const OPS: Record<string, (args: Json) => Json | Promise<Json>> = { list: listCards, read: readCards, decks: listDecks, media: cardMedia, deal: dealDeck,
@@ -3154,7 +3215,7 @@ const OPS: Record<string, (args: Json) => Json | Promise<Json>> = { list: listCa
   scene: readScene, sceneEdit: editScene,
   viewRead: readView, viewMove: moveView,
   cabinetRead: readCabinet, cabinetEdit: editCabinet,
-  chartRead: readChart, chartLike: layChartLike, chartCard: chartCardDo, replace: replaceInCharts,
+  chartRead: readChart, chartLike: layChartLike, chartCard: chartCardDo, replace: replaceInCharts, members: editMembers,
   blocksEdit: editBlocks, copy: copyCards, boardRead: readBoard, boardEdit: editBoard,
   poolRead: readPool,
   promptsRead: readPrompts, promptsEdit: editPrompts,
