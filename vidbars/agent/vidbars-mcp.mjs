@@ -536,6 +536,33 @@ const TOOLS = [
     description: 'Run a 3D set\'s clock: what rides its paths moves. play, pause, and / or go to a time in seconds. Seen in the tilted view. Not an undo step.',
     inputSchema: { type: 'object', properties: { setId: { type: 'string', description: 'Leave out for paths that belong to no set.' }, do: { type: 'string', enum: ['play', 'pause'] }, seconds: { type: 'number' } } },
   },
+  {
+    name: 'list_effects',
+    description: 'The effects VidBars has (bloom, ink, halftone, grade, film looks and more), each with what it does and its settings. With kind: that one effect in full, each setting\'s range, default and meaning. Read-only.',
+    inputSchema: { type: 'object', properties: { kind: { type: 'string' } } },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'read_effects',
+    description: 'The effect cards lined up to the right of a picture card, in the order they run, with their settings. Read-only.',
+    inputSchema: { type: 'object', required: ['cardId'], properties: { cardId: { type: 'string' } } },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'add_effects',
+    description: 'Put effects on a picture card: each is a new effect card lined up to the right of the card, after the ones there. They run left to right on the card\'s face picture and the face shows the result; the picture itself is not changed. One undo takes them back. delete_cards removes an effect card.',
+    inputSchema: { type: 'object', required: ['cardId', 'effects'], properties: { cardId: { type: 'string' }, effects: { type: 'array', minItems: 1, maxItems: 20, items: { type: 'object', properties: { id: { type: 'string', description: 'edit_effects: the effect card\'s id (read_effects).' }, kind: { type: 'string', description: 'add_effects: the effect, from list_effects.' }, params: { type: 'object', description: 'Settings by key, numbers within each one\'s range. Those left out keep their value.' }, text: { type: 'string', description: 'For effects that take words (a Segment card names what to pick out).' }, off: { type: 'boolean', description: 'Switched off: skipped.' }, solo: { type: 'boolean', description: 'The only effect its row runs.' } } } } } },
+  },
+  {
+    name: 'edit_effects',
+    description: 'Change effect cards: their settings, text, switched off, solo. Only what you give changes. One undo.',
+    inputSchema: { type: 'object', required: ['effects'], properties: { effects: { type: 'array', minItems: 1, maxItems: 40, items: { type: 'object', properties: { id: { type: 'string', description: 'edit_effects: the effect card\'s id (read_effects).' }, kind: { type: 'string', description: 'add_effects: the effect, from list_effects.' }, params: { type: 'object', description: 'Settings by key, numbers within each one\'s range. Those left out keep their value.' }, text: { type: 'string', description: 'For effects that take words (a Segment card names what to pick out).' }, off: { type: 'boolean', description: 'Switched off: skipped.' }, solo: { type: 'boolean', description: 'The only effect its row runs.' } } } } } },
+  },
+  {
+    name: 'save_effects',
+    description: 'Save a card\'s picture as its effects make it, at full size, as a file. Gives the file\'s path; deal_deck (media file, from the card) brings it in as a card of its own.',
+    inputSchema: { type: 'object', required: ['cardId'], properties: { cardId: { type: 'string' } } },
+  },
 ]
 
 for (const t of TOOLS) if (t.name !== 'send_file') t.inputSchema.properties.doing = DOING
@@ -547,6 +574,7 @@ const OPS = {
   read_states: 'states', build_states: 'statesBuild', edit_states: 'statesEdit', run_states: 'statesRun',
   read_storyline: 'story', build_storyline: 'storyBuild', edit_storyline: 'storyEdit',
   read_scene: 'scene', edit_scene: 'sceneEdit',
+  list_effects: 'fxList', read_effects: 'fxRead', add_effects: 'fxAdd', edit_effects: 'fxEdit', save_effects: 'fxSave',
   read_3d_set: 'set3dRead', add_to_3d_set: 'set3dAdd', draw_path: 'pathDraw', edit_path: 'pathEdit', play_paths: 'pathPlay',
 }
 
@@ -693,8 +721,8 @@ async function handle(msg) {
       return ok({
         protocolVersion: params?.protocolVersion || '2024-11-05',
         capabilities: { tools: {} },
-        serverInfo: { name: 'vidbars', version: '1.7.0' },
-        instructions: 'VidBars is the artist\'s card canvas. You may read cards and decks, hand out the media on cards as files, and deal a deck of cards: new cards, results brought in from another tool, and linked cards of cards that are there. You can use the tools of VidBars: set one down (place_tool), build a 3D set from cards that hold models (make_3d_set, stand_in_3d_set), add shapes and cameras to it and draw paths for them to ride (read_3d_set, add_to_3d_set, draw_path, edit_path, play_paths), make a GIF or a movie of cards, add cards to a Rough Cut, draw storylines and trees (build_storyline, edit_storyline), lay out the face of a scene card (read_scene, edit_scene), and set up state machines in a States workspace (read_states, build_states, edit_states, run_states). You may also change what is there when the artist asks for it: edit, arrange, open and close decks, link, delete; each change is one undo, and undo takes your last one back. Do not change or delete anything the artist did not ask you to. Read before you deal or change, keep card text short, and tell the artist plainly what you did. The artist sees your pointer in VidBars with a bubble: give each request a few plain words in "doing". To use a card\'s picture or model with another tool, get_card_media then send_file to the upload address that tool gives; bring what comes back onto a card with deal_deck (media, and from: the cards it was made from).',
+        serverInfo: { name: 'vidbars', version: '1.8.0' },
+        instructions: 'VidBars is the artist\'s card canvas. You may read cards and decks, hand out the media on cards as files, and deal a deck of cards: new cards, results brought in from another tool, and linked cards of cards that are there. You can use the tools of VidBars: set one down (place_tool), build a 3D set from cards that hold models (make_3d_set, stand_in_3d_set), add shapes and cameras to it and draw paths for them to ride (read_3d_set, add_to_3d_set, draw_path, edit_path, play_paths), put effects on picture cards (list_effects, add_effects, edit_effects, save_effects), make a GIF or a movie of cards, add cards to a Rough Cut, draw storylines and trees (build_storyline, edit_storyline), lay out the face of a scene card (read_scene, edit_scene), and set up state machines in a States workspace (read_states, build_states, edit_states, run_states). You may also change what is there when the artist asks for it: edit, arrange, open and close decks, link, delete; each change is one undo, and undo takes your last one back. Do not change or delete anything the artist did not ask you to. Read before you deal or change, keep card text short, and tell the artist plainly what you did. The artist sees your pointer in VidBars with a bubble: give each request a few plain words in "doing". To use a card\'s picture or model with another tool, get_card_media then send_file to the upload address that tool gives; bring what comes back onto a card with deal_deck (media, and from: the cards it was made from).',
       })
     case 'ping': return ok({})
     case 'tools/list': return ok({ tools: TOOLS })

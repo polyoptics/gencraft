@@ -58,6 +58,12 @@ import {
   type CalcOp, type Compare, type GenShape, type SpaceItem, type SpaceKind, type SpaceWire, type StateSpaceData,
 } from './stateSpace'
 import { viewportCenterInCanvas } from './canvasCreate'
+import { EFFECTS, type EffectKind } from './fx/effects'
+import { paramHelp } from './fx/paramHelp'
+import { createEffectCardGroup, effectChain } from './effectCards'
+import { cardStripId } from './fx/cardStrips'
+import { useFxStore } from '../store/fxStore'
+import { saveFailure, saveStripResult } from './fx/saveStrip'
 import { useNotesStore, useNotesUi, newNoteId, type Curve, type CurvePoint, type PathRider } from '../store/notesStore'
 import { curvesOf, parentOf } from './curveParent'
 import { parentToPath, rideSpan, rideTime, ridePlaying, setRider, unparentFromPath, useRideClock } from './pathRide'
@@ -1802,6 +1808,129 @@ function playPaths(args: Json): Json {
   return { seconds: Math.round(rideTime(set) * 1000) / 1000, playing: ridePlaying(set) }
 }
 
+// ── Effects: cards lined up to the right of a picture card ──────────────
+
+function effectOut(g: ProjectGroup): Json {
+  const e = g.effect!
+  const def = EFFECTS[e.kind]
+  return {
+    id: g.id, kind: e.kind, name: def.label,
+    params: Object.fromEntries(def.params.map(q => [q.key, e.params?.[q.key] ?? q.default])),
+    ...(e.text ? { text: e.text } : {}), ...(e.off ? { off: true } : {}), ...(e.solo ? { solo: true } : {}),
+  }
+}
+
+/** The effects there are, each with what it does and its settings. */
+function listEffects(args: Json): Json {
+  const one = typeof args.kind === 'string' ? args.kind : ''
+  if (one && !(one in EFFECTS)) throw new Error(`No effect "${one}". list_effects without kind gives them all.`)
+  agentPoint(say(args, 'Looking over the effects'))
+  const full = (k: EffectKind) => {
+    const d = EFFECTS[k]
+    return {
+      kind: k, name: d.label, does: d.blurb,
+      ...(d.blend ? { mixesIn: 'the next picture card in the row' } : {}),
+      ...(d.needs?.length ? { needs: d.needs } : {}),
+      params: d.params.map(q => ({ key: q.key, name: q.label, min: q.min, max: q.max, default: q.default, ...(q.names ? { choices: q.names } : {}), ...(paramHelp(k, q.key) ? { means: paramHelp(k, q.key) } : {}) })),
+    }
+  }
+  if (one) return full(one as EffectKind)
+  return {
+    effects: (Object.keys(EFFECTS) as EffectKind[]).map(k => ({ kind: k, name: EFFECTS[k].label, does: EFFECTS[k].blurb, params: EFFECTS[k].params.map(q => q.key) })),
+    note: 'list_effects with kind gives one effect\'s settings in full (range, default, what each means).',
+  }
+}
+
+/** The effect cards lined up to the right of a card, in the order they run. */
+function readEffects(args: Json): Json {
+  const [card] = cardsNamed([String(args.cardId ?? '')])
+  const groups = useBoardsStore.getState().groups
+  const chain = effectChain(card.id).map(id => groups.find(g => g.id === id)).filter((g): g is ProjectGroup => !!g?.effect)
+  agentPoint(say(args, 'Reading the effects'), agentSpotOfCard(card.id))
+  return { cardId: card.id, name: card.name, effects: chain.map(effectOut), note: 'They run left to right on the card\'s face picture; the face shows the result.' }
+}
+
+/** What an agent may set on an effect card. */
+function effectPatch(kind: EffectKind, c: Json): Partial<NonNullable<ProjectGroup['effect']>> {
+  const def = EFFECTS[kind]
+  const p: Partial<NonNullable<ProjectGroup['effect']>> = {}
+  if (c.params && typeof c.params === 'object') {
+    const params: Record<string, number> = {}
+    for (const [key, v] of Object.entries(c.params as Json)) {
+      const q = def.params.find(x => x.key === key)
+      if (!q) throw new Error(`${def.label} has no setting "${key}". Its settings: ${def.params.map(x => x.key).join(', ') || 'none'}.`)
+      if (num(v) == null) throw new Error(`${def.label} ${key} takes a number, ${q.min} to ${q.max}.`)
+      params[key] = Math.max(q.min, Math.min(q.max, num(v)!))
+    }
+    p.params = params
+  }
+  if (typeof c.text === 'string') p.text = c.text || undefined
+  if (typeof c.off === 'boolean') p.off = c.off || undefined
+  if (typeof c.solo === 'boolean') p.solo = c.solo || undefined
+  return p
+}
+
+const writeEffect = (id: string, patch: Partial<NonNullable<ProjectGroup['effect']>>) =>
+  useBoardsStore.setState(st => ({ groups: st.groups.map(g => g.id === id && g.effect ? { ...g, effect: { ...g.effect, ...patch, params: { ...g.effect.params, ...patch.params } } } : g) }))
+
+/** New effect cards at the end of a card's row of effects; one undo. */
+async function addEffects(args: Json): Promise<Json> {
+  const [card] = cardsNamed([String(args.cardId ?? '')])
+  const want = Array.isArray(args.effects) ? (args.effects as Json[]) : []
+  if (!want.length || want.length > 20) throw new Error('Give effects: 1 to 20.')
+  const plans = want.map(w => {
+    const kind = String(w.kind ?? '') as EffectKind
+    if (!(kind in EFFECTS)) throw new Error(`No effect "${kind}". list_effects gives them.`)
+    return { kind, patch: effectPatch(kind, w) }
+  })
+  await agentGlide(say(args, 'Adding effects'), agentSpotOfCard(card.id))
+  const was = useBoardsStore.getState().selectedGroupIds
+  useUndoCoordinator.getState().checkpoint()
+  const made: string[] = []
+  for (const q of plans) {
+    const id = createEffectCardGroup(q.kind, { after: card.id })
+    if (Object.keys(q.patch).length) writeEffect(id, q.patch)
+    made.push(id)
+  }
+  // The artist's selection is theirs.
+  useBoardsStore.getState().setSelectedGroups(was)
+  markNew(made)
+  return { ...readEffects({ cardId: card.id, doing: say(args, 'Adding effects') }), added: made, undo: 'One undo (Ctrl+Z) takes them back.' }
+}
+
+/** Effect cards changed: their settings, text, off, solo; one undo. */
+async function editEffects(args: Json): Promise<Json> {
+  const want = Array.isArray(args.effects) ? (args.effects as Json[]) : []
+  if (!want.length) throw new Error('Give effects: [{ id, params, text, off, solo }].')
+  const cards = cardsNamed(want.map(w => String(w.id ?? '')))
+  const plans = want.map((w, i) => {
+    const e = cards[i].effect
+    if (!e) throw new Error(`"${cards[i].name}" is not an effect card.`)
+    return { id: cards[i].id, patch: effectPatch(e.kind, w) }
+  })
+  await agentGlide(say(args, 'Setting the effects'), agentSpotOfCard(cards[0].id))
+  useUndoCoordinator.getState().checkpoint()
+  for (const q of plans) writeEffect(q.id, q.patch)
+  const groups = useBoardsStore.getState().groups
+  return { effects: plans.map(q => effectOut(groups.find(g => g.id === q.id)!)), note: 'One undo (Ctrl+Z) takes it back.' }
+}
+
+/** A card's picture through its effects, saved as a file at full size. */
+async function saveEffects(args: Json): Promise<Json> {
+  const [card] = cardsNamed([String(args.cardId ?? '')])
+  const fx = useFxStore.getState()
+  const strip = fx.strips[fx.byNode[cardStripId(card.id)] ?? '']
+  if (!strip || !strip.items.some(i => i.kind === 'effect')) throw new Error(`"${card.name}" has no effects running on it: add_effects first (the card needs a picture on its face).`)
+  agentPoint(say(args, 'Saving the result'), agentSpotOfCard(card.id))
+  const r = await saveStripResult(strip.items)
+  const mine = r.saved[0]
+  const failure = mine ? saveFailure(mine) : (r.error ?? 'Could not save the result.')
+  if (failure) throw new Error(failure)
+  return mine.path
+    ? { file: mine.path, note: 'Saved. To bring it in as a card: deal_deck with media { file } and from: [the card\'s id].' }
+    : { downloaded: true, note: 'Handed to the browser\'s downloads; on the desktop app it is saved as a file you can deal as a card.' }
+}
+
 // ── The door ────────────────────────────────────────────────────────────
 
 const OPS: Record<string, (args: Json) => Json | Promise<Json>> = { list: listCards, read: readCards, decks: listDecks, media: cardMedia, deal: dealDeck,
@@ -1810,6 +1939,7 @@ const OPS: Record<string, (args: Json) => Json | Promise<Json>> = { list: listCa
   states: readStates, statesBuild: buildStates, statesEdit: editStates, statesRun: runStates,
   story: readStoryline, storyBuild: buildStoryline, storyEdit: editStoryline,
   scene: readScene, sceneEdit: editScene,
+  fxList: listEffects, fxRead: readEffects, fxAdd: addEffects, fxEdit: editEffects, fxSave: saveEffects,
   set3dRead: read3dSet, set3dAdd: addTo3dSet, pathDraw: drawPath, pathEdit: editPath, pathPlay: playPaths,
 }
 
