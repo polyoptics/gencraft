@@ -610,11 +610,24 @@ export function wireGeom(d: StateSpaceData, w: SpaceWire | undefined): WireGeom 
     const g = wireGeom(d, d.wires.find(x => x.id === w.b && x.bp !== 'knob'))
     if (!g) return null
     p = outSpot(d, from, g.my) ?? p
-    // It comes to the knob from the side it is on.
-    return curve(p, { x: g.mx, y: g.my + (p.y >= g.my ? 7 : -7), dx: 0, dy: p.y >= g.my ? 1 : -1 })
+    // It comes to the knob square on to the arrow, from the side it is on,
+    // so it plainly lands on that arrow and not on one that runs beside it.
+    const tx = g.x2 + g.c2x - g.c1x - g.x1, ty = g.y2 + g.c2y - g.c1y - g.y1
+    const tl = Math.hypot(tx, ty)
+    let nx = tl ? -ty / tl : 0, ny = tl ? tx / tl : 1
+    if ((p.x - g.mx) * nx + (p.y - g.my) * ny < 0) { nx = -nx; ny = -ny }
+    return curve(p, { x: g.mx + nx * 7, y: g.my + ny * 7, dx: nx, dy: ny })
   }
   const q = portSpot(d, { node: w.b, port: w.bp ?? 'in' })
-  return q ? curve(outSpot(d, from, q.y) ?? p, q) : null
+  if (!q) return null
+  const g = curve(outSpot(d, from, q.y) ?? p, q)
+  // Two changes the opposite way between the same two states are bowed
+  // apart, each to its own side, so their arrows and knobs stand apart.
+  if (!d.wires.some(x => x.id !== w.id && x.a === w.b && x.b === w.a && x.bp !== 'knob') || wireKind(d, w) !== 'change') return g
+  const cx = g.x2 - g.x1, cy = g.y2 - g.y1, cl = Math.hypot(cx, cy) || 1
+  const bow = Math.max(40, Math.min(90, cl * 0.3)), ox = (-cy / cl) * bow, oy = (cx / cl) * bow
+  const c1x = g.c1x + ox, c1y = g.c1y + oy, c2x = g.c2x + ox, c2y = g.c2y + oy
+  return { ...g, c1x, c1y, c2x, c2y, mx: g.mx + ox * 0.75, my: g.my + oy * 0.75, path: `M${g.x1} ${g.y1}C${c1x} ${c1y} ${c2x} ${c2y} ${g.x2} ${g.y2}` }
 }
 
 /** How far (x, y) is from a wire. */

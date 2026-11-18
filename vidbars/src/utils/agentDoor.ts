@@ -54,7 +54,7 @@ import { deckGifShots, makeDeckMovie, makeGif, useGifJob } from './makeGif'
 import { appendCards, clipLength, clipRow, clipStart, cutLength, MIN_CLIP, placed, splitClipAt, type RoughClip, type RoughCutData } from './roughCut'
 import { deckOfPicks } from './roughCutPicks'
 import {
-  addItem, addWire, canWire, fireEvent, itemPorts, itemSize, patchItem, patchWire, planeBox, poke, removeFromSpace,
+  addItem, addWire, canWire, choose, fireEvent, itemPorts, itemSize, patchItem, patchWire, planeBox, poke, removeFromSpace,
   setNow, setValue, spaceNumbers, spaceOf, spaceTruths, wireKind,
   type CalcOp, type Compare, type GenShape, type SpaceItem, type SpaceKind, type SpaceWire, type StateSpaceData,
 } from './stateSpace'
@@ -1046,6 +1046,8 @@ function readStates(args: Json): Json {
       ...(lit.has(i.id) ? { true: true } : {}),
       ...(nums.has(i.id) ? { number: nums.get(i.id) } : i.kind === 'value' ? { number: i.val ?? i.init ?? 0 } : {}),
       ...(i.opts ? { options: i.opts.map(o => ({ id: o.id, name: o.name })) } : {}),
+      ...(i.kind === 'choice' && i.asking ? { asking: true } : {}),
+      ...(i.kind === 'choice' && i.chose ? { answered: i.chose } : {}),
       in: ports.filter(q => !q.out).map(q => q.port), out: ports.filter(q => q.out).map(q => q.port),
     }
   })
@@ -1192,7 +1194,13 @@ async function runStates(args: Json): Promise<Json> {
     const port = typeof args.port === 'string' ? args.port : 'in'
     if (!itemPorts(it).some(q => !q.out && q.port === port)) throw new Error(`That node has no input "${port}". It has: ${itemPorts(it).filter(q => !q.out).map(q => q.port).join(', ')}.`)
     poke(nodeId, it.id, port)
-  } else throw new Error('do is one of: light, unlight, fire, set, poke.')
+  } else if (act === 'answer') {
+    if (it.kind !== 'choice') throw new Error('Only a choose can be answered.')
+    const want = String(args.option ?? '').trim()
+    const opt = it.opts?.find(o => o.id === want || o.id === want.replace(/^opt:/, '')) ?? it.opts?.find(o => (o.name ?? '').toLowerCase() === want.toLowerCase())
+    if (!opt) throw new Error(`answer needs option: one of ${(it.opts ?? []).map(o => `${o.id} (${o.name})`).join(', ')}.`)
+    choose(nodeId, it.id, opt.id)
+  } else throw new Error('do is one of: light, unlight, fire, set, poke, answer.')
   const lit = spaceTruths(nodeId), nums = spaceNumbers(nodeId)
   const now = spaceOf(nodeId)!
   const groups = useBoardsStore.getState().groups
@@ -1200,6 +1208,7 @@ async function runStates(args: Json): Promise<Json> {
     done: act,
     litNow: now.items.filter(i => i.now).map(i => ({ id: i.id, name: i.name ?? groups.find(g => g.id === i.card)?.name ?? '' })),
     trueNow: now.items.filter(i => lit.has(i.id)).map(i => ({ id: i.id, kind: kindName(i), name: i.name ?? '' })),
+    asking: now.items.filter(i => i.kind === 'choice' && i.asking).map(i => ({ id: i.id, name: i.name ?? '', options: (i.opts ?? []).map(o => ({ id: o.id, name: o.name })) })),
     numbers: Object.fromEntries([
       ...now.items.filter(i => i.kind === 'value').map(i => [i.id, i.val ?? i.init ?? 0] as [string, number]),
       ...[...nums].filter(([id]) => now.items.some(i => i.id === id)),

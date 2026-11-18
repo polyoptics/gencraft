@@ -362,12 +362,13 @@ const TOOLS = [
   },
   {
     name: 'run_states',
-    description: 'Work a States workspace by hand, as a click on it does: light or unlight a state, fire an event (or a wait, pick one, signal), set a value, or poke a gadget\'s input port (flip a switch, add to a counter, start a timer, roll a dice). Returns what is lit and true and every number afterwards. One undo takes it back.',
+    description: 'Work a States workspace by hand, as a click on it does: light or unlight a state, fire an event (or a wait, pick one, signal), set a value, poke a gadget\'s input port (flip a switch, add to a counter, start a timer, roll a dice), or answer a choose that is asking (option: its id or name). Returns what is lit and true, every number, and each choose still asking. read_states marks a choose waiting for an answer with asking: true. One undo takes it back.',
     inputSchema: {
       type: 'object', required: ['toolId', 'id', 'do'],
       properties: {
         toolId: { type: 'string' }, id: { type: 'string', description: 'The node\'s id.' },
-        do: { type: 'string', enum: ['light', 'unlight', 'fire', 'set', 'poke'] },
+        do: { type: 'string', enum: ['light', 'unlight', 'fire', 'set', 'poke', 'answer'] },
+        option: { type: 'string', description: 'answer: the option id (e.g. "a") or its name (e.g. "Yes").' },
         value: { description: 'set: a number, or true / false.' },
         port: { type: 'string', description: 'poke: the input port. Default "in".' },
       },

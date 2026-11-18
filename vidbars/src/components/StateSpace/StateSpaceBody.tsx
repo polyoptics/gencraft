@@ -52,6 +52,7 @@ const CSS = `
 .vb-sp-chip:hover{background:rgba(255,255,255,0.12)}
 .vb-sp-row:hover{color:#fff}
 @keyframes vbSpPulse{0%{opacity:.9;transform:scale(1)}100%{opacity:0;transform:scale(1.35)}}
+@keyframes vbSpAnswer{0%,30%{opacity:1}100%{opacity:0}}
 @keyframes vbSpFlow{to{stroke-dashoffset:-18}}
 @keyframes vbSpAir{0%{opacity:0}35%{opacity:1}100%{opacity:.15}}
 @keyframes vbSpCarry{to{stroke-dashoffset:-14}}
@@ -258,12 +259,17 @@ const NodeView: React.FC<{ item: SpaceItem; picked: boolean; stamp?: number; on?
           {(item.name || 'Choose').toUpperCase()}
         </div>
         {(item.opts ?? []).map(o => {
-          const lit = item.chose === o.id && !item.asking
+          // The answer is a moment, as an event is: it flashes when given and
+          // goes dark, so it never reads as something that is true now.
+          const flash = stamp !== undefined && item.chose === o.id && !item.asking
           return <div key={o.id} data-sp-opt={o.id} data-sp-of={item.id} className="vb-sp-chip" title="Click to go on along this one" style={{
-            height: CHOICE_ROW - 4, lineHeight: `${CHOICE_ROW - 6}px`, margin: '0 8px 4px', padding: '0 8px', boxSizing: 'border-box', borderRadius: 5, fontSize: 11, cursor: 'pointer',
+            position: 'relative', height: CHOICE_ROW - 4, lineHeight: `${CHOICE_ROW - 6}px`, margin: '0 8px 4px', padding: '0 8px', boxSizing: 'border-box', borderRadius: 5, fontSize: 11, cursor: 'pointer',
             whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-            background: lit ? 'rgba(176,140,240,0.35)' : 'rgba(255,255,255,0.05)', border: `1px solid ${lit ? VIOLET : item.asking ? 'rgba(217,164,65,0.7)' : 'rgba(255,255,255,0.16)'}`, color: lit ? '#fff' : INK,
-          }}>{o.name || 'option'}</div>
+            background: 'rgba(255,255,255,0.05)', border: `1px solid ${item.asking ? 'rgba(217,164,65,0.7)' : 'rgba(255,255,255,0.16)'}`, color: INK,
+          }}>
+            {flash && <div key={stamp} style={{ position: 'absolute', inset: -1, borderRadius: 5, border: `1px solid ${VIOLET}`, background: 'rgba(176,140,240,0.45)', pointerEvents: 'none', animation: 'vbSpAnswer 0.9s ease-out forwards' }} />}
+            <span style={{ position: 'relative' }}>{o.name || 'option'}</span>
+          </div>
         })}
         <Pulse stamp={stamp} radius={10} tone={VIOLET} />
       </div>
@@ -1199,7 +1205,7 @@ export function StateSpaceBody({ id, node, bodyW, bodyH }: { id: string; node: F
       let far = false
       const who = optEl.dataset.spOf, opt = optEl.dataset.spOpt!
       window.addEventListener('pointermove', function seen(ev) { if (Math.hypot(local(ev).x - p0.x, local(ev).y - p0.y) > 3) { far = true; window.removeEventListener('pointermove', seen) } })
-      window.addEventListener('pointerup', () => { if (!far) choose(id, who, opt) }, { once: true })
+      window.addEventListener('pointerup', () => { if (!far) { choose(id, who, opt); setPulse(p => ({ ...p, [who]: Date.now() })) } }, { once: true })
     }
     const knobEl = t.closest('[data-sp-knob]') as HTMLElement | null
     const knobbed = knobEl ? d.items.find(i => i.id === knobEl.dataset.spOf) : undefined
@@ -1364,9 +1370,11 @@ export function StateSpaceBody({ id, node, bodyW, bodyH }: { id: string; node: F
               const ref = { wire: w.id, port: 'knob' }
               const can = !draw || draw.cands.some(c => sameRef(c.ref, ref))
               const hot = sameRef(draw?.snap, ref)
+              // A knob something lands on is filled with the colour of what makes it.
+              const by = wires.find(x => x.w.bp === 'knob' && x.w.b === w.id)
               return <div key={w.id} data-sp-port="knob" data-sp-wire={w.id} className="vb-sp-port" title="A wire dragged onto here makes this change" style={{
                 position: 'absolute', left: g.mx - 6, top: g.my - 6, width: 12, height: 12, boxSizing: 'border-box', transform: `rotate(45deg)${hot ? ' scale(1.5)' : ''}`,
-                background: hot ? BLUE : GROUND, border: `2px solid ${sel.includes(w.id) || (draw && can) ? BLUE : STEEL}`, cursor: 'crosshair', opacity: draw && !can ? 0.25 : 1,
+                background: hot ? BLUE : by ? by.tone : GROUND, border: `2px solid ${sel.includes(w.id) || (draw && can) ? BLUE : STEEL}`, cursor: 'crosshair', opacity: draw && !can ? 0.25 : 1,
               }} />
             })}
             {ports.map(p => {
