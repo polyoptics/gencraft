@@ -369,6 +369,60 @@ const TOOLS = [
       },
     },
   },
+  {
+    name: 'read_storyline',
+    description: 'Read a storyline (dots joined by straight lines: a story and its branches, a family tree, any tree): each dot with its title, where it is on the canvas, the dots it is joined to and the cards on it; the storyline\'s title and description; where its time marker is. list_tools gives the storylines. Read-only.',
+    inputSchema: { type: 'object', required: ['toolId'], properties: { toolId: { type: 'string', description: 'The storyline\'s id, from list_tools.' } } },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'build_storyline',
+    description: 'Draw a new storyline, or add dots to one that is there (toolId), all in one undo. A storyline has a base: a straight line of dots, left to right. A dot without "from" is the next dot along the base; a dot with "from" grows from that dot as a branch (and a dot from a branch dot carries the branch on). Give each dot a ref and use refs (or dot ids) in "from". Leave x and y out and dots are spaced to leave room for cards. Cards named on a dot are linked to it: they stay where they are and go with the dot when it is dragged.',
+    inputSchema: {
+      type: 'object', required: ['dots'],
+      properties: {
+        toolId: { type: 'string', description: 'Add to this storyline. Leave out to draw a new one in an empty spot.' },
+        at: { type: 'object', description: 'A new storyline\'s start, in canvas units. Leave out for an empty spot in view.', properties: { x: { type: 'number' }, y: { type: 'number' } } },
+        title: { type: 'string', description: 'Its label under the base line.' },
+        description: { type: 'string' },
+        dots: { type: 'array', maxItems: 80, items: {
+          type: 'object',
+          properties: {
+            ref: { type: 'string', description: 'Your own short name for it, used in "from" of this request.' },
+            title: { type: 'string' },
+            from: { type: 'string', description: 'The dot it branches from (a ref or a dot id). Leave out for the next dot on the base.' },
+            cards: { type: 'array', items: { type: 'string' }, description: 'Ids of cards to link to this dot.' },
+            x: { type: 'number' }, y: { type: 'number' },
+          },
+        } },
+      },
+    },
+  },
+  {
+    name: 'edit_storyline',
+    description: 'Change a storyline, one undo: its title, description, colour, whether it stands up in the tilted view; its dots (title, place, the cards on it); join or unjoin two dots; take dots out (the lines close up) or a whole branch from a dot onward; put its time marker at a dot. A base dot stays on the base line (only its x moves). Gives the storyline back as read_storyline does.',
+    inputSchema: {
+      type: 'object', required: ['toolId'],
+      properties: {
+        toolId: { type: 'string' },
+        title: { type: 'string' }, description: { type: 'string' },
+        color: { type: 'string', description: 'A CSS colour; empty for the default.' },
+        standUp: { type: 'boolean' }, snap: { type: 'boolean' },
+        dots: { type: 'array', maxItems: 80, items: {
+          type: 'object', required: ['id'],
+          properties: {
+            id: { type: 'string' }, title: { type: 'string' }, x: { type: 'number' }, y: { type: 'number' },
+            cards: { type: 'array', items: { type: 'string' }, description: 'The cards on this dot, replacing what was there ([] for none).' },
+          },
+        } },
+        join: { type: 'array', items: { type: 'object', required: ['a', 'b'], properties: { a: { type: 'string' }, b: { type: 'string' } } } },
+        unjoin: { type: 'array', items: { type: 'object', required: ['a', 'b'], properties: { a: { type: 'string' }, b: { type: 'string' } } } },
+        remove: { type: 'array', items: { type: 'string' }, description: 'Dot ids to take out.' },
+        removeBranchFrom: { type: 'array', items: { type: 'string' }, description: 'Dot ids: each goes with everything that hangs off it.' },
+        markerAt: { type: 'string', description: 'A base dot\'s id: the time marker goes there and the changes up to it are made. "start": before anything has happened.' },
+      },
+    },
+  },
 ]
 
 for (const t of TOOLS) if (t.name !== 'send_file') t.inputSchema.properties.doing = DOING
@@ -378,6 +432,7 @@ const OPS = {
   edit_cards: 'edit', arrange_cards: 'arrange', set_deck: 'deck', link_cards: 'link', delete_cards: 'delete', select_cards: 'select', undo: 'undo',
   list_tools: 'tools', place_tool: 'place', make_3d_set: 'set3d', stand_in_3d_set: 'stand3d', make_gif: 'gif', make_movie: 'movie', add_to_rough_cut: 'cut',
   read_states: 'states', build_states: 'statesBuild', edit_states: 'statesEdit', run_states: 'statesRun',
+  read_storyline: 'story', build_storyline: 'storyBuild', edit_storyline: 'storyEdit',
 }
 
 async function ask(op, args) {
@@ -523,8 +578,8 @@ async function handle(msg) {
       return ok({
         protocolVersion: params?.protocolVersion || '2024-11-05',
         capabilities: { tools: {} },
-        serverInfo: { name: 'vidbars', version: '1.4.0' },
-        instructions: 'VidBars is the artist\'s card canvas. You may read cards and decks, hand out the media on cards as files, and deal a deck of cards: new cards, results brought in from another tool, and linked cards of cards that are there. You can use the tools of VidBars: set one down (place_tool), build a 3D set from cards that hold models (make_3d_set, stand_in_3d_set), make a GIF or a movie of cards, add cards to a Rough Cut, and set up state machines in a States workspace (read_states, build_states, edit_states, run_states). You may also change what is there when the artist asks for it: edit, arrange, open and close decks, link, delete; each change is one undo, and undo takes your last one back. Do not change or delete anything the artist did not ask you to. Read before you deal or change, keep card text short, and tell the artist plainly what you did. The artist sees your pointer in VidBars with a bubble: give each request a few plain words in "doing". To use a card\'s picture or model with another tool, get_card_media then send_file to the upload address that tool gives; bring what comes back onto a card with deal_deck (media, and from: the cards it was made from).',
+        serverInfo: { name: 'vidbars', version: '1.5.0' },
+        instructions: 'VidBars is the artist\'s card canvas. You may read cards and decks, hand out the media on cards as files, and deal a deck of cards: new cards, results brought in from another tool, and linked cards of cards that are there. You can use the tools of VidBars: set one down (place_tool), build a 3D set from cards that hold models (make_3d_set, stand_in_3d_set), make a GIF or a movie of cards, add cards to a Rough Cut, draw storylines and trees (build_storyline, edit_storyline), and set up state machines in a States workspace (read_states, build_states, edit_states, run_states). You may also change what is there when the artist asks for it: edit, arrange, open and close decks, link, delete; each change is one undo, and undo takes your last one back. Do not change or delete anything the artist did not ask you to. Read before you deal or change, keep card text short, and tell the artist plainly what you did. The artist sees your pointer in VidBars with a bubble: give each request a few plain words in "doing". To use a card\'s picture or model with another tool, get_card_media then send_file to the upload address that tool gives; bring what comes back onto a card with deal_deck (media, and from: the cards it was made from).',
       })
     case 'ping': return ok({})
     case 'tools/list': return ok({ tools: TOOLS })

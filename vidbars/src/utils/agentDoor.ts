@@ -58,6 +58,10 @@ import {
   type CalcOp, type Compare, type GenShape, type SpaceItem, type SpaceKind, type SpaceWire, type StateSpaceData,
 } from './stateSpace'
 import { viewportCenterInCanvas } from './canvasCreate'
+import {
+  deleteBranchFrom, deleteDot, migrateStoryline, neighbours, newStoryline, normalizeStoryline, sortBase,
+  type StoryDot, type StorylineData,
+} from './storyline'
 import { CARD_TYPES, cardTypeOf, detailShown, newDetailId, type CardDetail, type CardType } from './cardTypes'
 import { factionGroupsOf } from './factionGroups'
 import { getMediaItems, type MediaItem, type MediaType } from '../types/bar'
@@ -1172,12 +1176,199 @@ async function runStates(args: Json): Promise<Json> {
   }
 }
 
+// ── Storylines: dots joined by lines ────────────────────────────────────
+
+function storyNamed(v: unknown): { nodeId: string; x: number; y: number; d: StorylineData } {
+  const n = useFreeNodeStore.getState().nodes[String(v ?? '')]
+  if (!n?.storyline) throw new Error('No storyline with that id. list_tools gives them; build_storyline without toolId makes one.')
+  return { nodeId: n.id, x: n.x, y: n.y, d: migrateStoryline(n.storyline) }
+}
+
+function writeStory(nodeId: string, x: number, y: number, d: StorylineData): void {
+  useFreeNodeStore.getState().updateFreeNode(nodeId, normalizeStoryline(x, y, sortBase(d)))
+}
+
+/** A storyline, read: its dots where they are on the canvas, what joins them, the cards on them. */
+function readStoryline(args: Json): Json {
+  const { nodeId, x, y, d } = storyNamed(args.toolId)
+  const groups = useBoardsStore.getState().groups
+  const base = d.base ?? []
+  const start = d.dots.find(p => p.id === base[0])
+  const dots = d.dots.map(p => ({
+    id: p.id, title: p.title, x: Math.round(x + p.x), y: Math.round(y + p.y),
+    ...(base.includes(p.id) ? { onBase: base.indexOf(p.id) + 1 } : {}),
+    joined: neighbours(d, p.id),
+    ...(p.cards?.length ? { cards: p.cards.map(c => ({ id: c, name: groups.find(g => g.id === c)?.name ?? '' })) } : {}),
+    ...(p.changes?.length ? { changes: p.changes.length } : {}),
+  }))
+  agentPoint(say(args, 'Reading the storyline'), { x: x + (start?.x ?? 0), y: y + (start?.y ?? 0) })
+  return {
+    toolId: nodeId, title: d.title ?? '', description: d.description ?? '',
+    ...(d.color ? { color: d.color } : {}), standsUp: !!d.standUp,
+    ...(start && d.marker != null ? { marker: d.marker < 0 ? 'before the start' : Math.round(x + start.x + d.marker) } : {}),
+    dots,
+    note: 'The base is the straight line its dots sit on, left to right (onBase 1 is the start). Everything else is a branch off it.',
+  }
+}
+
+/** Dots and lines added to a storyline (or a new one), all in one undo. */
+async function buildStoryline(args: Json): Promise<Json> {
+  const want = Array.isArray(args.dots) ? (args.dots as Json[]) : []
+  if (want.length > 80) throw new Error('At most 80 dots at once.')
+  for (const w of want) if (idsOf(w.cards).length) cardsNamed(idsOf(w.cards))
+  const zoom = useCanvasStore.getState().zoom
+  const face = cardFaceSize(zoom)
+  const SP = Math.round(face.w * 1.6), RISE = Math.round(face.h * 1.15)
+  const fresh = args.toolId == null
+  let nodeId: string, x: number, y: number, d: StorylineData
+  if (fresh) {
+    if (!want.length) throw new Error('Give the dots of the new storyline.')
+    const onBase = Math.max(1, want.filter(w => w.from == null).length)
+    const at = args.at as { x?: unknown; y?: unknown } | undefined
+    if (at && num(at.x) != null && num(at.y) != null) { x = num(at.x)!; y = num(at.y)! }
+    else {
+      const w = SP * onBase, h = RISE * 3 + face.h
+      const b = freeBox(w, h, face.w * 0.4)
+      x = b.left; y = b.top + h / 2
+    }
+    d = newStoryline()
+    nodeId = ''
+  } else ({ nodeId, x, y, d } = storyNamed(args.toolId))
+  await agentGlide(say(args, fresh ? 'Drawing a storyline' : 'Adding to the storyline'), { x: x + (d.dots[0]?.x ?? 0), y: y + (d.dots[0]?.y ?? 0) })
+
+  const dots: StoryDot[] = d.dots.map(p => ({ ...p }))
+  const edges = [...d.edges]
+  let base = [...(d.base ?? [])]
+  const byId = () => new Map(dots.map(p => [p.id, p]))
+  const refs: Record<string, string> = {}
+  const made: Record<string, string> = {}
+  const baseY = () => byId().get(base[0])?.y ?? 0
+  // A new storyline's one dot is its first.
+  let spare = fresh ? dots[0] : undefined
+  let n = 0
+  for (const w of want) {
+    const ref = typeof w.ref === 'string' && w.ref ? w.ref : `dot${++n}`
+    const title = typeof w.title === 'string' ? w.title : ''
+    const cards = idsOf(w.cards)
+    const ax = num(w.x), ay = num(w.y)
+    let dot: StoryDot
+    if (w.from == null) {
+      // The next dot along the base.
+      if (spare) { dot = spare; spare = undefined; dot.title = title }
+      else {
+        const last = byId().get(base[base.length - 1])
+        dot = { id: crypto.randomUUID(), x: ax != null ? ax - x : (last ? Math.max(...base.map(b => byId().get(b)?.x ?? 0)) + SP : 0), y: baseY(), title }
+        dots.push(dot)
+        if (last) edges.push({ a: last.id, b: dot.id })
+        base.push(dot.id)
+      }
+    } else {
+      const fromId = refs[String(w.from)] ?? String(w.from)
+      const from = byId().get(fromId)
+      if (!from) throw new Error(`Dot "${String(w.from)}" (from) is not there. Use a ref given earlier in this request, or a dot's id from read_storyline.`)
+      const kids = neighbours({ ...d, dots, edges }, fromId).filter(k => !base.includes(k))
+      let px: number, py: number
+      if (base.includes(fromId)) {
+        const k = kids.length
+        px = from.x + SP * 0.5; py = from.y + (k % 2 ? 1 : -1) * RISE * (1 + Math.floor(k / 2))
+      } else {
+        const k = Math.max(0, kids.length - 1)
+        const dir = from.y > baseY() ? 1 : -1
+        px = from.x + SP; py = from.y + dir * RISE * k
+      }
+      // Clear of the dots that are there: further out, the same side.
+      const side = py < baseY() ? -1 : 1
+      while (ax == null && ay == null && dots.some(q => Math.abs(q.x - px) < SP * 0.45 && Math.abs(q.y - py) < RISE * 0.45)) py += side * RISE
+      dot = { id: crypto.randomUUID(), x: ax != null ? ax - x : px, y: ay != null ? ay - y : py, title }
+      dots.push(dot)
+      edges.push({ a: fromId, b: dot.id })
+    }
+    if (cards.length) dot.cards = [...new Set([...(dot.cards ?? []), ...cards])]
+    refs[ref] = dot.id
+    made[ref] = dot.id
+  }
+  if (!base.length && dots.length) base = [dots[0].id]
+  const next: StorylineData = {
+    ...d, dots, edges, base,
+    ...(typeof args.title === 'string' ? { title: args.title } : {}),
+    ...(typeof args.description === 'string' ? { description: args.description } : {}),
+  }
+  useUndoCoordinator.getState().checkpoint()
+  if (fresh) nodeId = useFreeNodeStore.getState().addFreeNode(0, 0, 'storyline')
+  writeStory(nodeId, x, y, next)
+  const now = useFreeNodeStore.getState().nodes[nodeId]
+  return {
+    toolId: nodeId, dots: made,
+    place: { x: Math.round(now.x), y: Math.round(now.y), w: Math.round(now.width), h: Math.round(now.height) },
+    note: 'One undo (Ctrl+Z) takes it back. Cards put on a dot stay where they are and go with the dot when the artist drags it.',
+  }
+}
+
+/** A storyline changed: its label and look, its dots, lines between dots, dots taken out; one undo. */
+async function editStoryline(args: Json): Promise<Json> {
+  const { nodeId, x, y, d } = storyNamed(args.toolId)
+  const patches = Array.isArray(args.dots) ? (args.dots as Json[]) : []
+  const has = (id: string) => d.dots.some(p => p.id === id)
+  for (const c of patches) {
+    if (!has(String(c.id))) throw new Error(`No dot with id ${String(c.id)} (read_storyline gives them).`)
+    if (idsOf(c.cards).length) cardsNamed(idsOf(c.cards))
+  }
+  const join = (Array.isArray(args.join) ? args.join as Json[] : []).map(j => ({ a: String(j.a), b: String(j.b) }))
+  const unjoin = (Array.isArray(args.unjoin) ? args.unjoin as Json[] : []).map(j => ({ a: String(j.a), b: String(j.b) }))
+  for (const j of [...join, ...unjoin]) if (!has(j.a) || !has(j.b) || j.a === j.b) throw new Error('join and unjoin take two different dots of this storyline, { a, b }.')
+  const remove = idsOf(args.remove), removeBranches = idsOf(args.removeBranchFrom)
+  for (const id of [...remove, ...removeBranches]) if (!has(id)) throw new Error(`No dot with id ${id}.`)
+  const start = d.dots.find(p => p.id === d.base?.[0])
+  await agentGlide(say(args, 'Changing the storyline'), { x: x + (start?.x ?? 0), y: y + (start?.y ?? 0) })
+
+  const base = d.base ?? []
+  let next: StorylineData = { ...d, dots: d.dots.map(p => {
+    const c = patches.find(q => String(q.id) === p.id)
+    if (!c) return p
+    const q: StoryDot = { ...p }
+    if (typeof c.title === 'string') q.title = c.title
+    if (num(c.x) != null) q.x = num(c.x)! - x
+    // A base dot stays on the base line.
+    if (num(c.y) != null && !base.includes(p.id)) q.y = num(c.y)! - y
+    if (c.cards != null) { const ids = idsOf(c.cards); q.cards = ids.length ? ids : undefined }
+    return q
+  }) }
+  const same = (e: { a: string; b: string }, j: { a: string; b: string }) => (e.a === j.a && e.b === j.b) || (e.a === j.b && e.b === j.a)
+  if (unjoin.length) next = { ...next, edges: next.edges.filter(e => !unjoin.some(j => same(e, j))) }
+  for (const j of join) if (!next.edges.some(e => same(e, j))) next = { ...next, edges: [...next.edges, j] }
+  for (const id of removeBranches) if (next.dots.some(p => p.id === id)) next = deleteBranchFrom(next, id)
+  for (const id of remove) if (next.dots.some(p => p.id === id)) next = deleteDot(next, id)
+  if (typeof args.title === 'string') next = { ...next, title: args.title }
+  if (typeof args.description === 'string') next = { ...next, description: args.description }
+  if (typeof args.color === 'string') next = { ...next, color: args.color || undefined }
+  if (typeof args.standUp === 'boolean') next = { ...next, standUp: args.standUp || undefined }
+  if (typeof args.snap === 'boolean') next = { ...next, snap: args.snap ? undefined : false }
+
+  useUndoCoordinator.getState().checkpoint()
+  if (!next.dots.length) {
+    useFreeNodeStore.getState().deleteFreeNode(nodeId)
+    return { removed: true, note: 'Nothing was left of it, so the storyline is gone. One undo (Ctrl+Z) brings it back.' }
+  }
+  writeStory(nodeId, x, y, next)
+  if (args.markerAt != null) {
+    const now = useFreeNodeStore.getState().nodes[nodeId]
+    const sd = now.storyline!
+    const s0 = sd.dots.find(p => p.id === sd.base?.[0])
+    const at = args.markerAt === 'start' ? undefined : sd.dots.find(p => p.id === String(args.markerAt))
+    if (args.markerAt !== 'start' && !at) throw new Error(`markerAt is a dot's id, or "start" (before anything has happened).`)
+    const { scrubStoryline } = await import('../components/Canvas/StorylineLayer')
+    scrubStoryline(nodeId, at && s0 ? at.x - s0.x : -1e9)
+  }
+  return { ...readStoryline({ toolId: nodeId, doing: say(args, 'Changing the storyline') }), note: 'One undo (Ctrl+Z) takes it back.' }
+}
+
 // ── The door ────────────────────────────────────────────────────────────
 
 const OPS: Record<string, (args: Json) => Json | Promise<Json>> = { list: listCards, read: readCards, decks: listDecks, media: cardMedia, deal: dealDeck,
   edit: editCards, arrange: arrangeCards, deck: setDeck, link: linkCards, delete: deleteCards, select: selectCards, undo: undoLast,
   tools: listTools, place: placeTool, set3d: make3dSet, stand3d, gif: makeGifOf, movie: makeMovieOf, cut: addToCut,
   states: readStates, statesBuild: buildStates, statesEdit: editStates, statesRun: runStates,
+  story: readStoryline, storyBuild: buildStoryline, storyEdit: editStoryline,
 }
 
 /** Start answering the connector. Only where the dev server's socket is
