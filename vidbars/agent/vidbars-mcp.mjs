@@ -138,6 +138,7 @@ const TOOLS = [
                   url: { type: 'string', description: 'An http(s) address of the file.' },
                   file: { type: 'string', description: 'The full path of a file on this computer.' },
                   name: { type: 'string', description: 'A name for it, when the address or path does not give a good one.' },
+                  thumbnail: { type: 'object', description: 'For a 3D model that came with a picture of itself (a preview or thumbnail from the tool that made it): that picture, as url or file. The model\'s card shows it as its face, and the model stands up from it in 3D. Give it here, NOT as a second media entry: a second entry makes a second board on the card.', properties: { url: { type: 'string' }, file: { type: 'string' } } },
                 } },
               },
               from: { type: 'array', items: { type: 'string' }, description: 'Ids of the cards this new card was made from: it is linked back to them.' },
@@ -865,7 +866,16 @@ async function dealDeck(args) {
   const cards = []
   for (const c of Array.isArray(args.cards) ? args.cards : []) {
     const media = []
-    for (const m of Array.isArray(c.media) ? c.media : []) media.push(await bringIn(m))
+    for (const m of Array.isArray(c.media) ? c.media : []) {
+      const got = await bringIn(m)
+      // A model's own picture (its thumbnail from the tool that made it).
+      if (got.type === 'model' && m.thumbnail && typeof m.thumbnail === 'object') {
+        const pic = await bringIn(m.thumbnail)
+        if (pic.type !== 'image') throw new Error('A thumbnail is a picture.')
+        got.thumb = pic.url
+      }
+      media.push(got)
+    }
     cards.push({ ...c, media })
   }
   const result = await ask('deal', { ...args, cards })
@@ -885,8 +895,8 @@ async function handle(msg) {
       return ok({
         protocolVersion: params?.protocolVersion || '2024-11-05',
         capabilities: { tools: {} },
-        serverInfo: { name: 'vidbars', version: '1.14.0' },
-        instructions: 'VidBars is the artist\'s card canvas. You may read cards and decks, hand out the media on cards as files, and deal a deck of cards: new cards, results brought in from another tool, and linked cards of cards that are there. You can use the tools of VidBars: set one down (place_tool), build a 3D set from cards that hold models (make_3d_set, stand_in_3d_set), add shapes and cameras to it and draw paths for them to ride (read_3d_set, add_to_3d_set, draw_path, edit_path, play_paths), put effects on picture cards (list_effects, add_effects, edit_effects, save_effects), run pictures through a loop strip (read_loop_strip, edit_loop_strip, run_loop_strip), read and write prompts in a Card Prompts window (read_prompts, edit_prompts), keep cards in a cabinet\'s drawers (read_cabinet, edit_cabinet), look through a folder in a Media Pool (read_media_pool), show a card big in a Viewer (show_in_viewer), move the artist\'s view to show them something (read_view, move_view), make a GIF or a movie of cards, add cards to a Rough Cut and cut there (read_rough_cut, edit_rough_cut, deck_of_picks), draw storylines and trees (build_storyline, edit_storyline), lay out the face of a scene card (read_scene, edit_scene), and set up state machines in a States workspace (read_states, build_states, edit_states, run_states). You may also change what is there when the artist asks for it: edit, arrange, open and close decks, link, delete; each change is one undo, and undo takes your last one back. Do not change or delete anything the artist did not ask you to. Read before you deal or change, keep card text short, and tell the artist plainly what you did. The artist sees your pointer in VidBars with a bubble: give each request a few plain words in "doing". To use a card\'s picture or model with another tool, get_card_media then send_file to the upload address that tool gives; bring what comes back onto a card with deal_deck (media, and from: the cards it was made from).',
+        serverInfo: { name: 'vidbars', version: '1.15.0' },
+        instructions: 'VidBars is the artist\'s card canvas. You may read cards and decks, hand out the media on cards as files, and deal a deck of cards: new cards, results brought in from another tool, and linked cards of cards that are there. You can use the tools of VidBars: set one down (place_tool), build a 3D set from cards that hold models (make_3d_set, stand_in_3d_set), add shapes and cameras to it and draw paths for them to ride (read_3d_set, add_to_3d_set, draw_path, edit_path, play_paths), put effects on picture cards (list_effects, add_effects, edit_effects, save_effects), run pictures through a loop strip (read_loop_strip, edit_loop_strip, run_loop_strip), read and write prompts in a Card Prompts window (read_prompts, edit_prompts), keep cards in a cabinet\'s drawers (read_cabinet, edit_cabinet), look through a folder in a Media Pool (read_media_pool), show a card big in a Viewer (show_in_viewer), move the artist\'s view to show them something (read_view, move_view), make a GIF or a movie of cards, add cards to a Rough Cut and cut there (read_rough_cut, edit_rough_cut, deck_of_picks), draw storylines and trees (build_storyline, edit_storyline), lay out the face of a scene card (read_scene, edit_scene), and set up state machines in a States workspace (read_states, build_states, edit_states, run_states). You may also change what is there when the artist asks for it: edit, arrange, open and close decks, link, delete; each change is one undo, and undo takes your last one back. Do not change or delete anything the artist did not ask you to. Read before you deal or change, keep card text short, and tell the artist plainly what you did. The artist sees your pointer in VidBars with a bubble: give each request a few plain words in "doing". To use a card\'s picture or model with another tool, get_card_media then send_file to the upload address that tool gives; bring what comes back onto a card with deal_deck (media, and from: the cards it was made from). A 3D model that comes back with a preview picture is ONE media entry: the model, with the picture as its thumbnail.',
       })
     case 'ping': return ok({})
     case 'tools/list': return ok({ tools: TOOLS })

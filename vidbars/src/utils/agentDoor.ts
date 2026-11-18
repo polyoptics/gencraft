@@ -68,6 +68,7 @@ import { paramHelp } from './fx/paramHelp'
 import { createEffectCardGroup, effectChain } from './effectCards'
 import { cardStripId } from './fx/cardStrips'
 import { useFxStore } from '../store/fxStore'
+import { usePosterMapStore } from '../three/posterService'
 import type { FreeNodeData } from '../store/freeNodeStore'
 import { isRail, railMembers, railRows, RAIL_TRAY, RAIL_GEOM, type RailSlot } from './rail'
 import { dockCardsOnRail, placeCard } from './railCards'
@@ -399,6 +400,33 @@ function mediaGiven(c: Json): MediaItem[] {
   })
 }
 
+/** A picture, read and made small enough to keep: the picture a model shows
+ *  for itself (three/posterService keeps those whole, not as addresses). */
+async function pictureKept(url: string): Promise<string | null> {
+  try {
+    const img = new Image()
+    img.src = url
+    await img.decode()
+    const k = Math.min(1, 768 / Math.max(img.naturalWidth, img.naturalHeight, 1))
+    const c = document.createElement('canvas')
+    c.width = Math.max(1, Math.round(img.naturalWidth * k)); c.height = Math.max(1, Math.round(img.naturalHeight * k))
+    c.getContext('2d')!.drawImage(img, 0, 0, c.width, c.height)
+    return c.toDataURL('image/webp', 0.9)
+  } catch { return null }
+}
+
+/** Models that came with a picture of their own (media thumb): that picture
+ *  is what the model shows wherever it is seen still, in place of the
+ *  snapshot VidBars would take. Set before the cards are made, so none is taken. */
+async function keepThumbs(list: Json[]): Promise<void> {
+  for (const c of list) for (const m of Array.isArray(c.media) ? c.media as Json[] : []) {
+    const url = String(m.url ?? ''), thumb = String(m.thumb ?? '')
+    if (m.type !== 'model' || !(thumb.startsWith('/api/file?') || thumb.startsWith('/uploads/'))) continue
+    const data = await pictureKept(thumb)
+    if (data) usePosterMapStore.getState().setPoster(url, data)
+  }
+}
+
 /** The top-left of an empty box `w` by `h` (canvas units) nearest the
  *  middle of the view, clear of everything by `margin`. */
 function freeBox(w: number, h: number, margin: number): { left: number; top: number } {
@@ -431,6 +459,7 @@ async function dealDeck(args: Json): Promise<Json> {
     if (c.linkTo != null && !there.has(String(c.linkTo))) throw new Error(`No card with id ${String(c.linkTo)} to make a linked card of.`)
     for (const f of Array.isArray(c.from) ? c.from : []) if (!there.has(String(f))) throw new Error(`No card with id ${String(f)} to link back to.`)
   }
+  await keepThumbs(list)
   const zoom = useCanvasStore.getState().zoom
   const face = cardFaceSize(zoom)
   const at = freeSpot(list.length, face, zoom)
