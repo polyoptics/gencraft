@@ -266,7 +266,11 @@ const TOOLS = [
             y: { type: 'number', description: 'Deep into the ground, 0 (back, top of the set as seen flat) to 1 (front).' },
             height: { type: 'number', description: 'Lifted off the ground, as a part of the set\'s width. 0: standing on it.' },
             size: { type: 'number', description: 'How big, times its natural fit. 1: as it comes.' },
-            turn: { type: 'number', description: 'Turned about upright, degrees.' },
+            turn: { type: 'number', description: 'Turned about upright, degrees. 0 faces the front of the set (toward the viewer), 90 faces right.' },
+            tip: { type: 'number', description: 'Tipped up (or, below 0, down), degrees.' },
+            lookAt: { type: 'object', description: 'Face this spot of the set instead of turn and tip (a camera looks at it).', properties: { x: { type: 'number' }, y: { type: 'number' }, height: { type: 'number' } } },
+            mm: { type: 'number', description: 'A camera\'s lens, millimetres.' },
+            focus: { type: 'number', description: 'A camera\'s focal point, how far ahead in camera lengths.' },
           } } },
       },
     },
@@ -460,6 +464,78 @@ const TOOLS = [
       },
     },
   },
+  {
+    name: 'read_3d_set',
+    description: 'Read a 3D set: its ground, everything that stands in it (models, shapes, cameras) with where it stands, its size and which way it faces, each camera\'s lens, and its paths with their points and what rides them. Read-only.',
+    inputSchema: { type: 'object', required: ['setId'], properties: { setId: { type: 'string', description: 'The 3D set\'s id, from make_3d_set or list_tools.' } } },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'add_to_3d_set',
+    description: 'Add shapes (cube, sphere, cylinder, cone, plane) or cameras to a 3D set. Each is a new card docked under the set, standing in the set where you say. A camera looks out of its front: aim it with lookAt. One undo takes them back. To bring the artist\'s own models in, use make_3d_set.',
+    inputSchema: {
+      type: 'object', required: ['setId', 'things'],
+      properties: {
+        setId: { type: 'string' },
+        things: { type: 'array', minItems: 1, maxItems: 30, items: { type: 'object', required: ['shape'], properties: {
+          shape: { type: 'string', enum: ['cube', 'sphere', 'cylinder', 'cone', 'plane', 'camera'] },
+          name: { type: 'string' },
+          x: { type: 'number', description: 'Across the ground, 0 to 1.' }, y: { type: 'number', description: 'Deep into the ground, 0 (back) to 1 (front).' },
+          height: { type: 'number', description: 'Lifted off the ground, a part of the set\'s width.' },
+          size: { type: 'number' }, turn: { type: 'number' }, tip: { type: 'number' },
+          lookAt: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, height: { type: 'number' } } },
+          mm: { type: 'number', description: 'camera: its lens, millimetres.' }, focus: { type: 'number' },
+        } } },
+      },
+    },
+  },
+  {
+    name: 'draw_path',
+    description: 'Draw a path: a smooth line through the points you give. With setId it belongs to that 3D set (x and y 0 to 1 of its ground, height a part of its width) and is a real path in 3D; without, it lies on the canvas (canvas units). Cards under the set named in riders (models, cameras) ride it: they set off at "starts" and take "seconds" to reach the end, then loop, stop or come back. play_paths runs the clock. One undo takes it back.',
+    inputSchema: {
+      type: 'object', required: ['points'],
+      properties: {
+        setId: { type: 'string' }, name: { type: 'string' },
+        points: { type: 'array', minItems: 2, maxItems: 200, items: { type: 'object', required: ['x', 'y'], properties: { x: { type: 'number' }, y: { type: 'number' }, height: { type: 'number' }, label: { type: 'string', description: 'A few words shown by the point.' }, slow: { type: 'boolean', description: 'What rides slows into this point and gathers speed out of it.' }, corner: { type: 'boolean', description: 'The line turns sharply here.' }, twist: { type: 'number', description: 'The path rolled about its own line here, degrees.' } } } },
+        closed: { type: 'boolean', description: 'The end joins the start.' },
+        smooth: { type: 'boolean', description: 'Default true. false: straight lines between the points.' },
+        color: { type: 'string' }, width: { type: 'number', description: 'Canvas units.' }, arrow: { type: 'boolean', description: 'An arrow head on its end.' },
+        riders: { type: 'array', items: { type: 'string' }, description: 'Ids of cards under the set whose models ride the path.' },
+        starts: { type: 'number', description: 'Seconds on the set\'s clock when the riders set off.' },
+        seconds: { type: 'number', description: 'How long the ride takes.' },
+        after: { type: 'string', enum: ['loop', 'stop', 'pingpong'] }, ease: { type: 'boolean' },
+      },
+    },
+  },
+  {
+    name: 'edit_path',
+    description: 'Change a path, one undo: its name, look, its points (the whole list, replacing what was there), what rides it and how, and its timing; or remove it. Only what you give changes.',
+    inputSchema: {
+      type: 'object', required: ['pathId'],
+      properties: {
+        pathId: { type: 'string', description: 'From read_3d_set or draw_path.' },
+        name: { type: 'string' },
+        points: { type: 'array', minItems: 2, maxItems: 200, items: { type: 'object', required: ['x', 'y'], properties: { x: { type: 'number' }, y: { type: 'number' }, height: { type: 'number' }, label: { type: 'string', description: 'A few words shown by the point.' }, slow: { type: 'boolean', description: 'What rides slows into this point and gathers speed out of it.' }, corner: { type: 'boolean', description: 'The line turns sharply here.' }, twist: { type: 'number', description: 'The path rolled about its own line here, degrees.' } } } },
+        closed: { type: 'boolean' }, smooth: { type: 'boolean' }, color: { type: 'string' }, width: { type: 'number' }, arrow: { type: 'boolean' },
+        riders: { type: 'array', description: 'Everything that rides it, replacing the list ([] takes all off).', items: { type: 'object', required: ['id'], properties: {
+          id: { type: 'string' },
+          lead: { type: 'number', description: 'How far along it starts, 0 to 1: several on one path follow each other.' },
+          aim: { type: 'boolean', description: 'Faces the way the path runs (default on).' },
+          heading: { type: 'number', description: 'Turned from the way the path runs, degrees.' },
+          bank: { type: 'number', description: 'Leans into turns, percent.' },
+          lift: { type: 'number', description: 'Carried above the path, a part of the set\'s width.' },
+          side: { type: 'number', description: 'Carried to its side, a part of the set\'s width.' },
+        } } },
+        starts: { type: 'number' }, seconds: { type: 'number' }, after: { type: 'string', enum: ['loop', 'stop', 'pingpong'] }, ease: { type: 'boolean' },
+        remove: { type: 'boolean', description: 'Take the path away.' },
+      },
+    },
+  },
+  {
+    name: 'play_paths',
+    description: 'Run a 3D set\'s clock: what rides its paths moves. play, pause, and / or go to a time in seconds. Seen in the tilted view. Not an undo step.',
+    inputSchema: { type: 'object', properties: { setId: { type: 'string', description: 'Leave out for paths that belong to no set.' }, do: { type: 'string', enum: ['play', 'pause'] }, seconds: { type: 'number' } } },
+  },
 ]
 
 for (const t of TOOLS) if (t.name !== 'send_file') t.inputSchema.properties.doing = DOING
@@ -471,6 +547,7 @@ const OPS = {
   read_states: 'states', build_states: 'statesBuild', edit_states: 'statesEdit', run_states: 'statesRun',
   read_storyline: 'story', build_storyline: 'storyBuild', edit_storyline: 'storyEdit',
   read_scene: 'scene', edit_scene: 'sceneEdit',
+  read_3d_set: 'set3dRead', add_to_3d_set: 'set3dAdd', draw_path: 'pathDraw', edit_path: 'pathEdit', play_paths: 'pathPlay',
 }
 
 async function ask(op, args) {
@@ -616,8 +693,8 @@ async function handle(msg) {
       return ok({
         protocolVersion: params?.protocolVersion || '2024-11-05',
         capabilities: { tools: {} },
-        serverInfo: { name: 'vidbars', version: '1.6.0' },
-        instructions: 'VidBars is the artist\'s card canvas. You may read cards and decks, hand out the media on cards as files, and deal a deck of cards: new cards, results brought in from another tool, and linked cards of cards that are there. You can use the tools of VidBars: set one down (place_tool), build a 3D set from cards that hold models (make_3d_set, stand_in_3d_set), make a GIF or a movie of cards, add cards to a Rough Cut, draw storylines and trees (build_storyline, edit_storyline), lay out the face of a scene card (read_scene, edit_scene), and set up state machines in a States workspace (read_states, build_states, edit_states, run_states). You may also change what is there when the artist asks for it: edit, arrange, open and close decks, link, delete; each change is one undo, and undo takes your last one back. Do not change or delete anything the artist did not ask you to. Read before you deal or change, keep card text short, and tell the artist plainly what you did. The artist sees your pointer in VidBars with a bubble: give each request a few plain words in "doing". To use a card\'s picture or model with another tool, get_card_media then send_file to the upload address that tool gives; bring what comes back onto a card with deal_deck (media, and from: the cards it was made from).',
+        serverInfo: { name: 'vidbars', version: '1.7.0' },
+        instructions: 'VidBars is the artist\'s card canvas. You may read cards and decks, hand out the media on cards as files, and deal a deck of cards: new cards, results brought in from another tool, and linked cards of cards that are there. You can use the tools of VidBars: set one down (place_tool), build a 3D set from cards that hold models (make_3d_set, stand_in_3d_set), add shapes and cameras to it and draw paths for them to ride (read_3d_set, add_to_3d_set, draw_path, edit_path, play_paths), make a GIF or a movie of cards, add cards to a Rough Cut, draw storylines and trees (build_storyline, edit_storyline), lay out the face of a scene card (read_scene, edit_scene), and set up state machines in a States workspace (read_states, build_states, edit_states, run_states). You may also change what is there when the artist asks for it: edit, arrange, open and close decks, link, delete; each change is one undo, and undo takes your last one back. Do not change or delete anything the artist did not ask you to. Read before you deal or change, keep card text short, and tell the artist plainly what you did. The artist sees your pointer in VidBars with a bubble: give each request a few plain words in "doing". To use a card\'s picture or model with another tool, get_card_media then send_file to the upload address that tool gives; bring what comes back onto a card with deal_deck (media, and from: the cards it was made from).',
       })
     case 'ping': return ok({})
     case 'tools/list': return ok({ tools: TOOLS })

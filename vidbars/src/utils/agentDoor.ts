@@ -58,6 +58,10 @@ import {
   type CalcOp, type Compare, type GenShape, type SpaceItem, type SpaceKind, type SpaceWire, type StateSpaceData,
 } from './stateSpace'
 import { viewportCenterInCanvas } from './canvasCreate'
+import { useNotesStore, useNotesUi, newNoteId, type Curve, type CurvePoint, type PathRider } from '../store/notesStore'
+import { curvesOf, parentOf } from './curveParent'
+import { parentToPath, rideSpan, rideTime, ridePlaying, setRider, unparentFromPath, useRideClock } from './pathRide'
+import { CAMERA_URL, PRIMITIVES, PRIM_NAMES, primitiveUrl, type Primitive } from '../three/primitives'
 import {
   deleteBranchFrom, deleteDot, migrateStoryline, neighbours, newStoryline, normalizeStoryline, sortBase,
   type StoryDot, type StorylineData,
@@ -759,7 +763,7 @@ async function placeTool(args: Json): Promise<Json> {
 
 // ── 3D sets ─────────────────────────────────────────────────────────────
 
-type Stand = { id: string; x?: number; y?: number; height?: number; size?: number; turn?: number }
+type Stand = { id: string; x?: number; y?: number; height?: number; size?: number; turn?: number; tip?: number; lookAt?: { x: number; y: number; height: number }; mm?: number; focus?: number }
 
 const standsOf = (v: unknown): Stand[] => (Array.isArray(v) ? v as Json[] : []).map(c => ({
   id: String(c.id ?? ''),
@@ -768,6 +772,11 @@ const standsOf = (v: unknown): Stand[] => (Array.isArray(v) ? v as Json[] : []).
   ...(Number.isFinite(Number(c.height)) && c.height != null ? { height: Math.max(0, Number(c.height)) } : {}),
   ...(Number.isFinite(Number(c.size)) && c.size != null ? { size: Math.min(20, Math.max(0.05, Number(c.size))) } : {}),
   ...(Number.isFinite(Number(c.turn)) && c.turn != null ? { turn: Number(c.turn) } : {}),
+  ...(Number.isFinite(Number(c.tip)) && c.tip != null ? { tip: Math.max(-89, Math.min(89, Number(c.tip))) } : {}),
+  ...(c.lookAt && typeof c.lookAt === 'object' && Number.isFinite(Number((c.lookAt as Json).x)) && Number.isFinite(Number((c.lookAt as Json).y))
+    ? { lookAt: { x: Number((c.lookAt as Json).x), y: Number((c.lookAt as Json).y), height: Number((c.lookAt as Json).height) || 0 } } : {}),
+  ...(Number.isFinite(Number(c.mm)) && c.mm != null ? { mm: Math.max(4, Math.min(1200, Number(c.mm))) } : {}),
+  ...(Number.isFinite(Number(c.focus)) && c.focus != null ? { focus: Math.max(0.3, Number(c.focus)) } : {}),
 }))
 
 /** Stand card `cardId`'s model in 3D set `area`: across (x) and deep (y) as
@@ -781,10 +790,18 @@ function standModel(area: { width: number; height: number }, cardId: string, st:
   const y = st.y ?? (was ? was.dy / area.height : fallback.y)
   ms.setPlace(key, { dx: x * area.width, dy: y * area.height, h: st.height != null ? st.height * area.width : was?.h ?? 0 })
   if (st.size != null) ms.setSetSize(key, st.size)
-  if (st.turn != null) {
-    const a = st.turn * Math.PI / 360
-    ms.setPose(key, [0, Math.sin(a), 0, Math.cos(a)])
+  if (st.lookAt) {
+    // Faces a spot of the ground: from where it stands to there.
+    const h = st.height != null ? st.height * area.width : was?.h ?? 0
+    const q = lookQuat((st.lookAt.x - x) * area.width, st.lookAt.height * area.width - h, (st.lookAt.y - y) * area.height)
+    if (q) ms.setPose(key, q)
+  } else if (st.turn != null || st.tip != null) {
+    const now = facingOf(ms.poseOf[key] as Quat | undefined)
+    const yaw = (st.turn ?? now.turn) * Math.PI / 180, e = (st.tip ?? now.tip) * Math.PI / 180
+    const q = lookQuat(Math.sin(yaw) * Math.cos(e), Math.sin(e), Math.cos(yaw) * Math.cos(e))
+    if (q) ms.setPose(key, q)
   }
+  if (st.mm != null || st.focus != null) ms.setLens(key, { ...(st.mm != null ? { mm: st.mm } : {}), ...(st.focus != null ? { focus: st.focus } : {}) })
 }
 
 /** Build a 3D set: a new set with its card, and under it a row of new
@@ -1538,6 +1555,253 @@ async function editScene(args: Json): Promise<Json> {
   return { ...readScene({ cardId: g.id, doing: say(args, 'Laying out the scene') }), ...(Object.keys(refs).length ? { refs } : {}), undo: 'One undo (Ctrl+Z) takes it back.' }
 }
 
+// ── 3D sets: what stands in one, cameras, paths ─────────────────────────
+
+function areaNamed(v: unknown) {
+  const area = useFreeNodeStore.getState().nodes[String(v ?? '')]
+  if (!area || area.type !== 'area') throw new Error('No 3D set with that id. list_tools gives them; make_3d_set makes one.')
+  return area
+}
+
+/** The model a card holds (its address), if it holds one. */
+function modelUrlOf(g: ProjectGroup): string | undefined {
+  const boards = useBoardsStore.getState().boards
+  for (const bid of g.boardIds ?? []) {
+    const b = boards[bid]
+    for (const rid of b?.rootIds ?? []) {
+      const m = getMediaItems(b.bars[rid]?.content).find(x => x.type === 'model')
+      if (m) return m.url
+    }
+  }
+  return undefined
+}
+
+type Quat = [number, number, number, number]
+
+/** How something turned by `q` faces: its turn about the upright, degrees, and its tip up, degrees. */
+function facingOf(q: Quat | undefined): { turn: number; tip: number } {
+  if (!q) return { turn: 0, tip: 0 }
+  const [x, y, z, w] = q
+  // Where its front (+z) points.
+  const fx = 2 * (x * z + w * y), fy = 2 * (y * z - w * x), fz = 1 - 2 * (x * x + y * y)
+  return { turn: Math.round(Math.atan2(fx, fz) * 180 / Math.PI), tip: Math.round(Math.asin(Math.max(-1, Math.min(1, fy))) * 180 / Math.PI) }
+}
+
+/** The turn that points a front (+z) along (dx across, dh up, dy down the canvas), upright. */
+function lookQuat(dx: number, dh: number, dy: number): Quat | null {
+  const len = Math.hypot(dx, dh, dy)
+  if (len < 1e-6) return null
+  const yaw = Math.atan2(dx, dy), pitch = -Math.asin(dh / len)
+  const sy = Math.sin(yaw / 2), cy = Math.cos(yaw / 2), sp = Math.sin(pitch / 2), cp = Math.cos(pitch / 2)
+  // yaw about the upright, then tipped about its own side.
+  return [cy * sp, sy * cp, -sy * sp, cy * cp]
+}
+
+/** A point of a path as the agent gives it: on a set, 0 to 1 of its ground and height a part of its width; off one, canvas units. */
+function pathPoint(o: Json, area: { x: number; y: number; width: number; height: number } | null): CurvePoint {
+  const x = num(o.x), y = num(o.y)
+  if (x == null || y == null) throw new Error('Each point needs x and y.')
+  const h = num(o.height) ?? 0
+  return {
+    x: area ? area.x + x * area.width : x, y: area ? area.y + y * area.height : y,
+    ...(h ? { z: area ? h * area.width : h } : {}),
+    ...(typeof o.label === 'string' && o.label ? { label: o.label } : {}),
+    ...(o.slow ? { slow: true } : {}),
+    ...(o.corner ? { t: 'corner' as const } : {}),
+    ...(num(o.twist) ? { twist: num(o.twist)! } : {}),
+  }
+}
+
+function pathOut(c: Curve, area: { x: number; y: number; width: number; height: number } | null): Json {
+  const byId = new Map(useBoardsStore.getState().groups.map(g => [g.id, g]))
+  const r3 = (n: number) => Math.round(n * 1000) / 1000
+  const span = c.riders?.length ? rideSpan(c) : null
+  return {
+    id: c.id, name: c.name ?? '', ...(c.kind === 'free' ? { penLine: true } : {}),
+    ...(c.closed ? { closed: true } : {}), smooth: !!c.smooth, color: c.color,
+    points: c.kind === 'free' ? c.pts.length : c.pts.map((p, i) => ({
+      i, x: area ? r3((p.x - area.x) / area.width) : Math.round(p.x), y: area ? r3((p.y - area.y) / area.height) : Math.round(p.y),
+      ...(p.z ? { height: area ? r3(p.z / area.width) : Math.round(p.z) } : {}),
+      ...(p.label ? { label: p.label } : {}), ...(p.slow ? { slow: true } : {}), ...(p.t === 'corner' ? { corner: true } : {}), ...(p.twist ? { twist: p.twist } : {}),
+    })),
+    ...(c.riders?.length ? {
+      riders: c.riders.map(r => ({
+        cardId: r.key.startsWith('card:') ? r.key.slice(5) : r.key, name: byId.get(r.key.slice(5))?.name ?? '',
+        ...(r.lead ? { lead: r.lead } : {}), ...(r.aim === false ? { aim: false } : {}), ...(r.heading ? { heading: r.heading } : {}),
+        ...(r.bank ? { bank: r.bank } : {}), ...(r.lift ? { lift: r.lift } : {}), ...(r.side ? { side: r.side } : {}),
+      })),
+      starts: r3(span!.start), seconds: r3(span!.dur), after: c.rideAfter ?? 'loop', ...(c.rideEase ? { ease: true } : {}),
+    } : {}),
+  }
+}
+
+/** A 3D set, read: what stands in it and how, its cameras, its paths. */
+function read3dSet(args: Json): Json {
+  const area = areaNamed(args.setId)
+  const ms = useModelScaleStore.getState()
+  const r3 = (n: number) => Math.round(n * 1000) / 1000
+  const curves = Object.values(useNotesStore.getState().curves)
+  const things = rowCards(area).filter(g => g.id !== area.areaCard).map(g => {
+    const key = dataKey(`card:${g.id}`)
+    const url = modelUrlOf(g)
+    const place = ms.placeOf[key]
+    const lens = ms.lensOf[key]
+    const rides = curves.find(c => c.riders?.some(r => r.key === `card:${g.id}`))
+    return {
+      cardId: g.id, name: g.name,
+      ...(g.linkOf ? { linkedCardOf: g.linkOf } : {}),
+      ...(url === CAMERA_URL ? { camera: true } : url?.startsWith('prim:') ? { shape: url.slice(5) } : url ? { model: true } : { noModel: true }),
+      ...(place ? { x: r3(place.dx / area.width), y: r3(place.dy / area.height), height: r3((place.h ?? 0) / area.width) } : url ? { notPlaced: true } : {}),
+      ...(url ? { size: r3(ms.setSizeOf[key] ?? ms.sizeOf[key] ?? 1), ...facingOf(ms.poseOf[key] as Quat | undefined) } : {}),
+      ...(url === CAMERA_URL ? { lens: { mm: lens?.mm ?? 35, focus: r3(lens?.focus ?? 4) } } : {}),
+      ...(rides ? { ridesPath: rides.id } : {}),
+    }
+  })
+  agentPoint(say(args, 'Looking over the 3D set'), { x: area.x + area.width / 2, y: area.y + area.height / 2 })
+  return {
+    setId: area.id, ...(area.areaCard ? { setCardId: area.areaCard } : {}),
+    ground: { x: Math.round(area.x), y: Math.round(area.y), w: Math.round(area.width), h: Math.round(area.height) },
+    things, paths: curvesOf(area.id).map(c => pathOut(c, area)),
+    clock: { seconds: r3(rideTime(area.id)), playing: ridePlaying(area.id) },
+    note: 'x and y are 0 to 1 across and down the ground; height is a part of the ground\'s width. turn is degrees about the upright (0 faces down the canvas, toward the viewer; 90 faces right); tip is degrees up. A camera looks out of its front.',
+  }
+}
+
+/** New shapes and cameras in a 3D set: each a card docked under the set, standing where told. */
+async function addTo3dSet(args: Json): Promise<Json> {
+  const area = areaNamed(args.setId)
+  const want = Array.isArray(args.things) ? (args.things as Json[]) : []
+  if (!want.length || want.length > 30) throw new Error('Give things: 1 to 30 shapes or cameras.')
+  for (const w of want) if (!PRIMITIVES.includes(String(w.shape) as Primitive)) throw new Error(`No shape "${String(w.shape)}". Shapes: ${PRIMITIVES.join(', ')}.`)
+  const zoom = useCanvasStore.getState().zoom
+  const face = cardFaceSize(zoom)
+  await agentGlide(say(args, 'Adding to the 3D set'), { x: area.x + area.width / 2, y: area.y + area.height / 2 })
+  useUndoCoordinator.getState().checkpoint()
+  const rectOf = (id: string) => {
+    const bs = useBoardsStore.getState()
+    const g = bs.groups.find(x => x.id === id)
+    return (g && cardVisualRect(g, bs.boards, zoom)?.rect) || null
+  }
+  const made: { cardId: string; name: string; shape: string }[] = []
+  want.forEach((w, i) => {
+    const shape = String(w.shape) as Primitive
+    const name = typeof w.name === 'string' && w.name.trim() ? w.name.trim() : PRIM_NAMES[shape]
+    const row = rowCards(area).map(g => rectOf(g.id)).filter((r): r is NonNullable<typeof r> => !!r)
+    const first = row[0]
+    const right = first ? Math.max(...row.filter(r => r.top < first.bottom && r.bottom > first.top).map(r => r.right)) : area.x
+    const top = first ? first.top : area.y + area.height + TOUCH_GAP
+    const id = createMediaCard({ cx: right + TOUCH_GAP + face.w / 2, cy: top + face.h / 2 }, [{ media: { url: primitiveUrl(shape), type: 'model', originalName: name }, label: name }])
+    if (!id) return
+    useBoardsStore.setState(st => ({ groups: st.groups.map(g => g.id !== id ? g : { ...g, cardWidthOverride: face.w, cardHeightOverride: face.h }) }))
+    const g = useBoardsStore.getState().groups.find(o => o.id === id), r = rectOf(id)
+    if (g && r) useBoardsStore.getState().setGroupPosBatch([{ groupId: id, originX: g.originX + (right + TOUCH_GAP - r.left), originY: g.originY + (top - r.top) }])
+    if (name !== PRIM_NAMES[shape]) useBoardsStore.getState().renameGroup(id, name)
+    if (shape === 'camera') useModelScaleStore.getState().setLens(dataKey(`card:${id}`), { mm: 80 })
+    standModel(area, id, standsOf([{ ...w, id }])[0], { x: (i + 1) / (want.length + 1), y: 0.5 })
+    made.push({ cardId: id, name, shape })
+  })
+  markNew(made.map(m => m.cardId))
+  return { added: made, note: 'Each is a new card docked under the set. One undo (Ctrl+Z) takes them back.' }
+}
+
+/** A path drawn: on a 3D set (it belongs to the set) or on the canvas. */
+async function drawPath(args: Json): Promise<Json> {
+  const area = args.setId != null ? areaNamed(args.setId) : null
+  const want = Array.isArray(args.points) ? (args.points as Json[]) : []
+  if (want.length < 2 || want.length > 200) throw new Error('A path needs 2 to 200 points.')
+  const pts = want.map(o => pathPoint(o, area))
+  const riders = idsOf(args.riders)
+  if (riders.length) cardsNamed(riders)
+  const ui = useNotesUi.getState()
+  const zoom = useCanvasStore.getState().zoom
+  await agentGlide(say(args, 'Drawing a path'), { x: pts[0].x, y: pts[0].y })
+  useUndoCoordinator.getState().checkpoint()
+  const id = newNoteId('cv')
+  const curve: Curve = {
+    id, kind: 'bezier', pts, smooth: args.smooth !== false,
+    color: typeof args.color === 'string' && args.color ? args.color : ui.color,
+    width: num(args.width) ?? ui.width / zoom,
+    parent: area ? area.id : null,
+    ...(typeof args.name === 'string' && args.name ? { name: args.name } : {}),
+    ...(args.closed ? { closed: true } : {}),
+    ...(args.arrow ? { arrowEnd: true } : {}),
+  }
+  useNotesStore.getState().addCurve(curve)
+  for (const r of riders) parentToPath(`card:${r}`, id)
+  ridePatch(id, args)
+  await agentGlide(say(args, 'Drawing a path'), { x: pts[pts.length - 1].x, y: pts[pts.length - 1].y })
+  return { path: pathOut(useNotesStore.getState().curves[id], area), note: 'One undo (Ctrl+Z) takes it back.' }
+}
+
+/** When what rides a path sets off and arrives, and what it does then. */
+function ridePatch(id: string, args: Json): void {
+  const patch: Partial<Curve> = {}
+  const start = num(args.starts), secs = num(args.seconds)
+  if (start != null) patch.rideStart = Math.max(0, start)
+  if (secs != null) patch.rideEnd = (start ?? useNotesStore.getState().curves[id]?.rideStart ?? 0) + Math.max(0.1, secs)
+  if (args.after === 'loop' || args.after === 'stop' || args.after === 'pingpong') patch.rideAfter = args.after
+  if (typeof args.ease === 'boolean') patch.rideEase = args.ease || undefined
+  if (Object.keys(patch).length) useNotesStore.getState().updateCurve(id, patch)
+}
+
+/** A path changed, or taken away; one undo. */
+async function editPath(args: Json): Promise<Json> {
+  const ns = () => useNotesStore.getState()
+  const c = ns().curves[String(args.pathId ?? '')]
+  if (!c) throw new Error('No path with that id. read_3d_set gives a set\'s paths.')
+  const pid = parentOf(c)
+  const area = pid ? useFreeNodeStore.getState().nodes[pid] : null
+  const points = Array.isArray(args.points) ? (args.points as Json[]) : null
+  if (points && c.kind !== 'bezier') throw new Error('A pen line\'s points cannot be set.')
+  if (points && (points.length < 2 || points.length > 200)) throw new Error('A path needs 2 to 200 points.')
+  const pts = points?.map(o => pathPoint(o, area))
+  const riders = Array.isArray(args.riders) ? (args.riders as Json[]).map(r => (typeof r === 'string' ? { id: r } : r) as Json) : null
+  if (riders?.length) cardsNamed(riders.map(r => String(r.id)))
+  await agentGlide(say(args, args.remove ? 'Taking a path away' : 'Changing a path'), { x: c.pts[0]?.x ?? 0, y: c.pts[0]?.y ?? 0 })
+  useUndoCoordinator.getState().checkpoint()
+  if (args.remove) { ns().deleteCurves([c.id]); return { removed: true, note: 'One undo (Ctrl+Z) brings it back.' } }
+  const patch: Partial<Curve> = {}
+  if (pts) patch.pts = pts
+  if (typeof args.name === 'string') patch.name = args.name || undefined
+  if (typeof args.closed === 'boolean') patch.closed = args.closed || undefined
+  if (typeof args.smooth === 'boolean') patch.smooth = args.smooth
+  if (typeof args.color === 'string' && args.color) patch.color = args.color
+  if (num(args.width) != null) patch.width = Math.max(0.1, num(args.width)!)
+  if (typeof args.arrow === 'boolean') patch.arrowEnd = args.arrow || undefined
+  if (Object.keys(patch).length) ns().updateCurve(c.id, patch)
+  if (riders) {
+    const keep = new Set(riders.map(r => `card:${String(r.id)}`))
+    for (const r of ns().curves[c.id].riders ?? []) if (!keep.has(r.key)) unparentFromPath(r.key)
+    for (const r of riders) {
+      const key = `card:${String(r.id)}`
+      parentToPath(key, c.id)
+      const p: Partial<PathRider> = {}
+      if (num(r.lead) != null) p.lead = Math.max(0, Math.min(1, num(r.lead)!))
+      if (typeof r.aim === 'boolean') p.aim = r.aim
+      if (num(r.heading) != null) p.heading = num(r.heading)!
+      if (num(r.bank) != null) p.bank = num(r.bank)!
+      if (num(r.lift) != null) p.lift = area ? num(r.lift)! * area.width : num(r.lift)!
+      if (num(r.side) != null) p.side = area ? num(r.side)! * area.width : num(r.side)!
+      if (Object.keys(p).length) setRider(c.id, key, p)
+    }
+  }
+  ridePatch(c.id, args)
+  return { path: pathOut(ns().curves[c.id], area), note: 'One undo (Ctrl+Z) takes it back.' }
+}
+
+/** A set's ride clock: play, pause, or go to a time. */
+function playPaths(args: Json): Json {
+  const set = args.setId != null ? areaNamed(args.setId).id : ''
+  const clock = useRideClock.getState()
+  const t = num(args.seconds)
+  if (t != null) clock.seek(t, set)
+  if (args.do === 'play') clock.play(set)
+  else if (args.do === 'pause') clock.pause(set)
+  else if (t == null) throw new Error('Give do: play or pause, and / or seconds to go to.')
+  agentPoint(say(args, args.do === 'play' ? 'Playing the paths' : 'Setting the clock'))
+  return { seconds: Math.round(rideTime(set) * 1000) / 1000, playing: ridePlaying(set) }
+}
+
 // ── The door ────────────────────────────────────────────────────────────
 
 const OPS: Record<string, (args: Json) => Json | Promise<Json>> = { list: listCards, read: readCards, decks: listDecks, media: cardMedia, deal: dealDeck,
@@ -1546,6 +1810,7 @@ const OPS: Record<string, (args: Json) => Json | Promise<Json>> = { list: listCa
   states: readStates, statesBuild: buildStates, statesEdit: editStates, statesRun: runStates,
   story: readStoryline, storyBuild: buildStoryline, storyEdit: editStoryline,
   scene: readScene, sceneEdit: editScene,
+  set3dRead: read3dSet, set3dAdd: addTo3dSet, pathDraw: drawPath, pathEdit: editPath, pathPlay: playPaths,
 }
 
 /** Start answering the connector. Only where the dev server's socket is
