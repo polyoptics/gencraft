@@ -1335,7 +1335,7 @@ export function StateSpaceBody({ id, node, bodyW, bodyH }: { id: string; node: F
         <style>{CSS}</style>
         <div style={{ position: 'absolute', inset: 0, display: 'flex' }} onPointerDown={onDown} onDoubleClick={onDouble}>
           <div ref={plane} data-state-plane={id} style={{
-            flex: 1, minWidth: 0, position: 'relative', overflow: 'hidden', background: GROUND,
+            flex: 1, minWidth: 0, position: 'relative', overflow: 'hidden', background: GROUND, cursor: 'default',
             backgroundImage: 'radial-gradient(rgba(255,255,255,0.09) 1px, transparent 1.2px)', backgroundSize: '20px 20px',
           }}>
             <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', overflow: 'visible', pointerEvents: 'none' }}>
