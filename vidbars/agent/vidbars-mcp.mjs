@@ -692,6 +692,29 @@ const TOOLS = [
       required: ['toolId'],
     },
   },
+  {
+    name: 'read_cabinet',
+    description: 'Read a cabinet: its drawers, which one is open, and what each holds (cards and decks put away off the canvas). Read-only.',
+    inputSchema: { type: 'object', properties: { toolId: { type: 'string' } }, required: ['toolId'] },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'edit_cabinet',
+    description: 'Work a cabinet, in one undo: name drawers, add drawers, put cards away in a drawer (they leave the canvas, a closed deck going in as one thing), take things out again (where asked, or in a row just under the cabinet), move a thing to another drawer, open a drawer or close them. Put cards away only when the artist asks.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        toolId: { type: 'string' },
+        drawers: { type: 'array', items: { type: 'object', properties: { drawer: { type: 'string' }, name: { type: 'string' } }, required: ['drawer', 'name'] } },
+        addDrawers: { type: 'number' },
+        putAway: { type: 'array', items: { type: 'object', properties: { drawer: { type: 'string' }, cards: { type: 'array', items: { type: 'string' } } }, required: ['drawer', 'cards'] } },
+        takeOut: { type: 'array', items: { type: 'object', properties: { item: { type: 'string' }, at: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } } } }, required: ['item'] } },
+        move: { type: 'array', items: { type: 'object', properties: { item: { type: 'string' }, to: { type: 'string', description: 'A drawer id.' } }, required: ['item', 'to'] } },
+        open: { description: 'A drawer id to open, or null to close the open one.' },
+      },
+      required: ['toolId'],
+    },
+  },
 ]
 
 for (const t of TOOLS) if (t.name !== 'send_file') t.inputSchema.properties.doing = DOING
@@ -706,6 +729,7 @@ const OPS = {
   list_effects: 'fxList', read_effects: 'fxRead', add_effects: 'fxAdd', edit_effects: 'fxEdit', save_effects: 'fxSave',
   read_rough_cut: 'cutRead', edit_rough_cut: 'cutEdit', deck_of_picks: 'cutPicks',
   read_view: 'viewRead', move_view: 'viewMove',
+  read_cabinet: 'cabinetRead', edit_cabinet: 'cabinetEdit',
   read_prompts: 'promptsRead', edit_prompts: 'promptsEdit',
   read_loop_strip: 'stripRead', edit_loop_strip: 'stripEdit', run_loop_strip: 'stripRun',
   read_viewer: 'viewerRead', show_in_viewer: 'viewerShow',
@@ -855,8 +879,8 @@ async function handle(msg) {
       return ok({
         protocolVersion: params?.protocolVersion || '2024-11-05',
         capabilities: { tools: {} },
-        serverInfo: { name: 'vidbars', version: '1.12.0' },
-        instructions: 'VidBars is the artist\'s card canvas. You may read cards and decks, hand out the media on cards as files, and deal a deck of cards: new cards, results brought in from another tool, and linked cards of cards that are there. You can use the tools of VidBars: set one down (place_tool), build a 3D set from cards that hold models (make_3d_set, stand_in_3d_set), add shapes and cameras to it and draw paths for them to ride (read_3d_set, add_to_3d_set, draw_path, edit_path, play_paths), put effects on picture cards (list_effects, add_effects, edit_effects, save_effects), run pictures through a loop strip (read_loop_strip, edit_loop_strip, run_loop_strip), read and write prompts in a Card Prompts window (read_prompts, edit_prompts), show a card big in a Viewer (show_in_viewer), move the artist\'s view to show them something (read_view, move_view), make a GIF or a movie of cards, add cards to a Rough Cut and cut there (read_rough_cut, edit_rough_cut, deck_of_picks), draw storylines and trees (build_storyline, edit_storyline), lay out the face of a scene card (read_scene, edit_scene), and set up state machines in a States workspace (read_states, build_states, edit_states, run_states). You may also change what is there when the artist asks for it: edit, arrange, open and close decks, link, delete; each change is one undo, and undo takes your last one back. Do not change or delete anything the artist did not ask you to. Read before you deal or change, keep card text short, and tell the artist plainly what you did. The artist sees your pointer in VidBars with a bubble: give each request a few plain words in "doing". To use a card\'s picture or model with another tool, get_card_media then send_file to the upload address that tool gives; bring what comes back onto a card with deal_deck (media, and from: the cards it was made from).',
+        serverInfo: { name: 'vidbars', version: '1.13.0' },
+        instructions: 'VidBars is the artist\'s card canvas. You may read cards and decks, hand out the media on cards as files, and deal a deck of cards: new cards, results brought in from another tool, and linked cards of cards that are there. You can use the tools of VidBars: set one down (place_tool), build a 3D set from cards that hold models (make_3d_set, stand_in_3d_set), add shapes and cameras to it and draw paths for them to ride (read_3d_set, add_to_3d_set, draw_path, edit_path, play_paths), put effects on picture cards (list_effects, add_effects, edit_effects, save_effects), run pictures through a loop strip (read_loop_strip, edit_loop_strip, run_loop_strip), read and write prompts in a Card Prompts window (read_prompts, edit_prompts), keep cards in a cabinet\'s drawers (read_cabinet, edit_cabinet), show a card big in a Viewer (show_in_viewer), move the artist\'s view to show them something (read_view, move_view), make a GIF or a movie of cards, add cards to a Rough Cut and cut there (read_rough_cut, edit_rough_cut, deck_of_picks), draw storylines and trees (build_storyline, edit_storyline), lay out the face of a scene card (read_scene, edit_scene), and set up state machines in a States workspace (read_states, build_states, edit_states, run_states). You may also change what is there when the artist asks for it: edit, arrange, open and close decks, link, delete; each change is one undo, and undo takes your last one back. Do not change or delete anything the artist did not ask you to. Read before you deal or change, keep card text short, and tell the artist plainly what you did. The artist sees your pointer in VidBars with a bubble: give each request a few plain words in "doing". To use a card\'s picture or model with another tool, get_card_media then send_file to the upload address that tool gives; bring what comes back onto a card with deal_deck (media, and from: the cards it was made from).',
       })
     case 'ping': return ok({})
     case 'tools/list': return ok({ tools: TOOLS })

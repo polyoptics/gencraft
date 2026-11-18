@@ -76,6 +76,7 @@ import { railComboCount } from './fx/railChain'
 import { useRailRunStore } from '../store/railRunStore'
 import { cardFeed, tagsOf } from './cardBacks'
 import { dockedCards } from './filmShots'
+import { addDrawer, drawerName, moveItem, renameDrawer, stowCards, takeOutAt, toggleDrawer } from './cabinet'
 import { saveFailure, saveStripResult } from './fx/saveStrip'
 import { useNotesStore, useNotesUi, newNoteId, type Curve, type CurvePoint, type PathRider } from '../store/notesStore'
 import { curvesOf, parentOf } from './curveParent'
@@ -2473,6 +2474,81 @@ async function editPrompts(args: Json): Promise<Json> {
   return { ...promptsOut(promptsNamed(node.id)), undo: 'One undo (Ctrl+Z) takes it back.' }
 }
 
+// ── Cabinets: drawers that hold cards off the canvas ────────────────────
+
+function cabinetNamed(v: unknown) {
+  const node = useFreeNodeStore.getState().nodes[String(v ?? '')]
+  if (!node?.cabinet) throw new Error('No cabinet with that id. list_tools gives them; place_tool cabinet makes one.')
+  return { node, cab: node.cabinet }
+}
+
+function cabinetOut(id: string): Json {
+  const { node, cab } = cabinetNamed(id)
+  return {
+    toolId: node.id, name: node.label,
+    drawers: cab.drawers.map((d, i) => ({
+      drawer: d.id, name: drawerName(d, i).text, ...(cab.open === d.id ? { open: true } : {}),
+      ...(d.project ? { project: d.project.name } : {}),
+      holds: d.items.map(it => ({ item: it.id, name: it.name, ...(it.kind === 'card' ? { cards: it.groups.length } : { tiles: it.nodes.length }) })),
+    })),
+    note: 'What is in a drawer is off the canvas until taken out; a closed deck goes in and comes out as one thing. A drawer holding a whole project is the artist\'s to open.',
+  }
+}
+
+function readCabinet(args: Json): Json {
+  const { node } = cabinetNamed(args.toolId)
+  agentPoint(say(args, 'Looking in the cabinet'), { x: node.x + node.width / 2, y: node.y + node.height / 2 })
+  return cabinetOut(node.id)
+}
+
+/** A cabinet changed: drawers named or added, cards put away, things taken out. One undo. */
+async function editCabinet(args: Json): Promise<Json> {
+  const { node, cab } = cabinetNamed(args.toolId)
+  const id = node.id
+  if (node.pin) throw new Error('This cabinet is pinned. The artist unpins it.')
+  const list = (k: string) => Array.isArray(args[k]) ? (args[k] as Json[]) : []
+  const drawer = (v: unknown) => {
+    const d = cab.drawers.find(x => x.id === String(v ?? ''))
+    if (!d) throw new Error(`No drawer "${String(v)}" in this cabinet. read_cabinet gives them.`)
+    return d
+  }
+  const holder = (v: unknown) => {
+    const d = cab.drawers.find(x => x.items.some(it => it.id === String(v ?? '')))
+    if (!d) throw new Error(`Nothing "${String(v)}" in this cabinet. read_cabinet gives what each drawer holds.`)
+    return d
+  }
+  const names = list('drawers').map(w => ({ d: drawer(w.drawer), name: clip(String(w.name ?? ''), 60) }))
+  const stow = list('putAway').map(w => {
+    const d = drawer(w.drawer)
+    if (d.project) throw new Error('That drawer holds a whole project: it takes nothing else.')
+    const cards = cardsNamed(idsOf(w.cards))
+    return { d, cards: cards.map(g => g.id) }
+  })
+  const out = list('takeOut').map(w => ({ d: holder(w.item), item: String(w.item), at: w.at as Json | undefined }))
+  const move = list('move').map(w => ({ from: holder(w.item), item: String(w.item), to: drawer(w.to) }))
+  const add = Math.max(0, Math.min(12, Math.round(num(args.addDrawers) ?? 0)))
+  const open = args.open === undefined ? undefined : args.open === null || args.open === '' ? null : drawer(args.open).id
+  if (!names.length && !stow.length && !out.length && !move.length && !add && open === undefined) throw new Error('Nothing to change. Give drawers, addDrawers, putAway, takeOut, move or open.')
+
+  await agentGlide(say(args, 'At the cabinet'), { x: node.x + node.width / 2, y: node.y + node.height / 2 })
+  useUndoCoordinator.getState().checkpoint()
+  for (const q of names) renameDrawer(id, q.d.id, q.name)
+  for (let i = 0; i < add; i++) addDrawer(id)
+  let away = 0
+  for (const q of stow) if (stowCards(q.cards, { nodeId: id, drawerId: q.d.id })) away += q.cards.length
+  for (const q of move) moveItem({ nodeId: id, drawerId: q.from.id }, q.item, { nodeId: id, drawerId: q.to.id })
+  // Taken out: where asked, else in a row just under the cabinet.
+  let x = node.x
+  for (const q of out) {
+    const it = q.d.items.find(i => i.id === q.item)!
+    const at = q.at && num(q.at.x) != null && num(q.at.y) != null ? { x: num(q.at.x)!, y: num(q.at.y)! } : { x: x + it.w / 2, y: node.y + node.height + 80 + it.h / 2 }
+    takeOutAt(id, q.d.id, q.item, at.x, at.y)
+    if (!q.at) x += it.w + 24
+  }
+  if (open !== undefined && (cabinetNamed(id).cab.open ?? null) !== open) toggleDrawer(id, open ?? cabinetNamed(id).cab.open!)
+  return { ...cabinetOut(id), ...(stow.length ? { putAway: away } : {}), undo: 'One undo (Ctrl+Z) takes it back.' }
+}
+
 // ── The door ────────────────────────────────────────────────────────────
 
 const OPS: Record<string, (args: Json) => Json | Promise<Json>> = { list: listCards, read: readCards, decks: listDecks, media: cardMedia, deal: dealDeck,
@@ -2482,6 +2558,7 @@ const OPS: Record<string, (args: Json) => Json | Promise<Json>> = { list: listCa
   story: readStoryline, storyBuild: buildStoryline, storyEdit: editStoryline,
   scene: readScene, sceneEdit: editScene,
   viewRead: readView, viewMove: moveView,
+  cabinetRead: readCabinet, cabinetEdit: editCabinet,
   promptsRead: readPrompts, promptsEdit: editPrompts,
   stripRead: readStrip, stripEdit: editStrip, stripRun: runStrip,
   viewerRead: readViewer, viewerShow: showInViewer,
