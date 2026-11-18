@@ -65,7 +65,11 @@ import {
 import { CARD_TYPES, cardTypeOf, detailShown, newDetailId, type CardDetail, type CardType } from './cardTypes'
 import { factionGroupsOf } from './factionGroups'
 import { getMediaItems, type MediaItem, type MediaType } from '../types/bar'
-import type { SceneDiv } from './sceneCard'
+import {
+  addLinks, addStrip, canFold, clearDiv, findDiv, findParent, isLeaf, leaf, leaves, moveDiv, patchDiv, removeDiv, removeLink, splitDiv,
+  type SceneDiv,
+} from './sceneCard'
+import { dropCardsInDivision, refreshDivision } from './sceneContent'
 
 const MAX_DEAL = 40
 
@@ -1362,6 +1366,178 @@ async function editStoryline(args: Json): Promise<Json> {
   return { ...readStoryline({ toolId: nodeId, doing: say(args, 'Changing the storyline') }), note: 'One undo (Ctrl+Z) takes it back.' }
 }
 
+// ── Scene cards: a face of sections ─────────────────────────────────────
+
+const SCENE_COLORS = ['#5b8dd9', '#1f9ea6', '#6fa6a8', '#f2994a', '#8b6fd6', '#4fae6b']
+
+function sceneNamed(v: unknown): { g: ProjectGroup; scene: SceneDiv } {
+  const g = useBoardsStore.getState().groups.find(x => x.id === String(v ?? ''))
+  if (!g) throw new Error(`No card with id ${String(v)}.`)
+  if (!g.scene) throw new Error(`"${g.name}" is not a scene card. Make one with deal_deck (type scene), or give a card the type scene with edit_cards.`)
+  return { g, scene: g.scene }
+}
+
+/** A scene's face, in full: every split and section with its id. */
+function sceneTree(d: SceneDiv, byId: Map<string, ProjectGroup>): Json {
+  const named = (id: string) => ({ id, name: byId.get(id)?.name ?? '' })
+  if (!isLeaf(d)) {
+    const n = d.kids!.length
+    return {
+      id: d.id, split: d.dir === 'col' ? 'stacked' : 'side_by_side',
+      sizes: (d.sizes ?? d.kids!.map(() => 1 / n)).map(x => Math.round(x * 1000) / 1000),
+      ...(canFold(d) ? { headed: true } : {}), ...(d.fold ? { folded: true } : {}),
+      parts: d.kids!.map(k => sceneTree(k, byId)),
+    }
+  }
+  const card = d.card ?? d.cards?.[0]
+  return {
+    id: d.id, name: d.name ?? '',
+    ...(d.notes ? { notes: d.notes } : {}), ...(d.color ? { color: d.color } : {}),
+    ...(d.image ? { picture: true } : {}),
+    ...(card ? { card: named(card) } : {}),
+    ...(d.deck?.length ? { deck: d.deck.map(named) } : {}),
+    ...(d.hand ? { handsDown: true } : {}),
+    ...(d.links?.length ? { links: d.links.map(named) } : {}),
+    ...(d.live ? { live: true } : {}), ...(d.bump ? { bump: true } : {}), ...(d.tab ? { tab: true } : {}),
+    ...(d.opens ? { opensScene: named(d.opens) } : {}),
+  }
+}
+
+function readScene(args: Json): Json {
+  const { g, scene } = sceneNamed(args.cardId)
+  const byId = new Map(useBoardsStore.getState().groups.map(x => [x.id, x]))
+  agentPoint(say(args, 'Reading the scene'), agentSpotOfCard(g.id))
+  return {
+    cardId: g.id, name: g.name, face: sceneTree(scene, byId),
+    note: 'A split holds parts side by side or stacked, each with its share (sizes). A stacked split whose first part is a section is headed: that first part is its heading, and cards put on a heading are handed down to the sections under it.',
+  }
+}
+
+/** A face from an outline: { split, sizes, parts } or { name, notes, color }. Cards and links wait in `after`. */
+function sceneFromOutline(o: Json, turn: { n: number }, after: { id: string; cards: string[]; links: string[] }[], refs: Record<string, string>): SceneDiv {
+  const parts = Array.isArray(o.parts) ? (o.parts as Json[]) : []
+  if (parts.length) {
+    const kids = parts.map(q => sceneFromOutline(q, turn, after, refs))
+    const given = Array.isArray(o.sizes) && o.sizes.length === kids.length && (o.sizes as unknown[]).every(x => num(x) != null && num(x)! > 0) ? (o.sizes as unknown[]).map(Number) : kids.map(() => 1)
+    const total = given.reduce((x, y) => x + y, 0)
+    const d: SceneDiv = { id: newDetailId(), dir: o.split === 'stacked' ? 'col' : 'row', sizes: given.map(x => x / total), kids, ...(o.folded ? { fold: true } : {}) }
+    if (typeof o.ref === 'string') refs[o.ref] = d.id
+    return kids.length === 1 ? kids[0] : d
+  }
+  const d = leaf(typeof o.name === 'string' ? o.name : 'Section', typeof o.color === 'string' && o.color ? o.color : SCENE_COLORS[turn.n++ % SCENE_COLORS.length],
+    { ...(typeof o.notes === 'string' && o.notes ? { notes: o.notes, face: true } : {}), ...(o.bump ? { bump: true } : {}), ...(o.tab ? { tab: true } : {}) })
+  if (typeof o.ref === 'string') refs[o.ref] = d.id
+  const cards = idsOf(o.cards), links = idsOf(o.links)
+  if (cards.length || links.length) after.push({ id: d.id, cards, links })
+  return d
+}
+
+/** A scene's face changed: a whole new layout and / or steps in order; one undo. */
+async function editScene(args: Json): Promise<Json> {
+  const { g } = sceneNamed(args.cardId)
+  const bs = () => useBoardsStore.getState()
+  const sceneNow = () => bs().groups.find(x => x.id === g.id)!.scene!
+  const steps = Array.isArray(args.steps) ? (args.steps as Json[]) : []
+  if (!args.layout && !steps.length) throw new Error('Give layout (the whole face) and / or steps.')
+  const refs: Record<string, string> = {}
+  const need = (v: unknown): SceneDiv => {
+    const id = refs[String(v)] ?? String(v ?? '')
+    const d = findDiv(sceneNow(), id)
+    if (!d) throw new Error(`No section or split "${String(v)}" on this scene (read_scene gives the ids; a ref must be given by an earlier step).`)
+    return d
+  }
+  const cardsOf = (v: unknown) => { const ids = idsOf(v).filter(id => id !== g.id); if (!ids.length) throw new Error('Give cards: the ids of the cards.'); cardsNamed(ids); return ids }
+  await agentGlide(say(args, 'Laying out the scene'), agentSpotOfCard(g.id))
+  useUndoCoordinator.getState().checkpoint()
+  const before = sceneNow()
+  try {
+    if (args.layout && typeof args.layout === 'object') {
+      const after: { id: string; cards: string[]; links: string[] }[] = []
+      const face = sceneFromOutline(args.layout as Json, { n: 0 }, after, refs)
+      for (const a of after) cardsNamed([...a.cards, ...a.links])
+      bs().setGroupScene(g.id, face)
+      for (const a of after) {
+        if (a.cards.length) dropCardsInDivision(g.id, a.id, a.cards)
+        if (a.links.length) bs().setGroupScene(g.id, addLinks(sceneNow(), a.id, a.links))
+      }
+    }
+    for (const st of steps) {
+      const what = String(st.do ?? '')
+      const set = (next: SceneDiv) => bs().setGroupScene(g.id, next)
+      const fresh = (id: string) => {
+        const patch: Partial<SceneDiv> = {}
+        if (typeof st.name === 'string') patch.name = st.name
+        if (typeof st.color === 'string' && st.color) patch.color = st.color
+        if (typeof st.notes === 'string' && st.notes) { patch.notes = st.notes; patch.face = true }
+        if (Object.keys(patch).length) set(patchDiv(sceneNow(), id, patch))
+        if (typeof st.ref === 'string') refs[st.ref] = id
+      }
+      if (what === 'split') {
+        const d = need(st.section)
+        if (!isLeaf(d)) throw new Error('split takes a section, not a split.')
+        const dir = st.way === 'stacked' ? 'col' : 'row'
+        set(splitDiv(sceneNow(), d.id, dir))
+        const parent = findParent(sceneNow(), d.id)!
+        fresh(parent.kids![parent.kids!.findIndex(k => k.id === d.id) + 1].id)
+      } else if (what === 'strip') {
+        const side = String(st.side) as 'top' | 'bottom' | 'left' | 'right'
+        if (!['top', 'bottom', 'left', 'right'].includes(side)) throw new Error('strip: side is top, bottom, left or right.')
+        const had = new Set(leaves(sceneNow()).map(l => l.id))
+        set(addStrip(sceneNow(), side, num(st.share) != null ? Math.max(0.03, Math.min(0.9, num(st.share)!)) : undefined))
+        fresh(leaves(sceneNow()).find(l => !had.has(l.id))!.id)
+      } else if (what === 'set') {
+        const d = need(st.section)
+        const patch: Partial<SceneDiv> = {}
+        if (isLeaf(d)) {
+          if (typeof st.name === 'string') patch.name = st.name
+          if (typeof st.notes === 'string') { patch.notes = st.notes; patch.face = true; patch.live = undefined }
+          if (typeof st.color === 'string' && st.color) patch.color = st.color
+          if (typeof st.bump === 'boolean') patch.bump = st.bump || undefined
+          if (typeof st.tab === 'boolean') patch.tab = st.tab || undefined
+          if (typeof st.label === 'boolean') patch.mid = st.label ? undefined : false
+          if (typeof st.live === 'boolean') patch.live = st.live || undefined
+        } else {
+          if (typeof st.folded === 'boolean') { if (st.folded && !canFold(d)) throw new Error('Only a headed split (stacked, its first part a section) folds.'); patch.fold = st.folded || undefined }
+          if (Array.isArray(st.sizes)) {
+            const z = (st.sizes as unknown[]).map(Number)
+            if (z.length !== d.kids!.length || z.some(x => !(x > 0))) throw new Error(`sizes: one share above 0 for each of its ${d.kids!.length} parts.`)
+            const total = z.reduce((x, y) => x + y, 0)
+            patch.sizes = z.map(x => x / total)
+          }
+        }
+        if (!Object.keys(patch).length) throw new Error('set: nothing to set there (a section takes name, notes, color, bump, tab, label, live; a split takes sizes, folded).')
+        set(patchDiv(sceneNow(), d.id, patch))
+      } else if (what === 'put') {
+        dropCardsInDivision(g.id, need(st.section).id, cardsOf(st.cards))
+      } else if (what === 'link') {
+        set(addLinks(sceneNow(), need(st.section).id, cardsOf(st.cards)))
+      } else if (what === 'unlink') {
+        const d = need(st.section)
+        for (const c of cardsOf(st.cards)) set(removeLink(sceneNow(), c, d.id))
+      } else if (what === 'refresh') {
+        refreshDivision(g.id, need(st.section).id)
+      } else if (what === 'clear') {
+        set(clearDiv(sceneNow(), need(st.section).id))
+      } else if (what === 'remove') {
+        if (leaves(sceneNow()).length <= 1) throw new Error('The last section stays.')
+        set(removeDiv(sceneNow(), need(st.section).id))
+      } else if (what === 'move') {
+        const where = String(st.where) as 'left' | 'right' | 'top' | 'bottom' | 'swap'
+        if (!['left', 'right', 'top', 'bottom', 'swap'].includes(where)) throw new Error('move: where is left, right, top, bottom or swap.')
+        const was = sceneNow()
+        const next = moveDiv(was, need(st.section).id, need(st.to).id, where)
+        if (next === was) throw new Error('That move makes no sense (onto itself, or into itself).')
+        set(next)
+      } else throw new Error(`No step "${what}". Steps: split, strip, set, put, link, unlink, refresh, clear, remove, move.`)
+    }
+  } catch (e) {
+    // All or nothing: the face as it was.
+    bs().setGroupScene(g.id, before)
+    throw e
+  }
+  return { ...readScene({ cardId: g.id, doing: say(args, 'Laying out the scene') }), ...(Object.keys(refs).length ? { refs } : {}), undo: 'One undo (Ctrl+Z) takes it back.' }
+}
+
 // ── The door ────────────────────────────────────────────────────────────
 
 const OPS: Record<string, (args: Json) => Json | Promise<Json>> = { list: listCards, read: readCards, decks: listDecks, media: cardMedia, deal: dealDeck,
@@ -1369,6 +1545,7 @@ const OPS: Record<string, (args: Json) => Json | Promise<Json>> = { list: listCa
   tools: listTools, place: placeTool, set3d: make3dSet, stand3d, gif: makeGifOf, movie: makeMovieOf, cut: addToCut,
   states: readStates, statesBuild: buildStates, statesEdit: editStates, statesRun: runStates,
   story: readStoryline, storyBuild: buildStoryline, storyEdit: editStoryline,
+  scene: readScene, sceneEdit: editScene,
 }
 
 /** Start answering the connector. Only where the dev server's socket is

@@ -423,6 +423,43 @@ const TOOLS = [
       },
     },
   },
+  {
+    name: 'read_scene',
+    description: 'Read a scene card\'s face in full: its splits (parts side by side or stacked, with their shares) and its sections, each with its id, name, text, colour, the card or deck put on it and the cards linked to it. read_cards shows a short outline; this gives the ids edit_scene needs. Read-only.',
+    inputSchema: { type: 'object', required: ['cardId'], properties: { cardId: { type: 'string', description: 'The scene card\'s id.' } } },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'edit_scene',
+    description: 'Lay out a scene card\'s face, one undo. A face is sections (named, coloured rectangles) held in splits. Either give "layout", the whole face as an outline that replaces what is there, and / or "steps" done in order on the face. A card PUT on a section copies its header, text and picture onto the section (a closed deck goes in whole, as that section\'s cast; put on a heading, the cards are handed down to the sections under it). A card LINKED to a section only points at it; nothing in the section changes. To make a scene card first: deal_deck with type scene, or edit_cards type scene. If any step fails, nothing is changed.',
+    inputSchema: {
+      type: 'object', required: ['cardId'],
+      properties: {
+        cardId: { type: 'string' },
+        layout: { type: 'object', description: 'The whole face. A split: { split: "side_by_side" | "stacked", sizes: [shares], parts: [ ... ], folded }. A section: { name, notes, color, cards: [ids put on it], links: [ids linked to it], bump, tab, ref }. A stacked split whose first part is a section is a headed section (an act with its scenes under it).' },
+        steps: { type: 'array', maxItems: 80, items: {
+          type: 'object', required: ['do'],
+          properties: {
+            do: { type: 'string', enum: ['split', 'strip', 'set', 'put', 'link', 'unlink', 'refresh', 'clear', 'remove', 'move'], description: 'split: divide a section in two, the new half after it (way, name, color, notes, ref). strip: a new section along an edge of the whole face (side, share, name, ref). set: a section\'s name, notes, color, bump, tab, label, live; or a split\'s sizes, folded. put / link / unlink: cards on a section. refresh: take the card\'s content as it is now. clear: empty a section. remove: take a section or split away. move: a section beside another (to, where).' },
+            section: { type: 'string', description: 'A section\'s (or split\'s) id from read_scene, or a ref from an earlier step.' },
+            ref: { type: 'string', description: 'split, strip: your own name for the new section, for later steps.' },
+            way: { type: 'string', enum: ['side_by_side', 'stacked'] },
+            side: { type: 'string', enum: ['top', 'bottom', 'left', 'right'] },
+            share: { type: 'number', description: 'strip: its part of the face, 0 to 1.' },
+            name: { type: 'string' }, notes: { type: 'string' }, color: { type: 'string' },
+            bump: { type: 'boolean', description: 'Stands taller than its slot.' },
+            tab: { type: 'boolean', description: 'A small name tab on its top-right edge.' },
+            label: { type: 'boolean', description: 'Its name in the middle.' },
+            live: { type: 'boolean', description: 'Follows its card as the card is now.' },
+            folded: { type: 'boolean' },
+            sizes: { type: 'array', items: { type: 'number' } },
+            cards: { type: 'array', items: { type: 'string' } },
+            to: { type: 'string' }, where: { type: 'string', enum: ['left', 'right', 'top', 'bottom', 'swap'] },
+          },
+        } },
+      },
+    },
+  },
 ]
 
 for (const t of TOOLS) if (t.name !== 'send_file') t.inputSchema.properties.doing = DOING
@@ -433,6 +470,7 @@ const OPS = {
   list_tools: 'tools', place_tool: 'place', make_3d_set: 'set3d', stand_in_3d_set: 'stand3d', make_gif: 'gif', make_movie: 'movie', add_to_rough_cut: 'cut',
   read_states: 'states', build_states: 'statesBuild', edit_states: 'statesEdit', run_states: 'statesRun',
   read_storyline: 'story', build_storyline: 'storyBuild', edit_storyline: 'storyEdit',
+  read_scene: 'scene', edit_scene: 'sceneEdit',
 }
 
 async function ask(op, args) {
@@ -578,8 +616,8 @@ async function handle(msg) {
       return ok({
         protocolVersion: params?.protocolVersion || '2024-11-05',
         capabilities: { tools: {} },
-        serverInfo: { name: 'vidbars', version: '1.5.0' },
-        instructions: 'VidBars is the artist\'s card canvas. You may read cards and decks, hand out the media on cards as files, and deal a deck of cards: new cards, results brought in from another tool, and linked cards of cards that are there. You can use the tools of VidBars: set one down (place_tool), build a 3D set from cards that hold models (make_3d_set, stand_in_3d_set), make a GIF or a movie of cards, add cards to a Rough Cut, draw storylines and trees (build_storyline, edit_storyline), and set up state machines in a States workspace (read_states, build_states, edit_states, run_states). You may also change what is there when the artist asks for it: edit, arrange, open and close decks, link, delete; each change is one undo, and undo takes your last one back. Do not change or delete anything the artist did not ask you to. Read before you deal or change, keep card text short, and tell the artist plainly what you did. The artist sees your pointer in VidBars with a bubble: give each request a few plain words in "doing". To use a card\'s picture or model with another tool, get_card_media then send_file to the upload address that tool gives; bring what comes back onto a card with deal_deck (media, and from: the cards it was made from).',
+        serverInfo: { name: 'vidbars', version: '1.6.0' },
+        instructions: 'VidBars is the artist\'s card canvas. You may read cards and decks, hand out the media on cards as files, and deal a deck of cards: new cards, results brought in from another tool, and linked cards of cards that are there. You can use the tools of VidBars: set one down (place_tool), build a 3D set from cards that hold models (make_3d_set, stand_in_3d_set), make a GIF or a movie of cards, add cards to a Rough Cut, draw storylines and trees (build_storyline, edit_storyline), lay out the face of a scene card (read_scene, edit_scene), and set up state machines in a States workspace (read_states, build_states, edit_states, run_states). You may also change what is there when the artist asks for it: edit, arrange, open and close decks, link, delete; each change is one undo, and undo takes your last one back. Do not change or delete anything the artist did not ask you to. Read before you deal or change, keep card text short, and tell the artist plainly what you did. The artist sees your pointer in VidBars with a bubble: give each request a few plain words in "doing". To use a card\'s picture or model with another tool, get_card_media then send_file to the upload address that tool gives; bring what comes back onto a card with deal_deck (media, and from: the cards it was made from).',
       })
     case 'ping': return ok({})
     case 'tools/list': return ok({ tools: TOOLS })
