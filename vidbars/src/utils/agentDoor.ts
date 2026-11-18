@@ -51,13 +51,18 @@ import { cardHoldsModel, dataKey, rowCards } from './area3dScene'
 import { useModelScaleStore } from '../store/tiltStore'
 import { freeNodeFootprint } from './canvasCreate'
 import { deckGifShots, makeDeckMovie, makeGif, useGifJob } from './makeGif'
-import { appendCards } from './roughCut'
+import { appendCards, clipLength, clipRow, clipStart, cutLength, MIN_CLIP, placed, splitClipAt, type RoughClip, type RoughCutData } from './roughCut'
+import { deckOfPicks } from './roughCutPicks'
 import {
   addItem, addWire, canWire, fireEvent, itemPorts, itemSize, patchItem, patchWire, planeBox, poke, removeFromSpace,
   setNow, setValue, spaceNumbers, spaceOf, spaceTruths, wireKind,
   type CalcOp, type Compare, type GenShape, type SpaceItem, type SpaceKind, type SpaceWire, type StateSpaceData,
 } from './stateSpace'
 import { viewportCenterInCanvas } from './canvasCreate'
+import { showDockedCardInViewer } from '../hooks/useDockedContent'
+import { collectDeckContent } from './contentTraversal'
+import { viewportVisualRect } from './viewportDocking'
+import { activeItemKey } from '../store/viewport3dStore'
 import { EFFECTS, type EffectKind } from './fx/effects'
 import { paramHelp } from './fx/paramHelp'
 import { createEffectCardGroup, effectChain } from './effectCards'
@@ -1931,6 +1936,142 @@ async function saveEffects(args: Json): Promise<Json> {
     : { downloaded: true, note: 'Handed to the browser\'s downloads; on the desktop app it is saved as a file you can deal as a card.' }
 }
 
+// ── Rough Cut: its clips ────────────────────────────────────────────────
+
+function cutNamed(v: unknown) {
+  const node = useFreeNodeStore.getState().nodes[String(v ?? '')]
+  if (!node?.roughCut) throw new Error('No Rough Cut with that id. list_tools gives them; place_tool rough_cut makes one.')
+  return { node, cut: node.roughCut }
+}
+
+const r2 = (n: number) => Math.round(n * 100) / 100
+
+function readCut(args: Json): Json {
+  const { node, cut } = cutNamed(args.toolId)
+  const clips = [...placed(cut.clips)].sort((a, b) => clipStart(a) - clipStart(b) || clipRow(a) - clipRow(b))
+  agentPoint(say(args, 'Reading the Rough Cut'), { x: node.x + node.width / 2, y: node.y + node.height / 2 })
+  return {
+    toolId: node.id, seconds: r2(cutLength(clips)),
+    ...(cut.frame ? { frame: { aspect: r2(cut.frame.aspect), fill: !!cut.frame.fill } } : {}),
+    clips: clips.map(c => ({
+      id: c.id, name: c.label, kind: c.kind, row: clipRow(c), start: r2(clipStart(c)), seconds: r2(clipLength(c)),
+      ...(c.kind === 'video' ? { in: r2(c.in), out: r2(c.out), sourceSeconds: r2(c.full) } : {}),
+      ...(c.pick ? { pick: true } : {}),
+    })),
+    note: 'start and seconds are on the timeline; row 0 is the top row, and where clips overlap the top row shows. in and out are the part of a movie in the cut.',
+  }
+}
+
+/** A Rough Cut's clips changed: split, trimmed, moved, picked, taken out; one undo. */
+async function editCut(args: Json): Promise<Json> {
+  const { node, cut } = cutNamed(args.toolId)
+  let clips: RoughClip[] = placed(cut.clips).map(c => ({ ...c }))
+  const need = (id: unknown) => { const c = clips.find(x => x.id === String(id)); if (!c) throw new Error(`No clip with id ${String(id)} (read_rough_cut gives them).`); return c }
+  for (const sp of Array.isArray(args.split) ? args.split as Json[] : []) {
+    const c = need(sp.id), at = num(sp.at)
+    if (at == null) throw new Error('split: give at, the time on the timeline in seconds.')
+    const next = splitClipAt(clips, c.id, at)
+    if (!next) throw new Error(`"${c.label}" cannot be split at ${at}: that is not inside it with ${MIN_CLIP} seconds on each side (it runs ${r2(clipStart(c))} to ${r2(clipStart(c) + clipLength(c))}).`)
+    clips = next
+  }
+  for (const q of Array.isArray(args.clips) ? args.clips as Json[] : []) {
+    const c = need(q.id)
+    if (typeof q.name === 'string') c.label = q.name
+    if (num(q.in) != null || num(q.out) != null) {
+      if (c.kind !== 'video') throw new Error(`"${c.label}" is not a movie: set seconds for how long it shows.`)
+      const i = Math.max(0, Math.min(c.full - MIN_CLIP, num(q.in) ?? c.in))
+      c.in = i; c.out = Math.max(i + MIN_CLIP, Math.min(c.full, num(q.out) ?? c.out))
+    }
+    if (num(q.seconds) != null) c.out = c.kind === 'video' ? Math.min(c.full, c.in + Math.max(MIN_CLIP, num(q.seconds)!)) : c.in + Math.max(MIN_CLIP, num(q.seconds)!)
+    if (num(q.start) != null) c.start = Math.max(0, num(q.start)!)
+    if (num(q.row) != null) c.row = Math.max(0, Math.min(7, Math.round(num(q.row)!)))
+    if (typeof q.pick === 'boolean') c.pick = q.pick || undefined
+  }
+  const remove = new Set(idsOf(args.remove))
+  for (const id of remove) need(id)
+  clips = clips.filter(c => !remove.has(c.id))
+  const order = idsOf(args.order)
+  if (order.length) {
+    // End to end on the top row, in the order given; clips not named keep their places.
+    let t = 0
+    for (const id of order) { const c = need(id); c.start = t; c.row = 0; t += clipLength(c) }
+  }
+  const patch: Partial<RoughCutData> = { clips }
+  if (args.frame === null) patch.frame = undefined
+  else if (args.frame && typeof args.frame === 'object') {
+    const f = args.frame as Json, aspect = num(f.aspect)
+    if (aspect == null || aspect <= 0) throw new Error('frame: aspect is width divided by height (16:9 is 1.78).')
+    patch.frame = { aspect, ...(f.fill ? { fill: true } : {}) }
+  }
+  await agentGlide(say(args, 'Cutting'), { x: node.x + node.width / 2, y: node.y + node.height / 2 })
+  useUndoCoordinator.getState().checkpoint()
+  useFreeNodeStore.getState().updateFreeNode(node.id, { roughCut: { ...cut, ...patch } })
+  return { ...readCut({ toolId: node.id, doing: say(args, 'Cutting') }), undo: 'One undo (Ctrl+Z) takes it back.' }
+}
+
+/** The picked clips, out as a deck docked under the Rough Cut. */
+function picksDeck(args: Json): Json {
+  const { node } = cutNamed(args.toolId)
+  agentPoint(say(args, 'Dealing the picks'), { x: node.x + node.width / 2, y: node.y + node.height })
+  const before = new Set(useBoardsStore.getState().groups.map(g => g.id))
+  const made = deckOfPicks(node.id)
+  if (!made) throw new Error('No clip is picked. edit_rough_cut sets pick on clips.')
+  return { cards: useBoardsStore.getState().groups.filter(g => !before.has(g.id)).map(g => ({ id: g.id, name: g.name })), note: 'A deck of the picked clips, docked under the Rough Cut. One undo (Ctrl+Z) takes it back.' }
+}
+
+// ── Viewers: what they show ─────────────────────────────────────────────
+
+const itemOut = (i: { kind: string; name?: string; mediaType?: string; url?: string; sourceId?: string }) =>
+  ({ ...(i.kind === 'media' ? { shows: i.mediaType } : { shows: 'text' }), ...(i.name ? { name: i.name } : {}) })
+
+function readViewer(args: Json): Json {
+  const w = useViewport3DStore.getState().windows[String(args.viewerId ?? '')]
+  if (!w) throw new Error('No Viewer with that id. list_tools gives them; show_in_viewer without viewerId makes one.')
+  agentPoint(say(args, 'Looking at the Viewer'), { x: w.x + w.width / 2, y: w.y + w.height / 2 })
+  return {
+    viewerId: w.id, place: { x: Math.round(w.x), y: Math.round(w.y), w: Math.round(w.width), h: Math.round(w.height) },
+    ...(w.activeItem ? { showing: itemOut(w.activeItem) } : { showing: null }),
+    ...(w.pin ? { pinnedToScreen: true } : {}),
+    note: 'A Viewer shows what the cards touching it hold; its arrows step through them.',
+  }
+}
+
+/** A Viewer set against a card's side, showing what the card holds. The card is not moved. */
+async function showInViewer(args: Json): Promise<Json> {
+  const [card] = cardsNamed([String(args.cardId ?? '')])
+  const bs = useBoardsStore.getState()
+  const zoom = useCanvasStore.getState().zoom
+  const items = collectDeckContent(card.id, bs.groups, bs.boards)
+  if (!items.length) throw new Error(`"${card.name}" holds nothing a Viewer can show (a picture, movie, model, sound or text).`)
+  const r = cardVisualRect(card, bs.boards, zoom)?.rect
+  if (!r) throw new Error(`"${card.name}" is not out on the canvas (it may be inside a closed deck).`)
+  const vs = () => useViewport3DStore.getState()
+  let id = args.viewerId != null ? String(args.viewerId) : ''
+  if (id && !vs().windows[id]) throw new Error('No Viewer with that id. list_tools gives them.')
+  if (id && vs().windows[id].pin) throw new Error('That Viewer is pinned to the screen: it shows only what is pinned beside it.')
+  const side = ['left', 'right', 'top', 'bottom'].includes(String(args.side)) ? String(args.side) : 'right'
+  await agentGlide(say(args, `Showing ${card.name} in a Viewer`), agentSpotOfCard(card.id))
+  useUndoCoordinator.getState().checkpoint()
+  if (!id) id = vs().addWindow(r.right, r.top)
+  // Flush against the card's side, as drawn (its header is a band of its own).
+  const w = vs().windows[id]
+  const v = viewportVisualRect(w, zoom)
+  const tx = side === 'right' ? r.left + (r.right - r.left) : side === 'left' ? r.left - v.width : r.left
+  const ty = side === 'bottom' ? r.bottom : side === 'top' ? r.top - v.height : r.top
+  vs().updateWindow(id, { x: w.x + (tx - v.x), y: w.y + (ty - v.y) })
+  showDockedCardInViewer(card.id)
+  const n = num(args.item)
+  if (n != null && items[Math.round(n)]) vs().setActiveItem(id, items[Math.round(n)])
+  const now = vs().windows[id]
+  const on = !!now.activeItem && items.some(i => activeItemKey(i) === activeItemKey(now.activeItem))
+  return {
+    viewerId: id, ...(now.activeItem ? { showing: itemOut(now.activeItem) } : {}),
+    holds: items.map((i, k) => ({ item: k, ...itemOut(i) })),
+    ...(on ? {} : { warning: 'The Viewer is beside the card but did not take it up; the artist may need to nudge it against the card.' }),
+    note: 'The Viewer was set against the card; the card was not moved. One undo (Ctrl+Z) takes it back.',
+  }
+}
+
 // ── The door ────────────────────────────────────────────────────────────
 
 const OPS: Record<string, (args: Json) => Json | Promise<Json>> = { list: listCards, read: readCards, decks: listDecks, media: cardMedia, deal: dealDeck,
@@ -1939,6 +2080,8 @@ const OPS: Record<string, (args: Json) => Json | Promise<Json>> = { list: listCa
   states: readStates, statesBuild: buildStates, statesEdit: editStates, statesRun: runStates,
   story: readStoryline, storyBuild: buildStoryline, storyEdit: editStoryline,
   scene: readScene, sceneEdit: editScene,
+  viewerRead: readViewer, viewerShow: showInViewer,
+  cutRead: readCut, cutEdit: editCut, cutPicks: picksDeck,
   fxList: listEffects, fxRead: readEffects, fxAdd: addEffects, fxEdit: editEffects, fxSave: saveEffects,
   set3dRead: read3dSet, set3dAdd: addTo3dSet, pathDraw: drawPath, pathEdit: editPath, pathPlay: playPaths,
 }

@@ -563,6 +563,58 @@ const TOOLS = [
     description: 'Save a card\'s picture as its effects make it, at full size, as a file. Gives the file\'s path; deal_deck (media file, from the card) brings it in as a card of its own.',
     inputSchema: { type: 'object', required: ['cardId'], properties: { cardId: { type: 'string' } } },
   },
+  {
+    name: 'read_rough_cut',
+    description: 'Read a Rough Cut: its clips in order with where each starts on the timeline, how long it runs, its row, the part of a movie in the cut, and which are picked. Read-only.',
+    inputSchema: { type: 'object', required: ['toolId'], properties: { toolId: { type: 'string', description: 'The Rough Cut\'s id, from list_tools.' } } },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'edit_rough_cut',
+    description: 'Cut in a Rough Cut, one undo. Done in this order: split clips at a time; change clips (trim in / out, how long a picture shows, where it starts, its row, picked, name); take clips out; lay clips end to end on the top row in an order; set the frame every shot is shown in. add_to_rough_cut brings cards in.',
+    inputSchema: {
+      type: 'object', required: ['toolId'],
+      properties: {
+        toolId: { type: 'string' },
+        split: { type: 'array', items: { type: 'object', required: ['id', 'at'], properties: { id: { type: 'string' }, at: { type: 'number', description: 'Seconds on the timeline, inside the clip.' } } } },
+        clips: { type: 'array', items: { type: 'object', required: ['id'], properties: {
+          id: { type: 'string' }, name: { type: 'string' },
+          in: { type: 'number', description: 'A movie: where the part in the cut begins, seconds into the movie.' },
+          out: { type: 'number', description: 'A movie: where it ends.' },
+          seconds: { type: 'number', description: 'How long it runs (a picture: how long it shows).' },
+          start: { type: 'number', description: 'Where it starts on the timeline, seconds.' },
+          row: { type: 'number', description: '0 is the top row.' },
+          pick: { type: 'boolean', description: 'Picked: goes out with deck_of_picks.' },
+        } } },
+        remove: { type: 'array', items: { type: 'string' } },
+        order: { type: 'array', items: { type: 'string' }, description: 'Clip ids: laid end to end on the top row in this order.' },
+        frame: { description: 'One frame for every shot: { aspect (width / height), fill }. null: each shot keeps its own shape.' },
+      },
+    },
+  },
+  {
+    name: 'deck_of_picks',
+    description: 'Deal a Rough Cut\'s picked clips out as a deck of cards docked under it, each with its trim. One undo.',
+    inputSchema: { type: 'object', required: ['toolId'], properties: { toolId: { type: 'string' } } },
+  },
+  {
+    name: 'read_viewer',
+    description: 'What a Viewer is showing, and where it is. Read-only.',
+    inputSchema: { type: 'object', required: ['viewerId'], properties: { viewerId: { type: 'string', description: 'From list_tools (type viewer).' } } },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'show_in_viewer',
+    description: 'Show a card in a Viewer: the Viewer (a new one, or viewerId) is set against the card\'s side and shows what the card holds, big: its picture, movie, 3D model or text. A deck named by its front card gives the Viewer every card in it to step through. The card is not moved. One undo.',
+    inputSchema: {
+      type: 'object', required: ['cardId'],
+      properties: {
+        cardId: { type: 'string' }, viewerId: { type: 'string', description: 'Leave out for a new Viewer.' },
+        side: { type: 'string', enum: ['right', 'left', 'top', 'bottom'], description: 'Which side of the card. Default right.' },
+        item: { type: 'number', description: 'Which thing the card holds to show, counted from 0 (the result lists them). Default: its face.' },
+      },
+    },
+  },
 ]
 
 for (const t of TOOLS) if (t.name !== 'send_file') t.inputSchema.properties.doing = DOING
@@ -575,6 +627,8 @@ const OPS = {
   read_storyline: 'story', build_storyline: 'storyBuild', edit_storyline: 'storyEdit',
   read_scene: 'scene', edit_scene: 'sceneEdit',
   list_effects: 'fxList', read_effects: 'fxRead', add_effects: 'fxAdd', edit_effects: 'fxEdit', save_effects: 'fxSave',
+  read_rough_cut: 'cutRead', edit_rough_cut: 'cutEdit', deck_of_picks: 'cutPicks',
+  read_viewer: 'viewerRead', show_in_viewer: 'viewerShow',
   read_3d_set: 'set3dRead', add_to_3d_set: 'set3dAdd', draw_path: 'pathDraw', edit_path: 'pathEdit', play_paths: 'pathPlay',
 }
 
@@ -721,8 +775,8 @@ async function handle(msg) {
       return ok({
         protocolVersion: params?.protocolVersion || '2024-11-05',
         capabilities: { tools: {} },
-        serverInfo: { name: 'vidbars', version: '1.8.0' },
-        instructions: 'VidBars is the artist\'s card canvas. You may read cards and decks, hand out the media on cards as files, and deal a deck of cards: new cards, results brought in from another tool, and linked cards of cards that are there. You can use the tools of VidBars: set one down (place_tool), build a 3D set from cards that hold models (make_3d_set, stand_in_3d_set), add shapes and cameras to it and draw paths for them to ride (read_3d_set, add_to_3d_set, draw_path, edit_path, play_paths), put effects on picture cards (list_effects, add_effects, edit_effects, save_effects), make a GIF or a movie of cards, add cards to a Rough Cut, draw storylines and trees (build_storyline, edit_storyline), lay out the face of a scene card (read_scene, edit_scene), and set up state machines in a States workspace (read_states, build_states, edit_states, run_states). You may also change what is there when the artist asks for it: edit, arrange, open and close decks, link, delete; each change is one undo, and undo takes your last one back. Do not change or delete anything the artist did not ask you to. Read before you deal or change, keep card text short, and tell the artist plainly what you did. The artist sees your pointer in VidBars with a bubble: give each request a few plain words in "doing". To use a card\'s picture or model with another tool, get_card_media then send_file to the upload address that tool gives; bring what comes back onto a card with deal_deck (media, and from: the cards it was made from).',
+        serverInfo: { name: 'vidbars', version: '1.9.0' },
+        instructions: 'VidBars is the artist\'s card canvas. You may read cards and decks, hand out the media on cards as files, and deal a deck of cards: new cards, results brought in from another tool, and linked cards of cards that are there. You can use the tools of VidBars: set one down (place_tool), build a 3D set from cards that hold models (make_3d_set, stand_in_3d_set), add shapes and cameras to it and draw paths for them to ride (read_3d_set, add_to_3d_set, draw_path, edit_path, play_paths), put effects on picture cards (list_effects, add_effects, edit_effects, save_effects), show a card big in a Viewer (show_in_viewer), make a GIF or a movie of cards, add cards to a Rough Cut and cut there (read_rough_cut, edit_rough_cut, deck_of_picks), draw storylines and trees (build_storyline, edit_storyline), lay out the face of a scene card (read_scene, edit_scene), and set up state machines in a States workspace (read_states, build_states, edit_states, run_states). You may also change what is there when the artist asks for it: edit, arrange, open and close decks, link, delete; each change is one undo, and undo takes your last one back. Do not change or delete anything the artist did not ask you to. Read before you deal or change, keep card text short, and tell the artist plainly what you did. The artist sees your pointer in VidBars with a bubble: give each request a few plain words in "doing". To use a card\'s picture or model with another tool, get_card_media then send_file to the upload address that tool gives; bring what comes back onto a card with deal_deck (media, and from: the cards it was made from).',
       })
     case 'ping': return ok({})
     case 'tools/list': return ok({ tools: TOOLS })
