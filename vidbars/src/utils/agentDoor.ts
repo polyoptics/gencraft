@@ -74,6 +74,8 @@ import { dockCardsOnRail, placeCard } from './railCards'
 import { runRail, stopRail, isRailRunning } from './fx/railRun'
 import { railComboCount } from './fx/railChain'
 import { useRailRunStore } from '../store/railRunStore'
+import { cardFeed, tagsOf } from './cardBacks'
+import { dockedCards } from './filmShots'
 import { saveFailure, saveStripResult } from './fx/saveStrip'
 import { useNotesStore, useNotesUi, newNoteId, type Curve, type CurvePoint, type PathRider } from '../store/notesStore'
 import { curvesOf, parentOf } from './curveParent'
@@ -2351,6 +2353,126 @@ async function runStrip(args: Json): Promise<Json> {
   return { ...out, ...(isRailRunning(id) ? { stillRunning: 'It goes on. read_loop_strip says how far it is and what has landed.' } : {}) }
 }
 
+// ── Prompts: Card Prompts and the Prompt Pad ────────────────────────────
+
+function promptsNamed(v: unknown) {
+  const node = useFreeNodeStore.getState().nodes[String(v ?? '')]
+  if (node?.type !== 'promptCards' && node?.type !== 'prompt') throw new Error('No Card Prompts or Prompt Pad with that id. list_tools gives them; place_tool card_prompts makes one.')
+  return node
+}
+
+/** A Card Prompts window's tabs, the one in use holding what is written now. */
+function promptTabs(node: FreeNodeData): { tabs: { name: string; text: string }[]; at: number } {
+  const text = node.text ?? ''
+  const tabs = node.promptTabs?.length ? node.promptTabs : [{ name: 'Prompt 1', text }]
+  const at = Math.min(Math.max(0, node.promptTab ?? 0), tabs.length - 1)
+  return { tabs: tabs.map((t, i) => i === at ? { ...t, text } : t), at }
+}
+
+function promptsOut(node: FreeNodeData): Json {
+  const mid = { toolId: node.id, name: node.label }
+  if (node.type === 'prompt') {
+    return {
+      ...mid, type: 'Prompt Pad', text: node.text ?? '',
+      ...(node.promptKit ? { words: node.promptKit.sections.map(x => ({ group: x.label, words: x.tags.map(t => t.text) })), saved: node.promptKit.saved.map(x => ({ name: x.label, text: x.text })) } : {}),
+    }
+  }
+  const { tabs, at } = promptTabs(node)
+  const { groups, boards } = useBoardsStore.getState()
+  const feed = cardFeed(node, useFreeNodeStore.getState().nodes, groups, boards)
+  const cards = feed.ids.map(id => groups.find(g => g.id === id)).filter((g): g is ProjectGroup => !!g)
+  return {
+    ...mid, type: 'Card Prompts',
+    tabs: tabs.map((t, i) => ({ tab: i + 1, name: t.name, text: t.text, ...(i === at ? { inUse: true } : {}) })),
+    cards: cards.slice(0, 60).map(g => ({ id: g.id, name: g.name, words: (g.details ?? []).map(d => ({ row: d.name, words: tagsOf(detailShown(groups, d).text) })).filter(r => r.words.length) })),
+    ...(cards.length > 60 ? { more: cards.length - 60 } : {}),
+    note: 'Its words are the backs of the cards set against it (or shown by a Card Browser stuck to it): each row a group of words. The tabs are plain notepads; a card\'s words change with edit_cards (details).',
+  }
+}
+
+function readPrompts(args: Json): Json {
+  const node = promptsNamed(args.toolId)
+  agentPoint(say(args, 'Reading the prompts'), { x: node.x + node.width / 2, y: node.y + node.height / 2 })
+  return promptsOut(node)
+}
+
+/** What is written in a prompt window: its tabs, their names, the one in use. One undo. */
+async function editPrompts(args: Json): Promise<Json> {
+  const node = promptsNamed(args.toolId)
+  if (node.pin) throw new Error('This window is pinned. The artist unpins it.')
+  const spot = { x: node.x + node.width / 2, y: node.y + node.height / 2 }
+  const feed = idsOf(args.feed).length ? cardsNamed(idsOf(args.feed)) : []
+  if (node.type === 'prompt') {
+    if (feed.length) throw new Error('A Prompt Pad keeps its own words. Cards feed a Card Prompts window.')
+    if (typeof args.text !== 'string') throw new Error('A Prompt Pad takes text.')
+    await agentGlide(say(args, 'Writing the prompt'), spot)
+    useUndoCoordinator.getState().checkpoint()
+    useFreeNodeStore.getState().updateFreeNode(node.id, { text: args.text })
+    return { ...promptsOut(promptsNamed(node.id)), undo: 'One undo (Ctrl+Z) takes it back.' }
+  }
+  const now = promptTabs(node)
+  const list = now.tabs.map(t => ({ ...t }))
+  let at = now.at
+  const find = (v: unknown): number => {
+    const i = typeof v === 'number' ? v - 1 : list.findIndex(t => t.name.toLowerCase() === String(v ?? '').trim().toLowerCase())
+    if (!list[i]) throw new Error(`No tab "${String(v)}". Tabs: ${list.map((t, k) => `${k + 1} ${t.name}`).join(', ')}.`)
+    return i
+  }
+  const want = Array.isArray(args.tabs) ? (args.tabs as Json[]) : []
+  const add = Array.isArray(args.addTabs) ? (args.addTabs as Json[]) : []
+  if (typeof args.text === 'string') list[at].text = args.text
+  for (const w of want) {
+    const i = find(w.tab)
+    if (typeof w.text === 'string') list[i].text = w.text
+    if (typeof w.name === 'string' && w.name.trim()) list[i].name = clip(w.name.trim(), 40)
+  }
+  if (list.length + add.length > 24) throw new Error('At most 24 tabs.')
+  for (const w of add) {
+    const names = new Set(list.map(t => t.name))
+    let n = list.length + 1
+    while (names.has(`Prompt ${n}`)) n++
+    list.push({ name: typeof w.name === 'string' && w.name.trim() ? clip(w.name.trim(), 40) : `Prompt ${n}`, text: typeof w.text === 'string' ? w.text : '' })
+    at = list.length - 1
+  }
+  const remove = (Array.isArray(args.removeTabs) ? args.removeTabs as unknown[] : []).map(find)
+  if (remove.length >= list.length) throw new Error('A window keeps at least one tab.')
+  if (args.use != null) at = find(args.use)
+  if (typeof args.text !== 'string' && !want.length && !add.length && !remove.length && args.use == null && !feed.length) throw new Error('Nothing to change. Give text, tabs, addTabs, removeTabs, use or feed.')
+  const keepName = list[at].name
+  const kept = list.filter((_, i) => !remove.includes(i))
+  at = Math.max(0, kept.findIndex(t => t.name === keepName))
+  await agentGlide(say(args, 'Writing the prompt'), spot)
+  useUndoCoordinator.getState().checkpoint()
+  useFreeNodeStore.getState().updateFreeNode(node.id, { promptTabs: kept, promptTab: at, text: kept[at].text })
+  if (feed.length) {
+    // Set against the window's left, as its own "Prompt card" button does:
+    // left of the cards already there, level with its top, in the order given.
+    const zoom = useCanvasStore.getState().zoom
+    const before = useBoardsStore.getState()
+    const moving = new Set(feed.map(g => g.id))
+    let right = node.x, top = node.y
+    for (const g of dockedCards(node, before.groups, before.boards)) {
+      const v = moving.has(g.id) ? null : cardVisualRect(g, before.boards, zoom)?.rect
+      if (!v || v.bottom < node.y || v.top > node.y + node.height * 0.25 || v.left >= right) continue
+      right = v.left; top = v.top
+    }
+    let gap = (right === node.x ? 4 : 12) / zoom
+    for (const g of [...feed].reverse()) {
+      const bs = useBoardsStore.getState()
+      const v = cardVisualRect(bs.groups.find(x => x.id === g.id)!, bs.boards, zoom)?.rect
+      if (!v) continue
+      // (With every card of a closed deck it fronts.)
+      const dx = right - gap - v.right, dy = top - v.top
+      const all = new Set(expandWithNestedMembers([g.id], bs.groups))
+      useBoardsStore.setState(st => ({ groups: st.groups.map(x => all.has(x.id) ? { ...x, originX: x.originX + dx, originY: x.originY + dy } : x) }))
+      right = right - gap - (v.right - v.left)
+      gap = 12 / zoom
+    }
+    await new Promise(r => setTimeout(r, 200))
+  }
+  return { ...promptsOut(promptsNamed(node.id)), undo: 'One undo (Ctrl+Z) takes it back.' }
+}
+
 // ── The door ────────────────────────────────────────────────────────────
 
 const OPS: Record<string, (args: Json) => Json | Promise<Json>> = { list: listCards, read: readCards, decks: listDecks, media: cardMedia, deal: dealDeck,
@@ -2360,6 +2482,7 @@ const OPS: Record<string, (args: Json) => Json | Promise<Json>> = { list: listCa
   story: readStoryline, storyBuild: buildStoryline, storyEdit: editStoryline,
   scene: readScene, sceneEdit: editScene,
   viewRead: readView, viewMove: moveView,
+  promptsRead: readPrompts, promptsEdit: editPrompts,
   stripRead: readStrip, stripEdit: editStrip, stripRun: runStrip,
   viewerRead: readViewer, viewerShow: showInViewer,
   cutRead: readCut, cutEdit: editCut, cutPicks: picksDeck,
