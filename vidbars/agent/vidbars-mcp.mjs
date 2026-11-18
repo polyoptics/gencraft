@@ -7,8 +7,10 @@
 // and no outside service. All it does is pass three requests to the open
 // VidBars window (POST /api/agent on the dev server, vite.config.ts →
 // src/utils/agentDoor.ts): list cards and decks, read cards, hand out the
-// media on cards as files, and deal a deck of cards (new ones, results
-// brought in from outside, and linked cards of ones that are there).
+// media on cards as files, deal a deck of cards (new ones, results brought
+// in from outside, and linked cards of ones that are there), and, when the
+// artist asks, change what is there (edit, arrange, decks, links, delete),
+// one undo each.
 //
 // Brian 2026-11-18: widened so references and elements can go out of
 // VidBars to another tool (send_file posts a card's file to an upload
@@ -64,6 +66,7 @@ const TOOLS = [
         type: { type: 'string', enum: CARD_TYPES, description: 'Only cards of this type.' },
         search: { type: 'string', description: 'Only cards whose name or text contains this.' },
         selectedOnly: { type: 'boolean', description: 'Only the cards selected in VidBars right now.' },
+        places: { type: 'boolean', description: 'Also say where each card lies on the canvas (x, y, w, h in canvas units), for arrange_cards.' },
       },
     },
     annotations: { readOnlyHint: true },
@@ -151,11 +154,77 @@ const TOOLS = [
       },
     },
   },
+  {
+    name: 'edit_cards',
+    description: 'Change cards that are already on the canvas: name, header, text, type, colour, the detail rows on the back. Only what you give changes. Editing a linked card edits the card it shows, everywhere it is shown. Only when the artist asked for the change. One undo takes the whole edit back.',
+    inputSchema: {
+      type: 'object', required: ['cards'],
+      properties: { cards: { type: 'array', minItems: 1, maxItems: 40, items: {
+        type: 'object', required: ['id'],
+        properties: {
+          id: { type: 'string' },
+          name: { type: 'string' }, header: { type: 'string' }, text: { type: 'string' },
+          type: { type: 'string', enum: CARD_TYPES },
+          color: { type: 'string', description: '#rrggbb' },
+          details: { type: 'array', description: 'Rows for its back. A row named like one it has takes the new value; a new name adds a row; value null removes the row.',
+            items: { type: 'object', required: ['name'], properties: { name: { type: 'string' }, value: { type: ['string', 'null'] } } } },
+        },
+      } } },
+    },
+  },
+  {
+    name: 'arrange_cards',
+    description: 'Move cards that are on the canvas into one touching row (an open deck), in the order given; with close, shut the row as a closed deck on the first card. Where: at (the row\'s top-left in canvas units, see list_cards places), beside (right of that card), or neither for an empty spot of the view. A card inside a closed deck is taken out of it; a closed deck named by its front card moves whole. Only when the artist asked. One undo takes it back.',
+    inputSchema: {
+      type: 'object', required: ['ids'],
+      properties: {
+        ids: { type: 'array', items: { type: 'string' }, minItems: 1, description: 'Card ids from list_cards.' },
+        at: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } } },
+        beside: { type: 'string', description: 'A card id: the row starts touching its right side.' },
+        close: { type: 'boolean', description: 'Shut the row as a closed deck.' },
+      },
+    },
+  },
+  {
+    name: 'set_deck',
+    description: 'Open a closed deck (state open: name any one card of it), or close cards as a deck (state stacked or fanned: name all its cards, the front card first; or one card of a deck that is already closed, to switch it). One undo takes it back.',
+    inputSchema: {
+      type: 'object', required: ['ids', 'state'],
+      properties: { ids: { type: 'array', items: { type: 'string' }, minItems: 1, description: 'Card ids from list_cards.' }, state: { type: 'string', enum: ['open', 'stacked', 'fanned'] } },
+    },
+  },
+  {
+    name: 'link_cards',
+    description: 'Link one card to others (the link is held by from and shows on both), or with remove, take those links away. This is a link between different cards; a linked card (the same card shown twice) is dealt with deal_deck linkTo. One undo takes it back.',
+    inputSchema: {
+      type: 'object', required: ['from', 'to'],
+      properties: { from: { type: 'string' }, to: { type: 'array', items: { type: 'string' }, minItems: 1, description: 'Card ids from list_cards.' }, remove: { type: 'boolean' } },
+    },
+  },
+  {
+    name: 'delete_cards',
+    description: 'Delete cards from the canvas. A closed deck named by its front card is deleted whole. Only when the artist plainly asked for these cards to be deleted; say which you deleted. One undo brings them back.',
+    inputSchema: { type: 'object', required: ['ids'], properties: { ids: { type: 'array', items: { type: 'string' }, minItems: 1, description: 'Card ids from list_cards.' } } },
+    annotations: { destructiveHint: true },
+  },
+  {
+    name: 'select_cards',
+    description: 'Select cards in VidBars, so the artist sees which ones you mean. An empty list clears the selection. Changes nothing else.',
+    inputSchema: { type: 'object', required: ['ids'], properties: { ids: { type: 'array', items: { type: 'string' } } } },
+  },
+  {
+    name: 'undo',
+    description: 'Take back the last change on the canvas, exactly as the artist\'s Ctrl+Z: use it right after a change of yours that was wrong or that the artist does not want.',
+    inputSchema: { type: 'object', properties: {} },
+  },
 ]
 
 for (const t of TOOLS) if (t.name !== 'send_file') t.inputSchema.properties.doing = DOING
 
-const OPS = { list_cards: 'list', read_cards: 'read', list_decks: 'decks' }
+const OPS = {
+  list_cards: 'list', read_cards: 'read', list_decks: 'decks',
+  edit_cards: 'edit', arrange_cards: 'arrange', set_deck: 'deck', link_cards: 'link', delete_cards: 'delete', select_cards: 'select', undo: 'undo',
+}
 
 async function ask(op, args) {
   let res
@@ -300,8 +369,8 @@ async function handle(msg) {
       return ok({
         protocolVersion: params?.protocolVersion || '2024-11-05',
         capabilities: { tools: {} },
-        serverInfo: { name: 'vidbars', version: '1.1.0' },
-        instructions: 'VidBars is the artist\'s card canvas. You may read cards and decks, hand out the media on cards as files, and deal a deck of cards: new cards, results brought in from another tool, and linked cards of cards that are there. Read before you deal, keep card text short, and tell the artist plainly what you dealt. The artist sees your pointer in VidBars with a bubble: give each request a few plain words in "doing". To use a card\'s picture or model with another tool, get_card_media then send_file to the upload address that tool gives; bring what comes back onto a card with deal_deck (media, and from: the cards it was made from).',
+        serverInfo: { name: 'vidbars', version: '1.2.0' },
+        instructions: 'VidBars is the artist\'s card canvas. You may read cards and decks, hand out the media on cards as files, and deal a deck of cards: new cards, results brought in from another tool, and linked cards of cards that are there. You may also change what is there when the artist asks for it: edit, arrange, open and close decks, link, delete; each change is one undo, and undo takes your last one back. Do not change or delete anything the artist did not ask you to. Read before you deal or change, keep card text short, and tell the artist plainly what you did. The artist sees your pointer in VidBars with a bubble: give each request a few plain words in "doing". To use a card\'s picture or model with another tool, get_card_media then send_file to the upload address that tool gives; bring what comes back onto a card with deal_deck (media, and from: the cards it was made from).',
       })
     case 'ping': return ok({})
     case 'tools/list': return ok({ tools: TOOLS })

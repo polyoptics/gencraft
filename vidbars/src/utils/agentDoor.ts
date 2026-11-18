@@ -15,16 +15,21 @@
 //     to flip through, keep or delete. One undo takes the whole deal back.
 //     A dealt card is a new card (words, media that came in from outside)
 //     or a new LINKED card of one that is there (utils/linkedCards).
-// It never edits, moves or deletes a card that is already there: there is
-// no request for it, so no way to ask. (Brian 2026-11-18: widened for
-// passing references out and taking results back as cards.)
+//   • CHANGE what is there, when the artist asks (Brian 2026-11-18, "I
+//     definitely want that loosened for the agent"): edit cards' words,
+//     type, colour and details (edit); move cards into a row or a closed
+//     deck (arrange); open or close a deck (deck); link cards (link);
+//     delete cards (delete); select cards (select); and take back the last
+//     change (undo). Each change is one undo step.
+// (Brian 2026-11-18: widened for passing references out and taking results
+// back as cards, then for working on the canvas as he does.)
 
 import { useBoardsStore, type BoardData, type ProjectGroup } from '../store/boardsStore'
 import { useCanvasStore } from '../store/canvasStore'
 import { useFreeNodeStore } from '../store/freeNodeStore'
 import { useViewport3DStore } from '../store/viewport3dStore'
 import { useUndoCoordinator } from '../store/undoCoordinator'
-import { canvasObstacleGroups, cardVisualRect, cardsTouch, isHiddenDeckMember } from '../hooks/useCardDecks'
+import { canvasObstacleGroups, cardVisualRect, cardsTouch, expandWithNestedMembers, isHiddenDeckMember } from '../hooks/useCardDecks'
 import { cardFaceSize, createMediaCard, createTextCard } from './cardGrid'
 import { linkedHeight, makeLinkedCard, masterOf } from './linkedCards'
 import { getMedia } from './mediaStore'
@@ -51,6 +56,12 @@ const say = (args: Json, ours: string) => clip(typeof args.doing === 'string' &&
 
 // ── Reading ─────────────────────────────────────────────────────────────
 
+/** Where a card lies on the canvas: its left, top, width and height, canvas units. */
+function placeOf(g: ProjectGroup): Json | undefined {
+  const r = cardVisualRect(g, useBoardsStore.getState().boards, useCanvasStore.getState().zoom)?.rect
+  return r ? { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.right - r.left), h: Math.round(r.bottom - r.top) } : undefined
+}
+
 /** Every card, briefly: enough to pick which ones to read. */
 function listCards(args: Json): Json {
   const { groups, selectedGroupIds } = useBoardsStore.getState()
@@ -74,6 +85,7 @@ function listCards(args: Json): Json {
       ...(g.linkOf ? { showingOf: byId.get(g.linkOf)?.name ?? g.linkOf } : {}),
       ...(isHiddenDeckMember(g) ? { inDeckOf: byId.get(g.deckAnchorId!)?.name ?? g.deckAnchorId } : {}),
       ...(g.linkedGroupIds?.length ? { links: g.linkedGroupIds.length } : {}),
+      ...(args.places && !isHiddenDeckMember(g) ? { place: placeOf(g) } : {}),
     }))
   agentPoint(say(args, 'Looking over the cards'), cards.length === 1 ? agentSpotOfCard(cards[0].id) : undefined)
   return { count: cards.length, cards }
@@ -432,9 +444,216 @@ async function dealDeck(args: Json): Promise<Json> {
   }
 }
 
+// ── Changing what is there ──────────────────────────────────────────────
+
+const TOUCH_GAP = 8
+
+const idsOf = (v: unknown): string[] => Array.isArray(v) ? [...new Set(v.map(String))] : []
+
+/** The cards `ids` name, or an error naming the ones that are not there. */
+function cardsNamed(ids: string[]): ProjectGroup[] {
+  const groups = useBoardsStore.getState().groups
+  const missing = ids.filter(id => !groups.some(g => g.id === id))
+  if (missing.length) throw new Error(`No card with id ${missing.join(', ')}.`)
+  if (!ids.length) throw new Error('No cards named.')
+  return ids.map(id => groups.find(g => g.id === id)!)
+}
+
+const names = (gs: ProjectGroup[]) => gs.length === 1 ? gs[0].name : `${gs.length} cards`
+
+/** Edit cards: name, header, text, type, colour, detail rows. Only what is
+ *  given changes. A linked card's edit is its master's too (linkedCards). */
+async function editCards(args: Json): Promise<Json> {
+  const list = Array.isArray(args.cards) ? args.cards as Json[] : []
+  const cards = cardsNamed(list.map(c => String(c.id ?? '')))
+  for (const c of list) {
+    if (c.type != null && !TYPE_BY_NAME.has(String(c.type).toLowerCase().trim())) throw new Error(`No card type "${String(c.type)}".`)
+    if (c.color != null && !/^#[0-9a-f]{6}$/i.test(String(c.color))) throw new Error('A colour is given as #rrggbb.')
+  }
+  await agentGlide(say(args, `Editing ${names(cards)}`), agentSpotOfCard(cards[0].id))
+  useUndoCoordinator.getState().checkpoint()
+  for (const c of list) {
+    const id = String(c.id)
+    const bs = useBoardsStore.getState()
+    if (typeof c.name === 'string' && c.name.trim()) bs.renameGroup(id, c.name.trim())
+    if (typeof c.header === 'string') bs.setGroupCardHeaderText(id, c.header)
+    if (typeof c.text === 'string') bs.setGroupCardText(id, c.text)
+    if (c.type != null) bs.setGroupCardType(id, TYPE_BY_NAME.get(String(c.type).toLowerCase().trim())!)
+    if (c.color != null) bs.setGroupColor(id, String(c.color))
+    const given = (Array.isArray(c.details) ? c.details as Json[] : [])
+      .map(d => ({ name: String(d.name ?? '').trim(), value: d.value == null ? null : String(d.value) }))
+      .filter(d => d.name)
+    if (given.length) {
+      // A row named like one it has takes the value (null: the row goes); the rest are added.
+      let rows: CardDetail[] = [...(useBoardsStore.getState().groups.find(g => g.id === id)?.details ?? [])]
+      for (const d of given) {
+        const k = rows.findIndex(r => r.name.trim().toLowerCase() === d.name.toLowerCase())
+        if (d.value == null) { if (k >= 0) rows = rows.filter((_, i) => i !== k) }
+        else if (k >= 0) rows[k] = { ...rows[k], value: d.value }
+        else rows.push({ id: newDetailId(), name: d.name, value: d.value })
+      }
+      useBoardsStore.getState().setGroupDetails(id, rows)
+    }
+  }
+  return { edited: cards.length, cardIds: cards.map(g => g.id), note: 'One undo (Ctrl+Z) takes the edit back.' }
+}
+
+/** Move cards into one touching row (an open deck), in the order given, and
+ *  with `close` shut it as a deck on the first. Where: `at` (the row's top-
+ *  left, canvas units), right of card `beside`, or an empty spot of the
+ *  view. A card inside a closed deck is taken out of it; a closed deck
+ *  named by its front card moves whole. */
+async function arrangeCards(args: Json): Promise<Json> {
+  const ids = idsOf(args.ids)
+  const cards = cardsNamed(ids)
+  const zoom = useCanvasStore.getState().zoom
+  const face = cardFaceSize(zoom)
+  const rectOf = (id: string) => {
+    const bs = useBoardsStore.getState()
+    const g = bs.groups.find(x => x.id === id)
+    return (g && cardVisualRect(g, bs.boards, zoom)?.rect) || null
+  }
+  let left: number, top: number
+  const at = args.at as { x?: unknown; y?: unknown } | undefined
+  if (at && Number.isFinite(Number(at.x)) && Number.isFinite(Number(at.y))) { left = Number(at.x); top = Number(at.y) }
+  else if (args.beside != null) {
+    const b = cardsNamed([String(args.beside)])[0]
+    const r = rectOf(b.id)
+    if (!r) throw new Error(`${b.name} is not laid out on the canvas.`)
+    left = r.right + TOUCH_GAP; top = r.top
+  } else {
+    const spot = freeSpot(ids.length, face, zoom)
+    left = spot.cx - face.w / 2; top = spot.cy - face.h / 2
+  }
+  await agentGlide(say(args, `Moving ${names(cards)}`), { x: left + face.w * 0.35, y: top + face.h * 0.4 })
+  useUndoCoordinator.getState().checkpoint()
+  let x = left
+  for (const id of ids) {
+    let g = useBoardsStore.getState().groups.find(o => o.id === id)!
+    if (isHiddenDeckMember(g)) {
+      // Out of its closed deck, for good (no slot kept for it to go back to).
+      useBoardsStore.getState().extractFromDeck(id, g.originX, g.originY)
+      useBoardsStore.getState().severDeckTether(id)
+      g = useBoardsStore.getState().groups.find(o => o.id === id)!
+    }
+    const r = rectOf(id)
+    if (!r) continue
+    const dx = x - r.left, dy = top - r.top
+    // A closed deck's cards go with its front card.
+    const all = expandWithNestedMembers([id], useBoardsStore.getState().groups)
+    const groups = useBoardsStore.getState().groups
+    useBoardsStore.getState().setGroupPosBatch(all.flatMap(mid => {
+      const m = groups.find(o => o.id === mid)
+      return m ? [{ groupId: mid, originX: m.originX + dx, originY: m.originY + dy }] : []
+    }))
+    x += (r.right - r.left) + TOUCH_GAP
+  }
+  if (args.close && ids.length > 1) {
+    useBoardsStore.getState().setDeckState(ids, 'stacked', { asGiven: true })
+    useBoardsStore.getState().setRowPrimary(ids[0], ids)
+  }
+  // What the row now lies over, so it can be put somewhere clearer.
+  const movedSet = new Set(ids.flatMap(id => expandWithNestedMembers([id], useBoardsStore.getState().groups)))
+  const row = { left, right: x - TOUCH_GAP, top, bottom: Math.max(...ids.map(id => rectOf(id)?.bottom ?? top)) }
+  const over = canvasObstacleGroups(useBoardsStore.getState().groups, movedSet).filter(g => {
+    const r = rectOf(g.id)
+    return r && r.left < row.right - 1 && r.right > row.left + 1 && r.top < row.bottom - 1 && r.bottom > row.top + 1
+  }).map(g => g.name)
+  return {
+    moved: ids.length, cardIds: ids, place: { x: Math.round(left), y: Math.round(top) },
+    ...(args.close && ids.length > 1 ? { closedDeck: true } : {}),
+    ...(over.length ? { liesOver: over, warning: 'The row lies over other cards. Undo and choose a clearer place, or leave at and beside out for an empty spot.' } : {}),
+    note: 'One undo (Ctrl+Z) takes the move back.',
+  }
+}
+
+/** Open a closed deck, or close cards as a deck (stacked or fanned). */
+async function setDeck(args: Json): Promise<Json> {
+  const state = String(args.state ?? '')
+  if (state !== 'open' && state !== 'stacked' && state !== 'fanned') throw new Error('state is open, stacked or fanned.')
+  const ids = idsOf(args.ids)
+  const cards = cardsNamed(ids)
+  const groups = useBoardsStore.getState().groups
+  // A closed deck named by one of its cards is the whole deck.
+  let all = ids
+  if (ids.length === 1) {
+    let front = cards[0]
+    for (let n = 0; n < 20 && isHiddenDeckMember(front); n++) front = groups.find(g => g.id === front.deckAnchorId) ?? front
+    all = expandWithNestedMembers([front.id], groups)
+    if (all.length < 2) throw new Error(`${cards[0].name} is not in a closed deck. To close cards as a deck, name them all.`)
+  }
+  await agentGlide(say(args, state === 'open' ? 'Opening a deck' : 'Closing a deck'), agentSpotOfCard(all[0]))
+  useUndoCoordinator.getState().checkpoint()
+  useBoardsStore.getState().setDeckState(all, state, state === 'open' ? undefined : { asGiven: true })
+  return { state, cardIds: all, note: 'One undo (Ctrl+Z) takes it back.' }
+}
+
+/** Link card `from` to cards `to` (or with `remove`, unlink them). The link
+ *  is held by `from`. */
+async function linkCards(args: Json): Promise<Json> {
+  const from = cardsNamed([String(args.from ?? '')])[0]
+  const to = cardsNamed(idsOf(args.to).filter(id => id !== from.id))
+  await agentGlide(say(args, `${args.remove ? 'Unlinking' : 'Linking'} ${from.name}`), agentSpotOfCard(from.id))
+  useUndoCoordinator.getState().checkpoint()
+  for (const t of to) {
+    if (args.remove) useBoardsStore.getState().unlinkGroups(from.id, t.id)
+    else useBoardsStore.getState().linkGroups(from.id, t.id)
+  }
+  return { [args.remove ? 'unlinked' : 'linked']: to.length, from: from.id, note: 'One undo (Ctrl+Z) takes it back.' }
+}
+
+/** Delete cards. A closed deck named by its front card goes whole, as the
+ *  Delete key does it. */
+async function deleteCards(args: Json): Promise<Json> {
+  const ids = idsOf(args.ids)
+  const cards = cardsNamed(ids)
+  const { groups } = useBoardsStore.getState()
+  const closed = cards.filter(g => !isHiddenDeckMember(g) && (g.deckState === 'stacked' || g.deckState === 'fanned')).map(g => g.id)
+  const doomed = [...new Set([...ids, ...expandWithNestedMembers(closed, groups)])]
+  await agentGlide(say(args, `Deleting ${doomed.length === 1 ? cards[0].name : `${doomed.length} cards`}`), agentSpotOfCard(ids[0]))
+  useUndoCoordinator.getState().checkpoint()
+  const gone: string[] = []
+  for (const gid of doomed) {
+    const bs = useBoardsStore.getState()
+    if (bs.groups.length <= 1) break // the canvas keeps at least one card
+    const g = bs.groups.find(gr => gr.id === gid)
+    if (!g) continue
+    // A card in a closed deck leaves it first, so the deck closes up behind it.
+    if (isHiddenDeckMember(g) && !doomed.includes(g.deckAnchorId!)) {
+      bs.extractFromDeck(gid, g.originX, g.originY)
+      useBoardsStore.getState().severDeckTether(gid)
+    }
+    g.boardIds.forEach(bid => useBoardsStore.getState().deleteBoard(bid))
+    useBoardsStore.getState().deleteGroup(gid)
+    gone.push(gid)
+  }
+  const sel = useBoardsStore.getState().selectedGroupIds.filter(id => !gone.includes(id))
+  useBoardsStore.getState().setSelectedGroups(sel)
+  return { deleted: gone.length, names: doomed.map(id => groups.find(g => g.id === id)?.name ?? id), note: 'One undo (Ctrl+Z) brings them back.' }
+}
+
+/** Select cards, so the artist sees which ones are meant. */
+function selectCards(args: Json): Json {
+  const ids = idsOf(args.ids)
+  const cards = ids.length ? cardsNamed(ids) : []
+  useBoardsStore.getState().setSelectedGroups(ids)
+  agentPoint(say(args, ids.length ? `Selecting ${names(cards)}` : 'Clearing the selection'), ids.length ? agentSpotOfCard(ids[0]) : undefined)
+  return { selected: ids.length }
+}
+
+/** Take back the last change on the canvas (the artist's Ctrl+Z). */
+function undoLast(args: Json): Json {
+  if (!useUndoCoordinator.getState().canUndo) throw new Error('Nothing to undo.')
+  agentPoint(say(args, 'Undoing the last change'))
+  useUndoCoordinator.getState().undo()
+  return { undone: true }
+}
+
 // ── The door ────────────────────────────────────────────────────────────
 
-const OPS: Record<string, (args: Json) => Json | Promise<Json>> = { list: listCards, read: readCards, decks: listDecks, media: cardMedia, deal: dealDeck }
+const OPS: Record<string, (args: Json) => Json | Promise<Json>> = { list: listCards, read: readCards, decks: listDecks, media: cardMedia, deal: dealDeck,
+  edit: editCards, arrange: arrangeCards, deck: setDeck, link: linkCards, delete: deleteCards, select: selectCards, undo: undoLast,
+}
 
 /** Start answering the connector. Only where the dev server's socket is
  *  (always, as VidBars runs: the desktop window is the dev server's page). */
