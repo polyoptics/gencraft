@@ -57,6 +57,8 @@ const EXT_OF_MIME = {
 const MIME_OF_EXT = Object.fromEntries(Object.entries(EXT_OF_MIME).map(([m, e]) => [e, m]))
 const mimeOf = name => MIME_OF_EXT[path.extname(name).toLowerCase().replace('.jpeg', '.jpg')] || 'application/octet-stream'
 
+const MEDIA_ENTRY = { type: 'object', description: 'A picture, movie, sound or 3D model: url (http or https) or file (a full path on this computer); for a 3D model, thumbnail (url or file) is the picture it shows.', properties: { url: { type: 'string' }, file: { type: 'string' }, name: { type: 'string' }, thumbnail: { type: 'object', properties: { url: { type: 'string' }, file: { type: 'string' } } } } }
+
 const TOOLS = [
   {
     name: 'list_cards',
@@ -158,7 +160,7 @@ const TOOLS = [
   },
   {
     name: 'edit_cards',
-    description: 'Change cards that are already on the canvas: name, header, text, type, colour, the detail rows on the back. Only what you give changes. Editing a linked card edits the card it shows, everywhere it is shown. Only when the artist asked for the change. One undo takes the whole edit back.',
+    description: 'Change cards that are already on the canvas: name, header, text, type, colour and how see-through it is, which side is up, what its face shows (one of its blocks, or a picture of its own), the detail rows on the back. Only what you give changes. What a card holds (its blocks) is changed with edit_blocks. Editing a linked card edits the card it shows, everywhere it is shown. Only when the artist asked for the change. One undo takes the whole edit back.',
     inputSchema: {
       type: 'object', required: ['cards'],
       properties: { cards: { type: 'array', minItems: 1, maxItems: 40, items: {
@@ -168,6 +170,10 @@ const TOOLS = [
           name: { type: 'string' }, header: { type: 'string' }, text: { type: 'string' },
           type: { type: 'string', enum: CARD_TYPES },
           color: { type: 'string', description: '#rrggbb' },
+          opacity: { type: 'number', description: 'How solid its colour is, 0 (see-through) to 1.' },
+          side: { type: 'string', enum: ['face', 'back'], description: 'Which side is up: the face, or the back with its detail rows.' },
+          faceBlock: { type: 'string', description: 'The id of one of its blocks (read_cards): the face shows that block\'s picture, movie or model.' },
+          picture: { type: ['object', 'null'], description: 'A picture of its own for the face, as url or file, in place of a block\'s; null takes it away again.', properties: { url: { type: 'string' }, file: { type: 'string' } } },
           details: { type: 'array', description: 'Rows for its back. A row named like one it has takes the new value; a new name adds a row; value null removes the row.',
             items: { type: 'object', required: ['name'], properties: { name: { type: 'string' }, value: { type: ['string', 'null'] } } } },
         },
@@ -721,6 +727,23 @@ const TOOLS = [
     description: 'Read a Media Pool: the folder on this computer it shows, its subfolders and its files (pictures, movies, sounds, 3D models) with their full paths. With folder, the pool is pointed at that folder first (one undo). To bring a file in as a card, deal_deck with media { file }.',
     inputSchema: { type: 'object', properties: { toolId: { type: 'string' }, folder: { type: 'string', description: 'A folder to point the pool at: a full path, or one from folders / parent.' }, kind: { type: 'string', enum: ['image', 'video', 'audio', 'model'], description: 'Only files of this kind.' } }, required: ['toolId'] },
   },
+  {
+    name: 'edit_blocks',
+    description: 'Change what a card holds: its blocks (read_cards gives them with their ids, in reading order). In one undo: name a block, write its text, swap its media; remove blocks; add blocks; put them in order; move a block to another card; take a block out as a card of its own; merge other cards into this one as blocks (those cards are then gone). A card keeps at least one block. Only when the artist asked for the change.',
+    inputSchema: {
+      type: 'object', required: ['cardId'],
+      properties: {
+        cardId: { type: 'string' },
+        blocks: { type: 'array', description: 'Blocks to change.', items: { type: 'object', required: ['id'], properties: { id: { type: 'string' }, name: { type: 'string' }, text: { type: 'string' }, media: MEDIA_ENTRY } } },
+        remove: { type: 'array', items: { type: 'string' }, description: 'Block ids to delete.' },
+        add: { type: 'array', description: 'New blocks, each holding one media.', items: { type: 'object', required: ['media'], properties: { name: { type: 'string' }, text: { type: 'string' }, media: MEDIA_ENTRY } } },
+        order: { type: 'array', items: { type: 'string' }, description: 'Block ids in the order wanted; any left out follow as they were.' },
+        moveTo: { type: 'array', items: { type: 'object', required: ['id', 'card'], properties: { id: { type: 'string' }, card: { type: 'string', description: 'The id of the card that takes the block.' } } } },
+        takeOut: { type: 'array', items: { type: 'string' }, description: 'Block ids to make cards of their own.' },
+        merge: { type: 'array', items: { type: 'string' }, description: 'Ids of other cards to merge into this one as blocks.' },
+      },
+    },
+  },
 ]
 
 for (const t of TOOLS) if (t.name !== 'send_file') t.inputSchema.properties.doing = DOING
@@ -862,27 +885,44 @@ async function bringIn(m) {
   throw new Error('Each media entry needs a url (http or https) or a file path.')
 }
 
+/** One media entry brought in, a model with its own picture (its thumbnail from the tool that made it). */
+async function bringInWhole(m) {
+  const got = await bringIn(m)
+  if (got.type === 'model' && m.thumbnail && typeof m.thumbnail === 'object') {
+    const pic = await bringIn(m.thumbnail)
+    if (pic.type !== 'image') throw new Error('A thumbnail is a picture.')
+    got.thumb = pic.url
+  }
+  return got
+}
+
+async function editCards(args) {
+  const cards = []
+  for (const c of Array.isArray(args.cards) ? args.cards : []) {
+    cards.push(c.picture && typeof c.picture === 'object' ? { ...c, picture: await bringIn(c.picture) } : c)
+  }
+  return [{ type: 'text', text: JSON.stringify(await ask('edit', { ...args, cards }), null, 1) }]
+}
+
+async function editBlocks(args) {
+  const blocks = [], add = []
+  for (const b of Array.isArray(args.blocks) ? args.blocks : []) blocks.push(b.media && typeof b.media === 'object' ? { ...b, media: await bringInWhole(b.media) } : b)
+  for (const b of Array.isArray(args.add) ? args.add : []) add.push(b.media && typeof b.media === 'object' ? { ...b, media: await bringInWhole(b.media) } : b)
+  return [{ type: 'text', text: JSON.stringify(await ask('blocksEdit', { ...args, blocks, add }), null, 1) }]
+}
+
 async function dealDeck(args) {
   const cards = []
   for (const c of Array.isArray(args.cards) ? args.cards : []) {
     const media = []
-    for (const m of Array.isArray(c.media) ? c.media : []) {
-      const got = await bringIn(m)
-      // A model's own picture (its thumbnail from the tool that made it).
-      if (got.type === 'model' && m.thumbnail && typeof m.thumbnail === 'object') {
-        const pic = await bringIn(m.thumbnail)
-        if (pic.type !== 'image') throw new Error('A thumbnail is a picture.')
-        got.thumb = pic.url
-      }
-      media.push(got)
-    }
+    for (const m of Array.isArray(c.media) ? c.media : []) media.push(await bringInWhole(m))
     cards.push({ ...c, media })
   }
   const result = await ask('deal', { ...args, cards })
   return [{ type: 'text', text: JSON.stringify(result, null, 1) }]
 }
 
-const LOCAL = { get_card_media: getCardMedia, send_file: sendFile, deal_deck: dealDeck }
+const LOCAL = { get_card_media: getCardMedia, send_file: sendFile, deal_deck: dealDeck, edit_cards: editCards, edit_blocks: editBlocks }
 
 const out = msg => process.stdout.write(JSON.stringify(msg) + '\n')
 
@@ -895,8 +935,8 @@ async function handle(msg) {
       return ok({
         protocolVersion: params?.protocolVersion || '2024-11-05',
         capabilities: { tools: {} },
-        serverInfo: { name: 'vidbars', version: '1.15.0' },
-        instructions: 'VidBars is the artist\'s card canvas. You may read cards and decks, hand out the media on cards as files, and deal a deck of cards: new cards, results brought in from another tool, and linked cards of cards that are there. You can use the tools of VidBars: set one down (place_tool), build a 3D set from cards that hold models (make_3d_set, stand_in_3d_set), add shapes and cameras to it and draw paths for them to ride (read_3d_set, add_to_3d_set, draw_path, edit_path, play_paths), put effects on picture cards (list_effects, add_effects, edit_effects, save_effects), run pictures through a loop strip (read_loop_strip, edit_loop_strip, run_loop_strip), read and write prompts in a Card Prompts window (read_prompts, edit_prompts), keep cards in a cabinet\'s drawers (read_cabinet, edit_cabinet), look through a folder in a Media Pool (read_media_pool), show a card big in a Viewer (show_in_viewer), move the artist\'s view to show them something (read_view, move_view), make a GIF or a movie of cards, add cards to a Rough Cut and cut there (read_rough_cut, edit_rough_cut, deck_of_picks), draw storylines and trees (build_storyline, edit_storyline), lay out the face of a scene card (read_scene, edit_scene), and set up state machines in a States workspace (read_states, build_states, edit_states, run_states). You may also change what is there when the artist asks for it: edit, arrange, open and close decks, link, delete; each change is one undo, and undo takes your last one back. Do not change or delete anything the artist did not ask you to. Read before you deal or change, keep card text short, and tell the artist plainly what you did. The artist sees your pointer in VidBars with a bubble: give each request a few plain words in "doing". To use a card\'s picture or model with another tool, get_card_media then send_file to the upload address that tool gives; bring what comes back onto a card with deal_deck (media, and from: the cards it was made from). A 3D model that comes back with a preview picture is ONE media entry: the model, with the picture as its thumbnail.',
+        serverInfo: { name: 'vidbars', version: '1.16.0' },
+        instructions: 'VidBars is the artist\'s card canvas. You may read cards and decks, hand out the media on cards as files, and deal a deck of cards: new cards, results brought in from another tool, and linked cards of cards that are there. You can use the tools of VidBars: set one down (place_tool), build a 3D set from cards that hold models (make_3d_set, stand_in_3d_set), add shapes and cameras to it and draw paths for them to ride (read_3d_set, add_to_3d_set, draw_path, edit_path, play_paths), put effects on picture cards (list_effects, add_effects, edit_effects, save_effects), run pictures through a loop strip (read_loop_strip, edit_loop_strip, run_loop_strip), read and write prompts in a Card Prompts window (read_prompts, edit_prompts), keep cards in a cabinet\'s drawers (read_cabinet, edit_cabinet), look through a folder in a Media Pool (read_media_pool), show a card big in a Viewer (show_in_viewer), move the artist\'s view to show them something (read_view, move_view), make a GIF or a movie of cards, add cards to a Rough Cut and cut there (read_rough_cut, edit_rough_cut, deck_of_picks), draw storylines and trees (build_storyline, edit_storyline), lay out the face of a scene card (read_scene, edit_scene), and set up state machines in a States workspace (read_states, build_states, edit_states, run_states). You may also change what is there when the artist asks for it: edit cards and their faces (edit_cards), the blocks a card holds (edit_blocks: add, remove, order, move, take out, merge), arrange, open and close decks, link, delete; each change is one undo, and undo takes your last one back. Do not change or delete anything the artist did not ask you to. Read before you deal or change, keep card text short, and tell the artist plainly what you did. The artist sees your pointer in VidBars with a bubble: give each request a few plain words in "doing". To use a card\'s picture or model with another tool, get_card_media then send_file to the upload address that tool gives; bring what comes back onto a card with deal_deck (media, and from: the cards it was made from). A 3D model that comes back with a preview picture is ONE media entry: the model, with the picture as its thumbnail.',
       })
     case 'ping': return ok({})
     case 'tools/list': return ok({ tools: TOOLS })
