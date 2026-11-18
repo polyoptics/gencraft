@@ -39,7 +39,7 @@ const MAX_FETCH = 1024 * 1024 * 1024
 const PORT = Number(process.env.VIDBARS_PORT || 5173)
 const URL_ = process.env.VIDBARS_URL || `http://localhost:${PORT}`
 
-const CARD_TYPES = ['element', 'character', 'faction', 'family', 'location', 'prop', 'audio', 'scene', 'prompt', 'note']
+const CARD_TYPES = ['element', 'character', 'faction', 'family', 'location', 'prop', 'audio', 'scene', 'event', 'prompt', 'note']
 
 const DOING = { type: 'string', description: 'A few words on what you are doing, shown to the artist in a bubble by your pointer in VidBars, e.g. "Reading the cast". Plain words, under ten.' }
 
@@ -58,6 +58,22 @@ const MIME_OF_EXT = Object.fromEntries(Object.entries(EXT_OF_MIME).map(([m, e]) 
 const mimeOf = name => MIME_OF_EXT[path.extname(name).toLowerCase().replace('.jpeg', '.jpg')] || 'application/octet-stream'
 
 const MEDIA_ENTRY = { type: 'object', description: 'A picture, movie, sound or 3D model: url (http or https) or file (a full path on this computer); for a 3D model, thumbnail (url or file) is the picture it shows.', properties: { url: { type: 'string' }, file: { type: 'string' }, name: { type: 'string' }, thumbnail: { type: 'object', properties: { url: { type: 'string' }, file: { type: 'string' } } } } }
+
+const TEXT_STYLE = {
+  type: 'object',
+  properties: {
+    fontSize: { type: 'number' }, color: { type: 'string', description: '#rrggbb' },
+    bgColor: { type: 'string', description: '#rrggbb, behind the words' }, bgOpacity: { type: 'number', description: '0 to 1' },
+    bold: { type: 'boolean' }, italic: { type: 'boolean' },
+    align: { type: 'string', enum: ['left', 'center', 'right'] }, vAlign: { type: 'string', enum: ['top', 'middle', 'bottom'] },
+    fontFamily: { type: 'string' }, lineHeight: { type: 'number' }, letterSpacing: { type: 'number' }, fontWeight: { type: 'number', description: '100 to 900' },
+    textTransform: { type: 'string', enum: ['none', 'uppercase', 'lowercase', 'capitalize'] },
+  },
+}
+const BAR_LOOK = {
+  name: { type: 'string' }, subtitle: { type: 'string' }, text: { type: 'string' }, color: { type: 'string', description: '#rrggbb' },
+  media: { type: ['object', 'null'], description: 'One picture, movie, sound or model for the bar, as url or file; null takes its media away.', properties: { url: { type: 'string' }, file: { type: 'string' }, name: { type: 'string' } } },
+}
 
 const TOOLS = [
   {
@@ -160,7 +176,7 @@ const TOOLS = [
   },
   {
     name: 'edit_cards',
-    description: 'Change cards that are already on the canvas: name, header, text, type, colour and how see-through it is, which side is up, what its face shows (one of its blocks, or a picture of its own), the detail rows on the back. Only what you give changes. What a card holds (its blocks) is changed with edit_blocks. Editing a linked card edits the card it shows, everywhere it is shown. Only when the artist asked for the change. One undo takes the whole edit back.',
+    description: 'Change cards that are already on the canvas: name, header, text and how each is set (size, colour, bold, alignment, font), type, colour and how see-through it is, its size, which side is up, what its face shows (one of its blocks, or a picture of its own), the detail rows on the back. Only what you give changes. What a card holds (its blocks) is changed with edit_blocks. Editing a linked card edits the card it shows, everywhere it is shown. Only when the artist asked for the change. One undo takes the whole edit back.',
     inputSchema: {
       type: 'object', required: ['cards'],
       properties: { cards: { type: 'array', minItems: 1, maxItems: 40, items: {
@@ -174,6 +190,9 @@ const TOOLS = [
           side: { type: 'string', enum: ['face', 'back'], description: 'Which side is up: the face, or the back with its detail rows.' },
           faceBlock: { type: 'string', description: 'The id of one of its blocks (read_cards): the face shows that block\'s picture, movie or model.' },
           picture: { type: ['object', 'null'], description: 'A picture of its own for the face, as url or file, in place of a block\'s; null takes it away again.', properties: { url: { type: 'string' }, file: { type: 'string' } } },
+          size: { type: ['object', 'null'], description: 'A size of its own in canvas units (w, h or both). A card is never drawn smaller than what it holds. null lets it size itself again.', properties: { w: { type: 'number' }, h: { type: 'number' } } },
+          textStyle: { ...TEXT_STYLE, description: 'How its text is set. Only the parts given change.' },
+          headerStyle: { ...TEXT_STYLE, description: 'How its header is set. Only the parts given change.' },
           details: { type: 'array', description: 'Rows for its back. A row named like one it has takes the new value; a new name adds a row; value null removes the row.',
             items: { type: 'object', required: ['name'], properties: { name: { type: 'string' }, value: { type: ['string', 'null'] } } } },
         },
@@ -758,6 +777,40 @@ const TOOLS = [
       },
     },
   },
+  {
+    name: 'copy_cards',
+    description: 'Make copies of cards: each copy is a card of its own with the same face, text, details, blocks and look, named "... copy". They are set in a row at an empty spot of the view, or at "at". Copying one card of a closed deck copies that card alone. For a card that only shows another card (and changes with it), use link_cards instead. One undo takes the copies away.',
+    inputSchema: {
+      type: 'object', required: ['ids'],
+      properties: {
+        ids: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 40 },
+        at: { type: 'object', description: 'The row\'s top-left, in canvas units.', properties: { x: { type: 'number' }, y: { type: 'number' } } },
+      },
+    },
+  },
+  {
+    name: 'read_board',
+    description: 'Read the board of a card: what a block holds when the artist zooms all the way in. A board is bars: a top row, and under each bar the bars that belong to it, as deep as it goes. Each bar has an id, a name, a subtitle, text, a colour and maybe media. Leave block out to read the boards of all the card\'s blocks.',
+    inputSchema: {
+      type: 'object', required: ['cardId'],
+      properties: { cardId: { type: 'string' }, block: { type: 'string', description: 'A block id from read_cards.' } },
+    },
+  },
+  {
+    name: 'edit_board',
+    description: 'Change the bars on the board of one block of a card, in one undo: name a bar, write its subtitle and text, colour it, give it media; add bars (under a bar, or beside one: before or after it); move a bar with all under it to under another bar; remove bars. Steps are done in that order: bars, add, move, remove. If any step fails, nothing is changed. Only when the artist asked for the change.',
+    inputSchema: {
+      type: 'object', required: ['cardId'],
+      properties: {
+        cardId: { type: 'string' },
+        block: { type: 'string', description: 'The block whose board it is (read_cards). May be left out when the card has one block.' },
+        bars: { type: 'array', description: 'Bars to change, by id (read_board).', items: { type: 'object', required: ['id'], properties: { id: { type: 'string' }, ...BAR_LOOK } } },
+        add: { type: 'array', description: 'New bars. Each goes under a bar, or after / before one in its row; give exactly one of those, as a bar id or the ref of a bar added earlier in this list.', items: { type: 'object', properties: { ref: { type: 'string', description: 'A name of your own for this new bar, to use in later steps.' }, under: { type: 'string' }, after: { type: 'string' }, before: { type: 'string' }, ...BAR_LOOK } } },
+        move: { type: 'array', items: { type: 'object', required: ['id', 'under'], properties: { id: { type: 'string' }, under: { type: 'string', description: 'The bar it goes under.' } } } },
+        remove: { type: 'array', items: { type: 'object', required: ['id'], properties: { id: { type: 'string' }, withUnder: { type: 'boolean', description: 'true (the default) removes the bars under it too; false leaves them, moved up to where it was.' } } } },
+      },
+    },
+  },
 ]
 
 for (const t of TOOLS) if (t.name !== 'send_file') t.inputSchema.properties.doing = DOING
@@ -773,7 +826,7 @@ const OPS = {
   read_rough_cut: 'cutRead', edit_rough_cut: 'cutEdit', deck_of_picks: 'cutPicks',
   read_view: 'viewRead', move_view: 'viewMove',
   read_cabinet: 'cabinetRead', edit_cabinet: 'cabinetEdit',
-  read_media_pool: 'poolRead',
+  read_media_pool: 'poolRead', copy_cards: 'copy', read_board: 'boardRead',
   read_prompts: 'promptsRead', edit_prompts: 'promptsEdit',
   read_loop_strip: 'stripRead', edit_loop_strip: 'stripEdit', run_loop_strip: 'stripRun',
   read_viewer: 'viewerRead', show_in_viewer: 'viewerShow',
@@ -925,6 +978,13 @@ async function editBlocks(args) {
   return [{ type: 'text', text: JSON.stringify(await ask('blocksEdit', { ...args, blocks, add }), null, 1) }]
 }
 
+async function editBoard(args) {
+  const bars = [], add = []
+  for (const b of Array.isArray(args.bars) ? args.bars : []) bars.push(b.media && typeof b.media === 'object' ? { ...b, media: await bringInWhole(b.media) } : b)
+  for (const b of Array.isArray(args.add) ? args.add : []) add.push(b.media && typeof b.media === 'object' ? { ...b, media: await bringInWhole(b.media) } : b)
+  return [{ type: 'text', text: JSON.stringify(await ask('boardEdit', { ...args, bars, add }), null, 1) }]
+}
+
 async function dealDeck(args) {
   const cards = []
   for (const c of Array.isArray(args.cards) ? args.cards : []) {
@@ -936,7 +996,7 @@ async function dealDeck(args) {
   return [{ type: 'text', text: JSON.stringify(result, null, 1) }]
 }
 
-const LOCAL = { get_card_media: getCardMedia, send_file: sendFile, deal_deck: dealDeck, edit_cards: editCards, edit_blocks: editBlocks }
+const LOCAL = { get_card_media: getCardMedia, send_file: sendFile, deal_deck: dealDeck, edit_cards: editCards, edit_blocks: editBlocks, edit_board: editBoard }
 
 const out = msg => process.stdout.write(JSON.stringify(msg) + '\n')
 
@@ -949,8 +1009,8 @@ async function handle(msg) {
       return ok({
         protocolVersion: params?.protocolVersion || '2024-11-05',
         capabilities: { tools: {} },
-        serverInfo: { name: 'vidbars', version: '1.17.0' },
-        instructions: 'VidBars is the artist\'s card canvas. You may read cards and decks, hand out the media on cards as files, and deal a deck of cards: new cards, results brought in from another tool, and linked cards of cards that are there. You can use the tools of VidBars: set one down (place_tool), build a 3D set from cards that hold models (make_3d_set, stand_in_3d_set), square up a model that came in facing the wrong way (square_up_models), add shapes and cameras to it and draw paths for them to ride (read_3d_set, add_to_3d_set, draw_path, edit_path, play_paths), put effects on picture cards (list_effects, add_effects, edit_effects, save_effects), run pictures through a loop strip (read_loop_strip, edit_loop_strip, run_loop_strip), read and write prompts in a Card Prompts window (read_prompts, edit_prompts), keep cards in a cabinet\'s drawers (read_cabinet, edit_cabinet), look through a folder in a Media Pool (read_media_pool), show a card big in a Viewer (show_in_viewer), move the artist\'s view to show them something (read_view, move_view), make a GIF or a movie of cards, add cards to a Rough Cut and cut there (read_rough_cut, edit_rough_cut, deck_of_picks), draw storylines and trees (build_storyline, edit_storyline), lay out the face of a scene card (read_scene, edit_scene), and set up state machines in a States workspace (read_states, build_states, edit_states, run_states). You may also change what is there when the artist asks for it: edit cards and their faces (edit_cards), the blocks a card holds (edit_blocks: add, remove, order, move, take out, merge), arrange, open and close decks, link, delete; each change is one undo, and undo takes your last one back. Do not change or delete anything the artist did not ask you to. Read before you deal or change, keep card text short, and tell the artist plainly what you did. The artist sees your pointer in VidBars with a bubble: give each request a few plain words in "doing". To use a card\'s picture or model with another tool, get_card_media then send_file to the upload address that tool gives; bring what comes back onto a card with deal_deck (media, and from: the cards it was made from). A 3D model that comes back with a preview picture is ONE media entry: the model, with the picture as its thumbnail.',
+        serverInfo: { name: 'vidbars', version: '1.18.0' },
+        instructions: 'VidBars is the artist\'s card canvas. You may read cards and decks, hand out the media on cards as files, and deal a deck of cards: new cards, results brought in from another tool, and linked cards of cards that are there. You can use the tools of VidBars: set one down (place_tool), build a 3D set from cards that hold models (make_3d_set, stand_in_3d_set), square up a model that came in facing the wrong way (square_up_models), add shapes and cameras to it and draw paths for them to ride (read_3d_set, add_to_3d_set, draw_path, edit_path, play_paths), put effects on picture cards (list_effects, add_effects, edit_effects, save_effects), run pictures through a loop strip (read_loop_strip, edit_loop_strip, run_loop_strip), read and write prompts in a Card Prompts window (read_prompts, edit_prompts), keep cards in a cabinet\'s drawers (read_cabinet, edit_cabinet), look through a folder in a Media Pool (read_media_pool), show a card big in a Viewer (show_in_viewer), move the artist\'s view to show them something (read_view, move_view), make a GIF or a movie of cards, add cards to a Rough Cut and cut there (read_rough_cut, edit_rough_cut, deck_of_picks), draw storylines and trees (build_storyline, edit_storyline), lay out the face of a scene card (read_scene, edit_scene), and set up state machines in a States workspace (read_states, build_states, edit_states, run_states). You may also change what is there when the artist asks for it: edit cards and their faces (edit_cards), the blocks a card holds (edit_blocks: add, remove, order, move, take out, merge), the bars on a block\'s board (read_board, edit_board), copy cards (copy_cards), arrange, open and close decks, link, delete; each change is one undo, and undo takes your last one back. Do not change or delete anything the artist did not ask you to. Read before you deal or change, keep card text short, and tell the artist plainly what you did. The artist sees your pointer in VidBars with a bubble: give each request a few plain words in "doing". To use a card\'s picture or model with another tool, get_card_media then send_file to the upload address that tool gives; bring what comes back onto a card with deal_deck (media, and from: the cards it was made from). A 3D model that comes back with a preview picture is ONE media entry: the model, with the picture as its thumbnail.',
       })
     case 'ping': return ok({})
     case 'tools/list': return ok({ tools: TOOLS })

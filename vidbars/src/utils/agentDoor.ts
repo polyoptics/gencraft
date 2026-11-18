@@ -35,7 +35,7 @@
 
 import { useBoardsStore, type BoardData, type ProjectGroup } from '../store/boardsStore'
 import { useCanvasStore } from '../store/canvasStore'
-import { useFreeNodeStore } from '../store/freeNodeStore'
+import { useFreeNodeStore, DEFAULT_BODY_STYLE, DEFAULT_HEADER_STYLE, type TextStyle } from '../store/freeNodeStore'
 import { useViewport3DStore } from '../store/viewport3dStore'
 import { useUndoCoordinator } from '../store/undoCoordinator'
 import { canvasObstacleGroups, cardVisualRect, cardsTouch, expandWithNestedMembers, isHiddenDeckMember } from '../hooks/useCardDecks'
@@ -189,6 +189,9 @@ function describe(g: ProjectGroup, groups: ProjectGroup[], boards: Record<string
     text: g.cardText ?? '',
     ...(g.cardSummary ? { summary: g.cardSummary } : {}),
     ...(g.flipped ? { side: 'back' } : {}),
+    ...(g.cardWidthOverride != null || g.cardHeightOverride != null ? { size: { ...(g.cardWidthOverride != null ? { w: Math.round(g.cardWidthOverride) } : {}), ...(g.cardHeightOverride != null ? { h: Math.round(g.cardHeightOverride) } : {}) } } : {}),
+    ...(g.cardTextStyle ? { textStyle: g.cardTextStyle } : {}),
+    ...(g.cardHeaderTextStyle ? { headerStyle: g.cardHeaderTextStyle } : {}),
     ...(g.cardHeroImage && !stepped ? { facePicture: 'its own' } : {}),
     details: (g.details ?? []).map(d => {
       const shown = detailShown(groups, d)
@@ -573,6 +576,28 @@ const names = (gs: ProjectGroup[]) => gs.length === 1 ? gs[0].name : `${gs.lengt
 
 /** Edit cards: name, header, text, type, colour, detail rows. Only what is
  *  given changes. A linked card's edit is its master's too (linkedCards). */
+const HEX = /^#[0-9a-f]{6}$/i
+/** The parts of a text style that were given, checked. */
+function styleGiven(v: Json): Partial<TextStyle> {
+  const out: Partial<TextStyle> = {}
+  const within = (k: string, lo: number, hi: number) => { const n = num(v[k]); if (v[k] != null && (n == null || n < lo || n > hi)) throw new Error(`${k} is a number from ${lo} to ${hi}.`); return n }
+  const one = <T extends string>(k: string, of: readonly T[]) => { if (v[k] != null && !of.includes(String(v[k]) as T)) throw new Error(`${k} is one of: ${of.join(', ')}.`); return v[k] == null ? undefined : String(v[k]) as T }
+  const size = within('fontSize', 4, 400); if (size != null) out.fontSize = size
+  for (const k of ['color', 'bgColor'] as const) if (v[k] != null) { if (!HEX.test(String(v[k]))) throw new Error(`${k} is given as #rrggbb.`); out[k] = String(v[k]) }
+  const bgo = within('bgOpacity', 0, 1); if (bgo != null) out.bgOpacity = bgo
+  if (typeof v.bold === 'boolean') out.bold = v.bold
+  if (typeof v.italic === 'boolean') out.italic = v.italic
+  const al = one('align', ['left', 'center', 'right'] as const); if (al) out.align = al
+  const va = one('vAlign', ['top', 'middle', 'bottom'] as const); if (va) out.vAlign = va
+  if (typeof v.fontFamily === 'string' && v.fontFamily.trim()) out.fontFamily = clip(v.fontFamily.trim(), 120)
+  const lh = within('lineHeight', 0.5, 4); if (lh != null) out.lineHeight = lh
+  const ls = within('letterSpacing', -20, 100); if (ls != null) out.letterSpacing = ls
+  const fw = within('fontWeight', 100, 900); if (fw != null) out.fontWeight = fw
+  const tt = one('textTransform', ['none', 'uppercase', 'lowercase', 'capitalize'] as const); if (tt) out.textTransform = tt
+  if (!Object.keys(out).length) throw new Error('A text style gives at least one of: fontSize, color, bgColor, bgOpacity, bold, italic, align, vAlign, fontFamily, lineHeight, letterSpacing, fontWeight, textTransform.')
+  return out
+}
+
 async function editCards(args: Json): Promise<Json> {
   const list = Array.isArray(args.cards) ? args.cards as Json[] : []
   const cards = cardsNamed(list.map(c => String(c.id ?? '')))
@@ -584,6 +609,12 @@ async function editCards(args: Json): Promise<Json> {
       const g = cards.find(x => x.id === String(c.id))!
       if (!faceBlocks(g, useBoardsStore.getState().boards).includes(String(c.faceBlock))) throw new Error(`"${g.name}" has no block ${String(c.faceBlock)} with a picture, movie or model to show. read_cards gives its blocks.`)
     }
+    if (c.size != null) {
+      const z = c.size as Json
+      if (num(z.w) == null && num(z.h) == null) throw new Error('size: give w, h or both in canvas units; null lets the card size itself again.')
+    }
+    if (c.textStyle != null) styleGiven(c.textStyle as Json)
+    if (c.headerStyle != null) styleGiven(c.headerStyle as Json)
     const pic = c.picture as Json | null | undefined
     if (pic && !(String(pic.url ?? '').startsWith('/api/file?') || String(pic.url ?? '').startsWith('/uploads/'))) throw new Error('picture: give a url or a file.')
     if (pic && pic.type !== 'image') throw new Error('A face picture is a picture.')
@@ -606,6 +637,16 @@ async function editCards(args: Json): Promise<Json> {
       bs.setGroupCardHeroImage(id, c.picture ? String((c.picture as Json).url) : null)
       if (c.picture) useBoardsStore.setState(st => ({ groups: st.groups.map(g => g.id === id ? { ...g, faceBoardId: undefined } : g) }))
     }
+    const g0 = useBoardsStore.getState().groups.find(g => g.id === id)!
+    // A card is never drawn smaller than what it holds; a size only makes it larger.
+    if (c.size === null) bs.setGroupCardSize(id, undefined, undefined)
+    else if (c.size != null) {
+      const z = c.size as Json
+      const lim = (v: number | undefined, was: number | undefined) => v == null ? was : Math.max(40, Math.min(8000, v))
+      bs.setGroupCardSize(id, lim(num(z.w), g0.cardWidthOverride), lim(num(z.h), g0.cardHeightOverride))
+    }
+    if (c.textStyle != null) bs.setGroupCardTextStyle(id, { ...DEFAULT_BODY_STYLE, ...g0.cardTextStyle, ...styleGiven(c.textStyle as Json) })
+    if (c.headerStyle != null) bs.setGroupCardHeaderTextStyle(id, { ...DEFAULT_HEADER_STYLE, ...g0.cardHeaderTextStyle, ...styleGiven(c.headerStyle as Json) })
     const given = (Array.isArray(c.details) ? c.details as Json[] : [])
       .map(d => ({ name: String(d.name ?? '').trim(), value: d.value == null ? null : String(d.value) }))
       .filter(d => d.name)
@@ -2769,6 +2810,172 @@ async function editBlocks(args: Json): Promise<Json> {
   return { card: describe(me(), s.groups, s.boards), ...(added.length ? { addedBlocks: added } : {}), ...(out.length ? { newCards: out } : {}), undo: 'One undo (Ctrl+Z) takes it back.' }
 }
 
+/** Copies of cards, each a card of its own (not a linked card): same face,
+ *  text, details, blocks and look, in a row at an empty spot or at `at`. */
+async function copyCards(args: Json): Promise<Json> {
+  const ids = idsOf(args.ids)
+  const cards = cardsNamed(ids)
+  if (cards.length > 40) throw new Error('At most 40 cards at a time.')
+  const zoom = useCanvasStore.getState().zoom
+  const face = cardFaceSize(zoom)
+  const at = args.at as { x?: unknown; y?: unknown } | undefined
+  let left: number, top: number
+  if (at && num(at.x) != null && num(at.y) != null) { left = num(at.x)!; top = num(at.y)! }
+  else { const spot = freeSpot(ids.length, face, zoom); left = spot.cx - face.w / 2; top = spot.cy - face.h / 2 }
+  await agentGlide(say(args, `Copying ${names(cards)}`), agentSpotOfCard(cards[0].id))
+  const was = useBoardsStore.getState().selectedGroupIds
+  useUndoCoordinator.getState().checkpoint()
+  const made: { id: string; name: string; copyOf: string }[] = []
+  let x = left
+  for (const c of cards) {
+    const nid = useBoardsStore.getState().duplicateGroup(c.id)
+    if (!nid) continue
+    const bs = useBoardsStore.getState()
+    const g = bs.groups.find(o => o.id === nid)!
+    const r = cardVisualRect(g, bs.boards, zoom)?.rect
+    if (r) { bs.setGroupPosBatch([{ groupId: nid, originX: g.originX + x - r.left, originY: g.originY + top - r.top }]); x += (r.right - r.left) + face.w * 0.15 }
+    else x += face.w * 1.15
+    made.push({ id: nid, name: g.name, copyOf: c.id })
+  }
+  useBoardsStore.getState().setSelectedGroups(was.filter(i => useBoardsStore.getState().groups.some(g => g.id === i)))
+  markNew(made.map(m => m.id))
+  agentPoint(say(args, `Copied ${names(cards)}`), made[0] ? agentSpotOfCard(made[0].id) : undefined)
+  return { copies: made, place: { x: Math.round(left), y: Math.round(top) }, note: 'Each copy is a card of its own, named "... copy" (rename with edit_cards). For a card that only shows another, link_cards. One undo takes the copies away.' }
+}
+
+// ── The board: what a block holds, zoomed all the way in ─────────────────
+
+/** The block of `card` that `v` names; with none named, its only block. */
+function blockOf(card: ProjectGroup, v: unknown): string {
+  const boards = useBoardsStore.getState().boards
+  const have = card.boardIds.filter(b => boards[b])
+  if (v == null || v === '') {
+    if (have.length === 1) return have[0]
+    throw new Error(`"${card.name}" has ${have.length} blocks: name one (block). read_cards gives their ids.`)
+  }
+  const bid = String(v)
+  if (!have.includes(bid)) throw new Error(`"${card.name}" has no block ${bid}. read_cards gives its blocks and their ids.`)
+  return bid
+}
+
+/** A board as an outline: its bars from the top row down, each with the bars under it. */
+function boardOutline(bid: string): Json {
+  const b = useBoardsStore.getState().boards[bid]
+  const bar = (id: string): Json[] => {
+    const x = b.bars[id]
+    if (!x) return []
+    const text = typeof x.content?.text === 'string' ? x.content.text : ''
+    const media = getMediaItems(x.content).map(m => `${m.type}: ${m.originalName ?? m.url.split(/[\\/]/).pop()?.slice(0, 80) ?? ''}`)
+    const under = [...x.children].sort((p, q) => (b.bars[p]?.x ?? 0) - (b.bars[q]?.x ?? 0)).flatMap(bar)
+    return [{ id: x.id, name: x.name, ...(x.subtitle ? { subtitle: x.subtitle } : {}), ...(text ? { text } : {}), color: x.color, ...(media.length ? { media } : {}), ...(x.collapsed ? { folded: true } : {}), ...(under.length ? { under } : {}) }]
+  }
+  const tops = [...b.rootIds].sort((p, q) => (b.bars[p]?.x ?? 0) - (b.bars[q]?.x ?? 0))
+  return { block: bid, name: b.layers?.block?.label || b.projectName || '', bars: tops.flatMap(bar) }
+}
+
+function readBoard(args: Json): Json {
+  const [card] = cardsNamed([String(args.cardId ?? '')])
+  const boards = useBoardsStore.getState().boards
+  const bids = args.block != null && args.block !== '' ? [blockOf(card, args.block)] : gridOrder(card, boards).filter(b => boards[b])
+  agentPoint(say(args, `Reading the board of ${card.name}`), agentSpotOfCard(card.id))
+  return { card: card.name, cardId: card.id, boards: bids.map(boardOutline) }
+}
+
+async function editBoard(args: Json): Promise<Json> {
+  const [card] = cardsNamed([String(args.cardId ?? '')])
+  if (card.effect) throw new Error('An effect card has no board to edit.')
+  const bid = blockOf(card, args.block)
+  const now = () => useBoardsStore.getState()
+  const board = () => now().boards[bid]
+  const list = (k: string) => Array.isArray(args[k]) ? (args[k] as Json[]) : []
+  const served = (m: Json | undefined) => !!m && (String(m.url ?? '').startsWith('/api/file?') || String(m.url ?? '').startsWith('/uploads/'))
+  const item = (m: Json): MediaItem => ({ url: String(m.url), type: MEDIA_TYPES.find(t => t === m.type) ?? 'image', ...(typeof m.name === 'string' && m.name ? { originalName: m.name } : {}) })
+  const has = (v: unknown) => { const id = String(v ?? ''); if (!board().bars[id]) throw new Error(`That board has no bar ${id}. read_board gives its bars and their ids.`); return id }
+  const look = (w: Json) => {
+    if (w.color != null && !HEX.test(String(w.color))) throw new Error('A colour is given as #rrggbb.')
+    const media = w.media as Json | undefined
+    if (media && !served(media)) throw new Error('media: give a url or a file.')
+    return {
+      name: typeof w.name === 'string' ? clip(w.name.trim(), 120) : null,
+      subtitle: typeof w.subtitle === 'string' ? clip(w.subtitle, 200) : null,
+      text: typeof w.text === 'string' ? w.text : null,
+      color: w.color != null ? String(w.color) : null,
+      media: media ? item(media) : w.media === null ? 'none' as const : null,
+      thumb: media ? String(media.thumb ?? '') : '',
+    }
+  }
+  // Checked before anything changes. A new bar is known to later steps by its ref.
+  const refs = new Set<string>()
+  const edits = list('bars').map(w => ({ id: has(w.id), ...look(w) }))
+  const add = list('add').map(w => {
+    const where = (['under', 'after', 'before'] as const).filter(k => w[k] != null)
+    if (where.length !== 1) throw new Error('add: say where each new bar goes with one of under, after or before (a bar id, or the ref of a bar added earlier).')
+    const to = String(w[where[0]])
+    if (!refs.has(to)) has(to)
+    const ref = typeof w.ref === 'string' && w.ref ? w.ref : ''
+    if (ref) { if (board().bars[ref] || refs.has(ref)) throw new Error(`add: ref "${ref}" is already in use.`); refs.add(ref) }
+    return { ref, how: where[0], to, ...look(w) }
+  })
+  const move = list('move').map(w => {
+    const under = String(w.under ?? '')
+    if (!refs.has(under)) has(under)
+    const id = String(w.id ?? '')
+    if (!refs.has(id)) has(id)
+    return { id, under }
+  })
+  const remove = list('remove').map(w => ({ id: has(w.id), whole: w.withUnder !== false }))
+  if (!edits.length && !add.length && !move.length && !remove.length) throw new Error('Nothing to change. Give bars, add, move or remove.')
+
+  await keepThumbs([{ media: [...edits, ...add].flatMap(e => e.media && e.media !== 'none' ? [{ ...e.media, thumb: e.thumb }] : []) }])
+  await agentGlide(say(args, `Editing the board of ${card.name}`), agentSpotOfCard(card.id))
+  useUndoCoordinator.getState().checkpoint()
+  const at = new Map<string, string>()
+  const real = (id: string) => at.get(id) ?? id
+  const put = (id: string, e: ReturnType<typeof look>) => {
+    if (e.name != null) now().renameBar(bid, id, e.name)
+    if (e.subtitle != null) now().setSubtitle(bid, id, e.subtitle)
+    if (e.color != null) now().setBarColor(bid, id, e.color)
+    if (e.text != null) now().setContent(bid, id, { text: e.text })
+    if (e.media === 'none') now().setContent(bid, id, { media: [] })
+    else if (e.media) {
+      const poster = e.media.type === 'model' ? usePosterMapStore.getState().map[e.media.url] : undefined
+      now().setContent(bid, id, { media: [{ ...e.media, added: Date.now(), ...(poster ? { posterUrl: poster } : {}) }] })
+    }
+  }
+  try {
+    for (const e of edits) put(e.id, e)
+    const added: { id: string; ref?: string }[] = []
+    for (const a of add) {
+      const before = new Set(Object.keys(board().bars))
+      if (a.how === 'under') now().addChildToBar(bid, real(a.to))
+      else now().addSiblingBar(bid, real(a.to), a.how)
+      const nid = Object.keys(board().bars).find(k => !before.has(k))
+      if (!nid) throw new Error('A bar could not be added there.')
+      if (a.ref) at.set(a.ref, nid)
+      put(nid, a)
+      added.push({ id: nid, ...(a.ref ? { ref: a.ref } : {}) })
+    }
+    for (const m of move) {
+      const id = real(m.id), under = real(m.under)
+      if (board().bars[id]?.parentId === under) continue
+      now().reparentBar(bid, id, under)
+      if (board().bars[id]?.parentId !== under) throw new Error(`Bar ${m.id} cannot go under ${m.under} (a bar cannot go under itself or a bar beneath it).`)
+    }
+    for (const r of remove) {
+      if (!board().bars[r.id]) continue
+      if (Object.keys(board().bars).length <= 1) throw new Error('A board keeps at least one bar. To be rid of the block, edit_blocks remove.')
+      if (r.whole) now().deleteSubtree(bid, r.id); else now().deleteBar(bid, r.id)
+    }
+    if (!board() || !board().rootIds.length) throw new Error('That would leave the board empty. To be rid of the block, edit_blocks remove.')
+    if (isGridCard(now().groups.find(g => g.id === card.id)!)) layoutCardGrid(card.id)
+    return { card: card.name, cardId: card.id, board: boardOutline(bid), ...(added.length ? { added } : {}), undo: 'One undo (Ctrl+Z) takes it back.' }
+  } catch (err) {
+    // All or nothing: back to the checkpoint, which leaves no step behind.
+    useUndoCoordinator.getState().undo()
+    throw err
+  }
+}
+
 // ── The door ────────────────────────────────────────────────────────────
 
 const OPS: Record<string, (args: Json) => Json | Promise<Json>> = { list: listCards, read: readCards, decks: listDecks, media: cardMedia, deal: dealDeck,
@@ -2779,7 +2986,7 @@ const OPS: Record<string, (args: Json) => Json | Promise<Json>> = { list: listCa
   scene: readScene, sceneEdit: editScene,
   viewRead: readView, viewMove: moveView,
   cabinetRead: readCabinet, cabinetEdit: editCabinet,
-  blocksEdit: editBlocks,
+  blocksEdit: editBlocks, copy: copyCards, boardRead: readBoard, boardEdit: editBoard,
   poolRead: readPool,
   promptsRead: readPrompts, promptsEdit: editPrompts,
   stripRead: readStrip, stripEdit: editStrip, stripRun: runStrip,
