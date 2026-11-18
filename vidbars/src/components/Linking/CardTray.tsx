@@ -13,8 +13,12 @@
 // to do with the card browser"), and on a card it is SLIM ("super bulky
 // with so much clunk ... trim the sides down to next to nothing ... the tab
 // that says Mutation should be on the drawer part that I pull down"):
-//   - TrayLip, the one handle. Shut, it sticks out under the card's bottom
-//     edge, naming what is in the tray. Pulled, it goes down with the mouse
+//   - TrayLip, the one handle. Shut, it is a small handle alone under the
+//     middle of the card's bottom edge (Brian 2026-11-18: "it goes down to
+//     just the handle. Then, when we pull it down, it first pops wide into
+//     the shape, and then, with a smooth go, it just continues to pull
+//     down"): the pull widens it into the bar, and it stays the bar until
+//     let go. Pulled, it goes down with the mouse
 //     FROM THE FIRST PIXEL ("it doesn't really move, and then it flips ...
 //     popped on ... definitely don't want that when I'm opening it. Maybe
 //     on the close"): the lip is the same size and shape shut or out, so
@@ -49,6 +53,9 @@ const SEAM = 13          // under the chips, which ride the card's bottom edge
 const FOOT = 21          // what the lip shows of itself
 /** How tall the lip is (shut: how far it reaches below its card), natural units. */
 export const TRAY_LIP = SEAM + FOOT
+const HANDLE_W = 46      // shut: the handle alone, natural units
+const HANDLE_H = 12
+const POP_MS = 110       // the handle widening into the bar (and back)
 /** How far in from the card's sides the lip (and the tray) sits, natural units. */
 export const TRAY_INSET = INSET
 const OPEN_PX = 260      // how far a click opens it, screen px
@@ -107,7 +114,7 @@ function trayMaxPx(rows: number, mode: 'auto' | 'compact' | 'full', wPx: number)
 /** Drag: the tray's height (and width) follow the pointer; let go, it stays.
  *  `maxAt`: how long the tray may be at a width (where its cards end).
  *  `soft`: the press began in the search field, which keeps its click. */
-function dragTray(e: React.PointerEvent, cardId: string, zoom: number, from: { hPx: number; wPx?: number }, maxAt: (wPx: number) => number, wNow: number, onClick?: () => void, soft?: boolean) {
+function dragTray(e: React.PointerEvent, cardId: string, zoom: number, from: { hPx: number; wPx?: number }, maxAt: (wPx: number) => number, wNow: number, onClick?: () => void, soft?: boolean, onHold?: (held: boolean) => void) {
   if (e.button !== 0) return
   e.stopPropagation()
   if (!soft) e.preventDefault()
@@ -122,6 +129,7 @@ function dragTray(e: React.PointerEvent, cardId: string, zoom: number, from: { h
     if (!moved) { sx = dx; sy = dy }
     dx -= sx; dy -= sy
     if (!moved && soft) (document.activeElement as HTMLElement | null)?.blur?.()
+    if (!moved) onHold?.(true)
     moved = true
     // Every pixel of the pull is a pixel of tray: no threshold on the way out.
     const w = from.wPx !== undefined ? Math.max(MIN_W_PX, from.wPx + dx) : wNow
@@ -137,13 +145,14 @@ function dragTray(e: React.PointerEvent, cardId: string, zoom: number, from: { h
     window.removeEventListener('pointermove', onMove)
     window.removeEventListener('pointerup', onUp)
     window.removeEventListener('pointercancel', done)
+    if (moved) onHold?.(false)
   }
   const onUp = () => {
-    done()
-    if (!moved) { onClick?.(); return }
+    if (!moved) { done(); onClick?.(); return }
     // Let go nearly shut: shut.
     const ts = useTrayStore.getState()
     if ((ts.trays[cardId]?.h ?? 0) * zoom < SHUT_PX) ts.setSize(cardId, { h: 0 })
+    done()
   }
   window.addEventListener('pointermove', onMove)
   window.addEventListener('pointerup', onUp)
@@ -163,6 +172,19 @@ export const TrayLip: React.FC<{ cardId: string; left: number; top: number; scal
   const listed = useTrayStore(s => s.trays[cardId]?.rows)
   const { zoom } = useCardView()
   const tucked = useTrayTucked(cardId)
+  // Being pulled: it is the bar from the pull's first pixel until let go.
+  const [held, setHeld] = React.useState(false)
+  const wide = h > 0 || held
+  // The handle widens into the bar (and back) over a moment; nothing else
+  // of the lip is eased, so a pull or a sizing follows the mouse exactly.
+  const was = React.useRef({ wide, at: -1e9 })
+  if (was.current.wide !== wide) was.current = { wide, at: performance.now() }
+  const popping = performance.now() - was.current.at < POP_MS + 40
+  const [, settle] = React.useState(0)
+  React.useEffect(() => {
+    const t = window.setTimeout(() => settle(v => v + 1), POP_MS + 60)
+    return () => window.clearTimeout(t)
+  }, [wide])
   if (!n || tucked) return null
   const open = h > 0
   const hPx = h * zoom
@@ -182,30 +204,35 @@ export const TrayLip: React.FC<{ cardId: string; left: number; top: number; scal
           onPointerDown={e => {
             if ((e.target as Element).closest('[data-tray-mode]')) { e.stopPropagation(); return }
             const inField = (e.target as Element).tagName === 'INPUT'
-            dragTray(e, cardId, zoom, { hPx }, maxAt, wPx, inField ? undefined : toggle, inField)
+            dragTray(e, cardId, zoom, { hPx }, maxAt, wPx, inField ? undefined : toggle, inField, setHeld)
           }}
           onClick={e => e.stopPropagation()}
           onDoubleClick={e => e.stopPropagation()}
           style={{
-            position: 'absolute', left: INSET, top: 0, width: wPx / scale, height: TRAY_LIP, boxSizing: 'border-box',
+            position: 'absolute', boxSizing: 'border-box', top: 0, overflow: 'hidden',
+            // Shut: the handle alone, under the middle of the card's bottom edge.
+            left: wide ? INSET : (width - HANDLE_W) / 2,
+            width: wide ? wPx / scale : HANDLE_W,
+            height: wide ? TRAY_LIP : HANDLE_H,
+            transition: popping ? `left ${POP_MS}ms ease-out, width ${POP_MS}ms ease-out, height ${POP_MS}ms ease-out` : 'none',
             display: 'flex', flexDirection: 'column', justifyContent: 'flex-end',
-            borderRadius: '0 0 9px 9px',
+            borderRadius: wide ? '0 0 9px 9px' : '0 0 6px 6px',
             background: 'linear-gradient(#11131c, #1d2030)',
             border: `1px solid ${open ? 'rgba(160,200,255,0.5)' : 'rgba(255,255,255,0.28)'}`, borderTop: 'none',
-            boxShadow: 'inset 0 9px 8px -5px rgba(0,0,0,0.75), 0 2px 5px rgba(0,0,0,0.45)',
+            boxShadow: wide ? 'inset 0 9px 8px -5px rgba(0,0,0,0.75), 0 2px 5px rgba(0,0,0,0.45)' : '0 2px 5px rgba(0,0,0,0.45)',
             color: 'rgba(255,255,255,0.9)', cursor: open ? 'ns-resize' : 'grab', userSelect: 'none', touchAction: 'none',
             fontFamily: 'system-ui, -apple-system, sans-serif',
           }}
         >
           {/* The little handle, in the middle of the bar's top. */}
-          <div style={{ height: SEAM, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: 2, boxSizing: 'border-box' }}>
-            <div style={{ width: 26, height: 3, borderRadius: 2, background: `rgba(255,255,255,${open ? 0.45 : 0})` }} />
+          <div style={{ flex: '0 0 auto', height: wide ? SEAM : HANDLE_H, display: 'flex', alignItems: wide ? 'flex-end' : 'center', justifyContent: 'center', paddingBottom: wide ? 2 : 0, boxSizing: 'border-box' }}>
+            <div style={{ width: 26, height: 3, borderRadius: 2, background: 'rgba(255,255,255,0.45)' }} />
           </div>
-          <div style={{ height: FOOT, width: '100%', boxSizing: 'border-box', display: 'flex', alignItems: 'center', gap: 5, padding: `0 ${open ? 14 : 8}px 1px 7px`, minWidth: 0 }}>
+          {wide && <div style={{ flex: '0 0 auto', height: FOOT, width: '100%', boxSizing: 'border-box', display: 'flex', alignItems: 'center', gap: 5, padding: '0 14px 1px 7px', minWidth: 0 }}>
             <svg width="11" height="10" viewBox="0 0 11 10" style={{ flexShrink: 0, opacity: 0.8 }}>
               <path d="M1 1h9v5.5a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2z M3.5 4h4" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
             </svg>
-            {open ? (
+            {(
               // The tray's search: names what is in it until something is typed.
               <input
                 data-tray-search
@@ -223,11 +250,9 @@ export const TrayLip: React.FC<{ cardId: string; left: number; top: number; scal
                   color: '#fff', fontSize: 11, fontWeight: 600, fontFamily: 'inherit', cursor: 'text',
                 }}
               />
-            ) : (
-              <span style={{ flex: '1 1 auto', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>{names}</span>
             )}
             {/* The view modes, left to right: the browser's own three. */}
-            {open && MODES.map(m => (
+            {MODES.map(m => (
               <div
                 key={m.value}
                 data-tray-mode={m.value}
@@ -244,9 +269,9 @@ export const TrayLip: React.FC<{ cardId: string; left: number; top: number; scal
               >{m.label}</div>
             ))}
             <span style={{ flex: '0 0 auto', fontSize: 10, fontWeight: 600, opacity: 0.7 }}>{n}</span>
-          </div>
+          </div>}
           {/* Its corner: the tray wider or narrower too. */}
-          {open && (
+          {wide && (
             <div
               data-tray-corner
               title="Drag to size the tray"
@@ -268,7 +293,7 @@ export function useTrayReach(id: string, zoom: number, scale: number): number {
   const h = useTrayStore(s => s.trays[id]?.h ?? 0)
   const n = useTrayCount(id)
   const tucked = useTrayTucked(id)
-  return n && !tucked ? TRAY_LIP * scale + (h > 0 ? h * zoom + 4 : 0) : 0
+  return n && !tucked ? (h > 0 ? TRAY_LIP * scale + h * zoom + 4 : HANDLE_H * scale) : 0
 }
 
 /** The tray's cards: the browser's slots, from the card's bottom edge down
