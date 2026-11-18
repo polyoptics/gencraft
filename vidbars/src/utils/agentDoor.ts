@@ -41,6 +41,10 @@ import { useUndoCoordinator } from '../store/undoCoordinator'
 import { canvasObstacleGroups, cardVisualRect, cardsTouch, expandWithNestedMembers, isHiddenDeckMember } from '../hooks/useCardDecks'
 import { addMediaToGridCard, cardFaceSize, createMediaCard, createTextCard, extractBlockToCard, faceBlocks, gridOrder, isGridCard, layoutCardGrid, mergeCardsInto, moveBlockToCard } from './cardGrid'
 import { linkedHeight, makeLinkedCard, masterOf } from './linkedCards'
+import { bakeStoryline, chartArea, chartOfStoryline, chartOutOf, eraseChart, matchChart, pasteChart, recallChart } from './chartCard'
+import type { ChartData } from './chartData'
+import { cardOrigins } from '../components/Canvas/StorylineLayer'
+import { canReplace, chartsShowing, replaceCard } from './replaceCard'
 import { getMedia } from './mediaStore'
 import { blobToDataUrl, isDataUrl, isMediaRef, mediaRefId } from './mediaRef'
 import { markNew } from './newCards'
@@ -2976,6 +2980,170 @@ async function editBoard(args: Json): Promise<Json> {
   }
 }
 
+// ── Charts: a storyline with cards on its dots ───────────────────────────
+
+/** The chart `args` names: a storyline with cards on it (toolId), or the
+ *  chart kept in a card (cardId), out on the canvas or folded away. */
+function chartNamed(args: Json): { chart: ChartData; toolId?: string; cardId?: string; folded: boolean } {
+  if (args.cardId != null && args.cardId !== '') {
+    const [card] = cardsNamed([String(args.cardId)])
+    const out = chartOutOf(card.id)
+    const chart = out ? chartOfStoryline(out, cardOrigins) : card.chart
+    if (!chart) throw new Error(`"${card.name}" keeps no chart.`)
+    return { chart, cardId: card.id, ...(out ? { toolId: out } : {}), folded: !out }
+  }
+  const { nodeId, d } = storyNamed(args.toolId)
+  const chart = chartOfStoryline(nodeId, cardOrigins)
+  if (!chart) throw new Error('That storyline has no cards on its dots, so it is not a chart yet. Put cards on dots with build_storyline or edit_storyline.')
+  return { chart, toolId: nodeId, ...(d.chartCard ? { cardId: d.chartCard } : {}), folded: false }
+}
+
+/** A chart as its layout: the dots, and each card's slot (which dot, where from the dot, how large). */
+function chartOutline(got: ReturnType<typeof chartNamed>): Json {
+  const { chart } = got
+  const groups = useBoardsStore.getState().groups
+  const byId = new Map(groups.map(g => [g.id, g]))
+  const d = chart.node.storyline!
+  const dotOf = new Map<string, { dot: string; rank: number; leads: boolean }>()
+  chart.tiers.forEach((t, i) => t.cards.forEach((c, k) => dotOf.set(c, { dot: t.dot, rank: i + 1, leads: k === 0 })))
+  const r = Math.round
+  return {
+    ...(got.toolId ? { toolId: got.toolId } : {}), ...(got.cardId ? { cardId: got.cardId } : {}),
+    title: chart.title, folded: got.folded, at: { x: r(chart.node.x), y: r(chart.node.y) },
+    dots: d.dots.map(p => ({ id: p.id, title: p.title ?? '', x: r(p.x), y: r(p.y), joined: neighbours(d, p.id) })),
+    slots: chart.places.map(p => {
+      const t = dotOf.get(p.card)
+      const dot = t ? d.dots.find(q => q.id === t.dot) : undefined
+      return {
+        card: p.card, name: byId.get(p.card)?.name ?? '', type: cardTypeOf(byId.get(p.card)),
+        ...(t ? { dot: t.dot, rank: t.rank, ...(t.leads ? { onTheDot: true } : {}) } : {}),
+        ...(dot ? { fromDot: { x: r(p.dx - dot.x), y: r(p.dy - dot.y) } } : {}),
+        x: r(p.dx), y: r(p.dy), ...(p.w ? { w: r(p.w) } : {}), ...(p.h ? { h: r(p.h) } : {}),
+        ...(p.deckAnchorId ? { inDeckOf: p.deckAnchorId, deck: p.deckState } : {}),
+        ...(p.flipped ? { side: 'back' } : {}),
+      }
+    }),
+    note: 'Dots and slots are measured from the chart\'s own corner (at). rank counts the dots that hold cards from the top; onTheDot marks the card linked to the dot, the others of that rank sit with it. lay_chart_like makes a new chart in this layout with other cards in the slots.',
+  }
+}
+
+function readChart(args: Json): Json {
+  const got = chartNamed(args)
+  agentPoint(say(args, `Reading the chart ${got.chart.title}`), got.folded && got.cardId ? agentSpotOfCard(got.cardId) : { x: got.chart.node.x, y: got.chart.node.y })
+  return chartOutline(got)
+}
+
+/** A new chart laid out as an example is: the same dots and lines, with
+ *  other cards in its slots, each where the example's card sits and as
+ *  large. The new chart is linked cards; the cards themselves stay put. */
+async function layChartLike(args: Json): Promise<Json> {
+  const got = chartNamed((args.like ?? {}) as Json)
+  const groups = useBoardsStore.getState().groups
+  const master = (v: unknown) => masterOf(groups, cardsNamed([String(v ?? '')])[0].id)
+  const swap = new Map<string, string>()
+  const slots = new Set(got.chart.places.map(p => p.card))
+  for (const w of Array.isArray(args.put) ? args.put as Json[] : []) {
+    const was = master(w.inPlaceOf), now = master(w.card)
+    if (!slots.has(was)) throw new Error(`The example has no slot for card ${String(w.inPlaceOf)}. read_chart gives its slots.`)
+    if (swap.has(was)) throw new Error(`Two cards were given for the slot of ${String(w.inPlaceOf)}.`)
+    const g = groups.find(x => x.id === now)!
+    if (g.effect) throw new Error(`${g.name} is an effect card: it does not go on a chart.`)
+    swap.set(was, now)
+  }
+  const keep = args.keepOthers === true
+  const taken = [...swap.values(), ...(keep ? [...slots].filter(c => !swap.has(c)) : [])]
+  if (new Set(taken).size !== taken.length) throw new Error('A card can sit in one slot of a chart only.')
+  if (!taken.length) throw new Error('put: name at least one card and the slot it takes (inPlaceOf: a card of the example).')
+  const to = (c: string | undefined) => c == null ? undefined : swap.get(c) ?? (keep && slots.has(c) ? c : undefined)
+  const src = got.chart
+  const places = src.places.flatMap(p => {
+    const card = to(p.card)
+    if (!card) return []
+    const anchor = to(p.deckAnchorId)
+    // Sized as the slot is wide; as tall as the new card's own shape makes it.
+    const { h: _h, deckState, deckAnchorId: _a, deckOffsetX, deckOffsetY, nestedDeck, deckLastFront, deckLock, ...rest } = p
+    void _h; void _a
+    return [{ ...rest, card, ...(anchor ? { deckState, deckAnchorId: anchor, deckOffsetX, deckOffsetY, nestedDeck } : {}),
+      ...(to(deckLastFront) ? { deckLastFront: to(deckLastFront) } : {}), ...(to(deckLock) ? { deckLock: to(deckLock) } : {}) }]
+  })
+  const title = typeof args.title === 'string' && args.title.trim() ? clip(args.title.trim(), 120) : src.title
+  const st = src.node.storyline!
+  const chart: ChartData = {
+    title,
+    node: { ...src.node, storyline: { ...st, title, chartCard: undefined, dots: st.dots.map(p => ({ ...p, cards: p.cards?.flatMap(c => to(c) ?? []) })) } },
+    places,
+    tiers: src.tiers.map(t => ({ ...t, cards: t.cards.flatMap(c => to(c) ?? []) })).filter(t => t.cards.length),
+  }
+  const at = args.at as { x?: unknown; y?: unknown } | undefined
+  const area = chartArea(src)
+  const pos = at && num(at.x) != null && num(at.y) != null ? { x: num(at.x)!, y: num(at.y)! } : { x: src.node.x + area.w + Math.max(600, area.w * 0.5), y: src.node.y }
+  await agentGlide(say(args, `Laying out ${title}`), pos)
+  const was = useBoardsStore.getState().selectedGroupIds
+  const before = new Set(useBoardsStore.getState().groups.map(g => g.id))
+  useUndoCoordinator.getState().checkpoint()
+  const id = pasteChart(chart, pos)
+  useBoardsStore.getState().setSelectedGroups(was.filter(x => useBoardsStore.getState().groups.some(g => g.id === x)))
+  markNew(useBoardsStore.getState().groups.filter(g => !before.has(g.id)).map(g => g.id))
+  const empty = [...slots].filter(c => !to(c)).length
+  return { ...chartOutline(chartNamed({ toolId: id })), ...(empty ? { slotsLeftEmpty: empty } : {}), undo: 'One undo (Ctrl+Z) takes the new chart away. Its cards are linked cards: the cards they show have not moved.' }
+}
+
+const later = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
+
+/** What a chart card does with its chart: fold a storyline into its card
+ *  (bake), bring it back out (show), give it the layout its master decks
+ *  have now (match), or erase the layout kept in the card. */
+async function chartCardDo(args: Json): Promise<Json> {
+  const what = String(args.do ?? '')
+  if (what === 'bake') {
+    const { nodeId, d } = storyNamed(args.toolId)
+    if (!chartOfStoryline(nodeId, cardOrigins)) throw new Error('That storyline has no cards on its dots: there is nothing to bake.')
+    await agentGlide(say(args, 'Baking the chart into its card'), { x: useFreeNodeStore.getState().nodes[nodeId].x, y: useFreeNodeStore.getState().nodes[nodeId].y })
+    const cardId = bakeStoryline(nodeId, cardOrigins)
+    if (!cardId) throw new Error('A chart is on the move: try again in a moment.')
+    for (let i = 0; i < 40 && useFreeNodeStore.getState().nodes[nodeId]; i++) await later(100)
+    const s = useBoardsStore.getState()
+    const g = s.groups.find(x => x.id === cardId)
+    return { baked: true, cardId, card: g ? describe(g, s.groups, s.boards) : null, ...(d.chartCard ? {} : { newCard: true }), note: 'The chart is folded into the card: its linked cards and its line are gone from the canvas, the cards they showed stay. chart_card show brings it back out. One undo takes the bake back.' }
+  }
+  const [card] = cardsNamed([String(args.cardId ?? '')])
+  if (!card.chart) throw new Error(`"${card.name}" keeps no chart.`)
+  if (what === 'show') {
+    if (chartOutOf(card.id)) throw new Error('That chart is out already.')
+    await agentGlide(say(args, `Showing the chart of ${card.name}`), agentSpotOfCard(card.id))
+    const id = recallChart(card.id)
+    if (!id) throw new Error('A chart is on the move: try again in a moment.')
+    await later(900)
+    return { ...chartOutline(chartNamed({ toolId: id })), undo: 'One undo (Ctrl+Z) folds it away again.' }
+  }
+  if (what === 'match') {
+    const n = matchChart(card.id, cardOrigins, true)
+    if (!n) return { matched: 0, note: 'The chart already lies as its master decks do.' }
+    await agentGlide(say(args, `Matching the chart of ${card.name}`), agentSpotOfCard(card.id))
+    matchChart(card.id, cardOrigins)
+    return { matched: n, undo: 'One undo (Ctrl+Z) takes it back.' }
+  }
+  if (what === 'erase') {
+    if (chartOutOf(card.id)) throw new Error('That chart is out: bake it back into its card first (chart_card bake with its toolId).')
+    await agentGlide(say(args, `Erasing the chart layout of ${card.name}`), agentSpotOfCard(card.id))
+    if (!eraseChart(card.id)) throw new Error('The chart could not be erased.')
+    return { erased: true, note: 'Only the layout is gone (dots, lines, where each card sat). The card, its members and who reports to whom stay. One undo brings it back.' }
+  }
+  throw new Error('do is one of: bake (toolId), show, match, erase (cardId).')
+}
+
+/** One card takes another's place everywhere charts show it. */
+async function replaceInCharts(args: Json): Promise<Json> {
+  const [old, now] = cardsNamed([String(args.old ?? ''), String(args.with ?? '')])
+  const groups = useBoardsStore.getState().groups
+  if (!canReplace(groups, now.id, old.id)) throw new Error(`"${now.name}" cannot replace "${old.name}": the old card must be one that a chart or a linked card shows, and neither may be a linked card, an effect card or pinned.`)
+  const charts = chartsShowing(groups, old.id)
+  await agentGlide(say(args, `Replacing ${old.name} with ${now.name}`), agentSpotOfCard(old.id))
+  useUndoCoordinator.getState().checkpoint()
+  if (!replaceCard(old.id, now.id, { x: now.originX, y: now.originY })) throw new Error('The card could not be replaced.')
+  return { replaced: old.name, with: now.name, inCharts: charts, note: `"${now.name}" has taken the place, size and deck of "${old.name}", in every chart, faction, storyline dot and linked card that showed it. "${old.name}" lies where "${now.name}" was, linked to nothing. One undo takes it back.` }
+}
+
 // ── The door ────────────────────────────────────────────────────────────
 
 const OPS: Record<string, (args: Json) => Json | Promise<Json>> = { list: listCards, read: readCards, decks: listDecks, media: cardMedia, deal: dealDeck,
@@ -2986,6 +3154,7 @@ const OPS: Record<string, (args: Json) => Json | Promise<Json>> = { list: listCa
   scene: readScene, sceneEdit: editScene,
   viewRead: readView, viewMove: moveView,
   cabinetRead: readCabinet, cabinetEdit: editCabinet,
+  chartRead: readChart, chartLike: layChartLike, chartCard: chartCardDo, replace: replaceInCharts,
   blocksEdit: editBlocks, copy: copyCards, boardRead: readBoard, boardEdit: editBoard,
   poolRead: readPool,
   promptsRead: readPrompts, promptsEdit: editPrompts,

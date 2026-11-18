@@ -778,6 +778,42 @@ const TOOLS = [
     },
   },
   {
+    name: 'read_chart',
+    description: 'Read a chart as a layout. A chart is a storyline with cards on its dots (an org chart, a ranking, a family tree, any tree of cards). Gives its dots and lines, and a slot for every card: which dot it belongs to and its rank from the top, where it sits and how large it is. Name the storyline (toolId, from list_tools), or a card that keeps a chart (cardId), out on the canvas or folded away. Use it to learn a layout the artist shows you as an example, then lay_chart_like. Read-only.',
+    inputSchema: { type: 'object', properties: { toolId: { type: 'string' }, cardId: { type: 'string' } } },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'lay_chart_like',
+    description: 'Make a new chart laid out the way an example chart is: the same dots and lines, with the cards you name in its slots, each where the example\'s card sits and as wide. Use it to lay out other cards (new characters), or the same cards in another order (ranked by another attribute), in the fashion of a chart the artist made. The new chart is made of linked cards: the cards themselves do not move. Slots you give no card are left empty, unless keepOthers. For more cards than the example has slots, add dots and cards after with edit_storyline. It lands right of the example, or at "at". One undo takes it away.',
+    inputSchema: {
+      type: 'object', required: ['like', 'put'],
+      properties: {
+        like: { type: 'object', description: 'The example: a storyline (toolId) or a card that keeps a chart (cardId).', properties: { toolId: { type: 'string' }, cardId: { type: 'string' } } },
+        put: { type: 'array', minItems: 1, maxItems: 200, items: { type: 'object', required: ['inPlaceOf', 'card'], properties: {
+          inPlaceOf: { type: 'string', description: 'A card of the example (slots[].card from read_chart): its slot is the one taken.' },
+          card: { type: 'string', description: 'The card that goes in that slot.' },
+        } } },
+        keepOthers: { type: 'boolean', description: 'Slots you named no card for keep the example\'s card. Default false: they are left empty.' },
+        title: { type: 'string', description: 'The new chart\'s title. Default: the example\'s.' },
+        at: { type: 'object', description: 'Where the new chart\'s corner goes, in canvas units.', properties: { x: { type: 'number' }, y: { type: 'number' } } },
+      },
+    },
+  },
+  {
+    name: 'chart_card',
+    description: 'What a card does with its chart, as its menu does. bake: fold a storyline that has cards on its dots (toolId) into its card; the first time, that makes a faction card named after the storyline, whose back lists the members by rank. show: bring the chart kept in a card (cardId) back out as a storyline with linked cards. match: give the chart the layout its master decks have now. erase: erase the layout kept in the card (its members and who reports to whom stay). One undo each.',
+    inputSchema: {
+      type: 'object', required: ['do'],
+      properties: { do: { type: 'string', enum: ['bake', 'show', 'match', 'erase'] }, toolId: { type: 'string', description: 'For bake: the storyline.' }, cardId: { type: 'string', description: 'For show, match, erase: the card that keeps the chart.' } },
+    },
+  },
+  {
+    name: 'replace_card',
+    description: 'One card takes another\'s place everywhere it is shown: in every chart (out or folded), faction, storyline dot and linked card. The new card takes the old one\'s spot, size and deck; the old card goes to where the new one was, linked to nothing. The old card must be one a chart or a linked card shows. Only when the artist asked for it. One undo.',
+    inputSchema: { type: 'object', required: ['old', 'with'], properties: { old: { type: 'string', description: 'The id of the card to replace.' }, with: { type: 'string', description: 'The id of the card that takes its place.' } } },
+  },
+  {
     name: 'copy_cards',
     description: 'Make copies of cards: each copy is a card of its own with the same face, text, details, blocks and look, named "... copy". They are set in a row at an empty spot of the view, or at "at". Copying one card of a closed deck copies that card alone. For a card that only shows another card (and changes with it), use link_cards instead. One undo takes the copies away.',
     inputSchema: {
@@ -826,7 +862,7 @@ const OPS = {
   read_rough_cut: 'cutRead', edit_rough_cut: 'cutEdit', deck_of_picks: 'cutPicks',
   read_view: 'viewRead', move_view: 'viewMove',
   read_cabinet: 'cabinetRead', edit_cabinet: 'cabinetEdit',
-  read_media_pool: 'poolRead', copy_cards: 'copy', read_board: 'boardRead',
+  read_media_pool: 'poolRead', read_chart: 'chartRead', lay_chart_like: 'chartLike', chart_card: 'chartCard', replace_card: 'replace', copy_cards: 'copy', read_board: 'boardRead',
   read_prompts: 'promptsRead', edit_prompts: 'promptsEdit',
   read_loop_strip: 'stripRead', edit_loop_strip: 'stripEdit', run_loop_strip: 'stripRun',
   read_viewer: 'viewerRead', show_in_viewer: 'viewerShow',
@@ -1009,8 +1045,8 @@ async function handle(msg) {
       return ok({
         protocolVersion: params?.protocolVersion || '2024-11-05',
         capabilities: { tools: {} },
-        serverInfo: { name: 'vidbars', version: '1.18.0' },
-        instructions: 'VidBars is the artist\'s card canvas. You may read cards and decks, hand out the media on cards as files, and deal a deck of cards: new cards, results brought in from another tool, and linked cards of cards that are there. You can use the tools of VidBars: set one down (place_tool), build a 3D set from cards that hold models (make_3d_set, stand_in_3d_set), square up a model that came in facing the wrong way (square_up_models), add shapes and cameras to it and draw paths for them to ride (read_3d_set, add_to_3d_set, draw_path, edit_path, play_paths), put effects on picture cards (list_effects, add_effects, edit_effects, save_effects), run pictures through a loop strip (read_loop_strip, edit_loop_strip, run_loop_strip), read and write prompts in a Card Prompts window (read_prompts, edit_prompts), keep cards in a cabinet\'s drawers (read_cabinet, edit_cabinet), look through a folder in a Media Pool (read_media_pool), show a card big in a Viewer (show_in_viewer), move the artist\'s view to show them something (read_view, move_view), make a GIF or a movie of cards, add cards to a Rough Cut and cut there (read_rough_cut, edit_rough_cut, deck_of_picks), draw storylines and trees (build_storyline, edit_storyline), lay out the face of a scene card (read_scene, edit_scene), and set up state machines in a States workspace (read_states, build_states, edit_states, run_states). You may also change what is there when the artist asks for it: edit cards and their faces (edit_cards), the blocks a card holds (edit_blocks: add, remove, order, move, take out, merge), the bars on a block\'s board (read_board, edit_board), copy cards (copy_cards), arrange, open and close decks, link, delete; each change is one undo, and undo takes your last one back. Do not change or delete anything the artist did not ask you to. Read before you deal or change, keep card text short, and tell the artist plainly what you did. The artist sees your pointer in VidBars with a bubble: give each request a few plain words in "doing". To use a card\'s picture or model with another tool, get_card_media then send_file to the upload address that tool gives; bring what comes back onto a card with deal_deck (media, and from: the cards it was made from). A 3D model that comes back with a preview picture is ONE media entry: the model, with the picture as its thumbnail.',
+        serverInfo: { name: 'vidbars', version: '1.19.0' },
+        instructions: 'VidBars is the artist\'s card canvas. You may read cards and decks, hand out the media on cards as files, and deal a deck of cards: new cards, results brought in from another tool, and linked cards of cards that are there. You can use the tools of VidBars: set one down (place_tool), build a 3D set from cards that hold models (make_3d_set, stand_in_3d_set), square up a model that came in facing the wrong way (square_up_models), add shapes and cameras to it and draw paths for them to ride (read_3d_set, add_to_3d_set, draw_path, edit_path, play_paths), put effects on picture cards (list_effects, add_effects, edit_effects, save_effects), run pictures through a loop strip (read_loop_strip, edit_loop_strip, run_loop_strip), read and write prompts in a Card Prompts window (read_prompts, edit_prompts), keep cards in a cabinet\'s drawers (read_cabinet, edit_cabinet), look through a folder in a Media Pool (read_media_pool), show a card big in a Viewer (show_in_viewer), move the artist\'s view to show them something (read_view, move_view), make a GIF or a movie of cards, add cards to a Rough Cut and cut there (read_rough_cut, edit_rough_cut, deck_of_picks), draw storylines and trees (build_storyline, edit_storyline), read a chart the artist made as a layout and lay other cards out the same way (read_chart, lay_chart_like), bake a chart into a card and bring it back out (chart_card), replace a card everywhere charts show it (replace_card), lay out the face of a scene card (read_scene, edit_scene), and set up state machines in a States workspace (read_states, build_states, edit_states, run_states). You may also change what is there when the artist asks for it: edit cards and their faces (edit_cards), the blocks a card holds (edit_blocks: add, remove, order, move, take out, merge), the bars on a block\'s board (read_board, edit_board), copy cards (copy_cards), arrange, open and close decks, link, delete; each change is one undo, and undo takes your last one back. Do not change or delete anything the artist did not ask you to. Read before you deal or change, keep card text short, and tell the artist plainly what you did. The artist sees your pointer in VidBars with a bubble: give each request a few plain words in "doing". To use a card\'s picture or model with another tool, get_card_media then send_file to the upload address that tool gives; bring what comes back onto a card with deal_deck (media, and from: the cards it was made from). A 3D model that comes back with a preview picture is ONE media entry: the model, with the picture as its thumbnail.',
       })
     case 'ping': return ok({})
     case 'tools/list': return ok({ tools: TOOLS })
