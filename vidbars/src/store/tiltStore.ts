@@ -464,6 +464,13 @@ interface ModelScaleStore {
    *  the card's face. Same keys. Absent: sitting on its card. */
   floatOf: Record<string, number>
   setFloat: (key: string, h: number | null) => void
+  /** A model squared up (Brian 2026-11-18: one that came in facing the
+   *  wrong way, or lying down): quarter turns and a mirror, kept with the
+   *  model's FILE (by its url, as unitsPerMetre is), so it shows the same
+   *  on every card, deck, 3D set and Viewer that model is on
+   *  (three/modelQuarter). Absent: as it came. */
+  quarterOf: Record<string, ModelQuarter>
+  setQuarter: (url: string, q: ModelQuarter | null) => void
   /** Back as it came (Brian 2026-11-09: Reset): no place, turn, size or
    *  stretch of its own. */
   resetModel: (key: string) => void
@@ -485,6 +492,10 @@ interface ModelScaleStore {
  *  middle in that picture, for each half of its height. Such a piece
  *  stays upright, as a token; one from above turns with its model. */
 export interface PieceView { q: [number, number, number, number]; foot: [number, number] }
+
+/** How a model is squared up: `q` a turn made of quarter turns, about the
+ *  middle of its floor; `mirror` flipped left to right first. */
+export interface ModelQuarter { q: [number, number, number, number]; mirror?: boolean }
 
 export interface ScenePlace { dx: number; dy: number; h: number }
 /** A camera primitive's lens: `mm` focal length (on a 36 mm wide frame),
@@ -530,6 +541,12 @@ export const useModelScaleStore = create<ModelScaleStore>()(persist(set => ({
     if (h) floatOf[key] = h; else delete floatOf[key]
     return { floatOf }
   }),
+  quarterOf: {},
+  setQuarter: (url, q) => set(s => {
+    const quarterOf = { ...s.quarterOf }
+    if (q) quarterOf[url] = q; else delete quarterOf[url]
+    return { quarterOf }
+  }),
   placeOf: {},
   resetModel: key => set(s => {
     const drop = <T,>(m: Record<string, T>) => { const o = { ...m }; delete o[key]; return o }
@@ -562,6 +579,6 @@ export const useModelScaleStore = create<ModelScaleStore>()(persist(set => ({
   }),
 }), {
   name: 'vidbars-model-scale',
-  partialize: s => ({ unitsPerMetre: s.unitsPerMetre, sizeOf: s.sizeOf, setSizeOf: s.setSizeOf, poseOf: s.poseOf, tintOf: s.tintOf, placeOf: s.placeOf, stretchOf: s.stretchOf, lensOf: s.lensOf, floatOf: s.floatOf, pieceOf: s.pieceOf }),
+  partialize: s => ({ unitsPerMetre: s.unitsPerMetre, sizeOf: s.sizeOf, setSizeOf: s.setSizeOf, poseOf: s.poseOf, tintOf: s.tintOf, placeOf: s.placeOf, stretchOf: s.stretchOf, lensOf: s.lensOf, floatOf: s.floatOf, pieceOf: s.pieceOf, quarterOf: s.quarterOf }),
   storage: createDebouncedIDBStorage(400),
 }))

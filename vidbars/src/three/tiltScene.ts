@@ -11,6 +11,7 @@
 import * as THREE from 'three'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import { acquireModel, releaseModel, disposeInstance } from './modelCache'
+import { quarterStamp, modelBody } from './modelQuarter'
 import { computePosedBounds } from './orbitState'
 import { createLook, applyLook, disposeLook, type LookInstance, type ModelShade } from './modelLook'
 import { gradeLook, type Grade } from './modelMaps'
@@ -250,7 +251,7 @@ export const PERSON_H = 1.75
 /** What a model measures, per url — a skinned model's posed bounds walk
  *  every vertex, which is far too slow to redo each time a card comes
  *  back into view. */
-const measured = new Map<string, { size: THREE.Vector3; centre: THREE.Vector3; minY: number; triangles: number }>()
+const measured = new Map<string, { size: THREE.Vector3; centre: THREE.Vector3; minY: number; triangles: number; stamp: number }>()
 /** A model file's triangles, once it has been loaded (the triangle budget). */
 export const trianglesOf = (url: string): number | undefined => measured.get(url)?.triangles
 
@@ -307,6 +308,10 @@ interface Standing {
    *  footprint is (flat px, radius): the lift handle's ground mark. */
   base: number
   footR: number
+  /** How its model was squared up when this copy of it was made
+   *  (modelQuarter quarterStamp), and whether a new copy is on its way. */
+  quarter: number
+  swapping: boolean
 }
 
 const WIRE_MAT = new THREE.MeshBasicMaterial({ color: 0x9fd0ff, wireframe: true, transparent: true, opacity: 0.85 })
@@ -772,7 +777,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     list.push({ key: PATH_KEY, g: pathGizmo, rig: null })
     return list
   }
-  const notesHost = (s: Standing): NotesHost => ({ url: s.url, inst: s.inst, visible: s.stand.visible, body: s.turn, size: s.size.length() })
+  const notesHost = (s: Standing): NotesHost => ({ url: s.url, inst: s.inst && modelBody(s.inst), visible: s.stand.visible, body: s.turn, size: s.size.length() })
 
   const spawn = (key: string, url: string): Standing => {
     const stand = new THREE.Group()
@@ -802,12 +807,23 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     const s: Standing = {
       url, stand, turn, orient, pose, gizmo: null, rig: null, tint: null, baseColors: null, back: null, spun: [], inst: null, size: new THREE.Vector3(), unit: 1, unitSet: false, triangles: 0,
       figure, wall, wallText: '', look: null, phase: Math.random() * 6.28, dead: false, seen: frameNo, shownAt: 0,
-      mats: [], alpha: -1, base: 0, footR: 0,
+      mats: [], alpha: -1, base: 0, footR: 0, quarter: 0, swapping: false,
     }
     acquireModel(url).then(inst => {
       if (s.dead) { releaseModel(url); disposeInstance(inst); return }
+      seat(s, inst)
+    }).catch(() => { /* unreadable model: the card just stays flat */ })
+    standing.set(key, s)
+    return s
+  }
+  /** A loaded copy of its model onto stand `s`: measured, with its own
+   *  materials, feet on the card. */
+  const seat = (s: Standing, inst: THREE.Object3D) => {
+    const url = s.url
+    {
+      const stamp = (inst.userData.quarterStamp as number | undefined) ?? 0
       let m = measured.get(url)
-      if (!m) {
+      if (!m || m.stamp !== stamp) {
         const box = computePosedBounds(inst)
         let triangles = 0
         inst.traverse(o => {
@@ -815,9 +831,10 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
           const pos = mesh.isMesh ? mesh.geometry?.attributes?.position : null
           if (pos) triangles += mesh.geometry.index ? mesh.geometry.index.count / 3 : pos.count / 3
         })
-        m = { size: box.getSize(new THREE.Vector3()), centre: box.getCenter(new THREE.Vector3()), minY: box.min.y, triangles }
+        m = { size: box.getSize(new THREE.Vector3()), centre: box.getCenter(new THREE.Vector3()), minY: box.min.y, triangles, stamp }
         measured.set(url, m)
       }
+      s.quarter = stamp
       s.size.copy(m.size)
       s.triangles = m.triangles
       inst.traverse(o => { if ((o as THREE.Mesh).isMesh) o.castShadow = true })
@@ -826,13 +843,25 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       s.look = createLook(inst, c => s.mats.push({ m: c, o: c.opacity, t: c.transparent }))
       // Feet on the card, centred on it; the user's turn (orient) is about
       // the model's middle, half its height up.
-      orient.position.set(0, m.size.y / 2, 0)
+      s.orient.position.set(0, m.size.y / 2, 0)
       inst.position.set(-m.centre.x, -m.minY - m.size.y / 2, -m.centre.z)
-      pose.add(inst)
+      s.pose.add(inst)
       s.inst = inst
-    }).catch(() => { /* unreadable model: the card just stays flat */ })
-    standing.set(key, s)
-    return s
+    }
+  }
+  /** Its model has been squared up another way (modelQuarter) since this
+   *  copy was made: a new copy takes its place, standing as it stood (no
+   *  growing in again). The old one shows until the new one is here. */
+  const reseat = (s: Standing) => {
+    s.swapping = true
+    acquireModel(s.url).then(inst => {
+      s.swapping = false
+      if (s.dead) { releaseModel(s.url); disposeInstance(inst); return }
+      if (s.inst) { disposeInstance(s.inst); releaseModel(s.url) }
+      if (s.look) disposeLook(s.look)
+      s.inst = null; s.look = null; s.mats = []; s.alpha = -1; s.tint = null; s.baseColors = null
+      seat(s, inst)
+    }).catch(() => { s.swapping = false; s.quarter = quarterStamp(s.url) })
   }
   const drop = (key: string, s: Standing) => {
     s.dead = true
@@ -1325,6 +1354,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       if (s && s.url !== tg.url) { drop(tg.key, s); s = undefined }
       if (!s) s = spawn(tg.key, tg.url)
       s.seen = frameNo
+      if (s.inst && !s.swapping && s.quarter !== quarterStamp(s.url)) reseat(s)
       // (One a set shows live in the flat view stands whole at any tilt.)
       const full = !!st.full?.(tg.key)
       const ease = full ? 1 : easeAll, fade = full ? 1 : st.fade

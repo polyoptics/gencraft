@@ -75,6 +75,19 @@ export function getPiece(url: string, q: Quat, stretch?: Vec3): PiecePic | null 
   return usePieceStore.getState().pics[pieceKey(url, q, stretch)] ?? null
 }
 
+/** Model `url`'s pictures are let go (it has been squared up another way:
+ *  three/modelQuarter), and what it measured: asked for again, they are
+ *  drawn again. */
+export function dropPieces(url: string): void {
+  const { pics, sizes } = usePieceStore.getState()
+  const keys = Object.keys(pics).filter(k => k.startsWith(`${url}|`))
+  if (!keys.length && !(url in sizes)) return
+  const next = { ...pics }, nextSizes = { ...sizes }
+  for (const k of keys) delete next[k]
+  delete nextSizes[url]
+  usePieceStore.setState({ pics: next, sizes: nextSizes })
+}
+
 /** Pictures no piece shows any more are let go, oldest first, once there
  *  are more than KEEP of them. `inUse`: the keys of the ones shown. */
 export function trimPieces(inUse: Set<string>): void {

@@ -49,6 +49,8 @@ import { placeBox, placeToolAt, type PlaceKind } from './placeTool'
 import { bundleArea3dCard } from './area3dCard'
 import { cardHoldsModel, dataKey, rowCards } from './area3dScene'
 import { useModelScaleStore, useTiltStore } from '../store/tiltStore'
+import { QUARTER_STEPS, quarterable, stepQuarter, type ModelQuarter, type QuarterStep } from '../three/modelQuarter'
+import { cardModel } from '../components/Canvas/tilt/TiltModels'
 import { freeNodeFootprint } from './canvasCreate'
 import { deckGifShots, makeDeckMovie, makeGif, useGifJob } from './makeGif'
 import { appendCards, clipLength, clipRow, clipStart, cutLength, MIN_CLIP, placed, splitClipAt, type RoughClip, type RoughCutData } from './roughCut'
@@ -949,6 +951,35 @@ async function stand3d(args: Json): Promise<Json> {
   useUndoCoordinator.getState().checkpoint()
   stands.forEach(st => standModel(area, st.id, st, { x: 0.5, y: 0.5 }))
   return { placed: cards.length, note: 'One undo (Ctrl+Z) takes it back.' }
+}
+
+/** Square up the models on cards (three/modelQuarter): quarter turns, a
+ *  quarter tip, a mirror, as the row of buttons under a model in the 3D
+ *  view does. Kept with the model's file, so every card, deck, 3D set and
+ *  Viewer showing that model shows it so. */
+async function squareModels(args: Json): Promise<Json> {
+  const list = Array.isArray(args.cards) ? args.cards as Json[] : []
+  const cards = cardsNamed(list.map(c => String(c.id ?? '')))
+  const plan = list.map((c, i) => {
+    const model = cardModel(cards[i].id)
+    if (!model) throw new Error(`${cards[i].name} holds no 3D model.`)
+    if (!quarterable(model.url)) throw new Error(`${cards[i].name} is a shape made in VidBars (a cube, a camera): every card of it shares it, so it is not squared up. Turn it in a 3D set with stand_in_3d_set.`)
+    const steps = (Array.isArray(c.steps) ? c.steps : []).map(String)
+    const bad = steps.filter(s => !(QUARTER_STEPS as readonly string[]).includes(s))
+    if (bad.length) throw new Error(`No step "${bad[0]}". Steps: ${QUARTER_STEPS.join(', ')}.`)
+    if (!c.reset && !steps.length) throw new Error('Give steps, or reset: true.')
+    return { url: model.url, name: cards[i].name, reset: !!c.reset, steps: steps as QuarterStep[] }
+  })
+  await agentGlide(say(args, `Squaring up ${names(cards)}`), agentSpotOfCard(cards[0].id))
+  useUndoCoordinator.getState().checkpoint()
+  const said = (q: ModelQuarter | null | undefined) => q ? { squaredUp: true, ...(q.mirror ? { mirrored: true } : {}) } : { squaredUp: false }
+  const out = plan.map(p => {
+    let q: ModelQuarter | null | undefined = p.reset ? null : useModelScaleStore.getState().quarterOf[p.url]
+    for (const s of p.steps) q = stepQuarter(q, s)
+    useModelScaleStore.getState().setQuarter(p.url, q ?? null)
+    return { card: p.name, ...said(q) }
+  })
+  return { models: out, note: 'Kept with each model\'s file: every card, deck, 3D set and Viewer showing that model shows it so. One undo (Ctrl+Z) takes it back.' }
 }
 
 // ── GIF, movie, Rough Cut ───────────────────────────────────────────────
@@ -2742,7 +2773,7 @@ async function editBlocks(args: Json): Promise<Json> {
 
 const OPS: Record<string, (args: Json) => Json | Promise<Json>> = { list: listCards, read: readCards, decks: listDecks, media: cardMedia, deal: dealDeck,
   edit: editCards, arrange: arrangeCards, deck: setDeck, link: linkCards, delete: deleteCards, select: selectCards, undo: undoLast,
-  tools: listTools, place: placeTool, set3d: make3dSet, stand3d, gif: makeGifOf, movie: makeMovieOf, cut: addToCut,
+  tools: listTools, place: placeTool, set3d: make3dSet, stand3d, modelSquare: squareModels, gif: makeGifOf, movie: makeMovieOf, cut: addToCut,
   states: readStates, statesBuild: buildStates, statesEdit: editStates, statesRun: runStates,
   story: readStoryline, storyBuild: buildStoryline, storyEdit: editStoryline,
   scene: readScene, sceneEdit: editScene,

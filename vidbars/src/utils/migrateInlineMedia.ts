@@ -26,6 +26,7 @@ import { useFreeNodeStore } from '../store/freeNodeStore'
 import type { FreeNodeData } from '../store/freeNodeStore'
 import { isDataUrl, dataUrlToBlob } from './mediaRef'
 import { rekeyModelPosters } from '../three/posterService'
+import { useModelScaleStore } from '../store/tiltStore'
 
 // Pre-continuous-sweep guard key ('vidbars-inline-media-migrated') — the
 // sweep no longer version-gates, so clear the stale entry once.
@@ -198,6 +199,14 @@ export async function runInlineMediaMigration(): Promise<Counter> {
   // BEFORE committing state, so components re-rendering with the new urls
   // find their existing posters instead of regenerating.
   if (rewrites.size > 0) await rekeyModelPosters(rewrites)
+  // How a model is squared up is kept by its url too (three/modelQuarter).
+  if (rewrites.size > 0) {
+    const ms = useModelScaleStore.getState()
+    for (const [from, to] of rewrites) {
+      const q = ms.quarterOf[from]
+      if (q) { ms.setQuarter(to, q); ms.setQuarter(from, null) }
+    }
+  }
 
   if (nodesChanged) useFreeNodeStore.setState({ nodes: newNodes })
   if (counter.n > nBeforeBoards) useBoardsStore.setState({ boards: newBoards, groups: newGroups })

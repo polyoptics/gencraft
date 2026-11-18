@@ -283,6 +283,20 @@ const TOOLS = [
     },
   },
   {
+    name: 'square_up_models',
+    description: 'Square up the 3D models on cards that came in facing the wrong way or lying down: quarter turns about upright, quarter tips, a mirror. The same as the row of buttons under a model in the 3D view. It is kept with the model\'s file, so every card, linked card, deck, 3D set and Viewer showing that model shows it so (two cards of one model cannot differ; to turn one model in a 3D set use stand_in_3d_set). Not for shapes made in VidBars (cube, camera). One undo takes it back.',
+    inputSchema: {
+      type: 'object', required: ['cards'],
+      properties: {
+        cards: { type: 'array', minItems: 1, maxItems: 40, items: { type: 'object', required: ['id'], properties: {
+            id: { type: 'string', description: 'A card id from list_cards (a closed deck\'s front card: the model on its face).' },
+            steps: { type: 'array', maxItems: 12, items: { type: 'string', enum: ['left', 'right', 'forward', 'side', 'mirror'] }, description: 'Presses, in order, each made on the model as it stands then, seen from the front: left / right turn its front a quarter to the viewer\'s left / right (two of either: facing the other way); forward tips its top a quarter towards the viewer (one lying on its back stands up, or the other way round: try, then look); side tips its top a quarter to the right; mirror flips it left to right.' },
+            reset: { type: 'boolean', description: 'First put it back as it came (then any steps).' },
+          } } },
+      },
+    },
+  },
+  {
     name: 'make_gif',
     description: 'Make the movies and pictures on cards into one looping GIF, on a new card beside them, as the deck\'s right-click item does. A closed deck named by its front card gives every card in it. At least one card must hold a movie.',
     inputSchema: { type: 'object', required: ['ids'], properties: { ids: { type: 'array', items: { type: 'string' }, minItems: 1, description: 'Card ids from list_cards.' }, pingPong: { type: 'boolean', description: 'Play forward then backward.' } } },
@@ -751,7 +765,7 @@ for (const t of TOOLS) if (t.name !== 'send_file') t.inputSchema.properties.doin
 const OPS = {
   list_cards: 'list', read_cards: 'read', list_decks: 'decks',
   edit_cards: 'edit', arrange_cards: 'arrange', set_deck: 'deck', link_cards: 'link', delete_cards: 'delete', select_cards: 'select', undo: 'undo',
-  list_tools: 'tools', place_tool: 'place', make_3d_set: 'set3d', stand_in_3d_set: 'stand3d', make_gif: 'gif', make_movie: 'movie', add_to_rough_cut: 'cut',
+  list_tools: 'tools', place_tool: 'place', make_3d_set: 'set3d', stand_in_3d_set: 'stand3d', square_up_models: 'modelSquare', make_gif: 'gif', make_movie: 'movie', add_to_rough_cut: 'cut',
   read_states: 'states', build_states: 'statesBuild', edit_states: 'statesEdit', run_states: 'statesRun',
   read_storyline: 'story', build_storyline: 'storyBuild', edit_storyline: 'storyEdit',
   read_scene: 'scene', edit_scene: 'sceneEdit',
@@ -935,8 +949,8 @@ async function handle(msg) {
       return ok({
         protocolVersion: params?.protocolVersion || '2024-11-05',
         capabilities: { tools: {} },
-        serverInfo: { name: 'vidbars', version: '1.16.0' },
-        instructions: 'VidBars is the artist\'s card canvas. You may read cards and decks, hand out the media on cards as files, and deal a deck of cards: new cards, results brought in from another tool, and linked cards of cards that are there. You can use the tools of VidBars: set one down (place_tool), build a 3D set from cards that hold models (make_3d_set, stand_in_3d_set), add shapes and cameras to it and draw paths for them to ride (read_3d_set, add_to_3d_set, draw_path, edit_path, play_paths), put effects on picture cards (list_effects, add_effects, edit_effects, save_effects), run pictures through a loop strip (read_loop_strip, edit_loop_strip, run_loop_strip), read and write prompts in a Card Prompts window (read_prompts, edit_prompts), keep cards in a cabinet\'s drawers (read_cabinet, edit_cabinet), look through a folder in a Media Pool (read_media_pool), show a card big in a Viewer (show_in_viewer), move the artist\'s view to show them something (read_view, move_view), make a GIF or a movie of cards, add cards to a Rough Cut and cut there (read_rough_cut, edit_rough_cut, deck_of_picks), draw storylines and trees (build_storyline, edit_storyline), lay out the face of a scene card (read_scene, edit_scene), and set up state machines in a States workspace (read_states, build_states, edit_states, run_states). You may also change what is there when the artist asks for it: edit cards and their faces (edit_cards), the blocks a card holds (edit_blocks: add, remove, order, move, take out, merge), arrange, open and close decks, link, delete; each change is one undo, and undo takes your last one back. Do not change or delete anything the artist did not ask you to. Read before you deal or change, keep card text short, and tell the artist plainly what you did. The artist sees your pointer in VidBars with a bubble: give each request a few plain words in "doing". To use a card\'s picture or model with another tool, get_card_media then send_file to the upload address that tool gives; bring what comes back onto a card with deal_deck (media, and from: the cards it was made from). A 3D model that comes back with a preview picture is ONE media entry: the model, with the picture as its thumbnail.',
+        serverInfo: { name: 'vidbars', version: '1.17.0' },
+        instructions: 'VidBars is the artist\'s card canvas. You may read cards and decks, hand out the media on cards as files, and deal a deck of cards: new cards, results brought in from another tool, and linked cards of cards that are there. You can use the tools of VidBars: set one down (place_tool), build a 3D set from cards that hold models (make_3d_set, stand_in_3d_set), square up a model that came in facing the wrong way (square_up_models), add shapes and cameras to it and draw paths for them to ride (read_3d_set, add_to_3d_set, draw_path, edit_path, play_paths), put effects on picture cards (list_effects, add_effects, edit_effects, save_effects), run pictures through a loop strip (read_loop_strip, edit_loop_strip, run_loop_strip), read and write prompts in a Card Prompts window (read_prompts, edit_prompts), keep cards in a cabinet\'s drawers (read_cabinet, edit_cabinet), look through a folder in a Media Pool (read_media_pool), show a card big in a Viewer (show_in_viewer), move the artist\'s view to show them something (read_view, move_view), make a GIF or a movie of cards, add cards to a Rough Cut and cut there (read_rough_cut, edit_rough_cut, deck_of_picks), draw storylines and trees (build_storyline, edit_storyline), lay out the face of a scene card (read_scene, edit_scene), and set up state machines in a States workspace (read_states, build_states, edit_states, run_states). You may also change what is there when the artist asks for it: edit cards and their faces (edit_cards), the blocks a card holds (edit_blocks: add, remove, order, move, take out, merge), arrange, open and close decks, link, delete; each change is one undo, and undo takes your last one back. Do not change or delete anything the artist did not ask you to. Read before you deal or change, keep card text short, and tell the artist plainly what you did. The artist sees your pointer in VidBars with a bubble: give each request a few plain words in "doing". To use a card\'s picture or model with another tool, get_card_media then send_file to the upload address that tool gives; bring what comes back onto a card with deal_deck (media, and from: the cards it was made from). A 3D model that comes back with a preview picture is ONE media entry: the model, with the picture as its thumbnail.',
       })
     case 'ping': return ok({})
     case 'tools/list': return ok({ tools: TOOLS })

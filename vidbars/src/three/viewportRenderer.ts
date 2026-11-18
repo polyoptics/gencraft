@@ -585,6 +585,33 @@ async function loadModelIntoView(view: ViewRuntime, url: string, savedCamera: Or
   }
 }
 
+/** Model `url` has been squared up another way (three/modelQuarter): the
+ *  Viewers showing it take a new copy of it, where they are (the camera
+ *  stays; a clip playing stops). The old copy shows until the new one is
+ *  here. */
+export function redrawModelViews(url: string): void {
+  for (const view of views.values()) {
+    if (view.modelUrl !== url || view.status !== 'ready') continue
+    const seq = view.loadSeq
+    void acquireModel(url).then(root => {
+      if (seq !== view.loadSeq || view.modelUrl !== url || !views.has(view.id)) { disposeInstance(root); releaseModel(url); return }
+      dropModelRoot(view)
+      releaseModel(url)
+      const oldHelper = skeletons.get(view.id)
+      if (oldHelper) { view.scene.remove(oldHelper); oldHelper.dispose?.(); skeletons.delete(view.id) }
+      view.modelRoot = root
+      view.look = createLook(root)
+      view.scene.add(root)
+      view.mixer?.stopAllAction()
+      view.mixer = view.clips?.length ? new THREE.AnimationMixer(root) : undefined
+      view.action = undefined
+      view.playing = false
+      notifyStatus(view.id)
+      requestRender()
+    }).catch(() => { /* it keeps the copy it has */ })
+  }
+}
+
 function syncViews(): void {
   const wins = useViewport3DStore.getState().windows
   // Remove views whose window is gone

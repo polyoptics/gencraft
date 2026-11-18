@@ -109,6 +109,13 @@ export function ensureModelPoster(modelUrl: string): Promise<string | null> {
   return p
 }
 
+/** Draw model `modelUrl`'s poster again, over the one it has (it has been
+ *  squared up another way: three/modelQuarter). The old one shows until
+ *  the new one is made. */
+export function redrawModelPoster(modelUrl: string): Promise<string | null> {
+  return generatePoster(modelUrl)
+}
+
 /** Generation needs the shared renderer, which is attached by the GL host
  *  on mount. A tile can easily ask BEFORE that lands — on a fresh load, or
  *  right after a batch import — and the old code just returned null with

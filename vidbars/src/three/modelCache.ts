@@ -32,6 +32,7 @@ import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js'
 import { isMediaRef, mediaRefId } from '../utils/mediaRef'
 import { inlineGlbTextures } from './glbInlineTextures'
 import { getMedia } from '../utils/mediaStore'
+import { squareUp } from './modelQuarter'
 
 interface CacheEntry {
   source: THREE.Group      // pristine parsed scene — never rendered directly
@@ -134,7 +135,9 @@ export async function acquireModel(url: string): Promise<THREE.Object3D> {
   // whatever root it is given, so instances can safely reference the same
   // array. SkeletonUtils.clone does not carry them across.
   inst.animations = entry.source.animations ?? []
-  return inst
+  // Squared up (three/modelQuarter), if its file has been: every copy
+  // handed out stands the same way.
+  return squareUp(url, inst)
 }
 
 /** Drop one reference. Zero-ref entries park in the LRU; overflow disposes. */

@@ -5,6 +5,8 @@ import './index.css'
 import './utils/area3dHandles'
 // The lift handle on a model card's model (float height): ahead of them too.
 import './utils/floatHandle'
+// The row that squares a model up (quarter turns, mirror): with it.
+import './utils/quarterHandle'
 // Looking through a camera: ahead of the canvas's own listeners too.
 import { installLookThrough } from './components/Canvas/tilt/LookThrough'
 import App from './App.tsx'
@@ -22,6 +24,8 @@ import { startDeckUnder, startDeckHome } from './utils/deckUnder'
 import { createMediaCard, createTextCard } from './utils/cardGrid'
 
 installLookThrough()
+import { startQuarterPictures } from './utils/quarterPictures'
+startQuarterPictures()
 import { cardOrigins } from './components/Canvas/StorylineLayer'
 import { startDecksOpenRight } from './utils/deckRight'
 import { startAgentDoor } from './utils/agentDoor'

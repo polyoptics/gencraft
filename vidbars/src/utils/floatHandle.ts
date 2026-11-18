@@ -15,6 +15,7 @@ import { useCanvasStore } from '../store/canvasStore'
 import { useManip } from '../store/manipStore'
 import { models, modelKey, soloFloat, setSoloFloat } from '../components/Canvas/tilt/TiltModels'
 import { standsIn, dataKey } from './area3dScene'
+import { overQuarterRow } from './quarterHandle'
 
 /** The dot's radius, and how near a press counts as on it (px). */
 const DOT_R = 6
@@ -111,7 +112,7 @@ function draw() {
   else {
     const h = modelKey(models.hovered)
     if (eligible(h)) { key = h; linger = now + LINGER_MS }
-    else if (shown && (now < linger || (cursor && (() => { const s = models.floatSpot!(shown!); return !!s && near(cursor, s.foot) })()))) key = shown
+    else if (shown && (now < linger || (cursor && (() => { const s = models.floatSpot!(shown!); return !!s && near(cursor, s.foot) })()) || overQuarterRow())) key = shown
   }
   shown = key
   const s = key ? models.floatSpot!(key) : null
