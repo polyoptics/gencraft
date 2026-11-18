@@ -61,11 +61,18 @@ function load(): ChatBox[] {
   return []
 }
 
-export const useAgentChat = create<AgentChatState>(() => ({ open: false, busy: {}, boxes: load() }))
+/** Were the boxes on screen when the app was last closed or reloaded? */
+function wasOpen(): boolean {
+  try { return JSON.parse(localStorage.getItem(KEY) || 'null')?.open === true } catch { return false }
+}
+
+const kept = load()
+// Left open, the boxes are there again after a restart or a reload (Brian 2026-11-18).
+export const useAgentChat = create<AgentChatState>(() => ({ open: kept.length > 0 && wasOpen(), busy: {}, boxes: kept }))
 
 useAgentChat.subscribe((s, was) => {
-  if (s.boxes === was.boxes) return
-  try { localStorage.setItem(KEY, JSON.stringify({ boxes: s.boxes.map(b => ({ ...b, lines: b.lines.slice(-KEEP) })) })) } catch { /* private window */ }
+  if (s.boxes === was.boxes && s.open === was.open) return
+  try { localStorage.setItem(KEY, JSON.stringify({ open: s.open, boxes: s.boxes.map(b => ({ ...b, lines: b.lines.slice(-KEEP) })) })) } catch { /* private window */ }
 })
 
 let nextId = Math.max(0, ...useAgentChat.getState().boxes.flatMap(b => b.lines.map(l => l.id))) + 1
