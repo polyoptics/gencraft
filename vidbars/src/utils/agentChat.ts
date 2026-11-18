@@ -33,6 +33,10 @@ export interface ChatBox {
   session: string
   /** Where its top-left is, screen px, once it has been dragged. Absent: its place in the row. */
   at?: { x: number; y: number }
+  /** Its own width and height, px, once an edge or corner has been dragged. Absent: the plain size. */
+  size?: { w: number; h: number }
+  /** The whole box bigger or smaller (Shift + a corner). Absent: 1. */
+  scale?: number
 }
 
 interface AgentChatState {
@@ -93,6 +97,11 @@ export function closeChatBox(boxId: string): void {
 /** A box dragged to a place of its own. */
 export function moveChatBox(boxId: string, at: { x: number; y: number }): void {
   patch(boxId, b => ({ ...b, at }))
+}
+
+/** A box reshaped (an edge or corner dragged) or scaled whole (Shift + a corner). */
+export function shapeChatBox(boxId: string, to: { at: { x: number; y: number }; size: { w: number; h: number }; scale: number }): void {
+  patch(boxId, b => ({ ...b, at: to.at, size: to.size, scale: to.scale === 1 ? undefined : to.scale }))
 }
 
 /** The few words shown for a tool Claude used: its own (`doing`), or the tool's name in plain words. */

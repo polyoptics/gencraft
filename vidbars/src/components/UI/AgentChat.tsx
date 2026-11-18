@@ -1,11 +1,19 @@
 import React from 'react'
-import { addChatBox, closeChatBox, moveChatBox, newChat, sendChat, stopChat, useAgentChat, type ChatBox } from '../../utils/agentChat'
+import { addChatBox, closeChatBox, moveChatBox, newChat, sendChat, shapeChatBox, stopChat, useAgentChat, type ChatBox } from '../../utils/agentChat'
 
 // How a box looks and where the boxes sit: all of it is here, so it is easy
-// to change (Brian decides both). Every box is one fixed size; nothing in
-// it moves or resizes as the talk goes on. Until a box is dragged by its
-// header it sits in a row along the bottom, from the right.
-const BOX = { right: 46, bottom: 54, width: 360, height: 480, gap: 12 }
+// to change (Brian decides both). A box starts at one plain size and nothing
+// in it moves or resizes as the talk goes on; its size is the artist's
+// (Brian 2026-11-18: "needs to be sizeable"): an edge or corner dragged
+// reshapes it, Shift + a corner scales the whole box, as panels do. Until a
+// box is dragged or sized it sits in a row along the bottom, from the right.
+const BOX = { right: 46, bottom: 54, width: 360, height: 480, gap: 12, minW: 330, minH: 220, minScale: 0.5, maxScale: 3, grip: 6, corner: 12 }
+
+/** The eight places a box is sized from: which of its sides each moves. */
+const GRIPS: { l?: boolean; r?: boolean; t?: boolean; b?: boolean; cursor: string }[] = [
+  { t: true, cursor: 'ns-resize' }, { b: true, cursor: 'ns-resize' }, { l: true, cursor: 'ew-resize' }, { r: true, cursor: 'ew-resize' },
+  { l: true, t: true, cursor: 'nwse-resize' }, { r: true, b: true, cursor: 'nwse-resize' }, { r: true, t: true, cursor: 'nesw-resize' }, { l: true, b: true, cursor: 'nesw-resize' },
+]
 const ACCENT = '#d97757'
 
 const bubble = (who: string): React.CSSProperties => who === 'me'
@@ -21,7 +29,7 @@ const words = (text: string): React.ReactNode =>
 
 const small: React.CSSProperties = {
   background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', color: 'rgba(255,255,255,0.8)',
-  borderRadius: 6, fontSize: 11, padding: '3px 8px', cursor: 'pointer',
+  borderRadius: 6, fontSize: 11, padding: '3px 8px', cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0,
 }
 
 /** One chat box: its own lines, its own conversation with Claude. */
@@ -49,6 +57,28 @@ const Box: React.FC<{ box: ChatBox; index: number; count: number }> = ({ box, in
     window.addEventListener('pointerup', up)
     e.preventDefault()
   }
+  const w = box.size?.w ?? BOX.width, h = box.size?.h ?? BOX.height, k = box.scale ?? 1
+  // Sized from an edge or corner: the sides not held stay where they are.
+  // Shift on a corner (picked as the drag starts): the whole box scales.
+  const shape = (g: typeof GRIPS[number]) => (e: React.PointerEvent<HTMLDivElement>) => {
+    const r = e.currentTarget.parentElement!.getBoundingClientRect()
+    const x0 = e.clientX, y0 = e.clientY
+    const whole = e.shiftKey && (g.l || g.r) && (g.t || g.b)
+    const move = (ev: PointerEvent) => {
+      const dx = (g.r ? 1 : g.l ? -1 : 0) * (ev.clientX - x0), dy = (g.b ? 1 : g.t ? -1 : 0) * (ev.clientY - y0)
+      let nw = w, nh = h, nk = k
+      if (whole) nk = Math.max(BOX.minScale, Math.min(BOX.maxScale, k * Math.max(0.05, ((r.width + dx) / r.width + (r.height + dy) / r.height) / 2)))
+      else { nw = Math.max(BOX.minW, w + dx / k); nh = Math.max(BOX.minH, h + dy / k) }
+      shapeChatBox(box.id, {
+        at: { x: g.l ? r.right - nw * nk : r.left, y: g.t ? r.bottom - nh * nk : r.top },
+        size: { w: Math.round(nw), h: Math.round(nh) }, scale: Math.round(nk * 1000) / 1000,
+      })
+    }
+    const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    e.preventDefault(); e.stopPropagation()
+  }
   return (
     <div
       data-agent-chat={box.id}
@@ -57,12 +87,16 @@ const Box: React.FC<{ box: ChatBox; index: number; count: number }> = ({ box, in
       onWheel={e => e.stopPropagation()}
       onPointerDown={e => e.stopPropagation()}
       style={{
-        position: 'fixed', ...place, width: BOX.width, height: BOX.height, zIndex: 9000,
-        display: 'flex', flexDirection: 'column', boxSizing: 'border-box',
-        background: 'rgba(20,21,27,0.97)', border: '1px solid rgba(255,255,255,0.14)', borderRadius: 12,
-        boxShadow: '0 12px 40px rgba(0,0,0,0.55)', color: '#fff', fontSize: 13, overflow: 'hidden',
+        position: 'fixed', ...place, width: w, height: h, zIndex: 9000,
+        ...(k !== 1 ? { transform: `scale(${k})`, transformOrigin: box.at ? '0 0' : '100% 100%' } : {}),
       }}
     >
+      {/* The box itself; the grips it is sized by lie over it, corners included. */}
+      <div style={{
+        width: '100%', height: '100%', display: 'flex', flexDirection: 'column', boxSizing: 'border-box',
+        background: 'rgba(20,21,27,0.97)', border: '1px solid rgba(255,255,255,0.14)', borderRadius: 12,
+        boxShadow: '0 12px 40px rgba(0,0,0,0.55)', color: '#fff', fontSize: 13, overflow: 'hidden',
+      }}>
       <div onPointerDown={drag} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '9px 10px 9px 12px', borderBottom: '1px solid rgba(255,255,255,0.08)', flexShrink: 0, cursor: 'grab', userSelect: 'none' }}>
         <span style={{ width: 9, height: 9, borderRadius: 5, background: ACCENT, flexShrink: 0 }} />
         <span style={{ fontWeight: 600, flex: 1 }}>Claude{count > 1 ? ` ${index + 1}` : ''}</span>
@@ -107,6 +141,16 @@ const Box: React.FC<{ box: ChatBox; index: number; count: number }> = ({ box, in
           >Stop</button>
         </div>
       </div>
+      </div>
+      {GRIPS.map((g, i) => {
+        const corner = (g.l || g.r) && (g.t || g.b)
+        const c = corner ? BOX.corner : BOX.grip
+        return <div key={i} data-chat-grip onPointerDown={shape(g)} title={corner ? 'Drag to reshape · Shift + drag to scale the whole box' : undefined} style={{
+          position: 'absolute', cursor: g.cursor, touchAction: 'none',
+          ...(g.l ? { left: 0, width: c } : g.r ? { right: 0, width: c } : { left: BOX.corner, right: BOX.corner }),
+          ...(g.t ? { top: 0, height: c } : g.b ? { bottom: 0, height: c } : { top: BOX.corner, bottom: BOX.corner }),
+        }} />
+      })}
     </div>
   )
 }
