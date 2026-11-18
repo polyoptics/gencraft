@@ -48,7 +48,7 @@ import { agentGlide, agentPoint, agentSpotOfCard } from './agentCursor'
 import { placeBox, placeToolAt, type PlaceKind } from './placeTool'
 import { bundleArea3dCard } from './area3dCard'
 import { cardHoldsModel, dataKey, rowCards } from './area3dScene'
-import { useModelScaleStore } from '../store/tiltStore'
+import { useModelScaleStore, useTiltStore } from '../store/tiltStore'
 import { freeNodeFootprint } from './canvasCreate'
 import { deckGifShots, makeDeckMovie, makeGif, useGifJob } from './makeGif'
 import { appendCards, clipLength, clipRow, clipStart, cutLength, MIN_CLIP, placed, splitClipAt, type RoughClip, type RoughCutData } from './roughCut'
@@ -2081,6 +2081,66 @@ async function showInViewer(args: Json): Promise<Json> {
   }
 }
 
+// ── The view: where the artist is looking ───────────────────────────────
+
+function viewNow(): Json {
+  const { pan, zoom } = useCanvasStore.getState()
+  const t = useTiltStore.getState()
+  const w = window.innerWidth, h = window.innerHeight
+  return {
+    zoom: Math.round(zoom * 1000) / 10,
+    sees: { x: Math.round(-pan.x / zoom), y: Math.round(-pan.y / zoom), w: Math.round(w / zoom), h: Math.round(h / zoom) },
+    tilt: Math.round(t.tilt), spin: Math.round(t.spin),
+    levels: 'Zoomed far out cards show as cards; closer, their blocks; closest, their boards for editing.',
+  }
+}
+
+function readView(args: Json): Json {
+  agentPoint(say(args, 'Looking around'))
+  return viewNow()
+}
+
+/** The view moved: onto cards, a tool or a spot; zoomed; tilted. Not an undo step. */
+async function moveView(args: Json): Promise<Json> {
+  const cs = useCanvasStore.getState()
+  const boxes: Box[] = []
+  const ids = idsOf(args.cards)
+  if (ids.length) {
+    const bs = useBoardsStore.getState()
+    for (const g of cardsNamed(ids)) { const r = cardVisualRect(g, bs.boards, cs.zoom)?.rect; if (r) boxes.push(r) }
+  }
+  if (args.toolId != null) {
+    const t = toolsNow().find(x => x.id === String(args.toolId))
+    if (!t) throw new Error('No tool with that id. list_tools gives them.')
+    const q = t.place as { x: number; y: number; w: number; h: number }
+    boxes.push({ left: q.x, top: q.y, right: q.x + q.w, bottom: q.y + q.h })
+  }
+  const at = args.at as Json | undefined
+  if (at && num(at.x) != null && num(at.y) != null) boxes.push({ left: num(at.x)!, top: num(at.y)!, right: num(at.x)!, bottom: num(at.y)! })
+  let zoom = cs.zoom
+  if (num(args.zoom) != null) zoom = num(args.zoom)! / 100
+  if (boxes.length) {
+    const l = Math.min(...boxes.map(b => b.left)), r = Math.max(...boxes.map(b => b.right))
+    const t = Math.min(...boxes.map(b => b.top)), b = Math.max(...boxes.map(q => q.bottom))
+    if (args.fit && r > l && b > t) zoom = Math.min(window.innerWidth * 0.8 / (r - l), window.innerHeight * 0.7 / (b - t))
+    cs.setZoom(zoom)
+    const z = useCanvasStore.getState().zoom
+    cs.setPan({ x: window.innerWidth / 2 - (l + r) / 2 * z, y: window.innerHeight / 2 - (t + b) / 2 * z })
+  } else if (num(args.zoom) != null) {
+    // About the middle of the view.
+    const mid = viewportCenterInCanvas()
+    cs.setZoom(zoom)
+    const z = useCanvasStore.getState().zoom
+    cs.setPan({ x: window.innerWidth / 2 - mid.cx * z, y: window.innerHeight / 2 - mid.cy * z })
+  }
+  if (num(args.tilt) != null || num(args.spin) != null) {
+    const t = useTiltStore.getState()
+    t.setView(Math.max(0, Math.min(89, num(args.tilt) ?? t.tilt)), num(args.spin) ?? t.spin)
+  }
+  agentPoint(say(args, 'Moving the view'))
+  return viewNow()
+}
+
 // ── The door ────────────────────────────────────────────────────────────
 
 const OPS: Record<string, (args: Json) => Json | Promise<Json>> = { list: listCards, read: readCards, decks: listDecks, media: cardMedia, deal: dealDeck,
@@ -2089,6 +2149,7 @@ const OPS: Record<string, (args: Json) => Json | Promise<Json>> = { list: listCa
   states: readStates, statesBuild: buildStates, statesEdit: editStates, statesRun: runStates,
   story: readStoryline, storyBuild: buildStoryline, storyEdit: editStoryline,
   scene: readScene, sceneEdit: editScene,
+  viewRead: readView, viewMove: moveView,
   viewerRead: readViewer, viewerShow: showInViewer,
   cutRead: readCut, cutEdit: editCut, cutPicks: picksDeck,
   fxList: listEffects, fxRead: readEffects, fxAdd: addEffects, fxEdit: editEffects, fxSave: saveEffects,
