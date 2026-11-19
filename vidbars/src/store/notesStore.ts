@@ -275,8 +275,11 @@ export interface PictureMark {
  *  its board). `font`: its number's font (double-click the number).
  *  Standing on a card or a deck it is docked to it (worked out from where
  *  it is, never kept: utils/stickDock): the models of those cards whose
- *  backs give a Height stand that tall against it in 3D. */
-export interface Stick { id: string; x: number; y: number; ft: number; per: number; metric?: boolean; font?: string }
+ *  backs give a Height stand that tall against it in 3D.
+ *  `heights`: how tall the models of docked cards that give no Height
+ *  were when it was docked to them, feet, by card id: they size with
+ *  the stick from there (let go when it leaves them). */
+export interface Stick { id: string; x: number; y: number; ft: number; per: number; metric?: boolean; font?: string; heights?: Record<string, number> }
 
 interface NotesStore {
   sticks: Record<string, Stick>

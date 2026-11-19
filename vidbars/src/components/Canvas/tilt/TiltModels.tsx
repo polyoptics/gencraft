@@ -26,7 +26,7 @@ import { useCurveDraft, usePathHot, useStickUi } from '../../../store/pathLive'
 import { targetMiddle, pickedPoints } from '../../../utils/pathEdit'
 import type { PathFrame, PathHit } from '../../../three/pathOverlay'
 import type { StickFrame, StickSpot } from '../../../three/stickOverlay'
-import { stickMeasures } from '../../../utils/stickDock'
+import { stickMeasures, seenHeight } from '../../../utils/stickDock'
 import { curveRuns, pointFrames, withLayers } from '../../../utils/curveGeom'
 import { PinLabels } from '../../Notes/PinLabels'
 import { gradeFor } from '../../../utils/modelGrade'
@@ -241,6 +241,12 @@ const frameState = (): TiltFrameState => {
       return h ? h * zoomNow : undefined
     } : undefined,
     heightSig: measured.sig,
+    // One docked with no Height: how tall it stands now is where it starts from.
+    heightSeen: measured.bare.size ? (key, px) => {
+      if (!key.startsWith('card:')) return
+      const id = measured.bare.has(key.slice(5)) ? key.slice(5) : dataKey(key).slice(5)
+      if (measured.bare.has(id)) seenHeight(id, px / zoomNow)
+    } : undefined,
     full: live.size ? key => live.has(key) || live.has(dataKey(key)) : undefined,
   }
 }

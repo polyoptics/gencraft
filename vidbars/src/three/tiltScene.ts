@@ -185,6 +185,9 @@ export interface TiltFrameState {
   heightFor?: (key: string) => number | undefined
   /** Changes when any of those heights does. */
   heightSig?: number
+  /** Told how tall a loaded model stands by its card and size alone,
+   *  flat px, when heightFor gives it none. */
+  heightSeen?: (key: string, px: number) => void
   /** How a card's model stands turned, kept (useModelScaleStore poseOf). */
   poseFor?: (key: string) => [number, number, number, number] | undefined
   /** A model riding a path (utils/pathRide): how the path turns it there,
@@ -1394,6 +1397,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       k *= st.sizeFor(tg.key)
       const tall = st.heightFor?.(tg.key)
       if (tall) k = tall / Math.max(s.size.y, 1e-6)
+      else if (st.heightSeen && s.inst && !tg.mini) st.heightSeen(tg.key, s.size.y * k)
       s.footR = Math.max(s.size.x, s.size.z) * k / 2
       // ...and grow up out of them when the tilt starts, or when one
       // turns up while tilted, rather than popping on.
