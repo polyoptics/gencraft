@@ -154,12 +154,18 @@ type Far = { a: number; cx: number; cy: number; r: number }
  *  below `from`, and looking through a camera. */
 function farNow(): Far | null {
   const ts = useTiltStore.getState()
-  if (ts.tilt <= FAR.from || ts.tilt > 90 || useManip.getState().through) return null
+  // (Past edge-on, looking up from low down or from under the ground, it
+  // stays gone: Brian 2026-11-19, "past 90 the BG nodes stay faded off".)
+  if (ts.tilt <= FAR.from || useManip.getState().through) return null
   const x = Math.min(1, (ts.tilt - FAR.from) / (TILT_MAX - FAR.from)), a = x * x * (3 - 2 * x)
   // The middle: the ground in the middle of the screen across, at the
   // height on the screen of the point the view turns about (straight
   // under the screen's middle near edge-on is far off, or sky).
-  const c = unprojectTilt(0, ts.shiftY, ts.tilt, ts.spin, ts.shiftX, ts.shiftY) ?? { x: 0, y: 0 }
+  // (Where that has no answer, past edge-on: the same point, worked out
+  // from the view's shift across.)
+  const sp = ts.spin * Math.PI / 180
+  const c = (ts.tilt < 90 ? unprojectTilt(0, ts.shiftY, ts.tilt, ts.spin, ts.shiftX, ts.shiftY) : null)
+    ?? { x: -ts.shiftX * Math.cos(sp), y: ts.shiftX * Math.sin(sp) }
   const { pan, zoom } = useCanvasStore.getState()
   const W = models.root?.clientWidth ?? 0, H = models.root?.clientHeight ?? 0
   const mx = (c.x + W / 2 - pan.x) / zoom, my = (c.y + H / 2 - pan.y) / zoom
