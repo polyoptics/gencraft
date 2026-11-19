@@ -22,9 +22,10 @@ import { create } from 'zustand'
 import { createTiltScene, trianglesOf, ART_MAX, type TiltTarget, type TiltFrameState, type ManipHit, type ManipPart, type TiltSlab, type TiltArt } from '../../../three/tiltScene'
 import type { PinSpot } from '../../../three/notesOverlay'
 import { useNotesStore, useNotesUi } from '../../../store/notesStore'
-import { useCurveDraft, usePathHot } from '../../../store/pathLive'
+import { useCurveDraft, usePathHot, useStickUi } from '../../../store/pathLive'
 import { targetMiddle, pickedPoints } from '../../../utils/pathEdit'
 import type { PathFrame, PathHit } from '../../../three/pathOverlay'
+import type { StickFrame, StickSpot } from '../../../three/stickOverlay'
 import { curveRuns, pointFrames, withLayers } from '../../../utils/curveGeom'
 import { PinLabels } from '../../Notes/PinLabels'
 import { gradeFor } from '../../../utils/modelGrade'
@@ -103,6 +104,8 @@ export const models: {
   pathAt: ((clientX: number, clientY: number, only?: Set<string>) => PathHit | null) | null
   /** Where a point of the canvas (canvas units, z up) is drawn in 3D. */
   pathPx: ((p: { x: number; y: number; z: number }) => { x: number; y: number } | null) | null
+  /** Where the measuring sticks are drawn in 3D, client px (three/stickOverlay). */
+  stickSpots: (() => StickSpot[]) | null
   /** How model `key` is seen now, for its piece in the flat view
    *  (tiltScene pieceView). Only while the 3D view is on screen. */
   pieceView: ReturnType<typeof createTiltScene>['pieceView'] | null
@@ -110,7 +113,7 @@ export const models: {
    *  (tiltScene lend; three/pieceService). */
   lend: ReturnType<typeof createTiltScene>['lend'] | null
   root: HTMLElement | null
-} = { pieceView: null, lend: null, pathAt: null, pathPx: null, gizmoAt: null, manipHot: null, labelAt: null, strokeAt: null, modelSize: null, pick: null, pickZ: null, info: null, spin: null, letGo: null, hovered: null, at: null, surface: null, pinSpots: null, screenBox: null, floatSpot: null, pivotOf: null, aimAt: null, cameraFrame: null, lookBounds: null, lookHit: null, root: null }
+} = { pieceView: null, lend: null, pathAt: null, pathPx: null, stickSpots: null, gizmoAt: null, manipHot: null, labelAt: null, strokeAt: null, modelSize: null, pick: null, pickZ: null, info: null, spin: null, letGo: null, hovered: null, at: null, surface: null, pinSpots: null, screenBox: null, floatSpot: null, pivotOf: null, aimAt: null, cameraFrame: null, lookBounds: null, lookHit: null, root: null }
 /** Viewers showing what a camera sees (components/Viewport3D/
  *  CameraViewerOverlay, Brian 2026-11-12: "if I put a 2D viewer beside a
  *  3D set, I should be able to look through any active cameras there"):
@@ -227,6 +230,7 @@ const frameState = (): TiltFrameState => {
     through,
     inLook: lookSet ? key => inSet(key, lookSet) : undefined,
     paths: tilted3d() ? pathFrame() : undefined,
+    sticks: tilted3d() ? stickFrame() : undefined,
     full: live.size ? key => live.has(key) || live.has(dataKey(key)) : undefined,
   }
 }
@@ -234,7 +238,7 @@ const frameState = (): TiltFrameState => {
 /** Bumped whenever the curves, what is selected of them, the one being
  *  drawn or the part under the cursor changes: the 3D view draws again. */
 let pathSig = 0
-for (const st of [useNotesStore, useNotesUi, useCurveDraft, usePathHot]) st.subscribe(() => { pathSig++ })
+for (const st of [useNotesStore, useNotesUi, useCurveDraft, usePathHot, useStickUi]) st.subscribe(() => { pathSig++ })
 
 /** A curve's pattern is running along it: the 3D view keeps drawing. */
 const pathFlows = () => tilted3d() && Object.values(notesNow.curves).some(c => c.kind === 'bezier' && curveRuns(c))
@@ -246,6 +250,16 @@ function soloFrame() {
   if (picked.length !== 1 || picked[0][1].length !== 1) return null
   const c = notesNow.curves[picked[0][0]]
   return c?.kind === 'bezier' ? pointFrames(c)[picked[0][1][0]] ?? null : null
+}
+
+/** The measuring sticks for the 3D view (three/stickOverlay). */
+function stickFrame(): StickFrame | undefined {
+  const sticks = Object.values(notesNow.sticks ?? {})
+  if (!sticks.length) return undefined
+  const { pan, zoom } = useCanvasStore.getState()
+  const W = models.root?.clientWidth ?? 0, H = models.root?.clientHeight ?? 0
+  const ui = useStickUi.getState()
+  return { sticks, selected: ui.selected, hot: ui.hot, zoom, ox: pan.x - W / 2, oy: pan.y - H / 2 }
 }
 
 /** The canvas's curves for the 3D view (three/pathOverlay): the bezier
@@ -567,6 +581,11 @@ export const TiltModels: React.FC = () => {
         const r = root.getBoundingClientRect()
         return v.pathAt(clientX - r.left, clientY - r.top, only)
       }
+      models.stickSpots = () => {
+        const r = root.getBoundingClientRect()
+        const at = (p: { x: number; y: number }) => ({ x: p.x + r.left, y: p.y + r.top })
+        return v.stickSpots().map(s => ({ ...s, foot: at(s.foot), top: at(s.top), sign: at(s.sign) }))
+      }
       models.pathPx = p => {
         const r = root.getBoundingClientRect()
         const q = v.pathPx(p)
@@ -613,7 +632,7 @@ export const TiltModels: React.FC = () => {
       cancelAnimationFrame(raf)
       post.disconnect(); marker.remove()
       models.pick = null; models.pickZ = null; models.info = null; models.spin = null; models.letGo = null
-      models.surface = null; models.pinSpots = null; models.screenBox = null; models.floatSpot = null; models.pivotOf = null; models.labelAt = null; models.strokeAt = null; models.modelSize = null; models.gizmoAt = null; models.manipHot = null; models.pathAt = null; models.pathPx = null; models.aimAt = null; models.cameraFrame = null; models.lookBounds = null; models.lookHit = null; models.pieceView = null; models.lend = null; models.root = null
+      models.surface = null; models.pinSpots = null; models.screenBox = null; models.floatSpot = null; models.pivotOf = null; models.labelAt = null; models.strokeAt = null; models.modelSize = null; models.gizmoAt = null; models.manipHot = null; models.pathAt = null; models.pathPx = null; models.stickSpots = null; models.aimAt = null; models.cameraFrame = null; models.lookBounds = null; models.lookHit = null; models.pieceView = null; models.lend = null; models.root = null
       view?.dispose()
       canvas?.remove(); lookCanvas?.remove()
     }

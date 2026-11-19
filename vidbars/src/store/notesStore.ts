@@ -267,7 +267,18 @@ export interface PictureMark {
   fill?: boolean
 }
 
+/** A measuring stick (Brian 2026-11-18): a pole that stands on the canvas
+ *  in 3D and lies flat on it in 2D (pointing up the canvas), banded a
+ *  foot at a time with a round sign on its top. `x`, `y`: its foot,
+ *  canvas units. `ft`: how tall it is, feet (6 when made; the top drags).
+ *  `per`: canvas units to a foot. */
+export interface Stick { id: string; x: number; y: number; ft: number; per: number }
+
 interface NotesStore {
+  sticks: Record<string, Stick>
+  addStick: (s: Stick) => void
+  updateStick: (id: string, patch: Partial<Stick>) => void
+  deleteSticks: (ids: string[]) => void
   pictures: Record<string, PictureMark[]>
   addMark: (url: string, m: PictureMark) => void
   updateMark: (url: string, id: string, patch: Partial<PictureMark>) => void
@@ -302,7 +313,15 @@ export const useNotesStore = create<NotesStore>()(persist((set, get) => ({
   curves: {},
   models: {},
   pictures: {},
+  sticks: {},
   rev: 0,
+  addStick: st => set(s => ({ sticks: { ...s.sticks, [st.id]: st } })),
+  updateStick: (id, patch) => set(s => s.sticks[id] ? { sticks: { ...s.sticks, [id]: { ...s.sticks[id], ...patch } } } : s),
+  deleteSticks: ids => set(s => {
+    const sticks = { ...s.sticks }
+    for (const id of ids) delete sticks[id]
+    return { sticks }
+  }),
   addMark: (url, m) => set(s => ({ pictures: { ...s.pictures, [url]: [...(s.pictures[url] ?? []), m] } })),
   updateMark: (url, id, patch) => set(s => s.pictures[url] ? { pictures: { ...s.pictures, [url]: s.pictures[url].map(m => m.id === id ? { ...m, ...patch } : m) } } : s),
   removeMarks: (url, ids) => set(s => {
@@ -349,16 +368,16 @@ export const useNotesStore = create<NotesStore>()(persist((set, get) => ({
   removePin: (url, id) => set(s => touchModel(s, url, m => ({ ...m, pins: m.pins.filter(p => p.id !== id) }))),
 }), {
   name: 'vidbars-notes',
-  storage: createDebouncedIDBStorage<Pick<NotesStore, 'curves' | 'models' | 'pictures'>>(400, {
-    isEmpty: s => Object.keys(s.curves ?? {}).length === 0 && Object.keys(s.models ?? {}).length === 0 && Object.keys(s.pictures ?? {}).length === 0,
+  storage: createDebouncedIDBStorage<Pick<NotesStore, 'curves' | 'models' | 'pictures' | 'sticks'>>(400, {
+    isEmpty: s => Object.keys(s.curves ?? {}).length === 0 && Object.keys(s.models ?? {}).length === 0 && Object.keys(s.pictures ?? {}).length === 0 && Object.keys(s.sticks ?? {}).length === 0,
   }),
-  partialize: s => ({ curves: s.curves, models: s.models, pictures: s.pictures }),
+  partialize: s => ({ curves: s.curves, models: s.models, pictures: s.pictures, sticks: s.sticks }),
 }))
 
 // ── The tools (UI state) ──
 
 /** What the mouse does on the canvas. null: what it always does. */
-export type NotesTool = 'curve' | 'pen' | 'pin' | 'erase'
+export type NotesTool = 'curve' | 'pen' | 'pin' | 'erase' | 'stick'
 
 export const NOTE_COLORS = ['#ffffff', '#ff5a5a', '#ffb23f', '#ffe14a', '#5fe39b', '#4fc3ff', '#a98bff', '#ff8fd1', '#111318']
 

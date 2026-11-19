@@ -68,6 +68,9 @@ const IcPen: Ic = ({ size = 20 }) => (
 const IcPin: Ic = ({ size = 20 }) => (
   <svg {...svg(size)}><circle cx="8" cy="16" r="2.4" fill="#ffb23f" stroke="none" /><path d="M9.6 14.4L14 10" stroke={S} strokeWidth="1.4" /><rect x="13" y="4" width="8" height="6" rx="1" stroke={S} strokeWidth="1.6" /></svg>
 )
+const IcStick: Ic = ({ size = 20 }) => (
+  <svg {...svg(size)}><circle cx="12" cy="5.5" r="3.5" stroke={S} strokeWidth="1.6" /><path d="M12 9v11.5" stroke={S} /><path d="M12 12.5v3" stroke="#e5484d" strokeWidth="2.6" strokeLinecap="butt" /><path d="M8 20.5h8" stroke={S} /></svg>
+)
 const IcErase: Ic = ({ size = 20 }) => (
   <svg {...svg(size)}><path d="M14.5 4.5l5 5-8.5 8.5H6l-2.5-2.5z" stroke={S} strokeWidth="1.6" /><path d="M9.5 9.5l5 5" stroke="#ff8fd1" strokeWidth="1.6" /><path d="M11 18h9" stroke={S} strokeWidth="1.4" /></svg>
 )
@@ -122,6 +125,7 @@ const TOOLS: { id: NotesTool; Icon: Ic; name: string; tip: string }[] = [
   { id: 'curve', Icon: IcCurve, name: 'Curve', tip: 'Curve: click for corners, click-drag for smooth points. Double-click, Enter or Esc finishes; click the first point to close it. Click a selected curve’s end point to carry on from it. Works flat and in 3D.' },
   { id: 'pen', Icon: IcPen, name: 'Pen', tip: 'Pen: freehand. Over a model in 3D it draws on the model’s surface; anywhere else on the canvas.' },
   { id: 'pin', Icon: IcPin, name: 'Pin', tip: 'Pin: click a model in 3D to pin a note on it. Each pin gets a Note card, and the model gets an Annotation card.' },
+  { id: 'stick', Icon: IcStick, name: 'Measuring stick', tip: 'Measuring stick: click the canvas to stand a 6 ft stick there. It stands up in 3D and lies flat in 2D. Drag its round sign to make it taller or shorter (Shift-drag sizes the whole stick), drag its pole to move it. Click it and press Delete to remove it.' },
   { id: 'erase', Icon: IcErase, name: 'Erase', tip: 'Erase: click or drag over a stroke on a model, a pin’s dot or a curve to remove just that. Models and cards are never touched.' },
 ]
 

@@ -24,6 +24,7 @@ import { DrawToolbar } from './components/Annotation/DrawToolbar'
 import './utils/notesTool'
 import './utils/areaFollow'
 import { CurveLayer } from './components/Notes/CurveLayer'
+import { StickLayer } from './components/Notes/StickLayer'
 import { PieceLayer } from './components/Canvas/PieceLayer'
 import { MapNotesLayer } from './components/Notes/MapNotesLayer'
 import { NotesPanel } from './components/Notes/NotesPanel'
@@ -888,7 +889,7 @@ export default function App() {
         </InfiniteCanvas>
         {/* Layer overlay renders outside the canvas transform (screen-space headers/cards) */}
         {/* Tilts with the world layers when the canvas is tilted */}
-        <TiltStage><LayerOverlay /><PieceLayer /><CurveLayer /><MapNotesLayer /><SetPlayBars /></TiltStage>
+        <TiltStage><LayerOverlay /><PieceLayer /><CurveLayer /><StickLayer /><MapNotesLayer /><SetPlayBars /></TiltStage>
         {/* Tilted view: pan/zoom on the plane + model cards standing up */}
         <TiltLayer />
         {/* Where Cards / Blocks / Boards begin and end — drag to retune */}

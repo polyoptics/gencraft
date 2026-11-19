@@ -20,6 +20,7 @@ import { CAMERA_URL, CAMERA_LENS_AT } from './primitives'
 import { createNotesOverlay, type NotesHost } from './notesOverlay'
 import type { ModelNotes } from '../store/notesStore'
 import { createPathOverlay, type PathFrame } from './pathOverlay'
+import { createStickOverlay, type StickFrame } from './stickOverlay'
 
 const DEFAULT_SHADOWS = DEFAULT_LIGHT.shadows, DEFAULT_SHEEN = DEFAULT_LIGHT.sheen
 /** How long a model's pop onto a Viewer takes. */
@@ -226,6 +227,8 @@ export interface TiltFrameState {
   full?: (key: string) => boolean
   /** The canvas's curves, as things in the scene (three/pathOverlay). */
   paths?: PathFrame
+  /** The measuring sticks, as things in the scene (three/stickOverlay). */
+  sticks?: StickFrame
 }
 
 /** The key of the manipulator on a curve's selected points (ManipHit.key):
@@ -768,6 +771,8 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   // The canvas's curves, in 3D (three/pathOverlay), and the manipulator
   // on their selected points.
   const paths = createPathOverlay()
+  // The measuring sticks, in 3D (three/stickOverlay).
+  const sticks = createStickOverlay()
   const pathGizmo = makeManip()
   manipRoot.add(pathGizmo.group)
   /** Every manipulator: the models', then the curves' points'. */
@@ -1660,6 +1665,8 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     // The curves, and the manipulator on their selected points: at their
     // middle, on the world's axes.
     paths.render(renderer, camera, ground.matrix, st.paths, W, H, looking)
+    // The measuring sticks: up off the canvas as the 3D look comes in.
+    sticks.render(renderer, camera, ground.matrix, st.sticks, W, H, looking ? 1 : st.fade)
     {
       const at = st.paths?.gizmo, g = pathGizmo
       g.group.visible = !!at && !looking
@@ -2257,6 +2264,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     envRT.dispose()
     notes.dispose()
     paths.dispose()
+    sticks.dispose()
     renderer.dispose()
     renderer.forceContextLoss()
   }
@@ -2266,5 +2274,5 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
   const pathAt = (x: number, y: number, only?: Set<string>) => paths.at(x, y, only)
   const pathPx = (p: { x: number; y: number; z: number }) => paths.project(p)
 
-  return { pathAt, pathPx, frame, warm, pick, pickZ: () => pickedZ, info, spinBy, letGo, settleAll, keepTurn, gizmoAt, aimAt, cameraFrame, lookBounds, lookHit, manipHot, screenBox, floatSpot, pivotOf, labelAt, strokeAt, modelSize, dispose, surfaceAt, pinSpots: notes.spots, pieceView, lend }
+  return { pathAt, pathPx, stickSpots: sticks.spots, frame, warm, pick, pickZ: () => pickedZ, info, spinBy, letGo, settleAll, keepTurn, gizmoAt, aimAt, cameraFrame, lookBounds, lookHit, manipHot, screenBox, floatSpot, pivotOf, labelAt, strokeAt, modelSize, dispose, surfaceAt, pinSpots: notes.spots, pieceView, lend }
 }

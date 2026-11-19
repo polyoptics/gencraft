@@ -47,7 +47,7 @@ interface Snapshot {
   freeNodes: Record<string, unknown>
   viewports3d: Record<string, ViewportWindow3D>
   /** The 3D notes: curves, and strokes and pins on models (store/notesStore). */
-  notes?: { curves: unknown; models: unknown; pictures?: unknown }
+  notes?: { curves: unknown; models: unknown; pictures?: unknown; sticks?: unknown }
   /** Models' size and turn on their cards (tiltStore useModelScaleStore). */
   models3d?: { sizeOf: unknown; setSizeOf?: unknown; poseOf: unknown; tintOf?: unknown; placeOf?: unknown; stretchOf?: unknown; lensOf?: unknown; floatOf?: unknown; pieceOf?: unknown; quarterOf?: unknown }
 }
@@ -104,7 +104,7 @@ function captureSnapshot(): Snapshot {
     // View prefs (camera, text zoom) ride IN the snapshot; restoreSnapshot
     // is what keeps them out of history — see the liveness test there.
     viewports3d: useViewport3DStore.getState().windows,
-    notes: { curves: useNotesStore.getState().curves, models: useNotesStore.getState().models, pictures: useNotesStore.getState().pictures },
+    notes: { curves: useNotesStore.getState().curves, models: useNotesStore.getState().models, pictures: useNotesStore.getState().pictures, sticks: useNotesStore.getState().sticks },
     models3d: { sizeOf: useModelScaleStore.getState().sizeOf, setSizeOf: useModelScaleStore.getState().setSizeOf, poseOf: useModelScaleStore.getState().poseOf, tintOf: useModelScaleStore.getState().tintOf, placeOf: useModelScaleStore.getState().placeOf, stretchOf: useModelScaleStore.getState().stretchOf, lensOf: useModelScaleStore.getState().lensOf, floatOf: useModelScaleStore.getState().floatOf, pieceOf: useModelScaleStore.getState().pieceOf, quarterOf: useModelScaleStore.getState().quarterOf },
   }
 }
@@ -165,7 +165,7 @@ function restoreSnapshot(snap: Snapshot) {
   useViewport3DStore.setState({ windows: mergedWins })
   if (snap.notes) {
     const ns = useNotesStore.getState()
-    useNotesStore.setState({ curves: snap.notes.curves as typeof ns.curves, models: snap.notes.models as typeof ns.models, pictures: (snap.notes.pictures ?? {}) as typeof ns.pictures, rev: ns.rev + 1 })
+    useNotesStore.setState({ curves: snap.notes.curves as typeof ns.curves, models: snap.notes.models as typeof ns.models, pictures: (snap.notes.pictures ?? {}) as typeof ns.pictures, sticks: (snap.notes.sticks ?? {}) as typeof ns.sticks, rev: ns.rev + 1 })
   }
   if (snap.models3d) {
     type MS = ReturnType<typeof useModelScaleStore.getState>

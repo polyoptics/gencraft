@@ -37,6 +37,8 @@
 // (First: its listeners go on before this file's, so a press on a set being
 // annotated is its own. utils/mapNotes.)
 import './mapNotes'
+// (And the measuring sticks': a press on one is its own. utils/stickTool.)
+import './stickTool'
 import { useCurveDraft, usePathHot, usePathMenu } from '../store/pathLive'
 import { useNotesStore, useNotesUi, newNoteId, type Curve, type CurvePoint, type CurveHandle } from '../store/notesStore'
 import { curveSamples, nearestOnCurve } from './curveGeom'

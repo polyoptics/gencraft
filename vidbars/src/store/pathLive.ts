@@ -18,3 +18,8 @@ export const usePathMenu = create<{ at: { x: number; y: number; id: string; poin
 /** The part of a curve under the cursor in 3D: `p:${id}:${i}` (a point)
  *  or `h:${id}:${i}:${side}` (a handle). */
 export const usePathHot = create<{ hot: string | null }>(() => ({ hot: null }))
+
+/** The measuring sticks (notesStore sticks), live: the one selected, and
+ *  the part of one under the cursor, `${id}:top` (its sign, which drags
+ *  its height) or `${id}:body`. Written by utils/stickTool. */
+export const useStickUi = create<{ selected: string | null; hot: string | null }>(() => ({ selected: null, hot: null }))
