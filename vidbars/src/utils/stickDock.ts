@@ -176,6 +176,11 @@ export function stickMeasures(): Measured {
 /** Where a stick is: docked, on the edge it is docked by. */
 export const stickPoint = (s: Stick): { x: number; y: number } => stickMeasures().at.get(s.id) ?? { x: s.x, y: s.y }
 
+/** The marks' colour (Brian 2026-11-19: "instead of being black, let's
+ *  have them be yellow. So they fit in with the orange and the white
+ *  theme"). They were each card's own colour. */
+const MARK_YELLOW = '#ffd23f'
+
 /** A selected card of a stick's group: how tall it is against the stick. */
 export interface StickMark { id: string; ft: number; color: string; text: string }
 /** The marks on a stick: one for each selected card docked to it that
@@ -186,13 +191,12 @@ export function stickMarks(s: Stick): StickMark[] {
   const bs = useBoardsStore.getState()
   const out: StickMark[] = []
   for (const picked of bs.selectedGroupIds) {
-    // (A deck's front card showing another of its cards: that card's
-    // height, in the colour the deck is drawn in, its front card's.)
+    // (A deck's front card showing another of its cards: that card's height.)
     const id = dataKey(`card:${picked}`).slice(5)
     const units = m.owner.get(id) === s.id ? m.heights.get(id) : undefined
     if (!units) continue
     const ft = units / s.per
-    out.push({ id, ft, color: bs.groups.find(g => g.id === picked)?.color || '#4fc3ff', text: heightText({ ft, metric: s.metric }) })
+    out.push({ id, ft, color: MARK_YELLOW, text: heightText({ ft, metric: s.metric }) })
   }
   return out.sort((a, b) => a.ft - b.ft)
 }
