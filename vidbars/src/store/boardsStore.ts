@@ -1723,6 +1723,21 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
       return { groups: out.map(g => g.id === anchorId ? { ...g, ghostSlots: [...(g.ghostSlots ?? []), ...handed] }
         : holders.has(g.id) ? { ...g, ghostSlots: undefined } : g) }
     })
+    // Closed: a kept deck (the lock's first stage, utils/deckLock) lets go
+    // of its cards that did not close with it, and a kept card closed into
+    // another deck is that deck's now (Brian 2026-11-19: no card goes on
+    // remembering a deck it is not in).
+    if (state !== 'open' && get().groups.some(g => g.deckKeep)) {
+      set(s => {
+        const inIt = new Set(groupIds)
+        for (let grew = true; grew;) {
+          grew = false
+          for (const g of s.groups) if (!inIt.has(g.id) && g.deckAnchorId && inIt.has(g.deckAnchorId)) { inIt.add(g.id); grew = true }
+        }
+        const drop = (g: ProjectGroup) => !!g.deckKeep && inIt.has(g.deckKeep) !== inIt.has(g.id)
+        return s.groups.some(drop) ? { groups: s.groups.map(g => (drop(g) ? { ...g, deckKeep: undefined } : g)) } : {}
+      })
+    }
     // Opened: a deck inside it that was open when it closed opens again.
     if (state === 'open') {
       for (const a of get().groups.filter(g => idSet.has(g.id) && g.deckReopen)) {
@@ -1742,7 +1757,8 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
     set(s => {
       if (ids) {
         const on = new Set(ids)
-        return { groups: s.groups.map(g => on.has(g.id) ? { ...g, deckLock: groupId } : g) }
+        // Locked, a card is in that deck and no kept one.
+        return { groups: s.groups.map(g => on.has(g.id) ? { ...g, deckLock: groupId, deckKeep: undefined } : g) }
       }
       const lock = s.groups.find(g => g.id === groupId)?.deckLock
       if (!lock) return {}
