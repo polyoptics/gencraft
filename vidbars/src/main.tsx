@@ -20,7 +20,7 @@ import { useModelMaps } from './three/modelMaps'
 import { bakeStoryline, chartOutOf, matchChart, recallChart, startChartFollow } from './utils/chartCard'
 import { startArea3dFollow, startArea3dBundle, showArea3d, foldArea3d, toggleArea3d, area3dOutOf, bundleArea3dCard } from './utils/area3dCard'
 import { startAreaUnder } from './utils/area3dScene'
-import { startDeckUnder, startDeckHome } from './utils/deckUnder'
+import { startDeckUnder, startDeckHome, startDeckKeep } from './utils/deckUnder'
 import { createMediaCard, createTextCard } from './utils/cardGrid'
 
 installLookThrough()
@@ -107,6 +107,7 @@ startAreaUnder()
 startDeckUnder()
 // An open deck's cards stay that deck's (their tag), whatever row they are in.
 startDeckHome()
+startDeckKeep()
 // Decks off every storyline open to the right (utils/deckRight).
 startDecksOpenRight()
 // The doorway an agent reads cards and deals new ones through (utils/agentDoor).

@@ -52,27 +52,49 @@ export function keepOf(g: ProjectGroup | undefined, groups: ProjectGroup[]): str
   return k && groups.some(o => o.id !== g!.id && o.deckKeep === k) ? k : undefined
 }
 
-/** Card `g` fronts a kept deck among the cards `row` (an open row): that
- *  deck's cards there, when the row holds others too (null otherwise).
- *  Contact decides, as for every deck (Brian 2026-11-19): the deck is the
- *  card it was kept under and the kept cards that reach it through kept
- *  cards (`touch`). A kept card pulled away is out of it until it touches
- *  again; one beyond a card that is not the deck's is out too. */
-export function keptIn(g: ProjectGroup, row: string[], groups: ProjectGroup[], touch: (a: ProjectGroup, b: ProjectGroup) => boolean): string[] | null {
-  const k = g.deckKeep
-  if (!k || g.id !== k) return null
-  const byId = new Map(groups.map(o => [o.id, o]))
-  const marked = row.map(id => byId.get(id)).filter((o): o is ProjectGroup => !!o && o.deckKeep === k)
-  const mine = keptReach(g, marked, touch)
-  if (mine.length < 2 || mine.length >= row.length) return null
-  return row.filter(id => mine.some(o => o.id === id))
+type Touch = (a: ProjectGroup, b: ProjectGroup) => boolean
+const shut = (g: ProjectGroup) => !!g.deckState && g.deckState !== 'open'
+
+/** The kept deck `k` as it stands, its front card first (null: none).
+ *  Contact decides, as for every deck, and no card of it is special
+ *  (Brian 2026-11-19). Closed, it is the kept cards closed together. Open,
+ *  it is the kept cards that touch one another (`touch`), through kept
+ *  cards only: the largest such group of two or more (of two as large, the
+ *  one with the card it was kept under, else the leftmost). Its front is
+ *  the card it was kept under, or with that one away, its leftmost. A kept
+ *  card pulled off it is out of it until it touches it again. */
+export function keptDeck(k: string, groups: ProjectGroup[], touch: Touch): ProjectGroup[] | null {
+  const marked = groups.filter(g => g.deckKeep === k && !g.pin)
+  if (marked.length < 2) return null
+  const lead = (c: ProjectGroup[]) => {
+    const f = c.find(g => g.id === k) ?? c.reduce((a, b) => (b.originX < a.originX ? b : a))
+    return [f, ...c.filter(g => g !== f)]
+  }
+  const closed = marked.filter(shut)
+  if (closed.length >= 2) return [closed.find(g => !g.deckAnchorId || g.deckAnchorId === g.id || !closed.some(o => o.id === g.deckAnchorId)) ?? closed[0], ...closed].filter((g, i, a) => a.indexOf(g) === i)
+  const open = marked.filter(g => !shut(g))
+  const seen = new Set<ProjectGroup>()
+  let best: ProjectGroup[] | null = null
+  const left = (c: ProjectGroup[]) => Math.min(...c.map(g => g.originX))
+  for (const g of open) {
+    if (seen.has(g)) continue
+    const c = [g]
+    seen.add(g)
+    for (let i = 0; i < c.length; i++) for (const o of open) if (!seen.has(o) && touch(c[i], o)) { c.push(o); seen.add(o) }
+    if (c.length < 2) continue
+    const has = (x: ProjectGroup[]) => x.some(o => o.id === k)
+    if (!best || c.length > best.length || (c.length === best.length && (has(c) || (!has(best) && left(c) < left(best))))) best = c
+  }
+  return best && lead(best)
 }
 
-/** The cards among `marked` that reach `front` through one another (`touch`), it first. */
-export function keptReach(front: ProjectGroup, marked: ProjectGroup[], touch: (a: ProjectGroup, b: ProjectGroup) => boolean): ProjectGroup[] {
-  const mine = [front]
-  for (let i = 0; i < mine.length; i++) {
-    for (const o of marked) if (!mine.includes(o) && touch(mine[i], o)) mine.push(o)
-  }
-  return mine
+/** Card `g` fronts a kept deck among the cards `row` (an open row): that
+ *  deck's cards, when the row holds others too (null otherwise). */
+export function keptIn(g: ProjectGroup, row: string[], groups: ProjectGroup[], touch: Touch): string[] | null {
+  if (!g.deckKeep) return null
+  const deck = keptDeck(g.deckKeep, groups, touch)
+  if (!deck || deck[0].id !== g.id || deck.length >= row.length) return null
+  const mine = new Set(deck.map(o => o.id))
+  const here = row.filter(id => mine.has(id))
+  return here.length >= 2 ? here : null
 }

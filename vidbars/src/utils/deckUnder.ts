@@ -13,6 +13,7 @@ import { useCanvasStore } from '../store/canvasStore'
 import { isUndoRestoring } from '../store/undoCoordinator'
 import { cardsTouch, isHiddenDeckMember } from '../hooks/useCardDecks'
 import { primaryFirst } from './primaryCard'
+import { keptDeck } from './deckLock'
 
 const closed = (g: ProjectGroup | undefined) => !!g?.deckState && g.deckState !== 'open'
 
@@ -149,6 +150,44 @@ export function startDeckHome(): () => void {
           ? { ...g, ...(patch.has(g.id) ? { deckHome: patch.get(g.id) } : {}), ...(lead.has(g.id) ? { deckLastFront: lead.get(g.id) } : {}) }
           : g)),
       }))
+    } finally { busy = false }
+  })
+}
+
+// ── A kept deck settles when it closes (Brian 2026-11-19) ──
+// Open, a kept deck (the lock's first stage, utils/deckLock) is whichever
+// of its kept cards touch: they can be pulled off and put back. Closing
+// settles it: the cards that close with it are the deck, and every other
+// card kept under it lets go, for good. A kept card that closes into
+// something else lets go too. So no card goes on remembering a deck it is
+// not in. Nothing is ever moved here.
+
+export function startDeckKeep(): () => void {
+  let busy = false
+  return useBoardsStore.subscribe((s, prev) => {
+    if (busy || s.groups === prev.groups || isUndoRestoring()) return
+    if (!prev.groups.some(g => g.deckKeep)) return
+    const was = new Map(prev.groups.map(g => [g.id, g]))
+    // Open cards, now closed.
+    const shut = new Set(s.groups.filter(g => closed(g) && !!was.get(g.id) && !closed(was.get(g.id))).map(g => g.id))
+    if (!shut.size) return
+    const zoom = useCanvasStore.getState().zoom
+    const touch = (a: ProjectGroup, b: ProjectGroup) => cardsTouch(a, b, prev.boards, zoom)
+    const drop = new Set<string>()
+    for (const k of new Set(prev.groups.filter(g => g.deckKeep && shut.has(g.id)).map(g => g.deckKeep!))) {
+      const all = prev.groups.filter(g => g.deckKeep === k)
+      // The deck as it stood, open: closing, the cards of it that close.
+      const deck = keptDeck(k, prev.groups, touch)
+      const stay = deck && !closed(deck[0]) ? deck.filter(g => shut.has(g.id)) : []
+      if (stay.length >= 2) { for (const g of all) if (!stay.includes(g)) drop.add(g.id) }
+      // Not the deck closing: the kept cards that closed are in another.
+      else if (deck && !deck.some(g => shut.has(g.id))) { for (const g of all) if (shut.has(g.id)) drop.add(g.id) }
+      else for (const g of all) drop.add(g.id)
+    }
+    if (!drop.size) return
+    busy = true
+    try {
+      useBoardsStore.setState(st => ({ groups: st.groups.map(g => (drop.has(g.id) && g.deckKeep ? { ...g, deckKeep: undefined } : g)) }))
     } finally { busy = false }
   })
 }

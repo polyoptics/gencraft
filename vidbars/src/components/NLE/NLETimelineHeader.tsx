@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useRef, useCallback, useSyncExternalStore } from 'react'
-import { withLockMates, keptReach } from '../../utils/deckLock'
+import { withLockMates, keptDeck } from '../../utils/deckLock'
 import { BackRefDot } from '../Linking/BackRefDot'
 import { StatePicker } from '../Layers/StateFace'
 import { getBackRefs } from '../../utils/linkRefs'
@@ -134,19 +134,13 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
     return !!l && s.groups.some(o => o.id !== groupId && o.deckLock === l)
   })
   // Kept (the lock's first stage): its cards are remembered as a deck.
-  // Lit on the deck itself: the card it was kept under, the front of the
-  // row that card is in, or the closed deck it is hidden in. A kept card
-  // off on its own is in no deck while it is away.
+  // Lit on the deck itself (utils/deckLock keptDeck): a kept card off on
+  // its own is in no deck while it is away.
   const kept = useBoardsStore(s => {
     const k = groupId ? s.groups.find(g => g.id === groupId)?.deckKeep : undefined
-    if (!k || !s.groups.some(o => o.id !== groupId && o.deckKeep === k)) return false
-    if (k === groupId || rowOf(groupId!)?.includes(k)) return true
-    let at = s.groups.find(g => g.id === k)
-    for (let i = 0; at?.deckAnchorId && at.deckAnchorId !== at.id && i < 32; i++) {
-      if (at.deckAnchorId === groupId) return true
-      at = s.groups.find(g => g.id === at!.deckAnchorId)
-    }
-    return false
+    if (!k) return false
+    const zoom = useCanvasStore.getState().zoom
+    return !!keptDeck(k, s.groups, (a, b) => cardsTouch(a, b, s.boards, zoom))?.some(g => g.id === groupId)
   })
   // A scene card: its view modes (Focus, Bump-outs, Trace) from a "⋯" here.
   const isScene = useBoardsStore(s => !!groupId && s.groups.find(g => g.id === groupId)?.cardType === 'scene')
@@ -584,18 +578,10 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
         if (kept) {
           // Kept to locked: the cards it keeps, with the cards hidden in them.
           const k = bs.groups.find(g => g.id === groupId)?.deckKeep
-          // Those with it now: in its row, or hidden in it (closed).
-          // (Open, those that reach the card it was kept under through
-          // one another, as the deck is read: utils/deckLock keptIn.)
-          const here = new Set(expandWithNestedMembers(rowOf(groupId) ?? [groupId], bs.groups))
-          const with_ = bs.groups.filter(g => g.deckKeep === k && here.has(g.id))
-          const front = with_.find(g => g.id === k)
+          // The deck as it stands (utils/deckLock keptDeck).
           const zoom = useCanvasStore.getState().zoom
-          const open_ = (g: { deckState?: string }) => !g.deckState || g.deckState === 'open'
-          const reach = front && open_(front)
-            ? new Set(keptReach(front, with_.filter(open_), (a, b) => cardsTouch(a, b, bs.boards, zoom)).map(g => g.id))
-            : null
-          const ids = expandWithNestedMembers([groupId, ...with_.filter(g => g.id !== groupId && (!reach || !open_(g) || reach.has(g.id))).map(g => g.id)], bs.groups)
+          const deck = k ? keptDeck(k, bs.groups, (a, b) => cardsTouch(a, b, bs.boards, zoom)) : null
+          const ids = expandWithNestedMembers([groupId, ...(deck ?? []).filter(g => g.id !== groupId).map(g => g.id)], bs.groups)
           if (ids.length < 2) { bs.setDeckKeep(groupId, null); return }
           bs.setDeckKeep(groupId, null)
           bs.setRowPrimary(groupId, ids)
