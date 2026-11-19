@@ -60,6 +60,9 @@ export interface TiltTarget {
    *  section (Brian 2026-11-10): no back wall, and pick() sees through it
    *  (it is looked at there, never changed). */
   mini?: boolean
+  /** How much of it shows, 0..1 (default 1): far from the middle of a
+   *  side view it fades away with its card (TiltModels FAR). */
+  dim?: number
 }
 
 /** A flat element given thickness on the tilted plane: a rounded slab
@@ -1392,7 +1395,8 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       if (s.inst && !s.swapping && s.quarter !== quarterStamp(s.url)) reseat(s)
       // (One a set shows live in the flat view stands whole at any tilt.)
       const full = !!st.full?.(tg.key)
-      const ease = full ? 1 : easeAll, fade = full ? 1 : st.fade
+      const dim = tg.dim ?? 1
+      const ease = full ? 1 : easeAll, fade = (full ? 1 : st.fade) * dim
       if (full) anyFull = true
       // Floating (the lift handle): up off its card, rising in with the
       // rest of the 3D look.
@@ -1428,7 +1432,9 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       }
       if (s.look) applyLook(s.look, st.texture, st.shade)
       if (s.look && st.mapsFor) gradeLook(s.look, st.mapsFor(tg.key, s.url))
-      s.stand.visible = !!s.inst && ease > 0
+      // (The grey and wire looks are shared by every model: one of those
+      // goes at once, half way.)
+      s.stand.visible = !!s.inst && ease > 0 && dim > (st.texture ? 0.02 : 0.5)
       const placed = !!st.placed?.(tg.key)
       // Riding a path, it is turned as the path has it: about its feet,
       // so it keeps to the path as it leans; a camera about its middle,
@@ -1564,7 +1570,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       const back = s.wall.getObjectByName('placard')!
       back.scale.z = d
       back.position.z = -d / 2 - 0.3
-      s.wall.visible = st.walls && !!text && easeAll > 0 && !tg.mini
+      s.wall.visible = st.walls && !!text && easeAll > 0 && !tg.mini && dim > 0.5
     }
     // A card missing for a frame or two (a re-render, a deck shuffling) is
     // only hidden: dropping it would reload the model and blink.

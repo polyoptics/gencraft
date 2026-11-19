@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react'
 import {
-  useTiltStore, useModelScaleStore, isTilted, offFlat, standTilt, standRise, unprojectTilt, TILT_DRAW_FAR, tiltP,
+  useTiltStore, useModelScaleStore, isTilted, offFlat, standTilt, standRise, unprojectTilt, TILT_DRAW_FAR, TILT_MAX, tiltP,
 } from '../../../store/tiltStore'
 import { CAMERA_LENS } from '../../../store/tiltStore'
 import { usePeek } from '../../../utils/peek'
@@ -136,6 +136,118 @@ const fadeShown = () => {
   if (useTiltStore.getState().lock3d || useManip.getState().through) return 1
   const x = Math.min(1, offFlat(useTiltStore.getState()) / FADE_TILT)
   return x * x * (3 - 2 * x)
+}
+/** Coming round to a side view, the board far from the middle of the view
+ *  goes (Brian 2026-11-19: "When I get to an angle of 80, let's start to
+ *  fade away all the surrounding cards outside so by 90 they're completely
+ *  gone ... about 15 feet radius around the center of my view"): from
+ *  `from` degrees of tilt to edge-on, what lies wholly more than `feet`
+ *  from the middle fades out, over a soft edge `soft` of that wide. Feet as
+ *  the measuring stick nearest the middle counts them (`per` canvas units
+ *  each with no stick out: a model on a card as it comes is about 6). */
+/** The canvas's own dark, which a far slab's sides go into. */
+const FAR_DARK = 0x12131f
+const FAR = { from: 80, feet: 15, soft: 0.2, per: 200 }
+type Far = { a: number; cx: number; cy: number; r: number }
+/** How far that has gone and where: `a` 0..1, the middle of the view on
+ *  the canvas (flat px from the host's centre) and the radius, px. Null
+ *  below `from`, and looking through a camera. */
+function farNow(): Far | null {
+  const ts = useTiltStore.getState()
+  if (ts.tilt <= FAR.from || ts.tilt > 90 || useManip.getState().through) return null
+  const x = Math.min(1, (ts.tilt - FAR.from) / (TILT_MAX - FAR.from)), a = x * x * (3 - 2 * x)
+  // The middle: the ground in the middle of the screen across, at the
+  // height on the screen of the point the view turns about (straight
+  // under the screen's middle near edge-on is far off, or sky).
+  const c = unprojectTilt(0, ts.shiftY, ts.tilt, ts.spin, ts.shiftX, ts.shiftY) ?? { x: 0, y: 0 }
+  const { pan, zoom } = useCanvasStore.getState()
+  const W = models.root?.clientWidth ?? 0, H = models.root?.clientHeight ?? 0
+  const mx = (c.x + W / 2 - pan.x) / zoom, my = (c.y + H / 2 - pan.y) / zoom
+  let per = FAR.per, near = Infinity
+  for (const st of Object.values(useNotesStore.getState().sticks ?? {})) {
+    const d = Math.hypot(st.x - mx, st.y - my)
+    if (d < near) { near = d; per = st.per }
+  }
+  return { a, cx: c.x, cy: c.y, r: FAR.feet * per * zoom }
+}
+/** How much of a thing shows, 0..1: its box by its centre, flat px from
+ *  the host's centre. Whole while any of it is within the radius. */
+function farShown(f: Far | null, u: number, v: number, w: number, h: number): number {
+  if (!f) return 1
+  const d = Math.hypot(Math.max(0, Math.abs(u - f.cx) - w / 2), Math.max(0, Math.abs(v - f.cy) - h / 2))
+  const x = Math.max(0, Math.min(1, (d - f.r) / (f.r * FAR.soft)))
+  return 1 - f.a * x * x * (3 - 2 * x)
+}
+/** The far things' own faces on the page, faded as their slabs and models
+ *  are: each one's opacity as it had it (`was`) and as written. */
+let farFaded = new Map<HTMLElement, { was: string; wrote: string }>()
+function fadeFar(f: Far | null, host: HTMLElement | null) {
+  const next = new Map<HTMLElement, { was: string; wrote: string }>()
+  const put = (el: HTMLElement | null | undefined, o: number) => {
+    if (!el || o >= 0.995 || next.has(el)) return
+    const had = farFaded.get(el)
+    const was = had && el.style.opacity === had.wrote ? had.was : el.style.opacity
+    const wrote = String(+((was === '' ? 1 : parseFloat(was) || 0) * o).toFixed(3))
+    if (el.style.opacity !== wrote) el.style.opacity = wrote
+    next.set(el, { was, wrote })
+  }
+  if (f && host) {
+    const W = host.offsetWidth, H = host.offsetHeight
+    const { pan, zoom } = useCanvasStore.getState()
+    const nodes = useFreeNodeStore.getState().nodes
+    /** A loop strip and all that is docked on it go as one, by strip. */
+    const strips = new Map<string, number>()
+    for (const world of host.querySelectorAll<HTMLElement>(':scope > div[style*="scale("]')) {
+      const box = (el: HTMLElement) => {
+        const at = offsetIn(el, world)
+        const w = el.offsetWidth * zoom, h = el.offsetHeight * zoom
+        return at ? farShown(f, pan.x + at.x * zoom + w / 2 - W / 2, pan.y + at.y * zoom + h / 2 - H / 2, w, h) : 1
+      }
+      const tiles = [...world.querySelectorAll<HTMLElement>('[data-viewport3d]:not([data-pinned]), [data-freenode][data-id]:not([data-pinned])')]
+      for (const node of tiles) {
+        if (!node.hasAttribute('data-rail')) continue
+        const o = box(node.querySelector<HTMLElement>('[data-rail-body]') ?? node)
+        strips.set(node.dataset.id!, o)
+        put(node, o)
+        for (const part of world.querySelectorAll<HTMLElement>(`[data-rail-overlay="${node.dataset.id}"]`)) put(part, o)
+      }
+      for (const node of tiles) {
+        if (node.hasAttribute('data-rail')) continue
+        const rail = node.hasAttribute('data-rail-docked') ? nodes[node.dataset.id ?? '']?.railDock?.railId : undefined
+        put(node, (rail ? strips.get(rail) : undefined) ?? box(node))
+      }
+      // Blocks and boards (zoomed in), each by its own box.
+      for (const el of world.querySelectorAll<HTMLElement>('[data-board], [data-layer-block]')) {
+        const wrap = el.hasAttribute('data-layer-block') ? el.parentElement : el
+        if (wrap && wrap !== world && !wrap.parentElement?.closest('[data-board]')) put(wrap, box(wrap))
+      }
+    }
+    const stage = document.querySelector<HTMLElement>('[data-tilt-stage="overlay"]')
+    if (stage) {
+      const groups = useBoardsStore.getState().groups
+      const onStrip = new Map<string, string>()
+      for (const n of Object.values(nodes)) if (n.cardRef && n.railDock) onStrip.set(n.cardRef, n.railDock.railId)
+      const box = (el: HTMLElement) => {
+        const at = offsetIn(el, stage)
+        return at ? farShown(f, at.x + el.offsetWidth / 2 - W / 2, at.y + el.offsetHeight / 2 - H / 2, el.offsetWidth, el.offsetHeight) : 1
+      }
+      /** Each card's, for what is drawn beside it (its name, its chips). */
+      const cards = new Map<string, number>()
+      for (const el of stage.querySelectorAll<HTMLElement>('[data-group-card][data-id], [data-group-outline]')) {
+        const id = el.dataset.groupOutline ?? el.dataset.id!
+        const rail = onStrip.get(id) ?? onStrip.get(groups.find(g => g.id === id)?.deckAnchorId ?? '')
+        const o = (rail ? strips.get(rail) : undefined) ?? box(el)
+        cards.set(id, Math.min(cards.get(id) ?? 1, o))
+        put(el, o)
+      }
+      for (const el of stage.querySelectorAll<HTMLElement>('[data-card-header], [data-primary-rail], [data-block-outline]')) {
+        const id = el.dataset.cardHeader ?? el.dataset.primaryRail
+        put(el, (id ? cards.get(id) : undefined) ?? box(el))
+      }
+    }
+  }
+  for (const [el, had] of farFaded) if (!next.has(el) && el.style.opacity === had.wrote) el.style.opacity = had.was
+  farFaded = next
 }
 /** Whether the view is in 3D: tipped, or looking through a camera. */
 const tilted3d = () => isTilted(useTiltStore.getState()) || !!useManip.getState().through
@@ -1673,6 +1785,21 @@ function collectSlabs(K = 1): TiltSlab[] {
   // First in the list: past the slab budget it is the far, small things
   // that go, never the machine.
   out.unshift(...consoleFurniture(leaning, screens, decks, zoom, K))
+  // Far from the middle of a side view (see FAR): gone with their faces,
+  // going into the dark of the canvas on the way.
+  const far = farNow()
+  fadeFar(far, host)
+  if (far) {
+    for (let i = out.length - 1; i >= 0; i--) {
+      const s = out[i]
+      const o = farShown(far, s.u, s.v, s.w, s.h)
+      if (o >= 0.995) continue
+      if (o <= 0.02) { out.splice(i, 1); continue }
+      const mix = (sh: number) => Math.round(((s.color >> sh) & 255) * o + ((FAR_DARK >> sh) & 255) * (1 - o))
+      s.color = (mix(16) << 16) | (mix(8) << 8) | mix(0)
+      if (s.rim) s.rim = { ...s.rim, h: s.rim.h * o }
+    }
+  }
   setLifts(lifting)
   standScreens(screens.map(s => s.id))
   // Artwork — pictures, videos, Viewer screens — read after the lifts are
@@ -2761,6 +2888,7 @@ export function liftOf(el: Element | null): number {
 }
 function dropLifts() {
   if (lifted.size) setLifts(new Map())
+  if (farFaded.size) fadeFar(null, null)
   standScreens([])
   turnAway(new Set())
   restEase.clear()
@@ -3017,6 +3145,20 @@ function collectTargets(W: number, H: number): TiltTarget[] {
   }
   const st = useTiltStats.getState()
   if (st.held !== held || st.tris !== tris) useTiltStats.setState({ held, tris })
+  // Far from the middle of a side view (see FAR), a model goes with its
+  // card; in a 3D set, with the set.
+  const far = farNow()
+  if (far) {
+    for (let i = 0; i < keep.length; i++) {
+      const t = keep[i]
+      if (t.key.startsWith('viewer:') || looked(t)) continue
+      const at = t.wall ?? t
+      const a = sceneOf(t.key)?.area
+      const o = a ? farShown(far, pan.x + (a.x + a.width / 2) * zoom - W / 2, pan.y + (a.y + a.height / 2) * zoom - H / 2, a.width * zoom, a.height * zoom)
+        : farShown(far, at.u, at.v, t.w, at.h)
+      if (o < 0.995) keep[i] = { ...t, dim: o }
+    }
+  }
   return liveOnly ? keep.filter(t => liveOnly.has(t.key) || liveOnly.has(dataKey(t.key))) : keep
 }
 
