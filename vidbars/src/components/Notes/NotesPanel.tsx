@@ -41,10 +41,11 @@ import { isHiddenDeckMember } from '../../hooks/useCardDecks'
 import { parentOf, parentCurves } from '../../utils/curveParent'
 import { CameraTools, NEW_CAMERA_MM } from '../Canvas/tilt/LookThrough'
 import { useRideClock, rideTime, rideSpan, rideTotal, parentToPath, unparentFromPath, setRider } from '../../utils/pathRide'
-import { CAMERA_DOCK_BOTTOM } from '../Canvas/tilt/ViewCube'
+import { useZoomZonesStore } from '../../store/zoomZonesStore'
+import { CAMERA_DOCK_BOTTOM, CAMERA_DOCK_W, DOCK_LINE, ZOOM_BAR_W, DOCK_SLIDE } from '../Canvas/tilt/ViewCube'
 
 const S = 'rgba(228,234,255,0.92)'
-const W_OPEN = 252, W_FOLDED = 52
+const W_OPEN = 252, W_FOLDED = CAMERA_DOCK_W
 
 type Ic = React.FC<{ size?: number; color?: string }>
 const svg = (size: number) => ({ width: size, height: size, viewBox: '0 0 24 24', fill: 'none', strokeWidth: 2, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const })
@@ -1112,6 +1113,13 @@ const OutlinerBox: React.FC = () => {
 export const NotesPanel: React.FC = () => {
   const open = useNotesUi(s => s.open)
   const folded = useNotesUi(s => s.collapsed)
+  // Folded, it is as wide as what it hangs under: the cube and the lens,
+  // and the zoom bar beside them while that is open. It makes way with them
+  // as the zoom bar squeezes in or out; opened or folded itself, it is there at once.
+  const zoomBar = useZoomZonesStore(s => s.barOpen)
+  const foldedWas = useRef(folded)
+  const makeWay = foldedWas.current === folded
+  useEffect(() => { foldedWas.current = folded })
   const tool = useNotesUi(s => s.tool)
   const color = useNotesUi(s => s.color)
   const width = useNotesUi(s => s.width)
@@ -1236,10 +1244,10 @@ export const NotesPanel: React.FC = () => {
       onPointerDown={e => e.stopPropagation()}
       onWheel={e => e.stopPropagation()}
       style={{
-        // Docked under the view cube and the camera's lens (ViewCube), on their right edge: it opens out leftwards from there.
-        position: 'fixed', top: CAMERA_DOCK_BOTTOM, right: 52, width: folded ? W_FOLDED : W_OPEN, maxHeight: `calc(100vh - ${CAMERA_DOCK_BOTTOM + 32}px)`,
+        // Joined on under the view cube and the camera's lens (ViewCube), one piece with them: a line between, no gap. Folded it is their width; it opens out leftwards from their right edge.
+        position: 'fixed', top: CAMERA_DOCK_BOTTOM, right: 0, width: folded ? W_FOLDED + (zoomBar ? ZOOM_BAR_W : 0) : W_OPEN, transition: makeWay ? `width ${DOCK_SLIDE}` : 'none', maxHeight: `calc(100vh - ${CAMERA_DOCK_BOTTOM + 32}px)`,
         display: 'flex', flexDirection: 'column', boxSizing: 'border-box',
-        background: 'rgba(12,13,22,0.94)', border: '1px solid rgba(255,255,255,0.09)', borderRadius: 14,
+        background: 'rgba(12,13,22,0.94)', border: '1px solid rgba(255,255,255,0.09)', borderTop: DOCK_LINE, borderRight: 'none', borderRadius: folded ? '0 0 0 14px' : '14px 0 0 14px',
         boxShadow: '0 10px 30px rgba(0,0,0,0.55)', zIndex: 870, color: '#e8f0ff', userSelect: 'none',
         backdropFilter: 'blur(6px)',
       }}

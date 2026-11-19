@@ -22,6 +22,8 @@ import {
   DEFAULT_CARD_MAX, DEFAULT_BLOCK_MAX, type ZoomZone,
 } from '../../store/zoomZonesStore'
 import { MIN_ZOOM, MAX_ZOOM } from '../../store/canvasStore'
+import { CAMERA_DOCK_H, CAMERA_DOCK_W, ZOOM_BAR_W, DOCK_LINE, DOCK_SLIDE } from '../Canvas/tilt/ViewCube'
+import { useNotesUi } from '../../store/notesStore'
 
 const ZONES: { key: ZoomZone; label: string; color: string }[] = [
   { key: 'card',  label: 'Cards',  color: '#FFD24A' },
@@ -31,7 +33,7 @@ const ZONES: { key: ZoomZone; label: string; color: string }[] = [
 const TRACK_W = 14
 const GRIP_H = 10
 const PANEL_W = 210
-const BAR_W = 38
+const BAR_W = ZOOM_BAR_W
 /** Same as App's title bar, so the bar reads as hanging from it. */
 const HEADER_BG = '#080910'
 
@@ -84,6 +86,8 @@ export const ZoomZoneBar: React.FC = () => {
   const timeIn = useZoomZonesStore(s => s.timeIn)
   const trackRef = useRef<HTMLDivElement>(null)
   const [hover, setHover] = useState(false)
+  const leaveTimer = useRef(0)
+  const panelUnder = useNotesUi(s => s.open)
   const [dragging, setDragging] = useState<null | 'card' | 'block' | 'zoom'>(null)
 
   const tFromEvent = (e: React.PointerEvent | PointerEvent) => {
@@ -125,22 +129,25 @@ export const ZoomZoneBar: React.FC = () => {
 
   return (
     <div
-      onPointerEnter={() => setHover(true)}
-      onPointerLeave={() => setHover(false)}
+      onPointerEnter={() => { window.clearTimeout(leaveTimer.current); setHover(true) }}
+      // Its panel is across the view cube from it: time to get there.
+      onPointerLeave={() => { window.clearTimeout(leaveTimer.current); leaveTimer.current = window.setTimeout(() => setHover(false), 450) }}
       onWheel={e => { e.stopPropagation(); zoomCanvasTo(zoom * (e.deltaY < 0 ? 1.12 : 1 / 1.12), hostOf(trackRef.current)) }}
       onContextMenu={e => e.stopPropagation()}
       onDoubleClick={e => e.stopPropagation()}
       style={{
-        // Flush with the window's right frame, hanging from the title bar's
-        // corner button (ZoomZoneHeaderButton). Collapsing folds it up into
-        // that button rather than unmounting, so it reads as one object.
-        position: 'absolute', right: 0, top: 0, bottom: 36, width: BAR_W,
+        // Flush with the window's right frame, under the title bar's corner
+        // button (ZoomZoneHeaderButton), and one piece with the view cube
+        // and the camera's lens beside it (ViewCube): their height, a line
+        // between. Folding squeezes it out to the frame as they move into
+        // the corner, rather than unmounting.
+        position: 'absolute', right: 0, top: 0, height: CAMERA_DOCK_H, width: BAR_W,
         zIndex: 900, userSelect: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center',
-        background: HEADER_BG, borderLeft: '1px solid rgba(255,255,255,0.06)',
-        borderBottom: '1px solid rgba(255,255,255,0.06)', borderRadius: '0 0 0 10px',
+        background: 'rgba(12,13,22,0.94)', borderLeft: DOCK_LINE,
+        borderBottom: panelUnder ? 'none' : '1px solid rgba(255,255,255,0.09)', backdropFilter: 'blur(6px)',
         padding: '6px 0 8px', boxSizing: 'border-box',
-        transformOrigin: 'top', transform: open ? 'none' : 'scaleY(0)', opacity: open ? 1 : 0,
-        transition: 'transform 160ms ease, opacity 120ms ease',
+        transformOrigin: 'right', transform: open ? 'none' : 'scaleX(0)', opacity: open ? 1 : 0,
+        transition: `transform ${DOCK_SLIDE}, opacity 120ms ease`,
         pointerEvents: open ? 'auto' : 'none',
       }}
     >
@@ -209,7 +216,7 @@ export const ZoomZoneBar: React.FC = () => {
         <div
           onPointerDown={e => e.stopPropagation()}
           style={{
-            position: 'absolute', right: BAR_W + 6, top: '50%', transform: 'translateY(-50%)', width: PANEL_W,
+            position: 'absolute', right: BAR_W + CAMERA_DOCK_W + 6, top: 6, width: PANEL_W,
             background: 'rgba(12,13,20,0.94)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8,
             padding: '10px 12px', color: 'rgba(255,255,255,0.8)', fontSize: 11, lineHeight: 1.5,
             boxShadow: '0 6px 24px rgba(0,0,0,0.5)', pointerEvents: dragging ? 'none' : 'auto',

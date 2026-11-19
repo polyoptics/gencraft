@@ -543,7 +543,7 @@ export const LookThrough: React.FC = () => {
   return (
     <div style={{ position: 'absolute', inset: 0, zIndex: 860, pointerEvents: 'none' }}>
       {/* The 3D bar is the canvas's: not while looking through. */}
-      <style>{'[data-tilt-hud]{display:none !important}'}</style>
+      <style>{'[data-tilt-hud]:not([data-camera-dock]){display:none !important}'}</style>
       {box.w > 0 && <>
         <div style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: g.y, background: shade }} />
         <div style={{ position: 'absolute', left: 0, top: g.y + g.h, width: '100%', bottom: 0, background: shade }} />
