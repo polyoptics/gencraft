@@ -186,12 +186,13 @@ export function stickMarks(s: Stick): StickMark[] {
   const bs = useBoardsStore.getState()
   const out: StickMark[] = []
   for (const picked of bs.selectedGroupIds) {
-    // (A deck's front card showing another of its cards: that card.)
+    // (A deck's front card showing another of its cards: that card's
+    // height, in the colour the deck is drawn in, its front card's.)
     const id = dataKey(`card:${picked}`).slice(5)
     const units = m.owner.get(id) === s.id ? m.heights.get(id) : undefined
     if (!units) continue
     const ft = units / s.per
-    out.push({ id, ft, color: bs.groups.find(g => g.id === id)?.color || '#4fc3ff', text: heightText({ ft, metric: s.metric }) })
+    out.push({ id, ft, color: bs.groups.find(g => g.id === picked)?.color || '#4fc3ff', text: heightText({ ft, metric: s.metric }) })
   }
   return out.sort((a, b) => a.ft - b.ft)
 }
