@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { flushSync } from 'react-dom'
-import { useTiltStore, isTilted, offFlat, unprojectTilt, standRise, shiftKeeping, centrePoint, TILT_SNAP, TILT_MAX, TILT_UNDER, tiltP, type Pivot } from '../../../store/tiltStore'
+import { useTiltStore, isTilted, offFlat, unprojectTilt, standRise, shiftKeeping, depthShare, centrePoint, TILT_SNAP, TILT_MAX, TILT_UNDER, tiltP, type Pivot } from '../../../store/tiltStore'
 import { storyWallOf } from '../StorylineLayer'
 import { peekAt, usePeek } from '../../../utils/peek'
 import { useCanvasStore, groupBounds, MIN_ZOOM, MAX_ZOOM } from '../../../store/canvasStore'
@@ -532,14 +532,20 @@ function frameModel(host: HTMLElement): boolean {
   })
   const avg = (l: { x: number; y: number; h: number }[]) => ({ x: l.reduce((a, q) => a + q.x, 0) / l.length, y: l.reduce((a, q) => a + q.y, 0) / l.length, h: l.reduce((a, q) => a + q.h, 0) / l.length })
   const m0 = avg(mid(zFrom, pan))
-  // Its middle stands `A` toward the eye along the view's middle ray (per
-  // unit of zoom: it rises as the zoom grows), so it shows bigger the more
-  // it is zoomed, and too near it would reach the eye (a model lifted high
-  // up). Its size now, canvas units, without that.
+  // Framed, its foot is at the screen's own distance and its middle, `h`
+  // up, stands `A` nearer the eye (per unit of zoom: it rises as the zoom
+  // grows): h by how far the view is from side-on, where a thing's height
+  // brings it no nearer. (It was h OVER that: nearly side-on the model
+  // counted as a mile toward the eye and F backed far off to keep clear of
+  // it, 16 times too far at the view cube's FR; Brian 2026-11-19, "it
+  // zooms out super far".)
   const ts = useTiltStore.getState()
-  const along = Math.max(1e-3, Math.cos(ts.tilt * Math.PI / 180) * Math.cos((ts.yaw ?? 0) * Math.PI / 180))
-  const P = tiltP(), A = m0.h / along
-  const grow = Math.max(0.05, (P - A * zFrom) / P)
+  const along = Math.max(0, Math.cos(ts.tilt * Math.PI / 180) * Math.cos((ts.yaw ?? 0) * Math.PI / 180))
+  const P = tiltP(), A = m0.h * along
+  // Its size now, canvas units, without what its distance does to it
+  // where it stands now: near the eye it shows big and far off small, and
+  // neither is its size.
+  const grow = piv.reduce((a, { p }) => a + Math.max(0.05, depthShare({ x: p.u, y: p.v, z: p.z }, ts.tilt, ts.spin, ts.yaw)), 0) / piv.length
   const sw = (mb.x1 - mb.x0) / zFrom * grow, sh = (mb.y1 - mb.y0) / zFrom * grow
   // Shown at half the view (s·z·P/(P − A·z) = F), never past 0.6 of the
   // way to the eye.
@@ -616,8 +622,9 @@ export function useFrameKey() {
         for (const r of sets.rects) { box.x0 = Math.min(box.x0, r.x); box.y0 = Math.min(box.y0, r.y); box.x1 = Math.max(box.x1, r.x + r.w); box.y1 = Math.max(box.y1, r.y + r.h) }
         const ts = useTiltStore.getState()
         const cz = sets.top / 2
-        const along = Math.max(1e-3, Math.cos(ts.tilt * Math.PI / 180) * Math.cos((ts.yaw ?? 0) * Math.PI / 180))
-        const P = tiltP(), A = cz / along
+        // (How much nearer the eye that middle is: see frameModel.)
+        const along = Math.max(0, Math.cos(ts.tilt * Math.PI / 180) * Math.cos((ts.yaw ?? 0) * Math.PI / 180))
+        const P = tiltP(), A = cz * along
         const fit = (F: number, sz: number) => F * P / (Math.max(sz, 1) * P + F * A)
         const zTo = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, A > 0 ? 0.6 * P / A : Infinity, fit(W * 0.38, box.x1 - box.x0), fit(H * 0.38, box.y1 - box.y0)))
         const cx = (box.x0 + box.x1) / 2, cy = (box.y0 + box.y1) / 2

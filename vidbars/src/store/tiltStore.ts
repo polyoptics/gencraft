@@ -368,6 +368,11 @@ export function shiftKeeping(g: Pivot, tiltDeg: number, spinDeg: number, yawDeg:
   const k = (perspNow - q.z) / perspNow
   return { shiftX: at.x * k - q.x, shiftY: at.y * k - q.y }
 }
+/** How small point `g` is drawn for its distance: 1 at the screen's own
+ *  distance, less nearer the eye (drawn bigger), more beyond. */
+export function depthShare(g: Pivot, tiltDeg: number, spinDeg: number, yawDeg: number) {
+  return (perspNow - viewPoint(g, tiltDeg, spinDeg, yawDeg).z) / perspNow
+}
 /** Where ground point `g` is drawn now, px from the screen's middle; null
  *  when it is behind the eye. */
 export function screenOf(g: Pivot, s: { tilt: number; spin: number; yaw: number; shiftX: number; shiftY: number }) {

@@ -49,6 +49,7 @@ import { setChildOf, setPartners, isUnknown } from './family'
 import { getMedia } from './mediaStore'
 import { blobToDataUrl, isDataUrl, isMediaRef, mediaRefId } from './mediaRef'
 import { markNew } from './newCards'
+import { bringHome } from './bringHome'
 import { agentGlide, agentPoint, agentSpotOfCard } from './agentCursor'
 import { placeBox, placeToolAt, type PlaceKind } from './placeTool'
 import { bundleArea3dCard } from './area3dCard'
@@ -772,6 +773,30 @@ async function linkCards(args: Json): Promise<Json> {
     else useBoardsStore.getState().linkGroups(from.id, t.id)
   }
   return { [args.remove ? 'unlinked' : 'linked']: to.length, from: from.id, note: 'One undo (Ctrl+Z) takes it back.' }
+}
+
+/** A made card brought home to the card it was made from: into that
+ *  card's deck, and shown by a detail on its back (utils/bringHome). */
+async function bringCardsHome(args: Json): Promise<Json> {
+  const from = cardsNamed([String(args.from ?? '')])[0]
+  const made = cardsNamed(idsOf(args.cards).filter(id => id !== from.id))
+  if (!made.length) throw new Error('Give cards: the ids of the cards that were made from it.')
+  await agentGlide(say(args, `Bringing ${made.length > 1 ? `${made.length} cards` : made[0].name} home to ${from.name}`), agentSpotOfCard(from.id))
+  useUndoCoordinator.getState().checkpoint()
+  const r = bringHome(from.id, made.map(g => g.id), {
+    detail: typeof args.detail === 'string' ? args.detail : undefined,
+    replace: args.replace === true,
+    front: typeof args.front === 'boolean' ? args.front : undefined,
+  })
+  if (!r) throw new Error('Nothing could be brought home.')
+  markNew(made.map(g => g.id))
+  const where = r.deck === 'closed' ? `in ${from.name}'s closed deck` : `touching ${from.name}'s row, so in its deck`
+  const what = r.did === 'kept'
+    ? `${from.name}'s ${r.detail} detail already shows ${r.had} and was NOT changed. Ask the artist whether ${made[0].name} should replace it; if yes, call bring_home again with replace: true.`
+    : r.did === 'same' ? `${from.name}'s ${r.detail} detail already showed it.`
+    : r.did === 'replaced' ? `${from.name}'s ${r.detail} detail now shows ${made[0].name} (it showed ${r.had}).`
+    : `${from.name}'s ${r.detail} detail now shows ${made[0].name}.`
+  return { from: from.id, cards: made.map(g => g.id), deck: r.deck, detail: r.detail, detailWas: r.did, ...(r.had ? { had: r.had } : {}), note: `The made card${made.length > 1 ? 's are' : ' is'} ${where}. ${what} One undo (Ctrl+Z) takes it all back.` }
 }
 
 /** Delete cards. A closed deck named by its front card goes whole, as the
@@ -3208,7 +3233,7 @@ async function editMembers(args: Json): Promise<Json> {
 // ── The door ────────────────────────────────────────────────────────────
 
 const OPS: Record<string, (args: Json) => Json | Promise<Json>> = { list: listCards, read: readCards, decks: listDecks, media: cardMedia, deal: dealDeck,
-  edit: editCards, arrange: arrangeCards, deck: setDeck, link: linkCards, delete: deleteCards, select: selectCards, undo: undoLast,
+  edit: editCards, arrange: arrangeCards, deck: setDeck, link: linkCards, delete: deleteCards, select: selectCards, undo: undoLast, home: bringCardsHome,
   tools: listTools, place: placeTool, set3d: make3dSet, stand3d, modelSquare: squareModels, gif: makeGifOf, movie: makeMovieOf, cut: addToCut,
   states: readStates, statesBuild: buildStates, statesEdit: editStates, statesRun: runStates,
   story: readStoryline, storyBuild: buildStoryline, storyEdit: editStoryline,
