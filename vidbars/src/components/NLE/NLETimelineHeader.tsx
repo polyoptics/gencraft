@@ -471,10 +471,9 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
         }}
       >
         {/* Dashed-rectangle glyph — a tiny card silhouette displaying the
-            deck's MEANINGFUL-CONTENT count (authored pieces across all
-            members: cards, blocks, bars — text, images, titles). The
-            caller passes this via mode.count. Visually echoes the
-            DeckOpenPreview outlines it summons. */}
+            number of cards in the deck (the caller passes it via
+            mode.count). Visually echoes the DeckOpenPreview outlines it
+            summons. */}
         <div style={{
           width: iconW,
           height: iconH,

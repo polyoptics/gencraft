@@ -66,7 +66,7 @@ import type { FreeNodeData } from '../../store/freeNodeStore'
 import { useResolvedMedia } from '../../utils/useResolvedMedia'
 import type { MediaItem } from '../../types/bar'
 import { HeroImageEditOverlay } from '../UI/HeroImageEditOverlay'
-import { getFirstImageUrl, getMediaItems } from '../../types/bar'
+import { getFirstImageUrl } from '../../types/bar'
 import { groupFaceSource, groupImageSources, deckImageSources, cardGripUrl as cardGripUrlOf } from '../../utils/mediaSources'
 import { DragOutGrip } from '../UI/DragOutGrip'
 import { cardFill, hexToHsl, hslToHex, selectionHighlight } from '../../utils/colorUtils'
@@ -1993,103 +1993,9 @@ const UngroupedBoardCard = React.memo(UngroupedBoardCardInner)
 
 import { useCardDecks, isHiddenDeckMember, isSubDeckAnchor, expandWithNestedMembers, cardVisualRect, cardsTouch, canvasObstacleGroups, type Deck } from '../../hooks/useCardDecks'
 
-// Placeholder names that carry no authored intention — a card/bar with
-// only one of these (and no other content) is NOT counted as meaningful.
-const PLACEHOLDER_NAMES = new Set(['', 'untitled', 'new card', 'new block', 'new vidbar'])
-const isAuthoredName = (name?: string) =>
-  !!name && !PLACEHOLDER_NAMES.has(name.trim().toLowerCase())
-const hasText = (s?: string) => !!s && s.trim().length > 0
-const barHasImage = (bar: { content?: unknown }) => {
-  const c = bar?.content as Record<string, unknown> | undefined
-  return !!c && (!!c.imageUrl || !!c.image || !!c.imageTransform)
-}
-
-/** A media url's file name, lowercased, with and without its extension —
- *  what an import names its card, block and bar after. */
-function mediaNames(url: string): string[] {
-  let p = url.split(/[?#]/)[0]
-  try { p = decodeURIComponent(p) } catch { /* keep raw */ }
-  const file = (p.split(/[\\/]/).pop() ?? '').trim().toLowerCase()
-  return file ? [file, file.replace(/\.[^.]+$/, '')] : []
-}
-
-/** Count the UNIQUE things in a deck — what the deck badge shows. Every
- *  card, block and bar is looked at, but each distinct picture, text or
- *  authored name counts once, wherever it appears. An image dragged in
- *  makes a card, a block and a bar that all carry that one picture under
- *  its file name, so it counts 1; its block or bar only adds to the count
- *  once it holds something of its own (a note, a different name, another
- *  picture). Empty placeholders don't count.
- *
- *  Recurses through nested sub-decks: a deck's `memberIds` lists only
- *  its TOP-LEVEL members, but a member can itself be a sub-deck anchor
- *  with its own members (and those can nest further). We expand the
- *  id set across the full deckAnchorId tree first, so the total covers
- *  every card/block/bar anywhere inside the deck — not just the front
- *  layer. */
-function countMeaningfulContent(
-  memberIds: string[],
-  groups: ProjectGroup[],
-  boards: Record<string, import('../../store/boardsStore').BoardData>,
-): number {
-  // Expand to all transitive descendants via deckAnchorId.
-  const ids = new Set(memberIds)
-  let added = true
-  while (added) {
-    added = false
-    for (const g of groups) {
-      if (g.deckAnchorId && g.deckAnchorId !== g.id && ids.has(g.deckAnchorId) && !ids.has(g.id)) {
-        ids.add(g.id)
-        added = true
-      }
-    }
-  }
-  const seen = new Set<string>()
-  for (const gid of ids) {
-    const g = groups.find(gr => gr.id === gid)
-    if (!g) continue
-    // Pictures first, so a name that is only a picture's file name is
-    // known to be that picture, not something new.
-    const media: string[] = []
-    const originals: string[] = []
-    const texts: (string | undefined)[] = [g.cardText, g.cardHeaderText, g.cardSummary]
-    const names: (string | undefined)[] = [g.name]
-    if (g.cardHeroImage) media.push(g.cardHeroImage)
-    for (const bid of g.boardIds) {
-      const board = boards[bid]
-      if (!board) continue
-      const blk = board.layers?.block
-      if (blk) {
-        if (blk.thumbnail) media.push(blk.thumbnail)
-        texts.push(blk.text, blk.headerText)
-        names.push(blk.label)
-      }
-      for (const barId of Object.keys(board.bars || {})) {
-        const bar = board.bars[barId]
-        if (!bar) continue
-        for (const m of getMediaItems(bar.content)) {
-          media.push(m.url)
-          if (m.originalName) originals.push(m.originalName)
-        }
-        if (barHasImage(bar) && getMediaItems(bar.content).length === 0) media.push(`bar:${bid}:${barId}`)
-        texts.push(bar.content?.text)
-        names.push(bar.name)
-      }
-    }
-    // The names a picture came in under — its file's, and the card's own
-    // name, which an import (or a snip, or a rail run) takes from it.
-    const fileNames = new Set([...media, ...originals].flatMap(mediaNames))
-    if (media.length > 0 && g.name) fileNames.add(g.name.trim().toLowerCase())
-    for (const u of media) seen.add(`m:${u}`)
-    const addText = (t: string) => {
-      const k = t.trim().toLowerCase()
-      if (!fileNames.has(k)) seen.add(`t:${k}`)
-    }
-    for (const t of texts) if (hasText(t)) addText(t!)
-    for (const n of names) if (isAuthoredName(n)) addText(n!)
-  }
-  return seen.size
-}
+// (The deck icon's number is its cards now, Brian 2026-11-19. It counted
+// the distinct pictures, texts and names in them: countMeaningfulContent,
+// in this file's history before then.)
 
 /** Stacked deck — only anchor visible, peek tabs behind, badge + controls */
 const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; isNested?: boolean; side?: DeckSide }> = ({ deck, anchorGroup, isNested, side }) => {
@@ -4921,6 +4827,32 @@ const DeckOpenPreview: React.FC<{ deck: Deck; lay?: DeckLay }> = ({ deck, lay })
   )
 }
 
+/** An open deck's icon pointed at (Brian 2026-11-19): an outline on each
+ *  card it folds when double-clicked, so the icon reads as the control it
+ *  is and says which cards it means. */
+const FoldPreview: React.FC<{ id: string; ids: string[] }> = ({ id, ids }) => {
+  const active = useCanvasStore(s => s.previewHoveredDeckId === id)
+  const boards = useBoardsStore(s => s.boards)
+  const groups = useBoardsStore(s => s.groups)
+  const { pan, zoom } = useCardView()
+  if (!active) return null
+  return (
+    <>
+      {ids.map(gid => {
+        const g = groups.find(o => o.id === gid)
+        const r = g && !isHiddenDeckMember(g) ? cardScreenRect(g, boards, pan, zoom) : null
+        return r && (
+          <div key={gid} data-fold-preview={gid} style={{
+            position: 'absolute', left: r.screenLeft - 2, top: r.screenTop - 2, width: r.screenWidth + 4, height: r.screenHeight + 4,
+            border: '2px solid rgba(127,209,255,0.95)', borderRadius: 13, boxSizing: 'border-box',
+            boxShadow: '0 0 10px rgba(127,209,255,0.45)', pointerEvents: 'none', zIndex: 60,
+          }} />
+        )
+      })}
+    </>
+  )
+}
+
 /** Tint stripe across the middle third of an extracted card's NLE header,
  *  colored with the parent deck's color. Replaces the older floating chip
  *  approach — by integrating into the header bar itself, the indicator
@@ -5226,6 +5158,18 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
     return affordanceClusters.find(c => c[0] === g.id) ?? null
   }
 
+  // The front card of a row of touching cards: the row.
+  const rowFront = (g: ProjectGroup): string[] | null => affordanceClusters.find(c => c[0] === g.id) ?? null
+  // The open decks whose icon is in a header, and the cards each folds:
+  // pointed at, the icon outlines them (FoldPreview).
+  const folds = groups.flatMap(g => {
+    if (g.pin || g.chart || (g.deckState && g.deckState !== 'open')) return []
+    const own = openDeckFront(g)
+    if (own) return [{ id: 'home:' + g.id, ids: own }]
+    const row = rowFront(g)
+    return row && (sceneRowFront(g) || !(g.cardType === 'area3d' || g.area3d)) ? [{ id: 'row:' + g.id, ids: row }] : []
+  })
+
   const extractingCardId = useCanvasStore(s => s.extractingCardId)
   const fanTransition = useCanvasStore(s => s.fanTransition)
   // What a cluster's primary is drawn as below — DeckAffordance's hover
@@ -5304,7 +5248,7 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
                 groupId={g.id}
                 rightInset={deck.memberIds.length > 1 && lays.get(deck.id)?.side !== 'left' ? 10 : 0}
                 leftInset={deck.memberIds.length > 1 && lays.get(deck.id)?.side === 'left' ? 10 : 0}
-                iconMode={{ kind: 'deckPreview', deckId: deck.id, count: countMeaningfulContent(deck.memberIds, groups, boards), onDoubleClick: stackedDoubleClick }}
+                iconMode={{ kind: 'deckPreview', deckId: deck.id, count: expandWithNestedMembers(deck.memberIds, groups).length, onDoubleClick: stackedDoubleClick }}
               />
               <StackedDeckCard deck={deck} anchorGroup={g} isNested={nested} side={lays.get(deck.id)?.side} />
             </Fragment>
@@ -5334,7 +5278,7 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
               <div key={g.id} style={{ position: 'relative', zIndex: 55 }}>
                 <NLETimelineHeader
                   groupId={g.id}
-                  iconMode={{ kind: 'deckPreview', deckId: deck.id, count: countMeaningfulContent(deck.memberIds, groups, boards), onDoubleClick: fannedDoubleClick }}
+                  iconMode={{ kind: 'deckPreview', deckId: deck.id, count: expandWithNestedMembers(deck.memberIds, groups).length, onDoubleClick: fannedDoubleClick }}
                 />
                 <FannedDeckOverlay deck={deck} groups={memberGroups} lay={lays.get(deck.id)} />
               </div>
@@ -5361,7 +5305,7 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
               // The front card of an open deck that shares its row with
               // other cards (Brian 2026-11-10): the same icon, to close
               // just that deck onto it; the rest of the row stays open.
-              kind: 'deckPreview', deckId: 'home:' + g.id, count: openDeckFront(g)!.length, lit: true,
+              kind: 'deckPreview', deckId: 'home:' + g.id, count: expandWithNestedMembers(openDeckFront(g)!, groups).length, lit: true,
               onDoubleClick: () => {
                 const mine = openDeckFront(g)
                 if (!mine) return
@@ -5372,7 +5316,7 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
               // A scene card in front of a row: the same icon, to close
               // the row onto it and to move the row by (its face is its
               // sections' to press and double-click).
-              kind: 'deckPreview', deckId: 'row:' + g.id, count: sceneRowFront(g)!.length, lit: true,
+              kind: 'deckPreview', deckId: 'row:' + g.id, count: expandWithNestedMembers(sceneRowFront(g)!, groups).length, lit: true,
               onDragDown: e => clusterFront.get(g.id)?.drag(e),
               onDoubleClick: () => {
                 const row = sceneRowFront(g)
@@ -5387,6 +5331,17 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
               kind: 'deckPreview', deckId: 'set3d:' + g.id, count: (g.area3d?.cards.length ?? 0) + (g.area3d?.tiles.length ?? 0),
               lit: setsOut.split(' ').includes(g.id),
               onDoubleClick: () => toggleArea3d(g.id),
+            } : rowFront(g) ? {
+              // Any open deck's front card (Brian 2026-11-19): the icon is
+              // always there, counts its cards and closes them, as its
+              // face does while it is alone in its row. Lit: it is open.
+              kind: 'deckPreview', deckId: 'row:' + g.id, count: expandWithNestedMembers(rowFront(g)!, groups).length, lit: true,
+              onDoubleClick: () => {
+                const row = rowFront(g)
+                if (!row) return
+                useUndoCoordinator.getState().checkpoint()
+                useBoardsStore.getState().setDeckState(row, 'stacked')
+              },
             } : { kind: 'hidden' }} />
             <GroupCard group={g} />
           </Fragment>
@@ -5409,6 +5364,7 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
       {!scoped && groups.filter(g => (g.cardType === 'area3d' || g.area3d) && !g.pin).map(g => (
         <SetOpenPreview key={`set-preview-${g.id}`} group={g} />
       ))}
+      {!scoped && folds.map(f => <FoldPreview key={`fold-${f.id}`} id={f.id} ids={f.ids} />)}
       {affordanceClusters.filter(c => !onlySet || c.some(id => onlySet.has(id))).map(cluster => (
         <DeckAffordance key={cluster.join('|')} cluster={cluster} front={affordanceFront(cluster[0])} frontSide={(() => { const f = affordanceFront(cluster[0]); return f && f !== 'card' ? lays.get(f.id)?.side : undefined })()} />
       ))}
