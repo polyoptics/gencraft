@@ -7,11 +7,11 @@
 // mark, a number by the main ones), and a board on its top that says how
 // tall it is and always faces the viewer. A selected card of its group
 // has a mark on the tube at its height. Docked, a short ticked line runs
-// along the edge it is docked by; walked off its place, a thin line ties
+// along the edge it is docked by.
 // it back there.
 //
 // As the view lies back flat the tube goes down into its base and the
-// board comes down over it (and a stand walked off comes home): flat, it
+// board comes down over it: flat, it
 // is the tab the flat view draws (components/Notes/StickLayer). Drawn
 // after the models, against their depth: where something stands in front
 // of it, it shows through faintly (as three/pathOverlay).
@@ -38,6 +38,8 @@ export interface StickFrame {
   sides: Map<string, Side>
   /** A docked stick's place on that edge. */
   at: Map<string, Pt>
+  /** The middle of its mount line on that edge. */
+  line: Map<string, Pt>
   /** Each stick's marks. */
   marks: Map<string, StickMarkAt[]>
   /** Bumped when a font has loaded: the boards are drawn again. */
@@ -73,7 +75,7 @@ function signTexture(s: Stick, edge: string): THREE.CanvasTexture {
   board(20); g.fillStyle = CREAM; g.fill()
   const rule = H * SIGN_TEXT
   const text = heightText(s)
-  g.fillStyle = ORANGE
+  g.fillStyle = s.color ?? ORANGE
   g.textAlign = 'center'
   g.textBaseline = 'middle'
   let px = Math.round(rule * 0.78)
@@ -123,9 +125,8 @@ interface Built {
   board: THREE.Sprite[]
   labels: { sp: THREE.Sprite; at: number }[]
   /** On the ground, in canvas units: the line along the edge it is
-   *  docked by, and the line back to its place when walked off. */
+   *  docked by. */
   ground: THREE.Group
-  tether: THREE.Mesh | null
   own: { dispose: () => void }[]
 }
 
@@ -235,7 +236,7 @@ export function createStickOverlay() {
     for (const m of marks) {
       if (m.ft > s.ft + 1e-6) continue
       body([bar(POLE_R + 0.075, m.ft - 0.03, m.ft + 0.03, 20)], m.color)
-      const n = numTexture(m.text, m.color)
+      const n = numTexture(m.text, s.color ?? ORANGE)
       for (const sp of sprite(n.tex, NUM_H * 1.15 * n.aspect, NUM_H * 1.15, 1.25, false)) labels.push({ sp, at: m.ft })
     }
     // Docked: a short line along the edge it is docked by, ticked. In
@@ -253,12 +254,9 @@ export function createStickOverlay() {
       }
       body(parts, ORANGE, ground)
     }
-    // Walked off its place: a thin line back to it (a unit long, laid
-    // out each frame).
-    const tether = s.off ? body([new THREE.BoxGeometry(1, 1, 1).translate(0.5, 0, 0)], ORANGE, ground) : null
     root.add(ground)
     root.add(group)
-    return { sig, ft: s.ft, group, mast, board, labels, ground, tether, own }
+    return { sig, ft: s.ft, group, mast, board, labels, ground, own }
   }
 
   /** Draw the sticks over what the frame drew. `ground` is the canvas's
@@ -274,18 +272,18 @@ export function createStickOverlay() {
         seen.add(s.id)
         const selected = f.selected === s.id, hotTop = f.hot === `${s.id}:top`, docked = f.docked.has(s.id)
         const side = f.sides.get(s.id) ?? null, marks = f.marks.get(s.id) ?? []
-        const sig = `${s.ft}|${s.per}|${!!s.metric}|${s.font ?? ''}|${selected}|${hotTop}|${docked}|${side}|${!!s.off}|${f.fontRev}|${marks.map(m => `${m.ft.toFixed(3)}${m.color}`).join(',')}`
+        const sig = `${s.ft}|${s.per}|${!!s.metric}|${s.font ?? ''}|${s.color ?? ''}|${selected}|${hotTop}|${docked}|${side}|${f.fontRev}|${marks.map(m => `${m.ft.toFixed(3)}${m.color}`).join(',')}`
         let b = built.get(s.id)
         if (!b || b.sig !== sig) {
           if (b) drop(b)
           b = build(s, sig, selected, hotTop, docked, side, marks)
           built.set(s.id, b)
         }
-        // Its middle; walked off it in 3D, it comes home as the view lies flat.
+        // Its middle.
         const e = Math.max(0, Math.min(1, rise))
         const at = f.at.get(s.id) ?? s
         const c = tabCentre({ x: at.x, y: at.y, per: s.per }, side)
-        const px = c.x + (s.off?.x ?? 0) * e, py = c.y + (s.off?.y ?? 0) * e
+        const px = c.x, py = c.y
         b.group.position.set(px, py, 0)
         b.group.scale.setScalar(s.per)
         // The tubes go down into the base, and the board comes down over it.
@@ -293,17 +291,8 @@ export function createStickOverlay() {
         b.mast.visible = e > 0.01
         for (const sp of b.board) sp.position.set(0, 0, e * (s.ft + 0.05 + SIGN_H) + (1 - e) * (BASE_H + 0.02))
         for (const l of b.labels) { l.sp.position.set(0, 0, l.at * e); l.sp.visible = e > 0.6 }
-        b.ground.position.set(at.x, at.y, 0)
-        if (b.tether) {
-          const dx = px - at.x, dy = py - at.y, l = Math.hypot(dx, dy)
-          b.tether.parent!.children.forEach(m => {
-            if ((m as THREE.Mesh).geometry !== b!.tether!.geometry) return
-            m.visible = l > 0.3 * s.per
-            m.rotation.set(0, 0, Math.atan2(dy, dx))
-            m.scale.set(Math.max(l, 1e-6), 0.02 * s.per, 0.006 * s.per)
-            m.position.set(0, 0, 0.01 * s.per)
-          })
-        }
+        const ln = f.line.get(s.id) ?? at
+        b.ground.position.set(ln.x, ln.y, 0)
       }
     }
     for (const [id, b] of built) if (!seen.has(id)) { drop(b); built.delete(id) }

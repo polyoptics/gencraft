@@ -43,8 +43,7 @@ export const tabOut = (side: Side | null | undefined): { x: number; y: number } 
 /** How far out from its point a stick's middle is, feet: half its board,
  *  the way it faces. */
 export const tabDepth = (side: Side | null | undefined) => side === 'left' || side === 'right' ? SIGN_W : SIGN_H
-/** A stick's middle, canvas units: where its tube stands (before it is
- *  walked off, Stick.off) and its tab lies. */
+/** A stick's middle, canvas units: where its tube stands and its tab lies. */
 export function tabCentre(s: Pick<Stick, 'x' | 'y' | 'per'>, side: Side | null | undefined): { x: number; y: number } {
   const o = tabOut(side), d = tabDepth(side) * s.per
   return { x: s.x + o.x * d, y: s.y + o.y * d }

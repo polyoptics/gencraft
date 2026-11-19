@@ -19,7 +19,7 @@ import { useTiltStore, isTilted } from '../../store/tiltStore'
 import { useManip } from '../../store/manipStore'
 import { ensureFontLoaded } from '../UI/TextFormatToolbar'
 import { stickMeasures, stickMarks, tabText } from '../../utils/stickDock'
-import { DOCK_LINE, SIGN_W, SIGN_H, SIGN_CUT, SIGN_TEXT, CREAM, GREEN, ORANGE, DARK, ACCENT, DEFAULT_FONT, unitText, tabOut, tabDepth, type Side } from '../../utils/stickGeom'
+import { DOCK_LINE, SIGN_W, SIGN_H, SIGN_CUT, SIGN_TEXT, CREAM, GREEN, ORANGE, DARK, ACCENT, DEFAULT_FONT, tabOut, tabDepth, type Side } from '../../utils/stickGeom'
 
 /** The board's outline, its corners cut, `inset` in from its edge. */
 const boardPath = (cy: number, inset: number) => {
@@ -28,9 +28,10 @@ const boardPath = (cy: number, inset: number) => {
 }
 
 /** One stick's tab, in feet from its own point (on the edge it is docked by). */
-const StickTab: React.FC<{ s: Stick; at: { x: number; y: number }; selected: boolean; hot: boolean; docked: boolean; side: Side | null }> = ({ s, at, selected, hot, docked, side }) => {
+const StickTab: React.FC<{ s: Stick; at: { x: number; y: number }; line: { x: number; y: number }; selected: boolean; hot: boolean; docked: boolean; side: Side | null }> = ({ s, at, line, selected, hot, docked, side }) => {
   const marks = stickMarks(s)
-  const text = tabText(s, marks)
+  const { text, unit } = tabText(s, marks)
+  const ink = s.color ?? ORANGE
   const out = tabOut(side), depth = tabDepth(side)
   const cx = out.x * depth, cy = out.y * depth
   // The number's box: the board's upper part, over the rule.
@@ -44,12 +45,12 @@ const StickTab: React.FC<{ s: Stick; at: { x: number; y: number }; selected: boo
         <path d={boardPath(0, 0)} fill={DARK} />
         <path d={boardPath(0, 0.014)} fill={selected || hot ? ACCENT : GREEN} />
         <path d={boardPath(0, 0.05)} fill={CREAM} />
-        <text x={0} y={-SIGN_H + textH / 2 + 0.03} fontSize={size} fontWeight={700} fontFamily={s.font ?? DEFAULT_FONT} textAnchor="middle" dominantBaseline="central" fill={marks.length === 1 ? DARK : ORANGE}>{text}</text>
-        <rect x={-SIGN_W + 0.1} y={-SIGN_H + textH} width={SIGN_W * 2 - 0.2} height={0.03} fill={marks.length === 1 ? marks[0].color : ORANGE} />
-        <text x={0} y={-SIGN_H + textH + (SIGN_H * 2 - textH) / 2} fontSize={(SIGN_H * 2 - textH) * 0.4} fontWeight={700} fontFamily={DEFAULT_FONT} letterSpacing={0.015} textAnchor="middle" dominantBaseline="central" fill={GREEN}>{unitText(s)}</text>
+        <text x={0} y={-SIGN_H + textH / 2 + 0.03} fontSize={size} fontWeight={700} fontFamily={s.font ?? DEFAULT_FONT} textAnchor="middle" dominantBaseline="central" fill={ink}>{text}</text>
+        <rect x={-SIGN_W + 0.1} y={-SIGN_H + textH} width={SIGN_W * 2 - 0.2} height={0.03} fill={ink} />
+        <text x={0} y={-SIGN_H + textH + (SIGN_H * 2 - textH) / 2} fontSize={(SIGN_H * 2 - textH) * 0.4} fontWeight={700} fontFamily={DEFAULT_FONT} letterSpacing={0.015} textAnchor="middle" dominantBaseline="central" fill={GREEN}>{unit}</text>
       </g>
       {docked && (
-        <g stroke={ORANGE} strokeLinecap="butt">
+        <g transform={`translate(${(line.x - at.x) / s.per} ${(line.y - at.y) / s.per})`} stroke={ORANGE} strokeLinecap="butt">
           <line x1={-tx * L} y1={-ty * L} x2={tx * L} y2={ty * L} strokeWidth={0.04} />
           {[-4, -3, -2, -1, 0, 1, 2, 3, 4].map(i => {
             const a = i / 4 * L, k = i % 2 === 0 ? 0.13 : 0.07
@@ -84,11 +85,11 @@ export const StickLayer: React.FC = () => {
     }
   }, [fonts])
   if (!list.length || tilted || through) return null
-  const { docked, sides, at } = stickMeasures()
+  const { docked, sides, at, line } = stickMeasures()
   return (
     <svg data-stick-layer="" style={{ position: 'absolute', left: 0, top: 0, width: 1, height: 1, overflow: 'visible', pointerEvents: 'none' }}>
       <g transform={`translate(${pan.x} ${pan.y}) scale(${zoom})`}>
-        {list.map(s => <StickTab key={s.id} s={s} at={at.get(s.id) ?? s} selected={selected === s.id} hot={!!hot && hot.startsWith(`${s.id}:`)} docked={docked.has(s.id)} side={sides.get(s.id) ?? null} />)}
+        {list.map(s => <StickTab key={s.id} s={s} at={at.get(s.id) ?? s} line={line.get(s.id) ?? at.get(s.id) ?? s} selected={selected === s.id} hot={!!hot && hot.startsWith(`${s.id}:`)} docked={docked.has(s.id)} side={sides.get(s.id) ?? null} />)}
       </g>
     </svg>
   )

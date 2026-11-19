@@ -14,10 +14,8 @@
 //    time (a centimetre, metric). Shift-drag the board: the whole stick
 //    grows or shrinks, marks and all, and the models of the cards it is
 //    docked to with it (utils/stickDock).
-//  - In 3D, drag its pole or base: docked, the stand walks off across
-//    the floor (its place on the edge stays, a thin line ties it back;
-//    double-click the stand and it goes home). Docked to nothing, the
-//    whole stick moves.
+//  - In 3D, drag its pole or base: it moves as the tab does flat (along
+//    the edge it is docked by, or off it).
 //  - Double-click the number on its board: the list of fonts for it.
 //    Double-click the rest of the board: feet or metres.
 //  - Click it to select it; Delete removes it. The Erase tool's click
@@ -148,14 +146,13 @@ function onDown(e: PointerEvent) {
   const x0 = e.clientX, y0 = e.clientY
   const flat = !in3d()
   // Double-click its board: on the number, the fonts; off it, the unit.
-  // Double-click its stand: walked off, it goes home.
   {
     const now = performance.now(), was = lastPress
     lastPress = { id: `${s0.id}:${hit.part}`, t: now, x: x0, y: y0 }
     if (was && was.id === lastPress.id && now - was.t < DOUBLE_MS && Math.hypot(x0 - was.x, y0 - was.y) < 6) {
       lastPress = null
-      if (hit.part === 'body') { if (s0.off) { checkpoint(); useNotesStore.getState().updateStick(s0.id, { off: undefined }) } }
-      else if (onNumber({ x: x0, y: y0 }, hit.spot)) useStickUi.setState({ fonts: { id: s0.id, x: x0 + 14, y: y0 - 20 } })
+      if (hit.part === 'body') return
+      if (onNumber({ x: x0, y: y0 }, hit.spot)) useStickUi.setState({ fonts: { id: s0.id, x: x0 + 14, y: y0 - 20 } })
       else { checkpoint(); useNotesStore.getState().updateStick(s0.id, { metric: s0.metric ? undefined : true }) }
       return
     }
@@ -177,9 +174,7 @@ function onDown(e: PointerEvent) {
       move: ev => {
         if (!begin(ev)) return
         const x = p0.x + (ev.clientX - x0) / zoom, y = p0.y + (ev.clientY - y0) / zoom
-        const at = snapTab(x, y)
-        // (Off every edge, its stand is with it.)
-        useNotesStore.getState().updateStick(s0.id, at.x === x && at.y === y ? { x, y, off: undefined } : at)
+        useNotesStore.getState().updateStick(s0.id, snapTab(x, y))
       },
     }
   } else if (hit.part === 'top') {
@@ -203,20 +198,16 @@ function onDown(e: PointerEvent) {
       },
     }
   } else {
-    // Its stand goes where the cursor takes it across the floor. Docked,
-    // its place on the edge stays and the stand walks off it; docked to
-    // nothing, the whole stick goes.
+    // Its stand goes where the cursor takes it across the floor, the
+    // stick with it: as the tab is dragged flat.
     const f0 = hit.spot.foot
-    const m = stickMeasures()
-    const isDocked = m.docked.has(s0.id)
-    const c0 = tabCentre({ ...stickPoint(s0), per: s0.per }, m.sides.get(s0.id))
+    const p0 = stickPoint(s0)
+    const c0 = tabCentre({ ...p0, per: s0.per }, stickMeasures().sides.get(s0.id))
     drag = {
       move: ev => {
         if (!begin(ev)) return
         const p = canvasPointUnder(f0.x + ev.clientX - x0, f0.y + ev.clientY - y0)
-        if (!p) return
-        if (isDocked) useNotesStore.getState().updateStick(s0.id, { off: { x: p.cx - c0.x, y: p.cy - c0.y } })
-        else useNotesStore.getState().updateStick(s0.id, { ...snapTab(p.cx - (c0.x - s0.x), p.cy - (c0.y - s0.y)), off: undefined })
+        if (p) useNotesStore.getState().updateStick(s0.id, snapTab(p.cx - (c0.x - p0.x), p.cy - (c0.y - p0.y)))
       },
     }
   }

@@ -26,7 +26,7 @@ import { useModelScaleStore } from '../store/tiltStore'
 import type { FreeNodeData } from '../store/freeNodeStore'
 import { dockedCards } from './filmShots'
 import { detailShown, newDetailId } from './cardTypes'
-import { FT_PER_M, parseHeight, heightText, type Side } from './stickGeom'
+import { FT_PER_M, DOCK_LINE, SIGN_W, SIGN_H, parseHeight, heightText, unitText, type Side } from './stickGeom'
 import { cardScreenRect } from '../components/Layers/CardLayer'
 import { isHiddenDeckMember } from '../hooks/useCardDecks'
 
@@ -101,6 +101,10 @@ interface Measured {
    *  was put down). */
   sides: Map<string, Side>
   at: Map<string, { x: number; y: number }>
+  /** The middle of its mount line on that edge. The line keeps to the
+   *  edge (it stops at the edge's ends); the stick slides along the line
+   *  to its ends (Brian 2026-11-19). */
+  line: Map<string, { x: number; y: number }>
   /** Changes when any of it does. */
   sig: number
 }
@@ -115,19 +119,41 @@ export function stickMeasures(): Measured {
   const zoom = useCanvasStore.getState().zoom
   if (memo && memo.sticks === sticks && memo.groups === bs.groups && memo.boards === bs.boards && memo.zoom === zoom) return memo.out
   const heights = new Map<string, number>(), bare = new Map<string, string>(), owner = new Map<string, string>()
-  const docked = new Set<string>(), sides = new Map<string, Side>(), at = new Map<string, { x: number; y: number }>()
+  const docked = new Set<string>(), sides = new Map<string, Side>(), at = new Map<string, { x: number; y: number }>(), line = new Map<string, { x: number; y: number }>()
   for (const s of Object.values(sticks)) {
     const cards = stickCards(s)
     if (cards.length) docked.add(s.id)
     // The side of the nearest of them it is on.
-    let near: { x: number; y: number; side: Side; d: number } | null = null
+    let near: { x: number; y: number; side: Side; d: number } | null = null, nearBox: Box | null = null
+    const boxes: Box[] = []
     for (const g of cards) {
       if (isHiddenDeckMember(g)) continue
       const b = cardBox(g)
-      const e = b && nearEdge(b, s.x, s.y)
-      if (e && (!near || e.d < near.d)) near = e
+      if (!b) continue
+      boxes.push(b)
+      const e = nearEdge(b, s.x, s.y)
+      if (!near || e.d < near.d) { near = e; nearBox = b }
     }
-    if (near) { sides.set(s.id, near.side); at.set(s.id, { x: near.x, y: near.y }) }
+    if (near && nearBox) {
+      const side = near.side, across = side === 'top' || side === 'bottom'
+      sides.set(s.id, side)
+      // The edge it is on, run on along the cards in line with that one.
+      const edgeOf = (b: Box) => side === 'top' ? b.t : side === 'bottom' ? b.b : side === 'left' ? b.l : b.r
+      const e0 = edgeOf(nearBox)
+      let lo = across ? nearBox.l : nearBox.t, hi = across ? nearBox.r : nearBox.b
+      for (const b of boxes) {
+        if (Math.abs(edgeOf(b) - e0) > 1) continue
+        lo = Math.min(lo, across ? b.l : b.t); hi = Math.max(hi, across ? b.r : b.b)
+      }
+      // The line goes along with the stick until its end is at the
+      // edge's; the stick goes on to the line's end.
+      const L = DOCK_LINE * s.per, half = (across ? SIGN_W : SIGN_H) * s.per
+      const t = across ? s.x : s.y
+      const c = hi - lo > L ? Math.max(lo + L / 2, Math.min(hi - L / 2, t)) : (lo + hi) / 2
+      const tt = Math.max(c - L / 2 + half, Math.min(c + L / 2 - half, t))
+      at.set(s.id, across ? { x: tt, y: e0 } : { x: e0, y: tt })
+      line.set(s.id, across ? { x: c, y: e0 } : { x: e0, y: c })
+    }
     for (const g of cards) {
       if (owner.has(g.id)) continue
       owner.set(g.id, s.id)
@@ -139,7 +165,8 @@ export function stickMeasures(): Measured {
   const same = !!was && was.docked.size === docked.size && [...docked].every(id => was.docked.has(id))
     && sameMap(was.heights, heights) && sameMap(was.bare, bare) && sameMap(was.owner, owner) && sameMap(was.sides, sides)
     && at.size === was.at.size && [...at].every(([k, p]) => was.at.get(k)?.x === p.x && was.at.get(k)?.y === p.y)
-  const out = same ? was! : { heights, bare, owner, docked, sides, at, sig: ++sigSeq }
+    && [...line].every(([k, p]) => was.line.get(k)?.x === p.x && was.line.get(k)?.y === p.y)
+  const out = same ? was! : { heights, bare, owner, docked, sides, at, line, sig: ++sigSeq }
   memo = { sticks, groups: bs.groups, boards: bs.boards, zoom, out }
   return out
 }
@@ -165,11 +192,13 @@ export function stickMarks(s: Stick): StickMark[] {
   return out.sort((a, b) => a.ft - b.ft)
 }
 /** What a stick's tab says, flat: the height of the card picked in its
- *  group (of several, the shortest to the tallest); with none picked,
- *  its own. */
-export function tabText(s: Stick, marks = stickMarks(s)): string {
-  if (!marks.length) return heightText(s)
-  return marks.length === 1 ? marks[0].text : `${marks[0].text} – ${marks[marks.length - 1].text}`
+ *  group (of several, their average: Brian 2026-11-19); with none
+ *  picked, its own. And the unit under it. */
+export function tabText(s: Stick, marks = stickMarks(s)): { text: string; unit: string } {
+  if (!marks.length) return { text: heightText(s), unit: unitText(s) }
+  if (marks.length === 1) return { text: marks[0].text, unit: unitText(s) }
+  const ft = marks.reduce((a, m) => a + m.ft, 0) / marks.length
+  return { text: heightText({ ft, metric: s.metric }), unit: `${unitText(s)} AVG` }
 }
 
 // ── A card with no Height: where its model starts from ──

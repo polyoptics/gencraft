@@ -278,10 +278,10 @@ export interface PictureMark {
  *  backs give a Height stand that tall against it in 3D.
  *  `heights`: how tall the models of docked cards that give no Height
  *  were when it was docked to them, feet, by card id: they size with
- *  the stick from there (let go when it leaves them). `off`: how far
- *  its stand has been walked off its place in 3D, canvas units (flat it
- *  is a tab at its place, always). */
-export interface Stick { id: string; x: number; y: number; ft: number; per: number; metric?: boolean; font?: string; heights?: Record<string, number>; off?: { x: number; y: number } }
+ *  the stick from there (let go when it leaves them). */
+export interface Stick { id: string; x: number; y: number; ft: number; per: number; metric?: boolean; font?: string
+  /** The colour its numbers are written in (orange, unless set). */
+  color?: string; heights?: Record<string, number> }
 
 interface NotesStore {
   sticks: Record<string, Stick>

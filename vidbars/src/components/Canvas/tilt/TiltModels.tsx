@@ -278,7 +278,7 @@ function stickFrame(): StickFrame | undefined {
   const W = models.root?.clientWidth ?? 0, H = models.root?.clientHeight ?? 0
   const ui = useStickUi.getState()
   const m = stickMeasures()
-  return { sticks, selected: ui.selected, hot: ui.hot, docked: m.docked, sides: m.sides, at: m.at, marks: new Map(sticks.map(s => [s.id, stickMarks(s)])), fontRev: ui.fontRev, zoom, ox: pan.x - W / 2, oy: pan.y - H / 2 }
+  return { sticks, selected: ui.selected, hot: ui.hot, docked: m.docked, sides: m.sides, at: m.at, line: m.line, marks: new Map(sticks.map(s => [s.id, stickMarks(s)])), fontRev: ui.fontRev, zoom, ox: pan.x - W / 2, oy: pan.y - H / 2 }
 }
 
 /** The canvas's curves for the 3D view (three/pathOverlay): the bezier
