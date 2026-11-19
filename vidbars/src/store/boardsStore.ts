@@ -1194,14 +1194,19 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
   linkGroupDetail(groupId, detailId, cardId) {
     const src = get().groups.find(g => g.id === cardId)
     if (!src || cardId === groupId) return
+    // A closed or fanned deck let go by its front card: the detail shows
+    // the deck's favourite (utils/cardTypes deckFavorite).
+    const isDeck = !!src.deckState && src.deckState !== 'open' && (!src.deckAnchorId || src.deckAnchorId === src.id)
+      && get().groups.some(g => g.id !== src.id && g.deckAnchorId === src.id)
+    const link: import('../utils/cardTypes').DetailLink = isDeck ? { card: cardId, favorite: true } : { card: cardId }
     set(s => ({ groups: s.groups.map(g => {
       if (g.id !== groupId) return g
       const details = g.details ?? []
       if (detailId === 'new') {
         const name = src.cardType ? CARD_TYPES[src.cardType].label : 'Link'
-        return { ...g, details: [...details, { id: newDetailId(), name, value: '', link: { card: cardId } }] }
+        return { ...g, details: [...details, { id: newDetailId(), name, value: '', link }] }
       }
-      return { ...g, details: details.map(d => d.id === detailId ? { ...d, link: { card: cardId } } : d) }
+      return { ...g, details: details.map(d => d.id === detailId ? { ...d, link } : d) }
     }) }))
   },
 

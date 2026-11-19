@@ -13,7 +13,8 @@ import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { useLinkDragStore } from '../../store/linkDragStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { cardFill, edgeColorFromHex, hexToHsl, hslToHex } from '../../utils/colorUtils'
-import { CARD_TYPES, CARD_TYPE_ORDER, cardTypeOf, chartCards, chartName, chartRank, detailShown, isChartRank, factionMembers, factionsOf, hasMembers, isAbove, isOwnCount, newDetailId, typeColor, type CardDetail, type CardType, type FactionMember } from '../../utils/cardTypes'
+import { CARD_TYPES, CARD_TYPE_ORDER, cardTypeOf, chartCards, chartName, chartRank, deckCardsOf, deckFavorite, detailShown, isChartRank, factionMembers, factionsOf, hasMembers, isAbove, isOwnCount, newDetailId, typeColor, type CardDetail, type CardType, type FactionMember } from '../../utils/cardTypes'
+import { cardTitle } from '../../utils/faceStyle'
 import { rankText } from '../../utils/chartData'
 import { factionGroupsOf, withGroupMoved, withMemberMoved } from '../../utils/factionGroups'
 import { ColorPickerPopup } from '../Bar/ColorPickerPopup'
@@ -439,7 +440,7 @@ export const CardBack: React.FC<{
   const linking = useLinkDragStore(s => s.active && s.source?.kind === 'group' && s.source.id !== groupId)
   const [editing, setEditing] = useState<{ id: string; part: 'name' | 'value' } | null>(null)
   const [rowHover, setRowHover] = useState<string | null>(null)
-  const [menu, setMenu] = useState<{ x: number; y: number; kind: 'type' | 'chart' } | { x: number; y: number; kind: 'link'; id: string } | null>(null)
+  const [menu, setMenu] = useState<{ x: number; y: number; kind: 'type' | 'chart' } | { x: number; y: number; kind: 'link' | 'deck'; id: string } | null>(null)
   const [picker, setPicker] = useState<{ x: number; y: number; type: CardType } | null>(null)
   // The card's own colour and how see-through it is (the swatch by its type).
   const [cardPicker, setCardPicker] = useState<{ x: number; y: number } | null>(null)
@@ -804,6 +805,24 @@ export const CardBack: React.FC<{
       { label: `Sibling of ${name(b)}`, checked: sibs, disabled: !sibs && (isKinAbove(kin, a, b) || isKinAbove(kin, b, a)), onClick: () => apply(setSiblings(kin, a, b, !sibs)) },
     ]
   }
+  /** The cards in this card's deck, to pick one for a detail without
+   *  going to find it (Brian 2026-11-19). */
+  const deckMenu = (id: string): MenuItem[] => {
+    const all = useBoardsStore.getState().groups
+    const d = cur().find(x => x.id === id)
+    const mates = deckCardsOf(all, groupId).filter(g => g.id !== groupId && g.id !== meId && !g.effect)
+    if (!d) return []
+    const items: MenuItem[] = mates.map(g => ({
+      label: cardTitle(all, g) || 'Untitled',
+      hint: g.fav === 2 ? '  ♥♥' : g.fav === 1 ? '  ♥' : undefined,
+      swatch: g.color,
+      checked: d.link?.card === g.id && !d.link.detail && !d.link.count && !d.link.rankOf,
+      onClick: () => { setLink(id, { card: g.id }); setMenu(null) },
+    }))
+    if (!items.length) items.push({ label: 'No other cards in its deck', disabled: true, onClick: () => {} })
+    if (d.link) items.push({ label: 'Unlink, keep the text', separator: true, onClick: () => { setLink(id, null); setMenu(null) } })
+    return items
+  }
   const linkMenu = (id: string): MenuItem[] => {
     const all = useBoardsStore.getState().groups
     const d = cur().find(x => x.id === id)
@@ -827,7 +846,9 @@ export const CardBack: React.FC<{
       { label: 'Unlink, keep the text', separator: true, onClick: () => { setLink(id, null); setMenu(null) } },
     ]
     return [
-      { label: card.name || 'Untitled', hint: '  the card', checked: !d.link.detail && !d.link.count, swatch: card.color, onClick: () => { setLink(id, { card: card.id }); setMenu(null) } },
+      { label: card.name || 'Untitled', hint: '  the card', checked: !d.link.detail && !d.link.count && !d.link.favorite, swatch: card.color, onClick: () => { setLink(id, { card: card.id }); setMenu(null) } },
+      // The card as its deck: whichever of the deck's cards is its favourite.
+      ...(deckCardsOf(all, card.id).length > 1 ? [{ label: "Its deck's favourite", hint: `  ${deckFavorite(deckCardsOf(all, card.id))?.name || 'Untitled'}`, checked: !!d.link.favorite, onClick: () => { setLink(id, { card: card.id, favorite: true }); setMenu(null) } }] : []),
       // A faction or family: how many are in it (counted live).
       ...(hasMembers(card) ? [{ label: 'Number of members', hint: `  ${detailShown(all, { id: '', name: '', value: '', link: { card: card.id, count: 'members' } }).text}`, checked: d.link.count === 'members', onClick: () => { setLink(id, { card: card.id, count: 'members' }); setMenu(null) } }] : []),
       ...(card.details ?? []).filter(x => x.name.trim() && !isOwnCount(x, card.id)).map(x => ({
@@ -1084,6 +1105,23 @@ export const CardBack: React.FC<{
                   onLong={l => setLongRows(prev => prev.has(d.id) === l ? prev : (n => (l ? n.add(d.id) : n.delete(d.id), n))(new Set(prev)))}
                   style={valueStyle}
                 />
+                {/* Pick a card of its deck for this detail. Always there, in
+                    the same place, whether or not it is in a deck. */}
+                {!own && !rank && !(editing?.id === d.id) && (
+                  <button
+                    type="button"
+                    data-card-detail-pick
+                    title="Pick a card from its deck for this detail"
+                    onPointerDown={stopPress}
+                    onDoubleClick={e => e.stopPropagation()}
+                    onClick={e => { e.stopPropagation(); setMenu({ x: e.clientX, y: e.clientY, kind: 'deck', id: d.id }) }}
+                    style={{
+                      position: 'absolute', right: 34, top: 0, width: 11, height: 9, padding: 0, lineHeight: '9px',
+                      fontSize: 7, borderRadius: 3, border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+                      background: 'rgba(0,0,0,0.3)', color: ink, opacity: rowHover === d.id ? 1 : 0.5,
+                    }}
+                  >▾</button>
+                )}
                 {/* A long value: fold it to one line, or open it again. */}
                 {longRows.has(d.id) && !(editing?.id === d.id) && (
                   <button
@@ -1170,6 +1208,7 @@ export const CardBack: React.FC<{
       {menu?.kind === 'type' && <BackMenu at={menu} title="Card type" items={typeMenu()} onClose={() => setMenu(null)} />}
       {menu?.kind === 'chart' && <BackMenu at={menu} title="Rank on chart" items={chartMenu()} onClose={() => setMenu(null)} />}
       {menu?.kind === 'link' && <BackMenu at={menu} title="This detail shows" items={linkMenu(menu.id)} onClose={() => setMenu(null)} />}
+      {menu?.kind === 'deck' && <BackMenu at={menu} title="Pick from the deck" items={deckMenu(menu.id)} onClose={() => setMenu(null)} />}
       {kinMenu && <BackMenu at={kinMenu} title={`${groups.find(g => g.id === kinMenu.a)?.name || 'Untitled'} is…`} items={kinItems(kinMenu.a, kinMenu.b)} onClose={() => setKinMenu(null)} />}
       {cardPicker && ReactDOM.createPortal(
         // One undo step for each press: a drag on the colour field or the

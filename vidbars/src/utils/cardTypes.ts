@@ -8,6 +8,7 @@
 import type { ProjectGroup } from '../store/boardsStore'
 import { groupRankOf } from './factionGroups'
 import { chartRankOf, rankText, type ChartData } from './chartData'
+import { rowOf } from './primaryCard'
 
 /** Where a detail's value comes from when it is linked: another card (its
  *  name), or one detail on it (that detail's value, live). */
@@ -21,6 +22,38 @@ export interface DetailLink {
    *  back this is, its master) ranks on the chart baked into `card`, read
    *  live (Brian 2026-11-06: "add a chart attribute... pick lethality"). */
   rankOf?: string
+  /** `card` stands for its deck (Brian 2026-11-19): the detail shows the
+   *  deck's favourite: its standout, else its first hearted card, else its
+   *  front card (deckFavorite). Set when a deck's "+" is let go on it. */
+  favorite?: true
+}
+
+/** The cards of the deck card `id` is in, its front card first: a closed or
+ *  fanned deck by its cards, an open one by the row the canvas last drew
+ *  (utils/primaryCard). Alone: just itself. */
+export function deckCardsOf(groups: ProjectGroup[], id: string): ProjectGroup[] {
+  const g = groups.find(x => x.id === id)
+  if (!g) return []
+  if (g.deckState && g.deckState !== 'open') {
+    const anchor = g.deckAnchorId ?? g.id
+    const ids = new Set([anchor])
+    for (let grew = true; grew;) {
+      grew = false
+      for (const x of groups) if (!ids.has(x.id) && x.deckAnchorId && ids.has(x.deckAnchorId) && x.deckState && x.deckState !== 'open') { ids.add(x.id); grew = true }
+    }
+    const front = groups.find(x => x.id === anchor)
+    return [...(front ? [front] : []), ...groups.filter(x => ids.has(x.id) && x.id !== anchor)]
+  }
+  const row = rowOf(id)
+  if (!row || row.length < 2) return [g]
+  return row.map(rid => groups.find(x => x.id === rid)).filter((x): x is ProjectGroup => !!x)
+}
+
+/** The card that stands for a deck, of its cards front first: its first
+ *  standout, else its first hearted card, else its front (utils/favorites). */
+export function deckFavorite(cards: ProjectGroup[]): ProjectGroup | undefined {
+  const real = cards.filter(g => !g.effect)
+  return real.find(g => g.fav === 2) ?? real.find(g => g.fav === 1) ?? cards[0]
 }
 
 /** One row on a card's details side. */
@@ -115,6 +148,7 @@ export function detailShown(groups: ProjectGroup[], d: CardDetail, seen = new Se
   if (!card) return { text: d.value, missing: true }
   if (d.link.count === 'members') return { text: String(memberCount(groups, card)), card }
   if (d.link.rankOf) { const r = chartRank(card, d.link.rankOf); return { text: r ? rankText(r) : '—', card } }
+  if (d.link.favorite) { const pick = deckFavorite(deckCardsOf(groups, card.id)) ?? card; return { text: pick.name, card: pick } }
   if (!d.link.detail) return { text: card.name, card }
   const key = `${card.id}:${d.link.detail}`
   const target = card.details?.find(x => x.id === d.link!.detail)

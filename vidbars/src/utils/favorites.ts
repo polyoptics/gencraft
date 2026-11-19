@@ -11,6 +11,7 @@
 import { useBoardsStore, type ProjectGroup } from '../store/boardsStore'
 import { isUndoRestoring, useUndoCoordinator } from '../store/undoCoordinator'
 import { stackedDeckMembers } from './cardGrid'
+import { deckFavorite } from './cardTypes'
 
 export type Fav = 0 | 1 | 2
 
@@ -43,8 +44,7 @@ export function stepFav(id: string): void {
 /** The card that stands for a deck, of `ids` in deck order (front first):
  *  its first standout, else its first hearted card, else its front. */
 export function favoriteOf(ids: string[], groups: ProjectGroup[]): ProjectGroup | undefined {
-  const cards = ids.map(id => groups.find(g => g.id === id)).filter((g): g is ProjectGroup => !!g)
-  return cards.find(g => favOf(g) === 2) ?? cards.find(g => favOf(g) === 1) ?? cards[0]
+  return deckFavorite(ids.map(id => groups.find(g => g.id === id)).filter((g): g is ProjectGroup => !!g))
 }
 
 // A closed deck with hearts in it rests on a hearted card: when the card
