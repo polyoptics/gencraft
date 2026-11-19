@@ -1991,7 +1991,7 @@ const UngroupedBoardCard = React.memo(UngroupedBoardCardInner)
 
 // ── Deck components ──
 
-import { useCardDecks, isHiddenDeckMember, isSubDeckAnchor, expandWithNestedMembers, cardVisualRect, canvasObstacleGroups, type Deck } from '../../hooks/useCardDecks'
+import { useCardDecks, isHiddenDeckMember, isSubDeckAnchor, expandWithNestedMembers, cardVisualRect, cardsTouch, canvasObstacleGroups, type Deck } from '../../hooks/useCardDecks'
 
 // Placeholder names that carry no authored intention — a card/bar with
 // only one of these (and no other content) is NOT counted as meaningful.
@@ -5209,7 +5209,7 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
     // own mark, whatever its cards last opened from.
     if (keepOf(g, groups)) {
       const row = touchingClusters.find(c => c.includes(g.id))
-      return row ? keptIn(g, row, groups) : null
+      return row ? keptIn(g, row, groups, (a, b) => cardsTouch(a, b, deferredBoards, zoom)) : null
     }
     if (g.deckHome !== g.id) return null
     const row = touchingClusters.find(c => c.includes(g.id))

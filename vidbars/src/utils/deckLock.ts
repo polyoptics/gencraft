@@ -53,15 +53,26 @@ export function keepOf(g: ProjectGroup | undefined, groups: ProjectGroup[]): str
 }
 
 /** Card `g` fronts a kept deck among the cards `row` (an open row): that
- *  deck's cards there, when the row holds others too (null otherwise). Its
- *  front is the card it was kept under, or with that one elsewhere, its
- *  leftmost here. */
-export function keptIn(g: ProjectGroup, row: string[], groups: ProjectGroup[]): string[] | null {
+ *  deck's cards there, when the row holds others too (null otherwise).
+ *  Contact decides, as for every deck (Brian 2026-11-19): the deck is the
+ *  card it was kept under and the kept cards that reach it through kept
+ *  cards (`touch`). A kept card pulled away is out of it until it touches
+ *  again; one beyond a card that is not the deck's is out too. */
+export function keptIn(g: ProjectGroup, row: string[], groups: ProjectGroup[], touch: (a: ProjectGroup, b: ProjectGroup) => boolean): string[] | null {
   const k = g.deckKeep
-  if (!k) return null
+  if (!k || g.id !== k) return null
   const byId = new Map(groups.map(o => [o.id, o]))
-  const mine = row.filter(id => byId.get(id)?.deckKeep === k)
+  const marked = row.map(id => byId.get(id)).filter((o): o is ProjectGroup => !!o && o.deckKeep === k)
+  const mine = keptReach(g, marked, touch)
   if (mine.length < 2 || mine.length >= row.length) return null
-  const front = mine.includes(k) ? k : [...mine].sort((a, b) => byId.get(a)!.originX - byId.get(b)!.originX)[0]
-  return front === g.id ? mine : null
+  return row.filter(id => mine.some(o => o.id === id))
+}
+
+/** The cards among `marked` that reach `front` through one another (`touch`), it first. */
+export function keptReach(front: ProjectGroup, marked: ProjectGroup[], touch: (a: ProjectGroup, b: ProjectGroup) => boolean): ProjectGroup[] {
+  const mine = [front]
+  for (let i = 0; i < mine.length; i++) {
+    for (const o of marked) if (!mine.includes(o) && touch(mine[i], o)) mine.push(o)
+  }
+  return mine
 }
