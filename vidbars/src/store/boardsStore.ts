@@ -12,7 +12,6 @@ import { makeName, nameKey } from '../utils/nameGen'
 import { removeFromKin, type Kin } from '../utils/family'
 import { deckLay, linkedLines } from '../utils/deckAway'
 import { deckFront, primaryFirst } from '../utils/primaryCard'
-import { splitOpenDecks } from '../utils/deckSplit'
 import { useFreeNodeStore } from './freeNodeStore'
 import { useModelScaleStore } from './tiltStore'
 import { newSceneLayout, putCards, type SceneDiv, type SceneView } from '../utils/sceneCard'
@@ -222,11 +221,11 @@ export interface ProjectGroup {
   style?: import('../utils/styleCard').StyleData
   /** An open deck's card: the deck it is in now (its front card's id),
    *  kept while the deck is open (utils/deckUnder startDeckHome). One tag,
-   *  never a history. A row closing takes the deck in as a deck
-   *  (utils/deckSplit). */
+   *  never a history. */
   deckHome?: string
   /** A closed deck's front card: it was open when the row it is in closed,
-   *  and opens again when that row does. */
+   *  and opens again when that row does. (Decks closed before 2026-11-19
+   *  only: a row now closes as one deck.) */
   deckReopen?: boolean
   /** A deck's card, opened out: the cards that already lay where the deck
    *  opened (utils/deckUnder). Under the row, not in it: they do not join
@@ -1503,19 +1502,11 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
     // For stacking/fanning: the new deck anchor is groupIds[0] — the deck's
     // own front card if it is one already, else the row's primary card (the
     // leftmost unless one was made primary). utils/primaryCard.
-    // A row closing: the other open decks in it go in as decks of their
-    // own (utils/deckSplit), each closed first onto its own front, and
-    // marked to open again when this row does (it is put away as it is).
-    if (state !== 'open' && !opts?.asGiven) {
-      const { subs, rest } = splitOpenDecks(get().groups, ids)
-      if (subs.length) {
-        for (const sub of subs) get().setDeckState(sub, 'stacked', { asGiven: true })
-        const fronts = new Set(subs.map(sub => sub[0]))
-        set(s => ({ groups: s.groups.map(g => (fronts.has(g.id) ? { ...g, deckReopen: true } : g)) }))
-        ids = rest
-        if (ids.length < 2) return
-      }
-    }
+    // A row closing closes as ONE deck (Brian 2026-11-19: four cards in a
+    // line closed with two of them as a deck inside, because they were
+    // remembered as an open deck of their own, and it came back that way
+    // every time it opened). A deck that is closed when its row closes
+    // still goes in as a deck (subDeckAnchors below).
     const nodes = useFreeNodeStore.getState().nodes
     const groupIds = state === 'open' || opts?.asGiven ? ids : primaryFirst(get().groups, ids)
     const idSet = new Set(groupIds)

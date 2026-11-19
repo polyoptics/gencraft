@@ -1,3 +1,7 @@
+// NOT USED since 2026-11-19: a row closes as one deck (boardsStore
+// setDeckState; Brian: four cards in a line kept closing with a deck
+// inside). Kept for the record of what the tags were read for.
+//
 // deckSplit.ts — an open deck stays that deck (Brian 2026-11-10). While a
 // deck is open its cards carry its tag (ProjectGroup.deckHome, the id of
 // its front card; utils/deckUnder keeps it: one tag a card, never a

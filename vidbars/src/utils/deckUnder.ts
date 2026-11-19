@@ -76,8 +76,9 @@ export function startDeckUnder(): () => void {
 // deck is its own record). A card set down against an open deck takes its
 // tag there and then; dragged away from its deck, it drops it; set against
 // another open deck, it takes that one's. Rearranging changes nothing: the
-// tag says which deck, not where in it. A row closing reads the tags
-// (utils/deckSplit). Nothing is ever moved here.
+// tag says which deck, not where in it. A row closing does not read the
+// tags: it closes as one deck (boardsStore setDeckState). Nothing is ever
+// moved here.
 
 export function startDeckHome(): () => void {
   let busy = false
