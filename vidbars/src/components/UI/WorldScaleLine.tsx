@@ -19,6 +19,9 @@
 //    centimetre, and to where a shared height is kept). A card with no
 //    height has its mark at the top, a "?", to be dragged to one.
 //  - The x on one takes it off the strip. Its height stays on its card.
+//  - True size, top right, its own on/off: on, every model in the 3D view
+//    stands at its true height, its card's Emphasis ignored (Brian
+//    2026-11-19). The strip itself always shows true heights.
 //
 // A fixed size, the same in both views; more cards than fit scroll along.
 
@@ -69,6 +72,7 @@ export const WorldScaleLine: React.FC<{ left: number; right: number; bottom: num
   const groups = useBoardsStore(s => s.groups)
   const boards = useBoardsStore(s => s.boards)
   const metric = useUnits(s => s.metric)
+  const trueSize = useWorldScale(s => s.trueSize)
   const cols = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
   const scene = useRef<ReturnType<typeof createLineupScene> | null>(null)
@@ -219,6 +223,13 @@ export const WorldScaleLine: React.FC<{ left: number; right: number; bottom: num
             ))}
           </div>
         </div>
+        <button data-world-scale-true aria-pressed={trueSize} onClick={() => useWorldScale.getState().setTrueSize(!trueSize)}
+          title="True size: on or off. On, every model in the 3D view stands at its true height, and the Emphasis on its card's back is ignored. Off, a card's Emphasis (+50% is half as big again) shows. This strip always shows true heights"
+          style={{
+            position: 'absolute', right: 8, top: 6, zIndex: 2, fontSize: 11, padding: '3px 7px', borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
+            background: trueSize ? 'rgba(120,170,255,0.25)' : '#13141f', border: '1px solid rgba(255,255,255,0.14)',
+            color: trueSize ? '#dfe8ff' : 'rgba(255,255,255,0.6)',
+          }}>True size</button>
         {stood.length === 0 && (
           <div style={{ position: 'absolute', left: 0, right: 0, top: LINE_H / 2 - 16, textAlign: 'center', pointerEvents: 'none', fontSize: 11, color: 'rgba(255,255,255,0.4)' }}>
             Click cards on the canvas to stand them here at their height

@@ -21,6 +21,13 @@
 // click cards on the canvas ... the height would show up there. The
 // models could line up"): `open`, the cards standing on it (`line`, card
 // ids, for this sitting only) and how many feet tall it shows (`lineFt`).
+//
+// Once it is set, a model on a card with a Height stands that tall by it
+// in the 3D view (TiltModels frameState), times its card's Emphasis
+// (utils/stickDock), unless `trueSize` is on: every emphasis ignored
+// (Brian 2026-11-19: "its display should be linked to that, to whatever
+// that global height stick is"). Not one docked to a measuring stick,
+// which goes by that stick, nor one standing in a 3D set.
 
 import { create } from 'zustand'
 
@@ -30,15 +37,16 @@ export const WORLD_PER_DEFAULT = 200
 export const FADE_FT_DEFAULT = 15, FADE_FT_MIN = 1, FADE_FT_MAX = 5000
 export const LINE_FT_DEFAULT = 8, LINE_FT_MIN = 1, LINE_FT_MAX = 5000
 
-interface Kept { per: number | null; fadeFt: number; fadeOn: boolean; lineFt: number }
+interface Kept { per: number | null; fadeFt: number; fadeOn: boolean; lineFt: number; trueSize: boolean }
 function load(): Kept {
-  const k: Kept = { per: null, fadeFt: FADE_FT_DEFAULT, fadeOn: true, lineFt: LINE_FT_DEFAULT }
+  const k: Kept = { per: null, fadeFt: FADE_FT_DEFAULT, fadeOn: true, lineFt: LINE_FT_DEFAULT, trueSize: false }
   try {
     const p = JSON.parse(localStorage.getItem(KEY) ?? 'null') as Partial<Kept> | null
     if (p) {
       if (typeof p.per === 'number' && Number.isFinite(p.per) && p.per > 0) k.per = p.per
       if (typeof p.fadeFt === 'number' && Number.isFinite(p.fadeFt)) k.fadeFt = Math.max(FADE_FT_MIN, Math.min(FADE_FT_MAX, p.fadeFt))
       if (typeof p.fadeOn === 'boolean') k.fadeOn = p.fadeOn
+      if (typeof p.trueSize === 'boolean') k.trueSize = p.trueSize
       if (typeof p.lineFt === 'number' && Number.isFinite(p.lineFt)) k.lineFt = Math.max(LINE_FT_MIN, Math.min(LINE_FT_MAX, p.lineFt))
     }
   } catch { /* private window, or not ours */ }
@@ -61,12 +69,14 @@ interface WorldScale extends Kept {
   join: (ids: string[]) => void
   leave: (id: string) => void
   setLineFt: (ft: number) => void
+  /** Every model at its true height: emphasis ignored. */
+  setTrueSize: (on: boolean) => void
 }
 export const useWorldScale = create<WorldScale>((set, get) => {
   const keep = (p: Partial<Kept>) => {
     set(p)
-    const { per, fadeFt, fadeOn, lineFt } = get()
-    try { localStorage.setItem(KEY, JSON.stringify({ per, fadeFt, fadeOn, lineFt })) } catch { /* private window */ }
+    const { per, fadeFt, fadeOn, lineFt, trueSize } = get()
+    try { localStorage.setItem(KEY, JSON.stringify({ per, fadeFt, fadeOn, lineFt, trueSize })) } catch { /* private window */ }
   }
   return {
     ...load(),
@@ -80,6 +90,7 @@ export const useWorldScale = create<WorldScale>((set, get) => {
     setOpen: open => set({ open }),
     join: ids => { const add = ids.filter((id, i) => !get().line.includes(id) && ids.indexOf(id) === i); if (add.length) set({ line: [...get().line, ...add] }) },
     leave: id => set({ line: get().line.filter(x => x !== id) }),
+    setTrueSize: trueSize => keep({ trueSize }),
     setLineFt: ft => { if (Number.isFinite(ft)) keep({ lineFt: Math.max(LINE_FT_MIN, Math.min(LINE_FT_MAX, ft)) }) },
   }
 })

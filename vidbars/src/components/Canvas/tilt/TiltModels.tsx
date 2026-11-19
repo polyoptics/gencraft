@@ -26,7 +26,7 @@ import { useCurveDraft, usePathHot, useStickUi } from '../../../store/pathLive'
 import { targetMiddle, pickedPoints } from '../../../utils/pathEdit'
 import type { PathFrame, PathHit } from '../../../three/pathOverlay'
 import type { StickFrame, StickSpot } from '../../../three/stickOverlay'
-import { stickMeasures, stickMarks, seenHeight } from '../../../utils/stickDock'
+import { stickMeasures, stickMarks, seenHeight, cardHeight, cardEmphasis } from '../../../utils/stickDock'
 import { useWorldScale, worldPer } from '../../../utils/worldScale'
 import { useUnits } from '../../../store/unitsStore'
 import { curveRuns, pointFrames, withLayers } from '../../../utils/curveGeom'
@@ -327,8 +327,35 @@ export function setSoloFloat(key: string, h: number | null) { setSoloLook(key, {
  *  its size, turn, colour and stretch as its scene card keeps them. */
 const miniLook = new Map<string, { size?: number; pose?: [number, number, number, number]; tint?: string; stretch?: [number, number, number]; lens?: import('../../../store/tiltStore').CameraLens }>()
 
+/** A card's model by the world scale (utils/worldScale): how tall its
+ *  card's Height makes it, canvas units (none: no Height, or no world
+ *  scale set yet), and its card's Emphasis. Worked out once for the cards
+ *  and the scale as they are. */
+let worldMemo: { groups: unknown; per: number | null; of: Map<string, { tall?: number; emph: number }>; sig: number } | null = null
+function worldSizes() {
+  const groups = useBoardsStore.getState().groups, per = useWorldScale.getState().per
+  if (!worldMemo || worldMemo.groups !== groups || worldMemo.per !== per) worldMemo = { groups, per, of: new Map(), sig: (worldMemo?.sig ?? 0) + 1 }
+  const memo = worldMemo
+  return {
+    sig: memo.sig,
+    of: (id: string) => {
+      let v = memo.of.get(id)
+      if (!v) {
+        const g = groups.find(x => x.id === id)
+        const ft = g && per !== null ? cardHeight(g, groups) : null
+        v = { tall: ft ? ft * per! : undefined, emph: g ? cardEmphasis(g, groups) : 1 }
+        memo.of.set(id, v)
+      }
+      return v
+    },
+  }
+}
+
 const frameState = (): TiltFrameState => {
   const ts = useTiltStore.getState()
+  const world = worldSizes(), trueSize = useWorldScale.getState().trueSize
+  // (A card's model on its card: not a folded scene's small showing.)
+  const emphOf = (key: string) => trueSize || !key.startsWith('card:') ? 1 : world.of(dataKey(key).slice(5)).emph
   const { unitsPerMetre: scales, sizeOf, setSizeOf, poseOf, tintOf, stretchOf, lensOf } = useModelScaleStore.getState()
   const through = useManip.getState().through
   // The models of sets shown live in the flat view (utils/liveTop).
@@ -351,7 +378,8 @@ const frameState = (): TiltFrameState => {
     ]),
     unitsFor: url => scales[url],
     // In a 3D set a model has a size of its own; on its card, its card's.
-    sizeFor: key => (key.startsWith('mini:') ? miniLook.get(key)?.size : placed(key) ? setSizeOf[dataKey(key)] ?? sizeOf[dataKey(key)] : sizeOf[dataKey(key)]) ?? 1,
+    // (On its card, its card's Emphasis with it; in a 3D set, the set's size alone.)
+    sizeFor: key => (key.startsWith('mini:') ? miniLook.get(key)?.size : placed(key) ? setSizeOf[dataKey(key)] ?? sizeOf[dataKey(key)] : (sizeOf[dataKey(key)] ?? 1) * emphOf(key)) ?? 1,
     // Turn and stretch belong to a 3D set: off one (a master card left on
     // the canvas when its set folds) a model stands as it came, never
     // taking a set's rotation (Brian 2026-11-09).
@@ -375,13 +403,19 @@ const frameState = (): TiltFrameState => {
     paths: tilted3d() ? pathFrame() : undefined,
     sticks: tilted3d() ? stickFrame() : undefined,
     // A card docked to a measuring stick: its model as tall as its Height.
-    heightFor: measured.heights.size ? key => {
+    // Any other card with a Height: as tall as that is by the world scale,
+    // once there is one, and its Emphasis on that.
+    heightFor: key => {
       if (!key.startsWith('card:')) return undefined
       // (A deck's front card showing another of its cards: that card's.)
-      const h = measured.heights.get(dataKey(key).slice(5)) ?? measured.heights.get(key.slice(5))
-      return h ? h * zoomNow : undefined
-    } : undefined,
-    heightSig: measured.sig,
+      const shown = dataKey(key).slice(5)
+      const h = measured.heights.get(shown) ?? measured.heights.get(key.slice(5))
+      if (h) return h * zoomNow
+      if (measured.owner.has(shown) || measured.owner.has(key.slice(5)) || placed(key)) return undefined
+      const w = world.of(shown)
+      return w.tall ? w.tall * (trueSize ? 1 : w.emph) * zoomNow : undefined
+    },
+    heightSig: measured.sig + world.sig * 1e6 + (trueSize ? 0.5 : 0),
     // One docked with no Height: how tall it stands now is where it starts from.
     heightSeen: measured.bare.size ? (key, px) => {
       if (!key.startsWith('card:')) return

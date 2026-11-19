@@ -115,6 +115,38 @@ export function cardHeight(g: ProjectGroup, groups: ProjectGroup[]): number | nu
   return d ? parseHeight(detailShown(groups, d).text) : null
 }
 
+// ── Emphasis (Brian 2026-11-19: "we just make an `emphasis` attribute. And
+// if I hand-scale a model outside of a distance tool, then that's going to
+// make an emphasis attribute and put that scale adjustment as an offset
+// of its height ... it's easy to clear because you can delete attributes
+// simply on the back of the card"). A row on the card's back, a percent:
+// +50% shows its model half as big again, its Height untouched. ──
+export const isEmphasisName = (name: string | undefined) => (name ?? '').trim().toLowerCase() === 'emphasis'
+/** What an Emphasis row says, as a size: "+50%" 1.5, "-20" 0.8. Unread: 1. */
+export function parseEmphasis(text: string | undefined): number {
+  const m = /^\s*([+-]?\d+(?:[.,]\d+)?)\s*%?\s*$/.exec(text ?? '')
+  if (!m) return 1
+  return Math.max(0.05, 1 + parseFloat(m[1].replace(',', '.')) / 100)
+}
+/** How much bigger than true a card's model shows (1: true size). */
+export function cardEmphasis(g: ProjectGroup, groups: ProjectGroup[]): number {
+  const d = masterOf(g, groups).details?.find(x => isEmphasisName(x.name))
+  return d ? parseEmphasis(detailShown(groups, d).text) : 1
+}
+/** Write card `g`'s emphasis (a size, 1.5 = +50%) on its back; a card with
+ *  no Emphasis row gets one. The caller takes the undo step. */
+export function setCardEmphasis(g: ProjectGroup, k: number) {
+  const bs = useBoardsStore.getState()
+  const card = masterOf(g, bs.groups)
+  const pct = Math.round((k - 1) * 100)
+  const value = `${pct >= 0 ? '+' : ''}${pct}%`
+  const row = card.details?.find(x => isEmphasisName(x.name))
+  if (row && row.value === value && !row.link) return
+  bs.setGroupDetails(card.id, row
+    ? (card.details ?? []).map(d => d.id === row.id ? { ...d, value, link: undefined } : d)
+    : [...(card.details ?? []), { id: newDetailId(), name: 'Emphasis', value }])
+}
+
 interface Measured {
   /** How tall each docked card's model stands, canvas units, by card id. */
   heights: Map<string, number>

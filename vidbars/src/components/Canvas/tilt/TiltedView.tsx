@@ -7,6 +7,9 @@ import { useTiltStore, useModelScaleStore, offFlat, unprojectTilt, TILT_FAR } fr
 import { useCanvasStore, MIN_ZOOM, MAX_ZOOM } from '../../../store/canvasStore'
 import { useFreeNodeStore } from '../../../store/freeNodeStore'
 import { useBoardsStore } from '../../../store/boardsStore'
+import { useWorldScale } from '../../../utils/worldScale'
+import { useUndoCoordinator } from '../../../store/undoCoordinator'
+import { stickMeasures, cardEmphasis, setCardEmphasis } from '../../../utils/stickDock'
 import { clientToCanvas } from '../../../utils/fx/createEffect'
 import { hostOf, viewCentre, SPIN_RAD } from './altCamera'
 import {
@@ -334,7 +337,7 @@ export const TiltedView: React.FC = () => {
       | { kind: 'pan'; last: { x: number; y: number } }
       | { kind: 'marquee'; x0: number; y0: number; x1: number; y1: number; add: boolean }
       | { kind: 'person'; url: string; unit0: number; y0: number }
-      | { kind: 'model'; key: string; k0: number; y0: number; moved: boolean; inSet: boolean; solo?: boolean }
+      | { kind: 'model'; key: string; k0: number; y0: number; moved: boolean; inSet: boolean; solo?: boolean; /** The card whose Emphasis it sizes. */ emph?: string }
       | { kind: 'turn'; key: string; last: { x: number; y: number }; x0: number; y0: number; moved: boolean }
       | { kind: 'held' }
       | { kind: 'remap'; target: Element; pointerId: number; height: number; stood?: boolean; x0?: number; y0?: number; free?: boolean; tab?: { at: { x: number; y: number }; went?: boolean }; lay?: Map<string, string>; last?: { x: number; y: number }; wall?: Hinge }
@@ -537,6 +540,19 @@ export const TiltedView: React.FC = () => {
               : { kind: 'held' }
             return
           }
+          // On its own card, off any measuring stick: sized by hand it is
+          // emphasised, its Height left as it is (Brian 2026-11-19: "if I
+          // hand-scale a model outside of a distance tool, then that's
+          // going to make an emphasis attribute"). With True size on, the
+          // emphasis does not show, so the drag is held.
+          if (!inSet && solo === null && dk0.startsWith('card:')) {
+            const id = dk0.slice(5), groups = useBoardsStore.getState().groups, card = groups.find(x => x.id === id)
+            if (card && !stickMeasures().owner.has(id)) {
+              g = useWorldScale.getState().trueSize ? { kind: 'held' }
+                : { kind: 'model', key: dk0, k0: cardEmphasis(card, groups), y0: e.clientY, moved: false, inSet: false, emph: id }
+              return
+            }
+          }
           g = { kind: 'model', key: dk0, k0: solo ?? (inSet ? ms0.setSizeOf[dk0] ?? ms0.sizeOf[dk0] : ms0.sizeOf[dk0]) ?? 1, y0: e.clientY, moved: false, inSet, solo: solo !== null }
           return
         }
@@ -693,8 +709,14 @@ export const TiltedView: React.FC = () => {
       if (g.kind === 'model') {
         const dy = e.clientY - g.y0
         if (!g.moved && Math.abs(dy) < 4) return
+        if (!g.moved && g.emph) useUndoCoordinator.getState().checkpoint()
         g.moved = true
         const k = Math.min(8, Math.max(0.1, g.k0 * Math.exp(-dy / 160)))
+        if (g.emph) {
+          const id = g.emph, card = useBoardsStore.getState().groups.find(x => x.id === id)
+          if (card) setCardEmphasis(card, k)
+          return
+        }
         const ms1 = useModelScaleStore.getState()
         if (g.solo) setSoloSize(g.key, k)
         else if (g.inSet) ms1.setSetSize(g.key, k)
