@@ -851,7 +851,8 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       s.quarter = stamp
       s.size.copy(m.size)
       s.triangles = m.triangles
-      inst.traverse(o => { if ((o as THREE.Mesh).isMesh) o.castShadow = true })
+      // It shadows the canvas and itself: an arm darkens the chest behind it.
+      inst.traverse(o => { if ((o as THREE.Mesh).isMesh) o.castShadow = o.receiveShadow = true })
       // Its own materials, so it can fade with the tilt and not fade the
       // same model in a Viewer or a poster.
       s.look = createLook(inst, c => s.mats.push({ m: c, o: c.opacity, t: c.transparent }))
