@@ -237,14 +237,16 @@ const frameState = (): TiltFrameState => {
     // A card docked to a measuring stick: its model as tall as its Height.
     heightFor: measured.heights.size ? key => {
       if (!key.startsWith('card:')) return undefined
-      const h = measured.heights.get(key.slice(5)) ?? measured.heights.get(dataKey(key).slice(5))
+      // (A deck's front card showing another of its cards: that card's.)
+      const h = measured.heights.get(dataKey(key).slice(5)) ?? measured.heights.get(key.slice(5))
       return h ? h * zoomNow : undefined
     } : undefined,
     heightSig: measured.sig,
     // One docked with no Height: how tall it stands now is where it starts from.
     heightSeen: measured.bare.size ? (key, px) => {
       if (!key.startsWith('card:')) return
-      const id = measured.bare.has(key.slice(5)) ? key.slice(5) : dataKey(key).slice(5)
+      const shown = dataKey(key).slice(5)
+      const id = measured.bare.has(shown) ? shown : key.slice(5)
       if (measured.bare.has(id)) seenHeight(id, px / zoomNow)
     } : undefined,
     full: live.size ? key => live.has(key) || live.has(dataKey(key)) : undefined,

@@ -29,6 +29,8 @@ import { detailShown, newDetailId } from './cardTypes'
 import { FT_PER_M, DOCK_LINE, SIGN_W, SIGN_H, parseHeight, heightText, unitText, type Side } from './stickGeom'
 import { cardScreenRect } from '../components/Layers/CardLayer'
 import { isHiddenDeckMember } from '../hooks/useCardDecks'
+import { dataKey } from './area3dScene'
+import { useUndoCoordinator, isUndoRestoring } from '../store/undoCoordinator'
 
 /** How far round its foot a stick reaches for a card, feet. */
 const REACH = 1.2
@@ -183,7 +185,9 @@ export function stickMarks(s: Stick): StickMark[] {
   const m = stickMeasures()
   const bs = useBoardsStore.getState()
   const out: StickMark[] = []
-  for (const id of bs.selectedGroupIds) {
+  for (const picked of bs.selectedGroupIds) {
+    // (A deck's front card showing another of its cards: that card.)
+    const id = dataKey(`card:${picked}`).slice(5)
     const units = m.owner.get(id) === s.id ? m.heights.get(id) : undefined
     if (!units) continue
     const ft = units / s.per
@@ -248,7 +252,8 @@ function writeHeight(ft: number, like: string | undefined, metric: boolean | und
  *  began from (so many small steps do not round away). */
 const sizing = new Map<string, { ft0: number; k0: number; t: number }>()
 function sized(key: string, was: number | undefined, now: number | undefined) {
-  if (!key.startsWith('card:') || !now) return
+  // (An undo putting a size back is not a hand sizing it.)
+  if (!key.startsWith('card:') || !now || isUndoRestoring()) return
   const id = key.slice(5)
   const m = stickMeasures()
   const stick = useNotesStore.getState().sticks?.[m.owner.get(id) ?? '']
@@ -262,6 +267,9 @@ function sized(key: string, was: number | undefined, now: number | undefined) {
     const ft = cardHeight(g, bs.groups) ?? stick.heights?.[id]
     if (!ft) return
     s = { ft0: ft, k0: was ?? 1, t }
+    // One sizing is one step back (Brian 2026-11-19: "need to be able to
+    // undo a height change").
+    useUndoCoordinator.getState().checkpoint()
     sizing.set(key, s)
   }
   s.t = t
