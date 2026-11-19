@@ -12,6 +12,7 @@ import { makeName, nameKey } from '../utils/nameGen'
 import { removeFromKin, type Kin } from '../utils/family'
 import { deckLay, linkedLines } from '../utils/deckAway'
 import { deckFront, primaryFirst } from '../utils/primaryCard'
+import { joinShift } from '../utils/deckJoin'
 import { useFreeNodeStore } from './freeNodeStore'
 import { useModelScaleStore } from './tiltStore'
 import { newSceneLayout, putCards, type SceneDiv, type SceneView } from '../utils/sceneCard'
@@ -1559,7 +1560,22 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
         }, clearAfter)
       }
     }
-    set(s0 => {
+    set(s00 => {
+      // Closing onto a closed deck: the cards go into it, set past its own
+      // cards (utils/deckJoin), and whatever hangs off them goes along.
+      const s0 = (() => {
+        if (state === 'open' || opts?.asGiven || away || !anchorId) return s00
+        const front = s00.groups.find(g => g.id === anchorId)
+        if (!front) return s00
+        const d = joinShift(front, s00.groups.filter(g => idSet.has(g.id) && g.id !== anchorId), s00.groups, s00.boards)
+        if (!d) return s00
+        const go = new Set(groupIds.filter(id => id !== anchorId))
+        for (let grew = true; grew;) {
+          grew = false
+          for (const g of s00.groups) if (!go.has(g.id) && g.id !== anchorId && g.deckAnchorId && go.has(g.deckAnchorId)) { go.add(g.id); grew = true }
+        }
+        return { ...s00, groups: s00.groups.map(g => (go.has(g.id) ? { ...g, originX: g.originX + d.dx, originY: g.originY + d.dy } : g)) }
+      })()
       const s = !away ? s0 : {
         ...s0,
         groups: s0.groups.map(g => {
@@ -1584,6 +1600,9 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
           subDeckAnchors.add(g.deckAnchorId)
         }
       }
+      // The card a row closes onto is that deck's front, not a deck inside
+      // it: its own cards and the row's are one deck now.
+      if (anchorId) subDeckAnchors.delete(anchorId)
       // For stacking/fanning, the new anchor is groupIds[0].
       const anchorGroup = anchorId ? s.groups.find(g => g.id === anchorId) : null
       const groupById = new Map(s.groups.map(g => [g.id, g]))
