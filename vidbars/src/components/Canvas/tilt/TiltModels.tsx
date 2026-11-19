@@ -823,6 +823,38 @@ function collectSlabs(K = 1): TiltSlab[] {
    *  what shows over their strip flat hidden (see veil). */
   const buried: HTMLElement[] = []
   const worlds = [...host.querySelectorAll<HTMLElement>(':scope > div[style*="scale("]')]
+  /** A loop strip's tray, in host px before the fade: how much of its 3D
+   *  shows (`k`), its unit, and how high its bars stand over its floor
+   *  (`H`): over its rim, and clear of the cards docked on it (their tops,
+   *  a single card thick). */
+  const trayOf = (rid: string, w: number) => {
+    const nodes = useFreeNodeStore.getState().nodes
+    const k = detail(w), u = nodes[rid]?.rail?.unit || 1
+    let top = 0
+    for (const o of k > 0 ? Object.values(nodes) : []) {
+      const d = o.railDock
+      if (!d || d.railId !== rid || d.lifted) continue
+      const om = Math.min(o.width, o.height) * zoom
+      top = Math.max(top, (dockLift(om, d.order ?? 0) + om * THICK.card) * k)
+    }
+    return { k, u, H: Math.max(TRAY.rimH * TRAY.band * u * zoom * k, top + TRAY.rimH * u * zoom * k) }
+  }
+  /** One floor for everything (Brian 2026-11-19: "they become deeper than
+   *  the floor instead of popping up above the floor"): a loop strip is a
+   *  tray sunk into the floor, its bars' tops level with it and its floor
+   *  and the cards docked on it down in it. By strip: how far its floor is
+   *  under the canvas. Read before any tile, so that everything on a strip
+   *  is placed from its floor. (Console: the machine stands on the floor,
+   *  the strip coming up to it as it starts to rise.) */
+  const sunk = new Map<string, number>()
+  for (const world of worlds) {
+    for (const node of world.querySelectorAll<HTMLElement>('[data-freenode][data-rail][data-id]:not([data-pinned])')) {
+      const rid = node.dataset.id!
+      const tr = trayOf(rid, (node.querySelector<HTMLElement>('[data-rail-body]') ?? node).offsetWidth * zoom)
+      const S = tr.k > 0 ? tr.H * Math.max(0, 1 - 4 * (railStand.get(rid) ?? 0)) : 0
+      if (S > 0) sunk.set(rid, S)
+    }
+  }
   for (const world of worlds) {
     const tiles = [...world.querySelectorAll<HTMLElement>('[data-viewport3d]:not([data-pinned]), [data-freenode][data-id]:not([data-pinned])')]
     // Tiles lying over one another (a panel over a panel, a Viewer under a
@@ -867,7 +899,12 @@ function collectSlabs(K = 1): TiltSlab[] {
       const m = Math.min(w, h)
       const slab = add(pan.x + at.x * zoom, pan.y + at.y * zoom, w, h,
         m * (viewer ? THICK.viewer : THICK.tile), viewer ? SIDE.viewer : SIDE.tile, radiusOf(el) * zoom)
+      // A strip's floor, under the canvas (see sunk): the strip and all
+      // that is drawn in it go down with it.
+      const F = node.hasAttribute('data-rail') ? -(sunk.get(node.dataset.id!) ?? 0) : 0
+      if (F) { lifting.set(node, F); chain(node, world) }
       if (!slab) continue
+      if (F) slab.z = F
       // Over a tile under it: lifted, its sides down to the canvas.
       const overTile = tileBase.get(node)
       if (overTile !== undefined) {
@@ -906,8 +943,7 @@ function collectSlabs(K = 1): TiltSlab[] {
       } else if (node.hasAttribute('data-rail')) {
         // A loop strip is a tray: a rim round its edge, its floor the face.
         // Far off (small on screen) it settles back to a plain slab.
-        const k = detail(w)
-        const u = fs.nodes[node.dataset.id!]?.rail?.unit || 1
+        const { k, u, H } = trayOf(node.dataset.id!, w)
         // Its width grows in with its height: at full width from the start,
         // its top lay almost level with the floor in the first degrees, a
         // dark band over the strip's edge and over anything lying across it.
@@ -916,15 +952,9 @@ function collectSlabs(K = 1): TiltSlab[] {
         // The run arrow and the band of headers under it stand up out of
         // the tray, above its rim and the cards (Brian 2026-10-30).
         if (k > 0) {
-          // Clear of the cards on it too (their tops, a single card thick).
-          let top = 0
-          for (const o of Object.values(fs.nodes)) {
-            const d = o.railDock
-            if (!d || d.railId !== node.dataset.id || d.lifted) continue
-            const om = Math.min(o.width, o.height) * zoom
-            top = Math.max(top, (dockLift(om, d.order ?? 0) + om * THICK.card) * k)
-          }
-          const H = Math.max(TRAY.rimH * TRAY.band * u * zoom * k, top + TRAY.rimH * u * zoom * k)
+          // Clear of the cards on it too (trayOf's H). Heights here are
+          // over the strip's floor; what is not drawn in the strip is
+          // placed from the canvas, at its floor `F` and that.
           // Console: the loop strip bar and the header bar stand on a deck
           // above the leaning cards' tops (Brian 2026-10-30: "above the
           // tilted cards ... so it appears like a machine"), rising with
@@ -956,9 +986,9 @@ function collectSlabs(K = 1): TiltSlab[] {
             const gz = dockLift(gm, 0) * k
             const gs = add(pan.x + ga.x * zoom, pan.y + ga.y * zoom, gw, gh, Math.min(gz, gm * THICK.tile), SIDE.card, radiusOf(ghost) * zoom, true)
             if (gs) {
-              gs.z = gz
-              gs.hinge = { v: gs.v + gs.h / 2, z: gz, a }
-              lifting.set(ghost, gz)
+              gs.z = F + gz
+              gs.hinge = { v: gs.v + gs.h / 2, z: F + gz, a }
+              lifting.set(ghost, F + gz)
               chain(ghost, world)
               stand(ghost, gs.hinge, zoom)
               leaning.push({ id: `ghost:${rid}`, rail: rid, slot: RAIL_TRAY, order: -1, slab: gs, hinge: gs.hinge, main: true })
@@ -997,7 +1027,7 @@ function collectSlabs(K = 1): TiltSlab[] {
             // With the strip's body (and the deck on it), not culled alone.
             const s = add(pan.x + a.x * zoom, pan.y + a.y * zoom, part.offsetWidth * zoom, part.offsetHeight * zoom, z > H ? Math.min(z, 2) : z,
               SIDE.tray, (radiusOf(part) || 6 * u) * zoom, true)
-            if (s) s.z = z
+            if (s) s.z = F + z
             lifting.set(part, z)
             chain(part, world)
             // Solid, its sides the colour of its face, as a raised button's.
@@ -1007,7 +1037,7 @@ function collectSlabs(K = 1): TiltSlab[] {
             if (s && sr > 0 && z > H) {
               const b = 2.5 * u * zoom * sr
               if (part.hasAttribute('data-rail-arrow')) s.finish = 'glow'
-              if (b >= 0.5) out.push({ u: s.u, v: s.v, w: s.w + 2 * b, h: s.h + 2 * b, r: s.r + b, t: Math.min(z, 1.5 * b), z: z - 0.35,
+              if (b >= 0.5) out.push({ u: s.u, v: s.v, w: s.w + 2 * b, h: s.h + 2 * b, r: s.r + b, t: Math.min(z, 1.5 * b), z: F + z - 0.35,
                 color: DECK.alu, finish: 'alu', bevel: b * 0.6, cap: true, deco: `rail:${rid}` })
             }
           }
@@ -1033,10 +1063,10 @@ function collectSlabs(K = 1): TiltSlab[] {
             // A look row's tabs ride its leaning cards: its part over them
             // stands as they do (below, with the riders).
             const band = part.dataset.railDropMarkPart === 'band'
-            if (!band || lookRow) { marks.push({ part, world, rail: rid, z: H, band }); continue }
+            if (!band || lookRow) { marks.push({ part, world, rail: rid, z: F + H, band }); continue }
             // Its own plate (an opening in the 3D view over its line), or
             // the deck drawn over the page would hide it; over the heads.
-            const z = (D > H ? D + 0.5 : D) + 0.5
+            const z = F + (D > H ? D + 0.5 : D) + 0.5
             const a = offsetIn(part, world)
             const s = a && add(pan.x + a.x * zoom, pan.y + a.y * zoom, part.offsetWidth * zoom, part.offsetHeight * zoom, 0.5, DROP_RGB, part.offsetWidth * zoom / 2, true)
             if (s) { s.z = z; s.nopick = true }
@@ -1057,15 +1087,15 @@ function collectSlabs(K = 1): TiltSlab[] {
           // with the heads on it (the bars, flat), which the leaning cards
           // stay under; behind the header bar the loop strip bar's tier.
           const cx = slab.u - slab.w / 2 + W_ / 2, cy = slab.v - slab.h / 2 + H_ / 2
-          crowns.push({ x0: cx, y0: cy, x1: cx + slab.w, y1: cy + slab.h, z: D > H ? D + 0.5 : D })
-          if (A > D && ba) crowns.push({ x0: cx, y0: cy, x1: cx + slab.w, y1: pan.y + ba.y * zoom, z: A })
+          crowns.push({ x0: cx, y0: cy, x1: cx + slab.w, y1: cy + slab.h, z: F + (D > H ? D + 0.5 : D) })
+          if (A > D && ba) crowns.push({ x0: cx, y0: cy, x1: cx + slab.w, y1: pan.y + ba.y * zoom, z: F + A })
           if (run && ra && run.offsetWidth) {
             const P = TRAY.rimH * u * zoom * k * sr
             // And Run's pill, up off the tier.
-            crowns.push({ x0: pan.x + ra.x * zoom, y0: pan.y + ra.y * zoom, x1: pan.x + ra.x * zoom + run.offsetWidth * zoom, y1: pan.y + ra.y * zoom + run.offsetHeight * zoom, z: A + P })
+            crowns.push({ x0: pan.x + ra.x * zoom, y0: pan.y + ra.y * zoom, x1: pan.x + ra.x * zoom + run.offsetWidth * zoom, y1: pan.y + ra.y * zoom + run.offsetHeight * zoom, z: F + A + P })
             const rh = run.offsetHeight * zoom
             const ps = add(pan.x + ra.x * zoom, pan.y + ra.y * zoom, run.offsetWidth * zoom, rh, P, RUN_RGB, rh / 2, true)
-            if (ps) ps.z = A + P
+            if (ps) ps.z = F + A + P
             lifting.set(run, P)
             chain(run, world)
             fill(run, { rgb: RUN_RGB_A, round: true })
@@ -1129,8 +1159,9 @@ function collectSlabs(K = 1): TiltSlab[] {
         const strip = n?.railDock && world.querySelector<HTMLElement>(`[data-freenode][data-id="${n.railDock.railId}"] [data-rail-body]`)
         const k = strip ? detail(strip.offsetWidth * zoom) : 0
         if (k > 0) {
-          slab.z = dockLift(m, n?.railDock?.order ?? 0) * k
-          slab.t = slab.z    // stacked on the floor, so its sides reach it
+          const up = dockLift(m, n?.railDock?.order ?? 0) * k
+          slab.z = up - (sunk.get(n?.railDock?.railId ?? '') ?? 0)
+          slab.t = up    // stacked on the strip's floor, so its sides reach it
           lifting.set(node, slab.z)
           // Console: whatever is docked leans back on its bottom edge, a
           // plate a card thick (Brian 2026-10-30; the cast and the results
@@ -1139,7 +1170,7 @@ function collectSlabs(K = 1): TiltSlab[] {
           const a = lean.get(node.dataset.id!)
           if (a) {
             hinge = { v: slab.v + slab.h / 2, z: slab.z, a }
-            slab.t = Math.min(slab.z, m * THICK.tile)
+            slab.t = Math.min(up, m * THICK.tile)
             slab.hinge = hinge
             // Its selection ring shows over the sloped back behind it.
             if (fs.selectedIds.includes(n!.id)) slab.ring = 3
@@ -1240,7 +1271,7 @@ function collectSlabs(K = 1): TiltSlab[] {
     if (!n.cardRef || !n.railDock || n.railDock.lifted) continue
     const strip = host.querySelector<HTMLElement>(`[data-freenode][data-id="${n.railDock.railId}"] [data-rail-body]`)
     const k = strip ? detail(strip.offsetWidth * zoom) : 0
-    if (k > 0) docked.set(n.cardRef, dockLift(Math.min(n.width, n.height) * zoom, n.railDock.order ?? 0) * k)
+    if (k > 0) docked.set(n.cardRef, dockLift(Math.min(n.width, n.height) * zoom, n.railDock.order ?? 0) * k - (sunk.get(n.railDock.railId) ?? 0))
     // Console: it leans as the strip's tiles do (Brian 2026-11-01: the cast
     // and the results too), the card layer standing the card itself.
     const a = k > 0 ? lean.get(n.id) : undefined
@@ -1359,6 +1390,8 @@ function collectSlabs(K = 1): TiltSlab[] {
       const k = detail(w)
       let card: TiltSlab | undefined
       let tilt: Hinge | undefined
+      /** Given its thickness, face and all (not a far-off plain slab). */
+      let stoodUp = false
       // Off a strip, the highest top of the cards painted under it that it
       // overlaps: flat, it shows over them, so it stands over them here.
       let overTop: number | undefined
@@ -1375,8 +1408,11 @@ function collectSlabs(K = 1): TiltSlab[] {
         const f = Math.max(k, lift === undefined ? 0 : 1)
         const per = (lift === undefined ? CARD_STOCK * zoom : m * THICK.card) * f
         const thick = Math.min(m * THICK.deckMax, per * n)
-        // Lying over a card painted under it, a hair above that card's top.
-        const base = lift ?? Math.max(0, (overTop ?? -Infinity) + OVER - thick)
+        // Its face at the floor and its thickness down under it, however
+        // thick a deck it is, so every card, deck and model stands on one
+        // level (Brian 2026-11-19). Lying over a card painted under it, a
+        // hair above that card's top.
+        const base = lift ?? (overTop !== undefined ? overTop + OVER : 0) - thick
         const reserve = n > 1 ? Math.min(10, w * 0.05) : 0
         // Each card under the top one reaches a step further right than the
         // one above, so the deck's right side is an angled run of page edges
@@ -1389,8 +1425,9 @@ function collectSlabs(K = 1): TiltSlab[] {
         // leftward, the face past them (CardLayer StackedDeckCard).
         const lefty = el.dataset.deckSide === 'left'
         const faceX = lefty ? at.x + reserve : at.x
-        // A free card's sides go down to the canvas, lifted over another or not.
-        card = add(faceX, at.y, w - reserve, h, lift !== undefined ? thick : n > 1 ? per : base + per, SIDE.card, r)
+        // A deck's face is its top card, the rest its slices (below).
+        card = add(faceX, at.y, w - reserve, h, lift !== undefined ? thick : per, SIDE.card, r)
+        stoodUp = !!card
         if (card) {
           card.z = base + thick
           cardTops.set(id, card.z)
@@ -1454,7 +1491,7 @@ function collectSlabs(K = 1): TiltSlab[] {
         if (p) { p.z = z; p.pop = true; p.hinge = tilt }
         return p
       })
-      if (card?.z) unshadow(el, K)
+      if (stoodUp) unshadow(el, K)
     }
     // Zoomed in to Blocks or Boards, a card is drawn as its outline.
     for (const el of stage.querySelectorAll<HTMLElement>('[data-group-outline]')) {
@@ -1601,7 +1638,7 @@ function collectSlabs(K = 1): TiltSlab[] {
     const at = col[Math.min(m.index, col.length - 1)]
     // Its card's top as the card layer stands it (0 drawn as an outline),
     // a hair over the floor at the least: its plates below must be proud.
-    const z = Math.max(0.5, (at?.cardRef && cardTops.get(at.cardRef)) || 0)
+    const z = Math.max(0.5 - (sunk.get(m.rail) ?? 0), (at?.cardRef ? cardTops.get(at.cardRef) : undefined) ?? -Infinity)
     lifting.set(m.el, z)
     // Its line and dots each on a plate of their own that pick() sees
     // through, as the row's (above): up off the floor, without one the 3D
@@ -2020,7 +2057,10 @@ function fanSlabs(el: HTMLElement, stage: HTMLElement, at: { x: number; y: numbe
   const strips = kids.filter(c => c !== front).sort((a, b) => Math.abs(a.offsetLeft - front.offsetLeft) - Math.abs(b.offsetLeft - front.offsetLeft))
   const w = front.offsetWidth, h = front.offsetHeight, m = Math.min(w, h)
   const k = lift === undefined ? detail(w) : 1
-  const base = lift ?? 0
+  const per = m * THICK.card * k
+  // Loose on the canvas, its front card's face is at the floor and its
+  // stair goes down under it (Brian 2026-11-19: one level for everything).
+  const base = lift ?? (wall ? 0 : -per * (strips.length + 1))
   // Standing on a storyline's wall (stage px `wall.y` its foot): the whole
   // fan turns up on it, as a stacked deck does, its pages proud of it.
   const hinge: Hinge | undefined = wall && { v: wall.v, z: base, a: wall.a }
@@ -2030,7 +2070,6 @@ function fanSlabs(el: HTMLElement, stage: HTMLElement, at: { x: number; y: numbe
     if (s) s.hinge = hinge
     return base + m * THICK.card
   }
-  const per = m * THICK.card * k
   const top = base + per * (strips.length + 1)
   // The wrapper stays at the deck's base and its children rise from it:
   // a lifted wrapper (it takes the pointer) would sit over the lowered
@@ -2690,7 +2729,7 @@ function setLifts(next: Map<HTMLElement, number>) {
   for (const [el, z] of next) {
     const k = cssZoomOf(el)
     nextK.set(el, k)
-    if (Math.abs((lifted.get(el) ?? -1) - z) > 0.05 || liftK.get(el) !== k) el.style.translate = `0 0 ${(z / k).toFixed(3)}px`
+    if (!lifted.has(el) || Math.abs(lifted.get(el)! - z) > 0.05 || liftK.get(el) !== k) el.style.translate = `0 0 ${(z / k).toFixed(3)}px`
   }
   liftK = nextK
   for (const el of lifted.keys()) if (!next.has(el)) el.style.translate = ''

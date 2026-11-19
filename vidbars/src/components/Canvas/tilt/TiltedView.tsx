@@ -593,7 +593,7 @@ export const TiltedView: React.FC = () => {
       // Something standing, or a column's head up on the console's deck: a
       // drag from it goes where the cursor goes (see surfaceAt). So does a
       // loose card's, once carried (inHand).
-      g = { kind: 'remap', target, pointerId: e.pointerId, height, stood: !!hinge || (height > 0 && !!target.closest('[data-rail-card-head], [data-rail-head]')), x0: e.clientX, y0: e.clientY,
+      g = { kind: 'remap', target, pointerId: e.pointerId, height, stood: !!hinge || (lifted.get(target.closest<HTMLElement>('[data-rail-card-head], [data-rail-head]')!) ?? 0) > 0, x0: e.clientX, y0: e.clientY,
         lay: new Map(useBoardsStore.getState().groups.map(x => [x.id, `${x.originX},${x.originY}`])) }
       // A card, deck or row on a storyline's wall: its drag is read on the
       // wall (readFor).
