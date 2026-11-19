@@ -25,7 +25,7 @@ import type { Stick } from '../store/notesStore'
 import { POLE_R, LOWER_R, LOWER_TOP, BASE_H, BASE_W, DOCK_LINE, SIGN_W, SIGN_H, SIGN_CUT, SIGN_TEXT, NUM_H, CREAM, GREEN, ORANGE, DARK, ACCENT, DEFAULT_FONT, TICK, heightText, unitText, stickTicks, tabOut, tabDepth, tabCentre, type Side } from '../utils/stickGeom'
 
 /** A mark on a stick's tube: a selected card's height (utils/stickDock). */
-export interface StickMarkAt { ft: number; color: string; text: string }
+export interface StickMarkAt { id: string; ft: number; color: string; text: string; unset?: boolean }
 /** What the 3D view draws of the sticks this frame. */
 export interface StickFrame {
   sticks: Stick[]
@@ -53,7 +53,9 @@ export interface StickFrame {
 type Pt = { x: number; y: number }
 /** A stick on screen, px on the 3D canvas: its foot, the top of its pole,
  *  and its board (its middle, half its width and half its height). */
-export interface StickSpot { id: string; foot: Pt; top: Pt; sign: Pt; hw: number; hh: number; /** Its base's reach, px. */ br: number }
+export interface StickSpot { id: string; foot: Pt; top: Pt; sign: Pt; hw: number; hh: number; /** Its base's reach, px. */ br: number
+  /** Its marks (a selected card's height, by card id): where each is, to be dragged. */
+  marks: { id: string; at: Pt }[] }
 
 /** The board: cream with its corners cut, the height in orange over a
  *  rule, the unit small under it. */
@@ -127,6 +129,7 @@ interface Built {
   /** On the ground, in canvas units: the line along the edge it is
    *  docked by. */
   ground: THREE.Group
+  marks: StickMarkAt[]
   own: { dispose: () => void }[]
 }
 
@@ -256,7 +259,7 @@ export function createStickOverlay() {
     }
     root.add(ground)
     root.add(group)
-    return { sig, ft: s.ft, group, mast, board, labels, ground, own }
+    return { sig, ft: s.ft, group, mast, board, labels, ground, marks, own }
   }
 
   /** Draw the sticks over what the frame drew. `ground` is the canvas's
@@ -272,7 +275,7 @@ export function createStickOverlay() {
         seen.add(s.id)
         const selected = f.selected === s.id, hotTop = f.hot === `${s.id}:top`, docked = f.docked.has(s.id)
         const side = f.sides.get(s.id) ?? null, marks = f.marks.get(s.id) ?? []
-        const sig = `${s.ft}|${s.per}|${!!s.metric}|${s.font ?? ''}|${s.color ?? ''}|${selected}|${hotTop}|${docked}|${side}|${f.fontRev}|${marks.map(m => `${m.ft.toFixed(3)}${m.color}`).join(',')}`
+        const sig = `${s.ft}|${s.per}|${!!s.metric}|${s.font ?? ''}|${s.color ?? ''}|${selected}|${hotTop}|${docked}|${side}|${f.fontRev}|${marks.map(m => `${m.id}${m.ft.toFixed(3)}${m.color}${m.unset ? '?' : ''}`).join(',')}`
         let b = built.get(s.id)
         if (!b || b.sig !== sig) {
           if (b) drop(b)
@@ -326,7 +329,12 @@ export function createStickOverlay() {
       if (!foot || !top || !sign) continue
       const k = (v.setFromMatrixScale(b.group.matrixWorld).x || 1) * pxPer / sign.depth
       const per = v.setFromMatrixScale(b.group.matrixWorld).x || 1
-      out.push({ id, foot, top, sign, hw: SIGN_W * k, hh: SIGN_H * k, br: BASE_W * per * pxPer / foot.depth })
+      const marks: StickSpot['marks'] = []
+      for (const m of b.marks) {
+        const at = m.ft <= b.ft + 1e-6 ? px(m.ft * b.mast.scale.z, b) : null
+        if (at) marks.push({ id: m.id, at: { x: at.x, y: at.y } })
+      }
+      out.push({ id, foot, top, sign, hw: SIGN_W * k, hh: SIGN_H * k, br: BASE_W * per * pxPer / foot.depth, marks })
     }
     return out
   }

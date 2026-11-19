@@ -15,6 +15,7 @@ import { useNotesStore, type Stick } from '../../store/notesStore'
 import { useBoardsStore } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useStickUi } from '../../store/pathLive'
+import { useUnits } from '../../store/unitsStore'
 import { useTiltStore, isTilted } from '../../store/tiltStore'
 import { useManip } from '../../store/manipStore'
 import { ensureFontLoaded } from '../UI/TextFormatToolbar'
@@ -74,6 +75,7 @@ export const StickLayer: React.FC = () => {
   // selected card's height.)
   useBoardsStore(s => s.groups)
   useBoardsStore(s => s.selectedGroupIds)
+  useUnits(s => s.metric)
   const list = Object.values(sticks ?? {})
   // A number's font is fetched if it is not on the machine; the 3D view's
   // boards are drawn again when it has come.

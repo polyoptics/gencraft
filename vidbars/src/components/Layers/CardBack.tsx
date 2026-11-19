@@ -14,6 +14,8 @@ import { useLinkDragStore } from '../../store/linkDragStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { cardFill, edgeColorFromHex, hexToHsl, hslToHex } from '../../utils/colorUtils'
 import { CARD_TYPES, CARD_TYPE_ORDER, cardTypeOf, chartCards, chartName, chartRank, deckCardsOf, deckFavorite, detailShown, isChartRank, factionMembers, factionsOf, hasMembers, isAbove, isOwnCount, newDetailId, typeColor, type CardDetail, type CardType, type FactionMember } from '../../utils/cardTypes'
+import { heightAsUnit } from '../../utils/stickGeom'
+import { useUnits } from '../../store/unitsStore'
 import { cardTitle } from '../../utils/faceStyle'
 import { rankText } from '../../utils/chartData'
 import { factionGroupsOf, withGroupMoved, withMemberMoved } from '../../utils/factionGroups'
@@ -418,6 +420,7 @@ export const CardBack: React.FC<{
   const fgroups = type === 'faction' && me ? factionGroupsOf(me) : null
   // A linked card is its master shown again: its factions and kin are the master's.
   const meId = me?.linkOf ?? groupId
+  const metric = useUnits(s => s.metric)
   // Charts to rank on; while one this back ranks on is out on the canvas,
   // its storyline as it stands (redrawn when its dots or their cards change).
   const charts = chartCards(groups)
@@ -1062,7 +1065,10 @@ export const CardBack: React.FC<{
             </>
           )}
           {details.map(d => {
-            const linked = d.link ? detailShown(groups, d) : null
+            const linked0 = d.link ? detailShown(groups, d) : null
+            // A height is shown in the app's units, however it was typed (store/unitsStore).
+            const asUnit = heightAsUnit(d.name, linked0 ? linked0.text : d.value, metric)
+            const linked = linked0 && asUnit && d.link!.detail ? { ...linked0, text: asUnit } : linked0
             // Its own member count: shown, never typed, linked or removed.
             const own = isOwnCount(d, meId) || isOwnCount(d, groupId)
             const rank = isChartRank(d)
@@ -1096,7 +1102,7 @@ export const CardBack: React.FC<{
                   onCancel={() => cancel(d.id)}
                   shown={own ? <span data-member-count title="How many members it has: counted, not typed">{linked?.text}</span>
                     : rank && linked ? <span data-chart-rank={d.link!.card} title={`Rank on ${linked.card ? chartName(linked.card) : 'a chart'}: its group on the chart, counted from the top (read from the chart, not typed)`}><LinkShown text={linked.text} color={linked.card?.color} missing={linked.missing} whole={false} /></span>
-                    : linked ? <LinkShown text={linked.text} color={linked.card?.color} missing={linked.missing} whole={!d.link!.detail && !d.link!.count} /> : undefined}
+                    : linked ? <LinkShown text={linked.text} color={linked.card?.color} missing={linked.missing} whole={!d.link!.detail && !d.link!.count} /> : asUnit && asUnit !== d.value ? asUnit : undefined}
                   onPick={own ? undefined : e => setMenu({ x: e.clientX, y: e.clientY, kind: 'link', id: d.id })}
                   drop={own || rank ? undefined : `detail:${groupId}:${d.id}`}
                   lit={linking}

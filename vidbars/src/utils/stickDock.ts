@@ -26,7 +26,9 @@ import { useModelScaleStore } from '../store/tiltStore'
 import type { FreeNodeData } from '../store/freeNodeStore'
 import { dockedCards } from './filmShots'
 import { detailShown, newDetailId } from './cardTypes'
-import { FT_PER_M, DOCK_LINE, SIGN_W, SIGN_H, parseHeight, heightText, unitText, type Side } from './stickGeom'
+import { DOCK_LINE, SIGN_W, SIGN_H, parseHeight, heightText, unitText, heightWritten, isHeightName, type Side } from './stickGeom'
+import { useUnits } from '../store/unitsStore'
+import type { CardDetail } from './cardTypes'
 import { cardScreenRect } from '../components/Layers/CardLayer'
 import { isHiddenDeckMember } from '../hooks/useCardDecks'
 import { dataKey } from './area3dScene'
@@ -81,7 +83,32 @@ export function snapTab(x: number, y: number): { x: number; y: number } {
 
 /** The card a card's back is read from (a linked card's is its master's). */
 const masterOf = (g: ProjectGroup, groups: ProjectGroup[]) => (g.linkOf && groups.find(x => x.id === g.linkOf)) || g
-const heightRow = (g: ProjectGroup) => g.details?.find(x => x.name.trim().toLowerCase() === 'height')
+const heightRow = (g: ProjectGroup) => g.details?.find(x => isHeightName(x.name))
+/** Where a card's height is kept: its own Height row, or, that row
+ *  sharing another card's (linked to it, utils/detailMerge), that one. */
+function heightSpot(g: ProjectGroup, groups: ProjectGroup[]): { card: ProjectGroup; row?: CardDetail } {
+  let card = masterOf(g, groups), row = heightRow(card)
+  const seen = new Set<string>()
+  while (row?.link?.detail && !seen.has(row.id)) {
+    seen.add(row.id)
+    const c = groups.find(x => x.id === row!.link!.card)
+    const r = c?.details?.find(x => x.id === row!.link!.detail)
+    if (!c || !r) break
+    card = c; row = r
+  }
+  return { card, row }
+}
+/** Write card `g`'s height (feet), where it is kept, in the app's units.
+ *  A card with no Height row gets one. The caller takes the undo step. */
+export function setCardHeight(g: ProjectGroup, ft: number) {
+  const bs = useBoardsStore.getState()
+  const { card, row } = heightSpot(g, bs.groups)
+  const value = heightWritten(ft, useUnits.getState().metric)
+  const details = row
+    ? (card.details ?? []).map(d => d.id === row.id ? { ...d, value, link: undefined } : d)
+    : [...(card.details ?? []), { id: newDetailId(), name: 'Height', value }]
+  if (!row || row.value !== value || row.link) bs.setGroupDetails(card.id, details)
+}
 /** The Height on a card's back, feet. */
 function cardHeight(g: ProjectGroup, groups: ProjectGroup[]): number | null {
   const d = heightRow(masterOf(g, groups))
@@ -182,7 +209,9 @@ export const stickPoint = (s: Stick): { x: number; y: number } => stickMeasures(
 const MARK_YELLOW = '#ffd23f'
 
 /** A selected card of a stick's group: how tall it is against the stick. */
-export interface StickMark { id: string; ft: number; color: string; text: string }
+export interface StickMark { id: string; ft: number; color: string; text: string
+  /** No height yet: its mark waits at the stick's top to be dragged to one. */
+  unset?: boolean }
 /** The marks on a stick: one for each selected card docked to it that
  *  has a height (Brian 2026-11-19: "if you have a card selected... it'll
  *  show a mark on the measure stick"), shortest first. */
@@ -190,24 +219,30 @@ export function stickMarks(s: Stick): StickMark[] {
   const m = stickMeasures()
   const bs = useBoardsStore.getState()
   const out: StickMark[] = []
+  const metric = useUnits.getState().metric
   for (const picked of bs.selectedGroupIds) {
     // (A deck's front card showing another of its cards: that card's height.)
     const id = dataKey(`card:${picked}`).slice(5)
-    const units = m.owner.get(id) === s.id ? m.heights.get(id) : undefined
-    if (!units) continue
+    if (m.owner.get(id) !== s.id) continue
+    const units = m.heights.get(id)
+    // (Any card can have a height: one with none yet has its mark at the
+    // stick's top, to be dragged to one. Brian 2026-11-19.)
+    if (!units) { out.push({ id, ft: s.ft, color: MARK_YELLOW, text: '?', unset: true }); continue }
     const ft = units / s.per
-    out.push({ id, ft, color: MARK_YELLOW, text: heightText({ ft, metric: s.metric }) })
+    out.push({ id, ft, color: MARK_YELLOW, text: heightText({ ft, metric }) })
   }
   return out.sort((a, b) => a.ft - b.ft)
 }
 /** What a stick's tab says, flat: the height of the card picked in its
  *  group (of several, their average: Brian 2026-11-19); with none
  *  picked, its own. And the unit under it. */
-export function tabText(s: Stick, marks = stickMarks(s)): { text: string; unit: string } {
-  if (!marks.length) return { text: heightText(s), unit: unitText(s) }
-  if (marks.length === 1) return { text: marks[0].text, unit: unitText(s) }
+export function tabText(s: Stick, all = stickMarks(s)): { text: string; unit: string } {
+  const metric = useUnits.getState().metric
+  const marks = all.filter(m => !m.unset)
+  if (!marks.length) return { text: heightText({ ft: s.ft, metric }), unit: unitText({ metric }) }
+  if (marks.length === 1) return { text: marks[0].text, unit: unitText({ metric }) }
   const ft = marks.reduce((a, m) => a + m.ft, 0) / marks.length
-  return { text: heightText({ ft, metric: s.metric }), unit: `${unitText(s)} AVG` }
+  return { text: heightText({ ft, metric }), unit: `${unitText({ metric })} AVG` }
 }
 
 // ── A card with no Height: where its model starts from ──
@@ -243,16 +278,6 @@ function settle() {
 }
 
 // ── Sizing a docked model by hand changes its height ──
-/** A height as it is written on a card's back: as the one there is
- *  written, else in the stick's unit. */
-function writeHeight(ft: number, like: string | undefined, metric: boolean | undefined): string {
-  const t = (like ?? '').toLowerCase()
-  const cm = /cm/.test(t), m = !cm && /\d\s*m\b|met/.test(t), feet = /'|′|’|ft|feet|foot|"|″|\bin/.test(t)
-  if (cm || (!m && !feet && metric)) return `${Math.round(ft / FT_PER_M * 100)} cm`
-  if (m) return `${(ft / FT_PER_M).toFixed(2)} m`
-  const inches = Math.max(1, Math.round(ft * 12))
-  return `${Math.floor(inches / 12)}'${inches % 12}"`
-}
 /** A hand's sizing in progress, by model key: the height and size it
  *  began from (so many small steps do not round away). */
 const sizing = new Map<string, { ft0: number; k0: number; t: number }>()
@@ -279,13 +304,7 @@ function sized(key: string, was: number | undefined, now: number | undefined) {
   }
   s.t = t
   const ft = s.ft0 * now / s.k0
-  const master = masterOf(g, bs.groups)
-  const row = heightRow(master)
-  const value = writeHeight(ft, row?.value, stick.metric)
-  const details = row
-    ? (master.details ?? []).map(d => d.id === row.id ? { ...d, value, link: undefined } : d)
-    : [...(master.details ?? []), { id: newDetailId(), name: 'Height', value }]
-  if (!row || row.value !== value || row.link) bs.setGroupDetails(master.id, details)
+  setCardHeight(g, ft)
 }
 
 // A docked stick goes with its card. What each stick stands on (the

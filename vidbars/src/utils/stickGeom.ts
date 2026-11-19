@@ -150,3 +150,19 @@ export function parseHeight(text: string | undefined): number | null {
   if (n <= 0) return null
   return n <= 3 ? n * FT_PER_M : n <= 30 ? n : n <= 100 ? n / 12 : n / 100 * FT_PER_M
 }
+
+/** A height as a tool writes it on a card's back: 183 cm, or 6'0". */
+export function heightWritten(ft: number, metric: boolean | undefined): string {
+  if (metric) return `${Math.round(ft / FT_PER_M * 100)} cm`
+  const inches = Math.max(1, Math.round(ft * 12))
+  return `${Math.floor(inches / 12)}'${inches % 12}"`
+}
+/** A row is a card's height (by its name). */
+export const isHeightName = (name: string | undefined) => (name ?? '').trim().toLowerCase() === 'height'
+/** What a Height row shows in the app's units, however it was typed
+ *  (store/unitsStore). Null: not a height row, or not a height in it. */
+export function heightAsUnit(name: string | undefined, text: string | undefined, metric: boolean): string | null {
+  if (!isHeightName(name)) return null
+  const ft = parseHeight(text)
+  return ft ? heightWritten(ft, metric) : null
+}

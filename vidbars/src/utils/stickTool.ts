@@ -16,8 +16,12 @@
 //    docked to with it (utils/stickDock).
 //  - In 3D, drag its pole or base: it moves as the tab does flat (along
 //    the edge it is docked by, or off it).
+//  - In 3D, drag a mark on its pole (a selected card's height, yellow):
+//    that card's height changes, written on its back (a model's size
+//    with it). A card with no height has its mark at the pole's top.
 //  - Double-click the number on its board: the list of fonts for it.
-//    Double-click the rest of the board: feet or metres.
+//    Double-click the rest of the board: feet or metres, for the whole
+//    app (store/unitsStore).
 //  - Click it to select it; Delete removes it. The Erase tool's click
 //    removes it too.
 
@@ -31,11 +35,13 @@ import { clientToCanvas } from './fx/createEffect'
 import { canvasPointUnder, overCanvas, usePlacing } from './placeTool'
 import { models } from '../components/Canvas/tilt/TiltModels'
 import type { StickSpot } from '../three/stickOverlay'
-import { stickMeasures, stickPoint, snapTab } from './stickDock'
-import { STICK_FT, STICK_NEW_PX, SIGN_W, SIGN_H, SIGN_TEXT, stickLen, snapHeight, tabCentre } from './stickGeom'
+import { stickMeasures, stickPoint, snapTab, stickMarks, setCardHeight } from './stickDock'
+import { useUnits } from '../store/unitsStore'
+import { useBoardsStore } from '../store/boardsStore'
+import { STICK_FT, STICK_NEW_PX, SIGN_W, SIGN_H, SIGN_TEXT, stickLen, snapHeight, tabCentre, FT_PER_M } from './stickGeom'
 
 type Pt = { x: number; y: number }
-type Part = 'top' | 'body'
+type Part = 'top' | 'body' | 'mark'
 
 const checkpoint = () => useUndoCoordinator.getState().checkpoint()
 const sticksNow = () => useNotesStore.getState().sticks
@@ -51,7 +57,7 @@ function spots(): StickSpot[] {
   const sides = stickMeasures().sides
   return Object.values(sticksNow()).map(s => {
     const c = tabCentre({ ...stickPoint(s), per: s.per }, sides.get(s.id)), p = at(c.x, c.y)
-    return { id: s.id, foot: p, top: p, sign: p, hw: SIGN_W * s.per * zoom, hh: SIGN_H * s.per * zoom, br: 0 }
+    return { id: s.id, foot: p, top: p, sign: p, hw: SIGN_W * s.per * zoom, hh: SIGN_H * s.per * zoom, br: 0, marks: [] }
   })
 }
 
@@ -62,9 +68,18 @@ const segDist = (p: Pt, a: Pt, b: Pt) => {
 }
 
 /** The stick, and the part of it, at a point on screen. */
-function hitAt(p: Pt): { spot: StickSpot; part: Part } | null {
-  let best: { spot: StickSpot; part: Part; d: number } | null = null
-  for (const s of spots()) {
+function hitAt(p: Pt): { spot: StickSpot; part: Part; mark?: string } | null {
+  let best: { spot: StickSpot; part: Part; d: number; mark?: string } | null = null
+  const all = spots()
+  // A mark on a pole (a selected card's height) is in front of the pole:
+  // its band, and its number beside it.
+  for (const s of all) for (const m of s.marks) {
+    const dx = p.x - m.at.x, dy = p.y - m.at.y
+    const d = Math.hypot(dx, dy)
+    if ((d <= 11 || (dx < 0 && dx > -46 && Math.abs(dy) <= 10)) && (!best || d < best.d)) best = { spot: s, part: 'mark', d, mark: m.id }
+  }
+  if (best) return best
+  for (const s of all) {
     const ds = Math.hypot(p.x - s.sign.x, p.y - s.sign.y)
     const on = Math.abs(p.x - s.sign.x) <= Math.max(s.hw, 9) && Math.abs(p.y - s.sign.y) <= Math.max(s.hh, 9)
     if (on && (!best || best.part !== 'top' || ds < best.d)) { best = { spot: s, part: 'top', d: ds }; continue }
@@ -145,6 +160,33 @@ function onDown(e: PointerEvent) {
   if (ui.selected.length) useNotesUi.setState({ selected: [], points: [] })
   const x0 = e.clientX, y0 = e.clientY
   const flat = !in3d()
+  // A mark: the card's height goes up and down the pole with it, to the
+  // inch (metric, the centimetre), no higher than the pole.
+  if (hit.part === 'mark' && hit.mark) {
+    lastPress = null
+    const card = useBoardsStore.getState().groups.find(g => g.id === hit.mark)
+    const mark = stickMarks(s0).find(m => m.id === hit.mark)
+    if (!card || !mark) return
+    const L0 = stickLen(s0), zoom = useCanvasStore.getState().zoom || 1
+    let u = { x: (hit.spot.top.x - hit.spot.foot.x) / L0, y: (hit.spot.top.y - hit.spot.foot.y) / L0 }
+    if (Math.hypot(u.x, u.y) < 0.05 * zoom) u = { x: 0, y: -0.5 * zoom }
+    const metric = useUnits.getState().metric
+    let began = false
+    drag = {
+      move: ev => {
+        if (!began) {
+          if (Math.hypot(ev.clientX - x0, ev.clientY - y0) < 3) return
+          began = true
+          checkpoint()
+        }
+        const raw = mark.ft + ((ev.clientX - x0) * u.x + (ev.clientY - y0) * u.y) / (u.x * u.x + u.y * u.y) / s0.per
+        const ft = metric ? Math.round(raw / FT_PER_M * 100) / 100 * FT_PER_M : Math.round(raw * 12) / 12
+        const now = useBoardsStore.getState().groups.find(g => g.id === card.id)
+        if (now) setCardHeight(now, Math.max(1 / 12, Math.min(s0.ft, ft)))
+      },
+    }
+    return
+  }
   // Double-click its board: on the number, the fonts; off it, the unit.
   {
     const now = performance.now(), was = lastPress
@@ -153,7 +195,7 @@ function onDown(e: PointerEvent) {
       lastPress = null
       if (hit.part === 'body') return
       if (onNumber({ x: x0, y: y0 }, hit.spot)) useStickUi.setState({ fonts: { id: s0.id, x: x0 + 14, y: y0 - 20 } })
-      else { checkpoint(); useNotesStore.getState().updateStick(s0.id, { metric: s0.metric ? undefined : true }) }
+      else useUnits.getState().setMetric(!useUnits.getState().metric)
       return
     }
   }
@@ -193,7 +235,7 @@ function onDown(e: PointerEvent) {
           useNotesStore.getState().updateStick(s0.id, { per: Math.max(s0.per * 0.02, L / s0.ft) })
         } else {
           // Its top alone, to the inch (metric, the centimetre).
-          useNotesStore.getState().updateStick(s0.id, { ft: snapHeight(L / s0.per, s0.metric) })
+          useNotesStore.getState().updateStick(s0.id, { ft: snapHeight(L / s0.per, useUnits.getState().metric) })
         }
       },
     }
@@ -224,7 +266,7 @@ function onMove(e: PointerEvent) {
     if (h) { hot = `${h.spot.id}:${h.part}`; part = h.part }
   }
   if (useStickUi.getState().hot !== hot) useStickUi.setState({ hot })
-  if (part || hotCursor) document.documentElement.style.cursor = !part ? '' : tool === 'erase' ? 'pointer' : part === 'top' && in3d() ? 'ns-resize' : 'move'
+  if (part || hotCursor) document.documentElement.style.cursor = !part ? '' : tool === 'erase' ? 'pointer' : part === 'mark' || (part === 'top' && in3d()) ? 'ns-resize' : 'move'
   hotCursor = !!part
 }
 
