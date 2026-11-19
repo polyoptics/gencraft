@@ -334,6 +334,97 @@ function saveOrder(order: BarId[]) {
   try { localStorage.setItem(ORDER_KEY, JSON.stringify(order)) } catch { /* private window */ }
 }
 
+// ── Sections ──
+// The bar is cut into sections by dividers. A divider is one more thing in
+// the row: it drags along the bar exactly as an icon does, and an icon
+// dragged past one has changed section. Which icon sits where is still the
+// one saved order above; what is saved here is only where the dividers are,
+// each by the icon it stands in front of ('end' = after the last one).
+type Item = BarId | '|'
+const BREAKS_KEY = 'vidbars.topIconBar.breaks'
+/** A divider's width in px, and the bar's gap between things. */
+const DIV_W = 1
+const GAP = 8
+
+/** Only for where the dividers START (below): which icons are alike. */
+const ALIKE: Partial<Record<BarId, number>> = {
+  viewer: 0, pool: 0, browser: 0, history: 0, cabinet: 0,
+  prompt: 1, promptCards: 1, promptCard: 1, attributes: 1,
+  storyline: 2, scene3d: 2, stateSpace: 2, notes: 2,
+  filmMixer: 3, roughCut: 3, loopStrip: 3, effects: 3,
+  claude: 4,
+  new: 5,
+}
+
+/** Where the dividers go the first time, for the order the icons are
+ *  ALREADY in: no icon moves. The cuts that leave the fewest icons beside
+ *  ones unlike them, no section empty. */
+function firstBreaks(order: BarId[]): string[] {
+  const n = order.length
+  const sec = order.map(id => ALIKE[id] ?? 2)
+  const mean = (k: number) => { let t = 0, c = 0; sec.forEach((x, i) => { if (x === k) { t += i; c++ } }); return t / c }
+  const kinds = Array.from(new Set(sec)).sort((a, b) => mean(a) - mean(b))
+  const K = kinds.length
+  if (K < 2) return []
+  const miss = (j: number, i: number, k: number) => { let c = 0; for (let t = j; t < i; t++) if (sec[t] !== kinds[k]) c++; return c }
+  const f = Array.from({ length: K }, () => new Array<number>(n + 1).fill(Infinity))
+  const cut = Array.from({ length: K }, () => new Array<number>(n + 1).fill(0))
+  for (let i = 1; i <= n; i++) f[0][i] = miss(0, i, 0)
+  for (let k = 1; k < K; k++) for (let i = k + 1; i <= n; i++) for (let j = k; j < i; j++) {
+    const c = f[k - 1][j] + miss(j, i, k)
+    if (c < f[k][i]) { f[k][i] = c; cut[k][i] = j }
+  }
+  const out: string[] = []
+  for (let k = K - 1, i = n; k >= 1; k--) { i = cut[k][i]; out.unshift(order[i]) }
+  return out
+}
+
+function loadRow(): Item[] {
+  const order = loadOrder()
+  let saved: unknown = null
+  try { saved = JSON.parse(localStorage.getItem(BREAKS_KEY) || 'null') } catch { /* private window */ }
+  let breaks: string[]
+  if (Array.isArray(saved)) breaks = saved.filter((x): x is string => typeof x === 'string')
+  else {
+    breaks = firstBreaks(order)
+    try { localStorage.setItem(BREAKS_KEY, JSON.stringify(breaks)) } catch { /* private window */ }
+  }
+  const row: Item[] = []
+  for (const id of order) {
+    for (const b of breaks) if (b === id) row.push('|')
+    row.push(id)
+  }
+  for (const b of breaks) if (!order.includes(b as BarId)) row.push('|')
+  return row
+}
+
+function saveRow(row: Item[]) {
+  saveOrder(row.filter((x): x is BarId => x !== '|'))
+  const breaks: string[] = []
+  row.forEach((x, i) => { if (x === '|') breaks.push(row.slice(i + 1).find(y => y !== '|') ?? 'end') })
+  try { localStorage.setItem(BREAKS_KEY, JSON.stringify(breaks)) } catch { /* private window */ }
+}
+
+/** The line between two sections. Its colour is all that changes. */
+const DividerLine: React.FC<{ lit: boolean }> = ({ lit }) => {
+  const [hover, setHover] = React.useState(false)
+  return (
+    <>
+      {/* The grab: wider than the line, out into the gap on both sides. */}
+      <div
+        onMouseEnter={() => setHover(true)}
+        onMouseLeave={() => setHover(false)}
+        style={{ position: 'absolute', top: 0, bottom: 0, left: -6, right: -6 }}
+      />
+      <div style={{
+        width: 1, height: TILE * 0.55, pointerEvents: 'none',
+        background: lit || hover ? 'rgba(150,200,255,0.75)' : 'rgba(255,255,255,0.16)',
+        transition: 'background 0.12s',
+      }} />
+    </>
+  )
+}
+
 const IconButton: React.FC<{
   Icon: React.FC<SvgProps>
   title: string
@@ -411,8 +502,9 @@ export const TopIconBar: React.FC = () => {
   const closeNc = React.useCallback(() => setNcOpen(false), [])
 
   // Every button, by id. The ORDER they sit in is Brian's: drag one along
-  // the bar to move it, and the order is saved (localStorage) so it is the
-  // same after a reload. Every button moves, "New" included.
+  // the bar to move it, past a divider to move it to another section, and
+  // the order is saved (localStorage) so it is the same after a reload.
+  // Every button moves, "New" included.
   const buttons: Record<BarId, React.ReactNode> = {
     viewer: <IconButton Icon={IcViewer} title="Viewer — a window for models, video and images" {...place('viewer')} />,
     pool: <IconButton Icon={IcPool} title="Media Pool — a folder on disk" {...place('pool')} />,
@@ -469,27 +561,36 @@ export const TopIconBar: React.FC = () => {
     ),
   }
 
-  const [order, setOrder] = React.useState<BarId[]>(loadOrder)
-  const shown = order.filter(id => id !== 'cabinet' || cabinetsOn)
+  const [row, setRow] = React.useState<Item[]>(loadRow)
+  const shown = row.filter(id => id !== 'cabinet' || cabinetsOn)
 
   // ── Drag to reorder ──
   // Press and move a few px sideways: the icon lifts and follows the mouse,
   // the others slide aside to show where it will land. A press that doesn't
-  // move is an ordinary click.
-  const [drag, setDrag] = React.useState<{ id: BarId; from: number; to: number; dx: number } | null>(null)
-  const dragRef = React.useRef<{ id: BarId; x0: number; from: number; centers: number[]; live: boolean; to: number } | null>(null)
+  // move is an ordinary click. A section divider moves the same way.
+  const [drag, setDrag] = React.useState<{ from: number; to: number; dx: number; step: number } | null>(null)
+  const dragRef = React.useRef<{ x0: number; from: number; mids: number[]; min: number; max: number; step: number; live: boolean; to: number } | null>(null)
   const justDragged = React.useRef(false)
   // One frame with no slide on drop, so the icons don't animate back out of
   // the slots they've just been moved into.
   const [settling, setSettling] = React.useState(false)
-  const STEP = TILE + 8 // tile + the bar's gap
 
-  const onGrab = (e: React.PointerEvent<HTMLDivElement>, id: BarId) => {
+  const onGrab = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return
     const wrap = e.currentTarget
-    const row = Array.from(wrap.parentElement!.querySelectorAll<HTMLElement>('[data-top-icon]'))
-    const centers = row.map(el => { const r = el.getBoundingClientRect(); return r.left + r.width / 2 })
-    dragRef.current = { id, x0: e.clientX, from: row.indexOf(wrap), centers, live: false, to: row.indexOf(wrap) }
+    const els = Array.from(wrap.parentElement!.querySelectorAll<HTMLElement>('[data-top-item]'))
+    const rects = els.map(el => el.getBoundingClientRect())
+    const from = els.indexOf(wrap)
+    dragRef.current = {
+      x0: e.clientX, from,
+      mids: rects.map(r => r.left + r.width / 2),
+      // The ends of the row, so it can't wander off the bar.
+      min: rects[0].left - rects[from].left,
+      max: rects[rects.length - 1].right - rects[from].right,
+      // What the others give way by: this thing's width and one gap.
+      step: rects[from].width + GAP,
+      live: false, to: from,
+    }
     const move = (ev: PointerEvent) => {
       const d = dragRef.current
       if (!d) return
@@ -498,15 +599,13 @@ export const TopIconBar: React.FC = () => {
         if (Math.abs(dx) < 6) return
         d.live = true
       }
-      // Clamp to the ends of the row so it can't wander off the bar.
-      const min = d.centers[0] - d.centers[d.from]
-      const max = d.centers[d.centers.length - 1] - d.centers[d.from]
-      const cdx = Math.max(min, Math.min(max, dx))
-      const x = d.centers[d.from] + cdx
-      let to = 0, best = Infinity
-      d.centers.forEach((c, i) => { const dd = Math.abs(c - x); if (dd < best) { best = dd; to = i } })
+      const cdx = Math.max(d.min, Math.min(d.max, dx))
+      const x = d.mids[d.from] + cdx
+      // It lands after every other thing its middle has passed.
+      let to = 0
+      d.mids.forEach((c, i) => { if (i !== d.from && c < x) to++ })
       d.to = to
-      setDrag({ id: d.id, from: d.from, to, dx: cdx })
+      setDrag({ from: d.from, to, dx: cdx, step: d.step })
     }
     const up = () => {
       window.removeEventListener('pointermove', move)
@@ -521,15 +620,14 @@ export const TopIconBar: React.FC = () => {
       requestAnimationFrame(() => requestAnimationFrame(() => setSettling(false)))
       setDrag(null)
       if (d.from === d.to) return
-      const vis = order.filter(x => x !== 'cabinet' || cabinetsOn)
-      const next = vis.slice()
+      const next = row.filter(x => x !== 'cabinet' || cabinetsOn)
       const [m] = next.splice(d.from, 1)
       next.splice(d.to, 0, m)
       // Put a hidden cabinet back where it was.
-      const ci = order.indexOf('cabinet')
+      const ci = row.indexOf('cabinet')
       if (!cabinetsOn && ci >= 0) next.splice(Math.min(ci, next.length), 0, 'cabinet')
-      saveOrder(next)
-      setOrder(next)
+      saveRow(next)
+      setRow(next)
     }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
@@ -544,8 +642,8 @@ export const TopIconBar: React.FC = () => {
   const shiftFor = (i: number) => {
     if (!drag) return 0
     if (i === drag.from) return drag.dx
-    if (drag.from < drag.to && i > drag.from && i <= drag.to) return -STEP
-    if (drag.from > drag.to && i < drag.from && i >= drag.to) return STEP
+    if (drag.from < drag.to && i > drag.from && i <= drag.to) return -drag.step
+    if (drag.from > drag.to && i < drag.from && i >= drag.to) return drag.step
     return 0
   }
 
@@ -559,7 +657,7 @@ export const TopIconBar: React.FC = () => {
         top: 0,
         left: '50%',
         transform: 'translateX(-50%)',
-        display: 'flex', alignItems: 'center', gap: 8,
+        display: 'flex', alignItems: 'center', gap: GAP,
         padding: '4px 10px',
         background: '#000',
         border: '1px solid rgba(255,255,255,0.07)',
@@ -569,29 +667,44 @@ export const TopIconBar: React.FC = () => {
         zIndex: 700,
       }}
     >
-      {shown.map((id, i) => (
-        <React.Fragment key={id}>
-        {id === 'new' && i === shown.length - 1 && (
-          <div style={{ width: 1, height: TILE * 0.55, background: 'rgba(255,255,255,0.12)', margin: '0 2px' }} />
-        )}
-        <div
-          ref={id === 'effects' ? fxBtnRef : id === 'promptCard' ? pcBtnRef : id === 'new' ? ncBtnRef : undefined}
-          data-top-icon={id}
-          onPointerDown={e => onGrab(e, id)}
-          onClickCapture={swallowClickAfterDrag}
-          style={{
-            display: 'flex',
-            transform: `translateX(${shiftFor(i)}px)`,
-            transition: drag?.id === id || settling ? 'none' : 'transform 0.15s',
-            position: 'relative',
-            zIndex: drag?.id === id ? 1 : 0,
-            touchAction: 'none',
-          }}
-        >
-          {buttons[id]}
-        </div>
-        </React.Fragment>
-      ))}
+      {shown.map((id, i) => {
+        const mine = drag?.from === i
+        const lay: React.CSSProperties = {
+          display: 'flex',
+          transform: `translateX(${shiftFor(i)}px)`,
+          transition: mine || settling ? 'none' : 'transform 0.15s',
+          position: 'relative',
+          zIndex: mine ? 1 : 0,
+          touchAction: 'none',
+          flexShrink: 0,
+        }
+        if (id === '|') return (
+          <div
+            // Dividers are all alike: the nth is the nth.
+            key={'|' + shown.slice(0, i).filter(x => x === '|').length}
+            data-top-item=""
+            data-top-divider=""
+            title="Section divider — drag it along the bar; drag an icon past it to change its section"
+            onPointerDown={onGrab}
+            style={{ ...lay, width: DIV_W, height: TILE, alignItems: 'center', justifyContent: 'center', cursor: 'ew-resize' }}
+          >
+            <DividerLine lit={mine} />
+          </div>
+        )
+        return (
+          <div
+            key={id}
+            ref={id === 'effects' ? fxBtnRef : id === 'promptCard' ? pcBtnRef : id === 'new' ? ncBtnRef : undefined}
+            data-top-item=""
+            data-top-icon={id}
+            onPointerDown={onGrab}
+            onClickCapture={swallowClickAfterDrag}
+            style={lay}
+          >
+            {buttons[id]}
+          </div>
+        )
+      })}
       <EffectPalette open={fxOpen} anchorRef={fxBtnRef} onClose={closeFx} />
       <PromptCardMenu open={pcOpen} anchorRef={pcBtnRef} onClose={closePc} />
       <NewCardPalette open={ncOpen} anchorRef={ncBtnRef} onClose={closeNc} />
