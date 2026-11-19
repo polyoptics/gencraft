@@ -16,6 +16,9 @@
 //    docked to with it (utils/stickDock).
 //  - In 3D, drag its pole or base: it moves as the tab does flat (along
 //    the edge it is docked by, or off it).
+//  - Dragged (its tab flat, its pole or base in 3D) onto the world scale's
+//    icon, bottom left: its scale is copied as the world's
+//    (utils/worldScale), and it goes back where it was.
 //  - In 3D, drag a mark on its pole (a selected card's height, yellow):
 //    that card's height changes, written on its back (a model's size
 //    with it). A card with no height has its mark at the pole's top.
@@ -38,6 +41,7 @@ import type { StickSpot } from '../three/stickOverlay'
 import { stickMeasures, stickPoint, snapTab, stickMarks, setCardHeight } from './stickDock'
 import { useUnits } from '../store/unitsStore'
 import { useBoardsStore } from '../store/boardsStore'
+import { useWorldScale, overWorldScale } from './worldScale'
 import { STICK_FT, STICK_NEW_PX, SIGN_W, SIGN_H, SIGN_TEXT, stickLen, snapHeight, tabCentre, FT_PER_M } from './stickGeom'
 
 type Pt = { x: number; y: number }
@@ -108,7 +112,7 @@ const onNumber = (p: Pt, s: StickSpot) => (p.y - (s.sign.y - s.hh)) / Math.max(1
 /** Two presses on a board this close together: a double-click (ms). */
 const DOUBLE_MS = 380
 let lastPress: { id: string; t: number; x: number; y: number } | null = null
-let drag: { move: (e: PointerEvent) => void } | null = null
+let drag: { move: (e: PointerEvent) => void; drop?: (e: PointerEvent) => void } | null = null
 let eatClick = false
 let hotCursor = false
 
@@ -208,6 +212,17 @@ function onDown(e: PointerEvent) {
     checkpoint()
     return true
   }
+  // Moved over the world scale's icon it lights; let go there, its scale
+  // as it is now is the world's, and it is back where it was.
+  const over = (ev: PointerEvent) => useWorldScale.getState().setHot(overWorldScale(ev.clientX, ev.clientY))
+  const drop = (ev: PointerEvent) => {
+    useWorldScale.getState().setHot(false)
+    if (!moved || ev.type !== 'pointerup' || !overWorldScale(ev.clientX, ev.clientY)) return
+    const now = sticksNow()[s0.id]
+    if (!now) return
+    useWorldScale.getState().setPer(now.per)
+    useNotesStore.getState().updateStick(s0.id, { x: s0.x, y: s0.y })
+  }
   if (flat) {
     // The tab goes where the cursor takes it, and onto a card's edge it
     // is brought near.
@@ -217,7 +232,9 @@ function onDown(e: PointerEvent) {
         if (!begin(ev)) return
         const x = p0.x + (ev.clientX - x0) / zoom, y = p0.y + (ev.clientY - y0) / zoom
         useNotesStore.getState().updateStick(s0.id, snapTab(x, y))
+        over(ev)
       },
+      drop,
     }
   } else if (hit.part === 'top') {
     // The screen step of one canvas unit up the pole, at the press.
@@ -250,7 +267,9 @@ function onDown(e: PointerEvent) {
         if (!begin(ev)) return
         const p = canvasPointUnder(f0.x + ev.clientX - x0, f0.y + ev.clientY - y0)
         if (p) useNotesStore.getState().updateStick(s0.id, snapTab(p.cx - (c0.x - p0.x), p.cy - (c0.y - p0.y)))
+        over(ev)
       },
+      drop,
     }
   }
 }
@@ -273,6 +292,7 @@ function onMove(e: PointerEvent) {
 function onUp(e: PointerEvent) {
   if (!drag) return
   claim(e)
+  drag.drop?.(e)
   drag = null
   setTimeout(() => { eatClick = false }, 0)
 }

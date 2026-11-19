@@ -13,18 +13,24 @@
 //    (altCamera dragCube);
 //  - Camera Lens: the view's lens, typed in mm, and Ortho, its own
 //    on/off: a very long lens, near-flat (tiltStore lensMm / ortho);
+//  - Fade distance: how much of the world stays round the middle of a
+//    side view, in feet of the world scale (metres, the app in metric),
+//    and Fade, its own on/off (utils/worldScale; Brian 2026-11-19);
 //  - the panel (NotesPanel) hangs at CAMERA_DOCK_BOTTOM, open or folded.
 
 import React, { useEffect, useRef, useState } from 'react'
 import { useTiltStore, lensMmOf, LENS_MM_MIN, LENS_MM_MAX, ORTHO_MM } from '../../../store/tiltStore'
+import { useWorldScale, FADE_FT_MIN, FADE_FT_MAX } from '../../../utils/worldScale'
+import { useUnits } from '../../../store/unitsStore'
+import { FT_PER_M } from '../../../utils/stickGeom'
 import { jumpView, dragCube, cubeWasDragged, type CubeFace } from './altCamera'
 
 const SIZE = 54, HALF = SIZE / 2
 /** The column: where it is docked (the panel's own right edge, clear of
  *  the top bar), and its two boxes' sizes. */
-const DOCK_TOP = 84, DOCK_RIGHT = 52, DOCK_W = 122, CUBE_H = 112, LENS_H = 58, DOCK_GAP = 6
+const DOCK_TOP = 84, DOCK_RIGHT = 52, DOCK_W = 122, CUBE_H = 112, LENS_H = 58, FADE_H = 58, DOCK_GAP = 6
 /** Where the panel docked under the column starts, from the window's top. */
-export const CAMERA_DOCK_BOTTOM = DOCK_TOP + CUBE_H + DOCK_GAP + LENS_H + DOCK_GAP
+export const CAMERA_DOCK_BOTTOM = DOCK_TOP + CUBE_H + DOCK_GAP + LENS_H + DOCK_GAP + FADE_H + DOCK_GAP
 const BOX: React.CSSProperties = {
   width: DOCK_W, boxSizing: 'border-box', flexShrink: 0,
   background: 'rgba(12,13,22,0.94)', border: '1px solid rgba(255,255,255,0.09)', borderRadius: 12,
@@ -69,9 +75,40 @@ const ViewLens: React.FC = () => {
   )
 }
 
+/** The fade distance, typed as the lens is: feet of the world scale, or
+ *  metres with the app in metric. */
+const FadeDistance: React.FC = () => {
+  const ft = useWorldScale(s => s.fadeFt)
+  const metric = useUnits(s => s.metric)
+  const shown = String(Math.round((metric ? ft / FT_PER_M : ft) * 10) / 10)
+  const [draft, setDraft] = useState<string | null>(null)
+  const commit = () => {
+    const v = draft === null ? NaN : parseFloat(draft.replace(',', '.'))
+    setDraft(null)
+    if (!Number.isFinite(v) || draft!.trim() === shown) return
+    useWorldScale.getState().setFadeFt(metric ? v * FT_PER_M : v)
+  }
+  return (
+    <input type="text" inputMode="decimal" value={draft ?? shown} data-fade-distance
+      title={`How far round the middle of a side view stays in the 3D view, in ${metric ? 'metres' : 'feet'} of the world scale: type a number (${FADE_FT_MIN} to ${FADE_FT_MAX} ft). It is a size on the canvas: zooming does not change what is inside it. The world scale is set by dragging a measuring stick onto its icon, bottom left`}
+      onChange={e => setDraft(e.target.value)} onFocus={e => e.target.select()} onBlur={commit}
+      onKeyDown={e => {
+        e.stopPropagation()
+        if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+        else if (e.key === 'Escape') { setDraft(null); requestAnimationFrame(() => (e.target as HTMLInputElement).blur()) }
+      }}
+      style={{
+        width: 40, boxSizing: 'border-box', padding: '3px 5px', borderRadius: 6, fontSize: 11, fontFamily: 'ui-monospace, monospace',
+        textAlign: 'right', color: '#e8f0ff', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', outline: 'none',
+      }} />
+  )
+}
+
 export const ViewCube: React.FC = () => {
   const cubeRef = useRef<HTMLDivElement>(null)
   const ortho = useTiltStore(s => s.ortho)
+  const fadeOn = useWorldScale(s => s.fadeOn)
+  const metric = useUnits(s => s.metric)
   const [over, setOver] = useState<CubeFace | null>(null)
   // Turned straight on the element, every frame the view moves.
   useEffect(() => {
@@ -137,6 +174,25 @@ export const ViewCube: React.FC = () => {
               fontSize: 11, padding: '3px 5px', cursor: 'pointer', flexShrink: 0,
             }}
           >Ortho</button>
+        </div>
+      </div>
+      <div data-camera-fade style={{ ...BOX, height: FADE_H, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 5, padding: '0 7px' }}>
+        <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.6, color: 'rgba(255,255,255,0.62)', whiteSpace: 'nowrap' }}>FADE DISTANCE</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <FadeDistance />
+          <span style={{ width: 12 }}>{metric ? 'm' : 'ft'}</span>
+          <span style={{ flex: 1 }} />
+          <button
+            aria-pressed={fadeOn}
+            onClick={() => useWorldScale.getState().setFadeOn(!fadeOn)}
+            title="Fade: on or off. On, coming round to a side view in 3D, what is further from the middle of the view than the distance typed here fades out. Off, everything stays"
+            style={{
+              background: fadeOn ? 'rgba(120,170,255,0.25)' : 'transparent',
+              border: '1px solid rgba(255,255,255,0.14)', borderRadius: 6,
+              color: fadeOn ? '#dfe8ff' : 'rgba(255,255,255,0.6)',
+              fontSize: 11, padding: '3px 5px', cursor: 'pointer', flexShrink: 0,
+            }}
+          >Fade</button>
         </div>
       </div>
     </div>

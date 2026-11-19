@@ -9,6 +9,12 @@
 // made, so the State cards' output decks reform; drag back and they go back.
 // Only output decks change what they show. Nothing else moves.
 //
+// Compact (Brian 2026-11-19: "the world clock is going to be shrunk down
+// to its clock face icon, and the text will be in mouse over"): the clock
+// is its face alone, and what it said is in its hover text. To its left is
+// the world scale's icon (utils/worldScale), "an icon and no text": a
+// measuring stick dragged onto it gives the world its scale.
+//
 // The control and the bar are a fixed size and never move: the same in the
 // flat and the tilted view. The stops on the bar are spaced evenly, in story
 // order, however far apart they are on the storyline.
@@ -21,10 +27,12 @@ import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { scrubStoryline, storyClock } from '../Canvas/StorylineLayer'
 import { MarkTags } from '../Layers/StateFace'
 import { useWorldClockUi } from '../../utils/worldClock'
+import { useWorldScale } from '../../utils/worldScale'
 import type { StateMark } from '../../utils/stateCard'
 
 const TONE = '#9fe0ff'
-const CONTROL_W = 196, JUMP_W = 30
+const SCALE_W = 40, FACE_W = 40, JUMP_W = 30, GAP = 6
+const CONTROL_LEFT = 12 + SCALE_W + GAP, CONTROL_W = FACE_W + JUMP_W
 /** The control and its bar are one row, above the hint line and the tilted
  *  view's bar, so nothing is covered in either view. */
 const ROW_BOTTOM = 56, ROW_H = 50
@@ -58,6 +66,8 @@ export const WorldClock: React.FC = () => {
   const node = useFreeNodeStore(s => (lineId ? s.nodes[lineId] : undefined))
   const groups = useBoardsStore(s => s.groups)
   const hot = useWorldClockUi(s => s.hot)
+  const scaleHot = useWorldScale(s => s.hot)
+  const scaleSet = useWorldScale(s => s.per !== null)
   const d = node?.type === 'storyline' ? node.storyline : undefined
   const clock = d?.dots?.length ? storyClock(d, groups) : null
   const name = d ? (d.title?.trim() || 'Storyline') : ''
@@ -71,8 +81,19 @@ export const WorldClock: React.FC = () => {
   const lit = open || hot
   return (
     <>
+      <div data-world-scale-drop
+        title={`World scale: how big a foot is on the canvas, for the whole world. ${scaleSet ? 'Set from a measuring stick.' : 'Not set yet.'} Drag a measuring stick onto here to use its scale; the stick goes back where it was. It is a copy: scaling that stick afterwards changes nothing here until it is dropped again. The 3D view's fade distance is measured in it. Lit while it is set.`}
+        style={{
+          position: 'absolute', left: 12, bottom: ROW_BOTTOM, width: SCALE_W, height: ROW_H, zIndex: 950, boxSizing: 'border-box',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8, userSelect: 'none', cursor: 'default',
+          background: scaleSet || scaleHot ? '#1b2a3f' : '#13141f',
+          border: scaleHot ? `1px solid ${TONE}` : scaleSet ? '1px solid rgba(98,160,217,0.5)' : '1px solid rgba(255,255,255,0.12)',
+          boxShadow: scaleHot ? `0 0 10px ${TONE}` : '0 2px 8px rgba(0,0,0,0.45)',
+        }}>
+        <span style={{ fontSize: 17, lineHeight: 1, opacity: scaleSet || scaleHot ? 1 : 0.6 }}>📏</span>
+      </div>
       <div data-world-clock-drop style={{
-        position: 'absolute', left: 12, bottom: ROW_BOTTOM, width: CONTROL_W, height: ROW_H, zIndex: 950,
+        position: 'absolute', left: CONTROL_LEFT, bottom: ROW_BOTTOM, width: CONTROL_W, height: ROW_H, zIndex: 950,
         display: 'flex', borderRadius: 8, overflow: 'hidden', userSelect: 'none',
         background: '#13141f',
         border: hot ? `1px solid ${TONE}` : lit ? '1px solid rgba(98,160,217,0.5)' : '1px solid rgba(255,255,255,0.12)',
@@ -82,25 +103,20 @@ export const WorldClock: React.FC = () => {
           data-world-clock-toggle
           onClick={() => useCanvasStore.getState().setWorldClockOpen(!open)}
           aria-pressed={open}
-          title="World clock: one storyline is the world's timeline, and every State card follows its time marker. Drag a storyline by its handle onto here to use it. Click to show or hide the bar; lit while it is out."
+          title={`World clock: ${d ? name : 'no storyline yet, drag a storyline here'}. One storyline is the world's timeline, and every State card follows its time marker. Drag a storyline by its handle onto here to use it. Click to show or hide the bar; lit while it is out.`}
           style={{
-            width: CONTROL_W - JUMP_W, height: '100%', padding: '0 8px', display: 'flex', alignItems: 'center', gap: 7,
+            width: FACE_W, height: '100%', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
             background: lit ? 'rgba(98,160,217,0.22)' : 'transparent', border: 'none', cursor: 'pointer',
             color: lit ? '#9ecbff' : 'rgba(255,255,255,0.6)', fontFamily: 'inherit', textAlign: 'left',
           }}
         >
           <span style={{ fontSize: 17, lineHeight: 1 }}>🕰️</span>
-          <span style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: 1 }}>
-            <span style={{ fontSize: 11, fontWeight: 700, lineHeight: 1.2 }}>World clock</span>
-            <span data-world-clock-name style={{ fontSize: 10, lineHeight: 1.2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-              color: d ? 'rgba(255,255,255,0.85)' : 'rgba(255,255,255,0.35)' }}>{d ? name : 'Drag a storyline here'}</span>
-          </span>
         </button>
         <button
           data-world-clock-jump
           onClick={jump}
           disabled={!d}
-          title="Go to the world's storyline on the canvas"
+          title={d ? `Go to the world's storyline on the canvas: ${name}` : "Go to the world's storyline on the canvas (none yet)"}
           style={{
             width: JUMP_W, height: '100%', padding: 0, background: 'transparent', border: 'none',
             borderLeft: '1px solid rgba(255,255,255,0.1)', cursor: d ? 'pointer' : 'default',
@@ -149,7 +165,7 @@ const ClockBar: React.FC<{
   const slot = 100 / (inner.length + 1)
   return (
     <div data-world-clock-bar style={{
-      position: 'absolute', left: 12 + CONTROL_W + 8, right: 60, bottom: ROW_BOTTOM, height: ROW_H, zIndex: 950, userSelect: 'none',
+      position: 'absolute', left: CONTROL_LEFT + CONTROL_W + 8, right: 60, bottom: ROW_BOTTOM, height: ROW_H, zIndex: 950, userSelect: 'none',
       background: '#13141f', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 8,
       boxShadow: '0 2px 8px rgba(0,0,0,0.45)',
     }}>

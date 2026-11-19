@@ -27,6 +27,7 @@ import { targetMiddle, pickedPoints } from '../../../utils/pathEdit'
 import type { PathFrame, PathHit } from '../../../three/pathOverlay'
 import type { StickFrame, StickSpot } from '../../../three/stickOverlay'
 import { stickMeasures, stickMarks, seenHeight } from '../../../utils/stickDock'
+import { useWorldScale, worldPer } from '../../../utils/worldScale'
 import { useUnits } from '../../../store/unitsStore'
 import { curveRuns, pointFrames, withLayers } from '../../../utils/curveGeom'
 import { PinLabels } from '../../Notes/PinLabels'
@@ -143,13 +144,15 @@ const fadeShown = () => {
  *  fade away all the surrounding cards outside so by 90 they're completely
  *  gone ... about 15 feet radius around the center of my view"): from
  *  `from` degrees of tilt to edge-on, what lies wholly further from the
- *  middle than `view` of the view's width fades out, over a soft edge
- *  `soft` of that wide. By the view alone: it was 15 feet as the nearest
- *  measuring stick counts them, so a stick scaled up to measure something
- *  huge drew the circle in round it (Brian 2026-11-19: "I thought it was
- *  centered around where the camera is ... It doesn't seem to be doing it
- *  in my favor"). Half the view's width is what his 15 feet came to on the
- *  board he asked on; zooming in or out takes it with the view.
+ *  middle than the fade distance fades out, over a soft edge `soft` of
+ *  that wide. The distance is feet of the world scale (utils/worldScale:
+ *  a measuring stick's scale, copied when he drops it on the icon by the
+ *  world clock; the number and its on/off are under Camera Lens), so it
+ *  is a size on the canvas. Never a live stick's: it was the nearest
+ *  stick's feet, and a stick scaled up to measure something huge drew the
+ *  circle in round it ("It doesn't seem to be doing it in my favor"); nor
+ *  the view's width, which let more in zoomed out ("never really the
+ *  intent").
  *  From 70 now (Brian 2026-11-19: "let's start the fade out from 70"), on
  *  an ease-out: quick away from fully there, then slower and slower into
  *  fully gone ("it should become transparent faster, spend more time in
@@ -157,7 +160,7 @@ const fadeShown = () => {
  *  opaque. And slower: slow down and be nice"). */
 /** The canvas's own dark, which a far slab's sides go into. */
 const FAR_DARK = 0x12131f
-const FAR = { from: 70, view: 0.5, soft: 0.2 }
+const FAR = { from: 70, soft: 0.2 }
 type Far = { a: number; cx: number; cy: number; r: number }
 /** Under this share of itself a far thing is gone: not drawn (its slab,
  *  its model), not pressed, not selected. */
@@ -166,10 +169,10 @@ const FAR_GONE = 0.02
  *  the canvas (flat px from the host's centre) and the radius, px. Null
  *  below `from`, and looking through a camera. */
 function farNow(): Far | null {
-  const ts = useTiltStore.getState()
+  const ts = useTiltStore.getState(), ws = useWorldScale.getState()
   // (Past edge-on, looking up from low down or from under the ground, it
   // stays gone: Brian 2026-11-19, "past 90 the BG nodes stay faded off".)
-  if (ts.tilt <= FAR.from || useManip.getState().through) return null
+  if (!ws.fadeOn || ts.tilt <= FAR.from || useManip.getState().through) return null
   const x = Math.min(1, (ts.tilt - FAR.from) / (TILT_MAX - FAR.from)), a = 1 - (1 - x) ** 3
   // The middle: the ground in the middle of the screen across, at the
   // height on the screen of the point the view turns about (straight
@@ -179,8 +182,11 @@ function farNow(): Far | null {
   const sp = ts.spin * Math.PI / 180
   const c = (ts.tilt < 90 ? unprojectTilt(0, ts.shiftY, ts.tilt, ts.spin, ts.shiftX, ts.shiftY) : null)
     ?? { x: -ts.shiftX * Math.cos(sp), y: ts.shiftX * Math.sin(sp) }
-  // (At the point the view turns about, a flat px is a px of the screen.)
-  return { a, cx: c.x, cy: c.y, r: FAR.view * (models.root?.clientWidth ?? 0) }
+  // So many feet of the world (utils/worldScale), a size on the canvas:
+  // zooming does not change what is inside it (Brian 2026-11-19: "the
+  // zone where we see tends to grow and shrink depending on my zoom level.
+  // And that was never really the intent").
+  return { a, cx: c.x, cy: c.y, r: ws.fadeFt * worldPer(ws) * (useCanvasStore.getState().zoom || 1) }
 }
 /** How much of a thing shows, 0..1: its box by its centre, flat px from
  *  the host's centre. Whole while any of it is within the radius. */
@@ -390,7 +396,7 @@ const frameState = (): TiltFrameState => {
 /** Bumped whenever the curves, what is selected of them, the one being
  *  drawn or the part under the cursor changes: the 3D view draws again. */
 let pathSig = 0
-for (const st of [useNotesStore, useNotesUi, useCurveDraft, usePathHot, useStickUi, useUnits]) st.subscribe(() => { pathSig++ })
+for (const st of [useNotesStore, useNotesUi, useCurveDraft, usePathHot, useStickUi, useUnits, useWorldScale]) st.subscribe(() => { pathSig++ })
 // (A stick marks the selected cards of its group.)
 useBoardsStore.subscribe((s, p) => { if (s.selectedGroupIds !== p.selectedGroupIds && Object.keys(useNotesStore.getState().sticks ?? {}).length) pathSig++ })
 
