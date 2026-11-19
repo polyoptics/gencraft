@@ -96,6 +96,9 @@ body {
    flickered on and off (Brian 2026-11-01: "the viewer flickers"). A press
    on bare ground reaches the canvas behind, which is bare ground too. */
 [data-tilt-stage="world"][data-tilted] { pointer-events: none; }
+/* A far thing the side view has faded right out (TiltModels fadeFar) is
+   not there to be pressed: the place it was is empty ground. */
+[data-far-gone], [data-far-gone] * { pointer-events: none !important; }
 [data-tilt-stage="world"][data-tilted] > div[style*="scale("] { pointer-events: auto; }
 
 /* A selected loop strip's ring (FreeNode data-sel-ring): plain colour laid

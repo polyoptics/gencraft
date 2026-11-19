@@ -27,6 +27,7 @@ import { targetMiddle, pickedPoints } from '../../../utils/pathEdit'
 import type { PathFrame, PathHit } from '../../../three/pathOverlay'
 import type { StickFrame, StickSpot } from '../../../three/stickOverlay'
 import { stickMeasures, stickMarks, seenHeight } from '../../../utils/stickDock'
+import { useUnits } from '../../../store/unitsStore'
 import { curveRuns, pointFrames, withLayers } from '../../../utils/curveGeom'
 import { PinLabels } from '../../Notes/PinLabels'
 import { gradeFor } from '../../../utils/modelGrade'
@@ -158,6 +159,9 @@ const fadeShown = () => {
 const FAR_DARK = 0x12131f
 const FAR = { from: 70, view: 0.5, soft: 0.2 }
 type Far = { a: number; cx: number; cy: number; r: number }
+/** Under this share of itself a far thing is gone: not drawn (its slab,
+ *  its model), not pressed, not selected. */
+const FAR_GONE = 0.02
 /** How far that has gone and where: `a` 0..1, the middle of the view on
  *  the canvas (flat px from the host's centre) and the radius, px. Null
  *  below `from`, and looking through a camera. */
@@ -197,6 +201,12 @@ function fadeFar(f: Far | null, host: HTMLElement | null) {
     const was = had && el.style.opacity === had.wrote ? had.was : el.style.opacity
     const wrote = String(+((was === '' ? 1 : parseFloat(was) || 0) * o).toFixed(3))
     if (el.style.opacity !== wrote) el.style.opacity = wrote
+    // Faded right out, it is not there to be pressed or swept up by a
+    // drag-select either (index.css [data-far-gone], marqueeSelect): a
+    // band round the near things took in every unseen card behind them,
+    // and F then framed those too (Brian 2026-11-19, "it's trying to fit
+    // something else in the frame too ... nothing selected there").
+    if (o < FAR_GONE) { if (!el.dataset.farGone) el.dataset.farGone = '1' } else if (el.dataset.farGone) delete el.dataset.farGone
     next.set(el, { was, wrote })
   }
   if (f && host) {
@@ -254,7 +264,11 @@ function fadeFar(f: Far | null, host: HTMLElement | null) {
       }
     }
   }
-  for (const [el, had] of farFaded) if (!next.has(el) && el.style.opacity === had.wrote) el.style.opacity = had.was
+  for (const [el, had] of farFaded) {
+    if (next.has(el)) continue
+    if (el.style.opacity === had.wrote) el.style.opacity = had.was
+    if (el.dataset.farGone) delete el.dataset.farGone
+  }
   farFaded = next
 }
 /** Whether the view is in 3D: tipped, or looking through a camera. */
@@ -376,7 +390,7 @@ const frameState = (): TiltFrameState => {
 /** Bumped whenever the curves, what is selected of them, the one being
  *  drawn or the part under the cursor changes: the 3D view draws again. */
 let pathSig = 0
-for (const st of [useNotesStore, useNotesUi, useCurveDraft, usePathHot, useStickUi]) st.subscribe(() => { pathSig++ })
+for (const st of [useNotesStore, useNotesUi, useCurveDraft, usePathHot, useStickUi, useUnits]) st.subscribe(() => { pathSig++ })
 // (A stick marks the selected cards of its group.)
 useBoardsStore.subscribe((s, p) => { if (s.selectedGroupIds !== p.selectedGroupIds && Object.keys(useNotesStore.getState().sticks ?? {}).length) pathSig++ })
 
@@ -394,7 +408,9 @@ function soloFrame() {
 
 /** The measuring sticks for the 3D view (three/stickOverlay). */
 function stickFrame(): StickFrame | undefined {
-  const sticks = Object.values(notesNow.sticks ?? {})
+  // (They read in the app's units, store/unitsStore.)
+  const metric = useUnits.getState().metric || undefined
+  const sticks = Object.values(notesNow.sticks ?? {}).map(s => s.metric === metric ? s : { ...s, metric })
   if (!sticks.length) return undefined
   const { pan, zoom } = useCanvasStore.getState()
   const W = models.root?.clientWidth ?? 0, H = models.root?.clientHeight ?? 0
@@ -725,7 +741,7 @@ export const TiltModels: React.FC = () => {
       models.stickSpots = () => {
         const r = root.getBoundingClientRect()
         const at = (p: { x: number; y: number }) => ({ x: p.x + r.left, y: p.y + r.top })
-        return v.stickSpots().map(s => ({ ...s, foot: at(s.foot), top: at(s.top), sign: at(s.sign) }))
+        return v.stickSpots().map(s => ({ ...s, foot: at(s.foot), top: at(s.top), sign: at(s.sign), marks: s.marks.map(m => ({ ...m, at: at(m.at) })) }))
       }
       models.pathPx = p => {
         const r = root.getBoundingClientRect()
@@ -3181,12 +3197,20 @@ function collectTargets(W: number, H: number): TiltTarget[] {
  *  clears the selection, as on bare flat canvas. */
 export function marqueeSelect(m: { x0: number; y0: number; x1: number; y1: number }, add: boolean) {
   const fs = useFreeNodeStore.getState(), bs = useBoardsStore.getState()
+  // A press on bare ground lets go of everything picked, whether it then
+  // drags a band or not, as flat (InfiniteCanvas): cards, tiles, blocks,
+  // bars, a fanned deck's pick (Brian 2026-11-19, "if I blank drag-select
+  // in an empty area of the canvas that should clear all of my
+  // selections"). A band over nothing left the bars and blocks picked.
+  if (!add) {
+    bs.clearAllSelections()
+    useCanvasStore.getState().clearAllDeckPortals()
+    if (useCanvasStore.getState().selectedBlockBoardIds.length) useCanvasStore.getState().clearSelectedBlockBoardIds()
+  }
   if (Math.abs(m.x1 - m.x0) < 4 && Math.abs(m.y1 - m.y0) < 4) {
     if (add) return
     fs.setFreeSelection([])
     bs.clearGroupSelection()
-    bs.clearAllSelections()
-    useCanvasStore.getState().clearAllDeckPortals()
     return
   }
   const l = Math.min(m.x0, m.x1), r = Math.max(m.x0, m.x1), t = Math.min(m.y0, m.y1), b = Math.max(m.y0, m.y1)
@@ -3196,8 +3220,9 @@ export function marqueeSelect(m: { x0: number; y0: number; x1: number; y1: numbe
   }
   const ids = (sel: string) => Array.from(document.querySelectorAll<HTMLElement>(sel)).filter(hits).map(el => el.dataset.id!)
   // Storylines: the points covered, or a storyline covered whole.
-  const nodes = [...ids('[data-tilt-stage] [data-freenode][data-id]:not([data-pinned])'), ...selectStorylinesInBox(l, t, r, b, add)]
-  const cards = ids('[data-tilt-stage] [data-group-card][data-id]')
+  // (Not what the far fade has taken right out of sight: see fadeFar.)
+  const nodes = [...ids('[data-tilt-stage] [data-freenode][data-id]:not([data-pinned]):not([data-far-gone])'), ...selectStorylinesInBox(l, t, r, b, add)]
+  const cards = ids('[data-tilt-stage] [data-group-card][data-id]:not([data-far-gone])')
   fs.setFreeSelection(add ? [...new Set([...fs.selectedIds, ...nodes])] : nodes)
   bs.setSelectedGroups(add ? [...new Set([...bs.selectedGroupIds, ...cards])] : cards)
 }
