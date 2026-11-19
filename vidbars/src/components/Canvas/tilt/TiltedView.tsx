@@ -1,4 +1,4 @@
-import { CAMERA_DOCK_W, CAMERA_DOCK_BOTTOM, ZOOM_BAR_W, DOCK_SLIDE, DOCK_LINE } from './ViewCube'
+import { CAMERA_DOCK_W, ZOOM_BAR_W, DOCK_SLIDE, DOCK_LINE } from './ViewCube'
 import { useZoomZonesStore } from '../../../store/zoomZonesStore'
 import React, { useEffect, useRef, useState } from 'react'
 import { dataKey, standsIn } from '../../../utils/area3dScene'
@@ -936,8 +936,8 @@ export const TiltedView: React.FC = () => {
     color: active ? '#dfe8ff' : 'rgba(255,255,255,0.6)',
     fontSize: 11, padding: '3px 8px', cursor: 'pointer', textAlign: 'left', flexShrink: 0,
   })
-  /** The tags' top: clear of the top bar. */
-  const TAGS_TOP = 80
+  /** The tags' top: the view cube's, hard under the app's header (Brian 2026-11-19: "top-anchored to the top right against the view cube"). */
+  const TAGS_TOP = 38
   /** One column of the tags. */
   const col: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 4, padding: 6, alignItems: 'stretch' }
   const zoomBar = useZoomZonesStore(z => z.barOpen)
@@ -969,9 +969,9 @@ export const TiltedView: React.FC = () => {
         data-tilt-tags
         onPointerDown={e => e.stopPropagation()}
         style={{
-          position: 'fixed', top: TAGS_TOP, right: CAMERA_DOCK_W + (zoomBar ? ZOOM_BAR_W : 0), height: CAMERA_DOCK_BOTTOM - TAGS_TOP,
+          position: 'fixed', top: TAGS_TOP, right: CAMERA_DOCK_W + (zoomBar ? ZOOM_BAR_W : 0),
           transition: `right ${DOCK_SLIDE}`, boxSizing: 'border-box', display: 'flex',
-          background: 'rgb(12,13,22)', border: '1px solid rgba(255,255,255,0.09)', borderRight: 'none', borderRadius: '10px 0 0 10px',
+          background: 'rgb(12,13,22)', border: '1px solid rgba(255,255,255,0.09)', borderRight: 'none', borderTop: 'none', borderRadius: '0 0 0 10px',
           color: 'rgba(255,255,255,0.5)', fontSize: 11, cursor: 'default', userSelect: 'none',
           whiteSpace: 'nowrap', pointerEvents: 'auto',
         }}
