@@ -134,7 +134,10 @@ export const ViewCube: React.FC = () => {
   const ortho = useTiltStore(s => s.ortho)
   const fadeOn = useWorldScale(s => s.fadeOn)
   const metric = useUnits(s => s.metric)
-  const panel = useNotesUi(s => s.open)
+  // The panel under it, as wide as the column or wider (open): the column's
+  // bottom edge is the panel's top line. Folded to its icons, the panel is
+  // narrower, and the column keeps its own bottom edge and corner.
+  const panel = useNotesUi(s => s.open && !s.collapsed)
   const zoomBar = useZoomZonesStore(s => s.barOpen)
   const [over, setOver] = useState<CubeFace | null>(null)
   // Turned straight on the sides, every frame the view moves. Each side
