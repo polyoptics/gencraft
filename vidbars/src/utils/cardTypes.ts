@@ -64,6 +64,9 @@ export interface CardDetail {
   link?: DetailLink
   /** A long value folded to one line on the card's back. */
   collapsed?: boolean
+  /** Linked to a card, and a chip on the card's front that shows that card
+   *  there (components/Layers/DetailChips). Off unless switched on. */
+  onFace?: true
 }
 
 export type CardType = 'element' | 'character' | 'faction' | 'family' | 'location' | 'prop' | 'audio' | 'scene' | 'event' | 'prompt' | 'note' | 'state' | 'area3d' | 'style'

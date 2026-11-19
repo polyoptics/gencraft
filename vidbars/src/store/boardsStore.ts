@@ -154,6 +154,9 @@ export interface ProjectGroup {
   /** Hearted (utils/favorites): 1 a heart, 2 the standout. A closed deck
    *  with hearts in it shows only its hearted cards on its face. */
   fav?: 1 | 2
+  /** The detail whose chip is lit on the face: the face shows that
+   *  detail's card (components/Layers/DetailChips). A view. */
+  faceDetail?: string
   /** A loop strip's result card: the card it was made from. They step
    *  through their pictures together (utils/railCards followFaces). */
   railSource?: string

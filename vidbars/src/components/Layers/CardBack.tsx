@@ -1122,6 +1122,23 @@ export const CardBack: React.FC<{
                     }}
                   >▾</button>
                 )}
+                {/* A detail that shows a card: a chip for it on the front,
+                    or not (lit: on the front). */}
+                {!own && !rank && d.link && !d.link.detail && !d.link.count && !(editing?.id === d.id) && (
+                  <button
+                    type="button"
+                    data-card-detail-front={d.onFace ? 'on' : 'off'}
+                    title="Show as a chip on the front of the card (lit: on the front)"
+                    onPointerDown={stopPress}
+                    onDoubleClick={e => e.stopPropagation()}
+                    onClick={e => { e.stopPropagation(); write(cur().map(x => x.id !== d.id ? x : d.onFace ? (({ onFace: _f, ...rest }) => rest)(x) : { ...x, onFace: true })) }}
+                    style={{
+                      position: 'absolute', right: 47, top: 0, height: 9, padding: '0 3px', lineHeight: '9px',
+                      fontSize: 6.5, fontWeight: 700, borderRadius: 3, border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+                      background: d.onFace ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.3)', color: d.onFace ? '#14161f' : ink, opacity: d.onFace ? 1 : 0.55,
+                    }}
+                  >FRONT</button>
+                )}
                 {/* A long value: fold it to one line, or open it again. */}
                 {longRows.has(d.id) && !(editing?.id === d.id) && (
                   <button

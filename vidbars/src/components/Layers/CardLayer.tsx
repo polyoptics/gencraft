@@ -39,6 +39,7 @@ import { NLETimelineHeader, NLE_HEADER_CANVAS_H, headerExtend as computeHeaderEx
 import { HeroImageLayer } from './HeroImageLayer'
 import { CardBack, FlipButton, backColor, useCardFlip } from './CardBack'
 import { HeartButton } from './HeartButton'
+import { DetailChips, DetailFace } from './DetailChips'
 import { favOf, stepFav } from '../../utils/favorites'
 import { liveLocks, lockOf, withLockMates, keepOf, keptIn } from '../../utils/deckLock'
 import { SceneFace } from './SceneFace'
@@ -1604,6 +1605,9 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
           ? <FaceVideo key={`${faceVideo.url}|${faceVideo.clipIn ?? ""}|${faceVideo.clipOut ?? ""}`} media={faceVideo} cardId={group.id} scale={overviewScale(zoom)} />
           : shownHero && <HeroImageLayer heroImage={shownHero} transform={group.cardHeroTransform} />}
         {faceAudio && <FaceAudio key={faceAudio.url} media={faceAudio} scale={overviewScale(zoom)} />}
+        {/* A lit detail chip: that detail's card, over the card's own face. */}
+        <DetailFace group={group} boards={boards} scale={overviewScale(zoom)} top={headerPad} />
+        <DetailChips group={group} scale={overviewScale(zoom)} visible={isHovered} />
         {/* Step the face through the card's blocks, in reading order. */}
         {isHovered && steps.count > 1 && !group.cut && (
           <>
@@ -2456,6 +2460,9 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
             ? <FaceVideo key={`${faceVideo.url}|${faceVideo.clipIn ?? ""}|${faceVideo.clipOut ?? ""}`} media={faceVideo} cardId={anchorGroup.id} faceOf={faceCard.id} scale={overviewScale(zoom)} />
             : (deckFx.shown ?? heroImage) && <HeroImageLayer heroImage={(deckFx.shown ?? heroImage)!} transform={faceCard.cardHeroTransform} />}
           {faceAudio && !turnedClear(anchorGroup) && <FaceAudio key={faceAudio.url} media={faceAudio} scale={overviewScale(zoom)} />}
+          {/* The front card's detail chips: a lit one shows its card here. */}
+          {!turnedClear(anchorGroup) && !anchorGroup.flipped && <DetailFace group={anchorGroup} boards={boards} scale={overviewScale(zoom)} top={headerPad} />}
+          {!turnedClear(anchorGroup) && !anchorGroup.flipped && <DetailChips group={anchorGroup} scale={overviewScale(zoom)} visible={isHovered} />}
           {/* Step the face through every card's pictures, in deck order. */}
           {isHovered && deckFace.entries.length > 1 && !turnedClear(anchorGroup) && (
             <>
