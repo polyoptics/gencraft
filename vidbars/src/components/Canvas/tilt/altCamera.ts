@@ -115,6 +115,51 @@ export function jumpView(face: CubeFace) {
   jumpRaf = requestAnimationFrame(tick)
 }
 
+/** Degrees the view turns per px of a drag on the view cube: it is
+ *  small, so across it is about a quarter turn. */
+const CUBE_DEG = 1.2
+/** Px a press on the cube moves before it is a drag, not a click. */
+const CUBE_SLOP = 4
+let cubeDragged = false
+/** Did the press that just ended on the cube drag the camera? (Then its
+ *  click is not a jump.) */
+export const cubeWasDragged = () => cubeDragged
+/** A press on the view cube that drags moves the camera (Brian
+ *  2026-11-19: "If I drag the view cube, I should be dragging the
+ *  camera"): the cube is held like the ground under an Alt-drag, so drag
+ *  up tips the view back, drag sideways turns it. On the window, so it
+ *  goes on through the flat view (where the cube is not shown) and back. */
+export function dragCube(e: { clientX: number; clientY: number; button: number }) {
+  cubeDragged = false
+  if (e.button !== 0) return
+  const x0 = e.clientX, y0 = e.clientY
+  let last = { x: x0, y: y0 }
+  const onMove = (ev: PointerEvent) => {
+    if (!cubeDragged) {
+      if (Math.hypot(ev.clientX - x0, ev.clientY - y0) < CUBE_SLOP) return
+      cubeDragged = true
+      cancelAnimationFrame(jumpRaf)
+      camMode = '3d'
+      last = { x: ev.clientX, y: ev.clientY }
+    }
+    const s = useTiltStore.getState()
+    s.setView(s.tilt - (ev.clientY - last.y) * CUBE_DEG, s.spin - (ev.clientX - last.x) * CUBE_DEG, 0)
+    last = { x: ev.clientX, y: ev.clientY }
+  }
+  const onUp = () => {
+    window.removeEventListener('pointermove', onMove, true)
+    window.removeEventListener('pointerup', onUp, true)
+    window.removeEventListener('pointercancel', onUp, true)
+    if (!cubeDragged) return
+    // Let go near straight on, it settles flat, as an Alt-drag does.
+    const s = useTiltStore.getState()
+    if (offFlat(s) < TILT_SNAP && !s.lock3d) s.flatten()
+  }
+  window.addEventListener('pointermove', onMove, true)
+  window.addEventListener('pointerup', onUp, true)
+  window.addEventListener('pointercancel', onUp, true)
+}
+
 export function useAltTiltGesture() {
   useEffect(() => {
     let altUsed = false
@@ -622,14 +667,25 @@ export function useViewWidth() {
  *  slide of the flat canvas, so it becomes the canvas pan and the shift
  *  goes. The view does not move; nothing is remembered for next time. */
 export function useShiftToPan() {
-  useEffect(() => useTiltStore.subscribe(s => {
-    if (s.tilt !== 0 || s.spin !== 0 || s.yaw !== 0 || (!s.shiftX && !s.shiftY)) return
+  useEffect(() => {
+    // Handing over, the pan moving tells a framed model's pivot to follow
+    // (holdPivot), which is heard here again before the shift is dropped:
+    // the hand-over ran inside itself until the stack gave out, the pan
+    // moved hundreds of times over (F on a model, then Esc: an error and
+    // the canvas thrown far off). Once is all.
+    let handing = false
+    return useTiltStore.subscribe(s => {
+    if (handing || s.tilt !== 0 || s.spin !== 0 || s.yaw !== 0 || (!s.shiftX && !s.shiftY)) return
+    handing = true
     // The pan is drawn by React and the shift straight on the stage: draw
     // the new pan now (flushSync), then drop the shift, so the next frame
     // shows both changes together and the view does not move. Clearing the
     // shift here, not later, also stops a second store update moving the
     // pan twice.
-    flushSync(() => useCanvasStore.getState().shiftPan(s.shiftX, s.shiftY))
-    useTiltStore.getState().setShift(0, 0)
-  }), [])
+    try {
+      flushSync(() => useCanvasStore.getState().shiftPan(s.shiftX, s.shiftY))
+      useTiltStore.getState().setShift(0, 0)
+    } finally { handing = false }
+    })
+  }, [])
 }

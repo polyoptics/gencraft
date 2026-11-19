@@ -1332,6 +1332,17 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     // (As deep either side of the plane as from the canvas's own eye.)
     camera.near = eye - P + P / 120; camera.far = eye + P * (TILT_DRAW_FAR - 1)
     camera.updateProjectionMatrix()
+    // From underneath (the view cube's BT) the floor is see-through (Brian
+    // 2026-11-18): the slabs under the cards and the set, solid from
+    // below, are not drawn, nor the faces' depth, so what stands on the
+    // ground is seen up through it, as through a glass floor.
+    // (Under: the eye below the ground, tiltStore eyeHeight. Tipped on
+    // past edge-on looking up from low, it is still over it.)
+    {
+      const t = st.tilt * Math.PI / 180, b = st.yaw * Math.PI / 180
+      const over = -Math.sin(b) * st.shiftX + Math.sin(t) * Math.cos(b) * st.shiftY + Math.cos(t) * Math.cos(b) * P >= 0
+      sideMesh.visible = topMesh.visible = topFirst.visible = over
+    }
     // The plane: CSS rotateX(t) rotateZ(s), carried from CSS's y-down
     // space into three's y-up space (F·R·F, F = flip y).
     R.makeRotationX(st.tilt * Math.PI / 180).multiply(Rz.makeRotationY(st.yaw * Math.PI / 180)).multiply(Rz.makeRotationZ(st.spin * Math.PI / 180))

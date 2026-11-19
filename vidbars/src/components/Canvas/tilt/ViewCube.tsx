@@ -2,13 +2,14 @@
 //
 // In a corner of the 3D view: a small cube that turns as the view does, so
 // it shows which way you are looking, with a side to click for each
-// square-on view (altCamera jumpView). Under it the view's lens, typed in
+// square-on view (altCamera jumpView); dragged, it is the camera in hand
+// (altCamera dragCube). Under it the view's lens, typed in
 // mm, and Ortho, its own on/off: a very long lens, near-flat (tiltStore
 // lensMm / ortho).
 
 import React, { useEffect, useRef, useState } from 'react'
 import { useTiltStore, lensMmOf, LENS_MM_MIN, LENS_MM_MAX, ORTHO_MM } from '../../../store/tiltStore'
-import { jumpView, type CubeFace } from './altCamera'
+import { jumpView, dragCube, cubeWasDragged, type CubeFace } from './altCamera'
 
 const SIZE = 54, HALF = SIZE / 2
 /** Each side on the cube, as the ground has it: the top faces the eye in
@@ -75,14 +76,15 @@ export const ViewCube: React.FC = () => {
         color: 'rgba(255,255,255,0.5)', fontSize: 11, cursor: 'default', userSelect: 'none', pointerEvents: 'auto',
       }}
     >
-      <div style={{ width: 96, height: 96, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div onPointerDown={dragCube} title="Drag to turn the view; click a side to jump to it"
+        style={{ width: 96, height: 96, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'grab', touchAction: 'none' }}>
         <div ref={cubeRef} style={{ width: SIZE, height: SIZE, position: 'relative', transformStyle: 'preserve-3d' }}>
           {FACES.map(f => (
             <button
               key={f.face}
               data-cube-face={f.face}
-              title={f.face === 'TP' ? 'Top: straight down. Not locked into 3D, that is the flat canvas' : `${f.name}: jump to this view`}
-              onClick={() => jumpView(f.face)}
+              title={f.face === 'TP' ? 'Top: click for straight down (not locked into 3D, that is the flat canvas). Drag the cube to turn the view' : `${f.name}: click to jump to this view. Drag the cube to turn the view`}
+              onClick={() => { if (!cubeWasDragged()) jumpView(f.face) }}
               onPointerEnter={() => setOver(f.face)}
               onPointerLeave={() => setOver(o => (o === f.face ? null : o))}
               style={{
