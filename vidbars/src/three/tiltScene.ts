@@ -11,7 +11,7 @@
 import * as THREE from 'three'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import { acquireModel, releaseModel, disposeInstance } from './modelCache'
-import { quarterStamp, quarterOfUrl, modelBody } from './modelQuarter'
+import { quarterStamp, modelBody } from './modelQuarter'
 import { computePosedBounds } from './orbitState'
 import { createLook, applyLook, disposeLook, type LookInstance, type ModelShade } from './modelLook'
 import { gradeLook, type Grade } from './modelMaps'
@@ -309,7 +309,6 @@ interface Standing {
   wallText: string
   /** Its own materials and normals, once loaded. */
   look: LookInstance | null
-  phase: number
   dead: boolean
   seen: number
   /** When its model first showed (ms), to grow or pop it in from. */
@@ -327,9 +326,8 @@ interface Standing {
    *  (modelQuarter quarterStamp), and whether a new copy is on its way. */
   quarter: number
   swapping: boolean
-  /** When it began turning on the turntable (ms): one squared up
-   *  (modelQuarter) starts its turn from how it was squared up. null: not
-   *  turning. */
+  /** When it began turning on the turntable (ms): its turn starts from
+   *  how it stands. null: not turning. */
   turnAt: number | null
 }
 
@@ -827,7 +825,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     groundDeco.add(wall)
     const s: Standing = {
       url, stand, turn, orient, pose, gizmo: null, rig: null, tint: null, baseColors: null, back: null, spun: [], inst: null, size: new THREE.Vector3(), unit: 1, unitSet: false, triangles: 0,
-      figure, wall, wallText: '', look: null, phase: Math.random() * 6.28, dead: false, seen: frameNo, shownAt: 0,
+      figure, wall, wallText: '', look: null, dead: false, seen: frameNo, shownAt: 0,
       mats: [], alpha: -1, base: 0, footR: 0, quarter: 0, swapping: false, turnAt: null,
     }
     acquireModel(url).then(inst => {
@@ -1444,15 +1442,15 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       const mid = !!st.rideMid?.(tg.key)
       if (rq && !s.rig && !mid) s.turn.quaternion.set(rq[0], rq[1], rq[2], rq[3])
       else {
-        // On the turntable. One that has been squared up (Brian 2026-11-19:
-        // "they should start from their new offset positions if they have
-        // them") starts from how it was squared up, each time the turning
-        // starts: Turn switched on, the model coming up out of its card,
-        // or squared up another way. Any other starts where it happens to
-        // be, so a board of models is not all in step.
+        // On the turntable. Every model starts its turn from how it stands
+        // (Brian 2026-11-19: "they restart their spin from their current
+        // position"; one that came in mid-spin "flips into a spot of an
+        // already turning turn animation"), each time the turning starts:
+        // Turn switched on, the model coming up out of its card, or
+        // squared up another way. So a row of them turns together.
         const turning = st.turn && !placed && s.stand.visible
         if (!into) { if (!turning) s.turnAt = null; else if (s.turnAt === null) s.turnAt = now }
-        const a = !turning ? 0 : quarterOfUrl(s.url) ? (now - (s.turnAt ?? now)) / 1000 * 0.6 : now / 1000 * 0.6 + s.phase
+        const a = turning ? (now - (s.turnAt ?? now)) / 1000 * 0.6 : 0
         s.turn.rotation.set(0, a, 0)
       }
       const pq = st.poseFor?.(tg.key)
