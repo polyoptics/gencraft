@@ -275,12 +275,16 @@ export function stepFace(groupId: string, dir: 1 | -1): void {
 /** A closed deck's face: every picture block of every card in it, card by
  *  card in deck order (`memberIds`, front card first), each card's in its
  *  reading order — and which one the face is on. Effect cards hold none.
+ *  Once any card in it is hearted (utils/favorites) the face holds the
+ *  hearted cards only; with no heart in it, every card, as ever.
  *  `card` is the member the face shows, whose own face block it is on. */
 export function deckFaceSteps(anchor: ProjectGroup, memberIds: string[], groups: ProjectGroup[], boards: Record<string, BoardData>):
   { entries: { groupId: string; boardId: string }[]; index: number; card: ProjectGroup } {
-  const members = memberIds.map(id => groups.find(g => g.id === id)).filter((g): g is ProjectGroup => !!g && !g.effect)
+  const all = memberIds.map(id => groups.find(g => g.id === id)).filter((g): g is ProjectGroup => !!g && !g.effect)
+  const hearted = all.filter(g => g.fav)
+  const members = hearted.length ? hearted : all
   const entries = members.flatMap(g => faceBlocks(g, boards).map(boardId => ({ groupId: g.id, boardId })))
-  const card = members.find(g => g.id === anchor.deckFaceCard) ?? anchor
+  const card = members.find(g => g.id === anchor.deckFaceCard) ?? (hearted.length ? hearted[0] : anchor)
   const blocks = faceBlocks(card, boards)
   const block = card.faceBoardId && blocks.includes(card.faceBoardId) ? card.faceBoardId : blocks[0]
   const index = entries.findIndex(e => e.groupId === card.id && e.boardId === block)

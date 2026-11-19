@@ -151,6 +151,9 @@ export interface ProjectGroup {
    *  (utils/cardGrid stepDeckFace). That card's own faceBoardId says which
    *  of its blocks. Absent, or no longer a member: the anchor itself. */
   deckFaceCard?: string
+  /** Hearted (utils/favorites): 1 a heart, 2 the standout. A closed deck
+   *  with hearts in it shows only its hearted cards on its face. */
+  fav?: 1 | 2
   /** A loop strip's result card: the card it was made from. They step
    *  through their pictures together (utils/railCards followFaces). */
   railSource?: string

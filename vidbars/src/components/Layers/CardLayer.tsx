@@ -38,6 +38,8 @@ import { Viewport3DLayer } from '../Viewport3D/Viewport3DLayer'
 import { NLETimelineHeader, NLE_HEADER_CANVAS_H, headerExtend as computeHeaderExtend, headerScreenH, overviewScale } from '../NLE/NLETimelineHeader'
 import { HeroImageLayer } from './HeroImageLayer'
 import { CardBack, FlipButton, backColor, useCardFlip } from './CardBack'
+import { HeartButton } from './HeartButton'
+import { favOf, stepFav } from '../../utils/favorites'
 import { liveLocks, lockOf, withLockMates, keepOf, keptIn } from '../../utils/deckLock'
 import { SceneFace } from './SceneFace'
 import { stretchStart } from '../../utils/sceneGrow'
@@ -785,6 +787,7 @@ const Canvas: React.FC = () => <><Viewport3DLayer /><FreeCanvas /></>
 // card, a stacked deck and a fan (which has no pen), so it does not jump
 // when a deck changes state.
 
+const HEART_GAP = 4        // between the Flip and the heart beside it
 const CARD_TOOL_INSET = 6   // the pen's inset from the face's right edge and the header band
 const CARD_TOOL_GAP = 4
 
@@ -1719,6 +1722,17 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
                 style={{ top: headerPad + PEN_INSET, left: PEN_INSET }}
               />
             )}
+            {/* Heart, beside it: the same spot on either side. */}
+            {canFlip && (
+              <HeartButton
+                level={favOf(group)}
+                onStep={() => stepFav(group.id)}
+                quiet={showBack}
+                size={penSize}
+                visible={isHovered}
+                style={{ top: headerPad + PEN_INSET, left: PEN_INSET + penSize + HEART_GAP }}
+              />
+            )}
             {!showBack && <div
               data-pen-button="true"
               style={{
@@ -2527,6 +2541,20 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
               style={{ top: headerPad + CARD_TOOL_INSET, left: CARD_TOOL_INSET }}
             />
           )}
+          {/* Heart: the card the face is on. */}
+          {!deckFace.card.effect && (() => {
+            const size = Math.min(32, Math.max(8, 16 * overviewScale(zoom), headerScreenH(zoom) * 0.85))
+            return (
+              <HeartButton
+                level={favOf(deckFace.card)}
+                onStep={() => stepFav(deckFace.card.id)}
+                quiet={!!anchorGroup.flipped}
+                size={size}
+                visible={isHovered}
+                style={{ top: headerPad + CARD_TOOL_INSET, left: CARD_TOOL_INSET + size + HEART_GAP }}
+              />
+            )
+          })()}
 
           {/* Drag-out — ONE grip for the whole deck: the face on top, as the
               arrows left it; Shift, every image in every card. Sized to
@@ -3732,6 +3760,19 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[]; lay
               style={{ top: headerPad + CARD_TOOL_INSET, left: faceX + CARD_TOOL_INSET, zIndex: Math.max(22, secondaryItems.length + 4) }}
             />
           )}
+          {shown && !shown.effect && (() => {
+            const size = Math.min(32, Math.max(8, 16 * overviewScale(zoom), headerScreenH(zoom) * 0.85))
+            return (
+              <HeartButton
+                level={favOf(shown)}
+                onStep={() => stepFav(shown.id)}
+                quiet={!!shown.flipped}
+                size={size}
+                visible={isHovered}
+                style={{ top: headerPad + CARD_TOOL_INSET, left: faceX + CARD_TOOL_INSET + size + HEART_GAP, zIndex: Math.max(22, secondaryItems.length + 4) }}
+              />
+            )
+          })()}
           <CardFaceDragOut
             url={deckGripUrl(ids)}
             getUrls={({ all }) => deckDragOutUrls(ids, all)}
@@ -4511,6 +4552,18 @@ const DeckAffordance: React.FC<{ cluster: string[]; front: Deck | 'card' | null;
             style={{ top: computeHeaderExtend(zoom) + CARD_TOOL_INSET, left: CARD_TOOL_INSET }}
           />
         )}
+        {primaryGroup && front === 'card' && !primaryGroup.effect && !frontThrough && (() => {
+          const size = Math.min(32, Math.max(8, 16 * overviewScale(zoom), headerScreenH(zoom) * 0.85))
+          return (
+            <HeartButton
+              level={favOf(primaryGroup)}
+              onStep={() => stepFav(primaryGroup.id)}
+              size={size}
+              visible={isHovered}
+              style={{ top: computeHeaderExtend(zoom) + CARD_TOOL_INSET, left: CARD_TOOL_INSET + size + HEART_GAP }}
+            />
+          )
+        })()}
         {primaryGroup && front === 'card' && (
           <CardFaceDragOut
             card={primaryGroup.id}
