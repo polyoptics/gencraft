@@ -110,7 +110,7 @@ export function setCardHeight(g: ProjectGroup, ft: number) {
   if (!row || row.value !== value || row.link) bs.setGroupDetails(card.id, details)
 }
 /** The Height on a card's back, feet. */
-function cardHeight(g: ProjectGroup, groups: ProjectGroup[]): number | null {
+export function cardHeight(g: ProjectGroup, groups: ProjectGroup[]): number | null {
   const d = heightRow(masterOf(g, groups))
   return d ? parseHeight(detailShown(groups, d).text) : null
 }

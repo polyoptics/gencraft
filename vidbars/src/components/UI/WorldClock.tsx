@@ -13,7 +13,8 @@
 // to its clock face icon, and the text will be in mouse over"): the clock
 // is its face alone, and what it said is in its hover text. To its left is
 // the world scale's icon (utils/worldScale), "an icon and no text": a
-// measuring stick dragged onto it gives the world its scale.
+// measuring stick dragged onto it gives the world its scale. Clicked, its
+// lineup comes out of it, over this row (components/UI/WorldScaleLine).
 //
 // The control and the bar are a fixed size and never move: the same in the
 // flat and the tilted view. The stops on the bar are spaced evenly, in story
@@ -28,6 +29,7 @@ import { scrubStoryline, storyClock } from '../Canvas/StorylineLayer'
 import { MarkTags } from '../Layers/StateFace'
 import { useWorldClockUi } from '../../utils/worldClock'
 import { useWorldScale } from '../../utils/worldScale'
+import { WorldScaleLine } from './WorldScaleLine'
 import type { StateMark } from '../../utils/stateCard'
 
 const TONE = '#9fe0ff'
@@ -68,6 +70,7 @@ export const WorldClock: React.FC = () => {
   const hot = useWorldClockUi(s => s.hot)
   const scaleHot = useWorldScale(s => s.hot)
   const scaleSet = useWorldScale(s => s.per !== null)
+  const scaleOpen = useWorldScale(s => s.open)
   const d = node?.type === 'storyline' ? node.storyline : undefined
   const clock = d?.dots?.length ? storyClock(d, groups) : null
   const name = d ? (d.title?.trim() || 'Storyline') : ''
@@ -81,17 +84,20 @@ export const WorldClock: React.FC = () => {
   const lit = open || hot
   return (
     <>
-      <div data-world-scale-drop
-        title={`World scale: how big a foot is on the canvas, for the whole world. ${scaleSet ? 'Set from a measuring stick.' : 'Not set yet.'} Drag a measuring stick onto here to use its scale; the stick goes back where it was. It is a copy: scaling that stick afterwards changes nothing here until it is dropped again. The 3D view's fade distance is measured in it. Lit while it is set.`}
+      <button data-world-scale-drop
+        onClick={() => useWorldScale.getState().setOpen(!scaleOpen)}
+        aria-pressed={scaleOpen}
+        title={`World scale: how big a foot is on the canvas, for the whole world. ${scaleSet ? 'Set from a measuring stick.' : 'Not set yet.'} Drag a measuring stick onto here to use its scale; the stick goes back where it was. It is a copy: scaling that stick afterwards changes nothing here until it is dropped again. The 3D view's fade distance is measured in it. Click to show or hide the lineup, where the cards you click stand at their heights; lit while it is out.`}
         style={{
-          position: 'absolute', left: 12, bottom: ROW_BOTTOM, width: SCALE_W, height: ROW_H, zIndex: 950, boxSizing: 'border-box',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8, userSelect: 'none', cursor: 'default',
-          background: scaleSet || scaleHot ? '#1b2a3f' : '#13141f',
-          border: scaleHot ? `1px solid ${TONE}` : scaleSet ? '1px solid rgba(98,160,217,0.5)' : '1px solid rgba(255,255,255,0.12)',
+          position: 'absolute', left: 12, bottom: ROW_BOTTOM, width: SCALE_W, height: ROW_H, zIndex: 950, boxSizing: 'border-box', padding: 0,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8, userSelect: 'none', cursor: 'pointer', fontFamily: 'inherit',
+          background: scaleOpen || scaleHot ? '#1b2a3f' : '#13141f',
+          border: scaleHot ? `1px solid ${TONE}` : scaleOpen ? '1px solid rgba(98,160,217,0.5)' : '1px solid rgba(255,255,255,0.12)',
           boxShadow: scaleHot ? `0 0 10px ${TONE}` : '0 2px 8px rgba(0,0,0,0.45)',
         }}>
-        <span style={{ fontSize: 17, lineHeight: 1, opacity: scaleSet || scaleHot ? 1 : 0.6 }}>📏</span>
-      </div>
+        <span style={{ fontSize: 17, lineHeight: 1, opacity: scaleOpen || scaleHot ? 1 : 0.6 }}>📏</span>
+      </button>
+      {scaleOpen && <WorldScaleLine left={12} right={60} bottom={ROW_BOTTOM + ROW_H + GAP} />}
       <div data-world-clock-drop style={{
         position: 'absolute', left: CONTROL_LEFT, bottom: ROW_BOTTOM, width: CONTROL_W, height: ROW_H, zIndex: 950,
         display: 'flex', borderRadius: 8, overflow: 'hidden', userSelect: 'none',

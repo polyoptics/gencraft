@@ -14,6 +14,13 @@
 // the canvas whatever the zoom ("I always wanted to have that
 // original-sized zone"). Its distance and its on/off are under Camera Lens
 // (ViewCube). Kept with the browser, as the units are (store/unitsStore).
+//
+// Clicked, the icon opens the lineup (components/UI/WorldScaleLine; Brian
+// 2026-11-19: "If I click the world scale, it should pop up on the bottom
+// of the screen, like growing right out from its icon. Then, if I was to
+// click cards on the canvas ... the height would show up there. The
+// models could line up"): `open`, the cards standing on it (`line`, card
+// ids, for this sitting only) and how many feet tall it shows (`lineFt`).
 
 import { create } from 'zustand'
 
@@ -21,16 +28,18 @@ const KEY = 'vidbars.worldScale'
 /** Canvas units a foot with no world scale set yet. */
 export const WORLD_PER_DEFAULT = 200
 export const FADE_FT_DEFAULT = 15, FADE_FT_MIN = 1, FADE_FT_MAX = 5000
+export const LINE_FT_DEFAULT = 8, LINE_FT_MIN = 1, LINE_FT_MAX = 5000
 
-interface Kept { per: number | null; fadeFt: number; fadeOn: boolean }
+interface Kept { per: number | null; fadeFt: number; fadeOn: boolean; lineFt: number }
 function load(): Kept {
-  const k: Kept = { per: null, fadeFt: FADE_FT_DEFAULT, fadeOn: true }
+  const k: Kept = { per: null, fadeFt: FADE_FT_DEFAULT, fadeOn: true, lineFt: LINE_FT_DEFAULT }
   try {
     const p = JSON.parse(localStorage.getItem(KEY) ?? 'null') as Partial<Kept> | null
     if (p) {
       if (typeof p.per === 'number' && Number.isFinite(p.per) && p.per > 0) k.per = p.per
       if (typeof p.fadeFt === 'number' && Number.isFinite(p.fadeFt)) k.fadeFt = Math.max(FADE_FT_MIN, Math.min(FADE_FT_MAX, p.fadeFt))
       if (typeof p.fadeOn === 'boolean') k.fadeOn = p.fadeOn
+      if (typeof p.lineFt === 'number' && Number.isFinite(p.lineFt)) k.lineFt = Math.max(LINE_FT_MIN, Math.min(LINE_FT_MAX, p.lineFt))
     }
   } catch { /* private window, or not ours */ }
   return k
@@ -44,12 +53,20 @@ interface WorldScale extends Kept {
   setPer: (per: number) => void
   setFadeFt: (ft: number) => void
   setFadeOn: (on: boolean) => void
+  /** The lineup: out or not, the cards standing on it, in the order they
+   *  came, and how many feet tall it shows. */
+  open: boolean
+  line: string[]
+  setOpen: (open: boolean) => void
+  join: (ids: string[]) => void
+  leave: (id: string) => void
+  setLineFt: (ft: number) => void
 }
 export const useWorldScale = create<WorldScale>((set, get) => {
   const keep = (p: Partial<Kept>) => {
     set(p)
-    const { per, fadeFt, fadeOn } = get()
-    try { localStorage.setItem(KEY, JSON.stringify({ per, fadeFt, fadeOn })) } catch { /* private window */ }
+    const { per, fadeFt, fadeOn, lineFt } = get()
+    try { localStorage.setItem(KEY, JSON.stringify({ per, fadeFt, fadeOn, lineFt })) } catch { /* private window */ }
   }
   return {
     ...load(),
@@ -58,6 +75,12 @@ export const useWorldScale = create<WorldScale>((set, get) => {
     setPer: per => { if (Number.isFinite(per) && per > 0) keep({ per }) },
     setFadeFt: ft => { if (Number.isFinite(ft)) keep({ fadeFt: Math.max(FADE_FT_MIN, Math.min(FADE_FT_MAX, ft)) }) },
     setFadeOn: fadeOn => keep({ fadeOn }),
+    open: false,
+    line: [],
+    setOpen: open => set({ open }),
+    join: ids => { const add = ids.filter((id, i) => !get().line.includes(id) && ids.indexOf(id) === i); if (add.length) set({ line: [...get().line, ...add] }) },
+    leave: id => set({ line: get().line.filter(x => x !== id) }),
+    setLineFt: ft => { if (Number.isFinite(ft)) keep({ lineFt: Math.max(LINE_FT_MIN, Math.min(LINE_FT_MAX, ft)) }) },
   }
 })
 
