@@ -1,15 +1,14 @@
+import { CAMERA_DOCK_W, CAMERA_DOCK_BOTTOM, ZOOM_BAR_W, DOCK_SLIDE, DOCK_LINE } from './ViewCube'
+import { useZoomZonesStore } from '../../../store/zoomZonesStore'
 import React, { useEffect, useRef, useState } from 'react'
 import { dataKey, standsIn } from '../../../utils/area3dScene'
 import { useManip } from '../../../store/manipStore'
 import { useTiltStats, soloSize, setSoloSize } from './TiltModels'
 import { flushSync } from 'react-dom'
-import { useTiltStore, useModelScaleStore, offFlat, unprojectTilt, TILT_FAR } from '../../../store/tiltStore'
+import { useTiltStore, useModelScaleStore, unprojectTilt, TILT_FAR } from '../../../store/tiltStore'
 import { useCanvasStore, MIN_ZOOM, MAX_ZOOM } from '../../../store/canvasStore'
 import { useFreeNodeStore } from '../../../store/freeNodeStore'
 import { useBoardsStore } from '../../../store/boardsStore'
-import { useWorldScale } from '../../../utils/worldScale'
-import { useUndoCoordinator } from '../../../store/undoCoordinator'
-import { stickMeasures, cardEmphasis, setCardEmphasis } from '../../../utils/stickDock'
 import { clientToCanvas } from '../../../utils/fx/createEffect'
 import { hostOf, viewCentre, SPIN_RAD } from './altCamera'
 import {
@@ -30,7 +29,6 @@ export const TiltedView: React.FC = () => {
   const settle = useTiltStore(s => s.settle)
   const walls = useTiltStore(s => s.walls)
   const figure = useTiltStore(s => s.figure)
-  const tilt = useTiltStore(offFlat)
   const lock3d = useTiltStore(s => s.lock3d)
 
   // ── Working on the tilted plane ──
@@ -337,7 +335,7 @@ export const TiltedView: React.FC = () => {
       | { kind: 'pan'; last: { x: number; y: number } }
       | { kind: 'marquee'; x0: number; y0: number; x1: number; y1: number; add: boolean }
       | { kind: 'person'; url: string; unit0: number; y0: number }
-      | { kind: 'model'; key: string; k0: number; y0: number; moved: boolean; inSet: boolean; solo?: boolean; /** The card whose Emphasis it sizes. */ emph?: string }
+      | { kind: 'model'; key: string; k0: number; y0: number; moved: boolean; inSet: boolean; solo?: boolean }
       | { kind: 'turn'; key: string; last: { x: number; y: number }; x0: number; y0: number; moved: boolean }
       | { kind: 'held' }
       | { kind: 'remap'; target: Element; pointerId: number; height: number; stood?: boolean; x0?: number; y0?: number; free?: boolean; tab?: { at: { x: number; y: number }; went?: boolean }; lay?: Map<string, string>; last?: { x: number; y: number }; wall?: Hinge }
@@ -540,19 +538,6 @@ export const TiltedView: React.FC = () => {
               : { kind: 'held' }
             return
           }
-          // On its own card, off any measuring stick: sized by hand it is
-          // emphasised, its Height left as it is (Brian 2026-11-19: "if I
-          // hand-scale a model outside of a distance tool, then that's
-          // going to make an emphasis attribute"). With True size on, the
-          // emphasis does not show, so the drag is held.
-          if (!inSet && solo === null && dk0.startsWith('card:')) {
-            const id = dk0.slice(5), groups = useBoardsStore.getState().groups, card = groups.find(x => x.id === id)
-            if (card && !stickMeasures().owner.has(id)) {
-              g = useWorldScale.getState().trueSize ? { kind: 'held' }
-                : { kind: 'model', key: dk0, k0: cardEmphasis(card, groups), y0: e.clientY, moved: false, inSet: false, emph: id }
-              return
-            }
-          }
           g = { kind: 'model', key: dk0, k0: solo ?? (inSet ? ms0.setSizeOf[dk0] ?? ms0.sizeOf[dk0] : ms0.sizeOf[dk0]) ?? 1, y0: e.clientY, moved: false, inSet, solo: solo !== null }
           return
         }
@@ -709,14 +694,8 @@ export const TiltedView: React.FC = () => {
       if (g.kind === 'model') {
         const dy = e.clientY - g.y0
         if (!g.moved && Math.abs(dy) < 4) return
-        if (!g.moved && g.emph) useUndoCoordinator.getState().checkpoint()
         g.moved = true
         const k = Math.min(8, Math.max(0.1, g.k0 * Math.exp(-dy / 160)))
-        if (g.emph) {
-          const id = g.emph, card = useBoardsStore.getState().groups.find(x => x.id === id)
-          if (card) setCardEmphasis(card, k)
-          return
-        }
         const ms1 = useModelScaleStore.getState()
         if (g.solo) setSoloSize(g.key, k)
         else if (g.inSet) ms1.setSetSize(g.key, k)
@@ -955,8 +934,13 @@ export const TiltedView: React.FC = () => {
     background: active ? 'rgba(120,170,255,0.25)' : 'transparent',
     border: '1px solid rgba(255,255,255,0.14)', borderRadius: 6,
     color: active ? '#dfe8ff' : 'rgba(255,255,255,0.6)',
-    fontSize: 11, padding: '3px 8px', cursor: 'pointer',
+    fontSize: 11, padding: '3px 8px', cursor: 'pointer', textAlign: 'left', flexShrink: 0,
   })
+  /** The tags' top: clear of the top bar. */
+  const TAGS_TOP = 80
+  /** One column of the tags. */
+  const col: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 4, padding: 6, alignItems: 'stretch' }
+  const zoomBar = useZoomZonesStore(z => z.barOpen)
   const set = useTiltStore.getState()
   const manip = useManip()
   const stats = useTiltStats()
@@ -974,45 +958,53 @@ export const TiltedView: React.FC = () => {
         }} />
       )}
       {lightOpen && <LightPanel onClose={() => setLightOpen(false)} />}
+      {/* The 3D view's switches: tags on the left side of the view cube's
+          piece in the top right corner, one with it (Brian 2026-11-19:
+          "Can all that bottom bar information now be beside the 3D cube
+          and the camera lens on the left of it, so it's sort of like tags
+          on the side of that top menu"). The camera's angle and the help
+          that the bar had are in the cube's own box (ViewCube). */}
       <div
         data-tilt-hud
+        data-tilt-tags
+        onPointerDown={e => e.stopPropagation()}
         style={{
-          position: 'absolute', left: '50%', bottom: 14, transform: 'translateX(-50%)',
-          display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px',
-          background: 'rgba(19,20,31,0.88)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 10,
+          position: 'fixed', top: TAGS_TOP, right: CAMERA_DOCK_W + (zoomBar ? ZOOM_BAR_W : 0), height: CAMERA_DOCK_BOTTOM - TAGS_TOP,
+          transition: `right ${DOCK_SLIDE}`, boxSizing: 'border-box', display: 'flex',
+          background: 'rgb(12,13,22)', border: '1px solid rgba(255,255,255,0.09)', borderRight: 'none', borderRadius: '10px 0 0 10px',
           color: 'rgba(255,255,255,0.5)', fontSize: 11, cursor: 'default', userSelect: 'none',
           whiteSpace: 'nowrap', pointerEvents: 'auto',
         }}
       >
-        <span>Tilted {Math.round(tilt)}° · click to select · drag a box to select many · Alt+drag orbits · Alt+middle pans · F frames</span>
-        <span style={{ width: 1, height: 14, background: 'rgba(255,255,255,0.12)' }} />
+        <div style={col}>
         <button style={btn(manip.models)} onClick={() => manip.set({ models: !manip.models })} aria-pressed={manip.models} title="Models stand up off the cards on the canvas. Off, they stay flat; a 3D set's models and a Viewer's still stand">Models</button>
+        <button style={btn(manip.mode === 'move')} onClick={() => manip.set({ mode: 'move' })} title="Move handles on a selected model in a 3D set, or on a curve’s selected points (W). Ctrl-click an arrow to move on the plane across it; Ctrl-click the middle square for the camera's plane again">Move W</button>
+        <button style={btn(manip.mode === 'rotate')} onClick={() => manip.set({ mode: 'rotate' })} title="Rotate handles (E): a model, or a curve’s selected points about their middle. Hold a ring by its lit arcs; drag the model itself to turn it freely. The dashed outer ring turns it on the camera's plane. + and - size the handles">Rotate E</button>
+        <button style={btn(manip.mode === 'scale')} onClick={() => manip.set({ mode: 'scale' })} title="Scale handles (R): an axis box stretches along the model's own axis, the middle sizes it. On a curve’s selected points, they spread from their middle or draw in">Scale R</button>
+        <button style={btn(manip.local)} onClick={() => manip.set({ local: !manip.local })} aria-pressed={manip.local} title="Handles on the model's own axes. Off, on the world's">Local</button>
         {stats.held > 0 && (
           <span style={{ color: '#ffcf5a' }} title={`The triangle budget (3 million) is full: ${stats.held} model${stats.held === 1 ? '' : 's'} in view, furthest from the middle, stay flat. Standing now: ${(stats.tris / 1e6).toFixed(1)} M triangles`}>
             ⚠ {stats.held} flat
           </span>
         )}
-        <span style={{ width: 1, height: 14, background: 'rgba(255,255,255,0.12)' }} />
-        <button style={btn(manip.mode === 'move')} onClick={() => manip.set({ mode: 'move' })} title="Move handles on a selected model in a 3D set, or on a curve’s selected points (W). Ctrl-click an arrow to move on the plane across it; Ctrl-click the middle square for the camera's plane again">Move W</button>
-        <button style={btn(manip.mode === 'rotate')} onClick={() => manip.set({ mode: 'rotate' })} title="Rotate handles (E): a model, or a curve’s selected points about their middle. Hold a ring by its lit arcs; drag the model itself to turn it freely. The dashed outer ring turns it on the camera's plane. + and - size the handles">Rotate E</button>
-        <button style={btn(manip.mode === 'scale')} onClick={() => manip.set({ mode: 'scale' })} title="Scale handles (R): an axis box stretches along the model's own axis, the middle sizes it. On a curve’s selected points, they spread from their middle or draw in">Scale R</button>
-        <button style={btn(manip.local)} onClick={() => manip.set({ local: !manip.local })} aria-pressed={manip.local} title="Handles on the model's own axes. Off, on the world's">Local</button>
-        <span style={{ width: 1, height: 14, background: 'rgba(255,255,255,0.12)' }} />
+        </div>
+        <div style={{ ...col, borderLeft: DOCK_LINE }}>
         <button style={btn(texture)} onClick={() => set.setTexture(!texture)} title="The model's own textures; off is plain grey">Texture</button>
         <button style={btn(shade === 'flat')} onClick={() => set.setShade(shade === 'flat' ? null : 'flat')} title="Flat shading: every face shows">Flat</button>
         <button style={btn(shade === 'smooth')} onClick={() => set.setShade(shade === 'smooth' ? null : 'smooth')} title="Smooth shading. With Flat and Smooth both off the model is unshaded: its bare texture, or hollow with Texture off">Smooth</button>
         <button style={btn(wire)} onClick={() => set.setWire(!wire)} title="The wireframe, over whatever else shows">Wireframe</button>
         <button style={btn(lightOpen)} onClick={() => setLightOpen(o => !o)} title="Move the light, brightness and reflections">Light</button>
+        </div>
+        <div style={{ ...col, borderLeft: DOCK_LINE }}>
         <button style={btn(turn)} onClick={() => set.setTurn(!turn)}>Turn</button>
         <button style={btn(settle)} onClick={() => set.setSettle(!settle)} aria-pressed={settle} title="Settle: a model you turn with Alt-drag rolls back to how it stood. Off, it stays where you leave it, so you can turn it and draw on it.">Settle</button>
         <button style={btn(walls)} onClick={() => set.setWalls(!walls)} title="File name and size on a wall behind each model">Labels</button>
         <button style={btn(figure)} onClick={() => set.setFigure(!figure)} title="A 1.75 m person beside each model. Drag them up or down to set how big the model really is.">Person</button>
-        <span style={{ width: 1, height: 14, background: 'rgba(255,255,255,0.12)' }} />
         {/* Lock into 3D (Brian 2026-11-07): its own on/off. Lit, the camera
             is free (straight down, any turn, fly up) and never drops back
             to the flat view; Exit 3D still takes you home. */}
         <button
-          style={{ ...btn(lock3d), padding: '2px 6px', display: 'flex', alignItems: 'center' }}
+          style={{ ...btn(lock3d), padding: '2px 8px', display: 'flex', alignItems: 'center', gap: 6 }}
           onClick={() => set.setLock3d(!lock3d)}
           aria-pressed={lock3d}
           title="Lock into 3D: a free camera. Look straight down, turn any way, fly up, and never drop back to the flat canvas. Click again to unlock."
@@ -1023,8 +1015,10 @@ export const TiltedView: React.FC = () => {
             <rect x="14.5" y="14" width="7" height="6" rx="1.2" fill={lock3d ? '#5fe39b' : 'rgba(19,20,31,1)'} stroke={lock3d ? '#5fe39b' : 'rgba(255,255,255,0.6)'} />
             <path d="M16 14v-1.6a2 2 0 0 1 4 0V14" stroke={lock3d ? '#5fe39b' : 'rgba(255,255,255,0.6)'} />
           </svg>
+          <span>Lock 3D</span>
         </button>
         <button style={btn(true)} onClick={() => { if (lock3d) set.setLock3d(false); set.flatten() }}>Exit 3D (Esc)</button>
+        </div>
       </div>
     </div>
   )

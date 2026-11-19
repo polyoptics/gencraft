@@ -40,6 +40,9 @@ import { FT_PER_M } from '../../../utils/stickGeom'
 import { jumpView, dragCube, cubeWasDragged, type CubeFace } from './altCamera'
 
 const SIZE = 54, HALF = SIZE / 2
+/** What the 3D view's bar along the bottom said, on the mouse now: over the
+ *  camera's angle, and over the cube. */
+const VIEW_HELP = 'The camera: tipped back so many degrees (0 is the flat canvas, 90 edge-on), then turned so many.\n\nIn the 3D view: click to select · drag a box to select many · Alt+drag orbits · Alt+middle pans · F frames · Esc goes back to the flat canvas'
 /** The column: where it is docked (the panel's own right edge, clear of
  *  the top bar), and its two boxes' sizes. */
 const DOCK_TOP = 38, CUBE_H = 112, LENS_H = 58, FADE_H = 58
@@ -127,6 +130,7 @@ const FadeDistance: React.FC = () => {
 
 export const ViewCube: React.FC = () => {
   const cubeRef = useRef<HTMLDivElement>(null)
+  const angleRef = useRef<HTMLSpanElement>(null)
   const ortho = useTiltStore(s => s.ortho)
   const fadeOn = useWorldScale(s => s.fadeOn)
   const metric = useUnits(s => s.metric)
@@ -149,6 +153,10 @@ export const ViewCube: React.FC = () => {
         // Facing the eye: its own outward line (z) still points out of the screen.
         side.style.visibility = new DOMMatrix(t).m33 > 0.001 ? 'visible' : 'hidden'
       }
+      // The camera's angle, kept in sight (Brian 2026-11-19: "I really
+      // like knowing the camera angle ... maybe up inside the view cube
+      // area, as a little display"): how far it is tipped back, and turned.
+      if (angleRef.current) angleRef.current.textContent = `${Math.round(s.tilt)}°  ${Math.round(s.spin)}°`
     }
     turn(useTiltStore.getState())
     return useTiltStore.subscribe(turn)
@@ -173,8 +181,10 @@ export const ViewCube: React.FC = () => {
         color: 'rgba(255,255,255,0.5)', fontSize: 11, cursor: 'default', userSelect: 'none',
       }}
     >
-      <div data-view-cube style={{ height: CUBE_H, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <div onPointerDown={dragCube} title="Drag to turn the view; click a side to jump to it"
+      <div data-view-cube style={{ position: 'relative', height: CUBE_H, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <span ref={angleRef} data-camera-angle title={VIEW_HELP}
+          style={{ position: 'absolute', left: 7, top: 5, fontSize: 10, fontFamily: 'ui-monospace, monospace', color: 'rgba(255,255,255,0.62)', whiteSpace: 'pre', cursor: 'help' }} />
+        <div onPointerDown={dragCube} title={`Drag to turn the view; click a side to jump to it.\n\n${VIEW_HELP}`}
           style={{ width: 96, height: 96, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'grab', touchAction: 'none' }}>
           <div ref={cubeRef} style={{ width: SIZE, height: SIZE, position: 'relative' }}>
             {FACES.map(f => (

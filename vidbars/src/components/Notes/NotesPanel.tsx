@@ -1113,13 +1113,13 @@ const OutlinerBox: React.FC = () => {
 export const NotesPanel: React.FC = () => {
   const open = useNotesUi(s => s.open)
   const folded = useNotesUi(s => s.collapsed)
-  // Folded, it is as wide as what it hangs under: the cube and the lens,
-  // and the zoom bar beside them while that is open. It makes way with them
-  // as the zoom bar squeezes in or out; opened or folded itself, it is there at once.
+  // It hangs from the bottom right corner of the column over it (the cube
+  // down to the fade), folded as wide as that and no wider, and opens out
+  // leftwards from there; with the column, it steps aside for the zoom bar
+  // (Brian 2026-11-19: "its width should stay tight to the bar until it's
+  // expanded, and its anchor point is the bottom-right corner of the fade
+  // distance amount section").
   const zoomBar = useZoomZonesStore(s => s.barOpen)
-  const foldedWas = useRef(folded)
-  const makeWay = foldedWas.current === folded
-  useEffect(() => { foldedWas.current = folded })
   const tool = useNotesUi(s => s.tool)
   const color = useNotesUi(s => s.color)
   const width = useNotesUi(s => s.width)
@@ -1244,8 +1244,8 @@ export const NotesPanel: React.FC = () => {
       onPointerDown={e => e.stopPropagation()}
       onWheel={e => e.stopPropagation()}
       style={{
-        // Joined on under the view cube and the camera's lens (ViewCube), one piece with them: a line between, no gap. Folded it is their width; it opens out leftwards from their right edge.
-        position: 'fixed', top: CAMERA_DOCK_BOTTOM, right: 0, width: folded ? W_FOLDED + (zoomBar ? ZOOM_BAR_W : 0) : W_OPEN, transition: makeWay ? `width ${DOCK_SLIDE}` : 'none', maxHeight: `calc(100vh - ${CAMERA_DOCK_BOTTOM + 32}px)`,
+        // Joined on under the view cube's column (ViewCube), one piece with it: a line between, no gap.
+        position: 'fixed', top: CAMERA_DOCK_BOTTOM, right: zoomBar ? ZOOM_BAR_W : 0, width: folded ? W_FOLDED : W_OPEN, transition: `right ${DOCK_SLIDE}`, maxHeight: `calc(100vh - ${CAMERA_DOCK_BOTTOM + 32}px)`,
         display: 'flex', flexDirection: 'column', boxSizing: 'border-box',
         background: 'rgba(12,13,22,0.94)', border: '1px solid rgba(255,255,255,0.09)', borderTop: DOCK_LINE, borderRight: 'none', borderRadius: folded ? '0 0 0 14px' : '14px 0 0 14px',
         boxShadow: '0 10px 30px rgba(0,0,0,0.55)', zIndex: 870, color: '#e8f0ff', userSelect: 'none',
