@@ -229,6 +229,20 @@ const TOOLS = [
     },
   },
   {
+    name: 'bring_home',
+    description: 'Bring a card that was made from another card home to it. Use this after dealing a result that was made from one card (a 3D model made from a character\'s picture, a processed picture, a movie of it): the made card joins the deck of the card it was made from (into its closed deck, or touching its open row), and that card gets a detail on its back that shows the made card, so the artist finds everything made from a card in that card\'s deck. If the detail already shows another card it is left alone and the answer says so: ask the artist whether to replace it, and only then call again with replace: true. One undo takes it all back.',
+    inputSchema: {
+      type: 'object', required: ['from', 'cards'],
+      properties: {
+        from: { type: 'string', description: 'The id of the card the result was made from.' },
+        cards: { type: 'array', items: { type: 'string' }, minItems: 1, description: 'The ids of the made cards (from deal_deck). The first is the one the detail shows.' },
+        detail: { type: 'string', description: 'The name of the detail that shows it. Left out: Model for a 3D model, Image for a picture, Movie for a movie.' },
+        replace: { type: 'boolean', description: 'true only after the artist said yes to replacing what the detail already shows.' },
+        front: { type: 'boolean', description: 'Whether the detail is switched on for the front of the card (a model then stands on the card in 3D). Left out: on for a new detail, unchanged for one that was there.' },
+      },
+    },
+  },
+  {
     name: 'delete_cards',
     description: 'Delete cards from the canvas. A closed deck named by its front card is deleted whole. Only when the artist plainly asked for these cards to be deleted; say which you deleted. One undo brings them back.',
     inputSchema: { type: 'object', required: ['ids'], properties: { ids: { type: 'array', items: { type: 'string' }, minItems: 1, description: 'Card ids from list_cards.' } } },
@@ -868,7 +882,7 @@ for (const t of TOOLS) if (t.name !== 'send_file') t.inputSchema.properties.doin
 
 const OPS = {
   list_cards: 'list', read_cards: 'read', list_decks: 'decks',
-  edit_cards: 'edit', arrange_cards: 'arrange', set_deck: 'deck', link_cards: 'link', delete_cards: 'delete', select_cards: 'select', undo: 'undo',
+  edit_cards: 'edit', arrange_cards: 'arrange', set_deck: 'deck', link_cards: 'link', bring_home: 'home', delete_cards: 'delete', select_cards: 'select', undo: 'undo',
   list_tools: 'tools', place_tool: 'place', make_3d_set: 'set3d', stand_in_3d_set: 'stand3d', square_up_models: 'modelSquare', make_gif: 'gif', make_movie: 'movie', add_to_rough_cut: 'cut',
   read_states: 'states', build_states: 'statesBuild', edit_states: 'statesEdit', run_states: 'statesRun',
   read_storyline: 'story', build_storyline: 'storyBuild', edit_storyline: 'storyEdit',
@@ -1060,7 +1074,7 @@ async function handle(msg) {
       return ok({
         protocolVersion: params?.protocolVersion || '2024-11-05',
         capabilities: { tools: {} },
-        serverInfo: { name: 'vidbars', version: '1.20.0' },
+        serverInfo: { name: 'vidbars', version: '1.21.0' },
         instructions: 'VidBars is the artist\'s card canvas. You may read cards and decks, hand out the media on cards as files, and deal a deck of cards: new cards, results brought in from another tool, and linked cards of cards that are there. You can use the tools of VidBars: set one down (place_tool), build a 3D set from cards that hold models (make_3d_set, stand_in_3d_set), square up a model that came in facing the wrong way (square_up_models), add shapes and cameras to it and draw paths for them to ride (read_3d_set, add_to_3d_set, draw_path, edit_path, play_paths), put effects on picture cards (list_effects, add_effects, edit_effects, save_effects), run pictures through a loop strip (read_loop_strip, edit_loop_strip, run_loop_strip), read and write prompts in a Card Prompts window (read_prompts, edit_prompts), keep cards in a cabinet\'s drawers (read_cabinet, edit_cabinet), look through a folder in a Media Pool (read_media_pool), show a card big in a Viewer (show_in_viewer), move the artist\'s view to show them something (read_view, move_view), make a GIF or a movie of cards, add cards to a Rough Cut and cut there (read_rough_cut, edit_rough_cut, deck_of_picks), draw storylines and trees (build_storyline, edit_storyline), read a chart the artist made as a layout and lay other cards out the same way (read_chart, lay_chart_like), bake a chart into a card and bring it back out (chart_card), replace a card everywhere charts show it (replace_card), set who belongs to a faction or family card and who reports to whom or is whose parent (edit_members), lay out the face of a scene card (read_scene, edit_scene), and set up state machines in a States workspace (read_states, build_states, edit_states, run_states). You may also change what is there when the artist asks for it: edit cards and their faces (edit_cards), the blocks a card holds (edit_blocks: add, remove, order, move, take out, merge), the bars on a block\'s board (read_board, edit_board), copy cards (copy_cards), arrange, open and close decks, link, delete; each change is one undo, and undo takes your last one back. Do not change or delete anything the artist did not ask you to. Read before you deal or change, keep card text short, and tell the artist plainly what you did. The artist sees your pointer in VidBars with a bubble: give each request a few plain words in "doing". To use a card\'s picture or model with another tool, get_card_media then send_file to the upload address that tool gives; bring what comes back onto a card with deal_deck (media, and from: the cards it was made from). A 3D model that comes back with a preview picture is ONE media entry: the model, with the picture as its thumbnail.',
       })
     case 'ping': return ok({})
