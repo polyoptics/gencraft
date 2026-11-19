@@ -1,4 +1,5 @@
-// The heart on a card (utils/favorites): none, a heart, the standout.
+// The heart on a card (utils/favorites): none, a heart, a standout, and the
+// master (a medal).
 // Lit while the card has one, and then always there; with none it shows
 // with the card's other tools, on hover. Same spot, size and words always.
 import React, { useState } from 'react'
@@ -24,7 +25,7 @@ export const HeartButton: React.FC<{
     <button
       type="button"
       data-card-heart={level}
-      title="Heart: click for a heart, again for a standout, again for none"
+      title="Heart: click for a heart, again for a standout, again for the master, again for none"
       onPointerDown={e => { if (e.button === 0) e.stopPropagation() }}
       onDoubleClick={e => e.stopPropagation()}
       onClick={e => { e.stopPropagation(); onStep() }}
@@ -34,10 +35,10 @@ export const HeartButton: React.FC<{
         position: 'absolute', zIndex: 60,
         width: size, height: size, padding: 0,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        background: level === 2 ? 'rgba(60,42,0,0.72)' : 'rgba(0,0,0,0.45)',
-        border: `1px solid ${level === 2 ? GOLD : level === 1 ? 'rgba(240,62,82,0.75)' : hover ? 'rgba(255,255,255,0.55)' : 'rgba(255,255,255,0.25)'}`,
+        background: level === 3 ? GOLD : level === 2 ? 'rgba(60,42,0,0.72)' : 'rgba(0,0,0,0.45)',
+        border: `1px solid ${level === 3 ? 'rgba(90,60,0,0.9)' : level === 2 ? GOLD : level === 1 ? 'rgba(240,62,82,0.75)' : hover ? 'rgba(255,255,255,0.55)' : 'rgba(255,255,255,0.25)'}`,
         borderRadius: 4,
-        boxShadow: level === 2 ? `0 0 0 1px ${GOLD}` : 'none',
+        boxShadow: level === 3 ? `0 0 0 1.5px ${GOLD}, 0 0 5px 1px rgba(255,200,64,0.7)` : level === 2 ? `0 0 0 1px ${GOLD}` : 'none',
         opacity: shown ? 1 : 0, pointerEvents: shown ? 'auto' : 'none',
         cursor: 'pointer', boxSizing: 'border-box', lineHeight: 1,
         transition: 'opacity 0.12s, background 0.12s, border-color 0.12s',
@@ -45,7 +46,14 @@ export const HeartButton: React.FC<{
       }}
     >
       <svg width={size * 0.74} height={size * 0.74} viewBox="0 0 16 16" strokeLinejoin="round">
-        {level === 2
+        {level === 3
+          ? <>
+              {/* The master: a medal on its ribbon. */}
+              <path d="M4.2 1 L7 6.4 M11.8 1 L9 6.4" stroke="rgb(190,40,60)" strokeWidth="2.6" fill="none" />
+              <circle cx="8" cy="10" r="4.6" fill="rgb(120,78,0)" stroke="rgb(60,38,0)" strokeWidth="0.9" />
+              <path d="M8 7.1 L8.9 9 L11 9.2 L9.4 10.6 L9.9 12.7 L8 11.6 L6.1 12.7 L6.6 10.6 L5 9.2 L7.1 9 Z" fill={GOLD} />
+            </>
+          : level === 2
           ? <>
               {/* The standout: a heart on a heart. */}
               <path d={HEART} transform="translate(2.6 -1.6) scale(0.78)" fill={GOLD} stroke={GOLD} strokeWidth="1" />

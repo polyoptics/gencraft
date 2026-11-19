@@ -151,9 +151,10 @@ export interface ProjectGroup {
    *  (utils/cardGrid stepDeckFace). That card's own faceBoardId says which
    *  of its blocks. Absent, or no longer a member: the anchor itself. */
   deckFaceCard?: string
-  /** Hearted (utils/favorites): 1 a heart, 2 the standout. A closed deck
-   *  with hearts in it shows only its hearted cards on its face. */
-  fav?: 1 | 2
+  /** Hearted (utils/favorites): 1 a heart, 2 a standout, 3 the master
+   *  (one to a deck). A closed deck with hearts in it shows only its
+   *  hearted cards on its face. */
+  fav?: 1 | 2 | 3
   /** The detail whose chip is lit on the face: the face shows that
    *  detail's card (components/Layers/DetailChips). A view. */
   faceDetail?: string

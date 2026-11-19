@@ -814,7 +814,7 @@ export const CardBack: React.FC<{
     if (!d) return []
     const items: MenuItem[] = mates.map(g => ({
       label: cardTitle(all, g) || 'Untitled',
-      hint: g.fav === 2 ? '  ♥♥' : g.fav === 1 ? '  ♥' : undefined,
+      hint: g.fav === 3 ? '  master' : g.fav === 2 ? '  ♥♥' : g.fav === 1 ? '  ♥' : undefined,
       swatch: g.color,
       checked: d.link?.card === g.id && !d.link.detail && !d.link.count && !d.link.rankOf,
       onClick: () => { setLink(id, { card: g.id }); setMenu(null) },

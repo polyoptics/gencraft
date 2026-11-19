@@ -1,5 +1,8 @@
-// Favourites. A card can be hearted, in two grades (Brian 2026-11-19): a
-// heart says "in the running", a second heart on top says "the standout".
+// Favourites. A card can be hearted, in grades (Brian 2026-11-19): a heart
+// says "in the running", a second heart on top says "a standout", and one
+// step on is the master: "you can just upgrade something to master if you
+// want it to show". A deck has one master: making a card the master makes
+// the deck's old master a standout again.
 // The heart is the card's own: it goes wherever the card goes.
 //
 // What reads it:
@@ -11,12 +14,12 @@
 import { useBoardsStore, type ProjectGroup } from '../store/boardsStore'
 import { isUndoRestoring, useUndoCoordinator } from '../store/undoCoordinator'
 import { stackedDeckMembers } from './cardGrid'
-import { deckFavorite } from './cardTypes'
+import { deckCardsOf, deckFavorite } from './cardTypes'
 
-export type Fav = 0 | 1 | 2
+export type Fav = 0 | 1 | 2 | 3
 
 export function favOf(g: ProjectGroup | undefined): Fav {
-  return g?.fav === 2 ? 2 : g?.fav === 1 ? 1 : 0
+  return g?.fav === 3 ? 3 : g?.fav === 2 ? 2 : g?.fav === 1 ? 1 : 0
 }
 
 /** Give cards a grade (0 takes the heart off). The caller takes the undo
@@ -35,10 +38,16 @@ export function stepFav(id: string): void {
   const s = useBoardsStore.getState()
   const g = s.groups.find(x => x.id === id)
   if (!g) return
-  const next = ((favOf(g) + 1) % 3) as Fav
+  const next = ((favOf(g) + 1) % 4) as Fav
   const sel = s.selectedGroupIds
+  const ids = sel.length > 1 && sel.includes(id) ? sel : [id]
   useUndoCoordinator.getState().checkpoint()
-  setFav(sel.length > 1 && sel.includes(id) ? sel : [id], next)
+  if (next !== 3) { setFav(ids, next); return }
+  // The master: the pressed card alone. The others pressed with it, and
+  // its deck's old master, are standouts.
+  const old = deckCardsOf(s.groups, id).filter(x => x.id !== id && favOf(x) === 3).map(x => x.id)
+  setFav([...ids.filter(x => x !== id), ...old], 2)
+  setFav([id], 3)
 }
 
 /** The card that stands for a deck, of `ids` in deck order (front first):

@@ -23,8 +23,8 @@ export interface DetailLink {
    *  live (Brian 2026-11-06: "add a chart attribute... pick lethality"). */
   rankOf?: string
   /** `card` stands for its deck (Brian 2026-11-19): the detail shows the
-   *  deck's favourite: its standout, else its first hearted card, else its
-   *  front card (deckFavorite). Set when a deck's "+" is let go on it. */
+   *  deck's favourite: its master, else a standout, else its first hearted
+   *  card, else its front card (deckFavorite). Set when a deck's "+" is let go on it. */
   favorite?: true
 }
 
@@ -49,11 +49,12 @@ export function deckCardsOf(groups: ProjectGroup[], id: string): ProjectGroup[] 
   return row.map(rid => groups.find(x => x.id === rid)).filter((x): x is ProjectGroup => !!x)
 }
 
-/** The card that stands for a deck, of its cards front first: its first
- *  standout, else its first hearted card, else its front (utils/favorites). */
+/** The card that stands for a deck, of its cards front first: its master,
+ *  else its first standout, else its first hearted card, else its front
+ *  (utils/favorites). */
 export function deckFavorite(cards: ProjectGroup[]): ProjectGroup | undefined {
   const real = cards.filter(g => !g.effect)
-  return real.find(g => g.fav === 2) ?? real.find(g => g.fav === 1) ?? cards[0]
+  return real.find(g => g.fav === 3) ?? real.find(g => g.fav === 2) ?? real.find(g => g.fav === 1) ?? cards[0]
 }
 
 /** One row on a card's details side. */

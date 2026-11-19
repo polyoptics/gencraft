@@ -31,7 +31,7 @@ import { curveRuns, pointFrames, withLayers } from '../../../utils/curveGeom'
 import { PinLabels } from '../../Notes/PinLabels'
 import { gradeFor } from '../../../utils/modelGrade'
 import { lookFor, runLook } from '../../../utils/cameraLook'
-import { sceneOf, sceneSpot, standsIn, dataKey, cardBox, frontShowing } from '../../../utils/area3dScene'
+import { sceneOf, sceneSpot, standsIn, dataKey, cardBox, frontShowing, faceModelOf, linkedModelCard } from '../../../utils/area3dScene'
 import { rideSpots, rideRuns, useRideClock, useRideOverride, riderOf } from '../../../utils/pathRide'
 import { useUndoCoordinator } from '../../../store/undoCoordinator'
 import { useManip } from '../../../store/manipStore'
@@ -842,9 +842,13 @@ export function cardModel(id: string): { url: string; name: string } | null {
   for (const rid of board?.rootIds ?? []) {
     const m = getMediaItems(board!.bars[rid]?.content).find(it => it.type === 'image' || it.type === 'video' || it.type === 'model')
     if (!m) continue
-    return m.type === 'model' ? { url: m.url, name: m.originalName || fileName(m.url) || name || 'Model' } : null
+    if (m.type === 'model') return { url: m.url, name: m.originalName || fileName(m.url) || name || 'Model' }
+    break
   }
-  return null
+  // No model of its own on its face: the model of a detail filled with one
+  // and switched on for the front stands over the face (linkedModelCard).
+  const linked = g && linkedModelCard(g, bs.groups, bs.boards)
+  return (linked && faceModelOf(linked, bs.boards)) || null
 }
 
 /** How thick things are, as a share of their shorter side: a Viewer like

@@ -10,6 +10,7 @@ import { useCanvasStore } from '../store/canvasStore'
 import { useModelScaleStore, type ScenePlace } from '../store/tiltStore'
 import { getMediaItems } from '../types/bar'
 import { faceBlocks } from './cardGrid'
+import { detailShown } from './cardTypes'
 import { drawnRect } from './effectCards'
 import { useViewport3DStore, type ViewportWindow3D } from '../store/viewport3dStore'
 import { magnetRadiusForZoom, viewportVisualRect } from './viewportDocking'
@@ -89,7 +90,43 @@ export function dataKey(key: string): string {
   const face = deckFace(g, bs.groups)
   if (face) return `card:${face}`
   const front = frontShowing(g, bs.groups)
-  return front ? `card:${front.id}` : key
+  if (front) return `card:${front.id}`
+  // A model it shows for one of its details: that model card's settings.
+  const linked = linkedModelCard(g, bs.groups, bs.boards)
+  return linked ? `card:${linked.id}` : key
+}
+
+/** The model on card `card`'s own face (the block it is stepped to, else
+ *  its first picture block), if that is a model. */
+export function faceModelOf(card: ProjectGroup, boards: Record<string, BoardData>): { url: string; name: string } | null {
+  const blocks = faceBlocks(card, boards)
+  const bid = card.faceBoardId && blocks.includes(card.faceBoardId) ? card.faceBoardId : blocks[0]
+  const board = bid ? boards[bid] : undefined
+  for (const rid of board?.rootIds ?? []) {
+    const m = getMediaItems(board!.bars[rid]?.content).find(it => it.type === 'image' || it.type === 'video' || it.type === 'model')
+    if (!m) continue
+    return m.type === 'model' ? { url: m.url, name: m.originalName || card.name || 'Model' } : null
+  }
+  return null
+}
+
+/** A model card that card `g` stands up for one of its details (Brian
+ *  2026-11-19: "the model hovering above the deck's original card face...
+ *  the model is the thing that's useful, and I can show them both"). Only a
+ *  detail he filled with it and switched on for the front (CardDetail
+ *  onFace); a model merely in its deck never shows. Only while that model
+ *  card is put away in a closed or fanned deck: out on the canvas the model
+ *  stands on its own card, once. Not when `g`'s own face is a model. The
+ *  first such detail. */
+export function linkedModelCard(g: ProjectGroup, groups: ProjectGroup[], boards: Record<string, BoardData>): ProjectGroup | undefined {
+  if (!g.details?.some(d => d.onFace) || faceModelOf(g, boards)) return undefined
+  for (const d of g.details) {
+    if (!d.onFace || !d.link || d.link.detail || d.link.count || d.link.rankOf) continue
+    const card = detailShown(groups, d).card
+    if (!card || card.id === g.id || card.hideModel3d || !isHiddenDeckMember(card)) continue
+    if (faceModelOf(card, boards)) return card
+  }
+  return undefined
 }
 /** The member a closed or fanned deck's front card `g` shows on its face,
  *  when that is not the front card itself. */
