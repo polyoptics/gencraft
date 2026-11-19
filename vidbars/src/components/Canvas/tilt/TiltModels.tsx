@@ -144,10 +144,12 @@ const fadeShown = () => {
  *  `from` degrees of tilt to edge-on, what lies wholly more than `feet`
  *  from the middle fades out, over a soft edge `soft` of that wide. Feet as
  *  the measuring stick nearest the middle counts them (`per` canvas units
- *  each with no stick out: a model on a card as it comes is about 6). */
+ *  each with no stick out: a model on a card as it comes is about 6).
+ *  From 70 now, easing into the full fade (Brian 2026-11-19: "let's start
+ *  the fade out from 70, and we'll have it ease into the max fade"). */
 /** The canvas's own dark, which a far slab's sides go into. */
 const FAR_DARK = 0x12131f
-const FAR = { from: 80, feet: 15, soft: 0.2, per: 200 }
+const FAR = { from: 70, feet: 15, soft: 0.2, per: 200 }
 type Far = { a: number; cx: number; cy: number; r: number }
 /** How far that has gone and where: `a` 0..1, the middle of the view on
  *  the canvas (flat px from the host's centre) and the radius, px. Null
@@ -157,7 +159,7 @@ function farNow(): Far | null {
   // (Past edge-on, looking up from low down or from under the ground, it
   // stays gone: Brian 2026-11-19, "past 90 the BG nodes stay faded off".)
   if (ts.tilt <= FAR.from || useManip.getState().through) return null
-  const x = Math.min(1, (ts.tilt - FAR.from) / (TILT_MAX - FAR.from)), a = x * x * (3 - 2 * x)
+  const x = Math.min(1, (ts.tilt - FAR.from) / (TILT_MAX - FAR.from)), a = x * x * x * (x * (6 * x - 15) + 10)
   // The middle: the ground in the middle of the screen across, at the
   // height on the screen of the point the view turns about (straight
   // under the screen's middle near edge-on is far off, or sky).
