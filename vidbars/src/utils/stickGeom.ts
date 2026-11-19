@@ -27,7 +27,30 @@ export const POLE_R = 0.05
 export const LOWER_R = 0.095
 export const LOWER_TOP = 0.95
 export const BASE_R = 0.4
-export const BASE_H = 0.16
+export const BASE_H = 0.12
+/** Its base (Brian 2026-11-19): a D, flat on the side it docks by and
+ *  round on the other, this far across. The flat side lies on the
+ *  stick's own point (Stick x, y), the tube stands `tabDepth` out from
+ *  it, and flat (2D) its board lies over that same middle: a tab on the
+ *  edge of what it is docked to. */
+export const BASE_W = 0.4
+/** The side of a card a stick is docked by. */
+export type Side = 'top' | 'bottom' | 'left' | 'right'
+/** The way out from the card on that side (y runs down the canvas).
+ *  Docked to nothing, a stick sits as under something. */
+export const tabOut = (side: Side | null | undefined): { x: number; y: number } =>
+  side === 'top' ? { x: 0, y: -1 } : side === 'left' ? { x: -1, y: 0 } : side === 'right' ? { x: 1, y: 0 } : { x: 0, y: 1 }
+/** How far out from its point a stick's middle is, feet: half its board,
+ *  the way it faces. */
+export const tabDepth = (side: Side | null | undefined) => side === 'left' || side === 'right' ? SIGN_W : SIGN_H
+/** A stick's middle, canvas units: where its tube stands (before it is
+ *  walked off, Stick.off) and its tab lies. */
+export function tabCentre(s: Pick<Stick, 'x' | 'y' | 'per'>, side: Side | null | undefined): { x: number; y: number } {
+  const o = tabOut(side), d = tabDepth(side) * s.per
+  return { x: s.x + o.x * d, y: s.y + o.y * d }
+}
+/** The line that shows it is docked: how long, along the edge, feet. */
+export const DOCK_LINE = 1.7
 /** The board on its top: half its width and height, how far its corners
  *  are cut, and the share of its height (from its top) the number has. */
 export const SIGN_W = 0.62

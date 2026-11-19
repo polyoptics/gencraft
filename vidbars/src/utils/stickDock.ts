@@ -26,7 +26,9 @@ import { useModelScaleStore } from '../store/tiltStore'
 import type { FreeNodeData } from '../store/freeNodeStore'
 import { dockedCards } from './filmShots'
 import { detailShown, newDetailId } from './cardTypes'
-import { FT_PER_M, parseHeight } from './stickGeom'
+import { FT_PER_M, parseHeight, heightText, type Side } from './stickGeom'
+import { cardScreenRect } from '../components/Layers/CardLayer'
+import { isHiddenDeckMember } from '../hooks/useCardDecks'
 
 /** How far round its foot a stick reaches for a card, feet. */
 const REACH = 1.2
@@ -37,6 +39,42 @@ export function stickCards(s: Stick): ProjectGroup[] {
   const bs = useBoardsStore.getState()
   const r = REACH * s.per
   return dockedCards({ x: s.x - r, y: s.y - r, width: r * 2, height: r * 2 } as FreeNodeData, bs.groups, bs.boards)
+}
+
+type Box = { l: number; t: number; r: number; b: number }
+/** A card's face, canvas units, at the zoom it is drawn at. */
+function cardBox(g: ProjectGroup): Box | null {
+  const zoom = useCanvasStore.getState().zoom || 1
+  const r = cardScreenRect(g, useBoardsStore.getState().boards, { x: 0, y: 0 }, zoom)
+  return r && { l: r.screenLeft / zoom, t: r.screenTop / zoom, r: (r.screenLeft + r.screenWidth) / zoom, b: (r.screenTop + r.screenHeight) / zoom }
+}
+/** The nearest place on a box's edge to a point, which side it is on,
+ *  and how far. */
+function nearEdge(b: Box, x: number, y: number): { x: number; y: number; side: Side; d: number } {
+  const cx = Math.max(b.l, Math.min(b.r, x)), cy = Math.max(b.t, Math.min(b.b, y))
+  const c: { x: number; y: number; side: Side; d: number }[] = [
+    { x: cx, y: b.t, side: 'top', d: 0 }, { x: cx, y: b.b, side: 'bottom', d: 0 },
+    { x: b.l, y: cy, side: 'left', d: 0 }, { x: b.r, y: cy, side: 'right', d: 0 },
+  ]
+  for (const p of c) p.d = Math.hypot(p.x - x, p.y - y)
+  return c.reduce((a, p) => p.d < a.d ? p : a)
+}
+
+/** How near a card's edge (screen px) a stick being moved jumps onto it. */
+const SNAP_PX = 22
+/** Where a stick let go at (x, y) sits: on the nearest card edge within
+ *  reach, its flat side to it; else where it is. */
+export function snapTab(x: number, y: number): { x: number; y: number } {
+  const zoom = useCanvasStore.getState().zoom || 1
+  let best: { x: number; y: number; d: number } | null = null
+  for (const g of useBoardsStore.getState().groups) {
+    if (g.pin || isHiddenDeckMember(g)) continue
+    const b = cardBox(g)
+    if (!b) continue
+    const e = nearEdge(b, x, y)
+    if (e.d * zoom <= SNAP_PX && (!best || e.d < best.d)) best = e
+  }
+  return best ? { x: best.x, y: best.y } : { x, y }
 }
 
 /** The card a card's back is read from (a linked card's is its master's). */
@@ -58,6 +96,11 @@ interface Measured {
   owner: Map<string, string>
   /** The sticks that are docked. */
   docked: Set<string>
+  /** The side of its card each docked stick is on, and its place on
+   *  that edge (docked, a stick is drawn on the edge, wherever by it it
+   *  was put down). */
+  sides: Map<string, Side>
+  at: Map<string, { x: number; y: number }>
   /** Changes when any of it does. */
   sig: number
 }
@@ -72,10 +115,19 @@ export function stickMeasures(): Measured {
   const zoom = useCanvasStore.getState().zoom
   if (memo && memo.sticks === sticks && memo.groups === bs.groups && memo.boards === bs.boards && memo.zoom === zoom) return memo.out
   const heights = new Map<string, number>(), bare = new Map<string, string>(), owner = new Map<string, string>()
-  const docked = new Set<string>()
+  const docked = new Set<string>(), sides = new Map<string, Side>(), at = new Map<string, { x: number; y: number }>()
   for (const s of Object.values(sticks)) {
     const cards = stickCards(s)
     if (cards.length) docked.add(s.id)
+    // The side of the nearest of them it is on.
+    let near: { x: number; y: number; side: Side; d: number } | null = null
+    for (const g of cards) {
+      if (isHiddenDeckMember(g)) continue
+      const b = cardBox(g)
+      const e = b && nearEdge(b, s.x, s.y)
+      if (e && (!near || e.d < near.d)) near = e
+    }
+    if (near) { sides.set(s.id, near.side); at.set(s.id, { x: near.x, y: near.y }) }
     for (const g of cards) {
       if (owner.has(g.id)) continue
       owner.set(g.id, s.id)
@@ -85,10 +137,39 @@ export function stickMeasures(): Measured {
   }
   const was = memo?.out
   const same = !!was && was.docked.size === docked.size && [...docked].every(id => was.docked.has(id))
-    && sameMap(was.heights, heights) && sameMap(was.bare, bare) && sameMap(was.owner, owner)
-  const out = same ? was! : { heights, bare, owner, docked, sig: ++sigSeq }
+    && sameMap(was.heights, heights) && sameMap(was.bare, bare) && sameMap(was.owner, owner) && sameMap(was.sides, sides)
+    && at.size === was.at.size && [...at].every(([k, p]) => was.at.get(k)?.x === p.x && was.at.get(k)?.y === p.y)
+  const out = same ? was! : { heights, bare, owner, docked, sides, at, sig: ++sigSeq }
   memo = { sticks, groups: bs.groups, boards: bs.boards, zoom, out }
   return out
+}
+
+/** Where a stick is: docked, on the edge it is docked by. */
+export const stickPoint = (s: Stick): { x: number; y: number } => stickMeasures().at.get(s.id) ?? { x: s.x, y: s.y }
+
+/** A selected card of a stick's group: how tall it is against the stick. */
+export interface StickMark { id: string; ft: number; color: string; text: string }
+/** The marks on a stick: one for each selected card docked to it that
+ *  has a height (Brian 2026-11-19: "if you have a card selected... it'll
+ *  show a mark on the measure stick"), shortest first. */
+export function stickMarks(s: Stick): StickMark[] {
+  const m = stickMeasures()
+  const bs = useBoardsStore.getState()
+  const out: StickMark[] = []
+  for (const id of bs.selectedGroupIds) {
+    const units = m.owner.get(id) === s.id ? m.heights.get(id) : undefined
+    if (!units) continue
+    const ft = units / s.per
+    out.push({ id, ft, color: bs.groups.find(g => g.id === id)?.color || '#4fc3ff', text: heightText({ ft, metric: s.metric }) })
+  }
+  return out.sort((a, b) => a.ft - b.ft)
+}
+/** What a stick's tab says, flat: the height of the card picked in its
+ *  group (of several, the shortest to the tallest); with none picked,
+ *  its own. */
+export function tabText(s: Stick, marks = stickMarks(s)): string {
+  if (!marks.length) return heightText(s)
+  return marks.length === 1 ? marks[0].text : `${marks[0].text} – ${marks[marks.length - 1].text}`
 }
 
 // ── A card with no Height: where its model starts from ──

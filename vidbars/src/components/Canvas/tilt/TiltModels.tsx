@@ -26,7 +26,7 @@ import { useCurveDraft, usePathHot, useStickUi } from '../../../store/pathLive'
 import { targetMiddle, pickedPoints } from '../../../utils/pathEdit'
 import type { PathFrame, PathHit } from '../../../three/pathOverlay'
 import type { StickFrame, StickSpot } from '../../../three/stickOverlay'
-import { stickMeasures, seenHeight } from '../../../utils/stickDock'
+import { stickMeasures, stickMarks, seenHeight } from '../../../utils/stickDock'
 import { curveRuns, pointFrames, withLayers } from '../../../utils/curveGeom'
 import { PinLabels } from '../../Notes/PinLabels'
 import { gradeFor } from '../../../utils/modelGrade'
@@ -255,6 +255,8 @@ const frameState = (): TiltFrameState => {
  *  drawn or the part under the cursor changes: the 3D view draws again. */
 let pathSig = 0
 for (const st of [useNotesStore, useNotesUi, useCurveDraft, usePathHot, useStickUi]) st.subscribe(() => { pathSig++ })
+// (A stick marks the selected cards of its group.)
+useBoardsStore.subscribe((s, p) => { if (s.selectedGroupIds !== p.selectedGroupIds && Object.keys(useNotesStore.getState().sticks ?? {}).length) pathSig++ })
 
 /** A curve's pattern is running along it: the 3D view keeps drawing. */
 const pathFlows = () => tilted3d() && Object.values(notesNow.curves).some(c => c.kind === 'bezier' && curveRuns(c))
@@ -275,7 +277,8 @@ function stickFrame(): StickFrame | undefined {
   const { pan, zoom } = useCanvasStore.getState()
   const W = models.root?.clientWidth ?? 0, H = models.root?.clientHeight ?? 0
   const ui = useStickUi.getState()
-  return { sticks, selected: ui.selected, hot: ui.hot, docked: stickMeasures().docked, fontRev: ui.fontRev, zoom, ox: pan.x - W / 2, oy: pan.y - H / 2 }
+  const m = stickMeasures()
+  return { sticks, selected: ui.selected, hot: ui.hot, docked: m.docked, sides: m.sides, at: m.at, marks: new Map(sticks.map(s => [s.id, stickMarks(s)])), fontRev: ui.fontRev, zoom, ox: pan.x - W / 2, oy: pan.y - H / 2 }
 }
 
 /** The canvas's curves for the 3D view (three/pathOverlay): the bezier

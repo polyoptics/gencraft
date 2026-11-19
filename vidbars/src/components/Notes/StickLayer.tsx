@@ -1,10 +1,14 @@
 // StickLayer — the measuring sticks (store/notesStore sticks) in the flat
-// view: each lies on the canvas pointing up it, seen from its side, as
-// the 3D view (three/stickOverlay) has it lying before it stands up.
-// Drawn in the canvas's tilt stage in flat screen px (canvas x zoom + pan,
-// as the curves are). In 3D the sticks are the 3D view's to draw. The
-// mouse is utils/stickTool, which asks where they are rather than being
-// pressed through these shapes.
+// view (Brian 2026-11-19: "from the top view... it's a little tab now
+// that's docked onto the side"): flat, a stick is its board alone, lying
+// over its base on the edge of what it is docked to, with a short ticked
+// line along that edge. The board says how tall the stick is; with a
+// card of its group selected, how tall that card is (several: the
+// shortest to the tallest). Drawn in the canvas's tilt stage in flat
+// screen px (canvas x zoom + pan, as the curves are). In 3D the sticks
+// are the 3D view's to draw (three/stickOverlay). The mouse is
+// utils/stickTool, which asks where they are rather than being pressed
+// through these shapes.
 
 import React, { useEffect } from 'react'
 import { useNotesStore, type Stick } from '../../store/notesStore'
@@ -14,12 +18,8 @@ import { useStickUi } from '../../store/pathLive'
 import { useTiltStore, isTilted } from '../../store/tiltStore'
 import { useManip } from '../../store/manipStore'
 import { ensureFontLoaded } from '../UI/TextFormatToolbar'
-import { stickMeasures } from '../../utils/stickDock'
-import { POLE_R, LOWER_R, LOWER_TOP, BASE_R, BASE_H, SIGN_W, SIGN_H, SIGN_CUT, SIGN_TEXT, NUM_H, CREAM, GREEN, ORANGE, DARK, ACCENT, DEFAULT_FONT, TICK, heightText, unitText, stickTicks } from '../../utils/stickGeom'
-
-/** A tube seen from its side, `from` to `to` up the stick. */
-const Tube: React.FC<{ r: number; from: number; to: number; fill: string }> = ({ r, from, to, fill }) =>
-  <rect x={-r} y={-to} width={r * 2} height={to - from} fill={fill} />
+import { stickMeasures, stickMarks, tabText } from '../../utils/stickDock'
+import { DOCK_LINE, SIGN_W, SIGN_H, SIGN_CUT, SIGN_TEXT, CREAM, GREEN, ORANGE, DARK, ACCENT, DEFAULT_FONT, unitText, tabOut, tabDepth, type Side } from '../../utils/stickGeom'
 
 /** The board's outline, its corners cut, `inset` in from its edge. */
 const boardPath = (cy: number, inset: number) => {
@@ -27,37 +27,36 @@ const boardPath = (cy: number, inset: number) => {
   return `M${-w + c} ${cy - h}L${w - c} ${cy - h}L${w} ${cy - h + c}L${w} ${cy + h - c}L${w - c} ${cy + h}L${-w + c} ${cy + h}L${-w} ${cy + h - c}L${-w} ${cy - h + c}Z`
 }
 
-/** One stick, in feet from its foot (y runs down the canvas: up it is −y). */
-const StickShape: React.FC<{ s: Stick; selected: boolean; hotTop: boolean; docked: boolean }> = ({ s, selected, hotTop, docked }) => {
-  const text = heightText(s)
-  const cy = -(s.ft + 0.05 + SIGN_H)
-  const ticks = stickTicks(s)
-  const j = BASE_H + 0.08
-  const top = LOWER_R + 0.035
+/** One stick's tab, in feet from its own point (on the edge it is docked by). */
+const StickTab: React.FC<{ s: Stick; at: { x: number; y: number }; selected: boolean; hot: boolean; docked: boolean; side: Side | null }> = ({ s, at, selected, hot, docked, side }) => {
+  const marks = stickMarks(s)
+  const text = tabText(s, marks)
+  const out = tabOut(side), depth = tabDepth(side)
+  const cx = out.x * depth, cy = out.y * depth
   // The number's box: the board's upper part, over the rule.
   const textH = SIGN_H * 2 * SIGN_TEXT
   const size = Math.min(textH * 0.72, (SIGN_W * 2 - 0.3) / Math.max(1, text.length) * 1.7)
+  // Along the edge, and the ticks' way out from it.
+  const tx = -out.y, ty = out.x, L = DOCK_LINE / 2
   return (
-    <g transform={`translate(${s.x} ${s.y}) scale(${s.per})`}>
-      {docked && <rect x={-BASE_R - 0.11} y={-0.025} width={BASE_R * 2 + 0.22} height={0.05} fill={ORANGE} />}
-      <path d={`M${-BASE_R} 0L${BASE_R} 0L${top} ${-BASE_H}L${-top} ${-BASE_H}Z`} fill={selected ? ACCENT : GREEN} />
-      <Tube r={LOWER_R + 0.03} from={BASE_H} to={j} fill={GREEN} />
-      <Tube r={LOWER_R} from={j} to={LOWER_TOP - 0.07} fill={CREAM} />
-      <Tube r={LOWER_R + 0.004} from={0.46} to={0.6} fill={ORANGE} />
-      <Tube r={LOWER_R + 0.022} from={LOWER_TOP - 0.07} to={LOWER_TOP + 0.03} fill={GREEN} />
-      <Tube r={POLE_R} from={LOWER_TOP + 0.03} to={s.ft - 0.05} fill={CREAM} />
-      {ticks.map(t => <Tube key={t.at} r={TICK[t.k].r} from={t.at - TICK[t.k].h / 2} to={t.at + TICK[t.k].h / 2} fill={TICK[t.k].color} />)}
-      <Tube r={POLE_R + 0.03} from={s.ft - 0.05} to={s.ft + 0.05} fill={GREEN} />
-      {ticks.filter(t => t.label).map(t => (
-        <text key={t.at} x={POLE_R + 0.14} y={-t.at} fontSize={NUM_H * 0.8} fontWeight={700} fontFamily={DEFAULT_FONT} dominantBaseline="central"
-          fill="#fff" stroke="rgba(8,10,20,0.9)" strokeWidth={NUM_H * 0.16} strokeLinejoin="round" paintOrder="stroke">{t.label}</text>
-      ))}
-      <path d={boardPath(cy, 0)} fill={DARK} />
-      <path d={boardPath(cy, 0.014)} fill={selected || hotTop ? ACCENT : GREEN} />
-      <path d={boardPath(cy, 0.05)} fill={CREAM} />
-      <text x={0} y={cy - SIGN_H + textH / 2 + 0.03} fontSize={size} fontWeight={700} fontFamily={s.font ?? DEFAULT_FONT} textAnchor="middle" dominantBaseline="central" fill={ORANGE}>{text}</text>
-      <rect x={-SIGN_W + 0.1} y={cy - SIGN_H + textH} width={SIGN_W * 2 - 0.2} height={0.03} fill={ORANGE} />
-      <text x={0} y={cy - SIGN_H + textH + (SIGN_H * 2 - textH) / 2} fontSize={(SIGN_H * 2 - textH) * 0.4} fontWeight={700} fontFamily={DEFAULT_FONT} letterSpacing={0.015} textAnchor="middle" dominantBaseline="central" fill={GREEN}>{unitText(s)}</text>
+    <g transform={`translate(${at.x} ${at.y}) scale(${s.per})`}>
+      <g transform={`translate(${cx} ${cy})`}>
+        <path d={boardPath(0, 0)} fill={DARK} />
+        <path d={boardPath(0, 0.014)} fill={selected || hot ? ACCENT : GREEN} />
+        <path d={boardPath(0, 0.05)} fill={CREAM} />
+        <text x={0} y={-SIGN_H + textH / 2 + 0.03} fontSize={size} fontWeight={700} fontFamily={s.font ?? DEFAULT_FONT} textAnchor="middle" dominantBaseline="central" fill={marks.length === 1 ? DARK : ORANGE}>{text}</text>
+        <rect x={-SIGN_W + 0.1} y={-SIGN_H + textH} width={SIGN_W * 2 - 0.2} height={0.03} fill={marks.length === 1 ? marks[0].color : ORANGE} />
+        <text x={0} y={-SIGN_H + textH + (SIGN_H * 2 - textH) / 2} fontSize={(SIGN_H * 2 - textH) * 0.4} fontWeight={700} fontFamily={DEFAULT_FONT} letterSpacing={0.015} textAnchor="middle" dominantBaseline="central" fill={GREEN}>{unitText(s)}</text>
+      </g>
+      {docked && (
+        <g stroke={ORANGE} strokeLinecap="butt">
+          <line x1={-tx * L} y1={-ty * L} x2={tx * L} y2={ty * L} strokeWidth={0.04} />
+          {[-4, -3, -2, -1, 0, 1, 2, 3, 4].map(i => {
+            const a = i / 4 * L, k = i % 2 === 0 ? 0.13 : 0.07
+            return <line key={i} x1={tx * a} y1={ty * a} x2={tx * a + out.x * k} y2={ty * a + out.y * k} strokeWidth={0.028} />
+          })}
+        </g>
+      )}
     </g>
   )
 }
@@ -70,8 +69,10 @@ export const StickLayer: React.FC = () => {
   const hot = useStickUi(s => s.hot)
   const tilted = useTiltStore(s => isTilted(s))
   const through = useManip(s => s.through)
-  // (Docking is worked out from where the cards are.)
+  // (Docking is worked out from where the cards are; the tab reads the
+  // selected card's height.)
   useBoardsStore(s => s.groups)
+  useBoardsStore(s => s.selectedGroupIds)
   const list = Object.values(sticks ?? {})
   // A number's font is fetched if it is not on the machine; the 3D view's
   // boards are drawn again when it has come.
@@ -83,11 +84,11 @@ export const StickLayer: React.FC = () => {
     }
   }, [fonts])
   if (!list.length || tilted || through) return null
-  const docked = stickMeasures().docked
+  const { docked, sides, at } = stickMeasures()
   return (
     <svg data-stick-layer="" style={{ position: 'absolute', left: 0, top: 0, width: 1, height: 1, overflow: 'visible', pointerEvents: 'none' }}>
       <g transform={`translate(${pan.x} ${pan.y}) scale(${zoom})`}>
-        {list.map(s => <StickShape key={s.id} s={s} selected={selected === s.id} hotTop={hot === `${s.id}:top`} docked={docked.has(s.id)} />)}
+        {list.map(s => <StickTab key={s.id} s={s} at={at.get(s.id) ?? s} selected={selected === s.id} hot={!!hot && hot.startsWith(`${s.id}:`)} docked={docked.has(s.id)} side={sides.get(s.id) ?? null} />)}
       </g>
     </svg>
   )

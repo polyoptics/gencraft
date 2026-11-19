@@ -28,7 +28,7 @@ import { NewCardPalette } from './NewCardPalette'
 import { useZoomZone } from '../../store/zoomZonesStore'
 import { useCabinetUi } from '../../utils/cabinet'
 import { openFilmMixer, existingFilmMixer } from '../FilmMixer/FilmMixerBody'
-import { useNotesUi } from '../../store/notesStore'
+import { useNotesUi, toggleTool } from '../../store/notesStore'
 import { toggleChat, useAgentChat } from '../../utils/agentChat'
 
 /** Tile edge in px. A shade over 1cm on a typical desktop monitor. */
@@ -293,6 +293,17 @@ const IcNotes: React.FC<SvgProps> = ({ size }) => (
   </svg>
 )
 
+/** Measuring stick — a ticked pole on a D-shaped foot, its board on top.
+ *  Accent: the board. */
+const IcStick: React.FC<SvgProps> = ({ size }) => (
+  <svg {...svgBase(size)}>
+    <path d="M12 9.5v9" stroke={S} />
+    <path d="M12 12h2.6M12 14.5h1.6M12 17h2.6" stroke={S} strokeWidth="1.4" />
+    <path d="M7.5 18.5h9a4.5 2.6 0 0 1-9 0z" stroke={S} strokeWidth="1.6" />
+    <rect x="6.5" y="3.5" width="11" height="6" rx="1.2" stroke={A.coral} />
+  </svg>
+)
+
 /** Claude — a speech bubble with a spark in it. Accent: the spark. */
 const IcClaude: React.FC<SvgProps> = ({ size }) => (
   <svg {...svgBase(size)}>
@@ -307,10 +318,10 @@ const IcClaude: React.FC<SvgProps> = ({ size }) => (
 // follows here.
 type BarId =
   | 'viewer' | 'pool' | 'prompt' | 'promptCards' | 'history' | 'browser' | 'attributes' | 'filmMixer'
-  | 'roughCut' | 'storyline' | 'cabinet' | 'loopStrip' | 'scene3d' | 'stateSpace' | 'effects' | 'promptCard' | 'notes' | 'claude' | 'new'
+  | 'roughCut' | 'storyline' | 'cabinet' | 'loopStrip' | 'scene3d' | 'stateSpace' | 'effects' | 'promptCard' | 'notes' | 'stick' | 'claude' | 'new'
 const DEFAULT_ORDER: BarId[] = [
   'viewer', 'pool', 'prompt', 'promptCards', 'history', 'browser', 'attributes', 'filmMixer',
-  'roughCut', 'storyline', 'cabinet', 'loopStrip', 'scene3d', 'stateSpace', 'effects', 'promptCard', 'notes', 'claude', 'new',
+  'roughCut', 'storyline', 'cabinet', 'loopStrip', 'scene3d', 'stateSpace', 'effects', 'promptCard', 'notes', 'stick', 'claude', 'new',
 ]
 const ORDER_KEY = 'vidbars.topIconBar.order'
 
@@ -482,6 +493,7 @@ export const TopIconBar: React.FC = () => {
   // What the mouse is carrying, so its button stays lit while you aim.
   const placing = usePlacing(s => s.kind)
   const notesOpen = useNotesUi(s => s.open)
+  const stickInHand = useNotesUi(s => s.tool === 'stick')
   const chatOpen = useAgentChat(s => s.open)
   const place = (kind: PlaceKind) => ({ onClick: () => togglePlacing(kind), active: placing === kind })
 
@@ -549,6 +561,7 @@ export const TopIconBar: React.FC = () => {
     ),
     // The Notes & 3D tools panel (components/Notes/NotesPanel): lit while out.
     notes: <IconButton Icon={IcNotes} title="Notes & 3D tools — curves, arrows, drawing on models, pins, 3D sets" active={notesOpen} onClick={() => useNotesUi.setState(s => ({ open: !s.open, tool: s.open ? null : s.tool }))} />,
+    stick: <IconButton Icon={IcStick} title="Measuring stick — click the canvas to put one down; by a card's edge it docks to it" active={stickInHand} onClick={() => toggleTool('stick')} />,
     claude: <IconButton Icon={IcClaude} title="Claude — chat boxes: ask Claude to work on the canvas with you" active={chatOpen} onClick={toggleChat} />,
     new: (
       <IconButton
