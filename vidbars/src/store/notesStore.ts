@@ -271,8 +271,12 @@ export interface PictureMark {
  *  in 3D and lies flat on it in 2D (pointing up the canvas), banded a
  *  foot at a time with a round sign on its top. `x`, `y`: its foot,
  *  canvas units. `ft`: how tall it is, feet (6 when made; the top drags).
- *  `per`: canvas units to a foot. */
-export interface Stick { id: string; x: number; y: number; ft: number; per: number }
+ *  `per`: canvas units to a foot. `metric`: read in metres (double-click
+ *  its board). `font`: its number's font (double-click the number).
+ *  Standing on a card or a deck it is docked to it (worked out from where
+ *  it is, never kept: utils/stickDock): the models of those cards whose
+ *  backs give a Height stand that tall against it in 3D. */
+export interface Stick { id: string; x: number; y: number; ft: number; per: number; metric?: boolean; font?: string }
 
 interface NotesStore {
   sticks: Record<string, Stick>

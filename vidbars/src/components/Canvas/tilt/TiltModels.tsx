@@ -26,6 +26,7 @@ import { useCurveDraft, usePathHot, useStickUi } from '../../../store/pathLive'
 import { targetMiddle, pickedPoints } from '../../../utils/pathEdit'
 import type { PathFrame, PathHit } from '../../../three/pathOverlay'
 import type { StickFrame, StickSpot } from '../../../three/stickOverlay'
+import { stickMeasures } from '../../../utils/stickDock'
 import { curveRuns, pointFrames, withLayers } from '../../../utils/curveGeom'
 import { PinLabels } from '../../Notes/PinLabels'
 import { gradeFor } from '../../../utils/modelGrade'
@@ -197,6 +198,8 @@ const frameState = (): TiltFrameState => {
   const placedMemo = new Map<string, boolean>()
   // A model riding a path is where the path has it (utils/pathRide).
   const rides = rideSpots()
+  // Cards docked to a measuring stick (utils/stickDock).
+  const measured = stickMeasures(), zoomNow = useCanvasStore.getState().zoom
   const riding = (key: string) => rides?.size ? rides.get(key) ?? rides.get(dataKey(key)) : undefined
   const placed = (key: string) => { let v = placedMemo.get(key); if (v === undefined) { v = onArea3d(key) || !!riding(key); placedMemo.set(key, v) } return v }
   return {
@@ -231,6 +234,13 @@ const frameState = (): TiltFrameState => {
     inLook: lookSet ? key => inSet(key, lookSet) : undefined,
     paths: tilted3d() ? pathFrame() : undefined,
     sticks: tilted3d() ? stickFrame() : undefined,
+    // A card docked to a measuring stick: its model as tall as its Height.
+    heightFor: measured.heights.size ? key => {
+      if (!key.startsWith('card:')) return undefined
+      const h = measured.heights.get(key.slice(5)) ?? measured.heights.get(dataKey(key).slice(5))
+      return h ? h * zoomNow : undefined
+    } : undefined,
+    heightSig: measured.sig,
     full: live.size ? key => live.has(key) || live.has(dataKey(key)) : undefined,
   }
 }
@@ -259,7 +269,7 @@ function stickFrame(): StickFrame | undefined {
   const { pan, zoom } = useCanvasStore.getState()
   const W = models.root?.clientWidth ?? 0, H = models.root?.clientHeight ?? 0
   const ui = useStickUi.getState()
-  return { sticks, selected: ui.selected, hot: ui.hot, zoom, ox: pan.x - W / 2, oy: pan.y - H / 2 }
+  return { sticks, selected: ui.selected, hot: ui.hot, docked: stickMeasures().docked, fontRev: ui.fontRev, zoom, ox: pan.x - W / 2, oy: pan.y - H / 2 }
 }
 
 /** The canvas's curves for the 3D view (three/pathOverlay): the bezier
@@ -324,7 +334,7 @@ function frameSig(st: TiltFrameState, W: number, H: number): string {
     str(sl.finish); n(sl.bevel); n(sl.seam)
   }
   str(st.manip?.mode); str(st.manip?.plane); b(st.manip?.local); r(st.manip?.size)
-  n(st.paths?.sig); n(st.paths?.time); n(st.paths?.zoom); n(st.paths?.ox); n(st.paths?.oy); n(st.paths?.gizmo?.x); n(st.paths?.gizmo?.y); n(st.paths?.gizmo?.z)
+  n(st.heightSig); n(st.paths?.sig); n(st.paths?.time); n(st.paths?.zoom); n(st.paths?.ox); n(st.paths?.oy); n(st.paths?.gizmo?.x); n(st.paths?.gizmo?.y); n(st.paths?.gizmo?.z)
   n(st.art.length)
   for (const a of st.art) { n(a.u); n(a.v); n(a.w); n(a.h); n(a.z); n(a.hinge?.v); n(a.hinge?.z); n(a.hinge?.a) }
   return `${h1}:${h2}`

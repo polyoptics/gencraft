@@ -46,6 +46,7 @@ import { useTiltStore, useModelScaleStore } from './store/tiltStore'
 import { useCabinetUi } from './utils/cabinet'
 import { usePickMode } from './utils/cabinetPick'
 import { useNotesStore, useNotesUi } from './store/notesStore'
+import { stickMeasures, stickCards } from './utils/stickDock'
 import { models } from './components/Canvas/tilt/TiltModels'
 import { usePieceStore } from './three/pieceService'
 import { scenePieces } from './utils/scenePieces'
@@ -69,6 +70,8 @@ import { snapshotSetMap } from './utils/mapSnapshot'
   useCabinetUi, useTiltStore, usePickMode,
   // The 3D notes tools, and the 3D view's hit test they draw through.
   useNotesStore, useNotesUi, tiltModels: models,
+  // Measuring sticks docked to cards (utils/stickDock).
+  stick: { stickMeasures, stickCards },
   // 3D area cards (utils/area3dCard), and the model sizes and turns they keep.
   area3d: { showArea3d, foldArea3d, toggleArea3d, area3dOutOf, bundleArea3dCard, createMediaCard }, useModelScaleStore,
   // Charts baked into cards (utils/chartCard), and a plain card to try them on.

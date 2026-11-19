@@ -29,6 +29,7 @@ import { PieceLayer } from './components/Canvas/PieceLayer'
 import { MapNotesLayer } from './components/Notes/MapNotesLayer'
 import { NotesPanel } from './components/Notes/NotesPanel'
 import { PathMenu } from './components/Notes/PathMenu'
+import { StickMenu } from './components/Notes/StickMenu'
 import { ensureRolodexHome, useRolodexHomeBootstrap } from './utils/rolodexHome'
 import { StoragePersistenceBanner } from './components/UI/StoragePersistenceBanner'
 import { GifNotice } from './components/UI/GifNotice'
@@ -906,6 +907,7 @@ export default function App() {
       <DrawToolbar />
       <NotesPanel />
       <PathMenu />
+      <StickMenu />
 
       {/* The Rolodex is no longer mounted here: the home instance is an
           ordinary pinned `list` node, rendered by PinLayer → FreeNode →

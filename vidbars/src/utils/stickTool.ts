@@ -7,10 +7,14 @@
 // screen is asked of whichever draws it.
 //  - The Measuring stick tool (the Notes panel): click the canvas to put
 //    one down, 6 ft tall. The tool is put down with it.
-//  - Drag its round sign: its top goes higher or lower, an inch at a
-//    time. Shift-drag the sign: the whole stick grows or shrinks (its 6 ft
-//    with it), to set it against what it measures.
-//  - Drag its pole or foot: it moves across the canvas.
+//  - Drag its board: its top goes higher or lower, an inch at a time (a
+//    centimetre, metric). Shift-drag the board: the whole stick grows or
+//    shrinks, marks and all, and the models of the cards it is docked to
+//    with it (utils/stickDock).
+//  - Double-click the number on its board: the list of fonts for it.
+//    Double-click the rest of the board: feet or metres.
+//  - Drag its pole or foot: it moves across the canvas. Let go with its
+//    feet on a card or a deck, it is docked to it.
 //  - Click it to select it; Delete removes it. The Erase tool's click
 //    removes it too.
 
@@ -24,7 +28,8 @@ import { clientToCanvas } from './fx/createEffect'
 import { canvasPointUnder, overCanvas, usePlacing } from './placeTool'
 import { models } from '../components/Canvas/tilt/TiltModels'
 import type { StickSpot } from '../three/stickOverlay'
-import { STICK_FT, STICK_MIN, STICK_MAX, STICK_NEW_PX, SIGN_R, stickLen } from './stickGeom'
+import './stickDock'
+import { STICK_FT, STICK_NEW_PX, SIGN_W, SIGN_H, SIGN_TEXT, stickLen, snapHeight } from './stickGeom'
 
 type Pt = { x: number; y: number }
 type Part = 'top' | 'body'
@@ -41,7 +46,7 @@ function spots(): StickSpot[] {
   const at = (x: number, y: number) => ({ x: (x - o.cx) * zoom, y: (y - o.cy) * zoom })
   return Object.values(sticksNow()).map(s => {
     const L = stickLen(s)
-    return { id: s.id, foot: at(s.x, s.y), top: at(s.x, s.y - L), sign: at(s.x, s.y - L - SIGN_R * s.per), r: SIGN_R * s.per * zoom }
+    return { id: s.id, foot: at(s.x, s.y), top: at(s.x, s.y - L), sign: at(s.x, s.y - L - (0.05 + SIGN_H) * s.per), hw: SIGN_W * s.per * zoom, hh: SIGN_H * s.per * zoom }
   })
 }
 
@@ -56,7 +61,8 @@ function hitAt(p: Pt): { spot: StickSpot; part: Part } | null {
   let best: { spot: StickSpot; part: Part; d: number } | null = null
   for (const s of spots()) {
     const ds = Math.hypot(p.x - s.sign.x, p.y - s.sign.y)
-    if (ds <= Math.max(s.r, 9) && (!best || best.part !== 'top' || ds < best.d)) { best = { spot: s, part: 'top', d: ds }; continue }
+    const on = Math.abs(p.x - s.sign.x) <= Math.max(s.hw, 9) && Math.abs(p.y - s.sign.y) <= Math.max(s.hh, 9)
+    if (on && (!best || best.part !== 'top' || ds < best.d)) { best = { spot: s, part: 'top', d: ds }; continue }
     const db = Math.min(segDist(p, s.foot, s.top), Math.hypot(p.x - s.foot.x, p.y - s.foot.y) - 4)
     if (db <= 7 && (!best || (best.part === 'body' && db < best.d))) best = { spot: s, part: 'body', d: db }
   }
@@ -75,6 +81,13 @@ function free(target: EventTarget | null, e: { clientX: number; clientY: number 
   return true
 }
 
+/** A point on a stick's board is on its number (the board's upper part,
+ *  over the rule). */
+const onNumber = (p: Pt, s: StickSpot) => (p.y - (s.sign.y - s.hh)) / Math.max(1, s.hh * 2) < SIGN_TEXT
+
+/** Two presses on a board this close together: a double-click (ms). */
+const DOUBLE_MS = 380
+let lastPress: { id: string; t: number; x: number; y: number } | null = null
 let drag: { move: (e: PointerEvent) => void } | null = null
 let eatClick = false
 let hotCursor = false
@@ -125,11 +138,23 @@ function onDown(e: PointerEvent) {
   useStickUi.setState({ selected: s0.id })
   if (ui.selected.length) useNotesUi.setState({ selected: [], points: [] })
   const x0 = e.clientX, y0 = e.clientY
+  // Double-click its board: on the number, the fonts; off it, the unit.
+  if (hit.part === 'top') {
+    const now = performance.now(), was = lastPress
+    lastPress = { id: s0.id, t: now, x: x0, y: y0 }
+    if (was && was.id === s0.id && now - was.t < DOUBLE_MS && Math.hypot(x0 - was.x, y0 - was.y) < 6) {
+      lastPress = null
+      if (onNumber({ x: x0, y: y0 }, hit.spot)) useStickUi.setState({ fonts: { id: s0.id, x: x0 + 14, y: y0 - 20 } })
+      else { checkpoint(); useNotesStore.getState().updateStick(s0.id, { metric: s0.metric ? undefined : true }) }
+      return
+    }
+  } else lastPress = null
   let moved = false
   const begin = (ev: PointerEvent) => {
     if (moved) return true
     if (Math.hypot(ev.clientX - x0, ev.clientY - y0) < 3) return false
     moved = true
+    lastPress = null
     checkpoint()
     return true
   }
@@ -148,9 +173,8 @@ function onDown(e: PointerEvent) {
           // The whole stick, its marks with it.
           useNotesStore.getState().updateStick(s0.id, { per: Math.max(s0.per * 0.02, L / s0.ft) })
         } else {
-          // Its top alone, to the inch.
-          const ft = Math.round(L / s0.per * 12) / 12
-          useNotesStore.getState().updateStick(s0.id, { ft: Math.max(STICK_MIN, Math.min(STICK_MAX, ft)) })
+          // Its top alone, to the inch (metric, the centimetre).
+          useNotesStore.getState().updateStick(s0.id, { ft: snapHeight(L / s0.per, s0.metric) })
         }
       },
     }
@@ -195,6 +219,12 @@ function onClick(e: MouseEvent) {
   claim(e)
 }
 
+/** A double-click on a stick is the stick's (taken on its second press). */
+function onDbl(e: MouseEvent) {
+  if (!e.isTrusted || useNotesUi.getState().tool || !Object.keys(sticksNow()).length) return
+  if (useStickUi.getState().fonts || (free(e.target, e) && hitAt({ x: e.clientX, y: e.clientY }))) claim(e)
+}
+
 function onKey(e: KeyboardEvent) {
   const sel = useStickUi.getState().selected
   if (!sel || (e.key !== 'Delete' && e.key !== 'Backspace')) return
@@ -208,11 +238,13 @@ function onKey(e: KeyboardEvent) {
 }
 
 // Installed once; a reload of this module (dev) swaps the handlers in place.
-type Handlers = { onDown: typeof onDown; onMove: typeof onMove; onUp: typeof onUp; onClick: typeof onClick; onKey: typeof onKey }
+type Handlers = { onDown: typeof onDown; onMove: typeof onMove; onUp: typeof onUp; onClick: typeof onClick; onKey: typeof onKey; onDbl?: typeof onDbl }
 const w = (typeof window !== 'undefined' ? window : undefined) as (Window & { __stickTool?: Handlers }) | undefined
 if (w) {
   const first = !w.__stickTool
-  w.__stickTool = { onDown, onMove, onUp, onClick, onKey }
+  w.__stickTool = { onDown, onMove, onUp, onClick, onKey, onDbl }
+  // (A dev reload of the first version of this file left no double-click listener.)
+  if (!first && !(w as unknown as { __stickDbl?: boolean }).__stickDbl) { (w as unknown as { __stickDbl?: boolean }).__stickDbl = true; w.addEventListener('dblclick', e => w.__stickTool!.onDbl?.(e), true) }
   if (first) {
     const h = () => w.__stickTool!
     w.addEventListener('pointerdown', e => h().onDown(e), true)
@@ -221,5 +253,7 @@ if (w) {
     w.addEventListener('pointercancel', e => h().onUp(e), true)
     w.addEventListener('click', e => h().onClick(e), true)
     w.addEventListener('keydown', e => h().onKey(e), true)
+    ;(w as unknown as { __stickDbl?: boolean }).__stickDbl = true
+    w.addEventListener('dblclick', e => h().onDbl?.(e), true)
   }
 }
