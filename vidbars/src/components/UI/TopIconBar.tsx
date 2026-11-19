@@ -416,6 +416,87 @@ function saveRow(row: Item[]) {
   try { localStorage.setItem(BREAKS_KEY, JSON.stringify(breaks)) } catch { /* private window */ }
 }
 
+// ── Section names ──
+// Each section has a name under it, joined to its icons by thin lines the
+// way a node is joined to what hangs off it. Names are saved by the
+// section's place along the bar (first, second, ...): double-click one to
+// type another.
+const NAMES_KEY = 'vidbars.topIconBar.names'
+/** Bar padding: top and sides. */
+const PAD_T = 4
+const PAD_X = 10
+/** Where the line that joins a section's icons runs, from the bar's top. */
+const BUS_Y = PAD_T + TILE + 7
+/** The room under the icons for the lines and the names. */
+const NAME_ROW = 28
+const LINK = 'rgba(150,200,255,0.38)'
+
+/** Only for what the names START as: a word for each kind in ALIKE. */
+const KIND_NAME = ['Browse', 'Prompt', 'Build', 'Film', 'Claude', 'New']
+
+function loadNames(row: Item[]): string[] {
+  let saved: unknown = null
+  try { saved = JSON.parse(localStorage.getItem(NAMES_KEY) || 'null') } catch { /* private window */ }
+  if (Array.isArray(saved)) return saved.map(x => (typeof x === 'string' ? x : ''))
+  // The first time: each section is named for the kind most of its icons are.
+  const secs: BarId[][] = [[]]
+  row.forEach(x => { if (x === '|') secs.push([]); else secs[secs.length - 1].push(x) })
+  const names: string[] = []
+  secs.forEach((ids, i) => {
+    const count = new Map<number, number>()
+    ids.forEach(id => { const k = ALIKE[id] ?? 2; count.set(k, (count.get(k) || 0) + 1) })
+    let best = -1, n = 0
+    count.forEach((c, k) => { if (c > n) { n = c; best = k } })
+    const name = best >= 0 ? KIND_NAME[best] : ''
+    names.push(name && !names.includes(name) ? name : `Section ${i + 1}`)
+  })
+  saveNames(names)
+  return names
+}
+
+function saveNames(names: string[]) {
+  try { localStorage.setItem(NAMES_KEY, JSON.stringify(names)) } catch { /* private window */ }
+}
+
+/** One section's name. Double-click to type; Enter or a click away keeps
+ *  it, Esc leaves it as it was. The box is the same size either way. */
+const SectionName: React.FC<{
+  name: string
+  style: React.CSSProperties
+  onName: (name: string) => void
+}> = ({ name, style, onName }) => {
+  const [typing, setTyping] = React.useState(false)
+  const text: React.CSSProperties = {
+    width: '100%', height: '100%', boxSizing: 'border-box',
+    padding: '0 2px', margin: 0, border: 'none', outline: 'none', background: 'transparent',
+    font: '600 10px/14px system-ui, sans-serif', letterSpacing: 0.6, textTransform: 'uppercase',
+    textAlign: 'center', color: 'rgba(205,218,245,0.82)',
+    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+  }
+  return (
+    <div style={style} title={typing ? undefined : `${name} — double-click to rename this section`}>
+      {typing ? (
+        <input
+          autoFocus
+          defaultValue={name}
+          onFocus={e => e.currentTarget.select()}
+          onPointerDown={e => e.stopPropagation()}
+          onKeyDown={e => {
+            e.stopPropagation()
+            if (e.key === 'Enter') e.currentTarget.blur()
+            if (e.key === 'Escape') setTyping(false)
+          }}
+          onKeyUp={e => e.stopPropagation()}
+          onBlur={e => { const v = e.currentTarget.value.trim(); setTyping(false); if (v && v !== name) onName(v) }}
+          style={{ ...text, color: '#fff', background: 'rgba(120,170,255,0.18)', borderRadius: 3, textOverflow: 'clip' }}
+        />
+      ) : (
+        <div onDoubleClick={() => setTyping(true)} style={{ ...text, cursor: 'text' }}>{name}</div>
+      )}
+    </div>
+  )
+}
+
 /** The line between two sections. Its colour is all that changes. */
 const DividerLine: React.FC<{ lit: boolean }> = ({ lit }) => {
   const [hover, setHover] = React.useState(false)
@@ -652,6 +733,36 @@ export const TopIconBar: React.FC = () => {
     if (justDragged.current) { e.stopPropagation(); e.preventDefault() }
   }
 
+  // ── Section names ──
+  const [names, setNames] = React.useState<string[]>(() => loadNames(row))
+  const nameOf = (i: number) => names[i] || `Section ${i + 1}`
+  const setName = (i: number, name: string) => {
+    const next = names.slice()
+    while (next.length <= i) next.push(`Section ${next.length + 1}`)
+    next[i] = name
+    saveNames(next)
+    setNames(next)
+  }
+  // Where each section's icons run from and to, across the bar. While
+  // something is being dragged this is for where it would land, so the
+  // lines follow the icons as they give way.
+  const laid = shown.slice()
+  if (drag && drag.from !== drag.to) { const [m] = laid.splice(drag.from, 1); laid.splice(drag.to, 0, m) }
+  const spans: { x0: number; x1: number; n: number }[] = [{ x0: 0, x1: 0, n: 0 }]
+  {
+    let x = PAD_X
+    for (const it of laid) {
+      if (it === '|') { spans.push({ x0: 0, x1: 0, n: 0 }); x += DIV_W + GAP; continue }
+      const sp = spans[spans.length - 1]
+      const c = x + TILE / 2
+      if (!sp.n) sp.x0 = c
+      sp.x1 = c
+      sp.n++
+      x += TILE + GAP
+    }
+  }
+  const glide = settling ? 'none' : 'left 0.15s, width 0.15s'
+
   const shiftFor = (i: number) => {
     if (!drag) return 0
     if (i === drag.from) return drag.dx
@@ -671,7 +782,7 @@ export const TopIconBar: React.FC = () => {
         left: '50%',
         transform: 'translateX(-50%)',
         display: 'flex', alignItems: 'center', gap: GAP,
-        padding: '4px 10px',
+        padding: `${PAD_T}px ${PAD_X}px ${NAME_ROW}px`,
         background: '#000',
         border: '1px solid rgba(255,255,255,0.07)',
         borderTop: 'none',
@@ -715,9 +826,35 @@ export const TopIconBar: React.FC = () => {
             style={lay}
           >
             {buttons[id]}
+            {/* Its line down to the one its section's name hangs from. */}
+            <div style={{
+              position: 'absolute', left: '50%', marginLeft: -0.5, top: TILE + 1,
+              width: 1, height: BUS_Y - PAD_T - TILE - 1,
+              background: LINK, pointerEvents: 'none',
+            }} />
           </div>
         )
       })}
+      {spans.map((sp, i) => sp.n > 0 && (
+        <React.Fragment key={'s' + i}>
+          <div style={{
+            position: 'absolute', left: sp.x0, width: sp.x1 - sp.x0, top: BUS_Y, height: 1,
+            background: LINK, pointerEvents: 'none', transition: glide,
+          }} />
+          <div style={{
+            position: 'absolute', left: (sp.x0 + sp.x1) / 2 - 0.5, width: 1, top: BUS_Y, height: 4,
+            background: LINK, pointerEvents: 'none', transition: glide,
+          }} />
+          <SectionName
+            name={nameOf(i)}
+            onName={name => setName(i, name)}
+            style={{
+              position: 'absolute', left: sp.x0 - TILE / 2 - GAP / 2, width: sp.x1 - sp.x0 + TILE + GAP,
+              top: BUS_Y + 4, height: 14, transition: glide,
+            }}
+          />
+        </React.Fragment>
+      ))}
       <EffectPalette open={fxOpen} anchorRef={fxBtnRef} onClose={closeFx} />
       <PromptCardMenu open={pcOpen} anchorRef={pcBtnRef} onClose={closePc} />
       <NewCardPalette open={ncOpen} anchorRef={ncBtnRef} onClose={closeNc} />
