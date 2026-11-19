@@ -141,10 +141,14 @@ const fadeShown = () => {
  *  goes (Brian 2026-11-19: "When I get to an angle of 80, let's start to
  *  fade away all the surrounding cards outside so by 90 they're completely
  *  gone ... about 15 feet radius around the center of my view"): from
- *  `from` degrees of tilt to edge-on, what lies wholly more than `feet`
- *  from the middle fades out, over a soft edge `soft` of that wide. Feet as
- *  the measuring stick nearest the middle counts them (`per` canvas units
- *  each with no stick out: a model on a card as it comes is about 6).
+ *  `from` degrees of tilt to edge-on, what lies wholly further from the
+ *  middle than `view` of the view's width fades out, over a soft edge
+ *  `soft` of that wide. By the view alone: it was 15 feet as the nearest
+ *  measuring stick counts them, so a stick scaled up to measure something
+ *  huge drew the circle in round it (Brian 2026-11-19: "I thought it was
+ *  centered around where the camera is ... It doesn't seem to be doing it
+ *  in my favor"). Half the view's width is what his 15 feet came to on the
+ *  board he asked on; zooming in or out takes it with the view.
  *  From 70 now (Brian 2026-11-19: "let's start the fade out from 70"), on
  *  an ease-out: quick away from fully there, then slower and slower into
  *  fully gone ("it should become transparent faster, spend more time in
@@ -152,7 +156,7 @@ const fadeShown = () => {
  *  opaque. And slower: slow down and be nice"). */
 /** The canvas's own dark, which a far slab's sides go into. */
 const FAR_DARK = 0x12131f
-const FAR = { from: 70, feet: 15, soft: 0.2, per: 200 }
+const FAR = { from: 70, view: 0.5, soft: 0.2 }
 type Far = { a: number; cx: number; cy: number; r: number }
 /** How far that has gone and where: `a` 0..1, the middle of the view on
  *  the canvas (flat px from the host's centre) and the radius, px. Null
@@ -171,15 +175,8 @@ function farNow(): Far | null {
   const sp = ts.spin * Math.PI / 180
   const c = (ts.tilt < 90 ? unprojectTilt(0, ts.shiftY, ts.tilt, ts.spin, ts.shiftX, ts.shiftY) : null)
     ?? { x: -ts.shiftX * Math.cos(sp), y: ts.shiftX * Math.sin(sp) }
-  const { pan, zoom } = useCanvasStore.getState()
-  const W = models.root?.clientWidth ?? 0, H = models.root?.clientHeight ?? 0
-  const mx = (c.x + W / 2 - pan.x) / zoom, my = (c.y + H / 2 - pan.y) / zoom
-  let per = FAR.per, near = Infinity
-  for (const st of Object.values(useNotesStore.getState().sticks ?? {})) {
-    const d = Math.hypot(st.x - mx, st.y - my)
-    if (d < near) { near = d; per = st.per }
-  }
-  return { a, cx: c.x, cy: c.y, r: FAR.feet * per * zoom }
+  // (At the point the view turns about, a flat px is a px of the screen.)
+  return { a, cx: c.x, cy: c.y, r: FAR.view * (models.root?.clientWidth ?? 0) }
 }
 /** How much of a thing shows, 0..1: its box by its centre, flat px from
  *  the host's centre. Whole while any of it is within the radius. */
