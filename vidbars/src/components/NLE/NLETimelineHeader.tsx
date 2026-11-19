@@ -133,6 +133,11 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
     const l = groupId ? s.groups.find(g => g.id === groupId)?.deckLock : undefined
     return !!l && s.groups.some(o => o.id !== groupId && o.deckLock === l)
   })
+  // Kept (the lock's first stage): its cards are remembered as a deck.
+  const kept = useBoardsStore(s => {
+    const k = groupId ? s.groups.find(g => g.id === groupId)?.deckKeep : undefined
+    return !!k && s.groups.some(o => o.id !== groupId && o.deckKeep === k)
+  })
   // A scene card: its view modes (Focus, Bump-outs, Trace) from a "⋯" here.
   const isScene = useBoardsStore(s => !!groupId && s.groups.find(g => g.id === groupId)?.cardType === 'scene')
   // Its colour panel, opened from the header (a scene card): its circle or
@@ -557,28 +562,44 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
   const lockEl = isFace && groupId ? (
     <div
       data-deck-lock
-      title="Lock the deck: it keeps its cards and moves as one"
+      title="Lock the deck. Once: its cards stay this deck, and it still joins others. Twice: it keeps its cards and moves as one"
       onPointerDown={e => e.stopPropagation()}
       onDoubleClick={e => e.stopPropagation()}
       onClick={e => {
         e.stopPropagation()
         useUndoCoordinator.getState().checkpoint()
         const bs = useBoardsStore.getState()
+        // Off, kept, locked, off (Brian 2026-11-19).
         if (locked) { bs.setDeckLock(groupId, null); return }
-        // The open row, or the closed deck, with the cards hidden in it.
+        if (kept) {
+          // Kept to locked: the cards it keeps, with the cards hidden in them.
+          const k = bs.groups.find(g => g.id === groupId)?.deckKeep
+          const ids = expandWithNestedMembers([groupId, ...bs.groups.filter(g => g.id !== groupId && g.deckKeep === k).map(g => g.id)], bs.groups)
+          bs.setDeckKeep(groupId, null)
+          bs.setRowPrimary(groupId, ids)
+          bs.setDeckLock(groupId, ids)
+          return
+        }
+        // The open row, or the closed deck, with the cards hidden in it; an
+        // open deck's front card inside a row of other cards, that deck.
         const row = rowOf(groupId)
-        const ids = expandWithNestedMembers(row && row[0] === groupId ? row : [groupId], bs.groups)
+        const own = !(row && row[0] === groupId) && mode.kind === 'deckPreview' && row
+          ? row.filter(id => bs.groups.find(g => g.id === id)?.deckHome === groupId) : []
+        // A closed deck: its own cards, whatever it lies against.
+        const me = bs.groups.find(g => g.id === groupId)
+        const closedDeck = !!me?.deckState && me.deckState !== 'open' && bs.groups.some(g => g.id !== groupId && g.deckAnchorId === groupId && !!g.deckState && g.deckState !== 'open')
+        const ids = expandWithNestedMembers(closedDeck ? [groupId] : row && row[0] === groupId ? row : own.length >= 2 ? own : [groupId], bs.groups)
         if (ids.length < 2) return
-        bs.setRowPrimary(groupId, ids)
-        bs.setDeckLock(groupId, ids)
+        bs.setDeckKeep(groupId, ids)
       }}
       style={{
         flex: '0 0 auto', marginLeft: goEl || hasRefs || sceneOn || isTiny ? 0 : 'auto',
         width: lockH, height: lockH,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         borderRadius: Math.max(1 * ov, screenHeight * 0.12),
+        // Off: grey. Kept: blue, not filled. Locked: blue on a blue ground.
         background: locked ? 'rgba(127,209,255,0.32)' : 'transparent',
-        color: locked ? 'rgba(127,209,255,0.98)' : 'rgba(255,255,255,0.55)',
+        color: locked || kept ? 'rgba(127,209,255,0.98)' : 'rgba(255,255,255,0.55)',
         cursor: 'pointer',
         transition: 'background 0.12s, color 0.12s',
       }}

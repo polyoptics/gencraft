@@ -106,6 +106,12 @@ export interface ProjectGroup {
    *  primary when it was locked. Locked, the deck keeps exactly the cards
    *  that carry it, picks up no others, and moves as one. */
   deckLock?: string
+  /** Its deck is kept (the lock's first stage, Brian 2026-11-19): the id of
+   *  the deck's front card when it was kept. The cards that carry it are
+   *  remembered as that deck through opening, closing and rearranging, and
+   *  through a bigger row closing round them; they still join rows by
+   *  touching, and pick up no card. It counts while two or more carry it. */
+  deckKeep?: string
   /** It was linked to a storyline: its deck turns back to open right once
    *  it is closed off every line (utils/deckRight). */
   wasOnStoryline?: boolean
@@ -503,6 +509,9 @@ interface BoardsState {
   /** Lock the deck `ids` (its primary first) or, with null, unlock the deck
    *  `groupId`'s lock holds (utils/deckLock). */
   setDeckLock: (groupId: string, ids: string[] | null) => void
+  /** Keep the deck `ids` (its front first) or, with null, let go the deck
+   *  card `groupId` is kept in (ProjectGroup.deckKeep). */
+  setDeckKeep: (groupId: string, ids: string[] | null) => void
   /** Pull a card out of its deck onto the canvas. The parent gets a ghostSlots
    *  entry remembering the slot's offset so the card can return. The card
    *  itself becomes independent (deckAnchorId/deckOffset cleared). If the
@@ -1741,6 +1750,18 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
     })
   },
 
+  setDeckKeep(groupId, ids) {
+    set(s => {
+      if (ids) {
+        const on = new Set(ids)
+        return { groups: s.groups.map(g => on.has(g.id) ? { ...g, deckKeep: groupId } : g) }
+      }
+      const keep = s.groups.find(g => g.id === groupId)?.deckKeep
+      if (!keep) return {}
+      return { groups: s.groups.map(g => g.deckKeep === keep ? { ...g, deckKeep: undefined } : g) }
+    })
+  },
+
   extractFromDeck(cardId, newOriginX, newOriginY) {
     set(s => {
       const card = s.groups.find(g => g.id === cardId)
@@ -2042,7 +2063,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
       // Everything the card IS — its grid layout, face block, effect, size —
       // but not where it belongs: no deck, pin, strip result or links.
       const own: ProjectGroup = { ...group }
-      for (const k of ['deckState', 'deckAnchorId', 'deckOffsetX', 'deckOffsetY', 'deckFaceCard', 'pin', 'railSource', 'railBase', 'deckLastFront', 'deckLock', 'linkOf', 'stateOut', 'stateBlank', 'isNew'] as const) delete own[k]
+      for (const k of ['deckState', 'deckAnchorId', 'deckOffsetX', 'deckOffsetY', 'deckFaceCard', 'pin', 'railSource', 'railBase', 'deckLastFront', 'deckLock', 'deckKeep', 'linkOf', 'stateOut', 'stateBlank', 'isNew'] as const) delete own[k]
       // A State card's copy has the same states, but no output deck yet.
       if (own.stateCard) own.stateCard = { ...own.stateCard, output: undefined }
       const faceAt = group.faceBoardId ? group.boardIds.indexOf(group.faceBoardId) : -1

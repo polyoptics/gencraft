@@ -38,7 +38,7 @@ import { Viewport3DLayer } from '../Viewport3D/Viewport3DLayer'
 import { NLETimelineHeader, NLE_HEADER_CANVAS_H, headerExtend as computeHeaderExtend, headerScreenH, overviewScale } from '../NLE/NLETimelineHeader'
 import { HeroImageLayer } from './HeroImageLayer'
 import { CardBack, FlipButton, backColor, useCardFlip } from './CardBack'
-import { liveLocks, lockOf, withLockMates } from '../../utils/deckLock'
+import { liveLocks, lockOf, withLockMates, keepOf, keptIn } from '../../utils/deckLock'
 import { SceneFace } from './SceneFace'
 import { stretchStart } from '../../utils/sceneGrow'
 import type { TextPad } from '../../utils/sceneCard'
@@ -5205,6 +5205,12 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
   // An open deck's front card in a row with cards that are not its own:
   // that deck's cards in the row (utils/deckUnder startDeckHome).
   const openDeckFront = (g: ProjectGroup): string[] | null => {
+    // A kept deck (the lock's first stage, utils/deckLock) is read by its
+    // own mark, whatever its cards last opened from.
+    if (keepOf(g, groups)) {
+      const row = touchingClusters.find(c => c.includes(g.id))
+      return row ? keptIn(g, row, groups) : null
+    }
     if (g.deckHome !== g.id) return null
     const row = touchingClusters.find(c => c.includes(g.id))
     if (!row) return null
