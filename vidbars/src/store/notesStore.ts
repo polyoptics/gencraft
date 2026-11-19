@@ -281,7 +281,10 @@ export interface PictureMark {
  *  the stick from there (let go when it leaves them). */
 export interface Stick { id: string; x: number; y: number; ft: number; per: number; metric?: boolean; font?: string
   /** The colour its numbers are written in (orange, unless set). */
-  color?: string; heights?: Record<string, number> }
+  color?: string
+  /** How much of it shows through what stands in front of it in 3D, 0
+   *  (hidden behind things) to 1 (as if nothing were there). Absent: faintly. */
+  through?: number; heights?: Record<string, number> }
 
 interface NotesStore {
   sticks: Record<string, Stick>

@@ -22,7 +22,7 @@
 import * as THREE from 'three'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import type { Stick } from '../store/notesStore'
-import { POLE_R, LOWER_R, LOWER_TOP, BASE_H, BASE_W, DOCK_LINE, SIGN_W, SIGN_H, SIGN_CUT, SIGN_TEXT, NUM_H, CREAM, GREEN, ORANGE, DARK, ACCENT, DEFAULT_FONT, TICK, heightText, unitText, stickTicks, tabOut, tabDepth, tabCentre, type Side } from '../utils/stickGeom'
+import { POLE_R, LOWER_R, LOWER_TOP, BASE_H, BASE_W, DOCK_LINE, SIGN_W, SIGN_H, SIGN_CUT, SIGN_TEXT, NUM_H, CREAM, GREEN, ORANGE, DARK, ACCENT, DEFAULT_FONT, STICK_THROUGH, TICK, heightText, unitText, stickTicks, tabOut, tabDepth, tabCentre, type Side } from '../utils/stickGeom'
 
 /** A mark on a stick's tube: a selected card's height (utils/stickDock). */
 export interface StickMarkAt { id: string; ft: number; color: string; text: string; unset?: boolean }
@@ -130,6 +130,8 @@ interface Built {
    *  docked by. */
   ground: THREE.Group
   marks: StickMarkAt[]
+  /** What draws it through things in front of it: as strong as Stick.through. */
+  ghosts: THREE.Material[]
   own: { dispose: () => void }[]
 }
 
@@ -161,6 +163,7 @@ export function createStickOverlay() {
     const group = new THREE.Group(), mast = new THREE.Group(), ground = new THREE.Group()
     group.add(mast)
     const own: Built['own'] = []
+    const ghosts: THREE.Material[] = []
     const keep = <T extends { dispose: () => void }>(o: T) => { own.push(o); return o }
     const merged = (parts: THREE.BufferGeometry[]) => {
       const g = mergeGeometries(parts.map(p => p.index ? p.toNonIndexed() : p))
@@ -174,6 +177,7 @@ export function createStickOverlay() {
       const geo = keep(parts.length > 1 ? merged(parts) : parts[0])
       const color = new THREE.Color(hex)
       const ghost = keep(new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.22, depthTest: false, depthWrite: false, toneMapped: false, side: THREE.DoubleSide }))
+      ghosts.push(ghost)
       const solid = keep(new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.38, roughness: 0.45, metalness: 0, toneMapped: false, side: THREE.DoubleSide }))
       let last: THREE.Mesh | null = null
       for (const [mat, order] of [[ghost, 40], [solid, 41]] as const) {
@@ -217,6 +221,7 @@ export function createStickOverlay() {
       const pair: THREE.Sprite[] = []
       for (const [ghost, order] of [[true, 40], [false, 42]] as const) {
         const mat = keep(new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: ghost ? 0.22 : 1, alphaTest: ghost || !cutout ? 0 : 0.5, depthTest: !ghost, depthWrite: !ghost && cutout, toneMapped: false }))
+        if (ghost) ghosts.push(mat)
         const sp = new THREE.Sprite(mat)
         sp.center.set(cx, 0.5)
         sp.scale.set(w, h, 1)
@@ -259,7 +264,7 @@ export function createStickOverlay() {
     }
     root.add(ground)
     root.add(group)
-    return { sig, ft: s.ft, group, mast, board, labels, ground, marks, own }
+    return { sig, ft: s.ft, group, mast, board, labels, ground, marks, ghosts, own }
   }
 
   /** Draw the sticks over what the frame drew. `ground` is the canvas's
@@ -287,6 +292,10 @@ export function createStickOverlay() {
         const at = f.at.get(s.id) ?? s
         const c = tabCentre({ x: at.x, y: at.y, per: s.per }, side)
         const px = c.x, py = c.y
+        // Through what is in front of it: as much as he has set (Brian
+        // 2026-11-19: "adjust that level down to 0 or 100%").
+        const through = Math.max(0, Math.min(1, s.through ?? STICK_THROUGH))
+        for (const m of b.ghosts) { m.opacity = through; m.visible = through > 0.004 }
         b.group.position.set(px, py, 0)
         b.group.scale.setScalar(s.per)
         // The tubes go down into the base, and the board comes down over it.

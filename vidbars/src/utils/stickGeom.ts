@@ -60,6 +60,8 @@ export const SIGN_TEXT = 0.6
 export const NUM_H = 0.3
 
 export const CREAM = '#ecebc8', GREEN = '#3f6b52', ORANGE = '#f47b20', DARK = '#1c2b24', ACCENT = '#3d7fd9'
+/** How much of a stick shows through what is in front of it, unless set. */
+export const STICK_THROUGH = 0.22
 export const DEFAULT_FONT = 'system-ui, sans-serif'
 
 /** A stick's length, canvas units. */

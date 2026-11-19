@@ -5,7 +5,9 @@
 // Over the fonts, the colour its numbers are written in (Brian
 // 2026-11-19: "when we double-click to do the font change, we can set a
 // color there"): orange unless he picks another. The marks up its tube
-// in 3D are written in it too.
+// in 3D are written in it too. Under the colours, how much of the stick
+// shows through what stands in front of it in 3D (Brian 2026-11-19:
+// "I like to be able to adjust that level down to 0 or 100%").
 
 import React from 'react'
 import ReactDOM from 'react-dom'
@@ -13,9 +15,9 @@ import { useNotesStore, NOTE_COLORS } from '../../store/notesStore'
 import { useStickUi } from '../../store/pathLive'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { FONT_LIST, ensureFontLoaded } from '../UI/TextFormatToolbar'
-import { DEFAULT_FONT, ORANGE } from '../../utils/stickGeom'
+import { DEFAULT_FONT, ORANGE, STICK_THROUGH } from '../../utils/stickGeom'
 
-const H = 400
+const H = 450
 /** The colours its numbers can be written in: its own orange first. */
 const COLORS = [ORANGE, ...NOTE_COLORS]
 
@@ -32,6 +34,7 @@ export const StickMenu: React.FC = () => {
     useNotesStore.getState().updateStick(stick.id, { font: value === DEFAULT_FONT ? undefined : value })
   }
   const ink = stick.color ?? ORANGE
+  const through = Math.round((stick.through ?? STICK_THROUGH) * 100)
   const paint = (c: string) => {
     useUndoCoordinator.getState().checkpoint()
     useNotesStore.getState().updateStick(stick.id, { color: c === ORANGE ? undefined : c })
@@ -50,13 +53,23 @@ export const StickMenu: React.FC = () => {
         }}
       >
         <div style={{ padding: '4px 12px 6px', borderBottom: '1px solid rgba(255,255,255,0.07)', marginBottom: 4 }}>
-          <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: 11 }}>Number · colour and font</span>
+          <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: 11 }}>Colour, see-through and font</span>
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '2px 12px 8px', borderBottom: '1px solid rgba(255,255,255,0.07)', marginBottom: 4 }}>
           {COLORS.map(c => (
             <button key={c} title={c === ORANGE ? 'Orange (its own)' : c} onClick={() => paint(c)}
               style={{ width: 20, height: 20, padding: 0, borderRadius: 5, background: c, cursor: 'pointer', boxSizing: 'border-box', border: ink === c ? '2px solid #fff' : '2px solid rgba(255,255,255,0.14)' }} />
           ))}
+        </div>
+        <div style={{ padding: '2px 12px 8px', borderBottom: '1px solid rgba(255,255,255,0.07)', marginBottom: 4 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', color: 'rgba(255,255,255,0.55)', fontSize: 11, marginBottom: 3 }}>
+            <span>See-through in 3D</span>
+            <span style={{ fontVariantNumeric: 'tabular-nums', width: 34, textAlign: 'right' }}>{through}%</span>
+          </div>
+          <input type="range" min={0} max={100} step={1} value={through} title="How much of the stick shows through things in front of it in 3D"
+            onPointerDown={() => useUndoCoordinator.getState().checkpoint()}
+            onChange={e => useNotesStore.getState().updateStick(stick.id, { through: +e.target.value / 100 })}
+            style={{ width: '100%', margin: 0, accentColor: ORANGE, cursor: 'pointer' }} />
         </div>
         {FONT_LIST.map(f => (
           <button key={f.value}
