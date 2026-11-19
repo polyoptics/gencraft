@@ -11,7 +11,7 @@
 import * as THREE from 'three'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import { acquireModel, releaseModel, disposeInstance } from './modelCache'
-import { quarterStamp, modelBody } from './modelQuarter'
+import { quarterStamp, quarterOfUrl, modelBody } from './modelQuarter'
 import { computePosedBounds } from './orbitState'
 import { createLook, applyLook, disposeLook, type LookInstance, type ModelShade } from './modelLook'
 import { gradeLook, type Grade } from './modelMaps'
@@ -324,6 +324,10 @@ interface Standing {
    *  (modelQuarter quarterStamp), and whether a new copy is on its way. */
   quarter: number
   swapping: boolean
+  /** When it began turning on the turntable (ms): one squared up
+   *  (modelQuarter) starts its turn from how it was squared up. null: not
+   *  turning. */
+  turnAt: number | null
 }
 
 const WIRE_MAT = new THREE.MeshBasicMaterial({ color: 0x9fd0ff, wireframe: true, transparent: true, opacity: 0.85 })
@@ -821,7 +825,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     const s: Standing = {
       url, stand, turn, orient, pose, gizmo: null, rig: null, tint: null, baseColors: null, back: null, spun: [], inst: null, size: new THREE.Vector3(), unit: 1, unitSet: false, triangles: 0,
       figure, wall, wallText: '', look: null, phase: Math.random() * 6.28, dead: false, seen: frameNo, shownAt: 0,
-      mats: [], alpha: -1, base: 0, footR: 0, quarter: 0, swapping: false,
+      mats: [], alpha: -1, base: 0, footR: 0, quarter: 0, swapping: false, turnAt: null,
     }
     acquireModel(url).then(inst => {
       if (s.dead) { releaseModel(url); disposeInstance(inst); return }
@@ -849,6 +853,8 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
         measured.set(url, m)
       }
       s.quarter = stamp
+      // Squared up another way: its turn starts again from there.
+      s.turnAt = null
       s.size.copy(m.size)
       s.triangles = m.triangles
       // It shadows the canvas and itself: an arm darkens the chest behind it.
@@ -1431,7 +1437,18 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       const rq = st.rideFor?.(tg.key)
       const mid = !!st.rideMid?.(tg.key)
       if (rq && !s.rig && !mid) s.turn.quaternion.set(rq[0], rq[1], rq[2], rq[3])
-      else s.turn.rotation.set(0, st.turn && !placed ? now / 1000 * 0.6 + s.phase : 0, 0)
+      else {
+        // On the turntable. One that has been squared up (Brian 2026-11-19:
+        // "they should start from their new offset positions if they have
+        // them") starts from how it was squared up, each time the turning
+        // starts: Turn switched on, the model coming up out of its card,
+        // or squared up another way. Any other starts where it happens to
+        // be, so a board of models is not all in step.
+        const turning = st.turn && !placed && s.stand.visible
+        if (!into) { if (!turning) s.turnAt = null; else if (s.turnAt === null) s.turnAt = now }
+        const a = !turning ? 0 : quarterOfUrl(s.url) ? (now - (s.turnAt ?? now)) / 1000 * 0.6 : now / 1000 * 0.6 + s.phase
+        s.turn.rotation.set(0, a, 0)
+      }
       const pq = st.poseFor?.(tg.key)
       if (pq) s.pose.quaternion.set(pq[0], pq[1], pq[2], pq[3]); else s.pose.quaternion.identity()
       if (rq && (s.rig || mid)) s.pose.quaternion.premultiply(rideQ.set(rq[0], rq[1], rq[2], rq[3]))
