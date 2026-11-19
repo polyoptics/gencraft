@@ -28,6 +28,7 @@ import { StickLayer } from './components/Notes/StickLayer'
 import { PieceLayer } from './components/Canvas/PieceLayer'
 import { MapNotesLayer } from './components/Notes/MapNotesLayer'
 import { NotesPanel } from './components/Notes/NotesPanel'
+import { ViewCube } from './components/Canvas/tilt/ViewCube'
 import { PathMenu } from './components/Notes/PathMenu'
 import { StickMenu } from './components/Notes/StickMenu'
 import { MergeDialog } from './components/UI/MergeDialog'
@@ -906,6 +907,8 @@ export default function App() {
 
       {/* Annotation / draw-mode floating toolbar (only visible while in draw mode) */}
       <DrawToolbar />
+      {/* The view cube and the camera's lens, docked top right; the panel hangs under them */}
+      <ViewCube />
       <NotesPanel />
       <PathMenu />
       <StickMenu />

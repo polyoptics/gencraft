@@ -41,6 +41,7 @@ import { isHiddenDeckMember } from '../../hooks/useCardDecks'
 import { parentOf, parentCurves } from '../../utils/curveParent'
 import { CameraTools, NEW_CAMERA_MM } from '../Canvas/tilt/LookThrough'
 import { useRideClock, rideTime, rideSpan, rideTotal, parentToPath, unparentFromPath, setRider } from '../../utils/pathRide'
+import { CAMERA_DOCK_BOTTOM } from '../Canvas/tilt/ViewCube'
 
 const S = 'rgba(228,234,255,0.92)'
 const W_OPEN = 252, W_FOLDED = 52
@@ -1235,7 +1236,8 @@ export const NotesPanel: React.FC = () => {
       onPointerDown={e => e.stopPropagation()}
       onWheel={e => e.stopPropagation()}
       style={{
-        position: 'fixed', top: 64, right: 52, width: folded ? W_FOLDED : W_OPEN, maxHeight: 'calc(100vh - 96px)',
+        // Docked under the view cube and the camera's lens (ViewCube), on their right edge: it opens out leftwards from there.
+        position: 'fixed', top: CAMERA_DOCK_BOTTOM, right: 52, width: folded ? W_FOLDED : W_OPEN, maxHeight: `calc(100vh - ${CAMERA_DOCK_BOTTOM + 32}px)`,
         display: 'flex', flexDirection: 'column', boxSizing: 'border-box',
         background: 'rgba(12,13,22,0.94)', border: '1px solid rgba(255,255,255,0.09)', borderRadius: 14,
         boxShadow: '0 10px 30px rgba(0,0,0,0.55)', zIndex: 870, color: '#e8f0ff', userSelect: 'none',
