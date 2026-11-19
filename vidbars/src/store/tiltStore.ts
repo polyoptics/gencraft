@@ -451,7 +451,11 @@ export function unprojectTilt(sx: number, sy: number, tiltDeg: number, spinDeg: 
   if (denom <= 1e-3) return null
   // `height`: a plane that far above the canvas (a lifted tile's face).
   const lam = (-nx * shiftX - ny * shiftY + P * nz - height) / denom
-  if (lam <= 0 || lam > far) return null
+  // (`far` is by the eye's own distance as it always was: through a long
+  // lens or Ortho the eye is far back, and counted in its distances the
+  // limit let a press near edge-on reach ground a hundred times further
+  // off, where a pixel is thousands of flat px again.)
+  if (lam <= 0 || (lam - 1) * Math.max(P, TILT_PERSPECTIVE) > (far - 1) * TILT_PERSPECTIVE) return null
   const qx = -shiftX + lam * sx, qy = -shiftY + lam * sy, qz = P - lam * P
   // Back into plane coordinates: Rz(-s)·Ry(-b)·Rx(-t)·q.
   const y1 = qy * ct + qz * st, z1 = -qy * st + qz * ct
