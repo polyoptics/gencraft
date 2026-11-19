@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react'
 import {
-  useTiltStore, useModelScaleStore, isTilted, offFlat, standTilt, standRise, unprojectTilt, TILT_DRAW_FAR, TILT_PERSPECTIVE,
+  useTiltStore, useModelScaleStore, isTilted, offFlat, standTilt, standRise, unprojectTilt, TILT_DRAW_FAR, tiltP,
 } from '../../../store/tiltStore'
 import { CAMERA_LENS } from '../../../store/tiltStore'
 import { usePeek } from '../../../utils/peek'
@@ -1739,7 +1739,7 @@ function restDone() {
 function eyeOnPlane(): { y: number; z: number } {
   const { tilt, spin, yaw, shiftX, shiftY } = useTiltStore.getState()
   const t = tilt * Math.PI / 180, s = spin * Math.PI / 180, b = yaw * Math.PI / 180
-  const y1 = -shiftY * Math.cos(t) + TILT_PERSPECTIVE * Math.sin(t), z1 = shiftY * Math.sin(t) + TILT_PERSPECTIVE * Math.cos(t)
+  const y1 = -shiftY * Math.cos(t) + tiltP() * Math.sin(t), z1 = shiftY * Math.sin(t) + tiltP() * Math.cos(t)
   const x0 = -shiftX * Math.cos(b) - z1 * Math.sin(b)
   return { y: -x0 * Math.sin(s) + y1 * Math.cos(s), z: -shiftX * Math.sin(b) + z1 * Math.cos(b) }
 }
@@ -2313,7 +2313,7 @@ const NEAR = 0.2, BEND = Math.PI / 6
  *  angle from the hinge. */
 function nearFit(full: number, x0: number, x1: number, v: number, z: number, h: number): number {
   const { tilt, spin, yaw, glide } = useTiltStore.getState()
-  const P = TILT_PERSPECTIVE
+  const P = tiltP()
   const t = tilt * Math.PI / 180, sp = spin * Math.PI / 180
   const st = Math.sin(t), ct = Math.cos(t), ss = Math.sin(sp), cs = Math.cos(sp)
   const by = yaw * Math.PI / 180, sb = Math.sin(by), cb = Math.cos(by)

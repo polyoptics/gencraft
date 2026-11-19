@@ -19,22 +19,55 @@ import { DEFAULT_LOOK, type ModelShade } from '../three/modelLook'
 import { createDebouncedIDBStorage } from '../utils/debouncedIDBStorage'
 import { markMoving } from '../utils/rasterSettle'
 
-/** CSS perspective distance (px) — also the three.js camera distance. */
+/** CSS perspective distance (px) — also the three.js camera distance —
+ *  as it always was: what the 3D view has until a lens is typed. */
 export const TILT_PERSPECTIVE = 1200
+/** The 3D view's lens (Brian 2026-11-18: a typed focal length, and an
+ *  easy way to a near-flat view). A focal length in mm on a 36 mm wide
+ *  frame, the frame being the view's width: the eye stands mm / 36 view
+ *  widths off the screen. What is at the screen's own distance (what the
+ *  view turns about) keeps its size as the lens changes; near and far
+ *  draw in or spread round it. */
+export const LENS_MM_MIN = 10, LENS_MM_MAX = 2000
+/** The lens Ortho looks through: so long that near and far are all but
+ *  the same size. */
+export const ORTHO_MM = LENS_MM_MAX
+const LENS_KEY = 'vidbars.tiltLens'
+function readLens(): number | null {
+  try {
+    const v = parseFloat(localStorage.getItem(LENS_KEY) ?? '')
+    return Number.isFinite(v) ? Math.max(LENS_MM_MIN, Math.min(LENS_MM_MAX, v)) : null
+  } catch { return null }
+}
+/** The eye's distance to the screen now (px): TILT_PERSPECTIVE until a
+ *  lens is typed or Ortho is on. Everything that draws or reads the 3D
+ *  view takes it from here (tiltP), so the CSS, the three.js camera and
+ *  the pointer agree. */
+const perspOf = (mm: number | null, ortho: boolean, viewW: number) =>
+  ortho ? ORTHO_MM / 36 * viewW : mm === null ? TILT_PERSPECTIVE : mm / 36 * viewW
+/** (The view's width until it is measured: see setViewW.) */
+const VIEW_W0 = 1600
+let perspNow = perspOf(readLens(), false, VIEW_W0)
+export const tiltP = () => perspNow
+/** The lens the view has, in mm, typed or not. */
+export const lensMmOf = (s: { lensMm: number | null; viewW: number }) => s.lensMm ?? TILT_PERSPECTIVE * 36 / s.viewW
 /** Just short of edge-on: the plane can be seen from the side (Brian
  *  2026-10-30), never from below. Exactly 90 has no ground under the cursor. */
 export const TILT_MAX = 89
 /** How far it tips on past edge-on, looking up from low down, when what
  *  it turns about is up off the ground (see setView). */
 export const TILT_LOOK_UP = 150
+/** Straight up from underneath (see setView `under`): just short of it,
+ *  as TILT_MAX is of edge-on. */
+export const TILT_UNDER = 180 - 0.05
 /** How near the ground the eye comes (px): where it is at TILT_MAX with
  *  the view turning about a point on the ground. */
-const EYE_MIN = TILT_PERSPECTIVE * Math.cos(TILT_MAX * Math.PI / 180)
+const eyeMin = () => perspNow * Math.cos(TILT_MAX * Math.PI / 180)
 /** How high over the ground the eye is (px) for this view. */
 function eyeHeight(tiltDeg: number, yawDeg: number, shiftX: number, shiftY: number) {
   const t = tiltDeg * Math.PI / 180, b = yawDeg * Math.PI / 180
   // n·eye, n = (sin b, -sin t cos b, cos t cos b) (unprojectTilt), eye = (-shift, P).
-  return -Math.sin(b) * shiftX + Math.sin(t) * Math.cos(b) * shiftY + Math.cos(t) * Math.cos(b) * TILT_PERSPECTIVE
+  return -Math.sin(b) * shiftX + Math.sin(t) * Math.cos(b) * shiftY + Math.cos(t) * Math.cos(b) * perspNow
 }
 /** Let go below this and the view eases the rest of the way to flat — tilting back up to top-down is the way home. */
 export const TILT_SNAP = 10
@@ -118,7 +151,10 @@ interface TiltStore {
    *  across reloads. */
   console: boolean
   setConsole: (on: boolean) => void
-  setView: (tilt: number, spin: number, yaw?: number) => void
+  /** `under`: on past edge-on to underneath, looking up through the
+   *  ground (the view cube's BT). Once under, it stays free there until
+   *  it is brought back up over the ground. */
+  setView: (tilt: number, spin: number, yaw?: number, under?: boolean) => void
   setShift: (x: number, y: number) => void
   setTexture: (on: boolean) => void
   setShade: (shade: ModelShade) => void
@@ -135,6 +171,20 @@ interface TiltStore {
    *  rules are exactly as they were. Its own on/off toggle in the 3D view. */
   lock3d: boolean
   setLock3d: (on: boolean) => void
+  /** The lens typed for the 3D view, mm (see LENS_MM_MIN). Null: none
+   *  typed, the view as it always was. Kept across reloads. */
+  lensMm: number | null
+  setLensMm: (mm: number | null) => void
+  /** Ortho: the view through a very long lens (ORTHO_MM), near-flat. Its
+   *  own on/off; the typed lens is kept for when it goes off. */
+  ortho: boolean
+  setOrtho: (on: boolean) => void
+  /** The view's width, px (the lens's frame). */
+  viewW: number
+  setViewW: (w: number) => void
+  /** The eye's distance to the screen, px: tiltP(), here so that what
+   *  draws the view hears it change. */
+  persp: number
 }
 
 /** Locked into 3D, the camera tips no closer to flat than this (degrees):
@@ -173,7 +223,7 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
   setGlide: glide => set({ glide }),
   console: readConsole(),
   setConsole: on => { set({ console: on }); try { localStorage.setItem(CONSOLE_KEY, on ? '1' : '0') } catch { /* private window */ } },
-  setView: (tilt, spin, yaw = get().yaw) => {
+  setView: (tilt, spin, yaw = get().yaw, under = false) => {
     if (flattenRaf !== null) { cancelAnimationFrame(flattenRaf); flattenRaf = null }
     // Orbit about what is in the middle of the screen (or the pivot): the
     // ground point there stays there as the view turns or tips.
@@ -184,11 +234,13 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
     // could not come down to look at it from low (Brian 2026-11-13: "my
     // camera can't move down anymore"). It tips on past edge-on, looking
     // up, as far as keeps the eye over the ground.
-    if (tilt > TILT_MAX) {
+    const g0 = get()
+    if (!under && g0.tilt > TILT_MAX && eyeHeight(g0.tilt, g0.yaw, g0.shiftX, g0.shiftY) < eyeMin() - 0.01) under = true
+    if (tilt > TILT_MAX && !under) {
       const yawNow = yaw
       const high = (t: number) => {
         const sh = keep ? shiftKeeping(keep.g, t, spin, yawNow, keep.at) : get()
-        return eyeHeight(t, yawNow, sh.shiftX, sh.shiftY) >= EYE_MIN
+        return eyeHeight(t, yawNow, sh.shiftX, sh.shiftY) >= eyeMin()
       }
       const want = Math.min(TILT_LOOK_UP, tilt)
       if (!high(TILT_MAX)) tilt = TILT_MAX
@@ -199,7 +251,7 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
         tilt = lo
       }
     }
-    tilt = Math.max(locked ? LOCK_MIN_TILT : -TILT_UP, Math.min(TILT_LOOK_UP, tilt))
+    tilt = Math.max(locked ? LOCK_MIN_TILT : -TILT_UP, Math.min(under ? TILT_UNDER : TILT_LOOK_UP, tilt))
     // Tipped back any swing eases out: with the ground standing under models,
     // a swing would lean it, which reads as the camera rolling.
     const room = TILT_MAX * (1 - turntableShare(tilt))
@@ -218,6 +270,18 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
   setFigure: figure => set({ figure }),
   lock3d: false,
   setLock3d: lock3d => set({ lock3d }),
+  lensMm: readLens(),
+  setLensMm: mm => {
+    const lensMm = mm === null ? null : Math.max(LENS_MM_MIN, Math.min(LENS_MM_MAX, mm))
+    try { if (lensMm === null) localStorage.removeItem(LENS_KEY); else localStorage.setItem(LENS_KEY, String(lensMm)) } catch { /* private window */ }
+    // A lens typed is the lens wanted: Ortho lets go.
+    relens(set, get, { lensMm, ortho: false })
+  },
+  ortho: false,
+  setOrtho: ortho => relens(set, get, { ortho }),
+  viewW: VIEW_W0,
+  setViewW: viewW => { if (viewW > 0 && viewW !== get().viewW) relens(set, get, { viewW }) },
+  persp: perspNow,
   flatten: () => {
     if (flattenRaf !== null) cancelAnimationFrame(flattenRaf)
     const { tilt: t0, spin: s0raw, yaw: y0 } = get()
@@ -248,6 +312,17 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
     flattenRaf = requestAnimationFrame(tick)
   },
 }))
+
+/** Change the lens (or the view it is a lens on): what the view turns
+ *  about stays where it is on screen. */
+function relens(set: (p: Partial<TiltStore>) => void, get: () => TiltStore, patch: Partial<Pick<TiltStore, 'lensMm' | 'ortho' | 'viewW'>>) {
+  const s = { ...get(), ...patch }
+  const persp = perspOf(s.lensMm, s.ortho, s.viewW)
+  if (persp === perspNow) { set(patch); return }
+  const keep = isTilted(s) ? keeping(get()) : null
+  perspNow = persp
+  set({ ...patch, persp, ...(keep ? shiftKeeping(keep.g, s.tilt, s.spin, s.yaw, keep.at) : {}) })
+}
 
 /** How far off the flat view the camera is, by either axis, in degrees. */
 export const offFlat = (s: { tilt: number; yaw: number }) => Math.max(Math.abs(s.tilt), Math.abs(s.yaw))
@@ -290,14 +365,14 @@ function viewPoint(g: Pivot, tiltDeg: number, spinDeg: number, yawDeg: number) {
  *  it is just at - g. */
 export function shiftKeeping(g: Pivot, tiltDeg: number, spinDeg: number, yawDeg: number, at = { x: 0, y: 0 }) {
   const q = viewPoint(g, tiltDeg, spinDeg, yawDeg)
-  const k = (TILT_PERSPECTIVE - q.z) / TILT_PERSPECTIVE
+  const k = (perspNow - q.z) / perspNow
   return { shiftX: at.x * k - q.x, shiftY: at.y * k - q.y }
 }
 /** Where ground point `g` is drawn now, px from the screen's middle; null
  *  when it is behind the eye. */
 export function screenOf(g: Pivot, s: { tilt: number; spin: number; yaw: number; shiftX: number; shiftY: number }) {
   const q = viewPoint(g, s.tilt, s.spin, s.yaw)
-  const k = (TILT_PERSPECTIVE - q.z) / TILT_PERSPECTIVE
+  const k = (perspNow - q.z) / perspNow
   return k > 0.05 ? { x: (q.x + s.shiftX) / k, y: (q.y + s.shiftY) / k } : null
 }
 /** What a turn of the view keeps still: the pivot where it is drawn, else
@@ -335,7 +410,7 @@ export function tiltCss(tilt: number, spin: number, shiftX = 0, shiftY = 0, glid
   if (!glide && !isTilted({ tilt, yaw }) && Math.abs(spin) < 0.01 && Math.abs(shiftX) + Math.abs(shiftY) < 0.01) return 'none'
   // The shift comes before the perspective: it moves the camera sideways,
   // so near and far slide alike on screen, as in Maya.
-  const base = `perspective(${TILT_PERSPECTIVE}px) translate(${shiftX}px, ${shiftY}px) rotateX(${tilt}deg) rotateY(${yaw}deg) rotateZ(${spin}deg)`
+  const base = `perspective(${perspNow}px) translate(${shiftX}px, ${shiftY}px) rotateX(${tilt}deg) rotateY(${yaw}deg) rotateZ(${spin}deg)`
   // A wheel zoom in progress: the plane scaled about the zoom point, on the
   // compositor, until the zoom settles into the canvas zoom (see TiltGlide).
   return glide ? `${base} translate(${glide.x}px, ${glide.y}px) scale3d(${glide.k}, ${glide.k}, ${glide.k}) translate(${-glide.x}px, ${-glide.y}px)` : base
@@ -363,7 +438,7 @@ export const TILT_DRAW_FAR = 200
  *  plane, in FLAT px from the centre — i.e. the flat-view point now drawn
  *  under it. Null above the horizon, or past `far` (see TILT_FAR). */
 export function unprojectTilt(sx: number, sy: number, tiltDeg: number, spinDeg: number, shiftX = 0, shiftY = 0, height = 0, far = Infinity, yawDeg = useTiltStore.getState().yaw): { x: number; y: number } | null {
-  const P = TILT_PERSPECTIVE
+  const P = perspNow
   const t = tiltDeg * Math.PI / 180, s = spinDeg * Math.PI / 180
   const ct = Math.cos(t), st = Math.sin(t)
   const b = yawDeg * Math.PI / 180, cb = Math.cos(b), sb = Math.sin(b)

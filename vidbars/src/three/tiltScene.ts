@@ -15,7 +15,7 @@ import { quarterStamp, modelBody } from './modelQuarter'
 import { computePosedBounds } from './orbitState'
 import { createLook, applyLook, disposeLook, type LookInstance, type ModelShade } from './modelLook'
 import { gradeLook, type Grade } from './modelMaps'
-import { TILT_PERSPECTIVE, TILT_DRAW_FAR, DEFAULT_LIGHT, CAMERA_LENS, type TiltLight, type CameraLens } from '../store/tiltStore'
+import { TILT_PERSPECTIVE, TILT_DRAW_FAR, tiltP, DEFAULT_LIGHT, CAMERA_LENS, type TiltLight, type CameraLens } from '../store/tiltStore'
 import { CAMERA_URL, CAMERA_LENS_AT } from './primitives'
 import { createNotesOverlay, type NotesHost } from './notesOverlay'
 import type { ModelNotes } from '../store/notesStore'
@@ -1315,13 +1315,16 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     // plane is where it was either way. Tipping into 3D the eye comes in
     // to the canvas's own over the first degrees.
     const offFlat = Math.min(1, Math.max(Math.abs(st.tilt), Math.abs(st.yaw)) / PLAN_UNTIL)
-    const eye = TILT_PERSPECTIVE * (1 + (PLAN_FAR - 1) * (1 - offFlat * offFlat * (3 - 2 * offFlat)) ** 3)
+    // (P: the eye's distance for the view's lens, tiltStore tiltP. With a
+    // lens longer than the plan's, the plan is from where the lens is.)
+    const P = tiltP(), planEye = Math.max(P, TILT_PERSPECTIVE * PLAN_FAR)
+    const eye = P + (planEye - P) * (1 - offFlat * offFlat * (3 - 2 * offFlat)) ** 3
     camera.fov = 2 * Math.atan(H / 2 / eye) * 180 / Math.PI
     // (Looking through a camera moves it: back where the canvas's is.)
     camera.position.set(0, 0, eye)
     camera.quaternion.identity()
     // (As deep either side of the plane as from the canvas's own eye.)
-    camera.near = eye - TILT_PERSPECTIVE + 10; camera.far = eye + TILT_PERSPECTIVE * (TILT_DRAW_FAR - 1)
+    camera.near = eye - P + P / 120; camera.far = eye + P * (TILT_DRAW_FAR - 1)
     camera.updateProjectionMatrix()
     // The plane: CSS rotateX(t) rotateZ(s), carried from CSS's y-down
     // space into three's y-up space (F·R·F, F = flip y).

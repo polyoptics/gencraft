@@ -18,7 +18,7 @@
 
 import React from 'react'
 import { useTiltStore, isTilted } from '../../store/tiltStore'
-import { useAltTiltGesture, useFrameKey, useShiftToPan } from './tilt/altCamera'
+import { useAltTiltGesture, useFrameKey, useShiftToPan, useViewWidth } from './tilt/altCamera'
 import { TiltModels } from './tilt/TiltModels'
 import { TiltedView } from './tilt/TiltedView'
 import { LookThrough } from './tilt/LookThrough'
@@ -27,6 +27,7 @@ export const TiltLayer: React.FC = () => {
   useAltTiltGesture()
   useFrameKey()
   useShiftToPan()
+  useViewWidth()
   const tilted = useTiltStore(s => isTilted(s))
   return (
     <>

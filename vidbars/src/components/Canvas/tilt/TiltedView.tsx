@@ -13,6 +13,7 @@ import {
   grip, models, modelKey, restKeyOf, veiled, chained, filled, widened, consoleEase, decoPlanes, type Hinge, stood, hingeOf, lifted, liftOf, marqueeSelect, selectModel,
 } from './TiltModels'
 import { LightPanel } from './LightPanel'
+import { ViewCube } from './ViewCube'
 import { seeWallDrop, storyWallOf } from '../StorylineLayer'
 import { useLinkDragStore } from '../../../store/linkDragStore'
 
@@ -952,6 +953,7 @@ export const TiltedView: React.FC = () => {
         }} />
       )}
       {lightOpen && <LightPanel onClose={() => setLightOpen(false)} />}
+      <ViewCube />
       <div
         data-tilt-hud
         style={{

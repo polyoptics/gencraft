@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { flushSync } from 'react-dom'
-import { useTiltStore, isTilted, offFlat, unprojectTilt, standRise, shiftKeeping, centrePoint, TILT_SNAP, TILT_MAX, TILT_PERSPECTIVE, type Pivot } from '../../../store/tiltStore'
+import { useTiltStore, isTilted, offFlat, unprojectTilt, standRise, shiftKeeping, centrePoint, TILT_SNAP, TILT_MAX, TILT_UNDER, tiltP, type Pivot } from '../../../store/tiltStore'
 import { storyWallOf } from '../StorylineLayer'
 import { peekAt, usePeek } from '../../../utils/peek'
 import { useCanvasStore, groupBounds, MIN_ZOOM, MAX_ZOOM } from '../../../store/canvasStore'
@@ -73,13 +73,53 @@ function moveCamera(mode: CamMode, tilt: number, d: number) {
   else s.setView(tilt, s.spin - d, s.yaw)
 }
 
+// The camera picked by the drag that left the flat view (see above).
+let camMode: CamMode | null = null
+
+/** The six square-on views the view cube jumps to (Brian 2026-11-18),
+ *  named by the side of the ground seen: its front is the bottom edge of
+ *  the flat canvas, its top the flat view itself. */
+export type CubeFace = 'TP' | 'FR' | 'BA' | 'LF' | 'RT' | 'BT'
+/** Where each has the camera: tipped back to edge-on (TILT_MAX: exactly
+ *  edge-on has no ground under the cursor) and the ground turned to bring
+ *  that side round to the front. */
+const FACE_VIEW: Record<Exclude<CubeFace, 'TP' | 'BT'>, number> = { FR: 0, RT: 90, BA: 180, LF: -90 }
+let jumpRaf = 0
+/** Jump the 3D view square on to a side: a short ease, about what the
+ *  view turns about now. The top is the flat canvas: unlocked, that is
+ *  the way home (as tipping up to it is); locked into 3D it is straight
+ *  down with the models standing. */
+export function jumpView(face: CubeFace) {
+  cancelAnimationFrame(jumpRaf)
+  const s0 = useTiltStore.getState()
+  if (face === 'TP' && !s0.lock3d) { s0.flatten(); return }
+  camMode = '3d'
+  const tilt1 = face === 'TP' ? 0 : face === 'BT' ? TILT_UNDER : TILT_MAX
+  const turn1 = face === 'TP' || face === 'BT' ? 0 : FACE_VIEW[face]
+  const t0 = s0.tilt, y0 = s0.yaw
+  // The short way round.
+  const sp0 = s0.spin, dSpin = ((turn1 - sp0) % 360 + 540) % 360 - 180
+  const start = performance.now()
+  let last = { tilt: s0.tilt, spin: s0.spin }
+  const tick = () => {
+    const s = useTiltStore.getState()
+    // The camera taken in hand meanwhile: it is the hand's.
+    if (s.tilt !== last.tilt || s.spin !== last.spin) return
+    const u = Math.min(1, (performance.now() - start) / 260)
+    const k = 1 - Math.pow(1 - u, 3)
+    s.setView(t0 + (tilt1 - t0) * k, u < 1 ? sp0 + dSpin * k : turn1, y0 * (1 - k), face === 'BT')
+    const now = useTiltStore.getState()
+    last = { tilt: now.tilt, spin: now.spin }
+    if (u < 1) jumpRaf = requestAnimationFrame(tick)
+  }
+  jumpRaf = requestAnimationFrame(tick)
+}
+
 export function useAltTiltGesture() {
   useEffect(() => {
     let altUsed = false
     let swallowMenu = false
     let swallowClick = false
-    // The camera picked by the drag that left the flat view (see below).
-    let camMode: CamMode | null = null
     // Alt is the camera and nothing else (Brian 2026-10-30): with it held,
     // a press anywhere on the canvas, cards and tiles included, only moves
     // the view. Nothing under it selects, drags or changes — 3D Viewers
@@ -453,7 +493,7 @@ function frameModel(host: HTMLElement): boolean {
   // up). Its size now, canvas units, without that.
   const ts = useTiltStore.getState()
   const along = Math.max(1e-3, Math.cos(ts.tilt * Math.PI / 180) * Math.cos((ts.yaw ?? 0) * Math.PI / 180))
-  const P = TILT_PERSPECTIVE, A = m0.h / along
+  const P = tiltP(), A = m0.h / along
   const grow = Math.max(0.05, (P - A * zFrom) / P)
   const sw = (mb.x1 - mb.x0) / zFrom * grow, sh = (mb.y1 - mb.y0) / zFrom * grow
   // Shown at half the view (s·z·P/(P − A·z) = F), never past 0.6 of the
@@ -532,7 +572,7 @@ export function useFrameKey() {
         const ts = useTiltStore.getState()
         const cz = sets.top / 2
         const along = Math.max(1e-3, Math.cos(ts.tilt * Math.PI / 180) * Math.cos((ts.yaw ?? 0) * Math.PI / 180))
-        const P = TILT_PERSPECTIVE, A = cz / along
+        const P = tiltP(), A = cz / along
         const fit = (F: number, sz: number) => F * P / (Math.max(sz, 1) * P + F * A)
         const zTo = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, A > 0 ? 0.6 * P / A : Infinity, fit(W * 0.38, box.x1 - box.x0), fit(H * 0.38, box.y1 - box.y0)))
         const cx = (box.x0 + box.x1) / 2, cy = (box.y0 + box.y1) / 2
@@ -547,7 +587,7 @@ export function useFrameKey() {
       const fill = selected ? (isTilted(useTiltStore.getState()) ? 0.38 : 0.6) : 0.9
       // Seen `near` toward the eye, a size s shows s·z·P/(P − near·z): the
       // zoom that shows it at the size wanted (the plain W·fill/s at 0).
-      const P = TILT_PERSPECTIVE, A = box.near
+      const P = tiltP(), A = box.near
       const fit = (F: number, sz: number) => F * P / (Math.max(sz, 1) * P + F * A)
       // Never so near that the framed card reaches the eye.
       const zTo = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, A > 0 ? 0.95 * P / A : Infinity, Math.min(fit(W * fill, x1 - x0), fit(H * fill, y1 - y0))))
@@ -561,6 +601,20 @@ export function useFrameKey() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
+}
+
+/** The 3D view's lens is a focal length on the view's width (tiltStore
+ *  lensMm): the store is told how wide the view is. */
+export function useViewWidth() {
+  useEffect(() => {
+    const host = document.querySelector<HTMLElement>('[data-zoom-bar-host]')
+    if (!host) return
+    const tell = () => useTiltStore.getState().setViewW(host.clientWidth)
+    tell()
+    const ro = new ResizeObserver(tell)
+    ro.observe(host)
+    return () => ro.disconnect()
   }, [])
 }
 
