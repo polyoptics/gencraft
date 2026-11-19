@@ -36,10 +36,12 @@ const KEY = 'vidbars.worldScale'
 export const WORLD_PER_DEFAULT = 200
 export const FADE_FT_DEFAULT = 15, FADE_FT_MIN = 1, FADE_FT_MAX = 5000
 export const LINE_FT_DEFAULT = 8, LINE_FT_MIN = 1, LINE_FT_MAX = 5000
+/** How tall the lineup's ruler stands, px. */
+export const LINE_PX_DEFAULT = 190, LINE_PX_MIN = 80, LINE_PX_MAX = 1400
 
-interface Kept { per: number | null; fadeFt: number; fadeOn: boolean; lineFt: number; trueSize: boolean }
+interface Kept { per: number | null; fadeFt: number; fadeOn: boolean; lineFt: number; trueSize: boolean; linePx: number; lineBg: string | null }
 function load(): Kept {
-  const k: Kept = { per: null, fadeFt: FADE_FT_DEFAULT, fadeOn: true, lineFt: LINE_FT_DEFAULT, trueSize: false }
+  const k: Kept = { per: null, fadeFt: FADE_FT_DEFAULT, fadeOn: true, lineFt: LINE_FT_DEFAULT, trueSize: false, linePx: LINE_PX_DEFAULT, lineBg: null }
   try {
     const p = JSON.parse(localStorage.getItem(KEY) ?? 'null') as Partial<Kept> | null
     if (p) {
@@ -47,6 +49,8 @@ function load(): Kept {
       if (typeof p.fadeFt === 'number' && Number.isFinite(p.fadeFt)) k.fadeFt = Math.max(FADE_FT_MIN, Math.min(FADE_FT_MAX, p.fadeFt))
       if (typeof p.fadeOn === 'boolean') k.fadeOn = p.fadeOn
       if (typeof p.trueSize === 'boolean') k.trueSize = p.trueSize
+      if (typeof p.linePx === 'number' && Number.isFinite(p.linePx)) k.linePx = Math.max(LINE_PX_MIN, Math.min(LINE_PX_MAX, p.linePx))
+      if (typeof p.lineBg === 'string' && /^#[0-9a-f]{6}$/i.test(p.lineBg)) k.lineBg = p.lineBg
       if (typeof p.lineFt === 'number' && Number.isFinite(p.lineFt)) k.lineFt = Math.max(LINE_FT_MIN, Math.min(LINE_FT_MAX, p.lineFt))
     }
   } catch { /* private window, or not ours */ }
@@ -69,14 +73,18 @@ interface WorldScale extends Kept {
   join: (ids: string[]) => void
   leave: (id: string) => void
   setLineFt: (ft: number) => void
+  /** How tall the lineup's ruler stands, px, and the colour behind the
+   *  lineup (null: none, the canvas shows through). */
+  setLinePx: (px: number) => void
+  setLineBg: (bg: string | null) => void
   /** Every model at its true height: emphasis ignored. */
   setTrueSize: (on: boolean) => void
 }
 export const useWorldScale = create<WorldScale>((set, get) => {
   const keep = (p: Partial<Kept>) => {
     set(p)
-    const { per, fadeFt, fadeOn, lineFt, trueSize } = get()
-    try { localStorage.setItem(KEY, JSON.stringify({ per, fadeFt, fadeOn, lineFt, trueSize })) } catch { /* private window */ }
+    const { per, fadeFt, fadeOn, lineFt, trueSize, linePx, lineBg } = get()
+    try { localStorage.setItem(KEY, JSON.stringify({ per, fadeFt, fadeOn, lineFt, trueSize, linePx, lineBg })) } catch { /* private window */ }
   }
   return {
     ...load(),
@@ -91,6 +99,8 @@ export const useWorldScale = create<WorldScale>((set, get) => {
     join: ids => { const add = ids.filter((id, i) => !get().line.includes(id) && ids.indexOf(id) === i); if (add.length) set({ line: [...get().line, ...add] }) },
     leave: id => set({ line: get().line.filter(x => x !== id) }),
     setTrueSize: trueSize => keep({ trueSize }),
+    setLinePx: px => { if (Number.isFinite(px)) keep({ linePx: Math.max(LINE_PX_MIN, Math.min(LINE_PX_MAX, px)) }) },
+    setLineBg: lineBg => keep({ lineBg }),
     setLineFt: ft => { if (Number.isFinite(ft)) keep({ lineFt: Math.max(LINE_FT_MIN, Math.min(LINE_FT_MAX, ft)) }) },
   }
 })

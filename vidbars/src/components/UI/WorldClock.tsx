@@ -97,7 +97,7 @@ export const WorldClock: React.FC = () => {
         }}>
         <span style={{ fontSize: 17, lineHeight: 1, opacity: scaleOpen || scaleHot ? 1 : 0.6 }}>📏</span>
       </button>
-      {scaleOpen && <WorldScaleLine left={12} right={60} bottom={ROW_BOTTOM + ROW_H + GAP} />}
+      {scaleOpen && <WorldScaleLine bottom={ROW_BOTTOM + ROW_H + GAP} />}
       <div data-world-clock-drop style={{
         position: 'absolute', left: CONTROL_LEFT, bottom: ROW_BOTTOM, width: CONTROL_W, height: ROW_H, zIndex: 950,
         display: 'flex', borderRadius: 8, overflow: 'hidden', userSelect: 'none',
