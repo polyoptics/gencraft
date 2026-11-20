@@ -1341,7 +1341,13 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     camera.position.set(0, 0, eye)
     camera.quaternion.identity()
     // (As deep either side of the plane as from the canvas's own eye.)
-    camera.near = eye - P + P / 120; camera.far = eye + P * (TILT_DRAW_FAR - 1)
+    // Through a long lens or Ortho the eye is so far back that a near plane
+    // that close to it leaves the depth buffer steps of a pixel and more
+    // out at the canvas: a deck's cards showed through its face in stripes
+    // (Brian 2026-11-20, "shimmery effects on the card faces"). So the near
+    // plane keeps far enough out for steps of a fiftieth of a pixel there
+    // (24 bits of depth), never past 0.7 of the way to the canvas.
+    camera.near = Math.max(eye - P + P / 120, Math.min(eye * 0.7, eye * eye / (0.02 * 2 ** 24))); camera.far = eye + P * (TILT_DRAW_FAR - 1)
     camera.updateProjectionMatrix()
     // From underneath (the view cube's BT) the floor is see-through (Brian
     // 2026-11-18): the slabs under the cards and the set, solid from
