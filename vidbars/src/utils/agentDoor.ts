@@ -50,6 +50,7 @@ import { getMedia } from './mediaStore'
 import { blobToDataUrl, isDataUrl, isMediaRef, mediaRefId } from './mediaRef'
 import { markNew } from './newCards'
 import { bringHome } from './bringHome'
+import { setGenerators } from './gen3d'
 import { agentGlide, agentPoint, agentSpotOfCard } from './agentCursor'
 import { placeBox, placeToolAt, type PlaceKind } from './placeTool'
 import { bundleArea3dCard } from './area3dCard'
@@ -799,6 +800,15 @@ async function bringCardsHome(args: Json): Promise<Json> {
   return { from: from.id, cards: made.map(g => g.id), deck: r.deck, detail: r.detail, detailWas: r.did, ...(r.had ? { had: r.had } : {}), note: `The made card${made.length > 1 ? 's are' : ' is'} ${where}. ${what} One undo (Ctrl+Z) takes it all back.` }
 }
 
+/** Krea's list of 3D generators, read again for the 3D generation
+ *  window (utils/gen3d): kept as Krea gave it. */
+function setGeneratorList(args: Json): Json {
+  const n = setGenerators(args.generators)
+  if (!n) throw new Error('Give generators: each with id, name, description and inputSchema { properties } as Krea\'s get_model_schema gave them.')
+  agentPoint(say(args, 'Bringing the generator list'))
+  return { generators: n, note: 'The 3D generation window now lists these.' }
+}
+
 /** Delete cards. A closed deck named by its front card goes whole, as the
  *  Delete key does it. */
 async function deleteCards(args: Json): Promise<Json> {
@@ -856,6 +866,7 @@ const TOOL_KINDS: Record<string, { kind: Exclude<PlaceKind, 'new'>; label: strin
   rough_cut: { kind: 'roughCut', label: 'Rough Cut' }, storyline: { kind: 'storyline', label: 'Storyline' },
   cabinet: { kind: 'cabinet', label: 'Cabinet' }, loop_strip: { kind: 'loopStrip', label: 'Loop strip' },
   set_3d: { kind: 'area', label: '3D set' }, states: { kind: 'stateSpace', label: 'States' },
+  generate_3d: { kind: 'gen3d', label: 'Generate 3D' },
 }
 
 /** Every tool on the canvas (tiles and Viewers), briefly. */
@@ -3233,7 +3244,7 @@ async function editMembers(args: Json): Promise<Json> {
 // ── The door ────────────────────────────────────────────────────────────
 
 const OPS: Record<string, (args: Json) => Json | Promise<Json>> = { list: listCards, read: readCards, decks: listDecks, media: cardMedia, deal: dealDeck,
-  edit: editCards, arrange: arrangeCards, deck: setDeck, link: linkCards, delete: deleteCards, select: selectCards, undo: undoLast, home: bringCardsHome,
+  edit: editCards, arrange: arrangeCards, deck: setDeck, link: linkCards, delete: deleteCards, select: selectCards, undo: undoLast, home: bringCardsHome, generators: setGeneratorList,
   tools: listTools, place: placeTool, set3d: make3dSet, stand3d, modelSquare: squareModels, gif: makeGifOf, movie: makeMovieOf, cut: addToCut,
   states: readStates, statesBuild: buildStates, statesEdit: editStates, statesRun: runStates,
   story: readStoryline, storyBuild: buildStoryline, storyEdit: editStoryline,

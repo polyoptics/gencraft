@@ -22,6 +22,10 @@ How to work here:
   picture, a processed picture), deal it, then `bring_home` so it sits in
   that card's deck and its detail shows it. If the detail already shows
   another card, ask before replacing.
+- A message that starts "A 3D generation job from" comes from the Generate
+  3D window: the artist set it up there and pressed Generate. Run it as
+  written, on the generator named, and do not ask first. It spends the
+  artist's Krea credits, so run it once.
 - The artist decides what the materials are for. Don't assume a use.
 - You only have the VidBars tools here (and any connectors the artist has
   added). You cannot read or change files on the computer from this box.

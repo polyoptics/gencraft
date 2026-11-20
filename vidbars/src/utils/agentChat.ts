@@ -140,13 +140,14 @@ function take(boxId: string, ev: Record<string, unknown>): void {
 const setBusy = (boxId: string, on: boolean) =>
   useAgentChat.setState(s => { const busy = { ...s.busy }; if (on) busy[boxId] = true; else delete busy[boxId]; return { busy } })
 
-/** Say `text` to Claude in box `boxId`. One message at a time in a box. */
-export async function sendChat(boxId: string, text: string): Promise<void> {
+/** Say `text` to Claude in box `boxId`. One message at a time in a box.
+ *  `shown`: what the box shows as said, when the text itself is a long job. */
+export async function sendChat(boxId: string, text: string, shown?: string): Promise<void> {
   const t = text.trim()
   const st = useAgentChat.getState()
   const box = st.boxes.find(b => b.id === boxId)
   if (!t || !box || st.busy[boxId]) return
-  add(boxId, 'me', t)
+  add(boxId, 'me', shown?.trim() || t)
   setBusy(boxId, true)
   const stopper = new AbortController()
   stoppers.set(boxId, stopper)
@@ -180,6 +181,18 @@ export async function sendChat(boxId: string, text: string): Promise<void> {
     stoppers.delete(boxId)
     setBusy(boxId, false)
   }
+}
+
+/** A job from a tool on the canvas (the 3D generation window): passed to
+ *  Claude in a box that is free, a new one when all are working, with the
+ *  boxes shown so the artist sees it run. Returns that box's id. */
+export function sendJob(text: string, shown: string): string {
+  let st = useAgentChat.getState()
+  if (!st.boxes.some(b => !st.busy[b.id])) { addChatBox(); st = useAgentChat.getState() }
+  const box = st.boxes.find(b => !st.busy[b.id])!
+  if (!st.open) useAgentChat.setState({ open: true })
+  void sendChat(box.id, text, shown)
+  return box.id
 }
 
 /** Stop Claude where it is, in box `boxId`. */

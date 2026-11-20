@@ -146,6 +146,15 @@ const IcStateSpace: React.FC<SvgProps> = ({ size }) => (
   </svg>
 )
 
+/** Generate 3D — a cube with a spark at its corner. Accent: the spark. */
+const IcGen3d: React.FC<SvgProps> = ({ size }) => (
+  <svg {...svgBase(size)}>
+    <path d="M11 8.2l6.5 3.3v7L11 21.8l-6.5-3.3v-7L11 8.2z" stroke={S} />
+    <path d="M4.5 11.5L11 14.8l6.5-3.3M11 14.8v7" stroke={S} strokeWidth="1.2" />
+    <path d="M18.5 2v5M16 4.5h5" stroke={A.yellow} strokeWidth="1.8" />
+  </svg>
+)
+
 /** Project cabinet — a chest of drawers. Accent: the pulls. */
 const IcCabinet: React.FC<SvgProps> = ({ size }) => (
   <svg {...svgBase(size)}>
@@ -318,10 +327,10 @@ const IcClaude: React.FC<SvgProps> = ({ size }) => (
 // follows here.
 type BarId =
   | 'viewer' | 'pool' | 'prompt' | 'promptCards' | 'history' | 'browser' | 'attributes' | 'filmMixer'
-  | 'roughCut' | 'storyline' | 'cabinet' | 'loopStrip' | 'scene3d' | 'stateSpace' | 'effects' | 'promptCard' | 'notes' | 'stick' | 'claude' | 'new'
+  | 'roughCut' | 'storyline' | 'cabinet' | 'loopStrip' | 'scene3d' | 'stateSpace' | 'effects' | 'promptCard' | 'notes' | 'stick' | 'gen3d' | 'claude' | 'new'
 const DEFAULT_ORDER: BarId[] = [
   'viewer', 'pool', 'prompt', 'promptCards', 'history', 'browser', 'attributes', 'filmMixer',
-  'roughCut', 'storyline', 'cabinet', 'loopStrip', 'scene3d', 'stateSpace', 'effects', 'promptCard', 'notes', 'stick', 'claude', 'new',
+  'roughCut', 'storyline', 'cabinet', 'loopStrip', 'scene3d', 'stateSpace', 'effects', 'promptCard', 'notes', 'stick', 'gen3d', 'claude', 'new',
 ]
 const ORDER_KEY = 'vidbars.topIconBar.order'
 
@@ -363,7 +372,7 @@ const ALIKE: Partial<Record<BarId, number>> = {
   prompt: 1, promptCards: 1, promptCard: 1, attributes: 1,
   storyline: 2, scene3d: 2, stateSpace: 2, notes: 2,
   filmMixer: 3, roughCut: 3, loopStrip: 3, effects: 3,
-  claude: 4,
+  gen3d: 4, claude: 4,
   new: 5,
 }
 
@@ -622,6 +631,7 @@ export const TopIconBar: React.FC = () => {
     loopStrip: <IconButton Icon={IcLoopStrip} title="Loop strip — drop cards in and run effects over them" {...place('loopStrip')} />,
     scene3d: <IconButton Icon={IcScene3d} title="3D set — a mat that becomes a 3D workspace: dock model cards along it and lay their models out inside. Right-click it to fold it into a card" {...place('area')} />,
     stateSpace: <IconButton Icon={IcStateSpace} title="States — a workspace for states: drag cards in to make icons, draw lines between them, light the one that is now" {...place('stateSpace')} />,
+    gen3d: <IconButton Icon={IcGen3d} title="Generate 3D — link a card's picture in, pick a generator, and Claude runs it on Krea: the 3D model comes back into that card's deck" {...place('gen3d')} />,
     // The Effects wrapper carries fxBtnRef: the palette hangs under it, and
     // a press on it must not count as "outside" (IconButton forwards no ref).
     effects: (

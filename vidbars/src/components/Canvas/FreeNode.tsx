@@ -36,6 +36,7 @@ import { RoughCutBody } from '../RoughCut/RoughCutBody'
 import { FILM_MIXER_ASPECT, FilmLayersSpacing, FilmLayersToggle, FilmMixerBody } from '../FilmMixer/FilmMixerBody'
 import { MediaPool } from '../Pool/MediaPool'
 import { PromptPad } from '../Prompt/PromptPad'
+import { Gen3dWindow } from '../Gen/Gen3dWindow'
 import { AttributesWindow } from '../CardBacks/AttributesWindow'
 import { CARD_READER_TYPES } from '../../utils/deckDockDrag'
 import { dockedCards } from '../../utils/filmShots'
@@ -2113,6 +2114,13 @@ const FreeNodeBody: React.FC<{
     return (
       <CanvasUnits w={bodyW} h={bodyH} r={bodyR}><div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
         {node.type === 'attributes' ? <AttributesWindow nodeId={id} /> : <CardPromptPad nodeId={id} />}
+      </div></CanvasUnits>
+    )
+  }
+  if (node.type === 'gen3d') {
+    return (
+      <CanvasUnits w={bodyW} h={bodyH} r={bodyR}><div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
+        <Gen3dWindow nodeId={id} />
       </div></CanvasUnits>
     )
   }

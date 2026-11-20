@@ -3,6 +3,7 @@
 // pointermove/pointerup listeners that drive the drag. Mounted once at the
 // App root. Motion matches the NLEBlock color drag-out pattern.
 
+import { linkGenCard } from '../../utils/gen3d'
 import { linkCardsToDivision } from '../../utils/sceneContent'
 import { addState, setStateDeck } from '../../utils/stateCard'
 import React, { useEffect } from 'react'
@@ -46,6 +47,9 @@ export const LinkDragOverlay: React.FC = () => {
       // A state on a State card ("statedeck:<card>:<state>|new"): the deck
       // the card let go is in becomes that state's deck (StateFace).
       let stateDeck: string[] | null = null
+      // A row of a 3D generation window ("gen:<window>:<ref | view key>"):
+      // the card let go there is that row's picture (utils/gen3d).
+      let gen: string[] | null = null
       for (const el of els) {
         const attr = (el as HTMLElement).closest?.('[data-link-drop]')?.getAttribute('data-link-drop')
         if (!attr) continue
@@ -53,6 +57,7 @@ export const LinkDragOverlay: React.FC = () => {
         if (attr.startsWith('detail:')) { detail = attr.split(':'); break }
         if (attr.startsWith('division:')) { division = attr.split(':'); break }
         if (attr.startsWith('statedeck:')) { stateDeck = attr.split(':'); break }
+        if (attr.startsWith('gen:')) { gen = attr.split(':'); break }
         // "group:<id>" / "board:<id>" / "bar:<boardId>:<barId>", plus the
         // legacy "card:"/"chip:" spellings the card layer still emits.
         const hit = parseRef(attr)
@@ -95,6 +100,10 @@ export const LinkDragOverlay: React.FC = () => {
       if (stateDeck && source.kind === 'group' && source.id !== stateDeck[1]) {
         if (stateDeck[2] === 'new') addState(stateDeck[1], { deck: source.id })
         else setStateDeck(stateDeck[1], stateDeck[2], source.id)
+      }
+      if (gen && source.kind === 'group') {
+        useUndoCoordinator.getState().checkpoint()
+        linkGenCard(gen[1], gen.slice(2).join(':'), source.id)
       }
       if (story && source.kind === 'group') {
         useUndoCoordinator.getState().checkpoint()

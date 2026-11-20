@@ -36,7 +36,7 @@ import type { RailDropTarget } from './rail'
 import type { EffectKind } from './fx/effects'
 import type { CardType } from './cardTypes'
 
-export type PlaceKind = 'viewer' | 'pool' | 'prompt' | 'history' | 'browser' | 'filmMixer' | 'storyline' | 'cabinet' | 'roughCut' | 'loopStrip' | 'attributes' | 'promptCards' | 'area' | 'stateSpace' | 'new'
+export type PlaceKind = 'viewer' | 'pool' | 'prompt' | 'history' | 'browser' | 'filmMixer' | 'storyline' | 'cabinet' | 'roughCut' | 'loopStrip' | 'attributes' | 'promptCards' | 'area' | 'stateSpace' | 'gen3d' | 'new'
   /** An effect card picked off the Effects palette (`effect` says which). */
   | 'effect'
 

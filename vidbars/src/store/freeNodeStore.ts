@@ -29,6 +29,7 @@ export type FreeNodeType =
   | 'annotations' // a model's notes: its pins and strokes (store/notesStore)
   | 'area'        // a mat on the canvas that is a workspace in 3D (components/Notes/AreaBody)
   | 'stateSpace'  // a state workspace: icons joined by lines (utils/stateSpace)
+  | 'gen3d'       // a 3D generation job for Claude to run on Krea (utils/gen3d)
 
 export interface TextStyle {
   fontSize: number       // in px (base, before zoom scaling)
@@ -104,6 +105,8 @@ export interface FreeNodeData {
   promptTabs?: { name: string; text: string }[]
   /** Card Prompts: the tab in use (index into promptTabs). */
   promptTab?: number
+  /** 3D generation window: its reference card, views, generator and options (utils/gen3d). Its words are `text`. */
+  gen3d?: import('../utils/gen3d').Gen3dState
   /** Effect cards: which operator, and its slider values (missing keys
    *  take their defaults — utils/fx/effects). */
   effect?: { kind: import('../utils/fx/effects').EffectKind; params?: Record<string, number>; text?: string
@@ -286,6 +289,7 @@ const DEFAULT_HEIGHTS: Record<FreeNodeType, number> = {
   annotations: 520,
   area: 900,
   stateSpace: 720,
+  gen3d: 610,
 }
 const DEFAULT_WIDTHS: Partial<Record<FreeNodeType, number>> = {
   audio: 260,
@@ -308,6 +312,7 @@ const DEFAULT_WIDTHS: Partial<Record<FreeNodeType, number>> = {
   annotations: 760,
   area: 1400,
   stateSpace: 1180,
+  gen3d: 300,
 }
 
 /** A new free node's size before any zoom compensation. addFreeNode makes
@@ -421,7 +426,7 @@ export const useFreeNodeStore = create<FreeNodeStore>()(persist((set) => ({
       effect: 'Effect', rail: 'Loop strip', cabinet: 'Project cabinet', filmMixer: 'Film Look',
       storyline: 'Storyline', roughCut: 'Rough Cut',
       attributes: 'Attributes', promptCards: 'Card Prompts',
-      annotations: 'Annotations', area: '3D set', stateSpace: 'States',
+      annotations: 'Annotations', area: '3D set', stateSpace: 'States', gen3d: 'Generate 3D',
     }
     const node: FreeNodeData = {
       id, x, y,
