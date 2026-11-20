@@ -57,35 +57,57 @@ const shut = (g: ProjectGroup) => !!g.deckState && g.deckState !== 'open'
 
 /** The kept deck `k` as it stands, its front card first (null: none).
  *  Contact decides, as for every deck, and no card of it is special
- *  (Brian 2026-11-19). Closed, it is the kept cards closed together. Open,
- *  it is the kept cards that touch one another (`touch`), through kept
- *  cards only: the largest such group of two or more (of two as large, the
- *  one with the card it was kept under, else the leftmost). Its front is
- *  the card it was kept under, or with that one away, its leftmost. A kept
- *  card pulled off it is out of it until it touches it again. */
+ *  (Brian 2026-11-19). A closed deck of its cards counts as one thing,
+ *  standing where its front card stands, so a deck closed inside the open
+ *  deck is in it like any card (Brian 2026-11-20, "I can't lock this deck
+ *  ... It has to do with the sub deck"). Closed whole, it is the kept
+ *  cards closed together. Open, it is the kept things that touch one
+ *  another (`touch`), through kept things only: the largest such group of
+ *  two or more cards (of two as large, the one with the card it was kept
+ *  under, else the leftmost). Its front is the card it was kept under, or
+ *  with that one away, its leftmost. A kept card pulled off it is out of
+ *  it until it touches it again. */
 export function keptDeck(k: string, groups: ProjectGroup[], touch: Touch): ProjectGroup[] | null {
   const marked = groups.filter(g => g.deckKeep === k && !g.pin)
   if (marked.length < 2) return null
-  const lead = (c: ProjectGroup[]) => {
-    const f = c.find(g => g.id === k) ?? c.reduce((a, b) => (b.originX < a.originX ? b : a))
-    return [f, ...c.filter(g => g !== f)]
+  const byId = new Map(groups.map(g => [g.id, g]))
+  // The card a closed card is seen as: the front of the closed deck it is in.
+  const top = (g: ProjectGroup): ProjectGroup => {
+    let t = g
+    for (let i = 0; i < 32 && shut(t); i++) {
+      const a = t.deckAnchorId && t.deckAnchorId !== t.id ? byId.get(t.deckAnchorId) : undefined
+      if (!a || !shut(a)) break
+      t = a
+    }
+    return t
   }
-  const closed = marked.filter(shut)
-  if (closed.length >= 2) return [closed.find(g => !g.deckAnchorId || g.deckAnchorId === g.id || !closed.some(o => o.id === g.deckAnchorId)) ?? closed[0], ...closed].filter((g, i, a) => a.indexOf(g) === i)
-  const open = marked.filter(g => !shut(g))
+  // Each thing on the canvas: an open card, or a closed deck's kept cards.
+  const things = new Map<ProjectGroup, ProjectGroup[]>()
+  for (const g of marked) {
+    const t = top(g)
+    const u = things.get(t)
+    if (u) { if (g === t) u.unshift(g); else u.push(g) } else things.set(t, [g])
+  }
+  const tops = [...things.keys()]
   const seen = new Set<ProjectGroup>()
-  let best: ProjectGroup[] | null = null
+  let best: { tops: ProjectGroup[]; cards: ProjectGroup[] } | null = null
   const left = (c: ProjectGroup[]) => Math.min(...c.map(g => g.originX))
-  for (const g of open) {
-    if (seen.has(g)) continue
-    const c = [g]
-    seen.add(g)
-    for (let i = 0; i < c.length; i++) for (const o of open) if (!seen.has(o) && touch(c[i], o)) { c.push(o); seen.add(o) }
-    if (c.length < 2) continue
-    const has = (x: ProjectGroup[]) => x.some(o => o.id === k)
-    if (!best || c.length > best.length || (c.length === best.length && (has(c) || (!has(best) && left(c) < left(best))))) best = c
+  const has = (c: ProjectGroup[]) => c.some(o => o.id === k)
+  for (const t of tops) {
+    if (seen.has(t)) continue
+    const c = [t]
+    seen.add(t)
+    for (let i = 0; i < c.length; i++) for (const o of tops) if (!seen.has(o) && touch(c[i], o)) { c.push(o); seen.add(o) }
+    const cards = c.flatMap(o => things.get(o)!)
+    if (cards.length < 2) continue
+    if (!best || cards.length > best.cards.length
+      || (cards.length === best.cards.length && (has(c) || (!has(best.tops) && left(c) < left(best.tops))))) best = { tops: c, cards }
   }
-  return best && lead(best)
+  if (!best) return null
+  // Its front: the card it was kept under where that one shows, else its leftmost.
+  const f = best.tops.find(g => g.id === k) ?? best.tops.reduce((a, b) => (b.originX < a.originX ? b : a))
+  const first = things.get(f)!
+  return [...first, ...best.cards.filter(g => !first.includes(g))]
 }
 
 /** Card `g` fronts a kept deck among the cards `row` (an open row): that
@@ -93,8 +115,8 @@ export function keptDeck(k: string, groups: ProjectGroup[], touch: Touch): Proje
 export function keptIn(g: ProjectGroup, row: string[], groups: ProjectGroup[], touch: Touch): string[] | null {
   if (!g.deckKeep) return null
   const deck = keptDeck(g.deckKeep, groups, touch)
-  if (!deck || deck[0].id !== g.id || deck.length >= row.length) return null
+  if (!deck || deck[0].id !== g.id) return null
   const mine = new Set(deck.map(o => o.id))
   const here = row.filter(id => mine.has(id))
-  return here.length >= 2 ? here : null
+  return here.length >= 2 && here.length < row.length ? here : null
 }

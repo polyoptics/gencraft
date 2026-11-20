@@ -178,7 +178,9 @@ export function startDeckKeep(): () => void {
       const all = prev.groups.filter(g => g.deckKeep === k)
       // The deck as it stood, open: closing, the cards of it that close.
       const deck = keptDeck(k, prev.groups, touch)
-      const stay = deck && !closed(deck[0]) ? deck.filter(g => shut.has(g.id)) : []
+      // A deck already closed inside it goes with it (Brian 2026-11-20).
+      const went = deck && !closed(deck[0]) ? deck.filter(g => shut.has(g.id)) : []
+      const stay = went.length >= 2 ? deck!.filter(g => shut.has(g.id) || closed(g)) : went
       if (stay.length >= 2) { for (const g of all) if (!stay.includes(g)) drop.add(g.id) }
       // Not the deck closing: the kept cards that closed are in another.
       else if (deck && !deck.some(g => shut.has(g.id))) { for (const g of all) if (shut.has(g.id)) drop.add(g.id) }

@@ -140,7 +140,13 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
     const k = groupId ? s.groups.find(g => g.id === groupId)?.deckKeep : undefined
     if (!k) return false
     const zoom = useCanvasStore.getState().zoom
-    return !!keptDeck(k, s.groups, (a, b) => cardsTouch(a, b, s.boards, zoom))?.some(g => g.id === groupId)
+    const deck = keptDeck(k, s.groups, (a, b) => cardsTouch(a, b, s.boards, zoom))
+    const me = deck?.find(g => g.id === groupId)
+    if (!deck || !me) return false
+    // A closed deck inside an open kept deck: its lock is its own, and
+    // that is off (a press keeps just its cards).
+    const shut = (g: typeof me) => !!g.deckState && g.deckState !== 'open'
+    return !(shut(me) && deck[0].id !== groupId && deck.some(g => !shut(g)))
   })
   // A scene card: its view modes (Focus, Bump-outs, Trace) from a "⋯" here.
   const isScene = useBoardsStore(s => !!groupId && s.groups.find(g => g.id === groupId)?.cardType === 'scene')
