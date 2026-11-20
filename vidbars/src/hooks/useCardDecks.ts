@@ -10,7 +10,7 @@ import { DEFAULT_H } from '../utils/barConstants'
 import { nearer } from '../utils/deckAway'
 import { primaryFirst } from '../utils/primaryCard'
 import { liveLocks, lockOf } from '../utils/deckLock'
-import { NLE_HEADER_CANVAS_H } from '../components/NLE/NLETimelineHeader'
+import { NLE_HEADER_CANVAS_H, CARD_FLOOR_ZOOM } from '../components/NLE/NLETimelineHeader'
 
 /** Returns true if this group is a non-anchor member of a stacked/fanned deck (visually hidden). */
 export function isHiddenDeckMember(g: ProjectGroup): boolean {
@@ -49,6 +49,13 @@ const TOUCH_TOLERANCE = 16 // canvas units — slightly > DEFAULT_GAP (12)
 // decks a little apart merged into one).
 const TOUCH_HEADER = NLE_HEADER_CANVAS_H + 2
 const headerExtendCanvasAt = (zoom: number) => (Math.max(NLE_HEADER_CANVAS_H * zoom, 20) + 2 * zoom) / zoom
+// Cards joining a deck are judged with the whole header strip as drawn:
+// the tallest it is ever drawn against its card (headerExtend at
+// CARD_FLOOR_ZOOM, in canvas units), and that at every zoom, so a deck
+// does not come apart or join as the view zooms (Brian 2026-11-20: "the
+// header doesn't count as physical contact. It has to be below, into the
+// underheader part"). The windows' docking keeps TOUCH_HEADER.
+const DECK_HEADER = 20 / CARD_FLOOR_ZOOM + 2
 
 /** The zoom the slack below is measured at. It was the farthest zoom; the
  *  view now pulls back further (canvasStore MIN_ZOOM), and the reach under a
@@ -79,7 +86,8 @@ export function cardTouchRect(g: ProjectGroup, boards: Record<string, BoardData>
 /** Do cards `a` and `b` touch, as clustering judges it? */
 export function cardsTouch(a: ProjectGroup, b: ProjectGroup, boards: Record<string, BoardData>, zoom: number): boolean {
   const ra = cardTouchRect(a, boards, zoom), rb = cardTouchRect(b, boards, zoom)
-  return !!ra && !!rb && rectsTouch({ id: a.id, ...ra }, { id: b.id, ...rb }, TOUCH_TOLERANCE)
+  const up = DECK_HEADER - TOUCH_HEADER
+  return !!ra && !!rb && rectsTouch({ id: a.id, ...ra, top: ra.top - up }, { id: b.id, ...rb, top: rb.top - up }, TOUCH_TOLERANCE)
 }
 
 /** THE card-geometry authority: a group's VISUAL card rect in canvas
@@ -276,8 +284,8 @@ export function useCardDecks(
     // extracted-card gap, but are filtered out before cluster IDs are
     // returned (only real groups become deck members).
     // Every rect here carries the zoom's header band; swap it for the
-    // fixed one (TOUCH_HEADER) before testing touch.
-    const headerSlack = headerExtendCanvasAt(zoom) - TOUCH_HEADER
+    // fixed one (DECK_HEADER) before testing touch.
+    const headerSlack = headerExtendCanvasAt(zoom) - DECK_HEADER
     const touchRect = (r: GroupSlot): GroupSlot => ({ ...r, top: r.top + headerSlack })
     function findClusters(zoneGroups: ProjectGroup[], zoneGhosts: GroupSlot[]): string[][] {
       const groupCount = zoneGroups.length
