@@ -52,6 +52,9 @@ export function labelSpot(p: { p: [number, number, number]; n: [number, number, 
 
 export const PIN_COLORS = { open: 0x7fd4ff, resolved: 0x5fe39b } as const
 
+/** A pin's dot, px across on screen. */
+const DOT_PX = 15.6
+
 function dotTexture(): THREE.CanvasTexture {
   const c = document.createElement('canvas')
   c.width = c.height = 64
@@ -162,8 +165,12 @@ export function createNotesOverlay() {
       for (const d of b.dots) {
         const mat = d.sprite.material as THREE.SpriteMaterial
         // A constant size on screen: the sprite is drawn at its scale times
-        // the model's, so the model's is taken back out.
-        const sz = 0.013 / worldScale
+        // the model's, so the model's is taken back out; and at its scale
+        // times the lens's length, so that is too. Through a long lens,
+        // Ortho, or the plan's far eye near looking straight down, the dot
+        // was a disc across the whole view (Brian 2026-11-20, "the Notes
+        // icon is getting enlarged and put up in front of the camera").
+        const sz = DOT_PX / (H / 2 * camera.projectionMatrix.elements[5]) / worldScale
         d.sprite.scale.set(sz, sz, 1)
         v.copy(d.local).applyMatrix4(s.inst.matrixWorld)
         if (check) {
