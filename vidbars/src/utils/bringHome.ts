@@ -9,9 +9,10 @@
 // card, any kind of result, any detail name. Nothing here decides what
 // the result is for.
 //
-//  - The deck: a closed or fanned deck takes the made cards in; an open
-//    row, or a card lying alone, gets them touching its right end (cards
-//    that touch are a deck).
+//  - The deck: the made card goes BEHIND the card it was made from, as a
+//    small closed deck of the two where that card stands (Brian
+//    2026-11-20), or into the closed deck that card fronts already. A
+//    card in a bigger deck keeps its place in it; no lock changes.
 //  - The detail: named by the caller, else after what the made card holds.
 //    A detail of that name that already shows another card is left as it
 //    is unless `replace` is given: the caller asks the artist first.
@@ -20,7 +21,6 @@ import { useCanvasStore } from '../store/canvasStore'
 import { cardVisualRect, expandWithNestedMembers, isHiddenDeckMember } from '../hooks/useCardDecks'
 import { faceBlocks } from './cardGrid'
 import { detailShown, newDetailId, type CardDetail } from './cardTypes'
-import { rowOf } from './primaryCard'
 import { getMediaItems } from '../types/bar'
 
 const TOUCH_GAP = 8
@@ -34,8 +34,10 @@ export function detailNameFor(g: ProjectGroup, boards: Record<string, BoardData>
 }
 
 export interface BroughtHome {
-  /** How the made cards joined: into the closed deck, or beside the open row / lone card. */
-  deck: 'closed' | 'beside'
+  /** How the made cards joined: behind their card as a small closed deck of
+   *  its own (new, or one it had inside a bigger deck), or into the closed
+   *  deck that card already fronts. */
+  deck: 'closed' | 'behind'
   detail: string
   /** filled: the detail now shows the made card. kept: it already showed
    *  another card and was left (ask, then call again with replace). same:
@@ -68,39 +70,51 @@ export function bringHome(sourceId: string, madeIds: string[], opts: { detail?: 
     if (g && r) bs().setGroupPosBatch([{ groupId: id, originX: g.originX + left - r.left, originY: g.originY + top - r.top }])
   }
 
-  // The deck.
-  const anchorId = source.deckState && source.deckState !== 'open' ? (isHiddenDeckMember(source) ? source.deckAnchorId! : source.id) : null
-  const anchor = anchorId ? bs().groups.find(g => g.id === anchorId) : undefined
-  let deck: BroughtHome['deck'] = 'beside'
-  if (anchor && anchor.deckState && anchor.deckState !== 'open') {
-    // Into the closed deck.
-    const state = anchor.deckState
-    const members = bs().groups.filter(g => g.id !== anchor.id && g.deckAnchorId === anchor.id && g.deckState && g.deckState !== 'open').map(g => g.id)
-    // Past the far end of where its cards lie when open, on the front
-    // card's line, so the deck opens as one clean row.
-    const r = rectOf(anchor.id)
-    if (r) {
-      let x = Math.max(r.right, ...members.map(rectOf).filter((m): m is NonNullable<typeof m> => !!m).map(m => m.right)) + TOUCH_GAP
-      for (const id of ids) {
-        moveTo(id, x, r.top)
-        const m = rectOf(id)
-        x += (m ? m.right - m.left : 0) + TOUCH_GAP
-      }
+  // The deck: behind the card it was made from (Brian 2026-11-20). That
+  // card's own closed deck takes it; a card with none becomes the front of
+  // a small closed deck of the two, where it stands, also inside a bigger
+  // deck, open or closed. Nothing else moves and no lock is touched: the
+  // made card is simply held by the locks its card is held by.
+  const shut = (g: ProjectGroup | undefined) => !!g?.deckState && g.deckState !== 'open'
+  const inner = bs().groups.filter(g => g.id !== source.id && g.deckAnchorId === source.id && shut(g)).map(g => g.id)
+  const mine = rectOf(source.id)
+  if (mine) {
+    // Past the far end of where its cards lie when open, on its line, so
+    // its deck opens as one clean row.
+    let x = Math.max(mine.right, ...inner.map(rectOf).filter((m): m is NonNullable<typeof m> => !!m).map(m => m.right)) + TOUCH_GAP
+    for (const id of ids) {
+      moveTo(id, x, mine.top)
+      const m = rectOf(id)
+      x += (m ? m.right - m.left : 0) + TOUCH_GAP
     }
-    bs().setDeckState([anchor.id, ...members, ...ids], state, { asGiven: true })
+  }
+  let deck: BroughtHome['deck'] = 'behind'
+  if (isHiddenDeckMember(source)) {
+    // Put away in a closed deck: it fronts a deck of its own inside that
+    // one (a deck in a deck, as setDeckState leaves one), or has one
+    // already. Written here, not through setDeckState, which would take
+    // the card out of the deck it is in.
+    const state = inner.length ? source.deckState! : 'stacked'
+    const made = new Set(ids)
+    useBoardsStore.setState(s => {
+      const front = s.groups.find(g => g.id === source.id)!
+      return { groups: s.groups.map(g => g.id === front.id ? { ...g, deckState: state, nestedDeck: true }
+        : made.has(g.id) ? { ...g, deckState: state, deckAnchorId: front.id, nestedDeck: undefined, deckOffsetX: g.originX - front.originX, deckOffsetY: g.originY - front.originY, deckLastFront: undefined }
+        : g) }
+    })
+  } else if (shut(source)) {
+    // The front of a closed deck: into that deck.
+    bs().setDeckState([source.id, ...inner, ...ids], source.deckState!, { asGiven: true })
     deck = 'closed'
   } else {
-    // Touching the right end of its row (or of the card alone), on its line.
-    const row = (rowOf(source.id) ?? [source.id]).map(rectOf).filter((r): r is NonNullable<typeof r> => !!r)
-    const mine = rectOf(source.id)
-    if (mine) {
-      let x = Math.max(mine.right, ...row.filter(r => r.top < mine.bottom && r.bottom > mine.top).map(r => r.right)) + TOUCH_GAP
-      for (const id of ids) {
-        moveTo(id, x, mine.top)
-        const r = rectOf(id)
-        x += (r ? r.right - r.left : 0) + TOUCH_GAP
-      }
-    }
+    // Open, alone or in a row: a small closed deck where it stands.
+    bs().setDeckState([source.id, ...ids], 'stacked', { asGiven: true })
+  }
+  // Held by what holds its card: a locked or kept deck keeps the card made
+  // from one of its cards, and stays as it was.
+  if (source.deckLock || source.deckKeep) {
+    const made = new Set(ids)
+    useBoardsStore.setState(s => ({ groups: s.groups.map(g => made.has(g.id) ? { ...g, ...(source.deckLock ? { deckLock: source.deckLock } : {}), ...(source.deckKeep ? { deckKeep: source.deckKeep } : {}) } : g) }))
   }
 
   // The detail.

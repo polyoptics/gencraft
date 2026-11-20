@@ -791,7 +791,7 @@ async function bringCardsHome(args: Json): Promise<Json> {
   })
   if (!r) throw new Error('Nothing could be brought home.')
   markNew(made.map(g => g.id))
-  const where = r.deck === 'closed' ? `in ${from.name}'s closed deck` : `touching ${from.name}'s row, so in its deck`
+  const where = r.deck === 'closed' ? `in ${from.name}'s closed deck` : `behind ${from.name}, in a small closed deck that ${from.name} fronts, where it stood`
   const what = r.did === 'kept'
     ? `${from.name}'s ${r.detail} detail already shows ${r.had} and was NOT changed. Ask the artist whether ${made[0].name} should replace it; if yes, call bring_home again with replace: true.`
     : r.did === 'same' ? `${from.name}'s ${r.detail} detail already showed it.`

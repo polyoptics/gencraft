@@ -230,7 +230,7 @@ const TOOLS = [
   },
   {
     name: 'bring_home',
-    description: 'Bring a card that was made from another card home to it. Use this after dealing a result that was made from one card (a 3D model made from a character\'s picture, a processed picture, a movie of it): the made card joins the deck of the card it was made from (into its closed deck, or touching its open row), and that card gets a detail on its back that shows the made card, so the artist finds everything made from a card in that card\'s deck. If the detail already shows another card it is left alone and the answer says so: ask the artist whether to replace it, and only then call again with replace: true. One undo takes it all back.',
+    description: 'Bring a card that was made from another card home to it. Use this after dealing a result that was made from one card (a 3D model made from a character\'s picture, a processed picture, a movie of it): the made card goes behind the card it was made from (into the closed deck that card fronts, or as a small closed deck of the two where that card stands, also inside a bigger deck; no lock on any deck changes), and that card gets a detail on its back that shows the made card, so the artist finds everything made from a card in that card\'s deck. If the detail already shows another card it is left alone and the answer says so: ask the artist whether to replace it, and only then call again with replace: true. One undo takes it all back.',
     inputSchema: {
       type: 'object', required: ['from', 'cards'],
       properties: {
