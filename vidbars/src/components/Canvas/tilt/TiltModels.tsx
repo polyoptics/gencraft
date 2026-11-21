@@ -33,7 +33,7 @@ import { curveRuns, pointFrames, withLayers } from '../../../utils/curveGeom'
 import { PinLabels } from '../../Notes/PinLabels'
 import { gradeFor } from '../../../utils/modelGrade'
 import { lookFor, runLook } from '../../../utils/cameraLook'
-import { sceneOf, sceneSpot, standsIn, dataKey, cardBox, frontShowing, faceModelOf, linkedModelCard } from '../../../utils/area3dScene'
+import { sceneOf, sceneSpot, standsIn, dataKey, cardBox, frontShowing, modelOfCard, linkedModelCard } from '../../../utils/area3dScene'
 import { rideSpots, rideRuns, useRideClock, useRideOverride, riderOf } from '../../../utils/pathRide'
 import { useUndoCoordinator } from '../../../store/undoCoordinator'
 import { useManip } from '../../../store/manipStore'
@@ -906,7 +906,7 @@ export function cardModel(id: string): { url: string; name: string } | null {
   // No model of its own on its face: the model of a detail filled with one
   // and switched on for the front stands over the face (linkedModelCard).
   const linked = g && linkedModelCard(g, bs.groups, bs.boards)
-  return (linked && faceModelOf(linked, bs.boards)) || null
+  return (linked && modelOfCard(linked, bs.boards)) || null
 }
 
 /** How thick things are, as a share of their shorter side: a Viewer like

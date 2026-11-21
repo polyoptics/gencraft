@@ -41,7 +41,7 @@ import { useUnits } from '../../store/unitsStore'
 import { useWorldScale, LINE_FT_MIN, LINE_FT_MAX, LINE_PX_MIN, LINE_PX_MAX } from '../../utils/worldScale'
 import { cardHeight, setCardHeight } from '../../utils/stickDock'
 import { heightText, snapHeight, FT_PER_M } from '../../utils/stickGeom'
-import { dataKey, faceModelOf, linkedModelCard } from '../../utils/area3dScene'
+import { dataKey, faceModelOf, modelOfCard, linkedModelCard } from '../../utils/area3dScene'
 import { faceBlocks } from '../../utils/cardGrid'
 import { getMediaItems } from '../../types/bar'
 import { createLineupScene, type LineupModel } from '../../three/lineupScene'
@@ -133,7 +133,7 @@ export const WorldScaleLine: React.FC<{ bottom: number }> = ({ bottom }) => {
   const stood = line.map(id => groups.find(g => g.id === id)).filter((g): g is ProjectGroup => !!g).map((g, i) => {
     const ft = cardHeight(g, groups)
     const from = faceModelOf(g, boards) ? g : linkedModelCard(g, groups, boards)
-    const model = from ? faceModelOf(from, boards) : null
+    const model = from ? modelOfCard(from, boards) : null
     // (No height yet: it stands as tall as the ruler, its mark at the top.)
     const shown = Math.min(ft ?? lineFt, lineFt)
     return { g, i, ft, shown, model, picture: model ? null : facePicture(g, boards), px: shown * perFt, over: ft !== null && ft > lineFt + 1e-6 }

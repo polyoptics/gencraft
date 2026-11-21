@@ -22,11 +22,15 @@ import { cardVisualRect, expandWithNestedMembers, isHiddenDeckMember } from '../
 import { faceBlocks } from './cardGrid'
 import { detailShown, newDetailId, type CardDetail } from './cardTypes'
 import { getMediaItems } from '../types/bar'
+import { modelOfCard } from './area3dScene'
 
 const TOUCH_GAP = 8
 
-/** A detail name for what card `g` holds on its face. */
+/** A detail name for what card `g` holds. */
 export function detailNameFor(g: ProjectGroup, boards: Record<string, BoardData>): string {
+  // A card with a 3D model in it is that model's card, even with a
+  // picture of it in front.
+  if (modelOfCard(g, boards)) return 'Model'
   const bid = faceBlocks(g, boards)[0]
   const b = bid ? boards[bid] : undefined
   const m = b?.rootIds.flatMap(rid => getMediaItems(b.bars[rid]?.content)).find(it => it.type === 'model' || it.type === 'image' || it.type === 'video')

@@ -161,6 +161,27 @@ export function detailShown(groups: ProjectGroup[], d: CardDetail, seen = new Se
   return { ...detailShown(groups, target, seen), card }
 }
 
+/** Where a detail that shares another card's detail (link.detail) keeps its
+ *  text: the card and row at the end of the chain. Null when it shares
+ *  none, the chain is broken, or that row shows something not typed (a
+ *  card, a count, a rank). */
+export function sharedSpot(groups: ProjectGroup[], d: CardDetail): { card: ProjectGroup; row: CardDetail } | null {
+  let at: { card: ProjectGroup; row: CardDetail } | null = null
+  let row = d
+  const seen = new Set<string>()
+  while (row.link?.detail) {
+    const key = `${row.link.card}:${row.link.detail}`
+    if (seen.has(key)) return null
+    seen.add(key)
+    const card = groups.find(g => g.id === row.link!.card)
+    const next = card?.details?.find(x => x.id === row.link!.detail)
+    if (!card || !next) return null
+    at = { card, row: next }
+    row = next
+  }
+  return at && !at.row.link ? at : null
+}
+
 // ── Ranks on charts (Brian 2026-11-06) ──
 // A card's back can have a detail that reads where it ranks on a chart
 // (a storyline baked into a card, utils/chartData), e.g. LETHALITY 2.

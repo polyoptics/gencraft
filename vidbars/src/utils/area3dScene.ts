@@ -110,6 +110,24 @@ export function faceModelOf(card: ProjectGroup, boards: Record<string, BoardData
   return null
 }
 
+/** Card `card`'s 3D model for a detail that links it: the one on its face,
+ *  else the first one in any of its blocks. A card made with a picture of
+ *  the model in front of the model itself is still that model's card
+ *  (Brian 2026-11-21: nothing stood on the main card until he stepped the
+ *  deck's arrows round to the model). */
+export function modelOfCard(card: ProjectGroup, boards: Record<string, BoardData>): { url: string; name: string } | null {
+  const own = faceModelOf(card, boards)
+  if (own) return own
+  for (const bid of faceBlocks(card, boards)) {
+    const board = boards[bid]
+    for (const rid of board.rootIds) {
+      const m = getMediaItems(board.bars[rid]?.content).find(it => it.type === 'model')
+      if (m) return { url: m.url, name: m.originalName || card.name || 'Model' }
+    }
+  }
+  return null
+}
+
 /** A model card that card `g` stands up for one of its details (Brian
  *  2026-11-19: "the model hovering above the deck's original card face...
  *  the model is the thing that's useful, and I can show them both"). Only a
@@ -124,7 +142,7 @@ export function linkedModelCard(g: ProjectGroup, groups: ProjectGroup[], boards:
     if (!d.onFace || !d.link || d.link.detail || d.link.count || d.link.rankOf) continue
     const card = detailShown(groups, d).card
     if (!card || card.id === g.id || card.hideModel3d || !isHiddenDeckMember(card)) continue
-    if (faceModelOf(card, boards)) return card
+    if (modelOfCard(card, boards)) return card
   }
   return undefined
 }

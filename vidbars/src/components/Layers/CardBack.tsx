@@ -13,7 +13,7 @@ import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { useLinkDragStore } from '../../store/linkDragStore'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { cardFill, edgeColorFromHex, hexToHsl, hslToHex } from '../../utils/colorUtils'
-import { CARD_TYPES, CARD_TYPE_ORDER, cardTypeOf, chartCards, chartName, chartRank, deckCardsOf, deckFavorite, detailShown, isChartRank, factionMembers, factionsOf, hasMembers, isAbove, isOwnCount, newDetailId, typeColor, type CardDetail, type CardType, type FactionMember } from '../../utils/cardTypes'
+import { CARD_TYPES, CARD_TYPE_ORDER, cardTypeOf, chartCards, chartName, chartRank, deckCardsOf, deckFavorite, detailShown, isChartRank, factionMembers, factionsOf, hasMembers, isAbove, isOwnCount, newDetailId, sharedSpot, typeColor, type CardDetail, type CardType, type FactionMember } from '../../utils/cardTypes'
 import { heightAsUnit } from '../../utils/stickGeom'
 import { useUnits } from '../../store/unitsStore'
 import { cardTitle } from '../../utils/faceStyle'
@@ -266,7 +266,7 @@ const BackField: React.FC<{
       style={{
         ...style, minWidth: 0, overflow: 'hidden',
         ...(wrap && !folded ? { whiteSpace: 'normal', overflowWrap: 'anywhere' } : { textOverflow: 'ellipsis', whiteSpace: 'nowrap' }),
-        cursor: shown !== undefined ? 'pointer' : 'text', padding: '0 2px', borderRadius: 2,
+        cursor: shown !== undefined && onPick ? 'pointer' : 'text', padding: '0 2px', borderRadius: 2,
         // An outline, not a border: it takes no room between the rows.
         outline: lit ? '1px dashed rgba(255,255,255,0.7)' : 'none', outlineOffset: -1,
         background: lit ? 'rgba(255,255,255,0.08)' : undefined,
@@ -506,6 +506,18 @@ export const CardBack: React.FC<{
     const order = rows.flatMap(d => d.link ? [{ id: d.id, part: 'name' as const }] : [{ id: d.id, part: 'name' as const }, { id: d.id, part: 'value' as const }])
     const i = order.findIndex(o => o.id === id && o.part === part) + (next === 'next' ? 1 : -1)
     setEditing(order[i] ?? null)
+  }
+  /** A value typed into a detail that shares another card's detail: kept
+   *  where that one is kept, so every card sharing it shows it (Brian
+   *  2026-11-21: "I should still be able to go in there and type on it"). */
+  const commitShared = (id: string, v: string) => {
+    setEditing(null)
+    const bs = useBoardsStore.getState()
+    const row = cur().find(d => d.id === id)
+    const spot = row && sharedSpot(bs.groups, row)
+    if (!spot || spot.row.value === v) return
+    useUndoCoordinator.getState().checkpoint()
+    bs.setGroupDetails(spot.card.id, (spot.card.details ?? []).map(d => d.id === spot.row.id ? { ...d, value: v } : d))
   }
   const add = () => {
     const row: CardDetail = { id: newDetailId(), name: '', value: '' }
@@ -848,8 +860,12 @@ export const CardBack: React.FC<{
       }),
       { label: 'Unlink, keep the text', separator: true, onClick: () => { setLink(id, null); setMenu(null) } },
     ]
+    const spot = sharedSpot(all, d)
     return [
-      { label: card.name || 'Untitled', hint: '  the card', checked: !d.link.detail && !d.link.count && !d.link.favorite, swatch: card.color, onClick: () => { setLink(id, { card: card.id }); setMenu(null) } },
+      // A detail shared with another card can still be typed: the text is
+      // changed where it is kept, for every card that shares it.
+      ...(spot ? [{ label: 'Type a new value', hint: '  shared', onClick: () => { setMenu(null); setEditing({ id, part: 'value' as const }) } }] : []),
+      { label: card.name || 'Untitled', hint: '  the card', separator: !!spot, checked: !d.link.detail && !d.link.count && !d.link.favorite, swatch: card.color, onClick: () => { setLink(id, { card: card.id }); setMenu(null) } },
       // The card as its deck: whichever of the deck's cards is its favourite.
       ...(deckCardsOf(all, card.id).length > 1 ? [{ label: "Its deck's favourite", hint: `  ${deckFavorite(deckCardsOf(all, card.id))?.name || 'Untitled'}`, checked: !!d.link.favorite, onClick: () => { setLink(id, { card: card.id, favorite: true }); setMenu(null) } }] : []),
       // A faction or family: how many are in it (counted live).
@@ -1094,16 +1110,16 @@ export const CardBack: React.FC<{
                 <BackField
                   field="value"
                   where={where}
-                  value={d.value}
+                  value={d.link?.detail ? linked?.text ?? '' : d.value}
                   placeholder="—"
-                  editing={!d.link && editing?.id === d.id && editing.part === 'value'}
+                  editing={(!d.link || !!d.link.detail) && editing?.id === d.id && editing.part === 'value'}
                   onStart={() => setEditing({ id: d.id, part: 'value' })}
-                  onCommit={(v, n) => commit(d.id, 'value', v, n)}
+                  onCommit={(v, n) => d.link?.detail ? commitShared(d.id, v) : commit(d.id, 'value', v, n)}
                   onCancel={() => cancel(d.id)}
                   shown={own ? <span data-member-count title="How many members it has: counted, not typed">{linked?.text}</span>
                     : rank && linked ? <span data-chart-rank={d.link!.card} title={`Rank on ${linked.card ? chartName(linked.card) : 'a chart'}: its group on the chart, counted from the top (read from the chart, not typed)`}><LinkShown text={linked.text} color={linked.card?.color} missing={linked.missing} whole={false} /></span>
                     : linked ? <LinkShown text={linked.text} color={linked.card?.color} missing={linked.missing} whole={!d.link!.detail && !d.link!.count} /> : asUnit && asUnit !== d.value ? asUnit : undefined}
-                  onPick={own ? undefined : e => setMenu({ x: e.clientX, y: e.clientY, kind: 'link', id: d.id })}
+                  onPick={own || !d.link ? undefined : e => setMenu({ x: e.clientX, y: e.clientY, kind: 'link', id: d.id })}
                   drop={own || rank ? undefined : `detail:${groupId}:${d.id}`}
                   lit={linking}
                   wrap
