@@ -1,5 +1,6 @@
 import React, { useRef, useState, useMemo, useCallback } from 'react'
 import { useBoardsStore } from '../../store/boardsStore'
+import { wheelCanvas } from '../../utils/trackpad'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useNLEViewerStore } from '../../store/nleViewerStore'
 import { NLE_HEADER_CANVAS_H } from './NLETimelineHeader'
@@ -52,14 +53,12 @@ const NLEGroupViewer: React.FC<Props> = ({ scopeKey }) => {
   const boards       = useBoardsStore(s => s.boards)
   const pan          = useCanvasStore(s => s.pan)
   const zoom         = useCanvasStore(s => s.zoom)
-  const zoomAtPoint  = useCanvasStore(s => s.zoomAtPoint)
   const shiftPan     = useCanvasStore(s => s.shiftPan)
 
   const onWheel = useCallback((e: React.WheelEvent) => {
     e.stopPropagation()
-    const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12
-    zoomAtPoint(factor, e.clientX, e.clientY - APP_TOOLBAR_H)
-  }, [zoomAtPoint])
+    wheelCanvas(e, e.clientX, e.clientY - APP_TOOLBAR_H)
+  }, [])
 
   const panLast = useRef({ x: 0, y: 0 })
   const onPanDown = useCallback((e: React.PointerEvent) => {

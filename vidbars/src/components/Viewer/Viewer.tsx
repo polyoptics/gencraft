@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { useBoardsStore } from '../../store/boardsStore'
+import { wheelCanvas } from '../../utils/trackpad'
 import { useCanvasStore } from '../../store/canvasStore'
 import { computeGroupLayout, getRowY } from '../../utils/nleRows'
 import { getGroupForBoard } from '../../store/boardsStore'
@@ -39,16 +40,14 @@ export const Viewer: React.FC<Props> = ({ boardId }) => {
 
   const pan           = useCanvasStore(s => s.pan)
   const zoom          = useCanvasStore(s => s.zoom)
-  const zoomAtPoint   = useCanvasStore(s => s.zoomAtPoint)
   const shiftPan      = useCanvasStore(s => s.shiftPan)
   const groups        = useBoardsStore(s => s.groups)
 
   // Forward wheel-zoom through the viewer to the canvas
   const onWheel = useCallback((e: React.WheelEvent) => {
     e.stopPropagation()
-    const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12
-    zoomAtPoint(factor, e.clientX, e.clientY - APP_TOOLBAR_H)
-  }, [zoomAtPoint])
+    wheelCanvas(e, e.clientX, e.clientY - APP_TOOLBAR_H)
+  }, [])
 
   // Forward middle-mouse pan through the viewer
   const panLast = useRef({ x: 0, y: 0 })

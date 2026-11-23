@@ -24,6 +24,8 @@ import { startDeckUnder, startDeckHome, startDeckKeep } from './utils/deckUnder'
 import { createMediaCard, createTextCard } from './utils/cardGrid'
 
 installLookThrough()
+import { installTrackpad } from './utils/trackpad'
+installTrackpad()
 import { startQuarterPictures } from './utils/quarterPictures'
 startQuarterPictures()
 import { cardOrigins } from './components/Canvas/StorylineLayer'

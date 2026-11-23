@@ -25,6 +25,7 @@
 // on a card.
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { wheelCanvas } from '../../utils/trackpad'
 import { flushSync } from 'react-dom'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
 import { useBoardsStore } from '../../store/boardsStore'
@@ -59,7 +60,7 @@ const ring = (c: string) => `drop-shadow(1.5px 0 0 ${c}) drop-shadow(-1.5px 0 0 
 function wheel(e: React.WheelEvent) {
   e.stopPropagation()
   const r = document.querySelector('[data-pin-host]')?.getBoundingClientRect()
-  useCanvasStore.getState().zoomAtPoint(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX - (r?.left ?? 0), e.clientY - (r?.top ?? 0))
+  wheelCanvas(e, e.clientX - (r?.left ?? 0), e.clientY - (r?.top ?? 0))
 }
 
 /** And a middle-button drag pans it. */

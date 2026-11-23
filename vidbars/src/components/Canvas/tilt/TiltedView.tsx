@@ -10,7 +10,8 @@ import { useCanvasStore, MIN_ZOOM, MAX_ZOOM } from '../../../store/canvasStore'
 import { useFreeNodeStore } from '../../../store/freeNodeStore'
 import { useBoardsStore } from '../../../store/boardsStore'
 import { clientToCanvas } from '../../../utils/fx/createEffect'
-import { hostOf, viewCentre, SPIN_RAD } from './altCamera'
+import { hostOf, viewCentre, SPIN_RAD, orbitWheel } from './altCamera'
+import { padWheel, pinchFactor } from '../../../utils/trackpad'
 import {
   grip, models, modelKey, restKeyOf, veiled, chained, filled, widened, consoleEase, decoPlanes, type Hinge, stood, hingeOf, lifted, liftOf, marqueeSelect, selectModel,
 } from './TiltModels'
@@ -803,6 +804,9 @@ export const TiltedView: React.FC = () => {
     }
     const onWheel = (e: WheelEvent) => {
       if (!e.isTrusted || !onPlane(e.target)) return
+      // Alt + a two-finger swipe is the camera's (altCamera), whichever of
+      // the two listeners hears it first.
+      if (orbitWheel(e)) return
       // A panel that keeps the wheel flat (data-wheel-own: Prompt Pad's,
       // History's and the Pool's lists scroll, the List rolls, a Viewer
       // zooms its picture or turns its model) keeps it here too: zoomed
@@ -828,6 +832,16 @@ export const TiltedView: React.FC = () => {
         }
       }
       e.preventDefault(); swallow(e)
+      // The trackpad (utils/trackpad): a two-finger swipe slides the
+      // camera in its own view plane, as a middle drag does; a pinch zooms
+      // as the wheel does, by as much as the fingers spread.
+      const pad = padWheel(e)
+      if (pad === 'pan') {
+        settleZoom()
+        const ts = useTiltStore.getState()
+        ts.setShift(ts.shiftX - e.deltaX, ts.shiftY - e.deltaY)
+        return
+      }
       const c = viewCentre(host)
       if (!c) return
       const now = performance.now()
@@ -836,7 +850,7 @@ export const TiltedView: React.FC = () => {
         wz.raf = requestAnimationFrame(glideFrame)
       }
       const z = useCanvasStore.getState().zoom
-      const step = e.deltaY < 0 ? 1.12 : 1 / 1.12
+      const step = pad === 'pinch' ? pinchFactor(e) : e.deltaY < 0 ? 1.12 : 1 / 1.12
       wz.target = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z * wz.target * step)) / z
       wz.last = now
     }

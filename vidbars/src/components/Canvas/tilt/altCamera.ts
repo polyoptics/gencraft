@@ -9,6 +9,7 @@ import { useBoardsStore } from '../../../store/boardsStore'
 import { models, modelKey } from './TiltModels'
 import { sceneSpot, standsIn, sceneOf } from '../../../utils/area3dScene'
 import { area3dOutOf } from '../../../utils/area3dCard'
+import { padWheel } from '../../../utils/trackpad'
 
 /** Degrees of tilt / turn per pixel of Alt+drag. */
 const DRAG_DEG = 0.25
@@ -160,6 +161,85 @@ export function dragCube(e: { clientX: number; clientY: number; button: number }
   window.addEventListener('pointercancel', onUp, true)
 }
 
+/** Alt + a two-finger swipe on a trackpad moves the camera as an Alt-drag
+ *  does (Brian 2026-11-22: no middle button on the laptop), by the same
+ *  rules: the fingers stand in for the dragged mouse, the swipe for the
+ *  drag, and it goes through pickCamera and moveCamera like every other.
+ *  A swipe is over when the fingers have been still for SWIPE_END_MS, or
+ *  Alt is let go. */
+const SWIPE_END_MS = 220
+type Swipe = {
+  mode: CamMode | 'none' | null
+  /** Where the fingers have got to since the swipe began, px. */
+  x: number; y: number
+  oy: number; t0: number; turned: number
+  peek: ReturnType<typeof peekAt>
+  pivoted: boolean
+  timer: number
+}
+let swipe: Swipe | null = null
+/** When the last wheel event of a camera swipe came: a trackpad goes on
+ *  sending the swipe's coast after Alt is let go, and that tail is still
+ *  the camera's, not a slide of the view. */
+let swipeAt = -1e9
+let altSwiped = false
+const heard = new WeakSet<WheelEvent>()
+function endSwipe() {
+  if (!swipe) return
+  clearTimeout(swipe.timer)
+  swipe = null
+  // Let go near straight on, it settles flat, as an Alt-drag does.
+  const s = useTiltStore.getState()
+  if (offFlat(s) < TILT_SNAP && !s.lock3d) s.flatten()
+}
+/** True when the wheel event was a camera swipe's (and is now spent). */
+export function orbitWheel(e: WheelEvent): boolean {
+  if (heard.has(e)) return true
+  if (padWheel(e) !== 'pan') return false
+  const eat = () => { heard.add(e); swipeAt = e.timeStamp; e.preventDefault(); e.stopImmediatePropagation() }
+  if (!e.altKey) {
+    // The coast of a swipe whose Alt was let go.
+    if (e.timeStamp - swipeAt >= SWIPE_END_MS) return false
+    eat()
+    return true
+  }
+  const target = e.target as Element | null
+  const host = hostOf(target)
+  if (!host) return false
+  if (target?.closest('input,textarea,select,[contenteditable="true"],[data-tilt-hud]')) return false
+  eat()
+  altSwiped = true
+  if (!swipe) {
+    const ts = useTiltStore.getState()
+    // As a press: while flat it starts a new choice of camera.
+    if (!isTilted(ts)) { camMode = null; ts.setPivot(null) }
+    else if (!camMode) camMode = Math.abs(ts.yaw) > 0.5 ? 'peek' : '3d'
+    const peek = camMode === '3d' ? null : peekAt(target, host)
+    if (camMode === 'peek' && peek) usePeek.setState({ target: peek.target })
+    swipe = { mode: camMode, x: 0, y: 0, oy: 0, t0: ts.tilt, turned: 0, peek, pivoted: false, timer: 0 }
+  }
+  const w = swipe
+  clearTimeout(w.timer)
+  w.timer = window.setTimeout(endSwipe, SWIPE_END_MS)
+  // The view follows the fingers, as it follows the mouse.
+  w.x -= e.deltaX; w.y -= e.deltaY
+  if (w.mode === 'none') return true
+  if (w.mode === null) {
+    w.mode = pickCamera(w.x, w.y, !!w.peek)
+    if (w.mode === null || w.mode === 'none') return true
+    camMode = w.mode
+    if (w.mode === 'peek' && w.peek) usePeek.setState({ target: w.peek.target })
+    w.oy = w.y
+  }
+  const turnPx = Math.sign(w.x) * Math.max(0, Math.abs(w.x) - TURN_SLOP)
+  const tilt = w.t0 - (w.y - w.oy) * DRAG_DEG
+  const d = (turnPx - w.turned) * DRAG_DEG
+  w.turned = turnPx
+  if (w.mode === 'peek' && w.peek && !w.pivoted && (d || tilt !== w.t0)) { w.pivoted = true; useTiltStore.getState().setPivot(w.peek.g) }
+  moveCamera(w.mode, tilt, d)
+  return true
+}
+
 export function useAltTiltGesture() {
   useEffect(() => {
     let altUsed = false
@@ -299,10 +379,11 @@ export function useAltTiltGesture() {
     }
     // Releasing Alt after a tilt must not pop the desktop app's menu bar.
     const onKeyUp = (e: KeyboardEvent) => {
-      if (e.key === 'Alt' && altUsed) { e.preventDefault(); altUsed = false }
+      if (e.key === 'Alt') endSwipe()
+      if (e.key === 'Alt' && (altUsed || altSwiped)) { e.preventDefault(); altUsed = false; altSwiped = false }
     }
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Alt') altUsed = false
+      if (e.key === 'Alt') { altUsed = false; altSwiped = false }
       if (e.key !== 'Escape' || !isTilted(useTiltStore.getState()) || useTiltStore.getState().lock3d) return
       const t = document.activeElement as HTMLElement | null
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
@@ -319,6 +400,7 @@ export function useAltTiltGesture() {
       if (!swallowClick) return
       e.preventDefault(); e.stopImmediatePropagation()
     }
+    window.addEventListener('wheel', orbitWheel, { capture: true, passive: false })
     window.addEventListener('pointerdown', onDown, true)
     window.addEventListener('contextmenu', onMenu, true)
     window.addEventListener('click', onClick, true)
@@ -326,6 +408,7 @@ export function useAltTiltGesture() {
     window.addEventListener('keyup', onKeyUp, true)
     window.addEventListener('keydown', onKeyDown, true)
     return () => {
+      window.removeEventListener('wheel', orbitWheel, true)
       window.removeEventListener('pointerdown', onDown, true)
       window.removeEventListener('contextmenu', onMenu, true)
       window.removeEventListener('click', onClick, true)

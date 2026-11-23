@@ -1,5 +1,6 @@
 import React, { useRef, useCallback, useEffect, useState, useDeferredValue, useMemo } from 'react'
 import { useCanvasStore } from '../../store/canvasStore'
+import { wheelCanvas } from '../../utils/trackpad'
 import { markMoving } from '../../utils/rasterSettle'
 import { StripLayersStage } from '../Viewport3D/ExplodedStrip'
 import { useTiltStage, useTiltOverlayHost, useTiltStore, isTilted } from '../../store/tiltStore'
@@ -304,7 +305,6 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
   const tilted = useTiltStore(s => isTilted(s))
   const zone = useZoomZone()
   const shiftPan = useCanvasStore(s => s.shiftPan)
-  const zoomAtPoint = useCanvasStore(s => s.zoomAtPoint)
   const setPan = useCanvasStore(s => s.setPan)
 
 
@@ -392,9 +392,8 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
   const handleWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault()
     const rect = containerRef.current!.getBoundingClientRect()
-    const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12
-    zoomAtPoint(factor, e.clientX - rect.left, e.clientY - rect.top)
-  }, [zoomAtPoint])
+    wheelCanvas(e, e.clientX - rect.left, e.clientY - rect.top)
+  }, [])
 
   const handlePointerDown = useCallback((e: React.PointerEvent) => {
     // Middle mouse or space+left-drag = pan

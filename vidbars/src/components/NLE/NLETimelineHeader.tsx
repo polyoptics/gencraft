@@ -1,5 +1,6 @@
 import React, { useMemo, useState, useRef, useCallback, useSyncExternalStore } from 'react'
 import { withLockMates, keptDeck } from '../../utils/deckLock'
+import { wheelCanvas } from '../../utils/trackpad'
 import { BackRefDot } from '../Linking/BackRefDot'
 import { StatePicker } from '../Layers/StateFace'
 import { getBackRefs } from '../../utils/linkRefs'
@@ -356,13 +357,12 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
 
   const onWheel = useCallback((e: React.WheelEvent) => {
     e.stopPropagation()
-    const f = e.deltaY < 0 ? 1.12 : 1 / 1.12
     let container = (e.currentTarget as HTMLElement).parentElement
     while (container && container.style.overflow !== 'hidden') container = container.parentElement
     const rect = container?.getBoundingClientRect()
     const mx = rect ? e.clientX - rect.left : e.clientX
     const my = rect ? e.clientY - rect.top : e.clientY
-    useCanvasStore.getState().zoomAtPoint(f, mx, my)
+    wheelCanvas(e, mx, my)
   }, [])
 
   const screenBottom = pan.y + (headerCanvasY + NLE_HEADER_CANVAS_H) * zoom

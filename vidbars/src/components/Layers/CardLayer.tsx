@@ -3,6 +3,7 @@
 // boards into a single draggable card with a hero image and summary.
 
 import { aimCabinet, cabinetDrawerAt, cabinetTargets, stowCards, stowSelection, useCabinetUi } from '../../utils/cabinet'
+import { wheelCanvas } from '../../utils/trackpad'
 import React, { useMemo, useState, useCallback, useRef, useLayoutEffect, useEffect, useDeferredValue, Fragment } from 'react'
 import ReactDOM from 'react-dom'
 import { useBoardsStore, getUngroupedBoardIds } from '../../store/boardsStore'
@@ -1375,13 +1376,12 @@ const GroupCardInner: React.FC<{ group: ProjectGroup }> = ({ group }) => {
 
   const onWheel = useCallback((e: React.WheelEvent) => {
     e.stopPropagation()
-    const f = e.deltaY < 0 ? 1.12 : 1 / 1.12
     let container = (e.currentTarget as HTMLElement).parentElement
     while (container && container.style.overflow !== 'hidden') container = container.parentElement
     const rect = container?.getBoundingClientRect()
     const mx = rect ? e.clientX - rect.left : e.clientX
     const my = rect ? e.clientY - rect.top : e.clientY
-    useCanvasStore.getState().zoomAtPoint(f, mx, my)
+    wheelCanvas(e, mx, my)
   }, [])
 
   const onResizeDown = useCallback((e: React.PointerEvent, edge: 'right' | 'bottom' | 'corner') => {
@@ -1859,13 +1859,12 @@ const UngroupedBoardCardInner: React.FC<{ boardId: string }> = ({ boardId }) => 
 
   const onWheel = useCallback((e: React.WheelEvent) => {
     e.stopPropagation()
-    const f = e.deltaY < 0 ? 1.12 : 1 / 1.12
     let container = (e.currentTarget as HTMLElement).parentElement
     while (container && container.style.overflow !== 'hidden') container = container.parentElement
     const rect = container?.getBoundingClientRect()
     const mx = rect ? e.clientX - rect.left : e.clientX
     const my = rect ? e.clientY - rect.top : e.clientY
-    useCanvasStore.getState().zoomAtPoint(f, mx, my)
+    wheelCanvas(e, mx, my)
   }, [])
 
   if (!board) return null
@@ -2341,13 +2340,12 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
         onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setCardMenu({ x: e.clientX, y: e.clientY }) }}
         onWheel={e => {
           e.stopPropagation()
-          const f = e.deltaY < 0 ? 1.12 : 1 / 1.12
           let container = (e.currentTarget as HTMLElement).parentElement
           while (container && container.style.overflow !== 'hidden') container = container.parentElement
           const rect = container?.getBoundingClientRect()
           const mx = rect ? e.clientX - rect.left : e.clientX
           const my = rect ? e.clientY - rect.top : e.clientY
-          useCanvasStore.getState().zoomAtPoint(f, mx, my)
+          wheelCanvas(e, mx, my)
         }}
       >
         {/* Edge 1 — content-height right edge, beyond card face */}
@@ -3256,13 +3254,12 @@ const FannedDeckOverlayInner: React.FC<{ deck: Deck; groups: ProjectGroup[]; lay
       onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setCardMenu({ x: e.clientX, y: e.clientY, faceId: faceUnderCursor(e.target) }) }}
       onWheel={e => {
         e.stopPropagation()
-        const f = e.deltaY < 0 ? 1.12 : 1 / 1.12
         let container = (e.currentTarget as HTMLElement).parentElement
         while (container && container.style.overflow !== 'hidden') container = container.parentElement
         const rect = container?.getBoundingClientRect()
         const mx = rect ? e.clientX - rect.left : e.clientX
         const my = rect ? e.clientY - rect.top : e.clientY
-        useCanvasStore.getState().zoomAtPoint(f, mx, my)
+        wheelCanvas(e, mx, my)
       }}
     >
       {/* Secondary strips — real members and ghost slots, nearest the front card first */}
@@ -4530,13 +4527,12 @@ const DeckAffordance: React.FC<{ cluster: string[]; front: Deck | 'card' | null;
         }}
         onWheel={e => {
           e.stopPropagation()
-          const f = e.deltaY < 0 ? 1.12 : 1 / 1.12
           let container = (e.currentTarget as HTMLElement).parentElement
           while (container && container.style.overflow !== 'hidden') container = container.parentElement
           const rect = container?.getBoundingClientRect()
           const mx = rect ? e.clientX - rect.left : e.clientX
           const my = rect ? e.clientY - rect.top : e.clientY
-          useCanvasStore.getState().zoomAtPoint(f, mx, my)
+          wheelCanvas(e, mx, my)
         }}
       >
         {/* Drag-out for the face under this zone. The zone covers it (41
