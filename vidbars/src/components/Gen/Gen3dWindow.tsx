@@ -134,6 +134,8 @@ export const Gen3dWindow: React.FC<{ nodeId: string }> = ({ nodeId }) => {
 
   // What Generate will do, in a line.
   const n = docked.make.length
+  // On the button: a 3D model per docked card, or one from the words alone.
+  const count = n || (!why ? 1 : 0)
   const notes: string[] = []
   if (n) notes.push(`${cardsWord(n)}: ${n === 1 ? 'it gets a 3D model' : 'each gets a 3D model'}`)
   if (docked.have.length) notes.push(`${docked.have.length} already ${docked.have.length === 1 ? 'has' : 'have'} one`)
@@ -167,14 +169,14 @@ export const Gen3dWindow: React.FC<{ nodeId: string }> = ({ nodeId }) => {
             onClick={() => { if (texture) setOpt(texture.key, !textureOn) }}
             title={texture ? 'Texture: on or off' : 'Texture: this generator has no switch for it'}
             style={{
-              ...big, right: PAD, width: SIDE_W, top: Y_GEN, gap: 9, padding: '0 12px', fontSize: 17, fontWeight: 700,
+              ...big, right: PAD, width: SIDE_W, top: Y_GEN, padding: '0 12px', fontSize: 17, fontWeight: 700,
               cursor: texture ? 'pointer' : 'default', opacity: texture ? 1 : 0.3,
-              color: textureOn ? INK : DIM, borderColor: textureOn ? `${GOLD}99` : LINE, background: textureOn ? 'rgba(255,210,74,0.10)' : '#11131b',
+              // Lit: solid light, dark words, as the app's other lit switches.
+              // Yellow is Generate's alone (Brian 2026-11-23).
+              color: textureOn ? '#14161f' : DIM, borderColor: textureOn ? 'rgba(232,238,255,0.92)' : LINE, background: textureOn ? 'rgba(232,238,255,0.92)' : '#11131b',
+              justifyContent: 'center',
             }}
-          >
-            <span style={{ width: 10, height: 10, borderRadius: 5, background: textureOn ? GOLD : 'rgba(232,238,255,0.2)', flexShrink: 0 }} />
-            Texture
-          </div>
+          >Texture</div>
 
           <div style={{ ...caption, top: Y_FACES - 16 }}>Faces</div>
           <div
@@ -204,13 +206,17 @@ export const Gen3dWindow: React.FC<{ nodeId: string }> = ({ nodeId }) => {
           <div
             className="g3-go"
             onClick={() => { if (!why && !busy) runGen(nodeId) }}
-            title={why ?? (busy ? 'Claude is running the last one' : 'Pass this to Claude to run on Krea. It uses your Krea credits.')}
+            title={why ?? (busy ? 'Claude is running the last one' : `Makes ${count} 3D model${count === 1 ? '' : 's'}: passed to Claude to run on Krea. It uses your Krea credits.`)}
             style={{
               position: 'absolute', right: PAD, width: SIDE_W, top: Y_FACES, height: BIG_H, borderRadius: 8, boxSizing: 'border-box',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 800,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, fontSize: 17, fontWeight: 800,
               background: GOLD, color: '#15130a', opacity: why || busy ? 0.35 : 1, cursor: why || busy ? 'default' : 'pointer',
             }}
-          >Generate</div>
+          >
+            Generate
+            {/* How many 3D models it will make, always in its place. */}
+            <span className="g3-count" style={{ minWidth: 24, height: 24, boxSizing: 'border-box', padding: '0 6px', borderRadius: 12, background: '#15130a', color: GOLD, fontSize: 14, lineHeight: '24px', textAlign: 'center' }}>{count}</span>
+          </div>
 
           <div style={{ position: 'absolute', left: PAD, right: PAD, top: Y_MORE, height: 26, display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: GAP }}>
             {more.map(o => <OptionCell key={o.key} o={o} value={opts[o.key]} onValue={v => setOpt(o.key, v)} />)}
