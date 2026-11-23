@@ -129,14 +129,35 @@ export function bringHome(sourceId: string, madeIds: string[], opts: { detail?: 
   const old = k >= 0 ? details[k] : undefined
   const oldCard = old?.link && !old.link.detail && !old.link.count && !old.link.rankOf ? detailShown(bs().groups, old).card : undefined
   const had = oldCard && oldCard.id !== made.id ? oldCard.name || 'Untitled' : undefined
-  if (old?.link?.card === made.id && !old.link.detail) return { deck, detail: old.name, did: 'same' }
+  if (old?.link?.card === made.id && !old.link.detail) { ownModelUnlink(sourceId, made.id); return { deck, detail: old.name, did: 'same' } }
   if (had && !opts.replace) return { deck, detail: old!.name, did: 'kept', had }
   const front = opts.front ?? (old ? !!old.onFace || !old.link : true)
   const row: CardDetail = { ...(old ?? { id: newDetailId(), name, value: '' }), link: { card: made.id }, ...(front ? { onFace: true as const } : {}) }
   if (!front) delete row.onFace
   if (k >= 0) details[k] = row; else details.push(row)
   bs().setGroupDetails(sourceId, details)
+  ownModelUnlink(sourceId, made.id)
   return { deck, detail: row.name, did: had ? 'replaced' : 'filled', ...(had ? { had } : {}) }
+}
+
+/** A card's own 3D model is shown by its Model detail, not by a link chip
+ *  on its face as well (Brian 2026-11-23: "since they are the model of the
+ *  object, we don't need to see this sort of card-colored link on the
+ *  front"). The card-to-card link between card `cardId` and the 3D model
+ *  card its detail now shows is taken off, whichever of the two holds it.
+ *  Only a card holding a 3D model: any other made card keeps its link. */
+function ownModelUnlink(cardId: string, modelCardId: string) {
+  const s = useBoardsStore.getState()
+  const from = s.groups.find(g => g.id === modelCardId)
+  if (!from || !modelOfCard(from, s.boards)) return
+  s.unlinkGroups(cardId, modelCardId)
+  s.unlinkGroups(modelCardId, cardId)
+}
+
+/** Card `cardId`'s Model detail shows the 3D model card `modelCardId`. */
+export function showsAsModel(cardId: string, modelCardId: string): boolean {
+  const card = useBoardsStore.getState().groups.find(g => g.id === cardId)
+  return !!card?.details?.some(d => d.name.trim().toLowerCase() === 'model' && d.link?.card === modelCardId && !d.link.detail)
 }
 
 /** A 3D model card linked onto card `cardId` by hand (its "+" let go on the

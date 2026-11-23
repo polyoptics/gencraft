@@ -3,7 +3,7 @@
 // pointermove/pointerup listeners that drive the drag. Mounted once at the
 // App root. Motion matches the NLEBlock color drag-out pattern.
 
-import { fillModelDetail } from '../../utils/bringHome'
+import { fillModelDetail, showsAsModel } from '../../utils/bringHome'
 import { linkGenCard } from '../../utils/gen3d'
 import { linkCardsToDivision } from '../../utils/sceneContent'
 import { addState, setStateDeck } from '../../utils/stateCard'
@@ -119,10 +119,18 @@ export const LinkDragOverlay: React.FC = () => {
         // Direction convention: the DROP TARGET owns the reference. Dropping
         // A onto B means "B references A" — B gets a prominent primary chip
         // pointing at A, A gets a small back-ref chip pointing at B.
-        useBoardsStore.getState().linkRefs(target, source)
         // A 3D model's card linked onto a card: that card's Model detail
-        // shows it, on the front (utils/bringHome).
-        if (target.kind === 'group' && source.kind === 'group') fillModelDetail(target.id, source.id)
+        // shows it, on the front (utils/bringHome), and that is its link:
+        // no chip on the face as well (Brian 2026-11-23: "since they are
+        // the model of the object, we don't need to see this sort of
+        // card-colored link on the front"). A faction or family still takes
+        // it as a member, and a card whose Model detail shows another card
+        // takes it as an ordinary link.
+        const t0 = target
+        const asModel = t0.kind === 'group' && source.kind === 'group'
+          && (fillModelDetail(t0.id, source.id) || showsAsModel(t0.id, source.id))
+          && !['faction', 'family'].includes(useBoardsStore.getState().groups.find(g => g.id === t0.id)?.cardType ?? '')
+        if (!asModel) useBoardsStore.getState().linkRefs(target, source)
         // Onto a FACTION or a FAMILY, a card that is one of several
         // selected brings them all in as members (CardBack): fifty
         // characters sort into factions a selection at a time, not one

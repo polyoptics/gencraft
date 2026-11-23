@@ -31,6 +31,7 @@ startQuarterPictures()
 import { cardOrigins } from './components/Canvas/StorylineLayer'
 import { startDecksOpenRight } from './utils/deckRight'
 import { startAgentDoor } from './utils/agentDoor'
+import { bringHome } from './utils/bringHome'
 import { useCanvasStore } from './store/canvasStore'
 import { useFreeNodeStore } from './store/freeNodeStore'
 import { useUserTemplateStore } from './store/userTemplateStore'
@@ -78,6 +79,8 @@ import { snapshotSetMap } from './utils/mapSnapshot'
   area3d: { showArea3d, foldArea3d, toggleArea3d, area3dOutOf, bundleArea3dCard, createMediaCard }, useModelScaleStore,
   // Charts baked into cards (utils/chartCard), and a plain card to try them on.
   chart: { matchChart, recallChart, bakeStoryline, chartOutOf, cardOrigins, createTextCard },
+  // A made card brought home to its card (utils/bringHome).
+  home: { bringHome },
   // The manipulator's settings, and the camera looked through.
   useManip,
   // The clock the models riding paths go by (utils/pathRide).
