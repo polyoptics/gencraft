@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react'
 import {
-  useTiltStore, useModelScaleStore, isTilted, offFlat, standTilt, standRise, unprojectTilt, centrePoint, TILT_DRAW_FAR, TILT_MAX, tiltP,
+  useTiltStore, useModelScaleStore, isTilted, offFlat, standTilt, standRise, unprojectTilt, TILT_DRAW_FAR, TILT_MAX, tiltP,
 } from '../../../store/tiltStore'
 import { CAMERA_LENS } from '../../../store/tiltStore'
 import { usePeek } from '../../../utils/peek'
@@ -3234,19 +3234,25 @@ function collectTargets(W: number, H: number): TiltTarget[] {
   }
   if (!liveOnly) return keep
   const out2: TiltTarget[] = []
-  // The side view shows the 3D models near the middle of the view (Brian
-  // 2026-11-23: "maybe it shows the models within a radius, just like the
-  // sort of tilted canvas has a distance radius"): the same distance, so
-  // many feet of the world (utils/worldScale), with its soft edge; with
-  // that fade switched off, all of them.
-  const ws = useWorldScale.getState(), ts = useTiltStore.getState()
-  const mid = side && ws.fadeOn ? centrePoint(ts) : null
-  const near: Far | null = mid && { a: 1, cx: mid.x, cy: mid.y, r: ws.fadeFt * worldPer(ws) * (zoom || 1) }
+  // The side view lifts every 3D model that was in view when it began
+  // (utils/peek sideBox), and fades off beyond that over a soft edge
+  // (Brian 2026-11-23: "any models that are on the screen should
+  // definitely be within the range, and then it should fade off from
+  // there").
+  const box = side ? usePeek.getState().sideBox : null
+  const bx = box ? pan.x + (box.x + box.w / 2) * zoom - W / 2 : 0, by = box ? pan.y + (box.y + box.h / 2) * zoom - H / 2 : 0
+  const bw = box ? box.w * zoom : 0, bh = box ? box.h * zoom : 0, soft = Math.max(1, Math.min(bw, bh) * 0.25)
+  const inBox = (t: TiltTarget) => {
+    if (!box) return 1
+    const d = Math.hypot(Math.max(0, Math.abs(t.u - bx) - bw / 2 - t.w / 2), Math.max(0, Math.abs(t.v - by) - bh / 2 - t.h / 2))
+    const x = Math.max(0, Math.min(1, d / soft))
+    return 1 - x * x * (3 - 2 * x)
+  }
   for (const t of keep) {
     if (liveOnly.has(t.key) || liveOnly.has(dataKey(t.key))) { out2.push(t); continue }
     // On its own card or tile: not a Viewer's, a set's or a path's.
     if (!side || t.mini || inScene(t) || !(t.key.startsWith('card:') || t.key.startsWith('node:'))) continue
-    const o = Math.min(t.dim ?? 1, farShown(near, t.u, t.v, t.w, t.h))
+    const o = Math.min(t.dim ?? 1, inBox(t))
     if (o > FAR_GONE) out2.push({ ...t, lie: true, dim: o < 0.995 ? o : undefined })
   }
   return out2

@@ -78,6 +78,22 @@ function moveCamera(mode: CamMode, tilt: number, d: number) {
 // The camera picked by the drag that left the flat view (see above).
 let camMode: CamMode | null = null
 
+/** The peek is into this. Beginning the 3D models' side view, what of the
+ *  canvas is in view is kept with it (utils/peek sideBox; Brian
+ *  2026-11-23: "since I'm in 2D, any models that are on the screen should
+ *  definitely be within the range, and then it should fade off from
+ *  there"): until the view is flat again. */
+function peekInto(p: NonNullable<ReturnType<typeof peekOf>>, host: HTMLElement) {
+  const was = usePeek.getState()
+  let sideBox = p.side ? was.sideBox : null
+  if (p.side && !sideBox) {
+    const { pan, zoom } = useCanvasStore.getState()
+    const z = zoom || 1
+    sideBox = { x: -pan.x / z, y: -pan.y / z, w: host.clientWidth / z, h: host.clientHeight / z }
+  }
+  usePeek.setState({ target: p.target, side: p.side, sideBox })
+}
+
 /** What under this element can be peeked into (utils/peek peekAt), and
  *  whether that peek is the 3D models' side view (Brian 2026-11-23: "I
  *  want models cards to have an alt-click view left to right view to show
@@ -85,17 +101,22 @@ let camMode: CamMode | null = null
  *  up/down ... the camera behavior is the same as it is when we do a
  *  left-to-right alt-click on an image deck"): it began over any card or
  *  tile showing a 3D model: one card, an open deck's, or a closed deck
- *  with one on its face (which fans as well). Not where no 3D model would
- *  show: the 3D bar's Models off, or the card set to keep its own flat. */
+ *  with one on its face. Not where no 3D model would show: the 3D bar's
+ *  Models off, or the card set to keep its own flat.
+ *  In the side view no deck fans, anywhere (Brian 2026-11-23: "then I
+ *  don't want to see any card fanning. Anywhere"): the deck it began over
+ *  does not, nor one Alt is pressed on while the view is swung. */
 function peekOf(el: Element | null, host: HTMLElement): { target: PeekTarget; g: { x: number; y: number }; side: boolean } | null {
   const p = peekAt(el, host)
   if (p && p.target.kind !== 'deck') return { ...p, side: false }
   if (!el || !useManip.getState().models) return p && { ...p, side: false }
   const card = el.closest('[data-group-card][data-id]') as HTMLElement | null
-  const id = card && !card.closest('[data-pinned]') ? card.dataset.id! : null
+  // (An open deck's primary card is covered by the deck's hover zone.)
+  const zone = card ? null : el.closest('[data-row-of]') as HTMLElement | null
+  const id = card && !card.closest('[data-pinned]') ? card.dataset.id! : zone && !zone.closest('[data-pinned]') ? zone.dataset.rowOf! : null
   const g = id ? useBoardsStore.getState().groups.find(x => x.id === id) : undefined
   const has = !!g && !g.pin && !g.hideModel3d && !!cardModel(g.id)
-  if (p) return { ...p, side: has }
+  if (p) return has || usePeek.getState().side ? { target: { kind: 'models', id: `card:${p.target.id}` }, g: p.g, side: true } : { ...p, side: false }
   const W = host.clientWidth, H = host.clientHeight
   const { pan, zoom } = useCanvasStore.getState()
   const at = (x: number, y: number, w: number, h: number) => ({ x: pan.x + (x + w / 2) * zoom - W / 2, y: pan.y + (y + h / 2) * zoom - H / 2 })
@@ -247,7 +268,7 @@ export function orbitWheel(e: WheelEvent): boolean {
     if (!isTilted(ts)) { camMode = null; ts.setPivot(null) }
     else if (!camMode) camMode = Math.abs(ts.yaw) > 0.5 ? 'peek' : '3d'
     const peek = camMode === '3d' ? null : peekOf(target, host)
-    if (camMode === 'peek' && peek) usePeek.setState({ target: peek.target, side: peek.side })
+    if (camMode === 'peek' && peek) peekInto(peek, host)
     swipe = { mode: camMode, x: 0, y: 0, oy: 0, t0: ts.tilt, turned: 0, peek, pivoted: false, timer: 0 }
   }
   const w = swipe
@@ -260,7 +281,7 @@ export function orbitWheel(e: WheelEvent): boolean {
     w.mode = pickCamera(w.x, w.y, !!w.peek)
     if (w.mode === null || w.mode === 'none') return true
     camMode = w.mode
-    if (w.mode === 'peek' && w.peek) usePeek.setState({ target: w.peek.target, side: w.peek.side })
+    if (w.mode === 'peek' && w.peek) peekInto(w.peek, host)
     w.oy = w.y
   }
   const turnPx = Math.sign(w.x) * Math.max(0, Math.abs(w.x) - TURN_SLOP)
@@ -357,7 +378,7 @@ export function useAltTiltGesture() {
       // there if the drag starts side to side; while peeking, pressing on
       // another deck or Viewer hops to it at the same turn. Never in 3D.
       const peek = mode === '3d' ? null : peekOf(target, host)
-      if (mode === 'peek' && peek) usePeek.setState({ target: peek.target, side: peek.side })
+      if (mode === 'peek' && peek) peekInto(peek, host)
       let pivoted = false
       const x0 = e.clientX, y0 = e.clientY
       let oy = y0
@@ -378,7 +399,7 @@ export function useAltTiltGesture() {
           mode = pickCamera(ev.clientX - x0, ev.clientY - y0, !!peek)
           if (mode === null || mode === 'none') return
           camMode = mode
-          if (mode === 'peek' && peek) usePeek.setState({ target: peek.target, side: peek.side })
+          if (mode === 'peek' && peek) peekInto(peek, host)
           // Tilt counted from here, so nothing jumps when the camera is
           // picked (side to side already waits out TURN_SLOP from the press).
           oy = ev.clientY
