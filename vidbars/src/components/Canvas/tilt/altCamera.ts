@@ -106,7 +106,17 @@ function peekInto(p: NonNullable<ReturnType<typeof peekOf>>, host: HTMLElement) 
  *  In the side view no deck fans, anywhere (Brian 2026-11-23: "then I
  *  don't want to see any card fanning. Anywhere"): the deck it began over
  *  does not, nor one Alt is pressed on while the view is swung. */
-function peekOf(el: Element | null, host: HTMLElement): { target: PeekTarget; g: { x: number; y: number }; side: boolean } | null {
+function peekOf(el: Element | null, host: HTMLElement, cur?: { x: number; y: number }): { target: PeekTarget; g: Pivot; side: boolean } | null {
+  // Already in the side view, with the cursor on a lifted 3D model: the
+  // camera takes that 3D model up, and turns about its middle where it
+  // hangs off its card (Brian 2026-11-23: "my next camera interaction has
+  // my mouse over top of a model. Then I want the camera to focus on that
+  // model").
+  if (cur && usePeek.getState().side && isTilted(useTiltStore.getState())) {
+    const key = modelKey(models.pick?.(cur.x, cur.y))
+    const m = key && (key.startsWith('card:') || key.startsWith('node:')) ? models.pivotOf?.(key) : null
+    if (key && m) return { target: { kind: 'models', id: key }, g: { x: m.u, y: m.v, z: m.z }, side: true }
+  }
   const p = peekAt(el, host)
   if (p && p.target.kind !== 'deck') return { ...p, side: false }
   if (!el || !useManip.getState().models) return p && { ...p, side: false }
@@ -267,7 +277,7 @@ export function orbitWheel(e: WheelEvent): boolean {
     // As a press: while flat it starts a new choice of camera.
     if (!isTilted(ts)) { camMode = null; ts.setPivot(null) }
     else if (!camMode) camMode = Math.abs(ts.yaw) > 0.5 ? 'peek' : '3d'
-    const peek = camMode === '3d' ? null : peekOf(target, host)
+    const peek = camMode === '3d' ? null : peekOf(target, host, { x: e.clientX, y: e.clientY })
     if (camMode === 'peek' && peek) peekInto(peek, host)
     swipe = { mode: camMode, x: 0, y: 0, oy: 0, t0: ts.tilt, turned: 0, peek, pivoted: false, timer: 0 }
   }
@@ -377,7 +387,7 @@ export function useAltTiltGesture() {
       // What under the press can be peeked into: from flat, a peek starts
       // there if the drag starts side to side; while peeking, pressing on
       // another deck or Viewer hops to it at the same turn. Never in 3D.
-      const peek = mode === '3d' ? null : peekOf(target, host)
+      const peek = mode === '3d' ? null : peekOf(target, host, { x: e.clientX, y: e.clientY })
       if (mode === 'peek' && peek) peekInto(peek, host)
       let pivoted = false
       const x0 = e.clientX, y0 = e.clientY
