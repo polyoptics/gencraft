@@ -3,6 +3,7 @@
 // pointermove/pointerup listeners that drive the drag. Mounted once at the
 // App root. Motion matches the NLEBlock color drag-out pattern.
 
+import { fillModelDetail } from '../../utils/bringHome'
 import { linkGenCard } from '../../utils/gen3d'
 import { linkCardsToDivision } from '../../utils/sceneContent'
 import { addState, setStateDeck } from '../../utils/stateCard'
@@ -119,6 +120,9 @@ export const LinkDragOverlay: React.FC = () => {
         // A onto B means "B references A" — B gets a prominent primary chip
         // pointing at A, A gets a small back-ref chip pointing at B.
         useBoardsStore.getState().linkRefs(target, source)
+        // A 3D model's card linked onto a card: that card's Model detail
+        // shows it, on the front (utils/bringHome).
+        if (target.kind === 'group' && source.kind === 'group') fillModelDetail(target.id, source.id)
         // Onto a FACTION or a FAMILY, a card that is one of several
         // selected brings them all in as members (CardBack): fifty
         // characters sort into factions a selection at a time, not one

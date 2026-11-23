@@ -138,3 +138,24 @@ export function bringHome(sourceId: string, madeIds: string[], opts: { detail?: 
   bs().setGroupDetails(sourceId, details)
   return { deck, detail: row.name, did: had ? 'replaced' : 'filled', ...(had ? { had } : {}) }
 }
+
+/** A 3D model card linked onto card `cardId` by hand (its "+" let go on the
+ *  card): a card with no Model detail gets one, showing that 3D model and
+ *  switched on for the front (Brian 2026-11-23: "If I link a model onto a
+ *  card and it has no model slot, then it will get a model slot. That model
+ *  will go into it, and that will go on front"). A Model detail that shows
+ *  nothing yet is filled the same way; one that already shows a card is
+ *  left as it is. The same detail bring_home fills for a generated one.
+ *  The caller takes the undo step. True when the detail was written. */
+export function fillModelDetail(cardId: string, modelCardId: string): boolean {
+  const s = useBoardsStore.getState()
+  const card = s.groups.find(g => g.id === cardId), from = s.groups.find(g => g.id === modelCardId)
+  if (!card || !from || card.id === from.id || !modelOfCard(from, s.boards)) return false
+  const details: CardDetail[] = [...(card.details ?? [])]
+  const k = details.findIndex(d => d.name.trim().toLowerCase() === 'model')
+  if (k >= 0 && details[k].link) return false
+  const row: CardDetail = { ...(k >= 0 ? details[k] : { id: newDetailId(), name: 'Model', value: '' }), link: { card: from.id }, onFace: true }
+  if (k >= 0) details[k] = row; else details.push(row)
+  s.setGroupDetails(cardId, details)
+  return true
+}
