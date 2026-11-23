@@ -4,6 +4,7 @@
 
 import { aimCabinet, cabinetDrawerAt, cabinetTargets, stowCards, stowSelection, useCabinetUi } from '../../utils/cabinet'
 import { wheelCanvas } from '../../utils/trackpad'
+import { deckScaleStart, deckScaled } from '../../utils/deckScale'
 import React, { useMemo, useState, useCallback, useRef, useLayoutEffect, useEffect, useDeferredValue, Fragment } from 'react'
 import ReactDOM from 'react-dom'
 import { useBoardsStore, getUngroupedBoardIds } from '../../store/boardsStore'
@@ -912,6 +913,58 @@ function groupCardBounds(group: ProjectGroup, boards: Record<string, BoardData>)
   if (globalMinX === Infinity) return null
   return { minX: globalMinX, maxX: globalMaxX, topY, bottomY }
 }
+
+/** The corner a closed deck is scaled by (utils/deckScale): pulled, every
+ *  card in the deck, at every depth, takes the same factor, keeping its
+ *  shape, and the gaps between them stay, so it opens and closes as before
+ *  (Brian 2026-11-23: "can I scale a deck, and that would, in turn, resize
+ *  all of everything proportionally"). Looks and sits as a card's corner. */
+const DeckScaleCorner: React.FC<{ frontId: string; style: React.CSSProperties }> = ({ frontId, style }) => (
+  <div
+    data-deck-scale={frontId}
+    title="Drag to scale every card in this deck"
+    style={{
+      position: 'absolute', width: 12, height: 12, cursor: 'nwse-resize', zIndex: 52,
+      background: 'rgba(130,180,255,0.6)', borderRadius: '3px 0 3px 0', pointerEvents: 'all', ...style,
+    }}
+    onPointerDown={e => startDeckScale(e, frontId)}
+    onClick={e => e.stopPropagation()}
+    onDoubleClick={e => e.stopPropagation()}
+  />
+)
+
+function startDeckScale(e: React.PointerEvent, frontId: string) {
+  if (e.button !== 0) return
+  e.stopPropagation()
+  e.preventDefault()
+  const bs0 = useBoardsStore.getState()
+  const st = deckScaleStart(frontId, bs0.groups, g => {
+    const b = groupCardBounds(g, bs0.boards)
+    if (!b) return null
+    const minW = b.maxX - b.minX, minH = b.bottomY - b.topY
+    return { dx: b.minX - g.originX, dy: b.topY - g.originY, w: Math.max(minW, g.cardWidthOverride ?? 0), h: Math.max(minH, g.cardHeightOverride ?? 0), minW, minH }
+  })
+  const face = st?.boxes.get(frontId)
+  if (!st || !face) return
+  useUndoCoordinator.getState().checkpoint()
+  const startX = e.clientX, startY = e.clientY
+  const onMove = (ev: PointerEvent) => {
+    const z = useCanvasStore.getState().zoom
+    const k = Math.max((face.w + (ev.clientX - startX) / z) / face.w, (face.h + (ev.clientY - startY) / z) / face.h)
+    const next = deckScaled(st, k)
+    useBoardsStore.setState(s => ({ groups: s.groups.map(g => next.get(g.id) ? { ...g, ...pickScaled(next.get(g.id)!) } : g) }))
+  }
+  const onUp = () => { window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp) }
+  window.addEventListener('pointermove', onMove)
+  window.addEventListener('pointerup', onUp)
+}
+/** Only what scaling a deck changes on a card, so nothing else of it is
+ *  written back from how it was when the drag began. */
+const pickScaled = (g: ProjectGroup): Partial<ProjectGroup> => ({
+  originX: g.originX, originY: g.originY, deckOffsetX: g.deckOffsetX, deckOffsetY: g.deckOffsetY,
+  cardWidthOverride: g.cardWidthOverride, cardHeightOverride: g.cardHeightOverride,
+  ...(g.ghostSlots ? { ghostSlots: g.ghostSlots } : {}),
+})
 
 // ── Per-group card (screen-space) ──
 
@@ -2414,6 +2467,9 @@ const StackedDeckCardInner: React.FC<{ deck: Deck; anchorGroup: ProjectGroup; is
             }}
             onPointerDown={e => { if (e.button === 0) e.stopPropagation() }}
           />
+        )}
+        {isHovered && deck.memberIds.length > 1 && (
+          <DeckScaleCorner frontId={anchorGroup.id} style={{ left: faceX + cardWidth - 12, top: screenHeight - 12 }} />
         )}
         {/* Primary card — front, slightly narrower to fit edges within bounding box */}
         <div
@@ -4580,6 +4636,9 @@ const DeckAffordance: React.FC<{ cluster: string[]; front: Deck | 'card' | null;
             allLabel="every image in this card"
             visible={isHovered}
           />
+        )}
+        {primaryGroup && front && front !== 'card' && isHovered && front.memberIds.length > 1 && (
+          <DeckScaleCorner frontId={front.anchorGroupId} style={{ right: frontSide !== 'left' ? 3 * 2 + 4 : 0, bottom: 0 }} />
         )}
         {primaryGroup && front && front !== 'card' && (
           <CardFaceDragOut
