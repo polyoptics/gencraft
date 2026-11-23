@@ -96,6 +96,11 @@ export interface ProjectGroup {
   snipOf?: string         // cut from this source in a Viewer; its pieces share a deck (utils/snipCards)
   deckAnchorId?: string   // group ID of the deck anchor (its front card, the row's primary card); set when deckState !== 'open'
   nestedDeck?: boolean    // true if this group is a sub-deck anchor (persists through fan/stack cycles)
+  /** Hidden in a closed deck that became the front of a bigger deck of
+   *  decks (Brian 2026-11-23, "think of the system like folders"): how
+   *  many of the decks round it open before this card does. Its own deck
+   *  stays a closed deck while the bigger one opens (setDeckState). */
+  deckInside?: number
   deckOffsetX?: number    // offset from OWN anchor at stacking time (for position restore on open)
   deckOffsetY?: number
   /** Its row's primary card, as every card of the row remembers it: the
@@ -1530,6 +1535,35 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
     // every time it opened). A deck that is closed when its row closes
     // still goes in as a deck (subDeckAnchors below).
     const nodes = useFreeNodeStore.getState().nodes
+    // Opening a deck of decks whose front card is itself a deck: that
+    // deck's own cards stay closed under it (ProjectGroup.deckInside), so
+    // it opens as the closed decks it was made of. Each opening takes one
+    // off their count; with nothing else to open, they open.
+    const held = new Set<string>()
+    if (state === 'open') {
+      const all = get().groups
+      const inIds = new Set(ids)
+      const fronted = (g: ProjectGroup) => !!g.deckAnchorId && g.deckAnchorId !== g.id && inIds.has(g.deckAnchorId)
+      const inside = all.filter(g => inIds.has(g.id) && (g.deckInside ?? 0) > 0 && fronted(g) && !!g.deckState && g.deckState !== 'open')
+      if (inside.length) {
+        const fronts = new Set(inside.map(g => g.deckAnchorId!))
+        const others = all.some(g => inIds.has(g.id) && !fronts.has(g.id) && !inside.includes(g))
+        const least = Math.min(...inside.map(g => g.deckInside!))
+        // Nothing else in the deck (its other cards were taken out): the
+        // cards nearest the surface open now.
+        const off = others ? 1 : least
+        const stay = new Set(inside.filter(g => others || g.deckInside! > least).map(g => g.id))
+        for (const id of stay) held.add(id)
+        const lower = new Set(inside.map(g => g.id))
+        set(s => ({ groups: s.groups.map(g => {
+          if (!lower.has(g.id)) return g
+          const n = (g.deckInside ?? 0) - off
+          return { ...g, deckInside: n > 0 ? n : undefined }
+        }) }))
+      }
+      if (held.size) ids = ids.filter(id => !held.has(id))
+    }
+    const heldFronts = new Set(get().groups.filter(g => held.has(g.id)).map(g => g.deckAnchorId!))
     const groupIds = state === 'open' || opts?.asGiven ? ids : primaryFirst(get().groups, ids)
     const idSet = new Set(groupIds)
     // For opening: anchorId is undefined (no deck after open).
@@ -1584,8 +1618,20 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
     set(s00 => {
       // Closing onto a closed deck: the cards go into it, set past its own
       // cards (utils/deckJoin), and whatever hangs off them goes along.
+      // A closed deck in front of other closed decks (a deck of decks):
+      // it stays a deck inside. Its own cards are marked to stay closed
+      // under it when the bigger deck opens, and nothing is set aside for
+      // them, so every deck opens back where it stood.
+      const shutG = (g: ProjectGroup) => !!g.deckState && g.deckState !== 'open'
+      const frontOwn = state === 'open' || opts?.asGiven || !anchorId ? [] : (() => {
+        const front = s00.groups.find(g => g.id === anchorId)
+        if (!front || !shutG(front)) return []
+        const decksIn = s00.groups.some(g => !idSet.has(g.id) && shutG(g) && !!g.deckAnchorId && g.deckAnchorId !== anchorId && idSet.has(g.deckAnchorId))
+        if (!decksIn) return []
+        return s00.groups.filter(g => !idSet.has(g.id) && shutG(g) && g.deckAnchorId === anchorId).map(g => g.id)
+      })()
       const s0 = (() => {
-        if (state === 'open' || opts?.asGiven || away || !anchorId) return s00
+        if (state === 'open' || opts?.asGiven || away || !anchorId || frontOwn.length) return s00
         const front = s00.groups.find(g => g.id === anchorId)
         if (!front) return s00
         const d = joinShift(front, s00.groups.filter(g => idSet.has(g.id) && g.id !== anchorId), s00.groups, s00.boards)
@@ -1707,6 +1753,9 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
                 ox = anchor.originX + g.deckOffsetX
                 oy = anchor.originY + g.deckOffsetY
               }
+              // The deck's own front, its cards held closed under it
+              // (deckInside): a closed deck of its own again, stacked.
+              if (heldFronts.has(g.id)) return { ...g, deckState: 'stacked' as const, deckAnchorId: g.id, nestedDeck: true, deckOffsetX: undefined, deckOffsetY: undefined, deckLastFront: g.id }
               return { ...g, deckAnchorId: undefined, nestedDeck: true, originX: ox, originY: oy, deckOffsetX: undefined, deckOffsetY: undefined, deckLastFront: openFront ? openFront.id : g.deckLastFront }
             }
             // Stacking/fanning: store offset from new parent anchor for later restore.
@@ -1731,8 +1780,10 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
           // it came from is gone.
           return { ...g, deckState: state, deckAnchorId: anchorId, nestedDeck: g.nestedDeck, deckOffsetX: offX, deckOffsetY: offY, deckLastFront: undefined }
         })
-      if (!handed.length) return { groups: out }
-      return { groups: out.map(g => g.id === anchorId ? { ...g, ghostSlots: [...(g.ghostSlots ?? []), ...handed] }
+      const own = new Set(frontOwn)
+      const out2 = own.size ? out.map(g => (own.has(g.id) ? { ...g, deckInside: (g.deckInside ?? 0) + 1 } : g)) : out
+      if (!handed.length) return { groups: out2 }
+      return { groups: out2.map(g => g.id === anchorId ? { ...g, ghostSlots: [...(g.ghostSlots ?? []), ...handed] }
         : holders.has(g.id) ? { ...g, ghostSlots: undefined } : g) }
     })
     // Opened: a deck inside it that was open when it closed opens again.
@@ -1818,6 +1869,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
                 deckOffsetY: 0,
                 deckState: own,
                 nestedDeck: undefined,
+                deckInside: undefined,
               }
             }
             // Plain open card.
@@ -1831,6 +1883,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
               deckState: 'open',
               nestedDeck: undefined,
               deckLastFront: undefined,
+              deckInside: undefined,
             }
           }
           if (subTreeIds.has(g.id)) {
