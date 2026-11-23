@@ -6237,9 +6237,10 @@ const UngroupedCardText: React.FC<{ boardId: string }> = ({ boardId }) => {
  *  as eligible), not all drawn by a deck. */
 function rowsOf(touchingClusters: string[][], renderedByDeck: Set<string>, groups: ProjectGroup[]): string[][] {
   return touchingClusters.filter(cluster => {
-    // Skip if this cluster is fully handled by a deck
-    const allInDeck = cluster.every(gid => renderedByDeck.has(gid))
-    if (allInDeck) return false
+    // Closed decks touching one another are a row too, each one thing in
+    // it (Brian 2026-11-23: a deck whose every item is a deck would not
+    // close). It was skipped as "fully handled by a deck".
+    void renderedByDeck
     // Show affordance if at least 2 eligible cards are touching
     const eligibleCount = cluster.filter(gid => {
       const g = groups.find(gr => gr.id === gid)

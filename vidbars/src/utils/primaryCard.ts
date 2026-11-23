@@ -62,13 +62,13 @@ export function primaryFirst(groups: ProjectGroup[], ids: string[]): string[] {
     if (kids.length && kids.every(o => set.has(o.id))) return first(id)
   }
   // Remembered by itself and by another card of the row. A card hidden in a
-  // deck, or one fronting a deck whose cards are not all in `ids` (a deck of
-  // its own inside the row), is never the row's primary.
+  // deck is never the row's primary. A closed deck of its own inside the
+  // row can be (Brian 2026-11-23, a deck of decks: "my primary card is a
+  // deck"): the deck of decks closes onto it again, wherever it stands.
   const primary = ids.find(id => {
     const g = byId.get(id)
     return !!g && g.deckLastFront === id && ids.some(o => o !== id && byId.get(o)?.deckLastFront === id)
       && !(isClosed(g) && g.deckAnchorId && g.deckAnchorId !== g.id)
-      && !kidsOf(id).some(o => !set.has(o.id))
   })
   return primary ? first(primary) : ids
 }

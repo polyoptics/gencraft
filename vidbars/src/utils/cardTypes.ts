@@ -68,6 +68,9 @@ export interface CardDetail {
   /** Linked to a card, and a chip on the card's front that shows that card
    *  there (components/Layers/DetailChips). Off unless switched on. */
   onFace?: true
+  /** It came in with a picture's file (utils/madeWith: prompt, settings,
+   *  job id…), not typed: kept in the back's Metadata section. */
+  meta?: true
 }
 
 export type CardType = 'element' | 'character' | 'faction' | 'family' | 'location' | 'prop' | 'audio' | 'scene' | 'event' | 'prompt' | 'note' | 'state' | 'area3d' | 'style'
