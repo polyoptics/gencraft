@@ -17,6 +17,7 @@ import { CARD_TYPES, CARD_TYPE_ORDER, cardTypeOf, chartCards, chartName, chartRa
 import { heightAsUnit } from '../../utils/stickGeom'
 import { useUnits } from '../../store/unitsStore'
 import { cardTitle } from '../../utils/faceStyle'
+import { metaDetailIds } from '../../utils/madeWith'
 import { rankText } from '../../utils/chartData'
 import { factionGroupsOf, withGroupMoved, withMemberMoved } from '../../utils/factionGroups'
 import { ColorPickerPopup } from '../Bar/ColorPickerPopup'
@@ -413,6 +414,7 @@ export const CardBack: React.FC<{
 }> = ({ groupId, color, width, height, hovered, reserve, scale, radius }) => {
   const details = useBoardsStore(s => s.groups.find(g => g.id === groupId)?.details) ?? NONE
   const type = useBoardsStore(s => cardTypeOf(s.groups.find(g => g.id === groupId)))
+  const metaIds = useBoardsStore(s => metaDetailIds(s, groupId))
   const groups = useBoardsStore(s => s.groups)
   const me = groups.find(g => g.id === groupId)
   const members = type === 'faction' && me ? factionMembers(groups, me) : []
@@ -556,6 +558,11 @@ export const CardBack: React.FC<{
     return { x: g?.originX ?? 0, y: g?.originY ?? 0 }
   }
   const typeClick = useClick(where, e => setMenu({ x: e.clientX, y: e.clientY, kind: 'type' }))
+  const metaClick = useClick(where, () => {
+    useUndoCoordinator.getState().checkpoint()
+    const bs = useBoardsStore.getState()
+    bs.setMetaOpen(groupId, !bs.groups.find(g => g.id === groupId)?.metaOpen)
+  })
   const colorClick = useClick(where, e => setCardPicker({ x: e.clientX + 12, y: e.clientY + 12 }))
 
   /** Press on a member: drag it onto another. In a faction, onto the one
@@ -878,6 +885,126 @@ export const CardBack: React.FC<{
     ]
   }
 
+  // Details that came in with the card's media (utils/madeWith) are kept
+  // apart from the typed ones, in one section that folds as a whole.
+  const metaSet = new Set(metaIds ? metaIds.split(' ') : [])
+  const ownRows = details.filter(d => !metaSet.has(d.id))
+  const metaRows = details.filter(d => metaSet.has(d.id))
+  const metaFolded = !me?.metaOpen
+  const detailRow = (d: CardDetail) => {
+            const linked0 = d.link ? detailShown(groups, d) : null
+            // A height is shown in the app's units, however it was typed (store/unitsStore).
+            const asUnit = heightAsUnit(d.name, linked0 ? linked0.text : d.value, metric)
+            const linked = linked0 && asUnit && d.link!.detail ? { ...linked0, text: asUnit } : linked0
+            // Its own member count: shown, never typed, linked or removed.
+            const own = isOwnCount(d, meId) || isOwnCount(d, groupId)
+            const rank = isChartRank(d)
+            return (
+              <div
+                key={d.id}
+                data-card-detail-row={d.id}
+                onPointerEnter={() => setRowHover(d.id)}
+                onPointerLeave={() => setRowHover(r => r === d.id ? null : r)}
+                style={rowStyle}
+              >
+                <BackField
+                  field="name"
+                  where={where}
+                  value={d.name}
+                  placeholder="name"
+                  editing={editing?.id === d.id && editing.part === 'name'}
+                  onStart={() => setEditing({ id: d.id, part: 'name' })}
+                  onCommit={(v, n) => commit(d.id, 'name', v, n)}
+                  onCancel={() => cancel(d.id)}
+                  style={labelStyle}
+                />
+                <BackField
+                  field="value"
+                  where={where}
+                  value={d.link?.detail ? linked?.text ?? '' : d.value}
+                  placeholder="—"
+                  editing={(!d.link || !!d.link.detail) && editing?.id === d.id && editing.part === 'value'}
+                  onStart={() => setEditing({ id: d.id, part: 'value' })}
+                  onCommit={(v, n) => d.link?.detail ? commitShared(d.id, v) : commit(d.id, 'value', v, n)}
+                  onCancel={() => cancel(d.id)}
+                  shown={own ? <span data-member-count title="How many members it has: counted, not typed">{linked?.text}</span>
+                    : rank && linked ? <span data-chart-rank={d.link!.card} title={`Rank on ${linked.card ? chartName(linked.card) : 'a chart'}: its group on the chart, counted from the top (read from the chart, not typed)`}><LinkShown text={linked.text} color={linked.card?.color} missing={linked.missing} whole={false} /></span>
+                    : linked ? <LinkShown text={linked.text} color={linked.card?.color} missing={linked.missing} whole={!d.link!.detail && !d.link!.count} /> : asUnit && asUnit !== d.value ? asUnit : undefined}
+                  onPick={own || !d.link ? undefined : e => setMenu({ x: e.clientX, y: e.clientY, kind: 'link', id: d.id })}
+                  drop={own || rank ? undefined : `detail:${groupId}:${d.id}`}
+                  lit={linking}
+                  wrap
+                  folded={d.collapsed}
+                  onLong={l => setLongRows(prev => prev.has(d.id) === l ? prev : (n => (l ? n.add(d.id) : n.delete(d.id), n))(new Set(prev)))}
+                  style={valueStyle}
+                />
+                {/* Pick a card of its deck for this detail. Always there, in
+                    the same place, whether or not it is in a deck. */}
+                {!own && !rank && !(editing?.id === d.id) && (
+                  <button
+                    type="button"
+                    data-card-detail-pick
+                    title="Pick a card from its deck for this detail"
+                    onPointerDown={stopPress}
+                    onDoubleClick={e => e.stopPropagation()}
+                    onClick={e => { e.stopPropagation(); setMenu({ x: e.clientX, y: e.clientY, kind: 'deck', id: d.id }) }}
+                    style={{
+                      position: 'absolute', right: 34, top: 0, width: 11, height: 9, padding: 0, lineHeight: '9px',
+                      fontSize: 7, borderRadius: 3, border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+                      background: 'rgba(0,0,0,0.3)', color: ink, opacity: rowHover === d.id ? 1 : 0.5,
+                    }}
+                  >▾</button>
+                )}
+                {/* A detail that shows a card: a chip for it on the front,
+                    or not (lit: on the front). */}
+                {!own && !rank && d.link && !d.link.detail && !d.link.count && !(editing?.id === d.id) && (
+                  <button
+                    type="button"
+                    data-card-detail-front={d.onFace ? 'on' : 'off'}
+                    title="Show as a chip on the front of the card (lit: on the front)"
+                    onPointerDown={stopPress}
+                    onDoubleClick={e => e.stopPropagation()}
+                    onClick={e => { e.stopPropagation(); write(cur().map(x => x.id !== d.id ? x : d.onFace ? (({ onFace: _f, ...rest }) => rest)(x) : { ...x, onFace: true })) }}
+                    style={{
+                      position: 'absolute', right: 47, top: 0, height: 9, padding: '0 3px', lineHeight: '9px',
+                      fontSize: 6.5, fontWeight: 700, borderRadius: 3, border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+                      background: d.onFace ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.3)', color: d.onFace ? '#14161f' : ink, opacity: d.onFace ? 1 : 0.55,
+                    }}
+                  >FRONT</button>
+                )}
+                {/* A long value: fold it to one line, or open it again. */}
+                {longRows.has(d.id) && !(editing?.id === d.id) && (
+                  <button
+                    type="button"
+                    data-card-detail-fold
+                    title="Fold to one line (lit: folded)"
+                    onPointerDown={stopPress}
+                    onClick={e => { e.stopPropagation(); setFolded(d.id, !d.collapsed) }}
+                    style={{
+                      position: 'absolute', right: 13, top: 0, height: 9, padding: '0 3px', lineHeight: '9px',
+                      fontSize: 6.5, fontWeight: 700, borderRadius: 3, border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+                      background: d.collapsed ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.3)', color: d.collapsed ? '#fff' : ink, opacity: d.collapsed ? 1 : 0.55,
+                    }}
+                  >FOLD</button>
+                )}
+                {rowHover === d.id && !editing && !linking && !own && (
+                  <button
+                    type="button"
+                    data-card-detail-remove
+                    title="Remove this detail"
+                    onPointerDown={stopPress}
+                    onClick={e => { e.stopPropagation(); remove(d.id) }}
+                    style={{
+                      position: 'absolute', right: 0, top: 0, width: 11, height: 11, padding: 0, lineHeight: '9px',
+                      fontSize: 9, borderRadius: 3, border: 'none', cursor: 'pointer',
+                      background: 'rgba(0,0,0,0.6)', color: 'rgba(255,255,255,0.85)',
+                    }}
+                  >×</button>
+                )}
+              </div>
+            )
+            }
+
   return (
     <div
       data-card-back={groupId}
@@ -1080,119 +1207,7 @@ export const CardBack: React.FC<{
               <div style={{ fontSize: 7, fontWeight: 800, letterSpacing: 1, color: ink, opacity: 0.6, padding: '4px 2px 0' }}>DETAILS</div>
             </>
           )}
-          {details.map(d => {
-            const linked0 = d.link ? detailShown(groups, d) : null
-            // A height is shown in the app's units, however it was typed (store/unitsStore).
-            const asUnit = heightAsUnit(d.name, linked0 ? linked0.text : d.value, metric)
-            const linked = linked0 && asUnit && d.link!.detail ? { ...linked0, text: asUnit } : linked0
-            // Its own member count: shown, never typed, linked or removed.
-            const own = isOwnCount(d, meId) || isOwnCount(d, groupId)
-            const rank = isChartRank(d)
-            return (
-              <div
-                key={d.id}
-                data-card-detail-row={d.id}
-                onPointerEnter={() => setRowHover(d.id)}
-                onPointerLeave={() => setRowHover(r => r === d.id ? null : r)}
-                style={rowStyle}
-              >
-                <BackField
-                  field="name"
-                  where={where}
-                  value={d.name}
-                  placeholder="name"
-                  editing={editing?.id === d.id && editing.part === 'name'}
-                  onStart={() => setEditing({ id: d.id, part: 'name' })}
-                  onCommit={(v, n) => commit(d.id, 'name', v, n)}
-                  onCancel={() => cancel(d.id)}
-                  style={labelStyle}
-                />
-                <BackField
-                  field="value"
-                  where={where}
-                  value={d.link?.detail ? linked?.text ?? '' : d.value}
-                  placeholder="—"
-                  editing={(!d.link || !!d.link.detail) && editing?.id === d.id && editing.part === 'value'}
-                  onStart={() => setEditing({ id: d.id, part: 'value' })}
-                  onCommit={(v, n) => d.link?.detail ? commitShared(d.id, v) : commit(d.id, 'value', v, n)}
-                  onCancel={() => cancel(d.id)}
-                  shown={own ? <span data-member-count title="How many members it has: counted, not typed">{linked?.text}</span>
-                    : rank && linked ? <span data-chart-rank={d.link!.card} title={`Rank on ${linked.card ? chartName(linked.card) : 'a chart'}: its group on the chart, counted from the top (read from the chart, not typed)`}><LinkShown text={linked.text} color={linked.card?.color} missing={linked.missing} whole={false} /></span>
-                    : linked ? <LinkShown text={linked.text} color={linked.card?.color} missing={linked.missing} whole={!d.link!.detail && !d.link!.count} /> : asUnit && asUnit !== d.value ? asUnit : undefined}
-                  onPick={own || !d.link ? undefined : e => setMenu({ x: e.clientX, y: e.clientY, kind: 'link', id: d.id })}
-                  drop={own || rank ? undefined : `detail:${groupId}:${d.id}`}
-                  lit={linking}
-                  wrap
-                  folded={d.collapsed}
-                  onLong={l => setLongRows(prev => prev.has(d.id) === l ? prev : (n => (l ? n.add(d.id) : n.delete(d.id), n))(new Set(prev)))}
-                  style={valueStyle}
-                />
-                {/* Pick a card of its deck for this detail. Always there, in
-                    the same place, whether or not it is in a deck. */}
-                {!own && !rank && !(editing?.id === d.id) && (
-                  <button
-                    type="button"
-                    data-card-detail-pick
-                    title="Pick a card from its deck for this detail"
-                    onPointerDown={stopPress}
-                    onDoubleClick={e => e.stopPropagation()}
-                    onClick={e => { e.stopPropagation(); setMenu({ x: e.clientX, y: e.clientY, kind: 'deck', id: d.id }) }}
-                    style={{
-                      position: 'absolute', right: 34, top: 0, width: 11, height: 9, padding: 0, lineHeight: '9px',
-                      fontSize: 7, borderRadius: 3, border: 'none', cursor: 'pointer', fontFamily: 'inherit',
-                      background: 'rgba(0,0,0,0.3)', color: ink, opacity: rowHover === d.id ? 1 : 0.5,
-                    }}
-                  >▾</button>
-                )}
-                {/* A detail that shows a card: a chip for it on the front,
-                    or not (lit: on the front). */}
-                {!own && !rank && d.link && !d.link.detail && !d.link.count && !(editing?.id === d.id) && (
-                  <button
-                    type="button"
-                    data-card-detail-front={d.onFace ? 'on' : 'off'}
-                    title="Show as a chip on the front of the card (lit: on the front)"
-                    onPointerDown={stopPress}
-                    onDoubleClick={e => e.stopPropagation()}
-                    onClick={e => { e.stopPropagation(); write(cur().map(x => x.id !== d.id ? x : d.onFace ? (({ onFace: _f, ...rest }) => rest)(x) : { ...x, onFace: true })) }}
-                    style={{
-                      position: 'absolute', right: 47, top: 0, height: 9, padding: '0 3px', lineHeight: '9px',
-                      fontSize: 6.5, fontWeight: 700, borderRadius: 3, border: 'none', cursor: 'pointer', fontFamily: 'inherit',
-                      background: d.onFace ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.3)', color: d.onFace ? '#14161f' : ink, opacity: d.onFace ? 1 : 0.55,
-                    }}
-                  >FRONT</button>
-                )}
-                {/* A long value: fold it to one line, or open it again. */}
-                {longRows.has(d.id) && !(editing?.id === d.id) && (
-                  <button
-                    type="button"
-                    data-card-detail-fold
-                    title="Fold to one line (lit: folded)"
-                    onPointerDown={stopPress}
-                    onClick={e => { e.stopPropagation(); setFolded(d.id, !d.collapsed) }}
-                    style={{
-                      position: 'absolute', right: 13, top: 0, height: 9, padding: '0 3px', lineHeight: '9px',
-                      fontSize: 6.5, fontWeight: 700, borderRadius: 3, border: 'none', cursor: 'pointer', fontFamily: 'inherit',
-                      background: d.collapsed ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.3)', color: d.collapsed ? '#fff' : ink, opacity: d.collapsed ? 1 : 0.55,
-                    }}
-                  >FOLD</button>
-                )}
-                {rowHover === d.id && !editing && !linking && !own && (
-                  <button
-                    type="button"
-                    data-card-detail-remove
-                    title="Remove this detail"
-                    onPointerDown={stopPress}
-                    onClick={e => { e.stopPropagation(); remove(d.id) }}
-                    style={{
-                      position: 'absolute', right: 0, top: 0, width: 11, height: 11, padding: 0, lineHeight: '9px',
-                      fontSize: 9, borderRadius: 3, border: 'none', cursor: 'pointer',
-                      background: 'rgba(0,0,0,0.6)', color: 'rgba(255,255,255,0.85)',
-                    }}
-                  >×</button>
-                )}
-              </div>
-            )
-          })}
+          {ownRows.map(detailRow)}
           {details.length === 0 && type !== 'faction' && type !== 'family' && readRows.length === 0 && (
             <div style={{ fontSize: 8.5, opacity: 0.45, padding: '2px 2px 0' }}>No details yet.</div>
           )}
@@ -1242,6 +1257,29 @@ export const CardBack: React.FC<{
             >+ chart</button>
           )}
           </div>
+          {/* What came in with its media (prompt, settings, job id, where it
+              was made): one section, folded until asked for (lit: folded). */}
+          {metaRows.length > 0 && (
+            <>
+              <div
+                data-card-meta={metaFolded ? 'folded' : 'open'}
+                title="What came in with its media: prompt, settings, job id, where it was made (lit: folded)"
+                {...metaClick}
+                style={{
+                  position: 'relative', flexShrink: 0, display: 'flex', alignItems: 'center', minHeight: 11, marginTop: 3, cursor: 'pointer',
+                  borderBottom: '1px solid rgba(255,255,255,0.08)',
+                }}
+              >
+                <span style={{ fontSize: 7, fontWeight: 800, letterSpacing: 1, color: ink, opacity: 0.6, padding: '0 2px' }}>METADATA</span>
+                <span style={{
+                  position: 'absolute', right: 13, top: 1, height: 9, padding: '0 3px', lineHeight: '9px',
+                  fontSize: 6.5, fontWeight: 700, borderRadius: 3,
+                  background: metaFolded ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.3)', color: metaFolded ? '#fff' : ink, opacity: metaFolded ? 1 : 0.55,
+                }}>FOLD</span>
+              </div>
+              {!metaFolded && metaRows.map(detailRow)}
+            </>
+          )}
         </div>
       </div>
       {menu?.kind === 'type' && <BackMenu at={menu} title="Card type" items={typeMenu()} onClose={() => setMenu(null)} />}

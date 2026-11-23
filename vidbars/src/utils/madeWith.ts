@@ -169,6 +169,32 @@ export function madeRows(made: MadeWith): { name: string; value: string }[] {
   ].filter(r => r.value)
 }
 
+/** The names madeRows() gives its rows, lower case. */
+const MADE_NAMES = new Set(['prompt', 'settings', 'references', 'job id', 'made'])
+
+/** True when a card holds a picture that says how it was made. */
+type Cards = Pick<ReturnType<typeof useBoardsStore.getState>, 'groups' | 'boards'>
+function cardHasMade(s: Cards, groupId: string): boolean {
+  const g = s.groups.find(gr => gr.id === groupId)
+  return !!g && g.boardIds.some(bid => Object.values(s.boards[bid]?.bars ?? {}).some(bar => getMediaItems(bar.content).some(m => !!m.made)))
+}
+
+/** The ids of a card's details that came in with its media rather than
+ *  being typed (Brian 2026-11-23: "old prompt settings, job IDs, where it
+ *  was made… let's put it in one thing that I can fold"): rows marked so
+ *  when they were added, and, on cards filled before rows were marked,
+ *  the rows named as madeRows() names them while the card holds a picture
+ *  that carries how it was made. Read, never written: the rows stay as
+ *  they are. A string (ids joined by a space) so a store selector can
+ *  return it. */
+export function metaDetailIds(s: Cards, groupId: string): string {
+  const details = s.groups.find(g => g.id === groupId)?.details
+  if (!details?.length) return ''
+  const named = details.filter(d => !d.meta && !d.link && MADE_NAMES.has(d.name.trim().toLowerCase()))
+  const old = named.length > 0 && cardHasMade(s, groupId) ? new Set(named.map(d => d.id)) : null
+  return details.filter(d => d.meta || old?.has(d.id)).map(d => d.id).join(' ')
+}
+
 /** `media` with the moment it came into the project noted, unless it
  *  already carries one (a copy, a trimmed clip of something older). */
 export function withAdded(media: MediaItem): MediaItem {
@@ -218,6 +244,6 @@ export async function stampMadeWith(groupId: string, boardId: string, media: Med
   const have = new Set((g.details ?? []).map(d => d.name.trim().toLowerCase()))
   const add: CardDetail[] = madeRows(made)
     .filter(r => !have.has(r.name.toLowerCase()))
-    .map(r => ({ id: newDetailId(), name: r.name, value: r.value }))
+    .map(r => ({ id: newDetailId(), name: r.name, value: r.value, meta: true as const }))
   if (add.length) useBoardsStore.getState().setGroupDetails(groupId, [...(g.details ?? []), ...add])
 }

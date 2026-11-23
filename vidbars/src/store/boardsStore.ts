@@ -228,6 +228,9 @@ export interface ProjectGroup {
    *  (Brian 2026-11-05: fold a section down to its leaders, or to the
    *  leader and the seconds-in-command). */
   foldedMembers?: string[]
+  /** The Metadata section of its back (details that came in with its
+   *  media, utils/madeWith) is open. Absent: folded, as it starts. */
+  metaOpen?: true
   /** Its PAGES in a Card Prompts pad (Brian 2026-11-06): each page is the
    *  words lit on it, in the order they were picked. Absent: no page saved. */
   promptPages?: { words: string[] }[]
@@ -469,6 +472,7 @@ interface BoardsState {
   setFactionShape: (factionId: string, shape: Pick<ProjectGroup, 'factionGroups' | 'reportsTo' | 'linkedGroupIds'>) => void
   /** Fold (or open) these members on a faction's back: hide those under them. */
   setMembersFolded: (factionId: string, memberIds: string[], folded: boolean) => void
+  setMetaOpen: (groupId: string, open: boolean) => void
   /** A face copied from one card put on these (utils/faceStyle): its text,
    *  how it is set, and the line between title and body. Once, not tied. */
   pasteFaceStyle: (groupIds: string[], style: import('../utils/faceStyle').FaceStyle) => void
@@ -1244,6 +1248,14 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
       for (const id of memberIds) if (folded) now.add(id); else now.delete(id)
       const { foldedMembers: _f, ...rest } = g
       return now.size ? { ...rest, foldedMembers: [...now] } : rest
+    }) }))
+  },
+
+  setMetaOpen(groupId, open) {
+    set(s => ({ groups: s.groups.map(g => {
+      if (g.id !== groupId) return g
+      const { metaOpen: _m, ...rest } = g
+      return open ? { ...rest, metaOpen: true as const } : rest
     }) }))
   },
 
