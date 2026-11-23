@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { flushSync } from 'react-dom'
-import { useTiltStore, isTilted, offFlat, unprojectTilt, standRise, shiftKeeping, depthShare, centrePoint, TILT_SNAP, TILT_MAX, TILT_UNDER, tiltP, type Pivot } from '../../../store/tiltStore'
+import { useTiltStore, isTilted, offFlat, unprojectTilt, standRise, shiftKeeping, screenOf, depthShare, centrePoint, TILT_SNAP, TILT_MAX, TILT_UNDER, tiltP, type Pivot } from '../../../store/tiltStore'
 import { storyWallOf } from '../StorylineLayer'
 import { peekAt, usePeek, type PeekTarget } from '../../../utils/peek'
 import { useCanvasStore, groupBounds, MIN_ZOOM, MAX_ZOOM } from '../../../store/canvasStore'
@@ -77,6 +77,34 @@ function moveCamera(mode: CamMode, tilt: number, d: number) {
 
 // The camera picked by the drag that left the flat view (see above).
 let camMode: CamMode | null = null
+
+/** The camera taken to a lifted 3D model in the side view (peekOf): the
+ *  3D model comes to the middle of the view in a split second and the
+ *  view turns about it there, a fixed point in the middle from the first
+ *  moment (Brian 2026-11-23: turning about it where it was, off to one
+ *  side, felt like "a tractor beam ... the pivot of the orbit is changing
+ *  while I'm orbiting"; "let's snap to the new object and start rotating
+ *  around it right away ... except maybe ... a split-second zoom over to
+ *  where it's going"). */
+const SNAP_MS = 140
+let snapRaf = 0
+function snapTo(pivot: Pivot) {
+  cancelAnimationFrame(snapRaf)
+  const s0 = useTiltStore.getState()
+  s0.setPivot(pivot)
+  const from = screenOf(pivot, s0)
+  if (!from) return
+  const start = performance.now()
+  const tick = () => {
+    const s = useTiltStore.getState()
+    if (s.pivot !== pivot || !isTilted(s)) return
+    const u = Math.min(1, (performance.now() - start) / SNAP_MS), k = 1 - (1 - u) ** 3
+    const sh = shiftKeeping(pivot, s.tilt, s.spin, s.yaw, { x: from.x * (1 - k), y: from.y * (1 - k) })
+    s.setShift(sh.shiftX, sh.shiftY)
+    if (u < 1) snapRaf = requestAnimationFrame(tick)
+  }
+  tick()
+}
 
 /** The peek is into this. Beginning the 3D models' side view, what of the
  *  canvas is in view is kept with it (utils/peek sideBox; Brian
@@ -298,7 +326,7 @@ export function orbitWheel(e: WheelEvent): boolean {
   const tilt = w.t0 - (w.y - w.oy) * DRAG_DEG
   const d = (turnPx - w.turned) * DRAG_DEG
   w.turned = turnPx
-  if (w.mode === 'peek' && w.peek && !w.pivoted && (d || tilt !== w.t0)) { w.pivoted = true; useTiltStore.getState().setPivot(w.peek.g) }
+  if (w.mode === 'peek' && w.peek && !w.pivoted && (d || tilt !== w.t0)) { w.pivoted = true; if (w.peek.g.z !== undefined) snapTo(w.peek.g); else useTiltStore.getState().setPivot(w.peek.g) }
   moveCamera(w.mode, tilt, d)
   return true
 }
@@ -423,7 +451,7 @@ export function useAltTiltGesture() {
         turned = turnPx
         // A peek turns about the deck or Viewer it is into, taken when the
         // view first moves, so it stays put on screen.
-        if (mode === 'peek' && peek && !pivoted && (d || tilt !== t0)) { pivoted = true; useTiltStore.getState().setPivot(peek.g) }
+        if (mode === 'peek' && peek && !pivoted && (d || tilt !== t0)) { pivoted = true; if (peek.g.z !== undefined) snapTo(peek.g); else useTiltStore.getState().setPivot(peek.g) }
         moveCamera(mode, tilt, d)
         if (mode === '3d' && cTo && !glideStarted && useTiltStore.getState().tilt > 0.5) {
           glideStarted = true
