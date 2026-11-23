@@ -6,6 +6,10 @@
 // and undoable). The mark shrinks and softens as it lifts. Double-click
 // the dot: back sitting on its card. Nothing shows until hovered. Models
 // in a 3D scene have the manipulator instead (utils/area3dHandles).
+// In the 3D models' side view (utils/peek `side`, Brian 2026-11-23) the
+// same handle sets how far off its card the 3D model is in that view
+// (tiltStore sideFloatOf): that view's own, as the tilted view's lift is
+// the tilted view's. Double-click there: back just clear of its card.
 // Installed once when this module loads, ahead of the canvas's own
 // listeners, so a press on the dot reaches nothing else.
 
@@ -34,7 +38,7 @@ let shown: string | null = null
 let linger = 0
 let cursor: Pt | null = null
 let hot = false
-let drag: { key: string; dk: string; x0: number; y0: number; h0: number; up: Pt; moved: boolean } | null = null
+let drag: { key: string; dk: string; x0: number; y0: number; h0: number; up: Pt; moved: boolean; side: boolean } | null = null
 let lastPress: { key: string; t: number } | null = null
 let eatClick = false
 let raf = 0
@@ -55,9 +59,8 @@ const floatOfKey = (key: string, dk: string) => soloFloat(key) ?? useModelScaleS
 const setFloatOf = (key: string, dk: string, h: number | null) => {
   if (soloFloat(key) !== null) setSoloFloat(key, h); else useModelScaleStore.getState().setFloat(dk, h)
 }
-// (Not in the 3D models' side view, utils/peek: there they lie over their
-// cards, and how high is the view's own.)
-const live = () => isTilted(useTiltStore.getState()) && !useManip.getState().through && !!models.floatSpot && !usePeek.getState().side
+const live = () => isTilted(useTiltStore.getState()) && !useManip.getState().through && !!models.floatSpot
+const sideOn = () => usePeek.getState().side
 
 // ── Drawing ──
 // Two layers: the mark and stem under the 3D view's canvas, so the model
@@ -165,7 +168,9 @@ function onDown(e: PointerEvent) {
   // Double-click: back sitting on its card.
   if (lastPress && lastPress.key === shown && now - lastPress.t < DOUBLE_MS) {
     lastPress = null
-    if (floatOfKey(shown, dk)) { useUndoCoordinator.getState().checkpoint(); setFloatOf(shown, dk, null) }
+    if (sideOn()) {
+      if (useModelScaleStore.getState().sideFloatOf[dk] !== undefined) { useUndoCoordinator.getState().checkpoint(); useModelScaleStore.getState().setSideFloat(dk, null) }
+    } else if (floatOfKey(shown, dk)) { useUndoCoordinator.getState().checkpoint(); setFloatOf(shown, dk, null) }
     return
   }
   lastPress = { key: shown, t: now }
@@ -174,7 +179,11 @@ function onDown(e: PointerEvent) {
   const z = useCanvasStore.getState().zoom || 1
   let up = { x: s.up.x * z, y: s.up.y * z }
   if (Math.hypot(up.x, up.y) < 0.05) up = { x: 0, y: -0.5 * z }
-  drag = { key: shown, dk, x0: e.clientX, y0: e.clientY, h0: floatOfKey(shown, dk), up, moved: false }
+  // (In the side view: from where it is now, off its card.)
+  const upLen = Math.hypot(s.up.x, s.up.y)
+  const side = sideOn()
+  const h0 = side ? (upLen > 1e-6 ? Math.hypot(s.foot.x - s.ground.x, s.foot.y - s.ground.y) / upLen / z : 0) : floatOfKey(shown, dk)
+  drag = { key: shown, dk, x0: e.clientX, y0: e.clientY, h0, up, moved: false, side }
   wake()
 }
 
@@ -193,7 +202,8 @@ function onMove(e: PointerEvent) {
   // Along the stem: the model follows the cursor up or down.
   const u = drag.up
   const h = Math.max(0, drag.h0 + (mx * u.x + my * u.y) / (u.x * u.x + u.y * u.y))
-  setFloatOf(drag.key, drag.dk, h > 0.01 ? Math.round(h * 100) / 100 : null)
+  if (drag.side) useModelScaleStore.getState().setSideFloat(drag.dk, Math.round(h * 100) / 100)
+  else setFloatOf(drag.key, drag.dk, h > 0.01 ? Math.round(h * 100) / 100 : null)
 }
 
 function onUp(e: PointerEvent) {

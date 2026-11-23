@@ -3239,6 +3239,7 @@ function collectTargets(W: number, H: number): TiltTarget[] {
   // (Brian 2026-11-23: "any models that are on the screen should
   // definitely be within the range, and then it should fade off from
   // there").
+  const sideFloats = useModelScaleStore.getState().sideFloatOf
   const box = side ? usePeek.getState().sideBox : null
   const bx = box ? pan.x + (box.x + box.w / 2) * zoom - W / 2 : 0, by = box ? pan.y + (box.y + box.h / 2) * zoom - H / 2 : 0
   const bw = box ? box.w * zoom : 0, bh = box ? box.h * zoom : 0, soft = Math.max(1, Math.min(bw, bh) * 0.25)
@@ -3253,7 +3254,8 @@ function collectTargets(W: number, H: number): TiltTarget[] {
     // On its own card or tile: not a Viewer's, a set's or a path's.
     if (!side || t.mini || inScene(t) || !(t.key.startsWith('card:') || t.key.startsWith('node:'))) continue
     const o = Math.min(t.dim ?? 1, inBox(t))
-    if (o > FAR_GONE) out2.push({ ...t, lie: true, dim: o < 0.995 ? o : undefined })
+    const sf = sideFloats[dataKey(t.key)]
+    if (o > FAR_GONE) out2.push({ ...t, lie: true, dim: o < 0.995 ? o : undefined, sideFloat: sf === undefined ? undefined : sf * zoom })
   }
   return out2
 }

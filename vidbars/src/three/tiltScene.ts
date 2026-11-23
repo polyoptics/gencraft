@@ -68,6 +68,9 @@ export interface TiltTarget {
    *  and its top to the card's top (or as its side angle has it,
    *  TiltFrameState sideFor), in place of standing up on it. */
   lie?: boolean
+  /** Lying, how far off its card its middle is, px (useModelScaleStore
+   *  sideFloatOf). Absent: just clear of the card. */
+  sideFloat?: number
 }
 
 /** A flat element given thickness on the tilted plane: a rounded slab
@@ -1435,7 +1438,9 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       // Floating (the lift handle): up off its card, rising in with the
       // rest of the 3D look.
       s.base = tg.z ?? 0
-      s.stand.position.set(tg.u, -tg.v, s.base + (tg.float ?? 0) * ease)
+      // (Lying in the side view, its distance off the card is that view's
+      // own: below.)
+      s.stand.position.set(tg.u, -tg.v, s.base + (tg.float ?? 0) * ease * (1 - lie))
       const foot = Math.max(s.size.x, s.size.z, 1e-6)
       let k = (tg.w * 0.6) / foot
       if (s.size.y * k > tg.w * 1.1) k = (tg.w * 1.1) / Math.max(s.size.y, 1e-6)
@@ -1448,7 +1453,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       // the card whichever way it is turned, and turned from standing to
       // lying as the card does (or to its own side angle).
       if (lie > 0) {
-        s.stand.position.z += lie * ease * (Math.max(s.size.x, s.size.y, s.size.z) * k * 0.5 + tg.w * 0.1)
+        s.stand.position.z += lie * ease * (tg.sideFloat ?? Math.max(s.size.x, s.size.y, s.size.z) * k * 0.5 + tg.w * 0.1)
         const sq = st.sideFor?.(s.url)
         s.stand.quaternion.copy(STAND_Q).slerp(sq ? lieQ.set(sq[0], sq[1], sq[2], sq[3]) : FLAT_Q, lie)
       } else s.stand.quaternion.copy(STAND_Q)
