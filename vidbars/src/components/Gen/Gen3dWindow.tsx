@@ -1,107 +1,52 @@
-// Gen3dWindow.tsx — the 3D generation window (Brian 2026-11-20, his sketch
-// "A"): one reference picture, an arrow beside it that opens the extra
-// views when the generator takes them, the generator and its options
-// under it, the words under those, and Generate.
+// Gen3dWindow.tsx — the 3D generation window (Brian 2026-11-23, his
+// sketch): "The generator's main purpose is to hold the cards. And then,
+// in a nice big font, I want to know: what's the face limit? What's the AI
+// 3d model? And I can set them right there. And the prompt bit can go
+// underneath, and the generate can stay there."
 //
-// Nothing is laid ON the window. A card is linked in by letting its "+" go
-// on the picture box or on a view's row (LinkDragOverlay), as a detail on
-// a card's back is filled; the card stays where it is. The card linked as
-// the reference is the card the 3D model goes to (utils/gen3d).
+// The cards are not ON the window: they are docked on its side, as many as
+// he likes, or a whole deck, like cards on Film Look (utils/filmShots
+// dockedCards). Generate makes a 3D model for each (utils/gen3d).
 //
 // Everything has a fixed place: picking another generator changes what the
-// option cells hold, never where anything is, and opening the views makes
-// the window wider to the right without moving what was there.
+// boxes hold, never where anything is. A box the generator has no use for
+// (no face limit, no texture switch) stays where it is, unlit.
 
 import React, { useState } from 'react'
 import { useFreeNodeStore } from '../../store/freeNodeStore'
-import { useBoardsStore, type ProjectGroup } from '../../store/boardsStore'
-import { useLinkDragStore } from '../../store/linkDragStore'
+import { useBoardsStore } from '../../store/boardsStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
 import { useAgentChat } from '../../utils/agentChat'
 import { ContentScaled, panelContentScale } from '../UI/PanelSurface'
-import { DIM, FAINT, INK, LINE, MiniCard, PANEL_BG, useFaceUrl } from '../CardBacks/cardBackUi'
+import { DIM, FAINT, INK, LINE, PANEL_BG } from '../CardBacks/cardBackUi'
 import {
-  VIEWS_W, generatorFor, notReady, patchGen, refreshGenerators, runGen, useGenerators,
+  facesOption, genCards, generatorFor, notReady, patchGen, refreshGenerators, runGen, textureOption, useGenerators,
   type GenOption, type Generator,
 } from '../../utils/gen3d'
 
 const PAD = 12
-const REF_W = 200
-const REF_H = 280
-const LEFT_W = 300
-const COL_W = LEFT_W - PAD * 2
+const SIDE_W = 128
+const GAP = 8
+const BIG_H = 52
 const GOLD = '#FFD24A'
+// Rows, from the top.
+const Y_GEN = 26
+const Y_FACES = 102
+const Y_MORE = 164
+const Y_PROMPT = 214
 
 const field: React.CSSProperties = {
   boxSizing: 'border-box', background: '#11131b', color: INK, border: `1px solid ${LINE}`, borderRadius: 6,
   fontSize: 12, fontFamily: 'inherit', outline: 'none',
 }
-
-/** The reference picture's box: the card linked in, or where to let one go. */
-const RefBox: React.FC<{ nodeId: string; card: ProjectGroup | undefined; gone: boolean; linking: boolean }> = ({ nodeId, card, gone, linking }) => {
-  const url = useFaceUrl(card)
-  return (
-    <div
-      className="g3-ref"
-      data-link-drop={`gen:${nodeId}:ref`}
-      title={card ? `${card.name}: the reference picture. The 3D model goes to this card.` : 'Let a card\'s + go here: its face picture is the reference, and the 3D model goes to that card'}
-      style={{
-        position: 'absolute', left: PAD, top: PAD, width: REF_W, height: REF_H, boxSizing: 'border-box', borderRadius: 8, overflow: 'hidden',
-        border: card ? `1px solid ${card.color}` : `1.5px dashed ${linking ? GOLD : 'rgba(232,238,255,0.3)'}`,
-        boxShadow: linking ? `0 0 0 2px ${GOLD}66` : 'none',
-        background: url ? `#0b0c12 center / contain no-repeat url("${url}")` : '#0b0c12',
-        display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center',
-      }}
-    >
-      {!url && (
-        <div style={{ color: card ? '#ff9a8a' : DIM, fontSize: 12, lineHeight: 1.5, padding: 16 }}>
-          {gone ? 'That card is gone' : card ? 'This card has no picture on its face' : <>Reference picture<br /><span style={{ color: FAINT }}>let a card's + go here</span></>}
-        </div>
-      )}
-      {(card || gone) && (
-        <div
-          className="g3-x"
-          title="Take the reference off"
-          onClick={() => { useUndoCoordinator.getState().checkpoint(); patchGen(nodeId, { ref: undefined }) }}
-          style={{ position: 'absolute', right: 6, top: 6, width: 20, height: 20, borderRadius: 10, background: 'rgba(0,0,0,0.65)', color: INK, fontSize: 13, lineHeight: '20px', cursor: 'pointer' }}
-        >×</div>
-      )}
-    </div>
-  )
+const caption: React.CSSProperties = {
+  position: 'absolute', left: PAD, height: 14, fontSize: 10, fontWeight: 700, letterSpacing: 1, color: DIM, textTransform: 'uppercase',
+}
+const big: React.CSSProperties = {
+  ...field, position: 'absolute', height: BIG_H, borderRadius: 8, display: 'flex', alignItems: 'center',
 }
 
-/** One extra view: its name, and the card linked to it. */
-const ViewRow: React.FC<{ nodeId: string; slot: string; label: string; card: ProjectGroup | undefined; linking: boolean; top: number }> = ({ nodeId, slot, label, card, linking, top }) => (
-  <div
-    className="g3-view"
-    data-link-drop={`gen:${nodeId}:${slot}`}
-    title={card ? `${label}: ${card.name}` : `${label}: let a card's + go here`}
-    style={{
-      position: 'absolute', left: 0, right: 0, top, height: 32, boxSizing: 'border-box', display: 'flex', alignItems: 'center', gap: 8, padding: '0 8px',
-      borderRadius: 6, border: `1px ${card ? 'solid' : 'dashed'} ${linking ? GOLD : card ? LINE : 'rgba(232,238,255,0.18)'}`,
-    }}
-  >
-    <span style={{ width: 76, flexShrink: 0, fontSize: 12, color: DIM, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
-    {card && <MiniCard g={card} w={18} />}
-    <span style={{ flex: 1, minWidth: 0, fontSize: 12, color: card ? INK : FAINT, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{card ? card.name : 'none'}</span>
-    {card && (
-      <span
-        className="g3-x"
-        title="Take this view off"
-        onClick={() => {
-          const n = useFreeNodeStore.getState().nodes[nodeId]
-          const views = { ...n?.gen3d?.views }
-          delete views[slot]
-          useUndoCoordinator.getState().checkpoint()
-          patchGen(nodeId, { views })
-        }}
-        style={{ width: 18, height: 18, borderRadius: 9, textAlign: 'center', lineHeight: '18px', fontSize: 13, color: INK, cursor: 'pointer', flexShrink: 0 }}
-      >×</span>
-    )}
-  </div>
-)
-
-/** One option of the generator, in its cell. */
+/** One of the generator's smaller options, in its cell. */
 const OptionCell: React.FC<{ o: GenOption; value: number | boolean | string | undefined; onValue: (v: number | boolean | string | undefined) => void }> = ({ o, value, onValue }) => {
   const range = o.min !== undefined || o.max !== undefined ? ` (${o.min ?? ''} to ${o.max ?? ''})` : ''
   if (o.kind === 'switch') {
@@ -142,11 +87,6 @@ const OptionCell: React.FC<{ o: GenOption; value: number | boolean | string | un
             const t = e.target.value.replace(/[^\d]/g, '')
             onValue(t === '' ? undefined : Number(t))
           }}
-          onBlur={() => {
-            if (typeof value !== 'number') return
-            const v = Math.max(o.min ?? value, Math.min(o.max ?? value, value))
-            if (v !== value) onValue(v)
-          }}
           style={{ flex: 1, minWidth: 0, height: 24, background: 'transparent', color: INK, border: 'none', outline: 'none', fontSize: 12, fontFamily: 'inherit', textAlign: 'right', paddingRight: 8 }}
         />
       )}
@@ -155,19 +95,18 @@ const OptionCell: React.FC<{ o: GenOption; value: number | boolean | string | un
 }
 
 /** What a generator takes, in a line, for its row in the list. */
-const takes = (g: Generator): string => {
-  const parts: string[] = []
-  if (g.views.length) parts.push(g.views[0].key.startsWith('image:') ? `up to ${g.views.length + 1} views` : `views: ${g.views.map(v => v.label).join(', ')}`)
-  if (g.options.length) parts.push(g.options.map(o => o.label).join(', '))
-  return parts.join(' · ')
-}
+const takes = (g: Generator): string => g.options.map(o => o.label).join(', ')
+
+const cardsWord = (n: number) => n === 1 ? '1 docked card' : `${n} docked cards`
 
 export const Gen3dWindow: React.FC<{ nodeId: string }> = ({ nodeId }) => {
   const node = useFreeNodeStore(s => s.nodes[nodeId])
-  const groups = useBoardsStore(s => s.groups)
+  // What is docked is worked out from where the cards are: read again
+  // whenever a card or a block changes.
+  useBoardsStore(s => s.groups)
+  useBoardsStore(s => s.boards)
   const generators = useGenerators(s => s.generators)
   const readAt = useGenerators(s => s.readAt)
-  const linking = useLinkDragStore(s => s.active && s.source?.kind === 'group')
   const box = node?.gen3d?.box
   const busy = useAgentChat(s => !!box && !!s.busy[box])
   const [listOpen, setListOpen] = useState(false)
@@ -175,11 +114,11 @@ export const Gen3dWindow: React.FC<{ nodeId: string }> = ({ nodeId }) => {
   if (!node) return null
   const st = node.gen3d ?? {}
   const gen = generatorFor(node, generators)
-  const card = (id: string | undefined) => id ? groups.find(g => g.id === id) : undefined
-  const ref = card(st.ref)
   const opts = (gen && st.opts?.[gen.id]) || {}
-  const canViews = !!gen?.views.length
-  const open = !!st.viewsOpen
+  const faces = facesOption(gen)
+  const texture = textureOption(gen)
+  const more = gen?.options.filter(o => o !== faces && o !== texture).slice(0, 3) ?? []
+  const docked = genCards(node)
   const why = notReady(node)
   const ui = panelContentScale(node)
 
@@ -189,16 +128,19 @@ export const Gen3dWindow: React.FC<{ nodeId: string }> = ({ nodeId }) => {
     if (v === undefined) delete mine[key]; else mine[key] = v
     patchGen(nodeId, { opts: { ...st.opts, [gen.id]: mine } })
   }
-  // The views open to the right: the window is that much wider, and
-  // nothing that was there moves.
-  const toggleViews = () => {
-    if (!canViews && !open) return
-    useUndoCoordinator.getState().checkpoint()
-    useFreeNodeStore.getState().updateFreeNode(nodeId, {
-      width: Math.max(LEFT_W * ui, node.width + (open ? -1 : 1) * VIEWS_W * ui),
-      gen3d: { ...st, viewsOpen: !open },
-    })
-  }
+  const facesValue = faces ? opts[faces.key] : undefined
+  const textureOn = !!texture && (opts[texture.key] ?? texture.def) === true
+  const facesRange = faces && (faces.min !== undefined || faces.max !== undefined) ? ` (${(faces.min ?? 0).toLocaleString('en-US')} to ${faces.max?.toLocaleString('en-US') ?? 'any'})` : ''
+
+  // What Generate will do, in a line.
+  const n = docked.make.length
+  const notes: string[] = []
+  if (n) notes.push(`${cardsWord(n)}: ${n === 1 ? 'it gets a 3D model' : 'each gets a 3D model'}`)
+  if (docked.have.length) notes.push(`${docked.have.length} already ${docked.have.length === 1 ? 'has' : 'have'} one`)
+  if (docked.plain.length) notes.push(`${docked.plain.length} with no picture`)
+  const status = busy ? 'Claude is running it. Watch the chat box.'
+    : n ? notes.join(' · ')
+    : why ?? 'No cards docked: made from the words alone'
 
   return (
     <div
@@ -207,73 +149,89 @@ export const Gen3dWindow: React.FC<{ nodeId: string }> = ({ nodeId }) => {
       data-wheel-own=""
       style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: PANEL_BG }}
     >
-      <style>{`.g3-ref .g3-x, .g3-view .g3-x { opacity: 0; transition: opacity 0.1s } .g3-ref:hover .g3-x, .g3-view:hover .g3-x { opacity: 1 } .g3-item:hover { background: rgba(255,210,74,0.10) }`}</style>
+      <style>{`.g3-item:hover { background: rgba(255,210,74,0.10) }`}</style>
       <ContentScaled factor={ui}>
         <div style={{ position: 'relative', width: '100%', height: '100%', fontFamily: 'system-ui, sans-serif', color: INK }}>
-          <RefBox nodeId={nodeId} card={ref} gone={!!st.ref && !ref} linking={linking} />
-
+          <div style={{ ...caption, top: Y_GEN - 16 }}>Generator</div>
           <div
-            onClick={toggleViews}
-            title={canViews ? 'Extra views of the same thing (this generator takes them)' : 'Extra views: this generator takes one picture only'}
-            style={{
-              position: 'absolute', left: PAD + REF_W + 10, top: PAD + REF_H / 2 - 22, width: 26, height: 44, borderRadius: 6, boxSizing: 'border-box',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15,
-              border: `1px solid ${open ? `${GOLD}99` : LINE}`, background: open ? 'rgba(255,210,74,0.10)' : 'transparent',
-              color: open ? GOLD : INK, opacity: canViews || open ? 1 : 0.25, cursor: canViews || open ? 'pointer' : 'default',
-            }}
-          >▸</div>
-
-          {open && (
-            <div style={{ position: 'absolute', left: LEFT_W, top: PAD, width: VIEWS_W - PAD, height: REF_H }}>
-              <div style={{ height: 20, fontSize: 11, color: DIM, textTransform: 'uppercase', letterSpacing: 0.6 }}>Extra views</div>
-              {gen?.views.map((v, i) => (
-                <ViewRow key={v.key} nodeId={nodeId} slot={v.key} label={v.label} card={card(st.views?.[v.key])} linking={linking} top={22 + i * 36} />
-              ))}
-              {!canViews && <div style={{ fontSize: 12, color: FAINT, lineHeight: 1.5, paddingTop: 6 }}>This generator takes one picture only.</div>}
-            </div>
-          )}
-
-          <div style={{ position: 'absolute', left: PAD, top: PAD + REF_H + 5, width: COL_W, height: 16, fontSize: 11, color: DIM, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {ref ? <>The 3D model goes to <span style={{ color: INK }}>{ref.name}</span></> : 'No reference: made from the words alone'}
-          </div>
-
-          <div
+            className="g3-gen"
             onClick={() => setListOpen(o => !o)}
             title={gen ? `${gen.name}: ${gen.description}` : 'Pick a generator'}
-            style={{ ...field, position: 'absolute', left: PAD, top: PAD + REF_H + 28, width: COL_W, height: 30, display: 'flex', alignItems: 'center', gap: 6, padding: '0 10px', cursor: 'pointer', fontSize: 13, borderColor: listOpen ? `${GOLD}99` : LINE }}
+            style={{ ...big, left: PAD, right: PAD + SIDE_W + GAP, top: Y_GEN, gap: 8, padding: '0 12px', cursor: 'pointer', borderColor: listOpen ? `${GOLD}99` : LINE }}
           >
-            <span style={{ color: DIM, fontSize: 11, flexShrink: 0 }}>Generator</span>
-            <span style={{ flex: 1, minWidth: 0, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{gen?.name ?? 'none'}</span>
-            <span style={{ color: DIM, flexShrink: 0 }}>▾</span>
+            <span style={{ flex: 1, minWidth: 0, fontSize: 26, fontWeight: 700, letterSpacing: 0.2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{gen?.name ?? 'none'}</span>
+            <span style={{ color: DIM, fontSize: 18, flexShrink: 0 }}>▾</span>
+          </div>
+          <div
+            className="g3-texture"
+            onClick={() => { if (texture) setOpt(texture.key, !textureOn) }}
+            title={texture ? 'Texture: on or off' : 'Texture: this generator has no switch for it'}
+            style={{
+              ...big, right: PAD, width: SIDE_W, top: Y_GEN, gap: 9, padding: '0 12px', fontSize: 17, fontWeight: 700,
+              cursor: texture ? 'pointer' : 'default', opacity: texture ? 1 : 0.3,
+              color: textureOn ? INK : DIM, borderColor: textureOn ? `${GOLD}99` : LINE, background: textureOn ? 'rgba(255,210,74,0.10)' : '#11131b',
+            }}
+          >
+            <span style={{ width: 10, height: 10, borderRadius: 5, background: textureOn ? GOLD : 'rgba(232,238,255,0.2)', flexShrink: 0 }} />
+            Texture
           </div>
 
-          <div style={{ position: 'absolute', left: PAD, top: PAD + REF_H + 66, width: COL_W, height: 86, display: 'grid', gridTemplateColumns: '1fr 1fr', gridAutoRows: '26px', gap: '4px 8px' }}>
-            {gen?.options.slice(0, 6).map(o => <OptionCell key={o.key} o={o} value={opts[o.key]} onValue={v => setOpt(o.key, v)} />)}
+          <div style={{ ...caption, top: Y_FACES - 16 }}>Faces</div>
+          <div
+            title={faces ? `${faces.label}${facesRange}. Empty: left to the generator.` : 'Faces: this generator has no face limit to set'}
+            style={{ ...big, left: PAD, right: PAD + SIDE_W + GAP, top: Y_FACES, padding: '0 12px', opacity: faces ? 1 : 0.3 }}
+          >
+            <input
+              className="g3-faces"
+              disabled={!faces}
+              value={typeof facesValue === 'number' ? facesValue.toLocaleString('en-US') : ''}
+              placeholder={faces ? (faces.def !== undefined ? Number(faces.def).toLocaleString('en-US') : 'auto') : '—'}
+              inputMode="numeric"
+              onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+              onChange={e => {
+                if (!faces) return
+                const t = e.target.value.replace(/[^\d]/g, '')
+                setOpt(faces.key, t === '' ? undefined : Number(t))
+              }}
+              onBlur={() => {
+                if (!faces || typeof facesValue !== 'number') return
+                const v = Math.max(faces.min ?? facesValue, Math.min(faces.max ?? facesValue, facesValue))
+                if (v !== facesValue) setOpt(faces.key, v)
+              }}
+              style={{ width: '100%', minWidth: 0, height: BIG_H - 4, background: 'transparent', color: INK, border: 'none', outline: 'none', fontSize: 28, fontWeight: 700, fontFamily: 'inherit', letterSpacing: 0.5 }}
+            />
+          </div>
+          <div
+            className="g3-go"
+            onClick={() => { if (!why && !busy) runGen(nodeId) }}
+            title={why ?? (busy ? 'Claude is running the last one' : 'Pass this to Claude to run on Krea. It uses your Krea credits.')}
+            style={{
+              position: 'absolute', right: PAD, width: SIDE_W, top: Y_FACES, height: BIG_H, borderRadius: 8, boxSizing: 'border-box',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 800,
+              background: GOLD, color: '#15130a', opacity: why || busy ? 0.35 : 1, cursor: why || busy ? 'default' : 'pointer',
+            }}
+          >Generate</div>
+
+          <div style={{ position: 'absolute', left: PAD, right: PAD, top: Y_MORE, height: 26, display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: GAP }}>
+            {more.map(o => <OptionCell key={o.key} o={o} value={opts[o.key]} onValue={v => setOpt(o.key, v)} />)}
           </div>
 
+          <div style={{ ...caption, top: Y_PROMPT - 16 }}>Prompt</div>
           <textarea
             value={node.text}
             onChange={e => useFreeNodeStore.getState().updateFreeNode(nodeId, { text: e.target.value })}
             onKeyDown={e => e.stopPropagation()}
-            placeholder={ref ? 'Words to go with the picture, if the generator should have any' : 'What to make, in words'}
-            style={{ ...field, position: 'absolute', left: PAD, right: PAD, top: PAD + REF_H + 160, bottom: PAD + 34 + 10, resize: 'none', padding: '8px 10px', fontSize: 13, lineHeight: 1.5 }}
+            placeholder={n ? 'Words to go with the pictures, if the generator should have any' : 'What to make, in words'}
+            style={{ ...field, position: 'absolute', left: PAD, right: PAD, top: Y_PROMPT, bottom: PAD + 22, resize: 'none', padding: '8px 10px', fontSize: 13, lineHeight: 1.5 }}
           />
-
           <div
-            onClick={() => { if (!why && !busy) runGen(nodeId) }}
-            title={why ?? (busy ? 'Claude is running the last one' : 'Pass this to Claude to run on Krea. It uses your Krea credits.')}
-            style={{
-              position: 'absolute', left: PAD, bottom: PAD, width: 118, height: 34, borderRadius: 7, boxSizing: 'border-box',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700,
-              background: GOLD, color: '#15130a', opacity: why || busy ? 0.35 : 1, cursor: why || busy ? 'default' : 'pointer',
-            }}
-          >Generate</div>
-          <div style={{ position: 'absolute', left: PAD + 118 + 10, right: PAD, bottom: PAD, height: 34, display: 'flex', alignItems: 'center', fontSize: 11, lineHeight: 1.35, color: busy ? GOLD : DIM, overflow: 'hidden' }}>
-            {busy ? 'Claude is running it. Watch the chat box.' : why ?? ''}
-          </div>
+            className="g3-status"
+            title={n ? docked.make.map(g => g.name || 'Untitled').join(', ') : undefined}
+            style={{ position: 'absolute', left: PAD, right: PAD, bottom: PAD - 2, height: 18, lineHeight: '18px', fontSize: 11, color: busy ? GOLD : n ? INK : DIM, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+          >{status}</div>
 
           {listOpen && (
-            <div style={{ position: 'absolute', left: PAD, top: PAD, width: COL_W, height: REF_H + 24, boxSizing: 'border-box', background: '#0d0f17', border: `1px solid ${GOLD}66`, borderRadius: 8, display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 8px 24px rgba(0,0,0,0.6)' }}>
+            <div style={{ position: 'absolute', left: PAD, right: PAD, top: Y_GEN + BIG_H + 4, bottom: PAD, boxSizing: 'border-box', background: '#0d0f17', border: `1px solid ${GOLD}66`, borderRadius: 8, display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 8px 24px rgba(0,0,0,0.6)' }}>
               <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
                 {generators.map(g => (
                   <div
@@ -283,7 +241,7 @@ export const Gen3dWindow: React.FC<{ nodeId: string }> = ({ nodeId }) => {
                     onClick={() => { useUndoCoordinator.getState().checkpoint(); patchGen(nodeId, { generator: g.id }); setListOpen(false) }}
                     style={{ padding: '7px 10px', cursor: 'pointer', borderBottom: `1px solid ${LINE}`, borderLeft: `3px solid ${g.id === gen?.id ? GOLD : 'transparent'}` }}
                   >
-                    <div style={{ fontSize: 13, fontWeight: 600 }}>{g.name}</div>
+                    <div style={{ fontSize: 14, fontWeight: 600 }}>{g.name}</div>
                     <div style={{ fontSize: 11, color: DIM, lineHeight: 1.4 }}>{g.description}</div>
                     {takes(g) && <div style={{ fontSize: 11, color: FAINT, lineHeight: 1.4, marginTop: 2 }}>{takes(g)}</div>}
                   </div>

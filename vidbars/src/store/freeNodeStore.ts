@@ -105,7 +105,7 @@ export interface FreeNodeData {
   promptTabs?: { name: string; text: string }[]
   /** Card Prompts: the tab in use (index into promptTabs). */
   promptTab?: number
-  /** 3D generation window: its reference card, views, generator and options (utils/gen3d). Its words are `text`. */
+  /** 3D generation window: its generator and options (utils/gen3d). Its words are `text`; its cards are the ones docked on it. */
   gen3d?: import('../utils/gen3d').Gen3dState
   /** Effect cards: which operator, and its slider values (missing keys
    *  take their defaults — utils/fx/effects). */
@@ -289,7 +289,7 @@ const DEFAULT_HEIGHTS: Record<FreeNodeType, number> = {
   annotations: 520,
   area: 900,
   stateSpace: 720,
-  gen3d: 610,
+  gen3d: 380,
 }
 const DEFAULT_WIDTHS: Partial<Record<FreeNodeType, number>> = {
   audio: 260,
@@ -312,7 +312,7 @@ const DEFAULT_WIDTHS: Partial<Record<FreeNodeType, number>> = {
   annotations: 760,
   area: 1400,
   stateSpace: 1180,
-  gen3d: 300,
+  gen3d: 470,
 }
 
 /** A new free node's size before any zoom compensation. addFreeNode makes

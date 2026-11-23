@@ -631,7 +631,7 @@ export const TopIconBar: React.FC = () => {
     loopStrip: <IconButton Icon={IcLoopStrip} title="Loop strip — drop cards in and run effects over them" {...place('loopStrip')} />,
     scene3d: <IconButton Icon={IcScene3d} title="3D set — a mat that becomes a 3D workspace: dock model cards along it and lay their models out inside. Right-click it to fold it into a card" {...place('area')} />,
     stateSpace: <IconButton Icon={IcStateSpace} title="States — a workspace for states: drag cards in to make icons, draw lines between them, light the one that is now" {...place('stateSpace')} />,
-    gen3d: <IconButton Icon={IcGen3d} title="Generate 3D — link a card's picture in, pick a generator, and Claude runs it on Krea: the 3D model comes back into that card's deck" {...place('gen3d')} />,
+    gen3d: <IconButton Icon={IcGen3d} title="Generate 3D — dock cards or a deck on its side, pick a generator, and Claude makes a 3D model for each on Krea: it comes back behind its card" {...place('gen3d')} />,
     // The Effects wrapper carries fxBtnRef: the palette hangs under it, and
     // a press on it must not count as "outside" (IconButton forwards no ref).
     effects: (

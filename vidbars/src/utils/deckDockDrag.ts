@@ -34,8 +34,9 @@ export function viewportWindowRects(): WindowRect[] {
 export const CARD_READER_TYPES = new Set(['attributes', 'promptCards'])
 /** What cards magnet onto besides Viewers: the card readers, Film Look,
  *  which reads its docked cards the same way (utils/filmShots dockedCards),
- *  and the Card Browser, which browses them (utils/browserScope). */
-const CARD_MAGNET_TYPES = new Set([...CARD_READER_TYPES, 'filmMixer', 'list'])
+ *  the Card Browser, which browses them (utils/browserScope), and the 3D
+ *  generation window, which makes a 3D model for each (utils/gen3d). */
+const CARD_MAGNET_TYPES = new Set([...CARD_READER_TYPES, 'filmMixer', 'list', 'gen3d'])
 export function cardReaderRects(): WindowRect[] {
   return Object.values(useFreeNodeStore.getState().nodes)
     .filter(n => CARD_MAGNET_TYPES.has(n.type) && !n.pin)
