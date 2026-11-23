@@ -555,6 +555,14 @@ interface ModelScaleStore {
    *  (three/modelQuarter). Absent: as it came. */
   quarterOf: Record<string, ModelQuarter>
   setQuarter: (url: string, q: ModelQuarter | null) => void
+  /** How a 3D model is turned in the side view (Brian 2026-11-23: Alt
+   *  swung sideways over a 3D model card, the 3D models lift off their
+   *  cards facing out of them; "if a user has to set that model view angle
+   *  manually, then they do"): quarter turns of its own, used by that view
+   *  alone, kept with the model's FILE (by its url). Absent: its front
+   *  faces out of the card, its top to the card's top. */
+  sideOf: Record<string, ModelQuarter>
+  setSide: (url: string, q: ModelQuarter | null) => void
   /** Back as it came (Brian 2026-11-09: Reset): no place, turn, size or
    *  stretch of its own. */
   resetModel: (key: string) => void
@@ -631,6 +639,12 @@ export const useModelScaleStore = create<ModelScaleStore>()(persist(set => ({
     if (q) quarterOf[url] = q; else delete quarterOf[url]
     return { quarterOf }
   }),
+  sideOf: {},
+  setSide: (url, q) => set(s => {
+    const sideOf = { ...s.sideOf }
+    if (q) sideOf[url] = q; else delete sideOf[url]
+    return { sideOf }
+  }),
   placeOf: {},
   resetModel: key => set(s => {
     const drop = <T,>(m: Record<string, T>) => { const o = { ...m }; delete o[key]; return o }
@@ -663,6 +677,6 @@ export const useModelScaleStore = create<ModelScaleStore>()(persist(set => ({
   }),
 }), {
   name: 'vidbars-model-scale',
-  partialize: s => ({ unitsPerMetre: s.unitsPerMetre, sizeOf: s.sizeOf, setSizeOf: s.setSizeOf, poseOf: s.poseOf, tintOf: s.tintOf, placeOf: s.placeOf, stretchOf: s.stretchOf, lensOf: s.lensOf, floatOf: s.floatOf, pieceOf: s.pieceOf, quarterOf: s.quarterOf }),
+  partialize: s => ({ unitsPerMetre: s.unitsPerMetre, sizeOf: s.sizeOf, setSizeOf: s.setSizeOf, poseOf: s.poseOf, tintOf: s.tintOf, placeOf: s.placeOf, stretchOf: s.stretchOf, lensOf: s.lensOf, floatOf: s.floatOf, pieceOf: s.pieceOf, quarterOf: s.quarterOf, sideOf: s.sideOf }),
   storage: createDebouncedIDBStorage(400),
 }))

@@ -5,7 +5,11 @@
 //  - a Viewer with a loop strip and its Layers switch on: the strip's layers
 //    pull back behind its picture (Viewport3D/ExplodedStrip);
 //  - the Film Look Mixer with its layers on, the same;
-//  - a stacked deck: its cards fan back and to the side (Viewport3D/DeckPeek).
+//  - a stacked deck: its cards fan back and to the side (Viewport3D/DeckPeek);
+//  - a card or tile with a 3D model (Brian 2026-11-23): the side view, in
+//    which the 3D models near the middle of the view lift off their cards,
+//    facing out of them (`side`; found in tilt/altCamera peekOf, shown by
+//    tilt/TiltModels and three/tiltScene).
 // Nothing is stored: flat again, nothing is peeked.
 
 import { create } from 'zustand'
@@ -22,9 +26,12 @@ export type PeekTarget =
   | { kind: 'viewer'; id: string }
   | { kind: 'mixer'; id: string }
   | { kind: 'deck'; id: string }
+  /** A card or tile with a 3D model, by its key (`card:<id>`, `node:<id>`). */
+  | { kind: 'models'; id: string }
 
-/** What the view is peeking into, or null. */
-export const usePeek = create<{ target: PeekTarget | null }>(() => ({ target: null }))
+/** What the view is peeking into, or null. `side`: the peek is the 3D
+ *  models' side view (it began over a card showing a 3D model). */
+export const usePeek = create<{ target: PeekTarget | null; side: boolean }>(() => ({ target: null, side: false }))
 
 /** Where each stacked deck is, canvas units, and its cards in order (the
  *  front card first): written by CardLayer's StackedDeckCard as it draws. */
@@ -69,5 +76,5 @@ export function peekAt(el: Element | null, host: HTMLElement): { target: PeekTar
 
 // Back to flat, the peek is over.
 useTiltStore.subscribe((s, was) => {
-  if (isTilted(was) && !isTilted(s) && usePeek.getState().target) usePeek.setState({ target: null })
+  if (isTilted(was) && !isTilted(s) && usePeek.getState().target) usePeek.setState({ target: null, side: false })
 })

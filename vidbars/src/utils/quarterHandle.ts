@@ -13,6 +13,11 @@
 // a model on its own card or tile, or alone in a scene card's section; a
 // deck's row acts on the model on its face. Shapes made here (a cube, a
 // camera) have none: every card of one shares it.
+// In the 3D models' side view (utils/peek `side`, Brian 2026-11-23) the
+// same row sets the 3D model's side angle instead: how it is turned in
+// that view alone, also kept with its file (tiltStore sideOf). Its turns
+// and tips there change nothing anywhere else; Mirror is the file's own
+// and has nothing to do there.
 // Installed once when this module loads, ahead of the canvas's own
 // listeners, so a press on a button reaches nothing else.
 
@@ -21,6 +26,7 @@ import { useUndoCoordinator } from '../store/undoCoordinator'
 import { useManip } from '../store/manipStore'
 import { models, modelKey, soloFloat } from '../components/Canvas/tilt/TiltModels'
 import { standsIn } from './area3dScene'
+import { usePeek } from './peek'
 import { quarterable, stepQuarter, type QuarterStep } from '../three/modelQuarter'
 
 type Act = QuarterStep | 'reset'
@@ -147,13 +153,14 @@ function draw() {
   const cx = s.ground.x, cy = s.ground.y + DROP
   spots = XS.map(x => ({ x: cx + x, y: cy }))
   const hit = cursor ? spots.findIndex(p => Math.hypot(cursor!.x - p.x, cursor!.y - p.y) <= R + 1) : -1
-  const q = useModelScaleStore.getState().quarterOf[url]
+  const side = usePeek.getState().side
+  const q = side ? useModelScaleStore.getState().sideOf[url] : useModelScaleStore.getState().quarterOf[url]
   BUTTONS.forEach((b, i) => {
     const P = parts[i]
     P.g.setAttribute('transform', `translate(${spots[i].x - r0.left} ${spots[i].y - r0.top})`)
     // Lit: pointed at, or (Mirror) on. Dim: nothing for it to do.
     const lit = i === hit || (b.act === 'mirror' && !!q?.mirror)
-    const dim = b.act === 'reset' && !q
+    const dim = (b.act === 'reset' && !q) || (side && b.act === 'mirror')
     const ink = lit ? '#fff' : ACCENT
     P.disc.setAttribute('fill', lit ? ACCENT : DARK)
     P.disc.setAttribute('stroke', i === hit ? '#fff' : ACCENT)
@@ -186,6 +193,15 @@ function press(key: string, act: Act) {
   const url = urlOf(key)
   if (!quarterable(url)) return
   const ms = useModelScaleStore.getState()
+  if (usePeek.getState().side) {
+    // The side view's own angle.
+    const at = ms.sideOf[url]
+    if (act === 'mirror' || (act === 'reset' && !at)) return
+    useUndoCoordinator.getState().checkpoint()
+    const to = act === 'reset' ? null : stepQuarter(at, act)
+    ms.setSide(url, to && { q: to.q })
+    return
+  }
   const now = ms.quarterOf[url]
   if (act === 'reset') {
     if (now) { useUndoCoordinator.getState().checkpoint(); ms.setQuarter(url, null) }

@@ -15,6 +15,7 @@ import { useCanvasStore } from '../store/canvasStore'
 import { useManip } from '../store/manipStore'
 import { models, modelKey, soloFloat, setSoloFloat } from '../components/Canvas/tilt/TiltModels'
 import { standsIn, dataKey } from './area3dScene'
+import { usePeek } from './peek'
 import { overQuarterRow } from './quarterHandle'
 
 /** The dot's radius, and how near a press counts as on it (px). */
@@ -54,7 +55,9 @@ const floatOfKey = (key: string, dk: string) => soloFloat(key) ?? useModelScaleS
 const setFloatOf = (key: string, dk: string, h: number | null) => {
   if (soloFloat(key) !== null) setSoloFloat(key, h); else useModelScaleStore.getState().setFloat(dk, h)
 }
-const live = () => isTilted(useTiltStore.getState()) && !useManip.getState().through && !!models.floatSpot
+// (Not in the 3D models' side view, utils/peek: there they lie over their
+// cards, and how high is the view's own.)
+const live = () => isTilted(useTiltStore.getState()) && !useManip.getState().through && !!models.floatSpot && !usePeek.getState().side
 
 // ── Drawing ──
 // Two layers: the mark and stem under the 3D view's canvas, so the model

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react'
 import {
-  useTiltStore, useModelScaleStore, isTilted, offFlat, standTilt, standRise, unprojectTilt, TILT_DRAW_FAR, TILT_MAX, tiltP,
+  useTiltStore, useModelScaleStore, isTilted, offFlat, standTilt, standRise, unprojectTilt, centrePoint, TILT_DRAW_FAR, TILT_MAX, tiltP,
 } from '../../../store/tiltStore'
 import { CAMERA_LENS } from '../../../store/tiltStore'
 import { usePeek } from '../../../utils/peek'
@@ -356,7 +356,7 @@ const frameState = (): TiltFrameState => {
   const world = worldSizes(), trueSize = useWorldScale.getState().trueSize
   // (A card's model on its card: not a folded scene's small showing.)
   const emphOf = (key: string) => trueSize || !key.startsWith('card:') ? 1 : world.of(dataKey(key).slice(5)).emph
-  const { unitsPerMetre: scales, sizeOf, setSizeOf, poseOf, tintOf, stretchOf, lensOf } = useModelScaleStore.getState()
+  const { unitsPerMetre: scales, sizeOf, setSizeOf, poseOf, tintOf, stretchOf, lensOf, sideOf } = useModelScaleStore.getState()
   const through = useManip.getState().through
   // The models of sets shown live in the flat view (utils/liveTop).
   const live = liveKeys()
@@ -398,6 +398,7 @@ const frameState = (): TiltFrameState => {
     notesOf: url => notesNow.models[url],
     lock: ts.lock3d || !!through,
     lensFor: key => key.startsWith('mini:') ? miniLook.get(key)?.lens : lensOf[dataKey(key)],
+    sideFor: url => sideOf[url]?.q,
     through,
     inLook: lookSet ? key => inSet(key, lookSet) : undefined,
     paths: tilted3d() ? pathFrame() : undefined,
@@ -3083,9 +3084,13 @@ function collectTargets(W: number, H: number): TiltTarget[] {
   // stay flat in their cards (Brian 2026-11-04).
   // (But for the models of a set shown live in the flat view, utils/
   // liveTop: they have no piece to stay in their place.)
+  // (And but for the 3D models' side view, a peek begun over a card with a
+  // 3D model, Brian 2026-11-23: there the ones on their own cards and
+  // tiles lift off them, lying as their cards do; see `lie` below.)
+  const side = usePeek.getState().side
   const peeking = !!usePeek.getState().target
   const liveOnly = peeking ? liveKeys() : null
-  if (liveOnly && !liveOnly.size) return []
+  if (liveOnly && !liveOnly.size && !side) return []
   const out: TiltTarget[] = []
   const { pan, zoom } = useCanvasStore.getState()
   // In a 3D area's scene, a model stands where it was put there (up in
@@ -3227,7 +3232,24 @@ function collectTargets(W: number, H: number): TiltTarget[] {
       if (o < 0.995) keep[i] = { ...t, dim: o }
     }
   }
-  return liveOnly ? keep.filter(t => liveOnly.has(t.key) || liveOnly.has(dataKey(t.key))) : keep
+  if (!liveOnly) return keep
+  const out2: TiltTarget[] = []
+  // The side view shows the 3D models near the middle of the view (Brian
+  // 2026-11-23: "maybe it shows the models within a radius, just like the
+  // sort of tilted canvas has a distance radius"): the same distance, so
+  // many feet of the world (utils/worldScale), with its soft edge; with
+  // that fade switched off, all of them.
+  const ws = useWorldScale.getState(), ts = useTiltStore.getState()
+  const mid = side && ws.fadeOn ? centrePoint(ts) : null
+  const near: Far | null = mid && { a: 1, cx: mid.x, cy: mid.y, r: ws.fadeFt * worldPer(ws) * (zoom || 1) }
+  for (const t of keep) {
+    if (liveOnly.has(t.key) || liveOnly.has(dataKey(t.key))) { out2.push(t); continue }
+    // On its own card or tile: not a Viewer's, a set's or a path's.
+    if (!side || t.mini || inScene(t) || !(t.key.startsWith('card:') || t.key.startsWith('node:'))) continue
+    const o = Math.min(t.dim ?? 1, farShown(near, t.u, t.v, t.w, t.h))
+    if (o > FAR_GONE) out2.push({ ...t, lie: true, dim: o < 0.995 ? o : undefined })
+  }
+  return out2
 }
 
 

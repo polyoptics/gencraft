@@ -63,6 +63,11 @@ export interface TiltTarget {
   /** How much of it shows, 0..1 (default 1): far from the middle of a
    *  side view it fades away with its card (TiltModels FAR). */
   dim?: number
+  /** In the 3D models' side view (utils/peek `side`, Brian 2026-11-23): it
+   *  lifts off its card lying as the card does, its front out of the card
+   *  and its top to the card's top (or as its side angle has it,
+   *  TiltFrameState sideFor), in place of standing up on it. */
+  lie?: boolean
 }
 
 /** A flat element given thickness on the tilted plane: a rounded slab
@@ -195,6 +200,9 @@ export interface TiltFrameState {
   poseFor?: (key: string) => [number, number, number, number] | undefined
   /** A model riding a path (utils/pathRide): how the path turns it there,
    *  about its feet. Absent: it stands as it is. */
+  /** How a model file is turned in the side view (useModelScaleStore
+   *  sideOf), for the ones lying (TiltTarget lie). Absent: as it came. */
+  sideFor?: (url: string) => [number, number, number, number] | undefined
   rideFor?: (key: string) => [number, number, number, number] | null | undefined
   /** Riding, the middle of its box keeps to the path and it turns about
    *  that middle (PathRider.centre). */
@@ -329,7 +337,15 @@ interface Standing {
   /** When it began turning on the turntable (ms): its turn starts from
    *  how it stands. null: not turning. */
   turnAt: number | null
+  /** How far it lies as its card does (the side view, TiltTarget lie),
+   *  0..1: eased over LIE_MS when that changes while it shows. */
+  lie: number
 }
+/** How long a model takes between standing and lying, where the view
+ *  changes from one to the other with it in sight (ms). */
+const LIE_MS = 260
+const FLAT_Q = new THREE.Quaternion()
+const lieQ = new THREE.Quaternion()
 
 const WIRE_MAT = new THREE.MeshBasicMaterial({ color: 0x9fd0ff, wireframe: true, transparent: true, opacity: 0.85 })
 /** Over a surface the wire is drawn where the surface is, so it may sit
@@ -780,6 +796,8 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
 
   const standing = new Map<string, Standing>()
   let frameNo = 0
+  /** When the last frame was drawn (ms): a model's ease to lying. */
+  let lieAt = 0
   // The 3D notes on the models (three/notesOverlay).
   const notes = createNotesOverlay()
   // The canvas's curves, in 3D (three/pathOverlay), and the manipulator
@@ -826,7 +844,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     const s: Standing = {
       url, stand, turn, orient, pose, gizmo: null, rig: null, tint: null, baseColors: null, back: null, spun: [], inst: null, size: new THREE.Vector3(), unit: 1, unitSet: false, triangles: 0,
       figure, wall, wallText: '', look: null, dead: false, seen: frameNo, shownAt: 0,
-      mats: [], alpha: -1, base: 0, footR: 0, quarter: 0, swapping: false, turnAt: null,
+      mats: [], alpha: -1, base: 0, footR: 0, quarter: 0, swapping: false, turnAt: null, lie: -1,
     }
     acquireModel(url).then(inst => {
       if (s.dead) { releaseModel(url); disposeInstance(inst); return }
@@ -1388,6 +1406,12 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     const swingK = Math.min(1, Math.abs(st.yaw) / 35)
     const rise = st.lock ? 1 : Math.min(1, Math.max(0, (st.tilt - 4) / 26)) * (1 - swingK * swingK * (3 - 2 * swingK))
     const easeAll = rise * rise * (3 - 2 * rise)
+    // In the side view they lift off their cards as the view swings (or
+    // tips: a peek does a little), over the same first degrees.
+    const sideX = st.lock ? 1 : Math.min(1, Math.max(0, (off - 4) / 11))
+    const easeSide = sideX * sideX * (3 - 2 * sideX)
+    const dt = into ? 0 : Math.min(100, Math.max(0, now - (lieAt || now)))
+    if (!into) lieAt = now
     let anyFull = false
     const keep = new Set<string>()
     for (const tg of targets) {
@@ -1395,12 +1419,18 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       let s = standing.get(tg.key)
       if (s && s.url !== tg.url) { drop(tg.key, s); s = undefined }
       if (!s) s = spawn(tg.key, tg.url)
+      // Standing or lying: as asked at once when it comes into sight, eased
+      // when that changes with it in sight.
+      const lieTo = tg.lie ? 1 : 0
+      if (s.lie < 0 || frameNo - s.seen > 3) s.lie = lieTo
+      else if (s.lie !== lieTo) s.lie = lieTo ? Math.min(1, s.lie + dt / LIE_MS) : Math.max(0, s.lie - dt / LIE_MS)
+      const lie = s.lie * s.lie * (3 - 2 * s.lie)
       s.seen = frameNo
       if (s.inst && !s.swapping && s.quarter !== quarterStamp(s.url)) reseat(s)
       // (One a set shows live in the flat view stands whole at any tilt.)
       const full = !!st.full?.(tg.key)
       const dim = tg.dim ?? 1
-      const ease = full ? 1 : easeAll, fade = (full ? 1 : st.fade) * dim
+      const ease = full ? 1 : easeAll + (easeSide - easeAll) * lie, fade = (full ? 1 : st.fade) * dim
       if (full) anyFull = true
       // Floating (the lift handle): up off its card, rising in with the
       // rest of the 3D look.
@@ -1414,6 +1444,14 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       if (tall) k = tall / Math.max(s.size.y, 1e-6)
       else if (st.heightSeen && s.inst && !tg.mini) st.heightSeen(tg.key, s.size.y * k)
       s.footR = Math.max(s.size.x, s.size.z) * k / 2
+      // Lying (the side view): its middle over the card's, lifted clear of
+      // the card whichever way it is turned, and turned from standing to
+      // lying as the card does (or to its own side angle).
+      if (lie > 0) {
+        s.stand.position.z += lie * ease * (Math.max(s.size.x, s.size.y, s.size.z) * k * 0.5 + tg.w * 0.1)
+        const sq = st.sideFor?.(s.url)
+        s.stand.quaternion.copy(STAND_Q).slerp(sq ? lieQ.set(sq[0], sq[1], sq[2], sq[3]) : FLAT_Q, lie)
+      } else s.stand.quaternion.copy(STAND_Q)
       // ...and grow up out of them when the tilt starts, or when one
       // turns up while tilted, rather than popping on.
       if (s.inst && !s.shownAt) s.shownAt = now
@@ -1429,7 +1467,9 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       // picture as a flat print of its footprint in the first degrees of
       // tilt (Brian 2026-10-30). A Viewer's still pops up from flat.
       const up = tg.pop ? ease : 0.4 + 0.6 * ease
-      s.stand.scale.set(k, k * Math.max(up * (tg.pop ? 1 : since), 0.001), k)
+      // (Lying, it is whole: it comes in with the fade alone.)
+      const grown = up * (tg.pop ? 1 : since)
+      s.stand.scale.set(k, k * Math.max(grown + (1 - grown) * lie, 0.001), k)
       if (s.alpha !== fade) {
         s.alpha = fade
         for (const x of s.mats) fadeMat(x.m, x.o, x.t, fade)
@@ -1454,7 +1494,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
         // already turning turn animation"), each time the turning starts:
         // Turn switched on, the model coming up out of its card, or
         // squared up another way. So a row of them turns together.
-        const turning = st.turn && !placed && s.stand.visible
+        const turning = st.turn && !placed && s.stand.visible && !tg.lie
         if (!into) { if (!turning) s.turnAt = null; else if (s.turnAt === null) s.turnAt = now }
         const a = turning ? (now - (s.turnAt ?? now)) / 1000 * 0.6 : 0
         s.turn.rotation.set(0, a, 0)
@@ -1487,7 +1527,8 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       const sv = st.stretchFor?.(tg.key) ?? ONE3
       if (s.inst) {
         s.pose.scale.set(sv[0], sv[1], sv[2])
-        s.orient.position.y = s.size.y / 2 * sv[1]
+        // (Lying, it is held by its middle.)
+        s.orient.position.y = s.size.y / 2 * sv[1] * (1 - lie)
         // Its middle on the path, not its feet.
         if (mid) s.stand.position.z -= s.stand.scale.y * s.orient.position.y
       }
@@ -1554,7 +1595,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       s.figure.position.set(Math.hypot(s.size.x, s.size.z) / 2 + 0.45 * s.unit, 0, 0)
       // A guessed person only where they would read: not a giant beside a
       // teacup. One the user sized always shows.
-      s.figure.visible = st.figure && easeAll > 0 && !!s.inst && (s.unitSet || PERSON_H * s.unit < s.size.y * 5)
+      s.figure.visible = st.figure && easeAll > 0 && !tg.lie && !!s.inst && (s.unitSet || PERSON_H * s.unit < s.size.y * 5)
 
       // Back wall: stands on the card's top edge.
       const text = s.inst
@@ -1566,15 +1607,17 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
         s.wall.material.needsUpdate = true
         s.wallText = text
       }
+      // (No wall behind one lying: it would stand across the view.)
+      const wallUp = easeAll * (1 - lie)
       const wallW = tg.w, wallH = tg.w / 4
-      s.wall.scale.set(wallW, wallH * Math.max(easeAll, 0.001), 1)
+      s.wall.scale.set(wallW, wallH * Math.max(wallUp, 0.001), 1)
       const wt = tg.wall ?? tg
-      s.wall.position.set(wt.u, -(wt.v - wt.h / 2), (wallH * easeAll) / 2)
+      s.wall.position.set(wt.u, -(wt.v - wt.h / 2), (wallH * wallUp) / 2)
       const d = Math.max(1.5, wallH * 0.07)
       const back = s.wall.getObjectByName('placard')!
       back.scale.z = d
       back.position.z = -d / 2 - 0.3
-      s.wall.visible = st.walls && !!text && easeAll > 0 && !tg.mini && dim > 0.5
+      s.wall.visible = st.walls && !!text && wallUp > 0 && !tg.mini && dim > 0.5
     }
     // A card missing for a frame or two (a re-render, a deck shuffling) is
     // only hidden: dropping it would reload the model and blink.
