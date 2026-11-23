@@ -1,12 +1,14 @@
 // gen3d.ts — the 3D generation window's job (Brian 2026-11-20): what a
 // generator takes, what the window holds, and the hand-off to Claude.
 //
-// VidBars does not call Krea. The window only DESCRIBES a job: the card
-// whose picture is the reference, the cards linked as extra views, the
-// generator and its options, the words. Generate passes that to the Claude
-// in the app (utils/agentChat), which runs it on Krea through its
-// connector and brings the 3D model back as a card: into the reference
-// card's deck, shown by that card's Model detail (utils/bringHome).
+// VidBars does not call Krea. The window only DESCRIBES a job: the cards
+// docked on its side (Brian 2026-11-23: "The generator's main purpose is
+// to hold the cards ... as many as I want, on the side of the generator,
+// or have a deck and dock a deck beside the generator, and then just hit
+// Go"), the generator and its options, the words. Generate passes that to
+// the Claude in the app (utils/agentChat), which runs it on Krea through
+// its connector and brings each 3D model back as a card: behind the card
+// it was made from, shown by that card's Model detail (utils/bringHome).
 //
 // The generators, their hover text and their options are Krea's own: read
 // from Krea's list (list_models, get_model_schema) and kept as Krea gave
@@ -20,6 +22,9 @@ import { useFreeNodeStore, type FreeNodeData } from '../store/freeNodeStore'
 import { getMediaItems } from '../types/bar'
 import { cardFaceMedia } from './cardGrid'
 import { sendJob } from './agentChat'
+import { dockedCards } from './filmShots'
+import { modelOfCard } from './area3dScene'
+import { detailShown } from './cardTypes'
 
 /** One input of a generator, as Krea's schema gives it. */
 interface KreaProp {
@@ -165,24 +170,17 @@ export function setGenerators(models: unknown): number {
 
 // ── What a window holds ─────────────────────────────────────────────────
 
-/** A 3D generation window's own settings (FreeNodeData.gen3d). Its words are the node's `text`. */
+/** A 3D generation window's own settings (FreeNodeData.gen3d). Its words
+ *  are the node's `text`; its cards are the ones docked on it, worked out
+ *  from where they are (genCards), never stored. */
 export interface Gen3dState {
   /** Krea's id of the generator picked. Absent: the first in the list. */
   generator?: string
-  /** The card whose face picture is the reference. The 3D model goes to this card. */
-  ref?: string
-  /** Extra views, by the generator's view key: the card whose face picture is that view. */
-  views?: Record<string, string>
-  /** The extra views are open (the window is that much wider). */
-  viewsOpen?: boolean
   /** Option values by Krea's field, per generator id, so each generator keeps its own. */
   opts?: Record<string, Record<string, number | boolean | string>>
   /** The chat box the last job was passed to. */
   box?: string
 }
-
-/** How much wider the window is with its extra views open, in its own units (before uiScale). */
-export const VIEWS_W = 236
 
 export function patchGen(nodeId: string, patch: Partial<Gen3dState>): void {
   const n = useFreeNodeStore.getState().nodes[nodeId]
@@ -190,23 +188,55 @@ export function patchGen(nodeId: string, patch: Partial<Gen3dState>): void {
   useFreeNodeStore.getState().updateFreeNode(nodeId, { gen3d: { ...n.gen3d, ...patch } })
 }
 
-/** A card's "+" let go on the window (LinkDragOverlay): `slot` is `ref` or a view key. */
-export function linkGenCard(nodeId: string, slot: string, cardId: string): void {
-  const n = useFreeNodeStore.getState().nodes[nodeId]
-  if (!n || n.type !== 'gen3d') return
-  if (slot === 'ref') patchGen(nodeId, { ref: cardId })
-  else patchGen(nodeId, { views: { ...n.gen3d?.views, [slot]: cardId } })
-}
+/** A card's "+" let go on a window row (LinkDragOverlay "gen:"): the window
+ *  has had no such rows since its cards are docked (2026-11-23). Nothing. */
+export function linkGenCard(_nodeId: string, _slot: string, _cardId: string): void { /* no rows to link to */ }
 
 export function generatorFor(node: FreeNodeData | undefined, list: Generator[]): Generator | undefined {
   return list.find(g => g.id === node?.gen3d?.generator) ?? list[0]
 }
+
+/** A generator's face limit, whatever Krea calls it for that one (face
+ *  limit, face count, target polycount, decimation target). */
+export const facesOption = (gen: Generator | undefined): GenOption | undefined =>
+  gen?.options.find(o => o.kind === 'number' && /face|poly|decimation/.test(o.key))
+/** A generator's texture switch. */
+export const textureOption = (gen: Generator | undefined): GenOption | undefined =>
+  gen?.options.find(o => o.kind === 'switch' && o.key === 'generate_texture')
 
 /** Does the card's face hold a picture to send? */
 export function facePicture(g: ProjectGroup | undefined): boolean {
   if (!g) return false
   const m = cardFaceMedia(g, useBoardsStore.getState().boards)
   return !!m && (m.type === 'image' || !!m.posterUrl)
+}
+
+/** Does the card's Model detail already show a 3D model's card? */
+function hasModel(g: ProjectGroup, groups: ProjectGroup[]): boolean {
+  const { boards } = useBoardsStore.getState()
+  return !!g.details?.some(d => {
+    if (d.name.trim().toLowerCase() !== 'model' || !d.link || d.link.detail || d.link.count || d.link.rankOf) return false
+    const c = detailShown(groups, d).card
+    return !!c && !!modelOfCard(c, boards)
+  })
+}
+
+/** The cards docked on a window, sorted for Generate: `make` get a 3D
+ *  model each, in reading order; `have` already show one in their Model
+ *  detail and are left alone; `plain` have no picture on their face. A
+ *  card that IS a 3D model (one made here, sitting behind its card) is
+ *  not counted at all. */
+export function genCards(node: FreeNodeData | undefined): { make: ProjectGroup[]; have: ProjectGroup[]; plain: ProjectGroup[] } {
+  const out = { make: [] as ProjectGroup[], have: [] as ProjectGroup[], plain: [] as ProjectGroup[] }
+  if (!node) return out
+  const { groups, boards } = useBoardsStore.getState()
+  for (const g of dockedCards(node, groups, boards)) {
+    if (g.effect || modelOfCard(g, boards)) continue
+    if (hasModel(g, groups)) out.have.push(g)
+    else if (!facePicture(g)) out.plain.push(g)
+    else out.make.push(g)
+  }
+  return out
 }
 
 /** The block of a card that holds its face picture, by name, for Claude to pick the right file. */
@@ -232,11 +262,12 @@ const cardLine = (g: ProjectGroup): string => {
 /** Why the job cannot run yet, in plain words, or null when it can. */
 export function notReady(node: FreeNodeData | undefined): string | null {
   if (!node) return 'No window'
-  const { groups } = useBoardsStore.getState()
-  const ref = node.gen3d?.ref ? groups.find(g => g.id === node.gen3d?.ref) : undefined
-  if (node.gen3d?.ref && !ref) return 'The reference card is gone'
-  if (ref && !facePicture(ref)) return 'The reference card has no picture on its face'
-  if (!ref && !node.text.trim()) return 'Link a card as the reference, or write what to make'
+  const c = genCards(node)
+  if (c.make.length) return null
+  if (c.have.length && !c.plain.length) return c.have.length === 1 ? 'The docked card already has a 3D model' : `All ${c.have.length} docked cards already have a 3D model`
+  if (c.plain.length && !c.have.length) return c.plain.length === 1 ? 'The docked card has no picture on its face' : 'The docked cards have no picture on their faces'
+  if (c.have.length || c.plain.length) return 'No docked card needs a 3D model'
+  if (!node.text.trim()) return 'Dock cards on its side, or write what to make'
   return null
 }
 
@@ -245,37 +276,40 @@ export function jobText(nodeId: string): string | null {
   const node = useFreeNodeStore.getState().nodes[nodeId]
   const gen = generatorFor(node, useGenerators.getState().generators)
   if (!node || !gen || notReady(node)) return null
-  const { groups } = useBoardsStore.getState()
   const st = node.gen3d ?? {}
-  const ref = st.ref ? groups.find(g => g.id === st.ref) : undefined
-  const views = ref ? gen.views.map(v => ({ v, g: groups.find(g => g.id === st.views?.[v.key]) })).filter((x): x is { v: GenView; g: ProjectGroup } => !!x.g && facePicture(x.g)) : []
+  const cards = genCards(node).make
   const opts = st.opts?.[gen.id] ?? {}
   const set = gen.options.filter(o => opts[o.key] !== undefined && opts[o.key] !== '').map(o => `${o.key}: ${JSON.stringify(opts[o.key])}`)
   const words = node.text.trim()
+  const many = cards.length > 1
   const lines: string[] = [
     `A 3D generation job from the "${node.label}" window in VidBars (tool ${nodeId}). The artist pressed Generate: run it on Krea now, exactly as set here, without asking first.`,
     '',
     `Generator: ${gen.id} (${gen.name})`,
-    ref ? `Reference picture: ${cardLine(ref)}` : 'Reference picture: none. This is text to 3D (input_mode "text").',
   ]
-  if (views.length) {
-    lines.push('Extra views of the same thing:')
-    for (const { v, g } of views) lines.push(`- ${v.label}${v.key.startsWith('image:') ? '' : ` (${v.key})`}: ${cardLine(g)}`)
+  if (cards.length) {
+    lines.push(many ? `Make ONE 3D model for EACH of these ${cards.length} cards, from that card's own picture:` : 'Make one 3D model from this card\'s picture:')
+    for (const g of cards) lines.push(`- ${cardLine(g)}`)
+  } else {
+    lines.push('No picture. This is text to 3D (input_mode "text").')
   }
-  lines.push(words ? `Words (prompt): ${words}` : 'Words (prompt): none')
-  lines.push(set.length ? `Options: ${set.join(', ')}` : 'Options: none set, leave them to the generator')
-  lines.push('', 'How:')
-  if (ref) {
-    lines.push('1. get_card_media for the cards above (kinds: image) and upload each picture to Krea (get_upload_url, then send_file).')
-    lines.push(`2. Krea generate_3d with model ${gen.id}: the reference picture first in image_urls${views.some(x => x.v.key.startsWith('image:')) ? ', then the extra views in the order given' : ''}${views.some(x => !x.v.key.startsWith('image:')) ? ', and each named view in its own field' : ''}, the words as prompt if there are any, and the options.`)
-    lines.push(`3. When it is done, deal_deck ONE new card that holds the 3D model (its preview picture as the model's thumbnail), named "${ref.name} 3D", from: ["${ref.id}"].`)
-    lines.push(`4. bring_home from "${ref.id}" with that new card, so it joins that card's deck and its Model detail shows it. If the answer says the Model detail already shows another card, leave it and ask the artist whether to replace it.`)
+  lines.push(words ? `Words (prompt)${many ? ', the same for each' : ''}: ${words}` : 'Words (prompt): none')
+  lines.push(set.length ? `Options${many ? ', the same for each' : ''}: ${set.join(', ')}` : 'Options: none set, leave them to the generator')
+  lines.push('', many ? 'How, for each card in turn:' : 'How:')
+  if (cards.length) {
+    lines.push('1. get_card_media for the card (kinds: image) and upload its picture to Krea (get_upload_url, then send_file).')
+    lines.push(`2. Krea generate_3d with model ${gen.id}: that picture in image_urls, the words as prompt if there are any, and the options.`)
+    lines.push('3. When it is done, deal_deck ONE new card that holds the 3D model (its preview picture as the 3D model\'s thumbnail), named "<the card\'s name> 3D", from: [that card\'s id].')
+    lines.push('4. bring_home from that card\'s id with the new card, so it goes behind that card and its Model detail shows it.')
+    if (many) lines.push('You may start the Krea jobs together and bring each one home as it finishes. If one fails, go on with the rest.')
   } else {
     lines.push(`1. Krea generate_3d with model ${gen.id}, input_mode "text", the words as prompt, and the options.`)
-    lines.push('2. When it is done, deal_deck ONE new card that holds the 3D model (its preview picture as the model\'s thumbnail), named for what it is.')
+    lines.push('2. When it is done, deal_deck ONE new card that holds the 3D model (its preview picture as the 3D model\'s thumbnail), named for what it is.')
     lines.push(`3. Set that card down beside this window (tool ${nodeId}) if you can (list_tools gives its place, arrange_cards moves the card). It belongs to no card, so no bring_home.`)
   }
-  lines.push('', 'Say in one or two plain sentences what came back. If Krea refuses or fails, say why and stop; do not try another generator.')
+  lines.push('', many
+    ? 'At the end say in one or two plain sentences which cards got a 3D model and which did not, and why. Do not try another generator.'
+    : 'Say in one or two plain sentences what came back. If Krea refuses or fails, say why and stop; do not try another generator.')
   return lines.join('\n')
 }
 
@@ -285,8 +319,9 @@ export function runGen(nodeId: string): boolean {
   const text = jobText(nodeId)
   const gen = generatorFor(node, useGenerators.getState().generators)
   if (!node || !text || !gen) return false
-  const ref = node.gen3d?.ref ? useBoardsStore.getState().groups.find(g => g.id === node.gen3d?.ref) : undefined
-  const box = sendJob(text, `Generate 3D with ${gen.name}: ${ref ? ref.name : node.text.trim().slice(0, 80)}`)
+  const cards = genCards(node).make
+  const what = cards.length > 3 ? `${cards.length} cards` : cards.length ? cards.map(g => g.name || 'Untitled').join(', ') : node.text.trim().slice(0, 80)
+  const box = sendJob(text, `Generate 3D with ${gen.name}: ${what}`)
   patchGen(nodeId, { box })
   return true
 }
