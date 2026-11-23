@@ -10,6 +10,7 @@ import crypto from 'crypto'
 import { pipeline } from 'stream'
 import { spawn, type ChildProcess } from 'child_process'
 import { encodeUrlParam, isServableDiskPath, isUncPath } from './src/utils/diskUrl'
+import { libraryApi } from './libraryApi'
 
 /** Vite plugin: POST /api/upload — saves files to public/uploads/, returns URL */
 function fileUploadApi(): Plugin {
@@ -964,5 +965,5 @@ function agentChatApi(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [react(), tailwindcss(), pingApi(), agentApi(), agentChatApi(), fileUploadApi(), userTemplatesApi(), snapshotsApi(), browseApi()],
+  plugins: [react(), tailwindcss(), pingApi(), agentApi(), agentChatApi(), fileUploadApi(), userTemplatesApi(), snapshotsApi(), libraryApi(), browseApi()],
 })

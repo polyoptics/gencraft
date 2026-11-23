@@ -12,6 +12,7 @@
 // Each source binds to at most one window; items dedupe by activeItemKey
 // across the flattened list (first source wins).
 
+import { useLibraryStore, libraryCards, filterLibrary, libraryBrowseItem } from '../utils/library'
 import { useMemo } from 'react'
 import { useFreeNodeStore } from '../store/freeNodeStore'
 import { useBoardsStore } from '../store/boardsStore'
@@ -117,6 +118,14 @@ function listSourceItems(
   // contributes to a Viewer docked on its other side is the pool's files.
   // This is the middle link of the Pool | Rolodex | Viewer chain: none of
   // the three knows about the others, they are just adjacent.
+  // Lit to browse the saved projects (utils/library), it contributes THEIR
+  // cards' faces: what its rows send must be among what it is known to hold,
+  // or the Viewer drops it as stale.
+  if (n.library) {
+    return filterLibrary(libraryCards(useLibraryStore.getState().projects), { query: q.query, kind: q.kind, types: q.cardTypes })
+      .flatMap(c => libraryBrowseItem(c) ?? [])
+  }
+
   const pool = poolFeedingList(n, nodes)
   if (pool) {
     const files = getPoolContents(pool.id).files
@@ -206,6 +215,8 @@ export function useDockedSources(windowId: string): DockedSource[] {
   // Zoom-reactive like useCardDecks: card dock geometry follows the
   // visual card bounds, which include the zoom-dependent header extend.
   const zoom = useCanvasStore(s => s.zoom)
+  // A browser showing the saved projects feeds from these (listSourceItems).
+  const libraryProjects = useLibraryStore(s => s.projects)
 
   return useMemo(() => {
     // This window's own placement picks the stratum everything is read in.
@@ -278,7 +289,7 @@ export function useDockedSources(windowId: string): DockedSource[] {
     }
 
     return out
-  }, [windowId, windows, nodes, groups, boards, zoom])
+  }, [windowId, windows, nodes, groups, boards, zoom, libraryProjects])
 }
 
 /** Key-dedupe within one item list (a list source can match a card that

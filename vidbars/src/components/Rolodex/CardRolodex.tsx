@@ -56,6 +56,7 @@ import { poolFeedingList, viewerAdjacentTo } from '../../utils/componentLinks'
 import { useViewport3DStore } from '../../store/viewport3dStore'
 import { collectDeckContent, defaultBrowseItem, tileBrowseItem, type BrowseItem } from '../../utils/contentTraversal'
 import { browserScope, trayScope } from '../../utils/browserScope'
+import { useLibraryStore, libraryCards, filterLibrary, libraryBrowseItem, LIBRARY_DRAG_MIME, type LibraryCard, type LibraryDrag } from '../../utils/library'
 import { useTrayStore, TRAY_QUERY } from '../../store/trayStore'
 import {
   DEFAULT_HEADER_STYLE,
@@ -66,7 +67,7 @@ import { ensureFontLoaded, hexToRgba } from '../UI/TextFormatToolbar'
 import { FileContextMenu } from '../UI/FileMenu'
 import { mayHaveDiskFile } from '../../hooks/useFileMenu'
 import { lyingUp, nearer } from '../../utils/deckAway'
-import { CARD_TYPES, CARD_TYPE_ORDER, typeColor, type CardType } from '../../utils/cardTypes'
+import { CARD_TYPES, CARD_TYPE_ORDER, typeColor, cardTypeOf, type CardType } from '../../utils/cardTypes'
 
 // Card width — uniform across active and tucked cards. The active card
 // "rises" only via vertical growth (expansion); it's never wider than
@@ -283,6 +284,9 @@ type RolodexRow =
   // exists yet. Every switch on `kind` must handle it: the group fallback
   // at the end of those switches would read `row.group` off it.
   | { kind: 'addfx'; effect: EffectKind; level: 0; isDeck: false }
+  // A card of a SAVED project, not of this canvas (utils/library): there to
+  // look at and drag in, never to act on.
+  | { kind: 'libcard'; card: LibraryCard; level: 0 | 1; isDeck: boolean }
 
 // hasRenderableContent + sortGroups moved to utils/contentKinds.ts so the
 // pinned-list evaluator shares them (tile results must equal rolodex
@@ -852,7 +856,25 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string }; tray?: TrayB
       void loadPoolDir(feedingPool.id, feedingPool.poolDir ?? 'public/uploads')
     }
   }, [feedingPool])
+  // ── All projects: the saved projects' cards instead of this canvas's ──
+  const [flLibrary, setFlLibrary] = useState(false)
+  const library = !tray && (embedded ? !!embeddedNode?.library : flLibrary)
+  const setLibrary = (on: boolean) => {
+    if (embedded && embeddedNode) useFreeNodeStore.getState().updateFreeNode(embeddedNode.id, { library: on })
+    else setFlLibrary(on)
+  }
+  const libraryProjects = useLibraryStore(s => s.projects)
+  const libraryLeft = useLibraryStore(s => s.left)
+  // Read (again) each time it is lit: only new and changed saves are fetched.
+  useEffect(() => { if (library) void useLibraryStore.getState().load() }, [library])
+  const libraryRows = useMemo((): RolodexRow[] => {
+    if (!library) return []
+    return filterLibrary(libraryCards(libraryProjects), { query: searchQuery, kind: kindFilter, types: typeFilter })
+      .map(c => ({ kind: 'libcard' as const, card: c, level: c.level, isDeck: !!c.deck }))
+  }, [library, libraryProjects, searchQuery, typeFilter, kindFilter])
+
   const rows = useMemo(() => {
+    if (library) return libraryRows
     // MAGNETED TO A POOL: this Rolodex stops being a browser for the canvas
     // and becomes a browser for that pool. Nothing was wired to make this
     // happen — the link is derived from the two panels touching, so pulling
@@ -878,7 +900,7 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string }; tray?: TrayB
     if (addRows.length === 0 && tileRows.length === 0) return groupRows
     return [...addRows, ...groupRows, ...tileRows]
   }, [visibleGroups, sortMode, view, collapsedDeckIdSet, includeCanvasItems, freeNodes,
-      kindFilter, searchQuery, feedingPool, poolFiles])
+      kindFilter, searchQuery, feedingPool, poolFiles, library, libraryRows])
 
   // Rows, in a ref, so the send-to-Viewer callbacks can read the current
   // list without being rebuilt every time it changes.
@@ -1184,6 +1206,8 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string }; tray?: TrayB
       item = { kind: 'media', mediaType: row.file.kind, url: row.file.url, name: row.file.name }
     } else if (row.kind === 'freenode') {
       item = tileBrowseItem(row.node)
+    } else if (row.kind === 'libcard') {
+      item = libraryBrowseItem(row.card)
     } else {
       const bs = useBoardsStore.getState()
       item = defaultBrowseItem(collectDeckContent(row.group.id, bs.groups, bs.boards))
@@ -1742,7 +1766,7 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string }; tray?: TrayB
                 // Stop arrow keys from triggering canvas pan / nav.
                 e.stopPropagation()
               }}
-              placeholder={dockScope ? `IN ${dockScope.label.toUpperCase()}` : 'SEARCH'}
+              placeholder={library ? 'SEARCH SAVED' : dockScope ? `IN ${dockScope.label.toUpperCase()}` : 'SEARCH'}
               title={dockScope ? `Browsing what is docked: ${dockScope.label}` : undefined}
               spellCheck={false}
               autoComplete="off"
@@ -1800,6 +1824,22 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string }; tray?: TrayB
                   padding: '1px 6px', cursor: 'pointer', fontFamily: 'inherit', lineHeight: 1.4,
                 }}
               >＋</button>
+              {/* ── Saved projects ── a toggle, lit or unlit: the same words
+                  either way. */}
+              <button
+                onClick={() => setLibrary(!library)}
+                title={library
+                  ? 'Showing the cards and decks of every saved project. Drag one onto the canvas to bring in a copy. Click to browse this canvas again'
+                  : 'Browse the cards and decks of every saved project'}
+                style={{
+                  background: library ? 'rgba(255,190,90,0.26)' : 'rgba(255,255,255,0.05)',
+                  border: `1px solid ${library ? 'rgba(255,205,120,0.65)' : 'rgba(255,255,255,0.12)'}`,
+                  borderRadius: 4,
+                  color: library ? '#ffe2ad' : 'rgba(255,255,255,0.5)',
+                  fontSize: 10, fontWeight: 700, padding: '1px 5px', whiteSpace: 'nowrap',
+                  cursor: 'pointer', fontFamily: 'inherit', lineHeight: 1.4,
+                }}
+              >SAVED</button>
               {/* ── Viewer link mode ── only when a Viewer is actually
                   magneted to this panel: an option for a connection that
                   does not exist is just a puzzle. Sits at the end of the
@@ -1986,7 +2026,10 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string }; tray?: TrayB
               pointerEvents: 'none',
             }} />
             {rows.length === 0 ? (
-              feedingPool
+              library
+                ? <LibraryEmptyState reading={libraryLeft} none={libraryProjects.length === 0}
+                    filtered={!!(searchQuery.trim() || kindFilter !== 'all' || typeFilter.length)} />
+              : feedingPool
                 ? <PoolEmptyState dir={feedingPool.poolDir ?? 'public/uploads'} />
                 // A filter that matched nothing is not an empty project —
                 // "No cards yet / Place your first card" said it was.
@@ -2021,6 +2064,9 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string }; tray?: TrayB
                         {...shared}
                       />
                     )
+                  }
+                  if (row.kind === 'libcard') {
+                    return <RolodexLibrarySlot key={'lib:' + row.card.key} card={row.card} {...shared} />
                   }
                   if (row.kind === 'addfx') {
                     return (
@@ -2451,6 +2497,86 @@ const RolodexPoolSlot: React.FC<{
       {fileMenu && (
         <FileContextMenu x={fileMenu.x} y={fileMenu.y} url={file.url} onClose={closeFileMenu} />
       )}
+    </div>
+  )
+}
+
+/** A card of a saved project (utils/library). Drag it onto the canvas for
+ *  a copy of that card; on a deck's front card, the DECK chip drags the
+ *  whole deck. */
+const RolodexLibrarySlot: React.FC<{
+  card: LibraryCard
+  offset: number
+  top: number
+  zIndex: number
+  expansionFraction: number
+  isHovered: boolean
+  onClick: () => void
+  onHoverEnter: () => void
+  onHoverLeave: () => void
+}> = ({ card, offset, top, zIndex, expansionFraction, isHovered, onClick, onHoverEnter, onHoverLeave }) => {
+  const { group, project } = card
+  const hero = useMemo(() => {
+    const m = cardFaceMedia(group, project.boards)
+    return m ? (m.type === 'image' ? m.url : m.posterUrl ?? null) : null
+  }, [group, project])
+  const centerness = Math.max(0, 1 - Math.abs(offset))
+  const exposure = Math.min(1, Math.max(0, (expansionFraction - 0.15) / 0.2))
+  const borderRGB = Math.round(255 * centerness)
+  const indent = card.level * INDENT_STEP
+  const startDrag = (e: React.DragEvent, deck: boolean) => {
+    const payload: LibraryDrag = { file: project.file, v: project.v, ids: deck && card.deck ? card.deck : [group.id], deck }
+    e.dataTransfer.setData(LIBRARY_DRAG_MIME, JSON.stringify(payload))
+    e.dataTransfer.effectAllowed = 'copy'
+    e.stopPropagation()
+  }
+  const type = CARD_TYPES[cardTypeOf(group)]
+  return (
+    <div
+      onClick={onClick}
+      onPointerDown={e => { if (e.button === 0) e.stopPropagation() }}
+      onMouseEnter={onHoverEnter}
+      onMouseLeave={onHoverLeave}
+      draggable
+      onDragStart={e => startDrag(e, false)}
+      title={`${group.name || 'Untitled'}, in ${project.name}. Drag onto the canvas to bring in a copy`}
+      style={{
+        position: 'absolute', left: WING_W + indent, top, width: SLOT_W, height: CARD_H,
+        background: `linear-gradient(160deg, ${group.color || '#5b8dd9'} 0%, #1b2030 78%)`, borderRadius: 7,
+        border: isHovered
+          ? '1.5px solid rgba(255,255,255,0.85)'
+          : `${1 + 0.5 * centerness}px solid rgba(${borderRGB},${borderRGB},${borderRGB},${0.28 + 0.64 * centerness})`,
+        cursor: 'grab', zIndex, overflow: 'hidden',
+      }}
+    >
+      {hero && <HeroImageLayer heroImage={hero} opacity={Math.max(0.35, exposure * 0.7)} borderRadius={6} />}
+      <div style={{
+        position: 'absolute', top: 0, left: 0, right: 0, height: SLOT_PEEK_H,
+        display: 'flex', alignItems: 'center', gap: 6, padding: '0 8px 0 10px', boxSizing: 'border-box',
+      }}>
+        <span style={{
+          flex: 1, minWidth: 0, color: 'rgba(255,255,255,0.95)', fontSize: 11, fontWeight: 600,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          textShadow: '0 1px 3px rgba(0,0,0,0.8)', pointerEvents: 'none',
+        }}>{group.name || 'Untitled'}</span>
+        {card.deck && (
+          <span
+            draggable
+            onDragStart={e => startDrag(e, true)}
+            title={`The whole deck: ${card.deck.length} cards. Drag onto the canvas to bring in a copy of all of them`}
+            style={{
+              flexShrink: 0, fontSize: 9, fontWeight: 700, letterSpacing: '0.4px', padding: '1px 5px',
+              borderRadius: 3, cursor: 'grab', color: '#ffe2ad',
+              background: 'rgba(20,22,38,0.78)', border: '1px solid rgba(255,205,120,0.6)',
+            }}
+          >DECK {card.deck.length}</span>
+        )}
+      </div>
+      <div style={{
+        position: 'absolute', top: SLOT_PEEK_H, left: 10, right: 8, pointerEvents: 'none',
+        fontSize: 9, fontWeight: 600, letterSpacing: '0.3px', color: 'rgba(255,255,255,0.72)',
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textShadow: '0 1px 3px rgba(0,0,0,0.9)',
+      }}>{type.label.toUpperCase()} · {project.name}</div>
     </div>
   )
 }
@@ -3518,6 +3644,16 @@ const NoMatchState: React.FC = () => (
     alignItems: 'center', justifyContent: 'center',
     color: 'rgba(255,255,255,0.4)', fontSize: 11, textAlign: 'center', padding: 16,
   }}>No matches</div>
+)
+
+/** All projects, with nothing to show: still reading, none saved, or none
+ *  that answer the search. */
+const LibraryEmptyState: React.FC<{ reading: number; none: boolean; filtered: boolean }> = ({ reading, none, filtered }) => (
+  <div style={{
+    position: 'absolute', inset: 0, display: 'flex',
+    alignItems: 'center', justifyContent: 'center',
+    color: 'rgba(255,255,255,0.4)', fontSize: 11, textAlign: 'center', padding: 16,
+  }}>{reading > 0 ? `Reading saved projects (${reading} to go)` : none ? 'No saved projects' : filtered ? 'No matches' : 'No cards in the saved projects'}</div>
 )
 
 const EmptyState: React.FC<{ onAdd: () => void }> = ({ onAdd }) => (

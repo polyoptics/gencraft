@@ -1,4 +1,5 @@
 import React, { useRef, useCallback, useEffect, useState, useDeferredValue, useMemo } from 'react'
+import { LIBRARY_DRAG_MIME, parseLibraryDrag, bringIn } from '../../utils/library'
 import { useCanvasStore } from '../../store/canvasStore'
 import { wheelCanvas } from '../../utils/trackpad'
 import { markMoving } from '../../utils/rasterSettle'
@@ -491,6 +492,14 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
         floating || !effectDropAllowed(e.clientX, e.clientY) ? 'none' : 'copy'
       return
     }
+    // A card or deck out of a saved project (the Card Browser's All
+    // projects) lands as a copy on the canvas, and only there. Refused
+    // outright elsewhere, as an effect drag is.
+    if (e.dataTransfer.types.includes(LIBRARY_DRAG_MIME)) {
+      e.preventDefault()
+      e.dataTransfer.dropEffect = floating || !effectDropAllowed(e.clientX, e.clientY) ? 'none' : 'copy'
+      return
+    }
     // Dragged text (from a browser, an editor) makes a text card on bare
     // canvas, and only there.
     if (!e.dataTransfer.types.includes('Files') && !e.dataTransfer.types.includes(POOL_DRAG_MIME)) {
@@ -878,6 +887,14 @@ export const InfiniteCanvas: React.FC<Props> = ({ children, initialCenterW = 100
         onto,
         rail: effectDropRail(e.clientX, e.clientY, onto) ?? undefined,
       })
+      return
+    }
+    const libRaw = e.dataTransfer.getData(LIBRARY_DRAG_MIME)
+    if (libRaw) {
+      const drag = parseLibraryDrag(libRaw)
+      if (!drag || floating || !effectDropAllowed(e.clientX, e.clientY)) return
+      e.preventDefault()
+      void bringIn(drag, clientToCanvas(e.clientX, e.clientY))
       return
     }
     // A pool drag carries ZERO .files, so it has to be read before the

@@ -83,11 +83,20 @@ export function cardTouchRect(g: ProjectGroup, boards: Record<string, BoardData>
   return { left: v.rect.left, right: v.rect.right, bottom: v.rect.bottom, top: v.rect.top + headerExtendCanvasAt(zoom) - TOUCH_HEADER }
 }
 
+/** How near two deckTouchRects are and still join a deck. */
+export const DECK_TOUCH_TOLERANCE = TOUCH_TOLERANCE
+
+/** A card's rect as joining a deck judges it: two cards whose rects come
+ *  within DECK_TOUCH_TOLERANCE are one deck (cardsTouch). */
+export function deckTouchRect(g: ProjectGroup, boards: Record<string, BoardData>, zoom: number): GroupSlot | null {
+  const r = cardTouchRect(g, boards, zoom)
+  return r && { id: g.id, ...r, top: r.top - (DECK_HEADER - TOUCH_HEADER) }
+}
+
 /** Do cards `a` and `b` touch, as clustering judges it? */
 export function cardsTouch(a: ProjectGroup, b: ProjectGroup, boards: Record<string, BoardData>, zoom: number): boolean {
-  const ra = cardTouchRect(a, boards, zoom), rb = cardTouchRect(b, boards, zoom)
-  const up = DECK_HEADER - TOUCH_HEADER
-  return !!ra && !!rb && rectsTouch({ id: a.id, ...ra, top: ra.top - up }, { id: b.id, ...rb, top: rb.top - up }, TOUCH_TOLERANCE)
+  const ra = deckTouchRect(a, boards, zoom), rb = deckTouchRect(b, boards, zoom)
+  return !!ra && !!rb && rectsTouch(ra, rb, TOUCH_TOLERANCE)
 }
 
 /** THE card-geometry authority: a group's VISUAL card rect in canvas
@@ -172,7 +181,7 @@ class UnionFind {
   }
 }
 
-function rectsTouch(a: GroupSlot, b: GroupSlot, tol: number): boolean {
+export function rectsTouch(a: GroupSlot, b: GroupSlot, tol: number): boolean {
   return !(a.right + tol < b.left || b.right + tol < a.left ||
            a.bottom + tol < b.top || b.bottom + tol < a.top)
 }
