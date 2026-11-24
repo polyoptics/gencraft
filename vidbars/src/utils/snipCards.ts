@@ -11,6 +11,7 @@ import { drawnRect } from './effectCards'
 import { deckCards, placeCard } from './railCards'
 import { lyingLeft } from './deckAway'
 import { expandTileIds } from './tileDecks'
+import { putAwayUnder } from './deckTree'
 
 export interface SnipPiece {
   url: string
@@ -73,7 +74,7 @@ export function landSnip(piece: SnipPiece, firstSlot: () => { x: number; y: numb
   // A deck lying left of its front (utils/deckAway) goes on to the left
   // instead. One with cards on both sides of its front (a primary card in
   // the middle) goes far enough right that those on its left clear the new card.
-  const kids = useBoardsStore.getState().groups.filter(g => g.id !== front.id && g.deckAnchorId === front.id && g.deckState && g.deckState !== 'open')
+  const kids = putAwayUnder(front.id, useBoardsStore.getState().groups)
   const w = rectOf(gid)?.width ?? at.width
   const leftward = kids.length > 0 && lyingLeft(kids)
   const reach = leftward ? 0 : Math.max(0, ...kids.map(k => -(k.deckOffsetX ?? 0)))

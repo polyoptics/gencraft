@@ -37,6 +37,7 @@ import { knownKind } from './fx/effects'
 import { RAIL_TRAY, inputGiven, isRail, railDropTarget, railLayout, railMembers, type RailDropTarget } from './rail'
 import { byLay } from './deckAway'
 import { colorMapsOf } from '../three/modelMaps'
+import { putAwayUnder } from './deckTree'
 
 /** One picture: the card and block it is in, and what it shows. */
 export interface Entry { groupId: string; boardId: string; media: MediaItem; label: string
@@ -112,7 +113,7 @@ export function deckCards(anchorId: string, groups: ProjectGroup[]): string[] {
   const anchor = groups.find(g => g.id === anchorId)
   if (!anchor) return []
   if (!anchor.deckState || anchor.deckState === 'open') return [anchorId]
-  const kids = groups.filter(g => g.id !== anchorId && g.deckAnchorId === anchorId && g.deckState && g.deckState !== 'open')
+  const kids = putAwayUnder(anchorId, groups)
   const rest = byLay(kids)
   return [anchorId, ...rest.map(g => g.id)]
 }

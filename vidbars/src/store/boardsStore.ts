@@ -1,4 +1,5 @@
 import { detailLinked } from '../utils/linkEvents'
+import { putAwayUnder } from '../utils/deckTree'
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { createDebouncedIDBStorage } from '../utils/debouncedIDBStorage'
@@ -1804,7 +1805,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
     // Opened: a deck inside it that was open when it closed opens again.
     if (state === 'open') {
       for (const a of get().groups.filter(g => idSet.has(g.id) && g.deckReopen)) {
-        const kids = get().groups.filter(m => m.id !== a.id && m.deckAnchorId === a.id && !!m.deckState && m.deckState !== 'open').map(m => m.id)
+        const kids = putAwayUnder(a.id, get().groups).map(m => m.id)
         set(s => ({ groups: s.groups.map(g => (g.id === a.id ? { ...g, deckReopen: undefined } : g)) }))
         if (kids.length) get().setDeckState([a.id, ...kids], 'open')
       }

@@ -17,6 +17,7 @@ import { useViewport3DStore } from '../store/viewport3dStore'
 import { isDockableTile, tileBrowseItem } from './contentTraversal'
 import { dockSlidingGroup, viewportWindowRects } from './deckDockDrag'
 import { findMagnetCandidate, magnetRadiusForZoom } from './viewportDocking'
+import { putAwayUnder } from './deckTree'
 
 const KEY = 'vidbars.pickMode'
 function readOn(): boolean {
@@ -107,8 +108,9 @@ function moveBody(b: Body, dx: number, dy: number) {
   }
   // A deck moves whole: its hidden cards lie under its face.
   const bs = useBoardsStore.getState()
+  const under = new Set(putAwayUnder(b.id, bs.groups).map(g => g.id))
   bs.setGroupPosBatch(bs.groups
-    .filter(g => g.id === b.id || (g.deckAnchorId === b.id && g.deckState && g.deckState !== 'open'))
+    .filter(g => g.id === b.id || under.has(g.id))
     .map(g => ({ groupId: g.id, originX: g.originX + dx, originY: g.originY + dy })))
 }
 
@@ -158,8 +160,9 @@ function magnetIfNear(b: Body): boolean {
   let docked = false
   if (b.kind === 'card') {
     const groups = useBoardsStore.getState().groups
+    const under = new Set(putAwayUnder(b.id, groups).map(g => g.id))
     docked = dockSlidingGroup(b.id, groups
-      .filter(g => g.id === b.id || (g.deckAnchorId === b.id && g.deckState && g.deckState !== 'open'))
+      .filter(g => g.id === b.id || under.has(g.id))
       .map(g => g.id))
   } else {
     const fns = useFreeNodeStore.getState(), n = fns.nodes[b.id]

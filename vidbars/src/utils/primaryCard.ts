@@ -11,6 +11,7 @@
 // With two in one row, the leftmost of them.
 
 import type { ProjectGroup } from '../store/boardsStore'
+import { putAwayUnder } from './deckTree'
 
 /** Each card's row of touching cards as the canvas last drew it, its
  *  primary card first (CardLayer keeps it; rows with controls only). */
@@ -53,7 +54,7 @@ export function primaryFirst(groups: ProjectGroup[], ids: string[]): string[] {
   if (ids.length < 2) return ids
   const set = new Set(ids)
   const byId = new Map(groups.map(g => [g.id, g]))
-  const kidsOf = (id: string) => groups.filter(o => o.id !== id && o.deckAnchorId === id && isClosed(o))
+  const kidsOf = (id: string) => putAwayUnder(id, groups)
   const first = (id: string) => (id === ids[0] ? ids : [id, ...ids.filter(x => x !== id)])
   for (const id of ids) {
     const g = byId.get(id)

@@ -9,6 +9,7 @@ import { useFreeNodeStore } from '../store/freeNodeStore'
 import { expandWithNestedMembers, isHiddenDeckMember } from '../hooks/useCardDecks'
 import { rowOf } from './primaryCard'
 import { downstream } from './storyline'
+import { putAwayUnder } from './deckTree'
 
 /** The card `c` is shown as: itself, or, hidden in a closed deck, that
  *  deck's front card. */
@@ -50,7 +51,7 @@ export function chainDecks(nodeId: string, dotId: string): { closed: string[][];
     if (isClosedDeck(front)) {
       if (seen.has(f)) continue
       seen.add(f)
-      const kids = groups.filter(g => g.id !== f && g.deckAnchorId === f && isClosedDeck(g)).map(g => g.id)
+      const kids = putAwayUnder(f, groups).map(g => g.id)
       if (kids.length) closed.push([f, ...kids])
       continue
     }
