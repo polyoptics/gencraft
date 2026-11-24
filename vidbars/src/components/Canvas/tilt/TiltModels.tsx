@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react'
 import {
-  useTiltStore, useModelScaleStore, isTilted, offFlat, standTilt, standRise, unprojectTilt, TILT_DRAW_FAR, TILT_MAX, TILT_PERSPECTIVE, tiltP,
+  useTiltStore, useModelScaleStore, isTilted, offFlat, standTilt, standRise, unprojectTilt, screenOf, TILT_DRAW_FAR, TILT_MAX, TILT_PERSPECTIVE, tiltP,
 } from '../../../store/tiltStore'
 import { CAMERA_LENS } from '../../../store/tiltStore'
 import { usePeek } from '../../../utils/peek'
@@ -249,6 +249,26 @@ function farShown(f: Far | null, u: number, v: number, w: number, h: number): nu
  *  3D view (tilted or the side view) while Fade is on; not looking
  *  through a camera. */
 let ring: HTMLDivElement | null = null
+/** The point the camera turns about, marked on the screen: a small cross.
+ *  It is the middle of the screen, always, but for what F has just framed
+ *  (held there until the view is next slid), which F put in the middle. */
+let orbitMark: HTMLDivElement | null = null
+function drawOrbitMark(host: HTMLElement | null) {
+  const ts = useTiltStore.getState()
+  const box = host?.parentElement ?? null
+  if (!box || !isTilted(ts) || useManip.getState().through) { if (orbitMark) { orbitMark.remove(); orbitMark = null } return }
+  const at = (ts.pivot && screenOf(ts.pivot, ts)) || { x: 0, y: 0 }
+  if (!orbitMark || orbitMark.parentElement !== box) {
+    orbitMark?.remove()
+    orbitMark = document.createElement('div')
+    orbitMark.dataset.orbitMark = ''
+    orbitMark.style.cssText = 'position:absolute;left:50%;top:50%;width:17px;height:17px;margin:-8.5px 0 0 -8.5px;pointer-events:none;z-index:70;'
+      + 'background:linear-gradient(rgba(150,190,255,0.95),rgba(150,190,255,0.95)) center/100% 1px no-repeat,linear-gradient(rgba(150,190,255,0.95),rgba(150,190,255,0.95)) center/1px 100% no-repeat'
+    box.appendChild(orbitMark)
+  }
+  const t = `translate(${at.x.toFixed(1)}px, ${at.y.toFixed(1)}px)`
+  if (orbitMark.style.transform !== t) orbitMark.style.transform = t
+}
 function drawRing(host: HTMLElement | null) {
   const on = !!host && useWorldScale.getState().fadeOn && isTilted(useTiltStore.getState()) && !useManip.getState().through
   if (!on) { if (ring) { ring.remove(); ring = null } return }
@@ -1930,6 +1950,7 @@ function collectSlabs(K = 1): TiltSlab[] {
   const far = farNow()
   fadeFar(far, host)
   drawRing(host)
+  drawOrbitMark(host)
   if (far) {
     // What is selected stays whole: a slab lying on a selected card or tile.
     const held: { x0: number; y0: number; x1: number; y1: number }[] = []
@@ -3045,6 +3066,7 @@ function dropLifts() {
   if (lifted.size) setLifts(new Map())
   if (farFaded.size) fadeFar(null, null)
   drawRing(null)
+  drawOrbitMark(null)
   standScreens([])
   turnAway(new Set())
   restEase.clear()

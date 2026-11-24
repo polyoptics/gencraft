@@ -717,6 +717,13 @@ export const TiltedView: React.FC = () => {
         // Maya's pan: the camera slides in its own view plane, so the whole
         // view follows the mouse evenly, near and far alike.
         const ts = useTiltStore.getState()
+        // A slide lets go of whatever the view was turning about (what F
+        // framed, a deck peeked into): from here it turns about the middle
+        // of the screen again (Brian 2026-11-24: "F is a one-time instant
+        // update. Then after that, the camera goes back to its normal
+        // behavior"; left held, the next turn swung about a thing long
+        // since slid out of sight, "a pivot that's like 50 feet away").
+        if (ts.pivot) ts.setPivot(null)
         ts.setShift(ts.shiftX + e.clientX - g.last.x, ts.shiftY + e.clientY - g.last.y)
         g.last = { x: e.clientX, y: e.clientY }
         return
@@ -839,6 +846,9 @@ export const TiltedView: React.FC = () => {
       if (pad === 'pan') {
         settleZoom()
         const ts = useTiltStore.getState()
+        // (A slide lets go of what the view was turning about: as the
+        // middle drag's does.)
+        if (ts.pivot) ts.setPivot(null)
         ts.setShift(ts.shiftX - e.deltaX, ts.shiftY - e.deltaY)
         return
       }

@@ -285,7 +285,7 @@ export function orbitWheel(e: WheelEvent): boolean {
   const tilt = w.t0 - (w.y - w.oy) * DRAG_DEG
   const d = (turnPx - w.turned) * DRAG_DEG
   w.turned = turnPx
-  if (w.mode === 'peek' && w.peek && !w.pivoted && (d || tilt !== w.t0)) { w.pivoted = true; if (!w.peek.keep) useTiltStore.getState().setPivot(w.peek.g) }
+  if (w.mode === 'peek' && w.peek && !w.pivoted && (d || tilt !== w.t0)) { w.pivoted = true; if (!w.peek.keep && !w.peek.side) useTiltStore.getState().setPivot(w.peek.g) }
   moveCamera(w.mode, tilt, d)
   return true
 }
@@ -410,7 +410,7 @@ export function useAltTiltGesture() {
         turned = turnPx
         // A peek turns about the deck or Viewer it is into, taken when the
         // view first moves, so it stays put on screen.
-        if (mode === 'peek' && peek && !pivoted && (d || tilt !== t0)) { pivoted = true; if (!peek.keep) useTiltStore.getState().setPivot(peek.g) }
+        if (mode === 'peek' && peek && !pivoted && (d || tilt !== t0)) { pivoted = true; if (!peek.keep && !peek.side) useTiltStore.getState().setPivot(peek.g) }
         moveCamera(mode, tilt, d)
         if (mode === '3d' && cTo && !glideStarted && useTiltStore.getState().tilt > 0.5) {
           glideStarted = true
@@ -599,6 +599,14 @@ function frameBox(onlySelection = false, zoom?: number): { x0: number; y0: numbe
  *  when the view goes flat, on the next F, or when something else sets
  *  another pivot. */
 let framed: { pivot: Pivot; unsub: () => void } | null = null
+// A pivot nothing holds to its place on the canvas (a deck or Viewer
+// peeked into) is flat px as the canvas stood: once the zoom changes it is
+// somewhere else, and is let go. The view then turns about the middle of
+// the screen. (The 3D models' side view takes no pivot at all: one camera
+// rule there as in the tilted view.)
+useCanvasStore.subscribe((s, p) => {
+  if (s.zoom !== p.zoom && !framed && useTiltStore.getState().pivot) useTiltStore.getState().setPivot(null)
+})
 function dropFramed() {
   if (!framed) return
   framed.unsub()
