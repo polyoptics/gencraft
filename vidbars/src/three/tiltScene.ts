@@ -1415,7 +1415,7 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
     const easeSide = sideX * sideX * (3 - 2 * sideX)
     const dt = into ? 0 : Math.min(100, Math.max(0, now - (lieAt || now)))
     if (!into) lieAt = now
-    let anyFull = false, anyLie = false
+    let anyFull = false
     const keep = new Set<string>()
     for (const tg of targets) {
       keep.add(tg.key)
@@ -1428,7 +1428,6 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       if (s.lie < 0 || frameNo - s.seen > 3) s.lie = lieTo
       else if (s.lie !== lieTo) s.lie = lieTo ? Math.min(1, s.lie + dt / LIE_MS) : Math.max(0, s.lie - dt / LIE_MS)
       const lie = s.lie * s.lie * (3 - 2 * s.lie)
-      if (lie > 0.5) anyLie = true
       s.seen = frameNo
       if (s.inst && !s.swapping && s.quarter !== quarterStamp(s.url)) reseat(s)
       // (One a set shows live in the flat view stands whole at any tilt.)
@@ -1707,13 +1706,14 @@ export function createTiltScene(canvas: HTMLCanvasElement) {
       // are shared by every model.)
       const mfade = anyFull ? 1 : st.fade
       ;(modelShadow.material as THREE.ShadowMaterial).opacity = shadows * mfade
-      // In the side view the 3D models' shadows fall across the card faces
-      // too, pictures and all: there they are what places a 3D model over
-      // its card (Brian 2026-11-23: "Like to see the shadows across the
-      // card face a little bit more ... it's hard to place where things
-      // are because there's no shading or shadows"). Standing, they keep
-      // off the pictures as before (SKIP_ART).
-      ;(modelShadow.material as THREE.ShadowMaterial).stencilWrite = !anyLie
+      // The 3D models' shadows fall across the card faces too, pictures and
+      // all, in the side view and tipped back alike (Brian 2026-11-23, of
+      // the side view: "Like to see the shadows across the card face a
+      // little bit more ... it's hard to place where things are because
+      // there's no shading or shadows"; then "can we also have shadows on
+      // the card face in the tilt down 3d view?"). The raised parts'
+      // shadows and the sheen still keep off the pictures (SKIP_ART).
+      ;(modelShadow.material as THREE.ShadowMaterial).stencilWrite = false
       // The grey, wire and person looks fade in and out with the models.
       fadeMat(GRAY_MAT, 1, false, mfade)
       fadeMat(GRAY_FLAT_MAT, 1, false, mfade)
