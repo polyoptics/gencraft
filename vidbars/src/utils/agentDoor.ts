@@ -33,7 +33,7 @@
 // (Brian 2026-11-18: widened for passing references out and taking results
 // back as cards, then for working on the canvas as he does.)
 
-import { isShut } from './deckTree'
+import { isShut, shownFront } from './deckTree'
 import { useBoardsStore, type BoardData, type ProjectGroup } from '../store/boardsStore'
 import { useCanvasStore } from '../store/canvasStore'
 import { useFreeNodeStore, DEFAULT_BODY_STYLE, DEFAULT_HEADER_STYLE, type TextStyle } from '../store/freeNodeStore'
@@ -752,8 +752,7 @@ async function setDeck(args: Json): Promise<Json> {
   // A closed deck named by one of its cards is the whole deck.
   let all = ids
   if (ids.length === 1) {
-    let front = cards[0]
-    for (let n = 0; n < 20 && isHiddenDeckMember(front); n++) front = groups.find(g => g.id === front.deckAnchorId) ?? front
+    const front = shownFront(cards[0], groups)
     all = expandWithNestedMembers([front.id], groups)
     if (all.length < 2) throw new Error(`${cards[0].name} is not in a closed deck. To close cards as a deck, name them all.`)
   }

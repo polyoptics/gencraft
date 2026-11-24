@@ -22,7 +22,7 @@ import { rowOf } from './primaryCard'
 import { makeLinkedCard, masterOf } from './linkedCards'
 import { createCardOrBoardAt } from './canvasCreate'
 import { newDetailId } from './cardTypes'
-import { isShut } from './deckTree'
+import { isShut, shownFront } from './deckTree'
 
 export interface CardState {
   id: string
@@ -339,12 +339,8 @@ export function removeState(m: StateMachine, stateId: string): StateMachine {
 /** Jump the canvas to a card (to its deck's front when it is hidden in one). */
 export function goToCard(cardId: string): void {
   const gs = useBoardsStore.getState().groups
-  let to = gs.find(g => g.id === cardId)
-  for (let i = 0; to && closed(to) && to.deckAnchorId && to.deckAnchorId !== to.id && i < 32; i++) {
-    const up = gs.find(g => g.id === to!.deckAnchorId)
-    if (!up) break
-    to = up
-  }
+  const at = gs.find(g => g.id === cardId)
+  const to = at && shownFront(at, gs)
   if (!to) return
   useCanvasStore.getState().jumpToGroup(to.id)
   useBoardsStore.getState().setSelectedGroup(to.id)

@@ -8,7 +8,7 @@
 // Where it points is kept in canvas units, so it stays on what it points at
 // as the view moves. Not persisted.
 
-import { isPutAway } from './deckTree'
+import { shownFront } from './deckTree'
 import { create } from 'zustand'
 import { useBoardsStore } from '../store/boardsStore'
 import { useCanvasStore } from '../store/canvasStore'
@@ -52,12 +52,8 @@ export function agentPoint(text: string, at?: { x: number; y: number } | null): 
 export function agentSpotOfCard(id: string): { x: number; y: number } | null {
   const { groups, boards } = useBoardsStore.getState()
   // A card inside a closed deck is pointed at on the deck's front card.
-  let g = groups.find(x => x.id === id)
-  for (let n = 0; g && n < 20 && isPutAway(g); n++) {
-    const up = groups.find(x => x.id === g!.deckAnchorId)
-    if (!up) break
-    g = up
-  }
+  const at = groups.find(x => x.id === id)
+  const g = at && shownFront(at, groups)
   const r = g && cardVisualRect(g, boards, useCanvasStore.getState().zoom)?.rect
   if (!r) return null
   return { x: r.left + (r.right - r.left) * 0.35, y: r.top + (r.bottom - r.top) * 0.4 }
