@@ -16,6 +16,7 @@
 //  - The detail: named by the caller, else after what the made card holds.
 //    A detail of that name that already shows another card is left as it
 //    is unless `replace` is given: the caller asks the artist first.
+import { detailLinked } from './linkEvents'
 import { useBoardsStore, type BoardData, type ProjectGroup } from '../store/boardsStore'
 import { useCanvasStore } from '../store/canvasStore'
 import { cardVisualRect, expandWithNestedMembers, isHiddenDeckMember } from '../hooks/useCardDecks'
@@ -136,6 +137,7 @@ export function bringHome(sourceId: string, madeIds: string[], opts: { detail?: 
   if (!front) delete row.onFace
   if (k >= 0) details[k] = row; else details.push(row)
   bs().setGroupDetails(sourceId, details)
+  detailLinked(sourceId, made.id)
   ownModelUnlink(sourceId, made.id)
   return { deck, detail: row.name, did: had ? 'replaced' : 'filled', ...(had ? { had } : {}) }
 }
@@ -178,5 +180,6 @@ export function fillModelDetail(cardId: string, modelCardId: string): boolean {
   const row: CardDetail = { ...(k >= 0 ? details[k] : { id: newDetailId(), name: 'Model', value: '' }), link: { card: from.id }, onFace: true }
   if (k >= 0) details[k] = row; else details.push(row)
   s.setGroupDetails(cardId, details)
+  detailLinked(cardId, from.id)
   return true
 }

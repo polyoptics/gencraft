@@ -14,14 +14,16 @@
 //    both the same, or only one card has one (the other gets it, a row
 //    added if it has none). Heights are compared as heights (183 cm is
 //    6'0"), other rows as text.
-// Watched from the cards themselves, so every way of linking is covered.
-// Never on an undo, a project loading, or many links made at once.
+// Whatever makes such a link says so (utils/linkEvents detailLinked): the
+// store's linkGroupDetail, the row's menu, bringHome, fillModelDetail.
+// Never on an undo or a project loading: no link is made then.
 
 import { create } from 'zustand'
 import { useBoardsStore, type ProjectGroup } from '../store/boardsStore'
 import { useUndoCoordinator, isUndoRestoring } from '../store/undoCoordinator'
 import { detailShown, isChartRank, isOwnCount, newDetailId, type CardDetail } from './cardTypes'
 import { isHeightName, parseHeight } from './stickGeom'
+import { onDetailLinked } from './linkEvents'
 
 /** One row the two cards disagree on. */
 export interface MergeRow { name: string; aRow: string; bRow: string; aText: string; bText: string }
@@ -86,7 +88,7 @@ function linked(aId: string, bId: string) {
 export function answerMerge(ask: MergeAsk, keep: Record<string, 'a' | 'b' | undefined>) {
   useMergeAsk.setState({ ask: null })
   const picked = ask.rows.filter(r => keep[r.aRow])
-  if (!picked.length) return
+  if (!picked.length) { nextMerge(); return }
   useUndoCoordinator.getState().checkpoint()
   for (const r of picked) {
     const groups = groupsNow()
@@ -95,45 +97,25 @@ export function answerMerge(ask: MergeAsk, keep: Record<string, 'a' | 'b' | unde
     if (!a || !b || !ra || !rb) continue
     if (keep[r.aRow] === 'a') share(b, rb, a, ra); else share(a, ra, b, rb)
   }
+  nextMerge()
 }
 
-// ── Watching for a card being linked to another ──
-/** A card's rows that point at a whole card: `${row}>${card}`. */
-const wholeLinks = (g: ProjectGroup) => {
-  const out = new Set<string>()
-  for (const d of g.details ?? []) if (d.link && !d.link.detail && !d.link.count && !d.link.rankOf && !d.link.favorite) out.add(`${d.id}>${d.link.card}`)
-  return out
-}
-let before = new Map<string, { details: unknown; links: Set<string> }>()
-function look() {
-  const next = new Map<string, { details: unknown; links: Set<string> }>()
-  const fresh: [string, string][] = []
-  for (const g of groupsNow()) {
-    const was = before.get(g.id)
-    if (was && was.details === g.details) { next.set(g.id, was); continue }
-    const links = wholeLinks(g)
-    next.set(g.id, { details: g.details, links })
-    // (A card that was not here before came with its links: pasted, loaded.)
-    if (was) for (const k of links) if (!was.links.has(k)) fresh.push([g.id, k.slice(k.indexOf('>') + 1)])
+// ── A card linked to another: said by the action that made the link
+// (utils/linkEvents), once for each link, so one link and fifty made
+// together are treated alike. Rows that differ are asked about one pair
+// at a time: the next question comes up when the last is answered or
+// closed. Never on an undo (nothing is linked then, it is put back). ──
+const waiting: [string, string][] = []
+/** The question box was answered or closed: the next pair waiting, if any. */
+export function nextMerge() {
+  useMergeAsk.setState({ ask: null })
+  while (waiting.length && !useMergeAsk.getState().ask) {
+    const [a, b] = waiting.shift()!
+    linked(a, b)
   }
-  before = next
-  if (fresh.length !== 1 || isUndoRestoring() || useMergeAsk.getState().ask) return
-  const [a, b] = fresh[0]
-  queueMicrotask(() => w?.__detailMerge?.linked(a, b))
 }
-
-const w = (typeof window !== 'undefined' ? window : undefined) as (Window & { __detailMerge?: { look: typeof look; linked: typeof linked } }) | undefined
-if (w) {
-  // Installed once; a reload of this module (dev) swaps the handlers in place.
-  const first = !w.__detailMerge
-  w.__detailMerge = { look, linked }
-  if (first) {
-    let last: unknown = null
-    useBoardsStore.subscribe(s => {
-      if (s.groups === last) return
-      last = s.groups
-      w.__detailMerge!.look()
-    })
-  }
-  look()
-}
+onDetailLinked('detailMerge', (a, b) => {
+  if (isUndoRestoring()) return
+  if (useMergeAsk.getState().ask) { waiting.push([a, b]); return }
+  linked(a, b)
+})

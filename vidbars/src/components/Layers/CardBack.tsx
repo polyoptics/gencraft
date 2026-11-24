@@ -6,6 +6,7 @@
 // Data lives on the card itself (ProjectGroup.flipped / details /
 // cardType; utils/cardTypes).
 
+import { detailLinked } from '../../utils/linkEvents'
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import ReactDOM, { flushSync } from 'react-dom'
 import { useBoardsStore } from '../../store/boardsStore'
@@ -552,6 +553,8 @@ export const CardBack: React.FC<{
       const { link: _gone, ...rest } = d
       return { ...rest, value: detailShown(useBoardsStore.getState().groups, d).text }
     }))
+    // The row now shows a whole card: said, so what follows a link is done (utils/linkEvents).
+    if (link && !link.detail && !link.count && !link.rankOf && !link.favorite) detailLinked(groupId, link.card)
   }
   const where = () => {
     const g = useBoardsStore.getState().groups.find(gr => gr.id === groupId)

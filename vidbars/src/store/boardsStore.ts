@@ -1,3 +1,4 @@
+import { detailLinked } from '../utils/linkEvents'
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { createDebouncedIDBStorage } from '../utils/debouncedIDBStorage'
@@ -1221,6 +1222,8 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
       }
       return { ...g, details: details.map(d => d.id === detailId ? { ...d, link } : d) }
     }) }))
+    // (A deck's favourite is whichever card that is at the time: no one card is linked.)
+    if (!isDeck) detailLinked(groupId, cardId)
   },
 
   setGroupScene(groupId, scene) {

@@ -22,7 +22,6 @@
 import { useNotesStore, type Stick } from '../store/notesStore'
 import { useBoardsStore, type ProjectGroup } from '../store/boardsStore'
 import { useCanvasStore } from '../store/canvasStore'
-import { useModelScaleStore } from '../store/tiltStore'
 import type { FreeNodeData } from '../store/freeNodeStore'
 import { dockedCards } from './filmShots'
 import { detailShown, newDetailId } from './cardTypes'
@@ -32,7 +31,6 @@ import type { CardDetail } from './cardTypes'
 import { cardScreenRect } from '../components/Layers/CardLayer'
 import { isHiddenDeckMember } from '../hooks/useCardDecks'
 import { dataKey } from './area3dScene'
-import { useUndoCoordinator, isUndoRestoring } from '../store/undoCoordinator'
 import { useWorldScale } from './worldScale'
 
 /** How far round its foot a stick reaches for a card, feet. */
@@ -359,35 +357,10 @@ function settle() {
   seen.clear()
 }
 
-// ── Sizing a docked model by hand changes its height ──
-/** A hand's sizing in progress, by model key: the height and size it
- *  began from (so many small steps do not round away). */
-const sizing = new Map<string, { ft0: number; k0: number; t: number }>()
-function sized(key: string, was: number | undefined, now: number | undefined) {
-  // (An undo putting a size back is not a hand sizing it.)
-  if (!key.startsWith('card:') || !now || isUndoRestoring()) return
-  const id = key.slice(5)
-  const m = stickMeasures()
-  const stick = useNotesStore.getState().sticks?.[m.owner.get(id) ?? '']
-  if (!stick) return
-  const bs = useBoardsStore.getState()
-  const g = bs.groups.find(x => x.id === id)
-  if (!g) return
-  const t = performance.now()
-  let s = sizing.get(key)
-  if (!s || t - s.t > 900) {
-    const ft = cardHeight(g, bs.groups) ?? stick.heights?.[id]
-    if (!ft) return
-    s = { ft0: ft, k0: was ?? 1, t }
-    // One sizing is one step back (Brian 2026-11-19: "need to be able to
-    // undo a height change").
-    useUndoCoordinator.getState().checkpoint()
-    sizing.set(key, s)
-  }
-  s.t = t
-  const ft = s.ft0 * now / s.k0
-  setCardHeight(g, ft)
-}
+// (Sizing a docked 3D model by hand writes its card's Height: the drag does
+// it itself, components/Canvas/tilt/TiltedView, by standOf above. It was
+// guessed here from "exactly one size changed, under a second after the
+// last".)
 
 // A docked stick goes with its card. What each stick stands on (the
 // nearest of its cards) and where that card was, kept from the last look:
@@ -427,11 +400,11 @@ function follow() {
   anchor()
 }
 let lastGroups: unknown = null, lastSticks: unknown = null
-const w = (typeof window !== 'undefined' ? window : undefined) as (Window & { __stickDock?: { sized: typeof sized; follow: typeof follow; anchor: typeof anchor; settle: typeof settle } }) | undefined
+const w = (typeof window !== 'undefined' ? window : undefined) as (Window & { __stickDock?: { follow: typeof follow; anchor: typeof anchor; settle: typeof settle } }) | undefined
 if (w) {
   // Installed once; a reload of this module (dev) swaps the handlers in place.
   const first = !w.__stickDock
-  w.__stickDock = { sized, follow, anchor, settle }
+  w.__stickDock = { follow, anchor, settle }
   if (first) {
     const h = () => w.__stickDock!
     useNotesStore.subscribe(s => {
@@ -445,15 +418,6 @@ if (w) {
       if (s.groups === lastGroups) return
       lastGroups = s.groups
       if (Object.keys(useNotesStore.getState().sticks ?? {}).length) h().follow()
-    })
-    useModelScaleStore.subscribe((s, prev) => {
-      if (!Object.keys(useNotesStore.getState().sticks ?? {}).length) return
-      for (const [now, was] of [[s.sizeOf, prev.sizeOf], [s.setSizeOf, prev.setSizeOf]] as const) {
-        if (now === was) continue
-        const changed = Object.keys(now).filter(k => now[k] !== was[k])
-        // (One model sized by hand: not a whole project's sizes coming back.)
-        if (changed.length === 1) h().sized(changed[0], was[changed[0]], now[changed[0]])
-      }
     })
   }
 }

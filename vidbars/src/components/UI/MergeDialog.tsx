@@ -9,7 +9,7 @@ import React, { useEffect, useState } from 'react'
 import ReactDOM from 'react-dom'
 import { useBoardsStore } from '../../store/boardsStore'
 import { useUnits } from '../../store/unitsStore'
-import { useMergeAsk, answerMerge } from '../../utils/detailMerge'
+import { useMergeAsk, answerMerge, nextMerge } from '../../utils/detailMerge'
 import { heightAsUnit } from '../../utils/stickGeom'
 
 const pickStyle = (lit: boolean): React.CSSProperties => ({
@@ -28,7 +28,7 @@ export const MergeDialog: React.FC = () => {
   const groups = useBoardsStore.getState().groups
   const nameOf = (id: string) => groups.find(g => g.id === id)?.name || 'Untitled'
   const colorOf = (id: string) => groups.find(g => g.id === id)?.color || '#5b8dd9'
-  const close = () => useMergeAsk.setState({ ask: null })
+  const close = () => nextMerge()
   const any = ask.rows.some(r => keep[r.aRow])
   const side = (r: typeof ask.rows[number], which: 'a' | 'b') => {
     const lit = keep[r.aRow] === which
