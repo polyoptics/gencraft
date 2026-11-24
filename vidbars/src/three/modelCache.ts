@@ -113,6 +113,8 @@ async function loadEntry(url: string): Promise<CacheEntry> {
 /** Load (or reuse) the model at `url` and return a fresh instance the
  *  caller owns. Call releaseModel(url) when done with it. */
 export async function acquireModel(url: string): Promise<THREE.Object3D> {
+  // Wanted again: kept as any other.
+  passing.delete(url)
   let entry = cache.get(url)
   if (!entry) {
     let p = pending.get(url)
@@ -146,6 +148,7 @@ export function releaseModel(url: string): void {
   if (!entry) return
   entry.refCount = Math.max(0, entry.refCount - 1)
   if (entry.refCount === 0) {
+    if (passing.delete(url)) { disposeObject(entry.source); cache.delete(url); return }
     lru.push(url)
     while (lru.length > LRU_MAX) {
       const evict = lru.shift()!
@@ -156,6 +159,23 @@ export function releaseModel(url: string): void {
       }
     }
   }
+}
+
+// Models only being looked through (a saved project's, utils/library): not
+// kept warm once the last thing showing them lets go.
+const passing = new Set<string>()
+
+/** Let go of the model at `url` as soon as nothing shows it: now, when
+ *  nothing does, else at its last release. One still loading is let go of
+ *  the same way once it is in and released. Asked for again, it is kept. */
+export function forgetModel(url: string): void {
+  const entry = cache.get(url)
+  if (!entry) { if (pending.has(url)) passing.add(url); return }
+  if (entry.refCount > 0) { passing.add(url); return }
+  const li = lru.indexOf(url)
+  if (li >= 0) lru.splice(li, 1)
+  disposeObject(entry.source)
+  cache.delete(url)
 }
 
 /** Fully dispose a cloned instance returned by acquireModel. Clones share
