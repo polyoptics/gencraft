@@ -27,7 +27,7 @@ import { targetMiddle, pickedPoints } from '../../../utils/pathEdit'
 import type { PathFrame, PathHit } from '../../../three/pathOverlay'
 import type { StickFrame, StickSpot } from '../../../three/stickOverlay'
 import { stickMeasures, stickMarks, seenHeight, cardHeight, cardEmphasis } from '../../../utils/stickDock'
-import { useWorldScale } from '../../../utils/worldScale'
+import { useWorldScale, worldPer } from '../../../utils/worldScale'
 import { useUnits } from '../../../store/unitsStore'
 import { curveRuns, pointFrames, withLayers } from '../../../utils/curveGeom'
 import { PinLabels } from '../../Notes/PinLabels'
@@ -160,8 +160,8 @@ const fadeShown = () => {
  *  opaque. And slower: slow down and be nice"). */
 /** The canvas's own dark, which a far slab's sides go into. */
 const FAR_DARK = 0x12131f
-const FAR = { from: 70, soft: 0.25 }
-type Far = { a: number; cx: number; cy: number; hw: number; hh: number; cs: number; sn: number }
+const FAR = { from: 70, soft: 0.2 }
+type Far = { a: number; cx: number; cy: number; r: number }
 /** Under this share of itself a far thing is gone: not drawn (its slab,
  *  its model), not pressed, not selected. */
 const FAR_GONE = 0.02
@@ -179,64 +179,56 @@ const FAR_GONE = 0.02
  *  both counted from the flat canvas's middle. None knew the selection.)
  *
  *  The spot (flat px from the host's centre) is the ground under the
- *  middle of the screen, held near the screen's own distance (LOOK): seen
- *  from low down a pixel up the screen is a mile of ground, and the spot
- *  would fly off to the horizon and back with every small slide. So what
- *  is framed (it sits at the screen's own distance) is always inside.
- *  The reach is the screen's own size laid on the floor about that spot,
- *  turned as the view is turned: as wide as the screen across and as deep
- *  as the screen is high (what the screen would cover looking straight
- *  down). Lying nearly flat, the side view, that is the screen itself;
- *  side-on in the tilted view it is the line-up looked at and a screen's
- *  height of floor round it, the far board gone (the "bus stop" look). */
-const LOOK = { near: 0.4, far: 0.6 }
-function viewNow(W: number, H: number, whole = false): Omit<Far, 'a'> {
-  const ts = useTiltStore.getState()
+ *  middle of the screen, exactly, except that it goes no further off than
+ *  LOOK.far beyond the screen's own distance: seen from low down a pixel
+ *  up the screen is a mile of ground, and with the middle of the screen
+ *  at or over the horizon there is no ground under it at all. There the
+ *  spot waits at that limit, straight below the middle of the screen.
+ *  The reach is a CIRCLE about that spot, the Fade Distance typed under
+ *  the view cube (feet of the world scale, a size on the canvas), and the
+ *  circle is DRAWN on the floor (drawRing), so what the rule does can be
+ *  seen (Brian 2026-11-24: "Let's put a circle on the canvas, a big
+ *  circle ... Just the outline. When I go into the 3D view, I want to see
+ *  that circle based on the fade distance that I set under the cube ...
+ *  I'm going to look around and pan on different views, and I'm going to
+ *  watch that fucking circle. If it's not right where my camera is every
+ *  time ..."). The fade and the ring read the same viewNow: they cannot
+ *  disagree. */
+const LOOK = { far: 0.6 }
+function viewNow(): Omit<Far, 'a'> {
+  const ts = useTiltStore.getState(), ws = useWorldScale.getState()
   const P = tiltP()
   const t = ts.tilt * Math.PI / 180, b = ts.yaw * Math.PI / 180, sp = ts.spin * Math.PI / 180
-  let c: { x: number; y: number } | null = null
-  if (ts.tilt < 90) {
-    // unprojectTilt's own plane: a screen point (sx, sy) is `lam` times
-    // the screen's distance off, lam = K / (P nz - nx sx - ny sy).
-    const nx = Math.sin(b), ny = -Math.sin(t) * Math.cos(b), nz = Math.cos(t) * Math.cos(b)
-    const K = -nx * ts.shiftX - ny * ts.shiftY + P * nz
-    if (K > 1e-3) {
-      const lo = K / (1 + LOOK.far * TILT_PERSPECTIVE / P), hi = K / Math.max(0.05, 1 - LOOK.near * TILT_PERSPECTIVE / P)
-      const want = Math.max(lo, Math.min(hi, P * nz))
-      const m = Math.hypot(nx, ny), d = m > 1e-6 ? (P * nz - want) / m : 0
-      c = unprojectTilt(m > 1e-6 ? nx / m * d : 0, m > 1e-6 ? ny / m * d : 0, ts.tilt, ts.spin, ts.shiftX, ts.shiftY, 0, Infinity, ts.yaw)
-    }
-  }
-  // (Past edge-on, looking up from low down or from under the ground:
-  // the same spot, worked out from the view's shift across.)
-  c ??= { x: -ts.shiftX * Math.cos(sp), y: ts.shiftX * Math.sin(sp) }
-  const cs = Math.cos(sp), sn = Math.sin(sp)
-  let hw = W / 2, hh = H / 2
-  // `whole` (the side view, swung round): the far side of the floor is
-  // drawn small, and more of it than a screen's width is on screen. The
-  // reach takes in all the floor under the screen's four corners (to five
-  // screens off at most).
-  if (whole) {
-    let ax = 0, ay = 0
-    for (const [sx, sy] of [[-W / 2, -H / 2], [W / 2, -H / 2], [-W / 2, H / 2], [W / 2, H / 2]]) {
-      const q = ts.tilt < 90 ? unprojectTilt(sx, sy, ts.tilt, ts.spin, ts.shiftX, ts.shiftY, 0, Infinity, ts.yaw) : null
-      const du = q ? q.x - c.x : Infinity, dv = q ? q.y - c.y : Infinity
-      ax = Math.max(ax, q ? Math.abs(du * cs - dv * sn) : Infinity); ay = Math.max(ay, q ? Math.abs(du * sn + dv * cs) : Infinity)
-    }
-    hw = Math.max(hw, Math.min(ax, W * 2.5)); hh = Math.max(hh, Math.min(ay, H * 2.5))
-  }
-  return { cx: c.x, cy: c.y, hw, hh, cs, sn }
+  const ct = Math.cos(t), st = Math.sin(t), cb = Math.cos(b), sb = Math.sin(b)
+  // unprojectTilt's own plane: a screen point (sx, sy) is `lam` times the
+  // screen's distance off, lam = K / (P nz - nx sx - ny sy). (Worked here
+  // and not through unprojectTilt, which has no answer from under the
+  // floor: the view slid until the eye is below it still has a spot.)
+  const nx = sb, ny = -st * cb, nz = ct * cb
+  const K = -nx * ts.shiftX - ny * ts.shiftY + P * nz
+  let c: { x: number; y: number }
+  if (Math.abs(K) > 1e-3) {
+    const far = K / (1 + LOOK.far * TILT_PERSPECTIVE / P), near = K / 0.05
+    const want = Math.max(Math.min(far, near), Math.min(Math.max(far, near), P * nz))
+    const m = Math.hypot(nx, ny), d = m > 1e-6 ? (P * nz - want) / m : 0
+    const lam = K / want
+    const qx = -ts.shiftX + lam * (m > 1e-6 ? nx / m * d : 0), qy = -ts.shiftY + lam * (m > 1e-6 ? ny / m * d : 0), qz = P - lam * P
+    const y1 = qy * ct + qz * st, z1 = -qy * st + qz * ct
+    const x0 = qx * cb - z1 * sb
+    c = { x: x0 * Math.cos(sp) + y1 * Math.sin(sp), y: -x0 * Math.sin(sp) + y1 * Math.cos(sp) }
+  } else c = { x: -ts.shiftX * Math.cos(sp), y: ts.shiftX * Math.sin(sp) }
+  return { cx: c.x, cy: c.y, r: ws.fadeFt * worldPer(ws) * (useCanvasStore.getState().zoom || 1) }
 }
 /** The far board fading out, coming round to a side-on look at the tilted
  *  view (the "bus stop" line-up): how far gone `a` 0..1, about the one
  *  spot (viewNow). Null below `from`, and looking through a camera. */
-function farNow(W: number, H: number): Far | null {
+function farNow(): Far | null {
   const ts = useTiltStore.getState()
   // (Past edge-on, looking up from low down or from under the ground, it
   // stays gone: Brian 2026-11-19, "past 90 the BG nodes stay faded off".)
   if (!useWorldScale.getState().fadeOn || ts.tilt <= FAR.from || useManip.getState().through) return null
   const x = Math.min(1, (ts.tilt - FAR.from) / (TILT_MAX - FAR.from)), a = 1 - (1 - x) ** 3
-  return { a, ...viewNow(W, H) }
+  return { a, ...viewNow() }
 }
 /** What is selected always shows: cards and tiles by id. */
 function pickedNow(): { cards: Set<string>; nodes: Set<string>; key: (k: string) => boolean } {
@@ -248,13 +240,31 @@ function pickedNow(): { cards: Set<string>; nodes: Set<string>; key: (k: string)
  *  the host's centre. Whole while any of it is within the radius. */
 function farShown(f: Far | null, u: number, v: number, w: number, h: number): number {
   if (!f) return 1
-  // Across and into the view, from the spot (the floor turned as drawn).
-  const du = u - f.cx, dv = v - f.cy
-  const ax = Math.abs(du * f.cs - dv * f.sn), ay = Math.abs(du * f.sn + dv * f.cs)
-  const ew = (Math.abs(w * f.cs) + Math.abs(h * f.sn)) / 2, eh = (Math.abs(w * f.sn) + Math.abs(h * f.cs)) / 2
-  const d = Math.hypot(Math.max(0, ax - f.hw - ew), Math.max(0, ay - f.hh - eh))
-  const x = Math.max(0, Math.min(1, d / Math.max(1, Math.min(f.hw, f.hh) * 2 * FAR.soft)))
+  const d = Math.hypot(Math.max(0, Math.abs(u - f.cx) - w / 2), Math.max(0, Math.abs(v - f.cy) - h / 2))
+  const x = Math.max(0, Math.min(1, (d - f.r) / Math.max(1, f.r * FAR.soft)))
   return 1 - f.a * x * x * (3 - 2 * x)
+}
+/** The circle itself, drawn on the floor: an outline lying on the tilted
+ *  canvas, at the spot and of the radius the fade uses this frame. In the
+ *  3D view (tilted or the side view) while Fade is on; not looking
+ *  through a camera. */
+let ring: HTMLDivElement | null = null
+function drawRing(host: HTMLElement | null) {
+  const on = !!host && useWorldScale.getState().fadeOn && isTilted(useTiltStore.getState()) && !useManip.getState().through
+  if (!on) { if (ring) { ring.remove(); ring = null } return }
+  const v = viewNow()
+  if (!ring || ring.parentElement !== host) {
+    ring?.remove()
+    ring = document.createElement('div')
+    ring.dataset.fadeRing = ''
+    ring.style.cssText = 'position:absolute;left:0;top:0;box-sizing:border-box;border-radius:50%;border:3px solid rgba(150,190,255,0.9);pointer-events:none;z-index:60'
+    host!.appendChild(ring)
+  }
+  const d = Math.max(2, v.r * 2)
+  const t = `translate(${(host!.offsetWidth / 2 + v.cx - v.r).toFixed(1)}px, ${(host!.offsetHeight / 2 + v.cy - v.r).toFixed(1)}px)`
+  if (ring.style.transform !== t) ring.style.transform = t
+  const px = d.toFixed(1) + 'px'
+  if (ring.style.width !== px) { ring.style.width = px; ring.style.height = px }
 }
 /** The far things' own faces on the page, faded as their slabs and models
  *  are: each one's opacity as it had it (`was`) and as written. */
@@ -1917,8 +1927,9 @@ function collectSlabs(K = 1): TiltSlab[] {
   out.unshift(...consoleFurniture(leaning, screens, decks, zoom, K))
   // Far from the middle of a side view (see FAR): gone with their faces,
   // going into the dark of the canvas on the way.
-  const far = host ? farNow(host.offsetWidth, host.offsetHeight) : null
+  const far = farNow()
   fadeFar(far, host)
+  drawRing(host)
   if (far) {
     // What is selected stays whole: a slab lying on a selected card or tile.
     const held: { x0: number; y0: number; x1: number; y1: number }[] = []
@@ -3033,6 +3044,7 @@ export function liftOf(el: Element | null): number {
 function dropLifts() {
   if (lifted.size) setLifts(new Map())
   if (farFaded.size) fadeFar(null, null)
+  drawRing(null)
   standScreens([])
   turnAway(new Set())
   restEase.clear()
@@ -3272,10 +3284,9 @@ function collectTargets(W: number, H: number): TiltTarget[] {
   // The rest stand while they are about the spot in the middle of the
   // screen (viewNow), or selected: one rule, the view's own (it was the
   // flat canvas's middle, wherever the view had been slid to).
-  const view = viewNow(W, H)
+  const view = viewNow()
   const picked = pickedNow()
-  const wide = side ? viewNow(W, H, true) : null
-  const about = (t: TiltTarget) => (Math.abs(t.u) < W && Math.abs(t.v) < H) || (Math.abs(t.u - view.cx) < W && Math.abs(t.v - view.cy) < H) || (!!wide && farShown({ a: 1, ...wide }, t.u, t.v, t.w, t.h) > 0)
+  const about = (t: TiltTarget) => (Math.abs(t.u) < W && Math.abs(t.v) < H) || (Math.abs(t.u - view.cx) < W && Math.abs(t.v - view.cy) < H) || farShown({ a: 1, ...view }, t.u, t.v, t.w, t.h) > 0
   const shown = out.filter(t => looked(t) || ((about(t) || picked.key(t.key)) && t.w > (t.mini ? 1 : 4)))
   // A card set to keep its model flat ("Show model in 3D" off).
   const groups = useBoardsStore.getState().groups
@@ -3303,7 +3314,7 @@ function collectTargets(W: number, H: number): TiltTarget[] {
   if (st.held !== held || st.tris !== tris) useTiltStats.setState({ held, tris })
   // Far from the middle of a side view (see FAR), a model goes with its
   // card; in a 3D set, with the set.
-  const far = farNow(W, H)
+  const far = farNow()
   if (far) {
     for (let i = 0; i < keep.length; i++) {
       const t = keep[i]
@@ -3324,7 +3335,7 @@ function collectTargets(W: number, H: number): TiltTarget[] {
   // the view was slid: Brian 2026-11-24, "I've panned upwards to look at
   // some other models -- and they're all transparent".)
   const sideFloats = useModelScaleStore.getState().sideFloatOf
-  const near: Far | null = wide ? { a: 1, ...wide } : null
+  const near: Far | null = side ? { a: 1, ...view } : null
   const inBox = (t: TiltTarget) => (picked.key(t.key) ? 1 : farShown(near, t.u, t.v, t.w, t.h))
   for (const t of keep) {
     if (liveOnly.has(t.key) || liveOnly.has(dataKey(t.key))) { out2.push(t); continue }
