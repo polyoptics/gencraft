@@ -66,6 +66,8 @@ import { useCanvasStore, groupBounds } from '../../store/canvasStore'
 import { useBoardsStore, type ProjectGroup } from '../../store/boardsStore'
 import { cardTitle } from '../../utils/faceStyle'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
+import { useExportProjectStore } from '../../store/exportProjectStore'
+import { exportPickFor } from '../../utils/exportSelection'
 import { useLinkDragStore } from '../../store/linkDragStore'
 import { useViewport3DStore } from '../../store/viewport3dStore'
 import { useMenuClamp } from '../../hooks/useMenuClamp'
@@ -1712,6 +1714,7 @@ const StoryMenu: React.FC<{
     bakeStoryline(id, cardOrigins)
   } })
   if (at.grab) items.push({ label: 'Title and description', icon: '✏️', action: () => useStoryUi.getState().set({ labelEditing: id }) })
+  if (at.grab) items.push({ label: 'Export to new project…', icon: '📦', action: () => useExportProjectStore.getState().openExport(exportPickFor('tile', id)) })
   if (!at.tether) items.push({ label: 'Delete storyline', icon: '🗑️', danger: true, action: () => {
     useUndoCoordinator.getState().checkpoint()
     useFreeNodeStore.getState().deleteFreeNode(id)

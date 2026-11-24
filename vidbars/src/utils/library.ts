@@ -291,14 +291,18 @@ const ALWAYS_DROPS = ['pin', 'home', 'pinnedLayer', 'isNew'] as const
 
 const isId = (s: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(s)
 
-/** Under `v`, every card named by a `card`, `cards` or `links` entry: how a
- *  chart, a scene card's sections and a 3D set name the cards they hold. */
+/** Under `v`, every card named by a `card`, `cards`, `links`, `deck` or
+ *  `opens` entry: how a chart, a scene card's sections and a 3D set name the
+ *  cards they hold. */
 function namedCards(v: unknown, out: string[]): void {
   if (Array.isArray(v)) { for (const x of v) namedCards(x, out); return }
   if (!v || typeof v !== 'object') return
   for (const [k, x] of Object.entries(v)) {
     if (k === 'card' && typeof x === 'string') out.push(x)
-    else if ((k === 'cards' || k === 'links') && Array.isArray(x)) { for (const y of x) { if (typeof y === 'string') out.push(y) } }
+    // A scene section's own scene card (`opens`) and every card of the deck
+    // let go on it as its cast (`deck`, not its front alone) come as well.
+    else if (k === 'opens' && typeof x === 'string') out.push(x)
+    else if ((k === 'cards' || k === 'links' || k === 'deck') && Array.isArray(x)) { for (const y of x) { if (typeof y === 'string') out.push(y) } }
     else namedCards(x, out)
   }
 }
@@ -308,8 +312,15 @@ const childrenCache = new WeakMap<LibraryProject, Map<string, string[]>>()
 /** Each card of a saved project with the cards it points at. */
 function childrenOf(p: LibraryProject): Map<string, string[]> {
   let all = childrenCache.get(p)
-  if (all) return all
-  all = new Map()
+  if (!all) childrenCache.set(p, all = cardsPointedAt(p))
+  return all
+}
+
+/** Each of these cards with the cards it points at: the one rule for what
+ *  comes along with a card, out of a saved project or off the canvas
+ *  (utils/exportSelection). */
+export function cardsPointedAt(p: { groups: ProjectGroup[]; boards: Record<string, BoardData> }): Map<string, string[]> {
+  const all = new Map<string, string[]>()
   const has = new Set(p.groups.map(g => g.id))
   const ownerOfBoard = new Map(p.groups.flatMap(g => (g.boardIds ?? []).map(b => [b, g.id] as const)))
   for (const g of p.groups) {
@@ -333,7 +344,6 @@ function childrenOf(p: LibraryProject): Map<string, string[]> {
     if (g.linkOf) ids.push(g.linkOf)
     all.set(g.id, [...new Set(ids)].filter(id => id !== g.id && has.has(id)))
   }
-  childrenCache.set(p, all)
   return all
 }
 
