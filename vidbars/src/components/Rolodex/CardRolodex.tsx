@@ -56,7 +56,7 @@ import { poolFeedingList, viewerAdjacentTo } from '../../utils/componentLinks'
 import { useViewport3DStore } from '../../store/viewport3dStore'
 import { collectDeckContent, defaultBrowseItem, tileBrowseItem, type BrowseItem } from '../../utils/contentTraversal'
 import { browserScope, trayScope } from '../../utils/browserScope'
-import { useLibraryStore, libraryCards, filterLibrary, libraryBrowseItem, LIBRARY_DRAG_MIME, type LibraryCard, type LibraryDrag } from '../../utils/library'
+import { useLibraryStore, libraryCards, filterLibrary, libraryBrowseItem, linkedAlong, LIBRARY_DRAG_MIME, type LibraryCard, type LibraryDrag } from '../../utils/library'
 import { useTrayStore, TRAY_QUERY } from '../../store/trayStore'
 import {
   DEFAULT_HEADER_STYLE,
@@ -2519,6 +2519,9 @@ const RolodexPoolSlot: React.FC<{
 /** A card of a saved project (utils/library). Drag it onto the canvas for
  *  a copy of that card; on a deck's front card, the DECK chip drags the
  *  whole deck. */
+/** How a library row says what comes with it. */
+const alongWords = (n: number) => (n === 0 ? '' : n === 1 ? ', with the 1 card linked to it' : `, with the ${n} cards linked to it`)
+
 const RolodexLibrarySlot: React.FC<{
   card: LibraryCard
   offset: number
@@ -2554,7 +2557,7 @@ const RolodexLibrarySlot: React.FC<{
       onMouseLeave={onHoverLeave}
       draggable
       onDragStart={e => startDrag(e, false)}
-      title={`${group.name || 'Untitled'}, in ${project.name}. Drag onto the canvas to bring in a copy`}
+      title={`${group.name || 'Untitled'}, in ${project.name}. Drag onto the canvas to bring in a copy${alongWords(linkedAlong(project, [group.id]).length)}`}
       style={{
         position: 'absolute', left: WING_W + indent, top, width: SLOT_W, height: CARD_H,
         background: `linear-gradient(160deg, ${group.color || '#5b8dd9'} 0%, #1b2030 78%)`, borderRadius: 7,
@@ -2578,7 +2581,7 @@ const RolodexLibrarySlot: React.FC<{
           <span
             draggable
             onDragStart={e => startDrag(e, true)}
-            title={`The whole deck: ${card.deck.length} cards. Drag onto the canvas to bring in a copy of all of them`}
+            title={`The whole deck: ${card.deck.length} cards. Drag onto the canvas to bring in a copy of all of them${alongWords(linkedAlong(project, card.deck).length)}`}
             style={{
               flexShrink: 0, fontSize: 9, fontWeight: 700, letterSpacing: '0.4px', padding: '1px 5px',
               borderRadius: 3, cursor: 'grab', color: '#ffe2ad',
