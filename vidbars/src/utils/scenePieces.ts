@@ -28,6 +28,7 @@
 // over, its picture is drawn again. A view of its own stays as it was
 // taken, upright, standing on its spot as a token does.
 
+import { isShut } from './deckTree'
 import { useFreeNodeStore } from '../store/freeNodeStore'
 import { useBoardsStore } from '../store/boardsStore'
 import { useCanvasStore } from '../store/canvasStore'
@@ -169,7 +170,7 @@ function standing(): ScenePiece[] {
       const key = `card:${g.id}`
       // (Only a closed or fanned deck's front keeps its model's settings
       // with another card.)
-      const dk = g.deckState === 'stacked' || g.deckState === 'fanned' ? dataKey(key) : key
+      const dk = isShut(g) ? dataKey(key) : key
       const by = rider(key, dk)
       if (!(placed[dk] || by) || seen.has(`${dk}|${by}`)) continue
       const face = dk === key ? g : bs.groups.find(x => x.id === dk.slice(5)) ?? g

@@ -33,6 +33,7 @@
 // (Brian 2026-11-18: widened for passing references out and taking results
 // back as cards, then for working on the canvas as he does.)
 
+import { isShut } from './deckTree'
 import { useBoardsStore, type BoardData, type ProjectGroup } from '../store/boardsStore'
 import { useCanvasStore } from '../store/canvasStore'
 import { useFreeNodeStore, DEFAULT_BODY_STYLE, DEFAULT_HEADER_STYLE, type TextStyle } from '../store/freeNodeStore'
@@ -815,7 +816,7 @@ async function deleteCards(args: Json): Promise<Json> {
   const ids = idsOf(args.ids)
   const cards = cardsNamed(ids)
   const { groups } = useBoardsStore.getState()
-  const closed = cards.filter(g => !isHiddenDeckMember(g) && (g.deckState === 'stacked' || g.deckState === 'fanned')).map(g => g.id)
+  const closed = cards.filter(g => !isHiddenDeckMember(g) && isShut(g)).map(g => g.id)
   const doomed = [...new Set([...ids, ...expandWithNestedMembers(closed, groups)])]
   await agentGlide(say(args, `Deleting ${doomed.length === 1 ? cards[0].name : `${doomed.length} cards`}`), agentSpotOfCard(ids[0]))
   useUndoCoordinator.getState().checkpoint()

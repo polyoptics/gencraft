@@ -36,6 +36,7 @@
 
 // (First: its listeners go on before this file's, so a press on a set being
 // annotated is its own. utils/mapNotes.)
+import { isShut } from './deckTree'
 import './mapNotes'
 // (And the measuring sticks': a press on one is its own. utils/stickTool.)
 import './stickTool'
@@ -230,7 +231,7 @@ function onDown(e: PointerEvent) {
       checkpoint()
       // A closed deck clicked: the pin links the whole deck (its front).
       const g = useBoardsStore.getState().groups.find(x => x.id === card.dataset.id)
-      const closed = !!g && (g.deckState === 'stacked' || g.deckState === 'fanned')
+      const closed = !!g && isShut(g)
       useNotesStore.getState().updatePin(ui.linking.url, ui.linking.pinId, closed
         ? { cardId: g!.deckAnchorId ?? g!.id, deck: true }
         : { cardId: card.dataset.id!, deck: undefined })

@@ -1,3 +1,4 @@
+import { isShut } from './utils/deckTree'
 import { useEffect, useState } from 'react'
 import { InfiniteCanvas } from './components/Canvas/InfiniteCanvas'
 import { NLETimelineViewer } from './components/NLE/NLETimelineViewer'
@@ -158,7 +159,7 @@ function recipeCopy(ids: string[], nodes: Record<string, FreeNodeData>): string[
 function pasteCardOrDeck(groupId: string) {
   const bs = useBoardsStore.getState()
   const src = bs.groups.find(g => g.id === groupId)
-  const closed = src && (src.deckState === 'stacked' || src.deckState === 'fanned')
+  const closed = src && isShut(src)
   const members = closed ? expandWithNestedMembers([groupId], bs.groups) : [groupId]
   if (members.length < 2) {
     const copy = bs.duplicateGroup(groupId)
@@ -556,7 +557,7 @@ function useKeyboardDelete() {
         const { groups } = useBoardsStore.getState()
         const closed = selGroups.filter(gid => {
           const g = groups.find(gr => gr.id === gid)
-          return g && (g.deckState === 'stacked' || g.deckState === 'fanned')
+          return g && isShut(g)
         })
         const doomed = [...new Set([...selGroups, ...expandWithNestedMembers(closed, groups)])]
         for (const gid of doomed) {
