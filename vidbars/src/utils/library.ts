@@ -16,6 +16,7 @@ import { useBoardsStore } from '../store/boardsStore'
 import type { BoardData, ProjectGroup } from '../store/boardsStore'
 import { useUndoCoordinator } from '../store/undoCoordinator'
 import { cardVisualRect, deckTouchRect, isHiddenDeckMember, rectsTouch, DECK_TOUCH_TOLERANCE } from '../hooks/useCardDecks'
+import { CARD_FLOOR_ZOOM } from '../components/NLE/NLETimelineHeader'
 import { cardFaceMedia } from './cardGrid'
 import type { CardType } from './cardTypes'
 import {
@@ -238,39 +239,192 @@ export function parseLibraryDrag(raw: string): LibraryDrag | null {
  *  among: a card brought in on its own leaves these behind. */
 const ALONE_DROPS = ['deckState', 'deckAnchorId', 'deckOffsetX', 'deckOffsetY', 'deckFaceCard', 'deckInside',
   'nestedDeck', 'ghostSlots', 'deckLastFront', 'deckLock', 'deckKeep', 'railSource', 'railBase'] as const
-const ALWAYS_DROPS = ['pin', 'home', 'pinnedLayer', 'linkOf', 'isNew'] as const
+const ALWAYS_DROPS = ['pin', 'home', 'pinnedLayer', 'isNew'] as const
+
+// ── The cards linked to a card come with it ────────────────────────────────
+// (Brian 2026-11-24: "if i drag out a parent card the children should follow
+// -- if i grab a ship out, i need the model or w/e else too.") A card's
+// children are the cards it points at: the ones linked onto it (the drop
+// target owns the link, so they are in its own list), the card a detail
+// stands on it, a faction's or family's members, a chart's cards, the cards
+// in a scene card's sections and on a 3D set, and, for a linked copy, the
+// card it is a copy of. Theirs come too, all the way down. Never the other
+// way: a card does not bring the cards that point at IT.
+
+const isId = (s: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(s)
+
+/** Under `v`, every card named by a `card`, `cards` or `links` entry: how a
+ *  chart, a scene card's sections and a 3D set name the cards they hold. */
+function namedCards(v: unknown, out: string[]): void {
+  if (Array.isArray(v)) { for (const x of v) namedCards(x, out); return }
+  if (!v || typeof v !== 'object') return
+  for (const [k, x] of Object.entries(v)) {
+    if (k === 'card' && typeof x === 'string') out.push(x)
+    else if ((k === 'cards' || k === 'links') && Array.isArray(x)) { for (const y of x) { if (typeof y === 'string') out.push(y) } }
+    else namedCards(x, out)
+  }
+}
+
+const childrenCache = new WeakMap<LibraryProject, Map<string, string[]>>()
+
+/** Each card of a saved project with the cards it points at. */
+function childrenOf(p: LibraryProject): Map<string, string[]> {
+  let all = childrenCache.get(p)
+  if (all) return all
+  all = new Map()
+  const has = new Set(p.groups.map(g => g.id))
+  const ownerOfBoard = new Map(p.groups.flatMap(g => (g.boardIds ?? []).map(b => [b, g.id] as const)))
+  for (const g of p.groups) {
+    const ids: string[] = [...(g.linkedGroupIds ?? [])]
+    // A block or an element linked onto the card brings the card it is on.
+    const refs = [
+      ...(g.linkedRefs ?? []),
+      ...(g.boardIds ?? []).flatMap(b => {
+        const board = p.boards[b]
+        return board ? [...(board.linkedRefs ?? []), ...Object.values(board.bars ?? {}).flatMap(bar => bar.linkedRefs ?? [])] : []
+      }),
+    ]
+    for (const r of refs) {
+      const id = r.kind === 'group' ? r.id : ownerOfBoard.get(r.kind === 'board' ? r.id : r.boardId)
+      if (id) ids.push(id)
+    }
+    for (const d of g.details ?? []) { const c = (d as { link?: { card?: unknown } }).link?.card; if (typeof c === 'string') ids.push(c) }
+    namedCards(g.chart, ids)
+    namedCards(g.scene, ids)
+    namedCards(g.area3d, ids)
+    if (g.linkOf) ids.push(g.linkOf)
+    all.set(g.id, [...new Set(ids)].filter(id => id !== g.id && has.has(id)))
+  }
+  childrenCache.set(p, all)
+  return all
+}
+
+/** The cards that come along with `ids` and are not among them: everything
+ *  those cards point at, and what those point at, nearest first. */
+export function linkedAlong(p: LibraryProject, ids: string[]): string[] {
+  const kids = childrenOf(p)
+  const seen = new Set(ids)
+  const out: string[] = []
+  const line = [...ids]
+  for (let i = 0; i < line.length; i++) {
+    for (const k of kids.get(line[i]) ?? []) {
+      if (seen.has(k)) continue
+      seen.add(k); out.push(k); line.push(k)
+    }
+  }
+  return out
+}
+
+/** `v` with every card id in `map` swapped for what it maps to, as a value
+ *  and as an entry's name (who reports to whom is listed by card id). */
+function swapIds<T>(v: T, map: Map<string, string>): T {
+  if (typeof v === 'string') return (map.get(v) ?? v) as unknown as T
+  if (Array.isArray(v)) {
+    let same = true
+    const out = v.map(x => { const y = swapIds(x, map); if (y !== x) same = false; return y })
+    return same ? v : out as unknown as T
+  }
+  if (!v || typeof v !== 'object') return v
+  let same = true
+  const out: Record<string, unknown> = {}
+  for (const [k, x] of Object.entries(v)) {
+    const y = swapIds(x, map), nk = map.get(k) ?? k
+    if (y !== x || nk !== k) same = false
+    out[nk] = y
+  }
+  return same ? v : out as T
+}
+
+/** Clear of a card and of touching it: the space left between a brought-in
+ *  card and the linked cards set beside it. */
+const ALONG_GAP = 80
+/** The same between one line of them and the next: a card's header strip
+ *  counts as far up as it is ever drawn when cards are judged to touch
+ *  (hooks/useCardDecks DECK_HEADER), so a line lies further off than that. */
+const ALONG_LINE_GAP = 20 / CARD_FLOOR_ZOOM + ALONG_GAP
+/** How many linked cards lie side by side before the next line of them. */
+const ALONG_PER_LINE = 8
 
 /** Bring cards of a saved project onto the canvas as copies, the first of
- *  them centred on `at` (canvas units). One undo step. Returns the new cards. */
+ *  them centred on `at` (canvas units), with the cards linked to them set
+ *  beside them. One undo step. Returns the new cards, the dragged first. */
 export async function bringIn(drag: LibraryDrag, at: { cx: number; cy: number }): Promise<string[]> {
-  const res = await fetch(`/api/library/cards?${where(drag)}&v=${drag.v}&ids=${drag.ids.map(encodeURIComponent).join(',')}`)
+  const project = useLibraryStore.getState().projects.find(p => idOf(p) === idOf(drag))
+  const along = project ? linkedAlong(project, drag.ids) : []
+  const res = await fetch(`/api/library/cards?${where(drag)}&v=${drag.v}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: [...drag.ids, ...along] }),
+  })
   if (!res.ok) {
     // The project was saved again since it was listed: list it afresh.
     void useLibraryStore.getState().load()
     return []
   }
   const snapshot = await res.json() as ProjectSnapshot
-  const rank = new Map(drag.ids.map((id, i) => [id, i]))
+  const dragged = new Set(drag.ids)
+  const rank = new Map([...drag.ids, ...along].map((id, i) => [id, i]))
+  const came = new Set((snapshot.groups ?? []).map(g => g.id))
   const groups = (snapshot.groups ?? [])
-    .filter(g => !g.linkOf)
+    // A linked copy comes only with the card it is a copy of.
+    .filter(g => !g.linkOf || (!dragged.has(g.id) && came.has(g.linkOf)))
     .sort((a, b) => (rank.get(a.id) ?? 0) - (rank.get(b.id) ?? 0))
     .map(g => {
       const own = { ...g } as Record<string, unknown>
       for (const k of ALWAYS_DROPS) delete own[k]
-      if (!drag.deck) for (const k of ALONE_DROPS) delete own[k]
+      // The linked cards come as loose cards, whatever deck they were in.
+      if (!drag.deck || !dragged.has(g.id)) for (const k of ALONE_DROPS) delete own[k]
       return own as unknown as ProjectGroup
     })
-  if (!groups.length) return []
+  if (!groups.some(g => dragged.has(g.id))) return []
   useUndoCoordinator.getState().checkpoint()
   const made = insertProjectSnapshot({ ...snapshot, groups }, at.cy, { keepDecks: true })
+  // The copies name one another, not the cards they were copied from. The
+  // links were seen to already; this is every other way a card names a card
+  // (a chart's cards, a scene's, who reports to whom, a copy's own card).
+  const fresh = new Map(groups.map((g, i) => [g.id, made[i]]))
+  const byName = new Map([...fresh].filter(([old]) => isId(old)))
+  const mine = new Set(made)
+  useBoardsStore.setState(s => ({
+    groups: s.groups.map(g => {
+      if (!mine.has(g.id)) return g
+      const next = swapIds(g, byName)
+      return next.linkOf && fresh.has(next.linkOf) ? { ...next, linkOf: fresh.get(next.linkOf) } : next
+    }),
+  }))
   const bs = useBoardsStore.getState()
-  const front = bs.groups.find(g => g.id === made[0])
-  const rect = front && cardVisualRect(front, bs.boards, 1)?.rect
+  const rectOf = (id: string) => {
+    const g = bs.groups.find(x => x.id === id)
+    // A card with nothing on it yet has no face to measure: a card's worth.
+    return g ? cardVisualRect(g, bs.boards, 1)?.rect ?? { left: g.originX, top: g.originY, right: g.originX + 400, bottom: g.originY + 300 } : null
+  }
+  const firstCount = groups.filter(g => dragged.has(g.id)).length
+  const moves = new Map<string, { dx: number; dy: number }>()
+  const rect = rectOf(made[0])
   if (rect) {
     const dx = at.cx - (rect.left + rect.right) / 2
     const dy = at.cy - (rect.top + rect.bottom) / 2
-    const ids = new Set(made)
-    bs.setGroupPosBatch(bs.groups.filter(g => ids.has(g.id)).map(g => ({ groupId: g.id, originX: g.originX + dx, originY: g.originY + dy })))
+    // What was dragged keeps its own arrangement, under the pointer.
+    let right = -Infinity
+    for (const id of made.slice(0, firstCount)) {
+      moves.set(id, { dx, dy })
+      const r = rectOf(id)
+      if (r) right = Math.max(right, r.right + dx)
+    }
+    // The linked cards, wherever they lay in the saved project, are set out
+    // beside it: side by side, clear of it and of each other.
+    const top0 = rect.top + dy
+    let left = right + ALONG_GAP, top = top0, lineBottom = top0
+    made.slice(firstCount).forEach((id, i) => {
+      const r = rectOf(id)
+      if (!r) return
+      if (i > 0 && i % ALONG_PER_LINE === 0) { left = right + ALONG_GAP; top = lineBottom + ALONG_LINE_GAP }
+      moves.set(id, { dx: left - r.left, dy: top - r.top })
+      left += r.right - r.left + ALONG_GAP
+      lineBottom = Math.max(lineBottom, top + r.bottom - r.top)
+    })
+    bs.setGroupPosBatch(bs.groups.flatMap(g => {
+      const m = moves.get(g.id)
+      return m ? [{ groupId: g.id, originX: g.originX + m.dx, originY: g.originY + m.dy }] : []
+    }))
   }
   bs.setSelectedGroup(made[0])
   // Pictures written into the saved file go where this canvas keeps its own.

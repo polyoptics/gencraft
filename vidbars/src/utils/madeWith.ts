@@ -184,14 +184,21 @@ function cardHasMade(s: Cards, groupId: string): boolean {
  *  was made… let's put it in one thing that I can fold"): rows marked so
  *  when they were added, and, on cards filled before rows were marked,
  *  the rows named as madeRows() names them while the card holds a picture
- *  that carries how it was made. Read, never written: the rows stay as
+ *  that carries how it was made, or the rows themselves say so. Read, never written: the rows stay as
  *  they are. A string (ids joined by a space) so a store selector can
  *  return it. */
 export function metaDetailIds(s: Cards, groupId: string): string {
   const details = s.groups.find(g => g.id === groupId)?.details
   if (!details?.length) return ''
   const named = details.filter(d => !d.meta && !d.link && MADE_NAMES.has(d.name.trim().toLowerCase()))
-  const old = named.length > 0 && cardHasMade(s, groupId) ? new Set(named.map(d => d.id)) : null
+  // A card that no longer holds the picture itself (a copy, a linked card,
+  // a card its rows were moved onto) is still told by the rows: a Job ID
+  // that is one, or a Made line that names the tool.
+  const told = named.some(d => {
+    const k = d.name.trim().toLowerCase(), v = d.value.trim()
+    return k === 'job id' ? /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v) : k === 'made' && /^midjourney\b/i.test(v)
+  })
+  const old = named.length > 0 && (told || cardHasMade(s, groupId)) ? new Set(named.map(d => d.id)) : null
   return details.filter(d => d.meta || old?.has(d.id)).map(d => d.id).join(' ')
 }
 
