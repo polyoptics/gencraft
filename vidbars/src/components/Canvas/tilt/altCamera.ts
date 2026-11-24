@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { flushSync } from 'react-dom'
-import { useTiltStore, isTilted, offFlat, unprojectTilt, standRise, shiftKeeping, screenOf, depthShare, centrePoint, TILT_SNAP, TILT_MAX, TILT_UNDER, tiltP, type Pivot } from '../../../store/tiltStore'
+import { useTiltStore, isTilted, offFlat, unprojectTilt, standRise, shiftKeeping, depthShare, centrePoint, TILT_SNAP, TILT_MAX, TILT_UNDER, tiltP, type Pivot } from '../../../store/tiltStore'
 import { storyWallOf } from '../StorylineLayer'
 import { peekAt, usePeek, type PeekTarget } from '../../../utils/peek'
 import { useCanvasStore, groupBounds, MIN_ZOOM, MAX_ZOOM } from '../../../store/canvasStore'
@@ -78,48 +78,9 @@ function moveCamera(mode: CamMode, tilt: number, d: number) {
 // The camera picked by the drag that left the flat view (see above).
 let camMode: CamMode | null = null
 
-/** The camera taken to a lifted 3D model in the side view (peekOf): the
- *  3D model comes to the middle of the view in a split second and the
- *  view turns about it there, a fixed point in the middle from the first
- *  moment (Brian 2026-11-23: turning about it where it was, off to one
- *  side, felt like "a tractor beam ... the pivot of the orbit is changing
- *  while I'm orbiting"; "let's snap to the new object and start rotating
- *  around it right away ... except maybe ... a split-second zoom over to
- *  where it's going"). */
-const SNAP_MS = 140
-let snapRaf = 0
-function snapTo(pivot: Pivot) {
-  cancelAnimationFrame(snapRaf)
-  const s0 = useTiltStore.getState()
-  s0.setPivot(pivot)
-  const from = screenOf(pivot, s0)
-  if (!from) return
-  const start = performance.now()
-  const tick = () => {
-    const s = useTiltStore.getState()
-    if (s.pivot !== pivot || !isTilted(s)) return
-    const u = Math.min(1, (performance.now() - start) / SNAP_MS), k = 1 - (1 - u) ** 3
-    const sh = shiftKeeping(pivot, s.tilt, s.spin, s.yaw, { x: from.x * (1 - k), y: from.y * (1 - k) })
-    s.setShift(sh.shiftX, sh.shiftY)
-    if (u < 1) snapRaf = requestAnimationFrame(tick)
-  }
-  tick()
-}
-
-/** The peek is into this. Beginning the 3D models' side view, what of the
- *  canvas is in view is kept with it (utils/peek sideBox; Brian
- *  2026-11-23: "since I'm in 2D, any models that are on the screen should
- *  definitely be within the range, and then it should fade off from
- *  there"): until the view is flat again. */
-function peekInto(p: NonNullable<ReturnType<typeof peekOf>>, host: HTMLElement) {
-  const was = usePeek.getState()
-  let sideBox = p.side ? was.sideBox : null
-  if (p.side && !sideBox) {
-    const { pan, zoom } = useCanvasStore.getState()
-    const z = zoom || 1
-    sideBox = { x: -pan.x / z, y: -pan.y / z, w: host.clientWidth / z, h: host.clientHeight / z }
-  }
-  usePeek.setState({ target: p.target, side: p.side, sideBox })
+/** The peek is into this. */
+function peekInto(p: NonNullable<ReturnType<typeof peekOf>>, _host: HTMLElement) {
+  usePeek.setState({ target: p.target, side: p.side })
 }
 
 /** What under this element can be peeked into (utils/peek peekAt), and
@@ -134,17 +95,15 @@ function peekInto(p: NonNullable<ReturnType<typeof peekOf>>, host: HTMLElement) 
  *  In the side view no deck fans, anywhere (Brian 2026-11-23: "then I
  *  don't want to see any card fanning. Anywhere"): the deck it began over
  *  does not, nor one Alt is pressed on while the view is swung. */
-function peekOf(el: Element | null, host: HTMLElement, cur?: { x: number; y: number }): { target: PeekTarget; g: Pivot; side: boolean } | null {
-  // Already in the side view, with the cursor on a lifted 3D model: the
-  // camera takes that 3D model up, and turns about its middle where it
-  // hangs off its card (Brian 2026-11-23: "my next camera interaction has
-  // my mouse over top of a model. Then I want the camera to focus on that
-  // model").
-  if (cur && usePeek.getState().side && isTilted(useTiltStore.getState())) {
-    const key = modelKey(models.pick?.(cur.x, cur.y))
-    const m = key && (key.startsWith('card:') || key.startsWith('node:')) ? models.pivotOf?.(key) : null
-    if (key && m) return { target: { kind: 'models', id: key }, g: { x: m.u, y: m.v, z: m.z }, side: true }
-  }
+function peekOf(el: Element | null, host: HTMLElement): { target: PeekTarget; g: Pivot; side: boolean; keep?: boolean } | null {
+  // Already in the side view: the camera is the one camera, and goes on
+  // turning about what it turns about, what F framed or the middle of the
+  // view, as the tilted view's does. (It was taken to the 3D model under
+  // the cursor: Brian 2026-11-24, "it just doesn't work ... Let's get rid
+  // of that, and F will frame things just like in the other 3D view. And
+  // then we can have one rule for that as well".)
+  const now = usePeek.getState()
+  if (now.side && now.target && isTilted(useTiltStore.getState())) return { target: now.target, g: { x: 0, y: 0 }, side: true, keep: true }
   const p = peekAt(el, host)
   if (p && p.target.kind !== 'deck') return { ...p, side: false }
   if (!el || !useManip.getState().models) return p && { ...p, side: false }
@@ -305,7 +264,7 @@ export function orbitWheel(e: WheelEvent): boolean {
     // As a press: while flat it starts a new choice of camera.
     if (!isTilted(ts)) { camMode = null; ts.setPivot(null) }
     else if (!camMode) camMode = Math.abs(ts.yaw) > 0.5 ? 'peek' : '3d'
-    const peek = camMode === '3d' ? null : peekOf(target, host, { x: e.clientX, y: e.clientY })
+    const peek = camMode === '3d' ? null : peekOf(target, host)
     if (camMode === 'peek' && peek) peekInto(peek, host)
     swipe = { mode: camMode, x: 0, y: 0, oy: 0, t0: ts.tilt, turned: 0, peek, pivoted: false, timer: 0 }
   }
@@ -326,7 +285,7 @@ export function orbitWheel(e: WheelEvent): boolean {
   const tilt = w.t0 - (w.y - w.oy) * DRAG_DEG
   const d = (turnPx - w.turned) * DRAG_DEG
   w.turned = turnPx
-  if (w.mode === 'peek' && w.peek && !w.pivoted && (d || tilt !== w.t0)) { w.pivoted = true; if (w.peek.g.z !== undefined) snapTo(w.peek.g); else useTiltStore.getState().setPivot(w.peek.g) }
+  if (w.mode === 'peek' && w.peek && !w.pivoted && (d || tilt !== w.t0)) { w.pivoted = true; if (!w.peek.keep) useTiltStore.getState().setPivot(w.peek.g) }
   moveCamera(w.mode, tilt, d)
   return true
 }
@@ -415,7 +374,7 @@ export function useAltTiltGesture() {
       // What under the press can be peeked into: from flat, a peek starts
       // there if the drag starts side to side; while peeking, pressing on
       // another deck or Viewer hops to it at the same turn. Never in 3D.
-      const peek = mode === '3d' ? null : peekOf(target, host, { x: e.clientX, y: e.clientY })
+      const peek = mode === '3d' ? null : peekOf(target, host)
       if (mode === 'peek' && peek) peekInto(peek, host)
       let pivoted = false
       const x0 = e.clientX, y0 = e.clientY
@@ -451,7 +410,7 @@ export function useAltTiltGesture() {
         turned = turnPx
         // A peek turns about the deck or Viewer it is into, taken when the
         // view first moves, so it stays put on screen.
-        if (mode === 'peek' && peek && !pivoted && (d || tilt !== t0)) { pivoted = true; if (peek.g.z !== undefined) snapTo(peek.g); else useTiltStore.getState().setPivot(peek.g) }
+        if (mode === 'peek' && peek && !pivoted && (d || tilt !== t0)) { pivoted = true; if (!peek.keep) useTiltStore.getState().setPivot(peek.g) }
         moveCamera(mode, tilt, d)
         if (mode === '3d' && cTo && !glideStarted && useTiltStore.getState().tilt > 0.5) {
           glideStarted = true

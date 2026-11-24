@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react'
 import {
-  useTiltStore, useModelScaleStore, isTilted, offFlat, standTilt, standRise, unprojectTilt, TILT_DRAW_FAR, TILT_MAX, tiltP,
+  useTiltStore, useModelScaleStore, isTilted, offFlat, standTilt, standRise, unprojectTilt, TILT_DRAW_FAR, TILT_MAX, TILT_PERSPECTIVE, tiltP,
 } from '../../../store/tiltStore'
 import { CAMERA_LENS } from '../../../store/tiltStore'
 import { usePeek } from '../../../utils/peek'
@@ -27,7 +27,7 @@ import { targetMiddle, pickedPoints } from '../../../utils/pathEdit'
 import type { PathFrame, PathHit } from '../../../three/pathOverlay'
 import type { StickFrame, StickSpot } from '../../../three/stickOverlay'
 import { stickMeasures, stickMarks, seenHeight, cardHeight, cardEmphasis } from '../../../utils/stickDock'
-import { useWorldScale, worldPer } from '../../../utils/worldScale'
+import { useWorldScale } from '../../../utils/worldScale'
 import { useUnits } from '../../../store/unitsStore'
 import { curveRuns, pointFrames, withLayers } from '../../../utils/curveGeom'
 import { PinLabels } from '../../Notes/PinLabels'
@@ -160,40 +160,100 @@ const fadeShown = () => {
  *  opaque. And slower: slow down and be nice"). */
 /** The canvas's own dark, which a far slab's sides go into. */
 const FAR_DARK = 0x12131f
-const FAR = { from: 70, soft: 0.2 }
-type Far = { a: number; cx: number; cy: number; r: number }
+const FAR = { from: 70, soft: 0.25 }
+type Far = { a: number; cx: number; cy: number; hw: number; hh: number; cs: number; sn: number }
 /** Under this share of itself a far thing is gone: not drawn (its slab,
  *  its model), not pressed, not selected. */
 const FAR_GONE = 0.02
-/** How far that has gone and where: `a` 0..1, the middle of the view on
- *  the canvas (flat px from the host's centre) and the radius, px. Null
- *  below `from`, and looking through a camera. */
-function farNow(): Far | null {
-  const ts = useTiltStore.getState(), ws = useWorldScale.getState()
+/** ONE RULE for what the 3D view shows, tilted or in the side view (Brian
+ *  2026-11-24: "there's no way for me to predict what will be shown and
+ *  what won't be shown ... I might as well be pulling a Las Vegas slot
+ *  machine"; of "what is on screen shows, and it fades just past the
+ *  screen's edges" he said build it): what is within a screen of the spot
+ *  in the middle of the screen shows, further off it fades, and what is
+ *  selected always shows. Read from the camera as it is NOW, every frame:
+ *  it follows a slide, a zoom, a turn and F. Nothing else decides.
+ *  (It was four rules with four middles: a typed distance round the row
+ *  the view turned about; in the side view, the part of the canvas on
+ *  screen when that view began, never moved after; a cut-off and a budget
+ *  both counted from the flat canvas's middle. None knew the selection.)
+ *
+ *  The spot (flat px from the host's centre) is the ground under the
+ *  middle of the screen, held near the screen's own distance (LOOK): seen
+ *  from low down a pixel up the screen is a mile of ground, and the spot
+ *  would fly off to the horizon and back with every small slide. So what
+ *  is framed (it sits at the screen's own distance) is always inside.
+ *  The reach is the screen's own size laid on the floor about that spot,
+ *  turned as the view is turned: as wide as the screen across and as deep
+ *  as the screen is high (what the screen would cover looking straight
+ *  down). Lying nearly flat, the side view, that is the screen itself;
+ *  side-on in the tilted view it is the line-up looked at and a screen's
+ *  height of floor round it, the far board gone (the "bus stop" look). */
+const LOOK = { near: 0.4, far: 0.6 }
+function viewNow(W: number, H: number, whole = false): Omit<Far, 'a'> {
+  const ts = useTiltStore.getState()
+  const P = tiltP()
+  const t = ts.tilt * Math.PI / 180, b = ts.yaw * Math.PI / 180, sp = ts.spin * Math.PI / 180
+  let c: { x: number; y: number } | null = null
+  if (ts.tilt < 90) {
+    // unprojectTilt's own plane: a screen point (sx, sy) is `lam` times
+    // the screen's distance off, lam = K / (P nz - nx sx - ny sy).
+    const nx = Math.sin(b), ny = -Math.sin(t) * Math.cos(b), nz = Math.cos(t) * Math.cos(b)
+    const K = -nx * ts.shiftX - ny * ts.shiftY + P * nz
+    if (K > 1e-3) {
+      const lo = K / (1 + LOOK.far * TILT_PERSPECTIVE / P), hi = K / Math.max(0.05, 1 - LOOK.near * TILT_PERSPECTIVE / P)
+      const want = Math.max(lo, Math.min(hi, P * nz))
+      const m = Math.hypot(nx, ny), d = m > 1e-6 ? (P * nz - want) / m : 0
+      c = unprojectTilt(m > 1e-6 ? nx / m * d : 0, m > 1e-6 ? ny / m * d : 0, ts.tilt, ts.spin, ts.shiftX, ts.shiftY, 0, Infinity, ts.yaw)
+    }
+  }
+  // (Past edge-on, looking up from low down or from under the ground:
+  // the same spot, worked out from the view's shift across.)
+  c ??= { x: -ts.shiftX * Math.cos(sp), y: ts.shiftX * Math.sin(sp) }
+  const cs = Math.cos(sp), sn = Math.sin(sp)
+  let hw = W / 2, hh = H / 2
+  // `whole` (the side view, swung round): the far side of the floor is
+  // drawn small, and more of it than a screen's width is on screen. The
+  // reach takes in all the floor under the screen's four corners (to five
+  // screens off at most).
+  if (whole) {
+    let ax = 0, ay = 0
+    for (const [sx, sy] of [[-W / 2, -H / 2], [W / 2, -H / 2], [-W / 2, H / 2], [W / 2, H / 2]]) {
+      const q = ts.tilt < 90 ? unprojectTilt(sx, sy, ts.tilt, ts.spin, ts.shiftX, ts.shiftY, 0, Infinity, ts.yaw) : null
+      const du = q ? q.x - c.x : Infinity, dv = q ? q.y - c.y : Infinity
+      ax = Math.max(ax, q ? Math.abs(du * cs - dv * sn) : Infinity); ay = Math.max(ay, q ? Math.abs(du * sn + dv * cs) : Infinity)
+    }
+    hw = Math.max(hw, Math.min(ax, W * 2.5)); hh = Math.max(hh, Math.min(ay, H * 2.5))
+  }
+  return { cx: c.x, cy: c.y, hw, hh, cs, sn }
+}
+/** The far board fading out, coming round to a side-on look at the tilted
+ *  view (the "bus stop" line-up): how far gone `a` 0..1, about the one
+ *  spot (viewNow). Null below `from`, and looking through a camera. */
+function farNow(W: number, H: number): Far | null {
+  const ts = useTiltStore.getState()
   // (Past edge-on, looking up from low down or from under the ground, it
   // stays gone: Brian 2026-11-19, "past 90 the BG nodes stay faded off".)
-  if (!ws.fadeOn || ts.tilt <= FAR.from || useManip.getState().through) return null
+  if (!useWorldScale.getState().fadeOn || ts.tilt <= FAR.from || useManip.getState().through) return null
   const x = Math.min(1, (ts.tilt - FAR.from) / (TILT_MAX - FAR.from)), a = 1 - (1 - x) ** 3
-  // The middle: the ground in the middle of the screen across, at the
-  // height on the screen of the point the view turns about (straight
-  // under the screen's middle near edge-on is far off, or sky).
-  // (Where that has no answer, past edge-on: the same point, worked out
-  // from the view's shift across.)
-  const sp = ts.spin * Math.PI / 180
-  const c = (ts.tilt < 90 ? unprojectTilt(0, ts.shiftY, ts.tilt, ts.spin, ts.shiftX, ts.shiftY) : null)
-    ?? { x: -ts.shiftX * Math.cos(sp), y: ts.shiftX * Math.sin(sp) }
-  // So many feet of the world (utils/worldScale), a size on the canvas:
-  // zooming does not change what is inside it (Brian 2026-11-19: "the
-  // zone where we see tends to grow and shrink depending on my zoom level.
-  // And that was never really the intent").
-  return { a, cx: c.x, cy: c.y, r: ws.fadeFt * worldPer(ws) * (useCanvasStore.getState().zoom || 1) }
+  return { a, ...viewNow(W, H) }
+}
+/** What is selected always shows: cards and tiles by id. */
+function pickedNow(): { cards: Set<string>; nodes: Set<string>; key: (k: string) => boolean } {
+  const cards = new Set(useBoardsStore.getState().selectedGroupIds), nodes = new Set(useFreeNodeStore.getState().selectedIds)
+  const one = (k: string) => (k.startsWith('card:') ? cards.has(k.slice(5)) : k.startsWith('node:') ? nodes.has(k.slice(5)) : false)
+  return { cards, nodes, key: k => one(k) || one(dataKey(k)) }
 }
 /** How much of a thing shows, 0..1: its box by its centre, flat px from
  *  the host's centre. Whole while any of it is within the radius. */
 function farShown(f: Far | null, u: number, v: number, w: number, h: number): number {
   if (!f) return 1
-  const d = Math.hypot(Math.max(0, Math.abs(u - f.cx) - w / 2), Math.max(0, Math.abs(v - f.cy) - h / 2))
-  const x = Math.max(0, Math.min(1, (d - f.r) / (f.r * FAR.soft)))
+  // Across and into the view, from the spot (the floor turned as drawn).
+  const du = u - f.cx, dv = v - f.cy
+  const ax = Math.abs(du * f.cs - dv * f.sn), ay = Math.abs(du * f.sn + dv * f.cs)
+  const ew = (Math.abs(w * f.cs) + Math.abs(h * f.sn)) / 2, eh = (Math.abs(w * f.sn) + Math.abs(h * f.cs)) / 2
+  const d = Math.hypot(Math.max(0, ax - f.hw - ew), Math.max(0, ay - f.hh - eh))
+  const x = Math.max(0, Math.min(1, d / Math.max(1, Math.min(f.hw, f.hh) * 2 * FAR.soft)))
   return 1 - f.a * x * x * (3 - 2 * x)
 }
 /** The far things' own faces on the page, faded as their slabs and models
@@ -219,6 +279,7 @@ function fadeFar(f: Far | null, host: HTMLElement | null) {
     const W = host.offsetWidth, H = host.offsetHeight
     const { pan, zoom } = useCanvasStore.getState()
     const nodes = useFreeNodeStore.getState().nodes
+    const picked = pickedNow()
     /** A loop strip and all that is docked on it go as one, by strip. */
     const strips = new Map<string, number>()
     for (const world of host.querySelectorAll<HTMLElement>(':scope > div[style*="scale("]')) {
@@ -230,7 +291,7 @@ function fadeFar(f: Far | null, host: HTMLElement | null) {
       const tiles = [...world.querySelectorAll<HTMLElement>('[data-viewport3d]:not([data-pinned]), [data-freenode][data-id]:not([data-pinned])')]
       for (const node of tiles) {
         if (!node.hasAttribute('data-rail')) continue
-        const o = box(node.querySelector<HTMLElement>('[data-rail-body]') ?? node)
+        const o = picked.nodes.has(node.dataset.id!) ? 1 : box(node.querySelector<HTMLElement>('[data-rail-body]') ?? node)
         strips.set(node.dataset.id!, o)
         put(node, o)
         for (const part of world.querySelectorAll<HTMLElement>(`[data-rail-overlay="${node.dataset.id}"]`)) put(part, o)
@@ -238,7 +299,7 @@ function fadeFar(f: Far | null, host: HTMLElement | null) {
       for (const node of tiles) {
         if (node.hasAttribute('data-rail')) continue
         const rail = node.hasAttribute('data-rail-docked') ? nodes[node.dataset.id ?? '']?.railDock?.railId : undefined
-        put(node, (rail ? strips.get(rail) : undefined) ?? box(node))
+        put(node, picked.nodes.has(node.dataset.id ?? '') ? 1 : (rail ? strips.get(rail) : undefined) ?? box(node))
       }
       // Blocks and boards (zoomed in), each by its own box.
       for (const el of world.querySelectorAll<HTMLElement>('[data-board], [data-layer-block]')) {
@@ -260,7 +321,7 @@ function fadeFar(f: Far | null, host: HTMLElement | null) {
       for (const el of stage.querySelectorAll<HTMLElement>('[data-group-card][data-id], [data-group-outline]')) {
         const id = el.dataset.groupOutline ?? el.dataset.id!
         const rail = onStrip.get(id) ?? onStrip.get(groups.find(g => g.id === id)?.deckAnchorId ?? '')
-        const o = (rail ? strips.get(rail) : undefined) ?? box(el)
+        const o = picked.cards.has(id) ? 1 : (rail ? strips.get(rail) : undefined) ?? box(el)
         cards.set(id, Math.min(cards.get(id) ?? 1, o))
         put(el, o)
       }
@@ -1856,12 +1917,26 @@ function collectSlabs(K = 1): TiltSlab[] {
   out.unshift(...consoleFurniture(leaning, screens, decks, zoom, K))
   // Far from the middle of a side view (see FAR): gone with their faces,
   // going into the dark of the canvas on the way.
-  const far = farNow()
+  const far = host ? farNow(host.offsetWidth, host.offsetHeight) : null
   fadeFar(far, host)
   if (far) {
+    // What is selected stays whole: a slab lying on a selected card or tile.
+    const held: { x0: number; y0: number; x1: number; y1: number }[] = []
+    const picked = pickedNow()
+    if (host && (picked.cards.size || picked.nodes.size)) {
+      const W = host.offsetWidth, H = host.offsetHeight
+      const { pan, zoom: z } = useCanvasStore.getState()
+      const nodes = useFreeNodeStore.getState().nodes
+      for (const id of picked.nodes) { const n = nodes[id]; if (n) held.push({ x0: pan.x + n.x * z - W / 2, y0: pan.y + n.y * z - H / 2, x1: pan.x + (n.x + n.width) * z - W / 2, y1: pan.y + (n.y + n.height) * z - H / 2 }) }
+      const stage = document.querySelector<HTMLElement>('[data-tilt-stage="overlay"]')
+      if (stage && picked.cards.size) for (const el of stage.querySelectorAll<HTMLElement>('[data-group-card][data-id]')) {
+        const at = picked.cards.has(el.dataset.id!) ? offsetIn(el, stage) : null
+        if (at) held.push({ x0: at.x - W / 2, y0: at.y - H / 2, x1: at.x + el.offsetWidth - W / 2, y1: at.y + el.offsetHeight - H / 2 })
+      }
+    }
     for (let i = out.length - 1; i >= 0; i--) {
       const s = out[i]
-      const o = farShown(far, s.u, s.v, s.w, s.h)
+      const o = held.some(r => s.u >= r.x0 && s.u <= r.x1 && s.v >= r.y0 && s.v <= r.y1) ? 1 : farShown(far, s.u, s.v, s.w, s.h)
       if (o >= 0.995) continue
       if (o <= 0.02) { out.splice(i, 1); continue }
       const mix = (sh: number) => Math.round(((s.color >> sh) & 255) * o + ((FAR_DARK >> sh) & 255) * (1 - o))
@@ -3194,7 +3269,14 @@ function collectTargets(W: number, H: number): TiltTarget[] {
   const lookKeys = [useManip.getState().through, ...[...cameraViews.values()].map(v => v.key)].filter((k): k is string => !!k)
   const lookSets = new Set(lookKeys.map(k => sceneOf(k)?.area.id).filter((id): id is string => !!id))
   const looked = (t: TiltTarget) => !t.mini && (lookKeys.includes(t.key) || (lookSets.size > 0 && lookSets.has(sceneOf(t.key)?.area.id ?? '')))
-  const shown = out.filter(t => looked(t) || (Math.abs(t.u) < W && Math.abs(t.v) < H && t.w > (t.mini ? 1 : 4)))
+  // The rest stand while they are about the spot in the middle of the
+  // screen (viewNow), or selected: one rule, the view's own (it was the
+  // flat canvas's middle, wherever the view had been slid to).
+  const view = viewNow(W, H)
+  const picked = pickedNow()
+  const wide = side ? viewNow(W, H, true) : null
+  const about = (t: TiltTarget) => (Math.abs(t.u) < W && Math.abs(t.v) < H) || (Math.abs(t.u - view.cx) < W && Math.abs(t.v - view.cy) < H) || (!!wide && farShown({ a: 1, ...wide }, t.u, t.v, t.w, t.h) > 0)
+  const shown = out.filter(t => looked(t) || ((about(t) || picked.key(t.key)) && t.w > (t.mini ? 1 : 4)))
   // A card set to keep its model flat ("Show model in 3D" off).
   const groups = useBoardsStore.getState().groups
   const flatCard = (key: string) => key.startsWith('card:') && [key, dataKey(key)].some(k => groups.find(g => g.id === k.slice(5))?.hideModel3d)
@@ -3206,7 +3288,8 @@ function collectTargets(W: number, H: number): TiltTarget[] {
   const canvasOn = useManip.getState().models
   const rest = shown
     .filter(t => !inScene(t) && !flatCard(t.key) && (canvasOn || t.key.startsWith('viewer:')))
-    .sort((a, b) => (a.u * a.u + a.v * a.v) - (b.u * b.u + b.v * b.v))
+    .map(t => ({ t, d: picked.key(t.key) ? -1 : (t.u - view.cx) ** 2 + (t.v - view.cy) ** 2 }))
+    .sort((a, b) => a.d - b.d).map(x => x.t)
   const keep = [...scene]
   let tris = scene.reduce((n, t) => n + (trianglesOf(t.url) ?? UNKNOWN_TRIS), 0)
   let held = 0
@@ -3220,11 +3303,11 @@ function collectTargets(W: number, H: number): TiltTarget[] {
   if (st.held !== held || st.tris !== tris) useTiltStats.setState({ held, tris })
   // Far from the middle of a side view (see FAR), a model goes with its
   // card; in a 3D set, with the set.
-  const far = farNow()
+  const far = farNow(W, H)
   if (far) {
     for (let i = 0; i < keep.length; i++) {
       const t = keep[i]
-      if (t.key.startsWith('viewer:') || looked(t)) continue
+      if (t.key.startsWith('viewer:') || looked(t) || picked.key(t.key)) continue
       const at = t.wall ?? t
       const a = sceneOf(t.key)?.area
       const o = a ? farShown(far, pan.x + (a.x + a.width / 2) * zoom - W / 2, pan.y + (a.y + a.height / 2) * zoom - H / 2, a.width * zoom, a.height * zoom)
@@ -3234,21 +3317,15 @@ function collectTargets(W: number, H: number): TiltTarget[] {
   }
   if (!liveOnly) return keep
   const out2: TiltTarget[] = []
-  // The side view lifts every 3D model that was in view when it began
-  // (utils/peek sideBox), and fades off beyond that over a soft edge
-  // (Brian 2026-11-23: "any models that are on the screen should
-  // definitely be within the range, and then it should fade off from
-  // there").
+  // The side view lifts the 3D models by the same one rule (viewNow):
+  // those about the spot in the middle of the screen as it is now, fading
+  // off beyond, and the selected ones always. (It was the part of the
+  // canvas on screen when the side view began, which stayed behind when
+  // the view was slid: Brian 2026-11-24, "I've panned upwards to look at
+  // some other models -- and they're all transparent".)
   const sideFloats = useModelScaleStore.getState().sideFloatOf
-  const box = side ? usePeek.getState().sideBox : null
-  const bx = box ? pan.x + (box.x + box.w / 2) * zoom - W / 2 : 0, by = box ? pan.y + (box.y + box.h / 2) * zoom - H / 2 : 0
-  const bw = box ? box.w * zoom : 0, bh = box ? box.h * zoom : 0, soft = Math.max(1, Math.min(bw, bh) * 0.25)
-  const inBox = (t: TiltTarget) => {
-    if (!box) return 1
-    const d = Math.hypot(Math.max(0, Math.abs(t.u - bx) - bw / 2 - t.w / 2), Math.max(0, Math.abs(t.v - by) - bh / 2 - t.h / 2))
-    const x = Math.max(0, Math.min(1, d / soft))
-    return 1 - x * x * (3 - 2 * x)
-  }
+  const near: Far | null = wide ? { a: 1, ...wide } : null
+  const inBox = (t: TiltTarget) => (picked.key(t.key) ? 1 : farShown(near, t.u, t.v, t.w, t.h))
   for (const t of keep) {
     if (liveOnly.has(t.key) || liveOnly.has(dataKey(t.key))) { out2.push(t); continue }
     // On its own card or tile: not a Viewer's, a set's or a path's.

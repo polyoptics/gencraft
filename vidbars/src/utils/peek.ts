@@ -31,9 +31,7 @@ export type PeekTarget =
 
 /** What the view is peeking into, or null. `side`: the peek is the 3D
  *  models' side view (it began over a card showing a 3D model). */
-/** `sideBox`: what of the canvas was in view when the side view began
- *  (canvas units): the 3D models there all lift, and it fades off beyond. */
-export const usePeek = create<{ target: PeekTarget | null; side: boolean; sideBox: { x: number; y: number; w: number; h: number } | null }>(() => ({ target: null, side: false, sideBox: null }))
+export const usePeek = create<{ target: PeekTarget | null; side: boolean }>(() => ({ target: null, side: false }))
 
 /** Where each stacked deck is, canvas units, and its cards in order (the
  *  front card first): written by CardLayer's StackedDeckCard as it draws. */
@@ -78,5 +76,5 @@ export function peekAt(el: Element | null, host: HTMLElement): { target: PeekTar
 
 // Back to flat, the peek is over.
 useTiltStore.subscribe((s, was) => {
-  if (isTilted(was) && !isTilted(s) && usePeek.getState().target) usePeek.setState({ target: null, side: false, sideBox: null })
+  if (isTilted(was) && !isTilted(s) && usePeek.getState().target) usePeek.setState({ target: null, side: false })
 })
