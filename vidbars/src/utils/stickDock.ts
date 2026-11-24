@@ -33,6 +33,7 @@ import { cardScreenRect } from '../components/Layers/CardLayer'
 import { isHiddenDeckMember } from '../hooks/useCardDecks'
 import { dataKey } from './area3dScene'
 import { useUndoCoordinator, isUndoRestoring } from '../store/undoCoordinator'
+import { useWorldScale } from './worldScale'
 
 /** How far round its foot a stick reaches for a card, feet. */
 const REACH = 1.2
@@ -230,6 +231,55 @@ export function stickMeasures(): Measured {
   const out = same ? was! : { heights, bare, owner, docked, sides, at, line, sig: ++sigSeq }
   memo = { sticks, groups: bs.groups, boards: bs.boards, zoom, out }
   return out
+}
+
+// ── How tall a card's 3D model stands: THE rule (Brian 2026-11-24, after
+// the look back over the week: one drag meant a Height here, a hidden size
+// there, and a stick set beside a card dropped its Emphasis). Asked by the
+// 3D view to draw it (TiltModels frameState) and by the hand that sizes it
+// (TiltedView), so what a drag writes is always what is drawn:
+//  - 'stick': docked to a measuring stick with a height to go by (the
+//    Height on its back, or what that stick remembers of it): that height
+//    at the stick's scale. A hand's sizing writes its Height.
+//  - 'world': a Height on its back and a world scale set: that height at
+//    the world's scale. A hand's sizing writes its Emphasis.
+//  - 'hand': neither: the size it was given by hand (tiltStore sizeOf).
+// Its card's Emphasis is on top of all three alike, unless True size is on.
+// Not a 3D model standing in a 3D set, nor a scene section's: those have
+// sizes of their own there. ──
+export interface Stand {
+  by: 'stick' | 'world' | 'hand'
+  /** How tall it stands at its true size, canvas units ('stick', 'world'). */
+  tall?: number
+  /** Its card's Emphasis (1: none). */
+  emph: number
+  /** The stick it is docked to, with or without a height to go by. */
+  stick?: string
+}
+const lookCard = (id: string): { ft: number | null; emph: number } => {
+  const groups = useBoardsStore.getState().groups, g = groups.find(x => x.id === id)
+  return g ? { ft: cardHeight(g, groups), emph: cardEmphasis(g, groups) } : { ft: null, emph: 1 }
+}
+/** Card `shown`'s 3D model (a deck's front card `front` showing it: the
+ *  stick may be docked to either). `look`: a card's Height (feet) and
+ *  Emphasis, for a caller that keeps them worked out. */
+export function standOf(shown: string, front: string = shown, look: (id: string) => { ft: number | null; emph: number } = lookCard): Stand {
+  const m = stickMeasures()
+  const stick = m.owner.get(shown) ?? m.owner.get(front)
+  const l = look(shown)
+  if (stick) {
+    const tall = m.heights.get(shown) ?? m.heights.get(front)
+    return tall ? { by: 'stick', tall, emph: l.emph, stick } : { by: 'hand', emph: l.emph, stick }
+  }
+  const per = useWorldScale.getState().per
+  return per !== null && l.ft ? { by: 'world', tall: l.ft * per, emph: l.emph } : { by: 'hand', emph: l.emph }
+}
+/** A hand sizing docked card `id`'s 3D model: the height it began from,
+ *  feet (null: it has none to go by). */
+export function dockedHeight(id: string): number | null {
+  const m = stickMeasures(), s = useNotesStore.getState().sticks?.[m.owner.get(id) ?? '']
+  const units = m.heights.get(id)
+  return s && units ? units / s.per : null
 }
 
 /** Where a stick is: docked, on the edge it is docked by. */

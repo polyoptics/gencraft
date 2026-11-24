@@ -26,7 +26,7 @@ import { useCurveDraft, usePathHot, useStickUi } from '../../../store/pathLive'
 import { targetMiddle, pickedPoints } from '../../../utils/pathEdit'
 import type { PathFrame, PathHit } from '../../../three/pathOverlay'
 import type { StickFrame, StickSpot } from '../../../three/stickOverlay'
-import { stickMeasures, stickMarks, seenHeight, cardHeight, cardEmphasis } from '../../../utils/stickDock'
+import { stickMeasures, stickMarks, seenHeight, cardHeight, cardEmphasis, standOf } from '../../../utils/stickDock'
 import { useWorldScale, worldPer } from '../../../utils/worldScale'
 import { useUnits } from '../../../store/unitsStore'
 import { curveRuns, pointFrames, withLayers } from '../../../utils/curveGeom'
@@ -422,7 +422,7 @@ const miniLook = new Map<string, { size?: number; pose?: [number, number, number
  *  card's Height makes it, canvas units (none: no Height, or no world
  *  scale set yet), and its card's Emphasis. Worked out once for the cards
  *  and the scale as they are. */
-let worldMemo: { groups: unknown; per: number | null; of: Map<string, { tall?: number; emph: number }>; sig: number } | null = null
+let worldMemo: { groups: unknown; per: number | null; of: Map<string, { ft: number | null; emph: number }>; sig: number } | null = null
 function worldSizes() {
   const groups = useBoardsStore.getState().groups, per = useWorldScale.getState().per
   if (!worldMemo || worldMemo.groups !== groups || worldMemo.per !== per) worldMemo = { groups, per, of: new Map(), sig: (worldMemo?.sig ?? 0) + 1 }
@@ -433,8 +433,7 @@ function worldSizes() {
       let v = memo.of.get(id)
       if (!v) {
         const g = groups.find(x => x.id === id)
-        const ft = g && per !== null ? cardHeight(g, groups) : null
-        v = { tall: ft ? ft * per! : undefined, emph: g ? cardEmphasis(g, groups) : 1 }
+        v = { ft: g ? cardHeight(g, groups) : null, emph: g ? cardEmphasis(g, groups) : 1 }
         memo.of.set(id, v)
       }
       return v
@@ -494,18 +493,18 @@ const frameState = (): TiltFrameState => {
     inLook: lookSet ? key => inSet(key, lookSet) : undefined,
     paths: tilted3d() ? pathFrame() : undefined,
     sticks: tilted3d() ? stickFrame() : undefined,
-    // A card docked to a measuring stick: its model as tall as its Height.
-    // Any other card with a Height: as tall as that is by the world scale,
-    // once there is one, and its Emphasis on that.
+    // How tall a card's 3D model stands is one rule (utils/stickDock
+    // standOf): docked to a measuring stick, its height at the stick's
+    // scale; else its Height at the world's; its Emphasis on either.
     heightFor: key => {
       if (!key.startsWith('card:')) return undefined
       // (A deck's front card showing another of its cards: that card's.)
       const shown = dataKey(key).slice(5)
-      const h = measured.heights.get(shown) ?? measured.heights.get(key.slice(5))
-      if (h) return h * zoomNow
-      if (measured.owner.has(shown) || measured.owner.has(key.slice(5)) || placed(key)) return undefined
-      const w = world.of(shown)
-      return w.tall ? w.tall * (trueSize ? 1 : w.emph) * zoomNow : undefined
+      const st = standOf(shown, key.slice(5), id => { const w = world.of(id); return { ft: w.ft, emph: w.emph } })
+      const e = trueSize ? 1 : st.emph
+      if (st.by === 'stick') return st.tall! * e * zoomNow
+      if (st.stick || placed(key)) return undefined
+      return st.by === 'world' ? st.tall! * e * zoomNow : undefined
     },
     heightSig: measured.sig + world.sig * 1e6 + (trueSize ? 0.5 : 0),
     // One docked with no Height: how tall it stands now is where it starts from.

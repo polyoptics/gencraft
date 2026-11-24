@@ -132,16 +132,18 @@ export function modelOfCard(card: ProjectGroup, boards: Record<string, BoardData
  *  2026-11-19: "the model hovering above the deck's original card face...
  *  the model is the thing that's useful, and I can show them both"). Only a
  *  detail he filled with it and switched on for the front (CardDetail
- *  onFace); a model merely in its deck never shows. Only while that model
- *  card is put away in a closed or fanned deck: out on the canvas the model
- *  stands on its own card, once. Not when `g`'s own face is a model. The
- *  first such detail. */
+ *  onFace); a model merely in its deck never shows. Wherever that model
+ *  card is: put away in a deck, or out on the canvas, where the model
+ *  stands on its own card as well (Brian 2026-11-24: FRONT on showed
+ *  nothing until the model's card was hidden in a deck, so a link made by
+ *  hand looked broken). Not when `g`'s own face is a model. The first such
+ *  detail. */
 export function linkedModelCard(g: ProjectGroup, groups: ProjectGroup[], boards: Record<string, BoardData>): ProjectGroup | undefined {
   if (!g.details?.some(d => d.onFace) || faceModelOf(g, boards)) return undefined
   for (const d of g.details) {
     if (!d.onFace || !d.link || d.link.detail || d.link.count || d.link.rankOf) continue
     const card = detailShown(groups, d).card
-    if (!card || card.id === g.id || card.hideModel3d || !isHiddenDeckMember(card)) continue
+    if (!card || card.id === g.id || card.hideModel3d) continue
     if (modelOfCard(card, boards)) return card
   }
   return undefined

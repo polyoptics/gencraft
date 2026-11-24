@@ -63,6 +63,8 @@ interface WorldScale extends Kept {
   setHot: (hot: boolean) => void
   /** The world's scale, canvas units a foot (a stick's `per`, copied). */
   setPer: (per: number) => void
+  /** A saved canvas opened: its world scale, or none (utils/cardKeep). */
+  loadPer: (per: number | null) => void
   setFadeFt: (ft: number) => void
   setFadeOn: (on: boolean) => void
   /** The lineup: out or not, the cards standing on it, in the order they
@@ -91,6 +93,7 @@ export const useWorldScale = create<WorldScale>((set, get) => {
     hot: false,
     setHot: hot => { if (get().hot !== hot) set({ hot }) },
     setPer: per => { if (Number.isFinite(per) && per > 0) keep({ per }) },
+    loadPer: per => { if (get().per !== per) keep({ per }) },
     setFadeFt: ft => { if (Number.isFinite(ft)) keep({ fadeFt: Math.max(FADE_FT_MIN, Math.min(FADE_FT_MAX, ft)) }) },
     setFadeOn: fadeOn => keep({ fadeOn }),
     open: false,

@@ -10,7 +10,7 @@ import type { TemplateData } from '../../data/templates'
 import { SCAFFOLDS, instantiateScaffold } from '../../data/scaffolds'
 import type { ScaffoldData } from '../../data/scaffolds'
 import { insertProjectSnapshot } from '../../utils/projectInsert'
-import { collectKeep, applyKeep } from '../../utils/cardKeep'
+import { collectKeep, applyKeep, applyCanvasKeep } from '../../utils/cardKeep'
 import { getGroupHeight } from '../../utils/nleRows'
 import { keepDesignZone, zoomZonesSnapshot, applyZoomZonesSnapshot } from '../../store/zoomZonesStore'
 
@@ -136,7 +136,8 @@ export const TemplateMenu: React.FC = () => {
     }
     // What is kept beside the cards and tiles goes into the save with them
     // (utils/cardKeep): how their 3D models are turned and set, their notes.
-    return { ...content, keep: collectKeep(bs.groups.map(g => g.id), Object.keys(fn.nodes), JSON.stringify(content)) }
+    // The whole canvas: its measuring sticks, curves and world scale too.
+    return { ...content, keep: collectKeep(bs.groups.map(g => g.id), Object.keys(fn.nodes), JSON.stringify(content), true) }
   }
 
   /** Find the next available Y position below all existing groups */
@@ -188,6 +189,7 @@ export const TemplateMenu: React.FC = () => {
       }
       if (t.freeNodes) useFreeNodeStore.setState({ nodes: t.freeNodes, selectedIds: [] })
       applyKeep(t.keep)
+      applyCanvasKeep(t.keep)
       // The project's own zoom zones when it saved them — then its zoom is
       // already on the level it was saved at. Older projects keep the
       // current zones and are moved onto the level they were made for.

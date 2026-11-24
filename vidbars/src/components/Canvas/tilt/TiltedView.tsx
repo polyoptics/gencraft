@@ -10,6 +10,9 @@ import { useCanvasStore, MIN_ZOOM, MAX_ZOOM } from '../../../store/canvasStore'
 import { useFreeNodeStore } from '../../../store/freeNodeStore'
 import { useBoardsStore } from '../../../store/boardsStore'
 import { clientToCanvas } from '../../../utils/fx/createEffect'
+import { useWorldScale } from '../../../utils/worldScale'
+import { useUndoCoordinator } from '../../../store/undoCoordinator'
+import { standOf, dockedHeight, setCardEmphasis, setCardHeight } from '../../../utils/stickDock'
 import { hostOf, viewCentre, SPIN_RAD, orbitWheel } from './altCamera'
 import { padWheel, pinchFactor } from '../../../utils/trackpad'
 import {
@@ -337,7 +340,9 @@ export const TiltedView: React.FC = () => {
       | { kind: 'pan'; last: { x: number; y: number } }
       | { kind: 'marquee'; x0: number; y0: number; x1: number; y1: number; add: boolean }
       | { kind: 'person'; url: string; unit0: number; y0: number }
-      | { kind: 'model'; key: string; k0: number; y0: number; moved: boolean; inSet: boolean; solo?: boolean }
+      | { kind: 'model'; key: string; k0: number; y0: number; moved: boolean; inSet: boolean; solo?: boolean
+          /** On its own card the drag writes what the 3D model is drawn by (utils/stickDock standOf): the card's Emphasis, or its Height from `ft0` feet. */
+          card?: { id: string; write: 'emphasis' | 'height'; ft0: number } }
       | { kind: 'turn'; key: string; last: { x: number; y: number }; x0: number; y0: number; moved: boolean }
       | { kind: 'held' }
       | { kind: 'remap'; target: Element; pointerId: number; height: number; stood?: boolean; x0?: number; y0?: number; free?: boolean; tab?: { at: { x: number; y: number }; went?: boolean }; lay?: Map<string, string>; last?: { x: number; y: number }; wall?: Hinge }
@@ -540,6 +545,23 @@ export const TiltedView: React.FC = () => {
               : { kind: 'held' }
             return
           }
+          // On its own card a drag writes what the 3D model is drawn by, so it
+          // always shows (utils/stickDock standOf). By the world scale: its
+          // card's Emphasis, the Height left as it is (Brian 2026-11-19: "if
+          // I hand-scale a model outside of a distance tool, then that's
+          // going to make an emphasis attribute"); with True size on the
+          // emphasis does not show, so the drag is held. Docked to a
+          // measuring stick: its Height (Brian 2026-11-18).
+          if (!inSet && solo === null && dk0.startsWith('card:')) {
+            const id = dk0.slice(5), st = standOf(id, key.slice(5))
+            if (st.by === 'world') {
+              g = useWorldScale.getState().trueSize ? { kind: 'held' }
+                : { kind: 'model', key: dk0, k0: st.emph, y0: e.clientY, moved: false, inSet: false, card: { id, write: 'emphasis', ft0: 0 } }
+              return
+            }
+            const ft0 = st.by === 'stick' ? dockedHeight(id) ?? dockedHeight(key.slice(5)) : null
+            if (ft0) { g = { kind: 'model', key: dk0, k0: 1, y0: e.clientY, moved: false, inSet: false, card: { id, write: 'height', ft0 } }; return }
+          }
           g = { kind: 'model', key: dk0, k0: solo ?? (inSet ? ms0.setSizeOf[dk0] ?? ms0.sizeOf[dk0] : ms0.sizeOf[dk0]) ?? 1, y0: e.clientY, moved: false, inSet, solo: solo !== null }
           return
         }
@@ -696,8 +718,16 @@ export const TiltedView: React.FC = () => {
       if (g.kind === 'model') {
         const dy = e.clientY - g.y0
         if (!g.moved && Math.abs(dy) < 4) return
+        // (One sizing of a card's Height or Emphasis is one step back.)
+        if (!g.moved && g.card) useUndoCoordinator.getState().checkpoint()
         g.moved = true
         const k = Math.min(8, Math.max(0.1, g.k0 * Math.exp(-dy / 160)))
+        if (g.card) {
+          const at = g.card, card = useBoardsStore.getState().groups.find(x => x.id === at.id)
+          if (card && at.write === 'emphasis') setCardEmphasis(card, k)
+          else if (card) setCardHeight(card, at.ft0 * k)
+          return
+        }
         const ms1 = useModelScaleStore.getState()
         if (g.solo) setSoloSize(g.key, k)
         else if (g.inSet) ms1.setSetSize(g.key, k)

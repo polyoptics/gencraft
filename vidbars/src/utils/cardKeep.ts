@@ -16,7 +16,8 @@
 // document's urls (a package's files, a light copy) rewrites these with it.
 
 import { useModelScaleStore } from '../store/tiltStore'
-import { useNotesStore } from '../store/notesStore'
+import { useNotesStore, type Stick, type Curve } from '../store/notesStore'
+import { useWorldScale } from './worldScale'
 
 /** Kept under a card's or a tile's key ('card:<id>' / 'node:<id>'). */
 const OWN = ['sizeOf', 'setSizeOf', 'poseOf', 'tintOf', 'placeOf', 'stretchOf', 'floatOf', 'sideFloatOf', 'lensOf', 'pieceOf'] as const
@@ -25,15 +26,29 @@ const FILE = ['unitsPerMetre', 'quarterOf', 'sideOf'] as const
 type Own = typeof OWN[number]
 type FileKind = typeof FILE[number] | 'marks' | 'notes'
 
+/** What lies on the canvas itself and is no card's: the measuring sticks,
+ *  the curves and paths, and the world scale (Brian 2026-11-24: a save
+ *  opened on the laptop had none of them, so every Height stopped sizing
+ *  its 3D model; and the last project's stayed lying on the next one's
+ *  canvas). In a save of the WHOLE canvas only. */
+export interface CanvasKeep {
+  sticks: Record<string, Stick>
+  curves: Record<string, Curve>
+  world: { per: number | null }
+}
+
 export interface CardKeep {
   v: 1
   own: [what: Own, kind: 'card' | 'node', id: string, value: unknown][]
   files: [what: FileKind, url: string, value: unknown][]
+  canvas?: CanvasKeep
 }
 
 /** The settings kept for these cards and tiles, and for the files named in
  *  `text` (the cards' own content, as JSON). */
-export function collectKeep(groupIds: Iterable<string>, nodeIds: Iterable<string>, text: string): CardKeep | undefined {
+export function collectKeep(groupIds: Iterable<string>, nodeIds: Iterable<string>, text: string,
+  /** The whole canvas is being saved: what lies on it goes too (CanvasKeep). */
+  whole = false): CardKeep | undefined {
   const ms = useModelScaleStore.getState()
   const ns = useNotesStore.getState()
   const cards = new Set(groupIds), tiles = new Set(nodeIds)
@@ -56,7 +71,31 @@ export function collectKeep(groupIds: Iterable<string>, nodeIds: Iterable<string
     // Its Annotation card is a tile of the canvas it was made on.
     if ((m.strokes.length || m.pins.length) && named(url)) files.push(['notes', url, { ...m, cardNodeId: undefined }])
   }
+  if (whole) return { v: 1, own, files, canvas: { sticks: ns.sticks ?? {}, curves: ns.curves ?? {}, world: { per: useWorldScale.getState().per } } }
   return own.length || files.length ? { v: 1, own, files } : undefined
+}
+
+const REPLACED_KEY = 'vidbars.canvasKeep.replaced'
+/** A whole canvas opened in place of this one: what lies on the canvas is
+ *  the opened save's. A save from before this was kept (no `canvas`) says
+ *  nothing, and what lies here stays, as it always did. The sticks and
+ *  curves that give way are set aside (the last few lots, this browser's
+ *  storage): until now they were in no save, so nothing else has them. */
+export function applyCanvasKeep(keep: CardKeep | undefined): void {
+  const c = keep?.v === 1 ? keep.canvas : undefined
+  if (!c || typeof c !== 'object' || !c.sticks || !c.curves) return
+  const ns = useNotesStore.getState()
+  const was = { sticks: ns.sticks ?? {}, curves: ns.curves ?? {} }
+  const same = JSON.stringify(was.sticks) === JSON.stringify(c.sticks) && JSON.stringify(was.curves) === JSON.stringify(c.curves)
+  if (!same && (Object.keys(was.sticks).length || Object.keys(was.curves).length)) {
+    try {
+      const list = JSON.parse(localStorage.getItem(REPLACED_KEY) ?? '[]') as unknown[]
+      localStorage.setItem(REPLACED_KEY, JSON.stringify([{ at: Date.now(), ...was, per: useWorldScale.getState().per }, ...(Array.isArray(list) ? list : [])].slice(0, 5)))
+    } catch { /* no room, or a private window */ }
+  }
+  if (!same) useNotesStore.setState({ sticks: c.sticks, curves: c.curves })
+  const per = c.world?.per
+  useWorldScale.getState().loadPer(typeof per === 'number' && Number.isFinite(per) && per > 0 ? per : null)
 }
 
 /** Put a document's kept settings back: a card's under the id `card` gives
