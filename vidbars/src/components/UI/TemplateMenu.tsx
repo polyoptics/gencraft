@@ -1,4 +1,5 @@
-import React, { useState, useRef, useEffect } from 'react'
+import React, { useState, useRef, useEffect, useLayoutEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { useBoardsStore, freshCanvasBoards } from '../../store/boardsStore'
 import type { BoardData, ProjectGroup } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
@@ -26,6 +27,20 @@ export const TemplateMenu: React.FC = () => {
   const [projectName, setProjectName] = useState('')
   const projectInputRef = useRef<HTMLInputElement>(null)
   const ref = useRef<HTMLDivElement>(null)
+  // The open menu hangs under the button but is drawn on the page itself
+  // (see the portal below), so it is placed from where the button is.
+  const menuRef = useRef<HTMLDivElement>(null)
+  const [at, setAt] = useState<{ top: number; right: number } | null>(null)
+  useLayoutEffect(() => {
+    if (!open) return
+    const place = () => {
+      const r = ref.current?.getBoundingClientRect()
+      if (r) setAt({ top: r.bottom + 4, right: window.innerWidth - r.right })
+    }
+    place()
+    window.addEventListener('resize', place)
+    return () => window.removeEventListener('resize', place)
+  }, [open])
   const [snapshots, setSnapshots] = useState<SnapshotMeta[]>([])
   const [busyFile, setBusyFile] = useState<string | null>(null)
 
@@ -58,7 +73,9 @@ export const TemplateMenu: React.FC = () => {
   useEffect(() => {
     if (!open) return
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+      const t = e.target as Node
+      if (ref.current?.contains(t) || menuRef.current?.contains(t)) return
+      setOpen(false)
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
@@ -403,17 +420,14 @@ export const TemplateMenu: React.FC = () => {
         </svg>
       </button>
 
-      {open && (
-        <div style={{
-          position: 'absolute',
-          top: 'calc(100% + 4px)',
-          right: 0,
-          background: '#1a1b2e',
-          border: '1px solid rgba(255,255,255,0.10)',
-          borderRadius: 8,
-          padding: '4px',
-          minWidth: 220,
-          zIndex: 1000,
+      {open && at && createPortal(
+        <div ref={menuRef} style={{
+          // On the page itself, not inside the title bar: the title bar is its
+          // own layer under the icon bar, so a menu kept inside it opens
+          // underneath the icon bar however high its own number is.
+          position: 'fixed', top: at.top, right: at.right,
+          background: '#1a1b2e', border: '1px solid rgba(255,255,255,0.10)',
+          borderRadius: 8, padding: '4px', minWidth: 220, zIndex: 1900,
           boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
         }}>
 
@@ -561,7 +575,8 @@ export const TemplateMenu: React.FC = () => {
               </div>
             )
           })}
-        </div>
+        </div>,
+        document.body,
       )}
 
       {/* ── Confirmation dialog ── */}
