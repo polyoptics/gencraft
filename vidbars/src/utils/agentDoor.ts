@@ -226,7 +226,19 @@ function readCards(args: Json): Json {
   const cards = ids.flatMap(id => {
     const g = groups.find(x => x.id === id)
     if (!g) { missing.push(id); return [] }
-    return [describe(g, groups, boards)]
+    // What it remembers of decks, as stored: a card that holds on to an old
+    // deck shows it here (and which cards still point at it as their front).
+    const pointedAtBy = groups.filter(o => o.id !== g.id && o.deckAnchorId === g.id).map(o => o.id)
+    const rec = {
+      ...(g.deckState && g.deckState !== 'open' ? { deckState: g.deckState } : {}),
+      ...(g.deckAnchorId ? { deckAnchorId: g.deckAnchorId } : {}),
+      ...(g.nestedDeck ? { nestedDeck: true } : {}),
+      ...(g.deckLastFront ? { deckLastFront: g.deckLastFront } : {}),
+      ...(g.ghostSlots?.length ? { ghostSlots: g.ghostSlots.length } : {}),
+      ...(g.deckLock ? { deckLock: g.deckLock } : {}),
+      ...(pointedAtBy.length ? { frontOf: pointedAtBy } : {}),
+    }
+    return [{ ...describe(g, groups, boards) as Record<string, unknown>, ...(Object.keys(rec).length ? { deckRecord: rec } : {}) }]
   })
   const first = cards[0] as { id: string; name: string } | undefined
   agentPoint(say(args, !first ? 'Reading' : cards.length > 1 ? `Reading ${cards.length} cards` : `Reading ${first.name}`), first ? agentSpotOfCard(first.id) : undefined)
