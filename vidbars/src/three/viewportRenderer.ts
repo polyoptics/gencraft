@@ -21,7 +21,7 @@ import { useCanvasStore } from '../store/canvasStore'
 import { useViewport3DStore, type ViewportWindow3D } from '../store/viewport3dStore'
 import { acquireModel, releaseModel, disposeInstance } from './modelCache'
 import { applyOrbit, frameModel, dollyBounds, type OrbitState } from './orbitState'
-import { DEFAULT_LOOK, createLook, applyLook, disposeLook, type LookInstance } from './modelLook'
+import { DEFAULT_LOOK, createLook, applyLook, disposeLook, wireColor, wireColorChanged, type LookInstance } from './modelLook'
 import { gradeLook, grades } from './modelMaps'
 
 /** Below this on-screen width (px) a window skips GL (frame shows poster). */
@@ -92,12 +92,13 @@ export function setViewFooterInset(id: string, px: number): void {
 // ── Display look ── see modelLook.ts. Grey and the wire are applied as
 // scene.overrideMaterial; texture and shading on this view's own materials.
 const WIREFRAME_MAT = new THREE.MeshBasicMaterial({
-  color: 0x9fd0ff, wireframe: true, transparent: true, opacity: 0.85,
+  color: wireColor(), wireframe: true, transparent: true, opacity: 0.85,
 })
 const WIRE_OVER_MAT = new THREE.MeshBasicMaterial({
-  color: 0x9fd0ff, wireframe: true, transparent: true, opacity: 0.2,
+  color: wireColor(), wireframe: true, transparent: true, opacity: 0.2,
   depthFunc: THREE.LessEqualDepth, depthWrite: false,
 })
+wireColorChanged.add(() => { WIREFRAME_MAT.color.set(wireColor()); WIRE_OVER_MAT.color.set(wireColor()); requestRender() })
 const GRAY_MAT = new THREE.MeshStandardMaterial({
   color: 0xc8ccd8, roughness: 0.75, metalness: 0.0,
 })

@@ -13,7 +13,7 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import { acquireModel, releaseModel, disposeInstance } from './modelCache'
 import { quarterStamp, modelBody } from './modelQuarter'
 import { computePosedBounds } from './orbitState'
-import { createLook, applyLook, disposeLook, type LookInstance, type ModelShade } from './modelLook'
+import { createLook, applyLook, disposeLook, wireColor, wireColorChanged, type LookInstance, type ModelShade } from './modelLook'
 import { gradeLook, type Grade } from './modelMaps'
 import { TILT_PERSPECTIVE, TILT_DRAW_FAR, tiltP, DEFAULT_LIGHT, CAMERA_LENS, type TiltLight, type CameraLens } from '../store/tiltStore'
 import { CAMERA_URL, CAMERA_LENS_AT } from './primitives'
@@ -350,10 +350,11 @@ const LIE_MS = 260
 const FLAT_Q = new THREE.Quaternion()
 const lieQ = new THREE.Quaternion()
 
-const WIRE_MAT = new THREE.MeshBasicMaterial({ color: 0x9fd0ff, wireframe: true, transparent: true, opacity: 0.85 })
+const WIRE_MAT = new THREE.MeshBasicMaterial({ color: wireColor(), wireframe: true, transparent: true, opacity: 0.85 })
 /** Over a surface the wire is drawn where the surface is, so it may sit
  *  exactly on it: LessEqual lets it win those ties. */
-const WIRE_OVER_MAT = new THREE.MeshBasicMaterial({ color: 0x9fd0ff, wireframe: true, transparent: true, opacity: 0.2, depthFunc: THREE.LessEqualDepth, depthWrite: false })
+const WIRE_OVER_MAT = new THREE.MeshBasicMaterial({ color: wireColor(), wireframe: true, transparent: true, opacity: 0.2, depthFunc: THREE.LessEqualDepth, depthWrite: false })
+wireColorChanged.add(() => { WIRE_MAT.color.set(wireColor()); WIRE_OVER_MAT.color.set(wireColor()) })
 /** Texture off: plain grey, smooth or faceted. */
 const GRAY_MAT = new THREE.MeshStandardMaterial({ color: 0xc8ccd8, roughness: 0.85, metalness: 0 })
 const GRAY_FLAT_MAT = new THREE.MeshStandardMaterial({ color: 0xc8ccd8, roughness: 0.85, metalness: 0, flatShading: true })

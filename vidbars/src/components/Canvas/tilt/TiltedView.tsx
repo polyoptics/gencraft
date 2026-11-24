@@ -25,6 +25,7 @@ export const TiltedView: React.FC = () => {
   const texture = useTiltStore(s => s.texture)
   const shade = useTiltStore(s => s.shade)
   const wire = useTiltStore(s => s.wire)
+  const wireColor = useTiltStore(s => s.wireColor)
   const [lightOpen, setLightOpen] = useState(false)
   const turn = useTiltStore(s => s.turn)
   const settle = useTiltStore(s => s.settle)
@@ -1052,7 +1053,11 @@ export const TiltedView: React.FC = () => {
         <button style={btn(texture)} onClick={() => set.setTexture(!texture)} title="The model's own textures; off is plain grey">Texture</button>
         <button style={btn(shade === 'flat')} onClick={() => set.setShade(shade === 'flat' ? null : 'flat')} title="Flat shading: every face shows">Flat</button>
         <button style={btn(shade === 'smooth')} onClick={() => set.setShade(shade === 'smooth' ? null : 'smooth')} title="Smooth shading. With Flat and Smooth both off the model is unshaded: its bare texture, or hollow with Texture off">Smooth</button>
-        <button style={btn(wire)} onClick={() => set.setWire(!wire)} title="The wireframe, over whatever else shows">Wireframe</button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+          <button style={{ ...btn(wire), flex: 1 }} onClick={() => set.setWire(!wire)} title="The wireframe, over whatever else shows">Wireframe</button>
+          <input type="color" data-wire-color title="The wireframe's colour, here and in every Viewer" value={wireColor} onChange={e => set.setWireColor(e.target.value)}
+            style={{ width: 20, height: 20, padding: 0, border: 'none', background: 'none', cursor: 'pointer', flexShrink: 0 }} />
+        </div>
         <button style={btn(lightOpen)} onClick={() => setLightOpen(o => !o)} title="Move the light, brightness and reflections">Light</button>
         </div>
         <div style={{ ...col, borderLeft: DOCK_LINE }}>
