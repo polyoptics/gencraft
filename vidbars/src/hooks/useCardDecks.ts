@@ -10,7 +10,7 @@ import { DEFAULT_H } from '../utils/barConstants'
 import { nearer } from '../utils/deckAway'
 import { primaryFirst } from '../utils/primaryCard'
 import { liveLocks, lockOf } from '../utils/deckLock'
-import { isPutAway, putAwayUnder } from '../utils/deckTree'
+import { isPutAway, putAwayUnder, isShut } from '../utils/deckTree'
 import { NLE_HEADER_CANVAS_H, CARD_FLOOR_ZOOM } from '../components/NLE/NLETimelineHeader'
 
 /** Returns true if this group is a non-anchor member of a stacked/fanned deck (visually hidden). */
@@ -254,7 +254,7 @@ export function useCardDecks(
       // Only OPEN parents have visible ghost-slot placeholders on canvas.
       // For fanned/stacked parents, the ghost slot is part of the fan render
       // and the parent itself is the cluster — no bridging needed.
-      if (g.deckState && g.deckState !== 'open') continue
+      if (isShut(g)) continue
       const slots = g.ghostSlots ?? []
       if (slots.length === 0) continue
       for (const slot of slots) {
@@ -370,7 +370,7 @@ export function useCardDecks(
     for (const cluster of clusters) {
       const allNonOpen = cluster.every(gid => {
         const g = groupMap.get(gid)
-        return g && g.deckState && g.deckState !== 'open'
+        return g && isShut(g)
       })
       if (!allNonOpen) continue
 
@@ -399,7 +399,7 @@ export function useCardDecks(
     //     Group them by deckAnchorId to form decks.
     const anchorBuckets = new Map<string, string[]>()
     for (const g of groups) {
-      if (g.deckState && g.deckState !== 'open' && g.deckAnchorId && !inSpatialDeck.has(g.id)) {
+      if (isShut(g) && g.deckAnchorId && !inSpatialDeck.has(g.id)) {
         if (!anchorBuckets.has(g.deckAnchorId)) anchorBuckets.set(g.deckAnchorId, [])
         anchorBuckets.get(g.deckAnchorId)!.push(g.id)
       }
@@ -491,7 +491,7 @@ export function canvasObstacleGroups(
 function hiddenMember(
   g: ProjectGroup, groups: ProjectGroup[], selfContained: boolean,
 ): boolean {
-  if (!(g.deckState && g.deckState !== 'open' && g.deckAnchorId && g.deckAnchorId !== g.id)) return false
+  if (!(isPutAway(g))) return false
   return selfContained ? groups.some(x => x.id === g.deckAnchorId) : true
 }
 

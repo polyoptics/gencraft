@@ -11,7 +11,7 @@ import { drawnRect } from './effectCards'
 import { deckCards, placeCard } from './railCards'
 import { lyingLeft } from './deckAway'
 import { expandTileIds } from './tileDecks'
-import { putAwayUnder } from './deckTree'
+import { putAwayUnder, isShut } from './deckTree'
 
 export interface SnipPiece {
   url: string
@@ -43,7 +43,7 @@ function sourceFront(source: string): ProjectGroup | null {
   const { groups } = useBoardsStore.getState()
   const docked = new Set(Object.values(useFreeNodeStore.getState().nodes).map(n => n.cardRef))
   const mine = groups.filter(g => g.snipOf === source && !g.pin && !docked.has(g.id))
-  const inDeck = mine.find(g => g.deckState && g.deckState !== 'open' && g.deckAnchorId)
+  const inDeck = mine.find(g => isShut(g) && g.deckAnchorId)
   if (inDeck) return groups.find(g => g.id === inDeck.deckAnchorId) ?? inDeck
   return mine[mine.length - 1] ?? null
 }

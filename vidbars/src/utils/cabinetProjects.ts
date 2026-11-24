@@ -9,6 +9,7 @@
 // Every put-away writes a NEW file before anything leaves the canvas: a failed
 // write loses nothing, and the last few versions stay on disk.
 
+import { isPutAway } from './deckTree'
 import { useBoardsStore, freshCanvasBoards } from '../store/boardsStore'
 import type { BoardData, ProjectGroup } from '../store/boardsStore'
 import { useCanvasStore } from '../store/canvasStore'
@@ -149,7 +150,7 @@ async function mapOf(s: ProjectSnapshot): Promise<ProjectMap> {
   const raw: (ProjectMapPart & { src: string | null })[] = []
   for (const g of s.groups ?? []) {
     // The cards hidden in a collapsed deck lie under its face.
-    if (g.deckState && g.deckState !== 'open' && g.deckAnchorId && g.deckAnchorId !== g.id) continue
+    if (isPutAway(g)) continue
     raw.push({ ...groupRect(g), color: g.color || '#5b8dd9', pic: null, src: g.cardHeroImage ?? boardPicture(boards, g.boardIds) })
   }
   for (const n of Object.values(s.freeNodes ?? {})) {

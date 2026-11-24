@@ -1,3 +1,4 @@
+import { isPutAway } from '../../utils/deckTree'
 import React, { useRef, useCallback, useEffect, useState, useDeferredValue, useMemo } from 'react'
 import { LIBRARY_DRAG_MIME, parseLibraryDrag, bringIn } from '../../utils/library'
 import { useCanvasStore } from '../../store/canvasStore'
@@ -1312,7 +1313,7 @@ const NLERowBands: React.FC<{ pan: { x: number; y: number }; zoom: number; tilte
 
     const rowBands: React.ReactNode[] = []
     deferredGroups
-      .filter(g => !(g.deckState && g.deckState !== 'open' && g.deckAnchorId && g.deckAnchorId !== g.id))
+      .filter(g => !(isPutAway(g)))
       .forEach(group => {
         const layout = computeGroupLayout(group.boardIds, deferredBoards)
 

@@ -1679,7 +1679,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
       const subDeckAnchors = new Set<string>()
       for (const g of s.groups) {
         if (!idSet.has(g.id) && g.deckAnchorId && idSet.has(g.deckAnchorId)
-            && g.deckState && g.deckState !== 'open') {
+            && isShut(g)) {
           subDeckAnchors.add(g.deckAnchorId)
         }
       }
@@ -2561,7 +2561,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
       // Reset them to 'open' so user can re-stack cleanly.
       const groups: any[] = persisted.groups ?? []
       for (const g of groups) {
-        if (g.deckState && g.deckState !== 'open' && !g.deckAnchorId) {
+        if (isShut(g) && !g.deckAnchorId) {
           g.deckState = 'open'
         }
       }

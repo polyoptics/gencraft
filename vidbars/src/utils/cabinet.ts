@@ -8,6 +8,7 @@
 // Everything here works in screen space through elementsFromPoint, like link
 // drags, so it needs no knowledge of the zoom level or the tilted view.
 
+import { isPutAway } from './deckTree'
 import { create } from 'zustand'
 import { useBoardsStore } from '../store/boardsStore'
 import type { BoardData, ProjectGroup } from '../store/boardsStore'
@@ -175,7 +176,7 @@ function drawnCardSize(id: string): { w: number; h: number } | null {
 function deckRoot(g: ProjectGroup, groups: ProjectGroup[]): string {
   let cur = g
   const seen = new Set<string>()
-  while (cur.deckState && cur.deckState !== 'open' && cur.deckAnchorId && cur.deckAnchorId !== cur.id && !seen.has(cur.id)) {
+  while (isPutAway(cur) && !seen.has(cur.id)) {
     seen.add(cur.id)
     const next = groups.find(x => x.id === cur.deckAnchorId)
     if (!next) break

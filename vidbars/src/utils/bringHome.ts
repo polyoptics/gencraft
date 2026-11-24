@@ -69,7 +69,7 @@ export function bringHome(sourceId: string, madeIds: string[], opts: { detail?: 
   for (const id of ids) {
     const g = bs().groups.find(o => o.id === id)!
     if (isHiddenDeckMember(g)) { bs().extractFromDeck(id, g.originX, g.originY); bs().severDeckTether(id) }
-    else if (g.deckState && g.deckState !== 'open') bs().setDeckState(expandWithNestedMembers([id], bs().groups), 'open')
+    else if (isShut(g)) bs().setDeckState(expandWithNestedMembers([id], bs().groups), 'open')
   }
   const moveTo = (id: string, left: number, top: number) => {
     const g = bs().groups.find(o => o.id === id), r = rectOf(id)

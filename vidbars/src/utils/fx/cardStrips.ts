@@ -12,6 +12,7 @@
 // canvas units, and its face picture as a source item. Nothing is stored;
 // like the rest of the strip it is derived on every change.
 
+import { isShut } from '../deckTree'
 import { useBoardsStore, type BoardData, type ProjectGroup } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { cardFaceMedia } from '../cardGrid'
@@ -82,7 +83,7 @@ export function stripCards(
       item: g.effect
         ? { id, kind: 'effect', effect: knownKind(g.effect.kind), params: g.effect.params, text: g.effect.text, off: g.effect.off, solo: g.effect.solo }
         : { id, kind: 'source', url: url!, label: g.name || 'Card' },
-      ...(hiddenAll.has(g.id) ? { tucked: true, deck: g.deckAnchorId ?? g.id } : g.deckState && g.deckState !== 'open' ? { deck: g.id } : {}),
+      ...(hiddenAll.has(g.id) ? { tucked: true, deck: g.deckAnchorId ?? g.id } : isShut(g) ? { deck: g.id } : {}),
     })
   }
   return out

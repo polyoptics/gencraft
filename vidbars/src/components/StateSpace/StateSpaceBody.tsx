@@ -16,6 +16,7 @@
 //     to make it. Drag along a timeline to move its time marker.
 //   - Delete removes what is picked.
 
+import { isShut } from '../../utils/deckTree'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { useFreeNodeStore, type FreeNodeData } from '../../store/freeNodeStore'
@@ -174,7 +175,7 @@ const Pulse: React.FC<{ stamp: number | undefined; radius: number | string; tone
 const NodeView: React.FC<{ item: SpaceItem; picked: boolean; stamp?: number; on?: boolean; says?: [string, string]; num?: number; aux?: [number, number] }> = ({ item, picked, stamp, on, says, num, aux }) => {
   const card = useBoardsStore(s => item.card ? s.groups.find(g => g.id === item.card) : undefined)
   const boards = useBoardsStore(s => s.boards)
-  const count = useBoardsStore(s => card && card.deckState && card.deckState !== 'open' ? stackedDeckMembers(card.id, s.groups).length : 0)
+  const count = useBoardsStore(s => card && isShut(card) ? stackedDeckMembers(card.id, s.groups).length : 0)
   const src = useResolvedMedia(card ? cardFaceSourceUrl(card, boards) : null)
   const gone = !!item.card && !card
   // A workspace node: the other workspace, and what it shows of itself.

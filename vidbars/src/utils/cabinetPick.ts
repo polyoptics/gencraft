@@ -17,7 +17,7 @@ import { useViewport3DStore } from '../store/viewport3dStore'
 import { isDockableTile, tileBrowseItem } from './contentTraversal'
 import { dockSlidingGroup, viewportWindowRects } from './deckDockDrag'
 import { findMagnetCandidate, magnetRadiusForZoom } from './viewportDocking'
-import { putAwayUnder } from './deckTree'
+import { putAwayUnder, isPutAway } from './deckTree'
 
 const KEY = 'vidbars.pickMode'
 function readOn(): boolean {
@@ -79,7 +79,7 @@ function tableBodies(): Body[] {
   }
   for (const g of useBoardsStore.getState().groups) {
     if (g.pin) continue
-    if (g.deckAnchorId && g.deckAnchorId !== g.id && g.deckState && g.deckState !== 'open') continue
+    if (isPutAway(g)) continue
     // On a loop strip, it stays where the strip holds it.
     if (Object.values(fns.nodes).some(n => n.cardRef === g.id && n.railDock)) continue
     const el =document.querySelector<HTMLElement>(`[data-group-card][data-id="${g.id}"]`)

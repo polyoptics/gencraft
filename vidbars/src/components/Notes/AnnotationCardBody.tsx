@@ -4,6 +4,7 @@
 // status, and the strokes drawn on it. Laid out at one size and scaled with
 // the card, like a photograph, so it looks the same however big it is.
 
+import { isShut } from '../../utils/deckTree'
 import React from 'react'
 import { useNotesStore, useNotesUi, type ModelPin } from '../../store/notesStore'
 import { rowOf } from '../../utils/primaryCard'
@@ -56,7 +57,7 @@ const LinkedCard: React.FC<{ cardId: string; whole?: boolean }> = ({ cardId, who
   if (!g) return <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.4)' }}>Its card is gone.</div>
   const type = CARD_TYPES[cardTypeOf(g)]
   const details = (g.details ?? []).map(d => ({ d, v: detailShown(groups, d).text })).filter(x => x.v)
-  const anchor = g.deckAnchorId ?? (whole || (g.deckState && g.deckState !== 'open') ? g.id : undefined)
+  const anchor = g.deckAnchorId ?? (whole || (isShut(g)) ? g.id : undefined)
   // An open deck linked whole: its cards are the open row it fronts.
   const row = whole ? rowOf(g.id) : undefined
   const deck = row && row.length >= 2

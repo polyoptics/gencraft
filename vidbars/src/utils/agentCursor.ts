@@ -8,6 +8,7 @@
 // Where it points is kept in canvas units, so it stays on what it points at
 // as the view moves. Not persisted.
 
+import { isPutAway } from './deckTree'
 import { create } from 'zustand'
 import { useBoardsStore } from '../store/boardsStore'
 import { useCanvasStore } from '../store/canvasStore'
@@ -52,7 +53,7 @@ export function agentSpotOfCard(id: string): { x: number; y: number } | null {
   const { groups, boards } = useBoardsStore.getState()
   // A card inside a closed deck is pointed at on the deck's front card.
   let g = groups.find(x => x.id === id)
-  for (let n = 0; g && n < 20 && g.deckAnchorId && g.deckAnchorId !== g.id && g.deckState && g.deckState !== 'open'; n++) {
+  for (let n = 0; g && n < 20 && isPutAway(g); n++) {
     const up = groups.find(x => x.id === g!.deckAnchorId)
     if (!up) break
     g = up

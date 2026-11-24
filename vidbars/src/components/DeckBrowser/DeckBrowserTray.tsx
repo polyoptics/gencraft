@@ -6,6 +6,7 @@
 // Tile visual: color strip + header text + top slice of hero image. ~1/5 of
 // a normal card's height so many decks fit in a small footprint.
 
+import { isPutAway } from '../../utils/deckTree'
 import React, { useState } from 'react'
 import { useBoardsStore } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
@@ -35,7 +36,7 @@ export const DeckBrowserTray: React.FC<Props> = ({ open, onClose }) => {
 
   // Skip groups that are hidden deck members (they render as part of a stack).
   const visible = groups.filter(g =>
-    !(g.deckState && g.deckState !== 'open' && g.deckAnchorId && g.deckAnchorId !== g.id)
+    !(isPutAway(g))
   )
 
   return (

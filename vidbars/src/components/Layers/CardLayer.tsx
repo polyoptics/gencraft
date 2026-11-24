@@ -61,7 +61,7 @@ import { withGroupAdded } from '../../utils/factionGroups'
 import { FaceCut } from '../RoughCut/FaceCut'
 import { CUT_ASPECT } from '../../utils/cutCard'
 import { cardFaceAudio, cardFaceMedia, deckFaceSteps, faceSteps, layoutCardGrid, mergeCardsInto, setFaceThumbnail, stepDeckFace, stepFace } from '../../utils/cardGrid'
-import { isShut } from '../../utils/deckTree'
+import { isShut, isPutAway } from '../../utils/deckTree'
 import { drawnRect, effectChain, snapEffectCard } from '../../utils/effectCards'
 import { followFaceInViewer, showDockedCardInViewer } from '../../hooks/useDockedContent'
 import { cardGivesInput, cardRailTarget, dockCardsOnRail, endDockedDrag, liftDockedCards, previewCardRail } from '../../utils/railCards'
@@ -993,7 +993,7 @@ function dropDeckOnFaction(ev: PointerEvent, ids: string[], front: string, origi
   }
   const bs = useBoardsStore.getState()
   const back = backId ? bs.groups.find(g => g.id === backId) : undefined
-  if (!back?.flipped || (back.deckState && back.deckState !== 'open') || back.cardType !== 'faction') return false
+  if (!back?.flipped || (isShut(back)) || back.cardType !== 'faction') return false
   bs.setGroupPosBatch(Array.from(origins, ([gid, o]) => ({ groupId: gid, originY: o.y, originX: o.x })))
   const list = [front, ...ids.filter(id => id !== front)].filter(id => !bs.groups.find(g => g.id === id)?.effect)
   bs.setFactionShape(back.id, withGroupAdded(back, list, factionMembers(bs.groups, back).map(m => m.card.id)))
@@ -1014,7 +1014,7 @@ function dropDeckOnScene(ev: PointerEvent, ids: string[], members: string[], fro
   }
   const bs = useBoardsStore.getState()
   const back = backId ? bs.groups.find(g => g.id === backId) : undefined
-  if (!back || back.flipped || !back.scene || (back.deckState && back.deckState !== 'open')) return false
+  if (!back || back.flipped || !back.scene || (isShut(back))) return false
   const divEl = els
     .map(el => (el as HTMLElement).closest?.('[data-scene-div]') as HTMLElement | null)
     .find(el => el && (el.closest('[data-scene-face]') as HTMLElement | null)?.dataset.sceneFace === back.id)
@@ -5289,7 +5289,7 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
   // The open decks whose icon is in a header, and the cards each folds:
   // pointed at, the icon outlines them (FoldPreview).
   const folds = groups.flatMap(g => {
-    if (g.pin || g.chart || (g.deckState && g.deckState !== 'open')) return []
+    if (g.pin || g.chart || (isShut(g))) return []
     const own = openDeckFront(g)
     if (own) return [{ id: 'home:' + g.id, ids: own }]
     const row = rowFront(g)
@@ -5321,7 +5321,7 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
         // …unless it is PINNED. Deck state persists from before the pin, and
         // no anchor on the canvas represents a card that has left it, so a
         // pinned card must never be hidden as "someone else's member".
-        if (!g.pin && g.deckState && g.deckState !== 'open' && g.deckAnchorId && g.deckAnchorId !== g.id) {
+        if (!g.pin && isPutAway(g)) {
           return null
         }
         // While a fan strip is being dragged out, the FannedDeckOverlay owns
@@ -5572,7 +5572,7 @@ const Overlay: React.FC<{ only?: string[] }> = ({ only }) => {
         // …unless it is PINNED. Deck state persists from before the pin, and
         // no anchor on the canvas represents a card that has left it, so a
         // pinned card must never be hidden as "someone else's member".
-        if (!g.pin && g.deckState && g.deckState !== 'open' && g.deckAnchorId && g.deckAnchorId !== g.id) {
+        if (!g.pin && isPutAway(g)) {
           return null
         }
         // The SAME gate the card loop uses. Without it this map drew a rail

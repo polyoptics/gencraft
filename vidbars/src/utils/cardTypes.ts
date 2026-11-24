@@ -5,6 +5,7 @@
 // that card's details, and shows it live; anything can read a card's
 // details by name (detailText).
 
+import { isShut } from './deckTree'
 import type { ProjectGroup } from '../store/boardsStore'
 import { groupRankOf } from './factionGroups'
 import { chartRankOf, rankText, type ChartData } from './chartData'
@@ -34,12 +35,12 @@ export interface DetailLink {
 export function deckCardsOf(groups: ProjectGroup[], id: string): ProjectGroup[] {
   const g = groups.find(x => x.id === id)
   if (!g) return []
-  if (g.deckState && g.deckState !== 'open') {
+  if (isShut(g)) {
     const anchor = g.deckAnchorId ?? g.id
     const ids = new Set([anchor])
     for (let grew = true; grew;) {
       grew = false
-      for (const x of groups) if (!ids.has(x.id) && x.deckAnchorId && ids.has(x.deckAnchorId) && x.deckState && x.deckState !== 'open') { ids.add(x.id); grew = true }
+      for (const x of groups) if (!ids.has(x.id) && x.deckAnchorId && ids.has(x.deckAnchorId) && isShut(x)) { ids.add(x.id); grew = true }
     }
     const front = groups.find(x => x.id === anchor)
     return [...(front ? [front] : []), ...groups.filter(x => ids.has(x.id) && x.id !== anchor)]

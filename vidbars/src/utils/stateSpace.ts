@@ -69,6 +69,7 @@
 // The data is the node's (FreeNodeData.stateSpace); the picture and the
 // hands are components/StateSpace/StateSpaceBody.
 
+import { isShut } from './deckTree'
 import { create } from 'zustand'
 import { useFreeNodeStore } from '../store/freeNodeStore'
 import { useBoardsStore, type ProjectGroup } from '../store/boardsStore'
@@ -1566,7 +1567,7 @@ export function sceneState(): { hold: Record<string, number>; take: string[]; fo
       if (i.kind === 'act' && i.card && run.truth(i.id) === (i.do !== 'show')) {
         // A closed deck goes with all its cards; a card of an open deck goes alone.
         const groups = useBoardsStore.getState().groups, g = groups.find(x => x.id === i.card)
-        out.hidden.push(i.card, ...(g?.deckState && g.deckState !== 'open' ? deckCards(groups, i.card) : []))
+        out.hidden.push(i.card, ...(isShut(g) ? deckCards(groups, i.card) : []))
       }
       if (i.kind !== 'path' || !i.curve) continue
       for (const t of w.d.wires) {
