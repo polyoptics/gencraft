@@ -410,7 +410,17 @@ export function libraryApi(): Plugin {
           const boards = boardsOf(doc)
           const groups = ((doc.groups as GroupLike[] | undefined) ?? []).filter(g => g && ids.has(g.id))
           const boardIds = new Set(groups.flatMap(g => g.boardIds ?? []))
-          const out = { projectName: doc.projectName ?? '', groups, extraBoards: [...boardIds].map(id => boards[id]).filter(Boolean) }
+          const content = { projectName: doc.projectName ?? '', groups, extraBoards: [...boardIds].map(id => boards[id]).filter(Boolean) }
+          // What is kept beside these cards comes with them (src/utils/
+          // cardKeep): theirs by id, and their files' by the urls they name.
+          const all = doc.keep as { v?: unknown; own?: unknown; files?: unknown } | undefined
+          const text = all && Array.isArray(all.files) && all.files.length ? JSON.stringify(content) : ''
+          const keep = all && Array.isArray(all.own) && Array.isArray(all.files) ? {
+            v: all.v,
+            own: (all.own as unknown[][]).filter(e => Array.isArray(e) && e[1] === 'card' && ids.has(e[2] as string)),
+            files: (all.files as unknown[][]).filter(e => Array.isArray(e) && typeof e[1] === 'string' && text.includes(JSON.stringify(e[1]).slice(1, -1))),
+          } : undefined
+          const out = { ...content, keep }
           // Out of a package, a card takes its files with it: copied into
           // this machine's own uploads, once, and named from there.
           json(res, 200, f.d ? mapStrings(out, s => {

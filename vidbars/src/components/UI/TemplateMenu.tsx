@@ -9,6 +9,7 @@ import type { TemplateData } from '../../data/templates'
 import { SCAFFOLDS, instantiateScaffold } from '../../data/scaffolds'
 import type { ScaffoldData } from '../../data/scaffolds'
 import { insertProjectSnapshot } from '../../utils/projectInsert'
+import { collectKeep, applyKeep } from '../../utils/cardKeep'
 import { getGroupHeight } from '../../utils/nleRows'
 import { keepDesignZone, zoomZonesSnapshot, applyZoomZonesSnapshot } from '../../store/zoomZonesStore'
 
@@ -100,7 +101,7 @@ export const TemplateMenu: React.FC = () => {
       .filter(Boolean)
       .map(b => ({ ...b, selectedIds: [], viewerBarId: null }))
 
-    return {
+    const content = {
       projectName: pName,
       bars,
       rootIds,
@@ -116,6 +117,9 @@ export const TemplateMenu: React.FC = () => {
       // How the zoom was split between Cards / Blocks / Boards.
       zoomZones: zoomZonesSnapshot(),
     }
+    // What is kept beside the cards and tiles goes into the save with them
+    // (utils/cardKeep): how their 3D models are turned and set, their notes.
+    return { ...content, keep: collectKeep(bs.groups.map(g => g.id), Object.keys(fn.nodes), JSON.stringify(content)) }
   }
 
   /** Find the next available Y position below all existing groups */
@@ -166,6 +170,7 @@ export const TemplateMenu: React.FC = () => {
         useBoardsStore.getState().deleteBoard('primary')
       }
       if (t.freeNodes) useFreeNodeStore.setState({ nodes: t.freeNodes, selectedIds: [] })
+      applyKeep(t.keep)
       // The project's own zoom zones when it saved them — then its zoom is
       // already on the level it was saved at. Older projects keep the
       // current zones and are moved onto the level they were made for.

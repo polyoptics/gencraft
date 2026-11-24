@@ -21,6 +21,7 @@ import { getGroupHeight } from './nleRows'
 import { insertProjectSnapshot, type ProjectSnapshot } from './projectInsert'
 import { useCabinetUi, type DrawerRef } from './cabinet'
 import type { CabinetData, CabinetDrawer, CabinetProject, ProjectMap, ProjectMapPart } from './cabinetData'
+import { collectKeep } from './cardKeep'
 
 const API = '/api/snapshots/cabinet'
 /** Versions of a project kept on disk, the current one included. */
@@ -86,7 +87,7 @@ function buildSnapshot(name: string, groupIds: string[], nodeIds: string[]) {
   const clean = (b: BoardData) => ({ ...b, selectedIds: [], viewerBarId: null })
   const primary = boardIds.includes('primary') ? bs.boards.primary : undefined
   const extraBoards = boardIds.filter(id => id !== 'primary' && bs.boards[id]).map(id => clean(bs.boards[id]))
-  return {
+  const content = {
     name, id: crypto.randomUUID(), savedAt: Date.now(),
     projectName: primary?.projectName ?? name,
     bars: primary?.bars ?? {},
@@ -96,6 +97,8 @@ function buildSnapshot(name: string, groupIds: string[], nodeIds: string[]) {
     groups,
     freeNodes: Object.fromEntries(nodeIds.flatMap(id => fn.nodes[id] ? [[id, fn.nodes[id]]] : [])),
   }
+  // What is kept beside them goes along (utils/cardKeep).
+  return { ...content, keep: collectKeep(groupIds, nodeIds, JSON.stringify(content)) }
 }
 
 /** A small picture for the map: a data url is embedded media, far too big to

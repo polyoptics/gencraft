@@ -14,6 +14,7 @@ import type { FreeNodeData } from '../store/freeNodeStore'
 import { useBoardsStore } from '../store/boardsStore'
 import { useFreeNodeStore } from '../store/freeNodeStore'
 import { remapRefs } from './linkTargets'
+import { applyKeep, type CardKeep } from './cardKeep'
 
 /**
  * Snapshot shape — matches what `getCurrentSnapshot` produces in TemplateMenu.
@@ -28,6 +29,8 @@ export interface ProjectSnapshot {
   boardOrder?: string[]
   groups?: ProjectGroup[]
   freeNodes?: Record<string, FreeNodeData>
+  /** What is kept beside the cards (utils/cardKeep). */
+  keep?: CardKeep
   // Other fields (pan/zoom/etc) intentionally ignored for insert.
 }
 
@@ -221,6 +224,7 @@ export function insertProjectSnapshot(
   })
 
   // ── 6. Free nodes (Y-shifted, fresh IDs) ────────────────────
+  let tileIdMap = new Map<string, string>()
   if (snapshot.freeNodes) {
     const sourceNodes = Object.values(snapshot.freeNodes)
     // Ids minted up front, so a card docked on a loop strip can follow its
@@ -228,6 +232,7 @@ export function insertProjectSnapshot(
     // remapped here. Only to a rail that came along AS a rail: anything
     // else would leave the card docked on nothing.
     const nodeIdMap = new Map(sourceNodes.map(n => [n.id, crypto.randomUUID()]))
+    tileIdMap = nodeIdMap
     const railIds = new Set(sourceNodes.filter(n => n.type === 'rail' && n.rail).map(n => n.id))
     useFreeNodeStore.setState(s => {
       const updated = { ...s.nodes }
@@ -262,6 +267,9 @@ export function insertProjectSnapshot(
       return { nodes: updated }
     })
   }
+
+  // ── 7. What is kept beside the cards, under their new ids ───
+  applyKeep(snapshot.keep, id => groupIdMap.get(id), id => tileIdMap.get(id))
 
   return newGroups.map(g => g.id)
 }

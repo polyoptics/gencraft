@@ -28,6 +28,7 @@ import { hasLegacyInlineMedia, runInlineMediaMigration } from './migrateInlineMe
 import { mediaRefId } from './mediaRef'
 import { getMedia } from './mediaStore'
 import { insertProjectSnapshot, type ProjectSnapshot } from './projectInsert'
+import { collectKeep } from './cardKeep'
 
 export interface LibraryProject {
   file: string
@@ -534,13 +535,15 @@ const EXT: Record<string, string> = {
 export async function packageCanvas(dir: string, name: string, onStep?: (word: string) => void): Promise<PackageResult> {
   const bs = useBoardsStore.getState()
   const primary = bs.boards.primary
-  const doc = {
+  const content = {
     name, id: crypto.randomUUID(), savedAt: Date.now(),
     projectName: primary?.projectName ?? '', bars: primary?.bars ?? {}, rootIds: primary?.rootIds ?? [],
     extraBoards: bs.boardOrder.map(id => bs.boards[id]).filter(Boolean).map(b => ({ ...b, selectedIds: [], viewerBarId: null })),
     boardOrder: bs.boardOrder,
     groups: bs.groups,
   }
+  // What is kept beside the cards goes with them (utils/cardKeep).
+  const doc = { ...content, keep: collectKeep(bs.groups.map(g => g.id), [], JSON.stringify(content)) }
   // Pictures this window holds itself go into the package as files first;
   // the server then gathers the ones that are on disk.
   let text = JSON.stringify(doc)
