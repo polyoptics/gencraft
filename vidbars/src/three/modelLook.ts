@@ -23,6 +23,26 @@ export interface ModelLook {
 
 export const DEFAULT_LOOK: ModelLook = { texture: true, shade: 'smooth', wire: false }
 
+/** The wireframe's colour: one for the 3D view and every Viewer, kept per
+ *  machine (Brian 2026-11-24: "Need a color picker for the wireframe
+ *  color. In the tool options"). */
+export const DEFAULT_WIRE_COLOR = '#9fd0ff'
+const WIRE_COLOR_KEY = 'vidbars.wireColor'
+let wireCol = DEFAULT_WIRE_COLOR
+try {
+  const v = localStorage.getItem(WIRE_COLOR_KEY)
+  if (v && /^#[0-9a-f]{6}$/i.test(v)) wireCol = v
+} catch { /* private window */ }
+export const wireColor = (): string => wireCol
+/** Heard after the colour changes. */
+export const wireColorChanged = new Set<() => void>()
+export function setWireColor(c: string): void {
+  if (c === wireCol || !/^#[0-9a-f]{6}$/i.test(c)) return
+  wireCol = c
+  try { localStorage.setItem(WIRE_COLOR_KEY, c) } catch { /* private window */ }
+  for (const fn of wireColorChanged) fn()
+}
+
 /** Many models arrive with split, faceted normals. Normals are averaged
  *  across faces that meet at under SMOOTH_CREASE, so curves go smooth and
  *  hard edges stay hard. Skinned meshes keep their own normals. */

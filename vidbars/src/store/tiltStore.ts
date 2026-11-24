@@ -15,7 +15,7 @@
 import { useCallback } from 'react'
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { DEFAULT_LOOK, type ModelShade } from '../three/modelLook'
+import { DEFAULT_LOOK, wireColor, setWireColor, type ModelShade } from '../three/modelLook'
 import { createDebouncedIDBStorage } from '../utils/debouncedIDBStorage'
 import { markMoving } from '../utils/rasterSettle'
 
@@ -132,6 +132,8 @@ interface TiltStore {
   texture: boolean
   shade: ModelShade
   wire: boolean
+  /** The wireframe's colour (three/modelLook wireColor). */
+  wireColor: string
   light: TiltLight
   /** Models turn slowly on their card. */
   turn: boolean
@@ -159,6 +161,7 @@ interface TiltStore {
   setTexture: (on: boolean) => void
   setShade: (shade: ModelShade) => void
   setWire: (on: boolean) => void
+  setWireColor: (c: string) => void
   setLight: (patch: Partial<TiltLight>) => void
   setTurn: (on: boolean) => void
   setWalls: (on: boolean) => void
@@ -213,6 +216,7 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
   texture: true,
   shade: DEFAULT_LOOK.shade,
   wire: false,
+  wireColor: wireColor(),
   light: DEFAULT_LIGHT,
   turn: true,
   settle: true,
@@ -264,6 +268,7 @@ export const useTiltStore = create<TiltStore>()((set, get) => ({
   setTexture: texture => set({ texture }),
   setShade: shade => set({ shade }),
   setWire: wire => set({ wire }),
+  setWireColor: c => { setWireColor(c); set({ wireColor: wireColor() }) },
   setLight: patch => set(s => ({ light: { ...s.light, ...patch } })),
   setTurn: turn => set({ turn }),
   setWalls: walls => set({ walls }),
