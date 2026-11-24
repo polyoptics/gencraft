@@ -43,41 +43,36 @@ export function expandWithNestedMembers(baseIds: string[], allGroups: ProjectGro
 }
 
 const TOUCH_TOLERANCE = 16 // canvas units — slightly > DEFAULT_GAP (12)
-// The header band above a card is drawn with a screen-pixel floor, so in
-// canvas units it grows as you zoom out. Touching is judged with the band
-// at its own canvas size instead, so how near two cards must be to join a
-// deck is the same at every zoom (Brian 2026-11-05: zoomed far out, open
-// decks a little apart merged into one).
-const TOUCH_HEADER = NLE_HEADER_CANVAS_H + 2
+// THE rule for a card touching anything (Brian 2026-11-24, "Yes, one rule
+// everywhere"): its header strip counts, as tall as it is ever drawn
+// against its card (headerExtend at CARD_FLOOR_ZOOM, in canvas units), and
+// that at every zoom, so nothing joins or comes apart as the view zooms
+// (Brian 2026-11-05, 2026-11-20). Decks, the windows and panels cards dock
+// on, charts and the 3D set all judge a card by this one strip. It was 38
+// (the strip's own canvas size) for everything but decks.
+const TOUCH_HEADER = 20 / CARD_FLOOR_ZOOM + 2
 const headerExtendCanvasAt = (zoom: number) => (Math.max(NLE_HEADER_CANVAS_H * zoom, 20) + 2 * zoom) / zoom
-// Cards joining a deck are judged with the whole header strip as drawn:
-// the tallest it is ever drawn against its card (headerExtend at
-// CARD_FLOOR_ZOOM, in canvas units), and that at every zoom, so a deck
-// does not come apart or join as the view zooms (Brian 2026-11-20: "the
-// header doesn't count as physical contact. It has to be below, into the
-// underheader part"). The windows' docking keeps TOUCH_HEADER.
-const DECK_HEADER = 20 / CARD_FLOOR_ZOOM + 2
 
 /** The zoom the slack below is measured at. It was the farthest zoom; the
  *  view now pulls back further (canvasStore MIN_ZOOM), and the reach under a
  *  window stays what it was. */
 const SLACK_ZOOM = 0.045
 
-/** How much taller the drawn header band is at that zoom than its
- *  own canvas size: a card docked UNDER a card-back window sits with its
- *  drawn header below the window's foot (Brian 2026-11-07), so the window
- *  reaches this much further down for it, the same at every zoom. */
+/** How much further off than its touching strip a card can have been set
+ *  flush under something: the magnet sets a card by cardVisualRect, whose
+ *  header band keeps growing zoomed out past where the drawn strip stops,
+ *  so a card docked UNDER a window or panel sits with its strip below the
+ *  foot (Brian 2026-11-07). Whatever is not a card reaches this much
+ *  further down for a card, the same at every zoom. */
 export const HEADER_BAND_SLACK = headerExtendCanvasAt(SLACK_ZOOM) - TOUCH_HEADER
 
-/** How much of that slack is left at `zoom`: how much taller the drawn
- *  header band can still grow, zooming out from here. A card set flush
- *  under something while zoomed out lies this far below it, at most, as
- *  drawn at `zoom` (utils/area3dScene: cards docked under a 3D set). */
-export const headerSlackAt = (zoom: number): number => Math.max(0, HEADER_BAND_SLACK - (headerExtendCanvasAt(zoom) - TOUCH_HEADER))
+/** How far above its top as DRAWN at `zoom` a card's touching strip
+ *  reaches (the strip is drawn shorter zoomed in). */
+export const touchLiftAt = (zoom: number): number => Math.max(0, TOUCH_HEADER - (Math.max(NLE_HEADER_CANVAS_H * zoom, 20 * Math.min(1, zoom / CARD_FLOOR_ZOOM)) + 2 * zoom) / Math.max(0.0001, zoom))
 
-/** A card's rect as touching judges it: its visual rect with the header
- *  band at its own canvas size, so the same at every zoom. Used by the
- *  card-back windows' docking (utils/deckDockDrag, utils/filmShots). */
+
+/** A card's rect as touching judges it, whatever it touches: its visual
+ *  rect with the header strip at TOUCH_HEADER, the same at every zoom. */
 export function cardTouchRect(g: ProjectGroup, boards: Record<string, BoardData>, zoom: number): { left: number; top: number; right: number; bottom: number } | null {
   const v = cardVisualRect(g, boards, zoom)
   if (!v) return null
@@ -91,7 +86,7 @@ export const DECK_TOUCH_TOLERANCE = TOUCH_TOLERANCE
  *  within DECK_TOUCH_TOLERANCE are one deck (cardsTouch). */
 export function deckTouchRect(g: ProjectGroup, boards: Record<string, BoardData>, zoom: number): GroupSlot | null {
   const r = cardTouchRect(g, boards, zoom)
-  return r && { id: g.id, ...r, top: r.top - (DECK_HEADER - TOUCH_HEADER) }
+  return r && { id: g.id, ...r }
 }
 
 /** Do cards `a` and `b` touch, as clustering judges it? */
@@ -294,8 +289,8 @@ export function useCardDecks(
     // extracted-card gap, but are filtered out before cluster IDs are
     // returned (only real groups become deck members).
     // Every rect here carries the zoom's header band; swap it for the
-    // fixed one (DECK_HEADER) before testing touch.
-    const headerSlack = headerExtendCanvasAt(zoom) - DECK_HEADER
+    // fixed one (TOUCH_HEADER) before testing touch.
+    const headerSlack = headerExtendCanvasAt(zoom) - TOUCH_HEADER
     const touchRect = (r: GroupSlot): GroupSlot => ({ ...r, top: r.top + headerSlack })
     function findClusters(zoneGroups: ProjectGroup[], zoneGhosts: GroupSlot[]): string[][] {
       const groupCount = zoneGroups.length

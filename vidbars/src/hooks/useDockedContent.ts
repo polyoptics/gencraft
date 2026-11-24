@@ -36,7 +36,7 @@ import { poolFeedingList } from '../utils/componentLinks'
 import { getPoolContents } from '../store/poolStore'
 import { formatListQuerySummary } from '../utils/contentKinds'
 import { useCanvasStore } from '../store/canvasStore'
-import { isHiddenDeckMember, expandWithNestedMembers, cardVisualRect } from './useCardDecks'
+import { isHiddenDeckMember, expandWithNestedMembers, cardTouchRect, HEADER_BAND_SLACK } from './useCardDecks'
 import { getFirstImageUrl } from '../types/bar'
 import { tileDeckIndex, tileDeckMembers } from '../utils/tileDecks'
 import { isDocked } from '../utils/rail'
@@ -186,9 +186,10 @@ function cardFace(g: ProjectGroup, boards: Record<string, BoardData>): string | 
   return null
 }
 
-/** Content-bearing visible groups as dockable items — the shared CARD-
- *  level visual rect (cardVisualRect), matching the snap geometry exactly
- *  so a card that looks flush IS docked. Zoom-aware like deck clustering. */
+/** Content-bearing visible groups as dockable items, by the one rect a
+ *  card touches anything by (cardTouchRect): the same at every zoom, as
+ *  decks are. It was the rect as drawn, so a card docked on a Viewer came
+ *  off it zooming in. */
 function contentGroupItems(
   groups: ProjectGroup[],
   boards: Record<string, BoardData>,
@@ -198,12 +199,12 @@ function contentGroupItems(
   for (const g of groups) {
     if (isHiddenDeckMember(g)) continue
     if (!groupHasBrowsableContent(g.id, groups, boards)) continue
-    const v = cardVisualRect(g, boards, zoom)
-    if (!v) continue
+    const t = cardTouchRect(g, boards, zoom)
+    if (!t) continue
     items.push({
       id: GROUP_PREFIX + g.id,
-      x: v.rect.left, y: v.rect.top,
-      width: v.rect.right - v.rect.left, height: v.rect.bottom - v.rect.top,
+      x: t.left, y: t.top, width: t.right - t.left, height: t.bottom - t.top,
+      up: HEADER_BAND_SLACK,
     })
   }
   return items

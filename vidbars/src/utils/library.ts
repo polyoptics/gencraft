@@ -434,7 +434,7 @@ function swapIds<T>(v: T, map: Map<string, string>): T {
 const ALONG_GAP = 80
 /** The same between one line of them and the next: a card's header strip
  *  counts as far up as it is ever drawn when cards are judged to touch
- *  (hooks/useCardDecks DECK_HEADER), so a line lies further off than that. */
+ *  (hooks/useCardDecks TOUCH_HEADER), so a line lies further off than that. */
 const ALONG_LINE_GAP = 20 / CARD_FLOOR_ZOOM + ALONG_GAP
 /** How many linked cards lie side by side before the next line of them. */
 const ALONG_PER_LINE = 8

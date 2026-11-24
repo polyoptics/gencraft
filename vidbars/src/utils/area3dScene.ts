@@ -15,7 +15,7 @@ import { drawnRect } from './effectCards'
 import { useViewport3DStore, type ViewportWindow3D } from '../store/viewport3dStore'
 import { magnetRadiusForZoom, viewportVisualRect } from './viewportDocking'
 import { useNotesStore } from '../store/notesStore'
-import { cardsTouch, headerSlackAt, isHiddenDeckMember } from '../hooks/useCardDecks'
+import { cardsTouch, touchLiftAt, HEADER_BAND_SLACK, isHiddenDeckMember } from '../hooks/useCardDecks'
 
 type R = { x: number; y: number; width: number; height: number }
 
@@ -40,8 +40,14 @@ const touches = (a: R, b: R, gap: number) =>
  *  was docked no more (Brian 2026-11-13: "cards don't dock on the bottom
  *  properly"). Under it as far as that band can have put it: docked, the
  *  same at every zoom (as under a card-back window, HEADER_BAND_SLACK). */
-const cardTouches = (r: R, b: R, gap: number) => touches(r, b, gap) ||
-  (r.x <= b.x + b.width + gap && r.x + r.width >= b.x - gap && r.y > b.y + b.height && r.y <= b.y + b.height + gap + headerSlackAt(useCanvasStore.getState().zoom))
+const cardTouches = (r0: R, b: R, gap: number) => {
+  // By the one strip a card touches anything by (hooks/useCardDecks
+  // TOUCH_HEADER): `r0` is the card as drawn now, its strip shorter zoomed in.
+  const zoom = useCanvasStore.getState().zoom, lift = touchLiftAt(zoom)
+  const r = { x: r0.x, y: r0.y - lift, width: r0.width, height: r0.height + lift }
+  return touches(r, b, gap) ||
+    (r.x <= b.x + b.width + gap && r.x + r.width >= b.x - gap && r.y > b.y + b.height && r.y <= b.y + b.height + gap + HEADER_BAND_SLACK)
+}
 /** Is a CARD's box `r` docked under `b`: along its bottom, from below? */
 export const docksUnder = (r: R, b: R): boolean => r.y + r.height / 2 > b.y + b.height && cardTouches(r, b, dockGap())
 const inside = (a: R, px: number, py: number) => px >= a.x && px <= a.x + a.width && py >= a.y && py <= a.y + a.height

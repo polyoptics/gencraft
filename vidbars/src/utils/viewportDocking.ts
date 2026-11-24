@@ -177,7 +177,14 @@ export function findMagnetCandidate(
   return best
 }
 
-export interface DockableItem extends Rect { id: string }
+export interface DockableItem extends Rect {
+  id: string
+  /** A CARD: how much further up it reaches for a window or a tile (not
+   *  for another card) than its rect, set flush under one zoomed out
+   *  (hooks/useCardDecks HEADER_BAND_SLACK). */
+  up?: number
+}
+const forWindow = (t: DockableItem): Rect => t.up ? { x: t.x, y: t.y - t.up, width: t.width, height: t.height + t.up } : t
 export interface DockedItem { id: string; edge: DockEdge; along: number }
 
 const EDGE_RANK: Record<DockEdge, number> = { top: 0, right: 1, bottom: 2, left: 3 }
@@ -255,7 +262,10 @@ export function computeTileClusters(
   const union = (a: number, b: number) => { const ra = find(a), rb = find(b); if (ra !== rb) parent[rb] = ra }
   for (let i = 0; i < tiles.length; i++) {
     for (let j = i + 1; j < tiles.length; j++) {
-      if (rectsTouch(tiles[i], tiles[j], tol)) union(i, j)
+      // A card and a thing that is not one: the card reaches up for it
+      // as for a window. Two cards touch as decks judge it.
+      const a = tiles[i], b = tiles[j], mixed = !a.up !== !b.up
+      if (rectsTouch(mixed ? forWindow(a) : a, mixed ? forWindow(b) : b, tol)) union(i, j)
     }
   }
   const clusters = new Map<number, number[]>()
@@ -271,7 +281,7 @@ export function computeTileClusters(
     let best: { winId: string; distance: number } | null = null
     for (const mi of members) {
       for (const win of windows) {
-        if (!rectsTouch(tiles[mi], win, tol)) continue
+        if (!rectsTouch(forWindow(tiles[mi]), win, tol)) continue
         const d = edgeDistance(tiles[mi], win)
         if (!best || d < best.distance || (d === best.distance && win.id < best.winId)) {
           best = { winId: win.id, distance: d }
@@ -284,7 +294,7 @@ export function computeTileClusters(
     // BFS from the window: layer 0 = members touching the window (sorted by
     // edge rank + along), then touch-neighbors layer by layer (y, then x).
     const memberSet = new Set(members)
-    const layer0 = members.filter(mi => rectsTouch(tiles[mi], win, tol))
+    const layer0 = members.filter(mi => rectsTouch(forWindow(tiles[mi]), win, tol))
     layer0.sort((a, b) => {
       const ea = nearestEdge(tiles[a], win), eb = nearestEdge(tiles[b], win)
       const ra = EDGE_RANK[ea.edge], rb = EDGE_RANK[eb.edge]
