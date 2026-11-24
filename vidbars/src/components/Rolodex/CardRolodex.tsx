@@ -286,7 +286,7 @@ type RolodexRow =
   | { kind: 'addfx'; effect: EffectKind; level: 0; isDeck: false }
   // A card of a SAVED project, not of this canvas (utils/library): there to
   // look at and drag in, never to act on.
-  | { kind: 'libcard'; card: LibraryCard; level: 0 | 1; isDeck: boolean }
+  | { kind: 'libcard'; card: LibraryCard; level: number; isDeck: boolean }
 
 // hasRenderableContent + sortGroups moved to utils/contentKinds.ts so the
 // pinned-list evaluator shares them (tile results must equal rolodex

@@ -46,9 +46,11 @@ export interface LibraryCard {
   key: string
   project: LibraryProject
   group: ProjectGroup
-  /** 1: a card of the deck whose front card is the row above it. */
-  level: 0 | 1
-  /** On a deck's front card: every card of the deck, this one first. */
+  /** How deep in its deck: 0 a card on its own or a deck's front card, 1 a
+   *  card of that deck, 2 a card of a deck inside it, and so on. */
+  level: number
+  /** On the front card of a deck, or of a deck inside a deck: every card of
+   *  it, this one first. */
   deck?: string[]
 }
 
@@ -127,21 +129,41 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   },
 }))
 
-/** A project's cards as its decks: each a list of card ids, front card
- *  first; a card on its own is a list of one. Closed decks by what they
- *  record, open decks by their cards touching, as on the canvas. */
-function decksOf(p: LibraryProject): string[][] {
+/** One card of a deck as the library lists it. */
+interface DeckEntry {
+  id: string
+  /** How deep in the deck it lies: 0 its front card, 1 a card of the deck,
+   *  2 a card of a deck inside that deck, and so on down. */
+  level: number
+  /** On a deck's or a deck-inside's front card: its cards, this one first. */
+  deck?: string[]
+}
+
+/** A project's cards as its decks: each a list of cards, front card first;
+ *  a card on its own is a list of one. Closed decks by what they record,
+ *  open decks by their cards touching, as on the canvas. A deck inside a
+ *  deck is listed under its own front card, to any depth (Brian 2026-11-24:
+ *  "when i see decks in the card browser. i need to se sub decks now too"). */
+function decksOf(p: LibraryProject): DeckEntry[][] {
   const cards = p.groups.filter(g => !g.linkOf && hasRenderableContent(g, p.boards))
   const byId = new Map(cards.map(g => [g.id, g]))
-  // The cards folded away in a closed deck, under the card that shows.
-  const folded = new Map<string, string[]>()
+  // The cards folded away in a closed deck, each under the card it is put
+  // away under: the deck's front card, or the front card of a deck inside.
+  const under = new Map<string, ProjectGroup[]>()
   const shown: ProjectGroup[] = []
   for (const g of cards) {
     if (!isHiddenDeckMember(g)) { shown.push(g); continue }
     let top: ProjectGroup | undefined = g
     for (let i = 0; i < 20 && top && isHiddenDeckMember(top); i++) top = byId.get(top.deckAnchorId!)
     if (!top || isHiddenDeckMember(top)) { shown.push(g); continue }
-    folded.set(top.id, [...(folded.get(top.id) ?? []), g.id])
+    under.set(g.deckAnchorId!, [...(under.get(g.deckAnchorId!) ?? []), g])
+  }
+  // Nearest the front card first, as the deck fans.
+  const reach = (g: ProjectGroup) => Math.hypot(g.deckOffsetX ?? 0, g.deckOffsetY ?? 0)
+  /** A card and all that is put away under it, at `level` and below. */
+  const tree = (g: ProjectGroup, level: number): DeckEntry[] => {
+    const kids = [...(under.get(g.id) ?? [])].sort((a, b) => reach(a) - reach(b)).flatMap(k => tree(k, level + 1))
+    return [{ id: g.id, level, deck: kids.length ? [g.id, ...kids.map(k => k.id)] : undefined }, ...kids]
   }
   const rects = shown.map(g => deckTouchRect(g, p.boards, 1))
   const parent = shown.map((_, i) => i)
@@ -162,10 +184,19 @@ function decksOf(p: LibraryProject): string[][] {
   return [...sets.values()]
     .map(m => m.sort(order))
     .sort((a, b) => place(a[0]).top - place(b[0]).top || place(a[0]).left - place(b[0]).left)
-    .map(m => m.flatMap(i => [shown[i].id, ...(folded.get(shown[i].id) ?? [])]))
+    .map(m => {
+      // One card showing: a card, or a closed deck with its own tree.
+      if (m.length === 1) return tree(shown[m[0]], 0)
+      // An open deck: its first card fronts all of it; a closed deck lying
+      // in it is a deck inside, under its own front card.
+      const [front, ...rest] = m.map(i => shown[i])
+      const mine = tree(front, 1).slice(1)
+      const others = rest.flatMap(g => tree(g, 1))
+      return [{ id: front.id, level: 0, deck: [front.id, ...mine.map(e => e.id), ...others.map(e => e.id)] }, ...mine, ...others]
+    })
 }
 
-const decksCache = new WeakMap<LibraryProject, string[][]>()
+const decksCache = new WeakMap<LibraryProject, DeckEntry[][]>()
 
 /** Every card of every saved project, newest project first, decks kept
  *  together. A card saved in several projects (the same card, under the same
@@ -182,19 +213,25 @@ export function libraryCards(projects: LibraryProject[]): LibraryCard[] {
       decksCache.set(p, decks)
     }
     const byId = new Map(p.groups.map(g => [g.id, g]))
-    for (const ids of decks) {
-      const fresh = ids.filter(id => {
-        const g = byId.get(id)!
+    for (const entries of decks) {
+      const fresh = entries.filter(e => {
+        const g = byId.get(e.id)!
         // A new canvas's first card has the same id in every project: told
         // apart by how much is on it as well.
-        const k = `${id}|${g.name}|${/^[0-9a-f-]{36}$/.test(id) ? '' : g.boardIds.map(b => Object.keys(p.boards[b]?.bars ?? {}).length).join(',')}`
+        const k = `${e.id}|${g.name}|${/^[0-9a-f-]{36}$/.test(e.id) ? '' : g.boardIds.map(b => Object.keys(p.boards[b]?.bars ?? {}).length).join(',')}`
         return seen.has(k) ? false : (seen.add(k), true)
       })
-      fresh.forEach((id, i) => out.push({
-        key: `${p.dir ?? ''}|${p.file}|${id}`, project: p, group: byId.get(id)!,
-        level: i === 0 ? 0 : 1,
-        deck: i === 0 && fresh.length > 1 ? fresh : undefined,
-      }))
+      const here = new Set(fresh.map(e => e.id))
+      fresh.forEach((e, i) => {
+        // The deck's front card was listed from a newer save: the next card
+        // stands in front of what is left.
+        const deck = (i === 0 ? fresh.map(x => x.id) : e.deck?.filter(id => here.has(id)))
+        out.push({
+          key: `${p.dir ?? ''}|${p.file}|${e.id}`, project: p, group: byId.get(e.id)!,
+          level: i === 0 ? 0 : Math.max(1, e.level),
+          deck: deck && deck.length > 1 ? deck : undefined,
+        })
+      })
     }
   }
   return out
@@ -347,7 +384,7 @@ const ALONG_PER_LINE = 8
 
 /** Bring cards of a saved project onto the canvas as copies, the first of
  *  them centred on `at` (canvas units), with the cards linked to them set
- *  beside them. One undo step. Returns the new cards, the dragged first. */
+ *  beside them, or closed under them where they were saved so. One undo step. Returns the new cards, the dragged first. */
 export async function bringIn(drag: LibraryDrag, at: { cx: number; cy: number }): Promise<string[]> {
   const project = useLibraryStore.getState().projects.find(p => idOf(p) === idOf(drag))
   const along = project ? linkedAlong(project, drag.ids) : []
@@ -363,17 +400,31 @@ export async function bringIn(drag: LibraryDrag, at: { cx: number; cy: number })
   const dragged = new Set(drag.ids)
   const rank = new Map([...drag.ids, ...along].map((id, i) => [id, i]))
   const came = new Set((snapshot.groups ?? []).map(g => g.id))
-  const groups = (snapshot.groups ?? [])
+  const saved = (snapshot.groups ?? [])
     // A linked copy comes only with the card it is a copy of.
     .filter(g => !g.linkOf || (!dragged.has(g.id) && came.has(g.linkOf)))
     .sort((a, b) => (rank.get(a.id) ?? 0) - (rank.get(b.id) ?? 0))
-    .map(g => {
-      const own = { ...g } as Record<string, unknown>
-      for (const k of ALWAYS_DROPS) delete own[k]
-      // The linked cards come as loose cards, whatever deck they were in.
-      if (!drag.deck || !dragged.has(g.id)) for (const k of ALONE_DROPS) delete own[k]
-      return own as unknown as ProjectGroup
-    })
+  // A card put away under a card that is coming too stays put away under it
+  // (Brian 2026-11-24: "so i can pull out a single ship card with its
+  // model": the 3D model card closed under the ship comes closed under it).
+  const savedIds = new Set(saved.map(g => g.id))
+  const under = new Map(saved.flatMap(g => isHiddenDeckMember(g) && savedIds.has(g.deckAnchorId!) ? [[g.id, g.deckAnchorId!] as const] : []))
+  const fronts = new Set(under.values())
+  const groups = saved.map(g => {
+    const own = { ...g } as Record<string, unknown>
+    for (const k of ALWAYS_DROPS) delete own[k]
+    if ((drag.deck && dragged.has(g.id)) || under.has(g.id) || fronts.has(g.id)) {
+      // Still in its deck; out of the deck that one was in, if that stayed.
+      if (!under.has(g.id) && g.deckAnchorId && g.deckAnchorId !== g.id && !savedIds.has(g.deckAnchorId)) for (const k of ['deckAnchorId', 'deckOffsetX', 'deckOffsetY'] as const) delete own[k]
+      for (const k of ['deckLastFront', 'deckLock', 'deckFaceCard', 'railSource'] as const) {
+        if (typeof own[k] === 'string' && !savedIds.has(own[k] as string)) delete own[k]
+      }
+    } else {
+      // The rest come as loose cards, whatever deck they were in.
+      for (const k of ALONE_DROPS) delete own[k]
+    }
+    return own as unknown as ProjectGroup
+  })
   if (!groups.some(g => dragged.has(g.id))) return []
   useUndoCoordinator.getState().checkpoint()
   const made = insertProjectSnapshot({ ...snapshot, groups }, at.cy, { keepDecks: true })
@@ -396,33 +447,64 @@ export async function bringIn(drag: LibraryDrag, at: { cx: number; cy: number })
     // A card with nothing on it yet has no face to measure: a card's worth.
     return g ? cardVisualRect(g, bs.boards, 1)?.rect ?? { left: g.originX, top: g.originY, right: g.originX + 400, bottom: g.originY + 300 } : null
   }
-  const firstCount = groups.filter(g => dragged.has(g.id)).length
   const moves = new Map<string, { dx: number; dy: number }>()
   const rect = rectOf(made[0])
   if (rect) {
     const dx = at.cx - (rect.left + rect.right) / 2
     const dy = at.cy - (rect.top + rect.bottom) / 2
-    // What was dragged keeps its own arrangement, under the pointer.
-    let right = -Infinity
-    for (const id of made.slice(0, firstCount)) {
-      moves.set(id, { dx, dy })
-      const r = rectOf(id)
-      if (r) right = Math.max(right, r.right + dx)
+    // Cards that touched in the saved project are a deck there, and come as
+    // one: each lot keeps its own arrangement (Brian 2026-11-24: "some decks
+    // pull out as separated cards on the canvas too, we need to maintain the
+    // deck/subdeck w/e relationship"). Cards put away under one go with it.
+    const out = groups.flatMap((g, i) => {
+      if (under.has(g.id)) return []
+      const card = bs.groups.find(x => x.id === made[i])
+      const r = rectOf(made[i])
+      return card && r ? [{ id: g.id, r, touch: deckTouchRect(card, bs.boards, 1) }] : []
+    })
+    const lot = out.map((_, i) => i)
+    const find = (i: number): number => (lot[i] === i ? i : (lot[i] = find(lot[i])))
+    for (let i = 0; i < out.length; i++) {
+      for (let j = i + 1; j < out.length; j++) {
+        const a = out[i].touch, b = out[j].touch
+        if (a && b && rectsTouch(a, b, DECK_TOUCH_TOLERANCE)) lot[find(j)] = find(i)
+      }
     }
-    // The linked cards, wherever they lay in the saved project, are set out
-    // beside it: side by side, clear of it and of each other.
+    const lots = new Map<number, typeof out>()
+    out.forEach((c, i) => { const k = find(i); lots.set(k, [...(lots.get(k) ?? []), c]) })
+    const box = (cs: typeof out) => ({
+      left: Math.min(...cs.map(c => c.r.left)), right: Math.max(...cs.map(c => c.r.right)),
+      top: Math.min(...cs.map(c => c.r.top)), bottom: Math.max(...cs.map(c => c.r.bottom)),
+    })
+    // What was dragged, and what touched it, lies under the pointer.
+    let right = -Infinity
+    const beside: (typeof out)[] = []
+    for (const cs of lots.values()) {
+      if (!cs.some(c => dragged.has(c.id))) { beside.push(cs); continue }
+      for (const c of cs) moves.set(c.id, { dx, dy })
+      right = Math.max(right, box(cs).right + dx)
+    }
+    // The other linked cards, wherever they lay in the saved project, are
+    // set out beside it: lot by lot, clear of it and of each other.
     const top0 = rect.top + dy
-    let left = right + ALONG_GAP, top = top0, lineBottom = top0
-    made.slice(firstCount).forEach((id, i) => {
-      const r = rectOf(id)
-      if (!r) return
-      if (i > 0 && i % ALONG_PER_LINE === 0) { left = right + ALONG_GAP; top = lineBottom + ALONG_LINE_GAP }
-      moves.set(id, { dx: left - r.left, dy: top - r.top })
+    let left = right + ALONG_GAP, top = top0, lineBottom = top0, n = 0
+    for (const cs of beside) {
+      const r = box(cs)
+      if (n > 0 && n % ALONG_PER_LINE === 0) { left = right + ALONG_GAP; top = lineBottom + ALONG_LINE_GAP }
+      n++
+      for (const c of cs) moves.set(c.id, { dx: left - r.left, dy: top - r.top })
       left += r.right - r.left + ALONG_GAP
       lineBottom = Math.max(lineBottom, top + r.bottom - r.top)
-    })
+    }
+    // A card put away under another goes where that one goes.
+    const moveOf = (id: string) => {
+      let top = id
+      for (let i = 0; i < 20 && !moves.has(top) && under.has(top); i++) top = under.get(top)!
+      return moves.get(top)
+    }
+    const old = new Map(groups.map((g, i) => [made[i], g.id]))
     bs.setGroupPosBatch(bs.groups.flatMap(g => {
-      const m = moves.get(g.id)
+      const m = old.has(g.id) ? moveOf(old.get(g.id)!) : undefined
       return m ? [{ groupId: g.id, originX: g.originX + m.dx, originY: g.originY + m.dy }] : []
     }))
   }
