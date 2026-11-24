@@ -393,19 +393,17 @@ function keeping(s: { tilt: number; spin: number; yaw: number; shiftX: number; s
  *  TiltModels viewNow) only out to here. Further, or with the middle of
  *  the screen at or over the horizon, the view is looking PAST the floor. */
 export const LOOK_FAR = 0.6
-/** Looking past the floor (see LOOK_FAR): the cross in the middle of the
- *  screen is off the middle of the fade circle. There the wheel walks the
- *  camera along the floor instead of zooming (tilt/TiltedView). */
-export function pastFloor(s: { tilt: number; yaw: number; shiftX: number; shiftY: number }): boolean {
-  const P = perspNow
+/** How much of a wheel click is a WALK along the floor, 0..1 (the rest
+ *  zooms): from how far the view is tipped off straight-down ALONE, so it
+ *  is the same at every distance and every slide of the view. None up to
+ *  WALK_FROM degrees, all of it from WALK_FULL, eased between. */
+export const WALK_FROM = 45, WALK_FULL = 85
+export function walkShare(s: { tilt: number; yaw: number }): number {
+  if (!isTilted(s)) return 0
   const t = s.tilt * Math.PI / 180, b = s.yaw * Math.PI / 180
-  const nx = Math.sin(b), ny = -Math.sin(t) * Math.cos(b), nz = Math.cos(t) * Math.cos(b)
-  const K = -nx * s.shiftX - ny * s.shiftY + P * nz
-  if (Math.abs(K) <= 1e-3) return true
-  // (lam = K / (P nz) at the middle of the screen: behind the eye, or
-  // further than the limit.)
-  const lam = K / (P * nz)
-  return !(lam > 0) || lam > 1 + LOOK_FAR * TILT_PERSPECTIVE / P
+  const off = Math.acos(Math.max(-1, Math.min(1, Math.abs(Math.cos(t) * Math.cos(b))))) * 180 / Math.PI
+  const x = Math.max(0, Math.min(1, (off - WALK_FROM) / (WALK_FULL - WALK_FROM)))
+  return x * x * (3 - 2 * x)
 }
 /** The way forward along the floor, flat px (a unit step away from the
  *  eye): what walking moves along. */

@@ -5,7 +5,7 @@ import { dataKey, standsIn } from '../../../utils/area3dScene'
 import { useManip } from '../../../store/manipStore'
 import { useTiltStats, soloSize, setSoloSize } from './TiltModels'
 import { flushSync } from 'react-dom'
-import { useTiltStore, useModelScaleStore, unprojectTilt, isTilted, pastFloor, floorForward, TILT_FAR } from '../../../store/tiltStore'
+import { useTiltStore, useModelScaleStore, unprojectTilt, isTilted, walkShare, floorForward, TILT_FAR } from '../../../store/tiltStore'
 import { useCanvasStore, MIN_ZOOM, MAX_ZOOM } from '../../../store/canvasStore'
 import { useFreeNodeStore } from '../../../store/freeNodeStore'
 import { useBoardsStore } from '../../../store/boardsStore'
@@ -870,21 +870,22 @@ export const TiltedView: React.FC = () => {
         ts.setShift(ts.shiftX - e.deltaX, ts.shiftY - e.deltaY)
         return
       }
-      // Looking past the floor, toward the horizon (the cross off the
-      // middle of the fade circle), the wheel WALKS: the camera goes
-      // forward and back along the floor, nothing changes size, and the
-      // circle goes with it. Zooming there scales the canvas about a spot
-      // close by, which hardly brings what is far off any nearer (Brian
-      // 2026-11-24: "when I'm using the mouse wheel, it's just going to
-      // walk me forward and backwards. That way, the camera doesn't feel
-      // so stuck"; a trial, to be felt). A pinch still zooms.
-      if (pad !== 'pinch' && pastFloor(useTiltStore.getState())) {
-        settleZoom()
+      // The wheel is ONE move, blended by how far the view is tipped (no
+      // switch, and nothing to do with how close the camera is): looking
+      // down it zooms, looking along the floor it WALKS (the camera goes
+      // forward and back along the floor, nothing changes size, the fade
+      // circle goes with it), and in between it does some of each. A
+      // switch at an angle that moved with the distance could not be
+      // found by hand (Brian 2026-11-24: "you get in the walk effect, and
+      // you can't get out to do the zoom anymore unless you tilt in a
+      // weird way"). A pinch only zooms.
+      const share = pad === 'pinch' ? 0 : walkShare(useTiltStore.getState())
+      if (share > 0) {
         const ts = useTiltStore.getState()
         if (ts.pivot) ts.setPivot(null)
-        walk.left += (e.deltaY < 0 ? 1 : -1) * WALK_STEP
+        walk.left += (e.deltaY < 0 ? 1 : -1) * WALK_STEP * share
         if (!walk.raf) { walk.at = performance.now(); walk.raf = requestAnimationFrame(walkFrame) }
-        return
+        if (share >= 1) { settleZoom(); return }
       }
       const c = viewCentre(host)
       if (!c) return
@@ -894,7 +895,7 @@ export const TiltedView: React.FC = () => {
         wz.raf = requestAnimationFrame(glideFrame)
       }
       const z = useCanvasStore.getState().zoom
-      const step = pad === 'pinch' ? pinchFactor(e) : e.deltaY < 0 ? 1.12 : 1 / 1.12
+      const step = pad === 'pinch' ? pinchFactor(e) : Math.pow(1.12, (e.deltaY < 0 ? 1 : -1) * (1 - share))
       wz.target = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z * wz.target * step)) / z
       wz.last = now
     }
