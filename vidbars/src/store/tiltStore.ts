@@ -387,6 +387,38 @@ function keeping(s: { tilt: number; spin: number; yaw: number; shiftX: number; s
   if (s.pivot && at) return { g: s.pivot, at }
   return { g: centrePoint(s), at: { x: 0, y: 0 } }
 }
+/** How far beyond the screen's own distance the floor still counts as
+ *  looked at, in eye distances of the default lens: the floor under the
+ *  middle of the screen is "the spot" (the fade circle's middle, tilt/
+ *  TiltModels viewNow) only out to here. Further, or with the middle of
+ *  the screen at or over the horizon, the view is looking PAST the floor. */
+export const LOOK_FAR = 0.6
+/** Looking past the floor (see LOOK_FAR): the cross in the middle of the
+ *  screen is off the middle of the fade circle. There the wheel walks the
+ *  camera along the floor instead of zooming (tilt/TiltedView). */
+export function pastFloor(s: { tilt: number; yaw: number; shiftX: number; shiftY: number }): boolean {
+  const P = perspNow
+  const t = s.tilt * Math.PI / 180, b = s.yaw * Math.PI / 180
+  const nx = Math.sin(b), ny = -Math.sin(t) * Math.cos(b), nz = Math.cos(t) * Math.cos(b)
+  const K = -nx * s.shiftX - ny * s.shiftY + P * nz
+  if (Math.abs(K) <= 1e-3) return true
+  // (lam = K / (P nz) at the middle of the screen: behind the eye, or
+  // further than the limit.)
+  const lam = K / (P * nz)
+  return !(lam > 0) || lam > 1 + LOOK_FAR * TILT_PERSPECTIVE / P
+}
+/** The way forward along the floor, flat px (a unit step away from the
+ *  eye): what walking moves along. */
+export function floorForward(s: { tilt: number; yaw: number; spin: number }): { x: number; y: number } {
+  const t = s.tilt * Math.PI / 180, b = s.yaw * Math.PI / 180, sp = s.spin * Math.PI / 180
+  // A floor point (x0, y1), turned as drawn, is y1 sin t - x0 sin b cos t
+  // toward the eye: forward is straight down that slope.
+  let x0 = Math.sin(b) * Math.cos(t), y1 = -Math.sin(t)
+  const m = Math.hypot(x0, y1)
+  if (m < 1e-6) return { x: 0, y: -1 }
+  x0 /= m; y1 /= m
+  return { x: x0 * Math.cos(sp) + y1 * Math.sin(sp), y: -x0 * Math.sin(sp) + y1 * Math.cos(sp) }
+}
 /** What the view turns about with no pivot set: the point in the middle
  *  of the screen, as far off as the screen itself (where a framed thing
  *  sits, and where the ground is until the view is slid). It used to be

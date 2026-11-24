@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react'
 import {
-  useTiltStore, useModelScaleStore, isTilted, offFlat, standTilt, standRise, unprojectTilt, screenOf, TILT_DRAW_FAR, TILT_MAX, TILT_PERSPECTIVE, tiltP,
+  useTiltStore, useModelScaleStore, isTilted, offFlat, standTilt, standRise, unprojectTilt, screenOf, LOOK_FAR, TILT_DRAW_FAR, TILT_MAX, TILT_PERSPECTIVE, tiltP,
 } from '../../../store/tiltStore'
 import { CAMERA_LENS } from '../../../store/tiltStore'
 import { usePeek } from '../../../utils/peek'
@@ -194,7 +194,7 @@ const FAR_GONE = 0.02
  *  watch that fucking circle. If it's not right where my camera is every
  *  time ..."). The fade and the ring read the same viewNow: they cannot
  *  disagree. */
-const LOOK = { far: 0.6 }
+const LOOK = { far: LOOK_FAR }
 function viewNow(): Omit<Far, 'a'> {
   const ts = useTiltStore.getState(), ws = useWorldScale.getState()
   const P = tiltP()

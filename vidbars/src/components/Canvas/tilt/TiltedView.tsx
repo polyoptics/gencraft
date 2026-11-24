@@ -5,7 +5,7 @@ import { dataKey, standsIn } from '../../../utils/area3dScene'
 import { useManip } from '../../../store/manipStore'
 import { useTiltStats, soloSize, setSoloSize } from './TiltModels'
 import { flushSync } from 'react-dom'
-import { useTiltStore, useModelScaleStore, unprojectTilt, TILT_FAR } from '../../../store/tiltStore'
+import { useTiltStore, useModelScaleStore, unprojectTilt, isTilted, pastFloor, floorForward, TILT_FAR } from '../../../store/tiltStore'
 import { useCanvasStore, MIN_ZOOM, MAX_ZOOM } from '../../../store/canvasStore'
 import { useFreeNodeStore } from '../../../store/freeNodeStore'
 import { useBoardsStore } from '../../../store/boardsStore'
@@ -809,6 +809,24 @@ export const TiltedView: React.FC = () => {
       useTiltStore.getState().setGlide({ k: w.k, x: w.x, y: w.y })
       w.raf = requestAnimationFrame(glideFrame)
     }
+    /** The walk (see onWheel): how far is still to go, flat px, eased out
+     *  a frame at a time. Forward is along the floor, away from the eye:
+     *  the floor comes toward the camera. */
+    const WALK_STEP = 160
+    const walk = { left: 0, at: 0, raf: 0 }
+    const walkFrame = (now: number) => {
+      walk.raf = 0
+      const dt = Math.max(0, Math.min(64, now - walk.at))
+      walk.at = now
+      const ts = useTiltStore.getState()
+      if (!isTilted(ts)) { walk.left = 0; return }
+      let d = walk.left * (1 - Math.exp(-dt / 70))
+      if (Math.abs(walk.left - d) < 0.5) d = walk.left
+      walk.left -= d
+      const f = floorForward(ts)
+      if (d) useCanvasStore.getState().shiftPan(-f.x * d, -f.y * d)
+      if (walk.left) walk.raf = requestAnimationFrame(walkFrame)
+    }
     const onWheel = (e: WheelEvent) => {
       if (!e.isTrusted || !onPlane(e.target)) return
       // Alt + a two-finger swipe is the camera's (altCamera), whichever of
@@ -850,6 +868,22 @@ export const TiltedView: React.FC = () => {
         // middle drag's does.)
         if (ts.pivot) ts.setPivot(null)
         ts.setShift(ts.shiftX - e.deltaX, ts.shiftY - e.deltaY)
+        return
+      }
+      // Looking past the floor, toward the horizon (the cross off the
+      // middle of the fade circle), the wheel WALKS: the camera goes
+      // forward and back along the floor, nothing changes size, and the
+      // circle goes with it. Zooming there scales the canvas about a spot
+      // close by, which hardly brings what is far off any nearer (Brian
+      // 2026-11-24: "when I'm using the mouse wheel, it's just going to
+      // walk me forward and backwards. That way, the camera doesn't feel
+      // so stuck"; a trial, to be felt). A pinch still zooms.
+      if (pad !== 'pinch' && pastFloor(useTiltStore.getState())) {
+        settleZoom()
+        const ts = useTiltStore.getState()
+        if (ts.pivot) ts.setPivot(null)
+        walk.left += (e.deltaY < 0 ? 1 : -1) * WALK_STEP
+        if (!walk.raf) { walk.at = performance.now(); walk.raf = requestAnimationFrame(walkFrame) }
         return
       }
       const c = viewCentre(host)
@@ -925,6 +959,7 @@ export const TiltedView: React.FC = () => {
     window.addEventListener('wheel', onWheel, { capture: true, passive: false })
     return () => {
       window.removeEventListener('pointerdown', onPressSettle, true)
+      if (walk.raf) { cancelAnimationFrame(walk.raf); walk.raf = 0 }
       // Leaving mid-glide (inside React's commit, so no flushSync): the
       // zoom it was heading to.
       if (wz) {
