@@ -891,7 +891,13 @@ export const CardBack: React.FC<{
   // Details that came in with the card's media (utils/madeWith) are kept
   // apart from the typed ones, in one section that folds as a whole.
   const metaSet = new Set(metaIds ? metaIds.split(' ') : [])
-  const ownRows = details.filter(d => !metaSet.has(d.id))
+  // Its Model detail (the card's 3D model, utils/bringHome) goes below
+  // everything else of the card's own, right above Metadata, which is
+  // always last (Brian 2026-11-24: "stuff I end up having to scroll past
+  // to see the actual info of the card").
+  const isModel = (d: CardDetail) => d.name.trim().toLowerCase() === 'model'
+  const ownRows = details.filter(d => !metaSet.has(d.id) && !isModel(d))
+  const modelRows = details.filter(d => !metaSet.has(d.id) && isModel(d))
   const metaRows = details.filter(d => metaSet.has(d.id))
   const metaFolded = !me?.metaOpen
   const detailRow = (d: CardDetail) => {
@@ -1224,6 +1230,7 @@ export const CardBack: React.FC<{
               </div>
             </div>
           ))}
+          {modelRows.map(detailRow)}
           <div style={{ display: 'flex', gap: 3, alignSelf: 'flex-start', flexShrink: 0 }}>
           <button
             type="button"
