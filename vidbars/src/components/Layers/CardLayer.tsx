@@ -5678,6 +5678,53 @@ const cardDisplayStyle = (ts: TextStyle, bg: string, hasText: boolean): React.CS
   cursor: 'text',
 })
 
+/** A card face's text while it is edited, in place (Brian 2026-11-23: "I'm
+ *  sort of editing it in place on the card face ... it should follow the
+ *  formatting options that I have"): the typing sits where the finished
+ *  text sits, set the same way, no taller than its words, so the half's
+ *  top / middle / bottom setting places it as it places the finished text.
+ *  `final` shows the finished text in its place instead, its {fields}
+ *  filled in ("if my mouse is out of the card face ... it would show me
+ *  the actual text and position"); the typing stays underneath, unseen and
+ *  still holding the keyboard. One hidden copy of what is shown gives the
+ *  box its height, so nothing is measured and nothing lags a keystroke. */
+const FaceEditField: React.FC<{
+  value: string
+  shown: string
+  final: boolean
+  ts: TextStyle
+  bg: string
+  placeholder: string
+  onChange: (v: string) => void
+  onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void
+  onClick: () => void
+}> = ({ value, shown, final, ts, bg, placeholder, onChange, onKeyDown, onClick }) => {
+  const text: React.CSSProperties = { ...cardDisplayStyle(ts, '', true), gridArea: '1 / 1', minHeight: 0 }
+  return (
+    <div data-face-edit={final ? 'final' : 'raw'} style={{
+      position: 'relative', display: 'grid', gridTemplateRows: 'minmax(0, 1fr)', minHeight: 0, flexShrink: 1,
+      background: bg || 'transparent', borderRadius: 6,
+      outline: final ? 'none' : '1px solid rgba(100,160,255,0.5)', outlineOffset: -1,
+    }}>
+      {/* A zero-width space ends it, so a last empty line has its height. */}
+      <div style={{ ...text, visibility: final ? 'visible' : 'hidden', pointerEvents: 'none' }}>{(final ? shown : value || placeholder) + '\u200b'}</div>
+      <textarea autoFocus value={value} onChange={e => onChange(e.target.value)}
+        onKeyDown={onKeyDown}
+        onPointerDown={e => e.stopPropagation()}
+        onDoubleClick={e => e.stopPropagation()}
+        onClick={e => { e.stopPropagation(); onClick() }}
+        placeholder={placeholder}
+        style={{
+          // Laid over the copy, not beside it: a textarea's own two-line
+          // height would otherwise set the box's.
+          ...text, position: 'absolute', inset: 0, display: 'block', width: '100%', height: '100%', boxSizing: 'border-box', margin: 0,
+          border: 'none', outline: 'none', resize: 'none', opacity: final ? 0 : 1,
+        }}
+      />
+    </div>
+  )
+}
+
 const DEFAULT_PAD: TextPad = { t: 4, r: 4, b: 10, l: 4 }
 
 /** A face's four text margins (a scene division's, FaceBind.pad): a line
@@ -5802,6 +5849,10 @@ const TextSplitDivider: React.FC<{
     <div
       style={{
         padding: '4px 6px',
+        // Takes no room of its own, so the text sits while its face is
+        // edited exactly where it sits when it is not (Brian 2026-11-23,
+        // "edit it as if it was in its final place").
+        margin: dragging ? '-5px 0 -6px' : '-5px 0', position: 'relative', zIndex: 2,
         cursor: 'row-resize',
         pointerEvents: 'auto',
         backgroundColor: zoneBg,
@@ -5865,8 +5916,6 @@ export const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void
   const splitRatio = (bind ? bind.split : group?.textSplitRatio) ?? 0.5
   // Shown with its {fields} filled in from the card ({Name}, {Age}…);
   // edited as typed (utils/faceStyle).
-  const headerShown = useBoardsStore(s => bind ? bind.fill?.(headerText) ?? headerText : fillFields(headerText, s.groups, groupId))
-  const bodyShown = useBoardsStore(s => bind ? bind.fill?.(bodyText) ?? bodyText : fillFields(bodyText, s.groups, groupId))
   ensureFontLoaded(headerTs.fontFamily); ensureFontLoaded(bodyTs.fontFamily)
   // Text locked to card — scales proportionally with the card (no screen-size compensation)
   const textScale = bind ? bind.scale : zoom / CARD_TEXT_REF_ZOOM
@@ -5878,6 +5927,42 @@ export const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void
   const [headerVal, setHeaderVal] = useState('')
   const [bodyVal, setBodyVal] = useState('')
   const wrapperRef = useRef<HTMLDivElement>(null)
+  // Shown with its {fields} filled in from the card ({Name}, {Age}…);
+  // edited as typed (utils/faceStyle). While one is edited, what is being
+  // typed is what is filled in, so the finished text is the live one.
+  const headerLive = editingField === 'header' ? headerVal : headerText
+  const bodyLive = editingField === 'body' ? bodyVal : bodyText
+  const headerShown = useBoardsStore(s => bind ? bind.fill?.(headerLive) ?? headerLive : fillFields(headerLive, s.groups, groupId))
+  const bodyShown = useBoardsStore(s => bind ? bind.fill?.(bodyLive) ?? bodyLive : fillFields(bodyLive, s.groups, groupId))
+  // The typed text, tags and all, shows while the mouse is on the face;
+  // off it (down in the options) the face shows the finished text (Brian
+  // 2026-11-23). A key pressed with the mouse off the face brings the
+  // typing back until the mouse next moves. A button held (a colour or the
+  // midline dragged across the face) changes nothing.
+  const [onFace, setOnFace] = useState(true)
+  const keyHold = useRef<{ x: number; y: number } | null>(null)
+  const isEditing = editingField !== null
+  React.useEffect(() => {
+    if (!isEditing) return
+    setOnFace(true)
+    keyHold.current = null
+    const move = (e: PointerEvent) => {
+      const h = keyHold.current
+      if (h) {
+        if (Number.isNaN(h.x)) { keyHold.current = { x: e.clientX, y: e.clientY }; return }
+        if (Math.hypot(e.clientX - h.x, e.clientY - h.y) < 4) return
+        keyHold.current = null
+      }
+      if (e.buttons) return
+      const r = wrapperRef.current?.getBoundingClientRect()
+      if (!r) return
+      const inside = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom
+      setOnFace(inside && !(e.target as Element | null)?.closest?.('[data-text-format-toolbar]'))
+    }
+    window.addEventListener('pointermove', move, true)
+    return () => window.removeEventListener('pointermove', move, true)
+  }, [isEditing])
+  const typed = () => { if (!keyHold.current) keyHold.current = { x: NaN, y: NaN }; setOnFace(true) }
   // The card's own fields, or the bound face's (FaceBind).
   const bindRef = useRef(bind)
   bindRef.current = bind
@@ -6046,16 +6131,14 @@ export const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void
         {/* Header area */}
         <div style={{ flex: splitRatio, display: 'flex', flexDirection: 'column', justifyContent: vAlignToJustify(headerTs.vAlign), minHeight: 0, overflow: 'hidden' }}>
           {editingField === 'header' ? (
-            <textarea autoFocus value={headerVal} onChange={e => setHeaderVal(e.target.value)}
+            <FaceEditField value={headerVal} shown={headerShown} final={!onFace} ts={headerTs} bg={headerBg} placeholder="Title…"
+              onChange={setHeaderVal}
               onKeyDown={e => {
+                typed()
                 if (e.key === 'Escape') { commitHeader(); setSelected(false) }
                 if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); commitHeader(); startEditBody() }
               }}
-              onPointerDown={e => e.stopPropagation()}
-              onDoubleClick={e => e.stopPropagation()}
-              onClick={e => { e.stopPropagation(); setActiveField('header') }}
-              placeholder="Title…"
-              style={{ ...cardTextareaStyle(headerTs, headerBg || 'rgba(0,0,0,0.3)'), flex: 1 }}
+              onClick={() => setActiveField('header')}
             />
           ) : (
             <div
@@ -6076,16 +6159,14 @@ export const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void
         {/* Body area */}
         <div style={{ flex: 1 - splitRatio, display: 'flex', flexDirection: 'column', justifyContent: vAlignToJustify(bodyTs.vAlign), minHeight: 0, overflow: 'hidden' }}>
           {editingField === 'body' ? (
-            <textarea autoFocus value={bodyVal} onChange={e => setBodyVal(e.target.value)}
+            <FaceEditField value={bodyVal} shown={bodyShown} final={!onFace} ts={bodyTs} bg={bodyBg} placeholder="Body text…"
+              onChange={setBodyVal}
               onKeyDown={e => {
+                typed()
                 if (e.key === 'Escape') { commitBody(); setSelected(false) }
                 if (e.key === 'Tab' && e.shiftKey) { e.preventDefault(); commitBody(); startEditHeader() }
               }}
-              onPointerDown={e => e.stopPropagation()}
-              onDoubleClick={e => e.stopPropagation()}
-              onClick={e => { e.stopPropagation(); setActiveField('body') }}
-              placeholder="Body text…"
-              style={{ ...cardTextareaStyle(bodyTs, bodyBg || 'rgba(0,0,0,0.3)'), flex: 1 }}
+              onClick={() => setActiveField('body')}
             />
           ) : (
             <div
