@@ -61,6 +61,7 @@ import { withGroupAdded } from '../../utils/factionGroups'
 import { FaceCut } from '../RoughCut/FaceCut'
 import { CUT_ASPECT } from '../../utils/cutCard'
 import { cardFaceAudio, cardFaceMedia, deckFaceSteps, faceSteps, layoutCardGrid, mergeCardsInto, setFaceThumbnail, stepDeckFace, stepFace } from '../../utils/cardGrid'
+import { isShut } from '../../utils/deckTree'
 import { drawnRect, effectChain, snapEffectCard } from '../../utils/effectCards'
 import { followFaceInViewer, showDockedCardInViewer } from '../../hooks/useDockedContent'
 import { cardGivesInput, cardRailTarget, dockCardsOnRail, endDockedDrag, liftDockedCards, previewCardRail } from '../../utils/railCards'
@@ -4868,7 +4869,7 @@ const SetOpenPreview: React.FC<{ group: ProjectGroup }> = ({ group }) => {
   // Its own icon, or, the front of a closed deck, that deck's icon (the
   // deck's id is its cards' ids joined).
   const active = useCanvasStore(s => s.previewHoveredDeckId === 'set3d:' + group.id
-    || (!!group.deckState && group.deckState !== 'open' && group.deckAnchorId === group.id && !!s.previewHoveredDeckId?.split('|').includes(group.id)))
+    || (isShut(group) && group.deckAnchorId === group.id && !!s.previewHoveredDeckId?.split('|').includes(group.id)))
   const out = useFreeNodeStore(s => active && Object.values(s.nodes).some(n => n.type === 'area' && n.areaCard === group.id))
   if (!active || out) return null
   const a = area3dSpot(group)

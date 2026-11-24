@@ -1,5 +1,5 @@
 import { detailLinked } from '../utils/linkEvents'
-import { putAwayUnder } from '../utils/deckTree'
+import { isShut, putAwayUnder } from '../utils/deckTree'
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { createDebouncedIDBStorage } from '../utils/debouncedIDBStorage'
@@ -1211,7 +1211,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
     if (!src || cardId === groupId) return
     // A closed or fanned deck let go by its front card: the detail shows
     // the deck's favourite (utils/cardTypes deckFavorite).
-    const isDeck = !!src.deckState && src.deckState !== 'open' && (!src.deckAnchorId || src.deckAnchorId === src.id)
+    const isDeck = isShut(src) && (!src.deckAnchorId || src.deckAnchorId === src.id)
       && get().groups.some(g => g.id !== src.id && g.deckAnchorId === src.id)
     const link: import('../utils/cardTypes').DetailLink = isDeck ? { card: cardId, favorite: true } : { card: cardId }
     set(s => ({ groups: s.groups.map(g => {
@@ -1560,7 +1560,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
       const all = get().groups
       const inIds = new Set(ids)
       const fronted = (g: ProjectGroup) => !!g.deckAnchorId && g.deckAnchorId !== g.id && inIds.has(g.deckAnchorId)
-      const inside = all.filter(g => inIds.has(g.id) && (g.deckInside ?? 0) > 0 && fronted(g) && !!g.deckState && g.deckState !== 'open')
+      const inside = all.filter(g => inIds.has(g.id) && (g.deckInside ?? 0) > 0 && fronted(g) && isShut(g))
       if (inside.length) {
         const fronts = new Set(inside.map(g => g.deckAnchorId!))
         const others = all.some(g => inIds.has(g.id) && !fronts.has(g.id) && !inside.includes(g))
@@ -1638,7 +1638,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
       // it stays a deck inside. Its own cards are marked to stay closed
       // under it when the bigger deck opens, and nothing is set aside for
       // them, so every deck opens back where it stood.
-      const shutG = (g: ProjectGroup) => !!g.deckState && g.deckState !== 'open'
+      const shutG = isShut
       const frontOwn = state === 'open' || opts?.asGiven || !anchorId ? [] : (() => {
         const front = s00.groups.find(g => g.id === anchorId)
         if (!front || !shutG(front)) return []
@@ -2650,7 +2650,7 @@ export const useBoardsStore = create<BoardsState>()(persist((set, get) => ({
  *  Returns the same array when nothing needs healing. */
 export function healOrphanDeckMembers(groups: ProjectGroup[]): ProjectGroup[] {
   const byId = new Map(groups.map(g => [g.id, g]))
-  const collapsed = (g: ProjectGroup | undefined) => !!g && !!g.deckState && g.deckState !== 'open'
+  const collapsed = isShut
   const isMember = (g: ProjectGroup) => collapsed(g) && !!g.deckAnchorId && g.deckAnchorId !== g.id
   // Hidden members whose anchor chain comes back round to itself.
   const inLoop = new Set<string>()

@@ -12,6 +12,7 @@ import { getMediaItems } from '../types/bar'
 import { faceBlocks } from './cardGrid'
 import { detailShown } from './cardTypes'
 import { drawnRect } from './effectCards'
+import { isShut } from './deckTree'
 import { useViewport3DStore, type ViewportWindow3D } from '../store/viewport3dStore'
 import { magnetRadiusForZoom, viewportVisualRect } from './viewportDocking'
 import { useNotesStore } from '../store/notesStore'
@@ -303,7 +304,7 @@ function rowSets(): Map<string, RowSpot> {
       // its face is its front card's model, and stands for the front
       // card's own (dataKey).
       const inside: ProjectGroup[] = []
-      const fronts = row.slice(1).filter(g => !!g.deckState && g.deckState !== 'open')
+      const fronts = row.slice(1).filter(isShut)
       for (let i = 0; i < fronts.length; i++) {
         for (const m of bs.groups) {
           if (m.pin || m.id === fronts[i].id || m.deckAnchorId !== fronts[i].id || !isHiddenDeckMember(m) || inside.includes(m)) continue

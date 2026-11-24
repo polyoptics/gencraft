@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useRef, useCallback, useSyncExternalStore } from 'react'
-import { isShut } from '../../utils/deckTree'
+import { isShut, putAwayUnder } from '../../utils/deckTree'
 import { withLockMates, keptDeck } from '../../utils/deckLock'
 import { wheelCanvas } from '../../utils/trackpad'
 import { BackRefDot } from '../Linking/BackRefDot'
@@ -601,7 +601,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
           ? row.filter(id => bs.groups.find(g => g.id === id)?.deckHome === groupId) : []
         // A closed deck: its own cards, whatever it lies against.
         const me = bs.groups.find(g => g.id === groupId)
-        const closedDeck = !!me?.deckState && me.deckState !== 'open' && bs.groups.some(g => g.id !== groupId && g.deckAnchorId === groupId && !!g.deckState && g.deckState !== 'open')
+        const closedDeck = isShut(me) && putAwayUnder(groupId, bs.groups).length > 0
         const ids = expandWithNestedMembers(closedDeck ? [groupId] : row && row[0] === groupId ? row : own.length >= 2 ? own : [groupId], bs.groups)
         if (ids.length < 2) return
         bs.setDeckKeep(groupId, ids)
