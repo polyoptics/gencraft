@@ -42,6 +42,8 @@ import { useLinkDragStore } from './store/linkDragStore'
 import { useLinkingStore } from './store/linkingStore'
 import { usePinTravelStore } from './store/pinTravelStore'
 import { useContextSheetStore } from './store/contextSheetStore'
+import { useExportProjectStore } from './store/exportProjectStore'
+import { exportPlan, exportDocument } from './utils/exportSelection'
 import { useFxStore } from './store/fxStore'
 import { useRailRunStore } from './store/railRunStore'
 import { useRailUiStore } from './store/railUiStore'
@@ -93,6 +95,8 @@ import { snapshotSetMap } from './utils/mapSnapshot'
   useClipMotion,
   // A model's colour maps as pictures (three/modelMaps).
   useModelMaps,
+  // Export to new project (utils/exportSelection).
+  useExportProjectStore, exportSelection: { exportPlan, exportDocument },
 }
 
 // One card shown in several places: an edit on one is on all (utils/linkedCards).

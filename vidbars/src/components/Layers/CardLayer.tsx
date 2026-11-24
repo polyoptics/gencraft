@@ -84,6 +84,8 @@ import { PenButton } from '../Annotation/PenButton'
 import { useSeedHoverFromCursor } from '../../utils/pointerTracker'
 import { deckAreas } from '../../utils/peek'
 import { useContextSheetStore } from '../../store/contextSheetStore'
+import { useExportProjectStore } from '../../store/exportProjectStore'
+import { exportPickFor } from '../../utils/exportSelection'
 import { CARD_TYPES, CARD_TYPE_ORDER, cardTypeOf, chartName, factionMembers, typeColor, type CardType } from '../../utils/cardTypes'
 import { nameKindOf } from '../../utils/fillDetails'
 import { copiedFaceStyle, copyFaceStyle, fillFields } from '../../utils/faceStyle'
@@ -442,6 +444,14 @@ const CardContextMenu: React.FC<{
     useUndoCoordinator.getState().checkpoint()
     selIds.forEach(id => useBoardsStore.getState().duplicateGroup(id))
     onClose()
+  }})
+
+  // What is selected, cards and tiles, as a new saved project of its own,
+  // with everything it points at (utils/exportSelection). Copies: the
+  // canvas stays as it is.
+  menuItems.push({ label: 'Export to new project…', icon: '📦', action: () => {
+    onClose()
+    useExportProjectStore.getState().openExport(exportPickFor('card', group.id))
   }})
 
   // Looping GIF: the movie on this card's face, or every shot of its deck

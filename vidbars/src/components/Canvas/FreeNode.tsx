@@ -17,6 +17,8 @@ import {
 import { useBoardsStore } from '../../store/boardsStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useUndoCoordinator } from '../../store/undoCoordinator'
+import { useExportProjectStore } from '../../store/exportProjectStore'
+import { exportPickFor } from '../../utils/exportSelection'
 import { useViewport3DStore } from '../../store/viewport3dStore'
 import { useMagnetPreviewStore } from '../../store/magnetPreviewStore'
 import { addMediaBlockToCard, cardHitAt, groupForCardHit } from '../../utils/cardContent'
@@ -1989,6 +1991,8 @@ export const FreeNode: React.FC<Props> = React.memo(({ id, connectedWindowId = n
                     setNodeMenu(null)
                   } },
               ] : []),
+              // What is selected, as a new saved project (utils/exportSelection).
+              { label: 'Export to new project…', icon: '📦', action: () => { setNodeMenu(null); useExportProjectStore.getState().openExport(exportPickFor('tile', id)) } },
               // On a face this deletes the whole deck (deleteFreeNode), so it
               // says so; a rail likewise takes every card docked on it.
               // A cabinet sets down what it holds, below where it was.

@@ -12,6 +12,7 @@ import { ProjectBackupMenu } from './components/UI/ProjectBackupMenu'
 import { useInlineMediaMigration } from './utils/migrateInlineMedia'
 import { useVideoPosterBackfill } from './hooks/useVideoPosterBackfill'
 import { ContextSheetHost } from './components/UI/ContextSheetDialog'
+import { ExportProjectHost } from './components/UI/ExportProjectDialog'
 import { useFxStrips } from './hooks/useFxStrips'
 import { useRailSync } from './hooks/useRailSync'
 import { RailRunHost } from './components/Canvas/RailRunHost'
@@ -920,6 +921,7 @@ export default function App() {
 
       {/* Context sheet dialog — opened from a card's or deck's menu */}
       <ContextSheetHost />
+      <ExportProjectHost />
 
       {/* Effect strips: cards lined up with effect cards, kept running live */}
       <FxStripsHost />
