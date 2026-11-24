@@ -56,7 +56,7 @@ import { poolFeedingList, viewerAdjacentTo } from '../../utils/componentLinks'
 import { useViewport3DStore } from '../../store/viewport3dStore'
 import { collectDeckContent, defaultBrowseItem, tileBrowseItem, type BrowseItem } from '../../utils/contentTraversal'
 import { browserScope, trayScope } from '../../utils/browserScope'
-import { useLibraryStore, libraryCards, filterLibrary, libraryBrowseItem, linkedAlong, LIBRARY_DRAG_MIME, type LibraryCard, type LibraryDrag } from '../../utils/library'
+import { useLibraryStore, useLibraryShown, libraryCards, filterLibrary, libraryBrowseItem, linkedAlong, LIBRARY_DRAG_MIME, type LibraryCard, type LibraryDrag } from '../../utils/library'
 import { useTrayStore, TRAY_QUERY } from '../../store/trayStore'
 import {
   DEFAULT_HEADER_STYLE,
@@ -860,8 +860,11 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string }; tray?: TrayB
   const [flLibrary, setFlLibrary] = useState(false)
   const library = !tray && (embedded ? !!embeddedNode?.library : flLibrary)
   const setLibrary = (on: boolean) => {
-    if (embedded && embeddedNode) useFreeNodeStore.getState().updateFreeNode(embeddedNode.id, { library: on })
-    else setFlLibrary(on)
+    if (embedded && embeddedNode) {
+      useFreeNodeStore.getState().updateFreeNode(embeddedNode.id, { library: on })
+      // Its saved card is let go of with the list.
+      if (!on) useLibraryShown.getState().show(embeddedNode.id, null)
+    } else setFlLibrary(on)
   }
   const libraryProjects = useLibraryStore(s => s.projects)
   const libraryLeft = useLibraryStore(s => s.left)
@@ -1193,7 +1196,7 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string }; tray?: TrayB
   // can show is the same job contentTraversal already does for docking, so
   // rows reuse it rather than inventing a second notion of "the content of
   // this row".
-  const sendRowToViewer = useCallback((idx: number) => {
+  const sendRowToViewer = useCallback((idx: number, clicked = false) => {
     if (!embedded || !embeddedNode || tray) return
     const win = viewerAdjacentTo(
       embeddedNode, useViewport3DStore.getState().windows, useCanvasStore.getState().zoom)
@@ -1210,7 +1213,12 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string }; tray?: TrayB
     } else if (row.kind === 'freenode') {
       item = tileBrowseItem(row.node)
     } else if (row.kind === 'libcard') {
-      item = libraryBrowseItem(row.card)
+      // A saved card loads on a click, and only then: clicked, it is shown
+      // whole (a 3D model as a 3D model); flipped past, as its face.
+      const shown = useLibraryShown.getState()
+      // (A card with nothing to show leaves what is there.)
+      if (clicked && libraryBrowseItem(row.card, true)) shown.show(embeddedNode.id, row.card)
+      item = libraryBrowseItem(row.card, shown.shown[embeddedNode.id]?.key === row.card.key)
     } else {
       const bs = useBoardsStore.getState()
       item = defaultBrowseItem(collectDeckContent(row.group.id, bs.groups, bs.boards))
@@ -1223,7 +1231,7 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string }; tray?: TrayB
     startTween()
     // A click is explicit intent, so it sends in BOTH modes. What the mode
     // decides is whether merely FLIPPING past something also sends it.
-    sendRowToViewer(idx)
+    sendRowToViewer(idx, true)
   }, [startTween, sendRowToViewer])
 
   const onSlotDoubleClick = useCallback((g: ProjectGroup) => {

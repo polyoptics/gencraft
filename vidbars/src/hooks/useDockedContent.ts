@@ -12,7 +12,7 @@
 // Each source binds to at most one window; items dedupe by activeItemKey
 // across the flattened list (first source wins).
 
-import { useLibraryStore, libraryCards, filterLibrary, libraryBrowseItem } from '../utils/library'
+import { useLibraryStore, useLibraryShown, libraryCards, filterLibrary, libraryBrowseItem } from '../utils/library'
 import { useMemo } from 'react'
 import { useFreeNodeStore } from '../store/freeNodeStore'
 import { useBoardsStore } from '../store/boardsStore'
@@ -121,9 +121,12 @@ function listSourceItems(
   // Lit to browse the saved projects (utils/library), it contributes THEIR
   // cards' faces: what its rows send must be among what it is known to hold,
   // or the Viewer drops it as stale.
+  // The one row clicked is there as the click sent it (its 3D model, not the
+  // face's picture of it); every other card is its face alone.
   if (n.library) {
+    const shown = useLibraryShown.getState().shown[n.id]?.key
     return filterLibrary(libraryCards(useLibraryStore.getState().projects), { query: q.query, kind: q.kind, types: q.cardTypes })
-      .flatMap(c => libraryBrowseItem(c) ?? [])
+      .flatMap(c => libraryBrowseItem(c, c.key === shown) ?? [])
   }
 
   const pool = poolFeedingList(n, nodes)
@@ -217,6 +220,7 @@ export function useDockedSources(windowId: string): DockedSource[] {
   const zoom = useCanvasStore(s => s.zoom)
   // A browser showing the saved projects feeds from these (listSourceItems).
   const libraryProjects = useLibraryStore(s => s.projects)
+  const libraryShown = useLibraryShown(s => s.shown)
 
   return useMemo(() => {
     // This window's own placement picks the stratum everything is read in.
@@ -289,7 +293,7 @@ export function useDockedSources(windowId: string): DockedSource[] {
     }
 
     return out
-  }, [windowId, windows, nodes, groups, boards, zoom, libraryProjects])
+  }, [windowId, windows, nodes, groups, boards, zoom, libraryProjects, libraryShown])
 }
 
 /** Key-dedupe within one item list (a list source can match a card that

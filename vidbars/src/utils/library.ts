@@ -17,7 +17,9 @@ import type { BoardData, ProjectGroup } from '../store/boardsStore'
 import { useUndoCoordinator } from '../store/undoCoordinator'
 import { cardVisualRect, deckTouchRect, isHiddenDeckMember, rectsTouch, DECK_TOUCH_TOLERANCE } from '../hooks/useCardDecks'
 import { CARD_FLOOR_ZOOM } from '../components/NLE/NLETimelineHeader'
-import { cardFaceMedia } from './cardGrid'
+import { cardFaceMedia, cardFaceSourceUrl } from './cardGrid'
+import { getMediaItems } from '../types/bar'
+import { forgetModel } from '../three/modelCache'
 import type { CardType } from './cardTypes'
 import {
   hasRenderableContent, groupMatchesQuery, groupMatchesTags, groupMatchesTypes, groupHasContentOfKind, parseQueryTags,
@@ -255,11 +257,55 @@ export function filterLibrary(
 }
 
 /** What a Viewer shows for a library card: its face, straight out of the
- *  saved file. The project is never opened for it. */
-export function libraryBrowseItem(c: LibraryCard): ActiveItem | null {
+ *  saved file. The project is never opened for it. `whole`: the card was
+ *  clicked, so a face that is a 3D model comes as the 3D model itself and
+ *  not the picture the face draws it with (Brian 2026-11-24: "a 3D model
+ *  card, for instance, doesn't trigger the 3D mode in the viewer"; "if I'm
+ *  looking through and I see one and I click on it, then maybe I want to
+ *  load that one"). */
+export function libraryBrowseItem(c: LibraryCard, whole = false): ActiveItem | null {
   const m = cardFaceMedia(c.group, c.project.boards)
+  if (whole) {
+    const file = cardFaceSourceUrl(c.group, c.project.boards)
+    for (const bid of file ? c.group.boardIds : []) {
+      const b = c.project.boards[bid]
+      for (const bar of Object.values(b?.bars ?? {})) {
+        const x = getMediaItems(bar.content).find(i => i.url === file && i.type === 'model')
+        if (x) return { kind: 'media', mediaType: 'model', url: x.url, posterUrl: m?.url ?? x.posterUrl, name: c.group.name }
+      }
+    }
+  }
   return m ? { kind: 'media', mediaType: m.type, url: m.url, posterUrl: m.posterUrl, name: c.group.name } : null
 }
+
+// ── The one saved card being looked at ─────────────────────────────────────
+// Nothing of a saved project is loaded to list it. A click on a row is what
+// loads: the Viewer beside the browser then shows that card as it would a
+// card of the canvas, its 3D model as a 3D model. One card per browser, the
+// last one clicked; the 3D model of the one before is let go of, so looking
+// through a thousand cards holds one. Looking only: the canvas is not
+// touched, and none of this is kept.
+
+interface LibraryShownState {
+  /** Per browser (its node id): the row last clicked, and its 3D model's file. */
+  shown: Record<string, { key: string; model?: string }>
+  show: (browserId: string, c: LibraryCard | null) => void
+}
+
+export const useLibraryShown = create<LibraryShownState>((set, get) => ({
+  shown: {},
+  show(browserId, c) {
+    const was = get().shown[browserId]
+    if ((was?.key ?? null) === (c?.key ?? null)) return
+    const item = c ? libraryBrowseItem(c, true) : null
+    const model = item?.kind === 'media' && item.mediaType === 'model' ? item.url : undefined
+    const shown = { ...get().shown }
+    if (c) shown[browserId] = { key: c.key, model }
+    else delete shown[browserId]
+    set({ shown })
+    if (was?.model && was.model !== model && !Object.values(shown).some(s => s.model === was.model)) forgetModel(was.model)
+  },
+}))
 
 /** What a library row's drag carries. */
 export const LIBRARY_DRAG_MIME = 'application/x-vidbars-library'
