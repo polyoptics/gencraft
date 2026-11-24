@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { exportProject, importProjectFile } from '../../utils/projectBackup'
+import { packageCanvas } from '../../utils/library'
 
 /** Top-bar menu for portable project backup: export the whole project
  *  to a single .zip file (manifest + images), or import one (replacing
@@ -13,7 +14,7 @@ export const ProjectBackupMenu: React.FC = () => {
   const [pending, setPending] = useState<{ file: File; name: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
   // Export/import can move hundreds of MB and take a few seconds — surface it.
-  const [busy, setBusy] = useState<null | 'export' | 'import'>(null)
+  const [busy, setBusy] = useState<null | 'export' | 'import' | 'package'>(null)
   const yesBtnRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
@@ -42,6 +43,32 @@ export const ProjectBackupMenu: React.FC = () => {
     if (!file) return
     setError(null)
     setPending({ file, name: file.name })
+  }
+
+  // ── Cards to a folder (utils/library packageCanvas) ──
+  const [pkgDir, setPkgDir] = useState(() => { try { return localStorage.getItem('vidbars.packageDir') ?? '' } catch { return '' } })
+  const [pkgName, setPkgName] = useState(() => `Cards ${new Date().toISOString().slice(0, 10)}`)
+  const [pkgNote, setPkgNote] = useState<string | null>(null)
+  const onPackage = async () => {
+    setError(null)
+    setPkgNote('Starting')
+    setBusy('package')
+    try {
+      const r = await packageCanvas(pkgDir, pkgName.trim() || 'Cards', setPkgNote)
+      try { localStorage.setItem('vidbars.packageDir', r.dir) } catch { /* not kept */ }
+      setPkgDir(r.dir)
+      setPkgNote(`${r.cards} cards and ${r.files} files are in ${r.dir}${r.missing ? `. ${r.missing} files could not be found` : ''}`)
+    } catch (err) {
+      setPkgNote(null)
+      setError(err instanceof Error ? err.message : 'Could not write the package.')
+    } finally {
+      setBusy(null)
+    }
+  }
+  const fieldStyle: React.CSSProperties = {
+    display: 'block', width: 'calc(100% - 20px)', margin: '0 10px 4px', boxSizing: 'border-box',
+    background: 'rgba(0,0,0,0.25)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 4,
+    color: 'rgba(255,255,255,0.85)', fontSize: 11, padding: '4px 6px', fontFamily: 'inherit', outline: 'none',
   }
 
   const onExport = async () => {
@@ -135,6 +162,32 @@ export const ProjectBackupMenu: React.FC = () => {
           </button>
           <div style={{ padding: '4px 10px 6px', fontSize: 9, color: 'rgba(255,255,255,0.28)', lineHeight: 1.4 }}>
             One portable .zip (manifest + all your images). Carry it to another device.
+          </div>
+          <div style={{ padding: '6px 10px 4px', fontSize: 9, color: 'rgba(255,255,255,0.28)', letterSpacing: '0.6px', textTransform: 'uppercase', borderTop: '1px solid rgba(255,255,255,0.07)', marginTop: 2 }}>
+            Cards to a folder
+          </div>
+          <input
+            value={pkgDir} onChange={e => setPkgDir(e.target.value)} onKeyDown={e => e.stopPropagation()}
+            placeholder="Folder, such as D:\\VidBars Cards" spellCheck={false} style={fieldStyle}
+            title="The folder the cards and their files are written to. It is made if it is not there"
+          />
+          <input
+            value={pkgName} onChange={e => setPkgName(e.target.value)} onKeyDown={e => e.stopPropagation()}
+            placeholder="Name" spellCheck={false} style={fieldStyle}
+            title="The name these cards are listed under in the Card Browser"
+          />
+          <button
+            style={{ ...btnStyle, opacity: busy || !pkgDir.trim() ? 0.5 : 1, cursor: busy || !pkgDir.trim() ? 'default' : 'pointer' }}
+            disabled={!!busy || !pkgDir.trim()}
+            onMouseEnter={e => (e.currentTarget.style.background = busy || !pkgDir.trim() ? 'none' : 'rgba(255,255,255,0.07)')}
+            onMouseLeave={e => (e.currentTarget.style.background = 'none')}
+            onClick={() => { void onPackage() }}
+          >
+            <span style={{ width: 14, textAlign: 'center', opacity: 0.7 }}>▣</span>
+            Package this canvas's cards
+          </button>
+          <div style={{ padding: '2px 10px 6px', fontSize: 9, color: pkgNote ? 'rgba(255,226,173,0.85)' : 'rgba(255,255,255,0.28)', lineHeight: 1.4, maxWidth: 230, overflowWrap: 'anywhere' }}>
+            {pkgNote ?? 'Every card here with its pictures, videos and 3D models, in one folder. Copy the folder to another machine and add it to the Card Browser there.'}
           </div>
           {error && (
             <div style={{ padding: '4px 10px 8px', fontSize: 10, color: 'rgba(255,140,140,0.9)', lineHeight: 1.4 }}>

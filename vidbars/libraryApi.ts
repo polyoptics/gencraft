@@ -16,10 +16,27 @@
 //   GET /api/library/light?f=&v=               one project's light copy
 //   GET /api/library/blob?f=&v=&o=&n=&t=       one picture's bytes
 //   GET /api/library/cards?f=&v=&ids=a,b       those cards, whole, to bring in
+//
+// OTHER FOLDERS (Brian 2026-11-24: "If I just copy stuff over and throw it
+// somewhere, I should be able to point the card browser at a directory
+// somewhere anyway and read cards and stuff"). Any folder can be added to
+// the library: the project files in it are listed with the saves, and an
+// address names it with `d=`. A PACKAGE is such a folder made to travel:
+// its project file names its pictures, videos and 3D models as
+// `libmedia:<name>`, and they lie beside it in `media/`. Looked at, they are
+// read where they lie; a card brought in takes copies of its own into
+// public/uploads, so it no longer needs the package.
+//
+//   GET  /api/library/folders                  the added folders
+//   POST /api/library/folders {add|remove}     add or take away one
+//   POST /api/library/package-media?d=&m=      one file into a package (the body)
+//   POST /api/library/package?d=&name=         a package's project file (the body)
 
+import crypto from 'crypto'
 import fs from 'fs'
 import path from 'path'
 import type { Plugin } from 'vite'
+import { diskFileUrl, isServableDiskPath, isUncPath } from './src/utils/diskUrl'
 
 const LIGHT_VERSION = 1
 /** Past this a file cannot be read as one string; it is listed, unreadable. */
@@ -34,7 +51,23 @@ type Doc = Record<string, unknown>
 interface BoardLike { id: string; bars?: Record<string, unknown>; rootIds?: string[] }
 interface GroupLike { id: string; boardIds?: string[] }
 
-export interface LibraryFile { file: string; v: string; name: string; savedAt: number; size: number }
+export interface LibraryFile { file: string; dir?: string; v: string; name: string; savedAt: number; size: number }
+
+/** How a package names a file of its own, in `media/` beside it. */
+const LIBMEDIA = 'libmedia:'
+const mediaName = (s: string) => path.basename(s.slice(LIBMEDIA.length).replace(/\\/g, '/'))
+
+/** Every string in a document, each replaced by what `fn` gives for it. */
+function mapStrings(v: unknown, fn: (s: string) => string): unknown {
+  if (typeof v === 'string') return fn(v)
+  if (Array.isArray(v)) return v.map(x => mapStrings(x, fn))
+  if (v && typeof v === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [k, x] of Object.entries(v)) out[k] = mapStrings(x, fn)
+    return out
+  }
+  return v
+}
 
 /** `name.json`, or `cabinet/name.json`: nothing else is a saved project. */
 function safeRel(rel: string | null): string | null {
@@ -64,30 +97,52 @@ function boardsOf(doc: Doc): Record<string, BoardLike> {
 export function libraryApi(): Plugin {
   const dir = path.resolve(__dirname, 'snapshots')
   const cacheDir = path.join(dir, '.library')
+  const uploadsDir = path.resolve(__dirname, 'public/uploads')
   const versionOf = (st: fs.Stats) => `${Math.round(st.mtimeMs)}-${st.size}`
 
+  // ── The added folders: this machine's own list, beside the light copies ──
+  const foldersFile = path.join(cacheDir, 'folders.json')
+  function folders(): string[] {
+    try {
+      const list = JSON.parse(fs.readFileSync(foldersFile, 'utf-8'))
+      return Array.isArray(list) ? list.filter(x => typeof x === 'string') : []
+    } catch { return [] }
+  }
+  function setFolders(list: string[]) {
+    fs.mkdirSync(cacheDir, { recursive: true })
+    fs.writeFileSync(foldersFile, JSON.stringify([...new Set(list)], null, 1), 'utf-8')
+  }
+  /** A folder as typed or pasted (quotes and a trailing slash dropped), or
+   *  null when it cannot be one: not a whole path, or on another computer. */
+  function cleanDir(raw: unknown): string | null {
+    if (typeof raw !== 'string') return null
+    const d = raw.trim().replace(/^"(.*)"$/, '$1').replace(/[\\/]+$/, '')
+    return d && path.isAbsolute(d) && !isUncPath(d) ? path.normalize(d) : null
+  }
+
   /** The file behind an address, when it is still the version asked for. */
-  function resolve(q: URLSearchParams): { rel: string; abs: string; st: fs.Stats } | null {
+  function resolve(q: URLSearchParams): { rel: string; d: string; abs: string; st: fs.Stats } | null {
+    const d = q.get('d') ?? ''
     const rel = safeRel(q.get('f'))
-    if (!rel) return null
-    const abs = path.join(dir, rel)
+    if (!rel || (d && (rel.includes('/') || !folders().includes(d)))) return null
+    const abs = path.join(d || dir, rel)
     let st: fs.Stats
     try { st = fs.statSync(abs) } catch { return null }
     if (!st.isFile() || (q.get('v') && q.get('v') !== versionOf(st))) return null
-    return { rel, abs, st }
+    return { rel, d, abs, st }
   }
 
   function listFiles(): LibraryFile[] {
     const out: LibraryFile[] = []
-    const add = (rel: string, fallbackName: string) => {
+    const add = (rel: string, fallbackName: string, d = '') => {
       try {
-        const st = fs.statSync(path.join(dir, rel))
+        const st = fs.statSync(path.join(d || dir, rel))
         if (!st.isFile()) return
         const v = versionOf(st)
         // The name and date a project was saved under are inside the file;
         // the light copy has them once it exists.
-        const head = readHead(rel, v)
-        out.push({ file: rel, v, name: head?.name ?? fallbackName, savedAt: head?.savedAt ?? Math.round(st.mtimeMs), size: st.size })
+        const head = readHead(rel, d, v)
+        out.push({ file: rel, ...(d ? { dir: d } : {}), v, name: head?.name ?? fallbackName, savedAt: head?.savedAt ?? Math.round(st.mtimeMs), size: st.size })
       } catch { /* gone since the listing */ }
     }
     let names: string[] = []
@@ -105,24 +160,32 @@ export function libraryApi(): Plugin {
       if (!newest.has(m[1]) || newest.get(m[1])!.t < t) newest.set(m[1], { f, t })
     }
     for (const { f } of newest.values()) add(`cabinet/${f}`, 'Cabinet project')
+    // The project files lying in each added folder.
+    for (const d of folders()) {
+      let inside: string[] = []
+      try { inside = fs.readdirSync(d) } catch { /* not there now (a drive unplugged): listed again when it is */ }
+      for (const f of inside) if (f.endsWith('.json')) add(f, f.replace(/\.json$/, ''), d)
+    }
     return out.sort((a, b) => b.savedAt - a.savedAt)
   }
 
-  const cacheFile = (rel: string) => path.join(cacheDir, rel.replace(/[^\w.-]/g, '_'))
-  const headFile = (rel: string) => cacheFile(rel).replace(/\.json$/, '.head.json')
+  const cacheFile = (rel: string, d: string) => path.join(cacheDir,
+    (d ? `dir-${crypto.createHash('sha1').update(d).digest('hex').slice(0, 10)}_` : '') + rel.replace(/[^\w.-]/g, '_'))
+  const headFile = (rel: string, d: string) => cacheFile(rel, d).replace(/\.json$/, '.head.json')
 
-  function readHead(rel: string, v: string): { name: string; savedAt: number } | null {
+  function readHead(rel: string, d: string, v: string): { name: string; savedAt: number } | null {
     try {
-      const h = JSON.parse(fs.readFileSync(headFile(rel), 'utf-8'))
+      const h = JSON.parse(fs.readFileSync(headFile(rel, d), 'utf-8'))
       return h.v === v && h.lv === LIGHT_VERSION ? h : null
     } catch { return null }
   }
 
   /** The light copy, as JSON text: from beside the saves, else made now. */
-  function lightText(rel: string, abs: string, st: fs.Stats): string {
+  function lightText(rel: string, d: string, abs: string, st: fs.Stats): string {
     const v = versionOf(st)
-    const cached = cacheFile(rel)
-    if (readHead(rel, v) && fs.existsSync(cached)) return fs.readFileSync(cached, 'utf-8')
+    const cached = cacheFile(rel, d)
+    const where = `f=${encodeURIComponent(rel)}${d ? `&d=${encodeURIComponent(d)}` : ''}`
+    if (readHead(rel, d, v) && fs.existsSync(cached)) return fs.readFileSync(cached, 'utf-8')
     if (st.size > MAX_BYTES) throw new Error('too big to read')
     const buf = fs.readFileSync(abs)
     // latin1: one character per byte, so a place in the text IS the place in
@@ -143,13 +206,16 @@ export function libraryApi(): Plugin {
       if (end < 0 || n < MIN_B64 || raw[i - 1] === '\\' || raw[end - 1] === '\\') continue
       parts.push(buf.subarray(at, i))
       parts.push(Buffer.from(JSON.stringify(
-        `/api/library/blob?f=${encodeURIComponent(rel)}&v=${v}&o=${o}&n=${n}&t=${encodeURIComponent(head[1])}`)))
+        `/api/library/blob?${where}&v=${v}&o=${o}&n=${n}&t=${encodeURIComponent(head[1])}`)))
       at = end + 1
       i = end
     }
     parts.push(buf.subarray(at))
     const doc = JSON.parse(Buffer.concat(parts).toString('utf-8'), (_k, val) => {
-      if (typeof val !== 'string' || val.length <= MAX_TEXT || val.startsWith('/api/library/blob?')) return val
+      if (typeof val !== 'string') return val
+      // A package's own file, read where it lies.
+      if (d && val.startsWith(LIBMEDIA)) return diskFileUrl(path.join(d, 'media', mediaName(val)))
+      if (val.length <= MAX_TEXT || val.startsWith('/api/library/blob?')) return val
       // What is left that long is text, or a picture written some other way.
       return val.startsWith('data:') ? null : val.slice(0, MAX_TEXT)
     }) as Doc
@@ -158,11 +224,11 @@ export function libraryApi(): Plugin {
     // Only what has the shape of a card: saves go back a long way.
     const groups = (Array.isArray(doc.groups) ? doc.groups as GroupLike[] : [])
       .filter(g => g && typeof g.id === 'string' && Array.isArray(g.boardIds))
-    const text = JSON.stringify({ file: rel, v, name, savedAt, groups, boards: boardsOf(doc) })
+    const text = JSON.stringify({ file: rel, ...(d ? { dir: d } : {}), v, name, savedAt, groups, boards: boardsOf(doc) })
     try {
       fs.mkdirSync(cacheDir, { recursive: true })
       fs.writeFileSync(cached, text, 'utf-8')
-      fs.writeFileSync(headFile(rel), JSON.stringify({ v, lv: LIGHT_VERSION, name, savedAt }), 'utf-8')
+      fs.writeFileSync(headFile(rel, d), JSON.stringify({ v, lv: LIGHT_VERSION, name, savedAt }), 'utf-8')
     } catch { /* a copy that cannot be kept is made again next time */ }
     return text
   }
@@ -170,8 +236,8 @@ export function libraryApi(): Plugin {
   // The last project a card was brought in from, whole: the next card out of
   // the same project does not read 180 MB again. Let go after a while.
   let whole: { key: string; doc: Doc; timer: NodeJS.Timeout } | null = null
-  function wholeDoc(rel: string, abs: string, st: fs.Stats): Doc {
-    const key = `${rel}@${versionOf(st)}`
+  function wholeDoc(abs: string, st: fs.Stats): Doc {
+    const key = `${abs}@${versionOf(st)}`
     if (whole?.key !== key) {
       if (st.size > MAX_BYTES) throw new Error('too big to read')
       if (whole) clearTimeout(whole.timer)
@@ -195,10 +261,112 @@ export function libraryApi(): Plugin {
 
       server.middlewares.use('/api/library/list', (_req, res) => json(res, 200, listFiles()))
 
+      /** Only this app's own page, on this machine, changes what is on disk. */
+      const mayWrite = (req: import('http').IncomingMessage) => {
+        const origin = req.headers.origin
+        return req.method === 'POST' && (!origin || origin === `http://${req.headers.host}`)
+      }
+      const body = (req: import('http').IncomingMessage, max: number) => new Promise<Buffer>((done, fail) => {
+        const chunks: Buffer[] = []
+        let size = 0
+        req.on('data', (c: Buffer) => { size += c.length; if (size > max) { req.destroy(); fail(new Error('too big')) } else chunks.push(c) })
+        req.on('end', () => done(Buffer.concat(chunks)))
+        req.on('error', fail)
+      })
+
+      server.middlewares.use('/api/library/folders', (req, res) => {
+        if (req.method === 'GET') return json(res, 200, folders())
+        if (!mayWrite(req)) return json(res, 403, { error: 'Not allowed' })
+        void body(req, 10_000).then(raw => {
+          const b = JSON.parse(raw.toString('utf-8')) as { add?: unknown; remove?: unknown }
+          if (b.remove !== undefined) { setFolders(folders().filter(x => x !== b.remove)); return json(res, 200, folders()) }
+          const d = cleanDir(b.add)
+          if (!d) return json(res, 400, { error: 'That is not a whole folder path' })
+          let isDir = false
+          try { isDir = fs.statSync(d).isDirectory() } catch { /* not there */ }
+          if (!isDir) return json(res, 400, { error: 'No folder is there' })
+          setFolders([...folders(), d])
+          json(res, 200, folders())
+        }).catch(() => json(res, 400, { error: 'Could not read that' }))
+      })
+
+      // ── Writing a package ──
+      const packageDir = (q: URLSearchParams) => cleanDir(q.get('d'))
+
+      server.middlewares.use('/api/library/package-media', (req, res) => {
+        const q = query(req)
+        const d = packageDir(q)
+        const name = path.basename(q.get('m') ?? '')
+        if (!mayWrite(req) || !d || !name || !isServableDiskPath(name)) return json(res, 400, { error: 'Not allowed' })
+        const to = path.join(d, 'media', name)
+        try {
+          fs.mkdirSync(path.dirname(to), { recursive: true })
+          const tmp = `${to}.part`
+          const out = fs.createWriteStream(tmp)
+          const fail = () => { fs.rm(tmp, { force: true }, () => {}); json(res, 500, { error: 'Could not write' }) }
+          out.on('error', fail)
+          req.on('error', fail)
+          out.on('finish', () => { try { fs.renameSync(tmp, to); json(res, 200, { ok: true }) } catch { fail() } })
+          req.pipe(out)
+        } catch { json(res, 500, { error: 'Could not write' }) }
+      })
+
+      server.middlewares.use('/api/library/package', (req, res) => {
+        const q = query(req)
+        const d = packageDir(q)
+        const name = (q.get('name') ?? '').replace(/[^\w .-]/g, '_').trim()
+        if (!mayWrite(req) || !d || !name) return json(res, 400, { error: 'That is not a whole folder path' })
+        void body(req, 400 * 1024 * 1024).then(raw => {
+          const doc = JSON.parse(raw.toString('utf-8')) as Doc
+          const mediaDir = path.join(d, 'media')
+          fs.mkdirSync(mediaDir, { recursive: true })
+          let copied = 0
+          const missing: string[] = []
+          const done = new Map<string, string>()
+          /** A file this machine holds, copied into the package under `as`. */
+          const take = (from: string, as: string, url: string) => {
+            if (done.has(url)) return done.get(url)!
+            let to = url
+            try {
+              const dest = path.join(mediaDir, as)
+              const st = fs.statSync(from)
+              let same = false
+              try { same = fs.statSync(dest).size === st.size } catch { /* not there yet */ }
+              if (!same) fs.copyFileSync(from, dest)
+              copied++
+              to = LIBMEDIA + as
+            } catch { missing.push(url) }
+            done.set(url, to)
+            return to
+          }
+          const out = mapStrings(doc, s => {
+            if (s.startsWith('/uploads/')) {
+              const file = decodeURIComponent(s.slice('/uploads/'.length).split(/[?#]/)[0])
+              if (!file || file.includes('..') || /[\\/]/.test(file)) return s
+              return take(path.join(uploadsDir, file), file, s)
+            }
+            if (s.startsWith('/api/file?')) {
+              const p = new URLSearchParams(s.slice('/api/file?'.length)).get('path')
+              if (!p || !path.isAbsolute(p) || isUncPath(p) || !isServableDiskPath(p)) return s
+              // Two files of one name in different folders stay two.
+              return take(p, `${crypto.createHash('sha1').update(p).digest('hex').slice(0, 8)}-${path.basename(p)}`, s)
+            }
+            return s
+          })
+          const file = `${name}.json`
+          const tmp = path.join(d, `${file}.part`)
+          fs.writeFileSync(tmp, JSON.stringify(out), 'utf-8')
+          fs.renameSync(tmp, path.join(d, file))
+          // Made here, it is browsed here too.
+          setFolders([...folders(), d])
+          json(res, 200, { ok: true, dir: d, file, copied, missing: missing.length })
+        }).catch(err => json(res, 500, { error: err instanceof Error ? err.message : 'Could not write' }))
+      })
+
       server.middlewares.use('/api/library/light', (req, res) => {
         const f = resolve(query(req))
         if (!f) return json(res, 404, { error: 'Not found' })
-        try { json(res, 200, lightText(f.rel, f.abs, f.st)) }
+        try { json(res, 200, lightText(f.rel, f.d, f.abs, f.st)) }
         catch (err) { json(res, 500, { error: err instanceof Error ? err.message : 'unreadable' }) }
       })
 
@@ -231,11 +399,23 @@ export function libraryApi(): Plugin {
         const ids = new Set((q.get('ids') ?? '').split(',').filter(Boolean))
         if (!f || ids.size === 0) return json(res, 404, { error: 'Not found' })
         try {
-          const doc = wholeDoc(f.rel, f.abs, f.st)
+          const doc = wholeDoc(f.abs, f.st)
           const boards = boardsOf(doc)
           const groups = ((doc.groups as GroupLike[] | undefined) ?? []).filter(g => g && ids.has(g.id))
           const boardIds = new Set(groups.flatMap(g => g.boardIds ?? []))
-          json(res, 200, { projectName: doc.projectName ?? '', groups, extraBoards: [...boardIds].map(id => boards[id]).filter(Boolean) })
+          const out = { projectName: doc.projectName ?? '', groups, extraBoards: [...boardIds].map(id => boards[id]).filter(Boolean) }
+          // Out of a package, a card takes its files with it: copied into
+          // this machine's own uploads, once, and named from there.
+          json(res, 200, f.d ? mapStrings(out, s => {
+            if (!s.startsWith(LIBMEDIA)) return s
+            const name = mediaName(s)
+            const to = path.join(uploadsDir, name)
+            try {
+              fs.mkdirSync(uploadsDir, { recursive: true })
+              if (!fs.existsSync(to)) fs.copyFileSync(path.join(f.d, 'media', name), to)
+              return `/uploads/${encodeURIComponent(name)}`
+            } catch { return s }
+          }) : out)
         } catch (err) { json(res, 500, { error: err instanceof Error ? err.message : 'unreadable' }) }
       })
     },

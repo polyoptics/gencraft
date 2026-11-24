@@ -24,10 +24,14 @@ import {
 } from './contentKinds'
 import type { ActiveItem } from '../store/viewport3dStore'
 import { hasLegacyInlineMedia, runInlineMediaMigration } from './migrateInlineMedia'
+import { mediaRefId } from './mediaRef'
+import { getMedia } from './mediaStore'
 import { insertProjectSnapshot, type ProjectSnapshot } from './projectInsert'
 
 export interface LibraryProject {
   file: string
+  /** The added folder it lies in; absent for the app's own saves. */
+  dir?: string
   /** The saved file's version: its light copy and addresses are of this one. */
   v: string
   name: string
@@ -54,26 +58,60 @@ interface LibraryState {
   loading: boolean
   /** Read the list again; only new and changed projects are fetched. */
   load: () => Promise<void>
+  /** The folders added to the library, besides the app's own saves. */
+  folders: string[]
+  /** Add or take away a folder. Returns what was wrong with it, if anything. */
+  addFolder: (dir: string) => Promise<string | null>
+  removeFolder: (dir: string) => Promise<void>
 }
+
+/** A saved project's place, as the server's addresses name it. */
+const where = (p: { file: string; dir?: string }) =>
+  `f=${encodeURIComponent(p.file)}${p.dir ? `&d=${encodeURIComponent(p.dir)}` : ''}`
+const idOf = (p: { file: string; dir?: string; v: string }) => `${p.dir ?? ''}|${p.file}@${p.v}`
+
+async function postFolders(body: { add?: string; remove?: string }): Promise<{ folders?: string[]; error?: string }> {
+  try {
+    const res = await fetch('/api/library/folders', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    const data = await res.json() as string[] | { error?: string }
+    return Array.isArray(data) ? { folders: data } : { error: data.error ?? 'Could not do that' }
+  } catch { return { error: 'Could not reach the app' } }
+}
+
+let again = false
 
 export const useLibraryStore = create<LibraryState>((set, get) => ({
   projects: [],
   left: 0,
   loading: false,
+  folders: [],
+  async addFolder(dir) {
+    const r = await postFolders({ add: dir })
+    if (!r.folders) return r.error ?? 'Could not do that'
+    set({ folders: r.folders })
+    void get().load()
+    return null
+  },
+  async removeFolder(dir) {
+    const r = await postFolders({ remove: dir })
+    if (r.folders) set({ folders: r.folders })
+    void get().load()
+  },
   async load() {
-    if (get().loading) return
+    if (get().loading) { again = true; return }
     set({ loading: true })
     try {
-      const list = await (await fetch('/api/library/list')).json() as { file: string; v: string }[]
-      const have = new Map(get().projects.map(p => [`${p.file}@${p.v}`, p]))
+      fetch('/api/library/folders').then(r => r.json()).then(f => { if (Array.isArray(f)) set({ folders: f }) }).catch(() => {})
+      const list = await (await fetch('/api/library/list')).json() as { file: string; dir?: string; v: string }[]
+      const have = new Map(get().projects.map(p => [idOf(p), p]))
       // What is still current stays in view while the rest comes in.
-      const done: LibraryProject[] = list.flatMap(f => have.get(`${f.file}@${f.v}`) ?? [])
-      const missing = list.filter(f => !have.has(`${f.file}@${f.v}`))
+      const done: LibraryProject[] = list.flatMap(f => have.get(idOf(f)) ?? [])
+      const missing = list.filter(f => !have.has(idOf(f)))
       set({ projects: done, left: missing.length })
       // One at a time: the first look at a big save takes the server a moment.
       for (const [i, f] of missing.entries()) {
         try {
-          const res = await fetch(`/api/library/light?f=${encodeURIComponent(f.file)}&v=${f.v}`)
+          const res = await fetch(`/api/library/light?${where(f)}&v=${f.v}`)
           if (res.ok) {
             done.push(await res.json() as LibraryProject)
             done.sort((a, b) => b.savedAt - a.savedAt)
@@ -83,6 +121,8 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       }
     } catch { /* no server (a built copy): nothing to list */ }
     set({ loading: false, left: 0 })
+    // Asked again while this ran (a folder added): once more, for what is new.
+    if (again) { again = false; void get().load() }
   },
 }))
 
@@ -150,7 +190,7 @@ export function libraryCards(projects: LibraryProject[]): LibraryCard[] {
         return seen.has(k) ? false : (seen.add(k), true)
       })
       fresh.forEach((id, i) => out.push({
-        key: `${p.file}|${id}`, project: p, group: byId.get(id)!,
+        key: `${p.dir ?? ''}|${p.file}|${id}`, project: p, group: byId.get(id)!,
         level: i === 0 ? 0 : 1,
         deck: i === 0 && fresh.length > 1 ? fresh : undefined,
       }))
@@ -184,13 +224,13 @@ export function libraryBrowseItem(c: LibraryCard): ActiveItem | null {
 
 /** What a library row's drag carries. */
 export const LIBRARY_DRAG_MIME = 'application/x-vidbars-library'
-export interface LibraryDrag { file: string; v: string; ids: string[]; deck: boolean }
+export interface LibraryDrag { file: string; dir?: string; v: string; ids: string[]; deck: boolean }
 
 export function parseLibraryDrag(raw: string): LibraryDrag | null {
   try {
     const p = JSON.parse(raw) as Partial<LibraryDrag>
     if (typeof p?.file !== 'string' || typeof p.v !== 'string' || !Array.isArray(p.ids) || !p.ids.length) return null
-    return { file: p.file, v: p.v, ids: p.ids.filter(x => typeof x === 'string'), deck: !!p.deck }
+    return { file: p.file, dir: typeof p.dir === 'string' ? p.dir : undefined, v: p.v, ids: p.ids.filter(x => typeof x === 'string'), deck: !!p.deck }
   } catch { return null }
 }
 
@@ -203,7 +243,7 @@ const ALWAYS_DROPS = ['pin', 'home', 'pinnedLayer', 'linkOf', 'isNew'] as const
 /** Bring cards of a saved project onto the canvas as copies, the first of
  *  them centred on `at` (canvas units). One undo step. Returns the new cards. */
 export async function bringIn(drag: LibraryDrag, at: { cx: number; cy: number }): Promise<string[]> {
-  const res = await fetch(`/api/library/cards?f=${encodeURIComponent(drag.file)}&v=${drag.v}&ids=${drag.ids.map(encodeURIComponent).join(',')}`)
+  const res = await fetch(`/api/library/cards?${where(drag)}&v=${drag.v}&ids=${drag.ids.map(encodeURIComponent).join(',')}`)
   if (!res.ok) {
     // The project was saved again since it was listed: list it afresh.
     void useLibraryStore.getState().load()
@@ -236,4 +276,59 @@ export async function bringIn(drag: LibraryDrag, at: { cx: number; cy: number })
   // Pictures written into the saved file go where this canvas keeps its own.
   if (hasLegacyInlineMedia()) void runInlineMediaMigration().catch(() => {})
   return made
+}
+
+// ── A package: this canvas's cards and their files, in one folder ──────────
+// (Brian 2026-11-24: "can we set up a package for me to grab when I'm on my
+// laptop that has the new cards in this session? I want to copy them on my
+// laptop, and then I can at least browse through them.") The folder holds a
+// project file and, in `media/`, every picture, video and 3D model its cards
+// use, so it reads the same on any machine: copy the folder over, add it to
+// the browser's folders there. Nothing on the canvas is changed by it.
+
+export interface PackageResult { dir: string; file: string; cards: number; files: number; missing: number }
+
+const EXT: Record<string, string> = {
+  'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif', 'image/avif': 'avif',
+  'image/svg+xml': 'svg', 'image/bmp': 'bmp', 'video/mp4': 'mp4', 'video/webm': 'webm', 'video/quicktime': 'mov',
+  'audio/mpeg': 'mp3', 'audio/wav': 'wav', 'audio/ogg': 'ogg', 'audio/mp4': 'm4a', 'model/gltf-binary': 'glb',
+}
+
+/** Write every card on the canvas, with its files, to `dir` as `name`. */
+export async function packageCanvas(dir: string, name: string, onStep?: (word: string) => void): Promise<PackageResult> {
+  const bs = useBoardsStore.getState()
+  const primary = bs.boards.primary
+  const doc = {
+    name, id: crypto.randomUUID(), savedAt: Date.now(),
+    projectName: primary?.projectName ?? '', bars: primary?.bars ?? {}, rootIds: primary?.rootIds ?? [],
+    extraBoards: bs.boardOrder.map(id => bs.boards[id]).filter(Boolean).map(b => ({ ...b, selectedIds: [], viewerBarId: null })),
+    boardOrder: bs.boardOrder,
+    groups: bs.groups,
+  }
+  // Pictures this window holds itself go into the package as files first;
+  // the server then gathers the ones that are on disk.
+  let text = JSON.stringify(doc)
+  const refs = [...new Set(text.match(/mediaref:[\w-]+/g) ?? [])]
+  let files = 0, missing = 0
+  const d = `d=${encodeURIComponent(dir)}`
+  for (const [i, ref] of refs.entries()) {
+    onStep?.(`Copying ${i + 1} of ${refs.length}`)
+    const blob = await getMedia(mediaRefId(ref)!).catch(() => null)
+    if (!blob) { missing++; continue }
+    const file = `${mediaRefId(ref)}.${EXT[blob.type] ?? (blob.type.startsWith('video/') ? 'mp4' : blob.type.startsWith('audio/') ? 'mp3' : 'png')}`
+    const res = await fetch(`/api/library/package-media?${d}&m=${encodeURIComponent(file)}`, { method: 'POST', body: blob })
+    if (!res.ok) {
+      if (i === 0) throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error ?? 'Could not write there')
+      missing++
+      continue
+    }
+    files++
+    text = text.split(`"${ref}"`).join(JSON.stringify(`libmedia:${file}`))
+  }
+  onStep?.('Writing')
+  const res = await fetch(`/api/library/package?${d}&name=${encodeURIComponent(name)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: text })
+  const out = await res.json().catch(() => ({})) as { dir?: string; file?: string; copied?: number; missing?: number; error?: string }
+  if (!res.ok || !out.dir || !out.file) throw new Error(out.error ?? 'Could not write there')
+  void useLibraryStore.getState().load()
+  return { dir: out.dir, file: out.file, cards: bs.groups.length, files: files + (out.copied ?? 0), missing: missing + (out.missing ?? 0) }
 }

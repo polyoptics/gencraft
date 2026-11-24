@@ -902,6 +902,9 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string }; tray?: TrayB
   }, [visibleGroups, sortMode, view, collapsedDeckIdSet, includeCanvasItems, freeNodes,
       kindFilter, searchQuery, feedingPool, poolFiles, library, libraryRows])
 
+  // What is being looked through: every row but the "Add new" offers.
+  const assetCount = useMemo(() => rows.reduce((n, r) => n + (r.kind === 'addfx' ? 0 : 1), 0), [rows])
+
   // Rows, in a ref, so the send-to-Viewer callbacks can read the current
   // list without being rebuilt every time it changes.
   const rowsRef = useRef<RolodexRow[]>(rows)
@@ -1840,6 +1843,7 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string }; tray?: TrayB
                   cursor: 'pointer', fontFamily: 'inherit', lineHeight: 1.4,
                 }}
               >SAVED</button>
+              <LibraryFoldersButton />
               {/* ── Viewer link mode ── only when a Viewer is actually
                   magneted to this panel: an option for a connection that
                   does not exist is just a puzzle. Sits at the end of the
@@ -2239,6 +2243,17 @@ export const CardRolodex: React.FC<{ embedded?: { nodeId: string }; tray?: TrayB
                 paddingRight: panelRightExtension,
               }}
             >
+              {/* How many are being looked through, whatever is browsed
+                  (Brian 2026-11-24: "see how many assets there are that I'm
+                  looking through. And it changes as I filter"). */}
+              <span
+                title="How many this browser is showing"
+                style={{
+                  position: 'absolute', left: 10, top: 0, height: CABINET_BAR_H, display: 'flex', alignItems: 'center',
+                  fontSize: 9, fontWeight: 700, letterSpacing: '0.5px', color: 'rgba(255,255,255,0.5)',
+                  fontVariantNumeric: 'tabular-nums', pointerEvents: 'none', whiteSpace: 'nowrap',
+                }}
+              >{assetCount} {assetCount === 1 ? 'ASSET' : 'ASSETS'}</span>
               {/* Visible grip — a small horizontal pill so the user
                   knows the cabinet base is grabbable. */}
               <div style={{
@@ -2525,7 +2540,7 @@ const RolodexLibrarySlot: React.FC<{
   const borderRGB = Math.round(255 * centerness)
   const indent = card.level * INDENT_STEP
   const startDrag = (e: React.DragEvent, deck: boolean) => {
-    const payload: LibraryDrag = { file: project.file, v: project.v, ids: deck && card.deck ? card.deck : [group.id], deck }
+    const payload: LibraryDrag = { file: project.file, dir: project.dir, v: project.v, ids: deck && card.deck ? card.deck : [group.id], deck }
     e.dataTransfer.setData(LIBRARY_DRAG_MIME, JSON.stringify(payload))
     e.dataTransfer.effectAllowed = 'copy'
     e.stopPropagation()
@@ -3645,6 +3660,102 @@ const NoMatchState: React.FC = () => (
     color: 'rgba(255,255,255,0.4)', fontSize: 11, textAlign: 'center', padding: 16,
   }}>No matches</div>
 )
+
+/** The folders the SAVED view reads besides the app's own saves: a button
+ *  and the list it opens. The list is drawn on the screen, at its own size,
+ *  whatever size the browser is. */
+const LibraryFoldersButton: React.FC = () => {
+  const [at, setAt] = useState<{ x: number; y: number } | null>(null)
+  const [text, setText] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const folders = useLibraryStore(s => s.folders)
+  const boxRef = useRef<HTMLDivElement>(null)
+  const btnRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    if (!at) return
+    void useLibraryStore.getState().load()
+    const away = (e: MouseEvent) => {
+      const t = e.target as Node
+      if (!boxRef.current?.contains(t) && !btnRef.current?.contains(t)) setAt(null)
+    }
+    document.addEventListener('mousedown', away, true)
+    return () => document.removeEventListener('mousedown', away, true)
+  }, [at])
+  const add = async () => {
+    if (!text.trim()) return
+    const err = await useLibraryStore.getState().addFolder(text)
+    setError(err)
+    if (!err) setText('')
+  }
+  const stop = (e: React.SyntheticEvent) => e.stopPropagation()
+  return (
+    <>
+      <button
+        ref={btnRef}
+        onClick={e => {
+          const r = e.currentTarget.getBoundingClientRect()
+          setAt(at ? null : { x: Math.max(8, Math.min(r.left, window.innerWidth - 348)), y: r.bottom + 6 })
+        }}
+        title="Folders SAVED reads cards from, besides this app's own saved projects"
+        style={{
+          background: at ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.12)',
+          borderRadius: 4, color: 'rgba(255,255,255,0.6)', padding: '1px 4px', cursor: 'pointer',
+          display: 'flex', alignItems: 'center', lineHeight: 1.4,
+        }}
+      >
+        {/* Not a pointer target itself: the panel's drag takes any press that does not land on a button. */}
+        <svg width="11" height="10" viewBox="0 0 11 10" fill="none" style={{ display: 'block', pointerEvents: 'none' }}>
+          <path d="M1 2.2c0-.5.4-.9.9-.9h2.3l1 1.1h3.9c.5 0 .9.4.9.9v4.6c0 .5-.4.9-.9.9H1.900C1.400 8.800 1 8.400 1 7.900V2.200z" stroke="currentColor" strokeWidth="1.1" />
+        </svg>
+      </button>
+      {at && ReactDOM.createPortal(
+        <div
+          ref={boxRef}
+          onPointerDown={stop} onMouseDown={stop} onWheel={stop} onKeyDown={stop}
+          style={{
+            position: 'fixed', left: at.x, top: at.y, width: 340, zIndex: 5000,
+            background: '#1a1b2e', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 8, padding: 8,
+            boxShadow: '0 8px 24px rgba(0,0,0,0.5)', fontFamily: 'inherit', fontSize: 11, color: 'rgba(255,255,255,0.8)',
+          }}
+        >
+          <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)', letterSpacing: '0.6px', marginBottom: 6 }}>FOLDERS SAVED READS</div>
+          <div style={{ padding: '3px 0', color: 'rgba(255,255,255,0.45)' }}>This app's saved projects</div>
+          {folders.map(f => (
+            <div key={f} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 0' }}>
+              <span title={f} style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f}</span>
+              <button
+                onClick={() => void useLibraryStore.getState().removeFolder(f)}
+                title="Stop reading this folder. Nothing in it is deleted"
+                style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.45)', cursor: 'pointer', fontSize: 12, padding: '0 4px', fontFamily: 'inherit' }}
+              >✕</button>
+            </div>
+          ))}
+          <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+            <input
+              value={text} onChange={e => { setText(e.target.value); setError(null) }}
+              onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') void add() }}
+              placeholder="Paste a folder path" spellCheck={false} autoComplete="off"
+              style={{
+                flex: 1, minWidth: 0, background: 'rgba(0,0,0,0.25)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 4,
+                color: 'rgba(255,255,255,0.9)', fontSize: 11, padding: '4px 6px', fontFamily: 'inherit', outline: 'none',
+              }}
+            />
+            <button
+              onClick={() => void add()}
+              style={{
+                background: 'rgba(120,170,255,0.18)', border: '1px solid rgba(120,170,255,0.4)', borderRadius: 4,
+                color: 'rgba(255,255,255,0.85)', fontSize: 11, padding: '3px 10px', cursor: 'pointer', fontFamily: 'inherit',
+              }}
+            >Add</button>
+          </div>
+          {/* Its line is always there, so the list does not jump when it speaks. */}
+          <div style={{ minHeight: 14, marginTop: 4, fontSize: 10, color: 'rgba(255,140,140,0.9)' }}>{error}</div>
+        </div>,
+        document.body,
+      )}
+    </>
+  )
+}
 
 /** All projects, with nothing to show: still reading, none saved, or none
  *  that answer the search. */
