@@ -5812,17 +5812,22 @@ const TextSplitDivider: React.FC<{
   ratio: number
   onRatioChange: (r: number) => void
   visible: boolean
-}> = ({ onRatioChange, visible }) => {
+  /** Told when a drag of it begins and ends. */
+  onDragging?: (on: boolean) => void
+}> = ({ onRatioChange, visible, onDragging }) => {
   const [dragging, setDragging] = useState(false)
   const [hovered, setHovered] = useState(false)
+  const onDraggingRef = useRef(onDragging)
+  onDraggingRef.current = onDragging
 
   const onDown = useCallback((e: React.PointerEvent) => {
     if (e.button !== 0) return
     e.stopPropagation()
     e.preventDefault()
-    setDragging(true)
     const parent = (e.currentTarget as HTMLElement).parentElement
     if (!parent) return
+    setDragging(true)
+    onDraggingRef.current?.(true)
     const parentRect = parent.getBoundingClientRect()
     const parentH = parentRect.height
 
@@ -5833,6 +5838,7 @@ const TextSplitDivider: React.FC<{
     }
     const onUp = () => {
       setDragging(false)
+      onDraggingRef.current?.(false)
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
     }
@@ -5940,6 +5946,10 @@ export const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void
   // typing back until the mouse next moves. A button held (a colour or the
   // midline dragged across the face) changes nothing.
   const [onFace, setOnFace] = useState(true)
+  // The midline dragged shows the finished text too, though the mouse is
+  // on the face (Brian 2026-11-23: "while i drag the middle divider in the
+  // card face, this should also show the full text not the tag").
+  const [splitting, setSplitting] = useState(false)
   const keyHold = useRef<{ x: number; y: number } | null>(null)
   const isEditing = editingField !== null
   React.useEffect(() => {
@@ -6131,7 +6141,7 @@ export const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void
         {/* Header area */}
         <div style={{ flex: splitRatio, display: 'flex', flexDirection: 'column', justifyContent: vAlignToJustify(headerTs.vAlign), minHeight: 0, overflow: 'hidden' }}>
           {editingField === 'header' ? (
-            <FaceEditField value={headerVal} shown={headerShown} final={!onFace} ts={headerTs} bg={headerBg} placeholder="Title…"
+            <FaceEditField value={headerVal} shown={headerShown} final={!onFace || splitting} ts={headerTs} bg={headerBg} placeholder="Title…"
               onChange={setHeaderVal}
               onKeyDown={e => {
                 typed()
@@ -6155,11 +6165,11 @@ export const GroupCardText: React.FC<{ groupId: string; onCropImage?: () => void
           <TextMargins pad={pad} visible={selected && pointed} onChange={bind.setPad} />
         )}
         {/* Draggable divider */}
-        <TextSplitDivider ratio={splitRatio} onRatioChange={r => (bind ? bind.setSplit(r) : useBoardsStore.getState().setGroupTextSplitRatio(groupId, r))} visible={selected} />
+        <TextSplitDivider ratio={splitRatio} onRatioChange={r => (bind ? bind.setSplit(r) : useBoardsStore.getState().setGroupTextSplitRatio(groupId, r))} visible={selected} onDragging={setSplitting} />
         {/* Body area */}
         <div style={{ flex: 1 - splitRatio, display: 'flex', flexDirection: 'column', justifyContent: vAlignToJustify(bodyTs.vAlign), minHeight: 0, overflow: 'hidden' }}>
           {editingField === 'body' ? (
-            <FaceEditField value={bodyVal} shown={bodyShown} final={!onFace} ts={bodyTs} bg={bodyBg} placeholder="Body text…"
+            <FaceEditField value={bodyVal} shown={bodyShown} final={!onFace || splitting} ts={bodyTs} bg={bodyBg} placeholder="Body text…"
               onChange={setBodyVal}
               onKeyDown={e => {
                 typed()
